@@ -33,6 +33,7 @@ import {
 } from "./scene.ts";
 import { Overworld, type OverworldShell, type SaveSlice } from "./world/overworld.ts";
 import { Textbox } from "./world/textbox.ts";
+import { NamingState } from "./ui/naming.ts";
 
 /** The full save: the overworld slice plus the party the battle port added. */
 export interface GameSave extends SaveSlice {
@@ -362,7 +363,7 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       // this flag (data/scripts/reds_house.lua, pallet_town.lua), and with
       // it clear Mom would offer the wake-up line to a trainer who already
       // has a mon and Oak would still be barring the grass.
-      flags: { EVENT_GOT_STARTER: true },
+      flags: {},
       inventory: {},
       player: { name: "RED", rival: "BLUE" },
       lastHeal: { map: "PALLET_TOWN", x: 5, y: 6 },
@@ -372,11 +373,66 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       // slice has no lab script yet, so newGame grants SQUIRTLE L5 with
       // fixed zero DVs (deterministic — no rng draw at boot) so wild
       // encounters are playable end to end.
-      party: [newMon(this.data, "SQUIRTLE", 5)],
+      party: [],
     };
     this.overworld = new Overworld(this);
     this.stack = [new OverworldState(this.overworld)];
+    // Oak's speech: portrait + the extracted OakSpeech labels, then the two
+    // name entries. gen1recomp src/ui/OakSpeech.lua order.
     this.overworld.enter("REDS_HOUSE_2F", 3, 6, "down");
+    const P_OAK = 406, P_PLR = 408, P_RIV = 409, P_NIDO = 164;
+    const A = [
+      ["pic", P_OAK, 184, 24, 112, 112],
+      ["show_text", "_OakSpeechText1"],
+      ["pic", P_NIDO, 184, 24, 112, 112],
+      ["show_text", "_OakSpeechText2A"],
+      ["pic", P_OAK, 184, 24, 112, 112],
+      ["show_text", "_OakSpeechText2B"],
+      ["show_text", "_IntroducePlayerText"],
+      ["pic", P_PLR, 184, 24, 112, 112],
+    ] as const;
+    const B = [
+      ["pic", P_RIV, 184, 24, 112, 112],
+      ["show_text", "_IntroduceRivalText"],
+    ] as const;
+    const C = [
+      ["pic", P_PLR, 184, 24, 112, 112],
+      ["show_text", "_OakSpeechText3"],
+      ["pic", P_PLR, 184, 24, 112, 112],
+      ["wait", 4],
+      ["pic", P_PLR, 192, 32, 96, 96],
+      ["wait", 4],
+      ["pic", P_PLR, 200, 40, 80, 80],
+      ["wait", 4],
+      ["pic", P_PLR, 208, 48, 64, 64],
+      ["wait", 4],
+      ["pic", P_PLR, 216, 56, 48, 48],
+      ["wait", 4],
+      ["pic", P_PLR, 224, 64, 32, 32],
+      ["wait", 4],
+      ["pic_hide"],
+    ] as const;
+
+    const run = (rows: unknown, done: () => void) =>
+      this.overworld.runScript(rows as never[], done);
+
+    run(A, () => {
+      this.push(new NamingState(this, {
+        title: "YOUR NAME?", default: "RED",
+        onDone: (name: string) => {
+          this.save.player.name = name;
+          run(B, () => {
+            this.push(new NamingState(this, {
+              title: "RIVAL'S NAME?", default: "BLUE",
+              onDone: (rival: string) => {
+                this.save.player.rival = rival;
+                run(C, () => {});
+              },
+            }));
+          });
+        },
+      }));
+    });
   }
 
   /**
@@ -552,6 +608,13 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       if (s.box) return s as GameState & UiBoxSource;
     }
     return null;
+  }
+
+  pic(): unknown { return this.overworld.picShown; }
+
+  naming(): { view(): any } | null {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "naming" ? top : null;
   }
 
   uiChoice(): ChoiceSource | null {

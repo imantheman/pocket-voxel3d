@@ -15,6 +15,7 @@ exclude = [
     "crates/pocketvoxel-gu",
     "crates/pocketvoxel-psp",
     "crates/pocketvoxel-vita",
+    "crates/pocketvoxel-3ds",
     "vendor",
 ]
 

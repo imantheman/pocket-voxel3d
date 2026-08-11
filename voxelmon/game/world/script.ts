@@ -21,6 +21,8 @@ import { FADE_OUT_TO_WHITE } from "../rules/timing.ts";
 import type { Dir } from "./collision.ts";
 import type { NPC } from "./npc.ts";
 
+import { newMon } from "../battle/mon.ts";
+
 export type ScriptRow = [string, ...unknown[]];
 
 export interface ScriptSave {
@@ -50,6 +52,9 @@ export interface ScriptWorld {
   playOnce(songId: string, onDone: () => void): void;
   /** The fade overlay's ramp (Commands.lua:1216); the port holds frames. */
   fade(dir: "in" | "out", frames: number, onDone: () => void): void;
+  /** Screen-space portrait (voxel `pic` op): the intro speech, battle intros. */
+  showPic(page: number, x: number, y: number, w: number, h: number): void;
+  hidePic(): void;
   /** Turn an NPC to face the player (NPC.lua facePlayer). */
   facePlayer(npc: NPC): void;
 }
@@ -261,6 +266,52 @@ function* fade(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
   yield;
 }
 
+
+// oaks_lab.lua rung: the starter choice. give_pokemon is real; the object and
+// audio verbs are honest no-ops so upstream scripts run end to end instead of
+// dying on an unknown row (ScriptRunner.lua:158 does the same for old content).
+function* give_pokemon(ctx: ScriptContext, ...args: unknown[]): Generator<void, number | void> {
+  const species = args[0] as string;
+  const level = (args[1] as number | undefined) ?? 5;
+  const w = ctx.world;
+  const party = w.save.party as unknown[];
+  if (party.length < 6) party.push(newMon(w.data, species, level));
+  return;
+}
+
+function* noop_object(): Generator<void, number | void> { return; }
+function* noop_audio(): Generator<void, number | void> { return; }
+
+function* hide_object(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  (ctx.world as any).setObjectHidden?.(args[1] ?? args[0], true);
+}
+
+function* show_object(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  (ctx.world as any).setObjectHidden?.(args[1] ?? args[0], false);
+}
+
+function* face_object(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  (ctx.world as any).faceObject?.(args[0], (args[1] as string) ?? "down");
+}
+
+function* move_npc_to(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const runner = ctx.runner;
+  (ctx.world as any).moveNpcTo?.(args[0], args[1] as number, args[2] as number,
+    () => runner.resume());
+  yield;
+}
+
+function* pic(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  ctx.world.showPic(
+    args[0] as number, args[1] as number, args[2] as number,
+    args[3] as number, args[4] as number,
+  );
+}
+
+function* pic_hide(ctx: ScriptContext): Generator<void, void> {
+  ctx.world.hidePic();
+}
+
 const VERBS: Record<string, Verb> = {
   show_text,
   ask,
@@ -279,6 +330,18 @@ const VERBS: Record<string, Verb> = {
   play_once,
   fade,
   emote,
+  pic,
+  pic_hide,
+  give_pokemon,
+  hide_object,
+  show_object,
+  face_object,
+  move_npc_to,
+  place_npc: noop_object,
+  push_screen: noop_object,
+  play_sound: noop_audio,
+  play_music: noop_audio,
+  stop_music: noop_audio,
 };
 
 /** ScriptRunner.lua:26 scanLabels — first row wins, 1-based like the Lua. */

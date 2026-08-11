@@ -1,0 +1,17 @@
+[package]
+name = "pocketvoxel-3ds"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "pocketvoxel-3ds"
+path = "src/main.rs"
+
+[dependencies]
+ctru-rs = { git = "https://github.com/rust3ds/ctru-rs.git" }
+citro3d = { git = "https://github.com/rust3ds/citro3d-rs.git" }
+pocketvoxel-core = { path = "../pocketvoxel-core" }
+
+[build-dependencies]
+cc = "1"

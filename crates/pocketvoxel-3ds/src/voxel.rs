@@ -1,0 +1,69 @@
+//! The `voxel` surface: ops from the JS guest applied to the shared Scene.
+//! JSValue handling lives in vendor/quickjs/voxel_shim.c; this side only ever
+//! sees plain integers and byte slices.
+use pocketvoxel_core::scene::Scene;
+
+static mut SCENE: Option<Scene> = None;
+static mut GAME: &[u8] = &[];
+static mut AUDIO: &[u8] = &[];
+/// Host camera-pitch rung, or -1 to let the guest decide. The guest re-issues
+/// PITCH every tick, so overriding here is the only way it sticks.
+static mut PITCH_RUNG: i32 = -1;
+static mut OP_LOG: bool = false;
+pub unsafe fn set_op_log(on: bool) { OP_LOG = on; }
+
+pub unsafe fn set_pitch(rung: i32) { PITCH_RUNG = rung; }
+pub unsafe fn get_pitch() -> i32 { PITCH_RUNG }
+
+pub unsafe fn init(game: &'static [u8], audio: &'static [u8]) {
+    SCENE = Some(Scene::new());
+    GAME = game;
+    AUDIO = audio;
+}
+
+#[allow(static_mut_refs)]
+pub unsafe fn scene() -> &'static mut Scene {
+    SCENE.as_mut().expect("voxel::init not called")
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn voxel_log(s: *const u8, len: i32) {
+    if s.is_null() || len <= 0 { return; }
+    let b = core::slice::from_raw_parts(s, len as usize);
+    println!("js: {}", String::from_utf8_lossy(b));
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn voxel_op(code: u32, args: *const i32, n: i32) {
+    // The guest re-issues PITCH every tick, which resets the tween timer and
+    // freezes the camera mid-move. Once the host picks a rung, swallow them.
+    if OP_LOG && (code == 30 || code == 10 || code == 52 || code == 3) {
+        // ent / mapShow / uiText / reset - the ops scripted events drive
+        extern "C" { fn printf(f: *const u8, ...) -> i32; }
+        printf(b"op%u\n\0".as_ptr(), code);
+    }
+    if code == 13 && PITCH_RUNG >= 0 {
+        return;
+    }
+    if args.is_null() || n <= 0 { scene().op(code, &[], None); return; }
+    let a = core::slice::from_raw_parts(args, n as usize);
+    scene().op(code, a, None);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn voxel_op_text(code: u32, args: *const i32, n: i32,
+                                       s: *const u8, len: i32) {
+    let a = if args.is_null() || n <= 0 { &[][..] }
+            else { core::slice::from_raw_parts(args, n as usize) };
+    if s.is_null() || len <= 0 { scene().op(code, a, None); return; }
+    let bytes = core::slice::from_raw_parts(s, len as usize);
+    match core::str::from_utf8(bytes) {
+        Ok(t) => { scene().op(code, a, Some(t)); }
+        Err(_) => { scene().op(code, a, None); }
+    }
+}
+
+#[no_mangle] pub unsafe extern "C" fn voxel_game_ptr() -> *const u8 { GAME.as_ptr() }
+#[no_mangle] pub unsafe extern "C" fn voxel_game_len() -> u32 { GAME.len() as u32 }
+#[no_mangle] pub unsafe extern "C" fn voxel_audio_ptr() -> *const u8 { AUDIO.as_ptr() }
+#[no_mangle] pub unsafe extern "C" fn voxel_audio_len() -> u32 { AUDIO.len() as u32 }

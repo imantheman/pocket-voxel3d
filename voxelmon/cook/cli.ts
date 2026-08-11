@@ -147,9 +147,23 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
   const backKeys = Object.keys(gen.gfx)
     .filter((k) => k.startsWith("battle/back/"))
     .sort();
+
+  const backKeysTrainer = Object.keys(gen.gfx)
+    .filter((k) => k.startsWith("battle/trainer/"))
+    .sort();
   const backPageByKey = new Map<string, number>();
   for (const key of backKeys) {
     backPageByKey.set(key, pages.length);
+    pages.push(buildPicPage(gen, key));
+    pageOwners.push({ kind: ATLAS_KIND.pics });
+  }
+
+  // Trainer pics: one PICS page each, same as the mon sheets. These are the
+  // 56x56 portraits (Oak, the gym leaders, the rival) the intro and battle
+  // intro draw through the pic op.
+  const trainerPageByKey = new Map<string, number>();
+  for (const key of backKeysTrainer) {
+    trainerPageByKey.set(key, pages.length);
     pages.push(buildPicPage(gen, key));
     pageOwners.push({ kind: ATLAS_KIND.pics });
   }

@@ -41,6 +41,8 @@ export interface VoxelHost {
   entHide(slot: number): void;
   /** EMOTE kind; 0 clears. */
   emote(slot: number, kind: number): void;
+  pic(slot: number, page: number, x: number, y: number, w: number, h: number): void;
+  picHide(slot: number): void;
   // ui (the GB tile layer; tile ids index the cooked UI atlas)
   uiTile(x: number, y: number, tile: number): void;
   uiFill(x: number, y: number, w: number, h: number, tile: number): void;

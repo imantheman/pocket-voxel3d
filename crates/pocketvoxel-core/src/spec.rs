@@ -320,6 +320,8 @@ pub mod op {
     pub const ENT: u32 = 30;
     pub const ENT_HIDE: u32 = 31;
     pub const EMOTE: u32 = 32;
+    pub const PIC: u32 = 33;
+    pub const PIC_HIDE: u32 = 34;
     pub const UI_TILE: u32 = 50;
     pub const UI_FILL: u32 = 51;
     pub const UI_TEXT: u32 = 52;

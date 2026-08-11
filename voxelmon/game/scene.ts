@@ -33,6 +33,7 @@ import {
   BOX_TX,
   BOX_TY,
   encodeGlyphs,
+  ARROW_CURSOR,
   LINE1_Y,
   LINE2_Y,
   MAX_COLS,
@@ -76,6 +77,17 @@ export interface Prof {
 }
 
 /** What the scene reads each tick — game.ts satisfies this. */
+export interface NamingSource {
+  view(): {
+    title: string;
+    grid: string[][];
+    row: number;
+    col: number;
+    name: string;
+    maxLen: number;
+  };
+}
+
 export interface SceneView {
   data: VoxelmonData;
   overworld: Overworld;
@@ -83,6 +95,8 @@ export interface SceneView {
   uiBox(): UiBoxSource | null;
   /** Topmost YES/NO choice, if any (drawn over its parent box). */
   uiChoice(): ChoiceSource | null;
+  /** Topmost naming screen, if any (owns the whole tile layer). */
+  naming(): NamingSource | null;
   /** The active battle, if any — the scene then stages the arena and hands
    * the GB tile layer to the battle ui. */
   battleView(): BattleSceneView | null;
@@ -129,6 +143,8 @@ export class Scene {
   private sheetCache = new Map<string, number>();
   private lastEmote: { slot: number; kind: number } | null = null;
   private uiOwner: UiBoxSource | null = null;
+  private namingSig: string | null = null;
+  private picSig = "";
   private uiRows: UiRowCache[] = [];
   private uiPage = -1;
   private uiArrow = false;
@@ -248,6 +264,7 @@ export class Scene {
     for (const n of computeNeighbors(maps, ow.map.id, 1).slice(0, 4)) {
       // Un-cooked neighbours stay unseen: the pak has nothing to draw for
       // them, and the crossing guard (overworld.ts) already walls them off.
+      if ((n as any).hidden) continue;
       if (view.data.cookedMaps && !view.data.cookedMaps.includes(n.id)) continue;
       desired.push({ id: n.id, index: maps[n.id].index, ox: n.ox, oy: n.oy });
     }
@@ -423,6 +440,52 @@ export class Scene {
   // and every finished row stamped into the grid.
   private emitUi(view: SceneView): void {
     const host = this.host;
+    const pic = (view as unknown as { pic?: () => unknown }).pic?.() as
+      | { page: number; x: number; y: number; w: number; h: number }
+      | null
+      | undefined;
+    const psig = pic ? `${pic.page},${pic.x},${pic.y},${pic.w},${pic.h}` : "";
+    if (psig !== this.picSig) {
+      this.picSig = psig;
+      if (pic) host.pic(0, pic.page, pic.x, pic.y, pic.w, pic.h);
+      else host.picHide(0);
+    }
+    const nam = view.naming();
+    if (nam) {
+      const v = nam.view();
+      const sig = `${v.row},${v.col},${v.name},${v.grid[0]![0]}`;
+      if (sig !== this.namingSig) {
+        this.namingSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        // full-screen frame
+        host.uiTile(0, 0, BORDER_TL);
+        host.uiFill(1, 0, 18, 1, BORDER_H);
+        host.uiTile(19, 0, BORDER_TR);
+        host.uiFill(0, 1, 1, 16, BORDER_V);
+        host.uiFill(19, 1, 1, 16, BORDER_V);
+        host.uiTile(0, 17, BORDER_BL);
+        host.uiFill(1, 17, 18, 1, BORDER_H);
+        host.uiTile(19, 17, BORDER_BR);
+        host.uiFill(1, 1, 18, 16, SPACE);
+        this.stamp(host, 2, 1, v.title);
+        this.stamp(host, 3, 3, v.name);
+        host.uiFill(3 + v.name.length, 3, v.maxLen - v.name.length, 1, 0x76);
+        for (let r = 0; r < v.grid.length; r++) {
+          const row = v.grid[r]!;
+          for (let c = 0; c < row.length; c++) {
+            this.stamp(host, 2 + c * 2, 6 + r * 2, row[c]!);
+          }
+        }
+        host.uiTile(1 + v.col * 2, 6 + v.row * 2, ARROW_CURSOR);
+      }
+      return;
+    }
+    if (this.namingSig !== null) {
+      this.namingSig = null;
+      host.uiClear();
+      this.uiOwner = null;
+    }
     const owner = view.uiBox();
     const choice = view.uiChoice();
     if (!owner) {

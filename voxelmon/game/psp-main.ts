@@ -45,6 +45,8 @@ interface VoxelNative {
   ): void;
   entHide(slot: number): void;
   emote(slot: number, kind: number): void;
+  pic(slot: number, page: number, x: number, y: number, w: number, h: number): void;
+  picHide(slot: number): void;
   uiTile(x: number, y: number, tile: number): void;
   uiFill(x: number, y: number, w: number, h: number, tile: number): void;
   uiText(x: number, y: number, str: string): void;
@@ -131,6 +133,12 @@ class QuickJsHost implements VoxelHost {
     flags: number,
   ): void {
     native.ent(slot, sheet, frame, x, y, lift, flags);
+  }
+  pic(slot: number, page: number, x: number, y: number, w: number, h: number): void {
+    native.pic(slot, page, x, y, w, h);
+  }
+  picHide(slot: number): void {
+    native.picHide(slot);
   }
   entHide(slot: number): void {
     native.entHide(slot);

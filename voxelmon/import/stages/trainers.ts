@@ -3,6 +3,7 @@
 // set; the JSON keeps the manifest pic path so a later rung can decode them.
 
 import { check, hex2, hex4 } from "../ctx.ts";
+import { writeCompressedPic } from "./pokemon.ts";
 import type { Ctx } from "../ctx.ts";
 import { Rom } from "../rom.ts";
 
@@ -48,6 +49,16 @@ function trainerParties(
 }
 
 export function extractTrainers(ctx: Ctx): Record<string, unknown> {
+  // The player's intro portrait lives outside TrainerPicAndMoneyPointers
+  // (pokered RedPicFront); pull it so the Oak speech can show the player.
+  for (const [label, key] of [["RedPicFront", "battle/trainer/red"]] as const) {
+    try {
+      writeCompressedPic(ctx, label, key);
+    } catch (e) {
+      console.warn(`${label} skipped:`, String(e).slice(0, 80));
+    }
+  }
+
   const { rom, manifest } = ctx;
   const order = manifest.trainers;
   const names = ctx.symbol("TrainerNames");
@@ -96,6 +107,17 @@ export function extractTrainers(ctx: Ctx): Record<string, unknown> {
     // then 3 BCD money bytes; baseMoney = floor(bcd/100).
     const rawMoney = rom.bytes(money.bank, money.address + i * 5 + 2, 3);
     const picture = manifest.trainerPics[i];
+    // Trainer pics ARE in the ROM behind TrainerPicAndMoneyPointers; the
+    // manifest already names each one. Extract them like pokemon.ts does so
+    // the cook can build pics pages for portraits (Oak's intro, battles).
+    if (picture?.label) {
+      const key = `battle/trainer/${picture.imageBase ?? label.toLowerCase()}`;
+      try {
+        writeCompressedPic(ctx, picture.label, key);
+      } catch (e) {
+        console.warn(`trainer pic ${picture.label} skipped:`, String(e).slice(0, 80));
+      }
+    }
     let parties = trainerParties(ctx, pointers.bank, partyStarts[i], partyEnds[i]);
     // gen1recomp RomExtractor.lua:1317 — ChiefData is empty in the ROM (cut
     // content); the manifest carries a hand-authored party for it.

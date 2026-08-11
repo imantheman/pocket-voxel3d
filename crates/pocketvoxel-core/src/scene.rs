@@ -140,6 +140,8 @@ pub struct Scene {
     /// Stamps toggled OFF: (map_id, cx, cy). Stamps default to shown.
     pub stamps_off: Vec<(u32, i16, i16)>,
     pub ents: [Ent; ENTS_MAX],
+    /// Screen-space pictures (intro portraits, title art). Logical 480x272.
+    pub pics: [Pic; PICS_MAX],
     /// The GB UI tile grid, row-major. Tile 0 = empty (not drawn).
     pub ui: [u16; UI_COLS * UI_ROWS],
     /// The last `uiText` run; drawn over the grid, capped by `ui_reveal`.
@@ -164,6 +166,19 @@ pub struct Scene {
     pub ops: u32,
 }
 
+/// One screen-space picture: a whole atlas page scaled into a rect.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Pic {
+    pub shown: bool,
+    pub page: u16,
+    pub x: i16,
+    pub y: i16,
+    pub w: i16,
+    pub h: i16,
+}
+
+pub const PICS_MAX: usize = 4;
+
 impl Scene {
     pub fn new() -> Self {
         Self {
@@ -177,6 +192,7 @@ impl Scene {
             palette: -1,
             stamps_off: Vec::new(),
             ents: [Ent::default(); ENTS_MAX],
+            pics: [Pic::default(); PICS_MAX],
             ui: [0u16; UI_COLS * UI_ROWS],
             ui_text: None,
             ui_reveal: u32::MAX,
@@ -352,6 +368,21 @@ impl Scene {
                         flags: a(6) as u32,
                         emote,
                     };
+                }
+            }
+            op::PIC => {
+                if let Some(pic) = self.pics.get_mut(a(0) as usize) {
+                    pic.shown = true;
+                    pic.page = a(1) as u16;
+                    pic.x = a(2) as i16;
+                    pic.y = a(3) as i16;
+                    pic.w = a(4) as i16;
+                    pic.h = a(5) as i16;
+                }
+            }
+            op::PIC_HIDE => {
+                if let Some(pic) = self.pics.get_mut(a(0) as usize) {
+                    pic.shown = false;
                 }
             }
             op::ENT_HIDE => {

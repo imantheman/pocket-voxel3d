@@ -221,6 +221,15 @@ pub enum Item {
         pull: f32,
     },
     /// A GB UI tile, screen space, composited last with no depth.
+    /// A screen-space picture: whole atlas `page` scaled into the rect.
+    /// Logical 480x272 space, composited with the UI layer, no depth.
+    ScreenPic {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        page: u16,
+    },
     UiQuad {
         x: f32,
         y: f32,
@@ -750,6 +759,16 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
     );
 
     // 9. The GB UI layer.
+    for pic in scene.pics.iter().filter(|p| p.shown) {
+        items.push(Item::ScreenPic {
+            x: pic.x as f32,
+            y: pic.y as f32,
+            w: pic.w as f32,
+            h: pic.h as f32,
+            page: pic.page,
+        });
+    }
+
     ui::append_ui(scene, pak, &mut items);
 
     DrawList {
@@ -796,6 +815,7 @@ mod tests {
             Item::ShadowDecal { .. } => 4,
             Item::Ghost { .. } => 5,
             Item::Card { .. } => 6,
+            Item::ScreenPic { .. } => 8,
             Item::UiQuad { .. } => 9,
         }
     }

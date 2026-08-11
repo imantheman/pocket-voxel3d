@@ -20,7 +20,8 @@ import { defPassable, GameMap, isOutside } from "./map.ts";
 import { NPC } from "./npc.ts";
 import { Player } from "./player.ts";
 import { talkScript } from "./mapscripts.ts";
-import { ScriptRunner, type ScriptWorld } from "./script.ts";
+import { ScriptRunner, type ScriptRow, type ScriptWorld } from "./script.ts";
+import { MAP_SCRIPTS } from "./mapscripts.ts";
 import {
   destination,
   onArrive,
@@ -257,6 +258,8 @@ export class Overworld implements ScriptWorld {
       this.player = new Player(x, y, facing);
     }
     this.entities = [this.player, ...this.npcs];
+    console.log("NPCS " + (this.npcs as any[]).map((n: any) =>
+      (n?.name ?? n?.id ?? n?.obj?.name ?? "?") + "@" + n?.cellX + "," + n?.cellY).join(" | "));
   }
 
   // OverworldController.lua:110 objectVisible — the spawn filter. The slice
@@ -712,6 +715,22 @@ export class Overworld implements ScriptWorld {
   // encounter roll. (Spinners, badge gates, forced movement, Safari,
   // day-care, poison and repel are outside the slice.)
   onStepComplete(): void {
+    // story2.lua land-triggers: a map's onStep can return a script to run.
+    if (!this.runner.isRunning()) {
+      const self = this as any;
+      const label = self.mapId ?? self.map?.id ?? self.currentMap ?? "";
+      const hook =
+        (MAP_SCRIPTS as any)[label]?.onStep ??
+        (MAP_SCRIPTS as any)["PALLET_TOWN_ONSTEP_HOST"]?.onStep;
+      if (hook && label === "PALLET_TOWN") {
+        const rows = hook(this, self.save);
+        if (rows) {
+          this.runScript(rows);
+          return;
+        }
+      }
+    }
+
     const p = this.player;
     // The arrival disable is POSITIONAL (issue #265): the cell we warped in
     // on is inert until we step off it; pokered has no one-shot counter —
@@ -893,6 +912,61 @@ export class Overworld implements ScriptWorld {
         mv.remaining -= 1;
       }
     }
+  }
+
+  // Intro portrait state; scene.ts turns this into the voxel pic op.
+  picShown: { page: number; x: number; y: number; w: number; h: number } | null = null;
+
+  showPic(page: number, x: number, y: number, w: number, h: number): void {
+    this.picShown = { page, x, y, w, h };
+  }
+
+  hidePic(): void {
+    this.picShown = null;
+  }
+
+  /** Run a standalone script (the intro speech), outside any object talk. */
+  runScript(script: ScriptRow[], onDone?: () => void): void {
+    this.runner.run(script, { onDone });
+  }
+
+  /** Find an NPC by its object name or index (Commands.lua object lookup). */
+  findNpc(ref: unknown): any | null {
+    const list = this.npcs as any[];
+    if (typeof ref === "number") {
+      // Objects are named "<MAP>_obj_<n>"; index by that, not array slot,
+      // because hidden objects would shift the slots.
+      const byName = list.find((n) => String(n?.name ?? "").endsWith("_obj_" + ref));
+      return byName ?? list[ref - 1] ?? list[ref] ?? null;
+    }
+    const want = String(ref);
+    return (
+      list.find((n) => n?.name === want || n?.id === want || n?.obj?.name === want) ?? null
+    );
+  }
+
+  setObjectHidden(objName: unknown, hidden: boolean): void {
+    const npc = this.findNpc(objName);
+    if (npc) npc.hidden = hidden;
+  }
+
+  faceObject(ref: unknown, dir: string): void {
+    const npc = this.findNpc(ref);
+    if (npc) npc.facing = dir;
+  }
+
+  /** Walk an NPC to a tile, x first then y (Commands.lua move_npc_to). */
+  moveNpcTo(ref: unknown, tx: number, ty: number, onDone: () => void): void {
+    const npc = this.findNpc(ref);
+    if (!npc) { onDone(); return; }
+    const step = () => {
+      const dx = tx - (npc.cellX ?? 0);
+      const dy = ty - (npc.cellY ?? 0);
+      if (dx === 0 && dy === 0) { onDone(); return; }
+      const dir = dx !== 0 ? (dx > 0 ? "right" : "left") : dy > 0 ? "down" : "up";
+      this.scriptMove(npc, dir as any, 1, step);
+    };
+    step();
   }
 
   // ScriptWorld surface for the runner's verbs -------------------------------
