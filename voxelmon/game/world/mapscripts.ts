@@ -27,6 +27,30 @@ export interface MapScript {
 }
 
 export const MAP_SCRIPTS: Record<string, MapScript> = {
+  // oaks_lab.lua onStep: Blue cuts you off on the way out for the first
+  // rival battle. His party counters the starter you took (parties 1/2/3 in
+  // trainers.json are SQUIRTLE/BULBASAUR/CHARMANDER).
+  OAKS_LAB_ONSTEP_HOST: {
+    onStep: (ow: any, save: any) => {
+      const f = save?.flags ?? {};
+      if (!f.EVENT_GOT_STARTER) return null;
+      if (f.EVENT_BATTLED_RIVAL_IN_OAKS_LAB) return null;
+      const py = ow?.player?.cellY;
+      if (py !== 9) return null;
+      const px = ow?.player?.cellX ?? 5;
+      const party = f.EVENT_CHOSE_BULBASAUR ? 3 : f.EVENT_CHOSE_SQUIRTLE ? 1 : 2;
+      return [
+        ["move_npc_to", "SPRITE_BLUE", px, 10],
+        ["face_object", "SPRITE_BLUE", "up"],
+        ["show_text", "_OaksLabRivalIllTakeYouOnText"],
+        ["start_battle", "trainer", "OPP_RIVAL1", party],
+        ["set_flag", "EVENT_BATTLED_RIVAL_IN_OAKS_LAB"],
+        ["show_text", "_OaksLabRivalSmellYouLaterText"],
+        ["move_npc_to", "SPRITE_BLUE", 4, 3],
+      ] as ScriptRow[];
+    },
+  },
+
   // story2.lua PALLET_TOWN onStep: Oak stops the player at the north grass
   // and walks them to the lab, then OaksLabOakChooseMonSpeechScript runs.
   // The object-movement rungs (Oak's own walk, the OAK1/OAK2 swap) are still

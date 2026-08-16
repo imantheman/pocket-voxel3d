@@ -101,7 +101,11 @@ function* show_text(ctx: ScriptContext, ...args: unknown[]): Generator<void, voi
     args[0] as string,
     args[1] as Record<string, string> | undefined,
   );
-  ctx.world.showText(text, () => runner.resume());
+  console.log("show_text[" + String(args[0]).slice(0, 28) + "] len=" + (text?.length ?? -1));
+  ctx.world.showText(text, () => {
+    console.log("show_text done");
+    runner.resume();
+  });
   yield;
 }
 
@@ -312,7 +316,11 @@ function* start_battle(ctx: ScriptContext, ...args: unknown[]): Generator<void, 
   console.log("start_battle verb: " + kind + " " + id + " idx=" + idx +
     " hasFn=" + !!w.startTrainerBattle);
   if (kind === "trainer" && w.startTrainerBattle) {
-    w.startTrainerBattle(id, idx, undefined, () => runner.resume());
+    console.log("start_battle -> launching " + id + " party " + idx);
+    w.startTrainerBattle(id, idx, undefined, () => {
+      console.log("start_battle -> resuming script");
+      runner.resume();
+    });
     yield;
   }
 }

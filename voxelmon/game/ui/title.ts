@@ -53,6 +53,11 @@ export class TitleState implements GameState {
   update(): void {
     const p = this.game.input.pressed;
     this.timer += 1;
+    // The world stages behind the title and starts its map theme on its
+    // first tick, so claim the music from here rather than at push time.
+    if (this.timer === 2) {
+      (this.game as any).audio?.play?.("Music_TitleScreen");
+    }
 
     if (this.phase === "press") {
       // TitleState.lua cycles the art on a fixed beat while waiting.

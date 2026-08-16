@@ -193,6 +193,7 @@ class BattleGameState implements GameState, BattleSceneView {
   readonly ui = new BattleUi();
 
   onDone: (() => void) | null = null;
+  private popped = false;
 
   constructor(
     private game: VoxelmonGame,
@@ -212,9 +213,16 @@ class BattleGameState implements GameState, BattleSceneView {
   update(): void {
     const b = this.battle;
     if (b.finished) {
+      // Pop BEFORE resuming: done() runs the script synchronously, and if
+      // it pushes a textbox first, our own pop() would remove that instead
+      // of this battle — the box disappears and its callback never fires.
       const done = this.onDone;
       this.onDone = null;
-      if (done) queueMicrotask(done);
+      if (this.popped) return;
+      this.popped = true;
+      this.game.pop();
+      if (done) done();
+      return;
       // BattleState.lua:4647-4653 — teardown pops the battle screen FIRST,
       // and it is the map that holds: POST_BATTLE_RETURN before EnterMap
       // (home/overworld.asm:351-352) and then MapEntryAfterBattle's
@@ -408,6 +416,12 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     this.overworld.enter("REDS_HOUSE_2F", 3, 6, "down");
     // Title screen first; the intro only runs once the player picks.
     (this as any).hasSave = !!this.host.saveData?.();
+    // The title is a pushed state, so nothing calls startMap for it; the
+    // theme has to be asked for directly.
+
+    // enter() above starts the map theme; the title owns the music until
+    // the player picks, so claim it after the world is staged.
+
     this.push(
       new TitleState(this as any, (choice) => {
         if (choice === "viewer") {
@@ -615,6 +629,9 @@ export class VoxelmonGame implements OverworldShell, SceneView {
 
   /** Oak's speech + the two name entries (post-title). */
   startIntro(): void {
+    // Oak's speech has its own theme; startMap here would hand it the
+    // bedroom's song, which is Pallet Town's.
+    this.audio?.play?.("Music_MeetProfOak");
     const P_OAK = 406, P_PLR = 408, P_RIV = 409, P_NIDO = 164;
     const A = [
       ["pic", P_OAK, 184, 24, 112, 112],
@@ -661,7 +678,11 @@ export class VoxelmonGame implements OverworldShell, SceneView {
               title: "RIVAL'S NAME?", default: "BLUE",
               onDone: (rival: string) => {
                 this.save.player.rival = rival;
-                run(C, () => {});
+                run(C, () => {
+                  // The intro theme holds until something claims the music;
+                  // hand it to the spawn map once the shrink finishes.
+                  this.audio?.startMap?.("REDS_HOUSE_2F");
+                });
               },
             }));
           });

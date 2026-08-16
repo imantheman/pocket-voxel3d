@@ -30,6 +30,7 @@ extern "C" {
     fn qjs_run_bytecode(ctx: *mut JSContext, errbuf: *mut u8, errlen: i32) -> i32;
     fn qjs_register_voxel(ctx: *mut JSContext) -> i32;
     fn c3d_depth_test(on: i32);
+    fn gsp_flush(p: *const u8, len: u32);
     fn audio3ds_init(rate: i32, frames_per_buf: i32) -> i32;
     fn audio3ds_free_frames() -> i32;
     fn audio3ds_queue(pcm: *const i16, frames: i32) -> i32;
@@ -327,12 +328,21 @@ fn main() {
     let mut pic_idx: i32 = 0;
     // 11025 Hz stereo, ~3 ticks per buffer (the core renders 183.75
     // frames per 60 Hz tick).
+    // The synth renders at 11025, but the pump feeds fewer ticks than
+    // wall-clock 60 Hz, so playback drags. Telling ndsp the samples are
+    // 1.5x faster makes the song run at the right tempo.
+    // Measured on hardware: the pump delivers ~11,224 frames/sec, so the
+    // channel must consume at the rate we actually render.
     const AUDIO_RATE: i32 = 11025;
     // audio.rs: the synth advances by exactly the frames you ask for, so a
     // tick must render one tick's worth (11025/60, rounded up) or the music
     // stretches.
     const AUDIO_FRAMES_PER_TICK: i32 = 184;
     const AUDIO_BUF: i32 = AUDIO_FRAMES_PER_TICK * 3;
+    // pocketvoxel-psp/src/main.rs:289 — the synth has its own output rate
+    // and defaults high; without this it renders a fraction of a tick's
+    // song per call and the music drags.
+    let _ = unsafe { voxel::scene().audio.set_rate(AUDIO_RATE as u32) };
     let audio_on = unsafe { audio3ds_init(AUDIO_RATE, AUDIO_BUF) } != 0;
     let mut pcm: Vec<i16> = vec![0; (AUDIO_BUF * 2) as usize];
     println!("audio: {}", if audio_on { "ndsp open" } else { "unavailable" });
@@ -340,6 +350,8 @@ fn main() {
     let mut guest_drive = true;   // boot into the game; the title state runs there
     let mut dbg_tick: u32 = 0;
     let mut frame_start: u64 = 0;
+    let mut aud_ticks: u32 = 0;
+    let mut aud_queued: u32 = 0;
     let mut sim_acc: f32 = 0.0;
     let mut sim_last: u64 = 0;
     let mut fps_frames: u32 = 0;
@@ -347,6 +359,27 @@ fn main() {
     let pitches: [i32; 5] = [0, 1, 2, 3, 4];
     let mut pitch_i = 0usize;
     let mut page_tex: Vec<Option<texture::Texture>> = Vec::new();
+    // Card/pic vertex buffers are rebuilt every frame. Freeing them the
+    // instant the frame ends lets the GPU read memory that's already gone —
+    // on hardware that tears the walking sprite. Keep one frame alive.
+    let mut card_hold: Vec<(usize, buffer::Info)> = Vec::new();
+    let mut pic_hold: Vec<(usize, buffer::Info)> = Vec::new();
+    // Title art uploaded mid-frame can be sampled by the GPU before the
+    // cache is flushed; on hardware the right eye then reads half-written
+    // bytes and the pic strobes. Warm and flush them up front.
+    page_tex.resize_with(pak_static.atlases.len(), || None);
+    for pg in [408usize, 421, 422, 423, 424] {
+        if pg >= page_tex.len() { continue; }
+        let (data, ptw, pth) = build_page_tex(pak_static, pg as u16, -1);
+        if let Ok(mut t) = texture::Texture::new(
+            texture::TextureParameters::new_2d(ptw as u16, pth as u16, texture::ColorFormat::Rgba8)) {
+            if t.load_image(&data, texture::Face::default()).is_ok() {
+                unsafe { gsp_flush(data.as_ptr(), data.len() as u32); }
+                t.set_filter(texture::Filter::Nearest, texture::Filter::Nearest);
+                page_tex[pg] = Some(t);
+            }
+        }
+    }
 
     let mut yaw: f32 = 0.7;
     let mut pitch: f32 = 0.6;
@@ -357,19 +390,18 @@ fn main() {
         let k = hid.keys_held();
         let d = hid.keys_down();
         // START belongs to the game (menu). Exit with START+SELECT.
+        unsafe {
+            extern "C" { fn osGetTime() -> u64; }
+            frame_start = osGetTime();
+        }
         {
             extern "C" { fn osGetTime() -> u64; }
             fps_frames += 1;
             let now = unsafe { osGetTime() };
             if fps_last == 0 { fps_last = now; }
             if now.wrapping_sub(fps_last) >= 1000 {
-                fps_frames = 0;
-                fps_last = now;
+                fps_frames = 0; aud_ticks = 0; aud_queued = 0; fps_last = now;
             }
-        }
-        unsafe {
-            extern "C" { fn osGetTime() -> u64; }
-            frame_start = osGetTime();
         }
         if d.contains(KeyPad::START) && k.contains(KeyPad::SELECT) { break; }
         if d.contains(KeyPad::SELECT) && k.contains(KeyPad::START) { break; }
@@ -404,7 +436,6 @@ fn main() {
                     if want != pic_idx {
                         pic_idx = want.clamp(first, last);
                         let pg = pak_static.atlases[pic_idx as usize];
-                        println!("pic {} {}x{}", pic_idx, pg.w, pg.h);
                         unsafe { voxel::scene().op(33, &[0, pic_idx, 80, 20, 320, 230], None); }
                     }
                 }
@@ -419,19 +450,16 @@ fn main() {
                     guard += 1;
                 }
                 let pg = pak_static.atlases[pic_idx as usize];
-                println!("pic {} {}x{}", pic_idx, pg.w, pg.h);
                 unsafe { voxel::scene().op(33, &[0, pic_idx, 80, 20, 320, 230], None); }
             }
             if pic_on && d.contains(KeyPad::Y) && step == 0 {
                 let pg = pak_static.atlases[pic_idx as usize];
-                println!("pic {} {}x{}", pic_idx, pg.w, pg.h);
                 unsafe { voxel::scene().op(33, &[0, pic_idx, 80, 20, 320, 230], None); }
             }
         }
         if d.contains(KeyPad::SELECT) && pic_on {
             pic_on = false;
             unsafe { voxel::scene().op(34, &[0], None); }
-            println!("pic off");
         }
             // The guest is a 60 Hz simulation; render rate must not change
             // game speed. Catch up on whole ticks, capped so a hitch can't
@@ -463,19 +491,23 @@ fn main() {
                 let mut failed = false;
                 for _ in 0..steps {
                     if qjs_call_frame(CTX, b, e2.as_mut_ptr(), 255) != 0 { failed = true; break; }
+                    // Scene time and audio belong to the SIM tick, not the
+                    // rendered frame: at the 30 Hz render cap they were
+                    // advancing at half speed.
+                    voxel::scene().tick();
+                    if audio_on {
+                        let want = AUDIO_FRAMES_PER_TICK as usize;
+                        voxel::scene().render_audio(pak_static, want, &mut pcm);
+                        let got = audio3ds_queue(pcm.as_ptr(), want as i32);
+                        aud_ticks += 1;
+                        aud_queued += got as u32;
+                    }
                 }
                 if failed {
                     let n = e2.iter().position(|&c| c == 0).unwrap_or(0);
                     println!("frame ERR: {}", String::from_utf8_lossy(&e2[..n]));
                     guest_drive = false;
                 } else {
-                    // Advance scene tweens (camera pitch, fades) once per turn.
-                    voxel::scene().tick();
-                    if audio_on && audio3ds_free_frames() > 0 {
-                        let want = AUDIO_FRAMES_PER_TICK as usize;
-                        voxel::scene().render_audio(pak_static, want, &mut pcm);
-                        audio3ds_queue(pcm.as_ptr(), want as i32);
-                    }
                     let sc = voxel::scene();
                     // The guest owns which map you're standing in (mapShow).
                     let slot = &sc.maps[0];
@@ -546,6 +578,7 @@ fn main() {
                 if let Ok(mut t) = texture::Texture::new(
                     texture::TextureParameters::new_2d(ptw as u16, pth as u16, texture::ColorFormat::Rgba8)) {
                     if t.load_image(&data, texture::Face::default()).is_ok() {
+                        unsafe { gsp_flush(data.as_ptr(), data.len() as u32); }
                         t.set_filter(texture::Filter::Nearest, texture::Filter::Nearest);
                         page_tex[pi] = Some(t);
                         warmed += 1;
@@ -571,7 +604,6 @@ fn main() {
             geom.tex_rgba.shrink_to_fit();
             dist = geom.size * 1.4;
             center = geom.center;
-            println!("map {} (id {})  verts {}", map_i, map_ids[map_i], geom.verts.len());
         }
 
         if !guest_drive {
@@ -735,6 +767,7 @@ if page_tex.len() < pak_static.atlases.len() {
                 if let Ok(mut t) = texture::Texture::new(
                     texture::TextureParameters::new_2d(ptw as u16, pth as u16, texture::ColorFormat::Rgba8)) {
                     if t.load_image(&data, texture::Face::default()).is_ok() {
+                        unsafe { gsp_flush(data.as_ptr(), data.len() as u32); }
                         t.set_filter(texture::Filter::Nearest, texture::Filter::Nearest);
                         page_tex[i] = Some(t);
                     }
@@ -781,6 +814,7 @@ if page_tex.len() < pak_static.atlases.len() {
                 if let Ok(mut t) = texture::Texture::new(
                     texture::TextureParameters::new_2d(ptw as u16, pth as u16, texture::ColorFormat::Rgba8)) {
                     if t.load_image(&data, texture::Face::default()).is_ok() {
+                        unsafe { gsp_flush(data.as_ptr(), data.len() as u32); }
                         t.set_filter(texture::Filter::Nearest, texture::Filter::Nearest);
                         page_tex[i] = Some(t);
                     }
@@ -912,5 +946,11 @@ if page_tex.len() < pak_static.atlases.len() {
             }
             frame
         });
+
+        // Previous frame's buffers drop here, a full frame after the GPU
+        // last touched them.
+        card_hold = card_bufs;
+        pic_hold = pic_bufs;
+        let _ = (&card_hold, &pic_hold);
     }
 }

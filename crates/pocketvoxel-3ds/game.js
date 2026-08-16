@@ -4107,6 +4107,29 @@ class Player {
 
 // voxelmon/game/world/mapscripts.ts
 var MAP_SCRIPTS = {
+  OAKS_LAB_ONSTEP_HOST: {
+    onStep: (ow, save) => {
+      const f = save?.flags ?? {};
+      if (!f.EVENT_GOT_STARTER)
+        return null;
+      if (f.EVENT_BATTLED_RIVAL_IN_OAKS_LAB)
+        return null;
+      const py = ow?.player?.cellY;
+      if (py !== 9)
+        return null;
+      const px = ow?.player?.cellX ?? 5;
+      const party = f.EVENT_CHOSE_BULBASAUR ? 3 : f.EVENT_CHOSE_SQUIRTLE ? 1 : 2;
+      return [
+        ["move_npc_to", "SPRITE_BLUE", px, 10],
+        ["face_object", "SPRITE_BLUE", "up"],
+        ["show_text", "_OaksLabRivalIllTakeYouOnText"],
+        ["start_battle", "trainer", "OPP_RIVAL1", party],
+        ["set_flag", "EVENT_BATTLED_RIVAL_IN_OAKS_LAB"],
+        ["show_text", "_OaksLabRivalSmellYouLaterText"],
+        ["move_npc_to", "SPRITE_BLUE", 4, 3]
+      ];
+    }
+  },
   PALLET_TOWN_ONSTEP_HOST: {
     onStep: (ow, save) => {
       const f = save?.flags ?? {};
@@ -4303,7 +4326,11 @@ function scriptText(w, textId, subs) {
 function* show_text(ctx, ...args) {
   const runner = ctx.runner;
   const text = scriptText(ctx.world, args[0], args[1]);
-  ctx.world.showText(text, () => runner.resume());
+  console.log("show_text[" + String(args[0]).slice(0, 28) + "] len=" + (text?.length ?? -1));
+  ctx.world.showText(text, () => {
+    console.log("show_text done");
+    runner.resume();
+  });
   yield;
 }
 function* ask(ctx, ...args) {
@@ -4438,7 +4465,11 @@ function* start_battle(ctx, ...args) {
   const w = ctx.world;
   console.log("start_battle verb: " + kind + " " + id + " idx=" + idx + " hasFn=" + !!w.startTrainerBattle);
   if (kind === "trainer" && w.startTrainerBattle) {
-    w.startTrainerBattle(id, idx, undefined, () => runner.resume());
+    console.log("start_battle -> launching " + id + " party " + idx);
+    w.startTrainerBattle(id, idx, undefined, () => {
+      console.log("start_battle -> resuming script");
+      runner.resume();
+    });
     yield;
   }
 }
@@ -5127,8 +5158,9 @@ class Overworld {
       const self = this;
       const label2 = self.mapId ?? self.map?.id ?? self.currentMap ?? "";
       const hook = MAP_SCRIPTS[label2]?.onStep ?? MAP_SCRIPTS["PALLET_TOWN_ONSTEP_HOST"]?.onStep;
-      if (hook && label2 === "PALLET_TOWN") {
-        const rows = hook(this, self.save);
+      const hook2 = label2 === "OAKS_LAB" ? MAP_SCRIPTS["OAKS_LAB_ONSTEP_HOST"]?.onStep : hook;
+      if (hook2 && (label2 === "PALLET_TOWN" || label2 === "OAKS_LAB")) {
+        const rows = hook2(this, self.save);
         if (rows) {
           this.runScript(rows);
           return;
@@ -6221,6 +6253,9 @@ class TitleState {
   update() {
     const p = this.game.input.pressed;
     this.timer += 1;
+    if (this.timer === 2) {
+      this.game.audio?.play?.("Music_TitleScreen");
+    }
     if (this.phase === "press") {
       if (this.timer % 150 === 0)
         this.cycleAt += 1;
@@ -6634,6 +6669,7 @@ class BattleGameState {
   staging;
   ui = new BattleUi;
   onDone = null;
+  popped = false;
   constructor(game, species, level, prebuilt) {
     this.game = game;
     this.battle = prebuilt ?? new WildBattle(game.data, game.save, game.battleRng, species, level);
@@ -6646,8 +6682,13 @@ class BattleGameState {
     if (b.finished) {
       const done = this.onDone;
       this.onDone = null;
+      if (this.popped)
+        return;
+      this.popped = true;
+      this.game.pop();
       if (done)
-        queueMicrotask(done);
+        done();
+      return;
       this.game.pop();
       if (b.finished === "lose")
         this.game.blackout();
@@ -6909,6 +6950,7 @@ ${mdef.name}!`, () => step(i + 1));
     return null;
   }
   startIntro() {
+    this.audio?.play?.("Music_MeetProfOak");
     const P_OAK = 406, P_PLR = 408, P_RIV = 409, P_NIDO = 164;
     const A = [
       ["pic", P_OAK, 184, 24, 112, 112],
@@ -6954,7 +6996,9 @@ ${mdef.name}!`, () => step(i + 1));
               default: "BLUE",
               onDone: (rival) => {
                 this.save.player.rival = rival;
-                run(C, () => {});
+                run(C, () => {
+                  this.audio?.startMap?.("REDS_HOUSE_2F");
+                });
               }
             }));
           });

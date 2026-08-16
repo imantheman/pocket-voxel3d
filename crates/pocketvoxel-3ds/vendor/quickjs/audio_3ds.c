@@ -5,7 +5,7 @@
 #include <3ds.h>
 #include <string.h>
 
-#define NBUF 2
+#define NBUF 4
 
 static ndspWaveBuf s_buf[NBUF];
 static s16 *s_mem[NBUF];

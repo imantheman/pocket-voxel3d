@@ -723,8 +723,12 @@ export class Overworld implements ScriptWorld {
       const hook =
         (MAP_SCRIPTS as any)[label]?.onStep ??
         (MAP_SCRIPTS as any)["PALLET_TOWN_ONSTEP_HOST"]?.onStep;
-      if (hook && label === "PALLET_TOWN") {
-        const rows = hook(this, self.save);
+      const hook2 =
+        label === "OAKS_LAB"
+          ? (MAP_SCRIPTS as any)["OAKS_LAB_ONSTEP_HOST"]?.onStep
+          : hook;
+      if (hook2 && (label === "PALLET_TOWN" || label === "OAKS_LAB")) {
+        const rows = hook2(this, self.save);
         if (rows) {
           this.runScript(rows);
           return;
