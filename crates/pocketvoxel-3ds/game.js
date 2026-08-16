@@ -4126,7 +4126,8 @@ var MAP_SCRIPTS = {
         ["start_battle", "trainer", "OPP_RIVAL1", party],
         ["set_flag", "EVENT_BATTLED_RIVAL_IN_OAKS_LAB"],
         ["show_text", "_OaksLabRivalSmellYouLaterText"],
-        ["move_npc_to", "SPRITE_BLUE", 4, 3]
+        ["move_npc_to", "SPRITE_BLUE", 4, 11],
+        ["hide_object", "OAKS_LAB", "SPRITE_BLUE"]
       ];
     }
   },

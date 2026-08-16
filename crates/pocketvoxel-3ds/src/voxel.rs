@@ -66,7 +66,9 @@ pub unsafe extern "C" fn voxel_save_len() -> u32 { SAVE_BUF.len() as u32 }
 pub unsafe extern "C" fn voxel_log(s: *const u8, len: i32) {
     if s.is_null() || len <= 0 { return; }
     let b = core::slice::from_raw_parts(s, len as usize);
-    println!("js: {}", String::from_utf8_lossy(b));
+    let t = String::from_utf8_lossy(b);
+    // NPC dumps drown the console; keep the rest.
+    if !t.starts_with("NPCS") { println!("js: {}", t); }
 }
 
 #[no_mangle]

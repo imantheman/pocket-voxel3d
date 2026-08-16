@@ -60,6 +60,8 @@ export const DEFAULT_MAPS = [
   // cookedMaps guards.
   "ROUTE_2",
   "BLUES_HOUSE",
+  "PEWTER_CITY",
+  "ROUTE_3",
 ];
 
 export interface CookResult {

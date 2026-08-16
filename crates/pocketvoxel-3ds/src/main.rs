@@ -44,8 +44,54 @@ extern "C" {
 
 
 
+/// One pak per map on the card: memory scales with the biggest single map
+/// (~12 MB) instead of the total, so the map count is no longer capped.
+static mut PAK_BUF: Option<Box<[u8]>> = None;
+static mut PAK_CUR: Option<pak::Pak<'static>> = None;
+static mut PAK_NAME: String = String::new();
+
+#[allow(static_mut_refs)]
+unsafe fn load_map_pak(name: &str) -> bool {
+    if PAK_NAME == name && PAK_CUR.is_some() { return true; }
+    PAK_CUR = None;                       // drop borrows before the buffer goes
+    let path = format!("sdmc:/3ds/voxelmon/paks/{}.vxpak", name);
+    let Some(v) = map_pak(&path) else {
+        println!("pak missing: {}", name);
+        return false;
+    };
+    println!("pak {} {} KB", name, v.len() / 1024);
+    PAK_BUF = Some(v.into_boxed_slice());
+    let bytes: &'static [u8] =
+        core::mem::transmute(PAK_BUF.as_deref().unwrap_or(&[]));
+    match pak::read(bytes) {
+        Ok(p) => { PAK_CUR = Some(p); PAK_NAME = name.to_string(); true }
+        Err(e) => { println!("pak parse failed: {}", e); false }
+    }
+}
+
+#[allow(static_mut_refs)]
+unsafe fn cur_pak() -> &'static pak::Pak<'static> {
+    PAK_CUR.as_ref().expect("no pak loaded")
+}
+
 fn map_pak(path: &str) -> Option<Vec<u8>> {
-    std::fs::read(path).ok()
+    // fs::read grows by doubling, so a 45 MB pak can transiently want ~90 MB
+    // and blow the heap even though the final size fits. Size it exactly
+    // from the file length and read straight in.
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len() as usize;
+    let mut v: Vec<u8> = Vec::new();
+    if v.try_reserve_exact(len).is_err() {
+        println!("pak: cannot reserve {} KB", len / 1024);
+        return None;
+    }
+    v.resize(len, 0);
+    if f.read_exact(&mut v).is_err() {
+        println!("pak: short read");
+        return None;
+    }
+    Some(v)
 }
 
 fn app_heap_probe_mb() -> usize {
@@ -90,6 +136,19 @@ fn build_page_tex(pak: &Pak, pidx: u16, pal_sel: i32) -> (Vec<u8>, u32, u32) {
 
 static mut DRAWN: u32 = 0;
 
+// libctru's default split leaves the app heap small and the linear heap
+// larger than this renderer needs. The pak (a single contiguous read) lives
+// on the app heap, so give it the room.
+#[no_mangle]
+// Hardware grants far less than the emulator: 100+20 MB aborts at startup
+// under the Homebrew Launcher. 64+24 leaves room for libctru's own needs.
+// The forest pak alone is 58 MB; at a 64 MB app heap the read left nothing
+// for QuickJS or the geometry staging Vec.
+#[no_mangle]
+pub static __ctru_heap_size: u32 = 92 * 1024 * 1024;
+#[no_mangle]
+pub static __ctru_linear_heap_size: u32 = 24 * 1024 * 1024;
+
 fn po2(n: u32) -> u32 { let mut p = 8u32; while p < n { p <<= 1; } p }
 
 fn tiled_off(x: u32, y: u32, tw: u32) -> usize {
@@ -109,6 +168,10 @@ static GAME_JS: &[u8] = include_bytes!("../game.js");
 const SKY: u32 = 0x68_B0_D8_FF;
 const MAX_VERTS: usize = 400_000;
 const KINDS: [usize; 6] = [0, 2, 3, 6, 7, 8];
+/// Oversized maps (Viridian Forest) swap the fine tree hulls for the cook's
+/// own coarse/box carves — spec.rs QualityDials, the same LOD the PSP rung
+/// uses. 3.1M hull indices become 55k of boxes, so the whole map fits.
+const KINDS_LOD: [usize; 6] = [0, 2, 5, 6, 7, 8];
 
 struct MapGeom {
     chunk_spans: Vec<([f32; 3], [f32; 3], usize, usize)>,
@@ -150,7 +213,20 @@ fn build_map(pak: &Pak, map_id: u32) -> MapGeom {
     let mut cmax = [f32::MIN; 3];
     let map = pak.maps.iter().find(|m| m.map_id == map_id).expect("map");
     let chunks = &pak.chunks[map.first as usize..(map.first + map.count) as usize];
-    'outer: for &kind in KINDS.iter() {
+    // Prescan: if the fine geometry cannot fit, use the LOD set instead.
+    let kinds: &[usize] = {
+        let mut total = 0usize;
+        if let Some(m) = pak.maps.iter().find(|m| m.map_id == map_id) {
+            for c in &pak.chunks[m.first as usize..(m.first + m.count) as usize] {
+                for &k in KINDS.iter() { total += c.meshes[k].index_count as usize; }
+            }
+        }
+        // Routes and towns sit just under MAX_VERTS (Viridian City 396k,
+        // Route 2 383k) and must keep their fine carves. Only a map that is
+        // wildly past the budget — the forest, at 4.4M — takes the LOD set.
+        if total > MAX_VERTS * 3 { &KINDS_LOD } else { &KINDS }
+    };
+    'outer: for &kind in kinds.iter() {
         for chunk in chunks {
             let m = chunk.meshes[kind];
             if m.index_count == 0 { continue; }
@@ -209,46 +285,34 @@ fn main() {
 
     println!("linear free {} KB", unsafe_free_kb());
 
-    // GAME + AUDI outlive the pak: the guest reads them at boot.
-    {
-        let raw = map_pak("sdmc:/3ds/voxelmon/voxelmon.vxpak").unwrap_or_default();
-        if !raw.is_empty() {
-            let pk = pak::read(&raw).expect("parse pak");
-            let g: &'static [u8] = Box::leak(pk.game.to_vec().into_boxed_slice());
-            let a: &'static [u8] = Box::leak(pk.audio.to_vec().into_boxed_slice());
-            println!("game {} KB  audi {} KB", g.len()/1024, a.len()/1024);
-            unsafe { voxel::init(g, a); }
-            unsafe { voxel::load_save_file(); }
-        }
-    }
 
     // Hold the pak resident, as the live scene renderer will need.
     println!("loading pak...");
-    let pak_bytes: &'static [u8] = {
-        let mut v = match std::fs::read("sdmc:/3ds/voxelmon/voxelmon.vxpak") {
-            Ok(v) => v,
-            Err(e) => {
-                println!("PAK READ FAILED: {}", e);
-                println!("press START to exit");
-                loop {
-                    hid.scan_input();
-                    if hid.keys_down().contains(KeyPad::START) { return; }
-                    gfx.wait_for_vblank();
-                }
-            }
-        };
-        v.shrink_to_fit();
-        println!("pak resident {} KB", v.len() / 1024);
-        Box::leak(v.into_boxed_slice())
-    };
+    // Per-map paks: memory scales with the biggest map, not the map count.
+    let gd = std::fs::read("sdmc:/3ds/voxelmon/paks/gamedata.json").unwrap_or_default();
+    println!("gamedata {} KB", gd.len() / 1024);
+    let gd_static: &'static [u8] = Box::leak(gd.into_boxed_slice());
 
-    let pak_static: &'static Pak<'static> =
-        Box::leak(Box::new(pak::read(pak_bytes).expect("parse pak")));
+    let index_txt = std::fs::read_to_string("sdmc:/3ds/voxelmon/paks/index.txt")
+        .unwrap_or_default();
+    let map_index: Vec<(u32, String)> = index_txt
+        .lines()
+        .filter_map(|l| {
+            let mut it = l.split_whitespace();
+            Some((it.next()?.parse().ok()?, it.next()?.to_string()))
+        })
+        .collect();
+    println!("maps on card: {}", map_index.len());
 
-    let map_ids: Vec<u32> = {
-        let pak = pak::read(pak_bytes).expect("parse pak");
-        pak.maps.iter().map(|m| m.map_id).collect()
-    };
+    if !unsafe { load_map_pak("REDS_HOUSE_2F") } {
+        unsafe { load_map_pak("PALLET_TOWN"); }
+    }
+    let mut pak_static: &'static pak::Pak<'static> = unsafe { cur_pak() };
+    let audi: &'static [u8] = Box::leak(pak_static.audio.to_vec().into_boxed_slice());
+    unsafe { voxel::init(gd_static, audi); voxel::load_save_file(); }
+
+
+    let map_ids: Vec<u32> = map_index.iter().map(|(id, _)| *id).collect();
     println!("{} maps.  L/R = switch map", map_ids.len());
     println!("D-pad orbit  A/B zoom  START exit");
     let mut instance = citro3d::Instance::new().expect("citro3d");
@@ -514,6 +578,11 @@ fn main() {
                     if slot.shown {
                         let want = slot.map_id;
                         if map_ids.get(map_i).copied() != Some(want) {
+                            if let Some((_, nm)) = map_index.iter().find(|(id, _)| *id == want) {
+                                if unsafe { load_map_pak(nm) } {
+                                    pak_static = unsafe { cur_pak() };
+                                }
+                            }
                             if let Some(ix) = map_ids.iter().position(|&m| m == want) {
                                 map_i = ix;
                                 reload = true;
@@ -551,10 +620,20 @@ fn main() {
         if reload {
             reload = false;
             tex = None;
-            geom = {
-                let pak = pak::read(pak_bytes).expect("parse pak");
-                build_map(&pak, map_ids[map_i])
-            };
+            // Load this map's own pak, then build from it.
+            if let Some((_, nm)) = map_index.get(map_i) {
+                if unsafe { load_map_pak(nm) } {
+                    pak_static = unsafe { cur_pak() };
+                }
+            }
+            geom = build_map(pak_static, map_ids[map_i]);
+            {
+                // Which limit is eating the forest: the per-chunk 65,535
+                // vertex buffer ceiling, or the global MAX_VERTS budget?
+                let tot: usize = geom.chunk_spans.iter().map(|(_, _, a0, b0)| b0 - a0).sum();
+                let over = geom.chunk_spans.iter().filter(|(_, _, a0, b0)| b0 - a0 > 65535).count();
+                println!("chunks {} verts {} clipped {}", geom.chunk_spans.len(), tot, over);
+            }
             chunk_infos.clear();
             for (bmin, bmax, a0, b0) in geom.chunk_spans.iter() {
                 let n = (b0 - a0).min(65535);
