@@ -259,7 +259,7 @@ export class Overworld implements ScriptWorld {
     }
     this.entities = [this.player, ...this.npcs];
     console.log("NPCS " + (this.npcs as any[]).map((n: any) =>
-      (n?.name ?? n?.id ?? n?.obj?.name ?? "?") + "@" + n?.cellX + "," + n?.cellY).join(" | "));
+      JSON.stringify(n, (k, v) => (typeof v === "object" && v !== null && k !== "" ? undefined : v))).join(" | "));
   }
 
   // OverworldController.lua:110 objectVisible — the spawn filter. The slice
@@ -379,6 +379,7 @@ export class Overworld implements ScriptWorld {
     // START menu: outside the slice (the early return still skips the
     // turn re-arm below, like the original's jump to .displayDialogue)
     if (input.wasPressed("start")) {
+      (this as any).shell?.openStartMenu?.();
       return;
     }
     for (const dir of ["up", "down", "left", "right"] as Dir[]) {
@@ -941,8 +942,89 @@ export class Overworld implements ScriptWorld {
     }
     const want = String(ref);
     return (
-      list.find((n) => n?.name === want || n?.id === want || n?.obj?.name === want) ?? null
+      list.find((n) => n?.name === want || n?.id === want || n?.obj?.name === want) ??
+      // pokered object names aren't in the cooked data, so fall back to the
+      // sprite id ("SPRITE_OAK") which is stable across maps.
+      // Objects carry pokered's identity as def.text (TEXT_OAKSLAB_..._POKE_BALL);
+      // scripts refer to them without the TEXT_ prefix.
+      list.find((n) => {
+        const t = String((n as any)?.def?.text ?? "").toUpperCase();
+        const w = want.toUpperCase();
+        return t === w || t === "TEXT_" + w || t.replace(/^TEXT_/, "") === w;
+      }) ??
+      list.find((n) => {
+        const sp = String((n as any)?.def?.sprite ?? "").toUpperCase();
+        return sp === want.toUpperCase();
+      }) ?? null
     );
+  }
+
+  /** YES/NO then the letter grid (pokered's nickname prompt). */
+  askNickname(defaultName: string, onDone: (name: string | null) => void): void {
+    const shell = (this as any).shell ?? (this as any).game ?? null;
+    if (!shell?.askNickname) { onDone(null); return; }
+    shell.askNickname(defaultName, onDone);
+  }
+
+  /** Walk an actor through fixed waypoints (a scripted escort route). */
+  walkRoute(ref: unknown, route: [number, number][], onDone: () => void): void {
+    const list = route.slice();
+    const next = () => {
+      const wp = list.shift();
+      if (!wp) { onDone(); return; }
+      if (ref === "player") this.movePlayerTo(wp[0], wp[1], next);
+      else this.moveNpcTo(ref, wp[0], wp[1], next);
+    };
+    next();
+  }
+
+  startTrainerBattle(id: string, idx: number, name?: string, onDone?: () => void): void {
+    const self = this as any;
+    const shell = self.shell ?? self.game ?? self.host ?? null;
+    console.log("ow.startTrainerBattle shell=" + (shell ? "yes" : "NO") +
+      " fn=" + (shell && typeof shell.startTrainerBattle === "function"));
+    if (shell?.startTrainerBattle) shell.startTrainerBattle(id, idx, name, onDone);
+    else onDone?.();
+  }
+
+  /** Walk the player to a tile along a real path. */
+  movePlayerTo(tx: number, ty: number, onDone: () => void): void {
+    const p: any = this.player;
+    const path = this.findPath(p.cellX ?? 0, p.cellY ?? 0, tx, ty, p);
+    let i = 0;
+    const step = () => {
+      if (i >= path.length) { onDone(); return; }
+      const [nx, ny] = path[i++]!;
+      const dx = nx - (p.cellX ?? 0);
+      const dy = ny - (p.cellY ?? 0);
+      const dir = dx > 0 ? "right" : dx < 0 ? "left" : dy > 0 ? "down" : "up";
+      this.scriptMove(p, dir as any, 1, step);
+    };
+    step();
+  }
+
+  /** Commands.lua place_npc: spawn a scripted actor (Oak's escort). */
+  placeNpc(sprite: string, x: number, y: number, facing = "down"): any {
+    const existing = this.findNpc(sprite);
+    if (existing) {
+      existing.hidden = false;
+      existing.cellX = x; existing.cellY = y;
+      existing.px = x * 16; existing.py = y * 16;
+      existing.facing = facing;
+      return existing;
+    }
+    const obj: any = { sprite, x, y, cellX: x, cellY: y, facing, movement: "static" };
+    const self = this as any;
+    const npc = self.pooledNPC(self.mapId ?? self.map?.id ?? "", obj);
+    npc.def = npc.def ?? obj;
+    npc.cellX = x; npc.cellY = y;
+    npc.px = x * 16; npc.py = y * 16;
+    npc.facing = facing;
+    npc.frozen = false;
+    npc.wanders = false;
+    this.npcs.push(npc);
+    this.entities = [this.player, ...this.npcs];
+    return npc;
   }
 
   setObjectHidden(objName: unknown, hidden: boolean): void {
@@ -955,15 +1037,58 @@ export class Overworld implements ScriptWorld {
     if (npc) npc.facing = dir;
   }
 
-  /** Walk an NPC to a tile, x first then y (Commands.lua move_npc_to). */
+  /** Breadth-first route between two cells over walkable tiles. */
+  private findPath(sx: number, sy: number, tx: number, ty: number, mover: unknown): [number, number][] {
+    const W = 64, H = 64;
+    const key = (x: number, y: number) => y * W + x;
+    const prev = new Map<number, number>();
+    const seen = new Set<number>([key(sx, sy)]);
+    let q: [number, number][] = [[sx, sy]];
+    const ok = (x: number, y: number) => {
+      if (x < 0 || y < 0 || x >= W || y >= H) return false;
+      try {
+        return this.map.isWalkableCell(x, y) && !occupied(this.entities, x, y, mover as any);
+      } catch { return false; }
+    };
+    while (q.length) {
+      const nq: [number, number][] = [];
+      for (const [x, y] of q) {
+        if (x === tx && y === ty) {
+          const out: [number, number][] = [];
+          let k = key(x, y);
+          while (k !== key(sx, sy)) {
+            out.push([k % W, Math.floor(k / W)]);
+            const p2 = prev.get(k);
+            if (p2 === undefined) break;
+            k = p2;
+          }
+          return out.reverse();
+        }
+        for (const [nx, ny] of [[x, y + 1], [x, y - 1], [x + 1, y], [x - 1, y]] as [number, number][]) {
+          const nk = key(nx, ny);
+          if (seen.has(nk) || !(ok(nx, ny) || (nx === tx && ny === ty))) continue;
+          seen.add(nk);
+          prev.set(nk, key(x, y));
+          nq.push([nx, ny]);
+        }
+      }
+      q = nq;
+    }
+    return [];
+  }
+
+  /** Walk an NPC to a tile along a real path (no clipping through houses). */
   moveNpcTo(ref: unknown, tx: number, ty: number, onDone: () => void): void {
     const npc = this.findNpc(ref);
     if (!npc) { onDone(); return; }
+    const path = this.findPath(npc.cellX ?? 0, npc.cellY ?? 0, tx, ty, npc);
+    let i = 0;
     const step = () => {
-      const dx = tx - (npc.cellX ?? 0);
-      const dy = ty - (npc.cellY ?? 0);
-      if (dx === 0 && dy === 0) { onDone(); return; }
-      const dir = dx !== 0 ? (dx > 0 ? "right" : "left") : dy > 0 ? "down" : "up";
+      if (i >= path.length) { onDone(); return; }
+      const [nx, ny] = path[i++]!;
+      const dx = nx - (npc.cellX ?? 0);
+      const dy = ny - (npc.cellY ?? 0);
+      const dir = dx > 0 ? "right" : dx < 0 ? "left" : dy > 0 ? "down" : "up";
       this.scriptMove(npc, dir as any, 1, step);
     };
     step();

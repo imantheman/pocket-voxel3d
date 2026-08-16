@@ -145,6 +145,8 @@ export class Scene {
   private uiOwner: UiBoxSource | null = null;
   private namingSig: string | null = null;
   private picSig = "";
+  private titleSig: string | null = null;
+  private menuSig: string | null = null;
   private uiRows: UiRowCache[] = [];
   private uiPage = -1;
   private uiArrow = false;
@@ -440,16 +442,76 @@ export class Scene {
   // and every finished row stamped into the grid.
   private emitUi(view: SceneView): void {
     const host = this.host;
-    const pic = (view as unknown as { pic?: () => unknown }).pic?.() as
-      | { page: number; x: number; y: number; w: number; h: number }
-      | null
-      | undefined;
-    const psig = pic ? `${pic.page},${pic.x},${pic.y},${pic.w},${pic.h}` : "";
+    const rawPic = (view as unknown as { pic?: () => unknown }).pic?.();
+    const picList = Array.isArray(rawPic) ? rawPic : rawPic ? [rawPic] : [];
+    const psig = picList
+      .map((q: any, i: number) => `${i}:${q.page},${q.x},${q.y},${q.w},${q.h}`)
+      .join("|");
     if (psig !== this.picSig) {
       this.picSig = psig;
-      if (pic) host.pic(0, pic.page, pic.x, pic.y, pic.w, pic.h);
-      else host.picHide(0);
+      for (let i = 0; i < 4; i++) {
+        const q: any = picList[i];
+        if (q) host.pic(i, q.page, q.x, q.y, q.w, q.h);
+        else host.picHide(i);
+      }
     }
+
+    const sm = (view as unknown as { startMenu?: () => any }).startMenu?.();
+    if (sm) {
+      const sig = `${sm.index},${sm.entries.length}`;
+      if (sig !== this.menuSig) {
+        this.menuSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const W = 10, X = 20 - W - 1, Y = 0, H = sm.entries.length * 2;
+        host.uiTile(X, Y, BORDER_TL);
+        host.uiFill(X + 1, Y, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y, BORDER_TR);
+        host.uiFill(X, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + W, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + 1, Y + 1, W - 1, H, SPACE);
+        host.uiTile(X, Y + 1 + H, BORDER_BL);
+        host.uiFill(X + 1, Y + 1 + H, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y + 1 + H, BORDER_BR);
+        sm.entries.forEach((e: string, i: number) => {
+          this.stamp(host, X + 2, Y + 2 + i * 2, e);
+          if (i === sm.index) host.uiTile(X + 1, Y + 2 + i * 2, ARROW_CURSOR);
+        });
+      }
+      return;
+    }
+    if (this.menuSig !== null) { this.menuSig = null; host.uiClear(); this.uiOwner = null; }
+    const ttl = (view as unknown as { title?: () => any }).title?.();
+    if (ttl) {
+      const sig = `${ttl.phase},${ttl.index},${ttl.monPage}`;
+      if (sig !== this.titleSig) {
+        this.titleSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        if (ttl.phase === "press") {
+          this.stamp(host, 5, 15, "PRESS START");
+        } else {
+          // Top-left, like the original's main menu box.
+          const MX = 0, MY = 0, MW = 12;
+          const MH = ttl.menu.length * 2;
+          host.uiTile(MX, MY, BORDER_TL);
+          host.uiFill(MX + 1, MY, MW - 1, 1, BORDER_H);
+          host.uiTile(MX + MW, MY, BORDER_TR);
+          host.uiFill(MX, MY + 1, 1, MH, BORDER_V);
+          host.uiFill(MX + MW, MY + 1, 1, MH, BORDER_V);
+          host.uiFill(MX + 1, MY + 1, MW - 1, MH, SPACE);
+          host.uiTile(MX, MY + 1 + MH, BORDER_BL);
+          host.uiFill(MX + 1, MY + 1 + MH, MW - 1, 1, BORDER_H);
+          host.uiTile(MX + MW, MY + 1 + MH, BORDER_BR);
+          ttl.menu.forEach((m: string, i: number) => {
+            this.stamp(host, MX + 3, MY + 2 + i * 2, m);
+            if (i === ttl.index) host.uiTile(MX + 2, MY + 2 + i * 2, ARROW_CURSOR);
+          });
+        }
+      }
+      return;
+    }
+    if (this.titleSig !== null) { this.titleSig = null; host.uiClear(); this.uiOwner = null; }
     const nam = view.naming();
     if (nam) {
       const v = nam.view();

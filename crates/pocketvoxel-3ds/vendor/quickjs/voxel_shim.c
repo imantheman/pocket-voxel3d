@@ -6,6 +6,9 @@
 
 /* Rust side */
 extern void voxel_log(const char *s, int len);
+extern void voxel_save_write(const char *s, int len);
+extern const uint8_t *voxel_save_ptr(void);
+extern uint32_t voxel_save_len(void);
 extern void voxel_op(uint32_t code, const int32_t *args, int n);
 extern void voxel_op_text(uint32_t code, const int32_t *args, int n,
                           const char *s, int len);
@@ -52,6 +55,21 @@ static JSValue vox_uitext(JSContext *ctx, JSValueConst t, int c, JSValueConst *v
     return JS_UNDEFINED;
 }
 
+static JSValue vox_savewrite(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 1) return JS_UNDEFINED;
+    size_t len = 0;
+    const char *s = JS_ToCStringLen(ctx, &len, v[0]);
+    if (s) { voxel_save_write(s, (int)len); JS_FreeCString(ctx, s); }
+    return JS_UNDEFINED;
+}
+
+static JSValue vox_savedata(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;(void)c;(void)v;
+    if (voxel_save_len() == 0) return JS_UNDEFINED;
+    return JS_NewStringLen(ctx, (const char *)voxel_save_ptr(), voxel_save_len());
+}
+
 static void add_num(JSContext *ctx, JSValue obj, const char *name, int code, int len) {
     JS_SetPropertyStr(ctx, obj, name,
         JS_NewCFunctionMagic(ctx, vox_num, name, len, JS_CFUNC_generic_magic, code));
@@ -85,6 +103,8 @@ int qjs_register_voxel(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "gamedata",  JS_NewCFunction(ctx, vox_gamedata,  "gamedata", 0));
     JS_SetPropertyStr(ctx, o, "audiodata", JS_NewCFunction(ctx, vox_audiodata, "audiodata", 0));
     JS_SetPropertyStr(ctx, o, "stats",     JS_NewCFunction(ctx, vox_stats,     "stats", 0));
+    JS_SetPropertyStr(ctx, o, "saveWrite", JS_NewCFunction(ctx, vox_savewrite, "saveWrite", 1));
+    JS_SetPropertyStr(ctx, o, "saveData",  JS_NewCFunction(ctx, vox_savedata,  "saveData", 0));
     JS_SetPropertyStr(ctx, o, "uiText",    JS_NewCFunction(ctx, vox_uitext,    "uiText", 3));
 
     add_num(ctx, o, "reset",     3, 0);
@@ -101,6 +121,7 @@ int qjs_register_voxel(JSContext *ctx) {
     add_num(ctx, o, "emote",    32, 2);
     add_num(ctx, o, "pic",      33, 6);
     add_num(ctx, o, "picHide",  34, 1);
+    add_num(ctx, o, "viewer",   90, 0);
     add_num(ctx, o, "uiTile",   50, 3);
     add_num(ctx, o, "uiFill",   51, 5);
     add_num(ctx, o, "uiReveal", 53, 1);

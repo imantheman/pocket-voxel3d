@@ -1198,6 +1198,11 @@ export class WildBattle implements EffectBattle {
     this.sayNext(`${name} did not learn\n${mdef.name}!`);
   }
 
+  /** Swap the enemy battler (trainer send-out; makeBattler is module-local). */
+  swapEnemy(mon: PartyMon): void {
+    this.enemy = makeBattler(this.data, mon, false);
+  }
+
   /** :3808-3990 enemyMonFainted, wild slice: exp then the win. */
   enemyMonFainted(): void {
     this.awardExp();

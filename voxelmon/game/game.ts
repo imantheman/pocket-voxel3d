@@ -13,6 +13,7 @@
 import { fromSection, type AudioBanks } from "./audio/banks.ts";
 import { AudioDirector } from "./audio/music.ts";
 import { WildBattle } from "./battle/battle.ts";
+import { TrainerBattle } from "./battle/trainer.ts";
 import { healMon, newMon, type PartyMon } from "./battle/mon.ts";
 import { computeStaging, type BattleStaging } from "./battle/staging.ts";
 import { BattleUi } from "./battle/ui.ts";
@@ -34,6 +35,14 @@ import {
 import { Overworld, type OverworldShell, type SaveSlice } from "./world/overworld.ts";
 import { Textbox } from "./world/textbox.ts";
 import { NamingState } from "./ui/naming.ts";
+import { TitleState, TITLE_PAGES } from "./ui/title.ts";
+import { StartMenuState } from "./ui/startmenu.ts";
+import { encodeSave } from "./save-lua.ts";
+import { decodeSave } from "./save-read.ts";
+/** Must match Version.saveFormat in the recomp. */
+const SAVE_FORMAT = 4;   // Version.lua saveFormat
+/** battle/trainer/red — the intro portrait, not title/player. */
+const RED_PIC_PAGE = 408;
 
 /** The full save: the overworld slice plus the party the battle port added. */
 export interface GameSave extends SaveSlice {
@@ -183,12 +192,16 @@ class BattleGameState implements GameState, BattleSceneView {
   readonly staging: BattleStaging | null;
   readonly ui = new BattleUi();
 
+  onDone: (() => void) | null = null;
+
   constructor(
     private game: VoxelmonGame,
     species: string,
     level: number,
+    prebuilt?: WildBattle,
   ) {
-    this.battle = new WildBattle(game.data, game.save, game.battleRng, species, level);
+    this.battle = prebuilt ??
+      new WildBattle(game.data, game.save, game.battleRng, species, level);
     // stage where the player stands; nothing moves the player — the camera
     // goes to the arena (docs/VOXEL.md §4)
     const ow = game.overworld;
@@ -199,6 +212,9 @@ class BattleGameState implements GameState, BattleSceneView {
   update(): void {
     const b = this.battle;
     if (b.finished) {
+      const done = this.onDone;
+      this.onDone = null;
+      if (done) queueMicrotask(done);
       // BattleState.lua:4647-4653 — teardown pops the battle screen FIRST,
       // and it is the map that holds: POST_BATTLE_RETURN before EnterMap
       // (home/overworld.asm:351-352) and then MapEntryAfterBattle's
@@ -357,82 +373,69 @@ export class VoxelmonGame implements OverworldShell, SceneView {
    * has ever been outdoors.
    */
   newGame(): void {
+    // SaveData.lua:1566 newGame — same shape and key set the desktop
+    // recomp writes, so a save from either side opens in the other.
     this.save = {
-      // The starter is already in the party below, so the world must read
-      // as it does AFTER Oak's lab: every hand-ported script branches on
-      // this flag (data/scripts/reds_house.lua, pallet_town.lua), and with
-      // it clear Mom would offer the wake-up line to a trainer who already
-      // has a mon and Oak would still be barring the grass.
+      meta: { format: SAVE_FORMAT, mods: {} },
+      version: "red",
+      player: {
+        map: "REDS_HOUSE_2F",
+        x: 3,
+        y: 6,
+        facing: "down",
+        name: "RED",
+        rival: "BLUE",
+        id: Math.floor(Math.random() * 65536),
+      },
       flags: {},
       inventory: {},
-      player: { name: "RED", rival: "BLUE" },
+      pcItems: { POTION: 1 },
+      party: [],
+      box: {},
+      money: 3000,
+      defeatedTrainers: {},
+      pokedex: { seen: {}, owned: {} },
       lastHeal: { map: "PALLET_TOWN", x: 5, y: 6 },
       lastOutdoor: { id: "PALLET_TOWN", x: 5, y: 6 },
-      // DEVIATION (battle slice): the reference new-game party is EMPTY
-      // until Oak's lab hands out a starter (SaveData.lua newGame); the
-      // slice has no lab script yet, so newGame grants SQUIRTLE L5 with
-      // fixed zero DVs (deterministic — no rng draw at boot) so wild
-      // encounters are playable end to end.
-      party: [],
-    };
+      repelSteps: 0,
+      modData: {},
+      options: {},
+    } as any;
     this.overworld = new Overworld(this);
     this.stack = [new OverworldState(this.overworld)];
     // Oak's speech: portrait + the extracted OakSpeech labels, then the two
     // name entries. gen1recomp src/ui/OakSpeech.lua order.
     this.overworld.enter("REDS_HOUSE_2F", 3, 6, "down");
-    const P_OAK = 406, P_PLR = 408, P_RIV = 409, P_NIDO = 164;
-    const A = [
-      ["pic", P_OAK, 184, 24, 112, 112],
-      ["show_text", "_OakSpeechText1"],
-      ["pic", P_NIDO, 184, 24, 112, 112],
-      ["show_text", "_OakSpeechText2A"],
-      ["pic", P_OAK, 184, 24, 112, 112],
-      ["show_text", "_OakSpeechText2B"],
-      ["show_text", "_IntroducePlayerText"],
-      ["pic", P_PLR, 184, 24, 112, 112],
-    ] as const;
-    const B = [
-      ["pic", P_RIV, 184, 24, 112, 112],
-      ["show_text", "_IntroduceRivalText"],
-    ] as const;
-    const C = [
-      ["pic", P_PLR, 184, 24, 112, 112],
-      ["show_text", "_OakSpeechText3"],
-      ["pic", P_PLR, 184, 24, 112, 112],
-      ["wait", 4],
-      ["pic", P_PLR, 192, 32, 96, 96],
-      ["wait", 4],
-      ["pic", P_PLR, 200, 40, 80, 80],
-      ["wait", 4],
-      ["pic", P_PLR, 208, 48, 64, 64],
-      ["wait", 4],
-      ["pic", P_PLR, 216, 56, 48, 48],
-      ["wait", 4],
-      ["pic", P_PLR, 224, 64, 32, 32],
-      ["wait", 4],
-      ["pic_hide"],
-    ] as const;
-
-    const run = (rows: unknown, done: () => void) =>
-      this.overworld.runScript(rows as never[], done);
-
-    run(A, () => {
-      this.push(new NamingState(this, {
-        title: "YOUR NAME?", default: "RED",
-        onDone: (name: string) => {
-          this.save.player.name = name;
-          run(B, () => {
-            this.push(new NamingState(this, {
-              title: "RIVAL'S NAME?", default: "BLUE",
-              onDone: (rival: string) => {
-                this.save.player.rival = rival;
-                run(C, () => {});
-              },
-            }));
-          });
-        },
-      }));
-    });
+    // Title screen first; the intro only runs once the player picks.
+    (this as any).hasSave = !!this.host.saveData?.();
+    this.push(
+      new TitleState(this as any, (choice) => {
+        if (choice === "viewer") {
+          (this.host as any).viewer?.();
+          return;
+        }
+        if (choice === "continue") {
+          const text = this.host.saveData?.();
+          if (text) {
+            try {
+              this.save = decodeSave(text) as any;
+              // The live position lives in player.* (SaveData.lua newGame);
+              // lastOutdoor is only the palette/blackout anchor.
+              const pl: any = this.save.player ?? {};
+              const lo: any = this.save.lastOutdoor ?? {};
+              this.overworld.enter(
+                pl.map ?? lo.id ?? "PALLET_TOWN",
+                pl.x ?? lo.x ?? 5,
+                pl.y ?? lo.y ?? 6,
+                pl.facing ?? "down",
+              );
+              return;
+            } catch { /* fall through to a new game */ }
+          }
+        }
+        this.startIntro();
+      }),
+    );
   }
 
   /**
@@ -610,7 +613,128 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     return null;
   }
 
-  pic(): unknown { return this.overworld.picShown; }
+  /** Oak's speech + the two name entries (post-title). */
+  startIntro(): void {
+    const P_OAK = 406, P_PLR = 408, P_RIV = 409, P_NIDO = 164;
+    const A = [
+      ["pic", P_OAK, 184, 24, 112, 112],
+      ["show_text", "_OakSpeechText1"],
+      ["pic", P_NIDO, 184, 24, 112, 112],
+      ["show_text", "_OakSpeechText2A"],
+      ["pic", P_OAK, 184, 24, 112, 112],
+      ["show_text", "_OakSpeechText2B"],
+      ["show_text", "_IntroducePlayerText"],
+      ["pic", P_PLR, 184, 24, 112, 112],
+    ] as const;
+    const B = [
+      ["pic", P_RIV, 184, 24, 112, 112],
+      ["show_text", "_IntroduceRivalText"],
+    ] as const;
+    const C = [
+      ["pic", P_PLR, 184, 24, 112, 112],
+      ["show_text", "_OakSpeechText3"],
+      ["pic", P_PLR, 184, 24, 112, 112],
+      ["wait", 4],
+      ["pic", P_PLR, 192, 32, 96, 96],
+      ["wait", 4],
+      ["pic", P_PLR, 200, 40, 80, 80],
+      ["wait", 4],
+      ["pic", P_PLR, 208, 48, 64, 64],
+      ["wait", 4],
+      ["pic", P_PLR, 216, 56, 48, 48],
+      ["wait", 4],
+      ["pic", P_PLR, 224, 64, 32, 32],
+      ["wait", 4],
+      ["pic_hide"],
+    ] as const;
+
+    const run = (rows: unknown, done: () => void) =>
+      this.overworld.runScript(rows as never[], done);
+
+    run(A, () => {
+      this.push(new NamingState(this, {
+        title: "YOUR NAME?", default: "RED",
+        onDone: (name: string) => {
+          this.save.player.name = name;
+          run(B, () => {
+            this.push(new NamingState(this, {
+              title: "RIVAL'S NAME?", default: "BLUE",
+              onDone: (rival: string) => {
+                this.save.player.rival = rival;
+                run(C, () => {});
+              },
+            }));
+          });
+        },
+      }));
+    });
+  }
+
+  pic(): unknown {
+    const top = this.stack[this.stack.length - 1] as any;
+    if (top?.kind === "title") {
+      const v = top.view();
+      // logo up top; Red on the left with the cycling mon beside him.
+      const out: any[] = [{ page: TITLE_PAGES.logo, x: 96, y: 16, w: 288, h: 108 }];
+      out.push({ page: RED_PIC_PAGE, x: 160, y: 132, w: 112, h: 112 });
+      if (v.monPage >= 0) out.push({ page: v.monPage, x: 248, y: 140, w: 104, h: 104 });
+      return out;
+    }
+    return this.overworld.picShown;
+  }
+
+  openStartMenu(): void {
+    this.push(
+      new StartMenuState(this as any, (act) => {
+        // POKéMON and ITEM are their own screens; wired next.
+        if (act === "save") {
+          // The recomp keeps the live position in player.*; copy it over
+          // so the desktop build resumes exactly where the 3DS stood.
+          const ow: any = this.overworld;
+          const p: any = this.save.player;
+          p.map = ow.mapId ?? ow.map?.id ?? p.map;
+          p.x = ow.player?.cellX ?? p.x;
+          p.y = ow.player?.cellY ?? p.y;
+          p.facing = ow.player?.facing ?? p.facing;
+          const h: any = (this as any).host ?? (this as any).hostApi ?? (globalThis as any).voxel;
+          if (h?.saveWrite) h.saveWrite(encodeSave(this.save));
+          else console.log("save: no host.saveWrite");
+          this.pop();
+        }
+      }),
+    );
+  }
+
+  startMenu(): unknown {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "startmenu" ? top.view() : null;
+  }
+
+  title(): unknown {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "title" ? top.view() : null;
+  }
+
+  /** Script-driven trainer battle (start_battle). */
+  askNickname(defaultName: string, onDone: (name: string | null) => void): void {
+    this.push(
+      new NamingState(this, {
+        title: `${defaultName} NICKNAME?`,
+        default: defaultName,
+        onDone: (n: string) => onDone(n === defaultName ? null : n),
+      }),
+    );
+  }
+
+  startTrainerBattle(trainerId: string, partyIndex = 1, name?: string, onDone?: () => void): void {
+    console.log("game.startTrainerBattle " + trainerId + " " + partyIndex);
+    const battle = new TrainerBattle(
+      this.data, this.save, this.battleRng, trainerId, partyIndex, name,
+    );
+    const st = new BattleGameState(this, "", 0, battle);
+    st.onDone = onDone ?? null;
+    this.push(st);
+  }
 
   naming(): { view(): any } | null {
     const top = this.stack[this.stack.length - 1] as any;

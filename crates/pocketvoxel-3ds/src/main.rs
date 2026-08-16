@@ -30,6 +30,9 @@ extern "C" {
     fn qjs_run_bytecode(ctx: *mut JSContext, errbuf: *mut u8, errlen: i32) -> i32;
     fn qjs_register_voxel(ctx: *mut JSContext) -> i32;
     fn c3d_depth_test(on: i32);
+    fn audio3ds_init(rate: i32, frames_per_buf: i32) -> i32;
+    fn audio3ds_free_frames() -> i32;
+    fn audio3ds_queue(pcm: *const i16, frames: i32) -> i32;
     fn c3d_alpha_test(on: i32, r: i32);
     fn qjs_call_frame(ctx: *mut JSContext, buttons: i32, errbuf: *mut u8, errlen: i32) -> i32;
 }
@@ -83,6 +86,8 @@ fn build_page_tex(pak: &Pak, pidx: u16, pal_sel: i32) -> (Vec<u8>, u32, u32) {
     }
     (out, tw, th)
 }
+
+static mut DRAWN: u32 = 0;
 
 fn po2(n: u32) -> u32 { let mut p = 8u32; while p < n { p <<= 1; } p }
 
@@ -212,6 +217,7 @@ fn main() {
             let a: &'static [u8] = Box::leak(pk.audio.to_vec().into_boxed_slice());
             println!("game {} KB  audi {} KB", g.len()/1024, a.len()/1024);
             unsafe { voxel::init(g, a); }
+            unsafe { voxel::load_save_file(); }
         }
     }
 
@@ -319,8 +325,25 @@ fn main() {
     }
     let mut pic_on = false;
     let mut pic_idx: i32 = 0;
-    let mut guest_drive = false;
+    // 11025 Hz stereo, ~3 ticks per buffer (the core renders 183.75
+    // frames per 60 Hz tick).
+    const AUDIO_RATE: i32 = 11025;
+    // audio.rs: the synth advances by exactly the frames you ask for, so a
+    // tick must render one tick's worth (11025/60, rounded up) or the music
+    // stretches.
+    const AUDIO_FRAMES_PER_TICK: i32 = 184;
+    const AUDIO_BUF: i32 = AUDIO_FRAMES_PER_TICK * 3;
+    let audio_on = unsafe { audio3ds_init(AUDIO_RATE, AUDIO_BUF) } != 0;
+    let mut pcm: Vec<i16> = vec![0; (AUDIO_BUF * 2) as usize];
+    println!("audio: {}", if audio_on { "ndsp open" } else { "unavailable" });
+
+    let mut guest_drive = true;   // boot into the game; the title state runs there
     let mut dbg_tick: u32 = 0;
+    let mut frame_start: u64 = 0;
+    let mut sim_acc: f32 = 0.0;
+    let mut sim_last: u64 = 0;
+    let mut fps_frames: u32 = 0;
+    let mut fps_last: u64 = 0;
     let pitches: [i32; 5] = [0, 1, 2, 3, 4];
     let mut pitch_i = 0usize;
     let mut page_tex: Vec<Option<texture::Texture>> = Vec::new();
@@ -334,31 +357,96 @@ fn main() {
         let k = hid.keys_held();
         let d = hid.keys_down();
         // START belongs to the game (menu). Exit with START+SELECT.
+        {
+            extern "C" { fn osGetTime() -> u64; }
+            fps_frames += 1;
+            let now = unsafe { osGetTime() };
+            if fps_last == 0 { fps_last = now; }
+            if now.wrapping_sub(fps_last) >= 1000 {
+                fps_frames = 0;
+                fps_last = now;
+            }
+        }
+        unsafe {
+            extern "C" { fn osGetTime() -> u64; }
+            frame_start = osGetTime();
+        }
         if d.contains(KeyPad::START) && k.contains(KeyPad::SELECT) { break; }
         if d.contains(KeyPad::SELECT) && k.contains(KeyPad::START) { break; }
-        if d.contains(KeyPad::X) && guest_ok {
-            guest_drive = !guest_drive;
-            println!("guest_drive {}", guest_drive);
-        }
+        // The viewer is reachable only from the title menu now; START
+        // leaves it and hands control back to the game.
+        if unsafe { voxel::take_viewer_request() } { guest_drive = false; }
+        if !guest_drive && guest_ok && d.contains(KeyPad::START) { guest_drive = true; }
         if guest_drive {
-        if d.contains(KeyPad::Y) && guest_drive && pics_page >= 0 {
-            let n = pak_static.atlases.len() as i32;
-            if !pic_on { pic_on = true; pic_idx = pics_page; }
-            else {
-                pic_idx = (pic_idx + 1).rem_euclid(n);
-                while pak_static.atlases[pic_idx as usize].kind != atlas_kind::PICS {
-                    pic_idx = (pic_idx + 1).rem_euclid(n);
+        if guest_drive && pics_page >= 0 {
+            let held = hid.keys_held();
+            let mut step = 0i32;
+            if d.contains(KeyPad::Y) { if !pic_on { pic_on = true; pic_idx = pics_page; } else { step = 1; } }
+            if d.contains(KeyPad::L) { step = -10; }
+            if d.contains(KeyPad::R) { step = 10; }
+            // hold ZL/ZR to fly
+            if held.contains(KeyPad::ZL) { step = -25; }
+            if held.contains(KeyPad::ZR) { step = 25; }
+            if d.contains(KeyPad::SELECT) && pic_on {
+                pic_on = false;
+                unsafe { voxel::scene().op(34, &[0], None); }
+            }
+            // Touch the bottom screen to scrub: x maps across the whole
+            // PICS range, so any page is one tap away.
+            if pic_on {
+                let t = hid.touch_position();
+                if t.0 != 0 || t.1 != 0 {
+                    let first = pics_page.max(0);
+                    let last = pak_static.atlases.iter().rposition(|p| p.kind == atlas_kind::PICS)
+                        .map(|i| i as i32).unwrap_or(first);
+                    let span = (last - first).max(1) as f32;
+                    let want = first + ((t.0 as f32 / 320.0) * span) as i32;
+                    if want != pic_idx {
+                        pic_idx = want.clamp(first, last);
+                        let pg = pak_static.atlases[pic_idx as usize];
+                        println!("pic {} {}x{}", pic_idx, pg.w, pg.h);
+                        unsafe { voxel::scene().op(33, &[0, pic_idx, 80, 20, 320, 230], None); }
+                    }
                 }
             }
-            let pg = pak_static.atlases[pic_idx as usize];
-            println!("pic {} {}x{}", pic_idx, pg.w, pg.h);
-            unsafe { voxel::scene().op(33, &[0, pic_idx, 80, 20, 320, 230], None); }
+            if pic_on && step != 0 {
+                let n = pak_static.atlases.len() as i32;
+                pic_idx = (pic_idx + step).rem_euclid(n);
+                let dir = if step > 0 { 1 } else { -1 };
+                let mut guard = 0;
+                while pak_static.atlases[pic_idx as usize].kind != atlas_kind::PICS && guard < n {
+                    pic_idx = (pic_idx + dir).rem_euclid(n);
+                    guard += 1;
+                }
+                let pg = pak_static.atlases[pic_idx as usize];
+                println!("pic {} {}x{}", pic_idx, pg.w, pg.h);
+                unsafe { voxel::scene().op(33, &[0, pic_idx, 80, 20, 320, 230], None); }
+            }
+            if pic_on && d.contains(KeyPad::Y) && step == 0 {
+                let pg = pak_static.atlases[pic_idx as usize];
+                println!("pic {} {}x{}", pic_idx, pg.w, pg.h);
+                unsafe { voxel::scene().op(33, &[0, pic_idx, 80, 20, 320, 230], None); }
+            }
         }
         if d.contains(KeyPad::SELECT) && pic_on {
             pic_on = false;
             unsafe { voxel::scene().op(34, &[0], None); }
             println!("pic off");
         }
+            // The guest is a 60 Hz simulation; render rate must not change
+            // game speed. Catch up on whole ticks, capped so a hitch can't
+            // spiral.
+            let steps = unsafe {
+                extern "C" { fn osGetTime() -> u64; }
+                let now = osGetTime();
+                if sim_last == 0 { sim_last = now; }
+                let dt = now.wrapping_sub(sim_last) as f32;
+                sim_last = now;
+                sim_acc += dt.min(100.0);
+                let mut n = 0;
+                while sim_acc >= 16.667 && n < 3 { sim_acc -= 16.667; n += 1; }
+                n.max(1)
+            };
             let mut b = 0i32;
             let browsing = pic_on;
             if k.contains(KeyPad::DPAD_UP)    { b |= 1 << 0; }
@@ -372,13 +460,22 @@ fn main() {
             if browsing { b = 0; }
             unsafe {
                 let mut e2 = [0u8; 256];
-                if qjs_call_frame(CTX, b, e2.as_mut_ptr(), 255) != 0 {
+                let mut failed = false;
+                for _ in 0..steps {
+                    if qjs_call_frame(CTX, b, e2.as_mut_ptr(), 255) != 0 { failed = true; break; }
+                }
+                if failed {
                     let n = e2.iter().position(|&c| c == 0).unwrap_or(0);
                     println!("frame ERR: {}", String::from_utf8_lossy(&e2[..n]));
                     guest_drive = false;
                 } else {
                     // Advance scene tweens (camera pitch, fades) once per turn.
                     voxel::scene().tick();
+                    if audio_on && audio3ds_free_frames() > 0 {
+                        let want = AUDIO_FRAMES_PER_TICK as usize;
+                        voxel::scene().render_audio(pak_static, want, &mut pcm);
+                        audio3ds_queue(pcm.as_ptr(), want as i32);
+                    }
                     let sc = voxel::scene();
                     // The guest owns which map you're standing in (mapShow).
                     let slot = &sc.maps[0];
@@ -388,7 +485,6 @@ fn main() {
                             if let Some(ix) = map_ids.iter().position(|&m| m == want) {
                                 map_i = ix;
                                 reload = true;
-                                println!("guest map -> {}", want);
                             }
                         }
                     }
@@ -400,7 +496,6 @@ fn main() {
                             if let Some(ix) = map_ids.iter().position(|&m| m == want) {
                                 map_i = ix;
                                 reload = true;
-                                println!("guest map -> {}", want);
                             }
                         }
                     }
@@ -429,15 +524,34 @@ fn main() {
                 build_map(&pak, map_ids[map_i])
             };
             chunk_infos.clear();
-            for (bmin, bmax, a, b) in geom.chunk_spans.iter() {
-                let n = (b - a).min(65535);
+            for (bmin, bmax, a0, b0) in geom.chunk_spans.iter() {
+                let n = (b0 - a0).min(65535);
                 if n == 0 { continue; }
                 let mut bi = buffer::Info::new();
-                if bi.add(buffer::Buffer::new(&geom.verts[*a..*a + n]), attr_info.permutation()).is_ok() {
+                if bi.add(buffer::Buffer::new(&geom.verts[*a0..*a0 + n]), attr_info.permutation()).is_ok() {
                     chunk_infos.push((*bmin, *bmax, bi));
                 }
             }
-            println!("chunks {}", chunk_infos.len());
+            // Pre-warm the pages this map will ask for: decoding + uploading
+            // mid-frame is what causes the hitch the first time a sprite or
+            // the dialogue box appears.
+            if page_tex.len() < pak_static.atlases.len() {
+                page_tex.resize_with(pak_static.atlases.len(), || None);
+            }
+            let mut warmed = 0;
+            for (pi, pg) in pak_static.atlases.iter().enumerate() {
+                if pg.kind != atlas_kind::UI && pg.kind != atlas_kind::SPRITES { continue; }
+                if page_tex[pi].is_some() { continue; }
+                let (data, ptw, pth) = build_page_tex(pak_static, pi as u16, -1);
+                if let Ok(mut t) = texture::Texture::new(
+                    texture::TextureParameters::new_2d(ptw as u16, pth as u16, texture::ColorFormat::Rgba8)) {
+                    if t.load_image(&data, texture::Face::default()).is_ok() {
+                        t.set_filter(texture::Filter::Nearest, texture::Filter::Nearest);
+                        page_tex[pi] = Some(t);
+                        warmed += 1;
+                    }
+                }
+            }
             let mut t = texture::Texture::new(
                 texture::TextureParameters::new_2d(geom.tw as u16, geom.th as u16, texture::ColorFormat::Rgba8),
             ).expect("tex");
@@ -493,8 +607,7 @@ fn main() {
         let mut mvp_r = pr * camera;
         let mut card_groups: Vec<(u16, Vec<Vertex>)> = Vec::new();
         let mut ui_verts: Vec<Vertex> = Vec::new();
-        let mut pic_verts: Vec<Vertex> = Vec::new();
-        let mut pic_page: u16 = 0;
+        let mut pic_groups: Vec<(u16, Vec<Vertex>)> = Vec::new();
         let mut ui_page: u16 = 0;
         if guest_drive {
             let list = unsafe { draw::build(voxel::scene(), pak_static) };
@@ -525,9 +638,11 @@ fn main() {
             dbg_tick += 1;
             mvp_l = pl * gcam;
             mvp_r = pr * gcam;
+            // Title screen and Oak's speech own the whole frame; the guest
+            // still emits the player's overworld card, so drop it there.
+            let pic_active_scan = list.items.iter().any(|i| matches!(i, Item::ScreenPic { .. }));
             for it in list.items.iter() {
                 if let Item::ScreenPic { x, y, w, h, page } = it {
-                    pic_page = *page;
                     let pg = &pak_static.atlases[*page as usize];
                     let (pw, ph) = (po2(pg.w as u32) as f32, po2(pg.h as u32) as f32);
                     let (u1, v1) = (pg.w as f32 / pw, pg.h as f32 / ph);
@@ -537,13 +652,17 @@ fn main() {
                     let (x1, y1) = (sx(*x + *w), sy(*y + *h));
                     let mp = |px: i16, py: i16, u: f32, v: f32| Vertex {
                         pos: [px, py, 0, 0], color: [255, 255, 255, 255], uv: [u, v] };
-                    // same V flip the rest of the atlas sampling uses
-                    pic_verts.push(mp(x0, y0, 0.0, 1.0));
-                    pic_verts.push(mp(x1, y0, u1, 1.0));
-                    pic_verts.push(mp(x1, y1, u1, 1.0 - v1));
-                    pic_verts.push(mp(x0, y0, 0.0, 1.0));
-                    pic_verts.push(mp(x1, y1, u1, 1.0 - v1));
-                    pic_verts.push(mp(x0, y1, 0.0, 1.0 - v1));
+                    let gi = match pic_groups.iter().position(|g| g.0 == *page) {
+                        Some(i) => i,
+                        None => { pic_groups.push((*page, Vec::new())); pic_groups.len() - 1 }
+                    };
+                    let gv = &mut pic_groups[gi].1;
+                    gv.push(mp(x0, y0, 0.0, 1.0));
+                    gv.push(mp(x1, y0, u1, 1.0));
+                    gv.push(mp(x1, y1, u1, 1.0 - v1));
+                    gv.push(mp(x0, y0, 0.0, 1.0));
+                    gv.push(mp(x1, y1, u1, 1.0 - v1));
+                    gv.push(mp(x0, y1, 0.0, 1.0 - v1));
                 }
                 if let Item::UiQuad { x, y, w, h, page, tile } = it {
                     ui_page = *page;
@@ -571,6 +690,7 @@ fn main() {
                     ui_verts.push(m2(x1, y1, u1, v1));
                     ui_verts.push(m2(x0, y1, u0, v1));
                 }
+                if pic_active_scan { continue; }
                 if let Item::Card { verts, page, uv, mirror, pull } = it {
                     let pg = &pak_static.atlases[*page as usize];
                     let sx = pg.w as f32 / po2(pg.w as u32) as f32;
@@ -630,14 +750,10 @@ if page_tex.len() < pak_static.atlases.len() {
         }).collect();
         if guest_drive && dbg_tick % 60 == 0 {
             let pgx = &pak_static.atlases[ui_page as usize];
-            println!("UI v{} pg{} atlas {}x{} po2 {}x{} cols{}",
-                ui_verts.len(), ui_page, pgx.w, pgx.h,
-                po2(pgx.w as u32), po2(pgx.h as u32), (pgx.w as u32 / 8).max(1));
         }
         if guest_drive && dbg_tick % 30 == 0 {
             let sc3 = unsafe { voxel::scene() };
             let n = sc3.ents.iter().filter(|e| e.shown).count();
-            println!("ents {} ui {}", n, ui_verts.len());
         }
         let ui_pg = ui_page as usize;
         if !ui_verts.is_empty() && ui_pg < page_tex.len() && page_tex[ui_pg].is_none() {
@@ -654,25 +770,30 @@ if page_tex.len() < pak_static.atlases.len() {
             let sp = unsafe {
                 voxel::scene().pics.iter().filter(|p| p.shown).count()
             };
-            println!("pic idx {}  shown {}  verts {}", pic_idx, sp, pic_verts.len());
         }
-        let pic_pg = pic_page as usize;
-        if !pic_verts.is_empty() && pic_pg < page_tex.len() && page_tex[pic_pg].is_none() {
-            let (data, ptw, pth) = build_page_tex(pak_static, pic_page, -1);
-            if let Ok(mut t) = texture::Texture::new(
-                texture::TextureParameters::new_2d(ptw as u16, pth as u16, texture::ColorFormat::Rgba8)) {
-                if t.load_image(&data, texture::Face::default()).is_ok() {
-                    t.set_filter(texture::Filter::Nearest, texture::Filter::Nearest);
-                    page_tex[pic_pg] = Some(t);
+        if page_tex.len() < pak_static.atlases.len() {
+            page_tex.resize_with(pak_static.atlases.len(), || None);
+        }
+        for (pg, _) in pic_groups.iter() {
+            let i = *pg as usize;
+            if i < page_tex.len() && page_tex[i].is_none() {
+                let (data, ptw, pth) = build_page_tex(pak_static, *pg, -1);
+                if let Ok(mut t) = texture::Texture::new(
+                    texture::TextureParameters::new_2d(ptw as u16, pth as u16, texture::ColorFormat::Rgba8)) {
+                    if t.load_image(&data, texture::Face::default()).is_ok() {
+                        t.set_filter(texture::Filter::Nearest, texture::Filter::Nearest);
+                        page_tex[i] = Some(t);
+                    }
                 }
             }
         }
-        let pic_buf: Option<buffer::Info> = if pic_verts.is_empty() { None } else {
+        let pic_bufs: Vec<(usize, buffer::Info)> = pic_groups.iter().filter_map(|(pg, v)| {
+            if v.is_empty() { return None; }
             let mut bi = buffer::Info::new();
-            let n = pic_verts.len().min(65535);
-            bi.add(buffer::Buffer::new(&pic_verts[..n]), attr_info.permutation()).ok();
-            Some(bi)
-        };
+            let n = v.len().min(65535);
+            bi.add(buffer::Buffer::new(&v[..n]), attr_info.permutation()).ok()?;
+            Some((*pg as usize, bi))
+        }).collect();
         let ui_buf: Option<buffer::Info> = if ui_verts.is_empty() { None } else {
             let mut bi = buffer::Info::new();
             let n = ui_verts.len().min(65535);
@@ -682,10 +803,25 @@ if page_tex.len() < pak_static.atlases.len() {
         let page_tex_ref = &page_tex;
         let (focus_x, focus_z) = if guest_drive { (center[0], center[2]) } else { (center[0], center[2]) };
         let cull_r2: f32 = if guest_drive { 240.0 * 240.0 } else { 1.0e12 };
-        let pic_active = !pic_verts.is_empty();
+        let pic_active = !pic_groups.is_empty();        // View-cone cull: the radius test draws a full circle, but at this
+        // pitch most of it is behind or outside the frustum.
+        let (eye_x, eye_z) = (eye.x(), eye.z());
+        let (mut fx, mut fz) = (center[0] - eye.x(), center[2] - eye.z());
+        let fl = (fx * fx + fz * fz).sqrt().max(1e-6);
+        fx /= fl; fz /= fl;
         let tex_ref = tex.as_ref().unwrap();
         let infos_ref = &chunk_infos;
 
+        // Lock to 30 Hz: a steady cadence reads smoother than swinging
+        // between 37 and 60. The guest still simulates at 60 (sim_acc), so
+        // this changes smoothness, not game speed.
+        unsafe {
+            extern "C" { fn osGetTime() -> u64; fn svcSleepThread(ns: i64); }
+            let spent = osGetTime().wrapping_sub(frame_start);
+            if spent < 33 {
+                svcSleepThread(((33 - spent) as i64) * 1_000_000);
+            }
+        }
         instance.render_frame_with(|mut frame| {
             fn cast_lifetime_to_closure<'frame, T>(x: T) -> T
             where
@@ -702,30 +838,45 @@ if page_tex.len() < pak_static.atlases.len() {
                 frame.set_texenvs(&[stage0]);
                 frame.set_attr_info(&attr_info);
                 if !pic_active {
+                let mut drawn = 0u32;
                 for (bmin, bmax, bi) in infos_ref.iter() {
                     let cx = (bmin[0] + bmax[0]) * 0.5;
                     let cz = (bmin[2] + bmax[2]) * 0.5;
                     let dx = cx - focus_x;
                     let dz = cz - focus_z;
                     if dx * dx + dz * dz > cull_r2 { continue; }
+                    if guest_drive {
+                        let hx = (bmax[0] - bmin[0]) * 0.5;
+                        let hz = (bmax[2] - bmin[2]) * 0.5;
+                        let r = (hx * hx + hz * hz).sqrt() + 24.0;
+                        let vx = cx - eye_x;
+                        let vz = cz - eye_z;
+                        let along = vx * fx + vz * fz;
+                        let side = (vx * fz - vz * fx).abs();
+                        if along < -r || side > along.max(0.0) * 1.35 + r { continue; }
+                    }
+                    drawn += 1;
                     frame.draw_arrays(buffer::Primitive::Triangles, bi, None).unwrap();
                 }
+                unsafe { DRAWN = drawn; }
                 }
                 // Card UVs are already atlas-scaled here, so the shader's
                 // terrain uvx transform must not apply again.
                 frame.bind_vertex_uniform(uvx_idx, FVec4::new(1.0, 1.0, 0.0, 0.0));
-                if let Some(pb) = pic_buf.as_ref() {
+                if !pic_bufs.is_empty() {
                     unsafe { c3d_depth_test(0); }
                     let po: Matrix4 = Projection::orthographic(
                         0.0..400.0, 240.0..0.0,
                         ClipPlanes { near: -1.0, far: 1.0 })
                         .screen(ScreenOrientation::Rotated).into();
-                    if let Some(t) = page_tex_ref.get(pic_pg).and_then(|o| o.as_ref()) {
-                        frame.bind_texture(texture::Index::Texture0, t);
-                    }
                     frame.bind_vertex_uniform(projection_idx, &po);
                     frame.bind_vertex_uniform(uvx_idx, FVec4::new(1.0, 1.0, 0.0, 0.0));
-                    frame.draw_arrays(buffer::Primitive::Triangles, pb, None).unwrap();
+                    for (pg, pb) in pic_bufs.iter() {
+                        if let Some(t) = page_tex_ref.get(*pg).and_then(|o| o.as_ref()) {
+                            frame.bind_texture(texture::Index::Texture0, t);
+                        }
+                        frame.draw_arrays(buffer::Primitive::Triangles, pb, None).unwrap();
+                    }
                     frame.bind_vertex_uniform(projection_idx, mvp);
                     unsafe { c3d_depth_test(1); }
                 }

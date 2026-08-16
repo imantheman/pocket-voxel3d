@@ -2654,6 +2654,9 @@ learn ${mdef.name}!`);
     this.sayNext(`${name} did not learn
 ${mdef.name}!`);
   }
+  swapEnemy(mon) {
+    this.enemy = makeBattler(this.data, mon, false);
+  }
   enemyMonFainted() {
     this.awardExp();
     this.result = "win";
@@ -2897,6 +2900,52 @@ to fight!`);
   shownHPInt(b) {
     const shown = b.shownHP ?? b.mon.hp;
     return shown > b.mon.hp ? Math.ceil(shown) : Math.floor(shown);
+  }
+}
+
+// voxelmon/game/battle/trainer.ts
+class TrainerBattle extends WildBattle {
+  isTrainer = true;
+  trainerName;
+  enemyParty = [];
+  enemyIndex = 0;
+  baseMoney;
+  constructor(data, save, rng, trainerId, partyIndex = 1, displayName2) {
+    const def = data.trainers[trainerId];
+    const roster = def?.parties?.[partyIndex - 1] ?? def?.parties?.[0] ?? [];
+    const lead = roster[0] ?? { species: "RATTATA", level: 2 };
+    super(data, save, rng, lead.species, lead.level);
+    this.trainerName = displayName2 ?? def?.name ?? trainerId;
+    this.baseMoney = def?.baseMoney ?? 0;
+    this.enemyParty = roster.map((m) => newMon(data, m.species, m.level, rng));
+    this.enemyIndex = 0;
+  }
+  runRoll(_playerSpeed, _enemySpeed) {
+    this.say(`There's no escaping
+a trainer battle!`);
+    return false;
+  }
+  enemyMonFainted() {
+    this.awardExp();
+    const next = this.enemyParty.find((m, i) => i > this.enemyIndex && m.hp > 0);
+    if (!next) {
+      this.result = "win";
+      this.afterQueue = "finish";
+      const top = Math.max(...this.enemyParty.map((m) => m.level ?? 1));
+      const money = this.baseMoney * top;
+      if (money > 0) {
+        const save = this.save;
+        if (typeof save.money === "number")
+          save.money += money;
+        this.sayNext(`${this.trainerName} paid out
+$${money}!`);
+      }
+      return;
+    }
+    this.enemyIndex = this.enemyParty.indexOf(next);
+    this.sayNext(`${this.trainerName} sent out
+${next.species}!`);
+    this.act(() => this.swapEnemy(next));
   }
 }
 
@@ -4066,20 +4115,21 @@ var MAP_SCRIPTS = {
       const cy = ow?.player?.cellY;
       if (cy !== 1)
         return null;
-      const OAK_PALLET = 1;
+      const LAB_DOOR_X = 12, LAB_DOOR_Y = 11;
       const px = ow?.player?.cellX ?? 0;
       const py = ow?.player?.cellY ?? 0;
       return [
-        ["show_object", "PALLET_TOWN", OAK_PALLET],
+        ["place_npc", "SPRITE_OAK", px, py + 4, "up"],
+        ["move_npc_to", "SPRITE_OAK", px, py + 1],
+        ["face_object", "SPRITE_OAK", "up"],
         ["show_text", "_PalletTownOakHeyWaitDontGoOutText"],
-        ["move_npc_to", OAK_PALLET, px, py + 1],
-        ["face_object", OAK_PALLET, "up"],
         ["show_text", "_PalletTownOakItsUnsafeText"],
+        ["move_npc_to", "SPRITE_OAK", LAB_DOOR_X, LAB_DOOR_Y],
+        ["move_player_to", LAB_DOOR_X, LAB_DOOR_Y + 1],
         ["warp", "OAKS_LAB", 5, 11, "up"],
+        ["place_npc", "SPRITE_OAK", 5, 2, "down"],
         ["move_player", "up", 8],
         ["set_flag", "EVENT_FOLLOWED_OAK_INTO_LAB"],
-        ["show_object", "OAKS_LAB", 1],
-        ["face_object", 1, "down"],
         ["show_text", "_OaksLabRivalFedUpWithWaitingText"],
         ["show_text", "_OaksLabOakChooseMonText"],
         ["show_text", "_OaksLabRivalWhatAboutMeText"],
@@ -4101,6 +4151,8 @@ var MAP_SCRIPTS = {
         ["set_flag", "EVENT_GOT_STARTER"],
         ["set_flag", "EVENT_CHOSE_BULBASAUR"],
         ["hide_object", "OAKS_LAB", "OAKSLAB_BULBASAUR_POKE_BALL"],
+        ["move_npc_to", "SPRITE_BLUE", 6, 4],
+        ["face_object", "SPRITE_BLUE", "up"],
         ["show_text", "_OaksLabRivalIllTakeThisOneText"],
         ["hide_object", "OAKS_LAB", "OAKSLAB_CHARMANDER_POKE_BALL"],
         ["show_text", "_OaksLabRivalReceivedMonText"]
@@ -4116,6 +4168,8 @@ var MAP_SCRIPTS = {
         ["set_flag", "EVENT_GOT_STARTER"],
         ["set_flag", "EVENT_CHOSE_CHARMANDER"],
         ["hide_object", "OAKS_LAB", "OAKSLAB_CHARMANDER_POKE_BALL"],
+        ["move_npc_to", "SPRITE_BLUE", 7, 4],
+        ["face_object", "SPRITE_BLUE", "up"],
         ["show_text", "_OaksLabRivalIllTakeThisOneText"],
         ["hide_object", "OAKS_LAB", "OAKSLAB_SQUIRTLE_POKE_BALL"],
         ["show_text", "_OaksLabRivalReceivedMonText"]
@@ -4131,6 +4185,8 @@ var MAP_SCRIPTS = {
         ["set_flag", "EVENT_GOT_STARTER"],
         ["set_flag", "EVENT_CHOSE_SQUIRTLE"],
         ["hide_object", "OAKS_LAB", "OAKSLAB_SQUIRTLE_POKE_BALL"],
+        ["move_npc_to", "SPRITE_BLUE", 8, 4],
+        ["face_object", "SPRITE_BLUE", "up"],
         ["show_text", "_OaksLabRivalIllTakeThisOneText"],
         ["hide_object", "OAKS_LAB", "OAKSLAB_BULBASAUR_POKE_BALL"],
         ["show_text", "_OaksLabRivalReceivedMonText"]
@@ -4348,15 +4404,51 @@ function* give_pokemon(ctx, ...args) {
   const level = args[1] ?? 5;
   const w = ctx.world;
   const party = w.save.party;
-  if (party.length < 6)
-    party.push(newMon(w.data, species, level));
-  return;
+  if (party.length >= 6)
+    return;
+  const mon = newMon(w.data, species, level);
+  party.push(mon);
+  const runner = ctx.runner;
+  if (typeof w.askNickname === "function") {
+    const label2 = w.data.pokemon?.[species]?.name ?? species;
+    w.askNickname(label2, (name) => {
+      if (name)
+        mon.nickname = name;
+      runner.resume();
+    });
+    yield;
+  }
 }
 function* noop_object() {
   return;
 }
 function* noop_audio() {
   return;
+}
+function* walk_route(ctx, ...args) {
+  const runner = ctx.runner;
+  ctx.world.walkRoute?.(args[0], args[1], () => runner.resume());
+  yield;
+}
+function* start_battle(ctx, ...args) {
+  const kind = String(args[0] ?? "trainer");
+  const id = String(args[1] ?? "");
+  const idx = args[2] ?? 1;
+  const runner = ctx.runner;
+  const w = ctx.world;
+  console.log("start_battle verb: " + kind + " " + id + " idx=" + idx + " hasFn=" + !!w.startTrainerBattle);
+  if (kind === "trainer" && w.startTrainerBattle) {
+    w.startTrainerBattle(id, idx, undefined, () => runner.resume());
+    yield;
+  }
+}
+function* move_player_to(ctx, ...args) {
+  const runner = ctx.runner;
+  ctx.world.movePlayerTo?.(args[0], args[1], () => runner.resume());
+  yield;
+}
+function* place_npc(ctx, ...args) {
+  ctx.world.placeNpc?.(args[0], args[1], args[2], args[3] ?? "down");
 }
 function* hide_object(ctx, ...args) {
   ctx.world.setObjectHidden?.(args[1] ?? args[0], true);
@@ -4403,7 +4495,10 @@ var VERBS = {
   show_object,
   face_object,
   move_npc_to,
-  place_npc: noop_object,
+  place_npc,
+  move_player_to,
+  start_battle,
+  walk_route,
   push_screen: noop_object,
   play_sound: noop_audio,
   play_music: noop_audio,
@@ -4704,7 +4799,7 @@ class Overworld {
       this.player = new Player(x, y, facing);
     }
     this.entities = [this.player, ...this.npcs];
-    console.log("NPCS " + this.npcs.map((n) => (n?.name ?? n?.id ?? n?.obj?.name ?? "?") + "@" + n?.cellX + "," + n?.cellY).join(" | "));
+    console.log("NPCS " + this.npcs.map((n) => JSON.stringify(n, (k, v) => typeof v === "object" && v !== null && k !== "" ? undefined : v)).join(" | "));
   }
   objectVisible(obj) {
     return !obj.hidden;
@@ -4784,6 +4879,7 @@ class Overworld {
       return;
     }
     if (input.wasPressed("start")) {
+      this.shell?.openStartMenu?.();
       return;
     }
     for (const dir of ["up", "down", "left", "right"]) {
@@ -5175,7 +5271,89 @@ class Overworld {
       return byName ?? list[ref - 1] ?? list[ref] ?? null;
     }
     const want = String(ref);
-    return list.find((n) => n?.name === want || n?.id === want || n?.obj?.name === want) ?? null;
+    return list.find((n) => n?.name === want || n?.id === want || n?.obj?.name === want) ?? list.find((n) => {
+      const t = String(n?.def?.text ?? "").toUpperCase();
+      const w = want.toUpperCase();
+      return t === w || t === "TEXT_" + w || t.replace(/^TEXT_/, "") === w;
+    }) ?? list.find((n) => {
+      const sp = String(n?.def?.sprite ?? "").toUpperCase();
+      return sp === want.toUpperCase();
+    }) ?? null;
+  }
+  askNickname(defaultName, onDone) {
+    const shell = this.shell ?? this.game ?? null;
+    if (!shell?.askNickname) {
+      onDone(null);
+      return;
+    }
+    shell.askNickname(defaultName, onDone);
+  }
+  walkRoute(ref, route, onDone) {
+    const list = route.slice();
+    const next = () => {
+      const wp = list.shift();
+      if (!wp) {
+        onDone();
+        return;
+      }
+      if (ref === "player")
+        this.movePlayerTo(wp[0], wp[1], next);
+      else
+        this.moveNpcTo(ref, wp[0], wp[1], next);
+    };
+    next();
+  }
+  startTrainerBattle(id, idx, name, onDone) {
+    const self = this;
+    const shell = self.shell ?? self.game ?? self.host ?? null;
+    console.log("ow.startTrainerBattle shell=" + (shell ? "yes" : "NO") + " fn=" + (shell && typeof shell.startTrainerBattle === "function"));
+    if (shell?.startTrainerBattle)
+      shell.startTrainerBattle(id, idx, name, onDone);
+    else
+      onDone?.();
+  }
+  movePlayerTo(tx, ty, onDone) {
+    const p = this.player;
+    const path = this.findPath(p.cellX ?? 0, p.cellY ?? 0, tx, ty, p);
+    let i = 0;
+    const step = () => {
+      if (i >= path.length) {
+        onDone();
+        return;
+      }
+      const [nx, ny] = path[i++];
+      const dx = nx - (p.cellX ?? 0);
+      const dy = ny - (p.cellY ?? 0);
+      const dir = dx > 0 ? "right" : dx < 0 ? "left" : dy > 0 ? "down" : "up";
+      this.scriptMove(p, dir, 1, step);
+    };
+    step();
+  }
+  placeNpc(sprite, x, y, facing = "down") {
+    const existing = this.findNpc(sprite);
+    if (existing) {
+      existing.hidden = false;
+      existing.cellX = x;
+      existing.cellY = y;
+      existing.px = x * 16;
+      existing.py = y * 16;
+      existing.facing = facing;
+      return existing;
+    }
+    const obj = { sprite, x, y, cellX: x, cellY: y, facing, movement: "static" };
+    const self = this;
+    const npc = self.pooledNPC(self.mapId ?? self.map?.id ?? "", obj);
+    npc.def = npc.def ?? obj;
+    npc.cellX = x;
+    npc.cellY = y;
+    npc.px = x * 16;
+    npc.py = y * 16;
+    npc.facing = facing;
+    npc.frozen = false;
+    npc.wanders = false;
+    this.npcs.push(npc);
+    this.entities = [this.player, ...this.npcs];
+    return npc;
   }
   setObjectHidden(objName, hidden) {
     const npc = this.findNpc(objName);
@@ -5187,20 +5365,66 @@ class Overworld {
     if (npc)
       npc.facing = dir;
   }
+  findPath(sx, sy, tx, ty, mover) {
+    const W = 64, H = 64;
+    const key = (x, y) => y * W + x;
+    const prev = new Map;
+    const seen = new Set([key(sx, sy)]);
+    let q = [[sx, sy]];
+    const ok = (x, y) => {
+      if (x < 0 || y < 0 || x >= W || y >= H)
+        return false;
+      try {
+        return this.map.isWalkableCell(x, y) && !occupied(this.entities, x, y, mover);
+      } catch {
+        return false;
+      }
+    };
+    while (q.length) {
+      const nq = [];
+      for (const [x, y] of q) {
+        if (x === tx && y === ty) {
+          const out = [];
+          let k = key(x, y);
+          while (k !== key(sx, sy)) {
+            out.push([k % W, Math.floor(k / W)]);
+            const p2 = prev.get(k);
+            if (p2 === undefined)
+              break;
+            k = p2;
+          }
+          return out.reverse();
+        }
+        for (const [nx, ny] of [[x, y + 1], [x, y - 1], [x + 1, y], [x - 1, y]]) {
+          const nk = key(nx, ny);
+          if (seen.has(nk) || !(ok(nx, ny) || nx === tx && ny === ty))
+            continue;
+          seen.add(nk);
+          prev.set(nk, key(x, y));
+          nq.push([nx, ny]);
+        }
+      }
+      q = nq;
+    }
+    return [];
+  }
   moveNpcTo(ref, tx, ty, onDone) {
     const npc = this.findNpc(ref);
     if (!npc) {
       onDone();
       return;
     }
+    const path = this.findPath(npc.cellX ?? 0, npc.cellY ?? 0, tx, ty, npc);
+    let i = 0;
     const step = () => {
-      const dx = tx - (npc.cellX ?? 0);
-      const dy = ty - (npc.cellY ?? 0);
-      if (dx === 0 && dy === 0) {
+      if (i >= path.length) {
         onDone();
         return;
       }
-      const dir = dx !== 0 ? dx > 0 ? "right" : "left" : dy > 0 ? "down" : "up";
+      const [nx, ny] = path[i++];
+      const dx = nx - (npc.cellX ?? 0);
+      const dy = ny - (npc.cellY ?? 0);
+      const dir = dx > 0 ? "right" : dx < 0 ? "left" : dy > 0 ? "down" : "up";
       this.scriptMove(npc, dir, 1, step);
     };
     step();
@@ -5236,6 +5460,8 @@ class Scene {
   uiOwner = null;
   namingSig = null;
   picSig = "";
+  titleSig = null;
+  menuSig = null;
   uiRows = [];
   uiPage = -1;
   uiArrow = false;
@@ -5454,14 +5680,83 @@ class Scene {
   }
   emitUi(view) {
     const host = this.host;
-    const pic2 = view.pic?.();
-    const psig = pic2 ? `${pic2.page},${pic2.x},${pic2.y},${pic2.w},${pic2.h}` : "";
+    const rawPic = view.pic?.();
+    const picList = Array.isArray(rawPic) ? rawPic : rawPic ? [rawPic] : [];
+    const psig = picList.map((q, i) => `${i}:${q.page},${q.x},${q.y},${q.w},${q.h}`).join("|");
     if (psig !== this.picSig) {
       this.picSig = psig;
-      if (pic2)
-        host.pic(0, pic2.page, pic2.x, pic2.y, pic2.w, pic2.h);
-      else
-        host.picHide(0);
+      for (let i = 0;i < 4; i++) {
+        const q = picList[i];
+        if (q)
+          host.pic(i, q.page, q.x, q.y, q.w, q.h);
+        else
+          host.picHide(i);
+      }
+    }
+    const sm = view.startMenu?.();
+    if (sm) {
+      const sig = `${sm.index},${sm.entries.length}`;
+      if (sig !== this.menuSig) {
+        this.menuSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const W = 10, X = 20 - W - 1, Y = 0, H = sm.entries.length * 2;
+        host.uiTile(X, Y, BORDER_TL);
+        host.uiFill(X + 1, Y, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y, BORDER_TR);
+        host.uiFill(X, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + W, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + 1, Y + 1, W - 1, H, SPACE);
+        host.uiTile(X, Y + 1 + H, BORDER_BL);
+        host.uiFill(X + 1, Y + 1 + H, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y + 1 + H, BORDER_BR);
+        sm.entries.forEach((e, i) => {
+          this.stamp(host, X + 2, Y + 2 + i * 2, e);
+          if (i === sm.index)
+            host.uiTile(X + 1, Y + 2 + i * 2, ARROW_CURSOR);
+        });
+      }
+      return;
+    }
+    if (this.menuSig !== null) {
+      this.menuSig = null;
+      host.uiClear();
+      this.uiOwner = null;
+    }
+    const ttl = view.title?.();
+    if (ttl) {
+      const sig = `${ttl.phase},${ttl.index},${ttl.monPage}`;
+      if (sig !== this.titleSig) {
+        this.titleSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        if (ttl.phase === "press") {
+          this.stamp(host, 5, 15, "PRESS START");
+        } else {
+          const MX = 0, MY = 0, MW = 12;
+          const MH = ttl.menu.length * 2;
+          host.uiTile(MX, MY, BORDER_TL);
+          host.uiFill(MX + 1, MY, MW - 1, 1, BORDER_H);
+          host.uiTile(MX + MW, MY, BORDER_TR);
+          host.uiFill(MX, MY + 1, 1, MH, BORDER_V);
+          host.uiFill(MX + MW, MY + 1, 1, MH, BORDER_V);
+          host.uiFill(MX + 1, MY + 1, MW - 1, MH, SPACE);
+          host.uiTile(MX, MY + 1 + MH, BORDER_BL);
+          host.uiFill(MX + 1, MY + 1 + MH, MW - 1, 1, BORDER_H);
+          host.uiTile(MX + MW, MY + 1 + MH, BORDER_BR);
+          ttl.menu.forEach((m, i) => {
+            this.stamp(host, MX + 3, MY + 2 + i * 2, m);
+            if (i === ttl.index)
+              host.uiTile(MX + 2, MY + 2 + i * 2, ARROW_CURSOR);
+          });
+        }
+      }
+      return;
+    }
+    if (this.titleSig !== null) {
+      this.titleSig = null;
+      host.uiClear();
+      this.uiOwner = null;
     }
     const nam = view.naming();
     if (nam) {
@@ -5889,7 +6184,328 @@ class NamingState {
   }
 }
 
+// voxelmon/game/ui/title.ts
+var CYCLE = [
+  "CHARMANDER",
+  "SQUIRTLE",
+  "BULBASAUR",
+  "PIKACHU",
+  "MEWTWO",
+  "NIDOKING",
+  "GENGAR",
+  "ONIX",
+  "GYARADOS",
+  "LAPRAS"
+];
+var TITLE_PAGES = { copyright: 421, gamefreak: 422, logo: 423, player: 424 };
+var CYCLE_PAGES = { CHARMANDER: 84, SQUIRTLE: 202, BULBASAUR: 79, PIKACHU: 176, MEWTWO: 155, NIDOKING: 159, GENGAR: 112, ONIX: 169, GYARADOS: 123, LAPRAS: 141 };
+
+class TitleState {
+  game;
+  onChoose;
+  kind = "title";
+  phase = "press";
+  timer = 0;
+  cycleAt = 0;
+  index = 0;
+  menu;
+  constructor(game, onChoose) {
+    this.game = game;
+    this.onChoose = onChoose;
+    this.menu = game.hasSave ? ["CONTINUE", "NEW GAME", "OPTION", "MAP VIEWER"] : ["NEW GAME", "OPTION", "MAP VIEWER"];
+  }
+  monPage() {
+    const species = CYCLE[this.cycleAt % CYCLE.length];
+    return CYCLE_PAGES[species] ?? -1;
+  }
+  update() {
+    const p = this.game.input.pressed;
+    this.timer += 1;
+    if (this.phase === "press") {
+      if (this.timer % 150 === 0)
+        this.cycleAt += 1;
+      if (p.start || p.a) {
+        this.phase = "menu";
+        this.index = 0;
+      }
+      return;
+    }
+    if (p.up)
+      this.index = (this.index + this.menu.length - 1) % this.menu.length;
+    if (p.down)
+      this.index = (this.index + 1) % this.menu.length;
+    if (p.b) {
+      this.phase = "press";
+      return;
+    }
+    if (p.a) {
+      const pick = this.menu[this.index];
+      this.game.pop();
+      if (pick === "CONTINUE")
+        this.onChoose("continue");
+      else if (pick === "NEW GAME")
+        this.onChoose("new");
+      else if (pick === "MAP VIEWER")
+        this.onChoose("viewer");
+      else
+        this.onChoose("option");
+    }
+  }
+  view() {
+    return {
+      phase: this.phase,
+      monPage: this.monPage(),
+      menu: this.menu,
+      index: this.index,
+      hasSave: !!this.game.hasSave
+    };
+  }
+}
+
+// voxelmon/game/ui/startmenu.ts
+class StartMenuState {
+  game;
+  onPick;
+  kind = "startmenu";
+  index = 0;
+  entries;
+  actions;
+  constructor(game, onPick) {
+    this.game = game;
+    this.onPick = onPick;
+    const f = game.save?.flags ?? {};
+    const party = game.save?.party ?? [];
+    const e = [];
+    if (f.EVENT_GOT_POKEDEX)
+      e.push(["POKéDEX", "pokedex"]);
+    if (party.length > 0)
+      e.push(["POKéMON", "pokemon"]);
+    e.push(["ITEM", "item"]);
+    e.push([String(game.save?.player?.name ?? "RED"), "trainer"]);
+    e.push(["SAVE", "save"]);
+    e.push(["OPTION", "option"]);
+    e.push(["EXIT", "exit"]);
+    this.entries = e.map((x) => x[0]);
+    this.actions = e.map((x) => x[1]);
+  }
+  update() {
+    const p = this.game.input.pressed;
+    if (p.up)
+      this.index = (this.index + this.entries.length - 1) % this.entries.length;
+    if (p.down)
+      this.index = (this.index + 1) % this.entries.length;
+    if (p.b || p.start) {
+      this.game.pop();
+      return;
+    }
+    if (p.a) {
+      const act = this.actions[this.index];
+      if (act === "exit") {
+        this.game.pop();
+        return;
+      }
+      this.onPick(act);
+    }
+  }
+  view() {
+    return { entries: this.entries, index: this.index };
+  }
+}
+
+// voxelmon/game/save-lua.ts
+function quote(s) {
+  let out = '"';
+  for (const ch of s) {
+    const c = ch.codePointAt(0);
+    if (ch === '"')
+      out += "\\\"";
+    else if (ch === "\\")
+      out += "\\\\";
+    else if (ch === `
+`)
+      out += "\\\n";
+    else if (ch === "\r")
+      out += "\\r";
+    else if (c < 32 || c === 127)
+      out += "\\" + String(c);
+    else
+      out += ch;
+  }
+  return out + '"';
+}
+var BARE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+function sortKeys(keys) {
+  return keys.slice().sort((a, b) => {
+    const ta = typeof a === "number" ? "number" : "string";
+    const tb = typeof b === "number" ? "number" : "string";
+    if (ta !== tb)
+      return ta < tb ? -1 : 1;
+    if (ta === "number")
+      return a - b;
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+}
+function serialize(v, indent = 0) {
+  const pad = "  ".repeat(indent);
+  if (typeof v === "number" || typeof v === "boolean")
+    return String(v);
+  if (typeof v === "string")
+    return quote(v);
+  if (v === null || v === undefined)
+    return "nil";
+  let entries;
+  if (Array.isArray(v)) {
+    entries = v.map((x, i) => [i + 1, x]);
+  } else if (typeof v === "object") {
+    entries = Object.entries(v).filter(([, x]) => x !== undefined).map(([k, x]) => [/^\d+$/.test(k) ? Number(k) : k, x]);
+  } else {
+    throw new Error("cannot serialize " + typeof v);
+  }
+  if (entries.length === 0)
+    return "{}";
+  const byKey = new Map(entries);
+  const parts = [];
+  for (const k of sortKeys(entries.map((e) => e[0]))) {
+    const key = typeof k === "string" && BARE.test(k) ? k : "[" + serialize(k) + "]";
+    parts.push(pad + "  " + key + " = " + serialize(byKey.get(k), indent + 1));
+  }
+  return `{
+` + parts.join(`,
+`) + `,
+` + pad + "}";
+}
+function encodeSave(data) {
+  return "return " + serialize(data) + `
+`;
+}
+
+// voxelmon/game/save-read.ts
+class P {
+  src;
+  pos = 0;
+  constructor(src) {
+    this.src = src;
+  }
+  skip() {
+    while (this.pos < this.src.length && ` 	\r
+`.includes(this.src[this.pos]))
+      this.pos++;
+  }
+  eat(ch) {
+    this.skip();
+    if (this.src[this.pos] === ch) {
+      this.pos++;
+      return true;
+    }
+    return false;
+  }
+  expect(ch) {
+    if (!this.eat(ch))
+      throw new Error(`expected ${ch} at ${this.pos}`);
+  }
+}
+function parseString(p) {
+  p.expect('"');
+  let out = "";
+  while (p.pos < p.src.length) {
+    const c = p.src[p.pos++];
+    if (c === '"')
+      return out;
+    if (c !== "\\") {
+      out += c;
+      continue;
+    }
+    const e = p.src[p.pos++];
+    if (e === "n")
+      out += `
+`;
+    else if (e === "r")
+      out += "\r";
+    else if (e === "t")
+      out += "\t";
+    else if (e === `
+`)
+      out += `
+`;
+    else if (e >= "0" && e <= "9") {
+      let digits = e;
+      while (digits.length < 3 && /[0-9]/.test(p.src[p.pos] ?? ""))
+        digits += p.src[p.pos++];
+      out += String.fromCharCode(Number(digits));
+    } else
+      out += e;
+  }
+  throw new Error("unterminated string");
+}
+function parseValue(p, depth = 0) {
+  if (depth > 128)
+    throw new Error("too deep");
+  p.skip();
+  const c = p.src[p.pos];
+  if (c === '"')
+    return parseString(p);
+  if (c === "{")
+    return parseTable(p, depth);
+  const m = /^(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?|true|false|nil)/i.exec(p.src.slice(p.pos));
+  if (!m)
+    throw new Error(`bad value at ${p.pos}`);
+  p.pos += m[0].length;
+  if (m[0] === "true")
+    return true;
+  if (m[0] === "false")
+    return false;
+  if (m[0] === "nil")
+    return;
+  return Number(m[0]);
+}
+function parseTable(p, depth) {
+  p.expect("{");
+  const out = {};
+  const arr = [];
+  let isArray = true;
+  for (;; ) {
+    p.skip();
+    if (p.eat("}"))
+      break;
+    let key;
+    if (p.eat("[")) {
+      const k = parseValue(p, depth + 1);
+      p.expect("]");
+      key = k;
+    } else {
+      const m = /^[A-Za-z_][A-Za-z0-9_]*/.exec(p.src.slice(p.pos));
+      if (!m)
+        throw new Error(`bad key at ${p.pos}`);
+      p.pos += m[0].length;
+      key = m[0];
+    }
+    p.expect("=");
+    const v = parseValue(p, depth + 1);
+    if (typeof key === "number")
+      arr[key - 1] = v;
+    else {
+      isArray = false;
+      out[key] = v;
+    }
+    p.eat(",");
+  }
+  if (isArray && arr.length > 0)
+    return arr;
+  return out;
+}
+function decodeSave(text) {
+  const p = new P(text);
+  p.skip();
+  if (!p.src.startsWith("return", p.pos))
+    throw new Error("not a save file");
+  p.pos += 6;
+  return parseValue(p);
+}
+
 // voxelmon/game/game.ts
+var SAVE_FORMAT = 4;
+var RED_PIC_PAGE = 408;
+
 class OverworldState {
   ow;
   kind = "overworld";
@@ -6017,9 +6633,10 @@ class BattleGameState {
   battle;
   staging;
   ui = new BattleUi;
-  constructor(game, species, level) {
+  onDone = null;
+  constructor(game, species, level, prebuilt) {
     this.game = game;
-    this.battle = new WildBattle(game.data, game.save, game.battleRng, species, level);
+    this.battle = prebuilt ?? new WildBattle(game.data, game.save, game.battleRng, species, level);
     const ow = game.overworld;
     this.staging = computeStaging(ow.map, ow.player.cellX, ow.player.cellY, ow.player.surfing);
     this.battle.enter();
@@ -6027,6 +6644,10 @@ class BattleGameState {
   update() {
     const b = this.battle;
     if (b.finished) {
+      const done = this.onDone;
+      this.onDone = null;
+      if (done)
+        queueMicrotask(done);
       this.game.pop();
       if (b.finished === "lose")
         this.game.blackout();
@@ -6111,68 +6732,54 @@ class VoxelmonGame {
   }
   newGame() {
     this.save = {
+      meta: { format: SAVE_FORMAT, mods: {} },
+      version: "red",
+      player: {
+        map: "REDS_HOUSE_2F",
+        x: 3,
+        y: 6,
+        facing: "down",
+        name: "RED",
+        rival: "BLUE",
+        id: Math.floor(Math.random() * 65536)
+      },
       flags: {},
       inventory: {},
-      player: { name: "RED", rival: "BLUE" },
+      pcItems: { POTION: 1 },
+      party: [],
+      box: {},
+      money: 3000,
+      defeatedTrainers: {},
+      pokedex: { seen: {}, owned: {} },
       lastHeal: { map: "PALLET_TOWN", x: 5, y: 6 },
       lastOutdoor: { id: "PALLET_TOWN", x: 5, y: 6 },
-      party: []
+      repelSteps: 0,
+      modData: {},
+      options: {}
     };
     this.overworld = new Overworld(this);
     this.stack = [new OverworldState(this.overworld)];
     this.overworld.enter("REDS_HOUSE_2F", 3, 6, "down");
-    const P_OAK = 406, P_PLR = 408, P_RIV = 409, P_NIDO = 164;
-    const A = [
-      ["pic", P_OAK, 184, 24, 112, 112],
-      ["show_text", "_OakSpeechText1"],
-      ["pic", P_NIDO, 184, 24, 112, 112],
-      ["show_text", "_OakSpeechText2A"],
-      ["pic", P_OAK, 184, 24, 112, 112],
-      ["show_text", "_OakSpeechText2B"],
-      ["show_text", "_IntroducePlayerText"],
-      ["pic", P_PLR, 184, 24, 112, 112]
-    ];
-    const B = [
-      ["pic", P_RIV, 184, 24, 112, 112],
-      ["show_text", "_IntroduceRivalText"]
-    ];
-    const C = [
-      ["pic", P_PLR, 184, 24, 112, 112],
-      ["show_text", "_OakSpeechText3"],
-      ["pic", P_PLR, 184, 24, 112, 112],
-      ["wait", 4],
-      ["pic", P_PLR, 192, 32, 96, 96],
-      ["wait", 4],
-      ["pic", P_PLR, 200, 40, 80, 80],
-      ["wait", 4],
-      ["pic", P_PLR, 208, 48, 64, 64],
-      ["wait", 4],
-      ["pic", P_PLR, 216, 56, 48, 48],
-      ["wait", 4],
-      ["pic", P_PLR, 224, 64, 32, 32],
-      ["wait", 4],
-      ["pic_hide"]
-    ];
-    const run = (rows, done) => this.overworld.runScript(rows, done);
-    run(A, () => {
-      this.push(new NamingState(this, {
-        title: "YOUR NAME?",
-        default: "RED",
-        onDone: (name) => {
-          this.save.player.name = name;
-          run(B, () => {
-            this.push(new NamingState(this, {
-              title: "RIVAL'S NAME?",
-              default: "BLUE",
-              onDone: (rival) => {
-                this.save.player.rival = rival;
-                run(C, () => {});
-              }
-            }));
-          });
+    this.hasSave = !!this.host.saveData?.();
+    this.push(new TitleState(this, (choice) => {
+      if (choice === "viewer") {
+        this.host.viewer?.();
+        return;
+      }
+      if (choice === "continue") {
+        const text = this.host.saveData?.();
+        if (text) {
+          try {
+            this.save = decodeSave(text);
+            const pl = this.save.player ?? {};
+            const lo = this.save.lastOutdoor ?? {};
+            this.overworld.enter(pl.map ?? lo.id ?? "PALLET_TOWN", pl.x ?? lo.x ?? 5, pl.y ?? lo.y ?? 6, pl.facing ?? "down");
+            return;
+          } catch {}
         }
-      }));
-    });
+      }
+      this.startIntro();
+    }));
   }
   blackout() {
     for (const mon of this.save.party)
@@ -6301,8 +6908,111 @@ ${mdef.name}!`, () => step(i + 1));
     }
     return null;
   }
+  startIntro() {
+    const P_OAK = 406, P_PLR = 408, P_RIV = 409, P_NIDO = 164;
+    const A = [
+      ["pic", P_OAK, 184, 24, 112, 112],
+      ["show_text", "_OakSpeechText1"],
+      ["pic", P_NIDO, 184, 24, 112, 112],
+      ["show_text", "_OakSpeechText2A"],
+      ["pic", P_OAK, 184, 24, 112, 112],
+      ["show_text", "_OakSpeechText2B"],
+      ["show_text", "_IntroducePlayerText"],
+      ["pic", P_PLR, 184, 24, 112, 112]
+    ];
+    const B = [
+      ["pic", P_RIV, 184, 24, 112, 112],
+      ["show_text", "_IntroduceRivalText"]
+    ];
+    const C = [
+      ["pic", P_PLR, 184, 24, 112, 112],
+      ["show_text", "_OakSpeechText3"],
+      ["pic", P_PLR, 184, 24, 112, 112],
+      ["wait", 4],
+      ["pic", P_PLR, 192, 32, 96, 96],
+      ["wait", 4],
+      ["pic", P_PLR, 200, 40, 80, 80],
+      ["wait", 4],
+      ["pic", P_PLR, 208, 48, 64, 64],
+      ["wait", 4],
+      ["pic", P_PLR, 216, 56, 48, 48],
+      ["wait", 4],
+      ["pic", P_PLR, 224, 64, 32, 32],
+      ["wait", 4],
+      ["pic_hide"]
+    ];
+    const run = (rows, done) => this.overworld.runScript(rows, done);
+    run(A, () => {
+      this.push(new NamingState(this, {
+        title: "YOUR NAME?",
+        default: "RED",
+        onDone: (name) => {
+          this.save.player.name = name;
+          run(B, () => {
+            this.push(new NamingState(this, {
+              title: "RIVAL'S NAME?",
+              default: "BLUE",
+              onDone: (rival) => {
+                this.save.player.rival = rival;
+                run(C, () => {});
+              }
+            }));
+          });
+        }
+      }));
+    });
+  }
   pic() {
+    const top = this.stack[this.stack.length - 1];
+    if (top?.kind === "title") {
+      const v = top.view();
+      const out = [{ page: TITLE_PAGES.logo, x: 96, y: 16, w: 288, h: 108 }];
+      out.push({ page: RED_PIC_PAGE, x: 160, y: 132, w: 112, h: 112 });
+      if (v.monPage >= 0)
+        out.push({ page: v.monPage, x: 248, y: 140, w: 104, h: 104 });
+      return out;
+    }
     return this.overworld.picShown;
+  }
+  openStartMenu() {
+    this.push(new StartMenuState(this, (act) => {
+      if (act === "save") {
+        const ow = this.overworld;
+        const p = this.save.player;
+        p.map = ow.mapId ?? ow.map?.id ?? p.map;
+        p.x = ow.player?.cellX ?? p.x;
+        p.y = ow.player?.cellY ?? p.y;
+        p.facing = ow.player?.facing ?? p.facing;
+        const h = this.host ?? this.hostApi ?? globalThis.voxel;
+        if (h?.saveWrite)
+          h.saveWrite(encodeSave(this.save));
+        else
+          console.log("save: no host.saveWrite");
+        this.pop();
+      }
+    }));
+  }
+  startMenu() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "startmenu" ? top.view() : null;
+  }
+  title() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "title" ? top.view() : null;
+  }
+  askNickname(defaultName, onDone) {
+    this.push(new NamingState(this, {
+      title: `${defaultName} NICKNAME?`,
+      default: defaultName,
+      onDone: (n) => onDone(n === defaultName ? null : n)
+    }));
+  }
+  startTrainerBattle(trainerId, partyIndex = 1, name, onDone) {
+    console.log("game.startTrainerBattle " + trainerId + " " + partyIndex);
+    const battle = new TrainerBattle(this.data, this.save, this.battleRng, trainerId, partyIndex, name);
+    const st = new BattleGameState(this, "", 0, battle);
+    st.onDone = onDone ?? null;
+    this.push(st);
   }
   naming() {
     const top = this.stack[this.stack.length - 1];
@@ -6327,6 +7037,15 @@ var SEED = 17;
 var native = globalThis.voxel;
 
 class QuickJsHost {
+  saveWrite(text) {
+    native.saveWrite(text);
+  }
+  viewer() {
+    native.viewer?.();
+  }
+  saveData() {
+    return native.saveData();
+  }
   gamedata() {
     return null;
   }

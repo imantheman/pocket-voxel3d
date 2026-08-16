@@ -47,6 +47,9 @@ interface VoxelNative {
   emote(slot: number, kind: number): void;
   pic(slot: number, page: number, x: number, y: number, w: number, h: number): void;
   picHide(slot: number): void;
+  saveWrite(text: string): void;
+  saveData(): string | undefined;
+  viewer?(): void;
   uiTile(x: number, y: number, tile: number): void;
   uiFill(x: number, y: number, w: number, h: number, tile: number): void;
   uiText(x: number, y: number, str: string): void;
@@ -83,6 +86,18 @@ const native = (globalThis as unknown as { voxel: VoxelNative }).voxel;
  * `frame(buttons)` returns (one guest turn per host tick).
  */
 class QuickJsHost implements VoxelHost {
+  saveWrite(text: string): void {
+    native.saveWrite(text);
+  }
+
+  viewer(): void {
+    (native as any).viewer?.();
+  }
+
+  saveData(): string | undefined {
+    return native.saveData();
+  }
+
   gamedata(): ArrayBuffer | null {
     // The boot path below reads the GAME string directly; the game never
     // crosses for data again after construction.

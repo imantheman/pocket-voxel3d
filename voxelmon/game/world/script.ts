@@ -273,14 +273,63 @@ function* fade(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
 function* give_pokemon(ctx: ScriptContext, ...args: unknown[]): Generator<void, number | void> {
   const species = args[0] as string;
   const level = (args[1] as number | undefined) ?? 5;
-  const w = ctx.world;
-  const party = w.save.party as unknown[];
-  if (party.length < 6) party.push(newMon(w.data, species, level));
-  return;
+  const w = ctx.world as any;
+  const party = w.save.party as any[];
+  if (party.length >= 6) return;
+  const mon = newMon(w.data, species, level);
+  party.push(mon);
+  // The script's own _OaksLabReceivedMonText row prints the line; the
+  // nickname prompt is the only thing this verb waits on.
+  const runner = ctx.runner;
+  if (typeof w.askNickname === "function") {
+    const label = w.data.pokemon?.[species]?.name ?? species;
+    w.askNickname(label, (name: string | null) => {
+      if (name) mon.nickname = name;
+      runner.resume();
+    });
+    yield;
+  }
 }
 
 function* noop_object(): Generator<void, number | void> { return; }
 function* noop_audio(): Generator<void, number | void> { return; }
+
+function* walk_route(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  // ["walk_route", ref, [[x,y],[x,y],...]]
+  const runner = ctx.runner;
+  (ctx.world as any).walkRoute?.(args[0], args[1] as [number, number][],
+    () => runner.resume());
+  yield;
+}
+
+function* start_battle(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  // ["start_battle", "trainer", "OPP_PROF_OAK", 3]
+  const kind = String(args[0] ?? "trainer");
+  const id = String(args[1] ?? "");
+  const idx = (args[2] as number) ?? 1;
+  const runner = ctx.runner;
+  const w = ctx.world as any;
+  console.log("start_battle verb: " + kind + " " + id + " idx=" + idx +
+    " hasFn=" + !!w.startTrainerBattle);
+  if (kind === "trainer" && w.startTrainerBattle) {
+    w.startTrainerBattle(id, idx, undefined, () => runner.resume());
+    yield;
+  }
+}
+
+function* move_player_to(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const runner = ctx.runner;
+  (ctx.world as any).movePlayerTo?.(args[0] as number, args[1] as number,
+    () => runner.resume());
+  yield;
+}
+
+function* place_npc(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  (ctx.world as any).placeNpc?.(
+    args[0] as string, args[1] as number, args[2] as number,
+    (args[3] as string) ?? "down",
+  );
+}
 
 function* hide_object(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
   (ctx.world as any).setObjectHidden?.(args[1] ?? args[0], true);
@@ -337,7 +386,10 @@ const VERBS: Record<string, Verb> = {
   show_object,
   face_object,
   move_npc_to,
-  place_npc: noop_object,
+  place_npc,
+  move_player_to,
+  start_battle,
+  walk_route,
   push_screen: noop_object,
   play_sound: noop_audio,
   play_music: noop_audio,

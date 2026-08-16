@@ -151,6 +151,9 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
   const backKeysTrainer = Object.keys(gen.gfx)
     .filter((k) => k.startsWith("battle/trainer/"))
     .sort();
+  const titleKeys = Object.keys(gen.gfx)
+    .filter((k) => k.startsWith("title/"))
+    .sort();
   const backPageByKey = new Map<string, number>();
   for (const key of backKeys) {
     backPageByKey.set(key, pages.length);
@@ -164,6 +167,15 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
   const trainerPageByKey = new Map<string, number>();
   for (const key of backKeysTrainer) {
     trainerPageByKey.set(key, pages.length);
+    pages.push(buildPicPage(gen, key));
+    pageOwners.push({ kind: ATLAS_KIND.pics });
+  }
+
+  // Title art: logo, player figure, publisher logos — flat pages the pic op
+  // draws in screen space.
+  const titlePageByKey = new Map<string, number>();
+  for (const key of titleKeys) {
+    titlePageByKey.set(key, pages.length);
     pages.push(buildPicPage(gen, key));
     pageOwners.push({ kind: ATLAS_KIND.pics });
   }

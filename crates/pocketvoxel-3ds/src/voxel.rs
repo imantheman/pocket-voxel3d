@@ -9,6 +9,13 @@ static mut AUDIO: &[u8] = &[];
 /// Host camera-pitch rung, or -1 to let the guest decide. The guest re-issues
 /// PITCH every tick, so overriding here is the only way it sticks.
 static mut PITCH_RUNG: i32 = -1;
+/// Host-only op (90): the title's MAP VIEWER entry. Never reaches the Scene.
+static mut VIEWER_REQ: bool = false;
+pub unsafe fn take_viewer_request() -> bool {
+    let v = VIEWER_REQ;
+    VIEWER_REQ = false;
+    v
+}
 static mut OP_LOG: bool = false;
 pub unsafe fn set_op_log(on: bool) { OP_LOG = on; }
 
@@ -26,6 +33,35 @@ pub unsafe fn scene() -> &'static mut Scene {
     SCENE.as_mut().expect("voxel::init not called")
 }
 
+// GameVersion.saveSuffix("red") is "", so the recomp's file is save.lua.
+const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save.lua";
+static mut SAVE_BUF: Vec<u8> = Vec::new();
+
+/// Read whatever is on the card at boot so CONTINUE has something to load.
+#[allow(static_mut_refs)]
+pub unsafe fn load_save_file() {
+    SAVE_BUF = std::fs::read(SAVE_PATH).unwrap_or_default();
+    println!("save: {} bytes", SAVE_BUF.len());
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn voxel_save_write(s: *const u8, len: i32) {
+    if s.is_null() || len <= 0 { return; }
+    let b = core::slice::from_raw_parts(s, len as usize);
+    match std::fs::write(SAVE_PATH, b) {
+        Ok(()) => println!("save: wrote {} bytes", b.len()),
+        Err(e) => println!("save FAILED: {}", e),
+    }
+}
+
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub unsafe extern "C" fn voxel_save_ptr() -> *const u8 { SAVE_BUF.as_ptr() }
+
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub unsafe extern "C" fn voxel_save_len() -> u32 { SAVE_BUF.len() as u32 }
+
 #[no_mangle]
 pub unsafe extern "C" fn voxel_log(s: *const u8, len: i32) {
     if s.is_null() || len <= 0 { return; }
@@ -41,6 +77,10 @@ pub unsafe extern "C" fn voxel_op(code: u32, args: *const i32, n: i32) {
         // ent / mapShow / uiText / reset - the ops scripted events drive
         extern "C" { fn printf(f: *const u8, ...) -> i32; }
         printf(b"op%u\n\0".as_ptr(), code);
+    }
+    if code == 90 {
+        VIEWER_REQ = true;
+        return;
     }
     if code == 13 && PITCH_RUNG >= 0 {
         return;

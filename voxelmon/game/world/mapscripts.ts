@@ -40,20 +40,25 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
       if (cy !== 1) return null;
       // Object indices follow pokered's object order for these maps; if the
       // wrong NPC animates, these are the numbers to adjust.
-      const OAK_PALLET = 1;
+      const LAB_DOOR_X = 12, LAB_DOOR_Y = 11;   // maps.json warp -> OAKS_LAB
       const px = (ow?.player as any)?.cellX ?? 0;
       const py = (ow?.player as any)?.cellY ?? 0;
       return [
-        ["show_object", "PALLET_TOWN", OAK_PALLET],
+        // Oak comes up from the lab side, stops behind the player.
+        ["place_npc", "SPRITE_OAK", px, py + 4, "up"],
+        ["move_npc_to", "SPRITE_OAK", px, py + 1],
+        ["face_object", "SPRITE_OAK", "up"],
         ["show_text", "_PalletTownOakHeyWaitDontGoOutText"],
-        ["move_npc_to", OAK_PALLET, px, py + 1],
-        ["face_object", OAK_PALLET, "up"],
         ["show_text", "_PalletTownOakItsUnsafeText"],
+        // He leads, the player follows, then both enter the lab.
+        // Pathfinding routes around the buildings now, so go straight for
+        // the door; the old midpoint sent both of them east into a pillar.
+        ["move_npc_to", "SPRITE_OAK", LAB_DOOR_X, LAB_DOOR_Y],
+        ["move_player_to", LAB_DOOR_X, LAB_DOOR_Y + 1],
         ["warp", "OAKS_LAB", 5, 11, "up"],
+        ["place_npc", "SPRITE_OAK", 5, 2, "down"],
         ["move_player", "up", 8],
         ["set_flag", "EVENT_FOLLOWED_OAK_INTO_LAB"],
-        ["show_object", "OAKS_LAB", 1],
-        ["face_object", 1, "down"],
         ["show_text", "_OaksLabRivalFedUpWithWaitingText"],
         ["show_text", "_OaksLabOakChooseMonText"],
         ["show_text", "_OaksLabRivalWhatAboutMeText"],
@@ -79,6 +84,9 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
         ["set_flag", "EVENT_GOT_STARTER"],
         ["set_flag", "EVENT_CHOSE_BULBASAUR"],
         ["hide_object", "OAKS_LAB", "OAKSLAB_BULBASAUR_POKE_BALL"],
+        // Blue steps to the ball that counters yours, then claims it.
+        ["move_npc_to", "SPRITE_BLUE", 6, 4],
+        ["face_object", "SPRITE_BLUE", "up"],
         ["show_text", "_OaksLabRivalIllTakeThisOneText"],
         ["hide_object", "OAKS_LAB", "OAKSLAB_CHARMANDER_POKE_BALL"],
         ["show_text", "_OaksLabRivalReceivedMonText"],
@@ -94,6 +102,9 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
         ["set_flag", "EVENT_GOT_STARTER"],
         ["set_flag", "EVENT_CHOSE_CHARMANDER"],
         ["hide_object", "OAKS_LAB", "OAKSLAB_CHARMANDER_POKE_BALL"],
+        // Blue steps to the ball that counters yours, then claims it.
+        ["move_npc_to", "SPRITE_BLUE", 7, 4],
+        ["face_object", "SPRITE_BLUE", "up"],
         ["show_text", "_OaksLabRivalIllTakeThisOneText"],
         ["hide_object", "OAKS_LAB", "OAKSLAB_SQUIRTLE_POKE_BALL"],
         ["show_text", "_OaksLabRivalReceivedMonText"],
@@ -109,6 +120,9 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
         ["set_flag", "EVENT_GOT_STARTER"],
         ["set_flag", "EVENT_CHOSE_SQUIRTLE"],
         ["hide_object", "OAKS_LAB", "OAKSLAB_SQUIRTLE_POKE_BALL"],
+        // Blue steps to the ball that counters yours, then claims it.
+        ["move_npc_to", "SPRITE_BLUE", 8, 4],
+        ["face_object", "SPRITE_BLUE", "up"],
         ["show_text", "_OaksLabRivalIllTakeThisOneText"],
         ["hide_object", "OAKS_LAB", "OAKSLAB_BULBASAUR_POKE_BALL"],
         ["show_text", "_OaksLabRivalReceivedMonText"],

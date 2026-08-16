@@ -8,3 +8,4 @@ void c3d_depth_test(int on) {
 void c3d_alpha_test(int on, int ref) {
     C3D_AlphaTest(on ? true : false, GPU_GREATER, ref);
 }
+
