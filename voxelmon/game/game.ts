@@ -37,6 +37,10 @@ import { Textbox } from "./world/textbox.ts";
 import { NamingState } from "./ui/naming.ts";
 import { TitleState, TITLE_PAGES } from "./ui/title.ts";
 import { StartMenuState } from "./ui/startmenu.ts";
+import { BagState } from "./ui/bagscreen.ts";
+import { PartyState } from "./ui/partyscreen.ts";
+import { ShopState } from "./ui/shopscreen.ts";
+import { BoxState } from "./ui/boxscreen.ts";
 import { encodeSave } from "./save-lua.ts";
 import { decodeSave } from "./save-read.ts";
 /** Must match Version.saveFormat in the recomp. */
@@ -704,10 +708,31 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     return this.overworld.picShown;
   }
 
+  /** open_mart verb -> push the mart shop; onQuit resumes the yielded runner. */
+  openShop(stock: string[], onQuit?: () => void): void {
+    this.push(new ShopState(this as any, stock, onQuit));
+  }
+
+  /** PC tile -> Bill's PC box storage. */
+  openBox(): void {
+    this.push(new BoxState(this as any));
+  }
+
+  /** Mon cry for the box withdraw/release, via the audio director. */
+  playCry(species: string): void {
+    this.audio.playCry(species);
+  }
+
   openStartMenu(): void {
     this.push(
       new StartMenuState(this as any, (act) => {
         // POKéMON and ITEM are their own screens; wired next.
+        if (act === "item") {
+          this.push(new BagState(this as any));
+        }
+        if (act === "pokemon") {
+          this.push(new PartyState(this as any));
+        }
         if (act === "save") {
           // The recomp keeps the live position in player.*; copy it over
           // so the desktop build resumes exactly where the 3DS stood.
@@ -724,6 +749,31 @@ export class VoxelmonGame implements OverworldShell, SceneView {
         }
       }),
     );
+  }
+
+  bag(): unknown {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "bag" ? top.view() : null;
+  }
+
+  shop(): unknown {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "shop" ? top.view() : null;
+  }
+
+  box(): unknown {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "box" ? top.view() : null;
+  }
+
+  party(): unknown {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "party" ? top.view() : null;
+  }
+
+  summary(): unknown {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "summary" ? top.view() : null;
   }
 
   startMenu(): unknown {

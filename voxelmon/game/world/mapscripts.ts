@@ -208,3 +208,40 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
 export function talkScript(mapLabel: string, textConst: string): ScriptRow[] | null {
   return MAP_SCRIPTS[mapLabel]?.talk?.[textConst] ?? null;
 }
+
+// Item balls (pokered engine/overworld/ItemUseOverworld + the shared
+// PickupItem/ItemBallScript path): any map object carrying an `item` field is
+// a ground pickup, so it needs no per-map talk entry — the object data IS the
+// script. The event flag below is the missable-object flag pokered sets to
+// hide a collected ball (data/events/... EVENT_GOT_*): once set, the ball is
+// gone and re-talking is a no-op. Text const is globally unique per ball, but
+// the map id is folded in so nothing collides.
+export function itemBallFlag(mapLabel: string, textConst: string): string {
+  return `EVENT_ITEMBALL_${mapLabel}_${textConst}`;
+}
+
+/**
+ * Synthesise the pickup script for an item-ball object. Mirrors the starter
+ * Poke Ball rows above: gate on the flag, add the item, then (only if the bag
+ * had room) set the flag and hide the ball. give_item halts the script when
+ * the bag is full (AddItemToInventory's `jr nc, .full`), so a full bag leaves
+ * both the flag and the ball untouched and the player can come back for it.
+ * Returns null for any object without an item field.
+ */
+export function itemBallScript(
+  mapLabel: string,
+  obj: { text?: string; item?: string } | undefined,
+): ScriptRow[] | null {
+  const item = obj?.item;
+  const textConst = obj?.text;
+  if (!item || !textConst) return null;
+  const flag = itemBallFlag(mapLabel, textConst);
+  return [
+    ["check_flag", flag],
+    ["jump_if_true", "end"],
+    ["play_sound", "Get_Item_1"],
+    ["give_item", item],
+    ["set_flag", flag],
+    ["hide_object", mapLabel, textConst],
+  ] as ScriptRow[];
+}

@@ -168,6 +168,11 @@ export interface MapObject {
   movement: string;
   range: string;
   text: string;
+  /** Ground pickups (item balls) carry the item id here, e.g. "MOON_STONE". */
+  item?: string;
+  /** Overworld trainers carry their opponent class + party for sight battles. */
+  trainerClass?: string;
+  trainerParty?: number;
   x: number;
   y: number;
 }

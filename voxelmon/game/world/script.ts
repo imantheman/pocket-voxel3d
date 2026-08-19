@@ -22,6 +22,7 @@ import type { Dir } from "./collision.ts";
 import type { NPC } from "./npc.ts";
 
 import { newMon } from "../battle/mon.ts";
+import { martStock } from "./marts.ts";
 
 export type ScriptRow = [string, ...unknown[]];
 
@@ -369,6 +370,22 @@ function* pic_hide(ctx: ScriptContext): Generator<void, void> {
   ctx.world.hidePic();
 }
 
+// Commands.lua:852 open_mart — the clerk's mart list (entry.mart) opens the
+// ShopMenu and the runner yields until QUIT resumes it, exactly like
+// start_battle. Stock is resolved from the current map + text const.
+function* open_mart(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const runner = ctx.runner;
+  const w = ctx.world as unknown as {
+    map?: { id: string };
+    openShop?: (stock: string[], onQuit: () => void) => void;
+  };
+  const stock = martStock(w.map?.id ?? "", String(args[0] ?? ""));
+  if (stock && w.openShop) {
+    w.openShop(stock, () => runner.resume());
+    yield;
+  }
+}
+
 const VERBS: Record<string, Verb> = {
   show_text,
   ask,
@@ -397,6 +414,7 @@ const VERBS: Record<string, Verb> = {
   place_npc,
   move_player_to,
   start_battle,
+  open_mart,
   walk_route,
   push_screen: noop_object,
   play_sound: noop_audio,

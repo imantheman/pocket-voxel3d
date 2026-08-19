@@ -576,8 +576,7 @@ export class WildBattle implements EffectBattle {
     // wild battle calls PlayCry BEFORE the "appeared!" box, so the cry lands
     // with the text — after the silhouettes have slid in, not on the frame
     // the battle was pushed.
-    this.act(() => this.audioCues.push(`cry:${this.enemy.mon.species}`));
-    this.say(`Wild ${this.enemy.name}\nappeared!`);
+    this.enemyIntro();
     // _InitBattleCommon clears the intro chrome the instant the intro text
     // is dismissed (:1534-1539, #317)
     this.act(() => {
@@ -600,6 +599,13 @@ export class WildBattle implements EffectBattle {
     this.markParticipant();
     this.phase = "messages";
     this.afterQueue = "menu";
+  }
+
+  /** The enemy-appears line. Wild: "X appeared!" with its cry. Trainers
+   * override this for "TRAINER sent out X!" (common_text.asm). */
+  enemyIntro(): void {
+    this.act(() => this.audioCues.push(`cry:${this.enemy.mon.species}`));
+    this.say(`Wild ${this.enemy.name}\nappeared!`);
   }
 
   /** :1353-1363 sendOutText — the shout scales with enemy HP remaining. */

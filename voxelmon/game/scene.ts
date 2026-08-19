@@ -147,6 +147,11 @@ export class Scene {
   private picSig = "";
   private titleSig: string | null = null;
   private menuSig: string | null = null;
+  private bagSig: string | null = null;
+  private shopSig: string | null = null;
+  private boxSig: string | null = null;
+  private partySig: string | null = null;
+  private summarySig: string | null = null;
   private uiRows: UiRowCache[] = [];
   private uiPage = -1;
   private uiArrow = false;
@@ -456,6 +461,340 @@ export class Scene {
       }
     }
 
+    const bx = (view as unknown as { box?: () => any }).box?.();
+    if (bx) {
+      const sig = [
+        bx.mode, bx.currentBox, bx.menuIndex, bx.listIndex, bx.listTop,
+        bx.submenuIndex, bx.confirmYes, bx.footer ?? "",
+        bx.list.map((e: any) => `${e.label}${e.right}`).join(","),
+      ].join("|");
+      if (sig !== this.boxSig) {
+        this.boxSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const box = (x: number, y: number, w: number, h: number) => {
+          host.uiTile(x, y, BORDER_TL);
+          host.uiFill(x + 1, y, w - 1, 1, BORDER_H);
+          host.uiTile(x + w, y, BORDER_TR);
+          host.uiFill(x, y + 1, 1, h, BORDER_V);
+          host.uiFill(x + w, y + 1, 1, h, BORDER_V);
+          host.uiFill(x + 1, y + 1, w - 1, h, SPACE);
+          host.uiTile(x, y + 1 + h, BORDER_BL);
+          host.uiFill(x + 1, y + 1 + h, w - 1, 1, BORDER_H);
+          host.uiTile(x + w, y + 1 + h, BORDER_BR);
+        };
+        const footerBox = () => {
+          if (!bx.footer) return;
+          box(0, 12, 19, 4);
+          String(bx.footer).split("\n").forEach((ln: string, i: number) => {
+            this.stamp(host, 1, 13 + i, ln);
+          });
+        };
+        // BOX No. indicator, top-right.
+        box(12, 0, 7, 1);
+        this.stamp(host, 14, 1, `BOX No.${bx.currentBox}`);
+
+        if (bx.mode === "menu") {
+          const items = ["WITHDRAW", "DEPOSIT", "RELEASE", "CHANGE BOX", "SEE YA!"];
+          box(0, 3, 13, items.length * 2);
+          items.forEach((label, i) => {
+            this.stamp(host, 2, 5 + i * 2, label);
+            if (i === bx.menuIndex) host.uiTile(1, 5 + i * 2, ARROW_CURSOR);
+          });
+        } else if (bx.mode === "list") {
+          const total = bx.list.length + 1; // + CANCEL
+          const X = 0, Y = 3, W = 15, H = bx.rows * 2;
+          box(X, Y, W, H);
+          for (let r = 0; r < bx.rows; r++) {
+            const li = bx.listTop + r;
+            if (li >= total) break;
+            const rowY = Y + 2 + r * 2;
+            if (li < bx.list.length) {
+              const e = bx.list[li];
+              this.stamp(host, X + 2, rowY, e.label);
+              if (e.right) this.stamp(host, X + W - e.right.length, rowY, e.right);
+            } else {
+              this.stamp(host, X + 2, rowY, "CANCEL");
+            }
+            if (li === bx.listIndex) host.uiTile(X + 1, rowY, ARROW_CURSOR);
+          }
+          if (bx.listTop + bx.rows < total) host.uiTile(X + W - 1, Y + H, ARROW_MORE);
+        } else if (bx.mode === "submenu") {
+          const items = [bx.submenuLabel, "STATS", "CANCEL"];
+          box(9, 9, 9, 6);
+          items.forEach((label, i) => {
+            this.stamp(host, 12, 11 + i * 2, label);
+            if (i === bx.submenuIndex) host.uiTile(11, 11 + i * 2, ARROW_CURSOR);
+          });
+        } else if (bx.mode === "confirm") {
+          box(14, 8, 4, 2);
+          this.stamp(host, 16, 9, "YES");
+          this.stamp(host, 16, 10, "NO");
+          host.uiTile(15, bx.confirmYes ? 9 : 10, ARROW_CURSOR);
+          footerBox();
+        }
+        if (bx.mode === "list" || bx.mode === "message") footerBox();
+      }
+      return;
+    }
+    if (this.boxSig !== null) {
+      this.boxSig = null;
+      host.uiClear();
+      this.uiOwner = null;
+      this.shopSig = this.summarySig = this.partySig = this.bagSig = this.menuSig = this.titleSig = this.namingSig = null;
+    }
+
+    const sh = (view as unknown as { shop?: () => any }).shop?.();
+    if (sh) {
+      const sig = [
+        sh.mode, sh.money, sh.menuIndex, sh.buying, sh.listIndex, sh.listTop,
+        sh.qty, sh.total, sh.confirmYes, sh.footer ?? "",
+        sh.list.map((e: any) => `${e.label}${e.right}`).join(","),
+      ].join("|");
+      if (sig !== this.shopSig) {
+        this.shopSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const box = (x: number, y: number, w: number, h: number) => {
+          host.uiTile(x, y, BORDER_TL);
+          host.uiFill(x + 1, y, w - 1, 1, BORDER_H);
+          host.uiTile(x + w, y, BORDER_TR);
+          host.uiFill(x, y + 1, 1, h, BORDER_V);
+          host.uiFill(x + w, y + 1, 1, h, BORDER_V);
+          host.uiFill(x + 1, y + 1, w - 1, h, SPACE);
+          host.uiTile(x, y + 1 + h, BORDER_BL);
+          host.uiFill(x + 1, y + 1 + h, w - 1, 1, BORDER_H);
+          host.uiTile(x + w, y + 1 + h, BORDER_BR);
+        };
+        const footer = () => {
+          if (!sh.footer) return;
+          box(0, 13, 19, 3);
+          String(sh.footer).split("\n").forEach((ln: string, i: number) => {
+            this.stamp(host, 1, 14 + i, ln);
+          });
+        };
+        // Money box, top-right (¥ = 0xf0), in every mode.
+        box(11, 0, 8, 1);
+        const money = `\u00a5${sh.money}`;
+        this.stamp(host, 19 - money.length, 1, money);
+
+        if (sh.mode === "menu") {
+          box(0, 3, 8, 6);
+          ["BUY", "SELL", "QUIT"].forEach((label, i) => {
+            this.stamp(host, 3, 5 + i * 2, label);
+            if (i === sh.menuIndex) host.uiTile(2, 5 + i * 2, ARROW_CURSOR);
+          });
+        } else if (sh.mode === "list") {
+          const total = sh.list.length + 1; // + CANCEL
+          const X = 0, Y = 3, W = 19, H = sh.rows * 2;
+          box(X, Y, W, H);
+          for (let r = 0; r < sh.rows; r++) {
+            const li = sh.listTop + r;
+            if (li >= total) break;
+            const rowY = Y + 2 + r * 2;
+            if (li < sh.list.length) {
+              const e = sh.list[li];
+              this.stamp(host, X + 2, rowY, e.label);
+              this.stamp(host, X + W - e.right.length, rowY, e.right);
+            } else {
+              this.stamp(host, X + 2, rowY, "CANCEL");
+            }
+            if (li === sh.listIndex) host.uiTile(X + 1, rowY, ARROW_CURSOR);
+          }
+          if (sh.listTop + sh.rows < total) host.uiTile(X + W - 1, Y + H, ARROW_MORE);
+          footer();
+        } else if (sh.mode === "quantity") {
+          box(3, 6, 13, 2);
+          this.stamp(host, 5, 7, sh.selName);
+          this.stamp(host, 5, 8, `\u00d7${sh.qty}`);
+          const t = `\u00a5${sh.total}`;
+          this.stamp(host, 15 - t.length, 8, t);
+          footer();
+        } else if (sh.mode === "confirm") {
+          box(14, 9, 4, 2);
+          this.stamp(host, 16, 10, "YES");
+          this.stamp(host, 16, 11, "NO");
+          host.uiTile(15, sh.confirmYes ? 10 : 11, ARROW_CURSOR);
+          footer();
+        }
+      }
+      return;
+    }
+    if (this.shopSig !== null) {
+      this.shopSig = null;
+      host.uiClear();
+      this.uiOwner = null;
+      this.summarySig = this.partySig = this.bagSig = this.menuSig = this.titleSig = this.namingSig = null;
+    }
+
+    const sv = (view as unknown as { summary?: () => any }).summary?.();
+    if (sv) {
+      const sig = `${sv.name},${sv.hp}/${sv.maxHp},${sv.status},${sv.level}`;
+      if (sig !== this.summarySig) {
+        this.summarySig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        // Full-screen frame (StatusScreen owns the tile layer).
+        host.uiTile(0, 0, BORDER_TL);
+        host.uiFill(1, 0, 18, 1, BORDER_H);
+        host.uiTile(19, 0, BORDER_TR);
+        host.uiFill(0, 1, 1, 16, BORDER_V);
+        host.uiFill(19, 1, 1, 16, BORDER_V);
+        host.uiTile(0, 17, BORDER_BL);
+        host.uiFill(1, 17, 18, 1, BORDER_H);
+        host.uiTile(19, 17, BORDER_BR);
+        host.uiFill(1, 1, 18, 16, SPACE);
+        let y = 2;
+        this.stamp(host, 2, y, sv.name);
+        this.stamp(host, 14, y, `<LV>${sv.level}`);
+        y += 2;
+        this.stamp(host, 2, y, `HP ${sv.hp}/${sv.maxHp}`);
+        y += 1;
+        this.stamp(host, 2, y, `STATUS ${sv.status ?? "OK"}`);
+        y += 1;
+        this.stamp(host, 2, y, `TYPE ${sv.types.join("/")}`);
+        y += 2;
+        this.stamp(host, 2, y, `ATK ${sv.stats.atk}`);
+        this.stamp(host, 11, y, `DEF ${sv.stats.def}`);
+        y += 1;
+        this.stamp(host, 2, y, `SPD ${sv.stats.spd}`);
+        this.stamp(host, 11, y, `SPC ${sv.stats.spc}`);
+        y += 2;
+        this.stamp(host, 2, y, "MOVES");
+        y += 1;
+        for (const mv of sv.moves as { name: string; pp: number }[]) {
+          this.stamp(host, 3, y, mv.name);
+          this.stamp(host, 15, y, `PP${mv.pp}`);
+          y += 1;
+        }
+      }
+      return;
+    }
+    if (this.summarySig !== null) {
+      this.summarySig = null;
+      host.uiClear();
+      this.uiOwner = null;
+      this.partySig = this.bagSig = this.menuSig = this.titleSig = this.namingSig = null;
+    }
+
+    const pv = (view as unknown as { party?: () => any }).party?.();
+    if (pv) {
+      const total = pv.entries.length + 1; // + CANCEL
+      const sig = pv.entries
+        .map((e: any) => `${e.name}${e.level}:${e.hp}/${e.maxHp}:${e.status ?? ""}`)
+        .join(";") + `#${pv.index}|${pv.mode}|${pv.submenuIndex}|${pv.swapFrom}`;
+      if (sig !== this.partySig) {
+        this.partySig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        // Two tile-rows per mon (name, then <LV>/HP), CANCEL last.
+        const X = 0, Y = 0, W = 19, H = pv.entries.length * 2 + 1;
+        host.uiTile(X, Y, BORDER_TL);
+        host.uiFill(X + 1, Y, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y, BORDER_TR);
+        host.uiFill(X, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + W, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + 1, Y + 1, W - 1, H, SPACE);
+        host.uiTile(X, Y + 1 + H, BORDER_BL);
+        host.uiFill(X + 1, Y + 1 + H, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y + 1 + H, BORDER_BR);
+        const IY = Y + 1;
+        pv.entries.forEach((e: any, i: number) => {
+          const nameRow = IY + i * 2;
+          const statRow = nameRow + 1;
+          this.stamp(host, X + 2, nameRow, e.name);
+          if (e.status) this.stamp(host, X + 14, nameRow, e.status);
+          this.stamp(host, X + 3, statRow, `<LV>${e.level}`);
+          const hp = `${e.hp}/${e.maxHp}`;
+          this.stamp(host, X + W - hp.length, statRow, hp);
+          if (i === pv.index) host.uiTile(X + 1, nameRow, ARROW_CURSOR);
+        });
+        const cancelRow = IY + pv.entries.length * 2;
+        this.stamp(host, X + 2, cancelRow, "CANCEL");
+        if (pv.index === pv.entries.length) {
+          host.uiTile(X + 1, cancelRow, ARROW_CURSOR);
+        }
+        // the held mon during a SWITCH keeps a cursor so both slots are visible
+        if (pv.swapFrom !== null && pv.swapFrom !== pv.index) {
+          host.uiTile(X + 1, IY + pv.swapFrom * 2, ARROW_CURSOR);
+        }
+        // per-mon submenu: STATS / SWITCH / CANCEL
+        if (pv.mode === "submenu") {
+          const items = ["STATS", "SWITCH", "CANCEL"];
+          const sx = 10, sy = 9, sw = 9;
+          host.uiTile(sx, sy, BORDER_TL);
+          host.uiFill(sx + 1, sy, sw - 1, 1, BORDER_H);
+          host.uiTile(sx + sw, sy, BORDER_TR);
+          host.uiFill(sx, sy + 1, 1, 6, BORDER_V);
+          host.uiFill(sx + sw, sy + 1, 1, 6, BORDER_V);
+          host.uiFill(sx + 1, sy + 1, sw - 1, 6, SPACE);
+          host.uiTile(sx, sy + 7, BORDER_BL);
+          host.uiFill(sx + 1, sy + 7, sw - 1, 1, BORDER_H);
+          host.uiTile(sx + sw, sy + 7, BORDER_BR);
+          items.forEach((label, i) => {
+            this.stamp(host, sx + 3, sy + 2 + i * 2, label);
+            if (i === pv.submenuIndex) host.uiTile(sx + 2, sy + 2 + i * 2, ARROW_CURSOR);
+          });
+        }
+      }
+      return;
+    }
+    if (this.partySig !== null) {
+      this.partySig = null;
+      host.uiClear();
+      this.uiOwner = null;
+      this.bagSig = this.menuSig = this.titleSig = this.namingSig = null;
+    }
+
+    const bg = (view as unknown as { bag?: () => any }).bag?.();
+    if (bg) {
+      // entries carry names+qty; CANCEL is the implicit last row (bagscreen.ts
+      // counts it in its index range), and top/rows are the scroll window.
+      const total = bg.entries.length + 1;
+      const sig = `${bg.index},${bg.top},` +
+        bg.entries.map((e: any) => `${e.name}\u00d7${e.qty}`).join(";");
+      if (sig !== this.bagSig) {
+        this.bagSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const X = 2, Y = 2, W = 16, H = bg.rows * 2;
+        host.uiTile(X, Y, BORDER_TL);
+        host.uiFill(X + 1, Y, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y, BORDER_TR);
+        host.uiFill(X, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + W, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + 1, Y + 1, W - 1, H, SPACE);
+        host.uiTile(X, Y + 1 + H, BORDER_BL);
+        host.uiFill(X + 1, Y + 1 + H, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y + 1 + H, BORDER_BR);
+        for (let r = 0; r < bg.rows; r++) {
+          const li = bg.top + r;
+          if (li >= total) break;
+          const rowY = Y + 2 + r * 2;
+          if (li < bg.entries.length) {
+            const e = bg.entries[li];
+            this.stamp(host, X + 2, rowY, e.name);
+            const qs = `\u00d7${e.qty}`; // × + count, right-aligned
+            this.stamp(host, X + W - qs.length, rowY, qs);
+          } else {
+            this.stamp(host, X + 2, rowY, "CANCEL");
+          }
+          if (li === bg.index) host.uiTile(X + 1, rowY, ARROW_CURSOR);
+        }
+        // more-arrow when there are rows below the window.
+        if (bg.top + bg.rows < total) host.uiTile(X + W - 1, Y + H, ARROW_MORE);
+      }
+      return;
+    }
+    if (this.bagSig !== null) {
+      // The bag owned the whole UI layer; clearing it leaves the layer blank,
+      // so force whatever is under it (the start menu) to redraw — its own sig
+      // is unchanged from before the bag opened and would otherwise no-op.
+      this.bagSig = null;
+      host.uiClear();
+      this.uiOwner = null;
+      this.menuSig = this.titleSig = this.namingSig = null;
+    }
     const sm = (view as unknown as { startMenu?: () => any }).startMenu?.();
     if (sm) {
       const sig = `${sm.index},${sm.entries.length}`;

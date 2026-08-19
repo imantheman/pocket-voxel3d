@@ -19,7 +19,10 @@ import { canMove, occupied, target, type Dir, type Mover, type TilePairs } from 
 import { defPassable, GameMap, isOutside } from "./map.ts";
 import { NPC } from "./npc.ts";
 import { Player } from "./player.ts";
-import { talkScript } from "./mapscripts.ts";
+import { talkScript, itemBallScript, itemBallFlag } from "./mapscripts.ts";
+import { martGreetScript } from "./marts.ts";
+import { nurseGreetScript } from "./nurses.ts";
+import { pcTileAt } from "./pctiles.ts";
 import { ScriptRunner, type ScriptRow, type ScriptWorld } from "./script.ts";
 import { MAP_SCRIPTS } from "./mapscripts.ts";
 import {
@@ -162,6 +165,9 @@ export class Overworld implements ScriptWorld {
   entities: Mover[] = [];
   runner: ScriptRunner;
   scriptMoves: ScriptMove[] = [];
+  /** A trainer has spotted the player and is engaging (sight -> "!" -> walk-up
+   * -> battle); blocks input and re-sighting until the battle resolves. */
+  engaging = false;
   emote?: EmoteHold;
   lastOutdoor?: LastOutdoor;
   standingOnWarp = false;
@@ -266,7 +272,13 @@ export class Overworld implements ScriptWorld {
   // carries only the `hidden` gate (toggles/items-taken/defeated need save
   // machinery outside this slice).
   private objectVisible(obj: MapObject): boolean {
-    return !(obj as MapObject & { hidden?: boolean }).hidden;
+    if ((obj as MapObject & { hidden?: boolean }).hidden) return false;
+    // A collected item ball stays gone across reloads: its pickup flag hides
+    // it at spawn the way pokered's missable-object flag keeps it despawned.
+    if (obj.item && this.save?.flags?.[itemBallFlag(this.map.id, obj.text)]) {
+      return false;
+    }
+    return true;
   }
 
   // OverworldController.lua:131 pooledNPC
@@ -303,8 +315,18 @@ export class Overworld implements ScriptWorld {
     // emote is included: a hold queued from a scriptMove onDone is assigned
     // mid-frame, after the early emote return above already missed it
     // (OverworldController.lua:1045-1052)
-    const scripted =
-      this.runner.isRunning() || this.scriptMoves.length > 0 || this.emote !== undefined;
+    let scripted =
+      this.runner.isRunning() || this.scriptMoves.length > 0 || this.emote !== undefined ||
+      this.engaging;
+    // OverworldController.lua:1070 — scan for a trainer sighting on the step
+    // that just landed, then re-gate: a spotted player can never start another
+    // step (CheckFightingMapTrainers zeroes the joypad the instant it engages).
+    if (!scripted && !this.transitioning) {
+      this.checkTrainerSight();
+      scripted =
+        this.runner.isRunning() || this.scriptMoves.length > 0 || this.emote !== undefined ||
+        this.engaging;
+    }
     if (!scripted && !this.transitioning) {
       this.handleInput();
     }
@@ -606,6 +628,12 @@ export class Overworld implements ScriptWorld {
       this.showMapText(sign.text);
       return;
     }
+    // Bill's PC: a hidden PC tile (OverworldController.lua:2019). Pressing A
+    // facing it opens box storage.
+    if (pcTileAt(this.map.id, fx, fy, p.facing)) {
+      (this.shell as unknown as { openBox?: () => void }).openBox?.();
+      return;
+    }
   }
 
   // OverworldController.lua:2520 talkTo — freeze, then dispatch the object's
@@ -626,7 +654,13 @@ export class Overworld implements ScriptWorld {
   // pointers is only ever its FIRST case, so without the script Mom reads the
   // wake-up line forever and Oak never stops warning you about the grass.
   showMapText(textConst: string, npc?: NPC, onDone?: () => void): void {
-    const script = talkScript(this.map.id, textConst);
+    // A registered talk script wins; otherwise an object with an `item` field
+    // is a ground pickup and the item-ball script is synthesised for it.
+    const script =
+      talkScript(this.map.id, textConst) ??
+      itemBallScript(this.map.id, npc?.def) ??
+      martGreetScript(this.map.id, textConst) ??
+      nurseGreetScript(textConst);
     if (script && !this.runner.isRunning()) {
       if (npc) npc.frozen = true;
       this.runner.run(script, {
@@ -980,6 +1014,99 @@ export class Overworld implements ScriptWorld {
       else this.moveNpcTo(ref, wp[0], wp[1], next);
     };
     next();
+  }
+
+  /** open_mart -> ShopMenu: delegate to the game shell like startTrainerBattle. */
+  openShop(stock: string[], onQuit: () => void): void {
+    const self = this as any;
+    const shell = self.shell ?? self.game ?? self.host ?? null;
+    if (shell?.openShop) shell.openShop(stock, onQuit);
+    else onQuit();
+  }
+
+  /** PC tile -> Bill's PC box storage. */
+  openBox(): void {
+    const self = this as any;
+    const shell = self.shell ?? self.game ?? self.host ?? null;
+    shell?.openBox?.();
+  }
+
+  // --- Trainer sight (OverworldController.lua:3266 checkTrainerSight /
+  // engine/overworld/trainer_sight.asm): a STAY trainer with a facing spots
+  // the player on its line of sight, fires "!", walks up, and battles. ---
+
+  private trainerHeader(npc: NPC): { range?: number; event?: string; battle?: string } | undefined {
+    const headers = this.shell.data.trainer_headers as
+      | Record<string, Record<string, { range?: number; event?: string; battle?: string }>>
+      | undefined;
+    return headers?.[this.map.def.label]?.[npc.def.index];
+  }
+
+  private trainerDefeated(npc: NPC): boolean {
+    const ev = this.trainerHeader(npc)?.event;
+    return !!ev && this.save.flags?.[ev] === true;
+  }
+
+  checkTrainerSight(): void {
+    if (this.player.moving || this.engaging) return;
+    const p = this.player;
+    const DIRVEC: Record<string, [number, number]> = {
+      up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0],
+    };
+    for (const npc of this.npcs) {
+      const def = npc.def;
+      if (!def.trainerClass || npc.moving || npc.frozen) continue;
+      if (this.trainerDefeated(npc)) continue;
+      // scripted trainers (rival, leaders) engage through their own start_battle
+      if (talkScript(this.map.id, def.text)) continue;
+      // on-screen only (CheckSpriteAvailability): dx in [-4,5], dy in [-4,4]
+      const dx = npc.cellX - p.cellX;
+      const dy = npc.cellY - p.cellY;
+      if (dx < -4 || dx > 5 || dy < -4 || dy > 4) continue;
+      const range = this.trainerHeader(npc)?.range ?? 0;
+      const vec = DIRVEC[npc.facing];
+      if (range <= 0 || !vec) continue;
+      let dist: number | null = null;
+      if (vec[0] !== 0 && npc.cellY === p.cellY) dist = (p.cellX - npc.cellX) * vec[0];
+      else if (vec[1] !== 0 && npc.cellX === p.cellX) dist = (p.cellY - npc.cellY) * vec[1];
+      if (dist !== null && dist >= 1 && dist <= range) {
+        this.startTrainerApproach(npc, dist);
+        return;
+      }
+    }
+  }
+
+  private startTrainerApproach(npc: NPC, dist: number): void {
+    this.engaging = true;
+    npc.frozen = true;
+    const def = npc.def;
+    const header = this.trainerHeader(npc);
+    const fight = () => {
+      const launch = () =>
+        this.startTrainerBattle(def.trainerClass ?? "", def.trainerParty ?? 1, undefined, () => {
+          // mark the trainer's EVENT_BEAT_* on return so the sight line does not
+          // re-fire (gen1 sets it on a win).
+          const ev = header?.event;
+          if (ev && this.save.flags) this.save.flags[ev] = true;
+          npc.frozen = false;
+          this.engaging = false;
+        });
+      // TalkToTrainer prints the before-battle text FIRST, then StartTrainerBattle
+      // (home/trainers.asm:88). header.battle -> data.text key.
+      const key = header?.battle;
+      const taunt = key
+        ? (this.shell.data as { text?: Record<string, string> }).text?.[key]
+        : undefined;
+      if (taunt) this.showText(taunt, launch);
+      else launch();
+    };
+    // "!" bubble holds the world 60 frames (emotion_bubbles.asm), then the
+    // trainer marches up to one tile away (TrainerWalkUpToPlayer).
+    this.setEmote(npc, 1, 60, () => {
+      const steps = dist - 1;
+      if (steps > 0) this.scriptMove(npc, npc.facing, steps, fight);
+      else fight();
+    });
   }
 
   startTrainerBattle(id: string, idx: number, name?: string, onDone?: () => void): void {

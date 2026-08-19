@@ -42,6 +42,13 @@ export class TrainerBattle extends WildBattle {
     this.enemyIndex = 0;
   }
 
+  /** Trainers send out their lead instead of it "appearing" wild
+   * (common_text.asm TrainerSentOutText). */
+  override enemyIntro(): void {
+    this.act(() => this.audioCues.push(`cry:${this.enemy.mon.species}`));
+    this.say(`${this.trainerName} sent\nout ${this.enemy.name}!`);
+  }
+
   /** Trainers refuse escape (tryRun's trainer branch). */
   override runRoll(_playerSpeed: number, _enemySpeed: number): boolean {
     this.say("There's no escaping\na trainer battle!");

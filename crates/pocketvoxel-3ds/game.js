@@ -2134,9 +2134,7 @@ out!`);
       return;
     }
     this.queue.push({ wait: BATTLE_SLIDE_IN_FRAMES });
-    this.act(() => this.audioCues.push(`cry:${this.enemy.mon.species}`));
-    this.say(`Wild ${this.enemy.name}
-appeared!`);
+    this.enemyIntro();
     this.act(() => {
       this.introBalls = false;
     });
@@ -2154,6 +2152,11 @@ appeared!`);
     this.markParticipant();
     this.phase = "messages";
     this.afterQueue = "menu";
+  }
+  enemyIntro() {
+    this.act(() => this.audioCues.push(`cry:${this.enemy.mon.species}`));
+    this.say(`Wild ${this.enemy.name}
+appeared!`);
   }
   sendOutText(name) {
     const e = this.enemy.mon;
@@ -2919,6 +2922,11 @@ class TrainerBattle extends WildBattle {
     this.baseMoney = def?.baseMoney ?? 0;
     this.enemyParty = roster.map((m) => newMon(data, m.species, m.level, rng));
     this.enemyIndex = 0;
+  }
+  enemyIntro() {
+    this.act(() => this.audioCues.push(`cry:${this.enemy.mon.species}`));
+    this.say(`${this.trainerName} sent
+out ${this.enemy.name}!`);
   }
   runRoll(_playerSpeed, _enemySpeed) {
     this.say(`There's no escaping
@@ -4250,6 +4258,105 @@ var MAP_SCRIPTS = {
 function talkScript(mapLabel, textConst) {
   return MAP_SCRIPTS[mapLabel]?.talk?.[textConst] ?? null;
 }
+function itemBallFlag(mapLabel, textConst) {
+  return `EVENT_ITEMBALL_${mapLabel}_${textConst}`;
+}
+function itemBallScript(mapLabel, obj) {
+  const item = obj?.item;
+  const textConst = obj?.text;
+  if (!item || !textConst)
+    return null;
+  const flag = itemBallFlag(mapLabel, textConst);
+  return [
+    ["check_flag", flag],
+    ["jump_if_true", "end"],
+    ["play_sound", "Get_Item_1"],
+    ["give_item", item],
+    ["set_flag", flag],
+    ["hide_object", mapLabel, textConst]
+  ];
+}
+
+// voxelmon/game/world/marts.ts
+var MART_STOCK = {
+  VIRIDIAN_MART: {
+    TEXT_VIRIDIANMART_CLERK: ["POKE_BALL", "ANTIDOTE", "PARLYZ_HEAL", "BURN_HEAL"]
+  },
+  PEWTER_MART: {
+    TEXT_PEWTERMART_CLERK: [
+      "POKE_BALL",
+      "POTION",
+      "ESCAPE_ROPE",
+      "ANTIDOTE",
+      "BURN_HEAL",
+      "AWAKENING",
+      "PARLYZ_HEAL"
+    ]
+  }
+};
+function martStock(mapLabel, textConst) {
+  return MART_STOCK[mapLabel]?.[textConst] ?? null;
+}
+function martGreetScript(mapLabel, textConst) {
+  if (!martStock(mapLabel, textConst))
+    return null;
+  return [
+    ["face_player"],
+    ["show_text", `Hi there!
+May I help you?`],
+    ["open_mart", textConst]
+  ];
+}
+
+// voxelmon/game/world/nurses.ts
+function isNurseClerk(textConst) {
+  return textConst.endsWith("_NURSE");
+}
+function nurseGreetScript(textConst) {
+  if (!isNurseClerk(textConst))
+    return null;
+  return [
+    ["face_player"],
+    ["ask", `Welcome to our
+POKéMON CENTER!
+Shall we heal your
+POKéMON?`],
+    ["jump_if_false", "bye"],
+    ["show_text", `OK. We'll need
+your POKéMON.`],
+    ["fade", "out", "white"],
+    ["heal_party"],
+    ["play_once", "Music_PkmnHealed"],
+    ["fade", "in", "white"],
+    ["show_text", `Your POKéMON are
+fighting fit!`],
+    ["label", "bye"],
+    ["show_text", `We hope to see
+you again!`]
+  ];
+}
+
+// voxelmon/game/world/pctiles.ts
+var PC_TILES = {
+  VIRIDIAN_POKECENTER: [{ x: 13, y: 3, facing: "up" }],
+  PEWTER_POKECENTER: [{ x: 13, y: 3, facing: "up" }],
+  CERULEAN_POKECENTER: [{ x: 13, y: 3, facing: "up" }],
+  VERMILION_POKECENTER: [{ x: 13, y: 3, facing: "up" }],
+  LAVENDER_POKECENTER: [{ x: 13, y: 3, facing: "up" }],
+  CELADON_POKECENTER: [{ x: 13, y: 3, facing: "up" }],
+  FUCHSIA_POKECENTER: [{ x: 13, y: 3, facing: "up" }],
+  CINNABAR_POKECENTER: [{ x: 13, y: 3, facing: "up" }],
+  SAFFRON_POKECENTER: [{ x: 13, y: 3, facing: "up" }],
+  MT_MOON_POKECENTER: [{ x: 13, y: 3, facing: "up" }],
+  ROCK_TUNNEL_POKECENTER: [{ x: 13, y: 3, facing: "up" }],
+  INDIGO_PLATEAU_LOBBY: [{ x: 15, y: 7, facing: "up" }]
+};
+function pcTileAt(mapLabel, x, y, facing) {
+  const tiles = PC_TILES[mapLabel];
+  if (!tiles)
+    return false;
+  return tiles.some((t) => t.x === x && t.y === y && (!t.facing || t.facing === facing));
+}
 
 // voxelmon/game/rules/bag.ts
 var DEFAULT_CAPACITY = 20;
@@ -4311,6 +4418,19 @@ function add(save, id, qty, data) {
     order(save).push(id);
   }
   return true;
+}
+function remove(save, id, qty) {
+  const inv = save.inventory;
+  inv[id] = (inv[id] ?? 0) - (qty ?? 1);
+  if (inv[id] <= 0) {
+    delete inv[id];
+    const list = save.bagOrder;
+    if (list) {
+      const i = list.indexOf(id);
+      if (i !== -1)
+        list.splice(i, 1);
+    }
+  }
 }
 
 // voxelmon/game/world/script.ts
@@ -4502,6 +4622,15 @@ function* pic(ctx, ...args) {
 function* pic_hide(ctx) {
   ctx.world.hidePic();
 }
+function* open_mart(ctx, ...args) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  const stock = martStock(w.map?.id ?? "", String(args[0] ?? ""));
+  if (stock && w.openShop) {
+    w.openShop(stock, () => runner.resume());
+    yield;
+  }
+}
 var VERBS = {
   show_text,
   ask,
@@ -4530,6 +4659,7 @@ var VERBS = {
   place_npc,
   move_player_to,
   start_battle,
+  open_mart,
   walk_route,
   push_screen: noop_object,
   play_sound: noop_audio,
@@ -4765,6 +4895,7 @@ class Overworld {
   entities = [];
   runner;
   scriptMoves = [];
+  engaging = false;
   emote;
   lastOutdoor;
   standingOnWarp = false;
@@ -4834,7 +4965,12 @@ class Overworld {
     console.log("NPCS " + this.npcs.map((n) => JSON.stringify(n, (k, v) => typeof v === "object" && v !== null && k !== "" ? undefined : v)).join(" | "));
   }
   objectVisible(obj) {
-    return !obj.hidden;
+    if (obj.hidden)
+      return false;
+    if (obj.item && this.save?.flags?.[itemBallFlag(this.map.id, obj.text)]) {
+      return false;
+    }
+    return true;
   }
   pooledNPC(mapId, obj) {
     const key = `${mapId}_obj_${obj.index}`;
@@ -4863,7 +4999,11 @@ class Overworld {
       npc.update(this.map, this.entities, this.shell.npcRng, this.tilePairs);
     }
     this.updateScriptMoves();
-    const scripted = this.runner.isRunning() || this.scriptMoves.length > 0 || this.emote !== undefined;
+    let scripted = this.runner.isRunning() || this.scriptMoves.length > 0 || this.emote !== undefined || this.engaging;
+    if (!scripted && !this.transitioning) {
+      this.checkTrainerSight();
+      scripted = this.runner.isRunning() || this.scriptMoves.length > 0 || this.emote !== undefined || this.engaging;
+    }
     if (!scripted && !this.transitioning) {
       this.handleInput();
     }
@@ -5085,6 +5225,10 @@ class Overworld {
       this.showMapText(sign.text);
       return;
     }
+    if (pcTileAt(this.map.id, fx, fy, p.facing)) {
+      this.shell.openBox?.();
+      return;
+    }
   }
   talkTo(npc) {
     npc.frozen = true;
@@ -5094,7 +5238,7 @@ class Overworld {
     this.showMapText(npc.def.text, npc, unfreeze);
   }
   showMapText(textConst, npc, onDone) {
-    const script = talkScript(this.map.id, textConst);
+    const script = talkScript(this.map.id, textConst) ?? itemBallScript(this.map.id, npc?.def) ?? martGreetScript(this.map.id, textConst) ?? nurseGreetScript(textConst);
     if (script && !this.runner.isRunning()) {
       if (npc)
         npc.frozen = true;
@@ -5336,6 +5480,92 @@ class Overworld {
     };
     next();
   }
+  openShop(stock, onQuit) {
+    const self = this;
+    const shell = self.shell ?? self.game ?? self.host ?? null;
+    if (shell?.openShop)
+      shell.openShop(stock, onQuit);
+    else
+      onQuit();
+  }
+  openBox() {
+    const self = this;
+    const shell = self.shell ?? self.game ?? self.host ?? null;
+    shell?.openBox?.();
+  }
+  trainerHeader(npc) {
+    const headers = this.shell.data.trainer_headers;
+    return headers?.[this.map.def.label]?.[npc.def.index];
+  }
+  trainerDefeated(npc) {
+    const ev = this.trainerHeader(npc)?.event;
+    return !!ev && this.save.flags?.[ev] === true;
+  }
+  checkTrainerSight() {
+    if (this.player.moving || this.engaging)
+      return;
+    const p = this.player;
+    const DIRVEC = {
+      up: [0, -1],
+      down: [0, 1],
+      left: [-1, 0],
+      right: [1, 0]
+    };
+    for (const npc of this.npcs) {
+      const def = npc.def;
+      if (!def.trainerClass || npc.moving || npc.frozen)
+        continue;
+      if (this.trainerDefeated(npc))
+        continue;
+      if (talkScript(this.map.id, def.text))
+        continue;
+      const dx = npc.cellX - p.cellX;
+      const dy = npc.cellY - p.cellY;
+      if (dx < -4 || dx > 5 || dy < -4 || dy > 4)
+        continue;
+      const range = this.trainerHeader(npc)?.range ?? 0;
+      const vec = DIRVEC[npc.facing];
+      if (range <= 0 || !vec)
+        continue;
+      let dist = null;
+      if (vec[0] !== 0 && npc.cellY === p.cellY)
+        dist = (p.cellX - npc.cellX) * vec[0];
+      else if (vec[1] !== 0 && npc.cellX === p.cellX)
+        dist = (p.cellY - npc.cellY) * vec[1];
+      if (dist !== null && dist >= 1 && dist <= range) {
+        this.startTrainerApproach(npc, dist);
+        return;
+      }
+    }
+  }
+  startTrainerApproach(npc, dist) {
+    this.engaging = true;
+    npc.frozen = true;
+    const def = npc.def;
+    const header = this.trainerHeader(npc);
+    const fight = () => {
+      const launch = () => this.startTrainerBattle(def.trainerClass ?? "", def.trainerParty ?? 1, undefined, () => {
+        const ev = header?.event;
+        if (ev && this.save.flags)
+          this.save.flags[ev] = true;
+        npc.frozen = false;
+        this.engaging = false;
+      });
+      const key = header?.battle;
+      const taunt = key ? this.shell.data.text?.[key] : undefined;
+      if (taunt)
+        this.showText(taunt, launch);
+      else
+        launch();
+    };
+    this.setEmote(npc, 1, 60, () => {
+      const steps = dist - 1;
+      if (steps > 0)
+        this.scriptMove(npc, npc.facing, steps, fight);
+      else
+        fight();
+    });
+  }
   startTrainerBattle(id, idx, name, onDone) {
     const self = this;
     const shell = self.shell ?? self.game ?? self.host ?? null;
@@ -5495,6 +5725,11 @@ class Scene {
   picSig = "";
   titleSig = null;
   menuSig = null;
+  bagSig = null;
+  shopSig = null;
+  boxSig = null;
+  partySig = null;
+  summarySig = null;
   uiRows = [];
   uiPage = -1;
   uiArrow = false;
@@ -5725,6 +5960,354 @@ class Scene {
         else
           host.picHide(i);
       }
+    }
+    const bx = view.box?.();
+    if (bx) {
+      const sig = [
+        bx.mode,
+        bx.currentBox,
+        bx.menuIndex,
+        bx.listIndex,
+        bx.listTop,
+        bx.submenuIndex,
+        bx.confirmYes,
+        bx.footer ?? "",
+        bx.list.map((e) => `${e.label}${e.right}`).join(",")
+      ].join("|");
+      if (sig !== this.boxSig) {
+        this.boxSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const box2 = (x, y, w, h) => {
+          host.uiTile(x, y, BORDER_TL);
+          host.uiFill(x + 1, y, w - 1, 1, BORDER_H);
+          host.uiTile(x + w, y, BORDER_TR);
+          host.uiFill(x, y + 1, 1, h, BORDER_V);
+          host.uiFill(x + w, y + 1, 1, h, BORDER_V);
+          host.uiFill(x + 1, y + 1, w - 1, h, SPACE);
+          host.uiTile(x, y + 1 + h, BORDER_BL);
+          host.uiFill(x + 1, y + 1 + h, w - 1, 1, BORDER_H);
+          host.uiTile(x + w, y + 1 + h, BORDER_BR);
+        };
+        const footerBox = () => {
+          if (!bx.footer)
+            return;
+          box2(0, 12, 19, 4);
+          String(bx.footer).split(`
+`).forEach((ln, i) => {
+            this.stamp(host, 1, 13 + i, ln);
+          });
+        };
+        box2(12, 0, 7, 1);
+        this.stamp(host, 14, 1, `BOX No.${bx.currentBox}`);
+        if (bx.mode === "menu") {
+          const items = ["WITHDRAW", "DEPOSIT", "RELEASE", "CHANGE BOX", "SEE YA!"];
+          box2(0, 3, 13, items.length * 2);
+          items.forEach((label2, i) => {
+            this.stamp(host, 2, 5 + i * 2, label2);
+            if (i === bx.menuIndex)
+              host.uiTile(1, 5 + i * 2, ARROW_CURSOR);
+          });
+        } else if (bx.mode === "list") {
+          const total = bx.list.length + 1;
+          const X = 0, Y = 3, W = 15, H = bx.rows * 2;
+          box2(X, Y, W, H);
+          for (let r = 0;r < bx.rows; r++) {
+            const li = bx.listTop + r;
+            if (li >= total)
+              break;
+            const rowY = Y + 2 + r * 2;
+            if (li < bx.list.length) {
+              const e = bx.list[li];
+              this.stamp(host, X + 2, rowY, e.label);
+              if (e.right)
+                this.stamp(host, X + W - e.right.length, rowY, e.right);
+            } else {
+              this.stamp(host, X + 2, rowY, "CANCEL");
+            }
+            if (li === bx.listIndex)
+              host.uiTile(X + 1, rowY, ARROW_CURSOR);
+          }
+          if (bx.listTop + bx.rows < total)
+            host.uiTile(X + W - 1, Y + H, ARROW_MORE);
+        } else if (bx.mode === "submenu") {
+          const items = [bx.submenuLabel, "STATS", "CANCEL"];
+          box2(9, 9, 9, 6);
+          items.forEach((label2, i) => {
+            this.stamp(host, 12, 11 + i * 2, label2);
+            if (i === bx.submenuIndex)
+              host.uiTile(11, 11 + i * 2, ARROW_CURSOR);
+          });
+        } else if (bx.mode === "confirm") {
+          box2(14, 8, 4, 2);
+          this.stamp(host, 16, 9, "YES");
+          this.stamp(host, 16, 10, "NO");
+          host.uiTile(15, bx.confirmYes ? 9 : 10, ARROW_CURSOR);
+          footerBox();
+        }
+        if (bx.mode === "list" || bx.mode === "message")
+          footerBox();
+      }
+      return;
+    }
+    if (this.boxSig !== null) {
+      this.boxSig = null;
+      host.uiClear();
+      this.uiOwner = null;
+      this.shopSig = this.summarySig = this.partySig = this.bagSig = this.menuSig = this.titleSig = this.namingSig = null;
+    }
+    const sh = view.shop?.();
+    if (sh) {
+      const sig = [
+        sh.mode,
+        sh.money,
+        sh.menuIndex,
+        sh.buying,
+        sh.listIndex,
+        sh.listTop,
+        sh.qty,
+        sh.total,
+        sh.confirmYes,
+        sh.footer ?? "",
+        sh.list.map((e) => `${e.label}${e.right}`).join(",")
+      ].join("|");
+      if (sig !== this.shopSig) {
+        this.shopSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const box2 = (x, y, w, h) => {
+          host.uiTile(x, y, BORDER_TL);
+          host.uiFill(x + 1, y, w - 1, 1, BORDER_H);
+          host.uiTile(x + w, y, BORDER_TR);
+          host.uiFill(x, y + 1, 1, h, BORDER_V);
+          host.uiFill(x + w, y + 1, 1, h, BORDER_V);
+          host.uiFill(x + 1, y + 1, w - 1, h, SPACE);
+          host.uiTile(x, y + 1 + h, BORDER_BL);
+          host.uiFill(x + 1, y + 1 + h, w - 1, 1, BORDER_H);
+          host.uiTile(x + w, y + 1 + h, BORDER_BR);
+        };
+        const footer = () => {
+          if (!sh.footer)
+            return;
+          box2(0, 13, 19, 3);
+          String(sh.footer).split(`
+`).forEach((ln, i) => {
+            this.stamp(host, 1, 14 + i, ln);
+          });
+        };
+        box2(11, 0, 8, 1);
+        const money = `¥${sh.money}`;
+        this.stamp(host, 19 - money.length, 1, money);
+        if (sh.mode === "menu") {
+          box2(0, 3, 8, 6);
+          ["BUY", "SELL", "QUIT"].forEach((label2, i) => {
+            this.stamp(host, 3, 5 + i * 2, label2);
+            if (i === sh.menuIndex)
+              host.uiTile(2, 5 + i * 2, ARROW_CURSOR);
+          });
+        } else if (sh.mode === "list") {
+          const total = sh.list.length + 1;
+          const X = 0, Y = 3, W = 19, H = sh.rows * 2;
+          box2(X, Y, W, H);
+          for (let r = 0;r < sh.rows; r++) {
+            const li = sh.listTop + r;
+            if (li >= total)
+              break;
+            const rowY = Y + 2 + r * 2;
+            if (li < sh.list.length) {
+              const e = sh.list[li];
+              this.stamp(host, X + 2, rowY, e.label);
+              this.stamp(host, X + W - e.right.length, rowY, e.right);
+            } else {
+              this.stamp(host, X + 2, rowY, "CANCEL");
+            }
+            if (li === sh.listIndex)
+              host.uiTile(X + 1, rowY, ARROW_CURSOR);
+          }
+          if (sh.listTop + sh.rows < total)
+            host.uiTile(X + W - 1, Y + H, ARROW_MORE);
+          footer();
+        } else if (sh.mode === "quantity") {
+          box2(3, 6, 13, 2);
+          this.stamp(host, 5, 7, sh.selName);
+          this.stamp(host, 5, 8, `×${sh.qty}`);
+          const t = `¥${sh.total}`;
+          this.stamp(host, 15 - t.length, 8, t);
+          footer();
+        } else if (sh.mode === "confirm") {
+          box2(14, 9, 4, 2);
+          this.stamp(host, 16, 10, "YES");
+          this.stamp(host, 16, 11, "NO");
+          host.uiTile(15, sh.confirmYes ? 10 : 11, ARROW_CURSOR);
+          footer();
+        }
+      }
+      return;
+    }
+    if (this.shopSig !== null) {
+      this.shopSig = null;
+      host.uiClear();
+      this.uiOwner = null;
+      this.summarySig = this.partySig = this.bagSig = this.menuSig = this.titleSig = this.namingSig = null;
+    }
+    const sv = view.summary?.();
+    if (sv) {
+      const sig = `${sv.name},${sv.hp}/${sv.maxHp},${sv.status},${sv.level}`;
+      if (sig !== this.summarySig) {
+        this.summarySig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        host.uiTile(0, 0, BORDER_TL);
+        host.uiFill(1, 0, 18, 1, BORDER_H);
+        host.uiTile(19, 0, BORDER_TR);
+        host.uiFill(0, 1, 1, 16, BORDER_V);
+        host.uiFill(19, 1, 1, 16, BORDER_V);
+        host.uiTile(0, 17, BORDER_BL);
+        host.uiFill(1, 17, 18, 1, BORDER_H);
+        host.uiTile(19, 17, BORDER_BR);
+        host.uiFill(1, 1, 18, 16, SPACE);
+        let y = 2;
+        this.stamp(host, 2, y, sv.name);
+        this.stamp(host, 14, y, `<LV>${sv.level}`);
+        y += 2;
+        this.stamp(host, 2, y, `HP ${sv.hp}/${sv.maxHp}`);
+        y += 1;
+        this.stamp(host, 2, y, `STATUS ${sv.status ?? "OK"}`);
+        y += 1;
+        this.stamp(host, 2, y, `TYPE ${sv.types.join("/")}`);
+        y += 2;
+        this.stamp(host, 2, y, `ATK ${sv.stats.atk}`);
+        this.stamp(host, 11, y, `DEF ${sv.stats.def}`);
+        y += 1;
+        this.stamp(host, 2, y, `SPD ${sv.stats.spd}`);
+        this.stamp(host, 11, y, `SPC ${sv.stats.spc}`);
+        y += 2;
+        this.stamp(host, 2, y, "MOVES");
+        y += 1;
+        for (const mv of sv.moves) {
+          this.stamp(host, 3, y, mv.name);
+          this.stamp(host, 15, y, `PP${mv.pp}`);
+          y += 1;
+        }
+      }
+      return;
+    }
+    if (this.summarySig !== null) {
+      this.summarySig = null;
+      host.uiClear();
+      this.uiOwner = null;
+      this.partySig = this.bagSig = this.menuSig = this.titleSig = this.namingSig = null;
+    }
+    const pv = view.party?.();
+    if (pv) {
+      const total = pv.entries.length + 1;
+      const sig = pv.entries.map((e) => `${e.name}${e.level}:${e.hp}/${e.maxHp}:${e.status ?? ""}`).join(";") + `#${pv.index}|${pv.mode}|${pv.submenuIndex}|${pv.swapFrom}`;
+      if (sig !== this.partySig) {
+        this.partySig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const X = 0, Y = 0, W = 19, H = pv.entries.length * 2 + 1;
+        host.uiTile(X, Y, BORDER_TL);
+        host.uiFill(X + 1, Y, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y, BORDER_TR);
+        host.uiFill(X, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + W, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + 1, Y + 1, W - 1, H, SPACE);
+        host.uiTile(X, Y + 1 + H, BORDER_BL);
+        host.uiFill(X + 1, Y + 1 + H, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y + 1 + H, BORDER_BR);
+        const IY = Y + 1;
+        pv.entries.forEach((e, i) => {
+          const nameRow = IY + i * 2;
+          const statRow = nameRow + 1;
+          this.stamp(host, X + 2, nameRow, e.name);
+          if (e.status)
+            this.stamp(host, X + 14, nameRow, e.status);
+          this.stamp(host, X + 3, statRow, `<LV>${e.level}`);
+          const hp = `${e.hp}/${e.maxHp}`;
+          this.stamp(host, X + W - hp.length, statRow, hp);
+          if (i === pv.index)
+            host.uiTile(X + 1, nameRow, ARROW_CURSOR);
+        });
+        const cancelRow = IY + pv.entries.length * 2;
+        this.stamp(host, X + 2, cancelRow, "CANCEL");
+        if (pv.index === pv.entries.length) {
+          host.uiTile(X + 1, cancelRow, ARROW_CURSOR);
+        }
+        if (pv.swapFrom !== null && pv.swapFrom !== pv.index) {
+          host.uiTile(X + 1, IY + pv.swapFrom * 2, ARROW_CURSOR);
+        }
+        if (pv.mode === "submenu") {
+          const items = ["STATS", "SWITCH", "CANCEL"];
+          const sx = 10, sy = 9, sw = 9;
+          host.uiTile(sx, sy, BORDER_TL);
+          host.uiFill(sx + 1, sy, sw - 1, 1, BORDER_H);
+          host.uiTile(sx + sw, sy, BORDER_TR);
+          host.uiFill(sx, sy + 1, 1, 6, BORDER_V);
+          host.uiFill(sx + sw, sy + 1, 1, 6, BORDER_V);
+          host.uiFill(sx + 1, sy + 1, sw - 1, 6, SPACE);
+          host.uiTile(sx, sy + 7, BORDER_BL);
+          host.uiFill(sx + 1, sy + 7, sw - 1, 1, BORDER_H);
+          host.uiTile(sx + sw, sy + 7, BORDER_BR);
+          items.forEach((label2, i) => {
+            this.stamp(host, sx + 3, sy + 2 + i * 2, label2);
+            if (i === pv.submenuIndex)
+              host.uiTile(sx + 2, sy + 2 + i * 2, ARROW_CURSOR);
+          });
+        }
+      }
+      return;
+    }
+    if (this.partySig !== null) {
+      this.partySig = null;
+      host.uiClear();
+      this.uiOwner = null;
+      this.bagSig = this.menuSig = this.titleSig = this.namingSig = null;
+    }
+    const bg = view.bag?.();
+    if (bg) {
+      const total = bg.entries.length + 1;
+      const sig = `${bg.index},${bg.top},` + bg.entries.map((e) => `${e.name}×${e.qty}`).join(";");
+      if (sig !== this.bagSig) {
+        this.bagSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const X = 2, Y = 2, W = 16, H = bg.rows * 2;
+        host.uiTile(X, Y, BORDER_TL);
+        host.uiFill(X + 1, Y, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y, BORDER_TR);
+        host.uiFill(X, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + W, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + 1, Y + 1, W - 1, H, SPACE);
+        host.uiTile(X, Y + 1 + H, BORDER_BL);
+        host.uiFill(X + 1, Y + 1 + H, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y + 1 + H, BORDER_BR);
+        for (let r = 0;r < bg.rows; r++) {
+          const li = bg.top + r;
+          if (li >= total)
+            break;
+          const rowY = Y + 2 + r * 2;
+          if (li < bg.entries.length) {
+            const e = bg.entries[li];
+            this.stamp(host, X + 2, rowY, e.name);
+            const qs = `×${e.qty}`;
+            this.stamp(host, X + W - qs.length, rowY, qs);
+          } else {
+            this.stamp(host, X + 2, rowY, "CANCEL");
+          }
+          if (li === bg.index)
+            host.uiTile(X + 1, rowY, ARROW_CURSOR);
+        }
+        if (bg.top + bg.rows < total)
+          host.uiTile(X + W - 1, Y + H, ARROW_MORE);
+      }
+      return;
+    }
+    if (this.bagSig !== null) {
+      this.bagSig = null;
+      host.uiClear();
+      this.uiOwner = null;
+      this.menuSig = this.titleSig = this.namingSig = null;
     }
     const sm = view.startMenu?.();
     if (sm) {
@@ -6345,6 +6928,701 @@ class StartMenuState {
   }
   view() {
     return { entries: this.entries, index: this.index };
+  }
+}
+
+// voxelmon/game/ui/bagscreen.ts
+var ROWS = 4;
+
+class BagState {
+  game;
+  kind = "bag";
+  index = 0;
+  top = 0;
+  constructor(game) {
+    this.game = game;
+  }
+  ids() {
+    return order(this.game.save);
+  }
+  update() {
+    const p = this.game.input.pressed;
+    const n = this.ids().length + 1;
+    if (p.up)
+      this.index = (this.index + n - 1) % n;
+    if (p.down)
+      this.index = (this.index + 1) % n;
+    if (this.index < this.top)
+      this.top = this.index;
+    if (this.index >= this.top + ROWS)
+      this.top = this.index - ROWS + 1;
+    if (p.b || p.a && this.index === n - 1) {
+      this.game.pop();
+    }
+  }
+  view() {
+    const save = this.game.save;
+    const items = this.ids().map((id) => ({
+      name: this.game.data.items?.[id]?.name ?? id,
+      qty: save.inventory?.[id] ?? 0
+    }));
+    return { entries: items, index: this.index, top: this.top, rows: ROWS };
+  }
+}
+
+// voxelmon/game/ui/partyscreen.ts
+class PartyState {
+  game;
+  kind = "party";
+  index = 0;
+  mode = "list";
+  submenuIndex = 0;
+  swapFrom = null;
+  constructor(game) {
+    this.game = game;
+  }
+  party() {
+    return this.game.save.party ?? [];
+  }
+  update() {
+    const p = this.game.input.pressed;
+    if (this.mode === "submenu")
+      return this.updateSubmenu(p);
+    const n = this.party().length + 1;
+    if (p.up)
+      this.index = (this.index + n - 1) % n;
+    if (p.down)
+      this.index = (this.index + 1) % n;
+    if (p.b || p.a && this.index === n - 1) {
+      if (this.swapFrom !== null) {
+        this.swapFrom = null;
+        return;
+      }
+      this.game.pop();
+      return;
+    }
+    if (p.a && this.index < this.party().length) {
+      if (this.swapFrom !== null) {
+        if (this.swapFrom !== this.index) {
+          const party = this.party();
+          const tmp = party[this.swapFrom];
+          party[this.swapFrom] = party[this.index];
+          party[this.index] = tmp;
+        }
+        this.swapFrom = null;
+      } else {
+        this.mode = "submenu";
+        this.submenuIndex = 0;
+      }
+    }
+  }
+  updateSubmenu(p) {
+    if (p.up)
+      this.submenuIndex = (this.submenuIndex + 2) % 3;
+    if (p.down)
+      this.submenuIndex = (this.submenuIndex + 1) % 3;
+    if (p.b) {
+      this.mode = "list";
+      return;
+    }
+    if (!p.a)
+      return;
+    this.mode = "list";
+    if (this.submenuIndex === 0)
+      this.game.push(new SummaryState(this.game, this.index));
+    else if (this.submenuIndex === 1)
+      this.swapFrom = this.index;
+  }
+  view() {
+    const entries = this.party().map((m) => ({
+      name: m.nickname ?? this.game.data.pokemon?.[m.species]?.name ?? m.species,
+      level: m.level,
+      hp: m.hp,
+      maxHp: m.stats?.hp ?? m.hp,
+      status: m.status ?? null
+    }));
+    return {
+      entries,
+      index: this.index,
+      mode: this.mode,
+      submenuIndex: this.submenuIndex,
+      swapFrom: this.swapFrom
+    };
+  }
+}
+
+class SummaryState {
+  game;
+  slot;
+  mon;
+  kind = "summary";
+  constructor(game, slot, mon) {
+    this.game = game;
+    this.slot = slot;
+    this.mon = mon;
+  }
+  update() {
+    const p = this.game.input.pressed;
+    if (p.a || p.b)
+      this.game.pop();
+  }
+  view() {
+    const m = this.mon ?? (this.game.save.party ?? [])[this.slot];
+    const def = this.game.data.pokemon?.[m.species];
+    const moves = (m.moves ?? []).map((ms) => ({
+      name: this.game.data.moves?.[ms.id]?.name ?? ms.id,
+      pp: ms.pp
+    }));
+    return {
+      name: m.nickname ?? def?.name ?? m.species,
+      species: def?.name ?? m.species,
+      level: m.level,
+      hp: m.hp,
+      maxHp: m.stats?.hp ?? m.hp,
+      status: m.status ?? null,
+      types: def?.types ?? [],
+      stats: {
+        atk: m.stats?.attack ?? 0,
+        def: m.stats?.defense ?? 0,
+        spd: m.stats?.speed ?? 0,
+        spc: m.stats?.special ?? 0
+      },
+      moves
+    };
+  }
+}
+
+// voxelmon/game/ui/shopscreen.ts
+var ROWS2 = 4;
+var MONEY_CAP = 999999;
+var GREET = "Take your time.";
+var NOT_ENOUGH = `You don't have
+enough money.`;
+var BAG_FULL = `You can't carry
+any more items.`;
+var UNSELLABLE = `I can't put a
+price on that.`;
+var BOUGHT = `Here you are!
+Thank you!`;
+var SOLD = "Thank you!";
+
+class ShopState {
+  game;
+  stock;
+  onQuit;
+  kind = "shop";
+  mode = "menu";
+  menuIndex = 0;
+  buying = true;
+  list = [];
+  listIndex = 0;
+  listTop = 0;
+  selId = "";
+  selName = "";
+  unitPrice = 0;
+  maxQty = 1;
+  qty = 1;
+  confirmYes = true;
+  footer = null;
+  constructor(game, stock, onQuit) {
+    this.game = game;
+    this.stock = stock;
+    this.onQuit = onQuit;
+  }
+  name(id) {
+    return this.game.data.items?.[id]?.name ?? id;
+  }
+  price(id) {
+    return this.game.data.items?.[id]?.price ?? 0;
+  }
+  quit() {
+    this.game.pop();
+    this.onQuit?.();
+  }
+  buildBuyList() {
+    this.list = this.stock.filter((id) => this.game.data.items?.[id]).map((id) => ({ id, label: this.name(id), right: `¥${this.price(id)}` }));
+    this.listIndex = 0;
+    this.listTop = 0;
+    this.footer = GREET;
+  }
+  buildSellList() {
+    this.list = order(this.game.save).map((id) => ({
+      id,
+      label: this.name(id),
+      right: `x${this.game.save.inventory?.[id] ?? 0}`
+    }));
+    this.listIndex = 0;
+    this.listTop = 0;
+    this.footer = GREET;
+  }
+  clampWindow() {
+    if (this.listIndex < this.listTop)
+      this.listTop = this.listIndex;
+    if (this.listIndex >= this.listTop + ROWS2)
+      this.listTop = this.listIndex - ROWS2 + 1;
+  }
+  unsellable(id) {
+    const def = this.game.data.items?.[id];
+    return !def || id.startsWith("HM_") || def.tossable === false;
+  }
+  update() {
+    const p = this.game.input.pressed;
+    if (this.mode === "menu") {
+      if (p.up)
+        this.menuIndex = (this.menuIndex + 2) % 3;
+      if (p.down)
+        this.menuIndex = (this.menuIndex + 1) % 3;
+      if (p.b) {
+        this.quit();
+        return;
+      }
+      if (p.a) {
+        if (this.menuIndex === 0) {
+          this.buying = true;
+          this.buildBuyList();
+          this.mode = "list";
+        } else if (this.menuIndex === 1) {
+          this.buying = false;
+          this.buildSellList();
+          this.mode = "list";
+        } else
+          this.quit();
+      }
+      return;
+    }
+    if (this.mode === "list") {
+      const n = this.list.length + 1;
+      if (p.up)
+        this.listIndex = (this.listIndex + n - 1) % n;
+      if (p.down)
+        this.listIndex = (this.listIndex + 1) % n;
+      this.clampWindow();
+      if (p.b || p.a && this.listIndex === this.list.length) {
+        this.mode = "menu";
+        this.footer = null;
+        return;
+      }
+      if (p.a && this.listIndex < this.list.length)
+        this.chooseItem(this.list[this.listIndex]);
+      return;
+    }
+    if (this.mode === "quantity") {
+      if (p.up)
+        this.qty = Math.min(this.maxQty, this.qty + 1);
+      if (p.down)
+        this.qty = Math.max(1, this.qty - 1);
+      if (p.right)
+        this.qty = Math.min(this.maxQty, this.qty + 10);
+      if (p.left)
+        this.qty = Math.max(1, this.qty - 10);
+      if (p.b) {
+        this.mode = "list";
+        this.footer = GREET;
+        return;
+      }
+      if (p.a) {
+        const total = this.unitPrice * this.qty;
+        this.footer = this.buying ? `${this.selName}?
+That will be
+¥${total}. OK?` : `I can pay you
+¥${total} for that.`;
+        this.confirmYes = true;
+        this.mode = "confirm";
+      }
+      return;
+    }
+    if (this.mode === "confirm") {
+      if (p.up || p.down)
+        this.confirmYes = !this.confirmYes;
+      if (p.b) {
+        this.mode = "list";
+        this.footer = GREET;
+        return;
+      }
+      if (p.a) {
+        if (this.confirmYes)
+          this.commit();
+        else {
+          this.mode = "list";
+          this.footer = GREET;
+        }
+      }
+      return;
+    }
+  }
+  chooseItem(row) {
+    const save = this.game.save;
+    if (this.buying) {
+      const price = this.price(row.id);
+      if ((save.money ?? 0) < price) {
+        this.footer = NOT_ENOUGH;
+        return;
+      }
+      this.selId = row.id;
+      this.selName = row.label;
+      this.unitPrice = price;
+      this.maxQty = Math.min(99, Math.floor((save.money ?? 0) / Math.max(1, price)));
+      this.qty = 1;
+      this.mode = "quantity";
+    } else {
+      if (this.unsellable(row.id)) {
+        this.footer = UNSELLABLE;
+        return;
+      }
+      this.selId = row.id;
+      this.selName = row.label;
+      this.unitPrice = Math.floor(this.price(row.id) / 2);
+      this.maxQty = save.inventory?.[row.id] ?? 1;
+      this.qty = 1;
+      this.mode = "quantity";
+    }
+  }
+  commit() {
+    const save = this.game.save;
+    const total = this.unitPrice * this.qty;
+    if (this.buying) {
+      if ((save.money ?? 0) < total) {
+        this.footer = NOT_ENOUGH;
+        this.mode = "list";
+        return;
+      }
+      if (!add(save, this.selId, this.qty, this.game.data)) {
+        this.footer = BAG_FULL;
+        this.mode = "list";
+        return;
+      }
+      save.money = (save.money ?? 0) - total;
+      this.footer = BOUGHT;
+    } else {
+      save.money = Math.min(MONEY_CAP, (save.money ?? 0) + total);
+      remove(save, this.selId, this.qty);
+      this.buildSellList();
+      this.footer = SOLD;
+    }
+    this.mode = "list";
+  }
+  view() {
+    return {
+      mode: this.mode,
+      money: this.game.save.money ?? 0,
+      menuIndex: this.menuIndex,
+      buying: this.buying,
+      list: this.list,
+      listIndex: this.listIndex,
+      listTop: this.listTop,
+      rows: ROWS2,
+      selName: this.selName,
+      qty: this.qty,
+      total: this.unitPrice * this.qty,
+      confirmYes: this.confirmYes,
+      footer: this.footer
+    };
+  }
+}
+
+// voxelmon/game/pokemon/boxes.ts
+var BOX_COUNT = 12;
+var BOX_CAPACITY = 20;
+function ensure(save) {
+  if (!save.boxes) {
+    save.boxes = [];
+    for (let i = 0;i < BOX_COUNT; i++)
+      save.boxes[i] = [];
+    save.currentBox = 1;
+    if (Array.isArray(save.box)) {
+      for (const mon of save.box)
+        save.boxes[0].push(mon);
+      save.box = null;
+    }
+  }
+  save.currentBox = Math.max(1, Math.min(BOX_COUNT, save.currentBox ?? 1));
+  return save.boxes;
+}
+function active(save) {
+  return ensure(save)[save.currentBox - 1];
+}
+
+// voxelmon/game/ui/boxscreen.ts
+var ROWS3 = 4;
+var PARTY_MAX2 = 6;
+var MENU = ["WITHDRAW", "DEPOSIT", "RELEASE", "CHANGE BOX", "SEE YA!"];
+
+class BoxState {
+  game;
+  onQuit;
+  kind = "box";
+  mode = "menu";
+  menuIndex = 0;
+  kindOfList = "withdraw";
+  list = [];
+  listIndex = 0;
+  listTop = 0;
+  submenuIndex = 0;
+  confirmYes = false;
+  confirmKind = "release";
+  pendingBox = 1;
+  footer = null;
+  returnMode = "menu";
+  constructor(game, onQuit) {
+    this.game = game;
+    this.onQuit = onQuit;
+    ensure(game.save);
+  }
+  monName(mon) {
+    return mon.nickname ?? this.game.data.pokemon?.[mon.species]?.name ?? mon.species;
+  }
+  monLabel(mon) {
+    return `${this.monName(mon)} <LV>${mon.level}`;
+  }
+  cry(mon) {
+    this.game.playCry?.(mon.species);
+  }
+  quit() {
+    this.game.pop();
+    this.onQuit?.();
+  }
+  box() {
+    return active(this.game.save);
+  }
+  party() {
+    return this.game.save.party ?? [];
+  }
+  toMessage(text, ret) {
+    this.footer = text;
+    this.returnMode = ret;
+    this.mode = "message";
+  }
+  openList(kind) {
+    this.kindOfList = kind;
+    this.listIndex = 0;
+    this.listTop = 0;
+    if (kind === "changebox") {
+      const boxes = ensure(this.game.save);
+      this.list = boxes.map((b, i) => ({
+        label: `${i + 1 === this.game.save.currentBox ? "*" : " "}BOX ${i + 1}`,
+        right: `${b.length}/${BOX_CAPACITY}`
+      }));
+    } else if (kind === "deposit") {
+      this.list = this.party().map((m) => ({ label: this.monLabel(m), right: "" }));
+    } else {
+      this.list = this.box().map((m) => ({ label: this.monLabel(m), right: "" }));
+    }
+    this.mode = "list";
+  }
+  update() {
+    const p = this.game.input.pressed;
+    if (this.mode === "menu")
+      return this.updateMenu(p);
+    if (this.mode === "list")
+      return this.updateList(p);
+    if (this.mode === "submenu")
+      return this.updateSubmenu(p);
+    if (this.mode === "confirm")
+      return this.updateConfirm(p);
+    if (this.mode === "message") {
+      if (p.a || p.b) {
+        if (this.returnMode === "release-list")
+          this.rebuildAfterRelease();
+        else
+          this.mode = this.returnMode;
+      }
+      return;
+    }
+  }
+  updateMenu(p) {
+    const n = MENU.length;
+    if (p.up)
+      this.menuIndex = (this.menuIndex + n - 1) % n;
+    if (p.down)
+      this.menuIndex = (this.menuIndex + 1) % n;
+    if (p.b) {
+      this.quit();
+      return;
+    }
+    if (!p.a)
+      return;
+    switch (this.menuIndex) {
+      case 0:
+        if (this.box().length === 0)
+          return this.toMessage(`What? There are
+no POKéMON here!`, "menu");
+        if (this.party().length >= PARTY_MAX2) {
+          return this.toMessage(`You can't take
+any more POKéMON.`, "menu");
+        }
+        return this.openList("withdraw");
+      case 1:
+        if (this.party().length <= 1)
+          return this.toMessage(`You can't deposit
+the last POKéMON!`, "menu");
+        if (this.box().length >= BOX_CAPACITY) {
+          return this.toMessage(`Oops! This Box is
+full of POKéMON.`, "menu");
+        }
+        return this.openList("deposit");
+      case 2:
+        if (this.box().length === 0)
+          return this.toMessage(`What? There are
+no POKéMON here!`, "menu");
+        return this.openList("release");
+      case 3:
+        return this.openList("changebox");
+      default:
+        return this.quit();
+    }
+  }
+  clampWindow() {
+    if (this.listIndex < this.listTop)
+      this.listTop = this.listIndex;
+    if (this.listIndex >= this.listTop + ROWS3)
+      this.listTop = this.listIndex - ROWS3 + 1;
+  }
+  updateList(p) {
+    const n = this.list.length + 1;
+    if (p.up)
+      this.listIndex = (this.listIndex + n - 1) % n;
+    if (p.down)
+      this.listIndex = (this.listIndex + 1) % n;
+    this.clampWindow();
+    if (p.b || p.a && this.listIndex === this.list.length) {
+      this.mode = "menu";
+      return;
+    }
+    if (!(p.a && this.listIndex < this.list.length))
+      return;
+    if (this.kindOfList === "changebox") {
+      this.pendingBox = this.listIndex + 1;
+      this.confirmKind = "changebox";
+      this.confirmYes = false;
+      this.footer = `When you change a
+POKéMON BOX, data
+will be saved. OK?`;
+      this.mode = "confirm";
+      return;
+    }
+    if (this.kindOfList === "release") {
+      this.confirmKind = "release";
+      this.confirmYes = false;
+      const mon = this.box()[this.listIndex];
+      this.footer = `Once released,
+${this.monName(mon)} is
+gone forever. OK?`;
+      this.mode = "confirm";
+      return;
+    }
+    this.submenuIndex = 0;
+    this.mode = "submenu";
+  }
+  updateSubmenu(p) {
+    if (p.up)
+      this.submenuIndex = (this.submenuIndex + 2) % 3;
+    if (p.down)
+      this.submenuIndex = (this.submenuIndex + 1) % 3;
+    if (p.b) {
+      this.mode = "list";
+      return;
+    }
+    if (!p.a)
+      return;
+    if (this.submenuIndex === 0)
+      return this.doTransfer();
+    if (this.submenuIndex === 1) {
+      const mon = this.kindOfList === "deposit" ? this.party()[this.listIndex] : this.box()[this.listIndex];
+      if (mon)
+        this.game.push(new SummaryState(this.game, -1, mon));
+      return;
+    }
+    this.mode = "list";
+  }
+  doTransfer() {
+    if (this.kindOfList === "withdraw") {
+      const box = this.box();
+      const mon = box[this.listIndex];
+      if (!mon) {
+        this.mode = "list";
+        return;
+      }
+      if (this.party().length >= PARTY_MAX2)
+        return this.toMessage("The party is full!", "list");
+      box.splice(this.listIndex, 1);
+      this.party().push(mon);
+      this.cry(mon);
+      this.toMessage(`${this.monName(mon)} is
+taken out.`, "menu");
+    } else {
+      const mon = this.party()[this.listIndex];
+      if (!mon) {
+        this.mode = "list";
+        return;
+      }
+      if (this.party().length <= 1)
+        return this.toMessage(`You need at least
+one POKéMON!`, "list");
+      const box = this.box();
+      if (box.length >= BOX_CAPACITY) {
+        return this.toMessage(`BOX ${this.game.save.currentBox} is full!`, "list");
+      }
+      this.party().splice(this.listIndex, 1);
+      box.push(mon);
+      this.cry(mon);
+      this.toMessage(`${this.monName(mon)} was
+stored in Box ${this.game.save.currentBox}.`, "menu");
+    }
+  }
+  updateConfirm(p) {
+    if (p.up || p.down)
+      this.confirmYes = !this.confirmYes;
+    if (p.b) {
+      this.mode = "list";
+      return;
+    }
+    if (!p.a)
+      return;
+    if (!this.confirmYes) {
+      this.mode = "list";
+      return;
+    }
+    if (this.confirmKind === "changebox") {
+      this.game.save.currentBox = this.pendingBox;
+      this.game.writeSave?.();
+      this.mode = "menu";
+      return;
+    }
+    const box = this.box();
+    const mon = box[this.listIndex];
+    if (!mon) {
+      this.mode = "list";
+      return;
+    }
+    box.splice(this.listIndex, 1);
+    this.cry(mon);
+    this.toMessage(`${this.monName(mon)} was
+released outside.
+Bye ${this.monName(mon)}!`, "release-list");
+  }
+  rebuildAfterRelease() {
+    if (this.box().length === 0) {
+      this.mode = "menu";
+      return;
+    }
+    this.openList("release");
+    this.listIndex = Math.max(0, Math.min(this.listIndex, this.list.length - 1));
+    this.clampWindow();
+  }
+  view() {
+    return {
+      mode: this.mode,
+      currentBox: this.game.save.currentBox ?? 1,
+      menuIndex: this.menuIndex,
+      list: this.list,
+      listIndex: this.listIndex,
+      listTop: this.listTop,
+      rows: ROWS3,
+      submenuLabel: this.kindOfList === "deposit" ? "DEPOSIT" : "WITHDRAW",
+      submenuIndex: this.submenuIndex,
+      confirmYes: this.confirmYes,
+      footer: this.footer
+    };
   }
 }
 
@@ -7019,8 +8297,23 @@ ${mdef.name}!`, () => step(i + 1));
     }
     return this.overworld.picShown;
   }
+  openShop(stock, onQuit) {
+    this.push(new ShopState(this, stock, onQuit));
+  }
+  openBox() {
+    this.push(new BoxState(this));
+  }
+  playCry(species) {
+    this.audio.playCry(species);
+  }
   openStartMenu() {
     this.push(new StartMenuState(this, (act) => {
+      if (act === "item") {
+        this.push(new BagState(this));
+      }
+      if (act === "pokemon") {
+        this.push(new PartyState(this));
+      }
       if (act === "save") {
         const ow = this.overworld;
         const p = this.save.player;
@@ -7036,6 +8329,26 @@ ${mdef.name}!`, () => step(i + 1));
         this.pop();
       }
     }));
+  }
+  bag() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "bag" ? top.view() : null;
+  }
+  shop() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "shop" ? top.view() : null;
+  }
+  box() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "box" ? top.view() : null;
+  }
+  party() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "party" ? top.view() : null;
+  }
+  summary() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "summary" ? top.view() : null;
   }
   startMenu() {
     const top = this.stack[this.stack.length - 1];
