@@ -389,6 +389,11 @@ export class Scene {
       const npc = npcs[i]!;
       const slot = i + 1;
       if (slot >= ENTS_MAX) break;
+      // hide_object sets npc.hidden; skip emitting so the end-of-frame
+      // entSeen cleanup hides the slot. Without this an object picked up or
+      // hidden by a script (item balls, a departed rival) keeps drawing until
+      // the map reloads and objectVisible filters it at spawn.
+      if ((npc as { hidden?: boolean }).hidden) continue;
       const def = view.data.sprites?.[npc.def.sprite];
       const frames = def?.frames ?? 6;
       const phase = npc.walkPhase();

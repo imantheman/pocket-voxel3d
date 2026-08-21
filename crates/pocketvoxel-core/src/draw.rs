@@ -725,8 +725,16 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
             let Some(page) = page_at(pak, card.pic) else {
                 continue;
             };
+            // Battle mon sprites drawn at 60% (40% smaller) of their atlas
+            // page size; overworld entity cards use card_w and are unaffected.
+            const BATTLE_CARD_SCALE: f32 = 0.6;
             items.push(Item::Card {
-                verts: card_verts(cell_centre(card.x, card.y), page.w as f32, page.h as f32, a),
+                verts: card_verts(
+                    cell_centre(card.x, card.y),
+                    page.w as f32 * BATTLE_CARD_SCALE,
+                    page.h as f32 * BATTLE_CARD_SCALE,
+                    a,
+                ),
                 page: card.pic as u16,
                 uv: [0.0, 0.0, 1.0, 1.0],
                 mirror: false,

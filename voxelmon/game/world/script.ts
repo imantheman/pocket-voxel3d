@@ -312,16 +312,18 @@ function* start_battle(ctx: ScriptContext, ...args: unknown[]): Generator<void, 
   const kind = String(args[0] ?? "trainer");
   const id = String(args[1] ?? "");
   const idx = (args[2] as number) ?? 1;
+  // opts.loseable marks a battle whose loss heals-and-continues (the early
+  // rival) instead of blacking out.
+  const opts = (args[3] as { loseable?: boolean } | undefined) ?? {};
   const runner = ctx.runner;
   const w = ctx.world as any;
-  console.log("start_battle verb: " + kind + " " + id + " idx=" + idx +
-    " hasFn=" + !!w.startTrainerBattle);
   if (kind === "trainer" && w.startTrainerBattle) {
-    console.log("start_battle -> launching " + id + " party " + idx);
-    w.startTrainerBattle(id, idx, undefined, () => {
-      console.log("start_battle -> resuming script");
+    w.startTrainerBattle(id, idx, undefined, (won: boolean) => {
+      // expose the result so a script can jump_if_false past its rewards on a
+      // loss (home/battle.asm returns to the map only after a win otherwise).
+      ctx.lastCheck = !!won;
       runner.resume();
-    });
+    }, opts.loseable === true);
     yield;
   }
 }
@@ -386,6 +388,130 @@ function* open_mart(ctx: ScriptContext, ...args: unknown[]): Generator<void, voi
   }
 }
 
+// Commands.lua check_item (item_bag.asm IsItemInBag): lastCheck = the bag
+// holds at least one of the id. Gates OaksLabOak1Text's parcel/poke-ball
+// branches (oaks_lab.lua).
+function* check_item(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const inv = (ctx.world.save as { inventory?: Record<string, number> }).inventory ?? {};
+  ctx.lastCheck = (inv[args[0] as string] ?? 0) > 0;
+}
+
+// Commands.lua take_item (Bag.remove): drop qty (default 1) of an id, the
+// parcel hand-off in oaks_lab.lua's got_parcel branch.
+function* take_item(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  Bag.remove(ctx.world.save, args[0] as string, (args[1] as number | undefined) ?? 1);
+}
+
+// Commands.lua clear_flag (Flags.clear) — the counterpart to set_flag;
+// delete so a later check_flag reads false (oaks_lab.lua arms the Route 22
+// rematch by clearing EVENT_2ND_ROUTE22_RIVAL_BATTLE).
+function* clear_flag(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  delete ctx.world.save.flags[args[0] as string];
+}
+
+// Commands.lua check_dex_owned (pokedex_own count): lastCheck = owned-species
+// count >= N. OaksLabOak1Text's dex-rating gate (#600). save.pokedex.owned is
+// outside ScriptSave, so read it defensively.
+function* check_dex_owned(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const need = (args[0] as number | undefined) ?? 1;
+  const owned =
+    (ctx.world.save as { pokedex?: { owned?: Record<string, boolean> } }).pokedex?.owned ?? {};
+  let n = 0;
+  for (const k in owned) if (owned[k]) n += 1;
+  ctx.lastCheck = n >= need;
+}
+
+// Commands.lua dex_rating (DisplayDexRating, engine/events/pokedex_rating.asm):
+// the seen/owned tally Oak reads out. No rating UI in the slice, so this is an
+// honest no-op like push_screen — the rows around it still run.
+function* dex_rating(): Generator<void, void> {}
+
+// Commands.lua:895 rival_battle — the rival's team counters your starter:
+// party = baseParty + offset, offset from data.field.starterCounterpicks
+// (else the CHOSE_* fallback: Squirtle +1, Bulbasaur +2, Charmander +0),
+// then hand off to start_battle so the win result still lands in
+// ctx.lastCheck for the scene's jump_if_false.
+function* rival_battle(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const oppClass = args[0] as string;
+  const baseParty = (args[1] as number | undefined) ?? 1;
+  // 3rd arg is an options object: { offsets?, loseable? }. loseable marks the
+  // early Route 22 rival as heal-and-continue on a loss.
+  const opts =
+    (args[2] as { offsets?: Record<string, number>; loseable?: boolean } | undefined) ?? {};
+  const save = ctx.world.save as { flags: Record<string, boolean> };
+  const offsets =
+    opts.offsets ??
+    ((ctx.world.data as { field?: { starterCounterpicks?: Record<string, number> } }).field
+      ?.starterCounterpicks);
+  let offset = 0;
+  if (offsets) {
+    for (const [flag, mapped] of Object.entries(offsets)) {
+      if (save.flags?.[flag]) {
+        offset = mapped;
+        break;
+      }
+    }
+  } else if (save.flags?.EVENT_CHOSE_SQUIRTLE) {
+    offset = 1;
+  } else if (save.flags?.EVENT_CHOSE_BULBASAUR) {
+    offset = 2;
+  }
+  yield* start_battle(ctx, "trainer", oppClass, baseParty + offset, { loseable: opts.loseable });
+}
+
+// Commands.lua:1061 walk_npc — chained scriptMove along an explicit direction
+// list (a scripted exit walk); blocks until the last step lands. ref "player"
+// or an object name/sprite.
+function* walk_npc(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const runner = ctx.runner;
+  const w = ctx.world as unknown as {
+    player: { moving: boolean };
+    findNpc?: (ref: unknown) => { moving: boolean } | null;
+    scriptMove: (e: { moving: boolean }, dir: Dir, n: number, onDone?: () => void) => void;
+  };
+  const ref = args[0];
+  const dirs = (args[1] as Dir[] | undefined) ?? [];
+  const entity = ref === "player" ? w.player : w.findNpc?.(ref);
+  if (!entity || dirs.length === 0) return;
+  let i = 0;
+  const step = () => {
+    if (i >= dirs.length) {
+      runner.resume();
+      return;
+    }
+    w.scriptMove(entity, dirs[i++], 1, step);
+  };
+  step();
+  yield;
+}
+
+// story2.lua engageSuperNerd -> ow:engageTrainer: force a trainer object's
+// battle (no sight line), blocking until it resolves. No-op if already beaten.
+function* engage_trainer(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const runner = ctx.runner;
+  const w = ctx.world as unknown as {
+    findNpc?: (ref: unknown) => any;
+    trainerDefeated?: (npc: any) => boolean;
+    engageTrainer?: (npc: any, onDone?: () => void) => void;
+  };
+  const npc = w.findNpc?.(args[0]);
+  if (!npc || !w.engageTrainer || w.trainerDefeated?.(npc)) return;
+  w.engageTrainer(npc, () => runner.resume());
+  yield;
+}
+
+// A heal point sets where a blackout warps you (pokered wLastBlackoutMap):
+// the last Pokémon Center you healed at. Recorded at the spot you healed from.
+function* set_heal_point(ctx: ScriptContext): Generator<void, void> {
+  const w = ctx.world as any;
+  const p = w.player;
+  (ctx.world.save as { lastHeal?: { map: string; x: number; y: number } }).lastHeal = {
+    map: String(w.map?.id ?? ""),
+    x: (p?.cellX as number) ?? 0,
+    y: (p?.cellY as number) ?? 0,
+  };
+}
+
 const VERBS: Record<string, Verb> = {
   show_text,
   ask,
@@ -416,6 +542,15 @@ const VERBS: Record<string, Verb> = {
   start_battle,
   open_mart,
   walk_route,
+  check_item,
+  take_item,
+  clear_flag,
+  check_dex_owned,
+  dex_rating,
+  rival_battle,
+  walk_npc,
+  engage_trainer,
+  set_heal_point,
   push_screen: noop_object,
   play_sound: noop_audio,
   play_music: noop_audio,

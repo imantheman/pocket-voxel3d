@@ -62,6 +62,11 @@ export const DEFAULT_MAPS = [
   "BLUES_HOUSE",
   "PEWTER_CITY",
   "ROUTE_3",
+  // Viridian's WEST exit (real ROM connection). Cooked for the optional
+  // early rival battle after the parcel drop-off (story5.lua ROUTE_22). Its
+  // own far exits (Route 23, the gate) fall outside cookedMaps and are held
+  // as the locked frontier automatically.
+  "ROUTE_22",
 ];
 
 export interface CookResult {

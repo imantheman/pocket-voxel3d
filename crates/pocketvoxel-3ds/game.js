@@ -3041,9 +3041,6 @@ function atlasOf(data) {
 function picPageFor(data, speciesId) {
   return atlasOf(data)?.picFront?.[speciesId] ?? -1;
 }
-function backPageFor(data, speciesId) {
-  return atlasOf(data)?.picBack?.[speciesId] ?? -1;
-}
 function computeStaging(map, playerCellX, playerCellY, surfing) {
   const arena = search(map, playerCellX, playerCellY, surfing);
   if (!arena)
@@ -3065,7 +3062,7 @@ function desiredCards(data, battle, staging) {
       out.push({ side: 1, pic, x: ex, y: ey });
   }
   if (battle.player && !battle.player.fainted && !battle.showPlayerBack && !battle.sendingOut) {
-    const pic = backPageFor(data, battle.player.mon.species);
+    const pic = picPageFor(data, battle.player.mon.species);
     if (pic >= 0)
       out.push({ side: 0, pic, x: px, y: py });
   }
@@ -4114,7 +4111,156 @@ class Player {
 }
 
 // voxelmon/game/world/mapscripts.ts
+function gymLeader(o) {
+  const rows = [
+    ["check_flag", o.beatFlag],
+    ["jump_if_true", "beaten"],
+    ["show_text", o.preText],
+    ["start_battle", "trainer", o.trainerClass, 1],
+    ["jump_if_false", "end"],
+    ["set_flag", o.beatFlag]
+  ];
+  for (const d of o.deactivate ?? [])
+    rows.push(["set_flag", d]);
+  rows.push(["give_item", o.badge, 1, false]);
+  for (const t of o.badgeText)
+    rows.push(["show_text", t]);
+  rows.push(["label", "give_tm"]);
+  rows.push(["show_text", o.tmPre]);
+  rows.push(["give_item", o.tm, 1, false]);
+  rows.push(["set_flag", o.gotFlag]);
+  for (const t of o.tmText)
+    rows.push(["show_text", t]);
+  rows.push(["jump", "end"]);
+  rows.push(["label", "beaten"]);
+  rows.push(["check_flag", o.gotFlag]);
+  rows.push(["jump_if_false", "give_tm"]);
+  rows.push(["show_text", o.advice]);
+  return rows;
+}
+function mtMoonNerdWalk(px, py, itemId) {
+  if (px === 12 && py === 7 || px === 11 && py === 6 || px === 12 && py === 5) {
+    return ["right", "up"];
+  }
+  if (px === 13 && py === 7 || px === 14 && py === 6 || px === 14 && py === 5) {
+    return ["up"];
+  }
+  return itemId === "DOME_FOSSIL" ? ["right", "up"] : ["up"];
+}
+function mtMoonFossil(itemId, selfName, otherName, gotFlag) {
+  return (ow, save) => {
+    const f = save?.flags ?? {};
+    if (f.EVENT_GOT_DOME_FOSSIL || f.EVENT_GOT_HELIX_FOSSIL)
+      return null;
+    const nerd = ow.findNpc?.(1);
+    if (nerd && !ow.trainerDefeated?.(nerd))
+      return [["engage_trainer", 1]];
+    const dirs = mtMoonNerdWalk(ow?.player?.cellX ?? 0, ow?.player?.cellY ?? 0, itemId);
+    const wantText = itemId === "DOME_FOSSIL" ? "_MtMoonB2FDomeFossilYouWantText" : "_MtMoonB2FHelixFossilYouWantText";
+    return [
+      ["ask", wantText],
+      ["jump_if_false", "end"],
+      ["play_sound", "Get_Key_Item"],
+      ["give_item", itemId, 1, "_MtMoonB2FReceivedFossilText"],
+      ["hide_object", "MT_MOON_B2F", selfName],
+      ["set_flag", gotFlag],
+      ["walk_npc", 1, dirs],
+      ["show_text", "_MtMoonB2FSuperNerdThenThisIsMineText"],
+      ["play_sound", "Get_Key_Item"],
+      ["hide_object", "MT_MOON_B2F", otherName]
+    ];
+  };
+}
+function pewterEscortRows() {
+  return [
+    ["show_text", "_PewterCityYoungsterYoureATrainerFollowMeText"],
+    ["move_player_to", 11, 18],
+    ["move_npc_to", "PEWTERCITY_YOUNGSTER", 12, 18],
+    ["face_object", "PEWTERCITY_YOUNGSTER", "left"],
+    ["show_text", "_PewterCityYoungsterGoTakeOnBrockText"],
+    ["place_npc", "PEWTERCITY_YOUNGSTER", 35, 16, "down"]
+  ];
+}
 var MAP_SCRIPTS = {
+  PEWTER_CITY: {
+    onStep: (ow, save) => {
+      const f = save?.flags ?? {};
+      if (f.EVENT_BEAT_BROCK)
+        return null;
+      const p = ow?.player;
+      const x = p?.cellX;
+      const y = p?.cellY;
+      if (!(x === 35 && y === 17 || x === 36 && y === 17 || x === 37 && y === 18 || x === 37 && y === 19)) {
+        return null;
+      }
+      return pewterEscortRows();
+    },
+    talk: {
+      TEXT_PEWTERCITY_YOUNGSTER: (_ow, save) => save?.flags?.EVENT_BEAT_BROCK ? null : pewterEscortRows()
+    }
+  },
+  MT_MOON_B2F: {
+    onStep: (ow, save) => {
+      const p = ow?.player;
+      if (p?.cellX === 13 && p?.cellY === 8) {
+        const nerd = ow.findNpc?.(1);
+        if (nerd && !ow.trainerDefeated?.(nerd))
+          return [["engage_trainer", 1]];
+      }
+      return null;
+    },
+    talk: {
+      TEXT_MTMOONB2F_DOME_FOSSIL: mtMoonFossil("DOME_FOSSIL", "MTMOONB2F_DOME_FOSSIL", "MTMOONB2F_HELIX_FOSSIL", "EVENT_GOT_DOME_FOSSIL"),
+      TEXT_MTMOONB2F_HELIX_FOSSIL: mtMoonFossil("HELIX_FOSSIL", "MTMOONB2F_HELIX_FOSSIL", "MTMOONB2F_DOME_FOSSIL", "EVENT_GOT_HELIX_FOSSIL")
+    }
+  },
+  ROUTE_22: {
+    onStep: (ow, save) => {
+      const p = ow?.player;
+      const x = p?.cellX;
+      const y = p?.cellY;
+      if (!(x === 29 && y === 4 || x === 29 && y === 5))
+        return null;
+      const f = save?.flags ?? {};
+      if (!(f.EVENT_GOT_POKEDEX && !f.EVENT_BEAT_BROCK && !f.EVENT_BEAT_ROUTE22_RIVAL_1ST_BATTLE)) {
+        return null;
+      }
+      if (ow.player)
+        ow.player.facing = y === 4 ? "down" : "left";
+      const rx = y === 4 ? 29 : 28;
+      const rivalFacing = y === 4 ? "up" : "right";
+      const exit = y === 4 ? ["right", "right", "down", "down", "down", "down", "down"] : ["up", "right", "right", "right", "down", "down", "down", "down", "down", "down"];
+      return [
+        ["show_object", "ROUTE_22", "ROUTE22_RIVAL1"],
+        ["move_npc_to", "ROUTE22_RIVAL1", rx, 5],
+        ["face_object", "ROUTE22_RIVAL1", rivalFacing],
+        ["show_text", "_Route22RivalBeforeBattleText1"],
+        ["rival_battle", "OPP_RIVAL1", 4, { loseable: true }],
+        ["jump_if_false", 11],
+        ["set_flag", "EVENT_BEAT_ROUTE22_RIVAL_1ST_BATTLE"],
+        ["show_text", "_Route22Rival1DefeatedText"],
+        ["show_text", "_Route22RivalAfterBattleText1"],
+        ["walk_npc", "ROUTE22_RIVAL1", exit],
+        ["hide_object", "ROUTE_22", "ROUTE22_RIVAL1"]
+      ];
+    }
+  },
+  VIRIDIAN_MART: {
+    onStep: (_ow, save) => {
+      const f = save?.flags ?? {};
+      if (!f.EVENT_GOT_STARTER)
+        return null;
+      if (f.EVENT_GOT_OAKS_PARCEL || f.EVENT_OAK_GOT_PARCEL)
+        return null;
+      return [
+        ["show_text", "_ViridianMartClerkYouCameFromPalletTownText"],
+        ["move_player", "up", 2],
+        ["move_player", "left", 1],
+        ["give_item", "OAKS_PARCEL", 1, "_ViridianMartClerkParcelQuestText"],
+        ["set_flag", "EVENT_GOT_OAKS_PARCEL"]
+      ];
+    }
+  },
   OAKS_LAB_ONSTEP_HOST: {
     onStep: (ow, save) => {
       const f = save?.flags ?? {};
@@ -4131,7 +4277,7 @@ var MAP_SCRIPTS = {
         ["move_npc_to", "SPRITE_BLUE", px, 10],
         ["face_object", "SPRITE_BLUE", "up"],
         ["show_text", "_OaksLabRivalIllTakeYouOnText"],
-        ["start_battle", "trainer", "OPP_RIVAL1", party],
+        ["start_battle", "trainer", "OPP_RIVAL1", party, { loseable: true }],
         ["set_flag", "EVENT_BATTLED_RIVAL_IN_OAKS_LAB"],
         ["show_text", "_OaksLabRivalSmellYouLaterText"],
         ["move_npc_to", "SPRITE_BLUE", 4, 11],
@@ -4139,39 +4285,106 @@ var MAP_SCRIPTS = {
       ];
     }
   },
-  PALLET_TOWN_ONSTEP_HOST: {
+  OAKS_LAB: {
     onStep: (ow, save) => {
       const f = save?.flags ?? {};
-      if (f.EVENT_FOLLOWED_OAK_INTO_LAB || f.EVENT_GOT_STARTER)
-        return null;
-      const cy = ow?.player?.cellY;
-      if (cy !== 1)
-        return null;
-      const LAB_DOOR_X = 12, LAB_DOOR_Y = 11;
-      const px = ow?.player?.cellX ?? 0;
-      const py = ow?.player?.cellY ?? 0;
-      return [
-        ["place_npc", "SPRITE_OAK", px, py + 4, "up"],
-        ["move_npc_to", "SPRITE_OAK", px, py + 1],
-        ["face_object", "SPRITE_OAK", "up"],
-        ["show_text", "_PalletTownOakHeyWaitDontGoOutText"],
-        ["show_text", "_PalletTownOakItsUnsafeText"],
-        ["move_npc_to", "SPRITE_OAK", LAB_DOOR_X, LAB_DOOR_Y],
-        ["move_player_to", LAB_DOOR_X, LAB_DOOR_Y + 1],
-        ["warp", "OAKS_LAB", 5, 11, "up"],
-        ["place_npc", "SPRITE_OAK", 5, 2, "down"],
-        ["move_player", "up", 8],
-        ["set_flag", "EVENT_FOLLOWED_OAK_INTO_LAB"],
-        ["show_text", "_OaksLabRivalFedUpWithWaitingText"],
-        ["show_text", "_OaksLabOakChooseMonText"],
-        ["show_text", "_OaksLabRivalWhatAboutMeText"],
-        ["show_text", "_OaksLabOakBePatientText"],
-        ["set_flag", "EVENT_OAK_ASKED_TO_CHOOSE_MON"]
-      ];
-    }
-  },
-  OAKS_LAB: {
+      if (f.EVENT_FOLLOWED_OAK_INTO_LAB || f.EVENT_GOT_STARTER) {
+        if (!ow.findNpc?.("SPRITE_OAK"))
+          ow.placeNpc?.("SPRITE_OAK", 5, 2, "down");
+      }
+      return null;
+    },
     talk: {
+      TEXT_OAKSLAB_OAK1: [
+        ["face_player"],
+        ["check_flag", "EVENT_PALLET_AFTER_GETTING_POKEBALLS"],
+        ["jump_if_true", "dex_rating"],
+        ["check_dex_owned", 2],
+        ["jump_if_false", "no_rating"],
+        ["check_flag", "EVENT_GOT_POKEDEX"],
+        ["jump_if_true", "dex_rating"],
+        ["label", "no_rating"],
+        ["check_item", "POKE_BALL"],
+        ["jump_if_true", "come_see"],
+        ["check_flag", "EVENT_BEAT_ROUTE22_RIVAL_1ST_BATTLE"],
+        ["jump_if_true", "give_balls"],
+        ["check_flag", "EVENT_GOT_POKEDEX"],
+        ["jump_if_true", "around_world"],
+        ["check_flag", "EVENT_BATTLED_RIVAL_IN_OAKS_LAB"],
+        ["jump_if_false", "pre_lab_battle"],
+        ["check_item", "OAKS_PARCEL"],
+        ["jump_if_false", "raise_young"],
+        ["show_text", "_OaksLabOak1DeliverParcelText"],
+        ["play_sound", "Get_Key_Item"],
+        ["show_text", "_OaksLabOak1ParcelThanksText"],
+        ["take_item", "OAKS_PARCEL", 1],
+        ["stop_music"],
+        ["play_music", "Music_MeetRival"],
+        ["show_text", "_OaksLabRivalGrampsText"],
+        ["place_npc", "SPRITE_BLUE", 4, 7, "up"],
+        ["move_npc_to", "SPRITE_BLUE", 4, 3],
+        ["play_music", "Music_OaksLab"],
+        ["face_object", "SPRITE_BLUE", "up"],
+        ["face_object", "SPRITE_OAK", "down"],
+        ["show_text", "_OaksLabRivalWhatDidYouCallMeForText"],
+        ["face_object", "SPRITE_BLUE", "up"],
+        ["face_object", "SPRITE_OAK", "down"],
+        ["show_text", "_OaksLabOakIHaveARequestText"],
+        ["face_object", "SPRITE_BLUE", "up"],
+        ["face_object", "SPRITE_OAK", "down"],
+        ["show_text", "_OaksLabOakMyInventionPokedexText"],
+        ["show_text", "_OaksLabOakGotPokedexText"],
+        ["play_sound", "Get_Key_Item"],
+        ["hide_object", "OAKS_LAB", "OAKSLAB_POKEDEX1"],
+        ["hide_object", "OAKS_LAB", "OAKSLAB_POKEDEX2"],
+        ["face_object", "SPRITE_BLUE", "up"],
+        ["face_object", "SPRITE_OAK", "down"],
+        ["show_text", "_OaksLabOakThatWasMyDreamText"],
+        ["face_object", "SPRITE_BLUE", "right"],
+        ["show_text", "_OaksLabRivalLeaveItAllToMeText"],
+        ["set_flag", "EVENT_GOT_POKEDEX"],
+        ["set_flag", "EVENT_OAK_GOT_PARCEL"],
+        ["hide_object", "VIRIDIAN_CITY", "VIRIDIANCITY_OLD_MAN_SLEEPY"],
+        ["show_object", "VIRIDIAN_CITY", "VIRIDIANCITY_OLD_MAN"],
+        ["stop_music"],
+        ["play_music", "Music_MeetRival"],
+        ["move_npc_to", "SPRITE_BLUE", 4, 7],
+        ["hide_object", "OAKS_LAB", "SPRITE_BLUE"],
+        ["play_music", "Music_OaksLab"],
+        ["set_flag", "EVENT_1ST_ROUTE22_RIVAL_BATTLE"],
+        ["clear_flag", "EVENT_2ND_ROUTE22_RIVAL_BATTLE"],
+        ["set_flag", "EVENT_ROUTE22_RIVAL_WANTS_BATTLE"],
+        ["show_object", "ROUTE_22", "ROUTE22_RIVAL1"],
+        ["jump", "end"],
+        ["label", "raise_young"],
+        ["show_text", "_OaksLabOak1RaiseYourYoungPokemonText"],
+        ["jump", "end"],
+        ["label", "pre_lab_battle"],
+        ["check_flag", "EVENT_GOT_STARTER"],
+        ["jump_if_true", "can_fight"],
+        ["show_text", "_OaksLabOak1WhichPokemonDoYouWantText"],
+        ["jump", "end"],
+        ["label", "can_fight"],
+        ["show_text", "_OaksLabOak1YourPokemonCanFightText"],
+        ["jump", "end"],
+        ["label", "around_world"],
+        ["show_text", "_OaksLabOak1PokemonAroundTheWorldText"],
+        ["jump", "end"],
+        ["label", "give_balls"],
+        ["check_flag", "EVENT_GOT_POKEBALLS_FROM_OAK"],
+        ["jump_if_true", "come_see"],
+        ["set_flag", "EVENT_GOT_POKEBALLS_FROM_OAK"],
+        ["give_item", "POKE_BALL", 5, false],
+        ["show_text", "_OaksLabOak1ReceivedPokeballsText"],
+        ["show_text", "_OaksLabGivePokeballsExplanationText"],
+        ["jump", "end"],
+        ["label", "come_see"],
+        ["show_text", "_OaksLabOak1ComeSeeMeSometimesText"],
+        ["jump", "end"],
+        ["label", "dex_rating"],
+        ["show_text", "_OaksLabOak1HowIsYourPokedexComingText"],
+        ["dex_rating"]
+      ],
       TEXT_OAKSLAB_BULBASAUR_POKE_BALL: [
         ["check_flag", "EVENT_GOT_STARTER"],
         ["jump_if_true", "end"],
@@ -4252,6 +4465,55 @@ var MAP_SCRIPTS = {
         ["jump", "end"],
         ["show_text", "_PalletTownOakItsUnsafeText"]
       ]
+    },
+    onStep: (ow, save) => {
+      const f = save?.flags ?? {};
+      if (f.EVENT_FOLLOWED_OAK_INTO_LAB || f.EVENT_GOT_STARTER)
+        return null;
+      const cy = ow?.player?.cellY;
+      if (cy !== 1)
+        return null;
+      const LAB_DOOR_X = 12, LAB_DOOR_Y = 11;
+      const px = ow?.player?.cellX ?? 0;
+      const py = ow?.player?.cellY ?? 0;
+      return [
+        ["place_npc", "SPRITE_OAK", px, py + 4, "up"],
+        ["move_npc_to", "SPRITE_OAK", px, py + 1],
+        ["face_object", "SPRITE_OAK", "up"],
+        ["show_text", "_PalletTownOakHeyWaitDontGoOutText"],
+        ["show_text", "_PalletTownOakItsUnsafeText"],
+        ["move_npc_to", "SPRITE_OAK", LAB_DOOR_X, LAB_DOOR_Y],
+        ["move_player_to", LAB_DOOR_X, LAB_DOOR_Y + 1],
+        ["warp", "OAKS_LAB", 5, 11, "up"],
+        ["place_npc", "SPRITE_OAK", 5, 2, "down"],
+        ["move_player", "up", 8],
+        ["set_flag", "EVENT_FOLLOWED_OAK_INTO_LAB"],
+        ["show_text", "_OaksLabRivalFedUpWithWaitingText"],
+        ["show_text", "_OaksLabOakChooseMonText"],
+        ["show_text", "_OaksLabRivalWhatAboutMeText"],
+        ["show_text", "_OaksLabOakBePatientText"],
+        ["set_flag", "EVENT_OAK_ASKED_TO_CHOOSE_MON"]
+      ];
+    }
+  },
+  PEWTER_GYM: {
+    talk: {
+      TEXT_PEWTERGYM_BROCK: gymLeader({
+        trainerClass: "OPP_BROCK",
+        beatFlag: "EVENT_BEAT_BROCK",
+        preText: "_PewterGymBrockPreBattleText",
+        deactivate: ["EVENT_BEAT_PEWTER_GYM_TRAINER_0"],
+        badge: "BOULDERBADGE",
+        badgeText: [
+          "_PewterGymBrockReceivedBoulderBadgeText",
+          "_PewterGymBrockBoulderBadgeInfoText"
+        ],
+        tmPre: "_PewterGymBrockWaitTakeThisText",
+        tm: "TM_BIDE",
+        gotFlag: "EVENT_GOT_TM34",
+        tmText: ["_PewterGymReceivedTM34Text", "_TM34ExplanationText"],
+        advice: "_PewterGymBrockPostBattleAdviceText"
+      })
     }
   }
 };
@@ -4326,6 +4588,7 @@ POKéMON?`],
 your POKéMON.`],
     ["fade", "out", "white"],
     ["heal_party"],
+    ["set_heal_point"],
     ["play_once", "Music_PkmnHealed"],
     ["fade", "in", "white"],
     ["show_text", `Your POKéMON are
@@ -4582,15 +4845,14 @@ function* start_battle(ctx, ...args) {
   const kind = String(args[0] ?? "trainer");
   const id = String(args[1] ?? "");
   const idx = args[2] ?? 1;
+  const opts = args[3] ?? {};
   const runner = ctx.runner;
   const w = ctx.world;
-  console.log("start_battle verb: " + kind + " " + id + " idx=" + idx + " hasFn=" + !!w.startTrainerBattle);
   if (kind === "trainer" && w.startTrainerBattle) {
-    console.log("start_battle -> launching " + id + " party " + idx);
-    w.startTrainerBattle(id, idx, undefined, () => {
-      console.log("start_battle -> resuming script");
+    w.startTrainerBattle(id, idx, undefined, (won) => {
+      ctx.lastCheck = !!won;
       runner.resume();
-    });
+    }, opts.loseable === true);
     yield;
   }
 }
@@ -4631,6 +4893,84 @@ function* open_mart(ctx, ...args) {
     yield;
   }
 }
+function* check_item(ctx, ...args) {
+  const inv = ctx.world.save.inventory ?? {};
+  ctx.lastCheck = (inv[args[0]] ?? 0) > 0;
+}
+function* take_item(ctx, ...args) {
+  remove(ctx.world.save, args[0], args[1] ?? 1);
+}
+function* clear_flag(ctx, ...args) {
+  delete ctx.world.save.flags[args[0]];
+}
+function* check_dex_owned(ctx, ...args) {
+  const need = args[0] ?? 1;
+  const owned = ctx.world.save.pokedex?.owned ?? {};
+  let n = 0;
+  for (const k in owned)
+    if (owned[k])
+      n += 1;
+  ctx.lastCheck = n >= need;
+}
+function* dex_rating() {}
+function* rival_battle(ctx, ...args) {
+  const oppClass = args[0];
+  const baseParty = args[1] ?? 1;
+  const opts = args[2] ?? {};
+  const save = ctx.world.save;
+  const offsets = opts.offsets ?? ctx.world.data.field?.starterCounterpicks;
+  let offset = 0;
+  if (offsets) {
+    for (const [flag, mapped] of Object.entries(offsets)) {
+      if (save.flags?.[flag]) {
+        offset = mapped;
+        break;
+      }
+    }
+  } else if (save.flags?.EVENT_CHOSE_SQUIRTLE) {
+    offset = 1;
+  } else if (save.flags?.EVENT_CHOSE_BULBASAUR) {
+    offset = 2;
+  }
+  yield* start_battle(ctx, "trainer", oppClass, baseParty + offset, { loseable: opts.loseable });
+}
+function* walk_npc(ctx, ...args) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  const ref = args[0];
+  const dirs = args[1] ?? [];
+  const entity = ref === "player" ? w.player : w.findNpc?.(ref);
+  if (!entity || dirs.length === 0)
+    return;
+  let i = 0;
+  const step = () => {
+    if (i >= dirs.length) {
+      runner.resume();
+      return;
+    }
+    w.scriptMove(entity, dirs[i++], 1, step);
+  };
+  step();
+  yield;
+}
+function* engage_trainer(ctx, ...args) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  const npc = w.findNpc?.(args[0]);
+  if (!npc || !w.engageTrainer || w.trainerDefeated?.(npc))
+    return;
+  w.engageTrainer(npc, () => runner.resume());
+  yield;
+}
+function* set_heal_point(ctx) {
+  const w = ctx.world;
+  const p = w.player;
+  ctx.world.save.lastHeal = {
+    map: String(w.map?.id ?? ""),
+    x: p?.cellX ?? 0,
+    y: p?.cellY ?? 0
+  };
+}
 var VERBS = {
   show_text,
   ask,
@@ -4661,6 +5001,15 @@ var VERBS = {
   start_battle,
   open_mart,
   walk_route,
+  check_item,
+  take_item,
+  clear_flag,
+  check_dex_owned,
+  dex_rating,
+  rival_battle,
+  walk_npc,
+  engage_trainer,
+  set_heal_point,
   push_screen: noop_object,
   play_sound: noop_audio,
   play_music: noop_audio,
@@ -5238,7 +5587,8 @@ class Overworld {
     this.showMapText(npc.def.text, npc, unfreeze);
   }
   showMapText(textConst, npc, onDone) {
-    const script = talkScript(this.map.id, textConst) ?? itemBallScript(this.map.id, npc?.def) ?? martGreetScript(this.map.id, textConst) ?? nurseGreetScript(textConst);
+    const talk = talkScript(this.map.id, textConst);
+    const script = (typeof talk === "function" ? talk(this, this.save) : talk) ?? itemBallScript(this.map.id, npc?.def) ?? martGreetScript(this.map.id, textConst) ?? nurseGreetScript(textConst);
     if (script && !this.runner.isRunning()) {
       if (npc)
         npc.frozen = true;
@@ -5300,16 +5650,13 @@ class Overworld {
   }
   onStepComplete() {
     if (!this.runner.isRunning()) {
-      const self = this;
-      const label2 = self.mapId ?? self.map?.id ?? self.currentMap ?? "";
-      const hook = MAP_SCRIPTS[label2]?.onStep ?? MAP_SCRIPTS["PALLET_TOWN_ONSTEP_HOST"]?.onStep;
-      const hook2 = label2 === "OAKS_LAB" ? MAP_SCRIPTS["OAKS_LAB_ONSTEP_HOST"]?.onStep : hook;
-      if (hook2 && (label2 === "PALLET_TOWN" || label2 === "OAKS_LAB")) {
-        const rows = hook2(this, self.save);
-        if (rows) {
-          this.runScript(rows);
-          return;
-        }
+      const label2 = this.map?.id ?? "";
+      const script = MAP_SCRIPTS[label2];
+      const host = MAP_SCRIPTS[label2 + "_ONSTEP_HOST"];
+      const rows = script?.onStep?.(this, this.save) ?? host?.onStep?.(this, this.save) ?? this.coordTrigger(script) ?? this.coordTrigger(host);
+      if (rows) {
+        this.runScript(rows);
+        return;
       }
     }
     const p = this.player;
@@ -5438,17 +5785,34 @@ class Overworld {
   hidePic() {
     this.picShown = null;
   }
+  coordTrigger(script) {
+    const coords = script?.coord;
+    if (!coords)
+      return null;
+    const p = this.player;
+    const flags = this.save?.flags ?? {};
+    for (const c of coords) {
+      if (c.x !== p.cellX || c.y !== p.cellY)
+        continue;
+      if (c.unlessFlag && flags[c.unlessFlag])
+        continue;
+      if (c.ifFlag && !flags[c.ifFlag])
+        continue;
+      return c.rows;
+    }
+    return null;
+  }
   runScript(script, onDone) {
     this.runner.run(script, { onDone });
   }
   findNpc(ref) {
     const list = this.npcs;
     if (typeof ref === "number") {
-      const byName = list.find((n) => String(n?.name ?? "").endsWith("_obj_" + ref));
+      const byName = list.find((n) => String(n?.id ?? n?.name ?? "").endsWith("_obj_" + ref));
       return byName ?? list[ref - 1] ?? list[ref] ?? null;
     }
     const want = String(ref);
-    return list.find((n) => n?.name === want || n?.id === want || n?.obj?.name === want) ?? list.find((n) => {
+    return list.find((n) => n?.name === want || n?.id === want || n?.obj?.name === want || n?.def?.name === want) ?? list.find((n) => {
       const t = String(n?.def?.text ?? "").toUpperCase();
       const w = want.toUpperCase();
       return t === w || t === "TEXT_" + w || t.replace(/^TEXT_/, "") === w;
@@ -5501,6 +5865,22 @@ class Overworld {
     const ev = this.trainerHeader(npc)?.event;
     return !!ev && this.save.flags?.[ev] === true;
   }
+  engageTrainer(npc, onDone) {
+    const header = this.trainerHeader(npc);
+    npc.facePlayer(this.player);
+    const launch = () => this.startTrainerBattle(npc.def.trainerClass ?? "", npc.def.trainerParty ?? 1, undefined, (won) => {
+      const ev = header?.event;
+      if (won && ev && this.save.flags)
+        this.save.flags[ev] = true;
+      onDone?.();
+    });
+    const key = header?.battle;
+    const taunt = key ? this.shell.data.text?.[key] : undefined;
+    if (taunt)
+      this.showText(taunt, launch);
+    else
+      launch();
+  }
   checkTrainerSight() {
     if (this.player.moving || this.engaging)
       return;
@@ -5544,9 +5924,9 @@ class Overworld {
     const def = npc.def;
     const header = this.trainerHeader(npc);
     const fight = () => {
-      const launch = () => this.startTrainerBattle(def.trainerClass ?? "", def.trainerParty ?? 1, undefined, () => {
+      const launch = () => this.startTrainerBattle(def.trainerClass ?? "", def.trainerParty ?? 1, undefined, (won) => {
         const ev = header?.event;
-        if (ev && this.save.flags)
+        if (won && ev && this.save.flags)
           this.save.flags[ev] = true;
         npc.frozen = false;
         this.engaging = false;
@@ -5566,14 +5946,13 @@ class Overworld {
         fight();
     });
   }
-  startTrainerBattle(id, idx, name, onDone) {
+  startTrainerBattle(id, idx, name, onDone, loseable = false) {
     const self = this;
     const shell = self.shell ?? self.game ?? self.host ?? null;
-    console.log("ow.startTrainerBattle shell=" + (shell ? "yes" : "NO") + " fn=" + (shell && typeof shell.startTrainerBattle === "function"));
     if (shell?.startTrainerBattle)
-      shell.startTrainerBattle(id, idx, name, onDone);
+      shell.startTrainerBattle(id, idx, name, onDone, loseable);
     else
-      onDone?.();
+      onDone?.(false);
   }
   movePlayerTo(tx, ty, onDone) {
     const p = this.player;
@@ -5593,7 +5972,15 @@ class Overworld {
     step();
   }
   placeNpc(sprite, x, y, facing = "down") {
-    const existing = this.findNpc(sprite);
+    let existing = this.findNpc(sprite);
+    if (!existing) {
+      const def = (this.map.def.objects ?? []).find((o) => o.sprite === sprite && !this.npcs.some((n) => n.def === o));
+      if (def) {
+        existing = this.pooledNPC(this.map.id, def);
+        this.npcs.push(existing);
+        this.entities = [this.player, ...this.npcs];
+      }
+    }
     if (existing) {
       existing.hidden = false;
       existing.cellX = x;
@@ -5619,7 +6006,21 @@ class Overworld {
     return npc;
   }
   setObjectHidden(objName, hidden) {
-    const npc = this.findNpc(objName);
+    let npc = this.findNpc(objName);
+    if (!npc && !hidden) {
+      const want = String(objName).toUpperCase();
+      const def = (this.map.def.objects ?? []).find((o) => {
+        const name = String(o.name ?? "").toUpperCase();
+        const text = String(o.text ?? "").toUpperCase();
+        const matches = name === want || text === want || text === "TEXT_" + want || text.replace(/^TEXT_/, "") === want;
+        return matches && !this.npcs.some((n) => n.def === o);
+      });
+      if (def) {
+        npc = this.pooledNPC(this.map.id, def);
+        this.npcs.push(npc);
+        this.entities = [this.player, ...this.npcs];
+      }
+    }
     if (npc)
       npc.hidden = hidden;
   }
@@ -5910,6 +6311,8 @@ class Scene {
       const slot = i + 1;
       if (slot >= ENTS_MAX)
         break;
+      if (npc.hidden)
+        continue;
       const def = view.data.sprites?.[npc.def.sprite];
       const frames = def?.frames ?? 6;
       const phase = npc.walkPhase();
@@ -7948,6 +8351,7 @@ class BattleGameState {
   staging;
   ui = new BattleUi;
   onDone = null;
+  loseable = false;
   popped = false;
   constructor(game, species, level, prebuilt) {
     this.game = game;
@@ -7967,6 +8371,8 @@ class BattleGameState {
       this.game.pop();
       if (done)
         done();
+      if (b.finished === "lose" && !this.loseable)
+        this.game.blackout();
       return;
       this.game.pop();
       if (b.finished === "lose")
@@ -8365,11 +8771,11 @@ ${mdef.name}!`, () => step(i + 1));
       onDone: (n) => onDone(n === defaultName ? null : n)
     }));
   }
-  startTrainerBattle(trainerId, partyIndex = 1, name, onDone) {
-    console.log("game.startTrainerBattle " + trainerId + " " + partyIndex);
+  startTrainerBattle(trainerId, partyIndex = 1, name, onDone, loseable = false) {
     const battle = new TrainerBattle(this.data, this.save, this.battleRng, trainerId, partyIndex, name);
     const st = new BattleGameState(this, "", 0, battle);
-    st.onDone = onDone ?? null;
+    st.onDone = () => onDone?.(battle.finished === "win");
+    st.loseable = loseable;
     this.push(st);
   }
   naming() {

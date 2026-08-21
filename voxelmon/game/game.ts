@@ -197,6 +197,9 @@ class BattleGameState implements GameState, BattleSceneView {
   readonly ui = new BattleUi();
 
   onDone: (() => void) | null = null;
+  // Loseable battles (the OaksLab / Route 22 rival) heal-and-continue on a
+  // loss instead of blacking out — set by start_battle/rival_battle opts.
+  loseable = false;
   private popped = false;
 
   constructor(
@@ -226,6 +229,11 @@ class BattleGameState implements GameState, BattleSceneView {
       this.popped = true;
       this.game.pop();
       if (done) done();
+      // A lost battle blacks out (heal + warp to the last heal point) unless
+      // it's a designated loseable battle (the early rival), whose script
+      // heals and continues. The block below is the legacy teardown, kept for
+      // its notes; the live path pops + resumes above, so blackout goes here.
+      if (b.finished === "lose" && !this.loseable) this.game.blackout();
       return;
       // BattleState.lua:4647-4653 — teardown pops the battle screen FIRST,
       // and it is the map that holds: POST_BATTLE_RETURN before EnterMap
@@ -797,13 +805,14 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     );
   }
 
-  startTrainerBattle(trainerId: string, partyIndex = 1, name?: string, onDone?: () => void): void {
-    console.log("game.startTrainerBattle " + trainerId + " " + partyIndex);
+  startTrainerBattle(trainerId: string, partyIndex = 1, name?: string, onDone?: (won: boolean) => void, loseable = false): void {
     const battle = new TrainerBattle(
       this.data, this.save, this.battleRng, trainerId, partyIndex, name,
     );
     const st = new BattleGameState(this, "", 0, battle);
-    st.onDone = onDone ?? null;
+    // Report the outcome so a script rewards only on a win (afterBattle).
+    st.onDone = () => onDone?.(battle.finished === "win");
+    st.loseable = loseable;
     this.push(st);
   }
 

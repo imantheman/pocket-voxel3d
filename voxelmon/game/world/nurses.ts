@@ -29,6 +29,7 @@ export function nurseGreetScript(textConst: string): ScriptRow[] | null {
     ["show_text", "OK. We'll need\nyour POKéMON."],
     ["fade", "out", "white"], // GBFadeOutToWhite
     ["heal_party"], // Pokemon.heal each — before the machine runs
+    ["set_heal_point"], // last Pokémon Center becomes the blackout warp target
     ["play_once", "Music_PkmnHealed"],
     ["fade", "in", "white"], // GBFadeInFromWhite
     ["show_text", "Your POKéMON are\nfighting fit!"],

@@ -24,7 +24,7 @@ import { martGreetScript } from "./marts.ts";
 import { nurseGreetScript } from "./nurses.ts";
 import { pcTileAt } from "./pctiles.ts";
 import { ScriptRunner, type ScriptRow, type ScriptWorld } from "./script.ts";
-import { MAP_SCRIPTS } from "./mapscripts.ts";
+import { MAP_SCRIPTS, type MapScript } from "./mapscripts.ts";
 import {
   destination,
   onArrive,
@@ -656,8 +656,9 @@ export class Overworld implements ScriptWorld {
   showMapText(textConst: string, npc?: NPC, onDone?: () => void): void {
     // A registered talk script wins; otherwise an object with an `item` field
     // is a ground pickup and the item-ball script is synthesised for it.
+    const talk = talkScript(this.map.id, textConst);
     const script =
-      talkScript(this.map.id, textConst) ??
+      (typeof talk === "function" ? talk(this, this.save) : talk) ??
       itemBallScript(this.map.id, npc?.def) ??
       martGreetScript(this.map.id, textConst) ??
       nurseGreetScript(textConst);
@@ -750,23 +751,22 @@ export class Overworld implements ScriptWorld {
   // encounter roll. (Spinners, badge gates, forced movement, Safari,
   // day-care, poison and repel are outside the slice.)
   onStepComplete(): void {
-    // story2.lua land-triggers: a map's onStep can return a script to run.
+    // A map's land-triggers run first (OverworldController.lua:3502): the
+    // onStep function hook (story cutscene logic) or a declarative coord
+    // trigger. Fires for ANY map that registers one — the two _ONSTEP_HOST
+    // entries are checked too so the original Pallet/Oak hooks still run.
     if (!this.runner.isRunning()) {
-      const self = this as any;
-      const label = self.mapId ?? self.map?.id ?? self.currentMap ?? "";
-      const hook =
-        (MAP_SCRIPTS as any)[label]?.onStep ??
-        (MAP_SCRIPTS as any)["PALLET_TOWN_ONSTEP_HOST"]?.onStep;
-      const hook2 =
-        label === "OAKS_LAB"
-          ? (MAP_SCRIPTS as any)["OAKS_LAB_ONSTEP_HOST"]?.onStep
-          : hook;
-      if (hook2 && (label === "PALLET_TOWN" || label === "OAKS_LAB")) {
-        const rows = hook2(this, self.save);
-        if (rows) {
-          this.runScript(rows);
-          return;
-        }
+      const label = (this as any).map?.id ?? "";
+      const script = (MAP_SCRIPTS as any)[label] as MapScript | undefined;
+      const host = (MAP_SCRIPTS as any)[label + "_ONSTEP_HOST"] as MapScript | undefined;
+      const rows =
+        script?.onStep?.(this, this.save) ??
+        host?.onStep?.(this, this.save) ??
+        this.coordTrigger(script) ??
+        this.coordTrigger(host);
+      if (rows) {
+        this.runScript(rows);
+        return;
       }
     }
 
@@ -965,6 +965,22 @@ export class Overworld implements ScriptWorld {
   }
 
   /** Run a standalone script (the intro speech), outside any object talk. */
+  /** Declarative coord_event scan: the first (x,y) trigger on the player's
+   * current cell whose flag gates pass, or null. */
+  private coordTrigger(script?: MapScript): ScriptRow[] | null {
+    const coords = script?.coord;
+    if (!coords) return null;
+    const p = this.player;
+    const flags = this.save?.flags ?? {};
+    for (const c of coords) {
+      if (c.x !== p.cellX || c.y !== p.cellY) continue;
+      if (c.unlessFlag && flags[c.unlessFlag]) continue;
+      if (c.ifFlag && !flags[c.ifFlag]) continue;
+      return c.rows;
+    }
+    return null;
+  }
+
   runScript(script: ScriptRow[], onDone?: () => void): void {
     this.runner.run(script, { onDone });
   }
@@ -973,14 +989,20 @@ export class Overworld implements ScriptWorld {
   findNpc(ref: unknown): any | null {
     const list = this.npcs as any[];
     if (typeof ref === "number") {
-      // Objects are named "<MAP>_obj_<n>"; index by that, not array slot,
+      // Objects are id'd "<MAP>_obj_<n>"; index by that, not array slot,
       // because hidden objects would shift the slots.
-      const byName = list.find((n) => String(n?.name ?? "").endsWith("_obj_" + ref));
+      const byName = list.find((n) =>
+        String((n as any)?.id ?? n?.name ?? "").endsWith("_obj_" + ref),
+      );
       return byName ?? list[ref - 1] ?? list[ref] ?? null;
     }
     const want = String(ref);
     return (
-      list.find((n) => n?.name === want || n?.id === want || n?.obj?.name === want) ??
+      list.find(
+        (n) =>
+          n?.name === want || n?.id === want || n?.obj?.name === want ||
+          (n as any)?.def?.name === want,
+      ) ??
       // pokered object names aren't in the cooked data, so fall back to the
       // sprite id ("SPRITE_OAK") which is stable across maps.
       // Objects carry pokered's identity as def.text (TEXT_OAKSLAB_..._POKE_BALL);
@@ -1042,9 +1064,36 @@ export class Overworld implements ScriptWorld {
     return headers?.[this.map.def.label]?.[npc.def.index];
   }
 
-  private trainerDefeated(npc: NPC): boolean {
+  trainerDefeated(npc: NPC): boolean {
     const ev = this.trainerHeader(npc)?.event;
     return !!ev && this.save.flags?.[ev] === true;
+  }
+
+  // Force a trainer battle by object (no sight line): MtMoonB2F's Super Nerd
+  // is triggered by a coord step, not a range. Mirrors the sight path's
+  // fight() — before-battle text then StartTrainerBattle, beat flag set on a
+  // win so the trigger doesn't re-fire (story2.lua engageSuperNerd ->
+  // ow:engageTrainer).
+  engageTrainer(npc: NPC, onDone?: () => void): void {
+    const header = this.trainerHeader(npc);
+    npc.facePlayer(this.player);
+    const launch = () =>
+      this.startTrainerBattle(
+        npc.def.trainerClass ?? "",
+        npc.def.trainerParty ?? 1,
+        undefined,
+        (won) => {
+          const ev = header?.event;
+          if (won && ev && this.save.flags) this.save.flags[ev] = true;
+          onDone?.();
+        },
+      );
+    const key = header?.battle;
+    const taunt = key
+      ? (this.shell.data as { text?: Record<string, string> }).text?.[key]
+      : undefined;
+    if (taunt) this.showText(taunt, launch);
+    else launch();
   }
 
   checkTrainerSight(): void {
@@ -1083,11 +1132,11 @@ export class Overworld implements ScriptWorld {
     const header = this.trainerHeader(npc);
     const fight = () => {
       const launch = () =>
-        this.startTrainerBattle(def.trainerClass ?? "", def.trainerParty ?? 1, undefined, () => {
-          // mark the trainer's EVENT_BEAT_* on return so the sight line does not
-          // re-fire (gen1 sets it on a win).
+        this.startTrainerBattle(def.trainerClass ?? "", def.trainerParty ?? 1, undefined, (won) => {
+          // mark the trainer's EVENT_BEAT_* only on a win so the sight line
+          // does not re-fire; a loss leaves it and blacks out.
           const ev = header?.event;
-          if (ev && this.save.flags) this.save.flags[ev] = true;
+          if (won && ev && this.save.flags) this.save.flags[ev] = true;
           npc.frozen = false;
           this.engaging = false;
         });
@@ -1109,13 +1158,11 @@ export class Overworld implements ScriptWorld {
     });
   }
 
-  startTrainerBattle(id: string, idx: number, name?: string, onDone?: () => void): void {
+  startTrainerBattle(id: string, idx: number, name?: string, onDone?: (won: boolean) => void, loseable = false): void {
     const self = this as any;
     const shell = self.shell ?? self.game ?? self.host ?? null;
-    console.log("ow.startTrainerBattle shell=" + (shell ? "yes" : "NO") +
-      " fn=" + (shell && typeof shell.startTrainerBattle === "function"));
-    if (shell?.startTrainerBattle) shell.startTrainerBattle(id, idx, name, onDone);
-    else onDone?.();
+    if (shell?.startTrainerBattle) shell.startTrainerBattle(id, idx, name, onDone, loseable);
+    else onDone?.(false);
   }
 
   /** Walk the player to a tile along a real path. */
@@ -1136,7 +1183,22 @@ export class Overworld implements ScriptWorld {
 
   /** Commands.lua place_npc: spawn a scripted actor (Oak's escort). */
   placeNpc(sprite: string, x: number, y: number, facing = "down"): any {
-    const existing = this.findNpc(sprite);
+    let existing = this.findNpc(sprite);
+    // If the sprite has no visible actor, prefer REVEALING the map's real
+    // (spawn-hidden) object for it over a synthetic one: pokered HideObject's
+    // Oak / the rival until a ShowObject, and only the real object carries the
+    // def.text talkTo dispatches on (TEXT_OAKSLAB_OAK1). A synthetic actor has
+    // no text, so talking to it would do nothing.
+    if (!existing) {
+      const def = (this.map.def.objects ?? []).find(
+        (o) => o.sprite === sprite && !this.npcs.some((n) => n.def === o),
+      );
+      if (def) {
+        existing = this.pooledNPC(this.map.id, def);
+        this.npcs.push(existing);
+        this.entities = [this.player, ...this.npcs];
+      }
+    }
     if (existing) {
       existing.hidden = false;
       existing.cellX = x; existing.cellY = y;
@@ -1159,7 +1221,27 @@ export class Overworld implements ScriptWorld {
   }
 
   setObjectHidden(objName: unknown, hidden: boolean): void {
-    const npc = this.findNpc(objName);
+    let npc = this.findNpc(objName);
+    // show_object on a spawn-hidden object (pokered ShowObject): it is not in
+    // this.npcs yet, so reveal the real map def object for it. Matched by
+    // name/text (not sprite) so ROUTE22_RIVAL1 resolves distinctly from a
+    // second same-sprite rival on the map.
+    if (!npc && !hidden) {
+      const want = String(objName).toUpperCase();
+      const def = (this.map.def.objects ?? []).find((o) => {
+        const name = String((o as MapObject & { name?: string }).name ?? "").toUpperCase();
+        const text = String(o.text ?? "").toUpperCase();
+        const matches =
+          name === want || text === want || text === "TEXT_" + want ||
+          text.replace(/^TEXT_/, "") === want;
+        return matches && !this.npcs.some((n) => n.def === o);
+      });
+      if (def) {
+        npc = this.pooledNPC(this.map.id, def);
+        this.npcs.push(npc);
+        this.entities = [this.player, ...this.npcs];
+      }
+    }
     if (npc) npc.hidden = hidden;
   }
 
