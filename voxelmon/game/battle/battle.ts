@@ -53,7 +53,7 @@ import {
   type EffectMsgs,
   type HitFx,
 } from "./effects.ts";
-import { firstHealthy, newMon, partyAdd, type MoveSlot, type PartyMon } from "./mon.ts";
+import { firstHealthy, newMon, partyAdd, markSeen, markOwned, type MoveSlot, type PartyMon } from "./mon.ts";
 
 export type BattleResult = "win" | "lose" | "run" | "caught";
 
@@ -69,6 +69,9 @@ export interface BattleSave {
   party: PartyMon[];
   inventory: Record<string, number>;
   player: { name: string; rival: string };
+  /** Dex flags (markSeen/markOwned). Optional so an older save without the
+   * block is a no-op rather than a type error. */
+  pokedex?: { seen: Record<string, boolean>; owned: Record<string, boolean> };
 }
 
 // ---------------------------------------------------------------------------
@@ -115,6 +118,10 @@ export interface MsgShown {
 }
 
 export type BattlePhase = "messages" | "menu" | "moveSelect" | "party" | "item";
+
+// BattleState.lua:1868 — frames the old man's demo hovers the battle menu
+// before he opens his bag and throws.
+const DEMO_MENU_HOLD = 130;
 
 export class WildBattle implements EffectBattle {
   readonly kind = "wild";
@@ -165,6 +172,17 @@ export class WildBattle implements EffectBattle {
   /** SE_HIDE_ENEMY_MON_PIC (:1174) — the ball chain takes the pic away. */
   enemyHidden = false;
   lastBall: string | null = null;
+
+  // BATTLE_TYPE_OLD_MAN demo state (BattleState.lua:806-835, :2160-2210). The
+  // Viridian catch tutorial: no player mon acts, the old man auto-throws one
+  // POKé BALL, nothing is kept. `oakDemo`/`demoFails` carry Yellow's variants
+  // (PROF.OAK pic, initial-training breakout #636); Red/Blue Viridian uses
+  // neither.
+  demo = false;
+  demoName = "OLD MAN";
+  demoFails = false;
+  oakDemo = false;
+  private demoTimer = 0;
 
   // queue pump state (updateQueue :1064)
   private nextInsert = 0;
@@ -223,6 +241,56 @@ export class WildBattle implements EffectBattle {
       // keep the shared phases nil-safe like makeOldManDemo (:810-817)
       this.player = this.enemy;
     }
+  }
+
+  /**
+   * BattleState.lua:806-835 makeOldManDemo. Turns this wild battle into the
+   * BATTLE_TYPE_OLD_MAN catch tutorial: no player mon acts, the battle menu
+   * appears under the old man's name, and one POKé BALL is thrown at the wild
+   * mon. `name` is the thrower (Yellow's Pallet intro passes "PROF.OAK" for
+   * BATTLE_TYPE_PIKACHU, which also picks ProfOakPicBack); `failThrow` is
+   * Yellow's initial training only (#636). Red/Blue Viridian passes neither.
+   */
+  makeOldManDemo(name?: string, failThrow?: boolean): void {
+    this.demo = true;
+    this.demoName = name ?? "OLD MAN";
+    this.demoFails = !!failThrow;
+    this.oakDemo = name === "PROF.OAK";
+    // Yellow's intro runs this before the player owns a mon, so newWild flagged
+    // the battle dead; a hidden placeholder keeps the shared phases nil-safe.
+    // In Red/Blue Viridian the player has a party, so this never fires.
+    if (this.dead || !this.player) {
+      this.dead = false;
+      this.player = makeBattler(
+        this.data,
+        newMon(this.data, this.enemy.mon.species, 5, this.rng),
+        true,
+        this.save,
+      );
+    }
+  }
+
+  /**
+   * BattleState.lua:2197-2210 oldManThrow. The old man throws one POKé BALL.
+   * Red/Blue always catch (ItemUseBall's old-man branch jumps straight to
+   * .captured), and .oldManCaughtMon prints the caught text WITHOUT adding the
+   * mon to the party or the dex (item_effects.asm:568-570). No ball is
+   * consumed. result="run" only ends the demo — the party is healthy, so
+   * finish() will not force a blackout.
+   */
+  oldManThrow(): void {
+    this.phase = "messages";
+    this.afterQueue = "finish";
+    this.result = "run";
+    this.sayAuto(`${this.demoName} used\nPOKé BALL!`);
+    this.act(() => {
+      // ItemUseBall's 20-frame beat, then the toss/shake chain, exactly like
+      // throwBall's caught path (the anim rows carry the Ball_Toss cue and set
+      // enemyHidden). demoFails (#636) would break out here — Yellow only.
+      this.insertNext({ wait: 20 });
+      this.ballChain(true, 3, "POKE_BALL");
+      this.sayNext(`All right!\n${this.enemy.name} was\ncaught!`);
+    });
   }
 
   // -------------------------------------------------------------------
@@ -583,19 +651,24 @@ export class WildBattle implements EffectBattle {
       this.introBalls = false;
     });
     // StartBattle's unconditional `ld c, 40 / call DelayFrames` (:1580-1587)
-    this.queue.push({ wait: BATTLE_START_SENDOUT });
-    // the back pic walks off before "Go! X!" (:1588-1599, #317): 18 frames
-    this.queue.push({ wait: 18 });
-    this.act(() => {
-      this.showPlayerBack = false;
-      this.sendingOut = true;
-    });
-    this.say(this.sendOutText(this.player.name));
-    this.queue.push({ anim: "POOF_ANIM", attackerIsPlayer: false });
-    this.act(() => {
-      this.sendingOut = false;
-      // AnimateSendingOutMon grow-in + cry (:1604-1610) — later rung
-    });
+    if (!this.demo) {
+      this.queue.push({ wait: BATTLE_START_SENDOUT });
+      // the back pic walks off before "Go! X!" (:1588-1599, #317): 18 frames
+      this.queue.push({ wait: 18 });
+      this.act(() => {
+        this.showPlayerBack = false;
+        this.sendingOut = true;
+      });
+      this.say(this.sendOutText(this.player.name));
+      this.queue.push({ anim: "POOF_ANIM", attackerIsPlayer: false });
+      this.act(() => {
+        this.sendingOut = false;
+        // AnimateSendingOutMon grow-in + cry (:1604-1610) — later rung
+      });
+    }
+    // BATTLE_TYPE_OLD_MAN sends out no player mon; leaving showPlayerBack true
+    // keeps the player sprite + HUD hidden for the whole demo (staging.ts:99,
+    // ui.ts:162 — hidePlayer = self.demo, BattleState.lua:5397).
     this.markParticipant();
     this.phase = "messages";
     this.afterQueue = "menu";
@@ -604,6 +677,7 @@ export class WildBattle implements EffectBattle {
   /** The enemy-appears line. Wild: "X appeared!" with its cry. Trainers
    * override this for "TRAINER sent out X!" (common_text.asm). */
   enemyIntro(): void {
+    markSeen(this.save, this.enemy.mon.species); // BattleState.lua:596 — wild mon appears -> seen
     this.act(() => this.audioCues.push(`cry:${this.enemy.mon.species}`));
     this.say(`Wild ${this.enemy.name}\nappeared!`);
   }
@@ -655,6 +729,17 @@ export class WildBattle implements EffectBattle {
     }
 
     if (this.phase === "menu") {
+      // BattleState.lua:1858-1870: a demo battle reads no input. The old man
+      // hovers the menu, then opens his bag and throws. The port abstracts the
+      // scripted list menu, so the hover leads straight into oldManThrow.
+      if (this.demo) {
+        this.demoTimer += 1;
+        if (this.demoTimer > DEMO_MENU_HOLD) {
+          this.demoTimer = 0;
+          this.oldManThrow();
+        }
+        return;
+      }
       // forced replacement after a faint (ChooseNextMon :1856-1865)
       if (this.player.mon.hp <= 0) {
         if (firstHealthy(this.save.party)) {
@@ -1370,6 +1455,10 @@ export class WildBattle implements EffectBattle {
    * transfer text prints and the mon is lost (the box system is a later
    * rung; item_effects.asm:518-566 is the reference flow). */
   storeCaughtMon(): void {
+    // BattleState.lua:4451/4465 storeCaughtMon: a caught mon is marked owned
+    // (+seen) whether or not it fits the party — the mark precedes the PC
+    // transfer, so a full-party catch still fills the dex.
+    markOwned(this.save, this.enemy.mon.species);
     if (partyAdd(this.save.party, this.enemy.mon)) {
       // joined the party
     } else {

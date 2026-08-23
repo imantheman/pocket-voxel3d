@@ -51,7 +51,9 @@ export function occupied(
   ignore?: Mover,
 ): Mover | null {
   for (const e of entities) {
-    if (e !== ignore && !e.passable) {
+    // Hidden entities (a picked-up item ball, a departed rival) leave no
+    // collision — they're not drawn and shouldn't block the tile they were on.
+    if (e !== ignore && !e.passable && !(e as { hidden?: boolean }).hidden) {
       if (
         (e.cellX === cx && e.cellY === cy) ||
         (e.targetX === cx && e.targetY === cy)

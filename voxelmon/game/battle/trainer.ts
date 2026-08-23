@@ -4,7 +4,7 @@
 import { WildBattle, type BattleSave } from "./battle.ts";
 import type { VoxelmonData } from "../data.ts";
 import type { Rng } from "../rng.ts";
-import { newMon, type PartyMon } from "./mon.ts";
+import { newMon, markSeen, type PartyMon } from "./mon.ts";
 
 interface TrainerDef {
   id: string;
@@ -45,6 +45,7 @@ export class TrainerBattle extends WildBattle {
   /** Trainers send out their lead instead of it "appearing" wild
    * (common_text.asm TrainerSentOutText). */
   override enemyIntro(): void {
+    markSeen(this.save, this.enemy.mon.species); // BattleState.lua:718 — trainer lead sent out -> seen
     this.act(() => this.audioCues.push(`cry:${this.enemy.mon.species}`));
     this.say(`${this.trainerName} sent\nout ${this.enemy.name}!`);
   }
@@ -71,6 +72,7 @@ export class TrainerBattle extends WildBattle {
       return;
     }
     this.enemyIndex = this.enemyParty.indexOf(next);
+    markSeen(this.save, next.species); // BattleState.lua:3256/3945 — enemy send-out -> seen
     this.sayNext(`${this.trainerName} sent out\n${next.species}!`);
     this.act(() => this.swapEnemy(next));
   }

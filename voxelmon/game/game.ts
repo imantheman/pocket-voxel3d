@@ -41,6 +41,7 @@ import { BagState } from "./ui/bagscreen.ts";
 import { PartyState } from "./ui/partyscreen.ts";
 import { ShopState } from "./ui/shopscreen.ts";
 import { BoxState } from "./ui/boxscreen.ts";
+import { PokedexState } from "./ui/pokedexscreen.ts";
 import { encodeSave } from "./save-lua.ts";
 import { decodeSave } from "./save-read.ts";
 /** Must match Version.saveFormat in the recomp. */
@@ -234,6 +235,13 @@ class BattleGameState implements GameState, BattleSceneView {
       // heals and continues. The block below is the legacy teardown, kept for
       // its notes; the live path pops + resumes above, so blackout goes here.
       if (b.finished === "lose" && !this.loseable) this.game.blackout();
+      // OverworldController.lua:3851-3894 afterBattle: EvolveAfterBattle runs
+      // for every exit (the blackout heals first, :3882; other exits run it
+      // straight away, :3892). This call was orphaned in the dead legacy block
+      // below when the teardown moved to the pop+resume path above — without it
+      // no mon ever evolves. The evolution pages push over the overworld the
+      // battle just handed back to.
+      this.game.runEvolutions(b.leveledUp);
       return;
       // BattleState.lua:4647-4653 — teardown pops the battle screen FIRST,
       // and it is the map that holds: POST_BATTLE_RETURN before EnterMap
@@ -473,9 +481,17 @@ export class VoxelmonGame implements OverworldShell, SceneView {
    */
   blackout(): void {
     for (const mon of this.save.party) healMon(this.data, mon);
-    const heal = this.save.lastHeal;
+    const heal = this.save.lastHeal as
+      | { map: string; x: number; y: number; outdoor?: { id: string; x: number; y: number } }
+      | undefined;
     if (heal) {
       this.overworld.startWarpTo(heal.map, heal.x, heal.y, "down");
+      // startWarpTo just remembered the map we fainted on as the outdoor side;
+      // the heal point exits to the town it's IN, so restore that (setMap into
+      // the PC doesn't rewrite it, so this sticks until you walk back out).
+      if (heal.outdoor) {
+        this.overworld.rememberOutdoor(heal.outdoor.id, heal.outdoor.x, heal.outdoor.y);
+      }
     }
   }
 
@@ -713,6 +729,17 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       if (v.monPage >= 0) out.push({ page: v.monPage, x: 248, y: 140, w: 104, h: 104 });
       return out;
     }
+    if (top?.kind === "pokedex") {
+      // DexEntryMenu.lua draws the front pic top-left of the DATA page. Uses
+      // the same full-screen pic layer as the title mon; coordinates are in
+      // that layer's ~2x space (see the title mon at w/h 104). Tune the four
+      // DEX_SPRITE_* consts if it sits wrong on hardware.
+      const v = top.view();
+      if (v.mode === "entry" && v.entry && v.entry.spritePage >= 0) {
+        return [{ page: v.entry.spritePage, x: 16, y: 24, w: 104, h: 104 }];
+      }
+      return [];
+    }
     return this.overworld.picShown;
   }
 
@@ -735,6 +762,11 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     this.push(
       new StartMenuState(this as any, (act) => {
         // POKéMON and ITEM are their own screens; wired next.
+        if (act === "pokedex") {
+          // PokedexMenu.new(game, { onCancel }): B/QUIT return to the start
+          // menu, whose saved cursor is still on POKéDEX.
+          this.push(new PokedexState(this as any));
+        }
         if (act === "item") {
           this.push(new BagState(this as any));
         }
@@ -779,6 +811,11 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     return top?.kind === "party" ? top.view() : null;
   }
 
+  pokedexScreen(): unknown {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "pokedex" ? top.view() : null;
+  }
+
   summary(): unknown {
     const top = this.stack[this.stack.length - 1] as any;
     return top?.kind === "summary" ? top.view() : null;
@@ -813,6 +850,21 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     // Report the outcome so a script rewards only on a win (afterBattle).
     st.onDone = () => onDone?.(battle.finished === "win");
     st.loseable = loseable;
+    this.push(st);
+  }
+
+  /** Commands.lua:807-823 old_man_demo: the Viridian catch tutorial's
+   * BATTLE_TYPE_OLD_MAN wild battle. Built like a scripted wild battle, flagged
+   * as a demo, and pushed with an onDone that resumes the map script when it
+   * ends (battle.onFinish -> runner.resume). Nothing is kept. */
+  startOldManDemo(onDone?: () => void): void {
+    const om =
+      (this.data.field as { oldManBattle?: { species: string; level: number } } | undefined)
+        ?.oldManBattle ?? { species: "WEEDLE", level: 5 };
+    const battle = new WildBattle(this.data, this.save, this.battleRng, om.species, om.level);
+    battle.makeOldManDemo();
+    const st = new BattleGameState(this, "", 0, battle);
+    st.onDone = () => onDone?.();
     this.push(st);
   }
 

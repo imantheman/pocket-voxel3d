@@ -116,3 +116,26 @@ export function firstHealthy(party: PartyMon[]): PartyMon | null {
   }
   return null;
 }
+
+interface DexFlags {
+  seen: Record<string, boolean>;
+  owned: Record<string, boolean>;
+}
+
+/** BattleState.lua:513-515 markSeen — the dex "seen" flag, set whenever an
+ * enemy mon appears on the field. Guarded like Bryan's `if dex then` so a save
+ * whose pokedex block is missing (older import) is a no-op, not a crash. */
+export function markSeen(save: { pokedex?: DexFlags }, species: string): void {
+  const dex = save.pokedex;
+  if (dex) dex.seen[species] = true;
+}
+
+/** BattleState.lua:529-534 — the "owned" mark (a caught/received/evolved mon).
+ * Owned implies seen, so both bits are set together, as in every call site. */
+export function markOwned(save: { pokedex?: DexFlags }, species: string): void {
+  const dex = save.pokedex;
+  if (dex) {
+    dex.seen[species] = true;
+    dex.owned[species] = true;
+  }
+}

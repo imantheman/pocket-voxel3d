@@ -21,7 +21,7 @@ import { FADE_OUT_TO_WHITE } from "../rules/timing.ts";
 import type { Dir } from "./collision.ts";
 import type { NPC } from "./npc.ts";
 
-import { newMon } from "../battle/mon.ts";
+import { newMon, markOwned } from "../battle/mon.ts";
 import { martStock } from "./marts.ts";
 
 export type ScriptRow = [string, ...unknown[]];
@@ -279,6 +279,9 @@ function* give_pokemon(ctx: ScriptContext, ...args: unknown[]): Generator<void, 
   const species = args[0] as string;
   const level = (args[1] as number | undefined) ?? 5;
   const w = ctx.world as any;
+  // Commands.lua:695-696 — a received mon is owned (+seen) whether or not the
+  // party has room, so the starter and every gift fill the dex.
+  markOwned(w.save, species);
   const party = w.save.party as any[];
   if (party.length >= 6) return;
   const mon = newMon(w.data, species, level);
@@ -342,12 +345,34 @@ function* place_npc(ctx: ScriptContext, ...args: unknown[]): Generator<void, voi
   );
 }
 
+// gen1recomp Commands.lua:540-546 show_object/hide_object -> toggleObject:
+// writes save.objectToggles[map][name] (WorldAPI.lua:127-133, the same store
+// the spawn filter reads) so a CROSS-MAP toggle persists — Oak's lab hiding
+// the Viridian sleeper takes effect when Viridian is next entered — then
+// applies it live if the object is on the current map. Rows come as
+// ["<verb>", MAP, NAME]; the legacy ["<verb>", NAME] form targets current map.
+function toggleObject(ctx: ScriptContext, args: unknown[], visible: boolean): void {
+  const w = ctx.world as any;
+  const hasMap = args.length >= 2;
+  const curMap = String(w.map?.id ?? "");
+  const mapId = hasMap ? String(args[0]) : curMap;
+  const name = String(hasMap ? args[1] : args[0]);
+  const key = name.toUpperCase().replace(/^TEXT_/, "");
+  const save = w.save as { objectToggles?: Record<string, Record<string, boolean>> };
+  save.objectToggles = save.objectToggles ?? {};
+  save.objectToggles[mapId] = save.objectToggles[mapId] ?? {};
+  save.objectToggles[mapId][key] = visible;
+  // live-apply on the current map (setObjectHidden resolves by name/text);
+  // hidden is the inverse of visible
+  if (mapId === curMap) w.setObjectHidden?.(name, !visible);
+}
+
 function* hide_object(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
-  (ctx.world as any).setObjectHidden?.(args[1] ?? args[0], true);
+  toggleObject(ctx, args, false);
 }
 
 function* show_object(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
-  (ctx.world as any).setObjectHidden?.(args[1] ?? args[0], false);
+  toggleObject(ctx, args, true);
 }
 
 function* face_object(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
@@ -505,11 +530,40 @@ function* engage_trainer(ctx: ScriptContext, ...args: unknown[]): Generator<void
 function* set_heal_point(ctx: ScriptContext): Generator<void, void> {
   const w = ctx.world as any;
   const p = w.player;
-  (ctx.world.save as { lastHeal?: { map: string; x: number; y: number } }).lastHeal = {
+  const save = ctx.world.save as {
+    lastHeal?: {
+      map: string;
+      x: number;
+      y: number;
+      outdoor?: { id: string; x: number; y: number };
+    };
+    lastOutdoor?: { id: string; x: number; y: number };
+  };
+  save.lastHeal = {
     map: String(w.map?.id ?? ""),
     x: (p?.cellX as number) ?? 0,
     y: (p?.cellY as number) ?? 0,
+    // The PC door is a LAST_MAP warp — remember the outdoor map it exits to
+    // (the town you walked in from) so a blackout warp restores the right
+    // return. Without it, leaving the PC uses a stale lastOutdoor and drops
+    // you at the wrong exit (e.g. Diglett's Cave instead of Viridian City).
+    outdoor: save.lastOutdoor ? { ...save.lastOutdoor } : undefined,
   };
+}
+
+// gen1recomp Commands.lua:807-823 old_man_demo: the Viridian catch tutorial's
+// BATTLE_TYPE_OLD_MAN wild battle — the old man throws one POKé BALL at a wild
+// WEEDLE and nothing is kept. Hands off to the shell like start_battle and
+// blocks until the demo battle finishes (battle.onFinish -> runner.resume).
+// The demo battle engine is staged separately; until it lands, startOldManDemo
+// is absent and the tutorial dialogue simply continues past the demo.
+function* old_man_demo(ctx: ScriptContext): Generator<void, void> {
+  const runner = ctx.runner;
+  const w = ctx.world as any;
+  if (typeof w.startOldManDemo === "function") {
+    w.startOldManDemo(() => runner.resume());
+    yield;
+  }
 }
 
 const VERBS: Record<string, Verb> = {
@@ -551,6 +605,7 @@ const VERBS: Record<string, Verb> = {
   walk_npc,
   engage_trainer,
   set_heal_point,
+  old_man_demo,
   push_screen: noop_object,
   play_sound: noop_audio,
   play_music: noop_audio,

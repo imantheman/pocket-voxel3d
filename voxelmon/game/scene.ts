@@ -151,6 +151,7 @@ export class Scene {
   private shopSig: string | null = null;
   private boxSig: string | null = null;
   private partySig: string | null = null;
+  private dexSig: string | null = null;
   private summarySig: string | null = null;
   private uiRows: UiRowCache[] = [];
   private uiPage = -1;
@@ -796,6 +797,87 @@ export class Scene {
       // so force whatever is under it (the start menu) to redraw — its own sig
       // is unchanged from before the bag opened and would otherwise no-op.
       this.bagSig = null;
+      host.uiClear();
+      this.uiOwner = null;
+      this.menuSig = this.titleSig = this.namingSig = null;
+    }
+    // POKéDEX (pokedexscreen.ts): list / side-menu / entry, all on the tile
+    // layer; the DATA-page sprite rides the pic() layer under these tiles.
+    const dx = (view as unknown as { pokedexScreen?: () => any }).pokedexScreen?.();
+    if (dx) {
+      let sig: string;
+      if (dx.mode === "list") {
+        sig = `L,${dx.index},${dx.top},${dx.entries.length}`;
+      } else if (dx.mode === "submenu") {
+        sig = `S,${dx.index},${dx.submenuIndex}`;
+      } else {
+        const e = dx.entry;
+        sig = `E,${e ? e.name + "," + e.owned + "," + e.lines.length : "?"}`;
+      }
+      if (sig !== this.dexSig) {
+        this.dexSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        if (dx.mode === "entry" && dx.entry) {
+          const e = dx.entry;
+          // right column beside the pic; flavor text fills the lower rows
+          this.stamp(host, 9, 1, e.name);
+          this.stamp(host, 9, 3, e.no);
+          this.stamp(host, 9, 4, e.kind);
+          if (e.height) this.stamp(host, 9, 6, e.height);
+          if (e.weight) this.stamp(host, 9, 7, e.weight);
+          e.lines.forEach((ln: string, i: number) => {
+            if (i < 7) this.stamp(host, 1, 10 + i, ln);
+          });
+        } else {
+          // list box (like the bag): a scroll window of dex rows + counts
+          const X = 1, Y = 1, W = 17, H = dx.rows * 2;
+          host.uiTile(X, Y, BORDER_TL);
+          host.uiFill(X + 1, Y, W - 1, 1, BORDER_H);
+          host.uiTile(X + W, Y, BORDER_TR);
+          host.uiFill(X, Y + 1, 1, H, BORDER_V);
+          host.uiFill(X + W, Y + 1, 1, H, BORDER_V);
+          host.uiFill(X + 1, Y + 1, W - 1, H, SPACE);
+          host.uiTile(X, Y + 1 + H, BORDER_BL);
+          host.uiFill(X + 1, Y + 1 + H, W - 1, 1, BORDER_H);
+          host.uiTile(X + W, Y + 1 + H, BORDER_BR);
+          this.stamp(host, 2, 0, "POKéDEX");
+          for (let r = 0; r < dx.rows; r++) {
+            const li = dx.top + r;
+            if (li >= dx.entries.length) break;
+            const row = dx.entries[li];
+            const rowY = Y + 2 + r * 2;
+            if (row.owned) this.stamp(host, X + 2, rowY, "*"); // owned marker
+            this.stamp(host, X + 3, rowY, row.label);
+            if (li === dx.index) host.uiTile(X + 1, rowY, ARROW_CURSOR);
+          }
+          if (dx.top + dx.rows < dx.entries.length) {
+            host.uiTile(X + W - 1, Y + H, ARROW_MORE);
+          }
+          this.stamp(host, 2, Y + 2 + H, dx.footer);
+          if (dx.mode === "submenu") {
+            // DATA / CRY / QUIT popup, bottom-right (Menu tx=12,ty=8)
+            const MX = 11, MY = 8, MW = 7, MH = dx.submenu.length * 2;
+            host.uiTile(MX, MY, BORDER_TL);
+            host.uiFill(MX + 1, MY, MW - 1, 1, BORDER_H);
+            host.uiTile(MX + MW, MY, BORDER_TR);
+            host.uiFill(MX, MY + 1, 1, MH, BORDER_V);
+            host.uiFill(MX + MW, MY + 1, 1, MH, BORDER_V);
+            host.uiFill(MX + 1, MY + 1, MW - 1, MH, SPACE);
+            host.uiTile(MX, MY + 1 + MH, BORDER_BL);
+            host.uiFill(MX + 1, MY + 1 + MH, MW - 1, 1, BORDER_H);
+            host.uiTile(MX + MW, MY + 1 + MH, BORDER_BR);
+            dx.submenu.forEach((s: string, i: number) => {
+              this.stamp(host, MX + 2, MY + 2 + i * 2, s);
+              if (i === dx.submenuIndex) host.uiTile(MX + 1, MY + 2 + i * 2, ARROW_CURSOR);
+            });
+          }
+        }
+      }
+      return;
+    }
+    if (this.dexSig !== null) {
+      this.dexSig = null;
       host.uiClear();
       this.uiOwner = null;
       this.menuSig = this.titleSig = this.namingSig = null;

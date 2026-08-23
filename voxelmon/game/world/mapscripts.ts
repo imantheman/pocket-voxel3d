@@ -298,6 +298,74 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     },
   },
 
+  // data/scripts/story.lua M.VIRIDIAN_CITY (scripts/ViridianCity.asm): the two
+  // old men. The GAMBLER_ASLEEP at (18,9) only ever grumbles and shoves you
+  // back down; the coffee ask + catch tutorial belong to the walking GAMBLER
+  // at (17,5), swapped in by the Pokédex (data/scripts/oaks_lab.lua), not by
+  // talking to either. The north corridor is gated on EVENT_GOT_POKEDEX.
+  VIRIDIAN_CITY: {
+    talk: {
+      // story.lua TEXT_VIRIDIANCITY_OLD_MAN_SLEEPY: grumble, then shove the
+      // player one tile south. He never wakes, moves or hides.
+      TEXT_VIRIDIANCITY_OLD_MAN_SLEEPY: [
+        ["show_text", "_ViridianCityOldManSleepyPrivatePropertyText"], // 1
+        ["move_player", "down", 1], //                                    2
+      ],
+      // story.lua TEXT_VIRIDIANCITY_OLD_MAN (the walker, shown once the
+      // Pokédex swaps him in). "Are you in a hurry?" — YES (jump 8) brushes
+      // you off with TimeIsMoney; NO leads into the catch tutorial: explain,
+      // demo a catch on a wild WEEDLE (old_man_demo, BATTLE_TYPE_OLD_MAN),
+      // then the YouNeedToWeakenTheTarget comment AFTER the demo
+      // (ViridianCityOldManEndCatchTrainingScript), row 9 = end.
+      TEXT_VIRIDIANCITY_OLD_MAN: [
+        ["face_player"], //                                                 1
+        ["ask", "_ViridianCityOldManHadMyCoffeeNowText"], //                2
+        ["jump_if_true", 8], //                                             3 (yes = in a hurry)
+        ["show_text", "_ViridianCityOldManKnowHowToCatchPokemonText"], //   4
+        ["old_man_demo"], //                                                5
+        ["show_text", "_ViridianCityOldManYouNeedToWeakenTheTargetText"], //6
+        ["jump", 9], //                                                     7
+        ["show_text", "_ViridianCityOldManTimeIsMoneyText"], //             8 (9 = end)
+      ],
+    },
+    // story.lua VIRIDIAN_CITY.onEnter (#234) folded into onStep (the port has
+    // no onEnter dispatch, the same adaptation VIRIDIAN_MART/OAKS_LAB use):
+    // OaksLabOakGivesPokedexScript sets EVENT_GOT_POKEDEX and, with no branch
+    // between, HideObject TOGGLE_LYING_OLD_MAN + ShowObject TOGGLE_OLD_MAN, so
+    // the one flag settles both toggles. Re-deriving it on entry fixes a save
+    // that holds the flag but was never standing here when it fired (an
+    // imported .sav, whose codec leaves objectToggles empty). Side effect
+    // only — returns null so the north-corridor block below still runs.
+    onStep: (ow: any, save: any) => {
+      const f = save?.flags ?? {};
+      if (f.EVENT_GOT_POKEDEX) {
+        const w = ow as any;
+        const s = w.save as { objectToggles?: Record<string, Record<string, boolean>> };
+        s.objectToggles = s.objectToggles ?? {};
+        const t = (s.objectToggles.VIRIDIAN_CITY = s.objectToggles.VIRIDIAN_CITY ?? {});
+        if (t.VIRIDIANCITY_OLD_MAN_SLEEPY !== false || t.VIRIDIANCITY_OLD_MAN !== true) {
+          t.VIRIDIANCITY_OLD_MAN_SLEEPY = false; // hidden
+          t.VIRIDIANCITY_OLD_MAN = true; //        shown
+          w.setObjectHidden?.("VIRIDIANCITY_OLD_MAN_SLEEPY", true);
+          w.setObjectHidden?.("VIRIDIANCITY_OLD_MAN", false);
+        }
+        return null;
+      }
+      // ViridianCityCheckGotPokedexScript: without the Pokédex the block fires
+      // on exactly (19,9) — the gap east of the sleeper (18,9) that leads
+      // north — printing the private-property line and shoving you back down.
+      const px = ow?.player?.cellX;
+      const py = ow?.player?.cellY;
+      if (px === 19 && py === 9) {
+        return [
+          ["show_text", "_ViridianCityOldManSleepyPrivatePropertyText"],
+          ["move_player", "down", 1],
+        ] as ScriptRow[];
+      }
+      return null;
+    },
+  },
+
   // oaks_lab.lua onStep: Blue cuts you off on the way out for the first
   // rival battle. His party counters the starter you took (parties 1/2/3 in
   // trainers.json are SQUIRTLE/BULBASAUR/CHARMANDER).

@@ -1778,8 +1778,22 @@ function firstHealthy(party) {
   }
   return null;
 }
+function markSeen(save, species) {
+  const dex = save.pokedex;
+  if (dex)
+    dex.seen[species] = true;
+}
+function markOwned(save, species) {
+  const dex = save.pokedex;
+  if (dex) {
+    dex.seen[species] = true;
+    dex.owned[species] = true;
+  }
+}
 
 // voxelmon/game/battle/battle.ts
+var DEMO_MENU_HOLD = 130;
+
 class WildBattle {
   kind = "wild";
   data;
@@ -1810,6 +1824,11 @@ class WildBattle {
   blackedOut = false;
   enemyHidden = false;
   lastBall = null;
+  demo = false;
+  demoName = "OLD MAN";
+  demoFails = false;
+  oakDemo = false;
+  demoTimer = 0;
   nextInsert = 0;
   waitFrames = 0;
   draining = false;
@@ -1852,6 +1871,30 @@ class WildBattle {
     if (this.dead) {
       this.player = this.enemy;
     }
+  }
+  makeOldManDemo(name, failThrow) {
+    this.demo = true;
+    this.demoName = name ?? "OLD MAN";
+    this.demoFails = !!failThrow;
+    this.oakDemo = name === "PROF.OAK";
+    if (this.dead || !this.player) {
+      this.dead = false;
+      this.player = makeBattler(this.data, newMon(this.data, this.enemy.mon.species, 5, this.rng), true, this.save);
+    }
+  }
+  oldManThrow() {
+    this.phase = "messages";
+    this.afterQueue = "finish";
+    this.result = "run";
+    this.sayAuto(`${this.demoName} used
+POKé BALL!`);
+    this.act(() => {
+      this.insertNext({ wait: 20 });
+      this.ballChain(true, 3, "POKE_BALL");
+      this.sayNext(`All right!
+${this.enemy.name} was
+caught!`);
+    });
   }
   say(text) {
     this.queue.push({ text });
@@ -2138,22 +2181,25 @@ out!`);
     this.act(() => {
       this.introBalls = false;
     });
-    this.queue.push({ wait: BATTLE_START_SENDOUT });
-    this.queue.push({ wait: 18 });
-    this.act(() => {
-      this.showPlayerBack = false;
-      this.sendingOut = true;
-    });
-    this.say(this.sendOutText(this.player.name));
-    this.queue.push({ anim: "POOF_ANIM", attackerIsPlayer: false });
-    this.act(() => {
-      this.sendingOut = false;
-    });
+    if (!this.demo) {
+      this.queue.push({ wait: BATTLE_START_SENDOUT });
+      this.queue.push({ wait: 18 });
+      this.act(() => {
+        this.showPlayerBack = false;
+        this.sendingOut = true;
+      });
+      this.say(this.sendOutText(this.player.name));
+      this.queue.push({ anim: "POOF_ANIM", attackerIsPlayer: false });
+      this.act(() => {
+        this.sendingOut = false;
+      });
+    }
     this.markParticipant();
     this.phase = "messages";
     this.afterQueue = "menu";
   }
   enemyIntro() {
+    markSeen(this.save, this.enemy.mon.species);
     this.act(() => this.audioCues.push(`cry:${this.enemy.mon.species}`));
     this.say(`Wild ${this.enemy.name}
 appeared!`);
@@ -2199,6 +2245,14 @@ Get'm! ${name}!`;
       return;
     }
     if (this.phase === "menu") {
+      if (this.demo) {
+        this.demoTimer += 1;
+        if (this.demoTimer > DEMO_MENU_HOLD) {
+          this.demoTimer = 0;
+          this.oldManThrow();
+        }
+        return;
+      }
       if (this.player.mon.hp <= 0) {
         if (firstHealthy(this.save.party)) {
           this.openParty(true);
@@ -2804,6 +2858,7 @@ caught!`);
     });
   }
   storeCaughtMon() {
+    markOwned(this.save, this.enemy.mon.species);
     if (partyAdd(this.save.party, this.enemy.mon)) {} else {
       this.sayNext(`${this.enemy.name} was
 transferred to
@@ -2924,6 +2979,7 @@ class TrainerBattle extends WildBattle {
     this.enemyIndex = 0;
   }
   enemyIntro() {
+    markSeen(this.save, this.enemy.mon.species);
     this.act(() => this.audioCues.push(`cry:${this.enemy.mon.species}`));
     this.say(`${this.trainerName} sent
 out ${this.enemy.name}!`);
@@ -2951,6 +3007,7 @@ $${money}!`);
       return;
     }
     this.enemyIndex = this.enemyParty.indexOf(next);
+    markSeen(this.save, next.species);
     this.sayNext(`${this.trainerName} sent out
 ${next.species}!`);
     this.act(() => this.swapEnemy(next));
@@ -3657,7 +3714,7 @@ function target(cx, cy, dir) {
 }
 function occupied(entities, cx, cy, ignore) {
   for (const e of entities) {
-    if (e !== ignore && !e.passable) {
+    if (e !== ignore && !e.passable && !e.hidden) {
       if (e.cellX === cx && e.cellY === cy || e.targetX === cx && e.targetY === cy) {
         return e;
       }
@@ -4261,6 +4318,49 @@ var MAP_SCRIPTS = {
       ];
     }
   },
+  VIRIDIAN_CITY: {
+    talk: {
+      TEXT_VIRIDIANCITY_OLD_MAN_SLEEPY: [
+        ["show_text", "_ViridianCityOldManSleepyPrivatePropertyText"],
+        ["move_player", "down", 1]
+      ],
+      TEXT_VIRIDIANCITY_OLD_MAN: [
+        ["face_player"],
+        ["ask", "_ViridianCityOldManHadMyCoffeeNowText"],
+        ["jump_if_true", 8],
+        ["show_text", "_ViridianCityOldManKnowHowToCatchPokemonText"],
+        ["old_man_demo"],
+        ["show_text", "_ViridianCityOldManYouNeedToWeakenTheTargetText"],
+        ["jump", 9],
+        ["show_text", "_ViridianCityOldManTimeIsMoneyText"]
+      ]
+    },
+    onStep: (ow, save) => {
+      const f = save?.flags ?? {};
+      if (f.EVENT_GOT_POKEDEX) {
+        const w = ow;
+        const s = w.save;
+        s.objectToggles = s.objectToggles ?? {};
+        const t = s.objectToggles.VIRIDIAN_CITY = s.objectToggles.VIRIDIAN_CITY ?? {};
+        if (t.VIRIDIANCITY_OLD_MAN_SLEEPY !== false || t.VIRIDIANCITY_OLD_MAN !== true) {
+          t.VIRIDIANCITY_OLD_MAN_SLEEPY = false;
+          t.VIRIDIANCITY_OLD_MAN = true;
+          w.setObjectHidden?.("VIRIDIANCITY_OLD_MAN_SLEEPY", true);
+          w.setObjectHidden?.("VIRIDIANCITY_OLD_MAN", false);
+        }
+        return null;
+      }
+      const px = ow?.player?.cellX;
+      const py = ow?.player?.cellY;
+      if (px === 19 && py === 9) {
+        return [
+          ["show_text", "_ViridianCityOldManSleepyPrivatePropertyText"],
+          ["move_player", "down", 1]
+        ];
+      }
+      return null;
+    }
+  },
   OAKS_LAB_ONSTEP_HOST: {
     onStep: (ow, save) => {
       const f = save?.flags ?? {};
@@ -4814,6 +4914,7 @@ function* give_pokemon(ctx, ...args) {
   const species = args[0];
   const level = args[1] ?? 5;
   const w = ctx.world;
+  markOwned(w.save, species);
   const party = w.save.party;
   if (party.length >= 6)
     return;
@@ -4864,11 +4965,25 @@ function* move_player_to(ctx, ...args) {
 function* place_npc(ctx, ...args) {
   ctx.world.placeNpc?.(args[0], args[1], args[2], args[3] ?? "down");
 }
+function toggleObject(ctx, args, visible) {
+  const w = ctx.world;
+  const hasMap = args.length >= 2;
+  const curMap = String(w.map?.id ?? "");
+  const mapId = hasMap ? String(args[0]) : curMap;
+  const name = String(hasMap ? args[1] : args[0]);
+  const key = name.toUpperCase().replace(/^TEXT_/, "");
+  const save = w.save;
+  save.objectToggles = save.objectToggles ?? {};
+  save.objectToggles[mapId] = save.objectToggles[mapId] ?? {};
+  save.objectToggles[mapId][key] = visible;
+  if (mapId === curMap)
+    w.setObjectHidden?.(name, !visible);
+}
 function* hide_object(ctx, ...args) {
-  ctx.world.setObjectHidden?.(args[1] ?? args[0], true);
+  toggleObject(ctx, args, false);
 }
 function* show_object(ctx, ...args) {
-  ctx.world.setObjectHidden?.(args[1] ?? args[0], false);
+  toggleObject(ctx, args, true);
 }
 function* face_object(ctx, ...args) {
   ctx.world.faceObject?.(args[0], args[1] ?? "down");
@@ -4965,11 +5080,21 @@ function* engage_trainer(ctx, ...args) {
 function* set_heal_point(ctx) {
   const w = ctx.world;
   const p = w.player;
-  ctx.world.save.lastHeal = {
+  const save = ctx.world.save;
+  save.lastHeal = {
     map: String(w.map?.id ?? ""),
     x: p?.cellX ?? 0,
-    y: p?.cellY ?? 0
+    y: p?.cellY ?? 0,
+    outdoor: save.lastOutdoor ? { ...save.lastOutdoor } : undefined
   };
+}
+function* old_man_demo(ctx) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  if (typeof w.startOldManDemo === "function") {
+    w.startOldManDemo(() => runner.resume());
+    yield;
+  }
 }
 var VERBS = {
   show_text,
@@ -5010,6 +5135,7 @@ var VERBS = {
   walk_npc,
   engage_trainer,
   set_heal_point,
+  old_man_demo,
   push_screen: noop_object,
   play_sound: noop_audio,
   play_music: noop_audio,
@@ -5229,6 +5355,13 @@ function computeNeighbors(maps, rootId, hops) {
   }
   return out;
 }
+function objectToggleKey(nameOrObj) {
+  const raw = typeof nameOrObj === "string" ? nameOrObj : nameOrObj.name ?? nameOrObj.text ?? "";
+  return String(raw).toUpperCase().replace(/^TEXT_/, "");
+}
+var TOGGLE_DEFAULT_HIDDEN = {
+  VIRIDIAN_CITY: { VIRIDIANCITY_OLD_MAN: true }
+};
 
 class Overworld {
   isCooked(mapId) {
@@ -5314,8 +5447,17 @@ class Overworld {
     console.log("NPCS " + this.npcs.map((n) => JSON.stringify(n, (k, v) => typeof v === "object" && v !== null && k !== "" ? undefined : v)).join(" | "));
   }
   objectVisible(obj) {
-    if (obj.hidden)
-      return false;
+    const key = objectToggleKey(obj);
+    const toggles = this.save?.objectToggles?.[this.map.id];
+    if (toggles && Object.prototype.hasOwnProperty.call(toggles, key)) {
+      if (!toggles[key])
+        return false;
+    } else {
+      if (TOGGLE_DEFAULT_HIDDEN[this.map.id]?.[key])
+        return false;
+      if (obj.hidden)
+        return false;
+    }
     if (obj.item && this.save?.flags?.[itemBallFlag(this.map.id, obj.text)]) {
       return false;
     }
@@ -5646,7 +5788,7 @@ class Overworld {
     return null;
   }
   npcAtCell(cx, cy) {
-    return this.npcs.find((npc) => npc.cellX === cx && npc.cellY === cy || npc.targetX === cx && npc.targetY === cy);
+    return this.npcs.find((npc) => !npc.hidden && (npc.cellX === cx && npc.cellY === cy || npc.targetX === cx && npc.targetY === cy));
   }
   onStepComplete() {
     if (!this.runner.isRunning()) {
@@ -5954,6 +6096,14 @@ class Overworld {
     else
       onDone?.(false);
   }
+  startOldManDemo(onDone) {
+    const self = this;
+    const shell = self.shell ?? self.game ?? self.host ?? null;
+    if (shell?.startOldManDemo)
+      shell.startOldManDemo(onDone);
+    else
+      onDone?.();
+  }
   movePlayerTo(tx, ty, onDone) {
     const p = this.player;
     const path = this.findPath(p.cellX ?? 0, p.cellY ?? 0, tx, ty, p);
@@ -6130,6 +6280,7 @@ class Scene {
   shopSig = null;
   boxSig = null;
   partySig = null;
+  dexSig = null;
   summarySig = null;
   uiRows = [];
   uiPage = -1;
@@ -6708,6 +6859,89 @@ class Scene {
     }
     if (this.bagSig !== null) {
       this.bagSig = null;
+      host.uiClear();
+      this.uiOwner = null;
+      this.menuSig = this.titleSig = this.namingSig = null;
+    }
+    const dx = view.pokedexScreen?.();
+    if (dx) {
+      let sig;
+      if (dx.mode === "list") {
+        sig = `L,${dx.index},${dx.top},${dx.entries.length}`;
+      } else if (dx.mode === "submenu") {
+        sig = `S,${dx.index},${dx.submenuIndex}`;
+      } else {
+        const e = dx.entry;
+        sig = `E,${e ? e.name + "," + e.owned + "," + e.lines.length : "?"}`;
+      }
+      if (sig !== this.dexSig) {
+        this.dexSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        if (dx.mode === "entry" && dx.entry) {
+          const e = dx.entry;
+          this.stamp(host, 9, 1, e.name);
+          this.stamp(host, 9, 3, e.no);
+          this.stamp(host, 9, 4, e.kind);
+          if (e.height)
+            this.stamp(host, 9, 6, e.height);
+          if (e.weight)
+            this.stamp(host, 9, 7, e.weight);
+          e.lines.forEach((ln, i) => {
+            if (i < 7)
+              this.stamp(host, 1, 10 + i, ln);
+          });
+        } else {
+          const X = 1, Y = 1, W = 17, H = dx.rows * 2;
+          host.uiTile(X, Y, BORDER_TL);
+          host.uiFill(X + 1, Y, W - 1, 1, BORDER_H);
+          host.uiTile(X + W, Y, BORDER_TR);
+          host.uiFill(X, Y + 1, 1, H, BORDER_V);
+          host.uiFill(X + W, Y + 1, 1, H, BORDER_V);
+          host.uiFill(X + 1, Y + 1, W - 1, H, SPACE);
+          host.uiTile(X, Y + 1 + H, BORDER_BL);
+          host.uiFill(X + 1, Y + 1 + H, W - 1, 1, BORDER_H);
+          host.uiTile(X + W, Y + 1 + H, BORDER_BR);
+          this.stamp(host, 2, 0, "POKéDEX");
+          for (let r = 0;r < dx.rows; r++) {
+            const li = dx.top + r;
+            if (li >= dx.entries.length)
+              break;
+            const row = dx.entries[li];
+            const rowY = Y + 2 + r * 2;
+            if (row.owned)
+              this.stamp(host, X + 2, rowY, "*");
+            this.stamp(host, X + 3, rowY, row.label);
+            if (li === dx.index)
+              host.uiTile(X + 1, rowY, ARROW_CURSOR);
+          }
+          if (dx.top + dx.rows < dx.entries.length) {
+            host.uiTile(X + W - 1, Y + H, ARROW_MORE);
+          }
+          this.stamp(host, 2, Y + 2 + H, dx.footer);
+          if (dx.mode === "submenu") {
+            const MX = 11, MY = 8, MW = 7, MH = dx.submenu.length * 2;
+            host.uiTile(MX, MY, BORDER_TL);
+            host.uiFill(MX + 1, MY, MW - 1, 1, BORDER_H);
+            host.uiTile(MX + MW, MY, BORDER_TR);
+            host.uiFill(MX, MY + 1, 1, MH, BORDER_V);
+            host.uiFill(MX + MW, MY + 1, 1, MH, BORDER_V);
+            host.uiFill(MX + 1, MY + 1, MW - 1, MH, SPACE);
+            host.uiTile(MX, MY + 1 + MH, BORDER_BL);
+            host.uiFill(MX + 1, MY + 1 + MH, MW - 1, 1, BORDER_H);
+            host.uiTile(MX + MW, MY + 1 + MH, BORDER_BR);
+            dx.submenu.forEach((s, i) => {
+              this.stamp(host, MX + 2, MY + 2 + i * 2, s);
+              if (i === dx.submenuIndex)
+                host.uiTile(MX + 1, MY + 2 + i * 2, ARROW_CURSOR);
+            });
+          }
+        }
+      }
+      return;
+    }
+    if (this.dexSig !== null) {
+      this.dexSig = null;
       host.uiClear();
       this.uiOwner = null;
       this.menuSig = this.titleSig = this.namingSig = null;
@@ -8029,6 +8263,185 @@ Bye ${this.monName(mon)}!`, "release-list");
   }
 }
 
+// voxelmon/game/ui/pokedexscreen.ts
+var ROWS4 = 7;
+class PokedexState {
+  game;
+  onCancel;
+  kind = "pokedex";
+  mode = "list";
+  index = 0;
+  top = 0;
+  submenuIndex = 0;
+  entrySpecies = null;
+  entries = [];
+  seen = 0;
+  owned = 0;
+  digits;
+  static SUBMENU = ["DATA", "CRY", "QUIT"];
+  constructor(game, onCancel) {
+    this.game = game;
+    this.onCancel = onCancel;
+    const data = game.data;
+    const dex = game.save?.pokedex ?? { seen: {}, owned: {} };
+    const constants = data.constants ?? {};
+    this.digits = constants.dexDigits ?? 3;
+    const size = constants.dexSize ?? 151;
+    const byDex = {};
+    const mons = data.pokemon;
+    for (const id in mons) {
+      const def = mons[id];
+      if (def?.dex)
+        byDex[def.dex] = def;
+    }
+    for (let n = 1;n <= size; n++) {
+      const def = byDex[n];
+      if (!def)
+        continue;
+      const isOwned = !!dex.owned?.[def.id];
+      const isSeen = isOwned || !!dex.seen?.[def.id];
+      if (isOwned)
+        this.owned += 1;
+      if (isSeen)
+        this.seen += 1;
+      const num = String(n).padStart(this.digits, "0");
+      this.entries.push({
+        n,
+        label: isSeen ? `${num} ${def.name}` : `${num} -----`,
+        owned: isOwned,
+        value: isSeen ? def.id : null
+      });
+    }
+  }
+  update() {
+    const p = this.game.input.pressed;
+    if (this.mode === "entry") {
+      if (p.a || p.b)
+        this.mode = "submenu";
+      return;
+    }
+    if (this.mode === "submenu")
+      return this.updateSubmenu(p);
+    this.updateList(p);
+  }
+  updateList(p) {
+    const n = this.entries.length;
+    if (n === 0) {
+      if (p.a || p.b)
+        this.close();
+      return;
+    }
+    if (p.up)
+      this.index = Math.max(0, this.index - 1);
+    else if (p.down)
+      this.index = Math.min(n - 1, this.index + 1);
+    else if (p.left)
+      this.index = Math.max(0, this.index - ROWS4);
+    else if (p.right)
+      this.index = Math.min(n - 1, this.index + ROWS4);
+    this.syncScroll();
+    if (p.b) {
+      this.close();
+      return;
+    }
+    if (p.a) {
+      if (this.entries[this.index]?.value) {
+        this.submenuIndex = 0;
+        this.mode = "submenu";
+      }
+    }
+  }
+  updateSubmenu(p) {
+    const items = PokedexState.SUBMENU;
+    if (p.up)
+      this.submenuIndex = (this.submenuIndex + items.length - 1) % items.length;
+    if (p.down)
+      this.submenuIndex = (this.submenuIndex + 1) % items.length;
+    if (p.b) {
+      this.mode = "list";
+      return;
+    }
+    if (!p.a)
+      return;
+    const value = this.entries[this.index]?.value;
+    if (!value) {
+      this.mode = "list";
+      return;
+    }
+    switch (items[this.submenuIndex]) {
+      case "DATA":
+        this.entrySpecies = value;
+        this.mode = "entry";
+        break;
+      case "CRY":
+        this.game.playCry?.(value);
+        break;
+      case "QUIT":
+        this.close();
+        break;
+    }
+  }
+  close() {
+    this.game.pop();
+    if (this.onCancel)
+      this.onCancel();
+  }
+  syncScroll() {
+    if (this.index < this.top)
+      this.top = this.index;
+    if (this.index >= this.top + ROWS4)
+      this.top = this.index - ROWS4 + 1;
+  }
+  buildEntry() {
+    const id = this.entrySpecies;
+    if (!id)
+      return null;
+    const def = this.game.data.pokemon[id];
+    if (!def)
+      return null;
+    const e = def.dexEntry ?? {};
+    const owned = !!this.game.save?.pokedex?.owned?.[id];
+    const num = String(def.dex ?? 0).padStart(this.digits, "0");
+    let height = null;
+    let weight = null;
+    if (owned && e.heightFt !== undefined) {
+      height = `HT ${e.heightFt}'${String(e.heightIn ?? 0).padStart(2, "0")}"`;
+      weight = `WT ${((e.weight ?? 0) / 10).toFixed(1)}lb`;
+    }
+    let lines = ["Data unknown."];
+    const textStore = this.game.data.text;
+    const raw = owned && e.text ? textStore?.[e.text] ?? e.text : null;
+    if (raw) {
+      lines = String(raw).replace(/[\f\v]/g, `
+`).split(`
+`).filter((l) => l.length > 0);
+    }
+    return {
+      name: def.name,
+      no: `No.${num}`,
+      kind: e.kind ?? "?",
+      owned,
+      height,
+      weight,
+      lines,
+      spritePage: picPageFor(this.game.data, id)
+    };
+  }
+  view() {
+    return {
+      mode: this.mode,
+      rows: ROWS4,
+      top: this.top,
+      index: this.index,
+      entries: this.entries,
+      footer: `SEEN ${String(this.seen).padStart(3)}  OWN ${String(this.owned).padStart(3)}`,
+      submenuIndex: this.submenuIndex,
+      submenu: PokedexState.SUBMENU,
+      entry: this.mode === "entry" ? this.buildEntry() : null
+    };
+  }
+}
+
 // voxelmon/game/save-lua.ts
 function quote(s) {
   let out = '"';
@@ -8373,6 +8786,7 @@ class BattleGameState {
         done();
       if (b.finished === "lose" && !this.loseable)
         this.game.blackout();
+      this.game.runEvolutions(b.leveledUp);
       return;
       this.game.pop();
       if (b.finished === "lose")
@@ -8513,6 +8927,9 @@ class VoxelmonGame {
     const heal = this.save.lastHeal;
     if (heal) {
       this.overworld.startWarpTo(heal.map, heal.x, heal.y, "down");
+      if (heal.outdoor) {
+        this.overworld.rememberOutdoor(heal.outdoor.id, heal.outdoor.x, heal.outdoor.y);
+      }
     }
   }
   tick(buttons) {
@@ -8701,6 +9118,13 @@ ${mdef.name}!`, () => step(i + 1));
         out.push({ page: v.monPage, x: 248, y: 140, w: 104, h: 104 });
       return out;
     }
+    if (top?.kind === "pokedex") {
+      const v = top.view();
+      if (v.mode === "entry" && v.entry && v.entry.spritePage >= 0) {
+        return [{ page: v.entry.spritePage, x: 16, y: 24, w: 104, h: 104 }];
+      }
+      return [];
+    }
     return this.overworld.picShown;
   }
   openShop(stock, onQuit) {
@@ -8714,6 +9138,9 @@ ${mdef.name}!`, () => step(i + 1));
   }
   openStartMenu() {
     this.push(new StartMenuState(this, (act) => {
+      if (act === "pokedex") {
+        this.push(new PokedexState(this));
+      }
       if (act === "item") {
         this.push(new BagState(this));
       }
@@ -8752,6 +9179,10 @@ ${mdef.name}!`, () => step(i + 1));
     const top = this.stack[this.stack.length - 1];
     return top?.kind === "party" ? top.view() : null;
   }
+  pokedexScreen() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "pokedex" ? top.view() : null;
+  }
   summary() {
     const top = this.stack[this.stack.length - 1];
     return top?.kind === "summary" ? top.view() : null;
@@ -8776,6 +9207,14 @@ ${mdef.name}!`, () => step(i + 1));
     const st = new BattleGameState(this, "", 0, battle);
     st.onDone = () => onDone?.(battle.finished === "win");
     st.loseable = loseable;
+    this.push(st);
+  }
+  startOldManDemo(onDone) {
+    const om = this.data.field?.oldManBattle ?? { species: "WEEDLE", level: 5 };
+    const battle = new WildBattle(this.data, this.save, this.battleRng, om.species, om.level);
+    battle.makeOldManDemo();
+    const st = new BattleGameState(this, "", 0, battle);
+    st.onDone = () => onDone?.();
     this.push(st);
   }
   naming() {

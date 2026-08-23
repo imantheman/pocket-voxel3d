@@ -49,7 +49,15 @@ export interface SaveSlice {
   bagOrder?: string[];
   player: { name: string; rival: string };
   lastOutdoor?: LastOutdoor;
-  lastHeal?: { map: string; x: number; y: number };
+  lastHeal?: { map: string; x: number; y: number; outdoor?: LastOutdoor };
+  /**
+   * gen1recomp WorldAPI.lua:125-133 / the wToggleableObjectFlags array: per
+   * map, per object name, an explicit visible flag written by ShowObject /
+   * HideObject (Commands.lua:540-546). Present entry wins over the compiled-in
+   * default, so a cross-map toggle (Oak's lab hiding the Viridian sleeper)
+   * persists to when that map is next entered. true = shown, false = hidden.
+   */
+  objectToggles?: Record<string, Record<string, boolean>>;
 }
 
 /** What the overworld needs from the game shell (game.ts implements it). */
@@ -146,6 +154,26 @@ export function computeNeighbors(
   }
   return out;
 }
+
+// The stable key for the object-toggle store: an object_event name with any
+// TEXT_ prefix stripped, so a cooked object (name = "VIRIDIANCITY_OLD_MAN")
+// and a script's ShowObject/HideObject argument (either the name or its
+// TEXT_* const) resolve to the same slot in save.objectToggles.
+export function objectToggleKey(nameOrObj: string | { name?: string; text?: string }): string {
+  const raw =
+    typeof nameOrObj === "string" ? nameOrObj : nameOrObj.name ?? nameOrObj.text ?? "";
+  return String(raw).toUpperCase().replace(/^TEXT_/, "");
+}
+
+// gen1recomp src/save_convert/data/toggle_objects.lua bits 1-2: the Viridian
+// old-man pair's compiled-in visibility (there, `true` = default VISIBLE). The
+// voxel cooker doesn't emit those default-hidden bits, so only the entry that
+// must start hidden is seeded — the walking old man at (17,5), who the Pokédex
+// swap (data/scripts/oaks_lab.lua) shows once the parcel is delivered. The
+// sleeper stays on his compiled default (visible) and needs no entry.
+const TOGGLE_DEFAULT_HIDDEN: Record<string, Record<string, boolean>> = {
+  VIRIDIAN_CITY: { VIRIDIANCITY_OLD_MAN: true },
+};
 
 export class Overworld implements ScriptWorld {
   /** The content-boundary test: a map outside the pak's cooked set exists
@@ -268,11 +296,25 @@ export class Overworld implements ScriptWorld {
       JSON.stringify(n, (k, v) => (typeof v === "object" && v !== null && k !== "" ? undefined : v))).join(" | "));
   }
 
-  // OverworldController.lua:110 objectVisible — the spawn filter. The slice
-  // carries only the `hidden` gate (toggles/items-taken/defeated need save
-  // machinery outside this slice).
+  // OverworldController.lua:110-114 objectVisible — the spawn filter. A
+  // save-backed toggle (save.objectToggles[map][name]) wins over the
+  // compiled-in default, the way IsObjectHidden reads wToggleableObjectFlags,
+  // so a persisted ShowObject/HideObject settles here at spawn.
   private objectVisible(obj: MapObject): boolean {
-    if ((obj as MapObject & { hidden?: boolean }).hidden) return false;
+    const key = objectToggleKey(obj);
+    const toggles = this.save?.objectToggles?.[this.map.id];
+    if (toggles && Object.prototype.hasOwnProperty.call(toggles, key)) {
+      // an explicit toggle decides visibility outright (an item ball that was
+      // shown again would still respect its pickup flag below)
+      if (!toggles[key]) return false;
+    } else {
+      // no toggle recorded -> the compiled-in default. The voxel cooker does
+      // not carry pokered's toggleable_objects default-hidden bits, so the
+      // entries this build needs are seeded (save_convert/data/toggle_objects
+      // .lua): the Viridian walker defaults hidden until the Pokédex swap.
+      if (TOGGLE_DEFAULT_HIDDEN[this.map.id]?.[key]) return false;
+      if ((obj as MapObject & { hidden?: boolean }).hidden) return false;
+    }
     // A collected item ball stays gone across reloads: its pickup flag hides
     // it at spawn the way pokered's missable-object flag keeps it despawned.
     if (obj.item && this.save?.flags?.[itemBallFlag(this.map.id, obj.text)]) {
@@ -741,7 +783,8 @@ export class Overworld implements ScriptWorld {
   npcAtCell(cx: number, cy: number): NPC | undefined {
     return this.npcs.find(
       (npc) =>
-        (npc.cellX === cx && npc.cellY === cy) || (npc.targetX === cx && npc.targetY === cy),
+        !(npc as { hidden?: boolean }).hidden &&
+        ((npc.cellX === cx && npc.cellY === cy) || (npc.targetX === cx && npc.targetY === cy)),
     );
   }
 
@@ -1163,6 +1206,15 @@ export class Overworld implements ScriptWorld {
     const shell = self.shell ?? self.game ?? self.host ?? null;
     if (shell?.startTrainerBattle) shell.startTrainerBattle(id, idx, name, onDone, loseable);
     else onDone?.(false);
+  }
+
+  /** old_man_demo hand-off (Commands.lua:807-823): delegate to the shell, the
+   * same way startTrainerBattle does. onDone resumes the map script. */
+  startOldManDemo(onDone?: () => void): void {
+    const self = this as any;
+    const shell = self.shell ?? self.game ?? self.host ?? null;
+    if (shell?.startOldManDemo) shell.startOldManDemo(onDone);
+    else onDone?.();
   }
 
   /** Walk the player to a tile along a real path. */

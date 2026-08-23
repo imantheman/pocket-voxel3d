@@ -44,34 +44,73 @@ extern "C" {
 
 
 
-/// One pak per map on the card: memory scales with the biggest single map
-/// (~12 MB) instead of the total, so the map count is no longer capped.
-static mut PAK_BUF: Option<Box<[u8]>> = None;
-static mut PAK_CUR: Option<pak::Pak<'static>> = None;
-static mut PAK_NAME: String = String::new();
+/// Resident pak cache: front is the current map; the rest are recently-visited
+/// maps kept so backtracking skips the SD re-read. Total stays under
+/// PAK_CACHE_BUDGET_KB, which is below the largest single pak — so the cache
+/// never raises peak pak memory past what already loads today, and a map
+/// bigger than the budget evicts everything and loads alone, exactly as the
+/// single-pak design did. Bump the budget on hardware if there's headroom.
+struct CachedPak {
+    pak: pak::Pak<'static>, // borrows buf; declared first so it drops first
+    buf: Box<[u8]>,
+    name: String,
+    kb: usize,
+}
+static mut PAK_CACHE: Vec<CachedPak> = Vec::new();
+const PAK_CACHE_BUDGET_KB: usize = 24 * 1024;
+
+#[allow(static_mut_refs)]
+unsafe fn cache_total_kb() -> usize {
+    PAK_CACHE.iter().map(|c| c.kb).sum()
+}
 
 #[allow(static_mut_refs)]
 unsafe fn load_map_pak(name: &str) -> bool {
-    if PAK_NAME == name && PAK_CUR.is_some() { return true; }
-    PAK_CUR = None;                       // drop borrows before the buffer goes
+    // already the current map
+    if PAK_CACHE.first().map(|c| c.name == name).unwrap_or(false) {
+        return true;
+    }
+    // resident in the cache -> promote to front, no SD read
+    if let Some(i) = PAK_CACHE.iter().position(|c| c.name == name) {
+        let hit = PAK_CACHE.remove(i);
+        PAK_CACHE.insert(0, hit);
+        return true;
+    }
+    // must read from SD. Stat the size first so we can evict to fit WITHOUT a
+    // transient over-budget spike; a map larger than the whole budget evicts
+    // everything and loads alone (peak == the old single-pak peak).
     let path = format!("sdmc:/3ds/voxelmon/paks/{}.vxpak", name);
+    let new_kb = std::fs::metadata(&path)
+        .map(|m| (m.len() / 1024) as usize)
+        .unwrap_or(usize::MAX);
+    while !PAK_CACHE.is_empty() && cache_total_kb() + new_kb > PAK_CACHE_BUDGET_KB {
+        PAK_CACHE.pop(); // drop the least-recently-used entry
+    }
     let Some(v) = map_pak(&path) else {
         println!("pak missing: {}", name);
         return false;
     };
-    println!("pak {} {} KB", name, v.len() / 1024);
-    PAK_BUF = Some(v.into_boxed_slice());
-    let bytes: &'static [u8] =
-        core::mem::transmute(PAK_BUF.as_deref().unwrap_or(&[]));
+    let kb = v.len() / 1024;
+    println!("pak {} {} KB (cache {} KB)", name, kb, cache_total_kb());
+    let buf: Box<[u8]> = v.into_boxed_slice();
+    let bytes: &'static [u8] = core::mem::transmute(buf.as_ref());
     match pak::read(bytes) {
-        Ok(p) => { PAK_CUR = Some(p); PAK_NAME = name.to_string(); true }
-        Err(e) => { println!("pak parse failed: {}", e); false }
+        Ok(p) => {
+            PAK_CACHE.insert(0, CachedPak { pak: p, buf, name: name.to_string(), kb });
+            true
+        }
+        Err(e) => {
+            println!("pak parse failed: {}", e);
+            false
+        }
     }
 }
 
 #[allow(static_mut_refs)]
 unsafe fn cur_pak() -> &'static pak::Pak<'static> {
-    PAK_CUR.as_ref().expect("no pak loaded")
+    core::mem::transmute::<&pak::Pak<'static>, &'static pak::Pak<'static>>(
+        &PAK_CACHE.first().expect("no pak loaded").pak,
+    )
 }
 
 fn map_pak(path: &str) -> Option<Vec<u8>> {

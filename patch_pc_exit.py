@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+# Fix wrong PC exit after a blackout: remember the outdoor map the heal point
+# exits to (the town you walked in from) and restore it on blackout, so leaving
+# the PC uses the right LAST_MAP return instead of a stale one. Build-only.
+import base64, json, os, sys
+ROOT = os.path.expanduser("~/pocket-voxel")
+if not os.path.isdir(os.path.join(ROOT, "voxelmon")): ROOT = os.getcwd()
+DATA = json.loads(base64.b64decode("eyJodW5rcyI6W3sicGF0aCI6InZveGVsbW9uL2dhbWUvZ2FtZS50cyIsIm9sZCI6IklDQWdJR052Ym5OMElHaGxZV3dnUFNCMGFHbHpMbk5oZG1VdWJHRnpkRWhsWVd3N0NnPT0iLCJuZXciOiJJQ0FnSUdOdmJuTjBJR2hsWVd3Z1BTQjBhR2x6TG5OaGRtVXViR0Z6ZEVobFlXd2dZWE1LSUNBZ0lDQWdmQ0I3SUcxaGNEb2djM1J5YVc1bk95QjRPaUJ1ZFcxaVpYSTdJSGs2SUc1MWJXSmxjanNnYjNWMFpHOXZjajg2SUhzZ2FXUTZJSE4wY21sdVp6c2dlRG9nYm5WdFltVnlPeUI1T2lCdWRXMWlaWElnZlNCOUNpQWdJQ0FnSUh3Z2RXNWtaV1pwYm1Wa093bz0ifSx7InBhdGgiOiJ2b3hlbG1vbi9nYW1lL2dhbWUudHMiLCJvbGQiOiJJQ0FnSUNBZ2RHaHBjeTV2ZG1WeWQyOXliR1F1YzNSaGNuUlhZWEp3Vkc4b2FHVmhiQzV0WVhBc0lHaGxZV3d1ZUN3Z2FHVmhiQzU1TENBaVpHOTNiaUlwT3dvPSIsIm5ldyI6IklDQWdJQ0FnZEdocGN5NXZkbVZ5ZDI5eWJHUXVjM1JoY25SWFlYSndWRzhvYUdWaGJDNXRZWEFzSUdobFlXd3VlQ3dnYUdWaGJDNTVMQ0FpWkc5M2JpSXBPd29nSUNBZ0lDQXZMeUJ6ZEdGeWRGZGhjbkJVYnlCcWRYTjBJSEpsYldWdFltVnlaV1FnZEdobElHMWhjQ0IzWlNCbVlXbHVkR1ZrSUc5dUlHRnpJSFJvWlNCdmRYUmtiMjl5SUhOcFpHVTdDaUFnSUNBZ0lDOHZJSFJvWlNCb1pXRnNJSEJ2YVc1MElHVjRhWFJ6SUhSdklIUm9aU0IwYjNkdUlHbDBKM01nU1U0c0lITnZJSEpsYzNSdmNtVWdkR2hoZENBb2MyVjBUV0Z3SUdsdWRHOEtJQ0FnSUNBZ0x5OGdkR2hsSUZCRElHUnZaWE51SjNRZ2NtVjNjbWwwWlNCcGRDd2djMjhnZEdocGN5QnpkR2xqYTNNZ2RXNTBhV3dnZVc5MUlIZGhiR3NnWW1GamF5QnZkWFFwTGdvZ0lDQWdJQ0JwWmlBb2FHVmhiQzV2ZFhSa2IyOXlLU0I3Q2lBZ0lDQWdJQ0FnZEdocGN5NXZkbVZ5ZDI5eWJHUXVjbVZ0WlcxaVpYSlBkWFJrYjI5eUtHaGxZV3d1YjNWMFpHOXZjaTVwWkN3Z2FHVmhiQzV2ZFhSa2IyOXlMbmdzSUdobFlXd3ViM1YwWkc5dmNpNTVLVHNLSUNBZ0lDQWdmUW89In0seyJwYXRoIjoidm94ZWxtb24vZ2FtZS93b3JsZC9vdmVyd29ybGQudHMiLCJvbGQiOiJJQ0JzWVhOMFNHVmhiRDg2SUhzZ2JXRndPaUJ6ZEhKcGJtYzdJSGc2SUc1MWJXSmxjanNnZVRvZ2JuVnRZbVZ5SUgwN0NnPT0iLCJuZXciOiJJQ0JzWVhOMFNHVmhiRDg2SUhzZ2JXRndPaUJ6ZEhKcGJtYzdJSGc2SUc1MWJXSmxjanNnZVRvZ2JuVnRZbVZ5T3lCdmRYUmtiMjl5UHpvZ1RHRnpkRTkxZEdSdmIzSWdmVHNLIn0seyJwYXRoIjoidm94ZWxtb24vZ2FtZS93b3JsZC9zY3JpcHQudHMiLCJvbGQiOiJJQ0FvWTNSNExuZHZjbXhrTG5OaGRtVWdZWE1nZXlCc1lYTjBTR1ZoYkQ4NklIc2diV0Z3T2lCemRISnBibWM3SUhnNklHNTFiV0psY2pzZ2VUb2diblZ0WW1WeUlIMGdmU2t1YkdGemRFaGxZV3dnUFNCN0NnPT0iLCJuZXciOiJJQ0JqYjI1emRDQnpZWFpsSUQwZ1kzUjRMbmR2Y214a0xuTmhkbVVnWVhNZ2V3b2dJQ0FnYkdGemRFaGxZV3cvT2lCN0NpQWdJQ0FnSUcxaGNEb2djM1J5YVc1bk93b2dJQ0FnSUNCNE9pQnVkVzFpWlhJN0NpQWdJQ0FnSUhrNklHNTFiV0psY2pzS0lDQWdJQ0FnYjNWMFpHOXZjajg2SUhzZ2FXUTZJSE4wY21sdVp6c2dlRG9nYm5WdFltVnlPeUI1T2lCdWRXMWlaWElnZlRzS0lDQWdJSDA3Q2lBZ0lDQnNZWE4wVDNWMFpHOXZjajg2SUhzZ2FXUTZJSE4wY21sdVp6c2dlRG9nYm5WdFltVnlPeUI1T2lCdWRXMWlaWElnZlRzS0lDQjlPd29nSUhOaGRtVXViR0Z6ZEVobFlXd2dQU0I3Q2c9PSJ9LHsicGF0aCI6InZveGVsbW9uL2dhbWUvd29ybGQvc2NyaXB0LnRzIiwib2xkIjoiSUNBZ0lIazZJQ2h3UHk1alpXeHNXU0JoY3lCdWRXMWlaWElwSUQ4L0lEQXNDZz09IiwibmV3IjoiSUNBZ0lIazZJQ2h3UHk1alpXeHNXU0JoY3lCdWRXMWlaWElwSUQ4L0lEQXNDaUFnSUNBdkx5QlVhR1VnVUVNZ1pHOXZjaUJwY3lCaElFeEJVMVJmVFVGUUlIZGhjbkFnNG9DVUlISmxiV1Z0WW1WeUlIUm9aU0J2ZFhSa2IyOXlJRzFoY0NCcGRDQmxlR2wwY3lCMGJ3b2dJQ0FnTHk4Z0tIUm9aU0IwYjNkdUlIbHZkU0IzWVd4clpXUWdhVzRnWm5KdmJTa2djMjhnWVNCaWJHRmphMjkxZENCM1lYSndJSEpsYzNSdmNtVnpJSFJvWlNCeWFXZG9kQW9nSUNBZ0x5OGdjbVYwZFhKdUxpQlhhWFJvYjNWMElHbDBMQ0JzWldGMmFXNW5JSFJvWlNCUVF5QjFjMlZ6SUdFZ2MzUmhiR1VnYkdGemRFOTFkR1J2YjNJZ1lXNWtJR1J5YjNCekNpQWdJQ0F2THlCNWIzVWdZWFFnZEdobElIZHliMjVuSUdWNGFYUWdLR1V1Wnk0Z1JHbG5iR1YwZENkeklFTmhkbVVnYVc1emRHVmhaQ0J2WmlCV2FYSnBaR2xoYmlCRGFYUjVLUzRLSUNBZ0lHOTFkR1J2YjNJNklITmhkbVV1YkdGemRFOTFkR1J2YjNJZ1B5QjdJQzR1TG5OaGRtVXViR0Z6ZEU5MWRHUnZiM0lnZlNBNklIVnVaR1ZtYVc1bFpDd0sifV0sInNlbnRpbmVscyI6eyJ2b3hlbG1vbi9nYW1lL2dhbWUudHMiOiJ0aGUgaGVhbCBwb2ludCBleGl0cyB0byB0aGUgdG93biBpdCdzIElOIiwidm94ZWxtb24vZ2FtZS93b3JsZC9vdmVyd29ybGQudHMiOiJvdXRkb29yPzogTGFzdE91dGRvb3IgfTsiLCJ2b3hlbG1vbi9nYW1lL3dvcmxkL3NjcmlwdC50cyI6InJlbWVtYmVyIHRoZSBvdXRkb29yIG1hcCBpdCBleGl0cyB0byJ9fQ=="))
+for rel, marker in DATA["sentinels"].items():
+    p = os.path.join(ROOT, rel)
+    if os.path.isfile(p) and marker in open(p, encoding="utf-8").read():
+        sys.exit("ABORT: already applied ({}).".format(rel))
+files = {}
+for h in DATA["hunks"]:
+    p = os.path.join(ROOT, h["path"])
+    if p not in files:
+        if not os.path.isfile(p): sys.exit("ABORT: missing " + h["path"])
+        files[p] = open(p, encoding="utf-8").read()
+    old = base64.b64decode(h["old"]).decode()
+    if files[p].count(old) != 1: sys.exit("ABORT: anchor in {} not unique (need prior patches) -- nothing written.".format(h["path"]))
+for h in DATA["hunks"]:
+    p = os.path.join(ROOT, h["path"])
+    files[p] = files[p].replace(base64.b64decode(h["old"]).decode(), base64.b64decode(h["new"]).decode(), 1)
+conf = {}
+for p, t in files.items():
+    open(p, "w", encoding="utf-8").write(t); conf[os.path.relpath(p, ROOT)] = {"bytes": len(t)}
+print("PATCHED (root=" + ROOT + "):"); print(json.dumps(conf, indent=2))
+print("heal point now remembers its outdoor exit; blackout restores it")
