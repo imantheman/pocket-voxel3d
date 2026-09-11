@@ -154,6 +154,96 @@ fn unsafe_free_kb() -> u32 {
     (unsafe { linearSpaceFree() }) / 1024
 }
 
+/// Sampling for the sprite pages: entity cards, battle mons, screen pics
+/// and the UI tile sheet.
+///
+/// None of these lands on a whole number of device pixels. The guest draws
+/// into the PSP's 480x272 and the top screen is 400x240, which is 5/6 across
+/// and 15/17 down -- and the UI arrives already stretched, since the GB's
+/// 8-px tile is drawn at VIEW_H / GB_H = 1.889 guest px per texel and ends
+/// up covering 12.59 x 13.33 device pixels.
+///
+/// Nearest has to resolve those ratios by duplicating some rows of texels
+/// and not others. An 8-px glyph comes out with a two-pixel stem beside a
+/// one-pixel stem; UI_ORIGIN_X is fractional, so neighbouring tiles do not
+/// even duplicate the same columns, and a sprite changes which row it drops
+/// as it walks. That unevenness is the distortion. Linear weights the texels
+/// it lands between instead: softer, but the shape survives and stops
+/// crawling.
+///
+/// ClampToEdge matters because the page is uploaded into a power-of-two
+/// surface: without it a tap in the padding wraps to the opposite edge of
+/// the sprite. `build_page_tex` handles the rest of what linear exposes.
+fn sprite_filter(t: &mut texture::Texture, pak: &Pak, page: u16) {
+    let kind = pak.atlases.get(page as usize).map(|p| p.kind);
+    let linear = if kind == Some(atlas_kind::UI) { UI_BILINEAR } else { true };
+    let f = if linear { texture::Filter::Linear } else { texture::Filter::Nearest };
+    t.set_filter(f, f);
+    t.set_wrap(texture::Wrap::ClampToEdge, texture::Wrap::ClampToEdge);
+}
+
+/// Whether the GB tile sheet -- the text boxes, menus and font -- is filtered
+/// like the sprites are.
+///
+/// This one is a taste call, not a correctness one, which is why it has a
+/// name. The sheet suffers the worst of the scaling: an 8-px tile is drawn
+/// at 12.59 x 13.33 device pixels, so nearest duplicates some rows of each
+/// glyph and not others, and because UI_ORIGIN_X is fractional, neighbouring
+/// tiles do not agree about which. Linear evens that out at the cost of
+/// softening text that was designed to be crisp at 1:1.
+///
+/// Flip this to false to put the UI back on nearest and leave the sprites
+/// filtered.
+const UI_BILINEAR: bool = true;
+
+/// Rounds of `dilate_rgb` run over a sprite page before upload.
+///
+/// One. Only opaque texels are sources, so a second round has nothing new to
+/// read and is pure load-time cost -- and one is all that is needed, because
+/// a linear tap reaches exactly one texel past the silhouette.
+const DILATE_PASSES: u32 = 1;
+
+/// Push opaque RGB outward into the transparent texels touching it, leaving
+/// alpha untouched.
+///
+/// Sprite pages are CLUT8, and their transparent palette entries carry a
+/// real colour: index 3 is (255, 0, 0, 0) and index 255 is (0, 0, 0, 0).
+/// Nearest sampling never sees those texels -- alpha 0 means the blender
+/// discards them whatever the RGB. A bilinear tap does see them, and
+/// interpolating a sprite's edge against stored red or black rings every
+/// silhouette with a halo. Bleeding the neighbouring opaque colour into the
+/// dead texels first means the blend crosses a colour that matches the
+/// sprite, so the edge just softens.
+fn dilate_rgb(rgba: &mut [u8], w: u32, h: u32) {
+    if w == 0 || h == 0 { return; }
+    let src = rgba.to_vec();
+    for y in 0..h {
+        for x in 0..w {
+            let o = ((y * w + x) * 4) as usize;
+            if src[o + 3] != 0 { continue; }
+            let (mut r, mut g, mut b, mut n) = (0u32, 0u32, 0u32, 0u32);
+            for dy in -1i32..=1 {
+                for dx in -1i32..=1 {
+                    let (nx, ny) = (x as i32 + dx, y as i32 + dy);
+                    if nx < 0 || ny < 0 || nx >= w as i32 || ny >= h as i32 { continue; }
+                    let p = ((ny as u32 * w + nx as u32) * 4) as usize;
+                    if src[p + 3] == 0 { continue; }
+                    r += src[p] as u32;
+                    g += src[p + 1] as u32;
+                    b += src[p + 2] as u32;
+                    n += 1;
+                }
+            }
+            if n == 0 { continue; }
+            rgba[o] = (r / n) as u8;
+            rgba[o + 1] = (g / n) as u8;
+            rgba[o + 2] = (b / n) as u8;
+            // alpha stays 0: this texel is still invisible, it just no
+            // longer poisons the taps that straddle it.
+        }
+    }
+}
+
 fn build_page_tex(pak: &Pak, pidx: u16, pal_sel: i32) -> (Vec<u8>, u32, u32) {
     let page = pak.atlases[pidx as usize];
     let lin = pak::unswizzle(page.w as usize, page.h as usize, page.frame(0))
@@ -161,15 +251,39 @@ fn build_page_tex(pak: &Pak, pidx: u16, pal_sel: i32) -> (Vec<u8>, u32, u32) {
     let palv = &pak.palettes[resolve_pal(pak, pidx, page.kind, COLOR_PAL_NONE, pal_sel)];
     let (aw, ah) = (page.w as u32, page.h as u32);
     let (tw, th) = (po2(aw), po2(ah));
+    if aw == 0 || ah == 0 {
+        return (vec![0u8; (tw * th * 4) as usize], tw, th);
+    }
+    // Expand to a linear RGBA scratch before swizzling: dilation needs
+    // neighbour access, which the GPU's tiled layout does not give cheaply.
+    let mut flat = vec![0u8; (aw * ah * 4) as usize];
+    for i in 0..(aw * ah) as usize {
+        let c = palv[lin[i] as usize];
+        flat[i * 4] = ((c >> 24) & 0xff) as u8;
+        flat[i * 4 + 1] = ((c >> 16) & 0xff) as u8;
+        flat[i * 4 + 2] = ((c >> 8) & 0xff) as u8;
+        flat[i * 4 + 3] = (c & 0xff) as u8;
+    }
+    for _ in 0..DILATE_PASSES {
+        dilate_rgb(&mut flat, aw, ah);
+    }
     let mut out = vec![0u8; (tw * th * 4) as usize];
-    for y in 0..ah {
-        for x in 0..aw {
-            let c = palv[lin[(y * aw + x) as usize] as usize];
+    for y in 0..th {
+        for x in 0..tw {
+            // Pages are uploaded into a power-of-two surface, so a 40x40
+            // page sits in 64x64 with 24 dead rows and columns pressed
+            // against live sprite texels. Clamping into the page (rather
+            // than leaving the padding zeroed) turns that margin into an
+            // extension of the edge, so a bilinear tap straying off the
+            // page reads the page instead of a hole.
+            let sx = x.min(aw - 1);
+            let sy = y.min(ah - 1);
+            let s = ((sy * aw + sx) * 4) as usize;
             let o = tiled_off(x, y, tw);
-            out[o]     = ((c >> 24) & 0xff) as u8;
-            out[o + 1] = ((c >> 16) & 0xff) as u8;
-            out[o + 2] = ((c >> 8) & 0xff) as u8;
-            out[o + 3] = (c & 0xff) as u8;
+            out[o] = flat[s];
+            out[o + 1] = flat[s + 1];
+            out[o + 2] = flat[s + 2];
+            out[o + 3] = flat[s + 3];
         }
     }
     (out, tw, th)
@@ -191,6 +305,36 @@ pub static __ctru_heap_size: u32 = 92 * 1024 * 1024;
 pub static __ctru_linear_heap_size: u32 = 24 * 1024 * 1024;
 
 fn po2(n: u32) -> u32 { let mut p = 8u32; while p < n { p <<= 1; } p }
+
+/// The guest's screen, which is the PSP's: every ScreenPic and UiQuad
+/// arrives in these coordinates.
+const UI_VIEW_W: f32 = 480.0;
+const UI_VIEW_H: f32 = 272.0;
+
+/// Sub-pixel resolution of the screen-space vertex grid.
+///
+/// `Vertex::pos` is four i16s -- the attribute layout the terrain shares,
+/// where integer world units are the natural grid. Screen-space quads used
+/// to be converted into 400x240 device pixels and truncated into it, which
+/// rounded every edge to a whole device pixel: an 8-px UI tile landed on
+/// 8 * 400/480 = 6.67 pixels and so came out 6 wide or 7 wide depending on
+/// where it fell, and a text box's tiles visibly disagreed about their size.
+///
+/// Keeping the guest's own coordinates and scaling by Q instead leaves the
+/// 480->400 mapping to the ortho below, where the GPU does it at full
+/// rasteriser precision. Q = 4 puts the remaining rounding at a quarter of
+/// a guest pixel, well under a device pixel. 480 * 4 fits i16 with room to
+/// spare.
+const UI_Q: f32 = 4.0;
+
+/// Guest screen coordinate -> the quantised grid `Vertex::pos` stores.
+fn qpx(v: f32) -> i16 { (v * UI_Q) as i16 }
+
+/// The same trick as `UI_Q`, for billboard cards in world space. The card
+/// pass scales it back out of the mvp, so it is invisible to everything
+/// else. The tallest map is 2304 world px, which at Q = 4 is 9216 -- i16
+/// keeps 3x headroom over that.
+const CARD_Q: f32 = 4.0;
 
 fn tiled_off(x: u32, y: u32, tw: u32) -> usize {
     let (tx, ty) = (x / 8, y / 8);
@@ -1359,7 +1503,7 @@ fn main() {
             texture::TextureParameters::new_2d(ptw as u16, pth as u16, texture::ColorFormat::Rgba8)) {
             if t.load_image(&data, texture::Face::default()).is_ok() {
                 unsafe { gsp_flush(data.as_ptr(), data.len() as u32); }
-                t.set_filter(texture::Filter::Nearest, texture::Filter::Nearest);
+                sprite_filter(&mut t, pak_static, pg as u16);
                 page_tex[pg] = Some(t);
             }
         }
@@ -1850,7 +1994,7 @@ fn main() {
                     texture::TextureParameters::new_2d(ptw as u16, pth as u16, texture::ColorFormat::Rgba8)) {
                     if t.load_image(&data, texture::Face::default()).is_ok() {
                         unsafe { gsp_flush(data.as_ptr(), data.len() as u32); }
-                        t.set_filter(texture::Filter::Nearest, texture::Filter::Nearest);
+                        sprite_filter(&mut t, pak_static, pi as u16);
                         page_tex[pi] = Some(t);
                         warmed += 1;
                     }
@@ -1981,10 +2125,8 @@ fn main() {
                     let pg = &pak_static.atlases[*page as usize];
                     let (pw, ph) = (po2(pg.w as u32) as f32, po2(pg.h as u32) as f32);
                     let (u1, v1) = (pg.w as f32 / pw, pg.h as f32 / ph);
-                    let sx = |v: f32| ((v / 480.0) * 400.0) as i16;
-                    let sy = |v: f32| ((v / 272.0) * 240.0) as i16;
-                    let (x0, y0) = (sx(*x), sy(*y));
-                    let (x1, y1) = (sx(*x + *w), sy(*y + *h));
+                    let (x0, y0) = (qpx(*x), qpx(*y));
+                    let (x1, y1) = (qpx(*x + *w), qpx(*y + *h));
                     let mp = |px: i16, py: i16, u: f32, v: f32| Vertex {
                         pos: [px, py, 0, 0], color: [255, 255, 255, 255], uv: [u, v] };
                     let gi = match pic_groups.iter().position(|g| g.0 == *page) {
@@ -2010,12 +2152,15 @@ fn main() {
                     let (pw, ph) = (po2(pg.w as u32) as f32, po2(pg.h as u32) as f32);
                     // Same V flip the world uses (uv mode 5): texture rows
                     // are stored inverted relative to the UV convention.
+                    // Full cell, NOT inset by half a texel. Insetting is the
+                    // usual guard against a linear tap crossing into the next
+                    // cell, but it fits 7 texels into the space of 8 and so
+                    // scales the glyph up by a seventh -- a far more visible
+                    // error than the sliver of the neighbour it prevents.
                     let (u0, u1) = (tx0 / pw, (tx0 + 8.0) / pw);
                     let (v0, v1) = (1.0 - ty0 / ph, 1.0 - (ty0 + 8.0) / ph);
-                    let sx = |v: f32| ((v / 480.0) * 400.0) as i16;
-                    let sy = |v: f32| ((v / 272.0) * 240.0) as i16;
-                    let (x0, y0) = (sx(*x), sy(*y));
-                    let (x1, y1) = (sx(*x + *w), sy(*y + *h));
+                    let (x0, y0) = (qpx(*x), qpx(*y));
+                    let (x1, y1) = (qpx(*x + *w), qpx(*y + *h));
                     let m2 = |px: i16, py: i16, u: f32, v: f32| Vertex {
                         pos: [px, py, 0, 0], color: [255, 255, 255, 255], uv: [u, v] };
                     ui_verts.push(m2(x0, y0, u0, v0));
@@ -2041,9 +2186,17 @@ fn main() {
                         [q[0] + dx / l * pv, q[1] + dy / l * pv, q[2] + dz / l * pv]
                     };
                     let mk = |pt: ([f32; 3], f32, f32)| Vertex {
+                        // CARD_Q, for the reason UI_Q exists: a card's corners
+                        // are f32 world coordinates, and truncating them to
+                        // whole world units moved each corner by up to a
+                        // device pixel INDEPENDENTLY -- so the sprite's width
+                        // in pixels changed as it walked, and it resampled to
+                        // a slightly different shape every step. The card pass
+                        // divides it back out of the mvp.
                         pos: { let d = disp(pt.0);
-                               [(d[0] - sox + 8.0) as i16, d[1] as i16,
-                                (d[2] - soy + 8.0) as i16, 0] },
+                               [((d[0] - sox + 8.0) * CARD_Q) as i16,
+                                (d[1] * CARD_Q) as i16,
+                                ((d[2] - soy + 8.0) * CARD_Q) as i16, 0] },
                         // tint_b, not opaque white: a card standing on
                         // terrain build_map dimmed has to dim with it.
                         color: tint_b,
@@ -2073,7 +2226,7 @@ if page_tex.len() < pak_static.atlases.len() {
                     texture::TextureParameters::new_2d(ptw as u16, pth as u16, texture::ColorFormat::Rgba8)) {
                     if t.load_image(&data, texture::Face::default()).is_ok() {
                         unsafe { gsp_flush(data.as_ptr(), data.len() as u32); }
-                        t.set_filter(texture::Filter::Nearest, texture::Filter::Nearest);
+                        sprite_filter(&mut t, pak_static, *pg);
                         page_tex[i] = Some(t);
                     }
                 }
@@ -2099,7 +2252,7 @@ if page_tex.len() < pak_static.atlases.len() {
             if let Ok(mut t) = texture::Texture::new(
                 texture::TextureParameters::new_2d(ptw as u16, pth as u16, texture::ColorFormat::Rgba8)) {
                 if t.load_image(&data, texture::Face::default()).is_ok() {
-                    t.set_filter(texture::Filter::Nearest, texture::Filter::Nearest);
+                    sprite_filter(&mut t, pak_static, ui_page);
                     page_tex[ui_pg] = Some(t);
                 }
             }
@@ -2120,7 +2273,7 @@ if page_tex.len() < pak_static.atlases.len() {
                     texture::TextureParameters::new_2d(ptw as u16, pth as u16, texture::ColorFormat::Rgba8)) {
                     if t.load_image(&data, texture::Face::default()).is_ok() {
                         unsafe { gsp_flush(data.as_ptr(), data.len() as u32); }
-                        t.set_filter(texture::Filter::Nearest, texture::Filter::Nearest);
+                        sprite_filter(&mut t, pak_static, *pg);
                         page_tex[i] = Some(t);
                     }
                 }
@@ -2298,7 +2451,7 @@ if page_tex.len() < pak_static.atlases.len() {
                     texture::TextureParameters::new_2d(ptw as u16, pth as u16, texture::ColorFormat::Rgba8)) {
                     if t.load_image(&data, texture::Face::default()).is_ok() {
                         unsafe { gsp_flush(data.as_ptr(), data.len() as u32); }
-                        t.set_filter(texture::Filter::Nearest, texture::Filter::Nearest);
+                        sprite_filter(&mut t, pak_static, *pg);
                         page_tex[i] = Some(t);
                     }
                 }
@@ -2522,7 +2675,7 @@ if page_tex.len() < pak_static.atlases.len() {
                 if !pic_bufs.is_empty() {
                     unsafe { c3d_depth_test(0); }
                     let po: Matrix4 = Projection::orthographic(
-                        0.0..400.0, 240.0..0.0,
+                        0.0..(UI_VIEW_W * UI_Q), (UI_VIEW_H * UI_Q)..0.0,
                         ClipPlanes { near: -1.0, far: 1.0 })
                         .screen(ScreenOrientation::Rotated).into();
                     frame.bind_vertex_uniform(projection_idx, &po);
@@ -2539,7 +2692,7 @@ if page_tex.len() < pak_static.atlases.len() {
                 if let Some(ub) = ui_buf.as_ref() {
                     unsafe { c3d_depth_test(0); }
                     let ortho: Matrix4 = Projection::orthographic(
-                        0.0..400.0, 240.0..0.0,
+                        0.0..(UI_VIEW_W * UI_Q), (UI_VIEW_H * UI_Q)..0.0,
                         ClipPlanes { near: -1.0, far: 1.0 })
                         .screen(ScreenOrientation::Rotated).into();
                     if let Some(t) = page_tex_ref.get(ui_pg).and_then(|o| o.as_ref()) {
@@ -2551,11 +2704,22 @@ if page_tex.len() < pak_static.atlases.len() {
                     frame.bind_vertex_uniform(projection_idx, mvp);
                     unsafe { c3d_depth_test(1); }
                 }
-                for (pg, ci) in card_bufs.iter() {
-                    if let Some(t) = page_tex_ref.get(*pg).and_then(|o| o.as_ref()) {
-                        frame.bind_texture(texture::Index::Texture0, t);
+                if !card_bufs.is_empty() {
+                    // Card vertices carry world coordinates scaled by CARD_Q
+                    // so their corners survive the i16 attribute at sub-pixel
+                    // precision; undo it here, in object space, so the rest of
+                    // the mvp is untouched.
+                    let mut card_mvp = *mvp;
+                    let inv = 1.0 / CARD_Q;
+                    card_mvp.scale(inv, inv, inv);
+                    frame.bind_vertex_uniform(projection_idx, &card_mvp);
+                    for (pg, ci) in card_bufs.iter() {
+                        if let Some(t) = page_tex_ref.get(*pg).and_then(|o| o.as_ref()) {
+                            frame.bind_texture(texture::Index::Texture0, t);
+                        }
+                        frame.draw_arrays(buffer::Primitive::Triangles, ci, None).unwrap();
                     }
-                    frame.draw_arrays(buffer::Primitive::Triangles, ci, None).unwrap();
+                    frame.bind_vertex_uniform(projection_idx, mvp);
                 }
             });
 
