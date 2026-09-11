@@ -37,7 +37,7 @@ fn dilate_rgb(rgba: &mut [u8], w: u32, h: u32) {
     for y in 0..h {
         for x in 0..w {
             let o = ((y * w + x) * 4) as usize;
-            if src[o + 3] != 0 {
+            if src[o + 0] != 0 {
                 continue;
             }
             let (mut r, mut g, mut b, mut n) = (0u32, 0u32, 0u32, 0u32);
@@ -48,21 +48,21 @@ fn dilate_rgb(rgba: &mut [u8], w: u32, h: u32) {
                         continue;
                     }
                     let p = ((ny as u32 * w + nx as u32) * 4) as usize;
-                    if src[p + 3] == 0 {
+                    if src[p + 0] == 0 {
                         continue;
                     }
-                    r += src[p] as u32;
-                    g += src[p + 1] as u32;
-                    b += src[p + 2] as u32;
+                    r += src[p + 1] as u32;
+                    g += src[p + 2] as u32;
+                    b += src[p + 3] as u32;
                     n += 1;
                 }
             }
             if n == 0 {
                 continue;
             }
-            rgba[o] = (r / n) as u8;
-            rgba[o + 1] = (g / n) as u8;
-            rgba[o + 2] = (b / n) as u8;
+            rgba[o + 1] = (r / n) as u8;
+            rgba[o + 2] = (g / n) as u8;
+            rgba[o + 3] = (b / n) as u8;
         }
     }
 }
@@ -139,14 +139,15 @@ fn sample(t: &[u8], tw: u32, th: u32, u: f32, v: f32, linear: bool) -> [f32; 4] 
     out
 }
 
-/// Composite over a mid grey so an alpha-0 texel's RGB shows if it leaks.
+/// Composite over a mid grey so a transparent texel's colour shows if it
+/// leaks. Byte 0 is ALPHA and bytes 1..3 are the colour -- see main.rs.
 fn over(c: [f32; 4]) -> [u8; 3] {
-    let a = c[3] / 255.0;
+    let a = c[0] / 255.0;
     let bg = 150.0;
     [
-        (c[0] * a + bg * (1.0 - a)) as u8,
         (c[1] * a + bg * (1.0 - a)) as u8,
         (c[2] * a + bg * (1.0 - a)) as u8,
+        (c[3] * a + bg * (1.0 - a)) as u8,
     ]
 }
 
@@ -177,7 +178,7 @@ fn main() {
     let (aw, ah) = (page.w as u32, page.h as u32);
     let gap = |buf: &Vec<u8>, x: u32, y: u32| -> Option<f32> {
         let o = ((y * tw + x) * 4) as usize;
-        if buf[o + 3] != 0 {
+        if buf[o] != 0 {
             return None;
         }
         let mut best: Option<f32> = None;
@@ -188,10 +189,10 @@ fn main() {
                     continue;
                 }
                 let p = ((ny as u32 * tw + nx as u32) * 4) as usize;
-                if buf[p + 3] == 0 {
+                if buf[p] == 0 {
                     continue;
                 }
-                let d = (0..3)
+                let d = (1..4)
                     .map(|k| (buf[o + k] as f32 - buf[p + k] as f32).powi(2))
                     .sum::<f32>()
                     .sqrt();

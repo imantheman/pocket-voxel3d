@@ -203,8 +203,23 @@ const UI_BILINEAR: bool = true;
 /// a linear tap reaches exactly one texel past the silhouette.
 const DILATE_PASSES: u32 = 1;
 
-/// Push opaque RGB outward into the transparent texels touching it, leaving
-/// alpha untouched.
+/// Byte offsets within one uploaded texel.
+///
+/// `build_page_tex` writes a palette entry out most-significant byte first,
+/// and the entries are stored alpha-high -- so the four bytes on the way to
+/// the GPU are ALPHA, then the three colour channels. The locals there are
+/// spelled r/g/b/a, which is a lie worth naming: reading byte 3 as the alpha
+/// treats opaque black ink (alpha 255, colour 0,0,0) as transparent and
+/// reads a fully transparent texel as opaque. Every page in the game has
+/// exactly those two values, so nothing about it is a corner case.
+///
+/// Which of bytes 1..3 is red does not matter here -- the dilation averages
+/// each channel independently -- so they are just COLOR.
+const ALPHA: usize = 0;
+const COLOR: [usize; 3] = [1, 2, 3];
+
+/// Push opaque colour outward into the transparent texels touching it,
+/// leaving alpha untouched.
 ///
 /// Sprite pages are CLUT8, and their transparent palette entries carry a
 /// real colour: index 3 is (255, 0, 0, 0) and index 255 is (0, 0, 0, 0).
@@ -214,30 +229,30 @@ const DILATE_PASSES: u32 = 1;
 /// silhouette with a halo. Bleeding the neighbouring opaque colour into the
 /// dead texels first means the blend crosses a colour that matches the
 /// sprite, so the edge just softens.
-fn dilate_rgb(rgba: &mut [u8], w: u32, h: u32) {
+fn dilate_rgb(texels: &mut [u8], w: u32, h: u32) {
     if w == 0 || h == 0 { return; }
-    let src = rgba.to_vec();
+    let src = texels.to_vec();
     for y in 0..h {
         for x in 0..w {
             let o = ((y * w + x) * 4) as usize;
-            if src[o + 3] != 0 { continue; }
-            let (mut r, mut g, mut b, mut n) = (0u32, 0u32, 0u32, 0u32);
+            if src[o + ALPHA] != 0 { continue; }
+            let (mut c, mut n) = ([0u32; 3], 0u32);
             for dy in -1i32..=1 {
                 for dx in -1i32..=1 {
                     let (nx, ny) = (x as i32 + dx, y as i32 + dy);
                     if nx < 0 || ny < 0 || nx >= w as i32 || ny >= h as i32 { continue; }
                     let p = ((ny as u32 * w + nx as u32) * 4) as usize;
-                    if src[p + 3] == 0 { continue; }
-                    r += src[p] as u32;
-                    g += src[p + 1] as u32;
-                    b += src[p + 2] as u32;
+                    if src[p + ALPHA] == 0 { continue; }
+                    for (k, acc) in c.iter_mut().enumerate() {
+                        *acc += src[p + COLOR[k]] as u32;
+                    }
                     n += 1;
                 }
             }
             if n == 0 { continue; }
-            rgba[o] = (r / n) as u8;
-            rgba[o + 1] = (g / n) as u8;
-            rgba[o + 2] = (b / n) as u8;
+            for (k, acc) in c.iter().enumerate() {
+                texels[o + COLOR[k]] = (acc / n) as u8;
+            }
             // alpha stays 0: this texel is still invisible, it just no
             // longer poisons the taps that straddle it.
         }
@@ -254,8 +269,12 @@ fn build_page_tex(pak: &Pak, pidx: u16, pal_sel: i32) -> (Vec<u8>, u32, u32) {
     if aw == 0 || ah == 0 {
         return (vec![0u8; (tw * th * 4) as usize], tw, th);
     }
-    // Expand to a linear RGBA scratch before swizzling: dilation needs
-    // neighbour access, which the GPU's tiled layout does not give cheaply.
+    // Expand to a linear scratch before swizzling: dilation needs neighbour
+    // access, which the GPU's tiled layout does not give cheaply.
+    //
+    // A palette entry goes out most-significant byte first, which puts ALPHA
+    // in byte 0 and the colour in bytes 1..3 -- see ALPHA / COLOR above. Do
+    // not rename these to r/g/b/a.
     let mut flat = vec![0u8; (aw * ah * 4) as usize];
     for i in 0..(aw * ah) as usize {
         let c = palv[lin[i] as usize];
