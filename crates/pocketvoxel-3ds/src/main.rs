@@ -203,6 +203,66 @@ const UI_BILINEAR: bool = true;
 /// a linear tap reaches exactly one texel past the silhouette.
 const DILATE_PASSES: u32 = 1;
 
+/// The UI sheet's cell grid, and the gutter this renderer repacks it with.
+///
+/// It is the only page drawn cell by cell rather than as one picture, and
+/// the only page the game magnifies: the GB's 8-px tile covers 12.59 x 13.33
+/// device pixels on the top screen and 16 x 13.33 on the companion. Under a
+/// linear filter that magnification is what makes the packing a problem. A
+/// tile's first device pixel lands at texel 0.5/M, which for any M > 1 is
+/// less than half a texel in, so the tap straddles the cell boundary and
+/// mixes in whichever glyph happens to sit beside this one in the sheet.
+/// Drawn over a whole text box that reads as a faint dotted grid.
+///
+/// Repacking each cell with a one-texel border, filled by replicating the
+/// cell's own edge, gives the sampler something to reach into that is a copy
+/// of the cell. One texel is always enough: the tap centre is never negative,
+/// so it can never reach further than the texel before the cell.
+///
+/// The alternative -- pulling the UVs in by half a texel -- needs no repack
+/// but fits 7 texels into the space of 8, scaling every glyph up by a
+/// seventh. That is far more visible than the bleed it fixes.
+const UI_CELL: u32 = 8;
+const UI_GUTTER: u32 = 1;
+const UI_PITCH: u32 = UI_CELL + UI_GUTTER * 2;
+
+/// Dimensions `build_page_tex` lays a page out at, before power-of-two
+/// padding. Identity for every page except the gutter-repacked UI sheet.
+fn page_layout_dims(page: &pak::AtlasPage) -> (u32, u32) {
+    let (aw, ah) = (page.w as u32, page.h as u32);
+    if page.kind == atlas_kind::UI {
+        (aw.div_ceil(UI_CELL) * UI_PITCH, ah.div_ceil(UI_CELL) * UI_PITCH)
+    } else {
+        (aw, ah)
+    }
+}
+
+/// The texture dimensions `build_page_tex` produces, which is what UVs
+/// divide by.
+fn page_tex_size(page: &pak::AtlasPage) -> (f32, f32) {
+    let (gw, gh) = page_layout_dims(page);
+    (po2(gw) as f32, po2(gh) as f32)
+}
+
+/// Repacked column/row -> the source column/row it copies, replicating the
+/// cell edge into the gutter on either side.
+fn ui_cell_src(e: u32, limit: u32) -> u32 {
+    let cell = e / UI_PITCH;
+    let within = (e % UI_PITCH).saturating_sub(UI_GUTTER).min(UI_CELL - 1);
+    (cell * UI_CELL + within).min(limit - 1)
+}
+
+/// UV rect of one tile in the repacked sheet, V already flipped (texture
+/// rows are stored inverted relative to the UV convention, as uv mode 5).
+/// Spans the cell's eight real texels exactly, so the glyph keeps its scale.
+fn ui_tile_uv(tile: u16, cols: u16, pw: f32, ph: f32) -> (f32, f32, f32, f32) {
+    let g = UI_GUTTER as f32;
+    let x0 = (tile % cols) as f32 * UI_PITCH as f32 + g;
+    let y0 = (tile / cols) as f32 * UI_PITCH as f32 + g;
+    let c = UI_CELL as f32;
+    (x0 / pw, (x0 + c) / pw, 1.0 - y0 / ph, 1.0 - (y0 + c) / ph)
+}
+
 /// Byte offsets within one uploaded texel.
 ///
 /// `build_page_tex` writes a palette entry out most-significant byte first,
@@ -265,7 +325,8 @@ fn build_page_tex(pak: &Pak, pidx: u16, pal_sel: i32) -> (Vec<u8>, u32, u32) {
         .unwrap_or_else(|_| vec![0u8; (page.w as usize) * (page.h as usize)]);
     let palv = &pak.palettes[resolve_pal(pak, pidx, page.kind, COLOR_PAL_NONE, pal_sel)];
     let (aw, ah) = (page.w as u32, page.h as u32);
-    let (tw, th) = (po2(aw), po2(ah));
+    let (gw, gh) = page_layout_dims(&page);
+    let (tw, th) = (po2(gw), po2(gh));
     if aw == 0 || ah == 0 {
         return (vec![0u8; (tw * th * 4) as usize], tw, th);
     }
@@ -286,17 +347,27 @@ fn build_page_tex(pak: &Pak, pidx: u16, pal_sel: i32) -> (Vec<u8>, u32, u32) {
     for _ in 0..DILATE_PASSES {
         dilate_rgb(&mut flat, aw, ah);
     }
+    let is_ui = page.kind == atlas_kind::UI;
     let mut out = vec![0u8; (tw * th * 4) as usize];
     for y in 0..th {
         for x in 0..tw {
+            // Two clamps, outermost first.
+            //
             // Pages are uploaded into a power-of-two surface, so a 40x40
             // page sits in 64x64 with 24 dead rows and columns pressed
-            // against live sprite texels. Clamping into the page (rather
-            // than leaving the padding zeroed) turns that margin into an
-            // extension of the edge, so a bilinear tap straying off the
-            // page reads the page instead of a hole.
-            let sx = x.min(aw - 1);
-            let sy = y.min(ah - 1);
+            // against live sprite texels. Clamping into the laid-out area
+            // (rather than leaving the padding zeroed) turns that margin
+            // into an extension of the edge, so a bilinear tap straying off
+            // the page reads the page instead of a hole.
+            let (ex, ey) = (x.min(gw - 1), y.min(gh - 1));
+            // Then, for the UI sheet, the repack: each 8x8 cell is laid out
+            // on a 10-texel pitch with its own edge replicated into the
+            // one-texel border. See UI_GUTTER.
+            let (sx, sy) = if is_ui {
+                (ui_cell_src(ex, aw), ui_cell_src(ey, ah))
+            } else {
+                (ex.min(aw - 1), ey.min(ah - 1))
+            };
             let s = ((sy * aw + sx) * 4) as usize;
             let o = tiled_off(x, y, tw);
             out[o] = flat[s];
@@ -2163,21 +2234,11 @@ fn main() {
                 if let Item::UiQuad { x, y, w, h, page, tile } = it {
                     ui_page = *page;
                     let pg = &pak_static.atlases[*page as usize];
-                    // Tile rows use the atlas's real width; UVs then divide
-                    // by the po2 padded width.
-                    let cols = ((pg.w as u32 / 8) as u16).max(1);
-                    let tx0 = (*tile % cols) as f32 * 8.0;
-                    let ty0 = (*tile / cols) as f32 * 8.0;
-                    let (pw, ph) = (po2(pg.w as u32) as f32, po2(pg.h as u32) as f32);
-                    // Same V flip the world uses (uv mode 5): texture rows
-                    // are stored inverted relative to the UV convention.
-                    // Full cell, NOT inset by half a texel. Insetting is the
-                    // usual guard against a linear tap crossing into the next
-                    // cell, but it fits 7 texels into the space of 8 and so
-                    // scales the glyph up by a seventh -- a far more visible
-                    // error than the sliver of the neighbour it prevents.
-                    let (u0, u1) = (tx0 / pw, (tx0 + 8.0) / pw);
-                    let (v0, v1) = (1.0 - ty0 / ph, 1.0 - (ty0 + 8.0) / ph);
+                    // Tile indices count cells in the atlas's real width; the
+                    // UVs address the gutter-repacked surface.
+                    let cols = ((pg.w as u32 / UI_CELL) as u16).max(1);
+                    let (pw, ph) = page_tex_size(pg);
+                    let (u0, u1, v0, v1) = ui_tile_uv(*tile, cols, pw, ph);
                     let (x0, y0) = (qpx(*x), qpx(*y));
                     let (x1, y1) = (qpx(*x + *w), qpx(*y + *h));
                     let m2 = |px: i16, py: i16, u: f32, v: f32| Vertex {
@@ -2325,8 +2386,8 @@ if page_tex.len() < pak_static.atlases.len() {
         {
             let sc = unsafe { voxel::scene() };
             let pg = &pak_static.atlases[ui_b_page];
-            let cols = ((pg.w as u32 / 8) as u16).max(1);
-            let (pw, ph) = (po2(pg.w as u32) as f32, po2(pg.h as u32) as f32);
+            let cols = ((pg.w as u32 / UI_CELL) as u16).max(1);
+            let (pw, ph) = page_tex_size(pg);
             // Fill the full 320x240 bottom screen — 20 cols across 320 and 18
             // rows down 240. The GB source is 10:9 and the panel 4:3, so this is
             // the same horizontal stretch the real mod gets on a 4:3 screen; the
@@ -2374,10 +2435,7 @@ if page_tex.len() < pak_static.atlases.len() {
                     let is_dim = raw & DARKTEXT_BIT != 0;
                     let color = if is_light { LIGHT } else { DARK };
                     let tile = raw & !(LIGHT_BIT | FILL_BIT | DARKTEXT_BIT);
-                    let tx0 = (tile % cols) as f32 * 8.0;
-                    let ty0 = (tile / cols) as f32 * 8.0;
-                    let (u0, u1) = (tx0 / pw, (tx0 + 8.0) / pw);
-                    let (v0, v1) = (1.0 - ty0 / ph, 1.0 - (ty0 + 8.0) / ph);
+                    let (u0, u1, v0, v1) = ui_tile_uv(tile, cols, pw, ph);
                     let x0 = (cx as f32 * tpxx) as i16;
                     let y0 = (cy as f32 * tpxy) as i16;
                     let x1 = ((cx + 1) as f32 * tpxx) as i16;
