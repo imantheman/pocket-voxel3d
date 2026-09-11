@@ -44,6 +44,7 @@ import { BoxState } from "./ui/boxscreen.ts";
 import { PokedexState } from "./ui/pokedexscreen.ts";
 import { encodeSave } from "./save-lua.ts";
 import { decodeSave } from "./save-read.ts";
+import * as Bag from "./rules/bag.ts";
 /** Must match Version.saveFormat in the recomp. */
 const SAVE_FORMAT = 4;   // Version.lua saveFormat
 /** battle/trainer/red — the intro portrait, not title/player. */
@@ -495,6 +496,28 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     }
   }
 
+  /**
+   * DEBUG ONLY — cycles to the next/previous cooked map, landing at that
+   * map's own first warp tile (its nearest door), for testing map geometry
+   * (vertex-budget fixes, tileset issues) without walking the whole route.
+   * Triggered by the 3DS host's L/R shoulder buttons (psp-main.ts frame(),
+   * button-word bits 26/27) — outside VOX_BTN/Input on purpose: L/R have no
+   * Game Boy equivalent, so this has no business in the ported input model.
+   * A no-op mid-battle/mid-transition, or with fewer than 2 cooked maps.
+   */
+  debugCycleMap(direction: 1 | -1): void {
+    if (this.battleView() || this.overworld.transitioning) return;
+    const list = this.data.cookedMaps;
+    if (!list || list.length < 2) return;
+    const curId = this.overworld.map.id;
+    let i = list.indexOf(curId);
+    if (i < 0) i = 0;
+    i = (i + direction + list.length) % list.length;
+    const targetId = list[i]!;
+    const dw = this.data.maps?.[targetId]?.warps?.[0];
+    this.overworld.startWarpTo(targetId, dw?.x ?? 4, dw?.y ?? 4, "down");
+  }
+
   /** One guest turn per host tick — exactly once. */
   tick(buttons: number): void {
     const p = this.prof;
@@ -534,6 +557,15 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     this.stack.pop();
   }
 
+  /** Pop every pushed state back down to the base OverworldState (index 0,
+   * never itself pushed/popped — see the boot-time `this.stack = [...]`
+   * assignment). A field HM move (PartyState's CUT/FLASH submenu entries)
+   * needs the menu stack fully closed before it acts on the overworld, the
+   * way selecting CUT in pokered's own party menu backs all the way out. */
+  closeToOverworld(): void {
+    while (this.stack.length > 1) this.stack.pop();
+  }
+
   top(): GameState | undefined {
     return this.stack[this.stack.length - 1];
   }
@@ -547,6 +579,16 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   /** Commands.lua:587 heal_party — Pokemon.lua:90 heal over the party. */
   healParty(): void {
     for (const mon of this.save.party) healMon(this.data, mon);
+  }
+
+  /** host.stamp passthrough — see OverworldShell.stamp. */
+  stamp(mapId: number, cx: number, cy: number, on: boolean): void {
+    this.host.stamp(mapId, cx, cy, on ? 1 : 0);
+  }
+
+  /** host.tint passthrough — see OverworldShell.tint. */
+  tint(abgr: number): void {
+    this.host.tint(abgr);
   }
 
   /** Music.lua:383 playOnce / :407 restoreMap, for the script verbs. */
@@ -636,6 +678,41 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       );
     };
     step(0);
+  }
+
+  /**
+   * pokered ItemUseTMHM: teach the machine's move to the chosen party mon.
+   * Without this an HM is an item you can hold and never use, which is what
+   * kept CUT/FLASH's field effects (world/script.ts use_cut/use_flash)
+   * unreachable — no mon could ever know the move. A TM is consumed, an HM
+   * is not (Gen 1 HMs are reusable). A full moveset keeps the same v1
+   * deviation learnEvolutionMoves takes above: MoveLearnMenu is not in this
+   * slice, so the mon declines rather than silently replacing a move.
+   */
+  teachMachine(partyIndex: number, itemId: string): void {
+    const mon = this.save.party[partyIndex];
+    const item = this.data.items?.[itemId];
+    const moveId = item?.machine?.move;
+    if (!mon || !item || !moveId) return;
+    const def = this.data.pokemon[mon.species]!;
+    const name = mon.nickname ?? def.name;
+    const mdef = this.data.moves[moveId];
+    const mname = mdef?.name ?? moveId;
+    if (mon.moves.some((mv) => mv.id === moveId)) {
+      this.showText(`${name} knows\n${mname} already!`);
+      return;
+    }
+    if (!(def.tmhm ?? []).includes(moveId)) {
+      this.showText(`${name} is not\ncompatible with\n${item.name}!`);
+      return;
+    }
+    if (mon.moves.length >= 4) {
+      this.showText(`${name} is trying to\nlearn ${mname}!\f${name} did not learn\n${mname}!`);
+      return;
+    }
+    mon.moves.push({ id: moveId, pp: mdef?.pp ?? 0 });
+    if (item.machine?.kind === "TM") Bag.remove(this.save, itemId, 1);
+    this.showText(`${name} learned\n${mname}!`);
   }
 
   // OverworldShell keeps the seam's method name (overworld.ts is another

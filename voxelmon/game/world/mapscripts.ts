@@ -167,6 +167,235 @@ function pewterEscortRows(): ScriptRow[] {
   ];
 }
 
+// story4.lua M.ROUTE_24 (scripts/Route24.asm): the Nugget Bridge recruiter,
+// object index 1 — he has no trainer_headers entry (checked directly: he's
+// the one gen1recomp cites as such, and the imported data agrees, unlike
+// every other Route 24 trainer), so sight never engages him and his
+// talkScript entry doubles as the forced onStep trigger below. Both YES and
+// NO at the "join TEAM ROCKET?" ask lead to the same fight (pokered's own
+// joke — there is no way out of this one), so the ask is flavour only, not
+// a branch. give_item's own text carries {RAM:wStringBuffer} -> the item
+// name, matching the reference's `("%s received\na NUGGET!"):format(...)`.
+function route24RecruiterScript(_ow: any, save: any): ScriptRow[] {
+  const f = (save as { flags?: Record<string, boolean> } | undefined)?.flags ?? {};
+  const rows: ScriptRow[] = [];
+  if (!f.EVENT_GOT_NUGGET) {
+    rows.push(
+      ["show_text", "Congratulations!\nYou beat our 5\ncontest trainers!\fYou just earned a\nfabulous prize!"],
+      ["give_item", "NUGGET", 1, "{PLAYER} received\na NUGGET!"],
+      ["set_flag", "EVENT_GOT_NUGGET"],
+      ["ask", "By the way, would\nyou like to join\nTEAM ROCKET?"],
+      ["show_text", "Arrgh! You are\nnot convinced?\fThen I'll show\nyou my power!"],
+    );
+  }
+  rows.push(["engage_trainer", 1]);
+  return rows;
+}
+
+// story5.lua M.CERULEAN_CITY ceruleanRivalScene: the Nugget Bridge rival
+// ambush, fired by onStep below at the coord pair (CeruleanCityCoords2) just
+// south of the Route 24 gate. move_npc_to pathfinds around the player itself
+// (this port's moveNpcTo, unlike the walk-list the reference needs), so one
+// call covers both of upstream's px==20/else exit-direction branches.
+function ceruleanRivalRows(px: number): ScriptRow[] {
+  return [
+    ["show_object", "CERULEAN_CITY", "CERULEANCITY_RIVAL"],
+    ["move_npc_to", "CERULEANCITY_RIVAL", px, 5],
+    ["face_object", "CERULEANCITY_RIVAL", "down"],
+    ["show_text", "_CeruleanCityRivalPreBattleText"],
+    ["rival_battle", "OPP_RIVAL1", 7],
+    ["jump_if_false", "end"],
+    ["set_flag", "EVENT_BEAT_CERULEAN_RIVAL"],
+    ["show_text", "_CeruleanCityRivalDefeatedText"],
+    ["show_text", "_CeruleanCityRivalIWentToBillsText"],
+    ["move_npc_to", "CERULEANCITY_RIVAL", px, 12],
+    ["hide_object", "CERULEAN_CITY", "CERULEANCITY_RIVAL"],
+  ];
+}
+
+// story5.lua rocketRows (scripts/CeruleanCity.asm CeruleanCityRocketText):
+// the TM28 (DIG) thief blocking the mart-side path. CeruleanHideRocket's
+// GUARD1/GUARD2 swap reconnects the city the same way Bill's ticket does —
+// either route is enough, so this one alone doesn't need Bill's SS-ticket
+// branch to also work.
+const ceruleanRocketRows: ScriptRow[] = [
+  ["face_player"],
+  ["check_flag", "EVENT_GOT_TM28"],
+  ["jump_if_true", "hide"],
+  ["check_flag", "EVENT_BEAT_CERULEAN_ROCKET_THIEF"],
+  ["jump_if_true", "retry_tm"],
+  ["show_text", "_CeruleanCityRocketText"],
+  ["start_battle", "trainer", "OPP_ROCKET", 5],
+  ["jump_if_false", "end"],
+  ["label", "retry_tm"],
+  ["show_text", "_CeruleanCityRocketIllReturnTheTMText"],
+  ["set_flag", "EVENT_BEAT_CERULEAN_ROCKET_THIEF"],
+  ["give_item", "TM_DIG", 1, false],
+  ["set_flag", "EVENT_GOT_TM28"],
+  ["show_text", "_CeruleanCityRocketReceivedTM28Text"],
+  ["show_text", "_CeruleanCityRocketIBetterGetMovingText"],
+  ["label", "hide"],
+  ["show_object", "CERULEAN_CITY", "CERULEANCITY_GUARD1"],
+  ["hide_object", "CERULEAN_CITY", "CERULEANCITY_GUARD2"],
+  ["hide_object", "CERULEAN_CITY", "CERULEANCITY_ROCKET"],
+];
+
+// gyms.lua leaderTalk + victories.lua OPP_MISTY#1 (scripts/CeruleanGym.asm
+// CeruleanGymMistyText): Misty has no separate advice label, her repeat
+// dialogue after the badge IS the TM11 explanation, so both `advice` and
+// the last `tmText` line point at the same key (matches the reference's
+// `leaderTalk(..., "_CeruleanGymMistyTM11ExplanationText", ...)`).
+const MISTY_GYM = gymLeader({
+  trainerClass: "OPP_MISTY",
+  beatFlag: "EVENT_BEAT_MISTY",
+  preText: "_CeruleanGymMistyPreBattleText",
+  deactivate: ["EVENT_BEAT_CERULEAN_GYM_TRAINER_0", "EVENT_BEAT_CERULEAN_GYM_TRAINER_1"],
+  badge: "CASCADEBADGE",
+  badgeText: ["_CeruleanGymMistyReceivedCascadeBadgeText"],
+  tmPre: "_CeruleanGymMistyCascadeBadgeInfoText",
+  tm: "TM_BUBBLEBEAM",
+  gotFlag: "EVENT_GOT_TM11",
+  tmText: ["_CeruleanGymMistyReceivedTM11Text"],
+  advice: "_CeruleanGymMistyTM11ExplanationText",
+});
+
+// story.lua M.BILLS_HOUSE (scripts/BillsHouse.asm): the cell-separation
+// cutscene, compressed the same way the reference compresses it — into the
+// dialogue rather than a real teleporter animation. moveNpcTo's pathfinder
+// covers both of upstream's "player standing in the way" / "clear path"
+// walk branches with one call, same as the Cerulean rival above.
+const billsHousePokemonRows: ScriptRow[] = [
+  ["ask", "_BillsHouseBillImNotAPokemonText"],
+  ["jump_if_true", "toMachine"],
+  ["show_text", "_BillsHouseBillNoYouGottaHelpText"],
+  ["label", "toMachine"],
+  ["show_text", "_BillsHouseBillUseSeparationSystemText"],
+  ["move_npc_to", "BILLSHOUSE_BILL_POKEMON", 6, 2],
+  ["hide_object", "BILLS_HOUSE", "BILLSHOUSE_BILL_POKEMON"],
+  ["set_flag", "EVENT_BILL_SAID_USE_CELL_SEPARATOR"],
+];
+
+const billsHouseSsTicketRows: ScriptRow[] = [
+  ["face_player"],
+  ["check_flag", "EVENT_GOT_SS_TICKET"],
+  ["jump_if_true", "repeat"],
+  ["show_text", "_BillsHouseBillThankYouText"],
+  ["give_item", "S_S_TICKET", 1, false],
+  ["show_text", "_SSTicketReceivedText"],
+  ["set_flag", "EVENT_GOT_SS_TICKET"],
+  // The Cerulean guards are a swap pair, not scenery: (27,12) is the only
+  // walkable neighbour of the trashed house's south door, one of just two
+  // ways through the fence splitting the city in half (the TM28 Rocket
+  // thief opens the other). Leaving GUARD2 up severs the city permanently.
+  ["show_object", "CERULEAN_CITY", "CERULEANCITY_GUARD1"],
+  ["hide_object", "CERULEAN_CITY", "CERULEANCITY_GUARD2"],
+  ["show_text", "_BillsHouseBillWhyDontYouGoInsteadOfMeText"],
+  ["jump", "end"],
+  ["label", "repeat"],
+  ["show_text", "_BillsHouseBillWhyDontYouGoInsteadOfMeText"],
+];
+
+const billsHouseRarePokemonRows: ScriptRow[] = [
+  ["face_player"],
+  ["show_text", "_BillsHouseBillCheckOutMyRarePokemonText"],
+];
+
+// OverworldController.lua:2248 billsHousePC (data/events/hidden_events.asm
+// hidden_event 1,4 BillsHousePC): the separator machine's own PC, a hidden
+// tile (not an NPC) at (1,4) facing up — wired into Overworld.interact()
+// rather than sight/coord, same as the generic Pokémon Center PCs in
+// pctiles.ts. Registered under a synthetic TEXT_* key (there's no real ROM
+// text pointer for a hidden-event tile) purely so it can reuse showMapText/
+// talkScript's existing script dispatch instead of a bespoke path.
+// v1 simplification: the post-ticket Eevee-evolution showcase list
+// (BillsHousePokemonList, a DexEntryMenu picker) needs a list-menu UI this
+// port doesn't have yet, so that branch shows its own opening line as plain
+// flavour text instead of opening a menu — an honest simplification, not a
+// silent gap, matching how give_pokemon already treats the nickname prompt.
+export const TEXT_BILLSHOUSE_PC = "TEXT_BILLSHOUSE_PC";
+function billsHousePcScript(_ow: any, save: any): ScriptRow[] {
+  const f = (save as { flags?: Record<string, boolean> } | undefined)?.flags ?? {};
+  if (f.EVENT_LEFT_BILLS_HOUSE_AFTER_HELPING) {
+    return [["show_text", "_BillsHousePokemonListText1"]];
+  }
+  if (f.EVENT_USED_CELL_SEPARATOR_ON_BILL || !f.EVENT_BILL_SAID_USE_CELL_SEPARATOR) {
+    return [["show_text", "_BillsHouseMonitorText"]];
+  }
+  return [
+    ["show_text", "_BillsHouseInitiatedText"],
+    ["set_flag", "EVENT_USED_CELL_SEPARATOR_ON_BILL"],
+    // play_sound is an honest no-op in this port (script.ts VERBS) — the
+    // Switch/Tink/Shrink/Get_Item1 cues are silent, but the wait beats
+    // between them still hold the scene's pacing.
+    ["play_sound", "Switch"],
+    ["wait", 32],
+    ["play_sound", "Tink"],
+    ["wait", 80],
+    ["play_sound", "Shrink"],
+    ["wait", 48],
+    ["play_sound", "Tink"],
+    ["wait", 32],
+    ["play_sound", "Get_Item1"],
+    ["wait", 30],
+    ["show_object", "BILLS_HOUSE", "BILLSHOUSE_BILL1"],
+    ["move_npc_to", "BILLSHOUSE_BILL1", 4, 4],
+  ];
+}
+
+// gyms.lua leaderTalk + victories.lua OPP_LT_SURGE#1 (scripts/VermilionGym.asm
+// VermilionGymLTSurgeText .got_tm24_already).
+const LT_SURGE_GYM = gymLeader({
+  trainerClass: "OPP_LT_SURGE",
+  beatFlag: "EVENT_BEAT_LT_SURGE",
+  preText: "_VermilionGymLTSurgePreBattleText",
+  deactivate: [
+    "EVENT_BEAT_VERMILION_GYM_TRAINER_0",
+    "EVENT_BEAT_VERMILION_GYM_TRAINER_1",
+    "EVENT_BEAT_VERMILION_GYM_TRAINER_2",
+  ],
+  badge: "THUNDERBADGE",
+  badgeText: ["_VermilionGymLTSurgeReceivedThunderBadgeText"],
+  tmPre: "_VermilionGymLTSurgeThunderBadgeInfoText",
+  tm: "TM_THUNDERBOLT",
+  gotFlag: "EVENT_GOT_TM24",
+  tmText: ["_VermilionGymLTSurgeReceivedTM24Text", "_TM24ExplanationText"],
+  advice: "_VermilionGymLTSurgePostBattleAdviceText",
+});
+
+// scripts/CeruleanTrashedHouse.asm CeruleanTrashedHouseFishingGuruText: pure
+// flavor branching on whether the player still carries the stolen TM_DIG —
+// no flags change either way.
+const trashedHouseFishingGuruRows: ScriptRow[] = [
+  ["check_item", "TM_DIG"],
+  ["jump_if_true", "has_tm"],
+  ["show_text", "_CeruleanTrashedHouseFishingGuruTheyStoleATMText"],
+  ["jump", "end"],
+  ["label", "has_tm"],
+  ["show_text", "_CeruleanTrashedHouseFishingGuruWhatsLostIsLostText"],
+];
+
+// story.lua M.VERMILION_CITY (scripts/VermilionCity.asm
+// VermilionCityDefaultScript's SSAnneTicketCheckCoords): the sailor guarding
+// the dock gangway at (18,30). Faithfully ported as onStep (the per-frame
+// coord check) with a matching talk entry for walking up and interacting
+// directly — same dual-trigger shape as the Route 24 recruiter above. He
+// never hides; once the ship has sailed he only reports it gone.
+function vermilionSailorRows(save: any): ScriptRow[] {
+  const f = (save as { flags?: Record<string, boolean> } | undefined)?.flags ?? {};
+  if (f.EVENT_SS_ANNE_LEFT) {
+    return [["show_text", "_VermilionCitySailor1ShipSetSailText"]];
+  }
+  return [
+    ["show_text", "_VermilionCitySailor1DoYouHaveATicketText"],
+    ["check_item", "S_S_TICKET"],
+    ["jump_if_false", "no_ticket"],
+    ["show_text", "_VermilionCitySailor1FlashedTicketText"],
+    ["jump", "end"],
+    ["label", "no_ticket"],
+    ["show_text", "_VermilionCitySailor1YouNeedATicketText"],
+  ];
+}
+
 export const MAP_SCRIPTS: Record<string, MapScript> = {
   PEWTER_CITY: {
     // PewterGuys trigger tiles on the west-leaving path; fires until Brock is
@@ -680,6 +909,206 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
         tmText: ["_PewterGymReceivedTM34Text", "_TM34ExplanationText"],
         advice: "_PewterGymBrockPostBattleAdviceText",
       }),
+    },
+  },
+
+  // scripts/CeruleanGym.asm + victories.lua OPP_MISTY#1 (via gymLeader).
+  CERULEAN_GYM: {
+    talk: {
+      TEXT_CERULEANGYM_MISTY: MISTY_GYM,
+    },
+  },
+
+  // story4.lua M.ROUTE_24: the Nugget Bridge recruiter (route24RecruiterScript
+  // above) is both the talk entry AND, since he has no trainer_headers sight
+  // range, the forced onStep trigger for the one tile in front of him
+  // (Route24DefaultScript's dbmapcoord 10,15) while EVENT_GOT_NUGGET is unset.
+  ROUTE_24: {
+    talk: {
+      TEXT_ROUTE24_COOLTRAINER_M1: route24RecruiterScript,
+    },
+    onStep: (ow: any, save: any) => {
+      const f = save?.flags ?? {};
+      if (f.EVENT_GOT_NUGGET) return null;
+      const p = ow?.player;
+      if (p?.cellX !== 10 || p?.cellY !== 15) return null;
+      return route24RecruiterScript(ow, save);
+    },
+  },
+
+  // story5.lua M.CERULEAN_CITY: the Nugget Bridge rival ambush
+  // (CeruleanCityCoords2) and the TM28 Rocket thief (Coords1), both onStep
+  // land-triggers gated on their own beat flags so they fire once.
+  CERULEAN_CITY: {
+    talk: {
+      TEXT_CERULEANCITY_ROCKET: ceruleanRocketRows,
+    },
+    onStep: (ow: any, save: any) => {
+      const f = save?.flags ?? {};
+      const p = ow?.player;
+      const x = p?.cellX;
+      const y = p?.cellY;
+      if (!f.EVENT_BEAT_CERULEAN_ROCKET_THIEF && ((x === 30 && y === 7) || (x === 30 && y === 9))) {
+        return ceruleanRocketRows;
+      }
+      if (!f.EVENT_BEAT_CERULEAN_RIVAL && ((x === 20 && y === 6) || (x === 21 && y === 6))) {
+        return ceruleanRivalRows(x);
+      }
+      return null;
+    },
+  },
+
+  // story.lua M.BILLS_HOUSE: the cell-separation cutscene (Bill-as-Pokémon
+  // asks for the PC, the PC itself does the separation, human Bill hands
+  // over the SS Ticket).
+  BILLS_HOUSE: {
+    talk: {
+      TEXT_BILLSHOUSE_BILL_POKEMON: billsHousePokemonRows,
+      TEXT_BILLSHOUSE_BILL_SS_TICKET: billsHouseSsTicketRows,
+      TEXT_BILLSHOUSE_BILL_CHECK_OUT_MY_RARE_POKEMON: billsHouseRarePokemonRows,
+      [TEXT_BILLSHOUSE_PC]: billsHousePcScript,
+    },
+  },
+
+  // story.lua M.ROUTE_25 Route25ToggleBillsScript: leaving after the SS
+  // Ticket arms the post-quest Bill NPC (BILL2) and retires the Nugget
+  // Bridge recruiter for good, same as pokered's TOGGLE_NUGGET_BRIDGE_GUY.
+  // MapScript has no onEnter hook, so this rides onStep instead (the same
+  // mechanism PEWTER_CITY's guide-block already uses); the flag guard makes
+  // it a one-time, idempotent side effect rather than a script, so firing on
+  // the player's first step on the route (instead of the instant they walk
+  // in) is the only difference from the reference, and an imperceptible one.
+  ROUTE_25: {
+    onStep: (ow: any, save: any) => {
+      const f = save?.flags ?? {};
+      if (!f.EVENT_GOT_SS_TICKET || f.EVENT_LEFT_BILLS_HOUSE_AFTER_HELPING) return null;
+      f.EVENT_LEFT_BILLS_HOUSE_AFTER_HELPING = true;
+      ow.setObjectHidden?.("ROUTE24_COOLTRAINER_M1", true);
+      ow.setObjectHidden?.("BILLSHOUSE_BILL1", true);
+      ow.setObjectHidden?.("BILLSHOUSE_BILL2", false);
+      return null;
+    },
+  },
+
+  // scripts/CeruleanTrashedHouse.asm: the Fishing Guru whose TM the Rocket
+  // thief stole — pure flavor, no flags.
+  CERULEAN_TRASHED_HOUSE: {
+    talk: {
+      TEXT_CERULEANTRASHEDHOUSE_FISHING_GURU: trashedHouseFishingGuruRows,
+    },
+  },
+
+  // scripts/VermilionGym.asm + victories.lua OPP_LT_SURGE#1 (via gymLeader).
+  VERMILION_GYM: {
+    talk: {
+      TEXT_VERMILIONGYM_LT_SURGE: LT_SURGE_GYM,
+    },
+  },
+
+  // story.lua M.VERMILION_CITY: the sailor guarding the S.S. Anne gangway
+  // (vermilionSailorRows above), both as the forced onStep at his coord
+  // (18,30) facing down and as the ordinary talk entry.
+  VERMILION_CITY: {
+    talk: {
+      TEXT_VERMILIONCITY_SAILOR1: (_ow: any, save: any) => vermilionSailorRows(save),
+    },
+    onStep: (ow: any, save: any) => {
+      const p = ow?.player;
+      if (p?.cellX !== 18 || p?.cellY !== 30 || p?.facing !== "down") return null;
+      return vermilionSailorRows(save);
+    },
+  },
+
+  // story3.lua M.VERMILION_DOCK (scripts/VermilionDock.asm
+  // VermilionDockSSAnneLeavesScript): stepping off the ship (cellY 2) with
+  // HM01 in hand sends her off. The reference slides the ship's hull BLOCKS
+  // west column by column, live-editing the cooked map mesh — this engine
+  // bakes geometry at cook time with no runtime rewrite path, and the
+  // per-tile mesher every map shares is the wrong place to carve a one-map
+  // exception into. Instead, voxelmon/cook/mesh.ts post-processes just this
+  // map's FINISHED quad list (an isolated, additive step — nothing upstream
+  // changed, no other map's cook output touched) and splits the hull's 8x3
+  // cell footprint into 24 individual stamps, the exact mechanism cut trees
+  // already use. hideHullColumn below turns 6 of them off at a time (2 cells
+  // wide, all 3 rows), bow to stern, so the ship genuinely recedes column by
+  // column — real animation, not a fade — just without the reference's
+  // sub-tile pixel slide. A safety net covers landing here after she's
+  // already left, though in practice the sailor's onStep in VERMILION_CITY
+  // already blocks that approach before it's reachable.
+  VERMILION_DOCK: {
+    onStep: (ow: any, save: any) => {
+      const f = save?.flags ?? {};
+      const p = ow?.player;
+      const mapId = ow?.map?.def?.index;
+      if (f.EVENT_SS_ANNE_LEFT) {
+        return [
+          ["show_text", "_VermilionCitySailor1ShipSetSailText"],
+          ["warp", "VERMILION_CITY", 18, 31, "up"],
+        ];
+      }
+      if (f.EVENT_GOT_HM01 && p?.cellY === 2 && typeof mapId === "number") {
+        // Hull footprint (voxelmon/cook/mesh.ts VERMILION_DOCK special case):
+        // cellX 10-17, cellY 3-5 — 4 columns of 2 cells, bow (10-11) first.
+        const hideHullColumn = (cx0: number): ScriptRow[] => {
+          const rows: ScriptRow[] = [];
+          for (let cx = cx0; cx < cx0 + 2; cx++) {
+            for (let cy = 3; cy <= 5; cy++) rows.push(["stamp", mapId, cx, cy, false]);
+          }
+          rows.push(["wait", 20]);
+          return rows;
+        };
+        return [
+          ["set_flag", "EVENT_SS_ANNE_LEFT"],
+          ["play_sound", "SS_Anne_Horn"],
+          ["wait", 40],
+          ...hideHullColumn(10),
+          ...hideHullColumn(12),
+          ...hideHullColumn(14),
+          ...hideHullColumn(16),
+          ["play_sound", "SS_Anne_Horn"],
+          ["wait", 60],
+          ["warp", "VERMILION_CITY", 18, 31, "up"],
+        ];
+      }
+      return null;
+    },
+  },
+
+  // story.lua M.SS_ANNE_2F: the rival battle, talk-triggered (he's visible
+  // on arrival, not hidden/ambush-triggered like the Cerulean/Route 22
+  // rivals) — after the beat flag is set, re-talking is silent.
+  SS_ANNE_2F: {
+    talk: {
+      TEXT_SSANNE2F_RIVAL: [
+        ["face_player"],
+        ["check_flag", "EVENT_BEAT_SS_ANNE_RIVAL"],
+        ["jump_if_true", "end"],
+        ["show_text", "_SSAnne2FRivalText"],
+        ["rival_battle", "OPP_RIVAL2", 1],
+        ["jump_if_false", "end"],
+        ["set_flag", "EVENT_BEAT_SS_ANNE_RIVAL"],
+        ["show_text", "_SSAnne2FRivalDefeatedText"],
+      ],
+    },
+  },
+
+  // story.lua M.SS_ANNE_CAPTAINS_ROOM (scripts/SSAnneCaptainsRoom.asm): rub
+  // his back, he hands over HM01 CUT.
+  SS_ANNE_CAPTAINS_ROOM: {
+    talk: {
+      TEXT_SSANNECAPTAINSROOM_CAPTAIN: [
+        ["check_flag", "EVENT_GOT_HM01"],
+        ["jump_if_true", "already"],
+        ["show_text", "_SSAnneCaptainsRoomRubCaptainsBackText"],
+        ["play_once", "Music_PkmnHealed"],
+        ["show_text", "_SSAnneCaptainsRoomCaptainIFeelMuchBetterText"],
+        ["give_item", "HM_CUT", 1, false],
+        ["show_text", "_SSAnneCaptainsRoomCaptainReceivedHM01Text"],
+        ["set_flag", "EVENT_GOT_HM01"],
+        ["jump", "end"],
+        ["label", "already"],
+        ["show_text", "_SSAnneCaptainsRoomCaptainNotSickAnymoreText"],
+      ],
     },
   },
 };

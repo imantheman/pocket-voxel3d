@@ -178,15 +178,24 @@ export class Scene {
     const t0 = p ? p.now() : 0;
     this.emitMaps(view);
     const t1 = p ? p.now() : 0;
-    this.emitCam(view);
-    this.emitEnts(view);
-    this.emitEmote(view);
+    // The overworld camera and its ents (the player, every NPC) are only
+    // relevant when there's an overworld to look at. A battle stages its
+    // own camera (battleCam/arena) and shows only the two Pokémon — the
+    // trainers standing beside them in the reference game are never drawn
+    // — so skip all three while bv is set; hideAllEnts (in emitBattle,
+    // battle-start only) clears whatever was left showing from the moment
+    // before the battle began.
+    const bv = view.battleView();
+    if (!bv) {
+      this.emitCam(view);
+      this.emitEnts(view);
+      this.emitEmote(view);
+    }
     const t2 = p ? p.now() : 0;
     if (p) {
       p.maps += t1 - t0;
       p.ents += t2 - t1;
     }
-    const bv = view.battleView();
     if (bv) {
       this.emitBattle(view, bv);
       if (p) p.ui += p.now() - t2;
@@ -206,6 +215,7 @@ export class Scene {
     const host = this.host;
     if (!this.battleActive) {
       this.battleActive = true;
+      this.hideAllEnts();
       // drop the overworld ui program; the battle ui repaints from uiClear
       this.uiOwner = null;
       this.uiRows = [];
@@ -225,9 +235,12 @@ export class Scene {
     const seen = new Set<number>();
     for (const c of desired) {
       seen.add(c.side);
-      const key = `${c.pic},${c.x},${c.y}`;
+      // The offset is part of the key: a lunging card changes only dx/dz,
+      // and without them here the op would be suppressed as a no-op and the
+      // animation would never leave the guest.
+      const key = `${c.pic},${c.x},${c.y},${c.dx},${c.dy},${c.dz}`;
       if (this.cardShown.get(c.side) !== key) {
-        host.card(c.side, c.pic, c.x, c.y);
+        host.card(c.side, c.pic, c.x, c.y, c.dx, c.dy, c.dz);
         this.cardShown.set(c.side, key);
       }
     }
@@ -424,6 +437,20 @@ export class Scene {
         this.entShown[slot] = 0;
       }
     }
+  }
+
+  /** Hide every ent slot still showing from the moment before a battle
+   * started — emitEnts (and its own end-of-call hide sweep) is skipped for
+   * the whole battle, so nothing else clears the player/NPCs left over
+   * from the last overworld frame. */
+  private hideAllEnts(): void {
+    for (let slot = 0; slot < ENTS_MAX; slot++) {
+      if (this.entShown[slot] !== 0) {
+        this.host.entHide(slot);
+        this.entShown[slot] = 0;
+      }
+    }
+    this.entSeen.fill(0);
   }
 
   private emitEmote(view: SceneView): void {
@@ -724,19 +751,24 @@ export class Scene {
         if (pv.swapFrom !== null && pv.swapFrom !== pv.index) {
           host.uiTile(X + 1, IY + pv.swapFrom * 2, ARROW_CURSOR);
         }
-        // per-mon submenu: STATS / SWITCH / CANCEL
+        // per-mon submenu: STATS / SWITCH / [CUT] / [FLASH] / CANCEL — see
+        // partyscreen.ts's submenuItems() for which of CUT/FLASH show.
+        // Height grows with the item count, anchored so it never runs off
+        // the 18-row grid (UI_ROWS, spec.rs) even at the max 5 items.
         if (pv.mode === "submenu") {
-          const items = ["STATS", "SWITCH", "CANCEL"];
-          const sx = 10, sy = 9, sw = 9;
+          const items: string[] = pv.submenuItems;
+          const sx = 10, sw = 9;
+          const innerH = items.length * 2;
+          const sy = Math.min(9, 16 - innerH);
           host.uiTile(sx, sy, BORDER_TL);
           host.uiFill(sx + 1, sy, sw - 1, 1, BORDER_H);
           host.uiTile(sx + sw, sy, BORDER_TR);
-          host.uiFill(sx, sy + 1, 1, 6, BORDER_V);
-          host.uiFill(sx + sw, sy + 1, 1, 6, BORDER_V);
-          host.uiFill(sx + 1, sy + 1, sw - 1, 6, SPACE);
-          host.uiTile(sx, sy + 7, BORDER_BL);
-          host.uiFill(sx + 1, sy + 7, sw - 1, 1, BORDER_H);
-          host.uiTile(sx + sw, sy + 7, BORDER_BR);
+          host.uiFill(sx, sy + 1, 1, innerH, BORDER_V);
+          host.uiFill(sx + sw, sy + 1, 1, innerH, BORDER_V);
+          host.uiFill(sx + 1, sy + 1, sw - 1, innerH, SPACE);
+          host.uiTile(sx, sy + 1 + innerH, BORDER_BL);
+          host.uiFill(sx + 1, sy + 1 + innerH, sw - 1, 1, BORDER_H);
+          host.uiTile(sx + sw, sy + 1 + innerH, BORDER_BR);
           items.forEach((label, i) => {
             this.stamp(host, sx + 3, sy + 2 + i * 2, label);
             if (i === pv.submenuIndex) host.uiTile(sx + 2, sy + 2 + i * 2, ARROW_CURSOR);

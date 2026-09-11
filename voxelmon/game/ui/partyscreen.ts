@@ -11,6 +11,10 @@ interface PartyGame {
   pop(): void;
   save: any;
   data: any;
+  /** Closes every pushed menu down to the overworld — a field HM move
+   * (CUT/FLASH) needs the menu gone before it runs. */
+  closeToOverworld(): void;
+  overworld: { runScript(rows: unknown[], onDone?: () => void): void };
 }
 
 export interface PartyEntry {
@@ -27,7 +31,15 @@ export interface PartyView {
   mode: "list" | "submenu";
   submenuIndex: number;
   swapFrom: number | null;
+  /** STATS, SWITCH, then CUT/FLASH if the selected mon knows them, then
+   * CANCEL — the renderer (scene.ts) draws exactly this list, so the box
+   * only needs to grow/shrink with it, never guess at its contents. */
+  submenuItems: string[];
 }
+
+/** The two field moves this port wires up outside battle (PartyMenu.lua's
+ * HM dispatch) — voxelmon/game/world/script.ts's use_cut/use_flash verbs. */
+const FIELD_MOVES = ["CUT", "FLASH"] as const;
 
 export class PartyState implements GameState {
   readonly kind = "party";
@@ -37,7 +49,13 @@ export class PartyState implements GameState {
   // PartyMenu.lua swapFrom: the first pick, held while choosing the partner.
   private swapFrom: number | null = null;
 
-  constructor(private game: PartyGame) {}
+  /**
+   * `opts.onPick` turns the screen into a chooser (PartyMenu.lua's
+   * ChoosePokemon-for-an-item mode): picking a mon closes the screen and
+   * hands its index back instead of opening the STATS/SWITCH submenu. The
+   * bag uses it to pick who learns a TM/HM.
+   */
+  constructor(private game: PartyGame, private opts?: { onPick?: (index: number) => void }) {}
 
   private party(): PartyMon[] {
     return (this.game.save.party ?? []) as PartyMon[];
@@ -55,6 +73,12 @@ export class PartyState implements GameState {
       return;
     }
     if (p.a && this.index < this.party().length) {
+      const pick = this.opts?.onPick;
+      if (pick) {
+        this.game.pop();
+        pick(this.index);
+        return;
+      }
       if (this.swapFrom !== null) {
         // second pick: swap the two slots (PartyMenu.lua:563-566)
         if (this.swapFrom !== this.index) {
@@ -71,15 +95,44 @@ export class PartyState implements GameState {
     }
   }
 
+  // PartyMenu.lua's HM submenu: STATS/SWITCH are always offered; CUT/FLASH
+  // only appear when the mon the submenu was opened on actually knows them
+  // (mon.moves, battle/mon.ts's MoveSlot.id — the same id space
+  // constants.hmMoves would use if the cook ever populated it).
+  private submenuItems(): string[] {
+    const mon = this.party()[this.index];
+    const knows = (id: string) => mon?.moves?.some((m) => m.id === id) ?? false;
+    const items = ["STATS", "SWITCH"];
+    for (const id of FIELD_MOVES) if (knows(id)) items.push(id);
+    items.push("CANCEL");
+    return items;
+  }
+
   private updateSubmenu(p: any): void {
-    if (p.up) this.submenuIndex = (this.submenuIndex + 2) % 3;
-    if (p.down) this.submenuIndex = (this.submenuIndex + 1) % 3;
+    const items = this.submenuItems();
+    const n = items.length;
+    if (p.up) this.submenuIndex = (this.submenuIndex + n - 1) % n;
+    if (p.down) this.submenuIndex = (this.submenuIndex + 1) % n;
     if (p.b) { this.mode = "list"; return; }
     if (!p.a) return;
+    const label = items[this.submenuIndex];
     this.mode = "list";
-    if (this.submenuIndex === 0) this.game.push(new SummaryState(this.game, this.index)); // STATS
-    else if (this.submenuIndex === 1) this.swapFrom = this.index; // SWITCH
+    if (label === "STATS") this.game.push(new SummaryState(this.game, this.index));
+    else if (label === "SWITCH") this.swapFrom = this.index;
+    else if ((FIELD_MOVES as readonly string[]).includes(label!)) this.useFieldMove(label as "CUT" | "FLASH");
     // else CANCEL: already back to list
+  }
+
+  // PartyMenu.lua's HM dispatch: closes every menu on top of the overworld
+  // (pokered backs all the way out too) and lets the move's own verb
+  // (world/script.ts use_cut/use_flash) decide the effect and the text —
+  // CUT checks the tile the player faces, FLASH just needs to run.
+  private useFieldMove(moveId: "CUT" | "FLASH"): void {
+    const mon = this.party()[this.index];
+    const name = mon?.nickname ?? this.game.data.pokemon?.[mon?.species]?.name ?? mon?.species ?? "";
+    this.game.closeToOverworld();
+    const verb = moveId === "CUT" ? "use_cut" : "use_flash";
+    this.game.overworld.runScript([[verb, name]]);
   }
 
   view(): PartyView {
@@ -96,6 +149,7 @@ export class PartyState implements GameState {
       mode: this.mode,
       submenuIndex: this.submenuIndex,
       swapFrom: this.swapFrom,
+      submenuItems: this.submenuItems(),
     };
   }
 }

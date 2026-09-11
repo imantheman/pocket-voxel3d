@@ -106,7 +106,6 @@ export class BattleUi {
   private playerLevel: string | null = null;
   private cursorCell: [number, number] | null = null;
   private swapCell: [number, number] | null = null;
-  private choiceYes = true;
   private chromeTextDirty = false;
 
   /** Full repaint + delta emit for this tick. Call once per tick while the
@@ -118,7 +117,6 @@ export class BattleUi {
       battle.phase,
       enemyHud ? 1 : 0,
       playerHud ? 1 : 0,
-      battle.choiceOpen ? 1 : 0,
       battle.statBoxMon ? 1 : 0,
       battle.phase === "party" ? battle.save.party.length : 0,
       battle.phase === "item" ? battle.itemList.length : 0,
@@ -202,72 +200,17 @@ export class BattleUi {
     this.cursorCell = null;
     this.swapCell = null;
 
-    // the text box spans the screen bottom for the whole battle
-    // (drawTextArea :5498 Font.drawBox(0,12,20,6))
-    this.box(host, 0, 12, 20, 6);
+    // The battle message box now lives on the Kanto Gear bottom screen
+    // (kantogear.ts drawBattleMessage); the top screen keeps only the HUDs and
+    // the level-up stat window so the scene fills the space the box used to take.
 
     if (enemyHud) this.paintEnemyHud(host, battle);
-    if (playerHud && battle.phase !== "moveSelect") this.paintPlayerHud(host, battle);
-
-    if (battle.phase === "menu") {
-      // BATTLE_MENU_TEMPLATE: box (8,12) 12x6, "FIGHT <PK><MN> / ITEM RUN"
-      // from (10,14), cursor columns 9/15 (:5553-5559)
-      this.box(host, 8, 12, 12, 6);
-      this.text(host, 10, 14, "FIGHT");
-      host.uiTile(16, 14, GLYPH_PK);
-      host.uiTile(17, 14, GLYPH_MN);
-      this.text(host, 10, 16, "ITEM");
-      this.text(host, 16, 16, "RUN");
-      this.paintMenuCursor(host, battle);
-    } else if (battle.phase === "moveSelect") {
-      // MoveSelectionMenu: move box (4,12) 16x6, TYPE/PP box (0,8) 11x5,
-      // the two border-merge cells, names at column 6 (:5561-5611)
-      this.box(host, 0, 8, 11, 5);
-      this.box(host, 4, 12, 16, 6);
-      host.uiTile(4, 12, BORDER_H);
-      host.uiTile(10, 12, BORDER_BR);
-      battle.player.curMoves.forEach((mv, i) => {
-        const def = battle.data.moves[mv.id];
-        this.text(host, 6, 13 + i, def?.name ?? mv.id);
-      });
-      this.text(host, 1, 9, "TYPE/");
-      const sel = battle.player.curMoves[battle.moveIndex - 1];
-      const selDef = sel ? battle.data.moves[sel.id] : undefined;
-      if (selDef) {
-        this.text(host, 2, 10, battle.chart.displayName(selDef.type));
-        const maxPP = selDef.pp + (sel.ppUps ?? 0) * Math.floor(selDef.pp / 5);
-        this.text(host, 5, 11, `${String(sel.pp).padStart(2)}/${String(maxPP).padStart(2)}`);
-      }
-      this.paintMoveCursor(host, battle);
-    } else if (battle.phase === "party") {
-      // v1 stand-in for the PartyMenu screen (the reference pushes a full
-      // screen; ChooseNextMon :4097): name/level/HP rows + cursor
-      const party = battle.save.party;
-      this.box(host, 0, 0, 20, Math.max(4, 2 + party.length * 2));
-      party.forEach((mon, i) => {
-        const name = mon.nickname ?? battle.data.pokemon[mon.species].name;
-        this.text(host, 2, 1 + i * 2, name);
-        this.text(
-          host,
-          12,
-          1 + i * 2,
-          `L${String(mon.level).padStart(2)} ${String(mon.hp).padStart(3)}/${String(mon.stats.hp).padStart(3)}`,
-        );
-      });
-      host.uiTile(1, 1 + (battle.partyIndex ?? 0) * 2, ARROW_CURSOR);
-      this.cursorCell = [1, 1 + (battle.partyIndex ?? 0) * 2];
-    } else if (battle.phase === "item") {
-      // v1 stand-in for the battle BagMenu (balls only)
-      const list = battle.itemList;
-      this.box(host, 4, 2, 16, Math.max(4, 2 + list.length * 2));
-      list.forEach((id, i) => {
-        const name = battle.data.items?.[id]?.name ?? id;
-        this.text(host, 6, 3 + i * 2, name);
-        this.text(host, 15, 3 + i * 2, `x${String(battle.save.inventory[id] ?? 0).padStart(2)}`);
-      });
-      host.uiTile(5, 3 + battle.itemIndex * 2, ARROW_CURSOR);
-      this.cursorCell = [5, 3 + battle.itemIndex * 2];
-    }
+    // The player HUD stays up in every phase now — the move box that used to
+    // cover it (moveSelect) is gone; the action/move/party/item menus live on
+    // the Kanto Gear bottom screen, so the top screen keeps only the HUDs, the
+    // message box and the stat window. Text-box choice prompts (choiceOpen)
+    // still draw below in deltas().
+    if (playerHud) this.paintPlayerHud(host, battle);
 
     // the level-up stat window (PrintStatsBox: box (9,2) 11x10, :400-431)
     if (battle.statBoxMon) {
@@ -285,42 +228,43 @@ export class BattleUi {
       });
     }
 
-    // YES/NO over the still-visible text (sayChoice; placement follows the
-    // overworld ChoiceBox approximation in scene.ts)
-    if (battle.choiceOpen) {
-      this.box(host, 14, 7, 6, 5);
-      this.text(host, 16, 8, "YES");
-      this.text(host, 16, 10, "NO");
-      this.choiceYes = battle.choiceYes;
-      host.uiTile(15, battle.choiceYes ? 8 : 10, ARROW_CURSOR);
-    }
+    // YES/NO (sayChoice) now draws on the Kanto Gear bottom screen, over the
+    // battle dialog it belongs to (kantogear.ts drawBattleMessage) — see
+    // that file for the ChoiceBox.lua-ported box/cursor placement.
   }
 
   /** DrawEnemyHUDAndHPBar (:5391-5413): name row 0, <LV>/status row 1, tick
    * + bar row 2, underline row 3. */
   private paintEnemyHud(host: VoxelHost, battle: WildBattle): void {
     const e = battle.enemy;
-    this.text(host, nameTileX(1, e.name), 0, e.name);
-    this.paintLevelOrStatus(host, battle, e, 4, 1, false);
-    host.uiTile(1, 2, HUD_TICK);
-    this.paintBar(host, battle, e, 2, 2, false);
-    host.uiTile(1, 3, HUD_EDGE_L);
-    host.uiFill(2, 3, 8, 1, HUD_LINE);
-    host.uiTile(10, 3, HUD_EDGE_R);
+    // Shifted 1 col left of the ported DrawEnemyHUDAndHPBar position (was
+    // name/1,0; <LV>/4,1; tick/1,2; bar/2,2; underline 1-10,3) — a deliberate
+    // 3DS-remake deviation (Isaac), not a Lua port: push the enemy panel to
+    // the last column of slack before column 0, and the player panel
+    // (paintPlayerHud) the same amount toward column 19, so the two read as
+    // clearly left/right instead of meeting near screen centre.
+    this.text(host, nameTileX(0, e.name), 0, e.name);
+    this.paintLevelOrStatus(host, battle, e, 3, 1, false);
+    host.uiTile(0, 2, HUD_TICK);
+    this.paintBar(host, battle, e, 1, 2, false);
+    host.uiTile(0, 3, HUD_EDGE_L);
+    host.uiFill(1, 3, 8, 1, HUD_LINE);
+    host.uiTile(9, 3, HUD_EDGE_R);
   }
 
   /** DrawPlayerHUDAndHPBar (:5473-5493): name (10,7), <LV> (14,8), bar
-   * (10,9), digits row 10, underline row 11. */
+   * (10,9), digits row 10, underline row 11 — shifted 1 col right, see
+   * paintEnemyHud. */
   private paintPlayerHud(host: VoxelHost, battle: WildBattle): void {
     const p = battle.player;
-    this.text(host, nameTileX(10, p.name), 7, p.name);
-    this.paintLevelOrStatus(host, battle, p, 14, 8, true);
-    this.paintBar(host, battle, p, 10, 9, true);
+    this.text(host, nameTileX(11, p.name), 7, p.name);
+    this.paintLevelOrStatus(host, battle, p, 15, 8, true);
+    this.paintBar(host, battle, p, 11, 9, true);
     this.paintPlayerDigits(host, battle);
-    host.uiTile(18, 10, HUD_TICK);
-    host.uiTile(9, 11, HUD_HALF_ARROW);
-    host.uiFill(10, 11, 8, 1, HUD_LINE);
-    host.uiTile(18, 11, HUD_EDGE_DOWN);
+    host.uiTile(19, 10, HUD_TICK);
+    host.uiTile(10, 11, HUD_HALF_ARROW);
+    host.uiFill(11, 11, 8, 1, HUD_LINE);
+    host.uiTile(19, 11, HUD_EDGE_DOWN);
   }
 
   /** the HUD status label replaces <LV>+level (statusLabel :2201-2207). */
@@ -360,7 +304,7 @@ export class BattleUi {
   private paintPlayerDigits(host: VoxelHost, battle: WildBattle): void {
     const p = battle.player;
     const digits = `${String(battle.shownHPInt(p)).padStart(3)}/${String(p.mon.stats.hp).padStart(3)}`;
-    this.text(host, 11, 10, digits);
+    this.text(host, 12, 10, digits);
     this.playerDigits = digits;
   }
 
@@ -395,76 +339,30 @@ export class BattleUi {
       const bar = hpBarTiles(battle.shownHPInt(e), e.mon.stats.hp, false);
       if (this.enemyBar) {
         bar.forEach((t, i) => {
-          if (this.enemyBar![i] !== t) host.uiTile(2 + i, 2, t);
+          if (this.enemyBar![i] !== t) host.uiTile(1 + i, 2, t);
         });
       }
       this.enemyBar = bar;
       const label = e.shownStatus ?? String(e.mon.level);
-      if (label !== this.enemyLevel) this.paintLevelOrStatus(host, battle, e, 4, 1, false);
+      if (label !== this.enemyLevel) this.paintLevelOrStatus(host, battle, e, 3, 1, false);
     }
-    if (playerHud && battle.phase !== "moveSelect") {
+    if (playerHud) {
       const p = battle.player;
       const bar = hpBarTiles(battle.shownHPInt(p), p.mon.stats.hp, true);
       if (this.playerBar) {
         bar.forEach((t, i) => {
-          if (this.playerBar![i] !== t) host.uiTile(10 + i, 9, t);
+          if (this.playerBar![i] !== t) host.uiTile(11 + i, 9, t);
         });
       }
       this.playerBar = bar;
       const digits = `${String(battle.shownHPInt(p)).padStart(3)}/${String(p.mon.stats.hp).padStart(3)}`;
       if (digits !== this.playerDigits) this.paintPlayerDigits(host, battle);
       const label = p.shownStatus ?? String(p.mon.level);
-      if (label !== this.playerLevel) this.paintLevelOrStatus(host, battle, p, 14, 8, true);
+      if (label !== this.playerLevel) this.paintLevelOrStatus(host, battle, p, 15, 8, true);
     }
-    // cursor moves (PlaceMenuCursor: erase the old cell, draw the new)
-    if (battle.phase === "menu") {
-      const col = (battle.menuIndex - 1) % 2;
-      const row = Math.floor((battle.menuIndex - 1) / 2);
-      const cell: [number, number] = [col === 0 ? 9 : 15, 14 + row * 2];
-      this.moveCursor(host, cell);
-    } else if (battle.phase === "moveSelect") {
-      const cell: [number, number] = [5, 12 + battle.moveIndex];
-      const moved =
-        !this.cursorCell || this.cursorCell[0] !== cell[0] || this.cursorCell[1] !== cell[1];
-      this.moveCursor(host, cell);
-      const swap =
-        battle.moveSwapIndex !== null && battle.moveSwapIndex !== battle.moveIndex
-          ? ([5, 12 + battle.moveSwapIndex] as [number, number])
-          : null;
-      const swapKey = swap ? `${swap[0]},${swap[1]}` : null;
-      const oldKey = this.swapCell ? `${this.swapCell[0]},${this.swapCell[1]}` : null;
-      if (swapKey !== oldKey) {
-        if (this.swapCell && (!swap || swap[1] !== this.swapCell[1])) {
-          // only clear if the cursor is not sitting there now
-          if (!this.cursorCell || this.cursorCell[1] !== this.swapCell[1]) {
-            host.uiTile(this.swapCell[0], this.swapCell[1], SPACE);
-          }
-        }
-        if (swap) host.uiTile(swap[0], swap[1], ARROW_HOLLOW);
-        this.swapCell = swap;
-      }
-      if (moved) {
-        // the TYPE/PP panel follows the highlighted move (PrintMenuItem)
-        const sel = battle.player.curMoves[battle.moveIndex - 1];
-        const selDef = sel ? battle.data.moves[sel.id] : undefined;
-        host.uiFill(1, 10, 9, 1, SPACE);
-        host.uiFill(1, 11, 9, 1, SPACE);
-        if (selDef) {
-          this.text(host, 2, 10, battle.chart.displayName(selDef.type));
-          const maxPP = selDef.pp + (sel.ppUps ?? 0) * Math.floor(selDef.pp / 5);
-          this.text(host, 5, 11, `${String(sel.pp).padStart(2)}/${String(maxPP).padStart(2)}`);
-        }
-      }
-    } else if (battle.phase === "party") {
-      this.moveCursor(host, [1, 1 + battle.partyIndex * 2]);
-    } else if (battle.phase === "item") {
-      this.moveCursor(host, [5, 3 + battle.itemIndex * 2]);
-    }
-    if (battle.choiceOpen && battle.choiceYes !== this.choiceYes) {
-      this.choiceYes = battle.choiceYes;
-      host.uiTile(15, battle.choiceYes ? 10 : 8, SPACE);
-      host.uiTile(15, battle.choiceYes ? 8 : 10, ARROW_CURSOR);
-    }
+    // The menu / move / party / item cursors and the yes/no choice prompt
+    // all live on the Kanto Gear bottom screen now; nothing left to move
+    // on the top screen between repaints.
   }
 
   private moveCursor(host: VoxelHost, cell: [number, number]): void {
@@ -481,69 +379,12 @@ export class BattleUi {
   // -----------------------------------------------------------------
 
   private emitMessage(host: VoxelHost, battle: WildBattle): void {
-    const visible =
-      battle.phase === "messages" && (battle.current !== null || battle.msgHold);
-    if (!visible) {
-      if (this.msgVisible) {
-        // the gate dropped (:5500-5503): clear the interior rows
-        host.uiFill(1, 13, 18, 4, SPACE);
-        this.msgRows = [];
-        this.msgVisible = false;
-        this.arrowShown = false;
-      }
-      return;
-    }
-    this.msgVisible = true;
-    // a chrome uiText this tick would steal the reveal counter's target;
-    // force the message rows to re-emit so the LAST uiText is the typing row
-    if (this.chromeTextDirty) this.msgRows = [];
-    let textsEmitted = false;
-    battle.shown.forEach((line, i) => {
-      if (i >= MSG_ROWS.length) return;
-      const isLast = i === battle.shown.length - 1;
-      const cached = this.msgRows[i];
-      if (!isLast) {
-        // a finished row is chrome now: the core retains only the LAST
-        // uiText, so leaving it there would blank it the instant the next
-        // line begins (drawTextArea :5515 draws both rows every frame)
-        if (cached && cached.stamped && cached.text === line.text) return;
-        for (let c = 0; c < line.codes.length; c++) {
-          host.uiTile(MSG_X + c, MSG_ROWS[i], line.codes[c]!);
-        }
-        const pad = Math.max(0, MAX_COLS - line.codes.length);
-        if (pad > 0) host.uiFill(MSG_X + line.codes.length, MSG_ROWS[i], pad, 1, SPACE);
-        this.msgRows[i] = { text: line.text, revealed: -1, stamped: true };
-        return;
-      }
-      const text = toCells(line.text);
-      if (!cached || cached.stamped || cached.text !== text) {
-        host.uiText(MSG_X, MSG_ROWS[i], text);
-        this.msgRows[i] = { text, revealed: -1, stamped: false };
-        textsEmitted = true;
-      }
-    });
-    this.msgRows.length = Math.min(battle.shown.length, MSG_ROWS.length);
-    const last = battle.shown[battle.shown.length - 1];
-    if (last && battle.shown.length <= MSG_ROWS.length) {
-      const cached = this.msgRows[battle.shown.length - 1];
-      if (cached && (textsEmitted || cached.revealed !== last.revealed)) {
-        host.uiReveal(last.revealed);
-        cached.revealed = last.revealed;
-      }
-    }
-    // the blinking ▼ while a CONT or a typed page holds the box (:5521-5525)
-    const arrow = (battle.msgWaiting || battle.msgPrompt) && battle.frame % 60 < 30;
-    if (arrow !== this.arrowShown) {
-      if (arrow) {
-        host.uiTile(ARROW_X, ARROW_Y, ARROW_MORE);
-      } else {
-        const under = battle.shown[1];
-        const idx = ARROW_X - MSG_X;
-        const glyph =
-          under && under.codes.length > idx && under.revealed > idx ? under.codes[idx] : SPACE;
-        host.uiTile(ARROW_X, ARROW_Y, glyph);
-      }
-      this.arrowShown = arrow;
-    }
+    // Battle dialog moved to the Kanto Gear bottom screen (kantogear.ts
+    // drawBattleMessage reads battle.shown / msgWaiting each frame). The top
+    // screen no longer draws the message window, so this is intentionally inert
+    // — battle.ts still advances the reveal/queue timers that the bottom reads.
+    void host;
+    void battle;
+    return;
   }
 }

@@ -525,8 +525,12 @@ export const EMOTE = {
 //   battle
 //     arena(mapId, x, y, shape, rig)       stage at cell (x,y); ARENA_SHAPE,
 //                                          rig = 0 tele, 1 wide
-//     card(side, pic, x, y)                side 0 player, 1 enemy; pic =
-//                                          atlas page; cell coords
+//     card(side, pic, x, y[, dx, dy, dz]) side 0 player, 1 enemy; pic =
+//                                          atlas page; cell coords, plus an
+//                                          optional Q4-px offset from the
+//                                          cell centre for the battle
+//                                          animations (omitted = still).
+//                                          dy lifts; negative sinks.
 //     cardHide(side)
 //     battleCam(orbit, pitch, zoom)        Q8 fixed 0..256 = 0..1 (zoom Q8 x)
 //     arenaEnd()
@@ -606,6 +610,8 @@ export const VOX_OP = {
   ent: 30,
   entHide: 31,
   emote: 32,
+  pic: 33,
+  picHide: 34,
 
   uiTile: 50,
   uiFill: 51,
@@ -626,6 +632,11 @@ export const VOX_OP = {
   cry: 22,
   audioWaves: 23,
   audioDrum: 24,
+  // Kanto Gear companion (bottom screen) UI surface. Append-only: 75-78.
+  uiTileBottom: 75,
+  uiFillBottom: 76,
+  uiClearBottom: 77,
+  uiSpriteBottom: 78,
 } as const;
 
 /** Fixed-point scales used by op args. */

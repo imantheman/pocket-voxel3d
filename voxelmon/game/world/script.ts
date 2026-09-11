@@ -31,6 +31,9 @@ export interface ScriptSave {
   inventory: Record<string, number>;
   bagOrder?: string[];
   player: { name: string; rival: string };
+  /** Cut-tree cells permanently chopped, per map id then `"cx,cy"` — see
+   * OverworldShell's SaveSlice.cutTrees (same field, narrower view). */
+  cutTrees?: Record<string, Record<string, boolean>>;
 }
 
 /** The services a command reaches — the overworld hands itself in. */
@@ -45,7 +48,15 @@ export interface ScriptWorld {
   resolveText(textId: string): string | null;
   startWarpTo(mapId: string, x: number, y: number, facing: Dir, onDone: () => void): void;
   scriptMove(entity: { moving: boolean }, dir: Dir, tiles: number, onDone?: () => void): void;
-  player: { moving: boolean };
+  player: { moving: boolean; facingCell(): [number, number] };
+  /** The current map: just enough for a field-move verb (use_cut) to check
+   * the faced cell against cook-time cuttableCells and know this map's
+   * numeric id for the stamp op. */
+  map: {
+    id: string;
+    def: { index: number };
+    isCuttableCell(cx: number, cy: number): boolean;
+  };
   setEmote(entity: unknown, bubble: number, frames: number, onDone: () => void): void;
   /** Pokemon.lua:90 heal, over the whole party. */
   healParty(): void;
@@ -58,6 +69,11 @@ export interface ScriptWorld {
   hidePic(): void;
   /** Turn an NPC to face the player (NPC.lua facePlayer). */
   facePlayer(npc: NPC): void;
+  /** Toggle a cooked map decoration stamp (host.stamp) — see
+   * OverworldShell.stamp. */
+  stamp(mapId: number, cx: number, cy: number, on: boolean): void;
+  /** Scene-wide colour multiply (host.tint) — see OverworldShell.tint. */
+  tint(abgr: number): void;
 }
 
 export interface ScriptContext {
@@ -397,6 +413,56 @@ function* pic_hide(ctx: ScriptContext): Generator<void, void> {
   ctx.world.hidePic();
 }
 
+// host.stamp — toggle a cooked map decoration by cell. Args:
+// [mapId, cx, cy, on]. The S.S. Anne sailing-off animation (mapscripts.ts
+// VERMILION_DOCK) drives this directly; use_cut below is the other caller.
+function* stamp(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  ctx.world.stamp(
+    args[0] as number,
+    args[1] as number,
+    args[2] as number,
+    args[3] !== false,
+  );
+}
+
+// HM CUT's field effect (voxelmon/game/ui/partyscreen.ts's field-move
+// submenu entry runs this via VoxelmonGame.overworld.runScript). Checks the
+// cell the player faces against the cook-time cuttableCells marker
+// (voxelmon/cook/structures.ts); a cell already chopped this save
+// (save.cutTrees) reads the same as never having had a tree there, matching
+// pokered leaving a plain path behind. args: [monName] — the moving
+// pokémon's name for _UsedCutText's {RAM:wNameBuffer} slot.
+function* use_cut(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  const monName = (args[0] as string) ?? "";
+  const [fx, fy] = w.player.facingCell();
+  const key = `${fx},${fy}`;
+  const already = w.save.cutTrees?.[w.map.id]?.[key];
+  if (w.map.isCuttableCell(fx, fy) && !already) {
+    w.stamp(w.map.def.index, fx, fy, false);
+    w.save.cutTrees ??= {};
+    w.save.cutTrees[w.map.id] ??= {};
+    w.save.cutTrees[w.map.id][key] = true;
+    w.showText(scriptText(w, "_UsedCutText", { "RAM:wNameBuffer": monName }), () => runner.resume());
+  } else {
+    w.showText(scriptText(w, "_NothingToCutText"), () => runner.resume());
+  }
+  yield;
+}
+
+// HM FLASH's field effect: lifts the dark-cave dimming (OverworldShell's
+// DARK_MAPS / world/overworld.ts setMap) for the rest of this visit.
+// pokered lets Flash fire anywhere — harmless outside a dark cave, since
+// tint there is already full brightness — so no facing/location check.
+function* use_flash(ctx: ScriptContext): Generator<void, void> {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  w.tint(0xffff_ffff);
+  w.showText(scriptText(w, "_FlashLightsAreaText"), () => runner.resume());
+  yield;
+}
+
 // Commands.lua:852 open_mart — the clerk's mart list (entry.mart) opens the
 // ShopMenu and the runner yields until QUIT resumes it, exactly like
 // start_battle. Stock is resolved from the current map + text const.
@@ -586,6 +652,9 @@ const VERBS: Record<string, Verb> = {
   emote,
   pic,
   pic_hide,
+  stamp,
+  use_cut,
+  use_flash,
   give_pokemon,
   hide_object,
   show_object,

@@ -1309,6 +1309,48 @@ function sliceGlyphs(text, n) {
   return text.slice(0, i);
 }
 
+// voxelmon/game/battle/anim.ts
+var SIDE_PLAYER = 0;
+var SIDE_ENEMY = 1;
+function animFrames(kind) {
+  if (kind === "faint")
+    return FAINT_SLIDE;
+  return 16;
+}
+var LUNGE_PX = 7;
+var KNOCKBACK_PX = 5;
+var NO_FX = { dx: 0, dy: 0, dz: 0, hidden: false };
+var px = (v) => Math.round(v * Q4);
+function cardFx(anims, side, towardX, towardZ) {
+  const anim = anims.find((a) => a.side === side);
+  if (!anim)
+    return NO_FX;
+  const span = Math.max(1, anim.total - 1);
+  const t = Math.min(1, anim.frame / span);
+  if (anim.kind === "faint") {
+    return { dx: 0, dy: px(-FAINT_SLIDE_STEP * anim.frame), dz: 0, hidden: false };
+  }
+  if (anim.kind === "lunge") {
+    const reach = Math.sin(Math.PI * t) * LUNGE_PX;
+    return { dx: px(towardX * reach), dy: 0, dz: px(towardZ * reach), hidden: false };
+  }
+  const recoil = (1 - t) * KNOCKBACK_PX;
+  return {
+    dx: px(-towardX * recoil),
+    dy: 0,
+    dz: px(-towardZ * recoil),
+    hidden: anim.frame < anim.total / 2 && (anim.frame & 2) !== 0
+  };
+}
+function towardCell(from, to) {
+  const dx = to[0] - from[0];
+  const dz = to[1] - from[1];
+  const len = Math.hypot(dx, dz);
+  if (len < 0.000001)
+    return [0, 0];
+  return [dx / len, dz / len];
+}
+
 // voxelmon/game/battle/battler.ts
 function makeBattler(data, mon, isPlayer, save) {
   const def = data.pokemon[mon.species];
@@ -1833,6 +1875,7 @@ class WildBattle {
   waitFrames = 0;
   draining = false;
   moveAnimRow = null;
+  anims = [];
   current = null;
   statBoxMon = null;
   lines = [];
@@ -2072,6 +2115,15 @@ caught!`);
           this.waitFrames = MOVE_ANIM_PRE;
           return true;
         }
+        const engineRow = item.anim === "HIDEPIC_ANIM" || item.anim === "SHOWPIC_ANIM";
+        if (!engineRow && item.attackerIsPlayer !== undefined) {
+          const attacker = item.attackerIsPlayer ? SIDE_PLAYER : SIDE_ENEMY;
+          const defender = item.attackerIsPlayer ? SIDE_ENEMY : SIDE_PLAYER;
+          let hold = this.startAnim("lunge", attacker);
+          if (item.hit)
+            hold = Math.max(hold, this.startAnim("hit", defender));
+          this.waitFrames = hold;
+        }
         this.current = null;
         return true;
       }
@@ -2223,8 +2275,19 @@ Get'm! ${name}!`;
     if (this.player?.mon)
       this.participants.add(this.player.mon);
   }
+  startAnim(kind, side) {
+    const total = animFrames(kind);
+    this.anims = this.anims.filter((a) => a.side !== side);
+    this.anims.push({ kind, side, frame: 0, total });
+    return total;
+  }
   update(input) {
     this.frame += 1;
+    if (this.anims.length > 0) {
+      for (const a of this.anims)
+        a.frame += 1;
+      this.anims = this.anims.filter((a) => a.frame < a.total);
+    }
     if (this.phase === "menu") {
       for (const b of [this.player, this.enemy]) {
         if (!b)
@@ -2626,6 +2689,7 @@ ${displayName(target)}!`);
     }
     this.actNext(() => {
       battler.fainted = true;
+      this.startAnim("faint", battler.isPlayer ? SIDE_PLAYER : SIDE_ENEMY);
     });
     this.insertNext({ wait: FAINT_SLIDE });
     if (!battler.isPlayer) {
@@ -3112,16 +3176,23 @@ function computeStaging(map, playerCellX, playerCellY, surfing) {
 function desiredCards(data, battle, staging) {
   const out = [];
   const [ex, ey] = staging.arena.enemyCell;
-  const [px, py] = staging.arena.playerCell;
-  if (battle.enemy && !battle.enemy.fainted && !battle.enemyHidden && battle.result !== "caught") {
+  const [px2, py] = staging.arena.playerCell;
+  const anims = battle.anims;
+  const fainting = (side) => anims.some((a) => a.side === side && a.kind === "faint");
+  const [towardPlayerX, towardPlayerZ] = towardCell([ex, ey], [px2, py]);
+  if (battle.enemy && (!battle.enemy.fainted || fainting(SIDE_ENEMY)) && !battle.enemyHidden && battle.result !== "caught") {
     const pic = picPageFor(data, battle.enemy.mon.species);
-    if (pic >= 0)
-      out.push({ side: 1, pic, x: ex, y: ey });
+    const fx = cardFx(anims, SIDE_ENEMY, towardPlayerX, towardPlayerZ);
+    if (pic >= 0 && !fx.hidden) {
+      out.push({ side: SIDE_ENEMY, pic, x: ex, y: ey, dx: fx.dx, dy: fx.dy, dz: fx.dz });
+    }
   }
-  if (battle.player && !battle.player.fainted && !battle.showPlayerBack && !battle.sendingOut) {
+  if (battle.player && (!battle.player.fainted || fainting(SIDE_PLAYER)) && !battle.showPlayerBack && !battle.sendingOut) {
     const pic = picPageFor(data, battle.player.mon.species);
-    if (pic >= 0)
-      out.push({ side: 0, pic, x: px, y: py });
+    const fx = cardFx(anims, SIDE_PLAYER, -towardPlayerX, -towardPlayerZ);
+    if (pic >= 0 && !fx.hidden) {
+      out.push({ side: SIDE_PLAYER, pic, x: px2, y: py, dx: fx.dx, dy: fx.dy, dz: fx.dz });
+    }
   }
   return out;
 }
@@ -3140,14 +3211,12 @@ var HUD_LINE = 118;
 var HUD_EDGE_DOWN = 119;
 var HUD_EDGE_R = 120;
 var HUD_HALF_ARROW = 111;
-var GLYPH_PK = 225;
-var GLYPH_MN = 226;
 var HP_BAR_SEGMENTS = HP_BAR_PIXELS / 8;
 function hpBarTiles(hp, maxHP, playerSide) {
-  const px = hpBarPixels(hp, maxHP);
+  const px2 = hpBarPixels(hp, maxHP);
   const out = [HUD_HP_LABEL, HUD_BAR_LEFT];
   for (let i = 0;i < HP_BAR_SEGMENTS; i++) {
-    const seg = Math.min(8, Math.max(0, px - i * 8));
+    const seg = Math.min(8, Math.max(0, px2 - i * 8));
     out.push(seg >= 8 ? HUD_BAR_FULL : HUD_BAR_EMPTY + seg);
   }
   out.push(playerSide ? HUD_CAP_DOUBLE : HUD_CAP_NUB);
@@ -3157,11 +3226,6 @@ function nameTileX(tx, name) {
   const n = encodeGlyphs(name).length;
   return tx + (n <= 2 ? 2 : n <= 4 ? 1 : 0);
 }
-var MSG_X = 1;
-var MSG_ROWS = [14, 16];
-var ARROW_X2 = 18;
-var ARROW_Y2 = 16;
-
 class BattleUi {
   mode = null;
   msgRows = [];
@@ -3174,7 +3238,6 @@ class BattleUi {
   playerLevel = null;
   cursorCell = null;
   swapCell = null;
-  choiceYes = true;
   chromeTextDirty = false;
   emit(host, battle) {
     const enemyHud = this.enemyHudVisible(battle);
@@ -3183,7 +3246,6 @@ class BattleUi {
       battle.phase,
       enemyHud ? 1 : 0,
       playerHud ? 1 : 0,
-      battle.choiceOpen ? 1 : 0,
       battle.statBoxMon ? 1 : 0,
       battle.phase === "party" ? battle.save.party.length : 0,
       battle.phase === "item" ? battle.itemList.length : 0
@@ -3245,58 +3307,10 @@ class BattleUi {
     this.playerLevel = null;
     this.cursorCell = null;
     this.swapCell = null;
-    this.box(host, 0, 12, 20, 6);
     if (enemyHud)
       this.paintEnemyHud(host, battle);
-    if (playerHud && battle.phase !== "moveSelect")
+    if (playerHud)
       this.paintPlayerHud(host, battle);
-    if (battle.phase === "menu") {
-      this.box(host, 8, 12, 12, 6);
-      this.text(host, 10, 14, "FIGHT");
-      host.uiTile(16, 14, GLYPH_PK);
-      host.uiTile(17, 14, GLYPH_MN);
-      this.text(host, 10, 16, "ITEM");
-      this.text(host, 16, 16, "RUN");
-      this.paintMenuCursor(host, battle);
-    } else if (battle.phase === "moveSelect") {
-      this.box(host, 0, 8, 11, 5);
-      this.box(host, 4, 12, 16, 6);
-      host.uiTile(4, 12, BORDER_H);
-      host.uiTile(10, 12, BORDER_BR);
-      battle.player.curMoves.forEach((mv, i) => {
-        const def = battle.data.moves[mv.id];
-        this.text(host, 6, 13 + i, def?.name ?? mv.id);
-      });
-      this.text(host, 1, 9, "TYPE/");
-      const sel = battle.player.curMoves[battle.moveIndex - 1];
-      const selDef = sel ? battle.data.moves[sel.id] : undefined;
-      if (selDef) {
-        this.text(host, 2, 10, battle.chart.displayName(selDef.type));
-        const maxPP = selDef.pp + (sel.ppUps ?? 0) * Math.floor(selDef.pp / 5);
-        this.text(host, 5, 11, `${String(sel.pp).padStart(2)}/${String(maxPP).padStart(2)}`);
-      }
-      this.paintMoveCursor(host, battle);
-    } else if (battle.phase === "party") {
-      const party = battle.save.party;
-      this.box(host, 0, 0, 20, Math.max(4, 2 + party.length * 2));
-      party.forEach((mon, i) => {
-        const name = mon.nickname ?? battle.data.pokemon[mon.species].name;
-        this.text(host, 2, 1 + i * 2, name);
-        this.text(host, 12, 1 + i * 2, `L${String(mon.level).padStart(2)} ${String(mon.hp).padStart(3)}/${String(mon.stats.hp).padStart(3)}`);
-      });
-      host.uiTile(1, 1 + (battle.partyIndex ?? 0) * 2, ARROW_CURSOR);
-      this.cursorCell = [1, 1 + (battle.partyIndex ?? 0) * 2];
-    } else if (battle.phase === "item") {
-      const list = battle.itemList;
-      this.box(host, 4, 2, 16, Math.max(4, 2 + list.length * 2));
-      list.forEach((id, i) => {
-        const name = battle.data.items?.[id]?.name ?? id;
-        this.text(host, 6, 3 + i * 2, name);
-        this.text(host, 15, 3 + i * 2, `x${String(battle.save.inventory[id] ?? 0).padStart(2)}`);
-      });
-      host.uiTile(5, 3 + battle.itemIndex * 2, ARROW_CURSOR);
-      this.cursorCell = [5, 3 + battle.itemIndex * 2];
-    }
     if (battle.statBoxMon) {
       this.box(host, 9, 2, 11, 10);
       const s = battle.statBoxMon.stats;
@@ -3311,34 +3325,27 @@ class BattleUi {
         this.text(host, 16, 4 + i * 2, String(v).padStart(3));
       });
     }
-    if (battle.choiceOpen) {
-      this.box(host, 14, 7, 6, 5);
-      this.text(host, 16, 8, "YES");
-      this.text(host, 16, 10, "NO");
-      this.choiceYes = battle.choiceYes;
-      host.uiTile(15, battle.choiceYes ? 8 : 10, ARROW_CURSOR);
-    }
   }
   paintEnemyHud(host, battle) {
     const e = battle.enemy;
-    this.text(host, nameTileX(1, e.name), 0, e.name);
-    this.paintLevelOrStatus(host, battle, e, 4, 1, false);
-    host.uiTile(1, 2, HUD_TICK);
-    this.paintBar(host, battle, e, 2, 2, false);
-    host.uiTile(1, 3, HUD_EDGE_L);
-    host.uiFill(2, 3, 8, 1, HUD_LINE);
-    host.uiTile(10, 3, HUD_EDGE_R);
+    this.text(host, nameTileX(0, e.name), 0, e.name);
+    this.paintLevelOrStatus(host, battle, e, 3, 1, false);
+    host.uiTile(0, 2, HUD_TICK);
+    this.paintBar(host, battle, e, 1, 2, false);
+    host.uiTile(0, 3, HUD_EDGE_L);
+    host.uiFill(1, 3, 8, 1, HUD_LINE);
+    host.uiTile(9, 3, HUD_EDGE_R);
   }
   paintPlayerHud(host, battle) {
     const p = battle.player;
-    this.text(host, nameTileX(10, p.name), 7, p.name);
-    this.paintLevelOrStatus(host, battle, p, 14, 8, true);
-    this.paintBar(host, battle, p, 10, 9, true);
+    this.text(host, nameTileX(11, p.name), 7, p.name);
+    this.paintLevelOrStatus(host, battle, p, 15, 8, true);
+    this.paintBar(host, battle, p, 11, 9, true);
     this.paintPlayerDigits(host, battle);
-    host.uiTile(18, 10, HUD_TICK);
-    host.uiTile(9, 11, HUD_HALF_ARROW);
-    host.uiFill(10, 11, 8, 1, HUD_LINE);
-    host.uiTile(18, 11, HUD_EDGE_DOWN);
+    host.uiTile(19, 10, HUD_TICK);
+    host.uiTile(10, 11, HUD_HALF_ARROW);
+    host.uiFill(11, 11, 8, 1, HUD_LINE);
+    host.uiTile(19, 11, HUD_EDGE_DOWN);
   }
   paintLevelOrStatus(host, battle, b, lvX, y, player) {
     const label = b.shownStatus ? b.shownStatus : String(b.mon.level);
@@ -3364,7 +3371,7 @@ class BattleUi {
   paintPlayerDigits(host, battle) {
     const p = battle.player;
     const digits = `${String(battle.shownHPInt(p)).padStart(3)}/${String(p.mon.stats.hp).padStart(3)}`;
-    this.text(host, 11, 10, digits);
+    this.text(host, 12, 10, digits);
     this.playerDigits = digits;
   }
   paintMenuCursor(host, battle) {
@@ -3393,21 +3400,21 @@ class BattleUi {
       if (this.enemyBar) {
         bar.forEach((t, i) => {
           if (this.enemyBar[i] !== t)
-            host.uiTile(2 + i, 2, t);
+            host.uiTile(1 + i, 2, t);
         });
       }
       this.enemyBar = bar;
       const label = e.shownStatus ?? String(e.mon.level);
       if (label !== this.enemyLevel)
-        this.paintLevelOrStatus(host, battle, e, 4, 1, false);
+        this.paintLevelOrStatus(host, battle, e, 3, 1, false);
     }
-    if (playerHud && battle.phase !== "moveSelect") {
+    if (playerHud) {
       const p = battle.player;
       const bar = hpBarTiles(battle.shownHPInt(p), p.mon.stats.hp, true);
       if (this.playerBar) {
         bar.forEach((t, i) => {
           if (this.playerBar[i] !== t)
-            host.uiTile(10 + i, 9, t);
+            host.uiTile(11 + i, 9, t);
         });
       }
       this.playerBar = bar;
@@ -3416,50 +3423,7 @@ class BattleUi {
         this.paintPlayerDigits(host, battle);
       const label = p.shownStatus ?? String(p.mon.level);
       if (label !== this.playerLevel)
-        this.paintLevelOrStatus(host, battle, p, 14, 8, true);
-    }
-    if (battle.phase === "menu") {
-      const col = (battle.menuIndex - 1) % 2;
-      const row = Math.floor((battle.menuIndex - 1) / 2);
-      const cell = [col === 0 ? 9 : 15, 14 + row * 2];
-      this.moveCursor(host, cell);
-    } else if (battle.phase === "moveSelect") {
-      const cell = [5, 12 + battle.moveIndex];
-      const moved = !this.cursorCell || this.cursorCell[0] !== cell[0] || this.cursorCell[1] !== cell[1];
-      this.moveCursor(host, cell);
-      const swap = battle.moveSwapIndex !== null && battle.moveSwapIndex !== battle.moveIndex ? [5, 12 + battle.moveSwapIndex] : null;
-      const swapKey = swap ? `${swap[0]},${swap[1]}` : null;
-      const oldKey = this.swapCell ? `${this.swapCell[0]},${this.swapCell[1]}` : null;
-      if (swapKey !== oldKey) {
-        if (this.swapCell && (!swap || swap[1] !== this.swapCell[1])) {
-          if (!this.cursorCell || this.cursorCell[1] !== this.swapCell[1]) {
-            host.uiTile(this.swapCell[0], this.swapCell[1], SPACE);
-          }
-        }
-        if (swap)
-          host.uiTile(swap[0], swap[1], ARROW_HOLLOW);
-        this.swapCell = swap;
-      }
-      if (moved) {
-        const sel = battle.player.curMoves[battle.moveIndex - 1];
-        const selDef = sel ? battle.data.moves[sel.id] : undefined;
-        host.uiFill(1, 10, 9, 1, SPACE);
-        host.uiFill(1, 11, 9, 1, SPACE);
-        if (selDef) {
-          this.text(host, 2, 10, battle.chart.displayName(selDef.type));
-          const maxPP = selDef.pp + (sel.ppUps ?? 0) * Math.floor(selDef.pp / 5);
-          this.text(host, 5, 11, `${String(sel.pp).padStart(2)}/${String(maxPP).padStart(2)}`);
-        }
-      }
-    } else if (battle.phase === "party") {
-      this.moveCursor(host, [1, 1 + battle.partyIndex * 2]);
-    } else if (battle.phase === "item") {
-      this.moveCursor(host, [5, 3 + battle.itemIndex * 2]);
-    }
-    if (battle.choiceOpen && battle.choiceYes !== this.choiceYes) {
-      this.choiceYes = battle.choiceYes;
-      host.uiTile(15, battle.choiceYes ? 10 : 8, SPACE);
-      host.uiTile(15, battle.choiceYes ? 8 : 10, ARROW_CURSOR);
+        this.paintLevelOrStatus(host, battle, p, 15, 8, true);
     }
   }
   moveCursor(host, cell) {
@@ -3472,65 +3436,7 @@ class BattleUi {
     this.cursorCell = cell;
   }
   emitMessage(host, battle) {
-    const visible = battle.phase === "messages" && (battle.current !== null || battle.msgHold);
-    if (!visible) {
-      if (this.msgVisible) {
-        host.uiFill(1, 13, 18, 4, SPACE);
-        this.msgRows = [];
-        this.msgVisible = false;
-        this.arrowShown = false;
-      }
-      return;
-    }
-    this.msgVisible = true;
-    if (this.chromeTextDirty)
-      this.msgRows = [];
-    let textsEmitted = false;
-    battle.shown.forEach((line, i) => {
-      if (i >= MSG_ROWS.length)
-        return;
-      const isLast = i === battle.shown.length - 1;
-      const cached = this.msgRows[i];
-      if (!isLast) {
-        if (cached && cached.stamped && cached.text === line.text)
-          return;
-        for (let c = 0;c < line.codes.length; c++) {
-          host.uiTile(MSG_X + c, MSG_ROWS[i], line.codes[c]);
-        }
-        const pad = Math.max(0, MAX_COLS - line.codes.length);
-        if (pad > 0)
-          host.uiFill(MSG_X + line.codes.length, MSG_ROWS[i], pad, 1, SPACE);
-        this.msgRows[i] = { text: line.text, revealed: -1, stamped: true };
-        return;
-      }
-      const text = toCells(line.text);
-      if (!cached || cached.stamped || cached.text !== text) {
-        host.uiText(MSG_X, MSG_ROWS[i], text);
-        this.msgRows[i] = { text, revealed: -1, stamped: false };
-        textsEmitted = true;
-      }
-    });
-    this.msgRows.length = Math.min(battle.shown.length, MSG_ROWS.length);
-    const last = battle.shown[battle.shown.length - 1];
-    if (last && battle.shown.length <= MSG_ROWS.length) {
-      const cached = this.msgRows[battle.shown.length - 1];
-      if (cached && (textsEmitted || cached.revealed !== last.revealed)) {
-        host.uiReveal(last.revealed);
-        cached.revealed = last.revealed;
-      }
-    }
-    const arrow = (battle.msgWaiting || battle.msgPrompt) && battle.frame % 60 < 30;
-    if (arrow !== this.arrowShown) {
-      if (arrow) {
-        host.uiTile(ARROW_X2, ARROW_Y2, ARROW_MORE);
-      } else {
-        const under = battle.shown[1];
-        const idx = ARROW_X2 - MSG_X;
-        const glyph = under && under.codes.length > idx && under.revealed > idx ? under.codes[idx] : SPACE;
-        host.uiTile(ARROW_X2, ARROW_Y2, glyph);
-      }
-      this.arrowShown = arrow;
-    }
+    return;
   }
 }
 
@@ -3854,6 +3760,7 @@ class GameMap {
   waterTiles;
   warpAt = new Map;
   signAt = new Map;
+  cuttableAt = new Set;
   constructor(def, tilesetDef) {
     this.def = def;
     this.tileset = tilesetDef;
@@ -3872,6 +3779,9 @@ class GameMap {
     });
     for (const s of def.signs ?? []) {
       this.signAt.set(s.y * this.widthCells + s.x, s);
+    }
+    for (const [cx, cy] of def.cuttableCells ?? []) {
+      this.cuttableAt.add(cy * this.widthCells + cx);
     }
   }
   blockAt(bx, by) {
@@ -3927,6 +3837,9 @@ class GameMap {
   }
   signAtCell(cx, cy) {
     return this.signAt.get(cy * this.widthCells + cx);
+  }
+  isCuttableCell(cx, cy) {
+    return this.cuttableAt.has(cy * this.widthCells + cx);
   }
   connection(dir) {
     return this.def.connections?.[dir];
@@ -4127,9 +4040,9 @@ class Player {
     this.progress += 1;
     this.animClock += 1;
     const d = DELTA[this.facing];
-    const px = Math.floor(this.progress * 16 / stepLen);
-    this.px = this.cellX * 16 + d[0] * px;
-    this.py = this.cellY * 16 + d[1] * px;
+    const px2 = Math.floor(this.progress * 16 / stepLen);
+    this.px = this.cellX * 16 + d[0] * px2;
+    this.py = this.cellY * 16 + d[1] * px2;
     if (this.progress >= stepLen) {
       this.cellX = this.targetX;
       this.cellY = this.targetY;
@@ -4195,11 +4108,11 @@ function gymLeader(o) {
   rows.push(["show_text", o.advice]);
   return rows;
 }
-function mtMoonNerdWalk(px, py, itemId) {
-  if (px === 12 && py === 7 || px === 11 && py === 6 || px === 12 && py === 5) {
+function mtMoonNerdWalk(px2, py, itemId) {
+  if (px2 === 12 && py === 7 || px2 === 11 && py === 6 || px2 === 12 && py === 5) {
     return ["right", "up"];
   }
-  if (px === 13 && py === 7 || px === 14 && py === 6 || px === 14 && py === 5) {
+  if (px2 === 13 && py === 7 || px2 === 14 && py === 6 || px2 === 14 && py === 5) {
     return ["up"];
   }
   return itemId === "DOME_FOSSIL" ? ["right", "up"] : ["up"];
@@ -4236,6 +4149,167 @@ function pewterEscortRows() {
     ["face_object", "PEWTERCITY_YOUNGSTER", "left"],
     ["show_text", "_PewterCityYoungsterGoTakeOnBrockText"],
     ["place_npc", "PEWTERCITY_YOUNGSTER", 35, 16, "down"]
+  ];
+}
+function route24RecruiterScript(_ow, save) {
+  const f = save?.flags ?? {};
+  const rows = [];
+  if (!f.EVENT_GOT_NUGGET) {
+    rows.push(["show_text", `Congratulations!
+You beat our 5
+contest trainers!\fYou just earned a
+fabulous prize!`], ["give_item", "NUGGET", 1, `{PLAYER} received
+a NUGGET!`], ["set_flag", "EVENT_GOT_NUGGET"], ["ask", `By the way, would
+you like to join
+TEAM ROCKET?`], ["show_text", `Arrgh! You are
+not convinced?\fThen I'll show
+you my power!`]);
+  }
+  rows.push(["engage_trainer", 1]);
+  return rows;
+}
+function ceruleanRivalRows(px2) {
+  return [
+    ["show_object", "CERULEAN_CITY", "CERULEANCITY_RIVAL"],
+    ["move_npc_to", "CERULEANCITY_RIVAL", px2, 5],
+    ["face_object", "CERULEANCITY_RIVAL", "down"],
+    ["show_text", "_CeruleanCityRivalPreBattleText"],
+    ["rival_battle", "OPP_RIVAL1", 7],
+    ["jump_if_false", "end"],
+    ["set_flag", "EVENT_BEAT_CERULEAN_RIVAL"],
+    ["show_text", "_CeruleanCityRivalDefeatedText"],
+    ["show_text", "_CeruleanCityRivalIWentToBillsText"],
+    ["move_npc_to", "CERULEANCITY_RIVAL", px2, 12],
+    ["hide_object", "CERULEAN_CITY", "CERULEANCITY_RIVAL"]
+  ];
+}
+var ceruleanRocketRows = [
+  ["face_player"],
+  ["check_flag", "EVENT_GOT_TM28"],
+  ["jump_if_true", "hide"],
+  ["check_flag", "EVENT_BEAT_CERULEAN_ROCKET_THIEF"],
+  ["jump_if_true", "retry_tm"],
+  ["show_text", "_CeruleanCityRocketText"],
+  ["start_battle", "trainer", "OPP_ROCKET", 5],
+  ["jump_if_false", "end"],
+  ["label", "retry_tm"],
+  ["show_text", "_CeruleanCityRocketIllReturnTheTMText"],
+  ["set_flag", "EVENT_BEAT_CERULEAN_ROCKET_THIEF"],
+  ["give_item", "TM_DIG", 1, false],
+  ["set_flag", "EVENT_GOT_TM28"],
+  ["show_text", "_CeruleanCityRocketReceivedTM28Text"],
+  ["show_text", "_CeruleanCityRocketIBetterGetMovingText"],
+  ["label", "hide"],
+  ["show_object", "CERULEAN_CITY", "CERULEANCITY_GUARD1"],
+  ["hide_object", "CERULEAN_CITY", "CERULEANCITY_GUARD2"],
+  ["hide_object", "CERULEAN_CITY", "CERULEANCITY_ROCKET"]
+];
+var MISTY_GYM = gymLeader({
+  trainerClass: "OPP_MISTY",
+  beatFlag: "EVENT_BEAT_MISTY",
+  preText: "_CeruleanGymMistyPreBattleText",
+  deactivate: ["EVENT_BEAT_CERULEAN_GYM_TRAINER_0", "EVENT_BEAT_CERULEAN_GYM_TRAINER_1"],
+  badge: "CASCADEBADGE",
+  badgeText: ["_CeruleanGymMistyReceivedCascadeBadgeText"],
+  tmPre: "_CeruleanGymMistyCascadeBadgeInfoText",
+  tm: "TM_BUBBLEBEAM",
+  gotFlag: "EVENT_GOT_TM11",
+  tmText: ["_CeruleanGymMistyReceivedTM11Text"],
+  advice: "_CeruleanGymMistyTM11ExplanationText"
+});
+var billsHousePokemonRows = [
+  ["ask", "_BillsHouseBillImNotAPokemonText"],
+  ["jump_if_true", "toMachine"],
+  ["show_text", "_BillsHouseBillNoYouGottaHelpText"],
+  ["label", "toMachine"],
+  ["show_text", "_BillsHouseBillUseSeparationSystemText"],
+  ["move_npc_to", "BILLSHOUSE_BILL_POKEMON", 6, 2],
+  ["hide_object", "BILLS_HOUSE", "BILLSHOUSE_BILL_POKEMON"],
+  ["set_flag", "EVENT_BILL_SAID_USE_CELL_SEPARATOR"]
+];
+var billsHouseSsTicketRows = [
+  ["face_player"],
+  ["check_flag", "EVENT_GOT_SS_TICKET"],
+  ["jump_if_true", "repeat"],
+  ["show_text", "_BillsHouseBillThankYouText"],
+  ["give_item", "S_S_TICKET", 1, false],
+  ["show_text", "_SSTicketReceivedText"],
+  ["set_flag", "EVENT_GOT_SS_TICKET"],
+  ["show_object", "CERULEAN_CITY", "CERULEANCITY_GUARD1"],
+  ["hide_object", "CERULEAN_CITY", "CERULEANCITY_GUARD2"],
+  ["show_text", "_BillsHouseBillWhyDontYouGoInsteadOfMeText"],
+  ["jump", "end"],
+  ["label", "repeat"],
+  ["show_text", "_BillsHouseBillWhyDontYouGoInsteadOfMeText"]
+];
+var billsHouseRarePokemonRows = [
+  ["face_player"],
+  ["show_text", "_BillsHouseBillCheckOutMyRarePokemonText"]
+];
+var TEXT_BILLSHOUSE_PC = "TEXT_BILLSHOUSE_PC";
+function billsHousePcScript(_ow, save) {
+  const f = save?.flags ?? {};
+  if (f.EVENT_LEFT_BILLS_HOUSE_AFTER_HELPING) {
+    return [["show_text", "_BillsHousePokemonListText1"]];
+  }
+  if (f.EVENT_USED_CELL_SEPARATOR_ON_BILL || !f.EVENT_BILL_SAID_USE_CELL_SEPARATOR) {
+    return [["show_text", "_BillsHouseMonitorText"]];
+  }
+  return [
+    ["show_text", "_BillsHouseInitiatedText"],
+    ["set_flag", "EVENT_USED_CELL_SEPARATOR_ON_BILL"],
+    ["play_sound", "Switch"],
+    ["wait", 32],
+    ["play_sound", "Tink"],
+    ["wait", 80],
+    ["play_sound", "Shrink"],
+    ["wait", 48],
+    ["play_sound", "Tink"],
+    ["wait", 32],
+    ["play_sound", "Get_Item1"],
+    ["wait", 30],
+    ["show_object", "BILLS_HOUSE", "BILLSHOUSE_BILL1"],
+    ["move_npc_to", "BILLSHOUSE_BILL1", 4, 4]
+  ];
+}
+var LT_SURGE_GYM = gymLeader({
+  trainerClass: "OPP_LT_SURGE",
+  beatFlag: "EVENT_BEAT_LT_SURGE",
+  preText: "_VermilionGymLTSurgePreBattleText",
+  deactivate: [
+    "EVENT_BEAT_VERMILION_GYM_TRAINER_0",
+    "EVENT_BEAT_VERMILION_GYM_TRAINER_1",
+    "EVENT_BEAT_VERMILION_GYM_TRAINER_2"
+  ],
+  badge: "THUNDERBADGE",
+  badgeText: ["_VermilionGymLTSurgeReceivedThunderBadgeText"],
+  tmPre: "_VermilionGymLTSurgeThunderBadgeInfoText",
+  tm: "TM_THUNDERBOLT",
+  gotFlag: "EVENT_GOT_TM24",
+  tmText: ["_VermilionGymLTSurgeReceivedTM24Text", "_TM24ExplanationText"],
+  advice: "_VermilionGymLTSurgePostBattleAdviceText"
+});
+var trashedHouseFishingGuruRows = [
+  ["check_item", "TM_DIG"],
+  ["jump_if_true", "has_tm"],
+  ["show_text", "_CeruleanTrashedHouseFishingGuruTheyStoleATMText"],
+  ["jump", "end"],
+  ["label", "has_tm"],
+  ["show_text", "_CeruleanTrashedHouseFishingGuruWhatsLostIsLostText"]
+];
+function vermilionSailorRows(save) {
+  const f = save?.flags ?? {};
+  if (f.EVENT_SS_ANNE_LEFT) {
+    return [["show_text", "_VermilionCitySailor1ShipSetSailText"]];
+  }
+  return [
+    ["show_text", "_VermilionCitySailor1DoYouHaveATicketText"],
+    ["check_item", "S_S_TICKET"],
+    ["jump_if_false", "no_ticket"],
+    ["show_text", "_VermilionCitySailor1FlashedTicketText"],
+    ["jump", "end"],
+    ["label", "no_ticket"],
+    ["show_text", "_VermilionCitySailor1YouNeedATicketText"]
   ];
 }
 var MAP_SCRIPTS = {
@@ -4350,9 +4424,9 @@ var MAP_SCRIPTS = {
         }
         return null;
       }
-      const px = ow?.player?.cellX;
+      const px2 = ow?.player?.cellX;
       const py = ow?.player?.cellY;
-      if (px === 19 && py === 9) {
+      if (px2 === 19 && py === 9) {
         return [
           ["show_text", "_ViridianCityOldManSleepyPrivatePropertyText"],
           ["move_player", "down", 1]
@@ -4371,10 +4445,10 @@ var MAP_SCRIPTS = {
       const py = ow?.player?.cellY;
       if (py !== 9)
         return null;
-      const px = ow?.player?.cellX ?? 5;
+      const px2 = ow?.player?.cellX ?? 5;
       const party = f.EVENT_CHOSE_BULBASAUR ? 3 : f.EVENT_CHOSE_SQUIRTLE ? 1 : 2;
       return [
-        ["move_npc_to", "SPRITE_BLUE", px, 10],
+        ["move_npc_to", "SPRITE_BLUE", px2, 10],
         ["face_object", "SPRITE_BLUE", "up"],
         ["show_text", "_OaksLabRivalIllTakeYouOnText"],
         ["start_battle", "trainer", "OPP_RIVAL1", party, { loseable: true }],
@@ -4574,11 +4648,11 @@ var MAP_SCRIPTS = {
       if (cy !== 1)
         return null;
       const LAB_DOOR_X = 12, LAB_DOOR_Y = 11;
-      const px = ow?.player?.cellX ?? 0;
+      const px2 = ow?.player?.cellX ?? 0;
       const py = ow?.player?.cellY ?? 0;
       return [
-        ["place_npc", "SPRITE_OAK", px, py + 4, "up"],
-        ["move_npc_to", "SPRITE_OAK", px, py + 1],
+        ["place_npc", "SPRITE_OAK", px2, py + 4, "up"],
+        ["move_npc_to", "SPRITE_OAK", px2, py + 1],
         ["face_object", "SPRITE_OAK", "up"],
         ["show_text", "_PalletTownOakHeyWaitDontGoOutText"],
         ["show_text", "_PalletTownOakItsUnsafeText"],
@@ -4614,6 +4688,152 @@ var MAP_SCRIPTS = {
         tmText: ["_PewterGymReceivedTM34Text", "_TM34ExplanationText"],
         advice: "_PewterGymBrockPostBattleAdviceText"
       })
+    }
+  },
+  CERULEAN_GYM: {
+    talk: {
+      TEXT_CERULEANGYM_MISTY: MISTY_GYM
+    }
+  },
+  ROUTE_24: {
+    talk: {
+      TEXT_ROUTE24_COOLTRAINER_M1: route24RecruiterScript
+    },
+    onStep: (ow, save) => {
+      const f = save?.flags ?? {};
+      if (f.EVENT_GOT_NUGGET)
+        return null;
+      const p = ow?.player;
+      if (p?.cellX !== 10 || p?.cellY !== 15)
+        return null;
+      return route24RecruiterScript(ow, save);
+    }
+  },
+  CERULEAN_CITY: {
+    talk: {
+      TEXT_CERULEANCITY_ROCKET: ceruleanRocketRows
+    },
+    onStep: (ow, save) => {
+      const f = save?.flags ?? {};
+      const p = ow?.player;
+      const x = p?.cellX;
+      const y = p?.cellY;
+      if (!f.EVENT_BEAT_CERULEAN_ROCKET_THIEF && (x === 30 && y === 7 || x === 30 && y === 9)) {
+        return ceruleanRocketRows;
+      }
+      if (!f.EVENT_BEAT_CERULEAN_RIVAL && (x === 20 && y === 6 || x === 21 && y === 6)) {
+        return ceruleanRivalRows(x);
+      }
+      return null;
+    }
+  },
+  BILLS_HOUSE: {
+    talk: {
+      TEXT_BILLSHOUSE_BILL_POKEMON: billsHousePokemonRows,
+      TEXT_BILLSHOUSE_BILL_SS_TICKET: billsHouseSsTicketRows,
+      TEXT_BILLSHOUSE_BILL_CHECK_OUT_MY_RARE_POKEMON: billsHouseRarePokemonRows,
+      [TEXT_BILLSHOUSE_PC]: billsHousePcScript
+    }
+  },
+  ROUTE_25: {
+    onStep: (ow, save) => {
+      const f = save?.flags ?? {};
+      if (!f.EVENT_GOT_SS_TICKET || f.EVENT_LEFT_BILLS_HOUSE_AFTER_HELPING)
+        return null;
+      f.EVENT_LEFT_BILLS_HOUSE_AFTER_HELPING = true;
+      ow.setObjectHidden?.("ROUTE24_COOLTRAINER_M1", true);
+      ow.setObjectHidden?.("BILLSHOUSE_BILL1", true);
+      ow.setObjectHidden?.("BILLSHOUSE_BILL2", false);
+      return null;
+    }
+  },
+  CERULEAN_TRASHED_HOUSE: {
+    talk: {
+      TEXT_CERULEANTRASHEDHOUSE_FISHING_GURU: trashedHouseFishingGuruRows
+    }
+  },
+  VERMILION_GYM: {
+    talk: {
+      TEXT_VERMILIONGYM_LT_SURGE: LT_SURGE_GYM
+    }
+  },
+  VERMILION_CITY: {
+    talk: {
+      TEXT_VERMILIONCITY_SAILOR1: (_ow, save) => vermilionSailorRows(save)
+    },
+    onStep: (ow, save) => {
+      const p = ow?.player;
+      if (p?.cellX !== 18 || p?.cellY !== 30 || p?.facing !== "down")
+        return null;
+      return vermilionSailorRows(save);
+    }
+  },
+  VERMILION_DOCK: {
+    onStep: (ow, save) => {
+      const f = save?.flags ?? {};
+      const p = ow?.player;
+      const mapId = ow?.map?.def?.index;
+      if (f.EVENT_SS_ANNE_LEFT) {
+        return [
+          ["show_text", "_VermilionCitySailor1ShipSetSailText"],
+          ["warp", "VERMILION_CITY", 18, 31, "up"]
+        ];
+      }
+      if (f.EVENT_GOT_HM01 && p?.cellY === 2 && typeof mapId === "number") {
+        const hideHullColumn = (cx0) => {
+          const rows = [];
+          for (let cx = cx0;cx < cx0 + 2; cx++) {
+            for (let cy = 3;cy <= 5; cy++)
+              rows.push(["stamp", mapId, cx, cy, false]);
+          }
+          rows.push(["wait", 20]);
+          return rows;
+        };
+        return [
+          ["set_flag", "EVENT_SS_ANNE_LEFT"],
+          ["play_sound", "SS_Anne_Horn"],
+          ["wait", 40],
+          ...hideHullColumn(10),
+          ...hideHullColumn(12),
+          ...hideHullColumn(14),
+          ...hideHullColumn(16),
+          ["play_sound", "SS_Anne_Horn"],
+          ["wait", 60],
+          ["warp", "VERMILION_CITY", 18, 31, "up"]
+        ];
+      }
+      return null;
+    }
+  },
+  SS_ANNE_2F: {
+    talk: {
+      TEXT_SSANNE2F_RIVAL: [
+        ["face_player"],
+        ["check_flag", "EVENT_BEAT_SS_ANNE_RIVAL"],
+        ["jump_if_true", "end"],
+        ["show_text", "_SSAnne2FRivalText"],
+        ["rival_battle", "OPP_RIVAL2", 1],
+        ["jump_if_false", "end"],
+        ["set_flag", "EVENT_BEAT_SS_ANNE_RIVAL"],
+        ["show_text", "_SSAnne2FRivalDefeatedText"]
+      ]
+    }
+  },
+  SS_ANNE_CAPTAINS_ROOM: {
+    talk: {
+      TEXT_SSANNECAPTAINSROOM_CAPTAIN: [
+        ["check_flag", "EVENT_GOT_HM01"],
+        ["jump_if_true", "already"],
+        ["show_text", "_SSAnneCaptainsRoomRubCaptainsBackText"],
+        ["play_once", "Music_PkmnHealed"],
+        ["show_text", "_SSAnneCaptainsRoomCaptainIFeelMuchBetterText"],
+        ["give_item", "HM_CUT", 1, false],
+        ["show_text", "_SSAnneCaptainsRoomCaptainReceivedHM01Text"],
+        ["set_flag", "EVENT_GOT_HM01"],
+        ["jump", "end"],
+        ["label", "already"],
+        ["show_text", "_SSAnneCaptainsRoomCaptainNotSickAnymoreText"]
+      ]
     }
   }
 };
@@ -4999,6 +5219,34 @@ function* pic(ctx, ...args) {
 function* pic_hide(ctx) {
   ctx.world.hidePic();
 }
+function* stamp(ctx, ...args) {
+  ctx.world.stamp(args[0], args[1], args[2], args[3] !== false);
+}
+function* use_cut(ctx, ...args) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  const monName = args[0] ?? "";
+  const [fx, fy] = w.player.facingCell();
+  const key = `${fx},${fy}`;
+  const already = w.save.cutTrees?.[w.map.id]?.[key];
+  if (w.map.isCuttableCell(fx, fy) && !already) {
+    w.stamp(w.map.def.index, fx, fy, false);
+    w.save.cutTrees ??= {};
+    w.save.cutTrees[w.map.id] ??= {};
+    w.save.cutTrees[w.map.id][key] = true;
+    w.showText(scriptText(w, "_UsedCutText", { "RAM:wNameBuffer": monName }), () => runner.resume());
+  } else {
+    w.showText(scriptText(w, "_NothingToCutText"), () => runner.resume());
+  }
+  yield;
+}
+function* use_flash(ctx) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  w.tint(4294967295);
+  w.showText(scriptText(w, "_FlashLightsAreaText"), () => runner.resume());
+  yield;
+}
 function* open_mart(ctx, ...args) {
   const runner = ctx.runner;
   const w = ctx.world;
@@ -5116,6 +5364,9 @@ var VERBS = {
   emote,
   pic,
   pic_hide,
+  stamp,
+  use_cut,
+  use_flash,
   give_pokemon,
   hide_object,
   show_object,
@@ -5304,6 +5555,9 @@ function destination(data, warpDef, lastOutdoor) {
 }
 
 // voxelmon/game/world/overworld.ts
+var DARK_MAPS = new Set(["ROCK_TUNNEL_1F", "ROCK_TUNNEL_B1F"]);
+var DARK_TINT = 4282137660;
+var BRIGHT_TINT = 4294967295;
 var COMPASS = {
   up: "north",
   down: "south",
@@ -5420,6 +5674,16 @@ class Overworld {
     if (!tileset)
       throw new Error(`unknown tileset ${def.tileset} for ${mapId}`);
     this.map = new GameMap(def, tileset);
+    const cut = this.save?.cutTrees?.[mapId];
+    if (cut) {
+      for (const key of Object.keys(cut)) {
+        if (!cut[key])
+          continue;
+        const [cx, cy] = key.split(",").map(Number);
+        this.stamp(def.index, cx, cy, false);
+      }
+    }
+    this.tint(DARK_MAPS.has(mapId) ? DARK_TINT : BRIGHT_TINT);
     if (!(opts?.seamless && this.npcPool.size > 0)) {
       this.npcPool = new Map;
     }
@@ -5716,6 +5980,10 @@ class Overworld {
       this.showMapText(sign.text);
       return;
     }
+    if (this.map.id === "BILLS_HOUSE" && fx === 1 && fy === 4 && p.facing === "up") {
+      this.showMapText(TEXT_BILLSHOUSE_PC);
+      return;
+    }
     if (pcTileAt(this.map.id, fx, fy, p.facing)) {
       this.shell.openBox?.();
       return;
@@ -5757,6 +6025,12 @@ class Overworld {
   }
   healParty() {
     this.shell.healParty();
+  }
+  stamp(mapId, cx, cy, on) {
+    this.shell.stamp(mapId, cx, cy, on);
+  }
+  tint(abgr) {
+    this.shell.tint(abgr);
   }
   playOnce(songId, onDone) {
     this.oneShotPending = true;
@@ -6303,15 +6577,17 @@ class Scene {
     const t0 = p ? p.now() : 0;
     this.emitMaps(view);
     const t1 = p ? p.now() : 0;
-    this.emitCam(view);
-    this.emitEnts(view);
-    this.emitEmote(view);
+    const bv = view.battleView();
+    if (!bv) {
+      this.emitCam(view);
+      this.emitEnts(view);
+      this.emitEmote(view);
+    }
     const t2 = p ? p.now() : 0;
     if (p) {
       p.maps += t1 - t0;
       p.ents += t2 - t1;
     }
-    const bv = view.battleView();
     if (bv) {
       this.emitBattle(view, bv);
       if (p)
@@ -6329,6 +6605,7 @@ class Scene {
     const host = this.host;
     if (!this.battleActive) {
       this.battleActive = true;
+      this.hideAllEnts();
       this.uiOwner = null;
       this.uiRows = [];
       this.uiPage = -1;
@@ -6345,9 +6622,9 @@ class Scene {
     const seen = new Set;
     for (const c of desired) {
       seen.add(c.side);
-      const key = `${c.pic},${c.x},${c.y}`;
+      const key = `${c.pic},${c.x},${c.y},${c.dx},${c.dy},${c.dz}`;
       if (this.cardShown.get(c.side) !== key) {
-        host.card(c.side, c.pic, c.x, c.y);
+        host.card(c.side, c.pic, c.x, c.y, c.dx, c.dy, c.dz);
         this.cardShown.set(c.side, key);
       }
     }
@@ -6480,6 +6757,15 @@ class Scene {
         this.entShown[slot] = 0;
       }
     }
+  }
+  hideAllEnts() {
+    for (let slot = 0;slot < ENTS_MAX; slot++) {
+      if (this.entShown[slot] !== 0) {
+        this.host.entHide(slot);
+        this.entShown[slot] = 0;
+      }
+    }
+    this.entSeen.fill(0);
   }
   emitEmote(view) {
     const ow = view.overworld;
@@ -6792,17 +7078,19 @@ class Scene {
           host.uiTile(X + 1, IY + pv.swapFrom * 2, ARROW_CURSOR);
         }
         if (pv.mode === "submenu") {
-          const items = ["STATS", "SWITCH", "CANCEL"];
-          const sx = 10, sy = 9, sw = 9;
+          const items = pv.submenuItems;
+          const sx = 10, sw = 9;
+          const innerH = items.length * 2;
+          const sy = Math.min(9, 16 - innerH);
           host.uiTile(sx, sy, BORDER_TL);
           host.uiFill(sx + 1, sy, sw - 1, 1, BORDER_H);
           host.uiTile(sx + sw, sy, BORDER_TR);
-          host.uiFill(sx, sy + 1, 1, 6, BORDER_V);
-          host.uiFill(sx + sw, sy + 1, 1, 6, BORDER_V);
-          host.uiFill(sx + 1, sy + 1, sw - 1, 6, SPACE);
-          host.uiTile(sx, sy + 7, BORDER_BL);
-          host.uiFill(sx + 1, sy + 7, sw - 1, 1, BORDER_H);
-          host.uiTile(sx + sw, sy + 7, BORDER_BR);
+          host.uiFill(sx, sy + 1, 1, innerH, BORDER_V);
+          host.uiFill(sx + sw, sy + 1, 1, innerH, BORDER_V);
+          host.uiFill(sx + 1, sy + 1, sw - 1, innerH, SPACE);
+          host.uiTile(sx, sy + 1 + innerH, BORDER_BL);
+          host.uiFill(sx + 1, sy + 1 + innerH, sw - 1, 1, BORDER_H);
+          host.uiTile(sx + sw, sy + 1 + innerH, BORDER_BR);
           items.forEach((label2, i) => {
             this.stamp(host, sx + 3, sy + 2 + i * 2, label2);
             if (i === pv.submenuIndex)
@@ -7568,55 +7856,20 @@ class StartMenuState {
   }
 }
 
-// voxelmon/game/ui/bagscreen.ts
-var ROWS = 4;
-
-class BagState {
-  game;
-  kind = "bag";
-  index = 0;
-  top = 0;
-  constructor(game) {
-    this.game = game;
-  }
-  ids() {
-    return order(this.game.save);
-  }
-  update() {
-    const p = this.game.input.pressed;
-    const n = this.ids().length + 1;
-    if (p.up)
-      this.index = (this.index + n - 1) % n;
-    if (p.down)
-      this.index = (this.index + 1) % n;
-    if (this.index < this.top)
-      this.top = this.index;
-    if (this.index >= this.top + ROWS)
-      this.top = this.index - ROWS + 1;
-    if (p.b || p.a && this.index === n - 1) {
-      this.game.pop();
-    }
-  }
-  view() {
-    const save = this.game.save;
-    const items = this.ids().map((id) => ({
-      name: this.game.data.items?.[id]?.name ?? id,
-      qty: save.inventory?.[id] ?? 0
-    }));
-    return { entries: items, index: this.index, top: this.top, rows: ROWS };
-  }
-}
-
 // voxelmon/game/ui/partyscreen.ts
+var FIELD_MOVES = ["CUT", "FLASH"];
+
 class PartyState {
   game;
+  opts;
   kind = "party";
   index = 0;
   mode = "list";
   submenuIndex = 0;
   swapFrom = null;
-  constructor(game) {
+  constructor(game, opts) {
     this.game = game;
+    this.opts = opts;
   }
   party() {
     return this.game.save.party ?? [];
@@ -7639,6 +7892,12 @@ class PartyState {
       return;
     }
     if (p.a && this.index < this.party().length) {
+      const pick = this.opts?.onPick;
+      if (pick) {
+        this.game.pop();
+        pick(this.index);
+        return;
+      }
       if (this.swapFrom !== null) {
         if (this.swapFrom !== this.index) {
           const party = this.party();
@@ -7653,22 +7912,44 @@ class PartyState {
       }
     }
   }
+  submenuItems() {
+    const mon = this.party()[this.index];
+    const knows = (id) => mon?.moves?.some((m) => m.id === id) ?? false;
+    const items = ["STATS", "SWITCH"];
+    for (const id of FIELD_MOVES)
+      if (knows(id))
+        items.push(id);
+    items.push("CANCEL");
+    return items;
+  }
   updateSubmenu(p) {
+    const items = this.submenuItems();
+    const n = items.length;
     if (p.up)
-      this.submenuIndex = (this.submenuIndex + 2) % 3;
+      this.submenuIndex = (this.submenuIndex + n - 1) % n;
     if (p.down)
-      this.submenuIndex = (this.submenuIndex + 1) % 3;
+      this.submenuIndex = (this.submenuIndex + 1) % n;
     if (p.b) {
       this.mode = "list";
       return;
     }
     if (!p.a)
       return;
+    const label2 = items[this.submenuIndex];
     this.mode = "list";
-    if (this.submenuIndex === 0)
+    if (label2 === "STATS")
       this.game.push(new SummaryState(this.game, this.index));
-    else if (this.submenuIndex === 1)
+    else if (label2 === "SWITCH")
       this.swapFrom = this.index;
+    else if (FIELD_MOVES.includes(label2))
+      this.useFieldMove(label2);
+  }
+  useFieldMove(moveId) {
+    const mon = this.party()[this.index];
+    const name = mon?.nickname ?? this.game.data.pokemon?.[mon?.species]?.name ?? mon?.species ?? "";
+    this.game.closeToOverworld();
+    const verb = moveId === "CUT" ? "use_cut" : "use_flash";
+    this.game.overworld.runScript([[verb, name]]);
   }
   view() {
     const entries = this.party().map((m) => ({
@@ -7683,7 +7964,8 @@ class PartyState {
       index: this.index,
       mode: this.mode,
       submenuIndex: this.submenuIndex,
-      swapFrom: this.swapFrom
+      swapFrom: this.swapFrom,
+      submenuItems: this.submenuItems()
     };
   }
 }
@@ -7726,6 +8008,54 @@ class SummaryState {
       },
       moves
     };
+  }
+}
+
+// voxelmon/game/ui/bagscreen.ts
+var ROWS = 4;
+
+class BagState {
+  game;
+  kind = "bag";
+  index = 0;
+  top = 0;
+  constructor(game) {
+    this.game = game;
+  }
+  ids() {
+    return order(this.game.save);
+  }
+  update() {
+    const p = this.game.input.pressed;
+    const n = this.ids().length + 1;
+    if (p.up)
+      this.index = (this.index + n - 1) % n;
+    if (p.down)
+      this.index = (this.index + 1) % n;
+    if (this.index < this.top)
+      this.top = this.index;
+    if (this.index >= this.top + ROWS)
+      this.top = this.index - ROWS + 1;
+    if (p.b || p.a && this.index === n - 1) {
+      this.game.pop();
+      return;
+    }
+    if (p.a && this.index < this.ids().length) {
+      const id = this.ids()[this.index];
+      if (this.game.data.items?.[id]?.machine?.move) {
+        this.game.push(new PartyState(this.game, {
+          onPick: (i) => this.game.teachMachine(i, id)
+        }));
+      }
+    }
+  }
+  view() {
+    const save = this.game.save;
+    const items = this.ids().map((id) => ({
+      name: this.game.data.items?.[id]?.name ?? id,
+      qty: save.inventory?.[id] ?? 0
+    }));
+    return { entries: items, index: this.index, top: this.top, rows: ROWS };
   }
 }
 
@@ -8932,6 +9262,21 @@ class VoxelmonGame {
       }
     }
   }
+  debugCycleMap(direction) {
+    if (this.battleView() || this.overworld.transitioning)
+      return;
+    const list = this.data.cookedMaps;
+    if (!list || list.length < 2)
+      return;
+    const curId = this.overworld.map.id;
+    let i = list.indexOf(curId);
+    if (i < 0)
+      i = 0;
+    i = (i + direction + list.length) % list.length;
+    const targetId = list[i];
+    const dw = this.data.maps?.[targetId]?.warps?.[0];
+    this.overworld.startWarpTo(targetId, dw?.x ?? 4, dw?.y ?? 4, "down");
+  }
   tick(buttons) {
     const p = this.prof;
     const t0 = p ? p.now() : 0;
@@ -8961,6 +9306,10 @@ class VoxelmonGame {
   pop() {
     this.stack.pop();
   }
+  closeToOverworld() {
+    while (this.stack.length > 1)
+      this.stack.pop();
+  }
   top() {
     return this.stack[this.stack.length - 1];
   }
@@ -8970,6 +9319,12 @@ class VoxelmonGame {
   healParty() {
     for (const mon of this.save.party)
       healMon(this.data, mon);
+  }
+  stamp(mapId, cx, cy, on) {
+    this.host.stamp(mapId, cx, cy, on ? 1 : 0);
+  }
+  tint(abgr) {
+    this.host.tint(abgr);
   }
   playOnce(song) {
     this.audio.playOnce(song);
@@ -9039,6 +9394,39 @@ learn ${mdef.name}!\f${name} did not learn
 ${mdef.name}!`, () => step(i + 1));
     };
     step(0);
+  }
+  teachMachine(partyIndex, itemId) {
+    const mon = this.save.party[partyIndex];
+    const item = this.data.items?.[itemId];
+    const moveId = item?.machine?.move;
+    if (!mon || !item || !moveId)
+      return;
+    const def = this.data.pokemon[mon.species];
+    const name = mon.nickname ?? def.name;
+    const mdef = this.data.moves[moveId];
+    const mname = mdef?.name ?? moveId;
+    if (mon.moves.some((mv) => mv.id === moveId)) {
+      this.showText(`${name} knows
+${mname} already!`);
+      return;
+    }
+    if (!(def.tmhm ?? []).includes(moveId)) {
+      this.showText(`${name} is not
+compatible with
+${item.name}!`);
+      return;
+    }
+    if (mon.moves.length >= 4) {
+      this.showText(`${name} is trying to
+learn ${mname}!\f${name} did not learn
+${mname}!`);
+      return;
+    }
+    mon.moves.push({ id: moveId, pp: mdef?.pp ?? 0 });
+    if (item.machine?.kind === "TM")
+      remove(this.save, itemId, 1);
+    this.showText(`${name} learned
+${mname}!`);
   }
   pushStubBattle(species, level) {
     this.push(new BattleGameState(this, species, level));
@@ -9235,6 +9623,313 @@ ${mdef.name}!`, () => step(i + 1));
   }
 }
 
+// voxelmon/game/ui/kantogear.ts
+var COLS = 20;
+function stampBottom(host, x, y, s, bit = 0) {
+  const codes = encodeGlyphs(s);
+  for (let i = 0;i < codes.length && x + i < COLS; i++) {
+    host.uiTileBottom(x + i, y, codes[i] | bit);
+  }
+}
+function stampRight(host, y, s) {
+  stampBottom(host, Math.max(0, COLS - s.length - 1), y, s);
+}
+function tilesBottom(host, x, y, tiles) {
+  for (let i = 0;i < tiles.length && x + i < COLS; i++) {
+    host.uiTileBottom(x + i, y, tiles[i]);
+  }
+}
+var LIGHT_BIT = 32768;
+function stampLight(host, x, y, s) {
+  const codes = encodeGlyphs(s);
+  for (let i = 0;i < codes.length && x + i < COLS; i++) {
+    host.uiTileBottom(x + i, y, codes[i] | LIGHT_BIT);
+  }
+}
+var FILL_BIT = 16384;
+var DARKTEXT_BIT = 8192;
+function fillCellBottom(host, x0, y0, w, h) {
+  for (let y = y0;y < y0 + h; y++) {
+    for (let x = x0;x < x0 + w && x < COLS; x++) {
+      host.uiTileBottom(x, y, SPACE | FILL_BIT);
+    }
+  }
+}
+function stampFill(host, x, y, s) {
+  const codes = encodeGlyphs(s);
+  for (let i = 0;i < codes.length && x + i < COLS; i++) {
+    host.uiTileBottom(x + i, y, codes[i] | FILL_BIT);
+  }
+}
+function boxBottom(host, x0, y0, w, h, bit = 0) {
+  const x1 = x0 + w - 1;
+  const y1 = y0 + h - 1;
+  host.uiTileBottom(x0, y0, BORDER_TL | bit);
+  host.uiTileBottom(x1, y0, BORDER_TR | bit);
+  host.uiTileBottom(x0, y1, BORDER_BL | bit);
+  host.uiTileBottom(x1, y1, BORDER_BR | bit);
+  for (let x = x0 + 1;x < x1; x++) {
+    host.uiTileBottom(x, y0, BORDER_H | bit);
+    host.uiTileBottom(x, y1, BORDER_H | bit);
+  }
+  for (let y = y0 + 1;y < y1; y++) {
+    host.uiTileBottom(x0, y, BORDER_V | bit);
+    host.uiTileBottom(x1, y, BORDER_V | bit);
+  }
+}
+function clockStr() {
+  try {
+    const d = new Date;
+    const m = d.getMinutes();
+    let h = d.getHours();
+    const ap = h >= 12 ? "PM" : "AM";
+    h = h % 12;
+    if (h === 0)
+      h = 12;
+    const mm = m < 10 ? "0" + String(m) : String(m);
+    return String(h) + ":" + mm + ap;
+  } catch {
+    return "";
+  }
+}
+function drawTopBar(host, title) {
+  stampLight(host, 1, 0, title);
+  const t = clockStr();
+  if (t)
+    stampLight(host, Math.max(0, COLS - t.length - 1), 0, t);
+}
+var BATTLE_ACTIONS = ["FIGHT", "PKMN", "ITEM", "RUN"];
+function drawActionGrid(host, menuIndex, showCursor) {
+  host.uiClearBottom();
+  drawTopBar(host, "BATTLE");
+  const cellW = 10;
+  const cellH = 8;
+  const colX = [0, 10];
+  const rowY = [2, 10];
+  for (let i = 0;i < 4; i++) {
+    const x0 = colX[i % 2];
+    const y0 = rowY[i / 2 | 0];
+    const label2 = BATTLE_ACTIONS[i];
+    const iw = cellW - 2;
+    const lx = x0 + 1 + Math.max(0, Math.floor((iw - label2.length) / 2));
+    const ly = y0 + Math.floor(cellH / 2);
+    if (showCursor && i === menuIndex - 1) {
+      fillCellBottom(host, x0, y0, cellW, cellH);
+      boxBottom(host, x0, y0, cellW, cellH);
+      stampFill(host, lx, ly, label2);
+    } else {
+      boxBottom(host, x0, y0, cellW, cellH, DARKTEXT_BIT);
+      stampBottom(host, lx, ly, label2, DARKTEXT_BIT);
+    }
+  }
+}
+function effLabel(e10) {
+  if (e10 % 10 === 0)
+    return String(e10 / 10) + "X";
+  return (e10 / 10).toString().replace(/^0/, "") + "X";
+}
+function drawMoveSelect(host, game, b) {
+  host.uiClearBottom();
+  drawTopBar(host, "MOVES");
+  const moves = b.player.curMoves;
+  const cellW = 10;
+  const cellH = 8;
+  const colX = [0, 10];
+  const rowY = [2, 10];
+  const qmark = encodeGlyphs("?")[0];
+  for (let i = 0;i < 4; i++) {
+    if (i >= moves.length)
+      continue;
+    const x0 = colX[i % 2];
+    const y0 = rowY[i / 2 | 0];
+    const slot = moves[i];
+    const def = game.data.moves[slot.id];
+    const name = (def?.name ?? slot.id).slice(0, 7);
+    const maxPp = def?.pp ?? slot.pp;
+    const type = (def?.type ?? "").toUpperCase().slice(0, 6);
+    const power = def?.power ?? 0;
+    const selected = i === b.moveIndex - 1;
+    const bit = selected ? FILL_BIT : DARKTEXT_BIT;
+    if (selected)
+      fillCellBottom(host, x0, y0, cellW, cellH);
+    boxBottom(host, x0, y0, cellW, cellH, selected ? 0 : DARKTEXT_BIT);
+    stampBottom(host, x0 + 1, y0 + 1, name, bit);
+    host.uiTileBottom(x0 + cellW - 2, y0 + 1, qmark | bit);
+    stampBottom(host, x0 + 1, y0 + 3, "PP " + String(slot.pp) + "/" + String(maxPp), bit);
+    stampBottom(host, x0 + 1, y0 + 5, type, bit);
+    let eff = "--";
+    if (power > 0 && b.enemy && b.chart) {
+      eff = effLabel(b.chart.effectiveness(def.type ?? "", b.enemy.curTypes));
+    }
+    stampBottom(host, x0 + cellW - 1 - eff.length, y0 + 5, eff, bit);
+  }
+}
+function drawItemList(host, game, b) {
+  host.uiClearBottom();
+  drawTopBar(host, "ITEMS");
+  for (let i = 0;i < b.itemList.length && i < 12; i++) {
+    const id = b.itemList[i];
+    const name = game.data.items[id]?.name ?? id;
+    const count = game.save?.inventory?.[id] ?? 0;
+    const y = 2 + i;
+    stampBottom(host, 2, y, name.slice(0, 13));
+    stampRight(host, y, "x" + String(count));
+    if (i === b.itemIndex)
+      host.uiTileBottom(0, y, ARROW_CURSOR);
+  }
+}
+function drawPartyList(host, game, title, cursor) {
+  host.uiClearBottom();
+  drawTopBar(host, title);
+  const party = game.save?.party ?? [];
+  const cellW = 10;
+  const cellH = 5;
+  const colX = [0, 10];
+  const rowY = [2, 7, 12];
+  for (let i = 0;i < 6; i++) {
+    const x0 = colX[i % 2];
+    const y0 = rowY[i / 2 | 0];
+    if (i >= party.length)
+      continue;
+    const mon = party[i];
+    const full = mon.nickname ?? game.data.pokemon[mon.species]?.name ?? mon.species;
+    const name = full.length > 6 ? full.slice(0, 5) + "." : full;
+    const maxHp = mon.stats?.hp ?? mon.hp;
+    boxBottom(host, x0, y0, cellW, cellH, DARKTEXT_BIT);
+    const spritePage = picPageFor(game.data, mon.species);
+    if (spritePage >= 0) {
+      host.uiSpriteBottom(spritePage, (x0 + 1) * TILE_W, (y0 + 1) * TILE_H, 2 * TILE_W - 2, 2 * TILE_H - 1);
+    }
+    if (cursor === i)
+      host.uiTileBottom(x0, y0, ARROW_CURSOR | DARKTEXT_BIT);
+    stampBottom(host, x0 + 3, y0 + 1, name, DARKTEXT_BIT);
+    stampBottom(host, x0 + 3, y0 + 2, "L" + String(mon.level), DARKTEXT_BIT);
+    tilesBottom(host, x0 + 1, y0 + 3, hpBarTiles(mon.hp, maxHp, true).slice(1));
+    if (mon.status)
+      stampBottom(host, x0 + 6, y0 + 2, mon.status.slice(0, 3), DARKTEXT_BIT);
+  }
+}
+function drawBattleMessage(host, b) {
+  host.uiClearBottom();
+  drawTopBar(host, "BATTLE");
+  boxBottom(host, 0, 2, COLS, 14, DARKTEXT_BIT);
+  const rows = [5, 7];
+  b.shown.forEach((line, i) => {
+    if (i >= rows.length)
+      return;
+    const isLast = i === b.shown.length - 1;
+    const n = isLast ? line.revealed : line.codes.length;
+    for (let c = 0;c < n && c < line.codes.length && 2 + c < COLS - 1; c++) {
+      host.uiTileBottom(2 + c, rows[i], line.codes[c] | DARKTEXT_BIT);
+    }
+  });
+  if (b.msgWaiting || b.msgPrompt) {
+    for (let x = 2;x < COLS - 2; x++) {
+      host.uiTileBottom(x, 11, BORDER_H | DARKTEXT_BIT);
+    }
+    const tip = "TAP TO CONTINUE";
+    const tx = Math.max(2, Math.floor((COLS - tip.length) / 2));
+    stampBottom(host, tx, 13, tip, DARKTEXT_BIT);
+  }
+  if (b.choiceOpen) {
+    boxBottom(host, 14, 7, 6, 5, DARKTEXT_BIT);
+    stampBottom(host, 16, 8, "YES", DARKTEXT_BIT);
+    stampBottom(host, 16, 10, "NO", DARKTEXT_BIT);
+    host.uiTileBottom(15, b.choiceYes ? 8 : 10, ARROW_CURSOR | DARKTEXT_BIT);
+  }
+}
+function drawBattleGear(host, game, b) {
+  switch (b.phase) {
+    case "moveSelect":
+      drawMoveSelect(host, game, b);
+      return;
+    case "party":
+      drawPartyList(host, game, "PKMN", b.partyIndex);
+      return;
+    case "item":
+      drawItemList(host, game, b);
+      return;
+    case "menu":
+      drawActionGrid(host, b.menuIndex, true);
+      return;
+    default:
+      drawBattleMessage(host, b);
+      return;
+  }
+}
+function drawKantoGear(host, game) {
+  const bv = game.battleView?.();
+  const b = bv?.battle;
+  if (b) {
+    drawBattleGear(host, game, b);
+    return;
+  }
+  drawPartyList(host, game, "KANTO GEAR", -1);
+}
+var ROWS5 = 18;
+var TILE_W = 320 / COLS;
+var TILE_H = 240 / ROWS5;
+var TAP_A = {
+  isDown: () => false,
+  wasPressed: (btn) => btn === "a"
+};
+function clampInt(v, lo, hi) {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+function gearTouchDown(game, x, y) {
+  const b = game.battleView?.()?.battle;
+  if (!b)
+    return;
+  const col = clampInt(Math.floor(x / TILE_W), 0, COLS - 1);
+  const row = clampInt(Math.floor(y / TILE_H), 0, ROWS5 - 1);
+  if (b.choiceOpen) {
+    if (col >= 14 && col <= 19 && row >= 7 && row <= 11) {
+      b.choiceYes = row < 9;
+    }
+    b.update(TAP_A);
+    return;
+  }
+  switch (b.phase) {
+    case "menu": {
+      const c = col < 10 ? 0 : 1;
+      const r = row < 10 ? 0 : 1;
+      b.menuIndex = r * 2 + c + 1;
+      b.update(TAP_A);
+      return;
+    }
+    case "moveSelect": {
+      const n = b.player.curMoves.length;
+      if (n === 0)
+        return;
+      const i = clampInt(Math.floor((row - 2) / 3), 0, n - 1);
+      b.moveIndex = i + 1;
+      b.update(TAP_A);
+      return;
+    }
+    case "party": {
+      const n = game.save?.party?.length ?? 0;
+      if (n === 0)
+        return;
+      const i = clampInt(Math.floor((row - 2) / 2), 0, n - 1);
+      b.partyIndex = i;
+      b.update(TAP_A);
+      return;
+    }
+    case "item": {
+      const n = b.itemList.length;
+      if (n === 0)
+        return;
+      const i = clampInt(row - 2, 0, n - 1);
+      b.itemIndex = i;
+      b.update(TAP_A);
+      return;
+    }
+    default:
+      b.update(TAP_A);
+      return;
+  }
+}
+
 // voxelmon/game/psp-main.ts
 var SEED = 17;
 var native = globalThis.voxel;
@@ -9313,11 +10008,23 @@ class QuickJsHost {
   uiClear() {
     native.uiClear();
   }
+  uiTileBottom(x, y, tile) {
+    native.uiTileBottom(x, y, tile);
+  }
+  uiFillBottom(x, y, w, h, tile) {
+    native.uiFillBottom(x, y, w, h, tile);
+  }
+  uiClearBottom() {
+    native.uiClearBottom();
+  }
+  uiSpriteBottom(page, x, y, w, h) {
+    native.uiSpriteBottom(page, x, y, w, h);
+  }
   arena(mapId, x, y, shape, rig) {
     native.arena(mapId, x, y, shape, rig);
   }
-  card(side, pic2, x, y) {
-    native.card(side, pic2, x, y);
+  card(side, pic2, x, y, dx = 0, dy = 0, dz = 0) {
+    native.card(side, pic2, x, y, dx, dy, dz);
   }
   cardHide(side) {
     native.cardHide(side);
@@ -9369,6 +10076,26 @@ if (nat.now && nat.perf) {
     ui: 0
   };
 }
+var prevTouch = false;
+var prevDebugNext = false;
+var prevDebugPrev = false;
 globalThis.frame = (buttons) => {
-  game.tick(buttons);
+  const phys = buttons & 255;
+  const touching = (buttons >> 8 & 1) !== 0;
+  if (touching && !prevTouch) {
+    const tx = buttons >> 9 & 511;
+    const ty = buttons >> 18 & 255;
+    gearTouchDown(game, tx, ty);
+  }
+  prevTouch = touching;
+  const debugNext = (buttons >> 26 & 1) !== 0;
+  const debugPrev = (buttons >> 27 & 1) !== 0;
+  if (debugNext && !prevDebugNext)
+    game.debugCycleMap(1);
+  if (debugPrev && !prevDebugPrev)
+    game.debugCycleMap(-1);
+  prevDebugNext = debugNext;
+  prevDebugPrev = debugPrev;
+  game.tick(phys);
+  drawKantoGear(host, game);
 };

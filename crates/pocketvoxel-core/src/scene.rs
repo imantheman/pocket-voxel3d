@@ -80,6 +80,15 @@ pub struct BattleCard {
     /// Cell coords on the current map.
     pub x: i32,
     pub y: i32,
+    /// Animation offset from the cell centre, Q4 px (the same fixed point
+    /// `Ent` positions use). Cells are 16 px, far too coarse for an attack
+    /// lunge or a faint slide, so the battle animations (guest side:
+    /// voxelmon/game/battle/anim.ts) ride here instead of moving the card
+    /// between cells. `dy` lifts: negative sinks the card into the ground,
+    /// which is how the faint slide reads.
+    pub dx: i32,
+    pub dy: i32,
+    pub dz: i32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -144,6 +153,16 @@ pub struct Scene {
     pub pics: [Pic; PICS_MAX],
     /// The GB UI tile grid, row-major. Tile 0 = empty (not drawn).
     pub ui: [u16; UI_COLS * UI_ROWS],
+    /// Kanto Gear companion (bottom screen) tile grid — same 20x18 layout as
+    /// `ui`, filled by the UI_*_BOTTOM ops and rendered to the 3DS bottom
+    /// screen. Retained like `ui`; a host without a second screen ignores it.
+    pub ui_b: [u16; UI_COLS * UI_ROWS],
+    /// Sprites stacked on the companion surface this frame — see
+    /// [`BottomSprite`]. Reset by `uiClearBottom`, like `ui_b`.
+    pub ui_b_sprites: [BottomSprite; UI_B_SPRITES_MAX],
+    /// Sprites written so far this frame (`uiSpriteBottom` calls since the
+    /// last `uiClearBottom`).
+    pub ui_b_sprite_n: u8,
     /// The last `uiText` run; drawn over the grid, capped by `ui_reveal`.
     pub ui_text: Option<UiText>,
     /// Glyphs of `ui_text` shown. `uiText` resets it to "all".
@@ -179,6 +198,24 @@ pub struct Pic {
 
 pub const PICS_MAX: usize = 4;
 
+/// One sprite drawn on the Kanto Gear companion (bottom screen) surface: a
+/// whole atlas `page` scaled into a rect, in the bottom screen's native
+/// 320x240 pixel space (the same ortho main.rs renders the panel with — no
+/// squish, unlike the top-screen `Pic`'s 480x272 logical space).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BottomSprite {
+    pub page: u16,
+    pub x: i16,
+    pub y: i16,
+    pub w: i16,
+    pub h: i16,
+}
+
+/// `uiSpriteBottom` calls per frame are append-only like the tile grid: the
+/// guest re-emits every sprite each frame and `uiClearBottom` resets the
+/// count. 8 covers the party grid's 6 mons plus headroom.
+pub const UI_B_SPRITES_MAX: usize = 8;
+
 impl Scene {
     pub fn new() -> Self {
         Self {
@@ -194,6 +231,9 @@ impl Scene {
             ents: [Ent::default(); ENTS_MAX],
             pics: [Pic::default(); PICS_MAX],
             ui: [0u16; UI_COLS * UI_ROWS],
+            ui_b: [0u16; UI_COLS * UI_ROWS],
+            ui_b_sprites: [BottomSprite::default(); UI_B_SPRITES_MAX],
+            ui_b_sprite_n: 0,
             ui_text: None,
             ui_reveal: u32::MAX,
             battle: Battle::default(),
@@ -440,6 +480,51 @@ impl Scene {
                 self.ui_reveal = u32::MAX;
             }
 
+            // Kanto Gear companion surface (bottom screen): the UI_TILE/FILL/
+            // CLEAR logic, written into `ui_b` instead of `ui`. No text run —
+            // the companion draws every glyph as a tile (like the guest's
+            // stamp()), so ui_b needs only the grid.
+            op::UI_TILE_BOTTOM => {
+                if args.len() >= 3 {
+                    let (x, y) = (a(0), a(1));
+                    if (0..UI_COLS as i32).contains(&x) && (0..UI_ROWS as i32).contains(&y) {
+                        self.ui_b[y as usize * UI_COLS + x as usize] = a(2) as u16;
+                    }
+                }
+            }
+            op::UI_FILL_BOTTOM => {
+                if args.len() >= 5 {
+                    let x0 = a(0).clamp(0, UI_COLS as i32);
+                    let y0 = a(1).clamp(0, UI_ROWS as i32);
+                    let x1 = a(0).saturating_add(a(2).max(0)).clamp(0, UI_COLS as i32);
+                    let y1 = a(1).saturating_add(a(3).max(0)).clamp(0, UI_ROWS as i32);
+                    for y in y0..y1 {
+                        for x in x0..x1 {
+                            self.ui_b[y as usize * UI_COLS + x as usize] = a(4) as u16;
+                        }
+                    }
+                }
+            }
+            op::UI_CLEAR_BOTTOM => {
+                self.ui_b = [0u16; UI_COLS * UI_ROWS];
+                self.ui_b_sprite_n = 0;
+            }
+            op::UI_SPRITE_BOTTOM => {
+                if args.len() >= 5 {
+                    let n = self.ui_b_sprite_n as usize;
+                    if n < UI_B_SPRITES_MAX {
+                        self.ui_b_sprites[n] = BottomSprite {
+                            page: a(0) as u16,
+                            x: a(1) as i16,
+                            y: a(2) as i16,
+                            w: a(3) as i16,
+                            h: a(4) as i16,
+                        };
+                        self.ui_b_sprite_n = n as u8 + 1;
+                    }
+                }
+            }
+
             op::ARENA => {
                 if args.len() >= 5 {
                     // Entering the arena resets the staging camera; cards
@@ -459,11 +544,17 @@ impl Scene {
                 if args.len() >= 4
                     && let Some(card) = self.battle.cards.get_mut(a(0) as usize)
                 {
+                    // args 4..6 (the animation offset) are optional: a guest
+                    // that predates battle animations sends four and gets
+                    // a still card, exactly as before.
                     *card = BattleCard {
                         shown: true,
                         pic: a(1),
                         x: a(2),
                         y: a(3),
+                        dx: if args.len() > 4 { a(4) } else { 0 },
+                        dy: if args.len() > 5 { a(5) } else { 0 },
+                        dz: if args.len() > 6 { a(6) } else { 0 },
                     };
                 }
             }

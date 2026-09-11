@@ -54,9 +54,29 @@ export interface VoxelHost {
   /** Glyphs of the last uiText shown. */
   uiReveal(n: number): void;
   uiClear(): void;
+  /** Kanto Gear companion (bottom screen) tile surface. Same 20x18 grid as
+   * the top UI; tiles are glyph/border ids. Retained until uiClearBottom. */
+  uiTileBottom(x: number, y: number, tile: number): void;
+  uiFillBottom(x: number, y: number, w: number, h: number, tile: number): void;
+  uiClearBottom(): void;
+  /** A whole atlas `page` scaled into a rect on the bottom screen, in its
+   * native 320x240 pixel space. Append-only like the tile grid — up to 8
+   * per frame, reset by uiClearBottom. */
+  uiSpriteBottom(page: number, x: number, y: number, w: number, h: number): void;
   // battle
   arena(mapId: number, x: number, y: number, shape: number, rig: number): void;
-  card(side: number, pic: number, x: number, y: number): void;
+  /** dx/dy/dz: Q4-px animation offset from the cell centre, optional and 0
+   * for a still card (battle/anim.ts). dy lifts — negative sinks the card
+   * into the floor, which is the faint slide. */
+  card(
+    side: number,
+    pic: number,
+    x: number,
+    y: number,
+    dx?: number,
+    dy?: number,
+    dz?: number,
+  ): void;
   cardHide(side: number): void;
   /** Q8 fixed 0..256 = 0..1 (zoom Q8 x). */
   battleCam(orbit: number, pitch: number, zoom: number): void;
@@ -174,11 +194,23 @@ export class RecorderHost implements VoxelHost {
   uiClear(): void {
     this.op(VOX_OP.uiClear);
   }
+  uiTileBottom(x: number, y: number, tile: number): void {
+    this.op(VOX_OP.uiTileBottom, x, y, tile);
+  }
+  uiFillBottom(x: number, y: number, w: number, h: number, tile: number): void {
+    this.op(VOX_OP.uiFillBottom, x, y, w, h, tile);
+  }
+  uiClearBottom(): void {
+    this.op(VOX_OP.uiClearBottom);
+  }
+  uiSpriteBottom(page: number, x: number, y: number, w: number, h: number): void {
+    this.op(VOX_OP.uiSpriteBottom, page, x, y, w, h);
+  }
   arena(mapId: number, x: number, y: number, shape: number, rig: number): void {
     this.op(VOX_OP.arena, mapId, x, y, shape, rig);
   }
-  card(side: number, pic: number, x: number, y: number): void {
-    this.op(VOX_OP.card, side, pic, x, y);
+  card(side: number, pic: number, x: number, y: number, dx = 0, dy = 0, dz = 0): void {
+    this.op(VOX_OP.card, side, pic, x, y, dx, dy, dz);
   }
   cardHide(side: number): void {
     this.op(VOX_OP.cardHide, side);

@@ -664,11 +664,32 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
             (cy * CELL_PX + CELL_PX / 2 + oy0) as f32,
         )
     };
+    // A battle card's world anchor: its cell centre plus the Q4-px
+    // animation offset the guest drives (battle/anim.ts). `card_ground`
+    // keeps only the horizontal part, so a card's shadow tracks it across
+    // the floor during a lunge but does not follow it up or down — a faint
+    // sinks the card while its shadow stays put.
+    let card_anchor = |card: &crate::scene::BattleCard| {
+        let c = cell_centre(card.x, card.y);
+        vec3(
+            c.x + card.dx as f32 / spec::Q4 as f32,
+            c.y + card.dy as f32 / spec::Q4 as f32,
+            c.z + card.dz as f32 / spec::Q4 as f32,
+        )
+    };
+    let card_ground = |card: &crate::scene::BattleCard| {
+        let c = cell_centre(card.x, card.y);
+        vec3(
+            c.x + card.dx as f32 / spec::Q4 as f32,
+            c.y,
+            c.z + card.dz as f32 / spec::Q4 as f32,
+        )
+    };
     if scene.battle.active {
         for card in scene.battle.cards.iter().filter(|c| c.shown) {
             if let Some(page) = page_at(pak, card.pic) {
                 items.push(Item::ShadowDecal {
-                    corners: shadow_quad(cell_centre(card.x, card.y), page.w as f32),
+                    corners: shadow_quad(card_ground(card), page.w as f32),
                     abgr: alpha_abgr(SHADOW_ALPHA_BATTLE),
                 });
             }
@@ -721,7 +742,7 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
         }
     }
     if scene.battle.active {
-        for card in scene.battle.cards.iter().filter(|c| c.shown) {
+        for (side, card) in scene.battle.cards.iter().enumerate().filter(|(_, c)| c.shown) {
             let Some(page) = page_at(pak, card.pic) else {
                 continue;
             };
@@ -730,14 +751,18 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
             const BATTLE_CARD_SCALE: f32 = 0.6;
             items.push(Item::Card {
                 verts: card_verts(
-                    cell_centre(card.x, card.y),
+                    card_anchor(card),
                     page.w as f32 * BATTLE_CARD_SCALE,
                     page.h as f32 * BATTLE_CARD_SCALE,
                     a,
                 ),
                 page: card.pic as u16,
                 uv: [0.0, 0.0, 1.0, 1.0],
-                mirror: false,
+                // side 0 (player, the back sprite — staging.ts's
+                // backPageFor) needs a horizontal flip to face the right
+                // way in the arena; side 1 (enemy, the front sprite) is
+                // already correct as imported.
+                mirror: side == 0,
                 pull: pull_card,
             });
         }

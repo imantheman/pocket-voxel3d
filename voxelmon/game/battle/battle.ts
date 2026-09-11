@@ -41,6 +41,7 @@ import {
   hpDrainStepFrames,
 } from "../rules/timing.ts";
 import { encodeGlyphs } from "../ui/tiles.ts";
+import { animFrames, SIDE_ENEMY, SIDE_PLAYER, type AnimKind, type BattleAnim } from "./anim.ts";
 import { displayName, makeBattler, prefixEnemy, type WildBattler } from "./battler.ts";
 import {
   effectRecord,
@@ -189,6 +190,9 @@ export class WildBattle implements EffectBattle {
   private waitFrames = 0;
   private draining = false;
   moveAnimRow: QueueRow | null = null;
+  /** Running card animations, at most one per side (battle/anim.ts).
+   * staging.ts reads these to offset the cards it asks the scene for. */
+  anims: BattleAnim[] = [];
   current: QueueRow | null = null;
   statBoxMon: PartyMon | null = null;
 
@@ -516,6 +520,19 @@ export class WildBattle implements EffectBattle {
           this.waitFrames = MOVE_ANIM_PRE;
           return true;
         }
+        // The beat the v1 slice paid but drew nothing in. The attacker
+        // lunges; if this row landed damage (effects.ts sets `hit` only when
+        // dealt > 0) the defender is knocked back and flickers with it. A
+        // status move or a miss lunges alone. HIDEPIC/SHOWPIC handled above
+        // are engine state, not a move, and animate nothing.
+        const engineRow = item.anim === "HIDEPIC_ANIM" || item.anim === "SHOWPIC_ANIM";
+        if (!engineRow && item.attackerIsPlayer !== undefined) {
+          const attacker = item.attackerIsPlayer ? SIDE_PLAYER : SIDE_ENEMY;
+          const defender = item.attackerIsPlayer ? SIDE_ENEMY : SIDE_PLAYER;
+          let hold = this.startAnim("lunge", attacker);
+          if (item.hit) hold = Math.max(hold, this.startAnim("hit", defender));
+          this.waitFrames = hold;
+        }
         this.current = null;
         return true;
       }
@@ -704,8 +721,24 @@ export class WildBattle implements EffectBattle {
   // update (:1777-1998) — one call per fixed step
   // -------------------------------------------------------------------
 
+  /**
+   * Start a card animation and return the frames it runs for, so the caller
+   * can hold the queue exactly that long. One per side: a second animation
+   * on the same card replaces the first rather than fighting it.
+   */
+  private startAnim(kind: AnimKind, side: number): number {
+    const total = animFrames(kind);
+    this.anims = this.anims.filter((a) => a.side !== side);
+    this.anims.push({ kind, side, frame: 0, total });
+    return total;
+  }
+
   update(input: BattleInput): void {
     this.frame += 1;
+    if (this.anims.length > 0) {
+      for (const a of this.anims) a.frame += 1;
+      this.anims = this.anims.filter((a) => a.frame < a.total);
+    }
 
     // menu-idle safety net (:1783-1791): HP/status changed outside a drain
     if (this.phase === "menu") {
@@ -1194,8 +1227,12 @@ export class WildBattle implements EffectBattle {
     }
     this.actNext(() => {
       battler.fainted = true;
-      // faint slide + cry are presentation (:3645-3662) — later rung; the
-      // staging layer hides the side's card off the `fainted` flag
+      // SlideDownFaintedMonPic (:3645-3662): the card keeps drawing while
+      // it sinks — staging.ts holds it past the `fainted` gate for exactly
+      // as long as this animation runs, and the wait row below is already
+      // the reference's own FAINT_SLIDE hold, so the slide fills a beat
+      // that was being paid anyway. The cry is still a later rung.
+      this.startAnim("faint", battler.isPlayer ? SIDE_PLAYER : SIDE_ENEMY);
     });
     this.insertNext({ wait: FAINT_SLIDE });
     if (!battler.isPlayer) {

@@ -196,6 +196,10 @@ export interface MapDef {
   warps: MapWarp[];
   objects: MapObject[];
   signs: MapSign[];
+  /** Cell coords (cx,cy — same 2-cells-per-block space as warps/signs) of
+   * cook-time cut-tree props (voxelmon/cook/structures.ts cuttableCells),
+   * each also cooked as an individually-toggleable STMP stamp. */
+  cuttableCells?: [number, number][];
   source?: string;
 }
 

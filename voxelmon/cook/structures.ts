@@ -249,6 +249,27 @@ export function analyseMap(
   // ---- pinned standees (billboards, signposts, props, posts) ----
   const cuttable = cuttableCells(map, gen, S);
   buildPinnedStandees(S, map, art, profile, cuttable);
+  // Ride along on the shared MapDef (dumped verbatim into gamedata.json's
+  // `maps`, see voxelmon/cook/gamedata.ts) so the runtime can answer "is the
+  // player facing a cut tree" (world/map.ts isCuttableCell) without its own
+  // block-swap classification pass — cell space matches warps/signs (2
+  // cells per block), same key format buildPinnedStandees used above.
+  //
+  // Only cells that buildPinnedStandees ACTUALLY turned into a stamp count.
+  // cuttableCells is a block-id match against gen.field.cutTreeSwaps and is
+  // tileset-blind, so indoor maps whose tileset reuses those ids come back
+  // with false hits — Silph Co 1F/2F, Rocket Hideout B4F and Pokemon Mansion
+  // 1F/B1F between them claim 80 "cut trees", none of which is a tree or has
+  // a stamp to remove. buildPinnedStandees already rejects them (they aren't
+  // small billboard clusters), so intersecting with what it emitted leaves
+  // exactly the cells Cut can actually clear.
+  const stamped = [...cuttable].filter((key) => S.stampQuads.has(key));
+  if (stamped.length > 0) {
+    map.def.cuttableCells = stamped.map((key) => {
+      const [cx, cy] = key.split(",").map(Number);
+      return [cx, cy] as [number, number];
+    });
+  }
 
   // ---- tall grass (BODY only) + flowers ----
   buildGrass(S, map, art);

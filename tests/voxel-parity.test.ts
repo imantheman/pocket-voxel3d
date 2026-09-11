@@ -165,7 +165,8 @@ function stubWorld(flags: Record<string, boolean>, shown: string[]): ScriptWorld
     resolveText: () => null,
     startWarpTo: (_m, _x, _y, _f, onDone) => onDone(),
     scriptMove: (_e, _d, _t, onDone) => onDone?.(),
-    player: { moving: false },
+    player: { moving: false, facingCell: () => [0, 0] },
+    map: { id: "FIX_TOWN", def: { index: 0 }, isCuttableCell: () => false },
     setEmote: (_e, _b, _f, onDone) => onDone(),
     healParty() {
       shown.push("<heal>");
@@ -180,6 +181,12 @@ function stubWorld(flags: Record<string, boolean>, shown: string[]): ScriptWorld
     },
     facePlayer() {
       shown.push("<face>");
+    },
+    stamp(mapId, cx, cy, on) {
+      shown.push(`<stamp ${mapId},${cx},${cy},${on}>`);
+    },
+    tint(abgr) {
+      shown.push(`<tint ${abgr}>`);
     },
   };
 }

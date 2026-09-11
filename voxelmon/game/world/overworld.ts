@@ -19,7 +19,7 @@ import { canMove, occupied, target, type Dir, type Mover, type TilePairs } from 
 import { defPassable, GameMap, isOutside } from "./map.ts";
 import { NPC } from "./npc.ts";
 import { Player } from "./player.ts";
-import { talkScript, itemBallScript, itemBallFlag } from "./mapscripts.ts";
+import { talkScript, itemBallScript, itemBallFlag, TEXT_BILLSHOUSE_PC } from "./mapscripts.ts";
 import { martGreetScript } from "./marts.ts";
 import { nurseGreetScript } from "./nurses.ts";
 import { pcTileAt } from "./pctiles.ts";
@@ -34,6 +34,24 @@ import {
   type WarpCarpets,
 } from "./warp.ts";
 import type { MapWarp } from "../data.ts";
+
+// HM Flash: pokered's TilesetDarknessLookup lists exactly ROCK_TUNNEL_1F and
+// ROCK_TUNNEL_B1F as dark-until-lit (Diglett's Cave, despite also being a
+// cave, is normally lit). This port has no per-radius flashlight cutout —
+// the renderer's terrain is a baked flat vertex buffer with no per-frame
+// lighting pass (crates/pocketvoxel-3ds/src/main.rs build_map) — so darkness
+// is a full-map colour multiply (Scene.tint, baked into vertex colour at
+// build time) instead of a lit circle around the player; Flash clears it
+// for the rest of the visit, matching the mechanic's actual effect (you can
+// see the room again) even though the presentation is coarser than the GB's.
+const DARK_MAPS = new Set(["ROCK_TUNNEL_1F", "ROCK_TUNNEL_B1F"]);
+/** 0xAABBGGRR. ~24% brightness: the GB blacks the screen OUTSIDE a lit
+ * radius, which is only navigable because the radius exists. A uniform
+ * multiply has no lit circle to walk by, so it has to stay light enough to
+ * make out the cave's shape — dark and unpleasant, still playable. Drop it
+ * toward 0x14 for a harsher cave, raise it for a kinder one. */
+const DARK_TINT = 0xff3c_3c_3c;
+const BRIGHT_TINT = 0xffff_ffff;
 
 // OverworldController.lua:37
 const COMPASS: Record<Dir, "north" | "south" | "east" | "west"> = {
@@ -58,6 +76,11 @@ export interface SaveSlice {
    * persists to when that map is next entered. true = shown, false = hidden.
    */
   objectToggles?: Record<string, Record<string, boolean>>;
+  /** Cells a cut tree has been chopped at, permanently: per map id, per
+   * `"cx,cy"` cell key (voxelmon/cook/structures.ts cuttableCells' own key
+   * format). Reapplied as stamp-off ops at setMap so a cut tree stays gone
+   * across a reload/re-entry, the way objectToggles persists object hides. */
+  cutTrees?: Record<string, Record<string, boolean>>;
 }
 
 /** What the overworld needs from the game shell (game.ts implements it). */
@@ -85,6 +108,15 @@ export interface OverworldShell {
   showChoice(text: string, choice: (yes: boolean) => void): void;
   pushWarpFade(frames: number, midpoint: () => void, onDone?: () => void): void;
   pushStubBattle(species: string, level: number): void;
+  /** Toggle a cooked map decoration stamp (Scene.stamps_off / host.stamp) on
+   * or off by cell — cut trees and the S.S. Anne hull's per-cell split
+   * (voxelmon/cook/mesh.ts VERMILION_DOCK, mapscripts.ts's onStep) both ride
+   * this same mechanism. */
+  stamp(mapId: number, cx: number, cy: number, on: boolean): void;
+  /** Scene-wide colour multiply (Scene.tint / host.tint) — HM Flash's dark-
+   * cave dimming (see DARK_MAPS below) is the first caller; 0xffffffff is
+   * full brightness (no-op multiply). */
+  tint(abgr: number): void;
 }
 
 interface ScriptMove {
@@ -264,6 +296,21 @@ export class Overworld implements ScriptWorld {
     const tileset = this.shell.data.tilesets?.[def.tileset];
     if (!tileset) throw new Error(`unknown tileset ${def.tileset} for ${mapId}`);
     this.map = new GameMap(def, tileset);
+    // Cut trees stay cut across a reload/re-entry: reapply every stamp-off
+    // this save recorded for THIS map (setMap is the single choke point, so
+    // every entry path — warp, seam, boot — gets this for free, the same
+    // way objectToggles' hides get reapplied below via objectVisible).
+    const cut = this.save?.cutTrees?.[mapId];
+    if (cut) {
+      for (const key of Object.keys(cut)) {
+        if (!cut[key]) continue;
+        const [cx, cy] = key.split(",").map(Number);
+        this.stamp(def.index, cx, cy, false);
+      }
+    }
+    // HM Flash only lasts the current visit (pokered: leaving and
+    // re-entering a dark cave darkens it again) — see DARK_MAPS' doc.
+    this.tint(DARK_MAPS.has(mapId) ? DARK_TINT : BRIGHT_TINT);
     // NPC instances persist across connection crossings in the pool (keyed
     // by NPC.id) so nothing snaps back to its spawn point at a seam; warps
     // rebuild from scratch, like the original's per-entry sprite init
@@ -670,6 +717,13 @@ export class Overworld implements ScriptWorld {
       this.showMapText(sign.text);
       return;
     }
+    // BillsHousePC (OverworldController.lua:2248, hidden_event 1,4): Bill's
+    // OWN PC is the cell-separator, not box storage — checked before the
+    // generic pcTiles loop below, matching the reference's check order.
+    if (this.map.id === "BILLS_HOUSE" && fx === 1 && fy === 4 && p.facing === "up") {
+      this.showMapText(TEXT_BILLSHOUSE_PC);
+      return;
+    }
     // Bill's PC: a hidden PC tile (OverworldController.lua:2019). Pressing A
     // facing it opens box storage.
     if (pcTileAt(this.map.id, fx, fy, p.facing)) {
@@ -735,6 +789,16 @@ export class Overworld implements ScriptWorld {
   /** Commands.lua:587 heal_party. */
   healParty(): void {
     this.shell.healParty();
+  }
+
+  /** host.stamp passthrough — see OverworldShell.stamp. */
+  stamp(mapId: number, cx: number, cy: number, on: boolean): void {
+    this.shell.stamp(mapId, cx, cy, on);
+  }
+
+  /** host.tint passthrough — see OverworldShell.tint. */
+  tint(abgr: number): void {
+    this.shell.tint(abgr);
   }
 
   /** Commands.lua:533 play_once — see showMapText's restore note. */

@@ -16,6 +16,7 @@
 import { fromObject } from "./data.ts";
 import { VoxelmonGame } from "./game.ts";
 import type { VoxelHost } from "./host.ts";
+import { drawKantoGear, gearTouchDown } from "./ui/kantogear.ts";
 
 /** The story seed — voxelmon/tapes/story.tape is plotted against it
  * (tools/voxel.ts STORY_SEED). A save system picks its own seed later. */
@@ -55,8 +56,20 @@ interface VoxelNative {
   uiText(x: number, y: number, str: string): void;
   uiReveal(n: number): void;
   uiClear(): void;
+  uiTileBottom(x: number, y: number, tile: number): void;
+  uiFillBottom(x: number, y: number, w: number, h: number, tile: number): void;
+  uiClearBottom(): void;
+  uiSpriteBottom(page: number, x: number, y: number, w: number, h: number): void;
   arena(mapId: number, x: number, y: number, shape: number, rig: number): void;
-  card(side: number, pic: number, x: number, y: number): void;
+  card(
+    side: number,
+    pic: number,
+    x: number,
+    y: number,
+    dx?: number,
+    dy?: number,
+    dz?: number,
+  ): void;
   cardHide(side: number): void;
   battleCam(orbit: number, pitch: number, zoom: number): void;
   arenaEnd(): void;
@@ -176,11 +189,23 @@ class QuickJsHost implements VoxelHost {
   uiClear(): void {
     native.uiClear();
   }
+  uiTileBottom(x: number, y: number, tile: number): void {
+    native.uiTileBottom(x, y, tile);
+  }
+  uiFillBottom(x: number, y: number, w: number, h: number, tile: number): void {
+    native.uiFillBottom(x, y, w, h, tile);
+  }
+  uiClearBottom(): void {
+    native.uiClearBottom();
+  }
+  uiSpriteBottom(page: number, x: number, y: number, w: number, h: number): void {
+    native.uiSpriteBottom(page, x, y, w, h);
+  }
   arena(mapId: number, x: number, y: number, shape: number, rig: number): void {
     native.arena(mapId, x, y, shape, rig);
   }
-  card(side: number, pic: number, x: number, y: number): void {
-    native.card(side, pic, x, y);
+  card(side: number, pic: number, x: number, y: number, dx = 0, dy = 0, dz = 0): void {
+    native.card(side, pic, x, y, dx, dy, dz);
   }
   cardHide(side: number): void {
     native.cardHide(side);
@@ -267,8 +292,38 @@ if (nat.now && nat.perf) {
   };
 }
 
+// Touch state is packed into the high bits of the button word by the 3DS host
+// (main.rs): bit 8 = touching, bits 9..17 = x, bits 18..25 = y. We act on the
+// DOWN edge only (a held touch is one tap), and hand game.tick just the low 8
+// physical-button bits so nothing downstream sees the touch payload.
+let prevTouch = false;
+// DEBUG map-cycle edge flags (bits 26/27 of the button word — see
+// game.debugCycleMap). A rendered frame can call frame() more than once
+// (main.rs's sim-catch-up loop resends the same word for every step), so
+// this collapses those repeats into one trigger per physical L/R press the
+// same way prevTouch does for a held tap.
+let prevDebugNext = false;
+let prevDebugPrev = false;
 (globalThis as unknown as { frame: (buttons: number) => void }).frame = (
   buttons: number,
 ): void => {
-  game.tick(buttons);
+  const phys = buttons & 0xff;
+  const touching = ((buttons >> 8) & 1) !== 0;
+  if (touching && !prevTouch) {
+    const tx = (buttons >> 9) & 0x1ff;
+    const ty = (buttons >> 18) & 0xff;
+    // Tap-to-confirm on the bottom-screen battle menus; a no-op outside battle.
+    gearTouchDown(game as unknown as Parameters<typeof gearTouchDown>[0], tx, ty);
+  }
+  prevTouch = touching;
+  const debugNext = ((buttons >> 26) & 1) !== 0;
+  const debugPrev = ((buttons >> 27) & 1) !== 0;
+  if (debugNext && !prevDebugNext) game.debugCycleMap(1);
+  if (debugPrev && !prevDebugPrev) game.debugCycleMap(-1);
+  prevDebugNext = debugNext;
+  prevDebugPrev = debugPrev;
+  game.tick(phys);
+  // Kanto Gear companion: redraw the bottom-screen surface from current game
+  // state. A host without a second screen ignores the UI_*_BOTTOM ops.
+  drawKantoGear(host, game as unknown as Parameters<typeof drawKantoGear>[1]);
 };

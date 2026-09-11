@@ -6,6 +6,7 @@
 
 import type { VoxelmonData } from "../data.ts";
 import type { GameMap } from "../world/map.ts";
+import { cardFx, SIDE_ENEMY, SIDE_PLAYER, towardCell } from "./anim.ts";
 import { search, type Arena } from "./arena.ts";
 import type { WildBattle } from "./battle.ts";
 
@@ -23,6 +24,10 @@ export interface CardDesire {
   pic: number;
   x: number;
   y: number;
+  /** Animation offset from the cell centre, Q4 px (battle/anim.ts). */
+  dx: number;
+  dy: number;
+  dz: number;
 }
 
 /**
@@ -85,21 +90,38 @@ export function desiredCards(
   const out: CardDesire[] = [];
   const [ex, ey] = staging.arena.enemyCell;
   const [px, py] = staging.arena.playerCell;
+  const anims = battle.anims;
+  // A card sinking through its faint slide has to keep drawing past the
+  // `fainted` gate below until the slide finishes (battle/anim.ts).
+  const fainting = (side: number) =>
+    anims.some((a) => a.side === side && a.kind === "faint");
+  const [towardPlayerX, towardPlayerZ] = towardCell([ex, ey], [px, py]);
   // BattleState.lua:5283 — the draw gate reads enemyHidden too, so the ball
   // chain's HIDEPIC row takes the wild mon off the field while it shakes
   if (
     battle.enemy &&
-    !battle.enemy.fainted &&
+    (!battle.enemy.fainted || fainting(SIDE_ENEMY)) &&
     !battle.enemyHidden &&
     battle.result !== "caught"
   ) {
     const pic = picPageFor(data, battle.enemy.mon.species);
-    if (pic >= 0) out.push({ side: 1, pic, x: ex, y: ey });
+    const fx = cardFx(anims, SIDE_ENEMY, towardPlayerX, towardPlayerZ);
+    if (pic >= 0 && !fx.hidden) {
+      out.push({ side: SIDE_ENEMY, pic, x: ex, y: ey, dx: fx.dx, dy: fx.dy, dz: fx.dz });
+    }
   }
-  if (battle.player && !battle.player.fainted && !battle.showPlayerBack && !battle.sendingOut) {
+  if (
+    battle.player &&
+    (!battle.player.fainted || fainting(SIDE_PLAYER)) &&
+    !battle.showPlayerBack &&
+    !battle.sendingOut
+  ) {
     // Front-facing sprites on both sides for now (was backPageFor).
     const pic = picPageFor(data, battle.player.mon.species);
-    if (pic >= 0) out.push({ side: 0, pic, x: px, y: py });
+    const fx = cardFx(anims, SIDE_PLAYER, -towardPlayerX, -towardPlayerZ);
+    if (pic >= 0 && !fx.hidden) {
+      out.push({ side: SIDE_PLAYER, pic, x: px, y: py, dx: fx.dx, dy: fx.dy, dz: fx.dz });
+    }
   }
   return out;
 }

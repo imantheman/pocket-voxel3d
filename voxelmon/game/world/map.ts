@@ -157,6 +157,7 @@ export class GameMap {
   private waterTiles: Set<number>;
   private warpAt = new Map<number, WarpAt>();
   private signAt = new Map<number, MapSign>();
+  private cuttableAt = new Set<number>();
 
   // Map.lua:112 Map.new
   constructor(def: MapDef, tilesetDef: TilesetDef) {
@@ -174,6 +175,9 @@ export class GameMap {
     });
     for (const s of def.signs ?? []) {
       this.signAt.set(s.y * this.widthCells + s.x, s);
+    }
+    for (const [cx, cy] of def.cuttableCells ?? []) {
+      this.cuttableAt.add(cy * this.widthCells + cx);
     }
   }
 
@@ -257,6 +261,13 @@ export class GameMap {
   // Map.lua:287
   signAtCell(cx: number, cy: number): MapSign | undefined {
     return this.signAt.get(cy * this.widthCells + cx);
+  }
+
+  // Cook-time cuttableCells (voxelmon/cook/structures.ts) — a cell whose
+  // block was an authored cut-tree prop, independent of whether it's
+  // already been cut (that's save.cutTrees, checked separately).
+  isCuttableCell(cx: number, cy: number): boolean {
+    return this.cuttableAt.has(cy * this.widthCells + cx);
   }
 
   // Map.lua:291

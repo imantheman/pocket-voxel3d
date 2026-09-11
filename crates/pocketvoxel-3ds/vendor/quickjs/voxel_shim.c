@@ -126,8 +126,13 @@ int qjs_register_voxel(JSContext *ctx) {
     add_num(ctx, o, "uiFill",   51, 5);
     add_num(ctx, o, "uiReveal", 53, 1);
     add_num(ctx, o, "uiClear",  54, 0);
+    /* Kanto Gear companion (bottom screen) surface — ops 75-78. */
+    add_num(ctx, o, "uiTileBottom",   75, 3);
+    add_num(ctx, o, "uiFillBottom",   76, 5);
+    add_num(ctx, o, "uiClearBottom",  77, 0);
+    add_num(ctx, o, "uiSpriteBottom", 78, 5);
     add_num(ctx, o, "arena",    70, 5);
-    add_num(ctx, o, "card",     71, 4);
+    add_num(ctx, o, "card",     71, 7);
     add_num(ctx, o, "cardHide", 72, 1);
     add_num(ctx, o, "battleCam",73, 3);
     add_num(ctx, o, "arenaEnd", 74, 0);

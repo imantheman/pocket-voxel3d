@@ -339,6 +339,10 @@ pub mod op {
     pub const CRY: u32 = 22;
     pub const AUDIO_WAVES: u32 = 23;
     pub const AUDIO_DRUM: u32 = 24;
+    pub const UI_TILE_BOTTOM: u32 = 75;
+    pub const UI_FILL_BOTTOM: u32 = 76;
+    pub const UI_CLEAR_BOTTOM: u32 = 77;
+    pub const UI_SPRITE_BOTTOM: u32 = 78;
 }
 
 /// Fixed-point scales used by op args.

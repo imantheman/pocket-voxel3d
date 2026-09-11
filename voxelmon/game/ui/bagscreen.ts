@@ -3,6 +3,7 @@
 // same scrolling window the start menu uses.
 import type { GameState } from "../game.ts";
 import * as Bag from "../rules/bag.ts";
+import { PartyState } from "./partyscreen.ts";
 
 const ROWS = 4;
 
@@ -18,7 +19,16 @@ export class BagState implements GameState {
   private index = 0;
   private top = 0;
 
-  constructor(private game: { input: any; pop(): void; save: any; data: any }) {}
+  constructor(
+    private game: {
+      input: any;
+      push(s: GameState): void;
+      pop(): void;
+      save: any;
+      data: any;
+      teachMachine(partyIndex: number, itemId: string): void;
+    },
+  ) {}
 
   private ids(): string[] {
     return Bag.order(this.game.save);
@@ -33,8 +43,21 @@ export class BagState implements GameState {
     if (this.index >= this.top + ROWS) this.top = this.index - ROWS + 1;
     if (p.b || (p.a && this.index === n - 1)) {
       this.game.pop();
+      return;
     }
-    // Using / tossing items is the next rung; selecting is inert for now.
+    // Selecting a TM/HM opens the party as a chooser and teaches the move
+    // (game.ts teachMachine) — pokered's UseItem -> ItemUseTMHM. Every other
+    // item is still inert; general item use/toss is a later rung.
+    if (p.a && this.index < this.ids().length) {
+      const id = this.ids()[this.index]!;
+      if (this.game.data.items?.[id]?.machine?.move) {
+        this.game.push(
+          new PartyState(this.game as never, {
+            onPick: (i: number) => this.game.teachMachine(i, id),
+          }),
+        );
+      }
+    }
   }
 
   view(): BagView {

@@ -539,6 +539,43 @@ export function runGeometry(map: GameMap, S: SGrid): MapGeometry {
     }
   }
 
+  // Vermilion Dock's S.S. Anne hull (SHIP_PORT's `roof` pin, voxel_heights.lua)
+  // bakes as ordinary terrain like any other roof — story.lua/story3.lua want
+  // her to sail off once the player has Cut (mapscripts.ts VERMILION_DOCK
+  // onStep), but this engine has no runtime path that rewrites baked chunk
+  // geometry, and the per-tile loop above (AO/gables/repeat-folding, shared
+  // by every map in the game) is the wrong place to carve a one-map special
+  // case into — a mistake there risks every OTHER map's terrain, not just
+  // this one. Post-processing the FINISHED quad list instead touches nothing
+  // upstream: split the hull's quads out of `terrain` here, by world-space
+  // footprint (verified against the actual cooked tile grid — tiles x20-35,
+  // y6-11 are the only `roof`-tagged cells on this map, so the footprint
+  // check can't catch anything else), into per-CELL stamps — the exact
+  // mechanism cut trees already use (Scene.stamps_off / host.stamp), just
+  // handed a second source at cook time. The runtime hides them 2 cells at a
+  // time, bow to stern, for the sailing animation — same stamp infrastructure,
+  // no new rendering code, and every other map's cook output is unaffected by
+  // this being here at all (the `if` below is the map's own name).
+  if (map.def.id === "VERMILION_DOCK") {
+    const HULL_X0 = 160, HULL_X1 = 288; // tiles 20-35, world px
+    const HULL_Z0 = 48, HULL_Z1 = 96; // tiles 6-11, world px
+    const kept: Quad[] = [];
+    for (const q of terrain) {
+      const cx = (q.c[0][0] + q.c[1][0] + q.c[2][0] + q.c[3][0]) / 4;
+      const cz = (q.c[0][2] + q.c[1][2] + q.c[2][2] + q.c[3][2]) / 4;
+      if (cx >= HULL_X0 && cx < HULL_X1 && cz >= HULL_Z0 && cz < HULL_Z1) {
+        const key = `${Math.floor(cx / 16)},${Math.floor(cz / 16)}`;
+        let arr = S.stampQuads.get(key);
+        if (!arr) S.stampQuads.set(key, (arr = []));
+        arr.push(q);
+      } else {
+        kept.push(q);
+      }
+    }
+    terrain.length = 0;
+    terrain.push(...kept);
+  }
+
   const stamps = new Map<string, Quad[]>();
   for (const [key, quads] of S.stampQuads) {
     stamps.set(
