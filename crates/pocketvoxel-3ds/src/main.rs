@@ -362,6 +362,8 @@ const FILLER_KINDS: [usize; 2] = [7, 8];
 const TREE_HULL_KIND: usize = 3;
 const TREE_COARSE_KIND: usize = 4;
 const TREE_BOX_KIND: usize = 5;
+/// Mesh kinds per chunk record (spec::mesh_kind).
+const MESH_KINDS_N: usize = 9;
 /// For a "huge" map (over HUGE_MAP_THRESHOLD — currently just Viridian
 /// Forest), `build_map` always stays at MAX_VERTS_SAFE and, once the
 /// player's position is known, sorts every one of the map's chunks nearest-
@@ -409,6 +411,11 @@ struct MapGeom {
     /// the caller uses this to know whether to watch for chunk-crossing and
     /// re-stream, rather than re-deriving the same classification itself.
     is_huge: bool,
+    /// The map's FULL world bounds in XZ, over every chunk it has — not
+    /// just the ones the vertex budget built. Neighbour strips key off this
+    /// to find the shared seam (see load_neighbor_strip).
+    map_min: [f32; 2],
+    map_max: [f32; 2],
 }
 
 /// Push one chunk's mesh range for `kind` into the flat vertex buffer and
@@ -421,6 +428,8 @@ fn push_chunk_mesh(
     kind: usize,
     budget: usize,
     tint: u32,
+    clip_min: [f32; 2],
+    clip_max: [f32; 2],
     verts: &mut Vec<Vertex>,
     chunk_spans: &mut Vec<Span>,
     cmin: &mut [f32; 3],
@@ -436,25 +445,42 @@ fn push_chunk_mesh(
     let vbase = m.vert_base as usize;
     let mut gmin = [f32::MAX; 3];
     let mut gmax = [f32::MIN; 3];
-    for k in 0..m.index_count as usize {
-        if verts.len() >= budget {
+    // Walk TRIANGLES, not loose indices, so the border ring can be dropped
+    // whole-primitive: `clip` is the real map box on any side that has a
+    // connected neighbour drawn behind it (see build_map), and ±huge on the
+    // sides that do not, where the ring is still the only thing standing
+    // between the player and empty sky.
+    let tri_count = m.index_count as usize / 3;
+    for t in 0..tri_count {
+        if verts.len() + 3 > budget {
             break;
         }
-        let idx = pak.indices[m.index_base as usize + k] as usize;
-        let pv = pak.verts[vbase + idx];
-        let a = draw::modulate_rgb(pv.abgr, tint);
-        let p = [pv.x as f32, pv.y as f32, pv.z as f32];
-        for c in 0..3 {
-            if p[c] < cmin[c] { cmin[c] = p[c]; }
-            if p[c] > cmax[c] { cmax[c] = p[c]; }
-            if p[c] < gmin[c] { gmin[c] = p[c]; }
-            if p[c] > gmax[c] { gmax[c] = p[c]; }
+        let b = m.index_base as usize + t * 3;
+        let p0 = pak.verts[vbase + pak.indices[b] as usize];
+        let p1 = pak.verts[vbase + pak.indices[b + 1] as usize];
+        let p2 = pak.verts[vbase + pak.indices[b + 2] as usize];
+        let mid_x = (p0.x as f32 + p1.x as f32 + p2.x as f32) / 3.0;
+        let mid_z = (p0.z as f32 + p1.z as f32 + p2.z as f32) / 3.0;
+        if mid_x < clip_min[0] || mid_x > clip_max[0]
+            || mid_z < clip_min[1] || mid_z > clip_max[1]
+        {
+            continue;
         }
-        verts.push(Vertex {
-            pos: [pv.x, pv.y, pv.z, 0],
-            color: [(a & 0xff) as u8, ((a >> 8) & 0xff) as u8, ((a >> 16) & 0xff) as u8, 255],
-            uv: [pv.uf(), pv.vf()],
-        });
+        for pv in [p0, p1, p2] {
+            let a = draw::modulate_rgb(pv.abgr, tint);
+            let p = [pv.x as f32, pv.y as f32, pv.z as f32];
+            for c in 0..3 {
+                if p[c] < cmin[c] { cmin[c] = p[c]; }
+                if p[c] > cmax[c] { cmax[c] = p[c]; }
+                if p[c] < gmin[c] { gmin[c] = p[c]; }
+                if p[c] > gmax[c] { gmax[c] = p[c]; }
+            }
+            verts.push(Vertex {
+                pos: [pv.x, pv.y, pv.z, 0],
+                color: [(a & 0xff) as u8, ((a >> 8) & 0xff) as u8, ((a >> 16) & 0xff) as u8, 255],
+                uv: [pv.uf(), pv.vf()],
+            });
+        }
     }
     if verts.len() > span_start {
         chunk_spans.push(Span {
@@ -528,6 +554,323 @@ fn push_stamp_mesh(
     }
 }
 
+/// How far past the shared seam a neighbour map is drawn, world px. The
+/// view only reaches ~233 px, so three chunks is already more than can be
+/// seen from the boundary.
+const STRIP_DEPTH_PX: f32 = 2.0 * CHUNK_PX as f32;
+/// Ceiling on one neighbour's strip, in vertices (~20 bytes each, so ~1 MB).
+/// Most strips land near 20k; a short dense route like ROUTE_5 sits wholly
+/// inside the band and measured 85k, which is more than the seam needs.
+/// Chunks are read nearest-the-seam first, so the cap sheds the far ones.
+const STRIP_MAX_VERTS: usize = 48_000;
+/// Linear memory that must remain free after the map is built before any
+/// neighbour strip is loaded. Vertex buffers come out of linear, and a full
+/// map can already claim 18 MB of it; running it dry mid-load is how a map
+/// transition dies.
+const STRIP_MIN_FREE_KB: u32 = 6 * 1024;
+
+/// One connected map's seam strip: geometry only, drawn with the CURRENT
+/// map's terrain texture.
+struct NeighborStrip {
+    map_id: u32,
+    verts: Vec<Vertex>,
+    spans: Vec<Span>,
+}
+
+/// The neighbour's real map box in its OWN coords, read cheaply: header,
+/// section table and chunk records only, no geometry (~10 KB).
+///
+/// Needed because a connection offset carries TWO things at once — which
+/// side the neighbour is on, and how it slides along that side — and the
+/// sign alone cannot tell them apart. ROUTE_2's neighbours both arrive at
+/// ox=-160 while connecting north and south; -160 is the lateral slide,
+/// not a west connection. Knowing the neighbour's size settles it.
+fn neighbor_bounds(path: &str, map_id: u32) -> Option<([f32; 2], [f32; 2])> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut hdr = [0u8; 16];
+    f.read_exact(&mut hdr).ok()?;
+    let sec_count = u16::from_le_bytes([hdr[6], hdr[7]]) as usize;
+    let mut table = vec![0u8; sec_count * 16];
+    f.read_exact(&mut table).ok()?;
+    let rd32 =
+        |b: &[u8], o: usize| u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]) as usize;
+    let mut chnk_off = 0usize;
+    for i in 0..sec_count {
+        let e = i * 16;
+        if &table[e..e + 4] == b"CHNK" {
+            chnk_off = rd32(&table, e + 4);
+        }
+    }
+    if chnk_off == 0 {
+        return None;
+    }
+    let mut ch = [0u8; 32];
+    f.seek(SeekFrom::Start(chnk_off as u64)).ok()?;
+    f.read_exact(&mut ch).ok()?;
+    let map_count = u16::from_le_bytes([ch[0], ch[1]]) as usize;
+    let mut dir = vec![0u8; map_count * 12];
+    f.read_exact(&mut dir).ok()?;
+    let (mut first, mut count) = (0usize, 0usize);
+    for i in 0..map_count {
+        let e = i * 12;
+        if rd32(&dir, e) as u32 == map_id {
+            first = rd32(&dir, e + 4);
+            count = rd32(&dir, e + 8);
+        }
+    }
+    if count == 0 {
+        return None;
+    }
+    const REC: usize = 128;
+    let mut recs = vec![0u8; count * REC];
+    f.seek(SeekFrom::Start((chnk_off + 32 + map_count * 12 + first * REC) as u64)).ok()?;
+    f.read_exact(&mut recs).ok()?;
+    let (mut mn, mut mx) = ([f32::MAX; 2], [f32::MIN; 2]);
+    for ci in 0..count {
+        let r = &recs[ci * REC..(ci + 1) * REC];
+        let g = |o: usize| i16::from_le_bytes([r[o], r[o + 1]]) as f32;
+        mn[0] = mn[0].min(g(4));
+        mn[1] = mn[1].min(g(8));
+        mx[0] = mx[0].max(g(10));
+        mx[1] = mx[1].max(g(14));
+    }
+    let ring = [(-mn[0]).max(0.0), (-mn[1]).max(0.0)];
+    Some((
+        [mn[0] + ring[0], mn[1] + ring[1]],
+        [mx[0] - ring[0], mx[1] - ring[1]],
+    ))
+}
+
+/// Read ONLY the seam-side chunks of a neighbour map's pak.
+///
+/// Loading a neighbour whole is not an option: paks run 3-59 MB against a
+/// 24 MB cache budget, and 34 of the 36 connected outdoor maps would blow
+/// it with the current map plus two neighbours — which would thrash the
+/// cache at every seam. But the sliver you can actually see is a few
+/// hundred KB of geometry, so this seeks to just the chunk records and the
+/// vertex/index ranges of the chunks near the shared edge.
+///
+/// It reads no atlas and no palette, because it does not need them: every
+/// connected outdoor map was measured to use terrain page 0 and world
+/// palette 41, with at most 2 of 256 palette entries differing, so the
+/// strip draws correctly with the texture already bound for the current
+/// map. That is what makes this cheap enough to be worth doing.
+fn load_neighbor_strip(
+    path: &str,
+    map_id: u32,
+    ox: f32,
+    oy: f32,
+    cur_min: [f32; 2],
+    cur_max: [f32; 2],
+    tint: u32,
+) -> Option<NeighborStrip> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+
+    let mut hdr = [0u8; 16];
+    f.read_exact(&mut hdr).ok()?;
+    let sec_count = u16::from_le_bytes([hdr[6], hdr[7]]) as usize;
+    let mut table = vec![0u8; sec_count * 16];
+    f.read_exact(&mut table).ok()?;
+    let rd32 = |b: &[u8], o: usize| {
+        u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]) as usize
+    };
+    let mut chnk_off = 0usize;
+    for i in 0..sec_count {
+        let e = i * 16;
+        if &table[e..e + 4] == b"CHNK" {
+            chnk_off = rd32(&table, e + 4);
+        }
+    }
+    if chnk_off == 0 {
+        return None;
+    }
+
+    // CHNK header: map_count, then chunk_total + the pool offsets.
+    let mut ch = [0u8; 32];
+    f.seek(SeekFrom::Start(chnk_off as u64)).ok()?;
+    f.read_exact(&mut ch).ok()?;
+    let map_count = u16::from_le_bytes([ch[0], ch[1]]) as usize;
+    let chunk_total = rd32(&ch, 4);
+    let verts_off = chnk_off + rd32(&ch, 8);
+    let indices_off = chnk_off + rd32(&ch, 16);
+
+    // Map directory, then this map's chunk records.
+    let mut dir = vec![0u8; map_count * 12];
+    f.read_exact(&mut dir).ok()?;
+    let (mut first, mut count) = (0usize, 0usize);
+    for i in 0..map_count {
+        let e = i * 12;
+        if rd32(&dir, e) as u32 == map_id {
+            first = rd32(&dir, e + 4);
+            count = rd32(&dir, e + 8);
+        }
+    }
+    if count == 0 {
+        return None;
+    }
+    const REC: usize = 128;
+    let rec0 = chnk_off + 32 + map_count * 12;
+    let mut recs = vec![0u8; count * REC];
+    f.seek(SeekFrom::Start((rec0 + first * REC) as u64)).ok()?;
+    f.read_exact(&mut recs).ok()?;
+    let _ = chunk_total;
+
+    let mut verts: Vec<Vertex> = Vec::new();
+    let mut spans: Vec<Span> = Vec::new();
+    // Pick the seam-side chunks first and order them by how far OUTSIDE the
+    // current map they sit, so if the vertex cap bites it sheds the chunks
+    // furthest from the seam — the ones least likely to be on screen.
+    // The neighbour has a border ring of its own, and it points back over
+    // the map the player is standing on — that ring is the wall of bushes
+    // sitting across the pathway between two connected maps. Derive its
+    // real box the same way build_map does (bounds are symmetric about the
+    // ring) and clip the strip to it, in the neighbour's LOCAL coords,
+    // before the connection offset is applied.
+    let mut nb_min = [f32::MAX; 2];
+    let mut nb_max = [f32::MIN; 2];
+    for ci in 0..count {
+        let r = &recs[ci * REC..(ci + 1) * REC];
+        let g = |o: usize| i16::from_le_bytes([r[o], r[o + 1]]) as f32;
+        nb_min[0] = nb_min[0].min(g(4));
+        nb_min[1] = nb_min[1].min(g(8));
+        nb_max[0] = nb_max[0].max(g(10));
+        nb_max[1] = nb_max[1].max(g(14));
+    }
+    let nb_ring = [(-nb_min[0]).max(0.0), (-nb_min[1]).max(0.0)];
+    let nb_real_min = [nb_min[0] + nb_ring[0], nb_min[1] + nb_ring[1]];
+    let nb_real_max = [nb_max[0] - nb_ring[0], nb_max[1] - nb_ring[1]];
+
+    let mut cand: Vec<(usize, f32)> = Vec::new();
+    for ci in 0..count {
+        let r = &recs[ci * REC..(ci + 1) * REC];
+        let i16at = |o: usize| i16::from_le_bytes([r[o], r[o + 1]]) as f32;
+        let (x0, z0) = (i16at(4) + ox, i16at(8) + oy);
+        let (x1, z1) = (i16at(10) + ox, i16at(14) + oy);
+        let dx = (cur_min[0] - x1).max(x0 - cur_max[0]).max(0.0);
+        let dz = (cur_min[1] - z1).max(z0 - cur_max[1]).max(0.0);
+        if dx > STRIP_DEPTH_PX || dz > STRIP_DEPTH_PX {
+            continue;
+        }
+        cand.push((ci, dx.max(dz)));
+    }
+    cand.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(core::cmp::Ordering::Equal));
+
+    for (ci, _) in cand {
+        if verts.len() >= STRIP_MAX_VERTS {
+            break;
+        }
+        let r = &recs[ci * REC..(ci + 1) * REC];
+        let i16at = |o: usize| i16::from_le_bytes([r[o], r[o + 1]]) as f32;
+        // AABB in the neighbour's own space, shifted by the connection
+        // offset the guest already computed (scene.maps[slot].ox/oy).
+        let (x0, z0) = (i16at(4) + ox, i16at(8) + oy);
+        let (x1, z1) = (i16at(10) + ox, i16at(14) + oy);
+        let (y0, y1) = (i16at(6), i16at(12));
+        for kind in 0..MESH_KINDS_N {
+            let m = 20 + kind * 12;
+            let vert_base = rd32(r, m);
+            let index_count = u16::from_le_bytes([r[m + 6], r[m + 7]]) as usize;
+            let index_base = rd32(r, m + 8);
+            if index_count == 0 {
+                continue;
+            }
+            // A seam strip only has to stop the wall of border bushes, and
+            // it is always at the far end of the view: ground, water and
+            // BOXED trees give the silhouette. The fine/coarse tree hulls
+            // are the bulk of any map's geometry and would dominate the
+            // read for detail nobody can resolve at that distance; grass
+            // and flowers are ankle-height and invisible out there. Kind 1
+            // (groundBake) is skipped because build_map does not use it
+            // either, and drawing both would double up the ground.
+            let want = GROUND_KINDS.contains(&kind) || kind == TREE_BOX_KIND;
+            if !want {
+                continue;
+            }
+            let mut idx = vec![0u8; index_count * 2];
+            f.seek(SeekFrom::Start((indices_off + index_base * 2) as u64)).ok()?;
+            f.read_exact(&mut idx).ok()?;
+            let span_start = verts.len();
+            let mut gmin = [f32::MAX; 3];
+            let mut gmax = [f32::MIN; 3];
+            // One contiguous read of the chunk's vertex pool beats a seek
+            // per index by a wide margin on SD.
+            let vmax = (0..index_count)
+                .map(|k| u16::from_le_bytes([idx[k * 2], idx[k * 2 + 1]]) as usize)
+                .max()
+                .unwrap_or(0);
+            let mut vbuf = vec![0u8; (vmax + 1) * 16];
+            f.seek(SeekFrom::Start((verts_off + vert_base * 16) as u64)).ok()?;
+            if f.read_exact(&mut vbuf).is_err() {
+                continue;
+            }
+            let at = |vi: usize| -> (f32, f32, f32, f32, f32, u32) {
+                let b = &vbuf[vi * 16..vi * 16 + 16];
+                (
+                    u16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0,
+                    u16::from_le_bytes([b[2], b[3]]) as f32 / 32768.0,
+                    i16::from_le_bytes([b[8], b[9]]) as f32,
+                    i16::from_le_bytes([b[10], b[11]]) as f32,
+                    i16::from_le_bytes([b[12], b[13]]) as f32,
+                    u32::from_le_bytes([b[4], b[5], b[6], b[7]]),
+                )
+            };
+            for t in 0..index_count / 3 {
+                let i0 = u16::from_le_bytes([idx[t * 6], idx[t * 6 + 1]]) as usize;
+                let i1 = u16::from_le_bytes([idx[t * 6 + 2], idx[t * 6 + 3]]) as usize;
+                let i2 = u16::from_le_bytes([idx[t * 6 + 4], idx[t * 6 + 5]]) as usize;
+                let (t0, t1, t2) = (at(i0), at(i1), at(i2));
+                // Drop the neighbour's own border ring — in LOCAL coords,
+                // before the offset — so it cannot spill back across the
+                // seam onto the map the player is walking on.
+                let mid_x = (t0.2 + t1.2 + t2.2) / 3.0;
+                let mid_z = (t0.4 + t1.4 + t2.4) / 3.0;
+                if mid_x < nb_real_min[0] || mid_x > nb_real_max[0]
+                    || mid_z < nb_real_min[1] || mid_z > nb_real_max[1]
+                {
+                    continue;
+                }
+                for vt in [t0, t1, t2] {
+                    let (u, v, lx, ly, lz, abgr) = vt;
+                    let (px, py, pz) = (lx + ox, ly, lz + oy);
+                    let a = draw::modulate_rgb(abgr, tint);
+                    let p = [px, py, pz];
+                    for c in 0..3 {
+                        if p[c] < gmin[c] { gmin[c] = p[c]; }
+                        if p[c] > gmax[c] { gmax[c] = p[c]; }
+                    }
+                    verts.push(Vertex {
+                        pos: [px as i16, py as i16, pz as i16, 0],
+                        color: [
+                            (a & 0xff) as u8,
+                            ((a >> 8) & 0xff) as u8,
+                            ((a >> 16) & 0xff) as u8,
+                            255,
+                        ],
+                        uv: [u, v],
+                    });
+                }
+            }
+            if verts.len() > span_start {
+                spans.push(Span {
+                    bmin: [x0, y0, z0],
+                    bmax: [x1, y1, z1],
+                    gmin,
+                    gmax,
+                    occludable: kind == TREE_BOX_KIND,
+                    start: span_start,
+                    end: verts.len(),
+                });
+            }
+        }
+    }
+    if spans.is_empty() {
+        return None;
+    }
+    Some(NeighborStrip { map_id, verts, spans })
+}
+
 fn build_map(
     pak: &Pak,
     map_id: u32,
@@ -541,6 +884,11 @@ fn build_map(
     // a dark-cave map's baked colours come out dim until Flash brightens
     // scene.tint back to white and a reload rebakes them.
     tint: u32,
+    // Which sides have a connected map drawn behind them: west, east,
+    // north, south. The border ring is dropped on those sides only — the
+    // neighbour's own ground replaces it — and kept everywhere else, where
+    // removing it would leave the map ending in open sky.
+    seam_sides: [bool; 4],
 ) -> MapGeom {
     let pidx = pak.map_terrain_page(map_id)
         .or_else(|| pak.page_of_kind(atlas_kind::TERRAIN))
@@ -620,10 +968,45 @@ fn build_map(
         MAX_VERTS
     };
 
+    // The border ring the cook fills beyond the map proper — bushes
+    // outdoors, filler indoors. It sits OUTSIDE the real map box, and the
+    // chunk extent is symmetric (-border .. size+border), so the ring's
+    // thickness reads straight off the bounds without needing the map's
+    // width/height: 32 px on outdoor maps, 96 px indoors (measured across
+    // all 219 paks). Clipping to the real box on a seam side deletes the
+    // ring exactly where a neighbour strip now supplies real ground.
+    let mut ring = [0.0f32; 2];
+    let mut real_min = [0.0f32; 2];
+    let mut real_max = [0.0f32; 2];
+    {
+        let mut mn = [f32::MAX; 2];
+        let mut mx = [f32::MIN; 2];
+        for c in all_chunks {
+            mn[0] = mn[0].min(c.aabb_min[0] as f32);
+            mn[1] = mn[1].min(c.aabb_min[2] as f32);
+            mx[0] = mx[0].max(c.aabb_max[0] as f32);
+            mx[1] = mx[1].max(c.aabb_max[2] as f32);
+        }
+        for i in 0..2 {
+            ring[i] = (-mn[i]).max(0.0);
+            real_min[i] = mn[i] + ring[i];
+            real_max[i] = mx[i] - ring[i];
+        }
+    }
+    const NO_CLIP: f32 = 1.0e9;
+    let clip_min = [
+        if seam_sides[0] { real_min[0] } else { -NO_CLIP },
+        if seam_sides[2] { real_min[1] } else { -NO_CLIP },
+    ];
+    let clip_max = [
+        if seam_sides[1] { real_max[0] } else { NO_CLIP },
+        if seam_sides[3] { real_max[1] } else { NO_CLIP },
+    ];
+
     // Ground first — always in full.
     for &kind in GROUND_KINDS.iter() {
         for chunk in &chunks {
-            push_chunk_mesh(pak, chunk, kind, budget, tint, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax);
+            push_chunk_mesh(pak, chunk, kind, budget, tint, clip_min, clip_max, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax);
         }
     }
     // Removable stamps (cut trees, the S.S. Anne hull) next, at ground
@@ -669,12 +1052,12 @@ fn build_map(
         } else {
             TREE_BOX_KIND
         };
-        push_chunk_mesh(pak, chunk, kind, budget, tint, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax);
+        push_chunk_mesh(pak, chunk, kind, budget, tint, clip_min, clip_max, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax);
     }
     // Water, grass, flower last — whatever budget survives the above.
     for &kind in FILLER_KINDS.iter() {
         for chunk in &chunks {
-            push_chunk_mesh(pak, chunk, kind, budget, tint, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax);
+            push_chunk_mesh(pak, chunk, kind, budget, tint, clip_min, clip_max, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax);
         }
     }
     if verts.is_empty() { cmin = [0.0; 3]; cmax = [16.0; 3]; }
@@ -684,7 +1067,21 @@ fn build_map(
         (cmin[2] + cmax[2]) * 0.5,
     ];
     let size = (cmax[0]-cmin[0]).max(cmax[1]-cmin[1]).max(cmax[2]-cmin[2]).max(16.0);
-    MapGeom { chunk_spans, verts, center, size, tex_rgba, tw, th, aw, ah, is_huge }
+    // Full map bounds over EVERY chunk, budget or not — a neighbour strip
+    // attaches to the map's real edge, not to however much of it got built.
+    let mut map_min = [f32::MAX; 2];
+    let mut map_max = [f32::MIN; 2];
+    for c in all_chunks {
+        map_min[0] = map_min[0].min(c.aabb_min[0] as f32);
+        map_min[1] = map_min[1].min(c.aabb_min[2] as f32);
+        map_max[0] = map_max[0].max(c.aabb_max[0] as f32);
+        map_max[1] = map_max[1].max(c.aabb_max[2] as f32);
+    }
+    if all_chunks.is_empty() {
+        map_min = [0.0; 2];
+        map_max = [0.0; 2];
+    }
+    MapGeom { chunk_spans, verts, center, size, tex_rgba, tw, th, aw, ah, is_huge, map_min, map_max }
 }
 
 static mut RT: *mut JSRuntime = core::ptr::null_mut();
@@ -711,8 +1108,23 @@ fn main() {
 
 
     // Fresh diagnostics file per run (see dlog).
-    let _ = std::fs::write("sdmc:/3ds/voxelmon/pvlog.txt", "");
-    dlog("[pv] boot");
+    // Do NOT truncate: a freeze is investigated by relaunching, and wiping
+    // the log on boot destroys the very run being investigated. Trim only
+    // when it has grown large.
+    if std::fs::metadata("sdmc:/3ds/voxelmon/pvlog.txt")
+        .map(|m| m.len() > 512 * 1024)
+        .unwrap_or(false)
+    {
+        let _ = std::fs::write("sdmc:/3ds/voxelmon/pvlog.txt", "");
+    }
+    dlog("[pv] ---------------- boot ----------------");
+    // Stamp the build so a log can never be mistaken for one from a
+    // different binary — the Desktop copy lives in OneDrive, and a sync
+    // lag once made a stale .3dsx look like a code path that "did nothing".
+    dlog(&format!(
+        "[pv] boot build={}",
+        option_env!("PV_BUILD_ID").unwrap_or("dev"),
+    ));
 
     // Hold the pak resident, as the live scene renderer will need.
     println!("loading pak...");
@@ -813,8 +1225,16 @@ fn main() {
     let mut geom = MapGeom {
         chunk_spans: Vec::new(), verts: Vec::new(), center: [0.0; 3], size: 16.0,
         tex_rgba: Vec::new(), tw: 8, th: 8, aw: 8, ah: 8, is_huge: false,
+        map_min: [0.0; 2], map_max: [0.0; 2],
     };
     let mut chunk_infos: Vec<(Span, buffer::Info)> = Vec::new();
+    // Seam strips of the connected maps, so the world does not stop at a
+    // wall of border bushes. Rebuilt with the map, never mid-walk: the
+    // strip covers the whole shared edge, so walking along it needs no
+    // reload and costs no hitch.
+    let mut strip_infos: Vec<(Span, buffer::Info)> = Vec::new();
+    let mut strip_hold: Vec<(Span, buffer::Info)> = Vec::new();
+    let mut strip_verts_kb = 0usize;
     // A "huge" map (build_map's is_huge) streams a window of chunks instead
     // of building the whole thing, and re-streams whenever the player
     // crosses into a new chunk. chunk_infos_prev holds the outgoing window
@@ -1234,7 +1654,72 @@ fn main() {
             let stamps_off_snapshot: Vec<(u32, i16, i16)> = scene_now.stamps_off.clone();
             stamps_off_n = stamps_off_snapshot.len();
             last_tint = scene_now.tint;
-            geom = build_map(pak_static, map_ids[map_i], player_px, &stamps_off_snapshot, last_tint);
+            // Which sides a neighbour will be drawn on, read from the slots
+            // the guest already publishes. Needed BEFORE build_map so the
+            // border ring can be clipped away on exactly those sides.
+            let neighbor_slots: Vec<(u32, f32, f32)> = (1..scene_now.maps.len())
+                .filter(|&i| scene_now.maps[i].shown)
+                .map(|i| {
+                    (
+                        scene_now.maps[i].map_id,
+                        scene_now.maps[i].ox as f32,
+                        scene_now.maps[i].oy as f32,
+                    )
+                })
+                .collect();
+            // The current map's own real box, from the pak already loaded.
+            let cur_box = {
+                let m = pak_static
+                    .maps
+                    .iter()
+                    .find(|m| m.map_id == map_ids[map_i]);
+                m.map(|m| {
+                    let cs = &pak_static.chunks
+                        [m.first as usize..(m.first + m.count) as usize];
+                    let (mut mn, mut mx) = ([f32::MAX; 2], [f32::MIN; 2]);
+                    for c in cs {
+                        mn[0] = mn[0].min(c.aabb_min[0] as f32);
+                        mn[1] = mn[1].min(c.aabb_min[2] as f32);
+                        mx[0] = mx[0].max(c.aabb_max[0] as f32);
+                        mx[1] = mx[1].max(c.aabb_max[2] as f32);
+                    }
+                    let ring = [(-mn[0]).max(0.0), (-mn[1]).max(0.0)];
+                    (
+                        [mn[0] + ring[0], mn[1] + ring[1]],
+                        [mx[0] - ring[0], mx[1] - ring[1]],
+                    )
+                })
+            };
+            // Which side each neighbour is REALLY on: the axis on which its
+            // box lies wholly outside ours. Deciding from the offset's sign
+            // instead mistakes a lateral slide along a seam for a second
+            // connection, and clips a border ring off an edge that has
+            // nothing behind it.
+            let mut seam_sides = [false; 4]; // west, east, north, south
+            if let Some((cmn, cmx)) = cur_box {
+                for &(nid, ox, oy) in neighbor_slots.iter() {
+                    let Some((_, nname)) = map_index.iter().find(|(id, _)| *id == nid) else {
+                        continue;
+                    };
+                    let path = format!("sdmc:/3ds/voxelmon/paks/{}.vxpak", nname);
+                    let Some((nmn, nmx)) = neighbor_bounds(&path, nid) else {
+                        continue;
+                    };
+                    let (lo, hi) = ([nmn[0] + ox, nmn[1] + oy], [nmx[0] + ox, nmx[1] + oy]);
+                    if hi[0] <= cmn[0] + 1.0 { seam_sides[0] = true; }
+                    if lo[0] >= cmx[0] - 1.0 { seam_sides[1] = true; }
+                    if hi[1] <= cmn[1] + 1.0 { seam_sides[2] = true; }
+                    if lo[1] >= cmx[1] - 1.0 { seam_sides[3] = true; }
+                }
+            }
+            geom = build_map(
+                pak_static,
+                map_ids[map_i],
+                player_px,
+                &stamps_off_snapshot,
+                last_tint,
+                seam_sides,
+            );
             cur_map_huge = geom.is_huge;
             {
                 let tot: usize = geom.chunk_spans.iter().map(|s| s.end - s.start).sum();
@@ -1252,11 +1737,27 @@ fn main() {
                     cur_map_huge,
                     last_tint,
                 ));
+                dlog(&format!(
+                    "[pv] seams W={} E={} N={} S={} nbrs={}",
+                    seam_sides[0], seam_sides[1], seam_sides[2], seam_sides[3],
+                    neighbor_slots.len(),
+                ));
             }
-            // Hold the outgoing window one reload past its replacement — see
-            // chunk_infos_prev's declaration for why this matters here and
-            // didn't for the old build-once-per-map-load behavior.
-            chunk_infos_prev = core::mem::take(&mut chunk_infos);
+            dlog(&format!("[pv] linear free {} KB before build", unsafe_free_kb()));
+            // Holding the outgoing buffers while the new ones allocate
+            // DOUBLES peak linear memory, and the vertex buffers are the
+            // biggest thing in it (a full map can be 18 MB). That hold only
+            // exists for the huge-map streaming reload, which has no fade to
+            // hide a freed buffer the GPU is still reading. An ordinary map
+            // change is masked by pushWarpFade, so there we free first and
+            // allocate second, which halves the peak.
+            if cur_map_huge {
+                chunk_infos_prev = core::mem::take(&mut chunk_infos);
+            } else {
+                chunk_infos_prev.clear();
+                chunk_infos.clear();
+                strip_hold.clear();
+            }
             let mut upload_fail = 0u32;
             for s in geom.chunk_spans.iter() {
                 let n = (s.end - s.start).min(65535);
@@ -1276,6 +1777,63 @@ fn main() {
                 chunk_infos.len(),
                 geom.chunk_spans.len(),
                 upload_fail,
+            ));
+
+            // --- connected-map seam strips -------------------------------
+            // Skipped entirely on a huge map: those already spend their
+            // whole vertex budget on the map underfoot, and that path is
+            // the one that has crashed before. Everywhere else, the guest
+            // has already worked out which maps adjoin and at what offset
+            // (computeNeighbors -> mapShow), so slots 1..4 carry exactly
+            // what to load and where to put it.
+            strip_hold = core::mem::take(&mut strip_infos);
+            strip_verts_kb = 0;
+            // Strips are a luxury; the map underfoot is not. If linear
+            // memory is already tight after building it, skip them rather
+            // than fail an allocation mid-load.
+            let free_kb = unsafe_free_kb();
+            dlog(&format!("[pv] linear free {} KB after build", free_kb));
+            if !cur_map_huge && free_kb >= STRIP_MIN_FREE_KB {
+                for &(nid, ox, oy) in neighbor_slots.iter() {
+                    dlog(&format!("[pv] strip loading id={} free={}KB", nid, unsafe_free_kb()));
+                    let Some((_, nname)) = map_index.iter().find(|(id, _)| *id == nid) else {
+                        continue;
+                    };
+                    let path = format!("sdmc:/3ds/voxelmon/paks/{}.vxpak", nname);
+                    let Some(strip) = load_neighbor_strip(
+                        &path, nid, ox, oy, geom.map_min, geom.map_max, last_tint,
+                    ) else {
+                        continue;
+                    };
+                    strip_verts_kb += strip.verts.len() * 20 / 1024;
+                    for s in strip.spans.iter() {
+                        let n = (s.end - s.start).min(65535);
+                        if n == 0 { continue; }
+                        let mut bi = buffer::Info::new();
+                        if bi
+                            .add(
+                                buffer::Buffer::new(&strip.verts[s.start..s.start + n]),
+                                attr_info.permutation(),
+                            )
+                            .is_ok()
+                        {
+                            strip_infos.push((*s, bi));
+                        }
+                    }
+                    dlog(&format!(
+                        "[pv] strip {} spans={} verts={} off=({:.0},{:.0})",
+                        nname,
+                        strip.spans.len(),
+                        strip.verts.len(),
+                        ox,
+                        oy,
+                    ));
+                }
+            }
+            dlog(&format!(
+                "[pv] strips total spans={} ~{}KB",
+                strip_infos.len(),
+                strip_verts_kb,
             ));
             // Pre-warm the pages this map will ask for: decoding + uploading
             // mid-frame is what causes the hitch the first time a sprite or
@@ -1827,6 +2385,7 @@ if page_tex.len() < pak_static.atlases.len() {
         // escape beats a dead process.
         let Some(tex_ref) = tex.as_ref() else { continue };
         let infos_ref = &chunk_infos;
+        let strips_ref = &strip_infos;
         // Once a second: how many spans exist, how many survived the cull
         // last frame, and where the cull thinks the camera is. A map that
         // comes up as bare sky is either spans=0 (nothing built or nothing
@@ -1879,7 +2438,7 @@ if page_tex.len() < pak_static.atlases.len() {
                 let mut drawn = 0u32;
                 let (mut cull_r_n, mut cull_c_n, mut cull_o_n) = (0u32, 0u32, 0u32);
                 let mut min_culled = f32::MAX;
-                for (span, bi) in infos_ref.iter() {
+                for (span, bi) in infos_ref.iter().chain(strips_ref.iter()) {
                     let (bmin, bmax) = (&span.bmin, &span.bmax);
                     let cx = (bmin[0] + bmax[0]) * 0.5;
                     let cz = (bmin[2] + bmax[2]) * 0.5;
