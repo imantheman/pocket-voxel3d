@@ -99,6 +99,22 @@ export function displayName(b: WildBattler): string {
 }
 
 /**
+ * An extracted battle line by label, falling back to a literal.
+ *
+ * Most of this module's messages are literals, but the RESTLESS SOUL's are
+ * ones the data already carries verbatim (_ScaredText, _ItemUseBallText00),
+ * so read those rather than retype them — the same rule mapscripts.ts follows.
+ */
+export function ghostText(
+  data: { text?: Record<string, unknown> },
+  label: string,
+  fallback: string,
+): string {
+  const v = data.text?.[label];
+  return typeof v === "string" ? v : fallback;
+}
+
+/**
  * BattleState.lua:392-398 prefixEnemy — qualify a pre-built message from a
  * module that only knows the raw nickname (Status.beforeMove/residual).
  */

@@ -1381,6 +1381,10 @@ function makeBattler(data, mon, isPlayer, save) {
 function displayName(b) {
   return b.isPlayer ? b.name : `Enemy ${b.name}`;
 }
+function ghostText(data, label, fallback) {
+  const v = data.text?.[label];
+  return typeof v === "string" ? v : fallback;
+}
 function prefixEnemy(msg, battler) {
   if (battler.isPlayer)
     return msg;
@@ -2532,6 +2536,11 @@ this move!`);
       return;
     if (!action)
       return;
+    if (this.disguised && user === this.player) {
+      this.sayAuto(ghostText(this.data, "_ScaredText", `{RAM:wBattleMonNick} is too
+scared to move!`).replace("{RAM:wBattleMonNick}", user.name));
+      return;
+    }
     user.boundTurns = target.trappingTurns !== undefined ? Math.max(1, target.trappingTurns) : undefined;
     if (!this.statusInterrupt(user, target)) {
       this.performMove(user, target, action, false);
@@ -2906,7 +2915,9 @@ ${itemName}!`);
     if (this.noCatch) {
       this.act(() => {
         this.lastBall = ball;
-        this.sayNext("The GHOST dodged it!");
+        this.sayNext(ghostText(this.data, "_ItemUseBallText00", `It dodged the
+thrown BALL!\fThis POKéMON
+can't be caught!`));
         this.act(() => {
           this.executeAction(this.enemy, this.player, this.enemyAction());
         });
@@ -4865,6 +4876,31 @@ var MAP_SCRIPTS = {
       ]
     }
   },
+  GAME_CORNER: {
+    talk: {
+      TEXT_GAMECORNER_POSTER: [
+        ["check_flag", "EVENT_FOUND_ROCKET_HIDEOUT"],
+        ["jump_if_true", "known"],
+        ["play_sound", "Switch"],
+        ["show_text", "_GameCornerPosterSwitchBehindPosterText"],
+        ["set_flag", "EVENT_FOUND_ROCKET_HIDEOUT"],
+        ["play_sound", "Go_Inside"],
+        ["jump", "end"],
+        ["label", "known"],
+        ["show_text", "_GameCornerPosterSwitchBehindPosterText"]
+      ],
+      TEXT_GAMECORNER_ROCKET: [
+        ["engage_trainer", "GAMECORNER_ROCKET"],
+        ["jump_if_false", "end"],
+        ["hide_object", "GAME_CORNER", "GAMECORNER_ROCKET"]
+      ]
+    },
+    onStep: (ow, save) => {
+      if (save?.flags?.EVENT_FOUND_ROCKET_HIDEOUT)
+        ow.refreshGameCornerPoster?.();
+      return null;
+    }
+  },
   POKEMON_TOWER_5F: {
     onStep: (ow, save) => {
       const f = save?.flags ?? {};
@@ -4908,6 +4944,43 @@ var MAP_SCRIPTS = {
         ["label", "fled"],
         ["move_player", "right", 1]
       ];
+    }
+  },
+  POKEMON_TOWER_7F: {
+    talk: {
+      TEXT_POKEMONTOWER7F_MR_FUJI: [
+        ["face_player"],
+        ["show_text", "_PokemonTower7FMrFujiRescueText"],
+        ["set_flag", "EVENT_RESCUED_MR_FUJI"],
+        ["set_flag", "EVENT_RESCUED_MR_FUJI_2"],
+        ["show_object", "MR_FUJIS_HOUSE", "MRFUJISHOUSE_MR_FUJI"],
+        ["hide_object", "SAFFRON_CITY", "SAFFRONCITY_ROCKET8"],
+        ["show_object", "SAFFRON_CITY", "SAFFRONCITY_ROCKET9"],
+        ["warp", "MR_FUJIS_HOUSE", 3, 7, "up"]
+      ]
+    }
+  },
+  MR_FUJIS_HOUSE: {
+    talk: {
+      TEXT_MRFUJISHOUSE_MR_FUJI: [
+        ["face_player"],
+        ["check_flag", "EVENT_GOT_POKE_FLUTE"],
+        ["jump_if_true", "have"],
+        ["check_flag", "EVENT_RESCUED_MR_FUJI"],
+        ["jump_if_false", "notyet"],
+        ["show_text", "_MrFujisHouseMrFujiIThinkThisMayHelpYourQuestText"],
+        ["play_sound", "Get_Key_Item"],
+        ["give_item", "POKE_FLUTE", 1, false],
+        ["show_text", "_MrFujisHouseMrFujiReceivedPokeFluteText"],
+        ["set_flag", "EVENT_GOT_POKE_FLUTE"],
+        ["show_text", "_MrFujisHouseMrFujiPokeFluteExplanationText"],
+        ["jump", "end"],
+        ["label", "have"],
+        ["show_text", "_MrFujisHouseMrFujiHasMyFluteHelpedYouText"],
+        ["jump", "end"],
+        ["label", "notyet"],
+        ["show_text", "_MrFujisHouseMrFujiPokedexText"]
+      ]
     }
   },
   ROCKET_HIDEOUT_B4F: {
@@ -5809,6 +5882,7 @@ class Overworld {
     if (!tileset)
       throw new Error(`unknown tileset ${def.tileset} for ${mapId}`);
     this.map = new GameMap(def, tileset);
+    this.applyGameCornerPoster(mapId, def);
     const cut = this.save?.cutTrees?.[mapId];
     if (cut) {
       for (const key of Object.keys(cut)) {
@@ -6504,6 +6578,19 @@ class Overworld {
       shell.startTrainerBattle(id, idx, name, onDone, loseable);
     else
       onDone?.(false);
+  }
+  refreshGameCornerPoster() {
+    this.applyGameCornerPoster(String(this.map?.id ?? ""), this.map?.def);
+  }
+  applyGameCornerPoster(mapId, def) {
+    const p = this.shell.data.field?.gameCornerPoster;
+    if (!p || p.map !== mapId || !Array.isArray(def.blocks))
+      return;
+    const open = this.save?.flags?.[p.event] === true;
+    const block = open ? p.openBlock : p.closedBlock;
+    const i = p.y * def.width + p.x;
+    if (i >= 0 && i < def.blocks.length)
+      def.blocks[i] = block;
   }
   startWildBattle(species, level, opts, onDone) {
     const self = this;

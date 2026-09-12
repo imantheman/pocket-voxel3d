@@ -42,7 +42,7 @@ import {
 } from "../rules/timing.ts";
 import { encodeGlyphs } from "../ui/tiles.ts";
 import { animFrames, SIDE_ENEMY, SIDE_PLAYER, type AnimKind, type BattleAnim } from "./anim.ts";
-import { displayName, makeBattler, prefixEnemy, type WildBattler } from "./battler.ts";
+import { displayName, ghostText, makeBattler, prefixEnemy, type WildBattler } from "./battler.ts";
 import {
   effectRecord,
   inflictStatus,
@@ -1031,6 +1031,22 @@ export class WildBattle implements EffectBattle {
     if (user.mon.hp <= 0 || target.mon.hp <= 0) return;
     if (!action) return;
 
+    // The SILPH SCOPE's whole mechanical effect. While the RESTLESS SOUL is
+    // still disguised (core.asm:6698-6700), the player's mon is too scared to
+    // move and the turn is forfeit — so the ghost cannot be beaten, only fled
+    // from or ended with a POKE DOLL. The scope does not win the fight, it
+    // unveils the MAROWAK so an ordinary one can be had.
+    //
+    // Only the PLAYER is frozen: the ghost still attacks, which is what makes
+    // standing there costly.
+    if (this.disguised && user === this.player) {
+      this.sayAuto(
+        ghostText(this.data, "_ScaredText", "{RAM:wBattleMonNick} is too\nscared to move!")
+          .replace("{RAM:wBattleMonNick}", user.name),
+      );
+      return;
+    }
+
     // held-in-place mirror (:3158-3163)
     user.boundTurns =
       target.trappingTurns !== undefined ? Math.max(1, target.trappingTurns) : undefined;
@@ -1485,7 +1501,10 @@ export class WildBattle implements EffectBattle {
     if (this.noCatch) {
       this.act(() => {
         this.lastBall = ball;
-        this.sayNext("The GHOST dodged it!");
+        // ItemUseBallText00 — the dodge line, the same one a master-ball-proof
+        // encounter prints.
+        this.sayNext(ghostText(this.data, "_ItemUseBallText00",
+          "It dodged the\nthrown BALL!\fThis POKéMON\ncan't be caught!"));
         this.act(() => {
           this.executeAction(this.enemy, this.player, this.enemyAction());
         });

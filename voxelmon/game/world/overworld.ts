@@ -296,6 +296,7 @@ export class Overworld implements ScriptWorld {
     const tileset = this.shell.data.tilesets?.[def.tileset];
     if (!tileset) throw new Error(`unknown tileset ${def.tileset} for ${mapId}`);
     this.map = new GameMap(def, tileset);
+    this.applyGameCornerPoster(mapId, def);
     // Cut trees stay cut across a reload/re-entry: reapply every stamp-off
     // this save recorded for THIS map (setMap is the single choke point, so
     // every entry path — warp, seam, boot — gets this for free, the same
@@ -1270,6 +1271,39 @@ export class Overworld implements ScriptWorld {
     const shell = self.shell ?? self.game ?? self.host ?? null;
     if (shell?.startTrainerBattle) shell.startTrainerBattle(id, idx, name, onDone, loseable);
     else onDone?.(false);
+  }
+
+  /**
+   * The Game Corner's hidden staircase (field.gameCornerPoster). The block
+   * covering the hideout warp is a wall ($2a) until the switch behind the
+   * poster is found and $43 after, so the stairs only exist once
+   * EVENT_FOUND_ROCKET_HIDEOUT is set.
+   *
+   * Written into the map DEFINITION, which is the shared gamedata object, so
+   * it is set from the flag in BOTH directions on every entry rather than
+   * only opened — otherwise a save without the flag would inherit an open
+   * staircase from a save that had it, within one session.
+   *
+   * COLLISION ONLY. The voxel terrain is baked per map in the pak, so the
+   * wall still renders; walking the now-passable tile reads as a secret
+   * passage rather than a staircase appearing. Making it look right means
+   * cooking that block as a toggleable stamp, the way cuttable trees already
+   * are — a cook change, noted in the commit.
+   */
+  /** Re-run the poster swap on the map already loaded — what the GAME_CORNER
+   * onStep calls once the switch has been pushed, so the stairs open without
+   * leaving and coming back. */
+  refreshGameCornerPoster(): void {
+    this.applyGameCornerPoster(String(this.map?.id ?? ""), this.map?.def);
+  }
+
+  private applyGameCornerPoster(mapId: string, def: any): void {
+    const p = (this.shell.data as any).field?.gameCornerPoster;
+    if (!p || p.map !== mapId || !Array.isArray(def.blocks)) return;
+    const open = this.save?.flags?.[p.event] === true;
+    const block = open ? p.openBlock : p.closedBlock;
+    const i = p.y * def.width + p.x;
+    if (i >= 0 && i < def.blocks.length) def.blocks[i] = block;
   }
 
   /** A script-opened wild battle (the POKEMON TOWER 6F ghost), delegated to

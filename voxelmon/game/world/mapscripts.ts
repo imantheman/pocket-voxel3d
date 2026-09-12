@@ -1136,6 +1136,47 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     },
   },
 
+  // scripts/GameCorner.asm — story3.lua M.GAME_CORNER. The way into the
+  // Rocket Hideout.
+  //
+  // The stairs hide behind a wall block until the switch behind the poster is
+  // pushed; setMap's applyGameCornerPoster swaps the block from the flag, so
+  // all this has to do is set the flag and re-enter the map's block state.
+  // onStep re-runs applyGameCornerPoster the step after the switch, which is
+  // what makes the opening take effect without leaving and coming back.
+  //
+  // The grunt standing in front of the poster leaves the floor for good once
+  // beaten (GameCornerRocketExitScript), freeing the tile. He is a text_asm
+  // trainer with no def_trainers header, so the talk entry owns the engage.
+  GAME_CORNER: {
+    talk: {
+      TEXT_GAMECORNER_POSTER: [
+        ["check_flag", "EVENT_FOUND_ROCKET_HIDEOUT"],
+        ["jump_if_true", "known"],
+        ["play_sound", "Switch"],
+        ["show_text", "_GameCornerPosterSwitchBehindPosterText"],
+        ["set_flag", "EVENT_FOUND_ROCKET_HIDEOUT"],
+        ["play_sound", "Go_Inside"],
+        ["jump", "end"],
+        ["label", "known"],
+        ["show_text", "_GameCornerPosterSwitchBehindPosterText"],
+      ],
+      TEXT_GAMECORNER_ROCKET: [
+        ["engage_trainer", "GAMECORNER_ROCKET"],
+        ["jump_if_false", "end"],
+        // GameCornerRocketExitScript: beaten, he warns the BOSS and is gone.
+        ["hide_object", "GAME_CORNER", "GAMECORNER_ROCKET"],
+      ],
+    },
+    // The block swap lands on the next step rather than on the text box
+    // closing — there is no post-script hook, and the player has to step to
+    // reach the stairs anyway.
+    onStep: (ow: any, save: any) => {
+      if (save?.flags?.EVENT_FOUND_ROCKET_HIDEOUT) ow.refreshGameCornerPoster?.();
+      return null;
+    },
+  },
+
   // scripts/PokemonTower5F.asm PokemonTower5FDefaultScript — story3.lua
   // M.POKEMON_TOWER_5F. The 2x2 pad at the centre heals the party once per
   // visit; EVENT_IN_PURIFIED_ZONE latches until the player steps off it.
@@ -1202,6 +1243,70 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
         ["label", "fled"],
         ["move_player", "right", 1],
       ] as ScriptRow[];
+    },
+  },
+
+  // scripts/PokemonTower7F.asm — story.lua M.POKEMON_TOWER_7F. Mr Fuji at
+  // the top, and the rescue that carries the player home.
+  //
+  // The three grunts battle through the generic sight path, so only Fuji
+  // needs a script. Upstream also walks a beaten grunt off the floor on an
+  // onVictory hook (MapScript has no such hook here) — they stay put instead,
+  // beaten and harmless, which does not block the corridor to Fuji.
+  //
+  // Warping to (3,7) facing up is deliberate and load-bearing: it is the
+  // house's door mat, and the mat is inert until stepped OFF (warpEntryCell).
+  // Landing at (3,3) — the Pokedex table, which reads like the friendlier
+  // spot — walks the player onto a live mat and straight back outside before
+  // they can talk to Fuji, and the POKE FLUTE is never collected, which seals
+  // Route 16 behind the SNORLAX. Upstream hit exactly that.
+  POKEMON_TOWER_7F: {
+    talk: {
+      TEXT_POKEMONTOWER7F_MR_FUJI: [
+        ["face_player"],
+        ["show_text", "_PokemonTower7FMrFujiRescueText"],
+        ["set_flag", "EVENT_RESCUED_MR_FUJI"],
+        ["set_flag", "EVENT_RESCUED_MR_FUJI_2"],
+        ["show_object", "MR_FUJIS_HOUSE", "MRFUJISHOUSE_MR_FUJI"],
+        // pokered also swaps the Silph Co. door guard here (ROCKET8 off the
+        // door tile, ROCKET9 beside it) — kept, so Saffron is left in the
+        // state the rest of the story expects.
+        ["hide_object", "SAFFRON_CITY", "SAFFRONCITY_ROCKET8"],
+        ["show_object", "SAFFRON_CITY", "SAFFRONCITY_ROCKET9"],
+        ["warp", "MR_FUJIS_HOUSE", 3, 7, "up"],
+      ],
+    },
+  },
+
+  // scripts/MrFujisHouse.asm — story.lua M.MR_FUJIS_HOUSE. The POKE FLUTE,
+  // which is what unsticks the SNORLAX on Routes 12 and 16.
+  //
+  // Fuji starts hidden in the map data and the tower rescue reveals him, so
+  // the not-yet-rescued branch is only reachable by a save that toggled him
+  // visible some other way; it prints his Pokedex line, as upstream does.
+  MR_FUJIS_HOUSE: {
+    talk: {
+      TEXT_MRFUJISHOUSE_MR_FUJI: [
+        ["face_player"],
+        ["check_flag", "EVENT_GOT_POKE_FLUTE"],
+        ["jump_if_true", "have"],
+        ["check_flag", "EVENT_RESCUED_MR_FUJI"],
+        ["jump_if_false", "notyet"],
+        ["show_text", "_MrFujisHouseMrFujiIThinkThisMayHelpYourQuestText"],
+        // give-then-print, like the asm: give_item halts on a full bag, so
+        // the flag stays unset and he still has it next time.
+        ["play_sound", "Get_Key_Item"],
+        ["give_item", "POKE_FLUTE", 1, false],
+        ["show_text", "_MrFujisHouseMrFujiReceivedPokeFluteText"],
+        ["set_flag", "EVENT_GOT_POKE_FLUTE"],
+        ["show_text", "_MrFujisHouseMrFujiPokeFluteExplanationText"],
+        ["jump", "end"],
+        ["label", "have"],
+        ["show_text", "_MrFujisHouseMrFujiHasMyFluteHelpedYouText"],
+        ["jump", "end"],
+        ["label", "notyet"],
+        ["show_text", "_MrFujisHouseMrFujiPokedexText"],
+      ],
     },
   },
 
