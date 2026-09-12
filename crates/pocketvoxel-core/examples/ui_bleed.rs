@@ -16,7 +16,7 @@ use std::env;
 use std::fs;
 
 const UI_CELL: u32 = 8;
-const UI_GUTTER: u32 = 0;
+const UI_GUTTER: u32 = 1;
 /// Point-replication factor, matching main.rs page_prescale for the UI sheet.
 const UI_SCALE: u32 = 2;
 fn cell_px() -> u32 { UI_CELL * UI_SCALE }

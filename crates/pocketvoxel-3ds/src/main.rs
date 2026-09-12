@@ -174,38 +174,35 @@ fn unsafe_free_kb() -> u32 {
 /// ClampToEdge matters because the page is uploaded into a power-of-two
 /// surface: without it a tap in the padding wraps to the opposite edge of
 /// the sprite. `build_page_tex` handles the rest of what linear exposes.
-fn sprite_filter(t: &mut texture::Texture, _pak: &Pak, _page: u16) {
-    let f = if SPRITE_LINEAR { texture::Filter::Linear } else { texture::Filter::Nearest };
+fn sprite_filter(t: &mut texture::Texture, pak: &Pak, page: u16) {
+    let linear = pak.atlases.get(page as usize).is_some_and(page_linear);
+    let f = if linear { texture::Filter::Linear } else { texture::Filter::Nearest };
     t.set_filter(f, f);
     t.set_wrap(texture::Wrap::ClampToEdge, texture::Wrap::ClampToEdge);
 }
 
-/// Whether sprite pages are sampled with a linear filter.
+/// Whether a page is sampled with a linear filter rather than nearest.
 ///
-/// False, and it should stay false for pixel art. A linear tap is only
-/// worth having when it MINIFIES, where it averages real pixels; asked to
-/// magnify it invents intermediate colours, which is blur. Every one of
-/// these pages is magnified: the GB tile by 1.57x on the top screen, an
-/// entity card by 1.67x.
+/// The rule is whether `page_prescale` has already turned that page's
+/// magnification into a minification. A linear tap is worth having when it
+/// MINIFIES -- it averages real pixels, which evens out a fractional ratio.
+/// Asked to magnify it invents colours between them, which is blur.
 ///
-/// An emulator settles it. Citra renders at an integer multiple of 400x240,
-/// so at 5x the top screen is 2000 px wide and a tile that covered 12.59
-/// device pixels covers 63. No amount of pre-scaling outruns that -- the
-/// magnification grows with the setting -- so any linear filter is blur on
-/// an upscaled emulator, while nearest is exactly the hard-edged blocks the
-/// art was drawn as.
+/// The UI sheet qualifies: at x2 its cell is 16 texels against 12.59 x 13.33
+/// device pixels on the top screen and 16 x 13.33 on the companion, so every
+/// axis is at or below 1:1. The companion's horizontal is exactly 1:1, where
+/// a linear tap lands on texel centres and degenerates to nearest -- it stays
+/// pixel-perfect for free.
 ///
-/// Nearest also makes two problems that only exist for a linear tap go away:
-/// it never samples between texels, so it cannot pull a neighbouring glyph
-/// across a cell boundary (no gutter needed, see UI_GUTTER), and it never
-/// blends against a transparent texel's stored colour (no dilation needed,
-/// see DILATE_PASSES).
-///
-/// What it does NOT fix is uneven scaling -- 8 texels across 12.59 pixels
-/// means some rows get duplicated and others do not. That is what
-/// `page_prescale` and the UI_Q / CARD_Q geometry fixes are for, and it is
-/// a property of the ratio, not of the filter.
-const SPRITE_LINEAR: bool = false;
+/// Sprite and pic pages do not, and stay on nearest. An entity card is
+/// magnified 1.67x, so linear alone is the blur it looked like; making it
+/// minify needs x2, and examples/tex_budget.rs puts that at +5 MB of the
+/// 24 MB linear heap, which would drop free memory under STRIP_MIN_FREE_KB
+/// and silently stop the neighbour maps from loading. Affording it means
+/// bounding what gets uploaded, which is its own change.
+fn page_linear(page: &pak::AtlasPage) -> bool {
+    page.kind == atlas_kind::UI
+}
 
 /// Rounds of `dilate_rgb` run over a sprite page before upload.
 ///
@@ -262,13 +259,18 @@ fn page_prescale(page: &pak::AtlasPage) -> u32 {
 /// Border replicated around each UI cell so a linear tap that leaves the cell
 /// reads a copy of it rather than the neighbouring glyph.
 ///
-/// Zero, because `page_prescale` makes the reach impossible rather than safe.
-/// A tap only escapes its cell under magnification, and at x2 the UI cannot
-/// magnify: the tile would have to exceed 16 device pixels, which means a GB
-/// overlay larger than 320x288, and neither screen is 288 tall. A gutter on
-/// top of that would cost 750 KB to the next power of two for a reach that
-/// cannot happen. examples/ui_bleed.rs holds the line if any of that changes.
-const UI_GUTTER: u32 = 0;
+/// One, and the argument for dropping it was wrong. It went: at x2 the UI
+/// cannot magnify, because the tile would have to exceed 16 device pixels,
+/// meaning a GB overlay larger than 320x288, and neither screen is 288 tall.
+/// That assumes the framebuffer IS 400x240. Citra renders at an integer
+/// multiple of it, so at 5x the same tile covers 63 device pixels and every
+/// cell magnifies 4x -- the dotted grid across every text box came straight
+/// back. A gutter does not care what resolution it is sampled at, which is
+/// the whole point of having one.
+///
+/// Costs 750 KB: the repacked sheet goes from 256x256 to 288x288, which
+/// rounds up to 512x512. examples/ui_bleed.rs is the check.
+const UI_GUTTER: u32 = 1;
 
 fn ui_cell_px(scale: u32) -> u32 { UI_CELL * scale }
 fn ui_pitch(scale: u32) -> u32 { ui_cell_px(scale) + UI_GUTTER * 2 }
@@ -394,10 +396,9 @@ fn build_page_tex(pak: &Pak, pidx: u16, pal_sel: i32) -> (Vec<u8>, u32, u32) {
         flat[i * 4 + 2] = ((c >> 8) & 0xff) as u8;
         flat[i * 4 + 3] = (c & 0xff) as u8;
     }
-    // Only a linear tap can ever read a transparent texel's colour, so this
-    // is pure load-time cost under nearest. Kept, not deleted: it is the
-    // thing that makes SPRITE_LINEAR safe to turn back on.
-    if SPRITE_LINEAR {
+    // Only a linear tap can ever read a transparent texel's colour, so on a
+    // nearest page this is pure load-time cost.
+    if page_linear(&page) {
         for _ in 0..DILATE_PASSES {
             dilate_rgb(&mut flat, aw, ah);
         }
@@ -2270,8 +2271,13 @@ fn main() {
             for it in list.items.iter() {
                 if let Item::ScreenPic { x, y, w, h, page } = it {
                     let pg = &pak_static.atlases[*page as usize];
-                    let (pw, ph) = (po2(pg.w as u32) as f32, po2(pg.h as u32) as f32);
-                    let (u1, v1) = (pg.w as f32 / pw, pg.h as f32 / ph);
+                    // Via page_tex_size / page_prescale rather than po2 of the
+                    // source: the content fills w * prescale texels of the
+                    // uploaded surface, not w. A no-op while pics are not
+                    // prescaled, and correct if they ever are.
+                    let (pw, ph) = page_tex_size(pg);
+                    let s = page_prescale(pg) as f32;
+                    let (u1, v1) = (pg.w as f32 * s / pw, pg.h as f32 * s / ph);
                     let (x0, y0) = (qpx(*x), qpx(*y));
                     let (x1, y1) = (qpx(*x + *w), qpx(*y + *h));
                     let mp = |px: i16, py: i16, u: f32, v: f32| Vertex {
@@ -2310,8 +2316,11 @@ fn main() {
                 if pic_active_scan { continue; }
                 if let Item::Card { verts, page, uv, mirror, pull } = it {
                     let pg = &pak_static.atlases[*page as usize];
-                    let sx = pg.w as f32 / po2(pg.w as u32) as f32;
-                    let sy = pg.h as f32 / po2(pg.h as u32) as f32;
+                    // As ScreenPic above: the content fills w * prescale of
+                    // the uploaded surface.
+                    let (pw, ph) = page_tex_size(pg);
+                    let s = page_prescale(pg) as f32;
+                    let (sx, sy) = (pg.w as f32 * s / pw, pg.h as f32 * s / ph);
                     let (mut u0, v0, mut u1, v1) = (uv[0], uv[1], uv[2], uv[3]);
                     if *mirror { core::mem::swap(&mut u0, &mut u1); }
                     let q = [(verts[0], u0, v1), (verts[1], u1, v1),
