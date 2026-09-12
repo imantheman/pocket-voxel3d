@@ -576,6 +576,38 @@ export function runGeometry(map: GameMap, S: SGrid): MapGeometry {
     terrain.push(...kept);
   }
 
+  // The Game Corner's hidden staircase, by the same post-process as the hull
+  // above and for the same reason: the block covering the Rocket Hideout warp
+  // is a wall until the switch behind the poster is pushed, and nothing here
+  // can rewrite baked chunk geometry at runtime. Splitting that block's quads
+  // into per-cell stamps lets the runtime hide the wall the moment the switch
+  // flips, leaving the passage open — collision is handled separately, in
+  // overworld.ts applyGameCornerPoster.
+  //
+  // Footprint is field.gameCornerPoster's block (8,2). A block is 2 cells is
+  // 32 world px, so that is x 256-288, z 64-96 — the four cells (16..17,
+  // 4..5), which are exactly the cells containing the hideout warp at
+  // (17,4). cc_poster.py asserts these constants still match the data.
+  if (map.def.id === "GAME_CORNER") {
+    const PX0 = 256, PX1 = 288;
+    const PZ0 = 64, PZ1 = 96;
+    const kept: Quad[] = [];
+    for (const q of terrain) {
+      const cx = (q.c[0][0] + q.c[1][0] + q.c[2][0] + q.c[3][0]) / 4;
+      const cz = (q.c[0][2] + q.c[1][2] + q.c[2][2] + q.c[3][2]) / 4;
+      if (cx >= PX0 && cx < PX1 && cz >= PZ0 && cz < PZ1) {
+        const key = `${Math.floor(cx / 16)},${Math.floor(cz / 16)}`;
+        let arr = S.stampQuads.get(key);
+        if (!arr) S.stampQuads.set(key, (arr = []));
+        arr.push(q);
+      } else {
+        kept.push(q);
+      }
+    }
+    terrain.length = 0;
+    terrain.push(...kept);
+  }
+
   const stamps = new Map<string, Quad[]>();
   for (const [key, quads] of S.stampQuads) {
     stamps.set(

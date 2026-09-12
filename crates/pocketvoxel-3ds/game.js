@@ -1838,6 +1838,13 @@ function markOwned(save, species) {
 }
 
 // voxelmon/game/battle/battle.ts
+function listStep(input) {
+  if (input.wasPressed("up") || input.wasPressed("left"))
+    return -1;
+  if (input.wasPressed("down") || input.wasPressed("right"))
+    return 1;
+  return 0;
+}
 var DEMO_MENU_HOLD = 130;
 
 class WildBattle {
@@ -2366,10 +2373,9 @@ moves left!`);
     }
     if (this.phase === "moveSelect") {
       const moves = this.player.curMoves;
-      if (input.wasPressed("up")) {
-        this.moveIndex = this.moveIndex > 1 ? this.moveIndex - 1 : moves.length;
-      } else if (input.wasPressed("down")) {
-        this.moveIndex = this.moveIndex < moves.length ? this.moveIndex + 1 : 1;
+      const step = listStep(input);
+      if (step) {
+        this.moveIndex = step < 0 ? this.moveIndex > 1 ? this.moveIndex - 1 : moves.length : this.moveIndex < moves.length ? this.moveIndex + 1 : 1;
       } else if (input.wasPressed("select")) {
         if (this.moveSwapIndex !== null) {
           this.swapMoves(this.moveSwapIndex, this.moveIndex);
@@ -2867,10 +2873,9 @@ items to use!`);
     this.phase = "item";
   }
   updateItems(input) {
-    if (input.wasPressed("up")) {
-      this.itemIndex = Math.max(0, this.itemIndex - 1);
-    } else if (input.wasPressed("down")) {
-      this.itemIndex = Math.min(this.itemList.length - 1, this.itemIndex + 1);
+    const step = listStep(input);
+    if (step) {
+      this.itemIndex = Math.max(0, Math.min(this.itemList.length - 1, this.itemIndex + step));
     } else if (input.wasPressed("b")) {
       this.phase = "menu";
     } else if (input.wasPressed("a")) {
@@ -2963,10 +2968,9 @@ someone's PC!`);
   }
   updateParty(input) {
     const party = this.save.party;
-    if (input.wasPressed("up")) {
-      this.partyIndex = Math.max(0, this.partyIndex - 1);
-    } else if (input.wasPressed("down")) {
-      this.partyIndex = Math.min(party.length - 1, this.partyIndex + 1);
+    const step = listStep(input);
+    if (step) {
+      this.partyIndex = Math.max(0, Math.min(party.length - 1, this.partyIndex + step));
     } else if (input.wasPressed("b")) {
       if (!this.partyForced)
         this.phase = "menu";
@@ -6591,6 +6595,13 @@ class Overworld {
     const i = p.y * def.width + p.x;
     if (i >= 0 && i < def.blocks.length)
       def.blocks[i] = block;
+    if (!open)
+      return;
+    for (let dy = 0;dy < 2; dy++) {
+      for (let dx = 0;dx < 2; dx++) {
+        this.stamp(def.index, p.x * 2 + dx, p.y * 2 + dy, false);
+      }
+    }
   }
   startWildBattle(species, level, opts, onDone) {
     const self = this;

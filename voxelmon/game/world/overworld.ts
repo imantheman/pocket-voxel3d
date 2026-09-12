@@ -1304,6 +1304,17 @@ export class Overworld implements ScriptWorld {
     const block = open ? p.openBlock : p.closedBlock;
     const i = p.y * def.width + p.x;
     if (i >= 0 && i < def.blocks.length) def.blocks[i] = block;
+    // The wall the player SEES. cook/mesh.ts splits that block's quads into
+    // per-cell stamps, so the geometry comes off the same way a cut tree's
+    // does. A block is two cells square, hence the 2x2 loop from its
+    // top-left cell. Only hiding is ever needed: a fresh map load rebuilds
+    // the terrain with the wall present, and this runs on every entry.
+    if (!open) return;
+    for (let dy = 0; dy < 2; dy++) {
+      for (let dx = 0; dx < 2; dx++) {
+        this.stamp(def.index, p.x * 2 + dx, p.y * 2 + dy, false);
+      }
+    }
   }
 
   /** A script-opened wild battle (the POKEMON TOWER 6F ghost), delegated to

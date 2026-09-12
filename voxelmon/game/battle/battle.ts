@@ -65,6 +65,24 @@ export interface BattleInput {
   wasPressed(btn: BattleButton): boolean;
 }
 
+/**
+ * One step through a single-column battle list, from ANY d-pad direction.
+ *
+ * DEVIATION, deliberate. The battle's action menu is a 2x2 grid, so all four
+ * directions move its cursor; the move, item and party lists are single
+ * columns, and vanilla leaves left/right dead in them. Pressing left on a
+ * list that visibly responds to up therefore reads as the d-pad half-working
+ * rather than as fidelity, so left/right step the same way up/down do.
+ *
+ * Each caller keeps its own edge behaviour: the move list wraps (vanilla
+ * does), items and party clamp.
+ */
+function listStep(input: BattleInput): number {
+  if (input.wasPressed("up") || input.wasPressed("left")) return -1;
+  if (input.wasPressed("down") || input.wasPressed("right")) return 1;
+  return 0;
+}
+
 /** The save slice the battle reads and mutates. */
 export interface BattleSave {
   party: PartyMon[];
@@ -830,10 +848,12 @@ export class WildBattle implements EffectBattle {
 
     if (this.phase === "moveSelect") {
       const moves = this.player.curMoves;
-      if (input.wasPressed("up")) {
-        this.moveIndex = this.moveIndex > 1 ? this.moveIndex - 1 : moves.length;
-      } else if (input.wasPressed("down")) {
-        this.moveIndex = this.moveIndex < moves.length ? this.moveIndex + 1 : 1;
+      const step = listStep(input);
+      if (step) {
+        this.moveIndex =
+          step < 0
+            ? this.moveIndex > 1 ? this.moveIndex - 1 : moves.length
+            : this.moveIndex < moves.length ? this.moveIndex + 1 : 1;
       } else if (input.wasPressed("select")) {
         // SELECT swap (:1940-1946)
         if (this.moveSwapIndex !== null) {
@@ -1451,10 +1471,11 @@ export class WildBattle implements EffectBattle {
   }
 
   private updateItems(input: BattleInput): void {
-    if (input.wasPressed("up")) {
-      this.itemIndex = Math.max(0, this.itemIndex - 1);
-    } else if (input.wasPressed("down")) {
-      this.itemIndex = Math.min(this.itemList.length - 1, this.itemIndex + 1);
+    const step = listStep(input);
+    if (step) {
+      this.itemIndex = Math.max(
+        0, Math.min(this.itemList.length - 1, this.itemIndex + step),
+      );
     } else if (input.wasPressed("b")) {
       this.phase = "menu";
     } else if (input.wasPressed("a")) {
@@ -1564,10 +1585,9 @@ export class WildBattle implements EffectBattle {
 
   private updateParty(input: BattleInput): void {
     const party = this.save.party;
-    if (input.wasPressed("up")) {
-      this.partyIndex = Math.max(0, this.partyIndex - 1);
-    } else if (input.wasPressed("down")) {
-      this.partyIndex = Math.min(party.length - 1, this.partyIndex + 1);
+    const step = listStep(input);
+    if (step) {
+      this.partyIndex = Math.max(0, Math.min(party.length - 1, this.partyIndex + step));
     } else if (input.wasPressed("b")) {
       // ChooseNextMon loops until a healthy pick (:1856-1865): B only
       // backs out of a VOLUNTARY open
