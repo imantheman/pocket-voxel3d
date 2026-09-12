@@ -516,11 +516,22 @@ fn world_fov() -> f32 {
     half * 2.0
 }
 
-/// The same trick as `UI_Q`, for billboard cards in world space. The card
-/// pass scales it back out of the mvp, so it is invisible to everything
-/// else. The tallest map is 2304 world px, which at Q = 4 is 9216 -- i16
-/// keeps 3x headroom over that.
-const CARD_Q: f32 = 4.0;
+/// A card vertex. Same layout as `Vertex` except the position is three
+/// floats instead of four i16s, and `card_attr` is the matching attribute
+/// info.
+///
+/// Cards get their own format because they are the one thing that must land
+/// on an exact number of device pixels. `world_fov` puts precisely 2.0 device
+/// pixels on a world pixel at the camera's focus, so the player's card is
+/// exactly 32 device pixels across 16 texels -- but only if its corners
+/// arrive unrounded. Quantising them, at any step size, rounds each corner
+/// independently AFTER the eye-ray pull has moved it, so the card's width
+/// wobbles by a fraction of a pixel and re-rounds every frame as the player
+/// walks. That is a pixel of the hat growing and shrinking. Floats cost 8
+/// more bytes on a handful of vertices per frame and remove the question.
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct CardVertex { pos: [f32; 3], color: [u8; 4], uv: [f32; 2] }
 
 fn tiled_off(x: u32, y: u32, tw: u32) -> usize {
     let (tx, ty) = (x / 8, y / 8);
@@ -1507,6 +1518,14 @@ fn main() {
     attr_info.add_loader(attrib::Register::V1, attrib::Format::UnsignedByte, 4).unwrap();
     attr_info.add_loader(attrib::Register::V2, attrib::Format::Float, 2).unwrap();
 
+    // Cards only -- see CardVertex. Same registers, float position. The
+    // shader reads inpos.xyz and supplies w itself, so three components is
+    // all it needs.
+    let mut card_attr = attrib::Info::new();
+    card_attr.add_loader(attrib::Register::V0, attrib::Format::Float, 3).unwrap();
+    card_attr.add_loader(attrib::Register::V1, attrib::Format::UnsignedByte, 4).unwrap();
+    card_attr.add_loader(attrib::Register::V2, attrib::Format::Float, 2).unwrap();
+
     let stage0 = texenv::TexEnv::new()
         .src(texenv::Mode::BOTH, texenv::Source::Texture0, Some(texenv::Source::PrimaryColor), None)
         .func(texenv::Mode::BOTH, texenv::CombineFunc::Modulate);
@@ -2233,7 +2252,7 @@ fn main() {
         ).stereo_matrices(sl, sr);
         let mut mvp_l = pl * camera;
         let mut mvp_r = pr * camera;
-        let mut card_groups: Vec<(u16, Vec<Vertex>)> = Vec::new();
+        let mut card_groups: Vec<(u16, Vec<CardVertex>)> = Vec::new();
         let mut ui_verts: Vec<Vertex> = Vec::new();
         let mut pic_groups: Vec<(u16, Vec<Vertex>)> = Vec::new();
         let mut ui_page: u16 = 0;
@@ -2369,18 +2388,10 @@ fn main() {
                         let l = (dx * dx + dy * dy + dz * dz).sqrt().max(1e-6);
                         [q[0] + dx / l * pv, q[1] + dy / l * pv, q[2] + dz / l * pv]
                     };
-                    let mk = |pt: ([f32; 3], f32, f32)| Vertex {
-                        // CARD_Q, for the reason UI_Q exists: a card's corners
-                        // are f32 world coordinates, and truncating them to
-                        // whole world units moved each corner by up to a
-                        // device pixel INDEPENDENTLY -- so the sprite's width
-                        // in pixels changed as it walked, and it resampled to
-                        // a slightly different shape every step. The card pass
-                        // divides it back out of the mvp.
+                    let mk = |pt: ([f32; 3], f32, f32)| CardVertex {
+                        // Unrounded, on purpose -- see CardVertex.
                         pos: { let d = disp(pt.0);
-                               [((d[0] - sox + 8.0) * CARD_Q) as i16,
-                                (d[1] * CARD_Q) as i16,
-                                ((d[2] - soy + 8.0) * CARD_Q) as i16, 0] },
+                               [d[0] - sox + 8.0, d[1], d[2] - soy + 8.0] },
                         // tint_b, not opaque white: a card standing on
                         // terrain build_map dimmed has to dim with it.
                         color: tint_b,
@@ -2420,7 +2431,7 @@ if page_tex.len() < pak_static.atlases.len() {
             if v.is_empty() { return None; }
             let mut bi = buffer::Info::new();
             let n = v.len().min(65535);
-            bi.add(buffer::Buffer::new(&v[..n]), attr_info.permutation()).ok()?;
+            bi.add(buffer::Buffer::new(&v[..n]), card_attr.permutation()).ok()?;
             Some((*pg as usize, bi))
         }).collect();
         if guest_drive && dbg_tick % 60 == 0 {
@@ -2886,21 +2897,20 @@ if page_tex.len() < pak_static.atlases.len() {
                     unsafe { c3d_depth_test(1); }
                 }
                 if !card_bufs.is_empty() {
-                    // Card vertices carry world coordinates scaled by CARD_Q
-                    // so their corners survive the i16 attribute at sub-pixel
-                    // precision; undo it here, in object space, so the rest of
-                    // the mvp is untouched.
-                    let mut card_mvp = *mvp;
-                    let inv = 1.0 / CARD_Q;
-                    card_mvp.scale(inv, inv, inv);
-                    frame.bind_vertex_uniform(projection_idx, &card_mvp);
+                    // Cards carry unrounded world coordinates in a float
+                    // position attribute, so they need their own layout for
+                    // the pass. The mvp is the plain one -- there is no
+                    // longer a quantisation scale to divide back out.
+                    frame.set_attr_info(&card_attr);
                     for (pg, ci) in card_bufs.iter() {
                         if let Some(t) = page_tex_ref.get(*pg).and_then(|o| o.as_ref()) {
                             frame.bind_texture(texture::Index::Texture0, t);
                         }
                         frame.draw_arrays(buffer::Primitive::Triangles, ci, None).unwrap();
                     }
-                    frame.bind_vertex_uniform(projection_idx, mvp);
+                    // Restore: render_to runs again for the right eye, and
+                    // the companion screen's passes follow, both on i16.
+                    frame.set_attr_info(&attr_info);
                 }
             });
 
