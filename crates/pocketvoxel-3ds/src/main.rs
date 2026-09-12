@@ -13,7 +13,7 @@ use ctru::services::romfs::RomFS;
 use pocketvoxel_core::draw::{self, resolve_pal, Item};
 use pocketvoxel_core::pak::{self, AlignedBlob, Pak};
 use pocketvoxel_core::scene::UI_B_SPRITES_MAX;
-use pocketvoxel_core::spec::{atlas_kind, CHUNK_PX, COLOR_PAL_NONE, UI_COLS, UI_ROWS};
+use pocketvoxel_core::spec::{atlas_kind, CHUNK_PX, COLOR_PAL_NONE, UI_COLS, UI_ROWS, WORLD_VIEW_H};
 
 #[repr(C)] pub struct JSRuntime { _p: [u8; 0] }
 #[repr(C)] pub struct JSContext { _p: [u8; 0] }
@@ -477,6 +477,44 @@ const UI_Q: f32 = 4.0;
 
 /// Guest screen coordinate -> the quantised grid `Vertex::pos` stores.
 fn qpx(v: f32) -> i16 { (v * UI_Q) as i16 }
+
+/// Top screen height in device pixels.
+const SCREEN_H: f32 = 240.0;
+
+/// Device pixels per world pixel at the camera's focus plane. Two, exactly,
+/// and the exactness is the entire point.
+///
+/// Art in this game is 16 world pixels to the cell and 16 texels to the
+/// sprite, so one world pixel is one texel. Fixing that ratio at a whole
+/// number is what integer scaling means here: every source pixel becomes a
+/// 2x2 block of device pixels, all of them the same size. At the 2.13 this
+/// used to be, a sprite's pixels came out two device pixels wide or three
+/// depending on where they fell, which is what wrecked the player's eyes.
+const WORLD_PX_SCALE: f32 = 2.0;
+
+/// Vertical field of view that puts exactly `WORLD_PX_SCALE` device pixels
+/// on a world pixel at the overworld camera's distance.
+///
+/// `cam::orbit` always sits WORLD_VIEW_H from its focus whatever the pitch
+/// rung, and the camera focus IS the player, so the player's card is always
+/// at this distance and always dead centre. It therefore lands on an exact
+/// 2x at every moment, walking included -- and at a whole-number ratio a
+/// sub-pixel offset only shifts the phase, it cannot make one source pixel
+/// wider than its neighbour.
+///
+/// It works out to 47.6 degrees against the 45 that was here, so the view
+/// pulls back about 6%: 120 world pixels of height instead of 112.7. That
+/// direction is free -- the view-cone cull's TAN_HHALF is 0.958 and the new
+/// horizontal half-angle is 0.735, so it stays conservative.
+///
+/// Only the focus plane is exact. Perspective means an entity out at the
+/// screen edge is further from the eye and lands near 1.6x, so NPCs are
+/// approximate; nothing short of an orthographic projection fixes that, and
+/// ortho would flatten the voxel world and break the 3D slider.
+fn world_fov() -> f32 {
+    let half = (SCREEN_H / (2.0 * WORLD_VIEW_H as f32 * WORLD_PX_SCALE)).atan();
+    half * 2.0
+}
 
 /// The same trick as `UI_Q`, for billboard cards in world space. The card
 /// pass scales it back out of the mvp, so it is invisible to everything
@@ -2189,7 +2227,7 @@ fn main() {
         let slider = ctru::os::current_3d_slider_state();
         let (sl, sr) = StereoDisplacement::new(slider * dist * 0.03, dist);
         let (pl, pr) = Projection::perspective(
-            45.0_f32.to_radians(),
+            world_fov(),
             AspectRatio::TopScreen,
             ClipPlanes { near: 1.0, far: 100000.0 },
         ).stereo_matrices(sl, sr);
