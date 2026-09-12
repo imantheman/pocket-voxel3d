@@ -16,8 +16,11 @@ use std::env;
 use std::fs;
 
 const UI_CELL: u32 = 8;
-const UI_GUTTER: u32 = 1;
-const UI_PITCH: u32 = UI_CELL + UI_GUTTER * 2;
+const UI_GUTTER: u32 = 0;
+/// Point-replication factor, matching main.rs page_prescale for the UI sheet.
+const UI_SCALE: u32 = 2;
+fn cell_px() -> u32 { UI_CELL * UI_SCALE }
+fn pitch() -> u32 { cell_px() + UI_GUTTER * 2 }
 
 // The top screen's real tile footprint: UI_TILE_PX = 8 * VIEW_H / GB_H guest
 // px, then 400/480 across and 240/272 down.
@@ -34,15 +37,15 @@ fn po2(n: u32) -> u32 {
 }
 
 fn ui_cell_src(e: u32, limit: u32) -> u32 {
-    let cell = e / UI_PITCH;
-    let within = (e % UI_PITCH).saturating_sub(UI_GUTTER).min(UI_CELL - 1);
-    (cell * UI_CELL + within).min(limit - 1)
+    let cell = e / pitch();
+    let within = (e % pitch()).saturating_sub(UI_GUTTER).min(cell_px() - 1);
+    (cell * UI_CELL + within / UI_SCALE).min(limit - 1)
 }
 
 /// The uploaded surface, flat (swizzling is irrelevant to the sampler).
 fn build(flat: &[u8], aw: u32, ah: u32, gutter: bool) -> (Vec<u8>, u32, u32) {
     let (gw, gh) = if gutter {
-        (aw.div_ceil(UI_CELL) * UI_PITCH, ah.div_ceil(UI_CELL) * UI_PITCH)
+        (aw.div_ceil(UI_CELL) * pitch(), ah.div_ceil(UI_CELL) * pitch())
     } else {
         (aw, ah)
     };
@@ -65,14 +68,13 @@ fn build(flat: &[u8], aw: u32, ah: u32, gutter: bool) -> (Vec<u8>, u32, u32) {
 }
 
 fn uv(tile: u16, cols: u16, pw: f32, ph: f32, gutter: bool) -> (f32, f32, f32, f32) {
-    let (pitch, g) = if gutter {
-        (UI_PITCH as f32, UI_GUTTER as f32)
+    let (p, c, g) = if gutter {
+        (pitch() as f32, cell_px() as f32, UI_GUTTER as f32)
     } else {
-        (UI_CELL as f32, 0.0)
+        (UI_CELL as f32, UI_CELL as f32, 0.0)
     };
-    let x0 = (tile % cols) as f32 * pitch + g;
-    let y0 = (tile / cols) as f32 * pitch + g;
-    let c = UI_CELL as f32;
+    let x0 = (tile % cols) as f32 * p + g;
+    let y0 = (tile / cols) as f32 * p + g;
     (x0 / pw, (x0 + c) / pw, 1.0 - y0 / ph, 1.0 - (y0 + c) / ph)
 }
 
@@ -180,7 +182,7 @@ fn main() {
         println!(
             "  {:<16} {n_bad}/{} tiles change when their sheet neighbours do; \
              worst delta {worst:.1} (tile {worst_tile})",
-            if gutter { "gutter repack" } else { "flush packing" },
+            if gutter { "x2 prescale" } else { "flush 1:1" },
             cols * rows
         );
     }

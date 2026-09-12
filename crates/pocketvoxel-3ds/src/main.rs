@@ -223,17 +223,54 @@ const DILATE_PASSES: u32 = 1;
 /// but fits 7 texels into the space of 8, scaling every glyph up by a
 /// seventh. That is far more visible than the bleed it fixes.
 const UI_CELL: u32 = 8;
-const UI_GUTTER: u32 = 1;
-const UI_PITCH: u32 = UI_CELL + UI_GUTTER * 2;
+
+/// Whole-number factor each texel of a page is replicated by before upload.
+///
+/// This is the integer-scaling half of the fix, and it is what actually keeps
+/// pixel art crisp. Filtering alone cannot: a linear tap asked to MAGNIFY
+/// invents intermediate colours, which is blur. The way to avoid being asked
+/// is to hand the GPU a texture that is already big enough, point-replicated
+/// so every source pixel stays a hard-edged block, and let the remaining
+/// fraction be a slight minification instead -- which a linear tap handles
+/// well, because it is averaging real pixels rather than inventing them.
+///
+/// At x2 the GB's 8-px tile becomes 16 texels, and the companion screen draws
+/// it across 320/20 = 16 device pixels: exactly 1:1, so the filter is a no-op
+/// and the tiles are pixel-perfect. The top screen draws it at 12.59 x 13.33,
+/// a 0.79x minification of hard 2x2 blocks -- near-crisp.
+///
+/// Only the UI sheet gets it. The sprite sheets would cost +5 MB of the 24 MB
+/// linear heap (examples/tex_budget.rs), because every SPRITES page of a map
+/// is pre-warmed at load and uploads live in the same pool as the terrain
+/// vertex buffers -- which is exactly the pressure that used to freeze map
+/// transitions. See the note on entity cards in `sprite_filter`.
+fn page_prescale(page: &pak::AtlasPage) -> u32 {
+    if page.kind == atlas_kind::UI { 2 } else { 1 }
+}
+
+/// Border replicated around each UI cell so a linear tap that leaves the cell
+/// reads a copy of it rather than the neighbouring glyph.
+///
+/// Zero, because `page_prescale` makes the reach impossible rather than safe.
+/// A tap only escapes its cell under magnification, and at x2 the UI cannot
+/// magnify: the tile would have to exceed 16 device pixels, which means a GB
+/// overlay larger than 320x288, and neither screen is 288 tall. A gutter on
+/// top of that would cost 750 KB to the next power of two for a reach that
+/// cannot happen. examples/ui_bleed.rs holds the line if any of that changes.
+const UI_GUTTER: u32 = 0;
+
+fn ui_cell_px(scale: u32) -> u32 { UI_CELL * scale }
+fn ui_pitch(scale: u32) -> u32 { ui_cell_px(scale) + UI_GUTTER * 2 }
 
 /// Dimensions `build_page_tex` lays a page out at, before power-of-two
-/// padding. Identity for every page except the gutter-repacked UI sheet.
+/// padding: the source scaled up, and for the UI sheet repacked cell by cell.
 fn page_layout_dims(page: &pak::AtlasPage) -> (u32, u32) {
     let (aw, ah) = (page.w as u32, page.h as u32);
+    let s = page_prescale(page);
     if page.kind == atlas_kind::UI {
-        (aw.div_ceil(UI_CELL) * UI_PITCH, ah.div_ceil(UI_CELL) * UI_PITCH)
+        (aw.div_ceil(UI_CELL) * ui_pitch(s), ah.div_ceil(UI_CELL) * ui_pitch(s))
     } else {
-        (aw, ah)
+        (aw * s, ah * s)
     }
 }
 
@@ -244,22 +281,24 @@ fn page_tex_size(page: &pak::AtlasPage) -> (f32, f32) {
     (po2(gw) as f32, po2(gh) as f32)
 }
 
-/// Repacked column/row -> the source column/row it copies, replicating the
-/// cell edge into the gutter on either side.
-fn ui_cell_src(e: u32, limit: u32) -> u32 {
-    let cell = e / UI_PITCH;
-    let within = (e % UI_PITCH).saturating_sub(UI_GUTTER).min(UI_CELL - 1);
-    (cell * UI_CELL + within).min(limit - 1)
+/// Repacked column/row -> the source column/row it copies: which cell it
+/// falls in, then which of that cell's eight texels, with the edge replicated
+/// through any gutter.
+fn ui_cell_src(e: u32, scale: u32, limit: u32) -> u32 {
+    let cell = e / ui_pitch(scale);
+    let within = (e % ui_pitch(scale))
+        .saturating_sub(UI_GUTTER)
+        .min(ui_cell_px(scale) - 1);
+    (cell * UI_CELL + within / scale).min(limit - 1)
 }
 
 /// UV rect of one tile in the repacked sheet, V already flipped (texture
 /// rows are stored inverted relative to the UV convention, as uv mode 5).
-/// Spans the cell's eight real texels exactly, so the glyph keeps its scale.
-fn ui_tile_uv(tile: u16, cols: u16, pw: f32, ph: f32) -> (f32, f32, f32, f32) {
-    let g = UI_GUTTER as f32;
-    let x0 = (tile % cols) as f32 * UI_PITCH as f32 + g;
-    let y0 = (tile / cols) as f32 * UI_PITCH as f32 + g;
-    let c = UI_CELL as f32;
+/// Spans the cell's real texels exactly, so the glyph keeps its size.
+fn ui_tile_uv(tile: u16, cols: u16, pw: f32, ph: f32, scale: u32) -> (f32, f32, f32, f32) {
+    let (pitch, c, g) = (ui_pitch(scale) as f32, ui_cell_px(scale) as f32, UI_GUTTER as f32);
+    let x0 = (tile % cols) as f32 * pitch + g;
+    let y0 = (tile / cols) as f32 * pitch + g;
     (x0 / pw, (x0 + c) / pw, 1.0 - y0 / ph, 1.0 - (y0 + c) / ph)
 }
 
@@ -348,6 +387,7 @@ fn build_page_tex(pak: &Pak, pidx: u16, pal_sel: i32) -> (Vec<u8>, u32, u32) {
         dilate_rgb(&mut flat, aw, ah);
     }
     let is_ui = page.kind == atlas_kind::UI;
+    let scale = page_prescale(&page);
     let mut out = vec![0u8; (tw * th * 4) as usize];
     for y in 0..th {
         for x in 0..tw {
@@ -360,13 +400,14 @@ fn build_page_tex(pak: &Pak, pidx: u16, pal_sel: i32) -> (Vec<u8>, u32, u32) {
             // into an extension of the edge, so a bilinear tap straying off
             // the page reads the page instead of a hole.
             let (ex, ey) = (x.min(gw - 1), y.min(gh - 1));
-            // Then, for the UI sheet, the repack: each 8x8 cell is laid out
-            // on a 10-texel pitch with its own edge replicated into the
-            // one-texel border. See UI_GUTTER.
+            // Then the point replication -- every source texel repeated
+            // `scale` times each way, so it stays a hard-edged block. The UI
+            // sheet goes cell by cell, since its cells are repacked on their
+            // own pitch. See page_prescale / UI_GUTTER.
             let (sx, sy) = if is_ui {
-                (ui_cell_src(ex, aw), ui_cell_src(ey, ah))
+                (ui_cell_src(ex, scale, aw), ui_cell_src(ey, scale, ah))
             } else {
-                (ex.min(aw - 1), ey.min(ah - 1))
+                ((ex / scale).min(aw - 1), (ey / scale).min(ah - 1))
             };
             let s = ((sy * aw + sx) * 4) as usize;
             let o = tiled_off(x, y, tw);
@@ -2238,7 +2279,7 @@ fn main() {
                     // UVs address the gutter-repacked surface.
                     let cols = ((pg.w as u32 / UI_CELL) as u16).max(1);
                     let (pw, ph) = page_tex_size(pg);
-                    let (u0, u1, v0, v1) = ui_tile_uv(*tile, cols, pw, ph);
+                    let (u0, u1, v0, v1) = ui_tile_uv(*tile, cols, pw, ph, page_prescale(pg));
                     let (x0, y0) = (qpx(*x), qpx(*y));
                     let (x1, y1) = (qpx(*x + *w), qpx(*y + *h));
                     let m2 = |px: i16, py: i16, u: f32, v: f32| Vertex {
@@ -2435,7 +2476,7 @@ if page_tex.len() < pak_static.atlases.len() {
                     let is_dim = raw & DARKTEXT_BIT != 0;
                     let color = if is_light { LIGHT } else { DARK };
                     let tile = raw & !(LIGHT_BIT | FILL_BIT | DARKTEXT_BIT);
-                    let (u0, u1, v0, v1) = ui_tile_uv(tile, cols, pw, ph);
+                    let (u0, u1, v0, v1) = ui_tile_uv(tile, cols, pw, ph, page_prescale(pg));
                     let x0 = (cx as f32 * tpxx) as i16;
                     let y0 = (cy as f32 * tpxy) as i16;
                     let x1 = ((cx + 1) as f32 * tpxx) as i16;
