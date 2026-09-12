@@ -174,27 +174,38 @@ fn unsafe_free_kb() -> u32 {
 /// ClampToEdge matters because the page is uploaded into a power-of-two
 /// surface: without it a tap in the padding wraps to the opposite edge of
 /// the sprite. `build_page_tex` handles the rest of what linear exposes.
-fn sprite_filter(t: &mut texture::Texture, pak: &Pak, page: u16) {
-    let kind = pak.atlases.get(page as usize).map(|p| p.kind);
-    let linear = if kind == Some(atlas_kind::UI) { UI_BILINEAR } else { true };
-    let f = if linear { texture::Filter::Linear } else { texture::Filter::Nearest };
+fn sprite_filter(t: &mut texture::Texture, _pak: &Pak, _page: u16) {
+    let f = if SPRITE_LINEAR { texture::Filter::Linear } else { texture::Filter::Nearest };
     t.set_filter(f, f);
     t.set_wrap(texture::Wrap::ClampToEdge, texture::Wrap::ClampToEdge);
 }
 
-/// Whether the GB tile sheet -- the text boxes, menus and font -- is filtered
-/// like the sprites are.
+/// Whether sprite pages are sampled with a linear filter.
 ///
-/// This one is a taste call, not a correctness one, which is why it has a
-/// name. The sheet suffers the worst of the scaling: an 8-px tile is drawn
-/// at 12.59 x 13.33 device pixels, so nearest duplicates some rows of each
-/// glyph and not others, and because UI_ORIGIN_X is fractional, neighbouring
-/// tiles do not agree about which. Linear evens that out at the cost of
-/// softening text that was designed to be crisp at 1:1.
+/// False, and it should stay false for pixel art. A linear tap is only
+/// worth having when it MINIFIES, where it averages real pixels; asked to
+/// magnify it invents intermediate colours, which is blur. Every one of
+/// these pages is magnified: the GB tile by 1.57x on the top screen, an
+/// entity card by 1.67x.
 ///
-/// Flip this to false to put the UI back on nearest and leave the sprites
-/// filtered.
-const UI_BILINEAR: bool = true;
+/// An emulator settles it. Citra renders at an integer multiple of 400x240,
+/// so at 5x the top screen is 2000 px wide and a tile that covered 12.59
+/// device pixels covers 63. No amount of pre-scaling outruns that -- the
+/// magnification grows with the setting -- so any linear filter is blur on
+/// an upscaled emulator, while nearest is exactly the hard-edged blocks the
+/// art was drawn as.
+///
+/// Nearest also makes two problems that only exist for a linear tap go away:
+/// it never samples between texels, so it cannot pull a neighbouring glyph
+/// across a cell boundary (no gutter needed, see UI_GUTTER), and it never
+/// blends against a transparent texel's stored colour (no dilation needed,
+/// see DILATE_PASSES).
+///
+/// What it does NOT fix is uneven scaling -- 8 texels across 12.59 pixels
+/// means some rows get duplicated and others do not. That is what
+/// `page_prescale` and the UI_Q / CARD_Q geometry fixes are for, and it is
+/// a property of the ratio, not of the filter.
+const SPRITE_LINEAR: bool = false;
 
 /// Rounds of `dilate_rgb` run over a sprite page before upload.
 ///
@@ -383,8 +394,13 @@ fn build_page_tex(pak: &Pak, pidx: u16, pal_sel: i32) -> (Vec<u8>, u32, u32) {
         flat[i * 4 + 2] = ((c >> 8) & 0xff) as u8;
         flat[i * 4 + 3] = (c & 0xff) as u8;
     }
-    for _ in 0..DILATE_PASSES {
-        dilate_rgb(&mut flat, aw, ah);
+    // Only a linear tap can ever read a transparent texel's colour, so this
+    // is pure load-time cost under nearest. Kept, not deleted: it is the
+    // thing that makes SPRITE_LINEAR safe to turn back on.
+    if SPRITE_LINEAR {
+        for _ in 0..DILATE_PASSES {
+            dilate_rgb(&mut flat, aw, ah);
+        }
     }
     let is_ui = page.kind == atlas_kind::UI;
     let scale = page_prescale(&page);
