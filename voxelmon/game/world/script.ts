@@ -344,6 +344,20 @@ function* start_battle(ctx: ScriptContext, ...args: unknown[]): Generator<void, 
       runner.resume();
     }, opts.loseable === true);
     yield;
+    return;
+  }
+  // ["start_battle", "wild", "MAROWAK", 30, { noCatch, disguised }] — a wild
+  // battle a script opens rather than one the grass rolled. lastCheck is the
+  // defeat test the tower branches on: a win, and also a POKE DOLL escape,
+  // which leaves wBattleResult untouched and so reads as a defeat
+  // (PokemonTower6FMarowakBattleScript's "and a / jr nz").
+  if (kind === "wild" && w.startWildBattle) {
+    const wopts = opts as { noCatch?: boolean; disguised?: boolean };
+    w.startWildBattle(id, idx, wopts, (result: string | null) => {
+      ctx.lastCheck = result === "win";
+      runner.resume();
+    });
+    yield;
   }
 }
 
@@ -586,8 +600,17 @@ function* engage_trainer(ctx: ScriptContext, ...args: unknown[]): Generator<void
     engageTrainer?: (npc: any, onDone?: () => void) => void;
   };
   const npc = w.findNpc?.(args[0]);
-  if (!npc || !w.engageTrainer || w.trainerDefeated?.(npc)) return;
-  w.engageTrainer(npc, () => runner.resume());
+  // lastCheck reports whether the trainer STANDS defeated afterwards, so a
+  // script can gate its aftermath on the win the way pokered's text_asm does
+  // (Rocket Hideout B4F only drops the LIFT KEY once its grunt is beaten).
+  // An already-beaten trainer is a no-op that still reports true — that is
+  // the reprint path, not a failure.
+  if (!npc || !w.engageTrainer) { ctx.lastCheck = false; return; }
+  if (w.trainerDefeated?.(npc)) { ctx.lastCheck = true; return; }
+  w.engageTrainer(npc, () => {
+    ctx.lastCheck = w.trainerDefeated?.(npc) === true;
+    runner.resume();
+  });
   yield;
 }
 

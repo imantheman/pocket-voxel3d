@@ -1111,7 +1111,183 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
       ],
     },
   },
+
+  // scripts/CeladonDiner.asm, the busted gym guide — story5.lua
+  // M.CELADON_DINER. A plain gift: the COIN CASE, then the same line
+  // forever after.
+  //
+  // DEVIATION: upstream prints _CeladonDinerGymGuideCoinCaseNoRoomText on a
+  // full bag; give_item prints its own refusal and halts (leaving the flag
+  // unset, so the guide still has it next time), which is what every other
+  // gift in this file does.
+  CELADON_DINER: {
+    talk: {
+      TEXT_CELADONDINER_GYM_GUIDE: [
+        ["check_flag", "EVENT_GOT_COIN_CASE"],
+        ["jump_if_true", "already"],
+        ["show_text", "_CeladonDinerGymGuideImFlatOutBustedText"],
+        ["play_sound", "Get_Key_Item"],
+        ["give_item", "COIN_CASE", 1, "_CeladonDinerGymGuideReceivedCoinCaseText"],
+        ["set_flag", "EVENT_GOT_COIN_CASE"],
+        ["jump", "end"],
+        ["label", "already"],
+        ["show_text", "_CeladonDinerGymGuideWinItBackText"],
+      ],
+    },
+  },
+
+  // scripts/PokemonTower5F.asm PokemonTower5FDefaultScript — story3.lua
+  // M.POKEMON_TOWER_5F. The 2x2 pad at the centre heals the party once per
+  // visit; EVENT_IN_PURIFIED_ZONE latches until the player steps off it.
+  //
+  // Upstream also returns true from onStep while on the pad, standing in for
+  // the map script's BIT_NO_BATTLES so the pad suppresses wild encounters.
+  // This onStep returns rows, not a boolean, so the no-battles half is not
+  // wired — the pad is four tiles in a building whose encounter rate the
+  // player is standing still on, so the difference is close to unobservable.
+  POKEMON_TOWER_5F: {
+    onStep: (ow: any, save: any) => {
+      const f = save?.flags ?? {};
+      const p = ow?.player;
+      const onPad = TOWER_5F_PURIFIED.has(`${p?.cellX ?? -1},${p?.cellY ?? -1}`);
+      if (!onPad) {
+        delete f.EVENT_IN_PURIFIED_ZONE;
+        return null;
+      }
+      if (f.EVENT_IN_PURIFIED_ZONE) return null;
+      f.EVENT_IN_PURIFIED_ZONE = true;
+      // HealParty -> GBFadeOutToWhite -> Delay3 -> Delay3 -> GBFadeInFromWhite
+      // -> the purified-zone line. No Music_PkmnHealed, unlike a Center.
+      return [
+        ["heal_party"],
+        ["fade", "out", "white"],
+        ["wait", 3],
+        ["wait", 3],
+        ["fade", "in", "white"],
+        ["show_text", "_PokemonTower5FPurifiedZoneText"],
+      ] as ScriptRow[];
+    },
+  },
+
+  // scripts/PokemonTower6F.asm PokemonTower6FDefaultScript — story3.lua
+  // M.POKEMON_TOWER_6F. The ghost MAROWAK blocks the stairs at (10,16).
+  //
+  // The trigger does NOT check the SILPH SCOPE: vanilla opens the battle
+  // either way, and the scope only decides whether the disguise sticks. An
+  // earlier pass of the upstream port gated the trigger on the scope and made
+  // 6F impassable for anyone who skipped the Rocket Hideout, which is the
+  // mistake this comment exists to prevent repeating.
+  //
+  // Balls are dodged with or without the scope (item_effects.asm:166-175), so
+  // noCatch rides the battle rather than the disguise.
+  POKEMON_TOWER_6F: {
+    onStep: (ow: any, save: any) => {
+      const f = save?.flags ?? {};
+      if (f.EVENT_BEAT_GHOST_MAROWAK) return null;
+      const p = ow?.player;
+      if ((p?.cellX ?? -1) !== 10 || (p?.cellY ?? -1) !== 16) return null;
+      const hasScope = (save?.inventory?.SILPH_SCOPE ?? 0) > 0;
+      return [
+        ["show_text", "_PokemonTower6FBeGoneText"],
+        ["start_battle", "wild", "MAROWAK", 30, { noCatch: true, disguised: !hasScope }],
+        // lastCheck is the win. Losing blacks out and running leaves the
+        // player on the trigger tile, which re-fires next step — vanilla
+        // nudges them one tile clear instead (.did_not_defeat).
+        ["jump_if_false", "fled"],
+        ["set_flag", "EVENT_BEAT_GHOST_MAROWAK"],
+        ["show_text", "_PokemonTower6FGhostWasCubonesMotherText"],
+        ["wait", 30],
+        ["show_text", "_PokemonTower6FSoulWasCalmedText"],
+        ["jump", "end"],
+        ["label", "fled"],
+        ["move_player", "right", 1],
+      ] as ScriptRow[];
+    },
+  },
+
+  // scripts/RocketHideoutB4F.asm — story3.lua M.ROCKET_HIDEOUT_B4F.
+  //
+  // The grunt drops the LIFT KEY when beaten: the ball object starts hidden
+  // in the map data and show_object reveals it, after which the generic
+  // item-ball path (itemBallScript below) picks it up like any other. Later
+  // talks only reprint the line, which is why the reveal is flag-gated
+  // rather than repeated (CheckAndSetEvent EVENT_ROCKET_DROPPED_LIFT_KEY).
+  //
+  // Giovanni has no trainer-header row upstream (def_trainers 2) — his
+  // text_asm owns both the engage and BeatGiovanniScript's aftermath, which
+  // is why he is a talk script rather than a sight trainer.
+  ROCKET_HIDEOUT_B4F: {
+    talk: {
+      // Rocket3 is the one that drops it. Upstream also carries a Yellow
+      // spelling (a single unnumbered grunt); this build cooks Red/Blue,
+      // whose text set is Rocket1/2/3 and has no unnumbered line, so wiring
+      // it would be a dead key pointing at a label that does not exist.
+      TEXT_ROCKETHIDEOUTB4F_ROCKET3: liftKeyRocketRows("ROCKETHIDEOUTB4F_ROCKET3",
+        "_RocketHideoutB4FRocket3AfterBattleText"),
+      TEXT_ROCKETHIDEOUTB4F_GIOVANNI: [
+        ["check_flag", "EVENT_BEAT_ROCKET_HIDEOUT_GIOVANNI"],
+        ["jump_if_true", "beaten"],
+        ["show_text", "_RocketHideoutB4FGiovanniImpressedYouGotHereText"],
+        ["start_battle", "trainer", "OPP_GIOVANNI", 1],
+        ["jump_if_false", "end"],
+        ["set_flag", "EVENT_BEAT_ROCKET_HIDEOUT_GIOVANNI"],
+        ["show_text", "_RocketHideoutB4FGiovanniWhatCannotBeText"],
+        ["show_text", "_RocketHideoutB4FGiovanniHopeWeMeetAgainText"],
+        ["fade", "out", "black"],
+        ["hide_object", "ROCKET_HIDEOUT_B4F", "ROCKETHIDEOUTB4F_GIOVANNI"],
+        ["show_object", "ROCKET_HIDEOUT_B4F", "ROCKETHIDEOUTB4F_SILPH_SCOPE"],
+        ["fade", "in", "black"],
+        ["jump", "end"],
+        ["label", "beaten"],
+        ["show_text", "_RocketHideoutB4FGiovanniHopeWeMeetAgainText"],
+      ],
+    },
+  },
+
+  // scripts/RocketHideoutElevator.asm RocketHideoutElevatorText — story3.lua
+  // M.ROCKET_HIDEOUT_ELEVATOR's keyGate. Without the LIFT KEY the panel only
+  // prints the need-a-key line and opens no floor menu.
+  //
+  // DEFERRED: with the key, upstream opens DisplayElevatorFloorMenu (a floor
+  // list built from the maps warping into the car, then ShakeElevator). There
+  // is no elevator-menu verb in this port yet, so the panel currently says
+  // nothing once the key is in the bag and the car's own stair warps are how
+  // you move. The hideout is fully traversable by stairs, so this gates
+  // nothing but the shortcut.
+  // The panel is a SIGN, not an object (data/maps/objects/RocketHideout
+  // Elevator.asm bg_event), which is why the key is the bare map constant —
+  // signs route through showMapText and so reach talkScript the same way an
+  // object's text does.
+  ROCKET_HIDEOUT_ELEVATOR: {
+    talk: {
+      TEXT_ROCKETHIDEOUTELEVATOR: [
+        ["check_item", "LIFT_KEY"],
+        ["jump_if_true", "end"],
+        ["show_text", "_RocketHideoutElevatorAppearsToNeedKeyText"],
+      ],
+    },
+  },
 };
+
+/** The 2x2 purified pad on POKEMON_TOWER_5F (story3.lua TOWER_5F_PURIFIED). */
+const TOWER_5F_PURIFIED = new Set(["10,8", "11,8", "10,9", "11,9"]);
+
+/**
+ * The Rocket Hideout B4F grunt who drops the LIFT KEY. Beating him reveals
+ * the ball; talking again only reprints. engage_trainer reports the win in
+ * lastCheck, so a loss (which blacks out) never reaches the reveal.
+ */
+function liftKeyRocketRows(npc: string, afterText: string): ScriptRow[] {
+  return [
+    ["engage_trainer", npc],
+    ["jump_if_false", "end"],
+    ["show_text", afterText],
+    ["check_flag", "EVENT_ROCKET_DROPPED_LIFT_KEY"],
+    ["jump_if_true", "end"],
+    ["set_flag", "EVENT_ROCKET_DROPPED_LIFT_KEY"],
+    ["show_object", "ROCKET_HIDEOUT_B4F", "ROCKETHIDEOUTB4F_LIFT_KEY"],
+  ] as ScriptRow[];
+}
 
 /**
  * MapScripts.lua:239 talkScript — the script for an object's TEXT_* constant

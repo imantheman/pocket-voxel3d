@@ -174,6 +174,17 @@ export class WildBattle implements EffectBattle {
   enemyHidden = false;
   lastBall: string | null = null;
 
+  /** Balls are dodged instead of rolling a catch — the POKEMON TOWER 6F
+   * RESTLESS SOUL (item_effects.asm:166-175). Set by the script that opens
+   * the battle, not inferred from the disguise: vanilla dodges the ball with
+   * or without the SILPH SCOPE. */
+  noCatch = false;
+
+  /** The enemy is the GHOST the SILPH SCOPE has not identified yet
+   * (core.asm:6698-6700 InitWildBattle). Gates the name shown and the
+   * "can't be ID'd" refusal; the scope buys the unveil, not the battle. */
+  disguised = false;
+
   // BATTLE_TYPE_OLD_MAN demo state (BattleState.lua:806-835, :2160-2210). The
   // Viridian catch tutorial: no player mon acts, the old man auto-throws one
   // POKé BALL, nothing is kept. `oakDemo`/`demoFails` carry Yellow's variants
@@ -1467,6 +1478,22 @@ export class WildBattle implements EffectBattle {
   throwBall(ball: string): void {
     const itemName = this.data.items?.[ball]?.name ?? ball;
     this.sayAuto(`${this.save.player.name} used\n${itemName}!`);
+    // item_effects.asm:166-175 ItemUseBall .notOldManBattle: on
+    // POKEMON_TOWER_6F the RESTLESS SOUL dodges the ball whether or not the
+    // SILPH SCOPE revealed it, so the dodge rides the battle rather than the
+    // disguise. The turn still passes -- the ghost gets its move.
+    if (this.noCatch) {
+      this.act(() => {
+        this.lastBall = ball;
+        this.sayNext("The GHOST dodged it!");
+        this.act(() => {
+          this.executeAction(this.enemy, this.player, this.enemyAction());
+        });
+        this.queueResidual(this.player, this.enemy);
+        this.act(() => this.endOfTurn());
+      });
+      return;
+    }
     this.act(() => {
       this.lastBall = ball;
       const [caught, shakes] = catchAttempt(ball, this.enemy.mon, this.enemy.def, this.rng);

@@ -1272,6 +1272,20 @@ export class Overworld implements ScriptWorld {
     else onDone?.(false);
   }
 
+  /** A script-opened wild battle (the POKEMON TOWER 6F ghost), delegated to
+   * the shell the same way startTrainerBattle is. */
+  startWildBattle(
+    species: string,
+    level: number,
+    opts?: { noCatch?: boolean; disguised?: boolean },
+    onDone?: (result: string | null) => void,
+  ): void {
+    const self = this as any;
+    const shell = self.shell ?? self.game ?? self.host ?? null;
+    if (shell?.startWildBattle) shell.startWildBattle(species, level, opts, onDone);
+    else onDone?.(null);
+  }
+
   /** old_man_demo hand-off (Commands.lua:807-823): delegate to the shell, the
    * same way startTrainerBattle does. onDone resumes the map script. */
   startOldManDemo(onDone?: () => void): void {

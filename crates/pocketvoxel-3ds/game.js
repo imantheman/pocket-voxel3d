@@ -1866,6 +1866,8 @@ class WildBattle {
   blackedOut = false;
   enemyHidden = false;
   lastBall = null;
+  noCatch = false;
+  disguised = false;
   demo = false;
   demoName = "OLD MAN";
   demoFails = false;
@@ -2901,6 +2903,18 @@ close too!`;
     const itemName = this.data.items?.[ball]?.name ?? ball;
     this.sayAuto(`${this.save.player.name} used
 ${itemName}!`);
+    if (this.noCatch) {
+      this.act(() => {
+        this.lastBall = ball;
+        this.sayNext("The GHOST dodged it!");
+        this.act(() => {
+          this.executeAction(this.enemy, this.player, this.enemyAction());
+        });
+        this.queueResidual(this.player, this.enemy);
+        this.act(() => this.endOfTurn());
+      });
+      return;
+    }
     this.act(() => {
       this.lastBall = ball;
       const [caught, shakes] = attempt(ball, this.enemy.mon, this.enemy.def, this.rng);
@@ -4835,8 +4849,111 @@ var MAP_SCRIPTS = {
         ["show_text", "_SSAnneCaptainsRoomCaptainNotSickAnymoreText"]
       ]
     }
+  },
+  CELADON_DINER: {
+    talk: {
+      TEXT_CELADONDINER_GYM_GUIDE: [
+        ["check_flag", "EVENT_GOT_COIN_CASE"],
+        ["jump_if_true", "already"],
+        ["show_text", "_CeladonDinerGymGuideImFlatOutBustedText"],
+        ["play_sound", "Get_Key_Item"],
+        ["give_item", "COIN_CASE", 1, "_CeladonDinerGymGuideReceivedCoinCaseText"],
+        ["set_flag", "EVENT_GOT_COIN_CASE"],
+        ["jump", "end"],
+        ["label", "already"],
+        ["show_text", "_CeladonDinerGymGuideWinItBackText"]
+      ]
+    }
+  },
+  POKEMON_TOWER_5F: {
+    onStep: (ow, save) => {
+      const f = save?.flags ?? {};
+      const p = ow?.player;
+      const onPad = TOWER_5F_PURIFIED.has(`${p?.cellX ?? -1},${p?.cellY ?? -1}`);
+      if (!onPad) {
+        delete f.EVENT_IN_PURIFIED_ZONE;
+        return null;
+      }
+      if (f.EVENT_IN_PURIFIED_ZONE)
+        return null;
+      f.EVENT_IN_PURIFIED_ZONE = true;
+      return [
+        ["heal_party"],
+        ["fade", "out", "white"],
+        ["wait", 3],
+        ["wait", 3],
+        ["fade", "in", "white"],
+        ["show_text", "_PokemonTower5FPurifiedZoneText"]
+      ];
+    }
+  },
+  POKEMON_TOWER_6F: {
+    onStep: (ow, save) => {
+      const f = save?.flags ?? {};
+      if (f.EVENT_BEAT_GHOST_MAROWAK)
+        return null;
+      const p = ow?.player;
+      if ((p?.cellX ?? -1) !== 10 || (p?.cellY ?? -1) !== 16)
+        return null;
+      const hasScope = (save?.inventory?.SILPH_SCOPE ?? 0) > 0;
+      return [
+        ["show_text", "_PokemonTower6FBeGoneText"],
+        ["start_battle", "wild", "MAROWAK", 30, { noCatch: true, disguised: !hasScope }],
+        ["jump_if_false", "fled"],
+        ["set_flag", "EVENT_BEAT_GHOST_MAROWAK"],
+        ["show_text", "_PokemonTower6FGhostWasCubonesMotherText"],
+        ["wait", 30],
+        ["show_text", "_PokemonTower6FSoulWasCalmedText"],
+        ["jump", "end"],
+        ["label", "fled"],
+        ["move_player", "right", 1]
+      ];
+    }
+  },
+  ROCKET_HIDEOUT_B4F: {
+    talk: {
+      TEXT_ROCKETHIDEOUTB4F_ROCKET3: liftKeyRocketRows("ROCKETHIDEOUTB4F_ROCKET3", "_RocketHideoutB4FRocket3AfterBattleText"),
+      TEXT_ROCKETHIDEOUTB4F_GIOVANNI: [
+        ["check_flag", "EVENT_BEAT_ROCKET_HIDEOUT_GIOVANNI"],
+        ["jump_if_true", "beaten"],
+        ["show_text", "_RocketHideoutB4FGiovanniImpressedYouGotHereText"],
+        ["start_battle", "trainer", "OPP_GIOVANNI", 1],
+        ["jump_if_false", "end"],
+        ["set_flag", "EVENT_BEAT_ROCKET_HIDEOUT_GIOVANNI"],
+        ["show_text", "_RocketHideoutB4FGiovanniWhatCannotBeText"],
+        ["show_text", "_RocketHideoutB4FGiovanniHopeWeMeetAgainText"],
+        ["fade", "out", "black"],
+        ["hide_object", "ROCKET_HIDEOUT_B4F", "ROCKETHIDEOUTB4F_GIOVANNI"],
+        ["show_object", "ROCKET_HIDEOUT_B4F", "ROCKETHIDEOUTB4F_SILPH_SCOPE"],
+        ["fade", "in", "black"],
+        ["jump", "end"],
+        ["label", "beaten"],
+        ["show_text", "_RocketHideoutB4FGiovanniHopeWeMeetAgainText"]
+      ]
+    }
+  },
+  ROCKET_HIDEOUT_ELEVATOR: {
+    talk: {
+      TEXT_ROCKETHIDEOUTELEVATOR: [
+        ["check_item", "LIFT_KEY"],
+        ["jump_if_true", "end"],
+        ["show_text", "_RocketHideoutElevatorAppearsToNeedKeyText"]
+      ]
+    }
   }
 };
+var TOWER_5F_PURIFIED = new Set(["10,8", "11,8", "10,9", "11,9"]);
+function liftKeyRocketRows(npc, afterText) {
+  return [
+    ["engage_trainer", npc],
+    ["jump_if_false", "end"],
+    ["show_text", afterText],
+    ["check_flag", "EVENT_ROCKET_DROPPED_LIFT_KEY"],
+    ["jump_if_true", "end"],
+    ["set_flag", "EVENT_ROCKET_DROPPED_LIFT_KEY"],
+    ["show_object", "ROCKET_HIDEOUT_B4F", "ROCKETHIDEOUTB4F_LIFT_KEY"]
+  ];
+}
 function talkScript(mapLabel, textConst) {
   return MAP_SCRIPTS[mapLabel]?.talk?.[textConst] ?? null;
 }
@@ -5175,6 +5292,15 @@ function* start_battle(ctx, ...args) {
       runner.resume();
     }, opts.loseable === true);
     yield;
+    return;
+  }
+  if (kind === "wild" && w.startWildBattle) {
+    const wopts = opts;
+    w.startWildBattle(id, idx, wopts, (result) => {
+      ctx.lastCheck = result === "win";
+      runner.resume();
+    });
+    yield;
   }
 }
 function* move_player_to(ctx, ...args) {
@@ -5320,9 +5446,18 @@ function* engage_trainer(ctx, ...args) {
   const runner = ctx.runner;
   const w = ctx.world;
   const npc = w.findNpc?.(args[0]);
-  if (!npc || !w.engageTrainer || w.trainerDefeated?.(npc))
+  if (!npc || !w.engageTrainer) {
+    ctx.lastCheck = false;
     return;
-  w.engageTrainer(npc, () => runner.resume());
+  }
+  if (w.trainerDefeated?.(npc)) {
+    ctx.lastCheck = true;
+    return;
+  }
+  w.engageTrainer(npc, () => {
+    ctx.lastCheck = w.trainerDefeated?.(npc) === true;
+    runner.resume();
+  });
   yield;
 }
 function* set_heal_point(ctx) {
@@ -6369,6 +6504,14 @@ class Overworld {
       shell.startTrainerBattle(id, idx, name, onDone, loseable);
     else
       onDone?.(false);
+  }
+  startWildBattle(species, level, opts, onDone) {
+    const self = this;
+    const shell = self.shell ?? self.game ?? self.host ?? null;
+    if (shell?.startWildBattle)
+      shell.startWildBattle(species, level, opts, onDone);
+    else
+      onDone?.(null);
   }
   startOldManDemo(onDone) {
     const self = this;
@@ -9595,6 +9738,14 @@ ${mname}!`);
     const st = new BattleGameState(this, "", 0, battle);
     st.onDone = () => onDone?.(battle.finished === "win");
     st.loseable = loseable;
+    this.push(st);
+  }
+  startWildBattle(species, level, opts, onDone) {
+    const battle = new WildBattle(this.data, this.save, this.battleRng, species, level);
+    battle.noCatch = opts?.noCatch === true;
+    battle.disguised = opts?.disguised === true;
+    const st = new BattleGameState(this, species, level, battle);
+    st.onDone = () => onDone?.(battle.finished);
     this.push(st);
   }
   startOldManDemo(onDone) {

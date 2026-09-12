@@ -12,7 +12,7 @@
 
 import { fromSection, type AudioBanks } from "./audio/banks.ts";
 import { AudioDirector } from "./audio/music.ts";
-import { WildBattle } from "./battle/battle.ts";
+import { WildBattle, type BattleResult } from "./battle/battle.ts";
 import { TrainerBattle } from "./battle/trainer.ts";
 import { healMon, newMon, type PartyMon } from "./battle/mon.ts";
 import { computeStaging, type BattleStaging } from "./battle/staging.ts";
@@ -927,6 +927,31 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     // Report the outcome so a script rewards only on a win (afterBattle).
     st.onDone = () => onDone?.(battle.finished === "win");
     st.loseable = loseable;
+    this.push(st);
+  }
+
+  /**
+   * A wild battle a SCRIPT opens, rather than one the encounter roll rolled
+   * — the POKEMON TOWER 6F ghost. Same WildBattle the grass builds; the opts
+   * carry the two things that make it a ghost, and onDone reports the result
+   * so the script can branch on it the way start_battle does.
+   *
+   * `pokeDoll` in the result is the wBattleResult parity the tower leans on:
+   * losing writes $1 and running writes $2, but ending it with a POKE DOLL
+   * touches neither, so the script reads it as a defeat
+   * (PokemonTower6FMarowakBattleScript's "and a / jr nz").
+   */
+  startWildBattle(
+    species: string,
+    level: number,
+    opts?: { noCatch?: boolean; disguised?: boolean },
+    onDone?: (result: BattleResult | null) => void,
+  ): void {
+    const battle = new WildBattle(this.data, this.save, this.battleRng, species, level);
+    battle.noCatch = opts?.noCatch === true;
+    battle.disguised = opts?.disguised === true;
+    const st = new BattleGameState(this, species, level, battle);
+    st.onDone = () => onDone?.(battle.finished);
     this.push(st);
   }
 
