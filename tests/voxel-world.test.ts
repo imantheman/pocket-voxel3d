@@ -855,6 +855,69 @@ describe("talking to a trainer", () => {
   });
 });
 
+describe("the S.S. Anne rival", () => {
+  test.skipIf(!hasGen)("ambushes in the cabin corridor, countering your starter", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 20));
+    game.save.flags.EVENT_CHOSE_SQUIRTLE = true;
+    ow.setMap("SS_ANNE_2F", 37, 8, "up");
+    // He is `hidden` in the map data, so there is nobody to talk to until
+    // the coord trigger shows him — which is why a talk script could not
+    // have run this scene.
+    const onMap = (): boolean => ow.npcs.some((n: any) => n.def.name === "SSANNE2F_RIVAL");
+    expect(onMap()).toBe(false);
+
+    ow.onStepComplete();
+    let guard = 0;
+    while (game.stackKinds().at(-1) !== "textbox" && guard++ < 600) game.tick(0);
+    expect(onMap()).toBe(true);
+    expect(topText(game)).toContain("Bonjour");
+
+    dismissText(game);
+    guard = 0;
+    while (game.stackKinds().at(-1) !== "battle" && guard++ < 900) game.tick(0);
+    expect(game.stackKinds().at(-1)).toBe("battle");
+    // rival_battle offsets the party by your starter: Squirtle means he took
+    // BULBASAUR, so his last mon is its middle stage.
+    const battle = (game.battleView() as { battle: any }).battle;
+    expect(battle.enemyParty.map((m: any) => m.species)).toEqual([
+      "PIDGEOTTO", "RATICATE", "KADABRA", "IVYSAUR",
+    ]);
+  });
+
+  test.skipIf(!hasGen)("beating him sets the flag and walks him out", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 20));
+    (game as any).startTrainerBattle = (
+      _id: string, _idx: number, _name: unknown, onDone: (won: boolean) => void,
+    ) => onDone(true);
+    ow.setMap("SS_ANNE_2F", 37, 8, "up");
+    ow.onStepComplete();
+    for (let i = 0; i < 1200; i++) {
+      dismissText(game);
+      if (game.save.objectToggles?.SS_ANNE_2F?.SSANNE2F_RIVAL === false) break;
+      game.tick(0);
+    }
+    expect(game.save.flags.EVENT_BEAT_SS_ANNE_RIVAL).toBe(true);
+    // hide_object is the last row: he leaves rather than standing in the hall
+    expect(game.save.objectToggles?.SS_ANNE_2F?.SSANNE2F_RIVAL).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("does not fire again once beaten", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 20));
+    game.save.flags.EVENT_BEAT_SS_ANNE_RIVAL = true;
+    ow.setMap("SS_ANNE_2F", 37, 8, "up");
+    ow.onStepComplete();
+    for (let i = 0; i < 60; i++) game.tick(0);
+    expect(game.stackKinds()).toEqual(["overworld"]);
+    expect(ow.npcs.some((n: any) => n.def.name === "SSANNE2F_RIVAL")).toBe(false);
+  });
+});
+
 describe("the town map", () => {
   /**
    * The atlas index is the COOK's product and arrives with the pak's

@@ -5044,17 +5044,34 @@ var MAP_SCRIPTS = {
     }
   },
   SS_ANNE_2F: {
-    talk: {
-      TEXT_SSANNE2F_RIVAL: [
-        ["face_player"],
-        ["check_flag", "EVENT_BEAT_SS_ANNE_RIVAL"],
-        ["jump_if_true", "end"],
+    onStep: (ow, save) => {
+      if (save?.flags?.EVENT_BEAT_SS_ANNE_RIVAL)
+        return null;
+      const p = ow?.player;
+      const x = p?.cellX;
+      const y = p?.cellY;
+      if (y !== 8 || x !== 36 && x !== 37)
+        return null;
+      const onLeft = x === 36;
+      if (p)
+        p.facing = onLeft ? "up" : "left";
+      return [
+        ["show_object", "SS_ANNE_2F", "SSANNE2F_RIVAL"],
+        ["move_npc_to", "SSANNE2F_RIVAL", 36, onLeft ? 7 : 8],
+        ["face_object", "SSANNE2F_RIVAL", onLeft ? "down" : "right"],
         ["show_text", "_SSAnne2FRivalText"],
         ["rival_battle", "OPP_RIVAL2", 1],
-        ["jump_if_false", "end"],
+        ["jump_if_false", 11],
         ["set_flag", "EVENT_BEAT_SS_ANNE_RIVAL"],
-        ["show_text", "_SSAnne2FRivalDefeatedText"]
-      ]
+        ["show_text", "_SSAnne2FRivalDefeatedText"],
+        ["show_text", "_SSAnne2FRivalCutMasterText"],
+        [
+          "walk_npc",
+          "SSANNE2F_RIVAL",
+          onLeft ? ["right", "down", "down", "down", "down", "down"] : ["down", "down", "down", "down"]
+        ],
+        ["hide_object", "SS_ANNE_2F", "SSANNE2F_RIVAL"]
+      ];
     }
   },
   SS_ANNE_CAPTAINS_ROOM: {

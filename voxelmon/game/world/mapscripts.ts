@@ -1103,21 +1103,49 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     },
   },
 
-  // story.lua M.SS_ANNE_2F: the rival battle, talk-triggered (he's visible
-  // on arrival, not hidden/ambush-triggered like the Cerulean/Route 22
-  // rivals) — after the beat flag is set, re-talking is silent.
+  // story5.lua M.SS_ANNE_2F (scripts/SSAnne2F.asm): the rival ambush in the
+  // corridor outside the captain's cabin, at the coord pair (36,8)/(37,8).
+  //
+  // This was a talk script, on the assumption he stands there to be spoken
+  // to. He does not: SSANNE2F_RIVAL is `hidden` in the map data, exactly like
+  // the Cerulean and Route 22 rivals, so nothing was ever on screen to talk
+  // to and the battle could not happen at all. show_object is what puts him
+  // there, which only the coord trigger does.
+  //
+  // His exit is keyed on the PLAYER's column, not on where he stopped
+  // (SSAnne2FRivalAfterBattleScript): from (37,8) he stands below the player
+  // and walks straight down out of the room; from (36,8) he stands above and
+  // takes .RivalWalkAroundPlayerMovement, which steps RIGHT first and then
+  // falls through into the same four downs — five downs in all.
   SS_ANNE_2F: {
-    talk: {
-      TEXT_SSANNE2F_RIVAL: [
-        ["face_player"],
-        ["check_flag", "EVENT_BEAT_SS_ANNE_RIVAL"],
-        ["jump_if_true", "end"],
-        ["show_text", "_SSAnne2FRivalText"],
-        ["rival_battle", "OPP_RIVAL2", 1],
-        ["jump_if_false", "end"],
-        ["set_flag", "EVENT_BEAT_SS_ANNE_RIVAL"],
-        ["show_text", "_SSAnne2FRivalDefeatedText"],
-      ],
+    onStep: (ow: any, save: any) => {
+      if (save?.flags?.EVENT_BEAT_SS_ANNE_RIVAL) return null;
+      const p = ow?.player;
+      const x = p?.cellX;
+      const y = p?.cellY;
+      if (y !== 8 || (x !== 36 && x !== 37)) return null;
+      const onLeft = x === 36;
+      // runAmbush's side effect: turn to face him as he arrives.
+      if (p) p.facing = onLeft ? "up" : "left";
+      return [
+        ["show_object", "SS_ANNE_2F", "SSANNE2F_RIVAL"], //        1
+        ["move_npc_to", "SSANNE2F_RIVAL", 36, onLeft ? 7 : 8], //  2
+        ["face_object", "SSANNE2F_RIVAL", onLeft ? "down" : "right"], // 3
+        ["show_text", "_SSAnne2FRivalText"], //                    4
+        ["rival_battle", "OPP_RIVAL2", 1], //                      5
+        ["jump_if_false", 11], //                                  6  loss -> hide
+        ["set_flag", "EVENT_BEAT_SS_ANNE_RIVAL"], //               7
+        ["show_text", "_SSAnne2FRivalDefeatedText"], //            8
+        ["show_text", "_SSAnne2FRivalCutMasterText"], //           9
+        [
+          "walk_npc",
+          "SSANNE2F_RIVAL",
+          onLeft
+            ? ["right", "down", "down", "down", "down", "down"]
+            : ["down", "down", "down", "down"],
+        ], //                                                     10
+        ["hide_object", "SS_ANNE_2F", "SSANNE2F_RIVAL"], //       11
+      ] as ScriptRow[];
     },
   },
 
