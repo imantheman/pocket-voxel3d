@@ -1981,13 +1981,22 @@ fn main() {
                 }
             }
         }
-        if d.contains(KeyPad::R) {
-            map_i = (map_i + 1) % map_ids.len();
-            reload = true;
-        }
-        if d.contains(KeyPad::L) {
-            map_i = (map_i + map_ids.len() - 1) % map_ids.len();
-            reload = true;
+        // L/R step the map, but ONLY in the standalone viewer. While the
+        // guest drives, the map is its business and L/R belong to the Kanto
+        // Gear's view switcher (psp-main.ts frame -> game.cycleGearView).
+        // Unguarded this fired underneath the running game: it swapped the
+        // loaded pak, then the guest's next mapShow was found to disagree and
+        // the real map was reloaded — a visible flick to another map and back
+        // on every press.
+        if !guest_drive {
+            if d.contains(KeyPad::R) {
+                map_i = (map_i + 1) % map_ids.len();
+                reload = true;
+            }
+            if d.contains(KeyPad::L) {
+                map_i = (map_i + map_ids.len() - 1) % map_ids.len();
+                reload = true;
+            }
         }
 
         if reload {

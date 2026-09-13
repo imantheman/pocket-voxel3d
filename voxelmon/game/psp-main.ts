@@ -301,13 +301,14 @@ if (nat.now && nat.perf) {
 // DOWN edge only (a held touch is one tap), and hand game.tick just the low 8
 // physical-button bits so nothing downstream sees the touch payload.
 let prevTouch = false;
-// DEBUG map-cycle edge flags (bits 26/27 of the button word — see
-// game.debugCycleMap). A rendered frame can call frame() more than once
-// (main.rs's sim-catch-up loop resends the same word for every step), so
-// this collapses those repeats into one trigger per physical L/R press the
-// same way prevTouch does for a held tap.
-let prevDebugNext = false;
-let prevDebugPrev = false;
+// L/R edge flags (bits 26/27 of the button word — outside VOX_BTN/Input on
+// purpose: the shoulder buttons have no Game Boy equivalent, so they have no
+// business in the ported input model). A rendered frame can call frame() more
+// than once (main.rs's sim-catch-up loop resends the same word for every
+// step), so this collapses those repeats into one trigger per physical press
+// the same way prevTouch does for a held tap.
+let prevGearNext = false;
+let prevGearPrev = false;
 (globalThis as unknown as { frame: (buttons: number) => void }).frame = (
   buttons: number,
 ): void => {
@@ -320,14 +321,14 @@ let prevDebugPrev = false;
     gearTouchDown(game as unknown as Parameters<typeof gearTouchDown>[0], tx, ty);
   }
   prevTouch = touching;
-  const debugNext = ((buttons >> 26) & 1) !== 0;
-  const debugPrev = ((buttons >> 27) & 1) !== 0;
+  const gearNext = ((buttons >> 26) & 1) !== 0;
+  const gearPrev = ((buttons >> 27) & 1) !== 0;
   // L/R step the Kanto Gear's view (PARTY / MAP / ...). They used to cycle
   // the overworld map for debugging; the DEV menu's WARP picker replaced that.
-  if (debugNext && !prevDebugNext) game.cycleGearView(1);
-  if (debugPrev && !prevDebugPrev) game.cycleGearView(-1);
-  prevDebugNext = debugNext;
-  prevDebugPrev = debugPrev;
+  if (gearNext && !prevGearNext) game.cycleGearView(1);
+  if (gearPrev && !prevGearPrev) game.cycleGearView(-1);
+  prevGearNext = gearNext;
+  prevGearPrev = gearPrev;
   game.tick(phys);
   // Kanto Gear companion: redraw the bottom-screen surface from current game
   // state. A host without a second screen ignores the UI_*_BOTTOM ops.

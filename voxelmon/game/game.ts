@@ -516,27 +516,6 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     }
   }
 
-  /**
-   * DEBUG ONLY — cycles to the next/previous cooked map, landing at that
-   * map's own first warp tile (its nearest door), for testing map geometry
-   * (vertex-budget fixes, tileset issues) without walking the whole route.
-   * Triggered by the 3DS host's L/R shoulder buttons (psp-main.ts frame(),
-   * button-word bits 26/27) — outside VOX_BTN/Input on purpose: L/R have no
-   * Game Boy equivalent, so this has no business in the ported input model.
-   * A no-op mid-battle/mid-transition, or with fewer than 2 cooked maps.
-   */
-  debugCycleMap(direction: 1 | -1): void {
-    if (this.battleView() || this.overworld.transitioning) return;
-    const list = this.data.cookedMaps;
-    if (!list || list.length < 2) return;
-    const curId = this.overworld.map.id;
-    let i = list.indexOf(curId);
-    if (i < 0) i = 0;
-    i = (i + direction + list.length) % list.length;
-    const targetId = list[i]!;
-    const dw = this.data.maps?.[targetId]?.warps?.[0];
-    this.overworld.startWarpTo(targetId, dw?.x ?? 4, dw?.y ?? 4, "down");
-  }
 
   /** Frames since save.playTime last ticked over; never persisted. */
   private playTimeFrames = 0;

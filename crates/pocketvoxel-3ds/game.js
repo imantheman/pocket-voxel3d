@@ -10652,21 +10652,6 @@ class VoxelmonGame {
       }
     }
   }
-  debugCycleMap(direction) {
-    if (this.battleView() || this.overworld.transitioning)
-      return;
-    const list2 = this.data.cookedMaps;
-    if (!list2 || list2.length < 2)
-      return;
-    const curId = this.overworld.map.id;
-    let i = list2.indexOf(curId);
-    if (i < 0)
-      i = 0;
-    i = (i + direction + list2.length) % list2.length;
-    const targetId = list2[i];
-    const dw = this.data.maps?.[targetId]?.warps?.[0];
-    this.overworld.startWarpTo(targetId, dw?.x ?? 4, dw?.y ?? 4, "down");
-  }
   playTimeFrames = 0;
   advancePlayTime() {
     this.playTimeFrames += 1;
@@ -11384,8 +11369,8 @@ if (nat.now && nat.perf) {
   };
 }
 var prevTouch = false;
-var prevDebugNext = false;
-var prevDebugPrev = false;
+var prevGearNext = false;
+var prevGearPrev = false;
 globalThis.frame = (buttons) => {
   const phys = buttons & 255;
   const touching = (buttons >> 8 & 1) !== 0;
@@ -11395,14 +11380,14 @@ globalThis.frame = (buttons) => {
     gearTouchDown(game, tx, ty);
   }
   prevTouch = touching;
-  const debugNext = (buttons >> 26 & 1) !== 0;
-  const debugPrev = (buttons >> 27 & 1) !== 0;
-  if (debugNext && !prevDebugNext)
+  const gearNext = (buttons >> 26 & 1) !== 0;
+  const gearPrev = (buttons >> 27 & 1) !== 0;
+  if (gearNext && !prevGearNext)
     game.cycleGearView(1);
-  if (debugPrev && !prevDebugPrev)
+  if (gearPrev && !prevGearPrev)
     game.cycleGearView(-1);
-  prevDebugNext = debugNext;
-  prevDebugPrev = debugPrev;
+  prevGearNext = gearNext;
+  prevGearPrev = gearPrev;
   game.tick(phys);
   drawKantoGear(host, game);
 };
