@@ -36,6 +36,7 @@ import { encodeGlyphs, glyphLen, MAX_COLS } from "../voxelmon/game/ui/tiles.ts";
 import { GameMap } from "../voxelmon/game/world/map.ts";
 import { martStock } from "../voxelmon/game/world/marts.ts";
 import { computeNeighbors } from "../voxelmon/game/world/overworld.ts";
+import { daycareFee, learnMovesFromDayCare } from "../voxelmon/game/world/daycare.ts";
 import { paginate, Textbox } from "../voxelmon/game/world/textbox.ts";
 import { parseTape, TapePlayer, TapeStallError } from "../voxelmon/game/sim/tape.ts";
 
@@ -1983,5 +1984,209 @@ describe("trainer card", () => {
     expect(game.save.playTime).toBe(1);
     game.tick(0);
     expect(game.save.playTime).toBe(2);
+  });
+});
+
+describe("the day care", () => {
+  function dcGame(): VoxelmonGame {
+    const data = {
+      ...(romData as object),
+      cookedMaps: [...((romData as { cookedMaps?: string[] }).cookedMaps ?? []), "DAYCARE"],
+    };
+    const game = new VoxelmonGame(data as never, new MenuHost(), 1);
+    game.newGame();
+    game.closeToOverworld();
+    return game;
+  }
+
+  /** A party of `n`, so the "you only have one" branch can be aimed at. */
+  function party(game: VoxelmonGame, n: number, level = 10): void {
+    game.save.party = [];
+    for (let i = 0; i < n; i++) {
+      game.save.party.push(newMon(game.data, i === 0 ? "PIDGEY" : "RATTATA", level, seqRng([0])));
+    }
+  }
+
+  /**
+   * Talk to the gentleman and answer as we go: each `answers` entry feeds the
+   * next YES/NO, and `pick` (when given) picks that party slot.
+   */
+  function talkDaycare(
+    game: VoxelmonGame, answers: boolean[], pick?: number,
+  ): Set<string> {
+    const seen = new Set<string>();
+    game.overworld.setMap("DAYCARE", 2, 4, "up");
+    game.overworld.showMapText("TEXT_DAYCARE_GENTLEMAN");
+    const queue = answers.slice();
+    let picked = pick === undefined;
+    for (let i = 0; i < 1200; i++) {
+      const top = game.stackKinds().at(-1);
+      if (top) seen.add(top);
+      if (top === "choice" && queue.length > 0) {
+        if (!queue.shift()) tap(game, VOX_BTN.down);
+        tap(game, VOX_BTN.a);
+        continue;
+      }
+      if (top === "party" && !picked) {
+        for (let k = 0; k < pick!; k++) tap(game, VOX_BTN.down);
+        tap(game, VOX_BTN.a);
+        picked = true;
+        continue;
+      }
+      const runner = (game.overworld as unknown as { runner: { isRunning(): boolean } }).runner;
+      if (top === "overworld" && !runner.isRunning()) break;
+      dismissText(game);
+      game.tick(0);
+    }
+    return seen;
+  }
+
+  test.skipIf(!hasGen)("he boards the mon you pick, and the walk earns it exp", () => {
+    const game = dcGame();
+    party(game, 2);
+    talkDaycare(game, [true], 1); // hand over the second one
+    expect(game.save.party.length).toBe(1);
+    expect(game.save.daycare?.mon?.species).toBe("RATTATA");
+    expect(game.save.daycare?.depositLevel).toBe(10);
+    expect(game.save.daycare?.steps).toBe(0);
+
+    // one exp per step taken ANYWHERE, not just on his map
+    game.overworld.setMap("PALLET_TOWN", 5, 6, "down");
+    walk(game, VOX_BTN.up, 3);
+    expect(game.save.daycare?.steps).toBe(3);
+  });
+
+  test.skipIf(!hasGen)("he will not take your last mon", () => {
+    const game = dcGame();
+    party(game, 1);
+    // he refuses before the chooser: it must never open, or he would be
+    // taking the mon and just failing to record it
+    const seen = talkDaycare(game, [true]);
+    expect(seen.has("party")).toBe(false);
+    expect(game.save.daycare ?? null).toBe(null);
+    expect(game.save.party.length).toBe(1);
+
+    // with a second one he gets that far
+    party(game, 2);
+    expect(talkDaycare(game, [true], 1).has("party")).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("declining the fee leaves the mon boarded, unchanged", () => {
+    const game = dcGame();
+    party(game, 2);
+    talkDaycare(game, [true], 1);
+    const mon = game.save.daycare!.mon;
+    const def = game.data.pokemon[mon.species]!;
+    // enough exp for two levels
+    mon.exp = expForLevel(def.growthRate, 12, game.data.growth_rates);
+    game.save.money = 9999;
+
+    talkDaycare(game, [false]); // "All right then, come again."
+    expect(game.save.money).toBe(9999);
+    expect(game.save.party.length).toBe(1);
+    expect(game.save.daycare?.mon?.level).toBe(10); // not raised until paid
+    expect(game.save.daycare?.depositLevel).toBe(10);
+  });
+
+  test.skipIf(!hasGen)("an empty wallet cannot collect, and is quoted the same later", () => {
+    const game = dcGame();
+    party(game, 2);
+    talkDaycare(game, [true], 1);
+    const mon = game.save.daycare!.mon;
+    const def = game.data.pokemon[mon.species]!;
+    mon.exp = expForLevel(def.growthRate, 12, game.data.growth_rates);
+    game.save.money = 100; // the fee is 100 + 2 x 100
+
+    talkDaycare(game, [true]);
+    expect(game.save.party.length).toBe(1);
+    expect(game.save.money).toBe(100);
+
+    game.save.money = 300;
+    talkDaycare(game, [true]);
+    expect(game.save.party.length).toBe(2);
+    expect(game.save.money).toBe(0);
+    expect(game.save.party[1]!.level).toBe(12);
+  });
+
+  test.skipIf(!hasGen)("paying up returns the mon grown, healed and re-statted", () => {
+    const game = dcGame();
+    party(game, 2);
+    talkDaycare(game, [true], 1);
+    const state = game.save.daycare!;
+    const before = { ...state.mon.stats };
+    const def = game.data.pokemon[state.mon.species]!;
+    state.mon.exp = expForLevel(def.growthRate, 15, game.data.growth_rates);
+    state.mon.hp = 1;
+    game.save.money = 5000;
+
+    talkDaycare(game, [true]);
+    expect(game.save.daycare ?? null).toBe(null);
+    const back = game.save.party[1]!;
+    expect(back.level).toBe(15);
+    expect(game.save.money).toBe(5000 - (100 + 5 * 100));
+    expect(back.stats.hp).toBeGreaterThan(before.hp);
+    expect(back.hp).toBe(back.stats.hp); // comes back at full health
+  });
+
+  test.skipIf(!hasGen)("a full party has nowhere to put him", () => {
+    const game = dcGame();
+    party(game, 2);
+    talkDaycare(game, [true], 1);
+    party(game, 6); // filled up while he was away — note this drops nothing else
+    game.save.daycare = {
+      mon: newMon(game.data, "RATTATA", 10, seqRng([0])), steps: 0, depositLevel: 10,
+    };
+    game.save.money = 5000;
+    talkDaycare(game, [true]);
+    expect(game.save.party.length).toBe(6);
+    expect(game.save.daycare?.mon?.species).toBe("RATTATA");
+    expect(game.save.money).toBe(5000);
+  });
+
+  test.skipIf(!hasGen)("the steps are folded in once, not counted again", () => {
+    const game = dcGame();
+    party(game, 2);
+    talkDaycare(game, [true], 1);
+    game.save.daycare!.steps = 5000;
+    const exp0 = game.save.daycare!.mon.exp ?? 0;
+
+    talkDaycare(game, [false]); // look, then walk away
+    expect(game.save.daycare!.steps).toBe(0);
+    expect(game.save.daycare!.mon.exp).toBe(exp0 + 5000);
+
+    talkDaycare(game, [false]); // a second look adds nothing
+    expect(game.save.daycare!.mon.exp).toBe(exp0 + 5000);
+  });
+
+  test.skipIf(!hasGen)("he turns away a mon carrying an HM move", () => {
+    const game = dcGame();
+    party(game, 2);
+    game.save.party[1]!.moves = [{ id: "CUT", pp: 30 }];
+    talkDaycare(game, [true], 1);
+    expect(game.save.daycare ?? null).toBe(null);
+    expect(game.save.party.length).toBe(2);
+    // the one without it still boards
+    talkDaycare(game, [true], 0);
+    expect(game.save.daycare?.mon?.species).toBe("PIDGEY");
+  });
+
+  test("the fee is 100 flat plus 100 a level", () => {
+    expect(daycareFee(0)).toBe(100);
+    expect(daycareFee(1)).toBe(200);
+    expect(daycareFee(7)).toBe(800);
+  });
+
+  test.skipIf(!hasGen)("day-care learning shifts the oldest move out, with no prompt", () => {
+    const mon = newMon(romData!, "PIDGEY", 5, seqRng([0]));
+    mon.moves = [
+      { id: "TACKLE", pp: 35 }, { id: "GROWL", pp: 40 },
+      { id: "TAIL_WHIP", pp: 30 }, { id: "LEER", pp: 30 },
+    ];
+    learnMovesFromDayCare(romData!, mon, 5, 30);
+    expect(mon.moves.length).toBe(4);
+    expect(mon.moves.some((m) => m.id === "TACKLE")).toBe(false); // pushed off the front
+    const learnt = romData!.pokemon.PIDGEY!.learnset
+      .filter((e) => e.level > 5 && e.level <= 30).at(-1)!.move;
+    expect(mon.moves.at(-1)!.id).toBe(learnt);
   });
 });

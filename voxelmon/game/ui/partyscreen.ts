@@ -54,8 +54,15 @@ export class PartyState implements GameState {
    * ChoosePokemon-for-an-item mode): picking a mon closes the screen and
    * hands its index back instead of opening the STATS/SWITCH submenu. The
    * bag uses it to pick who learns a TM/HM.
+   *
+   * `opts.onCancel` fires instead when the pick is backed out of. A caller
+   * that yielded a script on the choice needs it -- without one, pressing B
+   * would leave the runner waiting for a resume that never comes.
    */
-  constructor(private game: PartyGame, private opts?: { onPick?: (index: number) => void }) {}
+  constructor(
+    private game: PartyGame,
+    private opts?: { onPick?: (index: number) => void; onCancel?: () => void },
+  ) {}
 
   private party(): PartyMon[] {
     return (this.game.save.party ?? []) as PartyMon[];
@@ -70,6 +77,7 @@ export class PartyState implements GameState {
     if (p.b || (p.a && this.index === n - 1)) {
       if (this.swapFrom !== null) { this.swapFrom = null; return; } // cancel the swap
       this.game.pop();
+      this.opts?.onCancel?.();
       return;
     }
     if (p.a && this.index < this.party().length) {

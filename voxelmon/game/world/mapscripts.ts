@@ -1326,6 +1326,15 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     },
   },
 
+  // story2.lua M.DAYCARE (scripts/Daycare.asm). Every line, the party pick
+  // and the fee are in game.ts openDaycare — the flow branches mid-way on a
+  // chooser, which script rows cannot express.
+  DAYCARE: {
+    talk: {
+      TEXT_DAYCARE_GENTLEMAN: [["open_daycare"]],
+    },
+  },
+
   // story.lua M.SS_ANNE_CAPTAINS_ROOM (scripts/SSAnneCaptainsRoom.asm): rub
   // his back, he hands over HM01 CUT.
   SS_ANNE_CAPTAINS_ROOM: {

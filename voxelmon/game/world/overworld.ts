@@ -22,6 +22,7 @@ import { Player } from "./player.ts";
 import { talkScript, itemBallScript, itemBallFlag, TEXT_BILLSHOUSE_PC } from "./mapscripts.ts";
 import { LAST_MAP_REWRITES, rewrittenLastMap } from "./lastmap.ts";
 import { martGreetScript } from "./marts.ts";
+import type { DaycareState } from "./daycare.ts";
 import {
   inSafariStepZone,
   SAFARI_BALLS,
@@ -99,6 +100,12 @@ export interface SaveSlice {
    * left. Absent when no game is running, which is every gate in the feature.
    */
   safari?: { balls: number; steps: number } | null;
+  /**
+   * The Route 5 DAY CARE's boarder (world/daycare.ts). Absent/null when no
+   * mon is in. The steps here are the deferred exp: the walk is only folded
+   * into the mon when the player comes to collect it.
+   */
+  daycare?: DaycareState | null;
   /** Money, for the Safari gate's fee and the coin clerk. */
   money?: number;
   /** wPlayerCoins — the GAME CORNER's currency, capped at 9999. */
@@ -930,6 +937,13 @@ export class Overworld implements ScriptWorld {
     }).openPrizes?.(window, onDone);
   }
 
+  /** open_daycare -> the DAY CARE gentleman's flow, via the shell. */
+  openDaycare(onDone?: () => void): void {
+    (this.shell as unknown as {
+      openDaycare?: (done?: () => void) => void;
+    }).openDaycare?.(onDone);
+  }
+
   /** Commands.lua:587 heal_party. */
   healParty(): void {
     this.shell.healParty();
@@ -1076,6 +1090,11 @@ export class Overworld implements ScriptWorld {
     // safari_game.asm runs BEFORE the land triggers and the warp check: when
     // the timer runs out the PA takes the step over entirely.
     if (this.safariStep()) return;
+    // Daycare.asm: the boarded mon earns one exp per step the player takes,
+    // anywhere. Only counted here — it is folded into the mon at collection
+    // (OverworldController.lua:3522).
+    const dc = this.save.daycare;
+    if (dc?.mon) dc.steps = (dc.steps ?? 0) + 1;
     // The Route 22 gate rewrites wLastMap from the player's row, so it has to
     // be re-read as they move — before the warp check below reads it.
     this.syncLastMapRewrite();

@@ -37,6 +37,9 @@ import {
 } from "./scene.ts";
 import { Overworld, type OverworldShell, type SaveSlice } from "./world/overworld.ts";
 import { inSafariStepZone, type SafariState } from "./world/safari.ts";
+import {
+  applyDaycareGrowth, daycareQuote, fillDaycareText, type DaycareState,
+} from "./world/daycare.ts";
 import { Textbox, TEXT_SPEED_DEFAULT, type TextboxOpts } from "./world/textbox.ts";
 import { NamingState } from "./ui/naming.ts";
 import { TitleState, TITLE_PAGES } from "./ui/title.ts";
@@ -962,6 +965,138 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       return [];
     }
     return this.overworld.picShown;
+  }
+
+  /**
+   * The DAY CARE gentleman (world/daycare.ts). Written as a flow rather than
+   * script rows because it branches on a party pick in the middle, the same
+   * reason the prize window is its own state.
+   */
+  openDaycare(onDone?: () => void): void {
+    const t = (this.data as { text?: Record<string, string> }).text ?? {};
+    const line = (k: string, fallback: string): string => t[k] ?? fallback;
+    const dc = (this.save as { daycare?: DaycareState | null }).daycare;
+    const name = (m: PartyMon): string =>
+      m.nickname ?? this.data.pokemon[m.species]?.name ?? m.species;
+    if (dc?.mon) { this.daycareCollect(dc, onDone); return; }
+
+    this.showChoice(line("_DaycareGentlemanIntroText", "I run a DAYCARE."), (yes) => {
+      if (!yes) {
+        this.showText(line("_DaycareGentlemanComeAgainText", "come again."), onDone);
+        return;
+      }
+      // He will not take your last one — you would be left with nothing.
+      if (this.save.party.length < 2) {
+        this.showText(
+          line("_DaycareGentlemanOnlyHaveOneMonText", "You only have one\nPOKéMON with you."),
+          onDone,
+        );
+        return;
+      }
+      this.showText(line("_DaycareGentlemanWhichMonText", "Which POKéMON\nshould I raise?"), () => {
+        this.push(new PartyState(this as never, {
+          onCancel: () => onDone?.(),
+          onPick: (i: number) => {
+            const mon = this.save.party[i];
+            if (!mon) { onDone?.(); return; }
+            // A mon carrying an HM cannot be boarded: the move would go with
+            // it and could strand the player. (The ROM carries this line;
+            // gen1recomp's script does not use it.)
+            if (mon.moves.some((mv) => this.hmMoveIds().has(mv.id))) {
+              this.showText(
+                line("_DaycareGentlemanCantAcceptMonWithHMText",
+                  "I can't accept a\nPOKéMON that\nknows an HM move."),
+                onDone,
+              );
+              return;
+            }
+            this.save.party.splice(i, 1);
+            (this.save as { daycare?: DaycareState | null }).daycare = {
+              mon, steps: 0, depositLevel: mon.level,
+            };
+            const said = fillDaycareText(
+              line("_DaycareGentlemanWillLookAfterMonText", "Fine, I'll look\nafter {RAM:wNameBuffer}."),
+              { wNameBuffer: name(mon) },
+            );
+            this.showText(said, () => {
+              this.showText(
+                line("_DaycareGentlemanComeSeeMeInAWhileText", "Come see me in\na while."),
+                onDone,
+              );
+            });
+          },
+        }));
+      });
+    });
+  }
+
+  /** The collection half: the quote, the fee, and only then the growth. */
+  private daycareCollect(dc: DaycareState, onDone?: () => void): void {
+    const t = (this.data as { text?: Record<string, string> }).text ?? {};
+    const line = (k: string, fallback: string): string => t[k] ?? fallback;
+    const mon = dc.mon;
+    const monName = mon.nickname ?? this.data.pokemon[mon.species]?.name ?? mon.species;
+    const cap = this.data.constants?.levelCap ?? 100;
+    const quote = daycareQuote(this.data, dc, cap);
+    // Fold the walk in ONCE: leaving the steps on the record would count the
+    // same distance again on the next visit.
+    mon.exp = quote.exp;
+    dc.steps = 0;
+    const subs = {
+      wNameBuffer: monName,
+      wDayCareMonName: monName,
+      wDayCareNumLevelsGrown: quote.levelsGrown,
+      wDayCareTotalCost: quote.fee,
+    };
+    const status = quote.levelsGrown > 0
+      ? line("_DaycareGentlemanMonHasGrownText", "Your {RAM:wNameBuffer}\nhas grown a lot!")
+      : line("_DaycareGentlemanMonNeedsMoreTimeText", "Back already?");
+    this.showText(fillDaycareText(status, subs), () => {
+      if (this.save.party.length >= 6) {
+        this.showText(
+          line("_DaycareGentlemanNoRoomForMonText", "You have no room\nfor this POKéMON!"),
+          onDone,
+        );
+        return;
+      }
+      const owe = fillDaycareText(
+        line("_DaycareGentlemanOweMoneyText", "You owe me ¥{NUM:wDayCareTotalCost}\nfor the return\nof this POKéMON."),
+        subs,
+      );
+      this.showChoice(owe, (yes) => {
+        if (!yes) {
+          this.showText(
+            line("_DaycareGentlemanAllRightThenText", "All right then,\n")
+              + line("_DaycareGentlemanComeAgainText", "come again."),
+            onDone,
+          );
+          return;
+        }
+        if ((this.save.money ?? 0) < quote.fee) {
+          this.showText(
+            line("_DaycareGentlemanNotEnoughMoneyText", "Hey, you don't\nhave enough ¥!"),
+            onDone,
+          );
+          return;
+        }
+        this.save.money = (this.save.money ?? 0) - quote.fee;
+        applyDaycareGrowth(this.data, mon, dc.depositLevel ?? mon.level, quote.newLevel);
+        this.save.party.push(mon);
+        (this.save as { daycare?: DaycareState | null }).daycare = null;
+        this.showText(
+          line("_DaycareGentlemanHeresYourMonText", "Thank you! Here's\nyour POKéMON!"),
+          () => {
+            this.showText(
+              fillDaycareText(
+                line("_DaycareGentlemanGotMonBackText", "{PLAYER} got\n{RAM:wDayCareMonName} back!"),
+                subs,
+              ),
+              onDone,
+            );
+          },
+        );
+      });
+    });
   }
 
   /** A slot seat -> the machine (ui/slotmachine.ts). */

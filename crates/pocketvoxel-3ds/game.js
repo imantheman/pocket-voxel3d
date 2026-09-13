@@ -5600,6 +5600,11 @@ var MAP_SCRIPTS = {
       TEXT_GAMECORNERPRIZEROOM_PRIZE_VENDOR_3: prizeCounterRows(3)
     }
   },
+  DAYCARE: {
+    talk: {
+      TEXT_DAYCARE_GENTLEMAN: [["open_daycare"]]
+    }
+  },
   SS_ANNE_CAPTAINS_ROOM: {
     talk: {
       TEXT_SSANNECAPTAINSROOM_CAPTAIN: [
@@ -6268,6 +6273,14 @@ function* open_prizes(ctx, ...args) {
   w.openPrizes(args[0], () => runner.resume());
   yield;
 }
+function* open_daycare(ctx) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  if (!w.openDaycare)
+    return;
+  w.openDaycare(() => runner.resume());
+  yield;
+}
 function* take_guard_drink(ctx) {
   const save = ctx.world.save;
   for (const drink of GUARD_DRINKS) {
@@ -6431,6 +6444,7 @@ var VERBS = {
   check_coins_below,
   give_coins,
   open_prizes,
+  open_daycare,
   safari_start,
   safari_end,
   take_guard_drink,
@@ -7161,6 +7175,9 @@ any coins!`);
   openPrizes(window, onDone) {
     this.shell.openPrizes?.(window, onDone);
   }
+  openDaycare(onDone) {
+    this.shell.openDaycare?.(onDone);
+  }
   healParty() {
     this.shell.healParty();
   }
@@ -7251,6 +7268,9 @@ GAME is over!`;
   onStepComplete() {
     if (this.safariStep())
       return;
+    const dc = this.save.daycare;
+    if (dc?.mon)
+      dc.steps = (dc.steps ?? 0) + 1;
     this.syncLastMapRewrite();
     if (!this.runner.isRunning()) {
       const label3 = this.map?.id ?? "";
@@ -8983,6 +9003,57 @@ class Scene {
   }
 }
 
+// voxelmon/game/world/daycare.ts
+var DAYCARE_BASE_FEE = 100;
+var DAYCARE_FEE_PER_LEVEL = 100;
+function daycareFee(levelsGrown) {
+  return DAYCARE_BASE_FEE + levelsGrown * DAYCARE_FEE_PER_LEVEL;
+}
+function daycareQuote(data, state, levelCap = 100) {
+  const def = data.pokemon[state.mon.species];
+  let exp = (state.mon.exp ?? 0) + state.steps;
+  let newLevel = levelForExp(def?.growthRate ?? "MEDIUM_FAST", exp, levelCap, data.growth_rates);
+  if (newLevel >= levelCap) {
+    newLevel = levelCap;
+    if (def)
+      exp = expForLevel(def.growthRate, levelCap, data.growth_rates);
+  }
+  const levelsGrown = Math.max(0, newLevel - (state.depositLevel ?? state.mon.level));
+  return { exp, newLevel, levelsGrown, fee: daycareFee(levelsGrown) };
+}
+function applyDaycareGrowth(data, mon, startLevel, newLevel) {
+  const def = data.pokemon[mon.species];
+  if (!def)
+    return;
+  mon.level = newLevel;
+  mon.stats = calc(def, mon.level, mon.dvs, mon.statExp);
+  mon.hp = mon.stats.hp;
+  learnMovesFromDayCare(data, mon, startLevel, newLevel);
+}
+function learnMovesFromDayCare(data, mon, startLevel, newLevel) {
+  const learnset = data.pokemon[mon.species]?.learnset;
+  if (!Array.isArray(learnset))
+    return;
+  for (const entry of learnset) {
+    if (entry.level > newLevel)
+      break;
+    if (entry.level <= startLevel)
+      continue;
+    if (mon.moves.some((mv) => mv.id === entry.move))
+      continue;
+    const slot = { id: entry.move, pp: data.moves[entry.move]?.pp ?? 0 };
+    if (mon.moves.length < 4)
+      mon.moves.push(slot);
+    else {
+      mon.moves.shift();
+      mon.moves.push(slot);
+    }
+  }
+}
+function fillDaycareText(text, subs) {
+  return text.replace(/\{RAM:([^}]*)\}/g, (_, name) => String(subs[name] ?? "")).replace(/\{NUM:([\w_]+)[^}]*\}/g, (_, name) => String(subs[name] ?? 0));
+}
+
 // voxelmon/game/world/textbox.ts
 var TEXT_SPEEDS = [
   { delay: 1, label: "FAST" },
@@ -10674,6 +10745,7 @@ class PartyState {
         return;
       }
       this.game.pop();
+      this.opts?.onCancel?.();
       return;
     }
     if (p.a && this.index < this.party().length) {
@@ -12388,6 +12460,107 @@ ${mname}!`);
       return [];
     }
     return this.overworld.picShown;
+  }
+  openDaycare(onDone) {
+    const t = this.data.text ?? {};
+    const line = (k, fallback) => t[k] ?? fallback;
+    const dc = this.save.daycare;
+    const name = (m) => m.nickname ?? this.data.pokemon[m.species]?.name ?? m.species;
+    if (dc?.mon) {
+      this.daycareCollect(dc, onDone);
+      return;
+    }
+    this.showChoice(line("_DaycareGentlemanIntroText", "I run a DAYCARE."), (yes) => {
+      if (!yes) {
+        this.showText(line("_DaycareGentlemanComeAgainText", "come again."), onDone);
+        return;
+      }
+      if (this.save.party.length < 2) {
+        this.showText(line("_DaycareGentlemanOnlyHaveOneMonText", `You only have one
+POKéMON with you.`), onDone);
+        return;
+      }
+      this.showText(line("_DaycareGentlemanWhichMonText", `Which POKéMON
+should I raise?`), () => {
+        this.push(new PartyState(this, {
+          onCancel: () => onDone?.(),
+          onPick: (i) => {
+            const mon = this.save.party[i];
+            if (!mon) {
+              onDone?.();
+              return;
+            }
+            if (mon.moves.some((mv) => this.hmMoveIds().has(mv.id))) {
+              this.showText(line("_DaycareGentlemanCantAcceptMonWithHMText", `I can't accept a
+POKéMON that
+knows an HM move.`), onDone);
+              return;
+            }
+            this.save.party.splice(i, 1);
+            this.save.daycare = {
+              mon,
+              steps: 0,
+              depositLevel: mon.level
+            };
+            const said = fillDaycareText(line("_DaycareGentlemanWillLookAfterMonText", `Fine, I'll look
+after {RAM:wNameBuffer}.`), { wNameBuffer: name(mon) });
+            this.showText(said, () => {
+              this.showText(line("_DaycareGentlemanComeSeeMeInAWhileText", `Come see me in
+a while.`), onDone);
+            });
+          }
+        }));
+      });
+    });
+  }
+  daycareCollect(dc, onDone) {
+    const t = this.data.text ?? {};
+    const line = (k, fallback) => t[k] ?? fallback;
+    const mon = dc.mon;
+    const monName = mon.nickname ?? this.data.pokemon[mon.species]?.name ?? mon.species;
+    const cap = this.data.constants?.levelCap ?? 100;
+    const quote2 = daycareQuote(this.data, dc, cap);
+    mon.exp = quote2.exp;
+    dc.steps = 0;
+    const subs = {
+      wNameBuffer: monName,
+      wDayCareMonName: monName,
+      wDayCareNumLevelsGrown: quote2.levelsGrown,
+      wDayCareTotalCost: quote2.fee
+    };
+    const status = quote2.levelsGrown > 0 ? line("_DaycareGentlemanMonHasGrownText", `Your {RAM:wNameBuffer}
+has grown a lot!`) : line("_DaycareGentlemanMonNeedsMoreTimeText", "Back already?");
+    this.showText(fillDaycareText(status, subs), () => {
+      if (this.save.party.length >= 6) {
+        this.showText(line("_DaycareGentlemanNoRoomForMonText", `You have no room
+for this POKéMON!`), onDone);
+        return;
+      }
+      const owe = fillDaycareText(line("_DaycareGentlemanOweMoneyText", `You owe me ¥{NUM:wDayCareTotalCost}
+for the return
+of this POKéMON.`), subs);
+      this.showChoice(owe, (yes) => {
+        if (!yes) {
+          this.showText(line("_DaycareGentlemanAllRightThenText", `All right then,
+`) + line("_DaycareGentlemanComeAgainText", "come again."), onDone);
+          return;
+        }
+        if ((this.save.money ?? 0) < quote2.fee) {
+          this.showText(line("_DaycareGentlemanNotEnoughMoneyText", `Hey, you don't
+have enough ¥!`), onDone);
+          return;
+        }
+        this.save.money = (this.save.money ?? 0) - quote2.fee;
+        applyDaycareGrowth(this.data, mon, dc.depositLevel ?? mon.level, quote2.newLevel);
+        this.save.party.push(mon);
+        this.save.daycare = null;
+        this.showText(line("_DaycareGentlemanHeresYourMonText", `Thank you! Here's
+your POKéMON!`), () => {
+          this.showText(fillDaycareText(line("_DaycareGentlemanGotMonBackText", `{PLAYER} got
+{RAM:wDayCareMonName} back!`), subs), onDone);
+        });
+      });
+    });
   }
   openSlots(lucky) {
     this.push(new SlotMachineState(this, this.battleRng, lucky));

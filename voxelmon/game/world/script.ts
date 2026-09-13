@@ -564,6 +564,19 @@ function* open_prizes(ctx: ScriptContext, ...args: unknown[]): Generator<void, v
 }
 
 /**
+ * The Route 5 DAY CARE gentleman (scripts/Daycare.asm). Deposit and
+ * collection both branch on choices made mid-flow, so the whole thing lives
+ * on the game side (game.ts openDaycare) and the script only waits for it.
+ */
+function* open_daycare(ctx: ScriptContext): Generator<void, void> {
+  const runner = ctx.runner;
+  const w = ctx.world as unknown as { openDaycare?: (done: () => void) => void };
+  if (!w.openDaycare) return;
+  w.openDaycare(() => runner.resume());
+  yield;
+}
+
+/**
  * RemoveGuardDrink (engine/items/inventory.asm): take ONE of the three
  * drinks from the bag and set the flag that opens all four Saffron gates.
  * lastCheck reports whether there was one to take.
@@ -808,6 +821,7 @@ const VERBS: Record<string, Verb> = {
   check_coins_below,
   give_coins,
   open_prizes,
+  open_daycare,
   safari_start,
   safari_end,
   take_guard_drink,
