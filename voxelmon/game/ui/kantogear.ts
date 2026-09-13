@@ -24,6 +24,7 @@ import {
   BORDER_TR,
   BORDER_V,
 } from "./tiles.ts";
+import { UI_TILE } from "../../../contracts/spec/voxel-spec.ts";
 import { hpBarTiles } from "../battle/ui.ts";
 import { picPageFor } from "../battle/staging.ts";
 import type { VoxelHost } from "../host.ts";
@@ -541,33 +542,52 @@ function activeView(game: GearGame): GearViewId {
   return gearTabs(game).some((t) => t.id === want) ? want : "party";
 }
 
-/** Where tab `i` starts, in cells. Kept in one place so the hit test and the
- * draw cannot drift apart. */
-function tabX(tabs: GearTab[], i: number): number {
-  let x = 0;
-  for (let j = 0; j < i; j++) x += tabs[j]!.label.length + 2;
-  return x;
-}
-
-/** The tab strip on row 1: the active tab inverted, the rest outlined. */
-function drawTabs(host: VoxelHost, game: GearGame): void {
+/** The view after `from`, `dir` steps along. Wraps. */
+export function gearViewStep(game: GearGame, dir: 1 | -1): GearViewId {
   const tabs = gearTabs(game);
-  if (tabs.length < 2) return; // nothing to switch between; keep the row clear
-  const active = activeView(game);
-  tabs.forEach((t, i) => {
-    const x = tabX(tabs, i);
-    const w = t.label.length + 2;
-    if (t.id === active) {
-      fillCellBottom(host, x, TAB_ROW, w, 1);
-      stampFill(host, x + 1, TAB_ROW, t.label);
-    } else {
-      stampBottom(host, x + 1, TAB_ROW, t.label, DARKTEXT_BIT);
-    }
-  });
+  const at = Math.max(0, tabs.findIndex((t) => t.id === activeView(game)));
+  return tabs[(at + dir + tabs.length) % tabs.length]!.id;
 }
 
-/** Row the tab strip lives on, under the dark status bar. */
-const TAB_ROW = 1;
+/**
+ * The view name centred on the status bar between a matched pair of arrows,
+ * the way the Kanto Gear mod titles its screens — the shoulder buttons step
+ * it, and the arrows are tappable for the same thing.
+ *
+ * Centred in the space LEFT of the clock rather than on the bar, so a long
+ * name cannot run into it.
+ */
+const CLOCK_COL = COLS - 8;
+
+function drawGearHeader(host: VoxelHost, game: GearGame, label: string): void {
+  const many = gearTabs(game).length > 1;
+  const w = label.length + (many ? 4 : 0);
+  const x = Math.max(0, Math.floor((CLOCK_COL - w) / 2));
+  if (many) {
+    host.uiTileBottom(x, 0, UI_TILE.arrowLeft | LIGHT_BIT);
+    host.uiTileBottom(x + w - 1, 0, ARROW_CURSOR | LIGHT_BIT);
+  }
+  stampLight(host, x + (many ? 2 : 0), 0, label);
+  const t = clockStr();
+  if (t) stampLight(host, Math.max(0, COLS - t.length - 1), 0, t);
+}
+
+/** Which cells the header's arrows occupy, for the hit test. */
+function headerArrowCols(game: GearGame, label: string): { left: number; right: number } | null {
+  if (gearTabs(game).length < 2) return null;
+  const w = label.length + 4;
+  const x = Math.max(0, Math.floor((CLOCK_COL - w) / 2));
+  return { left: x, right: x + w - 1 };
+}
+
+/**
+ * The bottom strip: a dark bar with one centred label, which is where the mod
+ * puts the map's location name.
+ */
+function drawBottomBar(host: VoxelHost, text: string): void {
+  fillCellBottom(host, 0, ROWS - 1, COLS, 1);
+  stampFill(host, Math.max(0, Math.floor((COLS - text.length) / 2)), ROWS - 1, text);
+}
 
 // --- the TOWN MAP view -----------------------------------------------------
 
@@ -576,8 +596,12 @@ const TAB_ROW = 1;
 // strip with its aspect kept — a stretched Kanto reads as a wrong map.
 const MAP_W = 160;
 const MAP_H = 144;
-const MAP_AREA_Y = Math.round((TAB_ROW + 1) * TILE_H);
-const MAP_AREA_H = 240 - MAP_AREA_Y;
+// Between the status bar and the location strip, inset a few pixels so the
+// map sits in a margin instead of butting against both bars — the mod's own
+// framing.
+const MAP_INSET = 4;
+const MAP_AREA_Y = Math.round(TILE_H) + MAP_INSET;
+const MAP_AREA_H = Math.round((ROWS - 1) * TILE_H) - MAP_AREA_Y - MAP_INSET;
 const MAP_SCALE = Math.min(320 / MAP_W, MAP_AREA_H / MAP_H);
 const MAP_DRAW_W = Math.round(MAP_W * MAP_SCALE);
 const MAP_DRAW_H = Math.round(MAP_H * MAP_SCALE);
@@ -596,6 +620,12 @@ function locPixel(loc: GearTownMapLoc): { x: number; y: number } {
 /** Map-page pixel -> bottom-screen pixel. */
 function mapToScreen(px: number, py: number): { x: number; y: number } {
   return { x: MAP_X + Math.round(px * MAP_SCALE), y: MAP_Y + Math.round(py * MAP_SCALE) };
+}
+
+/** The bottom-screen pixel at the centre of a location's square. */
+export function gearMapPoint(loc: GearTownMapLoc): { x: number; y: number } {
+  const p = locPixel(loc);
+  return mapToScreen(p.x + 4, p.y + 4);
 }
 
 function townMapLocations(game: GearGame): Record<string, GearTownMapLoc> {
@@ -640,12 +670,10 @@ function focusedLocation(game: GearGame): { id: string; loc: GearTownMapLoc } | 
 function drawTownMapView(host: VoxelHost, game: GearGame): void {
   host.uiClearBottom();
   const focus = focusedLocation(game);
-  // The banner is the selected location's name, as the original's is.
-  // 11 chars is what the bar has left of the clock ("12:34AM" plus its
-  // margins); longer names would run into it. "POKéMON LEAGUE" is the only
-  // one that loses anything.
-  drawTopBar(host, (focus?.loc.name ?? "TOWN MAP").slice(0, 11));
-  drawTabs(host, game);
+  drawGearHeader(host, game, "MAP");
+  // The place name gets the bottom strip to itself, so it has the width for
+  // "POKéMON LEAGUE" instead of fighting the clock for the status bar.
+  drawBottomBar(host, focus?.loc.name ?? "TOWN MAP");
 
   const page = game.data.atlas?.townMapPage;
   if (typeof page !== "number" || page < 0) {
@@ -676,8 +704,8 @@ export function drawKantoGear(host: VoxelHost, game: GearGame): void {
     drawTownMapView(host, game);
     return;
   }
-  drawPartyList(host, game, "KANTO GEAR", -1);
-  drawTabs(host, game);
+  drawPartyList(host, game, "", -1);
+  drawGearHeader(host, game, "PARTY");
 }
 
 /**
@@ -727,21 +755,21 @@ export function gearTouchDown(game: GearGame, x: number, y: number): void {
   const col = clampInt(Math.floor(x / TILE_W), 0, COLS - 1);
   const row = clampInt(Math.floor(y / TILE_H), 0, ROWS - 1);
   if (!b) {
-    // Out of battle the gear is its own screen: the tab strip switches view,
-    // and the map takes taps of its own. A battle owns the whole surface, so
-    // the tabs are not drawn and not hit-tested while one is up.
-    const tabs = gearTabs(game);
-    if (row === TAB_ROW && tabs.length > 1) {
-      for (let i = 0; i < tabs.length; i++) {
-        const x0 = tabX(tabs, i);
-        if (col >= x0 && col < x0 + tabs[i]!.label.length + 2) {
-          game.setGearView?.(tabs[i]!.id);
-          return;
-        }
+    // Out of battle the gear is its own screen: the header arrows step the
+    // view (what the shoulder buttons do), and the map takes taps of its own.
+    // A battle owns the whole surface, so the header is neither drawn nor
+    // hit-tested while one is up.
+    const view = activeView(game);
+    const arrows = headerArrowCols(game, view === "map" ? "MAP" : "PARTY");
+    if (row === 0 && arrows) {
+      if (col <= arrows.left) { game.setGearView?.(gearViewStep(game, -1)); return; }
+      if (col >= arrows.right && col < CLOCK_COL) {
+        game.setGearView?.(gearViewStep(game, 1));
+        return;
       }
       return;
     }
-    if (activeView(game) === "map") gearMapTouch(game, x, y);
+    if (view === "map") gearMapTouch(game, x, y);
     return;
   }
 

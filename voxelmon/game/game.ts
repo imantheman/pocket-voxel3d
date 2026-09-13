@@ -42,6 +42,7 @@ import { StartMenuState } from "./ui/startmenu.ts";
 import { DevMenuState } from "./ui/devmenu.ts";
 import { CARD_PIC_RECT, TrainerCardState } from "./ui/trainercard.ts";
 import { OptionsMenuState } from "./ui/optionsmenu.ts";
+import { gearViewStep } from "./ui/kantogear.ts";
 import { count as badgeCount } from "./rules/badges.ts";
 
 /** save.asm:164-181 — DelayFrames 120 over "Now saving...", then 30. */
@@ -1047,6 +1048,15 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   setGearView(v: "party" | "map"): void {
     this.gearView = v;
     if (v !== "map") this.gearMapPick = null;
+  }
+
+  /**
+   * L/R step the companion's view. The shoulder buttons used to cycle the
+   * overworld map for debugging, which the DEV menu's WARP picker replaced —
+   * that cycler had no way to pick a destination, which is why it went.
+   */
+  cycleGearView(dir: 1 | -1): void {
+    this.setGearView(gearViewStep(this as never, dir));
   }
 
   setGearMapPick(id: string | null): void {

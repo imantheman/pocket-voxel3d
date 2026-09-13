@@ -322,8 +322,10 @@ let prevDebugPrev = false;
   prevTouch = touching;
   const debugNext = ((buttons >> 26) & 1) !== 0;
   const debugPrev = ((buttons >> 27) & 1) !== 0;
-  if (debugNext && !prevDebugNext) game.debugCycleMap(1);
-  if (debugPrev && !prevDebugPrev) game.debugCycleMap(-1);
+  // L/R step the Kanto Gear's view (PARTY / MAP / ...). They used to cycle
+  // the overworld map for debugging; the DEV menu's WARP picker replaced that.
+  if (debugNext && !prevDebugNext) game.cycleGearView(1);
+  if (debugPrev && !prevDebugPrev) game.cycleGearView(-1);
   prevDebugNext = debugNext;
   prevDebugPrev = debugPrev;
   game.tick(phys);

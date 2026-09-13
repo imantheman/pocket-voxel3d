@@ -405,6 +405,21 @@ export function buildUiPage(gen: GenData): PageDef {
     const sheet = artOf(gen, key);
     if (sheet) place(sheet, base);
   }
+  // A left-pointing arrow, mirrored from the font's own ▶ (charmap $ED) into
+  // a free low code. Placed AFTER the font, which is where $ED comes from.
+  {
+    const src = 0xed;
+    const dst = UI_TILE.arrowLeft;
+    const sx = (src % 16) * 8;
+    const sy = Math.floor(src / 16) * 8;
+    const dx = (dst % 16) * 8;
+    const dy = Math.floor(dst / 16) * 8;
+    for (let y = 0; y < 8; y++) {
+      for (let x = 0; x < 8; x++) {
+        linear[(dy + y) * w + dx + x] = linear[(sy + y) * w + sx + (7 - x)]!;
+      }
+    }
+  }
   // Trainer-card art (voxel-spec.ts UI_TILE) in the tiles below 0x60, which
   // the GB's own UI never uses. Each sheet's tile order IS the drawing
   // order the card wants, so `place` needs no special case: the badges strip

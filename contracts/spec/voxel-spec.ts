@@ -68,6 +68,12 @@ export const UI_TILE = {
   /** Slot digits 1..8, one 8x8 tile each. */
   number: 0x0b,
   /**
+   * A LEFT arrow, mirrored from the charmap's ▶ at cook time. The GB font has
+   * ▶ ▷ ▼ and no ◀ — nothing in the original ever points left — and the Kanto
+   * Gear's view switcher wants a matched pair either side of the view name.
+   */
+  arrowLeft: 0x13,
+  /**
    * 8 gyms x 8 tiles: 4 face tiles (2x2), then 4 badge tiles (2x2). Gym `g`
    * starts at `badge + g * badgeStride`; the badge half is `+ badgeHalf`.
    */

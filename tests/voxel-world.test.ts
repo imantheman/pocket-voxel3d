@@ -24,7 +24,7 @@ import { expForLevel } from "../voxelmon/game/rules/growth.ts";
 import { VoxelmonGame } from "../voxelmon/game/game.ts";
 import { RecorderHost } from "../voxelmon/game/host.ts";
 import { Input } from "../voxelmon/game/input.ts";
-import { gearTabs, gearTouchDown } from "../voxelmon/game/ui/kantogear.ts";
+import { gearMapPoint, gearTabs, gearTouchDown } from "../voxelmon/game/ui/kantogear.ts";
 import { encodeGlyphs, glyphLen, MAX_COLS } from "../voxelmon/game/ui/tiles.ts";
 import { GameMap } from "../voxelmon/game/world/map.ts";
 import { computeNeighbors } from "../voxelmon/game/world/overworld.ts";
@@ -910,33 +910,41 @@ describe("the town map", () => {
     expect(gearTabs(game as never).map((t) => t.id)).toEqual(["party"]);
   });
 
-  test.skipIf(!hasGen)("tapping a tab switches the view, tapping the map picks", () => {
+  test.skipIf(!hasGen)("L/R and the header arrows both step the view", () => {
+    const game = withAtlas(makeMenuGame());
+    game.save.inventory.TOWN_MAP = 1;
+    expect(game.gearView).toBe("party");
+
+    game.cycleGearView(1); // the R shoulder
+    expect(game.gearView).toBe("map");
+    game.cycleGearView(1); // wraps
+    expect(game.gearView).toBe("party");
+    game.cycleGearView(-1);
+    expect(game.gearView).toBe("map");
+
+    // the header's ▶ does the same. "◀ PARTY ▶" is 9 wide, centred in the 12
+    // columns left of the clock, so the right arrow sits at column 9.
+    game.setGearView("party");
+    gearTouchDown(game as never, 9 * 16 + 8, 4);
+    expect(game.gearView).toBe("map");
+  });
+
+  test.skipIf(!hasGen)("tapping the map picks a place; tapping the sea clears it", () => {
     const game = withAtlas(makeMenuGame());
     game.save.inventory.TOWN_MAP = 1;
     game.overworld.setMap("PALLET_TOWN", 5, 6, "down");
-    expect(game.gearView).toBe("party");
-    // the MAP tab sits after PARTY on the strip's row (7 cells in, row 1)
-    gearTouchDown(game as never, 9 * 16, Math.floor(1.5 * (240 / 18)));
-    expect(game.gearView).toBe("map");
-
+    game.setGearView("map");
     // with nothing picked the marker follows the player
     expect(game.gearMapPick).toBeNull();
-    // CELADON CITY is at grid (7,5): map pixel (72,48), which the view puts
-    // at MAP_X + 72*scale, MAP_Y + 48*scale
-    const loc = (romData!.field as any).townMap.locations.CELADON_CITY;
-    const scale = Math.min(320 / 160, (240 - Math.round(2 * (240 / 18))) / 144);
-    const mx = Math.round((320 - Math.round(160 * scale)) / 2);
-    const my = Math.round(2 * (240 / 18))
-      + Math.round(((240 - Math.round(2 * (240 / 18))) - Math.round(144 * scale)) / 2);
-    gearTouchDown(
-      game as never,
-      mx + (loc.x * 8 + 20) * scale,
-      my + (loc.y * 8 + 12) * scale,
-    );
+
+    const locs = (romData!.field as any).townMap.locations;
+    const at = gearMapPoint(locs.CELADON_CITY);
+    gearTouchDown(game as never, at.x, at.y);
     expect(game.gearMapPick).toBe("CELADON_CITY");
 
-    // a tap out at sea clears it again
-    gearTouchDown(game as never, mx + 4, my + 4);
+    // and a far-off corner of the sea is no place at all
+    const sea = gearMapPoint({ name: "", x: 15, y: 0 });
+    gearTouchDown(game as never, sea.x, sea.y);
     expect(game.gearMapPick).toBeNull();
   });
 });

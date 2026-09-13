@@ -40,6 +40,7 @@ var UI_TILE = {
   frame: 1,
   circle: 10,
   number: 11,
+  arrowLeft: 19,
   badge: 32,
   badgeStride: 8,
   badgeHalf: 4
@@ -8655,8 +8656,482 @@ class OptionsMenuState {
   }
 }
 
+// voxelmon/game/ui/kantogear.ts
+var COLS = 20;
+var ROWS = 18;
+var TILE_W = 320 / COLS;
+var TILE_H = 240 / ROWS;
+function stampBottom(host, x, y, s, bit = 0) {
+  const codes = encodeGlyphs(s);
+  for (let i = 0;i < codes.length && x + i < COLS; i++) {
+    host.uiTileBottom(x + i, y, codes[i] | bit);
+  }
+}
+function stampRight(host, y, s) {
+  stampBottom(host, Math.max(0, COLS - s.length - 1), y, s);
+}
+function tilesBottom(host, x, y, tiles) {
+  for (let i = 0;i < tiles.length && x + i < COLS; i++) {
+    host.uiTileBottom(x + i, y, tiles[i]);
+  }
+}
+var LIGHT_BIT = 32768;
+function stampLight(host, x, y, s) {
+  const codes = encodeGlyphs(s);
+  for (let i = 0;i < codes.length && x + i < COLS; i++) {
+    host.uiTileBottom(x + i, y, codes[i] | LIGHT_BIT);
+  }
+}
+var FILL_BIT = 16384;
+var DARKTEXT_BIT = 8192;
+function fillCellBottom(host, x0, y0, w, h) {
+  for (let y = y0;y < y0 + h; y++) {
+    for (let x = x0;x < x0 + w && x < COLS; x++) {
+      host.uiTileBottom(x, y, SPACE | FILL_BIT);
+    }
+  }
+}
+function stampFill(host, x, y, s) {
+  const codes = encodeGlyphs(s);
+  for (let i = 0;i < codes.length && x + i < COLS; i++) {
+    host.uiTileBottom(x + i, y, codes[i] | FILL_BIT);
+  }
+}
+function boxBottom(host, x0, y0, w, h, bit = 0) {
+  const x1 = x0 + w - 1;
+  const y1 = y0 + h - 1;
+  host.uiTileBottom(x0, y0, BORDER_TL | bit);
+  host.uiTileBottom(x1, y0, BORDER_TR | bit);
+  host.uiTileBottom(x0, y1, BORDER_BL | bit);
+  host.uiTileBottom(x1, y1, BORDER_BR | bit);
+  for (let x = x0 + 1;x < x1; x++) {
+    host.uiTileBottom(x, y0, BORDER_H | bit);
+    host.uiTileBottom(x, y1, BORDER_H | bit);
+  }
+  for (let y = y0 + 1;y < y1; y++) {
+    host.uiTileBottom(x0, y, BORDER_V | bit);
+    host.uiTileBottom(x1, y, BORDER_V | bit);
+  }
+}
+function clockStr() {
+  try {
+    const d = new Date;
+    const m = d.getMinutes();
+    let h = d.getHours();
+    const ap = h >= 12 ? "PM" : "AM";
+    h = h % 12;
+    if (h === 0)
+      h = 12;
+    const mm = m < 10 ? "0" + String(m) : String(m);
+    return String(h) + ":" + mm + ap;
+  } catch {
+    return "";
+  }
+}
+function drawTopBar(host, title) {
+  stampLight(host, 1, 0, title);
+  const t = clockStr();
+  if (t)
+    stampLight(host, Math.max(0, COLS - t.length - 1), 0, t);
+}
+var BATTLE_ACTIONS = ["FIGHT", "PKMN", "ITEM", "RUN"];
+function drawActionGrid(host, menuIndex, showCursor) {
+  host.uiClearBottom();
+  drawTopBar(host, "BATTLE");
+  const cellW = 10;
+  const cellH = 8;
+  const colX = [0, 10];
+  const rowY = [2, 10];
+  for (let i = 0;i < 4; i++) {
+    const x0 = colX[i % 2];
+    const y0 = rowY[i / 2 | 0];
+    const label3 = BATTLE_ACTIONS[i];
+    const iw = cellW - 2;
+    const lx = x0 + 1 + Math.max(0, Math.floor((iw - label3.length) / 2));
+    const ly = y0 + Math.floor(cellH / 2);
+    if (showCursor && i === menuIndex - 1) {
+      fillCellBottom(host, x0, y0, cellW, cellH);
+      boxBottom(host, x0, y0, cellW, cellH);
+      stampFill(host, lx, ly, label3);
+    } else {
+      boxBottom(host, x0, y0, cellW, cellH, DARKTEXT_BIT);
+      stampBottom(host, lx, ly, label3, DARKTEXT_BIT);
+    }
+  }
+}
+function effLabel(e10) {
+  if (e10 % 10 === 0)
+    return String(e10 / 10) + "X";
+  return (e10 / 10).toString().replace(/^0/, "") + "X";
+}
+function drawMoveSelect(host, game, b) {
+  host.uiClearBottom();
+  drawTopBar(host, "MOVES");
+  const moves = b.player.curMoves;
+  const cellW = 10;
+  const cellH = 8;
+  const colX = [0, 10];
+  const rowY = [2, 10];
+  const qmark = encodeGlyphs("?")[0];
+  for (let i = 0;i < 4; i++) {
+    if (i >= moves.length)
+      continue;
+    const x0 = colX[i % 2];
+    const y0 = rowY[i / 2 | 0];
+    const slot = moves[i];
+    const def = game.data.moves[slot.id];
+    const name = (def?.name ?? slot.id).slice(0, 7);
+    const maxPp = def?.pp ?? slot.pp;
+    const type = (def?.type ?? "").toUpperCase().slice(0, 6);
+    const power = def?.power ?? 0;
+    const selected = i === b.moveIndex - 1;
+    const bit = selected ? FILL_BIT : DARKTEXT_BIT;
+    if (selected)
+      fillCellBottom(host, x0, y0, cellW, cellH);
+    boxBottom(host, x0, y0, cellW, cellH, selected ? 0 : DARKTEXT_BIT);
+    stampBottom(host, x0 + 1, y0 + 1, name, bit);
+    host.uiTileBottom(x0 + cellW - 2, y0 + 1, qmark | bit);
+    stampBottom(host, x0 + 1, y0 + 3, "PP " + String(slot.pp) + "/" + String(maxPp), bit);
+    stampBottom(host, x0 + 1, y0 + 5, type, bit);
+    let eff = "--";
+    if (power > 0 && b.enemy && b.chart) {
+      eff = effLabel(b.chart.effectiveness(def.type ?? "", b.enemy.curTypes));
+    }
+    stampBottom(host, x0 + cellW - 1 - eff.length, y0 + 5, eff, bit);
+  }
+}
+function drawForgetList(host, b) {
+  host.uiClearBottom();
+  const f = b.forgetView?.();
+  if (!f)
+    return;
+  drawTopBar(host, ("LEARN " + f.learning).slice(0, 18));
+  stampBottom(host, 1, 2, (f.name + " FORGETS?").slice(0, 18));
+  f.moves.forEach((name, i) => {
+    const y = 4 + i * 2;
+    stampBottom(host, 2, y, name.slice(0, 14));
+    if (i === f.index)
+      host.uiTileBottom(0, y, ARROW_CURSOR);
+  });
+  const cancelY = 4 + f.moves.length * 2;
+  stampBottom(host, 2, cancelY, "DON'T LEARN");
+  if (f.index >= f.moves.length)
+    host.uiTileBottom(0, cancelY, ARROW_CURSOR);
+}
+function drawItemList(host, game, b) {
+  host.uiClearBottom();
+  drawTopBar(host, "ITEMS");
+  for (let i = 0;i < b.itemList.length && i < 12; i++) {
+    const id = b.itemList[i];
+    const name = game.data.items[id]?.name ?? id;
+    const count2 = game.save?.inventory?.[id] ?? 0;
+    const y = 2 + i;
+    stampBottom(host, 2, y, name.slice(0, 13));
+    stampRight(host, y, "x" + String(count2));
+    if (i === b.itemIndex)
+      host.uiTileBottom(0, y, ARROW_CURSOR);
+  }
+}
+function drawPartyList(host, game, title, cursor) {
+  host.uiClearBottom();
+  drawTopBar(host, title);
+  const party = game.save?.party ?? [];
+  const cellW = 10;
+  const cellH = 5;
+  const colX = [0, 10];
+  const rowY = [2, 7, 12];
+  for (let i = 0;i < 6; i++) {
+    const x0 = colX[i % 2];
+    const y0 = rowY[i / 2 | 0];
+    if (i >= party.length)
+      continue;
+    const mon = party[i];
+    const full = mon.nickname ?? game.data.pokemon[mon.species]?.name ?? mon.species;
+    const name = full.length > 6 ? full.slice(0, 5) + "." : full;
+    const maxHp = mon.stats?.hp ?? mon.hp;
+    boxBottom(host, x0, y0, cellW, cellH, DARKTEXT_BIT);
+    const spritePage = picPageFor(game.data, mon.species);
+    if (spritePage >= 0) {
+      host.uiSpriteBottom(spritePage, (x0 + 1) * TILE_W, (y0 + 1) * TILE_H, 2 * TILE_W - 2, 2 * TILE_H - 1);
+    }
+    if (cursor === i)
+      host.uiTileBottom(x0, y0, ARROW_CURSOR | DARKTEXT_BIT);
+    stampBottom(host, x0 + 3, y0 + 1, name, DARKTEXT_BIT);
+    stampBottom(host, x0 + 3, y0 + 2, "L" + String(mon.level), DARKTEXT_BIT);
+    tilesBottom(host, x0 + 1, y0 + 3, hpBarTiles(mon.hp, maxHp, true).slice(1));
+    if (mon.status)
+      stampBottom(host, x0 + 6, y0 + 2, mon.status.slice(0, 3), DARKTEXT_BIT);
+  }
+}
+function drawBattleMessage(host, b) {
+  host.uiClearBottom();
+  drawTopBar(host, "BATTLE");
+  boxBottom(host, 0, 2, COLS, 14, DARKTEXT_BIT);
+  const rows = [5, 7];
+  b.shown.forEach((line, i) => {
+    if (i >= rows.length)
+      return;
+    const isLast = i === b.shown.length - 1;
+    const n = isLast ? line.revealed : line.codes.length;
+    for (let c = 0;c < n && c < line.codes.length && 2 + c < COLS - 1; c++) {
+      host.uiTileBottom(2 + c, rows[i], line.codes[c] | DARKTEXT_BIT);
+    }
+  });
+  if (b.msgWaiting || b.msgPrompt) {
+    for (let x = 2;x < COLS - 2; x++) {
+      host.uiTileBottom(x, 11, BORDER_H | DARKTEXT_BIT);
+    }
+    const tip = "TAP TO CONTINUE";
+    const tx = Math.max(2, Math.floor((COLS - tip.length) / 2));
+    stampBottom(host, tx, 13, tip, DARKTEXT_BIT);
+  }
+  if (b.choiceOpen) {
+    boxBottom(host, 14, 7, 6, 5, DARKTEXT_BIT);
+    stampBottom(host, 16, 8, "YES", DARKTEXT_BIT);
+    stampBottom(host, 16, 10, "NO", DARKTEXT_BIT);
+    host.uiTileBottom(15, b.choiceYes ? 8 : 10, ARROW_CURSOR | DARKTEXT_BIT);
+  }
+}
+function drawBattleGear(host, game, b) {
+  switch (b.phase) {
+    case "forget":
+      drawForgetList(host, b);
+      return;
+    case "moveSelect":
+      drawMoveSelect(host, game, b);
+      return;
+    case "party":
+      drawPartyList(host, game, "PKMN", b.partyIndex);
+      return;
+    case "item":
+      drawItemList(host, game, b);
+      return;
+    case "menu":
+      drawActionGrid(host, b.menuIndex, true);
+      return;
+    default:
+      drawBattleMessage(host, b);
+      return;
+  }
+}
+function gearTabs(game) {
+  const tabs = [{ id: "party", label: "PARTY" }];
+  if ((game.save?.inventory?.TOWN_MAP ?? 0) > 0 && hasTownMap(game)) {
+    tabs.push({ id: "map", label: "MAP" });
+  }
+  return tabs;
+}
+function hasTownMap(game) {
+  const a = game.data.atlas;
+  return typeof a?.townMapPage === "number" && a.townMapPage >= 0;
+}
+function activeView(game) {
+  const want = game.gearView ?? "party";
+  return gearTabs(game).some((t) => t.id === want) ? want : "party";
+}
+function gearViewStep(game, dir) {
+  const tabs = gearTabs(game);
+  const at = Math.max(0, tabs.findIndex((t) => t.id === activeView(game)));
+  return tabs[(at + dir + tabs.length) % tabs.length].id;
+}
+var CLOCK_COL = COLS - 8;
+function drawGearHeader(host, game, label3) {
+  const many = gearTabs(game).length > 1;
+  const w = label3.length + (many ? 4 : 0);
+  const x = Math.max(0, Math.floor((CLOCK_COL - w) / 2));
+  if (many) {
+    host.uiTileBottom(x, 0, UI_TILE.arrowLeft | LIGHT_BIT);
+    host.uiTileBottom(x + w - 1, 0, ARROW_CURSOR | LIGHT_BIT);
+  }
+  stampLight(host, x + (many ? 2 : 0), 0, label3);
+  const t = clockStr();
+  if (t)
+    stampLight(host, Math.max(0, COLS - t.length - 1), 0, t);
+}
+function headerArrowCols(game, label3) {
+  if (gearTabs(game).length < 2)
+    return null;
+  const w = label3.length + 4;
+  const x = Math.max(0, Math.floor((CLOCK_COL - w) / 2));
+  return { left: x, right: x + w - 1 };
+}
+function drawBottomBar(host, text) {
+  fillCellBottom(host, 0, ROWS - 1, COLS, 1);
+  stampFill(host, Math.max(0, Math.floor((COLS - text.length) / 2)), ROWS - 1, text);
+}
+var MAP_W = 160;
+var MAP_H = 144;
+var MAP_INSET = 4;
+var MAP_AREA_Y = Math.round(TILE_H) + MAP_INSET;
+var MAP_AREA_H = Math.round((ROWS - 1) * TILE_H) - MAP_AREA_Y - MAP_INSET;
+var MAP_SCALE = Math.min(320 / MAP_W, MAP_AREA_H / MAP_H);
+var MAP_DRAW_W = Math.round(MAP_W * MAP_SCALE);
+var MAP_DRAW_H = Math.round(MAP_H * MAP_SCALE);
+var MAP_X = Math.round((320 - MAP_DRAW_W) / 2);
+var MAP_Y = MAP_AREA_Y + Math.round((MAP_AREA_H - MAP_DRAW_H) / 2);
+function locPixel(loc) {
+  return { x: loc.x * 8 + 16, y: loc.y * 8 + 8 };
+}
+function mapToScreen(px2, py) {
+  return { x: MAP_X + Math.round(px2 * MAP_SCALE), y: MAP_Y + Math.round(py * MAP_SCALE) };
+}
+function townMapLocations(game) {
+  return game.data.field?.townMap?.locations ?? {};
+}
+function townMapPlaces(game) {
+  const bySquare = new Map;
+  for (const id of Object.keys(townMapLocations(game)).sort()) {
+    const loc = townMapLocations(game)[id];
+    const key = `${loc.x},${loc.y}`;
+    const held = bySquare.get(key);
+    if (!held || held.id.replace(/_/g, " ") !== held.loc.name && id.replace(/_/g, " ") === loc.name) {
+      bySquare.set(key, { id, loc });
+    }
+  }
+  return [...bySquare.values()];
+}
+function focusedLocation(game) {
+  const locs = townMapLocations(game);
+  const picked = game.gearMapPick;
+  if (picked && locs[picked])
+    return { id: picked, loc: locs[picked] };
+  const ow = game.overworld;
+  const here = ow?.mapId ?? ow?.map?.id;
+  if (here && locs[here])
+    return { id: here, loc: locs[here] };
+  return null;
+}
+function drawTownMapView(host, game) {
+  host.uiClearBottom();
+  const focus = focusedLocation(game);
+  drawGearHeader(host, game, "MAP");
+  drawBottomBar(host, focus?.loc.name ?? "TOWN MAP");
+  const page = game.data.atlas?.townMapPage;
+  if (typeof page !== "number" || page < 0) {
+    stampBottom(host, 2, 4, "NO MAP DATA", DARKTEXT_BIT);
+    return;
+  }
+  host.uiSpriteBottom(page, MAP_X, MAP_Y, MAP_DRAW_W, MAP_DRAW_H);
+  const cursorPage = game.data.atlas?.townMapCursorPage;
+  if (focus && typeof cursorPage === "number" && cursorPage >= 0) {
+    const p = locPixel(focus.loc);
+    const at = mapToScreen(p.x - 4, p.y - 4);
+    const size = Math.round(16 * MAP_SCALE);
+    host.uiSpriteBottom(cursorPage, at.x, at.y, size, size);
+  }
+}
+function drawKantoGear(host, game) {
+  const bv = game.battleView?.();
+  const b = bv?.battle;
+  if (b) {
+    drawBattleGear(host, game, b);
+    return;
+  }
+  if (activeView(game) === "map") {
+    drawTownMapView(host, game);
+    return;
+  }
+  drawPartyList(host, game, "", -1);
+  drawGearHeader(host, game, "PARTY");
+}
+function gearMapTouch(game, x, y) {
+  if (!game.setGearMapPick)
+    return;
+  const px2 = (x - MAP_X) / MAP_SCALE;
+  const py = (y - MAP_Y) / MAP_SCALE;
+  if (px2 < 0 || py < 0 || px2 >= MAP_W || py >= MAP_H)
+    return;
+  let bestId = null;
+  let bestD = Infinity;
+  for (const { id, loc } of townMapPlaces(game)) {
+    const p = locPixel(loc);
+    const d = (p.x + 4 - px2) ** 2 + (p.y + 4 - py) ** 2;
+    if (d < bestD) {
+      bestD = d;
+      bestId = id;
+    }
+  }
+  game.setGearMapPick(bestD <= 16 * 16 ? bestId : null);
+}
+var TAP_A = {
+  isDown: () => false,
+  wasPressed: (btn) => btn === "a"
+};
+function clampInt(v, lo, hi) {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+function gearTouchDown(game, x, y) {
+  const b = game.battleView?.()?.battle;
+  const col = clampInt(Math.floor(x / TILE_W), 0, COLS - 1);
+  const row = clampInt(Math.floor(y / TILE_H), 0, ROWS - 1);
+  if (!b) {
+    const view = activeView(game);
+    const arrows = headerArrowCols(game, view === "map" ? "MAP" : "PARTY");
+    if (row === 0 && arrows) {
+      if (col <= arrows.left) {
+        game.setGearView?.(gearViewStep(game, -1));
+        return;
+      }
+      if (col >= arrows.right && col < CLOCK_COL) {
+        game.setGearView?.(gearViewStep(game, 1));
+        return;
+      }
+      return;
+    }
+    if (view === "map")
+      gearMapTouch(game, x, y);
+    return;
+  }
+  if (b.choiceOpen) {
+    if (col >= 14 && col <= 19 && row >= 7 && row <= 11) {
+      b.choiceYes = row < 9;
+    }
+    b.update(TAP_A);
+    return;
+  }
+  switch (b.phase) {
+    case "menu": {
+      const c = col < 10 ? 0 : 1;
+      const r = row < 10 ? 0 : 1;
+      b.menuIndex = r * 2 + c + 1;
+      b.update(TAP_A);
+      return;
+    }
+    case "moveSelect": {
+      const n = b.player.curMoves.length;
+      if (n === 0)
+        return;
+      const i = clampInt(Math.floor((row - 2) / 3), 0, n - 1);
+      b.moveIndex = i + 1;
+      b.update(TAP_A);
+      return;
+    }
+    case "party": {
+      const n = game.save?.party?.length ?? 0;
+      if (n === 0)
+        return;
+      const i = clampInt(Math.floor((row - 2) / 2), 0, n - 1);
+      b.partyIndex = i;
+      b.update(TAP_A);
+      return;
+    }
+    case "item": {
+      const n = b.itemList.length;
+      if (n === 0)
+        return;
+      const i = clampInt(row - 2, 0, n - 1);
+      b.itemIndex = i;
+      b.update(TAP_A);
+      return;
+    }
+    default:
+      b.update(TAP_A);
+      return;
+  }
+}
+
 // voxelmon/game/ui/warppicker.ts
-var ROWS = 8;
+var ROWS2 = 8;
 
 class WarpPickerState {
   game;
@@ -8680,9 +9155,9 @@ class WarpPickerState {
   clampScroll() {
     if (this.index < this.top)
       this.top = this.index;
-    if (this.index >= this.top + ROWS)
-      this.top = this.index - ROWS + 1;
-    this.top = Math.max(0, Math.min(this.top, Math.max(0, this.maps.length - ROWS)));
+    if (this.index >= this.top + ROWS2)
+      this.top = this.index - ROWS2 + 1;
+    this.top = Math.max(0, Math.min(this.top, Math.max(0, this.maps.length - ROWS2)));
   }
   update() {
     const p = this.game.input.pressed;
@@ -8696,9 +9171,9 @@ class WarpPickerState {
     else if (p.down)
       this.index = (this.index + 1) % n;
     else if (p.left)
-      this.index = Math.max(0, this.index - ROWS);
+      this.index = Math.max(0, this.index - ROWS2);
     else if (p.right)
-      this.index = Math.min(n - 1, this.index + ROWS);
+      this.index = Math.min(n - 1, this.index + ROWS2);
     else if (p.select)
       this.index = this.nextLetter();
     this.clampScroll();
@@ -8722,7 +9197,7 @@ class WarpPickerState {
   }
   view() {
     return {
-      entries: this.maps.slice(this.top, this.top + ROWS),
+      entries: this.maps.slice(this.top, this.top + ROWS2),
       index: this.index - this.top,
       top: this.top,
       total: this.maps.length
@@ -8926,7 +9401,7 @@ class SummaryState {
 }
 
 // voxelmon/game/ui/bagscreen.ts
-var ROWS2 = 4;
+var ROWS3 = 4;
 var USABLE_ON_PARTY = new Set(["RARE_CANDY"]);
 
 class BagState {
@@ -8949,8 +9424,8 @@ class BagState {
       this.index = (this.index + 1) % n;
     if (this.index < this.top)
       this.top = this.index;
-    if (this.index >= this.top + ROWS2)
-      this.top = this.index - ROWS2 + 1;
+    if (this.index >= this.top + ROWS3)
+      this.top = this.index - ROWS3 + 1;
     if (p.b || p.a && this.index === n - 1) {
       this.game.pop();
       return;
@@ -8971,12 +9446,12 @@ class BagState {
       name: this.game.data.items?.[id]?.name ?? id,
       qty: save.inventory?.[id] ?? 0
     }));
-    return { entries: items, index: this.index, top: this.top, rows: ROWS2 };
+    return { entries: items, index: this.index, top: this.top, rows: ROWS3 };
   }
 }
 
 // voxelmon/game/ui/shopscreen.ts
-var ROWS3 = 4;
+var ROWS4 = 4;
 var MONEY_CAP = 999999;
 var GREET = "Take your time.";
 var NOT_ENOUGH = `You don't have
@@ -9041,8 +9516,8 @@ class ShopState {
   clampWindow() {
     if (this.listIndex < this.listTop)
       this.listTop = this.listIndex;
-    if (this.listIndex >= this.listTop + ROWS3)
-      this.listTop = this.listIndex - ROWS3 + 1;
+    if (this.listIndex >= this.listTop + ROWS4)
+      this.listTop = this.listIndex - ROWS4 + 1;
   }
   unsellable(id) {
     const def = this.game.data.items?.[id];
@@ -9193,7 +9668,7 @@ That will be
       list: this.list,
       listIndex: this.listIndex,
       listTop: this.listTop,
-      rows: ROWS3,
+      rows: ROWS4,
       selName: this.selName,
       qty: this.qty,
       total: this.unitPrice * this.qty,
@@ -9226,7 +9701,7 @@ function active(save) {
 }
 
 // voxelmon/game/ui/boxscreen.ts
-var ROWS4 = 4;
+var ROWS5 = 4;
 var PARTY_MAX2 = 6;
 var MENU = ["WITHDRAW", "DEPOSIT", "RELEASE", "CHANGE BOX", "SEE YA!"];
 
@@ -9357,8 +9832,8 @@ no POKéMON here!`, "menu");
   clampWindow() {
     if (this.listIndex < this.listTop)
       this.listTop = this.listIndex;
-    if (this.listIndex >= this.listTop + ROWS4)
-      this.listTop = this.listIndex - ROWS4 + 1;
+    if (this.listIndex >= this.listTop + ROWS5)
+      this.listTop = this.listIndex - ROWS5 + 1;
   }
   updateList(p) {
     const n = this.list.length + 1;
@@ -9500,7 +9975,7 @@ Bye ${this.monName(mon)}!`, "release-list");
       list: this.list,
       listIndex: this.listIndex,
       listTop: this.listTop,
-      rows: ROWS4,
+      rows: ROWS5,
       submenuLabel: this.kindOfList === "deposit" ? "DEPOSIT" : "WITHDRAW",
       submenuIndex: this.submenuIndex,
       confirmYes: this.confirmYes,
@@ -9510,7 +9985,7 @@ Bye ${this.monName(mon)}!`, "release-list");
 }
 
 // voxelmon/game/ui/pokedexscreen.ts
-var ROWS5 = 7;
+var ROWS6 = 7;
 class PokedexState {
   game;
   onCancel;
@@ -9582,9 +10057,9 @@ class PokedexState {
     else if (p.down)
       this.index = Math.min(n - 1, this.index + 1);
     else if (p.left)
-      this.index = Math.max(0, this.index - ROWS5);
+      this.index = Math.max(0, this.index - ROWS6);
     else if (p.right)
-      this.index = Math.min(n - 1, this.index + ROWS5);
+      this.index = Math.min(n - 1, this.index + ROWS6);
     this.syncScroll();
     if (p.b) {
       this.close();
@@ -9635,8 +10110,8 @@ class PokedexState {
   syncScroll() {
     if (this.index < this.top)
       this.top = this.index;
-    if (this.index >= this.top + ROWS5)
-      this.top = this.index - ROWS5 + 1;
+    if (this.index >= this.top + ROWS6)
+      this.top = this.index - ROWS6 + 1;
   }
   buildEntry() {
     const id = this.entrySpecies;
@@ -9676,7 +10151,7 @@ class PokedexState {
   view() {
     return {
       mode: this.mode,
-      rows: ROWS5,
+      rows: ROWS6,
       top: this.top,
       index: this.index,
       entries: this.entries,
@@ -10578,6 +11053,9 @@ the game!`, SAVE_DONE_HOLD, {
     if (v !== "map")
       this.gearMapPick = null;
   }
+  cycleGearView(dir) {
+    this.setGearView(gearViewStep(this, dir));
+  }
   setGearMapPick(id) {
     this.gearMapPick = id;
   }
@@ -10756,470 +11234,6 @@ to level ${mon.level}!`, () => {
   }
 }
 
-// voxelmon/game/ui/kantogear.ts
-var COLS = 20;
-var ROWS6 = 18;
-var TILE_W = 320 / COLS;
-var TILE_H = 240 / ROWS6;
-function stampBottom(host, x, y, s, bit = 0) {
-  const codes = encodeGlyphs(s);
-  for (let i = 0;i < codes.length && x + i < COLS; i++) {
-    host.uiTileBottom(x + i, y, codes[i] | bit);
-  }
-}
-function stampRight(host, y, s) {
-  stampBottom(host, Math.max(0, COLS - s.length - 1), y, s);
-}
-function tilesBottom(host, x, y, tiles) {
-  for (let i = 0;i < tiles.length && x + i < COLS; i++) {
-    host.uiTileBottom(x + i, y, tiles[i]);
-  }
-}
-var LIGHT_BIT = 32768;
-function stampLight(host, x, y, s) {
-  const codes = encodeGlyphs(s);
-  for (let i = 0;i < codes.length && x + i < COLS; i++) {
-    host.uiTileBottom(x + i, y, codes[i] | LIGHT_BIT);
-  }
-}
-var FILL_BIT = 16384;
-var DARKTEXT_BIT = 8192;
-function fillCellBottom(host, x0, y0, w, h) {
-  for (let y = y0;y < y0 + h; y++) {
-    for (let x = x0;x < x0 + w && x < COLS; x++) {
-      host.uiTileBottom(x, y, SPACE | FILL_BIT);
-    }
-  }
-}
-function stampFill(host, x, y, s) {
-  const codes = encodeGlyphs(s);
-  for (let i = 0;i < codes.length && x + i < COLS; i++) {
-    host.uiTileBottom(x + i, y, codes[i] | FILL_BIT);
-  }
-}
-function boxBottom(host, x0, y0, w, h, bit = 0) {
-  const x1 = x0 + w - 1;
-  const y1 = y0 + h - 1;
-  host.uiTileBottom(x0, y0, BORDER_TL | bit);
-  host.uiTileBottom(x1, y0, BORDER_TR | bit);
-  host.uiTileBottom(x0, y1, BORDER_BL | bit);
-  host.uiTileBottom(x1, y1, BORDER_BR | bit);
-  for (let x = x0 + 1;x < x1; x++) {
-    host.uiTileBottom(x, y0, BORDER_H | bit);
-    host.uiTileBottom(x, y1, BORDER_H | bit);
-  }
-  for (let y = y0 + 1;y < y1; y++) {
-    host.uiTileBottom(x0, y, BORDER_V | bit);
-    host.uiTileBottom(x1, y, BORDER_V | bit);
-  }
-}
-function clockStr() {
-  try {
-    const d = new Date;
-    const m = d.getMinutes();
-    let h = d.getHours();
-    const ap = h >= 12 ? "PM" : "AM";
-    h = h % 12;
-    if (h === 0)
-      h = 12;
-    const mm = m < 10 ? "0" + String(m) : String(m);
-    return String(h) + ":" + mm + ap;
-  } catch {
-    return "";
-  }
-}
-function drawTopBar(host, title) {
-  stampLight(host, 1, 0, title);
-  const t = clockStr();
-  if (t)
-    stampLight(host, Math.max(0, COLS - t.length - 1), 0, t);
-}
-var BATTLE_ACTIONS = ["FIGHT", "PKMN", "ITEM", "RUN"];
-function drawActionGrid(host, menuIndex, showCursor) {
-  host.uiClearBottom();
-  drawTopBar(host, "BATTLE");
-  const cellW = 10;
-  const cellH = 8;
-  const colX = [0, 10];
-  const rowY = [2, 10];
-  for (let i = 0;i < 4; i++) {
-    const x0 = colX[i % 2];
-    const y0 = rowY[i / 2 | 0];
-    const label3 = BATTLE_ACTIONS[i];
-    const iw = cellW - 2;
-    const lx = x0 + 1 + Math.max(0, Math.floor((iw - label3.length) / 2));
-    const ly = y0 + Math.floor(cellH / 2);
-    if (showCursor && i === menuIndex - 1) {
-      fillCellBottom(host, x0, y0, cellW, cellH);
-      boxBottom(host, x0, y0, cellW, cellH);
-      stampFill(host, lx, ly, label3);
-    } else {
-      boxBottom(host, x0, y0, cellW, cellH, DARKTEXT_BIT);
-      stampBottom(host, lx, ly, label3, DARKTEXT_BIT);
-    }
-  }
-}
-function effLabel(e10) {
-  if (e10 % 10 === 0)
-    return String(e10 / 10) + "X";
-  return (e10 / 10).toString().replace(/^0/, "") + "X";
-}
-function drawMoveSelect(host, game, b) {
-  host.uiClearBottom();
-  drawTopBar(host, "MOVES");
-  const moves = b.player.curMoves;
-  const cellW = 10;
-  const cellH = 8;
-  const colX = [0, 10];
-  const rowY = [2, 10];
-  const qmark = encodeGlyphs("?")[0];
-  for (let i = 0;i < 4; i++) {
-    if (i >= moves.length)
-      continue;
-    const x0 = colX[i % 2];
-    const y0 = rowY[i / 2 | 0];
-    const slot = moves[i];
-    const def = game.data.moves[slot.id];
-    const name = (def?.name ?? slot.id).slice(0, 7);
-    const maxPp = def?.pp ?? slot.pp;
-    const type = (def?.type ?? "").toUpperCase().slice(0, 6);
-    const power = def?.power ?? 0;
-    const selected = i === b.moveIndex - 1;
-    const bit = selected ? FILL_BIT : DARKTEXT_BIT;
-    if (selected)
-      fillCellBottom(host, x0, y0, cellW, cellH);
-    boxBottom(host, x0, y0, cellW, cellH, selected ? 0 : DARKTEXT_BIT);
-    stampBottom(host, x0 + 1, y0 + 1, name, bit);
-    host.uiTileBottom(x0 + cellW - 2, y0 + 1, qmark | bit);
-    stampBottom(host, x0 + 1, y0 + 3, "PP " + String(slot.pp) + "/" + String(maxPp), bit);
-    stampBottom(host, x0 + 1, y0 + 5, type, bit);
-    let eff = "--";
-    if (power > 0 && b.enemy && b.chart) {
-      eff = effLabel(b.chart.effectiveness(def.type ?? "", b.enemy.curTypes));
-    }
-    stampBottom(host, x0 + cellW - 1 - eff.length, y0 + 5, eff, bit);
-  }
-}
-function drawForgetList(host, b) {
-  host.uiClearBottom();
-  const f = b.forgetView?.();
-  if (!f)
-    return;
-  drawTopBar(host, ("LEARN " + f.learning).slice(0, 18));
-  stampBottom(host, 1, 2, (f.name + " FORGETS?").slice(0, 18));
-  f.moves.forEach((name, i) => {
-    const y = 4 + i * 2;
-    stampBottom(host, 2, y, name.slice(0, 14));
-    if (i === f.index)
-      host.uiTileBottom(0, y, ARROW_CURSOR);
-  });
-  const cancelY = 4 + f.moves.length * 2;
-  stampBottom(host, 2, cancelY, "DON'T LEARN");
-  if (f.index >= f.moves.length)
-    host.uiTileBottom(0, cancelY, ARROW_CURSOR);
-}
-function drawItemList(host, game, b) {
-  host.uiClearBottom();
-  drawTopBar(host, "ITEMS");
-  for (let i = 0;i < b.itemList.length && i < 12; i++) {
-    const id = b.itemList[i];
-    const name = game.data.items[id]?.name ?? id;
-    const count2 = game.save?.inventory?.[id] ?? 0;
-    const y = 2 + i;
-    stampBottom(host, 2, y, name.slice(0, 13));
-    stampRight(host, y, "x" + String(count2));
-    if (i === b.itemIndex)
-      host.uiTileBottom(0, y, ARROW_CURSOR);
-  }
-}
-function drawPartyList(host, game, title, cursor) {
-  host.uiClearBottom();
-  drawTopBar(host, title);
-  const party = game.save?.party ?? [];
-  const cellW = 10;
-  const cellH = 5;
-  const colX = [0, 10];
-  const rowY = [2, 7, 12];
-  for (let i = 0;i < 6; i++) {
-    const x0 = colX[i % 2];
-    const y0 = rowY[i / 2 | 0];
-    if (i >= party.length)
-      continue;
-    const mon = party[i];
-    const full = mon.nickname ?? game.data.pokemon[mon.species]?.name ?? mon.species;
-    const name = full.length > 6 ? full.slice(0, 5) + "." : full;
-    const maxHp = mon.stats?.hp ?? mon.hp;
-    boxBottom(host, x0, y0, cellW, cellH, DARKTEXT_BIT);
-    const spritePage = picPageFor(game.data, mon.species);
-    if (spritePage >= 0) {
-      host.uiSpriteBottom(spritePage, (x0 + 1) * TILE_W, (y0 + 1) * TILE_H, 2 * TILE_W - 2, 2 * TILE_H - 1);
-    }
-    if (cursor === i)
-      host.uiTileBottom(x0, y0, ARROW_CURSOR | DARKTEXT_BIT);
-    stampBottom(host, x0 + 3, y0 + 1, name, DARKTEXT_BIT);
-    stampBottom(host, x0 + 3, y0 + 2, "L" + String(mon.level), DARKTEXT_BIT);
-    tilesBottom(host, x0 + 1, y0 + 3, hpBarTiles(mon.hp, maxHp, true).slice(1));
-    if (mon.status)
-      stampBottom(host, x0 + 6, y0 + 2, mon.status.slice(0, 3), DARKTEXT_BIT);
-  }
-}
-function drawBattleMessage(host, b) {
-  host.uiClearBottom();
-  drawTopBar(host, "BATTLE");
-  boxBottom(host, 0, 2, COLS, 14, DARKTEXT_BIT);
-  const rows = [5, 7];
-  b.shown.forEach((line, i) => {
-    if (i >= rows.length)
-      return;
-    const isLast = i === b.shown.length - 1;
-    const n = isLast ? line.revealed : line.codes.length;
-    for (let c = 0;c < n && c < line.codes.length && 2 + c < COLS - 1; c++) {
-      host.uiTileBottom(2 + c, rows[i], line.codes[c] | DARKTEXT_BIT);
-    }
-  });
-  if (b.msgWaiting || b.msgPrompt) {
-    for (let x = 2;x < COLS - 2; x++) {
-      host.uiTileBottom(x, 11, BORDER_H | DARKTEXT_BIT);
-    }
-    const tip = "TAP TO CONTINUE";
-    const tx = Math.max(2, Math.floor((COLS - tip.length) / 2));
-    stampBottom(host, tx, 13, tip, DARKTEXT_BIT);
-  }
-  if (b.choiceOpen) {
-    boxBottom(host, 14, 7, 6, 5, DARKTEXT_BIT);
-    stampBottom(host, 16, 8, "YES", DARKTEXT_BIT);
-    stampBottom(host, 16, 10, "NO", DARKTEXT_BIT);
-    host.uiTileBottom(15, b.choiceYes ? 8 : 10, ARROW_CURSOR | DARKTEXT_BIT);
-  }
-}
-function drawBattleGear(host, game, b) {
-  switch (b.phase) {
-    case "forget":
-      drawForgetList(host, b);
-      return;
-    case "moveSelect":
-      drawMoveSelect(host, game, b);
-      return;
-    case "party":
-      drawPartyList(host, game, "PKMN", b.partyIndex);
-      return;
-    case "item":
-      drawItemList(host, game, b);
-      return;
-    case "menu":
-      drawActionGrid(host, b.menuIndex, true);
-      return;
-    default:
-      drawBattleMessage(host, b);
-      return;
-  }
-}
-function gearTabs(game) {
-  const tabs = [{ id: "party", label: "PARTY" }];
-  if ((game.save?.inventory?.TOWN_MAP ?? 0) > 0 && hasTownMap(game)) {
-    tabs.push({ id: "map", label: "MAP" });
-  }
-  return tabs;
-}
-function hasTownMap(game) {
-  const a = game.data.atlas;
-  return typeof a?.townMapPage === "number" && a.townMapPage >= 0;
-}
-function activeView(game) {
-  const want = game.gearView ?? "party";
-  return gearTabs(game).some((t) => t.id === want) ? want : "party";
-}
-function tabX(tabs, i) {
-  let x = 0;
-  for (let j = 0;j < i; j++)
-    x += tabs[j].label.length + 2;
-  return x;
-}
-function drawTabs(host, game) {
-  const tabs = gearTabs(game);
-  if (tabs.length < 2)
-    return;
-  const active2 = activeView(game);
-  tabs.forEach((t, i) => {
-    const x = tabX(tabs, i);
-    const w = t.label.length + 2;
-    if (t.id === active2) {
-      fillCellBottom(host, x, TAB_ROW, w, 1);
-      stampFill(host, x + 1, TAB_ROW, t.label);
-    } else {
-      stampBottom(host, x + 1, TAB_ROW, t.label, DARKTEXT_BIT);
-    }
-  });
-}
-var TAB_ROW = 1;
-var MAP_W = 160;
-var MAP_H = 144;
-var MAP_AREA_Y = Math.round((TAB_ROW + 1) * TILE_H);
-var MAP_AREA_H = 240 - MAP_AREA_Y;
-var MAP_SCALE = Math.min(320 / MAP_W, MAP_AREA_H / MAP_H);
-var MAP_DRAW_W = Math.round(MAP_W * MAP_SCALE);
-var MAP_DRAW_H = Math.round(MAP_H * MAP_SCALE);
-var MAP_X = Math.round((320 - MAP_DRAW_W) / 2);
-var MAP_Y = MAP_AREA_Y + Math.round((MAP_AREA_H - MAP_DRAW_H) / 2);
-function locPixel(loc) {
-  return { x: loc.x * 8 + 16, y: loc.y * 8 + 8 };
-}
-function mapToScreen(px2, py) {
-  return { x: MAP_X + Math.round(px2 * MAP_SCALE), y: MAP_Y + Math.round(py * MAP_SCALE) };
-}
-function townMapLocations(game) {
-  return game.data.field?.townMap?.locations ?? {};
-}
-function townMapPlaces(game) {
-  const bySquare = new Map;
-  for (const id of Object.keys(townMapLocations(game)).sort()) {
-    const loc = townMapLocations(game)[id];
-    const key = `${loc.x},${loc.y}`;
-    const held = bySquare.get(key);
-    if (!held || held.id.replace(/_/g, " ") !== held.loc.name && id.replace(/_/g, " ") === loc.name) {
-      bySquare.set(key, { id, loc });
-    }
-  }
-  return [...bySquare.values()];
-}
-function focusedLocation(game) {
-  const locs = townMapLocations(game);
-  const picked = game.gearMapPick;
-  if (picked && locs[picked])
-    return { id: picked, loc: locs[picked] };
-  const ow = game.overworld;
-  const here = ow?.mapId ?? ow?.map?.id;
-  if (here && locs[here])
-    return { id: here, loc: locs[here] };
-  return null;
-}
-function drawTownMapView(host, game) {
-  host.uiClearBottom();
-  const focus = focusedLocation(game);
-  drawTopBar(host, (focus?.loc.name ?? "TOWN MAP").slice(0, 11));
-  drawTabs(host, game);
-  const page = game.data.atlas?.townMapPage;
-  if (typeof page !== "number" || page < 0) {
-    stampBottom(host, 2, 4, "NO MAP DATA", DARKTEXT_BIT);
-    return;
-  }
-  host.uiSpriteBottom(page, MAP_X, MAP_Y, MAP_DRAW_W, MAP_DRAW_H);
-  const cursorPage = game.data.atlas?.townMapCursorPage;
-  if (focus && typeof cursorPage === "number" && cursorPage >= 0) {
-    const p = locPixel(focus.loc);
-    const at = mapToScreen(p.x - 4, p.y - 4);
-    const size = Math.round(16 * MAP_SCALE);
-    host.uiSpriteBottom(cursorPage, at.x, at.y, size, size);
-  }
-}
-function drawKantoGear(host, game) {
-  const bv = game.battleView?.();
-  const b = bv?.battle;
-  if (b) {
-    drawBattleGear(host, game, b);
-    return;
-  }
-  if (activeView(game) === "map") {
-    drawTownMapView(host, game);
-    return;
-  }
-  drawPartyList(host, game, "KANTO GEAR", -1);
-  drawTabs(host, game);
-}
-function gearMapTouch(game, x, y) {
-  if (!game.setGearMapPick)
-    return;
-  const px2 = (x - MAP_X) / MAP_SCALE;
-  const py = (y - MAP_Y) / MAP_SCALE;
-  if (px2 < 0 || py < 0 || px2 >= MAP_W || py >= MAP_H)
-    return;
-  let bestId = null;
-  let bestD = Infinity;
-  for (const { id, loc } of townMapPlaces(game)) {
-    const p = locPixel(loc);
-    const d = (p.x + 4 - px2) ** 2 + (p.y + 4 - py) ** 2;
-    if (d < bestD) {
-      bestD = d;
-      bestId = id;
-    }
-  }
-  game.setGearMapPick(bestD <= 16 * 16 ? bestId : null);
-}
-var TAP_A = {
-  isDown: () => false,
-  wasPressed: (btn) => btn === "a"
-};
-function clampInt(v, lo, hi) {
-  return v < lo ? lo : v > hi ? hi : v;
-}
-function gearTouchDown(game, x, y) {
-  const b = game.battleView?.()?.battle;
-  const col = clampInt(Math.floor(x / TILE_W), 0, COLS - 1);
-  const row = clampInt(Math.floor(y / TILE_H), 0, ROWS6 - 1);
-  if (!b) {
-    const tabs = gearTabs(game);
-    if (row === TAB_ROW && tabs.length > 1) {
-      for (let i = 0;i < tabs.length; i++) {
-        const x0 = tabX(tabs, i);
-        if (col >= x0 && col < x0 + tabs[i].label.length + 2) {
-          game.setGearView?.(tabs[i].id);
-          return;
-        }
-      }
-      return;
-    }
-    if (activeView(game) === "map")
-      gearMapTouch(game, x, y);
-    return;
-  }
-  if (b.choiceOpen) {
-    if (col >= 14 && col <= 19 && row >= 7 && row <= 11) {
-      b.choiceYes = row < 9;
-    }
-    b.update(TAP_A);
-    return;
-  }
-  switch (b.phase) {
-    case "menu": {
-      const c = col < 10 ? 0 : 1;
-      const r = row < 10 ? 0 : 1;
-      b.menuIndex = r * 2 + c + 1;
-      b.update(TAP_A);
-      return;
-    }
-    case "moveSelect": {
-      const n = b.player.curMoves.length;
-      if (n === 0)
-        return;
-      const i = clampInt(Math.floor((row - 2) / 3), 0, n - 1);
-      b.moveIndex = i + 1;
-      b.update(TAP_A);
-      return;
-    }
-    case "party": {
-      const n = game.save?.party?.length ?? 0;
-      if (n === 0)
-        return;
-      const i = clampInt(Math.floor((row - 2) / 2), 0, n - 1);
-      b.partyIndex = i;
-      b.update(TAP_A);
-      return;
-    }
-    case "item": {
-      const n = b.itemList.length;
-      if (n === 0)
-        return;
-      const i = clampInt(row - 2, 0, n - 1);
-      b.itemIndex = i;
-      b.update(TAP_A);
-      return;
-    }
-    default:
-      b.update(TAP_A);
-      return;
-  }
-}
-
 // voxelmon/game/psp-main.ts
 var SEED = 17;
 var native = globalThis.voxel;
@@ -11384,9 +11398,9 @@ globalThis.frame = (buttons) => {
   const debugNext = (buttons >> 26 & 1) !== 0;
   const debugPrev = (buttons >> 27 & 1) !== 0;
   if (debugNext && !prevDebugNext)
-    game.debugCycleMap(1);
+    game.cycleGearView(1);
   if (debugPrev && !prevDebugPrev)
-    game.debugCycleMap(-1);
+    game.cycleGearView(-1);
   prevDebugNext = debugNext;
   prevDebugPrev = debugPrev;
   game.tick(phys);
