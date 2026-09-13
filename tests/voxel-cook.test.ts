@@ -44,6 +44,7 @@ import {
   CAM_FOCAL,
   MESH_KIND,
   MESH_KINDS,
+  UI_TILE,
   PITCH_RUNGS,
   RIG,
   RIG_DOLLY,
@@ -348,6 +349,46 @@ describe.skipIf(reason !== null)("voxel cook", () => {
     // 'A' = 0x80 (mainBase), textbox border art lives in the extra bank
     expect(tileHasInk(0x80)).toBe(true);
     expect([0x60, 0x61, 0x62, 0x63, 0x79].some(tileHasInk)).toBe(true);
+  });
+
+  test("the UI page carries the trainer-card art below 0x60", () => {
+    const gen = loadGen(GEN_DIR);
+    const linear = buildUiPage(gen).frames[0];
+    const tileHasInk = (tile: number): boolean => {
+      const tx = (tile % 16) * 8;
+      const ty = Math.floor(tile / 16) * 8;
+      for (let y = 0; y < 8; y++) {
+        for (let x = 0; x < 8; x++) {
+          const b = linear[(ty + y) * 128 + tx + x];
+          if (b !== 0xff && b !== 0) return true;
+        }
+      }
+      return false;
+    };
+    // Every reserved code is filled: a short sheet or a wrong base would
+    // leave a hole, and the card would draw blanks where badges belong.
+    const filled = (from: number, n: number): boolean =>
+      Array.from({ length: n }, (_, i) => from + i).every(tileHasInk);
+    expect(filled(UI_TILE.frame, 9)).toBe(true);
+    expect(filled(UI_TILE.circle, 1)).toBe(true);
+    expect(filled(UI_TILE.number, 8)).toBe(true);
+    expect(filled(UI_TILE.badge, 8 * UI_TILE.badgeStride)).toBe(true);
+    // ...and none of it reaches the GB's own tile space, which starts at the
+    // font_extra bank — the card's codes are only free because 0x01..0x5f is.
+    expect(UI_TILE.badge + 8 * UI_TILE.badgeStride).toBeLessThanOrEqual(0x60);
+    // A gym's face and badge halves are different art, not the same tiles
+    // twice (the two are 4 tiles apart, DrawBadges' FaceBadgeTiles pairing).
+    const tile = (t: number): string => {
+      const tx = (t % 16) * 8;
+      const ty = Math.floor(t / 16) * 8;
+      const out: number[] = [];
+      for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) out.push(linear[(ty + y) * 128 + tx + x]);
+      return out.join(",");
+    };
+    for (let gym = 0; gym < 8; gym++) {
+      const base = UI_TILE.badge + gym * UI_TILE.badgeStride;
+      expect(tile(base)).not.toBe(tile(base + UI_TILE.badgeHalf));
+    }
   });
 });
 

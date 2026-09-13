@@ -76,6 +76,14 @@ export interface SaveSlice {
    * persists to when that map is next entered. true = shown, false = hidden.
    */
   objectToggles?: Record<string, Record<string, boolean>>;
+  /**
+   * gen1recomp save.defeatedTrainers: trainers beaten, by NPC object id
+   * (`<map>_obj_<index>`). The EVENT_BEAT_* flag covers trainers the
+   * extractor found a def_trainers header for; this covers the rest, which
+   * is every text_asm trainer — they have no header, so no flag exists to
+   * record their defeat.
+   */
+  defeatedTrainers?: Record<string, boolean>;
   /** Cells a cut tree has been chopped at, permanently: per map id, per
    * `"cx,cy"` cell key (voxelmon/cook/structures.ts cuttableCells' own key
    * format). Reapplied as stamp-off ops at setMap so a cut tree stays gone
@@ -1211,9 +1219,26 @@ export class Overworld implements ScriptWorld {
     return headers?.[this.map.def.label]?.[npc.def.index];
   }
 
+  /**
+   * OverworldController.lua:2982-2990 trainerDefeated — save.defeatedTrainers
+   * by object id FIRST, then the header's EVENT_BEAT_* flag.
+   *
+   * The per-object record is not redundant: a text_asm trainer has no
+   * def_trainers header at all, so there is no event flag to set and the flag
+   * alone can never remember him. That is the Game Corner Rocket, who stayed
+   * beatable forever and so never walked off the hidden staircase.
+   */
   trainerDefeated(npc: NPC): boolean {
+    if (this.save.defeatedTrainers?.[npc.id]) return true;
     const ev = this.trainerHeader(npc)?.event;
     return !!ev && this.save.flags?.[ev] === true;
+  }
+
+  /** The win record both engage paths write: object id, then the flag. */
+  private markTrainerDefeated(npc: NPC, event: string | undefined): void {
+    const save = this.save as { defeatedTrainers?: Record<string, boolean> };
+    (save.defeatedTrainers ??= {})[npc.id] = true;
+    if (event && this.save.flags) this.save.flags[event] = true;
   }
 
   // Force a trainer battle by object (no sight line): MtMoonB2F's Super Nerd
@@ -1230,8 +1255,7 @@ export class Overworld implements ScriptWorld {
         npc.def.trainerParty ?? 1,
         undefined,
         (won) => {
-          const ev = header?.event;
-          if (won && ev && this.save.flags) this.save.flags[ev] = true;
+          if (won) this.markTrainerDefeated(npc, header?.event);
           onDone?.();
         },
       );
@@ -1290,10 +1314,9 @@ export class Overworld implements ScriptWorld {
     const fight = () => {
       const launch = () =>
         this.startTrainerBattle(def.trainerClass ?? "", def.trainerParty ?? 1, undefined, (won) => {
-          // mark the trainer's EVENT_BEAT_* only on a win so the sight line
-          // does not re-fire; a loss leaves it and blacks out.
-          const ev = header?.event;
-          if (won && ev && this.save.flags) this.save.flags[ev] = true;
+          // record the win only on a win so the sight line does not re-fire;
+          // a loss leaves it and blacks out.
+          if (won) this.markTrainerDefeated(npc, header?.event);
           npc.frozen = false;
           this.engaging = false;
         });

@@ -25,6 +25,7 @@ import {
   buildSpritePage,
   buildTerrainPage,
   buildPalettes,
+  buildOpaquePicPage,
   buildUiPage,
   paletteBase,
   type PageDef,
@@ -200,6 +201,18 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
     pages.push(buildPicPage(gen, key));
     pageOwners.push({ kind: ATLAS_KIND.pics });
   }
+
+  // The trainer card's portrait: Red's battle front pic with its cut-out
+  // flooded white, so the card can show it without the diorama behind it
+  // (atlas.ts buildOpaquePicPage). Appended AFTER the title pages, which the
+  // guest still addresses by hardcoded index (ui/title.ts TITLE_PAGES) —
+  // inserting anywhere earlier would silently renumber them.
+  let trainerCardPic: number | null = null;
+  if (gen.gfx["battle/trainer/red"]) {
+    trainerCardPic = pages.length;
+    pages.push(buildOpaquePicPage(gen, "battle/trainer/red", "trainer_card/player"));
+    pageOwners.push({ kind: ATLAS_KIND.pics });
+  }
   const pageForPath = (byKey: Map<string, number>, path: string | undefined) => {
     if (!path) return undefined;
     const key = path.replace(/^assets\/generated\//, "").replace(/\.png$/, "");
@@ -256,6 +269,7 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
     emotePage,
     uiPage,
     terrainPage,
+    trainerCardPic,
   };
   const gameJson = buildGamedata(gen, atlas, mapNames);
   const glyphs = buildCharmap(gen);

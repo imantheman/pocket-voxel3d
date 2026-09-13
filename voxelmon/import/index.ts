@@ -23,6 +23,7 @@ import { extractPokemon } from "./stages/pokemon.ts";
 import { extractSprites } from "./stages/sprites.ts";
 import { extractText } from "./stages/text.ts";
 import { extractTitle } from "./stages/title.ts";
+import { extractTrainerCard } from "./stages/trainercard.ts";
 import { extractTilesets } from "./stages/tilesets.ts";
 import { extractTrainers } from "./stages/trainers.ts";
 import { extractTypeChart } from "./stages/type-chart.ts";
@@ -75,6 +76,7 @@ export async function runImport(env: VoxelEnv): Promise<void> {
     ],
     ["field", () => writeJson(genDir, "field", extractField(ctx))],
     ["title", () => writeJson(genDir, "title", extractTitle(ctx))],
+    ["trainercard", () => writeJson(genDir, "trainercard", extractTrainerCard(ctx))],
     [
       "audio",
       () => {

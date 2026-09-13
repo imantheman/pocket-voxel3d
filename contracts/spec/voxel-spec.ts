@@ -48,6 +48,34 @@ export const GB_H = 144;
 export const UI_COLS = 20;
 export const UI_ROWS = 18;
 
+/**
+ * Trainer-card art in the UI page (cook/atlas.ts buildUiPage packs it,
+ * game/ui/trainercard.ts draws it). The UI page is 256 tiles addressed by GB
+ * tile code, and the GB itself only ever fills 0x60..0xff — font_extra, the
+ * font, and the battle HUD overlay. Everything below 0x60 is ours, except
+ * tile 0, which the ui layer reserves as "cell empty".
+ *
+ * The card's art is not part of the GB's UI tile space at all: the original
+ * bank-switches these sheets into VRAM while the card is up. Giving them
+ * fixed codes down here is what lets the card be drawn with plain uiTile
+ * calls instead of a new op and a new atlas page.
+ */
+export const UI_TILE = {
+  /** 3x3 box pieces: 0 bottom, 1 right, 2 tl, 3 top, 4 tr, 5 left, 6 bl, 7 br, 8 fill. */
+  frame: 0x01,
+  /** The dot either side of the BADGES banner. */
+  circle: 0x0a,
+  /** Slot digits 1..8, one 8x8 tile each. */
+  number: 0x0b,
+  /**
+   * 8 gyms x 8 tiles: 4 face tiles (2x2), then 4 badge tiles (2x2). Gym `g`
+   * starts at `badge + g * badgeStride`; the badge half is `+ badgeHalf`.
+   */
+  badge: 0x20,
+  badgeStride: 8,
+  badgeHalf: 4,
+} as const;
+
 /** The PSP framebuffer the diorama renders at. */
 export const VIEW_W = 480;
 export const VIEW_H = 272;

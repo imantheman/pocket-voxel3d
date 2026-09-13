@@ -795,6 +795,47 @@ describe("talking to a trainer", () => {
     expect(topText(game)).toBe((romData!.text as any)[header.after].replace(/\n|\f|\x0b/g, " "));
   });
 
+  test.skipIf(!hasGen)("a headerless trainer's win is remembered by object id", () => {
+    // The Game Corner Rocket has no def_trainers header, so there is no
+    // EVENT_BEAT_* flag that could ever record beating him — the flag alone
+    // left him re-fightable forever, and his script only walks him off the
+    // hidden staircase once engage_trainer reports he stands defeated.
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    ow.setMap("GAME_CORNER", 9, 7, "up");
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 5));
+    expect((romData!.trainer_headers as any).GameCorner).toBeUndefined();
+    const npc = ow.findNpc("GAMECORNER_ROCKET")!;
+    expect(ow.trainerDefeated(npc)).toBe(false);
+
+    (game as any).startTrainerBattle = (
+      _id: string, _idx: number, _name: unknown, onDone: (won: boolean) => void,
+    ) => onDone(true);
+    ow.engageTrainer(npc);
+    dismissText(game); // the before-battle line, then the (stubbed) battle
+    expect(ow.trainerDefeated(npc)).toBe(true);
+    expect(game.save.defeatedTrainers[npc.id]).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("...which is what lets his script walk him off the stairs", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    ow.setMap("GAME_CORNER", 9, 7, "up");
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 5));
+    (game as any).startTrainerBattle = (
+      _id: string, _idx: number, _name: unknown, onDone: (won: boolean) => void,
+    ) => onDone(true);
+    const npc = ow.findNpc("GAMECORNER_ROCKET")!;
+
+    ow.talkTo(npc); // TEXT_GAMECORNER_ROCKET -> engage, walk up, despawn
+    for (let i = 0; i < 400; i++) {
+      dismissText(game);
+      if (game.save.objectToggles?.GAME_CORNER?.GAMECORNER_ROCKET === false) break;
+      game.tick(0);
+    }
+    expect(game.save.objectToggles?.GAME_CORNER?.GAMECORNER_ROCKET).toBe(false);
+  });
+
   test.skipIf(!hasGen)("the Game Corner Rocket has a line despite having no header", () => {
     // He is a text_asm trainer: no def_trainers header, so header.battle is
     // undefined and the taunt has to come from his own TEXT_* constant.

@@ -12,7 +12,7 @@
 // variants (gen1recomp TileRenderer.lua:74-92): water tile rows rotate by
 // WATER_OFFSETS per step, the flower tile cycles flower1-3.
 
-import { ATLAS_KIND } from "../../contracts/spec/voxel-spec.ts";
+import { ATLAS_KIND, UI_TILE } from "../../contracts/spec/voxel-spec.ts";
 import { ANIM_STEPS, FLOWER_FRAMES, WATER_OFFSETS, defaultAnimatedTiles } from "./classify.ts";
 import { type Art, artOf, type GenData, PX_CLEAR, sheetKeyOf, type TilesetDef } from "./data.ts";
 import { type Redpp, SHADES } from "./redpp.ts";
@@ -405,6 +405,19 @@ export function buildUiPage(gen: GenData): PageDef {
     const sheet = artOf(gen, key);
     if (sheet) place(sheet, base);
   }
+  // Trainer-card art (voxel-spec.ts UI_TILE) in the tiles below 0x60, which
+  // the GB's own UI never uses. Each sheet's tile order IS the drawing
+  // order the card wants, so `place` needs no special case: the badges strip
+  // is 2 tiles wide, giving each gym its 4 face then 4 badge tiles in order.
+  for (const [key, base] of [
+    ["trainer_card/frame", UI_TILE.frame],
+    ["trainer_card/circle", UI_TILE.circle],
+    ["trainer_card/numbers", UI_TILE.number],
+    ["trainer_card/badges", UI_TILE.badge],
+  ] as const) {
+    const sheet = artOf(gen, key);
+    if (sheet) place(sheet, base);
+  }
   return { w, h, kind: ATLAS_KIND.ui, frames: [linear], name: "ui" };
 }
 
@@ -415,4 +428,28 @@ export function buildPicPage(gen: GenData, key: string): PageDef {
   const linear = new Uint8Array(art.w * art.h);
   blitArt(linear, art.w, art, 0, 0);
   return { w: art.w, h: art.h, kind: ATLAS_KIND.pics, frames: [linear], name: key };
+}
+
+/**
+ * The same pic with its transparent pixels flooded to shade 0 (white) — the
+ * treatment buildUiPage already gives UI tiles, for the same reason.
+ *
+ * A pic draws UNDER the ui layer (draw.rs ranks ScreenPic 8, UiQuad 9), so a
+ * pic shown inside a menu has to bring its own background: 2271 of Red's
+ * 3136 pixels are transparent, and left that way the diorama shows through
+ * most of the trainer card's portrait. Cooked as its own page so the title
+ * screen's copy keeps its transparency, where the art sits over the logo
+ * screen and the cut-out is the point.
+ */
+export function buildOpaquePicPage(gen: GenData, key: string, name: string): PageDef {
+  const art = artOf(gen, key);
+  if (!art) throw new Error(`missing pic: ${key}`);
+  const linear = new Uint8Array(art.w * art.h);
+  for (let y = 0; y < art.h; y++) {
+    for (let x = 0; x < art.w; x++) {
+      const px = art.px(x, y);
+      linear[y * art.w + x] = px === PX_CLEAR ? 0 : px;
+    }
+  }
+  return { w: art.w, h: art.h, kind: ATLAS_KIND.pics, frames: [linear], name };
 }

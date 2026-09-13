@@ -8,7 +8,16 @@
 // (px + 16, py + 8) — the player sprite at screen tile (8,8). cam() takes
 // that centre in Q4.
 
-import { ENT_FLAG, ENTS_MAX, Q4, Q8 } from "../../contracts/spec/voxel-spec.ts";
+import {
+  ENT_FLAG,
+  ENTS_MAX,
+  Q4,
+  Q8,
+  UI_COLS,
+  UI_ROWS,
+  UI_TILE,
+} from "../../contracts/spec/voxel-spec.ts";
+import { CARD_PIC_CELL } from "./ui/trainercard.ts";
 import type { WildBattle } from "./battle/battle.ts";
 import { desiredCards, type BattleStaging } from "./battle/staging.ts";
 import type { BattleUi } from "./battle/ui.ts";
@@ -968,46 +977,69 @@ export class Scene {
       }
       return;
     }
-    // The TRAINER CARD (ui/trainercard.ts, DrawTrainerInfo): the NAME/MONEY/
-    // TIME card, the BADGES banner, then the eight numbered badge slots. The
-    // original puts the player's front pic in the top card's right half; a
-    // ScreenPic draws UNDER the ui layer (draw.rs rank 8 vs 9), so showing one
-    // would mean leaving those cells unfilled and letting the overworld show
-    // through behind him. The card is text-only instead.
+    // The TRAINER CARD (ui/trainercard.ts, DrawTrainerInfo), drawn from the
+    // ROM's own trainer-card tiles: the patterned box frame, the eight
+    // face/badge pairs, the slot digits and the banner dots, all packed into
+    // the UI page's low tile codes (voxel-spec UI_TILE).
     const tc = (view as unknown as { trainerCard?: () => any }).trainerCard?.();
     if (tc) {
       const owned = tc.badges.map((b: any) => (b.owned ? "1" : "0")).join("");
-      const sig = `c${tc.name},${tc.money},${tc.time},${owned}`;
+      const sig = `c${tc.name},${tc.money},${tc.time},${owned},${tc.picPage}`;
       if (sig !== this.menuSig) {
         this.menuSig = sig;
         this.uiOwner = null;
         host.uiClear();
-        const W = 19;
-        const box = (y: number, h: number): void => {
-          host.uiTile(0, y, BORDER_TL);
-          host.uiFill(1, y, W - 1, 1, BORDER_H);
-          host.uiTile(W, y, BORDER_TR);
-          host.uiFill(0, y + 1, 1, h, BORDER_V);
-          host.uiFill(W, y + 1, 1, h, BORDER_V);
-          host.uiFill(1, y + 1, W - 1, h, SPACE);
-          host.uiTile(0, y + 1 + h, BORDER_BL);
-          host.uiFill(1, y + 1 + h, W - 1, 1, BORDER_H);
-          host.uiTile(W, y + 1 + h, BORDER_BR);
+        // The Lua fills the screen white before drawing (TrainerCard:draw);
+        // SPACE is the ui layer's opaque white tile.
+        host.uiFill(0, 0, UI_COLS, UI_ROWS, SPACE);
+        // trainer_info.png's 3x3: 0 bottom, 1 right, 2 tl, 3 top, 4 tr,
+        // 5 left, 6 bl, 7 br, 8 the patterned fill.
+        const F = UI_TILE.frame;
+        const frameBox = (tx: number, ty: number, tw: number, th: number): void => {
+          const x1 = tx + tw - 1;
+          const y1 = ty + th - 1;
+          host.uiTile(tx, ty, F + 2);
+          host.uiTile(x1, ty, F + 4);
+          host.uiTile(tx, y1, F + 6);
+          host.uiTile(x1, y1, F + 7);
+          host.uiFill(tx + 1, ty, tw - 2, 1, F + 3);
+          host.uiFill(tx + 1, y1, tw - 2, 1, F + 0);
+          host.uiFill(tx, ty + 1, 1, th - 2, F + 5);
+          host.uiFill(x1, ty + 1, 1, th - 2, F + 1);
         };
-        box(0, 3);
-        this.stamp(host, 2, 1, `NAME/${tc.name}`);
-        this.stamp(host, 2, 2, `MONEY/¥${tc.money}`);
-        this.stamp(host, 2, 3, `TIME/${tc.time}`);
-        box(5, 1);
-        this.stamp(host, 7, 6, "BADGES");
-        // One slot per row: eight rows is exactly what the screen has left,
-        // and a two-column grid would run the 7-letter names together.
-        box(8, 8);
+        // the info card
+        frameBox(0, 0, UI_COLS, 9);
+        if (tc.picPage >= 0) {
+          // Cleared, not filled: the portrait is a pic drawn UNDER this layer
+          // (draw.rs ranks ScreenPic 8, UiQuad 9), so it shows only through
+          // empty cells. It covers the box's right edge, as it does on the GB.
+          const c = CARD_PIC_CELL;
+          host.uiFill(c.x, c.y, c.w, c.h, 0);
+        }
+        // Text last, so a long line draws OVER the portrait rather than being
+        // clipped by the hole — the order DrawTrainerInfo uses, and what a
+        // six-figure MONEY needs: it runs to the 13th column, where the
+        // portrait starts. Rows are the original's own (16/32/48 px).
+        this.stamp(host, 2, 2, `NAME/${tc.name}`);
+        this.stamp(host, 2, 4, `MONEY/¥${tc.money}`);
+        this.stamp(host, 2, 6, `TIME/${tc.time}`);
+        // the circle-dotted BADGES banner (TrainerInfo_BadgesText)
+        frameBox(0, 9, UI_COLS, 3);
+        host.uiTile(6, 10, UI_TILE.circle);
+        this.stamp(host, 7, 10, "BADGES");
+        host.uiTile(13, 10, UI_TILE.circle);
+        // the numbered badge grid: 4 across, 2 down, the digit in the cell to
+        // each badge's left. An unearned slot shows the gym leader's face.
+        frameBox(0, 12, UI_COLS, 6);
         tc.badges.forEach((b: any, i: number) => {
-          // An unearned badge keeps its number and hides its name, the way
-          // the original's grid shows a blank numbered face.
-          const label = b.owned ? b.name : ".".repeat(b.name.length);
-          this.stamp(host, 2, 9 + i, `${b.n} ${label}`);
+          const cx = 2 + (i % 4) * 4;
+          const cy = 13 + Math.floor(i / 4) * 2;
+          host.uiTile(cx, cy, UI_TILE.number + i);
+          const base = UI_TILE.badge + i * UI_TILE.badgeStride + (b.owned ? UI_TILE.badgeHalf : 0);
+          host.uiTile(cx + 1, cy, base);
+          host.uiTile(cx + 2, cy, base + 1);
+          host.uiTile(cx + 1, cy + 1, base + 2);
+          host.uiTile(cx + 2, cy + 1, base + 3);
         });
       }
       return;

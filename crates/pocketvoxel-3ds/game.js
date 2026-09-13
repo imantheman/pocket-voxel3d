@@ -32,6 +32,20 @@ var TILE_PX = 8;
 var CELL_PX = 16;
 var CHUNK_TILES = 16;
 var CHUNK_PX = CHUNK_TILES * TILE_PX;
+var GB_W = 160;
+var GB_H = 144;
+var UI_COLS = 20;
+var UI_ROWS = 18;
+var UI_TILE = {
+  frame: 1,
+  circle: 10,
+  number: 11,
+  badge: 32,
+  badgeStride: 8,
+  badgeHalf: 4
+};
+var VIEW_W = 480;
+var VIEW_H = 272;
 var WORLD_VIEW_H = 136;
 var VOX_BTN = {
   up: 1 << 0,
@@ -3684,6 +3698,77 @@ function apply2(data, mon, newSpecies, pokedex) {
   }
 }
 
+// voxelmon/game/rules/badges.ts
+var VANILLA = [
+  { id: "BOULDERBADGE" },
+  { id: "CASCADEBADGE" },
+  { id: "THUNDERBADGE" },
+  { id: "RAINBOWBADGE" },
+  { id: "SOULBADGE" },
+  { id: "MARSHBADGE" },
+  { id: "VOLCANOBADGE" },
+  { id: "EARTHBADGE" }
+];
+function list(data) {
+  const configured = data?.constants?.badges;
+  if (Array.isArray(configured) && configured.length > 0)
+    return configured;
+  return VANILLA;
+}
+function itemFor(entry) {
+  return entry.item ?? entry.id;
+}
+function label(entry) {
+  const name = entry.name ?? entry.id;
+  return name.endsWith("BADGE") && name.length > 5 ? name.slice(0, -5) : name;
+}
+
+// voxelmon/game/ui/trainercard.ts
+var UI_SCALE = VIEW_H / GB_H;
+var UI_ORIGIN_X = (VIEW_W - GB_W * UI_SCALE) / 2;
+var UI_TILE_PX = TILE_PX * UI_SCALE;
+var CARD_PIC_CELL = { x: 13, y: 1, w: 7, h: 7 };
+var CARD_PIC_RECT = {
+  x: Math.round(UI_ORIGIN_X + CARD_PIC_CELL.x * UI_TILE_PX),
+  y: Math.round(CARD_PIC_CELL.y * UI_TILE_PX),
+  w: Math.round(CARD_PIC_CELL.w * UI_TILE_PX),
+  h: Math.round(CARD_PIC_CELL.h * UI_TILE_PX)
+};
+function formatPlayTime(seconds) {
+  const t = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(t / 3600);
+  const m = Math.floor(t / 60) % 60;
+  return `${h}:${String(m).padStart(2, "0")}`;
+}
+
+class TrainerCardState {
+  game;
+  kind = "trainercard";
+  constructor(game) {
+    this.game = game;
+  }
+  update() {
+    const p = this.game.input.pressed;
+    if (p.a || p.b || p.start)
+      this.game.pop();
+  }
+  view() {
+    const save = this.game.save ?? {};
+    const inv = save.inventory ?? {};
+    return {
+      name: String(save.player?.name ?? "RED"),
+      money: Number(save.money ?? 0),
+      time: formatPlayTime(Number(save.playTime ?? 0)),
+      badges: list(this.game.data).map((entry, i) => ({
+        n: i + 1,
+        name: label(entry),
+        owned: !!inv[itemFor(entry)]
+      })),
+      picPage: this.game.data?.atlas?.trainerCardPic ?? -1
+    };
+  }
+}
+
 // voxelmon/game/rules/encounter.ts
 var ENCOUNTER_BUCKETS = [
   51,
@@ -3743,13 +3828,13 @@ function occupied(entities, cx, cy, ignore) {
 function pairBlocked(map, mover, sx, sy, tx, ty, tilePairs) {
   if (!tilePairs)
     return false;
-  const list = mover.surfing ? tilePairs.water : tilePairs.land;
-  if (!list || list.length === 0)
+  const list2 = mover.surfing ? tilePairs.water : tilePairs.land;
+  if (!list2 || list2.length === 0)
     return false;
   const tileset = map.def.tileset;
   const a = map.cellTile(sx, sy);
   const b = map.cellTile(tx, ty);
-  for (const p of list) {
+  for (const p of list2) {
     if (p.tileset === tileset && (p.a === a && p.b === b || p.a === b && p.b === a)) {
       return true;
     }
@@ -5252,30 +5337,30 @@ function slots(save) {
   return n;
 }
 function order(save) {
-  let list = save.bagOrder;
-  if (!list) {
-    list = [];
+  let list2 = save.bagOrder;
+  if (!list2) {
+    list2 = [];
     for (const id of Object.keys(save.inventory)) {
       if (!isBadge(id))
-        list.push(id);
+        list2.push(id);
     }
-    list.sort();
-    save.bagOrder = list;
+    list2.sort();
+    save.bagOrder = list2;
   }
   const seen = new Set;
-  for (let i = list.length - 1;i >= 0; i--) {
-    const id = list[i];
+  for (let i = list2.length - 1;i >= 0; i--) {
+    const id = list2[i];
     if (save.inventory[id] === undefined || seen.has(id)) {
-      list.splice(i, 1);
+      list2.splice(i, 1);
     } else {
       seen.add(id);
     }
   }
   for (const id of Object.keys(save.inventory)) {
     if (!isBadge(id) && !seen.has(id))
-      list.push(id);
+      list2.push(id);
   }
-  return list;
+  return list2;
 }
 function add(save, id, qty, data) {
   const inv = save.inventory;
@@ -5297,11 +5382,11 @@ function remove(save, id, qty) {
   inv[id] = (inv[id] ?? 0) - (qty ?? 1);
   if (inv[id] <= 0) {
     delete inv[id];
-    const list = save.bagOrder;
-    if (list) {
-      const i = list.indexOf(id);
+    const list2 = save.bagOrder;
+    if (list2) {
+      const i = list2.indexOf(id);
       if (i !== -1)
-        list.splice(i, 1);
+        list2.splice(i, 1);
     }
   }
 }
@@ -5406,7 +5491,7 @@ function* jump_if_false(ctx, ...args) {
   if (!ctx.lastCheck)
     return args[0];
 }
-function* label() {}
+function* label2() {}
 function* heal_party(ctx) {
   ctx.world.healParty();
 }
@@ -5434,8 +5519,8 @@ function* give_pokemon(ctx, ...args) {
   party.push(mon);
   const runner = ctx.runner;
   if (typeof w.askNickname === "function") {
-    const label2 = w.data.pokemon?.[species]?.name ?? species;
-    w.askNickname(label2, (name) => {
+    const label3 = w.data.pokemon?.[species]?.name ?? species;
+    w.askNickname(label3, (name) => {
       if (name)
         mon.nickname = name;
       runner.resume();
@@ -5669,7 +5754,7 @@ var VERBS = {
   jump,
   jump_if_true,
   jump_if_false,
-  label,
+  label: label2,
   face_player,
   check_flag,
   set_flag,
@@ -5940,8 +6025,8 @@ class Overworld {
   isCooked(mapId) {
     if (mapId === "LAST_MAP")
       return true;
-    const list = this.shell.data.cookedMaps;
-    return !list || list.includes(mapId);
+    const list2 = this.shell.data.cookedMaps;
+    return !list2 || list2.includes(mapId);
   }
   shell;
   map;
@@ -6405,9 +6490,9 @@ class Overworld {
   }
   onStepComplete() {
     if (!this.runner.isRunning()) {
-      const label2 = this.map?.id ?? "";
-      const script = MAP_SCRIPTS[label2];
-      const host = MAP_SCRIPTS[label2 + "_ONSTEP_HOST"];
+      const label3 = this.map?.id ?? "";
+      const script = MAP_SCRIPTS[label3];
+      const host = MAP_SCRIPTS[label3 + "_ONSTEP_HOST"];
       const rows = script?.onStep?.(this, this.save) ?? host?.onStep?.(this, this.save) ?? this.coordTrigger(script) ?? this.coordTrigger(host);
       if (rows) {
         this.runScript(rows);
@@ -6561,17 +6646,17 @@ class Overworld {
     this.runner.run(script, { onDone });
   }
   findNpc(ref) {
-    const list = this.npcs;
+    const list2 = this.npcs;
     if (typeof ref === "number") {
-      const byName = list.find((n) => String(n?.id ?? n?.name ?? "").endsWith("_obj_" + ref));
-      return byName ?? list[ref - 1] ?? list[ref] ?? null;
+      const byName = list2.find((n) => String(n?.id ?? n?.name ?? "").endsWith("_obj_" + ref));
+      return byName ?? list2[ref - 1] ?? list2[ref] ?? null;
     }
     const want = String(ref);
-    return list.find((n) => n?.name === want || n?.id === want || n?.obj?.name === want || n?.def?.name === want) ?? list.find((n) => {
+    return list2.find((n) => n?.name === want || n?.id === want || n?.obj?.name === want || n?.def?.name === want) ?? list2.find((n) => {
       const t = String(n?.def?.text ?? "").toUpperCase();
       const w = want.toUpperCase();
       return t === w || t === "TEXT_" + w || t.replace(/^TEXT_/, "") === w;
-    }) ?? list.find((n) => {
+    }) ?? list2.find((n) => {
       const sp = String(n?.def?.sprite ?? "").toUpperCase();
       return sp === want.toUpperCase();
     }) ?? null;
@@ -6585,9 +6670,9 @@ class Overworld {
     shell.askNickname(defaultName, onDone);
   }
   walkRoute(ref, route, onDone) {
-    const list = route.slice();
+    const list2 = route.slice();
     const next = () => {
-      const wp = list.shift();
+      const wp = list2.shift();
       if (!wp) {
         onDone();
         return;
@@ -6617,16 +6702,23 @@ class Overworld {
     return headers?.[this.map.def.label]?.[npc.def.index];
   }
   trainerDefeated(npc) {
+    if (this.save.defeatedTrainers?.[npc.id])
+      return true;
     const ev = this.trainerHeader(npc)?.event;
     return !!ev && this.save.flags?.[ev] === true;
+  }
+  markTrainerDefeated(npc, event) {
+    const save = this.save;
+    (save.defeatedTrainers ??= {})[npc.id] = true;
+    if (event && this.save.flags)
+      this.save.flags[event] = true;
   }
   engageTrainer(npc, onDone) {
     const header = this.trainerHeader(npc);
     npc.facePlayer(this.player);
     const launch = () => this.startTrainerBattle(npc.def.trainerClass ?? "", npc.def.trainerParty ?? 1, undefined, (won) => {
-      const ev = header?.event;
-      if (won && ev && this.save.flags)
-        this.save.flags[ev] = true;
+      if (won)
+        this.markTrainerDefeated(npc, header?.event);
       onDone?.();
     });
     const taunt = this.beforeBattleText(npc, header?.battle);
@@ -6684,9 +6776,8 @@ class Overworld {
     const header = this.trainerHeader(npc);
     const fight = () => {
       const launch = () => this.startTrainerBattle(def.trainerClass ?? "", def.trainerParty ?? 1, undefined, (won) => {
-        const ev = header?.event;
-        if (won && ev && this.save.flags)
-          this.save.flags[ev] = true;
+        if (won)
+          this.markTrainerDefeated(npc, header?.event);
         npc.frozen = false;
         this.engaging = false;
       });
@@ -7213,8 +7304,8 @@ class Scene {
         if (bx.mode === "menu") {
           const items = ["WITHDRAW", "DEPOSIT", "RELEASE", "CHANGE BOX", "SEE YA!"];
           box2(0, 3, 13, items.length * 2);
-          items.forEach((label2, i) => {
-            this.stamp(host, 2, 5 + i * 2, label2);
+          items.forEach((label3, i) => {
+            this.stamp(host, 2, 5 + i * 2, label3);
             if (i === bx.menuIndex)
               host.uiTile(1, 5 + i * 2, ARROW_CURSOR);
           });
@@ -7243,8 +7334,8 @@ class Scene {
         } else if (bx.mode === "submenu") {
           const items = [bx.submenuLabel, "STATS", "CANCEL"];
           box2(9, 9, 9, 6);
-          items.forEach((label2, i) => {
-            this.stamp(host, 12, 11 + i * 2, label2);
+          items.forEach((label3, i) => {
+            this.stamp(host, 12, 11 + i * 2, label3);
             if (i === bx.submenuIndex)
               host.uiTile(11, 11 + i * 2, ARROW_CURSOR);
           });
@@ -7310,8 +7401,8 @@ class Scene {
         this.stamp(host, 19 - money.length, 1, money);
         if (sh.mode === "menu") {
           box2(0, 3, 8, 6);
-          ["BUY", "SELL", "QUIT"].forEach((label2, i) => {
-            this.stamp(host, 3, 5 + i * 2, label2);
+          ["BUY", "SELL", "QUIT"].forEach((label3, i) => {
+            this.stamp(host, 3, 5 + i * 2, label3);
             if (i === sh.menuIndex)
               host.uiTile(2, 5 + i * 2, ARROW_CURSOR);
           });
@@ -7461,8 +7552,8 @@ class Scene {
           host.uiTile(sx, sy + 1 + innerH, BORDER_BL);
           host.uiFill(sx + 1, sy + 1 + innerH, sw - 1, 1, BORDER_H);
           host.uiTile(sx + sw, sy + 1 + innerH, BORDER_BR);
-          items.forEach((label2, i) => {
-            this.stamp(host, sx + 3, sy + 2 + i * 2, label2);
+          items.forEach((label3, i) => {
+            this.stamp(host, sx + 3, sy + 2 + i * 2, label3);
             if (i === pv.submenuIndex)
               host.uiTile(sx + 2, sy + 2 + i * 2, ARROW_CURSOR);
           });
@@ -7658,33 +7749,47 @@ class Scene {
     const tc = view.trainerCard?.();
     if (tc) {
       const owned = tc.badges.map((b) => b.owned ? "1" : "0").join("");
-      const sig = `c${tc.name},${tc.money},${tc.time},${owned}`;
+      const sig = `c${tc.name},${tc.money},${tc.time},${owned},${tc.picPage}`;
       if (sig !== this.menuSig) {
         this.menuSig = sig;
         this.uiOwner = null;
         host.uiClear();
-        const W = 19;
-        const box2 = (y, h) => {
-          host.uiTile(0, y, BORDER_TL);
-          host.uiFill(1, y, W - 1, 1, BORDER_H);
-          host.uiTile(W, y, BORDER_TR);
-          host.uiFill(0, y + 1, 1, h, BORDER_V);
-          host.uiFill(W, y + 1, 1, h, BORDER_V);
-          host.uiFill(1, y + 1, W - 1, h, SPACE);
-          host.uiTile(0, y + 1 + h, BORDER_BL);
-          host.uiFill(1, y + 1 + h, W - 1, 1, BORDER_H);
-          host.uiTile(W, y + 1 + h, BORDER_BR);
+        host.uiFill(0, 0, UI_COLS, UI_ROWS, SPACE);
+        const F = UI_TILE.frame;
+        const frameBox = (tx, ty, tw, th) => {
+          const x1 = tx + tw - 1;
+          const y1 = ty + th - 1;
+          host.uiTile(tx, ty, F + 2);
+          host.uiTile(x1, ty, F + 4);
+          host.uiTile(tx, y1, F + 6);
+          host.uiTile(x1, y1, F + 7);
+          host.uiFill(tx + 1, ty, tw - 2, 1, F + 3);
+          host.uiFill(tx + 1, y1, tw - 2, 1, F + 0);
+          host.uiFill(tx, ty + 1, 1, th - 2, F + 5);
+          host.uiFill(x1, ty + 1, 1, th - 2, F + 1);
         };
-        box2(0, 3);
-        this.stamp(host, 2, 1, `NAME/${tc.name}`);
-        this.stamp(host, 2, 2, `MONEY/¥${tc.money}`);
-        this.stamp(host, 2, 3, `TIME/${tc.time}`);
-        box2(5, 1);
-        this.stamp(host, 7, 6, "BADGES");
-        box2(8, 8);
+        frameBox(0, 0, UI_COLS, 9);
+        if (tc.picPage >= 0) {
+          const c = CARD_PIC_CELL;
+          host.uiFill(c.x, c.y, c.w, c.h, 0);
+        }
+        this.stamp(host, 2, 2, `NAME/${tc.name}`);
+        this.stamp(host, 2, 4, `MONEY/¥${tc.money}`);
+        this.stamp(host, 2, 6, `TIME/${tc.time}`);
+        frameBox(0, 9, UI_COLS, 3);
+        host.uiTile(6, 10, UI_TILE.circle);
+        this.stamp(host, 7, 10, "BADGES");
+        host.uiTile(13, 10, UI_TILE.circle);
+        frameBox(0, 12, UI_COLS, 6);
         tc.badges.forEach((b, i) => {
-          const label2 = b.owned ? b.name : ".".repeat(b.name.length);
-          this.stamp(host, 2, 9 + i, `${b.n} ${label2}`);
+          const cx = 2 + i % 4 * 4;
+          const cy = 13 + Math.floor(i / 4) * 2;
+          host.uiTile(cx, cy, UI_TILE.number + i);
+          const base = UI_TILE.badge + i * UI_TILE.badgeStride + (b.owned ? UI_TILE.badgeHalf : 0);
+          host.uiTile(cx + 1, cy, base);
+          host.uiTile(cx + 2, cy, base + 1);
+          host.uiTile(cx + 1, cy + 1, base + 2);
+          host.uiTile(cx + 2, cy + 1, base + 3);
         });
       }
       return;
@@ -8375,66 +8480,6 @@ class DevMenuState {
   }
   view() {
     return { entries: ENTRIES.map((e) => e[0]), index: this.index };
-  }
-}
-
-// voxelmon/game/rules/badges.ts
-var VANILLA = [
-  { id: "BOULDERBADGE" },
-  { id: "CASCADEBADGE" },
-  { id: "THUNDERBADGE" },
-  { id: "RAINBOWBADGE" },
-  { id: "SOULBADGE" },
-  { id: "MARSHBADGE" },
-  { id: "VOLCANOBADGE" },
-  { id: "EARTHBADGE" }
-];
-function list(data) {
-  const configured = data?.constants?.badges;
-  if (Array.isArray(configured) && configured.length > 0)
-    return configured;
-  return VANILLA;
-}
-function itemFor(entry) {
-  return entry.item ?? entry.id;
-}
-function label2(entry) {
-  const name = entry.name ?? entry.id;
-  return name.endsWith("BADGE") && name.length > 5 ? name.slice(0, -5) : name;
-}
-
-// voxelmon/game/ui/trainercard.ts
-function formatPlayTime(seconds) {
-  const t = Math.max(0, Math.floor(seconds));
-  const h = Math.floor(t / 3600);
-  const m = Math.floor(t / 60) % 60;
-  return `${h}:${String(m).padStart(2, "0")}`;
-}
-
-class TrainerCardState {
-  game;
-  kind = "trainercard";
-  constructor(game) {
-    this.game = game;
-  }
-  update() {
-    const p = this.game.input.pressed;
-    if (p.a || p.b || p.start)
-      this.game.pop();
-  }
-  view() {
-    const save = this.game.save ?? {};
-    const inv = save.inventory ?? {};
-    return {
-      name: String(save.player?.name ?? "RED"),
-      money: Number(save.money ?? 0),
-      time: formatPlayTime(Number(save.playTime ?? 0)),
-      badges: list(this.game.data).map((entry, i) => ({
-        n: i + 1,
-        name: label2(entry),
-        owned: !!inv[itemFor(entry)]
-      }))
-    };
   }
 }
 
@@ -10259,6 +10304,13 @@ ${mname}!`);
       if (v.monPage >= 0)
         out.push({ page: v.monPage, x: 248, y: 140, w: 104, h: 104 });
       return out;
+    }
+    if (top?.kind === "trainercard") {
+      const v = top.view();
+      if (v.picPage < 0)
+        return [];
+      const r = CARD_PIC_RECT;
+      return [{ page: v.picPage, x: r.x, y: r.y, w: r.w, h: r.h }];
     }
     if (top?.kind === "pokedex") {
       const v = top.view();

@@ -40,7 +40,7 @@ import { NamingState } from "./ui/naming.ts";
 import { TitleState, TITLE_PAGES } from "./ui/title.ts";
 import { StartMenuState } from "./ui/startmenu.ts";
 import { DevMenuState } from "./ui/devmenu.ts";
-import { TrainerCardState } from "./ui/trainercard.ts";
+import { CARD_PIC_RECT, TrainerCardState } from "./ui/trainercard.ts";
 import { WarpPickerState } from "./ui/warppicker.ts";
 import { MoveForgetState } from "./ui/moveforget.ts";
 import { BagState } from "./ui/bagscreen.ts";
@@ -890,6 +890,14 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       out.push({ page: RED_PIC_PAGE, x: 160, y: 132, w: 112, h: 112 });
       if (v.monPage >= 0) out.push({ page: v.monPage, x: 248, y: 140, w: 104, h: 104 });
       return out;
+    }
+    if (top?.kind === "trainercard") {
+      // DrawTrainerInfo's portrait, upper-right of the info card. The card
+      // clears those ui cells (scene.ts) so this shows through them.
+      const v = top.view();
+      if (v.picPage < 0) return [];
+      const r = CARD_PIC_RECT;
+      return [{ page: v.picPage, x: r.x, y: r.y, w: r.w, h: r.h }];
     }
     if (top?.kind === "pokedex") {
       // DexEntryMenu.lua draws the front pic top-left of the DATA page. Uses

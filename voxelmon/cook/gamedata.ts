@@ -22,6 +22,12 @@ export interface AtlasIndex {
   emotePage: number | null;
   uiPage: number;
   terrainPage: number;
+  /**
+   * Red's front pic, cooked opaque for the trainer card (atlas.ts
+   * buildOpaquePicPage). Null when the source art is absent; the card then
+   * draws without a portrait rather than showing a wrong page.
+   */
+  trainerCardPic: number | null;
 }
 
 /** The tileset subset the guest needs (collision + animation semantics). */
