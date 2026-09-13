@@ -136,7 +136,7 @@ export interface MsgShown {
   revealed: number;
 }
 
-export type BattlePhase = "messages" | "menu" | "moveSelect" | "party" | "item";
+export type BattlePhase = "messages" | "menu" | "moveSelect" | "party" | "item" | "forget";
 
 // BattleState.lua:1868 — frames the old man's demo hovers the battle menu
 // before he opens his bag and throws.
@@ -161,6 +161,10 @@ export class WildBattle implements EffectBattle {
 
   queue: QueueRow[] = [];
   phase: BattlePhase = "messages";
+  /** The move a full-moveset mon is being offered, and which mon. */
+  private learnPending: { mon: PartyMon; moveId: string } | null = null;
+  forgetIndex = 0;
+  private hmCache: Set<string> | null = null;
   afterQueue: "menu" | "finish" = "menu";
   menuIndex = 1;
   moveIndex = 1;
@@ -887,6 +891,10 @@ export class WildBattle implements EffectBattle {
       return;
     }
 
+    if (this.phase === "forget") {
+      this.updateForget(input);
+      return;
+    }
     if (this.phase === "party") {
       this.updateParty(input);
       return;
@@ -1356,9 +1364,10 @@ export class WildBattle implements EffectBattle {
     this.participants = new Set();
   }
 
-  /** :3993-4012 learnMove — auto when a slot is free. DEVIATION (v1): with
-   * four moves the replace-move prompt (MoveLearnMenu) is SKIPPED — the mon
-   * declines automatically, message only. */
+  /** :3993-4012 learnMove — auto when a slot is free, otherwise the
+   * replace-move prompt (MoveLearnMenu). A full moveset parks the queue on
+   * the "forget" phase the way openParty parks it on "party"; updateForget
+   * resumes it either way. */
   learnMove(mon: PartyMon, moveId: string): void {
     const mdef = this.data.moves[moveId];
     if (!mdef) return;
@@ -1370,7 +1379,76 @@ export class WildBattle implements EffectBattle {
       return;
     }
     this.sayNext(`${name} is trying to\nlearn ${mdef.name}!`);
-    this.sayNext(`${name} did not learn\n${mdef.name}!`);
+    this.sayNext(`But ${name} can't\nlearn more than\f4 moves!`);
+    this.actNext(() => {
+      this.learnPending = { mon, moveId };
+      this.forgetIndex = 0;
+      this.phase = "forget";
+    });
+  }
+
+  /** The move list the replace prompt is showing, or null. */
+  forgetView(): { name: string; moves: string[]; index: number; learning: string } | null {
+    const p = this.learnPending;
+    if (this.phase !== "forget" || !p) return null;
+    return {
+      name: p.mon.nickname ?? this.data.pokemon[p.mon.species].name,
+      moves: p.mon.moves.map((mv) => this.data.moves[mv.id]?.name ?? mv.id),
+      index: this.forgetIndex,
+      learning: this.data.moves[p.moveId]?.name ?? p.moveId,
+    };
+  }
+
+  /** Move slots + a trailing cancel row. */
+  private updateForget(input: BattleInput): void {
+    const p = this.learnPending;
+    if (!p) { this.phase = "messages"; return; }
+    const rows = p.mon.moves.length + 1; // + cancel
+    const step = listStep(input);
+    if (step) {
+      this.forgetIndex = (this.forgetIndex + step + rows) % rows;
+      return;
+    }
+    const name = p.mon.nickname ?? this.data.pokemon[p.mon.species].name;
+    const learning = this.data.moves[p.moveId]?.name ?? p.moveId;
+    const decline = (): void => {
+      this.learnPending = null;
+      this.say(`${name} did not learn\n${learning}!`);
+      this.phase = "messages";
+    };
+    if (input.wasPressed("b") || (input.wasPressed("a") && this.forgetIndex >= rows - 1)) {
+      decline();
+      return;
+    }
+    if (!input.wasPressed("a")) return;
+    const slot = p.mon.moves[this.forgetIndex];
+    if (!slot) { decline(); return; }
+    // Gen 1 will not let an HM move be forgotten (it is the only way off
+    // some maps, and there is no Move Deleter until Gen 2).
+    if (this.hmMoves().has(slot.id)) {
+      this.say("HM moves can't be\nforgotten now!");
+      this.phase = "messages";
+      return;
+    }
+    const forgotten = this.data.moves[slot.id]?.name ?? slot.id;
+    const mdef = this.data.moves[p.moveId];
+    p.mon.moves[this.forgetIndex] = { id: p.moveId, pp: mdef?.pp ?? 0 };
+    this.learnPending = null;
+    this.say(`1, 2 and... Poof!\f${name} forgot\n${forgotten}!\fAnd...`);
+    this.sayNext(`${name} learned\n${learning}!`);
+    this.phase = "messages";
+  }
+
+  /** Moves taught by an HM, by item definition rather than a hardcoded list. */
+  private hmMoves(): Set<string> {
+    if (!this.hmCache) {
+      this.hmCache = new Set<string>();
+      for (const it of Object.values(this.data.items ?? {})) {
+        const m = (it as { machine?: { kind?: string; move?: string } }).machine;
+        if (m?.kind === "HM" && m.move) this.hmCache.add(m.move);
+      }
+    }
+    return this.hmCache;
   }
 
   /** Swap the enemy battler (trainer send-out; makeBattler is module-local). */

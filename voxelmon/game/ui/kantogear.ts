@@ -58,7 +58,9 @@ interface GearBattleInput {
 /** The live battle state the panel mirrors. Every field is a plain public
  * member of WildBattle (battle.ts:144-217), read-only from here. */
 interface GearBattle {
-  phase: "messages" | "menu" | "moveSelect" | "party" | "item";
+  phase: "messages" | "menu" | "moveSelect" | "party" | "item" | "forget";
+  /** battle.ts forgetView(): the replace-move prompt's state, or null. */
+  forgetView?(): { name: string; moves: string[]; index: number; learning: string } | null;
   menuIndex: number; // 1..4, FIGHT/PKMN over ITEM/RUN (battle.ts:753)
   moveIndex: number; // 1-based into player.curMoves
   partyIndex: number; // 0-based into save.party
@@ -306,6 +308,29 @@ function drawMoveSelect(host: VoxelHost, game: GearGame, b: GearBattle): void {
 }
 
 /**
+ * The replace-move prompt (battle.ts learnMove / updateForget): the mon's
+ * four moves plus a cancel row, with the move being offered in the header so
+ * the choice is visible while making it. A plain list rather than the 2x2
+ * move grid — this picks a move to DELETE, and reading it as the familiar
+ * attack grid would invite picking one to use.
+ */
+function drawForgetList(host: VoxelHost, b: GearBattle): void {
+  host.uiClearBottom();
+  const f = b.forgetView?.();
+  if (!f) return;
+  drawTopBar(host, ("LEARN " + f.learning).slice(0, 18));
+  stampBottom(host, 1, 2, (f.name + " FORGETS?").slice(0, 18));
+  f.moves.forEach((name: string, i: number) => {
+    const y = 4 + i * 2;
+    stampBottom(host, 2, y, name.slice(0, 14));
+    if (i === f.index) host.uiTileBottom(0, y, ARROW_CURSOR);
+  });
+  const cancelY = 4 + f.moves.length * 2;
+  stampBottom(host, 2, cancelY, "DON'T LEARN");
+  if (f.index >= f.moves.length) host.uiTileBottom(0, cancelY, ARROW_CURSOR);
+}
+
+/**
  * ITEM -> the (ball-only, v1) battle bag. One row per item: name left, count
  * right, ▶ cursor at column 0 on the selected row (itemIndex is 0-based,
  * battle.ts:1388-1391).
@@ -430,6 +455,9 @@ function drawBattleMessage(host: VoxelHost, b: GearBattle): void {
  */
 function drawBattleGear(host: VoxelHost, game: GearGame, b: GearBattle): void {
   switch (b.phase) {
+    case "forget":
+      drawForgetList(host, b);
+      return;
     case "moveSelect":
       drawMoveSelect(host, game, b);
       return;

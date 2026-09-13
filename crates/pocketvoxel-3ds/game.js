@@ -1860,6 +1860,9 @@ class WildBattle {
   dead = false;
   queue = [];
   phase = "messages";
+  learnPending = null;
+  forgetIndex = 0;
+  hmCache = null;
   afterQueue = "menu";
   menuIndex = 1;
   moveIndex = 1;
@@ -2409,6 +2412,10 @@ this move!`);
       }
       return;
     }
+    if (this.phase === "forget") {
+      this.updateForget(input);
+      return;
+    }
     if (this.phase === "party") {
       this.updateParty(input);
       return;
@@ -2789,8 +2796,82 @@ ${mdef.name}!`);
     }
     this.sayNext(`${name} is trying to
 learn ${mdef.name}!`);
-    this.sayNext(`${name} did not learn
-${mdef.name}!`);
+    this.sayNext(`But ${name} can't
+learn more than\f4 moves!`);
+    this.actNext(() => {
+      this.learnPending = { mon, moveId };
+      this.forgetIndex = 0;
+      this.phase = "forget";
+    });
+  }
+  forgetView() {
+    const p = this.learnPending;
+    if (this.phase !== "forget" || !p)
+      return null;
+    return {
+      name: p.mon.nickname ?? this.data.pokemon[p.mon.species].name,
+      moves: p.mon.moves.map((mv) => this.data.moves[mv.id]?.name ?? mv.id),
+      index: this.forgetIndex,
+      learning: this.data.moves[p.moveId]?.name ?? p.moveId
+    };
+  }
+  updateForget(input) {
+    const p = this.learnPending;
+    if (!p) {
+      this.phase = "messages";
+      return;
+    }
+    const rows = p.mon.moves.length + 1;
+    const step = listStep(input);
+    if (step) {
+      this.forgetIndex = (this.forgetIndex + step + rows) % rows;
+      return;
+    }
+    const name = p.mon.nickname ?? this.data.pokemon[p.mon.species].name;
+    const learning = this.data.moves[p.moveId]?.name ?? p.moveId;
+    const decline = () => {
+      this.learnPending = null;
+      this.say(`${name} did not learn
+${learning}!`);
+      this.phase = "messages";
+    };
+    if (input.wasPressed("b") || input.wasPressed("a") && this.forgetIndex >= rows - 1) {
+      decline();
+      return;
+    }
+    if (!input.wasPressed("a"))
+      return;
+    const slot = p.mon.moves[this.forgetIndex];
+    if (!slot) {
+      decline();
+      return;
+    }
+    if (this.hmMoves().has(slot.id)) {
+      this.say(`HM moves can't be
+forgotten now!`);
+      this.phase = "messages";
+      return;
+    }
+    const forgotten = this.data.moves[slot.id]?.name ?? slot.id;
+    const mdef = this.data.moves[p.moveId];
+    p.mon.moves[this.forgetIndex] = { id: p.moveId, pp: mdef?.pp ?? 0 };
+    this.learnPending = null;
+    this.say(`1, 2 and... Poof!\f${name} forgot
+${forgotten}!\fAnd...`);
+    this.sayNext(`${name} learned
+${learning}!`);
+    this.phase = "messages";
+  }
+  hmMoves() {
+    if (!this.hmCache) {
+      this.hmCache = new Set;
+      for (const it of Object.values(this.data.items ?? {})) {
+        const m = it.machine;
+        if (m?.kind === "HM" && m.move)
+          this.hmCache.add(m.move);
+      }
+    }
+    return this.hmCache;
   }
   swapEnemy(mon) {
     this.enemy = makeBattler(this.data, mon, false);
@@ -7475,6 +7556,57 @@ class Scene {
       this.uiOwner = null;
       this.menuSig = this.titleSig = this.namingSig = null;
     }
+    const mf = view.moveForget?.();
+    if (mf) {
+      const rows = [...mf.moves, "DON'T LEARN"];
+      const sig = `f${mf.index},${rows.length}`;
+      if (sig !== this.menuSig) {
+        this.menuSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const X = 0, Y = 6, W = 15, H = rows.length * 2;
+        host.uiTile(X, Y, BORDER_TL);
+        host.uiFill(X + 1, Y, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y, BORDER_TR);
+        host.uiFill(X, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + W, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + 1, Y + 1, W - 1, H, SPACE);
+        host.uiTile(X, Y + 1 + H, BORDER_BL);
+        host.uiFill(X + 1, Y + 1 + H, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y + 1 + H, BORDER_BR);
+        rows.forEach((e, i) => {
+          this.stamp(host, X + 2, Y + 2 + i * 2, e.slice(0, W - 2));
+          if (i === mf.index)
+            host.uiTile(X + 1, Y + 2 + i * 2, ARROW_CURSOR);
+        });
+      }
+      return;
+    }
+    const wp = view.warpPicker?.();
+    if (wp) {
+      const sig = `w${wp.index},${wp.top},${wp.total}`;
+      if (sig !== this.menuSig) {
+        this.menuSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const X = 0, Y = 0, W = 19, H = wp.entries.length * 2;
+        host.uiTile(X, Y, BORDER_TL);
+        host.uiFill(X + 1, Y, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y, BORDER_TR);
+        host.uiFill(X, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + W, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + 1, Y + 1, W - 1, H, SPACE);
+        host.uiTile(X, Y + 1 + H, BORDER_BL);
+        host.uiFill(X + 1, Y + 1 + H, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y + 1 + H, BORDER_BR);
+        wp.entries.forEach((e, i) => {
+          this.stamp(host, X + 2, Y + 2 + i * 2, e.slice(0, W - 2));
+          if (i === wp.index)
+            host.uiTile(X + 1, Y + 2 + i * 2, ARROW_CURSOR);
+        });
+      }
+      return;
+    }
     const sm = view.startMenu?.();
     if (sm) {
       const sig = `${sm.index},${sm.entries.length}`;
@@ -8069,6 +8201,7 @@ class StartMenuState {
     e.push([String(game.save?.player?.name ?? "RED"), "trainer"]);
     e.push(["SAVE", "save"]);
     e.push(["OPTION", "option"]);
+    e.push(["WARP", "warp"]);
     e.push(["EXIT", "exit"]);
     this.entries = e.map((x) => x[0]);
     this.actions = e.map((x) => x[1]);
@@ -8094,6 +8227,121 @@ class StartMenuState {
   }
   view() {
     return { entries: this.entries, index: this.index };
+  }
+}
+
+// voxelmon/game/ui/warppicker.ts
+var ROWS = 8;
+
+class WarpPickerState {
+  game;
+  onPick;
+  kind = "warppicker";
+  index = 0;
+  top = 0;
+  maps;
+  constructor(game, here, onPick) {
+    this.game = game;
+    this.onPick = onPick;
+    const data = game.data ?? {};
+    const cooked = Array.isArray(data.cookedMaps) ? data.cookedMaps : [];
+    const known = data.maps ?? {};
+    this.maps = cooked.filter((m) => known[m]).sort();
+    const at = this.maps.indexOf(here);
+    if (at >= 0)
+      this.index = at;
+    this.clampScroll();
+  }
+  clampScroll() {
+    if (this.index < this.top)
+      this.top = this.index;
+    if (this.index >= this.top + ROWS)
+      this.top = this.index - ROWS + 1;
+    this.top = Math.max(0, Math.min(this.top, Math.max(0, this.maps.length - ROWS)));
+  }
+  update() {
+    const p = this.game.input.pressed;
+    const n = this.maps.length;
+    if (n === 0) {
+      this.game.pop();
+      return;
+    }
+    if (p.up)
+      this.index = (this.index + n - 1) % n;
+    else if (p.down)
+      this.index = (this.index + 1) % n;
+    else if (p.left)
+      this.index = Math.max(0, this.index - ROWS);
+    else if (p.right)
+      this.index = Math.min(n - 1, this.index + ROWS);
+    else if (p.select)
+      this.index = this.nextLetter();
+    this.clampScroll();
+    if (p.b || p.start) {
+      this.game.pop();
+      return;
+    }
+    if (p.a) {
+      const pick = this.maps[this.index];
+      this.game.pop();
+      this.onPick(pick);
+    }
+  }
+  nextLetter() {
+    const c = this.maps[this.index][0];
+    for (let i = this.index + 1;i < this.maps.length; i++) {
+      if (this.maps[i][0] !== c)
+        return i;
+    }
+    return this.maps.length - 1;
+  }
+  view() {
+    return {
+      entries: this.maps.slice(this.top, this.top + ROWS),
+      index: this.index - this.top,
+      top: this.top,
+      total: this.maps.length
+    };
+  }
+}
+
+// voxelmon/game/ui/moveforget.ts
+class MoveForgetState {
+  game;
+  mon;
+  onPick;
+  kind = "moveforget";
+  index = 0;
+  constructor(game, mon, onPick) {
+    this.game = game;
+    this.mon = mon;
+    this.onPick = onPick;
+  }
+  update() {
+    const p = this.game.input.pressed;
+    const rows = this.mon.moves.length + 1;
+    if (p.up || p.left)
+      this.index = (this.index + rows - 1) % rows;
+    else if (p.down || p.right)
+      this.index = (this.index + 1) % rows;
+    if (p.b) {
+      this.game.pop();
+      this.onPick(-1);
+      return;
+    }
+    if (p.a) {
+      const slot = this.index >= this.mon.moves.length ? -1 : this.index;
+      this.game.pop();
+      this.onPick(slot);
+    }
+  }
+  view() {
+    const names = this.mon.moves.map((mv) => this.game.data.moves?.[mv.id]?.name ?? mv.id);
+    return {
+      name: this.mon.nickname ?? this.game.data.pokemon?.[this.mon.species]?.name ?? "",
+      moves: names,
+      index: this.index
+    };
   }
 }
 
@@ -8253,7 +8501,7 @@ class SummaryState {
 }
 
 // voxelmon/game/ui/bagscreen.ts
-var ROWS = 4;
+var ROWS2 = 4;
 
 class BagState {
   game;
@@ -8275,8 +8523,8 @@ class BagState {
       this.index = (this.index + 1) % n;
     if (this.index < this.top)
       this.top = this.index;
-    if (this.index >= this.top + ROWS)
-      this.top = this.index - ROWS + 1;
+    if (this.index >= this.top + ROWS2)
+      this.top = this.index - ROWS2 + 1;
     if (p.b || p.a && this.index === n - 1) {
       this.game.pop();
       return;
@@ -8296,12 +8544,12 @@ class BagState {
       name: this.game.data.items?.[id]?.name ?? id,
       qty: save.inventory?.[id] ?? 0
     }));
-    return { entries: items, index: this.index, top: this.top, rows: ROWS };
+    return { entries: items, index: this.index, top: this.top, rows: ROWS2 };
   }
 }
 
 // voxelmon/game/ui/shopscreen.ts
-var ROWS2 = 4;
+var ROWS3 = 4;
 var MONEY_CAP = 999999;
 var GREET = "Take your time.";
 var NOT_ENOUGH = `You don't have
@@ -8366,8 +8614,8 @@ class ShopState {
   clampWindow() {
     if (this.listIndex < this.listTop)
       this.listTop = this.listIndex;
-    if (this.listIndex >= this.listTop + ROWS2)
-      this.listTop = this.listIndex - ROWS2 + 1;
+    if (this.listIndex >= this.listTop + ROWS3)
+      this.listTop = this.listIndex - ROWS3 + 1;
   }
   unsellable(id) {
     const def = this.game.data.items?.[id];
@@ -8518,7 +8766,7 @@ That will be
       list: this.list,
       listIndex: this.listIndex,
       listTop: this.listTop,
-      rows: ROWS2,
+      rows: ROWS3,
       selName: this.selName,
       qty: this.qty,
       total: this.unitPrice * this.qty,
@@ -8551,7 +8799,7 @@ function active(save) {
 }
 
 // voxelmon/game/ui/boxscreen.ts
-var ROWS3 = 4;
+var ROWS4 = 4;
 var PARTY_MAX2 = 6;
 var MENU = ["WITHDRAW", "DEPOSIT", "RELEASE", "CHANGE BOX", "SEE YA!"];
 
@@ -8682,8 +8930,8 @@ no POKéMON here!`, "menu");
   clampWindow() {
     if (this.listIndex < this.listTop)
       this.listTop = this.listIndex;
-    if (this.listIndex >= this.listTop + ROWS3)
-      this.listTop = this.listIndex - ROWS3 + 1;
+    if (this.listIndex >= this.listTop + ROWS4)
+      this.listTop = this.listIndex - ROWS4 + 1;
   }
   updateList(p) {
     const n = this.list.length + 1;
@@ -8825,7 +9073,7 @@ Bye ${this.monName(mon)}!`, "release-list");
       list: this.list,
       listIndex: this.listIndex,
       listTop: this.listTop,
-      rows: ROWS3,
+      rows: ROWS4,
       submenuLabel: this.kindOfList === "deposit" ? "DEPOSIT" : "WITHDRAW",
       submenuIndex: this.submenuIndex,
       confirmYes: this.confirmYes,
@@ -8835,7 +9083,7 @@ Bye ${this.monName(mon)}!`, "release-list");
 }
 
 // voxelmon/game/ui/pokedexscreen.ts
-var ROWS4 = 7;
+var ROWS5 = 7;
 class PokedexState {
   game;
   onCancel;
@@ -8907,9 +9155,9 @@ class PokedexState {
     else if (p.down)
       this.index = Math.min(n - 1, this.index + 1);
     else if (p.left)
-      this.index = Math.max(0, this.index - ROWS4);
+      this.index = Math.max(0, this.index - ROWS5);
     else if (p.right)
-      this.index = Math.min(n - 1, this.index + ROWS4);
+      this.index = Math.min(n - 1, this.index + ROWS5);
     this.syncScroll();
     if (p.b) {
       this.close();
@@ -8960,8 +9208,8 @@ class PokedexState {
   syncScroll() {
     if (this.index < this.top)
       this.top = this.index;
-    if (this.index >= this.top + ROWS4)
-      this.top = this.index - ROWS4 + 1;
+    if (this.index >= this.top + ROWS5)
+      this.top = this.index - ROWS5 + 1;
   }
   buildEntry() {
     const id = this.entrySpecies;
@@ -9001,7 +9249,7 @@ class PokedexState {
   view() {
     return {
       mode: this.mode,
-      rows: ROWS4,
+      rows: ROWS5,
       top: this.top,
       index: this.index,
       entries: this.entries,
@@ -9630,11 +9878,51 @@ ${newName}!`, () => {
 ${mdef.name}!`, () => step(i + 1));
         return;
       }
-      this.showText(`${name} is trying to
-learn ${mdef.name}!\f${name} did not learn
-${mdef.name}!`, () => step(i + 1));
+      this.offerReplaceMove(mon, moveId, () => step(i + 1));
     };
     step(0);
+  }
+  offerReplaceMove(mon, moveId, onDone) {
+    const def = this.data.pokemon[mon.species];
+    const name = mon.nickname ?? def.name;
+    const mname = this.data.moves[moveId]?.name ?? moveId;
+    const decline = () => this.showText(`${name} did not learn
+${mname}!`, onDone);
+    this.showChoice(`${name} is trying to
+learn ${mname}!\fBut ${name} can't
+learn more than\f4 moves!\f` + `Delete an older move
+to make room for\f${mname}?`, (yes) => {
+      if (!yes) {
+        decline();
+        return;
+      }
+      this.push(new MoveForgetState(this, mon, (slot) => {
+        if (slot < 0) {
+          decline();
+          return;
+        }
+        const old = mon.moves[slot];
+        if (this.hmMoveIds().has(old.id)) {
+          this.showText(`HM moves can't be
+forgotten now!`, () => this.offerReplaceMove(mon, moveId, onDone));
+          return;
+        }
+        const forgotten = this.data.moves[old.id]?.name ?? old.id;
+        mon.moves[slot] = { id: moveId, pp: this.data.moves[moveId]?.pp ?? 0 };
+        this.showText(`1, 2 and... Poof!\f${name} forgot
+${forgotten}!\fAnd...\f${name} learned
+${mname}!`, onDone);
+      }));
+    });
+  }
+  hmMoveIds() {
+    const out = new Set;
+    for (const it of Object.values(this.data.items ?? {})) {
+      const m = it.machine;
+      if (m?.kind === "HM" && m.move)
+        out.add(m.move);
+    }
+    return out;
   }
   teachMachine(partyIndex, itemId) {
     const mon = this.save.party[partyIndex];
@@ -9658,9 +9946,11 @@ ${item.name}!`);
       return;
     }
     if (mon.moves.length >= 4) {
-      this.showText(`${name} is trying to
-learn ${mname}!\f${name} did not learn
-${mname}!`);
+      this.offerReplaceMove(mon, moveId, () => {
+        if (mon.moves.some((mv) => mv.id === moveId) && item.machine?.kind === "TM") {
+          remove(this.save, itemId, 1);
+        }
+      });
       return;
     }
     mon.moves.push({ id: moveId, pp: mdef?.pp ?? 0 });
@@ -9776,6 +10066,16 @@ ${mname}!`);
       if (act === "pokemon") {
         this.push(new PartyState(this));
       }
+      if (act === "warp") {
+        const ow = this.overworld;
+        const here = String(ow.mapId ?? ow.map?.id ?? "");
+        this.push(new WarpPickerState(this, here, (mapId) => {
+          this.pop();
+          const def = this.data.maps?.[mapId];
+          const w = (def?.warps ?? [])[0];
+          ow.startWarpTo(mapId, w?.x ?? 1, w?.y ?? 1, "down", () => {});
+        }));
+      }
       if (act === "save") {
         const ow = this.overworld;
         const p = this.save.player;
@@ -9819,6 +10119,14 @@ ${mname}!`);
   startMenu() {
     const top = this.stack[this.stack.length - 1];
     return top?.kind === "startmenu" ? top.view() : null;
+  }
+  warpPicker() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "warppicker" ? top.view() : null;
+  }
+  moveForget() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "moveforget" ? top.view() : null;
   }
   title() {
     const top = this.stack[this.stack.length - 1];
@@ -10013,6 +10321,24 @@ function drawMoveSelect(host, game, b) {
     stampBottom(host, x0 + cellW - 1 - eff.length, y0 + 5, eff, bit);
   }
 }
+function drawForgetList(host, b) {
+  host.uiClearBottom();
+  const f = b.forgetView?.();
+  if (!f)
+    return;
+  drawTopBar(host, ("LEARN " + f.learning).slice(0, 18));
+  stampBottom(host, 1, 2, (f.name + " FORGETS?").slice(0, 18));
+  f.moves.forEach((name, i) => {
+    const y = 4 + i * 2;
+    stampBottom(host, 2, y, name.slice(0, 14));
+    if (i === f.index)
+      host.uiTileBottom(0, y, ARROW_CURSOR);
+  });
+  const cancelY = 4 + f.moves.length * 2;
+  stampBottom(host, 2, cancelY, "DON'T LEARN");
+  if (f.index >= f.moves.length)
+    host.uiTileBottom(0, cancelY, ARROW_CURSOR);
+}
 function drawItemList(host, game, b) {
   host.uiClearBottom();
   drawTopBar(host, "ITEMS");
@@ -10089,6 +10415,9 @@ function drawBattleMessage(host, b) {
 }
 function drawBattleGear(host, game, b) {
   switch (b.phase) {
+    case "forget":
+      drawForgetList(host, b);
+      return;
     case "moveSelect":
       drawMoveSelect(host, game, b);
       return;
@@ -10115,9 +10444,9 @@ function drawKantoGear(host, game) {
   }
   drawPartyList(host, game, "KANTO GEAR", -1);
 }
-var ROWS5 = 18;
+var ROWS6 = 18;
 var TILE_W = 320 / COLS;
-var TILE_H = 240 / ROWS5;
+var TILE_H = 240 / ROWS6;
 var TAP_A = {
   isDown: () => false,
   wasPressed: (btn) => btn === "a"
@@ -10130,7 +10459,7 @@ function gearTouchDown(game, x, y) {
   if (!b)
     return;
   const col = clampInt(Math.floor(x / TILE_W), 0, COLS - 1);
-  const row = clampInt(Math.floor(y / TILE_H), 0, ROWS5 - 1);
+  const row = clampInt(Math.floor(y / TILE_H), 0, ROWS6 - 1);
   if (b.choiceOpen) {
     if (col >= 14 && col <= 19 && row >= 7 && row <= 11) {
       b.choiceYes = row < 9;

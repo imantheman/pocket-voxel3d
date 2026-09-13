@@ -37,6 +37,8 @@ import { Textbox } from "./world/textbox.ts";
 import { NamingState } from "./ui/naming.ts";
 import { TitleState, TITLE_PAGES } from "./ui/title.ts";
 import { StartMenuState } from "./ui/startmenu.ts";
+import { WarpPickerState } from "./ui/warppicker.ts";
+import { MoveForgetState } from "./ui/moveforget.ts";
 import { BagState } from "./ui/bagscreen.ts";
 import { PartyState } from "./ui/partyscreen.ts";
 import { ShopState } from "./ui/shopscreen.ts";
@@ -672,12 +674,59 @@ export class VoxelmonGame implements OverworldShell, SceneView {
         this.showText(`${name} learned\n${mdef.name}!`, () => step(i + 1));
         return;
       }
-      this.showText(
-        `${name} is trying to\nlearn ${mdef.name}!\f${name} did not learn\n${mdef.name}!`,
-        () => step(i + 1),
-      );
+      this.offerReplaceMove(mon, moveId, () => step(i + 1));
     };
     step(0);
+  }
+
+  /**
+   * The replace-move prompt outside battle (pokered MoveLearnMenu), shared by
+   * the evolution learnset and TM/HM teaching. In battle the same decision is
+   * a phase on the battle itself (battle.ts updateForget), because the battle
+   * owns its own input loop; here it is an ordinary party screen.
+   *
+   * An HM move cannot be chosen — Gen 1 has no Move Deleter, and forgetting
+   * CUT or SURF can strand the player on a map they cannot leave.
+   */
+  private offerReplaceMove(mon: PartyMon, moveId: string, onDone: () => void): void {
+    const def = this.data.pokemon[mon.species]!;
+    const name = mon.nickname ?? def.name;
+    const mname = this.data.moves[moveId]?.name ?? moveId;
+    const decline = (): void => this.showText(`${name} did not learn\n${mname}!`, onDone);
+    this.showChoice(
+      `${name} is trying to\nlearn ${mname}!\fBut ${name} can't\nlearn more than\f4 moves!\f` +
+        `Delete an older move\nto make room for\f${mname}?`,
+      (yes) => {
+        if (!yes) { decline(); return; }
+        this.push(new MoveForgetState(this as any, mon, (slot) => {
+          if (slot < 0) { decline(); return; }
+          const old = mon.moves[slot]!;
+          if (this.hmMoveIds().has(old.id)) {
+            // Back to the list rather than cancelling the whole thing: the
+            // player picked a move they are not allowed to lose, not "no".
+            this.showText("HM moves can't be\nforgotten now!", () =>
+              this.offerReplaceMove(mon, moveId, onDone));
+            return;
+          }
+          const forgotten = this.data.moves[old.id]?.name ?? old.id;
+          mon.moves[slot] = { id: moveId, pp: this.data.moves[moveId]?.pp ?? 0 };
+          this.showText(
+            `1, 2 and... Poof!\f${name} forgot\n${forgotten}!\fAnd...\f${name} learned\n${mname}!`,
+            onDone,
+          );
+        }));
+      },
+    );
+  }
+
+  /** Moves an HM teaches, from the item data rather than a hardcoded list. */
+  private hmMoveIds(): Set<string> {
+    const out = new Set<string>();
+    for (const it of Object.values(this.data.items ?? {})) {
+      const m = (it as { machine?: { kind?: string; move?: string } }).machine;
+      if (m?.kind === "HM" && m.move) out.add(m.move);
+    }
+    return out;
   }
 
   /**
@@ -707,7 +756,13 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       return;
     }
     if (mon.moves.length >= 4) {
-      this.showText(`${name} is trying to\nlearn ${mname}!\f${name} did not learn\n${mname}!`);
+      // A TM is consumed only if the move is actually learned, so the charge
+      // rides the prompt's outcome rather than being taken up front.
+      this.offerReplaceMove(mon, moveId, () => {
+        if (mon.moves.some((mv) => mv.id === moveId) && item.machine?.kind === "TM") {
+          Bag.remove(this.save, itemId, 1);
+        }
+      });
       return;
     }
     mon.moves.push({ id: moveId, pp: mdef?.pp ?? 0 });
@@ -850,6 +905,22 @@ export class VoxelmonGame implements OverworldShell, SceneView {
         if (act === "pokemon") {
           this.push(new PartyState(this as any));
         }
+        if (act === "warp") {
+          // Debug jump. Uses the ordinary warp path so the destination gets a
+          // real map load, music, and heal-point handling — the point is to
+          // land somewhere PLAYABLE, not to sightsee.
+          const ow: any = this.overworld;
+          const here = String(ow.mapId ?? ow.map?.id ?? "");
+          this.push(new WarpPickerState(this as any, here, (mapId) => {
+            this.pop(); // the start menu under the picker
+            const def: any = this.data.maps?.[mapId];
+            // Warps name a destination warp, not a tile; the first warp of a
+            // map is where its own door puts you, which is the one spot every
+            // map is guaranteed to have standable ground.
+            const w = (def?.warps ?? [])[0];
+            ow.startWarpTo(mapId, w?.x ?? 1, w?.y ?? 1, "down", () => {});
+          }));
+        }
         if (act === "save") {
           // The recomp keeps the live position in player.*; copy it over
           // so the desktop build resumes exactly where the 3DS stood.
@@ -901,6 +972,16 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   startMenu(): unknown {
     const top = this.stack[this.stack.length - 1] as any;
     return top?.kind === "startmenu" ? top.view() : null;
+  }
+
+  warpPicker(): unknown {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "warppicker" ? top.view() : null;
+  }
+
+  moveForget(): unknown {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "moveforget" ? top.view() : null;
   }
 
   title(): unknown {

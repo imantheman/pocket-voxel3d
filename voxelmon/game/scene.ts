@@ -914,6 +914,60 @@ export class Scene {
       this.uiOwner = null;
       this.menuSig = this.titleSig = this.namingSig = null;
     }
+    // The out-of-battle replace-move list (ui/moveforget.ts): four moves and
+    // a "DON'T LEARN" row.
+    const mf = (view as unknown as { moveForget?: () => any }).moveForget?.();
+    if (mf) {
+      const rows: string[] = [...mf.moves, "DON'T LEARN"];
+      const sig = `f${mf.index},${rows.length}`;
+      if (sig !== this.menuSig) {
+        this.menuSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const X = 0, Y = 6, W = 15, H = rows.length * 2;
+        host.uiTile(X, Y, BORDER_TL);
+        host.uiFill(X + 1, Y, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y, BORDER_TR);
+        host.uiFill(X, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + W, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + 1, Y + 1, W - 1, H, SPACE);
+        host.uiTile(X, Y + 1 + H, BORDER_BL);
+        host.uiFill(X + 1, Y + 1 + H, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y + 1 + H, BORDER_BR);
+        rows.forEach((e: string, i: number) => {
+          this.stamp(host, X + 2, Y + 2 + i * 2, e.slice(0, W - 2));
+          if (i === mf.index) host.uiTile(X + 1, Y + 2 + i * 2, ARROW_CURSOR);
+        });
+      }
+      return;
+    }
+    // Debug map picker (ui/warppicker.ts). Full-width list, since map names
+    // run long (ROCKET_HIDEOUT_ELEVATOR is 23 characters) and the start
+    // menu's 10-wide box would truncate most of them.
+    const wp = (view as unknown as { warpPicker?: () => any }).warpPicker?.();
+    if (wp) {
+      const sig = `w${wp.index},${wp.top},${wp.total}`;
+      if (sig !== this.menuSig) {
+        this.menuSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const X = 0, Y = 0, W = 19, H = wp.entries.length * 2;
+        host.uiTile(X, Y, BORDER_TL);
+        host.uiFill(X + 1, Y, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y, BORDER_TR);
+        host.uiFill(X, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + W, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + 1, Y + 1, W - 1, H, SPACE);
+        host.uiTile(X, Y + 1 + H, BORDER_BL);
+        host.uiFill(X + 1, Y + 1 + H, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y + 1 + H, BORDER_BR);
+        wp.entries.forEach((e: string, i: number) => {
+          this.stamp(host, X + 2, Y + 2 + i * 2, e.slice(0, W - 2));
+          if (i === wp.index) host.uiTile(X + 1, Y + 2 + i * 2, ARROW_CURSOR);
+        });
+      }
+      return;
+    }
     const sm = (view as unknown as { startMenu?: () => any }).startMenu?.();
     if (sm) {
       const sig = `${sm.index},${sm.entries.length}`;

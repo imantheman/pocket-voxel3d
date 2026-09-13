@@ -4,7 +4,7 @@
 import type { GameState } from "../game.ts";
 
 export type MenuAction =
-  | "pokedex" | "pokemon" | "item" | "trainer" | "save" | "option" | "exit";
+  | "pokedex" | "pokemon" | "item" | "trainer" | "save" | "option" | "warp" | "exit";
 
 export interface StartMenuView {
   entries: string[];
@@ -30,6 +30,10 @@ export class StartMenuState implements GameState {
     e.push([String(game.save?.player?.name ?? "RED"), "trainer"]);
     e.push(["SAVE", "save"]);
     e.push(["OPTION", "option"]);
+    // Playtesting only, not in the original: jump straight to any cooked map.
+    // The story events sit deeper and deeper into the game and walking to one
+    // to check it costs minutes.
+    e.push(["WARP", "warp"]);
     e.push(["EXIT", "exit"]);
     this.entries = e.map((x) => x[0]);
     this.actions = e.map((x) => x[1]);
