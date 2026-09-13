@@ -4349,7 +4349,7 @@ function gymLeader(o) {
     ["check_flag", o.beatFlag],
     ["jump_if_true", "beaten"],
     ["show_text", o.preText],
-    ["start_battle", "trainer", o.trainerClass, 1],
+    ["start_battle", "trainer", o.trainerClass, o.party ?? 1],
     ["jump_if_false", "end"],
     ["set_flag", o.beatFlag]
   ];
@@ -4369,7 +4369,12 @@ function gymLeader(o) {
   rows.push(["check_flag", o.gotFlag]);
   rows.push(["jump_if_false", "give_tm"]);
   rows.push(["show_text", o.advice]);
+  for (const r of o.afterAdvice ?? [])
+    rows.push(r);
   return rows;
+}
+function gymTrainerFlags(prefix, last) {
+  return Array.from({ length: last + 1 }, (_, i) => `${prefix}${i}`);
 }
 function mtMoonNerdWalk(px2, py, itemId) {
   if (px2 === 12 && py === 7 || px2 === 11 && py === 6 || px2 === 12 && py === 5) {
@@ -4974,6 +4979,96 @@ var MAP_SCRIPTS = {
   CERULEAN_GYM: {
     talk: {
       TEXT_CERULEANGYM_MISTY: MISTY_GYM
+    }
+  },
+  CELADON_GYM: {
+    talk: {
+      TEXT_CELADONGYM_ERIKA: gymLeader({
+        trainerClass: "OPP_ERIKA",
+        beatFlag: "EVENT_BEAT_ERIKA",
+        preText: "_CeladonGymErikaPreBattleText",
+        deactivate: gymTrainerFlags("EVENT_BEAT_CELADON_GYM_TRAINER_", 6),
+        badge: "RAINBOWBADGE",
+        badgeText: ["_CeladonGymErikaReceivedRainbowBadgeText"],
+        tmPre: "_CeladonGymRainbowBadgeInfoText",
+        tm: "TM_MEGA_DRAIN",
+        gotFlag: "EVENT_GOT_TM21",
+        tmText: ["_CeladonGymReceivedTM21Text", "_TM21ExplanationText"],
+        advice: "_CeladonGymErikaPostBattleAdviceText"
+      })
+    }
+  },
+  FUCHSIA_GYM: {
+    talk: {
+      TEXT_FUCHSIAGYM_KOGA: gymLeader({
+        trainerClass: "OPP_KOGA",
+        beatFlag: "EVENT_BEAT_KOGA",
+        preText: "_FuchsiaGymKogaBeforeBattleText",
+        deactivate: gymTrainerFlags("EVENT_BEAT_FUCHSIA_GYM_TRAINER_", 5),
+        badge: "SOULBADGE",
+        badgeText: ["_FuchsiaGymKogaReceivedSoulBadgeText"],
+        tmPre: "_FuchsiaGymKogaSoulBadgeInfoText",
+        tm: "TM_TOXIC",
+        gotFlag: "EVENT_GOT_TM06",
+        tmText: ["_FuchsiaGymKogaReceivedTM06Text", "_FuchsiaGymKogaTM06ExplanationText"],
+        advice: "_FuchsiaGymKogaPostBattleAdviceText"
+      })
+    }
+  },
+  SAFFRON_GYM: {
+    talk: {
+      TEXT_SAFFRONGYM_SABRINA: gymLeader({
+        trainerClass: "OPP_SABRINA",
+        beatFlag: "EVENT_BEAT_SABRINA",
+        preText: "_SaffronGymSabrinaText",
+        deactivate: gymTrainerFlags("EVENT_BEAT_SAFFRON_GYM_TRAINER_", 6),
+        badge: "MARSHBADGE",
+        badgeText: ["_SaffronGymSabrinaReceivedMarshBadgeText"],
+        tmPre: "_SaffronGymSabrinaMarshBadgeInfoText",
+        tm: "TM_PSYWAVE",
+        gotFlag: "EVENT_GOT_TM46",
+        tmText: ["_SaffronGymSabrinaReceivedTM46Text", "_TM46ExplanationText"],
+        advice: "_SaffronGymSabrinaPostBattleAdviceText"
+      })
+    }
+  },
+  CINNABAR_GYM: {
+    talk: {
+      TEXT_CINNABARGYM_BLAINE: gymLeader({
+        trainerClass: "OPP_BLAINE",
+        beatFlag: "EVENT_BEAT_BLAINE",
+        preText: "_CinnabarGymBlainePreBattleText",
+        deactivate: gymTrainerFlags("EVENT_BEAT_CINNABAR_GYM_TRAINER_", 6),
+        badge: "VOLCANOBADGE",
+        badgeText: ["_CinnabarGymBlaineReceivedVolcanoBadgeText"],
+        tmPre: "_CinnabarGymBlaineVolcanoBadgeInfoText",
+        tm: "TM_FIRE_BLAST",
+        gotFlag: "EVENT_GOT_TM38",
+        tmText: ["_CinnabarGymBlaineReceivedTM38Text", "_CinnabarGymBlaineTM38ExplanationText"],
+        advice: "_CinnabarGymBlainePostBattleAdviceText"
+      })
+    }
+  },
+  VIRIDIAN_GYM: {
+    talk: {
+      TEXT_VIRIDIANGYM_GIOVANNI: gymLeader({
+        trainerClass: "OPP_GIOVANNI",
+        party: 3,
+        beatFlag: "EVENT_BEAT_GIOVANNI",
+        preText: "_ViridianGymGiovanniPreBattleText",
+        deactivate: gymTrainerFlags("EVENT_BEAT_VIRIDIAN_GYM_TRAINER_", 7),
+        badge: "EARTHBADGE",
+        badgeText: ["_ViridianGymGiovanniReceivedEarthBadgeText"],
+        tmPre: "_ViridianGymGiovanniEarthBadgeInfoText",
+        tm: "TM_FISSURE",
+        gotFlag: "EVENT_GOT_TM27",
+        tmText: [
+          "_ViridianGymGiovanniReceivedTM27Text",
+          "_ViridianGymGiovanniTM27ExplanationText"
+        ],
+        advice: "_ViridianGymGiovanniPostBattleAdviceText",
+        afterAdvice: [["hide_object", "VIRIDIAN_GYM", "VIRIDIANGYM_GIOVANNI"]]
+      })
     }
   },
   ROUTE_24: {

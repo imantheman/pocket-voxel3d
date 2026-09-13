@@ -858,6 +858,92 @@ describe("talking to a trainer", () => {
   });
 });
 
+describe("gym leaders", () => {
+  /** map, leader text, class, roster, beat flag, badge, TM, got flag. */
+  const GYMS: [string, string, string, number, string, string, string, string][] = [
+    ["PEWTER_GYM", "TEXT_PEWTERGYM_BROCK", "OPP_BROCK", 1,
+     "EVENT_BEAT_BROCK", "BOULDERBADGE", "TM_BIDE", "EVENT_GOT_TM34"],
+    ["CERULEAN_GYM", "TEXT_CERULEANGYM_MISTY", "OPP_MISTY", 1,
+     "EVENT_BEAT_MISTY", "CASCADEBADGE", "TM_BUBBLEBEAM", "EVENT_GOT_TM11"],
+    ["VERMILION_GYM", "TEXT_VERMILIONGYM_LT_SURGE", "OPP_LT_SURGE", 1,
+     "EVENT_BEAT_LT_SURGE", "THUNDERBADGE", "TM_THUNDERBOLT", "EVENT_GOT_TM24"],
+    ["CELADON_GYM", "TEXT_CELADONGYM_ERIKA", "OPP_ERIKA", 1,
+     "EVENT_BEAT_ERIKA", "RAINBOWBADGE", "TM_MEGA_DRAIN", "EVENT_GOT_TM21"],
+    ["FUCHSIA_GYM", "TEXT_FUCHSIAGYM_KOGA", "OPP_KOGA", 1,
+     "EVENT_BEAT_KOGA", "SOULBADGE", "TM_TOXIC", "EVENT_GOT_TM06"],
+    ["SAFFRON_GYM", "TEXT_SAFFRONGYM_SABRINA", "OPP_SABRINA", 1,
+     "EVENT_BEAT_SABRINA", "MARSHBADGE", "TM_PSYWAVE", "EVENT_GOT_TM46"],
+    ["CINNABAR_GYM", "TEXT_CINNABARGYM_BLAINE", "OPP_BLAINE", 1,
+     "EVENT_BEAT_BLAINE", "VOLCANOBADGE", "TM_FIRE_BLAST", "EVENT_GOT_TM38"],
+    ["VIRIDIAN_GYM", "TEXT_VIRIDIANGYM_GIOVANNI", "OPP_GIOVANNI", 3,
+     "EVENT_BEAT_GIOVANNI", "EARTHBADGE", "TM_FISSURE", "EVENT_GOT_TM27"],
+  ];
+
+  /** Talk to the leader with the battle stubbed to `won`; returns the call. */
+  function fightLeader(
+    game: VoxelmonGame, map: string, text: string, won: boolean,
+  ): { id: string; party: number } | null {
+    let call: { id: string; party: number } | null = null;
+    (game as any).startTrainerBattle = (
+      id: string, party: number, _n: unknown, onDone: (w: boolean) => void,
+    ) => { call = { id, party }; onDone(won); };
+    game.overworld.setMap(map, 4, 4, "up");
+    game.overworld.showMapText(text);
+    for (let i = 0; i < 1500 && game.stackKinds().length > 1; i++) {
+      dismissText(game);
+      game.tick(0);
+    }
+    return call;
+  }
+
+  test.skipIf(!hasGen)("all eight hand over their badge and TM on a win", () => {
+    for (const [map, text, cls, party, beat, badge, tm, gotFlag] of GYMS) {
+      const game = makeMenuGame();
+      game.save.party.push(newMon(romData!, "SQUIRTLE", 40));
+      const call = fightLeader(game, map, text, true);
+      expect(call, `${map} started no battle`).toEqual({ id: cls, party });
+      expect(game.save.flags[beat], `${map} beat flag`).toBe(true);
+      expect(game.save.inventory[badge], `${map} badge`).toBe(1);
+      expect(game.save.inventory[tm], `${map} TM`).toBe(1);
+      expect(game.save.flags[gotFlag], `${map} TM flag`).toBe(true);
+    }
+  });
+
+  test.skipIf(!hasGen)("a loss hands over nothing", () => {
+    for (const [map, text, , , beat, badge, tm] of GYMS) {
+      const game = makeMenuGame();
+      game.save.party.push(newMon(romData!, "SQUIRTLE", 5));
+      fightLeader(game, map, text, false);
+      expect(game.save.flags[beat], `${map} beat flag`).toBeUndefined();
+      expect(game.save.inventory[badge], `${map} badge`).toBeUndefined();
+      expect(game.save.inventory[tm], `${map} TM`).toBeUndefined();
+    }
+  });
+
+  test.skipIf(!hasGen)("a beaten leader talks instead of re-battling", () => {
+    const game = makeMenuGame();
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 40));
+    fightLeader(game, "CELADON_GYM", "TEXT_CELADONGYM_ERIKA", true);
+    // second visit: no battle is started at all
+    const again = fightLeader(game, "CELADON_GYM", "TEXT_CELADONGYM_ERIKA", true);
+    expect(again).toBeNull();
+    expect(game.save.inventory.RAINBOWBADGE).toBe(1); // not a second one
+    expect(game.save.inventory.TM_MEGA_DRAIN).toBe(1);
+  });
+
+  test.skipIf(!hasGen)("Giovanni fights his GYM roster and then leaves", () => {
+    const game = makeMenuGame();
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 50));
+    // his first two rosters are the Rocket Hideout and Silph Co.
+    const call = fightLeader(game, "VIRIDIAN_GYM", "TEXT_VIRIDIANGYM_GIOVANNI", true);
+    expect(call).toEqual({ id: "OPP_GIOVANNI", party: 3 });
+    expect(game.save.objectToggles?.VIRIDIAN_GYM?.VIRIDIANGYM_GIOVANNI).toBeUndefined();
+    // he says his farewell on the next talk, and is gone after it
+    fightLeader(game, "VIRIDIAN_GYM", "TEXT_VIRIDIANGYM_GIOVANNI", true);
+    expect(game.save.objectToggles?.VIRIDIAN_GYM?.VIRIDIANGYM_GIOVANNI).toBe(false);
+  });
+});
+
 describe("poke marts", () => {
   /** Every (map label, TEXT_*) the dataset marks as a mart clerk. */
   function clerks(): { label: string; text: string; stock: string[] }[] {

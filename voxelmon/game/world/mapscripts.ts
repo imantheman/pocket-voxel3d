@@ -51,6 +51,9 @@ export interface CoordTrigger {
 
 interface GymLeaderOpts {
   trainerClass: string; // "OPP_BROCK"
+  /** 1-based roster. Every leader's gym team is their first EXCEPT Giovanni,
+   * whose first two are the Rocket Hideout and Silph Co. */
+  party?: number;
   beatFlag: string; // "EVENT_BEAT_BROCK"
   preText: string; // pre-battle challenge line
   deactivate?: string[]; // gym-trainer beat flags to set
@@ -61,6 +64,8 @@ interface GymLeaderOpts {
   gotFlag: string; // "EVENT_GOT_TM34"
   tmText: string[]; // received-TM + explanation lines
   advice: string; // post-battle advice, shown once beaten
+  /** Rows appended after the advice — Giovanni leaves the gym for good. */
+  afterAdvice?: ScriptRow[];
 }
 
 /**
@@ -77,7 +82,7 @@ function gymLeader(o: GymLeaderOpts): ScriptRow[] {
     ["check_flag", o.beatFlag],
     ["jump_if_true", "beaten"],
     ["show_text", o.preText],
-    ["start_battle", "trainer", o.trainerClass, 1],
+    ["start_battle", "trainer", o.trainerClass, o.party ?? 1],
     ["jump_if_false", "end"], // lost -> no reward
     ["set_flag", o.beatFlag],
   ];
@@ -94,7 +99,13 @@ function gymLeader(o: GymLeaderOpts): ScriptRow[] {
   rows.push(["check_flag", o.gotFlag]);
   rows.push(["jump_if_false", "give_tm"]); // beaten but bag was full -> retry
   rows.push(["show_text", o.advice]);
+  for (const r of o.afterAdvice ?? []) rows.push(r);
   return rows;
+}
+
+/** EVENT_BEAT_<GYM>_TRAINER_0..n — the roster a leader's win deactivates. */
+function gymTrainerFlags(prefix: string, last: number): string[] {
+  return Array.from({ length: last + 1 }, (_, i) => `${prefix}${i}`);
 }
 
 // story2.lua mtMoonNerdWalk (MtMoonB2FMoveSuperNerdScript): the nerd walks
@@ -945,6 +956,114 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
   CERULEAN_GYM: {
     talk: {
       TEXT_CERULEANGYM_MISTY: MISTY_GYM,
+    },
+  },
+
+  // The remaining five leaders, same shape: scripts/<City>Gym.asm for the
+  // dialogue, data/scripts/victories.lua for the badge/TM reward and the
+  // gym-trainer flags the win deactivates.
+  //
+  // Their pre-battle labels do NOT follow one naming pattern — Koga's is
+  // ...BeforeBattleText and Sabrina's is just _SaffronGymSabrinaText — so
+  // each is the label the text table actually carries, not a guess.
+  CELADON_GYM: {
+    talk: {
+      TEXT_CELADONGYM_ERIKA: gymLeader({
+        trainerClass: "OPP_ERIKA",
+        beatFlag: "EVENT_BEAT_ERIKA",
+        preText: "_CeladonGymErikaPreBattleText",
+        deactivate: gymTrainerFlags("EVENT_BEAT_CELADON_GYM_TRAINER_", 6),
+        badge: "RAINBOWBADGE",
+        badgeText: ["_CeladonGymErikaReceivedRainbowBadgeText"],
+        tmPre: "_CeladonGymRainbowBadgeInfoText",
+        tm: "TM_MEGA_DRAIN",
+        gotFlag: "EVENT_GOT_TM21",
+        tmText: ["_CeladonGymReceivedTM21Text", "_TM21ExplanationText"],
+        advice: "_CeladonGymErikaPostBattleAdviceText",
+      }),
+    },
+  },
+
+  FUCHSIA_GYM: {
+    talk: {
+      TEXT_FUCHSIAGYM_KOGA: gymLeader({
+        trainerClass: "OPP_KOGA",
+        beatFlag: "EVENT_BEAT_KOGA",
+        preText: "_FuchsiaGymKogaBeforeBattleText",
+        deactivate: gymTrainerFlags("EVENT_BEAT_FUCHSIA_GYM_TRAINER_", 5),
+        badge: "SOULBADGE",
+        badgeText: ["_FuchsiaGymKogaReceivedSoulBadgeText"],
+        tmPre: "_FuchsiaGymKogaSoulBadgeInfoText",
+        tm: "TM_TOXIC",
+        gotFlag: "EVENT_GOT_TM06",
+        tmText: ["_FuchsiaGymKogaReceivedTM06Text", "_FuchsiaGymKogaTM06ExplanationText"],
+        advice: "_FuchsiaGymKogaPostBattleAdviceText",
+      }),
+    },
+  },
+
+  SAFFRON_GYM: {
+    talk: {
+      TEXT_SAFFRONGYM_SABRINA: gymLeader({
+        trainerClass: "OPP_SABRINA",
+        beatFlag: "EVENT_BEAT_SABRINA",
+        preText: "_SaffronGymSabrinaText",
+        deactivate: gymTrainerFlags("EVENT_BEAT_SAFFRON_GYM_TRAINER_", 6),
+        badge: "MARSHBADGE",
+        badgeText: ["_SaffronGymSabrinaReceivedMarshBadgeText"],
+        tmPre: "_SaffronGymSabrinaMarshBadgeInfoText",
+        tm: "TM_PSYWAVE",
+        gotFlag: "EVENT_GOT_TM46",
+        tmText: ["_SaffronGymSabrinaReceivedTM46Text", "_TM46ExplanationText"],
+        advice: "_SaffronGymSabrinaPostBattleAdviceText",
+      }),
+    },
+  },
+
+  CINNABAR_GYM: {
+    talk: {
+      TEXT_CINNABARGYM_BLAINE: gymLeader({
+        trainerClass: "OPP_BLAINE",
+        beatFlag: "EVENT_BEAT_BLAINE",
+        preText: "_CinnabarGymBlainePreBattleText",
+        deactivate: gymTrainerFlags("EVENT_BEAT_CINNABAR_GYM_TRAINER_", 6),
+        badge: "VOLCANOBADGE",
+        badgeText: ["_CinnabarGymBlaineReceivedVolcanoBadgeText"],
+        tmPre: "_CinnabarGymBlaineVolcanoBadgeInfoText",
+        tm: "TM_FIRE_BLAST",
+        gotFlag: "EVENT_GOT_TM38",
+        tmText: ["_CinnabarGymBlaineReceivedTM38Text", "_CinnabarGymBlaineTM38ExplanationText"],
+        advice: "_CinnabarGymBlainePostBattleAdviceText",
+      }),
+    },
+  },
+
+  // Giovanni is the exception twice over: his gym team is his THIRD roster
+  // (the first two are the Rocket Hideout and Silph Co.), and once he has
+  // said his farewell he leaves the gym for good — the original fades out,
+  // HideObjects him, and fades back. This port has no fade primitive for a
+  // talk script, so he simply goes; the objectToggles entry persists, so he
+  // stays gone across re-entry.
+  VIRIDIAN_GYM: {
+    talk: {
+      TEXT_VIRIDIANGYM_GIOVANNI: gymLeader({
+        trainerClass: "OPP_GIOVANNI",
+        party: 3,
+        beatFlag: "EVENT_BEAT_GIOVANNI",
+        preText: "_ViridianGymGiovanniPreBattleText",
+        deactivate: gymTrainerFlags("EVENT_BEAT_VIRIDIAN_GYM_TRAINER_", 7),
+        badge: "EARTHBADGE",
+        badgeText: ["_ViridianGymGiovanniReceivedEarthBadgeText"],
+        tmPre: "_ViridianGymGiovanniEarthBadgeInfoText",
+        tm: "TM_FISSURE",
+        gotFlag: "EVENT_GOT_TM27",
+        tmText: [
+          "_ViridianGymGiovanniReceivedTM27Text",
+          "_ViridianGymGiovanniTM27ExplanationText",
+        ],
+        advice: "_ViridianGymGiovanniPostBattleAdviceText",
+        afterAdvice: [["hide_object", "VIRIDIAN_GYM", "VIRIDIANGYM_GIOVANNI"]],
+      }),
     },
   },
 
