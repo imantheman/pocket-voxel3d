@@ -307,6 +307,10 @@ export class Overworld implements ScriptWorld {
         if (!cut[key]) continue;
         const [cx, cy] = key.split(",").map(Number);
         this.stamp(def.index, cx, cy, false);
+        // The geometry going away is only half of it: the block underneath is
+        // still a tree, so the cell has to be marked walkable too or a
+        // re-entered map has invisible walls where the trees were.
+        this.map.markCut(cx!, cy!);
       }
     }
     // HM Flash only lasts the current visit (pokered: leaving and

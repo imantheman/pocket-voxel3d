@@ -3871,6 +3871,7 @@ class GameMap {
   warpAt = new Map;
   signAt = new Map;
   cuttableAt = new Set;
+  cutAt = new Set;
   constructor(def, tilesetDef) {
     this.def = def;
     this.tileset = tilesetDef;
@@ -3913,7 +3914,12 @@ class GameMap {
     return cx >= 0 && cy >= 0 && cx < this.widthCells && cy < this.heightCells;
   }
   isWalkableCell(cx, cy) {
+    if (this.cutAt.has(cy * this.widthCells + cx))
+      return true;
     return this.walkable.has(this.cellTile(cx, cy));
+  }
+  markCut(cx, cy) {
+    this.cutAt.add(cy * this.widthCells + cx);
   }
   isGrassCell(cx, cy) {
     if (!this.inBounds(cx, cy))
@@ -5515,6 +5521,7 @@ function* use_cut(ctx, ...args) {
   const already = w.save.cutTrees?.[w.map.id]?.[key];
   if (w.map.isCuttableCell(fx, fy) && !already) {
     w.stamp(w.map.def.index, fx, fy, false);
+    w.map.markCut?.(fx, fy);
     w.save.cutTrees ??= {};
     w.save.cutTrees[w.map.id] ??= {};
     w.save.cutTrees[w.map.id][key] = true;
@@ -5975,6 +5982,7 @@ class Overworld {
           continue;
         const [cx, cy] = key.split(",").map(Number);
         this.stamp(def.index, cx, cy, false);
+        this.map.markCut(cx, cy);
       }
     }
     this.tint(DARK_MAPS.has(mapId) ? DARK_TINT : BRIGHT_TINT);

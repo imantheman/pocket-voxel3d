@@ -81,6 +81,7 @@ export function runGeometry(map: GameMap, S: SGrid): MapGeometry {
   const water: Quad[] = [];
   const perRow = map.tileset.tilesPerRow || 16;
 
+
   // Two readings of the same grid. `heightAt` is the cook's own: a claimed
   // cell is flat ground, because an object stands on it. `boxHeightAt` is
   // what the grid would have said had the round hulls never been carved —
@@ -588,6 +589,10 @@ export function runGeometry(map: GameMap, S: SGrid): MapGeometry {
   // 32 world px, so that is x 256-288, z 64-96 — the four cells (16..17,
   // 4..5), which are exactly the cells containing the hideout warp at
   // (17,4). cc_poster.py asserts these constants still match the data.
+  //
+  // What gets lifted out is the WALL, not the staircase — see the block
+  // override at the top of this function for why that is not what the map
+  // data says.
   if (map.def.id === "GAME_CORNER") {
     const PX0 = 256, PX1 = 288;
     const PZ0 = 64, PZ1 = 96;

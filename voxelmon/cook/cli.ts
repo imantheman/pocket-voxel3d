@@ -91,6 +91,20 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
     if (!def) throw new Error(`unknown map: ${name}`);
     const tileset = gen.tilesets[def.tileset];
     if (!tileset) throw new Error(`unknown tileset: ${def.tileset} (map ${name})`);
+    // The Game Corner's hidden staircase. pokered's map data ships the block
+    // OPEN ($43 = 67, the stairs) and GameCorner.asm writes the WALL ($2a =
+    // 42) over it until the switch behind the poster is found — so cooking
+    // the data as-is bakes a staircase visible from the moment the player
+    // walks in. Bake the wall instead; mesh.ts lifts it out as a toggleable
+    // stamp and the runtime hides it once the flag is set.
+    //
+    // It has to happen HERE rather than inside runGeometry: analyseMap builds
+    // the height/class grid from the blocks first, and a later override
+    // changes nothing (verified — the stamp bytes came out identical).
+    if (name === "GAME_CORNER" && Array.isArray(def.blocks)) {
+      const i = 2 * def.width + 8; // field.gameCornerPoster block (8,2)
+      if (i < def.blocks.length) def.blocks[i] = 42;
+    }
     return new GameMap(def, tileset);
   });
 

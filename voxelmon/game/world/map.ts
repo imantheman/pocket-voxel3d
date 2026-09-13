@@ -158,6 +158,8 @@ export class GameMap {
   private warpAt = new Map<number, WarpAt>();
   private signAt = new Map<number, MapSign>();
   private cuttableAt = new Set<number>();
+  /** Cells whose cut tree is already gone — see markCut. */
+  private cutAt = new Set<number>();
 
   // Map.lua:112 Map.new
   constructor(def: MapDef, tilesetDef: TilesetDef) {
@@ -209,7 +211,22 @@ export class GameMap {
 
   // Map.lua:220
   isWalkableCell(cx: number, cy: number): boolean {
+    // A cut tree leaves a walkable cell. The block still says "tree" — the
+    // cook bakes the prop into the map and HM Cut only hides its stamp — so
+    // without this the tree vanishes and the cell stays solid, which reads
+    // as the cut not having worked at all.
+    if (this.cutAt.has(cy * this.widthCells + cx)) return true;
     return this.walkable.has(this.cellTile(cx, cy));
+  }
+
+  /**
+   * Record that this cell's cut tree is gone: the live cut (script.ts
+   * use_cut) and every re-entry afterwards, which replays save.cutTrees
+   * through setMap. GameMap is rebuilt per map load, so the set starts empty
+   * and the save is the only thing that carries a cut across one.
+   */
+  markCut(cx: number, cy: number): void {
+    this.cutAt.add(cy * this.widthCells + cx);
   }
 
   // Map.lua:224 — off-map cells never count as tall grass (issue #217: the

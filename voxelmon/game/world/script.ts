@@ -455,6 +455,10 @@ function* use_cut(ctx: ScriptContext, ...args: unknown[]): Generator<void, void>
   const already = w.save.cutTrees?.[w.map.id]?.[key];
   if (w.map.isCuttableCell(fx, fy) && !already) {
     w.stamp(w.map.def.index, fx, fy, false);
+    // Hiding the stamp only removes the geometry; the block is still a tree,
+    // so the cell has to be opened up as well or the tree disappears and the
+    // player still cannot walk through it.
+    (w.map as unknown as { markCut?: (x: number, y: number) => void }).markCut?.(fx, fy);
     w.save.cutTrees ??= {};
     w.save.cutTrees[w.map.id] ??= {};
     w.save.cutTrees[w.map.id][key] = true;
