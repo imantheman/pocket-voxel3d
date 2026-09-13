@@ -98,8 +98,10 @@ export interface SaveSlice {
    * left. Absent when no game is running, which is every gate in the feature.
    */
   safari?: { balls: number; steps: number } | null;
-  /** Money, for the Safari gate's fee. */
+  /** Money, for the Safari gate's fee and the coin clerk. */
   money?: number;
+  /** wPlayerCoins — the GAME CORNER's currency, capped at 9999. */
+  coins?: number;
   /**
    * gen1recomp save.defeatedTrainers: trainers beaten, by NPC object id
    * (`<map>_obj_<index>`). The EVENT_BEAT_* flag covers trainers the
@@ -851,6 +853,13 @@ export class Overworld implements ScriptWorld {
   }
 
   // ScriptWorld (script.ts) — the services a command reaches -------------
+
+  /** open_prizes -> the GAME CORNER prize window, via the shell. */
+  openPrizes(window: number, onDone?: () => void): void {
+    (this.shell as unknown as {
+      openPrizes?: (w: number, done?: () => void) => void;
+    }).openPrizes?.(window, onDone);
+  }
 
   /** Commands.lua:587 heal_party. */
   healParty(): void {

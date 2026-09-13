@@ -977,6 +977,41 @@ export class Scene {
       }
       return;
     }
+    // The GAME CORNER prize window (ui/prizescreen.ts): three prizes with
+    // their coin prices, NO THANKS under them, and the coin count in a footer
+    // — the box CeladonPrizeMenu keeps beside the list.
+    const pz = (view as unknown as { prizes?: () => any }).prizes?.();
+    if (pz) {
+      const sig = `z${pz.index},${pz.coins},${pz.rows.map((r: any) => r.label).join(",")}`;
+      if (sig !== this.menuSig) {
+        this.menuSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const rows: string[] = [...pz.rows.map((r: any) => r.label), "NO THANKS"];
+        const X = 0, Y = 0, W = 19, H = rows.length * 2 + 2;
+        host.uiTile(X, Y, BORDER_TL);
+        host.uiFill(X + 1, Y, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y, BORDER_TR);
+        host.uiFill(X, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + W, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + 1, Y + 1, W - 1, H, SPACE);
+        host.uiTile(X, Y + 1 + H, BORDER_BL);
+        host.uiFill(X + 1, Y + 1 + H, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y + 1 + H, BORDER_BR);
+        rows.forEach((label: string, i: number) => {
+          const y = Y + 2 + i * 2;
+          this.stamp(host, X + 2, y, label.slice(0, 12));
+          const r = pz.rows[i];
+          if (r) {
+            const cost = String(r.cost);
+            this.stamp(host, X + W - cost.length, y, cost);
+          }
+          if (i === pz.index) host.uiTile(X + 1, y, ARROW_CURSOR);
+        });
+        this.stamp(host, X + 2, Y + H, `COINS ${pz.coins}`);
+      }
+      return;
+    }
     // The OPTION screen (ui/optionsmenu.ts, DisplayOptionMenu): each row's
     // label on its own line with the choices spread beneath it, a ▶ on the
     // active choice and a ▷ in the left margin marking the selected row.

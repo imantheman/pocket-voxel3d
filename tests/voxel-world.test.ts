@@ -858,6 +858,146 @@ describe("talking to a trainer", () => {
   });
 });
 
+describe("the game corner", () => {
+  function gcGame(): VoxelmonGame {
+    const data = {
+      ...(romData as object),
+      cookedMaps: [
+        ...((romData as { cookedMaps?: string[] }).cookedMaps ?? []),
+        "GAME_CORNER", "GAME_CORNER_PRIZE_ROOM",
+      ],
+    };
+    const game = new VoxelmonGame(data as never, new MenuHost(), 1);
+    game.newGame();
+    game.closeToOverworld();
+    return game;
+  }
+
+  /** Talk to a clerk/counter and answer the first YES/NO, if one opens. */
+  function talkAt(game: VoxelmonGame, map: string, text: string, yes?: boolean): void {
+    game.overworld.setMap(map, 4, 4, "up");
+    game.overworld.showMapText(text);
+    for (let i = 0; i < 900; i++) {
+      if (yes !== undefined && game.stackKinds().at(-1) === "choice") {
+        if (!yes) tap(game, VOX_BTN.down);
+        tap(game, VOX_BTN.a);
+        yes = undefined;
+        continue;
+      }
+      if (game.stackKinds().at(-1) === "prizes") return;
+      dismissText(game);
+      game.tick(0);
+    }
+  }
+
+  test.skipIf(!hasGen)("the clerk sells 50 coins for 1000, and refuses without a case", () => {
+    const game = gcGame();
+    game.save.money = 3000;
+    // IsItemInBag COIN_CASE comes first: no case, no sale
+    talkAt(game, "GAME_CORNER", "TEXT_GAMECORNER_CLERK1", true);
+    expect(game.save.money).toBe(3000);
+    expect(game.save.coins ?? 0).toBe(0);
+
+    game.save.inventory.COIN_CASE = 1;
+    talkAt(game, "GAME_CORNER", "TEXT_GAMECORNER_CLERK1", true);
+    expect(game.save.money).toBe(2000);
+    expect(game.save.coins).toBe(50);
+
+    // declining costs nothing
+    talkAt(game, "GAME_CORNER", "TEXT_GAMECORNER_CLERK1", false);
+    expect(game.save.money).toBe(2000);
+    expect(game.save.coins).toBe(50);
+  });
+
+  test.skipIf(!hasGen)("a full case, or an empty wallet, is refused", () => {
+    const full = gcGame();
+    full.save.inventory.COIN_CASE = 1;
+    full.save.money = 3000;
+    full.save.coins = 9990; // Has9990Coins
+    talkAt(full, "GAME_CORNER", "TEXT_GAMECORNER_CLERK1", true);
+    expect(full.save.coins).toBe(9990);
+    expect(full.save.money).toBe(3000);
+
+    const poor = gcGame();
+    poor.save.inventory.COIN_CASE = 1;
+    poor.save.money = 999;
+    talkAt(poor, "GAME_CORNER", "TEXT_GAMECORNER_CLERK1", true);
+    expect(poor.save.coins ?? 0).toBe(0);
+    expect(poor.save.money).toBe(999);
+  });
+
+  test.skipIf(!hasGen)("the gambler hands over 20 coins exactly once", () => {
+    const game = gcGame();
+    game.save.inventory.COIN_CASE = 1;
+    talkAt(game, "GAME_CORNER", "TEXT_GAMECORNER_CLERK2");
+    expect(game.save.coins).toBe(20);
+    talkAt(game, "GAME_CORNER", "TEXT_GAMECORNER_CLERK2");
+    expect(game.save.coins).toBe(20);
+  });
+
+  test.skipIf(!hasGen)("a prize counter needs the case, then opens its own window", () => {
+    const game = gcGame();
+    // no case: the window never opens at all
+    talkAt(game, "GAME_CORNER_PRIZE_ROOM", "TEXT_GAMECORNERPRIZEROOM_PRIZE_VENDOR_1");
+    expect(game.stackKinds()).toEqual(["overworld"]);
+
+    game.save.inventory.COIN_CASE = 1;
+    talkAt(game, "GAME_CORNER_PRIZE_ROOM", "TEXT_GAMECORNERPRIZEROOM_PRIZE_VENDOR_1");
+    expect(game.stackKinds().at(-1)).toBe("prizes");
+    const v = game.prizes() as { rows: { label: string; cost: number }[] };
+    // each counter owns ONE window of three, not the catalogue
+    expect(v.rows).toEqual([
+      { label: "ABRA L9", cost: 180 },
+      { label: "CLEFAIRY L8", cost: 500 },
+      { label: "NIDORINA L17", cost: 1200 },
+    ]);
+  });
+
+  test.skipIf(!hasGen)("buying a prize spends the coins; too few buys nothing", () => {
+    const game = gcGame();
+    game.save.inventory.COIN_CASE = 1;
+    game.save.coins = 100;
+    talkAt(game, "GAME_CORNER_PRIZE_ROOM", "TEXT_GAMECORNERPRIZEROOM_PRIZE_VENDOR_1");
+    tap(game, VOX_BTN.a); // ABRA, 180
+    let guard = 0;
+    while (game.stackKinds().at(-1) !== "choice" && guard++ < 600) game.tick(0);
+    tap(game, VOX_BTN.a); // yes
+    guard = 0;
+    while (game.stackKinds().length > 1 && guard++ < 900) { dismissText(game); game.tick(0); }
+    expect(game.save.coins).toBe(100); // HasEnoughCoins failed
+    expect(game.save.party.length).toBe(0);
+
+    game.save.coins = 500;
+    talkAt(game, "GAME_CORNER_PRIZE_ROOM", "TEXT_GAMECORNERPRIZEROOM_PRIZE_VENDOR_1");
+    tap(game, VOX_BTN.a);
+    guard = 0;
+    while (game.stackKinds().at(-1) !== "choice" && guard++ < 600) game.tick(0);
+    tap(game, VOX_BTN.a);
+    guard = 0;
+    while (game.stackKinds().length > 1 && guard++ < 900) { dismissText(game); game.tick(0); }
+    expect(game.save.coins).toBe(320);
+    expect(game.save.party.map((m) => m.species)).toEqual(["ABRA"]);
+    expect(game.save.pokedex.owned.ABRA).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("the TM counter sells items, not mons", () => {
+    const game = gcGame();
+    game.save.inventory.COIN_CASE = 1;
+    game.save.coins = 9999;
+    talkAt(game, "GAME_CORNER_PRIZE_ROOM", "TEXT_GAMECORNERPRIZEROOM_PRIZE_VENDOR_3");
+    const v = game.prizes() as { rows: { label: string; cost: number }[] };
+    expect(v.rows[0]!.cost).toBe(3300);
+    tap(game, VOX_BTN.a);
+    let guard = 0;
+    while (game.stackKinds().at(-1) !== "choice" && guard++ < 600) game.tick(0);
+    tap(game, VOX_BTN.a);
+    guard = 0;
+    while (game.stackKinds().length > 1 && guard++ < 900) { dismissText(game); game.tick(0); }
+    expect(game.save.inventory.TM_DRAGON_RAGE).toBe(1);
+    expect(game.save.coins).toBe(9999 - 3300);
+  });
+});
+
 describe("the safari zone", () => {
   /**
    * The importer's cookedMaps is the 11-map dev set (cook/cli.ts

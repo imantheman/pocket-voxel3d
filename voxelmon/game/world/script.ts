@@ -23,6 +23,7 @@ import type { Dir } from "./collision.ts";
 import type { NPC } from "./npc.ts";
 
 import { newMon, markOwned } from "../battle/mon.ts";
+import { COIN_CAP } from "./gamecorner.ts";
 import { martStock } from "./marts.ts";
 
 export type ScriptRow = [string, ...unknown[]];
@@ -534,6 +535,33 @@ function* take_money(ctx: ScriptContext, ...args: unknown[]): Generator<void, vo
   save.money = Math.max(0, (save.money ?? 0) - (args[0] as number));
 }
 
+/** lastCheck = the COIN CASE still has room for a sale (Has9990Coins). */
+function* check_coins_below(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const save = ctx.world.save as { coins?: number };
+  ctx.lastCheck = (save.coins ?? 0) < (args[0] as number);
+}
+
+/** lastCheck = the case holds at least this many (HasEnoughCoins). */
+function* check_coins(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const save = ctx.world.save as { coins?: number };
+  ctx.lastCheck = (save.coins ?? 0) >= (args[0] as number);
+}
+
+/** Add coins, capped at the case's four digits. */
+function* give_coins(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const save = ctx.world.save as { coins?: number };
+  save.coins = Math.min(COIN_CAP, (save.coins ?? 0) + (args[0] as number));
+}
+
+/** The prize window (world/gamecorner.ts), blocking until it closes. */
+function* open_prizes(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const runner = ctx.runner;
+  const w = ctx.world as unknown as { openPrizes?: (n: number, done: () => void) => void };
+  if (!w.openPrizes) return;
+  w.openPrizes(args[0] as number, () => runner.resume());
+  yield;
+}
+
 /** Open a SAFARI game: balls and the step timer (world/safari.ts). */
 function* safari_start(ctx: ScriptContext): Generator<void, void> {
   (ctx.world as unknown as { safariStart?: () => void }).safariStart?.();
@@ -754,6 +782,10 @@ const VERBS: Record<string, Verb> = {
   check_item,
   check_money,
   take_money,
+  check_coins,
+  check_coins_below,
+  give_coins,
+  open_prizes,
   safari_start,
   safari_end,
   safari_walk_in,

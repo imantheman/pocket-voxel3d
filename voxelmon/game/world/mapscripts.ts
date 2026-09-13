@@ -18,6 +18,7 @@
 // the way upstream's do once that cutscene is over).
 
 import type { ScriptRow } from "./script.ts";
+import { coinClerkRows, coinGiftRows, prizeCounterRows } from "./gamecorner.ts";
 import { SAFARI_JOIN_CELLS, safariJoinRows, safariLeavingRows } from "./safari.ts";
 
 /** A talk handler that builds its rows from live state, or null for none. */
@@ -1306,6 +1307,17 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     },
   },
 
+  // story3.lua M.GAME_CORNER_PRIZE_ROOM (engine/events/prize_menu.asm
+  // CeladonPrizeMenu): three counters, one window of three prizes each.
+  // They are SIGN texts, not objects — the counters are bg events.
+  GAME_CORNER_PRIZE_ROOM: {
+    talk: {
+      TEXT_GAMECORNERPRIZEROOM_PRIZE_VENDOR_1: prizeCounterRows(1),
+      TEXT_GAMECORNERPRIZEROOM_PRIZE_VENDOR_2: prizeCounterRows(2),
+      TEXT_GAMECORNERPRIZEROOM_PRIZE_VENDOR_3: prizeCounterRows(3),
+    },
+  },
+
   // story.lua M.SS_ANNE_CAPTAINS_ROOM (scripts/SSAnneCaptainsRoom.asm): rub
   // his back, he hands over HM01 CUT.
   SS_ANNE_CAPTAINS_ROOM: {
@@ -1380,6 +1392,11 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
       // the switch: until he moves, the player cannot face the poster.
       // Beaten, he walks up into the wall the hidden stairs are behind and
       // despawns, which frees the tile.
+      // scripts/GameCorner.asm GameCornerClerk1Text / Clerk2Text: the coin
+      // counter and the gambler's one-off 20.
+      TEXT_GAMECORNER_CLERK1: coinClerkRows(),
+      TEXT_GAMECORNER_CLERK: coinClerkRows(), // Yellow spells him CLERK
+      TEXT_GAMECORNER_CLERK2: coinGiftRows(),
       TEXT_GAMECORNER_ROCKET: [
         ["engage_trainer", "GAMECORNER_ROCKET"],
         ["jump_if_false", "end"],

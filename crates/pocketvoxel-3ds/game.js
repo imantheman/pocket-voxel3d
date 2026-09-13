@@ -4484,6 +4484,87 @@ class Player {
   }
 }
 
+// voxelmon/game/world/gamecorner.ts
+var COIN_CAP = 9999;
+var COIN_SALE_LIMIT = 9990;
+var COINS_PER_SALE = 50;
+var COIN_SALE_PRICE = 1000;
+function coinClerkRows() {
+  return [
+    ["face_player"],
+    ["ask", "_GameCornerClerk1DoYouNeedSomeGameCoinsText"],
+    ["jump_if_false", "no"],
+    ["check_item", "COIN_CASE"],
+    ["jump_if_false", "nocase"],
+    ["check_coins_below", COIN_SALE_LIMIT],
+    ["jump_if_false", "full"],
+    ["check_money", COIN_SALE_PRICE],
+    ["jump_if_false", "poor"],
+    ["take_money", COIN_SALE_PRICE],
+    ["give_coins", COINS_PER_SALE],
+    ["show_text", "_GameCornerClerk1ThanksHereAre50CoinsText"],
+    ["jump", "end"],
+    ["label", "no"],
+    ["show_text", "_GameCornerClerk1PleaseComePlaySometimeText"],
+    ["jump", "end"],
+    ["label", "nocase"],
+    ["show_text", "_GameCornerClerk1DontHaveCoinCaseText"],
+    ["jump", "end"],
+    ["label", "full"],
+    ["show_text", "_GameCornerClerk1CoinCaseIsFullText"],
+    ["jump", "end"],
+    ["label", "poor"],
+    ["show_text", "_GameCornerClerk1CantAffordTheCoinsText"]
+  ];
+}
+function coinGiftRows() {
+  return [
+    ["face_player"],
+    ["check_flag", "EVENT_GOT_20_COINS"],
+    ["jump_if_true", "already"],
+    ["check_item", "COIN_CASE"],
+    ["jump_if_false", "nocase"],
+    ["show_text", "_GameCornerClerk2WantSomeCoinsText"],
+    ["give_coins", 20],
+    ["show_text", "_GameCornerClerk2Received20CoinsText"],
+    ["set_flag", "EVENT_GOT_20_COINS"],
+    ["jump", "end"],
+    ["label", "already"],
+    ["show_text", "_GameCornerClerk2INeedMoreCoinsText"],
+    ["jump", "end"],
+    ["label", "nocase"],
+    ["show_text", "_GameCornerClerk1DontHaveCoinCaseText"]
+  ];
+}
+var PRIZE_WINDOWS = [
+  [
+    { kind: "mon", species: "ABRA", level: 9, cost: 180 },
+    { kind: "mon", species: "CLEFAIRY", level: 8, cost: 500 },
+    { kind: "mon", species: "NIDORINA", level: 17, cost: 1200 }
+  ],
+  [
+    { kind: "mon", species: "DRATINI", level: 18, cost: 2800 },
+    { kind: "mon", species: "SCYTHER", level: 25, cost: 5500 },
+    { kind: "mon", species: "PORYGON", level: 26, cost: 9999 }
+  ],
+  [
+    { kind: "item", item: "TM_DRAGON_RAGE", cost: 3300 },
+    { kind: "item", item: "TM_HYPER_BEAM", cost: 5500 },
+    { kind: "item", item: "TM_SUBSTITUTE", cost: 7700 }
+  ]
+];
+function prizeCounterRows(window) {
+  return [
+    ["check_item", "COIN_CASE"],
+    ["jump_if_false", "nocase"],
+    ["show_text", "_ExchangeCoinsForPrizesText"],
+    ["open_prizes", window],
+    ["jump", "end"],
+    ["label", "nocase"],
+    ["show_text", "_RequireCoinCaseText"]
+  ];
+}
+
 // voxelmon/game/world/safari.ts
 var SAFARI_FEE = 500;
 var SAFARI_BALLS = 30;
@@ -5438,6 +5519,13 @@ var MAP_SCRIPTS = {
       ];
     }
   },
+  GAME_CORNER_PRIZE_ROOM: {
+    talk: {
+      TEXT_GAMECORNERPRIZEROOM_PRIZE_VENDOR_1: prizeCounterRows(1),
+      TEXT_GAMECORNERPRIZEROOM_PRIZE_VENDOR_2: prizeCounterRows(2),
+      TEXT_GAMECORNERPRIZEROOM_PRIZE_VENDOR_3: prizeCounterRows(3)
+    }
+  },
   SS_ANNE_CAPTAINS_ROOM: {
     talk: {
       TEXT_SSANNECAPTAINSROOM_CAPTAIN: [
@@ -5483,6 +5571,9 @@ var MAP_SCRIPTS = {
         ["label", "known"],
         ["show_text", "_GameCornerPosterSwitchBehindPosterText"]
       ],
+      TEXT_GAMECORNER_CLERK1: coinClerkRows(),
+      TEXT_GAMECORNER_CLERK: coinClerkRows(),
+      TEXT_GAMECORNER_CLERK2: coinGiftRows(),
       TEXT_GAMECORNER_ROCKET: [
         ["engage_trainer", "GAMECORNER_ROCKET"],
         ["jump_if_false", "end"],
@@ -6060,6 +6151,26 @@ function* take_money(ctx, ...args) {
   const save = ctx.world.save;
   save.money = Math.max(0, (save.money ?? 0) - args[0]);
 }
+function* check_coins_below(ctx, ...args) {
+  const save = ctx.world.save;
+  ctx.lastCheck = (save.coins ?? 0) < args[0];
+}
+function* check_coins(ctx, ...args) {
+  const save = ctx.world.save;
+  ctx.lastCheck = (save.coins ?? 0) >= args[0];
+}
+function* give_coins(ctx, ...args) {
+  const save = ctx.world.save;
+  save.coins = Math.min(COIN_CAP, (save.coins ?? 0) + args[0]);
+}
+function* open_prizes(ctx, ...args) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  if (!w.openPrizes)
+    return;
+  w.openPrizes(args[0], () => runner.resume());
+  yield;
+}
 function* safari_start(ctx) {
   ctx.world.safariStart?.();
 }
@@ -6206,6 +6317,10 @@ var VERBS = {
   check_item,
   check_money,
   take_money,
+  check_coins,
+  check_coins_below,
+  give_coins,
+  open_prizes,
   safari_start,
   safari_end,
   safari_walk_in,
@@ -6886,6 +7001,9 @@ class Overworld {
     } else {
       onDone?.();
     }
+  }
+  openPrizes(window, onDone) {
+    this.shell.openPrizes?.(window, onDone);
   }
   healParty() {
     this.shell.healParty();
@@ -8251,6 +8369,39 @@ class Scene {
       }
       return;
     }
+    const pz = view.prizes?.();
+    if (pz) {
+      const sig = `z${pz.index},${pz.coins},${pz.rows.map((r) => r.label).join(",")}`;
+      if (sig !== this.menuSig) {
+        this.menuSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const rows = [...pz.rows.map((r) => r.label), "NO THANKS"];
+        const X = 0, Y = 0, W = 19, H = rows.length * 2 + 2;
+        host.uiTile(X, Y, BORDER_TL);
+        host.uiFill(X + 1, Y, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y, BORDER_TR);
+        host.uiFill(X, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + W, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + 1, Y + 1, W - 1, H, SPACE);
+        host.uiTile(X, Y + 1 + H, BORDER_BL);
+        host.uiFill(X + 1, Y + 1 + H, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y + 1 + H, BORDER_BR);
+        rows.forEach((label3, i) => {
+          const y = Y + 2 + i * 2;
+          this.stamp(host, X + 2, y, label3.slice(0, 12));
+          const r = pz.rows[i];
+          if (r) {
+            const cost = String(r.cost);
+            this.stamp(host, X + W - cost.length, y, cost);
+          }
+          if (i === pz.index)
+            host.uiTile(X + 1, y, ARROW_CURSOR);
+        });
+        this.stamp(host, X + 2, Y + H, `COINS ${pz.coins}`);
+      }
+      return;
+    }
     const op = view.optionsMenu?.();
     if (op) {
       const sig = `o${op.index},${op.rows.map((r) => r.index).join(",")}`;
@@ -9145,6 +9296,95 @@ class OptionsMenuState {
   }
   view() {
     return { rows: this.rows(), index: this.index };
+  }
+}
+
+// voxelmon/game/ui/prizescreen.ts
+class PrizeState {
+  game;
+  prizes;
+  onDone;
+  kind = "prizes";
+  index = 0;
+  closing = false;
+  constructor(game, prizes, onDone) {
+    this.game = game;
+    this.prizes = prizes;
+    this.onDone = onDone;
+  }
+  label(p) {
+    if (p.kind === "mon") {
+      const name = this.game.data.pokemon?.[p.species]?.name ?? p.species;
+      return `${name} L${p.level}`;
+    }
+    return this.game.data.items?.[p.item]?.name ?? p.item;
+  }
+  close(msg) {
+    if (this.closing)
+      return;
+    this.closing = true;
+    this.game.pop();
+    if (msg)
+      this.game.showText(msg, this.onDone);
+    else
+      this.onDone?.();
+  }
+  buy(p) {
+    const save = this.game.save;
+    const t = this.game.data.text ?? {};
+    if ((save.coins ?? 0) < p.cost) {
+      this.close(t._SorryNeedMoreCoinsText ?? `Sorry, you need
+more coins.`);
+      return;
+    }
+    const roomless = t._OopsYouDontHaveEnoughRoomText ?? `Oops! You don't
+have enough room.`;
+    if (p.kind === "mon") {
+      if (!this.game.givePrizeMon(p.species, p.level)) {
+        this.close(roomless);
+        return;
+      }
+    } else if (!add(this.game.save, p.item, 1, this.game.data)) {
+      this.close(roomless);
+      return;
+    }
+    save.coins = (save.coins ?? 0) - p.cost;
+    this.close();
+  }
+  update() {
+    if (this.closing)
+      return;
+    const p = this.game.input.pressed;
+    const n = this.prizes.length + 1;
+    if (p.up || p.left)
+      this.index = (this.index + n - 1) % n;
+    if (p.down || p.right)
+      this.index = (this.index + 1) % n;
+    if (p.b || p.a && this.index === this.prizes.length) {
+      this.close();
+      return;
+    }
+    if (!p.a)
+      return;
+    const prize = this.prizes[this.index];
+    const t = this.game.data.text ?? {};
+    const ask2 = (t._SoYouWantPrizeText ?? `So, you want
+{RAM:wNameBuffer}?`).replace("{RAM:wNameBuffer}", this.label(prize));
+    this.game.showChoice(ask2, (yes) => {
+      if (!yes) {
+        this.close(t._OhFineThenText ?? "Oh, fine then.");
+        return;
+      }
+      this.buy(prize);
+    });
+  }
+  view() {
+    return {
+      rows: this.prizes.map((p) => ({ label: this.label(p), cost: p.cost })),
+      index: this.index,
+      coins: this.game.save?.coins ?? 0,
+      message: null
+    };
   }
 }
 
@@ -11485,6 +11725,25 @@ ${mname}!`);
       return [];
     }
     return this.overworld.picShown;
+  }
+  openPrizes(window, onDone) {
+    const prizes = PRIZE_WINDOWS[window - 1];
+    if (!prizes) {
+      onDone?.();
+      return;
+    }
+    this.push(new PrizeState(this, prizes, onDone));
+  }
+  prizes() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "prizes" ? top.view() : null;
+  }
+  givePrizeMon(species, level) {
+    if (this.save.party.length >= 6)
+      return false;
+    this.save.party.push(newMon(this.data, species, level, this.battleRng));
+    markOwned(this.save, species);
+    return true;
   }
   openShop(stock, onQuit) {
     this.push(new ShopState(this, stock, onQuit));

@@ -14,7 +14,7 @@ import { fromSection, type AudioBanks } from "./audio/banks.ts";
 import { AudioDirector } from "./audio/music.ts";
 import { WildBattle, type BattleResult } from "./battle/battle.ts";
 import { TrainerBattle } from "./battle/trainer.ts";
-import { healMon, newMon, type PartyMon } from "./battle/mon.ts";
+import { healMon, markOwned, newMon, type PartyMon } from "./battle/mon.ts";
 import { SafariBattle } from "./battle/safari.ts";
 import { computeStaging, type BattleStaging } from "./battle/staging.ts";
 import { BattleUi } from "./battle/ui.ts";
@@ -44,6 +44,8 @@ import { StartMenuState } from "./ui/startmenu.ts";
 import { DevMenuState } from "./ui/devmenu.ts";
 import { CARD_PIC_RECT, TrainerCardState } from "./ui/trainercard.ts";
 import { OptionsMenuState } from "./ui/optionsmenu.ts";
+import { PrizeState } from "./ui/prizescreen.ts";
+import { PRIZE_WINDOWS } from "./world/gamecorner.ts";
 import { gearViewStep } from "./ui/kantogear.ts";
 import { count as badgeCount } from "./rules/badges.ts";
 
@@ -959,6 +961,30 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       return [];
     }
     return this.overworld.picShown;
+  }
+
+  /** open_prizes verb -> the GAME CORNER prize window (ui/prizescreen.ts). */
+  openPrizes(window: number, onDone?: () => void): void {
+    const prizes = PRIZE_WINDOWS[window - 1];
+    if (!prizes) { onDone?.(); return; }
+    this.push(new PrizeState(this as never, prizes, onDone));
+  }
+
+  prizes(): unknown {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "prizes" ? top.view() : null;
+  }
+
+  /**
+   * A prize mon (give_pokemon's path, without the nickname prompt the prize
+   * counter does not run). False when the party is full — the port has no box
+   * overflow here, so the sale is refused rather than the mon lost.
+   */
+  givePrizeMon(species: string, level: number): boolean {
+    if (this.save.party.length >= 6) return false;
+    this.save.party.push(newMon(this.data, species, level, this.battleRng));
+    markOwned(this.save as never, species);
+    return true;
   }
 
   /** open_mart verb -> push the mart shop; onQuit resumes the yielded runner. */
