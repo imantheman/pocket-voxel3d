@@ -863,6 +863,139 @@ describe("talking to a trainer", () => {
   });
 });
 
+describe("LAST_MAP rewrites", () => {
+  function wideGame(...maps: string[]): VoxelmonGame {
+    const data = {
+      ...(romData as object),
+      cookedMaps: [...((romData as { cookedMaps?: string[] }).cookedMaps ?? []), ...maps],
+    };
+    const game = new VoxelmonGame(data as never, new MenuHost(), 1);
+    game.newGame();
+    game.closeToOverworld();
+    return game;
+  }
+
+  test.skipIf(!hasGen)("the underground path delivers you to the FAR route", () => {
+    const game = wideGame(
+      "ROUTE_5", "ROUTE_6", "UNDERGROUND_PATH_ROUTE_5",
+      "UNDERGROUND_PATH_ROUTE_6", "UNDERGROUND_PATH_NORTH_SOUTH",
+    );
+    const ow = game.overworld;
+    // in from Route 5. The near house forces wLastMap to ROUTE_5, which is
+    // what makes ITS door lead back out to Route 5.
+    ow.setMap("ROUTE_5", 17, 27, "down");
+    ow.setMap("UNDERGROUND_PATH_ROUTE_5", 4, 4, "down");
+    expect(ow.lastOutdoor?.id).toBe("ROUTE_5");
+    ow.setMap("UNDERGROUND_PATH_NORTH_SOUTH", 2, 41, "down");
+    // out the far building: its script forces wLastMap to ROUTE_6, so the
+    // LAST_MAP door leaves onto Route 6 and not back where we came in
+    ow.setMap("UNDERGROUND_PATH_ROUTE_6", 4, 4, "down");
+    expect(ow.lastOutdoor?.id).toBe("ROUTE_6");
+    const exit = (romData!.maps as any).UNDERGROUND_PATH_ROUTE_6.warps[0];
+    expect(exit.destMap).toBe("LAST_MAP"); // which is the whole problem
+    ow.takeWarp(exit);
+    for (let i = 0; i < 300 && ow.map.id !== "ROUTE_6"; i++) game.tick(0);
+    expect(ow.map.id).toBe("ROUTE_6");
+  });
+
+  test.skipIf(!hasGen)("Diglett's Cave does the same, both ways", () => {
+    const game = wideGame("ROUTE_2", "ROUTE_11", "DIGLETTS_CAVE_ROUTE_2",
+      "DIGLETTS_CAVE_ROUTE_11");
+    const ow = game.overworld;
+    ow.setMap("ROUTE_2", 15, 15, "down");
+    ow.setMap("DIGLETTS_CAVE_ROUTE_11", 4, 4, "down");
+    expect(ow.lastOutdoor?.id).toBe("ROUTE_11");
+    ow.setMap("DIGLETTS_CAVE_ROUTE_2", 4, 4, "down");
+    expect(ow.lastOutdoor?.id).toBe("ROUTE_2");
+  });
+
+  test.skipIf(!hasGen)("the Route 22 gate picks its exit by the player's row", () => {
+    const game = wideGame("ROUTE_22", "ROUTE_23", "ROUTE_22_GATE");
+    const ow = game.overworld;
+    // north half -> Route 23, south half -> Route 22
+    ow.setMap("ROUTE_22_GATE", 4, 2, "up");
+    expect(ow.lastOutdoor?.id).toBe("ROUTE_23");
+    ow.player.cellY = 6;
+    ow.onStepComplete();
+    expect(ow.lastOutdoor?.id).toBe("ROUTE_22");
+  });
+});
+
+describe("the saffron gates", () => {
+  function gateGame(): VoxelmonGame {
+    const data = {
+      ...(romData as object),
+      cookedMaps: [
+        ...((romData as { cookedMaps?: string[] }).cookedMaps ?? []),
+        "ROUTE_5_GATE", "ROUTE_6_GATE", "ROUTE_7_GATE", "ROUTE_8_GATE",
+      ],
+    };
+    const game = new VoxelmonGame(data as never, new MenuHost(), 1);
+    game.newGame();
+    game.closeToOverworld();
+    return game;
+  }
+
+  /** Step onto the gate's checkpoint and drain whatever it says. */
+  function crossGate(game: VoxelmonGame, map: string, x: number, y: number): void {
+    const ow = game.overworld;
+    ow.setMap(map, x, y, "up");
+    ow.player.cellX = x;
+    ow.player.cellY = y;
+    ow.onStepComplete();
+    // A fixed span, not "until the stack empties": the walk-back is a script
+    // row that runs after the guard's text box has already closed.
+    for (let i = 0; i < 600; i++) {
+      dismissText(game);
+      game.tick(0);
+    }
+  }
+
+  test.skipIf(!hasGen)("a thirsty guard turns you back", () => {
+    const game = gateGame();
+    crossGate(game, "ROUTE_5_GATE", 4, 3);
+    expect(game.save.flags.EVENT_GAVE_GUARDS_DRINK).toBeUndefined();
+    // walked back the way we came, so the checkpoint is not crossed
+    expect(game.overworld.player.cellY).toBeGreaterThan(3);
+  });
+
+  test.skipIf(!hasGen)("the trigger takes the drink — talking is not required", () => {
+    const game = gateGame();
+    game.save.inventory.FRESH_WATER = 1;
+    crossGate(game, "ROUTE_5_GATE", 4, 3);
+    expect(game.save.flags.EVENT_GAVE_GUARDS_DRINK).toBe(true);
+    expect(game.save.inventory.FRESH_WATER).toBeUndefined();
+  });
+
+  test.skipIf(!hasGen)("one drink opens all four gates", () => {
+    const game = gateGame();
+    game.save.inventory.LEMONADE = 1;
+    crossGate(game, "ROUTE_5_GATE", 4, 3);
+    expect(game.save.flags.EVENT_GAVE_GUARDS_DRINK).toBe(true);
+    // the other three no longer trigger at all
+    for (const [map, x, y] of [
+      ["ROUTE_6_GATE", 4, 2], ["ROUTE_7_GATE", 3, 3], ["ROUTE_8_GATE", 2, 3],
+    ] as [string, number, number][]) {
+      const ow = game.overworld;
+      ow.setMap(map, x, y, "up");
+      ow.player.cellX = x;
+      ow.player.cellY = y;
+      ow.onStepComplete();
+      expect(game.stackKinds(), `${map} still blocks`).toEqual(["overworld"]);
+    }
+  });
+
+  test.skipIf(!hasGen)("any of the three drinks works, and only one is taken", () => {
+    for (const drink of ["FRESH_WATER", "SODA_POP", "LEMONADE"]) {
+      const game = gateGame();
+      game.save.inventory[drink] = 2;
+      crossGate(game, "ROUTE_6_GATE", 4, 2);
+      expect(game.save.flags.EVENT_GAVE_GUARDS_DRINK, drink).toBe(true);
+      expect(game.save.inventory[drink], drink).toBe(1);
+    }
+  });
+});
+
 describe("the game corner", () => {
   function gcGame(): VoxelmonGame {
     const data = {

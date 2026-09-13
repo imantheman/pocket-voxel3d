@@ -20,6 +20,7 @@ import { defPassable, GameMap, isOutside } from "./map.ts";
 import { NPC } from "./npc.ts";
 import { Player } from "./player.ts";
 import { talkScript, itemBallScript, itemBallFlag, TEXT_BILLSHOUSE_PC } from "./mapscripts.ts";
+import { LAST_MAP_REWRITES, rewrittenLastMap } from "./lastmap.ts";
 import { martGreetScript } from "./marts.ts";
 import {
   inSafariStepZone,
@@ -383,6 +384,11 @@ export class Overworld implements ScriptWorld {
       this.player = new Player(x, y, facing);
     }
     this.entities = [this.player, ...this.npcs];
+    // The path/cave entrance houses force wLastMap to their own route as
+    // their map loads; without this their far exit returns you to the route
+    // you came in from. AFTER the player is placed: the Route 22 gate's rule
+    // reads their row, and before this point that is still the old map's.
+    this.syncLastMapRewrite();
     console.log("NPCS " + (this.npcs as any[]).map((n: any) =>
       JSON.stringify(n, (k, v) => (typeof v === "object" && v !== null && k !== "" ? undefined : v))).join(" | "));
   }
@@ -1070,6 +1076,9 @@ export class Overworld implements ScriptWorld {
     // safari_game.asm runs BEFORE the land triggers and the warp check: when
     // the timer runs out the PA takes the step over entirely.
     if (this.safariStep()) return;
+    // The Route 22 gate rewrites wLastMap from the player's row, so it has to
+    // be re-read as they move — before the warp check below reads it.
+    this.syncLastMapRewrite();
     // A map's land-triggers run first (OverworldController.lua:3502): the
     // onStep function hook (story cutscene logic) or a declarative coord
     // trigger. Fires for ANY map that registers one — the two _ONSTEP_HOST
@@ -1161,6 +1170,21 @@ export class Overworld implements ScriptWorld {
       this.doorWarp = true; // door SFX + PlayerStepOutFromDoor walk-out
     }
     this.startWarpTo(dest.map, dest.x, dest.y, facing);
+  }
+
+  /**
+   * field.lastMapRewrites (world/lastmap.ts): maps that overwrite wLastMap
+   * themselves, so a LAST_MAP exit leaves where their script says rather than
+   * where the player came in from. Run on map load and on every completed
+   * step, since the Route 22 gate's rule reads the player's row.
+   */
+  private syncLastMapRewrite(): void {
+    const rewrite = LAST_MAP_REWRITES[this.map.id];
+    if (!rewrite) return;
+    const id = rewrittenLastMap(rewrite, this.player.cellX, this.player.cellY);
+    if (!id || this.lastOutdoor?.id === id) return;
+    const w = this.shell.data.maps?.[id]?.warps?.[0];
+    this.rememberOutdoor(id, w?.x ?? 0, w?.y ?? 0);
   }
 
   // OverworldController.lua:3949 rememberOutdoor (pokered's wLastMap)

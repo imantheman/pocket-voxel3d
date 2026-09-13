@@ -4631,6 +4631,71 @@ function safariLeavingRows(fromRightWarp) {
   ];
 }
 
+// voxelmon/game/world/saffrongate.ts
+var GUARD_DRINKS = ["FRESH_WATER", "SODA_POP", "LEMONADE"];
+var GAVE_DRINK_FLAG = "EVENT_GAVE_GUARDS_DRINK";
+var ACCEPTED = [
+  ["show_text", "_SaffronGateGuardImParchedText"],
+  ["show_text", "_SaffronGateGuardYouCanGoOnThroughText"]
+];
+function saffronGuardTalkRows() {
+  return [
+    ["face_player"],
+    ["check_flag", GAVE_DRINK_FLAG],
+    ["jump_if_true", "thanks"],
+    ["take_guard_drink"],
+    ["jump_if_false", "thirsty"],
+    ...ACCEPTED,
+    ["jump", "end"],
+    ["label", "thanks"],
+    ["show_text", "_SaffronGateGuardThanksForTheDrinkText"],
+    ["jump", "end"],
+    ["label", "thirsty"],
+    ["show_text", "_SaffronGateGuardGeeImThirstyText"]
+  ];
+}
+function saffronGateStepRows(back) {
+  return [
+    ["take_guard_drink"],
+    ["jump_if_false", "block"],
+    ...ACCEPTED,
+    ["jump", "end"],
+    ["label", "block"],
+    ["show_text", "_SaffronGateGuardGeeImThirstyText"],
+    ["move_player", back, 1]
+  ];
+}
+var SAFFRON_GATES = {
+  ROUTE_5_GATE: { guardText: "TEXT_ROUTE5GATE_GUARD", triggers: [[3, 3], [4, 3]] },
+  ROUTE_6_GATE: { guardText: "TEXT_ROUTE6GATE_GUARD", triggers: [[3, 2], [4, 2]] },
+  ROUTE_7_GATE: {
+    guardText: "TEXT_ROUTE7GATE_GUARD",
+    triggers: [[3, 3], [3, 4]],
+    horizontal: true
+  },
+  ROUTE_8_GATE: {
+    guardText: "TEXT_ROUTE8GATE_GUARD",
+    triggers: [[2, 3], [2, 4]],
+    horizontal: true
+  }
+};
+function saffronGateScript(gate) {
+  return {
+    talk: { [gate.guardText]: saffronGuardTalkRows() },
+    onStep: (ow, save) => {
+      const p = ow?.player;
+      const x = p?.cellX;
+      const y = p?.cellY;
+      if (!gate.triggers.some(([cx, cy]) => cx === x && cy === y))
+        return null;
+      if (save?.flags?.[GAVE_DRINK_FLAG])
+        return null;
+      const back = gate.horizontal ? p.facing === "left" ? "right" : "left" : p.facing === "up" ? "down" : "up";
+      return saffronGateStepRows(back);
+    }
+  };
+}
+
 // voxelmon/game/world/mapscripts.ts
 function gymLeader(o) {
   const rows = [
@@ -5264,6 +5329,10 @@ var MAP_SCRIPTS = {
       })
     }
   },
+  ROUTE_5_GATE: saffronGateScript(SAFFRON_GATES.ROUTE_5_GATE),
+  ROUTE_6_GATE: saffronGateScript(SAFFRON_GATES.ROUTE_6_GATE),
+  ROUTE_7_GATE: saffronGateScript(SAFFRON_GATES.ROUTE_7_GATE),
+  ROUTE_8_GATE: saffronGateScript(SAFFRON_GATES.ROUTE_8_GATE),
   SAFARI_ZONE_GATE: {
     talk: {
       TEXT_SAFARIZONEGATE_SAFARI_ZONE_WORKER1: (_ow, save) => {
@@ -5746,6 +5815,29 @@ function itemBallScript(mapLabel, obj) {
   ];
 }
 
+// voxelmon/game/world/lastmap.ts
+var LAST_MAP_REWRITES = {
+  ROUTE_22_GATE: {
+    axis: "y",
+    rules: [{ below: 4, map: "ROUTE_23" }, { map: "ROUTE_22" }]
+  },
+  UNDERGROUND_PATH_ROUTE_5: { rules: [{ map: "ROUTE_5" }] },
+  UNDERGROUND_PATH_ROUTE_6: { rules: [{ map: "ROUTE_6" }] },
+  UNDERGROUND_PATH_ROUTE_7: { rules: [{ map: "ROUTE_7" }] },
+  UNDERGROUND_PATH_ROUTE_8: { rules: [{ map: "ROUTE_8" }] },
+  DIGLETTS_CAVE_ROUTE_2: { rules: [{ map: "ROUTE_2" }] },
+  DIGLETTS_CAVE_ROUTE_11: { rules: [{ map: "ROUTE_11" }] }
+};
+function rewrittenLastMap(rewrite, cellX, cellY) {
+  const value = rewrite.axis === "x" ? cellX : cellY;
+  for (const rule of rewrite.rules) {
+    if ((rule.below === undefined || value < rule.below) && (rule.atLeast === undefined || value >= rule.atLeast)) {
+      return rule.map;
+    }
+  }
+  return null;
+}
+
 // voxelmon/game/world/marts.ts
 function martStock(data, mapLabel, textConst) {
   const mart = data?.text_pointers?.[mapLabel]?.[textConst]?.mart;
@@ -6176,6 +6268,19 @@ function* open_prizes(ctx, ...args) {
   w.openPrizes(args[0], () => runner.resume());
   yield;
 }
+function* take_guard_drink(ctx) {
+  const save = ctx.world.save;
+  for (const drink of GUARD_DRINKS) {
+    if ((save.inventory?.[drink] ?? 0) > 0) {
+      remove(save, drink, 1);
+      if (save.flags)
+        save.flags[GAVE_DRINK_FLAG] = true;
+      ctx.lastCheck = true;
+      return;
+    }
+  }
+  ctx.lastCheck = false;
+}
 function* safari_start(ctx) {
   ctx.world.safariStart?.();
 }
@@ -6328,6 +6433,7 @@ var VERBS = {
   open_prizes,
   safari_start,
   safari_end,
+  take_guard_drink,
   safari_walk_in,
   take_item,
   clear_flag,
@@ -6678,6 +6784,7 @@ class Overworld {
       this.player = new Player(x, y, facing);
     }
     this.entities = [this.player, ...this.npcs];
+    this.syncLastMapRewrite();
     console.log("NPCS " + this.npcs.map((n) => JSON.stringify(n, (k, v) => typeof v === "object" && v !== null && k !== "" ? undefined : v)).join(" | "));
   }
   objectVisible(obj) {
@@ -7144,6 +7251,7 @@ GAME is over!`;
   onStepComplete() {
     if (this.safariStep())
       return;
+    this.syncLastMapRewrite();
     if (!this.runner.isRunning()) {
       const label3 = this.map?.id ?? "";
       const script = MAP_SCRIPTS[label3];
@@ -7201,6 +7309,16 @@ GAME is over!`;
       this.doorWarp = true;
     }
     this.startWarpTo(dest.map, dest.x, dest.y, facing);
+  }
+  syncLastMapRewrite() {
+    const rewrite = LAST_MAP_REWRITES[this.map.id];
+    if (!rewrite)
+      return;
+    const id = rewrittenLastMap(rewrite, this.player.cellX, this.player.cellY);
+    if (!id || this.lastOutdoor?.id === id)
+      return;
+    const w = this.shell.data.maps?.[id]?.warps?.[0];
+    this.rememberOutdoor(id, w?.x ?? 0, w?.y ?? 0);
   }
   rememberOutdoor(id, x, y) {
     this.lastOutdoor = { id, x, y };

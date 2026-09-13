@@ -20,6 +20,7 @@
 import type { ScriptRow } from "./script.ts";
 import { coinClerkRows, coinGiftRows, prizeCounterRows } from "./gamecorner.ts";
 import { SAFARI_JOIN_CELLS, safariJoinRows, safariLeavingRows } from "./safari.ts";
+import { SAFFRON_GATES, saffronGateScript } from "./saffrongate.ts";
 
 /** A talk handler that builds its rows from live state, or null for none. */
 export type TalkFn = (ow: any, save: any) => ScriptRow[] | null;
@@ -953,6 +954,13 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
       }),
     },
   },
+
+  // story2.lua's four Saffron gates (scripts/Route5Gate.asm and siblings):
+  // each guard is thirsty, and one drink opens all four.
+  ROUTE_5_GATE: saffronGateScript(SAFFRON_GATES.ROUTE_5_GATE!),
+  ROUTE_6_GATE: saffronGateScript(SAFFRON_GATES.ROUTE_6_GATE!),
+  ROUTE_7_GATE: saffronGateScript(SAFFRON_GATES.ROUTE_7_GATE!),
+  ROUTE_8_GATE: saffronGateScript(SAFFRON_GATES.ROUTE_8_GATE!),
 
   // safari.lua M.SAFARI_ZONE_GATE (scripts/SafariZoneGate.asm). The worker
   // is both a talk entry and a coord trigger: stepping onto the two cells in

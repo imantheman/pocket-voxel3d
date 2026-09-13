@@ -24,6 +24,7 @@ import type { NPC } from "./npc.ts";
 
 import { newMon, markOwned } from "../battle/mon.ts";
 import { COIN_CAP } from "./gamecorner.ts";
+import { GAVE_DRINK_FLAG, GUARD_DRINKS } from "./saffrongate.ts";
 import { martStock } from "./marts.ts";
 
 export type ScriptRow = [string, ...unknown[]];
@@ -562,6 +563,27 @@ function* open_prizes(ctx: ScriptContext, ...args: unknown[]): Generator<void, v
   yield;
 }
 
+/**
+ * RemoveGuardDrink (engine/items/inventory.asm): take ONE of the three
+ * drinks from the bag and set the flag that opens all four Saffron gates.
+ * lastCheck reports whether there was one to take.
+ */
+function* take_guard_drink(ctx: ScriptContext): Generator<void, void> {
+  const save = ctx.world.save as {
+    inventory?: Record<string, number>;
+    flags?: Record<string, boolean>;
+  };
+  for (const drink of GUARD_DRINKS) {
+    if ((save.inventory?.[drink] ?? 0) > 0) {
+      Bag.remove(save as never, drink, 1);
+      if (save.flags) save.flags[GAVE_DRINK_FLAG] = true;
+      ctx.lastCheck = true;
+      return;
+    }
+  }
+  ctx.lastCheck = false;
+}
+
 /** Open a SAFARI game: balls and the step timer (world/safari.ts). */
 function* safari_start(ctx: ScriptContext): Generator<void, void> {
   (ctx.world as unknown as { safariStart?: () => void }).safariStart?.();
@@ -788,6 +810,7 @@ const VERBS: Record<string, Verb> = {
   open_prizes,
   safari_start,
   safari_end,
+  take_guard_drink,
   safari_walk_in,
   take_item,
   clear_flag,
