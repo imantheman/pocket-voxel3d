@@ -263,6 +263,20 @@ class BattleGameState implements GameState, BattleSceneView {
       // no mon ever evolves. The evolution pages push over the overworld the
       // battle just handed back to.
       this.game.runEvolutions(b.leveledUp);
+      // A catch that filled a new dex number shows its entry
+      // (item_effects.asm _ItemUseBallText06 -> predef ShowPokedexData).
+      //
+      // DEVIATION: the original shows it DURING the catch, over the battle
+      // screen; gen1recomp queues it as a ui row on the battle's own queue.
+      // This battle has no UI queue — its rows are text, waits and acts — so
+      // the page comes up as the battle hands back, one beat later. Nothing
+      // else can be queued behind it: a catch ends the battle, and awards no
+      // exp, so there are no level-ups or evolutions to sequence against.
+      const caught = b.caughtNewSpecies;
+      if (caught) {
+        b.caughtNewSpecies = null;
+        this.game.showCaughtDexEntry(caught);
+      }
       return;
       // BattleState.lua:4647-4653 — teardown pops the battle screen FIRST,
       // and it is the map that holds: POST_BATTLE_RETURN before EnterMap
@@ -368,7 +382,9 @@ export class VoxelmonGame implements OverworldShell, SceneView {
         // play_battle_music.asm runs before the transition (:1458); the cry
         // and the victory theme are NOT observed from out here — the battle
         // queues them where the reference does and we drain them below.
-        this.audio.playBattle("wild");
+        // The ROLE is the battle's (BattleState.lua computeMusicKind): this
+        // was pinned to "wild", so every trainer fought to the wild theme.
+        this.audio.playBattle(bv.battle.musicKind());
       }
       this.drainBattleCues(bv.battle);
       return;
@@ -400,9 +416,11 @@ export class VoxelmonGame implements OverworldShell, SceneView {
         this.audio.playCry(cue.slice(4));
       } else if (cue.startsWith("sfx:")) {
         this.audio.playSfx(cue.slice(4));
-      } else if (cue === "music:victory") {
-        // Music.playVictory only has a jingle for a won fight
-        this.audio.playVictory("wild");
+      } else if (cue.startsWith("music:victory")) {
+        // "music:victory:<kind>" — the battle names the theme, since only it
+        // knows whether a faint ended the fight (trainer.ts victoryMusicKind).
+        const kind = cue.slice("music:victory:".length);
+        this.audio.playVictory(kind || "wild");
       } else if (cue === "music:restore") {
         this.audio.restore();
         this.audioRestored = true;
@@ -1222,6 +1240,18 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   title(): unknown {
     const top = this.stack[this.stack.length - 1] as any;
     return top?.kind === "title" ? top.view() : null;
+  }
+
+  /**
+   * A newly caught species' dex entry: the line, then the data page
+   * (_ItemUseBallText06 + ShowPokedexData). The page opens in standalone
+   * mode, so a button closes it rather than dropping into the dex list.
+   */
+  showCaughtDexEntry(species: string): void {
+    const name = this.data.pokemon[species]?.name ?? species;
+    this.showText(`New POKéDEX data\nwill be added for\n${name}!`, () => {
+      this.push(new PokedexState(this as any, undefined, { species }));
+    });
   }
 
   /** Script-driven trainer battle (start_battle). */

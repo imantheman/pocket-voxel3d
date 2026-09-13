@@ -14,9 +14,29 @@ interface TrainerDef {
   parties: { species: string; level: number }[][];
 }
 
+/**
+ * The gym-leader fights, by class and the party index that IS the gym battle
+ * (init_battle.asm's wGymLeaderNo is written only by the eight gym scripts).
+ * Every leader has a single roster except Giovanni, whose gym team is his
+ * third — parties 1 and 2 are the Rocket Hideout and Silph Co., which take
+ * the ordinary trainer theme.
+ */
+const GYM_LEADER_PARTY: Record<string, number> = {
+  OPP_BROCK: 1,
+  OPP_MISTY: 1,
+  OPP_LT_SURGE: 1,
+  OPP_ERIKA: 1,
+  OPP_KOGA: 1,
+  OPP_SABRINA: 1,
+  OPP_BLAINE: 1,
+  OPP_GIOVANNI: 3,
+};
+
 export class TrainerBattle extends WildBattle {
   readonly isTrainer = true;
   readonly trainerName: string;
+  readonly trainerId: string;
+  readonly partyIndex: number;
   private enemyParty: PartyMon[] = [];
   private enemyIndex = 0;
   private baseMoney: number;
@@ -36,10 +56,44 @@ export class TrainerBattle extends WildBattle {
     const lead = roster[0] ?? { species: "RATTATA", level: 2 };
     super(data, save, rng, lead.species, lead.level);
 
+    this.trainerId = trainerId;
+    this.partyIndex = partyIndex;
     this.trainerName = displayName ?? def?.name ?? trainerId;
     this.baseMoney = def?.baseMoney ?? 0;
     this.enemyParty = roster.map((m) => newMon(data, m.species, m.level, rng));
     this.enemyIndex = 0;
+  }
+
+  /**
+   * BattleState.lua:1394 computeMusicKind. The champion gets the final theme;
+   * gym leaders and Lance get the leader theme; everyone else the ordinary
+   * trainer theme.
+   *
+   * "Gym leader" is the set of fights that write wGymLeaderNo, which is the
+   * eight gym scripts and nothing else — so Giovanni's Rocket Hideout and
+   * Silph Co. battles are ORDINARY trainer fights and only his Viridian gym
+   * roster is a leader fight. That is why the party index is part of the test
+   * rather than the class alone.
+   */
+  override musicKind(): string {
+    if (this.trainerId === "OPP_RIVAL3") return "final";
+    if (this.trainerId === "OPP_LANCE") return "gym";
+    const gymParty = GYM_LEADER_PARTY[this.trainerId];
+    if (gymParty !== undefined && gymParty === this.partyIndex) return "gym";
+    return "trainer";
+  }
+
+  /**
+   * A trainer's victory theme waits for the LAST mon (TrainerBattleVictory);
+   * until then the battle theme keeps playing. This was firing on every faint,
+   * so a trainer with a full party sounded beaten five times over.
+   */
+  protected override victoryMusicKind(): string | null {
+    const more = this.enemyParty.some((m, i) => i > this.enemyIndex && m.hp > 0);
+    if (more) return null;
+    // Only gymWin/trainerWin/wildWin exist (audio.battle); the champion's
+    // fight has no jingle of its own, so it takes the leader's.
+    return this.musicKind() === "trainer" ? "trainer" : "gym";
   }
 
   /** Trainers send out their lead instead of it "appearing" wild

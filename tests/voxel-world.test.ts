@@ -16,7 +16,9 @@ import { join } from "node:path";
 import { VOX_BTN, VOX_OP } from "../contracts/spec/voxel-spec.ts";
 import { fromGenDir as loadAudioBanks } from "../voxelmon/game/audio/banks.ts";
 import { loadRuntimeData, REQUIRED_MODULES, type VoxelmonData } from "../voxelmon/game/data.ts";
+import { WildBattle } from "../voxelmon/game/battle/battle.ts";
 import { newMon } from "../voxelmon/game/battle/mon.ts";
+import { TrainerBattle } from "../voxelmon/game/battle/trainer.ts";
 import { seqRng } from "../voxelmon/game/rng.ts";
 import * as Bag from "../voxelmon/game/rules/bag.ts";
 import { ENCOUNTER_BUCKETS } from "../voxelmon/game/rules/encounter.ts";
@@ -852,6 +854,138 @@ describe("talking to a trainer", () => {
     ow.engageTrainer(npc!);
     expect(game.stackKinds().at(-1)).toBe("textbox");
     expect(topText(game)).toContain("guarding this");
+  });
+});
+
+describe("catching a pokemon", () => {
+  /** Run a caught battle to its finish and return the game. */
+  function catchOne(game: VoxelmonGame, species: string): void {
+    game.pushStubBattle(species, 5);
+    const battle = (game.battleView() as { battle: any }).battle;
+    // storeCaughtMon normally runs from an act row mid-queue; called cold the
+    // battle is still parked on its action menu and would wait for input.
+    battle.phase = "messages";
+    battle.storeCaughtMon();
+    // The battle's messages are its own, not textbox states, so they need A
+    // edges fed to the battle itself; alternate so each tick is a fresh press.
+    for (let i = 0; i < 1200 && game.stackKinds().includes("battle"); i++) {
+      game.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    game.tick(0);
+  }
+
+  test.skipIf(!hasGen)("a new species is marked owned and shows its entry", () => {
+    const game = makeMenuGame();
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 5));
+    expect(game.save.pokedex.owned.PIDGEY).toBeUndefined();
+
+    catchOne(game, "PIDGEY");
+    expect(game.save.pokedex.owned.PIDGEY).toBe(true);
+
+    // the line, then the data page itself — ShowPokedexData, not the list
+    expect(topText(game)).toContain("New POKéDEX data");
+    dismissText(game);
+    expect(game.stackKinds().at(-1)).toBe("pokedex");
+    const dex = game.pokedexScreen() as { mode: string; entry: { name: string } | null };
+    expect(dex.mode).toBe("entry");
+    expect(dex.entry?.name).toBe("PIDGEY");
+
+    // a button closes the whole screen rather than dropping into the list
+    tap(game, VOX_BTN.a);
+    expect(game.stackKinds()).toEqual(["overworld"]);
+  });
+
+  test.skipIf(!hasGen)("a species already owned shows no entry", () => {
+    const game = makeMenuGame();
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 5));
+    game.save.pokedex.owned.PIDGEY = true;
+    catchOne(game, "PIDGEY");
+    expect(game.stackKinds()).toEqual(["overworld"]);
+  });
+});
+
+describe("battle and encounter music", () => {
+  /** Every song the audio director was asked for, in order. */
+  function songLog(game: VoxelmonGame): string[] {
+    const audio = (game as unknown as { audio: any }).audio;
+    if (!audio.__log) {
+      audio.__log = [];
+      for (const m of ["play", "playBattle", "playVictory", "playOnce", "startMap", "restore"]) {
+        const orig = audio[m].bind(audio);
+        audio[m] = (...args: unknown[]) => {
+          audio.__log.push(`${m}:${args[0] ?? ""}`);
+          return orig(...args);
+        };
+      }
+    }
+    return audio.__log as string[];
+  }
+
+  test.skipIf(!hasGen)("a trainer's victory theme waits for their LAST mon", () => {
+    const game = makeMenuGame();
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 60));
+    const battle = new TrainerBattle(
+      romData!, game.save as never, seqRng(0), "OPP_BROCK", 1,
+    );
+    // Brock leads with two mons, so downing the first must decide nothing.
+    // Asked directly rather than through onFaint: the cue is pushed from a
+    // queued act row, so an empty audioCues right after a faint would pass
+    // whether or not the bug was fixed.
+    expect((battle as any).enemyParty.length).toBeGreaterThan(1);
+    expect((battle as any).victoryMusicKind()).toBeNull();
+
+    // with the rest down the faint IS the win, and it is the leader's jingle
+    // rather than the wild one
+    for (const m of (battle as any).enemyParty) m.hp = 0;
+    expect((battle as any).victoryMusicKind()).toBe("gym");
+
+    // an ordinary trainer takes trainerWin, a wild mon wildWin
+    const grunt = new TrainerBattle(
+      romData!, game.save as never, seqRng(0), "OPP_YOUNGSTER", 1,
+    );
+    for (const m of (grunt as any).enemyParty) m.hp = 0;
+    expect((grunt as any).victoryMusicKind()).toBe("trainer");
+    const wild = new WildBattle(romData!, game.save as never, seqRng(0), "PIDGEY", 3);
+    expect((wild as any).victoryMusicKind()).toBe("wild");
+  });
+
+  test.skipIf(!hasGen)("the battle theme is the battle's own role", () => {
+    const game = makeMenuGame();
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 10));
+    const wild = new WildBattle(romData!, game.save as never, seqRng(0), "PIDGEY", 3);
+    expect(wild.musicKind()).toBe("wild");
+    const mk = (id: string, party = 1): string =>
+      new TrainerBattle(romData!, game.save as never, seqRng(0), id, party).musicKind();
+    expect(mk("OPP_YOUNGSTER")).toBe("trainer");
+    expect(mk("OPP_BROCK")).toBe("gym");
+    expect(mk("OPP_LANCE")).toBe("gym");
+    expect(mk("OPP_RIVAL3")).toBe("final");
+    // Giovanni's gym roster is his THIRD; the earlier two are ordinary fights
+    expect(mk("OPP_GIOVANNI", 1)).toBe("trainer");
+    expect(mk("OPP_GIOVANNI", 2)).toBe("trainer");
+    expect(mk("OPP_GIOVANNI", 3)).toBe("gym");
+  });
+
+  test.skipIf(!hasGen)("a trainer's sight line starts the encounter sting", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 10));
+    ow.setMap("ROUTE_3", 11, 6, "down");
+    const log = songLog(game);
+    const npc = ow.npcs.find((n: any) => n.def.trainerClass)!;
+    // stand on the trainer's line, one cell in front of them
+    const p = ow.player;
+    const vec: Record<string, [number, number]> = {
+      up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0],
+    };
+    const v = vec[npc.facing]!;
+    p.cellX = npc.cellX + v[0];
+    p.cellY = npc.cellY + v[1];
+    log.length = 0;
+    ow.checkTrainerSight();
+    // PlayTrainerMusic fires with the "!", before the walk-up — not when the
+    // battle opens, which is why the route theme used to run straight through
+    expect(log.some((s) => s.startsWith("playOnce:Music_Meet"))).toBe(true);
   });
 });
 

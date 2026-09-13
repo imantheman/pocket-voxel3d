@@ -2308,6 +2308,12 @@ Get'm! ${name}!`;
     if (this.player?.mon)
       this.participants.add(this.player.mon);
   }
+  musicKind() {
+    return "wild";
+  }
+  victoryMusicKind() {
+    return "wild";
+  }
   animationsOn() {
     return this.save.options?.animations !== false;
   }
@@ -2739,7 +2745,9 @@ ${displayName(target)}!`);
     });
     this.insertNext({ wait: FAINT_SLIDE });
     if (!battler.isPlayer) {
-      this.actNext(() => this.audioCues.push("music:victory"));
+      const kind = this.victoryMusicKind();
+      if (kind)
+        this.actNext(() => this.audioCues.push(`music:victory:${kind}`));
     }
     this.sayNext(`${displayName(battler)}
 fainted!`);
@@ -3054,8 +3062,12 @@ caught!`);
       }
     });
   }
+  caughtNewSpecies = null;
   storeCaughtMon() {
-    markOwned(this.save, this.enemy.mon.species);
+    const species = this.enemy.mon.species;
+    if (!this.save.pokedex?.owned?.[species])
+      this.caughtNewSpecies = species;
+    markOwned(this.save, species);
     if (partyAdd(this.save.party, this.enemy.mon)) {} else {
       this.sayNext(`${this.enemy.name} was
 transferred to
@@ -3158,9 +3170,22 @@ to fight!`);
 }
 
 // voxelmon/game/battle/trainer.ts
+var GYM_LEADER_PARTY = {
+  OPP_BROCK: 1,
+  OPP_MISTY: 1,
+  OPP_LT_SURGE: 1,
+  OPP_ERIKA: 1,
+  OPP_KOGA: 1,
+  OPP_SABRINA: 1,
+  OPP_BLAINE: 1,
+  OPP_GIOVANNI: 3
+};
+
 class TrainerBattle extends WildBattle {
   isTrainer = true;
   trainerName;
+  trainerId;
+  partyIndex;
   enemyParty = [];
   enemyIndex = 0;
   baseMoney;
@@ -3169,10 +3194,28 @@ class TrainerBattle extends WildBattle {
     const roster = def?.parties?.[partyIndex - 1] ?? def?.parties?.[0] ?? [];
     const lead = roster[0] ?? { species: "RATTATA", level: 2 };
     super(data, save, rng, lead.species, lead.level);
+    this.trainerId = trainerId;
+    this.partyIndex = partyIndex;
     this.trainerName = displayName2 ?? def?.name ?? trainerId;
     this.baseMoney = def?.baseMoney ?? 0;
     this.enemyParty = roster.map((m) => newMon(data, m.species, m.level, rng));
     this.enemyIndex = 0;
+  }
+  musicKind() {
+    if (this.trainerId === "OPP_RIVAL3")
+      return "final";
+    if (this.trainerId === "OPP_LANCE")
+      return "gym";
+    const gymParty = GYM_LEADER_PARTY[this.trainerId];
+    if (gymParty !== undefined && gymParty === this.partyIndex)
+      return "gym";
+    return "trainer";
+  }
+  victoryMusicKind() {
+    const more = this.enemyParty.some((m, i) => i > this.enemyIndex && m.hp > 0);
+    if (more)
+      return null;
+    return this.musicKind() === "trainer" ? "trainer" : "gym";
   }
   enemyIntro() {
     markSeen(this.save, this.enemy.mon.species);
@@ -6020,6 +6063,22 @@ var COMPASS = {
   left: "west",
   right: "east"
 };
+var FEMALE_TRAINERS = new Set([
+  "OPP_LASS",
+  "OPP_JR_TRAINER_F",
+  "OPP_BEAUTY",
+  "OPP_COOLTRAINER_F"
+]);
+var EVIL_TRAINERS = new Set([
+  "OPP_UNUSED_JUGGLER",
+  "OPP_GAMBLER",
+  "OPP_ROCKER",
+  "OPP_JUGGLER",
+  "OPP_CHIEF",
+  "OPP_SCIENTIST",
+  "OPP_GIOVANNI",
+  "OPP_ROCKET"
+]);
 function computeNeighbors(maps, rootId, hops) {
   const out = [];
   const rootDef = maps[rootId];
@@ -6765,9 +6824,23 @@ class Overworld {
     if (event && this.save.flags)
       this.save.flags[event] = true;
   }
+  meetTrainerTheme(cls) {
+    if (!cls || cls.includes("RIVAL"))
+      return null;
+    if (EVIL_TRAINERS.has(cls))
+      return "Music_MeetEvilTrainer";
+    if (FEMALE_TRAINERS.has(cls))
+      return "Music_MeetFemaleTrainer";
+    return "Music_MeetMaleTrainer";
+  }
   engageTrainer(npc, onDone) {
     const header = this.trainerHeader(npc);
     npc.facePlayer(this.player);
+    if (!this.engaging) {
+      const theme = this.meetTrainerTheme(npc.def.trainerClass);
+      if (theme)
+        this.shell.playOnce(theme);
+    }
     const launch = () => this.startTrainerBattle(npc.def.trainerClass ?? "", npc.def.trainerParty ?? 1, undefined, (won) => {
       if (won)
         this.markTrainerDefeated(npc, header?.event);
@@ -6839,6 +6912,9 @@ class Overworld {
       else
         launch();
     };
+    const theme = this.meetTrainerTheme(def.trainerClass);
+    if (theme)
+      this.shell.playOnce(theme);
     this.setEmote(npc, 1, 60, () => {
       const steps = dist - 1;
       if (steps > 0)
@@ -10017,7 +10093,8 @@ class PokedexState {
   owned = 0;
   digits;
   static SUBMENU = ["DATA", "CRY", "QUIT"];
-  constructor(game, onCancel) {
+  standalone = false;
+  constructor(game, onCancel, opts) {
     this.game = game;
     this.onCancel = onCancel;
     const data = game.data;
@@ -10050,12 +10127,26 @@ class PokedexState {
         value: isSeen ? def.id : null
       });
     }
+    if (opts?.species && mons[opts.species]) {
+      this.standalone = true;
+      this.mode = "entry";
+      this.entrySpecies = opts.species;
+      const at = this.entries.findIndex((e) => e.value === opts.species);
+      if (at >= 0)
+        this.index = at;
+    }
   }
   update() {
     const p = this.game.input.pressed;
     if (this.mode === "entry") {
-      if (p.a || p.b)
-        this.mode = "submenu";
+      if (p.a || p.b) {
+        if (this.standalone) {
+          this.game.pop();
+          this.onCancel?.();
+        } else {
+          this.mode = "submenu";
+        }
+      }
       return;
     }
     if (this.mode === "submenu")
@@ -10524,6 +10615,11 @@ class BattleGameState {
       if (b.finished === "lose" && !this.loseable)
         this.game.blackout();
       this.game.runEvolutions(b.leveledUp);
+      const caught = b.caughtNewSpecies;
+      if (caught) {
+        b.caughtNewSpecies = null;
+        this.game.showCaughtDexEntry(caught);
+      }
       return;
       this.game.pop();
       if (b.finished === "lose")
@@ -10572,7 +10668,7 @@ class VoxelmonGame {
     if (bv) {
       if (!this.audioBattle) {
         this.audioBattle = true;
-        this.audio.playBattle("wild");
+        this.audio.playBattle(bv.battle.musicKind());
       }
       this.drainBattleCues(bv.battle);
       return;
@@ -10597,8 +10693,9 @@ class VoxelmonGame {
         this.audio.playCry(cue.slice(4));
       } else if (cue.startsWith("sfx:")) {
         this.audio.playSfx(cue.slice(4));
-      } else if (cue === "music:victory") {
-        this.audio.playVictory("wild");
+      } else if (cue.startsWith("music:victory")) {
+        const kind = cue.slice("music:victory:".length);
+        this.audio.playVictory(kind || "wild");
       } else if (cue === "music:restore") {
         this.audio.restore();
         this.audioRestored = true;
@@ -11187,6 +11284,14 @@ to level ${mon.level}!`, () => {
   title() {
     const top = this.stack[this.stack.length - 1];
     return top?.kind === "title" ? top.view() : null;
+  }
+  showCaughtDexEntry(species) {
+    const name = this.data.pokemon[species]?.name ?? species;
+    this.showText(`New POKéDEX data
+will be added for
+${name}!`, () => {
+      this.push(new PokedexState(this, undefined, { species }));
+    });
   }
   askNickname(defaultName, onDone) {
     this.push(new NamingState(this, {

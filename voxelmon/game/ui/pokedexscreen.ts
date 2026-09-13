@@ -77,9 +77,18 @@ export class PokedexState implements GameState {
   // PokedexMenu.lua side menu: DATA / CRY / QUIT (AREA dropped, see header).
   private static SUBMENU = ["DATA", "CRY", "QUIT"];
 
+  /**
+   * ShowPokedexData mode: the screen opens straight on one species' data page
+   * and a button closes the whole thing, rather than dropping into the list.
+   * That is how the original shows a newly caught mon's entry
+   * (item_effects.asm's `predef ShowPokedexData` after _ItemUseBallText06).
+   */
+  private standalone = false;
+
   constructor(
     private game: DexGame,
     private onCancel?: () => void,
+    opts?: { species?: string },
   ) {
     const data = game.data;
     const dex = game.save?.pokedex ?? { seen: {}, owned: {} };
@@ -109,13 +118,28 @@ export class PokedexState implements GameState {
         value: isSeen ? def.id : null,
       });
     }
+    if (opts?.species && mons[opts.species]) {
+      this.standalone = true;
+      this.mode = "entry";
+      this.entrySpecies = opts.species;
+      const at = this.entries.findIndex((e) => e.value === opts.species);
+      if (at >= 0) this.index = at;
+    }
   }
 
   update(): void {
     const p = this.game.input.pressed;
     if (this.mode === "entry") {
-      // DexEntryMenu.lua:update — A or B pops the page back to the side menu.
-      if (p.a || p.b) this.mode = "submenu";
+      // DexEntryMenu.lua:update — A or B pops the page back to the side menu,
+      // or closes the screen outright when the page IS the screen.
+      if (p.a || p.b) {
+        if (this.standalone) {
+          this.game.pop();
+          this.onCancel?.();
+        } else {
+          this.mode = "submenu";
+        }
+      }
       return;
     }
     if (this.mode === "submenu") return this.updateSubmenu(p);

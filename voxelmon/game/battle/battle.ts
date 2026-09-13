@@ -761,6 +761,23 @@ export class WildBattle implements EffectBattle {
    * can hold the queue exactly that long. One per side: a second animation
    * on the same card replaces the first rather than fighting it.
    */
+  /**
+   * The battle theme's role (BattleState.lua:1394 computeMusicKind), read by
+   * game.ts when the battle opens. A wild battle is always "wild"; the
+   * trainer subclass picks between "trainer", "gym" and "final".
+   */
+  musicKind(): string {
+    return "wild";
+  }
+
+  /**
+   * The victory theme to start as this enemy mon's faint slide lands, or null
+   * when the battle is not over yet. Wild: the faint IS the win.
+   */
+  protected victoryMusicKind(): string | null {
+    return "wild";
+  }
+
   /** BattleState.lua:2544 animationsOn — the OPTION toggle; sounds stay. */
   animationsOn(): boolean {
     return this.save.options?.animations !== false;
@@ -1305,7 +1322,13 @@ export class WildBattle implements EffectBattle {
       // FaintEnemyPokemon .wild_win (:3673-3681, core.asm:792-795): the
       // victory theme starts AS THE SLIDE LANDS, before EnemyMonFaintedText
       // and the exp text — not after the box is dismissed.
-      this.actNext(() => this.audioCues.push("music:victory"));
+      //
+      // `.wild_win` is a BRANCH, though: pokered plays it there only when the
+      // faint ends the battle. A trainer with mons left keeps the battle
+      // theme and pays its victory music in TrainerBattleVictory instead, so
+      // this asks whether the battle is actually over.
+      const kind = this.victoryMusicKind();
+      if (kind) this.actNext(() => this.audioCues.push(`music:victory:${kind}`));
     }
     this.sayNext(`${displayName(battler)}\nfainted!`);
     if (battler.isPlayer) {
@@ -1643,15 +1666,26 @@ export class WildBattle implements EffectBattle {
     });
   }
 
-  /** :4387-4440 storeCaughtMon. DEVIATIONS (v1): no pokédex marks, no
-   * nickname prompt, and with a full party the mon is NOT stored — the PC
-   * transfer text prints and the mon is lost (the box system is a later
-   * rung; item_effects.asm:518-566 is the reference flow). */
+  /**
+   * The species this catch added to the dex for the FIRST time, else null.
+   * The shell reads it after the battle closes and shows the entry
+   * (item_effects.asm: _ItemUseBallText06 then `predef ShowPokedexData`).
+   * Cleared by whoever consumes it.
+   */
+  caughtNewSpecies: string | null = null;
+
+  /** :4387-4440 storeCaughtMon. DEVIATIONS (v1): no nickname prompt, and with
+   * a full party the mon is NOT stored — the PC transfer text prints and the
+   * mon is lost (the box system is a later rung; item_effects.asm:518-566 is
+   * the reference flow). */
   storeCaughtMon(): void {
     // BattleState.lua:4451/4465 storeCaughtMon: a caught mon is marked owned
     // (+seen) whether or not it fits the party — the mark precedes the PC
-    // transfer, so a full-party catch still fills the dex.
-    markOwned(this.save, this.enemy.mon.species);
+    // transfer, so a full-party catch still fills the dex. Whether the mark
+    // is NEW has to be read before it is made.
+    const species = this.enemy.mon.species;
+    if (!this.save.pokedex?.owned?.[species]) this.caughtNewSpecies = species;
+    markOwned(this.save, species);
     if (partyAdd(this.save.party, this.enemy.mon)) {
       // joined the party
     } else {

@@ -61,6 +61,16 @@ const COMPASS: Record<Dir, "north" | "south" | "east" | "west"> = {
   right: "east",
 };
 
+// data/trainers/encounter_types.asm — the two lists PlayTrainerMusic checks
+// before falling back to the male sting.
+const FEMALE_TRAINERS = new Set([
+  "OPP_LASS", "OPP_JR_TRAINER_F", "OPP_BEAUTY", "OPP_COOLTRAINER_F",
+]);
+const EVIL_TRAINERS = new Set([
+  "OPP_UNUSED_JUGGLER", "OPP_GAMBLER", "OPP_ROCKER", "OPP_JUGGLER",
+  "OPP_CHIEF", "OPP_SCIENTIST", "OPP_GIOVANNI", "OPP_ROCKET",
+]);
+
 export interface SaveSlice {
   flags: Record<string, boolean>;
   inventory: Record<string, number>;
@@ -1246,9 +1256,31 @@ export class Overworld implements ScriptWorld {
   // fight() — before-battle text then StartTrainerBattle, beat flag set on a
   // win so the trigger doesn't re-fire (story2.lua engageSuperNerd ->
   // ow:engageTrainer).
+  /**
+   * PlayTrainerMusic (home/trainers.asm:399), via OverworldController.lua's
+   * meetTrainerTheme: the encounter sting is picked from the engaged class —
+   * the evil list, then the female list, then male by default. The rivals
+   * `ret z` out of it and keep the MUSIC_MEET_RIVAL their own scripts start,
+   * so they get nothing here. Returns null when the class takes no sting.
+   */
+  private meetTrainerTheme(cls: string | undefined): string | null {
+    if (!cls || cls.includes("RIVAL")) return null;
+    if (EVIL_TRAINERS.has(cls)) return "Music_MeetEvilTrainer";
+    if (FEMALE_TRAINERS.has(cls)) return "Music_MeetFemaleTrainer";
+    return "Music_MeetMaleTrainer";
+  }
+
   engageTrainer(npc: NPC, onDone?: () => void): void {
     const header = this.trainerHeader(npc);
     npc.facePlayer(this.player);
+    // TalkToTrainer starts the sting here, before the before-battle text.
+    // On the SIGHT path TrainerEngage already started it at the "!"
+    // (trainer_sight.asm:224), and `engaging` is how that says so — it must
+    // not restart.
+    if (!this.engaging) {
+      const theme = this.meetTrainerTheme(npc.def.trainerClass);
+      if (theme) this.shell.playOnce(theme);
+    }
     const launch = () =>
       this.startTrainerBattle(
         npc.def.trainerClass ?? "",
@@ -1326,6 +1358,12 @@ export class Overworld implements ScriptWorld {
       if (taunt) this.showText(taunt, launch);
       else launch();
     };
+    // TrainerEngage (engine/overworld/trainer_sight.asm:224) starts the
+    // encounter sting HERE — with the "!", before the walk-up — not when the
+    // battle opens. Without it the route theme played straight through the
+    // approach, which is the one moment the original always scores.
+    const theme = this.meetTrainerTheme(def.trainerClass);
+    if (theme) this.shell.playOnce(theme);
     // "!" bubble holds the world 60 frames (emotion_bubbles.asm), then the
     // trainer marches up to one tile away (TrainerWalkUpToPlayer).
     this.setEmote(npc, 1, 60, () => {
