@@ -25,6 +25,7 @@ import { extractText } from "./stages/text.ts";
 import { extractTitle } from "./stages/title.ts";
 import { extractTrainerCard } from "./stages/trainercard.ts";
 import { extractTownMap } from "./stages/townmap.ts";
+import { extractSlots } from "./stages/slots.ts";
 import { extractTilesets } from "./stages/tilesets.ts";
 import { extractTrainers } from "./stages/trainers.ts";
 import { extractTypeChart } from "./stages/type-chart.ts";
@@ -79,6 +80,7 @@ export async function runImport(env: VoxelEnv): Promise<void> {
     ["title", () => writeJson(genDir, "title", extractTitle(ctx))],
     ["trainercard", () => writeJson(genDir, "trainercard", extractTrainerCard(ctx))],
     ["townmap", () => writeJson(genDir, "townmap", extractTownMap(ctx))],
+    ["slots", () => writeJson(genDir, "slots", extractSlots(ctx))],
     [
       "audio",
       () => {

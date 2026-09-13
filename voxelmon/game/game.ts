@@ -45,6 +45,7 @@ import { DevMenuState } from "./ui/devmenu.ts";
 import { CARD_PIC_RECT, TrainerCardState } from "./ui/trainercard.ts";
 import { OptionsMenuState } from "./ui/optionsmenu.ts";
 import { PrizeState } from "./ui/prizescreen.ts";
+import { SlotMachineState } from "./ui/slotmachine.ts";
 import { PRIZE_WINDOWS } from "./world/gamecorner.ts";
 import { gearViewStep } from "./ui/kantogear.ts";
 import { count as badgeCount } from "./rules/badges.ts";
@@ -961,6 +962,16 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       return [];
     }
     return this.overworld.picShown;
+  }
+
+  /** A slot seat -> the machine (ui/slotmachine.ts). */
+  openSlots(lucky: boolean): void {
+    this.push(new SlotMachineState(this as never, this.battleRng, lucky));
+  }
+
+  slots(): unknown {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "slots" ? top.view() : null;
   }
 
   /** open_prizes verb -> the GAME CORNER prize window (ui/prizescreen.ts). */

@@ -27,6 +27,11 @@ import { VoxelmonGame } from "../voxelmon/game/game.ts";
 import { RecorderHost } from "../voxelmon/game/host.ts";
 import { Input } from "../voxelmon/game/input.ts";
 import { gearMapPoint, gearTabs, gearTouchDown } from "../voxelmon/game/ui/kantogear.ts";
+import {
+  checkForMatch,
+  evaluate,
+  stopWheel1Early,
+} from "../voxelmon/game/ui/slotmachine.ts";
 import { encodeGlyphs, glyphLen, MAX_COLS } from "../voxelmon/game/ui/tiles.ts";
 import { GameMap } from "../voxelmon/game/world/map.ts";
 import { martStock } from "../voxelmon/game/world/marts.ts";
@@ -978,6 +983,114 @@ describe("the game corner", () => {
     expect(game.save.coins).toBe(320);
     expect(game.save.party.map((m) => m.species)).toEqual(["ABRA"]);
     expect(game.save.pokedex.owned.ABRA).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("the slot paylines are pokered's, in its order", () => {
+    // Three reels of the same symbol in the tested rows. LINES is checked in
+    // order and the FIRST match wins, so the diagonals beat the rows.
+    const w = (...s: string[]): string[] => s;
+    // a strip where position 1 reads bottom/middle/top = X/Y/Z
+    const strip = (b: string, m: string, t: string): string[] => w(b, m, t, "MOUSE");
+    const wheels = [strip("7", "BAR", "CHERRY"), strip("x", "BAR", "y"), strip("z", "BAR", "q")];
+    const stops = [1, 1, 1];
+    // middle row is all BAR: a 1-coin bet takes it
+    expect(evaluate(wheels, stops, 1)).toEqual({ payout: 100, symbol: "BAR" });
+    // a bet too small for a line finds nothing
+    const topOnly = [strip("a", "b", "7"), strip("c", "d", "7"), strip("e", "f", "7")];
+    expect(evaluate(topOnly, stops, 1)).toBeNull();
+    expect(evaluate(topOnly, stops, 2)).toEqual({ payout: 300, symbol: "7" });
+    // anything that is not 7/BAR/CHERRY pays a flat 15
+    const fish = [strip("a", "FISH", "b"), strip("c", "FISH", "d"), strip("e", "FISH", "f")];
+    expect(evaluate(fish, stops, 1)).toEqual({ payout: 15, symbol: "FISH" });
+    const cherry = [strip("a", "CHERRY", "b"), strip("c", "CHERRY", "d"), strip("e", "CHERRY", "f")];
+    expect(evaluate(cherry, stops, 1)).toEqual({ payout: 8, symbol: "CHERRY" });
+  });
+
+  test.skipIf(!hasGen)("the luck flags gate what a match is allowed to pay", () => {
+    const strip = (b: string, m: string, t: string): string[] => [b, m, t, "MOUSE"];
+    const stops = [1, 1, 1];
+    const seven = [strip("a", "7", "b"), strip("c", "7", "d"), strip("e", "7", "f")];
+    // cannot win at all: a lined-up match is rolled past
+    expect(checkForMatch(seven, stops, 1, false, false)[0]).toBe("roll");
+    // may win, but a 7 or BAR still needs seven-and-bar mode
+    expect(checkForMatch(seven, stops, 1, true, false)[0]).toBe("roll");
+    expect(checkForMatch(seven, stops, 1, false, true)[0]).toBe("accept");
+    const fish = [strip("a", "FISH", "b"), strip("c", "FISH", "d"), strip("e", "FISH", "f")];
+    expect(checkForMatch(fish, stops, 1, true, false)[0]).toBe("accept");
+  });
+
+  test.skipIf(!hasGen)("wheel 1 slips past a centred cherry, and never stops in 7/BAR mode", () => {
+    const cherry = [["x", "CHERRY", "y", "z"], [], []];
+    const other = [["x", "FISH", "y", "z"], [], []];
+    expect(stopWheel1Early(cherry, 1, false)).toBe(false);
+    expect(stopWheel1Early(other, 1, false)).toBe(true);
+    // pokered's own never-true comparison: in seven-and-bar mode it always slips
+    expect(stopWheel1Early(other, 1, true)).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("a seat needs a case and coins, and pays out into them", () => {
+    const game = gcGame();
+    const ow = game.overworld;
+    const seats = (romData!.field as any).slotMachines.GAME_CORNER;
+    const ok = seats.find((s: any) => s.state === "ok");
+    const stand = (seat: any): void => {
+      ow.setMap("GAME_CORNER", seat.x, seat.y + 1, "up");
+      ow.player.cellX = seat.x;
+      ow.player.cellY = seat.y + 1;
+      ow.player.facing = "up";
+      ow.interact();
+    };
+    // no COIN CASE
+    stand(ok);
+    expect(game.stackKinds().at(-1)).toBe("textbox");
+    expect(topText(game)).toContain("COIN CASE");
+    dismissText(game);
+
+    // case but no coins
+    game.save.inventory.COIN_CASE = 1;
+    stand(ok);
+    expect(topText(game)).toContain("any coins");
+    dismissText(game);
+
+    // and with both, the machine opens
+    game.save.coins = 20;
+    stand(ok);
+    expect(game.stackKinds().at(-1)).toBe("slots");
+    const v = game.slots() as { stage: string; grid: string[][] };
+    expect(v.stage).toBe("intro");
+    expect(v.grid.length).toBe(3);
+    expect(v.grid[0]!.length).toBe(3);
+  });
+
+  test.skipIf(!hasGen)("a broken machine says so instead of opening", () => {
+    const game = gcGame();
+    game.save.inventory.COIN_CASE = 1;
+    game.save.coins = 500;
+    const seats = (romData!.field as any).slotMachines.GAME_CORNER;
+    const broken = seats.find((s: any) => s.state !== "ok");
+    expect(broken).toBeDefined();
+    const ow = game.overworld;
+    ow.setMap("GAME_CORNER", broken.x, broken.y + 1, "up");
+    ow.player.cellX = broken.x;
+    ow.player.cellY = broken.y + 1;
+    ow.player.facing = "up";
+    ow.interact();
+    expect(game.stackKinds().at(-1)).toBe("textbox");
+    expect(game.stackKinds()).not.toContain("slots");
+  });
+
+  test.skipIf(!hasGen)("a spin costs the bet up front", () => {
+    const game = gcGame();
+    game.save.inventory.COIN_CASE = 1;
+    game.save.coins = 10;
+    game.openSlots(false);
+    tap(game, VOX_BTN.a); // YES, play
+    const v = () => game.slots() as { stage: string; bet: number };
+    expect(v().stage).toBe("bet");
+    expect(v().bet).toBe(3); // the cursor defaults to x3
+    tap(game, VOX_BTN.a);
+    expect(game.save.coins).toBe(7);
+    expect(v().stage).toBe("spinup");
   });
 
   test.skipIf(!hasGen)("the TM counter sells items, not mons", () => {

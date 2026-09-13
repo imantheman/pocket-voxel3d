@@ -60,6 +60,20 @@ export const UI_ROWS = 18;
  * fixed codes down here is what lets the card be drawn with plain uiTile
  * calls instead of a new op and a new atlas page.
  */
+/**
+ * The UI atlas page's size, in tiles. 16 across, and 24 down rather than the
+ * GB's 16: tile codes 0x00..0xff are the GB's own space (font, font_extra,
+ * the battle HUD overlay) and everything this port adds has to live outside
+ * it — below 0x60, which the GB leaves empty, and above 0xff.
+ *
+ * The extra rows are free. The page is prescaled x2 and gutter-packed, so
+ * 16x16 tiles already lay out at 288x288 and pad to a 512x512 texture; 16x24
+ * lays out at 288x432, which is still inside it.
+ */
+export const UI_PAGE_COLS = 16;
+export const UI_PAGE_ROWS = 24;
+export const UI_PAGE_TILES = UI_PAGE_COLS * UI_PAGE_ROWS;
+
 export const UI_TILE = {
   /** 3x3 box pieces: 0 bottom, 1 right, 2 tl, 3 top, 4 tr, 5 left, 6 bl, 7 br, 8 fill. */
   frame: 0x01,
@@ -80,6 +94,15 @@ export const UI_TILE = {
   badge: 0x20,
   badgeStride: 8,
   badgeHalf: 4,
+  /**
+   * The six slot symbols, above the GB's own tile space: 2x2 tiles each, in
+   * field.slotSymbols.order (7, BAR, CHERRY, FISH, BIRD, MOUSE), laid TL, TR,
+   * BL, BR. Only the symbols come from the ROM's slot sheet — the machine's
+   * frame is drawn from the GB's ordinary box tiles, which is 48 tile codes
+   * this does not have to spend.
+   */
+  slotSymbol: 0x100,
+  slotSymbolStride: 4,
 } as const;
 
 /** The PSP framebuffer the diorama renders at. */

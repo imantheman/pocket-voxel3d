@@ -977,6 +977,76 @@ export class Scene {
       }
       return;
     }
+    // The slot machine (ui/slotmachine.ts). The six symbols are the ROM's own
+    // (UI_TILE.slotSymbol, 2x2 tiles each); the machine's frame is drawn from
+    // the GB's ordinary box tiles rather than the slot tilemap, which would
+    // have cost another 48 tile codes to carry.
+    const sl = (view as unknown as { slots?: () => any }).slots?.();
+    if (sl) {
+      const sig = `s${sl.stage},${sl.grid.map((c: string[]) => c.join("")).join("|")},`
+        + `${sl.bet},${sl.coins},${sl.payout},${sl.message ?? ""},${sl.yesno},${sl.flash}`;
+      if (sig !== this.menuSig) {
+        this.menuSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        host.uiFill(0, 0, UI_COLS, UI_ROWS, SPACE);
+        // The reel window: three columns of three 2x2 symbols, stacked with
+        // no gap — they are one continuous strip, and a slip scrolls through
+        // them.
+        const REEL_X = [4, 9, 14];
+        const REEL_Y = [1, 3, 5];
+        const box = (x: number, y: number, w: number, h: number): void => {
+          host.uiTile(x, y, BORDER_TL);
+          host.uiFill(x + 1, y, w - 1, 1, BORDER_H);
+          host.uiTile(x + w, y, BORDER_TR);
+          host.uiFill(x, y + 1, 1, h, BORDER_V);
+          host.uiFill(x + w, y + 1, 1, h, BORDER_V);
+          host.uiTile(x, y + 1 + h, BORDER_BL);
+          host.uiFill(x + 1, y + 1 + h, w - 1, 1, BORDER_H);
+          host.uiTile(x + w, y + 1 + h, BORDER_BR);
+        };
+        box(2, 0, 15, 6);
+        const order: string[] = sl.order ?? [];
+        sl.grid.forEach((col: string[], w: number) => {
+          col.forEach((sym: string, r: number) => {
+            const i = order.indexOf(sym);
+            if (i < 0) return;
+            const base = UI_TILE.slotSymbol + i * UI_TILE.slotSymbolStride;
+            const x = REEL_X[w]!;
+            const y = REEL_Y[r]!;
+            host.uiTile(x, y, base);
+            host.uiTile(x + 1, y, base + 1);
+            host.uiTile(x, y + 1, base + 2);
+            host.uiTile(x + 1, y + 1, base + 3);
+          });
+        });
+        this.stamp(host, 2, 8, `COINS ${sl.coins}`);
+        if (sl.payout > 0) this.stamp(host, 12, 8, `PAYOUT ${sl.payout}`);
+        // the bottom box: the bet menu, a message, or the YES/NO prompt
+        box(0, 10, 19, 6);
+        if (sl.stage === "bet") {
+          this.stamp(host, 2, 11, "BET HOW MANY?");
+          ["x3", "x2", "x1"].forEach((label, i) => {
+            this.stamp(host, 5, 13 + i, label);
+            if (i === sl.betIndex) host.uiTile(4, 13 + i, ARROW_CURSOR);
+          });
+        } else if (sl.stage === "intro" || sl.stage === "onemore") {
+          this.stamp(host, 2, 11,
+            sl.stage === "intro" ? "A SLOT MACHINE!" : "ONE MORE GO?");
+          ["YES", "NO"].forEach((label, i) => {
+            this.stamp(host, 5, 13 + i, label);
+            if (i + 1 === sl.yesno) host.uiTile(4, 13 + i, ARROW_CURSOR);
+          });
+        } else if (sl.message) {
+          String(sl.message).split("\n").forEach((line: string, i: number) => {
+            this.stamp(host, 2, 12 + i, line.slice(0, 17));
+          });
+        } else if (sl.stage === "spin") {
+          this.stamp(host, 2, 12, "PRESS A TO STOP");
+        }
+      }
+      return;
+    }
     // The GAME CORNER prize window (ui/prizescreen.ts): three prizes with
     // their coin prices, NO THANKS under them, and the coin count in a footer
     // — the box CeladonPrizeMenu keeps beside the list.

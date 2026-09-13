@@ -352,6 +352,9 @@ export class Overworld implements ScriptWorld {
     // HM Flash only lasts the current visit (pokered: leaving and
     // re-entering a dark cave darkens it again) — see DARK_MAPS' doc.
     this.tint(DARK_MAPS.has(mapId) ? DARK_TINT : BRIGHT_TINT);
+    // game_corner_slots2.asm picks the lucky machine on entry, so it changes
+    // every time the player walks back in.
+    this.rollLuckySlot();
     // NPC instances persist across connection crossings in the pool (keyed
     // by NPC.id) so nothing snaps back to its spawn point at a seam; warps
     // rebuild from scratch, like the original's per-entry sprite init
@@ -753,6 +756,11 @@ export class Overworld implements ScriptWorld {
       }
       return;
     }
+    // A slot-machine seat (field.slotMachines). Checked before signs: the
+    // seats are hidden events on the machine tiles, and the refusals are the
+    // original's own, in its order — broken machine, then no COIN CASE, then
+    // no coins (AbleToPlaySlotsCheck).
+    if (this.trySlotSeat(fx, fy)) return;
     const sign = this.map.signAtCell(fx, fy);
     if (sign) {
       this.showMapText(sign.text);
@@ -853,6 +861,61 @@ export class Overworld implements ScriptWorld {
   }
 
   // ScriptWorld (script.ts) — the services a command reaches -------------
+
+  /**
+   * The machine the player is facing, or false when it is not a seat.
+   * game_corner_slots.asm's checks in order: the three broken-machine signs,
+   * then the COIN CASE, then having any coins at all.
+   */
+  private trySlotSeat(fx: number, fy: number): boolean {
+    const seats = (this.shell.data as {
+      field?: { slotMachines?: Record<string, { x: number; y: number; state: string }[]> };
+    }).field?.slotMachines?.[this.map.id];
+    if (!seats) return false;
+    const i = seats.findIndex((s) => s.x === fx && s.y === fy);
+    if (i < 0) return false;
+    const seat = seats[i]!;
+    const t = (this.shell.data as { text?: Record<string, string> }).text ?? {};
+    const say = (k: string, fallback: string): true => {
+      this.shell.showText(t[k] ?? fallback);
+      return true;
+    };
+    if (seat.state === "out_of_order") {
+      return say("_GameCornerOutOfOrderText", "OUT OF ORDER\nThis is broken.");
+    }
+    if (seat.state === "out_to_lunch") {
+      return say("_GameCornerOutToLunchText", "OUT TO LUNCH\nThis is reserved.");
+    }
+    if (seat.state === "keys") {
+      return say("_GameCornerSomeonesKeysText", "Someone's keys!\nThey'll be back.");
+    }
+    if (!this.save.inventory?.COIN_CASE) {
+      return say("_GameCornerCoinCaseText", "A COIN CASE is\nrequired!");
+    }
+    if ((this.save.coins ?? 0) === 0) {
+      return say("_GameCornerNoCoinsText", "You don't have\nany coins!");
+    }
+    // One machine per visit is secretly lucky (wLuckySlotHiddenEventIndex),
+    // picked on map entry.
+    (this.shell as unknown as { openSlots?: (lucky: boolean) => void })
+      .openSlots?.(i === this.luckySlot);
+    return true;
+  }
+
+  /**
+   * This visit's lucky machine. Rolled on every entry to a map that has
+   * seats, like game_corner_slots2.asm does.
+   */
+  luckySlot = -1;
+
+  private rollLuckySlot(): void {
+    const seats = (this.shell.data as {
+      field?: { slotMachines?: Record<string, unknown[]> };
+    }).field?.slotMachines?.[this.map.id];
+    this.luckySlot = seats && seats.length > 0
+      ? this.shell.rng.int(seats.length)
+      : -1;
+  }
 
   /** open_prizes -> the GAME CORNER prize window, via the shell. */
   openPrizes(window: number, onDone?: () => void): void {

@@ -36,6 +36,9 @@ var GB_W = 160;
 var GB_H = 144;
 var UI_COLS = 20;
 var UI_ROWS = 18;
+var UI_PAGE_COLS = 16;
+var UI_PAGE_ROWS = 24;
+var UI_PAGE_TILES = UI_PAGE_COLS * UI_PAGE_ROWS;
 var UI_TILE = {
   frame: 1,
   circle: 10,
@@ -43,7 +46,9 @@ var UI_TILE = {
   arrowLeft: 19,
   badge: 32,
   badgeStride: 8,
-  badgeHalf: 4
+  badgeHalf: 4,
+  slotSymbol: 256,
+  slotSymbolStride: 4
 };
 var VIEW_W = 480;
 var VIEW_H = 272;
@@ -6648,6 +6653,7 @@ class Overworld {
       }
     }
     this.tint(DARK_MAPS.has(mapId) ? DARK_TINT : BRIGHT_TINT);
+    this.rollLuckySlot();
     if (!(opts?.seamless && this.npcPool.size > 0)) {
       this.npcPool = new Map;
     }
@@ -6939,6 +6945,8 @@ class Overworld {
       }
       return;
     }
+    if (this.trySlotSeat(fx, fy))
+      return;
     const sign = this.map.signAtCell(fx, fy);
     if (sign) {
       this.showMapText(sign.text);
@@ -7001,6 +7009,47 @@ class Overworld {
     } else {
       onDone?.();
     }
+  }
+  trySlotSeat(fx, fy) {
+    const seats = this.shell.data.field?.slotMachines?.[this.map.id];
+    if (!seats)
+      return false;
+    const i = seats.findIndex((s) => s.x === fx && s.y === fy);
+    if (i < 0)
+      return false;
+    const seat = seats[i];
+    const t = this.shell.data.text ?? {};
+    const say = (k, fallback) => {
+      this.shell.showText(t[k] ?? fallback);
+      return true;
+    };
+    if (seat.state === "out_of_order") {
+      return say("_GameCornerOutOfOrderText", `OUT OF ORDER
+This is broken.`);
+    }
+    if (seat.state === "out_to_lunch") {
+      return say("_GameCornerOutToLunchText", `OUT TO LUNCH
+This is reserved.`);
+    }
+    if (seat.state === "keys") {
+      return say("_GameCornerSomeonesKeysText", `Someone's keys!
+They'll be back.`);
+    }
+    if (!this.save.inventory?.COIN_CASE) {
+      return say("_GameCornerCoinCaseText", `A COIN CASE is
+required!`);
+    }
+    if ((this.save.coins ?? 0) === 0) {
+      return say("_GameCornerNoCoinsText", `You don't have
+any coins!`);
+    }
+    this.shell.openSlots?.(i === this.luckySlot);
+    return true;
+  }
+  luckySlot = -1;
+  rollLuckySlot() {
+    const seats = this.shell.data.field?.slotMachines?.[this.map.id];
+    this.luckySlot = seats && seats.length > 0 ? this.shell.rng.int(seats.length) : -1;
   }
   openPrizes(window, onDone) {
     this.shell.openPrizes?.(window, onDone);
@@ -8369,6 +8418,71 @@ class Scene {
       }
       return;
     }
+    const sl = view.slots?.();
+    if (sl) {
+      const sig = `s${sl.stage},${sl.grid.map((c) => c.join("")).join("|")},` + `${sl.bet},${sl.coins},${sl.payout},${sl.message ?? ""},${sl.yesno},${sl.flash}`;
+      if (sig !== this.menuSig) {
+        this.menuSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        host.uiFill(0, 0, UI_COLS, UI_ROWS, SPACE);
+        const REEL_X = [4, 9, 14];
+        const REEL_Y = [1, 3, 5];
+        const box2 = (x, y, w, h) => {
+          host.uiTile(x, y, BORDER_TL);
+          host.uiFill(x + 1, y, w - 1, 1, BORDER_H);
+          host.uiTile(x + w, y, BORDER_TR);
+          host.uiFill(x, y + 1, 1, h, BORDER_V);
+          host.uiFill(x + w, y + 1, 1, h, BORDER_V);
+          host.uiTile(x, y + 1 + h, BORDER_BL);
+          host.uiFill(x + 1, y + 1 + h, w - 1, 1, BORDER_H);
+          host.uiTile(x + w, y + 1 + h, BORDER_BR);
+        };
+        box2(2, 0, 15, 6);
+        const order2 = sl.order ?? [];
+        sl.grid.forEach((col, w) => {
+          col.forEach((sym, r) => {
+            const i = order2.indexOf(sym);
+            if (i < 0)
+              return;
+            const base = UI_TILE.slotSymbol + i * UI_TILE.slotSymbolStride;
+            const x = REEL_X[w];
+            const y = REEL_Y[r];
+            host.uiTile(x, y, base);
+            host.uiTile(x + 1, y, base + 1);
+            host.uiTile(x, y + 1, base + 2);
+            host.uiTile(x + 1, y + 1, base + 3);
+          });
+        });
+        this.stamp(host, 2, 8, `COINS ${sl.coins}`);
+        if (sl.payout > 0)
+          this.stamp(host, 12, 8, `PAYOUT ${sl.payout}`);
+        box2(0, 10, 19, 6);
+        if (sl.stage === "bet") {
+          this.stamp(host, 2, 11, "BET HOW MANY?");
+          ["x3", "x2", "x1"].forEach((label3, i) => {
+            this.stamp(host, 5, 13 + i, label3);
+            if (i === sl.betIndex)
+              host.uiTile(4, 13 + i, ARROW_CURSOR);
+          });
+        } else if (sl.stage === "intro" || sl.stage === "onemore") {
+          this.stamp(host, 2, 11, sl.stage === "intro" ? "A SLOT MACHINE!" : "ONE MORE GO?");
+          ["YES", "NO"].forEach((label3, i) => {
+            this.stamp(host, 5, 13 + i, label3);
+            if (i + 1 === sl.yesno)
+              host.uiTile(4, 13 + i, ARROW_CURSOR);
+          });
+        } else if (sl.message) {
+          String(sl.message).split(`
+`).forEach((line, i) => {
+            this.stamp(host, 2, 12 + i, line.slice(0, 17));
+          });
+        } else if (sl.stage === "spin") {
+          this.stamp(host, 2, 12, "PRESS A TO STOP");
+        }
+      }
+      return;
+    }
     const pz = view.prizes?.();
     if (pz) {
       const sig = `z${pz.index},${pz.coins},${pz.rows.map((r) => r.label).join(",")}`;
@@ -9388,6 +9502,437 @@ have enough room.`;
   }
 }
 
+// voxelmon/game/ui/slotmachine.ts
+var PAYOUT = {
+  "7": 300,
+  BAR: 100,
+  CHERRY: 8,
+  MOUSE: 15,
+  FISH: 15,
+  BIRD: 15
+};
+var LINES = [
+  { rows: [0, 1, 2], bet: 3 },
+  { rows: [2, 1, 0], bet: 3 },
+  { rows: [2, 2, 2], bet: 2 },
+  { rows: [0, 0, 0], bet: 2 },
+  { rows: [1, 1, 1], bet: 1 }
+];
+var STEP_FRAMES3 = 2;
+var SPINUP_STEPS = 20;
+var COIN_CAP2 = 9999;
+function at(wheel, pos, off) {
+  return wheel[((pos + off - 1) % wheel.length + wheel.length) % wheel.length];
+}
+function rowsAt(wheel, pos) {
+  return [at(wheel, pos, 0), at(wheel, pos, 1), at(wheel, pos, 2)];
+}
+function evaluate(wheels, stops, bet) {
+  for (const line of LINES) {
+    if (bet < line.bet)
+      continue;
+    const a = at(wheels[0], stops[0], line.rows[0]);
+    const b = at(wheels[1], stops[1], line.rows[1]);
+    const c = at(wheels[2], stops[2], line.rows[2]);
+    if (a === b && b === c)
+      return { payout: PAYOUT[a] ?? 15, symbol: a };
+  }
+  return null;
+}
+function stopWheel1Early(wheels, pos1, sevenBar) {
+  if (sevenBar)
+    return false;
+  return rowsAt(wheels[0], pos1)[1] !== "CHERRY";
+}
+function findWheel1Wheel2Matches(wheels, pos1, pos2) {
+  const [b1, m1, t1] = rowsAt(wheels[0], pos1);
+  const [b2, m2, t2] = rowsAt(wheels[1], pos2);
+  if (b2 === b1)
+    return [true, b2];
+  if (m2 === b1)
+    return [true, m2];
+  if (m2 === m1)
+    return [true, m2];
+  if (m2 === t1)
+    return [true, m2];
+  if (t2 === t1)
+    return [true, t2];
+  return [false, b2];
+}
+function stopWheel2Early(wheels, pos1, pos2, sevenBar) {
+  const [matched, tile] = findWheel1Wheel2Matches(wheels, pos1, pos2);
+  if (sevenBar)
+    return tile === "7" || tile === "BAR";
+  return matched;
+}
+function checkForMatch(wheels, stops, bet, canWin, sevenBar) {
+  const win = evaluate(wheels, stops, bet);
+  if (!win)
+    return ["nomatch", null];
+  if (!(canWin || sevenBar))
+    return ["roll", win];
+  if (!sevenBar && (win.symbol === "7" || win.symbol === "BAR"))
+    return ["roll", win];
+  return ["accept", win];
+}
+
+class SlotMachineState {
+  game;
+  rng;
+  onDone;
+  kind = "slots";
+  wheels;
+  order;
+  stage = "intro";
+  yesno = 1;
+  betIndex = 0;
+  bet = 3;
+  payoutDisplay = 0;
+  flash = false;
+  offset = [29, 29, 29];
+  stopping = 0;
+  slip = [4, 4];
+  reroll = 4;
+  frame = 0;
+  message = null;
+  afterMessage = null;
+  exitTimer = null;
+  spinupSteps = 0;
+  rerollSteps = 0;
+  win = null;
+  payoutRemaining = 0;
+  flashLeft = 0;
+  flashTimer = 0;
+  dripFrames = 8;
+  dripTimer = 0;
+  dripFlash = 5;
+  sevenBarChance;
+  allowMatches = 0;
+  canWin = false;
+  sevenBar = false;
+  constructor(game, rng, lucky, onDone) {
+    this.game = game;
+    this.rng = rng;
+    this.onDone = onDone;
+    this.wheels = game.data.field?.slotWheels ?? [[], [], []];
+    this.order = game.data.field?.slotSymbols?.order ?? [];
+    this.sevenBarChance = lucky ? 250 : 253;
+  }
+  coins() {
+    return this.game.save.coins ?? 0;
+  }
+  sfx(name) {
+    this.game.playSfx?.(name);
+  }
+  setFlags() {
+    if (this.sevenBar)
+      return;
+    if (this.allowMatches > 0) {
+      this.canWin = true;
+      return;
+    }
+    const r = this.rng.byte();
+    if (r === 0) {
+      this.allowMatches = 60;
+      return;
+    }
+    if (r > this.sevenBarChance) {
+      this.sevenBar = true;
+      return;
+    }
+    this.canWin = r > 210;
+  }
+  animWheel(w) {
+    this.offset[w] = (this.offset[w] + 1) % 30;
+  }
+  stops() {
+    return this.offset.map((o) => (o + 1) / 2);
+  }
+  stopOrAnimWheel(w) {
+    if (this.stopping < w + 1) {
+      this.animWheel(w);
+      return;
+    }
+    const o = this.offset[w];
+    if (o % 2 === 0) {
+      this.animWheel(w);
+      return;
+    }
+    if (this.slip[w] === 0)
+      return;
+    this.slip[w] = this.slip[w] - 1;
+    const stop = w === 0 ? stopWheel1Early(this.wheels, (o + 1) / 2, this.sevenBar) : stopWheel2Early(this.wheels, (this.offset[0] + 1) / 2, (o + 1) / 2, this.sevenBar);
+    if (stop) {
+      this.slip[w] = 0;
+      return;
+    }
+    this.animWheel(w);
+  }
+  stopOrAnimWheel3() {
+    if (this.stopping < 3) {
+      this.animWheel(2);
+      return false;
+    }
+    if (this.offset[2] % 2 === 1)
+      return true;
+    this.animWheel(2);
+    return false;
+  }
+  checkForMatches() {
+    const [action, win] = checkForMatch(this.wheels, this.stops(), this.bet, this.canWin, this.sevenBar);
+    if (action === "accept") {
+      this.resolveWin(win);
+      return;
+    }
+    if (action === "nomatch") {
+      if (!(this.canWin || this.sevenBar)) {
+        this.resolveLose();
+        return;
+      }
+      this.reroll -= 1;
+      if (this.reroll === 0) {
+        this.resolveLose();
+        return;
+      }
+    }
+    this.stage = "reroll";
+    this.rerollSteps = 2;
+  }
+  resolveWin(win) {
+    const { symbol: sym, payout: pay } = win;
+    let flashes;
+    if (sym === "7") {
+      this.sfx("Get_Item2");
+      if (this.rng.byte() >= 128) {
+        this.canWin = false;
+        this.sevenBar = false;
+      }
+      this.allowMatches = 0;
+      flashes = 20;
+    } else if (sym === "BAR") {
+      this.sfx("Get_Key_Item");
+      this.canWin = false;
+      this.sevenBar = false;
+      flashes = 8;
+    } else {
+      if (this.allowMatches > 0)
+        this.allowMatches -= 1;
+      flashes = pay === 8 ? 2 : 4;
+    }
+    this.win = win;
+    this.payoutRemaining = pay;
+    this.payoutDisplay = pay;
+    this.message = `${sym} lined up!
+Scored ${pay} coins!`;
+    this.stage = "flash";
+    this.flashLeft = flashes;
+    this.flashTimer = 0;
+    this.flash = false;
+  }
+  resolveLose() {
+    this.message = "Not this time!";
+    this.stage = "message";
+    this.afterMessage = "onemore";
+  }
+  enterBet() {
+    this.stage = "bet";
+    this.betIndex = 0;
+    this.bet = 3;
+    this.message = null;
+    this.payoutDisplay = 0;
+  }
+  enterOneMore() {
+    this.stage = "onemore";
+    this.yesno = 1;
+    this.message = null;
+    this.payoutDisplay = 0;
+  }
+  afterSpin() {
+    if (this.coins() === 0) {
+      this.message = `Darn!
+Ran out of coins!`;
+      this.stage = "message";
+      this.afterMessage = null;
+      this.exitTimer = 60;
+    } else {
+      this.enterOneMore();
+    }
+  }
+  startPayout() {
+    this.stage = "payout";
+    const sym = this.win?.symbol;
+    this.dripFrames = sym === "7" || sym === "BAR" ? 4 : 8;
+    this.dripTimer = 0;
+    this.dripFlash = 5;
+    this.flash = false;
+  }
+  close() {
+    this.game.pop();
+    this.onDone?.();
+  }
+  updateYesNo(p, onYes) {
+    if (p.up || p.down)
+      this.yesno = this.yesno === 1 ? 2 : 1;
+    else if (p.a) {
+      this.sfx("Press_AB");
+      if (this.yesno === 1)
+        onYes();
+      else
+        this.close();
+    } else if (p.b) {
+      this.sfx("Press_AB");
+      this.close();
+    }
+  }
+  update() {
+    const p = this.game.input.pressed;
+    const save = this.game.save;
+    switch (this.stage) {
+      case "intro":
+        this.updateYesNo(p, () => this.enterBet());
+        return;
+      case "message": {
+        if (this.exitTimer !== null) {
+          this.exitTimer -= 1;
+          if (this.exitTimer <= 0)
+            this.close();
+          return;
+        }
+        if (!(p.a || p.b))
+          return;
+        this.sfx("Press_AB");
+        const after = this.afterMessage;
+        this.afterMessage = null;
+        if (after === "payout")
+          this.startPayout();
+        else if (after === "onemore")
+          this.afterSpin();
+        else
+          this.enterBet();
+        return;
+      }
+      case "onemore":
+        this.updateYesNo(p, () => this.enterBet());
+        return;
+      case "flash":
+        this.flashTimer += 1;
+        if (this.flashTimer >= 5) {
+          this.flashTimer = 0;
+          this.flash = !this.flash;
+          this.flashLeft -= 1;
+          if (this.flashLeft <= 0) {
+            this.flash = false;
+            this.stage = "message";
+            this.afterMessage = "payout";
+          }
+        }
+        return;
+      case "payout":
+        if (this.payoutRemaining <= 0) {
+          this.flash = false;
+          this.payoutDisplay = 0;
+          this.afterSpin();
+          return;
+        }
+        this.dripTimer += 1;
+        if (this.dripTimer >= this.dripFrames) {
+          this.dripTimer = 0;
+          save.coins = Math.min(COIN_CAP2, this.coins() + 1);
+          this.payoutRemaining -= 1;
+          this.payoutDisplay = this.payoutRemaining;
+          this.sfx("Slots_Reward");
+          this.dripFlash -= 1;
+          if (this.dripFlash <= 0) {
+            this.dripFlash = 5;
+            this.flash = !this.flash;
+          }
+        }
+        return;
+      case "bet":
+        if (p.b) {
+          this.close();
+          return;
+        }
+        if (p.up)
+          this.betIndex = Math.max(0, this.betIndex - 1);
+        if (p.down)
+          this.betIndex = Math.min(2, this.betIndex + 1);
+        this.bet = 3 - this.betIndex;
+        if (!p.a)
+          return;
+        if (this.coins() < this.bet) {
+          this.message = `Not enough
+coins!`;
+          this.afterMessage = "bet";
+          this.stage = "message";
+          return;
+        }
+        save.coins = this.coins() - this.bet;
+        this.setFlags();
+        this.stopping = 0;
+        this.slip = [4, 4];
+        this.reroll = 4;
+        this.frame = 0;
+        this.spinupSteps = SPINUP_STEPS;
+        this.stage = "spinup";
+        this.sfx("Slots_New_Spin");
+        return;
+      case "spinup":
+        this.frame += 1;
+        if (this.frame % STEP_FRAMES3 === 0) {
+          for (let w = 0;w < 3; w++)
+            this.animWheel(w);
+          this.spinupSteps -= 1;
+          if (this.spinupSteps === 0)
+            this.stage = "spin";
+        }
+        return;
+      case "spin": {
+        if (p.a) {
+          const held = this.stopping === 1 && this.slip[0] > 0 || this.stopping === 2 && this.slip[1] > 0;
+          if (!held) {
+            this.stopping += 1;
+            this.sfx("Slots_Stop_Wheel");
+          }
+        }
+        this.frame += 1;
+        if (this.frame % STEP_FRAMES3 === 0) {
+          this.stopOrAnimWheel(0);
+          this.stopOrAnimWheel(1);
+          if (this.stopOrAnimWheel3())
+            this.checkForMatches();
+        }
+        return;
+      }
+      case "reroll":
+        this.animWheel(2);
+        this.rerollSteps -= 1;
+        if (this.rerollSteps === 0)
+          this.checkForMatches();
+        return;
+    }
+  }
+  view() {
+    const grid = this.offset.map((o, w) => {
+      const pos = Math.floor((o + 1) / 2);
+      const [b, m, t] = rowsAt(this.wheels[w] ?? [], pos);
+      return [t, m, b];
+    });
+    return {
+      stage: this.stage,
+      grid,
+      bet: this.bet,
+      betIndex: this.betIndex,
+      coins: this.coins(),
+      payout: this.payoutDisplay,
+      message: this.message,
+      yesno: this.yesno,
+      flash: this.flash,
+      order: this.order
+    };
+  }
+}
+
 // voxelmon/game/ui/kantogear.ts
 var COLS = 20;
 var ROWS = 18;
@@ -9664,8 +10209,8 @@ function activeView(game) {
 }
 function gearViewStep(game, dir) {
   const tabs = gearTabs(game);
-  const at = Math.max(0, tabs.findIndex((t) => t.id === activeView(game)));
-  return tabs[(at + dir + tabs.length) % tabs.length].id;
+  const at2 = Math.max(0, tabs.findIndex((t) => t.id === activeView(game)));
+  return tabs[(at2 + dir + tabs.length) % tabs.length].id;
 }
 var CLOCK_COL = COLS - 8;
 function drawGearHeader(host, game, label3) {
@@ -9748,9 +10293,9 @@ function drawTownMapView(host, game) {
   const cursorPage = game.data.atlas?.townMapCursorPage;
   if (focus && typeof cursorPage === "number" && cursorPage >= 0) {
     const p = locPixel(focus.loc);
-    const at = mapToScreen(p.x - 4, p.y - 4);
+    const at2 = mapToScreen(p.x - 4, p.y - 4);
     const size = Math.round(16 * MAP_SCALE);
-    host.uiSpriteBottom(cursorPage, at.x, at.y, size, size);
+    host.uiSpriteBottom(cursorPage, at2.x, at2.y, size, size);
   }
 }
 function drawKantoGear(host, game) {
@@ -9880,9 +10425,9 @@ class WarpPickerState {
     const cooked = Array.isArray(data.cookedMaps) ? data.cookedMaps : [];
     const known = data.maps ?? {};
     this.maps = cooked.filter((m) => known[m]).sort();
-    const at = this.maps.indexOf(here);
-    if (at >= 0)
-      this.index = at;
+    const at2 = this.maps.indexOf(here);
+    if (at2 >= 0)
+      this.index = at2;
     this.clampScroll();
   }
   clampScroll() {
@@ -10771,9 +11316,9 @@ class PokedexState {
       this.standalone = true;
       this.mode = "entry";
       this.entrySpecies = opts.species;
-      const at = this.entries.findIndex((e) => e.value === opts.species);
-      if (at >= 0)
-        this.index = at;
+      const at2 = this.entries.findIndex((e) => e.value === opts.species);
+      if (at2 >= 0)
+        this.index = at2;
     }
   }
   update() {
@@ -11725,6 +12270,13 @@ ${mname}!`);
       return [];
     }
     return this.overworld.picShown;
+  }
+  openSlots(lucky) {
+    this.push(new SlotMachineState(this, this.battleRng, lucky));
+  }
+  slots() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "slots" ? top.view() : null;
   }
   openPrizes(window, onDone) {
     const prizes = PRIZE_WINDOWS[window - 1];

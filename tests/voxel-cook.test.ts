@@ -44,6 +44,8 @@ import {
   CAM_FOCAL,
   MESH_KIND,
   MESH_KINDS,
+  UI_PAGE_COLS,
+  UI_PAGE_ROWS,
   UI_TILE,
   PITCH_RUNGS,
   RIG,
@@ -328,8 +330,14 @@ describe.skipIf(reason !== null)("voxel cook", () => {
   test("the UI page has the font at 0x80 and font_extra at 0x60", () => {
     const gen = loadGen(GEN_DIR);
     const page = buildUiPage(gen);
-    expect(page.w).toBe(128);
-    expect(page.h).toBe(128);
+    // 16 tiles across, and 24 down rather than the GB's 16: the extra rows
+    // carry what this port adds above the GB's own 0x00..0xff tile space.
+    // They are free — the page is prescaled x2 and gutter-packed, so 16x24
+    // lays out at 288x432 and still pads into the same 512x512 texture.
+    expect(page.w).toBe(UI_PAGE_COLS * 8);
+    expect(page.h).toBe(UI_PAGE_ROWS * 8);
+    // main.rs ui_pitch at the UI page's x2 prescale is 8*2 + 2*1 gutter = 18
+    expect(Math.ceil(page.h / 8) * 18).toBeLessThanOrEqual(512);
     const linear = page.frames[0];
     // tile 0 is fully transparent (UI cell unset)
     for (let y = 0; y < 8; y++) {

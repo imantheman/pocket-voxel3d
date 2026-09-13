@@ -12,7 +12,13 @@
 // variants (gen1recomp TileRenderer.lua:74-92): water tile rows rotate by
 // WATER_OFFSETS per step, the flower tile cycles flower1-3.
 
-import { ATLAS_KIND, UI_TILE } from "../../contracts/spec/voxel-spec.ts";
+import {
+  ATLAS_KIND,
+  UI_PAGE_COLS,
+  UI_PAGE_ROWS,
+  UI_PAGE_TILES,
+  UI_TILE,
+} from "../../contracts/spec/voxel-spec.ts";
 import { ANIM_STEPS, FLOWER_FRAMES, WATER_OFFSETS, defaultAnimatedTiles } from "./classify.ts";
 import { type Art, artOf, type GenData, PX_CLEAR, sheetKeyOf, type TilesetDef } from "./data.ts";
 import { type Redpp, SHADES } from "./redpp.ts";
@@ -362,10 +368,62 @@ export function buildEmotePage(gen: GenData): PageDef | null {
  * font_extra tiles at extraBase (0x60..0x7f), font glyphs at mainBase
  * (0x80..0xff), 16 tiles per row, 8x8 tiles, tile 0 transparent.
  */
+/**
+ * The six slot symbols, cut out of SlotMachineTiles2 and laid into the UI
+ * page as 2x2 tiles each (UI_TILE.slotSymbol).
+ *
+ * They are not laid out in that sheet — they are assembled from it. Each
+ * symbol's `tiles` value in field.slotSymbols is a 16-bit pair: the HIGH byte
+ * names the sheet tile its top half starts at, the LOW byte its bottom half,
+ * and each half is a 16-WIDE strip spanning two of the sheet's four columns
+ * (build_rom_data.py's crop). So one symbol reads two 16x8 strips from
+ * anywhere in the sheet and stacks them.
+ */
+function placeSlotSymbols(
+  gen: GenData,
+  put: (read: (x: number, y: number) => number, tile: number) => void,
+): void {
+  const art = artOf(gen, "slots/wheel");
+  const cfg = (gen.field as {
+    slotSymbols?: { order?: string[]; symbols?: Record<string, { tiles?: number }> };
+  }).slotSymbols;
+  const order = cfg?.order;
+  if (!art || !Array.isArray(order) || !cfg?.symbols) return;
+  const cols = Math.floor(art.w / 8); // 4
+  order.forEach((name, i) => {
+    const tiles = cfg.symbols?.[name]?.tiles;
+    if (typeof tiles !== "number") return;
+    const halves = [tiles >> 8, tiles & 0xff]; // top, bottom
+    const base = UI_TILE.slotSymbol + i * UI_TILE.slotSymbolStride;
+    halves.forEach((strip, half) => {
+      const sx = (strip % cols) * 8;
+      const sy = Math.floor(strip / cols) * 8;
+      // the strip is 16 wide: its left 8 go in the symbol's left column, its
+      // right 8 in the right one
+      put((x, y) => art.px(sx + x, sy + y), base + half * 2);
+      put((x, y) => art.px(sx + 8 + x, sy + y), base + half * 2 + 1);
+    });
+  });
+}
+
 export function buildUiPage(gen: GenData): PageDef {
-  const w = 128;
-  const h = 128; // 256 tiles / 16 per row * 8 px
+  const w = UI_PAGE_COLS * 8;
+  const h = UI_PAGE_ROWS * 8;
   const linear = new Uint8Array(w * h).fill(PX_CLEAR);
+  /** Copy one 8x8 source cell into the page at `tile`. */
+  const put = (read: (x: number, y: number) => number, tile: number): void => {
+    if (tile >= UI_PAGE_TILES) return;
+    const dx = (tile % UI_PAGE_COLS) * 8;
+    const dy = Math.floor(tile / UI_PAGE_COLS) * 8;
+    for (let y = 0; y < 8; y++) {
+      for (let x = 0; x < 8; x++) {
+        // GB UI tiles are opaque white-backed (the textbox interior must
+        // cover the world); only the unset tile 0 stays transparent.
+        const px = read(x, y);
+        linear[(dy + y) * w + dx + x] = px === PX_CLEAR ? 0 : px;
+      }
+    }
+  };
   const place = (art: Art, base: number): void => {
     // Source rows are the sheet's own width in tiles (font sheets are 16
     // wide, the battle HUD pages 15 and 3).
@@ -375,9 +433,9 @@ export function buildUiPage(gen: GenData): PageDef {
       const sx = (g % glyphsPerRow) * 8;
       const sy = Math.floor(g / glyphsPerRow) * 8;
       const tile = base + g;
-      if (tile > 0xff) break;
-      const dx = (tile % 16) * 8;
-      const dy = Math.floor(tile / 16) * 8;
+      if (tile >= UI_PAGE_TILES) break;
+      const dx = (tile % UI_PAGE_COLS) * 8;
+      const dy = Math.floor(tile / UI_PAGE_COLS) * 8;
       for (let y = 0; y < 8; y++) {
         for (let x = 0; x < 8; x++) {
           // GB UI tiles are opaque white-backed (the textbox interior must
@@ -410,10 +468,10 @@ export function buildUiPage(gen: GenData): PageDef {
   {
     const src = 0xed;
     const dst = UI_TILE.arrowLeft;
-    const sx = (src % 16) * 8;
-    const sy = Math.floor(src / 16) * 8;
-    const dx = (dst % 16) * 8;
-    const dy = Math.floor(dst / 16) * 8;
+    const sx = (src % UI_PAGE_COLS) * 8;
+    const sy = Math.floor(src / UI_PAGE_COLS) * 8;
+    const dx = (dst % UI_PAGE_COLS) * 8;
+    const dy = Math.floor(dst / UI_PAGE_COLS) * 8;
     for (let y = 0; y < 8; y++) {
       for (let x = 0; x < 8; x++) {
         linear[(dy + y) * w + dx + x] = linear[(sy + y) * w + sx + (7 - x)]!;
@@ -433,6 +491,7 @@ export function buildUiPage(gen: GenData): PageDef {
     const sheet = artOf(gen, key);
     if (sheet) place(sheet, base);
   }
+  placeSlotSymbols(gen, put);
   return { w, h, kind: ATLAS_KIND.ui, frames: [linear], name: "ui" };
 }
 
