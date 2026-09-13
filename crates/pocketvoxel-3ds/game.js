@@ -218,6 +218,43 @@ function fromSection(bytes) {
   return new AudioBanks(JSON.parse(utf8(json)));
 }
 
+// voxelmon/game/world/bike.ts
+var BIKE_STEP_FRAMES = 8;
+var BIKE_SONG = "Music_BikeRiding";
+var OUTDOOR_SONGS = new Set([
+  "Music_PalletTown",
+  "Music_Cities1",
+  "Music_Cities2",
+  "Music_Celadon",
+  "Music_Cinnabar",
+  "Music_Vermilion",
+  "Music_Lavender",
+  "Music_Routes1",
+  "Music_Routes2",
+  "Music_Routes3",
+  "Music_Routes4",
+  "Music_IndigoPlateau",
+  "Music_SafariZone",
+  "Music_Dungeon1",
+  "Music_Dungeon2",
+  "Music_Dungeon3"
+]);
+var BIKE_RIDING_DEFAULT = {
+  maps: ["ROUTE_23", "INDIGO_PLATEAU"],
+  tilesets: ["OVERWORLD", "FOREST", "UNDERGROUND", "SHIP_PORT", "CAVERN"]
+};
+function bikeAllowed(mapId, tileset, rules) {
+  const br = rules ?? BIKE_RIDING_DEFAULT;
+  if (br.maps?.includes(mapId))
+    return true;
+  return !!tileset && !!br.tilesets?.includes(tileset);
+}
+function effectiveMapSong(song, onBike) {
+  if (!song || !onBike)
+    return song;
+  return OUTDOOR_SONGS.has(song) ? BIKE_SONG : song;
+}
+
 // voxelmon/game/audio/music.ts
 var FANFARES = {
   Level_Up: true,
@@ -254,11 +291,12 @@ class AudioDirector {
   get playing() {
     return this.current;
   }
-  startMap(mapId) {
+  startMap(mapId, onBike = false) {
     const song = this.banks?.mapSong(mapId) ?? null;
     this.mapSong = song;
-    if (song)
-      this.play(song);
+    const play = effectiveMapSong(song, onBike);
+    if (play)
+      this.play(play);
   }
   playBattle(kind = "wild") {
     const label = this.banks?.battleSong(kind) ?? this.banks?.battleSong("wild");
@@ -4385,6 +4423,8 @@ class Player {
   targetX;
   targetY;
   stepFrames = STEP_FRAMES2;
+  onBike = false;
+  bikeStepFrames = BIKE_STEP_FRAMES;
   turnFrames = TURN_FRAMES;
   stepFramesCur;
   bumpFrames;
@@ -4428,8 +4468,11 @@ class Player {
     this.moving = true;
     this.bumpFrames = undefined;
     this.progress = 0;
-    this.stepFramesCur = this.stepFrames;
+    this.stepFramesCur = this.stepSpeed();
     return "moved";
+  }
+  stepSpeed() {
+    return this.onBike ? this.bikeStepFrames : this.stepFrames;
   }
   update() {
     this.stepLanded = false;
@@ -5600,6 +5643,73 @@ var MAP_SCRIPTS = {
       TEXT_GAMECORNERPRIZEROOM_PRIZE_VENDOR_3: prizeCounterRows(3)
     }
   },
+  BIKE_SHOP: {
+    talk: {
+      TEXT_BIKESHOP_CLERK: [["face_player"], ["open_bike_shop"]],
+      TEXT_BIKESHOP_MIDDLE_AGED_WOMAN: [
+        ["face_player"],
+        ["show_text", "_BikeShopMiddleAgedWomanText"]
+      ],
+      TEXT_BIKESHOP_YOUNGSTER: [
+        ["face_player"],
+        ["check_item", "BICYCLE"],
+        ["jump_if_true", "gotBike"],
+        ["show_text", "_BikeShopYoungsterTheseBikesAreExpensiveText"],
+        ["jump", "end"],
+        ["label", "gotBike"],
+        ["show_text", "_BikeShopYoungsterCoolBikeText"],
+        ["label", "end"]
+      ]
+    }
+  },
+  POKEMON_FAN_CLUB: {
+    talk: {
+      TEXT_POKEMONFANCLUB_CHAIRMAN: [
+        ["face_player"],
+        ["check_flag", "EVENT_GOT_BIKE_VOUCHER"],
+        ["jump_if_true", "already"],
+        ["ask", "_PokemonFanClubChairmanIntroText"],
+        ["jump_if_false", "noStory"],
+        ["show_text", "_PokemonFanClubChairmanStoryText"],
+        ["give_item", "BIKE_VOUCHER", 1, "_PokemonFanClubReceivedBikeVoucherText"],
+        ["set_flag", "EVENT_GOT_BIKE_VOUCHER"],
+        ["show_text", "_PokemonFanClubExplainBikeVoucherText"],
+        ["jump", "end"],
+        ["label", "noStory"],
+        ["show_text", "_PokemonFanClubNoStoryText"],
+        ["jump", "end"],
+        ["label", "already"],
+        ["show_text", "_PokemonFanClubChairFinalText"],
+        ["label", "end"]
+      ],
+      TEXT_POKEMONFANCLUB_PIKACHU_FAN: [
+        ["face_player"],
+        ["check_flag", "EVENT_PIKACHU_FAN_BOAST"],
+        ["jump_if_true", "better"],
+        ["show_text", "_PokemonFanClubPikachuFanNormalText"],
+        ["set_flag", "EVENT_SEEL_FAN_BOAST"],
+        ["jump", "end"],
+        ["label", "better"],
+        ["show_text", "_PokemonFanClubPikachuFanBetterText"],
+        ["clear_flag", "EVENT_PIKACHU_FAN_BOAST"],
+        ["label", "end"]
+      ],
+      TEXT_POKEMONFANCLUB_SEEL_FAN: [
+        ["face_player"],
+        ["check_flag", "EVENT_SEEL_FAN_BOAST"],
+        ["jump_if_true", "better"],
+        ["show_text", "_PokemonFanClubSeelFanNormalText"],
+        ["set_flag", "EVENT_PIKACHU_FAN_BOAST"],
+        ["jump", "end"],
+        ["label", "better"],
+        ["show_text", "_PokemonFanClubSeelFanBetterText"],
+        ["clear_flag", "EVENT_SEEL_FAN_BOAST"],
+        ["label", "end"]
+      ],
+      TEXT_POKEMONFANCLUB_PIKACHU: [["show_text", "_PokemonFanClubPikachuText"]],
+      TEXT_POKEMONFANCLUB_SEEL: [["show_text", "_PokemonFanClubSeelText"]]
+    }
+  },
   DAYCARE: {
     talk: {
       TEXT_DAYCARE_GENTLEMAN: [["open_daycare"]]
@@ -6273,6 +6383,14 @@ function* open_prizes(ctx, ...args) {
   w.openPrizes(args[0], () => runner.resume());
   yield;
 }
+function* open_bike_shop(ctx) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  if (!w.openBikeShop)
+    return;
+  w.openBikeShop(() => runner.resume());
+  yield;
+}
 function* open_daycare(ctx) {
   const runner = ctx.runner;
   const w = ctx.world;
@@ -6445,6 +6563,7 @@ var VERBS = {
   give_coins,
   open_prizes,
   open_daycare,
+  open_bike_shop,
   safari_start,
   safari_end,
   take_guard_drink,
@@ -6799,6 +6918,7 @@ class Overworld {
     }
     this.entities = [this.player, ...this.npcs];
     this.syncLastMapRewrite();
+    this.syncBike();
     console.log("NPCS " + this.npcs.map((n) => JSON.stringify(n, (k, v) => typeof v === "object" && v !== null && k !== "" ? undefined : v)).join(" | "));
   }
   objectVisible(obj) {
@@ -7048,7 +7168,7 @@ class Overworld {
     p.moving = true;
     p.progress = 0;
     p.animClock = 0;
-    p.stepFramesCur = p.stepFrames;
+    p.stepFramesCur = p.stepSpeed();
     this.pendingSeamMusic = dest.id;
     return true;
   }
@@ -7174,6 +7294,22 @@ any coins!`);
   }
   openPrizes(window, onDone) {
     this.shell.openPrizes?.(window, onDone);
+  }
+  syncBike() {
+    const save = this.save;
+    const rules = this.shell.data.field?.bikeRiding;
+    if (save.onBike && !bikeAllowed(this.map.id, this.map.def?.tileset, rules)) {
+      save.onBike = false;
+    }
+    if (this.player)
+      this.player.onBike = !!save.onBike;
+  }
+  canRideHere() {
+    const rules = this.shell.data.field?.bikeRiding;
+    return bikeAllowed(this.map.id, this.map.def?.tileset, rules);
+  }
+  openBikeShop(onDone) {
+    this.shell.openBikeShop?.(onDone);
   }
   openDaycare(onDone) {
     this.shell.openDaycare?.(onDone);
@@ -7404,7 +7540,7 @@ GAME is over!`;
           e.moving = true;
           e.progress = 0;
           if (e instanceof Player) {
-            e.stepFramesCur = e.stepFrames;
+            e.stepFramesCur = e.stepSpeed();
           }
         }
         mv.remaining -= 1;
@@ -8002,7 +8138,7 @@ class Scene {
       let flags = ENT_FLAG.ghost | ENT_FLAG.walker;
       if (mirror)
         flags |= ENT_FLAG.mirror;
-      this.emitSlot(0, this.sheetIndex(view, "SPRITE_RED"), frame, p.px * Q4, p.py * Q4, p.hopLift(), flags);
+      this.emitSlot(0, this.sheetIndex(view, p.onBike ? "SPRITE_RED_BIKE" : "SPRITE_RED"), frame, p.px * Q4, p.py * Q4, p.hopLift(), flags);
     }
     const npcs = ow.npcs;
     for (let i = 0;i < npcs.length; i++) {
@@ -8617,6 +8753,39 @@ class Scene {
           });
         } else if (sl.stage === "spin") {
           this.stamp(host, 2, 12, "PRESS A TO STOP");
+        }
+      }
+      return;
+    }
+    const bs = view.bikeShop?.();
+    if (bs) {
+      const sig = `k${bs.index},${bs.rows.join(",")},${bs.footer ?? ""}`;
+      if (sig !== this.menuSig) {
+        this.menuSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const box2 = (x, y, w, h) => {
+          host.uiTile(x, y, BORDER_TL);
+          host.uiFill(x + 1, y, w - 1, 1, BORDER_H);
+          host.uiTile(x + w, y, BORDER_TR);
+          host.uiFill(x, y + 1, 1, h, BORDER_V);
+          host.uiFill(x + w, y + 1, 1, h, BORDER_V);
+          host.uiFill(x + 1, y + 1, w - 1, h, SPACE);
+          host.uiTile(x, y + 1 + h, BORDER_BL);
+          host.uiFill(x + 1, y + 1 + h, w - 1, 1, BORDER_H);
+          host.uiTile(x + w, y + 1 + h, BORDER_BR);
+        };
+        box2(0, 0, 15, 4);
+        this.stamp(host, 2, 2, bs.rows[0] ?? "BICYCLE");
+        this.stamp(host, 8, 3, bs.price);
+        this.stamp(host, 2, 4, bs.rows[1] ?? "CANCEL");
+        host.uiTile(1, bs.index === 0 ? 2 : 4, ARROW_CURSOR);
+        if (bs.footer) {
+          box2(0, 12, 19, 4);
+          String(bs.footer).split(`
+`).forEach((ln, i) => {
+            this.stamp(host, 1, 14 + i, ln);
+          });
         }
       }
       return;
@@ -10122,6 +10291,50 @@ coins!`;
   }
 }
 
+// voxelmon/game/ui/bikeshop.ts
+var BIKE_PRICE = 1e6;
+
+class BikeShopState {
+  game;
+  footer;
+  onChoose;
+  kind = "bikeshop";
+  index = 0;
+  answered = false;
+  constructor(game, footer, onChoose) {
+    this.game = game;
+    this.footer = footer;
+    this.onChoose = onChoose;
+  }
+  update() {
+    if (this.answered)
+      return;
+    const p = this.game.input.pressed;
+    if (p.up)
+      this.index = 0;
+    if (p.down)
+      this.index = 1;
+    if (!p.a && !p.b)
+      return;
+    const cancelled = !!p.b;
+    this.game.playSfx("Press_AB");
+    this.answered = true;
+    this.onChoose(!cancelled && this.index === 0);
+  }
+  close() {
+    this.game.pop();
+  }
+  view() {
+    const name = this.game.data?.items?.BICYCLE?.name ?? "BICYCLE";
+    return {
+      rows: [name, "CANCEL"],
+      price: `¥${BIKE_PRICE}`,
+      index: this.index,
+      footer: this.footer
+    };
+  }
+}
+
 // voxelmon/game/ui/kantogear.ts
 var COLS = 20;
 var ROWS = 18;
@@ -10871,6 +11084,7 @@ class SummaryState {
 // voxelmon/game/ui/bagscreen.ts
 var ROWS3 = 4;
 var USABLE_ON_PARTY = new Set(["RARE_CANDY"]);
+var USABLE_IN_FIELD = new Set(["BICYCLE"]);
 
 class BagState {
   game;
@@ -10901,6 +11115,11 @@ class BagState {
     if (p.a && this.index < this.ids().length) {
       const id = this.ids()[this.index];
       const teach = !!this.game.data.items?.[id]?.machine?.move;
+      if (USABLE_IN_FIELD.has(id)) {
+        this.game.closeToOverworld();
+        this.game.useKeyItem(id);
+        return;
+      }
       if (teach || USABLE_ON_PARTY.has(id)) {
         this.game.push(new PartyState(this.game, {
           onPick: (i) => teach ? this.game.teachMachine(i, id) : this.game.useItem(i, id)
@@ -12061,7 +12280,7 @@ class VoxelmonGame {
     const mapId = this.overworld.map.id;
     if (mapId !== this.audioMap && !this.overworld.pendingSeamMusic) {
       this.audioMap = mapId;
-      this.audio.startMap(mapId);
+      this.audio.startMap(mapId, !!this.save.onBike);
     }
   }
   drainBattleCues(battle) {
@@ -12214,7 +12433,7 @@ class VoxelmonGame {
   }
   startMapMusic(mapId) {
     this.audioMap = mapId;
-    this.audio.startMap(mapId);
+    this.audio.startMap(mapId, !!this.save.onBike);
   }
   showText(text, onDone) {
     this.push(new TextBoxState(this, text, onDone));
@@ -12460,6 +12679,95 @@ ${mname}!`);
       return [];
     }
     return this.overworld.picShown;
+  }
+  playSfx(name) {
+    this.audio.playSfx(name);
+  }
+  bikeShop() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "bikeshop" ? top.view() : null;
+  }
+  openBikeShop(onDone) {
+    const t = this.data.text ?? {};
+    const line = (k, fallback) => t[k] ?? fallback;
+    const save = this.save;
+    if ((this.save.inventory?.BICYCLE ?? 0) > 0 || save.flags?.EVENT_GOT_BICYCLE) {
+      this.showText(line("_BikeShopClerkHowDoYouLikeYourBicycleText", `How do you like
+your new BICYCLE?`), onDone);
+      return;
+    }
+    if ((this.save.inventory?.BIKE_VOUCHER ?? 0) > 0) {
+      this.showText(line("_BikeShopClerkOhThatsAVoucherText", "Oh, that's...\fA BIKE VOUCHER!"), () => {
+        if (!add(this.save, "BICYCLE", 1, this.data)) {
+          this.showText(line("_BikeShopBagFullText", `You better make
+room for this!`), onDone);
+          return;
+        }
+        remove(this.save, "BIKE_VOUCHER", 1);
+        save.flags.EVENT_GOT_BICYCLE = true;
+        this.audio.playSfx("Get_Key_Item");
+        this.showText(line("_BikeShopExchangedVoucherText", `{PLAYER} exchanged
+the BIKE VOUCHER
+for a BICYCLE.`), onDone);
+      });
+      return;
+    }
+    this.showText(line("_BikeShopClerkWelcomeText", `Hi! Welcome to
+our BIKE SHOP.`), () => {
+      const pitch = line("_BikeShopClerkDoYouLikeItText", `It's a cool BIKE!
+Do you want it?`);
+      const pages = paginate(substitute(pitch, { player: this.save.player?.name }));
+      const tail = pages[pages.length - 1]?.lines.join(`
+`) ?? null;
+      const win = new BikeShopState(this, tail, (bought) => {
+        const comeAgain = () => {
+          this.showText(line("_BikeShopComeAgainText", `Come back again
+some time!`), () => {
+            win.close();
+            onDone?.();
+          });
+        };
+        if (bought)
+          this.showText(line("_BikeShopCantAffordText", `Sorry! You can't
+afford it!`), comeAgain);
+        else
+          comeAgain();
+      });
+      this.push(win);
+    });
+  }
+  useKeyItem(itemId) {
+    if (itemId === "BICYCLE")
+      this.toggleBike();
+  }
+  toggleBike() {
+    const t = this.data.text ?? {};
+    const line = (k, fallback) => t[k] ?? fallback;
+    const save = this.save;
+    const name = this.data.items?.BICYCLE?.name ?? "BICYCLE";
+    const pair = (a, b) => `${line(a, "")}
+${line(b, "").replace(/\{RAM:\w+\}/g, name)}`;
+    if (save.forcedBike) {
+      this.showText(line("_CannotGetOffHereText", `You can't get off
+here.`));
+      return;
+    }
+    if (save.onBike) {
+      save.onBike = false;
+      this.overworld.syncBike();
+      this.startMapMusic(this.overworld.map.id);
+      this.showText(pair("_GotOffBicycleText1", "_GotOffBicycleText2"));
+      return;
+    }
+    if (!this.overworld.canRideHere()) {
+      this.showText(line("_NoCyclingAllowedHereText", `No cycling
+allowed here.`));
+      return;
+    }
+    save.onBike = true;
+    this.overworld.syncBike();
+    this.startMapMusic(this.overworld.map.id);
+    this.showText(pair("_GotOnBicycleText1", "_GotOnBicycleText2"));
   }
   openDaycare(onDone) {
     const t = this.data.text ?? {};

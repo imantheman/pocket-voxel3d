@@ -1326,6 +1326,90 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     },
   },
 
+  // story2.lua M.BIKE_SHOP + flavor/bike_shop.lua (scripts/BikeShop.asm).
+  // The clerk's three branches and his price window are in game.ts
+  // openBikeShop; the other two are plain flavour.
+  BIKE_SHOP: {
+    talk: {
+      TEXT_BIKESHOP_CLERK: [["face_player"], ["open_bike_shop"]],
+      TEXT_BIKESHOP_MIDDLE_AGED_WOMAN: [
+        ["face_player"],
+        ["show_text", "_BikeShopMiddleAgedWomanText"],
+      ],
+      // CheckEvent EVENT_GOT_BICYCLE. Reads the BAG, not the event: the
+      // BICYCLE is a key item and cannot be tossed, so it is the surer test
+      // and reads right on saves written before the clerk set the flag.
+      TEXT_BIKESHOP_YOUNGSTER: [
+        ["face_player"],
+        ["check_item", "BICYCLE"],
+        ["jump_if_true", "gotBike"],
+        ["show_text", "_BikeShopYoungsterTheseBikesAreExpensiveText"],
+        ["jump", "end"],
+        ["label", "gotBike"],
+        ["show_text", "_BikeShopYoungsterCoolBikeText"],
+        ["label", "end"],
+      ],
+    },
+  },
+
+  // story2.lua M.POKEMON_FAN_CLUB + flavor/pokemon_fan_club.lua
+  // (scripts/PokemonFanClub.asm): the chairman's BIKE VOUCHER, and the two
+  // fans bragging past each other.
+  POKEMON_FAN_CLUB: {
+    talk: {
+      TEXT_POKEMONFANCLUB_CHAIRMAN: [
+        ["face_player"],
+        ["check_flag", "EVENT_GOT_BIKE_VOUCHER"],
+        ["jump_if_true", "already"],
+        // The intro ends "Did you come visit to hear about my POKéMON?"
+        ["ask", "_PokemonFanClubChairmanIntroText"],
+        ["jump_if_false", "noStory"],
+        ["show_text", "_PokemonFanClubChairmanStoryText"],
+        // give-then-print like the asm: GiveItem fills wStringBuffer, and
+        // the received line reads the name back out of it.
+        ["give_item", "BIKE_VOUCHER", 1, "_PokemonFanClubReceivedBikeVoucherText"],
+        ["set_flag", "EVENT_GOT_BIKE_VOUCHER"],
+        ["show_text", "_PokemonFanClubExplainBikeVoucherText"],
+        ["jump", "end"],
+        ["label", "noStory"],
+        ["show_text", "_PokemonFanClubNoStoryText"],
+        ["jump", "end"],
+        ["label", "already"],
+        ["show_text", "_PokemonFanClubChairFinalText"],
+        ["label", "end"],
+      ],
+      // She brags unless she has already "won" the boast war, in which case
+      // she gets huffy and resets it. Either way she arms the OTHER fan, so
+      // their next line is the retort.
+      TEXT_POKEMONFANCLUB_PIKACHU_FAN: [
+        ["face_player"],
+        ["check_flag", "EVENT_PIKACHU_FAN_BOAST"],
+        ["jump_if_true", "better"],
+        ["show_text", "_PokemonFanClubPikachuFanNormalText"],
+        ["set_flag", "EVENT_SEEL_FAN_BOAST"],
+        ["jump", "end"],
+        ["label", "better"],
+        ["show_text", "_PokemonFanClubPikachuFanBetterText"],
+        ["clear_flag", "EVENT_PIKACHU_FAN_BOAST"],
+        ["label", "end"],
+      ],
+      TEXT_POKEMONFANCLUB_SEEL_FAN: [
+        ["face_player"],
+        ["check_flag", "EVENT_SEEL_FAN_BOAST"],
+        ["jump_if_true", "better"],
+        ["show_text", "_PokemonFanClubSeelFanNormalText"],
+        ["set_flag", "EVENT_PIKACHU_FAN_BOAST"],
+        ["jump", "end"],
+        ["label", "better"],
+        ["show_text", "_PokemonFanClubSeelFanBetterText"],
+        ["clear_flag", "EVENT_SEEL_FAN_BOAST"],
+        ["label", "end"],
+      ],
+      TEXT_POKEMONFANCLUB_PIKACHU: [["show_text", "_PokemonFanClubPikachuText"]],
+      TEXT_POKEMONFANCLUB_SEEL: [["show_text", "_PokemonFanClubSeelText"]],
+    },
+  },
+
   // story2.lua M.DAYCARE (scripts/Daycare.asm). Every line, the party pick
   // and the fee are in game.ts openDaycare — the flow branches mid-way on a
   // chooser, which script rows cannot express.

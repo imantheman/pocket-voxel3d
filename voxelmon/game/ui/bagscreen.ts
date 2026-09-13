@@ -17,6 +17,13 @@ const ROWS = 4;
  */
 const USABLE_ON_PARTY = new Set(["RARE_CANDY"]);
 
+/**
+ * Key items that act on the world rather than on a Pokemon — StartMenu_Item's
+ * .useOrTossItem straight into UseItem. The BICYCLE mounts and dismounts
+ * (game.ts useKeyItem -> world/bike.ts).
+ */
+const USABLE_IN_FIELD = new Set(["BICYCLE"]);
+
 export interface BagView {
   entries: { name: string; qty: number }[];
   index: number;
@@ -38,6 +45,8 @@ export class BagState implements GameState {
       data: any;
       teachMachine(partyIndex: number, itemId: string): void;
       useItem(partyIndex: number, itemId: string): void;
+      useKeyItem(itemId: string): void;
+      closeToOverworld(): void;
     },
   ) {}
 
@@ -66,6 +75,14 @@ export class BagState implements GameState {
     if (p.a && this.index < this.ids().length) {
       const id = this.ids()[this.index]!;
       const teach = !!this.game.data.items?.[id]?.machine?.move;
+      if (USABLE_IN_FIELD.has(id)) {
+        // ItemUseBicycle closes the WHOLE start menu, not just the item
+        // list: you land back on the map already riding. Leaving the start
+        // menu up would also swallow the walking input that follows.
+        this.game.closeToOverworld();
+        this.game.useKeyItem(id);
+        return;
+      }
       if (teach || USABLE_ON_PARTY.has(id)) {
         this.game.push(
           new PartyState(this.game as never, {

@@ -4,6 +4,7 @@
 // stepping. Rendering concerns (sprites, shadows, fishing poses) stay in
 // the presentation frontend; this class carries only the state it needs.
 
+import { BIKE_STEP_FRAMES } from "./bike.ts";
 import { canMove, DELTA, target, type Dir, type Mover, type TilePairs } from "./collision.ts";
 import type { GameMap } from "./map.ts";
 
@@ -32,6 +33,10 @@ export class Player implements Mover {
   targetX?: number;
   targetY?: number;
   stepFrames = STEP_FRAMES;
+  /** Player.lua:152 — the BICYCLE halves the frames a step costs. Mirrored
+   * from save.onBike by the overworld, so a warp cannot desync it. */
+  onBike = false;
+  bikeStepFrames = BIKE_STEP_FRAMES;
   turnFrames = TURN_FRAMES;
   stepFramesCur?: number;
   bumpFrames?: number;
@@ -88,8 +93,13 @@ export class Player implements Mover {
     this.moving = true;
     this.bumpFrames = undefined;
     this.progress = 0;
-    this.stepFramesCur = this.stepFrames;
+    this.stepFramesCur = this.stepSpeed();
     return "moved";
+  }
+
+  /** Player.lua:152 — frames per step, halved while riding. */
+  stepSpeed(): number {
+    return this.onBike ? this.bikeStepFrames : this.stepFrames;
   }
 
   // Player.lua:168 update — advance one fixed step; true when a step just

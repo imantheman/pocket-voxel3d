@@ -22,6 +22,7 @@ import { Player } from "./player.ts";
 import { talkScript, itemBallScript, itemBallFlag, TEXT_BILLSHOUSE_PC } from "./mapscripts.ts";
 import { LAST_MAP_REWRITES, rewrittenLastMap } from "./lastmap.ts";
 import { martGreetScript } from "./marts.ts";
+import { bikeAllowed, type BikeRiding } from "./bike.ts";
 import type { DaycareState } from "./daycare.ts";
 import {
   inSafariStepZone,
@@ -100,6 +101,12 @@ export interface SaveSlice {
    * left. Absent when no game is running, which is every gate in the feature.
    */
   safari?: { balls: number; steps: number } | null;
+  /**
+   * Riding the BICYCLE (world/bike.ts). A save flag, not a bag state: it
+   * carries across warps, and entering a map that disallows riding clears
+   * it on arrival.
+   */
+  onBike?: boolean;
   /**
    * The Route 5 DAY CARE's boarder (world/daycare.ts). Absent/null when no
    * mon is in. The steps here are the deferred exp: the walk is only folded
@@ -396,6 +403,9 @@ export class Overworld implements ScriptWorld {
     // you came in from. AFTER the player is placed: the Route 22 gate's rule
     // reads their row, and before this point that is still the old map's.
     this.syncLastMapRewrite();
+    // IsBikeRidingAllowed (OverworldController.lua:343): walking into a
+    // building gets you off the bike rather than refusing the door.
+    this.syncBike();
     console.log("NPCS " + (this.npcs as any[]).map((n: any) =>
       JSON.stringify(n, (k, v) => (typeof v === "object" && v !== null && k !== "" ? undefined : v))).join(" | "));
   }
@@ -740,7 +750,7 @@ export class Overworld implements ScriptWorld {
     p.progress = 0;
     // fresh walk-cycle clock so the seam step always shows leg frames
     p.animClock = 0;
-    p.stepFramesCur = p.stepFrames;
+    p.stepFramesCur = p.stepSpeed();
     // OverworldController.lua:1455 — the new map's theme is DEFERRED to the
     // frame the seam step lands (issue #93). Starting it here would swap the
     // song while the player is still visibly on the old map's last cell.
@@ -935,6 +945,37 @@ export class Overworld implements ScriptWorld {
     (this.shell as unknown as {
       openPrizes?: (w: number, done?: () => void) => void;
     }).openPrizes?.(window, onDone);
+  }
+
+  /**
+   * OverworldController.lua:343 + :899 — the forced dismount where riding
+   * is disallowed, and the player's mirror of the flag (the step timer
+   * reads it, and it must not survive a warp into a house).
+   */
+  syncBike(): void {
+    const save = this.save as { onBike?: boolean };
+    const rules = (this.shell.data as {
+      field?: { bikeRiding?: BikeRiding };
+    }).field?.bikeRiding;
+    if (save.onBike && !bikeAllowed(this.map.id, this.map.def?.tileset, rules)) {
+      save.onBike = false;
+    }
+    if (this.player) this.player.onBike = !!save.onBike;
+  }
+
+  /** Whether the BICYCLE may be ridden on the map we are standing on. */
+  canRideHere(): boolean {
+    const rules = (this.shell.data as {
+      field?: { bikeRiding?: BikeRiding };
+    }).field?.bikeRiding;
+    return bikeAllowed(this.map.id, this.map.def?.tileset, rules);
+  }
+
+  /** open_bike_shop -> the BIKE SHOP clerk's flow, via the shell. */
+  openBikeShop(onDone?: () => void): void {
+    (this.shell as unknown as {
+      openBikeShop?: (done?: () => void) => void;
+    }).openBikeShop?.(onDone);
   }
 
   /** open_daycare -> the DAY CARE gentleman's flow, via the shell. */
@@ -1307,7 +1348,7 @@ export class Overworld implements ScriptWorld {
           e.moving = true;
           e.progress = 0;
           if (e instanceof Player) {
-            e.stepFramesCur = e.stepFrames;
+            e.stepFramesCur = e.stepSpeed();
           }
         }
         mv.remaining -= 1;

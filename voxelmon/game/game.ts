@@ -40,7 +40,7 @@ import { inSafariStepZone, type SafariState } from "./world/safari.ts";
 import {
   applyDaycareGrowth, daycareQuote, fillDaycareText, type DaycareState,
 } from "./world/daycare.ts";
-import { Textbox, TEXT_SPEED_DEFAULT, type TextboxOpts } from "./world/textbox.ts";
+import { paginate, substitute, Textbox, TEXT_SPEED_DEFAULT, type TextboxOpts } from "./world/textbox.ts";
 import { NamingState } from "./ui/naming.ts";
 import { TitleState, TITLE_PAGES } from "./ui/title.ts";
 import { StartMenuState } from "./ui/startmenu.ts";
@@ -49,6 +49,7 @@ import { CARD_PIC_RECT, TrainerCardState } from "./ui/trainercard.ts";
 import { OptionsMenuState } from "./ui/optionsmenu.ts";
 import { PrizeState } from "./ui/prizescreen.ts";
 import { SlotMachineState } from "./ui/slotmachine.ts";
+import { BikeShopState } from "./ui/bikeshop.ts";
 import { PRIZE_WINDOWS } from "./world/gamecorner.ts";
 import { gearViewStep } from "./ui/kantogear.ts";
 import { count as badgeCount } from "./rules/badges.ts";
@@ -418,7 +419,7 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     // map id here would jump the gun by a whole step.
     if (mapId !== this.audioMap && !this.overworld.pendingSeamMusic) {
       this.audioMap = mapId;
-      this.audio.startMap(mapId);
+      this.audio.startMap(mapId, !!this.save.onBike);
     }
   }
 
@@ -657,7 +658,7 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   /** Music.lua:339 playMap, from the site that owns the moment. */
   startMapMusic(mapId: string): void {
     this.audioMap = mapId;
-    this.audio.startMap(mapId);
+    this.audio.startMap(mapId, !!this.save.onBike);
   }
 
   showText(text: string, onDone?: () => void): void {
@@ -965,6 +966,126 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       return [];
     }
     return this.overworld.picShown;
+  }
+
+  /** ui/bikeshop.ts wants a sound for its own A/B, like every menu. */
+  playSfx(name: string): void {
+    this.audio.playSfx(name);
+  }
+
+  bikeShop(): unknown {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "bikeshop" ? top.view() : null;
+  }
+
+  /**
+   * open_bike_shop -> BikeShopClerkText (scripts/BikeShop.asm), which runs
+   * three ways: the BICYCLE is already yours, you are carrying the BIKE
+   * VOUCHER, or you get the sales pitch and the million-yen window.
+   */
+  openBikeShop(onDone?: () => void): void {
+    const t = (this.data as { text?: Record<string, string> }).text ?? {};
+    const line = (k: string, fallback: string): string => t[k] ?? fallback;
+    const save = this.save as { flags: Record<string, boolean> };
+
+    // CheckEvent EVENT_GOT_BICYCLE. The bag is checked too: the BICYCLE is a
+    // key item and cannot be tossed, so owning one is proof either way.
+    if ((this.save.inventory?.BICYCLE ?? 0) > 0 || save.flags?.EVENT_GOT_BICYCLE) {
+      this.showText(
+        line("_BikeShopClerkHowDoYouLikeYourBicycleText", "How do you like\nyour new BICYCLE?"),
+        onDone,
+      );
+      return;
+    }
+
+    // .dontHaveBike: IsItemInBag BIKE_VOUCHER
+    if ((this.save.inventory?.BIKE_VOUCHER ?? 0) > 0) {
+      this.showText(line("_BikeShopClerkOhThatsAVoucherText", "Oh, that's...\fA BIKE VOUCHER!"), () => {
+        // GiveItem's `jr nc, .BagFull`: the voucher is only spent once the
+        // BICYCLE is actually in the bag.
+        if (!Bag.add(this.save, "BICYCLE", 1, this.data)) {
+          this.showText(line("_BikeShopBagFullText", "You better make\nroom for this!"), onDone);
+          return;
+        }
+        Bag.remove(this.save, "BIKE_VOUCHER", 1);
+        save.flags.EVENT_GOT_BICYCLE = true;
+        // BikeShopExchangedVoucherText carries sound_get_key_item.
+        this.audio.playSfx("Get_Key_Item");
+        this.showText(
+          line("_BikeShopExchangedVoucherText", "{PLAYER} exchanged\nthe BIKE VOUCHER\nfor a BICYCLE."),
+          onDone,
+        );
+      });
+      return;
+    }
+
+    // .dontHaveVoucher: the welcome, then the BICYCLE/CANCEL window
+    this.showText(line("_BikeShopClerkWelcomeText", "Hi! Welcome to\nour BIKE SHOP."), () => {
+      const pitch = line("_BikeShopClerkDoYouLikeItText", "It's a cool BIKE!\nDo you want it?");
+      // The window keeps the pitch's LAST page under it: PrintText hands
+      // straight to HandleMenuInput without waiting, so the line is still
+      // on screen while the menu is up.
+      const pages = paginate(substitute(pitch, { player: this.save.player?.name }));
+      const tail = pages[pages.length - 1]?.lines.join("\n") ?? null;
+      const win = new BikeShopState(this as never, tail, (bought) => {
+        const comeAgain = (): void => {
+          this.showText(line("_BikeShopComeAgainText", "Come back again\nsome time!"), () => {
+            win.close(); // the window, still up under the text
+            onDone?.();
+          });
+        };
+        // A million is out of anyone's reach, so YES only ever gets this.
+        if (bought) this.showText(line("_BikeShopCantAffordText", "Sorry! You can't\nafford it!"), comeAgain);
+        else comeAgain();
+      });
+      this.push(win);
+    });
+  }
+
+  /**
+   * StartMenu_Item -> UseItem for a key item that acts on the world. Only
+   * the BICYCLE so far (ItemUseBicycle, engine/items/item_effects.asm).
+   */
+  useKeyItem(itemId: string): void {
+    if (itemId === "BICYCLE") this.toggleBike();
+  }
+
+  /**
+   * ItemUseBicycle: mount or dismount. The texts are the ROM's own split
+   * pair, with wStringBuffer holding the item name.
+   *
+   * The Cycling Road's BIT_ALWAYS_ON_BIKE refusal (_CannotGetOffHereText)
+   * is checked first, exactly as the original gates it ahead of UseItem —
+   * the forced-bike stretch is not ported yet, so save.forcedBike is only
+   * ever unset here, but the branch is the one the ROM takes.
+   */
+  toggleBike(): void {
+    const t = (this.data as { text?: Record<string, string> }).text ?? {};
+    const line = (k: string, fallback: string): string => t[k] ?? fallback;
+    const save = this.save as { onBike?: boolean; forcedBike?: boolean };
+    const name = this.data.items?.BICYCLE?.name ?? "BICYCLE";
+    const pair = (a: string, b: string): string =>
+      `${line(a, "")}\n${line(b, "").replace(/\{RAM:\w+\}/g, name)}`;
+
+    if (save.forcedBike) {
+      this.showText(line("_CannotGetOffHereText", "You can't get off\nhere."));
+      return;
+    }
+    if (save.onBike) {
+      save.onBike = false;
+      this.overworld.syncBike();
+      this.startMapMusic(this.overworld.map.id);
+      this.showText(pair("_GotOffBicycleText1", "_GotOffBicycleText2"));
+      return;
+    }
+    if (!this.overworld.canRideHere()) {
+      this.showText(line("_NoCyclingAllowedHereText", "No cycling\nallowed here."));
+      return;
+    }
+    save.onBike = true;
+    this.overworld.syncBike();
+    this.startMapMusic(this.overworld.map.id);
+    this.showText(pair("_GotOnBicycleText1", "_GotOnBicycleText2"));
   }
 
   /**

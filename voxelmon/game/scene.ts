@@ -399,7 +399,9 @@ export class Scene {
       if (mirror) flags |= ENT_FLAG.mirror;
       this.emitSlot(
         0,
-        this.sheetIndex(view, "SPRITE_RED"),
+        // SpriteRenderer.lua:300 — riding swaps the walker for the bike
+        // sheet (SPRITE_RED_BIKE), which the atlas already carries.
+        this.sheetIndex(view, p.onBike ? "SPRITE_RED_BIKE" : "SPRITE_RED"),
         frame,
         p.px * Q4,
         p.py * Q4,
@@ -1043,6 +1045,42 @@ export class Scene {
           });
         } else if (sl.stage === "spin") {
           this.stamp(host, 2, 12, "PRESS A TO STOP");
+        }
+      }
+      return;
+    }
+    // The BIKE SHOP's price window (ui/bikeshop.ts). TextBoxBorder hlcoord
+    // 0,0 b=4 c=15: the bike on row 2, its price on row 3, CANCEL on row 4 —
+    // the cursor rows are two apart with the price tucked between them. The
+    // clerk's pitch stays in the bottom box underneath.
+    const bs = (view as unknown as { bikeShop?: () => any }).bikeShop?.();
+    if (bs) {
+      const sig = `k${bs.index},${bs.rows.join(",")},${bs.footer ?? ""}`;
+      if (sig !== this.menuSig) {
+        this.menuSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const box = (x: number, y: number, w: number, h: number) => {
+          host.uiTile(x, y, BORDER_TL);
+          host.uiFill(x + 1, y, w - 1, 1, BORDER_H);
+          host.uiTile(x + w, y, BORDER_TR);
+          host.uiFill(x, y + 1, 1, h, BORDER_V);
+          host.uiFill(x + w, y + 1, 1, h, BORDER_V);
+          host.uiFill(x + 1, y + 1, w - 1, h, SPACE);
+          host.uiTile(x, y + 1 + h, BORDER_BL);
+          host.uiFill(x + 1, y + 1 + h, w - 1, 1, BORDER_H);
+          host.uiTile(x + w, y + 1 + h, BORDER_BR);
+        };
+        box(0, 0, 15, 4);
+        this.stamp(host, 2, 2, bs.rows[0] ?? "BICYCLE");
+        this.stamp(host, 8, 3, bs.price);
+        this.stamp(host, 2, 4, bs.rows[1] ?? "CANCEL");
+        host.uiTile(1, bs.index === 0 ? 2 : 4, ARROW_CURSOR);
+        if (bs.footer) {
+          box(0, 12, 19, 4);
+          String(bs.footer).split("\n").forEach((ln: string, i: number) => {
+            this.stamp(host, 1, 14 + i, ln);
+          });
         }
       }
       return;

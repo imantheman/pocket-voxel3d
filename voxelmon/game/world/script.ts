@@ -564,6 +564,19 @@ function* open_prizes(ctx: ScriptContext, ...args: unknown[]): Generator<void, v
 }
 
 /**
+ * The BIKE SHOP clerk (scripts/BikeShop.asm). Three branches, one of which
+ * opens a menu the clerk keeps talking under, so the whole thing lives on
+ * the game side (game.ts openBikeShop).
+ */
+function* open_bike_shop(ctx: ScriptContext): Generator<void, void> {
+  const runner = ctx.runner;
+  const w = ctx.world as unknown as { openBikeShop?: (done: () => void) => void };
+  if (!w.openBikeShop) return;
+  w.openBikeShop(() => runner.resume());
+  yield;
+}
+
+/**
  * The Route 5 DAY CARE gentleman (scripts/Daycare.asm). Deposit and
  * collection both branch on choices made mid-flow, so the whole thing lives
  * on the game side (game.ts openDaycare) and the script only waits for it.
@@ -822,6 +835,7 @@ const VERBS: Record<string, Verb> = {
   give_coins,
   open_prizes,
   open_daycare,
+  open_bike_shop,
   safari_start,
   safari_end,
   take_guard_drink,

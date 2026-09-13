@@ -573,3 +573,53 @@ describe("the core synth against the reference ChipSynth", () => {
     600000,
   );
 });
+
+describe("the bike theme", () => {
+  /** The fixture plus a real outdoor song, an indoor one, and the bike. */
+  function bikeDirector(): { d: AudioDirector; ops: Emitted[] } {
+    const { host, ops } = recorder();
+    const base = fixtureManifest();
+    const d = new AudioDirector(
+      fromParts({
+        ...base,
+        songs: {
+          ...base.songs,
+          Music_Routes1: { bank: 2, address: 0x5100, engine: 1 },
+          Music_Pokecenter: { bank: 2, address: 0x5200, engine: 1 },
+          Music_BikeRiding: { bank: 2, address: 0x5300, engine: 1 },
+        },
+        mapSongs: {
+          ...base.mapSongs,
+          ROUTE_5: "Music_Routes1",
+          VIRIDIAN_POKECENTER: "Music_Pokecenter",
+        },
+      }),
+      host,
+    );
+    ops.length = 0;
+    return { d, ops };
+  }
+
+  test("riding replaces an outdoor theme with the bike song", () => {
+    const { d, ops } = bikeDirector();
+    d.startMap("ROUTE_5", true);
+    expect(d.playing).toBe("Music_BikeRiding");
+    expect(ops).toEqual([["music", 0, 0x5300, 1, AUDIO_MUSIC_FLAG.loop]]);
+    // getting off puts the route's own theme back
+    ops.length = 0;
+    d.startMap("ROUTE_5", false);
+    expect(d.playing).toBe("Music_Routes1");
+  });
+
+  test("an indoor theme is never overridden, even while riding", () => {
+    const { d } = bikeDirector();
+    d.startMap("VIRIDIAN_POKECENTER", true);
+    expect(d.playing).toBe("Music_Pokecenter");
+  });
+
+  test("walking is unaffected: the default is off the bike", () => {
+    const { d } = bikeDirector();
+    d.startMap("ROUTE_5");
+    expect(d.playing).toBe("Music_Routes1");
+  });
+});

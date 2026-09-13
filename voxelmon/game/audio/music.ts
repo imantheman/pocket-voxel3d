@@ -18,6 +18,7 @@
 import { AUDIO_MUSIC_FLAG, AUDIO_SFX_FLAG, AUDIO_SFX_TEMPO } from "../../../contracts/spec/voxel-spec.ts";
 import type { AudioBanks } from "./banks.ts";
 import type { VoxelHost } from "../host.ts";
+import { effectiveMapSong } from "../world/bike.ts";
 
 /**
  * Sound.lua:55-64 FANFARES — effects whose headers claim the music's tone
@@ -74,13 +75,15 @@ export class AudioDirector {
    * map that shares its theme is a no-op (:239 dedupes on the label), which
    * is what keeps a house door from restarting the town song.
    *
-   * The bike/surf overrides (:324-335 effectiveMapSong) are not ported: the
-   * v1 slice has neither vehicle.
+   * :337 effectiveMapSong: while `onBike` the bike theme takes over an
+   * OUTDOOR song (world/bike.ts) — an indoor theme is never replaced. Surf
+   * is the other override and has no vehicle in the port yet.
    */
-  startMap(mapId: string): void {
+  startMap(mapId: string, onBike = false): void {
     const song = this.banks?.mapSong(mapId) ?? null;
     this.mapSong = song;
-    if (song) this.play(song);
+    const play = effectiveMapSong(song, onBike);
+    if (play) this.play(play);
   }
 
   /** Music.lua:357 playBattle — kind = "wild" | "trainer" | "gym" | "final". */

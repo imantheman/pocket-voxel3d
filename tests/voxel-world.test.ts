@@ -36,6 +36,7 @@ import { encodeGlyphs, glyphLen, MAX_COLS } from "../voxelmon/game/ui/tiles.ts";
 import { GameMap } from "../voxelmon/game/world/map.ts";
 import { martStock } from "../voxelmon/game/world/marts.ts";
 import { computeNeighbors } from "../voxelmon/game/world/overworld.ts";
+import { bikeAllowed, BIKE_SONG, effectiveMapSong } from "../voxelmon/game/world/bike.ts";
 import { daycareFee, learnMovesFromDayCare } from "../voxelmon/game/world/daycare.ts";
 import { paginate, Textbox } from "../voxelmon/game/world/textbox.ts";
 import { parseTape, TapePlayer, TapeStallError } from "../voxelmon/game/sim/tape.ts";
@@ -2188,5 +2189,245 @@ describe("the day care", () => {
     const learnt = romData!.pokemon.PIDGEY!.learnset
       .filter((e) => e.level > 5 && e.level <= 30).at(-1)!.move;
     expect(mon.moves.at(-1)!.id).toBe(learnt);
+  });
+});
+
+describe("the bike voucher, the bike shop and the bicycle", () => {
+  function bikeGame(): VoxelmonGame {
+    const data = {
+      ...(romData as object),
+      cookedMaps: [
+        ...((romData as { cookedMaps?: string[] }).cookedMaps ?? []),
+        "BIKE_SHOP", "POKEMON_FAN_CLUB", "CERULEAN_CITY",
+      ],
+    };
+    const game = new VoxelmonGame(data as never, new MenuHost(), 1);
+    game.newGame();
+    game.closeToOverworld();
+    return game;
+  }
+
+  /** Talk to an NPC and answer the first YES/NO if one opens. */
+  function talk(game: VoxelmonGame, map: string, text: string, yes?: boolean): Set<string> {
+    const seen = new Set<string>();
+    game.overworld.setMap(map, 4, 4, "up");
+    game.overworld.showMapText(text);
+    const runner = (game.overworld as unknown as { runner: { isRunning(): boolean } }).runner;
+    for (let i = 0; i < 1200; i++) {
+      const top = game.stackKinds().at(-1);
+      if (top) seen.add(top);
+      if (top === "choice" && yes !== undefined) {
+        if (!yes) tap(game, VOX_BTN.down);
+        tap(game, VOX_BTN.a);
+        yes = undefined;
+        continue;
+      }
+      if (top === "bikeshop") return seen; // the window waits for a pick
+      if (top === "overworld" && !runner.isRunning()) break;
+      dismissText(game);
+      game.tick(0);
+    }
+    return seen;
+  }
+
+  /** Drive whatever the bike-shop window's answer pushed, to the end. */
+  function drain(game: VoxelmonGame): void {
+    const runner = (game.overworld as unknown as { runner: { isRunning(): boolean } }).runner;
+    for (let i = 0; i < 1200; i++) {
+      if (game.stackKinds().at(-1) === "overworld" && !runner.isRunning()) return;
+      dismissText(game);
+      game.tick(0);
+    }
+  }
+
+  // --- the chairman -------------------------------------------------------
+
+  test.skipIf(!hasGen)("the chairman's story earns the BIKE VOUCHER, exactly once", () => {
+    const game = bikeGame();
+    talk(game, "POKEMON_FAN_CLUB", "TEXT_POKEMONFANCLUB_CHAIRMAN", true);
+    expect(game.save.inventory.BIKE_VOUCHER).toBe(1);
+    expect(game.save.flags.EVENT_GOT_BIKE_VOUCHER).toBe(true);
+
+    // a second visit is the ChairFinal brush-off, not another voucher
+    talk(game, "POKEMON_FAN_CLUB", "TEXT_POKEMONFANCLUB_CHAIRMAN", true);
+    expect(game.save.inventory.BIKE_VOUCHER).toBe(1);
+  });
+
+  test.skipIf(!hasGen)("declining his story leaves you empty-handed", () => {
+    const game = bikeGame();
+    talk(game, "POKEMON_FAN_CLUB", "TEXT_POKEMONFANCLUB_CHAIRMAN", false);
+    expect(game.save.inventory.BIKE_VOUCHER ?? 0).toBe(0);
+    expect(game.save.flags.EVENT_GOT_BIKE_VOUCHER ?? false).toBe(false);
+    // and he will still tell it when you come back and say yes
+    talk(game, "POKEMON_FAN_CLUB", "TEXT_POKEMONFANCLUB_CHAIRMAN", true);
+    expect(game.save.inventory.BIKE_VOUCHER).toBe(1);
+  });
+
+  test.skipIf(!hasGen)("the two fans arm each other's retort", () => {
+    const game = bikeGame();
+    talk(game, "POKEMON_FAN_CLUB", "TEXT_POKEMONFANCLUB_PIKACHU_FAN");
+    expect(game.save.flags.EVENT_SEEL_FAN_BOAST).toBe(true);
+    expect(game.save.flags.EVENT_PIKACHU_FAN_BOAST ?? false).toBe(false);
+    // the SEEL fan now retorts, which spends her own flag and arms nobody
+    talk(game, "POKEMON_FAN_CLUB", "TEXT_POKEMONFANCLUB_SEEL_FAN");
+    expect(game.save.flags.EVENT_SEEL_FAN_BOAST ?? false).toBe(false);
+    expect(game.save.flags.EVENT_PIKACHU_FAN_BOAST ?? false).toBe(false);
+    // and she is back to her normal line, which arms the PIKACHU fan again
+    talk(game, "POKEMON_FAN_CLUB", "TEXT_POKEMONFANCLUB_SEEL_FAN");
+    expect(game.save.flags.EVENT_PIKACHU_FAN_BOAST).toBe(true);
+  });
+
+  // --- the clerk ----------------------------------------------------------
+
+  test.skipIf(!hasGen)("no voucher: the pitch, the million-yen window, and no sale", () => {
+    const game = bikeGame();
+    game.save.money = 999999;
+    const seen = talk(game, "BIKE_SHOP", "TEXT_BIKESHOP_CLERK");
+    expect(seen.has("bikeshop")).toBe(true);
+    const v = game.bikeShop() as { rows: string[]; price: string; footer: string | null };
+    expect(v.rows).toEqual(["BICYCLE", "CANCEL"]);
+    expect(v.price).toBe("¥1000000");
+    expect(v.footer).not.toBeNull(); // the pitch stays up under the menu
+
+    tap(game, VOX_BTN.a); // YES, buy it
+    drain(game);
+    expect(game.save.inventory.BICYCLE ?? 0).toBe(0);
+    expect(game.save.money).toBe(999999); // nothing is ever taken
+    expect(game.stackKinds()).toEqual(["overworld"]); // the window closed too
+  });
+
+  test.skipIf(!hasGen)("cancelling the window closes it the same way", () => {
+    const game = bikeGame();
+    talk(game, "BIKE_SHOP", "TEXT_BIKESHOP_CLERK");
+    expect(game.stackKinds().at(-1)).toBe("bikeshop");
+    tap(game, VOX_BTN.b);
+    drain(game);
+    expect(game.stackKinds()).toEqual(["overworld"]);
+  });
+
+  test.skipIf(!hasGen)("the voucher buys the BICYCLE and is spent doing it", () => {
+    const game = bikeGame();
+    Bag.add(game.save, "BIKE_VOUCHER", 1);
+    const seen = talk(game, "BIKE_SHOP", "TEXT_BIKESHOP_CLERK");
+    expect(seen.has("bikeshop")).toBe(false); // no window on this branch
+    expect(game.save.inventory.BICYCLE).toBe(1);
+    expect(game.save.inventory.BIKE_VOUCHER ?? 0).toBe(0);
+    expect(game.save.flags.EVENT_GOT_BICYCLE).toBe(true);
+
+    // with the bike in hand he just admires it
+    talk(game, "BIKE_SHOP", "TEXT_BIKESHOP_CLERK");
+    expect(game.save.inventory.BICYCLE).toBe(1);
+  });
+
+  test.skipIf(!hasGen)("the youngster has a line for each side of owning one", () => {
+    const game = bikeGame();
+    /** Whatever he says, flattened out of the box's own pages. */
+    const shown = (): string => {
+      game.overworld.setMap("BIKE_SHOP", 4, 4, "up");
+      game.overworld.showMapText("TEXT_BIKESHOP_YOUNGSTER");
+      for (let i = 0; i < 300; i++) {
+        const src = game.uiBox() as { box?: { pages?: { lines: string[] }[] } } | null;
+        const pages = src?.box?.pages;
+        if (pages?.length) {
+          const t = pages.map((pg) => pg.lines.join(" ")).join(" ");
+          drain(game);
+          return t;
+        }
+        game.tick(0);
+      }
+      return "";
+    };
+    const poor = shown();
+    Bag.add(game.save, "BICYCLE", 1);
+    const rich = shown();
+    expect(poor).toContain("expensive");
+    expect(rich).toContain("really cool");
+    expect(poor).not.toContain("really cool");
+  });
+
+  // --- riding -------------------------------------------------------------
+
+  test("the bike theme replaces an outdoor song only", () => {
+    expect(effectiveMapSong("Music_Routes1", true)).toBe(BIKE_SONG);
+    expect(effectiveMapSong("Music_Routes1", false)).toBe("Music_Routes1");
+    // an indoor theme is never overridden, even while riding
+    expect(effectiveMapSong("Music_Pokecenter", true)).toBe("Music_Pokecenter");
+    expect(effectiveMapSong(null, true)).toBeNull();
+  });
+
+  test("riding is allowed by tileset, or by the two map exceptions", () => {
+    expect(bikeAllowed("ROUTE_5", "OVERWORLD")).toBe(true);
+    expect(bikeAllowed("MT_MOON_1F", "CAVERN")).toBe(true);
+    expect(bikeAllowed("BIKE_SHOP", "CLUB")).toBe(false);
+    // PLATEAU-tileset maps that ride anyway
+    expect(bikeAllowed("ROUTE_23", "PLATEAU")).toBe(true);
+    expect(bikeAllowed("INDIGO_PLATEAU", "PLATEAU")).toBe(true);
+    expect(bikeAllowed("VICTORY_ROAD_1F", "PLATEAU")).toBe(false);
+  });
+
+  /** START -> ITEM -> BICYCLE, the way a player reaches it. */
+  function useBike(game: VoxelmonGame): void {
+    tap(game, VOX_BTN.start);
+    const sm = game.startMenu() as { entries: string[] };
+    pick(game, sm.entries.indexOf("ITEM"));
+    const bag = game.bag() as { entries: { name: string }[] };
+    pick(game, bag.entries.findIndex((e) => e.name === "BICYCLE"));
+  }
+
+  test.skipIf(!hasGen)("the bicycle mounts outdoors, doubles the pace, and plays its theme", () => {
+    const game = bikeGame();
+    Bag.add(game.save, "BICYCLE", 1);
+    game.overworld.setMap("CERULEAN_CITY", 20, 20, "down");
+
+    useBike(game);
+    expect(game.save.onBike).toBe(true);
+    expect(game.overworld.player.onBike).toBe(true);
+    expect(game.overworld.player.stepSpeed()).toBe(8); // walking is 16
+    dismissText(game);
+
+    // and off again
+    useBike(game);
+    expect(game.save.onBike).toBe(false);
+    expect(game.overworld.player.stepSpeed()).toBe(16);
+    // (the theme swap itself is driven through the director, which this
+    //  harness has no banks for — voxel-audio.test.ts "the bike theme")
+  });
+
+  test.skipIf(!hasGen)("a step on the bike really does take half the frames", () => {
+    const game = bikeGame();
+    Bag.add(game.save, "BICYCLE", 1);
+    game.overworld.setMap("CERULEAN_CITY", 20, 20, "down");
+    const p = game.overworld.player;
+
+    const time = (): number => {
+      const base = p.landedCount;
+      let t = 0;
+      while (p.landedCount === base && t < 200) { game.tick(VOX_BTN.down); t += 1; }
+      game.tick(0);
+      return t;
+    };
+    const walked = time();
+    useBike(game);
+    dismissText(game);
+    const ridden = time();
+    expect(ridden).toBeLessThan(walked);
+  });
+
+  test.skipIf(!hasGen)("there is no cycling indoors, and a door gets you off", () => {
+    const game = bikeGame();
+    Bag.add(game.save, "BICYCLE", 1);
+    game.overworld.setMap("BIKE_SHOP", 4, 4, "up");
+    useBike(game);
+    expect(game.save.onBike ?? false).toBe(false); // "No cycling allowed here."
+    dismissText(game);
+
+    // mount outside, then walk in: the map change dismounts you
+    game.overworld.setMap("CERULEAN_CITY", 20, 20, "down");
+    useBike(game);
+    expect(game.save.onBike).toBe(true);
+    dismissText(game);
+    game.overworld.setMap("BIKE_SHOP", 4, 4, "up");
+    expect(game.save.onBike).toBe(false);
+    expect(game.overworld.player.onBike).toBe(false);
   });
 });
