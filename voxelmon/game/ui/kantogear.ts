@@ -72,6 +72,8 @@ interface GearBattle {
   partyIndex: number; // 0-based into save.party
   itemIndex: number; // 0-based into itemList
   itemList: string[]; // ball ids openItems() narrowed to (battle.ts:1371)
+  /** Present only in a SAFARI battle (battle/safari.ts): the live ball count. */
+  safari?: { balls: number } | null;
   /** sayChoice's YES/NO box (battle.ts:558-594, ChoiceBox.lua:34-45).
    * choiceOpen can be true while phase stays "messages" — it overlays the
    * still-visible dialog rather than being a phase of its own. */
@@ -244,6 +246,8 @@ function drawTopBar(host: VoxelHost, title: string): void {
 // FIGHT/PKMN over ITEM/RUN — the pokered main battle menu (battle.ts maps
 // menuIndex 1..4 to fight/pkmn/item/run in this reading order).
 const BATTLE_ACTIONS = ["FIGHT", "PKMN", "ITEM", "RUN"] as const;
+/** DisplayBattleMenu's safari branch (battle/safari.ts SAFARI_ACTIONS). */
+const SAFARI_ACTIONS = ["BALL", "BAIT", "ROCK", "RUN"] as const;
 
 /**
  * The four-button action grid, the selected cell carrying the ▶ cursor. Two
@@ -251,9 +255,16 @@ const BATTLE_ACTIONS = ["FIGHT", "PKMN", "ITEM", "RUN"] as const;
  * header. When showCursor is false (the messages phase, while text/animation
  * plays on top) the grid shows as a passive backdrop with no selection.
  */
-function drawActionGrid(host: VoxelHost, menuIndex: number, showCursor: boolean): void {
+function drawActionGrid(
+  host: VoxelHost,
+  menuIndex: number,
+  showCursor: boolean,
+  safari?: { balls: number } | null,
+): void {
   host.uiClearBottom();
-  drawTopBar(host, "BATTLE");
+  // A SAFARI battle has its own four; the ball count rides the bar, where the
+  // original prints it beside the menu.
+  drawTopBar(host, safari ? `SAFARI BALLS ${safari.balls}` : "BATTLE");
 
   const cellW = 10;
   const cellH = 8;
@@ -262,7 +273,7 @@ function drawActionGrid(host: VoxelHost, menuIndex: number, showCursor: boolean)
   for (let i = 0; i < 4; i++) {
     const x0 = colX[i % 2]!;
     const y0 = rowY[(i / 2) | 0]!;
-    const label = BATTLE_ACTIONS[i]!;
+    const label = (safari ? SAFARI_ACTIONS : BATTLE_ACTIONS)[i]!;
     const iw = cellW - 2; // interior width
     const lx = x0 + 1 + Math.max(0, Math.floor((iw - label.length) / 2));
     const ly = y0 + Math.floor(cellH / 2);
@@ -494,7 +505,7 @@ function drawBattleGear(host: VoxelHost, game: GearGame, b: GearBattle): void {
       drawItemList(host, game, b);
       return;
     case "menu":
-      drawActionGrid(host, b.menuIndex, true);
+      drawActionGrid(host, b.menuIndex, true, b.safari ?? null);
       return;
     default: // "messages": battle dialog now lives on the bottom screen
       drawBattleMessage(host, b);

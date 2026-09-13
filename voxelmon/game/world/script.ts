@@ -521,6 +521,41 @@ function* open_mart(ctx: ScriptContext, ...args: unknown[]): Generator<void, voi
   }
 }
 
+// lastCheck = the wallet holds at least this much. The Safari gate's fee
+// check (SafariZoneGateWouldYouLikeToJoinScript compares wPlayerMoney).
+function* check_money(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const save = ctx.world.save as { money?: number };
+  ctx.lastCheck = (save.money ?? 0) >= (args[0] as number);
+}
+
+/** Deduct, never below zero. */
+function* take_money(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const save = ctx.world.save as { money?: number };
+  save.money = Math.max(0, (save.money ?? 0) - (args[0] as number));
+}
+
+/** Open a SAFARI game: balls and the step timer (world/safari.ts). */
+function* safari_start(ctx: ScriptContext): Generator<void, void> {
+  (ctx.world as unknown as { safariStart?: () => void }).safariStart?.();
+}
+
+/** End it, taking the leftover balls back. */
+function* safari_end(ctx: ScriptContext): Generator<void, void> {
+  (ctx.world as unknown as { safariEnd?: () => void }).safariEnd?.();
+}
+
+/**
+ * The scripted walk up through the gate's north warp, charged against the
+ * timer. Blocks until the warp is taken, since scripted steps skip
+ * onStepComplete and so would never trigger it.
+ */
+function* safari_walk_in(ctx: ScriptContext): Generator<void, void> {
+  const runner = ctx.runner;
+  const w = ctx.world as unknown as { safariWalkIn?: (done: () => void) => boolean };
+  if (!w.safariWalkIn?.(() => runner.resume())) return;
+  yield;
+}
+
 // Commands.lua check_item (item_bag.asm IsItemInBag): lastCheck = the bag
 // holds at least one of the id. Gates OaksLabOak1Text's parcel/poke-ball
 // branches (oaks_lab.lua).
@@ -717,6 +752,11 @@ const VERBS: Record<string, Verb> = {
   open_mart,
   walk_route,
   check_item,
+  check_money,
+  take_money,
+  safari_start,
+  safari_end,
+  safari_walk_in,
   take_item,
   clear_flag,
   check_dex_owned,

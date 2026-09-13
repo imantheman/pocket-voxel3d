@@ -15,6 +15,7 @@ import { AudioDirector } from "./audio/music.ts";
 import { WildBattle, type BattleResult } from "./battle/battle.ts";
 import { TrainerBattle } from "./battle/trainer.ts";
 import { healMon, newMon, type PartyMon } from "./battle/mon.ts";
+import { SafariBattle } from "./battle/safari.ts";
 import { computeStaging, type BattleStaging } from "./battle/staging.ts";
 import { BattleUi } from "./battle/ui.ts";
 import type { VoxelmonData } from "./data.ts";
@@ -35,6 +36,7 @@ import {
   type UiBoxSource,
 } from "./scene.ts";
 import { Overworld, type OverworldShell, type SaveSlice } from "./world/overworld.ts";
+import { inSafariStepZone, type SafariState } from "./world/safari.ts";
 import { Textbox, TEXT_SPEED_DEFAULT, type TextboxOpts } from "./world/textbox.ts";
 import { NamingState } from "./ui/naming.ts";
 import { TitleState, TITLE_PAGES } from "./ui/title.ts";
@@ -276,6 +278,12 @@ class BattleGameState implements GameState, BattleSceneView {
       if (caught) {
         b.caughtNewSpecies = null;
         this.game.showCaughtDexEntry(caught);
+      }
+      // Spending the last SAFARI BALL ends the GAME, not just the battle —
+      // the PA calls it and the warp home belongs to the overworld, so the
+      // battle only flags it.
+      if ((b as { outOfBalls?: boolean }).outOfBalls) {
+        this.game.overworld.safariGameOver("_OutOfSafariBallsText");
       }
       return;
       // BattleState.lua:4647-4653 — teardown pops the battle screen FIRST,
@@ -836,6 +844,14 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   // task's file); since the battle port it constructs the REAL wild battle
   // (BattleState.newWild in the reference).
   pushStubBattle(species: string, level: number): void {
+    // Inside a running SAFARI game the wild battle is the BALL/BAIT/ROCK/RUN
+    // one (battle/safari.ts): no player mon, and the wild mon can bolt.
+    const safari = (this.save as { safari?: SafariState | null }).safari;
+    if (safari && inSafariStepZone(this.overworld.map.id)) {
+      this.push(new BattleGameState(this, species, level,
+        new SafariBattle(this.data, this.save, this.battleRng, species, level, safari)));
+      return;
+    }
     this.push(new BattleGameState(this, species, level));
   }
 

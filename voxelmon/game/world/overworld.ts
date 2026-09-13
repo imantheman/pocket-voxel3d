@@ -21,6 +21,13 @@ import { NPC } from "./npc.ts";
 import { Player } from "./player.ts";
 import { talkScript, itemBallScript, itemBallFlag, TEXT_BILLSHOUSE_PC } from "./mapscripts.ts";
 import { martGreetScript } from "./marts.ts";
+import {
+  inSafariStepZone,
+  SAFARI_BALLS,
+  SAFARI_EXIT,
+  SAFARI_STEPS,
+  SAFARI_WALK_IN_STEPS,
+} from "./safari.ts";
 import { nurseGreetScript } from "./nurses.ts";
 import { pcTileAt } from "./pctiles.ts";
 import { ScriptRunner, type ScriptRow, type ScriptWorld } from "./script.ts";
@@ -86,6 +93,13 @@ export interface SaveSlice {
    * persists to when that map is next entered. true = shown, false = hidden.
    */
   objectToggles?: Record<string, Record<string, boolean>>;
+  /**
+   * The running SAFARI ZONE game (world/safari.ts): balls left and steps
+   * left. Absent when no game is running, which is every gate in the feature.
+   */
+  safari?: { balls: number; steps: number } | null;
+  /** Money, for the Safari gate's fee. */
+  money?: number;
   /**
    * gen1recomp save.defeatedTrainers: trainers beaten, by NPC object id
    * (`<map>_obj_<index>`). The EVENT_BEAT_* flag covers trainers the
@@ -913,7 +927,77 @@ export class Overworld implements ScriptWorld {
   // standing-on-warp refresh, arrival/held-collision warps, then the wild
   // encounter roll. (Spinners, badge gates, forced movement, Safari,
   // day-care, poison and repel are outside the slice.)
+  // --- SAFARI ZONE (world/safari.ts) ------------------------------------
+
+  /**
+   * safari_start: open a game. The two steps the scripted walk into the zone
+   * costs are charged there, not here (SAFARI_WALK_IN_STEPS).
+   */
+  safariStart(): void {
+    this.save.safari = { balls: SAFARI_BALLS, steps: SAFARI_STEPS };
+  }
+
+  /** safari_end: close it, leftover balls forfeited with the game. */
+  safariEnd(): void {
+    this.save.safari = null;
+  }
+
+  /**
+   * safari_walk_in: the two scripted steps up and out through the gate's
+   * north warp. Returns false (and runs nothing) when the player is not on a
+   * trigger cell — someone who paid after TALKING to the worker from
+   * elsewhere walks in themselves, as the original leaves them to.
+   */
+  safariWalkIn(done: () => void): boolean {
+    const p = this.player;
+    if (p.cellY !== 2) return false;
+    const w = this.map.warpAtCell?.(p.cellX, 0);
+    if (!w) return false;
+    this.scriptMove(p, "up", 2, () => {
+      const st = this.save.safari;
+      if (st) st.steps -= SAFARI_WALK_IN_STEPS;
+      // scripted steps skip onStepComplete (and with it the warp check), so
+      // the warp the walk lands on has to be taken explicitly
+      this.takeWarp(w.def);
+      done();
+    });
+    return true;
+  }
+
+  /**
+   * safari_game.asm: one step off the timer on the zone's own maps, and at
+   * zero the PA calls time. Returns true when the game ended, which stops the
+   * rest of the step (no warp, no encounter roll) — the same short-circuit
+   * OverworldController.lua:3520 takes.
+   */
+  private safariStep(): boolean {
+    const st = this.save.safari;
+    if (!st || !inSafariStepZone(this.map.id)) return false;
+    st.steps -= 1;
+    if (st.steps > 0) return false;
+    this.safariGameOver("_TimesUpText");
+    return true;
+  }
+
+  /**
+   * The PA announcement and the ride back to the gate. Shared by running out
+   * of steps and running out of balls (the battle's own game-over).
+   */
+  safariGameOver(reasonText: string): void {
+    this.save.safari = null;
+    this.shell.playOnce("Safari_Zone_PA");
+    const t = (this.shell.data as { text?: Record<string, string> }).text ?? {};
+    const reason = t[reasonText] ?? reasonText;
+    const over = t._GameOverText ?? "PA: Your SAFARI\nGAME is over!";
+    this.shell.showText(`${reason}\f${over}`, () => {
+      this.startWarpTo(SAFARI_EXIT.map, SAFARI_EXIT.x, SAFARI_EXIT.y, SAFARI_EXIT.facing);
+    });
+  }
+
   onStepComplete(): void {
+    // safari_game.asm runs BEFORE the land triggers and the warp check: when
+    // the timer runs out the PA takes the step over entirely.
+    if (this.safariStep()) return;
     // A map's land-triggers run first (OverworldController.lua:3502): the
     // onStep function hook (story cutscene logic) or a declarative coord
     // trigger. Fires for ANY map that registers one — the two _ONSTEP_HOST

@@ -703,7 +703,7 @@ export class WildBattle implements EffectBattle {
       this.introBalls = false;
     });
     // StartBattle's unconditional `ld c, 40 / call DelayFrames` (:1580-1587)
-    if (!this.demo) {
+    if (this.sendsPlayerMon()) {
       this.queue.push({ wait: BATTLE_START_SENDOUT });
       // the back pic walks off before "Go! X!" (:1588-1599, #317): 18 frames
       this.queue.push({ wait: 18 });
@@ -783,6 +783,24 @@ export class WildBattle implements EffectBattle {
     return this.save.options?.animations !== false;
   }
 
+  /**
+   * The SAFARI menu, when this is one (battle/safari.ts overrides it).
+   * Returns true when it handled the phase.
+   */
+  protected safariMenu(_input: BattleInput): boolean {
+    return false;
+  }
+
+  /**
+   * Does the player send a mon out at all? BATTLE_TYPE_OLD_MAN does not, and
+   * neither does a SAFARI battle — leaving showPlayerBack true is what keeps
+   * the player's sprite and HUD hidden for the whole thing (staging.ts:116,
+   * BattleState.lua:5397).
+   */
+  protected sendsPlayerMon(): boolean {
+    return !this.demo;
+  }
+
   private startAnim(kind: AnimKind, side: number): number {
     // The toggle gates MOVE animations only. The faint slide is
     // SlideDownFaintedMonPic, not a move animation, and always runs —
@@ -823,6 +841,9 @@ export class WildBattle implements EffectBattle {
     }
 
     if (this.phase === "menu") {
+      // A SAFARI battle's menu is a different four (battle/safari.ts), and
+      // the player's mon never acts, so it takes the phase over entirely.
+      if (this.safariMenu(input)) return;
       // BattleState.lua:1858-1870: a demo battle reads no input. The old man
       // hovers the menu, then opens his bag and throws. The port abstracts the
       // scripted list menu, so the hover leads straight into oldManThrow.
@@ -1611,7 +1632,7 @@ export class WildBattle implements EffectBattle {
 
   /** :4447-4464 ballChain — the TossBallAnimation row chain; v1 rows pace
    * the queue (MOVE_ANIM_PRE each) but draw nothing. */
-  private ballChain(caught: boolean, shakes: number, ball: string): void {
+  protected ballChain(caught: boolean, shakes: number, ball: string): void {
     this.animNext("TOSS_ANIM", true, undefined, ball);
     this.animNext("POOF_ANIM", true);
     if (!caught && shakes === 0) return;

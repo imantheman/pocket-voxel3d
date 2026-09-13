@@ -9,6 +9,14 @@ export type MenuAction =
 export interface StartMenuView {
   entries: string[];
   index: number;
+  /**
+   * The SAFARI ZONE counter, while a game is running. The original replaces
+   * the whole START menu with it (StartMenu_Safari: a BALLS/steps box is all
+   * you get), and the Safari Zone's own sign tells the player to press START
+   * to check the time — so it is drawn above the menu rather than instead of
+   * it, keeping SAVE and the rest reachable.
+   */
+  safari: { balls: number; steps: number } | null;
 }
 
 export class StartMenuState implements GameState {
@@ -52,6 +60,11 @@ export class StartMenuState implements GameState {
   }
 
   view(): StartMenuView {
-    return { entries: this.entries, index: this.index };
+    const s = this.game.save?.safari;
+    return {
+      entries: this.entries,
+      index: this.index,
+      safari: s ? { balls: s.balls, steps: s.steps } : null,
+    };
   }
 }

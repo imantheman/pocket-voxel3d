@@ -1104,11 +1104,31 @@ export class Scene {
     }
     const sm = (view as unknown as { startMenu?: () => any }).startMenu?.();
     if (sm) {
-      const sig = `${sm.index},${sm.entries.length}`;
+      const sf = sm.safari as { balls: number; steps: number } | null;
+      const sig = `${sm.index},${sm.entries.length},${sf ? `${sf.balls}/${sf.steps}` : ""}`;
       if (sig !== this.menuSig) {
         this.menuSig = sig;
         this.uiOwner = null;
         host.uiClear();
+        // The SAFARI counter box, top-LEFT so it does not fight the menu for
+        // the right-hand column (StartMenu_Safari's own box is the whole
+        // menu; here it sits beside it).
+        if (sf) {
+          const SW = 8, SH = 4;
+          host.uiTile(0, 0, BORDER_TL);
+          host.uiFill(1, 0, SW - 1, 1, BORDER_H);
+          host.uiTile(SW, 0, BORDER_TR);
+          host.uiFill(0, 1, 1, SH, BORDER_V);
+          host.uiFill(SW, 1, 1, SH, BORDER_V);
+          host.uiFill(1, 1, SW - 1, SH, SPACE);
+          host.uiTile(0, 1 + SH, BORDER_BL);
+          host.uiFill(1, 1 + SH, SW - 1, 1, BORDER_H);
+          host.uiTile(SW, 1 + SH, BORDER_BR);
+          this.stamp(host, 1, 1, "BALLS");
+          this.stamp(host, 2, 2, String(sf.balls));
+          this.stamp(host, 1, 3, "STEPS");
+          this.stamp(host, 2, 4, String(sf.steps));
+        }
         const W = 10, X = 20 - W - 1, Y = 0, H = sm.entries.length * 2;
         host.uiTile(X, Y, BORDER_TL);
         host.uiFill(X + 1, Y, W - 1, 1, BORDER_H);

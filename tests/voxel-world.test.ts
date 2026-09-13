@@ -858,6 +858,164 @@ describe("talking to a trainer", () => {
   });
 });
 
+describe("the safari zone", () => {
+  /**
+   * The importer's cookedMaps is the 11-map dev set (cook/cli.ts
+   * DEFAULT_MAPS); the shipped pak's is all 219. Warps into a map outside it
+   * are refused on purpose — the locked frontier — so a Safari test needs a
+   * dataset that has the zone in it. Shallow-copied: nothing mutates data,
+   * and romData is shared with every other suite.
+   */
+  function safariGame(): VoxelmonGame {
+    const data = {
+      ...(romData as object),
+      cookedMaps: [
+        ...((romData as { cookedMaps?: string[] }).cookedMaps ?? []),
+        "SAFARI_ZONE_GATE", "SAFARI_ZONE_CENTER", "SAFARI_ZONE_EAST",
+        "SAFARI_ZONE_NORTH", "SAFARI_ZONE_WEST",
+      ],
+    };
+    const game = new VoxelmonGame(data as never, new MenuHost(), 1);
+    game.newGame();
+    game.closeToOverworld();
+    return game;
+  }
+
+  /** Walk to the gate's join trigger and answer the prompt. */
+  function joinPrompt(game: VoxelmonGame, yes: boolean): void {
+    const ow = game.overworld;
+    ow.setMap("SAFARI_ZONE_GATE", 4, 2, "up");
+    ow.onStepComplete();
+    let guard = 0;
+    while (game.stackKinds().at(-1) !== "choice" && guard++ < 900) {
+      dismissText(game);
+      game.tick(0);
+    }
+    expect(game.stackKinds().at(-1)).toBe("choice");
+    if (!yes) tap(game, VOX_BTN.down);
+    tap(game, VOX_BTN.a);
+    // Driven for a fixed span, not "until the stack empties": the script
+    // outlives its text boxes — the walk into the zone and the warp it ends
+    // on are script rows that need ticks after the last box closes.
+    for (let i = 0; i < 900; i++) {
+      dismissText(game);
+      game.tick(0);
+    }
+  }
+
+  test.skipIf(!hasGen)("paying buys 30 balls and a 500-step hunt", () => {
+    const game = safariGame();
+    game.save.money = 1000;
+    joinPrompt(game, true);
+    expect(game.save.money).toBe(500);
+    expect(game.save.safari?.balls).toBe(30);
+    // wSafariSteps is written 502; the scripted walk in spends two of them,
+    // which is why the counter reads 500 on arrival
+    expect(game.save.safari?.steps).toBe(500);
+    // ...and that walk is what puts the player in the zone
+    expect(game.overworld.map.id).toBe("SAFARI_ZONE_CENTER");
+  });
+
+  test.skipIf(!hasGen)("declining, or being broke, buys nothing", () => {
+    const no = safariGame();
+    no.save.money = 1000;
+    joinPrompt(no, false);
+    expect(no.save.money).toBe(1000);
+    expect(no.save.safari).toBeUndefined();
+    expect(no.overworld.map.id).toBe("SAFARI_ZONE_GATE");
+
+    const broke = safariGame();
+    broke.save.money = 499;
+    joinPrompt(broke, true);
+    expect(broke.save.money).toBe(499);
+    expect(broke.save.safari).toBeUndefined();
+  });
+
+  test.skipIf(!hasGen)("steps only count inside the zone, and time runs out", () => {
+    const game = safariGame();
+    const ow = game.overworld;
+    game.save.safari = { balls: 30, steps: 3 };
+
+    // the gate is not a step map
+    ow.setMap("SAFARI_ZONE_GATE", 4, 3, "down");
+    ow.onStepComplete();
+    expect(game.save.safari?.steps).toBe(3);
+
+    ow.setMap("SAFARI_ZONE_CENTER", 15, 20, "down");
+    ow.onStepComplete();
+    expect(game.save.safari?.steps).toBe(2);
+    ow.onStepComplete();
+    expect(game.save.safari?.steps).toBe(1);
+    // the last step ends the game: the PA calls it and the save field clears
+    ow.onStepComplete();
+    expect(game.save.safari).toBeNull();
+    expect(topText(game)).toContain("Time's up");
+    // ...and dismissing it warps back to the gate
+    let guard = 0;
+    while (game.overworld.map.id !== "SAFARI_ZONE_GATE" && guard++ < 900) {
+      dismissText(game);
+      game.tick(0);
+    }
+    expect(game.overworld.map.id).toBe("SAFARI_ZONE_GATE");
+  });
+
+  test.skipIf(!hasGen)("the counter shows in the START menu, only in a hunt", () => {
+    const game = safariGame();
+    tap(game, VOX_BTN.start);
+    expect((game.startMenu() as { safari: unknown }).safari).toBeNull();
+    tap(game, VOX_BTN.b);
+    game.save.safari = { balls: 7, steps: 123 };
+    tap(game, VOX_BTN.start);
+    expect((game.startMenu() as { safari: unknown }).safari).toEqual({ balls: 7, steps: 123 });
+  });
+
+  test.skipIf(!hasGen)("a wild encounter in the zone is the BALL/BAIT/ROCK game", () => {
+    const game = safariGame();
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 20));
+    game.save.safari = { balls: 30, steps: 400 };
+    game.overworld.setMap("SAFARI_ZONE_CENTER", 15, 20, "down");
+    game.pushStubBattle("NIDORAN_M", 22);
+    const b = (game.battleView() as { battle: any }).battle;
+    expect(b.isSafari).toBe(true);
+    // no mon is sent out, so the player's card and HUD stay hidden
+    expect(b.showPlayerBack).toBe(true);
+    const base = (romData!.pokemon as any).NIDORAN_M.catchRate;
+    expect(b.catchFactor).toBe(base);
+
+    // BAIT halves the working rate and starts it eating; ROCK doubles it
+    b.safariAction("bait");
+    expect(b.catchFactor).toBe(Math.floor(base / 2));
+    expect(b.baitFactor).toBeGreaterThan(0);
+    expect(b.escapeFactor).toBe(0);
+    b.safariAction("rock");
+    expect(b.catchFactor).toBe(Math.min(255, Math.floor(base / 2) * 2));
+    expect(b.escapeFactor).toBeGreaterThan(0);
+    expect(b.baitFactor).toBe(0); // each zeroes the other
+
+    // a ball comes out of the hunt's own supply
+    b.safariAction("ball");
+    expect(game.save.safari.balls).toBe(29);
+  });
+
+  test.skipIf(!hasGen)("the last ball ends the hunt, not just the battle", () => {
+    const game = safariGame();
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 20));
+    game.save.safari = { balls: 0, steps: 400 };
+    game.overworld.setMap("SAFARI_ZONE_CENTER", 15, 20, "down");
+    game.pushStubBattle("NIDORAN_M", 22);
+    const b = (game.battleView() as { battle: any }).battle;
+    // reaching the menu with no balls left is game over
+    let guard = 0;
+    while (!b.outOfBalls && guard++ < 900) game.tick(guard % 2 === 0 ? VOX_BTN.a : 0);
+    expect(b.outOfBalls).toBe(true);
+    guard = 0;
+    while (game.stackKinds().includes("battle") && guard++ < 1200) {
+      game.tick(guard % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    expect(game.save.safari).toBeNull();
+  });
+});
+
 describe("gym leaders", () => {
   /** map, leader text, class, roster, beat flag, badge, TM, got flag. */
   const GYMS: [string, string, string, number, string, string, string, string][] = [

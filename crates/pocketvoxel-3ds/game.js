@@ -2266,7 +2266,7 @@ out!`);
     this.act(() => {
       this.introBalls = false;
     });
-    if (!this.demo) {
+    if (this.sendsPlayerMon()) {
       this.queue.push({ wait: BATTLE_START_SENDOUT });
       this.queue.push({ wait: 18 });
       this.act(() => {
@@ -2317,6 +2317,12 @@ Get'm! ${name}!`;
   animationsOn() {
     return this.save.options?.animations !== false;
   }
+  safariMenu(_input) {
+    return false;
+  }
+  sendsPlayerMon() {
+    return !this.demo;
+  }
   startAnim(kind, side) {
     if (kind !== "faint" && !this.animationsOn())
       return 0;
@@ -2352,6 +2358,8 @@ Get'm! ${name}!`;
       return;
     }
     if (this.phase === "menu") {
+      if (this.safariMenu(input))
+        return;
       if (this.demo) {
         this.demoTimer += 1;
         if (this.demoTimer > DEMO_MENU_HOLD) {
@@ -3250,6 +3258,139 @@ $${money}!`);
     this.sayNext(`${this.trainerName} sent out
 ${next.species}!`);
     this.act(() => this.swapEnemy(next));
+  }
+}
+
+// voxelmon/game/battle/safari.ts
+class SafariBattle extends WildBattle {
+  isSafari = true;
+  safari;
+  catchFactor;
+  baitFactor = 0;
+  escapeFactor = 0;
+  outOfBalls = false;
+  constructor(data, save, rng, species, level, safari) {
+    super(data, save, rng, species, level);
+    this.safari = safari;
+    this.catchFactor = this.enemy.def.catchRate;
+  }
+  sendsPlayerMon() {
+    return false;
+  }
+  safariMenu(input) {
+    if (this.safari.balls <= 0) {
+      this.safariOutOfBalls();
+      return true;
+    }
+    let col = (this.menuIndex - 1) % 2;
+    let row = Math.floor((this.menuIndex - 1) / 2);
+    if (input.wasPressed("left"))
+      col = Math.max(0, col - 1);
+    else if (input.wasPressed("right"))
+      col = Math.min(1, col + 1);
+    else if (input.wasPressed("up"))
+      row = Math.max(0, row - 1);
+    else if (input.wasPressed("down"))
+      row = Math.min(1, row + 1);
+    this.menuIndex = row * 2 + col + 1;
+    if (input.wasPressed("a")) {
+      this.safariAction(["ball", "bait", "rock", "run"][this.menuIndex - 1]);
+    }
+    return true;
+  }
+  safariCatch() {
+    return attempt("SAFARI_BALL", this.enemy.mon, this.enemy.def, this.rng, this.catchFactor, { statuses: this.data.statuses });
+  }
+  safariAction(choice) {
+    this.phase = "messages";
+    this.afterQueue = "menu";
+    const name = this.save.player.name;
+    if (choice === "run") {
+      this.audioCues.push("sfx:Run");
+      this.say("Got away safely!");
+      this.result = "run";
+      this.afterQueue = "finish";
+      return;
+    }
+    if (choice === "ball") {
+      this.safari.balls -= 1;
+      this.sayAuto(`${name} used
+SAFARI BALL!`);
+      this.act(() => this.throwSafariBall());
+      return;
+    }
+    if (choice === "bait") {
+      this.say(`${name} threw
+some BAIT.`);
+      this.catchFactor = Math.floor(this.catchFactor / 2);
+      this.baitFactor = Math.min(255, this.baitFactor + this.rollFactor());
+      this.escapeFactor = 0;
+    } else {
+      this.say(`${name} threw a
+ROCK.`);
+      this.catchFactor = Math.min(255, this.catchFactor * 2);
+      this.escapeFactor = Math.min(255, this.escapeFactor + this.rollFactor());
+      this.baitFactor = 0;
+    }
+    this.act(() => this.safariEnemyTurn());
+  }
+  rollFactor() {
+    return 1 + this.rng.byte() % 5;
+  }
+  throwSafariBall() {
+    this.audioCues.push("sfx:Ball_Toss");
+    const [caught, shakes] = this.safariCatch();
+    this.ballChain(caught, shakes, "SAFARI_BALL");
+    if (caught) {
+      this.sayNext(`All right!
+${this.enemy.name} was
+caught!`);
+      this.act(() => this.storeCaughtMon());
+      return;
+    }
+    this.sayNext(this.ballMissMessage(shakes));
+    this.act(() => this.safariEnemyTurn());
+  }
+  safariEnemyTurn() {
+    if (this.baitFactor > 0) {
+      this.baitFactor -= 1;
+      this.sayNext(`Wild ${this.enemy.name}
+is eating!`);
+    } else if (this.escapeFactor > 0) {
+      this.escapeFactor -= 1;
+      if (this.escapeFactor === 0)
+        this.catchFactor = this.enemy.def.catchRate;
+      this.sayNext(`Wild ${this.enemy.name}
+is angry!`);
+    }
+    this.act(() => this.fleeCheck());
+  }
+  fleeCheck() {
+    const speed = this.enemy.mon.stats.speed % 256;
+    let fled = speed > 127;
+    if (!fled) {
+      let b = speed * 2 % 256;
+      if (this.baitFactor > 0)
+        b = Math.floor(b / 4);
+      if (this.escapeFactor > 0)
+        b = Math.min(255, b * 2);
+      fled = this.rng.byte() < b;
+    }
+    if (!fled)
+      return;
+    this.sayNext(`Wild ${this.enemy.name}
+ran!`);
+    this.audioCues.push("sfx:Run");
+    this.result = "run";
+    this.afterQueue = "finish";
+  }
+  safariOutOfBalls() {
+    this.outOfBalls = true;
+    this.say(`PA: You're out of
+SAFARI BALLs!`);
+    this.phase = "messages";
+    this.result = "run";
+    this.afterQueue = "finish";
   }
 }
 
@@ -4343,6 +4484,67 @@ class Player {
   }
 }
 
+// voxelmon/game/world/safari.ts
+var SAFARI_FEE = 500;
+var SAFARI_BALLS = 30;
+var SAFARI_STEPS = 502;
+var SAFARI_WALK_IN_STEPS = 2;
+var SAFARI_STEP_MAPS = new Set([
+  "SAFARI_ZONE_CENTER",
+  "SAFARI_ZONE_EAST",
+  "SAFARI_ZONE_NORTH",
+  "SAFARI_ZONE_WEST",
+  "SAFARI_ZONE_CENTER_REST_HOUSE",
+  "SAFARI_ZONE_EAST_REST_HOUSE",
+  "SAFARI_ZONE_NORTH_REST_HOUSE",
+  "SAFARI_ZONE_WEST_REST_HOUSE",
+  "SAFARI_ZONE_SECRET_HOUSE"
+]);
+var SAFARI_EXIT = { map: "SAFARI_ZONE_GATE", x: 4, y: 3, facing: "down" };
+var SAFARI_JOIN_CELLS = [[3, 2], [4, 2]];
+var SAFARI_RETURN_LEFT = [14, 25];
+var SAFARI_RETURN_RIGHT = [15, 25];
+function inSafariStepZone(mapId) {
+  return SAFARI_STEP_MAPS.has(mapId);
+}
+function safariJoinRows() {
+  return [
+    ["ask", "_SafariZoneGateSafariZoneWorker1WouldYouLikeToJoinText"],
+    ["jump_if_false", "decline"],
+    ["check_money", SAFARI_FEE],
+    ["jump_if_false", "broke"],
+    ["take_money", SAFARI_FEE],
+    ["safari_start"],
+    ["show_text", "_SafariZoneGateSafariZoneWorker1ThatllBe500PleaseText"],
+    ["show_text", "_SafariZoneGateSafariZoneWorker1CallYouOnThePAText"],
+    ["show_text", "_SafariZoneGateSafariZoneWorker1GoodLuckText"],
+    ["safari_walk_in"],
+    ["jump", "end"],
+    ["label", "broke"],
+    ["show_text", "_SafariZoneGateSafariZoneWorker1NotEnoughMoneyText"],
+    ["move_player", "down", 1],
+    ["jump", "end"],
+    ["label", "decline"],
+    ["show_text", "_SafariZoneGateSafariZoneWorker1PleaseComeAgainText"],
+    ["move_player", "down", 1]
+  ];
+}
+function safariLeavingRows(fromRightWarp) {
+  const back = fromRightWarp ? SAFARI_RETURN_RIGHT : SAFARI_RETURN_LEFT;
+  return [
+    ["ask", "_SafariZoneGateSafariZoneWorker1LeavingEarlyText"],
+    ["jump_if_false", "stay"],
+    ["show_text", "_SafariZoneGateSafariZoneWorker1ReturnSafariBallsText"],
+    ["show_text", "_SafariZoneGateSafariZoneWorker1GoodHaulComeAgainText"],
+    ["safari_end"],
+    ["move_player", "down", 3],
+    ["jump", "end"],
+    ["label", "stay"],
+    ["show_text", "_SafariZoneGateSafariZoneWorker1GoodLuckText"],
+    ["warp", "SAFARI_ZONE_CENTER", back[0], back[1], "up"]
+  ];
+}
+
 // voxelmon/game/world/mapscripts.ts
 function gymLeader(o) {
   const rows = [
@@ -4974,6 +5176,30 @@ var MAP_SCRIPTS = {
         tmText: ["_PewterGymReceivedTM34Text", "_TM34ExplanationText"],
         advice: "_PewterGymBrockPostBattleAdviceText"
       })
+    }
+  },
+  SAFARI_ZONE_GATE: {
+    talk: {
+      TEXT_SAFARIZONEGATE_SAFARI_ZONE_WORKER1: (_ow, save) => {
+        if (save?.safari) {
+          return [["show_text", "_SafariZoneGateSafariZoneWorker1GoodLuckText"]];
+        }
+        return [
+          ["face_player"],
+          ["show_text", "_SafariZoneGateSafariZoneWorker1Text"],
+          ...safariJoinRows()
+        ];
+      }
+    },
+    onStep: (ow, save) => {
+      const p = ow?.player;
+      const x = p?.cellX;
+      const y = p?.cellY;
+      if (save?.safari) {
+        return y !== undefined && y <= 1 ? safariLeavingRows(x !== 3) : null;
+      }
+      const at = SAFARI_JOIN_CELLS.some(([cx, cy]) => cx === x && cy === y);
+      return at ? safariJoinRows() : null;
     }
   },
   CERULEAN_GYM: {
@@ -5826,6 +6052,27 @@ function* open_mart(ctx, ...args) {
     yield;
   }
 }
+function* check_money(ctx, ...args) {
+  const save = ctx.world.save;
+  ctx.lastCheck = (save.money ?? 0) >= args[0];
+}
+function* take_money(ctx, ...args) {
+  const save = ctx.world.save;
+  save.money = Math.max(0, (save.money ?? 0) - args[0]);
+}
+function* safari_start(ctx) {
+  ctx.world.safariStart?.();
+}
+function* safari_end(ctx) {
+  ctx.world.safariEnd?.();
+}
+function* safari_walk_in(ctx) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  if (!w.safariWalkIn?.(() => runner.resume()))
+    return;
+  yield;
+}
 function* check_item(ctx, ...args) {
   const inv = ctx.world.save.inventory ?? {};
   ctx.lastCheck = (inv[args[0]] ?? 0) > 0;
@@ -5957,6 +6204,11 @@ var VERBS = {
   open_mart,
   walk_route,
   check_item,
+  check_money,
+  take_money,
+  safari_start,
+  safari_end,
+  safari_walk_in,
   take_item,
   clear_flag,
   check_dex_owned,
@@ -6679,7 +6931,52 @@ class Overworld {
   npcAtCell(cx, cy) {
     return this.npcs.find((npc) => !npc.hidden && (npc.cellX === cx && npc.cellY === cy || npc.targetX === cx && npc.targetY === cy));
   }
+  safariStart() {
+    this.save.safari = { balls: SAFARI_BALLS, steps: SAFARI_STEPS };
+  }
+  safariEnd() {
+    this.save.safari = null;
+  }
+  safariWalkIn(done) {
+    const p = this.player;
+    if (p.cellY !== 2)
+      return false;
+    const w = this.map.warpAtCell?.(p.cellX, 0);
+    if (!w)
+      return false;
+    this.scriptMove(p, "up", 2, () => {
+      const st = this.save.safari;
+      if (st)
+        st.steps -= SAFARI_WALK_IN_STEPS;
+      this.takeWarp(w.def);
+      done();
+    });
+    return true;
+  }
+  safariStep() {
+    const st = this.save.safari;
+    if (!st || !inSafariStepZone(this.map.id))
+      return false;
+    st.steps -= 1;
+    if (st.steps > 0)
+      return false;
+    this.safariGameOver("_TimesUpText");
+    return true;
+  }
+  safariGameOver(reasonText) {
+    this.save.safari = null;
+    this.shell.playOnce("Safari_Zone_PA");
+    const t = this.shell.data.text ?? {};
+    const reason = t[reasonText] ?? reasonText;
+    const over = t._GameOverText ?? `PA: Your SAFARI
+GAME is over!`;
+    this.shell.showText(`${reason}\f${over}`, () => {
+      this.startWarpTo(SAFARI_EXIT.map, SAFARI_EXIT.x, SAFARI_EXIT.y, SAFARI_EXIT.facing);
+    });
+  }
   onStepComplete() {
+    if (this.safariStep())
+      return;
     if (!this.runner.isRunning()) {
       const label3 = this.map?.id ?? "";
       const script = MAP_SCRIPTS[label3];
@@ -8057,11 +8354,28 @@ class Scene {
     }
     const sm = view.startMenu?.();
     if (sm) {
-      const sig = `${sm.index},${sm.entries.length}`;
+      const sf = sm.safari;
+      const sig = `${sm.index},${sm.entries.length},${sf ? `${sf.balls}/${sf.steps}` : ""}`;
       if (sig !== this.menuSig) {
         this.menuSig = sig;
         this.uiOwner = null;
         host.uiClear();
+        if (sf) {
+          const SW = 8, SH = 4;
+          host.uiTile(0, 0, BORDER_TL);
+          host.uiFill(1, 0, SW - 1, 1, BORDER_H);
+          host.uiTile(SW, 0, BORDER_TR);
+          host.uiFill(0, 1, 1, SH, BORDER_V);
+          host.uiFill(SW, 1, 1, SH, BORDER_V);
+          host.uiFill(1, 1, SW - 1, SH, SPACE);
+          host.uiTile(0, 1 + SH, BORDER_BL);
+          host.uiFill(1, 1 + SH, SW - 1, 1, BORDER_H);
+          host.uiTile(SW, 1 + SH, BORDER_BR);
+          this.stamp(host, 1, 1, "BALLS");
+          this.stamp(host, 2, 2, String(sf.balls));
+          this.stamp(host, 1, 3, "STEPS");
+          this.stamp(host, 2, 4, String(sf.steps));
+        }
         const W = 10, X = 20 - W - 1, Y = 0, H = sm.entries.length * 2;
         host.uiTile(X, Y, BORDER_TL);
         host.uiFill(X + 1, Y, W - 1, 1, BORDER_H);
@@ -8712,7 +9026,12 @@ class StartMenuState {
     }
   }
   view() {
-    return { entries: this.entries, index: this.index };
+    const s = this.game.save?.safari;
+    return {
+      entries: this.entries,
+      index: this.index,
+      safari: s ? { balls: s.balls, steps: s.steps } : null
+    };
   }
 }
 
@@ -8908,9 +9227,10 @@ function drawTopBar(host, title) {
     stampLight(host, Math.max(0, COLS - t.length - 1), 0, t);
 }
 var BATTLE_ACTIONS = ["FIGHT", "PKMN", "ITEM", "RUN"];
-function drawActionGrid(host, menuIndex, showCursor) {
+var SAFARI_ACTIONS = ["BALL", "BAIT", "ROCK", "RUN"];
+function drawActionGrid(host, menuIndex, showCursor, safari) {
   host.uiClearBottom();
-  drawTopBar(host, "BATTLE");
+  drawTopBar(host, safari ? `SAFARI BALLS ${safari.balls}` : "BATTLE");
   const cellW = 10;
   const cellH = 8;
   const colX = [0, 10];
@@ -8918,7 +9238,7 @@ function drawActionGrid(host, menuIndex, showCursor) {
   for (let i = 0;i < 4; i++) {
     const x0 = colX[i % 2];
     const y0 = rowY[i / 2 | 0];
-    const label3 = BATTLE_ACTIONS[i];
+    const label3 = (safari ? SAFARI_ACTIONS : BATTLE_ACTIONS)[i];
     const iw = cellW - 2;
     const lx = x0 + 1 + Math.max(0, Math.floor((iw - label3.length) / 2));
     const ly = y0 + Math.floor(cellH / 2);
@@ -9080,7 +9400,7 @@ function drawBattleGear(host, game, b) {
       drawItemList(host, game, b);
       return;
     case "menu":
-      drawActionGrid(host, b.menuIndex, true);
+      drawActionGrid(host, b.menuIndex, true, b.safari ?? null);
       return;
     default:
       drawBattleMessage(host, b);
@@ -10700,6 +11020,9 @@ class BattleGameState {
         b.caughtNewSpecies = null;
         this.game.showCaughtDexEntry(caught);
       }
+      if (b.outOfBalls) {
+        this.game.overworld.safariGameOver("_OutOfSafariBallsText");
+      }
       return;
       this.game.pop();
       if (b.finished === "lose")
@@ -11065,6 +11388,11 @@ ${item.name}!`);
 ${mname}!`);
   }
   pushStubBattle(species, level) {
+    const safari = this.save.safari;
+    if (safari && inSafariStepZone(this.overworld.map.id)) {
+      this.push(new BattleGameState(this, species, level, new SafariBattle(this.data, this.save, this.battleRng, species, level, safari)));
+      return;
+    }
     this.push(new BattleGameState(this, species, level));
   }
   uiBox() {

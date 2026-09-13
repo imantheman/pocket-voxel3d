@@ -18,6 +18,7 @@
 // the way upstream's do once that cutscene is over).
 
 import type { ScriptRow } from "./script.ts";
+import { SAFARI_JOIN_CELLS, safariJoinRows, safariLeavingRows } from "./safari.ts";
 
 /** A talk handler that builds its rows from live state, or null for none. */
 export type TalkFn = (ow: any, save: any) => ScriptRow[] | null;
@@ -949,6 +950,43 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
         tmText: ["_PewterGymReceivedTM34Text", "_TM34ExplanationText"],
         advice: "_PewterGymBrockPostBattleAdviceText",
       }),
+    },
+  },
+
+  // safari.lua M.SAFARI_ZONE_GATE (scripts/SafariZoneGate.asm). The worker
+  // is both a talk entry and a coord trigger: stepping onto the two cells in
+  // front of him arms the join prompt, which is what stops a player walking
+  // straight through to the north warps without paying.
+  //
+  // Coming BACK through those warps mid-game is the "Leaving early?" prompt.
+  // The port has no onEnter hook, so it rides the same onStep the join does —
+  // the arriving warp lands the player on row 0 or 1, above the trigger cells,
+  // and a game already being open is what tells the two apart.
+  SAFARI_ZONE_GATE: {
+    talk: {
+      TEXT_SAFARIZONEGATE_SAFARI_ZONE_WORKER1: (_ow: any, save: any) => {
+        if (save?.safari) {
+          return [["show_text", "_SafariZoneGateSafariZoneWorker1GoodLuckText"]] as ScriptRow[];
+        }
+        return [
+          ["face_player"],
+          ["show_text", "_SafariZoneGateSafariZoneWorker1Text"],
+          ...safariJoinRows(),
+        ] as ScriptRow[];
+      },
+    },
+    onStep: (ow: any, save: any) => {
+      const p = ow?.player;
+      const x = p?.cellX;
+      const y = p?.cellY;
+      if (save?.safari) {
+        // Back from the zone. The original hangs this on map ENTRY; this port
+        // has no onEnter, so it lands on the first step after the arrival —
+        // one step later, still before the player can reach the counter.
+        return y !== undefined && y <= 1 ? safariLeavingRows(x !== 3) : null;
+      }
+      const at = SAFARI_JOIN_CELLS.some(([cx, cy]) => cx === x && cy === y);
+      return at ? safariJoinRows() : null;
     },
   },
 
