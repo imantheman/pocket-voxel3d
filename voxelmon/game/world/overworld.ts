@@ -971,6 +971,13 @@ export class Overworld implements ScriptWorld {
     return bikeAllowed(this.map.id, this.map.def?.tileset, rules);
   }
 
+  /** oaks_aide -> the aide's dex check and reward, via the shell. */
+  openOaksAide(textId: string, onDone?: () => void): void {
+    (this.shell as unknown as {
+      openOaksAide?: (t: string, done?: () => void) => void;
+    }).openOaksAide?.(textId, onDone);
+  }
+
   /** open_bike_shop -> the BIKE SHOP clerk's flow, via the shell. */
   openBikeShop(onDone?: () => void): void {
     (this.shell as unknown as {

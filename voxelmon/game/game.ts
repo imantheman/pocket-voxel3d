@@ -50,6 +50,9 @@ import { OptionsMenuState } from "./ui/optionsmenu.ts";
 import { PrizeState } from "./ui/prizescreen.ts";
 import { SlotMachineState } from "./ui/slotmachine.ts";
 import { BikeShopState } from "./ui/bikeshop.ts";
+import {
+  countOwned, fillAideText, oaksAideFlag, OAKS_AIDES,
+} from "./world/oaksaide.ts";
 import { PRIZE_WINDOWS } from "./world/gamecorner.ts";
 import { gearViewStep } from "./ui/kantogear.ts";
 import { count as badgeCount } from "./rules/badges.ts";
@@ -966,6 +969,53 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       return [];
     }
     return this.overworld.picShown;
+  }
+
+  /**
+   * oaks_aide verb -> OaksAideScript (engine/events/oaks_aide.asm). He asks
+   * whether you have the kinds, then checks the DEX himself rather than
+   * taking your word for it, and reads the real tally back at you either
+   * way — which is why this is a flow and not script rows.
+   */
+  openOaksAide(textId: string, onDone?: () => void): void {
+    const post = OAKS_AIDES[textId];
+    if (!post) { onDone?.(); return; }
+    const t = (this.data as { text?: Record<string, string> }).text ?? {};
+    const line = (k: string, fallback: string): string => t[k] ?? fallback;
+    const itemName = this.data.items?.[post.item]?.name ?? post.item;
+    const flag = oaksAideFlag(post.item);
+    const fill = (k: string, fallback: string, num?: number): string =>
+      fillAideText(line(k, fallback), { num, item: itemName });
+
+    // Already paid out: he just explains the thing forever after.
+    if (this.save.flags?.[flag]) {
+      this.showText(fill(post.repeatText, `I gave you the\n${itemName}!`), onDone);
+      return;
+    }
+    this.showChoice(
+      fill("_OaksAideHiText", "Hi! Remember me?\nI'm PROF.OAK's\nAIDE!", post.threshold),
+      (yes) => {
+        if (!yes) {
+          this.showText(fill("_OaksAideComeBackText", "Oh. I see.", post.threshold), onDone);
+          return;
+        }
+        // He counts for himself — saying yes with eight kinds gets Uh-oh.
+        const owned = countOwned(this.save as never);
+        if (owned < post.threshold) {
+          this.showText(fill("_OaksAideUhOhText", "Let's see...\nUh-oh!", owned), onDone);
+          return;
+        }
+        if (!Bag.add(this.save, post.item, 1, this.data)) {
+          this.showText(fill("_OaksAideNoRoomText", "Oh! You have no\nroom for it."), onDone);
+          return;
+        }
+        this.save.flags[flag] = true;
+        this.audio.playSfx("Get_Key_Item");
+        this.showText(fill("_OaksAideHereYouGoText", "Great!\nHere you go!", owned), () => {
+          this.showText(fill("_OaksAideGotItemText", `{PLAYER} got the\n${itemName}!`), onDone);
+        });
+      },
+    );
   }
 
   /** ui/bikeshop.ts wants a sound for its own A/B, like every menu. */

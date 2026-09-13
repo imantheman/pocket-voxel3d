@@ -37,6 +37,7 @@ import { GameMap } from "../voxelmon/game/world/map.ts";
 import { martStock } from "../voxelmon/game/world/marts.ts";
 import { computeNeighbors } from "../voxelmon/game/world/overworld.ts";
 import { bikeAllowed, BIKE_SONG, effectiveMapSong } from "../voxelmon/game/world/bike.ts";
+import { fillAideText } from "../voxelmon/game/world/oaksaide.ts";
 import { daycareFee, learnMovesFromDayCare } from "../voxelmon/game/world/daycare.ts";
 import { paginate, Textbox } from "../voxelmon/game/world/textbox.ts";
 import { parseTape, TapePlayer, TapeStallError } from "../voxelmon/game/sim/tape.ts";
@@ -2429,5 +2430,191 @@ describe("the bike voucher, the bike shop and the bicycle", () => {
     game.overworld.setMap("BIKE_SHOP", 4, 4, "up");
     expect(game.save.onBike).toBe(false);
     expect(game.overworld.player.onBike).toBe(false);
+  });
+});
+
+describe("cut trees across a reload", () => {
+  /** A host that records every stamp op, so re-entry can be inspected. */
+  class StampHost extends MenuHost {
+    stamps: [number, number, number, number][] = [];
+    stamp(mapId: number, cx: number, cy: number, on: number): void {
+      this.stamps.push([mapId, cx, cy, on]);
+    }
+  }
+
+  function cutGame(): { game: VoxelmonGame; host: StampHost } {
+    const host = new StampHost();
+    const data = {
+      ...(romData as object),
+      cookedMaps: [
+        ...((romData as { cookedMaps?: string[] }).cookedMaps ?? []),
+        "VIRIDIAN_CITY", "ROUTE_2", "PALLET_TOWN",
+      ],
+    };
+    const game = new VoxelmonGame(data as never, host, 1);
+    game.newGame();
+    game.closeToOverworld();
+    return { game, host };
+  }
+
+  /** The first cuttable cell this map cooked, if it has one. */
+  function cuttable(game: VoxelmonGame, mapId: string): [number, number] | null {
+    game.overworld.setMap(mapId, 4, 4, "down");
+    const m = game.overworld.map;
+    for (let y = 0; y < m.heightCells; y++) {
+      for (let x = 0; x < m.widthCells; x++) {
+        if (m.isCuttableCell(x, y)) return [x, y];
+      }
+    }
+    return null;
+  }
+
+  test.skipIf(!hasGen)("a chopped tree is still gone after leaving and coming back", () => {
+    const { game, host } = cutGame();
+    const at = cuttable(game, "VIRIDIAN_CITY");
+    if (!at) return; // this build cooked no cuttable cells here
+    const [cx, cy] = at;
+    const index = game.overworld.map.def.index;
+
+    // chop it the way use_cut does
+    game.overworld.map.markCut(cx, cy);
+    game.save.cutTrees ??= {};
+    game.save.cutTrees.VIRIDIAN_CITY = { [`${cx},${cy}`]: true };
+
+    // leave and come back
+    game.overworld.setMap("PALLET_TOWN", 5, 6, "down");
+    host.stamps.length = 0;
+    game.overworld.setMap("VIRIDIAN_CITY", 4, 4, "down");
+
+    // the geometry is told to stay hidden...
+    expect(host.stamps).toContainEqual([index, cx, cy, 0]);
+    // ...and the cell stays walkable, so there is no invisible wall
+    expect(game.overworld.map.isCuttableCell(cx, cy)).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("and after a save/load round trip", () => {
+    const { game } = cutGame();
+    const at = cuttable(game, "VIRIDIAN_CITY");
+    if (!at) return;
+    const [cx, cy] = at;
+    game.save.cutTrees = { VIRIDIAN_CITY: { [`${cx},${cy}`]: true } };
+
+    const text = encodeSave(game.save as never);
+    const back = decodeSave(text) as { cutTrees?: Record<string, Record<string, boolean>> };
+    expect(back.cutTrees?.VIRIDIAN_CITY?.[`${cx},${cy}`]).toBe(true);
+  });
+});
+
+describe("Oak's aides", () => {
+  function aideGame(): VoxelmonGame {
+    const data = {
+      ...(romData as object),
+      cookedMaps: [
+        ...((romData as { cookedMaps?: string[] }).cookedMaps ?? []),
+        "ROUTE_2_GATE", "ROUTE_11_GATE_2F", "ROUTE_15_GATE_2F",
+      ],
+    };
+    const game = new VoxelmonGame(data as never, new MenuHost(), 1);
+    game.newGame();
+    game.closeToOverworld();
+    return game;
+  }
+
+  /** Own `n` distinct species, the only thing he actually counts. */
+  function own(game: VoxelmonGame, n: number): void {
+    const ids = Object.keys(game.data.pokemon).slice(0, n);
+    const dex = ((game.save as { pokedex?: { owned?: Record<string, boolean> } }).pokedex ??=
+      {}) as { owned?: Record<string, boolean> };
+    dex.owned = {};
+    for (const id of ids) dex.owned[id] = true;
+  }
+
+  /** Talk to him, answering his question. Returns every line he showed. */
+  function talkAide(game: VoxelmonGame, map: string, text: string, yes: boolean): string {
+    game.overworld.setMap(map, 4, 4, "up");
+    game.overworld.showMapText(text);
+    const runner = (game.overworld as unknown as { runner: { isRunning(): boolean } }).runner;
+    const said: string[] = [];
+    let answered = false;
+    for (let i = 0; i < 1500; i++) {
+      const top = game.stackKinds().at(-1);
+      if (top === "choice" && !answered) {
+        if (!yes) tap(game, VOX_BTN.down);
+        tap(game, VOX_BTN.a);
+        answered = true;
+        continue;
+      }
+      const src = game.uiBox() as { box?: { pages?: { lines: string[] }[] } } | null;
+      const pages = src?.box?.pages;
+      if (pages?.length) {
+        const t = pages.map((pg) => pg.lines.join(" ")).join(" ");
+        if (said.at(-1) !== t) said.push(t);
+      }
+      if (top === "overworld" && !runner.isRunning()) break;
+      dismissText(game);
+      game.tick(0);
+    }
+    return said.join(" | ");
+  }
+
+  test.skipIf(!hasGen)("ten kinds earns HM05 FLASH, once", () => {
+    const game = aideGame();
+    own(game, 10);
+    const said = talkAide(game, "ROUTE_2_GATE", "TEXT_ROUTE2GATE_OAKS_AIDE", true);
+    expect(game.save.inventory.HM_FLASH).toBe(1);
+    expect(game.save.flags.EVENT_GOT_HM_FLASH).toBe(true);
+    // the tally he reads back is the real one, not the {NUM:} placeholder
+    expect(said).toContain("10");
+    expect(said).not.toContain("{NUM");
+    expect(said).not.toContain("{RAM");
+
+    // coming back gets the explanation, not a second copy
+    const again = talkAide(game, "ROUTE_2_GATE", "TEXT_ROUTE2GATE_OAKS_AIDE", true);
+    expect(game.save.inventory.HM_FLASH).toBe(1);
+    expect(again).toContain("darkest dungeons");
+  });
+
+  test.skipIf(!hasGen)("he counts for himself, so claiming ten with nine fails", () => {
+    const game = aideGame();
+    own(game, 9);
+    const said = talkAide(game, "ROUTE_2_GATE", "TEXT_ROUTE2GATE_OAKS_AIDE", true);
+    expect(game.save.inventory.HM_FLASH ?? 0).toBe(0);
+    expect(game.save.flags.EVENT_GOT_HM_FLASH ?? false).toBe(false);
+    expect(said).toContain("Uh-oh"); // _OaksAideUhOhText, with the real 9
+    expect(said).toContain("9");
+  });
+
+  test.skipIf(!hasGen)("saying no just sends you away, with the reward intact", () => {
+    const game = aideGame();
+    own(game, 30);
+    talkAide(game, "ROUTE_2_GATE", "TEXT_ROUTE2GATE_OAKS_AIDE", false);
+    expect(game.save.inventory.HM_FLASH ?? 0).toBe(0);
+    // and it is still there when you come back and say yes
+    talkAide(game, "ROUTE_2_GATE", "TEXT_ROUTE2GATE_OAKS_AIDE", true);
+    expect(game.save.inventory.HM_FLASH).toBe(1);
+  });
+
+  test.skipIf(!hasGen)("the other two posts want 30 and 50, for their own rewards", () => {
+    const game = aideGame();
+    own(game, 30);
+    talkAide(game, "ROUTE_11_GATE_2F", "TEXT_ROUTE11GATE2F_OAKS_AIDE", true);
+    expect(game.save.inventory.ITEMFINDER).toBe(1);
+    // 30 is not enough for the Route 15 aide
+    talkAide(game, "ROUTE_15_GATE_2F", "TEXT_ROUTE15GATE2F_OAKS_AIDE", true);
+    expect(game.save.inventory.EXP_ALL ?? 0).toBe(0);
+
+    own(game, 50);
+    talkAide(game, "ROUTE_15_GATE_2F", "TEXT_ROUTE15GATE2F_OAKS_AIDE", true);
+    expect(game.save.inventory.EXP_ALL).toBe(1);
+  });
+
+  test("the placeholders his lines carry are all filled", () => {
+    expect(fillAideText("caught {NUM:hOaksAideNumMonsOwned, 1, 3} kinds", { num: 7 }))
+      .toBe("caught 7 kinds");
+    expect(fillAideText("the {RAM:wOaksAideRewardItemName}!", { item: "HM05" }))
+      .toBe("the HM05!");
+    // {PLAYER} is the textbox's own token and must survive untouched
+    expect(fillAideText("{PLAYER} got the {RAM:x}!", { item: "HM05" }))
+      .toBe("{PLAYER} got the HM05!");
   });
 });

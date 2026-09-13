@@ -564,6 +564,21 @@ function* open_prizes(ctx: ScriptContext, ...args: unknown[]): Generator<void, v
 }
 
 /**
+ * Oak's aide (engine/events/oaks_aide.asm). He reads the real dex tally back
+ * into his own lines, which script rows cannot fill, so the flow is on the
+ * game side (game.ts openOaksAide). args: [the aide's TEXT_* id].
+ */
+function* oaks_aide(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const runner = ctx.runner;
+  const w = ctx.world as unknown as {
+    openOaksAide?: (textId: string, done: () => void) => void;
+  };
+  if (!w.openOaksAide) return;
+  w.openOaksAide(args[0] as string, () => runner.resume());
+  yield;
+}
+
+/**
  * The BIKE SHOP clerk (scripts/BikeShop.asm). Three branches, one of which
  * opens a menu the clerk keeps talking under, so the whole thing lives on
  * the game side (game.ts openBikeShop).
@@ -836,6 +851,7 @@ const VERBS: Record<string, Verb> = {
   open_prizes,
   open_daycare,
   open_bike_shop,
+  oaks_aide,
   safari_start,
   safari_end,
   take_guard_drink,

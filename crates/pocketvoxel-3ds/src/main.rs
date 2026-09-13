@@ -1623,12 +1623,14 @@ fn main() {
     /// rather than holds.
     let mut prev_map_i = usize::MAX;
     let mut stream_center_chunk: Option<(i32, i32)> = None;
-    // Snapshot of Scene.stamps_off.len() as of the last build_map — a cut
-    // tree or the S.S. Anne hull toggling a stamp only mutates Scene state;
-    // nothing else would ever tell this flat-buffer terrain path to rebuild.
-    // Length-only is enough for every current caller (mapscripts.ts only
-    // ever turns stamps OFF, never back on, within one map visit).
-    let mut stamps_off_n: usize = 0;
+    // Snapshot of Scene.stamps_off as of the last build_map — a cut tree or
+    // the S.S. Anne hull toggling a stamp only mutates Scene state; nothing
+    // else would ever tell this flat-buffer terrain path to rebuild.
+    //
+    // The whole list, not its length: re-entering a map replays its cuts,
+    // and the op handler removes-then-reappends each key, so the length is
+    // an unreliable witness (see the comparison below).
+    let mut stamps_off_seen: Vec<(u32, i16, i16)> = Vec::new();
     // Snapshot of scene.tint as of the last build_map — see build_map's
     // `tint` param doc: HM Flash changes this mid-visit and needs the same
     // kind of externally-triggered rebuild as a stamp toggle.
@@ -1683,12 +1685,26 @@ fn main() {
     // 1.5x faster makes the song run at the right tempo.
     // Measured on hardware: the pump delivers ~11,224 frames/sec, so the
     // channel must consume at the rate we actually render.
-    const AUDIO_RATE: i32 = 11025;
-    // audio.rs: the synth advances by exactly the frames you ask for, so a
-    // tick must render one tick's worth (11025/60, rounded up) or the music
-    // stretches.
-    const AUDIO_FRAMES_PER_TICK: i32 = 184;
-    const AUDIO_BUF: i32 = AUDIO_FRAMES_PER_TICK * 3;
+    // 22050, the next rate up that audio.rs accepts (it interprets every
+    // program's sample spans against this, and requires a divisor of 44100 —
+    // AUDIO_RATES is [44100, 22050, 11025]).
+    //
+    // 11025 was the reason the whole game sounded muffled: Nyquist at 5.5kHz
+    // cuts into the range a GB square wave actually occupies, so its
+    // harmonics fold back as grit instead of ringing. 22050 doubles that
+    // headroom. Not 44100: NDSP's own channel runs at 32728Hz, so 44100 has
+    // to be resampled DOWN to reach it (aliasing again, at four times the
+    // synth cost), while 22050 is resampled up, which linear interpolation
+    // handles cleanly.
+    const AUDIO_RATE: i32 = 22050;
+    // 22050/60 is 367.5, so no whole number of frames is a tick. Rounding up
+    // every tick over-produces by 0.14%, which is what made the queue creep
+    // ahead of the DSP until something had to be dropped; the loop carries
+    // the half-frame instead and alternates 367/368.
+    const AUDIO_FRAMES_PER_TICK: i32 = (AUDIO_RATE + 59) / 60;
+    // Each wave buffer holds exactly one tick (audio_3ds.c sizes NBUF of
+    // them), so the queue depth is counted in ticks of slack, not samples.
+    const AUDIO_BUF: i32 = AUDIO_FRAMES_PER_TICK;
     // pocketvoxel-psp/src/main.rs:289 — the synth has its own output rate
     // and defaults high; without this it renders a fraction of a tick's
     // song per call and the music drags.
@@ -1702,6 +1718,9 @@ fn main() {
     let mut frame_start: u64 = 0;
     let mut aud_ticks: u32 = 0;
     let mut aud_queued: u32 = 0;
+    let mut aud_dropped: u32 = 0;
+    /// Leftover sixtieths of a frame, so the long-run rate is exact.
+    let mut aud_rem: i32 = 0;
     let mut sim_acc: f32 = 0.0;
     let mut sim_last: u64 = 0;
     let mut fps_frames: u32 = 0;
@@ -1794,7 +1813,17 @@ fn main() {
             let now = unsafe { osGetTime() };
             if fps_last == 0 { fps_last = now; }
             if now.wrapping_sub(fps_last) >= 1000 {
-                fps_frames = 0; aud_ticks = 0; aud_queued = 0; fps_last = now;
+                // Silent while the audio is keeping up; one line a second
+                // the moment it is not, so a click has a number behind it
+                // rather than being reported as "it sounds weird".
+                if aud_dropped > 0 {
+                    println!(
+                        "audio: {} tick(s) dropped of {} ({} frames queued), {} fps",
+                        aud_dropped, aud_ticks, aud_queued, fps_frames,
+                    );
+                }
+                fps_frames = 0; aud_ticks = 0; aud_queued = 0; aud_dropped = 0;
+                fps_last = now;
             }
         }
         if d.contains(KeyPad::START) && k.contains(KeyPad::SELECT) { break; }
@@ -1914,11 +1943,20 @@ fn main() {
                     // advancing at half speed.
                     voxel::scene().tick();
                     if audio_on {
-                        let want = AUDIO_FRAMES_PER_TICK as usize;
+                        // Exactly rate/60 frames per tick on average: carry
+                        // the leftover sixtieths rather than rounding up
+                        // every time (see AUDIO_FRAMES_PER_TICK).
+                        aud_rem += AUDIO_RATE % 60;
+                        let mut want = (AUDIO_RATE / 60) as usize;
+                        if aud_rem >= 60 { aud_rem -= 60; want += 1; }
                         voxel::scene().render_audio(pak_static, want, &mut pcm);
                         let got = audio3ds_queue(pcm.as_ptr(), want as i32);
                         aud_ticks += 1;
                         aud_queued += got as u32;
+                        // A tick the synth rendered and the queue refused is
+                        // a hole in the music. Counted so the HUD line says
+                        // so instead of it being a mystery click.
+                        if got == 0 { aud_dropped += 1; }
                     }
                 }
                 if failed {
@@ -1943,19 +1981,22 @@ fn main() {
                             }
                         }
                     }
-                    // The guest owns which map you're standing in (mapShow).
-                    let slot = &sc.maps[0];
-                    if slot.shown {
-                        let want = slot.map_id;
-                        if map_ids.get(map_i).copied() != Some(want) {
-                            if let Some(ix) = map_ids.iter().position(|&m| m == want) {
-                                map_i = ix;
-                                reload = true;
-                            }
-                        }
-                    }
-                    if sc.stamps_off.len() != stamps_off_n {
-                        stamps_off_n = sc.stamps_off.len();
+                    // (a second, identical map-switch block used to sit here;
+                    // it could never fire, the one above having already moved
+                    // map_i to `want`.)
+                    // Stamps: compare the SET, not its size. Re-entering a
+                    // map replays every cut this save recorded, and the op
+                    // handler removes-then-reappends each key — so the list
+                    // comes out the same length with different contents, and
+                    // a length check calls that "no change". Any rebuild the
+                    // map switch itself did not already force would be
+                    // skipped and the chopped trees would grow back.
+                    //
+                    // Not consumed here either: the build below can bail out
+                    // (a pak that would not load), and eating the change on
+                    // the way past would leave nothing to re-trigger it.
+                    // build_map's own snapshot is what marks it done.
+                    if sc.stamps_off != stamps_off_seen {
                         reload = true;
                     }
                     if sc.tint != last_tint {
@@ -2037,7 +2078,7 @@ fn main() {
             let player_px = if guest_drive { Some((center[0], center[2])) } else { None };
             let scene_now = unsafe { voxel::scene() };
             let stamps_off_snapshot: Vec<(u32, i16, i16)> = scene_now.stamps_off.clone();
-            stamps_off_n = stamps_off_snapshot.len();
+            stamps_off_seen = stamps_off_snapshot.clone();
             last_tint = scene_now.tint;
             // Which sides a neighbour will be drawn on, read from the slots
             // the guest already publishes. Needed BEFORE build_map so the

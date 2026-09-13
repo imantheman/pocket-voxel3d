@@ -1326,6 +1326,40 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     },
   },
 
+  // story4.lua's oaksAide (engine/events/oaks_aide.asm): one routine, three
+  // posts. Each checks the DEX for kinds owned and hands over its reward
+  // once — 10 kinds for HM05 FLASH, 30 for the ITEMFINDER, 50 for EXP.ALL.
+  // The thresholds and rewards live in world/oaksaide.ts, keyed by these
+  // same TEXT_* ids.
+  ROUTE_2_GATE: {
+    talk: {
+      TEXT_ROUTE2GATE_OAKS_AIDE: [
+        ["face_player"],
+        ["oaks_aide", "TEXT_ROUTE2GATE_OAKS_AIDE"],
+      ],
+      TEXT_ROUTE2GATE_YOUNGSTER: [
+        ["face_player"],
+        ["show_text", "_Route2GateYoungsterText"],
+      ],
+    },
+  },
+  ROUTE_11_GATE_2F: {
+    talk: {
+      TEXT_ROUTE11GATE2F_OAKS_AIDE: [
+        ["face_player"],
+        ["oaks_aide", "TEXT_ROUTE11GATE2F_OAKS_AIDE"],
+      ],
+    },
+  },
+  ROUTE_15_GATE_2F: {
+    talk: {
+      TEXT_ROUTE15GATE2F_OAKS_AIDE: [
+        ["face_player"],
+        ["oaks_aide", "TEXT_ROUTE15GATE2F_OAKS_AIDE"],
+      ],
+    },
+  },
+
   // story2.lua M.BIKE_SHOP + flavor/bike_shop.lua (scripts/BikeShop.asm).
   // The clerk's three branches and his price window are in game.ts
   // openBikeShop; the other two are plain flavour.

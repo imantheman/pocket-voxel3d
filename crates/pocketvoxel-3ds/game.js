@@ -5643,6 +5643,34 @@ var MAP_SCRIPTS = {
       TEXT_GAMECORNERPRIZEROOM_PRIZE_VENDOR_3: prizeCounterRows(3)
     }
   },
+  ROUTE_2_GATE: {
+    talk: {
+      TEXT_ROUTE2GATE_OAKS_AIDE: [
+        ["face_player"],
+        ["oaks_aide", "TEXT_ROUTE2GATE_OAKS_AIDE"]
+      ],
+      TEXT_ROUTE2GATE_YOUNGSTER: [
+        ["face_player"],
+        ["show_text", "_Route2GateYoungsterText"]
+      ]
+    }
+  },
+  ROUTE_11_GATE_2F: {
+    talk: {
+      TEXT_ROUTE11GATE2F_OAKS_AIDE: [
+        ["face_player"],
+        ["oaks_aide", "TEXT_ROUTE11GATE2F_OAKS_AIDE"]
+      ]
+    }
+  },
+  ROUTE_15_GATE_2F: {
+    talk: {
+      TEXT_ROUTE15GATE2F_OAKS_AIDE: [
+        ["face_player"],
+        ["oaks_aide", "TEXT_ROUTE15GATE2F_OAKS_AIDE"]
+      ]
+    }
+  },
   BIKE_SHOP: {
     talk: {
       TEXT_BIKESHOP_CLERK: [["face_player"], ["open_bike_shop"]],
@@ -6383,6 +6411,14 @@ function* open_prizes(ctx, ...args) {
   w.openPrizes(args[0], () => runner.resume());
   yield;
 }
+function* oaks_aide(ctx, ...args) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  if (!w.openOaksAide)
+    return;
+  w.openOaksAide(args[0], () => runner.resume());
+  yield;
+}
 function* open_bike_shop(ctx) {
   const runner = ctx.runner;
   const w = ctx.world;
@@ -6564,6 +6600,7 @@ var VERBS = {
   open_prizes,
   open_daycare,
   open_bike_shop,
+  oaks_aide,
   safari_start,
   safari_end,
   take_guard_drink,
@@ -7307,6 +7344,9 @@ any coins!`);
   canRideHere() {
     const rules = this.shell.data.field?.bikeRiding;
     return bikeAllowed(this.map.id, this.map.def?.tileset, rules);
+  }
+  openOaksAide(textId, onDone) {
+    this.shell.openOaksAide?.(textId, onDone);
   }
   openBikeShop(onDone) {
     this.shell.openBikeShop?.(onDone);
@@ -10335,6 +10375,39 @@ class BikeShopState {
   }
 }
 
+// voxelmon/game/world/oaksaide.ts
+var OAKS_AIDES = {
+  TEXT_ROUTE2GATE_OAKS_AIDE: {
+    threshold: 10,
+    item: "HM_FLASH",
+    repeatText: "_Route2GateOaksAideFlashExplanationText"
+  },
+  TEXT_ROUTE11GATE2F_OAKS_AIDE: {
+    threshold: 30,
+    item: "ITEMFINDER",
+    repeatText: "_Route11Gate2FOaksAideItemfinderDescriptionText"
+  },
+  TEXT_ROUTE15GATE2F_OAKS_AIDE: {
+    threshold: 50,
+    item: "EXP_ALL",
+    repeatText: "_Route15Gate2FOaksAideExpAllText"
+  }
+};
+function oaksAideFlag(item) {
+  return `EVENT_GOT_${item}`;
+}
+function countOwned(save) {
+  const owned = save.pokedex?.owned ?? {};
+  let n = 0;
+  for (const k in owned)
+    if (owned[k])
+      n += 1;
+  return n;
+}
+function fillAideText(text, subs) {
+  return text.replace(/\{NUM:[^}]*\}/g, () => String(subs.num ?? "")).replace(/\{RAM:[^}]*\}/g, () => subs.item ?? "");
+}
+
 // voxelmon/game/ui/kantogear.ts
 var COLS = 20;
 var ROWS = 18;
@@ -12679,6 +12752,49 @@ ${mname}!`);
       return [];
     }
     return this.overworld.picShown;
+  }
+  openOaksAide(textId, onDone) {
+    const post = OAKS_AIDES[textId];
+    if (!post) {
+      onDone?.();
+      return;
+    }
+    const t = this.data.text ?? {};
+    const line = (k, fallback) => t[k] ?? fallback;
+    const itemName = this.data.items?.[post.item]?.name ?? post.item;
+    const flag = oaksAideFlag(post.item);
+    const fill = (k, fallback, num) => fillAideText(line(k, fallback), { num, item: itemName });
+    if (this.save.flags?.[flag]) {
+      this.showText(fill(post.repeatText, `I gave you the
+${itemName}!`), onDone);
+      return;
+    }
+    this.showChoice(fill("_OaksAideHiText", `Hi! Remember me?
+I'm PROF.OAK's
+AIDE!`, post.threshold), (yes) => {
+      if (!yes) {
+        this.showText(fill("_OaksAideComeBackText", "Oh. I see.", post.threshold), onDone);
+        return;
+      }
+      const owned = countOwned(this.save);
+      if (owned < post.threshold) {
+        this.showText(fill("_OaksAideUhOhText", `Let's see...
+Uh-oh!`, owned), onDone);
+        return;
+      }
+      if (!add(this.save, post.item, 1, this.data)) {
+        this.showText(fill("_OaksAideNoRoomText", `Oh! You have no
+room for it.`), onDone);
+        return;
+      }
+      this.save.flags[flag] = true;
+      this.audio.playSfx("Get_Key_Item");
+      this.showText(fill("_OaksAideHereYouGoText", `Great!
+Here you go!`, owned), () => {
+        this.showText(fill("_OaksAideGotItemText", `{PLAYER} got the
+${itemName}!`), onDone);
+      });
+    });
   }
   playSfx(name) {
     this.audio.playSfx(name);
