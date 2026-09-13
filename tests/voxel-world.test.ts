@@ -743,3 +743,112 @@ describe("dev menu", () => {
     expect(game.save.inventory.RARE_CANDY).toBe(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// talking to a trainer, and the trainer card
+// ---------------------------------------------------------------------------
+
+/** The full text of the textbox on top, pages joined. */
+function topText(game: VoxelmonGame): string {
+  const top = game.top() as unknown as { box?: { pages: { lines: string[] }[] } };
+  return (top.box?.pages ?? []).map((p) => p.lines.join(" ")).join(" ");
+}
+
+/** Stand next to `npc` facing it, then press A. */
+function talkTo(game: VoxelmonGame, npc: any): void {
+  const p = game.overworld.player;
+  p.cellX = npc.cellX;
+  p.cellY = npc.cellY + 1;
+  p.facing = "up";
+  game.overworld.interact();
+}
+
+describe("talking to a trainer", () => {
+  test.skipIf(!hasGen)("challenges them: before-battle text, then the fight", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    ow.setMap("ROUTE_3", 11, 6, "down");
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 5));
+    const npc = ow.npcs.find((n: any) => n.def.trainerClass);
+    expect(npc).toBeDefined();
+
+    talkTo(game, npc);
+    // TalkToTrainer prints the line FIRST, then starts the battle
+    expect(game.stackKinds().at(-1)).toBe("textbox");
+    const header = (romData!.trainer_headers as any).Route3[String(npc!.def.index)];
+    expect(topText(game)).toBe((romData!.text as any)[header.battle].replace(/\n|\f|\x0b/g, " "));
+    dismissText(game);
+    expect(game.stackKinds().at(-1)).toBe("battle");
+  });
+
+  test.skipIf(!hasGen)("a beaten trainer says their after-battle line instead", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    ow.setMap("ROUTE_3", 11, 6, "down");
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 5));
+    const npc = ow.npcs.find((n: any) => n.def.trainerClass)!;
+    const header = (romData!.trainer_headers as any).Route3[String(npc.def.index)];
+    game.save.flags[header.event] = true;
+
+    talkTo(game, npc);
+    expect(game.stackKinds().at(-1)).toBe("textbox");
+    expect(topText(game)).toBe((romData!.text as any)[header.after].replace(/\n|\f|\x0b/g, " "));
+  });
+
+  test.skipIf(!hasGen)("the Game Corner Rocket has a line despite having no header", () => {
+    // He is a text_asm trainer: no def_trainers header, so header.battle is
+    // undefined and the taunt has to come from his own TEXT_* constant.
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    ow.setMap("GAME_CORNER", 9, 7, "up");
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 5));
+    expect((romData!.trainer_headers as any).GameCorner).toBeUndefined();
+    const npc = ow.findNpc("GAMECORNER_ROCKET");
+    expect(npc).toBeDefined();
+
+    ow.engageTrainer(npc!);
+    expect(game.stackKinds().at(-1)).toBe("textbox");
+    expect(topText(game)).toContain("guarding this");
+  });
+});
+
+describe("trainer card", () => {
+  test.skipIf(!hasGen)("shows the name, money, time and the badge slots", () => {
+    const game = makeMenuGame();
+    game.save.money = 1234;
+    game.save.playTime = 3 * 3600 + 7 * 60 + 45;
+    game.save.inventory.BOULDERBADGE = 1;
+    game.save.inventory.SOULBADGE = 1;
+
+    tap(game, VOX_BTN.start);
+    const sm = game.startMenu() as { entries: string[] };
+    pick(game, sm.entries.indexOf("RED")); // the player-name entry
+    expect(game.stackKinds().at(-1)).toBe("trainercard");
+
+    const card = game.trainerCard() as {
+      name: string; money: number; time: string;
+      badges: { n: number; name: string; owned: boolean }[];
+    };
+    expect(card.name).toBe("RED");
+    expect(card.money).toBe(1234);
+    expect(card.time).toBe("3:07");
+    expect(card.badges).toHaveLength(8);
+    expect(card.badges[0]).toEqual({ n: 1, name: "BOULDER", owned: true });
+    expect(card.badges[1]).toEqual({ n: 2, name: "CASCADE", owned: false });
+    expect(card.badges[4]).toEqual({ n: 5, name: "SOUL", owned: true });
+    // either button closes it, back to the start menu with its cursor kept
+    tap(game, VOX_BTN.b);
+    expect(game.stackKinds().at(-1)).toBe("startmenu");
+  });
+
+  test.skipIf(!hasGen)("play time accrues a second per 60 ticks", () => {
+    const game = makeMenuGame();
+    expect(game.save.playTime).toBeUndefined(); // lazily created, as in the Lua
+    for (let i = 0; i < 60; i++) game.tick(0);
+    expect(game.save.playTime).toBe(1);
+    for (let i = 0; i < 59; i++) game.tick(0);
+    expect(game.save.playTime).toBe(1);
+    game.tick(0);
+    expect(game.save.playTime).toBe(2);
+  });
+});

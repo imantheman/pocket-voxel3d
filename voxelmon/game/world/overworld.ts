@@ -747,6 +747,33 @@ export class Overworld implements ScriptWorld {
     const unfreeze = () => {
       npc.frozen = false;
     };
+    // home/trainers.asm TalkToTrainer, via OverworldController.lua:2653-2666:
+    // walking up to a trainer and pressing A is a challenge, not small talk —
+    // before-battle line, then the fight. Without this only the sight line
+    // could start a battle, which left every range-0 trainer (the Elite Four,
+    // Mt Moon's Super Nerd, the Rocket Hideout floors) unfightable.
+    //
+    // A trainer whose text has its own talk script (the rival, the gym
+    // leaders, the Game Corner Rocket) keeps it: the script owns the engage,
+    // exactly as checkTrainerSight already skips those.
+    const def = npc.def;
+    if (def.trainerClass && !talkScript(this.map.id, def.text)) {
+      if (!this.trainerDefeated(npc)) {
+        npc.facePlayer(this.player);
+        this.engageTrainer(npc, unfreeze);
+        return;
+      }
+      // Beaten: the after-battle line, the one a trainer repeats forever.
+      const key = this.trainerHeader(npc)?.after;
+      const after = key
+        ? (this.shell.data as { text?: Record<string, string> }).text?.[key]
+        : undefined;
+      if (after) {
+        npc.facePlayer(this.player);
+        this.shell.showText(after, unfreeze);
+        return;
+      }
+    }
     this.showMapText(npc.def.text, npc, unfreeze);
   }
 
@@ -1175,9 +1202,11 @@ export class Overworld implements ScriptWorld {
   // engine/overworld/trainer_sight.asm): a STAY trainer with a facing spots
   // the player on its line of sight, fires "!", walks up, and battles. ---
 
-  private trainerHeader(npc: NPC): { range?: number; event?: string; battle?: string } | undefined {
+  private trainerHeader(
+    npc: NPC,
+  ): { range?: number; event?: string; battle?: string; after?: string } | undefined {
     const headers = this.shell.data.trainer_headers as
-      | Record<string, Record<string, { range?: number; event?: string; battle?: string }>>
+      | Record<string, Record<string, { range?: number; event?: string; battle?: string; after?: string }>>
       | undefined;
     return headers?.[this.map.def.label]?.[npc.def.index];
   }
@@ -1206,12 +1235,22 @@ export class Overworld implements ScriptWorld {
           onDone?.();
         },
       );
-    const key = header?.battle;
-    const taunt = key
-      ? (this.shell.data as { text?: Record<string, string> }).text?.[key]
-      : undefined;
+    const taunt = this.beforeBattleText(npc, header?.battle);
     if (taunt) this.showText(taunt, launch);
     else launch();
+  }
+
+  /**
+   * The line a trainer says before the battle. header.battle when the
+   * extractor found a def_trainers header, and otherwise the object's OWN
+   * TEXT_* constant (OverworldController.lua:3030-3035) — a text_asm trainer
+   * like the Game Corner Rocket has no header at all, so without the fallback
+   * he walks you into the battle in silence.
+   */
+  private beforeBattleText(npc: NPC, key: string | undefined): string | null {
+    const texts = (this.shell.data as { text?: Record<string, string> }).text;
+    const keyed = key ? texts?.[key] : undefined;
+    return keyed ?? this.resolveText(npc.def.text);
   }
 
   checkTrainerSight(): void {
@@ -1260,10 +1299,7 @@ export class Overworld implements ScriptWorld {
         });
       // TalkToTrainer prints the before-battle text FIRST, then StartTrainerBattle
       // (home/trainers.asm:88). header.battle -> data.text key.
-      const key = header?.battle;
-      const taunt = key
-        ? (this.shell.data as { text?: Record<string, string> }).text?.[key]
-        : undefined;
+      const taunt = this.beforeBattleText(npc, header?.battle);
       if (taunt) this.showText(taunt, launch);
       else launch();
     };

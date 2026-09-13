@@ -40,6 +40,7 @@ import { NamingState } from "./ui/naming.ts";
 import { TitleState, TITLE_PAGES } from "./ui/title.ts";
 import { StartMenuState } from "./ui/startmenu.ts";
 import { DevMenuState } from "./ui/devmenu.ts";
+import { TrainerCardState } from "./ui/trainercard.ts";
 import { WarpPickerState } from "./ui/warppicker.ts";
 import { MoveForgetState } from "./ui/moveforget.ts";
 import { BagState } from "./ui/bagscreen.ts";
@@ -523,6 +524,24 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     this.overworld.startWarpTo(targetId, dw?.x ?? 4, dw?.y ?? 4, "down");
   }
 
+  /** Frames since save.playTime last ticked over; never persisted. */
+  private playTimeFrames = 0;
+
+  /**
+   * save.playTime, the trainer card's TIME field. gen1recomp keeps it as
+   * seconds (GenSave.lua:807 rebuilds it from the ROM's H/M/S/frame bytes),
+   * so this counts whole seconds rather than adding 1/60 per frame — the
+   * card only ever shows H:MM, and an integer keeps the Lua save file free
+   * of accumulated float dust.
+   */
+  private advancePlayTime(): void {
+    this.playTimeFrames += 1;
+    if (this.playTimeFrames < 60) return;
+    this.playTimeFrames = 0;
+    const save = this.save as { playTime?: number };
+    save.playTime = Math.floor(save.playTime ?? 0) + 1;
+  }
+
   /** One guest turn per host tick — exactly once. */
   tick(buttons: number): void {
     const p = this.prof;
@@ -531,6 +550,7 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     this.input.step();
     const top = this.stack[this.stack.length - 1];
     top?.update();
+    this.advancePlayTime();
     const t1 = p ? p.now() : 0;
     this.scene.emit(this);
     const t2 = p ? p.now() : 0;
@@ -915,6 +935,9 @@ export class VoxelmonGame implements OverworldShell, SceneView {
         if (act === "pokemon") {
           this.push(new PartyState(this as any));
         }
+        if (act === "trainer") {
+          this.push(new TrainerCardState(this as any));
+        }
         if (act === "dev") this.openDevMenu();
         if (act === "save") {
           // The recomp keeps the live position in player.*; copy it over
@@ -1060,6 +1083,11 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   startMenu(): unknown {
     const top = this.stack[this.stack.length - 1] as any;
     return top?.kind === "startmenu" ? top.view() : null;
+  }
+
+  trainerCard(): unknown {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "trainercard" ? top.view() : null;
   }
 
   devMenu(): unknown {

@@ -6315,6 +6315,21 @@ class Overworld {
     const unfreeze = () => {
       npc.frozen = false;
     };
+    const def = npc.def;
+    if (def.trainerClass && !talkScript(this.map.id, def.text)) {
+      if (!this.trainerDefeated(npc)) {
+        npc.facePlayer(this.player);
+        this.engageTrainer(npc, unfreeze);
+        return;
+      }
+      const key = this.trainerHeader(npc)?.after;
+      const after = key ? this.shell.data.text?.[key] : undefined;
+      if (after) {
+        npc.facePlayer(this.player);
+        this.shell.showText(after, unfreeze);
+        return;
+      }
+    }
     this.showMapText(npc.def.text, npc, unfreeze);
   }
   showMapText(textConst, npc, onDone) {
@@ -6614,12 +6629,16 @@ class Overworld {
         this.save.flags[ev] = true;
       onDone?.();
     });
-    const key = header?.battle;
-    const taunt = key ? this.shell.data.text?.[key] : undefined;
+    const taunt = this.beforeBattleText(npc, header?.battle);
     if (taunt)
       this.showText(taunt, launch);
     else
       launch();
+  }
+  beforeBattleText(npc, key) {
+    const texts = this.shell.data.text;
+    const keyed = key ? texts?.[key] : undefined;
+    return keyed ?? this.resolveText(npc.def.text);
   }
   checkTrainerSight() {
     if (this.player.moving || this.engaging)
@@ -6671,8 +6690,7 @@ class Overworld {
         npc.frozen = false;
         this.engaging = false;
       });
-      const key = header?.battle;
-      const taunt = key ? this.shell.data.text?.[key] : undefined;
+      const taunt = this.beforeBattleText(npc, header?.battle);
       if (taunt)
         this.showText(taunt, launch);
       else
@@ -7637,6 +7655,40 @@ class Scene {
       }
       return;
     }
+    const tc = view.trainerCard?.();
+    if (tc) {
+      const owned = tc.badges.map((b) => b.owned ? "1" : "0").join("");
+      const sig = `c${tc.name},${tc.money},${tc.time},${owned}`;
+      if (sig !== this.menuSig) {
+        this.menuSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const W = 19;
+        const box2 = (y, h) => {
+          host.uiTile(0, y, BORDER_TL);
+          host.uiFill(1, y, W - 1, 1, BORDER_H);
+          host.uiTile(W, y, BORDER_TR);
+          host.uiFill(0, y + 1, 1, h, BORDER_V);
+          host.uiFill(W, y + 1, 1, h, BORDER_V);
+          host.uiFill(1, y + 1, W - 1, h, SPACE);
+          host.uiTile(0, y + 1 + h, BORDER_BL);
+          host.uiFill(1, y + 1 + h, W - 1, 1, BORDER_H);
+          host.uiTile(W, y + 1 + h, BORDER_BR);
+        };
+        box2(0, 3);
+        this.stamp(host, 2, 1, `NAME/${tc.name}`);
+        this.stamp(host, 2, 2, `MONEY/¥${tc.money}`);
+        this.stamp(host, 2, 3, `TIME/${tc.time}`);
+        box2(5, 1);
+        this.stamp(host, 7, 6, "BADGES");
+        box2(8, 8);
+        tc.badges.forEach((b, i) => {
+          const label2 = b.owned ? b.name : ".".repeat(b.name.length);
+          this.stamp(host, 2, 9 + i, `${b.n} ${label2}`);
+        });
+      }
+      return;
+    }
     const dv = view.devMenu?.();
     if (dv) {
       const sig = `d${dv.index},${dv.entries.length}`;
@@ -8326,6 +8378,66 @@ class DevMenuState {
   }
 }
 
+// voxelmon/game/rules/badges.ts
+var VANILLA = [
+  { id: "BOULDERBADGE" },
+  { id: "CASCADEBADGE" },
+  { id: "THUNDERBADGE" },
+  { id: "RAINBOWBADGE" },
+  { id: "SOULBADGE" },
+  { id: "MARSHBADGE" },
+  { id: "VOLCANOBADGE" },
+  { id: "EARTHBADGE" }
+];
+function list(data) {
+  const configured = data?.constants?.badges;
+  if (Array.isArray(configured) && configured.length > 0)
+    return configured;
+  return VANILLA;
+}
+function itemFor(entry) {
+  return entry.item ?? entry.id;
+}
+function label2(entry) {
+  const name = entry.name ?? entry.id;
+  return name.endsWith("BADGE") && name.length > 5 ? name.slice(0, -5) : name;
+}
+
+// voxelmon/game/ui/trainercard.ts
+function formatPlayTime(seconds) {
+  const t = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(t / 3600);
+  const m = Math.floor(t / 60) % 60;
+  return `${h}:${String(m).padStart(2, "0")}`;
+}
+
+class TrainerCardState {
+  game;
+  kind = "trainercard";
+  constructor(game) {
+    this.game = game;
+  }
+  update() {
+    const p = this.game.input.pressed;
+    if (p.a || p.b || p.start)
+      this.game.pop();
+  }
+  view() {
+    const save = this.game.save ?? {};
+    const inv = save.inventory ?? {};
+    return {
+      name: String(save.player?.name ?? "RED"),
+      money: Number(save.money ?? 0),
+      time: formatPlayTime(Number(save.playTime ?? 0)),
+      badges: list(this.game.data).map((entry, i) => ({
+        n: i + 1,
+        name: label2(entry),
+        owned: !!inv[itemFor(entry)]
+      }))
+    };
+  }
+}
+
 // voxelmon/game/ui/warppicker.ts
 var ROWS = 8;
 
@@ -8520,14 +8632,14 @@ class PartyState {
     }
     if (!p.a)
       return;
-    const label2 = items[this.submenuIndex];
+    const label3 = items[this.submenuIndex];
     this.mode = "list";
-    if (label2 === "STATS")
+    if (label3 === "STATS")
       this.game.push(new SummaryState(this.game, this.index));
-    else if (label2 === "SWITCH")
+    else if (label3 === "SWITCH")
       this.swapFrom = this.index;
-    else if (FIELD_MOVES.includes(label2))
-      this.useFieldMove(label2);
+    else if (FIELD_MOVES.includes(label3))
+      this.useFieldMove(label3);
   }
   useFieldMove(moveId) {
     const mon = this.party()[this.index];
@@ -9852,17 +9964,26 @@ class VoxelmonGame {
   debugCycleMap(direction) {
     if (this.battleView() || this.overworld.transitioning)
       return;
-    const list = this.data.cookedMaps;
-    if (!list || list.length < 2)
+    const list2 = this.data.cookedMaps;
+    if (!list2 || list2.length < 2)
       return;
     const curId = this.overworld.map.id;
-    let i = list.indexOf(curId);
+    let i = list2.indexOf(curId);
     if (i < 0)
       i = 0;
-    i = (i + direction + list.length) % list.length;
-    const targetId = list[i];
+    i = (i + direction + list2.length) % list2.length;
+    const targetId = list2[i];
     const dw = this.data.maps?.[targetId]?.warps?.[0];
     this.overworld.startWarpTo(targetId, dw?.x ?? 4, dw?.y ?? 4, "down");
+  }
+  playTimeFrames = 0;
+  advancePlayTime() {
+    this.playTimeFrames += 1;
+    if (this.playTimeFrames < 60)
+      return;
+    this.playTimeFrames = 0;
+    const save = this.save;
+    save.playTime = Math.floor(save.playTime ?? 0) + 1;
   }
   tick(buttons) {
     const p = this.prof;
@@ -9871,6 +9992,7 @@ class VoxelmonGame {
     this.input.step();
     const top = this.stack[this.stack.length - 1];
     top?.update();
+    this.advancePlayTime();
     const t1 = p ? p.now() : 0;
     this.scene.emit(this);
     const t2 = p ? p.now() : 0;
@@ -10167,6 +10289,9 @@ ${mname}!`);
       if (act === "pokemon") {
         this.push(new PartyState(this));
       }
+      if (act === "trainer") {
+        this.push(new TrainerCardState(this));
+      }
       if (act === "dev")
         this.openDevMenu();
       if (act === "save") {
@@ -10270,6 +10395,10 @@ to level ${mon.level}!`, () => {
   startMenu() {
     const top = this.stack[this.stack.length - 1];
     return top?.kind === "startmenu" ? top.view() : null;
+  }
+  trainerCard() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "trainercard" ? top.view() : null;
   }
   devMenu() {
     const top = this.stack[this.stack.length - 1];
@@ -10421,17 +10550,17 @@ function drawActionGrid(host, menuIndex, showCursor) {
   for (let i = 0;i < 4; i++) {
     const x0 = colX[i % 2];
     const y0 = rowY[i / 2 | 0];
-    const label2 = BATTLE_ACTIONS[i];
+    const label3 = BATTLE_ACTIONS[i];
     const iw = cellW - 2;
-    const lx = x0 + 1 + Math.max(0, Math.floor((iw - label2.length) / 2));
+    const lx = x0 + 1 + Math.max(0, Math.floor((iw - label3.length) / 2));
     const ly = y0 + Math.floor(cellH / 2);
     if (showCursor && i === menuIndex - 1) {
       fillCellBottom(host, x0, y0, cellW, cellH);
       boxBottom(host, x0, y0, cellW, cellH);
-      stampFill(host, lx, ly, label2);
+      stampFill(host, lx, ly, label3);
     } else {
       boxBottom(host, x0, y0, cellW, cellH, DARKTEXT_BIT);
-      stampBottom(host, lx, ly, label2, DARKTEXT_BIT);
+      stampBottom(host, lx, ly, label3, DARKTEXT_BIT);
     }
   }
 }

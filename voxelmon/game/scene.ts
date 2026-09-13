@@ -968,6 +968,50 @@ export class Scene {
       }
       return;
     }
+    // The TRAINER CARD (ui/trainercard.ts, DrawTrainerInfo): the NAME/MONEY/
+    // TIME card, the BADGES banner, then the eight numbered badge slots. The
+    // original puts the player's front pic in the top card's right half; a
+    // ScreenPic draws UNDER the ui layer (draw.rs rank 8 vs 9), so showing one
+    // would mean leaving those cells unfilled and letting the overworld show
+    // through behind him. The card is text-only instead.
+    const tc = (view as unknown as { trainerCard?: () => any }).trainerCard?.();
+    if (tc) {
+      const owned = tc.badges.map((b: any) => (b.owned ? "1" : "0")).join("");
+      const sig = `c${tc.name},${tc.money},${tc.time},${owned}`;
+      if (sig !== this.menuSig) {
+        this.menuSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const W = 19;
+        const box = (y: number, h: number): void => {
+          host.uiTile(0, y, BORDER_TL);
+          host.uiFill(1, y, W - 1, 1, BORDER_H);
+          host.uiTile(W, y, BORDER_TR);
+          host.uiFill(0, y + 1, 1, h, BORDER_V);
+          host.uiFill(W, y + 1, 1, h, BORDER_V);
+          host.uiFill(1, y + 1, W - 1, h, SPACE);
+          host.uiTile(0, y + 1 + h, BORDER_BL);
+          host.uiFill(1, y + 1 + h, W - 1, 1, BORDER_H);
+          host.uiTile(W, y + 1 + h, BORDER_BR);
+        };
+        box(0, 3);
+        this.stamp(host, 2, 1, `NAME/${tc.name}`);
+        this.stamp(host, 2, 2, `MONEY/¥${tc.money}`);
+        this.stamp(host, 2, 3, `TIME/${tc.time}`);
+        box(5, 1);
+        this.stamp(host, 7, 6, "BADGES");
+        // One slot per row: eight rows is exactly what the screen has left,
+        // and a two-column grid would run the 7-letter names together.
+        box(8, 8);
+        tc.badges.forEach((b: any, i: number) => {
+          // An unearned badge keeps its number and hides its name, the way
+          // the original's grid shows a blank numbered face.
+          const label = b.owned ? b.name : ".".repeat(b.name.length);
+          this.stamp(host, 2, 9 + i, `${b.n} ${label}`);
+        });
+      }
+      return;
+    }
     // The DEV submenu (ui/devmenu.ts). Same right-hand column as the start
     // menu it opens from, two tiles wider to fit RARE CANDY.
     const dv = (view as unknown as { devMenu?: () => any }).devMenu?.();
