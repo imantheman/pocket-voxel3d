@@ -509,10 +509,12 @@ function* use_flash(ctx: ScriptContext): Generator<void, void> {
 function* open_mart(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
   const runner = ctx.runner;
   const w = ctx.world as unknown as {
-    map?: { id: string };
+    map?: { def?: { label?: string } };
+    data?: unknown;
     openShop?: (stock: string[], onQuit: () => void) => void;
   };
-  const stock = martStock(w.map?.id ?? "", String(args[0] ?? ""));
+  // text_pointers is keyed by map LABEL, the same key resolveText uses.
+  const stock = martStock(w.data as never, w.map?.def?.label ?? "", String(args[0] ?? ""));
   if (stock && w.openShop) {
     w.openShop(stock, () => runner.resume());
     yield;

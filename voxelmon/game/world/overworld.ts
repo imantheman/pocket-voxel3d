@@ -808,7 +808,7 @@ export class Overworld implements ScriptWorld {
     const script =
       (typeof talk === "function" ? talk(this, this.save) : talk) ??
       itemBallScript(this.map.id, npc?.def) ??
-      martGreetScript(this.map.id, textConst) ??
+      martGreetScript(this.shell.data as never, this.map.def.label, textConst) ??
       nurseGreetScript(textConst);
     if (script && !this.runner.isRunning()) {
       if (npc) npc.frozen = true;

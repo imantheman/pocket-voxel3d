@@ -29,6 +29,7 @@ import { Input } from "../voxelmon/game/input.ts";
 import { gearMapPoint, gearTabs, gearTouchDown } from "../voxelmon/game/ui/kantogear.ts";
 import { encodeGlyphs, glyphLen, MAX_COLS } from "../voxelmon/game/ui/tiles.ts";
 import { GameMap } from "../voxelmon/game/world/map.ts";
+import { martStock } from "../voxelmon/game/world/marts.ts";
 import { computeNeighbors } from "../voxelmon/game/world/overworld.ts";
 import { paginate, Textbox } from "../voxelmon/game/world/textbox.ts";
 import { parseTape, TapePlayer, TapeStallError } from "../voxelmon/game/sim/tape.ts";
@@ -854,6 +855,63 @@ describe("talking to a trainer", () => {
     ow.engageTrainer(npc!);
     expect(game.stackKinds().at(-1)).toBe("textbox");
     expect(topText(game)).toContain("guarding this");
+  });
+});
+
+describe("poke marts", () => {
+  /** Every (map label, TEXT_*) the dataset marks as a mart clerk. */
+  function clerks(): { label: string; text: string; stock: string[] }[] {
+    const out: { label: string; text: string; stock: string[] }[] = [];
+    const tp = (romData! as any).text_pointers as Record<string, Record<string, any>>;
+    for (const [label, entries] of Object.entries(tp)) {
+      for (const [text, entry] of Object.entries(entries)) {
+        if (entry && Array.isArray(entry.mart) && entry.mart.length > 0) {
+          out.push({ label, text, stock: entry.mart });
+        }
+      }
+    }
+    return out;
+  }
+
+  test.skipIf(!hasGen)("every clerk in the data resolves its own stock", () => {
+    const all = clerks();
+    // pokered's marts.asm has fourteen: the eight town marts, the Indigo
+    // Plateau lobby, and Celadon's five department-store counters.
+    expect(all.length).toBe(14);
+    for (const c of all) {
+      expect(martStock(romData! as never, c.label, c.text)).toEqual(c.stock);
+      // and every one of them can actually be sold: a real item with a price
+      for (const id of c.stock) {
+        expect((romData!.items as any)[id], `${c.label} sells ${id}`).toBeDefined();
+        expect((romData!.items as any)[id].price).toBeGreaterThan(0);
+      }
+    }
+    // not a clerk -> no stock, so an ordinary NPC never opens a shop
+    expect(martStock(romData! as never, "CeruleanMart", "TEXT_CERULEANMART_COOLTRAINER_F")).toBeNull();
+  });
+
+  test.skipIf(!hasGen)("talking to a clerk opens the shop with their list", () => {
+    // Cerulean, which sold nothing before: its stock was in the pak all along
+    // and only Viridian's and Pewter's were transcribed into the port.
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    ow.setMap("CERULEAN_MART", 3, 5, "up");
+    ow.showMapText("TEXT_CERULEANMART_CLERK");
+    let guard = 0;
+    while (game.stackKinds().at(-1) !== "shop" && guard++ < 900) {
+      dismissText(game);
+      game.tick(0);
+    }
+    expect(game.stackKinds().at(-1)).toBe("shop");
+    // the shop opens on BUY / SELL / QUIT; BUY is what builds the list
+    expect((game.shop() as { mode: string }).mode).toBe("menu");
+    tap(game, VOX_BTN.a);
+    const shop = game.shop() as { mode: string; list: { label: string }[] };
+    expect(shop.mode).toBe("list");
+    expect(shop.list.map((e) => e.label)).toEqual([
+      "POKé BALL", "POTION", "REPEL", "ANTIDOTE",
+      "BURN HEAL", "AWAKENING", "PARLYZ HEAL",
+    ]);
   });
 });
 

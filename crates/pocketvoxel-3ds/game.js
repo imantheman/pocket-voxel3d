@@ -5330,27 +5330,12 @@ function itemBallScript(mapLabel, obj) {
 }
 
 // voxelmon/game/world/marts.ts
-var MART_STOCK = {
-  VIRIDIAN_MART: {
-    TEXT_VIRIDIANMART_CLERK: ["POKE_BALL", "ANTIDOTE", "PARLYZ_HEAL", "BURN_HEAL"]
-  },
-  PEWTER_MART: {
-    TEXT_PEWTERMART_CLERK: [
-      "POKE_BALL",
-      "POTION",
-      "ESCAPE_ROPE",
-      "ANTIDOTE",
-      "BURN_HEAL",
-      "AWAKENING",
-      "PARLYZ_HEAL"
-    ]
-  }
-};
-function martStock(mapLabel, textConst) {
-  return MART_STOCK[mapLabel]?.[textConst] ?? null;
+function martStock(data, mapLabel, textConst) {
+  const mart = data?.text_pointers?.[mapLabel]?.[textConst]?.mart;
+  return Array.isArray(mart) && mart.length > 0 ? mart : null;
 }
-function martGreetScript(mapLabel, textConst) {
-  if (!martStock(mapLabel, textConst))
+function martGreetScript(data, mapLabel, textConst) {
+  if (!martStock(data, mapLabel, textConst))
     return null;
   return [
     ["face_player"],
@@ -5740,7 +5725,7 @@ function* use_flash(ctx) {
 function* open_mart(ctx, ...args) {
   const runner = ctx.runner;
   const w = ctx.world;
-  const stock = martStock(w.map?.id ?? "", String(args[0] ?? ""));
+  const stock = martStock(w.data, w.map?.def?.label ?? "", String(args[0] ?? ""));
   if (stock && w.openShop) {
     w.openShop(stock, () => runner.resume());
     yield;
@@ -6530,7 +6515,7 @@ class Overworld {
   }
   showMapText(textConst, npc, onDone) {
     const talk = talkScript(this.map.id, textConst);
-    const script = (typeof talk === "function" ? talk(this, this.save) : talk) ?? itemBallScript(this.map.id, npc?.def) ?? martGreetScript(this.map.id, textConst) ?? nurseGreetScript(textConst);
+    const script = (typeof talk === "function" ? talk(this, this.save) : talk) ?? itemBallScript(this.map.id, npc?.def) ?? martGreetScript(this.shell.data, this.map.def.label, textConst) ?? nurseGreetScript(textConst);
     if (script && !this.runner.isRunning()) {
       if (npc)
         npc.frozen = true;
