@@ -33,6 +33,27 @@ interface TokenContext {
   rival?: string;
 }
 
+/** TextSpeedOptionData frame delays, with the OPTION screen's own labels. */
+export const TEXT_SPEEDS: readonly { delay: number; label: string }[] = [
+  { delay: 1, label: "FAST" },
+  { delay: 3, label: "MEDIUM" },
+  { delay: 5, label: "SLOW" },
+];
+
+/** InitOptions' wOptions default — TEXT_DELAY_MEDIUM. */
+export const TEXT_SPEED_DEFAULT = 3;
+
+export interface TextboxOpts {
+  /** Frames per glyph: save.options.textSpeed, one of TEXT_SPEEDS. */
+  speed?: number;
+  /**
+   * Close on a timer instead of a button (engine/menus/save.asm:164-181's
+   * "Now saving..." and GameSavedText, neither of which reaches
+   * TX_PROMPT_BUTTON). `delay` frames are held after the last glyph types.
+   */
+  auto?: { delay: number };
+}
+
 // TextBox.lua:80 TOKENS — the runtime tokens substitute() knows. The slice
 // carries PLAYER/RIVAL; unknown tokens drop (the Lua returns nil).
 export function substitute(text: string, ctx: TokenContext): string {
@@ -105,8 +126,14 @@ export class Textbox {
   private charTimer = 0;
   private lineGlyphs = 0;
 
-  constructor(text: string, ctx: TokenContext = {}) {
+  private readonly speed: number;
+  private readonly auto?: { delay: number };
+  private autoLeft = 0;
+
+  constructor(text: string, ctx: TokenContext = {}, opts: TextboxOpts = {}) {
     this.pages = paginate(substitute(text, ctx));
+    this.speed = opts.speed ?? TEXT_SPEED_DEFAULT;
+    this.auto = opts.auto;
     this.beginLine();
   }
 
@@ -134,6 +161,14 @@ export class Textbox {
       return;
     }
     if (this.done) {
+      // An auto box closes itself and takes no press: the original holds
+      // these with DelayFrames, and a button must not skip them (a save
+      // must not be dismissable before it is written).
+      if (this.auto) {
+        if (this.autoLeft > 0) this.autoLeft -= 1;
+        else this.closed = true;
+        return;
+      }
       if (input.wasPressed("a") || input.wasPressed("b")) {
         this.closed = true;
       }
@@ -168,7 +203,7 @@ export class Textbox {
     }
     // TextBox.lua:306 typewriter cadence: one glyph every N frames, N = the
     // OPTION text speed (default 3); holding A/B prints every frame
-    let delay = 3;
+    let delay = this.speed;
     if (input.isDown("a") || input.isDown("b")) delay = 1;
     this.charTimer += 1;
     while (this.charTimer >= delay) {
@@ -196,6 +231,7 @@ export class Textbox {
           this.contAdvance = false;
         } else {
           this.done = true;
+          this.autoLeft = this.auto?.delay ?? 0;
         }
         break;
       }
@@ -205,6 +241,13 @@ export class Textbox {
   // TextBox.lua:381 — the blinking ▼ shows while waiting for an advance or
   // (finished box) a close press, on the first half of the blink cycle.
   arrowVisible(): boolean {
+    // An auto box never waits on a press, so it must not advertise one.
+    if (this.done && this.auto) return false;
     return (this.waiting || this.done) && this.blink < 30;
+  }
+
+  /** True once an auto box has finished its hold (for the close beep). */
+  get isAuto(): boolean {
+    return this.auto !== undefined;
   }
 }

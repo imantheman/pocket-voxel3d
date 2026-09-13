@@ -645,7 +645,8 @@ describe("story tape", () => {
  * traces record.
  */
 class MenuHost extends RecorderHost {
-  private saved: string | undefined;
+  /** What the last saveWrite committed — undefined until one happens. */
+  saved: string | undefined;
   pic(): void {}
   picHide(): void {}
   saveWrite(text: string): void { this.saved = text; }
@@ -850,6 +851,117 @@ describe("talking to a trainer", () => {
     ow.engageTrainer(npc!);
     expect(game.stackKinds().at(-1)).toBe("textbox");
     expect(topText(game)).toContain("guarding this");
+  });
+});
+
+describe("save screen", () => {
+  test.skipIf(!hasGen)("panel, question, then a timed write with no press", () => {
+    const game = makeMenuGame();
+    const host = (game as unknown as { host: MenuHost }).host;
+    game.save.inventory.BOULDERBADGE = 1;
+    (game.save as any).pokedex = { seen: {}, owned: { PIDGEY: true } };
+    (game.save as any).playTime = 3 * 3600 + 5 * 60;
+
+    tap(game, VOX_BTN.start);
+    const sm = game.startMenu() as { entries: string[] };
+    pick(game, sm.entries.indexOf("SAVE"));
+    // the SaveScreen window is up, and it is its OWN window: four lines,
+    // where the dialogue box holds two
+    expect(game.savePanel()).toEqual([
+      "PLAYER RED", "BADGES    1", "POKéDEX   1", "TIME      3:05",
+    ]);
+    expect(topText(game)).toContain("Would you like to");
+
+    // the YES/NO opens once the question finishes typing
+    let guard = 0;
+    while (game.stackKinds().at(-1) !== "choice" && guard++ < 600) game.tick(0);
+    expect(game.stackKinds().at(-1)).toBe("choice");
+    expect(host.saved).toBeUndefined();
+    tap(game, VOX_BTN.a); // YES
+
+    // "Now saving..." takes no press and holds ~120 frames before the write
+    expect(host.saved).toBeUndefined();
+    guard = 0;
+    while (host.saved === undefined && guard++ < 900) game.tick(0);
+    expect(host.saved).toBeDefined();
+    expect(host.saved).toContain("REDS_HOUSE_2F"); // the live position
+    // ...then "RED saved the game!", also untouched by input, and the
+    // panel comes down only when the whole flow is over
+    expect(game.savePanel()).not.toBeNull();
+    guard = 0;
+    while (game.savePanel() !== null && guard++ < 900) game.tick(0);
+    expect(game.stackKinds()).toEqual(["overworld", "startmenu"]);
+  });
+
+  test.skipIf(!hasGen)("answering NO writes nothing and takes the panel down", () => {
+    const game = makeMenuGame();
+    const host = (game as unknown as { host: MenuHost }).host;
+    tap(game, VOX_BTN.start);
+    const sm = game.startMenu() as { entries: string[] };
+    pick(game, sm.entries.indexOf("SAVE"));
+    let guard = 0;
+    while (game.stackKinds().at(-1) !== "choice" && guard++ < 600) game.tick(0);
+    tap(game, VOX_BTN.down); // NO
+    tap(game, VOX_BTN.a);
+    guard = 0;
+    while (game.savePanel() !== null && guard++ < 300) game.tick(0);
+    expect(host.saved).toBeUndefined();
+  });
+});
+
+describe("options", () => {
+  test.skipIf(!hasGen)("TEXT SPEED sets the typewriter delay the box uses", () => {
+    const game = makeMenuGame();
+    tap(game, VOX_BTN.start);
+    const sm = game.startMenu() as { entries: string[] };
+    pick(game, sm.entries.indexOf("OPTION"));
+    expect(game.stackKinds().at(-1)).toBe("options");
+
+    const view = () => game.optionsMenu() as { rows: { label: string; choices: string[]; index: number }[]; index: number };
+    expect(view().rows[0]!.label).toBe("TEXT SPEED");
+    expect(view().rows[0]!.choices).toEqual(["FAST", "MEDIUM", "SLOW"]);
+    expect(view().rows[0]!.index).toBe(1); // InitOptions' TEXT_DELAY_MEDIUM
+    expect(game.textSpeed()).toBe(3);
+
+    tap(game, VOX_BTN.left); // MEDIUM -> FAST
+    expect(view().rows[0]!.index).toBe(0);
+    expect(game.save.options.textSpeed).toBe(1);
+    expect(game.textSpeed()).toBe(1);
+
+    tap(game, VOX_BTN.left); // wraps to SLOW
+    expect(game.textSpeed()).toBe(5);
+  });
+
+  test.skipIf(!hasGen)("BATTLE ANIMATION off skips move anims, never the faint", () => {
+    const game = makeMenuGame();
+    tap(game, VOX_BTN.start);
+    const sm = game.startMenu() as { entries: string[] };
+    pick(game, sm.entries.indexOf("OPTION"));
+    tap(game, VOX_BTN.down); // to BATTLE ANIMATION
+    tap(game, VOX_BTN.right); // ON -> OFF
+    expect(game.save.options.animations).toBe(false);
+    expect(game.animationsOn()).toBe(false);
+
+    // the battle reads the same save key, and the faint slide is not a move
+    // animation — without it a fainted mon would vanish instead of sinking
+    tap(game, VOX_BTN.b); // close the options
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 5));
+    game.pushStubBattle("PIDGEY", 3);
+    const battle = (game.battleView() as { battle: any }).battle;
+    expect(battle.animationsOn()).toBe(false);
+    expect(battle.startAnim("lunge", 0)).toBe(0);
+    expect(battle.startAnim("faint", 0)).toBeGreaterThan(0);
+  });
+
+  test.skipIf(!hasGen)("CANCEL closes back to the start menu", () => {
+    const game = makeMenuGame();
+    tap(game, VOX_BTN.start);
+    const sm = game.startMenu() as { entries: string[] };
+    pick(game, sm.entries.indexOf("OPTION"));
+    tap(game, VOX_BTN.down);
+    tap(game, VOX_BTN.down); // CANCEL
+    tap(game, VOX_BTN.a);
+    expect(game.stackKinds()).toEqual(["overworld", "startmenu"]);
   });
 });
 

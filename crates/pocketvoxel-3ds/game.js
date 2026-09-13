@@ -2307,7 +2307,12 @@ Get'm! ${name}!`;
     if (this.player?.mon)
       this.participants.add(this.player.mon);
   }
+  animationsOn() {
+    return this.save.options?.animations !== false;
+  }
   startAnim(kind, side) {
+    if (kind !== "faint" && !this.animationsOn())
+      return 0;
     const total = animFrames(kind);
     this.anims = this.anims.filter((a) => a.side !== side);
     this.anims.push({ kind, side, frame: 0, total });
@@ -3721,6 +3726,17 @@ function itemFor(entry) {
 function label(entry) {
   const name = entry.name ?? entry.id;
   return name.endsWith("BADGE") && name.length > 5 ? name.slice(0, -5) : name;
+}
+function count(data, save) {
+  const inv = save?.inventory;
+  if (!inv)
+    return 0;
+  let n = 0;
+  for (const entry of list(data)) {
+    if (inv[itemFor(entry)])
+      n += 1;
+  }
+  return n;
 }
 
 // voxelmon/game/ui/trainercard.ts
@@ -5428,11 +5444,11 @@ function* set_flag(ctx, ...args) {
 }
 function* give_item(ctx, ...args) {
   const itemId = args[0];
-  const count = args[1] ?? 1;
+  const count2 = args[1] ?? 1;
   const gotText = args[2];
   const w = ctx.world;
   const runner = ctx.runner;
-  if (!add(w.save, itemId, count, w.data)) {
+  if (!add(w.save, itemId, count2, w.data)) {
     w.showText(`You can't carry
 any more items!`, () => runner.resume());
     yield;
@@ -7746,6 +7762,34 @@ class Scene {
       }
       return;
     }
+    const op = view.optionsMenu?.();
+    if (op) {
+      const sig = `o${op.index},${op.rows.map((r) => r.index).join(",")}`;
+      if (sig !== this.menuSig) {
+        this.menuSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        host.uiFill(0, 0, 20, 18, SPACE);
+        op.rows.forEach((r, i) => {
+          const labelY = 1 + i * 4;
+          this.stamp(host, 1, labelY, r.label);
+          let x = 1;
+          r.choices.forEach((c, j) => {
+            this.stamp(host, x + 1, labelY + 2, c);
+            if (j === r.index)
+              host.uiTile(x, labelY + 2, ARROW_CURSOR);
+            x += c.length + 2;
+          });
+          if (i === op.index)
+            host.uiTile(0, labelY, ARROW_HOLLOW);
+        });
+        const cancelY = 1 + op.rows.length * 4;
+        this.stamp(host, 2, cancelY, "CANCEL");
+        if (op.index === op.rows.length)
+          host.uiTile(1, cancelY, ARROW_CURSOR);
+      }
+      return;
+    }
     const tc = view.trainerCard?.();
     if (tc) {
       const owned = tc.badges.map((b) => b.owned ? "1" : "0").join("");
@@ -7942,6 +7986,20 @@ class Scene {
       this.uiPage = box.pageIndex;
       this.uiArrow = false;
       this.choiceDrawn = false;
+      const panel = view.savePanel?.();
+      if (panel && panel.length > 0) {
+        const W = 19, H = panel.length;
+        host.uiTile(0, 0, BORDER_TL);
+        host.uiFill(1, 0, W - 1, 1, BORDER_H);
+        host.uiTile(W, 0, BORDER_TR);
+        host.uiFill(0, 1, 1, H, BORDER_V);
+        host.uiFill(W, 1, 1, H, BORDER_V);
+        host.uiFill(1, 1, W - 1, H, SPACE);
+        host.uiTile(0, 1 + H, BORDER_BL);
+        host.uiFill(1, 1 + H, W - 1, 1, BORDER_H);
+        host.uiTile(W, 1 + H, BORDER_BR);
+        panel.forEach((line, i) => this.stamp(host, 2, 1 + i, line));
+      }
       host.uiTile(BOX_TX, BOX_TY, BORDER_TL);
       host.uiFill(BOX_TX + 1, BOX_TY, BOX_TW - 2, 1, BORDER_H);
       host.uiTile(BOX_TX + BOX_TW - 1, BOX_TY, BORDER_TR);
@@ -8037,6 +8095,12 @@ class Scene {
 }
 
 // voxelmon/game/world/textbox.ts
+var TEXT_SPEEDS = [
+  { delay: 1, label: "FAST" },
+  { delay: 3, label: "MEDIUM" },
+  { delay: 5, label: "SLOW" }
+];
+var TEXT_SPEED_DEFAULT = 3;
 function substitute(text, ctx) {
   return text.replace(/\{(\w+):?\w*\}/g, (_, token) => {
     if (token === "PLAYER")
@@ -8105,8 +8169,13 @@ class Textbox {
   blink = 0;
   charTimer = 0;
   lineGlyphs = 0;
-  constructor(text, ctx = {}) {
+  speed;
+  auto;
+  autoLeft = 0;
+  constructor(text, ctx = {}, opts = {}) {
     this.pages = paginate(substitute(text, ctx));
+    this.speed = opts.speed ?? TEXT_SPEED_DEFAULT;
+    this.auto = opts.auto;
     this.beginLine();
   }
   currentLine() {
@@ -8127,6 +8196,13 @@ class Textbox {
       return;
     }
     if (this.done) {
+      if (this.auto) {
+        if (this.autoLeft > 0)
+          this.autoLeft -= 1;
+        else
+          this.closed = true;
+        return;
+      }
       if (input.wasPressed("a") || input.wasPressed("b")) {
         this.closed = true;
       }
@@ -8154,7 +8230,7 @@ class Textbox {
       }
       return;
     }
-    let delay = 3;
+    let delay = this.speed;
     if (input.isDown("a") || input.isDown("b"))
       delay = 1;
     this.charTimer += 1;
@@ -8181,13 +8257,19 @@ class Textbox {
           this.contAdvance = false;
         } else {
           this.done = true;
+          this.autoLeft = this.auto?.delay ?? 0;
         }
         break;
       }
     }
   }
   arrowVisible() {
+    if (this.done && this.auto)
+      return false;
     return (this.waiting || this.done) && this.blink < 30;
+  }
+  get isAuto() {
+    return this.auto !== undefined;
   }
 }
 
@@ -8480,6 +8562,78 @@ class DevMenuState {
   }
   view() {
     return { entries: ENTRIES.map((e) => e[0]), index: this.index };
+  }
+}
+
+// voxelmon/game/ui/optionsmenu.ts
+class OptionsMenuState {
+  game;
+  kind = "options";
+  index = 0;
+  constructor(game) {
+    this.game = game;
+  }
+  opts() {
+    const save = this.game.save;
+    return save.options ??= {};
+  }
+  speedIndex() {
+    const cur = this.opts().textSpeed ?? TEXT_SPEED_DEFAULT;
+    const at = TEXT_SPEEDS.findIndex((s) => s.delay === cur);
+    return at >= 0 ? at : 1;
+  }
+  rows() {
+    return [
+      {
+        label: "TEXT SPEED",
+        choices: TEXT_SPEEDS.map((s) => s.label),
+        index: this.speedIndex()
+      },
+      {
+        label: "BATTLE ANIMATION",
+        choices: ["ON", "OFF"],
+        index: this.opts().animations === false ? 1 : 0
+      }
+    ];
+  }
+  set(row, to) {
+    const rows = this.rows();
+    const r = rows[row];
+    if (!r)
+      return;
+    const at = Math.max(0, Math.min(r.choices.length - 1, to));
+    if (row === 0)
+      this.opts().textSpeed = TEXT_SPEEDS[at].delay;
+    else if (row === 1)
+      this.opts().animations = at === 0;
+  }
+  update() {
+    const p = this.game.input.pressed;
+    const rows = this.rows();
+    const n = rows.length + 1;
+    if (p.up)
+      this.index = (this.index + n - 1) % n;
+    if (p.down)
+      this.index = (this.index + 1) % n;
+    if (this.index < rows.length) {
+      const r = rows[this.index];
+      if (p.left)
+        this.set(this.index, (r.index + r.choices.length - 1) % r.choices.length);
+      if (p.right)
+        this.set(this.index, (r.index + 1) % r.choices.length);
+      if (p.a)
+        this.set(this.index, (r.index + 1) % r.choices.length);
+    } else if (p.a) {
+      this.game.pop();
+      return;
+    }
+    if (p.b || p.start) {
+      this.game.pop();
+      return;
+    }
+  }
+  view() {
+    return { rows: this.rows(), index: this.index };
   }
 }
 
@@ -9707,6 +9861,8 @@ function decodeSave(text) {
 }
 
 // voxelmon/game/game.ts
+var SAVE_HOLD = 120;
+var SAVE_DONE_HOLD = 30;
 var SAVE_FORMAT = 4;
 var RED_PIC_PAGE = 408;
 
@@ -9728,14 +9884,11 @@ class TextBoxState {
   kind = "textbox";
   box;
   choicePushed = false;
-  constructor(game, text, onDone, choice) {
+  constructor(game, text, onDone, choice, opts) {
     this.game = game;
     this.onDone = onDone;
     this.choice = choice;
-    this.box = new Textbox(text, {
-      player: game.save.player.name,
-      rival: game.save.player.rival
-    });
+    this.box = new Textbox(text, { player: game.save.player.name, rival: game.save.player.rival }, { speed: game.textSpeed(), ...opts });
   }
   update() {
     if (this.choice && this.box.done) {
@@ -9748,7 +9901,7 @@ class TextBoxState {
     const wasWaiting = this.box.waiting;
     const wasDone = this.box.done;
     this.box.update(this.game.input);
-    if (wasDone && this.box.closed || wasWaiting && !this.box.waiting) {
+    if (!this.box.isAuto && (wasDone && this.box.closed || wasWaiting && !this.box.waiting)) {
       this.game.audio.playSfx("Press_AB");
     }
     if (this.choice && this.box.done) {
@@ -10096,6 +10249,18 @@ class VoxelmonGame {
   showText(text, onDone) {
     this.push(new TextBoxState(this, text, onDone));
   }
+  showAuto(text, delay, opts) {
+    if (opts?.sfx)
+      this.audio.playSfx(opts.sfx);
+    this.push(new TextBoxState(this, text, opts?.onDone, undefined, { auto: { delay } }));
+  }
+  textSpeed() {
+    const v = this.save.options?.textSpeed;
+    return typeof v === "number" && v > 0 ? v : TEXT_SPEED_DEFAULT;
+  }
+  animationsOn() {
+    return this.save.options?.animations !== false;
+  }
   showChoice(text, choice) {
     this.push(new TextBoxState(this, text, undefined, choice));
   }
@@ -10346,21 +10511,68 @@ ${mname}!`);
       }
       if (act === "dev")
         this.openDevMenu();
-      if (act === "save") {
-        const ow = this.overworld;
-        const p = this.save.player;
-        p.map = ow.mapId ?? ow.map?.id ?? p.map;
-        p.x = ow.player?.cellX ?? p.x;
-        p.y = ow.player?.cellY ?? p.y;
-        p.facing = ow.player?.facing ?? p.facing;
-        const h = this.host ?? this.hostApi ?? globalThis.voxel;
-        if (h?.saveWrite)
-          h.saveWrite(encodeSave(this.save));
-        else
-          console.log("save: no host.saveWrite");
-        this.pop();
+      if (act === "save")
+        this.openSaveScreen();
+      if (act === "option") {
+        this.push(new OptionsMenuState(this));
       }
     }));
+  }
+  openSaveScreen() {
+    const save = this.save;
+    const name = save.player.name ?? "RED";
+    const badges = count(this.data, this.save);
+    const owned = Object.keys(save.pokedex?.owned ?? {}).length;
+    const t = Math.max(0, Math.floor(save.playTime ?? 0));
+    const h = Math.floor(t / 3600);
+    const m = Math.floor(t / 60) % 60;
+    this.savePanelLines = [
+      `PLAYER ${name}`,
+      `BADGES    ${badges}`,
+      `POKéDEX ${String(owned).padStart(3)}`,
+      `TIME ${String(h).padStart(6)}:${String(m).padStart(2, "0")}`
+    ];
+    const close = () => {
+      this.savePanelLines = null;
+    };
+    this.showChoice(`Would you like to
+SAVE the game?`, (yes) => {
+      if (!yes) {
+        close();
+        return;
+      }
+      this.showAuto("Now saving...", SAVE_HOLD, {
+        onDone: () => {
+          this.writeSave();
+          this.showAuto(`${name} saved
+the game!`, SAVE_DONE_HOLD, {
+            sfx: "Save",
+            onDone: close
+          });
+        }
+      });
+    });
+  }
+  savePanelLines = null;
+  savePanel() {
+    return this.savePanelLines;
+  }
+  writeSave() {
+    const ow = this.overworld;
+    const p = this.save.player;
+    p.map = ow.mapId ?? ow.map?.id ?? p.map;
+    p.x = ow.player?.cellX ?? p.x;
+    p.y = ow.player?.cellY ?? p.y;
+    p.facing = ow.player?.facing ?? p.facing;
+    const h = this.host ?? this.hostApi ?? globalThis.voxel;
+    if (h?.saveWrite)
+      h.saveWrite(encodeSave(this.save));
+    else
+      console.log("save: no host.saveWrite");
+  }
+  optionsMenu() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "options" ? top.view() : null;
   }
   openDevMenu() {
     this.push(new DevMenuState(this, (act) => {
@@ -10681,10 +10893,10 @@ function drawItemList(host, game, b) {
   for (let i = 0;i < b.itemList.length && i < 12; i++) {
     const id = b.itemList[i];
     const name = game.data.items[id]?.name ?? id;
-    const count = game.save?.inventory?.[id] ?? 0;
+    const count2 = game.save?.inventory?.[id] ?? 0;
     const y = 2 + i;
     stampBottom(host, 2, y, name.slice(0, 13));
-    stampRight(host, y, "x" + String(count));
+    stampRight(host, y, "x" + String(count2));
     if (i === b.itemIndex)
       host.uiTileBottom(0, y, ARROW_CURSOR);
   }

@@ -35,12 +35,18 @@ import {
   type UiBoxSource,
 } from "./scene.ts";
 import { Overworld, type OverworldShell, type SaveSlice } from "./world/overworld.ts";
-import { Textbox } from "./world/textbox.ts";
+import { Textbox, TEXT_SPEED_DEFAULT, type TextboxOpts } from "./world/textbox.ts";
 import { NamingState } from "./ui/naming.ts";
 import { TitleState, TITLE_PAGES } from "./ui/title.ts";
 import { StartMenuState } from "./ui/startmenu.ts";
 import { DevMenuState } from "./ui/devmenu.ts";
 import { CARD_PIC_RECT, TrainerCardState } from "./ui/trainercard.ts";
+import { OptionsMenuState } from "./ui/optionsmenu.ts";
+import { count as badgeCount } from "./rules/badges.ts";
+
+/** save.asm:164-181 — DelayFrames 120 over "Now saving...", then 30. */
+const SAVE_HOLD = 120;
+const SAVE_DONE_HOLD = 30;
 import { WarpPickerState } from "./ui/warppicker.ts";
 import { MoveForgetState } from "./ui/moveforget.ts";
 import { BagState } from "./ui/bagscreen.ts";
@@ -83,11 +89,13 @@ class TextBoxState implements GameState, UiBoxSource {
     text: string,
     private onDone?: () => void,
     private choice?: (yes: boolean) => void,
+    opts?: TextboxOpts,
   ) {
-    this.box = new Textbox(text, {
-      player: game.save.player.name,
-      rival: game.save.player.rival,
-    });
+    this.box = new Textbox(
+      text,
+      { player: game.save.player.name, rival: game.save.player.rival },
+      { speed: game.textSpeed(), ...opts },
+    );
   }
   update(): void {
     // opts.choice (TextBox.lua:255): once the last page has typed out, the
@@ -105,7 +113,12 @@ class TextBoxState implements GameState, UiBoxSource {
     this.box.update(this.game.input);
     // TextBox.lua:269 and :284 — A/B both close a finished box and advance a
     // waiting one, and each plays the Press_AB beep.
-    if ((wasDone && this.box.closed) || (wasWaiting && !this.box.waiting)) {
+    // an auto box closes on a timer, and a beep would announce a press that
+    // never happened
+    if (
+      !this.box.isAuto &&
+      ((wasDone && this.box.closed) || (wasWaiting && !this.box.waiting))
+    ) {
       this.game.audio.playSfx("Press_AB");
     }
     if (this.choice && this.box.done) {
@@ -639,6 +652,27 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     this.push(new TextBoxState(this, text, onDone));
   }
 
+  /**
+   * A box that closes on a timer rather than a press (save.asm's "Now
+   * saving..." / GameSavedText). `sfx` fires the moment the text finishes,
+   * so the hold covers the jingle.
+   */
+  showAuto(text: string, delay: number, opts?: { sfx?: string; onDone?: () => void }): void {
+    if (opts?.sfx) this.audio.playSfx(opts.sfx);
+    this.push(new TextBoxState(this, text, opts?.onDone, undefined, { auto: { delay } }));
+  }
+
+  /** save.options.textSpeed — frames per glyph (ui/optionsmenu.ts). */
+  textSpeed(): number {
+    const v = (this.save as { options?: { textSpeed?: number } }).options?.textSpeed;
+    return typeof v === "number" && v > 0 ? v : TEXT_SPEED_DEFAULT;
+  }
+
+  /** save.options.animations — BattleState.lua:2544 animationsOn. */
+  animationsOn(): boolean {
+    return (this.save as { options?: { animations?: boolean } }).options?.animations !== false;
+  }
+
   showChoice(text: string, choice: (yes: boolean) => void): void {
     this.push(new TextBoxState(this, text, undefined, choice));
   }
@@ -947,22 +981,89 @@ export class VoxelmonGame implements OverworldShell, SceneView {
           this.push(new TrainerCardState(this as any));
         }
         if (act === "dev") this.openDevMenu();
-        if (act === "save") {
-          // The recomp keeps the live position in player.*; copy it over
-          // so the desktop build resumes exactly where the 3DS stood.
-          const ow: any = this.overworld;
-          const p: any = this.save.player;
-          p.map = ow.mapId ?? ow.map?.id ?? p.map;
-          p.x = ow.player?.cellX ?? p.x;
-          p.y = ow.player?.cellY ?? p.y;
-          p.facing = ow.player?.facing ?? p.facing;
-          const h: any = (this as any).host ?? (this as any).hostApi ?? (globalThis as any).voxel;
-          if (h?.saveWrite) h.saveWrite(encodeSave(this.save));
-          else console.log("save: no host.saveWrite");
-          this.pop();
+        if (act === "save") this.openSaveScreen();
+        if (act === "option") {
+          this.push(new OptionsMenuState(this as any));
         }
       }),
     );
+  }
+
+  /**
+   * START -> SAVE, the real flow (engine/menus/save.asm SaveScreen, via
+   * gen1recomp StartMenu.lua:52-88): the PLAYER/BADGES/POKéDEX/TIME panel,
+   * then "Would you like to SAVE the game?".
+   *
+   * On YES: "Now saving..." is a bare PlaceString held by DelayFrames 120 —
+   * neither that page nor GameSavedText reaches TX_PROMPT_BUTTON, so neither
+   * takes a press. The write itself is invisible, on the far side of the
+   * hold, so it rides that box's onDone; the second box waits on SFX_SAVE
+   * and then DelayFrames 30.
+   */
+  private openSaveScreen(): void {
+    const save = this.save as {
+      player: { name: string };
+      pokedex?: { owned?: Record<string, boolean> };
+      playTime?: number;
+    };
+    const name = save.player.name ?? "RED";
+    const badges = badgeCount(this.data, this.save as never);
+    const owned = Object.keys(save.pokedex?.owned ?? {}).length;
+    const t = Math.max(0, Math.floor(save.playTime ?? 0));
+    const h = Math.floor(t / 3600);
+    const m = Math.floor(t / 60) % 60;
+    // The panel is its own window above the dialogue box, not text inside it:
+    // it is four lines, and the dialogue box holds two, so paginating it
+    // there would scroll PLAYER and BADGES away before they could be read.
+    // It stays up for the whole flow, as SaveScreen's does.
+    this.savePanelLines = [
+      `PLAYER ${name}`,
+      `BADGES    ${badges}`,
+      `POKéDEX ${String(owned).padStart(3)}`,
+      `TIME ${String(h).padStart(6)}:${String(m).padStart(2, "0")}`,
+    ];
+    const close = (): void => { this.savePanelLines = null; };
+    this.showChoice("Would you like to\nSAVE the game?", (yes) => {
+      if (!yes) { close(); return; }
+      this.showAuto("Now saving...", SAVE_HOLD, {
+        onDone: () => {
+          this.writeSave();
+          this.showAuto(`${name} saved\nthe game!`, SAVE_DONE_HOLD, {
+            sfx: "Save",
+            onDone: close,
+          });
+        },
+      });
+    });
+  }
+
+  private savePanelLines: string[] | null = null;
+
+  /** SaveScreen's PLAYER/BADGES/POKéDEX/TIME window, while the flow is up. */
+  savePanel(): string[] | null {
+    return this.savePanelLines;
+  }
+
+  /**
+   * Commit the save. The live position lives in overworld state; the recomp
+   * keeps it in player.*, so it is copied over first and a save written here
+   * resumes in exactly the same spot on the desktop build.
+   */
+  writeSave(): void {
+    const ow: any = this.overworld;
+    const p: any = this.save.player;
+    p.map = ow.mapId ?? ow.map?.id ?? p.map;
+    p.x = ow.player?.cellX ?? p.x;
+    p.y = ow.player?.cellY ?? p.y;
+    p.facing = ow.player?.facing ?? p.facing;
+    const h: any = (this as any).host ?? (this as any).hostApi ?? (globalThis as any).voxel;
+    if (h?.saveWrite) h.saveWrite(encodeSave(this.save));
+    else console.log("save: no host.saveWrite");
+  }
+
+  optionsMenu(): unknown {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "options" ? top.view() : null;
   }
 
   /** START -> DEV (ui/devmenu.ts): the playtesting tools. */

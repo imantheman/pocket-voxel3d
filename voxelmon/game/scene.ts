@@ -42,7 +42,7 @@ import {
   BOX_TX,
   BOX_TY,
   encodeGlyphs,
-  ARROW_CURSOR,
+  ARROW_HOLLOW,
   LINE1_Y,
   LINE2_Y,
   MAX_COLS,
@@ -977,6 +977,38 @@ export class Scene {
       }
       return;
     }
+    // The OPTION screen (ui/optionsmenu.ts, DisplayOptionMenu): each row's
+    // label on its own line with the choices spread beneath it, a ▶ on the
+    // active choice and a ▷ in the left margin marking the selected row.
+    const op = (view as unknown as { optionsMenu?: () => any }).optionsMenu?.();
+    if (op) {
+      const sig = `o${op.index},${op.rows.map((r: any) => r.index).join(",")}`;
+      if (sig !== this.menuSig) {
+        this.menuSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        host.uiFill(0, 0, 20, 18, SPACE);
+        op.rows.forEach((r: any, i: number) => {
+          const labelY = 1 + i * 4;
+          this.stamp(host, 1, labelY, r.label);
+          // Choices on the row below, each preceded by its cursor cell. The
+          // pitch is one blank column between entries and no more: FAST +
+          // MEDIUM + SLOW with their three cursors is 17 of the 20 columns,
+          // so anything wider pushes SLOW off the screen.
+          let x = 1;
+          r.choices.forEach((c: string, j: number) => {
+            this.stamp(host, x + 1, labelY + 2, c);
+            if (j === r.index) host.uiTile(x, labelY + 2, ARROW_CURSOR);
+            x += c.length + 2;
+          });
+          if (i === op.index) host.uiTile(0, labelY, ARROW_HOLLOW);
+        });
+        const cancelY = 1 + op.rows.length * 4;
+        this.stamp(host, 2, cancelY, "CANCEL");
+        if (op.index === op.rows.length) host.uiTile(1, cancelY, ARROW_CURSOR);
+      }
+      return;
+    }
     // The TRAINER CARD (ui/trainercard.ts, DrawTrainerInfo), drawn from the
     // ROM's own trainer-card tiles: the patterned box frame, the eight
     // face/badge pairs, the slot digits and the banner dots, all packed into
@@ -1185,6 +1217,24 @@ export class Scene {
       this.uiPage = box.pageIndex;
       this.uiArrow = false;
       this.choiceDrawn = false;
+      // SaveScreen's PLAYER/BADGES/POKéDEX/TIME window sits above the
+      // dialogue box and stays up across every box of the save flow — and
+      // each new box is a new owner, which cleared the screen just above, so
+      // it is redrawn here rather than once when the flow opens.
+      const panel = (view as unknown as { savePanel?: () => string[] | null }).savePanel?.();
+      if (panel && panel.length > 0) {
+        const W = 19, H = panel.length;
+        host.uiTile(0, 0, BORDER_TL);
+        host.uiFill(1, 0, W - 1, 1, BORDER_H);
+        host.uiTile(W, 0, BORDER_TR);
+        host.uiFill(0, 1, 1, H, BORDER_V);
+        host.uiFill(W, 1, 1, H, BORDER_V);
+        host.uiFill(1, 1, W - 1, H, SPACE);
+        host.uiTile(0, 1 + H, BORDER_BL);
+        host.uiFill(1, 1 + H, W - 1, 1, BORDER_H);
+        host.uiTile(W, 1 + H, BORDER_BR);
+        panel.forEach((line, i) => this.stamp(host, 2, 1 + i, line));
+      }
       host.uiTile(BOX_TX, BOX_TY, BORDER_TL);
       host.uiFill(BOX_TX + 1, BOX_TY, BOX_TW - 2, 1, BORDER_H);
       host.uiTile(BOX_TX + BOX_TW - 1, BOX_TY, BORDER_TR);

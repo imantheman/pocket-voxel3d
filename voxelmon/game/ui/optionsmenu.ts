@@ -1,0 +1,107 @@
+// The OPTION screen (engine/menus/main_menu.asm DisplayOptionMenu), ported
+// from gen1recomp src/ui/OptionsMenu.lua's vanilla rows.
+//
+// The original lays each row's choices out side by side with a ▶ cursor on
+// the active one, and a second cursor in the left margin marking the row —
+// so the whole state of the options is readable at a glance, which is the
+// point of the screen. That layout is what scene.ts draws.
+//
+// Upstream's menu is much longer, but nearly all of it is desktop-renderer
+// settings (video mode, tilt, zoom, GBC FX, window scaling) or a mod manager,
+// none of which exists here. What is left is the three vanilla rows, and of
+// those BATTLE STYLE is deliberately absent: SHIFT needs the "will you change
+// POKéMON?" prompt before a trainer's next send-out, and that needs a free
+// switch through the battle's message queue, which this port has no path for
+// yet. A row that stores a setting nothing honours is worse than no row.
+//
+// The settings live in save.options under gen1recomp's own key names
+// (textSpeed, animations), so a save moves between the two builds intact.
+import type { GameState } from "../game.ts";
+import { TEXT_SPEEDS, TEXT_SPEED_DEFAULT } from "../world/textbox.ts";
+
+export interface OptionsRow {
+  label: string;
+  /** Every choice, in menu order — the screen shows them all. */
+  choices: string[];
+  /** Index into `choices` of the active one. */
+  index: number;
+}
+
+export interface OptionsView {
+  rows: OptionsRow[];
+  /** Selected row, or rows.length for CANCEL. */
+  index: number;
+}
+
+interface OptionsSave {
+  options?: { textSpeed?: number; animations?: boolean };
+}
+
+export class OptionsMenuState implements GameState {
+  readonly kind = "options";
+  private index = 0;
+
+  constructor(private game: { input: any; pop(): void; save: OptionsSave }) {}
+
+  private opts(): { textSpeed?: number; animations?: boolean } {
+    const save = this.game.save;
+    return (save.options ??= {});
+  }
+
+  private speedIndex(): number {
+    const cur = this.opts().textSpeed ?? TEXT_SPEED_DEFAULT;
+    const at = TEXT_SPEEDS.findIndex((s) => s.delay === cur);
+    return at >= 0 ? at : 1; // MEDIUM
+  }
+
+  private rows(): OptionsRow[] {
+    return [
+      {
+        label: "TEXT SPEED",
+        choices: TEXT_SPEEDS.map((s) => s.label),
+        index: this.speedIndex(),
+      },
+      {
+        label: "BATTLE ANIMATION",
+        choices: ["ON", "OFF"],
+        index: this.opts().animations === false ? 1 : 0,
+      },
+    ];
+  }
+
+  /** Move row `row` to choice `to`, clamped. */
+  private set(row: number, to: number): void {
+    const rows = this.rows();
+    const r = rows[row];
+    if (!r) return;
+    const at = Math.max(0, Math.min(r.choices.length - 1, to));
+    if (row === 0) this.opts().textSpeed = TEXT_SPEEDS[at]!.delay;
+    else if (row === 1) this.opts().animations = at === 0;
+  }
+
+  update(): void {
+    const p = this.game.input.pressed;
+    const rows = this.rows();
+    const n = rows.length + 1; // + CANCEL
+    if (p.up) this.index = (this.index + n - 1) % n;
+    if (p.down) this.index = (this.index + 1) % n;
+    // Left/right walk the selected row's choices. The original wraps on
+    // right and stops on left (SetCursorPositionsFromOptions); wrapping both
+    // ways is friendlier on a d-pad and costs nothing to read.
+    if (this.index < rows.length) {
+      const r = rows[this.index]!;
+      if (p.left) this.set(this.index, (r.index + r.choices.length - 1) % r.choices.length);
+      if (p.right) this.set(this.index, (r.index + 1) % r.choices.length);
+      // A on a row also advances it, so the screen is usable with one button
+      if (p.a) this.set(this.index, (r.index + 1) % r.choices.length);
+    } else if (p.a) {
+      this.game.pop();
+      return;
+    }
+    if (p.b || p.start) { this.game.pop(); return; }
+  }
+
+  view(): OptionsView {
+    return { rows: this.rows(), index: this.index };
+  }
+}

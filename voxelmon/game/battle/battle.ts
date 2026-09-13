@@ -91,6 +91,8 @@ export interface BattleSave {
   /** Dex flags (markSeen/markOwned). Optional so an older save without the
    * block is a no-op rather than a type error. */
   pokedex?: { seen: Record<string, boolean>; owned: Record<string, boolean> };
+  /** The OPTION screen's settings (ui/optionsmenu.ts). */
+  options?: { textSpeed?: number; animations?: boolean };
 }
 
 // ---------------------------------------------------------------------------
@@ -759,7 +761,16 @@ export class WildBattle implements EffectBattle {
    * can hold the queue exactly that long. One per side: a second animation
    * on the same card replaces the first rather than fighting it.
    */
+  /** BattleState.lua:2544 animationsOn — the OPTION toggle; sounds stay. */
+  animationsOn(): boolean {
+    return this.save.options?.animations !== false;
+  }
+
   private startAnim(kind: AnimKind, side: number): number {
+    // The toggle gates MOVE animations only. The faint slide is
+    // SlideDownFaintedMonPic, not a move animation, and always runs —
+    // without it a mon would vanish rather than sink.
+    if (kind !== "faint" && !this.animationsOn()) return 0;
     const total = animFrames(kind);
     this.anims = this.anims.filter((a) => a.side !== side);
     this.anims.push({ kind, side, frame: 0, total });
