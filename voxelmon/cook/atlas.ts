@@ -321,15 +321,32 @@ export function buildSpritePage(gen: GenData, key: string): PageDef {
 export function buildEmotePage(gen: GenData): PageDef | null {
   const art = artOf(gen, "emotes");
   if (!art) return null;
-  const cells = Math.floor(art.w / 16);
+  const bubbles = Math.floor(art.w / 16);
+  // The overworld 16x16 sheet. The GB emotion bubbles come first, then any
+  // field effect that needs to be drawn at a world position — currently just
+  // HM Cut's tree sprite, which pokered flickers over the tree it fells
+  // (AnimateCutTree). They share this page because it is the one 16x16 sheet
+  // every pak already carries, so an effect costs a cell rather than a new
+  // page and a new META field to find it by.
+  //
+  // Order is the contract: spec's FX_FRAME_CUT_TREE indexes past the
+  // bubbles, so extras must only ever be APPENDED.
+  const extras = ["fx/cut_tree"];
+  const extraArt = extras.map((k) => artOf(gen, k));
+  const cells = bubbles + extraArt.filter((a) => a).length;
   // Same 64-wide pad as buildSpritePage (the GE missamples 16-px pages).
   const linear = new Uint8Array(SPRITE_PAGE_W * cells * 16).fill(PX_CLEAR);
-  for (let i = 0; i < cells; i++) {
+  const blit = (cell: number, src: Art, sx: number): void => {
     for (let y = 0; y < 16; y++) {
       for (let x = 0; x < 16; x++) {
-        linear[(i * 16 + y) * SPRITE_PAGE_W + x] = art.px(i * 16 + x, y);
+        linear[(cell * 16 + y) * SPRITE_PAGE_W + x] = src.px(sx + x, y);
       }
     }
+  };
+  for (let i = 0; i < bubbles; i++) blit(i, art, i * 16);
+  let cell = bubbles;
+  for (const a of extraArt) {
+    if (a) blit(cell++, a, 0);
   }
   return {
     w: SPRITE_PAGE_W,

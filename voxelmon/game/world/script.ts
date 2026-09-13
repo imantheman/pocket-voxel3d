@@ -18,6 +18,7 @@
 import type { VoxelmonData } from "../data.ts";
 import * as Bag from "../rules/bag.ts";
 import { FADE_OUT_TO_WHITE } from "../rules/timing.ts";
+import { CELL_PX, FX_FRAME_CUT_TREE, Q4 } from "../../../contracts/spec/voxel-spec.ts";
 import type { Dir } from "./collision.ts";
 import type { NPC } from "./npc.ts";
 
@@ -74,6 +75,8 @@ export interface ScriptWorld {
   stamp(mapId: number, cx: number, cy: number, on: boolean): void;
   /** Scene-wide colour multiply (host.tint) — see OverworldShell.tint. */
   tint(abgr: number): void;
+  /** Field effect billboard at Q4 world px; frame < 0 clears it. */
+  fieldFx(x: number, z: number, frame: number): void;
 }
 
 export interface ScriptContext {
@@ -87,6 +90,12 @@ export interface ScriptContext {
 // Commands.lua:1024 EMOTE_BUBBLES (data.field.emotionBubbles order; matches
 // the spec's EMOTE shock/question/happy = 1/2/3)
 const EMOTE_BUBBLES: Record<string, number> = { shock: 1, question: 2, happy: 3 };
+
+/** HM Cut's tree animation (pokered AnimateCutTree): the sprite flickers on
+ * and off over the tree before the block changes. Beats alternate on/off, so
+ * an even count ends with it hidden. */
+const CUT_ANIM_BEATS = 8;
+const CUT_ANIM_BEAT_FRAMES = 5;
 
 type Verb = (ctx: ScriptContext, ...args: unknown[]) => Generator<void, string | number | void>;
 
@@ -454,6 +463,19 @@ function* use_cut(ctx: ScriptContext, ...args: unknown[]): Generator<void, void>
   const key = `${fx},${fy}`;
   const already = w.save.cutTrees?.[w.map.id]?.[key];
   if (w.map.isCuttableCell(fx, fy) && !already) {
+    // pokered AnimateCutTree: the cut-tree sprite flickers over the tree for
+    // four on/off beats before the block changes. The sprite sits on the
+    // emote page (cook/atlas.ts buildEmotePage) and is drawn by the fieldFx
+    // op; the timing lives here rather than in the host, so the host has no
+    // animation state to keep.
+    const cx = Math.round((fx * CELL_PX + CELL_PX / 2) * Q4);
+    const cz = Math.round((fy * CELL_PX + CELL_PX / 2) * Q4);
+    for (let beat = 0; beat < CUT_ANIM_BEATS; beat++) {
+      w.fieldFx(cx, cz, beat % 2 === 0 ? FX_FRAME_CUT_TREE : -1);
+      runner.waitingFrames = CUT_ANIM_BEAT_FRAMES;
+      yield;
+    }
+    w.fieldFx(0, 0, -1);
     w.stamp(w.map.def.index, fx, fy, false);
     // Hiding the stamp only removes the geometry; the block is still a tree,
     // so the cell has to be opened up as well or the tree disappears and the

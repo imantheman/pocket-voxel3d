@@ -588,6 +588,10 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     this.host.stamp(mapId, cx, cy, on ? 1 : 0);
   }
 
+  fieldFx(x: number, z: number, frame: number): void {
+    this.host.fieldFx?.(x, z, frame);
+  }
+
   /** host.tint passthrough — see OverworldShell.tint. */
   tint(abgr: number): void {
     this.host.tint(abgr);

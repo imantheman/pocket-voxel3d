@@ -343,6 +343,7 @@ pub mod op {
     pub const UI_FILL_BOTTOM: u32 = 76;
     pub const UI_CLEAR_BOTTOM: u32 = 77;
     pub const UI_SPRITE_BOTTOM: u32 = 78;
+    pub const FIELD_FX: u32 = 79;
 }
 
 /// Fixed-point scales used by op args.

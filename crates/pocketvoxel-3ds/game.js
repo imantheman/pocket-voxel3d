@@ -29,6 +29,7 @@ function fromObject(source) {
 
 // contracts/spec/voxel-spec.ts
 var TILE_PX = 8;
+var CELL_PX = 16;
 var CHUNK_TILES = 16;
 var CHUNK_PX = CHUNK_TILES * TILE_PX;
 var WORLD_VIEW_H = 136;
@@ -59,6 +60,7 @@ var ENT_FLAG = {
   ghost: 1 << 1,
   walker: 1 << 2
 };
+var FX_FRAME_CUT_TREE = 3;
 var Q4 = 16;
 var Q8 = 256;
 var AUDIO_ENGINES = 4;
@@ -5306,6 +5308,8 @@ function remove(save, id, qty) {
 
 // voxelmon/game/world/script.ts
 var EMOTE_BUBBLES = { shock: 1, question: 2, happy: 3 };
+var CUT_ANIM_BEATS = 8;
+var CUT_ANIM_BEAT_FRAMES = 5;
 function scriptText(w, textId, subs) {
   let text = w.data.text?.[textId] ?? w.resolveText(textId) ?? textId;
   if (subs) {
@@ -5527,6 +5531,14 @@ function* use_cut(ctx, ...args) {
   const key = `${fx},${fy}`;
   const already = w.save.cutTrees?.[w.map.id]?.[key];
   if (w.map.isCuttableCell(fx, fy) && !already) {
+    const cx = Math.round((fx * CELL_PX + CELL_PX / 2) * Q4);
+    const cz = Math.round((fy * CELL_PX + CELL_PX / 2) * Q4);
+    for (let beat = 0;beat < CUT_ANIM_BEATS; beat++) {
+      w.fieldFx(cx, cz, beat % 2 === 0 ? FX_FRAME_CUT_TREE : -1);
+      runner.waitingFrames = CUT_ANIM_BEAT_FRAMES;
+      yield;
+    }
+    w.fieldFx(0, 0, -1);
     w.stamp(w.map.def.index, fx, fy, false);
     w.map.markCut?.(fx, fy);
     w.save.cutTrees ??= {};
@@ -6337,6 +6349,9 @@ class Overworld {
   }
   stamp(mapId, cx, cy, on) {
     this.shell.stamp(mapId, cx, cy, on);
+  }
+  fieldFx(x, z, frame) {
+    this.shell.fieldFx?.(x, z, frame);
   }
   tint(abgr) {
     this.shell.tint(abgr);
@@ -9827,6 +9842,9 @@ class VoxelmonGame {
   stamp(mapId, cx, cy, on) {
     this.host.stamp(mapId, cx, cy, on ? 1 : 0);
   }
+  fieldFx(x, z, frame) {
+    this.host.fieldFx?.(x, z, frame);
+  }
   tint(abgr) {
     this.host.tint(abgr);
   }
@@ -10612,6 +10630,9 @@ class QuickJsHost {
   }
   uiSpriteBottom(page, x, y, w, h) {
     native.uiSpriteBottom(page, x, y, w, h);
+  }
+  fieldFx(x, z, frame) {
+    native.fieldFx(x, z, frame);
   }
   arena(mapId, x, y, shape, rig) {
     native.arena(mapId, x, y, shape, rig);

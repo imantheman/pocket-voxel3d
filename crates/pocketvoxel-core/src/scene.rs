@@ -148,6 +148,9 @@ pub struct Scene {
     pub palette: i32,
     /// Stamps toggled OFF: (map_id, cx, cy). Stamps default to shown.
     pub stamps_off: Vec<(u32, i16, i16)>,
+    /// A field effect billboard: world px x, z and an emote-page frame.
+    /// `None` when nothing is showing. See spec's `fieldFx`.
+    pub field_fx: Option<(f32, f32, u16)>,
     pub ents: [Ent; ENTS_MAX],
     /// Screen-space pictures (intro portraits, title art). Logical 480x272.
     pub pics: [Pic; PICS_MAX],
@@ -228,6 +231,7 @@ impl Scene {
             tint: 0xffff_ffff,
             palette: -1,
             stamps_off: Vec::new(),
+            field_fx: None,
             ents: [Ent::default(); ENTS_MAX],
             pics: [Pic::default(); PICS_MAX],
             ui: [0u16; UI_COLS * UI_ROWS],
@@ -381,6 +385,20 @@ impl Scene {
             op::PALETTE => {
                 if !args.is_empty() {
                     self.palette = a(0);
+                }
+            }
+            op::FIELD_FX => {
+                // x, z in Q4 world px, then the frame; a negative frame
+                // clears. The guest re-sends this every frame it wants the
+                // sprite up, so there is no timer to keep here.
+                if args.len() >= 3 && a(2) >= 0 {
+                    self.field_fx = Some((
+                        a(0) as f32 / spec::Q4 as f32,
+                        a(1) as f32 / spec::Q4 as f32,
+                        a(2) as u16,
+                    ));
+                } else {
+                    self.field_fx = None;
                 }
             }
             op::STAMP => {

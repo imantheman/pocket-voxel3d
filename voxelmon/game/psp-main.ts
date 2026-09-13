@@ -60,6 +60,7 @@ interface VoxelNative {
   uiFillBottom(x: number, y: number, w: number, h: number, tile: number): void;
   uiClearBottom(): void;
   uiSpriteBottom(page: number, x: number, y: number, w: number, h: number): void;
+  fieldFx(x: number, z: number, frame: number): void;
   arena(mapId: number, x: number, y: number, shape: number, rig: number): void;
   card(
     side: number,
@@ -200,6 +201,9 @@ class QuickJsHost implements VoxelHost {
   }
   uiSpriteBottom(page: number, x: number, y: number, w: number, h: number): void {
     native.uiSpriteBottom(page, x, y, w, h);
+  }
+  fieldFx(x: number, z: number, frame: number): void {
+    native.fieldFx(x, z, frame);
   }
   arena(mapId: number, x: number, y: number, shape: number, rig: number): void {
     native.arena(mapId, x, y, shape, rig);

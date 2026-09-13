@@ -741,6 +741,33 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
             }
         }
     }
+    // The field effect (spec `fieldFx`): the same billboard an emote gets,
+    // but anchored to a world position instead of an entity, so HM Cut can
+    // flicker the cut-tree sprite over the tree it is felling. Rides the
+    // emote page, which is the one sheet every pak already carries for
+    // 16x16 overworld art.
+    if let Some((fx, fz, frame)) = scene.field_fx {
+        if pak.meta.emote_page != EMOTE_PAGE_NONE {
+            let epage = pak.meta.emote_page as i32;
+            // A pak cooked before the effect frames were appended has a
+            // shorter emote page, and sheet_uv WRAPS — frame 3 on a 3-frame
+            // page is the shock bubble, so the tree would flash an
+            // exclamation mark. Draw nothing instead: the map still cuts, it
+            // just does not animate until it is re-cooked.
+            if let Some(page) = page_at(pak, epage)
+                .filter(|p| (frame as i32) < (p.h as i32 / CELL_PX).max(1))
+            {
+                let feet = vec3(fx, 0.0, fz);
+                items.push(Item::Card {
+                    verts: card_verts(feet, card_w, card_w, a),
+                    page: epage as u16,
+                    uv: sheet_uv(page, frame as i32),
+                    mirror: false,
+                    pull: pull_card,
+                });
+            }
+        }
+    }
     if scene.battle.active {
         for (side, card) in scene.battle.cards.iter().enumerate().filter(|(_, c)| c.shown) {
             let Some(page) = page_at(pak, card.pic) else {

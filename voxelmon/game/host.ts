@@ -63,6 +63,8 @@ export interface VoxelHost {
    * native 320x240 pixel space. Append-only like the tile grid — up to 8
    * per frame, reset by uiClearBottom. */
   uiSpriteBottom(page: number, x: number, y: number, w: number, h: number): void;
+  /** Field effect billboard at Q4 world px (x, z); frame < 0 clears it. */
+  fieldFx(x: number, z: number, frame: number): void;
   // battle
   arena(mapId: number, x: number, y: number, shape: number, rig: number): void;
   /** dx/dy/dz: Q4-px animation offset from the cell centre, optional and 0
@@ -205,6 +207,10 @@ export class RecorderHost implements VoxelHost {
   }
   uiSpriteBottom(page: number, x: number, y: number, w: number, h: number): void {
     this.op(VOX_OP.uiSpriteBottom, page, x, y, w, h);
+  }
+  fieldFx(x: number, z: number, frame: number): void {
+    // Args pass straight through, like card/arena: the caller supplies Q4.
+    this.op(VOX_OP.fieldFx, x, z, frame);
   }
   arena(mapId: number, x: number, y: number, shape: number, rig: number): void {
     this.op(VOX_OP.arena, mapId, x, y, shape, rig);

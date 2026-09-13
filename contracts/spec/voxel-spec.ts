@@ -637,7 +637,22 @@ export const VOX_OP = {
   uiFillBottom: 76,
   uiClearBottom: 77,
   uiSpriteBottom: 78,
+  /**
+   * A field effect: one emote-page frame drawn as a billboard at a world
+   * position, for as long as the guest leaves it up. Args are x, z in Q4
+   * world px and the frame index; frame < 0 clears it.
+   *
+   * The overworld had no way to draw a sprite anywhere but on an entity, so
+   * HM Cut's tree animation (pokered AnimateCutTree, which flickers the
+   * cut-tree sprite over the tree before the block changes) had nowhere to
+   * live. The guest owns the flicker timing; this op only says what is on
+   * screen right now.
+   */
+  fieldFx: 79,
 } as const;
+
+/** Emote-page frame of the HM Cut tree sprite (after the 3 GB bubbles). */
+export const FX_FRAME_CUT_TREE = 3;
 
 /** Fixed-point scales used by op args. */
 export const Q4 = 16;

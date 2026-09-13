@@ -113,6 +113,8 @@ export interface OverworldShell {
    * (voxelmon/cook/mesh.ts VERMILION_DOCK, mapscripts.ts's onStep) both ride
    * this same mechanism. */
   stamp(mapId: number, cx: number, cy: number, on: boolean): void;
+  /** Field effect billboard at Q4 world px; frame < 0 clears it (host.fieldFx). */
+  fieldFx(x: number, z: number, frame: number): void;
   /** Scene-wide colour multiply (Scene.tint / host.tint) — HM Flash's dark-
    * cave dimming (see DARK_MAPS below) is the first caller; 0xffffffff is
    * full brightness (no-op multiply). */
@@ -799,6 +801,10 @@ export class Overworld implements ScriptWorld {
   /** host.stamp passthrough — see OverworldShell.stamp. */
   stamp(mapId: number, cx: number, cy: number, on: boolean): void {
     this.shell.stamp(mapId, cx, cy, on);
+  }
+
+  fieldFx(x: number, z: number, frame: number): void {
+    this.shell.fieldFx?.(x, z, frame);
   }
 
   /** host.tint passthrough — see OverworldShell.tint. */
