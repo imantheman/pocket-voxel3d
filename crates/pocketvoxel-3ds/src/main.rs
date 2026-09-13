@@ -154,6 +154,28 @@ fn unsafe_free_kb() -> u32 {
     (unsafe { linearSpaceFree() }) / 1024
 }
 
+/// Linear headroom kept free of vertex buffers, in KB. NDSP's audio buffers,
+/// the page textures and citro3d's own command lists all live in the same
+/// pool, so the last megabyte is not ours to spend.
+const LINEAR_RESERVE_KB: u32 = 1024;
+
+/// Can `verts` vertices be uploaded without exhausting linear memory?
+///
+/// citro3d-rs's `Buffer::new` allocates with `Vec::with_capacity_in(..,
+/// LinearAllocator)`, which is INFALLIBLE: out of memory calls Rust's
+/// handle_alloc_error, which aborts the process. On hardware that is the
+/// game closing and the console rebooting, with no chance for the
+/// `bi.add(..).is_ok()` below to report anything — the abort happens inside
+/// the constructor, before `add` is ever called.
+///
+/// So the check has to happen BEFORE the allocation. A span that does not fit
+/// is dropped, which costs a hole in the terrain and a line in the log
+/// instead of the session.
+fn linear_fits(verts: usize) -> bool {
+    let need_kb = ((verts * core::mem::size_of::<Vertex>()) / 1024) as u32;
+    unsafe_free_kb() > need_kb + LINEAR_RESERVE_KB
+}
+
 /// Sampling for the sprite pages: entity cards, battle mons, screen pics
 /// and the UI tile sheet.
 ///
@@ -1595,6 +1617,11 @@ fn main() {
     // C3D_FrameEnd reason).
     let mut chunk_infos_prev: Vec<(Span, buffer::Info)> = Vec::new();
     let mut cur_map_huge = false;
+    /// The map the last build was for, so a huge-map STREAM (same map, new
+    /// chunk window) can be told from a map CHANGE into a huge map. Starts
+    /// deliberately unequal to map_i's initial 0 so the first build frees
+    /// rather than holds.
+    let mut prev_map_i = usize::MAX;
     let mut stream_center_chunk: Option<(i32, i32)> = None;
     // Snapshot of Scene.stamps_off.len() as of the last build_map — a cut
     // tree or the S.S. Anne hull toggling a stamp only mutates Scene state;
@@ -2096,21 +2123,36 @@ fn main() {
             // Holding the outgoing buffers while the new ones allocate
             // DOUBLES peak linear memory, and the vertex buffers are the
             // biggest thing in it (a full map can be 18 MB). That hold only
-            // exists for the huge-map streaming reload, which has no fade to
-            // hide a freed buffer the GPU is still reading. An ordinary map
-            // change is masked by pushWarpFade, so there we free first and
-            // allocate second, which halves the peak.
-            if cur_map_huge {
+            // exists for the huge-map STREAM — a re-build of the map the
+            // player is already standing in, crossing a chunk boundary
+            // mid-walk, which has no fade to hide a freed buffer the GPU is
+            // still reading. An ordinary map CHANGE is masked by
+            // pushWarpFade, so there we free first and allocate second,
+            // which halves the peak.
+            //
+            // The test is "same map", not "the new map is huge". Those differ
+            // exactly when walking INTO a huge map, and that case crashed:
+            // entering SAFFRON_CITY off ROUTE_6 held Route 6's 8.5 MB of
+            // terrain plus 2.3 MB of seam strips while Saffron's own 6.4 MB
+            // (399,999 verts x 16 B) tried to allocate against 6.35 MB free,
+            // and the upload died mid-loop — twice in the same log, each time
+            // between "linear free ... before build" and the upload summary.
+            let streaming_same_map = cur_map_huge && map_i == prev_map_i;
+            if streaming_same_map {
                 chunk_infos_prev = core::mem::take(&mut chunk_infos);
             } else {
                 chunk_infos_prev.clear();
                 chunk_infos.clear();
                 strip_hold.clear();
+                strip_infos.clear();
+                strip_verts_kb = 0;
             }
+            prev_map_i = map_i;
             let mut upload_fail = 0u32;
             for s in geom.chunk_spans.iter() {
                 let n = (s.end - s.start).min(65535);
                 if n == 0 { continue; }
+                if !linear_fits(n) { upload_fail += 1; continue; }
                 let mut bi = buffer::Info::new();
                 if bi.add(buffer::Buffer::new(&geom.verts[s.start..s.start + n]), attr_info.permutation()).is_ok() {
                     chunk_infos.push((*s, bi));
@@ -2158,6 +2200,10 @@ fn main() {
                     for s in strip.spans.iter() {
                         let n = (s.end - s.start).min(65535);
                         if n == 0 { continue; }
+                        // Same infallible-allocation trap as the terrain
+                        // upload above — see linear_fits. A neighbour strip is
+                        // scenery, so dropping one is cheap.
+                        if !linear_fits(n) { continue; }
                         let mut bi = buffer::Info::new();
                         if bi
                             .add(
