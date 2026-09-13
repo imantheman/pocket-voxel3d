@@ -431,6 +431,46 @@ export function buildPicPage(gen: GenData, key: string): PageDef {
 }
 
 /**
+ * The TOWN MAP background, composed into one 160x144 page.
+ *
+ * The layout is field.townMap.background.map — the 20x18 tile indices the
+ * extractor decompressed out of LoadTownMap's RLE — indexing the 16-tile
+ * WorldMapTileGraphics sheet. Composing it at cook time means the gear draws
+ * the whole map with a single uiSpriteBottom instead of 360 tile writes, and
+ * it needs no room in the UI page's tile codes, which the trainer card has
+ * nearly filled.
+ *
+ * Returns null when either half is missing, so a dataset without the town map
+ * cooks a pak with no map page rather than failing.
+ */
+export function buildTownMapPage(gen: GenData): PageDef | null {
+  const art = artOf(gen, "townmap/tiles");
+  const tm = (gen.field as { townMap?: { background?: { map?: number[] } } }).townMap;
+  const layout = tm?.background?.map;
+  if (!art || !Array.isArray(layout) || layout.length !== 20 * 18) return null;
+  const w = 20 * 8;
+  const h = 18 * 8;
+  const linear = new Uint8Array(w * h);
+  const perRow = Math.floor(art.w / 8); // the sheet is 4 tiles across
+  for (let cell = 0; cell < layout.length; cell++) {
+    const tile = layout[cell]!;
+    const sx = (tile % perRow) * 8;
+    const sy = Math.floor(tile / perRow) * 8;
+    const dx = (cell % 20) * 8;
+    const dy = Math.floor(cell / 20) * 8;
+    for (let y = 0; y < 8; y++) {
+      for (let x = 0; x < 8; x++) {
+        // The map is opaque paper: its cut-out is the sea, which the GB
+        // draws as shade 0. Same treatment buildUiPage gives a UI tile.
+        const px = art.px(sx + x, sy + y);
+        linear[(dy + y) * w + dx + x] = px === PX_CLEAR ? 0 : px;
+      }
+    }
+  }
+  return { w, h, kind: ATLAS_KIND.pics, frames: [linear], name: "townmap/background" };
+}
+
+/**
  * The same pic with its transparent pixels flooded to shade 0 (white) — the
  * treatment buildUiPage already gives UI tiles, for the same reason.
  *

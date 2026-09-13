@@ -4848,6 +4848,24 @@ var MAP_SCRIPTS = {
       ]
     }
   },
+  BLUES_HOUSE: {
+    talk: {
+      TEXT_BLUESHOUSE_DAISY_SITTING: [
+        ["face_player"],
+        ["check_flag", "EVENT_GOT_TOWN_MAP"],
+        ["jump_if_true", 10],
+        ["check_flag", "EVENT_GOT_STARTER"],
+        ["jump_if_false", 12],
+        ["show_text", "_BluesHouseDaisyOfferMapText"],
+        ["give_item", "TOWN_MAP", 1, "_GotMapText"],
+        ["set_flag", "EVENT_GOT_TOWN_MAP"],
+        ["jump", "end"],
+        ["show_text", "_BluesHouseDaisyUseMapText"],
+        ["jump", "end"],
+        ["show_text", "_BluesHouseDaisyRivalAtLabText"]
+      ]
+    }
+  },
   PALLET_TOWN: {
     talk: {
       TEXT_PALLETTOWN_OAK: [
@@ -10553,6 +10571,16 @@ the game!`, SAVE_DONE_HOLD, {
       });
     });
   }
+  gearView = "party";
+  gearMapPick = null;
+  setGearView(v) {
+    this.gearView = v;
+    if (v !== "map")
+      this.gearMapPick = null;
+  }
+  setGearMapPick(id) {
+    this.gearMapPick = id;
+  }
   savePanelLines = null;
   savePanel() {
     return this.savePanelLines;
@@ -10730,6 +10758,9 @@ to level ${mon.level}!`, () => {
 
 // voxelmon/game/ui/kantogear.ts
 var COLS = 20;
+var ROWS6 = 18;
+var TILE_W = 320 / COLS;
+var TILE_H = 240 / ROWS6;
 function stampBottom(host, x, y, s, bit = 0) {
   const codes = encodeGlyphs(s);
   for (let i = 0;i < codes.length && x + i < COLS; i++) {
@@ -10983,6 +11014,104 @@ function drawBattleGear(host, game, b) {
       return;
   }
 }
+function gearTabs(game) {
+  const tabs = [{ id: "party", label: "PARTY" }];
+  if ((game.save?.inventory?.TOWN_MAP ?? 0) > 0 && hasTownMap(game)) {
+    tabs.push({ id: "map", label: "MAP" });
+  }
+  return tabs;
+}
+function hasTownMap(game) {
+  const a = game.data.atlas;
+  return typeof a?.townMapPage === "number" && a.townMapPage >= 0;
+}
+function activeView(game) {
+  const want = game.gearView ?? "party";
+  return gearTabs(game).some((t) => t.id === want) ? want : "party";
+}
+function tabX(tabs, i) {
+  let x = 0;
+  for (let j = 0;j < i; j++)
+    x += tabs[j].label.length + 2;
+  return x;
+}
+function drawTabs(host, game) {
+  const tabs = gearTabs(game);
+  if (tabs.length < 2)
+    return;
+  const active2 = activeView(game);
+  tabs.forEach((t, i) => {
+    const x = tabX(tabs, i);
+    const w = t.label.length + 2;
+    if (t.id === active2) {
+      fillCellBottom(host, x, TAB_ROW, w, 1);
+      stampFill(host, x + 1, TAB_ROW, t.label);
+    } else {
+      stampBottom(host, x + 1, TAB_ROW, t.label, DARKTEXT_BIT);
+    }
+  });
+}
+var TAB_ROW = 1;
+var MAP_W = 160;
+var MAP_H = 144;
+var MAP_AREA_Y = Math.round((TAB_ROW + 1) * TILE_H);
+var MAP_AREA_H = 240 - MAP_AREA_Y;
+var MAP_SCALE = Math.min(320 / MAP_W, MAP_AREA_H / MAP_H);
+var MAP_DRAW_W = Math.round(MAP_W * MAP_SCALE);
+var MAP_DRAW_H = Math.round(MAP_H * MAP_SCALE);
+var MAP_X = Math.round((320 - MAP_DRAW_W) / 2);
+var MAP_Y = MAP_AREA_Y + Math.round((MAP_AREA_H - MAP_DRAW_H) / 2);
+function locPixel(loc) {
+  return { x: loc.x * 8 + 16, y: loc.y * 8 + 8 };
+}
+function mapToScreen(px2, py) {
+  return { x: MAP_X + Math.round(px2 * MAP_SCALE), y: MAP_Y + Math.round(py * MAP_SCALE) };
+}
+function townMapLocations(game) {
+  return game.data.field?.townMap?.locations ?? {};
+}
+function townMapPlaces(game) {
+  const bySquare = new Map;
+  for (const id of Object.keys(townMapLocations(game)).sort()) {
+    const loc = townMapLocations(game)[id];
+    const key = `${loc.x},${loc.y}`;
+    const held = bySquare.get(key);
+    if (!held || held.id.replace(/_/g, " ") !== held.loc.name && id.replace(/_/g, " ") === loc.name) {
+      bySquare.set(key, { id, loc });
+    }
+  }
+  return [...bySquare.values()];
+}
+function focusedLocation(game) {
+  const locs = townMapLocations(game);
+  const picked = game.gearMapPick;
+  if (picked && locs[picked])
+    return { id: picked, loc: locs[picked] };
+  const ow = game.overworld;
+  const here = ow?.mapId ?? ow?.map?.id;
+  if (here && locs[here])
+    return { id: here, loc: locs[here] };
+  return null;
+}
+function drawTownMapView(host, game) {
+  host.uiClearBottom();
+  const focus = focusedLocation(game);
+  drawTopBar(host, (focus?.loc.name ?? "TOWN MAP").slice(0, 11));
+  drawTabs(host, game);
+  const page = game.data.atlas?.townMapPage;
+  if (typeof page !== "number" || page < 0) {
+    stampBottom(host, 2, 4, "NO MAP DATA", DARKTEXT_BIT);
+    return;
+  }
+  host.uiSpriteBottom(page, MAP_X, MAP_Y, MAP_DRAW_W, MAP_DRAW_H);
+  const cursorPage = game.data.atlas?.townMapCursorPage;
+  if (focus && typeof cursorPage === "number" && cursorPage >= 0) {
+    const p = locPixel(focus.loc);
+    const at = mapToScreen(p.x - 4, p.y - 4);
+    const size = Math.round(16 * MAP_SCALE);
+    host.uiSpriteBottom(cursorPage, at.x, at.y, size, size);
+  }
+}
 function drawKantoGear(host, game) {
   const bv = game.battleView?.();
   const b = bv?.battle;
@@ -10990,11 +11119,32 @@ function drawKantoGear(host, game) {
     drawBattleGear(host, game, b);
     return;
   }
+  if (activeView(game) === "map") {
+    drawTownMapView(host, game);
+    return;
+  }
   drawPartyList(host, game, "KANTO GEAR", -1);
+  drawTabs(host, game);
 }
-var ROWS6 = 18;
-var TILE_W = 320 / COLS;
-var TILE_H = 240 / ROWS6;
+function gearMapTouch(game, x, y) {
+  if (!game.setGearMapPick)
+    return;
+  const px2 = (x - MAP_X) / MAP_SCALE;
+  const py = (y - MAP_Y) / MAP_SCALE;
+  if (px2 < 0 || py < 0 || px2 >= MAP_W || py >= MAP_H)
+    return;
+  let bestId = null;
+  let bestD = Infinity;
+  for (const { id, loc } of townMapPlaces(game)) {
+    const p = locPixel(loc);
+    const d = (p.x + 4 - px2) ** 2 + (p.y + 4 - py) ** 2;
+    if (d < bestD) {
+      bestD = d;
+      bestId = id;
+    }
+  }
+  game.setGearMapPick(bestD <= 16 * 16 ? bestId : null);
+}
 var TAP_A = {
   isDown: () => false,
   wasPressed: (btn) => btn === "a"
@@ -11004,10 +11154,24 @@ function clampInt(v, lo, hi) {
 }
 function gearTouchDown(game, x, y) {
   const b = game.battleView?.()?.battle;
-  if (!b)
-    return;
   const col = clampInt(Math.floor(x / TILE_W), 0, COLS - 1);
   const row = clampInt(Math.floor(y / TILE_H), 0, ROWS6 - 1);
+  if (!b) {
+    const tabs = gearTabs(game);
+    if (row === TAB_ROW && tabs.length > 1) {
+      for (let i = 0;i < tabs.length; i++) {
+        const x0 = tabX(tabs, i);
+        if (col >= x0 && col < x0 + tabs[i].label.length + 2) {
+          game.setGearView?.(tabs[i].id);
+          return;
+        }
+      }
+      return;
+    }
+    if (activeView(game) === "map")
+      gearMapTouch(game, x, y);
+    return;
+  }
   if (b.choiceOpen) {
     if (col >= 14 && col <= 19 && row >= 7 && row <= 11) {
       b.choiceYes = row < 9;

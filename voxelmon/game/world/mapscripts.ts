@@ -845,6 +845,35 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
   // rematch rows (upstream 2-19) need a trainer battle and are left out with
   // the rest of §10's trainer rung — the branch that survives is the one v1
   // content can reach.
+  // story.lua M.BLUES_HOUSE (scripts/BluesHouse.asm BluesHouseDaisySittingText):
+  // Blue's sister hands over the TOWN MAP once Oak has sent you on the errand
+  // — which is EVENT_GOT_STARTER, the flag that gates every "run along now"
+  // line in Pallet. Before that she only mentions where her brother is; after,
+  // she repeats the "use the TOWN MAP" line forever.
+  //
+  // give_item halts the script on a full bag (pokered's `jr nc, .bag_full`),
+  // so the set_flag below it cannot burn the gift.
+  BLUES_HOUSE: {
+    talk: {
+      TEXT_BLUESHOUSE_DAISY_SITTING: [
+        ["face_player"], //                                       1
+        ["check_flag", "EVENT_GOT_TOWN_MAP"], //                   2
+        ["jump_if_true", 10], //                                   3
+        ["check_flag", "EVENT_GOT_STARTER"], //                    4
+        ["jump_if_false", 12], //                                  5
+        ["show_text", "_BluesHouseDaisyOfferMapText"], //           6
+        // _GotMapText is "{PLAYER} got a\n{RAM:wStringBuffer}!" — give_item
+        // fills the buffer slot with the item's name, as pokered does.
+        ["give_item", "TOWN_MAP", 1, "_GotMapText"], //             7
+        ["set_flag", "EVENT_GOT_TOWN_MAP"], //                      8
+        ["jump", "end"], //                                         9
+        ["show_text", "_BluesHouseDaisyUseMapText"], //            10
+        ["jump", "end"], //                                        11
+        ["show_text", "_BluesHouseDaisyRivalAtLabText"], //        12
+      ],
+    },
+  },
+
   PALLET_TOWN: {
     talk: {
       TEXT_PALLETTOWN_OAK: [

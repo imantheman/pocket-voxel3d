@@ -30,6 +30,11 @@ import type { VoxelHost } from "../host.ts";
 
 // The companion grid is the same 20x18 the top UI uses (spec UI_COLS/UI_ROWS).
 const COLS = 20;
+const ROWS = 18;
+// The bottom target is the full 320x240 filled by that grid (main.rs
+// tpxx=320/COLS, tpxy=240/ROWS), so a touch pixel maps straight to a cell.
+const TILE_W = 320 / COLS; // 16
+const TILE_H = 240 / ROWS; // 13.33
 
 interface GearMon {
   species: string;
@@ -89,6 +94,13 @@ interface GearBattleView {
   battle: GearBattle;
 }
 
+/** One TOWN MAP location: field.townMap.locations, keyed by map id. */
+interface GearTownMapLoc {
+  name: string;
+  x: number;
+  y: number;
+}
+
 /** The minimal shape the panel reads — kept loose so it doesn't couple to the
  * full game type. All paths exist on the real VoxelmonGame / VoxelmonData. */
 interface GearGame {
@@ -100,10 +112,23 @@ interface GearGame {
     pokemon: Record<string, { name: string } | undefined>;
     moves: Record<string, { name: string; pp: number; type?: string; power?: number } | undefined>;
     items: Record<string, { name: string } | undefined>;
+    /** Page indices the cook wrote (cook/gamedata.ts AtlasIndex). */
+    atlas?: { townMapPage?: number | null; townMapCursorPage?: number | null };
+    field?: { townMap?: { locations?: Record<string, GearTownMapLoc> } };
   };
   /** Non-null while a wild/trainer battle is on the stack (game.ts:881). */
   battleView?: () => GearBattleView | null;
+  /** Which companion view is up, and the setter a tab tap calls. */
+  gearView?: GearViewId;
+  setGearView?: (v: GearViewId) => void;
+  /** The location the map cursor sits on, or null to follow the player. */
+  gearMapPick?: string | null;
+  setGearMapPick?: (id: string | null) => void;
+  /** The live map. Its id is on the GameMap; game.ts reads it the same way. */
+  overworld?: { mapId?: string; map?: { id?: string } };
 }
+
+export type GearViewId = "party" | "map";
 
 /** Stamp a label into the bottom grid, glyph by glyph (tile id == code), the
  * same way scene.ts's stamp() fills the top grid. Clipped to the grid width. */
@@ -481,6 +506,165 @@ function drawBattleGear(host: VoxelHost, game: GearGame, b: GearBattle): void {
  * with the phase-mirroring battle panels; otherwise the party-detail panel
  * shows.
  */
+// ---------------------------------------------------------------------------
+// the view switcher
+// ---------------------------------------------------------------------------
+
+interface GearTab {
+  id: GearViewId;
+  label: string;
+}
+
+/**
+ * The tabs available right now. PARTY is always there; MAP appears only once
+ * the bag holds the TOWN MAP, which is Blue's sister's gift — the same gate
+ * the original puts on the item (you cannot open a map you were never given).
+ * More views slot in here as they arrive.
+ */
+export function gearTabs(game: GearGame): GearTab[] {
+  const tabs: GearTab[] = [{ id: "party", label: "PARTY" }];
+  if ((game.save?.inventory?.TOWN_MAP ?? 0) > 0 && hasTownMap(game)) {
+    tabs.push({ id: "map", label: "MAP" });
+  }
+  return tabs;
+}
+
+/** A pak cooked before the town map pages existed draws no MAP tab. */
+function hasTownMap(game: GearGame): boolean {
+  const a = game.data.atlas;
+  return typeof a?.townMapPage === "number" && a.townMapPage >= 0;
+}
+
+/** The active view, clamped to a tab that actually exists. */
+function activeView(game: GearGame): GearViewId {
+  const want = game.gearView ?? "party";
+  return gearTabs(game).some((t) => t.id === want) ? want : "party";
+}
+
+/** Where tab `i` starts, in cells. Kept in one place so the hit test and the
+ * draw cannot drift apart. */
+function tabX(tabs: GearTab[], i: number): number {
+  let x = 0;
+  for (let j = 0; j < i; j++) x += tabs[j]!.label.length + 2;
+  return x;
+}
+
+/** The tab strip on row 1: the active tab inverted, the rest outlined. */
+function drawTabs(host: VoxelHost, game: GearGame): void {
+  const tabs = gearTabs(game);
+  if (tabs.length < 2) return; // nothing to switch between; keep the row clear
+  const active = activeView(game);
+  tabs.forEach((t, i) => {
+    const x = tabX(tabs, i);
+    const w = t.label.length + 2;
+    if (t.id === active) {
+      fillCellBottom(host, x, TAB_ROW, w, 1);
+      stampFill(host, x + 1, TAB_ROW, t.label);
+    } else {
+      stampBottom(host, x + 1, TAB_ROW, t.label, DARKTEXT_BIT);
+    }
+  });
+}
+
+/** Row the tab strip lives on, under the dark status bar. */
+const TAB_ROW = 1;
+
+// --- the TOWN MAP view -----------------------------------------------------
+
+// The composed page (cook/atlas.ts buildTownMapPage) is the GB screen's own
+// 20x18 tiles. It is blitted whole, scaled to fit the area under the tab
+// strip with its aspect kept — a stretched Kanto reads as a wrong map.
+const MAP_W = 160;
+const MAP_H = 144;
+const MAP_AREA_Y = Math.round((TAB_ROW + 1) * TILE_H);
+const MAP_AREA_H = 240 - MAP_AREA_Y;
+const MAP_SCALE = Math.min(320 / MAP_W, MAP_AREA_H / MAP_H);
+const MAP_DRAW_W = Math.round(MAP_W * MAP_SCALE);
+const MAP_DRAW_H = Math.round(MAP_H * MAP_SCALE);
+const MAP_X = Math.round((320 - MAP_DRAW_W) / 2);
+const MAP_Y = MAP_AREA_Y + Math.round((MAP_AREA_H - MAP_DRAW_H) / 2);
+
+/**
+ * TownMapCoordsToOAMCoords (engine/items/town_map.asm): a location's grid
+ * (x,y) is the 8x8 cell at map pixel (x*8+16, y*8+8). The 16x16 marker is
+ * centred on that cell, so it starts 4px up and left of it.
+ */
+function locPixel(loc: GearTownMapLoc): { x: number; y: number } {
+  return { x: loc.x * 8 + 16, y: loc.y * 8 + 8 };
+}
+
+/** Map-page pixel -> bottom-screen pixel. */
+function mapToScreen(px: number, py: number): { x: number; y: number } {
+  return { x: MAP_X + Math.round(px * MAP_SCALE), y: MAP_Y + Math.round(py * MAP_SCALE) };
+}
+
+function townMapLocations(game: GearGame): Record<string, GearTownMapLoc> {
+  return game.data.field?.townMap?.locations ?? {};
+}
+
+/**
+ * One entry per SQUARE, not per map — most of the 226 locations are interiors
+ * pointing at their town's square (every Celadon building says CELADON CITY),
+ * and picking between them by iteration order would be arbitrary. The same
+ * dedupe TownMap.lua does when it builds its cursor list.
+ *
+ * The survivor is the map whose id IS the place ("CELADON_CITY" spelled out
+ * matches "CELADON CITY"); where no map is named after the square — BILLS_HOUSE
+ * is the SEA COTTAGE — the lowest id wins, so the choice is at least stable.
+ */
+function townMapPlaces(game: GearGame): { id: string; loc: GearTownMapLoc }[] {
+  const bySquare = new Map<string, { id: string; loc: GearTownMapLoc }>();
+  for (const id of Object.keys(townMapLocations(game)).sort()) {
+    const loc = townMapLocations(game)[id]!;
+    const key = `${loc.x},${loc.y}`;
+    const held = bySquare.get(key);
+    if (!held || (held.id.replace(/_/g, " ") !== held.loc.name
+                  && id.replace(/_/g, " ") === loc.name)) {
+      bySquare.set(key, { id, loc });
+    }
+  }
+  return [...bySquare.values()];
+}
+
+/** The location the cursor is on: the player's tap, else where they stand. */
+function focusedLocation(game: GearGame): { id: string; loc: GearTownMapLoc } | null {
+  const locs = townMapLocations(game);
+  const picked = game.gearMapPick;
+  if (picked && locs[picked]) return { id: picked, loc: locs[picked]! };
+  const ow = game.overworld;
+  const here = ow?.mapId ?? ow?.map?.id;
+  if (here && locs[here]) return { id: here, loc: locs[here]! };
+  return null;
+}
+
+function drawTownMapView(host: VoxelHost, game: GearGame): void {
+  host.uiClearBottom();
+  const focus = focusedLocation(game);
+  // The banner is the selected location's name, as the original's is.
+  // 11 chars is what the bar has left of the clock ("12:34AM" plus its
+  // margins); longer names would run into it. "POKéMON LEAGUE" is the only
+  // one that loses anything.
+  drawTopBar(host, (focus?.loc.name ?? "TOWN MAP").slice(0, 11));
+  drawTabs(host, game);
+
+  const page = game.data.atlas?.townMapPage;
+  if (typeof page !== "number" || page < 0) {
+    stampBottom(host, 2, 4, "NO MAP DATA", DARKTEXT_BIT);
+    return;
+  }
+  host.uiSpriteBottom(page, MAP_X, MAP_Y, MAP_DRAW_W, MAP_DRAW_H);
+
+  // The marker rides on top as a second sprite: sprites draw after the tile
+  // grid and in call order, so a tile overlay would be hidden by the map.
+  const cursorPage = game.data.atlas?.townMapCursorPage;
+  if (focus && typeof cursorPage === "number" && cursorPage >= 0) {
+    const p = locPixel(focus.loc);
+    const at = mapToScreen(p.x - 4, p.y - 4);
+    const size = Math.round(16 * MAP_SCALE);
+    host.uiSpriteBottom(cursorPage, at.x, at.y, size, size);
+  }
+}
+
 export function drawKantoGear(host: VoxelHost, game: GearGame): void {
   const bv = game.battleView?.();
   const b = bv?.battle;
@@ -488,14 +672,38 @@ export function drawKantoGear(host: VoxelHost, game: GearGame): void {
     drawBattleGear(host, game, b);
     return;
   }
+  if (activeView(game) === "map") {
+    drawTownMapView(host, game);
+    return;
+  }
   drawPartyList(host, game, "KANTO GEAR", -1);
+  drawTabs(host, game);
 }
 
-// The bottom target is the full 320x240 filled by the 20x18 grid (main.rs
-// tpxx=320/COLS, tpxy=240/ROWS), so a touch pixel maps straight to a cell.
-const ROWS = 18;
-const TILE_W = 320 / COLS; // 16
-const TILE_H = 240 / ROWS; // 13.33
+/**
+ * A tap on the TOWN MAP: move the marker to the nearest location and read its
+ * name in the banner, which is what the original's d-pad cursor does. A tap
+ * that lands nowhere near a location clears the pick, so the marker goes back
+ * to following the player.
+ */
+function gearMapTouch(game: GearGame, x: number, y: number): void {
+  if (!game.setGearMapPick) return;
+  // screen -> the map page's own pixels
+  const px = (x - MAP_X) / MAP_SCALE;
+  const py = (y - MAP_Y) / MAP_SCALE;
+  if (px < 0 || py < 0 || px >= MAP_W || py >= MAP_H) return;
+  let bestId: string | null = null;
+  let bestD = Infinity;
+  for (const { id, loc } of townMapPlaces(game)) {
+    const p = locPixel(loc);
+    // + 4 for the cell's centre, so the nearest location is measured from
+    // the middle of its square rather than its corner
+    const d = (p.x + 4 - px) ** 2 + (p.y + 4 - py) ** 2;
+    if (d < bestD) { bestD = d; bestId = id; }
+  }
+  // Two cells' slack: closer than that and the tap plainly meant that place.
+  game.setGearMapPick(bestD <= 16 * 16 ? bestId : null);
+}
 
 /** One synthetic A-press, reused for every tap. */
 const TAP_A: GearBattleInput = {
@@ -516,9 +724,26 @@ function clampInt(v: number, lo: number, hi: number): number {
  */
 export function gearTouchDown(game: GearGame, x: number, y: number): void {
   const b = game.battleView?.()?.battle;
-  if (!b) return;
   const col = clampInt(Math.floor(x / TILE_W), 0, COLS - 1);
   const row = clampInt(Math.floor(y / TILE_H), 0, ROWS - 1);
+  if (!b) {
+    // Out of battle the gear is its own screen: the tab strip switches view,
+    // and the map takes taps of its own. A battle owns the whole surface, so
+    // the tabs are not drawn and not hit-tested while one is up.
+    const tabs = gearTabs(game);
+    if (row === TAB_ROW && tabs.length > 1) {
+      for (let i = 0; i < tabs.length; i++) {
+        const x0 = tabX(tabs, i);
+        if (col >= x0 && col < x0 + tabs[i]!.label.length + 2) {
+          game.setGearView?.(tabs[i]!.id);
+          return;
+        }
+      }
+      return;
+    }
+    if (activeView(game) === "map") gearMapTouch(game, x, y);
+    return;
+  }
 
   // sayChoice's YES/NO box overlays "messages" rather than being its own
   // phase (battle.ts:558-594) — check it before the phase switch. Tapping

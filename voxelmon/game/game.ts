@@ -1037,6 +1037,22 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     });
   }
 
+  // --- Kanto Gear (ui/kantogear.ts) ------------------------------------
+  // Which companion view the bottom screen shows, and where its town-map
+  // marker sits. Both are presentation state, not save state: a reload
+  // opens on PARTY with the marker back on the player.
+  gearView: "party" | "map" = "party";
+  gearMapPick: string | null = null;
+
+  setGearView(v: "party" | "map"): void {
+    this.gearView = v;
+    if (v !== "map") this.gearMapPick = null;
+  }
+
+  setGearMapPick(id: string | null): void {
+    this.gearMapPick = id;
+  }
+
   private savePanelLines: string[] | null = null;
 
   /** SaveScreen's PLAYER/BADGES/POKéDEX/TIME window, while the flow is up. */

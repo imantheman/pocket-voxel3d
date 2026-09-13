@@ -28,6 +28,10 @@ export interface AtlasIndex {
    * draws without a portrait rather than showing a wrong page.
    */
   trainerCardPic: number | null;
+  /** The composed 160x144 TOWN MAP (atlas.ts buildTownMapPage). */
+  townMapPage: number | null;
+  /** The 16x16 marker drawn on the selected location, transparency kept. */
+  townMapCursorPage: number | null;
 }
 
 /** The tileset subset the guest needs (collision + animation semantics). */

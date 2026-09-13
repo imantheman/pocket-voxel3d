@@ -26,6 +26,7 @@ import {
   buildTerrainPage,
   buildPalettes,
   buildOpaquePicPage,
+  buildTownMapPage,
   buildUiPage,
   paletteBase,
   type PageDef,
@@ -213,6 +214,25 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
     pages.push(buildOpaquePicPage(gen, "battle/trainer/red", "trainer_card/player"));
     pageOwners.push({ kind: ATLAS_KIND.pics });
   }
+
+  // The TOWN MAP: the whole 20x18 layout composed into one page, plus the
+  // marker that sits on a location. The gear (game/ui/kantogear.ts) blits
+  // both with uiSpriteBottom.
+  let townMapPage: number | null = null;
+  let townMapCursorPage: number | null = null;
+  const townMap = buildTownMapPage(gen);
+  if (townMap) {
+    townMapPage = pages.length;
+    pages.push(townMap);
+    pageOwners.push({ kind: ATLAS_KIND.pics });
+  }
+  if (gen.gfx["townmap/cursor"]) {
+    // Keeps its transparency, unlike the background: the marker is an
+    // outline and the map has to show through the middle of it.
+    townMapCursorPage = pages.length;
+    pages.push(buildPicPage(gen, "townmap/cursor"));
+    pageOwners.push({ kind: ATLAS_KIND.pics });
+  }
   const pageForPath = (byKey: Map<string, number>, path: string | undefined) => {
     if (!path) return undefined;
     const key = path.replace(/^assets\/generated\//, "").replace(/\.png$/, "");
@@ -270,6 +290,8 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
     uiPage,
     terrainPage,
     trainerCardPic,
+    townMapPage,
+    townMapCursorPage,
   };
   const gameJson = buildGamedata(gen, atlas, mapNames);
   const glyphs = buildCharmap(gen);

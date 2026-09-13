@@ -24,6 +24,7 @@ import { expForLevel } from "../voxelmon/game/rules/growth.ts";
 import { VoxelmonGame } from "../voxelmon/game/game.ts";
 import { RecorderHost } from "../voxelmon/game/host.ts";
 import { Input } from "../voxelmon/game/input.ts";
+import { gearTabs, gearTouchDown } from "../voxelmon/game/ui/kantogear.ts";
 import { encodeGlyphs, glyphLen, MAX_COLS } from "../voxelmon/game/ui/tiles.ts";
 import { GameMap } from "../voxelmon/game/world/map.ts";
 import { computeNeighbors } from "../voxelmon/game/world/overworld.ts";
@@ -851,6 +852,92 @@ describe("talking to a trainer", () => {
     ow.engageTrainer(npc!);
     expect(game.stackKinds().at(-1)).toBe("textbox");
     expect(topText(game)).toContain("guarding this");
+  });
+});
+
+describe("the town map", () => {
+  /**
+   * The atlas index is the COOK's product and arrives with the pak's
+   * gamedata; loadRuntimeData reads the importer's output, which has none.
+   * The gear checks it before offering a MAP tab (a pak cooked before the
+   * town map pages existed must not draw one), so a test needs it present.
+   */
+  function withAtlas(game: VoxelmonGame): VoxelmonGame {
+    (game.data as { atlas?: unknown }).atlas = {
+      ...(game.data as { atlas?: object }).atlas,
+      townMapPage: 426,
+      townMapCursorPage: 427,
+    };
+    return game;
+  }
+
+  test.skipIf(!hasGen)("Blue's sister hands it over once Oak has sent you out", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    ow.setMap("BLUES_HOUSE", 3, 4, "up");
+
+    // before the starter she only says where her brother is
+    ow.showMapText("TEXT_BLUESHOUSE_DAISY_SITTING");
+    dismissText(game);
+    expect(game.save.inventory.TOWN_MAP).toBeUndefined();
+    expect(game.save.flags.EVENT_GOT_TOWN_MAP).toBeUndefined();
+
+    game.save.flags.EVENT_GOT_STARTER = true;
+    ow.showMapText("TEXT_BLUESHOUSE_DAISY_SITTING");
+    let guard = 0;
+    while (game.stackKinds().length > 1 && guard++ < 900) dismissText(game);
+    expect(game.save.inventory.TOWN_MAP).toBe(1);
+    expect(game.save.flags.EVENT_GOT_TOWN_MAP).toBe(true);
+
+    // talking again repeats the advice, it does not hand out a second map
+    ow.showMapText("TEXT_BLUESHOUSE_DAISY_SITTING");
+    guard = 0;
+    while (game.stackKinds().length > 1 && guard++ < 900) dismissText(game);
+    expect(game.save.inventory.TOWN_MAP).toBe(1);
+  });
+
+  test.skipIf(!hasGen)("the MAP tab appears only once the map is in the bag", () => {
+    const game = withAtlas(makeMenuGame());
+    expect(gearTabs(game as never).map((t) => t.id)).toEqual(["party"]);
+    game.save.inventory.TOWN_MAP = 1;
+    expect(gearTabs(game as never).map((t) => t.id)).toEqual(["party", "map"]);
+  });
+
+  test.skipIf(!hasGen)("a pak with no town map pages offers no MAP tab", () => {
+    const game = makeMenuGame();
+    game.save.inventory.TOWN_MAP = 1;
+    (game.data as { atlas?: unknown }).atlas = { townMapPage: null };
+    expect(gearTabs(game as never).map((t) => t.id)).toEqual(["party"]);
+  });
+
+  test.skipIf(!hasGen)("tapping a tab switches the view, tapping the map picks", () => {
+    const game = withAtlas(makeMenuGame());
+    game.save.inventory.TOWN_MAP = 1;
+    game.overworld.setMap("PALLET_TOWN", 5, 6, "down");
+    expect(game.gearView).toBe("party");
+    // the MAP tab sits after PARTY on the strip's row (7 cells in, row 1)
+    gearTouchDown(game as never, 9 * 16, Math.floor(1.5 * (240 / 18)));
+    expect(game.gearView).toBe("map");
+
+    // with nothing picked the marker follows the player
+    expect(game.gearMapPick).toBeNull();
+    // CELADON CITY is at grid (7,5): map pixel (72,48), which the view puts
+    // at MAP_X + 72*scale, MAP_Y + 48*scale
+    const loc = (romData!.field as any).townMap.locations.CELADON_CITY;
+    const scale = Math.min(320 / 160, (240 - Math.round(2 * (240 / 18))) / 144);
+    const mx = Math.round((320 - Math.round(160 * scale)) / 2);
+    const my = Math.round(2 * (240 / 18))
+      + Math.round(((240 - Math.round(2 * (240 / 18))) - Math.round(144 * scale)) / 2);
+    gearTouchDown(
+      game as never,
+      mx + (loc.x * 8 + 20) * scale,
+      my + (loc.y * 8 + 12) * scale,
+    );
+    expect(game.gearMapPick).toBe("CELADON_CITY");
+
+    // a tap out at sea clears it again
+    gearTouchDown(game as never, mx + 4, my + 4);
+    expect(game.gearMapPick).toBeNull();
   });
 });
 
