@@ -4983,12 +4983,19 @@ var MAP_SCRIPTS = {
       TEXT_GAMECORNER_ROCKET: [
         ["engage_trainer", "GAMECORNER_ROCKET"],
         ["jump_if_false", "end"],
+        ["walk_npc", "GAMECORNER_ROCKET", ["up"]],
         ["hide_object", "GAME_CORNER", "GAMECORNER_ROCKET"]
       ]
     },
     onStep: (ow, save) => {
       if (save?.flags?.EVENT_FOUND_ROCKET_HIDEOUT)
         ow.refreshGameCornerPoster?.();
+      const npc = ow.findNpc?.("GAMECORNER_ROCKET");
+      if (npc && ow.trainerDefeated?.(npc)) {
+        ow.setObjectHidden?.("GAMECORNER_ROCKET", true);
+        const toggles = save.objectToggles ??= {};
+        (toggles.GAME_CORNER ??= {}).GAMECORNER_ROCKET = false;
+      }
       return null;
     }
   },

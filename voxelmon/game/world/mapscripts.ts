@@ -1161,18 +1161,35 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
         ["label", "known"],
         ["show_text", "_GameCornerPosterSwitchBehindPosterText"],
       ],
+      // GameCornerRocketText / GameCornerRocketExitScript. He stands at
+      // (9,5), directly below the poster sign at (9,4), so he IS the lock on
+      // the switch: until he moves, the player cannot face the poster.
+      // Beaten, he walks up into the wall the hidden stairs are behind and
+      // despawns, which frees the tile.
       TEXT_GAMECORNER_ROCKET: [
         ["engage_trainer", "GAMECORNER_ROCKET"],
         ["jump_if_false", "end"],
-        // GameCornerRocketExitScript: beaten, he warns the BOSS and is gone.
+        ["walk_npc", "GAMECORNER_ROCKET", ["up"]],
         ["hide_object", "GAME_CORNER", "GAMECORNER_ROCKET"],
       ],
     },
-    // The block swap lands on the next step rather than on the text box
-    // closing — there is no post-script hook, and the player has to step to
-    // reach the stairs anyway.
     onStep: (ow: any, save: any) => {
+      // The poster block swap lands on the next step rather than on the text
+      // box closing — there is no post-script hook, and the player has to
+      // step to reach the stairs anyway.
       if (save?.flags?.EVENT_FOUND_ROCKET_HIDEOUT) ow.refreshGameCornerPoster?.();
+      // Repair, and upstream carries the same one: a grunt whose BEAT flag is
+      // already set but who is still standing keeps blocking the poster
+      // forever. That is any save that fought him through the trainer-sight
+      // path, which is what he was before this file gave him a talk script —
+      // sight trainers skip scripted ones, so registering the script is what
+      // routed him through it, and saves made before that never hid him.
+      const npc = ow.findNpc?.("GAMECORNER_ROCKET");
+      if (npc && ow.trainerDefeated?.(npc)) {
+        ow.setObjectHidden?.("GAMECORNER_ROCKET", true);
+        const toggles = (save.objectToggles ??= {});
+        (toggles.GAME_CORNER ??= {}).GAMECORNER_ROCKET = false;
+      }
       return null;
     },
   },
