@@ -7637,6 +7637,31 @@ class Scene {
       }
       return;
     }
+    const dv = view.devMenu?.();
+    if (dv) {
+      const sig = `d${dv.index},${dv.entries.length}`;
+      if (sig !== this.menuSig) {
+        this.menuSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const W = 12, X = 20 - W - 1, Y = 0, H = dv.entries.length * 2;
+        host.uiTile(X, Y, BORDER_TL);
+        host.uiFill(X + 1, Y, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y, BORDER_TR);
+        host.uiFill(X, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + W, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + 1, Y + 1, W - 1, H, SPACE);
+        host.uiTile(X, Y + 1 + H, BORDER_BL);
+        host.uiFill(X + 1, Y + 1 + H, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y + 1 + H, BORDER_BR);
+        dv.entries.forEach((e, i) => {
+          this.stamp(host, X + 2, Y + 2 + i * 2, e);
+          if (i === dv.index)
+            host.uiTile(X + 1, Y + 2 + i * 2, ARROW_CURSOR);
+        });
+      }
+      return;
+    }
     const sm = view.startMenu?.();
     if (sm) {
       const sig = `${sm.index},${sm.entries.length}`;
@@ -8231,7 +8256,7 @@ class StartMenuState {
     e.push([String(game.save?.player?.name ?? "RED"), "trainer"]);
     e.push(["SAVE", "save"]);
     e.push(["OPTION", "option"]);
-    e.push(["WARP", "warp"]);
+    e.push(["DEV", "dev"]);
     e.push(["EXIT", "exit"]);
     this.entries = e.map((x) => x[0]);
     this.actions = e.map((x) => x[1]);
@@ -8257,6 +8282,47 @@ class StartMenuState {
   }
   view() {
     return { entries: this.entries, index: this.index };
+  }
+}
+
+// voxelmon/game/ui/devmenu.ts
+var ENTRIES = [
+  ["WARP", "warp"],
+  ["RARE CANDY", "candy"],
+  ["CANCEL", "exit"]
+];
+
+class DevMenuState {
+  game;
+  onPick;
+  kind = "devmenu";
+  index = 0;
+  constructor(game, onPick) {
+    this.game = game;
+    this.onPick = onPick;
+  }
+  update() {
+    const p = this.game.input.pressed;
+    const n = ENTRIES.length;
+    if (p.up)
+      this.index = (this.index + n - 1) % n;
+    if (p.down)
+      this.index = (this.index + 1) % n;
+    if (p.b || p.start) {
+      this.game.pop();
+      return;
+    }
+    if (p.a) {
+      const act = ENTRIES[this.index][1];
+      if (act === "exit") {
+        this.game.pop();
+        return;
+      }
+      this.onPick(act);
+    }
+  }
+  view() {
+    return { entries: ENTRIES.map((e) => e[0]), index: this.index };
   }
 }
 
@@ -8532,6 +8598,7 @@ class SummaryState {
 
 // voxelmon/game/ui/bagscreen.ts
 var ROWS2 = 4;
+var USABLE_ON_PARTY = new Set(["RARE_CANDY"]);
 
 class BagState {
   game;
@@ -8561,9 +8628,10 @@ class BagState {
     }
     if (p.a && this.index < this.ids().length) {
       const id = this.ids()[this.index];
-      if (this.game.data.items?.[id]?.machine?.move) {
+      const teach = !!this.game.data.items?.[id]?.machine?.move;
+      if (teach || USABLE_ON_PARTY.has(id)) {
         this.game.push(new PartyState(this.game, {
-          onPick: (i) => this.game.teachMachine(i, id)
+          onPick: (i) => teach ? this.game.teachMachine(i, id) : this.game.useItem(i, id)
         }));
       }
     }
@@ -9885,12 +9953,12 @@ evolving!\fCongratulations!
 Your ${oldName}
 evolved into
 ${newName}!`, () => {
-        this.learnEvolutionMoves(mon, () => step(i + 1));
+        this.learnMovesAtLevel(mon, () => step(i + 1));
       });
     };
     step(0);
   }
-  learnEvolutionMoves(mon, onDone) {
+  learnMovesAtLevel(mon, onDone) {
     const def = this.data.pokemon[mon.species];
     const learned = movesLearnedAt(def, mon.level);
     const name = mon.nickname ?? def.name;
@@ -10099,16 +10167,8 @@ ${mname}!`);
       if (act === "pokemon") {
         this.push(new PartyState(this));
       }
-      if (act === "warp") {
-        const ow = this.overworld;
-        const here = String(ow.mapId ?? ow.map?.id ?? "");
-        this.push(new WarpPickerState(this, here, (mapId) => {
-          this.pop();
-          const def = this.data.maps?.[mapId];
-          const w = (def?.warps ?? [])[0];
-          ow.startWarpTo(mapId, w?.x ?? 1, w?.y ?? 1, "down", () => {});
-        }));
-      }
+      if (act === "dev")
+        this.openDevMenu();
       if (act === "save") {
         const ow = this.overworld;
         const p = this.save.player;
@@ -10124,6 +10184,64 @@ ${mname}!`);
         this.pop();
       }
     }));
+  }
+  openDevMenu() {
+    this.push(new DevMenuState(this, (act) => {
+      if (act === "warp") {
+        const ow = this.overworld;
+        const here = String(ow.mapId ?? ow.map?.id ?? "");
+        this.push(new WarpPickerState(this, here, (mapId) => {
+          this.closeToOverworld();
+          const def = this.data.maps?.[mapId];
+          const w = (def?.warps ?? [])[0];
+          ow.startWarpTo(mapId, w?.x ?? 1, w?.y ?? 1, "down", () => {});
+        }));
+      }
+      if (act === "candy")
+        this.giveRareCandies();
+    }));
+  }
+  giveRareCandies() {
+    const have = this.save.inventory?.RARE_CANDY ?? 0;
+    const want = 99 - have;
+    if (want <= 0) {
+      this.showText(`You already have
+99 RARE CANDY!`);
+      return;
+    }
+    if (!add(this.save, "RARE_CANDY", want, this.data)) {
+      this.showText("The BAG is full!");
+      return;
+    }
+    this.showText(`Got ${want} RARE CANDY!
+Now x99.`);
+  }
+  useItem(partyIndex, itemId) {
+    if (itemId === "RARE_CANDY")
+      this.useRareCandy(partyIndex);
+  }
+  useRareCandy(partyIndex) {
+    const mon = this.save.party[partyIndex];
+    if (!mon)
+      return;
+    const def = this.data.pokemon[mon.species];
+    const name = mon.nickname ?? def.name;
+    const cap = this.data.constants?.levelCap ?? 100;
+    if (mon.level >= cap) {
+      this.showText(`It won't have any
+effect.`);
+      return;
+    }
+    remove(this.save, "RARE_CANDY", 1);
+    mon.level += 1;
+    mon.exp = expForLevel(def.growthRate, mon.level, this.data.growth_rates);
+    const old = mon.stats;
+    mon.stats = calc(def, mon.level, mon.dvs, mon.statExp);
+    mon.hp = Math.min(mon.stats.hp, mon.hp + (mon.stats.hp - old.hp));
+    this.showText(`${name} grew
+to level ${mon.level}!`, () => {
+      this.learnMovesAtLevel(mon, () => this.runEvolutions(new Set([mon])));
+    });
   }
   bag() {
     const top = this.stack[this.stack.length - 1];
@@ -10152,6 +10270,10 @@ ${mname}!`);
   startMenu() {
     const top = this.stack[this.stack.length - 1];
     return top?.kind === "startmenu" ? top.view() : null;
+  }
+  devMenu() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "devmenu" ? top.view() : null;
   }
   warpPicker() {
     const top = this.stack[this.stack.length - 1];

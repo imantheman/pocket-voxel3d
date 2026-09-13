@@ -16,8 +16,11 @@ import { join } from "node:path";
 import { VOX_BTN, VOX_OP } from "../contracts/spec/voxel-spec.ts";
 import { fromGenDir as loadAudioBanks } from "../voxelmon/game/audio/banks.ts";
 import { loadRuntimeData, REQUIRED_MODULES, type VoxelmonData } from "../voxelmon/game/data.ts";
+import { newMon } from "../voxelmon/game/battle/mon.ts";
 import { seqRng } from "../voxelmon/game/rng.ts";
+import * as Bag from "../voxelmon/game/rules/bag.ts";
 import { ENCOUNTER_BUCKETS } from "../voxelmon/game/rules/encounter.ts";
+import { expForLevel } from "../voxelmon/game/rules/growth.ts";
 import { VoxelmonGame } from "../voxelmon/game/game.ts";
 import { RecorderHost } from "../voxelmon/game/host.ts";
 import { Input } from "../voxelmon/game/input.ts";
@@ -628,4 +631,115 @@ describe("story tape", () => {
     },
     60_000,
   );
+});
+
+// ---------------------------------------------------------------------------
+// the DEV menu and RARE CANDY (ui/devmenu.ts, game.ts useRareCandy)
+// ---------------------------------------------------------------------------
+
+/**
+ * RecorderHost predates the pic and save ops and still doesn't implement them
+ * (the standing `RecorderHost incorrectly implements VoxelHost` type error) —
+ * harmless for a tape walk, fatal the moment a menu emits a pic. Filling them
+ * in here keeps that gap out of this suite without changing what the .vtrace
+ * traces record.
+ */
+class MenuHost extends RecorderHost {
+  private saved: string | undefined;
+  pic(): void {}
+  picHide(): void {}
+  saveWrite(text: string): void { this.saved = text; }
+  saveData(): string | undefined { return this.saved; }
+}
+
+function makeMenuGame(seed = 1): VoxelmonGame {
+  const game = new VoxelmonGame(romData!, new MenuHost(), seed);
+  game.newGame();
+  game.closeToOverworld(); // drop the title; these tests start in the world
+  return game;
+}
+
+/** Mash A until the textbox on top closes (reveal, then page, then pop). */
+function dismissText(game: VoxelmonGame, maxTicks = 600): void {
+  let t = 0;
+  while (game.stackKinds().at(-1) === "textbox" && t < maxTicks) {
+    game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+    t += 1;
+  }
+  game.tick(0); // release, so the caller's next tap is a real edge
+}
+
+/** Tap a button for one tick, then release — one input edge. */
+function tap(game: VoxelmonGame, mask: number): void {
+  game.tick(mask);
+  game.tick(0);
+}
+
+/** Walk a menu cursor down to `index` and press A. */
+function pick(game: VoxelmonGame, index: number): void {
+  for (let i = 0; i < index; i++) tap(game, VOX_BTN.down);
+  tap(game, VOX_BTN.a);
+}
+
+describe("dev menu", () => {
+  test.skipIf(!hasGen)("START -> DEV -> RARE CANDY fills the stack to 99", () => {
+    const game = makeMenuGame();
+    tap(game, VOX_BTN.start);
+    expect(game.stackKinds()).toEqual(["overworld", "startmenu"]);
+    // a fresh save: ITEM, <name>, SAVE, OPTION, DEV, EXIT
+    const sm = game.startMenu() as { entries: string[] };
+    expect(sm.entries).toContain("DEV");
+    expect(sm.entries).not.toContain("WARP"); // moved down a level
+    pick(game, sm.entries.indexOf("DEV"));
+    expect(game.stackKinds()).toEqual(["overworld", "startmenu", "devmenu"]);
+
+    const dv = game.devMenu() as { entries: string[] };
+    expect(dv.entries).toEqual(["WARP", "RARE CANDY", "CANCEL"]);
+    pick(game, dv.entries.indexOf("RARE CANDY"));
+    expect(game.save.inventory.RARE_CANDY).toBe(99);
+    dismissText(game);
+    expect(game.stackKinds().at(-1)).toBe("devmenu");
+    // topping up an existing stack adds only the remainder, never over the cap
+    game.save.inventory.RARE_CANDY = 90;
+    tap(game, VOX_BTN.a); // the cursor is still on RARE CANDY
+    expect(game.save.inventory.RARE_CANDY).toBe(99);
+  });
+
+  test.skipIf(!hasGen)("a candy used from the BAG levels the mon and is spent", () => {
+    const game = makeMenuGame();
+    const mon = newMon(romData!, "SQUIRTLE", 5);
+    game.save.party.push(mon);
+    Bag.add(game.save, "RARE_CANDY", 2);
+    const before = { hp: mon.hp, max: mon.stats.hp };
+
+    tap(game, VOX_BTN.start);
+    const sm = game.startMenu() as { entries: string[] };
+    pick(game, sm.entries.indexOf("ITEM"));
+    expect(game.stackKinds().at(-1)).toBe("bag");
+    const bag = game.bag() as { entries: { name: string }[] };
+    pick(game, bag.entries.findIndex((e) => e.name === "RARE CANDY"));
+    expect(game.stackKinds().at(-1)).toBe("party"); // the chooser
+    tap(game, VOX_BTN.a);                           // pick the first mon
+
+    expect(mon.level).toBe(6);
+    expect(mon.exp).toBe(
+      expForLevel(romData!.pokemon.SQUIRTLE!.growthRate, 6, romData!.growth_rates),
+    );
+    expect(mon.stats.hp).toBeGreaterThan(before.max);
+    // current HP grows by the max-HP delta, not refilled
+    expect(mon.hp).toBe(before.hp + (mon.stats.hp - before.max));
+    expect(game.save.inventory.RARE_CANDY).toBe(1);
+    // the bag is still open underneath, so a stack can be burned through
+    expect(game.stackKinds()).toContain("bag");
+  });
+
+  test.skipIf(!hasGen)("a candy at the level cap is refused and not spent", () => {
+    const game = makeMenuGame();
+    const mon = newMon(romData!, "SQUIRTLE", 100);
+    game.save.party.push(mon);
+    Bag.add(game.save, "RARE_CANDY", 1);
+    game.useItem(0, "RARE_CANDY");
+    expect(mon.level).toBe(100);
+    expect(game.save.inventory.RARE_CANDY).toBe(1);
+  });
 });

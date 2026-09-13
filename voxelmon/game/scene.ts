@@ -968,6 +968,32 @@ export class Scene {
       }
       return;
     }
+    // The DEV submenu (ui/devmenu.ts). Same right-hand column as the start
+    // menu it opens from, two tiles wider to fit RARE CANDY.
+    const dv = (view as unknown as { devMenu?: () => any }).devMenu?.();
+    if (dv) {
+      const sig = `d${dv.index},${dv.entries.length}`;
+      if (sig !== this.menuSig) {
+        this.menuSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const W = 12, X = 20 - W - 1, Y = 0, H = dv.entries.length * 2;
+        host.uiTile(X, Y, BORDER_TL);
+        host.uiFill(X + 1, Y, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y, BORDER_TR);
+        host.uiFill(X, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + W, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + 1, Y + 1, W - 1, H, SPACE);
+        host.uiTile(X, Y + 1 + H, BORDER_BL);
+        host.uiFill(X + 1, Y + 1 + H, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y + 1 + H, BORDER_BR);
+        dv.entries.forEach((e: string, i: number) => {
+          this.stamp(host, X + 2, Y + 2 + i * 2, e);
+          if (i === dv.index) host.uiTile(X + 1, Y + 2 + i * 2, ARROW_CURSOR);
+        });
+      }
+      return;
+    }
     const sm = (view as unknown as { startMenu?: () => any }).startMenu?.();
     if (sm) {
       const sig = `${sm.index},${sm.entries.length}`;

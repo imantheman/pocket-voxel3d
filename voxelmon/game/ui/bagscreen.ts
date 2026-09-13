@@ -7,6 +7,16 @@ import { PartyState } from "./partyscreen.ts";
 
 const ROWS = 4;
 
+/**
+ * Items that open the party as a chooser and then act on the mon picked —
+ * the ported slice of ItemEffects.needsTarget (gen1recomp
+ * src/inventory/ItemEffects.lua:75-83), which in full also covers potions,
+ * status cures, revives, vitamins, PP UP and the evolution stones. TM/HMs
+ * need a target too but take their own branch below, since the bag reads
+ * those off the item data rather than a list.
+ */
+const USABLE_ON_PARTY = new Set(["RARE_CANDY"]);
+
 export interface BagView {
   entries: { name: string; qty: number }[];
   index: number;
@@ -27,6 +37,7 @@ export class BagState implements GameState {
       save: any;
       data: any;
       teachMachine(partyIndex: number, itemId: string): void;
+      useItem(partyIndex: number, itemId: string): void;
     },
   ) {}
 
@@ -46,14 +57,20 @@ export class BagState implements GameState {
       return;
     }
     // Selecting a TM/HM opens the party as a chooser and teaches the move
-    // (game.ts teachMachine) — pokered's UseItem -> ItemUseTMHM. Every other
-    // item is still inert; general item use/toss is a later rung.
+    // (game.ts teachMachine) — pokered's UseItem -> ItemUseTMHM. USABLE_ON_PARTY
+    // items take the same chooser into game.ts useItem. Everything else is
+    // still inert; general item use/toss is a later rung.
+    //
+    // The bag stays open under either, which is what lets a stack of RARE
+    // CANDY be used one after another (gen1recomp BagMenu.lua #796).
     if (p.a && this.index < this.ids().length) {
       const id = this.ids()[this.index]!;
-      if (this.game.data.items?.[id]?.machine?.move) {
+      const teach = !!this.game.data.items?.[id]?.machine?.move;
+      if (teach || USABLE_ON_PARTY.has(id)) {
         this.game.push(
           new PartyState(this.game as never, {
-            onPick: (i: number) => this.game.teachMachine(i, id),
+            onPick: (i: number) =>
+              teach ? this.game.teachMachine(i, id) : this.game.useItem(i, id),
           }),
         );
       }

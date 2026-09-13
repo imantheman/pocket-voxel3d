@@ -23,6 +23,8 @@ import { Input } from "./input.ts";
 import { seededRng, type Rng } from "./rng.ts";
 import { apply as applyEvolution, checkParty } from "./rules/evolution.ts";
 import { movesLearnedAt } from "./rules/experience.ts";
+import { expForLevel } from "./rules/growth.ts";
+import { calc as calcStats } from "./rules/stats.ts";
 import { MAP_ENTRY_AFTER_BATTLE, POST_BATTLE_RETURN, YES_NO_ANSWER } from "./rules/timing.ts";
 import {
   Scene,
@@ -37,6 +39,7 @@ import { Textbox } from "./world/textbox.ts";
 import { NamingState } from "./ui/naming.ts";
 import { TitleState, TITLE_PAGES } from "./ui/title.ts";
 import { StartMenuState } from "./ui/startmenu.ts";
+import { DevMenuState } from "./ui/devmenu.ts";
 import { WarpPickerState } from "./ui/warppicker.ts";
 import { MoveForgetState } from "./ui/moveforget.ts";
 import { BagState } from "./ui/bagscreen.ts";
@@ -645,7 +648,7 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       this.showText(
         `What?\n${oldName} is\nevolving!\fCongratulations!\nYour ${oldName}\nevolved into\n${newName}!`,
         () => {
-          this.learnEvolutionMoves(mon, () => step(i + 1));
+          this.learnMovesAtLevel(mon, () => step(i + 1));
         },
       );
     };
@@ -653,12 +656,15 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   }
 
   /**
-   * Evolution.lua:112-152 learnEvolutionMoves — the EVOLVED species' learnset
-   * at exactly this level (movesLearnedAt, not movesAtLevel), each new move
-   * announced on its own page. A full moveset keeps battle.ts's v1 deviation:
-   * MoveLearnMenu is not in this slice, so the mon declines and says so.
+   * Evolution.lua:112-152 learnEvolutionMoves — the species' learnset at
+   * exactly this level (movesLearnedAt, not movesAtLevel), each new move
+   * announced on its own page. A full moveset offers the replace prompt.
+   *
+   * Shared with the RARE CANDY bump: item_effects.asm .useRareCandy calls the
+   * same LearnMoveFromLevelUp predef the evolution path does, so both want
+   * exactly this walk over the new level's learnset.
    */
-  private learnEvolutionMoves(mon: PartyMon, onDone: () => void): void {
+  private learnMovesAtLevel(mon: PartyMon, onDone: () => void): void {
     const def = this.data.pokemon[mon.species]!;
     const learned = movesLearnedAt(def, mon.level);
     const name = mon.nickname ?? def.name;
@@ -909,22 +915,7 @@ export class VoxelmonGame implements OverworldShell, SceneView {
         if (act === "pokemon") {
           this.push(new PartyState(this as any));
         }
-        if (act === "warp") {
-          // Debug jump. Uses the ordinary warp path so the destination gets a
-          // real map load, music, and heal-point handling — the point is to
-          // land somewhere PLAYABLE, not to sightsee.
-          const ow: any = this.overworld;
-          const here = String(ow.mapId ?? ow.map?.id ?? "");
-          this.push(new WarpPickerState(this as any, here, (mapId) => {
-            this.pop(); // the start menu under the picker
-            const def: any = this.data.maps?.[mapId];
-            // Warps name a destination warp, not a tile; the first warp of a
-            // map is where its own door puts you, which is the one spot every
-            // map is guaranteed to have standable ground.
-            const w = (def?.warps ?? [])[0];
-            ow.startWarpTo(mapId, w?.x ?? 1, w?.y ?? 1, "down", () => {});
-          }));
-        }
+        if (act === "dev") this.openDevMenu();
         if (act === "save") {
           // The recomp keeps the live position in player.*; copy it over
           // so the desktop build resumes exactly where the 3DS stood.
@@ -941,6 +932,99 @@ export class VoxelmonGame implements OverworldShell, SceneView {
         }
       }),
     );
+  }
+
+  /** START -> DEV (ui/devmenu.ts): the playtesting tools. */
+  openDevMenu(): void {
+    this.push(
+      new DevMenuState(this as any, (act) => {
+        if (act === "warp") {
+          // Debug jump. Uses the ordinary warp path so the destination gets a
+          // real map load, music, and heal-point handling — the point is to
+          // land somewhere PLAYABLE, not to sightsee.
+          const ow: any = this.overworld;
+          const here = String(ow.mapId ?? ow.map?.id ?? "");
+          this.push(new WarpPickerState(this as any, here, (mapId) => {
+            // The picker popped itself; the dev and start menus are still
+            // stacked under it, and the warp has to land on a bare overworld.
+            this.closeToOverworld();
+            const def: any = this.data.maps?.[mapId];
+            // Warps name a destination warp, not a tile; the first warp of a
+            // map is where its own door puts you, which is the one spot every
+            // map is guaranteed to have standable ground.
+            const w = (def?.warps ?? [])[0];
+            ow.startWarpTo(mapId, w?.x ?? 1, w?.y ?? 1, "down", () => {});
+          }));
+        }
+        if (act === "candy") this.giveRareCandies();
+      }),
+    );
+  }
+
+  /**
+   * DEV -> RARE CANDY: fill the stack to the Gen 1 per-slot cap of 99
+   * (AddItemToInventory's quantity limit, rules/bag.ts add). A top-up rather
+   * than a fixed handful, so holding the menu open doesn't silently fail once
+   * the stack is near the cap — Bag.add refuses the whole add if it would
+   * pass 99.
+   */
+  private giveRareCandies(): void {
+    const have = this.save.inventory?.RARE_CANDY ?? 0;
+    const want = 99 - have;
+    if (want <= 0) {
+      this.showText("You already have\n99 RARE CANDY!");
+      return;
+    }
+    if (!Bag.add(this.save, "RARE_CANDY", want, this.data)) {
+      this.showText("The BAG is full!");
+      return;
+    }
+    this.showText(`Got ${want} RARE CANDY!\nNow x99.`);
+  }
+
+  /**
+   * Bag -> party chooser -> the item's effect (pokered UseItem, gen1recomp
+   * ItemEffects.use). Only the items ui/bagscreen.ts offers land here; every
+   * other item is still inert.
+   */
+  useItem(partyIndex: number, itemId: string): void {
+    if (itemId === "RARE_CANDY") this.useRareCandy(partyIndex);
+  }
+
+  /**
+   * item_effects.asm .useRareCandy, via gen1recomp ItemEffects.lua:372-390
+   * and BagMenu.lua:279-322: one level, the exp that level starts at,
+   * recalculated stats with current HP grown by the max-HP delta, then the
+   * new level's learnset and a level evolution. Refused at the level cap,
+   * and the candy is not spent on the refusal.
+   *
+   * One deviation: the Lua runs PrintStatsBox between the level text and the
+   * moves. This port has no stat window outside battle, so the text runs
+   * straight into the learnset.
+   *
+   * The bag stays open underneath (RARE_CANDY is in pokered's
+   * UsableItems_PartyMenu, so .useItem_partyMenu returns to StartMenu_Item
+   * with the cursor still on it) — mashing A burns through a stack.
+   */
+  private useRareCandy(partyIndex: number): void {
+    const mon = this.save.party[partyIndex];
+    if (!mon) return;
+    const def = this.data.pokemon[mon.species]!;
+    const name = mon.nickname ?? def.name;
+    const cap = this.data.constants?.levelCap ?? 100;
+    if (mon.level >= cap) {
+      this.showText("It won't have any\neffect.");
+      return;
+    }
+    Bag.remove(this.save, "RARE_CANDY", 1);
+    mon.level += 1;
+    mon.exp = expForLevel(def.growthRate, mon.level, this.data.growth_rates);
+    const old = mon.stats;
+    mon.stats = calcStats(def, mon.level, mon.dvs, mon.statExp);
+    mon.hp = Math.min(mon.stats.hp, mon.hp + (mon.stats.hp - old.hp));
+    this.showText(`${name} grew\nto level ${mon.level}!`, () => {
+      this.learnMovesAtLevel(mon, () => this.runEvolutions(new Set([mon])));
+    });
   }
 
   bag(): unknown {
@@ -976,6 +1060,11 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   startMenu(): unknown {
     const top = this.stack[this.stack.length - 1] as any;
     return top?.kind === "startmenu" ? top.view() : null;
+  }
+
+  devMenu(): unknown {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "devmenu" ? top.view() : null;
   }
 
   warpPicker(): unknown {
