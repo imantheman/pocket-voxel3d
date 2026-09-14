@@ -181,6 +181,43 @@ unsafe fn load_map_pak(name: &str, want: Option<PlanKey>) -> bool {
         dlog(&format!("[pv] pak {} cached (0 ms)", name));
         return true;
     }
+    // A read-ahead already in flight for THIS map: finish it rather than
+    // throw away the megabytes it has and start the file again. Crossing a
+    // seam before it completed used to cost the whole read twice over.
+    let adopted = match PREFETCH.as_ref() {
+        Some(pf) if pf.name == name => PREFETCH.take(),
+        _ => None,
+    };
+    if let Some(mut pf) = adopted {
+        use std::io::Read;
+        let had = pf.pos;
+        let ok = pf.pos >= pf.buf.len()
+            || pf.file.read_exact(&mut pf.buf[pf.pos..]).is_ok();
+        if ok {
+            let kb = pf.buf.len() / 1024;
+            let ms = {
+                extern "C" { fn osGetTime() -> u64; }
+                osGetTime().wrapping_sub(t_start)
+            };
+            let buf: Box<[u8]> = pf.buf.into_boxed_slice();
+            let bytes: &'static [u8] = core::mem::transmute(buf.as_ref());
+            if let Ok(p) = pak::read_with_shared(bytes, SHARED_ATLAS) {
+                while !PAK_CACHE.is_empty() && cache_total_kb() + kb > PAK_CACHE_BUDGET_KB {
+                    PAK_CACHE.pop();
+                }
+                PAK_CACHE.retain(|c| c.name != name);
+                PAK_CACHE.insert(0, CachedPak {
+                    pak: p, buf, name: name.to_string(), kb, plan: None,
+                });
+                dlog(&format!(
+                    "[pv] pak {} {} KB in {} ms ({} KB was read ahead)",
+                    name, kb, ms, had / 1024,
+                ));
+                return true;
+            }
+        }
+        // Fall through and read it properly; the partial buffer is dropped.
+    }
     let _ = t_start;
     // must read from SD. Stat the size first so we can evict to fit WITHOUT a
     // transient over-budget spike; a map larger than the whole budget evicts
@@ -295,12 +332,18 @@ unsafe fn prefetch_retarget(map_id: u32) {
     }
 }
 
-/// Give up this much of a frame to reading ahead. The slice loop stops at the
-/// first read that crosses it, so a slow card costs one slice, not a stall.
-const PREFETCH_MS: u64 = 3;
-/// Bytes per read within that window. Small enough that one cannot itself
-/// blow the frame on a slow card.
-const PREFETCH_SLICE: usize = 32 * 1024;
+/// Give up this much of a frame to reading ahead.
+///
+/// Measured on hardware the card does ~11 MB/s (13,338 KB in 1,225 ms), and
+/// the first version of this spent 3 ms of every frame on 32 KB slices --
+/// about 1.9 MB/s, a sixth of what the card can do, so a 13 MB route needed
+/// seven seconds of walking to arrive in time. The loop below stops before a
+/// slice it predicts will overrun, so this is a ceiling rather than a
+/// quantum: a slower card takes fewer slices rather than a longer frame.
+const PREFETCH_MS: u64 = 8;
+/// Bytes per read. At ~11 MB/s this is ~6 ms, comfortably inside the budget
+/// while being big enough that per-read overhead is not the limit.
+const PREFETCH_SLICE: usize = 64 * 1024;
 
 /// Begin reading `name` ahead, unless it is already resident, already in
 /// progress, or would not fit beside what is cached.
@@ -340,15 +383,19 @@ unsafe fn prefetch_step() -> bool {
     use std::io::Read;
     extern "C" { fn osGetTime() -> u64; }
     let Some(pf) = PREFETCH.as_mut() else { return false };
-    let deadline = osGetTime() + PREFETCH_MS;
+    let start = osGetTime();
     while pf.pos < pf.buf.len() {
+        let t0 = osGetTime();
         let end = (pf.pos + PREFETCH_SLICE).min(pf.buf.len());
         if pf.file.read_exact(&mut pf.buf[pf.pos..end]).is_err() {
             PREFETCH = None; // the card said no; the normal path will retry
             return false;
         }
         pf.pos = end;
-        if osGetTime() >= deadline {
+        // Stop before a slice that would overrun rather than after one that
+        // already has: the last one took `dt`, so the next probably will too.
+        let dt = osGetTime().wrapping_sub(t0);
+        if osGetTime().wrapping_sub(start) + dt > PREFETCH_MS {
             break;
         }
     }
