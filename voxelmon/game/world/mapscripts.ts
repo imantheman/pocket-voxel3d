@@ -472,6 +472,41 @@ export function silphAftermathRows(): ScriptRow[] {
   return rows;
 }
 
+/**
+ * The seven badges Viridian Gym checks before it will open
+ * (scripts/ViridianCity.asm: badges == ~EARTHBADGE).
+ */
+export const SEVEN_BADGES = [
+  "BOULDERBADGE", "CASCADEBADGE", "THUNDERBADGE", "RAINBOWBADGE",
+  "SOULBADGE", "MARSHBADGE", "VOLCANOBADGE",
+];
+
+/** True once all seven are in the bag. */
+export function hasSevenBadges(save: any): boolean {
+  const inv = save?.inventory ?? {};
+  return SEVEN_BADGES.every((b) => (inv[b] ?? 0) > 0);
+}
+
+/**
+ * A locked door you are shoved back off, the shape pokered gives both of
+ * these (a coord script that prints and then walks the player one tile back).
+ *
+ * Returns the rows for the step, or null when the door is open or the player
+ * is somewhere else.
+ */
+function lockedDoorStep(
+  ow: any,
+  at: [number, number][],
+  locked: boolean,
+  textId: string,
+): ScriptRow[] | null {
+  if (!locked) return null;
+  const x = ow?.player?.cellX;
+  const y = ow?.player?.cellY;
+  if (!at.some(([dx, dy]) => dx === x && dy === y)) return null;
+  return [["show_text", textId], ["move_player", "down", 1]];
+}
+
 export const MAP_SCRIPTS: Record<string, MapScript> = {
   PEWTER_CITY: {
     // PewterGuys trigger tiles on the west-leaving path; fires until Brock is
@@ -610,6 +645,19 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
   // talking to either. The north corridor is gated on EVENT_GOT_POKEDEX.
   VIRIDIAN_CITY: {
     talk: {
+      // flavor/viridian_city.lua TEXT_VIRIDIANCITY_GAMBLER1: he wonders who
+      // the leader is until the seventh badge is in, then reports that the
+      // leader is back -- and goes back to wondering once Giovanni is beaten
+      // and the gym is empty again.
+      TEXT_VIRIDIANCITY_GAMBLER1: (_ow: any, save: any): ScriptRow[] => [
+        ["face_player"],
+        [
+          "show_text",
+          hasSevenBadges(save) && !save?.flags?.EVENT_BEAT_GIOVANNI
+            ? "_ViridianCityGambler1GymLeaderReturnedText"
+            : "_ViridianCityGambler1GymAlwaysClosedText",
+        ],
+      ],
       // story.lua TEXT_VIRIDIANCITY_OLD_MAN_SLEEPY: grumble, then shove the
       // player one tile south. He never wakes, moves or hides.
       TEXT_VIRIDIANCITY_OLD_MAN_SLEEPY: [
@@ -642,6 +690,16 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     // imported .sav, whose codec leaves objectToggles empty). Side effect
     // only — returns null so the north-corridor block below still runs.
     onStep: (ow: any, save: any) => {
+      // story5.lua chains the gym lock ahead of the sleeper logic, because
+      // the registry keeps one onStep per map. VIRIDIAN GYM stays shut until
+      // the other seven badges are in (scripts/ViridianCity.asm).
+      const gym = lockedDoorStep(
+        ow,
+        [[32, 8]],
+        !hasSevenBadges(save),
+        "_ViridianCityGymLockedText",
+      );
+      if (gym) return gym;
       const f = save?.flags ?? {};
       if (f.EVENT_GOT_POKEDEX) {
         const w = ow as any;
@@ -1420,6 +1478,18 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
         ["oaks_aide", "TEXT_ROUTE15GATE2F_OAKS_AIDE"],
       ],
     },
+  },
+
+  // story5.lua M.CINNABAR_ISLAND (scripts/CinnabarIsland.asm): the gym door
+  // is locked until the SECRET KEY is found in the Pokemon Mansion.
+  CINNABAR_ISLAND: {
+    onStep: (ow: any, save: any) =>
+      lockedDoorStep(
+        ow,
+        [[18, 4]],
+        (save?.inventory?.SECRET_KEY ?? 0) <= 0,
+        "_CinnabarIslandDoorIsLockedText",
+      ),
   },
 
   // story.lua M.SILPH_CO_11F (scripts/SilphCo11F.asm) and story4.lua

@@ -5058,6 +5058,28 @@ function silphAftermathRows() {
   rows.push(["fade", "in"]);
   return rows;
 }
+var SEVEN_BADGES = [
+  "BOULDERBADGE",
+  "CASCADEBADGE",
+  "THUNDERBADGE",
+  "RAINBOWBADGE",
+  "SOULBADGE",
+  "MARSHBADGE",
+  "VOLCANOBADGE"
+];
+function hasSevenBadges(save) {
+  const inv = save?.inventory ?? {};
+  return SEVEN_BADGES.every((b) => (inv[b] ?? 0) > 0);
+}
+function lockedDoorStep(ow, at, locked, textId) {
+  if (!locked)
+    return null;
+  const x = ow?.player?.cellX;
+  const y = ow?.player?.cellY;
+  if (!at.some(([dx, dy]) => dx === x && dy === y))
+    return null;
+  return [["show_text", textId], ["move_player", "down", 1]];
+}
 var MAP_SCRIPTS = {
   PEWTER_CITY: {
     onStep: (ow, save) => {
@@ -5140,6 +5162,13 @@ var MAP_SCRIPTS = {
   },
   VIRIDIAN_CITY: {
     talk: {
+      TEXT_VIRIDIANCITY_GAMBLER1: (_ow, save) => [
+        ["face_player"],
+        [
+          "show_text",
+          hasSevenBadges(save) && !save?.flags?.EVENT_BEAT_GIOVANNI ? "_ViridianCityGambler1GymLeaderReturnedText" : "_ViridianCityGambler1GymAlwaysClosedText"
+        ]
+      ],
       TEXT_VIRIDIANCITY_OLD_MAN_SLEEPY: [
         ["show_text", "_ViridianCityOldManSleepyPrivatePropertyText"],
         ["move_player", "down", 1]
@@ -5156,6 +5185,9 @@ var MAP_SCRIPTS = {
       ]
     },
     onStep: (ow, save) => {
+      const gym = lockedDoorStep(ow, [[32, 8]], !hasSevenBadges(save), "_ViridianCityGymLockedText");
+      if (gym)
+        return gym;
       const f = save?.flags ?? {};
       if (f.EVENT_GOT_POKEDEX) {
         const w = ow;
@@ -5752,6 +5784,9 @@ var MAP_SCRIPTS = {
         ["oaks_aide", "TEXT_ROUTE15GATE2F_OAKS_AIDE"]
       ]
     }
+  },
+  CINNABAR_ISLAND: {
+    onStep: (ow, save) => lockedDoorStep(ow, [[18, 4]], (save?.inventory?.SECRET_KEY ?? 0) <= 0, "_CinnabarIslandDoorIsLockedText")
   },
   SILPH_CO_11F: {
     onStep: (ow, save) => {

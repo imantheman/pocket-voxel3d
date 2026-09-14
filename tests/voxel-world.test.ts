@@ -38,7 +38,7 @@ import { martStock } from "../voxelmon/game/world/marts.ts";
 import { computeNeighbors } from "../voxelmon/game/world/overworld.ts";
 import { rotateDir } from "../voxelmon/game/world/collision.ts";
 import { poseDir } from "../voxelmon/game/scene.ts";
-import { silphAftermathRows } from "../voxelmon/game/world/mapscripts.ts";
+import { SEVEN_BADGES, silphAftermathRows } from "../voxelmon/game/world/mapscripts.ts";
 import { deposit, pcCapacityData, withdraw } from "../voxelmon/game/world/pcitems.ts";
 import { bikeAllowed, BIKE_SONG, effectiveMapSong } from "../voxelmon/game/world/bike.ts";
 import { fillAideText } from "../voxelmon/game/world/oaksaide.ts";
@@ -3304,5 +3304,111 @@ describe("the PC item storage", () => {
     save.bagOrder.push("ETHER");
     expect(withdraw(save, "POTION", 1, data)).toBe(false);
     expect(save.pc.inventory.POTION).toBe(1);
+  });
+});
+
+describe("the two locked gym doors", () => {
+  function gateGame2(): VoxelmonGame {
+    const data = {
+      ...(romData as object),
+      cookedMaps: [
+        ...((romData as { cookedMaps?: string[] }).cookedMaps ?? []),
+        "CINNABAR_ISLAND", "VIRIDIAN_CITY",
+      ],
+    };
+    const game = new VoxelmonGame(data as never, new MenuHost(), 1);
+    game.newGame();
+    game.closeToOverworld();
+    return game;
+  }
+
+  /** Stand on a tile and let the land-trigger run. */
+  function stepOnto(game: VoxelmonGame, map: string, x: number, y: number): void {
+    game.overworld.setMap(map, x, y, "up");
+    game.overworld.onStepComplete();
+    for (let i = 0; i < 60; i++) game.tick(0);
+  }
+
+  function boxText(game: VoxelmonGame): string {
+    const src = game.uiBox() as { box?: { pages?: { lines: string[] }[] } } | null;
+    return (src?.box?.pages ?? []).map((pg) => pg.lines.join(" ")).join(" ");
+  }
+
+  test.skipIf(!hasGen)("Cinnabar's gym is locked until the SECRET KEY", () => {
+    const game = gateGame2();
+    stepOnto(game, "CINNABAR_ISLAND", 18, 4);
+    expect(boxText(game)).toContain("locked");
+
+    const open = gateGame2();
+    Bag.add(open.save, "SECRET_KEY", 1);
+    stepOnto(open, "CINNABAR_ISLAND", 18, 4);
+    expect(open.stackKinds()).toEqual(["overworld"]);
+  });
+
+  test.skipIf(!hasGen)("the rest of Cinnabar is walkable either way", () => {
+    const game = gateGame2();
+    stepOnto(game, "CINNABAR_ISLAND", 10, 10);
+    expect(game.stackKinds()).toEqual(["overworld"]);
+  });
+
+  test.skipIf(!hasGen)("Viridian's gym needs all seven other badges", () => {
+    const game = gateGame2();
+    stepOnto(game, "VIRIDIAN_CITY", 32, 8);
+    expect(boxText(game)).toContain("locked");
+
+    // six of seven is still locked -- it is every badge, not a count
+    const six = gateGame2();
+    for (const b of SEVEN_BADGES.slice(0, 6)) six.save.inventory[b] = 1;
+    stepOnto(six, "VIRIDIAN_CITY", 32, 8);
+    expect(boxText(six)).toContain("locked");
+
+    const all = gateGame2();
+    for (const b of SEVEN_BADGES) all.save.inventory[b] = 1;
+    stepOnto(all, "VIRIDIAN_CITY", 32, 8);
+    expect(all.stackKinds()).toEqual(["overworld"]);
+  });
+
+  test.skipIf(!hasGen)("the gym lock does not eat the sleeping old man's block", () => {
+    // The two share one onStep; the gym check must fall through when the
+    // player is nowhere near the gym door.
+    const game = gateGame2();
+    stepOnto(game, "VIRIDIAN_CITY", 19, 9);
+    // whatever the old-man corridor does, it is not the gym's line
+    expect(boxText(game)).not.toContain("GYM's doors");
+  });
+
+  test.skipIf(!hasGen)("the gambler reports the leader once the badges are in", () => {
+    const before = gateGame2();
+    before.overworld.setMap("VIRIDIAN_CITY", 10, 10, "up");
+    before.overworld.showMapText("TEXT_VIRIDIANCITY_GAMBLER1");
+    for (let i = 0; i < 600; i++) before.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+    expect(boxText(before) + " ").toBeTruthy();
+
+    const after = gateGame2();
+    for (const b of SEVEN_BADGES) after.save.inventory[b] = 1;
+    after.overworld.setMap("VIRIDIAN_CITY", 10, 10, "up");
+    after.overworld.showMapText("TEXT_VIRIDIANCITY_GAMBLER1");
+    let said = "";
+    for (let i = 0; i < 600; i++) {
+      const s = boxText(after);
+      if (s) said = s;
+      after.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    expect(said).toContain("returned");
+  });
+
+  test.skipIf(!hasGen)("and goes back to wondering once Giovanni is beaten", () => {
+    const game = gateGame2();
+    for (const b of SEVEN_BADGES) game.save.inventory[b] = 1;
+    game.save.flags.EVENT_BEAT_GIOVANNI = true;
+    game.overworld.setMap("VIRIDIAN_CITY", 10, 10, "up");
+    game.overworld.showMapText("TEXT_VIRIDIANCITY_GAMBLER1");
+    let said = "";
+    for (let i = 0; i < 600; i++) {
+      const s = boxText(game);
+      if (s) said = s;
+      game.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    expect(said).toContain("always closed");
   });
 });
