@@ -130,11 +130,11 @@ fn size_pak_cache() {
     let free_kb = probe_free_kb(96);
     let want = (free_kb / PAK_CACHE_HEAP_SHARE).clamp(PAK_CACHE_FLOOR_KB, PAK_CACHE_CEIL_KB);
     unsafe { PAK_CACHE_BUDGET_KB = want };
-    println!(
-        "pak cache: {} MB (heap probe found {} MB free)",
+    dlog(&format!(
+        "[pv] pak cache {} MB (heap probe found {} MB free)",
         want / 1024,
         free_kb / 1024,
-    );
+    ));
 }
 
 /// The shared atlas texels (paks/common.vxat), loaded once at boot.
@@ -178,7 +178,7 @@ unsafe fn load_map_pak(name: &str, want: Option<PlanKey>) -> bool {
     if let Some(i) = PAK_CACHE.iter().position(&serves) {
         let hit = PAK_CACHE.remove(i);
         PAK_CACHE.insert(0, hit);
-        println!("pak {} cached (0 ms)", name);
+        dlog(&format!("[pv] pak {} cached (0 ms)", name));
         return true;
     }
     let _ = t_start;
@@ -214,7 +214,9 @@ unsafe fn load_map_pak(name: &str, want: Option<PlanKey>) -> bool {
         extern "C" { fn osGetTime() -> u64; }
         osGetTime().wrapping_sub(t0)
     };
-    println!("pak {} {} KB in {} ms (cache {} KB)", name, kb, read_ms, cache_total_kb());
+    dlog(&format!(
+        "[pv] pak {} {} KB in {} ms (cache {} KB)", name, kb, read_ms, cache_total_kb()
+    ));
     let buf: Box<[u8]> = v.into_boxed_slice();
     let bytes: &'static [u8] = core::mem::transmute(buf.as_ref());
     match pak::read_with_shared(bytes, unsafe { SHARED_ATLAS }) {
@@ -272,6 +274,27 @@ struct Prefetch {
 
 static mut PREFETCH: Option<Prefetch> = None;
 
+/// Maps already attempted while standing on the current one, so a read-ahead
+/// that cannot be kept is not started again on the very next frame.
+///
+/// Without this every failure path re-read the whole map immediately: seconds
+/// of SD traffic and a 10-24 MB allocate-and-discard, over and over, for as
+/// long as the player stood on a map with neighbours. That is an outdoor-only
+/// drag that gets worse the longer you stand there, as the repeated large
+/// allocations fragment the heap.
+static mut PREFETCH_TRIED: Vec<String> = Vec::new();
+/// Which map PREFETCH_TRIED belongs to; walking somewhere new clears it.
+static mut PREFETCH_FOR: u32 = u32::MAX;
+
+/// Forget the attempt list when the player changes map.
+#[allow(static_mut_refs)]
+unsafe fn prefetch_retarget(map_id: u32) {
+    if PREFETCH_FOR != map_id {
+        PREFETCH_FOR = map_id;
+        PREFETCH_TRIED.clear();
+    }
+}
+
 /// Give up this much of a frame to reading ahead. The slice loop stops at the
 /// first read that crosses it, so a slow card costs one slice, not a stall.
 const PREFETCH_MS: u64 = 3;
@@ -283,17 +306,22 @@ const PREFETCH_SLICE: usize = 32 * 1024;
 /// progress, or would not fit beside what is cached.
 #[allow(static_mut_refs)]
 unsafe fn prefetch_start(name: &str) -> bool {
-    if PREFETCH.is_some() || PAK_CACHE.iter().any(|c| c.name == name) {
+    if PREFETCH.is_some()
+        || PAK_CACHE.iter().any(|c| c.name == name)
+        || PREFETCH_TRIED.iter().any(|n| n == name)
+    {
         return false;
     }
+    // Counted as attempted the moment it starts, so every exit below --
+    // finished, refused, or failed -- costs one try and not a loop.
+    PREFETCH_TRIED.push(name.to_string());
     let path = format!("sdmc:/3ds/voxelmon/paks/{}.vxpak", name);
     let Ok(file) = std::fs::File::open(&path) else { return false };
     let Ok(md) = file.metadata() else { return false };
     let len = md.len() as usize;
     // Only if it can live alongside the map being played without pushing it
     // out: a prefetch that evicts the ground under your feet is a loss.
-    let cur = PAK_CACHE.first().map(|c| c.kb).unwrap_or(0);
-    if cur + len / 1024 > PAK_CACHE_BUDGET_KB {
+    if cache_total_kb() + len / 1024 > PAK_CACHE_BUDGET_KB {
         return false;
     }
     let mut buf: Vec<u8> = Vec::new();
@@ -351,7 +379,7 @@ unsafe fn prefetch_step() -> bool {
             PAK_CACHE.insert(at, CachedPak {
                 pak: p, buf, name: pf.name.clone(), kb, plan: None,
             });
-            println!("pak {} read ahead ({} KB)", pf.name, kb);
+            dlog(&format!("[pv] read ahead {} ({} KB)", pf.name, kb));
             true
         }
         Err(_) => false,
@@ -2024,6 +2052,14 @@ fn main() {
     // `tint` param doc: HM Flash changes this mid-visit and needs the same
     // kind of externally-triggered rebuild as a stamp toggle.
     let mut last_tint: u32 = 0xffff_ffff;
+    /// What the geometry in hand was built from. A `reload` whose inputs are
+    /// all identical to this rebuilds the same vertices to the same values,
+    /// and a map like Route 8 is 651,000 of them -- the logs show maps built
+    /// two and three times over with no frame drawn in between.
+    ///
+    /// (map id, stream centre, tint, stamp count, seam sides)
+    type BuiltKey = (u32, Option<(i32, i32)>, u32, usize, [bool; 4]);
+    let mut built_key: Option<BuiltKey> = None;
     let mut tex: Option<texture::Texture> = None;
     let mut reload = true;
 
@@ -2427,6 +2463,7 @@ fn main() {
                     // and competing with it would make the visible wait
                     // longer, not shorter.
                     if !reload {
+                        unsafe { prefetch_retarget(map_ids.get(map_i).copied().unwrap_or(0)) };
                         if unsafe { prefetch_step() } {
                             // Inserting into PAK_CACHE can reallocate it and
                             // move the Pak structs with it, and pak_static
@@ -2570,16 +2607,34 @@ fn main() {
                     if lo[1] >= cmx[1] - 1.0 { seam_sides[3] = true; }
                 }
             }
-            let t_build = { extern "C" { fn osGetTime() -> u64; } unsafe { osGetTime() } };
-            geom = build_map(
-                pak_static,
+            let want_key: BuiltKey = (
                 map_ids[map_i],
-                player_px,
-                &stamps_off_snapshot,
+                if cur_map_huge { stream_center_chunk } else { None },
                 last_tint,
+                stamps_off_snapshot.len(),
                 seam_sides,
             );
-            cur_map_huge = geom.is_huge;
+            // Same map, same everything: what is on screen is already it.
+            // Skipping only the BUILD, not the frame -- a `continue` here
+            // would drop the frame, and if a reload ever fired every frame
+            // that would be a freeze rather than a stutter.
+            let skip_build = built_key.as_ref() == Some(&want_key);
+            if skip_build {
+                dlog("[pv] rebuild skipped (inputs unchanged)");
+            }
+            let t_build = { extern "C" { fn osGetTime() -> u64; } unsafe { osGetTime() } };
+            if !skip_build {
+                geom = build_map(
+                    pak_static,
+                    map_ids[map_i],
+                    player_px,
+                    &stamps_off_snapshot,
+                    last_tint,
+                    seam_sides,
+                );
+                cur_map_huge = geom.is_huge;
+                built_key = Some(want_key);
+            }
             {
                 let build_ms = {
                     extern "C" { fn osGetTime() -> u64; }
@@ -2594,6 +2649,7 @@ fn main() {
                     "built in {} ms: chunks {} verts {} clipped {} huge {}",
                     build_ms, geom.chunk_spans.len(), tot, over, cur_map_huge
                 );
+                dlog(&format!("[pv] built in {} ms", build_ms));
                 dlog(&format!(
                     "[pv] built map#{} name={} spans={} verts={} huge={} tint={:08x}",
                     map_ids[map_i],
