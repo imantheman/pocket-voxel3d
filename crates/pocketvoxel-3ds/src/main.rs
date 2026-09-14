@@ -2590,10 +2590,45 @@ fn main() {
                             // points straight at the front one. Re-take it.
                             pak_static = unsafe { cur_pak() };
                         } else if unsafe { PREFETCH.is_none() } {
+                            // NEAREST SEAM FIRST. There is one read-ahead in
+                            // flight at a time and a map can have three or
+                            // four neighbours, so slot order is a one-in-N
+                            // guess -- and it guessed wrong on the run that
+                            // was logged: standing in Lavender Town it read
+                            // Route 10 while the player walked west into
+                            // Route 8, which then had to be read from cold.
+                            //
+                            // A neighbour's offset says which side it is on,
+                            // so the distance to the seam it lies across is
+                            // the distance to that edge of this map.
+                            let (px, pz) = (center[0], center[2]);
+                            let mut cand: Vec<(f32, usize)> = Vec::new();
                             for i in 1..sc.maps.len() {
                                 if !sc.maps[i].shown {
                                     continue;
                                 }
+                                let (ox, oy) = (sc.maps[i].ox as f32, sc.maps[i].oy as f32);
+                                // Distance to the edge this neighbour is over.
+                                let dx = if ox < 0.0 {
+                                    px - geom.map_min[0]
+                                } else if ox > 0.0 {
+                                    geom.map_max[0] - px
+                                } else {
+                                    f32::MAX
+                                };
+                                let dz = if oy < 0.0 {
+                                    pz - geom.map_min[1]
+                                } else if oy > 0.0 {
+                                    geom.map_max[1] - pz
+                                } else {
+                                    f32::MAX
+                                };
+                                cand.push((dx.min(dz), i));
+                            }
+                            cand.sort_by(|a, b| {
+                                a.0.partial_cmp(&b.0).unwrap_or(core::cmp::Ordering::Equal)
+                            });
+                            for (_, i) in cand {
                                 let nid = sc.maps[i].map_id;
                                 if let Some((_, nm)) =
                                     map_index.iter().find(|(id, _)| *id == nid)
