@@ -1043,27 +1043,69 @@ fn stick_as_dpad(dx: i16, dy: i16) -> i32 {
 }
 
 
+/// Open log sinks, held for the session.
+///
+/// Opened ONCE at boot rather than reopened per line, and never with
+/// `append`: the sdmc devoptab on hardware does not reliably honour O_APPEND,
+/// and the old code ignored the error, so a failed open meant no file was
+/// ever created and nothing said so. `File::create` is the same call family
+/// as the save write, which is known to work on the card.
+static mut LOG_SINKS: Vec<std::fs::File> = Vec::new();
+/// Where the log actually ended up, reported at boot.
+static mut LOG_WHERE: String = String::new();
+
+/// Candidate log paths, best first. The SD ROOT is included deliberately: a
+/// file there is impossible to miss, and if the game folder is not writable
+/// for any reason it is the one place that still is.
+const LOG_PATHS: [&str; 3] = [
+    "sdmc:/3ds/voxelmon/newlog.txt",
+    "sdmc:/newlog.txt",
+    "sdmc:/pocketvoxel-newlog.txt",
+];
+
+/// Open the log files for this run. Each is TRUNCATED, so whatever is in
+/// them is this run and only this run.
+#[allow(static_mut_refs)]
+unsafe fn log_open() {
+    // The folder may not exist on a fresh card; create rather than fail.
+    let _ = std::fs::create_dir_all("sdmc:/3ds/voxelmon");
+    let mut where_ = String::new();
+    for path in LOG_PATHS {
+        match std::fs::File::create(path) {
+            Ok(f) => {
+                LOG_SINKS.push(f);
+                if !where_.is_empty() {
+                    where_.push_str(", ");
+                }
+                where_.push_str(path);
+            }
+            Err(e) => {
+                // Console only; there is no log to write it to yet.
+                println!("log: cannot write {} ({})", path, e);
+            }
+        }
+    }
+    LOG_WHERE = where_;
+}
+
 /// Diagnostics that survive to a log file. `println!` goes to the ctru
 /// Console, which this build hands to the Kanto Gear right after boot, so
 /// nothing printed during play is ever readable. svcOutputDebugString is
 /// picked up by emulators (Citra writes it to citra_log.txt as
-/// Debug_Emulated) and by 3dslink on hardware, which makes it the only way
-/// to see what the renderer actually did on a map that came up wrong.
+/// Debug_Emulated) and by 3dslink on hardware.
+///
+/// Flushed on every line: the HOME button can take the process away without
+/// warning, and an unflushed tail is exactly the part worth having.
+#[allow(static_mut_refs)]
 fn dlog(s: &str) {
     unsafe {
         svcOutputDebugString(s.as_ptr(), s.len() as i32);
     }
-    // Also to the SD card: an emulator only surfaces OutputDebugString at a
-    // log level its config may not have on, and on hardware there is no log
-    // at all. A file next to the paks is readable either way. Called about
-    // once a second, so re-opening per line is not worth avoiding.
     use std::io::Write;
-    for path in [
-        "sdmc:/3ds/voxelmon/pvlog.txt",   // every run, for a freeze post-mortem
-        "sdmc:/3ds/voxelmon/newlog.txt",  // this run only, emptied at boot
-    ] {
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    unsafe {
+        for f in LOG_SINKS.iter_mut() {
             let _ = writeln!(f, "{}", s);
+            let _ = f.flush();
         }
     }
 }
@@ -1900,23 +1942,9 @@ fn main() {
     println!("linear free {} KB", unsafe_free_kb());
 
 
-    // pvlog.txt ACCUMULATES: a freeze is investigated by relaunching, and
-    // wiping it on boot would destroy the very run being investigated. Trim
-    // only when it has grown large.
-    if std::fs::metadata("sdmc:/3ds/voxelmon/pvlog.txt")
-        .map(|m| m.len() > 512 * 1024)
-        .unwrap_or(false)
-    {
-        let _ = std::fs::write("sdmc:/3ds/voxelmon/pvlog.txt", "");
-    }
-    // newlog.txt holds THIS RUN and nothing else, emptied right here. The
-    // accumulating one is genuinely hard to read: several boots deep, the
-    // newest run is at the bottom and looks exactly like the others, so a
-    // stale copy and a fresh one are indistinguishable at a glance. If
-    // newlog.txt has more than one boot line in it, it did not come from
-    // this build.
-    let _ = std::fs::write("sdmc:/3ds/voxelmon/newlog.txt", "");
+    unsafe { log_open() };
     dlog("[pv] ---------------- boot ----------------");
+    dlog(&format!("[pv] log -> {}", unsafe { LOG_WHERE.clone() }));
     // Stamp the build so a log can never be mistaken for one from a
     // different binary — the Desktop copy lives in OneDrive, and a sync
     // lag once made a stale .3dsx look like a code path that "did nothing".
