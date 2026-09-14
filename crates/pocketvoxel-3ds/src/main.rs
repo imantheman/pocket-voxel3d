@@ -1016,6 +1016,59 @@ extern "C" {
     fn svcOutputDebugString(s: *const u8, len: i32) -> u32;
 }
 
+/// Past this, the circle pad counts as pushed. It rests a few units off
+/// centre and drifts with age, so the dead zone has to clear that without
+/// eating the first part of the throw. Full deflection is about 156.
+const STICK_DEAD: i16 = 40;
+
+/// Read the circle pad as a d-pad press, dominant axis only.
+///
+/// One direction at a time on purpose: the world is a tile grid and the
+/// walker takes a single direction per step, so turning a diagonal push into
+/// two presses would leave the choice to whichever the guest happens to test
+/// first. The dominant axis is what the player meant.
+///
+/// dy is positive upwards.
+fn stick_as_dpad(dx: i16, dy: i16) -> i32 {
+    if dx.abs() <= STICK_DEAD && dy.abs() <= STICK_DEAD {
+        return 0;
+    }
+    if dx.abs() > dy.abs() {
+        if dx > 0 { 1 << 3 } else { 1 << 2 } // right / left
+    } else if dy > 0 {
+        1 << 0 // up
+    } else {
+        1 << 1 // down
+    }
+}
+
+/// Swing the eye around the focus by the player's camera offsets.
+///
+/// Zero offsets return the eye untouched, bit for bit -- the camera the game
+/// asks for is the default, and the C-stick only ever departs from it.
+fn orbit_eye(
+    e: (f32, f32, f32),
+    f: (f32, f32, f32),
+    dyaw: f32,
+    dpitch: f32,
+) -> (f32, f32, f32) {
+    if dyaw == 0.0 && dpitch == 0.0 {
+        return e;
+    }
+    let (vx, vy, vz) = (e.0 - f.0, e.1 - f.1, e.2 - f.2);
+    let r = (vx * vx + vy * vy + vz * vz).sqrt();
+    if r < 0.001 {
+        return e;
+    }
+    let horiz = (vx * vx + vz * vz).sqrt();
+    let yaw = vz.atan2(vx) + dyaw;
+    // Clamped off both ends: level with the ground shows the world edge-on
+    // and straight down degenerates the up vector.
+    let pitch = (vy.atan2(horiz) + dpitch).clamp(0.12, 1.45);
+    let ch = r * pitch.cos();
+    (f.0 + ch * yaw.cos(), f.1 + r * pitch.sin(), f.2 + ch * yaw.sin())
+}
+
 /// Diagnostics that survive to a log file. `println!` goes to the ctru
 /// Console, which this build hands to the Kanto Gear right after boot, so
 /// nothing printed during play is ever readable. svcOutputDebugString is
@@ -2221,6 +2274,11 @@ fn main() {
 
     let mut yaw: f32 = 0.7;
     let mut pitch: f32 = 0.6;
+    // The player's own camera offsets, on top of whatever camera the game
+    // asks for. Zero is the game's own framing; the C-stick swings away from
+    // it and ZL+ZR together puts it back.
+    let mut cam_yaw_off: f32 = 0.0;
+    let mut cam_pitch_off: f32 = 0.0;
     let mut dist: f32 = geom.size * 1.4;
 
     while apt.main_loop() {
@@ -2329,6 +2387,12 @@ fn main() {
             if k.contains(KeyPad::DPAD_DOWN)  { b |= 1 << 1; }
             if k.contains(KeyPad::DPAD_LEFT)  { b |= 1 << 2; }
             if k.contains(KeyPad::DPAD_RIGHT) { b |= 1 << 3; }
+            // The circle pad walks exactly as the d-pad does -- same bits,
+            // so menus, the bag and the naming screen all take it too.
+            {
+                let (cx, cy) = hid.circlepad_position();
+                b |= stick_as_dpad(cx, cy);
+            }
             if k.contains(KeyPad::A)          { b |= 1 << 4; }
             if k.contains(KeyPad::B)          { b |= 1 << 5; }
             if k.contains(KeyPad::START)      { b |= 1 << 6; }
@@ -2813,6 +2877,22 @@ fn main() {
             center = geom.center;
         }
 
+        if guest_drive {
+            // C-stick swings the view. Rate, not position: holding it keeps
+            // turning, which is what a nub with no absolute reference wants.
+            // The C-stick's four directions are ordinary keypad bits, so no
+            // extra service to start; the analog read would be irrstCstick-
+            // Read, which hidCstickRead is only a macro for.
+            if k.contains(KeyPad::CSTICK_LEFT)  { cam_yaw_off -= 0.035; }
+            if k.contains(KeyPad::CSTICK_RIGHT) { cam_yaw_off += 0.035; }
+            if k.contains(KeyPad::CSTICK_UP)    { cam_pitch_off += 0.025; }
+            if k.contains(KeyPad::CSTICK_DOWN)  { cam_pitch_off -= 0.025; }
+            cam_pitch_off = cam_pitch_off.clamp(-0.7, 1.0);
+            if k.contains(KeyPad::ZL) && k.contains(KeyPad::ZR) {
+                cam_yaw_off = 0.0;
+                cam_pitch_off = 0.0;
+            }
+        }
         if !guest_drive {
         if k.contains(KeyPad::DPAD_LEFT)  { yaw -= 0.04; }
         if k.contains(KeyPad::DPAD_RIGHT) { yaw += 0.04; }
@@ -2892,8 +2972,22 @@ fn main() {
                 let sl = unsafe { &voxel::scene().maps[0] };
                 if sl.shown { (sl.ox as f32, sl.oy as f32) } else { (0.0, 0.0) }
             };
-            let e = list.cam.eye;
             let f = list.cam.focus;
+            let e0 = list.cam.eye;
+            // The eye the player has swung to, not the one the game asked
+            // for -- and the cull is told the same one, or it would keep
+            // culling against a camera that is no longer being drawn from.
+            // Not during a battle: that camera is staged around the arena
+            // (computeStaging), and swinging it is as likely to put the
+            // player behind a wall as to show them anything.
+            let fighting = unsafe { voxel::scene() }.battle.active;
+            let (ex, ey, ez) = orbit_eye(
+                (e0.x, e0.y, e0.z),
+                (f.x, f.y, f.z),
+                if fighting { 0.0 } else { cam_yaw_off },
+                if fighting { 0.0 } else { cam_pitch_off },
+            );
+            let e = pocketvoxel_core::math::Vec3 { x: ex, y: ey, z: ez };
             guest_eye_focus = Some((FVec3::new(e.x, e.y, e.z), FVec3::new(f.x, f.y, f.z)));
             // A top-down eye makes up=(0,1,0) degenerate (cross product -> 0),
             // which yields a garbage matrix and an empty screen. Use -Z as up
