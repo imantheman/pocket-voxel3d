@@ -733,6 +733,7 @@ describe("dev menu", () => {
     expect(game.stackKinds().at(-1)).toBe("bag");
     const bag = game.bag() as { entries: { name: string }[] };
     pick(game, bag.entries.findIndex((e) => e.name === "RARE CANDY"));
+    tap(game, VOX_BTN.a); // ItemMenu: USE (TOSS is the other row)
     expect(game.stackKinds().at(-1)).toBe("party"); // the chooser
     tap(game, VOX_BTN.a);                           // pick the first mon
 
@@ -2375,6 +2376,7 @@ describe("the bike voucher, the bike shop and the bicycle", () => {
     pick(game, sm.entries.indexOf("ITEM"));
     const bag = game.bag() as { entries: { name: string }[] };
     pick(game, bag.entries.findIndex((e) => e.name === "BICYCLE"));
+    tap(game, VOX_BTN.a); // ItemMenu: USE
   }
 
   test.skipIf(!hasGen)("the bicycle mounts outdoors, doubles the pace, and plays its theme", () => {
@@ -2829,5 +2831,128 @@ describe("the two HMs people hand over", () => {
     const again = say(game, "WARDENS_HOUSE", "TEXT_WARDENSHOUSE_WARDEN");
     expect(game.save.inventory.HM_STRENGTH).toBe(1);
     expect(again).toContain("STRENGTH");
+  });
+});
+
+describe("tossing things out of the bag", () => {
+  /** Open the bag with the cursor on `name`, and press A to get USE/TOSS. */
+  function openItem(game: VoxelmonGame, name: string): void {
+    tap(game, VOX_BTN.start);
+    const sm = game.startMenu() as { entries: string[] };
+    pick(game, sm.entries.indexOf("ITEM"));
+    const bag = game.bag() as { entries: { name: string }[] };
+    pick(game, bag.entries.findIndex((e) => e.name === name));
+  }
+
+  /** From the USE/TOSS box, choose TOSS. */
+  function chooseToss(game: VoxelmonGame): void {
+    tap(game, VOX_BTN.down); // USE -> TOSS
+    tap(game, VOX_BTN.a);
+  }
+
+  /**
+   * Answer the "Is it OK to toss...?" confirm.
+   *
+   * showChoice pushes a TEXTBOX that only opens its YES/NO once the line has
+   * typed out, so the answer has to wait for the choice to actually exist --
+   * pressing A the moment the box appears just advances the text.
+   */
+  function answerConfirm(game: VoxelmonGame, yes: boolean): boolean {
+    for (let i = 0; i < 400; i++) {
+      if (game.stackKinds().at(-1) === "choice") {
+        // Release first: the loop above holds A to type the line out, and
+        // pressing an already-held button is no edge at all -- the answer
+        // would be swallowed and the confirm would sit there forever.
+        game.tick(0);
+        if (!yes) tap(game, VOX_BTN.down);
+        tap(game, VOX_BTN.a);
+        // The answer runs the callback on a later frame, so settle before
+        // the caller looks at what it did.
+        for (let k = 0; k < 20; k++) game.tick(0);
+        return true;
+      }
+      game.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    return false; // no confirm ever appeared
+  }
+
+  test.skipIf(!hasGen)("a single item is tossed after a yes", () => {
+    const game = makeMenuGame();
+    Bag.add(game.save, "POTION", 1);
+    openItem(game, "POTION");
+    expect((game.bag() as { mode: string }).mode).toBe("submenu");
+    chooseToss(game);
+    // one of them, so no quantity to choose: straight to the confirm
+    expect(answerConfirm(game, true)).toBe(true);
+    expect(game.save.inventory.POTION ?? 0).toBe(0);
+  });
+
+  test.skipIf(!hasGen)("saying no keeps it", () => {
+    const game = makeMenuGame();
+    Bag.add(game.save, "POTION", 1);
+    openItem(game, "POTION");
+    chooseToss(game);
+    // it really did ask, and NO really does keep it
+    expect(answerConfirm(game, false)).toBe(true);
+    expect(game.save.inventory.POTION).toBe(1);
+  });
+
+  test.skipIf(!hasGen)("a stack asks how many, and tosses exactly that many", () => {
+    const game = makeMenuGame();
+    Bag.add(game.save, "POTION", 9);
+    openItem(game, "POTION");
+    chooseToss(game);
+    expect((game.bag() as { mode: string }).mode).toBe("quantity");
+    tap(game, VOX_BTN.up); // 1 -> 2
+    tap(game, VOX_BTN.up); // 2 -> 3
+    expect((game.bag() as { qty: number }).qty).toBe(3);
+    tap(game, VOX_BTN.a); // accept the count
+    expect(answerConfirm(game, true)).toBe(true);
+    expect(game.save.inventory.POTION).toBe(6);
+  });
+
+  test.skipIf(!hasGen)("the count cannot run past what is held, or below one", () => {
+    const game = makeMenuGame();
+    Bag.add(game.save, "POTION", 3);
+    openItem(game, "POTION");
+    chooseToss(game);
+    for (let i = 0; i < 8; i++) tap(game, VOX_BTN.up);
+    expect((game.bag() as { qty: number }).qty).toBe(3);
+    for (let i = 0; i < 8; i++) tap(game, VOX_BTN.down);
+    expect((game.bag() as { qty: number }).qty).toBe(1);
+  });
+
+  test.skipIf(!hasGen)("a key item is refused outright", () => {
+    const game = makeMenuGame();
+    Bag.add(game.save, "BICYCLE", 1);
+    openItem(game, "BICYCLE");
+    chooseToss(game);
+    // no confirm at all: it just says no and keeps it
+    expect(game.stackKinds().at(-1)).not.toBe("choice");
+    expect(game.save.inventory.BICYCLE).toBe(1);
+    const src = game.uiBox() as { box?: { pages?: { lines: string[] }[] } } | null;
+    const said = (src?.box?.pages ?? []).map((pg) => pg.lines.join(" ")).join(" ");
+    expect(said).toContain("too impor");
+  });
+
+  test.skipIf(!hasGen)("B backs out of the submenu without tossing", () => {
+    const game = makeMenuGame();
+    Bag.add(game.save, "POTION", 2);
+    openItem(game, "POTION");
+    tap(game, VOX_BTN.b);
+    expect((game.bag() as { mode: string }).mode).toBe("list");
+    expect(game.save.inventory.POTION).toBe(2);
+  });
+
+  test.skipIf(!hasGen)("tossing the last of a stack leaves the cursor somewhere real", () => {
+    const game = makeMenuGame();
+    Bag.add(game.save, "POTION", 1);
+    openItem(game, "POTION");
+    chooseToss(game);
+    expect(answerConfirm(game, true)).toBe(true);
+    for (let i = 0; i < 20; i++) game.tick(0); // let the confirm close
+    const v = game.bag() as { entries: unknown[]; index: number } | null;
+    expect(v).not.toBeNull();
+    expect(v!.index).toBeLessThanOrEqual(v!.entries.length);
   });
 });

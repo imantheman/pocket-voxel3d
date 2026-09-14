@@ -822,7 +822,7 @@ export class Scene {
       // entries carry names+qty; CANCEL is the implicit last row (bagscreen.ts
       // counts it in its index range), and top/rows are the scroll window.
       const total = bg.entries.length + 1;
-      const sig = `${bg.index},${bg.top},` +
+      const sig = `${bg.index},${bg.top},${bg.mode},${bg.submenuIndex},${bg.qty},` +
         bg.entries.map((e: any) => `${e.name}\u00d7${e.qty}`).join(";");
       if (sig !== this.bagSig) {
         this.bagSig = sig;
@@ -854,6 +854,28 @@ export class Scene {
         }
         // more-arrow when there are rows below the window.
         if (bg.top + bg.rows < total) host.uiTile(X + W - 1, Y + H, ARROW_MORE);
+        // ItemMenu's USE / TOSS over the bottom of the list, and then the
+        // 1-99 counter (DisplayChooseQuantityMenu) in the same corner.
+        const sub = (x: number, y: number, w: number, h: number) => {
+          host.uiTile(x, y, BORDER_TL);
+          host.uiFill(x + 1, y, w - 1, 1, BORDER_H);
+          host.uiTile(x + w, y, BORDER_TR);
+          host.uiFill(x, y + 1, 1, h, BORDER_V);
+          host.uiFill(x + w, y + 1, 1, h, BORDER_V);
+          host.uiFill(x + 1, y + 1, w - 1, h, SPACE);
+          host.uiTile(x, y + 1 + h, BORDER_BL);
+          host.uiFill(x + 1, y + 1 + h, w - 1, 1, BORDER_H);
+          host.uiTile(x + w, y + 1 + h, BORDER_BR);
+        };
+        if (bg.mode === "submenu") {
+          sub(11, 11, 7, 4);
+          this.stamp(host, 13, 13, "USE");
+          this.stamp(host, 13, 15, "TOSS");
+          host.uiTile(12, bg.submenuIndex === 0 ? 13 : 15, ARROW_CURSOR);
+        } else if (bg.mode === "quantity") {
+          sub(11, 11, 7, 2);
+          this.stamp(host, 14, 13, `×${String(bg.qty).padStart(2, "0")}`);
+        }
       }
       return;
     }

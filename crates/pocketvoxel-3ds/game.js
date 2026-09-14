@@ -8619,7 +8619,7 @@ class Scene {
     const bg = view.bag?.();
     if (bg) {
       const total = bg.entries.length + 1;
-      const sig = `${bg.index},${bg.top},` + bg.entries.map((e) => `${e.name}×${e.qty}`).join(";");
+      const sig = `${bg.index},${bg.top},${bg.mode},${bg.submenuIndex},${bg.qty},` + bg.entries.map((e) => `${e.name}×${e.qty}`).join(";");
       if (sig !== this.bagSig) {
         this.bagSig = sig;
         this.uiOwner = null;
@@ -8652,6 +8652,26 @@ class Scene {
         }
         if (bg.top + bg.rows < total)
           host.uiTile(X + W - 1, Y + H, ARROW_MORE);
+        const sub = (x, y, w, h) => {
+          host.uiTile(x, y, BORDER_TL);
+          host.uiFill(x + 1, y, w - 1, 1, BORDER_H);
+          host.uiTile(x + w, y, BORDER_TR);
+          host.uiFill(x, y + 1, 1, h, BORDER_V);
+          host.uiFill(x + w, y + 1, 1, h, BORDER_V);
+          host.uiFill(x + 1, y + 1, w - 1, h, SPACE);
+          host.uiTile(x, y + 1 + h, BORDER_BL);
+          host.uiFill(x + 1, y + 1 + h, w - 1, 1, BORDER_H);
+          host.uiTile(x + w, y + 1 + h, BORDER_BR);
+        };
+        if (bg.mode === "submenu") {
+          sub(11, 11, 7, 4);
+          this.stamp(host, 13, 13, "USE");
+          this.stamp(host, 13, 15, "TOSS");
+          host.uiTile(12, bg.submenuIndex === 0 ? 13 : 15, ARROW_CURSOR);
+        } else if (bg.mode === "quantity") {
+          sub(11, 11, 7, 2);
+          this.stamp(host, 14, 13, `×${String(bg.qty).padStart(2, "0")}`);
+        }
       }
       return;
     }
@@ -11228,14 +11248,115 @@ class BagState {
   kind = "bag";
   index = 0;
   top = 0;
+  mode = "list";
+  submenuIndex = 0;
+  qty = 1;
   constructor(game) {
     this.game = game;
   }
   ids() {
     return order(this.game.save);
   }
+  selected() {
+    return this.ids()[this.index];
+  }
+  line(key, fallback) {
+    return (this.game.data?.text ?? {})[key] ?? fallback;
+  }
+  itemName(id) {
+    return this.game.data.items?.[id]?.name ?? id;
+  }
+  toss(id, qty) {
+    if (this.game.data.items?.[id]?.keyItem) {
+      this.mode = "list";
+      this.game.showText(this.line("_TooImportantToTossText", `That's too impor-
+tant to toss!`));
+      return;
+    }
+    const ask2 = this.line("_IsItOKToTossItemText", `Is it OK to toss
+{RAM:wStringBuffer}?`).replace(/\{RAM:\w+\}/g, this.itemName(id));
+    this.game.showChoice(ask2, (yes) => {
+      this.mode = "list";
+      if (!yes)
+        return;
+      remove(this.game.save, id, qty);
+      const n = this.ids().length;
+      if (this.index > n)
+        this.index = n;
+      if (this.top > this.index)
+        this.top = this.index;
+    });
+  }
+  updateSubmenu(p) {
+    const id = this.selected();
+    if (!id) {
+      this.mode = "list";
+      return;
+    }
+    if (p.up)
+      this.submenuIndex = 0;
+    if (p.down)
+      this.submenuIndex = 1;
+    if (p.b) {
+      this.mode = "list";
+      return;
+    }
+    if (!p.a)
+      return;
+    if (this.submenuIndex === 1) {
+      const have = this.game.save.inventory?.[id] ?? 0;
+      if (this.game.data.items?.[id]?.keyItem || have <= 1) {
+        this.toss(id, 1);
+      } else {
+        this.qty = 1;
+        this.mode = "quantity";
+      }
+      return;
+    }
+    this.mode = "list";
+    this.use(id);
+  }
+  updateQuantity(p) {
+    const id = this.selected();
+    if (!id) {
+      this.mode = "list";
+      return;
+    }
+    const have = this.game.save.inventory?.[id] ?? 1;
+    if (p.up)
+      this.qty = Math.min(have, this.qty + 1);
+    if (p.down)
+      this.qty = Math.max(1, this.qty - 1);
+    if (p.right)
+      this.qty = Math.min(have, this.qty + 10);
+    if (p.left)
+      this.qty = Math.max(1, this.qty - 10);
+    if (p.b) {
+      this.mode = "submenu";
+      return;
+    }
+    if (p.a)
+      this.toss(id, this.qty);
+  }
+  use(id) {
+    const teach = !!this.game.data.items?.[id]?.machine?.move;
+    if (USABLE_IN_FIELD.has(id)) {
+      this.game.closeToOverworld();
+      this.game.useKeyItem(id);
+      return;
+    }
+    if (teach || USABLE_ON_PARTY.has(id)) {
+      this.game.push(new PartyState(this.game, {
+        onPick: (i) => teach ? this.game.teachMachine(i, id) : this.game.useItem(i, id)
+      }));
+    }
+  }
   update() {
     const p = this.game.input.pressed;
+    if (this.mode === "submenu")
+      return this.updateSubmenu(p);
+    if (this.mode === "quantity")
+      return this.updateQuantity(p);
     const n = this.ids().length + 1;
     if (p.up)
       this.index = (this.index + n - 1) % n;
@@ -11250,18 +11371,8 @@ class BagState {
       return;
     }
     if (p.a && this.index < this.ids().length) {
-      const id = this.ids()[this.index];
-      const teach = !!this.game.data.items?.[id]?.machine?.move;
-      if (USABLE_IN_FIELD.has(id)) {
-        this.game.closeToOverworld();
-        this.game.useKeyItem(id);
-        return;
-      }
-      if (teach || USABLE_ON_PARTY.has(id)) {
-        this.game.push(new PartyState(this.game, {
-          onPick: (i) => teach ? this.game.teachMachine(i, id) : this.game.useItem(i, id)
-        }));
-      }
+      this.mode = "submenu";
+      this.submenuIndex = 0;
     }
   }
   view() {
@@ -11270,7 +11381,15 @@ class BagState {
       name: this.game.data.items?.[id]?.name ?? id,
       qty: save.inventory?.[id] ?? 0
     }));
-    return { entries: items, index: this.index, top: this.top, rows: ROWS3 };
+    return {
+      entries: items,
+      index: this.index,
+      top: this.top,
+      rows: ROWS3,
+      mode: this.mode,
+      submenuIndex: this.submenuIndex,
+      qty: this.qty
+    };
   }
 }
 
