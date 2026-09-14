@@ -1360,6 +1360,71 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     },
   },
 
+  // story.lua M.SAFARI_ZONE_SECRET_HOUSE (scripts/SafariZoneSecretHouse.asm):
+  // reach the far corner of the Safari Zone and he hands over HM03 SURF.
+  SAFARI_ZONE_SECRET_HOUSE: {
+    talk: {
+      TEXT_SAFARIZONESECRETHOUSE_FISHING_GURU: [
+        ["face_player"],
+        ["check_flag", "EVENT_GOT_HM03"],
+        ["jump_if_true", "already"],
+        ["show_text", "_SafariZoneSecretHouseFishingGuruYouHaveWonText"],
+        // give-then-print: GiveItem fills wStringBuffer and the received
+        // line reads the name back out of it.
+        ["give_item", "HM_SURF", 1, "_SafariZoneSecretHouseFishingGuruReceivedHM03Text"],
+        ["set_flag", "EVENT_GOT_HM03"],
+        ["jump", "end"],
+        ["label", "already"],
+        ["show_text", "_SafariZoneSecretHouseFishingGuruHM03ExplanationText"],
+        ["label", "end"],
+      ],
+    },
+  },
+
+  // story.lua M.WARDENS_HOUSE (scripts/WardensHouse.asm): the WARDEN cannot
+  // be understood without his teeth. Bring the GOLD TEETH back from the
+  // Safari Zone and he swaps them for HM04 STRENGTH.
+  WARDENS_HOUSE: {
+    talk: {
+      TEXT_WARDENSHOUSE_WARDEN: [
+        ["face_player"],
+        ["check_flag", "EVENT_GOT_HM04"],
+        ["jump_if_true", "gotHm04"],
+        ["check_item", "GOLD_TEETH"],
+        ["jump_if_false", "noTeeth"],
+        // GaveTheGoldTeeth runs straight into "The WARDEN popped in his
+        // teeth!" -- that line opens on a page break, so it is the second
+        // page of this one rather than a box of its own. (The ROM carries
+        // it; gen1recomp's rows do not use it.)
+        ["show_text", "_WardensHouseWardenGaveTheGoldTeethText"],
+        ["show_text", "_WardensHouseWardenTeethPoppedInHisTeethText"],
+        ["take_item", "GOLD_TEETH", 1],
+        ["set_flag", "EVENT_GAVE_GOLD_TEETH"],
+        ["show_text", "_WardensHouseWardenThanksText"],
+        ["give_item", "HM_STRENGTH", 1, "_WardensHouseWardenReceivedHM04Text"],
+        ["set_flag", "EVENT_GOT_HM04"],
+        ["jump", "end"],
+
+        // No teeth: he asks something unintelligible and answers himself
+        // the same way whichever you pick (Gibberish2 on yes, 3 on no).
+        ["label", "noTeeth"],
+        ["ask", "_WardensHouseWardenGibberish1Text"],
+        ["jump_if_true", "gibberishYes"],
+        ["show_text", "_WardensHouseWardenGibberish3Text"],
+        ["jump", "end"],
+        ["label", "gibberishYes"],
+        ["show_text", "_WardensHouseWardenGibberish2Text"],
+        ["jump", "end"],
+
+        // Afterwards he explains what HM04 does, every time.
+        ["label", "gotHm04"],
+        ["show_text", "_WardensHouseWardenHM04ExplanationText"],
+        ["label", "end"],
+      ],
+      TEXT_WARDENSHOUSE_BOULDER: [["show_text", "_WardensHouseDisplayMerchandiseText"]],
+    },
+  },
+
   // story2.lua M.BIKE_SHOP + flavor/bike_shop.lua (scripts/BikeShop.asm).
   // The clerk's three branches and his price window are in game.ts
   // openBikeShop; the other two are plain flavour.

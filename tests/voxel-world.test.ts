@@ -2739,3 +2739,95 @@ describe("which way a walker looks from a swung camera", () => {
     }
   });
 });
+
+describe("the two HMs people hand over", () => {
+  function hmGame(): VoxelmonGame {
+    const data = {
+      ...(romData as object),
+      cookedMaps: [
+        ...((romData as { cookedMaps?: string[] }).cookedMaps ?? []),
+        "SAFARI_ZONE_SECRET_HOUSE", "WARDENS_HOUSE",
+      ],
+    };
+    const game = new VoxelmonGame(data as never, new MenuHost(), 1);
+    game.newGame();
+    game.closeToOverworld();
+    return game;
+  }
+
+  /**
+   * Talk, answering the first YES/NO if one opens, and return every line the
+   * NPC said.
+   *
+   * Driven for a fixed span rather than "until the stack settles": a script
+   * outlives its boxes, so a loop that stops at the first idle frame quietly
+   * misses everything after the first page.
+   */
+  function say(game: VoxelmonGame, map: string, text: string, yes?: boolean): string {
+    game.overworld.setMap(map, 4, 4, "up");
+    game.overworld.showMapText(text);
+    const said: string[] = [];
+    let answered = false;
+    for (let i = 0; i < 2000; i++) {
+      const src = game.uiBox() as { box?: { pages?: { lines: string[] }[] } } | null;
+      const pages = src?.box?.pages;
+      if (pages?.length) {
+        const t = pages.map((pg) => pg.lines.join(" ")).join(" ");
+        if (!said.includes(t)) said.push(t);
+      }
+      if (game.stackKinds().at(-1) === "choice" && yes !== undefined && !answered) {
+        if (!yes) tap(game, VOX_BTN.down);
+        tap(game, VOX_BTN.a);
+        answered = true;
+        continue;
+      }
+      // A or nothing, alternating, so held A never eats two boxes at once.
+      game.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    return said.join(" | ");
+  }
+
+  test.skipIf(!hasGen)("the secret house guru hands over HM03 SURF, once", () => {
+    const game = hmGame();
+    const said = say(game, "SAFARI_ZONE_SECRET_HOUSE", "TEXT_SAFARIZONESECRETHOUSE_FISHING_GURU");
+    expect(game.save.inventory.HM_SURF).toBe(1);
+    expect(game.save.flags.EVENT_GOT_HM03).toBe(true);
+    // the received line reads the item name out of wStringBuffer
+    expect(said).toContain("HM03");
+    expect(said).not.toContain("{RAM");
+
+    // coming back gets the explanation, not a second copy
+    const again = say(game, "SAFARI_ZONE_SECRET_HOUSE", "TEXT_SAFARIZONESECRETHOUSE_FISHING_GURU");
+    expect(game.save.inventory.HM_SURF).toBe(1);
+    expect(again).toContain("SURF");
+  });
+
+  test.skipIf(!hasGen)("the warden is unintelligible until the teeth come back", () => {
+    const game = hmGame();
+    // No teeth: gibberish, and nothing changes hands either way.
+    const no = say(game, "WARDENS_HOUSE", "TEXT_WARDENSHOUSE_WARDEN", false);
+    expect(game.save.inventory.HM_STRENGTH ?? 0).toBe(0);
+    expect(no).toContain("Ha?"); // Gibberish3, the "no" answer
+    const yes = say(game, "WARDENS_HOUSE", "TEXT_WARDENSHOUSE_WARDEN", true);
+    expect(yes).toContain("Ah howhee"); // Gibberish2, the "yes" answer
+    expect(game.save.inventory.HM_STRENGTH ?? 0).toBe(0);
+  });
+
+  test.skipIf(!hasGen)("the teeth buy HM04 STRENGTH and are handed over", () => {
+    const game = hmGame();
+    Bag.add(game.save, "GOLD_TEETH", 1);
+    const said = say(game, "WARDENS_HOUSE", "TEXT_WARDENSHOUSE_WARDEN");
+    expect(game.save.inventory.HM_STRENGTH).toBe(1);
+    expect(game.save.inventory.GOLD_TEETH ?? 0).toBe(0);
+    expect(game.save.flags.EVENT_GAVE_GOLD_TEETH).toBe(true);
+    expect(game.save.flags.EVENT_GOT_HM04).toBe(true);
+    // he puts them in before he can be understood
+    expect(said).toContain("popped in his teeth");
+    expect(said).toContain("Thanks");
+
+    // afterwards he explains what it does, and gives nothing more
+    const again = say(game, "WARDENS_HOUSE", "TEXT_WARDENSHOUSE_WARDEN");
+    expect(game.save.inventory.HM_STRENGTH).toBe(1);
+    expect(again).toContain("STRENGTH");
+  });
+});

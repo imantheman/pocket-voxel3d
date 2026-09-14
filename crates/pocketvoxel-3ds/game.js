@@ -5679,6 +5679,53 @@ var MAP_SCRIPTS = {
       ]
     }
   },
+  SAFARI_ZONE_SECRET_HOUSE: {
+    talk: {
+      TEXT_SAFARIZONESECRETHOUSE_FISHING_GURU: [
+        ["face_player"],
+        ["check_flag", "EVENT_GOT_HM03"],
+        ["jump_if_true", "already"],
+        ["show_text", "_SafariZoneSecretHouseFishingGuruYouHaveWonText"],
+        ["give_item", "HM_SURF", 1, "_SafariZoneSecretHouseFishingGuruReceivedHM03Text"],
+        ["set_flag", "EVENT_GOT_HM03"],
+        ["jump", "end"],
+        ["label", "already"],
+        ["show_text", "_SafariZoneSecretHouseFishingGuruHM03ExplanationText"],
+        ["label", "end"]
+      ]
+    }
+  },
+  WARDENS_HOUSE: {
+    talk: {
+      TEXT_WARDENSHOUSE_WARDEN: [
+        ["face_player"],
+        ["check_flag", "EVENT_GOT_HM04"],
+        ["jump_if_true", "gotHm04"],
+        ["check_item", "GOLD_TEETH"],
+        ["jump_if_false", "noTeeth"],
+        ["show_text", "_WardensHouseWardenGaveTheGoldTeethText"],
+        ["show_text", "_WardensHouseWardenTeethPoppedInHisTeethText"],
+        ["take_item", "GOLD_TEETH", 1],
+        ["set_flag", "EVENT_GAVE_GOLD_TEETH"],
+        ["show_text", "_WardensHouseWardenThanksText"],
+        ["give_item", "HM_STRENGTH", 1, "_WardensHouseWardenReceivedHM04Text"],
+        ["set_flag", "EVENT_GOT_HM04"],
+        ["jump", "end"],
+        ["label", "noTeeth"],
+        ["ask", "_WardensHouseWardenGibberish1Text"],
+        ["jump_if_true", "gibberishYes"],
+        ["show_text", "_WardensHouseWardenGibberish3Text"],
+        ["jump", "end"],
+        ["label", "gibberishYes"],
+        ["show_text", "_WardensHouseWardenGibberish2Text"],
+        ["jump", "end"],
+        ["label", "gotHm04"],
+        ["show_text", "_WardensHouseWardenHM04ExplanationText"],
+        ["label", "end"]
+      ],
+      TEXT_WARDENSHOUSE_BOULDER: [["show_text", "_WardensHouseDisplayMerchandiseText"]]
+    }
+  },
   BIKE_SHOP: {
     talk: {
       TEXT_BIKESHOP_CLERK: [["face_player"], ["open_bike_shop"]],
