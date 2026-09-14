@@ -81,6 +81,10 @@ unsafe fn load_map_pak(name: &str) -> bool {
     // must read from SD. Stat the size first so we can evict to fit WITHOUT a
     // transient over-budget spike; a map larger than the whole budget evicts
     // everything and loads alone (peak == the old single-pak peak).
+    let t0 = {
+        extern "C" { fn osGetTime() -> u64; }
+        osGetTime()
+    };
     let path = format!("sdmc:/3ds/voxelmon/paks/{}.vxpak", name);
     let new_kb = std::fs::metadata(&path)
         .map(|m| (m.len() / 1024) as usize)
@@ -93,7 +97,11 @@ unsafe fn load_map_pak(name: &str) -> bool {
         return false;
     };
     let kb = v.len() / 1024;
-    println!("pak {} {} KB (cache {} KB)", name, kb, cache_total_kb());
+    let read_ms = {
+        extern "C" { fn osGetTime() -> u64; }
+        osGetTime().wrapping_sub(t0)
+    };
+    println!("pak {} {} KB in {} ms (cache {} KB)", name, kb, read_ms, cache_total_kb());
     let buf: Box<[u8]> = v.into_boxed_slice();
     let bytes: &'static [u8] = core::mem::transmute(buf.as_ref());
     match pak::read(bytes) {
@@ -115,22 +123,101 @@ unsafe fn cur_pak() -> &'static pak::Pak<'static> {
     )
 }
 
+/// The GAME section's tag, the one payload this host never looks at.
+const TAG_GAME: u32 = u32::from_le_bytes(*b"GAME");
+
+/**
+ * Read a pak, skipping the payloads this host has no use for.
+ *
+ * Every map's pak carries a full copy of gamedata.json in its GAME section —
+ * 1.18 MB of it, the same bytes in all 219 of them. Nothing reads it: the
+ * guest is handed gamedata.json from its own file on the card at boot, and
+ * `pak::read` only ever slices GAME, never looks inside. It was still being
+ * pulled off the SD card on every single map change, which for a house or a
+ * gate (2.8 MB on disk, 0.14 MB of actual geometry) was most of the wait.
+ *
+ * The buffer is still allocated full-length and the section table is read
+ * intact, so every offset in it stays true and the parser's
+ * `total_len == data.len()` check still holds — the skipped range is simply
+ * left as zeros. Sections sit in ascending offset order, so dropping one
+ * leaves two runs to read instead of one.
+ */
 fn map_pak(path: &str) -> Option<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len() as usize;
     // fs::read grows by doubling, so a 45 MB pak can transiently want ~90 MB
     // and blow the heap even though the final size fits. Size it exactly
     // from the file length and read straight in.
-    use std::io::Read;
-    let mut f = std::fs::File::open(path).ok()?;
-    let len = f.metadata().ok()?.len() as usize;
     let mut v: Vec<u8> = Vec::new();
     if v.try_reserve_exact(len).is_err() {
         println!("pak: cannot reserve {} KB", len / 1024);
         return None;
     }
     v.resize(len, 0);
-    if f.read_exact(&mut v).is_err() {
-        println!("pak: short read");
+
+    // Header (16B) + one 16B entry per section. Read it first: it says where
+    // everything lives, and it has to reach the buffer verbatim either way.
+    const HDR: usize = 16;
+    const ENTRY: usize = 16;
+    if len < HDR {
+        println!("pak: too short");
         return None;
+    }
+    if f.read_exact(&mut v[..HDR]).is_err() {
+        println!("pak: short read (header)");
+        return None;
+    }
+    let n_sections = u16::from_le_bytes([v[6], v[7]]) as usize;
+    let table_end = HDR + n_sections * ENTRY;
+    if table_end > len {
+        println!("pak: bad section table");
+        return None;
+    }
+    if f.read_exact(&mut v[HDR..table_end]).is_err() {
+        println!("pak: short read (table)");
+        return None;
+    }
+
+    // Every byte worth reading, as merged runs. Starts as the whole tail
+    // after the table; GAME is then cut out of it.
+    let mut keep: Vec<(usize, usize)> = vec![(table_end, len)];
+    for s in 0..n_sections {
+        let e = HDR + s * ENTRY;
+        let tag = u32::from_le_bytes([v[e], v[e + 1], v[e + 2], v[e + 3]]);
+        if tag != TAG_GAME {
+            continue;
+        }
+        let off = u32::from_le_bytes([v[e + 4], v[e + 5], v[e + 6], v[e + 7]]) as usize;
+        let slen = u32::from_le_bytes([v[e + 8], v[e + 9], v[e + 10], v[e + 11]]) as usize;
+        let end = match off.checked_add(slen) {
+            Some(x) if x <= len => x,
+            _ => continue, // nonsense entry: read it like any other byte
+        };
+        let mut cut: Vec<(usize, usize)> = Vec::new();
+        for &(a, b) in &keep {
+            if end <= a || off >= b {
+                cut.push((a, b));
+                continue;
+            }
+            if a < off { cut.push((a, off)); }
+            if end < b { cut.push((end, b)); }
+        }
+        keep = cut;
+    }
+
+    for (a, b) in keep {
+        if b <= a {
+            continue;
+        }
+        if f.seek(SeekFrom::Start(a as u64)).is_err() {
+            println!("pak: seek failed");
+            return None;
+        }
+        if f.read_exact(&mut v[a..b]).is_err() {
+            println!("pak: short read");
+            return None;
+        }
     }
     Some(v)
 }
