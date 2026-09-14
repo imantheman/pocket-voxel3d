@@ -1058,12 +1058,13 @@ fn dlog(s: &str) {
     // at all. A file next to the paks is readable either way. Called about
     // once a second, so re-opening per line is not worth avoiding.
     use std::io::Write;
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("sdmc:/3ds/voxelmon/pvlog.txt")
-    {
-        let _ = writeln!(f, "{}", s);
+    for path in [
+        "sdmc:/3ds/voxelmon/pvlog.txt",   // every run, for a freeze post-mortem
+        "sdmc:/3ds/voxelmon/newlog.txt",  // this run only, emptied at boot
+    ] {
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(f, "{}", s);
+        }
     }
 }
 
@@ -1899,16 +1900,22 @@ fn main() {
     println!("linear free {} KB", unsafe_free_kb());
 
 
-    // Fresh diagnostics file per run (see dlog).
-    // Do NOT truncate: a freeze is investigated by relaunching, and wiping
-    // the log on boot destroys the very run being investigated. Trim only
-    // when it has grown large.
+    // pvlog.txt ACCUMULATES: a freeze is investigated by relaunching, and
+    // wiping it on boot would destroy the very run being investigated. Trim
+    // only when it has grown large.
     if std::fs::metadata("sdmc:/3ds/voxelmon/pvlog.txt")
         .map(|m| m.len() > 512 * 1024)
         .unwrap_or(false)
     {
         let _ = std::fs::write("sdmc:/3ds/voxelmon/pvlog.txt", "");
     }
+    // newlog.txt holds THIS RUN and nothing else, emptied right here. The
+    // accumulating one is genuinely hard to read: several boots deep, the
+    // newest run is at the bottom and looks exactly like the others, so a
+    // stale copy and a fresh one are indistinguishable at a glance. If
+    // newlog.txt has more than one boot line in it, it did not come from
+    // this build.
+    let _ = std::fs::write("sdmc:/3ds/voxelmon/newlog.txt", "");
     dlog("[pv] ---------------- boot ----------------");
     // Stamp the build so a log can never be mistaken for one from a
     // different binary — the Desktop copy lives in OneDrive, and a sync
@@ -2869,11 +2876,21 @@ fn main() {
             if k.contains(KeyPad::CSTICK_RIGHT) { cam_yaw_off += 0.035; }
             if k.contains(KeyPad::CSTICK_UP)    { cam_pitch_off += 0.025; }
             if k.contains(KeyPad::CSTICK_DOWN)  { cam_pitch_off -= 0.025; }
-            cam_pitch_off = cam_pitch_off.clamp(-1.4, 1.4);
             if k.contains(KeyPad::ZL) && k.contains(KeyPad::ZR) {
                 cam_yaw_off = 0.0;
                 cam_pitch_off = 0.0;
             }
+            // Held against the limit, the offset must not keep winding: the
+            // swing clamps its RESULT, so the slack would all have to be
+            // pushed back out before the camera moved again. Clamped to what
+            // this camera can actually take, the stick simply stops at the
+            // ground and reverses the moment it is pushed the other way.
+            cam_pitch_off =
+                draw::clamp_pitch_off(unsafe { voxel::scene() }, cam_pitch_off);
+            // Yaw has no limit, it just goes round; keep it in one turn so
+            // it cannot drift off into imprecision over a long session.
+            let tau = core::f32::consts::PI * 2.0;
+            cam_yaw_off = cam_yaw_off.rem_euclid(tau);
             // Handed to the scene rather than applied here: draw::camera
             // swings the ONE camera everything reads, so the billboard lean,
             // the card facing, the frustum and the projection cannot end up

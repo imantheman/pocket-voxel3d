@@ -37,6 +37,7 @@ import { GameMap } from "../voxelmon/game/world/map.ts";
 import { martStock } from "../voxelmon/game/world/marts.ts";
 import { computeNeighbors } from "../voxelmon/game/world/overworld.ts";
 import { rotateDir } from "../voxelmon/game/world/collision.ts";
+import { poseDir } from "../voxelmon/game/scene.ts";
 import { bikeAllowed, BIKE_SONG, effectiveMapSong } from "../voxelmon/game/world/bike.ts";
 import { fillAideText } from "../voxelmon/game/world/oaksaide.ts";
 import { daycareFee, learnMovesFromDayCare } from "../voxelmon/game/world/daycare.ts";
@@ -2689,5 +2690,52 @@ describe("walking with the camera swung round", () => {
     tap(game, VOX_BTN.down);
     // down moves the cursor down the list, camera or no camera
     expect(sm().index).toBe((first + 1) % sm().entries.length);
+  });
+});
+
+describe("which way a walker looks from a swung camera", () => {
+  test("an unswung camera poses every sprite exactly as before", () => {
+    for (const d of ["up", "down", "left", "right"] as const) {
+      expect(poseDir(d, 0)).toBe(d);
+    }
+  });
+
+  test("walking away from the camera shows the back, however it is swung", () => {
+    // Unswung the camera is south, so facing north is walking away: the
+    // "up" pose, which is the back view.
+    expect(poseDir("up", 0)).toBe("up");
+    // Swung right round the camera is north, so the walk-away direction is
+    // south -- and it has to resolve to that same back pose.
+    expect(poseDir("down", 2)).toBe("up");
+    // The same world facing, seen from the other side, must NOT stay the
+    // back view: that was the bug, the sprite walking away face-first.
+    expect(poseDir("up", 2)).toBe("down");
+  });
+
+  test("a quarter turn swaps the side-on poses for the front and back", () => {
+    // Swung a quarter turn, a press of up walks the player EAST, so east is
+    // the away-from-camera direction and must draw the back pose.
+    expect(poseDir("right", 1)).toBe("up");
+    expect(poseDir("left", 1)).toBe("down"); // west: walking toward you
+    // North and south are side-on from here.
+    expect(poseDir("up", 1)).toBe("left");
+    expect(poseDir("down", 1)).toBe("right");
+  });
+
+  test("a full turn is where it started", () => {
+    for (const d of ["up", "down", "left", "right"] as const) {
+      expect(poseDir(d, 4)).toBe(d);
+      expect(poseDir(d, -4)).toBe(d);
+    }
+  });
+
+  test("the pose turns opposite the walk, so the two agree on screen", () => {
+    // A press of `screen` walks the world direction rotateDir(screen, q);
+    // posing that world direction must give the screen one back again.
+    for (const q of [0, 1, 2, 3]) {
+      for (const screen of ["up", "down", "left", "right"] as const) {
+        expect(poseDir(rotateDir(screen, q), q)).toBe(screen);
+      }
+    }
   });
 });

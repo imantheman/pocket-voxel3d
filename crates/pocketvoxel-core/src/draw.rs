@@ -332,6 +332,12 @@ pub fn camera(scene: &Scene) -> Camera {
     cam::swing(base_camera(scene), scene.cam_yaw_off, scene.cam_pitch_off)
 }
 
+/// The pitch offset this scene's camera can actually take, for a host
+/// accumulating one from a stick (see [`cam::clamp_pitch_off`]).
+pub fn clamp_pitch_off(scene: &Scene, dpitch: f32) -> f32 {
+    cam::clamp_pitch_off(&base_camera(scene), dpitch)
+}
+
 fn base_camera(scene: &Scene) -> Camera {
     if scene.battle.active {
         let b = &scene.battle;

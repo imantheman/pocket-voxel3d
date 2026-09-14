@@ -25,6 +25,7 @@ import type { VoxelmonData } from "./data.ts";
 import type { VoxelHost } from "./host.ts";
 import { computeNeighbors, type Overworld } from "./world/overworld.ts";
 import { NPC } from "./world/npc.ts";
+import { rotateDir, type Dir } from "./world/collision.ts";
 import type { Textbox } from "./world/textbox.ts";
 import {
   ARROW_CURSOR,
@@ -122,6 +123,24 @@ interface UiRowCache {
   wasLast: boolean;
   text: string;
   revealed: number;
+}
+
+/**
+ * The direction a walker APPEARS to face from a camera swung `camTurns`
+ * quarter turns.
+ *
+ * The sheets are drawn for the unswung camera: the "down" pose is the front
+ * because that camera sits south of everything. Swing it round behind the
+ * player and their world facing is unchanged while the side of them you can
+ * see is the opposite one — so choosing the pose by world facing shows their
+ * face while they walk away from you.
+ *
+ * The walk rotates the other way (world = rotateDir(press, +turns)), so the
+ * pose rotates by -turns. At zero this is the identity and every sprite is
+ * exactly what it always was.
+ */
+export function poseDir(facing: Dir, camTurns: number): Dir {
+  return rotateDir(facing, -camTurns);
 }
 
 export class Scene {
@@ -385,16 +404,18 @@ export class Scene {
   private emitEnts(view: SceneView): void {
     const ow = view.overworld;
     this.entSeen.fill(0);
+    const seenAs = (d: Dir): Dir => poseDir(d, ow.camTurns);
     // player: slot 0, ghost silhouette + grass-occluded walker
     const p = ow.player;
     {
       const phase = p.walkPhase();
-      const frame = phase === 1 ? WALK[p.facing] : STAND[p.facing];
+      const pf = seenAs(p.facing);
+      const frame = phase === 1 ? WALK[pf] : STAND[pf];
       // SpriteRenderer.lua:189-193 flip: right-facing mirrors; alternate
       // up/down walk cycles mirror via the fixed-rate animClock
       const mirror =
-        p.facing === "right" ||
-        ((p.facing === "down" || p.facing === "up") && phase === 1 && p.animFlip());
+        pf === "right" ||
+        ((pf === "down" || pf === "up") && phase === 1 && p.animFlip());
       let flags = ENT_FLAG.ghost | ENT_FLAG.walker;
       if (mirror) flags |= ENT_FLAG.mirror;
       this.emitSlot(
@@ -424,12 +445,13 @@ export class Scene {
       const phase = npc.walkPhase();
       // single-frame sprites (item balls) have one fixed pose
       // (SpriteRenderer.lua:183)
+      const nf = seenAs(npc.facing);
       const frame =
-        frames <= 1 ? 0 : phase === 1 && def?.walker ? WALK[npc.facing] : STAND[npc.facing];
+        frames <= 1 ? 0 : phase === 1 && def?.walker ? WALK[nf] : STAND[nf];
       const mirror =
         frames > 1 &&
-        (npc.facing === "right" ||
-          ((npc.facing === "down" || npc.facing === "up") && phase === 1 && npc.stepFlip));
+        (nf === "right" ||
+          ((nf === "down" || nf === "up") && phase === 1 && npc.stepFlip));
       let flags = def?.walker ? ENT_FLAG.walker : 0;
       if (mirror) flags |= ENT_FLAG.mirror;
       this.emitSlot(

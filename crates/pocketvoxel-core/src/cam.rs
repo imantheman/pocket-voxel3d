@@ -126,6 +126,37 @@ pub fn swing(cam: Camera, dyaw: f32, dpitch: f32) -> Camera {
     finish(eye, cam.focus, Vec3::Y, a, cam.fov_y, dist)
 }
 
+/// The pitch offset that will actually survive [`swing`]'s clamp, given the
+/// camera it is being applied to.
+///
+/// `swing` clamps the RESULT, so an offset accumulated past the clamp keeps
+/// growing while nothing on screen moves -- and then the player has to push
+/// the other way for a second, through all the slack they wound up, before
+/// the camera stirs. It feels exactly like being stuck against the ground.
+/// Clamping the offset itself instead means the stick stops having any
+/// effect at the limit and reverses the instant it is pushed back.
+pub fn clamp_pitch_off(cam: &Camera, dpitch: f32) -> f32 {
+    let (vx, vy, vz) = (
+        cam.eye.x - cam.focus.x,
+        cam.eye.y - cam.focus.y,
+        cam.eye.z - cam.focus.z,
+    );
+    let horiz = sqrtf(vx * vx + vz * vz);
+    if horiz < 1e-4 && vy.abs() < 1e-4 {
+        return dpitch;
+    }
+    let base = atan2f(vy, horiz);
+    let lo = SWING_PITCH_MIN - base;
+    let hi = SWING_PITCH_MAX - base;
+    if dpitch < lo {
+        lo
+    } else if dpitch > hi {
+        hi
+    } else {
+        dpitch
+    }
+}
+
 /// The camera's horizontal facing, normalised. `(0, -1)` -- north, screen-up
 /// on an unswung camera -- when the view is too near vertical to have one.
 pub fn forward_h(cam: &Camera) -> (f32, f32) {
@@ -357,6 +388,40 @@ mod tests {
         assert!(horiz > 0.01, "degenerate straight-down eye");
         let down = swing(base(), 0.0, -10.0);
         assert!(down.eye.y > 0.0);
+    }
+
+    #[test]
+    fn a_pitch_offset_is_clamped_to_what_the_camera_can_take() {
+        let c = base(); // 45 degrees from straight down
+        // Pushing far past the floor gives back only the distance to it, so
+        // the accumulator never winds up slack the player has to unwind.
+        let down = clamp_pitch_off(&c, -10.0);
+        assert!(down > -10.0, "clamped: {down}");
+        let landed = swing(c, 0.0, down);
+        assert!((landed.a - HALF_PI).abs() < 0.1, "should reach the floor: {}", landed.a);
+
+        // And the clamped value is a fixed point: applying it again changes
+        // nothing, which is what makes the stick stop dead at the limit.
+        assert!((clamp_pitch_off(&c, down) - down).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_clamped_offset_reverses_the_instant_it_is_pushed_back() {
+        let c = base();
+        let floored = clamp_pitch_off(&c, -10.0);
+        // one step back up from the limit must actually move the camera
+        let stepped = clamp_pitch_off(&c, floored + 0.025);
+        assert!(stepped > floored, "{stepped} should exceed {floored}");
+        let a0 = swing(c, 0.0, floored).a;
+        let a1 = swing(c, 0.0, stepped).a;
+        assert!(a1 < a0, "pushing back up must tilt the view back: {a1} vs {a0}");
+    }
+
+    #[test]
+    fn an_offset_inside_the_range_is_left_alone() {
+        let c = base();
+        assert!((clamp_pitch_off(&c, 0.1) - 0.1).abs() < 1e-6);
+        assert!((clamp_pitch_off(&c, -0.1) + 0.1).abs() < 1e-6);
     }
 
     #[test]

@@ -7988,6 +7988,9 @@ GAME is over!`;
 // voxelmon/game/scene.ts
 var STAND = { down: 0, up: 1, left: 2, right: 2 };
 var WALK = { down: 3, up: 4, left: 5, right: 5 };
+function poseDir(facing, camTurns) {
+  return rotateDir(facing, -camTurns);
+}
 
 class Scene {
   host;
@@ -8180,11 +8183,13 @@ class Scene {
   emitEnts(view) {
     const ow = view.overworld;
     this.entSeen.fill(0);
+    const seenAs = (d) => poseDir(d, ow.camTurns);
     const p = ow.player;
     {
       const phase = p.walkPhase();
-      const frame = phase === 1 ? WALK[p.facing] : STAND[p.facing];
-      const mirror = p.facing === "right" || (p.facing === "down" || p.facing === "up") && phase === 1 && p.animFlip();
+      const pf = seenAs(p.facing);
+      const frame = phase === 1 ? WALK[pf] : STAND[pf];
+      const mirror = pf === "right" || (pf === "down" || pf === "up") && phase === 1 && p.animFlip();
       let flags = ENT_FLAG.ghost | ENT_FLAG.walker;
       if (mirror)
         flags |= ENT_FLAG.mirror;
@@ -8201,8 +8206,9 @@ class Scene {
       const def = view.data.sprites?.[npc.def.sprite];
       const frames = def?.frames ?? 6;
       const phase = npc.walkPhase();
-      const frame = frames <= 1 ? 0 : phase === 1 && def?.walker ? WALK[npc.facing] : STAND[npc.facing];
-      const mirror = frames > 1 && (npc.facing === "right" || (npc.facing === "down" || npc.facing === "up") && phase === 1 && npc.stepFlip);
+      const nf = seenAs(npc.facing);
+      const frame = frames <= 1 ? 0 : phase === 1 && def?.walker ? WALK[nf] : STAND[nf];
+      const mirror = frames > 1 && (nf === "right" || (nf === "down" || nf === "up") && phase === 1 && npc.stepFlip);
       let flags = def?.walker ? ENT_FLAG.walker : 0;
       if (mirror)
         flags |= ENT_FLAG.mirror;
