@@ -61,6 +61,16 @@ struct CachedPak {
 static mut PAK_CACHE: Vec<CachedPak> = Vec::new();
 const PAK_CACHE_BUDGET_KB: usize = 24 * 1024;
 
+/// The shared atlas texels (paks/common.vxat), loaded once at boot.
+///
+/// 635 atlas pages are carried by two or more maps -- the sprites, the font,
+/// the UI, the battle furniture, and the tilesets a region has in common.
+/// tools/pak_share_atlas.py hoists them here and points each pak's page
+/// directory at this blob, which is most of what a small map used to spend
+/// its load reading. None when the file is absent: paks that embed every
+/// page still read exactly as before.
+static mut SHARED_ATLAS: Option<&'static [u8]> = None;
+
 #[allow(static_mut_refs)]
 unsafe fn cache_total_kb() -> usize {
     PAK_CACHE.iter().map(|c| c.kb).sum()
@@ -104,7 +114,7 @@ unsafe fn load_map_pak(name: &str) -> bool {
     println!("pak {} {} KB in {} ms (cache {} KB)", name, kb, read_ms, cache_total_kb());
     let buf: Box<[u8]> = v.into_boxed_slice();
     let bytes: &'static [u8] = core::mem::transmute(buf.as_ref());
-    match pak::read(bytes) {
+    match pak::read_with_shared(bytes, unsafe { SHARED_ATLAS }) {
         Ok(p) => {
             PAK_CACHE.insert(0, CachedPak { pak: p, buf, name: name.to_string(), kb });
             true
@@ -1582,6 +1592,17 @@ fn main() {
     let gd = std::fs::read("sdmc:/3ds/voxelmon/paks/gamedata.json").unwrap_or_default();
     println!("gamedata {} KB", gd.len() / 1024);
     let gd_static: &'static [u8] = Box::leak(gd.into_boxed_slice());
+
+    // The shared atlas pages, before any pak is read — every pak's page
+    // directory resolves against this. Absent is fine and means the card
+    // holds original paks that embed every page.
+    match std::fs::read("sdmc:/3ds/voxelmon/paks/common.vxat") {
+        Ok(v) if !v.is_empty() => {
+            println!("shared atlas {} KB", v.len() / 1024);
+            unsafe { SHARED_ATLAS = Some(Box::leak(v.into_boxed_slice())); }
+        }
+        _ => println!("shared atlas: absent (paks carry their own pages)"),
+    }
 
     let index_txt = std::fs::read_to_string("sdmc:/3ds/voxelmon/paks/index.txt")
         .unwrap_or_default();

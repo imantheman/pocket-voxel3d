@@ -571,7 +571,35 @@ fn check_mesh_range(m: &MeshRange, verts: &[PakVert], indices: &[u16]) -> Result
 /// (GPU sections are borrowed, not copied) and should be 16-byte aligned so
 /// the vertex/index pools meet GE alignment requirements (2/4-byte alignment
 /// is verified; misaligned blobs are rejected, never mis-read).
+/// Marks an ATLS directory offset as pointing into the SHARED texel blob
+/// (`common.vxat`) instead of into this pak's own ATLS section.
+///
+/// 428 atlas pages — the sprites, the font, the UI, the battle furniture —
+/// are byte-identical in all 219 maps, about 1.06 MB of the 1.63 MB an
+/// average map spends on atlas texels. Storing them once and pointing at
+/// them is most of what a map load reads.
+///
+/// The page DIRECTORY still lists every page, in the same order, so page
+/// indices are untouched and nothing downstream of `Pak.atlases` can tell
+/// the difference — only the texel bytes move. Offsets are 16-byte aligned
+/// and a section is far under 2 GB, so the top bit is free to carry this.
+pub const ATLAS_SHARED_BIT: u32 = 1 << 31;
+
+/// Read a pak whose shared atlas pages live in `data` itself.
 pub fn read(data: &[u8]) -> Result<Pak<'_>, ReadError> {
+    read_with_shared(data, None)
+}
+
+/// Read a pak, resolving any [`ATLAS_SHARED_BIT`] atlas page against
+/// `shared` — the common texel blob, loaded once and kept for the session.
+///
+/// `None` is the legacy case: a pak that embeds every page. Such a pak
+/// still reads exactly as before, so a card holding a mix of repacked and
+/// original paks works either way.
+pub fn read_with_shared<'a>(
+    data: &'a [u8],
+    shared: Option<&'a [u8]>,
+) -> Result<Pak<'a>, ReadError> {
     // --- container header + section table ---------------------------------
     let mut r = Rd::new(data);
     if r.u32v()? != VXPK_MAGIC {
@@ -745,6 +773,10 @@ pub fn read(data: &[u8]) -> Result<Pak<'_>, ReadError> {
             if len != swizzled_len(w as usize, h as usize) {
                 return Err("atlas frame length disagrees with its dimensions");
             }
+            // A page whose texels were hoisted into the shared blob keeps its
+            // directory entry here and resolves against `shared` instead.
+            let from_shared = (offset as u32 & ATLAS_SHARED_BIT) != 0;
+            let offset = offset & !(ATLAS_SHARED_BIT as usize);
             if !offset.is_multiple_of(VXPK_ALIGN) {
                 return Err("atlas texel blob is not 16-byte aligned");
             }
@@ -752,7 +784,12 @@ pub fn read(data: &[u8]) -> Result<Pak<'_>, ReadError> {
                 .checked_mul(frames as usize)
                 .ok_or("atlas size overflow")?;
             let end = offset.checked_add(total).ok_or("atlas range overflow")?;
-            let texels = sect.get(offset..end).ok_or("atlas texels out of range")?;
+            let texels = if from_shared {
+                let blob = shared.ok_or("atlas page needs the shared blob, which was not supplied")?;
+                blob.get(offset..end).ok_or("shared atlas texels out of range")?
+            } else {
+                sect.get(offset..end).ok_or("atlas texels out of range")?
+            };
             atlases.push(AtlasPage {
                 w,
                 h,
