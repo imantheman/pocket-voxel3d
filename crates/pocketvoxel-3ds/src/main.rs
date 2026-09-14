@@ -13,6 +13,9 @@ use ctru::services::romfs::RomFS;
 use pocketvoxel_core::draw::{self, resolve_pal, Item};
 use pocketvoxel_core::pak::{self, AlignedBlob, Pak};
 use pocketvoxel_core::scene::UI_B_SPRITES_MAX;
+use pocketvoxel_core::mapplan::{
+    build_order, plan_build, planned_ranges, FILLER_KINDS, GROUND_KINDS, TREE_KINDS,
+};
 use pocketvoxel_core::spec::{atlas_kind, CHUNK_PX, COLOR_PAL_NONE, UI_COLS, UI_ROWS, WORLD_VIEW_H};
 
 #[repr(C)] pub struct JSRuntime { _p: [u8; 0] }
@@ -57,6 +60,37 @@ struct CachedPak {
     buf: Box<[u8]>,
     name: String,
     kb: usize,
+    /// The plan this copy was read under, or None when it was read whole.
+    ///
+    /// A planned read holds only the geometry that plan will draw, so a
+    /// later build wanting a DIFFERENT plan -- a huge map re-sorting its
+    /// chunks as the player walks into a new one -- cannot be served from
+    /// it. Mismatch means re-read, which is the same moment the rebuild was
+    /// going to happen anyway.
+    plan: Option<PlanKey>,
+}
+
+/// The plan a build at `px` will want. Only huge maps sort by position, but
+/// that is not known until the records are read, so the key is always built
+/// with a centre and `load_map_pak` downgrades it to None once it finds the
+/// map is not huge -- after which any centre matches.
+fn plan_key(map_id: u32, px: (f32, f32)) -> PlanKey {
+    PlanKey {
+        map_id,
+        center: Some((
+            (px.0 / CHUNK_PX as f32).floor() as i32,
+            (px.1 / CHUNK_PX as f32).floor() as i32,
+        )),
+    }
+}
+
+/// Identifies the geometry a planned read kept: the map, and the chunk the
+/// nearest-first sort was centred on (None when the map is not huge, where
+/// the order is file order and position does not enter into it).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct PlanKey {
+    map_id: u32,
+    center: Option<(i32, i32)>,
 }
 static mut PAK_CACHE: Vec<CachedPak> = Vec::new();
 const PAK_CACHE_BUDGET_KB: usize = 24 * 1024;
@@ -77,17 +111,32 @@ unsafe fn cache_total_kb() -> usize {
 }
 
 #[allow(static_mut_refs)]
-unsafe fn load_map_pak(name: &str) -> bool {
-    // already the current map
-    if PAK_CACHE.first().map(|c| c.name == name).unwrap_or(false) {
+unsafe fn load_map_pak(name: &str, want: Option<PlanKey>) -> bool {
+    // A cached copy serves only if it holds at least what is wanted: read
+    // whole (plan None) covers anything, and a planned copy covers exactly
+    // its own plan.
+    let serves = |c: &CachedPak| {
+        c.name == name
+            && match (c.plan, want) {
+                (None, _) => true, // read whole: covers anything
+                (Some(_), None) => false, // a planned copy cannot serve a full read
+                (Some(a), Some(b)) => {
+                    a.map_id == b.map_id && (a.center.is_none() || a.center == b.center)
+                }
+            }
+    };
+    if PAK_CACHE.first().map(&serves).unwrap_or(false) {
         return true;
     }
     // resident in the cache -> promote to front, no SD read
-    if let Some(i) = PAK_CACHE.iter().position(|c| c.name == name) {
+    if let Some(i) = PAK_CACHE.iter().position(&serves) {
         let hit = PAK_CACHE.remove(i);
         PAK_CACHE.insert(0, hit);
         return true;
     }
+    // Same map, wrong plan: its geometry is a subset of what is needed now,
+    // so drop it rather than let it sit in the budget as a decoy.
+    PAK_CACHE.retain(|c| c.name != name);
     // must read from SD. Stat the size first so we can evict to fit WITHOUT a
     // transient over-budget spike; a map larger than the whole budget evicts
     // everything and loads alone (peak == the old single-pak peak).
@@ -102,7 +151,16 @@ unsafe fn load_map_pak(name: &str) -> bool {
     while !PAK_CACHE.is_empty() && cache_total_kb() + new_kb > PAK_CACHE_BUDGET_KB {
         PAK_CACHE.pop(); // drop the least-recently-used entry
     }
-    let Some(v) = map_pak(&path) else {
+    // Back to a position at the centre of the planned chunk: build_order
+    // only ever divides it back down to a chunk index, so this round-trips.
+    let plan_for = want.map(|k| {
+        let px = k.center.map(|(cx, cy)| (
+            (cx as f32 + 0.5) * CHUNK_PX as f32,
+            (cy as f32 + 0.5) * CHUNK_PX as f32,
+        ));
+        (k.map_id, px)
+    });
+    let Some(v) = map_pak(&path, plan_for) else {
         println!("pak missing: {}", name);
         return false;
     };
@@ -116,7 +174,23 @@ unsafe fn load_map_pak(name: &str) -> bool {
     let bytes: &'static [u8] = core::mem::transmute(buf.as_ref());
     match pak::read_with_shared(bytes, unsafe { SHARED_ATLAS }) {
         Ok(p) => {
-            PAK_CACHE.insert(0, CachedPak { pak: p, buf, name: name.to_string(), kb });
+            // A map under HUGE_MAP_THRESHOLD builds in file order, so its
+            // plan does not depend on where the player stands: drop the
+            // centre and the copy then serves every later position, instead
+            // of being re-read every time they cross a chunk line.
+            let mut plan = want;
+            if let (Some(k), Some(map)) =
+                (want, p.maps.iter().find(|m| Some(m.map_id) == want.map(|k| k.map_id)))
+            {
+                let chunks = &p.chunks[map.first as usize..(map.first + map.count) as usize];
+                let (_, huge, _) = build_order(chunks, None);
+                if !huge {
+                    plan = Some(PlanKey { map_id: k.map_id, center: None });
+                }
+            }
+            PAK_CACHE.insert(0, CachedPak {
+                pak: p, buf, name: name.to_string(), kb, plan,
+            });
             true
         }
         Err(e) => {
@@ -135,6 +209,8 @@ unsafe fn cur_pak() -> &'static pak::Pak<'static> {
 
 /// The GAME section's tag, the one payload this host never looks at.
 const TAG_GAME: u32 = u32::from_le_bytes(*b"GAME");
+/// The geometry section: chunk records first, then the vertex/index pools.
+const TAG_CHNK: u32 = u32::from_le_bytes(*b"CHNK");
 
 /**
  * Read a pak, skipping the payloads this host has no use for.
@@ -152,7 +228,10 @@ const TAG_GAME: u32 = u32::from_le_bytes(*b"GAME");
  * left as zeros. Sections sit in ascending offset order, so dropping one
  * leaves two runs to read instead of one.
  */
-fn map_pak(path: &str) -> Option<Vec<u8>> {
+fn map_pak(
+    path: &str,
+    plan_for: Option<(u32, Option<(f32, f32)>)>,
+) -> Option<Vec<u8>> {
     use std::io::{Read, Seek, SeekFrom};
     let mut f = std::fs::File::open(path).ok()?;
     let len = f.metadata().ok()?.len() as usize;
@@ -189,48 +268,128 @@ fn map_pak(path: &str) -> Option<Vec<u8>> {
         return None;
     }
 
-    // Every byte worth reading, as merged runs. Starts as the whole tail
-    // after the table; GAME is then cut out of it.
-    let mut keep: Vec<(usize, usize)> = vec![(table_end, len)];
-    for s in 0..n_sections {
-        let e = HDR + s * ENTRY;
-        let tag = u32::from_le_bytes([v[e], v[e + 1], v[e + 2], v[e + 3]]);
-        if tag != TAG_GAME {
-            continue;
-        }
-        let off = u32::from_le_bytes([v[e + 4], v[e + 5], v[e + 6], v[e + 7]]) as usize;
-        let slen = u32::from_le_bytes([v[e + 8], v[e + 9], v[e + 10], v[e + 11]]) as usize;
-        let end = match off.checked_add(slen) {
-            Some(x) if x <= len => x,
-            _ => continue, // nonsense entry: read it like any other byte
-        };
-        let mut cut: Vec<(usize, usize)> = Vec::new();
-        for &(a, b) in &keep {
-            if end <= a || off >= b {
-                cut.push((a, b));
+    let section = |tag: u32| -> Option<(usize, usize)> {
+        for s in 0..n_sections {
+            let e = HDR + s * ENTRY;
+            let t = u32::from_le_bytes([v[e], v[e + 1], v[e + 2], v[e + 3]]);
+            if t != tag {
                 continue;
             }
-            if a < off { cut.push((a, off)); }
-            if end < b { cut.push((end, b)); }
+            let off = u32::from_le_bytes([v[e + 4], v[e + 5], v[e + 6], v[e + 7]]) as usize;
+            let slen = u32::from_le_bytes([v[e + 8], v[e + 9], v[e + 10], v[e + 11]]) as usize;
+            return off.checked_add(slen).filter(|&x| x <= len).map(|end| (off, end));
         }
-        keep = cut;
+        None
+    };
+
+    // Everything after the table, minus GAME, minus -- when we are going to
+    // plan -- the vertex and index pools. The pools sit at the tail of CHNK
+    // (chunk records come first), so cutting them still leaves the records,
+    // which are all the plan needs.
+    let mut keep: Vec<(usize, usize)> = vec![(table_end, len)];
+    fn cut_out(keep: &mut Vec<(usize, usize)>, off: usize, end: usize) {
+        let mut next: Vec<(usize, usize)> = Vec::new();
+        for &(a, b) in keep.iter() {
+            if end <= a || off >= b {
+                next.push((a, b));
+                continue;
+            }
+            if a < off { next.push((a, off)); }
+            if end < b { next.push((end, b)); }
+        }
+        *keep = next;
+    }
+    if let Some((off, end)) = section(TAG_GAME) {
+        cut_out(&mut keep, off, end);
+    }
+    // CHNK header word 8 is verts_off, relative to the payload start; the two
+    // pools run from there to the end of the section.
+    // (verts_at, indices_at, section end) -- header words 8 and 16 are the
+    // two pool offsets, relative to the payload start.
+    let mut pools: Option<(usize, usize, usize)> = None;
+    if plan_for.is_some() {
+        if let Some((c_off, c_end)) = section(TAG_CHNK) {
+            let mut h = [0u8; 32];
+            if f.seek(SeekFrom::Start(c_off as u64)).is_ok() && f.read_exact(&mut h).is_ok() {
+                let vo = c_off + u32::from_le_bytes([h[8], h[9], h[10], h[11]]) as usize;
+                let io_ = c_off + u32::from_le_bytes([h[16], h[17], h[18], h[19]]) as usize;
+                if vo < c_end && io_ <= c_end {
+                    pools = Some((vo, io_, c_end));
+                }
+            }
+        }
+    }
+    if let Some((a, _, b)) = pools {
+        cut_out(&mut keep, a, b);
     }
 
-    for (a, b) in keep {
-        if b <= a {
-            continue;
+    fn read_runs(f: &mut std::fs::File, v: &mut [u8], runs: &[(usize, usize)]) -> bool {
+        use std::io::{Read, Seek, SeekFrom};
+        for &(a, b) in runs {
+            if b <= a {
+                continue;
+            }
+            if f.seek(SeekFrom::Start(a as u64)).is_err() || f.read_exact(&mut v[a..b]).is_err() {
+                println!("pak: short read");
+                return false;
+            }
         }
-        if f.seek(SeekFrom::Start(a as u64)).is_err() {
-            println!("pak: seek failed");
-            return None;
-        }
-        if f.read_exact(&mut v[a..b]).is_err() {
-            println!("pak: short read");
-            return None;
-        }
+        true
+    }
+    if !read_runs(&mut f, &mut v, &keep) {
+        return None;
+    }
+
+    // Nothing to plan: the pools were read above along with everything else.
+    let (pools_at, i_at, pools_end) = match pools {
+        Some(x) => x,
+        None => return Some(v),
+    };
+    let (map_id, player_px) = match plan_for {
+        Some(x) => x,
+        None => return Some(v),
+    };
+
+    // Parse what we have -- records present, pools still zeros -- and replay
+    // the allocation over it. Going through the real structures rather than
+    // hand-reading the records is what stops this drifting away from what
+    // build_map will decide when handed the same pak.
+    let merged: Vec<(usize, usize)> = {
+        let p = match pak::read_with_shared(&v, unsafe { SHARED_ATLAS }) {
+            Ok(p) => p,
+            Err(e) => {
+                println!("pak: plan parse failed ({}), reading it whole", e);
+                return read_runs(&mut f, &mut v, &[(pools_at, pools_end)]).then_some(v);
+            }
+        };
+        let map = match p.maps.iter().find(|m| m.map_id == map_id) {
+            Some(m) => *m,
+            None => return read_runs(&mut f, &mut v, &[(pools_at, pools_end)]).then_some(v),
+        };
+        let chunks = &p.chunks[map.first as usize..(map.first + map.count) as usize];
+        let (order, huge, budget) = build_order(chunks, player_px);
+        // Stamps are read whole (there are a handful per map) rather than
+        // tracked against which are currently hidden, so the plan is given
+        // their full cost -- the same conservative direction as everything
+        // else here: read at least what will be drawn, never less.
+        let stamp_verts: usize =
+            p.stamps_of(map_id).iter().map(|st| st.mesh.index_count as usize).sum();
+        let plan = plan_build(chunks, &order, huge, budget, stamp_verts);
+        planned_ranges(chunks, &plan, p.stamps_of(map_id), pools_at, i_at, MERGE_SLOP)
+            .into_iter()
+            .map(|(a, b)| (a.min(len), b.min(len)))
+            .collect()
+    };
+
+    if !read_runs(&mut f, &mut v, &merged) {
+        return None;
     }
     Some(v)
 }
+
+/// Two pool runs closer than this are read as one. A seek on SD costs far
+/// more than a few hundred wasted bytes.
+const MERGE_SLOP: usize = 8 * 1024;
 
 fn app_heap_probe_mb() -> usize {
     let mut keep: Vec<Vec<u8>> = Vec::new();
@@ -780,7 +939,6 @@ const BATTLE_OCCLUDE_MARGIN_PX: f32 = 32.0;
 // pak alone is already 58 MB (PAK_CACHE_BUDGET_KB comment above), so an
 // 18 MB vertex buffer on top of that overflows where Cerulean's doesn't.
 // Forest-scale maps use MAX_VERTS_SAFE instead — see `budget_for` below.
-const MAX_VERTS: usize = 900_000;
 // The original conservative cap ("Routes and towns sit just under it,
 // Viridian City 396k, Route 2 383k"), kept for maps whose content is so far
 // past even the generous cap that reaching for it is what crashes — not
@@ -788,21 +946,18 @@ const MAX_VERTS: usize = 900_000;
 // hulls alone run ~4.4M indices; even letting it climb toward MAX_VERTS
 // before falling back to boxes still means allocating a much larger buffer
 // than this, which is the actual hardware failure, not the boxes.
-const MAX_VERTS_SAFE: usize = 400_000;
 /// Above this measured total (ground + full tree hulls + filler), a map is
 /// "wildly" oversized rather than moderately over budget, and gets the safe
 /// cap instead of the generous one. 3x MAX_VERTS_SAFE cleanly separates the
 /// two known data points: Cerulean City (758,508) stays under it and gets
 /// the generous cap; Viridian Forest (~4.4M) is far over and gets the safe
 /// one.
-const HUGE_MAP_THRESHOLD: usize = MAX_VERTS_SAFE * 3;
 /// terrain, terrain_keep, water (spec::mesh_kind): the walkable ground and
 /// the water surface it borders, always first and always in full. Water
 /// rides with ground rather than with grass/flower below despite being
 /// cheap in practice (Cerulean City: 3,672 indices total) — a missing lake
 /// reads as broken in a way a few missing flowers don't, so it isn't worth
 /// leaving to "whatever's left".
-const GROUND_KINDS: [usize; 3] = [0, 2, 6];
 /// grass, flower: no cheaper LOD exists for these, but they're the least
 /// noticeable thing to lose a few of, so they're processed LAST — whatever
 /// survives ground + trees. On a big, dense map (Cerulean City: ground+water
@@ -811,7 +966,6 @@ const GROUND_KINDS: [usize; 3] = [0, 2, 6];
 /// bug. This matches the original single-pass order (terrain, terrain_keep,
 /// tree, water, grass, flower) for grass/flower's position relative to
 /// trees; only water moved (see above) and the tree step below changed.
-const FILLER_KINDS: [usize; 2] = [7, 8];
 /// Round tree/rock cells cook THREE representations of the same cell: the
 /// fine per-pixel hull (~700 quads), a 2x2-px coarse carve (still round,
 /// ~1/4 the hull's cost), and a plain box (~10 quads) — spec.rs
@@ -1378,55 +1532,33 @@ fn build_map(
     let map = pak.maps.iter().find(|m| m.map_id == map_id).expect("map");
     let all_chunks = &pak.chunks[map.first as usize..(map.first + map.count) as usize];
 
-    // Prescan over the WHOLE map: ground + ALL tree hulls + filler, i.e.
-    // what it would cost at full detail. Below HUGE_MAP_THRESHOLD (Cerulean
-    // City-scale — over MAX_VERTS_SAFE but by a normal amount) it builds
-    // every chunk once, same as any other map, just with the generous cap
-    // so the per-chunk tree cascade below can use real hulls where it fits.
-    // Past it (Viridian Forest-scale, ~3.65M here against a 400,000-900,000
-    // budget either way) no single flat buffer holding every chunk at once
-    // is going to look right OR fit safely — so instead of building the
-    // whole map, stream a WINDOW of chunks around the player once we know
-    // where they are, and rebuild it as they cross into a new chunk (the
-    // check for that lives in main()'s loop, driving `reload`).
-    let is_huge = {
-        let mut total = 0usize;
-        for c in all_chunks {
-            for &k in GROUND_KINDS.iter() { total += c.meshes[k].index_count as usize; }
-            total += c.meshes[TREE_HULL_KIND].index_count as usize;
-            for &k in FILLER_KINDS.iter() { total += c.meshes[k].index_count as usize; }
-        }
-        total > HUGE_MAP_THRESHOLD
-    };
-    // A radius filter was tried here first and made things WORSE: Viridian
-    // Forest's entire map is only ~5x6 chunks, smaller than any reasonable
-    // draw-distance radius, so "windowing" it included every chunk anyway —
-    // while still switching the budget up to the generous cap, an even
-    // bigger allocation than the one that already crashed once. The forest
-    // isn't large-and-sparse (where skipping far chunks saves memory), it's
-    // small-and-extremely-dense (trees packed everywhere); no radius
-    // shrinks that. So: always the safe cap for a huge map, no filtering —
-    // just reorder ALL its chunks nearest-the-player-first once we know
-    // where they are, so the limited budget is spent on what's actually
-    // close instead of whatever came first in file order, and re-sort
-    // (via the chunk-crossing check in main()) as they walk. Ground is
-    // cheap enough to always fit regardless of order; the tree cascade and
-    // the filler pass both benefit from nearest-first the same way.
-    let mut chunks: Vec<pak::Chunk> = all_chunks.to_vec();
-    let budget = if is_huge {
-        if let Some((px, pz)) = player_px {
-            let pcx = (px / CHUNK_PX as f32).floor() as i32;
-            let pcz = (pz / CHUNK_PX as f32).floor() as i32;
-            chunks.sort_by_key(|c| {
-                let dx = c.cx as i32 - pcx;
-                let dy = c.cy as i32 - pcz;
-                dx * dx + dy * dy
-            });
-        }
-        MAX_VERTS_SAFE
-    } else {
-        MAX_VERTS
-    };
+    // Which chunks, in which order, at which tree tier — decided once by
+    // plan_build/build_order from the chunk records, so the LOADER could
+    // read exactly these and nothing else (see map_pak). Re-deriving the
+    // cascade here instead of following the plan would be a bug: the clip
+    // test below drops border-ring triangles, so the real vertex count runs
+    // lower than the plan's and the cascade could pick a fine hull the
+    // loader never read, drawing zeros.
+    //
+    // Past HUGE_MAP_THRESHOLD (Viridian Forest-scale, ~3.65M indices against
+    // a 400,000 budget) the order is nearest-the-player-first, so the limited
+    // budget is spent on what is actually close rather than whatever came
+    // first in file order, and it re-sorts as they walk (the chunk-crossing
+    // check lives in main()'s loop, driving `reload`). A radius filter was
+    // tried here once and made things worse: the forest is only ~6x8 chunks,
+    // smaller than any reasonable draw distance, so windowing included every
+    // chunk anyway while switching the budget up to the generous cap.
+    let (order, is_huge, budget) = build_order(all_chunks, player_px);
+    // Stamps are pushed between the ground and tree passes at ground
+    // priority, so the cascade has to see their share already spent.
+    let stamp_verts: usize = pak
+        .stamps_of(map_id)
+        .iter()
+        .filter(|st| !stamps_off.iter().any(|&(m, x, y)| m == map_id && x == st.cx && y == st.cy))
+        .map(|st| st.mesh.index_count as usize)
+        .sum();
+    let plan = plan_build(all_chunks, &order, is_huge, budget, stamp_verts);
+    let chunks: Vec<pak::Chunk> = all_chunks.to_vec();
 
     // The border ring the cook fills beyond the map proper — bushes
     // outdoors, filler indoors. It sits OUTSIDE the real map box, and the
@@ -1464,10 +1596,8 @@ fn build_map(
     ];
 
     // Ground first — always in full.
-    for &kind in GROUND_KINDS.iter() {
-        for chunk in &chunks {
-            push_chunk_mesh(pak, chunk, kind, budget, tint, clip_min, clip_max, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax);
-        }
+    for it in plan.items.iter().filter(|i| GROUND_KINDS.contains(&i.kind)) {
+        push_chunk_mesh(pak, &chunks[it.chunk], it.kind, budget, tint, clip_min, clip_max, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax);
     }
     // Removable stamps (cut trees, the S.S. Anne hull) next, at ground
     // priority: these are cooked into the pak's separate STMP section, not
@@ -1502,23 +1632,12 @@ fn build_map(
     // them.) A cook with no separate tree streams at all (old/VOXEL_TREE_
     // BOXES=1 pak, hulls folded into terrain) leaves every tier empty here
     // and just keeps what TERRAIN already carried above.
-    for chunk in &chunks {
-        let hull = chunk.meshes[TREE_HULL_KIND];
-        let coarse = chunk.meshes[TREE_COARSE_KIND];
-        let kind = if hull.index_count > 0 && verts.len() + hull.index_count as usize <= budget {
-            TREE_HULL_KIND
-        } else if coarse.index_count > 0 && verts.len() + coarse.index_count as usize <= budget {
-            TREE_COARSE_KIND
-        } else {
-            TREE_BOX_KIND
-        };
-        push_chunk_mesh(pak, chunk, kind, budget, tint, clip_min, clip_max, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax);
+    for it in plan.items.iter().filter(|i| TREE_KINDS.contains(&i.kind)) {
+        push_chunk_mesh(pak, &chunks[it.chunk], it.kind, budget, tint, clip_min, clip_max, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax);
     }
     // Water, grass, flower last — whatever budget survives the above.
-    for &kind in FILLER_KINDS.iter() {
-        for chunk in &chunks {
-            push_chunk_mesh(pak, chunk, kind, budget, tint, clip_min, clip_max, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax);
-        }
+    for it in plan.items.iter().filter(|i| FILLER_KINDS.contains(&i.kind)) {
+        push_chunk_mesh(pak, &chunks[it.chunk], it.kind, budget, tint, clip_min, clip_max, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax);
     }
     if verts.is_empty() { cmin = [0.0; 3]; cmax = [16.0; 3]; }
     let center = [
@@ -1615,8 +1734,10 @@ fn main() {
         .collect();
     println!("maps on card: {}", map_index.len());
 
-    if !unsafe { load_map_pak("REDS_HOUSE_2F") } {
-        unsafe { load_map_pak("PALLET_TOWN"); }
+    // Boot: read whole. The player position is not known yet, and a copy
+    // read whole serves any plan a later build asks for.
+    if !unsafe { load_map_pak("REDS_HOUSE_2F", None) } {
+        unsafe { load_map_pak("PALLET_TOWN", None); }
     }
     let mut pak_static: &'static pak::Pak<'static> = unsafe { cur_pak() };
     let audi: &'static [u8] = Box::leak(pak_static.audio.to_vec().into_boxed_slice());
@@ -2079,7 +2200,12 @@ fn main() {
                         let want = slot.map_id;
                         if map_ids.get(map_i).copied() != Some(want) {
                             if let Some((_, nm)) = map_index.iter().find(|(id, _)| *id == want) {
-                                if unsafe { load_map_pak(nm) } {
+                                // cam_px is already the NEW map's position on
+                                // this frame -- the same value `center` is
+                                // assigned a few lines below, and the same one
+                                // the build will plan against.
+                                let key = plan_key(want, sc.cam_px());
+                                if unsafe { load_map_pak(nm, Some(key)) } {
                                     pak_static = unsafe { cur_pak() };
                                 }
                             }
@@ -2151,8 +2277,11 @@ fn main() {
         if reload {
             reload = false;
             // Load this map's own pak, then build from it.
-            if let Some((_, nm)) = map_index.get(map_i) {
-                if unsafe { load_map_pak(nm) } {
+            if let Some((id, nm)) = map_index.get(map_i) {
+                // The same position build_map is about to be handed, so the
+                // geometry read is exactly the geometry built.
+                let key = guest_drive.then(|| plan_key(*id, (center[0], center[2])));
+                if unsafe { load_map_pak(nm, key) } {
                     pak_static = unsafe { cur_pak() };
                 }
             }

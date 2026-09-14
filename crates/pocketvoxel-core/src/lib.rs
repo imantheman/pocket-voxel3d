@@ -16,6 +16,7 @@ extern crate alloc;
 pub mod audio;
 pub mod cam;
 pub mod draw;
+pub mod mapplan;
 pub mod math;
 pub mod pak;
 pub mod scene;
