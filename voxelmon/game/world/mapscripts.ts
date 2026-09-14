@@ -410,6 +410,68 @@ function vermilionSailorRows(save: any): ScriptRow[] {
   ];
 }
 
+/**
+ * Every ROCKET and rocket-aligned SCIENTIST on Silph's floors, by the object
+ * names data/maps/toggleable_objects.asm uses.
+ *
+ * SilphCo11FTeamRocketLeavesScript hides all of them the moment Giovanni
+ * falls. The item balls, the rescued workers on 2F and 10F and the 7F rival
+ * keep theirs.
+ */
+const SILPH_ROCKET_OBJECTS: [string, string[]][] = [
+  ["SILPH_CO_2F", ["SILPHCO2F_SCIENTIST1", "SILPHCO2F_SCIENTIST2",
+                   "SILPHCO2F_ROCKET1", "SILPHCO2F_ROCKET2"]],
+  ["SILPH_CO_3F", ["SILPHCO3F_ROCKET", "SILPHCO3F_SCIENTIST"]],
+  ["SILPH_CO_4F", ["SILPHCO4F_ROCKET1", "SILPHCO4F_SCIENTIST", "SILPHCO4F_ROCKET2"]],
+  ["SILPH_CO_5F", ["SILPHCO5F_ROCKET1", "SILPHCO5F_SCIENTIST",
+                   "SILPHCO5F_ROCKER", "SILPHCO5F_ROCKET2"]],
+  ["SILPH_CO_6F", ["SILPHCO6F_ROCKET1", "SILPHCO6F_SCIENTIST", "SILPHCO6F_ROCKET2"]],
+  ["SILPH_CO_7F", ["SILPHCO7F_ROCKET1", "SILPHCO7F_SCIENTIST",
+                   "SILPHCO7F_ROCKET2", "SILPHCO7F_ROCKET3"]],
+  ["SILPH_CO_8F", ["SILPHCO8F_ROCKET1", "SILPHCO8F_SCIENTIST", "SILPHCO8F_ROCKET2"]],
+  ["SILPH_CO_9F", ["SILPHCO9F_ROCKET1", "SILPHCO9F_SCIENTIST", "SILPHCO9F_ROCKET2"]],
+  ["SILPH_CO_10F", ["SILPHCO10F_ROCKET", "SILPHCO10F_SCIENTIST"]],
+  ["SILPH_CO_11F", ["SILPHCO11F_ROCKET1", "SILPHCO11F_ROCKET2"]],
+];
+
+/** The nine grunts holding the Saffron streets, and the people they displaced. */
+const SAFFRON_ROCKETS = [
+  "SAFFRONCITY_ROCKET1", "SAFFRONCITY_ROCKET2", "SAFFRONCITY_ROCKET3",
+  "SAFFRONCITY_ROCKET4", "SAFFRONCITY_ROCKET5", "SAFFRONCITY_ROCKET6",
+  "SAFFRONCITY_ROCKET7", "SAFFRONCITY_ROCKET8", "SAFFRONCITY_ROCKET9",
+];
+const SAFFRON_CIVILIANS = [
+  "SAFFRONCITY_SCIENTIST", "SAFFRONCITY_SILPH_WORKER_M",
+  "SAFFRONCITY_SILPH_WORKER_F", "SAFFRONCITY_GENTLEMAN",
+  "SAFFRONCITY_PIDGEOT", "SAFFRONCITY_ROCKER",
+];
+
+/**
+ * SilphCo11FGiovanniAfterBattleScript: the speech, then every rocket in the
+ * building and in the streets outside leaves, behind a fade so it does not
+ * happen in front of the player.
+ *
+ * hide_object / show_object write save.objectToggles, which setMap replays
+ * when a map is next entered -- so this single pass covers the floors and the
+ * city the player is not standing on, and there is no onEnter hook needed for
+ * any of it.
+ */
+export function silphAftermathRows(): ScriptRow[] {
+  const rows: ScriptRow[] = [
+    ["show_text", "_SilphCo11FGiovanniYouRuinedOurPlansText"],
+    ["fade", "out"],
+  ];
+  for (const [map, names] of SILPH_ROCKET_OBJECTS) {
+    for (const n of names) rows.push(["hide_object", map, n]);
+  }
+  rows.push(["hide_object", "SILPH_CO_11F", "SILPHCO11F_GIOVANNI"]);
+  for (const n of SAFFRON_ROCKETS) rows.push(["hide_object", "SAFFRON_CITY", n]);
+  for (const n of SAFFRON_CIVILIANS) rows.push(["show_object", "SAFFRON_CITY", n]);
+  rows.push(["wait", 3]); // Delay3
+  rows.push(["fade", "in"]);
+  return rows;
+}
+
 export const MAP_SCRIPTS: Record<string, MapScript> = {
   PEWTER_CITY: {
     // PewterGuys trigger tiles on the west-leaving path; fires until Brock is
@@ -1357,6 +1419,56 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
         ["face_player"],
         ["oaks_aide", "TEXT_ROUTE15GATE2F_OAKS_AIDE"],
       ],
+    },
+  },
+
+  // story.lua M.SILPH_CO_11F (scripts/SilphCo11F.asm) and story4.lua
+  // M.SAFFRON_CITY: the end of Team Rocket.
+  SILPH_CO_11F: {
+    // Giovanni is a COORDINATE TRIGGER, not a talk. SilphCo11FDefaultScript
+    // watches (6,13) and (7,12) every frame while EVENT_BEAT_SILPH_CO_GIOVANNI
+    // is unset; he has no trainer header either, so sight engagement never
+    // fires. Without this he is a statue four tiles from anything the player
+    // would walk into, and the whole ending -- the flag, the MASTER BALL, the
+    // Saffron streets clearing -- silently never happens.
+    onStep: (ow: any, save: any) => {
+      if (save?.flags?.EVENT_BEAT_SILPH_CO_GIOVANNI) return null;
+      const x = ow?.player?.cellX;
+      const y = ow?.player?.cellY;
+      if (!((x === 6 && y === 13) || (x === 7 && y === 12))) return null;
+      return [
+        // The text comes FIRST and he walks after: pokered orders it
+        // DisplayTextID then MoveSprite, so he speaks from behind the desk
+        // rather than crossing the room in silence to deliver it point-blank.
+        ["show_text", "_SilphCo11FGiovanniText"],
+        ["walk_npc", "SILPHCO11F_GIOVANNI", ["down", "down", "down"]],
+        ["face_object", "SILPHCO11F_GIOVANNI", "down"],
+        // Party 2 is the Silph Co. team; 1 is the Rocket Hideout and 3 the
+        // Viridian gym rematch.
+        ["start_battle", "trainer", "OPP_GIOVANNI", 2],
+        ["jump_if_false", "end"], // a loss re-arms the trigger, as vanilla
+        ["set_flag", "EVENT_BEAT_SILPH_CO_GIOVANNI"],
+        ...silphAftermathRows(),
+        ["label", "end"],
+      ];
+    },
+    talk: {
+      // He is reachable through the teleport pads without passing the
+      // trigger, so this branches on the ball rather than on the battle.
+      TEXT_SILPHCO11F_SILPH_PRESIDENT: [
+        ["face_player"],
+        ["check_flag", "EVENT_GOT_MASTER_BALL"],
+        ["jump_if_true", "already"],
+        ["show_text", "_SilphCo11FSilphPresidentText"],
+        ["give_item", "MASTER_BALL", 1, "_SilphCo11FSilphPresidentReceivedMasterBallText"],
+        ["set_flag", "EVENT_GOT_MASTER_BALL"],
+        ["show_text", "_SilphCo11FSilphPresidentMasterBallDescriptionText"],
+        ["jump", "end"],
+        ["label", "already"],
+        ["show_text", "_SilphCo11FSilphPresidentMasterBallDescriptionText"],
+        ["label", "end"],
+      ],
+      TEXT_SILPHCO11F_BEAUTY: [["face_player"], ["show_text", "_SilphCo11FBeautyText"]],
     },
   },
 

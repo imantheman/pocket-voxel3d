@@ -38,6 +38,7 @@ import { martStock } from "../voxelmon/game/world/marts.ts";
 import { computeNeighbors } from "../voxelmon/game/world/overworld.ts";
 import { rotateDir } from "../voxelmon/game/world/collision.ts";
 import { poseDir } from "../voxelmon/game/scene.ts";
+import { silphAftermathRows } from "../voxelmon/game/world/mapscripts.ts";
 import { bikeAllowed, BIKE_SONG, effectiveMapSong } from "../voxelmon/game/world/bike.ts";
 import { fillAideText } from "../voxelmon/game/world/oaksaide.ts";
 import { daycareFee, learnMovesFromDayCare } from "../voxelmon/game/world/daycare.ts";
@@ -2954,5 +2955,114 @@ describe("tossing things out of the bag", () => {
     const v = game.bag() as { entries: unknown[]; index: number } | null;
     expect(v).not.toBeNull();
     expect(v!.index).toBeLessThanOrEqual(v!.entries.length);
+  });
+});
+
+describe("the end of Team Rocket", () => {
+  function silphGame(): VoxelmonGame {
+    const data = {
+      ...(romData as object),
+      cookedMaps: [
+        ...((romData as { cookedMaps?: string[] }).cookedMaps ?? []),
+        "SILPH_CO_11F", "SAFFRON_CITY",
+      ],
+    };
+    const game = new VoxelmonGame(data as never, new MenuHost(), 1);
+    game.newGame();
+    game.closeToOverworld();
+    game.save.party.push(newMon(romData!, "CHARIZARD", 80));
+    return game;
+  }
+
+  /** Step onto a tile and let the land-trigger run for a few frames. */
+  function stepOn(game: VoxelmonGame, x: number, y: number): void {
+    game.overworld.setMap("SILPH_CO_11F", x, y, "up");
+    game.overworld.onStepComplete();
+    for (let i = 0; i < 40; i++) game.tick(0);
+  }
+
+  /** Whatever box is open, flattened. */
+  function boxText(game: VoxelmonGame): string {
+    const src = game.uiBox() as { box?: { pages?: { lines: string[] }[] } } | null;
+    return (src?.box?.pages ?? []).map((pg) => pg.lines.join(" ")).join(" ");
+  }
+
+  test.skipIf(!hasGen)("his tiles start the encounter and no others do", () => {
+    const game = silphGame();
+    // Not one of his two: nothing at all.
+    stepOn(game, 10, 10);
+    expect(game.stackKinds()).toEqual(["overworld"]);
+
+    // Both of the tiles pokered watches, each on a fresh game so the first
+    // does not disarm the second.
+    for (const [x, y] of [[6, 13], [7, 12]] as const) {
+      const g = silphGame();
+      stepOn(g, x, y);
+      expect(boxText(g)).toContain("So we meet again");
+    }
+  });
+
+  test.skipIf(!hasGen)("once he is beaten the tile is dead", () => {
+    const game = silphGame();
+    game.save.flags.EVENT_BEAT_SILPH_CO_GIOVANNI = true;
+    stepOn(game, 6, 13);
+    expect(game.stackKinds()).toEqual(["overworld"]);
+  });
+
+  test.skipIf(!hasGen)("the aftermath empties Silph AND the streets outside", () => {
+    const game = silphGame();
+    game.overworld.setMap("SILPH_CO_11F", 6, 13, "up");
+    // The rows the win runs, driven on their own: the battle itself is the
+    // engine's business and takes hundreds of frames to fight by hand.
+    game.overworld.runScript(silphAftermathRows() as never);
+    for (let i = 0; i < 2000; i++) game.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+
+    const t = game.save.objectToggles ?? {};
+    // every floor, not just the one he was standing on
+    expect(t.SILPH_CO_2F?.SILPHCO2F_ROCKET1).toBe(false);
+    expect(t.SILPH_CO_7F?.SILPHCO7F_ROCKET3).toBe(false);
+    expect(t.SILPH_CO_11F?.SILPHCO11F_ROCKET2).toBe(false);
+    expect(t.SILPH_CO_11F?.SILPHCO11F_GIOVANNI).toBe(false);
+    // the nine holding Saffron, and the people they displaced coming back
+    expect(t.SAFFRON_CITY?.SAFFRONCITY_ROCKET1).toBe(false);
+    expect(t.SAFFRON_CITY?.SAFFRONCITY_ROCKET9).toBe(false);
+    expect(t.SAFFRON_CITY?.SAFFRONCITY_SCIENTIST).toBe(true);
+    expect(t.SAFFRON_CITY?.SAFFRONCITY_PIDGEOT).toBe(true);
+  });
+
+  test("the aftermath leaves the rescued workers and item balls alone", () => {
+    const rows = silphAftermathRows() as unknown as [string, string, string][];
+    const touched = new Set(rows.filter((r) => r[0] === "hide_object").map((r) => r[2]));
+    // 2F and 10F have workers the player rescued; they are not rockets
+    expect([...touched].some((n) => n.includes("WORKER"))).toBe(false);
+    expect([...touched].some((n) => n.includes("ITEM"))).toBe(false);
+    // and the 7F rival keeps his place too
+    expect([...touched].some((n) => n.includes("RIVAL"))).toBe(false);
+  });
+
+  test("it hides behind a fade, and says why first", () => {
+    const rows = silphAftermathRows() as unknown as [string, ...unknown[]][];
+    const kinds = rows.map((r) => r[0]);
+    // the speech comes before the fade, and every hide is inside it
+    expect(kinds[0]).toBe("show_text");
+    expect(kinds[1]).toBe("fade");
+    expect(kinds.at(-1)).toBe("fade");
+    const firstHide = kinds.indexOf("hide_object");
+    expect(firstHide).toBeGreaterThan(1);
+    expect(kinds.lastIndexOf("show_object")).toBeLessThan(kinds.length - 1);
+  });
+
+  test.skipIf(!hasGen)("the president hands over the MASTER BALL, once", () => {
+    const game = silphGame();
+    game.overworld.setMap("SILPH_CO_11F", 7, 6, "up");
+    game.overworld.showMapText("TEXT_SILPHCO11F_SILPH_PRESIDENT");
+    for (let i = 0; i < 900; i++) game.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+    expect(game.save.inventory.MASTER_BALL).toBe(1);
+    expect(game.save.flags.EVENT_GOT_MASTER_BALL).toBe(true);
+
+    game.closeToOverworld();
+    game.overworld.showMapText("TEXT_SILPHCO11F_SILPH_PRESIDENT");
+    for (let i = 0; i < 900; i++) game.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+    expect(game.save.inventory.MASTER_BALL).toBe(1);
   });
 });
