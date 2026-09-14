@@ -116,6 +116,12 @@ export interface SaveSlice {
    * into the mon when the player comes to collect it.
    */
   daycare?: DaycareState | null;
+  /**
+   * {PLAYER}'s PC — the Item Storage System's own bag (world/pcitems.ts).
+   * A BagSave of its own so rules/bag.ts drives it unchanged; only the
+   * number of slots differs.
+   */
+  pc?: { inventory: Record<string, number>; bagOrder?: string[] };
   /** Money, for the Safari gate's fee and the coin clerk. */
   money?: number;
   /** wPlayerCoins — the GAME CORNER's currency, capped at 9999. */
@@ -818,7 +824,12 @@ export class Overworld implements ScriptWorld {
     // Bill's PC: a hidden PC tile (OverworldController.lua:2019). Pressing A
     // facing it opens box storage.
     if (pcTileAt(this.map.id, fx, fy, p.facing)) {
-      (this.shell as unknown as { openBox?: () => void }).openBox?.();
+      // TurnedOnPC, then the machine's menu -- Pokemon storage is one entry
+      // on it, not the whole of it (engine/menus/pc.asm).
+      const t = (this.shell.data as { text?: Record<string, string> }).text ?? {};
+      this.shell.showText(t._TurnedOnPC1Text ?? "{PLAYER} turned on\nthe PC.", () => {
+        (this.shell as unknown as { openPc?: () => void }).openPc?.();
+      });
       return;
     }
   }

@@ -7405,7 +7405,11 @@ class Overworld {
     if (this.tryCardKeyDoor(fx, fy))
       return;
     if (pcTileAt(this.map.id, fx, fy, p.facing)) {
-      this.shell.openBox?.();
+      const t = this.shell.data.text ?? {};
+      this.shell.showText(t._TurnedOnPC1Text ?? `{PLAYER} turned on
+the PC.`, () => {
+        this.shell.openPc?.();
+      });
       return;
     }
   }
@@ -9049,6 +9053,63 @@ class Scene {
           });
         } else if (sl.stage === "spin") {
           this.stamp(host, 2, 12, "PRESS A TO STOP");
+        }
+      }
+      return;
+    }
+    const pcv = view.pc?.();
+    if (pcv) {
+      const cursor = view.pcCursor?.() ?? 0;
+      const sig = `p${pcv.mode},${pcv.index},${pcv.top},${pcv.qty},${cursor},` + pcv.entries.map((e) => `${e.name}×${e.qty}`).join(";");
+      if (sig !== this.menuSig) {
+        this.menuSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const box2 = (x, y, w, h) => {
+          host.uiTile(x, y, BORDER_TL);
+          host.uiFill(x + 1, y, w - 1, 1, BORDER_H);
+          host.uiTile(x + w, y, BORDER_TR);
+          host.uiFill(x, y + 1, 1, h, BORDER_V);
+          host.uiFill(x + w, y + 1, 1, h, BORDER_V);
+          host.uiFill(x + 1, y + 1, w - 1, h, SPACE);
+          host.uiTile(x, y + 1 + h, BORDER_BL);
+          host.uiFill(x + 1, y + 1 + h, w - 1, 1, BORDER_H);
+          host.uiTile(x + w, y + 1 + h, BORDER_BR);
+        };
+        if (pcv.mode === "root" || pcv.mode === "items") {
+          const labels = pcv.labels;
+          box2(0, 0, 17, labels.length * 2);
+          labels.forEach((l, i) => {
+            this.stamp(host, 2, 2 + i * 2, l);
+            if (i === cursor)
+              host.uiTile(1, 2 + i * 2, ARROW_CURSOR);
+          });
+        } else {
+          const total = pcv.entries.length + 1;
+          const X = 2, Y = 2, W = 16, H = pcv.rows * 2;
+          box2(X, Y, W, H);
+          for (let r = 0;r < pcv.rows; r++) {
+            const li = pcv.top + r;
+            if (li >= total)
+              break;
+            const rowY = Y + 2 + r * 2;
+            if (li < pcv.entries.length) {
+              const e = pcv.entries[li];
+              this.stamp(host, X + 2, rowY, e.name);
+              const qs = `×${e.qty}`;
+              this.stamp(host, X + W - qs.length, rowY, qs);
+            } else {
+              this.stamp(host, X + 2, rowY, "CANCEL");
+            }
+            if (li === pcv.index)
+              host.uiTile(X + 1, rowY, ARROW_CURSOR);
+          }
+          if (pcv.top + pcv.rows < total)
+            host.uiTile(X + W - 1, Y + H, ARROW_MORE);
+          if (pcv.mode === "quantity") {
+            box2(11, 11, 7, 2);
+            this.stamp(host, 14, 13, `×${String(pcv.qty).padStart(2, "0")}`);
+          }
         }
       }
       return;
@@ -12100,8 +12161,254 @@ Bye ${this.monName(mon)}!`, "release-list");
   }
 }
 
+// voxelmon/game/world/pcitems.ts
+var PC_ITEM_CAPACITY = 50;
+function pcBag(save) {
+  return save.pc ??= { inventory: {}, bagOrder: [] };
+}
+function pcCapacityData(data) {
+  const cap = data?.field?.pcItemCap;
+  return {
+    constants: {
+      ...data?.constants ?? {},
+      bagSize: typeof cap === "number" && cap >= 1 ? cap : PC_ITEM_CAPACITY
+    }
+  };
+}
+function pcOrder(save) {
+  return order(pcBag(save));
+}
+function deposit(save, id, qty, data) {
+  const have = save.inventory?.[id] ?? 0;
+  const n = Math.min(qty, have);
+  if (n <= 0)
+    return false;
+  if (!add(pcBag(save), id, n, pcCapacityData(data)))
+    return false;
+  remove(save, id, n);
+  return true;
+}
+function withdraw(save, id, qty, data) {
+  const box = pcBag(save);
+  const have = box.inventory?.[id] ?? 0;
+  const n = Math.min(qty, have);
+  if (n <= 0)
+    return false;
+  if (!add(save, id, n, data))
+    return false;
+  remove(box, id, n);
+  return true;
+}
+function tossFromPc(save, id, qty) {
+  remove(pcBag(save), id, qty);
+}
+
+// voxelmon/game/ui/pcscreen.ts
+var ROWS6 = 4;
+var ROOT = ["SOMEONE'S PC", "MY PC", "LOG OFF"];
+var ITEMS = ["WITHDRAW ITEM", "DEPOSIT ITEM", "TOSS ITEM", "LOG OFF"];
+
+class PcState {
+  game;
+  onDone;
+  kind = "pc";
+  mode = "root";
+  index = 0;
+  top = 0;
+  menuIndex = 0;
+  itemsIndex = 0;
+  qty = 1;
+  action = "withdraw";
+  constructor(game, onDone) {
+    this.game = game;
+    this.onDone = onDone;
+  }
+  line(key, fallback) {
+    return (this.game.data?.text ?? {})[key] ?? fallback;
+  }
+  name(id) {
+    return this.game.data.items?.[id]?.name ?? id;
+  }
+  ids() {
+    if (this.action === "deposit")
+      return order(this.game.save);
+    return pcOrder(this.game.save);
+  }
+  held(id) {
+    const inv = this.action === "deposit" ? this.game.save.inventory : pcBag(this.game.save).inventory;
+    return inv?.[id] ?? 0;
+  }
+  close() {
+    this.game.pop();
+    this.onDone?.();
+  }
+  startAction(a) {
+    this.action = a;
+    const empty = this.ids().length === 0;
+    if (empty) {
+      this.game.showText(a === "deposit" ? this.line("_NothingToDepositText", `You have nothing
+to deposit.`) : this.line("_NothingStoredText", `There is nothing
+stored.`));
+      return;
+    }
+    this.game.showText(a === "deposit" ? this.line("_WhatToDepositText", `What do you want
+to deposit?`) : a === "withdraw" ? this.line("_WhatToWithdrawText", `What do you want
+to withdraw?`) : this.line("_WhatToTossText", `What do you want
+to toss away?`));
+    this.index = 0;
+    this.top = 0;
+    this.mode = "list";
+  }
+  commit(id, n) {
+    const save = this.game.save;
+    if (this.action === "deposit") {
+      if (!deposit(save, id, n, this.game.data)) {
+        this.game.showText(this.line("_NoRoomToStoreText", `No room left to
+store items.`));
+      }
+    } else if (this.action === "withdraw") {
+      if (!withdraw(save, id, n, this.game.data)) {
+        this.game.showText(this.line("_CantCarryMoreText", `You can't carry
+any more items.`));
+      } else {
+        this.game.showText(this.line("_WithdrewItemText", `Withdrew
+{RAM:wNameBuffer}.`).replace(/\{RAM:\w+\}/g, this.name(id)));
+      }
+    } else {
+      tossFromPc(save, id, n);
+    }
+    const len = this.ids().length;
+    if (this.index > len)
+      this.index = Math.max(0, len);
+    if (this.top > this.index)
+      this.top = this.index;
+    this.mode = this.ids().length === 0 ? "items" : "list";
+  }
+  update() {
+    const p = this.game.input.pressed;
+    if (this.mode === "root")
+      return this.updateRoot(p);
+    if (this.mode === "items")
+      return this.updateItems(p);
+    if (this.mode === "quantity")
+      return this.updateQuantity(p);
+    return this.updateList(p);
+  }
+  updateRoot(p) {
+    const n = ROOT.length;
+    if (p.up)
+      this.menuIndex = (this.menuIndex + n - 1) % n;
+    if (p.down)
+      this.menuIndex = (this.menuIndex + 1) % n;
+    if (p.b) {
+      this.close();
+      return;
+    }
+    if (!p.a)
+      return;
+    if (this.menuIndex === 0) {
+      this.game.showText(this.line("_AccessedSomeonesPCText", `Accessed someone's
+PC.`), () => this.game.openBox());
+      return;
+    }
+    if (this.menuIndex === 1) {
+      this.game.showText(this.line("_AccessedMyPCText", "Accessed my PC."));
+      this.itemsIndex = 0;
+      this.mode = "items";
+      return;
+    }
+    this.close();
+  }
+  updateItems(p) {
+    const n = ITEMS.length;
+    if (p.up)
+      this.itemsIndex = (this.itemsIndex + n - 1) % n;
+    if (p.down)
+      this.itemsIndex = (this.itemsIndex + 1) % n;
+    if (p.b) {
+      this.mode = "root";
+      return;
+    }
+    if (!p.a)
+      return;
+    if (this.itemsIndex === 0)
+      this.startAction("withdraw");
+    else if (this.itemsIndex === 1)
+      this.startAction("deposit");
+    else if (this.itemsIndex === 2)
+      this.startAction("toss");
+    else
+      this.mode = "root";
+  }
+  updateList(p) {
+    const ids = this.ids();
+    const n = ids.length + 1;
+    if (p.up)
+      this.index = (this.index + n - 1) % n;
+    if (p.down)
+      this.index = (this.index + 1) % n;
+    if (this.index < this.top)
+      this.top = this.index;
+    if (this.index >= this.top + ROWS6)
+      this.top = this.index - ROWS6 + 1;
+    if (p.b || p.a && this.index === n - 1) {
+      this.mode = "items";
+      return;
+    }
+    if (!p.a)
+      return;
+    const id = ids[this.index];
+    if (!id)
+      return;
+    if (this.held(id) <= 1)
+      this.commit(id, 1);
+    else {
+      this.qty = 1;
+      this.mode = "quantity";
+    }
+  }
+  updateQuantity(p) {
+    const id = this.ids()[this.index];
+    if (!id) {
+      this.mode = "list";
+      return;
+    }
+    const have = this.held(id);
+    if (p.up)
+      this.qty = Math.min(have, this.qty + 1);
+    if (p.down)
+      this.qty = Math.max(1, this.qty - 1);
+    if (p.right)
+      this.qty = Math.min(have, this.qty + 10);
+    if (p.left)
+      this.qty = Math.max(1, this.qty - 10);
+    if (p.b) {
+      this.mode = "list";
+      return;
+    }
+    if (p.a)
+      this.commit(id, this.qty);
+  }
+  view() {
+    const ids = this.mode === "root" || this.mode === "items" ? [] : this.ids();
+    return {
+      mode: this.mode,
+      entries: ids.map((id) => ({ name: this.name(id), qty: this.held(id) })),
+      index: this.index,
+      top: this.top,
+      rows: ROWS6,
+      labels: this.mode === "root" ? ROOT : this.mode === "items" ? ITEMS : [],
+      qty: this.qty,
+      action: this.action.toUpperCase()
+    };
+  }
+  menuCursor() {
+    return this.mode === "root" ? this.menuIndex : this.itemsIndex;
+  }
+}
+
 // voxelmon/game/ui/pokedexscreen.ts
-var ROWS6 = 7;
+var ROWS7 = 7;
 class PokedexState {
   game;
   onCancel;
@@ -12188,9 +12495,9 @@ class PokedexState {
     else if (p.down)
       this.index = Math.min(n - 1, this.index + 1);
     else if (p.left)
-      this.index = Math.max(0, this.index - ROWS6);
+      this.index = Math.max(0, this.index - ROWS7);
     else if (p.right)
-      this.index = Math.min(n - 1, this.index + ROWS6);
+      this.index = Math.min(n - 1, this.index + ROWS7);
     this.syncScroll();
     if (p.b) {
       this.close();
@@ -12241,8 +12548,8 @@ class PokedexState {
   syncScroll() {
     if (this.index < this.top)
       this.top = this.index;
-    if (this.index >= this.top + ROWS6)
-      this.top = this.index - ROWS6 + 1;
+    if (this.index >= this.top + ROWS7)
+      this.top = this.index - ROWS7 + 1;
   }
   buildEntry() {
     const id = this.entrySpecies;
@@ -12282,7 +12589,7 @@ class PokedexState {
   view() {
     return {
       mode: this.mode,
-      rows: ROWS6,
+      rows: ROWS7,
       top: this.top,
       index: this.index,
       entries: this.entries,
@@ -13174,6 +13481,17 @@ back.`);
     const why = (h.writeErr?.() ?? "unknown").slice(0, 40);
     this.showText(`CARD WRITE FAILED
 ${why}`);
+  }
+  openPc(onDone) {
+    this.push(new PcState(this, onDone));
+  }
+  pc() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "pc" ? top.view() : null;
+  }
+  pcCursor() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "pc" ? top.menuCursor() : 0;
   }
   playSfx(name) {
     this.audio.playSfx(name);

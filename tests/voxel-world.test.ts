@@ -39,6 +39,7 @@ import { computeNeighbors } from "../voxelmon/game/world/overworld.ts";
 import { rotateDir } from "../voxelmon/game/world/collision.ts";
 import { poseDir } from "../voxelmon/game/scene.ts";
 import { silphAftermathRows } from "../voxelmon/game/world/mapscripts.ts";
+import { deposit, pcCapacityData, withdraw } from "../voxelmon/game/world/pcitems.ts";
 import { bikeAllowed, BIKE_SONG, effectiveMapSong } from "../voxelmon/game/world/bike.ts";
 import { fillAideText } from "../voxelmon/game/world/oaksaide.ts";
 import { daycareFee, learnMovesFromDayCare } from "../voxelmon/game/world/daycare.ts";
@@ -3180,5 +3181,128 @@ describe("the card key doors", () => {
     faceDoor(game, "SILPH_CO_3F", d);
     // no "Bingo!" a second time: the press falls through to the tile
     expect(boxText(game)).not.toContain("opened the door");
+  });
+});
+
+describe("the PC item storage", () => {
+  /** The PC menu, opened as the tile opens it. */
+  function openPc(game: VoxelmonGame): void {
+    game.openPc();
+  }
+
+  function pcv(game: VoxelmonGame): any {
+    return game.pc() as any;
+  }
+
+  /** Walk a menu cursor to `i` and press A. */
+  function choose(game: VoxelmonGame, i: number): void {
+    for (let k = 0; k < i; k++) tap(game, VOX_BTN.down);
+    tap(game, VOX_BTN.a);
+  }
+
+  /** Get past whatever box the last choice pushed. */
+  function settle(game: VoxelmonGame): void {
+    for (let i = 0; i < 300; i++) {
+      if (game.stackKinds().at(-1) === "pc") break;
+      game.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    game.tick(0);
+  }
+
+  /** Into MY PC -> the numbered item action. */
+  function itemAction(game: VoxelmonGame, action: number): void {
+    openPc(game);
+    choose(game, 1); // MY PC
+    settle(game);
+    choose(game, action);
+    settle(game);
+  }
+
+  test.skipIf(!hasGen)("depositing moves it out of the bag and into the PC", () => {
+    const game = makeMenuGame();
+    Bag.add(game.save, "POTION", 5);
+    itemAction(game, 1); // DEPOSIT ITEM
+    expect(pcv(game).mode).toBe("list");
+    tap(game, VOX_BTN.a); // first item -> quantity (a stack of 5)
+    expect(pcv(game).mode).toBe("quantity");
+    tap(game, VOX_BTN.up); // 1 -> 2
+    tap(game, VOX_BTN.a);
+    settle(game);
+    expect(game.save.inventory.POTION).toBe(3);
+    expect(game.save.pc?.inventory.POTION).toBe(2);
+  });
+
+  test.skipIf(!hasGen)("withdrawing brings it back", () => {
+    const game = makeMenuGame();
+    game.save.pc = { inventory: { POTION: 4 }, bagOrder: ["POTION"] };
+    itemAction(game, 0); // WITHDRAW ITEM
+    tap(game, VOX_BTN.a);
+    tap(game, VOX_BTN.a); // take 1
+    settle(game);
+    expect(game.save.inventory.POTION).toBe(1);
+    expect(game.save.pc?.inventory.POTION).toBe(3);
+  });
+
+  test.skipIf(!hasGen)("tossing from the PC just removes it", () => {
+    const game = makeMenuGame();
+    game.save.pc = { inventory: { POTION: 2 }, bagOrder: ["POTION"] };
+    itemAction(game, 2); // TOSS ITEM
+    tap(game, VOX_BTN.a);
+    tap(game, VOX_BTN.a); // 1 of them
+    settle(game);
+    expect(game.save.pc?.inventory.POTION).toBe(1);
+    expect(game.save.inventory.POTION ?? 0).toBe(0); // not into the bag
+  });
+
+  test.skipIf(!hasGen)("an empty box says so instead of opening a list", () => {
+    const game = makeMenuGame();
+    itemAction(game, 0); // WITHDRAW with nothing stored
+    expect(pcv(game)?.mode).toBe("items");
+  });
+
+  test.skipIf(!hasGen)("an empty bag has nothing to deposit", () => {
+    const game = makeMenuGame();
+    for (const id of Bag.order(game.save)) Bag.remove(game.save, id, 99);
+    itemAction(game, 1);
+    expect(pcv(game)?.mode).toBe("items");
+  });
+
+  test("the PC holds 50 slots where the bag holds 20", () => {
+    const save: any = { inventory: {}, bagOrder: [] };
+    const data: any = { constants: {} };
+    // 25 distinct things: the bag refuses past 20, the PC takes them all
+    const ids = Array.from({ length: 25 }, (_, i) => `ITEM_${i}`);
+    let inBag = 0;
+    for (const id of ids) if (Bag.add(save, id, 1, data)) inBag += 1;
+    expect(inBag).toBe(20);
+
+    const box: any = { inventory: {}, bagOrder: [] };
+    let inPc = 0;
+    for (const id of ids) {
+      if (Bag.add(box, id, 1, pcCapacityData(data))) inPc += 1;
+    }
+    expect(inPc).toBe(25);
+  });
+
+  test("a full box keeps the item in the bag rather than eating it", () => {
+    const save: any = { inventory: { POTION: 1 }, bagOrder: ["POTION"], pc: undefined };
+    const data: any = { constants: {}, field: { pcItemCap: 1 } };
+    // fill the single PC slot with something else
+    expect(deposit(save, "POTION", 1, data)).toBe(true);
+    save.inventory.ETHER = 1;
+    save.bagOrder.push("ETHER");
+    expect(deposit(save, "ETHER", 1, data)).toBe(false);
+    // refused, and NOT taken out of the bag on the way
+    expect(save.inventory.ETHER).toBe(1);
+    expect(save.pc.inventory.ETHER).toBeUndefined();
+  });
+
+  test("a full bag keeps the item in the box", () => {
+    const save: any = { inventory: {}, bagOrder: [], pc: { inventory: { POTION: 1 }, bagOrder: ["POTION"] } };
+    const data: any = { constants: { bagSize: 1 } };
+    save.inventory.ETHER = 1;
+    save.bagOrder.push("ETHER");
+    expect(withdraw(save, "POTION", 1, data)).toBe(false);
+    expect(save.pc.inventory.POTION).toBe(1);
   });
 });

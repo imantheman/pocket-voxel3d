@@ -1093,6 +1093,62 @@ export class Scene {
       }
       return;
     }
+    // The PC (ui/pcscreen.ts): the machine's menu, the Item Storage menu
+    // inside it, and the withdraw/deposit/toss list over either bag.
+    const pcv = (view as unknown as { pc?: () => any }).pc?.();
+    if (pcv) {
+      const cursor = (view as unknown as { pcCursor?: () => number }).pcCursor?.() ?? 0;
+      const sig = `p${pcv.mode},${pcv.index},${pcv.top},${pcv.qty},${cursor},` +
+        pcv.entries.map((e: any) => `${e.name}×${e.qty}`).join(";");
+      if (sig !== this.menuSig) {
+        this.menuSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const box = (x: number, y: number, w: number, h: number) => {
+          host.uiTile(x, y, BORDER_TL);
+          host.uiFill(x + 1, y, w - 1, 1, BORDER_H);
+          host.uiTile(x + w, y, BORDER_TR);
+          host.uiFill(x, y + 1, 1, h, BORDER_V);
+          host.uiFill(x + w, y + 1, 1, h, BORDER_V);
+          host.uiFill(x + 1, y + 1, w - 1, h, SPACE);
+          host.uiTile(x, y + 1 + h, BORDER_BL);
+          host.uiFill(x + 1, y + 1 + h, w - 1, 1, BORDER_H);
+          host.uiTile(x + w, y + 1 + h, BORDER_BR);
+        };
+        if (pcv.mode === "root" || pcv.mode === "items") {
+          const labels: string[] = pcv.labels;
+          box(0, 0, 17, labels.length * 2);
+          labels.forEach((l, i) => {
+            this.stamp(host, 2, 2 + i * 2, l);
+            if (i === cursor) host.uiTile(1, 2 + i * 2, ARROW_CURSOR);
+          });
+        } else {
+          const total = pcv.entries.length + 1; // + CANCEL
+          const X = 2, Y = 2, W = 16, H = pcv.rows * 2;
+          box(X, Y, W, H);
+          for (let r = 0; r < pcv.rows; r++) {
+            const li = pcv.top + r;
+            if (li >= total) break;
+            const rowY = Y + 2 + r * 2;
+            if (li < pcv.entries.length) {
+              const e = pcv.entries[li];
+              this.stamp(host, X + 2, rowY, e.name);
+              const qs = `×${e.qty}`;
+              this.stamp(host, X + W - qs.length, rowY, qs);
+            } else {
+              this.stamp(host, X + 2, rowY, "CANCEL");
+            }
+            if (li === pcv.index) host.uiTile(X + 1, rowY, ARROW_CURSOR);
+          }
+          if (pcv.top + pcv.rows < total) host.uiTile(X + W - 1, Y + H, ARROW_MORE);
+          if (pcv.mode === "quantity") {
+            box(11, 11, 7, 2);
+            this.stamp(host, 14, 13, `×${String(pcv.qty).padStart(2, "0")}`);
+          }
+        }
+      }
+      return;
+    }
     // The BIKE SHOP's price window (ui/bikeshop.ts). TextBoxBorder hlcoord
     // 0,0 b=4 c=15: the bike on row 2, its price on row 3, CANCEL on row 4 —
     // the cursor rows are two apart with the price tucked between them. The

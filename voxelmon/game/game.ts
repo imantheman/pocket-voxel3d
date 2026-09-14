@@ -66,6 +66,7 @@ import { BagState } from "./ui/bagscreen.ts";
 import { PartyState } from "./ui/partyscreen.ts";
 import { ShopState } from "./ui/shopscreen.ts";
 import { BoxState } from "./ui/boxscreen.ts";
+import { PcState } from "./ui/pcscreen.ts";
 import { PokedexState } from "./ui/pokedexscreen.ts";
 import { encodeSave } from "./save-lua.ts";
 import { decodeSave } from "./save-read.ts";
@@ -1051,6 +1052,28 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     }
     const why = (h.writeErr?.() ?? "unknown").slice(0, 40);
     this.showText(`CARD WRITE FAILED\n${why}`);
+  }
+
+  /**
+   * A PC tile -> the machine's menu (ui/pcscreen.ts).
+   *
+   * The tile used to open Pokemon storage directly, which left the Item
+   * Storage System with no way in -- items could go into the bag and never
+   * out of it.
+   */
+  openPc(onDone?: () => void): void {
+    this.push(new PcState(this as never, onDone));
+  }
+
+  pc(): unknown {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "pc" ? top.view() : null;
+  }
+
+  /** Cursor row of whichever PC menu is open, for the renderer. */
+  pcCursor(): number {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "pc" ? top.menuCursor() : 0;
   }
 
   /** ui/bikeshop.ts wants a sound for its own A/B, like every menu. */
