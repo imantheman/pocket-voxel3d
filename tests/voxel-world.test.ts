@@ -40,6 +40,10 @@ import { rotateDir } from "../voxelmon/game/world/collision.ts";
 import { poseDir } from "../voxelmon/game/scene.ts";
 import { SEVEN_BADGES, silphAftermathRows } from "../voxelmon/game/world/mapscripts.ts";
 import { deposit, pcCapacityData, withdraw } from "../voxelmon/game/world/pcitems.ts";
+import {
+  GYM_MACHINES, gymGateFlag, gymGuardKey, MANSION_BLOCKS, MANSION_HOLES,
+  OPEN_BLOCK, toggleBlocksFor,
+} from "../voxelmon/game/world/toggleblocks.ts";
 import { bikeAllowed, BIKE_SONG, effectiveMapSong } from "../voxelmon/game/world/bike.ts";
 import { fillAideText } from "../voxelmon/game/world/oaksaide.ts";
 import { daycareFee, learnMovesFromDayCare } from "../voxelmon/game/world/daycare.ts";
@@ -3181,6 +3185,250 @@ describe("the card key doors", () => {
     faceDoor(game, "SILPH_CO_3F", d);
     // no "Bingo!" a second time: the press falls through to the tile
     expect(boxText(game)).not.toContain("opened the door");
+  });
+});
+
+describe("the Mansion switches and the Cinnabar quiz", () => {
+  function tgGame(): VoxelmonGame {
+    const data = {
+      ...(romData as object),
+      cookedMaps: [
+        ...((romData as { cookedMaps?: string[] }).cookedMaps ?? []),
+        "POKEMON_MANSION_1F", "POKEMON_MANSION_3F", "POKEMON_MANSION_B1F", "CINNABAR_GYM",
+      ],
+    };
+    const game = new VoxelmonGame(data as never, new MenuHost(), 1);
+    game.newGame();
+    game.closeToOverworld();
+    return game;
+  }
+
+  /** The block sitting at (bx, by) on the map that is loaded right now. */
+  function blockAt(game: VoxelmonGame, bx: number, by: number): number {
+    const def = game.overworld.map.def as { blocks: number[]; width: number };
+    return def.blocks[by * def.width + bx]!;
+  }
+
+  /** Stand one cell below a tile, look up at it, and press A. */
+  function pressUpAt(game: VoxelmonGame, map: string, x: number, y: number): void {
+    game.overworld.setMap(map, x, y + 1, "up");
+    game.overworld.interact();
+    for (let i = 0; i < 40; i++) game.tick(0);
+  }
+
+  /** Mash to the YES/NO, answer it, then let the rest of the box play out. */
+  function answer(game: VoxelmonGame, yes: boolean): boolean {
+    let answered = false;
+    for (let i = 0; i < 900 && !answered; i++) {
+      if (game.stackKinds().at(-1) === "choice") {
+        game.tick(0); // release, so the next press is an edge
+        if (!yes) tap(game, VOX_BTN.down);
+        tap(game, VOX_BTN.a);
+        answered = true;
+        break;
+      }
+      game.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    if (!answered) return false;
+    for (let i = 0; i < 400; i++) {
+      game.tick(game.stackKinds().at(-1) === "textbox" && i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    return true;
+  }
+
+  const MANSION_1F = MANSION_BLOCKS.POKEMON_MANSION_1F!;
+
+  test.skipIf(!hasGen)("the cook baked every switch door SHUT, with stamps to lift", () => {
+    // pokered rewrites these on every map load, so the extracted map ships
+    // them all OPEN — cooked as-is the mansion is one open floor with no
+    // puzzle in it at all.
+    const game = tgGame();
+    game.overworld.setMap("POKEMON_MANSION_1F", 5, 5, "down");
+    for (const b of MANSION_1F) {
+      // switch off: the solidWhenOn doors stand open, the others are walls
+      expect(blockAt(game, b.bx, b.by)).toBe(b.solidWhenOn ? OPEN_BLOCK : b.solid);
+    }
+  });
+
+  test.skipIf(!hasGen)("pressing a switch flips every door on the floor", () => {
+    const game = tgGame();
+    game.overworld.setMap("POKEMON_MANSION_1F", 5, 5, "down");
+    const before = MANSION_1F.map((b) => blockAt(game, b.bx, b.by));
+    pressUpAt(game, "POKEMON_MANSION_1F", 2, 5);
+    expect(answer(game, true)).toBe(true);
+    expect(game.save.flags.EVENT_MANSION_SWITCH_ON).toBe(true);
+    MANSION_1F.forEach((b, i) => {
+      expect(blockAt(game, b.bx, b.by)).not.toBe(before[i]);
+      expect(blockAt(game, b.bx, b.by)).toBe(b.solidWhenOn ? b.solid : OPEN_BLOCK);
+    });
+  });
+
+  /**
+   * How many of a block's four cells can be stood on. A gate block ($2d, $54,
+   * $5f) walls off only half of its block — the wall runs across two of the
+   * four cells — so "shut" is fewer than 4, not 0.
+   */
+  function walkableCells(game: VoxelmonGame, b: { bx: number; by: number }): number {
+    let n = 0;
+    for (let dy = 0; dy < 2; dy++) {
+      for (let dx = 0; dx < 2; dx++) {
+        if (game.overworld.map.isWalkableCell(b.bx * 2 + dx, b.by * 2 + dy)) n += 1;
+      }
+    }
+    return n;
+  }
+
+  test.skipIf(!hasGen)("collision follows the doors, both ways", () => {
+    // The stamp only moves the geometry; without the def.blocks write the
+    // player walks through a door they can plainly see is shut.
+    const game = tgGame();
+    game.overworld.setMap("POKEMON_MANSION_1F", 5, 5, "down");
+    const wall = MANSION_1F.find((b) => !b.solidWhenOn)!;
+    expect(walkableCells(game, wall)).toBeLessThan(4);
+    pressUpAt(game, "POKEMON_MANSION_1F", 2, 5);
+    expect(answer(game, true)).toBe(true);
+    expect(walkableCells(game, wall)).toBe(4);
+    // and the switch shuts it again — markShut has to lift the override, or
+    // the door closes on screen and stays open underfoot
+    pressUpAt(game, "POKEMON_MANSION_1F", 2, 5);
+    expect(answer(game, true)).toBe(true);
+    expect(walkableCells(game, wall)).toBeLessThan(4);
+  });
+
+  test.skipIf(!hasGen)("a shut gym gate blocks the way through", () => {
+    const game = tgGame();
+    game.overworld.setMap("CINNABAR_GYM", 5, 5, "down");
+    for (const m of GYM_MACHINES) {
+      expect(walkableCells(game, m.gate)).toBeLessThan(4);
+    }
+  });
+
+  test.skipIf(!hasGen)("the switch toggles BACK off, doors and all", () => {
+    const game = tgGame();
+    pressUpAt(game, "POKEMON_MANSION_1F", 2, 5);
+    expect(answer(game, true)).toBe(true);
+    const on = MANSION_1F.map((b) => blockAt(game, b.bx, b.by));
+    pressUpAt(game, "POKEMON_MANSION_1F", 2, 5);
+    expect(answer(game, true)).toBe(true);
+    expect(game.save.flags.EVENT_MANSION_SWITCH_ON).toBe(false);
+    MANSION_1F.forEach((b, i) => {
+      expect(blockAt(game, b.bx, b.by)).not.toBe(on[i]);
+    });
+  });
+
+  test.skipIf(!hasGen)("saying NO leaves the switch alone", () => {
+    const game = tgGame();
+    pressUpAt(game, "POKEMON_MANSION_1F", 2, 5);
+    expect(answer(game, false)).toBe(true);
+    expect(game.save.flags.EVENT_MANSION_SWITCH_ON ?? false).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("one switch moves the OTHER floors too", () => {
+    // EVENT_MANSION_SWITCH_ON is shared; each floor re-reads it on entry.
+    const game = tgGame();
+    pressUpAt(game, "POKEMON_MANSION_1F", 2, 5);
+    expect(answer(game, true)).toBe(true);
+    game.overworld.setMap("POKEMON_MANSION_B1F", 5, 5, "down");
+    for (const b of MANSION_BLOCKS.POKEMON_MANSION_B1F!) {
+      expect(blockAt(game, b.bx, b.by)).toBe(b.solidWhenOn ? b.solid : OPEN_BLOCK);
+    }
+  });
+
+  test.skipIf(!hasGen)("a 3F hole drops you through the floor", () => {
+    const game = tgGame();
+    const h = MANSION_HOLES[0]!;
+    game.overworld.setMap("POKEMON_MANSION_3F", h.x, h.y, "down");
+    game.overworld.onStepComplete();
+    for (let i = 0; i < 200; i++) game.tick(0);
+    expect(game.overworld.map.id).toBe(h.map);
+    expect(game.overworld.player.cellX).toBe(h.dx);
+    expect(game.overworld.player.cellY).toBe(h.dy);
+  });
+
+  test.skipIf(!hasGen)("ordinary 3F floor does not drop you", () => {
+    const game = tgGame();
+    const h = MANSION_HOLES[0]!;
+    game.overworld.setMap("POKEMON_MANSION_3F", h.x, h.y + 2, "down");
+    game.overworld.onStepComplete();
+    for (let i = 0; i < 200; i++) game.tick(0);
+    expect(game.overworld.map.id).toBe("POKEMON_MANSION_3F");
+  });
+
+  test.skipIf(!hasGen)("the gym's six gates ship shut", () => {
+    const game = tgGame();
+    game.overworld.setMap("CINNABAR_GYM", 5, 5, "down");
+    for (const m of GYM_MACHINES) {
+      expect(blockAt(game, m.gate.bx, m.gate.by)).toBe(m.gate.solid);
+    }
+  });
+
+  test.skipIf(!hasGen)("a right answer opens that room's gate, and only that one", () => {
+    const game = tgGame();
+    const m = GYM_MACHINES[0]!;
+    pressUpAt(game, "CINNABAR_GYM", m.x, m.y);
+    expect(answer(game, m.yes)).toBe(true);
+    expect(game.save.flags[gymGateFlag(0)]).toBe(true);
+    expect(blockAt(game, m.gate.bx, m.gate.by)).toBe(OPEN_BLOCK);
+    const other = GYM_MACHINES[1]!;
+    expect(walkableCells(game, m.gate)).toBe(4);
+    expect(walkableCells(game, other.gate)).toBeLessThan(4);
+    expect(game.save.flags[gymGateFlag(1)] ?? false).toBe(false);
+    expect(blockAt(game, other.gate.bx, other.gate.by)).toBe(other.gate.solid);
+  });
+
+  test.skipIf(!hasGen)("a wrong answer leaves the gate shut", () => {
+    const game = tgGame();
+    const m = GYM_MACHINES[0]!;
+    pressUpAt(game, "CINNABAR_GYM", m.x, m.y);
+    expect(answer(game, !m.yes)).toBe(true);
+    expect(game.save.flags[gymGateFlag(0)] ?? false).toBe(false);
+    expect(blockAt(game, m.gate.bx, m.gate.by)).toBe(m.gate.solid);
+  });
+
+  test.skipIf(!hasGen)("the answers are not all the same button", () => {
+    // Mashing A through all six would otherwise pass the gym, which is the
+    // one thing the quiz exists to prevent.
+    const yeses = GYM_MACHINES.filter((m) => m.yes).length;
+    expect(yeses).toBeGreaterThan(0);
+    expect(yeses).toBeLessThan(GYM_MACHINES.length);
+  });
+
+  test.skipIf(!hasGen)("an opened gate is still open on re-entry", () => {
+    const game = tgGame();
+    const m = GYM_MACHINES[0]!;
+    pressUpAt(game, "CINNABAR_GYM", m.x, m.y);
+    expect(answer(game, m.yes)).toBe(true);
+    game.overworld.setMap("CINNABAR_ISLAND", 5, 5, "down");
+    game.overworld.setMap("CINNABAR_GYM", 5, 5, "down");
+    expect(blockAt(game, m.gate.bx, m.gate.by)).toBe(OPEN_BLOCK);
+  });
+
+  test.skipIf(!hasGen)("beating a guardian opens his gate without the quiz", () => {
+    const game = tgGame();
+    const m = GYM_MACHINES[2]!;
+    ((game.save as { defeatedTrainers?: Record<string, boolean> }).defeatedTrainers ??= {})[
+      gymGuardKey(m.npc)
+    ] = true;
+    game.overworld.setMap("CINNABAR_GYM", 5, 5, "down");
+    expect(blockAt(game, m.gate.bx, m.gate.by)).toBe(OPEN_BLOCK);
+  });
+
+  test("the six questions map to six distinct gates and six distinct guards", () => {
+    expect(GYM_MACHINES.length).toBe(6);
+    expect(new Set(GYM_MACHINES.map((m) => `${m.gate.bx},${m.gate.by}`)).size).toBe(6);
+    expect(new Set(GYM_MACHINES.map((m) => m.npc)).size).toBe(6);
+    expect(new Set(GYM_MACHINES.map((m) => `${m.x},${m.y}`)).size).toBe(6);
+    // wOpponentAfterWrongAnswer = gate index + 2, which is SUPER_NERD(i+1)
+    GYM_MACHINES.forEach((m, i) => expect(m.npc).toBe(i + 3));
+  });
+
+  test("the cook is told about exactly the blocks the runtime toggles", () => {
+    // If these two lists drift the geometry and the collision disagree.
+    for (const [mapId, rows] of Object.entries(MANSION_BLOCKS)) {
+      expect(toggleBlocksFor(mapId)).toEqual(rows);
+    }
+    expect(toggleBlocksFor("CINNABAR_GYM")).toEqual(GYM_MACHINES.map((m) => m.gate));
+    expect(toggleBlocksFor("PALLET_TOWN")).toEqual([]);
   });
 });
 

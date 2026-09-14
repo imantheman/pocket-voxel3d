@@ -207,7 +207,7 @@ export interface MapDef {
    * the same mechanism a cut tree uses, because nothing here can rewrite
    * baked chunk geometry at runtime.
    */
-  cardKeyDoorBlocks?: [number, number][];
+  stampBlocks?: [number, number][];
   source?: string;
 }
 

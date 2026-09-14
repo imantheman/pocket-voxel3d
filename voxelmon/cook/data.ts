@@ -56,7 +56,7 @@ export interface MapDef {
    * Blocks (bx,by) where cli.ts baked a CLOSED card-key door in, for mesh.ts
    * to lift out as per-cell stamps. The runtime hides them on unlock.
    */
-  cardKeyDoorBlocks?: [number, number][];
+  stampBlocks?: [number, number][];
 }
 
 export interface GfxEntry {

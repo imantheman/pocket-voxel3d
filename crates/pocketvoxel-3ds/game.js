@@ -4267,6 +4267,9 @@ class GameMap {
   markOpen(cx, cy) {
     this.openAt.add(cy * this.widthCells + cx);
   }
+  markShut(cx, cy) {
+    this.openAt.delete(cy * this.widthCells + cx);
+  }
   isOpenedDoor(cx, cy) {
     return this.openAt.has(cy * this.widthCells + cx);
   }
@@ -6197,6 +6200,57 @@ May I help you?`],
   ];
 }
 
+// voxelmon/game/world/toggleblocks.ts
+var OPEN_BLOCK = 14;
+var MANSION_BLOCKS = {
+  POKEMON_MANSION_1F: [
+    { bx: 12, by: 6, solid: 45, solidWhenOn: true },
+    { bx: 8, by: 3, solid: 45, solidWhenOn: false },
+    { bx: 10, by: 8, solid: 45, solidWhenOn: false },
+    { bx: 13, by: 13, solid: 45, solidWhenOn: false }
+  ],
+  POKEMON_MANSION_2F: [
+    { bx: 4, by: 2, solid: 95, solidWhenOn: true },
+    { bx: 9, by: 4, solid: 84, solidWhenOn: false },
+    { bx: 3, by: 11, solid: 95, solidWhenOn: false }
+  ],
+  POKEMON_MANSION_3F: [
+    { bx: 7, by: 2, solid: 95, solidWhenOn: true },
+    { bx: 7, by: 5, solid: 95, solidWhenOn: false }
+  ],
+  POKEMON_MANSION_B1F: [
+    { bx: 13, by: 8, solid: 45, solidWhenOn: true },
+    { bx: 6, by: 11, solid: 95, solidWhenOn: true },
+    { bx: 4, by: 3, solid: 95, solidWhenOn: false },
+    { bx: 8, by: 8, solid: 84, solidWhenOn: false }
+  ]
+};
+var MANSION_SWITCHES = {
+  POKEMON_MANSION_1F: { cells: [[2, 5]], text: "_PokemonMansion1F" },
+  POKEMON_MANSION_2F: { cells: [[2, 11]], text: "_PokemonMansion2F" },
+  POKEMON_MANSION_3F: { cells: [[10, 5]], text: "_PokemonMansion2F" },
+  POKEMON_MANSION_B1F: { cells: [[20, 3], [18, 25]], text: "_PokemonMansion2F" }
+};
+var MANSION_HOLES = [
+  { x: 16, y: 14, map: "POKEMON_MANSION_1F", dx: 16, dy: 14 },
+  { x: 17, y: 14, map: "POKEMON_MANSION_1F", dx: 16, dy: 14 },
+  { x: 19, y: 14, map: "POKEMON_MANSION_2F", dx: 18, dy: 14 }
+];
+var GYM_MACHINES = [
+  { x: 15, y: 7, yes: true, gate: { bx: 9, by: 3, solid: 84, solidWhenOn: false }, npc: 3 },
+  { x: 10, y: 1, yes: false, gate: { bx: 6, by: 3, solid: 84, solidWhenOn: false }, npc: 4 },
+  { x: 9, y: 7, yes: false, gate: { bx: 6, by: 6, solid: 84, solidWhenOn: false }, npc: 5 },
+  { x: 9, y: 13, yes: false, gate: { bx: 3, by: 8, solid: 95, solidWhenOn: false }, npc: 6 },
+  { x: 1, y: 13, yes: true, gate: { bx: 2, by: 6, solid: 84, solidWhenOn: false }, npc: 7 },
+  { x: 1, y: 7, yes: false, gate: { bx: 2, by: 3, solid: 84, solidWhenOn: false }, npc: 8 }
+];
+function gymGateFlag(i) {
+  return `EVENT_CINNABAR_GYM_GATE${i}_UNLOCKED`;
+}
+function gymGuardKey(npc) {
+  return `CINNABAR_GYM_obj_${npc}`;
+}
+
 // voxelmon/game/world/nurses.ts
 function isNurseClerk(textConst) {
   return textConst.endsWith("_NURSE");
@@ -7120,6 +7174,7 @@ class Overworld {
     this.map = new GameMap(def, tileset);
     this.applyGameCornerPoster(mapId, def);
     this.applyCardKeyDoors(mapId, def);
+    this.applyToggleBlocks(mapId, def);
     const cut = this.save?.cutTrees?.[mapId];
     if (cut) {
       for (const key of Object.keys(cut)) {
@@ -7439,6 +7494,10 @@ class Overworld {
     }
     if (this.tryCardKeyDoor(fx, fy))
       return;
+    if (this.tryMansionSwitch(fx, fy))
+      return;
+    if (this.tryGymQuiz(fx, fy))
+      return;
     if (pcTileAt(this.map.id, fx, fy, p.facing)) {
       const t = this.shell.data.text ?? {};
       this.shell.showText(t._TurnedOnPC1Text ?? `{PLAYER} turned on
@@ -7650,6 +7709,17 @@ GAME is over!`;
       this.startWarpTo(SAFARI_EXIT.map, SAFARI_EXIT.x, SAFARI_EXIT.y, SAFARI_EXIT.facing);
     });
   }
+  mansionHoleStep() {
+    if (this.runner.isRunning() || this.map?.id !== "POKEMON_MANSION_3F")
+      return false;
+    const p = this.player;
+    const h = MANSION_HOLES.find((r) => r.x === p.cellX && r.y === p.cellY);
+    if (!h)
+      return false;
+    this.shell.playOnce?.("Faint_Fall");
+    this.startWarpTo(h.map, h.dx, h.dy, p.facing);
+    return true;
+  }
   onStepComplete() {
     if (this.safariStep())
       return;
@@ -7657,6 +7727,8 @@ GAME is over!`;
     if (dc?.mon)
       dc.steps = (dc.steps ?? 0) + 1;
     this.syncLastMapRewrite();
+    if (this.mansionHoleStep())
+      return;
     if (!this.runner.isRunning()) {
       const label3 = this.map?.id ?? "";
       const script = MAP_SCRIPTS[label3];
@@ -7890,6 +7962,25 @@ GAME is over!`;
     (save.defeatedTrainers ??= {})[npc.id] = true;
     if (event && this.save.flags)
       this.save.flags[event] = true;
+    this.syncGymGates();
+  }
+  syncGymGates() {
+    if (this.map?.id !== "CINNABAR_GYM")
+      return;
+    const flags = this.save.flags;
+    if (!flags)
+      return;
+    let opened = false;
+    GYM_MACHINES.forEach((m, i) => {
+      const beaten = this.save.defeatedTrainers?.[gymGuardKey(m.npc)] === true;
+      if (beaten && flags[gymGateFlag(i)] !== true) {
+        flags[gymGateFlag(i)] = true;
+        opened = true;
+      }
+    });
+    if (opened)
+      this.shell.playOnce?.("Go_Inside");
+    this.applyToggleBlocks(this.map.id, this.map.def);
   }
   meetTrainerTheme(cls) {
     if (!cls || cls.includes("RIVAL"))
@@ -8000,6 +8091,92 @@ GAME is over!`;
   }
   refreshGameCornerPoster() {
     this.applyGameCornerPoster(String(this.map?.id ?? ""), this.map?.def);
+  }
+  applyToggleBlocks(mapId, def) {
+    const on = this.save?.flags?.EVENT_MANSION_SWITCH_ON === true;
+    for (const b of MANSION_BLOCKS[mapId] ?? []) {
+      this.setToggleBlock(def, b, b.solidWhenOn === on);
+    }
+    if (mapId === "CINNABAR_GYM") {
+      GYM_MACHINES.forEach((m, i) => {
+        this.setToggleBlock(def, m.gate, !this.gymGateOpen(i));
+      });
+    }
+  }
+  gymGateOpen(i) {
+    const f = this.save?.flags ?? {};
+    const beaten = this.save?.defeatedTrainers ?? {};
+    return f[gymGateFlag(i)] === true || beaten[gymGuardKey(GYM_MACHINES[i].npc)] === true;
+  }
+  setToggleBlock(def, b, solid) {
+    const i = b.by * def.width + b.bx;
+    if (Array.isArray(def.blocks) && i >= 0 && i < def.blocks.length) {
+      def.blocks[i] = solid ? b.solid : OPEN_BLOCK;
+    }
+    for (let dy = 0;dy < 2; dy++) {
+      for (let dx = 0;dx < 2; dx++) {
+        const cx = b.bx * 2 + dx;
+        const cy = b.by * 2 + dy;
+        this.stamp(def.index, cx, cy, solid);
+        if (solid)
+          this.map.markShut(cx, cy);
+        else
+          this.map.markOpen(cx, cy);
+      }
+    }
+  }
+  tryMansionSwitch(fx, fy) {
+    const cfg = MANSION_SWITCHES[this.map.id];
+    if (!cfg || this.player.facing !== "up")
+      return false;
+    if (!cfg.cells.some(([x, y]) => x === fx && y === fy))
+      return false;
+    const t = this.shell.data.text ?? {};
+    this.shell.showChoice(t[`${cfg.text}SwitchText`] ?? `A secret switch!
+Press it?`, (yes) => {
+      if (!yes) {
+        this.shell.showText(t[`${cfg.text}SwitchNotPressedText`] ?? "Not quite yet!");
+        return;
+      }
+      const f = this.save.flags;
+      f.EVENT_MANSION_SWITCH_ON = !f.EVENT_MANSION_SWITCH_ON;
+      this.applyToggleBlocks(this.map.id, this.map.def);
+      this.shell.playOnce?.("Go_Inside");
+      this.shell.showText(t[`${cfg.text}SwitchPressedText`] ?? "Who wouldn't?");
+    });
+    return true;
+  }
+  tryGymQuiz(fx, fy) {
+    if (this.map.id !== "CINNABAR_GYM" || this.player.facing !== "up")
+      return false;
+    const i = GYM_MACHINES.findIndex((m2) => m2.x === fx && m2.y === fy);
+    if (i < 0)
+      return false;
+    const m = GYM_MACHINES[i];
+    const t = this.shell.data.text ?? {};
+    this.shell.showText(t._CinnabarGymQuizIntroText ?? "POKéMON Quiz!", () => {
+      this.shell.showChoice(t[`_CinnabarQuizQuestionsText${i + 1}`] ?? "Well?", (yes) => {
+        if (yes === m.yes) {
+          this.shell.playOnce?.("Get_Item1");
+          this.shell.showText(t._CinnabarGymQuizCorrectText ?? `You're absolutely
+correct!`, () => {
+            if (!this.gymGateOpen(i)) {
+              this.save.flags[gymGateFlag(i)] = true;
+              this.shell.playOnce?.("Go_Inside");
+            }
+            this.applyToggleBlocks(this.map.id, this.map.def);
+          });
+          return;
+        }
+        this.shell.playOnce?.("Denied");
+        this.shell.showText(t._CinnabarGymQuizIncorrectText ?? "Sorry! Bad call!", () => {
+          const npc = this.findNpc(m.npc);
+          if (npc && !this.trainerDefeated(npc))
+            this.engageTrainer(npc, () => {});
+        });
+      });
+    });
+    return true;
   }
   cardKeyDoors(mapId) {
     const ck = this.shell.data.field?.cardKeyDoors;

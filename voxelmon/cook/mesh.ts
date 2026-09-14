@@ -629,7 +629,7 @@ export function runGeometry(map: GameMap, S: SGrid): MapGeometry {
   // Without this the barriers do not exist at all: every locked door in
   // Silph Co and the Rocket Hideout stands open from the first visit and the
   // CARD KEY has nothing to do.
-  for (const [bx, by] of map.def.cardKeyDoorBlocks ?? []) liftBlock(bx, by);
+  for (const [bx, by] of map.def.stampBlocks ?? []) liftBlock(bx, by);
 
   const stamps = new Map<string, Quad[]>();
   for (const [key, quads] of S.stampQuads) {

@@ -8,6 +8,7 @@
 // stats. Skips (exit 1, printed reason) when gen/ is absent.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { toggleBlocksFor } from "../game/world/toggleblocks.ts";
 import { dirname, join } from "node:path";
 
 import {
@@ -130,7 +131,23 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
           at.push([d.bx, d.by]);
         }
       }
-      if (at.length > 0) def.cardKeyDoorBlocks = at;
+      if (at.length > 0) def.stampBlocks = at;
+    }
+    // The Pokemon Mansion's switch doors and the Cinnabar Gym's quiz gates,
+    // for the same reason: pokered rewrites these blocks on every map load,
+    // so the extracted maps ship them all OPEN and neither barrier exists.
+    // Bake the SOLID block and let mesh.ts lift it out; the runtime shows or
+    // hides the stamp as the switch and the quiz say (world/toggleblocks.ts).
+    if (Array.isArray(def.blocks)) {
+      const at = def.stampBlocks ?? [];
+      for (const b of toggleBlocksFor(name)) {
+        const i = b.by * def.width + b.bx;
+        if (i >= 0 && i < def.blocks.length) {
+          def.blocks[i] = b.solid;
+          at.push([b.bx, b.by]);
+        }
+      }
+      if (at.length > 0) def.stampBlocks = at;
     }
     return new GameMap(def, tileset);
   });

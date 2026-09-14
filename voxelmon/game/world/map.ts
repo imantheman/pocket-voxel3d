@@ -245,6 +245,15 @@ export class GameMap {
     this.openAt.add(cy * this.widthCells + cx);
   }
 
+  /**
+   * The reverse: this cell is shut again. The Mansion switch closes doors as
+   * well as opening them, so the override has to be liftable — without this a
+   * door that opened once could never be walked into again.
+   */
+  markShut(cx: number, cy: number): void {
+    this.openAt.delete(cy * this.widthCells + cx);
+  }
+
   /** True when a card-key door at this cell has been unlocked. */
   isOpenedDoor(cx: number, cy: number): boolean {
     return this.openAt.has(cy * this.widthCells + cx);

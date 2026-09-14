@@ -26,6 +26,10 @@ import { talkScript, itemBallScript, itemBallFlag, TEXT_BILLSHOUSE_PC } from "./
 import { LAST_MAP_REWRITES, rewrittenLastMap } from "./lastmap.ts";
 import { martGreetScript } from "./marts.ts";
 import { bikeAllowed, type BikeRiding } from "./bike.ts";
+import {
+  GYM_MACHINES, gymGateFlag, gymGuardKey, MANSION_BLOCKS, MANSION_HOLES,
+  MANSION_SWITCHES, OPEN_BLOCK,
+} from "./toggleblocks.ts";
 import type { DaycareState } from "./daycare.ts";
 import {
   inSafariStepZone,
@@ -365,6 +369,7 @@ export class Overworld implements ScriptWorld {
     this.map = new GameMap(def, tileset);
     this.applyGameCornerPoster(mapId, def);
     this.applyCardKeyDoors(mapId, def);
+    this.applyToggleBlocks(mapId, def);
     // Cut trees stay cut across a reload/re-entry: reapply every stamp-off
     // this save recorded for THIS map (setMap is the single choke point, so
     // every entry path — warp, seam, boot — gets this for free, the same
@@ -821,6 +826,8 @@ export class Overworld implements ScriptWorld {
     // has the key (engine/events/card_key.asm runs before anything else on
     // the tile).
     if (this.tryCardKeyDoor(fx, fy)) return;
+    if (this.tryMansionSwitch(fx, fy)) return;
+    if (this.tryGymQuiz(fx, fy)) return;
     // Bill's PC: a hidden PC tile (OverworldController.lua:2019). Pressing A
     // facing it opens box storage.
     if (pcTileAt(this.map.id, fx, fy, p.facing)) {
@@ -1164,6 +1171,25 @@ export class Overworld implements ScriptWorld {
     });
   }
 
+  /**
+   * The Mansion 3F floor holes (PokemonMansion3FDefaultScript.holeCoords):
+   * step on one and you drop a floor. Not a warp tile — the block under it is
+   * ordinary floor — so it rides the land-trigger path, ahead of the map's own
+   * script, the way pokered's default script checks holeCoords first.
+   *
+   * These are not decoration: (16,14) and (17,14) are the ONLY way into the
+   * sealed 1F room the basement stairs sit in.
+   */
+  private mansionHoleStep(): boolean {
+    if (this.runner.isRunning() || this.map?.id !== "POKEMON_MANSION_3F") return false;
+    const p = this.player;
+    const h = MANSION_HOLES.find((r) => r.x === p.cellX && r.y === p.cellY);
+    if (!h) return false;
+    this.shell.playOnce?.("Faint_Fall");
+    this.startWarpTo(h.map, h.dx, h.dy, p.facing);
+    return true;
+  }
+
   onStepComplete(): void {
     // safari_game.asm runs BEFORE the land triggers and the warp check: when
     // the timer runs out the PA takes the step over entirely.
@@ -1180,6 +1206,7 @@ export class Overworld implements ScriptWorld {
     // onStep function hook (story cutscene logic) or a declarative coord
     // trigger. Fires for ANY map that registers one — the two _ONSTEP_HOST
     // entries are checked too so the original Pallet/Oak hooks still run.
+    if (this.mansionHoleStep()) return;
     if (!this.runner.isRunning()) {
       const label = (this as any).map?.id ?? "";
       const script = (MAP_SCRIPTS as any)[label] as MapScript | undefined;
@@ -1526,6 +1553,27 @@ export class Overworld implements ScriptWorld {
     const save = this.save as { defeatedTrainers?: Record<string, boolean> };
     (save.defeatedTrainers ??= {})[npc.id] = true;
     if (event && this.save.flags) this.save.flags[event] = true;
+    // CinnabarGymOpenGateScript: beating a room's guardian opens his gate,
+    // quiz or no quiz. The flag is set here so the gate survives him being
+    // gone, and the blocks are re-applied because no map load intervenes.
+    this.syncGymGates();
+  }
+
+  /** Open the gate of every guardian already beaten (CinnabarGymOpenGate). */
+  private syncGymGates(): void {
+    if (this.map?.id !== "CINNABAR_GYM") return;
+    const flags = this.save.flags;
+    if (!flags) return;
+    let opened = false;
+    GYM_MACHINES.forEach((m, i) => {
+      const beaten = this.save.defeatedTrainers?.[gymGuardKey(m.npc)] === true;
+      if (beaten && flags[gymGateFlag(i)] !== true) {
+        flags[gymGateFlag(i)] = true;
+        opened = true;
+      }
+    });
+    if (opened) this.shell.playOnce?.("Go_Inside");
+    this.applyToggleBlocks(this.map.id, this.map.def);
   }
 
   // Force a trainer battle by object (no sight line): MtMoonB2F's Super Nerd
@@ -1679,6 +1727,124 @@ export class Overworld implements ScriptWorld {
    * leaving and coming back. */
   refreshGameCornerPoster(): void {
     this.applyGameCornerPoster(String(this.map?.id ?? ""), this.map?.def);
+  }
+
+  /**
+   * The Mansion's switch doors and the Gym's quiz gates
+   * (world/toggleblocks.ts), set to whatever the save says.
+   *
+   * Runs on every map entry, which is what pokered's
+   * Mansion*CheckReplaceSwitchDoorBlocks and CinnabarGymGateCoords do, and
+   * again after a switch is pressed or a question answered.
+   */
+  applyToggleBlocks(mapId: string, def: any): void {
+    const on = this.save?.flags?.EVENT_MANSION_SWITCH_ON === true;
+    for (const b of MANSION_BLOCKS[mapId] ?? []) {
+      this.setToggleBlock(def, b, b.solidWhenOn === on);
+    }
+    if (mapId === "CINNABAR_GYM") {
+      GYM_MACHINES.forEach((m, i) => {
+        this.setToggleBlock(def, m.gate, !this.gymGateOpen(i));
+      });
+    }
+  }
+
+  /** A gate is open once its quiz was answered or its guardian beaten. */
+  private gymGateOpen(i: number): boolean {
+    const f = this.save?.flags ?? {};
+    const beaten = this.save?.defeatedTrainers ?? {};
+    return f[gymGateFlag(i)] === true || beaten[gymGuardKey(GYM_MACHINES[i]!.npc)] === true;
+  }
+
+  /**
+   * Put one toggleable block in a state: the collision block, and the baked
+   * geometry over it.
+   *
+   * Unlike a cut tree these go both ways -- the Mansion switch shuts doors as
+   * well as opening them -- and the stamp op takes a shown flag, so the
+   * geometry comes back as readily as it goes.
+   */
+  private setToggleBlock(def: any, b: any, solid: boolean): void {
+    const i = b.by * def.width + b.bx;
+    if (Array.isArray(def.blocks) && i >= 0 && i < def.blocks.length) {
+      def.blocks[i] = solid ? b.solid : OPEN_BLOCK;
+    }
+    for (let dy = 0; dy < 2; dy++) {
+      for (let dx = 0; dx < 2; dx++) {
+        const cx = b.bx * 2 + dx;
+        const cy = b.by * 2 + dy;
+        this.stamp(def.index, cx, cy, solid);
+        if (solid) this.map.markShut(cx, cy);
+        else this.map.markOpen(cx, cy);
+      }
+    }
+  }
+
+  /**
+   * A Mansion statue switch (data/events/hidden_events.asm): press it and
+   * every door on all four floors flips. Facing up, like all of them.
+   *
+   * Returns true when the press was spent here.
+   */
+  tryMansionSwitch(fx: number, fy: number): boolean {
+    const cfg = MANSION_SWITCHES[this.map.id];
+    if (!cfg || this.player.facing !== "up") return false;
+    if (!cfg.cells.some(([x, y]) => x === fx && y === fy)) return false;
+    const t = (this.shell.data as { text?: Record<string, string> }).text ?? {};
+    this.shell.showChoice(
+      t[`${cfg.text}SwitchText`] ?? "A secret switch!\nPress it?",
+      (yes) => {
+        if (!yes) {
+          this.shell.showText(t[`${cfg.text}SwitchNotPressedText`] ?? "Not quite yet!");
+          return;
+        }
+        const f = this.save.flags;
+        f.EVENT_MANSION_SWITCH_ON = !f.EVENT_MANSION_SWITCH_ON;
+        this.applyToggleBlocks(this.map.id, this.map.def);
+        this.shell.playOnce?.("Go_Inside");
+        this.shell.showText(t[`${cfg.text}SwitchPressedText`] ?? "Who wouldn't?");
+      },
+    );
+    return true;
+  }
+
+  /**
+   * A Cinnabar Gym quiz machine (cinnabar_gym_quiz.asm). Right answer opens
+   * that room's gate; wrong one sics the room's trainer on you.
+   */
+  tryGymQuiz(fx: number, fy: number): boolean {
+    if (this.map.id !== "CINNABAR_GYM" || this.player.facing !== "up") return false;
+    const i = GYM_MACHINES.findIndex((m) => m.x === fx && m.y === fy);
+    if (i < 0) return false;
+    const m = GYM_MACHINES[i]!;
+    const t = (this.shell.data as { text?: Record<string, string> }).text ?? {};
+    this.shell.showText(
+      t._CinnabarGymQuizIntroText ?? "POKéMON Quiz!",
+      () => {
+        this.shell.showChoice(t[`_CinnabarQuizQuestionsText${i + 1}`] ?? "Well?", (yes) => {
+          if (yes === m.yes) {
+            this.shell.playOnce?.("Get_Item1");
+            this.shell.showText(
+              t._CinnabarGymQuizCorrectText ?? "You're absolutely\ncorrect!",
+              () => {
+                if (!this.gymGateOpen(i)) {
+                  this.save.flags[gymGateFlag(i)] = true;
+                  this.shell.playOnce?.("Go_Inside");
+                }
+                this.applyToggleBlocks(this.map.id, this.map.def);
+              },
+            );
+            return;
+          }
+          this.shell.playOnce?.("Denied");
+          this.shell.showText(t._CinnabarGymQuizIncorrectText ?? "Sorry! Bad call!", () => {
+            const npc = this.findNpc(m.npc);
+            if (npc && !this.trainerDefeated(npc)) this.engageTrainer(npc, () => {});
+          });
+        });
+      },
+    );
+    return true;
   }
 
   /** This map's card-key doors, or an empty list. */
