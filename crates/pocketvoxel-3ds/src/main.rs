@@ -1043,49 +1043,39 @@ fn stick_as_dpad(dx: i16, dy: i16) -> i32 {
 }
 
 
-/// Open log sinks, held for the session.
+/// Log files, best first.
 ///
-/// Opened ONCE at boot rather than reopened per line, and never with
-/// `append`: the sdmc devoptab on hardware does not reliably honour O_APPEND,
-/// and the old code ignored the error, so a failed open meant no file was
-/// ever created and nothing said so. `File::create` is the same call family
-/// as the save write, which is known to work on the card.
-static mut LOG_SINKS: Vec<std::fs::File> = Vec::new();
-/// Where the log actually ended up, reported at boot.
-static mut LOG_WHERE: String = String::new();
-
-/// Candidate log paths, best first. The SD ROOT is included deliberately: a
-/// file there is impossible to miss, and if the game folder is not writable
-/// for any reason it is the one place that still is.
+/// pvlog.txt is FIRST and stays: it is the one that has actually been seen
+/// working on hardware. newlog.txt beside it is truncated at boot so it holds
+/// one run. The SD root copy is there because a file at the root cannot be
+/// missed, and if the game folder is not writable it is the one place that
+/// still is.
 const LOG_PATHS: [&str; 3] = [
+    "sdmc:/3ds/voxelmon/pvlog.txt",
     "sdmc:/3ds/voxelmon/newlog.txt",
     "sdmc:/newlog.txt",
-    "sdmc:/pocketvoxel-newlog.txt",
 ];
+/// Which of those are truncated at boot (the two "this run only" ones).
+const LOG_FRESH: [bool; 3] = [false, true, true];
 
-/// Open the log files for this run. Each is TRUNCATED, so whatever is in
-/// them is this run and only this run.
-#[allow(static_mut_refs)]
+/// Prepare the log files for this run.
 unsafe fn log_open() {
-    // The folder may not exist on a fresh card; create rather than fail.
+    // The folder may not exist on a fresh card, and create(true) will not
+    // make it.
     let _ = std::fs::create_dir_all("sdmc:/3ds/voxelmon");
-    let mut where_ = String::new();
-    for path in LOG_PATHS {
-        match std::fs::File::create(path) {
-            Ok(f) => {
-                LOG_SINKS.push(f);
-                if !where_.is_empty() {
-                    where_.push_str(", ");
-                }
-                where_.push_str(path);
-            }
-            Err(e) => {
-                // Console only; there is no log to write it to yet.
+    for (i, path) in LOG_PATHS.iter().enumerate() {
+        if LOG_FRESH[i] {
+            // Truncate by writing empty, the same call the save uses.
+            if let Err(e) = std::fs::write(path, "") {
                 println!("log: cannot write {} ({})", path, e);
             }
+        } else if std::fs::metadata(path).map(|m| m.len() > 512 * 1024).unwrap_or(false) {
+            // The accumulating one, trimmed only when it has grown large: a
+            // freeze is investigated by relaunching, and wiping it on boot
+            // would destroy the run being investigated.
+            let _ = std::fs::write(path, "");
         }
     }
-    LOG_WHERE = where_;
 }
 
 /// Diagnostics that survive to a log file. `println!` goes to the ctru
@@ -1094,18 +1084,20 @@ unsafe fn log_open() {
 /// picked up by emulators (Citra writes it to citra_log.txt as
 /// Debug_Emulated) and by 3dslink on hardware.
 ///
-/// Flushed on every line: the HOME button can take the process away without
-/// warning, and an unflushed tail is exactly the part worth having.
-#[allow(static_mut_refs)]
+/// Opened and CLOSED per line, deliberately. Holding the handle open for the
+/// session was tried and produced no file at all on hardware: HOME takes the
+/// process without running destructors, so a handle that is never closed
+/// leaves the directory entry uncommitted and the file simply is not there.
+/// Closing every line is what commits it. Called about once a second, so the
+/// cost is not worth the risk of losing the whole log.
 fn dlog(s: &str) {
     unsafe {
         svcOutputDebugString(s.as_ptr(), s.len() as i32);
     }
     use std::io::Write;
-    unsafe {
-        for f in LOG_SINKS.iter_mut() {
+    for path in LOG_PATHS {
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
             let _ = writeln!(f, "{}", s);
-            let _ = f.flush();
         }
     }
 }
@@ -1944,7 +1936,7 @@ fn main() {
 
     unsafe { log_open() };
     dlog("[pv] ---------------- boot ----------------");
-    dlog(&format!("[pv] log -> {}", unsafe { LOG_WHERE.clone() }));
+    dlog(&format!("[pv] log -> {}", LOG_PATHS.join(", ")));
     // Stamp the build so a log can never be mistaken for one from a
     // different binary — the Desktop copy lives in OneDrive, and a sync
     // lag once made a stale .3dsx look like a code path that "did nothing".
