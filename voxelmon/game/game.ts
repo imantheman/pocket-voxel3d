@@ -1026,6 +1026,33 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     this.overworld.camTurns = q;
   }
 
+  /** Whether the last save reached the card (ui/devmenu.ts reports it). */
+  lastSaveOk = true;
+
+  /**
+   * Write a file to the card and read it back, then say what happened -- on
+   * screen, where it cannot be missed.
+   *
+   * Chasing a silent write failure from outside the console is close to
+   * impossible: the game reads its maps happily, so the card looks fine, and
+   * every failed write was being swallowed. This is the one place that can
+   * answer it directly.
+   */
+  runWriteTest(): void {
+    const h = (this as { host?: VoxelHost }).host;
+    if (!h?.writeTest) {
+      this.showText("This build cannot\ntest card writes.");
+      return;
+    }
+    const ok = h.writeTest();
+    if (ok) {
+      this.showText("CARD WRITE OK\nwritetest.txt was\nwritten and read\nback.");
+      return;
+    }
+    const why = (h.writeErr?.() ?? "unknown").slice(0, 40);
+    this.showText(`CARD WRITE FAILED\n${why}`);
+  }
+
   /** ui/bikeshop.ts wants a sound for its own A/B, like every menu. */
   playSfx(name: string): void {
     this.audio.playSfx(name);
@@ -1447,8 +1474,20 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     p.y = ow.player?.cellY ?? p.y;
     p.facing = ow.player?.facing ?? p.facing;
     const h: any = (this as any).host ?? (this as any).hostApi ?? (globalThis as any).voxel;
-    if (h?.saveWrite) h.saveWrite(encodeSave(this.save));
-    else console.log("save: no host.saveWrite");
+    if (!h?.saveWrite) {
+      console.log("save: no host.saveWrite");
+      return;
+    }
+    // A save that silently took nothing is the worst outcome there is: the
+    // player is told it saved and finds out hours later. The host reports
+    // whether the card actually took it, and if it did not, say so here
+    // rather than anywhere the player will never look.
+    const ok = h.saveWrite(encodeSave(this.save));
+    this.lastSaveOk = ok !== false;
+    if (ok === false) {
+      const why = h.writeErr?.() ?? "";
+      this.showText(`SAVE FAILED!\nThe SD card did\nnot take it.${why ? `\n${why.slice(0, 24)}` : ""}`);
+    }
   }
 
   optionsMenu(): unknown {
@@ -1479,6 +1518,7 @@ export class VoxelmonGame implements OverworldShell, SceneView {
           }));
         }
         if (act === "candy") this.giveRareCandies();
+        if (act === "cardtest") this.runWriteTest();
       }),
     );
   }

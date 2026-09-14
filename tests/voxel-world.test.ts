@@ -709,7 +709,7 @@ describe("dev menu", () => {
     expect(game.stackKinds()).toEqual(["overworld", "startmenu", "devmenu"]);
 
     const dv = game.devMenu() as { entries: string[] };
-    expect(dv.entries).toEqual(["WARP", "RARE CANDY", "CANCEL"]);
+    expect(dv.entries).toEqual(["WARP", "RARE CANDY", "CARD TEST", "CANCEL"]);
     pick(game, dv.entries.indexOf("RARE CANDY"));
     expect(game.save.inventory.RARE_CANDY).toBe(99);
     dismissText(game);

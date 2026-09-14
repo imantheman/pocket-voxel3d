@@ -6,7 +6,10 @@
 
 /* Rust side */
 extern void voxel_log(const char *s, int len);
-extern void voxel_save_write(const char *s, int len);
+extern int voxel_save_write(const char *s, int len);
+extern int voxel_write_test(void);
+extern const uint8_t *voxel_write_err_ptr(void);
+extern uint32_t voxel_write_err_len(void);
 extern const uint8_t *voxel_save_ptr(void);
 extern uint32_t voxel_save_len(void);
 extern void voxel_op(uint32_t code, const int32_t *args, int n);
@@ -57,11 +60,25 @@ static JSValue vox_uitext(JSContext *ctx, JSValueConst t, int c, JSValueConst *v
 
 static JSValue vox_savewrite(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t;
-    if (c < 1) return JS_UNDEFINED;
+    if (c < 1) return JS_FALSE;
     size_t len = 0;
+    int ok = 0;
     const char *s = JS_ToCStringLen(ctx, &len, v[0]);
-    if (s) { voxel_save_write(s, (int)len); JS_FreeCString(ctx, s); }
-    return JS_UNDEFINED;
+    if (s) { ok = voxel_save_write(s, (int)len); JS_FreeCString(ctx, s); }
+    return ok ? JS_TRUE : JS_FALSE;
+}
+
+/* Write a file and read it back, so the game can say whether the card is
+   writable at all rather than leaving it to be guessed at from outside. */
+static JSValue vox_writetest(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;(void)c;(void)v;
+    return voxel_write_test() ? JS_TRUE : JS_FALSE;
+}
+
+static JSValue vox_writeerr(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;(void)c;(void)v;
+    if (voxel_write_err_len() == 0) return JS_UNDEFINED;
+    return JS_NewStringLen(ctx, (const char *)voxel_write_err_ptr(), voxel_write_err_len());
 }
 
 static JSValue vox_savedata(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
@@ -105,6 +122,8 @@ int qjs_register_voxel(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "stats",     JS_NewCFunction(ctx, vox_stats,     "stats", 0));
     JS_SetPropertyStr(ctx, o, "saveWrite", JS_NewCFunction(ctx, vox_savewrite, "saveWrite", 1));
     JS_SetPropertyStr(ctx, o, "saveData",  JS_NewCFunction(ctx, vox_savedata,  "saveData", 0));
+    JS_SetPropertyStr(ctx, o, "writeTest", JS_NewCFunction(ctx, vox_writetest, "writeTest", 0));
+    JS_SetPropertyStr(ctx, o, "writeErr",  JS_NewCFunction(ctx, vox_writeerr,  "writeErr", 0));
     JS_SetPropertyStr(ctx, o, "uiText",    JS_NewCFunction(ctx, vox_uitext,    "uiText", 3));
 
     add_num(ctx, o, "reset",     3, 0);

@@ -6,7 +6,7 @@
 // testing. Nothing in here is reachable in a normal playthrough.
 import type { GameState } from "../game.ts";
 
-export type DevAction = "warp" | "candy" | "exit";
+export type DevAction = "warp" | "candy" | "cardtest" | "exit";
 
 export interface DevMenuView {
   entries: string[];
@@ -17,6 +17,10 @@ export interface DevMenuView {
 const ENTRIES: [string, DevAction][] = [
   ["WARP", "warp"],
   ["RARE CANDY", "candy"],
+  // Writes a file to the SD card and reads it back, then says on screen
+  // whether it worked. A card that has gone read-only still reads its maps
+  // perfectly, so nothing else in the game gives it away.
+  ["CARD TEST", "cardtest"],
   ["CANCEL", "exit"],
 ];
 

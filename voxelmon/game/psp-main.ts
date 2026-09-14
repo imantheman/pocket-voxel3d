@@ -48,8 +48,10 @@ interface VoxelNative {
   emote(slot: number, kind: number): void;
   pic(slot: number, page: number, x: number, y: number, w: number, h: number): void;
   picHide(slot: number): void;
-  saveWrite(text: string): void;
+  saveWrite(text: string): boolean | void;
   saveData(): string | undefined;
+  writeTest?(): boolean;
+  writeErr?(): string | undefined;
   viewer?(): void;
   uiTile(x: number, y: number, tile: number): void;
   uiFill(x: number, y: number, w: number, h: number, tile: number): void;
@@ -100,12 +102,20 @@ const native = (globalThis as unknown as { voxel: VoxelNative }).voxel;
  * `frame(buttons)` returns (one guest turn per host tick).
  */
 class QuickJsHost implements VoxelHost {
-  saveWrite(text: string): void {
-    native.saveWrite(text);
+  saveWrite(text: string): boolean | void {
+    return native.saveWrite(text);
   }
 
   viewer(): void {
     (native as any).viewer?.();
+  }
+
+  writeTest(): boolean {
+    return native.writeTest ? native.writeTest() === true : true;
+  }
+
+  writeErr(): string | undefined {
+    return native.writeErr ? native.writeErr() : undefined;
   }
 
   saveData(): string | undefined {

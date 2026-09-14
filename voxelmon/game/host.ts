@@ -43,8 +43,13 @@ export interface VoxelHost {
   emote(slot: number, kind: number): void;
   pic(slot: number, page: number, x: number, y: number, w: number, h: number): void;
   picHide(slot: number): void;
-  saveWrite(text: string): void;
+  /** True when the bytes reached the card. False means nothing was saved. */
+  saveWrite(text: string): boolean | void;
   saveData(): string | undefined;
+  /** Write a file and read it back: is this card writable at all? */
+  writeTest?(): boolean;
+  /** Why the last write failed, from the host. */
+  writeErr?(): string | undefined;
   viewer?(): void;
   // ui (the GB tile layer; tile ids index the cooked UI atlas)
   uiTile(x: number, y: number, tile: number): void;

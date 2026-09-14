@@ -9718,6 +9718,7 @@ class StartMenuState {
 var ENTRIES = [
   ["WARP", "warp"],
   ["RARE CANDY", "candy"],
+  ["CARD TEST", "cardtest"],
   ["CANCEL", "exit"]
 ];
 
@@ -12815,6 +12816,26 @@ ${itemName}!`), onDone);
   setCamTurns(q) {
     this.overworld.camTurns = q;
   }
+  lastSaveOk = true;
+  runWriteTest() {
+    const h = this.host;
+    if (!h?.writeTest) {
+      this.showText(`This build cannot
+test card writes.`);
+      return;
+    }
+    const ok = h.writeTest();
+    if (ok) {
+      this.showText(`CARD WRITE OK
+writetest.txt was
+written and read
+back.`);
+      return;
+    }
+    const why = (h.writeErr?.() ?? "unknown").slice(0, 40);
+    this.showText(`CARD WRITE FAILED
+${why}`);
+  }
   playSfx(name) {
     this.audio.playSfx(name);
   }
@@ -13123,10 +13144,19 @@ the game!`, SAVE_DONE_HOLD, {
     p.y = ow.player?.cellY ?? p.y;
     p.facing = ow.player?.facing ?? p.facing;
     const h = this.host ?? this.hostApi ?? globalThis.voxel;
-    if (h?.saveWrite)
-      h.saveWrite(encodeSave(this.save));
-    else
+    if (!h?.saveWrite) {
       console.log("save: no host.saveWrite");
+      return;
+    }
+    const ok = h.saveWrite(encodeSave(this.save));
+    this.lastSaveOk = ok !== false;
+    if (ok === false) {
+      const why = h.writeErr?.() ?? "";
+      this.showText(`SAVE FAILED!
+The SD card did
+not take it.${why ? `
+${why.slice(0, 24)}` : ""}`);
+    }
   }
   optionsMenu() {
     const top = this.stack[this.stack.length - 1];
@@ -13146,6 +13176,8 @@ the game!`, SAVE_DONE_HOLD, {
       }
       if (act === "candy")
         this.giveRareCandies();
+      if (act === "cardtest")
+        this.runWriteTest();
     }));
   }
   giveRareCandies() {
@@ -13300,10 +13332,16 @@ var native = globalThis.voxel;
 
 class QuickJsHost {
   saveWrite(text) {
-    native.saveWrite(text);
+    return native.saveWrite(text);
   }
   viewer() {
     native.viewer?.();
+  }
+  writeTest() {
+    return native.writeTest ? native.writeTest() === true : true;
+  }
+  writeErr() {
+    return native.writeErr ? native.writeErr() : undefined;
   }
   saveData() {
     return native.saveData();

@@ -44,13 +44,74 @@ pub unsafe fn load_save_file() {
     println!("save: {} bytes", SAVE_BUF.len());
 }
 
+/// Why the last card write failed, for the game to show the player. Empty
+/// when it worked.
+///
+/// A write that fails silently is the worst case for a save: the player is
+/// told the game saved, the card took nothing, and they find out hours later.
+/// It also turns out to be the only practical way to tell from inside the
+/// game whether the SD card is writable at all.
+static mut LAST_WRITE_ERR: String = String::new();
+
+/// Write `b` to the card, remembering why if it does not take.
+#[allow(static_mut_refs)]
+unsafe fn card_write(path: &str, b: &[u8]) -> bool {
+    match std::fs::write(path, b) {
+        Ok(()) => true,
+        Err(e) => {
+            LAST_WRITE_ERR = format!("{}", e);
+            println!("write FAILED {}: {}", path, e);
+            false
+        }
+    }
+}
+
+/// Prove the card is writable by writing a file and reading it back.
+///
+/// Reading it back matters: a card can accept a write, report success, and
+/// still not have it -- which is exactly the failure being chased here.
 #[no_mangle]
-pub unsafe extern "C" fn voxel_save_write(s: *const u8, len: i32) {
-    if s.is_null() || len <= 0 { return; }
+#[allow(static_mut_refs)]
+pub unsafe extern "C" fn voxel_write_test() -> i32 {
+    const P: &str = "sdmc:/3ds/voxelmon/writetest.txt";
+    let want = b"pocketvoxel write test";
+    LAST_WRITE_ERR = String::new();
+    if !card_write(P, want) {
+        return 0;
+    }
+    match std::fs::read(P) {
+        Ok(got) if got == want => 1,
+        Ok(got) => {
+            LAST_WRITE_ERR = format!("read back {} of {} bytes", got.len(), want.len());
+            0
+        }
+        Err(e) => {
+            LAST_WRITE_ERR = format!("wrote but cannot read back: {}", e);
+            0
+        }
+    }
+}
+
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub unsafe extern "C" fn voxel_write_err_ptr() -> *const u8 { LAST_WRITE_ERR.as_ptr() }
+
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub unsafe extern "C" fn voxel_write_err_len() -> u32 { LAST_WRITE_ERR.len() as u32 }
+
+/// Returns 1 when the save reached the card, 0 when it did not.
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub unsafe extern "C" fn voxel_save_write(s: *const u8, len: i32) -> i32 {
+    if s.is_null() || len <= 0 { return 0; }
     let b = core::slice::from_raw_parts(s, len as usize);
-    match std::fs::write(SAVE_PATH, b) {
-        Ok(()) => println!("save: wrote {} bytes", b.len()),
-        Err(e) => println!("save FAILED: {}", e),
+    LAST_WRITE_ERR = String::new();
+    if card_write(SAVE_PATH, b) {
+        println!("save: wrote {} bytes", b.len());
+        1
+    } else {
+        0
     }
 }
 
