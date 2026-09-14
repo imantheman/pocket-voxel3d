@@ -160,6 +160,8 @@ export class GameMap {
   private cuttableAt = new Set<number>();
   /** Cells whose cut tree is already gone — see markCut. */
   private cutAt = new Set<number>();
+  /** Cells of an unlocked card-key door — see markOpen. */
+  private openAt = new Set<number>();
 
   // Map.lua:112 Map.new
   constructor(def: MapDef, tilesetDef: TilesetDef) {
@@ -215,7 +217,12 @@ export class GameMap {
     // cook bakes the prop into the map and HM Cut only hides its stamp — so
     // without this the tree vanishes and the cell stays solid, which reads
     // as the cut not having worked at all.
-    if (this.cutAt.has(cy * this.widthCells + cx)) return true;
+    const i = cy * this.widthCells + cx;
+    if (this.cutAt.has(i)) return true;
+    // An unlocked card-key door, for the same reason: the cook bakes the
+    // CLOSED door into the map and unlocking only hides its stamp, so
+    // without this the door vanishes and the doorway stays solid.
+    if (this.openAt.has(i)) return true;
     return this.walkable.has(this.cellTile(cx, cy));
   }
 
@@ -227,6 +234,20 @@ export class GameMap {
    */
   markCut(cx: number, cy: number): void {
     this.cutAt.add(cy * this.widthCells + cx);
+  }
+
+  /**
+   * Record that a card-key door here is unlocked and can be walked through:
+   * the live unlock and every re-entry afterwards, replayed through setMap
+   * from the door's own EVENT_*_UNLOCKED_DOOR* flag.
+   */
+  markOpen(cx: number, cy: number): void {
+    this.openAt.add(cy * this.widthCells + cx);
+  }
+
+  /** True when a card-key door at this cell has been unlocked. */
+  isOpenedDoor(cx: number, cy: number): boolean {
+    return this.openAt.has(cy * this.widthCells + cx);
   }
 
   // Map.lua:224 — off-map cells never count as tall grass (issue #217: the

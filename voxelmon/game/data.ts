@@ -200,6 +200,14 @@ export interface MapDef {
    * cook-time cut-tree props (voxelmon/cook/structures.ts cuttableCells),
    * each also cooked as an individually-toggleable STMP stamp. */
   cuttableCells?: [number, number][];
+  /**
+   * Block coords (bx,by) of this map's card-key doors, set by the cooker
+   * when it bakes the CLOSED door in (cook/cli.ts). Each is lifted out as
+   * per-cell stamps so the runtime can hide it once the door is unlocked —
+   * the same mechanism a cut tree uses, because nothing here can rewrite
+   * baked chunk geometry at runtime.
+   */
+  cardKeyDoorBlocks?: [number, number][];
   source?: string;
 }
 

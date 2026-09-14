@@ -3066,3 +3066,119 @@ describe("the end of Team Rocket", () => {
     expect(game.save.inventory.MASTER_BALL).toBe(1);
   });
 });
+
+describe("the card key doors", () => {
+  function doorGame(): VoxelmonGame {
+    const data = {
+      ...(romData as object),
+      cookedMaps: [
+        ...((romData as { cookedMaps?: string[] }).cookedMaps ?? []),
+        "SILPH_CO_3F", "ROCKET_HIDEOUT_B4F",
+      ],
+    };
+    const game = new VoxelmonGame(data as never, new MenuHost(), 1);
+    game.newGame();
+    game.closeToOverworld();
+    return game;
+  }
+
+  /** The doors the cook baked shut on a map. */
+  function doorsOf(mapId: string): { bx: number; by: number; event?: string; events?: string[] }[] {
+    const ck = (romData as { field?: { cardKeyDoors?: { closedDoors?: Record<string, unknown[]> } } })
+      .field?.cardKeyDoors?.closedDoors;
+    return ((ck?.[mapId] ?? []) as never[]);
+  }
+
+  /** Stand in front of a door's top-left cell and press A. */
+  function faceDoor(game: VoxelmonGame, mapId: string, d: { bx: number; by: number }): void {
+    const cx = d.bx * 2;
+    const cy = d.by * 2;
+    // one cell below the door, looking up at it
+    game.overworld.setMap(mapId, cx, cy + 2, "up");
+    game.overworld.interact();
+    for (let i = 0; i < 40; i++) game.tick(0);
+  }
+
+  function boxText(game: VoxelmonGame): string {
+    const src = game.uiBox() as { box?: { pages?: { lines: string[] }[] } } | null;
+    return (src?.box?.pages ?? []).map((pg) => pg.lines.join(" ")).join(" ");
+  }
+
+  test.skipIf(!hasGen)("the cook baked them shut, with stamps to lift", () => {
+    // Without this the barrier does not exist: the extracted map ships the
+    // doorway OPEN and the CARD KEY has nothing to do.
+    const doors = doorsOf("SILPH_CO_3F");
+    expect(doors.length).toBeGreaterThan(0);
+    const game = doorGame();
+    game.overworld.setMap("SILPH_CO_3F", 4, 8, "up");
+    const def = game.overworld.map.def as { blocks: number[]; width: number };
+    for (const d of doors) {
+      const got = def.blocks[d.by * def.width + d.bx];
+      expect(got).toBe((d as { block: number }).block); // the CLOSED block
+    }
+  });
+
+  test.skipIf(!hasGen)("a locked door with no key says so and stays shut", () => {
+    const game = doorGame();
+    const d = doorsOf("SILPH_CO_3F")[0]!;
+    faceDoor(game, "SILPH_CO_3F", d);
+    expect(boxText(game)).toContain("CARD KEY");
+    expect(game.save.flags[d.event!] ?? false).toBe(false);
+    expect(game.overworld.map.isOpenedDoor(d.bx * 2, d.by * 2)).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("the CARD KEY opens it, and it stays open", () => {
+    const game = doorGame();
+    Bag.add(game.save, "CARD_KEY", 1);
+    const d = doorsOf("SILPH_CO_3F")[0]!;
+    faceDoor(game, "SILPH_CO_3F", d);
+    expect(boxText(game)).toContain("opened the door");
+    expect(game.save.flags[d.event!]).toBe(true);
+    // all four cells of the block open up, not just the one faced
+    for (let dy = 0; dy < 2; dy++) {
+      for (let dx = 0; dx < 2; dx++) {
+        expect(game.overworld.map.isOpenedDoor(d.bx * 2 + dx, d.by * 2 + dy)).toBe(true);
+      }
+    }
+    // and walking out and back in leaves it open
+    game.overworld.setMap("SILPH_CO_3F", 1, 1, "down");
+    expect(game.overworld.map.isOpenedDoor(d.bx * 2, d.by * 2)).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("opening one door does not open its neighbour", () => {
+    const doors = doorsOf("SILPH_CO_3F");
+    if (doors.length < 2) return;
+    const game = doorGame();
+    Bag.add(game.save, "CARD_KEY", 1);
+    faceDoor(game, "SILPH_CO_3F", doors[0]!);
+    expect(game.save.flags[doors[0]!.event!]).toBe(true);
+    expect(game.save.flags[doors[1]!.event!] ?? false).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("the lift gate needs BOTH guards, not one", () => {
+    // Rocket Hideout B4F lists two events (CheckBothEventsSet), which is why
+    // the unlock test takes a list rather than a flag.
+    const d = doorsOf("ROCKET_HIDEOUT_B4F")[0]!;
+    expect((d.events ?? []).length).toBe(2);
+    const game = doorGame();
+    game.save.flags[d.events![0]!] = true;
+    game.overworld.setMap("ROCKET_HIDEOUT_B4F", 1, 1, "down");
+    expect(game.overworld.map.isOpenedDoor(d.bx * 2, d.by * 2)).toBe(false);
+
+    const both = doorGame();
+    both.save.flags[d.events![0]!] = true;
+    both.save.flags[d.events![1]!] = true;
+    both.overworld.setMap("ROCKET_HIDEOUT_B4F", 1, 1, "down");
+    expect(both.overworld.map.isOpenedDoor(d.bx * 2, d.by * 2)).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("an already-open door is not a door any more", () => {
+    const game = doorGame();
+    const d = doorsOf("SILPH_CO_3F")[0]!;
+    game.save.flags[d.event!] = true;
+    Bag.add(game.save, "CARD_KEY", 1);
+    faceDoor(game, "SILPH_CO_3F", d);
+    // no "Bingo!" a second time: the press falls through to the tile
+    expect(boxText(game)).not.toContain("opened the door");
+  });
+});

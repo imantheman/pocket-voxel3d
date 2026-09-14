@@ -358,6 +358,7 @@ export class Overworld implements ScriptWorld {
     if (!tileset) throw new Error(`unknown tileset ${def.tileset} for ${mapId}`);
     this.map = new GameMap(def, tileset);
     this.applyGameCornerPoster(mapId, def);
+    this.applyCardKeyDoors(mapId, def);
     // Cut trees stay cut across a reload/re-entry: reapply every stamp-off
     // this save recorded for THIS map (setMap is the single choke point, so
     // every entry path — warp, seam, boot — gets this for free, the same
@@ -810,6 +811,10 @@ export class Overworld implements ScriptWorld {
       this.showMapText(TEXT_BILLSHOUSE_PC);
       return;
     }
+    // A locked card-key door swallows the press whether or not the player
+    // has the key (engine/events/card_key.asm runs before anything else on
+    // the tile).
+    if (this.tryCardKeyDoor(fx, fy)) return;
     // Bill's PC: a hidden PC tile (OverworldController.lua:2019). Pressing A
     // facing it opens box storage.
     if (pcTileAt(this.map.id, fx, fy, p.facing)) {
@@ -1663,6 +1668,98 @@ export class Overworld implements ScriptWorld {
    * leaving and coming back. */
   refreshGameCornerPoster(): void {
     this.applyGameCornerPoster(String(this.map?.id ?? ""), this.map?.def);
+  }
+
+  /** This map's card-key doors, or an empty list. */
+  private cardKeyDoors(mapId: string): any[] {
+    const ck = (this.shell.data as any).field?.cardKeyDoors;
+    return ck?.closedDoors?.[mapId] ?? [];
+  }
+
+  /** A door is open once every event it lists is set. */
+  private doorUnlocked(door: any): boolean {
+    const f = this.save?.flags ?? {};
+    const events: string[] = door.events ?? (door.event ? [door.event] : []);
+    return events.length > 0 && events.every((e) => f[e] === true);
+  }
+
+  /**
+   * stampClosedDoors (OverworldController.lua:250): the card-key doors this
+   * floor still has shut stay shut, and the ones already opened come off.
+   *
+   * The cook bakes the CLOSED door in and lifts it out as per-cell stamps
+   * (cook/cli.ts + cook/mesh.ts), so an unlocked door is hidden the way a cut
+   * tree is and the cells under it are opened up. Nothing has to be done for
+   * a door that is still shut: the baked block is already solid and its
+   * geometry is already there.
+   *
+   * Rocket Hideout B4F's lift gate lists TWO events -- both guards -- which
+   * is why this takes a list rather than a flag.
+   */
+  private applyCardKeyDoors(mapId: string, def: any): void {
+    for (const door of this.cardKeyDoors(mapId)) {
+      if (this.doorUnlocked(door)) {
+        this.openDoorCells(def, door);
+        continue;
+      }
+      // Shut, and SAID to be shut here rather than trusted to be: the cook
+      // bakes the closed door into the pak's geometry, but gamedata.json is
+      // written from the imported map data, where the doorway is still the
+      // open block it ships as. Without this the door is drawn shut and
+      // walked straight through.
+      const i = door.by * def.width + door.bx;
+      if (Array.isArray(def.blocks) && i >= 0 && i < def.blocks.length) {
+        def.blocks[i] = door.block;
+      }
+    }
+  }
+
+  /** Take one door off the map: the geometry, the block and the collision. */
+  private openDoorCells(def: any, door: any): void {
+    const i = door.by * def.width + door.bx;
+    if (Array.isArray(def.blocks) && i >= 0 && i < def.blocks.length) {
+      def.blocks[i] = door.open;
+    }
+    // A block is two cells square, hence the 2x2 from its top-left cell.
+    for (let dy = 0; dy < 2; dy++) {
+      for (let dx = 0; dx < 2; dx++) {
+        const cx = door.bx * 2 + dx;
+        const cy = door.by * 2 + dy;
+        this.stamp(def.index, cx, cy, false);
+        this.map.markOpen(cx, cy);
+      }
+    }
+  }
+
+  /**
+   * PrintCardKeyText (engine/events/card_key.asm): facing a locked door with
+   * the CARD KEY opens it, without it says so.
+   *
+   * Returns true when the press was spent on a door, so interact() stops
+   * rather than falling through to whatever else is on that tile.
+   */
+  tryCardKeyDoor(fx: number, fy: number): boolean {
+    const mapId = this.map.id;
+    const door = this.cardKeyDoors(mapId).find((d: any) => {
+      // the four cells of the door's block
+      const cx = d.bx * 2;
+      const cy = d.by * 2;
+      return fx >= cx && fx <= cx + 1 && fy >= cy && fy <= cy + 1;
+    });
+    if (!door || this.doorUnlocked(door)) return false;
+    const t = (this.shell.data as { text?: Record<string, string> }).text ?? {};
+    if ((this.save.inventory?.CARD_KEY ?? 0) <= 0) {
+      this.shell.showText(t._CardKeyFailText ?? "Darn! It needs a\nCARD KEY!");
+      return true;
+    }
+    const events: string[] = door.events ?? (door.event ? [door.event] : []);
+    for (const e of events) this.save.flags[e] = true;
+    this.openDoorCells(this.map.def, door);
+    this.shell.playOnce?.("Go_Inside");
+    this.shell.showText(
+      (t._CardKeySuccessText1 ?? "Bingo!") + (t._CardKeySuccessText2 ?? "\nThe CARD KEY\nopened the door!"),
+    );
+    return true;
   }
 
   private applyGameCornerPoster(mapId: string, def: any): void {

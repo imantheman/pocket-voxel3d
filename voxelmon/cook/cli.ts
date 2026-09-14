@@ -107,6 +107,31 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
       const i = 2 * def.width + 8; // field.gameCornerPoster block (8,2)
       if (i < def.blocks.length) def.blocks[i] = 42;
     }
+    // Card-key doors, for the same reason and by the same route. The
+    // extracted maps ship these doorways OPEN, because pokered closes them
+    // at load (stampClosedDoors) and opens them again per unlock event, so
+    // cooking the data as-is bakes an open door and the barrier never exists
+    // -- every locked door in Silph Co and the Rocket Hideout stands open
+    // from the first visit and the CARD KEY has nothing to do.
+    //
+    // Bake the CLOSED block; mesh.ts lifts it out as per-cell stamps and
+    // overworld.ts applyCardKeyDoors hides them once the door is unlocked.
+    // Here rather than inside runGeometry for the reason above: analyseMap
+    // reads the blocks first and a later override changes nothing.
+    const closed = (gen.field.cardKeyDoors as
+      { closedDoors?: Record<string, { bx: number; by: number; block: number }[]> }
+      | undefined)?.closedDoors?.[name];
+    if (closed && Array.isArray(def.blocks)) {
+      const at: [number, number][] = [];
+      for (const d of closed) {
+        const i = d.by * def.width + d.bx;
+        if (i >= 0 && i < def.blocks.length) {
+          def.blocks[i] = d.block;
+          at.push([d.bx, d.by]);
+        }
+      }
+      if (at.length > 0) def.cardKeyDoorBlocks = at;
+    }
     return new GameMap(def, tileset);
   });
 

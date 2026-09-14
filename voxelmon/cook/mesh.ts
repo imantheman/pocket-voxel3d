@@ -593,9 +593,13 @@ export function runGeometry(map: GameMap, S: SGrid): MapGeometry {
   // What gets lifted out is the WALL, not the staircase — see the block
   // override at the top of this function for why that is not what the map
   // data says.
-  if (map.def.id === "GAME_CORNER") {
-    const PX0 = 256, PX1 = 288;
-    const PZ0 = 64, PZ1 = 96;
+  /**
+   * Lift one block's worth of terrain out into per-cell stamps, so the
+   * runtime can make it disappear. A block is 2 cells is 32 world px.
+   */
+  const liftBlock = (bx: number, by: number): void => {
+    const PX0 = bx * 32, PX1 = PX0 + 32;
+    const PZ0 = by * 32, PZ1 = PZ0 + 32;
     const kept: Quad[] = [];
     for (const q of terrain) {
       const cx = (q.c[0][0] + q.c[1][0] + q.c[2][0] + q.c[3][0]) / 4;
@@ -611,7 +615,21 @@ export function runGeometry(map: GameMap, S: SGrid): MapGeometry {
     }
     terrain.length = 0;
     terrain.push(...kept);
-  }
+  };
+
+  if (map.def.id === "GAME_CORNER") liftBlock(8, 2);
+
+  // Card-key doors (engine/events/card_key.asm). The extracted maps ship
+  // these doorways OPEN -- pokered closes them at load and opens them again
+  // per unlock event -- so cli.ts bakes the CLOSED block in before the mesh
+  // is built and the closed door is lifted out here. The runtime then hides
+  // it the moment the door is unlocked, exactly as a cut tree comes off, and
+  // collision is handled separately in overworld.ts applyCardKeyDoors.
+  //
+  // Without this the barriers do not exist at all: every locked door in
+  // Silph Co and the Rocket Hideout stands open from the first visit and the
+  // CARD KEY has nothing to do.
+  for (const [bx, by] of map.def.cardKeyDoorBlocks ?? []) liftBlock(bx, by);
 
   const stamps = new Map<string, Quad[]>();
   for (const [key, quads] of S.stampQuads) {

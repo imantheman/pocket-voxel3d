@@ -4211,6 +4211,7 @@ class GameMap {
   signAt = new Map;
   cuttableAt = new Set;
   cutAt = new Set;
+  openAt = new Set;
   constructor(def, tilesetDef) {
     this.def = def;
     this.tileset = tilesetDef;
@@ -4253,12 +4254,21 @@ class GameMap {
     return cx >= 0 && cy >= 0 && cx < this.widthCells && cy < this.heightCells;
   }
   isWalkableCell(cx, cy) {
-    if (this.cutAt.has(cy * this.widthCells + cx))
+    const i = cy * this.widthCells + cx;
+    if (this.cutAt.has(i))
+      return true;
+    if (this.openAt.has(i))
       return true;
     return this.walkable.has(this.cellTile(cx, cy));
   }
   markCut(cx, cy) {
     this.cutAt.add(cy * this.widthCells + cx);
+  }
+  markOpen(cx, cy) {
+    this.openAt.add(cy * this.widthCells + cx);
+  }
+  isOpenedDoor(cx, cy) {
+    return this.openAt.has(cy * this.widthCells + cx);
   }
   isGrassCell(cx, cy) {
     if (!this.inBounds(cx, cy))
@@ -7074,6 +7084,7 @@ class Overworld {
       throw new Error(`unknown tileset ${def.tileset} for ${mapId}`);
     this.map = new GameMap(def, tileset);
     this.applyGameCornerPoster(mapId, def);
+    this.applyCardKeyDoors(mapId, def);
     const cut = this.save?.cutTrees?.[mapId];
     if (cut) {
       for (const key of Object.keys(cut)) {
@@ -7391,6 +7402,8 @@ class Overworld {
       this.showMapText(TEXT_BILLSHOUSE_PC);
       return;
     }
+    if (this.tryCardKeyDoor(fx, fy))
+      return;
     if (pcTileAt(this.map.id, fx, fy, p.facing)) {
       this.shell.openBox?.();
       return;
@@ -7948,6 +7961,66 @@ GAME is over!`;
   }
   refreshGameCornerPoster() {
     this.applyGameCornerPoster(String(this.map?.id ?? ""), this.map?.def);
+  }
+  cardKeyDoors(mapId) {
+    const ck = this.shell.data.field?.cardKeyDoors;
+    return ck?.closedDoors?.[mapId] ?? [];
+  }
+  doorUnlocked(door) {
+    const f = this.save?.flags ?? {};
+    const events = door.events ?? (door.event ? [door.event] : []);
+    return events.length > 0 && events.every((e) => f[e] === true);
+  }
+  applyCardKeyDoors(mapId, def) {
+    for (const door of this.cardKeyDoors(mapId)) {
+      if (this.doorUnlocked(door)) {
+        this.openDoorCells(def, door);
+        continue;
+      }
+      const i = door.by * def.width + door.bx;
+      if (Array.isArray(def.blocks) && i >= 0 && i < def.blocks.length) {
+        def.blocks[i] = door.block;
+      }
+    }
+  }
+  openDoorCells(def, door) {
+    const i = door.by * def.width + door.bx;
+    if (Array.isArray(def.blocks) && i >= 0 && i < def.blocks.length) {
+      def.blocks[i] = door.open;
+    }
+    for (let dy = 0;dy < 2; dy++) {
+      for (let dx = 0;dx < 2; dx++) {
+        const cx = door.bx * 2 + dx;
+        const cy = door.by * 2 + dy;
+        this.stamp(def.index, cx, cy, false);
+        this.map.markOpen(cx, cy);
+      }
+    }
+  }
+  tryCardKeyDoor(fx, fy) {
+    const mapId = this.map.id;
+    const door = this.cardKeyDoors(mapId).find((d) => {
+      const cx = d.bx * 2;
+      const cy = d.by * 2;
+      return fx >= cx && fx <= cx + 1 && fy >= cy && fy <= cy + 1;
+    });
+    if (!door || this.doorUnlocked(door))
+      return false;
+    const t = this.shell.data.text ?? {};
+    if ((this.save.inventory?.CARD_KEY ?? 0) <= 0) {
+      this.shell.showText(t._CardKeyFailText ?? `Darn! It needs a
+CARD KEY!`);
+      return true;
+    }
+    const events = door.events ?? (door.event ? [door.event] : []);
+    for (const e of events)
+      this.save.flags[e] = true;
+    this.openDoorCells(this.map.def, door);
+    this.shell.playOnce?.("Go_Inside");
+    this.shell.showText((t._CardKeySuccessText1 ?? "Bingo!") + (t._CardKeySuccessText2 ?? `
+The CARD KEY
+opened the door!`));
+    return true;
   }
   applyGameCornerPoster(mapId, def) {
     const p = this.shell.data.field?.gameCornerPoster;

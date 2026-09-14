@@ -50,6 +50,13 @@ export interface MapDef {
   signs?: unknown[];
   objects?: unknown[];
   outdoor?: boolean;
+  /** Cells carrying a cook-time cut-tree prop (cook/structures.ts). */
+  cuttableCells?: [number, number][];
+  /**
+   * Blocks (bx,by) where cli.ts baked a CLOSED card-key door in, for mesh.ts
+   * to lift out as per-cell stamps. The runtime hides them on unlock.
+   */
+  cardKeyDoorBlocks?: [number, number][];
 }
 
 export interface GfxEntry {
