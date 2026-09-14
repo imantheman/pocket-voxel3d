@@ -15,7 +15,10 @@ import type { EncounterDef, MapObject, VoxelmonData } from "../data.ts";
 import type { Rng } from "../rng.ts";
 import { roll as encounterRoll } from "../rules/encounter.ts";
 import { WARP_FADE_OUT } from "../rules/timing.ts";
-import { canMove, occupied, target, type Dir, type Mover, type TilePairs } from "./collision.ts";
+import {
+  canMove, occupied, rotateDir, target,
+  type Dir, type Mover, type TilePairs,
+} from "./collision.ts";
 import { defPassable, GameMap, isOutside } from "./map.ts";
 import { NPC } from "./npc.ts";
 import { Player } from "./player.ts";
@@ -314,6 +317,13 @@ export class Overworld implements ScriptWorld {
     return this.shell.data;
   }
 
+  /**
+   * Quarter turns the player has swung the camera (host: cam::quarter_turns,
+   * sent in the button word). The overworld walk is rotated by it so a press
+   * keeps meaning what it looks like on screen; nothing else is.
+   */
+  camTurns = 0;
+
   get save(): SaveSlice {
     return this.shell.save;
   }
@@ -560,8 +570,12 @@ export class Overworld implements ScriptWorld {
       (this as any).shell?.openStartMenu?.();
       return;
     }
-    for (const dir of ["up", "down", "left", "right"] as Dir[]) {
-      if (!input.isDown(dir)) continue;
+    for (const screenDir of ["up", "down", "left", "right"] as Dir[]) {
+      if (!input.isDown(screenDir)) continue;
+      // The press is screen-relative; the world is not. With the camera
+      // swung round behind the player, "up" still has to mean away from the
+      // camera or walking becomes a guessing game.
+      const dir = rotateDir(screenDir, this.camTurns);
       if (!this.player.moving && this.player.facing === dir) {
         if (this.checkEdgeExit(dir)) return;
         if (this.checkLedgeHop(dir)) return;

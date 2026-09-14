@@ -142,6 +142,16 @@ pub struct Scene {
     pub pitch_t: u32,
     /// Global day tint, ABGR (0xffffffff = neutral).
     pub tint: u32,
+    /// The player's own camera swing, radians, on top of whatever camera the
+    /// scene asks for: yaw around the focus, and elevation.
+    ///
+    /// Here rather than in the host so ONE camera carries it. The billboard
+    /// lean, the card facing, the frustum and the projection all read the
+    /// camera; a host that swung only the matrix would leave every one of
+    /// them oriented to a camera that is no longer being drawn from -- cards
+    /// edge-on to the viewer, chunks culled out of a view they are inside.
+    pub cam_yaw_off: f32,
+    pub cam_pitch_off: f32,
     /// Selected SGB palette: index into the pak's SGB set (VPAL[4 + i]) for
     /// the non-ui atlas kinds; -1 = the GB grayscale ramp (voxel-spec.ts
     /// `palette`).
@@ -229,6 +239,8 @@ impl Scene {
             pitch_from_deg: PITCH_RUNGS[0],
             pitch_t: PITCH_TWEEN_TICKS, // settled at rung 0
             tint: 0xffff_ffff,
+            cam_yaw_off: 0.0,
+            cam_pitch_off: 0.0,
             palette: -1,
             stamps_off: Vec::new(),
             field_fx: None,

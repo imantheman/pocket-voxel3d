@@ -1018,6 +1018,14 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     );
   }
 
+  /**
+   * How far the player has swung the camera, in quarter turns, from the
+   * host's button word. Only the overworld walk uses it.
+   */
+  setCamTurns(q: number): void {
+    this.overworld.camTurns = q;
+  }
+
   /** ui/bikeshop.ts wants a sound for its own A/B, like every menu. */
   playSfx(name: string): void {
     this.audio.playSfx(name);

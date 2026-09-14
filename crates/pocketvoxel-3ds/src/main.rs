@@ -1042,32 +1042,6 @@ fn stick_as_dpad(dx: i16, dy: i16) -> i32 {
     }
 }
 
-/// Swing the eye around the focus by the player's camera offsets.
-///
-/// Zero offsets return the eye untouched, bit for bit -- the camera the game
-/// asks for is the default, and the C-stick only ever departs from it.
-fn orbit_eye(
-    e: (f32, f32, f32),
-    f: (f32, f32, f32),
-    dyaw: f32,
-    dpitch: f32,
-) -> (f32, f32, f32) {
-    if dyaw == 0.0 && dpitch == 0.0 {
-        return e;
-    }
-    let (vx, vy, vz) = (e.0 - f.0, e.1 - f.1, e.2 - f.2);
-    let r = (vx * vx + vy * vy + vz * vz).sqrt();
-    if r < 0.001 {
-        return e;
-    }
-    let horiz = (vx * vx + vz * vz).sqrt();
-    let yaw = vz.atan2(vx) + dyaw;
-    // Clamped off both ends: level with the ground shows the world edge-on
-    // and straight down degenerates the up vector.
-    let pitch = (vy.atan2(horiz) + dpitch).clamp(0.12, 1.45);
-    let ch = r * pitch.cos();
-    (f.0 + ch * yaw.cos(), f.1 + r * pitch.sin(), f.2 + ch * yaw.sin())
-}
 
 /// Diagnostics that survive to a log file. `println!` goes to the ctru
 /// Console, which this build hands to the Kanto Gear right after boot, so
@@ -2422,6 +2396,14 @@ fn main() {
                 if d.contains(KeyPad::L) { b |= 1 << 27; }
                 if d.contains(KeyPad::R) { b |= 1 << 26; }
             }
+            // Bits 24-25: how far the view has been swung, in quarter turns.
+            // The guest rotates its WALK by this and nothing else -- a menu
+            // is drawn flat on the screen and its cursor has to keep moving
+            // the way the player pushed.
+            {
+                let q = pocketvoxel_core::cam::quarter_turns(cam_yaw_off);
+                b |= (q & 3) << 24;
+            }
             unsafe {
                 let mut e2 = [0u8; 256];
                 let mut failed = false;
@@ -2887,11 +2869,19 @@ fn main() {
             if k.contains(KeyPad::CSTICK_RIGHT) { cam_yaw_off += 0.035; }
             if k.contains(KeyPad::CSTICK_UP)    { cam_pitch_off += 0.025; }
             if k.contains(KeyPad::CSTICK_DOWN)  { cam_pitch_off -= 0.025; }
-            cam_pitch_off = cam_pitch_off.clamp(-0.7, 1.0);
+            cam_pitch_off = cam_pitch_off.clamp(-1.4, 1.4);
             if k.contains(KeyPad::ZL) && k.contains(KeyPad::ZR) {
                 cam_yaw_off = 0.0;
                 cam_pitch_off = 0.0;
             }
+            // Handed to the scene rather than applied here: draw::camera
+            // swings the ONE camera everything reads, so the billboard lean,
+            // the card facing, the frustum and the projection cannot end up
+            // describing different eyes. Battles included -- the rig is a
+            // camera like any other, and the arena is worth walking around.
+            let sc = unsafe { voxel::scene() };
+            sc.cam_yaw_off = cam_yaw_off;
+            sc.cam_pitch_off = cam_pitch_off;
         }
         if !guest_drive {
         if k.contains(KeyPad::DPAD_LEFT)  { yaw -= 0.04; }
@@ -2972,22 +2962,11 @@ fn main() {
                 let sl = unsafe { &voxel::scene().maps[0] };
                 if sl.shown { (sl.ox as f32, sl.oy as f32) } else { (0.0, 0.0) }
             };
+            // Already swung: draw::camera applied the scene's offsets, so
+            // this is the eye actually being drawn from, and the cull can be
+            // handed the very same one.
+            let e = list.cam.eye;
             let f = list.cam.focus;
-            let e0 = list.cam.eye;
-            // The eye the player has swung to, not the one the game asked
-            // for -- and the cull is told the same one, or it would keep
-            // culling against a camera that is no longer being drawn from.
-            // Not during a battle: that camera is staged around the arena
-            // (computeStaging), and swinging it is as likely to put the
-            // player behind a wall as to show them anything.
-            let fighting = unsafe { voxel::scene() }.battle.active;
-            let (ex, ey, ez) = orbit_eye(
-                (e0.x, e0.y, e0.z),
-                (f.x, f.y, f.z),
-                if fighting { 0.0 } else { cam_yaw_off },
-                if fighting { 0.0 } else { cam_pitch_off },
-            );
-            let e = pocketvoxel_core::math::Vec3 { x: ex, y: ey, z: ez };
             guest_eye_focus = Some((FVec3::new(e.x, e.y, e.z), FVec3::new(f.x, f.y, f.z)));
             // A top-down eye makes up=(0,1,0) degenerate (cross product -> 0),
             // which yields a garbage matrix and an empty screen. Use -Z as up

@@ -264,16 +264,37 @@ pub fn modulate_rgb(c: u32, tint: u32) -> u32 {
     (c & 0xff00_0000) | (b << 16) | (g << 8) | r
 }
 
-/// Billboard quad at `feet`, `w` x `h` world px, leaning back by exactly
-/// the camera pitch `a` about its feet: the card's up axis is the orbit
-/// camera's own up, `(0, sin a, -cos a)` — flat on the ground at rung 0,
-/// upright at a horizontal camera. Verts: bl, br, tr, tl.
-pub fn card_verts(feet: Vec3, w: f32, h: f32, a: f32) -> [[f32; 3]; 4] {
+/// Billboard quad at `feet`, `w` x `h` world px, standing on its feet and
+/// turned to face the camera.
+///
+/// `(fx, fz)` is the camera's horizontal facing (`cam::forward_h`) and `a`
+/// the view direction's angle from straight down. The card's up axis is
+/// `(cos a * fx, sin a, cos a * fz)`: flat on the ground under a straight-
+/// down camera, fully upright under one level with the ground, and always
+/// leaning away from the viewer in between. Its width runs along the
+/// camera's right, `(-fz, 0, fx)`, so the quad stays square-on however far
+/// the view is swung around.
+///
+/// With the unswung camera — facing north, `(0, -1)` — this is exactly the
+/// old fixed form: up `(0, sin a, -cos a)`, width along world X.
+///
+/// Verts: bl, br, tr, tl.
+pub fn card_verts(feet: Vec3, w: f32, h: f32, a: f32, fx: f32, fz: f32) -> [[f32; 3]; 4] {
     use crate::math::cosf;
-    let up = vec3(0.0, sinf(a), -cosf(a));
+    let ca = cosf(a);
+    let up = vec3(ca * fx, sinf(a), ca * fz);
+    let right = vec3(-fz, 0.0, fx);
     let half = w * 0.5;
-    let bl = vec3(feet.x - half, feet.y, feet.z);
-    let br = vec3(feet.x + half, feet.y, feet.z);
+    let bl = vec3(
+        feet.x - right.x * half,
+        feet.y - right.y * half,
+        feet.z - right.z * half,
+    );
+    let br = vec3(
+        feet.x + right.x * half,
+        feet.y + right.y * half,
+        feet.z + right.z * half,
+    );
     let tl = bl.add(up.scale(h));
     let tr = br.add(up.scale(h));
     [
@@ -301,8 +322,17 @@ fn alpha_abgr(alpha: f32) -> u32 {
 }
 
 /// The camera for the current scene state: the battle rig while an arena is
-/// staged, the free-roam orbit otherwise.
+/// staged, the free-roam orbit otherwise, in both cases swung by whatever
+/// the player has asked for (`Scene::cam_yaw_off` / `cam_pitch_off`).
+///
+/// The swing is applied HERE, to the one camera everything else reads, so
+/// the billboard lean, the card facing, the frustum cull and the projection
+/// can never disagree about where the eye is.
 pub fn camera(scene: &Scene) -> Camera {
+    cam::swing(base_camera(scene), scene.cam_yaw_off, scene.cam_pitch_off)
+}
+
+fn base_camera(scene: &Scene) -> Camera {
     if scene.battle.active {
         let b = &scene.battle;
         let (px, py, ex, ey) = match b.shape {
@@ -427,6 +457,8 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
     }
 
     let a = cam.a;
+    // The camera's horizontal facing, so every billboard turns to it.
+    let (fwd_x, fwd_z) = cam::forward_h(&cam);
     let pull_card = card_pull(a);
     let pull_flower = (pull_card - FLOWER_PULL_SUB_PX * sinf(a)).max(0.0);
     // The rung's pull MODE (§quality ladder `pullDepthBias`): geometric —
@@ -710,7 +742,7 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
     for ent in scene.ents.iter().filter(|e| e.shown) {
         if ent.flags & ent_flag::GHOST != 0 {
             items.push(Item::Ghost {
-                verts: card_verts(ent_feet(ent), card_w, card_w, a),
+                verts: card_verts(ent_feet(ent), card_w, card_w, a, fwd_x, fwd_z),
                 pull: pull_card,
                 abgr: GHOST_ABGR,
             });
@@ -721,7 +753,7 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
             continue;
         };
         items.push(Item::Card {
-            verts: card_verts(ent_feet(ent), card_w, card_w, a),
+            verts: card_verts(ent_feet(ent), card_w, card_w, a, fwd_x, fwd_z),
             page: ent.sheet as u16,
             uv: sheet_uv(page, ent.frame),
             mirror: ent.flags & ent_flag::MIRROR != 0,
@@ -732,7 +764,7 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
             if let Some(page) = page_at(pak, epage) {
                 let feet = ent_feet(ent).add(vec3(0.0, EMOTE_LIFT_PX, 0.0));
                 items.push(Item::Card {
-                    verts: card_verts(feet, card_w, card_w, a),
+                    verts: card_verts(feet, card_w, card_w, a, fwd_x, fwd_z),
                     page: epage as u16,
                     uv: sheet_uv(page, ent.emote as i32 - 1),
                     mirror: false,
@@ -759,7 +791,7 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
             {
                 let feet = vec3(fx, 0.0, fz);
                 items.push(Item::Card {
-                    verts: card_verts(feet, card_w, card_w, a),
+                    verts: card_verts(feet, card_w, card_w, a, fwd_x, fwd_z),
                     page: epage as u16,
                     uv: sheet_uv(page, frame as i32),
                     mirror: false,
@@ -782,6 +814,8 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
                     page.w as f32 * BATTLE_CARD_SCALE,
                     page.h as f32 * BATTLE_CARD_SCALE,
                     a,
+                    fwd_x,
+                    fwd_z,
                 ),
                 page: card.pic as u16,
                 uv: [0.0, 0.0, 1.0, 1.0],
@@ -849,6 +883,63 @@ fn page_at<'p, 'a>(pak: &'p Pak<'a>, index: i32) -> Option<&'p crate::pak::Atlas
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The facing an unswung camera has: north, screen-up.
+    const NORTH: (f32, f32) = (0.0, -1.0);
+
+    #[test]
+    fn a_card_under_the_old_fixed_camera_is_unchanged() {
+        // What the previous fixed form produced: up (0, sin a, -cos a),
+        // width along world X.
+        let a = 0.7_f32;
+        let v = card_verts(vec3(100.0, 0.0, 200.0), 16.0, 16.0, a, NORTH.0, NORTH.1);
+        assert!((v[0][0] - 92.0).abs() < 1e-3, "bl x {:?}", v[0]);
+        assert!((v[1][0] - 108.0).abs() < 1e-3, "br x {:?}", v[1]);
+        // top corners lifted by sin a and pushed north by cos a
+        assert!((v[3][1] - 16.0 * a.sin()).abs() < 1e-3, "tl y {:?}", v[3]);
+        assert!((v[3][2] - (200.0 - 16.0 * a.cos())).abs() < 1e-3, "tl z {:?}", v[3]);
+    }
+
+    #[test]
+    fn a_level_camera_stands_the_card_straight_up() {
+        let a = core::f32::consts::FRAC_PI_2; // looking horizontally
+        let v = card_verts(vec3(0.0, 0.0, 0.0), 16.0, 16.0, a, NORTH.0, NORTH.1);
+        // the top edge is directly above the bottom: no lean, no flatness
+        assert!((v[3][1] - 16.0).abs() < 1e-3, "tl y {:?}", v[3]);
+        assert!(v[3][2].abs() < 1e-3, "tl z {:?}", v[3]);
+    }
+
+    #[test]
+    fn a_straight_down_camera_lays_the_card_flat() {
+        let v = card_verts(vec3(0.0, 0.0, 0.0), 16.0, 16.0, 0.0, NORTH.0, NORTH.1);
+        assert!(v[3][1].abs() < 1e-3, "flat card must not rise: {:?}", v[3]);
+        assert!((v[3][2] + 16.0).abs() < 1e-3, "{:?}", v[3]);
+    }
+
+    #[test]
+    fn the_card_turns_to_face_a_swung_camera() {
+        // Camera swung a quarter turn: it now looks east, so the card's
+        // width must run along Z instead of X, and its lean go east.
+        let a = 0.7_f32;
+        let v = card_verts(vec3(0.0, 0.0, 0.0), 16.0, 16.0, a, 1.0, 0.0);
+        assert!(v[0][0].abs() < 1e-3, "bl should not move along X: {:?}", v[0]);
+        assert!((v[1][2] - 8.0).abs() < 1e-3, "br should run along Z: {:?}", v[1]);
+        assert!((v[3][0] - 16.0 * a.cos()).abs() < 1e-3, "lean east: {:?}", v[3]);
+    }
+
+    #[test]
+    fn a_card_keeps_its_width_whichever_way_the_camera_faces() {
+        let a = 0.6_f32;
+        let w = 16.0_f32;
+        for (fx, fz) in [(0.0, -1.0), (1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)] {
+            let v = card_verts(vec3(0.0, 0.0, 0.0), w, w, a, fx, fz);
+            let dx = v[1][0] - v[0][0];
+            let dz = v[1][2] - v[0][2];
+            let span = (dx * dx + dz * dz).sqrt();
+            assert!((span - w).abs() < 1e-3, "facing ({fx},{fz}) gave width {span}");
+        }
+    }
+
     use crate::pak;
     use crate::spec::{Q4, op};
 

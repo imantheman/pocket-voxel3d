@@ -77,6 +77,75 @@ pub fn orbit(cx: f32, cy: f32, pitch_deg: f32) -> Camera {
     finish(eye, focus, up, a, fov, dist)
 }
 
+/// Lowest and highest the swung camera may sit above its focus, radians.
+/// Level with the ground is deliberately reachable -- a card billboards
+/// upright there, which is the point of allowing it -- but not below, where
+/// the ground goes edge-on and there is nothing to see. The top stops short
+/// of straight down, where the look-at up vector degenerates.
+pub const SWING_PITCH_MIN: f32 = 0.05;
+pub const SWING_PITCH_MAX: f32 = 1.50;
+
+/// Swing a camera about its focus by the player's offsets.
+///
+/// Zero offsets return the camera untouched, so the scene's own framing is
+/// the default and this only ever departs from it. `a` is recomputed from
+/// the moved eye, which is what keeps billboards leaning correctly.
+pub fn swing(cam: Camera, dyaw: f32, dpitch: f32) -> Camera {
+    if dyaw == 0.0 && dpitch == 0.0 {
+        return cam;
+    }
+    let v = vec3(
+        cam.eye.x - cam.focus.x,
+        cam.eye.y - cam.focus.y,
+        cam.eye.z - cam.focus.z,
+    );
+    let dist = sqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
+    if dist < 1e-4 {
+        return cam;
+    }
+    let horiz = sqrtf(v.x * v.x + v.z * v.z);
+    let yaw = atan2f(v.z, v.x) + dyaw;
+    let raw = atan2f(v.y, horiz) + dpitch;
+    let pitch = if raw < SWING_PITCH_MIN {
+        SWING_PITCH_MIN
+    } else if raw > SWING_PITCH_MAX {
+        SWING_PITCH_MAX
+    } else {
+        raw
+    };
+    let ch = dist * cosf(pitch);
+    let eye = vec3(
+        cam.focus.x + ch * cosf(yaw),
+        cam.focus.y + dist * sinf(pitch),
+        cam.focus.z + ch * sinf(yaw),
+    );
+    // The view direction's angle from straight down, the billboard lean.
+    let view = vec3(cam.focus.x - eye.x, cam.focus.y - eye.y, cam.focus.z - eye.z);
+    let view_h = sqrtf(view.x * view.x + view.z * view.z);
+    let a = atan2f(view_h, -view.y);
+    finish(eye, cam.focus, Vec3::Y, a, cam.fov_y, dist)
+}
+
+/// The camera's horizontal facing, normalised. `(0, -1)` -- north, screen-up
+/// on an unswung camera -- when the view is too near vertical to have one.
+pub fn forward_h(cam: &Camera) -> (f32, f32) {
+    let (dx, dz) = (cam.focus.x - cam.eye.x, cam.focus.z - cam.eye.z);
+    let len = sqrtf(dx * dx + dz * dz);
+    if len < 1e-4 {
+        return (0.0, -1.0);
+    }
+    (dx / len, dz / len)
+}
+
+/// Quarter turns the camera has been swung through, for mapping a press to
+/// the world direction it looks like on screen.
+pub fn quarter_turns(dyaw: f32) -> i32 {
+    const HALF_PI: f32 = core::f32::consts::FRAC_PI_2;
+    let q = (dyaw / HALF_PI + if dyaw >= 0.0 { 0.5 } else { -0.5 }) as i32;
+    q.rem_euclid(4)
+}
+
+
 /// The screen row of the horizon at infinity for a frame `h` rows tall,
 /// clamped to `[0, h]` (0 = no sky in frame).
 ///
@@ -241,6 +310,82 @@ pub fn battle(inp: &RigInput) -> Camera {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const HALF_PI: f32 = core::f32::consts::FRAC_PI_2;
+
+    fn base() -> Camera {
+        // Looking north (-Z) from the south and above: the unswung framing.
+        orbit(0.0, 0.0, 45.0)
+    }
+
+    #[test]
+    fn no_swing_leaves_the_camera_exactly_alone() {
+        let c = base();
+        let d = swing(c, 0.0, 0.0);
+        assert_eq!(d.eye.x, c.eye.x);
+        assert_eq!(d.eye.y, c.eye.y);
+        assert_eq!(d.eye.z, c.eye.z);
+        assert_eq!(d.a, c.a);
+    }
+
+    #[test]
+    fn a_half_turn_puts_the_eye_on_the_far_side() {
+        let c = base();
+        let d = swing(c, core::f32::consts::PI, 0.0);
+        // same distance, opposite side, same height
+        let r0 = ((c.eye.x - c.focus.x).powi(2) + (c.eye.z - c.focus.z).powi(2)).sqrt();
+        let r1 = ((d.eye.x - d.focus.x).powi(2) + (d.eye.z - d.focus.z).powi(2)).sqrt();
+        assert!((r0 - r1).abs() < 0.5, "{r0} vs {r1}");
+        assert!((d.eye.z - d.focus.z).signum() != (c.eye.z - c.focus.z).signum());
+        assert!((d.eye.y - c.eye.y).abs() < 0.5);
+    }
+
+    #[test]
+    fn swinging_level_with_the_ground_stands_a_card_upright() {
+        // Pitched all the way down to the floor, `a` reaches a quarter turn,
+        // which is what makes card_verts vertical.
+        let d = swing(base(), 0.0, -10.0);
+        assert!((d.a - HALF_PI).abs() < 0.1, "a = {}", d.a);
+        assert!(d.eye.y > 0.0, "the eye must stay above the ground");
+    }
+
+    #[test]
+    fn pitch_is_clamped_off_both_ends() {
+        let up = swing(base(), 0.0, 10.0);
+        let horiz = ((up.eye.x - up.focus.x).powi(2) + (up.eye.z - up.focus.z).powi(2)).sqrt();
+        // never exactly overhead: look_at needs a horizontal component
+        assert!(horiz > 0.01, "degenerate straight-down eye");
+        let down = swing(base(), 0.0, -10.0);
+        assert!(down.eye.y > 0.0);
+    }
+
+    #[test]
+    fn forward_h_is_north_on_an_unswung_camera() {
+        let (fx, fz) = forward_h(&base());
+        assert!(fx.abs() < 1e-3, "fx = {fx}");
+        assert!((fz + 1.0).abs() < 1e-3, "fz = {fz}");
+    }
+
+    #[test]
+    fn forward_h_turns_with_the_swing() {
+        let (fx, fz) = forward_h(&swing(base(), HALF_PI, 0.0));
+        // a quarter turn puts the camera west of the focus, looking east
+        assert!((fx - 1.0).abs() < 1e-2, "fx = {fx}");
+        assert!(fz.abs() < 1e-2, "fz = {fz}");
+    }
+
+    #[test]
+    fn quarter_turns_rounds_to_the_nearest_face() {
+        assert_eq!(quarter_turns(0.0), 0);
+        assert_eq!(quarter_turns(0.1), 0);
+        assert_eq!(quarter_turns(HALF_PI - 0.1), 1);
+        assert_eq!(quarter_turns(HALF_PI + 0.1), 1);
+        assert_eq!(quarter_turns(core::f32::consts::PI), 2);
+        assert_eq!(quarter_turns(-HALF_PI), 3);
+        assert_eq!(quarter_turns(2.0 * core::f32::consts::PI), 0);
+    }
+
+
     use crate::spec::{PITCH_RUNGS, VIEW_H, WORLD_VIEW_H};
 
     #[test]

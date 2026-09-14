@@ -321,6 +321,9 @@ let prevGearPrev = false;
     gearTouchDown(game as unknown as Parameters<typeof gearTouchDown>[0], tx, ty);
   }
   prevTouch = touching;
+  // Bits 24-25: quarter turns the camera has been swung, so the overworld
+  // can keep "up" meaning away-from-the-camera.
+  game.setCamTurns((buttons >> 24) & 3);
   const gearNext = ((buttons >> 26) & 1) !== 0;
   const gearPrev = ((buttons >> 27) & 1) !== 0;
   // L/R step the Kanto Gear's view (PARTY / MAP / ...). They used to cycle

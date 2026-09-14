@@ -8,6 +8,24 @@ import type { GameMap } from "./map.ts";
 export type Dir = "up" | "down" | "left" | "right";
 
 // Collision.lua:8
+/** Screen-clockwise, so one quarter turn is one step along it. */
+const DIR_CYCLE: readonly Dir[] = ["up", "right", "down", "left"];
+
+/**
+ * The world direction a screen-relative press means once the camera has been
+ * swung `quarterTurns` around (host: cam::quarter_turns).
+ *
+ * Only the overworld walk goes through this. A menu is drawn flat on the
+ * screen and its cursor has to keep moving the way the player pushed,
+ * whatever the world is doing behind it.
+ */
+export function rotateDir(d: Dir, quarterTurns: number): Dir {
+  const i = DIR_CYCLE.indexOf(d);
+  if (i < 0) return d;
+  const q = ((Math.round(quarterTurns) % 4) + 4) % 4;
+  return DIR_CYCLE[(i + q) % 4]!;
+}
+
 export const DELTA: Record<Dir, [number, number]> = {
   up: [0, -1],
   down: [0, 1],

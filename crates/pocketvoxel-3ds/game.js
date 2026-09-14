@@ -4049,6 +4049,14 @@ function roll(encounterDef, rng, buckets = ENCOUNTER_BUCKETS) {
 }
 
 // voxelmon/game/world/collision.ts
+var DIR_CYCLE = ["up", "right", "down", "left"];
+function rotateDir(d, quarterTurns) {
+  const i = DIR_CYCLE.indexOf(d);
+  if (i < 0)
+    return d;
+  const q = (Math.round(quarterTurns) % 4 + 4) % 4;
+  return DIR_CYCLE[(i + q) % 4];
+}
 var DELTA = {
   up: [0, -1],
   down: [0, 1],
@@ -6900,6 +6908,7 @@ class Overworld {
   get data() {
     return this.shell.data;
   }
+  camTurns = 0;
   get save() {
     return this.shell.save;
   }
@@ -7057,9 +7066,10 @@ class Overworld {
       this.shell?.openStartMenu?.();
       return;
     }
-    for (const dir of ["up", "down", "left", "right"]) {
-      if (!input.isDown(dir))
+    for (const screenDir of ["up", "down", "left", "right"]) {
+      if (!input.isDown(screenDir))
         continue;
+      const dir = rotateDir(screenDir, this.camTurns);
       if (!this.player.moving && this.player.facing === dir) {
         if (this.checkEdgeExit(dir))
           return;
@@ -12796,6 +12806,9 @@ ${itemName}!`), onDone);
       });
     });
   }
+  setCamTurns(q) {
+    this.overworld.camTurns = q;
+  }
   playSfx(name) {
     this.audio.playSfx(name);
   }
@@ -13436,6 +13449,7 @@ globalThis.frame = (buttons) => {
     gearTouchDown(game, tx, ty);
   }
   prevTouch = touching;
+  game.setCamTurns(buttons >> 24 & 3);
   const gearNext = (buttons >> 26 & 1) !== 0;
   const gearPrev = (buttons >> 27 & 1) !== 0;
   if (gearNext && !prevGearNext)

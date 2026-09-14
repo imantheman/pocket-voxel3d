@@ -36,6 +36,7 @@ import { encodeGlyphs, glyphLen, MAX_COLS } from "../voxelmon/game/ui/tiles.ts";
 import { GameMap } from "../voxelmon/game/world/map.ts";
 import { martStock } from "../voxelmon/game/world/marts.ts";
 import { computeNeighbors } from "../voxelmon/game/world/overworld.ts";
+import { rotateDir } from "../voxelmon/game/world/collision.ts";
 import { bikeAllowed, BIKE_SONG, effectiveMapSong } from "../voxelmon/game/world/bike.ts";
 import { fillAideText } from "../voxelmon/game/world/oaksaide.ts";
 import { daycareFee, learnMovesFromDayCare } from "../voxelmon/game/world/daycare.ts";
@@ -2616,5 +2617,77 @@ describe("Oak's aides", () => {
     // {PLAYER} is the textbox's own token and must survive untouched
     expect(fillAideText("{PLAYER} got the {RAM:x}!", { item: "HM05" }))
       .toBe("{PLAYER} got the HM05!");
+  });
+});
+
+describe("walking with the camera swung round", () => {
+  test("an unswung camera leaves every press alone", () => {
+    for (const d of ["up", "down", "left", "right"] as const) {
+      expect(rotateDir(d, 0)).toBe(d);
+      expect(rotateDir(d, 4)).toBe(d);
+      expect(rotateDir(d, -4)).toBe(d);
+    }
+  });
+
+  test("a quarter turn carries the press round with the view", () => {
+    // The camera swung a quarter turn clockwise: pushing up now walks east.
+    expect(rotateDir("up", 1)).toBe("right");
+    expect(rotateDir("right", 1)).toBe("down");
+    expect(rotateDir("down", 1)).toBe("left");
+    expect(rotateDir("left", 1)).toBe("up");
+  });
+
+  test("a half turn is the flip that made walking a guessing game", () => {
+    expect(rotateDir("up", 2)).toBe("down");
+    expect(rotateDir("down", 2)).toBe("up");
+    expect(rotateDir("left", 2)).toBe("right");
+    expect(rotateDir("right", 2)).toBe("left");
+  });
+
+  test("three quarters is the same as a quarter the other way", () => {
+    for (const d of ["up", "down", "left", "right"] as const) {
+      expect(rotateDir(d, 3)).toBe(rotateDir(d, -1));
+    }
+  });
+
+  test.skipIf(!hasGen)("a half turn sends the same press the opposite way", () => {
+    /** Hold `mask` for a fixed span and report where the player ended up. */
+    const walk = (turns: number, mask: number): [number, number] => {
+      const game = makeGame();
+      game.closeToOverworld();
+      game.overworld.setMap("PALLET_TOWN", 5, 6, "down");
+      game.overworld.camTurns = turns;
+      for (let i = 0; i < 120; i++) game.tick(mask);
+      return [game.overworld.player.cellX, game.overworld.player.cellY];
+    };
+    // A fixed span rather than "until it moves": the first press only turns
+    // the player, and stopping at the first changed cell would pass on a
+    // single step in ANY direction.
+    const [, northY] = walk(0, VOX_BTN.up);
+    const [, southY] = walk(2, VOX_BTN.up);
+    expect(northY).toBeLessThan(6);   // unswung: up walks north
+    expect(southY).toBeGreaterThan(6); // swung right round: up walks south
+  });
+
+  test.skipIf(!hasGen)("a quarter turn sends an up-press sideways", () => {
+    const game = makeGame();
+    game.closeToOverworld();
+    game.overworld.setMap("PALLET_TOWN", 5, 6, "down");
+    game.overworld.camTurns = 1;
+    const p = game.overworld.player;
+    const x0 = p.cellX;
+    holdUntil(game, VOX_BTN.up, () => p.cellX !== x0, 200);
+    expect(p.cellX).toBe(x0 + 1); // east
+  });
+
+  test.skipIf(!hasGen)("menus are not rotated: the cursor still moves as pressed", () => {
+    const game = makeMenuGame();
+    game.overworld.camTurns = 2; // camera swung right round
+    tap(game, VOX_BTN.start);
+    const sm = () => (game.startMenu() as { entries: string[]; index: number });
+    const first = sm().index;
+    tap(game, VOX_BTN.down);
+    // down moves the cursor down the list, camera or no camera
+    expect(sm().index).toBe((first + 1) % sm().entries.length);
   });
 });
