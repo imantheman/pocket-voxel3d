@@ -93,7 +93,49 @@ struct PlanKey {
     center: Option<(i32, i32)>,
 }
 static mut PAK_CACHE: Vec<CachedPak> = Vec::new();
-const PAK_CACHE_BUDGET_KB: usize = 24 * 1024;
+/// Set once at boot from the heap actually available (`size_pak_cache`).
+/// Backtracking is free when the map you came from is still resident, and
+/// after the loader stopped reading dead weight the thing standing between
+/// two neighbouring cities being resident at once was this number, not RAM.
+static mut PAK_CACHE_BUDGET_KB: usize = 24 * 1024;
+
+/// Never below this: one ordinary city has to fit with room beside it.
+const PAK_CACHE_FLOOR_KB: usize = 24 * 1024;
+/// Never above this. Past a point the cache is just holding maps the player
+/// has walked well away from, and the memory is better left for geometry.
+const PAK_CACHE_CEIL_KB: usize = 72 * 1024;
+
+/// How much of the free heap the pak cache may claim. The rest has to carry
+/// the built geometry (up to ~14 MB of vertices), its texture, and QuickJS.
+const PAK_CACHE_HEAP_SHARE: usize = 2; // i.e. a half
+
+/// Largest block the allocator will still hand out, by halving from `start`.
+/// One allocation rather than a hundred 1 MB ones, so probing cannot leave
+/// the heap fragmented behind it.
+fn probe_free_kb(start_mb: usize) -> usize {
+    let mut mb = start_mb;
+    while mb > 0 {
+        let mut v: Vec<u8> = Vec::new();
+        if v.try_reserve_exact(mb * 1024 * 1024).is_ok() {
+            drop(v);
+            return mb * 1024;
+        }
+        mb /= 2;
+    }
+    0
+}
+
+/// Size the cache against the heap this console actually has free.
+fn size_pak_cache() {
+    let free_kb = probe_free_kb(96);
+    let want = (free_kb / PAK_CACHE_HEAP_SHARE).clamp(PAK_CACHE_FLOOR_KB, PAK_CACHE_CEIL_KB);
+    unsafe { PAK_CACHE_BUDGET_KB = want };
+    println!(
+        "pak cache: {} MB (heap probe found {} MB free)",
+        want / 1024,
+        free_kb / 1024,
+    );
+}
 
 /// The shared atlas texels (paks/common.vxat), loaded once at boot.
 ///
@@ -115,6 +157,10 @@ unsafe fn load_map_pak(name: &str, want: Option<PlanKey>) -> bool {
     // A cached copy serves only if it holds at least what is wanted: read
     // whole (plan None) covers anything, and a planned copy covers exactly
     // its own plan.
+    let t_start = {
+        extern "C" { fn osGetTime() -> u64; }
+        osGetTime()
+    };
     let serves = |c: &CachedPak| {
         c.name == name
             && match (c.plan, want) {
@@ -132,11 +178,10 @@ unsafe fn load_map_pak(name: &str, want: Option<PlanKey>) -> bool {
     if let Some(i) = PAK_CACHE.iter().position(&serves) {
         let hit = PAK_CACHE.remove(i);
         PAK_CACHE.insert(0, hit);
+        println!("pak {} cached (0 ms)", name);
         return true;
     }
-    // Same map, wrong plan: its geometry is a subset of what is needed now,
-    // so drop it rather than let it sit in the budget as a decoy.
-    PAK_CACHE.retain(|c| c.name != name);
+    let _ = t_start;
     // must read from SD. Stat the size first so we can evict to fit WITHOUT a
     // transient over-budget spike; a map larger than the whole budget evicts
     // everything and loads alone (peak == the old single-pak peak).
@@ -188,6 +233,11 @@ unsafe fn load_map_pak(name: &str, want: Option<PlanKey>) -> bool {
                     plan = Some(PlanKey { map_id: k.map_id, center: None });
                 }
             }
+            // Only now drop a stale copy of the SAME map -- one read under
+            // a plan that no longer covers what is wanted. Dropping it
+            // earlier would have freed the buffer `pak_static` still points
+            // at, with no guarantee this read was going to replace it.
+            PAK_CACHE.retain(|c| c.name != name);
             PAK_CACHE.insert(0, CachedPak {
                 pak: p, buf, name: name.to_string(), kb, plan,
             });
@@ -197,6 +247,114 @@ unsafe fn load_map_pak(name: &str, want: Option<PlanKey>) -> bool {
             println!("pak parse failed: {}", e);
             false
         }
+    }
+}
+
+/// A map being read ahead, a slice at a time, while the player walks.
+///
+/// Crossing a seam has no fade to hide behind -- the original walks you
+/// straight from one route into the next -- so the only way the read can go
+/// unnoticed is for it to have happened already. The host knows which maps
+/// are connected long before you reach the edge: it is drawing their seam
+/// strips. This reads the whole of one of them in the time left over each
+/// frame, so arriving is a cache hit.
+///
+/// Read WHOLE, not planned: the plan depends on where you will be standing
+/// when you arrive, which is not known yet, and a copy read whole serves any
+/// plan. The extra bytes cost nothing here -- the point of this path is that
+/// the time is already being spent idle.
+struct Prefetch {
+    name: String,
+    file: std::fs::File,
+    buf: Vec<u8>,
+    pos: usize,
+}
+
+static mut PREFETCH: Option<Prefetch> = None;
+
+/// Give up this much of a frame to reading ahead. The slice loop stops at the
+/// first read that crosses it, so a slow card costs one slice, not a stall.
+const PREFETCH_MS: u64 = 3;
+/// Bytes per read within that window. Small enough that one cannot itself
+/// blow the frame on a slow card.
+const PREFETCH_SLICE: usize = 32 * 1024;
+
+/// Begin reading `name` ahead, unless it is already resident, already in
+/// progress, or would not fit beside what is cached.
+#[allow(static_mut_refs)]
+unsafe fn prefetch_start(name: &str) -> bool {
+    if PREFETCH.is_some() || PAK_CACHE.iter().any(|c| c.name == name) {
+        return false;
+    }
+    let path = format!("sdmc:/3ds/voxelmon/paks/{}.vxpak", name);
+    let Ok(file) = std::fs::File::open(&path) else { return false };
+    let Ok(md) = file.metadata() else { return false };
+    let len = md.len() as usize;
+    // Only if it can live alongside the map being played without pushing it
+    // out: a prefetch that evicts the ground under your feet is a loss.
+    let cur = PAK_CACHE.first().map(|c| c.kb).unwrap_or(0);
+    if cur + len / 1024 > PAK_CACHE_BUDGET_KB {
+        return false;
+    }
+    let mut buf: Vec<u8> = Vec::new();
+    if buf.try_reserve_exact(len).is_err() {
+        return false;
+    }
+    buf.resize(len, 0);
+    PREFETCH = Some(Prefetch { name: name.to_string(), file, buf, pos: 0 });
+    true
+}
+
+/// Read the next slices of the map in flight. Called once a frame; returns
+/// true when one just finished and went into the cache.
+#[allow(static_mut_refs)]
+unsafe fn prefetch_step() -> bool {
+    use std::io::Read;
+    extern "C" { fn osGetTime() -> u64; }
+    let Some(pf) = PREFETCH.as_mut() else { return false };
+    let deadline = osGetTime() + PREFETCH_MS;
+    while pf.pos < pf.buf.len() {
+        let end = (pf.pos + PREFETCH_SLICE).min(pf.buf.len());
+        if pf.file.read_exact(&mut pf.buf[pf.pos..end]).is_err() {
+            PREFETCH = None; // the card said no; the normal path will retry
+            return false;
+        }
+        pf.pos = end;
+        if osGetTime() >= deadline {
+            break;
+        }
+    }
+    if pf.pos < pf.buf.len() {
+        return false;
+    }
+
+    let Some(pf) = PREFETCH.take() else { return false };
+    let kb = pf.buf.len() / 1024;
+    // Room is checked again: the cache has moved on since this started.
+    let cur = PAK_CACHE.first().map(|c| c.kb).unwrap_or(0);
+    if cur + kb > PAK_CACHE_BUDGET_KB {
+        return false;
+    }
+    while PAK_CACHE.len() > 1 && cache_total_kb() + kb > PAK_CACHE_BUDGET_KB {
+        PAK_CACHE.pop(); // never the front: that is the map being played
+    }
+    if cache_total_kb() + kb > PAK_CACHE_BUDGET_KB {
+        return false;
+    }
+    let buf: Box<[u8]> = pf.buf.into_boxed_slice();
+    let bytes: &'static [u8] = core::mem::transmute(buf.as_ref());
+    match pak::read_with_shared(bytes, SHARED_ATLAS) {
+        Ok(p) => {
+            // Behind the current map, so it is the first thing dropped if
+            // the player walks somewhere else entirely.
+            let at = PAK_CACHE.len().min(1);
+            PAK_CACHE.insert(at, CachedPak {
+                pak: p, buf, name: pf.name.clone(), kb, plan: None,
+            });
+            println!("pak {} read ahead ({} KB)", pf.name, kb);
+            true
+        }
+        Err(_) => false,
     }
 }
 
@@ -1712,6 +1870,8 @@ fn main() {
     println!("gamedata {} KB", gd.len() / 1024);
     let gd_static: &'static [u8] = Box::leak(gd.into_boxed_slice());
 
+    size_pak_cache();
+
     // The shared atlas pages, before any pak is read — every pak's page
     // directory resolves against this. Absent is fine and means the card
     // holds original paks that embed every page.
@@ -2253,6 +2413,41 @@ fn main() {
                     }
                     center[0] = gx;
                     center[2] = gy;
+
+                    // Read the connected maps ahead, in whatever time is
+                    // left over. The guest publishes them as extra map slots
+                    // (it is already drawing their seam strips), so by the
+                    // time the player reaches the edge the pak they are
+                    // walking into is usually already in hand -- and a seam
+                    // crossing, unlike a door, has no fade to hide a read
+                    // behind.
+                    //
+                    // Never while a script is mid-warp: the loader is about
+                    // to want the card for the map actually being entered,
+                    // and competing with it would make the visible wait
+                    // longer, not shorter.
+                    if !reload {
+                        if unsafe { prefetch_step() } {
+                            // Inserting into PAK_CACHE can reallocate it and
+                            // move the Pak structs with it, and pak_static
+                            // points straight at the front one. Re-take it.
+                            pak_static = unsafe { cur_pak() };
+                        } else if unsafe { PREFETCH.is_none() } {
+                            for i in 1..sc.maps.len() {
+                                if !sc.maps[i].shown {
+                                    continue;
+                                }
+                                let nid = sc.maps[i].map_id;
+                                if let Some((_, nm)) =
+                                    map_index.iter().find(|(id, _)| *id == nid)
+                                {
+                                    if unsafe { prefetch_start(nm) } {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2375,6 +2570,7 @@ fn main() {
                     if lo[1] >= cmx[1] - 1.0 { seam_sides[3] = true; }
                 }
             }
+            let t_build = { extern "C" { fn osGetTime() -> u64; } unsafe { osGetTime() } };
             geom = build_map(
                 pak_static,
                 map_ids[map_i],
@@ -2385,11 +2581,18 @@ fn main() {
             );
             cur_map_huge = geom.is_huge;
             {
+                let build_ms = {
+                    extern "C" { fn osGetTime() -> u64; }
+                    unsafe { osGetTime() }.wrapping_sub(t_build)
+                };
                 let tot: usize = geom.chunk_spans.iter().map(|s| s.end - s.start).sum();
                 let over = geom.chunk_spans.iter().filter(|s| s.end - s.start > 65535).count();
+                // Paired with the loader's "pak ... in N ms": together these
+                // two numbers say whether a slow map change is the card or
+                // the mesh build, which is not guessable from the outside.
                 println!(
-                    "chunks {} verts {} clipped {} huge {}",
-                    geom.chunk_spans.len(), tot, over, cur_map_huge
+                    "built in {} ms: chunks {} verts {} clipped {} huge {}",
+                    build_ms, geom.chunk_spans.len(), tot, over, cur_map_huge
                 );
                 dlog(&format!(
                     "[pv] built map#{} name={} spans={} verts={} huge={} tint={:08x}",
