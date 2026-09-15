@@ -28,6 +28,8 @@ interface FlyField {
 interface FlySave {
   visited?: Record<string, boolean>;
   flags?: Record<string, boolean>;
+  inventory?: Record<string, number>;
+  hallOfFame?: unknown[];
 }
 
 /**
@@ -96,4 +98,64 @@ export function flyDestinations(
     out.push({ map, name: names[map]?.name ?? map.replace(/_/g, " "), x: w.x, y: w.y });
   }
   return out;
+}
+
+/**
+ * What a save already proves about where its player has been.
+ *
+ * `visited` did not exist before FLY did, so every save made before it -- and
+ * the champion runs among them -- comes back with an empty destination list
+ * and has to re-walk Kanto to earn back towns it has plainly already seen.
+ * These are the receipts: a badge is only handed over in its own city, and
+ * each of the three towns without a gym has a flag that is only set there.
+ *
+ * Conservative on purpose. Nothing here marks a town on a guess, because a
+ * wrongly-offered destination flies the player somewhere they have no business
+ * being; a missing one costs them one walk and then fixes itself on arrival.
+ */
+const VISIT_EVIDENCE: { map: string; item?: string; flags?: string[] }[] = [
+  // the gym badges, each earned in the city that hands it over
+  { map: "PEWTER_CITY", item: "BOULDERBADGE" },
+  { map: "CERULEAN_CITY", item: "CASCADEBADGE" },
+  { map: "VERMILION_CITY", item: "THUNDERBADGE" },
+  { map: "CELADON_CITY", item: "RAINBOWBADGE" },
+  { map: "FUCHSIA_CITY", item: "SOULBADGE" },
+  { map: "SAFFRON_CITY", item: "MARSHBADGE" },
+  { map: "CINNABAR_ISLAND", item: "VOLCANOBADGE" },
+  { map: "VIRIDIAN_CITY", item: "EARTHBADGE" },
+  // Pallet: the starter is only handed out in Oak's lab, and the parcel
+  // errand proves Viridian as well
+  { map: "PALLET_TOWN", flags: ["EVENT_GOT_STARTER", "EVENT_GOT_TOWN_MAP"] },
+  { map: "VIRIDIAN_CITY", flags: ["EVENT_GOT_OAKS_PARCEL", "EVENT_OAK_GOT_PARCEL"] },
+  // Lavender: the tower and Mr Fuji are the only source of either of these
+  {
+    map: "LAVENDER_TOWN",
+    flags: ["EVENT_GOT_POKE_FLUTE", "EVENT_RESCUED_MR_FUJI", "EVENT_BEAT_GHOST_MAROWAK"],
+  },
+];
+
+/**
+ * Give a save the visit record it never kept. Only ever ADDS, so it is safe to
+ * run on every load and safe to run over a save that already has one.
+ *
+ * Returns the towns it filled in, which is what the test asserts on.
+ */
+export function backfillVisited(save: FlySave): string[] {
+  const inv = save.inventory ?? {};
+  const flags = save.flags ?? {};
+  const added: string[] = [];
+  const mark = (map: string): void => {
+    if (hasVisited(save, map)) return;
+    (save.visited ??= {})[map] = true;
+    added.push(map);
+  };
+  for (const e of VISIT_EVIDENCE) {
+    if (e.item && (inv[e.item] ?? 0) > 0) mark(e.map);
+    if (e.flags?.some((f) => flags[f] === true)) mark(e.map);
+  }
+  // A champion has stood on the plateau by definition.
+  if ((save.hallOfFame?.length ?? 0) > 0 || flags.EVENT_BEAT_CHAMPION_RIVAL === true) {
+    mark("INDIGO_PLATEAU");
+  }
+  return added;
 }

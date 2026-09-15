@@ -27,7 +27,7 @@ import { VoxelmonGame } from "../voxelmon/game/game.ts";
 import { encodeSave } from "../voxelmon/game/save-lua.ts";
 import { decodeSave } from "../voxelmon/game/save-read.ts";
 import {
-  FLY_MAP_IDS, flyDestinations, visit,
+  backfillVisited, FLY_MAP_IDS, flyDestinations, visit,
 } from "../voxelmon/game/world/fly.ts";
 import {
   applyPostGameHome, POST_GAME_HOME, recordHallOfFame,
@@ -4025,6 +4025,97 @@ describe("HM02 FLY", () => {
     while (game.stackKinds().at(-1) !== "textbox" && guard++ < 400) game.tick(0);
     expect(game.stackKinds().at(-1)).toBe("textbox");
     expect(topText(game)).toContain("FLY");
+  });
+
+  test("a save from before FLY gets its visit record reconstructed", () => {
+    // Every save made before `visited` existed comes back with an empty
+    // destination list. A finished game having nowhere to fly to is the whole
+    // point of this: the receipts are already in the save.
+    const save: any = {
+      inventory: { BOULDERBADGE: 1, CASCADEBADGE: 1, SOULBADGE: 1 },
+      flags: { EVENT_GOT_STARTER: true, EVENT_GOT_POKE_FLUTE: true },
+    };
+    const added = backfillVisited(save);
+    expect(added.sort()).toEqual(
+      ["CERULEAN_CITY", "FUCHSIA_CITY", "LAVENDER_TOWN", "PALLET_TOWN", "PEWTER_CITY"],
+    );
+    // and nothing it has no evidence for
+    expect(save.visited.CELADON_CITY ?? false).toBe(false);
+    expect(save.visited.INDIGO_PLATEAU ?? false).toBe(false);
+  });
+
+  test("a champion has been to the plateau by definition", () => {
+    const a: any = { hallOfFame: [[{ species: "RATTATA", level: 12 }]] };
+    backfillVisited(a);
+    expect(a.visited.INDIGO_PLATEAU).toBe(true);
+    const b: any = { flags: { EVENT_BEAT_CHAMPION_RIVAL: true } };
+    backfillVisited(b);
+    expect(b.visited.INDIGO_PLATEAU).toBe(true);
+  });
+
+  test("the backfill only ever adds, so running it twice is harmless", () => {
+    const save: any = {
+      inventory: { BOULDERBADGE: 1 },
+      visited: { CELADON_CITY: true },
+    };
+    expect(backfillVisited(save)).toEqual(["PEWTER_CITY"]);
+    expect(backfillVisited(save)).toEqual([]);
+    // the town it already knew about is untouched
+    expect(save.visited.CELADON_CITY).toBe(true);
+    expect(save.visited.PEWTER_CITY).toBe(true);
+  });
+
+  test("a brand new save gains nothing from it", () => {
+    const save: any = { inventory: {}, flags: {} };
+    expect(backfillVisited(save)).toEqual([]);
+  });
+
+  test("every town the backfill can name is a real fly destination", () => {
+    // A reconstructed town that FLY does not list is a town the player can
+    // never be offered, and one that is not a destination at all would throw.
+    const save: any = {
+      inventory: Object.fromEntries(
+        ["BOULDERBADGE", "CASCADEBADGE", "THUNDERBADGE", "RAINBOWBADGE",
+         "SOULBADGE", "MARSHBADGE", "VOLCANOBADGE", "EARTHBADGE"].map((b) => [b, 1]),
+      ),
+      flags: {
+        EVENT_GOT_STARTER: true, EVENT_GOT_POKE_FLUTE: true,
+        EVENT_BEAT_CHAMPION_RIVAL: true,
+      },
+    };
+    const added = backfillVisited(save);
+    for (const m of added) expect(FLY_MAP_IDS as readonly string[]).toContain(m);
+    // with every receipt in the save, that is the whole map
+    expect(added.sort()).toEqual([...FLY_MAP_IDS].sort());
+  });
+
+  test.skipIf(!hasGen)("CONTINUE runs the backfill, so an old save can fly", () => {
+    // The function being right is half of it; the other half is that loading
+    // a save actually calls it. Driven through the title's CONTINUE, which is
+    // the only path a real save takes into the game.
+    const old: any = {
+      player: { name: "RED", rival: "BLUE", map: "PALLET_TOWN", x: 5, y: 6, facing: "down" },
+      party: [], inventory: { BOULDERBADGE: 1, CASCADEBADGE: 1 },
+      flags: { EVENT_GOT_STARTER: true }, money: 3000,
+      lastOutdoor: { id: "PALLET_TOWN", x: 5, y: 6 },
+    };
+    const host = new MenuHost();
+    host.saveWrite(encodeSave(old));
+
+    const game = new VoxelmonGame(romData!, host, 1);
+    game.newGame(); // stages the world and pushes the title
+    expect(game.stackKinds().at(-1)).toBe("title");
+    tap(game, VOX_BTN.start); // PRESS START -> the menu
+    let guard = 0;
+    while (game.stackKinds().at(-1) === "title" && guard++ < 40) tap(game, VOX_BTN.a);
+    expect(game.stackKinds().at(-1)).toBe("overworld");
+
+    // the save loaded, and it can fly to the two cities its badges prove
+    expect(game.save.inventory.BOULDERBADGE).toBe(1);
+    expect(game.save.visited?.PEWTER_CITY).toBe(true);
+    expect(game.save.visited?.CERULEAN_CITY).toBe(true);
+    expect(game.save.visited?.PALLET_TOWN).toBe(true);
+    expect(game.save.visited?.CELADON_CITY ?? false).toBe(false);
   });
 
   test.skipIf(!hasGen)("the party menu offers FLY to a mon that knows it", () => {

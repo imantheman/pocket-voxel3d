@@ -66,7 +66,7 @@ const SAVE_HOLD = 120;
 const SAVE_DONE_HOLD = 30;
 import { WarpPickerState } from "./ui/warppicker.ts";
 import { FlyPickerState } from "./ui/flypicker.ts";
-import { flyDestinations } from "./world/fly.ts";
+import { backfillVisited, flyDestinations } from "./world/fly.ts";
 import { MoveForgetState } from "./ui/moveforget.ts";
 import { BagState } from "./ui/bagscreen.ts";
 import { PartyState } from "./ui/partyscreen.ts";
@@ -517,6 +517,11 @@ export class VoxelmonGame implements OverworldShell, SceneView {
           if (text) {
             try {
               this.save = decodeSave(text) as any;
+              // `visited` postdates the saves that will be loaded here, so a
+              // save from before FLY existed gets its record reconstructed
+              // from what it already proves -- otherwise a finished game comes
+              // back with nowhere to fly to.
+              backfillVisited(this.save as never);
               // The live position lives in player.* (SaveData.lua newGame);
               // lastOutdoor is only the palette/blackout anchor.
               const pl: any = this.save.player ?? {};
