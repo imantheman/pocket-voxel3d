@@ -126,5 +126,81 @@ export function gymGuardKey(npc: number): string {
  */
 export function toggleBlocksFor(mapId: string): ToggleBlock[] {
   if (mapId === "CINNABAR_GYM") return GYM_MACHINES.map((m) => m.gate);
+  const seal = LEAGUE_SEALS[mapId];
+  if (seal) {
+    // solidWhenOn is meaningless for these — the cook only reads bx/by/solid,
+    // and the runtime drives them from the room's own flag instead.
+    return seal.blocks.map((b) => ({ ...b, solidWhenOn: false }));
+  }
   return MANSION_BLOCKS[mapId] ?? [];
+}
+
+// ---------------------------------------------------------------------------
+// The Elite Four's doors
+// ---------------------------------------------------------------------------
+
+/**
+ * One room of the league, and the block that seals it.
+ *
+ * Lorelei, Bruno and Agatha each seal their EXIT (LoreleiShowOrHideExitBlock
+ * and the Bruno/Agatha equivalents): the block above the north warp is solid
+ * until that room's trainer is beaten, so the only way on is through them.
+ *
+ * Lance is the odd one out — LancesRoomShowOrHideEntranceBlocks gates his
+ * ENTRANCE instead, and the .blk ships it CLOSED, so without this script his
+ * arena and both Champion's Room warps behind it are walled off and the
+ * league simply dead-ends at his door.
+ */
+export interface LeagueSeal {
+  /** Solid while this flag is UNSET (Lance: while it is SET — see `whileSet`). */
+  flag: string;
+  /** Inverted: Lance's door is open until you cross it and it locks behind. */
+  whileSet?: boolean;
+  blocks: { bx: number; by: number; solid: number }[];
+  /** The line for retreating toward the entrance, and the rows it covers. */
+  /** `fromY` is a MINIMUM: these are the rows nearest the entrance. */
+  dontRun?: { text: string; fromY: number; x: [number, number] };
+}
+
+/**
+ * Block ids are ReplaceTileBlock's: $24 the GYM gate, $3b the CEMETERY gate,
+ * $72/$73 the two halves of the DOJO doorway. Each opens to plain floor
+ * ($05 / $36 / $31+$32), which is why hiding the lifted stamp is enough —
+ * liftBlock leaves the ground behind it.
+ *
+ * LORELEIS_ROOM and LANCES_ROOM ship these blocks CLOSED already; BRUNOS_ROOM
+ * and AGATHAS_ROOM ship them OPEN and the cook has to bake them shut.
+ */
+export const LEAGUE_SEALS: Record<string, LeagueSeal> = {
+  LORELEIS_ROOM: {
+    flag: "EVENT_BEAT_LORELEIS_ROOM_TRAINER_0",
+    blocks: [{ bx: 2, by: 0, solid: 0x24 }],
+    dontRun: { text: "_LoreleisRoomLoreleiDontRunAwayText", fromY: 10, x: [4, 5] },
+  },
+  BRUNOS_ROOM: {
+    flag: "EVENT_BEAT_BRUNOS_ROOM_TRAINER_0",
+    blocks: [{ bx: 2, by: 0, solid: 0x24 }],
+    dontRun: { text: "_BrunosRoomBrunoDontRunAwayText", fromY: 10, x: [4, 5] },
+  },
+  AGATHAS_ROOM: {
+    flag: "EVENT_BEAT_AGATHAS_ROOM_TRAINER_0",
+    blocks: [{ bx: 2, by: 0, solid: 0x3b }],
+    dontRun: { text: "_AgathasRoomAgathaDontRunAwayText", fromY: 10, x: [4, 5] },
+  },
+  LANCES_ROOM: {
+    flag: "EVENT_LANCES_ROOM_LOCK_DOOR",
+    whileSet: true,
+    blocks: [
+      { bx: 2, by: 6, solid: 0x72 },
+      { bx: 3, by: 6, solid: 0x73 },
+    ],
+  },
+};
+
+/** The doorway cells that lock Lance's room behind you (LancesRoomDefault). */
+export const LANCE_DOOR_CELLS: [number, number][] = [[5, 11], [6, 11]];
+
+/** The trainer whose defeat opens each room, by object id. */
+export function leagueGuardKey(mapId: string): string {
+  return `${mapId}_obj_1`;
 }

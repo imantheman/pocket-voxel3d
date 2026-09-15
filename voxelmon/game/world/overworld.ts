@@ -27,8 +27,8 @@ import { LAST_MAP_REWRITES, rewrittenLastMap } from "./lastmap.ts";
 import { martGreetScript } from "./marts.ts";
 import { bikeAllowed, type BikeRiding } from "./bike.ts";
 import {
-  GYM_MACHINES, gymGateFlag, gymGuardKey, MANSION_BLOCKS, MANSION_HOLES,
-  MANSION_SWITCHES, OPEN_BLOCK,
+  GYM_MACHINES, gymGateFlag, gymGuardKey, LANCE_DOOR_CELLS, LEAGUE_SEALS,
+  MANSION_BLOCKS, MANSION_HOLES, MANSION_SWITCHES, OPEN_BLOCK,
 } from "./toggleblocks.ts";
 import type { DaycareState } from "./daycare.ts";
 import {
@@ -370,6 +370,7 @@ export class Overworld implements ScriptWorld {
     this.applyGameCornerPoster(mapId, def);
     this.applyCardKeyDoors(mapId, def);
     this.applyToggleBlocks(mapId, def);
+    this.applyLeagueSeals(mapId, def);
     // Cut trees stay cut across a reload/re-entry: reapply every stamp-off
     // this save recorded for THIS map (setMap is the single choke point, so
     // every entry path — warp, seam, boot — gets this for free, the same
@@ -1207,6 +1208,8 @@ export class Overworld implements ScriptWorld {
     // trigger. Fires for ANY map that registers one — the two _ONSTEP_HOST
     // entries are checked too so the original Pallet/Oak hooks still run.
     if (this.mansionHoleStep()) return;
+    this.lanceLockDoor();
+    if (this.leagueDontRun()) return;
     if (!this.runner.isRunning()) {
       const label = (this as any).map?.id ?? "";
       const script = (MAP_SCRIPTS as any)[label] as MapScript | undefined;
@@ -1528,9 +1531,21 @@ export class Overworld implements ScriptWorld {
     npc: NPC,
   ): { range?: number; event?: string; battle?: string; after?: string } | undefined {
     const headers = this.shell.data.trainer_headers as
-      | Record<string, Record<string, { range?: number; event?: string; battle?: string; after?: string }>>
+      | Record<string, unknown>
       | undefined;
-    return headers?.[this.map.def.label]?.[npc.def.index];
+    const forMap = headers?.[this.map.def.label];
+    if (!forMap) return undefined;
+    type H = { range?: number; event?: string; battle?: string; after?: string };
+    // The extractor keys these by OBJECT INDEX, which is 1-based -- but
+    // writer.ts numericKeyed turns a dense-from-1 map into an ARRAY, which is
+    // 0-based. 43 of the 69 maps come through as arrays and 26 stay objects,
+    // so indexing both the same way handed every trainer on those 43 the NEXT
+    // trainer's header (wrong sight range, wrong beat flag, wrong before- and
+    // after-battle line) and the last one on each map no header at all.
+    // Verified against the map data: wherever the shape is an array, the
+    // trainer objects are exactly 1..N.
+    if (Array.isArray(forMap)) return (forMap as H[])[npc.def.index - 1];
+    return (forMap as Record<string, H>)[npc.def.index];
   }
 
   /**
@@ -1557,6 +1572,7 @@ export class Overworld implements ScriptWorld {
     // quiz or no quiz. The flag is set here so the gate survives him being
     // gone, and the blocks are re-applied because no map load intervenes.
     this.syncGymGates();
+    this.syncLeagueSeal();
   }
 
   /** Open the gate of every guardian already beaten (CinnabarGymOpenGate). */
@@ -1747,6 +1763,71 @@ export class Overworld implements ScriptWorld {
         this.setToggleBlock(def, m.gate, !this.gymGateOpen(i));
       });
     }
+  }
+
+  /**
+   * The Elite Four's doors (world/toggleblocks.ts LEAGUE_SEALS), set to
+   * whatever the save says. Runs on every map entry, which is what pokered's
+   * *ShowOrHideExitBlock does, and again the moment a room's trainer falls.
+   *
+   * Lorelei, Bruno and Agatha seal their exit until beaten. Lance is
+   * inverted: his doorway ships CLOSED and opens while
+   * EVENT_LANCES_ROOM_LOCK_DOOR is unset, then shuts behind you for good.
+   */
+  applyLeagueSeals(mapId: string, def: any): void {
+    const seal = LEAGUE_SEALS[mapId];
+    if (!seal) return;
+    const set = this.save?.flags?.[seal.flag] === true;
+    const solid = seal.whileSet ? set : !set;
+    for (const b of seal.blocks) {
+      this.setToggleBlock(def, { ...b, solidWhenOn: false }, solid);
+    }
+  }
+
+  /**
+   * LoreleiShowOrHideExitBlock runs on a map load, and pokered reloads the
+   * map after a battle — so a door has to open the moment its keeper falls,
+   * with no re-entry. Called from markTrainerDefeated.
+   */
+  private syncLeagueSeal(): void {
+    const id = this.map?.id ?? "";
+    if (!LEAGUE_SEALS[id]) return;
+    this.applyLeagueSeals(id, this.map.def);
+  }
+
+  /**
+   * The league's three anterooms refuse to let you retreat: stepping back
+   * toward the entrance gets "Don't run away!" and a shove forward (the
+   * entrance coord rows in each room script). The real barrier is that the
+   * exit is sealed behind you; this is the front half of it.
+   */
+  private leagueDontRun(): boolean {
+    const seal = LEAGUE_SEALS[this.map?.id ?? ""];
+    const dr = seal?.dontRun;
+    if (!dr || this.runner.isRunning()) return false;
+    const p = this.player;
+    if (p.cellY < dr.fromY || p.cellX < dr.x[0] || p.cellX > dr.x[1]) return false;
+    const t = (this.shell.data as { text?: Record<string, string> }).text ?? {};
+    this.shell.showText(t[dr.text] ?? "Don't run away!", () => {
+      this.scriptMove(p, "up", 1);
+    });
+    return true;
+  }
+
+  /**
+   * LancesRoomDefaultScript's doorway trigger: the first crossing seals the
+   * door behind the player with SFX_GO_INSIDE. One way only — the flag is
+   * never cleared, so there is no walking back out mid-league.
+   */
+  private lanceLockDoor(): boolean {
+    if (this.map?.id !== "LANCES_ROOM") return false;
+    const p = this.player;
+    if (!LANCE_DOOR_CELLS.some(([x, y]) => x === p.cellX && y === p.cellY)) return false;
+    if (this.save.flags.EVENT_LANCES_ROOM_LOCK_DOOR) return false;
+    this.save.flags.EVENT_LANCES_ROOM_LOCK_DOOR = true;
+    this.shell.playOnce?.("Go_Inside");
+    this.applyLeagueSeals(this.map.id, this.map.def);
+    return false; // the step itself still counts; only the door changed
   }
 
   /** A gate is open once its quiz was answered or its guardian beaten. */

@@ -596,6 +596,14 @@ export function runGeometry(map: GameMap, S: SGrid): MapGeometry {
   /**
    * Lift one block's worth of terrain out into per-cell stamps, so the
    * runtime can make it disappear. A block is 2 cells is 32 world px.
+   *
+   * The FLOOR stays put. Every block these doors open into is plain floor,
+   * and every closed one is a wall standing ON that floor — the tileset
+   * blocks are literally two rows of gate over two rows of ground. Lifting
+   * the whole footprint took the ground with the gate, so an opened door was
+   * a hole you could see through instead of a doorway you walk along. A quad
+   * with all four corners at y = 0 is that ground, and only that: a wall's
+   * quads reach y = 0 at their base but rise from it.
    */
   const liftBlock = (bx: number, by: number): void => {
     const PX0 = bx * 32, PX1 = PX0 + 32;
@@ -604,7 +612,8 @@ export function runGeometry(map: GameMap, S: SGrid): MapGeometry {
     for (const q of terrain) {
       const cx = (q.c[0][0] + q.c[1][0] + q.c[2][0] + q.c[3][0]) / 4;
       const cz = (q.c[0][2] + q.c[1][2] + q.c[2][2] + q.c[3][2]) / 4;
-      if (cx >= PX0 && cx < PX1 && cz >= PZ0 && cz < PZ1) {
+      const onGround = q.c.every((c) => c[1] === 0);
+      if (!onGround && cx >= PX0 && cx < PX1 && cz >= PZ0 && cz < PZ1) {
         const key = `${Math.floor(cx / 16)},${Math.floor(cz / 16)}`;
         let arr = S.stampQuads.get(key);
         if (!arr) S.stampQuads.set(key, (arr = []));

@@ -43,8 +43,8 @@ import { poseDir } from "../voxelmon/game/scene.ts";
 import { SEVEN_BADGES, silphAftermathRows } from "../voxelmon/game/world/mapscripts.ts";
 import { deposit, pcCapacityData, withdraw } from "../voxelmon/game/world/pcitems.ts";
 import {
-  GYM_MACHINES, gymGateFlag, gymGuardKey, MANSION_BLOCKS, MANSION_HOLES,
-  OPEN_BLOCK, toggleBlocksFor,
+  GYM_MACHINES, gymGateFlag, gymGuardKey, LEAGUE_SEALS, MANSION_BLOCKS,
+  MANSION_HOLES, OPEN_BLOCK, toggleBlocksFor,
 } from "../voxelmon/game/world/toggleblocks.ts";
 import { bikeAllowed, BIKE_SONG, effectiveMapSong } from "../voxelmon/game/world/bike.ts";
 import { fillAideText } from "../voxelmon/game/world/oaksaide.ts";
@@ -3638,6 +3638,226 @@ describe("the Mansion switches and the Cinnabar quiz", () => {
     }
     expect(toggleBlocksFor("CINNABAR_GYM")).toEqual(GYM_MACHINES.map((m) => m.gate));
     expect(toggleBlocksFor("PALLET_TOWN")).toEqual([]);
+  });
+});
+
+describe("the trainer headers", () => {
+  /**
+   * The extractor keys these by object index, 1-based; writer.ts numericKeyed
+   * silently turns a dense-from-1 map into a 0-based array. 43 of the 69 maps
+   * come through as arrays, so a single indexing rule cannot be right for
+   * both -- and the one that was there gave every trainer on those 43 maps
+   * the NEXT trainer's header.
+   */
+  test.skipIf(!hasGen)("resolve to the right trainer in both shapes", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    const header = (npc: unknown): any => (ow as any).trainerHeader(npc);
+
+    // array shape: MT_MOON_1F's seven trainers ARE objects 1..7
+    ow.setMap("MT_MOON_1F", 5, 5, "down");
+    const hiker = ow.npcs.find((n: any) => n.def.name === "MTMOON1F_HIKER");
+    expect(header(hiker)?.event).toBe("EVENT_BEAT_MT_MOON_1_TRAINER_0");
+    const last = ow.npcs.find((n: any) => n.def.name === "MTMOON1F_YOUNGSTER3");
+    // the last one on the map used to fall off the end of the array entirely
+    expect(header(last)?.event).toBe("EVENT_BEAT_MT_MOON_1_TRAINER_6");
+
+    // object shape: PEWTER_GYM keys its one header "2", the Jr. Trainer --
+    // Brock is scripted and has none
+    ow.setMap("PEWTER_GYM", 4, 10, "up");
+    const jr = ow.npcs.find((n: any) => n.def.index === 2);
+    expect(header(jr)?.event).toBe("EVENT_BEAT_PEWTER_GYM_TRAINER_0");
+  });
+
+  test.skipIf(!hasGen)("every array-shaped map's trainers all resolve", () => {
+    // The real symptom was the LAST trainer of each of those maps silently
+    // having no header: no sight line, and no beat flag on a win.
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    const headers = (romData as any).trainer_headers as Record<string, unknown>;
+    const maps = (romData as any).maps as Record<string, any>;
+    let checked = 0;
+    for (const [name, def] of Object.entries(maps)) {
+      const h = def.label ? headers[def.label] : undefined;
+      if (!Array.isArray(h)) continue;
+      ow.setMap(name, 1, 1, "down");
+      for (let i = 1; i <= h.length; i++) {
+        const got = (ow as any).trainerHeader({ def: { index: i } });
+        expect(got, `${name} obj ${i}`).toBeTruthy();
+        expect(got).toBe(h[i - 1]);
+        checked += 1;
+      }
+    }
+    expect(checked).toBeGreaterThan(100);
+  });
+});
+
+describe("the Elite Four's doors", () => {
+  const ROOMS = ["LORELEIS_ROOM", "BRUNOS_ROOM", "AGATHAS_ROOM", "LANCES_ROOM"];
+
+  function leagueGame(): VoxelmonGame {
+    const data = {
+      ...(romData as object),
+      cookedMaps: [
+        ...((romData as { cookedMaps?: string[] }).cookedMaps ?? []),
+        ...ROOMS,
+      ],
+    };
+    const game = new VoxelmonGame(data as never, new MenuHost(), 1);
+    game.newGame();
+    game.closeToOverworld();
+    return game;
+  }
+
+  function blockAt(game: VoxelmonGame, bx: number, by: number): number {
+    const def = game.overworld.map.def as { blocks: number[]; width: number };
+    return def.blocks[by * def.width + bx]!;
+  }
+
+  /** How many of a block's four cells can be stood on. */
+  function walkableCells(game: VoxelmonGame, b: { bx: number; by: number }): number {
+    let n = 0;
+    for (let dy = 0; dy < 2; dy++) {
+      for (let dx = 0; dx < 2; dx++) {
+        if (game.overworld.map.isWalkableCell(b.bx * 2 + dx, b.by * 2 + dy)) n += 1;
+      }
+    }
+    return n;
+  }
+
+  const ANTEROOMS = ["LORELEIS_ROOM", "BRUNOS_ROOM", "AGATHAS_ROOM"] as const;
+
+  test.skipIf(!hasGen)("each anteroom's exit is sealed until its keeper falls", () => {
+    // BRUNOS_ROOM and AGATHAS_ROOM ship these blocks OPEN -- pokered rewrites
+    // them on load -- so without the cook baking them shut the league is a
+    // straight corridor you can walk to Lance through.
+    for (const id of ANTEROOMS) {
+      const seal = LEAGUE_SEALS[id]!;
+      const b = seal.blocks[0]!;
+      const shut = leagueGame();
+      shut.overworld.setMap(id, 4, 5, "up");
+      expect(blockAt(shut, b.bx, b.by), `${id} shut`).toBe(b.solid);
+      expect(walkableCells(shut, b), `${id} shut`).toBeLessThan(4);
+
+      const open = leagueGame();
+      open.save.flags[seal.flag] = true;
+      open.overworld.setMap(id, 4, 5, "up");
+      expect(blockAt(open, b.bx, b.by), `${id} open`).toBe(OPEN_BLOCK);
+      expect(walkableCells(open, b), `${id} open`).toBe(4);
+    }
+  });
+
+  test.skipIf(!hasGen)("the door opens the moment the keeper falls, with no re-entry", () => {
+    // pokered reloads the map after a battle, which is what re-runs
+    // LoreleiShowOrHideExitBlock. Nothing reloads here, so the win has to
+    // re-apply the seal itself.
+    const game = leagueGame();
+    const ow = game.overworld;
+    const b = LEAGUE_SEALS.LORELEIS_ROOM!.blocks[0]!;
+    ow.setMap("LORELEIS_ROOM", 4, 5, "up");
+    expect(walkableCells(game, b)).toBeLessThan(4);
+
+    // beat her for real, through engageTrainer -- the point of the test is
+    // that the WIN re-applies the seal, so poking the flag would prove nothing
+    (game as any).startTrainerBattle = (
+      _id: string, _idx: number, _name: unknown, onDone: (won: boolean) => void,
+    ) => onDone(true);
+    const lorelei = ow.npcs.find((n: any) => n.def.name === "LORELEISROOM_LORELEI");
+    expect(lorelei).toBeTruthy();
+    ow.engageTrainer(lorelei, () => {});
+    for (let i = 0; i < 900; i++) {
+      dismissText(game);
+      if (ow.trainerDefeated(lorelei)) break;
+      game.tick(0);
+    }
+    expect(ow.trainerDefeated(lorelei)).toBe(true);
+    expect(walkableCells(game, b)).toBe(4);
+  });
+
+  test.skipIf(!hasGen)("one room's win does not open another's door", () => {
+    const game = leagueGame();
+    game.save.flags.EVENT_BEAT_LORELEIS_ROOM_TRAINER_0 = true;
+    const b = LEAGUE_SEALS.BRUNOS_ROOM!.blocks[0]!;
+    game.overworld.setMap("BRUNOS_ROOM", 4, 5, "up");
+    expect(blockAt(game, b.bx, b.by)).toBe(b.solid);
+  });
+
+  test.skipIf(!hasGen)("retreating toward the entrance gets you shoved back", () => {
+    for (const id of ANTEROOMS) {
+      const game = leagueGame();
+      const ow = game.overworld;
+      ow.setMap(id, 4, 11, "down");
+      ow.onStepComplete();
+      let guard = 0;
+      while (game.stackKinds().at(-1) !== "textbox" && guard++ < 300) game.tick(0);
+      expect(topText(game), id).toContain("run away");
+      // and the shove actually moves them off the entrance row
+      dismissText(game);
+      for (let i = 0; i < 200; i++) game.tick(0);
+      expect(ow.player.cellY, id).toBeLessThan(11);
+    }
+  });
+
+  test.skipIf(!hasGen)("the rest of the room is free to walk", () => {
+    const game = leagueGame();
+    const ow = game.overworld;
+    ow.setMap("LORELEIS_ROOM", 4, 6, "up");
+    ow.onStepComplete();
+    for (let i = 0; i < 120; i++) game.tick(0);
+    expect(game.stackKinds()).toEqual(["overworld"]);
+  });
+
+  test.skipIf(!hasGen)("Lance's doorway stands OPEN on the way in", () => {
+    // His is the inverted one: the .blk ships the arena doorway CLOSED and
+    // pokered opens it on load. Cooked as-is, Lance and both Champion's Room
+    // warps behind him were walled off and the league dead-ended at his door.
+    const game = leagueGame();
+    game.overworld.setMap("LANCES_ROOM", 6, 12, "up");
+    for (const b of LEAGUE_SEALS.LANCES_ROOM!.blocks) {
+      expect(blockAt(game, b.bx, b.by)).toBe(OPEN_BLOCK);
+    }
+    expect(game.overworld.map.isWalkableCell(5, 11)).toBe(true);
+    expect(game.overworld.map.isWalkableCell(6, 11)).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("crossing it locks the door behind you", () => {
+    const game = leagueGame();
+    const ow = game.overworld;
+    ow.setMap("LANCES_ROOM", 6, 11, "up");
+    expect(game.save.flags.EVENT_LANCES_ROOM_LOCK_DOOR ?? false).toBe(false);
+    ow.onStepComplete();
+    expect(game.save.flags.EVENT_LANCES_ROOM_LOCK_DOOR).toBe(true);
+    for (const b of LEAGUE_SEALS.LANCES_ROOM!.blocks) {
+      expect(blockAt(game, b.bx, b.by)).toBe(b.solid);
+    }
+    // and it stays locked across a re-entry
+    ow.setMap("INDIGO_PLATEAU_LOBBY", 4, 4, "down");
+    ow.setMap("LANCES_ROOM", 6, 2, "up");
+    for (const b of LEAGUE_SEALS.LANCES_ROOM!.blocks) {
+      expect(blockAt(game, b.bx, b.by)).toBe(b.solid);
+    }
+  });
+
+  test.skipIf(!hasGen)("a tile that is not the doorway does not lock it", () => {
+    const game = leagueGame();
+    const ow = game.overworld;
+    ow.setMap("LANCES_ROOM", 10, 11, "up");
+    ow.onStepComplete();
+    expect(game.save.flags.EVENT_LANCES_ROOM_LOCK_DOOR ?? false).toBe(false);
+  });
+
+  test("the seals and the blocks the cook bakes cannot drift apart", () => {
+    for (const [id, seal] of Object.entries(LEAGUE_SEALS)) {
+      expect(toggleBlocksFor(id).map((b) => [b.bx, b.by, b.solid]))
+        .toEqual(seal.blocks.map((b) => [b.bx, b.by, b.solid]));
+    }
+    // Lance is the only inverted one, and the only one with no retreat line
+    expect(LEAGUE_SEALS.LANCES_ROOM!.whileSet).toBe(true);
+    expect(LEAGUE_SEALS.LANCES_ROOM!.dontRun).toBeUndefined();
+    for (const id of ANTEROOMS) {
+      expect(LEAGUE_SEALS[id]!.whileSet ?? false, id).toBe(false);
+      expect(LEAGUE_SEALS[id]!.dontRun, id).toBeTruthy();
+    }
   });
 });
 
