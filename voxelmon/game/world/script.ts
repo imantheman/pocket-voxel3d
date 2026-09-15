@@ -51,7 +51,7 @@ export interface ScriptWorld {
   resolveText(textId: string): string | null;
   startWarpTo(mapId: string, x: number, y: number, facing: Dir, onDone: () => void): void;
   scriptMove(entity: { moving: boolean }, dir: Dir, tiles: number, onDone?: () => void): void;
-  player: { moving: boolean; facingCell(): [number, number] };
+  player: { moving: boolean; surfing?: boolean; facingCell(): [number, number] };
   /** The current map: just enough for a field-move verb (use_cut) to check
    * the faced cell against cook-time cuttableCells and know this map's
    * numeric id for the stamp op. */
@@ -493,6 +493,47 @@ function* use_cut(ctx: ScriptContext, ...args: unknown[]): Generator<void, void>
   yield;
 }
 
+/**
+ * HM SURF's field effect (ItemUseSurfboard, engine/items/item_effects.asm).
+ *
+ * Every consumer of `player.surfing` was already here -- water passability
+ * (collision.ts), the water encounter table, the battle arena's open cells --
+ * so this is only the transition nothing ever performed: check the cell the
+ * player faces is water they can get onto, ask, and put them on it.
+ *
+ * Getting OFF is not here. pokered dismounts by walking onto land, which is
+ * the shore tile-pair rule plus overworld.ts's syncSurf on a completed step,
+ * so there is no "stop surfing" command to run.
+ *
+ * args: [monName] for _UsedSurfText's {RAM:wNameBuffer} slot.
+ */
+function* use_surf(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const w = ctx.world as unknown as ScriptWorld & {
+    canSurfHere?: () => boolean;
+    startSurfing?: () => void;
+  };
+  const runner = ctx.runner;
+  const monName = (args[0] as string) ?? "";
+  // .cannotSurf covers both "already afloat" and "that is not ridable water";
+  // the line takes the mon's name either way.
+  if (w.player.surfing === true || !w.canSurfHere?.()) {
+    w.showText(
+      scriptText(w as never, "_NoSurfingHereText", { "RAM:wNameBuffer": monName }),
+      () => runner.resume(),
+    );
+    yield;
+    return;
+  }
+  w.showText(
+    scriptText(w as never, "_SurfingGotOnText", { "RAM:wNameBuffer": monName }),
+    () => {
+      w.startSurfing?.();
+      runner.resume();
+    },
+  );
+  yield;
+}
+
 // HM FLASH's field effect: lifts the dark-cave dimming (OverworldShell's
 // DARK_MAPS / world/overworld.ts setMap) for the rest of this visit.
 // pokered lets Flash fire anywhere — harmless outside a dark cave, since
@@ -832,6 +873,7 @@ const VERBS: Record<string, Verb> = {
   stamp,
   use_cut,
   use_flash,
+  use_surf,
   give_pokemon,
   hide_object,
   show_object,

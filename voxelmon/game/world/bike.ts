@@ -11,6 +11,9 @@
 export const BIKE_STEP_FRAMES = 8;
 
 /** Music.lua:151 SPECIAL.bike. */
+/** Music_Surfing — the theme while afloat, indoors or out. */
+export const SURF_SONG = "Music_Surfing";
+
 export const BIKE_SONG = "Music_BikeRiding";
 
 /**
@@ -59,7 +62,16 @@ export function bikeAllowed(
  * the dungeon songs ARE in the outdoor set, which is what gives the bike
  * music inside Mt. Moon.
  */
-export function effectiveMapSong(song: string | null, onBike: boolean): string | null {
-  if (!song || !onBike) return song;
+export function effectiveMapSong(
+  song: string | null,
+  onBike: boolean,
+  surfing = false,
+): string | null {
+  if (!song) return song;
+  // Surf outranks the bike and is not limited to outdoor themes: the Seafoam
+  // caves are indoors and still play it (pokered PlayDefaultMusic checks
+  // wWalkBikeSurfState before the map's own song).
+  if (surfing) return SURF_SONG;
+  if (!onBike) return song;
   return OUTDOOR_SONGS.has(song) ? BIKE_SONG : song;
 }

@@ -39,7 +39,7 @@ export interface PartyView {
 
 /** The two field moves this port wires up outside battle (PartyMenu.lua's
  * HM dispatch) — voxelmon/game/world/script.ts's use_cut/use_flash verbs. */
-const FIELD_MOVES = ["CUT", "FLASH"] as const;
+const FIELD_MOVES = ["CUT", "SURF", "FLASH"] as const;
 
 export class PartyState implements GameState {
   readonly kind = "party";
@@ -127,7 +127,7 @@ export class PartyState implements GameState {
     this.mode = "list";
     if (label === "STATS") this.game.push(new SummaryState(this.game, this.index));
     else if (label === "SWITCH") this.swapFrom = this.index;
-    else if ((FIELD_MOVES as readonly string[]).includes(label!)) this.useFieldMove(label as "CUT" | "FLASH");
+    else if ((FIELD_MOVES as readonly string[]).includes(label!)) this.useFieldMove(label as (typeof FIELD_MOVES)[number]);
     // else CANCEL: already back to list
   }
 
@@ -135,11 +135,11 @@ export class PartyState implements GameState {
   // (pokered backs all the way out too) and lets the move's own verb
   // (world/script.ts use_cut/use_flash) decide the effect and the text —
   // CUT checks the tile the player faces, FLASH just needs to run.
-  private useFieldMove(moveId: "CUT" | "FLASH"): void {
+  private useFieldMove(moveId: (typeof FIELD_MOVES)[number]): void {
     const mon = this.party()[this.index];
     const name = mon?.nickname ?? this.game.data.pokemon?.[mon?.species]?.name ?? mon?.species ?? "";
     this.game.closeToOverworld();
-    const verb = moveId === "CUT" ? "use_cut" : "use_flash";
+    const verb = { CUT: "use_cut", SURF: "use_surf", FLASH: "use_flash" }[moveId];
     this.game.overworld.runScript([[verb, name]]);
   }
 

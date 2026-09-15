@@ -77,12 +77,12 @@ export class AudioDirector {
    *
    * :337 effectiveMapSong: while `onBike` the bike theme takes over an
    * OUTDOOR song (world/bike.ts) — an indoor theme is never replaced. Surf
-   * is the other override and has no vehicle in the port yet.
+   * is the other override, and that one replaces an indoor theme too.
    */
-  startMap(mapId: string, onBike = false): void {
+  startMap(mapId: string, onBike = false, surfing = false): void {
     const song = this.banks?.mapSong(mapId) ?? null;
     this.mapSong = song;
-    const play = effectiveMapSong(song, onBike);
+    const play = effectiveMapSong(song, onBike, surfing);
     if (play) this.play(play);
   }
 

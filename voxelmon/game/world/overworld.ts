@@ -115,6 +115,13 @@ export interface SaveSlice {
    */
   onBike?: boolean;
   /**
+   * Afloat on a mon (HM SURF). Saved rather than kept only on the Player,
+   * because a save reloaded mid-lake would otherwise come back standing on
+   * water with the flag cleared — a player who cannot move in any direction.
+   * syncSurf treats the CELL as the authority and repairs this either way.
+   */
+  surfing?: boolean;
+  /**
    * The Route 5 DAY CARE's boarder (world/daycare.ts). Absent/null when no
    * mon is in. The steps here are the deferred exp: the walk is only folded
    * into the mon when the player comes to collect it.
@@ -158,7 +165,11 @@ export interface OverworldShell {
   /** NPC wander stream, separate so ambience can't perturb encounters. */
   npcRng: Rng;
   /** Sound.lua:190 play — the field cues the overworld itself triggers. */
-  audio: { playSfx(name: string): void };
+  audio: {
+    playSfx(name: string): void;
+    /** Music.lua:239 startMap — the map theme, bike and surf overrides applied. */
+    startMap?(mapId: string, onBike?: boolean, surfing?: boolean): void;
+  };
   /** Pokemon.lua:90 heal over the party (Commands.lua:587 heal_party). */
   healParty(): void;
   /** Music.lua:383 playOnce — a jingle; Music.lua:407 restoreMap after it. */
@@ -429,6 +440,12 @@ export class Overworld implements ScriptWorld {
     // IsBikeRidingAllowed (OverworldController.lua:343): walking into a
     // building gets you off the bike rather than refusing the door.
     this.syncBike();
+    // And the same for the water. A warp can land the player on it (the
+    // Seafoam drops) and a reload can put them back on it with the flag
+    // cleared; either way the CELL is the authority, not the flag. After the
+    // player is placed, not before -- on the first map load there is no
+    // player yet.
+    this.syncSurf();
     console.log("NPCS " + (this.npcs as any[]).map((n: any) =>
       JSON.stringify(n, (k, v) => (typeof v === "object" && v !== null && k !== "" ? undefined : v))).join(" | "));
   }
@@ -1024,6 +1041,60 @@ export class Overworld implements ScriptWorld {
   }
 
   /** open_daycare -> the DAY CARE gentleman's flow, via the shell. */
+  /**
+   * ItemUseSurfboard's check: the cell the player faces is water, they are
+   * not on it yet, and nothing stands in the way.
+   *
+   * The tile-pair rule matters here — pokered's TilePairCollisionsWater keeps
+   * you from mounting across a shore edge you could not swim back over.
+   */
+  canSurfHere(): boolean {
+    const p = this.player;
+    if (p.surfing) return false;
+    const [fx, fy] = p.facingCell();
+    if (!this.map.inBounds(fx, fy)) return false;
+    if (!this.map.isWaterCell(fx, fy)) return false;
+    if (occupied(this.entities, fx, fy, p)) return false;
+    return true;
+  }
+
+  /**
+   * Get on the water: mount, then take the step onto the cell being faced,
+   * so SURF leaves the player afloat rather than standing on the bank having
+   * announced it.
+   */
+  startSurfing(): void {
+    const p = this.player;
+    p.surfing = true;
+    this.save.surfing = true;
+    this.scriptMove(p, p.facing, 1);
+    this.syncSurfSong();
+  }
+
+  /**
+   * Keep `surfing` honest about where the player actually is.
+   *
+   * Two jobs. Walking back onto land gets off the mon (pokered dismounts on
+   * the shore step, there is no command for it). And a save reloaded while
+   * afloat comes back standing on water with the flag cleared — which is a
+   * player stuck in the middle of a lake — so being on a water cell puts it
+   * back on.
+   */
+  syncSurf(): void {
+    const p = this.player;
+    const onWater = this.map.isWaterCell(p.cellX, p.cellY);
+    if (p.surfing === onWater) return;
+    p.surfing = onWater;
+    this.save.surfing = onWater;
+    this.syncSurfSong();
+  }
+
+  /** Music_Surfing while afloat, the map's own theme once ashore. */
+  private syncSurfSong(): void {
+    const save = this.save as { onBike?: boolean };
+    this.shell.audio?.startMap?.(this.map.id, save.onBike === true, this.player.surfing === true);
+  }
+
   /** record_hall_of_fame -> game.ts recordHallOfFame (the induction flow). */
   recordHallOfFame(onDone?: () => void): void {
     (this.shell as unknown as {
@@ -1214,6 +1285,7 @@ export class Overworld implements ScriptWorld {
     // onStep function hook (story cutscene logic) or a declarative coord
     // trigger. Fires for ANY map that registers one — the two _ONSTEP_HOST
     // entries are checked too so the original Pallet/Oak hooks still run.
+    this.syncSurf();
     if (this.mansionHoleStep()) return;
     this.lanceLockDoor();
     if (this.leagueDontRun()) return;

@@ -49,7 +49,9 @@ import {
   GYM_MACHINES, gymGateFlag, gymGuardKey, LEAGUE_SEALS, MANSION_BLOCKS,
   MANSION_HOLES, OPEN_BLOCK, toggleBlocksFor,
 } from "../voxelmon/game/world/toggleblocks.ts";
-import { bikeAllowed, BIKE_SONG, effectiveMapSong } from "../voxelmon/game/world/bike.ts";
+import {
+  bikeAllowed, BIKE_SONG, effectiveMapSong, SURF_SONG,
+} from "../voxelmon/game/world/bike.ts";
 import { fillAideText } from "../voxelmon/game/world/oaksaide.ts";
 import { daycareFee, learnMovesFromDayCare } from "../voxelmon/game/world/daycare.ts";
 import { paginate, Textbox } from "../voxelmon/game/world/textbox.ts";
@@ -3641,6 +3643,172 @@ describe("the Mansion switches and the Cinnabar quiz", () => {
     }
     expect(toggleBlocksFor("CINNABAR_GYM")).toEqual(GYM_MACHINES.map((m) => m.gate));
     expect(toggleBlocksFor("PALLET_TOWN")).toEqual([]);
+  });
+});
+
+describe("HM03 SURF", () => {
+  /** A water cell on this map with a walkable cell beside it, if one exists. */
+  function shore(
+    game: VoxelmonGame,
+  ): { land: [number, number]; water: [number, number]; dir: Dir } | null {
+    const m = game.overworld.map;
+    const DIRS: [Dir, number, number][] = [
+      ["up", 0, -1], ["down", 0, 1], ["left", -1, 0], ["right", 1, 0],
+    ];
+    for (let y = 1; y < m.heightCells - 1; y++) {
+      for (let x = 1; x < m.widthCells - 1; x++) {
+        if (!m.isWalkableCell(x, y) || m.isWaterCell(x, y)) continue;
+        for (const [dir, dx, dy] of DIRS) {
+          if (m.isWaterCell(x + dx, y + dy)) {
+            return { land: [x, y], water: [x + dx, y + dy], dir };
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  /** Stand on the bank of a real lake, facing the water. */
+  function atShore(map = "PALLET_TOWN"): { game: VoxelmonGame; at: any } | null {
+    const game = makeMenuGame();
+    game.overworld.setMap(map, 5, 6, "down");
+    const at = shore(game);
+    if (!at) return null;
+    game.overworld.setMap(map, at.land[0], at.land[1], at.dir);
+    return { game, at };
+  }
+
+  /** START -> POKéMON, the way a player reaches the party menu. */
+  function openParty(game: VoxelmonGame): void {
+    tap(game, VOX_BTN.start);
+    let guard = 0;
+    while (game.stackKinds().at(-1) !== "party" && guard++ < 40) tap(game, VOX_BTN.a);
+    expect(game.stackKinds().at(-1)).toBe("party");
+  }
+
+  function partyView(game: VoxelmonGame): any {
+    return game.party() as any;
+  }
+
+  function runSurf(game: VoxelmonGame, name = "SQUIRTLE"): void {
+    game.overworld.runScript([["use_surf", name]]);
+    for (let i = 0; i < 600; i++) {
+      if (game.stackKinds().at(-1) === "textbox") dismissText(game);
+      else game.tick(0);
+    }
+  }
+
+  test.skipIf(!hasGen)("water is impassable on foot and ridable afloat", () => {
+    // Every consumer of `surfing` was already wired -- passability, the water
+    // encounter table, the battle arena. Nothing ever set it, so the flag was
+    // permanently false and the water was a wall.
+    const found = atShore();
+    if (!found) return;
+    const { game, at } = found;
+    const ow = game.overworld;
+    expect(ow.map.isWalkableCell(at.water[0], at.water[1])).toBe(false);
+    expect(ow.map.isWaterCell(at.water[0], at.water[1])).toBe(true);
+    expect(ow.player.surfing).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("SURF gets you onto the water and off the bank", () => {
+    const found = atShore();
+    if (!found) return;
+    const { game, at } = found;
+    const ow = game.overworld;
+    expect(ow.canSurfHere()).toBe(true);
+    runSurf(game);
+    expect(ow.player.surfing).toBe(true);
+    expect(game.save.surfing).toBe(true);
+    // it takes the step, rather than announcing SURF from dry land
+    expect([ow.player.cellX, ow.player.cellY]).toEqual(at.water);
+  });
+
+  test.skipIf(!hasGen)("facing dry land it refuses, and does not mount", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    ow.setMap("PALLET_TOWN", 5, 6, "down");
+    expect(ow.canSurfHere()).toBe(false);
+    runSurf(game);
+    expect(ow.player.surfing).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("stepping back onto land gets you off", () => {
+    const found = atShore();
+    if (!found) return;
+    const { game, at } = found;
+    const ow = game.overworld;
+    runSurf(game);
+    expect(ow.player.surfing).toBe(true);
+    // walk back to the bank the way a completed step would land
+    ow.player.cellX = at.land[0];
+    ow.player.cellY = at.land[1];
+    ow.onStepComplete();
+    expect(ow.player.surfing).toBe(false);
+    expect(game.save.surfing).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("a save reloaded afloat comes back afloat, not stuck", () => {
+    // Without syncSurf on map entry this is a player standing in open water
+    // with the flag cleared: every direction blocked, no way to move at all.
+    const found = atShore();
+    if (!found) return;
+    const { game, at } = found;
+    const ow = game.overworld;
+    ow.player.surfing = false;
+    ow.setMap("PALLET_TOWN", at.water[0], at.water[1], "down");
+    expect(ow.player.surfing).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("the party menu offers SURF only to a mon that knows it", () => {
+    // Same rule CUT and FLASH already follow: the entry appears on the mon
+    // the submenu was opened on, not on the party as a whole.
+    const game = makeMenuGame();
+    const mon: any = newMon(romData!, "SQUIRTLE", 30);
+    mon.moves = [{ id: "TACKLE", pp: 30 }];
+    game.save.party.push(mon);
+    openParty(game);
+    tap(game, VOX_BTN.a); // open the submenu on slot 1
+    expect(partyView(game).submenuItems).not.toContain("SURF");
+
+    mon.moves = [{ id: "SURF", pp: 15 }];
+    expect(partyView(game).submenuItems).toContain("SURF");
+    // and the ones that were already there did not move
+    expect(partyView(game).submenuItems).toEqual(["STATS", "SWITCH", "SURF", "CANCEL"]);
+  });
+
+  test.skipIf(!hasGen)("choosing SURF from that menu actually puts you on the water", () => {
+    // The menu entry and the verb it dispatches are separate things: listing
+    // SURF while running use_flash would look right and do nothing at all.
+    const found = atShore();
+    if (!found) return;
+    const { game, at } = found;
+    const mon: any = newMon(romData!, "SQUIRTLE", 30);
+    mon.moves = [{ id: "SURF", pp: 15 }];
+    game.save.party.push(mon);
+    openParty(game);
+    tap(game, VOX_BTN.a);
+    const items = partyView(game).submenuItems as string[];
+    for (let i = 0; i < items.indexOf("SURF"); i++) tap(game, VOX_BTN.down);
+    tap(game, VOX_BTN.a);
+    for (let i = 0; i < 600; i++) {
+      if (game.stackKinds().at(-1) === "textbox") dismissText(game);
+      else game.tick(0);
+    }
+    expect(game.overworld.player.surfing).toBe(true);
+    expect([game.overworld.player.cellX, game.overworld.player.cellY]).toEqual(at.water);
+  });
+
+  test("surfing takes the music over, indoors as well as out", () => {
+    // pokered checks wWalkBikeSurfState before the map's own song, so the
+    // Seafoam caves play it too -- unlike the bike, which only overrides
+    // outdoor themes.
+    expect(effectiveMapSong("Music_Pallet", false, true)).toBe(SURF_SONG);
+    expect(effectiveMapSong("Music_Dungeon1", false, true)).toBe(SURF_SONG);
+    // and it outranks the bike
+    expect(effectiveMapSong("Music_Routes1", true, true)).toBe(SURF_SONG);
+    // ashore, nothing changes
+    expect(effectiveMapSong("Music_Pallet", false, false)).toBe("Music_Pallet");
   });
 });
 
