@@ -105,6 +105,22 @@ const PAK_CACHE_FLOOR_KB: usize = 24 * 1024;
 /// has walked well away from, and the memory is better left for geometry.
 const PAK_CACHE_CEIL_KB: usize = 72 * 1024;
 
+/// The largest pak a read-ahead will attempt.
+///
+/// map_pak reads only the sections a build actually needs -- that is what the
+/// planned read is for -- but prefetch_start reads the WHOLE file, so the two
+/// costs are not comparable for a big map. Viridian Forest's pak is 56 MB,
+/// seven times the next biggest, and Route 23 is 48 MB; pulling one of those
+/// in whole claims the heap the geometry then has to be built in, and the map
+/// half-loads or the console stops. The "does it fit beside the current map"
+/// test below does not catch it, because the map you are standing in when you
+/// walk into the forest is its 1.7 MB gate.
+///
+/// A read-ahead has to cost less than the load it saves. Past this size it
+/// does not, so those maps simply load the way they did before read-ahead
+/// existed -- which is the behaviour this is restoring, not a new limit.
+const PREFETCH_MAX_KB: usize = 16 * 1024;
+
 /// How much of the free heap the pak cache may claim. The rest has to carry
 /// the built geometry (up to ~14 MB of vertices), its texture, and QuickJS.
 const PAK_CACHE_HEAP_SHARE: usize = 2; // i.e. a half
@@ -362,6 +378,14 @@ unsafe fn prefetch_start(name: &str) -> bool {
     let Ok(file) = std::fs::File::open(&path) else { return false };
     let Ok(md) = file.metadata() else { return false };
     let len = md.len() as usize;
+    // Too big to read ahead at all: see PREFETCH_MAX_KB.
+    if len / 1024 > PREFETCH_MAX_KB {
+        dlog(&format!(
+            "[pv] prefetch {} skipped: {} MB is past the {} MB read-ahead cap",
+            name, len / 1048576, PREFETCH_MAX_KB / 1024,
+        ));
+        return false;
+    }
     // Only if it can live alongside the map being played without pushing it
     // out: a prefetch that evicts the ground under your feet is a loss.
     if cache_total_kb() + len / 1024 > PAK_CACHE_BUDGET_KB {
