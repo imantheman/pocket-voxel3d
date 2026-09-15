@@ -865,11 +865,26 @@ const VERBS: Record<string, Verb> = {
   engage_trainer,
   set_heal_point,
   old_man_demo,
+  record_hall_of_fame,
   push_screen: noop_object,
   play_sound: noop_audio,
   play_music: noop_audio,
   stop_music: noop_audio,
 };
+
+/**
+ * predef HallOfFamePC (engine/events/hall_of_fame.asm): the induction, the
+ * credits, and the save that follows them. The whole flow is on the game side
+ * (game.ts recordHallOfFame) because it pushes screens and rewrites where the
+ * save says the player lives; the verb is just the hand-off.
+ */
+function* record_hall_of_fame(ctx: ScriptContext): Generator<void, void> {
+  const runner = ctx.runner;
+  const w = ctx.world as unknown as { recordHallOfFame?: (done: () => void) => void };
+  if (!w.recordHallOfFame) return;
+  w.recordHallOfFame(() => runner.resume());
+  yield;
+}
 
 /** ScriptRunner.lua:26 scanLabels — first row wins, 1-based like the Lua. */
 function scanLabels(script: ScriptRow[]): Map<string, number> {

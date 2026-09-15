@@ -46,6 +46,10 @@ import { TitleState, TITLE_PAGES } from "./ui/title.ts";
 import { StartMenuState } from "./ui/startmenu.ts";
 import { DevMenuState } from "./ui/devmenu.ts";
 import { CARD_PIC_RECT, TrainerCardState } from "./ui/trainercard.ts";
+import { CreditsState, HallOfFameState } from "./ui/hofscreen.ts";
+import {
+  applyPostGameHome, POST_GAME_HOME, recordHallOfFame,
+} from "./world/halloffame.ts";
 import { OptionsMenuState } from "./ui/optionsmenu.ts";
 import { PrizeState } from "./ui/prizescreen.ts";
 import { SlotMachineState } from "./ui/slotmachine.ts";
@@ -958,6 +962,18 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       const r = CARD_PIC_RECT;
       return [{ page: v.picPage, x: r.x, y: r.y, w: r.w, h: r.h }];
     }
+    if (top?.kind === "halloffame") {
+      // The inductee, centred the way HallOfFameDisplayMonInfo places it.
+      const v = top.view();
+      if (!v.mon || v.mon.picPage < 0) return [];
+      return [{ page: v.mon.picPage, x: 188, y: 40, w: 112, h: 112 }];
+    }
+    if (top?.kind === "credits") {
+      // Credits.lua's mon sits to the left of the staff names.
+      const v = top.view();
+      if (v.picPage < 0) return [];
+      return [{ page: v.picPage, x: 40, y: 68, w: 96, h: 96 }];
+    }
     if (top?.kind === "pokedex") {
       // DexEntryMenu.lua draws the front pic top-left of the DATA page. Uses
       // the same full-screen pic layer as the title mon; coordinates are in
@@ -1201,6 +1217,41 @@ export class VoxelmonGame implements OverworldShell, SceneView {
    * script rows because it branches on a party pick in the middle, the same
    * reason the prize window is its own state.
    */
+  /**
+   * predef HallOfFamePC (engine/events/hall_of_fame.asm): write the record,
+   * roll the induction, roll the credits — and then, instead of pokered's
+   * `jp Init` soft reset to the title screen, put the player back in their
+   * own bedroom in Pallet with everything they earned intact.
+   *
+   * The save is written at THE END, which is where the original writes it
+   * too, so a champion who turns the console off on the credits still comes
+   * back a champion.
+   */
+  recordHallOfFame(onDone?: () => void): void {
+    const entry = recordHallOfFame(this.save as never);
+    const finish = (): void => {
+      // SaveGameData's neighbours: a healed party, home, and LAST_MAP moved
+      // off the plateau so the bedroom door opens onto Pallet.
+      this.healParty();
+      applyPostGameHome(this.save as never);
+      this.overworld.lastOutdoor = (this.save as { lastOutdoor?: unknown }).lastOutdoor as never;
+      this.writeSave?.();
+      this.overworld.startWarpTo(
+        POST_GAME_HOME.map, POST_GAME_HOME.x, POST_GAME_HOME.y, POST_GAME_HOME.facing,
+      );
+      onDone?.();
+    };
+    const rollCredits = (): void => {
+      const screens =
+        (this.data as { field?: { credits?: { screens?: unknown[] } } }).field?.credits?.screens
+        ?? [];
+      if (screens.length === 0) { finish(); return; }
+      this.push(new CreditsState(this as never, screens as never, finish));
+    };
+    if (entry.length === 0) { rollCredits(); return; }
+    this.push(new HallOfFameState(this as never, entry, rollCredits));
+  }
+
   openDaycare(onDone?: () => void): void {
     const t = (this.data as { text?: Record<string, string> }).text ?? {};
     const line = (k: string, fallback: string): string => t[k] ?? fallback;
@@ -1630,6 +1681,18 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   party(): unknown {
     const top = this.stack[this.stack.length - 1] as any;
     return top?.kind === "party" ? top.view() : null;
+  }
+
+  /** ui/hofscreen.ts HallOfFameState.view, for scene.ts. */
+  hallOfFameScreen(): unknown {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "halloffame" ? top.view() : null;
+  }
+
+  /** ui/hofscreen.ts CreditsState.view, for scene.ts. */
+  creditsScreen(): unknown {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "credits" ? top.view() : null;
   }
 
   pokedexScreen(): unknown {

@@ -1024,6 +1024,13 @@ export class Overworld implements ScriptWorld {
   }
 
   /** open_daycare -> the DAY CARE gentleman's flow, via the shell. */
+  /** record_hall_of_fame -> game.ts recordHallOfFame (the induction flow). */
+  recordHallOfFame(onDone?: () => void): void {
+    (this.shell as unknown as {
+      recordHallOfFame?: (done?: () => void) => void;
+    }).recordHallOfFame?.(onDone);
+  }
+
   openDaycare(onDone?: () => void): void {
     (this.shell as unknown as {
       openDaycare?: (done?: () => void) => void;

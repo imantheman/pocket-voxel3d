@@ -26,6 +26,9 @@ import { expForLevel } from "../voxelmon/game/rules/growth.ts";
 import { VoxelmonGame } from "../voxelmon/game/game.ts";
 import { encodeSave } from "../voxelmon/game/save-lua.ts";
 import { decodeSave } from "../voxelmon/game/save-read.ts";
+import {
+  applyPostGameHome, POST_GAME_HOME, recordHallOfFame,
+} from "../voxelmon/game/world/halloffame.ts";
 import { RecorderHost } from "../voxelmon/game/host.ts";
 import { Input } from "../voxelmon/game/input.ts";
 import { gearMapPoint, gearTabs, gearTouchDown } from "../voxelmon/game/ui/kantogear.ts";
@@ -3638,6 +3641,177 @@ describe("the Mansion switches and the Cinnabar quiz", () => {
     }
     expect(toggleBlocksFor("CINNABAR_GYM")).toEqual(GYM_MACHINES.map((m) => m.gate));
     expect(toggleBlocksFor("PALLET_TOWN")).toEqual([]);
+  });
+});
+
+describe("the endgame", () => {
+  function champGame(): VoxelmonGame {
+    const data = {
+      ...(romData as object),
+      cookedMaps: [
+        ...((romData as { cookedMaps?: string[] }).cookedMaps ?? []),
+        "CHAMPIONS_ROOM", "HALL_OF_FAME",
+      ],
+    };
+    const game = new VoxelmonGame(data as never, new MenuHost(), 1);
+    game.newGame();
+    game.closeToOverworld();
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 60));
+    game.save.flags.EVENT_CHOSE_SQUIRTLE = true;
+    return game;
+  }
+
+  function winBattles(game: VoxelmonGame): void {
+    (game as any).startTrainerBattle = (
+      _id: string, _idx: number, _name: unknown, onDone: (won: boolean) => void,
+    ) => onDone(true);
+  }
+
+  /** Mash through whatever the scene is doing until `stop` says so. */
+  function runScene(game: VoxelmonGame, stop: () => boolean, ticks = 4000): boolean {
+    for (let i = 0; i < ticks; i++) {
+      if (stop()) return true;
+      if (game.stackKinds().at(-1) === "textbox") dismissText(game);
+      else game.tick(0);
+    }
+    return stop();
+  }
+
+  test.skipIf(!hasGen)("the Champion's room opens with the rival, not silence", () => {
+    const game = champGame();
+    const ow = game.overworld;
+    ow.setMap("CHAMPIONS_ROOM", 4, 6, "up");
+    ow.onStepComplete();
+    let guard = 0;
+    while (game.stackKinds().at(-1) !== "textbox" && guard++ < 400) game.tick(0);
+    expect(topText(game)).toContain("looking forward to seeing");
+  });
+
+  test.skipIf(!hasGen)("he fights with the champion team", () => {
+    const game = champGame();
+    const ow = game.overworld;
+    ow.setMap("CHAMPIONS_ROOM", 4, 6, "up");
+    ow.onStepComplete();
+    let guard = 0;
+    while (game.stackKinds().at(-1) !== "battle" && guard++ < 1200) {
+      if (game.stackKinds().at(-1) === "textbox") dismissText(game);
+      else game.tick(0);
+    }
+    expect(game.stackKinds().at(-1)).toBe("battle");
+    // OPP_RIVAL3 party 1 + the Squirtle counterpick = party 2, the VENUSAUR set
+    const battle = (game.battleView() as { battle: any }).battle;
+    expect(battle.enemyParty.at(-1).species).toBe("VENUSAUR");
+    expect(battle.enemyParty.length).toBe(6);
+  });
+
+  test.skipIf(!hasGen)("losing to him does not crown you", () => {
+    const game = champGame();
+    const ow = game.overworld;
+    (game as any).startTrainerBattle = (
+      _id: string, _idx: number, _name: unknown, onDone: (won: boolean) => void,
+    ) => onDone(false);
+    ow.setMap("CHAMPIONS_ROOM", 4, 6, "up");
+    ow.onStepComplete();
+    runScene(game, () => false, 1200);
+    expect(game.save.flags.EVENT_BEAT_CHAMPION_RIVAL ?? false).toBe(false);
+    expect(game.save.flags.EVENT_HALL_OF_FAME_PENDING ?? false).toBe(false);
+    expect(game.save.hallOfFame ?? []).toEqual([]);
+  });
+
+  test.skipIf(!hasGen)("beating him crowns you and sends you up to the Hall", () => {
+    const game = champGame();
+    const ow = game.overworld;
+    winBattles(game);
+    ow.setMap("CHAMPIONS_ROOM", 4, 6, "up");
+    ow.onStepComplete();
+    expect(runScene(game, () => ow.map.id === "HALL_OF_FAME")).toBe(true);
+    expect(game.save.flags.EVENT_BEAT_CHAMPION_RIVAL).toBe(true);
+    expect(game.save.flags.EVENT_BEAT_CHAMPION_RIVAL_THIS_RUN).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("walking back in as champion does not re-run the fight", () => {
+    const game = champGame();
+    const ow = game.overworld;
+    game.save.flags.EVENT_BEAT_CHAMPION_RIVAL_THIS_RUN = true;
+    ow.setMap("CHAMPIONS_ROOM", 4, 6, "up");
+    ow.onStepComplete();
+    for (let i = 0; i < 200; i++) game.tick(0);
+    expect(game.stackKinds()).toEqual(["overworld"]);
+  });
+
+  test.skipIf(!hasGen)("the Hall records the party, rolls the credits, and sends you home", () => {
+    const game = champGame();
+    const ow = game.overworld;
+    game.save.party.push(newMon(romData!, "PIDGEOT", 55));
+    game.save.flags.EVENT_HALL_OF_FAME_PENDING = true;
+    ow.setMap("HALL_OF_FAME", 4, 7, "up");
+    ow.onStepComplete();
+
+    // the induction rolls first
+    expect(runScene(game, () => game.stackKinds().at(-1) === "halloffame", 2000)).toBe(true);
+    const hof = game.hallOfFameScreen() as any;
+    expect(hof.total).toBe(2);
+    expect(hof.mon.name).toBe("SQUIRTLE");
+    expect(hof.title).toContain("HALL OF FAME");
+
+    // then the credits
+    expect(runScene(game, () => game.stackKinds().at(-1) === "credits", 4000)).toBe(true);
+    const cr = game.creditsScreen() as any;
+    expect(cr.total).toBeGreaterThan(5);
+    expect(cr.lines.length).toBeGreaterThan(0);
+
+    // and then home to Pallet, healed, with the record kept
+    expect(runScene(game, () => ow.map.id === "REDS_HOUSE_2F", 60000)).toBe(true);
+    expect(game.save.hallOfFame.length).toBe(1);
+    expect(game.save.hallOfFame[0].map((m: any) => m.species))
+      .toEqual(["SQUIRTLE", "PIDGEOT"]);
+    expect(game.save.lastOutdoor.id).toBe("PALLET_TOWN");
+    // clear_flag deletes the key rather than writing false
+    expect(game.save.flags.EVENT_HALL_OF_FAME_PENDING ?? false).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("the induction runs once, not on every visit", () => {
+    const game = champGame();
+    const ow = game.overworld;
+    ow.setMap("HALL_OF_FAME", 4, 7, "up");
+    ow.onStepComplete();
+    for (let i = 0; i < 300; i++) game.tick(0);
+    expect(game.stackKinds()).toEqual(["overworld"]);
+    expect(game.save.hallOfFame ?? []).toEqual([]);
+  });
+
+  test("the record is a photograph, not a live view of the party", () => {
+    // The mons go on being played with -- levelled, renamed, released -- and
+    // the hall has to keep the team that actually won.
+    const save: any = { party: [{ species: "RATTATA", level: 12, nickname: "RAT" }] };
+    const entry = recordHallOfFame(save);
+    save.party[0].level = 99;
+    save.party[0].species = "RAICHU";
+    expect(entry).toEqual([{ species: "RATTATA", level: 12, nickname: "RAT" }]);
+    expect(save.hallOfFame[0][0].level).toBe(12);
+  });
+
+  test("a second win is a second record, not a replacement", () => {
+    const save: any = { party: [{ species: "RATTATA", level: 12 }] };
+    recordHallOfFame(save);
+    save.party = [{ species: "MEWTWO", level: 70 }];
+    recordHallOfFame(save);
+    expect(save.hallOfFame.length).toBe(2);
+    expect(save.hallOfFame[1][0].species).toBe("MEWTWO");
+  });
+
+  test("the record survives a save round trip", () => {
+    const save: any = { party: [{ species: "RATTATA", level: 12, nickname: "RAT" }] };
+    recordHallOfFame(save);
+    const back = decodeSave(encodeSave(save)) as any;
+    expect(back.hallOfFame[0][0]).toEqual({ species: "RATTATA", level: 12, nickname: "RAT" });
+  });
+
+  test("home is Pallet, not wherever the league left you", () => {
+    const save: any = { lastOutdoor: { id: "INDIGO_PLATEAU", x: 1, y: 1 } };
+    applyPostGameHome(save);
+    expect(save.lastOutdoor).toEqual({ id: "PALLET_TOWN", x: 5, y: 6 });
+    expect(POST_GAME_HOME.map).toBe("REDS_HOUSE_2F");
   });
 });
 

@@ -180,6 +180,8 @@ export class Scene {
   private boxSig: string | null = null;
   private partySig: string | null = null;
   private dexSig: string | null = null;
+  private hofSig: string | null = null;
+  private creditsSig: string | null = null;
   private summarySig: string | null = null;
   private uiRows: UiRowCache[] = [];
   private uiPage = -1;
@@ -887,6 +889,49 @@ export class Scene {
       host.uiClear();
       this.uiOwner = null;
       this.menuSig = this.titleSig = this.namingSig = null;
+    this.hofSig = this.creditsSig = null;
+    }
+    // The HALL OF FAME roll (ui/hofscreen.ts): one inductee at a time, the
+    // front pic on the pic layer with its dex number, name and level stamped
+    // under it. No cursor and nothing to choose -- it advances itself.
+    const hof = (view as unknown as { hallOfFameScreen?: () => any }).hallOfFameScreen?.();
+    if (hof) {
+      const sig = `H${hof.index},${hof.mon ? hof.mon.name + hof.mon.level : "-"}`;
+      if (sig !== this.hofSig) {
+        this.hofSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        host.uiFill(0, 0, UI_COLS, UI_ROWS, SPACE);
+        this.stamp(host, Math.max(0, Math.floor((UI_COLS - hof.title.length) / 2)), 1, hof.title);
+        if (hof.mon) {
+          this.stamp(host, 3, 12, hof.mon.dexNo);
+          this.stamp(host, 3, 14, hof.mon.name);
+          this.stamp(host, 3, 16, hof.mon.level);
+        }
+      }
+      return;
+    }
+    // The CREDITS (engine/movie/credits.asm), rolled from the staff screens
+    // the importer pulled out of the ROM -- each line already carries the
+    // column the original centres it at.
+    const cr = (view as unknown as { creditsScreen?: () => any }).creditsScreen?.();
+    if (cr) {
+      const sig = cr.theEnd ? "CEND" : `C${cr.index}`;
+      if (sig !== this.creditsSig) {
+        this.creditsSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        host.uiFill(0, 0, UI_COLS, UI_ROWS, SPACE);
+        if (cr.theEnd) {
+          const end = "THE END";
+          this.stamp(host, Math.max(0, Math.floor((UI_COLS - end.length) / 2)), 8, end);
+        } else {
+          cr.lines.forEach((ln: any, i: number) => {
+            this.stamp(host, Math.max(0, ln.column), 5 + i * 2, String(ln.text));
+          });
+        }
+      }
+      return;
     }
     // POKéDEX (pokedexscreen.ts): list / side-menu / entry, all on the tile
     // layer; the DATA-page sprite rides the pic() layer under these tiles.

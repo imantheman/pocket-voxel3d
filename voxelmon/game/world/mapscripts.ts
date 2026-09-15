@@ -687,6 +687,84 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     },
   },
 
+  // story.lua M.CHAMPIONS_ROOM (scripts/ChampionsRoom.asm). The last fight and
+  // the scene that follows it. Like the Viridian Mart parcel this runs off the
+  // map's onStep rather than an onEnter the port does not have, so it opens on
+  // the first step into the room instead of the instant the warp lands.
+  //
+  // ChampionsRoomRivalDefeatedScript re-displays the rival's text_asm, which
+  // on the EVENT_BEAT_CHAMPION_RIVAL branch is the after-battle line; the
+  // in-battle "defeated" line is the engine's own.
+  //
+  // Oak's entrance is Music_Cities1AlternateTempo in the original — a fade,
+  // 100 frames, then Cities1 restarted at tempo 232. play_music is a no-op in
+  // this port's audio slice, so the scene plays without it rather than with
+  // the wrong theme.
+  CHAMPIONS_ROOM: {
+    onStep: (ow: any, save: any) => {
+      const f = save?.flags ?? {};
+      if (f.EVENT_BEAT_CHAMPION_RIVAL_THIS_RUN) return null;
+      if (ow?.runner?.isRunning?.()) return null;
+      return [
+        // RivalEntrance_RLEMovement: he cuts you off before you reach him
+        ["face_object", "CHAMPIONSROOM_RIVAL", "down"], //                 1
+        ["show_text", "_ChampionsRoomRivalIntroText"], //                  2
+        ["rival_battle", "OPP_RIVAL3", 1], //                             3
+        ["jump_if_false", "end"], //                                       4  a loss ends it
+        ["set_flag", "EVENT_BEAT_CHAMPION_RIVAL_THIS_RUN"], //             5
+        ["set_flag", "EVENT_BEAT_CHAMPION_RIVAL"], //                      6
+        ["show_text", "_ChampionsRoomRivalAfterBattleText"], //            7
+        // ChampionsRoomOakArrivesScript
+        ["show_text", "_ChampionsRoomOakText"], //                         8
+        ["show_object", "CHAMPIONS_ROOM", "CHAMPIONSROOM_OAK"], //         9
+        ["walk_npc", "CHAMPIONSROOM_OAK", ["up", "up", "up", "up", "up"]], // 10
+        // OakCongratulatesPlayerScript: rival faces left, Oak faces down
+        ["face_object", "CHAMPIONSROOM_RIVAL", "left"], //                11
+        ["face_object", "CHAMPIONSROOM_OAK", "down"], //                  12
+        ["show_text", "_ChampionsRoomOakCongratulatesPlayerText"], //     13
+        // OakDisappointedWithRivalScript: Oak turns on the rival
+        ["face_object", "CHAMPIONSROOM_OAK", "right"], //                 14
+        ["show_text", "_ChampionsRoomOakDisappointedWithRivalText"], //   15
+        // OakComeWithMeScript: back to the player, then out the north door
+        ["face_object", "CHAMPIONSROOM_OAK", "down"], //                  16
+        ["show_text", "_ChampionsRoomOakComeWithMeText"], //              17
+        ["walk_npc", "CHAMPIONSROOM_OAK", ["up", "up"]], //               18
+        ["hide_object", "CHAMPIONS_ROOM", "CHAMPIONSROOM_OAK"], //        19
+        // ChampionsRoomPlayerFollowsOakScript, then the north warp. The
+        // induction is the ROOM's job, not this script's, so hand it the
+        // marker and let HALL_OF_FAME's own step pick it up.
+        ["set_flag", "EVENT_HALL_OF_FAME_PENDING"], //                    20
+        ["move_player", "up", 3], //                                      21
+        ["warp", "HALL_OF_FAME", 4, 7, "up"], //                          22
+      ] as ScriptRow[];
+    },
+  },
+
+  // story.lua M.HALL_OF_FAME (scripts/HallOfFame.asm). The induction's entry
+  // point is the ROOM: HallOfFameDefaultScript walks the player up into Oak,
+  // HallOfFameOakCongratulationsScript turns them face to face and shows his
+  // line, and HallOfFameResetEventsAndSaveScript runs predef HallOfFamePC.
+  //
+  // EVENT_HALL_OF_FAME_PENDING is the one-shot the Champion's Room sets and
+  // this clears, so walking back in later does not replay the induction --
+  // the room is still there to visit, it just does not crown you twice.
+  HALL_OF_FAME: {
+    onStep: (ow: any, save: any) => {
+      if (!save?.flags?.EVENT_HALL_OF_FAME_PENDING) return null;
+      if (ow?.runner?.isRunning?.()) return null;
+      return [
+        ["clear_flag", "EVENT_HALL_OF_FAME_PENDING"], //         1  before, not after:
+        //                                                          record_hall_of_fame
+        //                                                          warps away and never
+        //                                                          comes back to row 5
+        ["move_player", "up", 5], //                             2  (4,7) -> (4,2), beside Oak
+        ["face_object", "HALLOFFAME_OAK", "left"], //            3
+        ["show_text", "_HallOfFameOakText"], //                  4
+        ["record_hall_of_fame"], //                              5  induction, credits, home
+      ] as ScriptRow[];
+    },
+  },
+
   // story.lua M.POKEMON_TOWER_2F (scripts/PokemonTower2F.asm). He is a coord
   // trigger, not a doorstop: walking onto the landing starts it.
   POKEMON_TOWER_2F: {
