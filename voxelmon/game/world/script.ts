@@ -552,6 +552,26 @@ function* use_fly(ctx: ScriptContext, ...args: unknown[]): Generator<void, void>
   yield;
 }
 
+/**
+ * HM STRENGTH's field effect (ItemUseCardKey's neighbour, engine/items/
+ * item_effects.asm .useStrength). It does not move anything by itself: it
+ * gives the PLAYER the ability to shove boulders, and the shoving happens by
+ * walking into them afterwards.
+ *
+ * args: [monName] for _UsedStrengthText's {RAM:wNameBuffer} slot.
+ */
+function* use_strength(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const w = ctx.world as unknown as ScriptWorld & { enableStrength?: () => void };
+  const runner = ctx.runner;
+  const monName = (args[0] as string) ?? "";
+  w.enableStrength?.();
+  w.showText(
+    scriptText(w as never, "_UsedStrengthText", { "RAM:wNameBuffer": monName }),
+    () => runner.resume(),
+  );
+  yield;
+}
+
 // HM FLASH's field effect: lifts the dark-cave dimming (OverworldShell's
 // DARK_MAPS / world/overworld.ts setMap) for the rest of this visit.
 // pokered lets Flash fire anywhere — harmless outside a dark cave, since
@@ -893,6 +913,7 @@ const VERBS: Record<string, Verb> = {
   use_flash,
   use_surf,
   use_fly,
+  use_strength,
   give_pokemon,
   hide_object,
   show_object,

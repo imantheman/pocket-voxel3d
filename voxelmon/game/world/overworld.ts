@@ -128,6 +128,12 @@ export interface SaveSlice {
    */
   visited?: Record<string, boolean>;
   /**
+   * STRENGTH has been used, so boulders can be shoved (world/script.ts
+   * use_strength). pokered re-arms this per map; this keeps it, see
+   * Overworld.enableStrength.
+   */
+  strengthActive?: boolean;
+  /**
    * The Route 5 DAY CARE's boarder (world/daycare.ts). Absent/null when no
    * mon is in. The steps here are the deferred exp: the walk is only folded
    * into the mon when the player comes to collect it.
@@ -619,7 +625,7 @@ export class Overworld implements ScriptWorld {
       if (!this.player.moving && this.player.facing === dir) {
         if (this.checkEdgeExit(dir)) return;
         if (this.checkLedgeHop(dir)) return;
-        // boulder pushes: outside the slice
+        if (this.checkBoulderPush(dir)) return;
       }
       // Content boundary, standing case: a warp TILE whose destination map
       // is not in the cooked set must not even be stepped on (the real game
@@ -1103,6 +1109,56 @@ export class Overworld implements ScriptWorld {
   private syncSurfSong(): void {
     const save = this.save as { onBike?: boolean };
     this.shell.audio?.startMap?.(this.map.id, save.onBike === true, this.player.surfing === true);
+  }
+
+  /**
+   * use_strength: the player can now shove boulders. pokered clears its flag
+   * on every map load, so STRENGTH is re-used per area; this keeps it for the
+   * save instead. A player who has proved they can move boulders being asked
+   * to prove it again on each floor of Victory Road is nagging, not
+   * difficulty.
+   */
+  enableStrength(): void {
+    (this.save as { strengthActive?: boolean }).strengthActive = true;
+  }
+
+  /** Is this NPC one of the boulders (SPRITE_BOULDER)? */
+  private isBoulder(npc: unknown): boolean {
+    const def = (npc as { def?: { sprite?: string } })?.def;
+    return String(def?.sprite ?? "").includes("BOULDER");
+  }
+
+  /**
+   * Walking into a boulder with STRENGTH active shoves it one cell and steps
+   * into the space (engine/overworld/movement.asm's boulder branch).
+   *
+   * The far side has to be somewhere the boulder could stand: in bounds,
+   * walkable, and empty. Water counts as blocked here even while surfing --
+   * pokered drops a boulder into water only at the Seafoam holes, which are
+   * warps rather than pushes.
+   *
+   * Both the boulder and the player move as scripted steps so they travel
+   * together; an ordinary tryMove would be refused by the boulder still
+   * occupying the cell it is in the middle of leaving.
+   */
+  checkBoulderPush(dir: Dir): boolean {
+    if (!(this.save as { strengthActive?: boolean }).strengthActive) return false;
+    const p = this.player;
+    if (this.scriptMoves.length > 0 || this.runner.isRunning()) return false;
+    const [bx, by] = target(p.cellX, p.cellY, dir);
+    const boulder = this.npcs.find(
+      (n: any) => n.cellX === bx && n.cellY === by && this.isBoulder(n),
+    );
+    if (!boulder) return false;
+    const [tx, ty] = target(bx, by, dir);
+    if (!this.map.inBounds(tx, ty)) return false;
+    if (!this.map.isWalkableCell(tx, ty)) return false;
+    if (this.map.isWaterCell(tx, ty)) return false;
+    if (occupied(this.entities, tx, ty, boulder as never)) return false;
+    this.shell.audio.playSfx("Push_Boulder");
+    this.scriptMove(boulder as never, dir, 1);
+    this.scriptMove(p, dir, 1);
+    return true;
   }
 
   /** use_fly -> game.ts openFlyPicker (the destination list and the warp). */

@@ -3649,6 +3649,255 @@ describe("the Mansion switches and the Cinnabar quiz", () => {
   });
 });
 
+describe("HM04 STRENGTH", () => {
+  const MAP = "VICTORY_ROAD_1F";
+
+  function strGame(): VoxelmonGame {
+    const data = {
+      ...(romData as object),
+      cookedMaps: [
+        ...((romData as { cookedMaps?: string[] }).cookedMaps ?? []),
+        MAP,
+      ],
+    };
+    const game = new VoxelmonGame(data as never, new MenuHost(), 1);
+    game.newGame();
+    game.closeToOverworld();
+    return game;
+  }
+
+  function boulders(game: VoxelmonGame): any[] {
+    return game.overworld.npcs.filter((n: any) =>
+      String(n.def?.sprite ?? "").includes("BOULDER"));
+  }
+
+  /**
+   * Put the player next to a boulder that has somewhere to go, facing it.
+   * Returns the boulder and the direction of the shove.
+   */
+  function atBoulder(
+    game: VoxelmonGame,
+  ): { b: any; dir: Dir; to: [number, number] } | null {
+    const ow = game.overworld;
+    ow.setMap(MAP, 1, 1, "down");
+    const DIRS: [Dir, number, number][] = [
+      ["up", 0, -1], ["down", 0, 1], ["left", -1, 0], ["right", 1, 0],
+    ];
+    for (const b of boulders(game)) {
+      for (const [dir, dx, dy] of DIRS) {
+        const fromX = b.cellX - dx;
+        const fromY = b.cellY - dy;
+        const toX = b.cellX + dx;
+        const toY = b.cellY + dy;
+        if (!ow.map.inBounds(fromX, fromY) || !ow.map.inBounds(toX, toY)) continue;
+        if (!ow.map.isWalkableCell(fromX, fromY)) continue;
+        if (!ow.map.isWalkableCell(toX, toY) || ow.map.isWaterCell(toX, toY)) continue;
+        if (boulders(game).some((o) => o.cellX === toX && o.cellY === toY)) continue;
+        ow.setMap(MAP, fromX, fromY, dir);
+        const live = boulders(game).find((o) => o.cellX === b.cellX && o.cellY === b.cellY);
+        if (live) return { b: live, dir, to: [toX, toY] };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Hold the direction for exactly ONE step, then let go. Holding it down
+   * keeps pushing: a 120-frame hold walks seven cells, which tests nothing
+   * about the first shove.
+   */
+  function settle(game: VoxelmonGame, dir: Dir): void {
+    const mask = { up: VOX_BTN.up, down: VOX_BTN.down, left: VOX_BTN.left, right: VOX_BTN.right }[dir];
+    const ow = game.overworld;
+    const x0 = ow.player.cellX;
+    const y0 = ow.player.cellY;
+    for (let i = 0; i < 200; i++) {
+      game.tick(mask);
+      if (ow.player.cellX !== x0 || ow.player.cellY !== y0) break;
+    }
+    for (let i = 0; i < 60; i++) game.tick(0);
+  }
+
+  test.skipIf(!hasGen)("the maps really do carry boulders", () => {
+    const game = strGame();
+    game.overworld.setMap(MAP, 1, 1, "down");
+    expect(boulders(game).length).toBeGreaterThan(0);
+  });
+
+  test.skipIf(!hasGen)("without STRENGTH a boulder is just a wall", () => {
+    const found = (() => { const g = strGame(); const a = atBoulder(g); return a && { g, a }; })();
+    if (!found) return;
+    const { g: game, a } = found;
+    const ow = game.overworld;
+    const was = [a.b.cellX, a.b.cellY];
+    const me = [ow.player.cellX, ow.player.cellY];
+    expect(ow.checkBoulderPush(a.dir)).toBe(false);
+    settle(game, a.dir);
+    expect([a.b.cellX, a.b.cellY]).toEqual(was);
+    expect([ow.player.cellX, ow.player.cellY]).toEqual(me);
+  });
+
+  test.skipIf(!hasGen)("with STRENGTH, walking into it shoves it and you follow", () => {
+    const found = (() => { const g = strGame(); const a = atBoulder(g); return a && { g, a }; })();
+    if (!found) return;
+    const { g: game, a } = found;
+    const ow = game.overworld;
+    (game.save as any).strengthActive = true;
+    const bWas = [a.b.cellX, a.b.cellY];
+    const pWas = [ow.player.cellX, ow.player.cellY];
+    settle(game, a.dir);
+    // the boulder moved one cell, and the player took its old place
+    expect([a.b.cellX, a.b.cellY]).not.toEqual(bWas);
+    expect([ow.player.cellX, ow.player.cellY]).toEqual(bWas);
+    expect([ow.player.cellX, ow.player.cellY]).not.toEqual(pWas);
+  });
+
+  test.skipIf(!hasGen)("the shove moves BOTH, in the same beat", () => {
+    // Moving only the boulder looks almost right -- the next poll walks the
+    // player into the space anyway -- so check they are queued together.
+    const found = (() => { const g = strGame(); const a = atBoulder(g); return a && { g, a }; })();
+    if (!found) return;
+    const { g: game, a } = found;
+    const ow = game.overworld;
+    (game.save as any).strengthActive = true;
+    expect(ow.checkBoulderPush(a.dir)).toBe(true);
+    const moving = ow.scriptMoves.map((m: any) => m.entity);
+    expect(moving).toContain(a.b);
+    expect(moving).toContain(ow.player);
+    expect(moving.length).toBe(2);
+  });
+
+  test.skipIf(!hasGen)("a boulder against a wall does not budge", () => {
+    // Push it as far as it goes, and the last shove has to be refused.
+    const found = (() => { const g = strGame(); const a = atBoulder(g); return a && { g, a }; })();
+    if (!found) return;
+    const { g: game, a } = found;
+    const ow = game.overworld;
+    (game.save as any).strengthActive = true;
+    let pushes = 0;
+    while (ow.checkBoulderPush(a.dir) && pushes < 40) {
+      pushes += 1;
+      for (let i = 0; i < 200; i++) {
+        game.tick(0);
+        if (ow.scriptMoves.length === 0) break;
+      }
+      ow.player.facing = a.dir;
+      // the boulder never ends up INSIDE anything -- "it stopped eventually"
+      // is also true of one that ploughed through the wall to the map edge
+      expect(ow.map.isWalkableCell(a.b.cellX, a.b.cellY), `push ${pushes}`).toBe(true);
+    }
+    expect(pushes).toBeGreaterThan(0);
+    // it ran out of room rather than out of patience
+    expect(pushes).toBeLessThan(40);
+    const [tx, ty] = [
+      a.b.cellX + (a.dir === "left" ? -1 : a.dir === "right" ? 1 : 0),
+      a.b.cellY + (a.dir === "up" ? -1 : a.dir === "down" ? 1 : 0),
+    ];
+    const blocked =
+      !ow.map.inBounds(tx, ty) || !ow.map.isWalkableCell(tx, ty) ||
+      boulders(game).some((o: any) => o !== a.b && o.cellX === tx && o.cellY === ty);
+    expect(blocked).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("a boulder will not go through another boulder", () => {
+    const found = (() => { const g = strGame(); const a = atBoulder(g); return a && { g, a }; })();
+    if (!found) return;
+    const { g: game, a } = found;
+    const ow = game.overworld;
+    (game.save as any).strengthActive = true;
+    const other = boulders(game).find((o: any) => o !== a.b);
+    if (!other) return;
+    // park the second one exactly where the first is headed
+    other.cellX = a.to[0];
+    other.cellY = a.to[1];
+    other.targetX = undefined;
+    other.targetY = undefined;
+    expect(ow.checkBoulderPush(a.dir)).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("an ordinary person is not a boulder", () => {
+    // isBoulder reads the sprite; without that check STRENGTH would shove
+    // trainers and shopkeepers around the map.
+    const game = strGame();
+    const ow = game.overworld;
+    (game.save as any).strengthActive = true;
+    ow.setMap(MAP, 1, 1, "down");
+    const person = ow.npcs.find((n: any) =>
+      !String(n.def?.sprite ?? "").includes("BOULDER"));
+    if (!person) return;
+    const DIRS: [Dir, number, number][] = [
+      ["up", 0, 1], ["down", 0, -1], ["left", 1, 0], ["right", -1, 0],
+    ];
+    for (const [dir, dx, dy] of DIRS) {
+      const fx = person.cellX + dx;
+      const fy = person.cellY + dy;
+      if (!ow.map.inBounds(fx, fy) || !ow.map.isWalkableCell(fx, fy)) continue;
+      ow.setMap(MAP, fx, fy, dir);
+      expect(ow.checkBoulderPush(dir)).toBe(false);
+      return;
+    }
+  });
+
+  test.skipIf(!hasGen)("STRENGTH from the party menu is what switches it on", () => {
+    const game = strGame();
+    const ow = game.overworld;
+    ow.setMap(MAP, 1, 1, "down");
+    expect((game.save as any).strengthActive ?? false).toBe(false);
+    ow.runScript([["use_strength", "MACHOKE"]]);
+    for (let i = 0; i < 600; i++) {
+      if (game.stackKinds().at(-1) === "textbox") dismissText(game);
+      else game.tick(0);
+    }
+    expect((game.save as any).strengthActive).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("and it says so, using the mon's name", () => {
+    const game = strGame();
+    const ow = game.overworld;
+    ow.setMap(MAP, 1, 1, "down");
+    ow.runScript([["use_strength", "MACHOKE"]]);
+    let guard = 0;
+    while (game.stackKinds().at(-1) !== "textbox" && guard++ < 400) game.tick(0);
+    expect(topText(game)).toContain("MACHOKE");
+    expect(topText(game)).toContain("STRENGTH");
+  });
+
+  test.skipIf(!hasGen)("it stays on across a map change", () => {
+    const game = strGame();
+    const ow = game.overworld;
+    ow.setMap(MAP, 1, 1, "down");
+    ow.runScript([["use_strength", "MACHOKE"]]);
+    for (let i = 0; i < 600; i++) {
+      if (game.stackKinds().at(-1) === "textbox") dismissText(game);
+      else game.tick(0);
+    }
+    ow.setMap("PALLET_TOWN", 5, 6, "down");
+    ow.setMap(MAP, 1, 1, "down");
+    expect((game.save as any).strengthActive).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("the party menu offers STRENGTH, and it dispatches the right verb", () => {
+    const game = strGame();
+    const mon: any = newMon(romData!, "MACHOKE", 40);
+    mon.moves = [{ id: "STRENGTH", pp: 15 }];
+    game.save.party.push(mon);
+    tap(game, VOX_BTN.start);
+    let guard = 0;
+    while (game.stackKinds().at(-1) !== "party" && guard++ < 40) tap(game, VOX_BTN.a);
+    tap(game, VOX_BTN.a);
+    const items = (game.party() as any).submenuItems as string[];
+    expect(items).toContain("STRENGTH");
+    for (let i = 0; i < items.indexOf("STRENGTH"); i++) tap(game, VOX_BTN.down);
+    tap(game, VOX_BTN.a);
+    for (let i = 0; i < 600; i++) {
+      if (game.stackKinds().at(-1) === "textbox") dismissText(game);
+      else game.tick(0);
+    }
+    // use_strength is the only field verb that sets this
+    expect((game.save as any).strengthActive).toBe(true);
+  });
+});
+
 describe("HM02 FLY", () => {
   function flyGame(): VoxelmonGame {
     const data = {
