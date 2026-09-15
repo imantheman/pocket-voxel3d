@@ -687,6 +687,18 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     },
   },
 
+  // scripts/Route12.asm / Route16.asm: the sleeping line, and only that.
+  // Talking to a Snorlax with the POKé FLUTE in your bag does nothing in the
+  // original either -- Route12DefaultScript special-cases
+  // EVENT_FIGHT_ROUTE12_SNORLAX, and nothing but USING the flute sets it.
+  // The waking itself is game.ts playPokeFlute (world/snorlax.ts).
+  ROUTE_12: {
+    talk: { TEXT_ROUTE12_SNORLAX: [["show_text", "_Route12SnorlaxText"]] as ScriptRow[] },
+  },
+  ROUTE_16: {
+    talk: { TEXT_ROUTE16_SNORLAX: [["show_text", "_Route16Text7"]] as ScriptRow[] },
+  },
+
   // scripts/Route16FlyHouse.asm: the brunette girl hands over HM02 FLY, the
   // only source of it in the game. Nothing gave it before, so FLY could not
   // be obtained at all.

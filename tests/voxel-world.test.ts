@@ -30,6 +30,9 @@ import {
   backfillVisited, FLY_MAP_IDS, flyDestinations, visit,
 } from "../voxelmon/game/world/fly.ts";
 import {
+  adjacentSnorlax, SNORLAX, SNORLAX_LEVEL, spotFor,
+} from "../voxelmon/game/world/snorlax.ts";
+import {
   applyPostGameHome, POST_GAME_HOME, recordHallOfFame,
 } from "../voxelmon/game/world/halloffame.ts";
 import { RecorderHost } from "../voxelmon/game/host.ts";
@@ -3895,6 +3898,156 @@ describe("HM04 STRENGTH", () => {
     }
     // use_strength is the only field verb that sets this
     expect((game.save as any).strengthActive).toBe(true);
+  });
+});
+
+describe("the sleeping Snorlax", () => {
+  function snorGame(map: string): { game: VoxelmonGame; npc: any } {
+    const data = {
+      ...(romData as object),
+      cookedMaps: [
+        ...((romData as { cookedMaps?: string[] }).cookedMaps ?? []), map,
+      ],
+    };
+    const game = new VoxelmonGame(data as never, new MenuHost(), 1);
+    game.newGame();
+    game.closeToOverworld();
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 40));
+    Bag.add(game.save, "POKE_FLUTE", 1);
+    const spot = spotFor(map)!;
+    game.overworld.setMap(map, 1, 1, "down");
+    const npc = game.overworld.npcs.find((n: any) => n.def?.name === spot.object);
+    return { game, npc };
+  }
+
+  /** Stand on the cell the player reaches it from, facing it. */
+  function standBeside(game: VoxelmonGame, map: string, npc: any): void {
+    const ow = game.overworld;
+    for (const [dir, dx, dy] of [
+      ["up", 0, 1], ["down", 0, -1], ["left", 1, 0], ["right", -1, 0],
+    ] as [Dir, number, number][]) {
+      const x = npc.cellX + dx;
+      const y = npc.cellY + dy;
+      if (ow.map.inBounds(x, y) && ow.map.isWalkableCell(x, y)) {
+        ow.setMap(map, x, y, dir);
+        return;
+      }
+    }
+    throw new Error("nowhere to stand");
+  }
+
+  function playFlute(game: VoxelmonGame): void {
+    game.useKeyItem("POKE_FLUTE");
+    for (let i = 0; i < 200; i++) {
+      if (game.stackKinds().at(-1) === "textbox") dismissText(game);
+      else break;
+    }
+  }
+
+  test.skipIf(!hasGen)("blocks the only way past until it moves", () => {
+    // Both land routes to Fuchsia run through one of these, and the sea route
+    // needs SURF, which is handed out in Fuchsia. A Snorlax that never moves
+    // is the whole game.
+    for (const spot of SNORLAX) {
+      const { game, npc } = snorGame(spot.map);
+      expect(npc, spot.map).toBeTruthy();
+      const ow = game.overworld;
+      standBeside(game, spot.map, npc);
+      const [fx, fy] = ow.player.facingCell();
+      expect([fx, fy], spot.map).toEqual([npc.cellX, npc.cellY]);
+      // walking into it gets nowhere
+      const was = [ow.player.cellX, ow.player.cellY];
+      for (let i = 0; i < 120; i++) game.tick(VOX_BTN[ow.player.facing as "up"] ?? 0);
+      expect([ow.player.cellX, ow.player.cellY], spot.map).toEqual(was);
+    }
+  });
+
+  test.skipIf(!hasGen)("talking to it only ever says it is asleep", () => {
+    const { game, npc } = snorGame("ROUTE_12");
+    standBeside(game, "ROUTE_12", npc);
+    game.overworld.showMapText("TEXT_ROUTE12_SNORLAX");
+    let guard = 0;
+    while (game.stackKinds().at(-1) !== "textbox" && guard++ < 200) game.tick(0);
+    expect(topText(game)).toContain("sleeping");
+    // and it is still there, flute in the bag or not
+    expect(game.save.flags.EVENT_BEAT_ROUTE12_SNORLAX ?? false).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("the flute wakes it, and it is gone before the battle", () => {
+    for (const spot of SNORLAX) {
+      const { game, npc } = snorGame(spot.map);
+      standBeside(game, spot.map, npc);
+      playFlute(game);
+      // hidden BEFORE the fight, so a blackout still clears the road
+      expect(game.save.objectToggles?.[spot.map]?.[spot.object], spot.map).toBe(false);
+      expect(game.stackKinds().at(-1), spot.map).toBe("battle");
+      const b = (game.battleView() as any).battle;
+      expect(b.enemy.mon.species, spot.map).toBe("SNORLAX");
+      expect(b.enemy.mon.level, spot.map).toBe(SNORLAX_LEVEL);
+    }
+  });
+
+  test.skipIf(!hasGen)("and the road is open afterwards", () => {
+    // The point of the whole thing: the cell it sat on is walkable.
+    const spot = SNORLAX[0]!;
+    const { game, npc } = snorGame(spot.map);
+    const at = [npc.cellX, npc.cellY];
+    standBeside(game, spot.map, npc);
+    playFlute(game);
+    game.save.flags[spot.beatFlag] = true;
+    game.closeToOverworld();
+    game.overworld.setMap(spot.map, 1, 1, "down");
+    const still = game.overworld.npcs.some((n: any) => n.def?.name === spot.object);
+    expect(still).toBe(false);
+    expect(game.overworld.map.isWalkableCell(at[0], at[1])).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("playing it anywhere else is just a tune", () => {
+    const { game } = snorGame("ROUTE_12");
+    game.overworld.setMap("PALLET_TOWN", 5, 6, "down");
+    playFlute(game);
+    expect(game.stackKinds()).toEqual(["overworld"]);
+    expect(game.save.flags.EVENT_BEAT_ROUTE12_SNORLAX ?? false).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("standing a cell too far does nothing", () => {
+    const { game, npc } = snorGame("ROUTE_12");
+    const ow = game.overworld;
+    ow.setMap("ROUTE_12", npc.cellX, npc.cellY - 2, "down");
+    playFlute(game);
+    expect(ow.npcs.some((n: any) => n.def?.name === "ROUTE12_SNORLAX")).toBe(true);
+    expect(game.save.flags.EVENT_BEAT_ROUTE12_SNORLAX ?? false).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("a beaten one is not re-fought", () => {
+    const { game, npc } = snorGame("ROUTE_12");
+    game.save.flags.EVENT_BEAT_ROUTE12_SNORLAX = true;
+    standBeside(game, "ROUTE_12", npc);
+    playFlute(game);
+    expect(game.stackKinds().at(-1)).not.toBe("battle");
+  });
+
+  test.skipIf(!hasGen)("a save with the flag set but the sleeper on screen is repaired", () => {
+    // That state is a dead end -- the flute refuses a Snorlax whose flag is
+    // set, so without this the route stays sealed for good.
+    const { game } = snorGame("ROUTE_12");
+    game.save.flags.EVENT_BEAT_ROUTE12_SNORLAX = true;
+    (game.save.objectToggles ??= {}).ROUTE_12 = { ROUTE12_SNORLAX: true };
+    game.overworld.setMap("ROUTE_12", 1, 1, "down");
+    expect(game.overworld.npcs.some((n: any) => n.def?.name === "ROUTE12_SNORLAX")).toBe(false);
+  });
+
+  test("each route has its own lines, and they all exist in the ROM", () => {
+    expect(SNORLAX.length).toBe(2);
+    const text = (romData as any)?.text ?? {};
+    for (const s of SNORLAX) {
+      for (const k of [s.sleepText, s.wokeText, s.leftText]) {
+        expect(text[k], `${s.map} ${k}`).toBeTruthy();
+      }
+    }
+    // the two routes do not share a parting line -- one calms down, the
+    // other returns to the mountains
+    expect(SNORLAX[0]!.leftText).not.toBe(SNORLAX[1]!.leftText);
   });
 });
 

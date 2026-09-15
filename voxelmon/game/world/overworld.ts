@@ -27,6 +27,7 @@ import { LAST_MAP_REWRITES, rewrittenLastMap } from "./lastmap.ts";
 import { martGreetScript } from "./marts.ts";
 import { bikeAllowed, type BikeRiding } from "./bike.ts";
 import { visit } from "./fly.ts";
+import { spotFor } from "./snorlax.ts";
 import {
   GYM_MACHINES, gymGateFlag, gymGuardKey, LANCE_DOOR_CELLS, LEAGUE_SEALS,
   MANSION_BLOCKS, MANSION_HOLES, MANSION_SWITCHES, OPEN_BLOCK,
@@ -422,6 +423,18 @@ export class Overworld implements ScriptWorld {
     // (OverworldController.lua:376-385).
     if (!(opts?.seamless && this.npcPool.size > 0)) {
       this.npcPool = new Map();
+    }
+    // A beaten Snorlax is gone for good. The wake hides it, so this only
+    // matters for a save where the flag is set and the object is somehow
+    // still visible -- and that state is a dead end, because the flute
+    // refuses to wake a Snorlax whose flag is already set, so the route
+    // would stay sealed forever. BEFORE the spawn loop: the toggle is what
+    // objectVisible reads, and a write after this point misses this entry.
+    const sleeper = spotFor(mapId);
+    if (sleeper && this.save?.flags?.[sleeper.beatFlag] === true) {
+      const toggles = ((this.save as { objectToggles?: Record<string, Record<string, boolean>> })
+        .objectToggles ??= {});
+      (toggles[mapId] ??= {})[sleeper.object] = false;
     }
     this.npcs = [];
     for (const obj of def.objects ?? []) {

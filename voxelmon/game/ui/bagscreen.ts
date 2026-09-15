@@ -22,7 +22,9 @@ const USABLE_ON_PARTY = new Set(["RARE_CANDY"]);
  * .useOrTossItem straight into UseItem. The BICYCLE mounts and dismounts
  * (game.ts useKeyItem -> world/bike.ts).
  */
-const USABLE_IN_FIELD = new Set(["BICYCLE"]);
+// ItemUsePokeFlute is a field use like the bike: it acts on the world, so
+// it closes the menus rather than asking for a party member.
+const USABLE_IN_FIELD = new Set(["BICYCLE", "POKE_FLUTE"]);
 
 /** ItemMenu's two choices for a selected item (StartMenu_Item). */
 export type BagMode = "list" | "submenu" | "quantity";

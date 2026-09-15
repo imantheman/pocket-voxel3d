@@ -67,6 +67,7 @@ const SAVE_DONE_HOLD = 30;
 import { WarpPickerState } from "./ui/warppicker.ts";
 import { FlyPickerState } from "./ui/flypicker.ts";
 import { backfillVisited, flyDestinations } from "./world/fly.ts";
+import { adjacentSnorlax, SNORLAX_LEVEL } from "./world/snorlax.ts";
 import { MoveForgetState } from "./ui/moveforget.ts";
 import { BagState } from "./ui/bagscreen.ts";
 import { PartyState } from "./ui/partyscreen.ts";
@@ -1179,6 +1180,70 @@ export class VoxelmonGame implements OverworldShell, SceneView {
    */
   useKeyItem(itemId: string): void {
     if (itemId === "BICYCLE") this.toggleBike();
+    else if (itemId === "POKE_FLUTE") this.playPokeFlute();
+  }
+
+  /**
+   * ItemUsePokeFlute (engine/items/item_effects.asm).
+   *
+   * Standing next to a sleeping Snorlax, this is the ONLY thing that moves it
+   * -- and until one moves, Fuchsia and everything past it is unreachable and
+   * the game cannot be finished. Anywhere else the tune just plays.
+   *
+   * The order is the original's and it matters: the woke-up line, then
+   * HideObject BEFORE the battle, then the battle. Hiding first is what makes
+   * a blackout survivable -- lose to it and it is still gone, rather than
+   * sitting in the road with its event half-set.
+   *
+   * The parting line is only for a Snorlax that wandered off. Catching it
+   * skips that, since it did not go anywhere: it is in your party.
+   */
+  playPokeFlute(): void {
+    const t = (this.data as { text?: Record<string, string> }).text ?? {};
+    const line = (k: string, fallback: string): string => t[k] ?? fallback;
+    const found = adjacentSnorlax(
+      this.overworld.map?.id ?? "",
+      this.overworld.player,
+      this.overworld.npcs as never,
+      this.save.flags,
+    );
+    if (!found) {
+      this.showText(line("_PlayedFluteNoEffectText",
+        "Played the POKé\nFLUTE.\fNow, that's a\ncatchy tune!"));
+      return;
+    }
+    const { spot } = found;
+    const player = String(this.save.player?.name ?? "RED");
+    this.showText(
+      line("_PlayedFluteHadEffectText", "{PLAYER} played the\nPOKé FLUTE.")
+        .replace(/\{PLAYER\}/g, player),
+      () => {
+        this.showText(line(spot.wokeText, "SNORLAX woke up!"), () => {
+          // setObjectHidden alone is live-only: it hides the sprite for this
+          // visit and forgets. The SAVE toggle is what objectVisible reads on
+          // the next entry, and without it a beaten Snorlax is back in the
+          // road with its flag already set -- which the flute then refuses to
+          // wake, sealing the route for good.
+          ((this.save as { objectToggles?: Record<string, Record<string, boolean>> })
+            .objectToggles ??= {});
+          const toggles = (this.save as unknown as {
+            objectToggles: Record<string, Record<string, boolean>>;
+          }).objectToggles;
+          (toggles[spot.map] ??= {})[spot.object] = false;
+          this.overworld.setObjectHidden(spot.object, true);
+          this.startWildBattle(
+            "SNORLAX", SNORLAX_LEVEL, undefined, (result) => {
+              // Any non-blackout result settles it. A blackout does not come
+              // back here at all, so reaching this point is already the
+              // "survived" branch.
+              this.save.flags[spot.beatFlag] = true;
+              if (result === "caught") return;
+              this.showText(line(spot.leftText, "SNORLAX returned to the mountains!"));
+            },
+          );
+        });
+      },
+    );
   }
 
   /**
