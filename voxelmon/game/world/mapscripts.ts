@@ -687,6 +687,25 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     },
   },
 
+  // scripts/Route16FlyHouse.asm: the brunette girl hands over HM02 FLY, the
+  // only source of it in the game. Nothing gave it before, so FLY could not
+  // be obtained at all.
+  ROUTE_16_FLY_HOUSE: {
+    talk: {
+      TEXT_ROUTE16FLYHOUSE_BRUNETTE_GIRL: [
+        ["face_player"], //                                            1
+        ["check_flag", "EVENT_GOT_HM02"], //                           2
+        ["jump_if_true", 9], //                                        3  already got: just the advice
+        ["show_text", "_Route16FlyHouseBrunetteGirlText"], //          4
+        ["give_item", "HM_FLY", 1, "_Route16FlyHouseBrunetteGirlReceivedHM02Text"], // 5
+        ["set_flag", "EVENT_GOT_HM02"], //                             6
+        ["show_text", "_Route16FlyHouseBrunetteGirlHM02ExplanationText"], // 7
+        ["jump", "end"], //                                            8
+        ["show_text", "_Route16FlyHouseBrunetteGirlHM02ExplanationText"], // 9
+      ] as ScriptRow[],
+    },
+  },
+
   // story.lua M.CHAMPIONS_ROOM (scripts/ChampionsRoom.asm). The last fight and
   // the scene that follows it. Like the Viridian Mart parcel this runs off the
   // map's onStep rather than an onEnter the port does not have, so it opens on

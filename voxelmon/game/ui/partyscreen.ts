@@ -39,7 +39,7 @@ export interface PartyView {
 
 /** The two field moves this port wires up outside battle (PartyMenu.lua's
  * HM dispatch) — voxelmon/game/world/script.ts's use_cut/use_flash verbs. */
-const FIELD_MOVES = ["CUT", "SURF", "FLASH"] as const;
+const FIELD_MOVES = ["CUT", "FLY", "SURF", "FLASH"] as const;
 
 export class PartyState implements GameState {
   readonly kind = "party";
@@ -139,7 +139,7 @@ export class PartyState implements GameState {
     const mon = this.party()[this.index];
     const name = mon?.nickname ?? this.game.data.pokemon?.[mon?.species]?.name ?? mon?.species ?? "";
     this.game.closeToOverworld();
-    const verb = { CUT: "use_cut", SURF: "use_surf", FLASH: "use_flash" }[moveId];
+    const verb = { CUT: "use_cut", FLY: "use_fly", SURF: "use_surf", FLASH: "use_flash" }[moveId];
     this.game.overworld.runScript([[verb, name]]);
   }
 

@@ -26,6 +26,7 @@ import { talkScript, itemBallScript, itemBallFlag, TEXT_BILLSHOUSE_PC } from "./
 import { LAST_MAP_REWRITES, rewrittenLastMap } from "./lastmap.ts";
 import { martGreetScript } from "./marts.ts";
 import { bikeAllowed, type BikeRiding } from "./bike.ts";
+import { visit } from "./fly.ts";
 import {
   GYM_MACHINES, gymGateFlag, gymGuardKey, LANCE_DOOR_CELLS, LEAGUE_SEALS,
   MANSION_BLOCKS, MANSION_HOLES, MANSION_SWITCHES, OPEN_BLOCK,
@@ -121,6 +122,11 @@ export interface SaveSlice {
    * syncSurf treats the CELL as the authority and repairs this either way.
    */
   surfing?: boolean;
+  /**
+   * Towns arrived in at least once (world/fly.ts). pokered's
+   * wTownVisitedFlag: what FLY is allowed to offer.
+   */
+  visited?: Record<string, boolean>;
   /**
    * The Route 5 DAY CARE's boarder (world/daycare.ts). Absent/null when no
    * mon is in. The steps here are the deferred exp: the walk is only folded
@@ -446,6 +452,10 @@ export class Overworld implements ScriptWorld {
     // player is placed, not before -- on the first map load there is no
     // player yet.
     this.syncSurf();
+    // wTownVisitedFlag (engine/overworld/special_warps.asm): arriving in a
+    // town is what puts it on FLY's list. Nothing recorded this before, so
+    // every destination would have read as never-visited.
+    visit(this.save as never, mapId);
     console.log("NPCS " + (this.npcs as any[]).map((n: any) =>
       JSON.stringify(n, (k, v) => (typeof v === "object" && v !== null && k !== "" ? undefined : v))).join(" | "));
   }
@@ -1093,6 +1103,13 @@ export class Overworld implements ScriptWorld {
   private syncSurfSong(): void {
     const save = this.save as { onBike?: boolean };
     this.shell.audio?.startMap?.(this.map.id, save.onBike === true, this.player.surfing === true);
+  }
+
+  /** use_fly -> game.ts openFlyPicker (the destination list and the warp). */
+  openFlyPicker(monName: string, onDone?: () => void): void {
+    (this.shell as unknown as {
+      openFlyPicker?: (name: string, done?: () => void) => void;
+    }).openFlyPicker?.(monName, onDone);
   }
 
   /** record_hall_of_fame -> game.ts recordHallOfFame (the induction flow). */

@@ -65,6 +65,8 @@ import { count as badgeCount } from "./rules/badges.ts";
 const SAVE_HOLD = 120;
 const SAVE_DONE_HOLD = 30;
 import { WarpPickerState } from "./ui/warppicker.ts";
+import { FlyPickerState } from "./ui/flypicker.ts";
+import { flyDestinations } from "./world/fly.ts";
 import { MoveForgetState } from "./ui/moveforget.ts";
 import { BagState } from "./ui/bagscreen.ts";
 import { PartyState } from "./ui/partyscreen.ts";
@@ -1718,6 +1720,39 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   devMenu(): unknown {
     const top = this.stack[this.stack.length - 1] as any;
     return top?.kind === "devmenu" ? top.view() : null;
+  }
+
+  /**
+   * ItemUseTownMap's fly branch: pick a town you have been to, and go.
+   *
+   * A town you have not visited is not offered, and neither is the one you
+   * are standing in — pokered will not fly you to your own feet. With nothing
+   * to offer at all (a brand new save that has only seen Pallet, from Pallet)
+   * the move just says it cannot be used here.
+   */
+  openFlyPicker(monName: string, onDone?: () => void): void {
+    const t = (this.data as { text?: Record<string, string> }).text ?? {};
+    const dests = flyDestinations(
+      (this.data as { field?: unknown }).field as never,
+      this.save as never,
+      this.overworld.map?.id,
+    );
+    if (dests.length === 0) {
+      this.showText(t._CannotFlyHereText ?? "You cannot FLY\nhere.", onDone);
+      return;
+    }
+    void monName; // the original names no mon on the way out, it just goes
+    this.push(new FlyPickerState(
+      this as never,
+      dests,
+      (dest) => this.overworld.startWarpTo(dest.map, dest.x, dest.y, "down", onDone),
+      onDone,
+    ));
+  }
+
+  flyPicker(): unknown {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "flypicker" ? top.view() : null;
   }
 
   warpPicker(): unknown {

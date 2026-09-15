@@ -534,6 +534,24 @@ function* use_surf(ctx: ScriptContext, ...args: unknown[]): Generator<void, void
   yield;
 }
 
+/**
+ * HM FLY's field effect (ItemUseTownMap's fly branch). The destination list
+ * and the warp are on the game side (game.ts openFlyPicker) because it pushes
+ * a screen; the verb waits for whatever the player does with it, including
+ * backing out.
+ *
+ * args: [monName] for _UsedFlyText's {RAM:wNameBuffer} slot.
+ */
+function* use_fly(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const w = ctx.world as unknown as ScriptWorld & {
+    openFlyPicker?: (monName: string, done: () => void) => void;
+  };
+  const runner = ctx.runner;
+  if (!w.openFlyPicker) return;
+  w.openFlyPicker((args[0] as string) ?? "", () => runner.resume());
+  yield;
+}
+
 // HM FLASH's field effect: lifts the dark-cave dimming (OverworldShell's
 // DARK_MAPS / world/overworld.ts setMap) for the rest of this visit.
 // pokered lets Flash fire anywhere — harmless outside a dark cave, since
@@ -874,6 +892,7 @@ const VERBS: Record<string, Verb> = {
   use_cut,
   use_flash,
   use_surf,
+  use_fly,
   give_pokemon,
   hide_object,
   show_object,

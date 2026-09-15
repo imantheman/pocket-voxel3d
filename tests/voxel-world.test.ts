@@ -27,6 +27,9 @@ import { VoxelmonGame } from "../voxelmon/game/game.ts";
 import { encodeSave } from "../voxelmon/game/save-lua.ts";
 import { decodeSave } from "../voxelmon/game/save-read.ts";
 import {
+  FLY_MAP_IDS, flyDestinations, visit,
+} from "../voxelmon/game/world/fly.ts";
+import {
   applyPostGameHome, POST_GAME_HOME, recordHallOfFame,
 } from "../voxelmon/game/world/halloffame.ts";
 import { RecorderHost } from "../voxelmon/game/host.ts";
@@ -3643,6 +3646,158 @@ describe("the Mansion switches and the Cinnabar quiz", () => {
     }
     expect(toggleBlocksFor("CINNABAR_GYM")).toEqual(GYM_MACHINES.map((m) => m.gate));
     expect(toggleBlocksFor("PALLET_TOWN")).toEqual([]);
+  });
+});
+
+describe("HM02 FLY", () => {
+  function flyGame(): VoxelmonGame {
+    const data = {
+      ...(romData as object),
+      cookedMaps: [
+        ...((romData as { cookedMaps?: string[] }).cookedMaps ?? []),
+        "ROUTE_16_FLY_HOUSE",
+      ],
+    };
+    const game = new VoxelmonGame(data as never, new MenuHost(), 1);
+    game.newGame();
+    game.closeToOverworld();
+    return game;
+  }
+
+  const field = () => (romData as any).field;
+
+  test.skipIf(!hasGen)("the Route 16 girl is the only source, and gives it once", () => {
+    // Nothing gave HM02 before this, so FLY could not be obtained at all.
+    const game = flyGame();
+    game.overworld.setMap("ROUTE_16_FLY_HOUSE", 4, 5, "up");
+    game.overworld.showMapText("TEXT_ROUTE16FLYHOUSE_BRUNETTE_GIRL");
+    let guard = 0;
+    while (game.stackKinds().length > 1 && guard++ < 900) dismissText(game);
+    expect(game.save.inventory.HM_FLY).toBe(1);
+    expect(game.save.flags.EVENT_GOT_HM02).toBe(true);
+
+    game.overworld.showMapText("TEXT_ROUTE16FLYHOUSE_BRUNETTE_GIRL");
+    guard = 0;
+    while (game.stackKinds().length > 1 && guard++ < 900) dismissText(game);
+    expect(game.save.inventory.HM_FLY).toBe(1);
+  });
+
+  test.skipIf(!hasGen)("a town has to be visited before you can fly to it", () => {
+    const save: any = {};
+    expect(flyDestinations(field(), save)).toEqual([]);
+    visit(save, "PEWTER_CITY");
+    expect(flyDestinations(field(), save).map((d: any) => d.map)).toEqual(["PEWTER_CITY"]);
+  });
+
+  test.skipIf(!hasGen)("arriving in a town is what records it", () => {
+    const game = flyGame();
+    // a new game starts in the bedroom, so nothing is on the list yet
+    expect(game.save.visited?.PALLET_TOWN ?? false).toBe(false);
+    game.overworld.setMap("PALLET_TOWN", 5, 6, "down");
+    expect(game.save.visited?.PALLET_TOWN).toBe(true);
+    expect(game.save.visited?.CELADON_CITY ?? false).toBe(false);
+    game.overworld.setMap("CELADON_CITY", 20, 20, "down");
+    expect(game.save.visited?.CELADON_CITY).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("walking through a route does not put it on the list", () => {
+    const game = flyGame();
+    game.overworld.setMap("ROUTE_1", 5, 5, "down");
+    expect(game.save.visited?.ROUTE_1 ?? false).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("the town you are standing in is not offered", () => {
+    const save: any = {};
+    visit(save, "PEWTER_CITY");
+    visit(save, "CERULEAN_CITY");
+    const from = flyDestinations(field(), save, "PEWTER_CITY").map((d: any) => d.map);
+    expect(from).toEqual(["CERULEAN_CITY"]);
+  });
+
+  test.skipIf(!hasGen)("destinations keep the original's menu order", () => {
+    const save: any = {};
+    for (const m of ["SAFFRON_CITY", "PALLET_TOWN", "CELADON_CITY"]) visit(save, m);
+    expect(flyDestinations(field(), save).map((d: any) => d.map))
+      .toEqual(["PALLET_TOWN", "CELADON_CITY", "SAFFRON_CITY"]);
+  });
+
+  test.skipIf(!hasGen)("every destination has a real landing cell", () => {
+    const save: any = {};
+    for (const m of FLY_MAP_IDS) visit(save, m);
+    const all = flyDestinations(field(), save);
+    expect(all.length).toBe(FLY_MAP_IDS.length);
+    for (const d of all) {
+      expect(typeof d.x, d.map).toBe("number");
+      expect(typeof d.y, d.map).toBe("number");
+      expect(d.name.length, d.map).toBeGreaterThan(0);
+      // and the map it lands on is real
+      expect((romData as any).maps[d.map], d.map).toBeTruthy();
+    }
+  });
+
+  test.skipIf(!hasGen)("picking a town flies you there", () => {
+    const game = flyGame();
+    const ow = game.overworld;
+    visit(game.save as never, "PEWTER_CITY");
+    ow.runScript([["use_fly", "PIDGEOT"]]);
+    let guard = 0;
+    while (game.stackKinds().at(-1) !== "flypicker" && guard++ < 400) game.tick(0);
+    expect(game.stackKinds().at(-1)).toBe("flypicker");
+    const v = game.flyPicker() as any;
+    expect(v.entries).toContain("PEWTER CITY");
+    for (let i = 0; i < v.entries.indexOf("PEWTER CITY"); i++) tap(game, VOX_BTN.down);
+    tap(game, VOX_BTN.a);
+    for (let i = 0; i < 400; i++) game.tick(0);
+    expect(ow.map.id).toBe("PEWTER_CITY");
+  });
+
+  test.skipIf(!hasGen)("backing out of the list leaves you where you were", () => {
+    const game = flyGame();
+    const ow = game.overworld;
+    ow.setMap("PALLET_TOWN", 5, 6, "down");
+    visit(game.save as never, "PEWTER_CITY");
+    ow.runScript([["use_fly", "PIDGEOT"]]);
+    let guard = 0;
+    while (game.stackKinds().at(-1) !== "flypicker" && guard++ < 400) game.tick(0);
+    expect(game.stackKinds().at(-1)).toBe("flypicker");
+    tap(game, VOX_BTN.b);
+    for (let i = 0; i < 200; i++) game.tick(0);
+    expect(ow.map.id).toBe("PALLET_TOWN");
+    expect(game.stackKinds()).toEqual(["overworld"]);
+  });
+
+  test.skipIf(!hasGen)("with nowhere to go it says so instead of opening an empty list", () => {
+    const game = flyGame();
+    const ow = game.overworld;
+    // a brand new save in Pallet has visited exactly Pallet, and you cannot
+    // fly to where you already are
+    ow.runScript([["use_fly", "PIDGEOT"]]);
+    let guard = 0;
+    while (game.stackKinds().at(-1) !== "textbox" && guard++ < 400) game.tick(0);
+    expect(game.stackKinds().at(-1)).toBe("textbox");
+    expect(topText(game)).toContain("FLY");
+  });
+
+  test.skipIf(!hasGen)("the party menu offers FLY to a mon that knows it", () => {
+    const game = flyGame();
+    const mon: any = newMon(romData!, "PIDGEOT", 40);
+    mon.moves = [{ id: "FLY", pp: 15 }];
+    game.save.party.push(mon);
+    tap(game, VOX_BTN.start);
+    let guard = 0;
+    while (game.stackKinds().at(-1) !== "party" && guard++ < 40) tap(game, VOX_BTN.a);
+    tap(game, VOX_BTN.a);
+    const items = (game.party() as any).submenuItems as string[];
+    expect(items).toContain("FLY");
+
+    // and choosing it runs FLY's verb, not some other move's -- listing the
+    // entry while dispatching use_flash would look right and do nothing
+    visit(game.save as never, "PEWTER_CITY");
+    for (let i = 0; i < items.indexOf("FLY"); i++) tap(game, VOX_BTN.down);
+    tap(game, VOX_BTN.a);
+    guard = 0;
+    while (game.stackKinds().at(-1) !== "flypicker" && guard++ < 400) game.tick(0);
+    expect(game.stackKinds().at(-1)).toBe("flypicker");
   });
 });
 
