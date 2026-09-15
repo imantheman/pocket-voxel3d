@@ -4589,6 +4589,61 @@ describe("HM03 SURF", () => {
     expect([game.overworld.player.cellX, game.overworld.player.cellY]).toEqual(at.water);
   });
 
+  test.skipIf(!hasGen)("mounting obeys the water tile-pairs, not just 'is it wet'", () => {
+    // TilePairCollisionsWater: three shore edges in the caves and Viridian
+    // Forest that a surfer may not cross. The mount has to honour them as the
+    // SURFER the player is about to become -- pairBlocked picks its list by
+    // mover.surfing, so asking as a walker consults the wrong table entirely.
+    const pairs = (romData as any).field?.tilePairs?.water ?? [];
+    expect(pairs.length).toBeGreaterThan(0);
+
+    const maps = (romData as any).maps as Record<string, any>;
+    const tilesets = (romData as any).tilesets as Record<string, any>;
+    let checked = 0;
+
+    for (const [name, def] of Object.entries(maps)) {
+      const forHere = pairs.filter((p: any) => p.tileset === def.tileset);
+      if (forHere.length === 0) continue;
+      const map = new GameMap(def, tilesets[def.tileset]);
+      for (let y = 1; y < map.heightCells - 1 && checked < 3; y++) {
+        for (let x = 1; x < map.widthCells - 1 && checked < 3; x++) {
+          if (map.isWaterCell(x, y)) continue;
+          for (const [dir, dx, dy] of [
+            ["up", 0, -1], ["down", 0, 1], ["left", -1, 0], ["right", 1, 0],
+          ] as [Dir, number, number][]) {
+            const wx = x + dx;
+            const wy = y + dy;
+            if (!map.isWaterCell(wx, wy)) continue;
+            const a = map.cellTile(x, y);
+            const b = map.cellTile(wx, wy);
+            const blocked = forHere.some(
+              (p: any) => (p.a === a && p.b === b) || (p.a === b && p.b === a),
+            );
+            if (!blocked) continue;
+            // a real forbidden edge in the shipped data: the mount must refuse
+            const game = makeMenuGame();
+            const data = {
+              ...(romData as object),
+              cookedMaps: [
+                ...((romData as { cookedMaps?: string[] }).cookedMaps ?? []), name,
+              ],
+            };
+            const g = new VoxelmonGame(data as never, new MenuHost(), 1);
+            g.newGame();
+            g.closeToOverworld();
+            g.overworld.setMap(name, x, y, dir);
+            expect(g.overworld.canSurfHere(), `${name} (${x},${y}) ${dir}`).toBe(false);
+            void game;
+            checked += 1;
+            break;
+          }
+        }
+      }
+    }
+    // the rule is only worth having if the data actually exercises it
+    expect(checked).toBeGreaterThan(0);
+  });
+
   test("surfing takes the music over, indoors as well as out", () => {
     // pokered checks wWalkBikeSurfState before the map's own song, so the
     // Seafoam caves play it too -- unlike the bike, which only overrides

@@ -1090,8 +1090,16 @@ export class Overworld implements ScriptWorld {
     const [fx, fy] = p.facingCell();
     if (!this.map.inBounds(fx, fy)) return false;
     if (!this.map.isWaterCell(fx, fy)) return false;
-    if (occupied(this.entities, fx, fy, p)) return false;
-    return true;
+    // "Could a surfer step there?" -- asked of canMove rather than
+    // reimplemented, so the mount obeys every rule ordinary movement does.
+    // The one that matters is TilePairCollisionsWater (field.tilePairs.water,
+    // three shore edges in the caves and Viridian Forest): pairBlocked picks
+    // its list by mover.surfing, so the check has to be made as the surfer
+    // the player is about to become, not as the walker they still are.
+    //
+    // A plain water + occupancy test looked equivalent and was not: it let
+    // you mount across an edge the original refuses.
+    return canMove(this.map, this.entities, { ...p, surfing: true }, p.facing, this.tilePairs).ok;
   }
 
   /**
