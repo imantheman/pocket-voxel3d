@@ -29,6 +29,7 @@ import { bikeAllowed, type BikeRiding } from "./bike.ts";
 import { visit } from "./fly.ts";
 import { spotFor } from "./snorlax.ts";
 import { barriersFor } from "./toggleblocks.ts";
+import { fillBadgeName, gateFor, guardAt, hasBadge } from "./badgegate.ts";
 import {
   GYM_MACHINES, gymGateFlag, gymGuardKey, LANCE_DOOR_CELLS, LEAGUE_SEALS,
   MANSION_BLOCKS, MANSION_HOLES, MANSION_SWITCHES, OPEN_BLOCK,
@@ -1390,6 +1391,7 @@ export class Overworld implements ScriptWorld {
     if (this.mansionHoleStep()) return;
     this.lanceLockDoor();
     if (this.leagueDontRun()) return;
+    if (this.badgeGateStep()) return;
     if (!this.runner.isRunning()) {
       const label = (this as any).map?.id ?? "";
       const script = (MAP_SCRIPTS as any)[label] as MapScript | undefined;
@@ -1991,6 +1993,47 @@ export class Overworld implements ScriptWorld {
     this.shell.showText(t[dr.text] ?? "Don't run away!", () => {
       this.scriptMove(p, "up", 1);
     });
+    return true;
+  }
+
+  /**
+   * Route 23's badge checks (scripts/Route23.asm): seven guards up the road to
+   * Victory Road, each wanting a different badge. Walking the whole road takes
+   * all eight gyms, which is what makes the League an earned destination
+   * instead of somewhere you can stroll to on your first afternoon.
+   *
+   * Show the badge and the guard steps aside for good; turn up without it and
+   * you are told which one you are missing and moved back a step. The road
+   * runs north, so back is south.
+   */
+  private badgeGateStep(): boolean {
+    if (this.runner.isRunning() || this.scriptMoves.length > 0) return false;
+    const field = (this.shell.data as { field?: unknown }).field as never;
+    const p = this.player;
+    const guard = guardAt(field, this.save as never, this.map?.id ?? "", p.cellX, p.cellY);
+    if (!guard) return false;
+    const gate = gateFor(field, this.map.id);
+    const t = (this.shell.data as { text?: Record<string, string> }).text ?? {};
+    const say = (key: string | undefined, fallback: string): string =>
+      fillBadgeName(t[key ?? ""] ?? fallback, guard.badge);
+    if (guard.sprite !== undefined) this.faceObject?.(guard.sprite, "down");
+
+    if (!hasBadge(this.save as never, guard)) {
+      this.shell.showText(
+        say(gate?.failText, "You can pass here only if you have the {RAM:wNameBuffer}!"),
+        () => {
+          this.scriptMove(p, "down", 1);
+        },
+      );
+      return true;
+    }
+    this.save.flags[guard.event] = true;
+    this.shell.showText(
+      say(gate?.passText, "Oh! That is the {RAM:wNameBuffer}!"),
+      () => {
+        this.shell.showText(t._Route23GoRightAheadText ?? "OK then! Please, go right ahead!");
+      },
+    );
     return true;
   }
 

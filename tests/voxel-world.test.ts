@@ -3901,6 +3901,147 @@ describe("HM04 STRENGTH", () => {
   });
 });
 
+describe("the Route 23 badge checks", () => {
+  const ALL_BADGES = [
+    "BOULDERBADGE", "CASCADEBADGE", "THUNDERBADGE", "RAINBOWBADGE",
+    "SOULBADGE", "MARSHBADGE", "VOLCANOBADGE", "EARTHBADGE",
+  ];
+
+  function r23Game(badges: string[] = []): VoxelmonGame {
+    const data = {
+      ...(romData as object),
+      cookedMaps: [
+        ...((romData as { cookedMaps?: string[] }).cookedMaps ?? []), "ROUTE_23",
+      ],
+    };
+    const game = new VoxelmonGame(data as never, new MenuHost(), 1);
+    game.newGame();
+    game.closeToOverworld();
+    for (const b of badges) Bag.add(game.save, b, 1);
+    return game;
+  }
+
+  const guards = () =>
+    ((romData as any).field?.badgeGates?.ROUTE_23?.guards ?? []) as any[];
+
+  /** Step onto a guard's row and let whatever happens, happen. */
+  function stepOnto(game: VoxelmonGame, g: any): void {
+    const ow = game.overworld;
+    ow.setMap("ROUTE_23", g.maxX !== undefined ? g.maxX : 9, g.y, "up");
+    ow.onStepComplete();
+    for (let i = 0; i < 60; i++) {
+      if (game.stackKinds().at(-1) === "textbox") break;
+      game.tick(0);
+    }
+  }
+
+  test.skipIf(!hasGen)("all eight gyms are wanted between here and the League", () => {
+    // Seven guards on the road, plus the Route 22 gate for the eighth. With
+    // none of them read, the League was a stroll from the first afternoon.
+    const gs = guards();
+    expect(gs.length).toBe(7);
+    const wanted = gs.map((g) => g.badge);
+    expect(new Set(wanted).size).toBe(7);
+    for (const b of wanted) expect(ALL_BADGES).toContain(b);
+    // each has its own once-only event
+    expect(new Set(gs.map((g) => g.event)).size).toBe(7);
+    // the road runs north, so the rows descend as the badges get later
+    const byRow = [...gs].sort((a, b) => b.y - a.y).map((g) => g.badge);
+    expect(byRow[0]).toBe("CASCADEBADGE");
+    expect(byRow.at(-1)).toBe("EARTHBADGE");
+  });
+
+  test.skipIf(!hasGen)("without the badge you are stopped and moved back", () => {
+    for (const g of guards()) {
+      const game = r23Game();
+      const ow = game.overworld;
+      stepOnto(game, g);
+      expect(game.stackKinds().at(-1), g.badge).toBe("textbox");
+      expect(topText(game), g.badge).toContain(g.badge);
+      expect(game.save.flags[g.event] ?? false, g.badge).toBe(false);
+      // and shoved back south, away from the League
+      dismissText(game);
+      for (let i = 0; i < 200; i++) game.tick(0);
+      expect(ow.player.cellY, g.badge).toBeGreaterThan(g.y);
+    }
+  });
+
+  test.skipIf(!hasGen)("with the badge they step aside, for good", () => {
+    for (const g of guards()) {
+      const game = r23Game([g.badge]);
+      const ow = game.overworld;
+      stepOnto(game, g);
+      expect(topText(game), g.badge).toContain(g.badge);
+      expect(game.save.flags[g.event], g.badge).toBe(true);
+      dismissText(game);
+      for (let i = 0; i < 200; i++) game.tick(0);
+      // not pushed back
+      expect(ow.player.cellY, g.badge).toBe(g.y);
+
+      // and walking the row again says nothing
+      ow.onStepComplete();
+      for (let i = 0; i < 60; i++) game.tick(0);
+      expect(game.stackKinds(), g.badge).toEqual(["overworld"]);
+    }
+  });
+
+  test.skipIf(!hasGen)("one badge does not satisfy another guard", () => {
+    const [first, second] = guards();
+    const game = r23Game([first.badge]);
+    stepOnto(game, second);
+    expect(topText(game)).toContain(second.badge);
+    expect(game.save.flags[second.event] ?? false).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("a full set walks the whole road", () => {
+    const game = r23Game(ALL_BADGES);
+    const ow = game.overworld;
+    for (const g of guards()) {
+      stepOnto(game, g);
+      dismissText(game);
+      for (let i = 0; i < 200; i++) game.tick(0);
+      expect(game.save.flags[g.event], g.badge).toBe(true);
+      expect(ow.player.cellY, g.badge).toBe(g.y);
+    }
+  });
+
+  test.skipIf(!hasGen)("the first check only covers its half of the road", () => {
+    // That guard carries a maxX; past it the row is open.
+    const g = guards().find((x: any) => x.maxX !== undefined);
+    expect(g).toBeTruthy();
+    const game = r23Game();
+    const ow = game.overworld;
+    ow.setMap("ROUTE_23", g.maxX + 3, g.y, "up");
+    ow.onStepComplete();
+    for (let i = 0; i < 60; i++) game.tick(0);
+    expect(game.stackKinds()).toEqual(["overworld"]);
+  });
+
+  test.skipIf(!hasGen)("an ordinary row on the same road is not a checkpoint", () => {
+    const rows = new Set(guards().map((g: any) => g.y));
+    const game = r23Game();
+    const ow = game.overworld;
+    ow.setMap("ROUTE_23", 9, 20, "up"); // load it before asking about its cells
+    let free = 0;
+    for (let y = 20; y < 140 && free < 3; y += 7) {
+      if (rows.has(y)) continue;
+      // the road is not walkable at every x, so find a cell rather than
+      // assuming the middle of it is open
+      let x = -1;
+      for (let i = 0; i < ow.map.widthCells; i++) {
+        if (ow.map.isWalkableCell(i, y)) { x = i; break; }
+      }
+      if (x < 0) continue;
+      ow.setMap("ROUTE_23", x, y, "up");
+      ow.onStepComplete();
+      for (let i = 0; i < 40; i++) game.tick(0);
+      expect(game.stackKinds(), `row ${y}`).toEqual(["overworld"]);
+      free += 1;
+    }
+    expect(free).toBeGreaterThan(0);
+  });
+});
+
 describe("Victory Road's boulder switches", () => {
   const FLOORS = ["VICTORY_ROAD_1F", "VICTORY_ROAD_2F", "VICTORY_ROAD_3F"];
 
