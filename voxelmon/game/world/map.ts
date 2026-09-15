@@ -314,7 +314,13 @@ export class GameMap {
   // block was an authored cut-tree prop, independent of whether it's
   // already been cut (that's save.cutTrees, checked separately).
   isCuttableCell(cx: number, cy: number): boolean {
-    return this.cuttableAt.has(cy * this.widthCells + cx);
+    // A tree already chopped is not a tree any more. The cook bakes the prop
+    // into the map and markCut only hides its stamp, so without this the
+    // cuttable flag survives the re-entry that replays save.cutTrees and CUT
+    // could be used a second time on the empty cell it left behind.
+    const i = cy * this.widthCells + cx;
+    if (this.cutAt.has(i)) return false;
+    return this.cuttableAt.has(i);
   }
 
   // Map.lua:291

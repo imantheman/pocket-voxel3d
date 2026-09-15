@@ -18,6 +18,7 @@
 // the way upstream's do once that cutscene is over).
 
 import type { ScriptRow } from "./script.ts";
+import type { Dir } from "./collision.ts";
 import { coinClerkRows, coinGiftRows, prizeCounterRows } from "./gamecorner.ts";
 import { SAFARI_JOIN_CELLS, safariJoinRows, safariLeavingRows } from "./safari.ts";
 import { SAFFRON_GATES, saffronGateScript } from "./saffrongate.ts";
@@ -507,6 +508,96 @@ function lockedDoorStep(
   return [["show_text", textId], ["move_player", "down", 1]];
 }
 
+/**
+ * Route22Rival{1,2} (scripts/Route22.asm), the one scene both battles share.
+ *
+ * Route22MoveRivalRightScript walks him RIGHT along his own row from the spawn
+ * at (25,5): four RIGHTs on coord index 1 (player on (29,4)) stop him BELOW
+ * the player on (29,5); `inc de` drops one on index 2 (player on (29,5)),
+ * stopping him LEFT of them on (28,5). He never leaves row 5.
+ * Route22Rival{1,2}StartBattleScript then faces him UP on index 1, RIGHT
+ * otherwise.
+ *
+ * `n` is 1 for the early ambush, 2 for the post-Giovanni rematch. Parties are
+ * OPP_RIVAL1 base 4 and OPP_RIVAL2 base 10 (data/trainers/parties.asm);
+ * rival_battle adds the starter counterpick offset itself.
+ *
+ * The numeric `jump_if_false 11` is route22Scene's own: a loss skips the
+ * reward rows and lands on the hide, so he leaves either way.
+ */
+function route22Scene(n: 1 | 2, py: number): ScriptRow[] {
+  const obj = `ROUTE22_RIVAL${n}`;
+  const rx = py === 4 ? 29 : 28;
+  const rivalFacing = py === 4 ? "up" : "right";
+  // Route22Rival1ExitMovementData1/2: from (29,5) he cuts right then south;
+  // from (28,5) he steps up onto row 4 first, then right and south.
+  const exit =
+    py === 4
+      ? ["right", "right", "down", "down", "down", "down", "down"]
+      : ["up", "right", "right", "right", "down", "down", "down", "down", "down", "down"];
+  return [
+    ["show_object", "ROUTE_22", obj], //                        1
+    ["move_npc_to", obj, rx, 5], //                             2
+    ["face_object", obj, rivalFacing], //                       3
+    ["show_text", `_Route22RivalBeforeBattleText${n}`], //      4
+    // loseable on the first only: pokered's early ambush heals you and lets
+    // you walk on; the rematch blacks you out like any other loss
+    [
+      "rival_battle",
+      n === 1 ? "OPP_RIVAL1" : "OPP_RIVAL2",
+      n === 1 ? 4 : 10,
+      n === 1 ? { loseable: true } : {},
+    ], //                                                       5
+    ["jump_if_false", 11], //                                   6  loss -> hide
+    [
+      "set_flag",
+      n === 1 ? "EVENT_BEAT_ROUTE22_RIVAL_1ST_BATTLE" : "EVENT_BEAT_ROUTE22_RIVAL_2ND_BATTLE",
+    ], //                                                       7
+    ["show_text", `_Route22Rival${n}DefeatedText`], //          8
+    ["show_text", `_Route22RivalAfterBattleText${n}`], //       9
+    ["walk_npc", obj, exit], //                                10
+    ["hide_object", "ROUTE_22", obj], //                       11
+  ] as ScriptRow[];
+}
+
+/**
+ * PokemonTower2FDefeatedRivalScript's exit: which way he leaves depends on
+ * which side of him you came up. EVENT_POKEMON_TOWER_RIVAL_ON_LEFT — the
+ * (15,5) tile — takes DownThenRight, the other takes RightThenDown.
+ */
+const TOWER_RIVAL_EXIT_RIGHT_THEN_DOWN: Dir[] =
+  ["right", "down", "down", "right", "down", "down", "right", "right"];
+const TOWER_RIVAL_EXIT_DOWN_THEN_RIGHT: Dir[] =
+  ["down", "down", "right", "right", "right", "right", "down", "down"];
+
+/**
+ * PokemonTower2F.asm: the rival stops you on the stairs landing on the way up
+ * to Mr. Fuji. He does not wait to be spoken to — PokemonTower2FDefaultScript
+ * fires on (15,5)/(14,6) — but talking to him afterwards still works, which is
+ * why the same rows serve as his talk script.
+ *
+ * OPP_RIVAL2 party 4 is the Tower set (parties.asm). A loss halts at row 6, so
+ * he is still standing there to try again; only a win walks him out.
+ */
+function towerRivalScript(playerX: number): ScriptRow[] {
+  const exit =
+    playerX === 15 ? TOWER_RIVAL_EXIT_DOWN_THEN_RIGHT : TOWER_RIVAL_EXIT_RIGHT_THEN_DOWN;
+  return [
+    ["face_player"], //                                            1
+    ["check_flag", "EVENT_BEAT_POKEMON_TOWER_RIVAL"], //           2
+    ["jump_if_true", 12], //                                       3  beaten: just talk
+    ["show_text", "_PokemonTower2FRivalWhatBringsYouHereText"], //  4
+    ["rival_battle", "OPP_RIVAL2", 4], //                          5
+    ["jump_if_false", "end"], //                                   6  loss: he stays
+    ["set_flag", "EVENT_BEAT_POKEMON_TOWER_RIVAL"], //             7
+    ["show_text", "_PokemonTower2FRivalDefeatedText"], //          8
+    ["walk_npc", "POKEMONTOWER2F_RIVAL", exit], //                 9
+    ["hide_object", "POKEMON_TOWER_2F", "POKEMONTOWER2F_RIVAL"], // 10
+    ["jump", "end"], //                                           11
+    ["show_text", "_PokemonTower2FRivalHowsYourDexText"], //      12
+  ] as ScriptRow[];
+}
+
 export const MAP_SCRIPTS: Record<string, MapScript> = {
   PEWTER_CITY: {
     // PewterGuys trigger tiles on the west-leaving path; fires until Brock is
@@ -571,8 +662,12 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
   // jump_if_false 11 (skip the reward on a loss, straight to hide) still
   // lands. Rival is referenced by its object name ROUTE22_RIVAL1 so it
   // resolves distinctly from RIVAL2; show_object reveals the spawn-hidden
-  // object (setObjectHidden reveal). Only the 1st battle is wired — the 2nd is
-  // post-Giovanni content, left behind EVENT_BEAT_GIOVANNI.
+  // object (setObjectHidden reveal).
+  //
+  // BOTH battles run through route22Scene now: the early ambush (Pokédex in
+  // hand, Brock not yet beaten) and the rematch on the way to the League,
+  // gated on EVENT_BEAT_GIOVANNI — the Viridian Gym win. They use different
+  // objects (ROUTE22_RIVAL1/2) and different parties; the scene is the same.
   ROUTE_22: {
     onStep: (ow: any, save: any) => {
       const p = ow?.player;
@@ -581,34 +676,33 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
       // inCoords({{29,4},{29,5}})
       if (!((x === 29 && y === 4) || (x === 29 && y === 5))) return null;
       const f = save?.flags ?? {};
-      if (
-        !(f.EVENT_GOT_POKEDEX && !f.EVENT_BEAT_BROCK && !f.EVENT_BEAT_ROUTE22_RIVAL_1ST_BATTLE)
-      ) {
-        return null;
-      }
+      const first =
+        f.EVENT_GOT_POKEDEX && !f.EVENT_BEAT_BROCK && !f.EVENT_BEAT_ROUTE22_RIVAL_1ST_BATTLE;
+      const second =
+        !first && f.EVENT_BEAT_GIOVANNI && !f.EVENT_BEAT_ROUTE22_RIVAL_2ND_BATTLE;
+      if (!first && !second) return null;
       // runAmbush side effects: face the rival; Music_MeetRival is a no-op here
       if (ow.player) ow.player.facing = y === 4 ? "down" : "left";
-      // route22Scene: rival walks right along row 5 and stops below (29,5) /
-      // left of (28,5) the player; faces up on the top tile, right otherwise.
-      const rx = y === 4 ? 29 : 28;
-      const rivalFacing = y === 4 ? "up" : "right";
-      const exit =
-        y === 4
-          ? ["right", "right", "down", "down", "down", "down", "down"]
-          : ["up", "right", "right", "right", "down", "down", "down", "down", "down", "down"];
-      return [
-        ["show_object", "ROUTE_22", "ROUTE22_RIVAL1"], // 1
-        ["move_npc_to", "ROUTE22_RIVAL1", rx, 5], //      2
-        ["face_object", "ROUTE22_RIVAL1", rivalFacing], // 3
-        ["show_text", "_Route22RivalBeforeBattleText1"], // 4
-        ["rival_battle", "OPP_RIVAL1", 4, { loseable: true }], // 5 (loseable: no blackout)
-        ["jump_if_false", 11], //                         6  loss -> hide, no reward
-        ["set_flag", "EVENT_BEAT_ROUTE22_RIVAL_1ST_BATTLE"], // 7
-        ["show_text", "_Route22Rival1DefeatedText"], //   8
-        ["show_text", "_Route22RivalAfterBattleText1"], // 9
-        ["walk_npc", "ROUTE22_RIVAL1", exit], //          10
-        ["hide_object", "ROUTE_22", "ROUTE22_RIVAL1"], // 11
-      ] as ScriptRow[];
+      return route22Scene(first ? 1 : 2, y);
+    },
+  },
+
+  // story.lua M.POKEMON_TOWER_2F (scripts/PokemonTower2F.asm). He is a coord
+  // trigger, not a doorstop: walking onto the landing starts it.
+  POKEMON_TOWER_2F: {
+    talk: {
+      TEXT_POKEMONTOWER2F_RIVAL: (ow: any) => towerRivalScript(ow?.player?.cellX ?? 0),
+    },
+    onStep: (ow: any, save: any) => {
+      if (save?.flags?.EVENT_BEAT_POKEMON_TOWER_RIVAL) return null;
+      const p = ow?.player;
+      const x = p?.cellX;
+      const y = p?.cellY;
+      // PokemonTower2FDefaultScript's ArePlayerCoordsInArray
+      if (!((x === 15 && y === 5) || (x === 14 && y === 6))) return null;
+      // runAmbush's side effect: turn to face him as he rounds on you.
+      if (p) p.facing = x === 15 ? "left" : "up";
+      return towerRivalScript(x);
     },
   },
 

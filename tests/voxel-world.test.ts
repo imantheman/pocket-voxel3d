@@ -24,6 +24,8 @@ import * as Bag from "../voxelmon/game/rules/bag.ts";
 import { ENCOUNTER_BUCKETS } from "../voxelmon/game/rules/encounter.ts";
 import { expForLevel } from "../voxelmon/game/rules/growth.ts";
 import { VoxelmonGame } from "../voxelmon/game/game.ts";
+import { encodeSave } from "../voxelmon/game/save-lua.ts";
+import { decodeSave } from "../voxelmon/game/save-read.ts";
 import { RecorderHost } from "../voxelmon/game/host.ts";
 import { Input } from "../voxelmon/game/input.ts";
 import { gearMapPoint, gearTabs, gearTouchDown } from "../voxelmon/game/ui/kantogear.ts";
@@ -1749,6 +1751,213 @@ describe("the S.S. Anne rival", () => {
     for (let i = 0; i < 60; i++) game.tick(0);
     expect(game.stackKinds()).toEqual(["overworld"]);
     expect(ow.npcs.some((n: any) => n.def.name === "SSANNE2F_RIVAL")).toBe(false);
+  });
+});
+
+describe("the Pokemon Tower rival", () => {
+  /** Is he standing on the map right now? */
+  function onMap(ow: any): boolean {
+    return ow.npcs.some((n: any) => n.def.name === "POKEMONTOWER2F_RIVAL");
+  }
+
+  /** Squirtle in the party and chosen, so his counterpick is the Bulbasaur line. */
+  function towerGame(): VoxelmonGame {
+    const game = makeMenuGame();
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 30));
+    game.save.flags.EVENT_CHOSE_SQUIRTLE = true;
+    return game;
+  }
+
+  test.skipIf(!hasGen)("stops you on the landing without being talked to", () => {
+    const game = towerGame();
+    const ow = game.overworld;
+    ow.setMap("POKEMON_TOWER_2F", 15, 5, "up");
+    ow.onStepComplete();
+    let guard = 0;
+    while (game.stackKinds().at(-1) !== "textbox" && guard++ < 600) game.tick(0);
+    expect(topText(game)).toContain("brings you here");
+
+    dismissText(game);
+    guard = 0;
+    while (game.stackKinds().at(-1) !== "battle" && guard++ < 900) game.tick(0);
+    expect(game.stackKinds().at(-1)).toBe("battle");
+    // OPP_RIVAL2 party 4 + the Squirtle counterpick = party 5
+    const battle = (game.battleView() as { battle: any }).battle;
+    expect(battle.enemyParty.map((m: any) => m.species)).toEqual([
+      "PIDGEOTTO", "GYARADOS", "GROWLITHE", "KADABRA", "IVYSAUR",
+    ]);
+  });
+
+  test.skipIf(!hasGen)("the other approach tile triggers him too", () => {
+    const game = towerGame();
+    const ow = game.overworld;
+    ow.setMap("POKEMON_TOWER_2F", 14, 6, "up");
+    ow.onStepComplete();
+    let guard = 0;
+    while (game.stackKinds().at(-1) !== "textbox" && guard++ < 600) game.tick(0);
+    expect(topText(game)).toContain("brings you here");
+  });
+
+  test.skipIf(!hasGen)("an ordinary tile does not", () => {
+    const game = towerGame();
+    const ow = game.overworld;
+    ow.setMap("POKEMON_TOWER_2F", 10, 10, "up");
+    ow.onStepComplete();
+    for (let i = 0; i < 60; i++) game.tick(0);
+    expect(game.stackKinds()).toEqual(["overworld"]);
+  });
+
+  test.skipIf(!hasGen)("beating him sets the flag and walks him out", () => {
+    const game = towerGame();
+    const ow = game.overworld;
+    (game as any).startTrainerBattle = (
+      _id: string, _idx: number, _name: unknown, onDone: (won: boolean) => void,
+    ) => onDone(true);
+    ow.setMap("POKEMON_TOWER_2F", 15, 5, "up");
+    ow.onStepComplete();
+    for (let i = 0; i < 1200; i++) {
+      dismissText(game);
+      if (game.save.objectToggles?.POKEMON_TOWER_2F?.POKEMONTOWER2F_RIVAL === false) break;
+      game.tick(0);
+    }
+    expect(game.save.flags.EVENT_BEAT_POKEMON_TOWER_RIVAL).toBe(true);
+    expect(game.save.objectToggles?.POKEMON_TOWER_2F?.POKEMONTOWER2F_RIVAL).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("losing leaves him standing there to try again", () => {
+    // row 6 is `jump_if_false end`: no flag, no exit walk, no hide.
+    const game = towerGame();
+    const ow = game.overworld;
+    (game as any).startTrainerBattle = (
+      _id: string, _idx: number, _name: unknown, onDone: (won: boolean) => void,
+    ) => onDone(false);
+    ow.setMap("POKEMON_TOWER_2F", 15, 5, "up");
+    ow.onStepComplete();
+    for (let i = 0; i < 900; i++) {
+      dismissText(game);
+      game.tick(0);
+    }
+    expect(game.save.flags.EVENT_BEAT_POKEMON_TOWER_RIVAL ?? false).toBe(false);
+    expect(game.save.objectToggles?.POKEMON_TOWER_2F?.POKEMONTOWER2F_RIVAL).not.toBe(false);
+    expect(onMap(ow)).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("once beaten he is gone and the tile is inert", () => {
+    const game = towerGame();
+    const ow = game.overworld;
+    game.save.flags.EVENT_BEAT_POKEMON_TOWER_RIVAL = true;
+    ow.setMap("POKEMON_TOWER_2F", 15, 5, "up");
+    ow.onStepComplete();
+    for (let i = 0; i < 60; i++) game.tick(0);
+    expect(game.stackKinds()).toEqual(["overworld"]);
+  });
+
+  test.skipIf(!hasGen)("talking to him after the win gets the Pokedex line, not a rematch", () => {
+    const game = towerGame();
+    const ow = game.overworld;
+    game.save.flags.EVENT_BEAT_POKEMON_TOWER_RIVAL = true;
+    ow.setMap("POKEMON_TOWER_2F", 15, 5, "up");
+    ow.showMapText("TEXT_POKEMONTOWER2F_RIVAL");
+    let guard = 0;
+    while (game.stackKinds().at(-1) !== "textbox" && guard++ < 600) game.tick(0);
+    expect(topText(game)).toContain("POKéDEX");
+    expect(topText(game)).not.toContain("brings you here");
+  });
+});
+
+describe("the Route 22 rival rematch", () => {
+  function r22Game(): VoxelmonGame {
+    const game = makeMenuGame();
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 50));
+    game.save.flags.EVENT_CHOSE_SQUIRTLE = true;
+    game.save.flags.EVENT_GOT_POKEDEX = true;
+    return game;
+  }
+
+  /** Walk onto the gate tile and let whatever fires, fire. */
+  function stepOnGate(game: VoxelmonGame, y = 4): void {
+    game.overworld.setMap("ROUTE_22", 29, y, "up");
+    game.overworld.onStepComplete();
+    let guard = 0;
+    while (game.stackKinds().at(-1) !== "textbox" && guard++ < 600) game.tick(0);
+  }
+
+  test.skipIf(!hasGen)("stays quiet until Giovanni is beaten", () => {
+    const game = r22Game();
+    const ow = game.overworld;
+    game.save.flags.EVENT_BEAT_BROCK = true;
+    game.save.flags.EVENT_BEAT_ROUTE22_RIVAL_1ST_BATTLE = true;
+    ow.setMap("ROUTE_22", 29, 4, "up");
+    ow.onStepComplete();
+    // show_object is row 1, so he appears long before any text does -- watch
+    // for HIM, not for a textbox, or the walk-on delay hides a live trigger
+    for (let i = 0; i < 400; i++) {
+      expect(ow.npcs.some((n: any) => n.def.name === "ROUTE22_RIVAL2")).toBe(false);
+      expect(game.stackKinds().at(-1)).toBe("overworld");
+      game.tick(0);
+    }
+  });
+
+  test.skipIf(!hasGen)("fires on the way to the League once he is", () => {
+    const game = r22Game();
+    game.save.flags.EVENT_BEAT_BROCK = true;
+    game.save.flags.EVENT_BEAT_ROUTE22_RIVAL_1ST_BATTLE = true;
+    game.save.flags.EVENT_BEAT_GIOVANNI = true;
+    stepOnGate(game);
+    expect(topText(game)).toContain("surprise to see");
+
+    dismissText(game);
+    let guard = 0;
+    while (game.stackKinds().at(-1) !== "battle" && guard++ < 900) game.tick(0);
+    // OPP_RIVAL2 party 10 + the Squirtle counterpick = party 11, the six-mon
+    // team — not the four-mon Tower set the first battle uses
+    const battle = (game.battleView() as { battle: any }).battle;
+    expect(battle.enemyParty.map((m: any) => m.species)).toEqual([
+      "PIDGEOT", "RHYHORN", "GYARADOS", "GROWLITHE", "ALAKAZAM", "VENUSAUR",
+    ]);
+  });
+
+  test.skipIf(!hasGen)("it is the SECOND rival object, so the first stays hidden", () => {
+    const game = r22Game();
+    game.save.flags.EVENT_BEAT_BROCK = true;
+    game.save.flags.EVENT_BEAT_ROUTE22_RIVAL_1ST_BATTLE = true;
+    game.save.flags.EVENT_BEAT_GIOVANNI = true;
+    stepOnGate(game);
+    const ow = game.overworld;
+    expect(ow.npcs.some((n: any) => n.def.name === "ROUTE22_RIVAL2")).toBe(true);
+    expect(ow.npcs.some((n: any) => n.def.name === "ROUTE22_RIVAL1")).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("the early ambush still wins the tile when both could fire", () => {
+    // Pokédex in hand and Brock unbeaten is the first battle's window; a save
+    // that somehow has Giovanni too must not skip straight to the rematch.
+    const game = r22Game();
+    game.save.flags.EVENT_BEAT_GIOVANNI = true;
+    stepOnGate(game);
+    expect(topText(game)).toContain("Forget it!");
+  });
+
+  test.skipIf(!hasGen)("beating him sets the 2nd-battle flag and walks him off", () => {
+    const game = r22Game();
+    game.save.flags.EVENT_BEAT_BROCK = true;
+    game.save.flags.EVENT_BEAT_ROUTE22_RIVAL_1ST_BATTLE = true;
+    game.save.flags.EVENT_BEAT_GIOVANNI = true;
+    (game as any).startTrainerBattle = (
+      _id: string, _idx: number, _name: unknown, onDone: (won: boolean) => void,
+    ) => onDone(true);
+    game.overworld.setMap("ROUTE_22", 29, 4, "up");
+    game.overworld.onStepComplete();
+    for (let i = 0; i < 1500; i++) {
+      dismissText(game);
+      if (game.save.objectToggles?.ROUTE_22?.ROUTE22_RIVAL2 === false) break;
+      game.tick(0);
+    }
+    expect(game.save.flags.EVENT_BEAT_ROUTE22_RIVAL_2ND_BATTLE).toBe(true);
+    expect(game.save.objectToggles?.ROUTE_22?.ROUTE22_RIVAL2).toBe(false);
+    // and the tile is inert afterwards
+    game.overworld.onStepComplete();
+    for (let i = 0; i < 60; i++) game.tick(0);
+    expect(game.stackKinds()).toEqual(["overworld"]);
   });
 });
 
