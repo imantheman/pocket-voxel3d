@@ -52,8 +52,8 @@ import { poseDir } from "../voxelmon/game/scene.ts";
 import { SEVEN_BADGES, silphAftermathRows } from "../voxelmon/game/world/mapscripts.ts";
 import { deposit, pcCapacityData, withdraw } from "../voxelmon/game/world/pcitems.ts";
 import {
-  GYM_MACHINES, gymGateFlag, gymGuardKey, LEAGUE_SEALS, MANSION_BLOCKS,
-  MANSION_HOLES, OPEN_BLOCK, toggleBlocksFor,
+  barriersFor, GYM_MACHINES, gymGateFlag, gymGuardKey, LEAGUE_SEALS,
+  MANSION_BLOCKS, MANSION_HOLES, OPEN_BLOCK, toggleBlocksFor,
 } from "../voxelmon/game/world/toggleblocks.ts";
 import {
   bikeAllowed, BIKE_SONG, effectiveMapSong, SURF_SONG,
@@ -3898,6 +3898,148 @@ describe("HM04 STRENGTH", () => {
     }
     // use_strength is the only field verb that sets this
     expect((game.save as any).strengthActive).toBe(true);
+  });
+});
+
+describe("Victory Road's boulder switches", () => {
+  const FLOORS = ["VICTORY_ROAD_1F", "VICTORY_ROAD_2F", "VICTORY_ROAD_3F"];
+
+  function vrGame(): VoxelmonGame {
+    const data = {
+      ...(romData as object),
+      cookedMaps: [
+        ...((romData as { cookedMaps?: string[] }).cookedMaps ?? []), ...FLOORS,
+      ],
+    };
+    const game = new VoxelmonGame(data as never, new MenuHost(), 1);
+    game.newGame();
+    game.closeToOverworld();
+    (game.save as any).strengthActive = true;
+    return game;
+  }
+
+  function blockAt(game: VoxelmonGame, bx: number, by: number): number {
+    const def = game.overworld.map.def as { blocks: number[]; width: number };
+    return def.blocks[by * def.width + bx]!;
+  }
+
+  function walkableCells(game: VoxelmonGame, b: { bx: number; by: number }): number {
+    let n = 0;
+    for (let dy = 0; dy < 2; dy++) {
+      for (let dx = 0; dx < 2; dx++) {
+        if (game.overworld.map.isWalkableCell(b.bx * 2 + dx, b.by * 2 + dy)) n += 1;
+      }
+    }
+    return n;
+  }
+
+  test.skipIf(!hasGen)("every barrier ships shut, and the shipped ids are the ones we act on", () => {
+    const game = vrGame();
+    for (const map of FLOORS) {
+      game.overworld.setMap(map, 1, 1, "down");
+      for (const b of barriersFor(map)) {
+        expect(blockAt(game, b.bx, b.by), `${map} ${b.bx},${b.by}`).toBe(b.closed);
+      }
+    }
+  });
+
+  test.skipIf(!hasGen)("the flag opens it, and it opens only PARTLY", () => {
+    // $25 -> $1d frees one more cell and leaves the rest wall. Hiding the
+    // whole lifted block would take the wall with it.
+    const game = vrGame();
+    for (const map of FLOORS) {
+      for (const b of barriersFor(map)) {
+        const shut = vrGame();
+        shut.overworld.setMap(map, 1, 1, "down");
+        const before = walkableCells(shut, b);
+
+        const open = vrGame();
+        open.save.flags[b.flag] = true;
+        open.overworld.setMap(map, 1, 1, "down");
+        expect(blockAt(open, b.bx, b.by), `${map} ${b.flag}`).toBe(b.open);
+        const after = walkableCells(open, b);
+        expect(after, `${map} ${b.flag}`).toBeGreaterThan(before);
+        // $37 -> $15 is the only one that opens the whole block
+        if (b.closed !== 0x37) expect(after, `${map} ${b.flag}`).toBeLessThan(4);
+      }
+      void game;
+    }
+  });
+
+  test.skipIf(!hasGen)("a boulder coming to rest on a switch opens its barrier", () => {
+    const game = vrGame();
+    const ow = game.overworld;
+    const b = barriersFor("VICTORY_ROAD_3F")[0]!;
+    ow.setMap("VICTORY_ROAD_3F", 1, 1, "down");
+    expect(walkableCells(game, b)).toBeLessThan(4);
+
+    // put a boulder on the switch cell and tell the world it landed
+    const boulder = ow.npcs.find((n: any) =>
+      String(n.def?.sprite ?? "").includes("BOULDER"));
+    expect(boulder).toBeTruthy();
+    boulder.cellX = b.switchX;
+    boulder.cellY = b.switchY;
+    (ow as any).boulderLanded();
+
+    expect(game.save.flags[b.flag]).toBe(true);
+    expect(blockAt(game, b.bx, b.by)).toBe(b.open);
+  });
+
+  test.skipIf(!hasGen)("a boulder anywhere else does nothing", () => {
+    const game = vrGame();
+    const ow = game.overworld;
+    const b = barriersFor("VICTORY_ROAD_3F")[0]!;
+    ow.setMap("VICTORY_ROAD_3F", 1, 1, "down");
+    const boulder = ow.npcs.find((n: any) =>
+      String(n.def?.sprite ?? "").includes("BOULDER"));
+    boulder.cellX = b.switchX + 2;
+    boulder.cellY = b.switchY + 2;
+    (ow as any).boulderLanded();
+    expect(game.save.flags[b.flag] ?? false).toBe(false);
+    expect(blockAt(game, b.bx, b.by)).toBe(b.closed);
+  });
+
+  test.skipIf(!hasGen)("2F's two switches are separate barriers", () => {
+    const game = vrGame();
+    const [one, two] = barriersFor("VICTORY_ROAD_2F");
+    game.save.flags[one!.flag] = true;
+    game.overworld.setMap("VICTORY_ROAD_2F", 1, 1, "down");
+    expect(blockAt(game, one!.bx, one!.by)).toBe(one!.open);
+    expect(blockAt(game, two!.bx, two!.by)).toBe(two!.closed);
+  });
+
+  test.skipIf(!hasGen)("walking onto 2F resets 1F's switch, as the original does", () => {
+    // VictoryRoad2FResetBoulderEventScript. Without it 1F's barrier stays
+    // open for the rest of the run and the puzzle is solved once, forever.
+    const game = vrGame();
+    game.save.flags.EVENT_VICTORY_ROAD_1_BOULDER_ON_SWITCH = true;
+    game.overworld.setMap("VICTORY_ROAD_2F", 1, 1, "down");
+    expect(game.save.flags.EVENT_VICTORY_ROAD_1_BOULDER_ON_SWITCH).toBe(false);
+    // and 1F is shut again when you climb back down
+    const b = barriersFor("VICTORY_ROAD_1F")[0]!;
+    game.overworld.setMap("VICTORY_ROAD_1F", 1, 1, "down");
+    expect(blockAt(game, b.bx, b.by)).toBe(b.closed);
+  });
+
+  test.skipIf(!hasGen)("the barrier stays open across a re-entry of its own floor", () => {
+    const game = vrGame();
+    const b = barriersFor("VICTORY_ROAD_3F")[0]!;
+    game.save.flags[b.flag] = true;
+    game.overworld.setMap("VICTORY_ROAD_3F", 1, 1, "down");
+    game.overworld.setMap("VICTORY_ROAD_2F", 1, 1, "down");
+    game.overworld.setMap("VICTORY_ROAD_3F", 1, 1, "down");
+    expect(blockAt(game, b.bx, b.by)).toBe(b.open);
+  });
+
+  test("the cook is told about exactly the barrier blocks", () => {
+    for (const map of FLOORS) {
+      expect(toggleBlocksFor(map).map((t) => [t.bx, t.by, t.solid]))
+        .toEqual(barriersFor(map).map((b) => [b.bx, b.by, b.closed]));
+    }
+    // four barriers, four distinct flags
+    const all = FLOORS.flatMap((m) => barriersFor(m));
+    expect(all.length).toBe(4);
+    expect(new Set(all.map((b) => b.flag)).size).toBe(4);
   });
 });
 

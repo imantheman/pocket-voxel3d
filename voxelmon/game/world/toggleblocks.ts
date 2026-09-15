@@ -126,6 +126,15 @@ export function gymGuardKey(npc: number): string {
  */
 export function toggleBlocksFor(mapId: string): ToggleBlock[] {
   if (mapId === "CINNABAR_GYM") return GYM_MACHINES.map((m) => m.gate);
+  const barriers = ROAD_BARRIERS[mapId];
+  if (barriers) {
+    // These already ship closed, so baking changes nothing -- what the cook
+    // needs them for is the LIFT, which is what gives the runtime per-cell
+    // stamps to hide when the switch is pressed.
+    return barriers.map((b) => ({
+      bx: b.bx, by: b.by, solid: b.closed, solidWhenOn: false,
+    }));
+  }
   const seal = LEAGUE_SEALS[mapId];
   if (seal) {
     // solidWhenOn is meaningless for these — the cook only reads bx/by/solid,
@@ -203,4 +212,67 @@ export const LANCE_DOOR_CELLS: [number, number][] = [[5, 11], [6, 11]];
 /** The trainer whose defeat opens each room, by object id. */
 export function leagueGuardKey(mapId: string): string {
   return `${mapId}_obj_1`;
+}
+
+// ---------------------------------------------------------------------------
+// Victory Road's boulder switches
+// ---------------------------------------------------------------------------
+
+/**
+ * A barrier that a boulder on a switch takes down
+ * (scripts/VictoryRoad1F/2F/3F.asm).
+ *
+ * Unlike every other toggle in this file these open only PARTLY: $25 opens to
+ * $1d, which frees one more cell of the block and leaves the rest wall, and
+ * $37 opens to $15, which frees two. So the runtime cannot just hide the whole
+ * lifted block -- it shows the stamp on whichever cells are still wall under
+ * the block the barrier is currently set to.
+ *
+ * The closed ids are the shipped .blk bytes, checked against the extracted
+ * map data rather than taken on trust.
+ */
+export interface RoadBarrier {
+  bx: number;
+  by: number;
+  /** The shipped block: the way in is walled off. */
+  closed: number;
+  /** With a boulder on the switch. */
+  open: number;
+  flag: string;
+  /** The CELL a boulder has to come to rest on. */
+  switchX: number;
+  switchY: number;
+}
+
+export const ROAD_BARRIERS: Record<string, RoadBarrier[]> = {
+  VICTORY_ROAD_1F: [
+    {
+      bx: 4, by: 6, closed: 0x25, open: 0x1d,
+      flag: "EVENT_VICTORY_ROAD_1_BOULDER_ON_SWITCH",
+      switchX: 17, switchY: 13,
+    },
+  ],
+  VICTORY_ROAD_2F: [
+    {
+      bx: 3, by: 4, closed: 0x37, open: 0x15,
+      flag: "EVENT_VICTORY_ROAD_2_BOULDER_ON_SWITCH1",
+      switchX: 1, switchY: 16,
+    },
+    {
+      bx: 11, by: 7, closed: 0x25, open: 0x1d,
+      flag: "EVENT_VICTORY_ROAD_2_BOULDER_ON_SWITCH2",
+      switchX: 9, switchY: 16,
+    },
+  ],
+  VICTORY_ROAD_3F: [
+    {
+      bx: 3, by: 5, closed: 0x25, open: 0x1d,
+      flag: "EVENT_VICTORY_ROAD_3_BOULDER_ON_SWITCH1",
+      switchX: 3, switchY: 5,
+    },
+  ],
+};
+
+export function barriersFor(mapId: string): RoadBarrier[] {
+  return ROAD_BARRIERS[mapId] ?? [];
 }

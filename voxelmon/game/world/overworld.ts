@@ -28,6 +28,7 @@ import { martGreetScript } from "./marts.ts";
 import { bikeAllowed, type BikeRiding } from "./bike.ts";
 import { visit } from "./fly.ts";
 import { spotFor } from "./snorlax.ts";
+import { barriersFor } from "./toggleblocks.ts";
 import {
   GYM_MACHINES, gymGateFlag, gymGuardKey, LANCE_DOOR_CELLS, LEAGUE_SEALS,
   MANSION_BLOCKS, MANSION_HOLES, MANSION_SWITCHES, OPEN_BLOCK,
@@ -395,6 +396,12 @@ export class Overworld implements ScriptWorld {
     this.applyCardKeyDoors(mapId, def);
     this.applyToggleBlocks(mapId, def);
     this.applyLeagueSeals(mapId, def);
+    // VictoryRoad2FResetBoulderEventScript: walking onto 2F clears the 1F
+    // switch, so its barrier is shut again next time you climb down.
+    if (mapId === "VICTORY_ROAD_2F" && this.save?.flags) {
+      this.save.flags.EVENT_VICTORY_ROAD_1_BOULDER_ON_SWITCH = false;
+    }
+    this.applyRoadBarriers(mapId, def);
     // Cut trees stay cut across a reload/re-entry: reapply every stamp-off
     // this save recorded for THIS map (setMap is the single choke point, so
     // every entry path — warp, seam, boot — gets this for free, the same
@@ -1169,7 +1176,7 @@ export class Overworld implements ScriptWorld {
     if (this.map.isWaterCell(tx, ty)) return false;
     if (occupied(this.entities, tx, ty, boulder as never)) return false;
     this.shell.audio.playSfx("Push_Boulder");
-    this.scriptMove(boulder as never, dir, 1);
+    this.scriptMove(boulder as never, dir, 1, () => this.boulderLanded());
     this.scriptMove(p, dir, 1);
     return true;
   }
@@ -1993,6 +2000,57 @@ export class Overworld implements ScriptWorld {
     this.shell.playOnce?.("Go_Inside");
     this.applyLeagueSeals(this.map.id, this.map.def);
     return false; // the step itself still counts; only the door changed
+  }
+
+  /**
+   * Victory Road's boulder barriers, set to whatever the switches say.
+   *
+   * These open only PARTLY -- $25 to $1d frees one more cell of the block and
+   * leaves the rest wall -- so the stamp is driven per CELL rather than per
+   * block: show it wherever the cell is still wall under the block the
+   * barrier is now set to. Setting def.blocks first is what makes
+   * isWalkableCell the authority on that.
+   */
+  applyRoadBarriers(mapId: string, def: any): void {
+    const list = barriersFor(mapId);
+    if (list.length === 0) return;
+    for (const b of list) {
+      const open = this.save?.flags?.[b.flag] === true;
+      const i = b.by * def.width + b.bx;
+      if (Array.isArray(def.blocks) && i >= 0 && i < def.blocks.length) {
+        def.blocks[i] = open ? b.open : b.closed;
+      }
+      for (let dy = 0; dy < 2; dy++) {
+        for (let dx = 0; dx < 2; dx++) {
+          const cx = b.bx * 2 + dx;
+          const cy = b.by * 2 + dy;
+          this.stamp(def.index, cx, cy, !this.map.isWalkableCell(cx, cy));
+        }
+      }
+    }
+  }
+
+  /**
+   * A boulder came to rest. If it landed on a switch, the barrier that switch
+   * holds opens for good (CheckAndSetEvent, then ReplaceTileBlock).
+   */
+  private boulderLanded(): void {
+    const mapId = this.map?.id ?? "";
+    const list = barriersFor(mapId);
+    if (list.length === 0) return;
+    let opened = false;
+    for (const b of list) {
+      if (this.save.flags?.[b.flag] === true) continue;
+      const on = this.npcs.some(
+        (n: any) => this.isBoulder(n) && n.cellX === b.switchX && n.cellY === b.switchY,
+      );
+      if (!on) continue;
+      this.save.flags[b.flag] = true;
+      opened = true;
+    }
+    if (!opened) return;
+    this.shell.playOnce?.("Go_Inside");
+    this.applyRoadBarriers(mapId, this.map.def);
   }
 
   /** A gate is open once its quiz was answered or its guardian beaten. */
