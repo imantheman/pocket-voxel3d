@@ -99,6 +99,94 @@ pub fn orbit_at(cx: f32, cy: f32, pitch_deg: f32, dist: f32) -> Camera {
 pub const SWING_PITCH_MIN: f32 = 0.05;
 pub const SWING_PITCH_MAX: f32 = 1.50;
 
+// ---------------------------------------------------------------------------
+// The free-roam rig: 1ST and 3RD
+// ---------------------------------------------------------------------------
+//
+// Ported from DramaticShapeVoxelMod's two free-cam rungs (lib/FirstPerson.lua,
+// lib/ThirdPerson.lua). The orbit rungs 0/15/35/50/75 this port already has
+// swing the camera around the VIEW CENTRE; these two stand it with the player
+// instead -- in their eyes, or on a boom off the back of their head.
+//
+// The numbers are the mod's, not invented: the eye sits near the top of a
+// 16px sprite, the lens opens out because you are inside the world rather
+// than looking at a diorama of it, and the boom stands three cells back.
+
+/// Eye height above the player's feet, world px (FirstPerson.EYE_HEIGHT).
+pub const FREE_EYE_HEIGHT: f32 = 13.0;
+/// Vertical FOV inside the world -- wider than the diorama's ~53 degrees.
+pub const FREE_FOV: f32 = 65.0 * core::f32::consts::PI / 180.0;
+/// How far ahead the rig looks (FirstPerson.FOCUS_DIST).
+pub const FREE_FOCUS_DIST: f32 = 24.0;
+/// Pitch limits, radians, positive looking DOWN.
+pub const FREE_PITCH_DOWN: f32 = 70.0 * core::f32::consts::PI / 180.0;
+pub const FREE_PITCH_UP: f32 = -50.0 * core::f32::consts::PI / 180.0;
+pub const FREE_PITCH_DEFAULT: f32 = 10.0 * core::f32::consts::PI / 180.0;
+/// Boom length at full extension, world px -- three 16px cells back.
+pub const FREE_BOOM: f32 = 48.0;
+/// Raises the boom's pivot above the eye so it looks down across the
+/// shoulder rather than through the back of the head.
+pub const FREE_PIVOT_LIFT: f32 = 4.0;
+/// Lateral rail offset, positive to the camera's right, so the player sits
+/// left of centre and the larger half of the frame is what they face.
+pub const FREE_SHOULDER: f32 = 4.0;
+/// Zoom range on the boom, as a multiple of [`FREE_BOOM`].
+pub const FREE_ZOOM_MIN: f32 = 0.45;
+pub const FREE_ZOOM_MAX: f32 = 2.4;
+pub const FREE_ZOOM_STEP: f32 = 1.18;
+/// Stick rates, radians per second (FirstPerson.STICK_YAW / STICK_PITCH).
+pub const FREE_STICK_YAW: f32 = 3.5;
+pub const FREE_STICK_PITCH: f32 = 2.4;
+
+/// The rig standing with the player at `(px, pz)`.
+///
+/// `boom` 0 is first person -- the eye IS the head. Any boom pulls it back
+/// along the view line and adds the shoulder rail, which is third person.
+/// `yaw` 0 looks north (toward -z), the direction an unswung [`orbit`] looks,
+/// so the two ladders agree about which way is forward. `pitch` is positive
+/// looking down.
+///
+/// `a` comes out as the view direction's angle from straight down, same as
+/// every other camera here, so the billboard lean and the camera-ward pull
+/// keep working without knowing which rig made the camera -- which is what
+/// stands the character cards upright when the eye is level with them.
+pub fn free_cam(px: f32, pz: f32, yaw: f32, pitch: f32, boom: f32, shoulder: f32) -> Camera {
+    let lift = if boom > 0.0 { FREE_PIVOT_LIFT } else { 0.0 };
+    let pivot = vec3(px, FREE_EYE_HEIGHT + lift, pz);
+    let (sy, cy) = (sinf(yaw), cosf(yaw));
+    let (sp, cp) = (sinf(pitch), cosf(pitch));
+    let fwd = vec3(sy * cp, -sp, -cy * cp);
+    let right = vec3(cy, 0.0, sy);
+    let eye = vec3(
+        pivot.x - fwd.x * boom + right.x * shoulder,
+        pivot.y - fwd.y * boom,
+        pivot.z - fwd.z * boom + right.z * shoulder,
+    );
+    let focus = vec3(
+        pivot.x + fwd.x * FREE_FOCUS_DIST,
+        pivot.y + fwd.y * FREE_FOCUS_DIST,
+        pivot.z + fwd.z * FREE_FOCUS_DIST,
+    );
+    // `a` is the view direction's angle from straight down. For this rig that
+    // is exactly a quarter turn less the pitch -- cos a = -fwd.y = sin pitch,
+    // sin a = the horizontal part = cos pitch -- so there is no need for an
+    // arccos the math module does not carry.
+    let a = core::f32::consts::FRAC_PI_2 - pitch;
+    let dist = if boom > FREE_FOCUS_DIST { boom } else { FREE_FOCUS_DIST };
+    finish(eye, focus, vec3(0.0, 1.0, 0.0), a, FREE_FOV, dist)
+}
+
+/// Clamp a free-rig pitch to what the rung allows.
+pub fn clamp_free_pitch(pitch: f32) -> f32 {
+    if pitch < FREE_PITCH_UP {
+        FREE_PITCH_UP
+    } else if pitch > FREE_PITCH_DOWN {
+        FREE_PITCH_DOWN
+    } else {
+        pitch
+    }
+}
+
 /// The yaw offset that puts the camera BEHIND a player travelling `(dx, dz)`.
 ///
 /// [`swing`] measures yaw as `atan2(v.z, v.x)`, and an unswung [`orbit`] sits
@@ -382,6 +470,88 @@ pub fn battle(inp: &RigInput) -> Camera {
     let a = atan2f(view_h / dist, -dirn.y);
 
     finish(eye, look, Vec3::Y, a, fov, dist)
+}
+
+#[cfg(test)]
+mod free_rig_tests {
+    use super::*;
+
+    /// First person puts the eye IN the head: at the player, at eye height,
+    /// with no boom and no shoulder rail.
+    #[test]
+    fn first_person_stands_in_the_players_head() {
+        let c = free_cam(100.0, 200.0, 0.0, FREE_PITCH_DEFAULT, 0.0, 0.0);
+        assert!((c.eye.x - 100.0).abs() < 1e-3, "eye moved off the player: {}", c.eye.x);
+        assert!((c.eye.z - 200.0).abs() < 1e-3, "eye moved off the player: {}", c.eye.z);
+        assert!((c.eye.y - FREE_EYE_HEIGHT).abs() < 1e-3, "wrong eye height: {}", c.eye.y);
+    }
+
+    /// Third person pulls it back along the view line, so the player ends up
+    /// between the eye and what it is looking at.
+    #[test]
+    fn third_person_puts_the_player_between_the_eye_and_the_focus() {
+        let c = free_cam(100.0, 200.0, 0.0, FREE_PITCH_DEFAULT, FREE_BOOM, FREE_SHOULDER);
+        let along = |x: f32, z: f32| {
+            let fx = c.focus.x - c.eye.x;
+            let fz = c.focus.z - c.eye.z;
+            ((x - c.eye.x) * fx + (z - c.eye.z) * fz) / (fx * fx + fz * fz)
+        };
+        let t = along(100.0, 200.0);
+        assert!(t > 0.0 && t < 1.0, "player is not in front of the eye (t = {t})");
+        // and roughly the boom away, not on top of them
+        let dx = c.eye.x - 100.0;
+        let dz = c.eye.z - 200.0;
+        let back = (dx * dx + dz * dz).sqrt();
+        assert!(back > FREE_BOOM * 0.7, "boom too short: {back}");
+    }
+
+    /// Yaw 0 looks north, the way an unswung orbit looks -- so the camera
+    /// stands SOUTH of the player. Getting this backwards would put the
+    /// camera in front of them, facing the wrong way, on every rung.
+    #[test]
+    fn yaw_zero_looks_the_same_way_the_orbit_does() {
+        let c = free_cam(0.0, 0.0, 0.0, 0.0, FREE_BOOM, 0.0);
+        assert!(c.eye.z > 0.0, "eye should sit south of the player: {}", c.eye.z);
+        assert!(c.focus.z < c.eye.z, "camera is looking the wrong way");
+        let o = orbit(0.0, 0.0, 45.0);
+        assert!(o.eye.z > 0.0, "the orbit's own convention moved");
+    }
+
+    /// Turning right walks the eye round the player rather than sideways.
+    #[test]
+    fn yaw_swings_the_eye_around_the_player() {
+        let east = free_cam(0.0, 0.0, core::f32::consts::FRAC_PI_2, 0.0, FREE_BOOM, 0.0);
+        // looking east, the camera stands to the west
+        assert!(east.eye.x < -FREE_BOOM * 0.7, "eye did not swing west: {}", east.eye.x);
+        assert!(east.focus.x > east.eye.x, "not looking east");
+    }
+
+    /// A level camera stands the character cards upright -- the whole reason
+    /// `a` exists. Pitched down, they lean.
+    #[test]
+    fn the_lean_angle_tracks_the_pitch() {
+        let level = free_cam(0.0, 0.0, 0.0, 0.0, FREE_BOOM, 0.0);
+        assert!((level.a - core::f32::consts::FRAC_PI_2).abs() < 1e-4, "{}", level.a);
+        let down = free_cam(0.0, 0.0, 0.0, FREE_PITCH_DOWN, FREE_BOOM, 0.0);
+        assert!(down.a < level.a, "looking down should lean the cards");
+    }
+
+    #[test]
+    fn the_pitch_clamps_to_the_rungs_limits() {
+        assert_eq!(clamp_free_pitch(10.0), FREE_PITCH_DOWN);
+        assert_eq!(clamp_free_pitch(-10.0), FREE_PITCH_UP);
+        assert_eq!(clamp_free_pitch(0.2), 0.2);
+    }
+
+    /// The lens opens out inside the world; the diorama's does not move.
+    #[test]
+    fn the_free_rig_uses_its_own_wider_lens() {
+        let free = free_cam(0.0, 0.0, 0.0, 0.0, FREE_BOOM, 0.0);
+        let dio = orbit(0.0, 0.0, 45.0);
+        assert!(free.fov_y > dio.fov_y, "free rig should be wider: {} vs {}",
+                free.fov_y, dio.fov_y);
+        assert!((free.fov_y - FREE_FOV).abs() < 1e-5);
+    }
 }
 
 #[cfg(test)]

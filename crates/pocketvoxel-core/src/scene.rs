@@ -157,6 +157,16 @@ pub struct Scene {
     /// against, so a host that never touches this gets exactly the camera it
     /// had before camera modes existed -- goldens included.
     pub cam_dist_scale: f32,
+    /// Which camera rig is in charge: 0 the orbit this port has always used,
+    /// 1 first person, 2 third person (cam::free_cam). The orbit is 0 so a
+    /// zeroed scene is the old camera.
+    pub cam_rig: u8,
+    /// Where the free rig is looking, radians. Yaw 0 looks north, the way an
+    /// unswung orbit looks; pitch is positive looking down.
+    pub cam_rig_yaw: f32,
+    pub cam_rig_pitch: f32,
+    /// Boom length as a multiple of cam::FREE_BOOM (third person only).
+    pub cam_rig_zoom: f32,
     /// Selected SGB palette: index into the pak's SGB set (VPAL[4 + i]) for
     /// the non-ui atlas kinds; -1 = the GB grayscale ramp (voxel-spec.ts
     /// `palette`).
@@ -247,6 +257,10 @@ impl Scene {
             cam_yaw_off: 0.0,
             cam_pitch_off: 0.0,
             cam_dist_scale: 1.0,
+            cam_rig: 0,
+            cam_rig_yaw: 0.0,
+            cam_rig_pitch: crate::cam::FREE_PITCH_DEFAULT,
+            cam_rig_zoom: 1.0,
             palette: -1,
             stamps_off: Vec::new(),
             field_fx: None,

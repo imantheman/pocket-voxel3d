@@ -370,6 +370,25 @@ fn base_camera(scene: &Scene) -> Camera {
         })
     } else {
         let (cx, cy) = scene.cam_px();
+        // The free rungs stand the camera WITH the player instead of orbiting
+        // the view centre; the orbit stays rig 0, so a scene that never sets
+        // this gets exactly the camera it always had.
+        if scene.cam_rig != 0 {
+            let boom = if scene.cam_rig == 2 {
+                cam::FREE_BOOM * scene.cam_rig_zoom
+            } else {
+                0.0
+            };
+            let shoulder = if scene.cam_rig == 2 { cam::FREE_SHOULDER } else { 0.0 };
+            return cam::free_cam(
+                cx,
+                cy,
+                scene.cam_rig_yaw,
+                cam::clamp_free_pitch(scene.cam_rig_pitch),
+                boom,
+                shoulder,
+            );
+        }
         // scale 1.0 is cam::orbit exactly, which is why the default camera is
         // untouched by camera modes existing.
         let s = if scene.cam_dist_scale > 0.0 { scene.cam_dist_scale } else { 1.0 };
