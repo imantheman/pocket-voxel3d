@@ -502,40 +502,6 @@ function roundTemplate(
   return { quads: merged, bg };
 }
 
-/**
- * Maps whose carved tree hulls do not fit in a console's memory, and which
- * therefore cook their round scenery as boxes instead.
- *
- * A carved hull is ~700 quads, instanced per placement. On a map made almost
- * entirely of trees that runs away: measured hull vertices, against ~108k for
- * the worst map NOT in this list (Saffron) and ~37k for Route 2 —
- *
- *     VIRIDIAN_FOREST  2,069,848      ROUTE_23  1,564,996
- *     POWER_PLANT        623,672      ROUTE_17    539,260
- *
- * Viridian Forest cooked to 2.9M verts and a 56 MB pak, seven times the next
- * biggest map. load_map_pak sizes its buffer to the whole FILE even for a
- * planned read, so entering the forest asked a real 3DS for 56 MB of
- * contiguous heap; whether that succeeded depended on how fragmented the heap
- * already was, which is why it crashed coming in from the south gate and not
- * the north. On the boxes path the same map is 390k verts and 12 MB, which
- * also puts it under MAX_VERTS_SAFE — so it stops being a "huge" map and
- * renders WHOLE instead of having 85% of its geometry discarded.
- *
- * This is a list rather than a rule because the honest signal — how many
- * quads the placements actually cost — is only known after carving, and
- * unwinding a carve mid-cook is a bigger change than this needs to be. A
- * post-carve budget check that clears S.roundStamps is the version that would
- * not need maintaining; until then, adding a map here is a measurement, not a
- * guess. cc_planone reports the number.
- */
-const BOX_TREES_MAPS = new Set([
-  "VIRIDIAN_FOREST",
-  "ROUTE_23",
-  "POWER_PLANT",
-  "ROUTE_17",
-]);
-
 // Structures.lua:1278 buildCylinders — the cylinder/canopy scans.
 export function buildCylinders(
   S: SGrid,
@@ -552,10 +518,6 @@ export function buildCylinders(
   // to price the boxes-everywhere floor; a pak cooked with it carries neither
   // tree mesh kind and declares no VXPK_META_FLAG_TREE_LOD.
   if (process.env.VOXEL_TREE_BOXES === "1") return;
-  if (BOX_TREES_MAPS.has(map.def.id)) {
-    console.log(`  ${map.def.id}: carving boxes, not hulls (see BOX_TREES_MAPS)`);
-    return;
-  }
   const tw = map.def.width * 4;
   const th = map.def.height * 4;
   const gsig = [...groundTiles].sort((a, b) => a - b).join(",");
