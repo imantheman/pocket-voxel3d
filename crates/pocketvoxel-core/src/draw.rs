@@ -396,6 +396,15 @@ fn base_camera(scene: &Scene) -> Camera {
     }
 }
 
+/// Whether entity slot `i` is drawn at all -- card, shadow and ghost alike.
+///
+/// First person hides the player's own card, slot 0 (scene.ts puts the player
+/// there): the eye stands inside it, so it would fill the lens. Every other
+/// camera draws it, and every other entity is drawn on every camera.
+pub fn ent_drawn(scene: &Scene, i: usize, e: &crate::scene::Ent) -> bool {
+    e.shown && !(scene.cam_rig == 1 && i == 0)
+}
+
 fn slot0_offset(scene: &Scene) -> (i32, i32) {
     let s = &scene.maps[0];
     if s.shown { (s.ox, s.oy) } else { (0, 0) }
@@ -710,7 +719,9 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
         )
     };
     let card_w = CELL_PX as f32;
-    for ent in scene.ents.iter().filter(|e| e.shown) {
+    for (_, ent) in scene.ents.iter().enumerate()
+        .filter(|(i, e)| ent_drawn(scene, *i, e))
+    {
         items.push(Item::ShadowDecal {
             corners: shadow_quad(ent_feet(ent), card_w),
             abgr: alpha_abgr(SHADOW_ALPHA_FIELD),
@@ -767,7 +778,9 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
         let u1 = CELL_PX as f32 / (page.w as f32).max(CELL_PX as f32);
         [0.0, row * vh, u1, (row + 1.0) * vh]
     };
-    for ent in scene.ents.iter().filter(|e| e.shown) {
+    for (_, ent) in scene.ents.iter().enumerate()
+        .filter(|(i, e)| ent_drawn(scene, *i, e))
+    {
         if ent.flags & ent_flag::GHOST != 0 {
             items.push(Item::Ghost {
                 verts: card_verts(ent_feet(ent), card_w, card_w, a, fwd_x, fwd_z),
@@ -776,7 +789,9 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
             });
         }
     }
-    for ent in scene.ents.iter().filter(|e| e.shown) {
+    for (_, ent) in scene.ents.iter().enumerate()
+        .filter(|(i, e)| ent_drawn(scene, *i, e))
+    {
         let Some(page) = page_at(pak, ent.sheet) else {
             continue;
         };
@@ -926,6 +941,25 @@ mod tests {
         // top corners lifted by sin a and pushed north by cos a
         assert!((v[3][1] - 16.0 * a.sin()).abs() < 1e-3, "tl y {:?}", v[3]);
         assert!((v[3][2] - (200.0 - 16.0 * a.cos())).abs() < 1e-3, "tl z {:?}", v[3]);
+    }
+
+    #[test]
+    fn first_person_does_not_draw_the_players_own_card() {
+        let mut sc = Scene::new();
+        let shown = crate::scene::Ent { shown: true, ..Default::default() };
+        // every other camera draws the player
+        for rig in [0u8, 2] {
+            sc.cam_rig = rig;
+            assert!(ent_drawn(&sc, 0, &shown), "rig {rig} hid the player");
+        }
+        // first person hides only the player -- NPCs are still there
+        sc.cam_rig = 1;
+        assert!(!ent_drawn(&sc, 0, &shown), "the player is in the lens");
+        assert!(ent_drawn(&sc, 1, &shown), "an NPC vanished");
+        // and a hidden entity stays hidden whatever the camera
+        let hidden = crate::scene::Ent { shown: false, ..Default::default() };
+        sc.cam_rig = 0;
+        assert!(!ent_drawn(&sc, 3, &hidden));
     }
 
     #[test]

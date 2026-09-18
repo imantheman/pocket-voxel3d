@@ -670,7 +670,12 @@ export class Overworld implements ScriptWorld {
     }
     p.px = r.px;
     p.py = r.py;
-    p.bumpFrames = 1; // keeps the walk cycle turning over while moving
+    // Keeps the walk cycle turning over while moving. 2, not 1: the
+    // player's own update runs before the frame is drawn and takes one off,
+    // and at 0 walkPhase() reads "standing" -- which is why the walk looked
+    // stiff. At 2 the draw still sees 1, and letting go of the pad stands
+    // the player on the very next frame.
+    p.bumpFrames = 2;
     const cx = cellOf(p.px);
     const cy = cellOf(p.py);
     if (cx !== p.cellX || cy !== p.cellY) {

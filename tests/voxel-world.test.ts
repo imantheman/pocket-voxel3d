@@ -4755,6 +4755,27 @@ describe("free movement", () => {
     expect(ow.player.facing).toBe("right");
   });
 
+  test.skipIf(!hasGen)("the walk animates, rather than sliding stiffly", () => {
+    // The walk cycle has to be alive at DRAW time. The player's own update
+    // runs first and counts the cycle down, so a counter it had already taken
+    // to zero drew the standing pose every frame.
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    const [x, y] = openRun(game, "PALLET_TOWN", 4);
+    ow.setMap("PALLET_TOWN", x, y, "right");
+    game.setCamYaw(0);
+    const phases = new Set<number>();
+    for (let i = 0; i < 32; i++) {
+      game.tick(VOX_BTN.right);
+      phases.add(ow.player.walkPhase());
+    }
+    expect(phases).toEqual(new Set([0, 1])); // both legs, not one pose
+    // and letting go stands the player straight away
+    game.tick(0);
+    game.tick(0);
+    expect(ow.player.walkPhase()).toBe(0);
+  });
+
   test.skipIf(!hasGen)("each cell crossed lands like a grid step", () => {
     // onStepComplete is what runs warps, triggers and encounters -- once per
     // cell, the rate a grid walk fires it.
