@@ -294,6 +294,10 @@ unsafe fn load_map_pak(name: &str, want: Option<PlanKey>) -> bool {
 struct CamMode {
     name: &'static str,
     rig: u8,
+    /// A fixed-angle rung pins the orbit to one PITCH_RUNGS entry and locks
+    /// the stick out, as the mod's angle rungs do. None is a camera the stick
+    /// moves: ours, or a free rig.
+    rung: Option<usize>,
 }
 
 /// The ladder, cycled with ZL and ZR.
@@ -304,11 +308,19 @@ struct CamMode {
 /// back of their head, or in it.
 ///
 /// ZL/ZR and not L/R: L and R are the Kantogear's tabs.
-const CAM_MODES: [CamMode; 3] = [
-    CamMode { name: "orbit (ours)", rig: 0 },
-    CamMode { name: "3rd person", rig: 2 },
-    CamMode { name: "1st person", rig: 1 },
+const CAM_MODES: [CamMode; 8] = [
+    CamMode { name: "ours (free swing)", rig: 0, rung: None },
+    CamMode { name: "OFF (flat)", rig: 0, rung: Some(0) },
+    CamMode { name: "15", rig: 0, rung: Some(1) },
+    CamMode { name: "35", rig: 0, rung: Some(2) },
+    CamMode { name: "50", rig: 0, rung: Some(3) },
+    CamMode { name: "75", rig: 0, rung: Some(4) },
+    CamMode { name: "1st person", rig: 1, rung: None },
+    CamMode { name: "3rd person", rig: 2, rung: None },
 ];
+
+/// The rung ours sits on: 35 degrees, what the guest asks for at boot.
+const OURS_RUNG: usize = 2;
 
 /// C-stick rates per frame at 60 Hz, from the mod's per-second figures.
 const RIG_YAW_RATE: f32 = pocketvoxel_core::cam::FREE_STICK_YAW / 60.0;
@@ -2373,6 +2385,15 @@ fn main() {
     // last heading in place instead of snapping to a default.
     let mut cam_rig_yaw: f32 = 0.0;
     let mut cam_rig_pitch: f32 = pocketvoxel_core::cam::FREE_PITCH_DEFAULT;
+    // The battle camera's own swing. Kept apart from the overworld's so that
+    // walking round an arena never leaves the overworld camera somewhere else
+    // when the fight ends: it resets the moment the battle does.
+    let mut btl_yaw_off: f32 = 0.0;
+    let mut btl_pitch_off: f32 = 0.0;
+    let mut was_in_battle = false;
+    // The yaw the WALK is rotated by, whichever camera produced it. Read by
+    // the input packer above on the next frame.
+    let mut walk_yaw: f32 = 0.0;
     let mut dist: f32 = geom.size * 1.4;
 
     while apt.main_loop() {
@@ -2524,12 +2545,7 @@ fn main() {
                 // On a free rung the walk is relative to the RIG's yaw,
                 // or pushing forward sends the player off in the orbit's old
                 // direction instead of the way the camera is looking.
-                let swung = if CAM_MODES[cam_mode].rig == 0 {
-                    cam_yaw_off
-                } else {
-                    cam_rig_yaw
-                };
-                let q = pocketvoxel_core::cam::quarter_turns(swung);
+                let q = pocketvoxel_core::cam::quarter_turns(walk_yaw);
                 b |= (q & 3) << 24;
             }
             unsafe {
@@ -3036,90 +3052,113 @@ fn main() {
         }
 
         if guest_drive {
-            // C-stick swings the view. Rate, not position: holding it keeps
-            // turning, which is what a nub with no absolute reference wants.
             // The C-stick's four directions are ordinary keypad bits, so no
             // extra service to start; the analog read would be irrstCstick-
-            // Read, which hidCstickRead is only a macro for.
-            // Shoulder buttons cycle the camera mode. ZL/ZR on a New 3DS,
-            // L/R as well because the original console has no ZL/ZR at all
-            // and would otherwise have no way to reach the modes. L/R are
-            // free here -- the map viewer's use of them is in the other
-            // branch, where the guest is not driving.
-            let both_shoulders = k.contains(KeyPad::ZL) && k.contains(KeyPad::ZR);
-            if both_shoulders {
-                // The old recentre gesture, kept, for whichever rig is up.
-                if CAM_MODES[cam_mode].rig == 0 {
+            // Read, which hidCstickRead is only a macro for. Rate, not
+            // position: holding it keeps turning.
+            let sc = unsafe { voxel::scene() };
+            let in_battle = sc.battle.active;
+            let tau = core::f32::consts::PI * 2.0;
+
+            if in_battle {
+                // The battle camera always swings, whatever the overworld
+                // mode -- a staged arena is worth walking round. Its offset
+                // is its own and does not survive the fight.
+                if k.contains(KeyPad::CSTICK_LEFT)  { btl_yaw_off -= 0.035; }
+                if k.contains(KeyPad::CSTICK_RIGHT) { btl_yaw_off += 0.035; }
+                if k.contains(KeyPad::CSTICK_UP)    { btl_pitch_off += 0.025; }
+                if k.contains(KeyPad::CSTICK_DOWN)  { btl_pitch_off -= 0.025; }
+                if k.contains(KeyPad::ZL) && k.contains(KeyPad::ZR) {
+                    btl_yaw_off = 0.0;
+                    btl_pitch_off = 0.0;
+                }
+                btl_pitch_off = draw::clamp_pitch_off(sc, btl_pitch_off);
+                btl_yaw_off = btl_yaw_off.rem_euclid(tau);
+                sc.cam_yaw_off = btl_yaw_off;
+                sc.cam_pitch_off = btl_pitch_off;
+                was_in_battle = true;
+            } else {
+                if was_in_battle {
+                    // Back on the map: the arena's swing goes, the
+                    // overworld's own camera comes back exactly as it was.
+                    btl_yaw_off = 0.0;
+                    btl_pitch_off = 0.0;
+                    was_in_battle = false;
+                }
+
+                // ZL/ZR cycle the mode (L and R are the Kantogear's tabs);
+                // both together recentre whichever camera is up.
+                if k.contains(KeyPad::ZL) && k.contains(KeyPad::ZR) {
                     cam_yaw_off = 0.0;
                     cam_pitch_off = 0.0;
-                } else {
                     cam_rig_pitch = pocketvoxel_core::cam::FREE_PITCH_DEFAULT;
-                }
-            } else {
-                // ZL/ZR only. L and R belong to the Kantogear's tabs.
-                let fwd = d.contains(KeyPad::ZR);
-                let back = d.contains(KeyPad::ZL);
-                if fwd || back {
-                    cam_mode = if fwd {
-                        (cam_mode + 1) % CAM_MODES.len()
+                } else if d.contains(KeyPad::ZR) || d.contains(KeyPad::ZL) {
+                    let n = CAM_MODES.len();
+                    cam_mode = if d.contains(KeyPad::ZR) {
+                        (cam_mode + 1) % n
                     } else {
-                        (cam_mode + CAM_MODES.len() - 1) % CAM_MODES.len()
+                        (cam_mode + n - 1) % n
                     };
-                    // A free rung starts looking the way the orbit was, so
-                    // stepping onto one does not spin the world round.
-                    if CAM_MODES[cam_mode].rig != 0 {
-                        cam_rig_yaw = cam_yaw_off;
+                    let m = &CAM_MODES[cam_mode];
+                    // Onto a free rung: start looking the way the camera was,
+                    // so the world does not spin round under the switch.
+                    if m.rig != 0 {
+                        cam_rig_yaw = walk_yaw;
                         cam_rig_pitch = pocketvoxel_core::cam::FREE_PITCH_DEFAULT;
                     }
-                    dlog(&format!("[pv] camera mode {}", CAM_MODES[cam_mode].name));
+                    // The orbit's pitch rung: the mode's own, or ours for
+                    // ours. Tweened from wherever it is, so it never snaps.
+                    let want = m.rung.unwrap_or(OURS_RUNG);
+                    if m.rig == 0 && sc.pitch_rung != want {
+                        sc.pitch_from_deg = sc.pitch_deg();
+                        sc.pitch_rung = want;
+                        sc.pitch_t = 0;
+                    }
+                    dlog(&format!("[pv] camera mode {}", m.name));
                 }
-            }
-            let rig = CAM_MODES[cam_mode].rig;
 
-            // C-stick swings the view. Rate, not position: holding it keeps
-            // turning, which is what a nub with no absolute reference wants.
-            // The C-stick's four directions are ordinary keypad bits, so no
-            // extra service to start; the analog read would be irrstCstick-
-            // Read, which hidCstickRead is only a macro for.
-            if rig == 0 {
-                if k.contains(KeyPad::CSTICK_LEFT)  { cam_yaw_off -= 0.035; }
-                if k.contains(KeyPad::CSTICK_RIGHT) { cam_yaw_off += 0.035; }
-                if k.contains(KeyPad::CSTICK_UP)    { cam_pitch_off += 0.025; }
-                if k.contains(KeyPad::CSTICK_DOWN)  { cam_pitch_off -= 0.025; }
-            } else {
-                // A free rung steers its own attitude instead, at the mod's
-                // rates -- about twice the orbit's, which is the answer to
-                // the old camera being slow to swing.
-                if k.contains(KeyPad::CSTICK_LEFT)  { cam_rig_yaw -= RIG_YAW_RATE; }
-                if k.contains(KeyPad::CSTICK_RIGHT) { cam_rig_yaw += RIG_YAW_RATE; }
-                if k.contains(KeyPad::CSTICK_UP)    { cam_rig_pitch -= RIG_PITCH_RATE; }
-                if k.contains(KeyPad::CSTICK_DOWN)  { cam_rig_pitch += RIG_PITCH_RATE; }
-                cam_rig_pitch = pocketvoxel_core::cam::clamp_free_pitch(cam_rig_pitch);
-                cam_rig_yaw = cam_rig_yaw.rem_euclid(core::f32::consts::PI * 2.0);
+                let m = &CAM_MODES[cam_mode];
+                if m.rig != 0 {
+                    // 1ST / 3RD steer their own attitude at the mod's rates,
+                    // about twice the orbit's. Pushing up looks up.
+                    if k.contains(KeyPad::CSTICK_LEFT)  { cam_rig_yaw -= RIG_YAW_RATE; }
+                    if k.contains(KeyPad::CSTICK_RIGHT) { cam_rig_yaw += RIG_YAW_RATE; }
+                    if k.contains(KeyPad::CSTICK_UP)    { cam_rig_pitch -= RIG_PITCH_RATE; }
+                    if k.contains(KeyPad::CSTICK_DOWN)  { cam_rig_pitch += RIG_PITCH_RATE; }
+                    cam_rig_pitch = pocketvoxel_core::cam::clamp_free_pitch(cam_rig_pitch);
+                    cam_rig_yaw = cam_rig_yaw.rem_euclid(tau);
+                    // The rig is the camera; the orbit's swing must not be
+                    // laid on top of it, or it gets spun about its focus.
+                    sc.cam_yaw_off = 0.0;
+                    sc.cam_pitch_off = 0.0;
+                    // Forward is where the camera looks.
+                    walk_yaw = cam_rig_yaw;
+                } else if m.rung.is_some() {
+                    // A fixed angle is fixed: no swing, the stick does
+                    // nothing, and forward is straight up the screen.
+                    sc.cam_yaw_off = 0.0;
+                    sc.cam_pitch_off = 0.0;
+                    walk_yaw = 0.0;
+                } else {
+                    // Ours, exactly as it was.
+                    if k.contains(KeyPad::CSTICK_LEFT)  { cam_yaw_off -= 0.035; }
+                    if k.contains(KeyPad::CSTICK_RIGHT) { cam_yaw_off += 0.035; }
+                    if k.contains(KeyPad::CSTICK_UP)    { cam_pitch_off += 0.025; }
+                    if k.contains(KeyPad::CSTICK_DOWN)  { cam_pitch_off -= 0.025; }
+                    // Held against the limit, the offset must not keep
+                    // winding: clamp to what this camera can take, so the
+                    // stick stops at the ground and reverses at once.
+                    cam_pitch_off = draw::clamp_pitch_off(sc, cam_pitch_off);
+                    cam_yaw_off = cam_yaw_off.rem_euclid(tau);
+                    sc.cam_yaw_off = cam_yaw_off;
+                    sc.cam_pitch_off = cam_pitch_off;
+                    walk_yaw = cam_yaw_off;
+                }
+                sc.cam_rig = m.rig;
+                sc.cam_rig_yaw = cam_rig_yaw;
+                sc.cam_rig_pitch = cam_rig_pitch;
+                sc.cam_rig_zoom = 1.0;
             }
-            // Held against the limit, the offset must not keep winding: the
-            // swing clamps its RESULT, so the slack would all have to be
-            // pushed back out before the camera moved again. Clamped to what
-            // this camera can actually take, the stick simply stops at the
-            // ground and reverses the moment it is pushed the other way.
-            cam_pitch_off =
-                draw::clamp_pitch_off(unsafe { voxel::scene() }, cam_pitch_off);
-            // Yaw has no limit, it just goes round; keep it in one turn so
-            // it cannot drift off into imprecision over a long session.
-            let tau = core::f32::consts::PI * 2.0;
-            cam_yaw_off = cam_yaw_off.rem_euclid(tau);
-            // Handed to the scene rather than applied here: draw::camera
-            // swings the ONE camera everything reads, so the billboard lean,
-            // the card facing, the frustum and the projection cannot end up
-            // describing different eyes. Battles included -- the rig is a
-            // camera like any other, and the arena is worth walking around.
-            let sc = unsafe { voxel::scene() };
-            sc.cam_yaw_off = cam_yaw_off;
-            sc.cam_pitch_off = cam_pitch_off;
-            sc.cam_rig = CAM_MODES[cam_mode].rig;
-            sc.cam_rig_yaw = cam_rig_yaw;
-            sc.cam_rig_pitch = cam_rig_pitch;
-            sc.cam_rig_zoom = 1.0;
         }
         if !guest_drive {
         if k.contains(KeyPad::DPAD_LEFT)  { yaw -= 0.04; }
