@@ -4423,6 +4423,7 @@ describe("HM02 FLY", () => {
   test.skipIf(!hasGen)("picking a town flies you there", () => {
     const game = flyGame();
     const ow = game.overworld;
+    ow.setMap("PALLET_TOWN", 5, 6, "down"); // FLY only leaves outside
     visit(game.save as never, "PEWTER_CITY");
     ow.runScript([["use_fly", "PIDGEOT"]]);
     let guard = 0;
@@ -4454,8 +4455,13 @@ describe("HM02 FLY", () => {
   test.skipIf(!hasGen)("with nowhere to go it says so instead of opening an empty list", () => {
     const game = flyGame();
     const ow = game.overworld;
-    // a brand new save in Pallet has visited exactly Pallet, and you cannot
-    // fly to where you already are
+    // Outside, so the location check passes and the EMPTY LIST is what
+    // refuses: a brand new save standing in Pallet has visited exactly
+    // Pallet, and you cannot fly to where you already are.
+    ow.setMap("PALLET_TOWN", 5, 6, "down");
+    expect(ow.map.def.tileset).toBe("OVERWORLD");
+    expect(flyDestinations((romData as any).field, game.save as never, "PALLET_TOWN"))
+      .toEqual([]);
     ow.runScript([["use_fly", "PIDGEOT"]]);
     let guard = 0;
     while (game.stackKinds().at(-1) !== "textbox" && guard++ < 400) game.tick(0);
@@ -4554,11 +4560,78 @@ describe("HM02 FLY", () => {
     expect(game.save.visited?.CELADON_CITY ?? false).toBe(false);
   });
 
+  /**
+   * Open the picker from `map` and say what came back. A fresh game per call:
+   * the script runner from the previous use_fly is still live otherwise.
+   */
+  function flyFrom(map: string, visitAll = true): "picker" | "refused" | "nothing" {
+    const game = flyGame();
+    if (visitAll) for (const m of FLY_MAP_IDS) visit(game.save as never, m);
+    game.overworld.setMap(map, 4, 4, "down");
+    game.overworld.runScript([["use_fly", "PIDGEOT"]]);
+    for (let i = 0; i < 400; i++) {
+      const top = game.stackKinds().at(-1);
+      if (top === "flypicker") return "picker";
+      if (top === "textbox") return "refused";
+      game.tick(0);
+    }
+    return "nothing";
+  }
+
+  /** The refusal line, for the test that checks WHICH refusal it was. */
+  function flyRefusalFrom(map: string, visitAll: boolean): string {
+    const game = flyGame();
+    if (visitAll) for (const m of FLY_MAP_IDS) visit(game.save as never, m);
+    game.overworld.setMap(map, 4, 4, "down");
+    game.overworld.runScript([["use_fly", "PIDGEOT"]]);
+    for (let i = 0; i < 400; i++) {
+      if (game.stackKinds().at(-1) === "textbox") return topText(game);
+      game.tick(0);
+    }
+    return "";
+  }
+
+  test.skipIf(!hasGen)("FLY only leaves from outside", () => {
+    // CheckIfInOutsideMap: an OVERWORLD or PLATEAU map. Without this you can
+    // fly out of a cave or out of Silph Co.
+    for (const map of ["ROUTE_1", "CELADON_CITY", "PALLET_TOWN"]) {
+      expect(flyFrom(map), map).toBe("picker");
+    }
+    for (const map of ["SILPH_CO_3F", "MT_MOON_1F", "VIRIDIAN_FOREST", "CELADON_GYM"]) {
+      expect(flyFrom(map), map).toBe("refused");
+      expect(flyRefusalFrom(map, true), map).toContain("FLY");
+    }
+  });
+
+  test.skipIf(!hasGen)("and not out of an Elite Four room", () => {
+    // Lance's door locks behind you on the way in. Flying out of the league
+    // mid-run would undo that entirely.
+    for (const map of ["LORELEIS_ROOM", "BRUNOS_ROOM", "AGATHAS_ROOM", "LANCES_ROOM",
+                       "CHAMPIONS_ROOM"]) {
+      expect(flyFrom(map), map).toBe("refused");
+    }
+  });
+
+  test.skipIf(!hasGen)("the plateau counts as outside, as it does in the original", () => {
+    // CheckIfInOutsideMap takes tileset 0 OR PLATEAU, which is why Indigo
+    // Plateau is somewhere you can fly from as well as to.
+    expect(flyFrom("INDIGO_PLATEAU")).toBe("picker");
+  });
+
+  test.skipIf(!hasGen)("being outside is checked before having anywhere to go", () => {
+    // Both refuse with the same line, so the order only shows in which reason
+    // is reported -- but a cave with a full destination list must still say
+    // no, and that is the case this pins.
+    expect(flyFrom("MT_MOON_1F", false)).toBe("refused");
+    expect(flyFrom("MT_MOON_1F", true)).toBe("refused");
+  });
+
   test.skipIf(!hasGen)("the party menu offers FLY to a mon that knows it", () => {
     const game = flyGame();
     const mon: any = newMon(romData!, "PIDGEOT", 40);
     mon.moves = [{ id: "FLY", pp: 15 }];
     game.save.party.push(mon);
+    game.overworld.setMap("PALLET_TOWN", 5, 6, "down"); // FLY only leaves outside
     tap(game, VOX_BTN.start);
     let guard = 0;
     while (game.stackKinds().at(-1) !== "party" && guard++ < 40) tap(game, VOX_BTN.a);

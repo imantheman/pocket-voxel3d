@@ -105,22 +105,6 @@ const PAK_CACHE_FLOOR_KB: usize = 24 * 1024;
 /// has walked well away from, and the memory is better left for geometry.
 const PAK_CACHE_CEIL_KB: usize = 72 * 1024;
 
-/// The largest pak a read-ahead will attempt.
-///
-/// map_pak reads only the sections a build actually needs -- that is what the
-/// planned read is for -- but prefetch_start reads the WHOLE file, so the two
-/// costs are not comparable for a big map. Viridian Forest's pak is 56 MB,
-/// seven times the next biggest, and Route 23 is 48 MB; pulling one of those
-/// in whole claims the heap the geometry then has to be built in, and the map
-/// half-loads or the console stops. The "does it fit beside the current map"
-/// test below does not catch it, because the map you are standing in when you
-/// walk into the forest is its 1.7 MB gate.
-///
-/// A read-ahead has to cost less than the load it saves. Past this size it
-/// does not, so those maps simply load the way they did before read-ahead
-/// existed -- which is the behaviour this is restoring, not a new limit.
-const PREFETCH_MAX_KB: usize = 16 * 1024;
-
 /// How much of the free heap the pak cache may claim. The rest has to carry
 /// the built geometry (up to ~14 MB of vertices), its texture, and QuickJS.
 const PAK_CACHE_HEAP_SHARE: usize = 2; // i.e. a half
@@ -365,6 +349,17 @@ const PREFETCH_SLICE: usize = 64 * 1024;
 /// progress, or would not fit beside what is cached.
 #[allow(static_mut_refs)]
 unsafe fn prefetch_start(name: &str) -> bool {
+    // Viridian Forest is not read ahead into, and nothing is read ahead while
+    // standing in it or its gates (the call site checks that half).
+    //
+    // Its pak is 56 MB, against a heap probe that finds 48 MB free on real
+    // hardware. The log caught a 10 MB read-ahead of Pewter City still
+    // resident when the forest was asked for, and the console rebooted
+    // between the read finishing and the build starting. This is the one map
+    // where reading ahead cannot pay for itself, so it does not happen.
+    if name.starts_with("VIRIDIAN_FOREST") {
+        return false;
+    }
     if PREFETCH.is_some()
         || PAK_CACHE.iter().any(|c| c.name == name)
         || PREFETCH_TRIED.iter().any(|n| n == name)
@@ -378,14 +373,6 @@ unsafe fn prefetch_start(name: &str) -> bool {
     let Ok(file) = std::fs::File::open(&path) else { return false };
     let Ok(md) = file.metadata() else { return false };
     let len = md.len() as usize;
-    // Too big to read ahead at all: see PREFETCH_MAX_KB.
-    if len / 1024 > PREFETCH_MAX_KB {
-        dlog(&format!(
-            "[pv] prefetch {} skipped: {} MB is past the {} MB read-ahead cap",
-            name, len / 1048576, PREFETCH_MAX_KB / 1024,
-        ));
-        return false;
-    }
     // Only if it can live alongside the map being played without pushing it
     // out: a prefetch that evicts the ground under your feet is a loss.
     if cache_total_kb() + len / 1024 > PAK_CACHE_BUDGET_KB {
@@ -2652,13 +2639,26 @@ fn main() {
                             cand.sort_by(|a, b| {
                                 a.0.partial_cmp(&b.0).unwrap_or(core::cmp::Ordering::Equal)
                             });
-                            for (_, i) in cand {
-                                let nid = sc.maps[i].map_id;
-                                if let Some((_, nm)) =
-                                    map_index.iter().find(|(id, _)| *id == nid)
-                                {
-                                    if unsafe { prefetch_start(nm) } {
-                                        break;
+                            // The other half: standing in the forest or one
+                            // of its gates, the next map is very likely the
+                            // forest itself, and whatever gets read ahead is
+                            // still holding its buffer when that 56 MB load
+                            // arrives. Nothing is read ahead from here.
+                            let in_forest = map_ids
+                                .get(map_i)
+                                .and_then(|id| {
+                                    map_index.iter().find(|(mid, _)| mid == id)
+                                })
+                                .is_some_and(|(_, nm)| nm.starts_with("VIRIDIAN_FOREST"));
+                            if !in_forest {
+                                for (_, i) in cand {
+                                    let nid = sc.maps[i].map_id;
+                                    if let Some((_, nm)) =
+                                        map_index.iter().find(|(id, _)| *id == nid)
+                                    {
+                                        if unsafe { prefetch_start(nm) } {
+                                            break;
+                                        }
                                     }
                                 }
                             }

@@ -67,6 +67,7 @@ const SAVE_DONE_HOLD = 30;
 import { WarpPickerState } from "./ui/warppicker.ts";
 import { FlyPickerState } from "./ui/flypicker.ts";
 import { backfillVisited, flyDestinations } from "./world/fly.ts";
+import { isOutside } from "./world/map.ts";
 import { adjacentSnorlax, SNORLAX_LEVEL } from "./world/snorlax.ts";
 import { MoveForgetState } from "./ui/moveforget.ts";
 import { BagState } from "./ui/bagscreen.ts";
@@ -1802,6 +1803,15 @@ export class VoxelmonGame implements OverworldShell, SceneView {
    */
   openFlyPicker(monName: string, onDone?: () => void): void {
     const t = (this.data as { text?: Record<string, string> }).text ?? {};
+    // CheckIfInOutsideMap (home/overworld.asm): FLY only leaves from an
+    // OVERWORLD or PLATEAU map. Without this you could fly out of a cave, out
+    // of Silph Co -- and out of an Elite Four room, which undoes the whole
+    // point of Lance's door locking behind you.
+    const here = this.overworld.map?.def;
+    if (here && !isOutside(here)) {
+      this.showText(t._CannotFlyHereText ?? "You cannot FLY here.", onDone);
+      return;
+    }
     const dests = flyDestinations(
       (this.data as { field?: unknown }).field as never,
       this.save as never,
