@@ -289,6 +289,32 @@ unsafe fn load_map_pak(name: &str, want: Option<PlanKey>) -> bool {
     }
 }
 
+/// One camera mode.
+///
+/// `dist` is a multiple of the default framing distance (one view height).
+/// `follow` turns the camera to sit behind travel; `turn` is how fast it does
+/// so, in radians a frame. `stick` is the C-stick rate, which the follow
+/// modes raise because the complaint about the old camera was that it was
+/// slow to swing.
+struct CamMode {
+    name: &'static str,
+    dist: f32,
+    follow: bool,
+    turn: f32,
+    stick: f32,
+    pitch_off: f32,
+}
+
+/// Mode 0 is the camera as it was: same distance, same stick rate, no
+/// following, no pitch bias. Cycling away from it and back has to land on
+/// exactly the old framing, which is why its numbers are the old constants
+/// rather than something close to them.
+const CAM_MODES: [CamMode; 3] = [
+    CamMode { name: "classic", dist: 1.00, follow: false, turn: 0.00, stick: 0.035, pitch_off: 0.0 },
+    CamMode { name: "follow",  dist: 0.62, follow: true,  turn: 0.06, stick: 0.060, pitch_off: -0.25 },
+    CamMode { name: "close",   dist: 0.42, follow: true,  turn: 0.10, stick: 0.075, pitch_off: -0.40 },
+];
+
 /// A map being read ahead, a slice at a time, while the player walks.
 ///
 /// Crossing a seam has no fade to hide behind -- the original walks you
@@ -2338,6 +2364,16 @@ fn main() {
     // it and ZL+ZR together puts it back.
     let mut cam_yaw_off: f32 = 0.0;
     let mut cam_pitch_off: f32 = 0.0;
+    // Camera modes, cycled with the shoulder buttons. Mode 0 is the camera
+    // this game has always had, unchanged and still the default -- everything
+    // else is an addition, so nothing that reads the camera today moves.
+    let mut cam_mode: usize = 0;
+    // Travel direction, remembered between frames. Taken from how the CAMERA
+    // moved rather than from the player's facing: the camera follows the
+    // player, so its motion IS their heading, and standing still leaves the
+    // last heading in place instead of snapping to a default.
+    let mut cam_heading: (f32, f32) = (0.0, -1.0);
+    let mut cam_last_px: Option<(f32, f32)> = None;
     let mut dist: f32 = geom.size * 1.4;
 
     while apt.main_loop() {
@@ -2998,13 +3034,61 @@ fn main() {
             // The C-stick's four directions are ordinary keypad bits, so no
             // extra service to start; the analog read would be irrstCstick-
             // Read, which hidCstickRead is only a macro for.
-            if k.contains(KeyPad::CSTICK_LEFT)  { cam_yaw_off -= 0.035; }
-            if k.contains(KeyPad::CSTICK_RIGHT) { cam_yaw_off += 0.035; }
+            // Shoulder buttons cycle the camera mode. ZL/ZR on a New 3DS,
+            // L/R as well because the original console has no ZL/ZR at all
+            // and would otherwise have no way to reach the modes. L/R are
+            // free here -- the map viewer's use of them is in the other
+            // branch, where the guest is not driving.
+            let both_shoulders = k.contains(KeyPad::ZL) && k.contains(KeyPad::ZR);
+            if both_shoulders {
+                // The old recentre gesture, kept.
+                cam_yaw_off = 0.0;
+                cam_pitch_off = CAM_MODES[cam_mode].pitch_off;
+            } else {
+                let fwd = d.contains(KeyPad::ZR) || d.contains(KeyPad::R);
+                let back = d.contains(KeyPad::ZL) || d.contains(KeyPad::L);
+                if fwd || back {
+                    cam_mode = if fwd {
+                        (cam_mode + 1) % CAM_MODES.len()
+                    } else {
+                        (cam_mode + CAM_MODES.len() - 1) % CAM_MODES.len()
+                    };
+                    // Each mode owns its pitch, so switching lands on that
+                    // mode's framing rather than keeping the last one's.
+                    cam_pitch_off = CAM_MODES[cam_mode].pitch_off;
+                    dlog(&format!("[pv] camera mode {}", CAM_MODES[cam_mode].name));
+                }
+            }
+            let m = &CAM_MODES[cam_mode];
+
+            // C-stick swings the view. Rate, not position: holding it keeps
+            // turning, which is what a nub with no absolute reference wants.
+            // The C-stick's four directions are ordinary keypad bits, so no
+            // extra service to start; the analog read would be irrstCstick-
+            // Read, which hidCstickRead is only a macro for.
+            if k.contains(KeyPad::CSTICK_LEFT)  { cam_yaw_off -= m.stick; }
+            if k.contains(KeyPad::CSTICK_RIGHT) { cam_yaw_off += m.stick; }
             if k.contains(KeyPad::CSTICK_UP)    { cam_pitch_off += 0.025; }
             if k.contains(KeyPad::CSTICK_DOWN)  { cam_pitch_off -= 0.025; }
-            if k.contains(KeyPad::ZL) && k.contains(KeyPad::ZR) {
-                cam_yaw_off = 0.0;
-                cam_pitch_off = 0.0;
+
+            // A following camera swings round to sit behind travel. The stick
+            // still moves it; the follow pulls it back, so a look-around is a
+            // deliberate act rather than a mode you get stuck in.
+            if m.follow {
+                let sc = unsafe { voxel::scene() };
+                let (cx, cy) = sc.cam_px();
+                if let Some((lx, ly)) = cam_last_px {
+                    let (dx, dz) = (cx - lx, cy - ly);
+                    if dx * dx + dz * dz > 0.25 {
+                        cam_heading = (dx, dz);
+                    }
+                }
+                cam_last_px = Some((cx, cy));
+                let want = pocketvoxel_core::cam::follow_yaw(cam_heading.0, cam_heading.1);
+                cam_yaw_off =
+                    pocketvoxel_core::cam::approach_yaw(cam_yaw_off, want, m.turn);
+            } else {
+                cam_last_px = None;
             }
             // Held against the limit, the offset must not keep winding: the
             // swing clamps its RESULT, so the slack would all have to be
@@ -3025,6 +3109,7 @@ fn main() {
             let sc = unsafe { voxel::scene() };
             sc.cam_yaw_off = cam_yaw_off;
             sc.cam_pitch_off = cam_pitch_off;
+            sc.cam_dist_scale = CAM_MODES[cam_mode].dist;
         }
         if !guest_drive {
         if k.contains(KeyPad::DPAD_LEFT)  { yaw -= 0.04; }

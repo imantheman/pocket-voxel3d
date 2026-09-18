@@ -68,8 +68,22 @@ fn finish(eye: Vec3, focus: Vec3, up: Vec3, a: f32, fov_y: f32, dist: f32) -> Ca
 /// exactly WORLD_VIEW_H world px vertically — framing-identical to the flat
 /// 2D game. Screen-up is north (-Z) at every pitch.
 pub fn orbit(cx: f32, cy: f32, pitch_deg: f32) -> Camera {
+    orbit_at(cx, cy, pitch_deg, CAM_FOCAL * WORLD_VIEW_H as f32)
+}
+
+/// The default distance an orbit sits at: one view height, which is what
+/// makes a straight-down camera frame exactly the flat game's screen.
+pub fn orbit_dist() -> f32 {
+    CAM_FOCAL * WORLD_VIEW_H as f32
+}
+
+/// [`orbit`], but at a chosen distance.
+///
+/// The framing distance used to be welded in, because there was one camera
+/// and it wanted the one distance. A third-person camera wants to sit closer
+/// than the whole screen height; passing the distance is all that takes.
+pub fn orbit_at(cx: f32, cy: f32, pitch_deg: f32, dist: f32) -> Camera {
     let a = pitch_deg.to_radians();
-    let dist = CAM_FOCAL * WORLD_VIEW_H as f32;
     let fov = 2.0 * atanf(1.0 / (2.0 * CAM_FOCAL));
     let focus = vec3(cx, 0.0, cy);
     let eye = vec3(cx, dist * cosf(a), cy + dist * sinf(a));
@@ -84,6 +98,38 @@ pub fn orbit(cx: f32, cy: f32, pitch_deg: f32) -> Camera {
 /// of straight down, where the look-at up vector degenerates.
 pub const SWING_PITCH_MIN: f32 = 0.05;
 pub const SWING_PITCH_MAX: f32 = 1.50;
+
+/// The yaw offset that puts the camera BEHIND a player travelling `(dx, dz)`.
+///
+/// [`swing`] measures yaw as `atan2(v.z, v.x)`, and an unswung [`orbit`] sits
+/// at +z of its focus -- yaw pi/2. Behind means the opposite of travel, so the
+/// offset is the angle of `-travel` less that pi/2.
+///
+/// Zero travel returns zero rather than snapping somewhere arbitrary: standing
+/// still, a follow camera should stay where it is.
+pub fn follow_yaw(dx: f32, dz: f32) -> f32 {
+    if dx == 0.0 && dz == 0.0 {
+        return 0.0;
+    }
+    atan2f(-dz, -dx) - core::f32::consts::FRAC_PI_2
+}
+
+/// Step `yaw` toward `target` by at most `rate`, the short way round.
+///
+/// A follow camera that snapped would whip round every time the player turned
+/// a corner. Turning at a rate, and taking the shorter arc, is what makes it
+/// read as following rather than cutting.
+pub fn approach_yaw(yaw: f32, target: f32, rate: f32) -> f32 {
+    let tau = core::f32::consts::PI * 2.0;
+    let mut d = (target - yaw).rem_euclid(tau);
+    if d > core::f32::consts::PI {
+        d -= tau;
+    }
+    if d.abs() <= rate {
+        return target.rem_euclid(tau);
+    }
+    (yaw + if d > 0.0 { rate } else { -rate }).rem_euclid(tau)
+}
 
 /// Swing a camera about its focus by the player's offsets.
 ///
@@ -336,6 +382,55 @@ pub fn battle(inp: &RigInput) -> Camera {
     let a = atan2f(view_h / dist, -dirn.y);
 
     finish(eye, look, Vec3::Y, a, fov, dist)
+}
+
+#[cfg(test)]
+mod follow_tests {
+    use super::*;
+
+    /// Walk each way and check the eye lands on the far side of the focus.
+    /// Asserting the camera's POSITION rather than the angle is the point:
+    /// the sign convention in swing is exactly what a hand-derived yaw gets
+    /// wrong, and a wrong one would have the camera lead the player instead.
+    #[test]
+    fn the_follow_camera_sits_behind_travel() {
+        for (dx, dz, name) in [
+            (0.0f32, -1.0f32, "north"),
+            (0.0, 1.0, "south"),
+            (1.0, 0.0, "east"),
+            (-1.0, 0.0, "west"),
+        ] {
+            let base = orbit(0.0, 0.0, 45.0);
+            let cam = swing(base, follow_yaw(dx, dz), 0.0);
+            let ox = cam.eye.x - cam.focus.x;
+            let oz = cam.eye.z - cam.focus.z;
+            // behind travel: the offset points against the direction of travel
+            let dot = ox * dx + oz * dz;
+            assert!(dot < 0.0, "{name}: camera is not behind travel (dot {dot})");
+            // and it is BEHIND, not merely off to one side
+            let along = (ox * ox + oz * oz).sqrt() * (dx * dx + dz * dz).sqrt();
+            assert!(dot < -0.9 * along, "{name}: camera is off to the side");
+        }
+    }
+
+    #[test]
+    fn standing_still_leaves_the_camera_alone() {
+        assert_eq!(follow_yaw(0.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn the_turn_takes_the_short_way_round() {
+        let tau = core::f32::consts::PI * 2.0;
+        // just past the wrap: the short way is forward, not all the way back
+        let y = approach_yaw(tau - 0.05, 0.05, 0.02);
+        assert!(y > tau - 0.05 || y < 0.05, "went the long way: {y}");
+        // and it arrives rather than orbiting forever
+        let mut y = 0.0f32;
+        for _ in 0..200 {
+            y = approach_yaw(y, 1.0, 0.02);
+        }
+        assert!((y - 1.0).abs() < 1e-4, "did not arrive: {y}");
+    }
 }
 
 #[cfg(test)]

@@ -370,7 +370,10 @@ fn base_camera(scene: &Scene) -> Camera {
         })
     } else {
         let (cx, cy) = scene.cam_px();
-        cam::orbit(cx, cy, scene.pitch_deg())
+        // scale 1.0 is cam::orbit exactly, which is why the default camera is
+        // untouched by camera modes existing.
+        let s = if scene.cam_dist_scale > 0.0 { scene.cam_dist_scale } else { 1.0 };
+        cam::orbit_at(cx, cy, scene.pitch_deg(), cam::orbit_dist() * s)
     }
 }
 

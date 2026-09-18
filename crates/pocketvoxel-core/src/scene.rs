@@ -152,6 +152,11 @@ pub struct Scene {
     /// edge-on to the viewer, chunks culled out of a view they are inside.
     pub cam_yaw_off: f32,
     pub cam_pitch_off: f32,
+    /// How far the overworld camera sits from its focus, as a multiple of the
+    /// default (one view height). 1.0 is the framing everything was built
+    /// against, so a host that never touches this gets exactly the camera it
+    /// had before camera modes existed -- goldens included.
+    pub cam_dist_scale: f32,
     /// Selected SGB palette: index into the pak's SGB set (VPAL[4 + i]) for
     /// the non-ui atlas kinds; -1 = the GB grayscale ramp (voxel-spec.ts
     /// `palette`).
@@ -241,6 +246,7 @@ impl Scene {
             tint: 0xffff_ffff,
             cam_yaw_off: 0.0,
             cam_pitch_off: 0.0,
+            cam_dist_scale: 1.0,
             palette: -1,
             stamps_off: Vec::new(),
             field_fx: None,
