@@ -34,7 +34,7 @@ export interface OptionsView {
 }
 
 interface OptionsSave {
-  options?: { textSpeed?: number; animations?: boolean };
+  options?: { textSpeed?: number; animations?: boolean; movement?: string };
 }
 
 export class OptionsMenuState implements GameState {
@@ -43,7 +43,7 @@ export class OptionsMenuState implements GameState {
 
   constructor(private game: { input: any; pop(): void; save: OptionsSave }) {}
 
-  private opts(): { textSpeed?: number; animations?: boolean } {
+  private opts(): { textSpeed?: number; animations?: boolean; movement?: string } {
     const save = this.game.save;
     return (save.options ??= {});
   }
@@ -66,6 +66,13 @@ export class OptionsMenuState implements GameState {
         choices: ["ON", "OFF"],
         index: this.opts().animations === false ? 1 : 0,
       },
+      {
+        // FREE walks at any angle, steered by the camera (world/freemove.ts);
+        // GRID is the original four-way step.
+        label: "MOVEMENT",
+        choices: ["FREE", "GRID"],
+        index: this.opts().movement === "grid" ? 1 : 0,
+      },
     ];
   }
 
@@ -77,6 +84,7 @@ export class OptionsMenuState implements GameState {
     const at = Math.max(0, Math.min(r.choices.length - 1, to));
     if (row === 0) this.opts().textSpeed = TEXT_SPEEDS[at]!.delay;
     else if (row === 1) this.opts().animations = at === 0;
+    else if (row === 2) this.opts().movement = at === 1 ? "grid" : "free";
   }
 
   update(): void {

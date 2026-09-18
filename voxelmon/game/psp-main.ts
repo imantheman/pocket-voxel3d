@@ -334,6 +334,14 @@ let prevGearPrev = false;
   // Bits 24-25: quarter turns the camera has been swung, so the overworld
   // can keep "up" meaning away-from-the-camera.
   game.setCamTurns((buttons >> 24) & 3);
+  // Bits 28-31 carry the low four bits of the camera's yaw in 64ths of a
+  // turn; bits 24-25 are its top two (offset half a quadrant, which is what
+  // makes them the rounded quarter turns the grid walk has always read).
+  // Together they give free movement a 5.6-degree yaw.
+  {
+    const e = (((buttons >> 24) & 3) << 4) | ((buttons >>> 28) & 15);
+    game.setCamYaw((((e - 8) % 64 + 64) % 64) * ((Math.PI * 2) / 64));
+  }
   const gearNext = ((buttons >> 26) & 1) !== 0;
   const gearPrev = ((buttons >> 27) & 1) !== 0;
   // L/R step the Kanto Gear's view (PARTY / MAP / ...). They used to cycle

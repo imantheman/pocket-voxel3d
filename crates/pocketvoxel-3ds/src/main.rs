@@ -2545,8 +2545,15 @@ fn main() {
                 // On a free rung the walk is relative to the RIG's yaw,
                 // or pushing forward sends the player off in the orbit's old
                 // direction instead of the way the camera is looking.
-                let q = pocketvoxel_core::cam::quarter_turns(walk_yaw);
-                b |= (q & 3) << 24;
+                // The camera's yaw in 64ths of a turn, offset half a
+                // quadrant: the top two bits are then exactly the rounded
+                // quarter turns the grid walk reads from 24-25, and the low
+                // four ride in 28-31 for free movement.
+                let tau = core::f32::consts::PI * 2.0;
+                let fine = ((walk_yaw.rem_euclid(tau) / tau * 64.0).round() as i32) & 63;
+                let e = (fine + 8) & 63;
+                b |= ((e >> 4) & 3) << 24;
+                b |= (e & 15) << 28;
             }
             unsafe {
                 let mut e2 = [0u8; 256];

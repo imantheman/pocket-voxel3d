@@ -27,6 +27,7 @@ import { LAST_MAP_REWRITES, rewrittenLastMap } from "./lastmap.ts";
 import { martGreetScript } from "./marts.ts";
 import { bikeAllowed, type BikeRiding } from "./bike.ts";
 import { visit } from "./fly.ts";
+import { cellOf, freeDir, quantize, slide } from "./freemove.ts";
 import { spotFor } from "./snorlax.ts";
 import { barriersFor } from "./toggleblocks.ts";
 import { fillBadgeName, gateFor, guardAt, hasBadge } from "./badgegate.ts";
@@ -315,6 +316,12 @@ export class Overworld implements ScriptWorld {
   entities: Mover[] = [];
   runner: ScriptRunner;
   scriptMoves: ScriptMove[] = [];
+  /**
+   * The camera's yaw, radians, when the host sends it (psp-main's button
+   * word). Undefined means no camera yaw is known, and the walk stays on the
+   * grid.
+   */
+  freeYaw?: number;
   /** A trainer has spotted the player and is engaging (sight -> "!" -> walk-up
    * -> battle); blocks input and re-sighting until the battle resolves. */
   engaging = false;
@@ -561,7 +568,12 @@ export class Overworld implements ScriptWorld {
         this.engaging;
     }
     if (!scripted && !this.transitioning) {
-      this.handleInput();
+      if (this.freeMoveActive()) {
+        this.freeWalk();
+      } else {
+        this.snapToCell();
+        this.handleInput();
+      }
     }
     const stepped = this.player.update();
     // the warp-arrival cell goes stale the instant the player's real cell
@@ -579,6 +591,93 @@ export class Overworld implements ScriptWorld {
       if (pending === this.map.id) this.shell.startMapMusic(pending);
     }
     if (stepped && !scripted) {
+      this.onStepComplete();
+    }
+  }
+
+  /**
+   * Walk freely rather than on the grid (world/freemove.ts, ported from
+   * DramaticShapeVoxelMod's FreeMove). Needs the camera's real yaw, which only
+   * a host that sends it provides -- a test driving game.tick never does, so
+   * every grid-walk test stays a grid walk -- and the player can turn it off
+   * in OPTIONS (MOVEMENT: GRID).
+   */
+  freeMoveActive(): boolean {
+    if (this.freeYaw === undefined) return false;
+    const mv = (this.save as { options?: { movement?: string } }).options?.movement;
+    return mv !== "grid";
+  }
+
+  /**
+   * Back onto the grid. Switching from free movement to grid mid-cell would
+   * otherwise leave the grid walker stepping from a position it does not
+   * know it is at.
+   */
+  private snapToCell(): void {
+    const p = this.player;
+    if (p.moving) return;
+    p.px = p.cellX * 16;
+    p.py = p.cellY * 16;
+  }
+
+  /** May the free body stand in cell (cx, cy)? The grid walker's own rules. */
+  private freeOpen(cx: number, cy: number): boolean {
+    const m = this.map;
+    const p = this.player;
+    if (!m.inBounds(cx, cy)) return false;
+    if (!m.isWalkableCell(cx, cy) && !(p.surfing && m.isWaterCell(cx, cy))) return false;
+    if ((cx !== p.cellX || cy !== p.cellY) && occupied(this.entities, cx, cy, p)) return false;
+    return true;
+  }
+
+  /**
+   * One frame of free movement.
+   *
+   * The position is continuous and steered by the camera's yaw; everything
+   * the world does is still the grid's. Crossing into a new cell runs the
+   * same onStepComplete a grid step lands on -- warps, triggers, encounters,
+   * the step counters -- once per cell, the rate a grid walk fires it. A push
+   * that gets nowhere from the middle of a cell is handed to the grid's own
+   * handler, which is what still does map edges, ledge hops, boulders and
+   * door mats; and buttons go to the grid poll unchanged.
+   */
+  private freeWalk(): void {
+    const input = this.shell.input;
+    const p = this.player;
+    if (p.moving) return; // a grid step (a hop, a script) owns the player
+    if (input.wasPressed("a") || input.wasPressed("start") || input.wasPressed("select")) {
+      this.snapToCell();
+      this.handleInput();
+      return;
+    }
+    const sx = (input.isDown("right") ? 1 : 0) - (input.isDown("left") ? 1 : 0);
+    const sy = (input.isDown("down") ? 1 : 0) - (input.isDown("up") ? 1 : 0);
+    const dir = freeDir(sx, sy, this.freeYaw ?? 0);
+    if (!dir) return;
+    // the grid walker's own speed: one cell per stepSpeed() frames
+    const speed = 16 / p.stepSpeed();
+    const r = slide(p.px, p.py, dir[0] * speed, dir[1] * speed, (x, y) => this.freeOpen(x, y));
+    p.facing = quantize(dir[0], dir[1]);
+    if (!r.moved) {
+      // Against something. From the middle of a cell, let the grid decide
+      // what that something is -- an edge to cross, a ledge to hop, a boulder
+      // to shove, a door mat, or just a wall to bonk.
+      if (Math.abs(p.px - p.cellX * 16) <= 4 && Math.abs(p.py - p.cellY * 16) <= 4) {
+        this.snapToCell();
+        this.handleInput();
+      }
+      return;
+    }
+    p.px = r.px;
+    p.py = r.py;
+    p.bumpFrames = 1; // keeps the walk cycle turning over while moving
+    const cx = cellOf(p.px);
+    const cy = cellOf(p.py);
+    if (cx !== p.cellX || cy !== p.cellY) {
+      p.cellX = cx;
+      p.cellY = cy;
+      p.stepFlip = !p.stepFlip;
+      p.landedCount += 1;
       this.onStepComplete();
     }
   }

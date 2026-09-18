@@ -25,6 +25,8 @@ import { ENCOUNTER_BUCKETS } from "../voxelmon/game/rules/encounter.ts";
 import { expForLevel } from "../voxelmon/game/rules/growth.ts";
 import { VoxelmonGame } from "../voxelmon/game/game.ts";
 import { encodeSave } from "../voxelmon/game/save-lua.ts";
+import { bodyClear, freeDir, slide } from "../voxelmon/game/world/freemove.ts";
+import { OptionsMenuState } from "../voxelmon/game/ui/optionsmenu.ts";
 import { decodeSave } from "../voxelmon/game/save-read.ts";
 import {
   backfillVisited, FLY_MAP_IDS, flyDestinations, visit,
@@ -2171,7 +2173,8 @@ describe("options", () => {
     const sm = game.startMenu() as { entries: string[] };
     pick(game, sm.entries.indexOf("OPTION"));
     tap(game, VOX_BTN.down);
-    tap(game, VOX_BTN.down); // CANCEL
+    tap(game, VOX_BTN.down);
+    tap(game, VOX_BTN.down); // CANCEL, under TEXT SPEED / ANIMATION / MOVEMENT
     tap(game, VOX_BTN.a);
     expect(game.stackKinds()).toEqual(["overworld", "startmenu"]);
   });
@@ -4647,6 +4650,165 @@ describe("HM02 FLY", () => {
     guard = 0;
     while (game.stackKinds().at(-1) !== "flypicker" && guard++ < 400) game.tick(0);
     expect(game.stackKinds().at(-1)).toBe("flypicker");
+  });
+});
+
+describe("free movement", () => {
+  const near = (a: number, b: number) => Math.abs(a - b) < 1e-6;
+
+  test("up on the pad is always away from the camera", () => {
+    const n = freeDir(0, -1, 0)!;
+    expect(near(n[0], 0) && near(n[1], -1)).toBe(true); // north
+    const e = freeDir(0, -1, Math.PI / 2)!;
+    expect(near(e[0], 1) && near(e[1], 0)).toBe(true); // camera looks east
+    const r = freeDir(1, 0, 0)!;
+    expect(near(r[0], 1) && near(r[1], 0)).toBe(true); // right is east
+  });
+
+  test("at an angle the walk goes at that angle, not the nearest axis", () => {
+    // The whole point: with the camera at 30 degrees, forward is 30 degrees.
+    const a = Math.PI / 6;
+    const d = freeDir(0, -1, a)!;
+    expect(near(d[0], Math.sin(a)) && near(d[1], -Math.cos(a))).toBe(true);
+  });
+
+  test("a diagonal is no faster than a straight", () => {
+    const d = freeDir(1, -1, 0)!;
+    expect(near(Math.hypot(d[0], d[1]), 1)).toBe(true);
+    expect(freeDir(0, 0, 1)).toBeNull();
+  });
+
+  test("a push into a wall at an angle slides along it", () => {
+    // wall everywhere north of row 1
+    const open = (_x: number, y: number) => y >= 1;
+    let px = 16, py = 16;
+    for (let i = 0; i < 20; i++) {
+      const r = slide(px, py, 2, -2, open);
+      px = r.px;
+      py = r.py;
+    }
+    // it kept going along the wall...
+    expect(px).toBe(56);
+    // ...and its body never crossed into the wall row (top edge stays >= 16;
+    // the body has a little slack inside its own cell before it touches)
+    expect(py + 8 - 5.5).toBeGreaterThanOrEqual(16);
+    // straight into the wall, once touching, gets nowhere
+    expect(slide(px, py, 0, -2, open).moved).toBe(false);
+  });
+
+  test("a body at rest never tests its neighbours", () => {
+    const seen: string[] = [];
+    bodyClear(32, 48, (x, y) => { seen.push(`${x},${y}`); return true; });
+    expect(new Set(seen)).toEqual(new Set(["2,3"]));
+  });
+
+  /** An open straight run of `len` cells east from somewhere on `map`. */
+  function openRun(game: VoxelmonGame, map: string, len: number): [number, number] {
+    const ow = game.overworld;
+    ow.setMap(map, 1, 1, "down");
+    const m = ow.map;
+    for (let y = 2; y < m.heightCells - 2; y++) {
+      for (let x = 2; x < m.widthCells - len - 2; x++) {
+        let ok = true;
+        for (let i = 0; i <= len && ok; i++) {
+          for (let dy = -1; dy <= 1 && ok; dy++) {
+            const cx = x + i, cy = y + dy;
+            if (!m.isWalkableCell(cx, cy) || m.warpAtCell(cx, cy) ||
+                ow.npcs.some((n: any) => n.cellX === cx && n.cellY === cy)) ok = false;
+          }
+        }
+        if (ok) return [x, y];
+      }
+    }
+    throw new Error("no open run");
+  }
+
+  function hold(game: VoxelmonGame, mask: number, frames: number): void {
+    for (let i = 0; i < frames; i++) game.tick(mask);
+  }
+
+  test.skipIf(!hasGen)("with a camera yaw the player walks continuously", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    const [x, y] = openRun(game, "PALLET_TOWN", 4);
+    ow.setMap("PALLET_TOWN", x, y, "right");
+    game.setCamYaw(0);
+    expect(ow.freeMoveActive()).toBe(true);
+    hold(game, VOX_BTN.right, 6);
+    const p = ow.player;
+    // part way into a cell, which a grid walk never rests at
+    expect(p.px).toBeGreaterThan(x * 16);
+    expect(p.px % 16).not.toBe(0);
+    expect(p.moving).toBe(false);
+    expect(p.py).toBe(y * 16);
+  });
+
+  test.skipIf(!hasGen)("forward follows the camera, not the map", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    const [x, y] = openRun(game, "PALLET_TOWN", 4);
+    ow.setMap("PALLET_TOWN", x, y, "up");
+    game.setCamYaw(Math.PI / 2); // camera looking east
+    hold(game, VOX_BTN.up, 20);
+    expect(ow.player.px).toBeGreaterThan(x * 16 + 8); // went east
+    expect(ow.player.py).toBe(y * 16); // not north
+    expect(ow.player.facing).toBe("right");
+  });
+
+  test.skipIf(!hasGen)("each cell crossed lands like a grid step", () => {
+    // onStepComplete is what runs warps, triggers and encounters -- once per
+    // cell, the rate a grid walk fires it.
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    const [x, y] = openRun(game, "PALLET_TOWN", 4);
+    ow.setMap("PALLET_TOWN", x, y, "right");
+    game.setCamYaw(0);
+    let landed = 0;
+    const orig = ow.onStepComplete.bind(ow);
+    ow.onStepComplete = () => { landed += 1; orig(); };
+    hold(game, VOX_BTN.right, 16 * 3);
+    expect(ow.player.cellX).toBe(x + 3);
+    expect(landed).toBe(3);
+  });
+
+  test.skipIf(!hasGen)("it does not walk into walls", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    game.setCamYaw(0);
+    const [x, y] = openRun(game, "PALLET_TOWN", 4);
+    ow.setMap("PALLET_TOWN", x, y, "up");
+    hold(game, VOX_BTN.up, 200);
+    // wherever it stopped, it is standing somewhere walkable
+    expect(ow.map.isWalkableCell(ow.player.cellX, ow.player.cellY)).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("MOVEMENT: GRID puts it back on the grid", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    const [x, y] = openRun(game, "PALLET_TOWN", 4);
+    ow.setMap("PALLET_TOWN", x, y, "right");
+    game.setCamYaw(0);
+    (game.save as any).options = { movement: "grid" };
+    expect(ow.freeMoveActive()).toBe(false);
+    hold(game, VOX_BTN.right, 6);
+    // a grid step is in flight: the classic walker owns it
+    expect(ow.player.moving).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("with no camera yaw it stays a grid walk", () => {
+    // Every other test in this suite drives the grid; none sends a yaw.
+    const game = makeMenuGame();
+    expect(game.overworld.freeMoveActive()).toBe(false);
+  });
+
+  test("the OPTIONS screen offers FREE and GRID", () => {
+    const save: any = {};
+    const st = new OptionsMenuState({ input: { pressed: {} }, pop() {}, save } as never);
+    const row = (st.view().rows as any[]).find((r) => r.label === "MOVEMENT");
+    expect(row.choices).toEqual(["FREE", "GRID"]);
+    expect(row.index).toBe(0); // free by default
+    (st as any).set(2, 1);
+    expect(save.options.movement).toBe("grid");
   });
 });
 

@@ -1052,6 +1052,11 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     this.overworld.camTurns = q;
   }
 
+  /** The camera's real yaw, radians, for free movement (world/freemove.ts). */
+  setCamYaw(yaw: number): void {
+    this.overworld.freeYaw = yaw;
+  }
+
   /** Whether the last save reached the card (ui/devmenu.ts reports it). */
   lastSaveOk = true;
 
