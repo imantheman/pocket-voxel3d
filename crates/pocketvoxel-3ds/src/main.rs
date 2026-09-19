@@ -344,6 +344,10 @@ struct Prefetch {
     file: std::fs::File,
     buf: Vec<u8>,
     pos: usize,
+    /// The GAME section, which every pak carries and this host never looks
+    /// at (map_pak cuts it too): ~1.1 MB of the 8-10 MB of a route, skipped
+    /// rather than read. The buffer is already zero there.
+    skip: Option<(usize, usize)>,
 }
 
 static mut PREFETCH: Option<Prefetch> = None;
@@ -378,6 +382,12 @@ unsafe fn prefetch_retarget(map_id: u32) {
 /// slice it predicts will overrun, so this is a ceiling rather than a
 /// quantum: a slower card takes fewer slices rather than a longer frame.
 const PREFETCH_MS: u64 = 12;
+/// Near a seam the read is about to be needed, so it takes most of the
+/// frame: a few dropped frames walking up to the edge buy an arrival with
+/// the map already in hand, which is the whole point of reading ahead.
+const PREFETCH_MS_NEAR: u64 = 24;
+/// "Near" is within this many world px of the map's edge (3 chunks).
+const PREFETCH_NEAR_PX: f32 = 3.0 * CHUNK_PX as f32;
 /// Bytes per read. At ~11 MB/s this is ~6 ms, comfortably inside the budget
 /// while being big enough that per-read overhead is not the limit.
 const PREFETCH_SLICE: usize = 64 * 1024;
@@ -420,21 +430,62 @@ unsafe fn prefetch_start(name: &str) -> bool {
         return false;
     }
     buf.resize(len, 0);
-    PREFETCH = Some(Prefetch { name: name.to_string(), file, buf, pos: 0 });
-    true
+    // Header and section table first, to find the GAME section to skip.
+    let mut file = file;
+    let mut skip = None;
+    {
+        use std::io::Read;
+        if file.read_exact(&mut buf[..16]).is_ok() {
+            let secs = u16::from_le_bytes([buf[6], buf[7]]) as usize;
+            let table_end = 16 + secs * 16;
+            if table_end <= len && file.read_exact(&mut buf[16..table_end]).is_ok() {
+                for i in 0..secs {
+                    let e = 16 + i * 16;
+                    if u32::from_le_bytes([buf[e], buf[e + 1], buf[e + 2], buf[e + 3]]) == TAG_GAME {
+                        let off = u32::from_le_bytes([buf[e + 4], buf[e + 5], buf[e + 6], buf[e + 7]]) as usize;
+                        let slen = u32::from_le_bytes([buf[e + 8], buf[e + 9], buf[e + 10], buf[e + 11]]) as usize;
+                        if off >= table_end && off + slen <= len {
+                            skip = Some((off, off + slen));
+                        }
+                    }
+                }
+                PREFETCH = Some(Prefetch {
+                    name: name.to_string(), file, buf, pos: table_end, skip,
+                });
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Read the next slices of the map in flight. Called once a frame; returns
 /// true when one just finished and went into the cache.
 #[allow(static_mut_refs)]
-unsafe fn prefetch_step() -> bool {
-    use std::io::Read;
+unsafe fn prefetch_step(budget_ms: u64) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
     extern "C" { fn osGetTime() -> u64; }
     let Some(pf) = PREFETCH.as_mut() else { return false };
     let start = osGetTime();
     while pf.pos < pf.buf.len() {
+        // Past the section this host never reads: seek over it.
+        if let Some((a, b)) = pf.skip {
+            if pf.pos >= a && pf.pos < b {
+                if pf.file.seek(SeekFrom::Start(b as u64)).is_err() {
+                    PREFETCH = None;
+                    return false;
+                }
+                pf.pos = b;
+                continue;
+            }
+        }
         let t0 = osGetTime();
-        let end = (pf.pos + PREFETCH_SLICE).min(pf.buf.len());
+        let mut end = (pf.pos + PREFETCH_SLICE).min(pf.buf.len());
+        if let Some((a, _)) = pf.skip {
+            if pf.pos < a && end > a {
+                end = a; // stop the slice where the skipped section starts
+            }
+        }
         if pf.file.read_exact(&mut pf.buf[pf.pos..end]).is_err() {
             PREFETCH = None; // the card said no; the normal path will retry
             return false;
@@ -443,7 +494,7 @@ unsafe fn prefetch_step() -> bool {
         // Stop before a slice that would overrun rather than after one that
         // already has: the last one took `dt`, so the next probably will too.
         let dt = osGetTime().wrapping_sub(t0);
-        if osGetTime().wrapping_sub(start) + dt > PREFETCH_MS {
+        if osGetTime().wrapping_sub(start) + dt > budget_ms {
             break;
         }
     }
@@ -2183,12 +2234,13 @@ fn build_map(
     // 300k-vertex route is several full copies in the frame being waited on.
     // The clip only ever removes, so this is an upper bound.
     //
-    // This is also what keeps Viridian Forest alive. Growing by doubling, its
-    // 400,000 vertices pass through a moment where the old 5 MB block and the
-    // new 10 MB one both exist, on a heap its 57 MB pak has already nearly
-    // filled; the console rebooted there, between the read and the build.
-    // Reserved once, the peak is the 8 MB the vertices actually take.
-    {
+    // NOT for a huge map -- Viridian Forest. It re-builds every time the
+    // player crosses a chunk, and a reservation there asks for one 8 MB block
+    // per rebuild while the outgoing build still holds its own; on a heap its
+    // 57 MB pak has nearly filled, that eventually cannot be met and the
+    // allocator aborts. Growing by doubling reuses what it already has. The
+    // forest gets the path it has always had.
+    if !is_huge {
         let want: usize = plan
             .items
             .iter()
@@ -2978,7 +3030,15 @@ fn main() {
                     // longer, not shorter.
                     if !reload {
                         unsafe { prefetch_retarget(map_ids.get(map_i).copied().unwrap_or(0)) };
-                        if unsafe { prefetch_step() } {
+                        // How close the player is to leaving this map at all:
+                        // the read in flight is for a neighbour, and near the
+                        // edge it is about to be wanted.
+                        let edge = (center[0] - geom.map_min[0])
+                            .min(geom.map_max[0] - center[0])
+                            .min(center[2] - geom.map_min[1])
+                            .min(geom.map_max[1] - center[2]);
+                        let budget = if edge < PREFETCH_NEAR_PX { PREFETCH_MS_NEAR } else { PREFETCH_MS };
+                        if unsafe { prefetch_step(budget) } {
                             // Inserting into PAK_CACHE can reallocate it and
                             // move the Pak structs with it, and pak_static
                             // points straight at the front one. Re-take it.
