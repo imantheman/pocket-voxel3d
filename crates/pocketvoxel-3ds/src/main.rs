@@ -16,6 +16,7 @@ use pocketvoxel_core::scene::UI_B_SPRITES_MAX;
 use pocketvoxel_core::mapplan::{
     build_order, plan_build, planned_ranges, FILLER_KINDS, GROUND_KINDS, TREE_KINDS,
 };
+use pocketvoxel_core::pakcompact;
 use pocketvoxel_core::spec::{atlas_kind, CHUNK_PX, COLOR_PAL_NONE, UI_COLS, UI_ROWS, WORLD_VIEW_H};
 
 #[repr(C)] pub struct JSRuntime { _p: [u8; 0] }
@@ -572,6 +573,148 @@ const TAG_CHNK: u32 = u32::from_le_bytes(*b"CHNK");
  * left as zeros. Sections sit in ascending offset order, so dropping one
  * leaves two runs to read instead of one.
  */
+/// Files at least this big are packed rather than read in place. Only
+/// Viridian Forest is anywhere near it; a route is 8-10 MB.
+const COMPACT_MIN_KB: usize = 16 * 1024;
+
+/// The STMP section's tag -- read only for its stamp count, which decides
+/// whether this pak can be packed at all.
+const TAG_STMP: u32 = u32::from_le_bytes(*b"STMP");
+
+/// Read a pak PACKED: only the planned geometry, laid end to end in a buffer
+/// sized to it, with the offsets that point at it rewritten to match
+/// (pocketvoxel_core::pakcompact).
+///
+/// The in-place read below allocates the whole file because every offset in
+/// a pak is a position in that image. Viridian Forest is 56 MB of which the
+/// 400,000-vertex budget can draw ~13 MB, and asking a 3DS heap for 56 MB is
+/// what unmapped the GPU thread's own stack and took the console down on
+/// every entry. Returns None if anything is not as expected, and the caller
+/// falls back to reading in place.
+fn map_pak_packed(
+    path: &str,
+    len: usize,
+    map_id: u32,
+    player_px: Option<(f32, f32)>,
+) -> Option<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut head = [0u8; 16];
+    f.read_exact(&mut head).ok()?;
+    let n = u16::from_le_bytes([head[6], head[7]]) as usize;
+    if n != 9 {
+        return None;
+    }
+    let mut table = vec![0u8; n * 16];
+    f.read_exact(&mut table).ok()?;
+    let rd32 = |b: &[u8], o: usize| {
+        u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]) as usize
+    };
+    let mut sections = [(0usize, 0usize); 9];
+    let mut chnk_idx = usize::MAX;
+    let mut game = (0usize, 0usize);
+    let mut stmp = (0usize, 0usize);
+    for i in 0..9 {
+        let e = i * 16;
+        let tag = rd32(&table, e) as u32;
+        let (off, slen) = (rd32(&table, e + 4), rd32(&table, e + 8));
+        if off + slen > len {
+            return None;
+        }
+        sections[i] = (off, slen);
+        if tag == TAG_CHNK {
+            chnk_idx = i;
+        } else if tag == TAG_GAME {
+            game = (off, off + slen);
+        } else if tag == TAG_STMP {
+            stmp = (off, slen);
+        }
+    }
+    if chnk_idx == usize::MAX || game.1 == 0 {
+        return None;
+    }
+    // Stamps ride the same pools and nothing rewrites them, so a pak with
+    // any is read in place.
+    let mut stamp_total = 1usize;
+    if stmp.1 >= 8 {
+        let mut sh = [0u8; 8];
+        f.seek(SeekFrom::Start(stmp.0 as u64)).ok()?;
+        f.read_exact(&mut sh).ok()?;
+        stamp_total = rd32(&sh, 4);
+    }
+
+    let (chnk_off, _) = sections[chnk_idx];
+    let mut ch = [0u8; 32];
+    f.seek(SeekFrom::Start(chnk_off as u64)).ok()?;
+    f.read_exact(&mut ch).ok()?;
+    let map_count = u16::from_le_bytes([ch[0], ch[1]]) as usize;
+    let chunk_total = rd32(&ch, 4);
+    let payload_len = 32 + map_count * 12 + chunk_total * 128;
+    if chnk_off + payload_len > len {
+        return None;
+    }
+    let mut payload = vec![0u8; payload_len];
+    payload[..32].copy_from_slice(&ch);
+    f.read_exact(&mut payload[32..]).ok()?;
+
+    let chunks = pakcompact::parse_records(&payload, map_count, chunk_total)?;
+    let (first, count) = pakcompact::map_dir(&payload, map_count, map_id)?;
+    if first + count > chunks.len() {
+        return None;
+    }
+    // The same plan build_map will make when handed this map.
+    let mine = &chunks[first..first + count];
+    let (order, huge, budget) = build_order(mine, player_px);
+    let bp = plan_build(mine, &order, huge, budget, 0);
+    let planned: Vec<(usize, usize)> =
+        bp.items.iter().map(|it| (first + it.chunk, it.kind)).collect();
+
+    let src = pakcompact::Source {
+        file_len: len,
+        sections,
+        chnk_idx,
+        map_count,
+        chunk_total,
+        verts_at: chnk_off + rd32(&ch, 8),
+        verts_len: rd32(&ch, 12),
+        indices_at: chnk_off + rd32(&ch, 16),
+        indices_len: rd32(&ch, 20),
+        chunks: &chunks,
+        planned: &planned,
+        stamp_total,
+        // header, table and META, then AUDI and the chunk records: GAME is
+        // left as the zeros the in-place read leaves too
+        prefix: &[(0, game.0), (game.1, chnk_off + payload_len)],
+    };
+    let c = pakcompact::plan(&src)?;
+
+    let mut v: Vec<u8> = Vec::new();
+    if v.try_reserve_exact(c.len).is_err() {
+        println!("pak: cannot reserve {} KB packed", c.len / 1024);
+        return None;
+    }
+    v.resize(c.len, 0);
+    for cp in c.copies.iter() {
+        if cp.dst + cp.len > c.len || cp.src + cp.len > len {
+            return None;
+        }
+        if f.seek(SeekFrom::Start(cp.src as u64)).is_err()
+            || f.read_exact(&mut v[cp.dst..cp.dst + cp.len]).is_err()
+        {
+            println!("pak: short read (packed)");
+            return None;
+        }
+    }
+    pakcompact::patch(&mut v, &c);
+    dlog(&format!(
+        "[pv] packed {} KB -> {} KB ({} reads)",
+        len / 1024,
+        c.len / 1024,
+        c.copies.len(),
+    ));
+    Some(v)
+}
+
 fn map_pak(
     path: &str,
     plan_for: Option<(u32, Option<(f32, f32)>)>,
@@ -579,6 +722,15 @@ fn map_pak(
     use std::io::{Read, Seek, SeekFrom};
     let mut f = std::fs::File::open(path).ok()?;
     let len = f.metadata().ok()?.len() as usize;
+    // A map too big to hold whole is packed down to what it will draw.
+    if len / 1024 >= COMPACT_MIN_KB {
+        if let Some((map_id, px)) = plan_for {
+            if let Some(v) = map_pak_packed(path, len, map_id, px) {
+                return Some(v);
+            }
+            dlog("[pv] packing declined; reading in place");
+        }
+    }
     // fs::read grows by doubling, so a 45 MB pak can transiently want ~90 MB
     // and blow the heap even though the final size fits. Size it exactly
     // from the file length and read straight in.

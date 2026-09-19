@@ -19,6 +19,7 @@ pub mod draw;
 pub mod mapplan;
 pub mod math;
 pub mod pak;
+pub mod pakcompact;
 pub mod scene;
 pub mod spec;
 pub mod ui;
