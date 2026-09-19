@@ -33,7 +33,8 @@ import { loadRuntimeData, REQUIRED_MODULES, type VoxelmonData } from "../voxelmo
 import { encodeGlyphs } from "../voxelmon/game/ui/tiles.ts";
 import type { VoxelHost } from "../voxelmon/game/host.ts";
 import { RecorderHost } from "../voxelmon/game/host.ts";
-import { seqRng } from "../voxelmon/game/rng.ts";
+import { seededRng, seqRng } from "../voxelmon/game/rng.ts";
+import { EFFECTS } from "../voxelmon/game/battle/effects.ts";
 import { attempt as catchAttempt } from "../voxelmon/game/rules/catching.ts";
 import { compute as damageCompute, GEN1_FAITHFUL } from "../voxelmon/game/rules/damage.ts";
 import { gainFor } from "../voxelmon/game/rules/experience.ts";
@@ -528,6 +529,106 @@ class CaptureHost implements VoxelHost {
     return out;
   }
 }
+
+describe("status moves and trapping (MoveEffects port)", () => {
+  /** A seeded battle: the player's mon knows exactly `moves`, the enemy
+   * only GROWL, so nothing but the move under test changes the picture. */
+  function setup(species: string, level: number, moves: string[], foe: string, foeLevel: number, seed: number) {
+    const mon = newMon(data!, species, level);
+    mon.moves = moves.map((id) => ({ id, pp: 40 }));
+    const save = makeSave([mon]);
+    const b = new WildBattle(data!, save, seededRng(seed), foe, foeLevel);
+    b.enter();
+    const input = new FakeInput();
+    settle(b, input);
+    b.enemy.curMoves = [{ id: "GROWL", pp: 40 }];
+    return { b, input };
+  }
+
+  /** FIGHT, slot 1 (or straight through if the lock skips the list). */
+  function fight(b: WildBattle, input: FakeInput): void {
+    tick(b, input, ["a"]);
+    if (b.phase === "moveSelect") tick(b, input, ["a"]);
+    settle(b, input);
+  }
+
+  test.skipIf(!hasGen)("every effect a move in the data uses has a record, but Mimic", () => {
+    const missing = new Set<string>();
+    for (const mv of Object.values(data!.moves)) {
+      if (mv.effect && !EFFECTS[mv.effect]) missing.add(mv.effect);
+    }
+    expect([...missing]).toEqual(["MIMIC_EFFECT"]);
+  });
+
+  for (const [move, status, text] of [
+    ["THUNDER_WAVE", "PAR", "paralyzed! It may\nnot attack!"],
+    ["SLEEP_POWDER", "SLP", "fell asleep!"],
+    ["TOXIC", "PSN", "badly poisoned!"],
+  ] as const) {
+    test.skipIf(!hasGen)(`${move} lands ${status}`, () => {
+      const { b, input } = setup("PIKACHU", 20, [move], "RATTATA", 20, 7);
+      for (let i = 0; i < 12 && !b.enemy.mon.status; i++) fight(b, input);
+      expect(b.enemy.mon.status).toBe(status);
+      expect(b.messageLog.some((m) => m.endsWith(text))).toBe(true);
+      // a second use on a statused foe fails
+      const before = b.messageLog.length;
+      fight(b, input);
+      expect(b.messageLog.slice(before)).toContain("But, it failed!");
+    });
+  }
+
+  test.skipIf(!hasGen)("a sleeping foe loses its turns, then wakes", () => {
+    const { b, input } = setup("PIKACHU", 20, ["SLEEP_POWDER"], "RATTATA", 20, 3);
+    for (let i = 0; i < 12 && b.enemy.mon.status !== "SLP"; i++) fight(b, input);
+    expect(b.enemy.mon.status).toBe("SLP");
+    for (let i = 0; i < 10 && b.enemy.mon.status === "SLP"; i++) fight(b, input);
+    expect(b.messageLog).toContain("Enemy RATTATA\nis fast asleep!");
+    expect(b.messageLog).toContain("Enemy RATTATA\nwoke up!");
+  });
+
+  test.skipIf(!hasGen)("poison hurts at the end of each turn", () => {
+    const { b, input } = setup("PIKACHU", 20, ["POISONPOWDER"], "PIDGEY", 20, 5);
+    for (let i = 0; i < 12 && !b.enemy.mon.status; i++) fight(b, input);
+    expect(b.enemy.mon.status).toBe("PSN");
+    const hp = b.enemy.mon.hp;
+    fight(b, input); // POISONPOWDER fails, the tick still lands
+    expect(b.enemy.mon.hp).toBeLessThan(hp);
+    expect(b.messageLog).toContain("Enemy PIDGEY's\nhurt by poison!");
+  });
+
+  test.skipIf(!hasGen)("an ICE move's freeze side effect is registered at 26/256", () => {
+    expect(EFFECTS.FREEZE_SIDE_EFFECT1?.kind).toBe("secondary");
+    expect(data!.moves.ICE_BEAM.effect).toBe("FREEZE_SIDE_EFFECT1");
+  });
+
+  test.skipIf(!hasGen)("WRAP holds the foe and keeps hitting without the move list", () => {
+    const { b, input } = setup("EKANS", 20, ["WRAP"], "RATTATA", 40, 11);
+    for (let i = 0; i < 12 && b.player.trappingTurns === undefined; i++) fight(b, input);
+    expect(b.player.trappingTurns).toBeDefined();
+    // the foe was held on the turn it was wrapped, or is from now on
+    const hp = b.enemy.mon.hp;
+    tick(b, input, ["a"]); // FIGHT
+    expect(b.phase).toBe("messages"); // the move list is skipped
+    settle(b, input);
+    expect(b.messageLog).toContain("EKANS's\nattack continues!");
+    expect(b.messageLog).toContain("Enemy RATTATA\ncan't move!");
+    expect(b.enemy.mon.hp).toBeLessThan(hp);
+    // and it lets go after 2-5 attacks in all
+    for (let i = 0; i < 6 && b.player.trappingTurns !== undefined; i++) fight(b, input);
+    expect(b.player.trappingTurns).toBeUndefined();
+  });
+
+  test.skipIf(!hasGen)("a wrapped player cannot pick a move", () => {
+    const { b, input } = setup("PIKACHU", 20, ["THUNDERSHOCK"], "EKANS", 40, 2);
+    b.enemy.curMoves = [{ id: "WRAP", pp: 40 }];
+    for (let i = 0; i < 12 && b.enemy.trappingTurns === undefined; i++) fight(b, input);
+    expect(b.enemy.trappingTurns).toBeDefined();
+    tick(b, input, ["a"]); // FIGHT goes straight to the held turn
+    expect(b.phase).toBe("messages");
+    settle(b, input);
+    expect(b.messageLog).toContain("PIKACHU\ncan't move!");
+  });
+});
 
 describe("battle screen layout", () => {
   test.skipIf(!hasGen)("the action menu matches the pinned geometry", () => {

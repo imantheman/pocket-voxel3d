@@ -490,6 +490,8 @@ export class Overworld implements ScriptWorld {
     // town is what puts it on FLY's list. Nothing recorded this before, so
     // every destination would have read as never-visited.
     visit(this.save as never, mapId);
+    // A map script's every-load hook (story5.lua M.CINNABAR_ISLAND.onEnter).
+    (MAP_SCRIPTS as Record<string, MapScript>)[mapId]?.onEnter?.(this, this.save);
     console.log("NPCS " + (this.npcs as any[]).map((n: any) =>
       JSON.stringify(n, (k, v) => (typeof v === "object" && v !== null && k !== "" ? undefined : v))).join(" | "));
   }
@@ -1314,6 +1316,15 @@ export class Overworld implements ScriptWorld {
     }).openDaycare?.(onDone);
   }
 
+  /** The party screen as a chooser (the in-game trade's DisplayPartyMenu). */
+  pickPartyMon(onPick: (index: number) => void, onCancel: () => void): void {
+    const shell = this.shell as unknown as {
+      pickPartyMon?: (pick: (i: number) => void, cancel: () => void) => void;
+    };
+    if (shell.pickPartyMon) shell.pickPartyMon(onPick, onCancel);
+    else onCancel();
+  }
+
   /** Commands.lua:587 heal_party. */
   healParty(): void {
     this.shell.healParty();
@@ -1496,6 +1507,7 @@ export class Overworld implements ScriptWorld {
     this.lanceLockDoor();
     if (this.leagueDontRun()) return;
     if (this.badgeGateStep()) return;
+    if (this.spinnerStep()) return;
     if (!this.runner.isRunning()) {
       const label = (this as any).map?.id ?? "";
       const script = (MAP_SCRIPTS as any)[label] as MapScript | undefined;
@@ -2087,6 +2099,39 @@ export class Overworld implements ScriptWorld {
    * entrance coord rows in each room script). The real barrier is that the
    * exit is sealed behind you; this is the front half of it.
    */
+  /**
+   * OverworldController.lua:3627-3660 checkSpinner / runSpinnerMoves: the
+   * arrow tiles of the Rocket Hideout and Viridian Gym (field.spinners).
+   * Landing on one slides the player along its extracted move list; where it
+   * stops re-enters this landing pipeline, so a chain of arrows chains, and a
+   * warp at the end of one still fires.
+   */
+  private spinnerStep(): boolean {
+    const list = (this.shell.data.field as {
+      spinners?: Record<string, { x: number; y: number; moves: { dir: Dir; count: number }[] }[]>;
+    } | undefined)?.spinners?.[this.map.id];
+    if (!list) return false;
+    const p = this.player;
+    const sp = list.find((s) => s.x === p.cellX && s.y === p.cellY);
+    if (!sp) return false;
+    // a free walk can land mid-cell; the slide runs on the grid
+    p.px = p.cellX * 16;
+    p.py = p.cellY * 16;
+    this.shell.audio?.playSfx?.("Arrow_Tiles");
+    const run = (i: number): void => {
+      const mv = sp.moves[i];
+      if (!mv) {
+        (p as { spinning?: boolean }).spinning = false;
+        this.onStepComplete();
+        return;
+      }
+      (p as { spinning?: boolean }).spinning = true;
+      this.scriptMove(p, mv.dir, mv.count, () => run(i + 1));
+    };
+    run(0);
+    return true;
+  }
+
   private leagueDontRun(): boolean {
     const seal = LEAGUE_SEALS[this.map?.id ?? ""];
     const dr = seal?.dontRun;

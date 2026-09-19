@@ -40,15 +40,27 @@ export interface WildBattler extends DamageBattler {
   fainted?: boolean;
   faintQueued?: boolean;
   lastMove?: string;
-  /** Hyper Beam recharge etc. — outside the reachable v1 effect set but the
-   * menu-lock checks read them (BattleState.lua:1699-1729). */
+  /** The multi-turn locks (BattleState.lua:1744-1774 menuLockedAction /
+   * fightLockedAction) and the state they carry. */
   mustRecharge?: boolean;
   invulnerable?: boolean;
-  /** Substitute / Mist / trapping — unreachable in v1 but the pipeline's
-   * guards read them (EffectRegistry.lua, MoveEffects.lua changeStage). */
   substituteHP?: number;
   mist?: boolean;
+  /** Wrap/Bind/Fire Spin/Clamp: continuation attacks still to come. */
   trappingTurns?: number;
+  trapDamage?: number;
+  trapMove?: string;
+  thrashTurns?: number;
+  thrashMove?: MoveSlot;
+  thrashAnnounced?: boolean;
+  /** A charge move mid-charge (Fly, Dig, Solarbeam...), released next turn. */
+  charging?: MoveSlot;
+  chargeReady?: boolean;
+  rageMove?: MoveSlot;
+  bideTurns?: number;
+  bideDamage?: number;
+  /** Transform's species, for anything that wants to draw it. */
+  transformedInto?: string;
 }
 
 interface BattlerSave {

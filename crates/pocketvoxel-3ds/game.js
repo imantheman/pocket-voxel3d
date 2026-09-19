@@ -220,6 +220,7 @@ function fromSection(bytes) {
 
 // voxelmon/game/world/bike.ts
 var BIKE_STEP_FRAMES = 8;
+var SURF_SONG = "Music_Surfing";
 var BIKE_SONG = "Music_BikeRiding";
 var OUTDOOR_SONGS = new Set([
   "Music_PalletTown",
@@ -249,8 +250,12 @@ function bikeAllowed(mapId, tileset, rules) {
     return true;
   return !!tileset && !!br.tilesets?.includes(tileset);
 }
-function effectiveMapSong(song, onBike) {
-  if (!song || !onBike)
+function effectiveMapSong(song, onBike, surfing = false) {
+  if (!song)
+    return song;
+  if (surfing)
+    return SURF_SONG;
+  if (!onBike)
     return song;
   return OUTDOOR_SONGS.has(song) ? BIKE_SONG : song;
 }
@@ -291,10 +296,10 @@ class AudioDirector {
   get playing() {
     return this.current;
   }
-  startMap(mapId, onBike = false) {
+  startMap(mapId, onBike = false, surfing = false) {
     const song = this.banks?.mapSong(mapId) ?? null;
     this.mapSong = song;
-    const play = effectiveMapSong(song, onBike);
+    const play = effectiveMapSong(song, onBike, surfing);
     if (play)
       this.play(play);
   }
@@ -1516,6 +1521,46 @@ function inflictStatus(battle, target, status, opts) {
 was afflicted
 by ${record?.label ?? status}!`];
 }
+var FAILED = "But, it failed!";
+function statusMove(status) {
+  return (ctx) => {
+    if (ctx.target.mon.status)
+      return [FAILED];
+    if (status === "PSN" && ctx.target.substituteHP !== undefined)
+      return [FAILED];
+    const msgs = inflictStatus(ctx.battle, ctx.target, status, {
+      toxic: ctx.move.id === "TOXIC",
+      moveType: ctx.move.type,
+      source: ctx.move.id
+    });
+    return msgs.length === 0 ? [FAILED] : msgs;
+  };
+}
+function confuse(battle, target, pierceSub = false) {
+  if (target.confusedTurns !== undefined || target.substituteHP !== undefined && !pierceSub) {
+    return [FAILED];
+  }
+  target.confusedTurns = randRange(battle.rng, 2, 5);
+  return [`${displayName(target)}
+became confused!`];
+}
+function drainHalf(text) {
+  return (ctx) => {
+    const heal = Math.max(1, Math.floor((ctx.rawDamage ?? 0) / 2));
+    ctx.battle.lastDamage = heal;
+    const mon = ctx.user.mon;
+    mon.hp = Math.min(mon.stats.hp, mon.hp + heal);
+    ctx.battle.drainNext(ctx.user);
+    ctx.say(text(displayName(ctx.target)));
+  };
+}
+var FIXED_DAMAGE = {
+  SONICBOOM: 20,
+  DRAGON_RAGE: 40,
+  SEISMIC_TOSS: "level",
+  NIGHT_SHADE: "level",
+  PSYWAVE: "half_level_rand"
+};
 function statUp(stat, delta) {
   return (ctx) => ctx.changeStage(ctx.user, stat, delta, false);
 }
@@ -1556,70 +1601,447 @@ ${displayName(ctx.target)}!`];
     });
   };
 }
-var EFFECTS = {
-  NO_ADDITIONAL_EFFECT: { kind: "full" },
-  ATTACK_DOWN1_EFFECT: { kind: "primary", accuracyChecked: true, run: statDown("attack", 1) },
-  DEFENSE_DOWN1_EFFECT: { kind: "primary", accuracyChecked: true, run: statDown("defense", 1) },
-  ACCURACY_DOWN1_EFFECT: { kind: "primary", accuracyChecked: true, run: statDown("accuracy", 1) },
-  SPEED_DOWN1_EFFECT: { kind: "primary", accuracyChecked: true, run: statDown("speed", 1) },
-  DEFENSE_UP1_EFFECT: { kind: "primary", run: statUp("defense", 1) },
-  FOCUS_ENERGY_EFFECT: {
-    kind: "primary",
-    run: (ctx) => {
-      if (ctx.user.focusEnergy)
-        return ["But, it failed!"];
-      ctx.user.focusEnergy = true;
-      return [`${displayName(ctx.user)}'s
-getting pumped!`];
+var PRIMARY = {
+  ATTACK_UP1_EFFECT: statUp("attack", 1),
+  ATTACK_UP2_EFFECT: statUp("attack", 2),
+  DEFENSE_UP1_EFFECT: statUp("defense", 1),
+  DEFENSE_UP2_EFFECT: statUp("defense", 2),
+  SPEED_UP2_EFFECT: statUp("speed", 2),
+  SPECIAL_UP1_EFFECT: statUp("special", 1),
+  SPECIAL_UP2_EFFECT: statUp("special", 2),
+  EVASION_UP1_EFFECT: statUp("evasion", 1),
+  ATTACK_DOWN1_EFFECT: statDown("attack", 1),
+  DEFENSE_DOWN1_EFFECT: statDown("defense", 1),
+  DEFENSE_DOWN2_EFFECT: statDown("defense", 2),
+  SPEED_DOWN1_EFFECT: statDown("speed", 1),
+  ACCURACY_DOWN1_EFFECT: statDown("accuracy", 1),
+  SLEEP_EFFECT: statusMove("SLP"),
+  POISON_EFFECT: statusMove("PSN"),
+  PARALYZE_EFFECT: statusMove("PAR"),
+  CONFUSION_EFFECT: (ctx) => confuse(ctx.battle, ctx.target),
+  LEECH_SEED_EFFECT: (ctx) => {
+    if (ctx.target.leechSeeded)
+      return [FAILED];
+    for (const t of ctx.target.curTypes) {
+      if (t === "GRASS")
+        return [FAILED];
     }
-  },
-  LEECH_SEED_EFFECT: {
-    kind: "primary",
-    accuracyChecked: true,
-    run: (ctx) => {
-      if (ctx.target.leechSeeded)
-        return ["But, it failed!"];
-      for (const t of ctx.target.curTypes) {
-        if (t === "GRASS")
-          return ["But, it failed!"];
-      }
-      ctx.target.leechSeeded = true;
-      return [`${displayName(ctx.target)}
+    ctx.target.leechSeeded = true;
+    return [`${displayName(ctx.target)}
 was seeded!`];
+  },
+  HEAL_EFFECT: (ctx) => {
+    const mon = ctx.user.mon;
+    if (ctx.move.id === "REST") {
+      if (mon.hp === mon.stats.hp)
+        return [FAILED];
+      mon.hp = mon.stats.hp;
+      mon.status = "SLP";
+      ctx.user.sleepTurns = 2;
+      ctx.user.toxicCounter = undefined;
+      return [`${displayName(ctx.user)}
+started sleeping!`];
+    }
+    if (mon.hp === mon.stats.hp)
+      return [FAILED];
+    mon.hp = Math.min(mon.stats.hp, mon.hp + Math.floor(mon.stats.hp / 2));
+    return [`${displayName(ctx.user)}
+regained health!`];
+  },
+  LIGHT_SCREEN_EFFECT: (ctx) => {
+    if (ctx.user.lightScreen)
+      return [FAILED];
+    ctx.user.lightScreen = true;
+    return [`${displayName(ctx.user)}'s
+protected against
+special attacks!`];
+  },
+  REFLECT_EFFECT: (ctx) => {
+    if (ctx.user.reflect)
+      return [FAILED];
+    ctx.user.reflect = true;
+    return [`${displayName(ctx.user)}
+gained armor!`];
+  },
+  MIST_EFFECT: (ctx) => {
+    if (ctx.user.mist)
+      return [FAILED];
+    ctx.user.mist = true;
+    return [`${displayName(ctx.user)}'s
+shrouded in mist!`];
+  },
+  FOCUS_ENERGY_EFFECT: (ctx) => {
+    if (ctx.user.focusEnergy)
+      return [FAILED];
+    ctx.user.focusEnergy = true;
+    return [`${displayName(ctx.user)}'s
+getting pumped!`];
+  },
+  HAZE_EFFECT: (ctx) => {
+    for (const b of [ctx.user, ctx.target]) {
+      b.stages = {};
+      b.confusedTurns = undefined;
+      b.leechSeeded = undefined;
+      b.toxicCounter = undefined;
+      b.reflect = undefined;
+      b.lightScreen = undefined;
+      b.mist = undefined;
+      b.focusEnergy = undefined;
+      b.disabledSlot = undefined;
+      b.disabledTurns = undefined;
+      b.xAccuracy = undefined;
+      b.hazeStatReset = true;
+    }
+    const st = ctx.target.mon.status;
+    if (st === "SLP" || st === "FRZ")
+      ctx.target.skipMove = true;
+    ctx.target.mon.status = null;
+    return [`All STATUS changes
+are eliminated!`];
+  },
+  SUBSTITUTE_EFFECT: (ctx) => {
+    const user = ctx.user;
+    if (user.substituteHP !== undefined) {
+      const m = [`${displayName(user)}
+has a SUBSTITUTE!`];
+      m.failed = true;
+      return m;
+    }
+    const cost = Math.floor(user.mon.stats.hp / 4);
+    if (user.mon.hp < cost) {
+      const m = [`Too weak to make
+a SUBSTITUTE!`];
+      m.failed = true;
+      return m;
+    }
+    user.mon.hp -= cost;
+    user.substituteHP = cost + 1;
+    return [`It created a
+SUBSTITUTE!`];
+  },
+  CONVERSION_EFFECT: (ctx) => {
+    if (ctx.target.invulnerable)
+      return [FAILED];
+    ctx.user.curTypes = [...ctx.target.curTypes];
+    return [`Converted type to
+${displayName(ctx.target)}'s!`];
+  },
+  TRANSFORM_EFFECT: (ctx) => {
+    const { user, target } = ctx;
+    user.curStats = {
+      ...user.mon.stats,
+      attack: target.curStats.attack,
+      defense: target.curStats.defense,
+      speed: target.curStats.speed,
+      special: target.curStats.special
+    };
+    user.curTypes = [...target.curTypes];
+    user.stages = { ...target.stages };
+    user.curMoves = target.curMoves.map((mv) => ({ id: mv.id, pp: 5 }));
+    user.transformedInto = target.mon.species;
+    return [`${displayName(user)}
+transformed into
+${target.name}!`];
+  },
+  DISABLE_EFFECT: (ctx) => {
+    const target = ctx.target;
+    if (target.disabledSlot !== undefined)
+      return [FAILED];
+    const usable = [];
+    target.curMoves.forEach((mv, i) => {
+      if (mv.pp > 0)
+        usable.push(i + 1);
+    });
+    if (usable.length === 0)
+      return [FAILED];
+    const slot = usable[randRange(ctx.rng, 1, usable.length) - 1];
+    target.disabledSlot = slot;
+    target.disabledTurns = randRange(ctx.rng, 1, 8);
+    const id = target.curMoves[slot - 1].id;
+    return [`${displayName(target)}'s
+${ctx.data.moves[id]?.name ?? id} was
+disabled!`];
+  },
+  SPLASH_EFFECT: () => ["No effect!"]
+};
+var ACC_CHECKED = new Set([
+  "SLEEP_EFFECT",
+  "POISON_EFFECT",
+  "PARALYZE_EFFECT",
+  "CONFUSION_EFFECT",
+  "LEECH_SEED_EFFECT",
+  "DISABLE_EFFECT",
+  "ATTACK_DOWN1_EFFECT",
+  "DEFENSE_DOWN1_EFFECT",
+  "DEFENSE_DOWN2_EFFECT",
+  "SPEED_DOWN1_EFFECT",
+  "ACCURACY_DOWN1_EFFECT"
+]);
+var SECONDARY = {
+  BURN_SIDE_EFFECT1: statusSide("BRN", 26),
+  BURN_SIDE_EFFECT2: statusSide("BRN", 77),
+  FREEZE_SIDE_EFFECT1: statusSide("FRZ", 26),
+  PARALYZE_SIDE_EFFECT1: statusSide("PAR", 26),
+  PARALYZE_SIDE_EFFECT2: statusSide("PAR", 77),
+  POISON_SIDE_EFFECT1: statusSide("PSN", 52),
+  POISON_SIDE_EFFECT2: statusSide("PSN", 103),
+  FLINCH_SIDE_EFFECT1: flinchSide(26),
+  FLINCH_SIDE_EFFECT2: flinchSide(77),
+  ATTACK_DOWN_SIDE_EFFECT: statDownSide("attack"),
+  DEFENSE_DOWN_SIDE_EFFECT: statDownSide("defense"),
+  SPEED_DOWN_SIDE_EFFECT: statDownSide("speed"),
+  SPECIAL_DOWN_SIDE_EFFECT: statDownSide("special"),
+  CONFUSION_SIDE_EFFECT: (ctx) => {
+    if (ctx.target.confusedTurns !== undefined)
+      return [];
+    if (ctx.battle.rng.byte() >= 25)
+      return [];
+    return confuse(ctx.battle, ctx.target, true);
+  },
+  TWINEEDLE_EFFECT: (ctx) => {
+    if (ctx.battle.rng.byte() >= 52)
+      return [];
+    return inflictStatus(ctx.battle, ctx.target, "PSN", {
+      secondary: true,
+      source: "TWINEEDLE"
+    });
+  }
+};
+function hitsFrom(dist, ctx) {
+  if (typeof dist === "number")
+    return dist;
+  return dist[randRange(ctx.rng, 0, dist.length - 1)];
+}
+var plainInfo = () => ({ crit: false, typeMult: 10 });
+var FULL = {
+  NO_ADDITIONAL_EFFECT: {},
+  TWO_TO_FIVE_ATTACKS_EFFECT: {
+    hitCount: (ctx) => hitsFrom(ctx.move.multiHit ?? [
+      2,
+      2,
+      2,
+      3,
+      3,
+      3,
+      4,
+      5
+    ], ctx)
+  },
+  ATTACK_TWICE_EFFECT: {
+    hitCount: (ctx) => hitsFrom(ctx.move.multiHit ?? 2, ctx)
+  },
+  TWINEEDLE_EFFECT: {
+    hitCount: (ctx) => hitsFrom(ctx.move.multiHit ?? 2, ctx)
+  },
+  SPECIAL_DAMAGE_EFFECT: {
+    chooseDamage: (ctx) => {
+      const spec = FIXED_DAMAGE[ctx.move.id];
+      let dmg;
+      if (spec === "level")
+        dmg = ctx.user.mon.level;
+      else if (spec === "half_level_rand") {
+        const max = Math.max(1, Math.floor(ctx.user.mon.level * 3 / 2) - 1);
+        dmg = randRange(ctx.rng, 1, max);
+      } else
+        dmg = spec;
+      if (!dmg)
+        return [null, FAILED];
+      return [dmg, plainInfo()];
     }
   },
-  SPEED_DOWN_SIDE_EFFECT: { kind: "secondary", run: statDownSide("speed") },
-  BURN_SIDE_EFFECT1: { kind: "secondary", run: statusSide("BRN", 26) },
-  POISON_SIDE_EFFECT1: { kind: "secondary", run: statusSide("PSN", 52) },
-  FLINCH_SIDE_EFFECT1: { kind: "secondary", run: flinchSide(26) },
-  TWO_TO_FIVE_ATTACKS_EFFECT: {
-    kind: "full",
-    hitCount: (ctx) => {
-      const dist = ctx.move.multiHit ?? [
-        2,
-        2,
-        2,
-        3,
-        3,
-        3,
-        4,
-        5
-      ];
-      if (typeof dist === "number")
-        return dist;
-      return dist[randRange(ctx.rng, 0, dist.length - 1)];
-    }
+  SUPER_FANG_EFFECT: {
+    chooseDamage: (ctx) => [Math.max(1, Math.floor(ctx.target.mon.hp / 2)), plainInfo()]
+  },
+  OHKO_EFFECT: {
+    gate: (ctx) => {
+      if (ctx.battle.chart.effectiveness(ctx.move.type, ctx.target.curTypes) === 0) {
+        return [false, `It doesn't affect
+${displayName(ctx.target)}!`];
+      }
+      if (effectiveSpeed(ctx.user) < effectiveSpeed(ctx.target))
+        return [false, FAILED];
+      return [true];
+    },
+    chooseDamage: () => [65535, { crit: false, typeMult: 10, ohko: true }]
   },
   RECOIL_EFFECT: {
-    kind: "full",
     afterDamage: (ctx) => {
       const recoil = Math.max(1, Math.floor((ctx.rawDamage ?? 0) / (ctx.moveInst.struggle ? 2 : 4)));
       ctx.say(`${displayName(ctx.user)}'s
 hit with recoil!`);
       ctx.battle.applyDamage(ctx.user, recoil);
     }
+  },
+  DRAIN_HP_EFFECT: {
+    afterDamage: drainHalf((t) => `Sucked health from
+${t}!`)
+  },
+  DREAM_EATER_EFFECT: {
+    gate: (ctx) => ctx.target.mon.status !== "SLP" ? [false, FAILED] : [true],
+    afterDamage: drainHalf((t) => `${t}'s
+dream was eaten!`)
+  },
+  CHARGE_EFFECT: { charge: { anim: "XSTATITEM_ANIM", enemyAnim: "XSTATITEM_DUPLICATE_ANIM" } },
+  FLY_EFFECT: { charge: { invulnerable: true, anim: "TELEPORT" } },
+  TRAPPING_EFFECT: {
+    beforeAccuracy: (ctx) => {
+      if (ctx.user.trappingTurns === undefined)
+        ctx.target.mustRecharge = undefined;
+    },
+    afterDamage: (ctx) => {
+      const user = ctx.user;
+      if (user.trappingTurns === undefined) {
+        const r = randRange(ctx.rng, 0, 7);
+        user.trappingTurns = [1, 1, 1, 2, 2, 2, 3, 4][r];
+        user.trapDamage = ctx.rawDamage;
+        user.trapMove = ctx.move.id;
+      }
+    }
+  },
+  THRASH_PETAL_DANCE_EFFECT: {
+    afterDamage: (ctx) => {
+      const user = ctx.user;
+      if (user.thrashTurns === undefined) {
+        user.thrashTurns = randRange(ctx.rng, 2, 3);
+        user.thrashMove = ctx.moveInst;
+        user.thrashAnnounced = true;
+      } else {
+        user.thrashTurns -= 1;
+        if (user.thrashTurns <= 0) {
+          user.thrashTurns = undefined;
+          user.thrashMove = undefined;
+          user.thrashAnnounced = undefined;
+          if (user.confusedTurns === undefined) {
+            user.confusedTurns = randRange(ctx.rng, 2, 5);
+            ctx.say(`${displayName(user)}
+became confused!`);
+          }
+        }
+      }
+    }
+  },
+  JUMP_KICK_EFFECT: {
+    onMiss: (ctx, reason) => {
+      if (reason !== "accuracy")
+        return;
+      ctx.say(`${displayName(ctx.user)}
+kept going and
+crashed!`);
+      ctx.damage(ctx.user, 1);
+    }
+  },
+  EXPLODE_EFFECT: {
+    explode: true,
+    onMiss: (ctx) => ctx.battle.selfDestruct(ctx.user),
+    afterDamage: (ctx) => ctx.battle.selfDestruct(ctx.user)
+  },
+  HYPER_BEAM_EFFECT: {
+    afterDamage: (ctx) => {
+      const skipOnKO = ctx.battle.ruleset.hyperBeamSkipRechargeOnKO !== false;
+      const targetDown = ctx.target.mon.hp <= 0 || ctx.brokeSub;
+      if (!skipOnKO || !targetDown)
+        ctx.user.mustRecharge = true;
+    }
+  },
+  PAY_DAY_EFFECT: {
+    afterDamage: (ctx) => {
+      ctx.battle.payDay += 2 * ctx.user.mon.level;
+      ctx.say(`Coins scattered
+everywhere!`);
+    }
+  },
+  SWIFT_EFFECT: { neverMiss: true },
+  RAGE_EFFECT: {
+    afterDamage: (ctx) => {
+      ctx.user.rageMove = ctx.moveInst;
+    }
+  },
+  BIDE_EFFECT: {
+    perform: (ctx) => {
+      const user = ctx.user;
+      user.bideTurns = randRange(ctx.rng, 2, 3);
+      user.bideDamage = 0;
+      ctx.battle.cancelMoveAnim();
+      ctx.battle.animNext(user.isPlayer ? "XSTATITEM_ANIM" : "XSTATITEM_DUPLICATE_ANIM", user.isPlayer);
+      ctx.say(`${displayName(user)}
+is storing energy!`);
+    }
+  },
+  SWITCH_AND_TELEPORT_EFFECT: {
+    perform: (ctx) => {
+      const { battle, user, target, move } = ctx;
+      if (!battle.trainerBattle) {
+        const uLvl = user.mon.level;
+        const tLvl = target.mon.level;
+        let ok = uLvl >= tLvl;
+        if (!ok)
+          ok = randRange(ctx.rng, 0, uLvl + tLvl) >= Math.floor(tLvl / 4);
+        if (ok) {
+          if (move.id === "ROAR")
+            ctx.say(`${displayName(target)}
+ran away scared!`);
+          else if (move.id === "WHIRLWIND")
+            ctx.say(`${displayName(target)}
+was blown away!`);
+          else
+            ctx.say(`${displayName(user)}
+ran from battle!`);
+          battle.escape();
+        } else if (move.id === "TELEPORT") {
+          battle.cancelMoveAnim();
+          ctx.say(FAILED);
+        } else {
+          battle.cancelMoveAnim();
+          ctx.say(`It didn't affect
+${displayName(target)}!`);
+        }
+      } else if (move.id === "TELEPORT") {
+        battle.cancelMoveAnim();
+        ctx.say(FAILED);
+      } else {
+        battle.cancelMoveAnim();
+        ctx.say(`${displayName(target)}
+is unaffected!`);
+      }
+    }
+  },
+  METRONOME_EFFECT: {
+    callsMove: (ctx) => {
+      const order = ctx.data.constants?.moveOrder ?? Object.keys(ctx.data.moves);
+      for (let tries = 0;tries < 1000; tries++) {
+        const pick = order[randRange(ctx.rng, 1, order.length) - 1];
+        if (pick !== "METRONOME" && pick !== "STRUGGLE" && ctx.data.moves[pick])
+          return pick;
+      }
+      return null;
+    }
+  },
+  MIRROR_MOVE_EFFECT: {
+    callsMove: (ctx) => {
+      const last = ctx.target.lastMove;
+      if (!last) {
+        ctx.say(`The MIRROR MOVE
+failed!`);
+        return null;
+      }
+      return last;
+    }
   }
 };
+var EFFECTS = {};
+for (const [id, run] of Object.entries(PRIMARY)) {
+  EFFECTS[id] = { kind: "primary", run, accuracyChecked: ACC_CHECKED.has(id) || undefined };
+}
+for (const [id, run] of Object.entries(SECONDARY)) {
+  EFFECTS[id] = { kind: "secondary", run };
+}
+for (const [id, spec] of Object.entries(FULL)) {
+  const record = { kind: "full", ...spec };
+  const secondary = SECONDARY[id];
+  if (secondary)
+    record.run = secondary;
+  EFFECTS[id] = record;
+}
 var warned2 = new Set;
 function warnUnknown(effect) {
   if (!warned2.has(effect)) {
@@ -1906,6 +2328,31 @@ function listStep(input) {
   return 0;
 }
 var DEMO_MENU_HOLD = 130;
+var CHARGE_TEXT = {
+  FLY: `%s
+flew up high!`,
+  DIG: `%s
+dug a hole!`,
+  RAZOR_WIND: `%s
+made a whirlwind!`,
+  SOLARBEAM: `%s
+took in sunlight!`,
+  SKULL_BASH: `%s
+lowered its head!`,
+  SKY_ATTACK: `%s
+is glowing!`
+};
+var SLOW_SHAKE_EFFECTS = new Set([
+  "SLEEP_EFFECT",
+  "POISON_EFFECT",
+  "CONFUSION_EFFECT",
+  "DISABLE_EFFECT",
+  "ATTACK_DOWN1_EFFECT",
+  "DEFENSE_DOWN1_EFFECT",
+  "DEFENSE_DOWN2_EFFECT",
+  "SPEED_DOWN1_EFFECT",
+  "ACCURACY_DOWN1_EFFECT"
+]);
 
 class WildBattle {
   kind = "wild";
@@ -2418,6 +2865,11 @@ Get'm! ${name}!`;
         return;
       }
       this.clearTurnFlinches();
+      const locked = this.menuLockedAction(this.player);
+      if (locked) {
+        this.resolveTurn(locked);
+        return;
+      }
       const col0 = (this.menuIndex - 1) % 2;
       const row0 = Math.floor((this.menuIndex - 1) / 2);
       let col = col0;
@@ -2434,6 +2886,11 @@ Get'm! ${name}!`;
       if (input.wasPressed("a")) {
         const choice = ["fight", "pkmn", "item", "run"][this.menuIndex - 1];
         if (choice === "fight") {
+          const fightLock = this.fightLockedAction(this.player);
+          if (fightLock) {
+            this.resolveTurn(fightLock);
+            return;
+          }
           if (!this.playerHasPP()) {
             this.say(`${this.player.name} has no
 moves left!`);
@@ -2506,9 +2963,34 @@ this move!`);
   }
   clearTurnFlinches() {
     for (const b of [this.player, this.enemy]) {
-      if (b && !b.mustRecharge)
+      if (b && !(b.mustRecharge || b.rageMove))
         b.flinched = false;
     }
+  }
+  menuLockedAction(b) {
+    if (b.mustRecharge)
+      return { id: "", pp: 0, special: "recharge" };
+    if (b.charging)
+      return b.charging;
+    if (b.thrashTurns !== undefined && b.thrashTurns > 0 && b.thrashMove)
+      return b.thrashMove;
+    if (b.rageMove)
+      return b.rageMove;
+    return null;
+  }
+  fightLockedAction(b) {
+    if (b.trappingTurns !== undefined && b.trappingTurns > 0) {
+      return { id: "", pp: 0, special: "trapping" };
+    }
+    if (b.bideTurns !== undefined)
+      return { id: "", pp: 0, special: "bide" };
+    const opp = b.isPlayer ? this.enemy : this.player;
+    if (opp && opp.trappingTurns !== undefined)
+      return { id: "", pp: 0, special: "bound" };
+    return null;
+  }
+  lockedAction(b) {
+    return this.menuLockedAction(b) ?? this.fightLockedAction(b);
   }
   playerHasPP() {
     return this.player.curMoves.some((mv, i) => mv.pp > 0 && this.player.disabledSlot !== i + 1);
@@ -2529,6 +3011,9 @@ this move!`);
       this.player.disabledSlot = i;
   }
   enemyAction() {
+    const locked = this.lockedAction(this.enemy);
+    if (locked)
+      return locked;
     const usable = [];
     this.enemy.curMoves.forEach((mv, i) => {
       if (this.enemy.disabledSlot !== i + 1 && (this.ruleset.enemyUnlimitedPP || mv.pp > 0)) {
@@ -2634,7 +3119,22 @@ scared to move!`).replace("{RAM:wBattleMonNick}", user.name));
       return;
     }
     user.boundTurns = target.trappingTurns !== undefined ? Math.max(1, target.trappingTurns) : undefined;
-    if (!this.statusInterrupt(user, target)) {
+    if (action.special === "recharge") {
+      if (!this.preRechargeChecks(user, target)) {
+        user.mustRecharge = undefined;
+        this.sayNext(`${displayName(user)}
+must recharge!`);
+      }
+    } else if (action.special === "bound") {
+      if (target.trappingTurns !== undefined)
+        this.statusInterrupt(user, target);
+    } else if (action.special === "trapping") {
+      if (!this.statusInterrupt(user, target))
+        this.continueTrapping(user, target);
+    } else if (action.special === "bide") {
+      if (!this.statusInterrupt(user, target))
+        this.continueBide(user, target);
+    } else if (!this.statusInterrupt(user, target)) {
       this.performMove(user, target, action, false);
     }
     this.actNext(() => this.syncShownStatus());
@@ -2666,6 +3166,13 @@ its confusion!`);
     return false;
   }
   clearVolatiles(user, selfHit) {
+    user.bideTurns = undefined;
+    user.bideDamage = undefined;
+    user.thrashTurns = undefined;
+    user.thrashMove = undefined;
+    user.thrashAnnounced = undefined;
+    user.charging = undefined;
+    user.chargeReady = undefined;
     user.trappingTurns = undefined;
     if (selfHit) {
       user.invulnerable = undefined;
@@ -2697,17 +3204,26 @@ its confusion!`);
       return;
     }
     const record = effectRecord(move.effect);
+    const releasing = user.charging === moveInst && user.chargeReady;
+    if (releasing) {
+      user.charging = undefined;
+      user.chargeReady = undefined;
+      user.invulnerable = undefined;
+    }
+    const isContinuation = releasing || user.thrashTurns !== undefined && user.thrashTurns > 0 && moveInst === user.thrashMove || moveInst === user.rageMove;
     const enemyUnlimited = !user.isPlayer && this.ruleset.enemyUnlimitedPP;
-    if (!moveInst.struggle && !isCalled && !enemyUnlimited) {
+    if (!isContinuation && !moveInst.struggle && !isCalled && !enemyUnlimited) {
       moveInst.pp = Math.max(0, moveInst.pp - 1);
     }
     this.moveAnimRow = null;
-    this.sayNextAuto(`${displayName(user)}
+    if (!(user.thrashTurns !== undefined && moveInst === user.thrashMove && user.thrashAnnounced)) {
+      this.sayNextAuto(`${displayName(user)}
 used ${move.name}!`);
-    if (!(record && record.announceAnim === false)) {
-      const row = { anim: move.id, attackerIsPlayer: user.isPlayer };
-      this.insertNext(row);
-      this.moveAnimRow = row;
+      if (!(record && record.announceAnim === false)) {
+        const row = { anim: move.id, attackerIsPlayer: user.isPlayer };
+        this.insertNext(row);
+        this.moveAnimRow = row;
+      }
     }
     const ctx = makeCtx(this, user, target, move, moveInst, isCalled);
     if (record?.callsMove) {
@@ -2719,10 +3235,22 @@ used ${move.name}!`);
       return;
     }
     user.lastMove = move.id;
-    if (record?.charge) {
+    if (record?.charge && !releasing) {
       this.cancelMoveAnim();
-      this.sayNext(`${displayName(user)}
-is charging up!`);
+      user.charging = moveInst;
+      user.chargeReady = true;
+      if (record.charge.invulnerable || move.id === "DIG")
+        user.invulnerable = true;
+      let chargeAnim = record.charge.anim;
+      if (move.id === "DIG")
+        chargeAnim = "SLIDE_DOWN_ANIM";
+      else if (record.charge.enemyAnim && !user.isPlayer)
+        chargeAnim = record.charge.enemyAnim;
+      if (chargeAnim)
+        this.animNext(chargeAnim, user.isPlayer);
+      const text = CHARGE_TEXT[move.id] ?? `%s
+is charging up!`;
+      this.sayNext(text.replace("%s", displayName(user)));
       return;
     }
     if (record?.perform) {
@@ -2739,6 +3267,8 @@ attack missed!`);
       const msgs = record.run(ctx);
       if (this.primaryEffectFailed(msgs)) {
         this.cancelMoveAnim();
+      } else if (SLOW_SHAKE_EFFECTS.has(move.effect) && this.moveAnimRow) {
+        this.moveAnimRow.hit = { sfx: "", animType: user.isPlayer ? 6 : 3 };
       }
       for (const m of msgs)
         this.sayNext(m);
@@ -2753,6 +3283,85 @@ attack missed!`);
       return;
     }
     runDamaging(this, ctx, record);
+  }
+  preRechargeChecks(user, target) {
+    if (user.skipMove) {
+      user.skipMove = undefined;
+      return true;
+    }
+    const mon = user.mon;
+    if (mon.status === "SLP") {
+      user.sleepTurns = (user.sleepTurns ?? 1) - 1;
+      if (user.sleepTurns <= 0) {
+        mon.status = null;
+        this.sayNext(`${displayName(user)}
+woke up!`);
+      } else {
+        this.sayNext(`${displayName(user)}
+is fast asleep!`);
+      }
+      return true;
+    }
+    if (mon.status === "FRZ") {
+      this.sayNext(`${displayName(user)}
+is frozen solid!`);
+      return true;
+    }
+    if (target.trappingTurns !== undefined) {
+      this.sayNext(`${displayName(user)}
+can't move!`);
+      return true;
+    }
+    if (user.flinched) {
+      user.flinched = false;
+      this.sayNext(`${displayName(user)}
+flinched!`);
+      return true;
+    }
+    return false;
+  }
+  continueTrapping(user, target) {
+    this.sayNext(`${displayName(user)}'s
+attack continues!`);
+    if (user.trapMove)
+      this.animNext(user.trapMove, user.isPlayer);
+    user.trappingTurns = (user.trappingTurns ?? 1) - 1;
+    this.applyDamage(target, user.trapDamage ?? 1);
+    if (target.mon.hp <= 0)
+      this.onFaint(target);
+  }
+  continueBide(user, target) {
+    user.bideTurns = (user.bideTurns ?? 1) - 1;
+    if (user.bideTurns > 0) {
+      this.sayNext(`${displayName(user)}
+is storing energy!`);
+      return;
+    }
+    this.sayNext(`${displayName(user)}
+unleashed energy!`);
+    const dmg = (user.bideDamage ?? 0) * 2;
+    user.bideTurns = undefined;
+    user.bideDamage = undefined;
+    if (dmg <= 0) {
+      this.sayNext("But, it failed!");
+      return;
+    }
+    this.animNext("BIDE", user.isPlayer);
+    this.applyDamage(target, dmg);
+    if (target.mon.hp <= 0)
+      this.onFaint(target);
+  }
+  selfDestruct(user) {
+    user.mon.hp = 0;
+    this.onFaint(user);
+  }
+  payDay = 0;
+  get trainerBattle() {
+    return this.isTrainer === true;
+  }
+  escape() {
+    this.result = "run";
+    this.afterQueue = "finish";
   }
   accuracyRoll(move, user, target) {
     return accuracyRoll(this.ruleset, move, user, target, this.rng);
@@ -2781,6 +3390,14 @@ ${displayName(target)}!`);
     target.mon.hp -= dealt;
     if (dealt > 0)
       this.drainNext(target, target.mon.hp);
+    if (target.bideTurns !== undefined) {
+      target.bideDamage = (target.bideDamage ?? 0) + dealt;
+    }
+    if (target.rageMove && dealt > 0) {
+      target.stages.attack = Math.min(6, (target.stages.attack ?? 0) + 1);
+      this.sayNext(`${displayName(target)}'s
+RAGE is building!`);
+    }
     return dealt;
   }
   onFaint(battler) {
@@ -2956,6 +3573,9 @@ ${learning}!`);
   }
   swapEnemy(mon) {
     this.enemy = makeBattler(this.data, mon, false);
+    this.player.trappingTurns = undefined;
+    this.player.trapMove = undefined;
+    this.player.trapDamage = undefined;
   }
   enemyMonFainted() {
     this.awardExp();
@@ -3188,6 +3808,8 @@ to fight!`);
     this.act(() => {
       this.player = makeBattler(this.data, next, true, this.save);
       this.enemy.trappingTurns = undefined;
+      this.enemy.trapMove = undefined;
+      this.enemy.trapDamage = undefined;
       this.markParticipant();
       this.sendOutMonCursors();
       this.sendingOut = true;
@@ -3207,6 +3829,17 @@ to fight!`);
     this.moveIndex = 1;
   }
   finish() {
+    if (this.payDay > 0 && this.result === "win") {
+      const save = this.save;
+      if (typeof save.money === "number")
+        save.money += this.payDay;
+      this.say(`${this.save.player.name} picked up
+$${this.payDay}!`);
+      this.payDay = 0;
+      this.afterQueue = "finish";
+      this.phase = "messages";
+      return;
+    }
     if (this.result !== "lose" && !firstHealthy(this.save.party)) {
       console.warn(`battle finished ${this.result} with no healthy party; forcing blackout`);
       this.result = "lose";
@@ -4307,7 +4940,10 @@ class GameMap {
     return this.signAt.get(cy * this.widthCells + cx);
   }
   isCuttableCell(cx, cy) {
-    return this.cuttableAt.has(cy * this.widthCells + cx);
+    const i = cy * this.widthCells + cx;
+    if (this.cutAt.has(i))
+      return false;
+    return this.cuttableAt.has(i);
   }
   connection(dir) {
     return this.def.connections?.[dir];
@@ -4826,6 +5462,102 @@ function mtMoonFossil(itemId, selfName, otherName, gotFlag) {
     ];
   };
 }
+function staticMon(map, object, text, species, level, flag) {
+  return [
+    ["show_text", text],
+    ["check_flag", flag],
+    ["jump_if_true", "end"],
+    ["static_battle", species, level],
+    ["jump_if_false", "end"],
+    ["set_flag", flag],
+    ["hide_object", map, object],
+    ["label", "end"]
+  ];
+}
+function tradeRows(index, flag) {
+  return [["face_player"], ["trade", index, flag]];
+}
+var E4_RESET_FLAGS = [
+  "EVENT_BEAT_LORELEIS_ROOM_TRAINER_0",
+  "EVENT_AUTOWALKED_INTO_LORELEIS_ROOM",
+  "EVENT_BEAT_BRUNOS_ROOM_TRAINER_0",
+  "EVENT_AUTOWALKED_INTO_BRUNOS_ROOM",
+  "EVENT_BEAT_AGATHAS_ROOM_TRAINER_0",
+  "EVENT_AUTOWALKED_INTO_AGATHAS_ROOM",
+  "EVENT_BEAT_LANCES_ROOM_TRAINER_0",
+  "EVENT_BEAT_LANCE",
+  "EVENT_LANCES_ROOM_LOCK_DOOR",
+  "EVENT_BEAT_CHAMPION_RIVAL_THIS_RUN"
+];
+var E4_TRAINER_KEYS = [
+  "LORELEIS_ROOM_obj_1",
+  "BRUNOS_ROOM_obj_1",
+  "AGATHAS_ROOM_obj_1",
+  "LANCES_ROOM_obj_1"
+];
+var FOSSIL_MONS = {
+  DOME_FOSSIL: "KABUTO",
+  HELIX_FOSSIL: "OMANYTE",
+  OLD_AMBER: "AERODACTYL"
+};
+var FOSSIL_ORDER = ["DOME_FOSSIL", "HELIX_FOSSIL", "OLD_AMBER"];
+function fossilScientistRows(ow, save) {
+  const f = save?.flags ?? {};
+  const data = ow?.data ?? ow?.shell?.data;
+  const monName = (sp) => data?.pokemon?.[sp]?.name ?? sp;
+  const itemName = (id) => data?.items?.[id]?.name ?? id;
+  const L = "_CinnabarLabFossilRoomScientist1";
+  if (f.EVENT_GAVE_FOSSIL_TO_LAB) {
+    if (f.EVENT_LAB_STILL_REVIVING_FOSSIL) {
+      return [["face_player"], ["show_text", `${L}GoForAWalkText`]];
+    }
+    const species = save.labFossilMon;
+    const rows2 = [["face_player"]];
+    if (!species) {
+      return [
+        ...rows2,
+        ["clear_flag", "EVENT_GAVE_FOSSIL_TO_LAB"],
+        ["show_text", `${L}Text`]
+      ];
+    }
+    return [
+      ...rows2,
+      ["show_text", `${L}FossilIsBackToLifeText`, { "RAM:wStringBuffer": monName(species) }],
+      ["check_party_room"],
+      ["jump_if_false", "full"],
+      ["play_sound", "Get_Key_Item"],
+      ["give_pokemon", species, 30],
+      ["show_text", `{PLAYER} got
+${monName(species)}!`],
+      ["lab_fossil"],
+      ["clear_flag", "EVENT_GAVE_FOSSIL_TO_LAB"],
+      ["clear_flag", "EVENT_LAB_STILL_REVIVING_FOSSIL"],
+      ["jump", "end"],
+      ["label", "full"],
+      ["show_text", `You have no room
+for it!\fCome back when
+you do!`],
+      ["label", "end"]
+    ];
+  }
+  const carried = FOSSIL_ORDER.filter((id) => (save?.inventory?.[id] ?? 0) > 0);
+  const rows = [["face_player"], ["show_text", `${L}Text`]];
+  if (carried.length === 0)
+    return [...rows, ["show_text", `${L}NoFossilsText`]];
+  carried.forEach((id, i) => {
+    rows.push([
+      "ask",
+      `${L}SeesFossilText`,
+      { "RAM:wNameBuffer": itemName(id), "RAM:wStringBuffer": monName(FOSSIL_MONS[id]) }
+    ], ["jump_if_true", `give${i}`]);
+  });
+  rows.push(["show_text", `${L}ComeAgainText`], ["jump", "end"]);
+  carried.forEach((id, i) => {
+    rows.push(["label", `give${i}`], ["take_item", id, 1], ["lab_fossil", FOSSIL_MONS[id]], ["set_flag", "EVENT_GAVE_FOSSIL_TO_LAB"], ["set_flag", "EVENT_LAB_STILL_REVIVING_FOSSIL"], ["show_text", `${L}TakesFossilText`, { "RAM:wNameBuffer": itemName(id) }], ["show_text", `${L}GoForAWalkText2`], ["jump", "end"]);
+  });
+  rows.push(["label", "end"]);
+  return rows;
+}
 function pewterEscortRows() {
   return [
     ["show_text", "_PewterCityYoungsterYoureATrainerFollowMeText"],
@@ -5083,6 +5815,52 @@ function lockedDoorStep(ow, at, locked, textId) {
     return null;
   return [["show_text", textId], ["move_player", "down", 1]];
 }
+function route22Scene(n, py) {
+  const obj = `ROUTE22_RIVAL${n}`;
+  const rx = py === 4 ? 29 : 28;
+  const rivalFacing = py === 4 ? "up" : "right";
+  const exit = py === 4 ? ["right", "right", "down", "down", "down", "down", "down"] : ["up", "right", "right", "right", "down", "down", "down", "down", "down", "down"];
+  return [
+    ["show_object", "ROUTE_22", obj],
+    ["move_npc_to", obj, rx, 5],
+    ["face_object", obj, rivalFacing],
+    ["show_text", `_Route22RivalBeforeBattleText${n}`],
+    [
+      "rival_battle",
+      n === 1 ? "OPP_RIVAL1" : "OPP_RIVAL2",
+      n === 1 ? 4 : 10,
+      n === 1 ? { loseable: true } : {}
+    ],
+    ["jump_if_false", 11],
+    [
+      "set_flag",
+      n === 1 ? "EVENT_BEAT_ROUTE22_RIVAL_1ST_BATTLE" : "EVENT_BEAT_ROUTE22_RIVAL_2ND_BATTLE"
+    ],
+    ["show_text", `_Route22Rival${n}DefeatedText`],
+    ["show_text", `_Route22RivalAfterBattleText${n}`],
+    ["walk_npc", obj, exit],
+    ["hide_object", "ROUTE_22", obj]
+  ];
+}
+var TOWER_RIVAL_EXIT_RIGHT_THEN_DOWN = ["right", "down", "down", "right", "down", "down", "right", "right"];
+var TOWER_RIVAL_EXIT_DOWN_THEN_RIGHT = ["down", "down", "right", "right", "right", "right", "down", "down"];
+function towerRivalScript(playerX) {
+  const exit = playerX === 15 ? TOWER_RIVAL_EXIT_DOWN_THEN_RIGHT : TOWER_RIVAL_EXIT_RIGHT_THEN_DOWN;
+  return [
+    ["face_player"],
+    ["check_flag", "EVENT_BEAT_POKEMON_TOWER_RIVAL"],
+    ["jump_if_true", 12],
+    ["show_text", "_PokemonTower2FRivalWhatBringsYouHereText"],
+    ["rival_battle", "OPP_RIVAL2", 4],
+    ["jump_if_false", "end"],
+    ["set_flag", "EVENT_BEAT_POKEMON_TOWER_RIVAL"],
+    ["show_text", "_PokemonTower2FRivalDefeatedText"],
+    ["walk_npc", "POKEMONTOWER2F_RIVAL", exit],
+    ["hide_object", "POKEMON_TOWER_2F", "POKEMONTOWER2F_RIVAL"],
+    ["jump", "end"],
+    ["show_text", "_PokemonTower2FRivalHowsYourDexText"]
+  ];
+}
 var MAP_SCRIPTS = {
   PEWTER_CITY: {
     onStep: (ow, save) => {
@@ -5124,27 +5902,150 @@ var MAP_SCRIPTS = {
       if (!(x === 29 && y === 4 || x === 29 && y === 5))
         return null;
       const f = save?.flags ?? {};
-      if (!(f.EVENT_GOT_POKEDEX && !f.EVENT_BEAT_BROCK && !f.EVENT_BEAT_ROUTE22_RIVAL_1ST_BATTLE)) {
+      const first = f.EVENT_GOT_POKEDEX && !f.EVENT_BEAT_BROCK && !f.EVENT_BEAT_ROUTE22_RIVAL_1ST_BATTLE;
+      const second = !first && f.EVENT_BEAT_GIOVANNI && !f.EVENT_BEAT_ROUTE22_RIVAL_2ND_BATTLE;
+      if (!first && !second)
         return null;
-      }
       if (ow.player)
         ow.player.facing = y === 4 ? "down" : "left";
-      const rx = y === 4 ? 29 : 28;
-      const rivalFacing = y === 4 ? "up" : "right";
-      const exit = y === 4 ? ["right", "right", "down", "down", "down", "down", "down"] : ["up", "right", "right", "right", "down", "down", "down", "down", "down", "down"];
+      return route22Scene(first ? 1 : 2, y);
+    }
+  },
+  ROUTE_12: {
+    talk: { TEXT_ROUTE12_SNORLAX: [["show_text", "_Route12SnorlaxText"]] }
+  },
+  ROUTE_16: {
+    talk: { TEXT_ROUTE16_SNORLAX: [["show_text", "_Route16Text7"]] }
+  },
+  ROUTE_16_FLY_HOUSE: {
+    talk: {
+      TEXT_ROUTE16FLYHOUSE_BRUNETTE_GIRL: [
+        ["face_player"],
+        ["check_flag", "EVENT_GOT_HM02"],
+        ["jump_if_true", 9],
+        ["show_text", "_Route16FlyHouseBrunetteGirlText"],
+        ["give_item", "HM_FLY", 1, "_Route16FlyHouseBrunetteGirlReceivedHM02Text"],
+        ["set_flag", "EVENT_GOT_HM02"],
+        ["show_text", "_Route16FlyHouseBrunetteGirlHM02ExplanationText"],
+        ["jump", "end"],
+        ["show_text", "_Route16FlyHouseBrunetteGirlHM02ExplanationText"]
+      ]
+    }
+  },
+  POWER_PLANT: {
+    talk: {
+      TEXT_POWERPLANT_VOLTORB1: staticMon("POWER_PLANT", "POWERPLANT_VOLTORB1", "_PowerPlantVoltorbBattleText", "VOLTORB", 40, "EVENT_BEAT_POWER_PLANT_VOLTORB_0"),
+      TEXT_POWERPLANT_VOLTORB2: staticMon("POWER_PLANT", "POWERPLANT_VOLTORB2", "_PowerPlantVoltorbBattleText", "VOLTORB", 40, "EVENT_BEAT_POWER_PLANT_VOLTORB_1"),
+      TEXT_POWERPLANT_VOLTORB3: staticMon("POWER_PLANT", "POWERPLANT_VOLTORB3", "_PowerPlantVoltorbBattleText", "VOLTORB", 40, "EVENT_BEAT_POWER_PLANT_VOLTORB_2"),
+      TEXT_POWERPLANT_ELECTRODE1: staticMon("POWER_PLANT", "POWERPLANT_ELECTRODE1", "_PowerPlantVoltorbBattleText", "ELECTRODE", 43, "EVENT_BEAT_POWER_PLANT_VOLTORB_3"),
+      TEXT_POWERPLANT_VOLTORB4: staticMon("POWER_PLANT", "POWERPLANT_VOLTORB4", "_PowerPlantVoltorbBattleText", "VOLTORB", 40, "EVENT_BEAT_POWER_PLANT_VOLTORB_4"),
+      TEXT_POWERPLANT_VOLTORB5: staticMon("POWER_PLANT", "POWERPLANT_VOLTORB5", "_PowerPlantVoltorbBattleText", "VOLTORB", 40, "EVENT_BEAT_POWER_PLANT_VOLTORB_5"),
+      TEXT_POWERPLANT_ELECTRODE2: staticMon("POWER_PLANT", "POWERPLANT_ELECTRODE2", "_PowerPlantVoltorbBattleText", "ELECTRODE", 43, "EVENT_BEAT_POWER_PLANT_VOLTORB_6"),
+      TEXT_POWERPLANT_VOLTORB6: staticMon("POWER_PLANT", "POWERPLANT_VOLTORB6", "_PowerPlantVoltorbBattleText", "VOLTORB", 40, "EVENT_BEAT_POWER_PLANT_VOLTORB_7"),
+      TEXT_POWERPLANT_ZAPDOS: staticMon("POWER_PLANT", "POWERPLANT_ZAPDOS", "_PowerPlantZapdosBattleText", "ZAPDOS", 50, "EVENT_BEAT_ZAPDOS")
+    }
+  },
+  SEAFOAM_ISLANDS_B4F: {
+    talk: {
+      TEXT_SEAFOAMISLANDSB4F_ARTICUNO: staticMon("SEAFOAM_ISLANDS_B4F", "SEAFOAMISLANDSB4F_ARTICUNO", "_SeafoamIslandsB4FArticunoBattleText", "ARTICUNO", 50, "EVENT_BEAT_ARTICUNO")
+    }
+  },
+  VICTORY_ROAD_2F: {
+    talk: {
+      TEXT_VICTORYROAD2F_MOLTRES: staticMon("VICTORY_ROAD_2F", "VICTORYROAD2F_MOLTRES", "_VictoryRoad2FMoltresBattleText", "MOLTRES", 50, "EVENT_BEAT_MOLTRES")
+    }
+  },
+  CERULEAN_CAVE_B1F: {
+    talk: {
+      TEXT_CERULEANCAVEB1F_MEWTWO: staticMon("CERULEAN_CAVE_B1F", "CERULEANCAVEB1F_MEWTWO", "_MewtwoBattleText", "MEWTWO", 70, "EVENT_BEAT_MEWTWO")
+    }
+  },
+  INDIGO_PLATEAU_LOBBY: {
+    onEnter: (_ow, save) => {
+      const f = save?.flags;
+      if (!f)
+        return;
+      let started = !!f.EVENT_STARTED_ELITE_4;
+      if (!started)
+        started = E4_RESET_FLAGS.some((flag) => f[flag]);
+      if (!started)
+        return;
+      delete f.EVENT_STARTED_ELITE_4;
+      for (const flag of E4_RESET_FLAGS)
+        delete f[flag];
+      for (const key of E4_TRAINER_KEYS)
+        delete save.defeatedTrainers?.[key];
+    }
+  },
+  LORELEIS_ROOM: {
+    onEnter: (_ow, save) => {
+      if (save?.flags)
+        save.flags.EVENT_STARTED_ELITE_4 = true;
+    }
+  },
+  CHAMPIONS_ROOM: {
+    onStep: (ow, save) => {
+      const f = save?.flags ?? {};
+      if (f.EVENT_BEAT_CHAMPION_RIVAL_THIS_RUN)
+        return null;
+      if (ow?.runner?.isRunning?.())
+        return null;
       return [
-        ["show_object", "ROUTE_22", "ROUTE22_RIVAL1"],
-        ["move_npc_to", "ROUTE22_RIVAL1", rx, 5],
-        ["face_object", "ROUTE22_RIVAL1", rivalFacing],
-        ["show_text", "_Route22RivalBeforeBattleText1"],
-        ["rival_battle", "OPP_RIVAL1", 4, { loseable: true }],
-        ["jump_if_false", 11],
-        ["set_flag", "EVENT_BEAT_ROUTE22_RIVAL_1ST_BATTLE"],
-        ["show_text", "_Route22Rival1DefeatedText"],
-        ["show_text", "_Route22RivalAfterBattleText1"],
-        ["walk_npc", "ROUTE22_RIVAL1", exit],
-        ["hide_object", "ROUTE_22", "ROUTE22_RIVAL1"]
+        ["face_object", "CHAMPIONSROOM_RIVAL", "down"],
+        ["show_text", "_ChampionsRoomRivalIntroText"],
+        ["rival_battle", "OPP_RIVAL3", 1],
+        ["jump_if_false", "end"],
+        ["set_flag", "EVENT_BEAT_CHAMPION_RIVAL_THIS_RUN"],
+        ["set_flag", "EVENT_BEAT_CHAMPION_RIVAL"],
+        ["show_text", "_ChampionsRoomRivalAfterBattleText"],
+        ["show_text", "_ChampionsRoomOakText"],
+        ["show_object", "CHAMPIONS_ROOM", "CHAMPIONSROOM_OAK"],
+        ["walk_npc", "CHAMPIONSROOM_OAK", ["up", "up", "up", "up", "up"]],
+        ["face_object", "CHAMPIONSROOM_RIVAL", "left"],
+        ["face_object", "CHAMPIONSROOM_OAK", "down"],
+        ["show_text", "_ChampionsRoomOakCongratulatesPlayerText"],
+        ["face_object", "CHAMPIONSROOM_OAK", "right"],
+        ["show_text", "_ChampionsRoomOakDisappointedWithRivalText"],
+        ["face_object", "CHAMPIONSROOM_OAK", "down"],
+        ["show_text", "_ChampionsRoomOakComeWithMeText"],
+        ["walk_npc", "CHAMPIONSROOM_OAK", ["up", "up"]],
+        ["hide_object", "CHAMPIONS_ROOM", "CHAMPIONSROOM_OAK"],
+        ["set_flag", "EVENT_HALL_OF_FAME_PENDING"],
+        ["move_player", "up", 3],
+        ["warp", "HALL_OF_FAME", 4, 7, "up"]
       ];
+    }
+  },
+  HALL_OF_FAME: {
+    onStep: (ow, save) => {
+      if (!save?.flags?.EVENT_HALL_OF_FAME_PENDING)
+        return null;
+      if (ow?.runner?.isRunning?.())
+        return null;
+      return [
+        ["clear_flag", "EVENT_HALL_OF_FAME_PENDING"],
+        ["move_player", "up", 5],
+        ["face_object", "HALLOFFAME_OAK", "left"],
+        ["show_text", "_HallOfFameOakText"],
+        ["record_hall_of_fame"]
+      ];
+    }
+  },
+  POKEMON_TOWER_2F: {
+    talk: {
+      TEXT_POKEMONTOWER2F_RIVAL: (ow) => towerRivalScript(ow?.player?.cellX ?? 0)
+    },
+    onStep: (ow, save) => {
+      if (save?.flags?.EVENT_BEAT_POKEMON_TOWER_RIVAL)
+        return null;
+      const p = ow?.player;
+      const x = p?.cellX;
+      const y = p?.cellY;
+      if (!(x === 15 && y === 5 || x === 14 && y === 6))
+        return null;
+      if (p)
+        p.facing = x === 15 ? "left" : "up";
+      return towerRivalScript(x);
     }
   },
   VIRIDIAN_MART: {
@@ -5774,6 +6675,7 @@ var MAP_SCRIPTS = {
   },
   ROUTE_11_GATE_2F: {
     talk: {
+      TEXT_ROUTE11GATE2F_YOUNGSTER: tradeRows(1, "EVENT_TRADED_NIDORINO_FOR_NIDORINA"),
       TEXT_ROUTE11GATE2F_OAKS_AIDE: [
         ["face_player"],
         ["oaks_aide", "TEXT_ROUTE11GATE2F_OAKS_AIDE"]
@@ -5789,7 +6691,52 @@ var MAP_SCRIPTS = {
     }
   },
   CINNABAR_ISLAND: {
-    onStep: (ow, save) => lockedDoorStep(ow, [[18, 4]], (save?.inventory?.SECRET_KEY ?? 0) <= 0, "_CinnabarIslandDoorIsLockedText")
+    onStep: (ow, save) => lockedDoorStep(ow, [[18, 4]], (save?.inventory?.SECRET_KEY ?? 0) <= 0, "_CinnabarIslandDoorIsLockedText"),
+    onEnter: (_ow, save) => {
+      if (save?.flags)
+        delete save.flags.EVENT_LAB_STILL_REVIVING_FOSSIL;
+    }
+  },
+  ROUTE_2_TRADE_HOUSE: {
+    talk: { TEXT_ROUTE2TRADEHOUSE_GAMEBOY_KID: tradeRows(2, "EVENT_TRADED_ABRA_FOR_MR_MIME") }
+  },
+  CERULEAN_TRADE_HOUSE: {
+    talk: { TEXT_CERULEANTRADEHOUSE_GAMBLER: tradeRows(7, "EVENT_TRADED_POLIWHIRL_FOR_JYNX") }
+  },
+  VERMILION_TRADE_HOUSE: {
+    talk: { TEXT_VERMILIONTRADEHOUSE_LITTLE_GIRL: tradeRows(5, "EVENT_TRADED_SPEAROW_FOR_FARFETCHD") }
+  },
+  UNDERGROUND_PATH_ROUTE_5: {
+    talk: { TEXT_UNDERGROUNDPATHROUTE5_LITTLE_GIRL: tradeRows(10, "EVENT_TRADED_NIDORAN_M_FOR_NIDORAN_F") }
+  },
+  ROUTE_18_GATE_2F: {
+    talk: { TEXT_ROUTE18GATE2F_YOUNGSTER: tradeRows(6, "EVENT_TRADED_SLOWBRO_FOR_LICKITUNG") }
+  },
+  CINNABAR_LAB_TRADE_ROOM: {
+    talk: {
+      TEXT_CINNABARLABTRADEROOM_GRAMPS: tradeRows(8, "EVENT_TRADED_RAICHU_FOR_ELECTRODE"),
+      TEXT_CINNABARLABTRADEROOM_BEAUTY: tradeRows(9, "EVENT_TRADED_VENONAT_FOR_TANGELA")
+    }
+  },
+  MUSEUM_1F: {
+    talk: {
+      TEXT_MUSEUM1F_SCIENTIST2: (_ow, save) => save?.flags?.EVENT_GOT_OLD_AMBER ? [["face_player"], ["show_text", "_Museum1FScientist2GetTheOldAmberCheckText"]] : [
+        ["face_player"],
+        ["show_text", "_Museum1FScientist2TakeThisToAPokemonLabText"],
+        ["give_item", "OLD_AMBER", 1, "_Museum1FScientist2ReceivedOldAmberText"],
+        ["set_flag", "EVENT_GOT_OLD_AMBER"],
+        ["hide_object", "MUSEUM_1F", "MUSEUM1F_OLD_AMBER"]
+      ],
+      TEXT_MUSEUM1F_OLD_AMBER: [["show_text", "_Museum1FOldAmberText"]],
+      TEXT_MUSEUM1F_GAMBLER: [["face_player"], ["show_text", "_Museum1FGamblerText"]],
+      TEXT_MUSEUM1F_SCIENTIST3: [["face_player"], ["show_text", "_Museum1FScientist3Text"]]
+    }
+  },
+  CINNABAR_LAB_FOSSIL_ROOM: {
+    talk: {
+      TEXT_CINNABARLABFOSSILROOM_SCIENTIST1: fossilScientistRows,
+      TEXT_CINNABARLABFOSSILROOM_SCIENTIST2: tradeRows(4, "EVENT_TRADED_PONYTA_FOR_SEEL")
+    }
   },
   SILPH_CO_11F: {
     onStep: (ow, save) => {
@@ -6200,6 +7147,170 @@ May I help you?`],
   ];
 }
 
+// voxelmon/game/world/fly.ts
+var FLY_MAP_IDS = [
+  "PALLET_TOWN",
+  "VIRIDIAN_CITY",
+  "PEWTER_CITY",
+  "CERULEAN_CITY",
+  "LAVENDER_TOWN",
+  "VERMILION_CITY",
+  "CELADON_CITY",
+  "FUCHSIA_CITY",
+  "CINNABAR_ISLAND",
+  "INDIGO_PLATEAU",
+  "SAFFRON_CITY"
+];
+function isFlyDest(mapId) {
+  return FLY_MAP_IDS.includes(mapId);
+}
+function visit(save, mapId) {
+  if (!isFlyDest(mapId))
+    return false;
+  const seen = save.visited ??= {};
+  if (seen[mapId])
+    return false;
+  seen[mapId] = true;
+  return true;
+}
+function hasVisited(save, mapId) {
+  return save.visited?.[mapId] === true;
+}
+function flyDestinations(field, save, currentMap) {
+  const warps = field?.flyWarps ?? {};
+  const names = field?.townMap?.locations ?? {};
+  const out = [];
+  for (const map of FLY_MAP_IDS) {
+    if (map === currentMap)
+      continue;
+    if (!hasVisited(save, map))
+      continue;
+    const w = warps[map];
+    if (!w)
+      continue;
+    out.push({ map, name: names[map]?.name ?? map.replace(/_/g, " "), x: w.x, y: w.y });
+  }
+  return out;
+}
+var VISIT_EVIDENCE = [
+  { map: "PEWTER_CITY", item: "BOULDERBADGE" },
+  { map: "CERULEAN_CITY", item: "CASCADEBADGE" },
+  { map: "VERMILION_CITY", item: "THUNDERBADGE" },
+  { map: "CELADON_CITY", item: "RAINBOWBADGE" },
+  { map: "FUCHSIA_CITY", item: "SOULBADGE" },
+  { map: "SAFFRON_CITY", item: "MARSHBADGE" },
+  { map: "CINNABAR_ISLAND", item: "VOLCANOBADGE" },
+  { map: "VIRIDIAN_CITY", item: "EARTHBADGE" },
+  { map: "PALLET_TOWN", flags: ["EVENT_GOT_STARTER", "EVENT_GOT_TOWN_MAP"] },
+  { map: "VIRIDIAN_CITY", flags: ["EVENT_GOT_OAKS_PARCEL", "EVENT_OAK_GOT_PARCEL"] },
+  {
+    map: "LAVENDER_TOWN",
+    flags: ["EVENT_GOT_POKE_FLUTE", "EVENT_RESCUED_MR_FUJI", "EVENT_BEAT_GHOST_MAROWAK"]
+  }
+];
+function backfillVisited(save) {
+  const inv = save.inventory ?? {};
+  const flags = save.flags ?? {};
+  const added = [];
+  const mark = (map) => {
+    if (hasVisited(save, map))
+      return;
+    (save.visited ??= {})[map] = true;
+    added.push(map);
+  };
+  for (const e of VISIT_EVIDENCE) {
+    if (e.item && (inv[e.item] ?? 0) > 0)
+      mark(e.map);
+    if (e.flags?.some((f) => flags[f] === true))
+      mark(e.map);
+  }
+  if ((save.hallOfFame?.length ?? 0) > 0 || flags.EVENT_BEAT_CHAMPION_RIVAL === true) {
+    mark("INDIGO_PLATEAU");
+  }
+  return added;
+}
+
+// voxelmon/game/world/freemove.ts
+var FREE_RADIUS = 5.5;
+function freeDir(sx, sy, yaw) {
+  if (sx === 0 && sy === 0)
+    return null;
+  const c = Math.cos(yaw);
+  const s = Math.sin(yaw);
+  const x = sx * c - sy * s;
+  const y = sx * s + sy * c;
+  const len = Math.hypot(x, y);
+  return len === 0 ? null : [x / len, y / len];
+}
+function quantize(x, y) {
+  if (Math.abs(x) > Math.abs(y))
+    return x > 0 ? "right" : "left";
+  return y > 0 ? "down" : "up";
+}
+function bodyClear(px2, py, open) {
+  const cx = px2 + 8;
+  const cy = py + 8;
+  for (const ox of [-FREE_RADIUS, FREE_RADIUS]) {
+    for (const oy of [-FREE_RADIUS, FREE_RADIUS]) {
+      if (!open(Math.floor((cx + ox) / 16), Math.floor((cy + oy) / 16)))
+        return false;
+    }
+  }
+  return true;
+}
+function slide(px2, py, dx, dy, open) {
+  let nx = px2;
+  let ny = py;
+  if (dx !== 0 && bodyClear(px2 + dx, py, open))
+    nx = px2 + dx;
+  if (dy !== 0 && bodyClear(nx, py + dy, open))
+    ny = py + dy;
+  return { px: nx, py: ny, moved: nx !== px2 || ny !== py };
+}
+function cellOf(p) {
+  return Math.round(p / 16);
+}
+
+// voxelmon/game/world/snorlax.ts
+var SNORLAX = [
+  {
+    map: "ROUTE_12",
+    object: "ROUTE12_SNORLAX",
+    beatFlag: "EVENT_BEAT_ROUTE12_SNORLAX",
+    sleepText: "_Route12SnorlaxText",
+    wokeText: "_Route12SnorlaxWokeUpText",
+    leftText: "_Route12SnorlaxCalmedDownText"
+  },
+  {
+    map: "ROUTE_16",
+    object: "ROUTE16_SNORLAX",
+    beatFlag: "EVENT_BEAT_ROUTE16_SNORLAX",
+    sleepText: "_Route16Text7",
+    wokeText: "_Route16SnorlaxWokeUpText",
+    leftText: "_Route16SnorlaxReturnedToMountainsText"
+  }
+];
+var SNORLAX_LEVEL = 30;
+function spotFor(mapId) {
+  return SNORLAX.find((s) => s.map === mapId);
+}
+function adjacentSnorlax(mapId, player, npcs, flags) {
+  const spot = spotFor(mapId);
+  if (!spot)
+    return null;
+  if (flags?.[spot.beatFlag] === true)
+    return null;
+  for (const npc of npcs) {
+    if (npc.def?.name !== spot.object)
+      continue;
+    const dx = Math.abs(npc.cellX - player.cellX);
+    const dy = Math.abs(npc.cellY - player.cellY);
+    if (dx + dy === 1)
+      return { spot, npc };
+  }
+  return null;
+}
+
 // voxelmon/game/world/toggleblocks.ts
 var OPEN_BLOCK = 14;
 var MANSION_BLOCKS = {
@@ -6249,6 +7360,103 @@ function gymGateFlag(i) {
 }
 function gymGuardKey(npc) {
   return `CINNABAR_GYM_obj_${npc}`;
+}
+var LEAGUE_SEALS = {
+  LORELEIS_ROOM: {
+    flag: "EVENT_BEAT_LORELEIS_ROOM_TRAINER_0",
+    blocks: [{ bx: 2, by: 0, solid: 36 }],
+    dontRun: { text: "_LoreleisRoomLoreleiDontRunAwayText", fromY: 10, x: [4, 5] }
+  },
+  BRUNOS_ROOM: {
+    flag: "EVENT_BEAT_BRUNOS_ROOM_TRAINER_0",
+    blocks: [{ bx: 2, by: 0, solid: 36 }],
+    dontRun: { text: "_BrunosRoomBrunoDontRunAwayText", fromY: 10, x: [4, 5] }
+  },
+  AGATHAS_ROOM: {
+    flag: "EVENT_BEAT_AGATHAS_ROOM_TRAINER_0",
+    blocks: [{ bx: 2, by: 0, solid: 59 }],
+    dontRun: { text: "_AgathasRoomAgathaDontRunAwayText", fromY: 10, x: [4, 5] }
+  },
+  LANCES_ROOM: {
+    flag: "EVENT_LANCES_ROOM_LOCK_DOOR",
+    whileSet: true,
+    blocks: [
+      { bx: 2, by: 6, solid: 114 },
+      { bx: 3, by: 6, solid: 115 }
+    ]
+  }
+};
+var LANCE_DOOR_CELLS = [[5, 11], [6, 11]];
+var ROAD_BARRIERS = {
+  VICTORY_ROAD_1F: [
+    {
+      bx: 4,
+      by: 6,
+      closed: 37,
+      open: 29,
+      flag: "EVENT_VICTORY_ROAD_1_BOULDER_ON_SWITCH",
+      switchX: 17,
+      switchY: 13
+    }
+  ],
+  VICTORY_ROAD_2F: [
+    {
+      bx: 3,
+      by: 4,
+      closed: 55,
+      open: 21,
+      flag: "EVENT_VICTORY_ROAD_2_BOULDER_ON_SWITCH1",
+      switchX: 1,
+      switchY: 16
+    },
+    {
+      bx: 11,
+      by: 7,
+      closed: 37,
+      open: 29,
+      flag: "EVENT_VICTORY_ROAD_2_BOULDER_ON_SWITCH2",
+      switchX: 9,
+      switchY: 16
+    }
+  ],
+  VICTORY_ROAD_3F: [
+    {
+      bx: 3,
+      by: 5,
+      closed: 37,
+      open: 29,
+      flag: "EVENT_VICTORY_ROAD_3_BOULDER_ON_SWITCH1",
+      switchX: 3,
+      switchY: 5
+    }
+  ]
+};
+function barriersFor(mapId) {
+  return ROAD_BARRIERS[mapId] ?? [];
+}
+
+// voxelmon/game/world/badgegate.ts
+function gateFor(field, mapId) {
+  return field?.badgeGates?.[mapId];
+}
+function guardAt(field, save, mapId, x, y) {
+  const gate = gateFor(field, mapId);
+  for (const g of gate?.guards ?? []) {
+    if (g.y !== y)
+      continue;
+    if (g.maxX !== undefined && x > g.maxX)
+      continue;
+    if (save.flags?.[g.event] === true)
+      continue;
+    return g;
+  }
+  return null;
+}
+function hasBadge(save, guard) {
+  return (save.inventory?.[guard.badge] ?? 0) > 0;
+}
+function fillBadgeName(text, badge) {
+  return text.replace(/\{RAM:\w+\}/g, badge);
 }
 
 // voxelmon/game/world/nurses.ts
@@ -6549,6 +7757,77 @@ function* start_battle(ctx, ...args) {
     yield;
   }
 }
+function* trade(ctx, ...args) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  const data = w.data;
+  const t = (data.field?.trades ?? [])[args[0] - 1];
+  if (!t)
+    return;
+  const doneFlag = args[1];
+  const set = t.dialogset ?? 1;
+  const subs = {
+    "RAM:wInGameTradeGiveMonName": data.pokemon?.[t.give]?.name ?? t.give,
+    "RAM:wInGameTradeReceiveMonName": data.pokemon?.[t.get]?.name ?? t.get
+  };
+  const say = function* (label3) {
+    w.showText(scriptText(w, label3, subs), () => runner.resume());
+    yield;
+  };
+  if (doneFlag && w.save.flags[doneFlag]) {
+    yield* say(`_AfterTrade${set}Text`);
+    return;
+  }
+  let yes = false;
+  w.showChoice(scriptText(w, `_WannaTrade${set}Text`, subs), (y) => {
+    yes = y;
+    runner.resume();
+  });
+  yield;
+  if (!yes) {
+    yield* say(`_NoTrade${set}Text`);
+    return;
+  }
+  let picked = -1;
+  w.pickPartyMon((i) => {
+    picked = i;
+    runner.resume();
+  }, () => runner.resume());
+  yield;
+  const party = w.save.party;
+  const sent = party[picked];
+  if (!sent) {
+    yield* say(`_NoTrade${set}Text`);
+    return;
+  }
+  if (sent.species !== t.give) {
+    yield* say(`_WrongMon${set}Text`);
+    return;
+  }
+  if (doneFlag)
+    w.save.flags[doneFlag] = true;
+  yield* say("_ConnectCableText");
+  const mon = newMon(data, t.get, sent.level);
+  if (t.nickname)
+    mon.nickname = t.nickname;
+  mon.traded = true;
+  party.splice(picked, 1);
+  party.push(mon);
+  markOwned(w.save, t.get);
+  yield* say("_TradedForText");
+  yield* say(`_Thanks${set}Text`);
+}
+function* static_battle(ctx, ...args) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  if (!w.startWildBattle)
+    return;
+  w.startWildBattle(args[0], args[1], undefined, (result) => {
+    ctx.lastCheck = result !== null && result !== "lose";
+    runner.resume();
+  });
+  yield;
+}
 function* move_player_to(ctx, ...args) {
   const runner = ctx.runner;
   ctx.world.movePlayerTo?.(args[0], args[1], () => runner.resume());
@@ -6619,6 +7898,37 @@ function* use_cut(ctx, ...args) {
   } else {
     w.showText(scriptText(w, "_NothingToCutText"), () => runner.resume());
   }
+  yield;
+}
+function* use_surf(ctx, ...args) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  const monName = args[0] ?? "";
+  if (w.player.surfing === true || !w.canSurfHere?.()) {
+    w.showText(scriptText(w, "_NoSurfingHereText", { "RAM:wNameBuffer": monName }), () => runner.resume());
+    yield;
+    return;
+  }
+  w.showText(scriptText(w, "_SurfingGotOnText", { "RAM:wNameBuffer": monName }), () => {
+    w.startSurfing?.();
+    runner.resume();
+  });
+  yield;
+}
+function* use_fly(ctx, ...args) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  if (!w.openFlyPicker)
+    return;
+  w.openFlyPicker(args[0] ?? "", () => runner.resume());
+  yield;
+}
+function* use_strength(ctx, ...args) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  const monName = args[0] ?? "";
+  w.enableStrength?.();
+  w.showText(scriptText(w, "_UsedStrengthText", { "RAM:wNameBuffer": monName }), () => runner.resume());
   yield;
 }
 function* use_flash(ctx) {
@@ -6714,6 +8024,18 @@ function* safari_walk_in(ctx) {
   if (!w.safariWalkIn?.(() => runner.resume()))
     return;
   yield;
+}
+function* lab_fossil(ctx, ...args) {
+  const save = ctx.world.save;
+  const species = args[0];
+  if (species)
+    save.labFossilMon = species;
+  else
+    delete save.labFossilMon;
+}
+function* check_party_room(ctx) {
+  const party = ctx.world.save.party ?? [];
+  ctx.lastCheck = party.length < 6;
 }
 function* check_item(ctx, ...args) {
   const inv = ctx.world.save.inventory ?? {};
@@ -6835,6 +8157,9 @@ var VERBS = {
   stamp,
   use_cut,
   use_flash,
+  use_surf,
+  use_fly,
+  use_strength,
   give_pokemon,
   hide_object,
   show_object,
@@ -6843,9 +8168,13 @@ var VERBS = {
   place_npc,
   move_player_to,
   start_battle,
+  static_battle,
+  trade,
   open_mart,
   walk_route,
   check_item,
+  lab_fossil,
+  check_party_room,
   check_money,
   take_money,
   check_coins,
@@ -6868,11 +8197,20 @@ var VERBS = {
   engage_trainer,
   set_heal_point,
   old_man_demo,
+  record_hall_of_fame,
   push_screen: noop_object,
   play_sound: noop_audio,
   play_music: noop_audio,
   stop_music: noop_audio
 };
+function* record_hall_of_fame(ctx) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  if (!w.recordHallOfFame)
+    return;
+  w.recordHallOfFame(() => runner.resume());
+  yield;
+}
 function scanLabels(script) {
   const labels = new Map;
   script.forEach((row, i) => {
@@ -7128,6 +8466,7 @@ class Overworld {
   entities = [];
   runner;
   scriptMoves = [];
+  freeYaw;
   engaging = false;
   emote;
   lastOutdoor;
@@ -7175,6 +8514,11 @@ class Overworld {
     this.applyGameCornerPoster(mapId, def);
     this.applyCardKeyDoors(mapId, def);
     this.applyToggleBlocks(mapId, def);
+    this.applyLeagueSeals(mapId, def);
+    if (mapId === "VICTORY_ROAD_2F" && this.save?.flags) {
+      this.save.flags.EVENT_VICTORY_ROAD_1_BOULDER_ON_SWITCH = false;
+    }
+    this.applyRoadBarriers(mapId, def);
     const cut = this.save?.cutTrees?.[mapId];
     if (cut) {
       for (const key of Object.keys(cut)) {
@@ -7189,6 +8533,11 @@ class Overworld {
     this.rollLuckySlot();
     if (!(opts?.seamless && this.npcPool.size > 0)) {
       this.npcPool = new Map;
+    }
+    const sleeper = spotFor(mapId);
+    if (sleeper && this.save?.flags?.[sleeper.beatFlag] === true) {
+      const toggles = this.save.objectToggles ??= {};
+      (toggles[mapId] ??= {})[sleeper.object] = false;
     }
     this.npcs = [];
     for (const obj of def.objects ?? []) {
@@ -7213,6 +8562,9 @@ class Overworld {
     this.entities = [this.player, ...this.npcs];
     this.syncLastMapRewrite();
     this.syncBike();
+    this.syncSurf();
+    visit(this.save, mapId);
+    MAP_SCRIPTS[mapId]?.onEnter?.(this, this.save);
     console.log("NPCS " + this.npcs.map((n) => JSON.stringify(n, (k, v) => typeof v === "object" && v !== null && k !== "" ? undefined : v)).join(" | "));
   }
   objectVisible(obj) {
@@ -7265,7 +8617,12 @@ class Overworld {
       scripted = this.runner.isRunning() || this.scriptMoves.length > 0 || this.emote !== undefined || this.engaging;
     }
     if (!scripted && !this.transitioning) {
-      this.handleInput();
+      if (this.freeMoveActive()) {
+        this.freeWalk();
+      } else {
+        this.snapToCell();
+        this.handleInput();
+      }
     }
     const stepped = this.player.update();
     const entry = this.warpEntryCell;
@@ -7279,6 +8636,68 @@ class Overworld {
         this.shell.startMapMusic(pending);
     }
     if (stepped && !scripted) {
+      this.onStepComplete();
+    }
+  }
+  freeMoveActive() {
+    if (this.freeYaw === undefined)
+      return false;
+    const mv = this.save.options?.movement;
+    return mv !== "grid";
+  }
+  snapToCell() {
+    const p = this.player;
+    if (p.moving)
+      return;
+    p.px = p.cellX * 16;
+    p.py = p.cellY * 16;
+  }
+  freeOpen(cx, cy) {
+    const m = this.map;
+    const p = this.player;
+    if (!m.inBounds(cx, cy))
+      return false;
+    if (!m.isWalkableCell(cx, cy) && !(p.surfing && m.isWaterCell(cx, cy)))
+      return false;
+    if ((cx !== p.cellX || cy !== p.cellY) && occupied(this.entities, cx, cy, p))
+      return false;
+    return true;
+  }
+  freeWalk() {
+    const input = this.shell.input;
+    const p = this.player;
+    if (p.moving)
+      return;
+    if (input.wasPressed("a") || input.wasPressed("start") || input.wasPressed("select")) {
+      this.snapToCell();
+      this.handleInput();
+      return;
+    }
+    const sx = (input.isDown("right") ? 1 : 0) - (input.isDown("left") ? 1 : 0);
+    const sy = (input.isDown("down") ? 1 : 0) - (input.isDown("up") ? 1 : 0);
+    const dir = freeDir(sx, sy, this.freeYaw ?? 0);
+    if (!dir)
+      return;
+    const speed = 16 / p.stepSpeed();
+    const r = slide(p.px, p.py, dir[0] * speed, dir[1] * speed, (x, y) => this.freeOpen(x, y));
+    p.facing = quantize(dir[0], dir[1]);
+    if (!r.moved) {
+      if (Math.abs(p.px - p.cellX * 16) <= 4 && Math.abs(p.py - p.cellY * 16) <= 4) {
+        this.snapToCell();
+        this.handleInput();
+      }
+      return;
+    }
+    p.px = r.px;
+    p.py = r.py;
+    p.bumpFrames = 2;
+    const cx = cellOf(p.px);
+    const cy = cellOf(p.py);
+    if (cx !== p.cellX || cy !== p.cellY) {
+      p.cellX = cx;
+      p.cellY = cy;
+      p.stepFlip = !p.stepFlip;
+      p.landedCount += 1;
       this.onStepComplete();
     }
   }
@@ -7322,6 +8741,8 @@ class Overworld {
         if (this.checkEdgeExit(dir))
           return;
         if (this.checkLedgeHop(dir))
+          return;
+        if (this.checkBoulderPush(dir))
           return;
       }
       {
@@ -7619,8 +9040,83 @@ any coins!`);
   openBikeShop(onDone) {
     this.shell.openBikeShop?.(onDone);
   }
+  canSurfHere() {
+    const p = this.player;
+    if (p.surfing)
+      return false;
+    const [fx, fy] = p.facingCell();
+    if (!this.map.inBounds(fx, fy))
+      return false;
+    if (!this.map.isWaterCell(fx, fy))
+      return false;
+    return canMove(this.map, this.entities, { ...p, surfing: true }, p.facing, this.tilePairs).ok;
+  }
+  startSurfing() {
+    const p = this.player;
+    p.surfing = true;
+    this.save.surfing = true;
+    this.scriptMove(p, p.facing, 1);
+    this.syncSurfSong();
+  }
+  syncSurf() {
+    const p = this.player;
+    const onWater = this.map.isWaterCell(p.cellX, p.cellY);
+    if (p.surfing === onWater)
+      return;
+    p.surfing = onWater;
+    this.save.surfing = onWater;
+    this.syncSurfSong();
+  }
+  syncSurfSong() {
+    const save = this.save;
+    this.shell.audio?.startMap?.(this.map.id, save.onBike === true, this.player.surfing === true);
+  }
+  enableStrength() {
+    this.save.strengthActive = true;
+  }
+  isBoulder(npc) {
+    const def = npc?.def;
+    return String(def?.sprite ?? "").includes("BOULDER");
+  }
+  checkBoulderPush(dir) {
+    if (!this.save.strengthActive)
+      return false;
+    const p = this.player;
+    if (this.scriptMoves.length > 0 || this.runner.isRunning())
+      return false;
+    const [bx, by] = target(p.cellX, p.cellY, dir);
+    const boulder = this.npcs.find((n) => n.cellX === bx && n.cellY === by && this.isBoulder(n));
+    if (!boulder)
+      return false;
+    const [tx, ty] = target(bx, by, dir);
+    if (!this.map.inBounds(tx, ty))
+      return false;
+    if (!this.map.isWalkableCell(tx, ty))
+      return false;
+    if (this.map.isWaterCell(tx, ty))
+      return false;
+    if (occupied(this.entities, tx, ty, boulder))
+      return false;
+    this.shell.audio.playSfx("Push_Boulder");
+    this.scriptMove(boulder, dir, 1, () => this.boulderLanded());
+    this.scriptMove(p, dir, 1);
+    return true;
+  }
+  openFlyPicker(monName, onDone) {
+    this.shell.openFlyPicker?.(monName, onDone);
+  }
+  recordHallOfFame(onDone) {
+    this.shell.recordHallOfFame?.(onDone);
+  }
   openDaycare(onDone) {
     this.shell.openDaycare?.(onDone);
+  }
+  pickPartyMon(onPick, onCancel) {
+    const shell = this.shell;
+    if (shell.pickPartyMon)
+      shell.pickPartyMon(onPick, onCancel);
+    else
+      onCancel();
   }
   healParty() {
     this.shell.healParty();
@@ -7727,7 +9223,15 @@ GAME is over!`;
     if (dc?.mon)
       dc.steps = (dc.steps ?? 0) + 1;
     this.syncLastMapRewrite();
+    this.syncSurf();
     if (this.mansionHoleStep())
+      return;
+    this.lanceLockDoor();
+    if (this.leagueDontRun())
+      return;
+    if (this.badgeGateStep())
+      return;
+    if (this.spinnerStep())
       return;
     if (!this.runner.isRunning()) {
       const label3 = this.map?.id ?? "";
@@ -7949,7 +9453,12 @@ GAME is over!`;
   }
   trainerHeader(npc) {
     const headers = this.shell.data.trainer_headers;
-    return headers?.[this.map.def.label]?.[npc.def.index];
+    const forMap = headers?.[this.map.def.label];
+    if (!forMap)
+      return;
+    if (Array.isArray(forMap))
+      return forMap[npc.def.index - 1];
+    return forMap[npc.def.index];
   }
   trainerDefeated(npc) {
     if (this.save.defeatedTrainers?.[npc.id])
@@ -7963,6 +9472,7 @@ GAME is over!`;
     if (event && this.save.flags)
       this.save.flags[event] = true;
     this.syncGymGates();
+    this.syncLeagueSeal();
   }
   syncGymGates() {
     if (this.map?.id !== "CINNABAR_GYM")
@@ -8102,6 +9612,137 @@ GAME is over!`;
         this.setToggleBlock(def, m.gate, !this.gymGateOpen(i));
       });
     }
+  }
+  applyLeagueSeals(mapId, def) {
+    const seal = LEAGUE_SEALS[mapId];
+    if (!seal)
+      return;
+    const set = this.save?.flags?.[seal.flag] === true;
+    const solid = seal.whileSet ? set : !set;
+    for (const b of seal.blocks) {
+      this.setToggleBlock(def, { ...b, solidWhenOn: false }, solid);
+    }
+  }
+  syncLeagueSeal() {
+    const id = this.map?.id ?? "";
+    if (!LEAGUE_SEALS[id])
+      return;
+    this.applyLeagueSeals(id, this.map.def);
+  }
+  spinnerStep() {
+    const list2 = this.shell.data.field?.spinners?.[this.map.id];
+    if (!list2)
+      return false;
+    const p = this.player;
+    const sp = list2.find((s) => s.x === p.cellX && s.y === p.cellY);
+    if (!sp)
+      return false;
+    p.px = p.cellX * 16;
+    p.py = p.cellY * 16;
+    this.shell.audio?.playSfx?.("Arrow_Tiles");
+    const run = (i) => {
+      const mv = sp.moves[i];
+      if (!mv) {
+        p.spinning = false;
+        this.onStepComplete();
+        return;
+      }
+      p.spinning = true;
+      this.scriptMove(p, mv.dir, mv.count, () => run(i + 1));
+    };
+    run(0);
+    return true;
+  }
+  leagueDontRun() {
+    const seal = LEAGUE_SEALS[this.map?.id ?? ""];
+    const dr = seal?.dontRun;
+    if (!dr || this.runner.isRunning())
+      return false;
+    const p = this.player;
+    if (p.cellY < dr.fromY || p.cellX < dr.x[0] || p.cellX > dr.x[1])
+      return false;
+    const t = this.shell.data.text ?? {};
+    this.shell.showText(t[dr.text] ?? "Don't run away!", () => {
+      this.scriptMove(p, "up", 1);
+    });
+    return true;
+  }
+  badgeGateStep() {
+    if (this.runner.isRunning() || this.scriptMoves.length > 0)
+      return false;
+    const field = this.shell.data.field;
+    const p = this.player;
+    const guard = guardAt(field, this.save, this.map?.id ?? "", p.cellX, p.cellY);
+    if (!guard)
+      return false;
+    const gate = gateFor(field, this.map.id);
+    const t = this.shell.data.text ?? {};
+    const say = (key, fallback) => fillBadgeName(t[key ?? ""] ?? fallback, guard.badge);
+    if (guard.sprite !== undefined)
+      this.faceObject?.(guard.sprite, "down");
+    if (!hasBadge(this.save, guard)) {
+      this.shell.showText(say(gate?.failText, "You can pass here only if you have the {RAM:wNameBuffer}!"), () => {
+        this.scriptMove(p, "down", 1);
+      });
+      return true;
+    }
+    this.save.flags[guard.event] = true;
+    this.shell.showText(say(gate?.passText, "Oh! That is the {RAM:wNameBuffer}!"), () => {
+      this.shell.showText(t._Route23GoRightAheadText ?? "OK then! Please, go right ahead!");
+    });
+    return true;
+  }
+  lanceLockDoor() {
+    if (this.map?.id !== "LANCES_ROOM")
+      return false;
+    const p = this.player;
+    if (!LANCE_DOOR_CELLS.some(([x, y]) => x === p.cellX && y === p.cellY))
+      return false;
+    if (this.save.flags.EVENT_LANCES_ROOM_LOCK_DOOR)
+      return false;
+    this.save.flags.EVENT_LANCES_ROOM_LOCK_DOOR = true;
+    this.shell.playOnce?.("Go_Inside");
+    this.applyLeagueSeals(this.map.id, this.map.def);
+    return false;
+  }
+  applyRoadBarriers(mapId, def) {
+    const list2 = barriersFor(mapId);
+    if (list2.length === 0)
+      return;
+    for (const b of list2) {
+      const open = this.save?.flags?.[b.flag] === true;
+      const i = b.by * def.width + b.bx;
+      if (Array.isArray(def.blocks) && i >= 0 && i < def.blocks.length) {
+        def.blocks[i] = open ? b.open : b.closed;
+      }
+      for (let dy = 0;dy < 2; dy++) {
+        for (let dx = 0;dx < 2; dx++) {
+          const cx = b.bx * 2 + dx;
+          const cy = b.by * 2 + dy;
+          this.stamp(def.index, cx, cy, !this.map.isWalkableCell(cx, cy));
+        }
+      }
+    }
+  }
+  boulderLanded() {
+    const mapId = this.map?.id ?? "";
+    const list2 = barriersFor(mapId);
+    if (list2.length === 0)
+      return;
+    let opened = false;
+    for (const b of list2) {
+      if (this.save.flags?.[b.flag] === true)
+        continue;
+      const on = this.npcs.some((n) => this.isBoulder(n) && n.cellX === b.switchX && n.cellY === b.switchY);
+      if (!on)
+        continue;
+      this.save.flags[b.flag] = true;
+      opened = true;
+    }
+    if (!opened)
+      return;
+    this.shell.playOnce?.("Go_Inside");
+    this.applyRoadBarriers(mapId, this.map.def);
   }
   gymGateOpen(i) {
     const f = this.save?.flags ?? {};
@@ -8451,6 +10092,8 @@ class Scene {
   boxSig = null;
   partySig = null;
   dexSig = null;
+  hofSig = null;
+  creditsSig = null;
   summarySig = null;
   uiRows = [];
   uiPage = -1;
@@ -9069,6 +10712,43 @@ class Scene {
       host.uiClear();
       this.uiOwner = null;
       this.menuSig = this.titleSig = this.namingSig = null;
+      this.hofSig = this.creditsSig = null;
+    }
+    const hof = view.hallOfFameScreen?.();
+    if (hof) {
+      const sig = `H${hof.index},${hof.mon ? hof.mon.name + hof.mon.level : "-"}`;
+      if (sig !== this.hofSig) {
+        this.hofSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        host.uiFill(0, 0, UI_COLS, UI_ROWS, SPACE);
+        this.stamp(host, Math.max(0, Math.floor((UI_COLS - hof.title.length) / 2)), 1, hof.title);
+        if (hof.mon) {
+          this.stamp(host, 3, 12, hof.mon.dexNo);
+          this.stamp(host, 3, 14, hof.mon.name);
+          this.stamp(host, 3, 16, hof.mon.level);
+        }
+      }
+      return;
+    }
+    const cr = view.creditsScreen?.();
+    if (cr) {
+      const sig = cr.theEnd ? "CEND" : `C${cr.index}`;
+      if (sig !== this.creditsSig) {
+        this.creditsSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        host.uiFill(0, 0, UI_COLS, UI_ROWS, SPACE);
+        if (cr.theEnd) {
+          const end = "THE END";
+          this.stamp(host, Math.max(0, Math.floor((UI_COLS - end.length) / 2)), 8, end);
+        } else {
+          cr.lines.forEach((ln, i) => {
+            this.stamp(host, Math.max(0, ln.column), 5 + i * 2, String(ln.text));
+          });
+        }
+      }
+      return;
     }
     const dx = view.pokedexScreen?.();
     if (dx) {
@@ -9174,6 +10854,31 @@ class Scene {
         rows.forEach((e, i) => {
           this.stamp(host, X + 2, Y + 2 + i * 2, e.slice(0, W - 2));
           if (i === mf.index)
+            host.uiTile(X + 1, Y + 2 + i * 2, ARROW_CURSOR);
+        });
+      }
+      return;
+    }
+    const fp = view.flyPicker?.();
+    if (fp) {
+      const sig = `f${fp.index},${fp.top},${fp.total}`;
+      if (sig !== this.menuSig) {
+        this.menuSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const X = 0, Y = 0, W = 16, H = fp.entries.length * 2;
+        host.uiTile(X, Y, BORDER_TL);
+        host.uiFill(X + 1, Y, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y, BORDER_TR);
+        host.uiFill(X, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + W, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + 1, Y + 1, W - 1, H, SPACE);
+        host.uiTile(X, Y + 1 + H, BORDER_BL);
+        host.uiFill(X + 1, Y + 1 + H, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y + 1 + H, BORDER_BR);
+        fp.entries.forEach((e, i) => {
+          this.stamp(host, X + 2, Y + 2 + i * 2, e.slice(0, W - 2));
+          if (i === fp.index)
             host.uiTile(X + 1, Y + 2 + i * 2, ARROW_CURSOR);
         });
       }
@@ -10269,6 +11974,135 @@ class DevMenuState {
   }
 }
 
+// voxelmon/game/ui/hofscreen.ts
+var HOF_MON_FRAMES = 150;
+var CREDITS_SCREEN_FRAMES = 110;
+var CREDITS_END_FRAMES = 180;
+function dexNumber(data, species) {
+  const mons = data?.pokemon;
+  const n = mons?.[species]?.dex;
+  return n ? `No.${String(n).padStart(3, "0")}` : "";
+}
+
+class HallOfFameState {
+  game;
+  entry;
+  onDone;
+  kind = "halloffame";
+  index = 0;
+  timer = 0;
+  constructor(game, entry, onDone) {
+    this.game = game;
+    this.entry = entry;
+    this.onDone = onDone;
+  }
+  update() {
+    this.timer += 1;
+    const p = this.game.input.pressed;
+    const skip = p.a === true || p.b === true || p.start === true;
+    if (!skip && this.timer < HOF_MON_FRAMES)
+      return;
+    this.timer = 0;
+    this.index += 1;
+    if (this.index < this.entry.length)
+      return;
+    const done = this.onDone;
+    this.game.pop();
+    done();
+  }
+  view() {
+    const mon = this.entry[this.index];
+    const name = String(this.game.save?.player?.name ?? "RED");
+    return {
+      index: this.index,
+      total: this.entry.length,
+      title: `${name}'s HALL OF FAME`,
+      mon: mon ? {
+        dexNo: dexNumber(this.game.data, mon.species),
+        name: mon.nickname && mon.nickname.length > 0 ? mon.nickname : mon.species,
+        level: `LEVEL${String(mon.level).padStart(3, " ")}`,
+        picPage: picPageFor(this.game.data, mon.species)
+      } : null
+    };
+  }
+}
+
+class CreditsState {
+  game;
+  screens;
+  onDone;
+  kind = "credits";
+  index = 0;
+  timer = 0;
+  ended = false;
+  constructor(game, screens, onDone) {
+    this.game = game;
+    this.screens = screens;
+    this.onDone = onDone;
+  }
+  get atEnd() {
+    return this.index >= this.screens.length;
+  }
+  update() {
+    this.timer += 1;
+    const p = this.game.input.pressed;
+    const skip = p.a === true || p.b === true || p.start === true;
+    const hold = this.atEnd ? CREDITS_END_FRAMES : CREDITS_SCREEN_FRAMES;
+    if (!skip && this.timer < hold)
+      return;
+    this.timer = 0;
+    if (this.atEnd) {
+      if (this.ended)
+        return;
+      this.ended = true;
+      const done = this.onDone;
+      this.game.pop();
+      done();
+      return;
+    }
+    this.index += 1;
+  }
+  view() {
+    const s = this.screens[this.index];
+    return {
+      index: this.index,
+      total: this.screens.length,
+      lines: s?.lines ?? [],
+      picPage: s?.mon ? picPageFor(this.game.data, s.mon) : -1,
+      theEnd: this.atEnd
+    };
+  }
+}
+
+// voxelmon/game/world/halloffame.ts
+var POST_GAME_HOME = {
+  map: "REDS_HOUSE_2F",
+  x: 3,
+  y: 6,
+  facing: "down"
+};
+var POST_GAME_OUTDOOR = { id: "PALLET_TOWN", x: 5, y: 6 };
+var HALL_OF_FAME_MAX = 50;
+function recordHallOfFame(save) {
+  const entry = (save.party ?? []).map((mon) => {
+    const rec = {
+      species: String(mon.species ?? ""),
+      level: Number(mon.level ?? 0)
+    };
+    if (mon.nickname)
+      rec.nickname = mon.nickname;
+    return rec;
+  });
+  const hall = save.hallOfFame ??= [];
+  hall.push(entry);
+  while (hall.length > HALL_OF_FAME_MAX)
+    hall.shift();
+  return entry;
+}
+function applyPostGameHome(save) {
+  save.lastOutdoor = { ...POST_GAME_OUTDOOR };
+}
+
 // voxelmon/game/ui/optionsmenu.ts
 class OptionsMenuState {
   game;
@@ -10297,6 +12131,11 @@ class OptionsMenuState {
         label: "BATTLE ANIMATION",
         choices: ["ON", "OFF"],
         index: this.opts().animations === false ? 1 : 0
+      },
+      {
+        label: "MOVEMENT",
+        choices: ["FREE", "GRID"],
+        index: this.opts().movement === "grid" ? 1 : 0
       }
     ];
   }
@@ -10310,6 +12149,8 @@ class OptionsMenuState {
       this.opts().textSpeed = TEXT_SPEEDS[at].delay;
     else if (row === 1)
       this.opts().animations = at === 0;
+    else if (row === 2)
+      this.opts().movement = at === 1 ? "grid" : "free";
   }
   update() {
     const p = this.game.input.pressed;
@@ -11488,6 +13329,64 @@ class WarpPickerState {
   }
 }
 
+// voxelmon/game/ui/flypicker.ts
+var ROWS3 = 9;
+
+class FlyPickerState {
+  game;
+  dests;
+  onPick;
+  onCancel;
+  kind = "flypicker";
+  index = 0;
+  top = 0;
+  constructor(game, dests, onPick, onCancel) {
+    this.game = game;
+    this.dests = dests;
+    this.onPick = onPick;
+    this.onCancel = onCancel;
+  }
+  clampScroll() {
+    if (this.index < this.top)
+      this.top = this.index;
+    if (this.index >= this.top + ROWS3)
+      this.top = this.index - ROWS3 + 1;
+    this.top = Math.max(0, Math.min(this.top, Math.max(0, this.dests.length - ROWS3)));
+  }
+  update() {
+    const p = this.game.input.pressed;
+    const n = this.dests.length;
+    if (n === 0) {
+      this.game.pop();
+      this.onCancel?.();
+      return;
+    }
+    if (p.up)
+      this.index = (this.index + n - 1) % n;
+    else if (p.down)
+      this.index = (this.index + 1) % n;
+    this.clampScroll();
+    if (p.b || p.start) {
+      this.game.pop();
+      this.onCancel?.();
+      return;
+    }
+    if (p.a) {
+      const pick = this.dests[this.index];
+      this.game.pop();
+      this.onPick(pick);
+    }
+  }
+  view() {
+    return {
+      entries: this.dests.map((d) => d.name),
+      index: this.index,
+      top: this.top,
+      total: this.dests.length
+    };
+  }
+}
+
 // voxelmon/game/ui/moveforget.ts
 class MoveForgetState {
   game;
@@ -11529,7 +13428,7 @@ class MoveForgetState {
 }
 
 // voxelmon/game/ui/partyscreen.ts
-var FIELD_MOVES = ["CUT", "FLASH"];
+var FIELD_MOVES = ["CUT", "FLY", "SURF", "STRENGTH", "FLASH"];
 
 class PartyState {
   game;
@@ -11621,7 +13520,13 @@ class PartyState {
     const mon = this.party()[this.index];
     const name = mon?.nickname ?? this.game.data.pokemon?.[mon?.species]?.name ?? mon?.species ?? "";
     this.game.closeToOverworld();
-    const verb = moveId === "CUT" ? "use_cut" : "use_flash";
+    const verb = {
+      CUT: "use_cut",
+      FLY: "use_fly",
+      SURF: "use_surf",
+      STRENGTH: "use_strength",
+      FLASH: "use_flash"
+    }[moveId];
     this.game.overworld.runScript([[verb, name]]);
   }
   view() {
@@ -11685,9 +13590,9 @@ class SummaryState {
 }
 
 // voxelmon/game/ui/bagscreen.ts
-var ROWS3 = 4;
+var ROWS4 = 4;
 var USABLE_ON_PARTY = new Set(["RARE_CANDY"]);
-var USABLE_IN_FIELD = new Set(["BICYCLE"]);
+var USABLE_IN_FIELD = new Set(["BICYCLE", "POKE_FLUTE"]);
 
 class BagState {
   game;
@@ -11810,8 +13715,8 @@ tant to toss!`));
       this.index = (this.index + 1) % n;
     if (this.index < this.top)
       this.top = this.index;
-    if (this.index >= this.top + ROWS3)
-      this.top = this.index - ROWS3 + 1;
+    if (this.index >= this.top + ROWS4)
+      this.top = this.index - ROWS4 + 1;
     if (p.b || p.a && this.index === n - 1) {
       this.game.pop();
       return;
@@ -11831,7 +13736,7 @@ tant to toss!`));
       entries: items,
       index: this.index,
       top: this.top,
-      rows: ROWS3,
+      rows: ROWS4,
       mode: this.mode,
       submenuIndex: this.submenuIndex,
       qty: this.qty
@@ -11840,7 +13745,7 @@ tant to toss!`));
 }
 
 // voxelmon/game/ui/shopscreen.ts
-var ROWS4 = 4;
+var ROWS5 = 4;
 var MONEY_CAP = 999999;
 var GREET = "Take your time.";
 var NOT_ENOUGH = `You don't have
@@ -11905,8 +13810,8 @@ class ShopState {
   clampWindow() {
     if (this.listIndex < this.listTop)
       this.listTop = this.listIndex;
-    if (this.listIndex >= this.listTop + ROWS4)
-      this.listTop = this.listIndex - ROWS4 + 1;
+    if (this.listIndex >= this.listTop + ROWS5)
+      this.listTop = this.listIndex - ROWS5 + 1;
   }
   unsellable(id) {
     const def = this.game.data.items?.[id];
@@ -12057,7 +13962,7 @@ That will be
       list: this.list,
       listIndex: this.listIndex,
       listTop: this.listTop,
-      rows: ROWS4,
+      rows: ROWS5,
       selName: this.selName,
       qty: this.qty,
       total: this.unitPrice * this.qty,
@@ -12090,7 +13995,7 @@ function active(save) {
 }
 
 // voxelmon/game/ui/boxscreen.ts
-var ROWS5 = 4;
+var ROWS6 = 4;
 var PARTY_MAX2 = 6;
 var MENU = ["WITHDRAW", "DEPOSIT", "RELEASE", "CHANGE BOX", "SEE YA!"];
 
@@ -12221,8 +14126,8 @@ no POKéMON here!`, "menu");
   clampWindow() {
     if (this.listIndex < this.listTop)
       this.listTop = this.listIndex;
-    if (this.listIndex >= this.listTop + ROWS5)
-      this.listTop = this.listIndex - ROWS5 + 1;
+    if (this.listIndex >= this.listTop + ROWS6)
+      this.listTop = this.listIndex - ROWS6 + 1;
   }
   updateList(p) {
     const n = this.list.length + 1;
@@ -12364,7 +14269,7 @@ Bye ${this.monName(mon)}!`, "release-list");
       list: this.list,
       listIndex: this.listIndex,
       listTop: this.listTop,
-      rows: ROWS5,
+      rows: ROWS6,
       submenuLabel: this.kindOfList === "deposit" ? "DEPOSIT" : "WITHDRAW",
       submenuIndex: this.submenuIndex,
       confirmYes: this.confirmYes,
@@ -12416,7 +14321,7 @@ function tossFromPc(save, id, qty) {
 }
 
 // voxelmon/game/ui/pcscreen.ts
-var ROWS6 = 4;
+var ROWS7 = 4;
 var ROOT = ["SOMEONE'S PC", "MY PC", "LOG OFF"];
 var ITEMS = ["WITHDRAW ITEM", "DEPOSIT ITEM", "TOSS ITEM", "LOG OFF"];
 
@@ -12561,8 +14466,8 @@ PC.`), () => this.game.openBox());
       this.index = (this.index + 1) % n;
     if (this.index < this.top)
       this.top = this.index;
-    if (this.index >= this.top + ROWS6)
-      this.top = this.index - ROWS6 + 1;
+    if (this.index >= this.top + ROWS7)
+      this.top = this.index - ROWS7 + 1;
     if (p.b || p.a && this.index === n - 1) {
       this.mode = "items";
       return;
@@ -12608,7 +14513,7 @@ PC.`), () => this.game.openBox());
       entries: ids.map((id) => ({ name: this.name(id), qty: this.held(id) })),
       index: this.index,
       top: this.top,
-      rows: ROWS6,
+      rows: ROWS7,
       labels: this.mode === "root" ? ROOT : this.mode === "items" ? ITEMS : [],
       qty: this.qty,
       action: this.action.toUpperCase()
@@ -12620,7 +14525,7 @@ PC.`), () => this.game.openBox());
 }
 
 // voxelmon/game/ui/pokedexscreen.ts
-var ROWS7 = 7;
+var ROWS8 = 7;
 class PokedexState {
   game;
   onCancel;
@@ -12707,9 +14612,9 @@ class PokedexState {
     else if (p.down)
       this.index = Math.min(n - 1, this.index + 1);
     else if (p.left)
-      this.index = Math.max(0, this.index - ROWS7);
+      this.index = Math.max(0, this.index - ROWS8);
     else if (p.right)
-      this.index = Math.min(n - 1, this.index + ROWS7);
+      this.index = Math.min(n - 1, this.index + ROWS8);
     this.syncScroll();
     if (p.b) {
       this.close();
@@ -12760,8 +14665,8 @@ class PokedexState {
   syncScroll() {
     if (this.index < this.top)
       this.top = this.index;
-    if (this.index >= this.top + ROWS7)
-      this.top = this.index - ROWS7 + 1;
+    if (this.index >= this.top + ROWS8)
+      this.top = this.index - ROWS8 + 1;
   }
   buildEntry() {
     const id = this.entrySpecies;
@@ -12801,7 +14706,7 @@ class PokedexState {
   view() {
     return {
       mode: this.mode,
-      rows: ROWS7,
+      rows: ROWS8,
       top: this.top,
       index: this.index,
       entries: this.entries,
@@ -13290,6 +15195,7 @@ class VoxelmonGame {
         if (text) {
           try {
             this.save = decodeSave(text);
+            backfillVisited(this.save);
             const pl = this.save.player ?? {};
             const lo = this.save.lastOutdoor ?? {};
             this.overworld.enter(pl.map ?? lo.id ?? "PALLET_TOWN", pl.x ?? lo.x ?? 5, pl.y ?? lo.y ?? 6, pl.facing ?? "down");
@@ -13619,6 +15525,18 @@ ${mname}!`);
       const r = CARD_PIC_RECT;
       return [{ page: v.picPage, x: r.x, y: r.y, w: r.w, h: r.h }];
     }
+    if (top?.kind === "halloffame") {
+      const v = top.view();
+      if (!v.mon || v.mon.picPage < 0)
+        return [];
+      return [{ page: v.mon.picPage, x: 188, y: 40, w: 112, h: 112 }];
+    }
+    if (top?.kind === "credits") {
+      const v = top.view();
+      if (v.picPage < 0)
+        return [];
+      return [{ page: v.picPage, x: 40, y: 68, w: 96, h: 96 }];
+    }
     if (top?.kind === "pokedex") {
       const v = top.view();
       if (v.mode === "entry" && v.entry && v.entry.spritePage >= 0) {
@@ -13673,6 +15591,9 @@ ${itemName}!`), onDone);
   }
   setCamTurns(q) {
     this.overworld.camTurns = q;
+  }
+  setCamYaw(yaw) {
+    this.overworld.freeYaw = yaw;
   }
   lastSaveOk = true;
   runWriteTest() {
@@ -13764,6 +15685,36 @@ afford it!`), comeAgain);
   useKeyItem(itemId) {
     if (itemId === "BICYCLE")
       this.toggleBike();
+    else if (itemId === "POKE_FLUTE")
+      this.playPokeFlute();
+  }
+  playPokeFlute() {
+    const t = this.data.text ?? {};
+    const line = (k, fallback) => t[k] ?? fallback;
+    const found = adjacentSnorlax(this.overworld.map?.id ?? "", this.overworld.player, this.overworld.npcs, this.save.flags);
+    if (!found) {
+      this.showText(line("_PlayedFluteNoEffectText", `Played the POKé
+FLUTE.\fNow, that's a
+catchy tune!`));
+      return;
+    }
+    const { spot } = found;
+    const player = String(this.save.player?.name ?? "RED");
+    this.showText(line("_PlayedFluteHadEffectText", `{PLAYER} played the
+POKé FLUTE.`).replace(/\{PLAYER\}/g, player), () => {
+      this.showText(line(spot.wokeText, "SNORLAX woke up!"), () => {
+        this.save.objectToggles ??= {};
+        const toggles = this.save.objectToggles;
+        (toggles[spot.map] ??= {})[spot.object] = false;
+        this.overworld.setObjectHidden(spot.object, true);
+        this.startWildBattle("SNORLAX", SNORLAX_LEVEL, undefined, (result) => {
+          this.save.flags[spot.beatFlag] = true;
+          if (result === "caught")
+            return;
+          this.showText(line(spot.leftText, "SNORLAX returned to the mountains!"));
+        });
+      });
+    });
   }
   toggleBike() {
     const t = this.data.text ?? {};
@@ -13793,6 +15744,33 @@ allowed here.`));
     this.overworld.syncBike();
     this.startMapMusic(this.overworld.map.id);
     this.showText(pair("_GotOnBicycleText1", "_GotOnBicycleText2"));
+  }
+  recordHallOfFame(onDone) {
+    const entry = recordHallOfFame(this.save);
+    const finish = () => {
+      this.healParty();
+      applyPostGameHome(this.save);
+      this.overworld.lastOutdoor = this.save.lastOutdoor;
+      this.writeSave?.();
+      this.overworld.startWarpTo(POST_GAME_HOME.map, POST_GAME_HOME.x, POST_GAME_HOME.y, POST_GAME_HOME.facing);
+      onDone?.();
+    };
+    const rollCredits = () => {
+      const screens = this.data.field?.credits?.screens ?? [];
+      if (screens.length === 0) {
+        finish();
+        return;
+      }
+      this.push(new CreditsState(this, screens, finish));
+    };
+    if (entry.length === 0) {
+      rollCredits();
+      return;
+    }
+    this.push(new HallOfFameState(this, entry, rollCredits));
+  }
+  pickPartyMon(onPick, onCancel) {
+    this.push(new PartyState(this, { onPick, onCancel }));
   }
   openDaycare(onDone) {
     const t = this.data.text ?? {};
@@ -14107,6 +16085,14 @@ to level ${mon.level}!`, () => {
     const top = this.stack[this.stack.length - 1];
     return top?.kind === "party" ? top.view() : null;
   }
+  hallOfFameScreen() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "halloffame" ? top.view() : null;
+  }
+  creditsScreen() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "credits" ? top.view() : null;
+  }
   pokedexScreen() {
     const top = this.stack[this.stack.length - 1];
     return top?.kind === "pokedex" ? top.view() : null;
@@ -14126,6 +16112,25 @@ to level ${mon.level}!`, () => {
   devMenu() {
     const top = this.stack[this.stack.length - 1];
     return top?.kind === "devmenu" ? top.view() : null;
+  }
+  openFlyPicker(monName, onDone) {
+    const t = this.data.text ?? {};
+    const here = this.overworld.map?.def;
+    if (here && !isOutside(here)) {
+      this.showText(t._CannotFlyHereText ?? "You cannot FLY here.", onDone);
+      return;
+    }
+    const dests = flyDestinations(this.data.field, this.save, this.overworld.map?.id);
+    if (dests.length === 0) {
+      this.showText(t._CannotFlyHereText ?? `You cannot FLY
+here.`, onDone);
+      return;
+    }
+    this.push(new FlyPickerState(this, dests, (dest) => this.overworld.startWarpTo(dest.map, dest.x, dest.y, "down", onDone), onDone));
+  }
+  flyPicker() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "flypicker" ? top.view() : null;
   }
   warpPicker() {
     const top = this.stack[this.stack.length - 1];
@@ -14363,6 +16368,10 @@ globalThis.frame = (buttons) => {
   }
   prevTouch = touching;
   game.setCamTurns(buttons >> 24 & 3);
+  {
+    const e = (buttons >> 24 & 3) << 4 | buttons >>> 28 & 15;
+    game.setCamYaw(((e - 8) % 64 + 64) % 64 * (Math.PI * 2 / 64));
+  }
   const gearNext = (buttons >> 26 & 1) !== 0;
   const gearPrev = (buttons >> 27 & 1) !== 0;
   if (gearNext && !prevGearNext)

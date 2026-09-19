@@ -1377,6 +1377,25 @@ struct MapGeom {
 
 /// Push one chunk's mesh range for `kind` into the flat vertex buffer and
 /// record its span; a no-op when that chunk has no geometry for `kind`.
+/// Is this triangle the INNER side of a border-ring block? Those faces lie
+/// exactly on the real map's edge -- centroid on the clip line, so the
+/// past-the-edge test keeps them -- and face into the map, which is what
+/// stood as a hedge wall across every path at a seam. Faces of the real
+/// map's own edge blocks face outward and are left alone.
+fn ring_inner_face(p: [[f32; 3]; 3], clip_min: [f32; 2], clip_max: [f32; 2]) -> bool {
+    const ON: f32 = 0.01;
+    let mx = (p[0][0] + p[1][0] + p[2][0]) / 3.0;
+    let mz = (p[0][2] + p[1][2] + p[2][2]) / 3.0;
+    let a = [p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]];
+    let b = [p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]];
+    let nx = a[1] * b[2] - a[2] * b[1];
+    let nz = a[0] * b[1] - a[1] * b[0];
+    ((mx - clip_min[0]).abs() < ON && nx > 0.0)
+        || ((mx - clip_max[0]).abs() < ON && nx < 0.0)
+        || ((mz - clip_min[1]).abs() < ON && nz > 0.0)
+        || ((mz - clip_max[1]).abs() < ON && nz < 0.0)
+}
+
 /// Stops (silent, last-resort backstop) if `verts` is already at `budget` —
 /// callers that care about it check `verts.len()` before choosing `kind`.
 fn push_chunk_mesh(
@@ -1421,6 +1440,10 @@ fn push_chunk_mesh(
         if mid_x < clip_min[0] || mid_x > clip_max[0]
             || mid_z < clip_min[1] || mid_z > clip_max[1]
         {
+            continue;
+        }
+        let pos = |v: &pak::PakVert| [v.x as f32, v.y as f32, v.z as f32];
+        if ring_inner_face([pos(&p0), pos(&p1), pos(&p2)], clip_min, clip_max) {
             continue;
         }
         for pv in [p0, p1, p2] {
@@ -1786,6 +1809,10 @@ fn load_neighbor_strip(
                 if mid_x < nb_real_min[0] || mid_x > nb_real_max[0]
                     || mid_z < nb_real_min[1] || mid_z > nb_real_max[1]
                 {
+                    continue;
+                }
+                let tri = [[t0.2, t0.3, t0.4], [t1.2, t1.3, t1.4], [t2.2, t2.3, t2.4]];
+                if ring_inner_face(tri, nb_real_min, nb_real_max) {
                     continue;
                 }
                 for vt in [t0, t1, t2] {

@@ -800,6 +800,178 @@ function talkTo(game: VoxelmonGame, npc: any): void {
   game.overworld.interact();
 }
 
+describe("the OLD AMBER and the fossil lab", () => {
+  /** Run a map text's script to the end, answering its YES/NOs in order. */
+  function runText(game: VoxelmonGame, map: string, text: string, answers: boolean[] = []): void {
+    const ow = game.overworld;
+    if (ow.map.id !== map) ow.setMap(map, 4, 4, "up");
+    ow.showMapText(text);
+    for (let i = 0; i < 900; i++) {
+      const top = game.stackKinds().at(-1);
+      if (top === "choice") {
+        if (!(answers.shift() ?? false)) tap(game, VOX_BTN.down);
+        tap(game, VOX_BTN.a);
+        // the answer is held on screen for a beat before the box closes
+        for (let h = 0; h < 60 && game.stackKinds().at(-1) === "choice"; h++) game.tick(0);
+        continue;
+      }
+      if (top !== "textbox" && !(ow as any).runner.isRunning()) return;
+      dismissText(game);
+      game.tick(0);
+    }
+  }
+
+  test.skipIf(!hasGen)("the museum scientist hands over the OLD AMBER, once", () => {
+    const game = makeMenuGame();
+    runText(game, "MUSEUM_1F", "TEXT_MUSEUM1F_SCIENTIST2");
+    expect(game.save.inventory.OLD_AMBER).toBe(1);
+    expect(game.save.flags.EVENT_GOT_OLD_AMBER).toBe(true);
+    expect(game.save.objectToggles?.MUSEUM_1F?.MUSEUM1F_OLD_AMBER).toBe(false);
+    runText(game, "MUSEUM_1F", "TEXT_MUSEUM1F_SCIENTIST2");
+    expect(game.save.inventory.OLD_AMBER).toBe(1);
+  });
+
+  test.skipIf(!hasGen)("the lab revives it after a walk on the island", () => {
+    const game = makeMenuGame();
+    (game as any).askNickname = (_n: string, done: (n: string | null) => void) => done(null);
+    game.save.inventory.OLD_AMBER = 1;
+    const lab = "CINNABAR_LAB_FOSSIL_ROOM";
+    const doc = "TEXT_CINNABARLABFOSSILROOM_SCIENTIST1";
+    runText(game, lab, doc, [true]);
+    expect(game.save.inventory.OLD_AMBER ?? 0).toBe(0);
+    expect(game.save.flags.EVENT_GAVE_FOSSIL_TO_LAB).toBe(true);
+    // still in the lab: not ready
+    const before = game.save.party.length;
+    runText(game, lab, doc);
+    expect(game.save.party.length).toBe(before);
+    // out onto the island and back
+    game.overworld.setMap("CINNABAR_ISLAND", 6, 4, "down");
+    expect(game.save.flags.EVENT_LAB_STILL_REVIVING_FOSSIL).toBeFalsy();
+    runText(game, lab, doc, [false]); // no nickname
+    expect(game.save.party.length).toBe(before + 1);
+    const mon = game.save.party.at(-1)!;
+    expect(mon.species).toBe("AERODACTYL");
+    expect(mon.level).toBe(30);
+    expect(game.save.flags.EVENT_GAVE_FOSSIL_TO_LAB).toBeFalsy();
+  });
+
+  test.skipIf(!hasGen)("with two fossils, NO to the first offers the next", () => {
+    const game = makeMenuGame();
+    game.save.inventory.HELIX_FOSSIL = 1;
+    game.save.inventory.OLD_AMBER = 1;
+    runText(game, "CINNABAR_LAB_FOSSIL_ROOM", "TEXT_CINNABARLABFOSSILROOM_SCIENTIST1", [false, true]);
+    expect(game.save.inventory.HELIX_FOSSIL).toBe(1);
+    expect(game.save.inventory.OLD_AMBER ?? 0).toBe(0);
+    expect((game.save as any).labFossilMon).toBe("AERODACTYL");
+  });
+});
+
+describe("spinners, trades, legendaries, the League rematch", () => {
+  function drain(game: VoxelmonGame, answers: boolean[] = [], pick?: number): void {
+    const ow = game.overworld;
+    for (let i = 0; i < 900; i++) {
+      const top = game.stackKinds().at(-1);
+      if (top === "choice") {
+        if (!(answers.shift() ?? false)) tap(game, VOX_BTN.down);
+        tap(game, VOX_BTN.a);
+        for (let h = 0; h < 60 && game.stackKinds().at(-1) === "choice"; h++) game.tick(0);
+        continue;
+      }
+      if (top === "party") {
+        for (let k = 0; k < (pick ?? 0); k++) tap(game, VOX_BTN.down);
+        tap(game, VOX_BTN.a);
+        continue;
+      }
+      if (top !== "textbox" && !(ow as any).runner.isRunning() && ow.scriptMoves.length === 0) return;
+      dismissText(game);
+      game.tick(0);
+    }
+  }
+
+  test.skipIf(!hasGen)("a Rocket Hideout arrow slides the player", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    const sp = (romData!.field as any).spinners.ROCKET_HIDEOUT_B2F[0];
+    ow.setMap("ROCKET_HIDEOUT_B2F", sp.x, sp.y, "down");
+    ow.onStepComplete();
+    for (let i = 0; i < 400 && ow.scriptMoves.length > 0; i++) game.tick(0);
+    const mv = sp.moves[0];
+    const dx = mv.dir === "left" ? -mv.count : mv.dir === "right" ? mv.count : 0;
+    const dy = mv.dir === "up" ? -mv.count : mv.dir === "down" ? mv.count : 0;
+    // it moved off the arrow the way the arrow points (a chain may carry on)
+    expect(ow.player.cellX !== sp.x || ow.player.cellY !== sp.y).toBe(true);
+    if (sp.moves.length === 1 && dx) expect(Math.sign(ow.player.cellX - sp.x)).toBe(Math.sign(dx));
+    if (sp.moves.length === 1 && dy) expect(Math.sign(ow.player.cellY - sp.y)).toBe(Math.sign(dy));
+  });
+
+  test.skipIf(!hasGen)("the Route 2 trader swaps ABRA for MR. MIME, once", () => {
+    const game = makeMenuGame();
+    game.save.party.push(newMon(romData!, "ABRA", 9));
+    const at = game.save.party.length - 1;
+    game.overworld.setMap("ROUTE_2_TRADE_HOUSE", 3, 3, "up");
+    game.overworld.showMapText("TEXT_ROUTE2TRADEHOUSE_GAMEBOY_KID");
+    drain(game, [true], at);
+    const got = game.save.party.at(-1)!;
+    expect(got.species).toBe("MR_MIME");
+    expect(got.nickname).toBe("MARCEL");
+    expect(got.level).toBe(9);
+    expect(game.save.party.some((m) => m.species === "ABRA")).toBe(false);
+    expect(game.save.flags.EVENT_TRADED_ABRA_FOR_MR_MIME).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("the wrong mon is refused and nothing moves", () => {
+    const game = makeMenuGame();
+    const before = game.save.party.map((m) => m.species);
+    game.overworld.setMap("ROUTE_2_TRADE_HOUSE", 3, 3, "up");
+    game.overworld.showMapText("TEXT_ROUTE2TRADEHOUSE_GAMEBOY_KID");
+    drain(game, [true], 0);
+    expect(game.save.party.map((m) => m.species)).toEqual(before);
+    expect(game.save.flags.EVENT_TRADED_ABRA_FOR_MR_MIME).toBeFalsy();
+  });
+
+  test.skipIf(!hasGen)("ZAPDOS battles, and is gone for good once it is over", () => {
+    const game = makeMenuGame();
+    let fought: string | null = null;
+    (game as any).startWildBattle = (sp: string, _l: number, _o: unknown, done: (r: string) => void) => {
+      fought = sp;
+      done("run");
+    };
+    game.overworld.setMap("POWER_PLANT", 4, 11, "up");
+    game.overworld.showMapText("TEXT_POWERPLANT_ZAPDOS");
+    drain(game);
+    expect(fought).toBe("ZAPDOS");
+    expect(game.save.flags.EVENT_BEAT_ZAPDOS).toBe(true);
+    expect(game.save.objectToggles?.POWER_PLANT?.POWERPLANT_ZAPDOS).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("a blackout against it leaves the bird there", () => {
+    const game = makeMenuGame();
+    (game as any).startWildBattle = (_s: string, _l: number, _o: unknown, done: (r: string) => void) => done("lose");
+    game.overworld.setMap("SEAFOAM_ISLANDS_B4F", 6, 3, "up");
+    game.overworld.showMapText("TEXT_SEAFOAMISLANDSB4F_ARTICUNO");
+    drain(game);
+    expect(game.save.flags.EVENT_BEAT_ARTICUNO).toBeFalsy();
+  });
+
+  test.skipIf(!hasGen)("the lobby resets the League after a run", () => {
+    const game = makeMenuGame();
+    const f = game.save.flags;
+    f.EVENT_BEAT_LORELEIS_ROOM_TRAINER_0 = true;
+    f.EVENT_BEAT_LANCES_ROOM_TRAINER_0 = true;
+    f.EVENT_LANCES_ROOM_LOCK_DOOR = true;
+    f.EVENT_BEAT_CHAMPION_RIVAL_THIS_RUN = true;
+    f.EVENT_BEAT_CHAMPION_RIVAL = true;
+    (game.save as any).defeatedTrainers = { LORELEIS_ROOM_obj_1: true, ROUTE_3_obj_2: true };
+    game.overworld.setMap("INDIGO_PLATEAU_LOBBY", 7, 10, "up");
+    expect(f.EVENT_BEAT_LORELEIS_ROOM_TRAINER_0).toBeFalsy();
+    expect(f.EVENT_LANCES_ROOM_LOCK_DOOR).toBeFalsy();
+    expect(f.EVENT_BEAT_CHAMPION_RIVAL_THIS_RUN).toBeFalsy();
+    expect(f.EVENT_BEAT_CHAMPION_RIVAL).toBe(true); // the title stays
+    expect((game.save as any).defeatedTrainers.LORELEIS_ROOM_obj_1).toBeUndefined();
+    expect((game.save as any).defeatedTrainers.ROUTE_3_obj_2).toBe(true);
+  });
+});
+
 describe("talking to a trainer", () => {
   test.skipIf(!hasGen)("challenges them: before-battle text, then the fight", () => {
     const game = makeMenuGame();
@@ -5414,8 +5586,9 @@ describe("the Elite Four's doors", () => {
     for (const b of LEAGUE_SEALS.LANCES_ROOM!.blocks) {
       expect(blockAt(game, b.bx, b.by)).toBe(b.solid);
     }
-    // and it stays locked across a re-entry
-    ow.setMap("INDIGO_PLATEAU_LOBBY", 4, 4, "down");
+    // and it stays locked across a re-entry (not via the lobby, which
+    // resets the whole League for a rematch)
+    ow.setMap("AGATHAS_ROOM", 4, 4, "down");
     ow.setMap("LANCES_ROOM", 6, 2, "up");
     for (const b of LEAGUE_SEALS.LANCES_ROOM!.blocks) {
       expect(blockAt(game, b.bx, b.by)).toBe(b.solid);

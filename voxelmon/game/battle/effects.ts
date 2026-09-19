@@ -1,12 +1,10 @@
 // The move-effect execution surface. Ports gen1recomp
-// src/battle/EffectRegistry.lua (makeCtx :37, runDamaging :99) and the
-// subset of src/battle/MoveEffects.lua reachable from the v1 slice's wild
-// movesets (Route 1 / Route 22 / Route 2 species at L2-8 plus a starter's
-// early kit — see EFFECTS below). Every other effect id degrades exactly
-// the way the reference degrades an UNREGISTERED effect: a damaging move
-// falls through to plain damage with a one-shot warning
-// (MoveEffects.warnUnknown, MoveEffects.lua:788-793) and a status move
-// prints "But, it failed!" (BattleState.lua performMove :3535-3540).
+// src/battle/EffectRegistry.lua (makeCtx :37, runDamaging :99) and
+// src/battle/MoveEffects.lua's primary/secondary/full records. An effect id
+// with no record degrades the way the reference degrades an UNREGISTERED
+// effect: a damaging move falls through to plain damage with a one-shot
+// warning (MoveEffects.warnUnknown, MoveEffects.lua:788-793) and a status
+// move prints "But, it failed!" (BattleState.lua performMove :3599-3604).
 
 import type { MoveDef, VoxelmonData } from "../data.ts";
 import { randRange, type Rng } from "../rng.ts";
@@ -14,6 +12,7 @@ import type { DamageInfo, DamageMove, Ruleset } from "../rules/damage.ts";
 import { recordFor } from "../rules/status.ts";
 import type { TypeChart } from "../rules/typechart.ts";
 import { displayName, type WildBattler } from "./battler.ts";
+import { effectiveSpeed } from "../rules/turnorder.ts";
 import { MOVE_STATUS_OR_MISS, CRIT_OHKO_TEXT } from "../rules/timing.ts";
 
 /** Handler message list; `failed` marks a failure whose text is bespoke
@@ -70,6 +69,14 @@ export interface EffectBattle {
     status: string,
     opts: { toxic?: boolean; moveType?: string; secondary?: boolean; source?: string },
   ): string[];
+  animNext(name: string, isPlayer: boolean): void;
+  selfDestruct(user: WildBattler): void;
+  /** Pay Day's scattered coins, picked up if the battle is won. */
+  payDay: number;
+  /** A trainer battle: Teleport and Roar/Whirlwind do nothing there. */
+  readonly trainerBattle: boolean;
+  /** Teleport / Roar / Whirlwind end a wild battle. */
+  escape(): void;
 }
 
 export interface AnimRowRef {
@@ -176,33 +183,55 @@ export function inflictStatus(
 }
 
 // ---------------------------------------------------------------------------
-// The ported handler subset. The census is over the COOKED map set
-// (cook/cli.ts DEFAULT_MAPS): gen/encounters.json puts PIDGEY, RATTATA and
-// WEEDLE at L2-5 in the ROUTE_1 and ROUTE_2 grass, and the player's own line
-// reaches L20-ish by grinding there (evolutions included, since a level
-// evolution now lands — rules/evolution.ts).
-//   GUST/TACKLE/QUICK_ATTACK/HORN_ATTACK/SCRATCH/PECK -> NO_ADDITIONAL_EFFECT
-//   GROWL  -> ATTACK_DOWN1_EFFECT      TAIL_WHIP/LEER -> DEFENSE_DOWN1_EFFECT
-//   SAND_ATTACK -> ACCURACY_DOWN1_EFFECT
-//   STRING_SHOT (WEEDLE L1)  -> SPEED_DOWN1_EFFECT
-//   POISON_STING (WEEDLE L1) -> POISON_SIDE_EFFECT1
-//   HARDEN (KAKUNA/METAPOD L1) -> DEFENSE_UP1_EFFECT
-//   HYPER_FANG (RATTATA L14) -> FLINCH_SIDE_EFFECT1
-//   FURY_ATTACK (SPEAROW L?, BEEDRILL L?) -> TWO_TO_FIVE_ATTACKS_EFFECT
-//   FOCUS_ENERGY (BEEDRILL L16) -> FOCUS_ENERGY_EFFECT
-//   LEECH_SEED (BULBASAUR L7) -> LEECH_SEED_EFFECT
-//   BUBBLE (SQUIRTLE L8) -> SPEED_DOWN_SIDE_EFFECT
-//   EMBER (CHARMANDER L9, one level past the window but one level-up away)
-//          -> BURN_SIDE_EFFECT1
-//   STRUGGLE (the no-PP fallback) -> RECOIL_EFFECT
-// Reachable but still NOT registered, both needing plumbing this slice does
-// not have: TWINEEDLE_EFFECT (BEEDRILL L20 — MoveEffects.lua registers it in
-// both `full` and `secondary`, and the second hit's poison reroute wants the
-// per-hit seam) and SWITCH_AND_TELEPORT_EFFECT (PIDGEY L19 WHIRLWIND —
-// effects.asm:810 ends the wild battle, which is a battle-exit path).
-// Everything else: NOT REGISTERED — degrades via the reference's own
-// unknown-effect fallbacks (see module header).
+// The handlers: every record in MoveEffects.lua except Mimic (see EFFECTS).
 // ---------------------------------------------------------------------------
+
+const FAILED = "But, it failed!";
+
+function statusMove(status: string): EffectRecord["run"] {
+  // MoveEffects.lua:96-114 statusMove — already statused, or poison into a
+  // substitute, fails; otherwise the registry inflict, which may refuse
+  return (ctx) => {
+    if (ctx.target.mon.status) return [FAILED];
+    if (status === "PSN" && ctx.target.substituteHP !== undefined) return [FAILED];
+    const msgs = inflictStatus(ctx.battle, ctx.target, status, {
+      toxic: ctx.move.id === "TOXIC",
+      moveType: ctx.move.type,
+      source: ctx.move.id,
+    });
+    return msgs.length === 0 ? [FAILED] : msgs;
+  };
+}
+
+/** MoveEffects.lua:153-159 confuse — 2-5 turns. */
+function confuse(battle: EffectBattle, target: WildBattler, pierceSub = false): EffectMsgs {
+  if (target.confusedTurns !== undefined || (target.substituteHP !== undefined && !pierceSub)) {
+    return [FAILED];
+  }
+  target.confusedTurns = randRange(battle.rng, 2, 5);
+  return [`${displayName(target)}\nbecame confused!`];
+}
+
+/** MoveEffects.lua:444-458 drainHalf. */
+function drainHalf(text: (target: string) => string): (ctx: EffectCtx) => void {
+  return (ctx) => {
+    const heal = Math.max(1, Math.floor((ctx.rawDamage ?? 0) / 2));
+    ctx.battle.lastDamage = heal;
+    const mon = ctx.user.mon;
+    mon.hp = Math.min(mon.stats.hp, mon.hp + heal);
+    ctx.battle.drainNext(ctx.user);
+    ctx.say(text(displayName(ctx.target)));
+  };
+}
+
+// MoveEffects.lua:413-416 FIXED_DAMAGE
+const FIXED_DAMAGE: Record<string, number | "level" | "half_level_rand"> = {
+  SONICBOOM: 20,
+  DRAGON_RAGE: 40,
+  SEISMIC_TOSS: "level",
+  NIGHT_SHADE: "level",
+  PSYWAVE: "half_level_rand",
+};
 
 function statUp(stat: StageStat, delta: number): EffectRecord["run"] {
   // MoveEffects.lua:74-78 statUp — the USER's stage, and no MIST guard
@@ -251,69 +280,281 @@ function statusSide(status: string, chance: number): EffectRecord["run"] {
   };
 }
 
-export const EFFECTS: Record<string, EffectRecord> = {
-  // MoveEffects.lua:480
-  NO_ADDITIONAL_EFFECT: { kind: "full" },
+// ---------------------------------------------------------------------------
+// MoveEffects.lua:165-358 primary — status-only moves
+// ---------------------------------------------------------------------------
 
-  // MoveEffects.lua:175-179 via statDown; ACC_CHECKED (MoveEffects.lua:403-409)
-  ATTACK_DOWN1_EFFECT: { kind: "primary", accuracyChecked: true, run: statDown("attack", 1) },
-  DEFENSE_DOWN1_EFFECT: { kind: "primary", accuracyChecked: true, run: statDown("defense", 1) },
-  ACCURACY_DOWN1_EFFECT: { kind: "primary", accuracyChecked: true, run: statDown("accuracy", 1) },
-  SPEED_DOWN1_EFFECT: { kind: "primary", accuracyChecked: true, run: statDown("speed", 1) },
+type PrimaryRun = NonNullable<EffectRecord["run"]>;
 
-  // MoveEffects.lua:166-173 via statUp — the user's own stage, so no
-  // accuracy roll (ACC_CHECKED lists only the stat-DOWN moves)
-  DEFENSE_UP1_EFFECT: { kind: "primary", run: statUp("defense", 1) },
+const PRIMARY: Record<string, PrimaryRun> = {
+  ATTACK_UP1_EFFECT: statUp("attack", 1)!,
+  ATTACK_UP2_EFFECT: statUp("attack", 2)!,
+  DEFENSE_UP1_EFFECT: statUp("defense", 1)!,
+  DEFENSE_UP2_EFFECT: statUp("defense", 2)!,
+  SPEED_UP2_EFFECT: statUp("speed", 2)!,
+  SPECIAL_UP1_EFFECT: statUp("special", 1)!,
+  SPECIAL_UP2_EFFECT: statUp("special", 2)!,
+  EVASION_UP1_EFFECT: statUp("evasion", 1)!,
 
-  // MoveEffects.lua:235-239 — a second FOCUS ENERGY fails outright
-  FOCUS_ENERGY_EFFECT: {
-    kind: "primary",
-    run: (ctx) => {
-      if (ctx.user.focusEnergy) return ["But, it failed!"];
-      ctx.user.focusEnergy = true;
-      return [`${displayName(ctx.user)}'s\ngetting pumped!`];
-    },
+  ATTACK_DOWN1_EFFECT: statDown("attack", 1)!,
+  DEFENSE_DOWN1_EFFECT: statDown("defense", 1)!,
+  DEFENSE_DOWN2_EFFECT: statDown("defense", 2)!,
+  SPEED_DOWN1_EFFECT: statDown("speed", 1)!,
+  ACCURACY_DOWN1_EFFECT: statDown("accuracy", 1)!,
+
+  SLEEP_EFFECT: statusMove("SLP")!,
+  POISON_EFFECT: statusMove("PSN")!,
+  PARALYZE_EFFECT: statusMove("PAR")!,
+
+  CONFUSION_EFFECT: (ctx) => confuse(ctx.battle, ctx.target),
+
+  // leech_seed.asm has no substitute check: seeding lands through one
+  LEECH_SEED_EFFECT: (ctx) => {
+    if (ctx.target.leechSeeded) return [FAILED];
+    for (const t of ctx.target.curTypes) {
+      if (t === "GRASS") return [FAILED];
+    }
+    ctx.target.leechSeeded = true;
+    return [`${displayName(ctx.target)}\nwas seeded!`];
   },
 
-  // MoveEffects.lua:189-199 — leech_seed.asm has no substitute check;
-  // fails on an already-seeded or GRASS-type target
-  LEECH_SEED_EFFECT: {
-    kind: "primary",
-    accuracyChecked: true,
-    run: (ctx) => {
-      if (ctx.target.leechSeeded) return ["But, it failed!"];
-      for (const t of ctx.target.curTypes) {
-        if (t === "GRASS") return ["But, it failed!"];
-      }
-      ctx.target.leechSeeded = true;
-      return [`${displayName(ctx.target)}\nwas seeded!`];
-    },
+  HEAL_EFFECT: (ctx) => {
+    const mon = ctx.user.mon;
+    if (ctx.move.id === "REST") {
+      if (mon.hp === mon.stats.hp) return [FAILED];
+      mon.hp = mon.stats.hp;
+      mon.status = "SLP";
+      ctx.user.sleepTurns = 2;
+      ctx.user.toxicCounter = undefined;
+      return [`${displayName(ctx.user)}\nstarted sleeping!`];
+    }
+    if (mon.hp === mon.stats.hp) return [FAILED];
+    mon.hp = Math.min(mon.stats.hp, mon.hp + Math.floor(mon.stats.hp / 2));
+    return [`${displayName(ctx.user)}\nregained health!`];
   },
 
-  // MoveEffects.lua:376 (statDownSide) / :365 (statusSide BRN 26)
-  SPEED_DOWN_SIDE_EFFECT: { kind: "secondary", run: statDownSide("speed") },
-  BURN_SIDE_EFFECT1: { kind: "secondary", run: statusSide("BRN", 26) },
-  // MoveEffects.lua:370 statusSide PSN 52 / :372 flinchSide 26
-  POISON_SIDE_EFFECT1: { kind: "secondary", run: statusSide("PSN", 52) },
-  FLINCH_SIDE_EFFECT1: { kind: "secondary", run: flinchSide(26) },
+  LIGHT_SCREEN_EFFECT: (ctx) => {
+    if (ctx.user.lightScreen) return [FAILED];
+    ctx.user.lightScreen = true;
+    return [`${displayName(ctx.user)}'s\nprotected against\nspecial attacks!`];
+  },
 
-  // MoveEffects.lua:482-486 — hitsFrom(:438) draws rand(0..len-1) over the
-  // 2/2/2/3/3/3/4/5 table when the move carries no multiHit of its own
+  REFLECT_EFFECT: (ctx) => {
+    if (ctx.user.reflect) return [FAILED];
+    ctx.user.reflect = true;
+    return [`${displayName(ctx.user)}\ngained armor!`];
+  },
+
+  MIST_EFFECT: (ctx) => {
+    if (ctx.user.mist) return [FAILED];
+    ctx.user.mist = true;
+    return [`${displayName(ctx.user)}'s\nshrouded in mist!`];
+  },
+
+  FOCUS_ENERGY_EFFECT: (ctx) => {
+    if (ctx.user.focusEnergy) return [FAILED];
+    ctx.user.focusEnergy = true;
+    return [`${displayName(ctx.user)}'s\ngetting pumped!`];
+  },
+
+  HAZE_EFFECT: (ctx) => {
+    for (const b of [ctx.user, ctx.target]) {
+      b.stages = {};
+      b.confusedTurns = undefined;
+      b.leechSeeded = undefined;
+      b.toxicCounter = undefined;
+      b.reflect = undefined;
+      b.lightScreen = undefined;
+      b.mist = undefined;
+      b.focusEnergy = undefined;
+      b.disabledSlot = undefined;
+      b.disabledTurns = undefined;
+      b.xAccuracy = undefined;
+      // haze.asm ResetStats lifts the burn/para penalty until the next
+      // stat recompute
+      b.hazeStatReset = true;
+    }
+    // curing the enemy's sleep or freeze forfeits its move this turn
+    const st = ctx.target.mon.status;
+    if (st === "SLP" || st === "FRZ") ctx.target.skipMove = true;
+    ctx.target.mon.status = null;
+    return ["All STATUS changes\nare eliminated!"];
+  },
+
+  // substitute.asm: both failures print with no animation (msgs.failed)
+  SUBSTITUTE_EFFECT: (ctx) => {
+    const user = ctx.user;
+    if (user.substituteHP !== undefined) {
+      const m: EffectMsgs = [`${displayName(user)}\nhas a SUBSTITUTE!`];
+      m.failed = true;
+      return m;
+    }
+    const cost = Math.floor(user.mon.stats.hp / 4);
+    if (user.mon.hp < cost) {
+      const m: EffectMsgs = ["Too weak to make\na SUBSTITUTE!"];
+      m.failed = true;
+      return m;
+    }
+    user.mon.hp -= cost;
+    user.substituteHP = cost + 1;
+    return ["It created a\nSUBSTITUTE!"];
+  },
+
+  CONVERSION_EFFECT: (ctx) => {
+    if (ctx.target.invulnerable) return [FAILED];
+    ctx.user.curTypes = [...ctx.target.curTypes];
+    return [`Converted type to\n${displayName(ctx.target)}'s!`];
+  },
+
+  TRANSFORM_EFFECT: (ctx) => {
+    const { user, target } = ctx;
+    user.curStats = {
+      ...user.mon.stats,
+      attack: target.curStats.attack,
+      defense: target.curStats.defense,
+      speed: target.curStats.speed,
+      special: target.curStats.special,
+    };
+    user.curTypes = [...target.curTypes];
+    user.stages = { ...target.stages };
+    // a fresh list, so the party mon's own moves are never overwritten
+    user.curMoves = target.curMoves.map((mv) => ({ id: mv.id, pp: 5 }));
+    user.transformedInto = target.mon.species;
+    return [`${displayName(user)}\ntransformed into\n${target.name}!`];
+  },
+
+  DISABLE_EFFECT: (ctx) => {
+    const target = ctx.target;
+    if (target.disabledSlot !== undefined) return [FAILED];
+    const usable: number[] = [];
+    target.curMoves.forEach((mv, i) => {
+      if (mv.pp > 0) usable.push(i + 1);
+    });
+    if (usable.length === 0) return [FAILED];
+    const slot = usable[randRange(ctx.rng, 1, usable.length) - 1]!;
+    target.disabledSlot = slot;
+    target.disabledTurns = randRange(ctx.rng, 1, 8);
+    const id = target.curMoves[slot - 1]!.id;
+    return [`${displayName(target)}'s\n${ctx.data.moves[id]?.name ?? id} was\ndisabled!`];
+  },
+
+  SPLASH_EFFECT: () => ["No effect!"],
+};
+
+// MoveEffects.lua:403-409 ACC_CHECKED — the handlers that call MoveHitTest
+const ACC_CHECKED = new Set([
+  "SLEEP_EFFECT",
+  "POISON_EFFECT",
+  "PARALYZE_EFFECT",
+  "CONFUSION_EFFECT",
+  "LEECH_SEED_EFFECT",
+  "DISABLE_EFFECT",
+  "ATTACK_DOWN1_EFFECT",
+  "DEFENSE_DOWN1_EFFECT",
+  "DEFENSE_DOWN2_EFFECT",
+  "SPEED_DOWN1_EFFECT",
+  "ACCURACY_DOWN1_EFFECT",
+]);
+
+// ---------------------------------------------------------------------------
+// MoveEffects.lua:364-392 secondary — after-damage side effects
+// ---------------------------------------------------------------------------
+
+const SECONDARY: Record<string, PrimaryRun> = {
+  BURN_SIDE_EFFECT1: statusSide("BRN", 26)!,
+  BURN_SIDE_EFFECT2: statusSide("BRN", 77)!,
+  FREEZE_SIDE_EFFECT1: statusSide("FRZ", 26)!,
+  PARALYZE_SIDE_EFFECT1: statusSide("PAR", 26)!,
+  PARALYZE_SIDE_EFFECT2: statusSide("PAR", 77)!,
+  POISON_SIDE_EFFECT1: statusSide("PSN", 52)!,
+  POISON_SIDE_EFFECT2: statusSide("PSN", 103)!,
+  FLINCH_SIDE_EFFECT1: flinchSide(26)!,
+  FLINCH_SIDE_EFFECT2: flinchSide(77)!,
+  ATTACK_DOWN_SIDE_EFFECT: statDownSide("attack")!,
+  DEFENSE_DOWN_SIDE_EFFECT: statDownSide("defense")!,
+  SPEED_DOWN_SIDE_EFFECT: statDownSide("speed")!,
+  SPECIAL_DOWN_SIDE_EFFECT: statDownSide("special")!,
+  // cp 10 percent (25/256), and it pierces a substitute
+  CONFUSION_SIDE_EFFECT: (ctx) => {
+    if (ctx.target.confusedTurns !== undefined) return [];
+    if (ctx.battle.rng.byte() >= 25) return [];
+    return confuse(ctx.battle, ctx.target, true);
+  },
+  // the second hit reroutes to PoisonEffect, 52/256
+  TWINEEDLE_EFFECT: (ctx) => {
+    if (ctx.battle.rng.byte() >= 52) return [];
+    return inflictStatus(ctx.battle, ctx.target, "PSN", {
+      secondary: true,
+      source: "TWINEEDLE",
+    }) as EffectMsgs;
+  },
+};
+
+// ---------------------------------------------------------------------------
+// MoveEffects.lua:479-731 full — the damaging pipeline's stage callbacks
+// ---------------------------------------------------------------------------
+
+type FullSpec = Omit<EffectRecord, "kind">;
+
+function hitsFrom(dist: number | number[], ctx: EffectCtx): number {
+  if (typeof dist === "number") return dist;
+  return dist[randRange(ctx.rng, 0, dist.length - 1)]!;
+}
+
+const plainInfo = (): DamageInfo => ({ crit: false, typeMult: 10 });
+
+const FULL: Record<string, FullSpec> = {
+  NO_ADDITIONAL_EFFECT: {},
+
   TWO_TO_FIVE_ATTACKS_EFFECT: {
-    kind: "full",
-    hitCount: (ctx) => {
-      const dist = (ctx.move as MoveDef & { multiHit?: number | number[] }).multiHit ?? [
-        2, 2, 2, 3, 3, 3, 4, 5,
-      ];
-      if (typeof dist === "number") return dist;
-      return dist[randRange(ctx.rng, 0, dist.length - 1)]!;
-    },
+    hitCount: (ctx) =>
+      hitsFrom(
+        (ctx.move as MoveDef & { multiHit?: number | number[] }).multiHit ?? [
+          2, 2, 2, 3, 3, 3, 4, 5,
+        ],
+        ctx,
+      ),
+  },
+  ATTACK_TWICE_EFFECT: {
+    hitCount: (ctx) =>
+      hitsFrom((ctx.move as MoveDef & { multiHit?: number | number[] }).multiHit ?? 2, ctx),
+  },
+  TWINEEDLE_EFFECT: {
+    hitCount: (ctx) =>
+      hitsFrom((ctx.move as MoveDef & { multiHit?: number | number[] }).multiHit ?? 2, ctx),
   },
 
-  // MoveEffects.lua:530-539 RECOIL_EFFECT — recoil.asm reads the RAW
-  // computed wDamage, div 2 for Struggle, div 4 otherwise
+  // SetDamageEffects skip the type chart entirely (#616)
+  SPECIAL_DAMAGE_EFFECT: {
+    chooseDamage: (ctx) => {
+      const spec = FIXED_DAMAGE[ctx.move.id];
+      let dmg: number | undefined;
+      if (spec === "level") dmg = ctx.user.mon.level;
+      else if (spec === "half_level_rand") {
+        const max = Math.max(1, Math.floor((ctx.user.mon.level * 3) / 2) - 1);
+        dmg = randRange(ctx.rng, 1, max);
+      } else dmg = spec;
+      if (!dmg) return [null, FAILED];
+      return [dmg, plainInfo()];
+    },
+  },
+  SUPER_FANG_EFFECT: {
+    chooseDamage: (ctx) => [Math.max(1, Math.floor(ctx.target.mon.hp / 2)), plainInfo()],
+  },
+  OHKO_EFFECT: {
+    // fails against a faster foe and an immune type
+    gate: (ctx) => {
+      if (ctx.battle.chart.effectiveness(ctx.move.type, ctx.target.curTypes) === 0) {
+        return [false, `It doesn't affect\n${displayName(ctx.target)}!`];
+      }
+      if (effectiveSpeed(ctx.user) < effectiveSpeed(ctx.target)) return [false, FAILED];
+      return [true];
+    },
+    chooseDamage: () => [65535, { crit: false, typeMult: 10, ohko: true }],
+  },
+
+  // recoil.asm reads the RAW computed wDamage, div 2 for Struggle
   RECOIL_EFFECT: {
-    kind: "full",
     afterDamage: (ctx) => {
       const recoil = Math.max(
         1,
@@ -323,14 +564,177 @@ export const EFFECTS: Record<string, EffectRecord> = {
       ctx.battle.applyDamage(ctx.user, recoil);
     },
   },
+  DRAIN_HP_EFFECT: {
+    afterDamage: drainHalf((t) => `Sucked health from\n${t}!`),
+  },
+  DREAM_EATER_EFFECT: {
+    gate: (ctx) => (ctx.target.mon.status !== "SLP" ? [false, FAILED] : [true]),
+    afterDamage: drainHalf((t) => `${t}'s\ndream was eaten!`),
+  },
+
+  // first turn charges; Fly AND Dig go semi-invulnerable
+  CHARGE_EFFECT: { charge: { anim: "XSTATITEM_ANIM", enemyAnim: "XSTATITEM_DUPLICATE_ANIM" } },
+  FLY_EFFECT: { charge: { invulnerable: true, anim: "TELEPORT" } },
+
+  TRAPPING_EFFECT: {
+    // TrappingEffect runs BEFORE the hit test and clears the target's
+    // Hyper Beam recharge even if the move then misses
+    beforeAccuracy: (ctx) => {
+      if (ctx.user.trappingTurns === undefined) ctx.target.mustRecharge = undefined;
+    },
+    afterDamage: (ctx) => {
+      const user = ctx.user;
+      if (user.trappingTurns === undefined) {
+        // 1-4 CONTINUATION attacks follow (weights 3/8 3/8 1/8 1/8)
+        const r = randRange(ctx.rng, 0, 7);
+        user.trappingTurns = [1, 1, 1, 2, 2, 2, 3, 4][r]!;
+        user.trapDamage = ctx.rawDamage;
+        user.trapMove = ctx.move.id;
+      }
+    },
+  },
+  THRASH_PETAL_DANCE_EFFECT: {
+    afterDamage: (ctx) => {
+      const user = ctx.user;
+      if (user.thrashTurns === undefined) {
+        user.thrashTurns = randRange(ctx.rng, 2, 3);
+        user.thrashMove = ctx.moveInst;
+        user.thrashAnnounced = true;
+      } else {
+        user.thrashTurns -= 1;
+        if (user.thrashTurns <= 0) {
+          user.thrashTurns = undefined;
+          user.thrashMove = undefined;
+          user.thrashAnnounced = undefined;
+          if (user.confusedTurns === undefined) {
+            user.confusedTurns = randRange(ctx.rng, 2, 5);
+            ctx.say(`${displayName(user)}\nbecame confused!`);
+          }
+        }
+      }
+    },
+  },
+  JUMP_KICK_EFFECT: {
+    onMiss: (ctx, reason) => {
+      if (reason !== "accuracy") return;
+      ctx.say(`${displayName(ctx.user)}\nkept going and\ncrashed!`);
+      ctx.damage(ctx.user, 1);
+    },
+  },
+  EXPLODE_EFFECT: {
+    explode: true,
+    onMiss: (ctx) => ctx.battle.selfDestruct(ctx.user),
+    afterDamage: (ctx) => ctx.battle.selfDestruct(ctx.user),
+  },
+  HYPER_BEAM_EFFECT: {
+    // Gen 1: no recharge when the target faints or its substitute breaks
+    afterDamage: (ctx) => {
+      const skipOnKO =
+        (ctx.battle.ruleset as { hyperBeamSkipRechargeOnKO?: boolean })
+          .hyperBeamSkipRechargeOnKO !== false;
+      const targetDown = ctx.target.mon.hp <= 0 || ctx.brokeSub;
+      if (!skipOnKO || !targetDown) ctx.user.mustRecharge = true;
+    },
+  },
+  PAY_DAY_EFFECT: {
+    afterDamage: (ctx) => {
+      ctx.battle.payDay += 2 * ctx.user.mon.level;
+      ctx.say("Coins scattered\neverywhere!");
+    },
+  },
+  SWIFT_EFFECT: { neverMiss: true },
+  RAGE_EFFECT: {
+    afterDamage: (ctx) => {
+      ctx.user.rageMove = ctx.moveInst;
+    },
+  },
+
+  // the storing turn plays XSTATITEM_ANIM, never BIDE's own (#375)
+  BIDE_EFFECT: {
+    perform: (ctx) => {
+      const user = ctx.user;
+      user.bideTurns = randRange(ctx.rng, 2, 3);
+      user.bideDamage = 0;
+      ctx.battle.cancelMoveAnim();
+      ctx.battle.animNext(
+        user.isPlayer ? "XSTATITEM_ANIM" : "XSTATITEM_DUPLICATE_ANIM",
+        user.isPlayer,
+      );
+      ctx.say(`${displayName(user)}\nis storing energy!`);
+    },
+  },
+  SWITCH_AND_TELEPORT_EFFECT: {
+    perform: (ctx) => {
+      const { battle, user, target, move } = ctx;
+      if (!battle.trainerBattle) {
+        const uLvl = user.mon.level;
+        const tLvl = target.mon.level;
+        let ok = uLvl >= tLvl;
+        if (!ok) ok = randRange(ctx.rng, 0, uLvl + tLvl) >= Math.floor(tLvl / 4);
+        if (ok) {
+          if (move.id === "ROAR") ctx.say(`${displayName(target)}\nran away scared!`);
+          else if (move.id === "WHIRLWIND") ctx.say(`${displayName(target)}\nwas blown away!`);
+          else ctx.say(`${displayName(user)}\nran from battle!`);
+          battle.escape();
+        } else if (move.id === "TELEPORT") {
+          battle.cancelMoveAnim();
+          ctx.say(FAILED);
+        } else {
+          battle.cancelMoveAnim();
+          ctx.say(`It didn't affect\n${displayName(target)}!`);
+        }
+      } else if (move.id === "TELEPORT") {
+        battle.cancelMoveAnim();
+        ctx.say(FAILED);
+      } else {
+        battle.cancelMoveAnim();
+        ctx.say(`${displayName(target)}\nis unaffected!`);
+      }
+    },
+  },
+  METRONOME_EFFECT: {
+    callsMove: (ctx) => {
+      const order =
+        (ctx.data.constants as { moveOrder?: string[] } | undefined)?.moveOrder ??
+        Object.keys(ctx.data.moves);
+      for (let tries = 0; tries < 1000; tries++) {
+        const pick = order[randRange(ctx.rng, 1, order.length) - 1]!;
+        if (pick !== "METRONOME" && pick !== "STRUGGLE" && ctx.data.moves[pick]) return pick;
+      }
+      return null;
+    },
+  },
+  MIRROR_MOVE_EFFECT: {
+    callsMove: (ctx) => {
+      const last = ctx.target.lastMove;
+      if (!last) {
+        ctx.say("The MIRROR MOVE\nfailed!");
+        return null;
+      }
+      return last;
+    },
+  },
 };
 
-// The rest of MoveEffects.lua (primary :165-358, secondary :364-392,
-// full :479-731 — sleep/poison/confusion/multi-hit/charge/trapping/thrash/
-// bide/OHKO/drain/explode/hyper-beam/pay-day/swift/rage/teleport/metronome/
-// mirror-move/mimic/transform/substitute/haze/screens/rest/...) is
-// UNPORTED in v1: none of it is reachable from the slice's movesets, and an
-// unregistered id takes the reference's own unknown-effect path.
+// MoveEffects.lua:760-776 — the registry view: one record per effect
+export const EFFECTS: Record<string, EffectRecord> = {};
+for (const [id, run] of Object.entries(PRIMARY)) {
+  EFFECTS[id] = { kind: "primary", run, accuracyChecked: ACC_CHECKED.has(id) || undefined };
+}
+for (const [id, run] of Object.entries(SECONDARY)) {
+  EFFECTS[id] = { kind: "secondary", run };
+}
+for (const [id, spec] of Object.entries(FULL)) {
+  const record: EffectRecord = { kind: "full", ...spec };
+  // TWINEEDLE: a full record whose secondary run is honoured post-damage
+  const secondary = SECONDARY[id];
+  if (secondary) record.run = secondary;
+  EFFECTS[id] = record;
+}
+
+// MIMIC_EFFECT is the one reference effect not registered: its copy menu
+// pauses the message queue mid-move, which this port's queue has no row
+// for yet. It takes the unknown-status fallback ("But, it failed!").
 
 const warned = new Set<string>();
 

@@ -144,6 +144,36 @@ export type BattlePhase = "messages" | "menu" | "moveSelect" | "party" | "item" 
 // before he opens his bag and throws.
 const DEMO_MENU_HOLD = 130;
 
+/** A turn's action: a move, or one of the locked specials. */
+export type BattleAction = MoveSlot & {
+  struggle?: boolean;
+  special?: "recharge" | "bound" | "trapping" | "bide";
+};
+
+/** :380-387 CHARGE_TEXT — ChargeEffect's per-move lines. */
+const CHARGE_TEXT: Record<string, string> = {
+  FLY: "%s\nflew up high!",
+  DIG: "%s\ndug a hole!",
+  RAZOR_WIND: "%s\nmade a whirlwind!",
+  SOLARBEAM: "%s\ntook in sunlight!",
+  SKULL_BASH: "%s\nlowered its head!",
+  SKY_ATTACK: "%s\nis glowing!",
+};
+
+/** :2925-2931 SLOW_SHAKE_EFFECTS — status effects whose landing plays the
+ * slow target shake. */
+const SLOW_SHAKE_EFFECTS = new Set([
+  "SLEEP_EFFECT",
+  "POISON_EFFECT",
+  "CONFUSION_EFFECT",
+  "DISABLE_EFFECT",
+  "ATTACK_DOWN1_EFFECT",
+  "DEFENSE_DOWN1_EFFECT",
+  "DEFENSE_DOWN2_EFFECT",
+  "SPEED_DOWN1_EFFECT",
+  "ACCURACY_DOWN1_EFFECT",
+]);
+
 export class WildBattle implements EffectBattle {
   readonly kind = "wild";
   readonly data: VoxelmonData;
@@ -863,8 +893,13 @@ export class WildBattle implements EffectBattle {
         return;
       }
       this.clearTurnFlinches();
-      // recharge/Rage/thrash/charge would skip DisplayBattleMenu
-      // (:1867-1873); none is reachable from the v1 effect set
+      // only recharge/Rage/thrash/charge skip DisplayBattleMenu; trapping
+      // victims (and wrappers) still get FIGHT/PKMN/ITEM/RUN (core.asm:312)
+      const locked = this.menuLockedAction(this.player);
+      if (locked) {
+        this.resolveTurn(locked);
+        return;
+      }
       const col0 = (this.menuIndex - 1) % 2;
       const row0 = Math.floor((this.menuIndex - 1) / 2);
       let col = col0;
@@ -877,8 +912,13 @@ export class WildBattle implements EffectBattle {
       if (input.wasPressed("a")) {
         const choice = (["fight", "pkmn", "item", "run"] as const)[this.menuIndex - 1];
         if (choice === "fight") {
-          // own trapping/Bide or foe Wrap would lock here (:1899-1906);
-          // unreachable in v1
+          // own trapping/Bide or foe Wrap skips the move list and forces
+          // the locked action (core.asm:320-329)
+          const fightLock = this.fightLockedAction(this.player);
+          if (fightLock) {
+            this.resolveTurn(fightLock);
+            return;
+          }
           if (!this.playerHasPP()) {
             // _NoMovesLeftText then Struggle (:1907-1911)
             this.say(`${this.player.name} has no\nmoves left!`);
@@ -954,11 +994,39 @@ export class WildBattle implements EffectBattle {
     }
   }
 
-  /** :1689-1693 clearTurnFlinches. */
+  /** :1734-1738 clearTurnFlinches — skipped for a mon that must recharge
+   * or is locked into Rage (the Hyper Beam flinch glitch). */
   private clearTurnFlinches(): void {
     for (const b of [this.player, this.enemy]) {
-      if (b && !b.mustRecharge) b.flinched = false;
+      if (b && !(b.mustRecharge || b.rageMove)) b.flinched = false;
     }
+  }
+
+  /** :1744-1750 menuLockedAction — recharge, charge, thrash, Rage skip the
+   * menu entirely. */
+  menuLockedAction(b: WildBattler): BattleAction | null {
+    if (b.mustRecharge) return { id: "", pp: 0, special: "recharge" };
+    if (b.charging) return b.charging;
+    if (b.thrashTurns !== undefined && b.thrashTurns > 0 && b.thrashMove) return b.thrashMove;
+    if (b.rageMove) return b.rageMove;
+    return null;
+  }
+
+  /** :1754-1774 fightLockedAction — own trapping/Bide continue; a foe's
+   * trap holds this one in place. */
+  fightLockedAction(b: WildBattler): BattleAction | null {
+    if (b.trappingTurns !== undefined && b.trappingTurns > 0) {
+      return { id: "", pp: 0, special: "trapping" };
+    }
+    if (b.bideTurns !== undefined) return { id: "", pp: 0, special: "bide" };
+    const opp = b.isPlayer ? this.enemy : this.player;
+    if (opp && opp.trappingTurns !== undefined) return { id: "", pp: 0, special: "bound" };
+    return null;
+  }
+
+  /** :1777-1779 lockedAction. */
+  lockedAction(b: WildBattler): BattleAction | null {
+    return this.menuLockedAction(b) ?? this.fightLockedAction(b);
   }
 
   /** :1736-1741 playerHasPP. */
@@ -991,7 +1059,9 @@ export class WildBattle implements EffectBattle {
    * SelectEnemyMove never consults enemy PP — and Struggles only when every
    * slot is missing or disabled.
    */
-  enemyAction(): MoveSlot & { struggle?: boolean } {
+  enemyAction(): BattleAction {
+    const locked = this.lockedAction(this.enemy);
+    if (locked) return locked;
     const usable: MoveSlot[] = [];
     this.enemy.curMoves.forEach((mv, i) => {
       if (this.enemy.disabledSlot !== i + 1 && (this.ruleset.enemyUnlimitedPP || mv.pp > 0)) {
@@ -1003,13 +1073,13 @@ export class WildBattle implements EffectBattle {
   }
 
   /** :2296-2331 resolveTurn. */
-  resolveTurn(playerAction: MoveSlot & { struggle?: boolean }): void {
+  resolveTurn(playerAction: BattleAction): void {
     const enemyAction = this.enemyAction();
     this.turnCount += 1;
     const pMove = this.data.moves[playerAction.id] ?? null;
     const eMove = this.data.moves[enemyAction.id] ?? null;
     const pFirst = firstMover(this.player, pMove, this.enemy, eMove, this.rng);
-    const order: [WildBattler, WildBattler, MoveSlot][] = pFirst
+    const order: [WildBattler, WildBattler, BattleAction][] = pFirst
       ? [
           [this.player, this.enemy, playerAction],
           [this.enemy, this.player, enemyAction],
@@ -1102,7 +1172,7 @@ export class WildBattle implements EffectBattle {
   executeAction(
     user: WildBattler,
     target: WildBattler,
-    action: (MoveSlot & { struggle?: boolean }) | null,
+    action: BattleAction | null,
   ): void {
     if (this.result) return;
     if (user.mon.hp <= 0 || target.mon.hp <= 0) return;
@@ -1128,7 +1198,23 @@ export class WildBattle implements EffectBattle {
     user.boundTurns =
       target.trappingTurns !== undefined ? Math.max(1, target.trappingTurns) : undefined;
 
-    if (!this.statusInterrupt(user, target)) {
+    // The locked specials still run the status gauntlet first
+    // (CheckPlayerStatusConditions, core.asm:3328-3583).
+    if (action.special === "recharge") {
+      // only reaching .HyperBeamCheck consumes the flag (core.asm:3384-
+      // 3392): sleep/freeze/held/flinch keep the mon recharging
+      if (!this.preRechargeChecks(user, target)) {
+        user.mustRecharge = undefined;
+        this.sayNext(`${displayName(user)}\nmust recharge!`);
+      }
+    } else if (action.special === "bound") {
+      // the trap ended earlier this turn: the selection is simply lost
+      if (target.trappingTurns !== undefined) this.statusInterrupt(user, target);
+    } else if (action.special === "trapping") {
+      if (!this.statusInterrupt(user, target)) this.continueTrapping(user, target);
+    } else if (action.special === "bide") {
+      if (!this.statusInterrupt(user, target)) this.continueBide(user, target);
+    } else if (!this.statusInterrupt(user, target)) {
       this.performMove(user, target, action, false);
     }
     this.actNext(() => this.syncShownStatus());
@@ -1170,6 +1256,13 @@ export class WildBattle implements EffectBattle {
 
   /** :3362-3371 clearVolatiles. */
   private clearVolatiles(user: WildBattler, selfHit: boolean): void {
+    user.bideTurns = undefined;
+    user.bideDamage = undefined;
+    user.thrashTurns = undefined;
+    user.thrashMove = undefined;
+    user.thrashAnnounced = undefined;
+    user.charging = undefined;
+    user.chargeReady = undefined;
     user.trappingTurns = undefined;
     if (selfHit) {
       user.invulnerable = undefined;
@@ -1204,19 +1297,33 @@ export class WildBattle implements EffectBattle {
     }
     const record = effectRecord(move.effect);
 
-    // PP: not for struggle, called moves, or (gen1_faithful) enemies —
-    // DecrementPP only ever mutates the player side (:3411-3429)
+    // a charge move's second turn (:3469-3473)
+    const releasing = user.charging === moveInst && user.chargeReady;
+    if (releasing) {
+      user.charging = undefined;
+      user.chargeReady = undefined;
+      user.invulnerable = undefined;
+    }
+
+    // PP: not for continuations, struggle, called moves, or (gen1_faithful)
+    // enemies — DecrementPP only ever mutates the player side (:3475-3493)
+    const isContinuation =
+      releasing ||
+      (user.thrashTurns !== undefined && user.thrashTurns > 0 && moveInst === user.thrashMove) ||
+      moveInst === user.rageMove;
     const enemyUnlimited = !user.isPlayer && this.ruleset.enemyUnlimitedPP;
-    if (!moveInst.struggle && !isCalled && !enemyUnlimited) {
+    if (!isContinuation && !moveInst.struggle && !isCalled && !enemyUnlimited) {
       moveInst.pp = Math.max(0, moveInst.pp - 1);
     }
 
     this.moveAnimRow = null;
-    this.sayNextAuto(`${displayName(user)}\nused ${move.name}!`);
-    if (!(record && record.announceAnim === false)) {
-      const row: QueueRow = { anim: move.id, attackerIsPlayer: user.isPlayer };
-      this.insertNext(row);
-      this.moveAnimRow = row;
+    if (!(user.thrashTurns !== undefined && moveInst === user.thrashMove && user.thrashAnnounced)) {
+      this.sayNextAuto(`${displayName(user)}\nused ${move.name}!`);
+      if (!(record && record.announceAnim === false)) {
+        const row: QueueRow = { anim: move.id, attackerIsPlayer: user.isPlayer };
+        this.insertNext(row);
+        this.moveAnimRow = row;
+      }
     }
 
     const ctx = makeCtx(this, user, target, move, moveInst, isCalled);
@@ -1229,10 +1336,19 @@ export class WildBattle implements EffectBattle {
     }
     user.lastMove = move.id;
 
-    // charge moves (:3470-3498) — no charge record is registered in v1
-    if (record?.charge) {
+    // charge moves (:3532-3562): the first turn only charges; Fly and Dig
+    // go semi-invulnerable
+    if (record?.charge && !releasing) {
       this.cancelMoveAnim();
-      this.sayNext(`${displayName(user)}\nis charging up!`);
+      user.charging = moveInst;
+      user.chargeReady = true;
+      if (record.charge.invulnerable || move.id === "DIG") user.invulnerable = true;
+      let chargeAnim = record.charge.anim;
+      if (move.id === "DIG") chargeAnim = "SLIDE_DOWN_ANIM";
+      else if (record.charge.enemyAnim && !user.isPlayer) chargeAnim = record.charge.enemyAnim;
+      if (chargeAnim) this.animNext(chargeAnim, user.isPlayer);
+      const text = CHARGE_TEXT[move.id] ?? "%s\nis charging up!";
+      this.sayNext(text.replace("%s", displayName(user)));
       return;
     }
 
@@ -1254,6 +1370,8 @@ export class WildBattle implements EffectBattle {
       const msgs = record.run(ctx);
       if (this.primaryEffectFailed(msgs)) {
         this.cancelMoveAnim();
+      } else if (SLOW_SHAKE_EFFECTS.has(move.effect) && this.moveAnimRow) {
+        this.moveAnimRow.hit = { sfx: "", animType: user.isPlayer ? 6 : 3 };
       }
       for (const m of msgs) this.sayNext(m);
       this.drainNext(); // REST/RECOVER would move the user's bar (:3532)
@@ -1268,6 +1386,90 @@ export class WildBattle implements EffectBattle {
     }
 
     runDamaging(this, ctx, record);
+  }
+
+  /** :3347-3386 preRechargeChecks — sleep, freeze, held, flinch each lose
+   * the turn WITHOUT consuming the recharge flag. */
+  private preRechargeChecks(user: WildBattler, target: WildBattler): boolean {
+    if (user.skipMove) {
+      user.skipMove = undefined;
+      return true;
+    }
+    const mon = user.mon;
+    if (mon.status === "SLP") {
+      user.sleepTurns = (user.sleepTurns ?? 1) - 1;
+      if (user.sleepTurns <= 0) {
+        mon.status = null;
+        this.sayNext(`${displayName(user)}\nwoke up!`);
+      } else {
+        this.sayNext(`${displayName(user)}\nis fast asleep!`);
+      }
+      return true;
+    }
+    if (mon.status === "FRZ") {
+      this.sayNext(`${displayName(user)}\nis frozen solid!`);
+      return true;
+    }
+    if (target.trappingTurns !== undefined) {
+      this.sayNext(`${displayName(user)}\ncan't move!`);
+      return true;
+    }
+    if (user.flinched) {
+      user.flinched = false;
+      this.sayNext(`${displayName(user)}\nflinched!`);
+      return true;
+    }
+    return false;
+  }
+
+  /** :3610-3629 continueTrapping — the same damage again, animation shown. */
+  private continueTrapping(user: WildBattler, target: WildBattler): void {
+    this.sayNext(`${displayName(user)}'s\nattack continues!`);
+    if (user.trapMove) this.animNext(user.trapMove, user.isPlayer);
+    // the counter can sit at 0 until endOfTurn clears it, so a slower
+    // victim is still held through the attacker's final hit
+    user.trappingTurns = (user.trappingTurns ?? 1) - 1;
+    this.applyDamage(target, user.trapDamage ?? 1);
+    if (target.mon.hp <= 0) this.onFaint(target);
+  }
+
+  /** :3631-3651 continueBide — store, then unleash double. */
+  private continueBide(user: WildBattler, target: WildBattler): void {
+    user.bideTurns = (user.bideTurns ?? 1) - 1;
+    if (user.bideTurns > 0) {
+      this.sayNext(`${displayName(user)}\nis storing energy!`);
+      return;
+    }
+    this.sayNext(`${displayName(user)}\nunleashed energy!`);
+    const dmg = (user.bideDamage ?? 0) * 2;
+    user.bideTurns = undefined;
+    user.bideDamage = undefined;
+    if (dmg <= 0) {
+      this.sayNext("But, it failed!");
+      return;
+    }
+    this.animNext("BIDE", user.isPlayer);
+    this.applyDamage(target, dmg);
+    if (target.mon.hp <= 0) this.onFaint(target);
+  }
+
+  /** :3653-3656 selfDestruct. */
+  selfDestruct(user: WildBattler): void {
+    user.mon.hp = 0;
+    this.onFaint(user);
+  }
+
+  /** Pay Day's coins (:4675), picked up on a win. */
+  payDay = 0;
+
+  get trainerBattle(): boolean {
+    return (this as { isTrainer?: boolean }).isTrainer === true;
+  }
+
+  /** Teleport / Roar / Whirlwind in the wild: the battle ends here. */
+  escape(): void {
+    this.result = "run";
+    this.afterQueue = "finish";
   }
 
   // rules bridge (:2210-2246 accuracyRoll/computeDamage/catchAttempt) ----
@@ -1318,6 +1520,13 @@ export class WildBattle implements EffectBattle {
     const dealt = Math.min(dmg, target.mon.hp);
     target.mon.hp -= dealt;
     if (dealt > 0) this.drainNext(target, target.mon.hp);
+    if (target.bideTurns !== undefined) {
+      target.bideDamage = (target.bideDamage ?? 0) + dealt;
+    }
+    if (target.rageMove && dealt > 0) {
+      target.stages.attack = Math.min(6, (target.stages.attack ?? 0) + 1);
+      this.sayNext(`${displayName(target)}'s\nRAGE is building!`);
+    }
     return dealt;
   }
 
@@ -1509,6 +1718,10 @@ export class WildBattle implements EffectBattle {
   /** Swap the enemy battler (trainer send-out; makeBattler is module-local). */
   swapEnemy(mon: PartyMon): void {
     this.enemy = makeBattler(this.data, mon, false);
+    // EnemySendOutFirstMon (core.asm:1314-1315): frees the player's trap
+    this.player.trappingTurns = undefined;
+    this.player.trapMove = undefined;
+    this.player.trapDamage = undefined;
   }
 
   /** :3808-3990 enemyMonFainted, wild slice: exp then the win. */
@@ -1787,6 +2000,8 @@ export class WildBattle implements EffectBattle {
       this.player = makeBattler(this.data, next, true, this.save);
       // SendOutMon clears the FOE's trapping bit (:2341-2343)
       this.enemy.trappingTurns = undefined;
+      this.enemy.trapMove = undefined;
+      this.enemy.trapDamage = undefined;
       this.markParticipant();
       this.sendOutMonCursors();
       this.sendingOut = true;
@@ -1813,6 +2028,16 @@ export class WildBattle implements EffectBattle {
   // -------------------------------------------------------------------
 
   finish(): void {
+    // :4675-4682 — Pay Day's coins, picked up only on a win
+    if (this.payDay > 0 && this.result === "win") {
+      const save = this.save as BattleSave & { money?: number };
+      if (typeof save.money === "number") save.money += this.payDay;
+      this.say(`${this.save.player.name} picked up\n$${this.payDay}!`);
+      this.payDay = 0;
+      this.afterQueue = "finish";
+      this.phase = "messages";
+      return;
+    }
     // the no-healthy-party invariant (:4629-4634)
     if (this.result !== "lose" && !firstHealthy(this.save.party)) {
       console.warn(`battle finished ${this.result} with no healthy party; forcing blackout`);

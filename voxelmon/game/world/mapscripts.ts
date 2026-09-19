@@ -40,6 +40,9 @@ export interface MapScript {
    * officer moving aside) are one of these instead of hand-written logic.
    */
   coord?: CoordTrigger[];
+  /** Runs on every load of the map, the way a pokered map script's first
+   * lines do (CinnabarIsland_Script resetting the fossil revival). */
+  onEnter?: (ow: any, save: any) => void;
 }
 
 export interface CoordTrigger {
@@ -158,6 +161,144 @@ function mtMoonFossil(
       ["hide_object", "MT_MOON_B2F", otherName],
     ];
   };
+}
+
+/**
+ * The static encounters (flavor/power_plant.lua ballMon + the legendaries):
+ * the cry line, then -- unless already settled -- a wild battle, and on any
+ * non-blackout end (win, catch, flee) the beat flag and the object is gone.
+ */
+function staticMon(
+  map: string,
+  object: string,
+  text: string,
+  species: string,
+  level: number,
+  flag: string,
+): ScriptRow[] {
+  return [
+    ["show_text", text],
+    ["check_flag", flag],
+    ["jump_if_true", "end"],
+    ["static_battle", species, level],
+    ["jump_if_false", "end"],
+    ["set_flag", flag],
+    ["hide_object", map, object],
+    ["label", "end"],
+  ];
+}
+
+/** An in-game trader: face the player, then the trade verb. */
+function tradeRows(index: number, flag: string): ScriptRow[] {
+  return [["face_player"], ["trade", index, flag]];
+}
+
+// story6.lua E4_RESET_FLAGS: event_constants.asm INDIGO_PLATEAU_EVENTS_START
+// .. EVENT_LANCES_ROOM_LOCK_DOOR, plus the port's run-scoped champion gate
+// (EVENT_BEAT_CHAMPION_RIVAL itself stays set, like pokered's).
+const E4_RESET_FLAGS = [
+  "EVENT_BEAT_LORELEIS_ROOM_TRAINER_0",
+  "EVENT_AUTOWALKED_INTO_LORELEIS_ROOM",
+  "EVENT_BEAT_BRUNOS_ROOM_TRAINER_0",
+  "EVENT_AUTOWALKED_INTO_BRUNOS_ROOM",
+  "EVENT_BEAT_AGATHAS_ROOM_TRAINER_0",
+  "EVENT_AUTOWALKED_INTO_AGATHAS_ROOM",
+  "EVENT_BEAT_LANCES_ROOM_TRAINER_0",
+  "EVENT_BEAT_LANCE",
+  "EVENT_LANCES_ROOM_LOCK_DOOR",
+  "EVENT_BEAT_CHAMPION_RIVAL_THIS_RUN",
+];
+/** The four's win records by object id (npc.ts `${map}_obj_${index}`). */
+const E4_TRAINER_KEYS = [
+  "LORELEIS_ROOM_obj_1",
+  "BRUNOS_ROOM_obj_1",
+  "AGATHAS_ROOM_obj_1",
+  "LANCES_ROOM_obj_1",
+];
+
+// story2.lua FOSSIL_MONS / FOSSIL_ORDER (CinnabarLabFossilRoom.asm FossilsList)
+const FOSSIL_MONS: Record<string, string> = {
+  DOME_FOSSIL: "KABUTO",
+  HELIX_FOSSIL: "OMANYTE",
+  OLD_AMBER: "AERODACTYL",
+};
+const FOSSIL_ORDER = ["DOME_FOSSIL", "HELIX_FOSSIL", "OLD_AMBER"];
+
+/**
+ * story2.lua TEXT_CINNABARLABFOSSILROOM_SCIENTIST1: nothing deposited ->
+ * offer each carried fossil (the ROM's fossil menu, asked one at a time in
+ * FossilsList order); deposited -> "go for a walk" until the island has been
+ * reloaded, then the revived mon at L30. A full party leaves it waiting
+ * instead of losing it (GivePokemon's `jr nc`).
+ */
+function fossilScientistRows(ow: any, save: any): ScriptRow[] {
+  const f = save?.flags ?? {};
+  const data = ow?.data ?? ow?.shell?.data;
+  const monName = (sp: string) => data?.pokemon?.[sp]?.name ?? sp;
+  const itemName = (id: string) => data?.items?.[id]?.name ?? id;
+  const L = "_CinnabarLabFossilRoomScientist1";
+
+  if (f.EVENT_GAVE_FOSSIL_TO_LAB) {
+    if (f.EVENT_LAB_STILL_REVIVING_FOSSIL) {
+      return [["face_player"], ["show_text", `${L}GoForAWalkText`]];
+    }
+    const species: string | undefined = save.labFossilMon;
+    const rows: ScriptRow[] = [["face_player"]];
+    if (!species) {
+      // an old save that deposited before the species was kept: nothing to
+      // hand back, so let a new fossil in
+      return [
+        ...rows,
+        ["clear_flag", "EVENT_GAVE_FOSSIL_TO_LAB"],
+        ["show_text", `${L}Text`],
+      ];
+    }
+    return [
+      ...rows,
+      ["show_text", `${L}FossilIsBackToLifeText`, { "RAM:wStringBuffer": monName(species) }],
+      ["check_party_room"],
+      ["jump_if_false", "full"],
+      ["play_sound", "Get_Key_Item"],
+      ["give_pokemon", species, 30],
+      ["show_text", `{PLAYER} got\n${monName(species)}!`],
+      ["lab_fossil"],
+      ["clear_flag", "EVENT_GAVE_FOSSIL_TO_LAB"],
+      ["clear_flag", "EVENT_LAB_STILL_REVIVING_FOSSIL"],
+      ["jump", "end"],
+      ["label", "full"],
+      ["show_text", "You have no room\nfor it!\fCome back when\nyou do!"],
+      ["label", "end"],
+    ];
+  }
+
+  const carried = FOSSIL_ORDER.filter((id) => (save?.inventory?.[id] ?? 0) > 0);
+  const rows: ScriptRow[] = [["face_player"], ["show_text", `${L}Text`]];
+  if (carried.length === 0) return [...rows, ["show_text", `${L}NoFossilsText`]];
+  carried.forEach((id, i) => {
+    rows.push(
+      [
+        "ask",
+        `${L}SeesFossilText`,
+        { "RAM:wNameBuffer": itemName(id), "RAM:wStringBuffer": monName(FOSSIL_MONS[id]!) },
+      ],
+      ["jump_if_true", `give${i}`],
+    );
+  });
+  rows.push(["show_text", `${L}ComeAgainText`], ["jump", "end"]);
+  carried.forEach((id, i) => {
+    rows.push(
+      ["label", `give${i}`],
+      ["take_item", id, 1],
+      ["lab_fossil", FOSSIL_MONS[id]],
+      ["set_flag", "EVENT_GAVE_FOSSIL_TO_LAB"],
+      ["set_flag", "EVENT_LAB_STILL_REVIVING_FOSSIL"],
+      ["show_text", `${L}TakesFossilText`, { "RAM:wNameBuffer": itemName(id) }],
+      ["show_text", `${L}GoForAWalkText2`],
+      ["jump", "end"],
+    );
+  });
+  rows.push(["label", "end"]);
+  return rows;
 }
 
 // story5.lua M.PEWTER_CITY / pewterGymEscort (scripts/PewterCity.asm
@@ -715,6 +856,64 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
         ["jump", "end"], //                                            8
         ["show_text", "_Route16FlyHouseBrunetteGirlHM02ExplanationText"], // 9
       ] as ScriptRow[],
+    },
+  },
+
+  // flavor/power_plant.lua: Zapdos, and the item balls that are Voltorbs.
+  POWER_PLANT: {
+    talk: {
+      TEXT_POWERPLANT_VOLTORB1: staticMon("POWER_PLANT", "POWERPLANT_VOLTORB1", "_PowerPlantVoltorbBattleText", "VOLTORB", 40, "EVENT_BEAT_POWER_PLANT_VOLTORB_0"),
+      TEXT_POWERPLANT_VOLTORB2: staticMon("POWER_PLANT", "POWERPLANT_VOLTORB2", "_PowerPlantVoltorbBattleText", "VOLTORB", 40, "EVENT_BEAT_POWER_PLANT_VOLTORB_1"),
+      TEXT_POWERPLANT_VOLTORB3: staticMon("POWER_PLANT", "POWERPLANT_VOLTORB3", "_PowerPlantVoltorbBattleText", "VOLTORB", 40, "EVENT_BEAT_POWER_PLANT_VOLTORB_2"),
+      TEXT_POWERPLANT_ELECTRODE1: staticMon("POWER_PLANT", "POWERPLANT_ELECTRODE1", "_PowerPlantVoltorbBattleText", "ELECTRODE", 43, "EVENT_BEAT_POWER_PLANT_VOLTORB_3"),
+      TEXT_POWERPLANT_VOLTORB4: staticMon("POWER_PLANT", "POWERPLANT_VOLTORB4", "_PowerPlantVoltorbBattleText", "VOLTORB", 40, "EVENT_BEAT_POWER_PLANT_VOLTORB_4"),
+      TEXT_POWERPLANT_VOLTORB5: staticMon("POWER_PLANT", "POWERPLANT_VOLTORB5", "_PowerPlantVoltorbBattleText", "VOLTORB", 40, "EVENT_BEAT_POWER_PLANT_VOLTORB_5"),
+      TEXT_POWERPLANT_ELECTRODE2: staticMon("POWER_PLANT", "POWERPLANT_ELECTRODE2", "_PowerPlantVoltorbBattleText", "ELECTRODE", 43, "EVENT_BEAT_POWER_PLANT_VOLTORB_6"),
+      TEXT_POWERPLANT_VOLTORB6: staticMon("POWER_PLANT", "POWERPLANT_VOLTORB6", "_PowerPlantVoltorbBattleText", "VOLTORB", 40, "EVENT_BEAT_POWER_PLANT_VOLTORB_7"),
+      TEXT_POWERPLANT_ZAPDOS: staticMon("POWER_PLANT", "POWERPLANT_ZAPDOS", "_PowerPlantZapdosBattleText", "ZAPDOS", 50, "EVENT_BEAT_ZAPDOS"),
+    },
+  },
+  // flavor/seafoam_islands_b4f.lua
+  SEAFOAM_ISLANDS_B4F: {
+    talk: {
+      TEXT_SEAFOAMISLANDSB4F_ARTICUNO: staticMon("SEAFOAM_ISLANDS_B4F", "SEAFOAMISLANDSB4F_ARTICUNO", "_SeafoamIslandsB4FArticunoBattleText", "ARTICUNO", 50, "EVENT_BEAT_ARTICUNO"),
+    },
+  },
+  // flavor/victory_road_2f.lua
+  VICTORY_ROAD_2F: {
+    talk: {
+      TEXT_VICTORYROAD2F_MOLTRES: staticMon("VICTORY_ROAD_2F", "VICTORYROAD2F_MOLTRES", "_VictoryRoad2FMoltresBattleText", "MOLTRES", 50, "EVENT_BEAT_MOLTRES"),
+    },
+  },
+  // flavor/cerulean_cave_b1f.lua
+  CERULEAN_CAVE_B1F: {
+    talk: {
+      TEXT_CERULEANCAVEB1F_MEWTWO: staticMon("CERULEAN_CAVE_B1F", "CERULEANCAVEB1F_MEWTWO", "_MewtwoBattleText", "MEWTWO", 70, "EVENT_BEAT_MEWTWO"),
+    },
+  },
+
+  // story6.lua M.INDIGO_PLATEAU_LOBBY (scripts/IndigoPlateauLobby.asm): the
+  // Elite Four rematch. Walking into the lobby after a run into the League
+  // (BIT_STARTED_ELITE_4) clears every League event, so all four and the
+  // Champion can be fought again. Old saves with no started flag derive it
+  // from the run's own flags, as upstream does.
+  INDIGO_PLATEAU_LOBBY: {
+    onEnter: (_ow: any, save: any) => {
+      const f = save?.flags;
+      if (!f) return;
+      let started = !!f.EVENT_STARTED_ELITE_4;
+      if (!started) started = E4_RESET_FLAGS.some((flag) => f[flag]);
+      if (!started) return;
+      delete f.EVENT_STARTED_ELITE_4;
+      for (const flag of E4_RESET_FLAGS) delete f[flag];
+      for (const key of E4_TRAINER_KEYS) delete save.defeatedTrainers?.[key];
+    },
+  },
+
+  // story6.lua M.LORELEIS_ROOM: loading her room marks the run started.
+  LORELEIS_ROOM: {
+    onEnter: (_ow: any, save: any) => {
+      if (save?.flags) save.flags.EVENT_STARTED_ELITE_4 = true;
     },
   },
 
@@ -1668,6 +1867,7 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
   },
   ROUTE_11_GATE_2F: {
     talk: {
+      TEXT_ROUTE11GATE2F_YOUNGSTER: tradeRows(1, "EVENT_TRADED_NIDORINO_FOR_NIDORINA"),
       TEXT_ROUTE11GATE2F_OAKS_AIDE: [
         ["face_player"],
         ["oaks_aide", "TEXT_ROUTE11GATE2F_OAKS_AIDE"],
@@ -1693,6 +1893,66 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
         (save?.inventory?.SECRET_KEY ?? 0) <= 0,
         "_CinnabarIslandDoorIsLockedText",
       ),
+    // CinnabarIsland_Script line 6: every load of the island finishes the
+    // lab's revival, so walking out of the lab and back in is the "go for a
+    // walk" the scientist asks for.
+    onEnter: (_ow: any, save: any) => {
+      if (save?.flags) delete save.flags.EVENT_LAB_STILL_REVIVING_FOSSIL;
+    },
+  },
+
+  // The in-game trades (Commands.lua trade over field.trades).
+  ROUTE_2_TRADE_HOUSE: {
+    talk: { TEXT_ROUTE2TRADEHOUSE_GAMEBOY_KID: tradeRows(2, "EVENT_TRADED_ABRA_FOR_MR_MIME") },
+  },
+  CERULEAN_TRADE_HOUSE: {
+    talk: { TEXT_CERULEANTRADEHOUSE_GAMBLER: tradeRows(7, "EVENT_TRADED_POLIWHIRL_FOR_JYNX") },
+  },
+  VERMILION_TRADE_HOUSE: {
+    talk: { TEXT_VERMILIONTRADEHOUSE_LITTLE_GIRL: tradeRows(5, "EVENT_TRADED_SPEAROW_FOR_FARFETCHD") },
+  },
+  UNDERGROUND_PATH_ROUTE_5: {
+    talk: { TEXT_UNDERGROUNDPATHROUTE5_LITTLE_GIRL: tradeRows(10, "EVENT_TRADED_NIDORAN_M_FOR_NIDORAN_F") },
+  },
+  ROUTE_18_GATE_2F: {
+    talk: { TEXT_ROUTE18GATE2F_YOUNGSTER: tradeRows(6, "EVENT_TRADED_SLOWBRO_FOR_LICKITUNG") },
+  },
+  CINNABAR_LAB_TRADE_ROOM: {
+    talk: {
+      TEXT_CINNABARLABTRADEROOM_GRAMPS: tradeRows(8, "EVENT_TRADED_RAICHU_FOR_ELECTRODE"),
+      TEXT_CINNABARLABTRADEROOM_BEAUTY: tradeRows(9, "EVENT_TRADED_VENONAT_FOR_TANGELA"),
+    },
+  },
+
+  // story2.lua M.MUSEUM_1F + flavor/museum_1f.lua (scripts/Museum1F.asm):
+  // the scientist in the back room hands over the OLD AMBER, and the amber
+  // on display goes with it.
+  MUSEUM_1F: {
+    talk: {
+      TEXT_MUSEUM1F_SCIENTIST2: (_ow: any, save: any): ScriptRow[] =>
+        save?.flags?.EVENT_GOT_OLD_AMBER
+          ? [["face_player"], ["show_text", "_Museum1FScientist2GetTheOldAmberCheckText"]]
+          : [
+              ["face_player"],
+              ["show_text", "_Museum1FScientist2TakeThisToAPokemonLabText"],
+              ["give_item", "OLD_AMBER", 1, "_Museum1FScientist2ReceivedOldAmberText"],
+              ["set_flag", "EVENT_GOT_OLD_AMBER"],
+              ["hide_object", "MUSEUM_1F", "MUSEUM1F_OLD_AMBER"],
+            ],
+      TEXT_MUSEUM1F_OLD_AMBER: [["show_text", "_Museum1FOldAmberText"]],
+      TEXT_MUSEUM1F_GAMBLER: [["face_player"], ["show_text", "_Museum1FGamblerText"]],
+      TEXT_MUSEUM1F_SCIENTIST3: [["face_player"], ["show_text", "_Museum1FScientist3Text"]],
+    },
+  },
+
+  // story2.lua M.CINNABAR_LAB_FOSSIL_ROOM (scripts/CinnabarLabFossilRoom.asm,
+  // engine/events/cinnabar_lab.asm): deposit a fossil, leave for the island,
+  // come back, and it is a Pokémon.
+  CINNABAR_LAB_FOSSIL_ROOM: {
+    talk: {
+      TEXT_CINNABARLABFOSSILROOM_SCIENTIST1: fossilScientistRows,
+      TEXT_CINNABARLABFOSSILROOM_SCIENTIST2: tradeRows(4, "EVENT_TRADED_PONYTA_FOR_SEEL"),
+    },
   },
 
   // story.lua M.SILPH_CO_11F (scripts/SilphCo11F.asm) and story4.lua

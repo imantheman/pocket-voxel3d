@@ -1330,6 +1330,11 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     this.push(new HallOfFameState(this as never, entry, rollCredits));
   }
 
+  /** A party pick for a script: onPick(index) or onCancel on B / CANCEL. */
+  pickPartyMon(onPick: (index: number) => void, onCancel: () => void): void {
+    this.push(new PartyState(this as never, { onPick, onCancel }));
+  }
+
   openDaycare(onDone?: () => void): void {
     const t = (this.data as { text?: Record<string, string> }).text ?? {};
     const line = (k: string, fallback: string): string => t[k] ?? fallback;

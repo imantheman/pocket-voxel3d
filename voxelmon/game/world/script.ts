@@ -372,6 +372,91 @@ function* start_battle(ctx: ScriptContext, ...args: unknown[]): Generator<void, 
   }
 }
 
+/**
+ * Commands.lua:934-1023 trade — the in-game trades (field.trades, 1-based):
+ * already done -> the after line; otherwise ask, pick a party mon, refuse the
+ * wrong species, then swap it for the trader's nicknamed mon at the same
+ * level, which joins at the end of the party. The trade animation is not
+ * ported; the cable line and the traded-for line carry it.
+ */
+function* trade(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const w = ctx.world as any;
+  const runner = ctx.runner;
+  const data = w.data;
+  const t = (data.field?.trades ?? [])[(args[0] as number) - 1] as
+    | { give: string; get: string; nickname?: string; dialogset?: number }
+    | undefined;
+  if (!t) return;
+  const doneFlag = args[1] as string | undefined;
+  const set = t.dialogset ?? 1;
+  const subs = {
+    "RAM:wInGameTradeGiveMonName": data.pokemon?.[t.give]?.name ?? t.give,
+    "RAM:wInGameTradeReceiveMonName": data.pokemon?.[t.get]?.name ?? t.get,
+  };
+  const say = function* (label: string): Generator<void, void> {
+    w.showText(scriptText(w, label, subs), () => runner.resume());
+    yield;
+  };
+  if (doneFlag && w.save.flags[doneFlag]) {
+    yield* say(`_AfterTrade${set}Text`);
+    return;
+  }
+  let yes = false;
+  w.showChoice(scriptText(w, `_WannaTrade${set}Text`, subs), (y: boolean) => {
+    yes = y;
+    runner.resume();
+  });
+  yield;
+  if (!yes) {
+    yield* say(`_NoTrade${set}Text`);
+    return;
+  }
+  let picked = -1;
+  w.pickPartyMon(
+    (i: number) => {
+      picked = i;
+      runner.resume();
+    },
+    () => runner.resume(),
+  );
+  yield;
+  const party = w.save.party as any[];
+  const sent = party[picked];
+  if (!sent) {
+    yield* say(`_NoTrade${set}Text`);
+    return;
+  }
+  if (sent.species !== t.give) {
+    yield* say(`_WrongMon${set}Text`);
+    return;
+  }
+  if (doneFlag) w.save.flags[doneFlag] = true;
+  yield* say("_ConnectCableText");
+  const mon = newMon(data, t.get, sent.level);
+  if (t.nickname) mon.nickname = t.nickname;
+  mon.traded = true;
+  party.splice(picked, 1);
+  party.push(mon);
+  markOwned(w.save, t.get);
+  yield* say("_TradedForText");
+  yield* say(`_Thanks${set}Text`);
+}
+
+// flavor/power_plant.lua static_battle: a legendary (or a Voltorb ball) as
+// a wild battle. EndTrainerBattle settles it on ANY non-blackout result --
+// win, catch or flee -- so lastCheck is "it is over", and the script sets the
+// beat flag and hides the object on that branch.
+function* static_battle(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const runner = ctx.runner;
+  const w = ctx.world as any;
+  if (!w.startWildBattle) return;
+  w.startWildBattle(args[0] as string, args[1] as number, undefined, (result: string | null) => {
+    ctx.lastCheck = result !== null && result !== "lose";
+    runner.resume();
+  });
+  yield;
+}
+
 function* move_player_to(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
   const runner = ctx.runner;
   (ctx.world as any).movePlayerTo?.(args[0] as number, args[1] as number,
@@ -729,6 +814,24 @@ function* safari_walk_in(ctx: ScriptContext): Generator<void, void> {
 // Commands.lua check_item (item_bag.asm IsItemInBag): lastCheck = the bag
 // holds at least one of the id. Gates OaksLabOak1Text's parcel/poke-ball
 // branches (oaks_lab.lua).
+// story2.lua CINNABAR_LAB_FOSSIL_ROOM: the species the lab is reviving,
+// kept on the save (save.labFossilMon) between the deposit and the pickup.
+// No argument clears it.
+function* lab_fossil(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const save = ctx.world.save as { labFossilMon?: string };
+  const species = args[0] as string | undefined;
+  if (species) save.labFossilMon = species;
+  else delete save.labFossilMon;
+}
+
+// lastCheck = the party has a free slot. GivePokemon's `jr nc` in the lab:
+// with no room, the revived mon waits for the next visit instead of being
+// lost.
+function* check_party_room(ctx: ScriptContext): Generator<void, void> {
+  const party = (ctx.world.save as { party?: unknown[] }).party ?? [];
+  ctx.lastCheck = party.length < 6;
+}
+
 function* check_item(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
   const inv = (ctx.world.save as { inventory?: Record<string, number> }).inventory ?? {};
   ctx.lastCheck = (inv[args[0] as string] ?? 0) > 0;
@@ -922,9 +1025,13 @@ const VERBS: Record<string, Verb> = {
   place_npc,
   move_player_to,
   start_battle,
+  static_battle,
+  trade,
   open_mart,
   walk_route,
   check_item,
+  lab_fossil,
+  check_party_room,
   check_money,
   take_money,
   check_coins,
