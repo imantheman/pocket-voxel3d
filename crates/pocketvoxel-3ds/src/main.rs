@@ -230,6 +230,18 @@ unsafe fn load_map_pak(name: &str, want: Option<PlanKey>) -> bool {
     let new_kb = std::fs::metadata(&path)
         .map(|m| (m.len() / 1024) as usize)
         .unwrap_or(usize::MAX);
+    // A read-ahead in flight for a DIFFERENT map is still holding its whole
+    // buffer -- up to 10 MB of heap for a route -- and nothing counts it
+    // against the cache budget, so the eviction below cannot free it. Walking
+    // into Viridian Forest asks for 57 MB on top of exactly that, and the
+    // console faulted on the GPU thread's own stack, 2 MB into the heap: the
+    // heap had grown past what it could hold. Whatever cannot fit beside the
+    // incoming map goes first.
+    let pf_kb = PREFETCH.as_ref().map(|p| p.buf.len() / 1024).unwrap_or(0);
+    if pf_kb > 0 && cache_total_kb() + new_kb + pf_kb > PAK_CACHE_BUDGET_KB {
+        dlog(&format!("[pv] read-ahead dropped ({} KB) to make room for {}", pf_kb, name));
+        PREFETCH = None;
+    }
     while !PAK_CACHE.is_empty() && cache_total_kb() + new_kb > PAK_CACHE_BUDGET_KB {
         PAK_CACHE.pop(); // drop the least-recently-used entry
     }
