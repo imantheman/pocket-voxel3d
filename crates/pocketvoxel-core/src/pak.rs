@@ -273,6 +273,20 @@ pub struct Chunk {
     pub meshes: [MeshRange; MESH_KINDS],
 }
 
+/// One placed copy of a carved shape (TINS).
+///
+/// The same tree drawn in many places: the geometry lives once in the CHNK
+/// pools and this says where to put it, at which of two levels of detail.
+/// `near`/`far` index [`Pak::tree_shapes`], or are `TREE_SHAPE_NONE`.
+#[derive(Clone, Copy, Debug)]
+pub struct TreeInst {
+    pub x: i16,
+    pub y: i16,
+    pub z: i16,
+    pub near: u16,
+    pub far: u16,
+}
+
 /// One removable stamp (cut tree, moved boulder).
 #[derive(Clone, Copy, Debug)]
 pub struct Stamp {
@@ -332,6 +346,10 @@ pub struct Pak<'a> {
     pub chunks: Vec<Chunk>,
     pub stamp_maps: Vec<MapDir>,
     pub stamps: Vec<Stamp>,
+    /// TINS shape library, empty in a v8 pak.
+    pub tree_shapes: Vec<MeshRange>,
+    pub tree_maps: Vec<MapDir>,
+    pub tree_insts: Vec<TreeInst>,
     /// `(code_point, ui_tile)` sorted ascending by code point.
     pub charmap: Vec<(u16, u16)>,
     /// The GAME section: gameplay JSON the guest parses at boot.
@@ -387,6 +405,14 @@ impl<'a> Pak<'a> {
     }
 
     /// Stamps of one map (paired with [`find_map`]-style directory walk).
+    /// The tree instances of one map (TINS), empty when it has none.
+    pub fn trees_of(&self, map_id: u32) -> &[TreeInst] {
+        match self.tree_maps.iter().find(|m| m.map_id == map_id) {
+            Some(dir) => &self.tree_insts[dir.first as usize..(dir.first + dir.count) as usize],
+            None => &[],
+        }
+    }
+
     pub fn stamps_of(&self, map_id: u32) -> &[Stamp] {
         match self.stamp_maps.iter().find(|m| m.map_id == map_id) {
             Some(dir) => &self.stamps[dir.first as usize..(dir.first + dir.count) as usize],
@@ -605,9 +631,13 @@ pub fn read_with_shared<'a>(
     if r.u32v()? != VXPK_MAGIC {
         return Err("not a VXPK blob (bad magic)");
     }
-    if r.u16v()? != VXPK_VERSION {
+    // v8 is the nine sections below; v9 adds TINS as a tenth. TINS sorts
+    // last, so nothing ahead of it moves and a reader takes either.
+    let version = r.u16v()?;
+    if version != VXPK_VERSION && version != spec::VXPK_VERSION_TREES {
         return Err("unsupported VXPK version");
     }
+    let has_trees = version == spec::VXPK_VERSION_TREES;
     let section_count = r.u16v()? as usize;
     let total_len = r.u32v()? as usize;
     if r.u32v()? != 0 {
@@ -616,7 +646,7 @@ pub fn read_with_shared<'a>(
     if total_len != data.len() {
         return Err("header length disagrees with the blob (truncated or padded)");
     }
-    const TAGS: [u32; 9] = [
+    const TAGS: [u32; 10] = [
         spec::tag::META,
         spec::tag::GAME,
         spec::tag::CHUNKS,
@@ -626,16 +656,19 @@ pub fn read_with_shared<'a>(
         spec::tag::ATLAS,
         spec::tag::AUDIO,
         spec::tag::COLOR,
+        spec::tag::TREES,
     ];
-    // All nine sections required, ascending tag order (spec: "sections
-    // appear in tag order"), ascending non-overlapping payloads.
-    if section_count != TAGS.len() {
+    let tag_count = if has_trees { TAGS.len() } else { TAGS.len() - 1 };
+    // Every section required, ascending tag order (spec: "sections appear in
+    // tag order"), ascending non-overlapping payloads.
+    if section_count != tag_count {
         return Err("wrong section count");
     }
     let table_end = VXPK_HEADER_SIZE + section_count * VXPK_ENTRY_SIZE;
     let mut expected = TAGS;
     expected.sort_unstable();
-    let mut sections = [(0usize, 0usize, 0u32); 9]; // (offset, length, count) in TAGS order
+    let expected = &expected[..tag_count]; // TINS sorts last, so this is it
+    let mut sections = [(0usize, 0usize, 0u32); 10]; // (offset, length, count) in TAGS order
     let mut prev_end = table_end;
     for (i, &want) in expected.iter().enumerate() {
         let tag = r.u32v()?;
@@ -902,6 +935,61 @@ pub fn read_with_shared<'a>(
         stamps = out;
     }
 
+    // --- TINS -------------------------------------------------------------
+    let (tree_shapes, tree_maps, tree_insts);
+    if has_trees {
+        let (_, _, table_count) = sections[9];
+        let mut r = Rd::new(payload(9));
+        let map_count = r.u16v()? as usize;
+        if r.u16v()? != 0 {
+            return Err("TINS pad is not zero");
+        }
+        if map_count as u32 != table_count {
+            return Err("TINS map count disagrees with the table");
+        }
+        let shape_total = r.u32v()? as usize;
+        let inst_total = r.u32v()?;
+        if r.u32v()? != 0 {
+            return Err("TINS pad is not zero");
+        }
+        let mut shapes = Vec::with_capacity(shape_total);
+        for _ in 0..shape_total {
+            let mesh = read_mesh_range(&mut r)?;
+            check_mesh_range(&mesh, verts, indices)?;
+            if r.u32v()? != 0 {
+                return Err("TINS shape pad is not zero");
+            }
+            shapes.push(mesh);
+        }
+        tree_maps = read_map_dir(&mut r, map_count, inst_total)?;
+        let mut out = Vec::with_capacity(inst_total as usize);
+        for _ in 0..inst_total {
+            let x = r.i16v()?;
+            let y = r.i16v()?;
+            let z = r.i16v()?;
+            let near = r.u16v()?;
+            let far = r.u16v()?;
+            if r.u16v()? != 0 {
+                return Err("TINS instance pad is not zero");
+            }
+            for id in [near, far] {
+                if id != spec::TREE_SHAPE_NONE && id as usize >= shapes.len() {
+                    return Err("TINS instance names a shape that is not there");
+                }
+            }
+            if near == spec::TREE_SHAPE_NONE && far == spec::TREE_SHAPE_NONE {
+                return Err("TINS instance has no shape at either level");
+            }
+            out.push(TreeInst { x, y, z, near, far });
+        }
+        tree_shapes = shapes;
+        tree_insts = out;
+    } else {
+        tree_shapes = Vec::new();
+        tree_maps = Vec::new();
+        tree_insts = Vec::new();
+    }
+
     // --- CMAP -------------------------------------------------------------
     let mut charmap = Vec::new();
     {
@@ -1003,6 +1091,9 @@ pub fn read_with_shared<'a>(
         chunks,
         stamp_maps,
         stamps,
+        tree_shapes,
+        tree_maps,
+        tree_insts,
         charmap,
         game,
         audio,

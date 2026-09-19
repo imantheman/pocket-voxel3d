@@ -106,7 +106,12 @@ import {
   VXPK_META_FLAG_TREE_LOD,
   VXPK_META_SIZE,
   VXPK_TAG,
+  VXPK_TREE_INST_SIZE,
+  VXPK_TREE_SHAPE_SIZE,
   VXPK_VERSION,
+  VXPK_VERSION_TREES,
+  TREE_NEAR_PX,
+  TREE_SHAPE_NONE,
   WATER_DROP_PX,
 } from "./voxel-spec.ts";
 
@@ -432,6 +437,15 @@ export function generateVoxelRust(): string {
   put("");
   put(`pub const VXPK_MAGIC: u32 = ${hex(VXPK_MAGIC)}; // 'VXPK'`);
   put(`pub const VXPK_VERSION: u16 = ${VXPK_VERSION};`);
+  put("/// The version a pak carrying TINS declares; readers take both, so");
+  put("/// only maps that need tree instancing are recooked.");
+  put(`pub const VXPK_VERSION_TREES: u16 = ${VXPK_VERSION_TREES};`);
+  put("/// TINS record sizes, and the `no shape at this level` marker.");
+  put(`pub const VXPK_TREE_SHAPE_SIZE: usize = ${VXPK_TREE_SHAPE_SIZE};`);
+  put(`pub const VXPK_TREE_INST_SIZE: usize = ${VXPK_TREE_INST_SIZE};`);
+  put(`pub const TREE_SHAPE_NONE: u16 = ${hex(TREE_SHAPE_NONE, 4)};`);
+  put("/// How far a tree instance draws its NEAR shape, world px.");
+  put(`pub const TREE_NEAR_PX: f32 = ${f32(TREE_NEAR_PX)};`);
   put(`pub const VXPK_HEADER_SIZE: usize = ${VXPK_HEADER_SIZE};`);
   put(`pub const VXPK_ENTRY_SIZE: usize = ${VXPK_ENTRY_SIZE};`);
   put(`pub const VXPK_ALIGN: usize = ${VXPK_ALIGN};`);

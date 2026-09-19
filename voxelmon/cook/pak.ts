@@ -27,10 +27,12 @@ import {
   VXPK_META_SIZE,
   VXPK_TAG,
   VXPK_VERSION,
+  VXPK_VERSION_TREES,
+  TREE_SHAPE_NONE,
 } from "../../contracts/spec/voxel-spec.ts";
 import { swizzle } from "./atlas.ts";
 import type { PageDef } from "./atlas.ts";
-import type { ChunkOut, PackedMesh, StampOut } from "./mesh.ts";
+import type { ChunkOut, PackedMesh, PackedVert, StampOut } from "./mesh.ts";
 
 const EMOTE_PAGE_NONE = 0xffffffff;
 
@@ -147,6 +149,117 @@ export function writePak(input: PakInput): { bytes: Uint8Array; stats: PakStats 
   // --- shared vertex/index pools + mesh ranges -----------------------------
   const verts = new ByteWriter();
   const indexPool = new ByteWriter();
+/** One placed copy of a carved shape (TINS). */
+interface TreeInst {
+  x: number;
+  y: number;
+  z: number;
+  near: number;
+  far: number;
+}
+
+/**
+ * Pull repeated tree cells out of the chunk meshes into shapes + placements.
+ *
+ * A carved hull is stamped per cell, so a forest is the same few drawings
+ * thousands of times: Viridian Forest is 1,062 cells carved from 21 shapes,
+ * 3.1M vertices of which 59.5k are unique. Kept per cell that is 37.5 MB --
+ * more than a 3DS will hold, which is why the cook had to shed detail and
+ * then whole trees. Stored once and placed, it is about 1 MB and every tree
+ * can be drawn, with the renderer picking detail per tree by distance.
+ *
+ * This runs on the FINISHED meshes, after the hidden-face cull and the chunk
+ * split, so what a shape holds is exactly what the map would have drawn
+ * there. Cells whose geometry differs (a forest edge, a lone tree) simply
+ * become shapes used once. The map's own art decides all of it -- nothing
+ * here knows which map it is looking at.
+ */
+function instanceTrees(
+  maps: { mapId: number; chunks: ChunkOut[] }[],
+): { shapes: PackedMesh[]; perMap: { mapId: number; insts: TreeInst[] }[] } {
+  const shapes: PackedMesh[] = [];
+  const shapeIds = new Map<string, number>();
+  const perMap: { mapId: number; insts: TreeInst[] }[] = [];
+  const CELL = 16;
+
+  for (const m of maps) {
+    // (cell) -> the triangles of each level of detail found there
+    const cells = new Map<string, { near: PackedVert[][]; far: PackedVert[][] }>();
+    for (const c of m.chunks) {
+      for (const [kind, slot] of [
+        [MESH_KIND.treeHull, "near"],
+        [MESH_KIND.treeCoarse, "far"],
+      ] as const) {
+        const mesh = c.meshes[kind];
+        if (!mesh || mesh.indices.length === 0) continue;
+        for (let t = 0; t + 2 < mesh.indices.length; t += 3) {
+          const tri = [
+            mesh.verts[mesh.indices[t]],
+            mesh.verts[mesh.indices[t + 1]],
+            mesh.verts[mesh.indices[t + 2]],
+          ];
+          const cx = Math.floor(Math.min(tri[0].x, tri[1].x, tri[2].x) / CELL);
+          const cz = Math.floor(Math.min(tri[0].z, tri[1].z, tri[2].z) / CELL);
+          const key = `${cx},${cz}`;
+          let cell = cells.get(key);
+          if (!cell) {
+            cell = { near: [], far: [] };
+            cells.set(key, cell);
+          }
+          cell[slot].push(tri);
+        }
+        // instanced wholesale: the chunk keeps none of it
+        c.meshes[kind] = { verts: [], indices: [] };
+      }
+    }
+    if (cells.size === 0) {
+      continue;
+    }
+
+    /** A cell's triangles as a mesh in its own coordinates, plus its key. */
+    const shapeOf = (tris: PackedVert[][], ox: number, oz: number): number => {
+      if (tris.length === 0) return TREE_SHAPE_NONE;
+      const verts: PackedVert[] = [];
+      const indices: number[] = [];
+      const seen = new Map<string, number>();
+      for (const tri of tris) {
+        for (const v of tri) {
+          const moved: PackedVert = { u: v.u, v: v.v, abgr: v.abgr, x: v.x - ox, y: v.y, z: v.z - oz };
+          const k = `${moved.x},${moved.y},${moved.z},${moved.u},${moved.v},${moved.abgr}`;
+          let at = seen.get(k);
+          if (at === undefined) {
+            at = verts.length;
+            seen.set(k, at);
+            verts.push(moved);
+          }
+          indices.push(at);
+        }
+      }
+      const key = JSON.stringify([verts, indices]);
+      let id = shapeIds.get(key);
+      if (id === undefined) {
+        id = shapes.length;
+        shapeIds.set(key, id);
+        shapes.push({ verts, indices });
+      }
+      return id;
+    };
+
+    const insts: TreeInst[] = [];
+    for (const [key, cell] of [...cells.entries()].sort()) {
+      const [cx, cz] = key.split(",").map(Number);
+      const ox = cx * CELL;
+      const oz = cz * CELL;
+      const near = shapeOf(cell.near, ox, oz);
+      const far = shapeOf(cell.far, ox, oz);
+      if (near === TREE_SHAPE_NONE && far === TREE_SHAPE_NONE) continue;
+      insts.push({ x: ox, y: 0, z: oz, near, far });
+    }
+    if (insts.length > 0) perMap.push({ mapId: m.mapId, insts });
+  }
+  return { shapes, perMap };
+}
+
   let vertCount = 0;
   let indexCount = 0;
 
@@ -200,6 +313,13 @@ export function writePak(input: PakInput): { bytes: Uint8Array; stats: PakStats 
     bakePage?: number;
     meshes: Range[];
   }
+  // Repeated tree cells become shapes + placements (TINS) before anything
+  // is appended, so the shapes land in the pools like any other mesh and
+  // the chunks they came from carry nothing.
+  const trees = process.env.VOXEL_TREE_INSTANCES === "0"
+    ? { shapes: [] as PackedMesh[], perMap: [] as { mapId: number; insts: TreeInst[] }[] }
+    : instanceTrees(input.maps);
+
   const chunkRecs: { mapId: number; chunks: ChunkRec[] }[] = [];
   const stampRecs: { mapId: number; stamps: { cx: number; cy: number; mesh: Range }[] }[] = [];
   for (const m of input.maps) {
@@ -235,6 +355,9 @@ export function writePak(input: PakInput): { bytes: Uint8Array; stats: PakStats 
       });
     }
   }
+  const treeShapeRanges: Range[] = trees.shapes.map((sh) => appendMesh(sh));
+  const treeInstTotal = trees.perMap.reduce((n, m) => n + m.insts.length, 0);
+
   const chunkTotal = chunkRecs.reduce((n, m) => n + m.chunks.length, 0);
   const stampTotal = stampRecs.reduce((n, m) => n + m.stamps.length, 0);
 
@@ -402,6 +525,37 @@ export function writePak(input: PakInput): { bytes: Uint8Array; stats: PakStats 
   }
   for (const p of colour.pagePal) vcol.u16(p);
 
+  // --- TINS (v9 only: a pak with no instances stays v8) ---
+  const tins = new ByteWriter();
+  if (treeInstTotal > 0) {
+    tins.u16(trees.perMap.length);
+    tins.u16(0);
+    tins.u32(treeShapeRanges.length);
+    tins.u32(treeInstTotal);
+    tins.u32(0);
+    for (const r of treeShapeRanges) {
+      writeRange(tins, r);
+      tins.u32(0); // pad to 16
+    }
+    let firstInst = 0;
+    for (const m of trees.perMap) {
+      tins.u32(m.mapId);
+      tins.u32(firstInst);
+      tins.u32(m.insts.length);
+      firstInst += m.insts.length;
+    }
+    for (const m of trees.perMap) {
+      for (const it of m.insts) {
+        tins.i16(it.x);
+        tins.i16(it.y);
+        tins.i16(it.z);
+        tins.u16(it.near);
+        tins.u16(it.far);
+        tins.u16(0);
+      }
+    }
+  }
+
   // --- container: ascending tag order, 16-aligned payloads ---
   const sections: [number, string, Uint8Array, number][] = [
     [VXPK_TAG.meta, "META", meta.out(), 1],
@@ -414,13 +568,16 @@ export function writePak(input: PakInput): { bytes: Uint8Array; stats: PakStats 
     [VXPK_TAG.stamps, "STMP", stmp.out(), stampRecs.length],
     [VXPK_TAG.atlas, "ATLS", atls.out(), input.pages.length],
   ];
+  if (treeInstTotal > 0) {
+    sections.push([VXPK_TAG.trees, "TINS", tins.out(), trees.perMap.length]);
+  }
   sections.sort((a, b) => a[0] - b[0]);
 
   const tableEnd = VXPK_HEADER_SIZE + sections.length * VXPK_ENTRY_SIZE;
   let offset = Math.ceil(tableEnd / VXPK_ALIGN) * VXPK_ALIGN;
   const out = new ByteWriter();
   out.u32(VXPK_MAGIC);
-  out.u16(VXPK_VERSION);
+  out.u16(treeInstTotal > 0 ? VXPK_VERSION_TREES : VXPK_VERSION);
   out.u16(sections.length);
   const totalLenAt = out.length;
   out.u32(0); // patched below
@@ -450,6 +607,8 @@ export function writePak(input: PakInput): { bytes: Uint8Array; stats: PakStats 
       indices: indexCount,
       chunks: chunkTotal,
       stamps: stampTotal,
+      treeShapes: treeShapeRanges.length,
+      treeInsts: treeInstTotal,
     },
   };
 }

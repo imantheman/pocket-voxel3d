@@ -810,6 +810,22 @@ export const VXPK_MAGIC = 0x4b505856; // 'VXPK'
  * rejected, never mis-read.
  */
 export const VXPK_VERSION = 8;
+/**
+ * The version a pak carrying TINS declares. A v8 pak has the nine sections
+ * below and nothing else; a v9 pak adds TINS as a tenth (it sorts last, so
+ * nothing before it moves). Readers take both, so only the maps that need
+ * instancing are recooked.
+ */
+export const VXPK_VERSION_TREES = 9;
+/** How far a tree instance draws its NEAR shape, world px. Beyond this it
+ * draws its far shape; beyond the cull radius it is not drawn at all. */
+export const TREE_NEAR_PX = 240;
+/** Bytes per TINS instance record: i16 x,y,z | u16 near | u16 far | u16 pad. */
+export const VXPK_TREE_INST_SIZE = 12;
+/** Bytes per TINS shape record: a mesh range (12) padded to 16. */
+export const VXPK_TREE_SHAPE_SIZE = 16;
+/** "this instance has no shape at that level of detail". */
+export const TREE_SHAPE_NONE = 0xffff;
 export const VXPK_HEADER_SIZE = 16;
 export const VXPK_ENTRY_SIZE = 16;
 export const VXPK_ALIGN = 16;
@@ -874,6 +890,28 @@ export const VXPK_TAG = {
   chunks: 0x4b4e4843, // 'CHNK'
   /** Removable stamps: per map, per (cx,cy) a small vert/index range. */
   stamps: 0x504d5453, // 'STMP'
+  /**
+   * Tree instances (v9): the same carved hull drawn in many places.
+   *
+   * Viridian Forest is 1,062 tree cells carved from 21 distinct shapes --
+   * 3.1M vertices of which 59.5k are unique. Stamped out per cell they are
+   * 37.5 MB, more than a 3DS can hold, so the cook had to drop detail and
+   * then whole trees. Stored once and placed, they are ~1 MB and every tree
+   * can be drawn: the shapes live in the CHNK pools like any other mesh, and
+   * each instance names a near and a far one, so the renderer picks detail
+   * per tree by distance instead of the cook picking it per chunk.
+   *
+   *   0  u16 map_count | 2 u16 pad
+   *   4  u32 shape_total | 8 u32 inst_total | 12 u32 pad
+   *   16 shape records, shape_total * VXPK_TREE_SHAPE_SIZE:
+   *        u32 vert_base | u16 vert_count | u16 index_count | u32 index_base
+   *        | u32 pad
+   *   .. map directory, map_count * 12: u32 map_id | u32 first | u32 count
+   *   .. instance records, inst_total * VXPK_TREE_INST_SIZE:
+   *        i16 x | i16 y | i16 z | u16 near_shape | u16 far_shape | u16 pad
+   *      (x, y, z is the shape's origin in map-local world px)
+   */
+  trees: 0x534e4954, // 'TINS'
   /** GB charmap -> UI atlas tile, u16 pairs (for uiText). */
   charmap: 0x50414d43, // 'CMAP'
   /** The gameplay dataset the guest parses at boot (JSON bytes). */

@@ -401,6 +401,15 @@ pub const EVENT_CAP: usize = 64;
 
 pub const VXPK_MAGIC: u32 = 0x4b505856; // 'VXPK'
 pub const VXPK_VERSION: u16 = 8;
+/// The version a pak carrying TINS declares; readers take both, so
+/// only maps that need tree instancing are recooked.
+pub const VXPK_VERSION_TREES: u16 = 9;
+/// TINS record sizes, and the `no shape at this level` marker.
+pub const VXPK_TREE_SHAPE_SIZE: usize = 16;
+pub const VXPK_TREE_INST_SIZE: usize = 12;
+pub const TREE_SHAPE_NONE: u16 = 0xffff;
+/// How far a tree instance draws its NEAR shape, world px.
+pub const TREE_NEAR_PX: f32 = 240.0;
 pub const VXPK_HEADER_SIZE: usize = 16;
 pub const VXPK_ENTRY_SIZE: usize = 16;
 pub const VXPK_ALIGN: usize = 16;
@@ -435,6 +444,7 @@ pub mod tag {
     pub const ATLAS: u32 = 1397511233;
     pub const CHUNKS: u32 = 1263421507;
     pub const STAMPS: u32 = 1347245139;
+    pub const TREES: u32 = 1397639508;
     pub const CHARMAP: u32 = 1346456899;
     pub const GAME: u32 = 1162690887;
     pub const AUDIO: u32 = 1229215041;

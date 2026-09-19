@@ -17,7 +17,10 @@ use pocketvoxel_core::mapplan::{
     build_order, plan_build, planned_ranges, FILLER_KINDS, GROUND_KINDS, TREE_KINDS,
 };
 use pocketvoxel_core::pakcompact;
-use pocketvoxel_core::spec::{atlas_kind, CHUNK_PX, COLOR_PAL_NONE, UI_COLS, UI_ROWS, WORLD_VIEW_H};
+use pocketvoxel_core::spec::{
+    atlas_kind, CHUNK_PX, COLOR_PAL_NONE, TREE_NEAR_PX, TREE_SHAPE_NONE, UI_COLS, UI_ROWS,
+    WORLD_VIEW_H,
+};
 
 #[repr(C)] pub struct JSRuntime { _p: [u8; 0] }
 #[repr(C)] pub struct JSContext { _p: [u8; 0] }
@@ -601,6 +604,12 @@ fn map_pak_packed(
     let mut f = std::fs::File::open(path).ok()?;
     let mut head = [0u8; 16];
     f.read_exact(&mut head).ok()?;
+    // v9 carries TINS, whose shape ranges point into the same pools and are
+    // not rewritten here: those paks are read as they are (they are small,
+    // which is the whole point of instancing them).
+    if u16::from_le_bytes([head[4], head[5]]) != pocketvoxel_core::spec::VXPK_VERSION {
+        return None;
+    }
     let n = u16::from_le_bytes([head[6], head[7]]) as usize;
     if n != 9 {
         return None;
@@ -1478,6 +1487,8 @@ fn dlog_batch_end() {
 /// NEAREST span any cull threw away: if that is small, something close
 /// enough to be on screen is being dropped.
 static mut CULL_RADIUS_N: u32 = 0;
+/// Tree instances drawn last frame (the cull log line).
+static mut TREES_DRAWN: u32 = 0;
 static mut CULL_CONE_N: u32 = 0;
 static mut CULL_OCCL_N: u32 = 0;
 static mut MIN_CULLED_D: f32 = 0.0;
@@ -2813,6 +2824,11 @@ fn main() {
     let pitches: [i32; 5] = [0, 1, 2, 3, 4];
     let mut pitch_i = 0usize;
     let mut page_tex: Vec<Option<texture::Texture>> = Vec::new();
+    // TINS: one buffer per carved shape, and the placements that draw them.
+    // A forest is the same few drawings thousands of times, so the geometry
+    // is uploaded once and the instances only say where and how detailed.
+    let mut tree_bufs: Vec<Option<(buffer::Info, [f32; 3], [f32; 3])>> = Vec::new();
+    let mut tree_insts: Vec<pak::TreeInst> = Vec::new();
     // Card/pic vertex buffers are rebuilt every frame. Freeing them the
     // instant the frame ends lets the GPU read memory that's already gone —
     // on hardware that tears the walking sprite. Keep one frame alive.
@@ -3596,6 +3612,60 @@ fn main() {
                     ));
                 }
             }
+            // --- tree instances (TINS) ----------------------------------
+            tree_bufs.clear();
+            tree_insts.clear();
+            {
+                let insts = pak_static.trees_of(map_ids[map_i]);
+                if !insts.is_empty() {
+                    tree_insts.extend_from_slice(insts);
+                    let mut shape_verts = 0usize;
+                    for m in pak_static.tree_shapes.iter() {
+                        let n = m.index_count as usize;
+                        if n == 0 || !linear_fits(n) {
+                            tree_bufs.push(None);
+                            continue;
+                        }
+                        let mut v: Vec<Vertex> = Vec::with_capacity(n);
+                        let mut gmin = [f32::MAX; 3];
+                        let mut gmax = [f32::MIN; 3];
+                        let vbase = m.vert_base as usize;
+                        for i in 0..n {
+                            let pv = pak_static.verts
+                                [vbase + pak_static.indices[m.index_base as usize + i] as usize];
+                            let a = draw::modulate_rgb(pv.abgr, last_tint);
+                            let p = [pv.x as f32, pv.y as f32, pv.z as f32];
+                            for c in 0..3 {
+                                if p[c] < gmin[c] { gmin[c] = p[c]; }
+                                if p[c] > gmax[c] { gmax[c] = p[c]; }
+                            }
+                            v.push(Vertex {
+                                pos: [pv.x, pv.y, pv.z, 0],
+                                color: [
+                                    (a & 0xff) as u8,
+                                    ((a >> 8) & 0xff) as u8,
+                                    ((a >> 16) & 0xff) as u8,
+                                    255,
+                                ],
+                                uv: [pv.uf(), pv.vf()],
+                            });
+                        }
+                        let mut bi = buffer::Info::new();
+                        if bi.add(buffer::Buffer::new(&v), attr_info.permutation()).is_ok() {
+                            shape_verts += v.len();
+                            tree_bufs.push(Some((bi, gmin, gmax)));
+                        } else {
+                            tree_bufs.push(None);
+                        }
+                    }
+                    dlog(&format!(
+                        "[pv] trees {} shapes ({} verts) x {} placements",
+                        tree_bufs.len(),
+                        shape_verts,
+                        tree_insts.len(),
+                    ));
+                }
+            }
             dlog(&format!(
                 "[pv] strips total spans={} ~{}KB",
                 strip_infos.len(),
@@ -4279,6 +4349,8 @@ if page_tex.len() < pak_static.atlases.len() {
         let Some(tex_ref) = tex.as_ref() else { continue };
         let infos_ref = &chunk_infos;
         let strips_ref = &strip_infos;
+        let tree_bufs_ref = &tree_bufs;
+        let tree_insts_ref = &tree_insts;
         // Once a second: how many spans exist, how many survived the cull
         // last frame, and where the cull thinks the camera is. A map that
         // comes up as bare sky is either spans=0 (nothing built or nothing
@@ -4288,9 +4360,10 @@ if page_tex.len() < pak_static.atlases.len() {
         // where it was three SD writes a second of nothing new.
         if dbg_tick % (if unsafe { LEGACY_ZONE } { 60 } else { 600 }) == 0 {
             dlog(&format!(
-                "[pv] spans={} drawn={} cull(r={} cone={} occl={}) nearestCulled={:.0} focus=({:.0},{:.0}) eye=({:.0},{:.0}) fwd=({:.2},{:.2}) battle={} huge={}",
+                "[pv] spans={} drawn={} trees={} cull(r={} cone={} occl={}) nearestCulled={:.0} focus=({:.0},{:.0}) eye=({:.0},{:.0}) fwd=({:.2},{:.2}) battle={} huge={}",
                 infos_ref.len(),
                 unsafe { DRAWN },
+                unsafe { TREES_DRAWN },
                 unsafe { CULL_RADIUS_N },
                 unsafe { CULL_CONE_N },
                 unsafe { CULL_OCCL_N },
@@ -4402,6 +4475,62 @@ if page_tex.len() < pak_static.atlases.len() {
                     }
                     drawn += 1;
                     frame.draw_arrays(buffer::Primitive::Triangles, bi, None).unwrap();
+                }
+                // --- tree instances -------------------------------------
+                // The same shape drawn where each placement says, at the
+                // level of detail its distance earns: near ones carved,
+                // far ones coarse, and nothing dropped for want of budget
+                // the way a baked-in chunk mesh had to be.
+                if !tree_insts_ref.is_empty() {
+                    let mut tdrawn = 0u32;
+                    for it in tree_insts_ref.iter() {
+                        let (ix, iz) = (it.x as f32, it.z as f32);
+                        // near/far by distance to the focus, the same
+                        // measure the spans above cull on
+                        let dx = ix + 8.0 - focus_x;
+                        let dz = iz + 8.0 - focus_z;
+                        let dist = (dx * dx + dz * dz).sqrt();
+                        let want = if dist <= TREE_NEAR_PX { it.near } else { it.far };
+                        let id = if want == TREE_SHAPE_NONE {
+                            if it.near != TREE_SHAPE_NONE { it.near } else { it.far }
+                        } else {
+                            want
+                        };
+                        let Some(Some((bi, gmin, gmax))) = tree_bufs_ref.get(id as usize) else {
+                            continue;
+                        };
+                        // the shape's own box, put where this copy stands
+                        let cx = ix + (gmin[0] + gmax[0]) * 0.5;
+                        let cz = iz + (gmin[2] + gmax[2]) * 0.5;
+                        let hx = (gmax[0] - gmin[0]) * 0.5;
+                        let hz = (gmax[2] - gmin[2]) * 0.5;
+                        let ddx = cx - focus_x;
+                        let ddz = cz - focus_z;
+                        let extent = (hx * hx + hz * hz).sqrt();
+                        if (ddx * ddx + ddz * ddz).sqrt() - extent > cull_radius {
+                            continue;
+                        }
+                        if guest_drive {
+                            let vx = cx - eye_x;
+                            let vz = cz - eye_z;
+                            let along = vx * fx + vz * fz;
+                            let side = (vx * fz - vz * fx).abs();
+                            let fwd_half = (hx * fx).abs() + (hz * fz).abs();
+                            let lat_half = (hx * fz).abs() + (hz * fx).abs();
+                            let far_edge = along + fwd_half;
+                            let half = (far_edge * far_edge + cam_h * cam_h).sqrt() * TAN_HHALF;
+                            if far_edge < -CONE_PAD || side - lat_half > half + CONE_PAD {
+                                continue;
+                            }
+                        }
+                        let mut m = *mvp;
+                        m.translate(ix, it.y as f32, iz);
+                        frame.bind_vertex_uniform(projection_idx, &m);
+                        frame.draw_arrays(buffer::Primitive::Triangles, bi, None).unwrap();
+                        tdrawn += 1;
+                    }
+                    frame.bind_vertex_uniform(projection_idx, mvp);
+                    unsafe { TREES_DRAWN = tdrawn };
                 }
                 unsafe {
                     DRAWN = drawn;

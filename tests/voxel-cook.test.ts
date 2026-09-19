@@ -53,6 +53,10 @@ import {
   VXPK_CHUNK_RECORD_SIZE,
   VXPK_META_FLAG_TREE_LOD,
   VXPK_TAG,
+  VXPK_TREE_INST_SIZE,
+  VXPK_TREE_SHAPE_SIZE,
+  VXPK_VERSION_TREES,
+  TREE_SHAPE_NONE,
   WORLD_VIEW_H,
 } from "../contracts/spec/voxel-spec.ts";
 
@@ -101,6 +105,53 @@ function readPak(path: string): { flags: number; chunks: ChunkRec[] } {
   return { flags, chunks };
 }
 
+/** A pak's TINS section: the shape library and the placements. */
+function readTins(path: string): {
+  version: number;
+  shapeTotal: number;
+  instTotal: number;
+  shapes: { vertBase: number; vertCount: number; indexCount: number }[];
+  insts: { x: number; y: number; z: number; near: number; far: number }[];
+} {
+  const bytes = readFileSync(path);
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const version = dv.getUint16(4, true);
+  const sections = new Map<number, number>();
+  for (let i = 0; i < dv.getUint16(6, true); i++) {
+    const e = 16 + i * 16;
+    sections.set(dv.getUint32(e, true), dv.getUint32(e + 4, true));
+  }
+  const at = sections.get(VXPK_TAG.trees);
+  if (at === undefined) {
+    return { version, shapeTotal: 0, instTotal: 0, shapes: [], insts: [] };
+  }
+  const mapCount = dv.getUint16(at, true);
+  const shapeTotal = dv.getUint32(at + 4, true);
+  const instTotal = dv.getUint32(at + 8, true);
+  const shapes = [];
+  for (let i = 0; i < shapeTotal; i++) {
+    const r = at + 16 + i * VXPK_TREE_SHAPE_SIZE;
+    shapes.push({
+      vertBase: dv.getUint32(r, true),
+      vertCount: dv.getUint16(r + 4, true),
+      indexCount: dv.getUint16(r + 6, true),
+    });
+  }
+  const instAt = at + 16 + shapeTotal * VXPK_TREE_SHAPE_SIZE + mapCount * 12;
+  const insts = [];
+  for (let i = 0; i < instTotal; i++) {
+    const r = instAt + i * VXPK_TREE_INST_SIZE;
+    insts.push({
+      x: dv.getInt16(r, true),
+      y: dv.getInt16(r + 2, true),
+      z: dv.getInt16(r + 4, true),
+      near: dv.getUint16(r + 6, true),
+      far: dv.getUint16(r + 8, true),
+    });
+  }
+  return { version, shapeTotal, instTotal, shapes, insts };
+}
+
 const root = join(import.meta.dir, "..");
 const scratch = join(root, "dist/voxelmon");
 
@@ -123,8 +174,28 @@ describe.skipIf(reason !== null)("voxel cook", () => {
   const outB = join(scratch, "voxelmon.test-b.vxpak");
   let resultA: ReturnType<typeof cook>;
 
+  /**
+   * Cook with tree instancing OFF.
+   *
+   * The invariants below -- both levels present, the hull suffix order, the
+   * box floor -- are about the geometry a chunk CARRIES, and instancing
+   * lifts repeated tree cells out of the chunks into TINS (see "tree
+   * instancing" below, which pins that path). Cooking the fixture this way
+   * keeps testing the layout these tests are about.
+   */
+  const cookInChunks = (maps: string[], out: string): ReturnType<typeof cook> => {
+    const before = process.env.VOXEL_TREE_INSTANCES;
+    process.env.VOXEL_TREE_INSTANCES = "0";
+    try {
+      return cook(maps, out);
+    } finally {
+      if (before === undefined) delete process.env.VOXEL_TREE_INSTANCES;
+      else process.env.VOXEL_TREE_INSTANCES = before;
+    }
+  };
+
   test("cook produces a pak the Rust reader validates", () => {
-    resultA = cook(DEFAULT_MAPS, outA);
+    resultA = cookInChunks(DEFAULT_MAPS, outA);
     expect(resultA.pakBytes).toBeGreaterThan(0);
 
     // Smoke gate: the core's untrusted-byte reader accepts every section.
@@ -140,7 +211,7 @@ describe.skipIf(reason !== null)("voxel cook", () => {
   }, 240000);
 
   test("cook is deterministic: two cooks, identical bytes", () => {
-    cook(DEFAULT_MAPS, outB);
+    cookInChunks(DEFAULT_MAPS, outB);
     const a = readFileSync(outA);
     const b = readFileSync(outB);
     expect(a.equals(b)).toBe(true);
@@ -182,6 +253,52 @@ describe.skipIf(reason !== null)("voxel cook", () => {
       expect(hull.vertBase).toBe(terrain.vertBase + terrain.vertCount);
     }
     expect(checked).toBeGreaterThan(0);
+  });
+
+  // Tree instancing (TINS): a carved hull is stamped per cell, so a map full
+  // of the same drawing is that drawing thousands of times -- 37.5 MB of
+  // vertices in Viridian Forest, more than a 3DS will hold, which is why the
+  // cook had to shed detail and then whole trees. The cook lifts repeated
+  // cells into one shape plus placements, and the pak says v9 so a reader
+  // that predates it never sees a section it cannot parse.
+  describe("tree instancing", () => {
+    const outT = join(scratch, "voxelmon.test-trees.vxpak");
+    let pak: ReturnType<typeof readTins>;
+
+    test("repeated tree cells become shapes and placements", () => {
+      cook(DEFAULT_MAPS, outT);
+      pak = readTins(outT);
+      expect(pak.version).toBe(VXPK_VERSION_TREES);
+      expect(pak.shapeTotal).toBeGreaterThan(0);
+      // The point of the exercise: far more placements than shapes.
+      expect(pak.instTotal).toBeGreaterThan(pak.shapeTotal * 4);
+      // Every placement names a shape that is there, at one level or both.
+      for (const it of pak.insts) {
+        expect(it.near === TREE_SHAPE_NONE || it.near < pak.shapeTotal).toBe(true);
+        expect(it.far === TREE_SHAPE_NONE || it.far < pak.shapeTotal).toBe(true);
+        expect(it.near !== TREE_SHAPE_NONE || it.far !== TREE_SHAPE_NONE).toBe(true);
+      }
+    }, 240000);
+
+    test("the chunks they came from carry no tree geometry", () => {
+      const { chunks } = readPak(outT);
+      const tris = (kind: number) =>
+        chunks.reduce((n, c) => n + c.meshes[kind].indexCount / 3, 0);
+      expect(tris(MESH_KIND.treeHull)).toBe(0);
+      expect(tris(MESH_KIND.treeCoarse)).toBe(0);
+    });
+
+    test("it is a big saving, and the in-chunk cook is the one it saves", () => {
+      // Same maps, same everything, tree cells kept per chunk.
+      const plain = readPak(outA);
+      const hullTris = plain.chunks.reduce(
+        (n, c) => n + c.meshes[MESH_KIND.treeHull].indexCount / 3,
+        0,
+      );
+      expect(hullTris).toBeGreaterThan(0);
+      const shapeTris = pak.shapes.reduce((n, sh) => n + sh.indexCount / 3, 0);
+      expect(shapeTris * 4).toBeLessThan(hullTris);
+    });
   });
 
   // The ladder's predecessor still works, and still states what it is: a

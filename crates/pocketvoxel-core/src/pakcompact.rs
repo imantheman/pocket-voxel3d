@@ -335,13 +335,14 @@ mod tests {
         out
     }
 
-    /// Pack Viridian Forest's planned geometry and check it comes out the
-    /// same, from a buffer a fraction of the size. This is the map the
-    /// packing exists for: 56 MB, of which the build can draw ~13 MB.
+    /// Pack a big map's planned geometry and check it comes out the same,
+    /// from a buffer a fraction of the size. Route 23 is the largest map
+    /// still read in place: 47 MB, of which a build draws a fraction.
     #[test]
-    fn packs_the_forest_without_changing_a_triangle() {
+    fn packs_a_big_map_without_changing_a_triangle() {
         let dir = paks();
-        let path = dir.join("VIRIDIAN_FOREST.vxpak");
+        // The biggest map still read in place: 47 MB, no stamps, v8.
+        let path = dir.join("ROUTE_23.vxpak");
         if !path.exists() {
             eprintln!("no cooked paks; skipped");
             return;
@@ -366,8 +367,8 @@ mod tests {
         // the player in.
         let map = orig.maps[0];
         let chunks = &orig.chunks[map.first as usize..(map.first + map.count) as usize];
-        let (order, huge, budget) = build_order(chunks, Some((320.0, 1400.0)));
-        assert!(huge, "the forest is the huge map this is for");
+        let (order, huge, budget) = build_order(chunks, Some((160.0, 1400.0)));
+        assert!(huge, "this is the map size packing is for");
         let bp = plan_build(chunks, &order, huge, budget, 0);
         let planned: Vec<(usize, usize)> = bp
             .items
@@ -396,7 +397,7 @@ mod tests {
 
         // Well under the file, and under what a 3DS heap will hand out.
         eprintln!(
-            "forest: {} MB file -> {} MB packed, {} reads",
+            "packed: {} MB file -> {} MB, {} reads",
             blob.len() / 1048576,
             c.len / 1048576,
             c.copies.len()
