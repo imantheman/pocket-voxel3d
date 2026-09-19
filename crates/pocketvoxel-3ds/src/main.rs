@@ -377,7 +377,7 @@ unsafe fn prefetch_retarget(map_id: u32) {
 /// seven seconds of walking to arrive in time. The loop below stops before a
 /// slice it predicts will overrun, so this is a ceiling rather than a
 /// quantum: a slower card takes fewer slices rather than a longer frame.
-const PREFETCH_MS: u64 = 8;
+const PREFETCH_MS: u64 = 12;
 /// Bytes per read. At ~11 MB/s this is ~6 ms, comfortably inside the budget
 /// while being big enough that per-read overhead is not the limit.
 const PREFETCH_SLICE: usize = 64 * 1024;
@@ -1230,14 +1230,11 @@ static mut LEGACY_ZONE: bool = false;
 /// Lines held for one write at the end of a map load (outside the zone).
 static mut DLOG_BATCH: Option<String> = None;
 
-/// Viridian Forest, its two gates, and Route 2 with its buildings -- the
-/// maps the forest is reached through. Exact names: ROUTE_20..25 must not
-/// match.
+/// Viridian Forest and its two gates. Route 2 was in this list too, which
+/// put Route 2, Pewter and Viridian City (Route 2's neighbours) all on the
+/// slow path; none of them is where the forest has ever failed.
 fn forest_zone(name: &str) -> bool {
     name.starts_with("VIRIDIAN_FOREST")
-        || name == "ROUTE_2"
-        || name == "ROUTE_2_GATE"
-        || name == "ROUTE_2_TRADE_HOUSE"
 }
 
 #[allow(static_mut_refs)]
@@ -1703,16 +1700,9 @@ unsafe fn resident_pak(name: &str) -> Option<&'static Pak<'static>> {
         .map(|c| core::mem::transmute::<&Pak<'static>, &'static Pak<'static>>(&c.pak))
 }
 
-/// A resident copy read WHOLE. A planned copy holds only the tree tier its
-/// own build chose, and a strip wants the box tier, so only these serve
-/// `strip_from_pak`.
-#[allow(static_mut_refs)]
-unsafe fn resident_whole_pak(name: &str) -> Option<&'static Pak<'static>> {
-    PAK_CACHE
-        .iter()
-        .find(|c| c.name == name && c.plan.is_none())
-        .map(|c| core::mem::transmute::<&Pak<'static>, &'static Pak<'static>>(&c.pak))
-}
+/// Every neighbour box read so far, by map id. A map's box never changes,
+/// so after the first time a crossing pays nothing for it.
+static mut BOUNDS_SEEN: Vec<(u32, [f32; 2], [f32; 2])> = Vec::new();
 
 /// `neighbor_bounds`, from a pak already in memory: no file opened.
 fn bounds_from_pak(pak: &Pak, map_id: u32) -> Option<([f32; 2], [f32; 2])> {
@@ -1732,6 +1722,18 @@ fn bounds_from_pak(pak: &Pak, map_id: u32) -> Option<([f32; 2], [f32; 2])> {
         [mn[0] + ring[0], mn[1] + ring[1]],
         [mx[0] - ring[0], mx[1] - ring[1]],
     ))
+}
+
+/// Whether a mesh's data is really in this copy of the pak. A planned read
+/// leaves what it skipped zero-filled (map_pak resizes with 0), and no real
+/// triangle is (0, 0, 0).
+fn mesh_loaded(pak: &Pak, m: pak::MeshRange) -> bool {
+    if m.index_count < 3 {
+        return false;
+    }
+    let b = m.index_base as usize;
+    let Some(t) = pak.indices.get(b..b + 3) else { return false };
+    !(t[0] == t[1] && t[1] == t[2])
 }
 
 /// `load_neighbor_strip`, from a pak already in memory (a read-ahead copy):
@@ -1777,13 +1779,32 @@ fn strip_from_pak(
         let (x0, z0) = (c.aabb_min[0] as f32 + ox, c.aabb_min[2] as f32 + oy);
         let (x1, z1) = (c.aabb_max[0] as f32 + ox, c.aabb_max[2] as f32 + oy);
         let (y0, y1) = (c.aabb_min[1] as f32, c.aabb_max[1] as f32);
+        // The tree tier: the box the file path would read, or -- in a copy
+        // read under a plan, which holds only the tier its own build chose --
+        // the finer tier that copy did load.
+        let tree_kind = [TREE_BOX_KIND, TREE_COARSE_KIND, TREE_HULL_KIND]
+            .into_iter()
+            .find(|&k| mesh_loaded(pak, c.meshes[k]));
+        if c.meshes[TREE_BOX_KIND].index_count > 0 && tree_kind.is_none() {
+            return None; // no tier of this chunk's trees is in memory
+        }
         for kind in 0..MESH_KINDS_N {
-            let m = c.meshes[kind];
+            let src_kind = if kind == TREE_BOX_KIND {
+                match tree_kind {
+                    Some(k) => k,
+                    None => continue,
+                }
+            } else if GROUND_KINDS.contains(&kind) {
+                kind
+            } else {
+                continue;
+            };
+            let m = c.meshes[src_kind];
             if m.index_count == 0 {
                 continue;
             }
-            if !(GROUND_KINDS.contains(&kind) || kind == TREE_BOX_KIND) {
-                continue;
+            if !mesh_loaded(pak, m) {
+                return None; // ground this copy never read: use the file
             }
             let span_start = verts.len();
             let mut gmin = [f32::MAX; 3];
@@ -2160,9 +2181,14 @@ fn build_map(
     // Size the buffer once from the plan, instead of letting it double its
     // way up: each doubling copies everything pushed so far, which on a
     // 300k-vertex route is several full copies in the frame being waited on.
-    // The clip only ever removes, so this is an upper bound. The forest zone
-    // grows it the way it always has.
-    if !unsafe { LEGACY_ZONE } {
+    // The clip only ever removes, so this is an upper bound.
+    //
+    // This is also what keeps Viridian Forest alive. Growing by doubling, its
+    // 400,000 vertices pass through a moment where the old 5 MB block and the
+    // new 10 MB one both exist, on a heap its 57 MB pak has already nearly
+    // filled; the console rebooted there, between the read and the build.
+    // Reserved once, the peak is the 8 MB the vertices actually take.
+    {
         let want: usize = plan
             .items
             .iter()
@@ -3136,14 +3162,29 @@ fn main() {
                     };
                     // A resident copy answers without opening the file;
                     // the forest zone keeps the file read it always did.
-                    let resident = if unsafe { LEGACY_ZONE } { None } else { unsafe { resident_pak(nname) } };
-                    let bounds = match resident {
-                        Some(p) => bounds_from_pak(p, nid),
-                        None => {
-                            let path = format!("sdmc:/3ds/voxelmon/paks/{}.vxpak", nname);
-                            neighbor_bounds(&path, nid)
+                    let legacy = unsafe { LEGACY_ZONE };
+                    #[allow(static_mut_refs)]
+                    let seen = if legacy {
+                        None
+                    } else {
+                        unsafe { BOUNDS_SEEN.iter().find(|b| b.0 == nid).map(|b| (b.1, b.2)) }
+                    };
+                    let resident = if legacy || seen.is_some() { None } else { unsafe { resident_pak(nname) } };
+                    let bounds = if seen.is_some() {
+                        seen
+                    } else {
+                        match resident {
+                            Some(p) => bounds_from_pak(p, nid),
+                            None => {
+                                let path = format!("sdmc:/3ds/voxelmon/paks/{}.vxpak", nname);
+                                neighbor_bounds(&path, nid)
+                            }
                         }
                     };
+                    if let (false, None, Some((a, b))) = (legacy, seen, bounds) {
+                        #[allow(static_mut_refs)]
+                        unsafe { BOUNDS_SEEN.push((nid, a, b)) };
+                    }
                     let Some((nmn, nmx)) = bounds else {
                         continue;
                     };
@@ -3291,7 +3332,7 @@ fn main() {
                     };
                     // From memory when the read-ahead already has it whole;
                     // off the card otherwise, and always in the forest zone.
-                    let resident = if unsafe { LEGACY_ZONE } { None } else { unsafe { resident_whole_pak(nname) } };
+                    let resident = if unsafe { LEGACY_ZONE } { None } else { unsafe { resident_pak(nname) } };
                     let strip = match resident {
                         Some(p) => strip_from_pak(p, nid, ox, oy, geom.map_min, geom.map_max, last_tint),
                         None => {
