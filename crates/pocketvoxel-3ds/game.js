@@ -8565,7 +8565,6 @@ class Overworld {
     this.syncSurf();
     visit(this.save, mapId);
     MAP_SCRIPTS[mapId]?.onEnter?.(this, this.save);
-    console.log("NPCS " + this.npcs.map((n) => JSON.stringify(n, (k, v) => typeof v === "object" && v !== null && k !== "" ? undefined : v)).join(" | "));
   }
   objectVisible(obj) {
     const key = objectToggleKey(obj);

@@ -1185,15 +1185,79 @@ unsafe fn log_open() {
 /// leaves the directory entry uncommitted and the file simply is not there.
 /// Closing every line is what commits it. Called about once a second, so the
 /// cost is not worth the risk of losing the whole log.
+///
+/// Outside the forest zone (see `forest_zone`) the cost is cut two ways: one
+/// file instead of three, and the dozen lines a map load writes are gathered
+/// (`dlog_batch_begin`) and committed in ONE open/close when it ends
+/// (`dlog_batch_end`) instead of thirty-odd, each of which is an SD round
+/// trip in the frame the player is waiting on. Inside the zone every line
+/// still goes to all three files the moment it is written, as it always has.
+#[allow(static_mut_refs)]
 fn dlog(s: &str) {
     unsafe {
         svcOutputDebugString(s.as_ptr(), s.len() as i32);
+        if !LEGACY_ZONE {
+            if let Some(b) = DLOG_BATCH.as_mut() {
+                b.push_str(s);
+                b.push('\n');
+                return;
+            }
+        }
     }
     use std::io::Write;
-    for path in LOG_PATHS {
+    let paths: &[&str] = if unsafe { LEGACY_ZONE } { &LOG_PATHS } else { &LOG_PATHS[..1] };
+    for path in paths {
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
             let _ = writeln!(f, "{}", s);
         }
+    }
+}
+
+/// osGetTime, for the load timings.
+fn now_ms() -> u64 {
+    extern "C" { fn osGetTime() -> u64; }
+    unsafe { osGetTime() }
+}
+
+/// Where the last map load's time went, ms: the guest's frame that asked
+/// for it, the pak read, then the host's stages. Logged as one line.
+static mut LOAD_JS_MS: u64 = 0;
+static mut LOAD_PAK_MS: u64 = 0;
+
+/// True while the player is in or beside Viridian Forest: every load path
+/// there stays exactly as it was (logging, seam strips, the build).
+static mut LEGACY_ZONE: bool = false;
+/// Lines held for one write at the end of a map load (outside the zone).
+static mut DLOG_BATCH: Option<String> = None;
+
+/// Viridian Forest, its two gates, and Route 2 with its buildings -- the
+/// maps the forest is reached through. Exact names: ROUTE_20..25 must not
+/// match.
+fn forest_zone(name: &str) -> bool {
+    name.starts_with("VIRIDIAN_FOREST")
+        || name == "ROUTE_2"
+        || name == "ROUTE_2_GATE"
+        || name == "ROUTE_2_TRADE_HOUSE"
+}
+
+#[allow(static_mut_refs)]
+fn dlog_batch_begin() {
+    unsafe {
+        if !LEGACY_ZONE && DLOG_BATCH.is_none() {
+            DLOG_BATCH = Some(String::new());
+        }
+    }
+}
+
+#[allow(static_mut_refs)]
+fn dlog_batch_end() {
+    let Some(b) = (unsafe { DLOG_BATCH.take() }) else { return };
+    if b.is_empty() {
+        return;
+    }
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(LOG_PATHS[0]) {
+        let _ = f.write_all(b.as_bytes());
     }
 }
 
@@ -1386,7 +1450,14 @@ fn ring_inner_face(p: [[f32; 3]; 3], clip_min: [f32; 2], clip_max: [f32; 2]) -> 
     const ON: f32 = 0.01;
     let mx = (p[0][0] + p[1][0] + p[2][0]) / 3.0;
     let mz = (p[0][2] + p[1][2] + p[2][2]) / 3.0;
-    let a = [p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]];
+    // Nearly every triangle is nowhere near an edge: answer those before
+    // the cross product, which is the per-triangle cost of this test.
+    let on_x = (mx - clip_min[0]).abs() < ON || (mx - clip_max[0]).abs() < ON;
+    let on_z = (mz - clip_min[1]).abs() < ON || (mz - clip_max[1]).abs() < ON;
+    if !on_x && !on_z {
+        return false;
+    }
+    let a =[p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]];
     let b = [p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]];
     let nx = a[1] * b[2] - a[2] * b[1];
     let nz = a[0] * b[1] - a[1] * b[0];
@@ -1620,6 +1691,163 @@ fn neighbor_bounds(path: &str, map_id: u32) -> Option<([f32; 2], [f32; 2])> {
         [mn[0] + ring[0], mn[1] + ring[1]],
         [mx[0] - ring[0], mx[1] - ring[1]],
     ))
+}
+
+/// A resident copy of `name`, if the cache holds one. Chunk records are in
+/// every copy, planned or whole, so this serves `bounds_from_pak`.
+#[allow(static_mut_refs)]
+unsafe fn resident_pak(name: &str) -> Option<&'static Pak<'static>> {
+    PAK_CACHE
+        .iter()
+        .find(|c| c.name == name)
+        .map(|c| core::mem::transmute::<&Pak<'static>, &'static Pak<'static>>(&c.pak))
+}
+
+/// A resident copy read WHOLE. A planned copy holds only the tree tier its
+/// own build chose, and a strip wants the box tier, so only these serve
+/// `strip_from_pak`.
+#[allow(static_mut_refs)]
+unsafe fn resident_whole_pak(name: &str) -> Option<&'static Pak<'static>> {
+    PAK_CACHE
+        .iter()
+        .find(|c| c.name == name && c.plan.is_none())
+        .map(|c| core::mem::transmute::<&Pak<'static>, &'static Pak<'static>>(&c.pak))
+}
+
+/// `neighbor_bounds`, from a pak already in memory: no file opened.
+fn bounds_from_pak(pak: &Pak, map_id: u32) -> Option<([f32; 2], [f32; 2])> {
+    let map = pak.maps.iter().find(|m| m.map_id == map_id)?;
+    if map.count == 0 {
+        return None;
+    }
+    let (mut mn, mut mx) = ([f32::MAX; 2], [f32::MIN; 2]);
+    for c in &pak.chunks[map.first as usize..(map.first + map.count) as usize] {
+        mn[0] = mn[0].min(c.aabb_min[0] as f32);
+        mn[1] = mn[1].min(c.aabb_min[2] as f32);
+        mx[0] = mx[0].max(c.aabb_max[0] as f32);
+        mx[1] = mx[1].max(c.aabb_max[2] as f32);
+    }
+    let ring = [(-mn[0]).max(0.0), (-mn[1]).max(0.0)];
+    Some((
+        [mn[0] + ring[0], mn[1] + ring[1]],
+        [mx[0] - ring[0], mx[1] - ring[1]],
+    ))
+}
+
+/// `load_neighbor_strip`, from a pak already in memory (a read-ahead copy):
+/// the same chunks, the same order, the same cap, the same clip -- and no
+/// SD traffic, where the file path costs a seek and two reads per chunk and
+/// mesh kind, in the frame the player is crossing the seam.
+fn strip_from_pak(
+    pak: &Pak,
+    map_id: u32,
+    ox: f32,
+    oy: f32,
+    cur_min: [f32; 2],
+    cur_max: [f32; 2],
+    tint: u32,
+) -> Option<NeighborStrip> {
+    let map = pak.maps.iter().find(|m| m.map_id == map_id)?;
+    if map.count == 0 {
+        return None;
+    }
+    let chunks = &pak.chunks[map.first as usize..(map.first + map.count) as usize];
+    let (nb_real_min, nb_real_max) = bounds_from_pak(pak, map_id)?;
+
+    let mut cand: Vec<(usize, f32)> = Vec::new();
+    for (ci, c) in chunks.iter().enumerate() {
+        let (x0, z0) = (c.aabb_min[0] as f32 + ox, c.aabb_min[2] as f32 + oy);
+        let (x1, z1) = (c.aabb_max[0] as f32 + ox, c.aabb_max[2] as f32 + oy);
+        let dx = (cur_min[0] - x1).max(x0 - cur_max[0]).max(0.0);
+        let dz = (cur_min[1] - z1).max(z0 - cur_max[1]).max(0.0);
+        if dx > STRIP_DEPTH_PX || dz > STRIP_DEPTH_PX {
+            continue;
+        }
+        cand.push((ci, dx.max(dz)));
+    }
+    cand.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(core::cmp::Ordering::Equal));
+
+    let mut verts: Vec<Vertex> = Vec::new();
+    let mut spans: Vec<Span> = Vec::new();
+    for (ci, _) in cand {
+        if verts.len() >= STRIP_MAX_VERTS {
+            break;
+        }
+        let c = &chunks[ci];
+        let (x0, z0) = (c.aabb_min[0] as f32 + ox, c.aabb_min[2] as f32 + oy);
+        let (x1, z1) = (c.aabb_max[0] as f32 + ox, c.aabb_max[2] as f32 + oy);
+        let (y0, y1) = (c.aabb_min[1] as f32, c.aabb_max[1] as f32);
+        for kind in 0..MESH_KINDS_N {
+            let m = c.meshes[kind];
+            if m.index_count == 0 {
+                continue;
+            }
+            if !(GROUND_KINDS.contains(&kind) || kind == TREE_BOX_KIND) {
+                continue;
+            }
+            let span_start = verts.len();
+            let mut gmin = [f32::MAX; 3];
+            let mut gmax = [f32::MIN; 3];
+            let vbase = m.vert_base as usize;
+            for t in 0..m.index_count as usize / 3 {
+                let b = m.index_base as usize + t * 3;
+                let p = [
+                    pak.verts[vbase + pak.indices[b] as usize],
+                    pak.verts[vbase + pak.indices[b + 1] as usize],
+                    pak.verts[vbase + pak.indices[b + 2] as usize],
+                ];
+                let mid_x = (p[0].x as f32 + p[1].x as f32 + p[2].x as f32) / 3.0;
+                let mid_z = (p[0].z as f32 + p[1].z as f32 + p[2].z as f32) / 3.0;
+                if mid_x < nb_real_min[0] || mid_x > nb_real_max[0]
+                    || mid_z < nb_real_min[1] || mid_z > nb_real_max[1]
+                {
+                    continue;
+                }
+                let tri = [
+                    [p[0].x as f32, p[0].y as f32, p[0].z as f32],
+                    [p[1].x as f32, p[1].y as f32, p[1].z as f32],
+                    [p[2].x as f32, p[2].y as f32, p[2].z as f32],
+                ];
+                if ring_inner_face(tri, nb_real_min, nb_real_max) {
+                    continue;
+                }
+                for pv in p {
+                    let (px, py, pz) = (pv.x as f32 + ox, pv.y as f32, pv.z as f32 + oy);
+                    let a = draw::modulate_rgb(pv.abgr, tint);
+                    let q = [px, py, pz];
+                    for k in 0..3 {
+                        if q[k] < gmin[k] { gmin[k] = q[k]; }
+                        if q[k] > gmax[k] { gmax[k] = q[k]; }
+                    }
+                    verts.push(Vertex {
+                        pos: [px as i16, py as i16, pz as i16, 0],
+                        color: [
+                            (a & 0xff) as u8,
+                            ((a >> 8) & 0xff) as u8,
+                            ((a >> 16) & 0xff) as u8,
+                            255,
+                        ],
+                        uv: [pv.uf(), pv.vf()],
+                    });
+                }
+            }
+            if verts.len() > span_start {
+                spans.push(Span {
+                    bmin: [x0, y0, z0],
+                    bmax: [x1, y1, z1],
+                    gmin,
+                    gmax,
+                    occludable: kind == TREE_BOX_KIND,
+                    start: span_start,
+                    end: verts.len(),
+                });
+            }
+        }
+    }
+    if spans.is_empty() {
+        return None;
+    }
+    Some(NeighborStrip { map_id, verts, spans })
 }
 
 /// Read ONLY the seam-side chunks of a neighbour map's pak.
@@ -1929,6 +2157,20 @@ fn build_map(
         .sum();
     let plan = plan_build(all_chunks, &order, is_huge, budget, stamp_verts);
     let chunks: Vec<pak::Chunk> = all_chunks.to_vec();
+    // Size the buffer once from the plan, instead of letting it double its
+    // way up: each doubling copies everything pushed so far, which on a
+    // 300k-vertex route is several full copies in the frame being waited on.
+    // The clip only ever removes, so this is an upper bound. The forest zone
+    // grows it the way it always has.
+    if !unsafe { LEGACY_ZONE } {
+        let want: usize = plan
+            .items
+            .iter()
+            .map(|it| all_chunks[it.chunk].meshes[it.kind].index_count as usize)
+            .sum::<usize>()
+            + stamp_verts;
+        let _ = verts.try_reserve_exact(want.min(budget));
+    }
 
     // The border ring the cook fills beyond the map proper — bushes
     // outdoors, filler indoors. It sits OUTSIDE the real map box, and the
@@ -2427,6 +2669,8 @@ fn main() {
         hid.scan_input();
         let k = hid.keys_held();
         let d = hid.keys_down();
+        // Commit whatever the last map load logged, in one write.
+        dlog_batch_end();
         // START belongs to the game (menu). Exit with START+SELECT.
         unsafe {
             extern "C" { fn osGetTime() -> u64; }
@@ -2585,6 +2829,7 @@ fn main() {
             unsafe {
                 let mut e2 = [0u8; 256];
                 let mut failed = false;
+                let t_js = now_ms();
                 for _ in 0..steps {
                     if qjs_call_frame(CTX, b, e2.as_mut_ptr(), 255) != 0 { failed = true; break; }
                     // Scene time and audio belong to the SIM tick, not the
@@ -2619,15 +2864,34 @@ fn main() {
                     if slot.shown {
                         let want = slot.map_id;
                         if map_ids.get(map_i).copied() != Some(want) {
+                            // In or beside the forest, everything below runs
+                            // the way it always has. Decided before the read,
+                            // from the map and every neighbour it shows.
+                            {
+                                let name_of = |id: u32| {
+                                    map_index.iter().find(|(m, _)| *m == id).map(|(_, n)| n.as_str())
+                                };
+                                let mut zone = name_of(want).is_some_and(forest_zone);
+                                for i in 1..sc.maps.len() {
+                                    if sc.maps[i].shown && name_of(sc.maps[i].map_id).is_some_and(forest_zone) {
+                                        zone = true;
+                                    }
+                                }
+                                unsafe { LEGACY_ZONE = zone };
+                            }
+                            dlog_batch_begin();
                             if let Some((_, nm)) = map_index.iter().find(|(id, _)| *id == want) {
                                 // cam_px is already the NEW map's position on
                                 // this frame -- the same value `center` is
                                 // assigned a few lines below, and the same one
                                 // the build will plan against.
                                 let key = plan_key(want, sc.cam_px());
+                                LOAD_JS_MS = now_ms().wrapping_sub(t_js);
+                                let t_pak = now_ms();
                                 if unsafe { load_map_pak(nm, Some(key)) } {
                                     pak_static = unsafe { cur_pak() };
                                 }
+                                LOAD_PAK_MS = now_ms().wrapping_sub(t_pak);
                             }
                             if let Some(ix) = map_ids.iter().position(|&m| m == want) {
                                 map_i = ix;
@@ -2780,6 +3044,8 @@ fn main() {
 
         if reload {
             reload = false;
+            dlog_batch_begin();
+            let t_load = now_ms();
             // Load this map's own pak, then build from it.
             if let Some((id, nm)) = map_index.get(map_i) {
                 // The same position build_map is about to be handed, so the
@@ -2868,8 +3134,17 @@ fn main() {
                     let Some((_, nname)) = map_index.iter().find(|(id, _)| *id == nid) else {
                         continue;
                     };
-                    let path = format!("sdmc:/3ds/voxelmon/paks/{}.vxpak", nname);
-                    let Some((nmn, nmx)) = neighbor_bounds(&path, nid) else {
+                    // A resident copy answers without opening the file;
+                    // the forest zone keeps the file read it always did.
+                    let resident = if unsafe { LEGACY_ZONE } { None } else { unsafe { resident_pak(nname) } };
+                    let bounds = match resident {
+                        Some(p) => bounds_from_pak(p, nid),
+                        None => {
+                            let path = format!("sdmc:/3ds/voxelmon/paks/{}.vxpak", nname);
+                            neighbor_bounds(&path, nid)
+                        }
+                    };
+                    let Some((nmn, nmx)) = bounds else {
                         continue;
                     };
                     let (lo, hi) = ([nmn[0] + ox, nmn[1] + oy], [nmx[0] + ox, nmx[1] + oy]);
@@ -2879,6 +3154,7 @@ fn main() {
                     if lo[1] >= cmx[1] - 1.0 { seam_sides[3] = true; }
                 }
             }
+            let bounds_ms = now_ms().wrapping_sub(t_load);
             let want_key: BuiltKey = (
                 map_ids[map_i],
                 if cur_map_huge { stream_center_chunk } else { None },
@@ -2938,6 +3214,10 @@ fn main() {
                 ));
             }
             dlog(&format!("[pv] linear free {} KB before build", unsafe_free_kb()));
+            // The upload is where a load has died before (linear running
+            // dry): what led up to it is on the card before it starts.
+            dlog_batch_end();
+            dlog_batch_begin();
             // Holding the outgoing buffers while the new ones allocate
             // DOUBLES peak linear memory, and the vertex buffers are the
             // biggest thing in it (a full map can be 18 MB). That hold only
@@ -2988,6 +3268,7 @@ fn main() {
                 upload_fail,
             ));
 
+            let t_strips = now_ms();
             // --- connected-map seam strips -------------------------------
             // Skipped entirely on a huge map: those already spend their
             // whole vertex budget on the map underfoot, and that path is
@@ -3008,10 +3289,17 @@ fn main() {
                     let Some((_, nname)) = map_index.iter().find(|(id, _)| *id == nid) else {
                         continue;
                     };
-                    let path = format!("sdmc:/3ds/voxelmon/paks/{}.vxpak", nname);
-                    let Some(strip) = load_neighbor_strip(
-                        &path, nid, ox, oy, geom.map_min, geom.map_max, last_tint,
-                    ) else {
+                    // From memory when the read-ahead already has it whole;
+                    // off the card otherwise, and always in the forest zone.
+                    let resident = if unsafe { LEGACY_ZONE } { None } else { unsafe { resident_whole_pak(nname) } };
+                    let strip = match resident {
+                        Some(p) => strip_from_pak(p, nid, ox, oy, geom.map_min, geom.map_max, last_tint),
+                        None => {
+                            let path = format!("sdmc:/3ds/voxelmon/paks/{}.vxpak", nname);
+                            load_neighbor_strip(&path, nid, ox, oy, geom.map_min, geom.map_max, last_tint)
+                        }
+                    };
+                    let Some(strip) = strip else {
                         continue;
                     };
                     strip_verts_kb += strip.verts.len() * 20 / 1024;
@@ -3048,6 +3336,8 @@ fn main() {
                 strip_infos.len(),
                 strip_verts_kb,
             ));
+            let strips_ms = now_ms().wrapping_sub(t_strips);
+            let t_tex = now_ms();
             // Pre-warm the pages this map will ask for: decoding + uploading
             // mid-frame is what causes the hitch the first time a sprite or
             // the dialogue box appears.
@@ -3082,6 +3372,23 @@ fn main() {
             geom.verts = Vec::new();
             geom.verts.shrink_to_fit();
             dist = geom.size * 1.4;
+            {
+                let tex_ms = now_ms().wrapping_sub(t_tex);
+                let total = now_ms().wrapping_sub(t_load);
+                let (js, pk) = unsafe { (LOAD_JS_MS, LOAD_PAK_MS) };
+                dlog(&format!(
+                    "[pv] load {}: js {} pak {} | bounds {} build+upload {} strips {} tex {} | host {} ms{}",
+                    map_index.get(map_i).map(|(_, n)| n.as_str()).unwrap_or("?"),
+                    js, pk, bounds_ms,
+                    t_strips.wrapping_sub(t_load).wrapping_sub(bounds_ms),
+                    strips_ms, tex_ms, total,
+                    if unsafe { LEGACY_ZONE } { " (forest zone: unchanged path)" } else { "" },
+                ));
+                unsafe {
+                    LOAD_JS_MS = 0;
+                    LOAD_PAK_MS = 0;
+                }
+            }
             center = geom.center;
         }
 
@@ -3712,7 +4019,9 @@ if page_tex.len() < pak_static.atlases.len() {
         // comes up as bare sky is either spans=0 (nothing built or nothing
         // uploaded) or drawn=0 (everything culled) — these two numbers say
         // which, which is otherwise unknowable on a device with no console.
-        if dbg_tick % 60 == 0 {
+        // Every second in the forest zone, as always; every ten elsewhere,
+        // where it was three SD writes a second of nothing new.
+        if dbg_tick % (if unsafe { LEGACY_ZONE } { 60 } else { 600 }) == 0 {
             dlog(&format!(
                 "[pv] spans={} drawn={} cull(r={} cone={} occl={}) nearestCulled={:.0} focus=({:.0},{:.0}) eye=({:.0},{:.0}) fwd=({:.2},{:.2}) battle={} huge={}",
                 infos_ref.len(),

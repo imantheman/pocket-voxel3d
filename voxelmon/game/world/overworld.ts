@@ -492,8 +492,6 @@ export class Overworld implements ScriptWorld {
     visit(this.save as never, mapId);
     // A map script's every-load hook (story5.lua M.CINNABAR_ISLAND.onEnter).
     (MAP_SCRIPTS as Record<string, MapScript>)[mapId]?.onEnter?.(this, this.save);
-    console.log("NPCS " + (this.npcs as any[]).map((n: any) =>
-      JSON.stringify(n, (k, v) => (typeof v === "object" && v !== null && k !== "" ? undefined : v))).join(" | "));
   }
 
   // OverworldController.lua:110-114 objectVisible — the spawn filter. A
