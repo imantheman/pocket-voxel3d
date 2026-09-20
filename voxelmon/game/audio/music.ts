@@ -113,7 +113,17 @@ export class AudioDirector {
    * new op, i.e. a later rung — so the caller decides when to `restore()`.
    */
   playOnce(song: string): boolean {
-    if (!this.banks?.song(song)) return false;
+    if (!this.banks?.song(song)) {
+      // Every jingle the field plays -- Get_Item1, Go_Inside, Denied -- is an
+      // SFX in the ROM's tables, not a song (Sound.lua:55 FANFARES are sound
+      // effects that claim the music channels). Looking only in the song
+      // bank meant every one of these call sites played nothing at all.
+      if (this.banks?.sfx(song)) {
+        this.playSfx(song);
+        return true;
+      }
+      return false;
+    }
     this.play(song);
     return this.current === song;
   }

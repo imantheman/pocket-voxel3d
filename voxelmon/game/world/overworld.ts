@@ -1342,6 +1342,11 @@ export class Overworld implements ScriptWorld {
     this.shell.tint(abgr);
   }
 
+  /** Sound.lua:190 play — a one-shot effect over whatever is playing. */
+  playSfx(name: string): void {
+    this.shell.audio?.playSfx?.(name);
+  }
+
   /** Commands.lua:533 play_once — see showMapText's restore note. */
   playOnce(songId: string, onDone: () => void): void {
     this.oneShotPending = true;

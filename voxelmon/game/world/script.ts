@@ -65,6 +65,8 @@ export interface ScriptWorld {
   healParty(): void;
   /** Music.lua:playOnce — a one-shot song; onDone fires when it ends. */
   playOnce(songId: string, onDone: () => void): void;
+  /** Sound.lua:190 play — a field effect or a fanfare (give_item's jingle). */
+  playSfx?(name: string): void;
   /** The fade overlay's ramp (Commands.lua:1216); the port holds frames. */
   fade(dir: "in" | "out", frames: number, onDone: () => void): void;
   /** Screen-space portrait (voxel `pic` op): the intro speech, battle intros. */
@@ -162,8 +164,12 @@ function* set_flag(ctx: ScriptContext, ...args: unknown[]): Generator<void, void
 
 // Commands.lua:220 give_item — adds to the bag and shows the "got item!"
 // box; a full bag halts the script so later set_flag rows don't burn the
-// gift (pokered's `jr nc, .bag_full`). The jingle (sound_get_item_1) is
-// out of the slice's scope; the box waits on A/B like every other.
+// gift (pokered's `jr nc, .bag_full`).
+//
+// The jingle is sound_get_item_1, or sound_get_key_item for a key item. In
+// pokered it is a trailing TEXT COMMAND, so it fires once the last page has
+// typed out; here it rides the box opening instead, which is the same beat
+// to within the typing of two lines and needs no hook into the text engine.
 function* give_item(ctx: ScriptContext, ...args: unknown[]): Generator<void, number | void> {
   const itemId = args[0] as string;
   const count = (args[1] as number | undefined) ?? 1;
@@ -177,6 +183,7 @@ function* give_item(ctx: ScriptContext, ...args: unknown[]): Generator<void, num
   }
   const def = w.data.items?.[itemId];
   const name = def?.name ?? itemId;
+  w.playSfx?.(def?.keyItem ? "Get_Key_Item" : "Get_Item1");
   if (gotText !== false) {
     // gotText picks the script's own received-text (a label or a literal);
     // pokered copies the item name into wStringBuffer first, so the extracted
@@ -327,6 +334,21 @@ function* give_pokemon(ctx: ScriptContext, ...args: unknown[]): Generator<void, 
 }
 
 function* noop_object(): Generator<void, number | void> { return; }
+
+// Commands.lua:533 play_sound / play_music. Both were no-ops: the cues named
+// here (Get_Item1, Tink, Music_MeetRival) never reached the audio director,
+// so gift jingles and the rival's encounter theme were silent.
+function* play_sound(ctx: ScriptContext, ...args: unknown[]): Generator<void, number | void> {
+  ctx.world.playSfx?.(args[0] as string);
+}
+
+function* play_music(ctx: ScriptContext, ...args: unknown[]): Generator<void, number | void> {
+  // Through playOnce: it takes over the map theme's slot and the world puts
+  // the theme back when the script ends (overworld.ts oneShotPending), which
+  // is where the reference's own restore lands for a scene like this.
+  ctx.world.playOnce(args[0] as string, () => {});
+}
+
 function* noop_audio(): Generator<void, number | void> { return; }
 
 function* walk_route(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
@@ -1056,8 +1078,8 @@ const VERBS: Record<string, Verb> = {
   old_man_demo,
   record_hall_of_fame,
   push_screen: noop_object,
-  play_sound: noop_audio,
-  play_music: noop_audio,
+  play_sound,
+  play_music,
   stop_music: noop_audio,
 };
 

@@ -135,6 +135,9 @@ export interface ItemDef {
   index: number;
   name: string;
   price: number;
+  /** The bag refuses to toss or sell it, and a gift of one plays the
+   * key-item jingle rather than the ordinary one (items.json carries it). */
+  keyItem?: boolean;
   tossable?: boolean;
   ball?: string;
   machine?: { kind: string; number: number; move: string };

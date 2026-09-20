@@ -1797,7 +1797,9 @@ describe("battle and encounter music", () => {
     const audio = (game as unknown as { audio: any }).audio;
     if (!audio.__log) {
       audio.__log = [];
-      for (const m of ["play", "playBattle", "playVictory", "playOnce", "startMap", "restore"]) {
+      const hooked = ["play", "playBattle", "playVictory", "playOnce", "startMap",
+                      "restore", "playSfx"];
+      for (const m of hooked) {
         const orig = audio[m].bind(audio);
         audio[m] = (...args: unknown[]) => {
           audio.__log.push(`${m}:${args[0] ?? ""}`);
@@ -1807,6 +1809,46 @@ describe("battle and encounter music", () => {
     }
     return audio.__log as string[];
   }
+
+  test.skipIf(!hasGen)("the rival's encounter theme opens his scene", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 20));
+    const log = songLog(game);
+    ow.setMap("SS_ANNE_2F", 37, 8, "up");
+    log.length = 0;
+    ow.onStepComplete();
+    let guard = 0;
+    while (game.stackKinds().at(-1) !== "textbox" && guard++ < 600) game.tick(0);
+    // PlayTrainerMusic bails on the rival classes (home/trainers.asm:399), so
+    // his own scene is the only thing that gives him a sting -- and it starts
+    // as he walks up, before his line, not under the battle.
+    expect(log[0]).toBe("playOnce:Music_MeetRival");
+    expect(topText(game)).toContain("Bonjour");
+  });
+
+  test.skipIf(!hasGen)("a gift plays the item jingle, a key item its own", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld as any;
+    const log = songLog(game);
+    ow.setMap("PALLET_TOWN", 5, 6, "down");
+
+    const gift = (item: string): string[] => {
+      log.length = 0;
+      ow.runner.run([["give_item", item]]);
+      for (let i = 0; i < 400; i++) {
+        game.tick(0);
+        dismissText(game);
+        if (!ow.runner.isRunning()) break;
+      }
+      return [...log];
+    };
+
+    // sound_get_item_1 / sound_get_key_item (home/text.asm TextCommand_SOUND)
+    expect(gift("POTION")).toContain("playSfx:Get_Item1");
+    expect(gift("TOWN_MAP")).toContain("playSfx:Get_Key_Item");
+    expect(game.save.inventory.POTION).toBe(1);
+  });
 
   test.skipIf(!hasGen)("a trainer's victory theme waits for their LAST mon", () => {
     const game = makeMenuGame();

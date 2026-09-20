@@ -316,8 +316,13 @@ class AudioDirector {
     return true;
   }
   playOnce(song) {
-    if (!this.banks?.song(song))
+    if (!this.banks?.song(song)) {
+      if (this.banks?.sfx(song)) {
+        this.playSfx(song);
+        return true;
+      }
       return false;
+    }
     this.play(song);
     return this.current === song;
   }
@@ -6083,7 +6088,7 @@ you my power!`]);
   return rows;
 }
 function ceruleanRivalRows(px2) {
-  return [
+  return sceneWithTheme(MEET_RIVAL, [
     ["show_object", "CERULEAN_CITY", "CERULEANCITY_RIVAL"],
     ["move_npc_to", "CERULEANCITY_RIVAL", px2, 5],
     ["face_object", "CERULEANCITY_RIVAL", "down"],
@@ -6095,7 +6100,7 @@ function ceruleanRivalRows(px2) {
     ["show_text", "_CeruleanCityRivalIWentToBillsText"],
     ["move_npc_to", "CERULEANCITY_RIVAL", px2, 12],
     ["hide_object", "CERULEAN_CITY", "CERULEANCITY_RIVAL"]
-  ];
+  ]);
 }
 var ceruleanRocketRows = [
   ["face_player"],
@@ -6317,7 +6322,7 @@ function route22Scene(n, py) {
   const rx = py === 4 ? 29 : 28;
   const rivalFacing = py === 4 ? "up" : "right";
   const exit = py === 4 ? ["right", "right", "down", "down", "down", "down", "down"] : ["up", "right", "right", "right", "down", "down", "down", "down", "down", "down"];
-  return [
+  return sceneWithTheme(MEET_RIVAL, [
     ["show_object", "ROUTE_22", obj],
     ["move_npc_to", obj, rx, 5],
     ["face_object", obj, rivalFacing],
@@ -6337,13 +6342,13 @@ function route22Scene(n, py) {
     ["show_text", `_Route22RivalAfterBattleText${n}`],
     ["walk_npc", obj, exit],
     ["hide_object", "ROUTE_22", obj]
-  ];
+  ]);
 }
 var TOWER_RIVAL_EXIT_RIGHT_THEN_DOWN = ["right", "down", "down", "right", "down", "down", "right", "right"];
 var TOWER_RIVAL_EXIT_DOWN_THEN_RIGHT = ["down", "down", "right", "right", "right", "right", "down", "down"];
 function towerRivalScript(playerX) {
   const exit = playerX === 15 ? TOWER_RIVAL_EXIT_DOWN_THEN_RIGHT : TOWER_RIVAL_EXIT_RIGHT_THEN_DOWN;
-  return [
+  return sceneWithTheme(MEET_RIVAL, [
     ["face_player"],
     ["check_flag", "EVENT_BEAT_POKEMON_TOWER_RIVAL"],
     ["jump_if_true", 12],
@@ -6356,7 +6361,7 @@ function towerRivalScript(playerX) {
     ["hide_object", "POKEMON_TOWER_2F", "POKEMONTOWER2F_RIVAL"],
     ["jump", "end"],
     ["show_text", "_PokemonTower2FRivalHowsYourDexText"]
-  ];
+  ]);
 }
 var MAP_SCRIPTS = {
   PEWTER_CITY: {
@@ -6626,7 +6631,7 @@ var MAP_SCRIPTS = {
         return null;
       const px2 = ow?.player?.cellX ?? 5;
       const party = f.EVENT_CHOSE_BULBASAUR ? 3 : f.EVENT_CHOSE_SQUIRTLE ? 1 : 2;
-      return [
+      return sceneWithTheme(MEET_RIVAL, [
         ["move_npc_to", "SPRITE_BLUE", px2, 10],
         ["face_object", "SPRITE_BLUE", "up"],
         ["show_text", "_OaksLabRivalIllTakeYouOnText"],
@@ -6635,7 +6640,7 @@ var MAP_SCRIPTS = {
         ["show_text", "_OaksLabRivalSmellYouLaterText"],
         ["move_npc_to", "SPRITE_BLUE", 4, 11],
         ["hide_object", "OAKS_LAB", "SPRITE_BLUE"]
-      ];
+      ]);
     }
   },
   OAKS_LAB: {
@@ -7132,7 +7137,7 @@ var MAP_SCRIPTS = {
       const onLeft = x === 36;
       if (p)
         p.facing = onLeft ? "up" : "left";
-      return [
+      return sceneWithTheme(MEET_RIVAL, [
         ["show_object", "SS_ANNE_2F", "SSANNE2F_RIVAL"],
         ["move_npc_to", "SSANNE2F_RIVAL", 36, onLeft ? 7 : 8],
         ["face_object", "SSANNE2F_RIVAL", onLeft ? "down" : "right"],
@@ -7148,7 +7153,7 @@ var MAP_SCRIPTS = {
           onLeft ? ["right", "down", "down", "down", "down", "down"] : ["down", "down", "down", "down"]
         ],
         ["hide_object", "SS_ANNE_2F", "SSANNE2F_RIVAL"]
-      ];
+      ]);
     }
   },
   GAME_CORNER_PRIZE_ROOM: {
@@ -7586,6 +7591,12 @@ function liftKeyRocketRows(npc, afterText) {
 function talkScript(mapLabel, textConst) {
   return MAP_SCRIPTS[mapLabel]?.talk?.[textConst] ?? null;
 }
+var MEET_RIVAL = "Music_MeetRival";
+function sceneWithTheme(song, rows) {
+  const jumps = ["jump", "jump_if_true", "jump_if_false"];
+  const bumped = rows.map((r) => jumps.includes(r[0]) && typeof r[1] === "number" ? [r[0], r[1] + 1] : r);
+  return [["play_music", song], ...bumped];
+}
 function itemBallFlag(mapLabel, textConst) {
   return `EVENT_ITEMBALL_${mapLabel}_${textConst}`;
 }
@@ -7598,7 +7609,6 @@ function itemBallScript(mapLabel, obj) {
   return [
     ["check_flag", flag],
     ["jump_if_true", "end"],
-    ["play_sound", "Get_Item_1"],
     ["give_item", item],
     ["set_flag", flag],
     ["hide_object", mapLabel, textConst]
@@ -8131,6 +8141,7 @@ any more items!`, () => runner.resume());
   }
   const def = w.data.items?.[itemId];
   const name = def?.name ?? itemId;
+  w.playSfx?.(def?.keyItem ? "Get_Key_Item" : "Get_Item1");
   if (gotText !== false) {
     const text = gotText === undefined ? `{PLAYER} got
 ${name}!` : scriptText(w, gotText, { "RAM:wStringBuffer": name });
@@ -8221,6 +8232,12 @@ function* give_pokemon(ctx, ...args) {
 }
 function* noop_object() {
   return;
+}
+function* play_sound(ctx, ...args) {
+  ctx.world.playSfx?.(args[0]);
+}
+function* play_music(ctx, ...args) {
+  ctx.world.playOnce(args[0], () => {});
 }
 function* noop_audio() {
   return;
@@ -8696,8 +8713,8 @@ var VERBS = {
   old_man_demo,
   record_hall_of_fame,
   push_screen: noop_object,
-  play_sound: noop_audio,
-  play_music: noop_audio,
+  play_sound,
+  play_music,
   stop_music: noop_audio
 };
 function* record_hall_of_fame(ctx) {
@@ -9625,6 +9642,9 @@ any coins!`);
   }
   tint(abgr) {
     this.shell.tint(abgr);
+  }
+  playSfx(name) {
+    this.shell.audio?.playSfx?.(name);
   }
   playOnce(songId, onDone) {
     this.oneShotPending = true;

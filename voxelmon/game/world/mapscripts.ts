@@ -354,7 +354,7 @@ function route24RecruiterScript(_ow: any, save: any): ScriptRow[] {
 // (this port's moveNpcTo, unlike the walk-list the reference needs), so one
 // call covers both of upstream's px==20/else exit-direction branches.
 function ceruleanRivalRows(px: number): ScriptRow[] {
-  return [
+  return sceneWithTheme(MEET_RIVAL, [
     ["show_object", "CERULEAN_CITY", "CERULEANCITY_RIVAL"],
     ["move_npc_to", "CERULEANCITY_RIVAL", px, 5],
     ["face_object", "CERULEANCITY_RIVAL", "down"],
@@ -366,7 +366,7 @@ function ceruleanRivalRows(px: number): ScriptRow[] {
     ["show_text", "_CeruleanCityRivalIWentToBillsText"],
     ["move_npc_to", "CERULEANCITY_RIVAL", px, 12],
     ["hide_object", "CERULEAN_CITY", "CERULEANCITY_RIVAL"],
-  ];
+  ]);
 }
 
 // story5.lua rocketRows (scripts/CeruleanCity.asm CeruleanCityRocketText):
@@ -480,9 +480,6 @@ function billsHousePcScript(_ow: any, save: any): ScriptRow[] {
   return [
     ["show_text", "_BillsHouseInitiatedText"],
     ["set_flag", "EVENT_USED_CELL_SEPARATOR_ON_BILL"],
-    // play_sound is an honest no-op in this port (script.ts VERBS) — the
-    // Switch/Tink/Shrink/Get_Item1 cues are silent, but the wait beats
-    // between them still hold the scene's pacing.
     ["play_sound", "Switch"],
     ["wait", 32],
     ["play_sound", "Tink"],
@@ -676,7 +673,7 @@ function route22Scene(n: 1 | 2, py: number): ScriptRow[] {
     py === 4
       ? ["right", "right", "down", "down", "down", "down", "down"]
       : ["up", "right", "right", "right", "down", "down", "down", "down", "down", "down"];
-  return [
+  return sceneWithTheme(MEET_RIVAL, [
     ["show_object", "ROUTE_22", obj], //                        1
     ["move_npc_to", obj, rx, 5], //                             2
     ["face_object", obj, rivalFacing], //                       3
@@ -698,7 +695,7 @@ function route22Scene(n: 1 | 2, py: number): ScriptRow[] {
     ["show_text", `_Route22RivalAfterBattleText${n}`], //       9
     ["walk_npc", obj, exit], //                                10
     ["hide_object", "ROUTE_22", obj], //                       11
-  ] as ScriptRow[];
+  ] as ScriptRow[]);
 }
 
 /**
@@ -723,7 +720,7 @@ const TOWER_RIVAL_EXIT_DOWN_THEN_RIGHT: Dir[] =
 function towerRivalScript(playerX: number): ScriptRow[] {
   const exit =
     playerX === 15 ? TOWER_RIVAL_EXIT_DOWN_THEN_RIGHT : TOWER_RIVAL_EXIT_RIGHT_THEN_DOWN;
-  return [
+  return sceneWithTheme(MEET_RIVAL, [
     ["face_player"], //                                            1
     ["check_flag", "EVENT_BEAT_POKEMON_TOWER_RIVAL"], //           2
     ["jump_if_true", 12], //                                       3  beaten: just talk
@@ -736,7 +733,7 @@ function towerRivalScript(playerX: number): ScriptRow[] {
     ["hide_object", "POKEMON_TOWER_2F", "POKEMONTOWER2F_RIVAL"], // 10
     ["jump", "end"], //                                           11
     ["show_text", "_PokemonTower2FRivalHowsYourDexText"], //      12
-  ] as ScriptRow[];
+  ] as ScriptRow[]);
 }
 
 export const MAP_SCRIPTS: Record<string, MapScript> = {
@@ -1143,7 +1140,7 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
       if (py !== 9) return null;
       const px = ow?.player?.cellX ?? 5;
       const party = f.EVENT_CHOSE_BULBASAUR ? 3 : f.EVENT_CHOSE_SQUIRTLE ? 1 : 2;
-      return [
+      return sceneWithTheme(MEET_RIVAL, [
         ["move_npc_to", "SPRITE_BLUE", px, 10],
         ["face_object", "SPRITE_BLUE", "up"],
         ["show_text", "_OaksLabRivalIllTakeYouOnText"],
@@ -1153,7 +1150,7 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
         // He leaves through the lab door (warps at 4,11 / 5,11).
         ["move_npc_to", "SPRITE_BLUE", 4, 11],
         ["hide_object", "OAKS_LAB", "SPRITE_BLUE"],
-      ] as ScriptRow[];
+      ] as ScriptRow[]);
     },
   },
 
@@ -1815,7 +1812,7 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
       const onLeft = x === 36;
       // runAmbush's side effect: turn to face him as he arrives.
       if (p) p.facing = onLeft ? "up" : "left";
-      return [
+      return sceneWithTheme(MEET_RIVAL, [
         ["show_object", "SS_ANNE_2F", "SSANNE2F_RIVAL"], //        1
         ["move_npc_to", "SSANNE2F_RIVAL", 36, onLeft ? 7 : 8], //  2
         ["face_object", "SSANNE2F_RIVAL", onLeft ? "down" : "right"], // 3
@@ -1833,7 +1830,7 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
             : ["down", "down", "down", "down"],
         ], //                                                     10
         ["hide_object", "SS_ANNE_2F", "SSANNE2F_RIVAL"], //       11
-      ] as ScriptRow[];
+      ] as ScriptRow[]);
     },
   },
 
@@ -2503,6 +2500,33 @@ export function talkScript(mapLabel: string, textConst: string): ScriptRow[] | T
 // hide a collected ball (data/events/... EVENT_GOT_*): once set, the ball is
 // gone and re-talking is a no-op. Text const is globally unique per ball, but
 // the map id is folded in so nothing collides.
+/** MUSIC_MEET_RIVAL — the sting every rival encounter opens with. */
+const MEET_RIVAL = "Music_MeetRival";
+
+/**
+ * A scene that opens with a theme of its own.
+ *
+ * The rival's encounters play MUSIC_MEET_RIVAL as he walks up -- the
+ * reference starts it at the ambush (story5.lua runAmbush) or as a row
+ * (oaks_lab.lua), and PlayTrainerMusic deliberately skips the rival classes
+ * so this is the only thing that gives him one (home/trainers.asm:399, and
+ * OverworldController.lua meetTrainerTheme's `cls:find("RIVAL")` bail).
+ * The map theme comes back when the scene ends (overworld.ts oneShotPending).
+ *
+ * The row goes on the FRONT, which moves every numeric jump target after it
+ * -- they are 1-based row numbers (script.ts VERBS jump) -- so they are
+ * rewritten here instead of being hand-counted at each scene.
+ */
+function sceneWithTheme(song: string, rows: ScriptRow[]): ScriptRow[] {
+  const jumps = ["jump", "jump_if_true", "jump_if_false"];
+  const bumped = rows.map((r) =>
+    jumps.includes(r[0] as string) && typeof r[1] === "number"
+      ? ([r[0], (r[1] as number) + 1] as unknown as ScriptRow)
+      : r,
+  );
+  return [["play_music", song] as unknown as ScriptRow, ...bumped];
+}
+
 export function itemBallFlag(mapLabel: string, textConst: string): string {
   return `EVENT_ITEMBALL_${mapLabel}_${textConst}`;
 }
@@ -2526,7 +2550,8 @@ export function itemBallScript(
   return [
     ["check_flag", flag],
     ["jump_if_true", "end"],
-    ["play_sound", "Get_Item_1"],
+    // no play_sound row: the cue was misspelled (Get_Item_1) and never
+    // existed, and give_item plays the right jingle for the item itself.
     ["give_item", item],
     ["set_flag", flag],
     ["hide_object", mapLabel, textConst],
