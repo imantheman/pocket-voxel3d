@@ -1,5 +1,9 @@
 .fvec projection[4]
 .fvec uvx
+; Where this draw's geometry stands, world px. Zero for everything that
+; carries its own world coordinates; a tree instance sets it to the placement
+; it is being drawn at, so one carved shape serves every copy of it.
+.fvec toff
 .constf ones(1.0, 1.0, 1.0, 1.0)
 .constf inv255(0.003921569, 0.003921569, 0.003921569, 0.003921569)
 .out outpos position
@@ -9,7 +13,9 @@
 .alias inclr v1
 .alias intex v2
 .proc main
-mov r0.xyz, inpos
+; PICA takes a uniform only as the FIRST source, so stage it in a register.
+mov r1, toff
+add r0.xyz, inpos, r1
 mov r0.w, ones
 dp4 outpos.x, projection[0], r0
 dp4 outpos.y, projection[1], r0

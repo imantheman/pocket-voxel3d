@@ -2625,6 +2625,8 @@ fn main() {
     let program = shader::Program::new(shader.get(0).unwrap()).unwrap();
     let projection_idx = program.get_vertex_uniform("projection").unwrap();
     let uvx_idx = program.get_vertex_uniform("uvx").unwrap();
+    // Tree instances ride on this; every other draw leaves it zero.
+    let toff_idx = program.get_vertex_uniform("toff").unwrap();
 
     let mut attr_info = attrib::Info::new();
     attr_info.add_loader(attrib::Register::V0, attrib::Format::Short, 4).unwrap();
@@ -4418,6 +4420,7 @@ if page_tex.len() < pak_static.atlases.len() {
                 frame.select_render_target(target).expect("select");
                 frame.bind_vertex_uniform(projection_idx, mvp);
                 frame.bind_vertex_uniform(uvx_idx, uvx);
+                frame.bind_vertex_uniform(toff_idx, FVec4::new(0.0, 0.0, 0.0, 0.0));
                 frame.set_cull_face(CullMode::None);
                 frame.bind_texture(texture::Index::Texture0, tex_ref);
                 frame.set_texenvs(&[stage0]);
@@ -4555,29 +4558,28 @@ if page_tex.len() < pak_static.atlases.len() {
                                 continue;
                             }
                         }
-                        // mvp * translate(x, y, z), by hand.
+                        // Where this copy stands, handed to the shader,
+                        // which adds it to the vertex before the projection.
                         //
-                        // Matrix4::translate is Mtx_Translate with
-                        // bRightSide = false, which pre-multiplies: that
-                        // moves the result in CLIP space, not the world, and
-                        // scattered every tree off where it belongs. Only the
-                        // w column changes, so this is four multiply-adds a
-                        // row rather than a full matrix product.
-                        let mut raw = *mvp.as_raw();
-                        unsafe {
-                            for r in raw.r.iter_mut() {
-                                r.c[0] += ix * r.c[3] + (it.y as f32) * r.c[2] + iz * r.c[1];
-                            }
-                        }
-                        let m = Matrix4::from_raw(raw);
-                        frame.bind_vertex_uniform(projection_idx, &m);
+                        // This was a matrix edit first -- mvp * translate,
+                        // by hand, because Matrix4::translate pre-multiplies
+                        // (Mtx_Translate with bRightSide = false) and moves
+                        // the result in clip space. The arithmetic looked
+                        // right and the trees still drew somewhere invisible:
+                        // 339 of 1,238 passed the cull, none reached the
+                        // screen. An offset the shader applies to the vertex
+                        // has no convention to get wrong.
+                        frame.bind_vertex_uniform(
+                            toff_idx,
+                            FVec4::new(ix, it.y as f32, iz, 0.0),
+                        );
                         if frame.draw_arrays(buffer::Primitive::Triangles, bi, None).is_err() {
                             t_err += 1;
                             continue;
                         }
                         tdrawn += 1;
                     }
-                    frame.bind_vertex_uniform(projection_idx, mvp);
+                    frame.bind_vertex_uniform(toff_idx, FVec4::new(0.0, 0.0, 0.0, 0.0));
                     unsafe {
                         TREES_DRAWN = tdrawn;
                         TREES_CULLED = [t_noshape, t_radius, t_cone, t_err];
