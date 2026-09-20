@@ -1489,6 +1489,8 @@ fn dlog_batch_end() {
 static mut CULL_RADIUS_N: u32 = 0;
 /// Tree instances drawn last frame (the cull log line).
 static mut TREES_DRAWN: u32 = 0;
+/// Why the rest were not: no shape, radius, view cone, failed draw.
+static mut TREES_CULLED: [u32; 4] = [0; 4];
 static mut CULL_CONE_N: u32 = 0;
 static mut CULL_OCCL_N: u32 = 0;
 static mut MIN_CULLED_D: f32 = 0.0;
@@ -3663,11 +3665,19 @@ fn main() {
                             tree_bufs.push(None);
                         }
                     }
+                    let ok = tree_bufs.iter().filter(|b| b.is_some()).count();
+                    let first = tree_insts.first();
                     dlog(&format!(
-                        "[pv] trees {} shapes ({} verts) x {} placements",
+                        "[pv] trees {}/{} shapes uploaded ({} verts) x {} placements; first=({},{}) near={} mid={} far={}",
+                        ok,
                         tree_bufs.len(),
                         shape_verts,
                         tree_insts.len(),
+                        first.map(|i| i.x).unwrap_or(-1),
+                        first.map(|i| i.z).unwrap_or(-1),
+                        first.map(|i| i.near).unwrap_or(0),
+                        first.map(|i| i.mid).unwrap_or(0),
+                        first.map(|i| i.far).unwrap_or(0),
                     ));
                 }
             }
@@ -4365,10 +4375,15 @@ if page_tex.len() < pak_static.atlases.len() {
         // where it was three SD writes a second of nothing new.
         if dbg_tick % (if unsafe { LEGACY_ZONE } { 60 } else { 600 }) == 0 {
             dlog(&format!(
-                "[pv] spans={} drawn={} trees={} cull(r={} cone={} occl={}) nearestCulled={:.0} focus=({:.0},{:.0}) eye=({:.0},{:.0}) fwd=({:.2},{:.2}) battle={} huge={}",
+                "[pv] spans={} drawn={} trees={}/{} treecull(shape={} r={} cone={} err={}) cull(r={} cone={} occl={}) nearestCulled={:.0} focus=({:.0},{:.0}) eye=({:.0},{:.0}) fwd=({:.2},{:.2}) battle={} huge={}",
                 infos_ref.len(),
                 unsafe { DRAWN },
                 unsafe { TREES_DRAWN },
+                tree_insts_ref.len(),
+                unsafe { TREES_CULLED[0] },
+                unsafe { TREES_CULLED[1] },
+                unsafe { TREES_CULLED[2] },
+                unsafe { TREES_CULLED[3] },
                 unsafe { CULL_RADIUS_N },
                 unsafe { CULL_CONE_N },
                 unsafe { CULL_OCCL_N },
@@ -4488,6 +4503,7 @@ if page_tex.len() < pak_static.atlases.len() {
                 // the way a baked-in chunk mesh had to be.
                 if !tree_insts_ref.is_empty() {
                     let mut tdrawn = 0u32;
+                    let (mut t_noshape, mut t_radius, mut t_cone, mut t_err) = (0u32, 0u32, 0u32, 0u32);
                     for it in tree_insts_ref.iter() {
                         let (ix, iz) = (it.x as f32, it.z as f32);
                         // near/far by distance to the focus, the same
@@ -4510,6 +4526,7 @@ if page_tex.len() < pak_static.atlases.len() {
                             continue;
                         };
                         let Some(Some((bi, gmin, gmax))) = tree_bufs_ref.get(id as usize) else {
+                            t_noshape += 1;
                             continue;
                         };
                         // the shape's own box, put where this copy stands
@@ -4521,6 +4538,7 @@ if page_tex.len() < pak_static.atlases.len() {
                         let ddz = cz - focus_z;
                         let extent = (hx * hx + hz * hz).sqrt();
                         if (ddx * ddx + ddz * ddz).sqrt() - extent > cull_radius {
+                            t_radius += 1;
                             continue;
                         }
                         if guest_drive {
@@ -4533,6 +4551,7 @@ if page_tex.len() < pak_static.atlases.len() {
                             let far_edge = along + fwd_half;
                             let half = (far_edge * far_edge + cam_h * cam_h).sqrt() * TAN_HHALF;
                             if far_edge < -CONE_PAD || side - lat_half > half + CONE_PAD {
+                                t_cone += 1;
                                 continue;
                             }
                         }
@@ -4552,11 +4571,17 @@ if page_tex.len() < pak_static.atlases.len() {
                         }
                         let m = Matrix4::from_raw(raw);
                         frame.bind_vertex_uniform(projection_idx, &m);
-                        frame.draw_arrays(buffer::Primitive::Triangles, bi, None).unwrap();
+                        if frame.draw_arrays(buffer::Primitive::Triangles, bi, None).is_err() {
+                            t_err += 1;
+                            continue;
+                        }
                         tdrawn += 1;
                     }
                     frame.bind_vertex_uniform(projection_idx, mvp);
-                    unsafe { TREES_DRAWN = tdrawn };
+                    unsafe {
+                        TREES_DRAWN = tdrawn;
+                        TREES_CULLED = [t_noshape, t_radius, t_cone, t_err];
+                    }
                 }
                 unsafe {
                     DRAWN = drawn;
