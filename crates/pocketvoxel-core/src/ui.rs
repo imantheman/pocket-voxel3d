@@ -164,14 +164,34 @@ pub fn panel_shift(
     view: (f32, f32),
     now: [f32; 2],
 ) -> [f32; 2] {
+    // A comfortable gap first; if the sprites leave no room for one, a
+    // touching fit still beats sitting on top of a mon.
+    for gap in [PANEL_GAP, 1.0] {
+        if let Some(d) = panel_fit(home, own, other, avoid, view, now, gap) {
+            return d;
+        }
+    }
+    panel_least_bad(home, own, other, avoid, view, now)
+}
+
+/// A placement with `gap` px to spare on every side, or None.
+fn panel_fit(
+    home: Rect,
+    own: Option<Rect>,
+    other: Option<Rect>,
+    avoid: Option<Rect>,
+    view: (f32, f32),
+    now: [f32; 2],
+    gap: f32,
+) -> Option<[f32; 2]> {
     let (view_w, view_h) = view;
     let blockers: [Option<Rect>; 3] = [
-        own.map(|r| r.grown(PANEL_GAP)),
-        other.map(|r| r.grown(PANEL_GAP)),
-        avoid.map(|r| r.grown(PANEL_GAP * 0.5)),
+        own.map(|r| r.grown(gap)),
+        other.map(|r| r.grown(gap)),
+        avoid.map(|r| r.grown(gap * 0.5)),
     ];
     if blockers.iter().flatten().count() == 0 {
-        return [0.0, 0.0];
+        return Some([0.0, 0.0]);
     }
     let at = |d: [f32; 2]| home.shifted(d[0], d[1]);
     let on_screen = |d: [f32; 2]| {
@@ -210,11 +230,37 @@ pub fn panel_shift(
             }
         }
     }
-    if let Some((d, _)) = best {
-        return d;
+    best.map(|(d, _)| d)
+}
+
+/// Nothing fits: stay on screen and cover as little as possible, so the mon
+/// is still readable through even the worst angle.
+fn panel_least_bad(
+    home: Rect,
+    own: Option<Rect>,
+    other: Option<Rect>,
+    avoid: Option<Rect>,
+    view: (f32, f32),
+    now: [f32; 2],
+) -> [f32; 2] {
+    let (view_w, view_h) = view;
+    let blockers: [Option<Rect>; 3] = [own, other, avoid];
+    let at = |d: [f32; 2]| home.shifted(d[0], d[1]);
+    let cost = |d: [f32; 2]| {
+        d[0].abs()
+            + d[1].abs() * 1.4
+            + ((d[0] - now[0]).abs() + (d[1] - now[1]).abs()) * 0.3
+    };
+    let mut xs = [0.0f32; 7];
+    let mut ys = [0.0f32; 7];
+    let mut n = 1;
+    for b in blockers.iter().flatten() {
+        xs[n] = b.x0 - home.x1;
+        ys[n] = b.y0 - home.y1;
+        xs[n + 1] = b.x1 - home.x0;
+        ys[n + 1] = b.y1 - home.y0;
+        n += 2;
     }
-    // Nothing is clear: stay on screen and cover as little as possible, so
-    // the mon is still readable through even the worst angle.
     let clamp = |d: [f32; 2]| {
         [
             d[0].clamp(-home.x0, view_w - home.x1),
@@ -246,14 +292,14 @@ pub fn panel_shift(
 /// on screen, if it is being drawn.
 pub fn ease_panels(scene: &Scene, cards: &[Option<Rect>; UI_PANELS]) -> [[f32; 2]; UI_PANELS] {
     let mut out = [[0.0f32; 2]; UI_PANELS];
-    // Where each panel is drawn right now, so a panel also dodges the other
-    // one rather than the two of them stacking up in the same corner.
-    let mut drawn: [Option<Rect>; UI_PANELS] = [None; UI_PANELS];
+    // Where each panel is drawn now, so one also dodges the other rather
+    // than the two of them stacking in the same corner.
+    let mut taken: [Option<Rect>; UI_PANELS] = [None; UI_PANELS];
     for i in 0..UI_PANELS {
         let p = scene.ui_panels[i];
         if p.w > 0 {
             let o = scene.ui_panel_off[i].get();
-            drawn[i] = Some(panel_home(&p).shifted(o[0], o[1]));
+            taken[i] = Some(panel_home(&p).shifted(o[0], o[1]));
         }
     }
     for i in 0..UI_PANELS {
@@ -261,13 +307,15 @@ pub fn ease_panels(scene: &Scene, cards: &[Option<Rect>; UI_PANELS]) -> [[f32; 2
         let now = scene.ui_panel_off[i].get();
         if panel.w == 0 || !scene.battle.active {
             scene.ui_panel_off[i].set([0.0, 0.0]);
+            taken[i] = None;
             continue;
         }
+        let home = panel_home(&panel);
         let target = panel_shift(
-            panel_home(&panel),
+            home,
             cards[i],
             cards[UI_PANELS - 1 - i],
-            drawn[UI_PANELS - 1 - i],
+            taken[UI_PANELS - 1 - i],
             (VIEW_W as f32, VIEW_H as f32),
             now,
         );
@@ -280,6 +328,18 @@ pub fn ease_panels(scene: &Scene, cards: &[Option<Rect>; UI_PANELS]) -> [[f32; 2
         }
         scene.ui_panel_off[i].set(at);
         out[i] = at;
+        // What the NEXT panel has to keep clear of is everywhere this one
+        // passes through: where it is now and where it is heading. Handing
+        // on only its current rect let the two cross while both were still
+        // sliding, which is the overlap that survived the first pass.
+        let here = home.shifted(at[0], at[1]);
+        let going = home.shifted(target[0], target[1]);
+        taken[i] = Some(Rect::of(
+            here.x0.min(going.x0),
+            here.y0.min(going.y0),
+            here.x1.max(going.x1),
+            here.y1.max(going.y1),
+        ));
     }
     out
 }
@@ -481,6 +541,48 @@ mod tests {
         let card = Rect::of(0.0, 0.0, 100.0, 100.0);
         // No arena staged: nothing to dodge, so nothing moves.
         assert_eq!(ease_panels(&s, &[None, Some(card)]), [[0.0; 2]; UI_PANELS]);
+    }
+
+    #[test]
+    fn re_declaring_the_same_panel_does_not_move_it() {
+        let mut s = Scene::new();
+        s.op(op::ARENA, &[0, 4, 4, 0, 0], None);
+        s.op(op::UI_PANEL, &[1, 0, 0, 10, 4], None);
+        let own = Rect::of(60.0, 0.0, 160.0, 90.0);
+        for _ in 0..200 {
+            ease_panels(&s, &[None, Some(own)]);
+        }
+        let settled = s.ui_panel_off[1].get();
+        assert!(settled[0] != 0.0, "it should have moved off the GB cells");
+        // The battle HUD re-declares its rects on every repaint, which is
+        // every A press: the same rect must not send it home again.
+        s.op(op::UI_PANEL, &[1, 0, 0, 10, 4], None);
+        assert_eq!(s.ui_panel_off[1].get(), settled, "an A press moved the HUD");
+        // A rect that really changed starts over.
+        s.op(op::UI_PANEL, &[1, 0, 0, 9, 4], None);
+        assert_eq!(s.ui_panel_off[1].get(), [0.0, 0.0]);
+    }
+
+    #[test]
+    fn two_panels_do_not_land_on_each_other() {
+        let mut s = Scene::new();
+        s.op(op::ARENA, &[0, 4, 4, 0, 0], None);
+        s.op(op::UI_PANEL, &[1, 0, 0, 10, 4], None);
+        s.op(op::UI_PANEL, &[0, 10, 7, 10, 5], None);
+        // Both mons crowded into the middle: the panels have to take
+        // different ways out, not the same one.
+        let cards = [
+            Some(Rect::of(150.0, 60.0, 260.0, 170.0)),
+            Some(Rect::of(170.0, 20.0, 280.0, 130.0)),
+        ];
+        let mut rects = [Rect::default(); UI_PANELS];
+        for _ in 0..200 {
+            let off = ease_panels(&s, &cards);
+            for i in 0..UI_PANELS {
+                rects[i] = panel_home(&s.ui_panels[i]).shifted(off[i][0], off[i][1]);
+            }
+        }
+        assert!(!rects[0].overlaps(&rects[1]), "{:?} over {:?}", rects[0], rects[1]);
     }
 
     #[test]

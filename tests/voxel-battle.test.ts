@@ -17,7 +17,8 @@ import { join } from "node:path";
 import { WildBattle, type BattleButton, type BattleInput, type BattleSave } from "../voxelmon/game/battle/battle.ts";
 import { makeBattler } from "../voxelmon/game/battle/battler.ts";
 import { newMon, type PartyMon } from "../voxelmon/game/battle/mon.ts";
-import { search as arenaSearch } from "../voxelmon/game/battle/arena.ts";
+import { search as arenaSearch, type Arena } from "../voxelmon/game/battle/arena.ts";
+import { chooseOrbit, orbitDir } from "../voxelmon/game/battle/staging.ts";
 import {
   HUD_BAR_EMPTY,
   HUD_BAR_FULL,
@@ -943,5 +944,66 @@ describe("playing a move animation", () => {
     expect(b.animSprites()).toEqual([]);
     for (let i = 0; i < 600 && b.phase === "messages"; i++) tick(b, input);
     expect(b.phase).toBe("menu");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Where the battle camera stands (staging.ts chooseOrbit)
+// ---------------------------------------------------------------------------
+
+describe("the battle camera's opening angle", () => {
+  /** Open ground everywhere `wall` does not say otherwise. */
+  function ground(wall: (x: number, y: number) => boolean): never {
+    return {
+      inBounds: (x: number, y: number) => x >= 0 && y >= 0 && x < 40 && y < 40,
+      isWalkableCell: (x: number, y: number) => !wall(x, y),
+      isWaterCell: () => false,
+    } as never;
+  }
+
+  const arena: Arena = {
+    shape: 0,
+    x: 18,
+    y: 18,
+    w: 3,
+    h: 6,
+    enemyCell: [19, 19],
+    playerCell: [19, 22],
+  };
+
+  test("open ground keeps the framing the rig was solved for", () => {
+    expect(chooseOrbit(ground(() => false), arena, 0)).toBe(0);
+  });
+
+  test("a building where the camera would stand turns it away", () => {
+    // Wall off the half of the map the orbit-0 eye looks in from.
+    const [ux, uy] = orbitDir(arena, 0, 0);
+    const mid = [20.5 - 1.5, 20.5]; // the arena midpoint, near enough
+    const behind = (x: number, y: number): boolean =>
+      (x - mid[0]) * ux + (y - mid[1]) * uy > 1;
+    const q8 = chooseOrbit(ground(behind), arena, 0);
+    expect(q8).not.toBe(0);
+    // and the angle it picked looks in over ground it can see across
+    const [nx, ny] = orbitDir(arena, 0, q8);
+    expect(nx * ux + ny * uy).toBeLessThan(0.5);
+  });
+
+  test("a wall on both sides still opens on the clearest one", () => {
+    // Two walls, one of them further from the arena than the other: the
+    // camera takes the side it can see the most of the fight from.
+    const near = (x: number, _y: number): boolean => x <= 17;
+    const q8 = chooseOrbit(ground(near), arena, 0);
+    const [nx] = orbitDir(arena, 0, q8);
+    expect(nx).toBeGreaterThan(-0.4);
+  });
+
+  test("a real arena on ROUTE_1 gets an angle the map has room for", () => {
+    const game = new VoxelmonGame(data!, new RecorderHost(), 1);
+    game.newGame();
+    game.overworld.setMap("ROUTE_1", 10, 20, "down");
+    const a = arenaSearch(game.overworld.map, 10, 20, false)!;
+    const q8 = chooseOrbit(game.overworld.map, a, 0);
+    expect(q8).toBeGreaterThanOrEqual(0);
+    expect(q8).toBeLessThan(256);
   });
 });

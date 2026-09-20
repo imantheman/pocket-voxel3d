@@ -656,16 +656,22 @@ impl Scene {
                 if args.len() >= 5 {
                     let i = a(0) as usize;
                     if i < UI_PANELS {
-                        self.ui_panels[i] = UiPanel {
+                        let panel = UiPanel {
                             x: a(1).clamp(0, 255) as u8,
                             y: a(2).clamp(0, 255) as u8,
                             w: a(3).clamp(0, 255) as u8,
                             h: a(4).clamp(0, 255) as u8,
                         };
-                        // A panel that has just been declared (or cleared)
-                        // starts where the GB puts it rather than easing in
-                        // from wherever the last battle left it.
-                        self.ui_panel_off[i].set([0.0, 0.0]);
+                        // Only a panel that actually CHANGED goes back to
+                        // where the GB puts it. The battle HUD re-declares
+                        // its rects on every repaint -- which is every time
+                        // a press moves the phase on -- and resetting there
+                        // made the bar jump home and slide out again on each
+                        // A press, which is what it looked like.
+                        if panel != self.ui_panels[i] {
+                            self.ui_panels[i] = panel;
+                            self.ui_panel_off[i].set([0.0, 0.0]);
+                        }
                     }
                 }
             }

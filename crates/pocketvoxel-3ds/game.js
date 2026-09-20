@@ -74,6 +74,24 @@ var ARENA_SHAPE = {
   wide: 0,
   narrow: 1
 };
+var RIG = {
+  tele: {
+    side: 78.79,
+    back: 144.96,
+    height: 37.88,
+    lookX: -0.26,
+    lookY: 0.34,
+    frameH: 34.11
+  },
+  wide: {
+    side: 41.98,
+    back: 41.16,
+    height: 28.48,
+    lookX: -3.24,
+    lookY: -1.35,
+    frameH: 55.62
+  }
+};
 var ENTS_MAX = 16;
 var ENT_FLAG = {
   mirror: 1 << 0,
@@ -4656,15 +4674,71 @@ function atlasOf(data) {
 function picPageFor(data, speciesId) {
   return atlasOf(data)?.picFront?.[speciesId] ?? -1;
 }
+function orbitDir(arena, rig, q8) {
+  const [ex, ey] = arena.enemyCell;
+  const [px2, py] = arena.playerCell;
+  const axis = Math.atan2(ex - px2, -(ey - py));
+  const f = [Math.sin(axis), -Math.cos(axis)];
+  const s = [-f[1], f[0]];
+  const r = rig === 1 ? RIG.wide : RIG.tele;
+  const base = [s[0] * r.side - f[0] * r.back, s[1] * r.side - f[1] * r.back];
+  const ang = q8 / 256 * Math.PI * 2;
+  const dir = [
+    base[0] * Math.cos(ang) + base[1] * Math.sin(ang),
+    -base[0] * Math.sin(ang) + base[1] * Math.cos(ang)
+  ];
+  const len = Math.hypot(dir[0], dir[1]) || 1;
+  return [dir[0] / len, dir[1] / len];
+}
+function chooseOrbit(map, arena, rig) {
+  const [ex, ey] = arena.enemyCell;
+  const [px2, py] = arena.playerCell;
+  const mid = [(ex + px2) / 2, (ey + py) / 2];
+  const blocked = (cx, cy) => {
+    const x = Math.round(cx);
+    const y = Math.round(cy);
+    if (!map.inBounds(x, y))
+      return false;
+    return !map.isWalkableCell(x, y) && !map.isWaterCell(x, y);
+  };
+  let best = 0;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (let step = 0;step < ORBIT_STEPS; step++) {
+    const q8 = Math.round(step * 256 / ORBIT_STEPS);
+    const [ux, uy] = orbitDir(arena, rig, q8);
+    let score = 0;
+    for (let d = 1;d <= ORBIT_REACH_CELLS; d++) {
+      const w = 1 + (ORBIT_REACH_CELLS - d) / ORBIT_REACH_CELLS;
+      for (const side of [0, 1, -1]) {
+        const cx = mid[0] + ux * d - uy * side;
+        const cy = mid[1] + uy * d + ux * side;
+        if (blocked(cx, cy))
+          score += side === 0 ? w * 2 : w;
+      }
+    }
+    const turn = Math.min(step, ORBIT_STEPS - step) / ORBIT_STEPS;
+    score += turn * ORBIT_TURN_COST;
+    if (score < bestScore) {
+      bestScore = score;
+      best = q8;
+    }
+  }
+  return best;
+}
+var ORBIT_STEPS = 8;
+var ORBIT_REACH_CELLS = 8;
+var ORBIT_TURN_COST = 2;
 function computeStaging(map, playerCellX, playerCellY, surfing) {
   const arena = search(map, playerCellX, playerCellY, surfing);
   if (!arena)
     return null;
   const indoor = map.def.tileset !== "OVERWORLD";
+  const rig = indoor ? 1 : 0;
   return {
     mapIndex: map.def.index,
     arena,
-    rig: indoor ? 1 : 0
+    rig,
+    orbit: chooseOrbit(map, arena, rig)
   };
 }
 function desiredCards(data, battle, staging) {
@@ -10730,7 +10804,7 @@ class Scene {
       if (bv.staging) {
         const a = bv.staging.arena;
         host.arena(bv.staging.mapIndex, a.x, a.y, a.shape, bv.staging.rig);
-        host.battleCam(0, 0, Q8);
+        host.battleCam(bv.staging.orbit ?? 0, 0, Q8);
         this.arenaStaged = true;
       }
     }

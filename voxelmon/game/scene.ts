@@ -287,9 +287,11 @@ export class Scene {
       if (bv.staging) {
         const a = bv.staging.arena;
         host.arena(bv.staging.mapIndex, a.x, a.y, a.shape, bv.staging.rig);
-        // battleCam defaults: orbit 0, pitch 0, zoom 1.0 (Q8); the solved
-        // rig constants live core-side, keyed by the arena op's rig arg
-        host.battleCam(0, 0, Q8);
+        // pitch 0, zoom 1.0 (Q8); the solved rig constants live core-side,
+        // keyed by the arena op's rig arg. The ORBIT is chosen per battle
+        // (staging.ts chooseOrbit) so the fight does not open on the back
+        // of whatever the arena happened to be standing next to.
+        host.battleCam(bv.staging.orbit ?? 0, 0, Q8);
         this.arenaStaged = true;
       }
     }
