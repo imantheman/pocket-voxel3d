@@ -2906,7 +2906,18 @@ fn main() {
     // Card/pic vertex buffers are rebuilt every frame. Freeing them the
     // instant the frame ends lets the GPU read memory that's already gone —
     // on hardware that tears the walking sprite. Keep one frame alive.
+    //
+    // EVERY per-frame buffer needs this, and two were missing it: the top
+    // screen's UI (the text box and its glyphs) and the move-animation
+    // tiles. C3D_FrameEnd only SUBMITS the frame; the wait is in the next
+    // C3D_FrameBegin, and these buffers are built BEFORE that. So the
+    // allocator handed the new text box the linear memory the GPU was
+    // still reading the old one out of, and it drew as the box smeared
+    // across the map for a frame -- which is exactly when it was seen:
+    // talking to someone, where the box is rebuilt on every letter.
     let mut card_hold: Vec<(usize, buffer::Info)> = Vec::new();
+    let mut ui_hold: Option<buffer::Info> = None;
+    let mut anim_hold: Vec<(usize, buffer::Info)> = Vec::new();
     let mut pic_hold: Vec<(usize, buffer::Info)> = Vec::new();
     // Same hazard for the Kanto Gear (bottom) surface: its per-frame vertex
     // buffers were freed the instant the frame closure returned, but C3D_FrameEnd
@@ -4913,11 +4924,16 @@ if page_tex.len() < pak_static.atlases.len() {
         // last touched them.
         card_hold = card_bufs;
         pic_hold = pic_bufs;
+        ui_hold = ui_buf;
+        anim_hold = anim_bufs;
         ui_b_hold = ui_b_buf;
         ui_b_bar_hold = ui_b_bar_buf;
         ui_b_light_hold = ui_b_light_buf;
         ui_b_dim_hold = ui_b_dim_buf;
         ui_b_sprite_hold = ui_b_sprite_bufs;
-        let _ = (&card_hold, &pic_hold, &ui_b_hold, &ui_b_bar_hold, &ui_b_light_hold, &ui_b_dim_hold, &ui_b_sprite_hold);
+        let _ = (
+            &card_hold, &pic_hold, &ui_hold, &anim_hold, &ui_b_hold,
+            &ui_b_bar_hold, &ui_b_light_hold, &ui_b_dim_hold, &ui_b_sprite_hold,
+        );
     }
 }

@@ -201,6 +201,11 @@ pub struct Scene {
     /// placement is judged on the clearance it was chosen for, not on the
     /// clearance it happens to have partway through easing into it.
     pub ui_panel_target: [Cell<[f32; 2]>; UI_PANELS],
+    /// The last screen rect each side's card was drawn at (x0, y0, x1, y1),
+    /// empty when that side has not been seen. The hit flicker blinks a
+    /// card off every other frame; without this the HUD read those frames
+    /// as the sprite having left and hopped back to its GB cells.
+    pub ui_card_seen: [Cell<[f32; 4]>; UI_PANELS],
     /// This frame's move-animation sprites (`animSprite`/`animClear`).
     pub anim_sprites: [AnimSprite; ANIM_SPRITES_MAX],
     pub anim_sprite_n: u8,
@@ -326,6 +331,7 @@ impl Scene {
             ui_panels: [UiPanel::default(); UI_PANELS],
             ui_panel_off: [const { Cell::new([0.0, 0.0]) }; UI_PANELS],
             ui_panel_target: [const { Cell::new([0.0, 0.0]) }; UI_PANELS],
+            ui_card_seen: [const { Cell::new([0.0; 4]) }; UI_PANELS],
             anim_sprites: [AnimSprite::default(); ANIM_SPRITES_MAX],
             anim_sprite_n: 0,
             ui_b_sprites: [BottomSprite::default(); UI_B_SPRITES_MAX],

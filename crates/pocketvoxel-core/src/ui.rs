@@ -299,6 +299,31 @@ fn panel_least_bad(
 /// on screen, if it is being drawn.
 pub fn ease_panels(scene: &Scene, cards: &[Option<Rect>; UI_PANELS]) -> [[f32; 2]; UI_PANELS] {
     let mut out = [[0.0f32; 2]; UI_PANELS];
+    // A card missing from THIS frame is not "no sprite there": the hit
+    // flicker blinks the defender off every other frame. Remember where
+    // each one was, and go on dodging that until it is drawn again --
+    // reading a blink as open ground sent the HUD home and straight back
+    // out, once per hit, which is the hop on every A press.
+    let mut seen: [Option<Rect>; UI_PANELS] = [None; UI_PANELS];
+    for i in 0..UI_PANELS {
+        if !scene.battle.active {
+            scene.ui_card_seen[i].set([0.0; 4]);
+            continue;
+        }
+        match cards[i] {
+            Some(r) => {
+                scene.ui_card_seen[i].set([r.x0, r.y0, r.x1, r.y1]);
+                seen[i] = Some(r);
+            }
+            None => {
+                let v = scene.ui_card_seen[i].get();
+                if v[2] > v[0] {
+                    seen[i] = Some(Rect::of(v[0], v[1], v[2], v[3]));
+                }
+            }
+        }
+    }
+    let cards = &seen;
     // Where each panel is drawn now, so one also dodges the other rather
     // than the two of them stacking in the same corner.
     let mut taken: [Option<Rect>; UI_PANELS] = [None; UI_PANELS];
@@ -637,6 +662,26 @@ mod tests {
         // under the camera and reads as the HUD twitching.
         let settled = ease_panels(&s, &[None, Some(own)])[1];
         assert_eq!(settled, last, "it never came to rest");
+    }
+
+    #[test]
+    fn a_blinking_sprite_leaves_the_panel_alone() {
+        let mut s = Scene::new();
+        s.op(op::ARENA, &[0, 4, 4, 0, 0], None);
+        s.op(op::UI_PANEL, &[1, 0, 0, 10, 4], None);
+        let own = Rect::of(60.0, 0.0, 160.0, 90.0);
+        for _ in 0..200 {
+            ease_panels(&s, &[None, Some(own)]);
+        }
+        let settled = s.ui_panel_off[1].get();
+        assert!(settled[0] != 0.0);
+        // The hit flicker: drawn, gone, drawn, gone. The panel has to hold
+        // its ground through it rather than treating a blink as open space.
+        for f in 0..40 {
+            let cards = if f % 2 == 0 { [None, None] } else { [None, Some(own)] };
+            ease_panels(&s, &cards);
+        }
+        assert_eq!(s.ui_panel_off[1].get(), settled, "the HUD hopped on a blink");
     }
 
     #[test]
