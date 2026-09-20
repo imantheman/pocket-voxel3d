@@ -2736,6 +2736,12 @@ fn main() {
     /// (map id, stream centre, tint, stamp count, seam sides)
     type BuiltKey = (u32, Option<(i32, i32)>, u32, usize, [bool; 4]);
     let mut built_key: Option<BuiltKey> = None;
+    /// The connected-map slots (id, offset) the built geometry and its seam
+    /// strips were made for. The guest publishes these a frame or two AFTER
+    /// the map itself when the player crosses a seam -- a warp arrives with
+    /// them already set, which is why warping in showed the neighbours and
+    /// walking across never did.
+    let mut built_slots: Vec<(u32, i32, i32)> = Vec::new();
     let mut tex: Option<texture::Texture> = None;
     let mut reload = true;
 
@@ -3201,6 +3207,20 @@ fn main() {
                     center[0] = gx;
                     center[2] = gy;
 
+                    // The neighbours the guest is showing right now. When
+                    // they differ from what was built, the strips on screen
+                    // are for the wrong map (or for none at all) and the
+                    // border ring is clipped for the wrong sides: rebuild.
+                    {
+                        let cur: Vec<(u32, i32, i32)> = (1..sc.maps.len())
+                            .filter(|&i| sc.maps[i].shown)
+                            .map(|i| (sc.maps[i].map_id, sc.maps[i].ox as i32, sc.maps[i].oy as i32))
+                            .collect();
+                        if cur != built_slots {
+                            reload = true;
+                        }
+                    }
+
                     // Read the connected maps ahead, in whatever time is
                     // left over. The guest publishes them as extra map slots
                     // (it is already drawing their seam strips), so by the
@@ -3441,6 +3461,10 @@ fn main() {
                 }
             }
             let bounds_ms = now_ms().wrapping_sub(t_load);
+            built_slots = neighbor_slots
+                .iter()
+                .map(|&(id, ox, oy)| (id, ox as i32, oy as i32))
+                .collect();
             let want_key: BuiltKey = (
                 map_ids[map_i],
                 if cur_map_huge { stream_center_chunk } else { None },
