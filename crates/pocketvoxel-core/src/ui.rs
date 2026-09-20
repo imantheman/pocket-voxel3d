@@ -612,9 +612,14 @@ mod tests {
         let settled = s.ui_panel_off[1].get();
         assert!(settled[0] != 0.0, "it should have moved off the GB cells");
         // The battle HUD re-declares its rects on every repaint, which is
-        // every A press: the same rect must not send it home again.
+        // every A press -- and a repaint is uiClear FIRST, then the rects.
+        // Neither may send it home again.
         s.op(op::UI_PANEL, &[1, 0, 0, 10, 4], None);
         assert_eq!(s.ui_panel_off[1].get(), settled, "an A press moved the HUD");
+        s.op(op::UI_CLEAR, &[], None);
+        s.op(op::UI_PANEL, &[1, 0, 0, 10, 4], None);
+        s.op(op::UI_PANEL, &[0, 10, 7, 10, 5], None);
+        assert_eq!(s.ui_panel_off[1].get(), settled, "a repaint moved the HUD");
         // A rect that really changed starts over.
         s.op(op::UI_PANEL, &[1, 0, 0, 9, 4], None);
         assert_eq!(s.ui_panel_off[1].get(), [0.0, 0.0]);

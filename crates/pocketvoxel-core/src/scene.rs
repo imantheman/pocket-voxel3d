@@ -592,11 +592,14 @@ impl Scene {
             op::UI_REVEAL => self.ui_reveal = a(0).max(0) as u32,
             op::UI_CLEAR => {
                 self.ui = [0u16; UI_COLS * UI_ROWS];
-                self.ui_panels = [UiPanel::default(); UI_PANELS];
-                for (off, target) in self.ui_panel_off.iter().zip(self.ui_panel_target.iter()) {
-                    off.set([0.0, 0.0]);
-                    target.set([0.0, 0.0]);
-                }
+                // The PANELS are deliberately left alone. A repaint is
+                // uiClear followed by the same rects being declared again --
+                // the battle HUD does one every time a press moves the phase
+                // on -- and wiping them here made each of those a brand new
+                // panel, which starts at the GB cells. That is the HP bar
+                // jumping home and sliding back out on every A press. A
+                // panel that is really gone is said so with w = 0, and one
+                // outside a battle is not slid at all (ui::ease_panels).
                 self.ui_text = None;
                 self.ui_reveal = u32::MAX;
             }
@@ -680,6 +683,8 @@ impl Scene {
                         // a press moves the phase on -- and resetting there
                         // made the bar jump home and slide out again on each
                         // A press, which is what it looked like.
+                        // Only a panel that really moved goes back to the
+                        // GB cells: same rect, same slide.
                         if panel != self.ui_panels[i] {
                             self.ui_panels[i] = panel;
                             self.ui_panel_off[i].set([0.0, 0.0]);
