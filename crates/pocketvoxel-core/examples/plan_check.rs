@@ -83,7 +83,7 @@ fn main() {
             let stamp_verts: usize =
                 p.stamps_of(map_id).iter().map(|s| s.mesh.index_count as usize).sum();
             let plan = plan_build(chunks, &order, huge, budget, stamp_verts);
-            let runs = planned_ranges(chunks, &plan, p.stamps_of(map_id), v_at, i_at, 8 * 1024);
+            let runs = planned_ranges(chunks, &plan, p.stamps_of(map_id), &p.tree_shapes, v_at, i_at, 8 * 1024);
             worst_read = worst_read.max(runs.iter().map(|(a, b)| (b - a) as u64).sum::<u64>());
             let covered = |a: usize, b: usize| runs.iter().any(|&(x, y)| x <= a && b <= y);
 

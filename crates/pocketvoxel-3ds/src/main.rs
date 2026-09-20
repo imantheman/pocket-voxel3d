@@ -880,7 +880,16 @@ fn map_pak(
         let stamp_verts: usize =
             p.stamps_of(map_id).iter().map(|st| st.mesh.index_count as usize).sum();
         let plan = plan_build(chunks, &order, huge, budget, stamp_verts);
-        planned_ranges(chunks, &plan, p.stamps_of(map_id), pools_at, i_at, MERGE_SLOP)
+        planned_ranges(
+            chunks,
+            &plan,
+            p.stamps_of(map_id),
+            // every shape, not just this map's: they are shared by id
+            &p.tree_shapes,
+            pools_at,
+            i_at,
+            MERGE_SLOP,
+        )
             .into_iter()
             .map(|(a, b)| (a.min(len), b.min(len)))
             .collect()
@@ -3606,13 +3615,21 @@ fn main() {
                     } else {
                         unsafe { resident_pak(nname) }.filter(|p| strip_has_trees(p, nid))
                     };
-                    let strip = match resident {
-                        Some(p) => strip_from_pak(p, nid, ox, oy, geom.map_min, geom.map_max, last_tint),
-                        None => {
+                    // A resident copy that cannot supply the strip (read
+                    // under a plan that skipped the tier it wants) must fall
+                    // THROUGH to the file, not drop the neighbour: skipping
+                    // it left a map with no connected map drawn at all, and
+                    // its border ring already clipped off for one.
+                    let strip = resident
+                        .and_then(|p| {
+                            strip_from_pak(p, nid, ox, oy, geom.map_min, geom.map_max, last_tint)
+                        })
+                        .or_else(|| {
                             let path = format!("sdmc:/3ds/voxelmon/paks/{}.vxpak", nname);
-                            load_neighbor_strip(&path, nid, ox, oy, geom.map_min, geom.map_max, last_tint)
-                        }
-                    };
+                            load_neighbor_strip(
+                                &path, nid, ox, oy, geom.map_min, geom.map_max, last_tint,
+                            )
+                        });
                     let Some(strip) = strip else {
                         continue;
                     };

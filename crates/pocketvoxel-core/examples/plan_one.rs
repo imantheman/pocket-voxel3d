@@ -82,7 +82,7 @@ fn main() {
         ));
         let (order, huge, budget) = build_order(chunks, centre);
         let plan = plan_build(chunks, &order, huge, budget, 0);
-        let ranges = planned_ranges(chunks, &plan, &stamps, v_at, i_at, 4096);
+        let ranges = planned_ranges(chunks, &plan, &stamps, &[], v_at, i_at, 4096);
         let bytes: u64 = ranges.iter().map(|r| (r.1 - r.0) as u64).sum();
         let mut verts = 0usize;
         let mut idx = 0usize;

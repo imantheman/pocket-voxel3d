@@ -170,6 +170,12 @@ pub fn planned_ranges(
     chunks: &[pak::Chunk],
     plan: &BuildPlan,
     stamps: &[pak::Stamp],
+    // TINS shape meshes (Pak::tree_shapes). They live in the same pools and
+    // NO CHUNK NAMES THEM, so a planned read left them as the zeros the
+    // buffer was filled with: every tree instance then drew a shape whose
+    // vertices were all (0, 0, 0) -- degenerate triangles, no error from the
+    // GPU, and nothing on screen.
+    tree_shapes: &[pak::MeshRange],
     verts_at: usize,
     indices_at: usize,
     slop: usize,
@@ -193,6 +199,9 @@ pub fn planned_ranges(
     }
     for st in stamps {
         want(st.mesh);
+    }
+    for m in tree_shapes {
+        want(*m);
     }
     runs.sort_unstable();
     let mut merged: Vec<(usize, usize)> = Vec::with_capacity(runs.len());
@@ -306,7 +315,7 @@ mod tests {
     fn planned_ranges_cover_every_byte_the_mesh_will_touch() {
         let cs = vec![chunk(0, 0, &[(TERRAIN, 30, 5)])];
         let plan = plan_build(&cs, &[0], false, MAX_VERTS, 0);
-        let r = planned_ranges(&cs, &plan, &[], 1000, 9000, 0);
+        let r = planned_ranges(&cs, &plan, &[], &[], 1000, 9000, 0);
         // vertices [5, 35) * 16 bytes, indices [5, 35) * 2 bytes
         assert!(r.contains(&(1000 + 5 * 16, 1000 + 35 * 16)), "{r:?}");
         assert!(r.contains(&(9000 + 5 * 2, 9000 + 35 * 2)), "{r:?}");
@@ -319,7 +328,7 @@ mod tests {
             chunk(1, 0, &[(TERRAIN, 10, 10)]), // immediately after in the pool
         ];
         let plan = plan_build(&cs, &[0, 1], false, MAX_VERTS, 0);
-        let r = planned_ranges(&cs, &plan, &[], 0, 100_000, 0);
+        let r = planned_ranges(&cs, &plan, &[], &[], 0, 100_000, 0);
         let verts: Vec<_> = r.iter().filter(|&&(a, _)| a < 100_000).collect();
         assert_eq!(verts.len(), 1, "two adjacent vertex blocks should be one run");
         assert_eq!(*verts[0], (0, 20 * 16));
@@ -330,6 +339,6 @@ mod tests {
         let cs = vec![chunk(0, 0, &[])];
         let plan = plan_build(&cs, &[0], false, MAX_VERTS, 0);
         assert!(plan.items.is_empty());
-        assert!(planned_ranges(&cs, &plan, &[], 0, 0, 0).is_empty());
+        assert!(planned_ranges(&cs, &plan, &[], &[], 0, 0, 0).is_empty());
     }
 }
