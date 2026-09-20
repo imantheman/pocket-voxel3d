@@ -4642,6 +4642,9 @@ function search(map, fromX, fromY, surfing) {
 }
 
 // voxelmon/game/battle/staging.ts
+function namedPage(data, which, key) {
+  return atlasOf(data)?.[which]?.[key] ?? -1;
+}
 function atlasOf(data) {
   return data.atlas;
 }
@@ -12328,6 +12331,10 @@ var CYCLE = [
   "LAPRAS"
 ];
 var TITLE_PAGES = { copyright: 421, gamefreak: 422, logo: 423, player: 424 };
+function titlePage(data, key) {
+  const p = namedPage(data, "picTitle", key);
+  return p >= 0 ? p : TITLE_PAGES[key];
+}
 var CYCLE_PAGES = { CHARMANDER: 84, SQUIRTLE: 202, BULBASAUR: 79, PIKACHU: 176, MEWTWO: 155, NIDOKING: 159, GENGAR: 112, ONIX: 169, GYARADOS: 123, LAPRAS: 141 };
 
 class TitleState {
@@ -12346,7 +12353,8 @@ class TitleState {
   }
   monPage() {
     const species = CYCLE[this.cycleAt % CYCLE.length];
-    return CYCLE_PAGES[species] ?? -1;
+    const p = this.game.picPageFor ? this.game.picPageFor(species) : picPageFor(this.game.data, species);
+    return p >= 0 ? p : CYCLE_PAGES[species] ?? -1;
   }
   update() {
     const p = this.game.input.pressed;
@@ -15431,7 +15439,8 @@ function decodeSave(text) {
 var SAVE_HOLD = 120;
 var SAVE_DONE_HOLD = 30;
 var SAVE_FORMAT = 4;
-var RED_PIC_PAGE = 408;
+var PIC_NAMES = { oak: "prof.oak", player: "red", rival: "rival1" };
+var PIC_FALLBACK = { oak: 406, player: 408, rival: 409, nidorino: 164 };
 
 class OverworldState {
   ow;
@@ -15970,9 +15979,17 @@ ${mname}!`);
     }
     return null;
   }
+  picNamed(which) {
+    const p = namedPage(this.data, "picTrainer", PIC_NAMES[which]);
+    return p >= 0 ? p : PIC_FALLBACK[which];
+  }
   startIntro() {
     this.audio?.play?.("Music_MeetProfOak");
-    const P_OAK = 406, P_PLR = 408, P_RIV = 409, P_NIDO = 164;
+    const P_OAK = this.picNamed("oak");
+    const P_PLR = this.picNamed("player");
+    const P_RIV = this.picNamed("rival");
+    const nido = picPageFor(this.data, "NIDORINO");
+    const P_NIDO = nido >= 0 ? nido : PIC_FALLBACK.nidorino;
     const A = [
       ["pic", P_OAK, 184, 24, 112, 112],
       ["show_text", "_OakSpeechText1"],
@@ -16031,8 +16048,10 @@ ${mname}!`);
     const top = this.stack[this.stack.length - 1];
     if (top?.kind === "title") {
       const v = top.view();
-      const out = [{ page: TITLE_PAGES.logo, x: 96, y: 16, w: 288, h: 108 }];
-      out.push({ page: RED_PIC_PAGE, x: 160, y: 132, w: 112, h: 112 });
+      const out = [
+        { page: titlePage(this.data, "logo"), x: 96, y: 16, w: 288, h: 108 }
+      ];
+      out.push({ page: this.picNamed("player"), x: 160, y: 132, w: 112, h: 112 });
       if (v.monPage >= 0)
         out.push({ page: v.monPage, x: 248, y: 140, w: 104, h: 104 });
       return out;

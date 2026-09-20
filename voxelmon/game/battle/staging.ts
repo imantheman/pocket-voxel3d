@@ -39,6 +39,24 @@ export interface CardDesire {
 interface AtlasDir {
   picFront?: Record<string, number>;
   picBack?: Record<string, number>;
+  picTrainer?: Record<string, number>;
+  picTitle?: Record<string, number>;
+}
+
+/**
+ * A page the cook named, or -1.
+ *
+ * `which` is "picTrainer" for a portrait ("prof.oak", "red", "rival1") or
+ * "picTitle" for the title art ("logo", "player"). A dataset cooked before
+ * the cook named them has neither, and the caller falls back to whatever it
+ * used to hardcode -- which is right for exactly those old paks.
+ */
+export function namedPage(
+  data: VoxelmonData,
+  which: "picTrainer" | "picTitle",
+  key: string,
+): number {
+  return atlasOf(data)?.[which]?.[key] ?? -1;
 }
 
 function atlasOf(data: VoxelmonData): AtlasDir | undefined {

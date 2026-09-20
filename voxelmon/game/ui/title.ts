@@ -2,6 +2,7 @@
 // through mon pics while PRESS START waits, then the main menu offers
 // CONTINUE / NEW GAME / OPTION.
 import type { GameState } from "../game.ts";
+import { namedPage, picPageFor } from "../battle/staging.ts";
 
 /** The rotating cast the original cycles behind the logo. */
 const CYCLE = [
@@ -9,7 +10,15 @@ const CYCLE = [
   "NIDOKING", "GENGAR", "ONIX", "GYARADOS", "LAPRAS",
 ];
 
+/** Where a pak cooked before `atlas.picTitle` existed put the title art.
+ * Only used when the dataset does not name the pages itself. */
 export const TITLE_PAGES = {"copyright": 421, "gamefreak": 422, "logo": 423, "player": 424} as const;
+
+/** The title art page the dataset names, else the old literal. */
+export function titlePage(data: unknown, key: keyof typeof TITLE_PAGES): number {
+  const p = namedPage(data as never, "picTitle", key);
+  return p >= 0 ? p : TITLE_PAGES[key];
+}
 export const CYCLE_PAGES: Record<string, number> = {"CHARMANDER": 84, "SQUIRTLE": 202, "BULBASAUR": 79, "PIKACHU": 176, "MEWTWO": 155, "NIDOKING": 159, "GENGAR": 112, "ONIX": 169, "GYARADOS": 123, "LAPRAS": 141};
 
 export type TitleChoice = "continue" | "new" | "option" | "viewer";
@@ -47,7 +56,12 @@ export class TitleState implements GameState {
 
   private monPage(): number {
     const species = CYCLE[this.cycleAt % CYCLE.length]!;
-    return CYCLE_PAGES[species] ?? -1;
+    // The dataset knows where a species' front pic landed; CYCLE_PAGES is
+    // the answer for a pak cooked before it was asked.
+    const p = this.game.picPageFor
+      ? this.game.picPageFor(species)
+      : picPageFor(this.game.data, species);
+    return p >= 0 ? p : (CYCLE_PAGES[species] ?? -1);
   }
 
   update(): void {

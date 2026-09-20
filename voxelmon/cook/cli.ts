@@ -335,7 +335,14 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
   });
 
   // --- GAME + CMAP + pack --------------------------------------------------
+  const named = (byKey: Map<string, number>, prefix: string): Record<string, number> => {
+    const out: Record<string, number> = {};
+    for (const [key, page] of byKey) out[key.slice(prefix.length)] = page;
+    return out;
+  };
   const atlas: AtlasIndex = {
+    picTrainer: named(trainerPageByKey, "battle/trainer/"),
+    picTitle: named(titlePageByKey, "title/"),
     sprites: spriteIndex,
     picFront: frontIndex,
     picBack: backIndex,

@@ -16,7 +16,7 @@ import { WildBattle, type BattleResult } from "./battle/battle.ts";
 import { TrainerBattle } from "./battle/trainer.ts";
 import { healMon, markOwned, newMon, type PartyMon } from "./battle/mon.ts";
 import { SafariBattle } from "./battle/safari.ts";
-import { computeStaging, type BattleStaging } from "./battle/staging.ts";
+import { computeStaging, namedPage, picPageFor, type BattleStaging } from "./battle/staging.ts";
 import { BattleUi } from "./battle/ui.ts";
 import type { VoxelmonData } from "./data.ts";
 import type { VoxelHost } from "./host.ts";
@@ -42,7 +42,7 @@ import {
 } from "./world/daycare.ts";
 import { paginate, substitute, Textbox, TEXT_SPEED_DEFAULT, type TextboxOpts } from "./world/textbox.ts";
 import { NamingState } from "./ui/naming.ts";
-import { TitleState, TITLE_PAGES } from "./ui/title.ts";
+import { TitleState, titlePage } from "./ui/title.ts";
 import { StartMenuState } from "./ui/startmenu.ts";
 import { DevMenuState } from "./ui/devmenu.ts";
 import { CARD_PIC_RECT, TrainerCardState } from "./ui/trainercard.ts";
@@ -81,8 +81,14 @@ import { decodeSave } from "./save-read.ts";
 import * as Bag from "./rules/bag.ts";
 /** Must match Version.saveFormat in the recomp. */
 const SAVE_FORMAT = 4;   // Version.lua saveFormat
-/** battle/trainer/red — the intro portrait, not title/player. */
-const RED_PIC_PAGE = 408;
+/**
+ * The intro's portraits, by the name the cook files them under. The numbers
+ * are the pages a pak cooked before `atlas.picTrainer` existed put them on;
+ * they are wrong for any pak cooked since, which is why nothing reads them
+ * unless the dataset has no names at all.
+ */
+const PIC_NAMES = { oak: "prof.oak", player: "red", rival: "rival1" } as const;
+const PIC_FALLBACK = { oak: 406, player: 408, rival: 409, nidorino: 164 };
 
 /** The full save: the overworld slice plus the party the battle port added. */
 export interface GameSave extends SaveSlice {
@@ -889,12 +895,22 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     return null;
   }
 
+  /** One of the intro portraits: the cook's page, else the old literal. */
+  private picNamed(which: keyof typeof PIC_NAMES): number {
+    const p = namedPage(this.data as never, "picTrainer", PIC_NAMES[which]);
+    return p >= 0 ? p : PIC_FALLBACK[which];
+  }
+
   /** Oak's speech + the two name entries (post-title). */
   startIntro(): void {
     // Oak's speech has its own theme; startMap here would hand it the
     // bedroom's song, which is Pallet Town's.
     this.audio?.play?.("Music_MeetProfOak");
-    const P_OAK = 406, P_PLR = 408, P_RIV = 409, P_NIDO = 164;
+    const P_OAK = this.picNamed("oak");
+    const P_PLR = this.picNamed("player");
+    const P_RIV = this.picNamed("rival");
+    const nido = picPageFor(this.data as never, "NIDORINO");
+    const P_NIDO = nido >= 0 ? nido : PIC_FALLBACK.nidorino;
     const A = [
       ["pic", P_OAK, 184, 24, 112, 112],
       ["show_text", "_OakSpeechText1"],
@@ -958,8 +974,10 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     if (top?.kind === "title") {
       const v = top.view();
       // logo up top; Red on the left with the cycling mon beside him.
-      const out: any[] = [{ page: TITLE_PAGES.logo, x: 96, y: 16, w: 288, h: 108 }];
-      out.push({ page: RED_PIC_PAGE, x: 160, y: 132, w: 112, h: 112 });
+      const out: any[] = [
+        { page: titlePage(this.data, "logo"), x: 96, y: 16, w: 288, h: 108 },
+      ];
+      out.push({ page: this.picNamed("player"), x: 160, y: 132, w: 112, h: 112 });
       if (v.monPage >= 0) out.push({ page: v.monPage, x: 248, y: 140, w: 104, h: 104 });
       return out;
     }

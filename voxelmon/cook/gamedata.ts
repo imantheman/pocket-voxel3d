@@ -34,6 +34,19 @@ export interface AtlasIndex {
   townMapPage: number | null;
   /** The 16x16 marker drawn on the selected location, transparency kept. */
   townMapCursorPage: number | null;
+  /**
+   * Trainer portrait name ("prof.oak", "red", "rival1", ...) -> atlas page,
+   * and the title art the same way ("logo", "player", ...).
+   *
+   * The guest addressed both by literal page number, which held only for as
+   * long as nothing was ever inserted earlier in the page list. Adding the
+   * two move-animation sheets moved every page after them by two and the
+   * whole intro drew the wrong portraits -- Oak where Red belonged, Misty
+   * where Oak did. Naming them costs a few hundred bytes of gamedata and
+   * ends that class of bug.
+   */
+  picTrainer: Record<string, number>;
+  picTitle: Record<string, number>;
 }
 
 /** The tileset subset the guest needs (collision + animation semantics). */
