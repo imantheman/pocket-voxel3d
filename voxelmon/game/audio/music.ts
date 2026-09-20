@@ -158,17 +158,20 @@ export class AudioDirector {
    * (Sound.lua:55) pauses the song for its duration (Music.lua:102-115);
    * the core owns that, the name -> flag decision is policy and lives here.
    */
-  playSfx(name: string): void {
+  playSfx(name: string, pitch = 0, tempo = AUDIO_SFX_TEMPO): void {
     const ref = this.banks?.sfx(name);
     if (!ref || !this.host) return;
     // ChipAudio.lua:414-420 — an SFX renders with the caller's pitch and
-    // tempo modifiers; the plain form uses the defaults.
+    // tempo modifiers; the plain form uses the defaults. A MOVE's sound
+    // carries its own pair (moves.json `anim`, from the ROM's
+    // MoveSoundTable), which is most of what tells THUNDERBOLT from
+    // THUNDER WAVE: same effect, different frequency and speed.
     this.host.sfx(
       ref.bank,
       ref.address,
       ref.engine,
-      0,
-      AUDIO_SFX_TEMPO,
+      pitch,
+      tempo,
       FANFARES[name] ? AUDIO_SFX_FLAG.duck : 0,
     );
   }

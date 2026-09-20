@@ -447,6 +447,11 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     for (const cue of cues) {
       if (cue.startsWith("cry:")) {
         this.audio.playCry(cue.slice(4));
+      } else if (cue.startsWith("move:")) {
+        // "move:<sfx>:<pitch>:<tempo>" — a battle move's sound with the
+        // modifiers its MoveSoundTable row carries.
+        const [name, pitch, tempo] = cue.slice(5).split(":");
+        this.audio.playSfx(name, Number(pitch) || 0, Number(tempo) || undefined);
       } else if (cue.startsWith("sfx:")) {
         this.audio.playSfx(cue.slice(4));
       } else if (cue.startsWith("music:victory")) {

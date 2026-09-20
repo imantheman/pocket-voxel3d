@@ -43,19 +43,75 @@ fn quad(page: u16, cx: i32, cy: i32, tile: u16) -> Item {
     }
 }
 
+/// Where the GB drew the two battlers: the enemy's front pic at tile
+/// (12, 0) and the player's back pic at tile (1, 5), both 7x7 tiles. The
+/// move animations were authored against these two boxes -- a beam leaves
+/// one and lands on the other -- so they are what an animation has to be
+/// mapped FROM.
+const GB_ENEMY_PIC: (f32, f32) = (96.0 + 28.0, 0.0 + 28.0);
+const GB_PLAYER_PIC: (f32, f32) = (8.0 + 28.0, 40.0 + 28.0);
+/// How far the animation may be scaled from the GB's own size. A camera
+/// looking down the arena's axis puts the two mons almost on top of each
+/// other; without a floor the whole effect would collapse into a dot.
+const ANIM_SCALE_MIN: f32 = 0.5;
+const ANIM_SCALE_MAX: f32 = 2.5;
+
+/// How to put a Game Boy screen coordinate where the battle actually is.
+///
+/// Returns (x offset, y offset, px per GB px). With no cards on screen
+/// this is the UI's own letterboxed frame, which is where the animations
+/// used to land unconditionally -- and that was the bug: the mons are
+/// cards in a diorama, several dozen pixels from where the flat game drew
+/// them, so every attack went off beside its target. The two pic boxes are
+/// mapped onto the two cards instead: same midpoint, same separation, so a
+/// beam still leaves one mon and lands on the other whatever the camera is
+/// doing.
+fn anim_frame(cards: &[Option<Rect>; UI_PANELS]) -> (f32, f32, f32) {
+    let home = (UI_ORIGIN_X, 0.0, UI_SCALE);
+    let (Some(p), Some(e)) = (cards[0], cards[1]) else { return home };
+    let mid = |r: Rect| ((r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5);
+    let (px, py) = mid(p);
+    let (ex, ey) = mid(e);
+    let gap = crate::math::sqrtf((ex - px) * (ex - px) + (ey - py) * (ey - py));
+    let gb_gap = {
+        let dx = GB_ENEMY_PIC.0 - GB_PLAYER_PIC.0;
+        let dy = GB_ENEMY_PIC.1 - GB_PLAYER_PIC.1;
+        crate::math::sqrtf(dx * dx + dy * dy)
+    };
+    if gb_gap < 1.0 {
+        return home;
+    }
+    let scale = (gap / gb_gap).clamp(UI_SCALE * ANIM_SCALE_MIN, UI_SCALE * ANIM_SCALE_MAX);
+    let gb_mid = (
+        (GB_ENEMY_PIC.0 + GB_PLAYER_PIC.0) * 0.5,
+        (GB_ENEMY_PIC.1 + GB_PLAYER_PIC.1) * 0.5,
+    );
+    let screen_mid = ((px + ex) * 0.5, (py + ey) * 0.5);
+    (
+        screen_mid.0 - gb_mid.0 * scale,
+        screen_mid.1 - gb_mid.1 * scale,
+        scale,
+    )
+}
+
 /// Append this frame's move-animation sprites.
 ///
-/// They arrive in Game Boy pixels and land in the same scaled, centered
-/// frame the UI tiles use, so an animation lines up with the battle it is
-/// drawn over. `page` is the sheet the guest read out of its own data.
-pub fn append_anim(scene: &Scene, items: &mut Vec<Item>) {
+/// They arrive in Game Boy pixels and are put where the battle is drawn
+/// (see [`anim_frame`]); `page` is the sheet the guest read out of its own
+/// data.
+pub fn append_anim(scene: &Scene, cards: &[Option<Rect>; UI_PANELS], items: &mut Vec<Item>) {
+    if scene.anim_sprite_n == 0 {
+        return;
+    }
+    let (ox, oy, scale) = anim_frame(cards);
+    let tile = TILE_PX as f32 * scale;
     for i in 0..scene.anim_sprite_n as usize {
         let s = scene.anim_sprites[i];
         items.push(Item::AnimQuad {
-            x: UI_ORIGIN_X + s.x as f32 * UI_SCALE,
-            y: s.y as f32 * UI_SCALE,
-            w: UI_TILE_PX,
-            h: UI_TILE_PX,
+            x: ox + s.x as f32 * scale,
+            y: oy + s.y as f32 * scale,
+            w: tile,
+            h: tile,
             page: s.page,
             tile: s.tile,
             flip_x: s.flags & 1 != 0,
@@ -708,15 +764,56 @@ mod tests {
     }
 
     #[test]
+    fn an_animation_lands_on_the_mons_wherever_they_are() {
+        let mut s = Scene::new();
+        s.op(op::ARENA, &[0, 4, 4, 0, 0], None);
+        // Two cards a long way from where the flat game drew its pics.
+        let player = Rect::of(120.0, 150.0, 200.0, 230.0);
+        let enemy = Rect::of(300.0, 40.0, 380.0, 120.0);
+        let cards = [Some(player), Some(enemy)];
+        // The GB pic centres: what the animations were authored against.
+        for (gb, card) in [(GB_PLAYER_PIC, player), (GB_ENEMY_PIC, enemy)] {
+            s.op(op::ANIM_CLEAR, &[], None);
+            s.op(op::ANIM_SPRITE, &[3, 0, gb.0 as i32 - 4, gb.1 as i32 - 4, 0], None);
+            let mut items = Vec::new();
+            append_anim(&s, &cards, &mut items);
+            let Item::AnimQuad { x, y, w, h, .. } = items[0] else { panic!("no quad") };
+            // A tile drawn at a pic's centre lands on that mon's card.
+            let (cx, cy) = (x + w * 0.5, y + h * 0.5);
+            let (mx, my) = ((card.x0 + card.x1) * 0.5, (card.y0 + card.y1) * 0.5);
+            assert!(
+                (cx - mx).abs() < 12.0 && (cy - my).abs() < 12.0,
+                "tile at {cx},{cy} but the mon is at {mx},{my}",
+            );
+        }
+    }
+
+    #[test]
+    fn without_cards_an_animation_keeps_the_gb_frame() {
+        let mut s = Scene::new();
+        s.op(op::ANIM_SPRITE, &[3, 7, 0, 16, 0], None);
+        let mut items = Vec::new();
+        append_anim(&s, &[None; UI_PANELS], &mut items);
+        match items[0] {
+            Item::AnimQuad { x, y, w, .. } => {
+                assert!((x - UI_ORIGIN_X).abs() < 1e-3);
+                assert!((y - 16.0 * UI_SCALE).abs() < 1e-3);
+                assert!((w - UI_TILE_PX).abs() < 1e-3);
+            }
+            _ => panic!("expected an AnimQuad"),
+        }
+    }
+
+    #[test]
     fn anim_sprites_land_in_the_ui_frame_and_flip() {
         let mut s = Scene::new();
         let mut items = Vec::new();
-        append_anim(&s, &mut items);
+        append_anim(&s, &[None; UI_PANELS], &mut items);
         assert!(items.is_empty());
         // a tile at the top-left of the GB screen, x-flipped
         s.op(op::ANIM_SPRITE, &[3, 7, 0, 16, 1], None);
         s.op(op::ANIM_SPRITE, &[3, 8, 8, 16, 2], None);
-        append_anim(&s, &mut items);
+        append_anim(&s, &[None; UI_PANELS], &mut items);
         assert_eq!(items.len(), 2);
         match items[0] {
             Item::AnimQuad { x, y, w, h, page, tile, flip_x, flip_y } => {
@@ -738,7 +835,7 @@ mod tests {
         // the animation ends: the list empties, the UI keeps its own tiles
         s.op(op::ANIM_CLEAR, &[], None);
         let mut after = Vec::new();
-        append_anim(&s, &mut after);
+        append_anim(&s, &[None; UI_PANELS], &mut after);
         assert!(after.is_empty());
     }
 

@@ -965,7 +965,7 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
         });
     }
 
-    ui::append_anim(scene, &mut items);
+    ui::append_anim(scene, &card_rects, &mut items);
     ui::append_ui(scene, pak, ui::ease_panels(scene, &card_rects), &mut items);
 
     DrawList {

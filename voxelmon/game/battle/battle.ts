@@ -43,6 +43,11 @@ import {
 import { encodeGlyphs } from "../ui/tiles.ts";
 import { animFrames, SIDE_ENEMY, SIDE_PLAYER, type AnimKind, type BattleAnim } from "./anim.ts";
 import { MoveAnim, type AnimEvent, type AnimSprite as MoveAnimSprite } from "./moveanim.ts";
+
+/** What a move's record carries for its sound (moves.json `anim`). */
+interface MoveSoundDef {
+  anim?: { sound?: string; pitch?: number; tempo?: number };
+}
 import { displayName, ghostText, makeBattler, prefixEnemy, type WildBattler } from "./battler.ts";
 import {
   effectRecord,
@@ -203,6 +208,8 @@ export class WildBattle implements EffectBattle {
   moveIndex = 1;
   moveSwapIndex: number | null = null;
   frame = 0;
+  /** move index -> its record, for the animation rows' sound bytes. */
+  private moveSfxIndex: Map<number, MoveSoundDef> | null = null;
   /** The move animation drawing over the cards, and the frame it is on.
    * Compiled when the anim row runs; dropped when it has played out. */
   moveAnim: MoveAnim | null = null;
@@ -880,15 +887,38 @@ export class WildBattle implements EffectBattle {
   }
 
   /**
-   * A special effect the animation asked for. The screen-level ones have a
-   * card equivalent here: the defender takes the knock it takes on a hit.
-   * The sounds are named by move id and wait on the move SFX table.
+   * A special effect the animation asked for, and the sound its row plays.
+   *
+   * The screen-level effects have a card equivalent here: the defender
+   * takes the knock it takes on a hit. The sound is named by MOVE INDEX --
+   * an animation row borrows whichever move's MoveSoundTable entry it wants
+   * (TACKLE's rows play LEECH SEED's) -- and that entry carries the pitch
+   * and tempo modifiers with it.
    */
   private applyAnimEvent(e: AnimEvent): void {
+    if (e.sound !== undefined && e.sound !== null) {
+      const def = this.moveByIndex(e.sound);
+      const a = def?.anim;
+      if (a?.sound) {
+        this.audioCues.push(`move:${a.sound}:${a.pitch ?? 0}:${a.tempo ?? 0}`);
+      }
+    }
     if (!e.effect) return;
     if (e.effect.includes("SHAKE") || e.effect.includes("FLASH_SCREEN")) {
       this.startAnim("hit", this.moveAnimDefender);
     }
+  }
+
+  /** The move a MoveSoundTable index names (moves.json `index`). */
+  private moveByIndex(index: number): MoveSoundDef | undefined {
+    if (!this.moveSfxIndex) {
+      this.moveSfxIndex = new Map();
+      for (const def of Object.values(this.data.moves ?? {})) {
+        const d = def as MoveSoundDef & { index?: number };
+        if (typeof d.index === "number") this.moveSfxIndex.set(d.index, d);
+      }
+    }
+    return this.moveSfxIndex.get(index);
   }
 
   update(input: BattleInput): void {

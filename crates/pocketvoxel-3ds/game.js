@@ -363,11 +363,11 @@ class AudioDirector {
     this.current = null;
     this.host?.musicStop();
   }
-  playSfx(name) {
+  playSfx(name, pitch = 0, tempo = AUDIO_SFX_TEMPO) {
     const ref = this.banks?.sfx(name);
     if (!ref || !this.host)
       return;
-    this.host.sfx(ref.bank, ref.address, ref.engine, 0, AUDIO_SFX_TEMPO, FANFARES[name] ? AUDIO_SFX_FLAG.duck : 0);
+    this.host.sfx(ref.bank, ref.address, ref.engine, pitch, tempo, FANFARES[name] ? AUDIO_SFX_FLAG.duck : 0);
   }
   playCry(species) {
     const cry = this.banks?.cry(species);
@@ -2854,6 +2854,7 @@ class WildBattle {
   moveIndex = 1;
   moveSwapIndex = null;
   frame = 0;
+  moveSfxIndex = null;
   moveAnim = null;
   moveAnimFrame = 0;
   moveAnimDefender = SIDE_ENEMY;
@@ -3324,11 +3325,29 @@ Get'm! ${name}!`;
     return this.moveAnim ? this.moveAnim.spritesAt(this.moveAnimFrame) : [];
   }
   applyAnimEvent(e) {
+    if (e.sound !== undefined && e.sound !== null) {
+      const def = this.moveByIndex(e.sound);
+      const a = def?.anim;
+      if (a?.sound) {
+        this.audioCues.push(`move:${a.sound}:${a.pitch ?? 0}:${a.tempo ?? 0}`);
+      }
+    }
     if (!e.effect)
       return;
     if (e.effect.includes("SHAKE") || e.effect.includes("FLASH_SCREEN")) {
       this.startAnim("hit", this.moveAnimDefender);
     }
+  }
+  moveByIndex(index) {
+    if (!this.moveSfxIndex) {
+      this.moveSfxIndex = new Map;
+      for (const def of Object.values(this.data.moves ?? {})) {
+        const d = def;
+        if (typeof d.index === "number")
+          this.moveSfxIndex.set(d.index, d);
+      }
+    }
+    return this.moveSfxIndex.get(index);
   }
   update(input) {
     this.frame += 1;
@@ -15803,6 +15822,9 @@ class VoxelmonGame {
     for (const cue of cues) {
       if (cue.startsWith("cry:")) {
         this.audio.playCry(cue.slice(4));
+      } else if (cue.startsWith("move:")) {
+        const [name, pitch, tempo] = cue.slice(5).split(":");
+        this.audio.playSfx(name, Number(pitch) || 0, Number(tempo) || undefined);
       } else if (cue.startsWith("sfx:")) {
         this.audio.playSfx(cue.slice(4));
       } else if (cue.startsWith("music:victory")) {

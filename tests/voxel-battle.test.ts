@@ -927,6 +927,31 @@ describe("playing a move animation", () => {
     expect(b.phase).toBe("menu");
   });
 
+  test.skipIf(!hasAnims)("its rows play the move's own sound", () => {
+    const { b, input } = animBattle("THUNDERBOLT");
+    b.audioCues.length = 0;
+    for (let i = 0; i < 600 && b.phase === "messages"; i++) tick(b, input);
+    const moves = b.audioCues.filter((c) => c.startsWith("move:"));
+    expect(moves.length).toBeGreaterThan(0);
+    // MoveSoundTable: the sfx AND the pitch/tempo modifiers that tell one
+    // electric move from another (moves.json `anim`).
+    const anim = (data!.moves.THUNDERBOLT as { anim?: Record<string, unknown> }).anim!;
+    expect(moves[0]).toBe(`move:${anim.sound}:${anim.pitch}:${anim.tempo}`);
+  });
+
+  test.skipIf(!hasAnims)("a row can borrow another move's sound", () => {
+    // TACKLE's rows name move 73 (LEECH SEED); the original does this all
+    // over, so the lookup is by MoveSoundTable index, not by the move used.
+    const { b, input } = animBattle("TACKLE");
+    b.audioCues.length = 0;
+    for (let i = 0; i < 600 && b.phase === "messages"; i++) tick(b, input);
+    const moves = b.audioCues.filter((c) => c.startsWith("move:"));
+    const byIndex = Object.values(data!.moves).find(
+      (m) => (m as { index?: number }).index === 73,
+    ) as { anim?: { sound?: string } } | undefined;
+    expect(moves[0]).toBe(`move:${byIndex!.anim!.sound}:${(byIndex as never as { anim: { pitch: number } }).anim.pitch}:${(byIndex as never as { anim: { tempo: number } }).anim.tempo}`);
+  });
+
   test.skipIf(!hasAnims)("the OPTION toggle keeps it off the screen", () => {
     const { b, input } = animBattle("THUNDERBOLT", { off: true });
     for (let i = 0; i < 600; i++) {
