@@ -4032,11 +4032,22 @@ fn main() {
                 if let Item::AnimQuad { x, y, w, h, page, tile, flip_x, flip_y } = it {
                     // Same placement as a UI tile, with the flips the
                     // original animations spend half their time doing.
+                    //
+                    // NOT ui_tile_uv: that reads the UI sheet's repacked
+                    // cell-with-a-gutter layout, and an animation sheet is a
+                    // sprite page, uploaded as-is (page_layout_dims) and
+                    // padded to a power of two at the bottom right. So the
+                    // tiles are a plain 8x8 grid, and v counts down from 1
+                    // the way a pic's does.
                     let pg = &pak_static.atlases[*page as usize];
-                    let cols = ((pg.w as u32 / UI_CELL) as u16).max(1);
+                    let cols = (pg.w as u32 / UI_CELL).max(1) as u16;
                     let (pw, ph) = page_tex_size(pg);
-                    let (mut u0, mut u1, mut v0, mut v1) =
-                        ui_tile_uv(*tile, cols, pw, ph, page_prescale(pg));
+                    let sc = page_prescale(pg) as f32;
+                    let cell = UI_CELL as f32 * sc;
+                    let tx = (*tile % cols) as f32 * cell;
+                    let ty = (*tile / cols) as f32 * cell;
+                    let (mut u0, mut u1) = (tx / pw, (tx + cell) / pw);
+                    let (mut v0, mut v1) = (1.0 - ty / ph, 1.0 - (ty + cell) / ph);
                     if *flip_x {
                         core::mem::swap(&mut u0, &mut u1);
                     }
