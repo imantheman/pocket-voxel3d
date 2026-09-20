@@ -336,17 +336,41 @@ mod tests {
     }
 
     /// Pack a big map's planned geometry and check it comes out the same,
-    /// from a buffer a fraction of the size. Route 23 is the largest map
-    /// still read in place: 47 MB, of which a build draws a fraction.
+    /// from a buffer a fraction of the size.
+    ///
+    /// This used to name Route 23, 47 MB of it trees. Cooking the trees as
+    /// instances (TINS) took that map to 11 MB and every other one with it,
+    /// so the biggest v8 pak left may be under the threshold packing is for
+    /// -- and a v9 pak is not something this module rewrites. The test
+    /// picks the largest pak it can still exercise and says so when there
+    /// is none, rather than pinning a file that changed shape underneath it.
     #[test]
     fn packs_a_big_map_without_changing_a_triangle() {
         let dir = paks();
-        // The biggest map still read in place: 47 MB, no stamps, v8.
-        let path = dir.join("ROUTE_23.vxpak");
-        if !path.exists() {
-            eprintln!("no cooked paks; skipped");
-            return;
+        let mut best: Option<(u64, std::path::PathBuf)> = None;
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|e| e != "vxpak") {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else { continue };
+            // Version is bytes 4..6; only a v8 pak has the layout below.
+            let mut head = [0u8; 8];
+            if std::fs::File::open(&path)
+                .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut head))
+                .is_err()
+                || u16::from_le_bytes([head[4], head[5]]) != crate::spec::VXPK_VERSION as u16
+            {
+                continue;
+            }
+            if best.as_ref().is_none_or(|(n, _)| meta.len() > *n) {
+                best = Some((meta.len(), path));
+            }
         }
+        let Some((_, path)) = best else {
+            eprintln!("no v8 pak to pack (tree instancing shrank the set); skipped");
+            return;
+        };
         let blob = std::fs::read(&path).unwrap();
         let shared = std::fs::read(dir.join("common.vxat")).ok();
         let orig = pak::read_with_shared(&blob, shared.as_deref()).expect("read original");
@@ -368,7 +392,10 @@ mod tests {
         let map = orig.maps[0];
         let chunks = &orig.chunks[map.first as usize..(map.first + map.count) as usize];
         let (order, huge, budget) = build_order(chunks, Some((160.0, 1400.0)));
-        assert!(huge, "this is the map size packing is for");
+        if !huge {
+            eprintln!("largest v8 pak is under the packing threshold; skipped");
+            return;
+        }
         let bp = plan_build(chunks, &order, huge, budget, 0);
         let planned: Vec<(usize, usize)> = bp
             .items

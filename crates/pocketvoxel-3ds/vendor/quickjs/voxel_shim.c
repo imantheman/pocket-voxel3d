@@ -154,6 +154,8 @@ int qjs_register_voxel(JSContext *ctx) {
     /* Move animation sprites — ops 80-81. */
     add_num(ctx, o, "animSprite",     80, 5);
     add_num(ctx, o, "animClear",      81, 0);
+    /* Battle HUD panel rects the core slides — op 82. */
+    add_num(ctx, o, "uiPanel",        82, 5);
     add_num(ctx, o, "arena",    70, 5);
     add_num(ctx, o, "card",     71, 7);
     add_num(ctx, o, "cardHide", 72, 1);

@@ -716,6 +716,17 @@ export const VOX_OP = {
   animSprite: 80,
   /** Drop every move-animation sprite (start of frame, end of animation). */
   animClear: 81,
+  /**
+   * Declare a rectangle of the UI grid as a HUD PANEL belonging to one side
+   * of a battle: the name/level/HP box the GB draws in fixed cells.
+   *
+   * The sprites it used to sit on top of are 3D cards now, and they move
+   * with the camera, so the core slides the whole rect sideways to keep it
+   * beside its own mon (core ui.rs panel_shift). The guest keeps drawing
+   * the tiles where the GB puts them and says which cells are the panel.
+   *   args: side (0 player, 1 enemy), x, y, w, h -- cells; w = 0 clears it
+   */
+  uiPanel: 82,
 } as const;
 
 /** Emote-page frame of the HM Cut tree sprite (after the 3 GB bubbles). */
@@ -727,6 +738,9 @@ export const FX_FRAME_CUT_TREE = 3;
  * across the field and the petals fall twenty at a time.
  */
 export const ANIM_SPRITES_MAX = 64;
+
+/** Battle HUD panels the core may slide: one per side (`uiPanel`). */
+export const UI_PANELS = 2;
 
 /** Fixed-point scales used by op args. */
 export const Q4 = 16;

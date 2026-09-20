@@ -4692,6 +4692,10 @@ function desiredCards(data, battle, staging) {
 }
 
 // voxelmon/game/battle/ui.ts
+var ENEMY_HUD_W = 10;
+var ENEMY_HUD_H = 4;
+var PLAYER_HUD_W = 10;
+var PLAYER_HUD_H = 5;
 var HUD_HP_LABEL = 113;
 var HUD_BAR_LEFT = 98;
 var HUD_BAR_EMPTY = 99;
@@ -4801,6 +4805,9 @@ class BattleUi {
     this.playerLevel = null;
     this.cursorCell = null;
     this.swapCell = null;
+    const slide = !battle.statBoxMon;
+    host.uiPanel(1, 0, 0, enemyHud && slide ? ENEMY_HUD_W : 0, ENEMY_HUD_H);
+    host.uiPanel(0, 10, 7, playerHud && slide ? PLAYER_HUD_W : 0, PLAYER_HUD_H);
     if (enemyHud)
       this.paintEnemyHud(host, battle);
     if (playerHud)
@@ -16859,6 +16866,9 @@ class QuickJsHost {
   }
   animClear() {
     native.animClear();
+  }
+  uiPanel(side, x, y, w, h) {
+    native.uiPanel(side, x, y, w, h);
   }
   fieldFx(x, z, frame) {
     native.fieldFx(x, z, frame);

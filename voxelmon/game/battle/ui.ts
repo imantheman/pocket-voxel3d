@@ -39,6 +39,17 @@ import type { WildBattler } from "./battler.ts";
 // capTile :119-121; BattleState.lua drawHUDs hudTile sites :5401-5493).
 // ---------------------------------------------------------------------------
 
+/**
+ * The cells each HUD panel covers: the enemy's name/level/bar/underline in
+ * the top-left block, the player's in the bottom-right one. Declared to the
+ * core (uiPanel) so it can slide the whole block sideways when a sprite
+ * would end up under it.
+ */
+const ENEMY_HUD_W = 10;
+const ENEMY_HUD_H = 4;
+const PLAYER_HUD_W = 10;
+const PLAYER_HUD_H = 5;
+
 export const HUD_HP_LABEL = 0x71; // "HP" pair-glyph (drawHPBar :147)
 export const HUD_BAR_LEFT = 0x62; // ":[" bar opener (:148)
 export const HUD_BAR_EMPTY = 0x63; // +n = n-pixel partial fill (:171)
@@ -203,6 +214,16 @@ export class BattleUi {
     // The battle message box now lives on the Kanto Gear bottom screen
     // (kantogear.ts drawBattleMessage); the top screen keeps only the HUDs and
     // the level-up stat window so the scene fills the space the box used to take.
+
+    // The two HUD rects, so the core can slide them clear of the sprites
+    // (voxel-spec uiPanel). They go out AFTER uiClear, which drops them.
+    //
+    // The level-up stat window overlaps both rects; while it is up nothing
+    // slides, so the window and the HUD under it stay lined up with each
+    // other the way the GB drew them.
+    const slide = !battle.statBoxMon;
+    host.uiPanel(1, 0, 0, enemyHud && slide ? ENEMY_HUD_W : 0, ENEMY_HUD_H);
+    host.uiPanel(0, 10, 7, playerHud && slide ? PLAYER_HUD_W : 0, PLAYER_HUD_H);
 
     if (enemyHud) this.paintEnemyHud(host, battle);
     // The player HUD stays up in every phase now — the move box that used to

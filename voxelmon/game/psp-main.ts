@@ -64,6 +64,7 @@ interface VoxelNative {
   uiSpriteBottom(page: number, x: number, y: number, w: number, h: number): void;
   animSprite(page: number, tile: number, x: number, y: number, flags: number): void;
   animClear(): void;
+  uiPanel(side: number, x: number, y: number, w: number, h: number): void;
   fieldFx(x: number, z: number, frame: number): void;
   arena(mapId: number, x: number, y: number, shape: number, rig: number): void;
   card(
@@ -219,6 +220,9 @@ class QuickJsHost implements VoxelHost {
   }
   animClear(): void {
     native.animClear();
+  }
+  uiPanel(side: number, x: number, y: number, w: number, h: number): void {
+    native.uiPanel(side, x, y, w, h);
   }
   fieldFx(x: number, z: number, frame: number): void {
     native.fieldFx(x, z, frame);

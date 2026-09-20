@@ -106,6 +106,7 @@ import {
   VXPK_META_FLAG_TREE_LOD,
   VXPK_META_SIZE,
   ANIM_SPRITES_MAX,
+  UI_PANELS,
   VXPK_TAG,
   VXPK_TREE_INST_SIZE,
   VXPK_TREE_SHAPE_SIZE,
@@ -437,6 +438,8 @@ export function generateVoxelRust(): string {
   put("// VXPK — the cooked content container");
   put("// ---------------------------------------------------------------------------");
   put("");
+  put("/// Battle HUD panels the core may slide, one per side (`uiPanel`).");
+  put(`pub const UI_PANELS: usize = ${UI_PANELS};`);
   put("/// Move-animation sprites on screen at once (`animSprite`).");
   put(`pub const ANIM_SPRITES_MAX: usize = ${ANIM_SPRITES_MAX};`);
   put(`pub const VXPK_MAGIC: u32 = ${hex(VXPK_MAGIC)}; // 'VXPK'`);

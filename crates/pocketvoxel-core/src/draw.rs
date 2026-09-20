@@ -330,6 +330,31 @@ fn shadow_quad(center: Vec3, card_w: f32) -> [[f32; 3]; 4] {
     ]
 }
 
+/// The screen rectangle a card's four world verts cover, in UI px.
+///
+/// The backends displace a card along each vertex's eye ray (`pull`), which
+/// under a perspective projection slides a point along the line it already
+/// projects to -- so the unpulled verts give the same rectangle and this
+/// does not need to know the pull. A card with any vertex behind the eye
+/// has no usable rectangle.
+fn card_screen_rect(cam: &Camera, verts: &[[f32; 3]; 4]) -> Option<ui::Rect> {
+    let (mut x0, mut y0) = (f32::MAX, f32::MAX);
+    let (mut x1, mut y1) = (f32::MIN, f32::MIN);
+    for v in verts.iter() {
+        let clip = cam.vp.transform(vec3(v[0], v[1], v[2]), 1.0);
+        if clip.w <= 1e-4 {
+            return None;
+        }
+        let sx = (clip.x / clip.w * 0.5 + 0.5) * crate::spec::VIEW_W as f32;
+        let sy = (1.0 - (clip.y / clip.w * 0.5 + 0.5)) * VIEW_H as f32;
+        x0 = x0.min(sx);
+        y0 = y0.min(sy);
+        x1 = x1.max(sx);
+        y1 = y1.max(sy);
+    }
+    Some(ui::Rect::of(x0, y0, x1, y1))
+}
+
 fn alpha_abgr(alpha: f32) -> u32 {
     ((alpha * 255.0 + 0.5) as u32) << 24
 }
@@ -428,6 +453,8 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
     let cam = camera(scene);
     let frustum = cam.frustum();
     let mut items = Vec::new();
+    // Where each battle sprite lands on screen, for the HUD panels to dodge.
+    let mut card_rects: [Option<ui::Rect>; crate::spec::UI_PANELS] = [None; crate::spec::UI_PANELS];
 
     // 1. Sky.
     let mut colors = SKY_ABGR;
@@ -864,15 +891,19 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
             // Battle mon sprites drawn at 60% (40% smaller) of their atlas
             // page size; overworld entity cards use card_w and are unaffected.
             const BATTLE_CARD_SCALE: f32 = 0.6;
+            let verts = card_verts(
+                card_anchor(card),
+                page.w as f32 * BATTLE_CARD_SCALE,
+                page.h as f32 * BATTLE_CARD_SCALE,
+                a,
+                fwd_x,
+                fwd_z,
+            );
+            if let Some(slot) = card_rects.get_mut(side) {
+                *slot = card_screen_rect(&cam, &verts);
+            }
             items.push(Item::Card {
-                verts: card_verts(
-                    card_anchor(card),
-                    page.w as f32 * BATTLE_CARD_SCALE,
-                    page.h as f32 * BATTLE_CARD_SCALE,
-                    a,
-                    fwd_x,
-                    fwd_z,
-                ),
+                verts,
                 page: card.pic as u16,
                 uv: [0.0, 0.0, 1.0, 1.0],
                 // side 0 (player, the back sprite — staging.ts's
@@ -920,7 +951,7 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
     }
 
     ui::append_anim(scene, &mut items);
-    ui::append_ui(scene, pak, &mut items);
+    ui::append_ui(scene, pak, ui::ease_panels(scene, &card_rects), &mut items);
 
     DrawList {
         cam,
@@ -1281,6 +1312,136 @@ mod tests {
     /// The rung's grass/flower dials strip the far chunk's DETAIL meshes and
     /// nothing else: the same chunk's terrain still draws, because terrain is
     /// the silhouette and only the chunk cap bounds it.
+
+    /// Swing the battle camera all the way round a real cooked arena and
+    /// check the HUD panels never end up over a sprite.
+    ///
+    /// The GB could pin the name and the HP bar to fixed cells because what
+    /// they sat beside was a flat pic at a fixed place. Here they sit over a
+    /// diorama the player can spin, so the panels move instead (ui.rs
+    /// panel_shift) -- and the thing to hold onto is not where they land but
+    /// that the sprites stay readable from every angle.
+    #[test]
+    fn the_battle_huds_stay_off_the_sprites_at_every_angle() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../dist/voxelmon/paks");
+        let path = dir.join("PALLET_TOWN.vxpak");
+        if !path.exists() {
+            eprintln!("no cooked paks; skipped");
+            return;
+        }
+        let blob = std::fs::read(&path).unwrap();
+        let shared = std::fs::read(dir.join("common.vxat")).ok();
+        let pak = crate::pak::read_with_shared(&blob, shared.as_deref()).expect("read pak");
+        // Two pic pages to stand in for the mons, the size the battle draws.
+        let pics: Vec<u16> = (0..pak.atlases.len() as u16)
+            .filter(|i| {
+                let p = &pak.atlases[*i as usize];
+                p.kind == crate::spec::atlas_kind::PICS && p.w >= 40 && p.h >= 40
+            })
+            .take(2)
+            .collect();
+        assert_eq!(pics.len(), 2, "the pak carries no battle pics");
+
+        let mut scene = Scene::new();
+        scene.op(op::MAP_SHOW, &[0, 0, 0, 0], None);
+        scene.op(op::ARENA, &[0, 6, 6, 0, 1], None);
+        scene.op(op::CARD, &[0, pics[0] as i32, 7, 10, 0, 0, 0], None);
+        scene.op(op::CARD, &[1, pics[1] as i32, 7, 7, 0, 0, 0], None);
+        scene.op(op::UI_PANEL, &[1, 0, 0, 10, 4], None);
+        scene.op(op::UI_PANEL, &[0, 10, 7, 10, 5], None);
+        // One tile in each corner of each panel, so the quads that come out
+        // trace the rect the guest declared.
+        for (x, y) in [(0, 0), (9, 3), (10, 7), (19, 11)] {
+            scene.op(op::UI_TILE, &[x, y, 9], None);
+        }
+
+        for step in 0..16 {
+            scene.cam_yaw_off = step as f32 * core::f32::consts::TAU / 16.0;
+            // Let the ease settle at this angle before judging it: a swing
+            // slides the panels, and mid-slide is not where they live.
+            let mut list = build(&scene, &pak);
+            for _ in 0..80 {
+                list = build(&scene, &pak);
+            }
+            let cards: Vec<ui::Rect> = list
+                .items
+                .iter()
+                .filter_map(|it| match it {
+                    Item::Card { verts, page, .. } if pics.contains(page) => {
+                        card_screen_rect(&list.cam, verts)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(cards.len(), 2, "both sprites drawn at yaw step {step}");
+            for it in list.items.iter() {
+                let Item::UiQuad { x, y, w, h, .. } = it else { continue };
+                let q = ui::Rect::of(*x, *y, *x + *w, *y + *h);
+                for c in cards.iter() {
+                    assert!(
+                        !q.overlaps(c),
+                        "yaw step {step}: HUD tile {q:?} is over a sprite {c:?}",
+                    );
+                }
+            }
+        }
+    }
+
+
+    /// Not an assertion: prints where the panels end up at each angle, for
+    /// looking at. `cargo test -p pocketvoxel-core hud_probe -- --nocapture`
+    #[test]
+    #[ignore]
+    fn hud_probe() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../dist/voxelmon/paks");
+        let blob = std::fs::read(dir.join("PALLET_TOWN.vxpak")).unwrap();
+        let shared = std::fs::read(dir.join("common.vxat")).ok();
+        let pak = crate::pak::read_with_shared(&blob, shared.as_deref()).unwrap();
+        let pics: Vec<u16> = (0..pak.atlases.len() as u16)
+            .filter(|i| {
+                let p = &pak.atlases[*i as usize];
+                p.kind == crate::spec::atlas_kind::PICS && p.w >= 40 && p.h >= 40
+            })
+            .take(2)
+            .collect();
+        let mut scene = Scene::new();
+        scene.op(op::MAP_SHOW, &[0, 0, 0, 0], None);
+        scene.op(op::ARENA, &[0, 6, 6, 0, 1], None);
+        scene.op(op::CARD, &[0, pics[0] as i32, 7, 10, 0, 0, 0], None);
+        scene.op(op::CARD, &[1, pics[1] as i32, 7, 7, 0, 0, 0], None);
+        scene.op(op::UI_PANEL, &[1, 0, 0, 10, 4], None);
+        scene.op(op::UI_PANEL, &[0, 10, 7, 10, 5], None);
+        for step in 0..8 {
+            scene.cam_yaw_off = step as f32 * core::f32::consts::TAU / 8.0;
+            let mut list = build(&scene, &pak);
+            for _ in 0..80 {
+                list = build(&scene, &pak);
+            }
+            let cards: Vec<ui::Rect> = list.items.iter().filter_map(|it| match it {
+                Item::Card { verts, page, .. } if pics.contains(page) =>
+                    card_screen_rect(&list.cam, verts),
+                _ => None,
+            }).collect();
+            let off = [scene.ui_panel_off[0].get(), scene.ui_panel_off[1].get()];
+            let home = [
+                ui::panel_home(&scene.ui_panels[0]),
+                ui::panel_home(&scene.ui_panels[1]),
+            ];
+            println!("yaw {:>3}deg", step * 45);
+            for (i, c) in cards.iter().enumerate() {
+                println!("   sprite {i}: x {:>6.0}..{:<6.0} y {:>6.0}..{:<6.0}",
+                         c.x0, c.x1, c.y0, c.y1);
+            }
+            for i in 0..2 {
+                let p = home[i].shifted(off[i][0], off[i][1]);
+                println!("   panel  {i}: x {:>6.0}..{:<6.0} y {:>6.0}..{:<6.0}  (moved {:>5.0},{:>5.0})",
+                         p.x0, p.x1, p.y0, p.y1, off[i][0], off[i][1]);
+            }
+        }
+    }
+
     #[test]
     fn detail_meshes_fade_with_the_rung() {
         let blob = pak::AlignedBlob::from_bytes(&fading_pak_bytes(true));

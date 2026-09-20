@@ -76,6 +76,13 @@ export interface VoxelHost {
   animSprite(page: number, tile: number, x: number, y: number, flags: number): void;
   /** Drop every move-animation sprite. */
   animClear(): void;
+  /**
+   * Declare a rect of UI cells as one side's battle HUD panel, so the core
+   * can slide it clear of the 3D sprites as the camera moves. `side` is the
+   * card's side (0 player, 1 enemy); `w` 0 clears it.
+   */
+  uiPanel(side: number, x: number, y: number, w: number, h: number): void;
+
 
   /** Field effect billboard at Q4 world px (x, z); frame < 0 clears it. */
   fieldFx(x: number, z: number, frame: number): void;
@@ -229,6 +236,10 @@ export class RecorderHost implements VoxelHost {
 
   animClear(): void {
     this.op(VOX_OP.animClear);
+  }
+
+  uiPanel(side: number, x: number, y: number, w: number, h: number): void {
+    this.op(VOX_OP.uiPanel, side, x, y, w, h);
   }
   fieldFx(x: number, z: number, frame: number): void {
     // Args pass straight through, like card/arena: the caller supplies Q4.

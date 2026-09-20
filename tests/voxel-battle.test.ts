@@ -464,6 +464,9 @@ class CaptureHost implements VoxelHost {
   uiTile(x: number, y: number, tile: number): void {
     this.rec("uiTile", x, y, tile);
   }
+  uiPanel(side: number, x: number, y: number, w: number, h: number): void {
+    this.rec("uiPanel", side, x, y, w, h);
+  }
   uiFill(x: number, y: number, w: number, h: number, tile: number): void {
     this.rec("uiFill", x, y, w, h, tile);
   }
@@ -746,6 +749,20 @@ describe("status moves and trapping (MoveEffects port)", () => {
 });
 
 describe("battle screen layout", () => {
+  test.skipIf(!hasGen)("the HUDs declare the cells the core may slide", () => {
+    const { b } = makeBattle({ rolls: [0, 0, 0, 0, 0] });
+    const host = new CaptureHost();
+    new BattleUi().emit(host, b);
+    const panels = host.ops.filter((o) => o.op === "uiPanel").map((o) => o.args);
+    // side 1 is the enemy card (top-left block), side 0 the player's
+    // (bottom-right): the cells paintEnemyHud / paintPlayerHud write into.
+    expect(panels).toEqual([
+      [1, 0, 0, 10, 4],
+      [0, 10, 7, 10, 5],
+    ]);
+  });
+
+
   test.skipIf(!hasGen)("the action menu matches the pinned geometry", () => {
     const { b } = makeBattle({
       rolls: [0, 0, 0, 0, 0],

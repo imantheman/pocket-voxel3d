@@ -10,12 +10,13 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::cell::Cell;
 
 use crate::audio::Audio;
 use crate::pak::Pak;
 use crate::spec::{
     self, ANIM_SPRITES_MAX, ENTS_MAX, PITCH_RUNGS, PITCH_TWEEN_TICKS, Q8, QUALITY, QUALITY_TIER_DEFAULT,
-    QualityDials, RIG_ZOOM_MAX, RIG_ZOOM_MIN, UI_COLS, UI_ROWS, op,
+    QualityDials, RIG_ZOOM_MAX, RIG_ZOOM_MIN, UI_COLS, UI_PANELS, UI_ROWS, op,
 };
 
 /// Map slots: slot 0 is the current map, 1..4 the connected neighbours at
@@ -187,6 +188,15 @@ pub struct Scene {
     pub ui_b: [u16; UI_COLS * UI_ROWS],
     /// Sprites stacked on the companion surface this frame — see
     /// [`BottomSprite`]. Reset by `uiClearBottom`, like `ui_b`.
+    /// The battle HUD panels, by side (`uiPanel`).
+    pub ui_panels: [UiPanel; UI_PANELS],
+    /// Where each panel is actually drawn, in UI px, eased toward the place
+    /// the camera leaves room for so a swing slides it instead of snapping.
+    ///
+    /// A `Cell` because the draw pass is the only thing that knows where the
+    /// sprites landed and it takes the scene by shared reference; nothing
+    /// else reads or writes these.
+    pub ui_panel_off: [Cell<[f32; 2]>; UI_PANELS],
     /// This frame's move-animation sprites (`animSprite`/`animClear`).
     pub anim_sprites: [AnimSprite; ANIM_SPRITES_MAX],
     pub anim_sprite_n: u8,
@@ -242,6 +252,32 @@ pub struct BottomSprite {
     pub h: i16,
 }
 
+/// A rectangle of the UI grid the core may slide as a block (`uiPanel`).
+///
+/// The battle HUDs are drawn in the GB's fixed cells, but what they used to
+/// sit beside is a 3D card now: it moves with the camera and would end up
+/// under the name and the HP bar. The guest keeps drawing GB tiles and
+/// declares which cells belong to which side; the draw pass slides the rect
+/// to keep it clear of the sprites (ui::panel_shift).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct UiPanel {
+    pub x: u8,
+    pub y: u8,
+    pub w: u8,
+    pub h: u8,
+}
+
+impl UiPanel {
+    /// Whether a grid cell is part of this panel (an empty panel holds none).
+    pub fn holds(&self, cx: i32, cy: i32) -> bool {
+        self.w > 0
+            && cx >= self.x as i32
+            && cx < self.x as i32 + self.w as i32
+            && cy >= self.y as i32
+            && cy < self.y as i32 + self.h as i32
+    }
+}
+
 /// One 8x8 move-animation tile (`animSprite`), in GAME BOY pixels: the
 /// guest has already taken OAM space off (x - 8, y - 16). `tile` indexes
 /// the sheet sixteen to a row; `flags` bit 0 is x-flip, bit 1 y-flip.
@@ -283,6 +319,8 @@ impl Scene {
             pics: [Pic::default(); PICS_MAX],
             ui: [0u16; UI_COLS * UI_ROWS],
             ui_b: [0u16; UI_COLS * UI_ROWS],
+            ui_panels: [UiPanel::default(); UI_PANELS],
+            ui_panel_off: [const { Cell::new([0.0, 0.0]) }; UI_PANELS],
             anim_sprites: [AnimSprite::default(); ANIM_SPRITES_MAX],
             anim_sprite_n: 0,
             ui_b_sprites: [BottomSprite::default(); UI_B_SPRITES_MAX],
@@ -543,6 +581,10 @@ impl Scene {
             op::UI_REVEAL => self.ui_reveal = a(0).max(0) as u32,
             op::UI_CLEAR => {
                 self.ui = [0u16; UI_COLS * UI_ROWS];
+                self.ui_panels = [UiPanel::default(); UI_PANELS];
+                for off in self.ui_panel_off.iter() {
+                    off.set([0.0, 0.0]);
+                }
                 self.ui_text = None;
                 self.ui_reveal = u32::MAX;
             }
@@ -609,6 +651,23 @@ impl Scene {
             }
             op::ANIM_CLEAR => {
                 self.anim_sprite_n = 0;
+            }
+            op::UI_PANEL => {
+                if args.len() >= 5 {
+                    let i = a(0) as usize;
+                    if i < UI_PANELS {
+                        self.ui_panels[i] = UiPanel {
+                            x: a(1).clamp(0, 255) as u8,
+                            y: a(2).clamp(0, 255) as u8,
+                            w: a(3).clamp(0, 255) as u8,
+                            h: a(4).clamp(0, 255) as u8,
+                        };
+                        // A panel that has just been declared (or cleared)
+                        // starts where the GB puts it rather than easing in
+                        // from wherever the last battle left it.
+                        self.ui_panel_off[i].set([0.0, 0.0]);
+                    }
+                }
             }
 
             op::ARENA => {

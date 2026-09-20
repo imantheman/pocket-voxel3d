@@ -346,6 +346,7 @@ pub mod op {
     pub const FIELD_FX: u32 = 79;
     pub const ANIM_SPRITE: u32 = 80;
     pub const ANIM_CLEAR: u32 = 81;
+    pub const UI_PANEL: u32 = 82;
 }
 
 /// Fixed-point scales used by op args.
@@ -401,6 +402,8 @@ pub const EVENT_CAP: usize = 64;
 // VXPK — the cooked content container
 // ---------------------------------------------------------------------------
 
+/// Battle HUD panels the core may slide, one per side (`uiPanel`).
+pub const UI_PANELS: usize = 2;
 /// Move-animation sprites on screen at once (`animSprite`).
 pub const ANIM_SPRITES_MAX: usize = 64;
 pub const VXPK_MAGIC: u32 = 0x4b505856; // 'VXPK'
