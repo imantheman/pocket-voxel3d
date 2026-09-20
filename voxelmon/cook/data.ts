@@ -110,6 +110,17 @@ export interface GenData {
   textPointers: unknown;
   trainerHeaders: unknown;
   field: Record<string, unknown>;
+  /** Battle move animations, or null in a dataset imported before them. */
+  battleAnims: BattleAnims | null;
+}
+
+/** The tables voxelmon/import/stages/battle-anims.ts writes. */
+export interface BattleAnims {
+  anims: Record<string, unknown[]>;
+  subanims: unknown[];
+  frameBlocks: unknown[][];
+  baseCoords: [number, number][];
+  tilesets: { tiles: number; gfx: string }[];
 }
 
 export function genMissingReason(genDir = GEN_DIR): string | null {
@@ -143,6 +154,11 @@ export function loadGen(genDir = GEN_DIR): GenData {
     textPointers: readJson(genDir, "text_pointers.json"),
     trainerHeaders: readJson(genDir, "trainer_headers.json"),
     field: readJson(genDir, "field.json"),
+    // Optional: a dataset imported before the animations still cooks, and
+    // the guest simply has no move animations to play.
+    battleAnims: existsSync(join(genDir, "battle_anims.json"))
+      ? readJson(genDir, "battle_anims.json")
+      : null,
   };
 }
 

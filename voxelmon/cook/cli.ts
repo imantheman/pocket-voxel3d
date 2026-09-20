@@ -23,6 +23,7 @@ import {
 import {
   buildEmotePage,
   buildPicPage,
+  buildAnimPage,
   buildSpritePage,
   buildTerrainPage,
   buildPalettes,
@@ -187,6 +188,16 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
     pageOwners.push({ kind: ATLAS_KIND.sprites, spriteKey: key });
   }
 
+  // The move animation sheets. One page each, shared by every tileset that
+  // reads them (tileset 2 is the first sheet again, with fewer tiles).
+  const animPages: Record<string, number> = {};
+  for (const ts of gen.battleAnims?.tilesets ?? []) {
+    if (animPages[ts.gfx] !== undefined) continue;
+    animPages[ts.gfx] = pages.length;
+    pages.push(buildAnimPage(gen, ts.gfx));
+    pageOwners.push({ kind: ATLAS_KIND.sprites });
+  }
+
   let emotePage: number | null = null;
   const emotes = buildEmotePage(gen);
   if (emotes) {
@@ -329,6 +340,7 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
     picFront: frontIndex,
     picBack: backIndex,
     emotePage,
+    animPages,
     uiPage,
     terrainPage,
     trainerCardPic,

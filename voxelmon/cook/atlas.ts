@@ -322,6 +322,25 @@ export function buildSpritePage(gen: GenData, key: string): PageDef {
   return { w, h: art.h, kind: ATLAS_KIND.sprites, frames: [linear], name: key };
 }
 
+/**
+ * One move-animation tile sheet, as a page.
+ *
+ * The sheet is already laid out the way the animations index it -- sixteen
+ * 8x8 tiles to a row -- so it goes down verbatim. It is a SPRITES page
+ * because that is what these are: OAM sprites, drawn over the battle
+ * through the OBJ palettes, which also means the host's existing sprite
+ * page handling loads it without knowing anything new.
+ */
+export function buildAnimPage(gen: GenData, key: string): PageDef {
+  const art = artOf(gen, key);
+  if (!art) throw new Error(`missing move animation sheet: ${key}`);
+  const linear = new Uint8Array(art.w * art.h).fill(PX_CLEAR);
+  for (let y = 0; y < art.h; y++) {
+    for (let x = 0; x < art.w; x++) linear[y * art.w + x] = art.px(x, y);
+  }
+  return { w: art.w, h: art.h, kind: ATLAS_KIND.sprites, frames: [linear], name: key };
+}
+
 /** The emote page: gen's 48x16 horizontal strip restacked 16x48 vertical
  *  (the core's sheet_uv stacks 16x16 cells vertically). */
 export function buildEmotePage(gen: GenData): PageDef | null {

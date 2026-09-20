@@ -20,6 +20,8 @@ export interface AtlasIndex {
   /** species id (+ "redb") -> back-pic atlas page. */
   picBack: Record<string, number>;
   emotePage: number | null;
+  /** Move animation sheet key -> atlas page (battle/moveanim.ts reads it). */
+  animPages?: Record<string, number>;
   uiPage: number;
   terrainPage: number;
   /**
@@ -186,6 +188,17 @@ export function buildGamedata(gen: GenData, atlas: AtlasIndex, cookedMaps: strin
     text_pointers: gen.textPointers,
     trainer_headers: gen.trainerHeaders,
     field: gen.field,
+    // The move animations: the tables the player compiles from, with each
+    // tileset pointed at the page its sheet cooked into.
+    battle_anims: gen.battleAnims
+      ? {
+          ...gen.battleAnims,
+          tilesets: gen.battleAnims.tilesets.map((ts) => ({
+            tiles: ts.tiles,
+            page: atlas.animPages?.[ts.gfx] ?? -1,
+          })),
+        }
+      : undefined,
     atlas,
     mapPalette: buildMapPalette(gen),
   };

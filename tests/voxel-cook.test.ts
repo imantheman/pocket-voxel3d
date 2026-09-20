@@ -52,6 +52,7 @@ import {
   RIG_DOLLY,
   VXPK_CHUNK_RECORD_SIZE,
   VXPK_META_FLAG_TREE_LOD,
+  ATLAS_KIND,
   VXPK_TAG,
   VXPK_TREE_INST_SIZE,
   VXPK_TREE_SHAPE_SIZE,
@@ -254,6 +255,58 @@ describe.skipIf(reason !== null)("voxel cook", () => {
       expect(hull.vertBase).toBe(terrain.vertBase + terrain.vertCount);
     }
     expect(checked).toBeGreaterThan(0);
+  });
+
+  // The move animations ride in GAME with their sheets cooked as pages, so
+  // the guest can compile an animation and the host can draw its tiles
+  // without either of them reading anything else.
+  describe("battle move animations", () => {
+    test("gamedata carries the tables, pointed at real pages", () => {
+      const bytes = readFileSync(outA);
+      const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const sections = new Map<number, [number, number, number]>();
+      for (let i = 0; i < dv.getUint16(6, true); i++) {
+        const e = 16 + i * 16;
+        sections.set(dv.getUint32(e, true), [
+          dv.getUint32(e + 4, true),
+          dv.getUint32(e + 8, true),
+          dv.getUint32(e + 12, true),
+        ]);
+      }
+      const [gameOff, gameLen] = sections.get(VXPK_TAG.game)!;
+      const game = JSON.parse(
+        new TextDecoder().decode(bytes.subarray(gameOff, gameOff + gameLen)),
+      );
+      const anims = game.battle_anims;
+      if (!anims) {
+        // a dataset imported before the animation stage still cooks
+        console.error("battle_anims absent from gen — animation cook test skipped");
+        return;
+      }
+      expect(Object.keys(anims.anims).length).toBe(202);
+      expect(anims.subanims.length).toBe(86);
+      expect(anims.frameBlocks.length).toBe(122);
+      expect(anims.baseCoords.length).toBe(177);
+      expect(anims.anims.TACKLE[0].effect).toBe("SE_MOVE_MON_HORIZONTALLY");
+
+      // every tileset names a page that is there, and is a SPRITES page:
+      // these are OAM sprites and go through the OBJ palettes
+      const [atlasOff, , pageCount] = sections.get(VXPK_TAG.atlas)!;
+      expect(anims.tilesets.length).toBe(3);
+      for (const ts of anims.tilesets) {
+        expect(ts.page).toBeGreaterThanOrEqual(0);
+        expect(ts.page).toBeLessThan(pageCount);
+        const head = atlasOff + 2 + ts.page * 16;
+        expect(dv.getUint16(head, true)).toBe(128); // 16 tiles a row
+        expect(dv.getUint16(head + 4, true)).toBe(ATLAS_KIND.sprites);
+        // tall enough for the tiles this tileset reads
+        expect(dv.getUint16(head + 2, true)).toBeGreaterThanOrEqual(
+          Math.ceil(ts.tiles / 16) * 8,
+        );
+      }
+      // the third tileset is the first sheet again
+      expect(anims.tilesets[2].page).toBe(anims.tilesets[0].page);
+    });
   });
 
   // Tree instancing (TINS): a carved hull is stamped per cell, so a map full
