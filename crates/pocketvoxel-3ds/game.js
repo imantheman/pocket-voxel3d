@@ -1416,6 +1416,462 @@ function towardCell(from, to) {
   return [dx / len, dz / len];
 }
 
+// voxelmon/game/battle/moveanim.ts
+var SE_PAUSE_FRAMES = 8;
+var SE_FRAMES = {
+  SE_DARK_SCREEN_FLASH: 4,
+  SE_FLASH_SCREEN_LONG: 48,
+  SE_DARK_SCREEN_PALETTE: 0,
+  SE_LIGHT_SCREEN_PALETTE: 0,
+  SE_DARKEN_MON_PALETTE: 0,
+  SE_RESET_SCREEN_PALETTE: 0,
+  SE_SHAKE_SCREEN: 72,
+  SE_SHAKE_ENEMY_HUD: 44,
+  SE_DELAY_ANIMATION_10: 10,
+  SE_SLIDE_MON_OFF: 24,
+  SE_SLIDE_ENEMY_MON_OFF: 24,
+  SE_SLIDE_MON_HALF_OFF: 19,
+  SE_SLIDE_MON_UP: 14,
+  SE_SLIDE_MON_DOWN: 21,
+  SE_SLIDE_MON_DOWN_AND_HIDE: 19,
+  SE_MOVE_MON_HORIZONTALLY: 3,
+  SE_RESET_MON_POSITION: 3,
+  SE_SHAKE_BACK_AND_FORTH: 96,
+  SE_BOUNCE_UP_AND_DOWN: 108,
+  SE_SQUISH_MON_PIC: 26,
+  SE_MINIMIZE_MON: 6,
+  SE_SHOW_MON_PIC: 3,
+  SE_SHOW_ENEMY_MON_PIC: 3,
+  SE_HIDE_MON_PIC: 3,
+  SE_HIDE_ENEMY_MON_PIC: 3,
+  SE_BLINK_MON: 60,
+  SE_BLINK_ENEMY_MON: 60,
+  SE_FLASH_MON_PIC: 4,
+  SE_FLASH_ENEMY_MON_PIC: 4,
+  SE_TRANSFORM_MON: 4,
+  SE_SUBSTITUTE_MON: 3,
+  SE_WAVY_SCREEN: 255
+};
+var ANIM_ID_FX = {
+  MEGA_PUNCH: "flash",
+  GUILLOTINE: "flash",
+  MEGA_KICK: "flash",
+  HEADBUTT: "flash",
+  DISABLE: "flash",
+  BUBBLEBEAM: "flash",
+  REFLECT: "flash",
+  SPORE: "flash",
+  BLIZZARD: "blizzard",
+  HYPER_BEAM: "every4",
+  THUNDERBOLT: "every8",
+  SELFDESTRUCT: "explode",
+  EXPLOSION: "explode",
+  ROCK_SLIDE: "rockslide"
+};
+var BALL_TILE = 122 - 49;
+var DROPLET_TILE = 113 - 49;
+var LEAF_TILE = 55 - 49;
+var PETAL_TILE = 113 - 49;
+var wrap = (v) => (v % 256 + 256) % 256;
+function resolveTransform(subType, attackerIsPlayer) {
+  if (subType === "ENEMY")
+    return attackerIsPlayer ? "HFLIP" : "NORMAL";
+  return attackerIsPlayer ? "NORMAL" : subType;
+}
+var SPIRAL_COORDS = [
+  [56, 40],
+  [64, 24],
+  [80, 16],
+  [96, 24],
+  [104, 40],
+  [96, 56],
+  [80, 64],
+  [64, 56],
+  [64, 40],
+  [70, 30],
+  [80, 24],
+  [91, 30],
+  [96, 40],
+  [91, 50],
+  [80, 56],
+  [70, 50],
+  [72, 40],
+  [80, 32],
+  [88, 40],
+  [80, 48],
+  [80, 40]
+];
+function spiralBallSteps(attackerIsPlayer) {
+  const by = attackerIsPlayer ? 0 : -40;
+  const bx = attackerIsPlayer ? 0 : 80;
+  const steps = [];
+  for (let k = 0;k < SPIRAL_COORDS.length - 2; k++) {
+    const sprites = [];
+    for (let i = 0;i < 3; i++) {
+      const c = SPIRAL_COORDS[k + i];
+      sprites.push({
+        x: wrap(bx + c[1]),
+        y: wrap(by + c[0]),
+        tile: BALL_TILE,
+        ts: 0,
+        xf: false,
+        yf: false,
+        obp: "e4"
+      });
+    }
+    steps.push({ dur: 5, sprites });
+  }
+  return steps;
+}
+function shootPillarSteps(steps, n, x, baseY) {
+  const ys = [];
+  for (let i = 1;i <= n; i++)
+    ys.push(baseY + 8 * i);
+  const snapshot = () => ys.filter((y) => y !== null).map((y) => ({ x, y: wrap(y), tile: BALL_TILE, ts: 0, xf: false, yf: false, obp: "e4" }));
+  steps.push({ dur: 1, sprites: snapshot() });
+  let alive = n;
+  while (alive > 0) {
+    for (let i = 0;i < n; i++) {
+      const y = ys[i];
+      if (y === null)
+        continue;
+      if (y === baseY + 8) {
+        ys[i] = null;
+        alive -= 1;
+      } else {
+        ys[i] = y - 4;
+      }
+    }
+    steps.push({ dur: 1, sprites: snapshot() });
+  }
+}
+function shootBallsSteps(attackerIsPlayer) {
+  const steps = [];
+  if (attackerIsPlayer)
+    shootPillarSteps(steps, 5, 5 * 8, 6 * 8);
+  else
+    shootPillarSteps(steps, 5, 16 * 8, 0);
+  return steps;
+}
+function shootManyBallsSteps(attackerIsPlayer) {
+  const xs = attackerIsPlayer ? [16, 64, 40, 24, 56, 48] : [96, 144, 120, 104, 136, 128];
+  const baseY = attackerIsPlayer ? 80 : 40;
+  const steps = [];
+  for (const x of xs)
+    shootPillarSteps(steps, 4, x, baseY);
+  return steps;
+}
+function waterDropletSteps() {
+  const steps = [];
+  let baseX = 240;
+  for (let pass = 0;pass < 32; pass++) {
+    for (const startY of [16, 24]) {
+      const sprites = [];
+      let y = startY;
+      for (;; ) {
+        baseX = wrap(baseX + 27);
+        sprites.push({ x: baseX, y, tile: DROPLET_TILE, ts: 0, xf: false, yf: false, obp: "e4" });
+        if (baseX >= 144) {
+          baseX = wrap(baseX - 168);
+          y += 16;
+          if (y >= 112)
+            break;
+        }
+      }
+      steps.push({ dur: 1, sprites });
+    }
+  }
+  return steps;
+}
+var FALLING_X = [
+  56,
+  64,
+  80,
+  96,
+  112,
+  136,
+  144,
+  86,
+  103,
+  74,
+  119,
+  132,
+  152,
+  50,
+  34,
+  92,
+  108,
+  125,
+  142,
+  153
+];
+var FALLING_M = [
+  0,
+  132,
+  6,
+  129,
+  2,
+  136,
+  1,
+  131,
+  5,
+  137,
+  9,
+  128,
+  7,
+  135,
+  3,
+  130,
+  4,
+  133,
+  8,
+  134
+];
+var FALLING_DX = [0, 1, 3, 5, 7, 9, 11, 13, 15];
+function fallingObjectSteps(n, tile, obp) {
+  const objs = [];
+  for (let i = 0;i < n; i++) {
+    objs.push({ y: i === 0 ? 0 : 8 * (i + 1), x: FALLING_X[i], m: FALLING_M[i], xf: false });
+  }
+  const steps = [];
+  while (objs[0].y !== 104) {
+    const sprites = [];
+    for (const o of objs) {
+      let left = o.m >= 128;
+      let idx = o.m % 128 + 1;
+      if (idx === 9) {
+        left = !left;
+        idx = 0;
+      }
+      o.m = (left ? 128 : 0) + idx;
+      o.y += 2;
+      if (o.y >= 112)
+        o.y = 160;
+      const dx = FALLING_DX[idx];
+      o.x = left ? wrap(o.x - dx) : wrap(o.x + dx);
+      o.xf = left;
+      sprites.push({ x: o.x, y: o.y, tile, ts: 1, xf: o.xf, yf: false, obp });
+    }
+    steps.push({ dur: 3, sprites });
+    if (steps.length > 120)
+      break;
+  }
+  return steps;
+}
+var EMITTERS = {
+  SE_SPIRAL_BALLS_INWARD: (p) => [spiralBallSteps(p), "flash"],
+  SE_SHOOT_BALLS_UPWARD: (p) => [shootBallsSteps(p)],
+  SE_SHOOT_MANY_BALLS_UPWARD: (p) => [shootManyBallsSteps(p)],
+  SE_WATER_DROPLETS_EVERYWHERE: () => [waterDropletSteps()],
+  SE_LEAVES_FALLING: () => [fallingObjectSteps(3, LEAF_TILE, "f0")],
+  SE_PETALS_FALLING: () => [fallingObjectSteps(20, PETAL_TILE, "e4")]
+};
+var OAM_PAL1 = 16;
+var OAM_XFLIP = 32;
+var OAM_YFLIP = 64;
+var OAM_PRIO = 128;
+function placeTile(transform, bc, t, tileset) {
+  const [bcy, bcx] = bc;
+  const xflip = (t.attrs & OAM_XFLIP) !== 0;
+  const yflip = (t.attrs & OAM_YFLIP) !== 0;
+  const prio = (t.attrs & OAM_PRIO) !== 0;
+  const pal1 = (t.attrs & OAM_PAL1) !== 0;
+  let x;
+  let y;
+  let xf;
+  let yf;
+  if (transform === "HVFLIP") {
+    y = wrap(136 - wrap(bcy + t.y));
+    x = wrap(168 - wrap(bcx + t.x));
+    const plain = !prio && !pal1;
+    if (plain && !xflip && !yflip) {
+      xf = true;
+      yf = true;
+    } else if (plain && xflip && !yflip) {
+      xf = false;
+      yf = true;
+    } else if (plain && yflip && !xflip) {
+      xf = true;
+      yf = false;
+    } else {
+      xf = false;
+      yf = false;
+    }
+  } else if (transform === "HFLIP") {
+    y = wrap(wrap(bcy + t.y) + 40);
+    x = wrap(168 - wrap(bcx + t.x));
+    xf = !xflip;
+    yf = yflip;
+  } else if (transform === "COORDFLIP") {
+    y = wrap(wrap(136 - bcy) + t.y);
+    x = wrap(wrap(168 - bcx) + t.x);
+    xf = xflip;
+    yf = yflip;
+  } else {
+    y = wrap(bcy + t.y);
+    x = wrap(bcx + t.x);
+    xf = xflip;
+    yf = yflip;
+  }
+  return { x, y, tile: t.tile, ts: tileset, xf, yf, obp: pal1 ? "obp1" : "f0" };
+}
+
+class MoveAnim {
+  steps = [];
+  events = [];
+  frames = 0;
+  missing = [];
+  constructor(data, moveId, attackerIsPlayer, opts = {}) {
+    const rows = data?.anims?.[moveId];
+    if (!data || !rows) {
+      this.missing.push(`anim:${moveId}`);
+      return;
+    }
+    const steps = this.steps;
+    const events = this.events;
+    let oam = [];
+    let oamMax = 0;
+    let frame = 0;
+    const emit = (dur, override) => {
+      const d = dur < 1 ? 1 : dur;
+      const sprites = override ?? oam.slice(0, oamMax).filter((s) => s !== null && s !== undefined);
+      steps.push({ dur: d, sprites });
+      frame += d;
+    };
+    const flashScreen = () => {
+      events.push({ effect: "SE_DARK_SCREEN_FLASH", frame });
+      emit(4);
+    };
+    const idFx = ANIM_ID_FX[moveId];
+    const wantsFlicker = opts.ballFlicker ?? (opts.ball === "MASTER_BALL" || opts.ball === "ULTRA_BALL");
+    const ballFlicker = wantsFlicker && (moveId === "TOSS_ANIM" || moveId === "GREATTOSS_ANIM" || moveId === "ULTRATOSS_ANIM");
+    let obp0Flip = false;
+    let growlNoteTrail = null;
+    for (const row of rows) {
+      if (row.sound !== null && row.sound !== undefined) {
+        events.push({ sound: row.sound, frame });
+      }
+      if ("effect" in row) {
+        const emitter = EMITTERS[row.effect];
+        if (emitter) {
+          oam = [];
+          oamMax = 0;
+          const [emSteps, tailFx] = emitter(attackerIsPlayer);
+          events.push({ effect: row.effect, frame });
+          for (const st of emSteps)
+            emit(st.dur, st.sprites);
+          emit(1, []);
+          if (tailFx === "flash")
+            flashScreen();
+        } else {
+          const known = SE_FRAMES[row.effect];
+          const dur = known ?? SE_PAUSE_FRAMES;
+          events.push({ effect: row.effect, frame, dur });
+          if (dur > 0)
+            emit(dur);
+        }
+        continue;
+      }
+      const sub = data.subanims[row.sub];
+      if (!sub) {
+        this.missing.push(`subanim:${row.sub}`);
+        continue;
+      }
+      const transform = resolveTransform(sub.type, attackerIsPlayer);
+      const reverse = transform === "REVERSE";
+      const order = reverse ? [...sub.blocks].reverse() : sub.blocks;
+      const passes = opts.shakes ?? 1;
+      for (let pass = 0;pass < passes; pass++) {
+        if (opts.shakes !== undefined) {
+          events.push({ effect: "SFX_TINK", frame });
+          emit(40);
+        }
+        let dest = 0;
+        let played = 0;
+        for (const entry of order) {
+          const fb = data.frameBlocks[entry.block];
+          const bc = data.baseCoords[entry.base];
+          if (!fb || !bc) {
+            this.missing.push(`block:${entry.block}:${entry.base}`);
+            continue;
+          }
+          for (let j = 0;j < fb.length; j++) {
+            oam[dest + j] = placeTile(transform, bc, fb[j], row.tileset);
+          }
+          if (obp0Flip) {
+            for (let j = 0;j < fb.length; j++) {
+              const t = oam[dest + j];
+              if (t && t.obp === "f0")
+                t.obp = "f0x";
+            }
+          }
+          if (dest + fb.length > oamMax)
+            oamMax = dest + fb.length;
+          const mode = entry.mode;
+          if (mode === 2) {
+            dest += fb.length;
+          } else if (mode === 3) {
+            emit(row.delay);
+            dest += fb.length;
+          } else if (mode === 4) {
+            emit(row.delay);
+          } else {
+            if (moveId === "GROWL") {
+              const current = oam.slice(0, oamMax).filter((s) => s !== null && s !== undefined);
+              const shown = growlNoteTrail ? [...current, ...growlNoteTrail] : current;
+              emit(row.delay, shown);
+              growlNoteTrail = current;
+            } else {
+              emit(row.delay + 1);
+              oam = [];
+              oamMax = 0;
+            }
+            dest = 0;
+          }
+          played += 1;
+          if (ballFlicker)
+            obp0Flip = !obp0Flip;
+          if (idFx) {
+            const counter = order.length - played + 1;
+            if (idFx === "flash" || idFx === "every4" && counter % 4 === 0 || idFx === "every8" && counter % 8 === 0 || idFx === "blizzard" && (counter === 13 || counter === 9 || counter === 5 || counter === 1)) {
+              flashScreen();
+            } else if (idFx === "explode") {
+              if (counter % 4 === 0)
+                flashScreen();
+              if (counter === 1) {
+                events.push({ effect: "SE_HIDE_ATTACKER_PIC", frame });
+              }
+            } else if (idFx === "rockslide") {
+              if (counter >= 8 && counter <= 11) {
+                events.push({ effect: "SE_ROCK_SLIDE_SHAKE", frame, dur: 15 });
+                emit(15);
+              } else if (counter === 1) {
+                flashScreen();
+              }
+            }
+          }
+        }
+      }
+    }
+    this.frames = frame;
+  }
+  spritesAt(frame) {
+    let at = 0;
+    for (const step of this.steps) {
+      if (frame < at + step.dur)
+        return step.sprites;
+      at += step.dur;
+    }
+    return [];
+  }
+  eventsIn(from, to) {
+    return this.events.filter((e) => e.frame >= from && e.frame < to);
+  }
+  done(frame) {
+    return frame >= this.frames;
+  }
+}
+
 // voxelmon/game/battle/battler.ts
 function makeBattler(data, mon, isPlayer, save) {
   const def = data.pokemon[mon.species];
@@ -2375,6 +2831,9 @@ class WildBattle {
   moveIndex = 1;
   moveSwapIndex = null;
   frame = 0;
+  moveAnim = null;
+  moveAnimFrame = 0;
+  moveAnimDefender = SIDE_ENEMY;
   turnCount = 0;
   runAttempts = 0;
   lastDamage = 0;
@@ -2645,6 +3104,8 @@ caught!`);
           let hold = this.startAnim("lunge", attacker);
           if (item.hit)
             hold = Math.max(hold, this.startAnim("hit", defender));
+          const played = this.startMoveAnim(item.anim, item.attackerIsPlayer, defender, item);
+          hold = Math.max(hold, played);
           this.waitFrames = hold;
         }
         this.current = null;
@@ -2821,8 +3282,41 @@ Get'm! ${name}!`;
     this.anims.push({ kind, side, frame: 0, total });
     return total;
   }
+  startMoveAnim(id, attackerIsPlayer, defender, opts) {
+    this.moveAnim = null;
+    this.moveAnimFrame = 0;
+    if (!id || !this.animationsOn())
+      return 0;
+    const anim = new MoveAnim(this.data.battle_anims ?? null, id, attackerIsPlayer, {
+      shakes: opts.shakes,
+      ball: opts.ball
+    });
+    if (anim.frames <= 0)
+      return 0;
+    this.moveAnim = anim;
+    this.moveAnimDefender = defender;
+    return anim.frames;
+  }
+  animSprites() {
+    return this.moveAnim ? this.moveAnim.spritesAt(this.moveAnimFrame) : [];
+  }
+  applyAnimEvent(e) {
+    if (!e.effect)
+      return;
+    if (e.effect.includes("SHAKE") || e.effect.includes("FLASH_SCREEN")) {
+      this.startAnim("hit", this.moveAnimDefender);
+    }
+  }
   update(input) {
     this.frame += 1;
+    if (this.moveAnim) {
+      const from = this.moveAnimFrame;
+      this.moveAnimFrame += 1;
+      for (const e of this.moveAnim.eventsIn(from, this.moveAnimFrame))
+        this.applyAnimEvent(e);
+      if (this.moveAnim.done(this.moveAnimFrame))
+        this.moveAnim = null;
+    }
     if (this.anims.length > 0) {
       for (const a of this.anims)
         a.frame += 1;
@@ -10139,6 +10633,27 @@ class Scene {
     if (p)
       p.ui += p.now() - t2;
   }
+  emitAnimSprites(view, bv) {
+    const host = this.host;
+    const sprites = bv.battle.animSprites();
+    if (sprites.length === 0) {
+      if (this.animEmitted) {
+        host.animClear();
+        this.animEmitted = false;
+      }
+      return;
+    }
+    const tilesets = view.data.battle_anims?.tilesets ?? [];
+    host.animClear();
+    this.animEmitted = true;
+    for (const s of sprites) {
+      const page = tilesets[s.ts]?.page ?? -1;
+      if (page < 0)
+        continue;
+      host.animSprite(page, s.tile, s.x - 8, s.y - 16, (s.xf ? 1 : 0) | (s.yf ? 2 : 0));
+    }
+  }
+  animEmitted = false;
   emitBattle(view, bv) {
     const host = this.host;
     if (!this.battleActive) {
@@ -10172,6 +10687,7 @@ class Scene {
         this.cardShown.delete(side);
       }
     }
+    this.emitAnimSprites(view, bv);
     bv.ui.emit(host, bv.battle);
   }
   endBattle() {
@@ -10183,6 +10699,10 @@ class Scene {
     if (this.arenaStaged) {
       host.arenaEnd();
       this.arenaStaged = false;
+    }
+    if (this.animEmitted) {
+      host.animClear();
+      this.animEmitted = false;
     }
     host.uiClear();
     this.battleActive = false;
@@ -16294,6 +16814,12 @@ class QuickJsHost {
   }
   uiSpriteBottom(page, x, y, w, h) {
     native.uiSpriteBottom(page, x, y, w, h);
+  }
+  animSprite(page, tile, x, y, flags) {
+    native.animSprite(page, tile, x, y, flags);
+  }
+  animClear() {
+    native.animClear();
   }
   fieldFx(x, z, frame) {
     native.fieldFx(x, z, frame);

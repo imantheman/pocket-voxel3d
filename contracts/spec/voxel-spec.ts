@@ -706,10 +706,27 @@ export const VOX_OP = {
    * screen right now.
    */
   fieldFx: 79,
+  /**
+   * One 8x8 move-animation tile for this frame, in GAME BOY pixels (the
+   * guest converts OAM space: x - 8, y - 16). Append-only like the bottom
+   * sprites: the guest re-emits every sprite each frame and `animClear`
+   * resets the count.
+   *   args: page, tile, x, y, flags (bit 0 x-flip, bit 1 y-flip)
+   */
+  animSprite: 80,
+  /** Drop every move-animation sprite (start of frame, end of animation). */
+  animClear: 81,
 } as const;
 
 /** Emote-page frame of the HM Cut tree sprite (after the 3 GB bubbles). */
 export const FX_FRAME_CUT_TREE = 3;
+
+/**
+ * Move-animation sprites on screen at once. A frame block is at most a
+ * dozen tiles, but the emitters are wider: the water droplets lay rows
+ * across the field and the petals fall twenty at a time.
+ */
+export const ANIM_SPRITES_MAX = 64;
 
 /** Fixed-point scales used by op args. */
 export const Q4 = 16;

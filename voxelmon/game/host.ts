@@ -68,6 +68,15 @@ export interface VoxelHost {
    * native 320x240 pixel space. Append-only like the tile grid — up to 8
    * per frame, reset by uiClearBottom. */
   uiSpriteBottom(page: number, x: number, y: number, w: number, h: number): void;
+  /**
+   * One 8x8 move-animation tile for this frame, in GAME BOY pixels
+   * (battle/moveanim.ts converts OAM space). `flags` bit 0 is x-flip, bit
+   * 1 y-flip. Append-only per frame; `animClear` resets the list.
+   */
+  animSprite(page: number, tile: number, x: number, y: number, flags: number): void;
+  /** Drop every move-animation sprite. */
+  animClear(): void;
+
   /** Field effect billboard at Q4 world px (x, z); frame < 0 clears it. */
   fieldFx(x: number, z: number, frame: number): void;
   // battle
@@ -212,6 +221,14 @@ export class RecorderHost implements VoxelHost {
   }
   uiSpriteBottom(page: number, x: number, y: number, w: number, h: number): void {
     this.op(VOX_OP.uiSpriteBottom, page, x, y, w, h);
+  }
+
+  animSprite(page: number, tile: number, x: number, y: number, flags: number): void {
+    this.op(VOX_OP.animSprite, page, tile, x, y, flags);
+  }
+
+  animClear(): void {
+    this.op(VOX_OP.animClear);
   }
   fieldFx(x: number, z: number, frame: number): void {
     // Args pass straight through, like card/arena: the caller supplies Q4.

@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 use crate::audio::Audio;
 use crate::pak::Pak;
 use crate::spec::{
-    self, ENTS_MAX, PITCH_RUNGS, PITCH_TWEEN_TICKS, Q8, QUALITY, QUALITY_TIER_DEFAULT,
+    self, ANIM_SPRITES_MAX, ENTS_MAX, PITCH_RUNGS, PITCH_TWEEN_TICKS, Q8, QUALITY, QUALITY_TIER_DEFAULT,
     QualityDials, RIG_ZOOM_MAX, RIG_ZOOM_MIN, UI_COLS, UI_ROWS, op,
 };
 
@@ -187,6 +187,9 @@ pub struct Scene {
     pub ui_b: [u16; UI_COLS * UI_ROWS],
     /// Sprites stacked on the companion surface this frame — see
     /// [`BottomSprite`]. Reset by `uiClearBottom`, like `ui_b`.
+    /// This frame's move-animation sprites (`animSprite`/`animClear`).
+    pub anim_sprites: [AnimSprite; ANIM_SPRITES_MAX],
+    pub anim_sprite_n: u8,
     pub ui_b_sprites: [BottomSprite; UI_B_SPRITES_MAX],
     /// Sprites written so far this frame (`uiSpriteBottom` calls since the
     /// last `uiClearBottom`).
@@ -239,6 +242,18 @@ pub struct BottomSprite {
     pub h: i16,
 }
 
+/// One 8x8 move-animation tile (`animSprite`), in GAME BOY pixels: the
+/// guest has already taken OAM space off (x - 8, y - 16). `tile` indexes
+/// the sheet sixteen to a row; `flags` bit 0 is x-flip, bit 1 y-flip.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct AnimSprite {
+    pub page: u16,
+    pub tile: u16,
+    pub x: i16,
+    pub y: i16,
+    pub flags: u8,
+}
+
 /// `uiSpriteBottom` calls per frame are append-only like the tile grid: the
 /// guest re-emits every sprite each frame and `uiClearBottom` resets the
 /// count. 8 covers the party grid's 6 mons plus headroom.
@@ -268,6 +283,8 @@ impl Scene {
             pics: [Pic::default(); PICS_MAX],
             ui: [0u16; UI_COLS * UI_ROWS],
             ui_b: [0u16; UI_COLS * UI_ROWS],
+            anim_sprites: [AnimSprite::default(); ANIM_SPRITES_MAX],
+            anim_sprite_n: 0,
             ui_b_sprites: [BottomSprite::default(); UI_B_SPRITES_MAX],
             ui_b_sprite_n: 0,
             ui_text: None,
@@ -573,6 +590,25 @@ impl Scene {
                         self.ui_b_sprite_n = n as u8 + 1;
                     }
                 }
+            }
+
+            op::ANIM_SPRITE => {
+                if args.len() >= 5 {
+                    let n = self.anim_sprite_n as usize;
+                    if n < ANIM_SPRITES_MAX {
+                        self.anim_sprites[n] = AnimSprite {
+                            page: a(0) as u16,
+                            tile: a(1) as u16,
+                            x: a(2) as i16,
+                            y: a(3) as i16,
+                            flags: a(4) as u8,
+                        };
+                        self.anim_sprite_n = n as u8 + 1;
+                    }
+                }
+            }
+            op::ANIM_CLEAR => {
+                self.anim_sprite_n = 0;
             }
 
             op::ARENA => {

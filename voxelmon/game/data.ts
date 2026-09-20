@@ -255,6 +255,8 @@ export interface GrowthRateRecord {
   expForLevel(level: number): number;
 }
 
+import type { AnimData } from "./battle/moveanim.ts";
+
 export interface VoxelmonData {
   /** Maps whose geometry the pak carries; absent (old gamedata) = all.
    * Anything else is a locked content boundary (world/overworld.ts). */
@@ -275,6 +277,10 @@ export interface VoxelmonData {
   trainer_headers?: Record<string, unknown>;
   growth_rates?: Record<string, GrowthRateRecord>;
   evolution_methods?: Record<string, unknown>;
+  /** The move-animation tables (battle/moveanim.ts compiles a move out of
+   * them). Absent on a dataset cooked before they were extracted: the
+   * battle then plays the lunge alone, as it always did. */
+  battle_anims?: AnimData;
   /** Cooked map id -> SGB palette index (the cooker's buildMapPalette;
    * indexes the pak's SGB set). Absent pre-cook: the scene then emits -1
    * (the GB grayscale ramp) for every map. */

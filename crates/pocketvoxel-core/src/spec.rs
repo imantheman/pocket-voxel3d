@@ -344,6 +344,8 @@ pub mod op {
     pub const UI_CLEAR_BOTTOM: u32 = 77;
     pub const UI_SPRITE_BOTTOM: u32 = 78;
     pub const FIELD_FX: u32 = 79;
+    pub const ANIM_SPRITE: u32 = 80;
+    pub const ANIM_CLEAR: u32 = 81;
 }
 
 /// Fixed-point scales used by op args.
@@ -399,6 +401,8 @@ pub const EVENT_CAP: usize = 64;
 // VXPK — the cooked content container
 // ---------------------------------------------------------------------------
 
+/// Move-animation sprites on screen at once (`animSprite`).
+pub const ANIM_SPRITES_MAX: usize = 64;
 pub const VXPK_MAGIC: u32 = 0x4b505856; // 'VXPK'
 pub const VXPK_VERSION: u16 = 8;
 /// The version a pak carrying TINS declares; readers take both, so

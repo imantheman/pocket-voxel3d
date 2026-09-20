@@ -862,3 +862,69 @@ describe("battle tape", () => {
     60_000,
   );
 });
+
+// ---------------------------------------------------------------------------
+// Playing one in a battle — the anim row holds the queue and draws
+// ---------------------------------------------------------------------------
+
+/** A battle whose dataset carries the animation tables, parked in the queue
+ * with one animation row ready to run (the shape resolveTurn builds). */
+function animBattle(move: string, opts: { off?: boolean } = {}): {
+  b: WildBattle;
+  input: FakeInput;
+} {
+  const save = makeSave([newMon(data!, "SQUIRTLE", 5)], {});
+  if (opts.off) save.options = { animations: false };
+  const b = new WildBattle(
+    { ...data!, battle_anims: animData! },
+    save,
+    seqRng(0, 0, 0, 0, 0),
+    "PIDGEY",
+    3,
+  );
+  b.enter();
+  const input = new FakeInput();
+  settle(b, input);
+  b.queue.push({ anim: move, attackerIsPlayer: true });
+  b.phase = "messages";
+  return { b, input };
+}
+
+describe("playing a move animation", () => {
+  test.skipIf(!hasAnims)("the row holds the queue for the whole animation", () => {
+    const { b, input } = animBattle("THUNDERBOLT");
+    let drew = 0;
+    let frames = 0;
+    for (let i = 0; i < 600; i++) {
+      tick(b, input);
+      if (b.moveAnim) frames += 1;
+      drew = Math.max(drew, b.animSprites().length);
+      if (b.phase !== "messages") break;
+    }
+    // it drew, it ran for its compiled length, and the queue waited it out
+    expect(drew).toBeGreaterThan(0);
+    expect(frames).toBe(new MoveAnim(animData, "THUNDERBOLT", true).frames);
+    expect(b.moveAnim).toBeNull();
+    expect(b.animSprites()).toEqual([]);
+    expect(b.phase).toBe("menu");
+  });
+
+  test.skipIf(!hasAnims)("the OPTION toggle keeps it off the screen", () => {
+    const { b, input } = animBattle("THUNDERBOLT", { off: true });
+    for (let i = 0; i < 600; i++) {
+      tick(b, input);
+      expect(b.animSprites()).toEqual([]);
+      if (b.phase !== "messages") break;
+    }
+    expect(b.moveAnim).toBeNull();
+  });
+
+  test.skipIf(!hasAnims)("a move with no animation data still lunges", () => {
+    const { b, input } = animBattle("NOT_A_MOVE");
+    tick(b, input);
+    expect(b.moveAnim).toBeNull();
+    expect(b.animSprites()).toEqual([]);
+    for (let i = 0; i < 600 && b.phase === "messages"; i++) tick(b, input);
+    expect(b.phase).toBe("menu");
+  });
+});

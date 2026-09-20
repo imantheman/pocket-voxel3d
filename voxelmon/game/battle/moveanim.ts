@@ -59,7 +59,10 @@ export interface AnimData {
   subanims: { type: string; blocks: { block: number; base: number; mode: number }[] }[];
   frameBlocks: { y: number; x: number; tile: number; attrs: number }[][];
   baseCoords: [number, number][];
-  tilesets: { tiles: number; gfx: string }[];
+  /** `gfx` is the importer's sheet key; the cook replaces it with the
+   * atlas `page` that sheet landed on. The player reads neither -- it
+   * carries the tileset index through so the renderer can. */
+  tilesets: { tiles: number; gfx?: string; page?: number }[];
 }
 
 /** Fallback pacing for a special effect with no measured length. */

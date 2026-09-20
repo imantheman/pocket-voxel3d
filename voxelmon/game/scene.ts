@@ -241,6 +241,38 @@ export class Scene {
   // battle — arena/card/battleCam on entry, cardHide/arenaEnd on exit; the
   // GB tile layer is handed to the battle ui (battle/ui.ts) while a battle
   // is up. Nothing moves the player: the camera goes to the arena.
+  /**
+   * The move animation's tiles for this frame, over the cards.
+   *
+   * They arrive in the Game Boy's OAM space (screen x + 8, y + 16) and go
+   * out in screen pixels; the host places them in the same scaled, centered
+   * frame the UI tiles use. The list is re-sent whole each frame -- a
+   * subanimation rewrites its OAM rows freely, so diffing single sprites
+   * would cost more than the dozen ops it saved.
+   */
+  private emitAnimSprites(view: SceneView, bv: BattleSceneView): void {
+    const host = this.host;
+    const sprites = bv.battle.animSprites();
+    if (sprites.length === 0) {
+      if (this.animEmitted) {
+        host.animClear();
+        this.animEmitted = false;
+      }
+      return;
+    }
+    const tilesets = view.data.battle_anims?.tilesets ?? [];
+    host.animClear();
+    this.animEmitted = true;
+    for (const s of sprites) {
+      const page = tilesets[s.ts]?.page ?? -1;
+      if (page < 0) continue;
+      host.animSprite(page, s.tile, s.x - 8, s.y - 16, (s.xf ? 1 : 0) | (s.yf ? 2 : 0));
+    }
+  }
+
+  /** Whether move-animation sprites are on screen (so they get cleared). */
+  private animEmitted = false;
+
   private emitBattle(view: SceneView, bv: BattleSceneView): void {
     const host = this.host;
     if (!this.battleActive) {
@@ -280,6 +312,7 @@ export class Scene {
         this.cardShown.delete(side);
       }
     }
+    this.emitAnimSprites(view, bv);
     bv.ui.emit(host, bv.battle);
   }
 
@@ -292,6 +325,10 @@ export class Scene {
     if (this.arenaStaged) {
       host.arenaEnd();
       this.arenaStaged = false;
+    }
+    if (this.animEmitted) {
+      host.animClear();
+      this.animEmitted = false;
     }
     host.uiClear();
     this.battleActive = false;

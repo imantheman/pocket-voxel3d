@@ -42,6 +42,7 @@ import {
 } from "../rules/timing.ts";
 import { encodeGlyphs } from "../ui/tiles.ts";
 import { animFrames, SIDE_ENEMY, SIDE_PLAYER, type AnimKind, type BattleAnim } from "./anim.ts";
+import { MoveAnim, type AnimEvent, type AnimSprite as MoveAnimSprite } from "./moveanim.ts";
 import { displayName, ghostText, makeBattler, prefixEnemy, type WildBattler } from "./battler.ts";
 import {
   effectRecord,
@@ -202,6 +203,11 @@ export class WildBattle implements EffectBattle {
   moveIndex = 1;
   moveSwapIndex: number | null = null;
   frame = 0;
+  /** The move animation drawing over the cards, and the frame it is on.
+   * Compiled when the anim row runs; dropped when it has played out. */
+  moveAnim: MoveAnim | null = null;
+  moveAnimFrame = 0;
+  private moveAnimDefender = SIDE_ENEMY;
   turnCount = 0;
   runAttempts = 0;
   lastDamage = 0;
@@ -575,19 +581,19 @@ export class WildBattle implements EffectBattle {
         if (item.anim === "HIDEPIC_ANIM") this.enemyHidden = true;
         else if (item.anim === "SHOWPIC_ANIM") this.enemyHidden = false;
         // PlayMoveAnimation's Delay3 before the first animation frame
-        // (:1158-1167); v1 has no subanimation player, so the row then
-        // resolves at once — the Lua's own no-animPlayer fallback applies
-        // the hit immediately (:1209-1230). Nothing draws (scope ladder:
-        // battle move animations are a later rung).
+        // (:1158-1167). The row then compiles the move's subanimations and
+        // holds the queue for exactly as long as they play; a move with no
+        // animation data of its own falls back to the lunge alone, which is
+        // the Lua's own no-animPlayer path (:1209-1230).
         if (item.anim && !item.animDelayed) {
           item.animDelayed = true;
           this.queue.unshift(item);
           this.waitFrames = MOVE_ANIM_PRE;
           return true;
         }
-        // The beat the v1 slice paid but drew nothing in. The attacker
-        // lunges; if this row landed damage (effects.ts sets `hit` only when
-        // dealt > 0) the defender is knocked back and flickers with it. A
+        // The attacker lunges; if this row landed damage (effects.ts sets
+        // `hit` only when dealt > 0) the defender is knocked back and
+        // flickers with it. The move's own animation draws over that. A
         // status move or a miss lunges alone. HIDEPIC/SHOWPIC handled above
         // are engine state, not a move, and animate nothing.
         const engineRow = item.anim === "HIDEPIC_ANIM" || item.anim === "SHOWPIC_ANIM";
@@ -596,6 +602,8 @@ export class WildBattle implements EffectBattle {
           const defender = item.attackerIsPlayer ? SIDE_ENEMY : SIDE_PLAYER;
           let hold = this.startAnim("lunge", attacker);
           if (item.hit) hold = Math.max(hold, this.startAnim("hit", defender));
+          const played = this.startMoveAnim(item.anim, item.attackerIsPlayer, defender, item);
+          hold = Math.max(hold, played);
           this.waitFrames = hold;
         }
         this.current = null;
@@ -842,8 +850,55 @@ export class WildBattle implements EffectBattle {
     return total;
   }
 
+  /**
+   * Compile a move's animation and start it over the cards; returns the
+   * frames the queue owes it (0 when animations are off, the dataset has no
+   * animation tables, or this id has no animation of its own).
+   */
+  private startMoveAnim(
+    id: string | null | undefined,
+    attackerIsPlayer: boolean,
+    defender: number,
+    opts: { shakes?: number; ball?: string },
+  ): number {
+    this.moveAnim = null;
+    this.moveAnimFrame = 0;
+    if (!id || !this.animationsOn()) return 0;
+    const anim = new MoveAnim(this.data.battle_anims ?? null, id, attackerIsPlayer, {
+      shakes: opts.shakes,
+      ball: opts.ball,
+    });
+    if (anim.frames <= 0) return 0;
+    this.moveAnim = anim;
+    this.moveAnimDefender = defender;
+    return anim.frames;
+  }
+
+  /** This frame's animation sprites, in OAM space (scene.ts places them). */
+  animSprites(): MoveAnimSprite[] {
+    return this.moveAnim ? this.moveAnim.spritesAt(this.moveAnimFrame) : [];
+  }
+
+  /**
+   * A special effect the animation asked for. The screen-level ones have a
+   * card equivalent here: the defender takes the knock it takes on a hit.
+   * The sounds are named by move id and wait on the move SFX table.
+   */
+  private applyAnimEvent(e: AnimEvent): void {
+    if (!e.effect) return;
+    if (e.effect.includes("SHAKE") || e.effect.includes("FLASH_SCREEN")) {
+      this.startAnim("hit", this.moveAnimDefender);
+    }
+  }
+
   update(input: BattleInput): void {
     this.frame += 1;
+    if (this.moveAnim) {
+      const from = this.moveAnimFrame;
+      this.moveAnimFrame += 1;
+      for (const e of this.moveAnim.eventsIn(from, this.moveAnimFrame)) this.applyAnimEvent(e);
+      if (this.moveAnim.done(this.moveAnimFrame)) this.moveAnim = null;
+    }
     if (this.anims.length > 0) {
       for (const a of this.anims) a.frame += 1;
       this.anims = this.anims.filter((a) => a.frame < a.total);

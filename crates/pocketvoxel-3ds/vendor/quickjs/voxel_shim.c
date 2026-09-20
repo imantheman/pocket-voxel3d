@@ -151,6 +151,9 @@ int qjs_register_voxel(JSContext *ctx) {
     add_num(ctx, o, "uiClearBottom",  77, 0);
     add_num(ctx, o, "uiSpriteBottom", 78, 5);
     add_num(ctx, o, "fieldFx",        79, 3);
+    /* Move animation sprites — ops 80-81. */
+    add_num(ctx, o, "animSprite",     80, 5);
+    add_num(ctx, o, "animClear",      81, 0);
     add_num(ctx, o, "arena",    70, 5);
     add_num(ctx, o, "card",     71, 7);
     add_num(ctx, o, "cardHide", 72, 1);

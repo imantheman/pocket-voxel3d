@@ -238,6 +238,19 @@ pub enum Item {
         page: u16,
         tile: u16,
     },
+    /// One move-animation tile, in the same screen space as [`Item::UiQuad`]
+    /// but flippable: these are OAM sprites and half of what the original
+    /// animations do is mirror a drawing (DrawFrameBlock).
+    AnimQuad {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        page: u16,
+        tile: u16,
+        flip_x: bool,
+        flip_y: bool,
+    },
 }
 
 /// One frame, plain data. `cam` carries the VP and the eye for the pull;
@@ -906,6 +919,7 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
         });
     }
 
+    ui::append_anim(scene, &mut items);
     ui::append_ui(scene, pak, &mut items);
 
     DrawList {
@@ -1029,6 +1043,9 @@ mod tests {
             Item::Ghost { .. } => 5,
             Item::Card { .. } => 6,
             Item::ScreenPic { .. } => 8,
+            // over the scene, under the UI: OAM sprites sit above the
+            // background the text box is drawn in
+            Item::AnimQuad { .. } => 8,
             Item::UiQuad { .. } => 9,
         }
     }

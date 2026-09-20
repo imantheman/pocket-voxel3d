@@ -3928,6 +3928,8 @@ fn main() {
         let mut card_groups: Vec<(u16, Vec<CardVertex>)> = Vec::new();
         let mut ui_verts: Vec<Vertex> = Vec::new();
         let mut pic_groups: Vec<(u16, Vec<Vertex>)> = Vec::new();
+        // Move animation tiles, grouped by the sheet they come from.
+        let mut anim_groups: Vec<(u16, Vec<Vertex>)> = Vec::new();
         let mut ui_page: u16 = 0;
         // The guest camera's real eye/focus (list.cam below) — captured here
         // so the chunk-visibility cull further down can use it instead of
@@ -4026,6 +4028,36 @@ fn main() {
                     gv.push(mp(x0, y0, 0.0, 1.0));
                     gv.push(mp(x1, y1, u1, 1.0 - v1));
                     gv.push(mp(x0, y1, 0.0, 1.0 - v1));
+                }
+                if let Item::AnimQuad { x, y, w, h, page, tile, flip_x, flip_y } = it {
+                    // Same placement as a UI tile, with the flips the
+                    // original animations spend half their time doing.
+                    let pg = &pak_static.atlases[*page as usize];
+                    let cols = ((pg.w as u32 / UI_CELL) as u16).max(1);
+                    let (pw, ph) = page_tex_size(pg);
+                    let (mut u0, mut u1, mut v0, mut v1) =
+                        ui_tile_uv(*tile, cols, pw, ph, page_prescale(pg));
+                    if *flip_x {
+                        core::mem::swap(&mut u0, &mut u1);
+                    }
+                    if *flip_y {
+                        core::mem::swap(&mut v0, &mut v1);
+                    }
+                    let (x0, y0) = (qpx(*x), qpx(*y));
+                    let (x1, y1) = (qpx(*x + *w), qpx(*y + *h));
+                    let ma = |px: i16, py: i16, u: f32, v: f32| Vertex {
+                        pos: [px, py, 0, 0], color: [255, 255, 255, 255], uv: [u, v] };
+                    let gi = match anim_groups.iter().position(|g| g.0 == *page) {
+                        Some(i) => i,
+                        None => { anim_groups.push((*page, Vec::new())); anim_groups.len() - 1 }
+                    };
+                    let gv = &mut anim_groups[gi].1;
+                    gv.push(ma(x0, y0, u0, v0));
+                    gv.push(ma(x1, y0, u1, v0));
+                    gv.push(ma(x1, y1, u1, v1));
+                    gv.push(ma(x0, y0, u0, v0));
+                    gv.push(ma(x1, y1, u1, v1));
+                    gv.push(ma(x0, y1, u0, v1));
                 }
                 if let Item::UiQuad { x, y, w, h, page, tile } = it {
                     ui_page = *page;
@@ -4136,7 +4168,7 @@ if page_tex.len() < pak_static.atlases.len() {
         if page_tex.len() < pak_static.atlases.len() {
             page_tex.resize_with(pak_static.atlases.len(), || None);
         }
-        for (pg, _) in pic_groups.iter() {
+        for (pg, _) in pic_groups.iter().chain(anim_groups.iter()) {
             let i = *pg as usize;
             if i < page_tex.len() && page_tex[i].is_none() {
                 let (data, ptw, pth) = build_page_tex(pak_static, *pg, -1);
@@ -4151,6 +4183,13 @@ if page_tex.len() < pak_static.atlases.len() {
             }
         }
         let pic_bufs: Vec<(usize, buffer::Info)> = pic_groups.iter().filter_map(|(pg, v)| {
+            if v.is_empty() { return None; }
+            let mut bi = buffer::Info::new();
+            let n = v.len().min(65535);
+            bi.add(buffer::Buffer::new(&v[..n]), attr_info.permutation()).ok()?;
+            Some((*pg as usize, bi))
+        }).collect();
+        let anim_bufs: Vec<(usize, buffer::Info)> = anim_groups.iter().filter_map(|(pg, v)| {
             if v.is_empty() { return None; }
             let mut bi = buffer::Info::new();
             let n = v.len().min(65535);
@@ -4407,6 +4446,7 @@ if page_tex.len() < pak_static.atlases.len() {
         let Some(tex_ref) = tex.as_ref() else { continue };
         let infos_ref = &chunk_infos;
         let strips_ref = &strip_infos;
+        let anim_ref = &anim_bufs;
         let tree_bufs_ref = &tree_bufs;
         let tree_insts_ref = &tree_insts;
         // Once a second: how many spans exist, how many survived the cull
@@ -4650,6 +4690,25 @@ if page_tex.len() < pak_static.atlases.len() {
                             frame.bind_texture(texture::Index::Texture0, t);
                         }
                         frame.draw_arrays(buffer::Primitive::Triangles, pb, None).unwrap();
+                    }
+                    frame.bind_vertex_uniform(projection_idx, mvp);
+                    unsafe { c3d_depth_test(1); }
+                }
+                if !anim_ref.is_empty() {
+                    // Over the battle, under the UI: these are OAM sprites,
+                    // which sit above the background a text box is drawn in.
+                    unsafe { c3d_depth_test(0); }
+                    let ortho: Matrix4 = Projection::orthographic(
+                        0.0..(UI_VIEW_W * UI_Q), (UI_VIEW_H * UI_Q)..0.0,
+                        ClipPlanes { near: -1.0, far: 1.0 })
+                        .screen(ScreenOrientation::Rotated).into();
+                    frame.bind_vertex_uniform(projection_idx, &ortho);
+                    frame.bind_vertex_uniform(uvx_idx, FVec4::new(1.0, 1.0, 0.0, 0.0));
+                    for (pg, ab) in anim_ref.iter() {
+                        if let Some(t) = page_tex_ref.get(*pg).and_then(|o| o.as_ref()) {
+                            frame.bind_texture(texture::Index::Texture0, t);
+                            let _ = frame.draw_arrays(buffer::Primitive::Triangles, ab, None);
+                        }
                     }
                     frame.bind_vertex_uniform(projection_idx, mvp);
                     unsafe { c3d_depth_test(1); }

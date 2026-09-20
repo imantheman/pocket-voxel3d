@@ -42,6 +42,27 @@ fn quad(page: u16, cx: i32, cy: i32, tile: u16) -> Item {
     }
 }
 
+/// Append this frame's move-animation sprites.
+///
+/// They arrive in Game Boy pixels and land in the same scaled, centered
+/// frame the UI tiles use, so an animation lines up with the battle it is
+/// drawn over. `page` is the sheet the guest read out of its own data.
+pub fn append_anim(scene: &Scene, items: &mut Vec<Item>) {
+    for i in 0..scene.anim_sprite_n as usize {
+        let s = scene.anim_sprites[i];
+        items.push(Item::AnimQuad {
+            x: UI_ORIGIN_X + s.x as f32 * UI_SCALE,
+            y: s.y as f32 * UI_SCALE,
+            w: UI_TILE_PX,
+            h: UI_TILE_PX,
+            page: s.page,
+            tile: s.tile,
+            flip_x: s.flags & 1 != 0,
+            flip_y: s.flags & 2 != 0,
+        });
+    }
+}
+
 /// Append the UI layer: the retained tile grid (tile 0 = empty), then the
 /// last `uiText` run capped by `uiReveal`.
 pub fn append_ui(scene: &Scene, pak: &Pak, items: &mut Vec<Item>) {
@@ -94,6 +115,41 @@ mod tests {
         assert!((UI_ORIGIN_X - (480.0 - 160.0 * UI_SCALE) / 2.0).abs() < 1e-6);
         // The scaled frame fits the screen exactly in height.
         assert!((UI_TILE_PX * UI_ROWS as f32 - VIEW_H as f32).abs() < 1e-3);
+    }
+
+    #[test]
+    fn anim_sprites_land_in_the_ui_frame_and_flip() {
+        let mut s = Scene::new();
+        let mut items = Vec::new();
+        append_anim(&s, &mut items);
+        assert!(items.is_empty());
+        // a tile at the top-left of the GB screen, x-flipped
+        s.op(op::ANIM_SPRITE, &[3, 7, 0, 16, 1], None);
+        s.op(op::ANIM_SPRITE, &[3, 8, 8, 16, 2], None);
+        append_anim(&s, &mut items);
+        assert_eq!(items.len(), 2);
+        match items[0] {
+            Item::AnimQuad { x, y, w, h, page, tile, flip_x, flip_y } => {
+                assert!((x - UI_ORIGIN_X).abs() < 1e-3);
+                assert!((y - 16.0 * UI_SCALE).abs() < 1e-3);
+                assert!((w - UI_TILE_PX).abs() < 1e-3 && (h - UI_TILE_PX).abs() < 1e-3);
+                assert_eq!((page, tile), (3, 7));
+                assert!(flip_x && !flip_y);
+            }
+            _ => panic!("expected an AnimQuad"),
+        }
+        match items[1] {
+            Item::AnimQuad { x, flip_x, flip_y, .. } => {
+                assert!((x - (UI_ORIGIN_X + 8.0 * UI_SCALE)).abs() < 1e-3);
+                assert!(!flip_x && flip_y);
+            }
+            _ => panic!("expected an AnimQuad"),
+        }
+        // the animation ends: the list empties, the UI keeps its own tiles
+        s.op(op::ANIM_CLEAR, &[], None);
+        let mut after = Vec::new();
+        append_anim(&s, &mut after);
+        assert!(after.is_empty());
     }
 
     #[test]
