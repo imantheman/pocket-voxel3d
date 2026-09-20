@@ -96,7 +96,23 @@ struct PlanKey {
     map_id: u32,
     center: Option<(i32, i32)>,
 }
-static mut PAK_CACHE: Vec<CachedPak> = Vec::new();
+/// The resident paks, most recently used first.
+///
+/// BOXED, and that is the point: `cur_pak` hands out a `&'static Pak` that
+/// points INTO the entry, and it is held across frames. A `Vec<CachedPak>`
+/// moves its elements whenever it grows, promotes an entry to the front or
+/// removes one -- and every such move left that reference pointing at a Pak
+/// that had been moved out from under it: chunk records, vertex and index
+/// pools all read from stale memory, which draws as geometry stretched
+/// across the screen. The box keeps each entry at a fixed address for as
+/// long as it is in the cache, whatever the Vec does.
+static mut PAK_CACHE: Vec<Box<CachedPak>> = Vec::new();
+/// The entry `cur_pak` last handed out, by address. Nothing may evict it,
+/// and a front that is not this is a stale `pak_static` (see `pak_moved`).
+static mut PAK_IN_USE: *const CachedPak = core::ptr::null();
+/// How many times the backstop has had to re-take it. Anything but 0 means
+/// a cache path changed the front without telling the frame loop.
+static mut PAK_RETAKEN: u32 = 0;
 /// Set once at boot from the heap actually available (`size_pak_cache`).
 /// Backtracking is free when the map you came from is still resident, and
 /// after the loader stopped reading dead weight the thing standing between
@@ -175,11 +191,11 @@ unsafe fn load_map_pak(name: &str, want: Option<PlanKey>) -> bool {
                 }
             }
     };
-    if PAK_CACHE.first().map(&serves).unwrap_or(false) {
+    if PAK_CACHE.first().map(|c| serves(c)).unwrap_or(false) {
         return true;
     }
     // resident in the cache -> promote to front, no SD read
-    if let Some(i) = PAK_CACHE.iter().position(&serves) {
+    if let Some(i) = PAK_CACHE.iter().position(|c| serves(c)) {
         let hit = PAK_CACHE.remove(i);
         PAK_CACHE.insert(0, hit);
         dlog(&format!("[pv] pak {} cached (0 ms)", name));
@@ -206,13 +222,11 @@ unsafe fn load_map_pak(name: &str, want: Option<PlanKey>) -> bool {
             let buf: Box<[u8]> = pf.buf.into_boxed_slice();
             let bytes: &'static [u8] = core::mem::transmute(buf.as_ref());
             if let Ok(p) = pak::read_with_shared(bytes, SHARED_ATLAS) {
-                while !PAK_CACHE.is_empty() && cache_total_kb() + kb > PAK_CACHE_BUDGET_KB {
-                    PAK_CACHE.pop();
-                }
+                while cache_total_kb() + kb > PAK_CACHE_BUDGET_KB && evict_lru(false) {}
                 PAK_CACHE.retain(|c| c.name != name);
-                PAK_CACHE.insert(0, CachedPak {
+                PAK_CACHE.insert(0, Box::new(CachedPak {
                     pak: p, buf, name: name.to_string(), kb, plan: None,
-                });
+                }));
                 dlog(&format!(
                     "[pv] pak {} {} KB in {} ms ({} KB was read ahead)",
                     name, kb, ms, had / 1024,
@@ -246,9 +260,7 @@ unsafe fn load_map_pak(name: &str, want: Option<PlanKey>) -> bool {
         dlog(&format!("[pv] read-ahead dropped ({} KB) to make room for {}", pf_kb, name));
         PREFETCH = None;
     }
-    while !PAK_CACHE.is_empty() && cache_total_kb() + new_kb > PAK_CACHE_BUDGET_KB {
-        PAK_CACHE.pop(); // drop the least-recently-used entry
-    }
+    while cache_total_kb() + new_kb > PAK_CACHE_BUDGET_KB && evict_lru(false) {}
     // Back to a position at the centre of the planned chunk: build_order
     // only ever divides it back down to a chunk index, so this round-trips.
     let plan_for = want.map(|k| {
@@ -293,9 +305,9 @@ unsafe fn load_map_pak(name: &str, want: Option<PlanKey>) -> bool {
             // earlier would have freed the buffer `pak_static` still points
             // at, with no guarantee this read was going to replace it.
             PAK_CACHE.retain(|c| c.name != name);
-            PAK_CACHE.insert(0, CachedPak {
+            PAK_CACHE.insert(0, Box::new(CachedPak {
                 pak: p, buf, name: name.to_string(), kb, plan,
-            });
+            }));
             true
         }
         Err(e) => {
@@ -525,9 +537,7 @@ unsafe fn prefetch_step(budget_ms: u64) -> bool {
     if cur + kb > PAK_CACHE_BUDGET_KB {
         return false;
     }
-    while PAK_CACHE.len() > 1 && cache_total_kb() + kb > PAK_CACHE_BUDGET_KB {
-        PAK_CACHE.pop(); // never the front: that is the map being played
-    }
+    while PAK_CACHE.len() > 1 && cache_total_kb() + kb > PAK_CACHE_BUDGET_KB && evict_lru(true) {}
     if cache_total_kb() + kb > PAK_CACHE_BUDGET_KB {
         return false;
     }
@@ -538,9 +548,9 @@ unsafe fn prefetch_step(budget_ms: u64) -> bool {
             // Behind the current map, so it is the first thing dropped if
             // the player walks somewhere else entirely.
             let at = PAK_CACHE.len().min(1);
-            PAK_CACHE.insert(at, CachedPak {
+            PAK_CACHE.insert(at, Box::new(CachedPak {
                 pak: p, buf, name: pf.name.clone(), kb, plan: None,
-            });
+            }));
             dlog(&format!("[pv] read ahead {} ({} KB)", pf.name, kb));
             true
         }
@@ -550,9 +560,50 @@ unsafe fn prefetch_step(budget_ms: u64) -> bool {
 
 #[allow(static_mut_refs)]
 unsafe fn cur_pak() -> &'static pak::Pak<'static> {
-    core::mem::transmute::<&pak::Pak<'static>, &'static pak::Pak<'static>>(
-        &PAK_CACHE.first().expect("no pak loaded").pak,
-    )
+    let entry: &CachedPak = PAK_CACHE.first().expect("no pak loaded");
+    PAK_IN_USE = entry as *const CachedPak;
+    core::mem::transmute::<&pak::Pak<'static>, &'static pak::Pak<'static>>(&entry.pak)
+}
+
+/// Has the cache put a different pak at the front since `cur_pak` last ran?
+///
+/// The call sites that mutate the cache re-take `pak_static` when they
+/// report a change, but one that returns "nothing to do" after promoting,
+/// evicting or adopting a read-ahead would leave the old one in hand. This
+/// is the backstop: it is exact (an address compare), it costs nothing, and
+/// it turns a whole class of "the world drew as streaks for a second" into
+/// a line in the log.
+#[allow(static_mut_refs)]
+unsafe fn pak_moved() -> bool {
+    match PAK_CACHE.first() {
+        Some(front) => !core::ptr::eq(&**front as *const CachedPak, PAK_IN_USE),
+        None => false,
+    }
+}
+
+/// Drop the least-recently-used entry. Returns false when there is nothing
+/// left it may take.
+///
+/// `protect_in_use` keeps the map being drawn from: a read-ahead that
+/// evicted the ground under the player's feet would leave `pak_static`
+/// pointing at freed memory for as long as it took the next build to
+/// notice. A cold read passes false -- it is about to put a new pak at the
+/// front and its caller re-takes the pointer on the same line -- and that
+/// is what lets a map larger than the rest of the cache still load.
+#[allow(static_mut_refs)]
+unsafe fn evict_lru(protect_in_use: bool) -> bool {
+    match PAK_CACHE.last() {
+        Some(last)
+            if protect_in_use && core::ptr::eq(&**last as *const CachedPak, PAK_IN_USE) =>
+        {
+            false
+        }
+        Some(_) => {
+            PAK_CACHE.pop();
+            true
+        }
+        None => false,
+    }
 }
 
 /// The GAME section's tag, the one payload this host never looks at.
@@ -3107,6 +3158,18 @@ fn main() {
             unsafe {
                 let mut e2 = [0u8; 256];
                 let mut failed = false;
+                // Before the frame reads a single vertex: if anything put a
+                // different entry at the front of the pak cache without
+                // saying so, take the new one. A stale `pak_static` reads
+                // chunk records and vertex pools out of memory that has
+                // moved, which draws as geometry stretched across the
+                // screen -- and then rights itself on the next map build,
+                // which is exactly how it was reported.
+                if pak_moved() {
+                    pak_static = cur_pak();
+                    PAK_RETAKEN += 1;
+                    dlog(&format!("[pv] pak_static re-taken ({PAK_RETAKEN} so far)"));
+                }
                 let t_js = now_ms();
                 for _ in 0..steps {
                     if qjs_call_frame(CTX, b, e2.as_mut_ptr(), 255) != 0 { failed = true; break; }

@@ -5888,3 +5888,82 @@ describe("the two locked gym doors", () => {
     expect(said).toContain("always closed");
   });
 });
+
+describe("the MAGIKARP salesman", () => {
+  /** Talk to him, answering his YES/NO the way `answers` says. */
+  function haggle(game: VoxelmonGame, answers: boolean[] = []): void {
+    const ow = game.overworld;
+    if (ow.map.id !== "MT_MOON_POKECENTER") ow.setMap("MT_MOON_POKECENTER", 10, 7, "up");
+    ow.showMapText("TEXT_MTMOONPOKECENTER_MAGIKARP_SALESMAN");
+    for (let i = 0; i < 900; i++) {
+      const top = game.stackKinds().at(-1);
+      if (top === "choice") {
+        if (!(answers.shift() ?? false)) tap(game, VOX_BTN.down);
+        tap(game, VOX_BTN.a);
+        for (let h = 0; h < 60 && game.stackKinds().at(-1) === "choice"; h++) game.tick(0);
+        continue;
+      }
+      if (top !== "textbox" && !(ow as any).runner.isRunning()) return;
+      dismissText(game);
+      game.tick(0);
+    }
+  }
+
+  function buyer(): VoxelmonGame {
+    const game = makeMenuGame();
+    (game as any).askNickname = (_n: string, done: (n: string | null) => void) => done(null);
+    game.save.money = 1000;
+    return game;
+  }
+
+  test.skipIf(!hasGen)("sells one level 5 MAGIKARP for 500", () => {
+    const game = buyer();
+    const before = game.save.party.length;
+    haggle(game, [true]);
+    expect(game.save.money).toBe(500);
+    expect(game.save.flags.EVENT_BOUGHT_MAGIKARP).toBe(true);
+    expect(game.save.party.length).toBe(before + 1);
+    const fish = game.save.party.at(-1)!;
+    expect(fish.species).toBe("MAGIKARP");
+    expect(fish.level).toBe(5);
+  });
+
+  test.skipIf(!hasGen)("and only the once -- no refunds", () => {
+    const game = buyer();
+    haggle(game, [true]);
+    const after = game.save.party.length;
+    haggle(game, [true]);
+    expect(game.save.party.length).toBe(after);
+    expect(game.save.money).toBe(500);
+  });
+
+  test.skipIf(!hasGen)("saying no costs nothing", () => {
+    const game = buyer();
+    const before = game.save.party.length;
+    haggle(game, [false]);
+    expect(game.save.money).toBe(1000);
+    expect(game.save.party.length).toBe(before);
+    expect(game.save.flags.EVENT_BOUGHT_MAGIKARP).toBeFalsy();
+  });
+
+  test.skipIf(!hasGen)("a short wallet keeps its money", () => {
+    const game = buyer();
+    game.save.money = 499;
+    haggle(game, [true]);
+    expect(game.save.money).toBe(499);
+    expect(game.save.flags.EVENT_BOUGHT_MAGIKARP).toBeFalsy();
+  });
+
+  test.skipIf(!hasGen)("a full party is refused before the money moves", () => {
+    const game = buyer();
+    while (game.save.party.length < 6) {
+      game.save.party.push(newMon(romData!, "PIDGEY", 5));
+    }
+    haggle(game, [true]);
+    // pokered would box it; this port has no boxes, so he keeps the fish
+    // and the player keeps the 500.
+    expect(game.save.money).toBe(1000);
+    expect(game.save.party.length).toBe(6);
+    expect(game.save.flags.EVENT_BOUGHT_MAGIKARP).toBeFalsy();
+  });
+});

@@ -6403,6 +6403,38 @@ var MAP_SCRIPTS = {
       TEXT_MTMOONB2F_HELIX_FOSSIL: mtMoonFossil("HELIX_FOSSIL", "MTMOONB2F_HELIX_FOSSIL", "MTMOONB2F_DOME_FOSSIL", "EVENT_GOT_HELIX_FOSSIL")
     }
   },
+  MT_MOON_POKECENTER: {
+    talk: {
+      TEXT_MTMOONPOKECENTER_MAGIKARP_SALESMAN: (_ow, save) => {
+        if (save?.flags?.EVENT_BOUGHT_MAGIKARP) {
+          return [
+            ["show_text", "_MtMoonPokecenterMagikarpSalesmanNoRefundsText"]
+          ];
+        }
+        return [
+          ["face_player"],
+          ["ask", "_MtMoonPokecenterMagikarpSalesmanIGotADealText"],
+          ["jump_if_false", "no"],
+          ["check_money", MAGIKARP_PRICE],
+          ["jump_if_false", "broke"],
+          ["check_party_room"],
+          ["jump_if_false", "full"],
+          ["take_money", MAGIKARP_PRICE],
+          ["set_flag", "EVENT_BOUGHT_MAGIKARP"],
+          ["give_pokemon", "MAGIKARP", 5],
+          ["jump", "end"],
+          ["label", "no"],
+          ["show_text", "_MtMoonPokecenterMagikarpSalesmanNoText"],
+          ["jump", "end"],
+          ["label", "broke"],
+          ["show_text", "_MtMoonPokecenterMagikarpSalesmanNoMoneyText"],
+          ["jump", "end"],
+          ["label", "full"],
+          ["show_text", "_BoxIsFullText"]
+        ];
+      }
+    }
+  },
   ROUTE_22: {
     onStep: (ow, save) => {
       const p = ow?.player;
@@ -7604,6 +7636,7 @@ function sceneWithTheme(song, rows) {
   const bumped = rows.map((r) => jumps.includes(r[0]) && typeof r[1] === "number" ? [r[0], r[1] + 1] : r);
   return [["play_music", song], ...bumped];
 }
+var MAGIKARP_PRICE = 500;
 function itemBallFlag(mapLabel, textConst) {
   return `EVENT_ITEMBALL_${mapLabel}_${textConst}`;
 }

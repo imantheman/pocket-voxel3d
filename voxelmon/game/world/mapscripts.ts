@@ -791,6 +791,49 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     },
   },
 
+  // story4.lua M.MT_MOON_POKECENTER (scripts/MtMoonPokecenter.asm): the
+  // MAGIKARP salesman, ¥500 for a level 5 one, once ever.
+  //
+  // pokered hands the fish to GivePokemon, which boxes it when the party is
+  // full. This port has no POKéMON boxes yet, so a full party is refused
+  // BEFORE the money moves -- paying ¥500 for nothing would be worse than
+  // waiting until there is room.
+  MT_MOON_POKECENTER: {
+    talk: {
+      TEXT_MTMOONPOKECENTER_MAGIKARP_SALESMAN: (_ow: any, save: any) => {
+        if (save?.flags?.EVENT_BOUGHT_MAGIKARP) {
+          // .alreadyBought: he is not taking it back
+          return [
+            ["show_text", "_MtMoonPokecenterMagikarpSalesmanNoRefundsText"],
+          ] as ScriptRow[];
+        }
+        return [
+          ["face_player"], //                                                  1
+          ["ask", "_MtMoonPokecenterMagikarpSalesmanIGotADealText"], //        2
+          ["jump_if_false", "no"], //                                          3
+          ["check_money", MAGIKARP_PRICE], //                                  4
+          ["jump_if_false", "broke"], //                                       5
+          ["check_party_room"], //                                             6
+          ["jump_if_false", "full"], //                                        7
+          ["take_money", MAGIKARP_PRICE], //                                   8
+          ["set_flag", "EVENT_BOUGHT_MAGIKARP"], //                            9
+          // give_pokemon marks it owned and offers the nickname prompt, the
+          // way every gift mon in the port does.
+          ["give_pokemon", "MAGIKARP", 5], //                                 10
+          ["jump", "end"], //                                                 11
+          ["label", "no"], //                                                 12
+          ["show_text", "_MtMoonPokecenterMagikarpSalesmanNoText"], //        13
+          ["jump", "end"], //                                                 14
+          ["label", "broke"], //                                              15
+          ["show_text", "_MtMoonPokecenterMagikarpSalesmanNoMoneyText"], //   16
+          ["jump", "end"], //                                                 17
+          ["label", "full"], //                                               18
+          ["show_text", "_BoxIsFullText"], //                                 19
+        ] as ScriptRow[];
+      },
+    },
+  },
+
   // story5.lua M.ROUTE_22 + route22Scene(1,...) (scripts/Route22.asm): the
   // optional early rival ambush after the parcel drop-off. Coord trigger at
   // (29,4)/(29,5), gated on the Pokédex in hand, Brock not yet beaten, and
@@ -2526,6 +2569,9 @@ function sceneWithTheme(song: string, rows: ScriptRow[]): ScriptRow[] {
   );
   return [["play_music", song] as unknown as ScriptRow, ...bumped];
 }
+
+/** What the Mt. Moon salesman asks for his MAGIKARP (MtMoonPokecenter.asm). */
+const MAGIKARP_PRICE = 500;
 
 export function itemBallFlag(mapLabel: string, textConst: string): string {
   return `EVENT_ITEMBALL_${mapLabel}_${textConst}`;
