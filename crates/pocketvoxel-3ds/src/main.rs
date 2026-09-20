@@ -39,6 +39,9 @@ extern "C" {
     fn qjs_run_bytecode(ctx: *mut JSContext, errbuf: *mut u8, errlen: i32) -> i32;
     fn qjs_register_voxel(ctx: *mut JSContext) -> i32;
     fn c3d_depth_test(on: i32);
+    /// Blocks until the GPU has finished the frame it is drawing
+    /// (citro3d renderqueue.h). See the rebuild below for why.
+    fn C3D_FrameSync();
     fn gsp_flush(p: *const u8, len: u32);
     fn audio3ds_init(rate: i32, frames_per_buf: i32) -> i32;
     fn audio3ds_free_frames() -> i32;
@@ -3407,6 +3410,18 @@ fn main() {
 
         if reload {
             reload = false;
+            // WAIT FOR THE GPU FIRST. Everything below frees the vertex
+            // buffers the last frame was drawn from and allocates new ones
+            // in their place, and it runs BETWEEN frames -- after
+            // C3D_FrameEnd submitted that frame and before the next
+            // C3D_FrameBegin, whose SYNCDRAW is what normally guarantees
+            // the GPU is done. So a rebuild could hand the linear
+            // allocator memory the GPU was still reading vertices out of,
+            // and it drew as geometry stretched across the screen: a
+            // rebuild is triggered by a stamp, a tint or the guest
+            // publishing different connected maps, which is why it showed
+            // up while standing still talking to someone.
+            unsafe { C3D_FrameSync() };
             dlog_batch_begin();
             let t_load = now_ms();
             // Load this map's own pak, then build from it.

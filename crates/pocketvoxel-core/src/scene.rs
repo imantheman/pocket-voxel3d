@@ -197,6 +197,10 @@ pub struct Scene {
     /// sprites landed and it takes the scene by shared reference; nothing
     /// else reads or writes these.
     pub ui_panel_off: [Cell<[f32; 2]>; UI_PANELS],
+    /// Where each panel is heading. Held separately from where it IS so a
+    /// placement is judged on the clearance it was chosen for, not on the
+    /// clearance it happens to have partway through easing into it.
+    pub ui_panel_target: [Cell<[f32; 2]>; UI_PANELS],
     /// This frame's move-animation sprites (`animSprite`/`animClear`).
     pub anim_sprites: [AnimSprite; ANIM_SPRITES_MAX],
     pub anim_sprite_n: u8,
@@ -321,6 +325,7 @@ impl Scene {
             ui_b: [0u16; UI_COLS * UI_ROWS],
             ui_panels: [UiPanel::default(); UI_PANELS],
             ui_panel_off: [const { Cell::new([0.0, 0.0]) }; UI_PANELS],
+            ui_panel_target: [const { Cell::new([0.0, 0.0]) }; UI_PANELS],
             anim_sprites: [AnimSprite::default(); ANIM_SPRITES_MAX],
             anim_sprite_n: 0,
             ui_b_sprites: [BottomSprite::default(); UI_B_SPRITES_MAX],
@@ -582,8 +587,9 @@ impl Scene {
             op::UI_CLEAR => {
                 self.ui = [0u16; UI_COLS * UI_ROWS];
                 self.ui_panels = [UiPanel::default(); UI_PANELS];
-                for off in self.ui_panel_off.iter() {
+                for (off, target) in self.ui_panel_off.iter().zip(self.ui_panel_target.iter()) {
                     off.set([0.0, 0.0]);
+                    target.set([0.0, 0.0]);
                 }
                 self.ui_text = None;
                 self.ui_reveal = u32::MAX;
@@ -671,6 +677,7 @@ impl Scene {
                         if panel != self.ui_panels[i] {
                             self.ui_panels[i] = panel;
                             self.ui_panel_off[i].set([0.0, 0.0]);
+                            self.ui_panel_target[i].set([0.0, 0.0]);
                         }
                     }
                 }

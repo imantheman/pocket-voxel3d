@@ -900,7 +900,22 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
                 fwd_z,
             );
             if let Some(slot) = card_rects.get_mut(side) {
-                *slot = card_screen_rect(&cam, &verts);
+                // The RESTING quad, with the animation offset left out. A
+                // lunge or a faint slide moves the card for a few frames,
+                // and a HUD panel that dodged those twitched every time a
+                // move was chosen. Where the mon stands is what the panel
+                // has to stay off.
+                *slot = card_screen_rect(
+                    &cam,
+                    &card_verts(
+                        cell_centre(card.x, card.y),
+                        page.w as f32 * BATTLE_CARD_SCALE,
+                        page.h as f32 * BATTLE_CARD_SCALE,
+                        a,
+                        fwd_x,
+                        fwd_z,
+                    ),
+                );
             }
             items.push(Item::Card {
                 verts,

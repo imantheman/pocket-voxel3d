@@ -71,6 +71,13 @@ pub fn append_anim(scene: &Scene, items: &mut Vec<Item>) {
 
 /// Clear space kept between a HUD panel and a sprite, in UI px.
 pub const PANEL_GAP: f32 = 8.0;
+/// A panel that is already placed only moves once a sprite comes THIS
+/// close to it, and only goes back to its GB cells once they are clear by
+/// `PANEL_GAP * PANEL_HOME_MARGIN`. Two different thresholds on purpose:
+/// with one, a mon drifting along the edge of the gap would have the HUD
+/// stepping in and out on every frame it crossed.
+const PANEL_HOLD_GAP: f32 = 2.0;
+const PANEL_HOME_MARGIN: f32 = 1.5;
 /// How much of the way a panel travels toward its target each frame. A
 /// camera swing moves the sprites smoothly; the panel follows the same way
 /// rather than teleporting when the answer changes side.
@@ -307,18 +314,43 @@ pub fn ease_panels(scene: &Scene, cards: &[Option<Rect>; UI_PANELS]) -> [[f32; 2
         let now = scene.ui_panel_off[i].get();
         if panel.w == 0 || !scene.battle.active {
             scene.ui_panel_off[i].set([0.0, 0.0]);
+            scene.ui_panel_target[i].set([0.0, 0.0]);
             taken[i] = None;
             continue;
         }
         let home = panel_home(&panel);
-        let target = panel_shift(
-            home,
+        let blockers = [
             cards[i],
             cards[UI_PANELS - 1 - i],
             taken[UI_PANELS - 1 - i],
-            (VIEW_W as f32, VIEW_H as f32),
-            now,
-        );
+        ];
+        let clear_by = |r: Rect, gap: f32| {
+            blockers
+                .iter()
+                .flatten()
+                .all(|b| !r.overlaps(&b.grown(gap)))
+        };
+        let was = scene.ui_panel_target[i].get();
+        let going = home.shifted(was[0], was[1]);
+        let target = if clear_by(home, PANEL_GAP * PANEL_HOME_MARGIN) {
+            // Nothing near its own cells any more: that is where it belongs.
+            [0.0, 0.0]
+        } else if was != [0.0, 0.0] && clear_by(going, PANEL_HOLD_GAP) {
+            // Where it was already heading still works: keep going there.
+            // Re-solving every frame is what had the HUD drifting whenever
+            // a sprite so much as leaned.
+            was
+        } else {
+            panel_shift(
+                home,
+                cards[i],
+                cards[UI_PANELS - 1 - i],
+                taken[UI_PANELS - 1 - i],
+                (VIEW_W as f32, VIEW_H as f32),
+                now,
+            )
+        };
+        scene.ui_panel_target[i].set(target);
         let mut at = [0.0f32; 2];
         for k in 0..2 {
             at[k] = now[k] + (target[k] - now[k]) * PANEL_EASE;
@@ -586,24 +618,43 @@ mod tests {
     }
 
     #[test]
-    fn a_panel_eases_to_where_the_camera_left_room() {
+    fn a_panel_eases_clear_and_then_stops() {
         let mut s = Scene::new();
         s.op(op::ARENA, &[0, 4, 4, 0, 0], None);
         s.op(op::UI_PANEL, &[1, 0, 0, 10, 4], None);
-        let panel = s.ui_panels[1];
         let own = Rect::of(60.0, 0.0, 160.0, 90.0);
-        let target = panel_shift(panel_home(&panel), Some(own), None, None, VIEW, [0.0, 0.0]);
-        let mut last = [0.0f32; 2];
+        // It gets there gradually rather than snapping.
+        let first = ease_panels(&s, &[None, Some(own)])[1];
+        assert!(first[0] != 0.0 && first[0].abs() < 40.0, "snapped: {first:?}");
+        let mut last = first;
         for _ in 0..200 {
             last = ease_panels(&s, &[None, Some(own)])[1];
         }
-        assert!((last[0] - target[0]).abs() < 1e-3, "{last:?} never reached {target:?}");
-        // and it got there gradually, not in one frame
-        let mut s2 = Scene::new();
-        s2.op(op::ARENA, &[0, 4, 4, 0, 0], None);
-        s2.op(op::UI_PANEL, &[1, 0, 0, 10, 4], None);
-        let first = ease_panels(&s2, &[None, Some(own)])[1];
-        assert!(first[0].abs() < target[0].abs(), "snapped straight to the target");
+        // ... lands clear of the sprite ...
+        let placed = panel_home(&s.ui_panels[1]).shifted(last[0], last[1]);
+        assert!(!placed.overlaps(&own), "{placed:?} is on the sprite");
+        // ... and then holds still: a panel that keeps re-solving drifts
+        // under the camera and reads as the HUD twitching.
+        let settled = ease_panels(&s, &[None, Some(own)])[1];
+        assert_eq!(settled, last, "it never came to rest");
+    }
+
+    #[test]
+    fn a_sprite_that_moves_a_little_leaves_the_panel_alone() {
+        let mut s = Scene::new();
+        s.op(op::ARENA, &[0, 4, 4, 0, 0], None);
+        s.op(op::UI_PANEL, &[1, 0, 0, 10, 4], None);
+        let own = Rect::of(60.0, 0.0, 160.0, 90.0);
+        for _ in 0..200 {
+            ease_panels(&s, &[None, Some(own)]);
+        }
+        let settled = s.ui_panel_off[1].get();
+        // A lunge's worth of movement, toward the panel but not into it.
+        let lunged = Rect::of(64.0, 2.0, 164.0, 92.0);
+        for _ in 0..30 {
+            ease_panels(&s, &[None, Some(lunged)]);
+        }
+        assert_eq!(s.ui_panel_off[1].get(), settled, "the HUD chased the lunge");
     }
 
     #[test]
