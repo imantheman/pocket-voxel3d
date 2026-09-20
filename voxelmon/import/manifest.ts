@@ -98,6 +98,18 @@ export interface Manifest {
     types: Record<string, number>;
   };
   tileAnimations: string[];
+  /** Battle move animations: the counts and names the tables are read with. */
+  battleAnimations: {
+    moveCount: number;
+    miscAnimations: string[];
+    subanimCount: number;
+    frameBlockCount: number;
+    baseCoordCount: number;
+    firstSpecialEffect: number;
+    specialEffects: Record<string, string>;
+    subanimTypes: string[];
+    tilesheets: { path: string; source?: string; height?: number }[];
+  };
   tilesets: TilesetSpec[];
   maps: Record<string, MapSpec>;
   sprites: { order: SpriteSpec[]; bike: BikeSpec; surfPikachu?: BikeSpec };

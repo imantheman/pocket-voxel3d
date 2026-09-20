@@ -23,6 +23,88 @@ const json = async (name: string): Promise<any> =>
   await Bun.file(join(env.genDir, `${name}.json`)).json();
 
 describe.skipIf(!genReady)("voxel importer dataset", () => {
+  // Battle move animations (engine/battle/animations.asm): the composed
+  // beams, blobs and projectiles, read out of the ROM's own tables. Pinned
+  // against what pokered's data says those animations are.
+  test("battle_anims: every move and misc animation, with its script", async () => {
+    const a = await json("battle_anims");
+    // 165 moves (NUM_ATTACKS) then the misc animations that share the table
+    expect(Object.keys(a.anims).length).toBe(202);
+    expect(a.subanims.length).toBe(86);
+    expect(a.frameBlocks.length).toBe(122);
+    expect(a.baseCoords.length).toBe(177);
+
+    // TACKLE is the plain lunge: move the pic, then put it back.
+    expect(a.anims.TACKLE).toEqual([
+      { effect: "SE_MOVE_MON_HORIZONTALLY", sound: 73 },
+      { effect: "SE_RESET_MON_POSITION", sound: null },
+    ]);
+    // THUNDERBOLT plays its subanimation twice off the second tileset.
+    expect(a.anims.THUNDERBOLT).toEqual([
+      { sub: 41, tileset: 1, delay: 1, sound: 85 },
+      { sub: 41, tileset: 1, delay: 1, sound: 85 },
+    ]);
+    // HYPER_BEAM darkens the screen, spirals its balls inward, then flashes.
+    const hyper = a.anims.HYPER_BEAM.map((r: any) => r.effect ?? `sub${r.sub}`);
+    expect(hyper[0]).toBe("SE_DARK_SCREEN_PALETTE");
+    expect(hyper).toContain("SE_SPIRAL_BALLS_INWARD");
+    expect(hyper).toContain("SE_DARK_SCREEN_FLASH");
+    // the misc animations ride the same table
+    expect(a.anims.SHOWPIC_ANIM).toEqual([
+      { effect: "SE_SHOW_ENEMY_MON_PIC", sound: null },
+    ]);
+    expect(a.anims.TOSS_ANIM[0].sub).toBe(6);
+  });
+
+  test("battle_anims: every id a script names resolves", async () => {
+    const a = await json("battle_anims");
+    const types = ["NORMAL", "HVFLIP", "HFLIP", "COORDFLIP", "REVERSE", "ENEMY"];
+    for (const [name, rows] of Object.entries<any[]>(a.anims)) {
+      for (const row of rows) {
+        if (row.effect !== undefined) {
+          expect(row.effect.startsWith("SE_")).toBe(true);
+          continue;
+        }
+        expect(a.subanims[row.sub], `${name} subanim ${row.sub}`).toBeDefined();
+        expect(a.tilesets[row.tileset], `${name} tileset ${row.tileset}`).toBeDefined();
+        expect(row.delay).toBeLessThan(64);
+      }
+    }
+    for (const sub of a.subanims) {
+      expect(types).toContain(sub.type);
+      for (const b of sub.blocks) {
+        expect(a.frameBlocks[b.block]).toBeDefined();
+        expect(a.baseCoords[b.base]).toBeDefined();
+        expect(b.mode).toBeLessThanOrEqual(4);
+      }
+    }
+    // Frame block tiles are OAM entries: an 8x8 tile at a signed offset.
+    const tiles = a.frameBlocks.flat();
+    expect(tiles.length).toBeGreaterThan(500);
+    for (const t of tiles.slice(0, 200)) {
+      expect(t.tile).toBeLessThan(0x100);
+      expect(t.attrs & ~0xf0).toBe(0); // only PAL/PRIO/XFLIP/YFLIP bits
+    }
+  });
+
+  test("battle_anims: three tilesets over two sheets", async () => {
+    const a = await json("battle_anims");
+    const gfx = await json("gfx");
+    expect(a.tilesets.length).toBe(3);
+    // the third is the first sheet again, with fewer tiles loaded
+    expect(a.tilesets[2].gfx).toBe(a.tilesets[0].gfx);
+    expect(a.tilesets[2].tiles).toBeLessThan(a.tilesets[0].tiles);
+    for (const ts of a.tilesets) {
+      const sheet = gfx[ts.gfx] ?? gfx.directory?.[ts.gfx];
+      expect(sheet, `gfx entry for ${ts.gfx}`).toBeDefined();
+      // 16 tiles to a row, 8px tiles. A shared sheet is as tall as its
+      // BIGGEST user (tileset 2 reads the first 64 of sheet 0's 79).
+      expect(sheet.w).toBe(128);
+      expect(sheet.h).toBeGreaterThanOrEqual(Math.ceil(ts.tiles / 16) * 8);
+      expect(sheet.h % 8).toBe(0);
+    }
+  });
+
   test("pokemon: 151 species, starters and Pikachu pinned", async () => {
     const pokemon = await json("pokemon");
     expect(Object.keys(pokemon).length).toBe(151);

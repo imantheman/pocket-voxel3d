@@ -17,6 +17,7 @@ import { extractField } from "./stages/field.ts";
 import { extractFont } from "./stages/font.ts";
 import { extractItems } from "./stages/items.ts";
 import { extractMaps } from "./stages/maps.ts";
+import { extractBattleAnims } from "./stages/battle-anims.ts";
 import { extractMoves } from "./stages/moves.ts";
 import { extractPalettes } from "./stages/palettes.ts";
 import { extractPokemon } from "./stages/pokemon.ts";
@@ -61,6 +62,7 @@ export async function runImport(env: VoxelEnv): Promise<void> {
     ["font", () => writeJson(genDir, "font", extractFont(ctx))],
     ["sprites", () => writeJson(genDir, "sprites", extractSprites(ctx))],
     ["moves", () => writeJson(genDir, "moves", extractMoves(ctx))],
+    ["battle_anims", () => writeJson(genDir, "battle_anims", extractBattleAnims(ctx))],
     ["items", () => writeJson(genDir, "items", extractItems(ctx))],
     ["type_chart", () => writeJson(genDir, "type_chart", extractTypeChart(ctx))],
     ["palettes", () => writeJson(genDir, "palettes", extractPalettes(ctx))],
