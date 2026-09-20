@@ -122,14 +122,24 @@ def repack(path, at, out_path):
         new_dir.extend(struct.pack("<HHHHII", w, h, kind, frames, off, l))
     new_atls = bytes(new_dir) + bytes(body)
 
-    # ATLS is the last section, so only its own length and the file total move.
-    assert a_off + a_len == len(d), "ATLS is not last; repack needs a rewrite"
+    # ATLS used to be the last section, so only its own length moved. A v9
+    # pak puts TINS (the tree instances) after it, so everything past the
+    # atlas is re-laid at its new offset and the table follows.
     out = bytearray(d[:a_off])
-    out.extend(new_atls)
+    moved = {}                                        # tag -> (offset, length)
+    for tag, off, ln, cnt in sorted(secs, key=lambda s: s[1]):
+        if off < a_off:
+            continue
+        if len(out) % ALIGN:
+            out.extend(b"\0" * (ALIGN - len(out) % ALIGN))
+        body = new_atls if tag == b"ATLS" else d[off:off + ln]
+        moved[tag] = (len(out), len(body))
+        out.extend(body)
     struct.pack_into("<I", out, 8, len(out))          # header total_len
     for i, (tag, off, ln, cnt) in enumerate(secs):
-        if tag == b"ATLS":
-            struct.pack_into("<I", out, HDR + i * ENTRY + 8, len(new_atls))
+        if tag in moved:
+            n_off, n_len = moved[tag]
+            struct.pack_into("<II", out, HDR + i * ENTRY + 4, n_off, n_len)
     open(out_path, "wb").write(bytes(out))
     return len(d), len(out)
 
@@ -155,25 +165,38 @@ def verify(src, dst, blob):
             return f"page {i} header changed"
         if src_blob != want[8]:
             return f"page {i} texels differ"
-    # Nothing before ATLS may have moved. Two fields are allowed to differ,
-    # and only these: the header's total_len, and ATLS's own length in the
-    # section table. Blank both out and the rest must match byte for byte --
-    # every other section's offset, length and payload included.
+    # Nothing before ATLS may have moved. The fields allowed to differ are
+    # the header's total_len and, for ATLS and anything laid out after it
+    # (TINS, in a v9 pak), that section's offset and length. Blank those and
+    # the rest must match byte for byte -- every other section's offset,
+    # length and payload included.
     secs_a = read_sections(a)
+    secs_b = read_sections(b)
     a_off = next(o for t, o, l, c in secs_a if t == b"ATLS")
     ha, hb = bytearray(a[:a_off]), bytearray(b[:a_off])
-    for h in (ha, hb):
+    for h, secs in ((ha, secs_a), (hb, secs_b)):
         struct.pack_into("<I", h, 8, 0)                       # total_len
-        for i, (tag, _o, _l, _c) in enumerate(secs_a):
-            if tag == b"ATLS":
-                struct.pack_into("<I", h, HDR + i * ENTRY + 8, 0)   # ATLS len
+        for i, (tag, o, _l, _c) in enumerate(secs):
+            if o >= a_off:                                    # ATLS and after
+                struct.pack_into("<II", h, HDR + i * ENTRY + 4, 0, 0)
     if ha != hb:
         return "a byte before ATLS changed that should not have"
     if struct.unpack_from("<I", b, 8)[0] != len(b):
         return "header total_len disagrees with the file"
-    a_len_b = next(l for t, o, l, c in read_sections(b) if t == b"ATLS")
-    if a_off + a_len_b != len(b):
-        return "ATLS length disagrees with the file"
+    # Every moved section must land inside the file, and the last one end at
+    # it: a gap would mean bytes the reader can never see.
+    tail = max((o + l) for _t, o, l, _c in secs_b)
+    if tail != len(b):
+        return "the last section does not end at the file"
+    # The payloads after the atlas must survive the move untouched.
+    for tag, o, l, c in secs_b:
+        if tag == b"ATLS" or o < a_off:
+            continue
+        src = next(((so, sl) for st, so, sl, _sc in secs_a if st == tag), None)
+        if src is None:
+            return f"section {tag!r} appeared from nowhere"
+        if a[src[0]:src[0] + src[1]] != b[o:o + l]:
+            return f"section {tag!r} changed across the repack"
     return None
 
 
