@@ -277,13 +277,15 @@ pub struct Chunk {
 ///
 /// The same tree drawn in many places: the geometry lives once in the CHNK
 /// pools and this says where to put it, at which of two levels of detail.
-/// `near`/`far` index [`Pak::tree_shapes`], or are `TREE_SHAPE_NONE`.
+/// `near` (carved hull), `mid` (coarse carve) and `far` (plain box) index
+/// [`Pak::tree_shapes`], or are `TREE_SHAPE_NONE`.
 #[derive(Clone, Copy, Debug)]
 pub struct TreeInst {
     pub x: i16,
     pub y: i16,
     pub z: i16,
     pub near: u16,
+    pub mid: u16,
     pub far: u16,
 }
 
@@ -968,19 +970,17 @@ pub fn read_with_shared<'a>(
             let y = r.i16v()?;
             let z = r.i16v()?;
             let near = r.u16v()?;
+            let mid = r.u16v()?;
             let far = r.u16v()?;
-            if r.u16v()? != 0 {
-                return Err("TINS instance pad is not zero");
-            }
-            for id in [near, far] {
+            for id in [near, mid, far] {
                 if id != spec::TREE_SHAPE_NONE && id as usize >= shapes.len() {
                     return Err("TINS instance names a shape that is not there");
                 }
             }
-            if near == spec::TREE_SHAPE_NONE && far == spec::TREE_SHAPE_NONE {
-                return Err("TINS instance has no shape at either level");
+            if [near, mid, far].iter().all(|&id| id == spec::TREE_SHAPE_NONE) {
+                return Err("TINS instance has no shape at any level");
             }
-            out.push(TreeInst { x, y, z, near, far });
+            out.push(TreeInst { x, y, z, near, mid, far });
         }
         tree_shapes = shapes;
         tree_insts = out;

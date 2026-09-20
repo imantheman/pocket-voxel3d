@@ -408,8 +408,10 @@ pub const VXPK_VERSION_TREES: u16 = 9;
 pub const VXPK_TREE_SHAPE_SIZE: usize = 16;
 pub const VXPK_TREE_INST_SIZE: usize = 12;
 pub const TREE_SHAPE_NONE: u16 = 0xffff;
-/// How far a tree instance draws its NEAR shape, world px.
-pub const TREE_NEAR_PX: f32 = 240.0;
+/// How far a tree instance draws its carved NEAR shape, world px,
+/// and past which it draws its box.
+pub const TREE_NEAR_PX: f32 = 96.0;
+pub const TREE_MID_PX: f32 = 224.0;
 pub const VXPK_HEADER_SIZE: usize = 16;
 pub const VXPK_ENTRY_SIZE: usize = 16;
 pub const VXPK_ALIGN: usize = 16;

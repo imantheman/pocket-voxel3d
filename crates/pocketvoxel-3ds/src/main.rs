@@ -18,8 +18,8 @@ use pocketvoxel_core::mapplan::{
 };
 use pocketvoxel_core::pakcompact;
 use pocketvoxel_core::spec::{
-    atlas_kind, CHUNK_PX, COLOR_PAL_NONE, TREE_NEAR_PX, TREE_SHAPE_NONE, UI_COLS, UI_ROWS,
-    WORLD_VIEW_H,
+    atlas_kind, CHUNK_PX, COLOR_PAL_NONE, TREE_MID_PX, TREE_NEAR_PX, TREE_SHAPE_NONE, UI_COLS,
+    UI_ROWS, WORLD_VIEW_H,
 };
 
 #[repr(C)] pub struct JSRuntime { _p: [u8; 0] }
@@ -2005,32 +2005,26 @@ fn strip_from_pak(
         let (x0, z0) = (c.aabb_min[0] as f32 + ox, c.aabb_min[2] as f32 + oy);
         let (x1, z1) = (c.aabb_max[0] as f32 + ox, c.aabb_max[2] as f32 + oy);
         let (y0, y1) = (c.aabb_min[1] as f32, c.aabb_max[1] as f32);
-        // The tree tier: the box the file path would read, or -- in a copy
-        // read under a plan, which holds only the tier its own build chose --
-        // the finer tier that copy did load.
-        let tree_kind = [TREE_BOX_KIND, TREE_COARSE_KIND, TREE_HULL_KIND]
-            .into_iter()
-            .find(|&k| mesh_loaded(pak, c.meshes[k]));
-        if c.meshes[TREE_BOX_KIND].index_count > 0 && tree_kind.is_none() {
-            return None; // no tier of this chunk's trees is in memory
+        // The BOX tier only, exactly what the file path reads.
+        //
+        // Substituting a finer tier when a planned copy had not read the box
+        // was a mistake: a hull is several times the vertices, so the strip
+        // hit STRIP_MAX_VERTS partway along and the chunks past it were
+        // dropped -- seams with holes in them. A copy without the box is
+        // simply not usable here, and the file path takes over.
+        if c.meshes[TREE_BOX_KIND].index_count > 0 && !mesh_loaded(pak, c.meshes[TREE_BOX_KIND]) {
+            return None;
         }
         for kind in 0..MESH_KINDS_N {
-            let src_kind = if kind == TREE_BOX_KIND {
-                match tree_kind {
-                    Some(k) => k,
-                    None => continue,
-                }
-            } else if GROUND_KINDS.contains(&kind) {
-                kind
-            } else {
+            if !(GROUND_KINDS.contains(&kind) || kind == TREE_BOX_KIND) {
                 continue;
-            };
-            let m = c.meshes[src_kind];
+            }
+            let m = c.meshes[kind];
             if m.index_count == 0 {
                 continue;
             }
             if !mesh_loaded(pak, m) {
-                return None; // ground this copy never read: use the file
+                return None; // geometry this copy never read: use the file
             }
             let span_start = verts.len();
             let mut gmin = [f32::MAX; 3];
@@ -2095,6 +2089,13 @@ fn strip_from_pak(
         return None;
     }
     Some(NeighborStrip { map_id, verts, spans })
+}
+
+/// A map whose trees are instanced (TINS) carries no box tier in its
+/// chunks, so a seam strip built from it would be bare ground where its
+/// trees are. Those keep to the file path until strips place instances too.
+fn strip_has_trees(pak: &Pak, map_id: u32) -> bool {
+    pak.trees_of(map_id).is_empty()
 }
 
 /// Read ONLY the seam-side chunks of a neighbour map's pak.
@@ -3572,7 +3573,11 @@ fn main() {
                     };
                     // From memory when the read-ahead already has it whole;
                     // off the card otherwise, and always in the forest zone.
-                    let resident = if unsafe { LEGACY_ZONE } { None } else { unsafe { resident_pak(nname) } };
+                    let resident = if unsafe { LEGACY_ZONE } {
+                        None
+                    } else {
+                        unsafe { resident_pak(nname) }.filter(|p| strip_has_trees(p, nid))
+                    };
                     let strip = match resident {
                         Some(p) => strip_from_pak(p, nid, ox, oy, geom.map_min, geom.map_max, last_tint),
                         None => {
@@ -4490,11 +4495,19 @@ if page_tex.len() < pak_static.atlases.len() {
                         let dx = ix + 8.0 - focus_x;
                         let dz = iz + 8.0 - focus_z;
                         let dist = (dx * dx + dz * dz).sqrt();
-                        let want = if dist <= TREE_NEAR_PX { it.near } else { it.far };
-                        let id = if want == TREE_SHAPE_NONE {
-                            if it.near != TREE_SHAPE_NONE { it.near } else { it.far }
+                        // Carved close up, coarse a bit further, a box
+                        // beyond that -- and each tree decides for itself as
+                        // the player moves, which is what the cook could
+                        // never do baking one level per chunk.
+                        let ladder = if dist <= TREE_NEAR_PX {
+                            [it.near, it.mid, it.far]
+                        } else if dist <= TREE_MID_PX {
+                            [it.mid, it.far, it.near]
                         } else {
-                            want
+                            [it.far, it.mid, it.near]
+                        };
+                        let Some(&id) = ladder.iter().find(|&&id| id != TREE_SHAPE_NONE) else {
+                            continue;
                         };
                         let Some(Some((bi, gmin, gmax))) = tree_bufs_ref.get(id as usize) else {
                             continue;
@@ -4523,8 +4536,21 @@ if page_tex.len() < pak_static.atlases.len() {
                                 continue;
                             }
                         }
-                        let mut m = *mvp;
-                        m.translate(ix, it.y as f32, iz);
+                        // mvp * translate(x, y, z), by hand.
+                        //
+                        // Matrix4::translate is Mtx_Translate with
+                        // bRightSide = false, which pre-multiplies: that
+                        // moves the result in CLIP space, not the world, and
+                        // scattered every tree off where it belongs. Only the
+                        // w column changes, so this is four multiply-adds a
+                        // row rather than a full matrix product.
+                        let mut raw = *mvp.as_raw();
+                        unsafe {
+                            for r in raw.r.iter_mut() {
+                                r.c[0] += ix * r.c[3] + (it.y as f32) * r.c[2] + iz * r.c[1];
+                            }
+                        }
+                        let m = Matrix4::from_raw(raw);
                         frame.bind_vertex_uniform(projection_idx, &m);
                         frame.draw_arrays(buffer::Primitive::Triangles, bi, None).unwrap();
                         tdrawn += 1;

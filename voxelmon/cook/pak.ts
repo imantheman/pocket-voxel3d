@@ -155,6 +155,7 @@ interface TreeInst {
   y: number;
   z: number;
   near: number;
+  mid: number;
   far: number;
 }
 
@@ -184,11 +185,15 @@ function instanceTrees(
 
   for (const m of maps) {
     // (cell) -> the triangles of each level of detail found there
-    const cells = new Map<string, { near: PackedVert[][]; far: PackedVert[][] }>();
+    const cells = new Map<
+      string,
+      { near: PackedVert[][]; mid: PackedVert[][]; far: PackedVert[][] }
+    >();
     for (const c of m.chunks) {
       for (const [kind, slot] of [
         [MESH_KIND.treeHull, "near"],
-        [MESH_KIND.treeCoarse, "far"],
+        [MESH_KIND.treeCoarse, "mid"],
+        [MESH_KIND.treeBox, "far"],
       ] as const) {
         const mesh = c.meshes[kind];
         if (!mesh || mesh.indices.length === 0) continue;
@@ -203,7 +208,7 @@ function instanceTrees(
           const key = `${cx},${cz}`;
           let cell = cells.get(key);
           if (!cell) {
-            cell = { near: [], far: [] };
+            cell = { near: [], mid: [], far: [] };
             cells.set(key, cell);
           }
           cell[slot].push(tri);
@@ -251,9 +256,12 @@ function instanceTrees(
       const ox = cx * CELL;
       const oz = cz * CELL;
       const near = shapeOf(cell.near, ox, oz);
+      const mid = shapeOf(cell.mid, ox, oz);
       const far = shapeOf(cell.far, ox, oz);
-      if (near === TREE_SHAPE_NONE && far === TREE_SHAPE_NONE) continue;
-      insts.push({ x: ox, y: 0, z: oz, near, far });
+      if (near === TREE_SHAPE_NONE && mid === TREE_SHAPE_NONE && far === TREE_SHAPE_NONE) {
+        continue;
+      }
+      insts.push({ x: ox, y: 0, z: oz, near, mid, far });
     }
     if (insts.length > 0) perMap.push({ mapId: m.mapId, insts });
   }
@@ -550,8 +558,8 @@ function instanceTrees(
         tins.i16(it.y);
         tins.i16(it.z);
         tins.u16(it.near);
+        tins.u16(it.mid);
         tins.u16(it.far);
-        tins.u16(0);
       }
     }
   }

@@ -111,7 +111,7 @@ function readTins(path: string): {
   shapeTotal: number;
   instTotal: number;
   shapes: { vertBase: number; vertCount: number; indexCount: number }[];
-  insts: { x: number; y: number; z: number; near: number; far: number }[];
+  insts: { x: number; y: number; z: number; near: number; mid: number; far: number }[];
 } {
   const bytes = readFileSync(path);
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -146,7 +146,8 @@ function readTins(path: string): {
       y: dv.getInt16(r + 2, true),
       z: dv.getInt16(r + 4, true),
       near: dv.getUint16(r + 6, true),
-      far: dv.getUint16(r + 8, true),
+      mid: dv.getUint16(r + 8, true),
+      far: dv.getUint16(r + 10, true),
     });
   }
   return { version, shapeTotal, instTotal, shapes, insts };
@@ -274,9 +275,10 @@ describe.skipIf(reason !== null)("voxel cook", () => {
       expect(pak.instTotal).toBeGreaterThan(pak.shapeTotal * 4);
       // Every placement names a shape that is there, at one level or both.
       for (const it of pak.insts) {
-        expect(it.near === TREE_SHAPE_NONE || it.near < pak.shapeTotal).toBe(true);
-        expect(it.far === TREE_SHAPE_NONE || it.far < pak.shapeTotal).toBe(true);
-        expect(it.near !== TREE_SHAPE_NONE || it.far !== TREE_SHAPE_NONE).toBe(true);
+        for (const id of [it.near, it.mid, it.far]) {
+          expect(id === TREE_SHAPE_NONE || id < pak.shapeTotal).toBe(true);
+        }
+        expect([it.near, it.mid, it.far].some((id) => id !== TREE_SHAPE_NONE)).toBe(true);
       }
     }, 240000);
 
@@ -286,6 +288,7 @@ describe.skipIf(reason !== null)("voxel cook", () => {
         chunks.reduce((n, c) => n + c.meshes[kind].indexCount / 3, 0);
       expect(tris(MESH_KIND.treeHull)).toBe(0);
       expect(tris(MESH_KIND.treeCoarse)).toBe(0);
+      expect(tris(MESH_KIND.treeBox)).toBe(0);
     });
 
     test("it is a big saving, and the in-chunk cook is the one it saves", () => {

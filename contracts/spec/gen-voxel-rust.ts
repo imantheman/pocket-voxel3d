@@ -110,6 +110,7 @@ import {
   VXPK_TREE_SHAPE_SIZE,
   VXPK_VERSION,
   VXPK_VERSION_TREES,
+  TREE_MID_PX,
   TREE_NEAR_PX,
   TREE_SHAPE_NONE,
   WATER_DROP_PX,
@@ -444,8 +445,10 @@ export function generateVoxelRust(): string {
   put(`pub const VXPK_TREE_SHAPE_SIZE: usize = ${VXPK_TREE_SHAPE_SIZE};`);
   put(`pub const VXPK_TREE_INST_SIZE: usize = ${VXPK_TREE_INST_SIZE};`);
   put(`pub const TREE_SHAPE_NONE: u16 = ${hex(TREE_SHAPE_NONE, 4)};`);
-  put("/// How far a tree instance draws its NEAR shape, world px.");
+  put("/// How far a tree instance draws its carved NEAR shape, world px,");
+  put("/// and past which it draws its box.");
   put(`pub const TREE_NEAR_PX: f32 = ${f32(TREE_NEAR_PX)};`);
+  put(`pub const TREE_MID_PX: f32 = ${f32(TREE_MID_PX)};`);
   put(`pub const VXPK_HEADER_SIZE: usize = ${VXPK_HEADER_SIZE};`);
   put(`pub const VXPK_ENTRY_SIZE: usize = ${VXPK_ENTRY_SIZE};`);
   put(`pub const VXPK_ALIGN: usize = ${VXPK_ALIGN};`);

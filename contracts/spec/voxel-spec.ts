@@ -817,9 +817,17 @@ export const VXPK_VERSION = 8;
  * instancing are recooked.
  */
 export const VXPK_VERSION_TREES = 9;
-/** How far a tree instance draws its NEAR shape, world px. Beyond this it
- * draws its far shape; beyond the cull radius it is not drawn at all. */
-export const TREE_NEAR_PX = 240;
+/**
+  * How far a tree instance draws its carved NEAR shape, world px.
+  *
+  * A carved hull is ~2,900 vertices and a coarse carve ~800, against a
+  * console that draws a couple of hundred thousand a frame: detail has to
+  * be spent on what is close enough to see it. Past TREE_MID_PX an instance
+  * draws its box, which is under a hundred vertices and still a tree.
+  */
+export const TREE_NEAR_PX = 96;
+/** Past this an instance draws its box (see TREE_NEAR_PX). */
+export const TREE_MID_PX = 224;
 /** Bytes per TINS instance record: i16 x,y,z | u16 near | u16 far | u16 pad. */
 export const VXPK_TREE_INST_SIZE = 12;
 /** Bytes per TINS shape record: a mesh range (12) padded to 16. */
@@ -908,8 +916,10 @@ export const VXPK_TAG = {
    *        | u32 pad
    *   .. map directory, map_count * 12: u32 map_id | u32 first | u32 count
    *   .. instance records, inst_total * VXPK_TREE_INST_SIZE:
-   *        i16 x | i16 y | i16 z | u16 near_shape | u16 far_shape | u16 pad
-   *      (x, y, z is the shape's origin in map-local world px)
+   *        i16 x | i16 y | i16 z | u16 near | u16 mid | u16 far
+   *      (x, y, z is the shape's origin in map-local world px; near is the
+   *      carved hull, mid the coarse carve, far the plain box, and any of
+   *      them may be TREE_SHAPE_NONE)
    */
   trees: 0x534e4954, // 'TINS'
   /** GB charmap -> UI atlas tile, u16 pairs (for uiText). */
