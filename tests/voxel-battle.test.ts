@@ -11,7 +11,7 @@
 // determinism run.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { WildBattle, type BattleButton, type BattleInput, type BattleSave } from "../voxelmon/game/battle/battle.ts";
@@ -34,6 +34,7 @@ import { encodeGlyphs } from "../voxelmon/game/ui/tiles.ts";
 import type { VoxelHost } from "../voxelmon/game/host.ts";
 import { RecorderHost } from "../voxelmon/game/host.ts";
 import { seededRng, seqRng } from "../voxelmon/game/rng.ts";
+import { MoveAnim, type AnimData } from "../voxelmon/game/battle/moveanim.ts";
 import { EFFECTS } from "../voxelmon/game/battle/effects.ts";
 import { attempt as catchAttempt } from "../voxelmon/game/rules/catching.ts";
 import { compute as damageCompute, GEN1_FAITHFUL } from "../voxelmon/game/rules/damage.ts";
@@ -529,6 +530,120 @@ class CaptureHost implements VoxelHost {
     return out;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Move animations — the compiled subanimation player (battle/moveanim.ts)
+// ---------------------------------------------------------------------------
+
+const animPath = join(genDir, "battle_anims.json");
+const hasAnims = existsSync(animPath);
+if (!hasAnims) console.log("[voxel-battle] battle_anims.json absent — move animation suite skipped");
+const animData: AnimData | null = hasAnims
+  ? (JSON.parse(readFileSync(animPath, "utf8")) as AnimData)
+  : null;
+
+describe("move animations", () => {
+  test.skipIf(!hasAnims)("TACKLE is the lunge: two effects, no sprites", () => {
+    const a = new MoveAnim(animData, "TACKLE", true);
+    expect(a.missing).toEqual([]);
+    expect(a.events.filter((e) => e.effect).map((e) => e.effect)).toEqual([
+      "SE_MOVE_MON_HORIZONTALLY",
+      "SE_RESET_MON_POSITION",
+    ]);
+    // the row also names the sound its MoveSoundTable entry plays
+    expect(a.events.filter((e) => e.sound !== undefined).length).toBe(1);
+    // three frames each (the routines' DelayFrames), and nothing drawn
+    expect(a.frames).toBe(6);
+    expect(a.steps.every((s) => s.sprites.length === 0)).toBe(true);
+  });
+
+  test.skipIf(!hasAnims)("THUNDERBOLT draws tiles and flashes every 8 blocks", () => {
+    const a = new MoveAnim(animData, "THUNDERBOLT", true);
+    expect(a.missing).toEqual([]);
+    expect(a.frames).toBeGreaterThan(20);
+    const drawn = a.steps.filter((s) => s.sprites.length > 0);
+    expect(drawn.length).toBeGreaterThan(4);
+    // ANIM_ID_FX: THUNDERBOLT flashes when the block counter hits a
+    // multiple of 8 (DoSpecialEffectByAnimationId)
+    expect(a.events.some((e) => e.effect === "SE_DARK_SCREEN_FLASH")).toBe(true);
+    // every sprite is an 8x8 tile inside its sheet, in OAM space
+    for (const s of drawn.flatMap((d) => d.sprites)) {
+      expect(s.tile).toBeLessThan(animData!.tilesets[s.ts].tiles);
+      expect(s.x).toBeGreaterThanOrEqual(0);
+      expect(s.x).toBeLessThan(256);
+      expect(s.y).toBeLessThan(256);
+    }
+  });
+
+  test.skipIf(!hasAnims)("the enemy's turn mirrors what the player's does not", () => {
+    // GetSubanimationTransform1/2: on the player's turn every type but
+    // ENEMY plays untransformed, so a mirrored type only bites for the foe.
+    const mine = new MoveAnim(animData, "EMBER", true);
+    const theirs = new MoveAnim(animData, "EMBER", false);
+    expect(mine.frames).toBe(theirs.frames);
+    const first = (a: MoveAnim) => a.steps.find((s) => s.sprites.length > 0)!.sprites[0];
+    const p = first(mine);
+    const e = first(theirs);
+    expect(p.tile).toBe(e.tile);
+    // HFLIP puts x at 168 - x and adds 40 to y (DrawFrameBlock)
+    expect(e.x).toBe((168 - p.x) % 256);
+    expect(e.y).toBe((p.y + 40) % 256);
+    expect(e.xf).toBe(!p.xf);
+  });
+
+  test.skipIf(!hasAnims)("HYPER_BEAM spirals three balls inward, then flashes", () => {
+    const a = new MoveAnim(animData, "HYPER_BEAM", true);
+    expect(a.events.some((e) => e.effect === "SE_SPIRAL_BALLS_INWARD")).toBe(true);
+    // the emitter's own steps: three balls, five frames each
+    const ball = 0x7a - 0x31;
+    const balls = a.steps.filter(
+      (s) => s.sprites.length === 3 && s.sprites.every((q) => q.tile === ball),
+    );
+    expect(balls.length).toBe(19); // 21 spiral coordinates, three at a time
+    expect(balls.every((s) => s.dur === 5)).toBe(true);
+    expect(a.events.some((e) => e.effect === "SE_DARK_SCREEN_FLASH")).toBe(true);
+  });
+
+  test.skipIf(!hasAnims)("GROWL keeps the previous block's notes on screen", () => {
+    // DoGrowlSpecialEffects copies the notes and skips the OAM clean, so
+    // after the first block every frame shows two sets.
+    const a = new MoveAnim(animData, "GROWL", true);
+    const counts = a.steps.filter((s) => s.sprites.length > 0).map((s) => s.sprites.length);
+    expect(counts.length).toBeGreaterThan(1);
+    expect(Math.max(...counts)).toBeGreaterThan(Math.min(...counts));
+  });
+
+  test.skipIf(!hasAnims)("playback is a cursor: sprites and events by frame", () => {
+    const a = new MoveAnim(animData, "THUNDERBOLT", true);
+    expect(a.done(a.frames)).toBe(true);
+    expect(a.done(a.frames - 1)).toBe(false);
+    // every frame of the animation resolves to the step covering it
+    let at = 0;
+    for (const step of a.steps) {
+      expect(a.spritesAt(at)).toBe(step.sprites);
+      at += step.dur;
+    }
+    expect(a.spritesAt(a.frames)).toEqual([]);
+    // events land in the window they belong to, once
+    const all = a.eventsIn(0, a.frames + 1);
+    expect(all.length).toBe(a.events.length);
+  });
+
+  test.skipIf(!hasAnims)("every move in the dataset compiles", () => {
+    let drawn = 0;
+    for (const id of Object.keys(animData!.anims)) {
+      for (const attacker of [true, false]) {
+        const a = new MoveAnim(animData, id, attacker);
+        expect(a.missing, `${id} missing ids`).toEqual([]);
+        // an animation is either drawn, or pure screen effect (TACKLE)
+        expect(a.frames).toBeGreaterThanOrEqual(0);
+        if (a.steps.some((s) => s.sprites.length > 0)) drawn += 1;
+      }
+    }
+    // most of the 202 animations actually draw something
+    expect(drawn).toBeGreaterThan(200);
+  });
+});
 
 describe("status moves and trapping (MoveEffects port)", () => {
   /** A seeded battle: the player's mon knows exactly `moves`, the enemy
