@@ -84,9 +84,9 @@ export class BagState implements GameState {
 
   /** ItemMenu's TOSS branch (StartMenu_Item .tossItem). */
   private toss(id: string, qty: number): void {
-    // TossItem refuses a key item outright -- they are one of a kind and
-    // several of them cannot be replaced.
-    if (this.game.data.items?.[id]?.keyItem) {
+    // TossItem refuses a key item or an HM outright -- they are one of a
+    // kind and several of them cannot be replaced.
+    if (Bag.precious(this.game.data, id)) {
       this.mode = "list";
       this.game.showText(this.line("_TooImportantToTossText", "That's too impor-\ntant to toss!"));
       return;
@@ -114,7 +114,7 @@ export class BagState implements GameState {
     if (this.submenuIndex === 1) {
       // TOSS: a stack asks how many, a single one does not.
       const have = this.game.save.inventory?.[id] ?? 0;
-      if (this.game.data.items?.[id]?.keyItem || have <= 1) {
+      if (Bag.precious(this.game.data, id) || have <= 1) {
         this.toss(id, 1);
       } else {
         this.qty = 1;

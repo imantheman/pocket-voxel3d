@@ -18,6 +18,8 @@ import { fromGenDir as loadAudioBanks } from "../voxelmon/game/audio/banks.ts";
 import { loadRuntimeData, REQUIRED_MODULES, type VoxelmonData } from "../voxelmon/game/data.ts";
 import { WildBattle } from "../voxelmon/game/battle/battle.ts";
 import { newMon } from "../voxelmon/game/battle/mon.ts";
+import * as Bag from "../voxelmon/game/rules/bag.ts";
+import { ShopState } from "../voxelmon/game/ui/shopscreen.ts";
 import { LANCE_WALK_IN } from "../voxelmon/game/world/mapscripts.ts";
 import { TrainerBattle } from "../voxelmon/game/battle/trainer.ts";
 import { seqRng } from "../voxelmon/game/rng.ts";
@@ -6066,5 +6068,42 @@ describe("Oak's POKe BALLs", () => {
     talkToOak(game);
     expect(game.save.inventory.POKE_BALL ?? 0).toBe(0);
     expect(f.EVENT_GOT_POKEBALLS_FROM_OAK).toBeFalsy();
+  });
+});
+
+describe("what the game will not take off you", () => {
+  test.skipIf(!hasGen)("key items and HMs are not sellable, tossable or PC-tossable", () => {
+    const data = romData!;
+    // pokemart.asm IsKeyItem / IsItemHM, the one rule every screen asks.
+    for (const id of ["TOWN_MAP", "POKEDEX", "BICYCLE", "BOULDERBADGE", "S_S_TICKET",
+                      "HM_CUT", "HM_SURF", "HM_FLY", "HM_STRENGTH", "HM_FLASH"]) {
+      expect({ id, precious: Bag.precious(data, id) }).toEqual({ id, precious: true });
+    }
+    // and the ordinary stock still is: the MOON STONE is priced 0 and
+    // perfectly tossable, which is why price cannot be the test.
+    for (const id of ["POTION", "POKE_BALL", "MOON_STONE", "ANTIDOTE", "TM_MEGA_PUNCH"]) {
+      expect({ id, precious: Bag.precious(data, id) }).toEqual({ id, precious: false });
+    }
+    // an id no dataset knows is treated as precious rather than sold for
+    // whatever a missing price rounds to
+    expect(Bag.precious(data, "ITEM_NOT_A_THING")).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("the mart refuses to buy a TOWN MAP", () => {
+    const game = makeMenuGame();
+    game.save.inventory.TOWN_MAP = 1;
+    game.save.inventory.POTION = 2;
+    game.save.money = 0;
+    const shop = new ShopState(game as never, ["POTION"]);
+    (game as any).push?.(shop);
+    // SELL, then the TOWN MAP: the clerk says no and the bag is untouched.
+    const sell = (id: string): boolean => (shop as never as {
+      unsellable(id: string): boolean;
+    }).unsellable(id);
+    expect(sell("TOWN_MAP")).toBe(true);
+    expect(sell("HM_CUT")).toBe(true);
+    expect(sell("POTION")).toBe(false);
+    expect(game.save.inventory.TOWN_MAP).toBe(1);
+    expect(game.save.money).toBe(0);
   });
 });

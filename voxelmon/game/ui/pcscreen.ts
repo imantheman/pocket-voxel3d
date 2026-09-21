@@ -120,7 +120,15 @@ export class PcState implements GameState {
         );
       }
     } else {
-      Pc.tossFromPc(save, id, n);
+      // players_pc.asm's own IsKeyItem check: the PC will not toss one
+      // either, and it says so rather than quietly doing nothing.
+      if (Bag.precious(this.game.data, id)) {
+        this.game.showText(
+          this.line("_TooImportantToTossText", "That's too impor-\ntant to toss!"),
+        );
+      } else {
+        Pc.tossFromPc(save, id, n);
+      }
     }
     // The list just changed under the cursor.
     const len = this.ids().length;
@@ -183,8 +191,9 @@ export class PcState implements GameState {
     if (!p.a) return;
     const id = ids[this.index];
     if (!id) return;
-    // One of a thing needs no counter; a stack gets the 1-99 chooser.
-    if (this.held(id) <= 1) this.commit(id, 1);
+    // One of a thing needs no counter, and neither does a key item or an
+    // HM: DisplayChooseQuantityMenu is skipped for those (players_pc.asm).
+    if (this.held(id) <= 1 || Bag.precious(this.game.data, id)) this.commit(id, 1);
     else { this.qty = 1; this.mode = "quantity"; }
   }
 

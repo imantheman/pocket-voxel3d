@@ -8197,6 +8197,10 @@ function capacity(data) {
   }
   return DEFAULT_CAPACITY;
 }
+function precious(data, id) {
+  const def = data.items?.[id];
+  return !def || id.startsWith("HM_") || def.keyItem === true || def.tossable === false;
+}
 function isBadge(id) {
   return id.includes("BADGE");
 }
@@ -14336,7 +14340,7 @@ class BagState {
     return this.game.data.items?.[id]?.name ?? id;
   }
   toss(id, qty) {
-    if (this.game.data.items?.[id]?.keyItem) {
+    if (precious(this.game.data, id)) {
       this.mode = "list";
       this.game.showText(this.line("_TooImportantToTossText", `That's too impor-
 tant to toss!`));
@@ -14374,7 +14378,7 @@ tant to toss!`));
       return;
     if (this.submenuIndex === 1) {
       const have = this.game.save.inventory?.[id] ?? 0;
-      if (this.game.data.items?.[id]?.keyItem || have <= 1) {
+      if (precious(this.game.data, id) || have <= 1) {
         this.toss(id, 1);
       } else {
         this.qty = 1;
@@ -14532,8 +14536,7 @@ class ShopState {
       this.listTop = this.listIndex - ROWS5 + 1;
   }
   unsellable(id) {
-    const def = this.game.data.items?.[id];
-    return !def || id.startsWith("HM_") || def.tossable === false;
+    return precious(this.game.data, id);
   }
   update() {
     const p = this.game.input.pressed;
@@ -15110,7 +15113,12 @@ any more items.`));
 {RAM:wNameBuffer}.`).replace(/\{RAM:\w+\}/g, this.name(id)));
       }
     } else {
-      tossFromPc(save, id, n);
+      if (precious(this.game.data, id)) {
+        this.game.showText(this.line("_TooImportantToTossText", `That's too impor-
+tant to toss!`));
+      } else {
+        tossFromPc(save, id, n);
+      }
     }
     const len = this.ids().length;
     if (this.index > len)
@@ -15195,7 +15203,7 @@ PC.`), () => this.game.openBox());
     const id = ids[this.index];
     if (!id)
       return;
-    if (this.held(id) <= 1)
+    if (this.held(id) <= 1 || precious(this.game.data, id))
       this.commit(id, 1);
     else {
       this.qty = 1;

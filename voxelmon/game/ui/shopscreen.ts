@@ -113,11 +113,11 @@ export class ShopState implements GameState {
   }
 
   private unsellable(id: string): boolean {
-    const def = this.game.data.items?.[id];
-    // pokemart.asm IsKeyItem / IsItemHM. The TS ItemDef has no keyItem flag, so
-    // key items fall back to the non-tossable proxy where cooked; HMs and
-    // unknown ids (nil def, guards a bogus ITEM_NONE) are always unsellable.
-    return !def || id.startsWith("HM_") || def.tossable === false;
+    // pokemart.asm IsKeyItem / IsItemHM (rules/bag.ts precious). This used
+    // to stand on a `tossable === false` proxy because the item records had
+    // no key-item flag -- and no record sets `tossable` at all, so the
+    // clerk would buy the TOWN MAP, the POKeDEX, every badge.
+    return Bag.precious(this.game.data, id);
   }
 
   update(): void {

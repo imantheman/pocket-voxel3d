@@ -34,6 +34,30 @@ export function capacity(data?: Pick<VoxelmonData, "constants">): number {
  * Bag.lua:25-31 isBadge — exported so item lists that share save.inventory
  * (e.g. the PC deposit menu) can exclude badges the same way the bag does.
  */
+/**
+ * Is this item one the game refuses to part with?
+ *
+ * pokemart.asm IsKeyItem / IsItemHM, and players_pc.asm's own copy: the
+ * KeyItemFlags bit or an HM. Price does not come into it -- MOON STONE is
+ * priced 0 and perfectly tossable, while the TOWN MAP is priced 0 and must
+ * never be sold. An unknown id counts as precious: it has no price to sell
+ * at, and a save that picked up a bogus id should not be able to launder it
+ * into money.
+ *
+ * Every screen that can take an item away asks this: the mart's SELL, the
+ * bag's TOSS and the PC's.
+ */
+export function precious(data: { items?: Record<string, ItemLike> }, id: string): boolean {
+  const def = data.items?.[id];
+  return !def || id.startsWith("HM_") || def.keyItem === true || def.tossable === false;
+}
+
+/** What `precious` needs of an item record. */
+interface ItemLike {
+  keyItem?: boolean;
+  tossable?: boolean;
+}
+
 export function isBadge(id: string): boolean {
   return id.includes("BADGE");
 }
