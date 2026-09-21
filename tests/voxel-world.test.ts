@@ -6021,3 +6021,50 @@ describe("Lance's room", () => {
     expect([x, y]).toEqual([6, 11]);
   });
 });
+
+describe("Oak's POKe BALLs", () => {
+  /** Talk to Oak and answer nothing; returns when the script idles. */
+  function talkToOak(game: VoxelmonGame): void {
+    const ow = game.overworld;
+    if (ow.map.id !== "OAKS_LAB") ow.setMap("OAKS_LAB", 4, 5, "up");
+    ow.showMapText("TEXT_OAKSLAB_OAK1");
+    for (let i = 0; i < 1200; i++) {
+      const top = game.stackKinds().at(-1);
+      if (top !== "textbox" && !(ow as any).runner.isRunning()) return;
+      dismissText(game);
+      game.tick(0);
+    }
+  }
+
+  test.skipIf(!hasGen)("five of them, once, after the Route 22 rival", () => {
+    const game = makeMenuGame();
+    const f = game.save.flags;
+    f.EVENT_GOT_POKEDEX = true;
+    f.EVENT_BATTLED_RIVAL_IN_OAKS_LAB = true;
+    // OaksLabScript_Oak1's own gate: the balls are the reward for the
+    // OPTIONAL Route 22 rival battle, which is why a player who skips it
+    // never sees them (pokered .GiveBalls, same order as bryan's).
+    f.EVENT_BEAT_ROUTE22_RIVAL_1ST_BATTLE = true;
+    delete game.save.inventory.POKE_BALL;
+
+    talkToOak(game);
+    expect(game.save.inventory.POKE_BALL).toBe(5);
+    expect(f.EVENT_GOT_POKEBALLS_FROM_OAK).toBe(true);
+
+    // and not a second handful
+    delete game.save.inventory.POKE_BALL;
+    talkToOak(game);
+    expect(game.save.inventory.POKE_BALL ?? 0).toBe(0);
+  });
+
+  test.skipIf(!hasGen)("not before that battle is won", () => {
+    const game = makeMenuGame();
+    const f = game.save.flags;
+    f.EVENT_GOT_POKEDEX = true;
+    f.EVENT_BATTLED_RIVAL_IN_OAKS_LAB = true;
+    delete game.save.inventory.POKE_BALL;
+    talkToOak(game);
+    expect(game.save.inventory.POKE_BALL ?? 0).toBe(0);
+    expect(f.EVENT_GOT_POKEBALLS_FROM_OAK).toBeFalsy();
+  });
+});

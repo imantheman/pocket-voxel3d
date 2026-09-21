@@ -58,16 +58,22 @@ const ANIM_SCALE_MAX: f32 = 2.5;
 
 /// How to put a Game Boy screen coordinate where the battle actually is.
 ///
-/// Returns (x offset, y offset, px per GB px). With no cards on screen
-/// this is the UI's own letterboxed frame, which is where the animations
-/// used to land unconditionally -- and that was the bug: the mons are
-/// cards in a diorama, several dozen pixels from where the flat game drew
-/// them, so every attack went off beside its target. The two pic boxes are
-/// mapped onto the two cards instead: same midpoint, same separation, so a
-/// beam still leaves one mon and lands on the other whatever the camera is
-/// doing.
-fn anim_frame(cards: &[Option<Rect>; UI_PANELS]) -> (f32, f32, f32) {
-    let home = (UI_ORIGIN_X, 0.0, UI_SCALE);
+/// Returns (x offset, y offset, px per GB px, mirrored). With no cards on
+/// screen this is the UI's own letterboxed frame, which is where the
+/// animations used to land unconditionally -- and that was the bug: the
+/// mons are cards in a diorama, several dozen pixels from where the flat
+/// game drew them, so every attack went off beside its target. The two pic
+/// boxes are mapped onto the two cards instead: same midpoint, same
+/// separation, so a beam still leaves one mon and lands on the other
+/// whatever the camera is doing.
+///
+/// `mirrored` is the other half of that. The animations were authored for
+/// a layout with the enemy on the RIGHT; swing the camera past the arena's
+/// axis and the two mons trade sides on screen, so the GB x axis is
+/// reflected (and each tile with it) to keep an attack leaving the mon
+/// that threw it.
+fn anim_frame(cards: &[Option<Rect>; UI_PANELS]) -> (f32, f32, f32, bool) {
+    let home = (UI_ORIGIN_X, 0.0, UI_SCALE, false);
     let (Some(p), Some(e)) = (cards[0], cards[1]) else { return home };
     let mid = |r: Rect| ((r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5);
     let (px, py) = mid(p);
@@ -91,7 +97,21 @@ fn anim_frame(cards: &[Option<Rect>; UI_PANELS]) -> (f32, f32, f32) {
         screen_mid.0 - gb_mid.0 * scale,
         screen_mid.1 - gb_mid.1 * scale,
         scale,
+        ex < px,
     )
+}
+
+/// The GB x a tile is drawn at, reflected about the two pics' midpoint
+/// when the camera has the mons the other way round. The tile's own width
+/// comes off it: `x` is its LEFT edge, and a mirrored left edge is the
+/// right one.
+fn anim_x(x: i16, mirrored: bool) -> f32 {
+    let gb_mid_x = (GB_ENEMY_PIC.0 + GB_PLAYER_PIC.0) * 0.5;
+    if mirrored {
+        2.0 * gb_mid_x - (x as f32 + TILE_PX as f32)
+    } else {
+        x as f32
+    }
 }
 
 /// Append this frame's move-animation sprites.
@@ -103,18 +123,18 @@ pub fn append_anim(scene: &Scene, cards: &[Option<Rect>; UI_PANELS], items: &mut
     if scene.anim_sprite_n == 0 {
         return;
     }
-    let (ox, oy, scale) = anim_frame(cards);
+    let (ox, oy, scale, mirrored) = anim_frame(cards);
     let tile = TILE_PX as f32 * scale;
     for i in 0..scene.anim_sprite_n as usize {
         let s = scene.anim_sprites[i];
         items.push(Item::AnimQuad {
-            x: ox + s.x as f32 * scale,
+            x: ox + anim_x(s.x, mirrored) * scale,
             y: oy + s.y as f32 * scale,
             w: tile,
             h: tile,
             page: s.page,
             tile: s.tile,
-            flip_x: s.flags & 1 != 0,
+            flip_x: (s.flags & 1 != 0) != mirrored,
             flip_y: s.flags & 2 != 0,
         });
     }
@@ -785,6 +805,34 @@ mod tests {
                 (cx - mx).abs() < 12.0 && (cy - my).abs() < 12.0,
                 "tile at {cx},{cy} but the mon is at {mx},{my}",
             );
+        }
+    }
+
+    #[test]
+    fn a_reversed_camera_reverses_the_animation() {
+        let mut s = Scene::new();
+        s.op(op::ARENA, &[0, 4, 4, 0, 0], None);
+        // The camera swung round: the ENEMY is now the left-hand mon.
+        let player = Rect::of(300.0, 150.0, 380.0, 230.0);
+        let enemy = Rect::of(120.0, 40.0, 200.0, 120.0);
+        let cards = [Some(player), Some(enemy)];
+        for (gb, card) in [(GB_PLAYER_PIC, player), (GB_ENEMY_PIC, enemy)] {
+            s.op(op::ANIM_CLEAR, &[], None);
+            // flags 0: the tile is not flipped in the GB's own layout
+            s.op(op::ANIM_SPRITE, &[3, 0, gb.0 as i32 - 4, gb.1 as i32 - 4, 0], None);
+            let mut items = Vec::new();
+            append_anim(&s, &cards, &mut items);
+            let Item::AnimQuad { x, y, w, h, flip_x, .. } = items[0] else {
+                panic!("no quad")
+            };
+            let (cx, cy) = (x + w * 0.5, y + h * 0.5);
+            let (mx, my) = ((card.x0 + card.x1) * 0.5, (card.y0 + card.y1) * 0.5);
+            assert!(
+                (cx - mx).abs() < 12.0 && (cy - my).abs() < 12.0,
+                "tile at {cx},{cy} but the mon is at {mx},{my}",
+            );
+            // the drawing is mirrored with the layout
+            assert!(flip_x, "a reversed animation has to mirror its tiles");
         }
     }
 

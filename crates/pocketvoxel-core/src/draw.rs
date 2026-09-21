@@ -883,6 +883,19 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
             }
         }
     }
+    // Which way round the two mons read from HERE. The pics are drawn
+    // facing each other on a Game Boy because the layout never moves: the
+    // enemy stands right, the player's back is on the left. Swing the
+    // camera past the arena's axis and that reverses -- and a mon drawn to
+    // its unchanged rule is then facing away from the fight.
+    let enemy_on_right = {
+        let f = cam.focus.sub(cam.eye);
+        // Mat4::look_at's own screen-right: cross(forward, up) with up +Y.
+        let (sx, sz) = (-f.z, f.x);
+        let p = cell_centre(scene.battle.cards[0].x, scene.battle.cards[0].y);
+        let e = cell_centre(scene.battle.cards[1].x, scene.battle.cards[1].y);
+        sx * (e.x - p.x) + sz * (e.z - p.z) >= 0.0
+    };
     if scene.battle.active {
         for (side, card) in scene.battle.cards.iter().enumerate().filter(|(_, c)| c.shown) {
             let Some(page) = page_at(pak, card.pic) else {
@@ -921,11 +934,14 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
                 verts,
                 page: card.pic as u16,
                 uv: [0.0, 0.0, 1.0, 1.0],
-                // side 0 (player, the back sprite — staging.ts's
-                // backPageFor) needs a horizontal flip to face the right
-                // way in the arena; side 1 (enemy, the front sprite) is
-                // already correct as imported.
-                mirror: side == 0,
+                // Side 0 (the player's back sprite) needs a horizontal
+                // flip to face up the arena, side 1 (the enemy's front
+                // pic) is correct as imported -- while the camera has the
+                // enemy on the right, which is where the flat game's
+                // layout always put it. From the other side of the axis
+                // both are mirrored, or each mon faces away from the one
+                // it is fighting.
+                mirror: (side == 0) == enemy_on_right,
                 pull: pull_card,
             });
         }
@@ -1327,6 +1343,37 @@ mod tests {
     /// The rung's grass/flower dials strip the far chunk's DETAIL meshes and
     /// nothing else: the same chunk's terrain still draws, because terrain is
     /// the silhouette and only the chunk cap bounds it.
+
+    /// A mon faces the one it is fighting from either side of the arena.
+    #[test]
+    fn the_mons_turn_round_with_the_camera() {
+        let mut scene = Scene::new();
+        scene.op(op::ARENA, &[0, 6, 6, 0, 1], None);
+        scene.op(op::CARD, &[0, 1, 7, 10, 0, 0, 0], None);
+        scene.op(op::CARD, &[1, 1, 7, 7, 0, 0, 0], None);
+        let blob = crate::pak::AlignedBlob::from_bytes(&crate::pak::tests::tiny_pak_bytes());
+        let pak = crate::pak::read(blob.bytes()).unwrap();
+        let mirrors = |scene: &Scene| -> Vec<bool> {
+            build(scene, &pak)
+                .items
+                .iter()
+                .filter_map(|it| match it {
+                    Item::Card { mirror, .. } => Some(*mirror),
+                    _ => None,
+                })
+                .collect()
+        };
+        let front = mirrors(&scene);
+        assert_eq!(front.len(), 2, "both mons drawn");
+        assert_ne!(front[0], front[1], "they face each other, not the same way");
+        scene.cam_yaw_off = core::f32::consts::PI;
+        let behind = mirrors(&scene);
+        assert_eq!(behind.len(), 2);
+        // From the far side the two have traded places on screen, so each
+        // one's drawing has to turn round with them.
+        assert_ne!(front[0], behind[0], "the player kept facing the old way");
+        assert_ne!(front[1], behind[1], "the enemy kept facing the old way");
+    }
 
     /// Swing the battle camera all the way round a real cooked arena and
     /// check the HUD panels never end up over a sprite.
