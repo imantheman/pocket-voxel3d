@@ -483,17 +483,24 @@ export class Scene {
       if ((npc as { hidden?: boolean }).hidden) continue;
       const def = view.data.sprites?.[npc.def.sprite];
       const frames = def?.frames ?? 6;
+      // A dataset cooked without the sprite table has no record to read,
+      // and every NPC then walked on the spot: the legs held their
+      // standing frame while the mirror kept flipping, so Blue's hair
+      // swapped sides and nothing else moved. Anything that WALKS is a
+      // walk sheet -- a prop that is not never takes a step -- so the
+      // missing record defaults to one.
+      const walker = def?.walker ?? frames > 1;
       const phase = npc.walkPhase();
       // single-frame sprites (item balls) have one fixed pose
       // (SpriteRenderer.lua:183)
       const nf = seenAs(npc.facing);
       const frame =
-        frames <= 1 ? 0 : phase === 1 && def?.walker ? WALK[nf] : STAND[nf];
+        frames <= 1 ? 0 : phase === 1 && walker ? WALK[nf] : STAND[nf];
       const mirror =
         frames > 1 &&
         (nf === "right" ||
           ((nf === "down" || nf === "up") && phase === 1 && npc.stepFlip));
-      let flags = def?.walker ? ENT_FLAG.walker : 0;
+      let flags = walker ? ENT_FLAG.walker : 0;
       if (mirror) flags |= ENT_FLAG.mirror;
       this.emitSlot(
         slot,

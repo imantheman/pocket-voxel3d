@@ -12,6 +12,12 @@
 import { LIGATURE_BASE } from "../game/ui/tiles.ts";
 import type { GenData, MapDef, TilesetDef } from "./data.ts";
 
+/** The two fields the guest reads off a sprite sheet record. */
+interface SpriteLike {
+  frames?: number;
+  walker?: boolean;
+}
+
 export interface AtlasIndex {
   /** sprite sheet name ("red", "oak", ...) -> atlas page. */
   sprites: Record<string, number>;
@@ -191,6 +197,17 @@ export function buildGamedata(gen: GenData, atlas: AtlasIndex, cookedMaps: strin
     cookedMaps,
     maps: gen.maps,
     tilesets,
+    // What a sprite's pose needs: how many frames its sheet has and
+    // whether they are a WALK cycle. Left out of the cooked dataset
+    // entirely until now, so scene.ts read `undefined` for every NPC and
+    // none of them animated. The art itself is in the atlas; this is two
+    // fields per sheet.
+    sprites: Object.fromEntries(
+      Object.entries(gen.sprites ?? {}).map(([id, def]) => [
+        id,
+        { frames: (def as SpriteLike).frames, walker: (def as SpriteLike).walker },
+      ]),
+    ),
     encounters: gen.encounters,
     moves: gen.moves,
     pokemon,

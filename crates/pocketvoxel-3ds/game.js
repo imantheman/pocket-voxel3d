@@ -11001,11 +11001,12 @@ class Scene {
         continue;
       const def = view.data.sprites?.[npc.def.sprite];
       const frames = def?.frames ?? 6;
+      const walker = def?.walker ?? frames > 1;
       const phase = npc.walkPhase();
       const nf = seenAs(npc.facing);
-      const frame = frames <= 1 ? 0 : phase === 1 && def?.walker ? WALK[nf] : STAND[nf];
+      const frame = frames <= 1 ? 0 : phase === 1 && walker ? WALK[nf] : STAND[nf];
       const mirror = frames > 1 && (nf === "right" || (nf === "down" || nf === "up") && phase === 1 && npc.stepFlip);
-      let flags = def?.walker ? ENT_FLAG.walker : 0;
+      let flags = walker ? ENT_FLAG.walker : 0;
       if (mirror)
         flags |= ENT_FLAG.mirror;
       this.emitSlot(slot, this.sheetIndex(view, npc.def.sprite), frame, npc.px * Q4, npc.py * Q4, 0, flags);

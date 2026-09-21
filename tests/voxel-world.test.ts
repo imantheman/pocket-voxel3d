@@ -13,7 +13,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { VOX_BTN, VOX_OP } from "../contracts/spec/voxel-spec.ts";
+import { ENT_FLAG, VOX_BTN, VOX_OP } from "../contracts/spec/voxel-spec.ts";
 import { fromGenDir as loadAudioBanks } from "../voxelmon/game/audio/banks.ts";
 import { loadRuntimeData, REQUIRED_MODULES, type VoxelmonData } from "../voxelmon/game/data.ts";
 import { WildBattle } from "../voxelmon/game/battle/battle.ts";
@@ -6105,5 +6105,65 @@ describe("what the game will not take off you", () => {
     expect(sell("POTION")).toBe(false);
     expect(game.save.inventory.TOWN_MAP).toBe(1);
     expect(game.save.money).toBe(0);
+  });
+});
+
+describe("NPCs on the move", () => {
+  /** Every ent op, so an NPC's pose can be read back frame by frame. */
+  class EntHost extends MenuHost {
+    poses: { slot: number; frame: number; mirror: boolean }[] = [];
+    ent(slot: number, _sheet: number, frame: number, _x: number, _y: number,
+        _lift: number, flags: number): void {
+      this.poses.push({ slot, frame, mirror: (flags & ENT_FLAG.mirror) !== 0 });
+    }
+  }
+
+  /** Walk one NPC a few steps and report the poses it struck. */
+  function walkPoses(data: VoxelmonData): { frames: Set<number>; mirrors: Set<boolean> } {
+    const host = new EntHost();
+    const game = new VoxelmonGame(data, host, 1);
+    game.newGame();
+    game.closeToOverworld();
+    const ow = game.overworld;
+    ow.setMap("PALLET_TOWN", 5, 6, "down");
+    const npc = ow.npcs.find((n: any) => n.def?.movement === "WALK") ?? ow.npcs[0];
+    expect(npc).toBeTruthy();
+    const frames = new Set<number>();
+    const mirrors = new Set<boolean>();
+    // MARCH it: NPC_CHANGE_FACING walks the cycle on the spot (npc.ts
+    // update), which needs no free cell and no wander roll.
+    for (let i = 0; i < 200; i++) {
+      if (!npc.moving) {
+        npc.moving = true;
+        npc.marching = true;
+        npc.progress = 0;
+      }
+      host.poses.length = 0;
+      game.tick(0);
+      for (const p of host.poses) {
+        if (p.slot === 0) continue; // slot 0 is the player
+        frames.add(p.frame);
+        mirrors.add(p.mirror);
+      }
+    }
+    return { frames, mirrors };
+  }
+
+  test.skipIf(!hasGen)("a walk sheet with no dataset record still animates", () => {
+    // A dataset cooked before the sprite table shipped: scene.ts has no
+    // record to read, and every NPC used to hold its standing frame while
+    // the mirror kept flipping -- legs still, hair swapping sides.
+    const bare = { ...(romData as object) } as VoxelmonData & { sprites?: unknown };
+    delete bare.sprites;
+    const { frames } = walkPoses(bare);
+    expect(frames.size).toBeGreaterThan(1);
+  });
+
+  test.skipIf(!hasGen)("the cooked dataset carries what a pose needs", () => {
+    // The fallback above is a fallback; the data is meant to be there.
+    const sprites = (romData as { sprites?: Record<string, { frames?: number; walker?: boolean }> })
+      .sprites;
+    expect(sprites?.SPRITE_BLUE?.walker).toBe(true);
+    expect(sprites?.SPRITE_BLUE?.frames).toBe(6);
   });
 });
