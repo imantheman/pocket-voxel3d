@@ -1105,6 +1105,32 @@ export class Scene {
       }
       return;
     }
+    // WHICH FLOOR? — the lift panel (ui/floorpicker.ts). Same box as FLY's
+    // list, narrower: a floor token is three characters at most.
+    const flp = (view as unknown as { floorPicker?: () => any }).floorPicker?.();
+    if (flp) {
+      const sig = `L${flp.index},${flp.top},${flp.total}`;
+      if (sig !== this.menuSig) {
+        this.menuSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const X = 0, Y = 0, W = 8, H = flp.entries.length * 2;
+        host.uiTile(X, Y, BORDER_TL);
+        host.uiFill(X + 1, Y, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y, BORDER_TR);
+        host.uiFill(X, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + W, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + 1, Y + 1, W - 1, H, SPACE);
+        host.uiTile(X, Y + 1 + H, BORDER_BL);
+        host.uiFill(X + 1, Y + 1 + H, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y + 1 + H, BORDER_BR);
+        flp.entries.forEach((e: string, i: number) => {
+          this.stamp(host, X + 2, Y + 2 + i * 2, String(e).slice(0, W - 2));
+          if (i === flp.index) host.uiTile(X + 1, Y + 2 + i * 2, ARROW_CURSOR);
+        });
+      }
+      return;
+    }
     // FLY's destination list (ui/flypicker.ts). Narrower than the debug map
     // picker: town names are short, and this one is a real menu the player
     // sees rather than a tool.

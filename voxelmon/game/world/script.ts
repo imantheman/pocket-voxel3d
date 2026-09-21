@@ -694,6 +694,19 @@ function* use_flash(ctx: ScriptContext): Generator<void, void> {
 // Commands.lua:852 open_mart — the clerk's mart list (entry.mart) opens the
 // ShopMenu and the runner yields until QUIT resumes it, exactly like
 // start_battle. Stock is resolved from the current map + text const.
+/**
+ * The lift panel (engine/overworld/elevator.asm DisplayElevatorFloorMenu).
+ * Blocks until a floor is chosen or the menu is backed out of, like the
+ * mart's list -- and like it, the screen is the shell's.
+ */
+function* open_elevator(ctx: ScriptContext): Generator<void, void> {
+  const runner = ctx.runner;
+  const w = ctx.world as unknown as { openElevator?: (done: () => void) => void };
+  if (!w.openElevator) return;
+  w.openElevator(() => runner.resume());
+  yield;
+}
+
 function* open_mart(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
   const runner = ctx.runner;
   const w = ctx.world as unknown as {
@@ -1050,6 +1063,7 @@ const VERBS: Record<string, Verb> = {
   static_battle,
   trade,
   open_mart,
+  open_elevator,
   walk_route,
   check_item,
   lab_fossil,

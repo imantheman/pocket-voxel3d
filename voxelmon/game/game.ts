@@ -67,6 +67,12 @@ const SAVE_HOLD = 120;
 const SAVE_DONE_HOLD = 30;
 import { WarpPickerState } from "./ui/warppicker.ts";
 import { FlyPickerState } from "./ui/flypicker.ts";
+import { FloorPickerState } from "./ui/floorpicker.ts";
+import {
+  floorsOf as elevatorFloors,
+  seedExit as seedElevatorExit,
+  setExit as setElevatorExit,
+} from "./world/elevator.ts";
 import { backfillVisited, flyDestinations } from "./world/fly.ts";
 import { isOutside } from "./world/map.ts";
 import { adjacentSnorlax, SNORLAX_LEVEL } from "./world/snorlax.ts";
@@ -1884,6 +1890,38 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       (dest) => this.overworld.startWarpTo(dest.map, dest.x, dest.y, "down", onDone),
       onDone,
     ));
+  }
+
+  /**
+   * The lift panel (world/elevator.ts): pick a floor, and the car's exits
+   * are rewritten to it. The player walks out of the car themselves, which
+   * is how a Gen 1 lift moves anyone.
+   */
+  openElevator(elevatorMapId: string, onDone?: () => void): void {
+    const floors = elevatorFloors(this.data, elevatorMapId);
+    if (floors.length === 0) {
+      onDone?.();
+      return;
+    }
+    this.push(
+      new FloorPickerState(
+        this as never,
+        floors,
+        (floor) => {
+          setElevatorExit(this.overworld.map?.def as never, floor);
+          // ShakeElevator ends on the PA chime; the ride itself is not
+          // animated here, so the chime is what says the car moved.
+          this.audio?.playSfx?.("Safari_Zone_PA");
+          onDone?.();
+        },
+        onDone,
+      ),
+    );
+  }
+
+  floorPicker(): unknown {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "floorpicker" ? top.view() : null;
   }
 
   flyPicker(): unknown {

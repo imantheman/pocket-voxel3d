@@ -20,6 +20,7 @@ import { WildBattle } from "../voxelmon/game/battle/battle.ts";
 import { newMon, type PartyMon } from "../voxelmon/game/battle/mon.ts";
 import { EVO_FLASH_FRAMES, flashPeriod } from "../voxelmon/game/ui/evoscreen.ts";
 import * as Bag from "../voxelmon/game/rules/bag.ts";
+import { floorsOf } from "../voxelmon/game/world/elevator.ts";
 import * as Pc from "../voxelmon/game/world/pcitems.ts";
 import { decodeSave } from "../voxelmon/game/save-read.ts";
 import { ShopState } from "../voxelmon/game/ui/shopscreen.ts";
@@ -6327,5 +6328,68 @@ describe("a save that was written with an empty list", () => {
     expect(() => Pc.deposit(game.save as never, "POTION", 2, game.data)).not.toThrow();
     expect(Pc.pcBag(game.save as never).inventory.POTION).toBe(2);
     expect(game.save.inventory.POTION).toBe(1);
+  });
+});
+
+describe("the lifts", () => {
+  /** Read the panel sign and drive until something settles. */
+  function readPanel(game: VoxelmonGame, map: string, text: string): void {
+    const ow = game.overworld;
+    if (ow.map.id !== map) ow.setMap(map, 3, 2, "up");
+    ow.showMapText(text);
+    for (let i = 0; i < 400; i++) {
+      if (game.stackKinds().at(-1) === "floorpicker") return;
+      if (game.stackKinds().at(-1) !== "textbox" && !(ow as any).runner.isRunning()) return;
+      dismissText(game);
+      game.tick(0);
+    }
+  }
+
+  test.skipIf(!hasGen)("the hideout's floors are its own, in order", () => {
+    const floors = floorsOf(romData!, "ROCKET_HIDEOUT_ELEVATOR");
+    expect(floors.map((f) => f.token)).toEqual(["B1F", "B2F", "B4F"]);
+    // each one's warpIdx is that floor's own door back into the car
+    for (const f of floors) {
+      const warp = (romData!.maps as any)[f.map].warps[f.warpIdx];
+      expect({ map: f.map, dest: warp.destMap }).toEqual({
+        map: f.map,
+        dest: "ROCKET_HIDEOUT_ELEVATOR",
+      });
+    }
+  });
+
+  test.skipIf(!hasGen)("no LIFT KEY, no floor menu", () => {
+    const game = makeMenuGame();
+    delete game.save.inventory.LIFT_KEY;
+    readPanel(game, "ROCKET_HIDEOUT_ELEVATOR", "TEXT_ROCKETHIDEOUTELEVATOR");
+    expect(game.stackKinds()).not.toContain("floorpicker");
+  });
+
+  test.skipIf(!hasGen)("with the key it opens, and the choice rewrites the car's exits", () => {
+    const game = makeMenuGame();
+    game.save.inventory.LIFT_KEY = 1;
+    readPanel(game, "ROCKET_HIDEOUT_ELEVATOR", "TEXT_ROCKETHIDEOUTELEVATOR");
+    expect(game.stackKinds().at(-1)).toBe("floorpicker");
+    const view = (game as any).floorPicker();
+    expect(view.entries).toEqual(["B1F", "B2F", "B4F"]);
+
+    // Down twice to B4F -- Giovanni's floor -- then A.
+    tap(game, VOX_BTN.down);
+    tap(game, VOX_BTN.down);
+    tap(game, VOX_BTN.a);
+    expect(game.stackKinds()).not.toContain("floorpicker");
+    // Every exit of the car now leads to B4F: walking out is the ride.
+    const def = (romData!.maps as any).ROCKET_HIDEOUT_ELEVATOR;
+    expect(def.warps.every((w: any) => w.destMap === "ROCKET_HIDEOUT_B4F")).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("stepping in seeds the way back out", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    // Arrive from B2F; the car's ROM default is B1F.
+    ow.setMap("ROCKET_HIDEOUT_B2F", 5, 5, "up");
+    ow.setMap("ROCKET_HIDEOUT_ELEVATOR", 3, 2, "up");
+    const def = (romData!.maps as any).ROCKET_HIDEOUT_ELEVATOR;
+    expect(def.warps.every((w: any) => w.destMap === "ROCKET_HIDEOUT_B2F")).toBe(true);
   });
 });

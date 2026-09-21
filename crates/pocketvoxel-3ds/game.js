@@ -5896,6 +5896,49 @@ function prizeCounterRows(window) {
   ];
 }
 
+// voxelmon/game/world/elevator.ts
+function floorsOf(data, elevatorMapId) {
+  const maps = data.maps ?? {};
+  const floors = [];
+  for (const [mapId, def] of Object.entries(maps)) {
+    const warps = def?.warps ?? [];
+    for (let i = 0;i < warps.length; i++) {
+      if (warps[i]?.destMap !== elevatorMapId)
+        continue;
+      floors.push({
+        map: mapId,
+        token: mapId.slice(mapId.lastIndexOf("_") + 1) || mapId,
+        warpIdx: i
+      });
+      break;
+    }
+  }
+  floors.sort((a, b) => floorNumber(a.token) - floorNumber(b.token));
+  return floors;
+}
+function floorNumber(token) {
+  const m = /\d+/.exec(token);
+  return m ? Number(m[0]) : 0;
+}
+function setExit(mapDef, floor) {
+  if (!mapDef?.warps || !floor)
+    return;
+  for (const w of mapDef.warps) {
+    w.destMap = floor.map;
+    w.destWarp = floor.warpIdx;
+  }
+}
+function seedExit(mapDef, floors, fromMapId) {
+  let exit = floors[0];
+  if (fromMapId) {
+    const came = floors.find((f) => f.map === fromMapId);
+    if (came)
+      exit = came;
+  }
+  setExit(mapDef, exit);
+  return exit;
+}
+
 // voxelmon/game/world/safari.ts
 var SAFARI_FEE = 500;
 var SAFARI_BALLS = 30;
@@ -7742,15 +7785,33 @@ var MAP_SCRIPTS = {
     }
   },
   ROCKET_HIDEOUT_ELEVATOR: {
+    onEnter: seedElevator,
     talk: {
       TEXT_ROCKETHIDEOUTELEVATOR: [
         ["check_item", "LIFT_KEY"],
-        ["jump_if_true", "end"],
+        ["jump_if_false", "no_key"],
+        ["open_elevator"],
+        ["jump", "end"],
+        ["label", "no_key"],
         ["show_text", "_RocketHideoutElevatorAppearsToNeedKeyText"]
       ]
     }
+  },
+  SILPH_CO_ELEVATOR: {
+    onEnter: seedElevator,
+    talk: { TEXT_SILPHCOELEVATOR_ELEVATOR: [["open_elevator"]] }
+  },
+  CELADON_MART_ELEVATOR: {
+    onEnter: seedElevator,
+    talk: { TEXT_CELADONMARTELEVATOR: [["open_elevator"]] }
   }
 };
+function seedElevator(ow) {
+  const id = ow?.map?.id;
+  if (!id)
+    return;
+  seedExit(ow.map.def, floorsOf(ow.shell?.data ?? ow.data, id), ow.cameFromMapId);
+}
 var TOWER_5F_PURIFIED = new Set(["10,8", "11,8", "10,9", "11,9"]);
 function liftKeyRocketRows(npc, afterText) {
   return [
@@ -8651,6 +8712,14 @@ function* use_flash(ctx) {
   w.showText(scriptText(w, "_FlashLightsAreaText"), () => runner.resume());
   yield;
 }
+function* open_elevator(ctx) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  if (!w.openElevator)
+    return;
+  w.openElevator(() => runner.resume());
+  yield;
+}
 function* open_mart(ctx, ...args) {
   const runner = ctx.runner;
   const w = ctx.world;
@@ -8884,6 +8953,7 @@ var VERBS = {
   static_battle,
   trade,
   open_mart,
+  open_elevator,
   walk_route,
   check_item,
   lab_fossil,
@@ -9190,6 +9260,7 @@ class Overworld {
   bumpCooldown = 0;
   oneShotPending = false;
   pendingSeamMusic = null;
+  cameFromMapId;
   joyLatch;
   npcPool = new Map;
   tilePairs;
@@ -9219,6 +9290,7 @@ class Overworld {
     const def = this.shell.data.maps?.[mapId];
     if (!def)
       throw new Error(`unknown map ${mapId}`);
+    this.cameFromMapId = this.map?.id;
     this.pendingSeamMusic = null;
     const tileset = this.shell.data.tilesets?.[def.tileset];
     if (!tileset)
@@ -10152,6 +10224,13 @@ GAME is over!`;
         this.moveNpcTo(ref, wp[0], wp[1], next);
     };
     next();
+  }
+  openElevator(onDone) {
+    const shell = this.shell;
+    if (shell?.openElevator)
+      shell.openElevator(this.map.id, onDone);
+    else
+      onDone();
   }
   openShop(stock, onQuit) {
     const self = this;
@@ -11609,6 +11688,31 @@ class Scene {
         rows.forEach((e, i) => {
           this.stamp(host, X + 2, Y + 2 + i * 2, e.slice(0, W - 2));
           if (i === mf.index)
+            host.uiTile(X + 1, Y + 2 + i * 2, ARROW_CURSOR);
+        });
+      }
+      return;
+    }
+    const flp = view.floorPicker?.();
+    if (flp) {
+      const sig = `L${flp.index},${flp.top},${flp.total}`;
+      if (sig !== this.menuSig) {
+        this.menuSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        const X = 0, Y = 0, W = 8, H = flp.entries.length * 2;
+        host.uiTile(X, Y, BORDER_TL);
+        host.uiFill(X + 1, Y, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y, BORDER_TR);
+        host.uiFill(X, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + W, Y + 1, 1, H, BORDER_V);
+        host.uiFill(X + 1, Y + 1, W - 1, H, SPACE);
+        host.uiTile(X, Y + 1 + H, BORDER_BL);
+        host.uiFill(X + 1, Y + 1 + H, W - 1, 1, BORDER_H);
+        host.uiTile(X + W, Y + 1 + H, BORDER_BR);
+        flp.entries.forEach((e, i) => {
+          this.stamp(host, X + 2, Y + 2 + i * 2, String(e).slice(0, W - 2));
+          if (i === flp.index)
             host.uiTile(X + 1, Y + 2 + i * 2, ARROW_CURSOR);
         });
       }
@@ -14224,6 +14328,64 @@ class FlyPickerState {
   }
 }
 
+// voxelmon/game/ui/floorpicker.ts
+var ROWS4 = 9;
+
+class FloorPickerState {
+  game;
+  floors;
+  onPick;
+  onCancel;
+  kind = "floorpicker";
+  index = 0;
+  top = 0;
+  constructor(game, floors, onPick, onCancel) {
+    this.game = game;
+    this.floors = floors;
+    this.onPick = onPick;
+    this.onCancel = onCancel;
+  }
+  clampScroll() {
+    if (this.index < this.top)
+      this.top = this.index;
+    if (this.index >= this.top + ROWS4)
+      this.top = this.index - ROWS4 + 1;
+    this.top = Math.max(0, Math.min(this.top, Math.max(0, this.floors.length - ROWS4)));
+  }
+  update() {
+    const p = this.game.input.pressed;
+    const n = this.floors.length;
+    if (n === 0) {
+      this.game.pop();
+      this.onCancel?.();
+      return;
+    }
+    if (p.up)
+      this.index = (this.index + n - 1) % n;
+    else if (p.down)
+      this.index = (this.index + 1) % n;
+    this.clampScroll();
+    if (p.b || p.start) {
+      this.game.pop();
+      this.onCancel?.();
+      return;
+    }
+    if (p.a) {
+      const pick = this.floors[this.index];
+      this.game.pop();
+      this.onPick(pick);
+    }
+  }
+  view() {
+    return {
+      entries: this.floors.map((f) => f.token),
+      index: this.index,
+      top: this.top,
+      total: this.floors.length
+    };
+  }
+}
+
 // voxelmon/game/ui/moveforget.ts
 class MoveForgetState {
   game;
@@ -14427,7 +14589,7 @@ class SummaryState {
 }
 
 // voxelmon/game/ui/bagscreen.ts
-var ROWS4 = 4;
+var ROWS5 = 4;
 var USABLE_ON_PARTY = new Set(["RARE_CANDY"]);
 var USABLE_IN_FIELD = new Set(["BICYCLE", "POKE_FLUTE"]);
 
@@ -14552,8 +14714,8 @@ tant to toss!`));
       this.index = (this.index + 1) % n;
     if (this.index < this.top)
       this.top = this.index;
-    if (this.index >= this.top + ROWS4)
-      this.top = this.index - ROWS4 + 1;
+    if (this.index >= this.top + ROWS5)
+      this.top = this.index - ROWS5 + 1;
     if (p.b || p.a && this.index === n - 1) {
       this.game.pop();
       return;
@@ -14573,7 +14735,7 @@ tant to toss!`));
       entries: items,
       index: this.index,
       top: this.top,
-      rows: ROWS4,
+      rows: ROWS5,
       mode: this.mode,
       submenuIndex: this.submenuIndex,
       qty: this.qty
@@ -14582,7 +14744,7 @@ tant to toss!`));
 }
 
 // voxelmon/game/ui/shopscreen.ts
-var ROWS5 = 4;
+var ROWS6 = 4;
 var MONEY_CAP = 999999;
 var GREET = "Take your time.";
 var NOT_ENOUGH = `You don't have
@@ -14647,8 +14809,8 @@ class ShopState {
   clampWindow() {
     if (this.listIndex < this.listTop)
       this.listTop = this.listIndex;
-    if (this.listIndex >= this.listTop + ROWS5)
-      this.listTop = this.listIndex - ROWS5 + 1;
+    if (this.listIndex >= this.listTop + ROWS6)
+      this.listTop = this.listIndex - ROWS6 + 1;
   }
   unsellable(id) {
     return precious(this.game.data, id);
@@ -14798,7 +14960,7 @@ That will be
       list: this.list,
       listIndex: this.listIndex,
       listTop: this.listTop,
-      rows: ROWS5,
+      rows: ROWS6,
       selName: this.selName,
       qty: this.qty,
       total: this.unitPrice * this.qty,
@@ -14831,7 +14993,7 @@ function active(save) {
 }
 
 // voxelmon/game/ui/boxscreen.ts
-var ROWS6 = 4;
+var ROWS7 = 4;
 var PARTY_MAX2 = 6;
 var MENU = ["WITHDRAW", "DEPOSIT", "RELEASE", "CHANGE BOX", "SEE YA!"];
 
@@ -14962,8 +15124,8 @@ no POKéMON here!`, "menu");
   clampWindow() {
     if (this.listIndex < this.listTop)
       this.listTop = this.listIndex;
-    if (this.listIndex >= this.listTop + ROWS6)
-      this.listTop = this.listIndex - ROWS6 + 1;
+    if (this.listIndex >= this.listTop + ROWS7)
+      this.listTop = this.listIndex - ROWS7 + 1;
   }
   updateList(p) {
     const n = this.list.length + 1;
@@ -15105,7 +15267,7 @@ Bye ${this.monName(mon)}!`, "release-list");
       list: this.list,
       listIndex: this.listIndex,
       listTop: this.listTop,
-      rows: ROWS6,
+      rows: ROWS7,
       submenuLabel: this.kindOfList === "deposit" ? "DEPOSIT" : "WITHDRAW",
       submenuIndex: this.submenuIndex,
       confirmYes: this.confirmYes,
@@ -15157,7 +15319,7 @@ function tossFromPc(save, id, qty) {
 }
 
 // voxelmon/game/ui/pcscreen.ts
-var ROWS7 = 4;
+var ROWS8 = 4;
 var ROOT = ["SOMEONE'S PC", "MY PC", "LOG OFF"];
 var ITEMS = ["WITHDRAW ITEM", "DEPOSIT ITEM", "TOSS ITEM", "LOG OFF"];
 
@@ -15307,8 +15469,8 @@ PC.`), () => this.game.openBox());
       this.index = (this.index + 1) % n;
     if (this.index < this.top)
       this.top = this.index;
-    if (this.index >= this.top + ROWS7)
-      this.top = this.index - ROWS7 + 1;
+    if (this.index >= this.top + ROWS8)
+      this.top = this.index - ROWS8 + 1;
     if (p.b || p.a && this.index === n - 1) {
       this.mode = "items";
       return;
@@ -15354,7 +15516,7 @@ PC.`), () => this.game.openBox());
       entries: ids.map((id) => ({ name: this.name(id), qty: this.held(id) })),
       index: this.index,
       top: this.top,
-      rows: ROWS7,
+      rows: ROWS8,
       labels: this.mode === "root" ? ROOT : this.mode === "items" ? ITEMS : [],
       qty: this.qty,
       action: this.action.toUpperCase()
@@ -15366,7 +15528,7 @@ PC.`), () => this.game.openBox());
 }
 
 // voxelmon/game/ui/pokedexscreen.ts
-var ROWS8 = 7;
+var ROWS9 = 7;
 class PokedexState {
   game;
   onCancel;
@@ -15453,9 +15615,9 @@ class PokedexState {
     else if (p.down)
       this.index = Math.min(n - 1, this.index + 1);
     else if (p.left)
-      this.index = Math.max(0, this.index - ROWS8);
+      this.index = Math.max(0, this.index - ROWS9);
     else if (p.right)
-      this.index = Math.min(n - 1, this.index + ROWS8);
+      this.index = Math.min(n - 1, this.index + ROWS9);
     this.syncScroll();
     if (p.b) {
       this.close();
@@ -15506,8 +15668,8 @@ class PokedexState {
   syncScroll() {
     if (this.index < this.top)
       this.top = this.index;
-    if (this.index >= this.top + ROWS8)
-      this.top = this.index - ROWS8 + 1;
+    if (this.index >= this.top + ROWS9)
+      this.top = this.index - ROWS9 + 1;
   }
   buildEntry() {
     const id = this.entrySpecies;
@@ -15547,7 +15709,7 @@ class PokedexState {
   view() {
     return {
       mode: this.mode,
-      rows: ROWS8,
+      rows: ROWS9,
       top: this.top,
       index: this.index,
       entries: this.entries,
@@ -17030,6 +17192,22 @@ here.`, onDone);
       return;
     }
     this.push(new FlyPickerState(this, dests, (dest) => this.overworld.startWarpTo(dest.map, dest.x, dest.y, "down", onDone), onDone));
+  }
+  openElevator(elevatorMapId, onDone) {
+    const floors = floorsOf(this.data, elevatorMapId);
+    if (floors.length === 0) {
+      onDone?.();
+      return;
+    }
+    this.push(new FloorPickerState(this, floors, (floor) => {
+      setExit(this.overworld.map?.def, floor);
+      this.audio?.playSfx?.("Safari_Zone_PA");
+      onDone?.();
+    }, onDone));
+  }
+  floorPicker() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "floorpicker" ? top.view() : null;
   }
   flyPicker() {
     const top = this.stack[this.stack.length - 1];

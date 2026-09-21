@@ -337,6 +337,8 @@ export class Overworld implements ScriptWorld {
   private oneShotPending = false;
   /** OverworldController.lua:1455 — the map whose theme the seam step owes. */
   pendingSeamMusic: string | null = null;
+  /** The map the player was on before this one (setMap). */
+  cameFromMapId: string | undefined;
   private joyLatch?: { a?: boolean };
   private npcPool = new Map<string, NPC>();
   readonly tilePairs: TilePairs;
@@ -393,6 +395,10 @@ export class Overworld implements ScriptWorld {
   ): void {
     const def = this.shell.data.maps?.[mapId];
     if (!def) throw new Error(`unknown map ${mapId}`);
+    // Where this arrival came FROM: an elevator car seeds its walk-out
+    // exit with it (mapscripts.ts seedElevator), so backing out of the
+    // panel puts you back on the floor you stepped in from.
+    this.cameFromMapId = this.map?.id;
     // crossConnection re-arms this right after; clearing here is what keeps a
     // warp or a reload from leaving a stale deferred PlayMapMusic pending
     // (OverworldController.lua:437-439).
@@ -1810,6 +1816,15 @@ export class Overworld implements ScriptWorld {
   }
 
   /** open_mart -> ShopMenu: delegate to the game shell like startTrainerBattle. */
+  /** The lift panel; the shell owns the menu (game.ts openElevator). */
+  openElevator(onDone: () => void): void {
+    const shell = this.shell as unknown as {
+      openElevator?: (mapId: string, done: () => void) => void;
+    };
+    if (shell?.openElevator) shell.openElevator(this.map.id, onDone);
+    else onDone();
+  }
+
   openShop(stock: string[], onQuit: () => void): void {
     const self = this as any;
     const shell = self.shell ?? self.game ?? self.host ?? null;

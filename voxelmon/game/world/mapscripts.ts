@@ -20,6 +20,7 @@
 import type { ScriptRow } from "./script.ts";
 import type { Dir } from "./collision.ts";
 import { coinClerkRows, coinGiftRows, prizeCounterRows } from "./gamecorner.ts";
+import { floorsOf, seedExit } from "./elevator.ts";
 import { SAFARI_JOIN_CELLS, safariJoinRows, safariLeavingRows } from "./safari.ts";
 import { SAFFRON_GATES, saffronGateScript } from "./saffrongate.ts";
 
@@ -2516,28 +2517,49 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
 
   // scripts/RocketHideoutElevator.asm RocketHideoutElevatorText — story3.lua
   // M.ROCKET_HIDEOUT_ELEVATOR's keyGate. Without the LIFT KEY the panel only
-  // prints the need-a-key line and opens no floor menu.
+  // prints the need-a-key line and opens no floor menu; with it, the floor
+  // list (world/elevator.ts, ui/floorpicker.ts).
   //
-  // DEFERRED: with the key, upstream opens DisplayElevatorFloorMenu (a floor
-  // list built from the maps warping into the car, then ShakeElevator). There
-  // is no elevator-menu verb in this port yet, so the panel currently says
-  // nothing once the key is in the bag and the car's own stair warps are how
-  // you move. The hideout is fully traversable by stairs, so this gates
-  // nothing but the shortcut.
   // The panel is a SIGN, not an object (data/maps/objects/RocketHideout
   // Elevator.asm bg_event), which is why the key is the bare map constant —
   // signs route through showMapText and so reach talkScript the same way an
   // object's text does.
   ROCKET_HIDEOUT_ELEVATOR: {
+    onEnter: seedElevator,
     talk: {
       TEXT_ROCKETHIDEOUTELEVATOR: [
         ["check_item", "LIFT_KEY"],
-        ["jump_if_true", "end"],
+        ["jump_if_false", "no_key"],
+        ["open_elevator"],
+        ["jump", "end"],
+        ["label", "no_key"],
         ["show_text", "_RocketHideoutElevatorAppearsToNeedKeyText"],
       ],
     },
   },
+
+  // The other two cars: the same panel with nothing to unlock
+  // (story3.lua M.SILPH_CO_ELEVATOR / M.CELADON_MART_ELEVATOR).
+  SILPH_CO_ELEVATOR: {
+    onEnter: seedElevator,
+    talk: { TEXT_SILPHCOELEVATOR_ELEVATOR: [["open_elevator"]] as ScriptRow[] },
+  },
+  CELADON_MART_ELEVATOR: {
+    onEnter: seedElevator,
+    talk: { TEXT_CELADONMARTELEVATOR: [["open_elevator"]] as ScriptRow[] },
+  },
 };
+
+/**
+ * A car remembers the floor you stepped in from, so walking back out lands
+ * there rather than on the ROM's static default (the Rocket Hideout's is
+ * B1F, however you got in). Choosing a floor rewrites it again.
+ */
+function seedElevator(ow: any): void {
+  const id = ow?.map?.id;
+  if (!id) return;
+  seedExit(ow.map.def, floorsOf(ow.shell?.data ?? ow.data, id), ow.cameFromMapId);
+}
 
 /** The 2x2 purified pad on POKEMON_TOWER_5F (story3.lua TOWER_5F_PURIFIED). */
 const TOWER_5F_PURIFIED = new Set(["10,8", "11,8", "10,9", "11,9"]);
