@@ -1032,3 +1032,67 @@ describe("the battle camera's opening angle", () => {
     expect(q8).toBeLessThan(256);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The gear's grids: the cursor goes the way the d-pad is pushed
+// ---------------------------------------------------------------------------
+
+describe("the move cursor", () => {
+  /** In the move list, with `n` moves, cursor on slot 1. */
+  function atMoves(n: number): { b: WildBattle; input: FakeInput } {
+    const mon = newMon(data!, "SQUIRTLE", 30);
+    // Four is what a full moveset is; trim to the count under test.
+    while (mon.moves.length > n) mon.moves.pop();
+    const { b, input } = makeBattle({ rolls: [0, 0, 0, 0, 0], playerMon: mon });
+    expect(b.phase).toBe("menu");
+    tick(b, input, ["a"]); // FIGHT
+    expect(b.phase).toBe("moveSelect");
+    expect(b.moveIndex).toBe(1);
+    return { b, input };
+  }
+
+  test.skipIf(!hasGen)("down goes DOWN a row, not along the list", () => {
+    const { b, input } = atMoves(4);
+    // The gear draws them two to a row: 1 2 / 3 4.
+    tick(b, input, ["down"]);
+    expect(b.moveIndex).toBe(3);
+    tick(b, input, ["right"]);
+    expect(b.moveIndex).toBe(4);
+    tick(b, input, ["up"]);
+    expect(b.moveIndex).toBe(2);
+    tick(b, input, ["left"]);
+    expect(b.moveIndex).toBe(1);
+  });
+
+  test.skipIf(!hasGen)("it stops at the edges instead of wrapping", () => {
+    const { b, input } = atMoves(4);
+    tick(b, input, ["up"]);
+    expect(b.moveIndex).toBe(1);
+    tick(b, input, ["left"]);
+    expect(b.moveIndex).toBe(1);
+  });
+
+  test.skipIf(!hasGen)("a press into an empty cell holds", () => {
+    // Two moves: one row, and nothing under them to move to.
+    const { b, input } = atMoves(2);
+    tick(b, input, ["down"]);
+    expect(b.moveIndex).toBe(1);
+    tick(b, input, ["right"]);
+    expect(b.moveIndex).toBe(2);
+    tick(b, input, ["down"]);
+    expect(b.moveIndex).toBe(2);
+  });
+
+  test.skipIf(!hasGen)("three moves: the lone one on the second row", () => {
+    const { b, input } = atMoves(3);
+    tick(b, input, ["right"]);
+    expect(b.moveIndex).toBe(2);
+    // Under slot 2 is the empty fourth cell, so it holds...
+    tick(b, input, ["down"]);
+    expect(b.moveIndex).toBe(2);
+    // ... while under slot 1 there is a third move.
+    tick(b, input, ["left"]);
+    tick(b, input, ["down"]);
+    expect(b.moveIndex).toBe(3);
+  });
+});

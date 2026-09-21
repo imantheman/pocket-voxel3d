@@ -89,6 +89,45 @@ function listStep(input: BattleInput): number {
   return 0;
 }
 
+/** Was any direction pressed this frame? */
+function pressedDir(input: BattleInput): boolean {
+  return (
+    input.wasPressed("left") ||
+    input.wasPressed("right") ||
+    input.wasPressed("up") ||
+    input.wasPressed("down")
+  );
+}
+
+/**
+ * Move a cursor around a GRID: `index` is 0-based, `cols` wide, `count`
+ * entries, and the answer is where the press leaves it.
+ *
+ * The flat game's move list and party roster are single columns, so every
+ * direction stepped the index by one and `listStep` was the whole rule.
+ * The Kanto Gear draws both TWO TO A ROW (ui/kantogear.ts drawMoveSelect,
+ * drawPartyList), and against that layout a press of DOWN moved the cursor
+ * sideways. What a direction does is now what it looks like it does.
+ *
+ * A press into a cell past the end holds: the gear draws nothing there.
+ */
+function gridStep(input: BattleInput, index: number, cols: number, count: number): number {
+  if (count <= 0) return index;
+  const rows = Math.ceil(count / cols);
+  let col = index % cols;
+  let row = Math.floor(index / cols);
+  if (input.wasPressed("left")) col = Math.max(0, col - 1);
+  else if (input.wasPressed("right")) col = Math.min(cols - 1, col + 1);
+  else if (input.wasPressed("up")) row = Math.max(0, row - 1);
+  else if (input.wasPressed("down")) row = Math.min(rows - 1, row + 1);
+  else return index;
+  const next = row * cols + col;
+  return next < count ? next : index;
+}
+
+/** How wide the gear lays the move grid and the party roster out. */
+export const GEAR_GRID_COLS = 2;
+
 /** The save slice the battle reads and mutates. */
 export interface BattleSave {
   party: PartyMon[];
@@ -1030,12 +1069,12 @@ export class WildBattle implements EffectBattle {
 
     if (this.phase === "moveSelect") {
       const moves = this.player.curMoves;
-      const step = listStep(input);
-      if (step) {
+      if (pressedDir(input)) {
+        // The moves are drawn two to a row, so the cursor moves the way
+        // the d-pad is pushed rather than stepping down a list that is
+        // not there (gridStep).
         this.moveIndex =
-          step < 0
-            ? this.moveIndex > 1 ? this.moveIndex - 1 : moves.length
-            : this.moveIndex < moves.length ? this.moveIndex + 1 : 1;
+          gridStep(input, this.moveIndex - 1, GEAR_GRID_COLS, moves.length) + 1;
       } else if (input.wasPressed("select")) {
         // SELECT swap (:1940-1946)
         if (this.moveSwapIndex !== null) {
@@ -2032,9 +2071,9 @@ export class WildBattle implements EffectBattle {
 
   private updateParty(input: BattleInput): void {
     const party = this.save.party;
-    const step = listStep(input);
-    if (step) {
-      this.partyIndex = Math.max(0, Math.min(party.length - 1, this.partyIndex + step));
+    if (pressedDir(input)) {
+      // Two mons to a row on the gear, same as the moves.
+      this.partyIndex = gridStep(input, this.partyIndex, GEAR_GRID_COLS, party.length);
     } else if (input.wasPressed("b")) {
       // ChooseNextMon loops until a healthy pick (:1856-1865): B only
       // backs out of a VOLUNTARY open

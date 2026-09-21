@@ -2806,6 +2806,29 @@ function listStep(input) {
     return 1;
   return 0;
 }
+function pressedDir(input) {
+  return input.wasPressed("left") || input.wasPressed("right") || input.wasPressed("up") || input.wasPressed("down");
+}
+function gridStep(input, index, cols, count) {
+  if (count <= 0)
+    return index;
+  const rows = Math.ceil(count / cols);
+  let col = index % cols;
+  let row = Math.floor(index / cols);
+  if (input.wasPressed("left"))
+    col = Math.max(0, col - 1);
+  else if (input.wasPressed("right"))
+    col = Math.min(cols - 1, col + 1);
+  else if (input.wasPressed("up"))
+    row = Math.max(0, row - 1);
+  else if (input.wasPressed("down"))
+    row = Math.min(rows - 1, row + 1);
+  else
+    return index;
+  const next = row * cols + col;
+  return next < count ? next : index;
+}
+var GEAR_GRID_COLS = 2;
 var DEMO_MENU_HOLD = 130;
 var CHARGE_TEXT = {
   FLY: `%s
@@ -3451,9 +3474,8 @@ moves left!`);
     }
     if (this.phase === "moveSelect") {
       const moves = this.player.curMoves;
-      const step = listStep(input);
-      if (step) {
-        this.moveIndex = step < 0 ? this.moveIndex > 1 ? this.moveIndex - 1 : moves.length : this.moveIndex < moves.length ? this.moveIndex + 1 : 1;
+      if (pressedDir(input)) {
+        this.moveIndex = gridStep(input, this.moveIndex - 1, GEAR_GRID_COLS, moves.length) + 1;
       } else if (input.wasPressed("select")) {
         if (this.moveSwapIndex !== null) {
           this.swapMoves(this.moveSwapIndex, this.moveIndex);
@@ -4293,9 +4315,8 @@ someone's PC!`);
   }
   updateParty(input) {
     const party = this.save.party;
-    const step = listStep(input);
-    if (step) {
-      this.partyIndex = Math.max(0, Math.min(party.length - 1, this.partyIndex + step));
+    if (pressedDir(input)) {
+      this.partyIndex = gridStep(input, this.partyIndex, GEAR_GRID_COLS, party.length);
     } else if (input.wasPressed("b")) {
       if (!this.partyForced)
         this.phase = "menu";
