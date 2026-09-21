@@ -206,6 +206,29 @@ export class RecorderHost implements VoxelHost {
   uiFill(x: number, y: number, w: number, h: number, tile: number): void {
     this.op(VOX_OP.uiFill, x, y, w, h, tile);
   }
+  /**
+   * The pic layer and the save slot: recorded like everything else so a
+   * trace is the whole frame, and present at ALL, which they were not.
+   * A RecorderHost that cannot answer `pic` threw the moment a screen with
+   * a portrait opened -- the trainer card, the hall of fame, and now the
+   * evolution movie -- which is why several tests died in the scene rather
+   * than failing an assertion.
+   */
+  pic(slot: number, page: number, x: number, y: number, w: number, h: number): void {
+    this.op(VOX_OP.pic, slot, page, x, y, w, h);
+  }
+  picHide(slot: number): void {
+    this.op(VOX_OP.picHide, slot);
+  }
+  /** The save the last write committed; `saveData` reads it back. */
+  private savedText: string | undefined;
+  saveWrite(text: string): void {
+    this.savedText = text;
+  }
+  saveData(): string | undefined {
+    return this.savedText;
+  }
+
   uiText(x: number, y: number, str: string): void {
     // the string-arg op form: `s <code> <i32> <i32> <json-string>`
     this.pending.push(`s ${VOX_OP.uiText} ${x} ${y} ${JSON.stringify(str)}`);

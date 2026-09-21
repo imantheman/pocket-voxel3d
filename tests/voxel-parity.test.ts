@@ -305,11 +305,13 @@ describe.skipIf(!hasGen)("evolution after a battle", () => {
     const data = romData!;
     const game = new VoxelmonGame(data, new RecorderHost(), 1);
     game.newGame();
-    const mon = game.save.party[0]!;
-    mon.level = 16;
-    mon.species = "SQUIRTLE";
+    // A new game has no party yet -- the starter comes from Oak's lab --
+    // so put the mon in hand rather than reading an empty slot.
+    const mon = newMon(data, "SQUIRTLE", 16);
+    game.save.party = [mon];
     game.runEvolutions(new Set([mon]));
-    // the two pages queue as one box; drive it closed
+    // The movie runs its flash (ui/evoscreen.ts EVO_FLASH_FRAMES) and then
+    // the congratulations page; A closes that.
     for (let i = 0; i < 400 && mon.species === "SQUIRTLE"; i++) {
       game.tick(i % 30 === 29 ? VOX_BTN.a : 0);
     }

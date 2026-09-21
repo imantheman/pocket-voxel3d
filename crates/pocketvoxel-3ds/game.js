@@ -10785,6 +10785,7 @@ class Scene {
   dexSig = null;
   hofSig = null;
   creditsSig = null;
+  evoSig = null;
   summarySig = null;
   uiRows = [];
   uiPage = -1;
@@ -11430,7 +11431,19 @@ class Scene {
       host.uiClear();
       this.uiOwner = null;
       this.menuSig = this.titleSig = this.namingSig = null;
-      this.hofSig = this.creditsSig = null;
+      this.hofSig = this.creditsSig = this.evoSig = null;
+    }
+    const evo = view.evolutionScreen?.();
+    if (evo) {
+      const sig = `E${evo.lines.join("|")}`;
+      if (sig !== this.evoSig) {
+        this.evoSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        host.uiFill(0, 0, UI_COLS, UI_ROWS, SPACE);
+        evo.lines.forEach((ln, i) => this.stamp(host, 1, 13 + i, ln));
+      }
+      return;
     }
     const hof = view.hallOfFameScreen?.();
     if (hof) {
@@ -12793,6 +12806,83 @@ class CreditsState {
       lines: s?.lines ?? [],
       picPage: s?.mon ? picPageFor(this.game.data, s.mon) : -1,
       theEnd: this.atEnd
+    };
+  }
+}
+
+// voxelmon/game/ui/evoscreen.ts
+var EVO_FLASH_FRAMES = 220;
+function flashPeriod(t) {
+  return Math.max(4, 28 - Math.floor(t / 40) * 6);
+}
+
+class EvolutionState {
+  game;
+  mon;
+  newSpecies;
+  via;
+  evolve;
+  onDone;
+  kind = "evolution";
+  t = 0;
+  done = false;
+  canceled = false;
+  cancelable;
+  oldName;
+  oldPage;
+  newPage;
+  constructor(game, mon, newSpecies, via, evolve, onDone) {
+    this.game = game;
+    this.mon = mon;
+    this.newSpecies = newSpecies;
+    this.via = via;
+    this.evolve = evolve;
+    this.onDone = onDone;
+    this.cancelable = via === "LEVEL";
+    this.oldName = mon.nickname ?? game.data.pokemon[mon.species]?.name ?? mon.species;
+    this.oldPage = picPageFor(game.data, mon.species);
+    this.newPage = picPageFor(game.data, newSpecies);
+  }
+  update() {
+    this.t += 1;
+    if (this.done)
+      return;
+    if (this.cancelable && this.game.input.isDown("b")) {
+      this.done = true;
+      this.canceled = true;
+      const line = this.text("_StoppedEvolvingText", `Huh? ${this.oldName}
+stopped evolving!`);
+      this.game.showText(line, () => this.finish());
+      return;
+    }
+    if (this.t < EVO_FLASH_FRAMES)
+      return;
+    this.done = true;
+    this.evolve(this.mon, this.newSpecies);
+    this.game.audio?.playCry?.(this.newSpecies);
+    const newName = this.game.data.pokemon[this.newSpecies]?.name ?? this.newSpecies;
+    this.game.showText(`Congratulations!
+Your ${this.oldName}
+evolved into
+${newName}!`, () => this.finish());
+  }
+  finish() {
+    this.game.pop();
+    this.onDone();
+  }
+  text(key, fallback) {
+    const table = this.game.data.text;
+    const line = table?.[key];
+    return typeof line === "string" && line.length > 0 ? line : fallback;
+  }
+  view() {
+    if (this.done) {
+      return { picPage: this.canceled ? this.oldPage : this.newPage, lines: [] };
+    }
+    const showNew = Math.floor(this.t / flashPeriod(this.t)) % 2 === 1;
+    return {
+      picPage: showNew ? this.newPage : this.oldPage,
+      lines: ["What?", `${this.oldName} is`, "evolving!"]
     };
   }
 }
@@ -16049,20 +16139,13 @@ class VoxelmonGame {
       const row = pending[i];
       if (!row)
         return;
-      const { mon, to } = row;
-      const oldName = mon.nickname ?? this.data.pokemon[mon.species].name;
-      const newName = this.data.pokemon[to].name;
-      apply2(this.data, mon, to);
-      this.showText(`What?
-${oldName} is
-evolving!\fCongratulations!
-Your ${oldName}
-evolved into
-${newName}!`, () => {
-        this.learnMovesAtLevel(mon, () => step(i + 1));
-      });
+      this.push(new EvolutionState(this, row.mon, row.to, "LEVEL", (mon, to) => apply2(this.data, mon, to, this.save.pokedex), () => this.learnMovesAtLevel(row.mon, () => step(i + 1))));
     };
     step(0);
+  }
+  evolutionScreen() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "evolution" ? top.view?.() ?? null : null;
   }
   learnMovesAtLevel(mon, onDone) {
     const def = this.data.pokemon[mon.species];
@@ -16265,6 +16348,12 @@ ${mname}!`);
         return [];
       const r = CARD_PIC_RECT;
       return [{ page: v.picPage, x: r.x, y: r.y, w: r.w, h: r.h }];
+    }
+    if (top?.kind === "evolution") {
+      const v = top.view();
+      if (!v || v.picPage < 0)
+        return [];
+      return [{ page: v.picPage, x: 187, y: 15, w: 106, h: 106 }];
     }
     if (top?.kind === "halloffame") {
       const v = top.view();

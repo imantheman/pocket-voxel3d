@@ -182,6 +182,8 @@ export class Scene {
   private dexSig: string | null = null;
   private hofSig: string | null = null;
   private creditsSig: string | null = null;
+  /** The evolution movie's last drawn lines (ui/evoscreen.ts). */
+  private evoSig: string | null = null;
   private summarySig: string | null = null;
   private uiRows: UiRowCache[] = [];
   private uiPage = -1;
@@ -935,7 +937,23 @@ export class Scene {
       host.uiClear();
       this.uiOwner = null;
       this.menuSig = this.titleSig = this.namingSig = null;
-    this.hofSig = this.creditsSig = null;
+    this.hofSig = this.creditsSig = this.evoSig = null;
+    }
+    // The evolution movie (ui/evoscreen.ts): the form on the pic layer,
+    // "What? X is evolving!" stamped under it while the two trade places.
+    // The congratulations page is an ordinary text box over the top.
+    const evo = (view as unknown as { evolutionScreen?: () => any }).evolutionScreen?.();
+    if (evo) {
+      const sig = `E${evo.lines.join("|")}`;
+      if (sig !== this.evoSig) {
+        this.evoSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        host.uiFill(0, 0, UI_COLS, UI_ROWS, SPACE);
+        // GB rows 104/114/124 px, which is where the original puts them.
+        evo.lines.forEach((ln: string, i: number) => this.stamp(host, 1, 13 + i, ln));
+      }
+      return;
     }
     // The HALL OF FAME roll (ui/hofscreen.ts): one inductee at a time, the
     // front pic on the pic layer with its dex number, name and level stamped

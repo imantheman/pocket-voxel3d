@@ -47,6 +47,7 @@ import { StartMenuState } from "./ui/startmenu.ts";
 import { DevMenuState } from "./ui/devmenu.ts";
 import { CARD_PIC_RECT, TrainerCardState } from "./ui/trainercard.ts";
 import { CreditsState, HallOfFameState } from "./ui/hofscreen.ts";
+import { EvolutionState, type EvolutionView } from "./ui/evoscreen.ts";
 import {
   applyPostGameHome, POST_GAME_HOME, recordHallOfFame,
 } from "./world/halloffame.ts";
@@ -736,18 +737,31 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     const step = (i: number): void => {
       const row = pending[i];
       if (!row) return;
-      const { mon, to } = row;
-      const oldName = mon.nickname ?? this.data.pokemon[mon.species]!.name;
-      const newName = this.data.pokemon[to]!.name;
-      applyEvolution(this.data, mon, to);
-      this.showText(
-        `What?\n${oldName} is\nevolving!\fCongratulations!\nYour ${oldName}\nevolved into\n${newName}!`,
-        () => {
-          this.learnMovesAtLevel(mon, () => step(i + 1));
-        },
+      // The movie, not the two text pages this used to be: the two forms
+      // trade places faster and faster over "What? X is evolving!", B calls
+      // it off, and the congratulations page and the evolved species' learn
+      // check follow it (ui/evoscreen.ts).
+      this.push(
+        new EvolutionState(
+          this as never,
+          row.mon,
+          row.to,
+          "LEVEL",
+          (mon, to) =>
+            applyEvolution(this.data, mon, to, (this.save as { pokedex?: never }).pokedex),
+          () => this.learnMovesAtLevel(row.mon, () => step(i + 1)),
+        ),
       );
     };
     step(0);
+  }
+
+  /** The evolution movie's view, for the scene (ui/evoscreen.ts). */
+  evolutionScreen(): EvolutionView | null {
+    const top = this.stack[this.stack.length - 1] as GameState & {
+      view?: () => EvolutionView;
+    };
+    return top?.kind === "evolution" ? (top.view?.() ?? null) : null;
   }
 
   /**
@@ -993,6 +1007,15 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       if (v.picPage < 0) return [];
       const r = CARD_PIC_RECT;
       return [{ page: v.picPage, x: r.x, y: r.y, w: r.w, h: r.h }];
+    }
+    if (top?.kind === "evolution") {
+      // EvolutionState.lua centres the form on the GB screen: x = (160 - w)
+      // / 2, y = max(8, 64 - h), for a 56x56 pic. Scaled into the UI frame
+      // that is (187, 15) at 106 px, which is where the battle and the
+      // hall of fame put a mon too.
+      const v = top.view() as { picPage: number };
+      if (!v || v.picPage < 0) return [];
+      return [{ page: v.picPage, x: 187, y: 15, w: 106, h: 106 }];
     }
     if (top?.kind === "halloffame") {
       // The inductee, centred the way HallOfFameDisplayMonInfo places it.

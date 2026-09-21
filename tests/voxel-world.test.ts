@@ -17,7 +17,8 @@ import { ENT_FLAG, VOX_BTN, VOX_OP } from "../contracts/spec/voxel-spec.ts";
 import { fromGenDir as loadAudioBanks } from "../voxelmon/game/audio/banks.ts";
 import { loadRuntimeData, REQUIRED_MODULES, type VoxelmonData } from "../voxelmon/game/data.ts";
 import { WildBattle } from "../voxelmon/game/battle/battle.ts";
-import { newMon } from "../voxelmon/game/battle/mon.ts";
+import { newMon, type PartyMon } from "../voxelmon/game/battle/mon.ts";
+import { EVO_FLASH_FRAMES, flashPeriod } from "../voxelmon/game/ui/evoscreen.ts";
 import * as Bag from "../voxelmon/game/rules/bag.ts";
 import { ShopState } from "../voxelmon/game/ui/shopscreen.ts";
 import { LANCE_WALK_IN } from "../voxelmon/game/world/mapscripts.ts";
@@ -2199,10 +2200,17 @@ describe("the town map", () => {
    * town map pages existed must not draw one), so a test needs it present.
    */
   function withAtlas(game: VoxelmonGame): VoxelmonGame {
-    (game.data as { atlas?: unknown }).atlas = {
-      ...(game.data as { atlas?: object }).atlas,
-      townMapPage: 426,
-      townMapCursorPage: 427,
+    // On a COPY: `game.data` is the one dataset every test in this file
+    // shares, and replacing its atlas outright left every later test
+    // without picFront -- which is a mystery failure two thousand lines
+    // away rather than a wrong answer here.
+    (game as { data: unknown }).data = {
+      ...(game.data as object),
+      atlas: {
+        ...(game.data as { atlas?: object }).atlas,
+        townMapPage: 426,
+        townMapCursorPage: 427,
+      },
     };
     return game;
   }
@@ -2242,7 +2250,7 @@ describe("the town map", () => {
   test.skipIf(!hasGen)("a pak with no town map pages offers no MAP tab", () => {
     const game = makeMenuGame();
     game.save.inventory.TOWN_MAP = 1;
-    (game.data as { atlas?: unknown }).atlas = { townMapPage: null };
+    (game as { data: unknown }).data = { ...(game.data as object), atlas: { townMapPage: null } };
     expect(gearTabs(game as never).map((t) => t.id)).toEqual(["party"]);
   });
 
@@ -6165,5 +6173,80 @@ describe("NPCs on the move", () => {
       .sprites;
     expect(sprites?.SPRITE_BLUE?.walker).toBe(true);
     expect(sprites?.SPRITE_BLUE?.frames).toBe(6);
+  });
+});
+
+describe("the evolution movie", () => {
+  /** A game with one mon one level short of evolving, levelled into it. */
+  function evolving(nickname?: string): { game: VoxelmonGame; mon: PartyMon } {
+    const game = makeMenuGame();
+    // The movie needs a page per form; say which rather than depending on
+    // whatever the shared dataset's atlas looks like by now.
+    (game as { data: unknown }).data = {
+      ...(game.data as object),
+      atlas: {
+        ...(game.data as { atlas?: object }).atlas,
+        picFront: { BULBASAUR: 80, IVYSAUR: 81 },
+      },
+    };
+    const mon = newMon(romData!, "BULBASAUR", 16);
+    if (nickname) mon.nickname = nickname;
+    game.save.party = [mon];
+    // checkParty asks whether THIS mon just levelled, so say it did.
+    (game as any).runEvolutions(new Set([mon]));
+    return { game, mon };
+  }
+
+  test.skipIf(!hasGen)("flashes the two forms, then evolves and renames", () => {
+    const { game, mon } = evolving();
+    expect(game.stackKinds().at(-1)).toBe("evolution");
+    const view = () => (game as any).evolutionScreen();
+    const pages = new Set<number>();
+    // "What? BULBASAUR is evolving!" over the flashing forms.
+    expect(view().lines).toEqual(["What?", "BULBASAUR is", "evolving!"]);
+    for (let i = 0; i < EVO_FLASH_FRAMES - 1; i++) {
+      pages.add(view().picPage);
+      game.tick(0);
+    }
+    expect(pages.size).toBe(2); // both forms took their turn
+    expect(mon.species).toBe("BULBASAUR"); // not until the flashing is done
+
+    game.tick(0); // the last frame: apply, cry, congratulations
+    expect(mon.species).toBe("IVYSAUR");
+    expect(game.stackKinds().at(-1)).toBe("textbox");
+    expect(topText(game)).toContain("evolved into");
+    // No nickname, so what it is CALLED follows what it is.
+    expect(mon.nickname).toBeUndefined();
+    expect(romData!.pokemon[mon.species]!.name).toBe("IVYSAUR");
+
+    dismissText(game);
+    // the movie is off the stack once its text closes
+    for (let i = 0; i < 30 && game.stackKinds().includes("evolution"); i++) game.tick(0);
+    expect(game.stackKinds()).not.toContain("evolution");
+  });
+
+  test.skipIf(!hasGen)("a nickname survives the evolution", () => {
+    const { game, mon } = evolving("SPROUT");
+    expect((game as any).evolutionScreen().lines[1]).toBe("SPROUT is");
+    for (let i = 0; i < EVO_FLASH_FRAMES + 1; i++) game.tick(0);
+    expect(mon.species).toBe("IVYSAUR");
+    expect(mon.nickname).toBe("SPROUT");
+    expect(topText(game)).toContain("Your SPROUT");
+  });
+
+  test.skipIf(!hasGen)("holding B calls it off", () => {
+    const { game, mon } = evolving();
+    // EvolveMon polls the joypad every flash iteration; a held B aborts.
+    for (let i = 0; i < 5; i++) game.tick(VOX_BTN.b);
+    expect(mon.species).toBe("BULBASAUR");
+    expect(topText(game)).toContain("stopped evolving");
+  });
+
+  test.skipIf(!hasGen)("the flash speeds up as it goes", () => {
+    // 28 frames a form to begin with, down to a floor of 4.
+    expect(flashPeriod(0)).toBe(28);
+    expect(flashPeriod(40)).toBe(22);
+    expect(flashPeriod(200)).toBe(4);
+    expect(flashPeriod(1000)).toBe(4);
   });
 });
