@@ -20,6 +20,8 @@ import { WildBattle } from "../voxelmon/game/battle/battle.ts";
 import { newMon, type PartyMon } from "../voxelmon/game/battle/mon.ts";
 import { EVO_FLASH_FRAMES, flashPeriod } from "../voxelmon/game/ui/evoscreen.ts";
 import * as Bag from "../voxelmon/game/rules/bag.ts";
+import * as Pc from "../voxelmon/game/world/pcitems.ts";
+import { decodeSave } from "../voxelmon/game/save-read.ts";
 import { ShopState } from "../voxelmon/game/ui/shopscreen.ts";
 import { LANCE_WALK_IN } from "../voxelmon/game/world/mapscripts.ts";
 import { TrainerBattle } from "../voxelmon/game/battle/trainer.ts";
@@ -6248,5 +6250,82 @@ describe("the evolution movie", () => {
     expect(flashPeriod(40)).toBe(22);
     expect(flashPeriod(200)).toBe(4);
     expect(flashPeriod(1000)).toBe(4);
+  });
+});
+
+describe("a save that was written with an empty list", () => {
+  // `{}` is what Lua writes for BOTH an empty array and an empty record,
+  // so a save made while a list was empty reads back as an object -- and
+  // every push and splice on it throws. On the console a thrown guest
+  // frame is answered by the host dropping into its map viewer, which is
+  // what "hitting DEPOSIT opens the map viewer" was.
+  test.skipIf(!hasGen)("the reader hands back the arrays the game expects", () => {
+    const text = [
+      "return {",
+      '  party = {},',
+      "  bagOrder = {},",
+      "  inventory = { POTION = 3 },",
+      "  pc = { inventory = {}, bagOrder = {} },",
+      "}",
+    ].join("\n");
+    const save = decodeSave(text) as {
+      party: unknown;
+      bagOrder: unknown;
+      pc: { bagOrder: unknown };
+    };
+    expect(Array.isArray(save.party)).toBe(true);
+    expect(Array.isArray(save.bagOrder)).toBe(true);
+    expect(Array.isArray(save.pc.bagOrder)).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("storage boxes and move lists too, however deep", () => {
+    // The shape a real save takes: twelve boxes, most of them untouched,
+    // and a mon whose move list the writer emptied.
+    const text = [
+      "return {",
+      '  boxes = { [1] = {}, [2] = { [1] = { species = "PIDGEY", moves = {} } } },',
+      '  party = { [1] = { species = "SQUIRTLE", moves = {} } },',
+      "}",
+    ].join("\n");
+    const save = decodeSave(text) as {
+      boxes: { moves: unknown }[][];
+      party: { moves: unknown }[];
+    };
+    expect(Array.isArray(save.boxes)).toBe(true);
+    expect(save.boxes.every((b) => Array.isArray(b))).toBe(true);
+    expect(Array.isArray(save.boxes[1]![0]!.moves)).toBe(true);
+    expect(Array.isArray(save.party[0]!.moves)).toBe(true);
+    // and the ones that were never lists are left alone
+    expect(Array.isArray((save as { boxes: unknown }).boxes)).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("a record that happens to be empty stays a record", () => {
+    const save = decodeSave("return { flags = {}, inventory = {}, pokedex = { seen = {} } }") as {
+      flags: unknown;
+      inventory: unknown;
+      pokedex: { seen: unknown };
+    };
+    expect(Array.isArray(save.flags)).toBe(false);
+    expect(Array.isArray(save.inventory)).toBe(false);
+    expect(Array.isArray(save.pokedex.seen)).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("the bag rebuilds an order that is not a list", () => {
+    // Belt and braces: even handed the wrong shape outright, nothing throws.
+    const save = { inventory: { POTION: 3, ANTIDOTE: 1 }, bagOrder: {} as never };
+    expect(Bag.order(save as never).sort()).toEqual(["ANTIDOTE", "POTION"]);
+    expect(() => Bag.add(save as never, "ETHER", 1)).not.toThrow();
+    expect(() => Bag.remove(save as never, "POTION", 3)).not.toThrow();
+    expect(save.inventory.POTION).toBeUndefined();
+  });
+
+  test.skipIf(!hasGen)("depositing into a PC saved empty does not throw", () => {
+    const game = makeMenuGame();
+    game.save.inventory.POTION = 3;
+    // The shape a save written with an empty PC comes back as.
+    (game.save as { pc?: unknown }).pc = { inventory: {}, bagOrder: {} };
+    expect(() => Pc.deposit(game.save as never, "POTION", 2, game.data)).not.toThrow();
+    expect(Pc.pcBag(game.save as never).inventory.POTION).toBe(2);
+    expect(game.save.inventory.POTION).toBe(1);
   });
 });

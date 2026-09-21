@@ -79,6 +79,15 @@ export function slots(save: BagSave): number {
  */
 export function order(save: BagSave): string[] {
   let list = save.bagOrder;
+  // An EMPTY Lua table is written `{}`, and nothing in that text says
+  // whether it was a list or a record -- so a save made while this order
+  // was empty reads back as an object, and `push` on it throws. The throw
+  // took the guest's whole frame down, and the host answered a dead guest
+  // by dropping into its map viewer: "hitting DEPOSIT opens the viewer".
+  // Anything that is not really an array is rebuilt from the inventory.
+  if (!Array.isArray(list)) {
+    list = undefined;
+  }
   if (!list) {
     list = [];
     for (const id of Object.keys(save.inventory)) {
@@ -138,7 +147,7 @@ export function remove(save: BagSave, id: string, qty?: number): void {
   if (inv[id] <= 0) {
     delete inv[id];
     const list = save.bagOrder;
-    if (list) {
+    if (Array.isArray(list)) {
       const i = list.indexOf(id);
       if (i !== -1) list.splice(i, 1);
     }

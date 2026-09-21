@@ -8235,6 +8235,9 @@ function slots(save) {
 }
 function order(save) {
   let list2 = save.bagOrder;
+  if (!Array.isArray(list2)) {
+    list2 = undefined;
+  }
   if (!list2) {
     list2 = [];
     for (const id of Object.keys(save.inventory)) {
@@ -8280,7 +8283,7 @@ function remove(save, id, qty) {
   if (inv[id] <= 0) {
     delete inv[id];
     const list2 = save.bagOrder;
-    if (list2) {
+    if (Array.isArray(list2)) {
       const i = list2.indexOf(id);
       if (i !== -1)
         list2.splice(i, 1);
@@ -15737,13 +15740,62 @@ function parseTable(p, depth) {
     return arr;
   return out;
 }
+var ARRAY_FIELDS = [
+  ["party"],
+  ["party", "*", "moves"],
+  ["bagOrder"],
+  ["pc", "bagOrder"],
+  ["pcItems", "bagOrder"],
+  ["box"],
+  ["boxes"],
+  ["boxes", "*"],
+  ["boxes", "*", "*", "moves"]
+];
+function atPath(root, path) {
+  let level = [];
+  let containers = [root];
+  for (let i = 0;i < path.length; i++) {
+    const key = path[i];
+    const next = [];
+    level = [];
+    for (const c of containers) {
+      if (!c || typeof c !== "object")
+        continue;
+      const obj = c;
+      if (key === "*") {
+        for (const k of Object.keys(obj)) {
+          level.push({ owner: obj, key: k });
+          next.push(obj[k]);
+        }
+      } else {
+        level.push({ owner: obj, key });
+        next.push(obj[key]);
+      }
+    }
+    containers = next;
+  }
+  return level;
+}
+function fixArrays(save) {
+  for (const path of ARRAY_FIELDS) {
+    for (const { owner, key } of atPath(save, path)) {
+      const v = owner[key];
+      if (v && typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 0) {
+        owner[key] = [];
+      }
+    }
+  }
+}
 function decodeSave(text) {
   const p = new P(text);
   p.skip();
   if (!p.src.startsWith("return", p.pos))
     throw new Error("not a save file");
   p.pos += 6;
-  return parseValue(p);
+  const save = parseValue(p);
+  if (save && typeof save === "object")
+    fixArrays(save);
+  return save;
 }
 
 // voxelmon/game/game.ts

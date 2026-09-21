@@ -86,10 +86,77 @@ function parseTable(p: P, depth: number): Record<string, unknown> {
   return out;
 }
 
+/**
+ * The fields the game keeps as ARRAYS, `*` standing for every entry of the
+ * container at that point.
+ *
+ * An empty Lua table is written `{}` -- the same text an empty record is
+ * written as -- so the type cannot be recovered from the save. A party
+ * saved before the starter was handed over, a bag order saved while the
+ * bag was empty, an untouched storage box: each comes back as an object,
+ * and the first `push` or `.length` on it throws or silently misreads.
+ *
+ * On the console a thrown guest frame is answered by the host dropping
+ * into its map viewer, which is how one of these turned up: "hitting
+ * DEPOSIT opens the map viewer".
+ */
+const ARRAY_FIELDS: string[][] = [
+  ["party"],
+  ["party", "*", "moves"],
+  ["bagOrder"],
+  ["pc", "bagOrder"],
+  ["pcItems", "bagOrder"],
+  ["box"],
+  ["boxes"],
+  ["boxes", "*"],
+  ["boxes", "*", "*", "moves"],
+];
+
+/** Every value `path` names, walking `*` across a container's entries. */
+function atPath(root: unknown, path: string[]): { owner: Record<string, unknown>; key: string }[] {
+  let level: { owner: Record<string, unknown>; key: string }[] = [];
+  let containers: unknown[] = [root];
+  for (let i = 0; i < path.length; i++) {
+    const key = path[i]!;
+    const next: unknown[] = [];
+    level = [];
+    for (const c of containers) {
+      if (!c || typeof c !== "object") continue;
+      const obj = c as Record<string, unknown>;
+      if (key === "*") {
+        for (const k of Object.keys(obj)) {
+          level.push({ owner: obj, key: k });
+          next.push(obj[k]);
+        }
+      } else {
+        level.push({ owner: obj, key });
+        next.push(obj[key]);
+      }
+    }
+    containers = next;
+  }
+  return level;
+}
+
+function fixArrays(save: Record<string, unknown>): void {
+  for (const path of ARRAY_FIELDS) {
+    for (const { owner, key } of atPath(save, path)) {
+      const v = owner[key];
+      // Only an EMPTY table is ambiguous: a populated one already came
+      // back as an array, and reshaping anything else would be guessing.
+      if (v && typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 0) {
+        owner[key] = [];
+      }
+    }
+  }
+}
+
 export function decodeSave(text: string): Record<string, unknown> {
   const p = new P(text);
   p.skip();
   if (!p.src.startsWith("return", p.pos)) throw new Error("not a save file");
   p.pos += 6;
-  return parseValue(p) as Record<string, unknown>;
+  const save = parseValue(p) as Record<string, unknown>;
+  if (save && typeof save === "object") fixArrays(save);
+  return save;
 }
