@@ -5908,7 +5908,7 @@ function floorsOf(data, elevatorMapId) {
       floors.push({
         map: mapId,
         token: mapId.slice(mapId.lastIndexOf("_") + 1) || mapId,
-        warpIdx: i
+        warpIdx: i + 1
       });
       break;
     }

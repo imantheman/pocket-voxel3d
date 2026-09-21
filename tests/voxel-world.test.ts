@@ -21,6 +21,7 @@ import { newMon, type PartyMon } from "../voxelmon/game/battle/mon.ts";
 import { EVO_FLASH_FRAMES, flashPeriod } from "../voxelmon/game/ui/evoscreen.ts";
 import * as Bag from "../voxelmon/game/rules/bag.ts";
 import { floorsOf } from "../voxelmon/game/world/elevator.ts";
+import { destination as warpDestination } from "../voxelmon/game/world/warp.ts";
 import * as Pc from "../voxelmon/game/world/pcitems.ts";
 import { decodeSave } from "../voxelmon/game/save-read.ts";
 import { ShopState } from "../voxelmon/game/ui/shopscreen.ts";
@@ -6348,10 +6349,11 @@ describe("the lifts", () => {
   test.skipIf(!hasGen)("the hideout's floors are its own, in order", () => {
     const floors = floorsOf(romData!, "ROCKET_HIDEOUT_ELEVATOR");
     expect(floors.map((f) => f.token)).toEqual(["B1F", "B2F", "B4F"]);
-    // each one's warpIdx is that floor's own door back into the car
+    // Each one's warpIdx is that floor's own door back into the car --
+    // read the way a warp reads it, 1-based (world/warp.ts).
     for (const f of floors) {
-      const warp = (romData!.maps as any)[f.map].warps[f.warpIdx];
-      expect({ map: f.map, dest: warp.destMap }).toEqual({
+      const warp = (romData!.maps as any)[f.map].warps[f.warpIdx - 1];
+      expect({ map: f.map, dest: warp?.destMap }).toEqual({
         map: f.map,
         dest: "ROCKET_HIDEOUT_ELEVATOR",
       });
@@ -6381,6 +6383,17 @@ describe("the lifts", () => {
     // Every exit of the car now leads to B4F: walking out is the ride.
     const def = (romData!.maps as any).ROCKET_HIDEOUT_ELEVATOR;
     expect(def.warps.every((w: any) => w.destMap === "ROCKET_HIDEOUT_B4F")).toBe(true);
+    // And it lands on B4F's OWN LIFT DOOR -- the cell that warps back into
+    // the car -- not on whatever warp happens to sit beside it. Resolved
+    // through the same function a real step through the door uses.
+    const landing = warpDestination(romData!, def.warps[0]);
+    const b4f = (romData!.maps as any).ROCKET_HIDEOUT_B4F;
+    const door = b4f.warps.find((w: any) => w.destMap === "ROCKET_HIDEOUT_ELEVATOR");
+    expect({ map: landing.map, x: landing.x, y: landing.y }).toEqual({
+      map: "ROCKET_HIDEOUT_B4F",
+      x: door.x,
+      y: door.y,
+    });
   });
 
   test.skipIf(!hasGen)("stepping in seeds the way back out", () => {

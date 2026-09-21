@@ -15,8 +15,15 @@ export interface ElevatorFloor {
   map: string;
   /** What the panel prints: SILPH_CO_10F -> "10F", ..._B2F -> "B2F". */
   token: string;
-  /** The floor's own warp back into the car -- the reciprocal the car's
-   * rewritten exit lands on, matching wElevatorWarpMaps' (warp, map). */
+  /**
+   * The floor's own warp back into the car -- the reciprocal the car's
+   * rewritten exit lands on, matching wElevatorWarpMaps' (warp, map).
+   *
+   * ONE-BASED, because that is what `destWarp` means everywhere else in
+   * the dataset (world/warp.ts indexes `warps[destWarp - 1]`). Handing it
+   * the 0-based array index put every ride one warp early: choosing B4F
+   * walked the player out onto that floor's STAIRS.
+   */
   warpIdx: number;
 }
 
@@ -40,7 +47,7 @@ export function floorsOf(data: VoxelmonData, elevatorMapId: string): ElevatorFlo
       floors.push({
         map: mapId,
         token: mapId.slice(mapId.lastIndexOf("_") + 1) || mapId,
-        warpIdx: i,
+        warpIdx: i + 1,
       });
       break;
     }
