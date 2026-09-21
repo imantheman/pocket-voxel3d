@@ -609,6 +609,10 @@ export class WildBattle implements EffectBattle {
           const defender = item.attackerIsPlayer ? SIDE_ENEMY : SIDE_PLAYER;
           let hold = this.startAnim("lunge", attacker);
           if (item.hit) hold = Math.max(hold, this.startAnim("hit", defender));
+          // PlayApplyingAttackSound, on the beat the knock lands. The tempo
+          // byte is deliberately not carried: the noise channel ignores it.
+          const hs = typeof item.hit === "object" ? item.hit?.sfx : null;
+          if (hs?.sound) this.audioCues.push(`move:${hs.sound}:${hs.pitch}:0`);
           const played = this.startMoveAnim(item.anim, item.attackerIsPlayer, defender, item);
           hold = Math.max(hold, played);
           this.waitFrames = hold;
@@ -1456,7 +1460,8 @@ export class WildBattle implements EffectBattle {
       if (this.primaryEffectFailed(msgs)) {
         this.cancelMoveAnim();
       } else if (SLOW_SHAKE_EFFECTS.has(move.effect) && this.moveAnimRow) {
-        this.moveAnimRow.hit = { sfx: "", animType: user.isPlayer ? 6 : 3 };
+        // types 3 and 6 are the silent ones (a status move's shake)
+        this.moveAnimRow.hit = { sfx: null, animType: user.isPlayer ? 6 : 3 };
       }
       for (const m of msgs) this.sayNext(m);
       this.drainNext(); // REST/RECOVER would move the user's bar (:3532)

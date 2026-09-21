@@ -2193,8 +2193,12 @@ export class Overworld implements ScriptWorld {
    * LancesRoomDefaultScript's doorway trigger: the first crossing seals the
    * door behind the player with SFX_GO_INSIDE. One way only — the flag is
    * never cleared, so there is no walking back out mid-league.
+   *
+   * Public because the walk-in lands ON the doorway and a scripted landing
+   * fires no step (mapscripts.ts LANCES_ROOM), so that path calls this
+   * itself, exactly as the original's per-frame coord poll would have.
    */
-  private lanceLockDoor(): boolean {
+  lanceLockDoor(): boolean {
     if (this.map?.id !== "LANCES_ROOM") return false;
     const p = this.player;
     if (!LANCE_DOOR_CELLS.some(([x, y]) => x === p.cellX && y === p.cellY)) return false;

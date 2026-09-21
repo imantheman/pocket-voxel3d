@@ -84,7 +84,8 @@ export interface AnimRowRef {
 }
 
 export interface HitFx {
-  sfx: string;
+  /** PlayApplyingAttackSound's effect AND its wFrequencyModifier. */
+  sfx: { sound: string; pitch: number } | null;
   animType: number;
 }
 
@@ -899,8 +900,20 @@ export function runDamaging(
   }
   battle.lastDamage = dmg;
 
+  // PlayApplyingAttackSound (engine/battle/animations.asm): the effect
+  // comes with a frequency modifier -- $e0 super effective, $50 not very,
+  // $20 the ordinary hit. All three programs are on the NOISE channel,
+  // where the frequency modifier is added to the polynomial counter and so
+  // IS the pitch of the hit, while the tempo byte is skipped outright
+  // (Audio2_note_length bails on CHAN8). Play them bare and the super
+  // effective hit is a dull thud and the not very effective one a bright
+  // crack -- they sound swapped, which is exactly what bare sounded like.
   const hitSfx =
-    info.typeMult > 10 ? "Super_Effective" : info.typeMult < 10 ? "Not_Very_Effective" : "Damage";
+    info.typeMult > 10
+      ? { sound: "Super_Effective", pitch: 0xe0 }
+      : info.typeMult < 10
+        ? { sound: "Not_Very_Effective", pitch: 0x50 }
+        : { sound: "Damage", pitch: 0x20 };
   // GetPlayerAnimationType / GetEnemyAnimationType (core.asm:3159/:5555):
   // 4/1 for a damaging move with no added effect, 5/2 once it has one
   const added = move.effect !== undefined && move.effect !== "NO_ADDITIONAL_EFFECT";

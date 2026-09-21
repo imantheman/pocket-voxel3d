@@ -2656,7 +2656,7 @@ attack missed!`);
     return;
   }
   battle.lastDamage = dmg;
-  const hitSfx = info.typeMult > 10 ? "Super_Effective" : info.typeMult < 10 ? "Not_Very_Effective" : "Damage";
+  const hitSfx = info.typeMult > 10 ? { sound: "Super_Effective", pitch: 224 } : info.typeMult < 10 ? { sound: "Not_Very_Effective", pitch: 80 } : { sound: "Damage", pitch: 32 };
   const added = move.effect !== undefined && move.effect !== "NO_ADDITIONAL_EFFECT";
   const hitFx = {
     sfx: hitSfx,
@@ -3128,6 +3128,9 @@ caught!`);
           let hold = this.startAnim("lunge", attacker);
           if (item.hit)
             hold = Math.max(hold, this.startAnim("hit", defender));
+          const hs = typeof item.hit === "object" ? item.hit?.sfx : null;
+          if (hs?.sound)
+            this.audioCues.push(`move:${hs.sound}:${hs.pitch}:0`);
           const played = this.startMoveAnim(item.anim, item.attackerIsPlayer, defender, item);
           hold = Math.max(hold, played);
           this.waitFrames = hold;
@@ -3804,7 +3807,7 @@ attack missed!`);
       if (this.primaryEffectFailed(msgs)) {
         this.cancelMoveAnim();
       } else if (SLOW_SHAKE_EFFECTS.has(move.effect) && this.moveAnimRow) {
-        this.moveAnimRow.hit = { sfx: "", animType: user.isPlayer ? 6 : 3 };
+        this.moveAnimRow.hit = { sfx: null, animType: user.isPlayer ? 6 : 3 };
       }
       for (const m of msgs)
         this.sayNext(m);
@@ -6611,6 +6614,25 @@ var MAP_SCRIPTS = {
         delete save.defeatedTrainers?.[key];
     }
   },
+  LANCES_ROOM: {
+    onEnter: (ow, save) => {
+      if (save?.flags?.EVENT_BEAT_LANCE)
+        return;
+      const p = ow?.player;
+      if (p?.cellX !== LANCE_STAIRS[0] || p?.cellY !== LANCE_STAIRS[1])
+        return;
+      startLanceWalkIn(ow);
+    },
+    onStep: (ow, save) => {
+      if (save?.flags?.EVENT_BEAT_LANCE)
+        return null;
+      const p = ow?.player;
+      if (p?.cellX === LANCE_STAIRS[0] && p?.cellY === LANCE_STAIRS[1]) {
+        startLanceWalkIn(ow);
+      }
+      return null;
+    }
+  },
   LORELEIS_ROOM: {
     onEnter: (_ow, save) => {
       if (save?.flags)
@@ -7730,6 +7752,22 @@ function sceneWithTheme(song, rows) {
   return [["play_music", song], ...bumped];
 }
 var MAGIKARP_PRICE = 500;
+var LANCE_STAIRS = [24, 16];
+var LANCE_WALK_IN = [
+  ["down", 2],
+  ["left", 6],
+  ["down", 5],
+  ["left", 10],
+  ["up", 9],
+  ["left", 2],
+  ["up", 3]
+];
+function startLanceWalkIn(ow) {
+  if (ow?.runner?.isRunning?.())
+    return;
+  const rows = LANCE_WALK_IN.map(([dir, n]) => ["move_player", dir, n]);
+  ow.runner.run(rows, { onDone: () => ow.lanceLockDoor?.() });
+}
 function itemBallFlag(mapLabel, textConst) {
   return `EVENT_ITEMBALL_${mapLabel}_${textConst}`;
 }

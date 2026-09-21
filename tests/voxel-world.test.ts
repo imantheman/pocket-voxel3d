@@ -18,6 +18,7 @@ import { fromGenDir as loadAudioBanks } from "../voxelmon/game/audio/banks.ts";
 import { loadRuntimeData, REQUIRED_MODULES, type VoxelmonData } from "../voxelmon/game/data.ts";
 import { WildBattle } from "../voxelmon/game/battle/battle.ts";
 import { newMon } from "../voxelmon/game/battle/mon.ts";
+import { LANCE_WALK_IN } from "../voxelmon/game/world/mapscripts.ts";
 import { TrainerBattle } from "../voxelmon/game/battle/trainer.ts";
 import { seqRng } from "../voxelmon/game/rng.ts";
 import * as Bag from "../voxelmon/game/rules/bag.ts";
@@ -5965,5 +5966,58 @@ describe("the MAGIKARP salesman", () => {
     expect(game.save.money).toBe(1000);
     expect(game.save.party.length).toBe(6);
     expect(game.save.flags.EVENT_BOUGHT_MAGIKARP).toBeFalsy();
+  });
+});
+
+describe("Lance's room", () => {
+  /** Walk the runner to a stop, or give up. */
+  function settleScript(game: VoxelmonGame, ticks = 2000): void {
+    const ow = game.overworld as any;
+    for (let i = 0; i < ticks; i++) {
+      if (!ow.runner?.isRunning?.() && !ow.player.moving) return;
+      game.tick(0);
+    }
+  }
+
+  test.skipIf(!hasGen)("walks you in from the stairs and seals the door", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    // Coming up from Agatha's lands on the staircase cell.
+    ow.setMap("LANCES_ROOM", 24, 16, "up");
+    settleScript(game);
+    // WalkToLance ends on the doorway, which locks behind you.
+    expect([ow.player.cellX, ow.player.cellY]).toEqual([6, 11]);
+    expect(game.save.flags.EVENT_LANCES_ROOM_LOCK_DOOR).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("does not re-run it once Lance is beaten", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    game.save.flags.EVENT_BEAT_LANCE = true;
+    ow.setMap("LANCES_ROOM", 24, 16, "up");
+    settleScript(game, 120);
+    expect([ow.player.cellX, ow.player.cellY]).toEqual([24, 16]);
+  });
+
+  test.skipIf(!hasGen)("every step of the route is floor", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    game.save.flags.EVENT_BEAT_LANCE = true; // no walk-in; just read the map
+    ow.setMap("LANCES_ROOM", 24, 16, "up");
+    const step: Record<string, [number, number]> = {
+      up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0],
+    };
+    let [x, y] = [24, 16];
+    for (const [dir, n] of LANCE_WALK_IN) {
+      const [dx, dy] = step[dir]!;
+      for (let i = 0; i < n; i++) {
+        x += dx;
+        y += dy;
+        expect({ dir, x, y, walkable: ow.map.isWalkableCell(x, y) })
+          .toEqual({ dir, x, y, walkable: true });
+      }
+    }
+    // and it ends on the doorway cell the original lands on
+    expect([x, y]).toEqual([6, 11]);
   });
 });

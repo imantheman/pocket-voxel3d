@@ -950,6 +950,38 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     },
   },
 
+  /**
+   * story4.lua M.LANCES_ROOM (scripts/LancesRoom.asm). Lance's room gates
+   * its ENTRANCE rather than its exit, and the way in is a cutscene: coming
+   * up the stairs from Agatha's puts the player on (24,16), and
+   * LancesRoomDefaultScript's trigger there runs WalkToLance -- an auto-walk
+   * that ends on the doorway cell (6,11), which then seals behind them.
+   *
+   * Vanilla's WalkToLance_RLEList (up 12 / left 12 / down 7 / left 6) walks
+   * THROUGH the void the flat game never draws; a camera that follows the
+   * player literally would pan across an empty upper chamber on the way.
+   * Same landing cell, routed along the open floor corridor instead.
+   */
+  LANCES_ROOM: {
+    onEnter: (ow: any, save: any) => {
+      if (save?.flags?.EVENT_BEAT_LANCE) return;
+      const p = ow?.player;
+      // The warp from Agatha's lands ON the trigger, and a warp arrival is
+      // not a step -- so the walk starts from the map load, the way
+      // Lorelei's does.
+      if (p?.cellX !== LANCE_STAIRS[0] || p?.cellY !== LANCE_STAIRS[1]) return;
+      startLanceWalkIn(ow);
+    },
+    onStep: (ow: any, save: any) => {
+      if (save?.flags?.EVENT_BEAT_LANCE) return null;
+      const p = ow?.player;
+      if (p?.cellX === LANCE_STAIRS[0] && p?.cellY === LANCE_STAIRS[1]) {
+        startLanceWalkIn(ow);
+      }
+      return null;
+    },
+  },
+
   // story6.lua M.LORELEIS_ROOM: loading her room marks the run started.
   LORELEIS_ROOM: {
     onEnter: (_ow: any, save: any) => {
@@ -2572,6 +2604,32 @@ function sceneWithTheme(song: string, rows: ScriptRow[]): ScriptRow[] {
 
 /** What the Mt. Moon salesman asks for his MAGIKARP (MtMoonPokecenter.asm). */
 const MAGIKARP_PRICE = 500;
+
+/** The staircase cell the Agatha's Room warp lands on. */
+const LANCE_STAIRS: [number, number] = [24, 16];
+
+/** WalkToLance, along the floor: (24,16) -> the doorway at (6,11). */
+export const LANCE_WALK_IN: [Dir, number][] = [
+  ["down", 2],
+  ["left", 6],
+  ["down", 5],
+  ["left", 10],
+  ["up", 9],
+  ["left", 2],
+  ["up", 3],
+];
+
+/**
+ * Run the walk-in, then seal the door behind them.
+ *
+ * The landing cell IS the doorway trigger, but a scripted move fires no
+ * step, so the lock is called here rather than waited for.
+ */
+function startLanceWalkIn(ow: any): void {
+  if (ow?.runner?.isRunning?.()) return;
+  const rows = LANCE_WALK_IN.map(([dir, n]) => ["move_player", dir, n] as ScriptRow);
+  ow.runner.run(rows, { onDone: () => ow.lanceLockDoor?.() });
+}
 
 export function itemBallFlag(mapLabel: string, textConst: string): string {
   return `EVENT_ITEMBALL_${mapLabel}_${textConst}`;
