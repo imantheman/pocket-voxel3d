@@ -1500,6 +1500,34 @@ fn dlog(s: &str) {
     }
 }
 
+/// Write a panic to the log before the process dies.
+///
+/// A Rust panic on this console aborts, and an aborted 3dsx drops the
+/// player straight back to the homebrew menu -- no message, no dump,
+/// nothing to go on but "it crashed". The default hook prints to stderr,
+/// which nobody can read on hardware. This puts the same line where every
+/// other diagnostic already goes, and writes it STRAIGHT to the file
+/// rather than the batch, which is about to be lost with everything else.
+fn install_panic_log() {
+    std::panic::set_hook(Box::new(|info| {
+        let where_ = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "?".to_string());
+        let msg = format!("[pv] PANIC at {where_}: {}", info);
+        unsafe {
+            svcOutputDebugString(msg.as_ptr(), msg.len() as i32);
+        }
+        use std::io::Write;
+        for path in LOG_PATHS.iter() {
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                let _ = writeln!(f, "{}", msg);
+                let _ = f.flush();
+            }
+        }
+    }));
+}
+
 /// osGetTime, for the load timings.
 fn now_ms() -> u64 {
     extern "C" { fn osGetTime() -> u64; }
@@ -1791,9 +1819,13 @@ fn push_chunk_mesh(
             break;
         }
         let b = m.index_base as usize + t * 3;
-        let p0 = pak.verts[vbase + pak.indices[b] as usize];
-        let p1 = pak.verts[vbase + pak.indices[b + 1] as usize];
-        let p2 = pak.verts[vbase + pak.indices[b + 2] as usize];
+        let (Some(p0), Some(p1), Some(p2)) = (
+            pool_vert(pak, vbase, b),
+            pool_vert(pak, vbase, b + 1),
+            pool_vert(pak, vbase, b + 2),
+        ) else {
+            break;
+        };
         let mid_x = (p0.x as f32 + p1.x as f32 + p2.x as f32) / 3.0;
         let mid_z = (p0.z as f32 + p1.z as f32 + p2.z as f32) / 3.0;
         if mid_x < clip_min[0] || mid_x > clip_max[0]
@@ -1840,6 +1872,28 @@ fn push_chunk_mesh(
 /// into the pak's STMP section, not CHNK) into the flat vertex buffer.
 /// Stamps carry no `pak::Chunk`-style AABB of their own, so the span's
 /// bounding box is derived from its own vertices instead.
+/// How many mesh reads have been refused for pointing outside the pools.
+/// Anything but 0 means a pak whose records and pools disagree.
+static mut POOL_OOB: u32 = 0;
+
+/// One vertex of a mesh, or None when the range reaches past the pools.
+///
+/// A record that disagrees with its pools is a broken pak either way, but
+/// on a console the difference between a missing mesh and an INDEX PANIC
+/// is the whole session: a panic aborts, and an aborted 3dsx drops the
+/// player back to the homebrew menu with nothing said. Every read of the
+/// two pools goes through here so a bad range costs a hole and a line in
+/// the log instead.
+#[inline]
+fn pool_vert(pak: &Pak, vbase: usize, index_at: usize) -> Option<pak::PakVert> {
+    let idx = *pak.indices.get(index_at)? as usize;
+    let v = pak.verts.get(vbase + idx).copied();
+    if v.is_none() {
+        unsafe { POOL_OOB += 1 };
+    }
+    v
+}
+
 fn push_stamp_mesh(
     pak: &Pak,
     stamp: &pak::Stamp,
@@ -1862,8 +1916,9 @@ fn push_stamp_mesh(
         if verts.len() >= budget {
             break;
         }
-        let idx = pak.indices[m.index_base as usize + k] as usize;
-        let pv = pak.verts[vbase + idx];
+        let Some(pv) = pool_vert(pak, vbase, m.index_base as usize + k) else {
+            break;
+        };
         let a = draw::modulate_rgb(pv.abgr, tint);
         let p = [pv.x as f32, pv.y as f32, pv.z as f32];
         for c in 0..3 {
@@ -2097,11 +2152,14 @@ fn strip_from_pak(
             let vbase = m.vert_base as usize;
             for t in 0..m.index_count as usize / 3 {
                 let b = m.index_base as usize + t * 3;
-                let p = [
-                    pak.verts[vbase + pak.indices[b] as usize],
-                    pak.verts[vbase + pak.indices[b + 1] as usize],
-                    pak.verts[vbase + pak.indices[b + 2] as usize],
-                ];
+                let (Some(v0), Some(v1), Some(v2)) = (
+                    pool_vert(pak, vbase, b),
+                    pool_vert(pak, vbase, b + 1),
+                    pool_vert(pak, vbase, b + 2),
+                ) else {
+                    break;
+                };
+                let p = [v0, v1, v2];
                 let mid_x = (p[0].x as f32 + p[1].x as f32 + p[2].x as f32) / 3.0;
                 let mid_z = (p[0].z as f32 + p[1].z as f32 + p[2].z as f32) / 3.0;
                 if mid_x < nb_real_min[0] || mid_x > nb_real_max[0]
@@ -2460,6 +2518,23 @@ fn build_map(
     // smaller than any reasonable draw distance, so windowing included every
     // chunk anyway while switching the budget up to the generous cap.
     let (order, is_huge, budget) = build_order(all_chunks, player_px);
+    // Ask for the whole budget UP FRONT, and fallibly.
+    //
+    // A Vec growing by doubling asks the allocator for the new block while
+    // still holding the old one, and a refusal is not an error it can
+    // return -- Rust calls handle_alloc_error, which aborts, which on this
+    // console is the homebrew menu with nothing said. Reserving once says
+    // whether the memory is there before a single vertex is written, and a
+    // no is answered by building a smaller map rather than by dying.
+    let mut budget = budget;
+    while budget > 0 && verts.try_reserve_exact(budget).is_err() {
+        dlog(&format!(
+            "[pv] no room for {} verts ({} KB); halving the budget",
+            budget,
+            budget * core::mem::size_of::<Vertex>() / 1024,
+        ));
+        budget /= 2;
+    }
     // Stamps are pushed between the ground and tree passes at ground
     // priority, so the cascade has to see their share already spent.
     let stamp_verts: usize = pak
@@ -2598,6 +2673,8 @@ static mut RT: *mut JSRuntime = core::ptr::null_mut();
 static mut CTX: *mut JSContext = core::ptr::null_mut();
 
 fn main() {
+    // Before anything that can fail: a crash has to leave a line.
+    install_panic_log();
     let gfx = Gfx::new().expect("gfx");
     let mut hid = Hid::new().expect("hid");
     let apt = Apt::new().expect("apt");
@@ -3621,7 +3698,18 @@ fn main() {
                     neighbor_slots.len(),
                 ));
             }
-            dlog(&format!("[pv] linear free {} KB before build", unsafe_free_kb()));
+            // Both halves of the memory picture, not just the GPU's: the
+            // pak cache and the built geometry live on the APP heap, and a
+            // rebuild that cannot get its vertices there is the one that
+            // used to abort. Plus anything refused for pointing outside the
+            // pools, which should always read 0.
+            dlog(&format!(
+                "[pv] linear free {} KB, heap block {} KB, cache {} KB, oob {} before build",
+                unsafe_free_kb(),
+                probe_free_kb(16),
+                unsafe { cache_total_kb() },
+                unsafe { POOL_OOB },
+            ));
             // The upload is where a load has died before (linear running
             // dry): what led up to it is on the card before it starts.
             dlog_batch_end();
@@ -3770,8 +3858,11 @@ fn main() {
                         let mut gmax = [f32::MIN; 3];
                         let vbase = m.vert_base as usize;
                         for i in 0..n {
-                            let pv = pak_static.verts
-                                [vbase + pak_static.indices[m.index_base as usize + i] as usize];
+                            let Some(pv) =
+                                pool_vert(pak_static, vbase, m.index_base as usize + i)
+                            else {
+                                break;
+                            };
                             let a = draw::modulate_rgb(pv.abgr, last_tint);
                             let p = [pv.x as f32, pv.y as f32, pv.z as f32];
                             for c in 0..3 {
