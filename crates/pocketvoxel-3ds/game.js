@@ -8732,6 +8732,28 @@ var MAP_SCRIPTS = {
       })
     }
   },
+  FIGHTING_DOJO: {
+    talk: {
+      TEXT_FIGHTINGDOJO_KARATE_MASTER: (_ow, save) => {
+        if (save?.flags?.EVENT_BEAT_KARATE_MASTER) {
+          return [
+            ["face_player"],
+            ["show_text", "_FightingDojoKarateMasterStayAndTrainWithUsText"]
+          ];
+        }
+        return [
+          ["face_player"],
+          ["show_text", "_FightingDojoKarateMasterText"],
+          ["engage_trainer", "FIGHTINGDOJO_KARATE_MASTER"],
+          ["jump_if_false", "end"],
+          ["set_flag", "EVENT_BEAT_KARATE_MASTER"],
+          ["show_text", "_FightingDojoKarateMasterIWillGiveYouAPokemonText"]
+        ];
+      },
+      TEXT_FIGHTINGDOJO_HITMONLEE_POKE_BALL: dojoBall("HITMONLEE", "FIGHTINGDOJO_HITMONLEE_POKE_BALL", "_FightingDojoHitmonleePokeBallText"),
+      TEXT_FIGHTINGDOJO_HITMONCHAN_POKE_BALL: dojoBall("HITMONCHAN", "FIGHTINGDOJO_HITMONCHAN_POKE_BALL", "_FightingDojoHitmonchanPokeBallText")
+    }
+  },
   SILPH_CO_7F: {
     onEnter: (ow, save) => {
       if (save?.flags?.EVENT_BEAT_SILPH_CO_RIVAL)
@@ -8804,6 +8826,35 @@ function sceneWithTheme(song, rows) {
   const jumps = ["jump", "jump_if_true", "jump_if_false"];
   const bumped = rows.map((r) => jumps.includes(r[0]) && typeof r[1] === "number" ? [r[0], r[1] + 1] : r);
   return [["play_music", song], ...bumped];
+}
+function dojoBall(species, ball, askKey) {
+  return (_ow, save) => {
+    const f = save?.flags ?? {};
+    if (f.EVENT_GOT_HITMONLEE || f.EVENT_GOT_HITMONCHAN) {
+      return [["show_text", "_FightingDojoBetterNotGetGreedyText"]];
+    }
+    if (!f.EVENT_BEAT_KARATE_MASTER) {
+      return [["show_text", `You'll have to
+beat the master
+first!`]];
+    }
+    return [
+      ["ask", askKey],
+      ["jump_if_false", "end"],
+      ["check_party_room"],
+      ["jump_if_false", "full"],
+      ["give_pokemon", species, 30],
+      ["set_flag", `EVENT_GOT_${species}`],
+      ["set_flag", "EVENT_DEFEATED_FIGHTING_DOJO"],
+      ["hide_object", "FIGHTING_DOJO", ball],
+      ["show_text", `{PLAYER} got
+${species}!`],
+      ["jump", "end"],
+      ["label", "full"],
+      ["show_text", `You have no room
+for it!`]
+    ];
+  };
 }
 function giftRows(o) {
   return [

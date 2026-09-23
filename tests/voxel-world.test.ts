@@ -7227,6 +7227,73 @@ describe("the party menu and the status screens, as the GB lays them out", () =>
   });
 });
 
+describe("the FIGHTING DOJO prize", () => {
+  /** Talk to a dojo object and answer its YES/NO; returns what was said. */
+  function talk(game: VoxelmonGame, text: string, yes = true): string {
+    let said = "";
+    game.overworld.showMapText(text);
+    for (let t = 0; t < 900; t++) {
+      const top = game.stackKinds().at(-1);
+      if (top === "overworld") break;
+      if (top === "textbox") said += topText(game) + " ";
+      if (top === "choice") {
+        if (!yes) tap(game, VOX_BTN.down);
+        tap(game, VOX_BTN.a);
+        for (let h = 0; h < 60 && game.stackKinds().at(-1) === "choice"; h++) game.tick(0);
+        continue;
+      }
+      if (top === "naming") { tap(game, VOX_BTN.start); continue; }
+      game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    return said;
+  }
+
+  test.skipIf(!hasGen)("the balls refuse until the master is beaten, then give one mon", () => {
+    const game = makeMenuGame();
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 40, game.battleRng));
+    const ow = game.overworld;
+    ow.setMap("FIGHTING_DOJO", 4, 2, "up");
+
+    // before the master: nothing to take
+    expect(talk(game, "TEXT_FIGHTINGDOJO_HITMONLEE_POKE_BALL")).toContain("beat the master");
+    expect(game.save.party.length).toBe(1);
+
+    // beaten (the fight itself is engage_trainer's, tested elsewhere)
+    game.save.flags.EVENT_BEAT_KARATE_MASTER = true;
+    expect(talk(game, "TEXT_FIGHTINGDOJO_KARATE_MASTER")).toContain("Stay and train");
+
+    // a "no" leaves the ball where it is
+    expect(talk(game, "TEXT_FIGHTINGDOJO_HITMONLEE_POKE_BALL", false)).toContain("hard kicking");
+    expect(game.save.party.length).toBe(1);
+
+    // take HITMONLEE: it joins, its ball goes, the dojo is done
+    talk(game, "TEXT_FIGHTINGDOJO_HITMONLEE_POKE_BALL", true);
+    expect(game.save.party.length).toBe(2);
+    expect(game.save.party[1]!.species).toBe("HITMONLEE");
+    expect(game.save.party[1]!.level).toBe(30);
+    expect(game.save.flags.EVENT_GOT_HITMONLEE).toBe(true);
+    expect(game.save.flags.EVENT_DEFEATED_FIGHTING_DOJO).toBe(true);
+    const lee = ow.npcs.find((n: any) => n.def.name === "FIGHTINGDOJO_HITMONLEE_POKE_BALL");
+    expect(!lee || (lee as any).hidden).toBe(true);
+
+    // the other ball stays, and knows better
+    expect(talk(game, "TEXT_FIGHTINGDOJO_HITMONCHAN_POKE_BALL")).toContain("greedy");
+    expect(game.save.party.length).toBe(2);
+  });
+
+  test.skipIf(!hasGen)("a full party keeps the ball on the mat", () => {
+    const game = makeMenuGame();
+    while (game.save.party.length < 6) {
+      game.save.party.push(newMon(romData!, "RATTATA", 5, game.battleRng));
+    }
+    game.save.flags.EVENT_BEAT_KARATE_MASTER = true;
+    game.overworld.setMap("FIGHTING_DOJO", 4, 2, "up");
+    expect(talk(game, "TEXT_FIGHTINGDOJO_HITMONCHAN_POKE_BALL", true)).toContain("no room");
+    expect(game.save.flags.EVENT_GOT_HITMONCHAN).toBeUndefined();
+    expect(game.save.party.length).toBe(6);
+  });
+});
+
 describe("Silph Co 7F", () => {
   test.skipIf(!hasGen)("the rival waits at the door, and only there", () => {
     const rows = (ow: any, save: any) =>

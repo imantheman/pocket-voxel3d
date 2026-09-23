@@ -2619,6 +2619,39 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     },
   },
 
+  // story4.lua M.FIGHTING_DOJO (scripts/FightingDojo.asm). The KARATE
+  // MASTER has no trainer header -- he is a text_asm trainer, like the Game
+  // Corner Rocket -- so his fight is scripted here, and the prize is the
+  // point of the building: beat him and take HITMONLEE or HITMONCHAN from
+  // the two balls on the mat. Only the chosen ball goes; the other stays,
+  // and asks for it get the "Better not get greedy" refusal.
+  FIGHTING_DOJO: {
+    talk: {
+      TEXT_FIGHTINGDOJO_KARATE_MASTER: (_ow: any, save: any): ScriptRow[] => {
+        if (save?.flags?.EVENT_BEAT_KARATE_MASTER) {
+          return [
+            ["face_player"],
+            ["show_text", "_FightingDojoKarateMasterStayAndTrainWithUsText"],
+          ] as ScriptRow[];
+        }
+        return [
+          ["face_player"],
+          ["show_text", "_FightingDojoKarateMasterText"],
+          ["engage_trainer", "FIGHTINGDOJO_KARATE_MASTER"],
+          ["jump_if_false", "end"],
+          ["set_flag", "EVENT_BEAT_KARATE_MASTER"],
+          ["show_text", "_FightingDojoKarateMasterIWillGiveYouAPokemonText"],
+        ] as ScriptRow[];
+      },
+      TEXT_FIGHTINGDOJO_HITMONLEE_POKE_BALL: dojoBall(
+        "HITMONLEE", "FIGHTINGDOJO_HITMONLEE_POKE_BALL", "_FightingDojoHitmonleePokeBallText",
+      ),
+      TEXT_FIGHTINGDOJO_HITMONCHAN_POKE_BALL: dojoBall(
+        "HITMONCHAN", "FIGHTINGDOJO_HITMONCHAN_POKE_BALL", "_FightingDojoHitmonchanPokeBallText",
+      ),
+    },
+  },
+
   // story4.lua M.SILPH_CO_7F (the worker's LAPRAS) + story5.lua M.SILPH_CO_7F
   // (the rival ambush). Both live on this floor, so both are here.
   //
@@ -2750,6 +2783,37 @@ function sceneWithTheme(song: string, rows: ScriptRow[]): ScriptRow[] {
       : r,
   );
   return [["play_music", song] as unknown as ScriptRow, ...bumped];
+}
+
+/**
+ * One of the FIGHTING DOJO's prize balls (FightingDojo.asm). The ask is the
+ * ball's own line; taking it sets its EVENT_GOT_* and the dojo's done flag,
+ * and hides ONLY that ball -- the other stays on the mat and refuses.
+ */
+function dojoBall(species: string, ball: string, askKey: string): TalkFn {
+  return (_ow: any, save: any): ScriptRow[] => {
+    const f = save?.flags ?? {};
+    if (f.EVENT_GOT_HITMONLEE || f.EVENT_GOT_HITMONCHAN) {
+      return [["show_text", "_FightingDojoBetterNotGetGreedyText"]] as ScriptRow[];
+    }
+    if (!f.EVENT_BEAT_KARATE_MASTER) {
+      return [["show_text", "You'll have to\nbeat the master\nfirst!"]] as ScriptRow[];
+    }
+    return [
+      ["ask", askKey],
+      ["jump_if_false", "end"],
+      ["check_party_room"],
+      ["jump_if_false", "full"],
+      ["give_pokemon", species, 30],
+      ["set_flag", `EVENT_GOT_${species}`],
+      ["set_flag", "EVENT_DEFEATED_FIGHTING_DOJO"],
+      ["hide_object", "FIGHTING_DOJO", ball],
+      ["show_text", `{PLAYER} got\n${species}!`],
+      ["jump", "end"],
+      ["label", "full"],
+      ["show_text", "You have no room\nfor it!"],
+    ] as ScriptRow[];
+  };
 }
 
 /**
