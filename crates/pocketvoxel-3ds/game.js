@@ -1115,6 +1115,7 @@ var TEXT_PARAGRAPH = TEXT_PRE_ADVANCE + TEXT_PAGE_CLEAR;
 var YES_NO_ANSWER = 15;
 var FIELD_TELEPORT = 60 + DELAY3;
 var BATTLE_SLIDE_IN_FRAMES = 72;
+var TRAINER_INTRO_SFX_GAP = 20;
 var BATTLE_START_SENDOUT = 40;
 var MOVE_ANIM_PRE = DELAY3;
 var MOVE_STATUS_OR_MISS = 30;
@@ -4962,6 +4963,10 @@ class TrainerBattle extends WildBattle {
     return this.musicKind() === "trainer" ? "trainer" : "gym";
   }
   enemyIntro() {
+    this.act(() => this.audioCues.push("sfx:Trainer_Appeared"));
+    this.queue.push({ wait: TRAINER_INTRO_SFX_GAP });
+    this.say(`${this.trainerName} wants
+to fight!`);
     markSeen(this.save, this.enemy.mon.species);
     this.act(() => this.audioCues.push(`cry:${this.enemy.mon.species}`));
     this.say(`${this.trainerName} sent

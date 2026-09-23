@@ -7078,6 +7078,73 @@ describe("the NAME RATER", () => {
   });
 });
 
+describe("a trainer who has already lost", () => {
+  /** The first sight-line trainer on a route, and its header. */
+  function trainerOn(game: VoxelmonGame, map: string) {
+    const ow = game.overworld;
+    ow.setMap(map, 5, 5, "down");
+    const npc = ow.npcs.find((n: any) => n.def.trainerClass);
+    expect(npc).toBeDefined();
+    return { ow, npc, header: ow.trainerHeader(npc) };
+  }
+
+  test.skipIf(!hasGen)("says their after-battle line instead of fighting again", () => {
+    const game = makeMenuGame();
+    const { ow, npc, header } = trainerOn(game, "ROUTE_3");
+    expect(header?.after).toBeTruthy();
+
+    // beaten, however it was recorded: the flag OR the per-object record
+    game.save.flags[header!.event!] = true;
+    expect(ow.trainerDefeated(npc)).toBe(true);
+
+    const p = ow.player;
+    p.cellX = npc.cellX;
+    p.cellY = npc.cellY + 1;
+    p.facing = "up";
+    ow.interact();
+    // the after line, and no battle. topText joins the box's pages with
+    // spaces, so compare on the words rather than the line breaks.
+    const words = (x: string) => x.replace(/[\n\f\u000b]+/g, " ").trim();
+    expect(words(topText(game))).toBe(words((romData as any).text[header!.after!]));
+    expect(game.stackKinds()).not.toContain("battle");
+  });
+
+  test.skipIf(!hasGen)("stays beaten when the win was recorded by object, not flag", () => {
+    const game = makeMenuGame();
+    const { ow, npc } = trainerOn(game, "ROUTE_3");
+    (game.save as any).defeatedTrainers = { [npc.id]: true };
+    expect(ow.trainerDefeated(npc)).toBe(true);
+    const p = ow.player;
+    p.cellX = npc.cellX;
+    p.cellY = npc.cellY + 1;
+    p.facing = "up";
+    ow.interact();
+    expect(game.stackKinds()).not.toContain("battle");
+    expect(game.stackKinds().at(-1)).toBe("textbox");
+  });
+
+  test.skipIf(!hasGen)("a trainer who spots you scores the moment the ! goes up", () => {
+    const game = makeMenuGame();
+    const host = (game as any).host as { music?: string[] };
+    const { ow, npc, header } = trainerOn(game, "ROUTE_3");
+    expect(header?.range).toBeGreaterThan(0);
+
+    // stand in the line of sight, one cell along the way they face
+    const step: Record<string, [number, number]> = {
+      up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0],
+    };
+    const [dx, dy] = step[npc.facing as string]!;
+    ow.player.cellX = npc.cellX + dx;
+    ow.player.cellY = npc.cellY + dy;
+    ow.player.px = ow.player.cellX * 16;
+    ow.player.py = ow.player.cellY * 16;
+    ow.checkTrainerSight();
+    // the "!" is up and the encounter sting has started, before the walk-up
+    expect((ow as any).emote).toBeDefined();
+    expect((ow as any).engaging).toBe(true);
+  });
+});
+
 describe("Silph Co 7F", () => {
   test.skipIf(!hasGen)("the rival waits at the door, and only there", () => {
     const rows = (ow: any, save: any) =>

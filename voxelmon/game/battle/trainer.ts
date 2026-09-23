@@ -5,6 +5,7 @@ import { WildBattle, type BattleSave } from "./battle.ts";
 import type { VoxelmonData } from "../data.ts";
 import type { Rng } from "../rng.ts";
 import { newMon, markSeen, type PartyMon } from "./mon.ts";
+import { TRAINER_INTRO_SFX_GAP } from "../rules/timing.ts";
 
 interface TrainerDef {
   id: string;
@@ -103,6 +104,15 @@ export class TrainerBattle extends WildBattle {
   /** Trainers send out their lead instead of it "appearing" wild
    * (common_text.asm TrainerSentOutText). */
   override enemyIntro(): void {
+    // PrintBeginningBattleText .trainerBattle (common_text.asm): a trainer
+    // battle opens on a sound of its own -- extracted as "Trainer_Appeared",
+    // the header pokered names SFX_Silph_Scope -- and the ROM gives it a
+    // clear window: PlaySound, WaitForSoundToFinish, then twenty frames
+    // before anything else. Nothing had ever played it, so a trainer fight
+    // started in silence where the ROM announces itself.
+    this.act(() => this.audioCues.push("sfx:Trainer_Appeared"));
+    this.queue.push({ wait: TRAINER_INTRO_SFX_GAP });
+    this.say(`${this.trainerName} wants\nto fight!`);
     markSeen(this.save, this.enemy.mon.species); // BattleState.lua:718 — trainer lead sent out -> seen
     this.act(() => this.audioCues.push(`cry:${this.enemy.mon.species}`));
     this.say(`${this.trainerName} sent\nout ${this.enemy.name}!`);
