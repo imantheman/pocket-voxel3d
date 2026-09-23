@@ -7446,6 +7446,79 @@ describe("EEVEE and the stones", () => {
   });
 });
 
+describe("the TM givers", () => {
+  /** Talk, then A through every page until the world is back on top. */
+  function talkThrough(game: VoxelmonGame, key: string): void {
+    game.overworld.showMapText(key);
+    for (let t = 0; t < 3000; t++) {
+      if (game.stackKinds().at(-1) === "overworld") break;
+      game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    expect(game.stackKinds().at(-1)).toBe("overworld");
+  }
+
+  const GIVERS = [
+    ["MR_PSYCHICS_HOUSE", 4, 4, "TEXT_MRPSYCHICSHOUSE_MR_PSYCHIC", "TM_PSYCHIC_M", "EVENT_GOT_TM29", "PSYCHIC"],
+    ["ROUTE_12_GATE_2F", 3, 3, "TEXT_ROUTE12GATE2F_BRUNETTE_GIRL", "TM_SWIFT", "EVENT_GOT_TM39", "SWIFT"],
+    ["CELADON_CITY", 22, 17, "TEXT_CELADONCITY_GRAMPS3", "TM_SOFTBOILED", "EVENT_GOT_TM41", "SOFTBOILED"],
+    ["CINNABAR_LAB_METRONOME_ROOM", 6, 2, "TEXT_CINNABARLABMETRONOMEROOM_SCIENTIST1", "TM_METRONOME", "EVENT_GOT_TM35", "METRONOME"],
+    ["VIRIDIAN_CITY", 5, 5, "TEXT_VIRIDIANCITY_FISHER", "TM_DREAM_EATER", "EVENT_GOT_TM42", "DREAM EATER"],
+  ] as const;
+
+  test.skipIf(!hasGen)("each hands over the TM once, then only explains it", () => {
+    for (const [map, x, y, key, item, flag, word] of GIVERS) {
+      const game = makeMenuGame();
+      const ow = game.overworld;
+      ow.setMap(map, x, y, "down");
+      expect(game.save.inventory[item] ?? 0).toBe(0);
+      talkThrough(game, key);
+      expect(game.save.inventory[item]).toBe(1);
+      expect(game.save.flags[flag]).toBe(true);
+      // again: the explanation, and no second TM
+      ow.showMapText(key);
+      expect(topText(game)).toContain(word);
+      talkThrough(game, key);
+      expect(game.save.inventory[item]).toBe(1);
+    }
+  });
+
+  test.skipIf(!hasGen)("a full bag halts the gift and keeps it for later", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    const ids = Object.keys((romData as any).items).filter((id) => id !== "TM_PSYCHIC_M").slice(0, 20);
+    for (const id of ids) game.save.inventory[id] = 1;
+    ow.setMap("MR_PSYCHICS_HOUSE", 4, 4, "down");
+    talkThrough(game, "TEXT_MRPSYCHICSHOUSE_MR_PSYCHIC");
+    expect(game.save.inventory.TM_PSYCHIC_M).toBeUndefined();
+    expect(game.save.flags.EVENT_GOT_TM29).toBeUndefined();
+    // make room and come back
+    game.save.inventory = {};
+    talkThrough(game, "TEXT_MRPSYCHICSHOUSE_MR_PSYCHIC");
+    expect(game.save.inventory.TM_PSYCHIC_M).toBe(1);
+    expect(game.save.flags.EVENT_GOT_TM29).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("the COPYCAT takes a POKe DOLL for TM31, and nothing without one", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    ow.setMap("COPYCATS_HOUSE_2F", 4, 4, "down");
+    talkThrough(game, "TEXT_COPYCATSHOUSE2F_COPYCAT");
+    expect(game.save.inventory.TM_MIMIC).toBeUndefined();
+    expect(game.save.flags.EVENT_GOT_TM31).toBeUndefined();
+    game.save.inventory.POKE_DOLL = 2;
+    talkThrough(game, "TEXT_COPYCATSHOUSE2F_COPYCAT");
+    expect(game.save.inventory.TM_MIMIC).toBe(1);
+    expect(game.save.inventory.POKE_DOLL).toBe(1);
+    expect(game.save.flags.EVENT_GOT_TM31).toBe(true);
+    // afterwards she thanks you for it and keeps the second doll
+    ow.showMapText("TEXT_COPYCATSHOUSE2F_COPYCAT");
+    expect(topText(game)).toContain("TM31");
+    talkThrough(game, "TEXT_COPYCATSHOUSE2F_COPYCAT");
+    expect(game.save.inventory.TM_MIMIC).toBe(1);
+    expect(game.save.inventory.POKE_DOLL).toBe(1);
+  });
+});
+
 describe("Silph Co 7F", () => {
   test.skipIf(!hasGen)("the rival waits at the door, and only there", () => {
     const rows = (ow: any, save: any) =>

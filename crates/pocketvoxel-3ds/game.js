@@ -7677,6 +7677,17 @@ var MAP_SCRIPTS = {
   },
   VIRIDIAN_CITY: {
     talk: {
+      TEXT_VIRIDIANCITY_FISHER: giftRows({
+        flag: "EVENT_GOT_TM42",
+        item: "TM_DREAM_EATER",
+        pre: `Yawn!
+I must have dozed\voff in the sun.` + `\fI had this dream
+about a DROWZEE\veating my dream.` + "\vWhat's this?\vWhere did this TM\vcome from?" + `\fThis is spooky!
+Here, you can\vhave this TM.`,
+        received: "_ViridianCityFisherReceivedTM42Text",
+        explain: "_ViridianCityFisherTM42ExplanationText",
+        already: "_ViridianCityFisherTM42ExplanationText"
+      }),
       TEXT_VIRIDIANCITY_GAMBLER1: (_ow, save) => [
         ["face_player"],
         [
@@ -8721,6 +8732,77 @@ var MAP_SCRIPTS = {
       ]
     }
   },
+  MR_PSYCHICS_HOUSE: {
+    talk: {
+      TEXT_MRPSYCHICSHOUSE_MR_PSYCHIC: giftRows({
+        flag: "EVENT_GOT_TM29",
+        item: "TM_PSYCHIC_M",
+        pre: "_MrPsychicsHouseMrPsychicYouWantedThisText",
+        received: "_MrPsychicsHouseMrPsychicReceivedTM29Text",
+        explain: "_MrPsychicsHouseMrPsychicTM29ExplanationText",
+        already: "_MrPsychicsHouseMrPsychicTM29ExplanationText"
+      })
+    }
+  },
+  ROUTE_12_GATE_2F: {
+    talk: {
+      TEXT_ROUTE12GATE2F_BRUNETTE_GIRL: giftRows({
+        flag: "EVENT_GOT_TM39",
+        item: "TM_SWIFT",
+        pre: "_Route12Gate2FBrunetteGirlYouCanHaveThisText",
+        received: "_Route12Gate2FBrunetteGirlReceivedTM39Text",
+        explain: "_Route12Gate2FBrunetteGirlTM39ExplanationText",
+        already: "_Route12Gate2FBrunetteGirlTM39ExplanationText"
+      })
+    }
+  },
+  CELADON_CITY: {
+    talk: {
+      TEXT_CELADONCITY_GRAMPS3: giftRows({
+        flag: "EVENT_GOT_TM41",
+        item: "TM_SOFTBOILED",
+        pre: "_CeladonCityGramps3Text",
+        received: "_CeladonCityGramps3ReceivedTM41Text",
+        explain: "_CeladonCityGramps3TM41ExplanationText",
+        already: "_CeladonCityGramps3TM41ExplanationText"
+      })
+    }
+  },
+  CINNABAR_LAB_METRONOME_ROOM: {
+    talk: {
+      TEXT_CINNABARLABMETRONOMEROOM_SCIENTIST1: giftRows({
+        flag: "EVENT_GOT_TM35",
+        item: "TM_METRONOME",
+        pre: "_CinnabarLabMetronomeRoomScientist1Text",
+        received: "_CinnabarLabMetronomeRoomScientist1ReceivedTM35Text",
+        explain: "_CinnabarLabMetronomeRoomScientist1TM35ExplanationText",
+        already: "_CinnabarLabMetronomeRoomScientist1TM35ExplanationText"
+      })
+    }
+  },
+  COPYCATS_HOUSE_2F: {
+    talk: {
+      TEXT_COPYCATSHOUSE2F_COPYCAT: (_ow, save) => {
+        if (save?.flags?.EVENT_GOT_TM31) {
+          return [
+            ["face_player"],
+            ["show_text", "_CopycatsHouse2FCopycatTM31Explanation2Text"]
+          ];
+        }
+        return [
+          ["face_player"],
+          ["show_text", "_CopycatsHouse2FCopycatDoYouLikePokemonText"],
+          ["check_item", "POKE_DOLL"],
+          ["jump_if_false", "end"],
+          ["show_text", "_CopycatsHouse2FCopycatTM31PreReceiveText"],
+          ["give_item", "TM_MIMIC", 1, "_CopycatsHouse2FCopycatReceivedTM31Text"],
+          ["take_item", "POKE_DOLL", 1],
+          ["set_flag", "EVENT_GOT_TM31"],
+          ["show_text", "_CopycatsHouse2FCopycatTM31Explanation1Text"]
+        ];
+      }
+    }
+  },
   ROUTE_1: {
     talk: {
       TEXT_ROUTE1_YOUNGSTER1: giftRows({
@@ -8891,6 +8973,7 @@ function giftRows(o) {
     ["show_text", o.pre],
     ["give_item", o.item, 1, o.received],
     ["set_flag", o.flag],
+    ...o.explain ? [["show_text", o.explain]] : [],
     ["jump", "end"],
     ["label", "already"],
     ["show_text", o.already]

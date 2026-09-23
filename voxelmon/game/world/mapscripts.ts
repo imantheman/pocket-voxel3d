@@ -1121,6 +1121,23 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
   // talking to either. The north corridor is gated on EVENT_GOT_POKEDEX.
   VIRIDIAN_CITY: {
     talk: {
+      // story5.lua TEXT_VIRIDIANCITY_FISHER (scripts/ViridianCity.asm): the
+      // dozing fisher's TM42 DREAM EATER. His YouCanHaveThis label has no
+      // leading underscore in the ROM and sits outside the extractor's
+      // symbol set, so the line rides along as a literal, as the reference
+      // carries it too.
+      TEXT_VIRIDIANCITY_FISHER: giftRows({
+        flag: "EVENT_GOT_TM42",
+        item: "TM_DREAM_EATER",
+        pre:
+          "Yawn!\nI must have dozed\voff in the sun." +
+          "\fI had this dream\nabout a DROWZEE\veating my dream." +
+          "\vWhat's this?\vWhere did this TM\vcome from?" +
+          "\fThis is spooky!\nHere, you can\vhave this TM.",
+        received: "_ViridianCityFisherReceivedTM42Text",
+        explain: "_ViridianCityFisherTM42ExplanationText",
+        already: "_ViridianCityFisherTM42ExplanationText",
+      }),
       // flavor/viridian_city.lua TEXT_VIRIDIANCITY_GAMBLER1: he wonders who
       // the leader is until the seventh badge is in, then reports that the
       // leader is back -- and goes back to wondering once Giovanni is beaten
@@ -2604,6 +2621,94 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     },
   },
 
+  // story4.lua M.MR_PSYCHICS_HOUSE (scripts/MrPsychicsHouse.asm): TM29
+  // PSYCHIC, once; afterwards he only explains it.
+  MR_PSYCHICS_HOUSE: {
+    talk: {
+      TEXT_MRPSYCHICSHOUSE_MR_PSYCHIC: giftRows({
+        flag: "EVENT_GOT_TM29",
+        item: "TM_PSYCHIC_M",
+        pre: "_MrPsychicsHouseMrPsychicYouWantedThisText",
+        received: "_MrPsychicsHouseMrPsychicReceivedTM29Text",
+        explain: "_MrPsychicsHouseMrPsychicTM29ExplanationText",
+        already: "_MrPsychicsHouseMrPsychicTM29ExplanationText",
+      }),
+    },
+  },
+
+  // story5.lua M.ROUTE_12_GATE_2F (scripts/Route12Gate2F.asm): the girl
+  // whose POKeMON's ashes are in the tower gives away TM39 SWIFT.
+  ROUTE_12_GATE_2F: {
+    talk: {
+      TEXT_ROUTE12GATE2F_BRUNETTE_GIRL: giftRows({
+        flag: "EVENT_GOT_TM39",
+        item: "TM_SWIFT",
+        pre: "_Route12Gate2FBrunetteGirlYouCanHaveThisText",
+        received: "_Route12Gate2FBrunetteGirlReceivedTM39Text",
+        explain: "_Route12Gate2FBrunetteGirlTM39ExplanationText",
+        already: "_Route12Gate2FBrunetteGirlTM39ExplanationText",
+      }),
+    },
+  },
+
+  // story5.lua M.CELADON_CITY (scripts/CeladonCity.asm, Gramps3): TM41
+  // SOFTBOILED from the old man by the mansion.
+  CELADON_CITY: {
+    talk: {
+      TEXT_CELADONCITY_GRAMPS3: giftRows({
+        flag: "EVENT_GOT_TM41",
+        item: "TM_SOFTBOILED",
+        pre: "_CeladonCityGramps3Text",
+        received: "_CeladonCityGramps3ReceivedTM41Text",
+        explain: "_CeladonCityGramps3TM41ExplanationText",
+        already: "_CeladonCityGramps3TM41ExplanationText",
+      }),
+    },
+  },
+
+  // story5.lua M.CINNABAR_LAB_METRONOME_ROOM (scripts/CinnabarLabMetronome
+  // Room.asm): the tch-tch-tch scientist's TM35 METRONOME.
+  CINNABAR_LAB_METRONOME_ROOM: {
+    talk: {
+      TEXT_CINNABARLABMETRONOMEROOM_SCIENTIST1: giftRows({
+        flag: "EVENT_GOT_TM35",
+        item: "TM_METRONOME",
+        pre: "_CinnabarLabMetronomeRoomScientist1Text",
+        received: "_CinnabarLabMetronomeRoomScientist1ReceivedTM35Text",
+        explain: "_CinnabarLabMetronomeRoomScientist1TM35ExplanationText",
+        already: "_CinnabarLabMetronomeRoomScientist1TM35ExplanationText",
+      }),
+    },
+  },
+
+  // story4.lua M.COPYCATS_HOUSE_2F (scripts/CopycatsHouse2F.asm): the
+  // COPYCAT mimics you, and if a POKe DOLL is in the bag she takes it for
+  // TM31 MIMIC -- no question asked, the ROM just checks the bag. The doll
+  // goes AFTER the TM, so a full bag (give_item halts) keeps the doll.
+  COPYCATS_HOUSE_2F: {
+    talk: {
+      TEXT_COPYCATSHOUSE2F_COPYCAT: (_ow: any, save: any): ScriptRow[] => {
+        if (save?.flags?.EVENT_GOT_TM31) {
+          return [
+            ["face_player"],
+            ["show_text", "_CopycatsHouse2FCopycatTM31Explanation2Text"],
+          ] as ScriptRow[];
+        }
+        return [
+          ["face_player"],
+          ["show_text", "_CopycatsHouse2FCopycatDoYouLikePokemonText"],
+          ["check_item", "POKE_DOLL"],
+          ["jump_if_false", "end"],
+          ["show_text", "_CopycatsHouse2FCopycatTM31PreReceiveText"],
+          ["give_item", "TM_MIMIC", 1, "_CopycatsHouse2FCopycatReceivedTM31Text"],
+          ["take_item", "POKE_DOLL", 1],
+          ["set_flag", "EVENT_GOT_TM31"],
+          ["show_text", "_CopycatsHouse2FCopycatTM31Explanation1Text"],
+        ] as ScriptRow[];
+      },
+    },
+  },
+
   // story5.lua M.ROUTE_1 (scripts/Route1.asm): the POKeMON MART man's free
   // POTION sample, the first item in the game that is handed over rather
   // than found.
@@ -2857,6 +2962,8 @@ function giftRows(o: {
   pre: string;
   received: string;
   already: string;
+  /** Read after the received line: the "TMxx is ..." page most TM givers add. */
+  explain?: string;
 }): ScriptRow[] {
   return [
     ["face_player"],
@@ -2865,6 +2972,7 @@ function giftRows(o: {
     ["show_text", o.pre],
     ["give_item", o.item, 1, o.received],
     ["set_flag", o.flag],
+    ...(o.explain ? [["show_text", o.explain]] : []),
     ["jump", "end"],
     ["label", "already"],
     ["show_text", o.already],
