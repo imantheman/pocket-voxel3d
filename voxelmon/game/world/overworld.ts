@@ -1932,6 +1932,14 @@ export class Overworld implements ScriptWorld {
     else onDone();
   }
 
+  /** open_name_rater -> the NAME RATER's flow, via the shell. */
+  openNameRater(onDone: () => void): void {
+    const self = this as any;
+    const shell = self.shell ?? self.game ?? self.host ?? null;
+    if (shell?.openNameRater) shell.openNameRater(onDone);
+    else onDone();
+  }
+
   /** open_vending -> the rooftop machine's drink list (ui/shopscreen.ts). */
   openVending(onDone: () => void): void {
     const self = this as any;

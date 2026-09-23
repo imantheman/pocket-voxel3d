@@ -6986,6 +6986,98 @@ describe("a map's own script on arrival", () => {
   });
 });
 
+describe("the NAME RATER", () => {
+  /** Drive his flow: YES/NO answers in order, then the keyboard. */
+  function raterGame() {
+    const game = makeMenuGame();
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 10, game.battleRng));
+    game.overworld.setMap("NAME_RATERS_HOUSE", 5, 4, "up");
+    return game;
+  }
+  /** Mash through text until a screen of `kind` is on top, then stop. */
+  const until = (game: VoxelmonGame, kind: string, max = 900): void => {
+    for (let t = 0; t < max; t++) {
+      if (game.stackKinds().at(-1) === kind) return;
+      game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+    }
+  };
+  /** Answer the YES/NO box on top, and let it close. */
+  const answer = (game: VoxelmonGame, yes: boolean) => {
+    until(game, "choice");
+    if (game.stackKinds().at(-1) !== "choice") return;
+    if (!yes) tap(game, VOX_BTN.down);
+    tap(game, VOX_BTN.a);
+    for (let h = 0; h < 60 && game.stackKinds().at(-1) === "choice"; h++) game.tick(0);
+  };
+
+  test.skipIf(!hasGen)("renames the mon you pick", () => {
+    const game = raterGame();
+    game.overworld.showMapText("TEXT_NAMERATERSHOUSE_NAME_RATER");
+    answer(game, true); // rate them? yes
+    // "Which POKeMON?" then the party list
+    until(game, "party");
+    expect(game.stackKinds().at(-1)).toBe("party");
+    tap(game, VOX_BTN.a); // the first mon
+    answer(game, true); // a nicer name? yes
+    // the keyboard: type one glyph and confirm with START
+    until(game, "naming");
+    expect(game.stackKinds().at(-1)).toBe("naming");
+    tap(game, VOX_BTN.a); // one letter
+    tap(game, VOX_BTN.start);
+    dismissText(game, 800);
+    const mon = game.save.party[0]!;
+    expect(mon.nickname).toBeTruthy();
+    expect(mon.nickname).not.toBe("SQUIRTLE");
+  });
+
+  test.skipIf(!hasGen)("will not touch a traded mon, and takes no for an answer", () => {
+    /**
+     * One visit, saying YES to everything and typing a name if he offers
+     * the keyboard. Returns whether it ever got that far.
+     */
+    const visit = (game: VoxelmonGame, yes: boolean): boolean => {
+      let named = false;
+      game.overworld.showMapText("TEXT_NAMERATERSHOUSE_NAME_RATER");
+      for (let t = 0; t < 900; t++) {
+        const top = game.stackKinds().at(-1);
+        if (top === "overworld") break;
+        if (top === "choice") {
+          if (!yes) tap(game, VOX_BTN.down);
+          tap(game, VOX_BTN.a);
+          for (let h = 0; h < 60 && game.stackKinds().at(-1) === "choice"; h++) game.tick(0);
+          continue;
+        }
+        if (top === "party") { tap(game, VOX_BTN.a); continue; }
+        if (top === "naming") {
+          named = true;
+          tap(game, VOX_BTN.a);
+          tap(game, VOX_BTN.start);
+          continue;
+        }
+        game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+      }
+      return named;
+    };
+
+    // A traded mon is refused: NameRatersHouseCheckMonOTScript never gets
+    // to the keyboard, however willing the player is.
+    const traded = raterGame();
+    traded.save.party[0]!.traded = true;
+    expect(visit(traded, true)).toBe(false);
+    expect(traded.save.party[0]!.nickname).toBeUndefined();
+
+    // the same mon, not traded: he does offer the keyboard
+    const own = raterGame();
+    expect(visit(own, true)).toBe(true);
+
+    // and a "no" at the door ends the visit with nothing renamed
+    const shy = raterGame();
+    expect(visit(shy, false)).toBe(false);
+    expect(shy.save.party[0]!.nickname).toBeUndefined();
+    expect(shy.stackKinds()).toEqual(["overworld"]);
+  });
+});
+
 describe("Silph Co 7F", () => {
   test.skipIf(!hasGen)("the rival waits at the door, and only there", () => {
     const rows = (ow: any, save: any) =>

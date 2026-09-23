@@ -1525,6 +1525,63 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     this.push(new HallOfFameState(this as never, entry, rollCredits));
   }
 
+  /**
+   * The NAME RATER (scripts/NameRatersHouse.asm), via the open_name_rater
+   * verb. His whole visit is menus over menus -- ask, party pick, ask,
+   * keyboard -- so like the DAY CARE it lives here rather than as script
+   * rows, and `onDone` resumes the script that opened him.
+   *
+   * NameRatersHouseCheckMonOTScript: a mon whose ORIGINAL TRAINER is not
+   * the player cannot be renamed. He compliments its name instead, which
+   * is how the ROM refuses.
+   */
+  openNameRater(onDone?: () => void): void {
+    const t = (this.data as { text?: Record<string, string> }).text ?? {};
+    const fill = (k: string, fallback: string, name = ""): string =>
+      (t[k] ?? fallback)
+        .replace(/\{RAM:wNameBuffer\}/g, name)
+        .replace(/\{RAM:wBuffer\}/g, name);
+    // .did_not_rename -- every way out of his flow but the rename itself
+    const bye = (): void =>
+      this.showText(fill("_NameRatersHouseNameRaterComeAnyTimeYouLikeText",
+        "Fine! Come any\ntime you like!"), onDone);
+
+    this.showChoice(fill("_NameRatersHouseNameRaterWantMeToRateText",
+      "Hello, hello!\nI am the official\nNAME RATER!\fWant me to rate\nthe nicknames of\nyour POKéMON?"), (yes) => {
+      if (!yes) { bye(); return; }
+      this.showText(fill("_NameRatersHouseNameRaterWhichPokemonText",
+        "Which POKéMON\nshould I look at?"), () => {
+        this.pickPartyMon((index) => {
+          const mon = this.save.party[index];
+          if (!mon) { bye(); return; }
+          const def = this.data.pokemon[mon.species];
+          const species = def?.name ?? mon.species;
+          const cur = mon.nickname ?? species;
+          if (mon.traded === true) {
+            this.showText(fill("_NameRatersHouseNameRaterATrulyImpeccableNameText",
+              "{RAM:wNameBuffer}, is it?\nThat is a truly\nimpeccable name!\fTake good care of\n{RAM:wNameBuffer}!", cur), onDone);
+            return;
+          }
+          this.showChoice(fill("_NameRatersHouseNameRaterGiveItANiceNameText",
+            "{RAM:wNameBuffer}, is it?\nThat is a decent\nnickname!\fBut, would you\nlike me to give\nit a nicer name?\fHow about it?", cur), (rename) => {
+            if (!rename) { bye(); return; }
+            this.showText(fill("_NameRatersHouseNameRaterWhatShouldWeNameItText",
+              "Fine! What should\nwe name it?"), () => {
+              this.askNickname(species, (name) => {
+                // askNickname reports the DEFAULT back as null, which here
+                // means "call it by its species name again".
+                mon.nickname = name ?? undefined;
+                this.showText(fill("_NameRatersHouseNameRaterPokemonHasBeenRenamedText",
+                  "OK! This POKéMON\nhas been renamed\n{RAM:wBuffer}!\fThat's a better\nname than before!",
+                  mon.nickname ?? species), onDone);
+              });
+            });
+          });
+        }, bye);
+      });
+    });
+  }
+
   /** A party pick for a script: onPick(index) or onCancel on B / CANCEL. */
   pickPartyMon(onPick: (index: number) => void, onCancel: () => void): void {
     this.push(new PartyState(this as never, { onPick, onCancel }));

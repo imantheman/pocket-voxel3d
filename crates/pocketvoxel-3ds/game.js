@@ -8449,6 +8449,14 @@ var MAP_SCRIPTS = {
       TEXT_ROUTE12SUPERRODHOUSE_FISHING_GURU: rodGiverRows("_Route12SuperRodHouseFishingGuruDoYouLikeToFishText", "_Route12SuperRodHouseFishingGuruReceivedSuperRodText", "_Route12SuperRodHouseFishingGuruTryFishingText", "_Route12SuperRodHouseFishingGuruThatsDisappointingText", "SUPER_ROD", "EVENT_GOT_SUPER_ROD")
     }
   },
+  NAME_RATERS_HOUSE: {
+    talk: {
+      TEXT_NAMERATERSHOUSE_NAME_RATER: [
+        ["face_player"],
+        ["open_name_rater"]
+      ]
+    }
+  },
   ROUTE_1: {
     talk: {
       TEXT_ROUTE1_YOUNGSTER1: giftRows({
@@ -9477,6 +9485,14 @@ function* open_prizes(ctx, ...args) {
   w.openPrizes(args[0], () => runner.resume());
   yield;
 }
+function* open_name_rater(ctx) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  if (!w.openNameRater)
+    return;
+  w.openNameRater(() => runner.resume());
+  yield;
+}
 function* open_vending(ctx) {
   const runner = ctx.runner;
   const w = ctx.world;
@@ -9682,6 +9698,7 @@ var VERBS = {
   trade,
   open_mart,
   open_vending,
+  open_name_rater,
   open_elevator,
   walk_route,
   check_item,
@@ -11005,6 +11022,14 @@ wore off.`);
     const shell = this.shell;
     if (shell?.openElevator)
       shell.openElevator(this.map.id, onDone);
+    else
+      onDone();
+  }
+  openNameRater(onDone) {
+    const self = this;
+    const shell = self.shell ?? self.game ?? self.host ?? null;
+    if (shell?.openNameRater)
+      shell.openNameRater(onDone);
     else
       onDone();
   }
@@ -17830,6 +17855,62 @@ allowed here.`));
       return;
     }
     this.push(new HallOfFameState(this, entry, rollCredits));
+  }
+  openNameRater(onDone) {
+    const t = this.data.text ?? {};
+    const fill = (k, fallback, name = "") => (t[k] ?? fallback).replace(/\{RAM:wNameBuffer\}/g, name).replace(/\{RAM:wBuffer\}/g, name);
+    const bye = () => this.showText(fill("_NameRatersHouseNameRaterComeAnyTimeYouLikeText", `Fine! Come any
+time you like!`), onDone);
+    this.showChoice(fill("_NameRatersHouseNameRaterWantMeToRateText", `Hello, hello!
+I am the official
+NAME RATER!\fWant me to rate
+the nicknames of
+your POKéMON?`), (yes) => {
+      if (!yes) {
+        bye();
+        return;
+      }
+      this.showText(fill("_NameRatersHouseNameRaterWhichPokemonText", `Which POKéMON
+should I look at?`), () => {
+        this.pickPartyMon((index) => {
+          const mon = this.save.party[index];
+          if (!mon) {
+            bye();
+            return;
+          }
+          const def = this.data.pokemon[mon.species];
+          const species = def?.name ?? mon.species;
+          const cur = mon.nickname ?? species;
+          if (mon.traded === true) {
+            this.showText(fill("_NameRatersHouseNameRaterATrulyImpeccableNameText", `{RAM:wNameBuffer}, is it?
+That is a truly
+impeccable name!\fTake good care of
+{RAM:wNameBuffer}!`, cur), onDone);
+            return;
+          }
+          this.showChoice(fill("_NameRatersHouseNameRaterGiveItANiceNameText", `{RAM:wNameBuffer}, is it?
+That is a decent
+nickname!\fBut, would you
+like me to give
+it a nicer name?\fHow about it?`, cur), (rename) => {
+            if (!rename) {
+              bye();
+              return;
+            }
+            this.showText(fill("_NameRatersHouseNameRaterWhatShouldWeNameItText", `Fine! What should
+we name it?`), () => {
+              this.askNickname(species, (name) => {
+                mon.nickname = name ?? undefined;
+                this.showText(fill("_NameRatersHouseNameRaterPokemonHasBeenRenamedText", `OK! This POKéMON
+has been renamed
+{RAM:wBuffer}!\fThat's a better
+name than before!`, mon.nickname ?? species), onDone);
+              });
+            });
+          });
+        }, bye);
+      });
+    });
   }
   pickPartyMon(onPick, onCancel) {
     this.push(new PartyState(this, { onPick, onCancel }));

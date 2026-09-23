@@ -765,6 +765,15 @@ function* open_prizes(ctx: ScriptContext, ...args: unknown[]): Generator<void, v
   yield;
 }
 
+/** The NAME RATER (game.ts openNameRater), blocking until he is done. */
+function* open_name_rater(ctx: ScriptContext): Generator<void, void> {
+  const runner = ctx.runner;
+  const w = ctx.world as unknown as { openNameRater?: (done: () => void) => void };
+  if (!w.openNameRater) return;
+  w.openNameRater(() => runner.resume());
+  yield;
+}
+
 /**
  * A Celadon rooftop vending machine (world/vending.ts). The same shop screen
  * the marts use, in its machine mode; blocks until the player walks away
@@ -1080,6 +1089,7 @@ const VERBS: Record<string, Verb> = {
   trade,
   open_mart,
   open_vending,
+  open_name_rater,
   open_elevator,
   walk_route,
   check_item,

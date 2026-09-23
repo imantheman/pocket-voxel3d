@@ -2592,6 +2592,18 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     },
   },
 
+  // story4.lua M.NAME_RATERS_HOUSE (scripts/NameRatersHouse.asm): the man
+  // in Lavender who renames a Pokemon. The flow is his own (game.ts
+  // openNameRater); this is the door to it.
+  NAME_RATERS_HOUSE: {
+    talk: {
+      TEXT_NAMERATERSHOUSE_NAME_RATER: [
+        ["face_player"],
+        ["open_name_rater"],
+      ] as ScriptRow[],
+    },
+  },
+
   // story5.lua M.ROUTE_1 (scripts/Route1.asm): the POKeMON MART man's free
   // POTION sample, the first item in the game that is handed over rather
   // than found.
