@@ -2673,6 +2673,30 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     },
   },
 
+  // flavor/silph_co_9f.lua (scripts/SilphCo9F.asm SilphCo9FNurseText): the
+  // nurse on 9F heals the party while TEAM ROCKET holds the building -- a
+  // white fade with Delay3 between, no Music_PkmnHealed -- and just says
+  // thanks once Giovanni is beaten. Her lines are not in the extracted text
+  // table, so pokered/text/SilphCo9F.asm's are carried as literals.
+  SILPH_CO_9F: {
+    talk: {
+      TEXT_SILPHCO9F_NURSE: [
+        ["face_player"],
+        ["check_flag", "EVENT_BEAT_SILPH_CO_GIOVANNI"],
+        ["jump_if_true", "thanks"],
+        ["show_text", "You look tired!\nYou should take a\vquick nap!"],
+        ["heal_party"],
+        ["fade", "out"],
+        ["wait", 3],
+        ["fade", "in"],
+        ["show_text", "Don't give up!"],
+        ["jump", "end"],
+        ["label", "thanks"],
+        ["show_text", "Thank you so\nmuch!"],
+      ] as ScriptRow[],
+    },
+  },
+
   // story4.lua M.MR_PSYCHICS_HOUSE (scripts/MrPsychicsHouse.asm): TM29
   // PSYCHIC, once; afterwards he only explains it.
   MR_PSYCHICS_HOUSE: {

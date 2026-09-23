@@ -8795,6 +8795,26 @@ Here, you can\vhave this TM.`,
       })
     }
   },
+  SILPH_CO_9F: {
+    talk: {
+      TEXT_SILPHCO9F_NURSE: [
+        ["face_player"],
+        ["check_flag", "EVENT_BEAT_SILPH_CO_GIOVANNI"],
+        ["jump_if_true", "thanks"],
+        ["show_text", `You look tired!
+You should take a\vquick nap!`],
+        ["heal_party"],
+        ["fade", "out"],
+        ["wait", 3],
+        ["fade", "in"],
+        ["show_text", "Don't give up!"],
+        ["jump", "end"],
+        ["label", "thanks"],
+        ["show_text", `Thank you so
+much!`]
+      ]
+    }
+  },
   MR_PSYCHICS_HOUSE: {
     talk: {
       TEXT_MRPSYCHICSHOUSE_MR_PSYCHIC: giftRows({

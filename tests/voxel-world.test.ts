@@ -7828,6 +7828,40 @@ describe("the CYCLING ROAD's forced bike and downhill roll", () => {
   });
 });
 
+describe("the Silph Co 9F nurse", () => {
+  function talkThrough(game: VoxelmonGame): void {
+    game.overworld.showMapText("TEXT_SILPHCO9F_NURSE");
+    for (let t = 0; t < 3000; t++) {
+      // the script's own wait between the fades leaves the world on top
+      // while it is still running
+      const idle = !(game.overworld as any).runner.isRunning();
+      if (game.stackKinds().at(-1) === "overworld" && idle) break;
+      game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    expect(game.stackKinds().at(-1)).toBe("overworld");
+  }
+
+  test.skipIf(!hasGen)("she heals the party while the Rockets hold the building, and only thanks you after", () => {
+    const game = makeMenuGame();
+    const mon = newMon(romData!, "PIDGEY", 12, game.battleRng);
+    mon.hp = 1;
+    game.save.party.push(mon);
+    game.overworld.setMap("SILPH_CO_9F", 5, 5, "down");
+    talkThrough(game);
+    expect(game.save.party[0]!.hp).toBeGreaterThan(1);
+
+    game.save.party[0]!.hp = 1;
+    game.save.flags.EVENT_BEAT_SILPH_CO_GIOVANNI = true;
+    // let the fade settle before she is spoken to again
+    for (let i = 0; i < 120; i++) game.tick(0);
+    game.overworld.showMapText("TEXT_SILPHCO9F_NURSE");
+    for (let i = 0; i < 120 && game.stackKinds().at(-1) !== "textbox"; i++) game.tick(0);
+    expect(topText(game)).toContain("Thank");
+    talkThrough(game);
+    expect(game.save.party[0]!.hp).toBe(1);
+  });
+});
+
 describe("Silph Co 7F", () => {
   test.skipIf(!hasGen)("the rival waits at the door, and only there", () => {
     const rows = (ow: any, save: any) =>
