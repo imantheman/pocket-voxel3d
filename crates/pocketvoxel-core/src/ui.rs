@@ -215,6 +215,14 @@ impl Rect {
     }
 }
 
+/// How far apart two rects are: the gap between their nearest edges on
+/// each axis, summed; 0 when they touch or overlap.
+pub fn rect_gap(a: &Rect, b: &Rect) -> f32 {
+    let dx = (b.x0 - a.x1).max(a.x0 - b.x1).max(0.0);
+    let dy = (b.y0 - a.y1).max(a.y0 - b.y1).max(0.0);
+    dx + dy
+}
+
 /// Where a panel sits when nothing has moved it: its cells, in UI px.
 pub fn panel_home(p: &UiPanel) -> Rect {
     Rect::of(
@@ -294,11 +302,23 @@ fn panel_fit(
         n += 2;
     }
     // Sideways first, then up or down, then the diagonals; ties to where it
-    // already is.
+    // already is. And when it is the panel's OWN mon standing on its cells
+    // that moved it -- the camera swung the mon across to the panel's side
+    // -- the placement has to end up beside that mon, not merely off it:
+    // the cheapest clear spot could be flush against the OTHER mon, which
+    // read as the enemy's HP bar sitting next to your own Pokemon. The gap
+    // to its own mon costs more than any distance travelled, so of the
+    // clear spots the flush ones win, and the cheapest of those is taken.
+    let own_displaces = own.is_some_and(|o| home.overlaps(&o.grown(gap)));
     let cost = |d: [f32; 2]| {
         d[0].abs()
             + d[1].abs() * 1.4
             + ((d[0] - now[0]).abs() + (d[1] - now[1]).abs()) * 0.3
+            + if own_displaces {
+                own.map_or(0.0, |o| rect_gap(&at(d), &o) * 2.0)
+            } else {
+                0.0
+            }
     };
     let mut best: Option<([f32; 2], f32)> = None;
     for dx in xs.iter().take(n) {
@@ -433,10 +453,14 @@ pub fn ease_panels(scene: &Scene, cards: &[Option<Rect>; UI_PANELS]) -> [[f32; 2
         };
         let was = scene.ui_panel_target[i].get();
         let going = home.shifted(was[0], was[1]);
+        // Still beside its own mon? A target chosen when the mon was here
+        // is stale once the camera has carried the mon across the screen:
+        // clear of everything, and nowhere near what it labels.
+        let still_beside = cards[i].is_none_or(|o| rect_gap(&going, &o) <= PANEL_GAP * 3.0);
         let target = if clear_by(home, PANEL_GAP * PANEL_HOME_MARGIN) {
             // Nothing near its own cells any more: that is where it belongs.
             [0.0, 0.0]
-        } else if was != [0.0, 0.0] && clear_by(going, PANEL_HOLD_GAP) {
+        } else if was != [0.0, 0.0] && still_beside && clear_by(going, PANEL_HOLD_GAP) {
             // Where it was already heading still works: keep going there.
             // Re-solving every frame is what had the HUD drifting whenever
             // a sprite so much as leaned.
@@ -637,6 +661,37 @@ mod tests {
         let right = placed(home, own, None, [100.0, 0.0]);
         assert!(left.x1 <= own.x0, "was on the left, stayed left");
         assert!(right.x0 >= own.x1, "was on the right, stayed right");
+    }
+
+    /// Pushed off its cells by its own mon, a panel lands flush against
+    /// that mon -- never at some clear spot beside the other one. Here the
+    /// cheapest clear move by distance alone would be a short drop that
+    /// lands the panel touching the OTHER mon; the flush spot beside its
+    /// own costs more travel and still wins.
+    #[test]
+    fn a_displaced_panel_stays_flush_with_its_own_mon() {
+        let home = rect(0.0, 0.0, 150.0, 60.0);
+        let own = rect(20.0, 0.0, 100.0, 40.0);
+        let other = rect(0.0, 60.0 + PANEL_GAP + 2.0, 150.0, 200.0);
+        let d = panel_shift(home, Some(own), Some(other), None, VIEW, [0.0, 0.0]);
+        let p = home.shifted(d[0], d[1]);
+        assert!(!p.overlaps(&own.grown(PANEL_GAP)), "{p:?} is on its own mon");
+        assert!(!p.overlaps(&other.grown(PANEL_GAP)), "{p:?} is on the other mon");
+        assert!(
+            rect_gap(&p, &own) <= PANEL_GAP + 0.5,
+            "{p:?} is not beside its own mon (gap {})",
+            rect_gap(&p, &own)
+        );
+    }
+
+    #[test]
+    fn rect_gap_measures_the_space_between() {
+        let a = rect(0.0, 0.0, 10.0, 10.0);
+        assert_eq!(rect_gap(&a, &rect(5.0, 5.0, 20.0, 20.0)), 0.0); // overlap
+        assert_eq!(rect_gap(&a, &rect(10.0, 0.0, 20.0, 10.0)), 0.0); // touching
+        assert_eq!(rect_gap(&a, &rect(14.0, 0.0, 20.0, 10.0)), 4.0);
+        assert_eq!(rect_gap(&a, &rect(14.0, 13.0, 20.0, 20.0)), 7.0);
+        assert_eq!(rect_gap(&rect(14.0, 13.0, 20.0, 20.0), &a), 7.0);
     }
 
     #[test]
