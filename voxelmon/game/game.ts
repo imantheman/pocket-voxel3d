@@ -81,6 +81,7 @@ import { BagState } from "./ui/bagscreen.ts";
 import { PartyState } from "./ui/partyscreen.ts";
 import { ShopState } from "./ui/shopscreen.ts";
 import { VENDING_DRINKS } from "./world/vending.ts";
+import { fishingCatch, isRod } from "./world/fishing.ts";
 import { BoxState } from "./ui/boxscreen.ts";
 import { PcState } from "./ui/pcscreen.ts";
 import { PokedexState } from "./ui/pokedexscreen.ts";
@@ -1240,6 +1241,49 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   useKeyItem(itemId: string): void {
     if (itemId === "BICYCLE") this.toggleBike();
     else if (itemId === "POKE_FLUTE") this.playPokeFlute();
+    else if (isRod(itemId)) this.goFishing(itemId);
+  }
+
+  /**
+   * Cast a rod at the water being faced (gen1recomp OverworldController
+   * goFishing; engine/items/item_effects.asm FishingInit).
+   *
+   * Two refusals before any of it, both the original's. FishingInit opens
+   * with `cp wWalkBikeSurfState, 2` and every ItemUseXRod jumps out on the
+   * carry, so a rod on the water is OAK's "not the time", not a cast -- you
+   * cannot fish while surfing. And a rod pointed at anything that is not
+   * water says so.
+   *
+   * Then the dots, then the verdict. The bite goes straight into the battle
+   * with no "appeared" line of its own, the way a hooked encounter does.
+   */
+  goFishing(rod: string): void {
+    const t = (this.data as { text?: Record<string, string> }).text ?? {};
+    const line = (k: string, fallback: string): string =>
+      (t[k] ?? fallback).replace(/\{PLAYER\}/g, String(this.save.player?.name ?? "RED"));
+    const ow = this.overworld;
+    const p = ow?.player;
+    if (!p) return;
+    if (p.surfing) {
+      this.showText(line("_ItemUseNotTimeText",
+        "OAK: {PLAYER}!\nThis isn't the\ntime to use that!"));
+      return;
+    }
+    const [fx, fy] = p.facingCell();
+    if (!ow.map?.inBounds(fx, fy) || !ow.map.isWaterCell(fx, fy)) {
+      this.showText("No good! It's not\neven near water.");
+      return;
+    }
+    const hooked = fishingCatch(this.data, rod, ow.map.id, () => this.rng.int(256));
+    this.showText(". . .", () => {
+      if (!hooked) {
+        this.showText(line("_NoNibbleText", "Not even a nibble!"));
+        return;
+      }
+      this.showText(line("_ItsABiteText", "Oh!\nIt's a bite!"), () => {
+        this.startWildBattle(hooked.species, hooked.level);
+      });
+    });
   }
 
   /**

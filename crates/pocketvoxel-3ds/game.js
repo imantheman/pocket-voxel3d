@@ -7854,6 +7854,54 @@ var MAP_SCRIPTS = {
     onEnter: seedElevator,
     talk: { TEXT_SILPHCOELEVATOR_ELEVATOR: [["open_elevator"]] }
   },
+  VERMILION_OLD_ROD_HOUSE: {
+    talk: {
+      TEXT_VERMILIONOLDRODHOUSE_FISHING_GURU: rodGiverRows("_VermilionOldRodHouseFishingGuruDoYouLikeToFishText", "_VermilionOldRodHouseFishingGuruTakeThisText", "_VermilionOldRodHouseFishingGuruHowAreTheFishBitingText", "_VermilionOldRodHouseFishingGuruThatsSoDisappointingText", "OLD_ROD", "EVENT_GOT_OLD_ROD")
+    }
+  },
+  FUCHSIA_GOOD_ROD_HOUSE: {
+    talk: {
+      TEXT_FUCHSIAGOODRODHOUSE_FISHING_GURU: rodGiverRows("_FuchsiaGoodRodHouseFishingGuruText", "_FuchsiaGoodRodHouseFishingGuruReceivedGoodRodText", "_FuchsiaGoodRodHouseFishingGuruHowAreTheFishText", "_FuchsiaGoodRodHouseFishingGuruThatsSoDisappointingText", "GOOD_ROD", "EVENT_GOT_GOOD_ROD")
+    }
+  },
+  ROUTE_12_SUPER_ROD_HOUSE: {
+    talk: {
+      TEXT_ROUTE12SUPERRODHOUSE_FISHING_GURU: rodGiverRows("_Route12SuperRodHouseFishingGuruDoYouLikeToFishText", "_Route12SuperRodHouseFishingGuruReceivedSuperRodText", "_Route12SuperRodHouseFishingGuruTryFishingText", "_Route12SuperRodHouseFishingGuruThatsDisappointingText", "SUPER_ROD", "EVENT_GOT_SUPER_ROD")
+    }
+  },
+  SILPH_CO_7F: {
+    onEnter: (ow, save) => {
+      if (save?.flags?.EVENT_BEAT_SILPH_CO_RIVAL)
+        return;
+      ow?.setObjectHidden?.("SILPHCO7F_RIVAL", true);
+    },
+    talk: { TEXT_SILPHCO7F_SILPH_WORKER_M1: laprasRows },
+    onStep: (ow, save) => {
+      if (save?.flags?.EVENT_BEAT_SILPH_CO_RIVAL)
+        return null;
+      const p = ow?.player;
+      const x = p?.cellX;
+      const y = p?.cellY;
+      if (x !== 3 || y !== 2 && y !== 3)
+        return null;
+      if (p)
+        p.facing = "down";
+      return sceneWithTheme(MEET_RIVAL, [
+        ["show_object", "SILPH_CO_7F", "SILPHCO7F_RIVAL"],
+        ["show_text", "_SilphCo7FRivalText"],
+        ["move_npc_to", "SILPHCO7F_RIVAL", 3, y + 1],
+        ["face_object", "SILPHCO7F_RIVAL", "up"],
+        ["show_text", "_SilphCo7FRivalWaitedHereText"],
+        ["rival_battle", "OPP_RIVAL2", 7],
+        ["jump_if_false", 12],
+        ["set_flag", "EVENT_BEAT_SILPH_CO_RIVAL"],
+        ["show_text", "_SilphCo7FRivalDefeatedText"],
+        ["show_text", "_SilphCo7FRivalGoodLuckToYouText"],
+        ["move_npc_to", "SILPHCO7F_RIVAL", 5, y + 1],
+        ["hide_object", "SILPH_CO_7F", "SILPHCO7F_RIVAL"]
+      ]);
+    }
+  },
   CELADON_MART_ELEVATOR: {
     onEnter: seedElevator,
     talk: { TEXT_CELADONMARTELEVATOR: [["open_elevator"]] }
@@ -7893,6 +7941,35 @@ function sceneWithTheme(song, rows) {
   const jumps = ["jump", "jump_if_true", "jump_if_false"];
   const bumped = rows.map((r) => jumps.includes(r[0]) && typeof r[1] === "number" ? [r[0], r[1] + 1] : r);
   return [["play_music", song], ...bumped];
+}
+function rodGiverRows(ask, received, after, refused, rod, flag) {
+  return [
+    ["face_player"],
+    ["check_flag", flag],
+    ["jump_if_true", "already"],
+    ["ask", ask],
+    ["jump_if_false", "no"],
+    ["give_item", rod, 1, received],
+    ["set_flag", flag],
+    ["jump", "end"],
+    ["label", "no"],
+    ["show_text", refused],
+    ["jump", "end"],
+    ["label", "already"],
+    ["show_text", after]
+  ];
+}
+function laprasRows(_ow, save) {
+  if (save?.flags?.EVENT_GOT_LAPRAS) {
+    return [["show_text", "_SilphCo7FSilphWorkerM1LaprasDescriptionText"]];
+  }
+  return [
+    ["face_player"],
+    ["show_text", "_SilphCo7FSilphWorkerM1HaveThisPokemonText"],
+    ["give_pokemon", "LAPRAS", 15],
+    ["set_flag", "EVENT_GOT_LAPRAS"],
+    ["show_text", "_SilphCo7FSilphWorkerM1LaprasDescriptionText"]
+  ];
 }
 var MAGIKARP_PRICE = 500;
 var LANCE_STAIRS = [24, 16];
@@ -14669,7 +14746,13 @@ class SummaryState {
 // voxelmon/game/ui/bagscreen.ts
 var ROWS5 = 4;
 var USABLE_ON_PARTY = new Set(["RARE_CANDY"]);
-var USABLE_IN_FIELD = new Set(["BICYCLE", "POKE_FLUTE"]);
+var USABLE_IN_FIELD = new Set([
+  "BICYCLE",
+  "POKE_FLUTE",
+  "OLD_ROD",
+  "GOOD_ROD",
+  "SUPER_ROD"
+]);
 
 class BagState {
   game;
@@ -15071,6 +15154,43 @@ That will be
       footer: this.footer
     };
   }
+}
+
+// voxelmon/game/world/fishing.ts
+var OLD_ROD_CATCH = { species: "MAGIKARP", level: 5 };
+var GOOD_ROD_POOL = [
+  { species: "GOLDEEN", level: 10 },
+  { species: "POLIWAG", level: 10 }
+];
+function isRod(id) {
+  return id === "OLD_ROD" || id === "GOOD_ROD" || id === "SUPER_ROD";
+}
+function rodPool(data, rod, mapId) {
+  if (rod === "GOOD_ROD")
+    return GOOD_ROD_POOL;
+  if (rod === "SUPER_ROD") {
+    const groups = data?.field?.superRod;
+    return groups?.[mapId] ?? [];
+  }
+  return [];
+}
+function rollFishingGroup(group, rand) {
+  if (group.length === 0)
+    return null;
+  for (let guard = 0;guard < 64; guard++) {
+    const r = rand() & 255;
+    if (r % 2 === 1)
+      return null;
+    const pick = Math.floor(r / 2) % 4;
+    if (pick < group.length)
+      return { ...group[pick] };
+  }
+  return null;
+}
+function fishingCatch(data, rod, mapId, rand) {
+  if (rod === "OLD_ROD")
+    return { ...OLD_ROD_CATCH };
+  return rollFishingGroup(rodPool(data, rod, mapId), rand);
 }
 
 // voxelmon/game/pokemon/boxes.ts
@@ -16855,6 +16975,39 @@ afford it!`), comeAgain);
       this.toggleBike();
     else if (itemId === "POKE_FLUTE")
       this.playPokeFlute();
+    else if (isRod(itemId))
+      this.goFishing(itemId);
+  }
+  goFishing(rod) {
+    const t = this.data.text ?? {};
+    const line = (k, fallback) => (t[k] ?? fallback).replace(/\{PLAYER\}/g, String(this.save.player?.name ?? "RED"));
+    const ow = this.overworld;
+    const p = ow?.player;
+    if (!p)
+      return;
+    if (p.surfing) {
+      this.showText(line("_ItemUseNotTimeText", `OAK: {PLAYER}!
+This isn't the
+time to use that!`));
+      return;
+    }
+    const [fx, fy] = p.facingCell();
+    if (!ow.map?.inBounds(fx, fy) || !ow.map.isWaterCell(fx, fy)) {
+      this.showText(`No good! It's not
+even near water.`);
+      return;
+    }
+    const hooked = fishingCatch(this.data, rod, ow.map.id, () => this.rng.int(256));
+    this.showText(". . .", () => {
+      if (!hooked) {
+        this.showText(line("_NoNibbleText", "Not even a nibble!"));
+        return;
+      }
+      this.showText(line("_ItsABiteText", `Oh!
+It's a bite!`), () => {
+        this.startWildBattle(hooked.species, hooked.level);
+      });
+    });
   }
   playPokeFlute() {
     const t = this.data.text ?? {};

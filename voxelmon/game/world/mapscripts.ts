@@ -2545,6 +2545,91 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     onEnter: seedElevator,
     talk: { TEXT_SILPHCOELEVATOR_ELEVATOR: [["open_elevator"]] as ScriptRow[] },
   },
+  // story3.lua M.VERMILION_OLD_ROD_HOUSE / M.FUCHSIA_GOOD_ROD_HOUSE /
+  // M.ROUTE_12_SUPER_ROD_HOUSE (scripts/VermilionOldRodHouse.asm and its two
+  // siblings). Three houses, one script: the guru asks whether you like to
+  // fish, and a yes is the only way any rod enters the game.
+  VERMILION_OLD_ROD_HOUSE: {
+    talk: {
+      TEXT_VERMILIONOLDRODHOUSE_FISHING_GURU: rodGiverRows(
+        "_VermilionOldRodHouseFishingGuruDoYouLikeToFishText",
+        "_VermilionOldRodHouseFishingGuruTakeThisText",
+        "_VermilionOldRodHouseFishingGuruHowAreTheFishBitingText",
+        "_VermilionOldRodHouseFishingGuruThatsSoDisappointingText",
+        "OLD_ROD",
+        "EVENT_GOT_OLD_ROD",
+      ),
+    },
+  },
+
+  FUCHSIA_GOOD_ROD_HOUSE: {
+    talk: {
+      TEXT_FUCHSIAGOODRODHOUSE_FISHING_GURU: rodGiverRows(
+        "_FuchsiaGoodRodHouseFishingGuruText",
+        "_FuchsiaGoodRodHouseFishingGuruReceivedGoodRodText",
+        "_FuchsiaGoodRodHouseFishingGuruHowAreTheFishText",
+        "_FuchsiaGoodRodHouseFishingGuruThatsSoDisappointingText",
+        "GOOD_ROD",
+        "EVENT_GOT_GOOD_ROD",
+      ),
+    },
+  },
+
+  ROUTE_12_SUPER_ROD_HOUSE: {
+    talk: {
+      TEXT_ROUTE12SUPERRODHOUSE_FISHING_GURU: rodGiverRows(
+        "_Route12SuperRodHouseFishingGuruDoYouLikeToFishText",
+        "_Route12SuperRodHouseFishingGuruReceivedSuperRodText",
+        "_Route12SuperRodHouseFishingGuruTryFishingText",
+        "_Route12SuperRodHouseFishingGuruThatsDisappointingText",
+        "SUPER_ROD",
+        "EVENT_GOT_SUPER_ROD",
+      ),
+    },
+  },
+
+  // story4.lua M.SILPH_CO_7F (the worker's LAPRAS) + story5.lua M.SILPH_CO_7F
+  // (the rival ambush). Both live on this floor, so both are here.
+  //
+  // The rival stands at (3,7) in the map data with no `hidden` flag -- the
+  // extractor gave SS Anne's rival one and not this one -- so without the
+  // load-time hide he is simply standing in the room from the first visit,
+  // and walking up to him says "What kept you?" with no battle. He belongs
+  // off the floor until the doorway trigger puts him on it.
+  SILPH_CO_7F: {
+    onEnter: (ow: any, save: any) => {
+      if (save?.flags?.EVENT_BEAT_SILPH_CO_RIVAL) return;
+      ow?.setObjectHidden?.("SILPHCO7F_RIVAL", true);
+    },
+    talk: { TEXT_SILPHCO7F_SILPH_WORKER_M1: laprasRows },
+    onStep: (ow: any, save: any) => {
+      if (save?.flags?.EVENT_BEAT_SILPH_CO_RIVAL) return null;
+      const p = ow?.player;
+      const x = p?.cellX;
+      const y = p?.cellY;
+      // SilphCo7FDefaultScript's coord pair, the two cells inside the door.
+      if (x !== 3 || (y !== 2 && y !== 3)) return null;
+      // runAmbush's side effect: you turn to face him as he comes up.
+      if (p) p.facing = "down";
+      return sceneWithTheme(MEET_RIVAL, [
+        ["show_object", "SILPH_CO_7F", "SILPHCO7F_RIVAL"], //      1
+        ["show_text", "_SilphCo7FRivalText"], //                   2
+        ["move_npc_to", "SILPHCO7F_RIVAL", 3, y + 1], //           3
+        ["face_object", "SILPHCO7F_RIVAL", "up"], //               4
+        ["show_text", "_SilphCo7FRivalWaitedHereText"], //         5
+        // OPP_RIVAL2 parties 7-9, one per starter; rival_battle adds the
+        // counterpick offset itself.
+        ["rival_battle", "OPP_RIVAL2", 7], //                      6
+        ["jump_if_false", 12], //                                  7  loss -> hide
+        ["set_flag", "EVENT_BEAT_SILPH_CO_RIVAL"], //              8
+        ["show_text", "_SilphCo7FRivalDefeatedText"], //           9
+        ["show_text", "_SilphCo7FRivalGoodLuckToYouText"], //     10
+        ["move_npc_to", "SILPHCO7F_RIVAL", 5, y + 1], //          11
+        ["hide_object", "SILPH_CO_7F", "SILPHCO7F_RIVAL"], //     12
+      ] as ScriptRow[]);
+    },
+  },
+
   CELADON_MART_ELEVATOR: {
     onEnter: seedElevator,
     talk: { TEXT_CELADONMARTELEVATOR: [["open_elevator"]] as ScriptRow[] },
@@ -2634,6 +2719,59 @@ function sceneWithTheme(song: string, rows: ScriptRow[]): ScriptRow[] {
       : r,
   );
   return [["play_music", song] as unknown as ScriptRow, ...bumped];
+}
+
+/**
+ * A fishing guru (VermilionOldRodHouse.asm and its two siblings). The rod is
+ * handed over by give_item, which prints the guru's own received line with
+ * the rod's name folded into it -- the text is written for exactly that.
+ *
+ * A "no" is not a refusal to be argued with: he says it is disappointing and
+ * that is the end of the conversation. Coming back re-asks.
+ */
+function rodGiverRows(
+  ask: string,
+  received: string,
+  after: string,
+  refused: string,
+  rod: string,
+  flag: string,
+): ScriptRow[] {
+  return [
+    ["face_player"],
+    ["check_flag", flag],
+    ["jump_if_true", "already"],
+    ["ask", ask],
+    ["jump_if_false", "no"],
+    ["give_item", rod, 1, received],
+    ["set_flag", flag],
+    ["jump", "end"],
+    ["label", "no"],
+    ["show_text", refused],
+    ["jump", "end"],
+    ["label", "already"],
+    ["show_text", after],
+  ] as ScriptRow[];
+}
+
+/**
+ * The SILPH worker's LAPRAS (SilphCo7F.asm). Once, and unconditional -- the
+ * only thing gating it is having reached the floor to be thanked on.
+ *
+ * The description is the second half of the gift AND the whole of what he
+ * says afterwards, which is how the original reads it back.
+ */
+function laprasRows(_ow: any, save: any): ScriptRow[] {
+  if (save?.flags?.EVENT_GOT_LAPRAS) {
+    return [["show_text", "_SilphCo7FSilphWorkerM1LaprasDescriptionText"]] as ScriptRow[];
+  }
+  return [
+    ["face_player"],
+    ["show_text", "_SilphCo7FSilphWorkerM1HaveThisPokemonText"],
+    ["give_pokemon", "LAPRAS", 15],
+    ["set_flag", "EVENT_GOT_LAPRAS"],
+    ["show_text", "_SilphCo7FSilphWorkerM1LaprasDescriptionText"],
+  ] as ScriptRow[];
 }
 
 /** What the Mt. Moon salesman asks for his MAGIKARP (MtMoonPokecenter.asm). */

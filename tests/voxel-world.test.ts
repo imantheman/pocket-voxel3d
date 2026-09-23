@@ -10,7 +10,7 @@
 // story.tape determinism run (in-process twice + the real cli once).
 
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { ENT_FLAG, VOX_BTN, VOX_OP } from "../contracts/spec/voxel-spec.ts";
@@ -26,6 +26,8 @@ import * as Pc from "../voxelmon/game/world/pcitems.ts";
 import { decodeSave } from "../voxelmon/game/save-read.ts";
 import { ShopState } from "../voxelmon/game/ui/shopscreen.ts";
 import { thirstyGirlRows } from "../voxelmon/game/world/vending.ts";
+import { MAP_SCRIPTS } from "../voxelmon/game/world/mapscripts.ts";
+import { fishingCatch, rodPool } from "../voxelmon/game/world/fishing.ts";
 import { talkScript } from "../voxelmon/game/world/mapscripts.ts";
 import { LANCE_WALK_IN } from "../voxelmon/game/world/mapscripts.ts";
 import { TrainerBattle } from "../voxelmon/game/battle/trainer.ts";
@@ -6122,6 +6124,190 @@ describe("what the game will not take off you", () => {
   });
 });
 
+describe("fishing", () => {
+  test.skipIf(!hasGen)("the three gurus each hand over their own rod, once", () => {
+    const cases: [string, string, string, string][] = [
+      ["VERMILION_OLD_ROD_HOUSE", "TEXT_VERMILIONOLDRODHOUSE_FISHING_GURU",
+       "OLD_ROD", "EVENT_GOT_OLD_ROD"],
+      ["FUCHSIA_GOOD_ROD_HOUSE", "TEXT_FUCHSIAGOODRODHOUSE_FISHING_GURU",
+       "GOOD_ROD", "EVENT_GOT_GOOD_ROD"],
+      ["ROUTE_12_SUPER_ROD_HOUSE", "TEXT_ROUTE12SUPERRODHOUSE_FISHING_GURU",
+       "SUPER_ROD", "EVENT_GOT_SUPER_ROD"],
+    ];
+    for (const [map, textConst, rod, flag] of cases) {
+      const rows = talkScript(map, textConst) as ScriptRow[];
+      expect({ map, rows: Array.isArray(rows) }).toEqual({ map, rows: true });
+      // the rod itself, the flag that closes the gift, and a "no" that is
+      // answered rather than ignored
+      expect(rows.some((r) => r[0] === "give_item" && r[1] === rod)).toBe(true);
+      expect(rows.some((r) => r[0] === "set_flag" && r[1] === flag)).toBe(true);
+      expect(rows.some((r) => r[0] === "check_flag" && r[1] === flag)).toBe(true);
+      expect(rows.some((r) => r[0] === "ask")).toBe(true);
+    }
+  });
+
+  test.skipIf(!hasGen)("the OLD ROD always hooks a L5 MAGIKARP", () => {
+    // ItemUseOldRod does not roll at all, so no byte the RNG gives can
+    // turn it into a miss.
+    for (const byte of [0, 1, 7, 128, 255]) {
+      expect(fishingCatch(romData!, "OLD_ROD", "PALLET_TOWN", () => byte))
+        .toEqual({ species: "MAGIKARP", level: 5 });
+    }
+  });
+
+  test.skipIf(!hasGen)("an odd byte is no bite; an even one picks from the group", () => {
+    const good = (byte: number) =>
+      fishingCatch(romData!, "GOOD_ROD", "PALLET_TOWN", () => byte);
+    expect(good(1)).toBeNull();
+    expect(good(255)).toBeNull();
+    // r=0 -> pick 0, r=2 -> pick 1: the Good Rod's pair, in its order
+    expect(good(0)).toEqual({ species: "GOLDEEN", level: 10 });
+    expect(good(2)).toEqual({ species: "POLIWAG", level: 10 });
+    // r=4 -> pick 2, past the pair: reroll rather than catch nothing, which
+    // is what makes the odds 1/3 and not 1/4
+    const bytes = [4, 2];
+    let i = 0;
+    expect(fishingCatch(romData!, "GOOD_ROD", "PALLET_TOWN", () => bytes[i++]!))
+      .toEqual({ species: "POLIWAG", level: 10 });
+  });
+
+  test.skipIf(!hasGen)("the SUPER ROD reads the map's own group, and dry water is a miss", () => {
+    const pal = rodPool(romData!, "SUPER_ROD", "PALLET_TOWN");
+    expect(pal.length).toBeGreaterThan(0);
+    expect(fishingCatch(romData!, "SUPER_ROD", "PALLET_TOWN", () => 0))
+      .toEqual(pal[0]);
+    // a map with no group: nothing to hook, whatever the roll
+    expect(rodPool(romData!, "SUPER_ROD", "REDS_HOUSE_1F")).toEqual([]);
+    expect(fishingCatch(romData!, "SUPER_ROD", "REDS_HOUSE_1F", () => 0)).toBeNull();
+  });
+
+  test.skipIf(!hasGen)("a rod pointed away from water says so, and refuses on the water", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    ow.setMap("PALLET_TOWN", 5, 6, "up");
+    game.save.inventory.OLD_ROD = 1;
+    // facing dry land: the cast never happens
+    game.goFishing("OLD_ROD");
+    expect(game.stackKinds().at(-1)).toBe("textbox");
+    dismissText(game);
+    expect(game.stackKinds()).not.toContain("battle");
+
+    // and FishingInit's first check: surfing refuses every rod outright
+    ow.player.surfing = true;
+    game.goFishing("OLD_ROD");
+    dismissText(game);
+    expect(game.stackKinds()).not.toContain("battle");
+  });
+});
+
+/** Mash through a gift's text, keeping the default name at the keyboard. */
+function takeTheGift(game: VoxelmonGame, maxTicks = 2000): void {
+  for (let t = 0; t < maxTicks; t++) {
+    const top = game.stackKinds().at(-1);
+    if (top === "textbox") game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+    else if (top === "naming") game.tick(t % 2 === 0 ? VOX_BTN.start : 0);
+    else break;
+  }
+  game.tick(0);
+}
+
+describe("Silph Co 7F", () => {
+  test.skipIf(!hasGen)("the rival waits at the door, and only there", () => {
+    const rows = (ow: any, save: any) =>
+      (MAP_SCRIPTS as any).SILPH_CO_7F.onStep(ow, save);
+    const at = (x: number, y: number) => ({ player: { cellX: x, cellY: y, facing: "up" } });
+    const fresh = { flags: {} as Record<string, boolean> };
+
+    // SilphCo7FDefaultScript's coord pair, and nothing else on the floor
+    expect(rows(at(3, 2), fresh)).not.toBeNull();
+    expect(rows(at(3, 3), fresh)).not.toBeNull();
+    expect(rows(at(3, 4), fresh)).toBeNull();
+    expect(rows(at(4, 2), fresh)).toBeNull();
+    // beaten once is beaten for good
+    expect(rows(at(3, 2), { flags: { EVENT_BEAT_SILPH_CO_RIVAL: true } })).toBeNull();
+
+    const scene = rows(at(3, 2), fresh) as ScriptRow[];
+    // his own theme, OPP_RIVAL2's Silph parties, and he leaves whatever the
+    // result was -- the loss jump lands on the same hide the win walks into
+    expect(scene[0]).toEqual(["play_music", "Music_MeetRival"]);
+    expect(scene.some((r) => r[0] === "rival_battle" && r[1] === "OPP_RIVAL2" && r[2] === 7))
+      .toBe(true);
+    expect(scene.at(-1)).toEqual(["hide_object", "SILPH_CO_7F", "SILPHCO7F_RIVAL"]);
+    const lose = scene.find((r) => r[0] === "jump_if_false")![1] as number;
+    expect(scene[lose - 1]).toEqual(["hide_object", "SILPH_CO_7F", "SILPHCO7F_RIVAL"]);
+  });
+
+  test.skipIf(!hasGen)("he is off the floor until the trigger puts him on it", () => {
+    const hidden: string[] = [];
+    const ow = { setObjectHidden: (n: string, h: boolean) => { if (h) hidden.push(n); } };
+    (MAP_SCRIPTS as any).SILPH_CO_7F.onEnter(ow, { flags: {} });
+    expect(hidden).toEqual(["SILPHCO7F_RIVAL"]);
+    // once he has been beaten he is gone by his own script, not by this
+    hidden.length = 0;
+    (MAP_SCRIPTS as any).SILPH_CO_7F.onEnter(ow, {
+      flags: { EVENT_BEAT_SILPH_CO_RIVAL: true },
+    });
+    expect(hidden).toEqual([]);
+  });
+
+  test.skipIf(!hasGen)("the worker's LAPRAS is given once and joins the party", () => {
+    const game = makeMenuGame();
+    game.overworld.setMap("SILPH_CO_7F", 3, 5, "up");
+    const before = game.save.party.length;
+    game.overworld.showMapText("TEXT_SILPHCO7F_SILPH_WORKER_M1");
+    takeTheGift(game);
+    const mon = game.save.party[game.save.party.length - 1];
+    expect({ party: game.save.party.length, species: mon?.species })
+      .toEqual({ party: before + 1, species: "LAPRAS" });
+    expect(mon?.level).toBe(15);
+    expect(game.save.flags.EVENT_GOT_LAPRAS).toBe(true);
+
+    // and asking again only gets the story about it
+    game.overworld.showMapText("TEXT_SILPHCO7F_SILPH_WORKER_M1");
+    takeTheGift(game);
+    expect(game.save.party.length).toBe(before + 1);
+  });
+});
+
+describe("a rod in the water", () => {
+  /** A dry cell in PALLET_TOWN with water next to it, and the way to face it. */
+  function shoreSpot(ow: any): { x: number; y: number; facing: string } {
+    const m = ow.map;
+    const dirs: [number, number, string][] = [
+      [0, 1, "down"], [0, -1, "up"], [1, 0, "right"], [-1, 0, "left"],
+    ];
+    for (let y = 0; y < m.def.height * 2; y++) {
+      for (let x = 0; x < m.def.width * 2; x++) {
+        if (!m.isWalkableCell(x, y) || m.isWaterCell(x, y)) continue;
+        for (const [dx, dy, facing] of dirs) {
+          if (m.inBounds(x + dx, y + dy) && m.isWaterCell(x + dx, y + dy)) {
+            return { x, y, facing };
+          }
+        }
+      }
+    }
+    throw new Error("no shore cell in PALLET_TOWN");
+  }
+
+  test.skipIf(!hasGen)("casting at real water lands the battle the rod hooked", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    ow.setMap("PALLET_TOWN", 5, 6, "down");
+    const spot = shoreSpot(ow);
+    ow.setMap("PALLET_TOWN", spot.x, spot.y, spot.facing);
+    game.save.inventory.OLD_ROD = 1;
+
+    game.goFishing("OLD_ROD");
+    // the dots, then the bite, then the battle itself
+    dismissText(game);
+    expect(game.stackKinds()).toContain("battle");
+    // and it is the rod's mon in it, not a grass roll
+    const battle = (game.battleView() as { battle: any } | null)?.battle;
+    expect(battle?.enemy?.mon?.species).toBe("MAGIKARP");
+    expect(battle?.enemy?.mon?.level).toBe(5);
+  });
+});
+
 describe("the Celadon rooftop", () => {
   test.skipIf(!hasGen)("a vending machine sells one can at the item's own price", () => {
     const game = makeMenuGame();
@@ -6202,10 +6388,18 @@ describe("the Celadon rooftop", () => {
     // Three of them had no pak at all: the cooker refused any map needing a
     // per-map tile-id colour fix, and the mart owns all three such maps --
     // including its ground floor, which is the only way in.
-    const cooked = new Set(romData!.cookedMaps ?? []);
+    //
+    // Asked of the SHIPPED set, not of `romData`: a full run cooks maps of
+    // its own, and a cook rewrites the gamedata.json beside its output --
+    // which for the default path is the very dataset the headless loader
+    // reads, so `romData.cookedMaps` is whichever cook ran last.
+    const paks = join(root, "dist/voxelmon/paks");
+    const shipped = JSON.parse(readFileSync(join(paks, "gamedata.json"), "utf8"));
+    const cooked = new Set<string>(shipped.cookedMaps ?? []);
     for (const f of ["1F", "2F", "3F", "4F", "5F", "ROOF", "ELEVATOR"]) {
-      expect({ floor: f, cooked: cooked.has(`CELADON_MART_${f}`) })
-        .toEqual({ floor: f, cooked: true });
+      const name = `CELADON_MART_${f}`;
+      expect({ floor: f, cooked: cooked.has(name), pak: existsSync(join(paks, `${name}.vxpak`)) })
+        .toEqual({ floor: f, cooked: true, pak: true });
     }
   });
 });

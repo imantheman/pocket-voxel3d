@@ -23,8 +23,11 @@ const USABLE_ON_PARTY = new Set(["RARE_CANDY"]);
  * (game.ts useKeyItem -> world/bike.ts).
  */
 // ItemUsePokeFlute is a field use like the bike: it acts on the world, so
-// it closes the menus rather than asking for a party member.
-const USABLE_IN_FIELD = new Set(["BICYCLE", "POKE_FLUTE"]);
+// it closes the menus rather than asking for a party member. So are the three
+// rods: they are used ON the water you are facing, not on a Pokemon.
+const USABLE_IN_FIELD = new Set([
+  "BICYCLE", "POKE_FLUTE", "OLD_ROD", "GOOD_ROD", "SUPER_ROD",
+]);
 
 /** ItemMenu's two choices for a selected item (StartMenu_Item). */
 export type BagMode = "list" | "submenu" | "quantity";
