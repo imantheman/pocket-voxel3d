@@ -292,6 +292,13 @@ pub fn modulate_rgb(c: u32, tint: u32) -> u32 {
 /// old fixed form: up `(0, sin a, -cos a)`, width along world X.
 ///
 /// Verts: bl, br, tr, tl.
+/// The battle card's size as a fraction of its page: `outdoor` everywhere
+/// the tele rig stages (rig 0, the overworld), half of it under the wide
+/// rig (rig 1: houses, gyms, caves), whose arenas are small rooms.
+pub fn battle_card_scale(outdoor: f32, rig: u8) -> f32 {
+    if rig == 1 { outdoor * 0.5 } else { outdoor }
+}
+
 pub fn card_verts(feet: Vec3, w: f32, h: f32, a: f32, fx: f32, fz: f32) -> [[f32; 3]; 4] {
     use crate::math::cosf;
     let ca = cosf(a);
@@ -904,10 +911,16 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
             // Battle mon sprites drawn at 60% (40% smaller) of their atlas
             // page size; overworld entity cards use card_w and are unaffected.
             const BATTLE_CARD_SCALE: f32 = 0.6;
+            // Half that again under a roof. The wide rig (rig 1) is what the
+            // guest stages for every map that is not the overworld -- a
+            // house, a gym, a cave -- and those arenas are a few cells
+            // across with walls close behind, where a mon the size of the
+            // outdoor one fills the room and stands into the ceiling.
+            let scale = battle_card_scale(BATTLE_CARD_SCALE, scene.battle.rig);
             let verts = card_verts(
                 card_anchor(card),
-                page.w as f32 * BATTLE_CARD_SCALE,
-                page.h as f32 * BATTLE_CARD_SCALE,
+                page.w as f32 * scale,
+                page.h as f32 * scale,
                 a,
                 fwd_x,
                 fwd_z,
@@ -922,8 +935,8 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
                     &cam,
                     &card_verts(
                         cell_centre(card.x, card.y),
-                        page.w as f32 * BATTLE_CARD_SCALE,
-                        page.h as f32 * BATTLE_CARD_SCALE,
+                        page.w as f32 * scale,
+                        page.h as f32 * scale,
                         a,
                         fwd_x,
                         fwd_z,
@@ -1650,5 +1663,13 @@ mod tests {
         assert!((card_pull(0.0) - 46.0).abs() < 1e-4);
         // Horizontal: 6 + max(0, -8)/1 = 6 px.
         assert!((card_pull(core::f32::consts::FRAC_PI_2) - 6.0).abs() < 1e-4);
+    }
+
+    /// Under a roof (the wide rig) a battle mon is half its outdoor size;
+    /// on the overworld (the tele rig) it is exactly the outdoor size.
+    #[test]
+    fn battle_cards_are_half_size_indoors() {
+        assert!((battle_card_scale(0.6, 0) - 0.6).abs() < 1e-6);
+        assert!((battle_card_scale(0.6, 1) - 0.3).abs() < 1e-6);
     }
 }
