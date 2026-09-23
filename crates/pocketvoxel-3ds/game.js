@@ -8942,8 +8942,9 @@ function* use_cut(ctx, ...args) {
   const runner = ctx.runner;
   const monName = args[0] ?? "";
   const [fx, fy] = w.player.facingCell();
-  const key = `${fx},${fy}`;
-  const already = w.save.cutTrees?.[w.map.id]?.[key];
+  const visit2 = w.cutThisVisit;
+  const key = `${w.map.def.index},${fx},${fy}`;
+  const already = visit2?.has(key) === true;
   if (w.map.isCuttableCell(fx, fy) && !already) {
     const cx = Math.round((fx * CELL_PX + CELL_PX / 2) * Q4);
     const cz = Math.round((fy * CELL_PX + CELL_PX / 2) * Q4);
@@ -8955,9 +8956,7 @@ function* use_cut(ctx, ...args) {
     w.fieldFx(0, 0, -1);
     w.stamp(w.map.def.index, fx, fy, false);
     w.map.markCut?.(fx, fy);
-    w.save.cutTrees ??= {};
-    w.save.cutTrees[w.map.id] ??= {};
-    w.save.cutTrees[w.map.id][key] = true;
+    visit2?.add(key);
     w.showText(scriptText(w, "_UsedCutText", { "RAM:wNameBuffer": monName }), () => runner.resume());
   } else {
     w.showText(scriptText(w, "_NothingToCutText"), () => runner.resume());
@@ -9604,16 +9603,11 @@ class Overworld {
       this.save.flags.EVENT_VICTORY_ROAD_1_BOULDER_ON_SWITCH = false;
     }
     this.applyRoadBarriers(mapId, def);
-    const cut = this.save?.cutTrees?.[mapId];
-    if (cut) {
-      for (const key of Object.keys(cut)) {
-        if (!cut[key])
-          continue;
-        const [cx, cy] = key.split(",").map(Number);
-        this.stamp(def.index, cx, cy, false);
-        this.map.markCut(cx, cy);
-      }
+    for (const key of this.cutThisVisit) {
+      const [mi, cx, cy] = key.split(",").map(Number);
+      this.stamp(mi, cx, cy, true);
     }
+    this.cutThisVisit.clear();
     const save = this.save;
     if (DARK_MAPS.has(mapId)) {
       this.tint(save.flashLit ? BRIGHT_TINT : DARK_TINT);
@@ -9730,6 +9724,7 @@ class Overworld {
     }
   }
   stick;
+  cutThisVisit = new Set;
   freeMoveActive() {
     if (this.freeYaw === undefined)
       return false;

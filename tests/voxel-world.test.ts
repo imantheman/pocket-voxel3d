@@ -3026,7 +3026,9 @@ describe("cut trees across a reload", () => {
     return null;
   }
 
-  test.skipIf(!hasGen)("a chopped tree is still gone after leaving and coming back", () => {
+  test.skipIf(!hasGen)("a chopped tree is back after leaving and coming back", () => {
+    // pokered keeps no record of a cut: the next map load has the tree
+    // standing again. (This port used to keep it cut in the save.)
     const { game, host } = cutGame();
     const at = cuttable(game, "VIRIDIAN_CITY");
     if (!at) return; // this build cooked no cuttable cells here
@@ -3035,30 +3037,35 @@ describe("cut trees across a reload", () => {
 
     // chop it the way use_cut does
     game.overworld.map.markCut(cx, cy);
-    game.save.cutTrees ??= {};
-    game.save.cutTrees.VIRIDIAN_CITY = { [`${cx},${cy}`]: true };
+    game.overworld.stamp(index, cx, cy, false);
+    game.overworld.cutThisVisit.add(`${index},${cx},${cy}`);
+    expect(game.overworld.map.isCuttableCell(cx, cy)).toBe(false);
 
-    // leave and come back
+    // leave: the geometry is put back as the map goes
+    host.stamps.length = 0;
     game.overworld.setMap("PALLET_TOWN", 5, 6, "down");
+    expect(host.stamps).toContainEqual([index, cx, cy, 1]);
+    expect(game.overworld.cutThisVisit.size).toBe(0);
+
+    // and come back: nothing hides it, and it can be cut again
     host.stamps.length = 0;
     game.overworld.setMap("VIRIDIAN_CITY", 4, 4, "down");
-
-    // the geometry is told to stay hidden...
-    expect(host.stamps).toContainEqual([index, cx, cy, 0]);
-    // ...and the cell stays walkable, so there is no invisible wall
-    expect(game.overworld.map.isCuttableCell(cx, cy)).toBe(false);
+    expect(host.stamps).not.toContainEqual([index, cx, cy, 0]);
+    expect(game.overworld.map.isCuttableCell(cx, cy)).toBe(true);
   });
 
-  test.skipIf(!hasGen)("and after a save/load round trip", () => {
+  test.skipIf(!hasGen)("a cut is not written into the save", () => {
     const { game } = cutGame();
     const at = cuttable(game, "VIRIDIAN_CITY");
     if (!at) return;
     const [cx, cy] = at;
-    game.save.cutTrees = { VIRIDIAN_CITY: { [`${cx},${cy}`]: true } };
-
-    const text = encodeSave(game.save as never);
-    const back = decodeSave(text) as { cutTrees?: Record<string, Record<string, boolean>> };
-    expect(back.cutTrees?.VIRIDIAN_CITY?.[`${cx},${cy}`]).toBe(true);
+    const ow = game.overworld;
+    ow.setMap("VIRIDIAN_CITY", cx, cy + 1, "up");
+    ow.runScript([["use_cut", "BULBASAUR"]]);
+    for (let t = 0; t < 400; t++) game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+    expect(ow.cutThisVisit.has(`${ow.map.def.index},${cx},${cy}`)).toBe(true);
+    const back = decodeSave(encodeSave(game.save as never)) as { cutTrees?: unknown };
+    expect(back.cutTrees).toBeUndefined();
   });
 });
 

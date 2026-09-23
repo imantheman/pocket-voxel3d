@@ -569,8 +569,9 @@ function* use_cut(ctx: ScriptContext, ...args: unknown[]): Generator<void, void>
   const runner = ctx.runner;
   const monName = (args[0] as string) ?? "";
   const [fx, fy] = w.player.facingCell();
-  const key = `${fx},${fy}`;
-  const already = w.save.cutTrees?.[w.map.id]?.[key];
+  const visit = (w as unknown as { cutThisVisit?: Set<string> }).cutThisVisit;
+  const key = `${w.map.def.index},${fx},${fy}`;
+  const already = visit?.has(key) === true;
   if (w.map.isCuttableCell(fx, fy) && !already) {
     // pokered AnimateCutTree: the cut-tree sprite flickers over the tree for
     // four on/off beats before the block changes. The sprite sits on the
@@ -590,9 +591,9 @@ function* use_cut(ctx: ScriptContext, ...args: unknown[]): Generator<void, void>
     // so the cell has to be opened up as well or the tree disappears and the
     // player still cannot walk through it.
     (w.map as unknown as { markCut?: (x: number, y: number) => void }).markCut?.(fx, fy);
-    w.save.cutTrees ??= {};
-    w.save.cutTrees[w.map.id] ??= {};
-    w.save.cutTrees[w.map.id][key] = true;
+    // Remembered for THIS visit only, so the tree is back on re-entry the
+    // way the original's is (overworld.ts setMap); nothing goes in the save.
+    visit?.add(key);
     w.showText(scriptText(w, "_UsedCutText", { "RAM:wNameBuffer": monName }), () => runner.resume());
   } else {
     w.showText(scriptText(w, "_NothingToCutText"), () => runner.resume());

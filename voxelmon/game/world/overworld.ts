@@ -416,22 +416,19 @@ export class Overworld implements ScriptWorld {
       this.save.flags.EVENT_VICTORY_ROAD_1_BOULDER_ON_SWITCH = false;
     }
     this.applyRoadBarriers(mapId, def);
-    // Cut trees stay cut across a reload/re-entry: reapply every stamp-off
-    // this save recorded for THIS map (setMap is the single choke point, so
-    // every entry path — warp, seam, boot — gets this for free, the same
-    // way objectToggles' hides get reapplied below via objectVisible).
-    const cut = this.save?.cutTrees?.[mapId];
-    if (cut) {
-      for (const key of Object.keys(cut)) {
-        if (!cut[key]) continue;
-        const [cx, cy] = key.split(",").map(Number);
-        this.stamp(def.index, cx, cy, false);
-        // The geometry going away is only half of it: the block underneath is
-        // still a tree, so the cell has to be marked walkable too or a
-        // re-entered map has invisible walls where the trees were.
-        this.map.markCut(cx!, cy!);
-      }
+    // A cut tree grows back the moment the map is left: pokered keeps no
+    // record of a cut -- the block is rewritten in the map's own RAM copy,
+    // which the next map load throws away -- so every tree stands again on
+    // re-entry, and so does the S.S. Anne's split hull. This port used to
+    // keep them cut in the save; the trees never came back. The stamps the
+    // last visit hid are shown again here, on every entry path (setMap is
+    // the one choke point), and the record of them cleared. Collision needs
+    // nothing: the GameMap above was just rebuilt with every tree in place.
+    for (const key of this.cutThisVisit) {
+      const [mi, cx, cy] = key.split(",").map(Number);
+      this.stamp(mi!, cx!, cy!, true);
     }
+    this.cutThisVisit.clear();
     // Rock Tunnel's darkness (wMapPalOffset, home/overworld.asm): dark
     // until FLASH is used, and the light then holds between the tunnel's
     // floors -- 1F to B1F and back is one visit, not a new cave -- and
@@ -625,6 +622,13 @@ export class Overworld implements ScriptWorld {
    * menu still sees the pad as the four directions it always did.
    */
   stick?: { x: number; y: number };
+
+  /**
+   * The trees cut on the map being stood on, as "mapIndex,cx,cy" -- the
+   * stamps to show again when it is left (setMap). Per visit on purpose:
+   * see the regrow note there.
+   */
+  cutThisVisit = new Set<string>();
 
   freeMoveActive(): boolean {
     if (this.freeYaw === undefined) return false;
