@@ -9569,6 +9569,86 @@ var ROUTE_23_RESET_FLAGS = [
   "EVENT_VICTORY_ROAD_3_BOULDER_ON_SWITCH2"
 ];
 
+// voxelmon/game/world/seafoam.ts
+function seafoamData(field) {
+  return field?.seafoam;
+}
+function toggleToObjectName(mapId, toggle) {
+  const prefix = `TOGGLE_${mapId}_`;
+  if (!toggle.startsWith(prefix))
+    return null;
+  return `${mapId.replace(/_/g, "")}_${toggle.slice(prefix.length).replace(/_/g, "")}`;
+}
+function holesFor(sf, mapId) {
+  const out = [];
+  for (const [owner, floor] of Object.entries(sf ?? {})) {
+    if (owner === mapId && floor.holeDestination) {
+      for (const hole of floor.holes ?? [])
+        out.push({ hole, destMap: floor.holeDestination });
+    }
+    if (floor.pluggedByHolesOn?.map === mapId) {
+      for (const hole of floor.pluggedByHolesOn.holes)
+        out.push({ hole, destMap: owner });
+    }
+  }
+  return out;
+}
+function isHole(sf, mapId, x, y) {
+  return holesFor(sf, mapId).some((h) => h.hole.x === x && h.hole.y === y);
+}
+function defaultHiddenBoulders(sf) {
+  const out = {};
+  const add2 = (mapId, toggle) => {
+    const name = toggle ? toggleToObjectName(mapId, toggle) : null;
+    if (!name)
+      return;
+    (out[mapId] ??= {})[name] = true;
+  };
+  for (const [owner, floor] of Object.entries(sf ?? {})) {
+    if (floor.holeDestination) {
+      for (const h of floor.holes ?? [])
+        add2(floor.holeDestination, h.showObject);
+    }
+    for (const h of floor.pluggedByHolesOn?.holes ?? [])
+      add2(owner, h.showObject);
+  }
+  return out;
+}
+var allSet = (flags, events) => (events ?? []).every((e) => flags?.[e] === true);
+function forcedExitAt(sf, flags, mapId, x, y) {
+  const fe = sf?.[mapId]?.forcedExit;
+  if (!fe || allSet(flags, fe.activeUntilEvents))
+    return 0;
+  if (!fe.coords.some((c) => c.x === x && c.y === y))
+    return 0;
+  const top = Math.min(...fe.coords.map((c) => c.y));
+  return y - (top - 1);
+}
+function currentAt(sf, flags, mapId, x, y) {
+  const floor = sf?.[mapId];
+  if (!floor)
+    return null;
+  const active2 = [];
+  if (!allSet(flags, floor.currentsDisabledByEvents))
+    active2.push(...floor.currents ?? []);
+  if (floor.entryCurrent) {
+    const plugged = (floor.pluggedByHolesOn?.holes ?? []).every((h) => flags?.[h.boulderEvent] === true);
+    if (!plugged)
+      active2.push(floor.entryCurrent);
+  }
+  return active2.find((c) => c.x === x && c.y === y) ?? null;
+}
+var FORCED_WARP_FLOORS = ["SEAFOAM_ISLANDS_B3F"];
+var SURF_BLOCKED = {
+  map: "SEAFOAM_ISLANDS_B4F",
+  x: 7,
+  y: 11,
+  untilEvents: ["EVENT_SEAFOAM4_BOULDER1_DOWN_HOLE", "EVENT_SEAFOAM4_BOULDER2_DOWN_HOLE"]
+};
+function surfBlockedAt(flags, mapId, x, y) {
+  return mapId === SURF_BLOCKED.map && x === SURF_BLOCKED.x && y === SURF_BLOCKED.y && !allSet(flags, SURF_BLOCKED.untilEvents);
+}
+
 // voxelmon/game/world/badgegate.ts
 function gateFor(field, mapId) {
   return field?.badgeGates?.[mapId];
@@ -9969,6 +10049,11 @@ function* use_surf(ctx, ...args) {
   const w = ctx.world;
   const runner = ctx.runner;
   const monName2 = args[0] ?? "";
+  if (w.surfBlockedHere?.()) {
+    w.showText(scriptText(w, "_CurrentTooFastText"), () => runner.resume());
+    yield;
+    return;
+  }
   if (w.player.surfing === true || !w.canSurfHere?.()) {
     w.showText(scriptText(w, "_NoSurfingHereText", { "RAM:wNameBuffer": monName2 }), () => runner.resume());
     yield;
@@ -10692,6 +10777,8 @@ class Overworld {
     } else {
       if (TOGGLE_DEFAULT_HIDDEN[this.map.id]?.[key])
         return false;
+      if (this.seafoamHidden()[this.map.id]?.[key])
+        return false;
       if (obj.hidden)
         return false;
     }
@@ -11216,9 +11303,10 @@ any coins!`);
     const [tx, ty] = target(bx, by, dir);
     if (!this.map.inBounds(tx, ty))
       return false;
-    if (!this.map.isWalkableCell(tx, ty))
+    const hole = isHole(this.seafoam(), this.map.id, tx, ty);
+    if (!this.map.isWalkableCell(tx, ty) && !hole)
       return false;
-    if (this.map.isWaterCell(tx, ty))
+    if (this.map.isWaterCell(tx, ty) && !hole)
       return false;
     if (occupied(this.entities, tx, ty, boulder))
       return false;
@@ -11366,6 +11454,8 @@ GAME is over!`;
       return;
     }
     this.arrivalPending = false;
+    if (this.seafoamStep())
+      return;
     this.runLandTriggers();
   }
   onStepComplete() {
@@ -11394,6 +11484,8 @@ wore off.`);
       return;
     if (this.badgeGateStep())
       return;
+    if (this.seafoamStep())
+      return;
     if (this.spinnerStep())
       return;
     if (this.runLandTriggers())
@@ -11407,7 +11499,9 @@ wore off.`);
     this.refreshStandingOnWarp();
     if (!entry) {
       let w = onArrive(this.map, p.cellX, p.cellY);
-      if (!w && this.dirHeld()) {
+      const forced = this.forcedWarp;
+      this.forcedWarp = false;
+      if (!w && (this.dirHeld() || forced)) {
         w = onCollision(this.map, this.carpets, p.cellX, p.cellY, p.facing);
       }
       if (w) {
@@ -11904,6 +11998,55 @@ wore off.`);
       }
     }
   }
+  forcedWarp = false;
+  seafoamHiddenCache;
+  seafoam() {
+    return seafoamData(this.shell.data.field);
+  }
+  seafoamHidden() {
+    if (!this.seafoamHiddenCache)
+      this.seafoamHiddenCache = defaultHiddenBoulders(this.seafoam());
+    return this.seafoamHiddenCache;
+  }
+  seafoamStep() {
+    const sf = this.seafoam();
+    if (!sf)
+      return false;
+    const p = this.player;
+    const flags = this.save.flags;
+    const up = forcedExitAt(sf, flags, this.map.id, p.cellX, p.cellY);
+    if (up > 0 && p.surfing) {
+      this.forcedWarp = false;
+      this.shell.audio?.playSfx?.("Collision");
+      p.px = p.cellX * 16;
+      p.py = p.cellY * 16;
+      this.scriptMove(p, "up", up);
+      return true;
+    }
+    if (!p.surfing)
+      return false;
+    const c = currentAt(sf, flags, this.map.id, p.cellX, p.cellY);
+    if (!c)
+      return false;
+    p.px = p.cellX * 16;
+    p.py = p.cellY * 16;
+    if (FORCED_WARP_FLOORS.includes(this.map.id))
+      this.forcedWarp = true;
+    const run = (i) => {
+      const mv = c.moves[i];
+      if (!mv) {
+        this.onStepComplete();
+        return;
+      }
+      this.scriptMove(p, mv.dir, mv.count, () => run(i + 1));
+    };
+    run(0);
+    return true;
+  }
+  surfBlockedHere() {
+    const p = this.player;
+    return surfBlockedAt(this.save.flags, this.map.id, p.cellX, p.cellY);
+  }
   roadHoleStep() {
     if (this.runner.isRunning())
       return false;
@@ -11925,6 +12068,22 @@ wore off.`);
   }
   boulderFell() {
     const mapId = this.map?.id ?? "";
+    for (const { hole, destMap } of holesFor(this.seafoam(), mapId)) {
+      if (this.save.flags?.[hole.boulderEvent] === true)
+        continue;
+      const on = this.npcs.find((n) => this.isBoulder(n) && !n.hidden && n.cellX === hole.x && n.cellY === hole.y);
+      if (!on)
+        continue;
+      this.save.flags[hole.boulderEvent] = true;
+      this.setObjectToggle(mapId, String(on.def?.name ?? ""), false);
+      const shown = hole.showObject ? toggleToObjectName(destMap, hole.showObject) : null;
+      if (shown)
+        this.setObjectToggle(destMap, shown, true);
+      this.shell.audio?.playSfx?.("Faint_Thud");
+      this.shell.showText(`The boulder fell
+through the hole!`);
+      return true;
+    }
     for (const h of ROAD_HOLES) {
       if (h.map !== mapId || this.save.flags?.[h.flag] === true)
         continue;

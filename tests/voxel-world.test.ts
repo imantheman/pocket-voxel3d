@@ -30,6 +30,7 @@ import { MAP_SCRIPTS } from "../voxelmon/game/world/mapscripts.ts";
 import * as Items from "../voxelmon/game/rules/items.ts";
 import * as Trash from "../voxelmon/game/world/trashcans.ts";
 import * as Hidden from "../voxelmon/game/world/hiddenitems.ts";
+import * as Seafoam from "../voxelmon/game/world/seafoam.ts";
 import { POST_GAME_HOME, postGameRescue } from "../voxelmon/game/world/halloffame.ts";
 import { fishingCatch, rodPool } from "../voxelmon/game/world/fishing.ts";
 import { talkScript } from "../voxelmon/game/world/mapscripts.ts";
@@ -7634,6 +7635,112 @@ describe("the CYCLING ROAD gates", () => {
       stepOnto(game, map, x, y);
       expect(game.stackKinds(), map).toEqual(["overworld"]);
     }
+  });
+});
+
+describe("the SEAFOAM ISLANDS puzzle", () => {
+  const FLOORS = [
+    "SEAFOAM_ISLANDS_1F", "SEAFOAM_ISLANDS_B1F", "SEAFOAM_ISLANDS_B2F",
+    "SEAFOAM_ISLANDS_B3F", "SEAFOAM_ISLANDS_B4F",
+  ];
+  const sf = () => Seafoam.seafoamData((romData as any).field)!;
+
+  function sfGame(): VoxelmonGame {
+    const data = {
+      ...(romData as object),
+      cookedMaps: [
+        ...((romData as { cookedMaps?: string[] }).cookedMaps ?? []), ...FLOORS,
+      ],
+    };
+    const game = new VoxelmonGame(data as never, new MenuHost(), 1);
+    game.newGame();
+    game.closeToOverworld();
+    (game.save as any).strengthActive = true;
+    return game;
+  }
+
+  const shown = (ow: any, name: string) =>
+    ow.npcs.some((n: any) => n.def?.name === name && !n.hidden);
+
+  test.skipIf(!hasGen)("the dataset carries the whole puzzle", () => {
+    const d = sf();
+    expect(Object.keys(d).length).toBeGreaterThanOrEqual(4);
+    expect(Seafoam.holesFor(d, "SEAFOAM_ISLANDS_1F").length).toBe(2);
+    expect(Seafoam.holesFor(d, "SEAFOAM_ISLANDS_B2F").length).toBe(2);
+    expect(Seafoam.toggleToObjectName("SEAFOAM_ISLANDS_B3F", "TOGGLE_SEAFOAM_ISLANDS_B3F_BOULDER_5"))
+      .toBe("SEAFOAMISLANDSB3F_BOULDER5");
+  });
+
+  test.skipIf(!hasGen)("the boulders that come from above ship hidden", () => {
+    const game = sfGame();
+    const ow = game.overworld;
+    ow.setMap("SEAFOAM_ISLANDS_B1F", 1, 1, "down");
+    expect(shown(ow, "SEAFOAMISLANDSB1F_BOULDER1")).toBe(false);
+    ow.setMap("SEAFOAM_ISLANDS_B3F", 1, 1, "down");
+    expect(shown(ow, "SEAFOAMISLANDSB3F_BOULDER1")).toBe(true);
+    expect(shown(ow, "SEAFOAMISLANDSB3F_BOULDER5")).toBe(false);
+    expect(shown(ow, "SEAFOAMISLANDSB3F_BOULDER6")).toBe(false);
+    ow.setMap("SEAFOAM_ISLANDS_B4F", 1, 1, "down");
+    expect(shown(ow, "SEAFOAMISLANDSB4F_BOULDER1")).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("a boulder shoved into a hole turns up on the floor below", () => {
+    const game = sfGame();
+    const ow = game.overworld;
+    const { hole } = Seafoam.holesFor(sf(), "SEAFOAM_ISLANDS_1F")[0]!;
+    ow.setMap("SEAFOAM_ISLANDS_1F", 1, 1, "down");
+    const boulder = ow.npcs.find((n: any) => n.def?.name === "SEAFOAMISLANDS1F_BOULDER1") as any;
+    expect(boulder).toBeTruthy();
+    boulder.cellX = hole.x;
+    boulder.cellY = hole.y;
+    (ow as any).boulderLanded();
+    expect(game.save.flags[hole.boulderEvent]).toBe(true);
+    expect(shown(ow, "SEAFOAMISLANDS1F_BOULDER1")).toBe(false);
+    expect(topText(game)).toContain("fell");
+    dismissText(game);
+    ow.setMap("SEAFOAM_ISLANDS_B1F", 1, 1, "down");
+    expect(shown(ow, "SEAFOAMISLANDSB1F_BOULDER1")).toBe(true);
+    // and it stays gone upstairs
+    ow.setMap("SEAFOAM_ISLANDS_1F", 1, 1, "down");
+    expect(shown(ow, "SEAFOAMISLANDS1F_BOULDER1")).toBe(false);
+  });
+
+  function surfAt(game: VoxelmonGame, map: string, x: number, y: number): void {
+    const ow = game.overworld;
+    ow.setMap(map, x, y, "down");
+    ow.player.surfing = true;
+    game.save.surfing = true;
+    ow.onStepComplete();
+    for (let i = 0; i < 1500; i++) game.tick(0);
+  }
+
+  test.skipIf(!hasGen)("B3F's current carries a surfer down to the stairs, and B4F's edge pushes back", () => {
+    const game = sfGame();
+    const ow = game.overworld;
+    const c = sf().SEAFOAM_ISLANDS_B3F!.currents![0]!;
+    surfAt(game, "SEAFOAM_ISLANDS_B3F", c.x, c.y);
+    expect(ow.map.id).toBe("SEAFOAM_ISLANDS_B4F");
+    // the pool edge (rows 16-17) shoved us up off it
+    expect(ow.player.cellY).toBeLessThan(16);
+  });
+
+  test.skipIf(!hasGen)("with the plugs down the water is still", () => {
+    const game = sfGame();
+    const ow = game.overworld;
+    for (const e of sf().SEAFOAM_ISLANDS_B3F!.currentsDisabledByEvents!) game.save.flags[e] = true;
+    const c = sf().SEAFOAM_ISLANDS_B3F!.currents![0]!;
+    surfAt(game, "SEAFOAM_ISLANDS_B3F", c.x, c.y);
+    expect(ow.map.id).toBe("SEAFOAM_ISLANDS_B3F");
+    expect([ow.player.cellX, ow.player.cellY]).toEqual([c.x, c.y]);
+  });
+
+  test.skipIf(!hasGen)("SURF is refused on B4F's stairs square until the plugs are down", () => {
+    const game = sfGame();
+    const ow = game.overworld;
+    ow.setMap("SEAFOAM_ISLANDS_B4F", Seafoam.SURF_BLOCKED.x, Seafoam.SURF_BLOCKED.y, "down");
+    expect(ow.surfBlockedHere()).toBe(true);
+    for (const e of Seafoam.SURF_BLOCKED.untilEvents) game.save.flags[e] = true;
+    expect(ow.surfBlockedHere()).toBe(false);
   });
 });
 

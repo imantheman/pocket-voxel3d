@@ -34,6 +34,10 @@ import { findHidden, hiddenItemNear } from "./hiddenitems.ts";
 import * as Bag from "../rules/bag.ts";
 import { spotFor } from "./snorlax.ts";
 import { barriersFor, ROAD_HOLES, ROUTE_23_RESET_FLAGS } from "./toggleblocks.ts";
+import {
+  currentAt, defaultHiddenBoulders, FORCED_WARP_FLOORS, forcedExitAt, holesFor, isHole,
+  seafoamData, surfBlockedAt, toggleToObjectName, type SeafoamField,
+} from "./seafoam.ts";
 import { fillBadgeName, gateFor, guardAt, hasBadge } from "./badgegate.ts";
 import {
   GYM_MACHINES, gymGateFlag, gymGuardKey, LANCE_DOOR_CELLS, LEAGUE_SEALS,
@@ -562,6 +566,7 @@ export class Overworld implements ScriptWorld {
       // entries this build needs are seeded (save_convert/data/toggle_objects
       // .lua): the Viridian walker defaults hidden until the Pokédex swap.
       if (TOGGLE_DEFAULT_HIDDEN[this.map.id]?.[key]) return false;
+      if (this.seafoamHidden()[this.map.id]?.[key]) return false;
       if ((obj as MapObject & { hidden?: boolean }).hidden) return false;
     }
     // A collected item ball stays gone across reloads: its pickup flag hides
@@ -1362,8 +1367,9 @@ export class Overworld implements ScriptWorld {
     if (!boulder) return false;
     const [tx, ty] = target(bx, by, dir);
     if (!this.map.inBounds(tx, ty)) return false;
-    if (!this.map.isWalkableCell(tx, ty)) return false;
-    if (this.map.isWaterCell(tx, ty)) return false;
+    const hole = isHole(this.seafoam(), this.map.id, tx, ty);
+    if (!this.map.isWalkableCell(tx, ty) && !hole) return false;
+    if (this.map.isWaterCell(tx, ty) && !hole) return false;
     if (occupied(this.entities, tx, ty, boulder as never)) return false;
     this.shell.audio.playSfx("Push_Boulder");
     this.scriptMove(boulder as never, dir, 1, () => this.boulderLanded());
@@ -1615,6 +1621,7 @@ export class Overworld implements ScriptWorld {
       return;
     }
     this.arrivalPending = false;
+    if (this.seafoamStep()) return;
     this.runLandTriggers();
   }
 
@@ -1650,6 +1657,7 @@ export class Overworld implements ScriptWorld {
     this.lanceLockDoor();
     if (this.leagueDontRun()) return;
     if (this.badgeGateStep()) return;
+    if (this.seafoamStep()) return;
     if (this.spinnerStep()) return;
     if (this.runLandTriggers()) return;
 
@@ -1670,7 +1678,11 @@ export class Overworld implements ScriptWorld {
       // CheckWarpsNoCollision: door/warp tiles fire immediately; otherwise
       // ExtraWarpCheck must pass AND a d-pad is held.
       let w = onArrive(this.map, p.cellX, p.cellY);
-      if (!w && this.dirHeld()) {
+      // BIT_FORCED_WARP (home/overworld.asm): a Seafoam current that ends on
+      // the south-edge water stairs fires them with nothing held.
+      const forced = this.forcedWarp;
+      this.forcedWarp = false;
+      if (!w && (this.dirHeld() || forced)) {
         w = onCollision(this.map, this.carpets, p.cellX, p.cellY, p.facing);
       }
       if (w) {
@@ -2392,6 +2404,67 @@ export class Overworld implements ScriptWorld {
     }
   }
 
+  /** BIT_FORCED_WARP: set by a Seafoam current, read once by the next warp check. */
+  private forcedWarp = false;
+  private seafoamHiddenCache?: Record<string, Record<string, boolean>>;
+
+  private seafoam(): SeafoamField | undefined {
+    return seafoamData(this.shell.data.field);
+  }
+
+  private seafoamHidden(): Record<string, Record<string, boolean>> {
+    if (!this.seafoamHiddenCache) this.seafoamHiddenCache = defaultHiddenBoulders(this.seafoam());
+    return this.seafoamHiddenCache;
+  }
+
+  /**
+   * The Seafoam water (scripts/SeafoamIslandsB3F.asm / B4F.asm): B4F's pool
+   * edge pushes a surfer back up until the B3F plugs are down, and B3F's
+   * currents drag one along their movement lists to the stairs. True when
+   * the water took the step over.
+   */
+  private seafoamStep(): boolean {
+    const sf = this.seafoam();
+    if (!sf) return false;
+    const p = this.player;
+    const flags = this.save.flags;
+    const up = forcedExitAt(sf, flags, this.map.id, p.cellX, p.cellY);
+    if (up > 0 && p.surfing) {
+      // SeafoamIslandsB4FDefaultScript: res BIT_FORCED_WARP before the push
+      // so the stair warps underfoot cannot bounce you back.
+      this.forcedWarp = false;
+      this.shell.audio?.playSfx?.("Collision");
+      p.px = p.cellX * 16;
+      p.py = p.cellY * 16;
+      this.scriptMove(p, "up", up);
+      return true;
+    }
+    if (!p.surfing) return false;
+    const c = currentAt(sf, flags, this.map.id, p.cellX, p.cellY);
+    if (!c) return false;
+    p.px = p.cellX * 16;
+    p.py = p.cellY * 16;
+    if (FORCED_WARP_FLOORS.includes(this.map.id)) this.forcedWarp = true;
+    const run = (i: number): void => {
+      const mv = c.moves[i];
+      if (!mv) {
+        // scripted steps skip onStepComplete; re-enter the landing pipeline
+        // so the stairs (and BIT_FORCED_WARP) see the cell we stopped on
+        this.onStepComplete();
+        return;
+      }
+      this.scriptMove(p, mv.dir, mv.count, () => run(i + 1));
+    };
+    run(0);
+    return true;
+  }
+
+  /** IsSurfingAllowed's Seafoam clause: "The current is much too fast!" */
+  surfBlockedHere(): boolean {
+    const p = this.player;
+    return surfBlockedAt(this.save.flags, this.map.id, p.cellX, p.cellY);
+  }
+
   /**
    * Victory Road 3F's hole under the player (VictoryRoad3FDefaultScript's
    * dungeon warp): the cell is ordinary walkable cave, so like the Mansion
@@ -2427,6 +2500,22 @@ export class Overworld implements ScriptWorld {
    */
   private boulderFell(): boolean {
     const mapId = this.map?.id ?? "";
+    // Seafoam's holes (Seafoam1HolesCoords ..): the boulder goes down and
+    // its twin appears on the floor below, once, under the hole's event.
+    for (const { hole, destMap } of holesFor(this.seafoam(), mapId)) {
+      if (this.save.flags?.[hole.boulderEvent] === true) continue;
+      const on = this.npcs.find(
+        (n: any) => this.isBoulder(n) && !n.hidden && n.cellX === hole.x && n.cellY === hole.y,
+      ) as any;
+      if (!on) continue;
+      this.save.flags[hole.boulderEvent] = true;
+      this.setObjectToggle(mapId, String(on.def?.name ?? ""), false);
+      const shown = hole.showObject ? toggleToObjectName(destMap, hole.showObject) : null;
+      if (shown) this.setObjectToggle(destMap, shown, true);
+      this.shell.audio?.playSfx?.("Faint_Thud");
+      this.shell.showText("The boulder fell\nthrough the hole!");
+      return true;
+    }
     for (const h of ROAD_HOLES) {
       if (h.map !== mapId || this.save.flags?.[h.flag] === true) continue;
       const on = this.npcs.find(

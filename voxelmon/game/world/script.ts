@@ -619,9 +619,16 @@ function* use_surf(ctx: ScriptContext, ...args: unknown[]): Generator<void, void
   const w = ctx.world as unknown as ScriptWorld & {
     canSurfHere?: () => boolean;
     startSurfing?: () => void;
+    surfBlockedHere?: () => boolean;
   };
   const runner = ctx.runner;
   const monName = (args[0] as string) ?? "";
+  // IsSurfingAllowed: Seafoam B4F's stairs square until its plugs are down
+  if (w.surfBlockedHere?.()) {
+    w.showText(scriptText(w as never, "_CurrentTooFastText"), () => runner.resume());
+    yield;
+    return;
+  }
   // .cannotSurf covers both "already afloat" and "that is not ridable water";
   // the line takes the mon's name either way.
   if (w.player.surfing === true || !w.canSurfHere?.()) {
