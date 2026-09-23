@@ -13262,6 +13262,21 @@ function recordHallOfFame(save) {
 function applyPostGameHome(save) {
   save.lastOutdoor = { ...POST_GAME_OUTDOOR };
 }
+function postGameRescue(save) {
+  const p = save.player;
+  if (!p || p.map !== "HALL_OF_FAME")
+    return false;
+  if ((save.hallOfFame?.length ?? 0) === 0)
+    return false;
+  if (save.flags?.EVENT_HALL_OF_FAME_PENDING === true)
+    return false;
+  p.map = POST_GAME_HOME.map;
+  p.x = POST_GAME_HOME.x;
+  p.y = POST_GAME_HOME.y;
+  p.facing = POST_GAME_HOME.facing;
+  applyPostGameHome(save);
+  return true;
+}
 
 // voxelmon/game/ui/optionsmenu.ts
 class OptionsMenuState {
@@ -16554,6 +16569,7 @@ class VoxelmonGame {
           try {
             this.save = decodeSave(text);
             backfillVisited(this.save);
+            postGameRescue(this.save);
             const pl = this.save.player ?? {};
             const lo = this.save.lastOutdoor ?? {};
             this.overworld.enter(pl.map ?? lo.id ?? "PALLET_TOWN", pl.x ?? lo.x ?? 5, pl.y ?? lo.y ?? 6, pl.facing ?? "down");
@@ -17155,7 +17171,7 @@ allowed here.`));
       this.healParty();
       applyPostGameHome(this.save);
       this.overworld.lastOutdoor = this.save.lastOutdoor;
-      this.writeSave?.();
+      this.writeSave?.(POST_GAME_HOME);
       this.overworld.startWarpTo(POST_GAME_HOME.map, POST_GAME_HOME.x, POST_GAME_HOME.y, POST_GAME_HOME.facing);
       onDone?.();
     };
@@ -17390,13 +17406,13 @@ the game!`, SAVE_DONE_HOLD, {
   savePanel() {
     return this.savePanelLines;
   }
-  writeSave() {
+  writeSave(at2) {
     const ow = this.overworld;
     const p = this.save.player;
-    p.map = ow.mapId ?? ow.map?.id ?? p.map;
-    p.x = ow.player?.cellX ?? p.x;
-    p.y = ow.player?.cellY ?? p.y;
-    p.facing = ow.player?.facing ?? p.facing;
+    p.map = at2?.map ?? ow.mapId ?? ow.map?.id ?? p.map;
+    p.x = at2?.x ?? ow.player?.cellX ?? p.x;
+    p.y = at2?.y ?? ow.player?.cellY ?? p.y;
+    p.facing = at2?.facing ?? ow.player?.facing ?? p.facing;
     const h = this.host ?? this.hostApi ?? globalThis.voxel;
     if (!h?.saveWrite) {
       console.log("save: no host.saveWrite");

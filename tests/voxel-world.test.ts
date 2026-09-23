@@ -27,6 +27,7 @@ import { decodeSave } from "../voxelmon/game/save-read.ts";
 import { ShopState } from "../voxelmon/game/ui/shopscreen.ts";
 import { thirstyGirlRows } from "../voxelmon/game/world/vending.ts";
 import { MAP_SCRIPTS } from "../voxelmon/game/world/mapscripts.ts";
+import { POST_GAME_HOME, postGameRescue } from "../voxelmon/game/world/halloffame.ts";
 import { fishingCatch, rodPool } from "../voxelmon/game/world/fishing.ts";
 import { talkScript } from "../voxelmon/game/world/mapscripts.ts";
 import { LANCE_WALK_IN } from "../voxelmon/game/world/mapscripts.ts";
@@ -6369,6 +6370,45 @@ describe("the Rocket Hideout lift gate", () => {
     // and running it again over an open door changes nothing
     ow.refreshDoors();
     expect(open()).toBe(true);
+  });
+});
+
+describe("the save the Hall of Fame writes", () => {
+  test.skipIf(!hasGen)("is written at home, wherever the player is standing", () => {
+    const game = makeMenuGame();
+    const host = (game as any).host as { saved?: string };
+    game.overworld.setMap("HALL_OF_FAME", 4, 2, "left");
+    game.writeSave(POST_GAME_HOME);
+    const written = decodeSave(host.saved!) as any;
+    expect(written.player.map).toBe("REDS_HOUSE_2F");
+    expect([written.player.x, written.player.y]).toEqual([POST_GAME_HOME.x, POST_GAME_HOME.y]);
+    // and an ordinary save still takes the live position
+    game.writeSave();
+    expect((decodeSave(host.saved!) as any).player.map).toBe("HALL_OF_FAME");
+  });
+
+  test.skipIf(!hasGen)("a save stranded in the hall by the old write comes home once", () => {
+    const stranded = () => ({
+      player: { map: "HALL_OF_FAME", x: 4, y: 2, facing: "left" },
+      hallOfFame: [[{ species: "PIKACHU", level: 50 }]],
+      flags: {} as Record<string, boolean>,
+    });
+    const s = stranded();
+    expect(postGameRescue(s as never)).toBe(true);
+    expect(s.player.map).toBe("REDS_HOUSE_2F");
+    // the induction not yet run: the player is there to be crowned
+    const pending = stranded();
+    pending.flags.EVENT_HALL_OF_FAME_PENDING = true;
+    expect(postGameRescue(pending as never)).toBe(false);
+    expect(pending.player.map).toBe("HALL_OF_FAME");
+    // never crowned at all: not a rescue case
+    const visitor = stranded();
+    visitor.hallOfFame = [];
+    expect(postGameRescue(visitor as never)).toBe(false);
+    // already home: nothing to do
+    const home = stranded();
+    home.player.map = "REDS_HOUSE_2F";
+    expect(postGameRescue(home as never)).toBe(false);
   });
 });
 

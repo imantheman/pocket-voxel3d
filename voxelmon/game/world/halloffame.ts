@@ -85,6 +85,29 @@ export function applyPostGameHome(save: HofSave): void {
   save.lastOutdoor = { ...POST_GAME_OUTDOOR };
 }
 
+/**
+ * A save written in the HALL OF FAME after the induction -- which is what
+ * every post-game save was until the write took the home position -- comes
+ * back standing beside Oak in the hall, with nothing left to happen there.
+ * On CONTINUE such a save is moved home once (gen1recomp SaveData
+ * needsPostGameRescue). A save with the induction still pending is left
+ * where it is: it has not been crowned yet.
+ */
+export function postGameRescue(save: HofSave & {
+  player?: { map?: string; x?: number; y?: number; facing?: string };
+}): boolean {
+  const p = save.player;
+  if (!p || p.map !== "HALL_OF_FAME") return false;
+  if ((save.hallOfFame?.length ?? 0) === 0) return false;
+  if (save.flags?.EVENT_HALL_OF_FAME_PENDING === true) return false;
+  p.map = POST_GAME_HOME.map;
+  p.x = POST_GAME_HOME.x;
+  p.y = POST_GAME_HOME.y;
+  p.facing = POST_GAME_HOME.facing;
+  applyPostGameHome(save);
+  return true;
+}
+
 /** Has this save ever been inducted? What gates the post-game content. */
 export function isChampion(save: HofSave): boolean {
   return (save.hallOfFame?.length ?? 0) > 0 || save.flags?.EVENT_BEAT_CHAMPION_RIVAL === true;

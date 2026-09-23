@@ -49,7 +49,7 @@ import { CARD_PIC_RECT, TrainerCardState } from "./ui/trainercard.ts";
 import { CreditsState, HallOfFameState } from "./ui/hofscreen.ts";
 import { EvolutionState, type EvolutionView } from "./ui/evoscreen.ts";
 import {
-  applyPostGameHome, POST_GAME_HOME, recordHallOfFame,
+  applyPostGameHome, POST_GAME_HOME, postGameRescue, recordHallOfFame,
 } from "./world/halloffame.ts";
 import { OptionsMenuState } from "./ui/optionsmenu.ts";
 import { PrizeState } from "./ui/prizescreen.ts";
@@ -550,6 +550,9 @@ export class VoxelmonGame implements OverworldShell, SceneView {
               // from what it already proves -- otherwise a finished game comes
               // back with nowhere to fly to.
               backfillVisited(this.save as never);
+              // A save the old induction wrote in the hall itself resumes
+              // in the bedroom, where the write now puts it.
+              postGameRescue(this.save as never);
               // The live position lives in player.* (SaveData.lua newGame);
               // lastOutdoor is only the palette/blackout anchor.
               const pl: any = this.save.player ?? {};
@@ -1423,7 +1426,12 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       this.healParty();
       applyPostGameHome(this.save as never);
       this.overworld.lastOutdoor = (this.save as { lastOutdoor?: unknown }).lastOutdoor as never;
-      this.writeSave?.();
+      // Written as if already home. The player is still standing beside Oak
+      // in the hall when this runs, and a save taken from the live position
+      // came back THERE on CONTINUE -- in the hall, with the induction spent
+      // and nowhere to go. SaveGameData in HallOfFamePC runs after the
+      // player has been put in the bedroom, so that is what is saved.
+      this.writeSave?.(POST_GAME_HOME);
       this.overworld.startWarpTo(
         POST_GAME_HOME.map, POST_GAME_HOME.x, POST_GAME_HOME.y, POST_GAME_HOME.facing,
       );
@@ -1738,13 +1746,15 @@ export class VoxelmonGame implements OverworldShell, SceneView {
    * keeps it in player.*, so it is copied over first and a save written here
    * resumes in exactly the same spot on the desktop build.
    */
-  writeSave(): void {
+  writeSave(at?: { map: string; x: number; y: number; facing: string }): void {
     const ow: any = this.overworld;
     const p: any = this.save.player;
-    p.map = ow.mapId ?? ow.map?.id ?? p.map;
-    p.x = ow.player?.cellX ?? p.x;
-    p.y = ow.player?.cellY ?? p.y;
-    p.facing = ow.player?.facing ?? p.facing;
+    // `at` is a position the save should resume from that is not where the
+    // player is standing (the Hall of Fame's write, which resumes at home).
+    p.map = at?.map ?? ow.mapId ?? ow.map?.id ?? p.map;
+    p.x = at?.x ?? ow.player?.cellX ?? p.x;
+    p.y = at?.y ?? ow.player?.cellY ?? p.y;
+    p.facing = at?.facing ?? ow.player?.facing ?? p.facing;
     const h: any = (this as any).host ?? (this as any).hostApi ?? (globalThis as any).voxel;
     if (!h?.saveWrite) {
       console.log("save: no host.saveWrite");
