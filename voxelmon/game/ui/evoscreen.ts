@@ -17,6 +17,16 @@ import type { PartyMon } from "../battle/mon.ts";
 import type { VoxelmonData } from "../data.ts";
 
 /** How long the forms trade places before the new one settles. */
+/**
+ * The cells the evolving form sits on. EvolutionState.lua centres a 56x56
+ * pic on the GB screen -- x = (160 - w) / 2, y = max(8, 64 - h) -- which is
+ * these seven cells from column 6, row 1. Cells rather than a rect because
+ * the pic is drawn UNDER the ui layer and shows only through EMPTY cells:
+ * the scene fills the screen white for this movie and has to cut these out
+ * again, or the form is painted over and all that is left is the text.
+ */
+export const EVO_PIC_CELL = { x: 6, y: 1, w: 7, h: 7 } as const;
+
 export const EVO_FLASH_FRAMES = 220;
 
 /** What made this happen; only a level-up may be called off. */

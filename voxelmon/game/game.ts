@@ -52,6 +52,8 @@ import {
   applyPostGameHome, POST_GAME_HOME, postGameRescue, recordHallOfFame,
 } from "./world/halloffame.ts";
 import { CAMERA_SPEED_DEFAULT_Q8, CAMERA_SPEEDS, OptionsMenuState } from "./ui/optionsmenu.ts";
+import { cellsToPicRect } from "./ui/trainercard.ts";
+import { EVO_PIC_CELL } from "./ui/evoscreen.ts";
 import { PrizeState } from "./ui/prizescreen.ts";
 import { SlotMachineState } from "./ui/slotmachine.ts";
 import { BikeShopState } from "./ui/bikeshop.ts";
@@ -1061,7 +1063,8 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       // hall of fame put a mon too.
       const v = top.view() as { picPage: number };
       if (!v || v.picPage < 0) return [];
-      return [{ page: v.picPage, x: 187, y: 15, w: 106, h: 106 }];
+      const r = cellsToPicRect(EVO_PIC_CELL);
+      return [{ page: v.picPage, x: r.x, y: r.y, w: r.w, h: r.h }];
     }
     if (top?.kind === "halloffame") {
       // The inductee, centred the way HallOfFameDisplayMonInfo places it.

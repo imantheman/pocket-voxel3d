@@ -18,6 +18,7 @@ import {
   UI_TILE,
 } from "../../contracts/spec/voxel-spec.ts";
 import { CARD_PIC_CELL } from "./ui/trainercard.ts";
+import { EVO_PIC_CELL } from "./ui/evoscreen.ts";
 import type { WildBattle } from "./battle/battle.ts";
 import { desiredCards, type BattleStaging } from "./battle/staging.ts";
 import type { BattleUi } from "./battle/ui.ts";
@@ -955,6 +956,14 @@ export class Scene {
         this.uiOwner = null;
         host.uiClear();
         host.uiFill(0, 0, UI_COLS, UI_ROWS, SPACE);
+        // Cleared, not filled, where the form goes: the pic is drawn UNDER
+        // this layer (draw.rs ranks ScreenPic 8, UiQuad 9), so it shows
+        // only through empty cells. With the fill left whole the movie was
+        // a white screen and three lines of text -- and the form appeared
+        // only on a SECOND try, whose lines matched the first's and so
+        // never repainted the fill at all.
+        const c = EVO_PIC_CELL;
+        host.uiFill(c.x, c.y, c.w, c.h, 0);
         // GB rows 104/114/124 px, which is where the original puts them.
         evo.lines.forEach((ln: string, i: number) => this.stamp(host, 1, 13 + i, ln));
       }

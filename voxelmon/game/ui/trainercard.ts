@@ -34,13 +34,20 @@ const UI_TILE_PX = TILE_PX * UI_SCALE;
 /** The portrait's cells, top-right of the info box (DrawTrainerInfo's 104,4). */
 export const CARD_PIC_CELL = { x: 13, y: 1, w: 7, h: 7 } as const;
 
+/** A run of ui cells as a screen rect for the pic op. */
+export function cellsToPicRect(c: { x: number; y: number; w: number; h: number }): {
+  x: number; y: number; w: number; h: number;
+} {
+  return {
+    x: Math.round(UI_ORIGIN_X + c.x * UI_TILE_PX),
+    y: Math.round(c.y * UI_TILE_PX),
+    w: Math.round(c.w * UI_TILE_PX),
+    h: Math.round(c.h * UI_TILE_PX),
+  };
+}
+
 /** Those cells as a screen rect for the pic op. */
-export const CARD_PIC_RECT = {
-  x: Math.round(UI_ORIGIN_X + CARD_PIC_CELL.x * UI_TILE_PX),
-  y: Math.round(CARD_PIC_CELL.y * UI_TILE_PX),
-  w: Math.round(CARD_PIC_CELL.w * UI_TILE_PX),
-  h: Math.round(CARD_PIC_CELL.h * UI_TILE_PX),
-} as const;
+export const CARD_PIC_RECT = cellsToPicRect(CARD_PIC_CELL);
 
 export interface TrainerCardBadge {
   /** 1-based badge number, the grid position. */
