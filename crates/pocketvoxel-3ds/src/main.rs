@@ -2874,7 +2874,7 @@ fn main() {
     /// two and three times over with no frame drawn in between.
     ///
     /// (map id, stream centre, tint, stamp count, seam sides)
-    type BuiltKey = (u32, Option<(i32, i32)>, u32, usize, [bool; 4]);
+    type BuiltKey = (u32, Option<(i32, i32)>, u32, u64, [bool; 4]);
     let mut built_key: Option<BuiltKey> = None;
     /// The connected-map slots (id, offset) the built geometry and its seam
     /// strips were made for. The guest publishes these a frame or two AFTER
@@ -3640,11 +3640,32 @@ fn main() {
                 .iter()
                 .map(|&(id, ox, oy)| (id, ox as i32, oy as i32))
                 .collect();
+            // Which stamps are hidden, not HOW MANY: a mansion switch
+            // opens one door and closes another, so the count comes back the
+            // same and the map would keep the doors it already had. The
+            // reload itself already fires on the list's contents (it is
+            // compared whole, above); this is the same question asked the
+            // same way.
+            let stamps_key = {
+                let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+                for &(id, x, y) in stamps_off_snapshot.iter() {
+                    for b in id
+                        .to_le_bytes()
+                        .iter()
+                        .chain(x.to_le_bytes().iter())
+                        .chain(y.to_le_bytes().iter())
+                    {
+                        h ^= *b as u64;
+                        h = h.wrapping_mul(0x100_0000_01b3);
+                    }
+                }
+                h
+            };
             let want_key: BuiltKey = (
                 map_ids[map_i],
                 if cur_map_huge { stream_center_chunk } else { None },
                 last_tint,
-                stamps_off_snapshot.len(),
+                stamps_key,
                 seam_sides,
             );
             // Same map, same everything: what is on screen is already it.
