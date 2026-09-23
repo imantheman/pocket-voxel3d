@@ -347,6 +347,7 @@ pub mod op {
     pub const ANIM_SPRITE: u32 = 80;
     pub const ANIM_CLEAR: u32 = 81;
     pub const UI_PANEL: u32 = 82;
+    pub const CAM_SPEED: u32 = 83;
 }
 
 /// Fixed-point scales used by op args.

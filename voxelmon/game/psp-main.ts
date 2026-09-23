@@ -65,6 +65,8 @@ interface VoxelNative {
   animSprite(page: number, tile: number, x: number, y: number, flags: number): void;
   animClear(): void;
   uiPanel(side: number, x: number, y: number, w: number, h: number): void;
+  /** spec `camSpeed`: the C-stick's rate multiplier, Q8. */
+  camSpeed?(q8: number): void;
   fieldFx(x: number, z: number, frame: number): void;
   arena(mapId: number, x: number, y: number, shape: number, rig: number): void;
   card(
@@ -349,6 +351,12 @@ let prevGearPrev = false;
   // Bits 24-25: quarter turns the camera has been swung, so the overworld
   // can keep "up" meaning away-from-the-camera.
   game.setCamTurns((buttons >> 24) & 3);
+  // And the other way: how fast the stick may swing it, from the OPTION
+  // screen. Stated every frame -- one small number -- so a scene reset on
+  // the host side never leaves it at the default while the save says
+  // otherwise. Optional on the native surface: an older shim has no such
+  // op and the host keeps its tuned rate.
+  native.camSpeed?.(game.cameraSpeedQ8());
   // Bits 28-31 carry the low four bits of the camera's yaw in 64ths of a
   // turn; bits 24-25 are its top two (offset half a quadrant, which is what
   // makes them the rounded quarter turns the grid walk has always read).

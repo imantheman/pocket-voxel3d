@@ -156,6 +156,7 @@ int qjs_register_voxel(JSContext *ctx) {
     add_num(ctx, o, "animClear",      81, 0);
     /* Battle HUD panel rects the core slides — op 82. */
     add_num(ctx, o, "uiPanel",        82, 5);
+    add_num(ctx, o, "camSpeed",       83, 1);
     add_num(ctx, o, "arena",    70, 5);
     add_num(ctx, o, "card",     71, 7);
     add_num(ctx, o, "cardHide", 72, 1);

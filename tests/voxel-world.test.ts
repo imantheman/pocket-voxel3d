@@ -6460,6 +6460,36 @@ describe("surfing", () => {
   });
 });
 
+describe("the CAMERA SPEED option", () => {
+  test.skipIf(!hasGen)("is a row on the OPTION screen and a multiplier the host reads", () => {
+    const game = makeMenuGame();
+    // unset: the tuned rate
+    expect(game.cameraSpeedQ8()).toBe(256);
+    const menu = new OptionsMenuState(game as never);
+    const rows = () => menu.view().rows;
+    const cam = rows().findIndex((r) => r.label === "CAMERA SPEED");
+    expect(cam).toBeGreaterThanOrEqual(0);
+    expect(rows()[cam]!.choices).toEqual(["SLOW", "NORMAL", "FAST"]);
+    expect(rows()[cam]!.index).toBe(1);
+
+    // walk down to the row and step it right: FAST
+    (game as any).push?.(menu);
+    for (let i = 0; i < cam; i++) tap(game, VOX_BTN.down);
+    tap(game, VOX_BTN.right);
+    expect(game.save.options.cameraSpeed).toBe("fast");
+    expect(game.cameraSpeedQ8()).toBe(448);
+    expect(rows()[cam]!.index).toBe(2);
+    // and left twice: SLOW, half the rate
+    tap(game, VOX_BTN.left);
+    tap(game, VOX_BTN.left);
+    expect(game.save.options.cameraSpeed).toBe("slow");
+    expect(game.cameraSpeedQ8()).toBe(128);
+    // a value no build wrote reads as NORMAL rather than freezing the stick
+    game.save.options.cameraSpeed = "ludicrous";
+    expect(game.cameraSpeedQ8()).toBe(256);
+  });
+});
+
 describe("Silph Co 7F", () => {
   test.skipIf(!hasGen)("the rival waits at the door, and only there", () => {
     const rows = (ow: any, save: any) =>

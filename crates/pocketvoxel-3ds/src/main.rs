@@ -3939,15 +3939,18 @@ fn main() {
             let sc = unsafe { voxel::scene() };
             let in_battle = sc.battle.active;
             let tau = core::f32::consts::PI * 2.0;
+            // The OPTION screen's CAMERA SPEED (spec `camSpeed`), a Q8
+            // multiplier on every rate the stick drives below.
+            let sens = sc.cam_speed_q8 as f32 / 256.0;
 
             if in_battle {
                 // The battle camera always swings, whatever the overworld
                 // mode -- a staged arena is worth walking round. Its offset
                 // is its own and does not survive the fight.
-                if k.contains(KeyPad::CSTICK_LEFT)  { btl_yaw_off -= 0.035; }
-                if k.contains(KeyPad::CSTICK_RIGHT) { btl_yaw_off += 0.035; }
-                if k.contains(KeyPad::CSTICK_UP)    { btl_pitch_off += 0.025; }
-                if k.contains(KeyPad::CSTICK_DOWN)  { btl_pitch_off -= 0.025; }
+                if k.contains(KeyPad::CSTICK_LEFT)  { btl_yaw_off -= 0.035 * sens; }
+                if k.contains(KeyPad::CSTICK_RIGHT) { btl_yaw_off += 0.035 * sens; }
+                if k.contains(KeyPad::CSTICK_UP)    { btl_pitch_off += 0.025 * sens; }
+                if k.contains(KeyPad::CSTICK_DOWN)  { btl_pitch_off -= 0.025 * sens; }
                 if k.contains(KeyPad::ZL) && k.contains(KeyPad::ZR) {
                     btl_yaw_off = 0.0;
                     btl_pitch_off = 0.0;
@@ -4001,10 +4004,10 @@ fn main() {
                 if m.rig != 0 {
                     // 1ST / 3RD steer their own attitude at the mod's rates,
                     // about twice the orbit's. Pushing up looks up.
-                    if k.contains(KeyPad::CSTICK_LEFT)  { cam_rig_yaw -= RIG_YAW_RATE; }
-                    if k.contains(KeyPad::CSTICK_RIGHT) { cam_rig_yaw += RIG_YAW_RATE; }
-                    if k.contains(KeyPad::CSTICK_UP)    { cam_rig_pitch -= RIG_PITCH_RATE; }
-                    if k.contains(KeyPad::CSTICK_DOWN)  { cam_rig_pitch += RIG_PITCH_RATE; }
+                    if k.contains(KeyPad::CSTICK_LEFT)  { cam_rig_yaw -= RIG_YAW_RATE * sens; }
+                    if k.contains(KeyPad::CSTICK_RIGHT) { cam_rig_yaw += RIG_YAW_RATE * sens; }
+                    if k.contains(KeyPad::CSTICK_UP)    { cam_rig_pitch -= RIG_PITCH_RATE * sens; }
+                    if k.contains(KeyPad::CSTICK_DOWN)  { cam_rig_pitch += RIG_PITCH_RATE * sens; }
                     cam_rig_pitch = pocketvoxel_core::cam::clamp_free_pitch(cam_rig_pitch);
                     cam_rig_yaw = cam_rig_yaw.rem_euclid(tau);
                     // The rig is the camera; the orbit's swing must not be
@@ -4021,10 +4024,10 @@ fn main() {
                     walk_yaw = 0.0;
                 } else {
                     // Ours, exactly as it was.
-                    if k.contains(KeyPad::CSTICK_LEFT)  { cam_yaw_off -= 0.035; }
-                    if k.contains(KeyPad::CSTICK_RIGHT) { cam_yaw_off += 0.035; }
-                    if k.contains(KeyPad::CSTICK_UP)    { cam_pitch_off += 0.025; }
-                    if k.contains(KeyPad::CSTICK_DOWN)  { cam_pitch_off -= 0.025; }
+                    if k.contains(KeyPad::CSTICK_LEFT)  { cam_yaw_off -= 0.035 * sens; }
+                    if k.contains(KeyPad::CSTICK_RIGHT) { cam_yaw_off += 0.035 * sens; }
+                    if k.contains(KeyPad::CSTICK_UP)    { cam_pitch_off += 0.025 * sens; }
+                    if k.contains(KeyPad::CSTICK_DOWN)  { cam_pitch_off -= 0.025 * sens; }
                     // Held against the limit, the offset must not keep
                     // winding: clamp to what this camera can take, so the
                     // stick stops at the ground and reverses at once.

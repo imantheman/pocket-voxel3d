@@ -73,6 +73,11 @@ pub struct UiText {
     pub text: String,
 }
 
+/// The `camSpeed` multiplier's floor and ceiling, Q8: a quarter to four
+/// times the tuned rate. Anything past either is a bad value, not a taste.
+pub const CAM_SPEED_MIN: i32 = 64;
+pub const CAM_SPEED_MAX: i32 = 1024;
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BattleCard {
     pub shown: bool,
@@ -218,6 +223,12 @@ pub struct Scene {
     /// Glyphs of `ui_text` shown. `uiText` resets it to "all".
     pub ui_reveal: u32,
     pub battle: Battle,
+    /// The C-stick's camera rate, Q8 (`camSpeed`): 256 is the host's tuned
+    /// rate, 128 half of it, 512 twice. The host multiplies its per-frame
+    /// yaw and pitch steps by this; the guest sets it from the OPTION
+    /// screen. Clamped on the way in so a bad save cannot freeze or spin
+    /// the camera.
+    pub cam_speed_q8: i32,
     /// The quality rung this host climbed to (`spec::quality_tier`), always a
     /// valid index into [`spec::QUALITY`]. HOST configuration, not guest
     /// state: the host knows the machine, so `reset()` keeps this exactly as
@@ -339,6 +350,7 @@ impl Scene {
             ui_text: None,
             ui_reveal: u32::MAX,
             battle: Battle::default(),
+            cam_speed_q8: Q8,
             quality: QUALITY_TIER_DEFAULT,
             audio: Audio::new(),
             tick: 0,
@@ -666,6 +678,11 @@ impl Scene {
             }
             op::ANIM_CLEAR => {
                 self.anim_sprite_n = 0;
+            }
+            op::CAM_SPEED => {
+                if !args.is_empty() {
+                    self.cam_speed_q8 = a(0).clamp(CAM_SPEED_MIN, CAM_SPEED_MAX);
+                }
             }
             op::UI_PANEL => {
                 if args.len() >= 5 {

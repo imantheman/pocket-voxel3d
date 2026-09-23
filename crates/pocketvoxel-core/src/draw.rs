@@ -1665,6 +1665,24 @@ mod tests {
         assert!((card_pull(core::f32::consts::FRAC_PI_2) - 6.0).abs() < 1e-4);
     }
 
+    /// `camSpeed` lands on the scene, and a value past either end of the
+    /// range is held at that end rather than freezing or spinning the stick.
+    #[test]
+    fn cam_speed_is_kept_and_clamped() {
+        use crate::scene::{Scene, CAM_SPEED_MAX, CAM_SPEED_MIN};
+        let mut scene = Scene::new();
+        assert_eq!(scene.cam_speed_q8, crate::spec::Q8);
+        scene.op(op::CAM_SPEED, &[448], None);
+        assert_eq!(scene.cam_speed_q8, 448);
+        scene.op(op::CAM_SPEED, &[0], None);
+        assert_eq!(scene.cam_speed_q8, CAM_SPEED_MIN);
+        scene.op(op::CAM_SPEED, &[1 << 20], None);
+        assert_eq!(scene.cam_speed_q8, CAM_SPEED_MAX);
+        // no argument: nothing changes
+        scene.op(op::CAM_SPEED, &[], None);
+        assert_eq!(scene.cam_speed_q8, CAM_SPEED_MAX);
+    }
+
     /// Under a roof (the wide rig) a battle mon is half its outdoor size;
     /// on the overworld (the tele rig) it is exactly the outdoor size.
     #[test]

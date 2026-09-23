@@ -727,6 +727,13 @@ export const VOX_OP = {
    *   args: side (0 player, 1 enemy), x, y, w, h -- cells; w = 0 clears it
    */
   uiPanel: 82,
+  /**
+   * How fast the C-stick swings the camera, as a Q8 multiplier of the
+   * host's own rates (256 = the rates as tuned). The OPTION screen's
+   * CAMERA SPEED row; the guest states it every frame, the host reads it
+   * off the scene when it turns the stick into degrees.
+   */
+  camSpeed: 83,
 } as const;
 
 /** Emote-page frame of the HM Cut tree sprite (after the 3 GB bubbles). */

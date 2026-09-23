@@ -51,7 +51,7 @@ import { EvolutionState, type EvolutionView } from "./ui/evoscreen.ts";
 import {
   applyPostGameHome, POST_GAME_HOME, postGameRescue, recordHallOfFame,
 } from "./world/halloffame.ts";
-import { OptionsMenuState } from "./ui/optionsmenu.ts";
+import { CAMERA_SPEED_DEFAULT_Q8, CAMERA_SPEEDS, OptionsMenuState } from "./ui/optionsmenu.ts";
 import { PrizeState } from "./ui/prizescreen.ts";
 import { SlotMachineState } from "./ui/slotmachine.ts";
 import { BikeShopState } from "./ui/bikeshop.ts";
@@ -725,6 +725,16 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   textSpeed(): number {
     const v = (this.save as { options?: { textSpeed?: number } }).options?.textSpeed;
     return typeof v === "number" && v > 0 ? v : TEXT_SPEED_DEFAULT;
+  }
+
+  /**
+   * save.options.cameraSpeed -> the Q8 multiplier the host swings the
+   * camera by (spec `camSpeed`): SLOW is half the tuned rate, FAST is
+   * near twice it. Unset, or anything unknown, is NORMAL.
+   */
+  cameraSpeedQ8(): number {
+    const v = (this.save as { options?: { cameraSpeed?: string } }).options?.cameraSpeed;
+    return CAMERA_SPEEDS.find((s) => s.key === v)?.q8 ?? CAMERA_SPEED_DEFAULT_Q8;
   }
 
   /** save.options.animations — BattleState.lua:2544 animationsOn. */

@@ -33,8 +33,25 @@ export interface OptionsView {
   index: number;
 }
 
+/**
+ * CAMERA SPEED: how fast the C-stick swings the view, as the Q8 multiplier
+ * the host applies to its own tuned rates (256 = as tuned). This port's
+ * row, not the original's -- the Game Boy had no camera to swing.
+ */
+export const CAMERA_SPEEDS = [
+  { key: "slow", label: "SLOW", q8: 128 },
+  { key: "normal", label: "NORMAL", q8: 256 },
+  { key: "fast", label: "FAST", q8: 448 },
+] as const;
+export const CAMERA_SPEED_DEFAULT_Q8 = 256;
+
 interface OptionsSave {
-  options?: { textSpeed?: number; animations?: boolean; movement?: string };
+  options?: {
+    textSpeed?: number;
+    animations?: boolean;
+    movement?: string;
+    cameraSpeed?: string;
+  };
 }
 
 export class OptionsMenuState implements GameState {
@@ -43,9 +60,14 @@ export class OptionsMenuState implements GameState {
 
   constructor(private game: { input: any; pop(): void; save: OptionsSave }) {}
 
-  private opts(): { textSpeed?: number; animations?: boolean; movement?: string } {
+  private opts(): NonNullable<OptionsSave["options"]> {
     const save = this.game.save;
     return (save.options ??= {});
+  }
+
+  private cameraIndex(): number {
+    const at = CAMERA_SPEEDS.findIndex((s) => s.key === this.opts().cameraSpeed);
+    return at >= 0 ? at : 1; // NORMAL
   }
 
   private speedIndex(): number {
@@ -73,6 +95,11 @@ export class OptionsMenuState implements GameState {
         choices: ["FREE", "GRID"],
         index: this.opts().movement === "grid" ? 1 : 0,
       },
+      {
+        label: "CAMERA SPEED",
+        choices: CAMERA_SPEEDS.map((s) => s.label),
+        index: this.cameraIndex(),
+      },
     ];
   }
 
@@ -85,6 +112,7 @@ export class OptionsMenuState implements GameState {
     if (row === 0) this.opts().textSpeed = TEXT_SPEEDS[at]!.delay;
     else if (row === 1) this.opts().animations = at === 0;
     else if (row === 2) this.opts().movement = at === 1 ? "grid" : "free";
+    else if (row === 3) this.opts().cameraSpeed = CAMERA_SPEEDS[at]!.key;
   }
 
   update(): void {
