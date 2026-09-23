@@ -2641,6 +2641,38 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     ),
   },
 
+  // story5.lua M.CELADON_MART_3F (scripts/CeladonMart3F.asm): the clerk
+  // leaning on the TV-game counter gives TM18 COUNTER.
+  CELADON_MART_3F: {
+    talk: {
+      TEXT_CELADONMART3F_CLERK: giftRows({
+        flag: "EVENT_GOT_TM18",
+        item: "TM_COUNTER",
+        pre: "_CeladonMart3FClerkTM18PreReceiveText",
+        received: "_CeladonMart3FClerkReceivedTM18Text",
+        explain: "_CeladonMart3FClerkTM18ExplanationText",
+        already: "_CeladonMart3FClerkTM18ExplanationText",
+      }),
+    },
+  },
+
+  // story5.lua M.SILPH_CO_2F (scripts/SilphCo2F.asm): the worker cornered
+  // on 2F gives TM36 SELFDESTRUCT once she sees you are not a Rocket. Her
+  // opening line carries no leading underscore -- pokered keeps it in the
+  // script bank, not the far-text bank -- and the table has it by that name.
+  SILPH_CO_2F: {
+    talk: {
+      TEXT_SILPHCO2F_SILPH_WORKER_F: giftRows({
+        flag: "EVENT_GOT_TM36",
+        item: "TM_SELFDESTRUCT",
+        pre: "SilphCo2FSilphWorkerFPleaseTakeThisText",
+        received: "_SilphCo2FSilphWorkerFReceivedTM36Text",
+        explain: "_SilphCo2FSilphWorkerFTM36ExplanationText",
+        already: "_SilphCo2FSilphWorkerFTM36ExplanationText",
+      }),
+    },
+  },
+
   // story4.lua M.MR_PSYCHICS_HOUSE (scripts/MrPsychicsHouse.asm): TM29
   // PSYCHIC, once; afterwards he only explains it.
   MR_PSYCHICS_HOUSE: {

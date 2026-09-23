@@ -8771,6 +8771,30 @@ Here, you can\vhave this TM.`,
   ROUTE_18_GATE_1F: {
     onStep: bikeGate([[4, 3], [4, 4], [4, 5], [4, 6]], "_Route18Gate1FGuardExcuseMeText", "_Route18Gate1FGuardYouNeedABicycleText")
   },
+  CELADON_MART_3F: {
+    talk: {
+      TEXT_CELADONMART3F_CLERK: giftRows({
+        flag: "EVENT_GOT_TM18",
+        item: "TM_COUNTER",
+        pre: "_CeladonMart3FClerkTM18PreReceiveText",
+        received: "_CeladonMart3FClerkReceivedTM18Text",
+        explain: "_CeladonMart3FClerkTM18ExplanationText",
+        already: "_CeladonMart3FClerkTM18ExplanationText"
+      })
+    }
+  },
+  SILPH_CO_2F: {
+    talk: {
+      TEXT_SILPHCO2F_SILPH_WORKER_F: giftRows({
+        flag: "EVENT_GOT_TM36",
+        item: "TM_SELFDESTRUCT",
+        pre: "SilphCo2FSilphWorkerFPleaseTakeThisText",
+        received: "_SilphCo2FSilphWorkerFReceivedTM36Text",
+        explain: "_SilphCo2FSilphWorkerFTM36ExplanationText",
+        already: "_SilphCo2FSilphWorkerFTM36ExplanationText"
+      })
+    }
+  },
   MR_PSYCHICS_HOUSE: {
     talk: {
       TEXT_MRPSYCHICSHOUSE_MR_PSYCHIC: giftRows({
