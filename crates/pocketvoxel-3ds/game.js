@@ -10836,6 +10836,23 @@ correct!`, () => {
       }
     }
   }
+  refreshDoors() {
+    const def = this.map?.def;
+    if (!def || !Array.isArray(def.blocks))
+      return;
+    let opened = false;
+    for (const door of this.cardKeyDoors(this.map.id)) {
+      if (!this.doorUnlocked(door))
+        continue;
+      const i = door.by * def.width + door.bx;
+      if (i < 0 || i >= def.blocks.length || def.blocks[i] === door.open)
+        continue;
+      this.openDoorCells(def, door);
+      opened = true;
+    }
+    if (opened)
+      this.playSfx("Go_Inside");
+  }
   openDoorCells(def, door) {
     const i = door.by * def.width + door.bx;
     if (Array.isArray(def.blocks) && i >= 0 && i < def.blocks.length) {
@@ -16397,6 +16414,8 @@ class BattleGameState {
         done();
       if (b.finished === "lose" && !this.loseable)
         this.game.blackout();
+      else
+        this.game.overworld.refreshDoors();
       this.game.runEvolutions(b.leveledUp);
       const caught = b.caughtNewSpecies;
       if (caught) {

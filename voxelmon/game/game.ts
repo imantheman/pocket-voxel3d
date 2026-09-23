@@ -293,6 +293,11 @@ class BattleGameState implements GameState, BattleSceneView {
       // heals and continues. The block below is the legacy teardown, kept for
       // its notes; the live path pops + resumes above, so blackout goes here.
       if (b.finished === "lose" && !this.loseable) this.game.blackout();
+      // EndTrainerBattle re-runs the floor's door callback (home/trainers.asm
+      // BIT_CUR_MAP_LOADED_1): the Rocket Hideout's lift gate opens the
+      // moment its last guard falls, not on the next visit. After done(),
+      // which is what records the win the gate is waiting on.
+      else this.game.overworld.refreshDoors();
       // OverworldController.lua:3851-3894 afterBattle: EvolveAfterBattle runs
       // for every exit (the blackout heals first, :3882; other exits run it
       // straight away, :3892). This call was orphaned in the dead legacy block

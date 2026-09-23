@@ -2425,6 +2425,32 @@ export class Overworld implements ScriptWorld {
     }
   }
 
+  /**
+   * The floor's door callback, run again the way the ROM runs it at the end
+   * of a battle: EndTrainerBattle sets BIT_CUR_MAP_LOADED_1 (home/trainers
+   * .asm), and the Rocket Hideout's ...DoorCallbackScript reads that as a
+   * map load, so beating the last guard opens the lift gate on the spot,
+   * with SFX_GO_INSIDE. Without this the gate only opened on the NEXT load:
+   * you beat both guards and stood in front of a door that would not open
+   * until you left the floor and came back.
+   *
+   * Only doors that are shut and have just become unlockable move; a door
+   * already open, or still locked, is left exactly as it is.
+   */
+  refreshDoors(): void {
+    const def = this.map?.def;
+    if (!def || !Array.isArray(def.blocks)) return;
+    let opened = false;
+    for (const door of this.cardKeyDoors(this.map.id)) {
+      if (!this.doorUnlocked(door)) continue;
+      const i = door.by * def.width + door.bx;
+      if (i < 0 || i >= def.blocks.length || def.blocks[i] === door.open) continue;
+      this.openDoorCells(def, door);
+      opened = true;
+    }
+    if (opened) this.playSfx("Go_Inside");
+  }
+
   /** Take one door off the map: the geometry, the block and the collision. */
   private openDoorCells(def: any, door: any): void {
     const i = door.by * def.width + door.bx;

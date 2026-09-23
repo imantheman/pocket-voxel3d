@@ -6342,6 +6342,36 @@ describe("the Pokemon Tower without the SILPH SCOPE", () => {
   });
 });
 
+describe("the Rocket Hideout lift gate", () => {
+  test.skipIf(!hasGen)("opens the moment the last guard falls, not on the next visit", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    const door = (romData as any).field.cardKeyDoors.closedDoors.ROCKET_HIDEOUT_B4F[0];
+    ow.setMap("ROCKET_HIDEOUT_B4F", 2, 2, "down");
+    // a shut door is the baked block, which the tile grid does not know
+    // about: what changes when it opens is the door record (isOpenedDoor),
+    // the same thing the load-time test reads
+    const shut = () => !ow.map.isOpenedDoor(door.bx * 2, door.by * 2);
+    const open = () => ow.map.isOpenedDoor(door.bx * 2, door.by * 2);
+    expect(shut()).toBe(true);
+
+    // one guard down: still shut -- CheckBothEventsSet wants both
+    game.save.flags[door.events[0]] = true;
+    ow.refreshDoors();
+    expect(shut()).toBe(true);
+
+    // the second falls: the gate goes on the spot, no reload
+    game.save.flags[door.events[1]] = true;
+    ow.refreshDoors();
+    expect(open()).toBe(true);
+    expect(ow.map.def.blocks[door.by * ow.map.def.width + door.bx]).toBe(door.open);
+
+    // and running it again over an open door changes nothing
+    ow.refreshDoors();
+    expect(open()).toBe(true);
+  });
+});
+
 describe("Silph Co 7F", () => {
   test.skipIf(!hasGen)("the rival waits at the door, and only there", () => {
     const rows = (ow: any, save: any) =>
