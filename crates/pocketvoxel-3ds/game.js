@@ -13290,6 +13290,13 @@ function postGameRescue(save) {
 }
 
 // voxelmon/game/ui/optionsmenu.ts
+var CAMERA_SPEEDS = [
+  { key: "slow", label: "SLOW", q8: 128 },
+  { key: "normal", label: "NORMAL", q8: 256 },
+  { key: "fast", label: "FAST", q8: 448 }
+];
+var CAMERA_SPEED_DEFAULT_Q8 = 256;
+
 class OptionsMenuState {
   game;
   kind = "options";
@@ -13300,6 +13307,10 @@ class OptionsMenuState {
   opts() {
     const save = this.game.save;
     return save.options ??= {};
+  }
+  cameraIndex() {
+    const at = CAMERA_SPEEDS.findIndex((s) => s.key === this.opts().cameraSpeed);
+    return at >= 0 ? at : 1;
   }
   speedIndex() {
     const cur = this.opts().textSpeed ?? TEXT_SPEED_DEFAULT;
@@ -13322,6 +13333,11 @@ class OptionsMenuState {
         label: "MOVEMENT",
         choices: ["FREE", "GRID"],
         index: this.opts().movement === "grid" ? 1 : 0
+      },
+      {
+        label: "CAMERA SPEED",
+        choices: CAMERA_SPEEDS.map((s) => s.label),
+        index: this.cameraIndex()
       }
     ];
   }
@@ -13337,6 +13353,8 @@ class OptionsMenuState {
       this.opts().animations = at === 0;
     else if (row === 2)
       this.opts().movement = at === 1 ? "grid" : "free";
+    else if (row === 3)
+      this.opts().cameraSpeed = CAMERA_SPEEDS[at].key;
   }
   update() {
     const p = this.game.input.pressed;
@@ -16686,6 +16704,10 @@ class VoxelmonGame {
     const v = this.save.options?.textSpeed;
     return typeof v === "number" && v > 0 ? v : TEXT_SPEED_DEFAULT;
   }
+  cameraSpeedQ8() {
+    const v = this.save.options?.cameraSpeed;
+    return CAMERA_SPEEDS.find((s) => s.key === v)?.q8 ?? CAMERA_SPEED_DEFAULT_Q8;
+  }
   animationsOn() {
     return this.save.options?.animations !== false;
   }
@@ -17833,6 +17855,7 @@ globalThis.frame = (buttons) => {
   }
   prevTouch = touching;
   game.setCamTurns(buttons >> 24 & 3);
+  native.camSpeed?.(game.cameraSpeedQ8());
   {
     const e = (buttons >> 24 & 3) << 4 | buttons >>> 28 & 15;
     game.setCamYaw(((e - 8) % 64 + 64) % 64 * (Math.PI * 2 / 64));

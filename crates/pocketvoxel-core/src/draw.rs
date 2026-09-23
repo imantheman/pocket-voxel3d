@@ -425,9 +425,19 @@ fn base_camera(scene: &Scene) -> Camera {
                 0.0
             };
             let shoulder = if scene.cam_rig == 2 { cam::FREE_SHOULDER } else { 0.0 };
+            // WHERE the player stands, not where the flat game scrolls to.
+            // `cam` is Camera.lua's follow point -- the 160x144 view's
+            // centre, which the guest places half a cell right of the
+            // player's own -- and it is the right thing for the orbit to
+            // look at. Standing the eye there put first person on the seam
+            // between the player's cell and the next, and put the third-
+            // person boom's pivot beside the player rather than on them.
+            // The player's card (slot 0, the one first person hides) is
+            // drawn at its feet, so its feet are where the head goes.
+            let (px, pz) = rig_feet(scene).unwrap_or((cx, cy));
             return cam::free_cam(
-                cx,
-                cy,
+                px,
+                pz,
                 scene.cam_rig_yaw,
                 cam::clamp_free_pitch(scene.cam_rig_pitch),
                 boom,
@@ -439,6 +449,20 @@ fn base_camera(scene: &Scene) -> Camera {
         let s = if scene.cam_dist_scale > 0.0 { scene.cam_dist_scale } else { 1.0 };
         cam::orbit_at(cx, cy, scene.pitch_deg(), cam::orbit_dist() * s)
     }
+}
+
+/// The player's feet in world px, for the free rigs to stand on: entity slot
+/// 0's position (scene.ts puts the player there), or None before the guest
+/// has placed it, when the follow point is all there is.
+fn rig_feet(scene: &Scene) -> Option<(f32, f32)> {
+    let ent = scene.ents.first()?;
+    if !ent.shown {
+        return None;
+    }
+    Some((
+        ent.x as f32 / spec::Q4 as f32,
+        ent.y as f32 / spec::Q4 as f32,
+    ))
 }
 
 /// Whether entity slot `i` is drawn at all -- card, shadow and ghost alike.
@@ -1663,6 +1687,36 @@ mod tests {
         assert!((card_pull(0.0) - 46.0).abs() < 1e-4);
         // Horizontal: 6 + max(0, -8)/1 = 6 px.
         assert!((card_pull(core::f32::consts::FRAC_PI_2) - 6.0).abs() < 1e-4);
+    }
+
+    /// The free rigs stand on the player's own feet -- entity slot 0 --
+    /// not on the flat game's follow point, which sits half a cell to the
+    /// right of them. Third person pivots on the same spot; the orbit is
+    /// untouched and still looks where the guest scrolls.
+    #[test]
+    fn free_rigs_stand_on_the_players_feet() {
+        use crate::scene::Scene;
+        let mut sc = Scene::new();
+        // the player at cell (3,4): the guest emits the card at px (48,64)
+        // and the follow point at (48+16, 64+8), all Q4
+        sc.op(op::ENT, &[0, 0, 0, 48 * 16, 64 * 16, 0, 0], None);
+        sc.op(op::CAM, &[(48 + 16) * 16, (64 + 8) * 16], None);
+        sc.cam_rig = 1;
+        sc.cam_rig_pitch = 0.0;
+        let c = camera(&sc);
+        assert!((c.eye.x - 48.0).abs() < 1e-3, "first person off the player: {}", c.eye.x);
+        assert!((c.eye.z - 64.0).abs() < 1e-3, "first person off the player: {}", c.eye.z);
+        // no player placed yet: the follow point, rather than nowhere
+        let mut bare = Scene::new();
+        bare.op(op::CAM, &[(48 + 16) * 16, (64 + 8) * 16], None);
+        bare.cam_rig = 1;
+        bare.cam_rig_pitch = 0.0;
+        let b = camera(&bare);
+        assert!((b.eye.x - 64.0).abs() < 1e-3);
+        // the orbit still looks at the follow point
+        sc.cam_rig = 0;
+        let o = camera(&sc);
+        assert!((o.focus.x - 64.0).abs() < 1e-3, "orbit moved: {}", o.focus.x);
     }
 
     /// `camSpeed` lands on the scene, and a value past either end of the
