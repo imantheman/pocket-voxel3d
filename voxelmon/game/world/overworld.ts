@@ -30,6 +30,8 @@ import { visit } from "./fly.ts";
 import { cellOf, freeDir, quantize, slide, stickPush } from "./freemove.ts";
 import { repelled } from "../rules/items.ts";
 import { canAt, DOOR_BLOCK, openCan, rollFirst, SECOND_LOCK, trashData } from "./trashcans.ts";
+import { findHidden, hiddenItemNear } from "./hiddenitems.ts";
+import * as Bag from "../rules/bag.ts";
 import { spotFor } from "./snorlax.ts";
 import { barriersFor } from "./toggleblocks.ts";
 import { fillBadgeName, gateFor, guardAt, hasBadge } from "./badgegate.ts";
@@ -1048,6 +1050,7 @@ export class Overworld implements ScriptWorld {
     if (this.tryMansionSwitch(fx, fy)) return;
     if (this.tryGymQuiz(fx, fy)) return;
     if (this.tryTrashCan(fx, fy)) return;
+    if (this.tryHiddenItem(fx, fy)) return;
     // Bill's PC: a hidden PC tile (OverworldController.lua:2019). Pressing A
     // facing it opens box storage.
     if (pcTileAt(this.map.id, fx, fy, p.facing)) {
@@ -2552,6 +2555,44 @@ export class Overworld implements ScriptWorld {
         ?? "Nope! There's\nonly trash here.\fHey! The electric\nlocks were reset!", "Denied");
     }
     return true;
+  }
+
+  /**
+   * Hidden items and coins (world/hiddenitems.ts): A on a tile that hides
+   * one finds it, with SFX_GET_ITEM_2 as hidden_items.asm always plays. A
+   * full bag announces the find and leaves it for later.
+   */
+  private tryHiddenItem(fx: number, fy: number): boolean {
+    const data = this.shell.data as never;
+    const t = (this.shell.data as { text?: Record<string, string> }).text ?? {};
+    const player = String(this.save.player?.name ?? "RED");
+    const line = (k: string, fallback: string, subs: Record<string, string> = {}): string => {
+      let s = t[k] ?? fallback;
+      s = s.replace(/\{PLAYER\}/g, player).replace(/\{RAM:wNameBuffer\}/g, subs.name ?? "");
+      return s.replace(/\{NUM:[^}]*\}/g, subs.num ?? "");
+    };
+    const r = findHidden(data, this.save as never, this.map.id, fx, fy,
+      (item) => Bag.add(this.save, item, 1, data));
+    if (!r || r.kind === "nocase") return false;
+    if (r.kind === "item") {
+      this.playSfx("Get_Item2");
+      this.shell.showText(line("_FoundHiddenItemText", "{PLAYER} found\n{RAM:wNameBuffer}!", { name: r.name }));
+    } else if (r.kind === "bagfull") {
+      this.shell.showText(
+        line("_FoundHiddenItemText", "{PLAYER} found\n{RAM:wNameBuffer}!", { name: r.name }) + "\f"
+        + line("_HiddenItemBagFullText", "But, {PLAYER} has\nno more room for\nother items!"),
+      );
+    } else {
+      this.playSfx("Get_Item2");
+      this.shell.showText(line("_FoundHiddenCoinsText", "{PLAYER} found\n{NUM} coins!", { num: String(r.coins) }));
+    }
+    return true;
+  }
+
+  /** ITEMFINDER: any hidden item still unfound near the player. */
+  hiddenItemNearby(): boolean {
+    const p = this.player;
+    return hiddenItemNear(this.shell.data as never, this.save as never, this.map.id, p.cellX, p.cellY);
   }
 
   /** This map's card-key doors, or an empty list. */

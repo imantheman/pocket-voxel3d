@@ -1353,10 +1353,12 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       return;
     }
     if (r.kind === "itemfinder") {
-      // ItemUseItemfinder's search is the hidden-item table, which this
-      // port does not walk yet: the honest answer is the one it gives
-      // when nothing is near.
-      this.showText("Nope! There's no\nresponse.");
+      // ItemUseItemfinder (engine/items/itemfinder.asm): a hidden item still
+      // unfound within the window around the player, or not.
+      const t = (this.data as { text?: Record<string, string> }).text ?? {};
+      this.showText(this.overworld.hiddenItemNearby()
+        ? (t._ItemfinderFoundItemText ?? "Yes! ITEMFINDER\nindicates there's\nan item nearby.")
+        : (t._ItemfinderFoundNothingText ?? "Nope! ITEMFINDER\nisn't responding."));
       return;
     }
     if (r.kind === "consumed") Bag.remove(this.save, itemId, 1);

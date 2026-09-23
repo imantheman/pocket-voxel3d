@@ -29,6 +29,7 @@ import { thirstyGirlRows } from "../voxelmon/game/world/vending.ts";
 import { MAP_SCRIPTS } from "../voxelmon/game/world/mapscripts.ts";
 import * as Items from "../voxelmon/game/rules/items.ts";
 import * as Trash from "../voxelmon/game/world/trashcans.ts";
+import * as Hidden from "../voxelmon/game/world/hiddenitems.ts";
 import { POST_GAME_HOME, postGameRescue } from "../voxelmon/game/world/halloffame.ts";
 import { fishingCatch, rodPool } from "../voxelmon/game/world/fishing.ts";
 import { talkScript } from "../voxelmon/game/world/mapscripts.ts";
@@ -7291,6 +7292,83 @@ describe("the FIGHTING DOJO prize", () => {
     expect(talk(game, "TEXT_FIGHTINGDOJO_HITMONCHAN_POKE_BALL", true)).toContain("no room");
     expect(game.save.flags.EVENT_GOT_HITMONCHAN).toBeUndefined();
     expect(game.save.party.length).toBe(6);
+  });
+});
+
+describe("hidden items", () => {
+  const spotOn = (map: string) => {
+    const list = (romData as any).field.hiddenItems[map] as { x: number; y: number; item: string }[];
+    expect(list?.length).toBeGreaterThan(0);
+    return list[0]!;
+  };
+
+  test.skipIf(!hasGen)("A on the tile finds it once, and a full bag leaves it", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    const h = spotOn("CELADON_CITY");
+    ow.setMap("CELADON_CITY", h.x, h.y + 1, "up");
+    ow.interact();
+    expect(topText(game)).toContain("found");
+    expect(topText(game)).toContain((romData as any).items[h.item].name);
+    dismissText(game);
+    expect(game.save.inventory[h.item]).toBe(1);
+    expect(game.save.hiddenTaken[Hidden.hiddenKey("CELADON_CITY", h.x, h.y)]).toBe(true);
+    // gone now: the press falls through to nothing
+    ow.interact();
+    expect(game.stackKinds()).toEqual(["overworld"]);
+  });
+
+  test.skipIf(!hasGen)("a full bag announces the find and keeps the spot", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    const h = spotOn("CERULEAN_CAVE_1F");
+    // twenty different items: the bag is full
+    const ids = Object.keys((romData as any).items).filter((id) => id !== h.item).slice(0, 20);
+    for (const id of ids) game.save.inventory[id] = 1;
+    ow.setMap("CERULEAN_CAVE_1F", h.x, h.y + 1, "up");
+    ow.interact();
+    expect(topText(game)).toContain("no more room");
+    dismissText(game);
+    expect(game.save.inventory[h.item]).toBeUndefined();
+    expect(game.save.hiddenTaken?.[Hidden.hiddenKey("CERULEAN_CAVE_1F", h.x, h.y)]).toBeUndefined();
+  });
+
+  test.skipIf(!hasGen)("hidden coins need the COIN CASE and go into it", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    const c = ((romData as any).field.hiddenCoins.GAME_CORNER as { x: number; y: number; coins: number }[])[0]!;
+    ow.setMap("GAME_CORNER", c.x, c.y + 1, "up");
+    ow.interact();
+    expect(game.save.coins ?? 0).toBe(0); // no case: nothing
+    dismissText(game);
+    game.save.inventory.COIN_CASE = 1;
+    ow.interact();
+    expect(topText(game)).toContain("coins");
+    dismissText(game);
+    expect(game.save.coins).toBe(c.coins);
+  });
+
+  test.skipIf(!hasGen)("the ITEMFINDER answers by the window around the player", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    const h = spotOn("CELADON_CITY");
+    game.save.inventory.ITEMFINDER = 1;
+    ow.setMap("CELADON_CITY", h.x - 2, h.y + 2, "down");
+    expect(ow.hiddenItemNearby()).toBe(true);
+    game.useKeyItem("ITEMFINDER");
+    expect(topText(game)).toContain("nearby");
+    dismissText(game);
+    // taken: nothing left to point at
+    game.save.hiddenTaken = { [Hidden.hiddenKey("CELADON_CITY", h.x, h.y)]: true };
+    expect(ow.hiddenItemNearby()).toBe(false);
+    game.useKeyItem("ITEMFINDER");
+    expect(topText(game)).toContain("isn't responding");
+    dismissText(game);
+    // pure window: the clamp excludes coordinate 0 near the top-left
+    const data = { field: { hiddenItems: { M: [{ x: 0, y: 0, item: "POTION" }] } } };
+    expect(Hidden.hiddenItemNear(data, { inventory: {} }, "M", 3, 3)).toBe(false);
+    expect(Hidden.hiddenItemNear({ field: { hiddenItems: { M: [{ x: 1, y: 1, item: "POTION" }] } } },
+      { inventory: {} }, "M", 3, 3)).toBe(true);
   });
 });
 

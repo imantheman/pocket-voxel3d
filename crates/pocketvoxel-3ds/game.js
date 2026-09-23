@@ -9156,6 +9156,46 @@ function openCan(data, save, can, rand) {
   return { kind: "fail", first: puz.first };
 }
 
+// voxelmon/game/world/hiddenitems.ts
+function hiddenKey(mapId, x, y) {
+  return `${mapId}_${x}_${y}`;
+}
+function findHidden(data, save, mapId, x, y, add2) {
+  const key = hiddenKey(mapId, x, y);
+  const taken = save.hiddenTaken ??= {};
+  const items = data?.field?.hiddenItems?.[mapId] ?? [];
+  for (const h of items) {
+    if (h.x !== x || h.y !== y)
+      continue;
+    if (taken[key])
+      return null;
+    const name = data?.items?.[h.item]?.name ?? h.item;
+    if (!add2(h.item))
+      return { kind: "bagfull", item: h.item, name };
+    taken[key] = true;
+    return { kind: "item", item: h.item, name };
+  }
+  const coins = data?.field?.hiddenCoins?.[mapId] ?? [];
+  for (const h of coins) {
+    if (h.x !== x || h.y !== y)
+      continue;
+    if (taken[key])
+      return null;
+    if (!(save.inventory.COIN_CASE > 0))
+      return { kind: "nocase" };
+    taken[key] = true;
+    save.coins = Math.min(9999, (save.coins ?? 0) + h.coins);
+    return { kind: "coins", coins: h.coins };
+  }
+  return null;
+}
+function hiddenItemNear(data, save, mapId, px2, py) {
+  const items = data?.field?.hiddenItems?.[mapId] ?? [];
+  const taken = save.hiddenTaken ?? {};
+  const near = (c, v, hi) => v > Math.max(c - 5, 0) && v <= c + hi;
+  return items.some((h) => !taken[hiddenKey(mapId, h.x, h.y)] && near(py, h.y, 4) && near(px2, h.x, 5));
+}
+
 // voxelmon/game/world/snorlax.ts
 var SNORLAX = [
   {
@@ -10784,6 +10824,8 @@ class Overworld {
       return;
     if (this.tryTrashCan(fx, fy))
       return;
+    if (this.tryHiddenItem(fx, fy))
+      return;
     if (pcTileAt(this.map.id, fx, fy, p.facing)) {
       const t = this.shell.data.text ?? {};
       this.shell.showText(t._TurnedOnPC1Text ?? `{PLAYER} turned on
@@ -11783,6 +11825,38 @@ only trash here.\fHey! The electric
 locks were reset!`, "Denied");
     }
     return true;
+  }
+  tryHiddenItem(fx, fy) {
+    const data = this.shell.data;
+    const t = this.shell.data.text ?? {};
+    const player = String(this.save.player?.name ?? "RED");
+    const line = (k, fallback, subs = {}) => {
+      let s = t[k] ?? fallback;
+      s = s.replace(/\{PLAYER\}/g, player).replace(/\{RAM:wNameBuffer\}/g, subs.name ?? "");
+      return s.replace(/\{NUM:[^}]*\}/g, subs.num ?? "");
+    };
+    const r = findHidden(data, this.save, this.map.id, fx, fy, (item) => add(this.save, item, 1, data));
+    if (!r || r.kind === "nocase")
+      return false;
+    if (r.kind === "item") {
+      this.playSfx("Get_Item2");
+      this.shell.showText(line("_FoundHiddenItemText", `{PLAYER} found
+{RAM:wNameBuffer}!`, { name: r.name }));
+    } else if (r.kind === "bagfull") {
+      this.shell.showText(line("_FoundHiddenItemText", `{PLAYER} found
+{RAM:wNameBuffer}!`, { name: r.name }) + "\f" + line("_HiddenItemBagFullText", `But, {PLAYER} has
+no more room for
+other items!`));
+    } else {
+      this.playSfx("Get_Item2");
+      this.shell.showText(line("_FoundHiddenCoinsText", `{PLAYER} found
+{NUM} coins!`, { num: String(r.coins) }));
+    }
+    return true;
+  }
+  hiddenItemNearby() {
+    const p = this.player;
+    return hiddenItemNear(this.shell.data, this.save, this.map.id, p.cellX, p.cellY);
   }
   cardKeyDoors(mapId) {
     const ck = this.shell.data.field?.cardKeyDoors;
@@ -17919,8 +17993,11 @@ time to use that!`, { player: this.save.player?.name ?? "RED" }));
       return;
     }
     if (r.kind === "itemfinder") {
-      this.showText(`Nope! There's no
-response.`);
+      const t = this.data.text ?? {};
+      this.showText(this.overworld.hiddenItemNearby() ? t._ItemfinderFoundItemText ?? `Yes! ITEMFINDER
+indicates there's
+an item nearby.` : t._ItemfinderFoundNothingText ?? `Nope! ITEMFINDER
+isn't responding.`);
       return;
     }
     if (r.kind === "consumed")
