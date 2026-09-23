@@ -9,7 +9,7 @@
 // encounter slot mapping driven through the overworld path, and the
 // story.tape determinism run (in-process twice + the real cli once).
 
-import { stickPush, STICK_MIN_THROW, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -38,7 +38,7 @@ import { ENCOUNTER_BUCKETS } from "../voxelmon/game/rules/encounter.ts";
 import { expForLevel } from "../voxelmon/game/rules/growth.ts";
 import { VoxelmonGame } from "../voxelmon/game/game.ts";
 import { encodeSave } from "../voxelmon/game/save-lua.ts";
-import { bodyClear, freeDir, slide } from "../voxelmon/game/world/freemove.ts";
+import { bodyClear, freeDir, slide, stickPush, STICK_MIN_THROW } from "../voxelmon/game/world/freemove.ts";
 import { OptionsMenuState } from "../voxelmon/game/ui/optionsmenu.ts";
 import { decodeSave } from "../voxelmon/game/save-read.ts";
 import {
@@ -5138,7 +5138,9 @@ describe("free movement", () => {
     game.setCamYaw(0);
     game.setStick(0, 0, 156);
     ow.player.px = cx * 16 + 6; // off-centre, inside the cell
-    hold(game, VOX_BTN.up, 2);
+    // the body has a couple of pixels of slack before its corner touches
+    // the wall row; hold long enough to use them up and be stopped
+    hold(game, VOX_BTN.up, 12);
     // the grid took over: the body is back on the cell, facing the wall
     expect(ow.player.px).toBe(cx * 16);
     expect(ow.player.facing).toBe("up");
