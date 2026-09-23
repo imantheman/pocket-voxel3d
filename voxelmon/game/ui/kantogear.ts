@@ -413,7 +413,11 @@ function drawPartyList(
     if (i >= party.length) continue; // empty party slot: blank cell
     const mon = party[i]!;
     const full = mon.nickname ?? game.data.pokemon[mon.species]?.name ?? mon.species;
-    const name = full.length > 6 ? full.slice(0, 5) + "." : full;
+    // The name row runs from x0+3 to the cell's inner edge at x0+9: seven
+    // glyphs. Only a name longer than that is shortened, and to six plus a
+    // stop -- it used to cut everything past five, so CHARMANDER read as
+    // CHARM. in a cell with two more columns to spare.
+    const name = full.length > 7 ? full.slice(0, 6) + "." : full;
     const maxHp = mon.stats?.hp ?? mon.hp;
 
     boxBottom(host, x0, y0, cellW, cellH, DARKTEXT_BIT);

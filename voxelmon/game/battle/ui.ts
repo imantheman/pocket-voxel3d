@@ -278,7 +278,13 @@ export class BattleUi {
    * paintEnemyHud. */
   private paintPlayerHud(host: VoxelHost, battle: WildBattle): void {
     const p = battle.player;
-    this.text(host, nameTileX(11, p.name), 7, p.name);
+    // From column 10, not 11: the grid is twenty columns and a name is up
+    // to ten glyphs, so from 11 the last glyph of CHARMANDER fell off the
+    // right edge -- and off the panel, which is 10..19, so it was neither
+    // drawn nor carried when the panel slid. The GB prints it at 10 too;
+    // the one-column shift the rest of this HUD takes (paintEnemyHud) has
+    // no room to apply to the name.
+    this.text(host, nameTileX(10, p.name), 7, p.name);
     this.paintLevelOrStatus(host, battle, p, 15, 8, true);
     this.paintBar(host, battle, p, 11, 9, true);
     this.paintPlayerDigits(host, battle);
