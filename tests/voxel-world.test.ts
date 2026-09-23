@@ -2496,9 +2496,9 @@ describe("options", () => {
     tap(game, VOX_BTN.start);
     const sm = game.startMenu() as { entries: string[] };
     pick(game, sm.entries.indexOf("OPTION"));
-    tap(game, VOX_BTN.down);
-    tap(game, VOX_BTN.down);
-    tap(game, VOX_BTN.down); // CANCEL, under TEXT SPEED / ANIMATION / MOVEMENT
+    // CANCEL sits under every row there is, however many that is today
+    const rows = (game.optionsMenu() as { rows: unknown[] }).rows.length;
+    for (let i = 0; i < rows; i++) tap(game, VOX_BTN.down);
     tap(game, VOX_BTN.a);
     expect(game.stackKinds()).toEqual(["overworld", "startmenu"]);
   });
