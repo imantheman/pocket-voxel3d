@@ -10651,6 +10651,7 @@ var TOGGLE_DEFAULT_HIDDEN = {
   VICTORY_ROAD_2F: { VICTORYROAD2F_BOULDER3: true }
 };
 var FORCED_BIKE_CLEAR_MAPS = ["ROUTE_16_GATE_1F", "ROUTE_18_GATE_1F"];
+var POISON_STEP_INTERVAL = 4;
 var BACK = { up: "down", down: "up", left: "right", right: "left" };
 
 class Overworld {
@@ -11496,6 +11497,8 @@ GAME is over!`;
 wore off.`);
       }
     }
+    if (this.fieldPoisonStep())
+      return;
     const dc = this.save.daycare;
     if (dc?.mon)
       dc.steps = (dc.steps ?? 0) + 1;
@@ -12025,6 +12028,43 @@ wore off.`);
         }
       }
     }
+  }
+  fieldPoisonStep() {
+    const save = this.save;
+    save.poisonSteps = ((save.poisonSteps ?? 0) + 1) % POISON_STEP_INTERVAL;
+    if (save.poisonSteps !== 0)
+      return false;
+    const party = save.party ?? [];
+    const fainted = [];
+    let any = false;
+    for (const mon of party) {
+      if (mon.status !== "PSN" || mon.hp <= 0)
+        continue;
+      any = true;
+      mon.hp -= 1;
+      if (mon.hp <= 0) {
+        mon.hp = 0;
+        mon.status = null;
+        const species = this.shell.data.pokemon?.[mon.species];
+        fainted.push(mon.nickname ?? species?.name ?? mon.species);
+      }
+    }
+    if (!any)
+      return false;
+    this.shell.audio?.playSfx?.("Poisoned");
+    const alive = party.some((m) => m.hp > 0);
+    if (fainted.length === 0 && alive)
+      return false;
+    const rows = fainted.map((n) => ["show_text", `${n}
+fainted!`]);
+    if (!alive)
+      rows.push(["show_text", `${save.player?.name ?? "RED"} blacked
+out!`]);
+    this.runScript(rows, () => {
+      if (!alive)
+        this.shell.blackout?.();
+    });
+    return true;
   }
   forcedMovement() {
     return this.shell.data.field?.forcedMovement;
@@ -17939,6 +17979,7 @@ class VoxelmonGame {
   blackout() {
     for (const mon of this.save.party)
       healMon(this.data, mon);
+    this.save.money = Math.floor((this.save.money ?? 0) / 2);
     const heal = this.save.lastHeal;
     if (heal) {
       this.overworld.startWarpTo(heal.map, heal.x, heal.y, "down");

@@ -322,6 +322,9 @@ interface ForcedMovement {
  */
 const FORCED_BIKE_CLEAR_MAPS = ["ROUTE_16_GATE_1F", "ROUTE_18_GATE_1F"];
 
+/** poison.asm: `ld a, [wStepCounter]; and 3` -- every fourth step. */
+const POISON_STEP_INTERVAL = 4;
+
 const BACK: Record<Dir, Dir> = { up: "down", down: "up", left: "right", right: "left" };
 
 export class Overworld implements ScriptWorld {
@@ -1664,6 +1667,8 @@ export class Overworld implements ScriptWorld {
         this.shell.showText(t._RepelWoreOffText ?? "REPEL's effect\nwore off.");
       }
     }
+    // engine/events/poison.asm runs on the step too, ahead of the triggers
+    if (this.fieldPoisonStep()) return;
     // Daycare.asm: the boarded mon earns one exp per step the player takes,
     // anywhere. Only counted here — it is folded into the mon at collection
     // (OverworldController.lua:3522).
@@ -2428,6 +2433,50 @@ export class Overworld implements ScriptWorld {
         }
       }
     }
+  }
+
+  /**
+   * Out-of-battle poison (engine/events/poison.asm, gen1recomp
+   * applyFieldPoison): every fourth step each poisoned mon loses 1 HP with
+   * SFX_POISONED; one that drops to 0 faints, its status cleared, and says
+   * so; with nobody left standing the player blacks out. True when a box
+   * took the step over.
+   */
+  private fieldPoisonStep(): boolean {
+    const save = this.save as {
+      poisonSteps?: number;
+      party?: { hp: number; status: string | null; nickname?: string; species: string }[];
+      player?: { name?: string };
+    };
+    save.poisonSteps = ((save.poisonSteps ?? 0) + 1) % POISON_STEP_INTERVAL;
+    if (save.poisonSteps !== 0) return false;
+    const party = save.party ?? [];
+    const fainted: string[] = [];
+    let any = false;
+    for (const mon of party) {
+      if (mon.status !== "PSN" || mon.hp <= 0) continue;
+      any = true;
+      mon.hp -= 1;
+      if (mon.hp <= 0) {
+        mon.hp = 0;
+        mon.status = null; // the original clears the status on the faint
+        const species = (this.shell.data.pokemon as Record<string, { name?: string }> | undefined)
+          ?.[mon.species];
+        fainted.push(mon.nickname ?? species?.name ?? mon.species);
+      }
+    }
+    if (!any) return false;
+    this.shell.audio?.playSfx?.("Poisoned");
+    const alive = party.some((m) => m.hp > 0);
+    if (fainted.length === 0 && alive) return false;
+    // the boxes run as a script so each waits for the last, like the ROM's
+    // PrintText chain; the blackout itself is the script's done
+    const rows: unknown[][] = fainted.map((n) => ["show_text", `${n}\nfainted!`]);
+    if (!alive) rows.push(["show_text", `${save.player?.name ?? "RED"} blacked\nout!`]);
+    this.runScript(rows as never[], () => {
+      if (!alive) (this.shell as unknown as { blackout?: () => void }).blackout?.();
+    });
+    return true;
   }
 
   private forcedMovement(): ForcedMovement | undefined {

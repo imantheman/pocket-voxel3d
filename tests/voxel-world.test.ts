@@ -7862,6 +7862,67 @@ describe("the Silph Co 9F nurse", () => {
   });
 });
 
+describe("poison on the walk", () => {
+  const steps = (game: VoxelmonGame, n: number) => {
+    for (let i = 0; i < n; i++) game.overworld.onStepComplete();
+  };
+
+  test.skipIf(!hasGen)("every fourth step costs each poisoned mon a point, and a faint says so", () => {
+    const game = makeMenuGame();
+    const a = newMon(romData!, "PIDGEY", 10, game.battleRng);
+    const b = newMon(romData!, "RATTATA", 10, game.battleRng);
+    a.status = "PSN";
+    a.hp = 2;
+    game.save.party.push(a, b);
+    game.overworld.setMap("PALLET_TOWN", 5, 6, "down");
+    steps(game, 3);
+    expect(a.hp).toBe(2);
+    steps(game, 1);
+    expect(a.hp).toBe(1);
+    expect(b.hp).toBe(b.stats.hp);
+    expect(game.stackKinds()).toEqual(["overworld"]);
+    steps(game, 4);
+    expect(a.hp).toBe(0);
+    expect(a.status).toBeNull();
+    expect(topText(game)).toContain("fainted");
+    dismissText(game);
+    // the other one still stands: no blackout
+    expect(game.stackKinds()).toEqual(["overworld"]);
+    expect(game.save.money).toBe(3000);
+  });
+
+  test.skipIf(!hasGen)("with nobody left standing you black out, healed and half as rich", () => {
+    const game = makeMenuGame();
+    const a = newMon(romData!, "PIDGEY", 10, game.battleRng);
+    a.status = "PSN";
+    a.hp = 1;
+    game.save.party.push(a);
+    game.save.money = 3000;
+    game.overworld.setMap("PALLET_TOWN", 5, 6, "down");
+    steps(game, 4);
+    expect(topText(game)).toContain("fainted");
+    // the next box opens the tick this one closes, so read it by its words
+    // rather than by the stack emptying between the two
+    for (let t = 0; t < 600 && !topText(game).includes("blacked"); t++) {
+      game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    expect(topText(game)).toContain("blacked");
+    dismissText(game);
+    expect(a.hp).toBe(a.stats.hp);
+    expect(game.save.money).toBe(1500);
+  });
+
+  test.skipIf(!hasGen)("a clean party is not touched", () => {
+    const game = makeMenuGame();
+    const a = newMon(romData!, "PIDGEY", 10, game.battleRng);
+    a.hp = 3;
+    game.save.party.push(a);
+    game.overworld.setMap("PALLET_TOWN", 5, 6, "down");
+    steps(game, 8);
+    expect(a.hp).toBe(3);
+  });
+});
+
 describe("Silph Co 7F", () => {
   test.skipIf(!hasGen)("the rival waits at the door, and only there", () => {
     const rows = (ow: any, save: any) =>

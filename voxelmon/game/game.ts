@@ -583,7 +583,10 @@ export class VoxelmonGame implements OverworldShell, SceneView {
    * to act on in this slice.
    */
   blackout(): void {
+    // ResetStatusAndHalveMoneyOnBlackout (engine/events/black_out.asm): the
+    // party is healed and the wallet halved, out of battle or in.
     for (const mon of this.save.party) healMon(this.data, mon);
+    this.save.money = Math.floor((this.save.money ?? 0) / 2);
     const heal = this.save.lastHeal as
       | { map: string; x: number; y: number; outdoor?: { id: string; x: number; y: number } }
       | undefined;
