@@ -7372,6 +7372,80 @@ describe("hidden items", () => {
   });
 });
 
+describe("EEVEE and the stones", () => {
+  /** Talk to the ball; A through everything, START past the keyboard. */
+  function takeBall(game: VoxelmonGame): void {
+    game.overworld.showMapText("TEXT_CELADONMANSION_ROOF_HOUSE_EEVEE_POKEBALL");
+    for (let t = 0; t < 900; t++) {
+      const top = game.stackKinds().at(-1);
+      if (top === "overworld") break;
+      if (top === "naming") { tap(game, VOX_BTN.start); continue; }
+      game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+    }
+  }
+
+  test.skipIf(!hasGen)("the ball on the table gives an EEVEE, once", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    ow.setMap("CELADON_MANSION_ROOF_HOUSE", 4, 4, "up");
+    takeBall(game);
+    expect(game.save.party.length).toBe(1);
+    expect(game.save.party[0]!.species).toBe("EEVEE");
+    expect(game.save.party[0]!.level).toBe(25);
+    expect(game.save.flags.EVENT_GOT_EEVEE).toBe(true);
+    const ball = ow.npcs.find((n: any) => n.def.name === "CELADONMANSION_ROOF_HOUSE_EEVEE_POKEBALL");
+    expect(!ball || (ball as any).hidden).toBe(true);
+    // and it is not on the table next time in
+    ow.setMap("CELADON_CITY", 5, 5, "down");
+    ow.setMap("CELADON_MANSION_ROOF_HOUSE", 4, 4, "up");
+    expect(ow.npcs.some((n: any) => n.def.name === "CELADONMANSION_ROOF_HOUSE_EEVEE_POKEBALL" && !n.hidden))
+      .toBe(false);
+    takeBall(game);
+    expect(game.save.party.length).toBe(1);
+  });
+
+  /** Use a stone from the bag on party slot 0 and let the movie play. */
+  function useStone(game: VoxelmonGame, stone: string): void {
+    game.save.inventory[stone] = 1;
+    game.useItem(0, stone);
+    for (let t = 0; t < 6000; t++) {
+      const top = game.stackKinds().at(-1);
+      if (top === "overworld") break;
+      if (top === "naming" || top === "moveforget") { tap(game, VOX_BTN.start); continue; }
+      game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+    }
+  }
+
+  test.skipIf(!hasGen)("each stone turns it into its own form, and the stone is spent", () => {
+    for (const [stone, form] of [
+      ["FIRE_STONE", "FLAREON"], ["THUNDER_STONE", "JOLTEON"], ["WATER_STONE", "VAPOREON"],
+    ] as const) {
+      const game = makeMenuGame();
+      game.save.party.push(newMon(romData!, "EEVEE", 25, game.battleRng));
+      game.overworld.setMap("PALLET_TOWN", 5, 6, "down");
+      useStone(game, stone);
+      expect(game.save.party[0]!.species).toBe(form);
+      expect(game.save.inventory[stone]).toBeUndefined();
+      expect(game.save.pokedex?.owned?.[form]).toBe(true);
+    }
+  });
+
+  test.skipIf(!hasGen)("a stone the mon cannot use has no effect and is kept", () => {
+    const game = makeMenuGame();
+    game.save.party.push(newMon(romData!, "EEVEE", 25, game.battleRng));
+    game.overworld.setMap("PALLET_TOWN", 5, 6, "down");
+    useStone(game, "MOON_STONE");
+    expect(game.save.party[0]!.species).toBe("EEVEE");
+    expect(game.save.inventory.MOON_STONE).toBe(1);
+    // and the other stone users still work: a MOON STONE on a CLEFAIRY
+    const g2 = makeMenuGame();
+    g2.save.party.push(newMon(romData!, "CLEFAIRY", 20, g2.battleRng));
+    g2.overworld.setMap("PALLET_TOWN", 5, 6, "down");
+    useStone(g2, "MOON_STONE");
+    expect(g2.save.party[0]!.species).toBe("CLEFABLE");
+  });
+});
+
 describe("Silph Co 7F", () => {
   test.skipIf(!hasGen)("the rival waits at the door, and only there", () => {
     const rows = (ow: any, save: any) =>

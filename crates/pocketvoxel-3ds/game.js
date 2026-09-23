@@ -8754,6 +8754,33 @@ var MAP_SCRIPTS = {
       TEXT_FIGHTINGDOJO_HITMONCHAN_POKE_BALL: dojoBall("HITMONCHAN", "FIGHTINGDOJO_HITMONCHAN_POKE_BALL", "_FightingDojoHitmonchanPokeBallText")
     }
   },
+  CELADON_MANSION_ROOF_HOUSE: {
+    talk: {
+      TEXT_CELADONMANSION_ROOF_HOUSE_EEVEE_POKEBALL: (_ow, save) => {
+        if (save?.flags?.EVENT_GOT_EEVEE) {
+          return [[
+            "hide_object",
+            "CELADON_MANSION_ROOF_HOUSE",
+            "CELADONMANSION_ROOF_HOUSE_EEVEE_POKEBALL"
+          ]];
+        }
+        return [
+          ["check_party_room"],
+          ["jump_if_false", "full"],
+          ["give_pokemon", "EEVEE", 25],
+          ["set_flag", "EVENT_GOT_EEVEE"],
+          ["hide_object", "CELADON_MANSION_ROOF_HOUSE", "CELADONMANSION_ROOF_HOUSE_EEVEE_POKEBALL"],
+          ["play_sound", "Get_Item1"],
+          ["show_text", `{PLAYER} got
+EEVEE!`],
+          ["jump", "end"],
+          ["label", "full"],
+          ["show_text", `You have no room
+for it!`]
+        ];
+      }
+    }
+  },
   SILPH_CO_7F: {
     onEnter: (ow, save) => {
       if (save?.flags?.EVENT_BEAT_SILPH_CO_RIVAL)

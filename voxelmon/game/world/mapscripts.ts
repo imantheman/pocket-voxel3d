@@ -2652,6 +2652,34 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     },
   },
 
+  // celadon_eevee.lua (scripts/CeladonMansionRoofHouse.asm): the EEVEE in
+  // the ball on the table, L25, once. The flag and the hide come BEFORE the
+  // got line, so a script that dies at the nickname prompt cannot leave the
+  // EEVEE taken with the ball still on the table (#426 in the reference).
+  CELADON_MANSION_ROOF_HOUSE: {
+    talk: {
+      TEXT_CELADONMANSION_ROOF_HOUSE_EEVEE_POKEBALL: (_ow: any, save: any): ScriptRow[] => {
+        if (save?.flags?.EVENT_GOT_EEVEE) {
+          // an old save with the flag but the ball still showing
+          return [["hide_object", "CELADON_MANSION_ROOF_HOUSE",
+            "CELADONMANSION_ROOF_HOUSE_EEVEE_POKEBALL"]] as ScriptRow[];
+        }
+        return [
+          ["check_party_room"],
+          ["jump_if_false", "full"],
+          ["give_pokemon", "EEVEE", 25],
+          ["set_flag", "EVENT_GOT_EEVEE"],
+          ["hide_object", "CELADON_MANSION_ROOF_HOUSE", "CELADONMANSION_ROOF_HOUSE_EEVEE_POKEBALL"],
+          ["play_sound", "Get_Item1"],
+          ["show_text", "{PLAYER} got\nEEVEE!"],
+          ["jump", "end"],
+          ["label", "full"],
+          ["show_text", "You have no room\nfor it!"],
+        ] as ScriptRow[];
+      },
+    },
+  },
+
   // story4.lua M.SILPH_CO_7F (the worker's LAPRAS) + story5.lua M.SILPH_CO_7F
   // (the rival ambush). Both live on this floor, so both are here.
   //
