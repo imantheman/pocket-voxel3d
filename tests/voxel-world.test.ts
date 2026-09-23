@@ -6412,6 +6412,54 @@ describe("the save the Hall of Fame writes", () => {
   });
 });
 
+describe("surfing", () => {
+  /** Slot 0's sheet and lift, frame by frame. */
+  class SurfHost extends MenuHost {
+    poses: { sheet: number; lift: number }[] = [];
+    ent(slot: number, sheet: number, _frame: number, _x: number, _y: number,
+        lift: number, _flags: number): void {
+      if (slot === 0) this.poses.push({ sheet, lift });
+    }
+  }
+
+  test.skipIf(!hasGen)("afloat, the player is the surf sprite and it bobs", () => {
+    const host = new SurfHost();
+    const game = new VoxelmonGame(romData!, host, 1);
+    game.newGame();
+    game.closeToOverworld();
+    const ow = game.overworld;
+    ow.setMap("PALLET_TOWN", 5, 6, "down");
+    const atlas = (romData as any).atlas.sprites;
+
+    // ashore: Red's own sheet, flat on the ground
+    for (let t = 0; t < 8; t++) game.tick(0);
+    expect(host.poses.at(-1)?.sheet).toBe(atlas.red);
+    expect(host.poses.every((p) => p.lift === 0)).toBe(true);
+
+    // find the water and get on it
+    const m = ow.map;
+    let spot: { x: number; y: number; facing: string } | null = null;
+    const dirs: [number, number, string][] = [[0, 1, "down"], [0, -1, "up"], [1, 0, "right"], [-1, 0, "left"]];
+    for (let y = 0; y < m.def.height * 2 && !spot; y++) {
+      for (let x = 0; x < m.def.width * 2 && !spot; x++) {
+        if (!m.isWalkableCell(x, y) || m.isWaterCell(x, y)) continue;
+        for (const [dx, dy, facing] of dirs) {
+          if (m.inBounds(x + dx, y + dy) && m.isWaterCell(x + dx, y + dy)) { spot = { x, y, facing }; break; }
+        }
+      }
+    }
+    ow.setMap("PALLET_TOWN", spot!.x, spot!.y, spot!.facing);
+    expect(ow.canSurfHere()).toBe(true);
+    ow.startSurfing();
+    host.poses.length = 0;
+    for (let t = 0; t < 80; t++) game.tick(0);
+    // SPRITE_SEEL, the whole time; and the 1px sink for half of every 32
+    expect(host.poses.every((p) => p.sheet === atlas.seel)).toBe(true);
+    const lifts = new Set(host.poses.map((p) => p.lift));
+    expect([...lifts].sort()).toEqual([-1, 0]);
+  });
+});
+
 describe("Silph Co 7F", () => {
   test.skipIf(!hasGen)("the rival waits at the door, and only there", () => {
     const rows = (ow: any, save: any) =>

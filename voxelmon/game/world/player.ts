@@ -179,4 +179,20 @@ export class Player implements Mover {
     const t = 1 - this.hopFrames / total;
     return Math.floor(10 * Math.sin(t * Math.PI) + 0.5);
   }
+
+  /** Player.lua:266-268 bobTimer: the surf ride rocks on a 32-frame clock. */
+  bobTimer = 0;
+
+  /**
+   * The surfing bob (Player.lua:266-268, the original's 1px sink for half
+   * of every 32 frames), as a lift: 0 for sixteen frames, then one pixel
+   * down for sixteen. Advances the clock, so it is read once per frame,
+   * and only while afloat -- a ledge hop's arc takes precedence, since the
+   * two never overlap anyway.
+   */
+  surfBob(): number {
+    if (!this.surfing) { this.bobTimer = 0; return 0; }
+    this.bobTimer = (this.bobTimer + 1) % 32;
+    return this.bobTimer < 16 ? 0 : -1;
+  }
 }

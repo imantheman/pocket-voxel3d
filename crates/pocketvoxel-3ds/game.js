@@ -5854,6 +5854,15 @@ class Player {
     const t = 1 - this.hopFrames / total;
     return Math.floor(10 * Math.sin(t * Math.PI) + 0.5);
   }
+  bobTimer = 0;
+  surfBob() {
+    if (!this.surfing) {
+      this.bobTimer = 0;
+      return 0;
+    }
+    this.bobTimer = (this.bobTimer + 1) % 32;
+    return this.bobTimer < 16 ? 0 : -1;
+  }
 }
 
 // voxelmon/game/world/gamecorner.ts
@@ -11312,7 +11321,9 @@ class Scene {
       let flags = ENT_FLAG.ghost | ENT_FLAG.walker;
       if (mirror)
         flags |= ENT_FLAG.mirror;
-      this.emitSlot(0, this.sheetIndex(view, p.onBike ? "SPRITE_RED_BIKE" : "SPRITE_RED"), frame, p.px * Q4, p.py * Q4, p.hopLift(), flags);
+      const sheet = p.surfing ? "SPRITE_SEEL" : p.onBike ? "SPRITE_RED_BIKE" : "SPRITE_RED";
+      const hop = p.hopLift();
+      this.emitSlot(0, this.sheetIndex(view, sheet), frame, p.px * Q4, p.py * Q4, hop !== 0 ? hop : p.surfBob(), flags);
     }
     const npcs = ow.npcs;
     for (let i = 0;i < npcs.length; i++) {

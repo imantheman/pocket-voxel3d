@@ -461,15 +461,20 @@ export class Scene {
         ((pf === "down" || pf === "up") && phase === 1 && p.animFlip());
       let flags = ENT_FLAG.ghost | ENT_FLAG.walker;
       if (mirror) flags |= ENT_FLAG.mirror;
+      // Player.lua:297-301 pose: afloat, the player IS the surf sprite --
+      // SPRITE_SEEL, the sheet LoadSurfingPlayerSpriteGraphics loads -- and
+      // it rides the same walk cycle, so the flippers go as it moves. It
+      // used to stay Red, walking on the water. Riding swaps in the bike
+      // sheet the same way (SpriteRenderer.lua:300).
+      const sheet = p.surfing ? "SPRITE_SEEL" : p.onBike ? "SPRITE_RED_BIKE" : "SPRITE_RED";
+      const hop = p.hopLift();
       this.emitSlot(
         0,
-        // SpriteRenderer.lua:300 — riding swaps the walker for the bike
-        // sheet (SPRITE_RED_BIKE), which the atlas already carries.
-        this.sheetIndex(view, p.onBike ? "SPRITE_RED_BIKE" : "SPRITE_RED"),
+        this.sheetIndex(view, sheet),
         frame,
         p.px * Q4,
         p.py * Q4,
-        p.hopLift(),
+        hop !== 0 ? hop : p.surfBob(),
         flags,
       );
     }
