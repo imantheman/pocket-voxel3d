@@ -9492,6 +9492,25 @@ var ROAD_BARRIERS = {
 function barriersFor(mapId) {
   return ROAD_BARRIERS[mapId] ?? [];
 }
+var ROAD_HOLES = [
+  {
+    map: "VICTORY_ROAD_3F",
+    x: 23,
+    y: 15,
+    boulder: "VICTORYROAD3F_BOULDER4",
+    toBoulder: "VICTORYROAD2F_BOULDER3",
+    flag: "EVENT_VICTORY_ROAD_3_BOULDER_ON_SWITCH2",
+    toMap: "VICTORY_ROAD_2F",
+    dx: 22,
+    dy: 16
+  }
+];
+var ROUTE_23_RESET_FLAGS = [
+  "EVENT_VICTORY_ROAD_2_BOULDER_ON_SWITCH1",
+  "EVENT_VICTORY_ROAD_2_BOULDER_ON_SWITCH2",
+  "EVENT_VICTORY_ROAD_3_BOULDER_ON_SWITCH1",
+  "EVENT_VICTORY_ROAD_3_BOULDER_ON_SWITCH2"
+];
 
 // voxelmon/game/world/badgegate.ts
 function gateFor(field, mapId) {
@@ -10466,7 +10485,8 @@ function objectToggleKey(nameOrObj) {
   return String(raw).toUpperCase().replace(/^TEXT_/, "");
 }
 var TOGGLE_DEFAULT_HIDDEN = {
-  VIRIDIAN_CITY: { VIRIDIANCITY_OLD_MAN: true }
+  VIRIDIAN_CITY: { VIRIDIANCITY_OLD_MAN: true },
+  VICTORY_ROAD_2F: { VICTORYROAD2F_BOULDER3: true }
 };
 
 class Overworld {
@@ -10537,6 +10557,14 @@ class Overworld {
     this.applyLeagueSeals(mapId, def);
     if (mapId === "VICTORY_ROAD_2F" && this.save?.flags) {
       this.save.flags.EVENT_VICTORY_ROAD_1_BOULDER_ON_SWITCH = false;
+    }
+    if (mapId === "ROUTE_23" && this.save?.flags) {
+      for (const f of ROUTE_23_RESET_FLAGS)
+        this.save.flags[f] = false;
+      for (const h of ROAD_HOLES) {
+        this.setObjectToggle(h.map, h.boulder, true);
+        this.setObjectToggle(h.toMap, h.toBoulder, false);
+      }
     }
     this.applyRoadBarriers(mapId, def);
     if (mapId === "VERMILION_GYM" && this.save?.flags?.[SECOND_LOCK]) {
@@ -11302,6 +11330,8 @@ wore off.`);
     this.syncSurf();
     if (this.mansionHoleStep())
       return;
+    if (this.roadHoleStep())
+      return;
     this.lanceLockDoor();
     if (this.leagueDontRun())
       return;
@@ -11817,7 +11847,43 @@ wore off.`);
       }
     }
   }
+  roadHoleStep() {
+    if (this.runner.isRunning())
+      return false;
+    const p = this.player;
+    const h = ROAD_HOLES.find((r) => r.map === this.map?.id && r.x === p.cellX && r.y === p.cellY);
+    if (!h)
+      return false;
+    this.shell.playOnce?.("Faint_Fall");
+    this.startWarpTo(h.toMap, h.dx, h.dy, p.facing);
+    return true;
+  }
+  setObjectToggle(mapId, name, visible) {
+    const save = this.save;
+    save.objectToggles = save.objectToggles ?? {};
+    save.objectToggles[mapId] = save.objectToggles[mapId] ?? {};
+    save.objectToggles[mapId][objectToggleKey(name)] = visible;
+    if (mapId === this.map?.id)
+      this.setObjectHidden(name, !visible);
+  }
+  boulderFell() {
+    const mapId = this.map?.id ?? "";
+    for (const h of ROAD_HOLES) {
+      if (h.map !== mapId || this.save.flags?.[h.flag] === true)
+        continue;
+      const on = this.npcs.find((n) => this.isBoulder(n) && !n.hidden && n.cellX === h.x && n.cellY === h.y);
+      if (!on)
+        continue;
+      this.save.flags[h.flag] = true;
+      this.setObjectToggle(h.map, String(on.def?.name ?? h.boulder), false);
+      this.setObjectToggle(h.toMap, h.toBoulder, true);
+      return true;
+    }
+    return false;
+  }
   boulderLanded() {
+    if (this.boulderFell())
+      return;
     const mapId = this.map?.id ?? "";
     const list2 = barriersFor(mapId);
     if (list2.length === 0)

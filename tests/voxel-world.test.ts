@@ -72,7 +72,7 @@ import { SEVEN_BADGES, silphAftermathRows } from "../voxelmon/game/world/mapscri
 import { deposit, pcCapacityData, withdraw } from "../voxelmon/game/world/pcitems.ts";
 import {
   barriersFor, GYM_MACHINES, gymGateFlag, gymGuardKey, LEAGUE_SEALS,
-  MANSION_BLOCKS, MANSION_HOLES, OPEN_BLOCK, toggleBlocksFor,
+  MANSION_BLOCKS, MANSION_HOLES, OPEN_BLOCK, ROAD_HOLES, toggleBlocksFor,
 } from "../voxelmon/game/world/toggleblocks.ts";
 import {
   bikeAllowed, BIKE_SONG, effectiveMapSong, SURF_SONG,
@@ -4478,6 +4478,45 @@ describe("Victory Road's boulder switches", () => {
     (ow as any).boulderLanded();
     expect(game.save.flags[b.flag] ?? false).toBe(false);
     expect(blockAt(game, b.bx, b.by)).toBe(b.closed);
+  });
+
+  test.skipIf(!hasGen)("the 3F hole drops a boulder to 2F, and you after it", () => {
+    const game = vrGame();
+    const ow = game.overworld;
+    const h = ROAD_HOLES[0]!;
+    const below = () => ow.npcs.some((n: any) => n.def?.name === h.toBoulder && !n.hidden);
+    const above = () => ow.npcs.some((n: any) => n.def?.name === h.boulder && !n.hidden);
+    // 2F's third boulder is not there until one falls
+    ow.setMap("VICTORY_ROAD_2F", 1, 1, "down");
+    expect(below()).toBe(false);
+
+    ow.setMap("VICTORY_ROAD_3F", 1, 1, "down");
+    expect(above()).toBe(true);
+    const boulder = ow.npcs.find((n: any) => n.def?.name === h.boulder) as any;
+    boulder.cellX = h.x;
+    boulder.cellY = h.y;
+    (ow as any).boulderLanded();
+    expect(game.save.flags[h.flag]).toBe(true);
+    expect(above()).toBe(false);
+    ow.setMap("VICTORY_ROAD_2F", 1, 1, "down");
+    expect(below()).toBe(true);
+
+    // the player follows it down
+    ow.setMap("VICTORY_ROAD_3F", h.x, h.y, "down");
+    ow.onStepComplete();
+    for (let i = 0; i < 200; i++) game.tick(0);
+    expect(ow.map.id).toBe(h.toMap);
+    expect([ow.player.cellX, ow.player.cellY]).toEqual([h.dx, h.dy]);
+
+    // Route 23 puts the whole puzzle back behind you
+    game.save.flags.EVENT_VICTORY_ROAD_2_BOULDER_ON_SWITCH1 = true;
+    ow.setMap("ROUTE_23", 9, 5, "down");
+    expect(game.save.flags[h.flag]).toBe(false);
+    expect(game.save.flags.EVENT_VICTORY_ROAD_2_BOULDER_ON_SWITCH1).toBe(false);
+    ow.setMap("VICTORY_ROAD_2F", 1, 1, "down");
+    expect(below()).toBe(false);
+    ow.setMap("VICTORY_ROAD_3F", 1, 1, "down");
+    expect(above()).toBe(true);
   });
 
   test.skipIf(!hasGen)("2F's two switches are separate barriers", () => {

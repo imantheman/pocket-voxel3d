@@ -33,7 +33,7 @@ import { canAt, DOOR_BLOCK, openCan, rollFirst, SECOND_LOCK, trashData } from ".
 import { findHidden, hiddenItemNear } from "./hiddenitems.ts";
 import * as Bag from "../rules/bag.ts";
 import { spotFor } from "./snorlax.ts";
-import { barriersFor } from "./toggleblocks.ts";
+import { barriersFor, ROAD_HOLES, ROUTE_23_RESET_FLAGS } from "./toggleblocks.ts";
 import { fillBadgeName, gateFor, guardAt, hasBadge } from "./badgegate.ts";
 import {
   GYM_MACHINES, gymGateFlag, gymGuardKey, LANCE_DOOR_CELLS, LEAGUE_SEALS,
@@ -300,6 +300,9 @@ export function objectToggleKey(nameOrObj: string | { name?: string; text?: stri
 // sleeper stays on his compiled default (visible) and needs no entry.
 const TOGGLE_DEFAULT_HIDDEN: Record<string, Record<string, boolean>> = {
   VIRIDIAN_CITY: { VIRIDIANCITY_OLD_MAN: true },
+  // the boulder beside 2F's second switch is upstairs until it falls
+  // through 3F's hole (toggleable_objects.asm TOGGLE_VICTORY_ROAD_2F_BOULDER)
+  VICTORY_ROAD_2F: { VICTORYROAD2F_BOULDER3: true },
 };
 
 export class Overworld implements ScriptWorld {
@@ -421,6 +424,16 @@ export class Overworld implements ScriptWorld {
     // switch, so its barrier is shut again next time you climb down.
     if (mapId === "VICTORY_ROAD_2F" && this.save?.flags) {
       this.save.flags.EVENT_VICTORY_ROAD_1_BOULDER_ON_SWITCH = false;
+    }
+    // Route23SetVictoryRoadBoulders: every entry to Route 23 resets the rest
+    // of the puzzle behind you -- 2F's and 3F's switches, and the boulder
+    // that fell through 3F's hole goes back upstairs.
+    if (mapId === "ROUTE_23" && this.save?.flags) {
+      for (const f of ROUTE_23_RESET_FLAGS) this.save.flags[f] = false;
+      for (const h of ROAD_HOLES) {
+        this.setObjectToggle(h.map, h.boulder, true);
+        this.setObjectToggle(h.toMap, h.toBoulder, false);
+      }
     }
     this.applyRoadBarriers(mapId, def);
     // The motorized door, once both locks are open: stamped away on every
@@ -1633,6 +1646,7 @@ export class Overworld implements ScriptWorld {
     // entries are checked too so the original Pallet/Oak hooks still run.
     this.syncSurf();
     if (this.mansionHoleStep()) return;
+    if (this.roadHoleStep()) return;
     this.lanceLockDoor();
     if (this.leagueDontRun()) return;
     if (this.badgeGateStep()) return;
@@ -2379,10 +2393,60 @@ export class Overworld implements ScriptWorld {
   }
 
   /**
+   * Victory Road 3F's hole under the player (VictoryRoad3FDefaultScript's
+   * dungeon warp): the cell is ordinary walkable cave, so like the Mansion
+   * holes it rides the land-trigger path rather than a warp tile.
+   */
+  private roadHoleStep(): boolean {
+    if (this.runner.isRunning()) return false;
+    const p = this.player;
+    const h = ROAD_HOLES.find(
+      (r) => r.map === this.map?.id && r.x === p.cellX && r.y === p.cellY,
+    );
+    if (!h) return false;
+    this.shell.playOnce?.("Faint_Fall");
+    this.startWarpTo(h.toMap, h.dx, h.dy, p.facing);
+    return true;
+  }
+
+  /**
+   * A persisted ShowObject/HideObject for a map that need not be the current
+   * one -- the script verbs' toggleObject, live-applied only when it is.
+   */
+  private setObjectToggle(mapId: string, name: string, visible: boolean): void {
+    const save = this.save as { objectToggles?: Record<string, Record<string, boolean>> };
+    save.objectToggles = save.objectToggles ?? {};
+    save.objectToggles[mapId] = save.objectToggles[mapId] ?? {};
+    save.objectToggles[mapId][objectToggleKey(name)] = visible;
+    if (mapId === this.map?.id) this.setObjectHidden(name, !visible);
+  }
+
+  /**
+   * A boulder came to rest on the hole (.handle_hole): once, it goes down
+   * and its twin appears on the floor below. True when one fell.
+   */
+  private boulderFell(): boolean {
+    const mapId = this.map?.id ?? "";
+    for (const h of ROAD_HOLES) {
+      if (h.map !== mapId || this.save.flags?.[h.flag] === true) continue;
+      const on = this.npcs.find(
+        (n: any) => this.isBoulder(n) && !n.hidden && n.cellX === h.x && n.cellY === h.y,
+      ) as any;
+      if (!on) continue;
+      this.save.flags[h.flag] = true;
+      this.setObjectToggle(h.map, String(on.def?.name ?? h.boulder), false);
+      this.setObjectToggle(h.toMap, h.toBoulder, true);
+      return true;
+    }
+    return false;
+  }
+
+  /**
    * A boulder came to rest. If it landed on a switch, the barrier that switch
    * holds opens for good (CheckAndSetEvent, then ReplaceTileBlock).
    */
   private boulderLanded(): void {
+    if (this.boulderFell()) return;
     const mapId = this.map?.id ?? "";
     const list = barriersFor(mapId);
     if (list.length === 0) return;

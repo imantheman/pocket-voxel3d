@@ -276,3 +276,47 @@ export const ROAD_BARRIERS: Record<string, RoadBarrier[]> = {
 export function barriersFor(mapId: string): RoadBarrier[] {
   return ROAD_BARRIERS[mapId] ?? [];
 }
+
+/**
+ * The hole in Victory Road 3F (scripts/VictoryRoad3F.asm, .handle_hole and
+ * VictoryRoad3FDefaultScript). A boulder shoved onto it drops a floor and
+ * turns up on 2F beside the second switch -- it is the only boulder that
+ * can reach that switch -- and the player who steps in after it falls to
+ * 2F too. Which floor the boulder is on is a pair of toggleable objects
+ * (data/maps/toggleable_objects.asm), swapped once, under the flag.
+ */
+export interface RoadHole {
+  map: string;
+  /** The hole's CELL. */
+  x: number;
+  y: number;
+  /** The boulder that goes down it, and the one that appears below. */
+  boulder: string;
+  toBoulder: string;
+  flag: string;
+  /** Where the player lands (DungeonWarpData). */
+  toMap: string;
+  dx: number;
+  dy: number;
+}
+
+export const ROAD_HOLES: RoadHole[] = [
+  {
+    map: "VICTORY_ROAD_3F", x: 23, y: 15,
+    boulder: "VICTORYROAD3F_BOULDER4", toBoulder: "VICTORYROAD2F_BOULDER3",
+    flag: "EVENT_VICTORY_ROAD_3_BOULDER_ON_SWITCH2",
+    toMap: "VICTORY_ROAD_2F", dx: 22, dy: 16,
+  },
+];
+
+/**
+ * Route23SetVictoryRoadBoulders (scripts/Route23.asm): the switch events
+ * every entry to Route 23 clears, so the puzzle is whole again on the way
+ * back. 1F's is reset by 2F instead.
+ */
+export const ROUTE_23_RESET_FLAGS = [
+  "EVENT_VICTORY_ROAD_2_BOULDER_ON_SWITCH1",
+  "EVENT_VICTORY_ROAD_2_BOULDER_ON_SWITCH2",
+  "EVENT_VICTORY_ROAD_3_BOULDER_ON_SWITCH1",
+  "EVENT_VICTORY_ROAD_3_BOULDER_ON_SWITCH2",
+];
