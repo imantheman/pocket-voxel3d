@@ -6399,12 +6399,12 @@ describe("the Pokemon Tower without the SILPH SCOPE", () => {
     return (game.battleView() as { battle: any } | null)?.battle;
   }
 
-  test.skipIf(!hasGen)("every tower encounter is the GHOST until the scope is carried", () => {
-    expect(wildOn("POKEMON_TOWER_3F", {})?.disguised).toBe(true);
-    expect(wildOn("POKEMON_TOWER_3F", {})?.enemy?.name).toBe("GHOST");
+  test.skipIf(!hasGen)("a wild tower encounter is an ordinary fight, scope or no scope", () => {
+    // Only the 6F MAROWAK is the GHOST (a departure from the ROM, which
+    // disguises every wild mon in the tower until the scope is carried).
+    expect(wildOn("POKEMON_TOWER_3F", {})?.disguised).toBe(false);
+    expect(wildOn("POKEMON_TOWER_3F", {})?.enemy?.name).toBe("GASTLY");
     expect(wildOn("POKEMON_TOWER_3F", { SILPH_SCOPE: 1 })?.disguised).toBe(false);
-    expect(wildOn("POKEMON_TOWER_3F", { SILPH_SCOPE: 1 })?.enemy?.name).toBe("GASTLY");
-    // and nowhere else
     expect(wildOn("ROUTE_1", {})?.disguised).toBe(false);
   });
 

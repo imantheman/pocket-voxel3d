@@ -15720,11 +15720,6 @@ function fishingCatch(data, rod, mapId, rand) {
   return rollFishingGroup(rodPool(data, rod, mapId), rand);
 }
 
-// voxelmon/game/world/ghost.ts
-function isGhostMap(mapId) {
-  return typeof mapId === "string" && mapId.startsWith("POKEMON_TOWER");
-}
-
 // voxelmon/game/pokemon/boxes.ts
 var BOX_COUNT = 12;
 var BOX_CAPACITY = 20;
@@ -17259,11 +17254,7 @@ ${mname}!`);
       this.push(new BattleGameState(this, species, level, new SafariBattle(this.data, this.save, this.battleRng, species, level, safari)));
       return;
     }
-    const battle = new WildBattle(this.data, this.save, this.battleRng, species, level);
-    if (isGhostMap(this.overworld.map.id) && !(this.save.inventory?.SILPH_SCOPE > 0)) {
-      battle.makeGhost();
-    }
-    this.push(new BattleGameState(this, species, level, battle));
+    this.push(new BattleGameState(this, species, level, new WildBattle(this.data, this.save, this.battleRng, species, level)));
   }
   uiBox() {
     for (let i = this.stack.length - 1;i >= 0; i--) {

@@ -85,7 +85,6 @@ import { ShopState } from "./ui/shopscreen.ts";
 import { VENDING_DRINKS } from "./world/vending.ts";
 import { fishingCatch, isRod } from "./world/fishing.ts";
 import * as Items from "./rules/items.ts";
-import { isGhostMap } from "./world/ghost.ts";
 import { BoxState } from "./ui/boxscreen.ts";
 import { PcState } from "./ui/pcscreen.ts";
 import { PokedexState } from "./ui/pokedexscreen.ts";
@@ -943,14 +942,13 @@ export class VoxelmonGame implements OverworldShell, SceneView {
         new SafariBattle(this.data, this.save, this.battleRng, species, level, safari)));
       return;
     }
-    const battle = new WildBattle(this.data, this.save, this.battleRng, species, level);
-    // IsGhostBattle (core.asm): in the Pokemon Tower without the SILPH SCOPE
-    // every wild mon is the GHOST -- unidentifiable, unfightable, only fled.
-    // The scope in the bag is all it takes to see them.
-    if (isGhostMap(this.overworld.map.id) && !(this.save.inventory?.SILPH_SCOPE > 0)) {
-      battle.makeGhost();
-    }
-    this.push(new BattleGameState(this, species, level, battle));
+    // The tower's wild GASTLYs and HAUNTERs are ordinary fights, scope or
+    // no scope -- catchable, beatable, seen. A deliberate departure from
+    // the ROM, whose IsGhostBattle disguises every wild mon in the tower
+    // until the scope is carried (Isaac): only the MAROWAK at the top is
+    // the GHOST here, and that one is the 6F script's, not the grass's.
+    this.push(new BattleGameState(this, species, level,
+      new WildBattle(this.data, this.save, this.battleRng, species, level)));
   }
 
   // SceneView -----------------------------------------------------------
