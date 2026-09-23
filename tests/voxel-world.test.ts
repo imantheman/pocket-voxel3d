@@ -51,7 +51,7 @@ import {
 } from "../voxelmon/game/world/halloffame.ts";
 import { RecorderHost } from "../voxelmon/game/host.ts";
 import { Input } from "../voxelmon/game/input.ts";
-import { gearMapPoint, gearTabs, gearTouchDown } from "../voxelmon/game/ui/kantogear.ts";
+import { gearMapPoint, gearTabs, gearTouchDown, gearTouchUp } from "../voxelmon/game/ui/kantogear.ts";
 import {
   checkForMatch,
   evaluate,
@@ -2298,6 +2298,96 @@ describe("the town map", () => {
     const sea = gearMapPoint({ name: "", x: 15, y: 0 });
     gearTouchDown(game as never, sea.x, sea.y);
     expect(game.gearMapPick).toBeNull();
+  });
+});
+
+describe("touching the battle panel", () => {
+  /** A wild battle idling on its action menu, with a full moveset to aim at. */
+  function battleOnMenu() {
+    const game = makeMenuGame();
+    // a new game has no party yet: give it one mon with four moves
+    if (game.save.party.length === 0) {
+      game.save.party.push(newMon(romData!, "SQUIRTLE", 5, game.battleRng));
+    }
+    const lead = game.save.party[0]!;
+    lead.moves = [
+      { id: "TACKLE", pp: 35 }, { id: "GROWL", pp: 40 },
+      { id: "TAIL_WHIP", pp: 30 }, { id: "BUBBLE", pp: 30 },
+    ];
+    game.overworld.setMap("ROUTE_1", 5, 5, "down");
+    game.pushStubBattle("PIDGEY", 3);
+    // through the intro to the menu
+    for (let t = 0; t < 4000; t++) {
+      const b = (game.battleView() as any)?.battle;
+      if (b?.phase === "menu") break;
+      game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    const b = (game.battleView() as any).battle;
+    expect(b.phase).toBe("menu");
+    return { game, b };
+  }
+  // the centre of a 2x2 cell (drawActionGrid / drawMoveSelect)
+  const cell = (c: number, r: number) => ({ x: c * 160 + 80, y: r === 0 ? 80 : 190 });
+
+  test.skipIf(!hasGen)("the down edge highlights, the up edge executes", () => {
+    const { game, b } = battleOnMenu();
+    // FIGHT is the resting cursor; touch RUN (bottom-right)
+    gearTouchDown(game as never, cell(1, 1).x, cell(1, 1).y);
+    expect(b.menuIndex).toBe(4);
+    expect(b.phase).toBe("menu"); // nothing has run yet: only highlighted
+    gearTouchUp(game as never);
+    expect(b.phase).not.toBe("menu"); // now it has
+  });
+
+  test.skipIf(!hasGen)("a tap on a move picks THAT move, on the 2x2 grid it is drawn on", () => {
+    const { game, b } = battleOnMenu();
+    gearTouchDown(game as never, cell(0, 0).x, cell(0, 0).y); // FIGHT
+    gearTouchUp(game as never);
+    expect(b.phase).toBe("moveSelect");
+    // bottom-left is the third move, not "row 13 of a list"
+    gearTouchDown(game as never, cell(0, 1).x, cell(0, 1).y);
+    expect(b.moveIndex).toBe(3);
+    gearTouchDown(game as never, cell(1, 0).x, cell(1, 0).y);
+    expect(b.moveIndex).toBe(2);
+    gearTouchUp(game as never);
+    expect(b.phase).toBe("messages");
+    // the exchange plays out over the next frames; the move that ran is the
+    // one the finger was on
+    for (let t = 0; t < 600 && b.phase === "messages"; t++) {
+      game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    expect(b.messageLog.some((m: string) => m.includes("used GROWL"))).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("an empty slot is not an option: neither edge does anything", () => {
+    const { game, b } = battleOnMenu();
+    const lead = game.save.party[0]!;
+    lead.moves = [{ id: "TACKLE", pp: 35 }];
+    b.player.curMoves = lead.moves;
+    gearTouchDown(game as never, cell(0, 0).x, cell(0, 0).y);
+    gearTouchUp(game as never);
+    expect(b.phase).toBe("moveSelect");
+    gearTouchDown(game as never, cell(1, 1).x, cell(1, 1).y); // no fourth move
+    expect(b.moveIndex).toBe(1);
+    gearTouchUp(game as never);
+    expect(b.phase).toBe("moveSelect");
+  });
+
+  test.skipIf(!hasGen)("the party panel is 2x3, and a tap lands on the mon drawn there", () => {
+    const { game, b } = battleOnMenu();
+    while (game.save.party.length < 4) {
+      game.save.party.push(newMon(romData!, "RATTATA", 5, game.battleRng));
+    }
+    gearTouchDown(game as never, cell(1, 0).x, cell(1, 0).y); // PKMN
+    gearTouchUp(game as never);
+    expect(b.phase).toBe("party");
+    // drawPartyList: colX=[0,10], rowY=[2,7,12] -> the fourth mon is right
+    // column, middle row (rows 7..11 -> y in 93..159)
+    gearTouchDown(game as never, 240, 130);
+    expect(b.partyIndex).toBe(3);
+    // and the right column, bottom row is nobody: the cursor stays
+    gearTouchDown(game as never, 240, 200);
+    expect(b.partyIndex).toBe(3);
   });
 });
 

@@ -14327,7 +14327,9 @@ var TAP_A = {
 function clampInt(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
 }
+var armed = false;
 function gearTouchDown(game, x, y) {
+  armed = false;
   const b = game.battleView?.()?.battle;
   const col = clampInt(Math.floor(x / TILE_W), 0, COLS - 1);
   const row = clampInt(Math.floor(y / TILE_H), 0, ROWS - 1);
@@ -14353,48 +14355,54 @@ function gearTouchDown(game, x, y) {
     if (col >= 14 && col <= 19 && row >= 7 && row <= 11) {
       b.choiceYes = row < 9;
     }
-    b.update(TAP_A);
+    armed = true;
     return;
   }
+  const cell2x2 = () => (row < 10 ? 0 : 2) + (col < 10 ? 0 : 1);
   switch (b.phase) {
     case "menu": {
-      const c = col < 10 ? 0 : 1;
-      const r = row < 10 ? 0 : 1;
-      b.menuIndex = r * 2 + c + 1;
-      b.update(TAP_A);
+      b.menuIndex = cell2x2() + 1;
+      armed = true;
       return;
     }
     case "moveSelect": {
-      const n = b.player.curMoves.length;
-      if (n === 0)
+      const i = cell2x2();
+      if (i >= b.player.curMoves.length)
         return;
-      const i = clampInt(Math.floor((row - 2) / 3), 0, n - 1);
       b.moveIndex = i + 1;
-      b.update(TAP_A);
+      armed = true;
       return;
     }
     case "party": {
-      const n = game.save?.party?.length ?? 0;
-      if (n === 0)
+      const r = row < 7 ? 0 : row < 12 ? 1 : 2;
+      const i = r * 2 + (col < 10 ? 0 : 1);
+      if (i >= (game.save?.party?.length ?? 0))
         return;
-      const i = clampInt(Math.floor((row - 2) / 2), 0, n - 1);
       b.partyIndex = i;
-      b.update(TAP_A);
+      armed = true;
       return;
     }
     case "item": {
-      const n = b.itemList.length;
-      if (n === 0)
+      const i = row - 2;
+      if (i < 0 || i >= b.itemList.length)
         return;
-      const i = clampInt(row - 2, 0, n - 1);
       b.itemIndex = i;
-      b.update(TAP_A);
+      armed = true;
       return;
     }
     default:
       b.update(TAP_A);
       return;
   }
+}
+function gearTouchUp(game) {
+  if (!armed)
+    return;
+  armed = false;
+  const b = game.battleView?.()?.battle;
+  if (!b)
+    return;
+  b.update(TAP_A);
 }
 
 // voxelmon/game/ui/warppicker.ts
@@ -17774,6 +17782,8 @@ globalThis.frame = (buttons) => {
     const tx = buttons >> 9 & 511;
     const ty = buttons >> 18 & 255;
     gearTouchDown(game, tx, ty);
+  } else if (!touching && prevTouch) {
+    gearTouchUp(game);
   }
   prevTouch = touching;
   game.setCamTurns(buttons >> 24 & 3);

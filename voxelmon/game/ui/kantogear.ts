@@ -755,13 +755,28 @@ function clampInt(v: number, lo: number, hi: number): number {
 }
 
 /**
+ * Whether the finger is down on a battle option, so the release fires it.
+ * Only a touch that landed ON an option arms this; one on an empty cell (a
+ * fourth move the mon does not have, a sixth party slot) does nothing on
+ * either edge, because there is nothing there to execute.
+ */
+let armed = false;
+
+/**
  * A bottom-screen touch-DOWN, in bottom-target pixels (0..319, 0..239). Maps
- * the pixel to the cell the battle panel drew there, sets that phase's cursor,
- * then runs one A-press through the real handler (tap = select + confirm). The
- * cell math mirrors drawActionGrid / drawMoveSelect / drawItemList /
- * drawPartyList exactly. A no-op when no battle is on the stack.
+ * the pixel to the cell the battle panel drew there and puts that phase's
+ * cursor on it -- and only that. The option lights up under the finger, and
+ * gearTouchUp runs the A-press when it lifts, so a tap reads as a tap
+ * everywhere: highlight, then execute, and always the thing that was
+ * touched. (It used to select and confirm on the same edge, so nothing was
+ * ever seen highlighted, and the move and party grids had gone 2x2 / 2x3
+ * while this still read them as lists -- a tap on a move hit a different
+ * move.) The cell math mirrors drawActionGrid / drawMoveSelect /
+ * drawItemList / drawPartyList exactly. A no-op when no battle is on the
+ * stack.
  */
 export function gearTouchDown(game: GearGame, x: number, y: number): void {
+  armed = false;
   const b = game.battleView?.()?.battle;
   const col = clampInt(Math.floor(x / TILE_W), 0, COLS - 1);
   const row = clampInt(Math.floor(y / TILE_H), 0, ROWS - 1);
@@ -792,50 +807,61 @@ export function gearTouchDown(game: GearGame, x: number, y: number): void {
     if (col >= 14 && col <= 19 && row >= 7 && row <= 11) {
       b.choiceYes = row < 9;
     }
-    b.update(TAP_A);
+    armed = true;
     return;
   }
 
+  // The 2x2 cells drawActionGrid and drawMoveSelect share: colX=[0,10],
+  // rowY=[2,10], cellH=8. Reading order, so FIGHT/PKMN over ITEM/RUN.
+  const cell2x2 = (): number => (row < 10 ? 0 : 2) + (col < 10 ? 0 : 1);
+
   switch (b.phase) {
     case "menu": {
-      // 2x2 grid: cols split at 10, rows split at 10 (colX=[0,10], rowY=[2,10],
-      // cellH=8). FIGHT/PKMN over ITEM/RUN -> menuIndex 1..4.
-      const c = col < 10 ? 0 : 1;
-      const r = row < 10 ? 0 : 1;
-      b.menuIndex = r * 2 + c + 1;
-      b.update(TAP_A);
+      b.menuIndex = cell2x2() + 1;
+      armed = true;
       return;
     }
     case "moveSelect": {
-      // moves listed at y = 2 + i*3 (3-row band each).
-      const n = b.player.curMoves.length;
-      if (n === 0) return;
-      const i = clampInt(Math.floor((row - 2) / 3), 0, n - 1);
+      const i = cell2x2();
+      if (i >= b.player.curMoves.length) return; // an empty slot
       b.moveIndex = i + 1;
-      b.update(TAP_A);
+      armed = true;
       return;
     }
     case "party": {
-      // party rows at y = 2 + i*2 (2-row band each).
-      const n = game.save?.party?.length ?? 0;
-      if (n === 0) return;
-      const i = clampInt(Math.floor((row - 2) / 2), 0, n - 1);
+      // drawPartyList's 2x3: colX=[0,10], rowY=[2,7,12], cellH=5.
+      const r = row < 7 ? 0 : row < 12 ? 1 : 2;
+      const i = r * 2 + (col < 10 ? 0 : 1);
+      if (i >= (game.save?.party?.length ?? 0)) return; // an empty slot
       b.partyIndex = i;
-      b.update(TAP_A);
+      armed = true;
       return;
     }
     case "item": {
       // item rows at y = 2 + i (one row each).
-      const n = b.itemList.length;
-      if (n === 0) return;
-      const i = clampInt(row - 2, 0, n - 1);
+      const i = row - 2;
+      if (i < 0 || i >= b.itemList.length) return;
       b.itemIndex = i;
-      b.update(TAP_A);
+      armed = true;
       return;
     }
     default:
-      // "messages": a tap anywhere advances the text, like pressing A.
+      // "messages": a tap anywhere advances the text, like pressing A --
+      // on the down edge, since there is nothing to highlight first.
       b.update(TAP_A);
       return;
   }
+}
+
+/**
+ * The finger lifting. If the touch-down landed on a battle option, this is
+ * the press that runs it: the highlighted option, whatever the finger did in
+ * between, so a tap can never fire something other than what it touched.
+ */
+export function gearTouchUp(game: GearGame): void {
+  if (!armed) return;
+  armed = false;
+  const b = game.battleView?.()?.battle;
+  if (!b) return;
+  b.update(TAP_A);
 }
