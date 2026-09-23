@@ -435,9 +435,12 @@ fn base_camera(scene: &Scene) -> Camera {
             // The player's card (slot 0, the one first person hides) is
             // drawn at its feet, so its feet are where the head goes.
             let (px, pz) = rig_feet(scene).unwrap_or((cx, cy));
-            return cam::free_cam(
+            let (ox0, oy0) = slot0_offset(scene);
+            let ground = scene.floor.height_at(px - ox0 as f32, pz - oy0 as f32);
+            return cam::free_cam_at(
                 px,
                 pz,
+                ground,
                 scene.cam_rig_yaw,
                 cam::clamp_free_pitch(scene.cam_rig_pitch),
                 boom,
@@ -782,11 +785,17 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
 
     // 4. Shadow decals: field entities, then staged battle cards (which
     // darken harder — the cards need grounding).
+    // Feet on the FLOOR of the cell, not on the map's base: an entity's
+    // lift is its own (a hop, the surf bob) and rides on top of whatever
+    // the cook raised that cell to (scene.floor).
+    let (fx0, fz0) = slot0_offset(scene);
     let ent_feet = |ent: &crate::scene::Ent| {
+        let x = ent.x as f32 / spec::Q4 as f32;
+        let z = ent.y as f32 / spec::Q4 as f32;
         vec3(
-            ent.x as f32 / spec::Q4 as f32,
-            ent.lift as f32,
-            ent.y as f32 / spec::Q4 as f32,
+            x,
+            ent.lift as f32 + scene.floor.height_at(x - fx0 as f32, z - fz0 as f32),
+            z,
         )
     };
     let card_w = CELL_PX as f32;
@@ -800,10 +809,12 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
     }
     let (ox0, oy0) = slot0_offset(scene);
     let cell_centre = |cx: i32, cy: i32| {
+        let lx = (cx * CELL_PX + CELL_PX / 2) as f32;
+        let lz = (cy * CELL_PX + CELL_PX / 2) as f32;
         vec3(
-            (cx * CELL_PX + CELL_PX / 2 + ox0) as f32,
-            0.0,
-            (cy * CELL_PX + CELL_PX / 2 + oy0) as f32,
+            lx + ox0 as f32,
+            scene.floor.height_at(lx, lz),
+            lz + oy0 as f32,
         )
     };
     // A battle card's world anchor: its cell centre plus the Q4-px
@@ -1717,6 +1728,44 @@ mod tests {
         sc.cam_rig = 0;
         let o = camera(&sc);
         assert!((o.focus.x - 64.0).abs() < 1e-3, "orbit moved: {}", o.focus.x);
+    }
+
+    /// The floor map answers in the map's own px, 0 anywhere it does not
+    /// cover, and an empty one is flat ground everywhere.
+    #[test]
+    fn the_floor_is_read_per_cell_and_flat_off_the_map() {
+        use crate::scene::FloorMap;
+        let flat = FloorMap::default();
+        assert_eq!(flat.height_at(40.0, 40.0), 0.0);
+        // a 3x2 map starting at cell (2,1); the middle top cell is raised
+        let f = FloorMap { x0: 2, z0: 1, w: 3, h: 2, cells: vec![0, 12, 0, 0, 0, 0] };
+        assert_eq!(f.height_at(3.0 * 16.0 + 8.0, 1.0 * 16.0 + 8.0), 12.0);
+        assert_eq!(f.height_at(3.0 * 16.0, 1.0 * 16.0), 12.0); // the cell's corner too
+        assert_eq!(f.height_at(2.0 * 16.0 + 8.0, 1.0 * 16.0 + 8.0), 0.0);
+        assert_eq!(f.height_at(3.0 * 16.0 + 8.0, 2.0 * 16.0 + 8.0), 0.0);
+        // off the map on every side
+        assert_eq!(f.height_at(0.0, 24.0), 0.0);
+        assert_eq!(f.height_at(200.0, 24.0), 0.0);
+        assert_eq!(f.height_at(56.0, -5.0), 0.0);
+        assert_eq!(f.height_at(56.0, 300.0), 0.0);
+    }
+
+    /// An entity on a raised cell stands on it; its own lift rides on top.
+    #[test]
+    fn entities_stand_on_the_raised_floor() {
+        use crate::scene::{FloorMap, Scene};
+        let mut sc = Scene::new();
+        sc.op(op::MAP_SHOW, &[0, 0, 0, 0], None);
+        sc.floor = FloorMap { x0: 0, z0: 0, w: 4, h: 4, cells: vec![0; 16] };
+        sc.floor.cells[2 * 4 + 1] = 12; // cell (1,2)
+        sc.cam_rig = 1;
+        sc.cam_rig_pitch = 0.0;
+        // the player at cell (1,2): the first-person eye is 12 px higher
+        sc.op(op::ENT, &[0, 0, 0, (16 + 8) * 16, (32 + 8) * 16, 0, 0], None);
+        let up = camera(&sc);
+        sc.op(op::ENT, &[0, 0, 0, (48 + 8) * 16, (32 + 8) * 16, 0, 0], None);
+        let flat = camera(&sc);
+        assert!((up.eye.y - flat.eye.y - 12.0).abs() < 1e-3, "{} vs {}", up.eye.y, flat.eye.y);
     }
 
     /// `camSpeed` lands on the scene, and a value past either end of the

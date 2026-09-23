@@ -1735,6 +1735,8 @@ struct Span {
 }
 
 struct MapGeom {
+    /// The floor under each cell, measured off the terrain (floor_map_of).
+    floor: pocketvoxel_core::scene::FloorMap,
     chunk_spans: Vec<Span>,
     verts: Vec<Vertex>,
     center: [f32; 3],
@@ -2666,7 +2668,71 @@ fn build_map(
         map_min = [0.0; 2];
         map_max = [0.0; 2];
     }
-    MapGeom { chunk_spans, verts, center, size, tex_rgba, tw, th, aw, ah, is_huge, map_min, map_max }
+    let floor = floor_map_of(pak, all_chunks, map_min, map_max);
+    MapGeom { floor, chunk_spans, verts, center, size, tex_rgba, tw, th, aw, ah, is_huge, map_min, map_max }
+}
+
+/// The floor under each cell of the map: the highest up-facing TERRAIN
+/// triangle in it, so a shelf the cook raised reads as its top and the
+/// base ground as 0. Whoever stands on the cell is drawn that high
+/// (core draw.rs ent_feet / cell_centre), which is what keeps the player
+/// and a staged battle out of Mt. Moon's upper floor rather than sunk to
+/// its foot.
+///
+/// A triangle covers every cell its XZ box touches, not only the cells its
+/// corners land in: the cook merges a flat run into one quad, whose inner
+/// cells have no vertex of their own. The box of a rectangle's half is the
+/// rectangle, so the merged run comes out whole.
+fn floor_map_of(pak: &Pak, chunks: &[pak::Chunk], map_min: [f32; 2], map_max: [f32; 2]) -> pocketvoxel_core::scene::FloorMap {
+    use pocketvoxel_core::scene::FloorMap;
+    let cell = pocketvoxel_core::spec::CELL_PX as f32;
+    let x0 = (map_min[0] / cell).floor() as i32;
+    let z0 = (map_min[1] / cell).floor() as i32;
+    let x1 = (map_max[0] / cell).ceil() as i32;
+    let z1 = (map_max[1] / cell).ceil() as i32;
+    let (w, h) = ((x1 - x0).max(0) as usize, (z1 - z0).max(0) as usize);
+    if w == 0 || h == 0 || w * h > 65536 {
+        return FloorMap::default();
+    }
+    let mut cells = vec![0i16; w * h];
+    for chunk in chunks {
+        let m = chunk.meshes[pocketvoxel_core::spec::mesh_kind::TERRAIN as usize];
+        let vbase = m.vert_base as usize;
+        for t in 0..(m.index_count as usize / 3) {
+            let b = m.index_base as usize + t * 3;
+            let (Some(p0), Some(p1), Some(p2)) = (
+                pool_vert(pak, vbase, b),
+                pool_vert(pak, vbase, b + 1),
+                pool_vert(pak, vbase, b + 2),
+            ) else {
+                break;
+            };
+            // up-facing: the normal's y dominates and points up
+            let (ax, ay, az) = ((p1.x - p0.x) as f32, (p1.y - p0.y) as f32, (p1.z - p0.z) as f32);
+            let (bx, by, bz) = ((p2.x - p0.x) as f32, (p2.y - p0.y) as f32, (p2.z - p0.z) as f32);
+            let ny = az * bx - ax * bz;
+            let nx = ay * bz - az * by;
+            let nz = ax * by - ay * bx;
+            if ny <= 0.0 || ny.abs() < nx.abs() || ny.abs() < nz.abs() {
+                continue;
+            }
+            let top = p0.y.max(p1.y).max(p2.y);
+            let (lo_x, hi_x) = (p0.x.min(p1.x).min(p2.x), p0.x.max(p1.x).max(p2.x));
+            let (lo_z, hi_z) = (p0.z.min(p1.z).min(p2.z), p0.z.max(p1.z).max(p2.z));
+            // the cells whose CENTRES the box covers
+            let cx0 = ((lo_x as f32 - cell / 2.0) / cell).ceil() as i32;
+            let cx1 = ((hi_x as f32 - cell / 2.0) / cell).floor() as i32;
+            let cz0 = ((lo_z as f32 - cell / 2.0) / cell).ceil() as i32;
+            let cz1 = ((hi_z as f32 - cell / 2.0) / cell).floor() as i32;
+            for cz in cz0.max(z0)..=cz1.min(z1 - 1) {
+                for cx in cx0.max(x0)..=cx1.min(x1 - 1) {
+                    let i = (cz - z0) as usize * w + (cx - x0) as usize;
+                    if top > cells[i] { cells[i] = top; }
+                }
+            }
+        }
+    }
+    FloorMap { x0, z0, w: w as u16, h: h as u16, cells }
 }
 
 static mut RT: *mut JSRuntime = core::ptr::null_mut();
@@ -2827,6 +2893,7 @@ fn main() {
 
     let mut map_i = 0usize;
     let mut geom = MapGeom {
+        floor: Default::default(),
         chunk_spans: Vec::new(), verts: Vec::new(), center: [0.0; 3], size: 16.0,
         tex_rgba: Vec::new(), tw: 8, th: 8, aw: 8, ah: 8, is_huge: false,
         map_min: [0.0; 2], map_max: [0.0; 2],
@@ -3615,6 +3682,8 @@ fn main() {
                 );
                 cur_map_huge = geom.is_huge;
                 built_key = Some(want_key);
+                // The floor the cards stand on, for the draw pass.
+                unsafe { voxel::scene().floor = geom.floor.clone(); }
             }
             {
                 let build_ms = {

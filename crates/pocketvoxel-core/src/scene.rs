@@ -73,6 +73,46 @@ pub struct UiText {
     pub text: String,
 }
 
+/// The floor under each cell of the slot-0 map: the height, in world px
+/// above y = 0, of the highest up-facing terrain in that cell. HOST state,
+/// measured off the built mesh at map load (main.rs floor_map_of), so a
+/// cell the cook raised -- Mt. Moon's upper shelf, a staircase landing --
+/// stands whoever is on it at that height instead of sinking them to the
+/// map's base. Empty (w or h of 0) reads as flat ground everywhere, which
+/// is exactly what every map got before this existed.
+///
+/// Indexed in the map's OWN px, not the world's: `x0`/`z0` are the cell the
+/// map's bounds start at, and a caller with a world position takes the
+/// slot's offset off first.
+#[derive(Clone, Debug, Default)]
+pub struct FloorMap {
+    pub x0: i32,
+    pub z0: i32,
+    pub w: u16,
+    pub h: u16,
+    /// Row-major, `w * h` entries, px.
+    pub cells: Vec<i16>,
+}
+
+impl FloorMap {
+    /// The floor at map px (x, z); 0 off the map or in an empty map.
+    pub fn height_at(&self, x: f32, z: f32) -> f32 {
+        if self.w == 0 || self.h == 0 {
+            return 0.0;
+        }
+        // floor(x / 16) without libm, exact for any |x| under 65536
+        let cx = ((x + 65536.0) / 16.0) as i32 - 4096 - self.x0;
+        let cz = ((z + 65536.0) / 16.0) as i32 - 4096 - self.z0;
+        if cx < 0 || cz < 0 || cx >= self.w as i32 || cz >= self.h as i32 {
+            return 0.0;
+        }
+        self.cells
+            .get((cz as usize) * (self.w as usize) + cx as usize)
+            .copied()
+            .unwrap_or(0) as f32
+    }
+}
+
 /// The `camSpeed` multiplier's floor and ceiling, Q8: a quarter to four
 /// times the tuned rate. Anything past either is a bad value, not a taste.
 pub const CAM_SPEED_MIN: i32 = 64;
@@ -229,6 +269,8 @@ pub struct Scene {
     /// screen. Clamped on the way in so a bad save cannot freeze or spin
     /// the camera.
     pub cam_speed_q8: i32,
+    /// The floor under the slot-0 map's cells (see [`FloorMap`]); host state.
+    pub floor: FloorMap,
     /// The quality rung this host climbed to (`spec::quality_tier`), always a
     /// valid index into [`spec::QUALITY`]. HOST configuration, not guest
     /// state: the host knows the machine, so `reset()` keeps this exactly as
@@ -351,6 +393,7 @@ impl Scene {
             ui_reveal: u32::MAX,
             battle: Battle::default(),
             cam_speed_q8: Q8,
+            floor: FloorMap::default(),
             quality: QUALITY_TIER_DEFAULT,
             audio: Audio::new(),
             tick: 0,

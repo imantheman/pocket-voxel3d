@@ -151,8 +151,23 @@ pub const FREE_STICK_PITCH: f32 = 2.4;
 /// keep working without knowing which rig made the camera -- which is what
 /// stands the character cards upright when the eye is level with them.
 pub fn free_cam(px: f32, pz: f32, yaw: f32, pitch: f32, boom: f32, shoulder: f32) -> Camera {
+    free_cam_at(px, pz, 0.0, yaw, pitch, boom, shoulder)
+}
+
+/// [`free_cam`] with the player standing on a floor `ground` px above the
+/// map's base -- a raised shelf, a landing -- so the head is that much
+/// higher too, rather than at ground level inside the shelf.
+pub fn free_cam_at(
+    px: f32,
+    pz: f32,
+    ground: f32,
+    yaw: f32,
+    pitch: f32,
+    boom: f32,
+    shoulder: f32,
+) -> Camera {
     let lift = if boom > 0.0 { FREE_PIVOT_LIFT } else { 0.0 };
-    let pivot = vec3(px, FREE_EYE_HEIGHT + lift, pz);
+    let pivot = vec3(px, ground + FREE_EYE_HEIGHT + lift, pz);
     let (sy, cy) = (sinf(yaw), cosf(yaw));
     let (sp, cp) = (sinf(pitch), cosf(pitch));
     let fwd = vec3(sy * cp, -sp, -cy * cp);
