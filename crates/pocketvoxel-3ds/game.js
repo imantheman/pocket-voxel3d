@@ -10630,6 +10630,8 @@ var TOGGLE_DEFAULT_HIDDEN = {
   VIRIDIAN_CITY: { VIRIDIANCITY_OLD_MAN: true },
   VICTORY_ROAD_2F: { VICTORYROAD2F_BOULDER3: true }
 };
+var FORCED_BIKE_CLEAR_MAPS = ["ROUTE_16_GATE_1F", "ROUTE_18_GATE_1F"];
+var BACK = { up: "down", down: "up", left: "right", right: "left" };
 
 class Overworld {
   isCooked(mapId) {
@@ -10764,6 +10766,9 @@ class Overworld {
     this.entities = [this.player, ...this.npcs];
     this.syncLastMapRewrite();
     this.syncBike();
+    if (FORCED_BIKE_CLEAR_MAPS.includes(mapId) || !this.save.onBike) {
+      this.save.forcedBike = false;
+    }
     this.syncSurf();
     visit(this.save, mapId);
     MAP_SCRIPTS[mapId]?.onEnter?.(this, this.save);
@@ -10827,6 +10832,7 @@ class Overworld {
       } else {
         this.snapToCell();
         this.handleInput();
+        this.rollDownhill();
       }
     }
     const stepped = this.player.update();
@@ -10883,7 +10889,7 @@ class Overworld {
     const stick = stickPush(this.stick);
     const sx = stick ? stick.x : (input.isDown("right") ? 1 : 0) - (input.isDown("left") ? 1 : 0);
     const sy = stick ? -stick.y : (input.isDown("down") ? 1 : 0) - (input.isDown("up") ? 1 : 0);
-    const dir = freeDir(sx, sy, this.freeYaw ?? 0);
+    const dir = sx === 0 && sy === 0 && this.slopeRolls() ? freeDir(0, 1, 0) : freeDir(sx, sy, this.freeYaw ?? 0);
     if (!dir)
       return;
     const speed = 16 / p.stepSpeed() * (stick ? stick.throw : 1);
@@ -11484,6 +11490,8 @@ wore off.`);
       return;
     if (this.badgeGateStep())
       return;
+    if (this.forcedTileStep())
+      return;
     if (this.seafoamStep())
       return;
     if (this.spinnerStep())
@@ -11997,6 +12005,66 @@ wore off.`);
         }
       }
     }
+  }
+  forcedMovement() {
+    return this.shell.data.field?.forcedMovement;
+  }
+  slopeRolls() {
+    const fm = this.forcedMovement();
+    if (!fm?.slopeMaps?.includes(this.map.id))
+      return false;
+    if (!this.save.onBike)
+      return false;
+    if (this.player.moving || this.transitioning)
+      return false;
+    if (this.runner.isRunning() || this.scriptMoves.length > 0 || this.engaging)
+      return false;
+    const input = this.shell.input;
+    return !(input.isDown("a") || input.isDown("b"));
+  }
+  rollDownhill() {
+    if (this.dirHeld() || !this.slopeRolls())
+      return;
+    const p = this.player;
+    p.facing = "down";
+    p.tryMove("down", this.map, this.entities, this.tilePairs);
+  }
+  forcedTileStep() {
+    const tiles = this.forcedMovement()?.tiles?.[this.map.id];
+    if (!tiles)
+      return false;
+    const p = this.player;
+    const t = tiles.find((t2) => t2.x === p.cellX && t2.y === p.cellY);
+    if (!t)
+      return false;
+    const save = this.save;
+    if (t.mode === "bike") {
+      if (save.onBike) {
+        save.forcedBike = true;
+        return false;
+      }
+      if ((save.inventory?.BICYCLE ?? 0) > 0) {
+        save.onBike = true;
+        save.forcedBike = true;
+        this.syncBike();
+        this.syncSurfSong();
+        return false;
+      }
+      this.showText(`You need a
+BICYCLE for the
+Cycling Road!`, () => {
+        this.scriptMove(p, BACK[p.facing], 1);
+      });
+      return true;
+    }
+    if (!p.surfing) {
+      p.surfing = true;
+      this.save.surfing = true;
+      save.onBike = false;
+      this.syncBike();
+      this.syncSurfSong();
+    }
+    return false;
   }
   forcedWarp = false;
   seafoamHiddenCache;

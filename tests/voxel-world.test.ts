@@ -7744,6 +7744,90 @@ describe("the SEAFOAM ISLANDS puzzle", () => {
   });
 });
 
+describe("the CYCLING ROAD's forced bike and downhill roll", () => {
+  const MAPS = ["ROUTE_16", "ROUTE_17", "ROUTE_18", "ROUTE_16_GATE_1F"];
+
+  function fmGame(): VoxelmonGame {
+    const data = {
+      ...(romData as object),
+      cookedMaps: [
+        ...((romData as { cookedMaps?: string[] }).cookedMaps ?? []), ...MAPS,
+      ],
+    };
+    const game = new VoxelmonGame(data as never, new MenuHost(), 1);
+    game.newGame();
+    game.closeToOverworld();
+    return game;
+  }
+
+  const tile = () => (romData as any).field.forcedMovement.tiles.ROUTE_16[0] as { x: number; y: number };
+
+  test.skipIf(!hasGen)("the road's mouth puts you on the BICYCLE, and the gate takes it off", () => {
+    const game = fmGame();
+    const ow = game.overworld;
+    const save = game.save as any;
+    save.inventory.BICYCLE = 1;
+    ow.setMap("ROUTE_16", tile().x, tile().y, "left");
+    ow.onStepComplete();
+    expect(save.onBike).toBe(true);
+    expect(save.forcedBike).toBe(true);
+    expect(game.stackKinds()).toEqual(["overworld"]);
+    ow.setMap("ROUTE_16_GATE_1F", 5, 8, "right");
+    expect(save.forcedBike).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("a walker is turned back", () => {
+    const game = fmGame();
+    const ow = game.overworld;
+    ow.setMap("ROUTE_16", tile().x, tile().y, "left");
+    ow.onStepComplete();
+    expect(game.stackKinds().at(-1)).toBe("textbox");
+    expect(topText(game)).toContain("BICYCLE");
+    dismissText(game);
+    for (let i = 0; i < 200; i++) game.tick(0);
+    expect([ow.player.cellX, ow.player.cellY]).toEqual([tile().x + 1, tile().y]);
+    expect((game.save as any).onBike ?? false).toBe(false);
+  });
+
+  /** A run of three plain cells down a column of Route 17. */
+  function slopeCell(ow: any): [number, number] {
+    for (let y = 8; y < 60; y++) {
+      for (let x = 0; x < 20; x++) {
+        const ok = [0, 1, 2, 3].every(
+          (d) => ow.map.isWalkableCell(x, y + d) && !ow.map.isGrassCell(x, y + d) &&
+            !ow.map.isWaterCell(x, y + d),
+        );
+        if (ok) return [x, y];
+      }
+    }
+    throw new Error("no slope cell");
+  }
+
+  test.skipIf(!hasGen)("the hill rolls the bike south when nothing is held; A holds you", () => {
+    const rolling = fmGame();
+    (rolling.save as any).onBike = true;
+    rolling.overworld.setMap("ROUTE_17", 5, 5, "down");
+    const [x, y] = slopeCell(rolling.overworld);
+    rolling.overworld.setMap("ROUTE_17", x, y, "down");
+    rolling.overworld.syncBike();
+    for (let i = 0; i < 240; i++) rolling.tick(0);
+    expect(rolling.overworld.player.cellY).toBeGreaterThan(y);
+
+    const braking = fmGame();
+    (braking.save as any).onBike = true;
+    braking.overworld.setMap("ROUTE_17", x, y, "down");
+    braking.overworld.syncBike();
+    for (let i = 0; i < 240; i++) braking.tick(VOX_BTN.b);
+    expect(braking.overworld.player.cellY).toBe(y);
+
+    // on foot the hill is just a hill
+    const walking = fmGame();
+    walking.overworld.setMap("ROUTE_17", x, y, "down");
+    for (let i = 0; i < 240; i++) walking.tick(0);
+    expect(walking.overworld.player.cellY).toBe(y);
+  });
+});
+
 describe("Silph Co 7F", () => {
   test.skipIf(!hasGen)("the rival waits at the door, and only there", () => {
     const rows = (ow: any, save: any) =>

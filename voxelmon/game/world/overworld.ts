@@ -309,6 +309,21 @@ const TOGGLE_DEFAULT_HIDDEN: Record<string, Record<string, boolean>> = {
   VICTORY_ROAD_2F: { VICTORYROAD2F_BOULDER3: true },
 };
 
+/** data/maps/force_bike_surf.asm, as the extractor lays it out. */
+interface ForcedMovement {
+  /** JoypadOverworld's simulated PAD_DOWN: the bike rolls south here. */
+  slopeMaps?: string[];
+  tiles?: Record<string, { mode: "bike" | "surf"; x: number; y: number }[]>;
+}
+
+/**
+ * BIT_ALWAYS_ON_BIKE ends at the CYCLING ROAD gates, whose map scripts clear
+ * it every frame (scripts/Route16Gate1F.asm / Route18Gate1F.asm).
+ */
+const FORCED_BIKE_CLEAR_MAPS = ["ROUTE_16_GATE_1F", "ROUTE_18_GATE_1F"];
+
+const BACK: Record<Dir, Dir> = { up: "down", down: "up", left: "right", right: "left" };
+
 export class Overworld implements ScriptWorld {
   /** The content-boundary test: a map outside the pak's cooked set exists
    * as DATA (warp targets, connection math) but must never be entered —
@@ -535,6 +550,9 @@ export class Overworld implements ScriptWorld {
     // IsBikeRidingAllowed (OverworldController.lua:343): walking into a
     // building gets you off the bike rather than refusing the door.
     this.syncBike();
+    if (FORCED_BIKE_CLEAR_MAPS.includes(mapId) || !(this.save as { onBike?: boolean }).onBike) {
+      (this.save as { forcedBike?: boolean }).forcedBike = false;
+    }
     // And the same for the water. A warp can land the player on it (the
     // Seafoam drops) and a reload can put them back on it with the flag
     // cleared; either way the CELL is the authority, not the flag. After the
@@ -630,6 +648,7 @@ export class Overworld implements ScriptWorld {
       } else {
         this.snapToCell();
         this.handleInput();
+        this.rollDownhill();
       }
     }
     const stepped = this.player.update();
@@ -727,7 +746,13 @@ export class Overworld implements ScriptWorld {
     const stick = stickPush(this.stick);
     const sx = stick ? stick.x : (input.isDown("right") ? 1 : 0) - (input.isDown("left") ? 1 : 0);
     const sy = stick ? -stick.y : (input.isDown("down") ? 1 : 0) - (input.isDown("up") ? 1 : 0);
-    const dir = freeDir(sx, sy, this.freeYaw ?? 0);
+    // Cycling Road's downhill pull (home/overworld.asm JoypadOverworld's
+    // simulated PAD_DOWN): with nothing held the bike rolls south -- south
+    // on the map, whichever way the camera faces.
+    const dir =
+      sx === 0 && sy === 0 && this.slopeRolls()
+        ? freeDir(0, 1, 0)
+        : freeDir(sx, sy, this.freeYaw ?? 0);
     if (!dir) return;
     // the grid walker's own speed: one cell per stepSpeed() frames, scaled
     // by the pad's throw
@@ -1657,6 +1682,7 @@ export class Overworld implements ScriptWorld {
     this.lanceLockDoor();
     if (this.leagueDontRun()) return;
     if (this.badgeGateStep()) return;
+    if (this.forcedTileStep()) return;
     if (this.seafoamStep()) return;
     if (this.spinnerStep()) return;
     if (this.runLandTriggers()) return;
@@ -2402,6 +2428,78 @@ export class Overworld implements ScriptWorld {
         }
       }
     }
+  }
+
+  private forcedMovement(): ForcedMovement | undefined {
+    return (this.shell.data.field as { forcedMovement?: ForcedMovement } | undefined)
+      ?.forcedMovement;
+  }
+
+  /**
+   * Does the hill pull right now? On the BICYCLE, on a slope map, standing
+   * still, and not braking: JoypadOverworld's mask is PAD_CTRL_PAD | PAD_B |
+   * PAD_A, so a HELD A or B stays put, as the Route 17 sign promises
+   * ("Press the A or B Button to stay in place").
+   */
+  private slopeRolls(): boolean {
+    const fm = this.forcedMovement();
+    if (!fm?.slopeMaps?.includes(this.map.id)) return false;
+    if (!(this.save as { onBike?: boolean }).onBike) return false;
+    if (this.player.moving || this.transitioning) return false;
+    if (this.runner.isRunning() || this.scriptMoves.length > 0 || this.engaging) return false;
+    const input = this.shell.input;
+    return !(input.isDown("a") || input.isDown("b"));
+  }
+
+  /** The grid poll's half of the pull: one step south when nothing is held. */
+  private rollDownhill(): void {
+    if (this.dirHeld() || !this.slopeRolls()) return;
+    const p = this.player;
+    p.facing = "down";
+    p.tryMove("down", this.map, this.entities, this.tilePairs);
+  }
+
+  /**
+   * CheckForceBikeOrSurf (engine/overworld/player_state.asm, data/maps/
+   * force_bike_surf.asm): the CYCLING ROAD's mouths put you on the BICYCLE
+   * -- silently; _CyclingIsFunText is only IsSurfingAllowed's refusal -- or
+   * turn a walker back, and the Seafoam current mouths put you on the water.
+   * BIT_ALWAYS_ON_BIKE goes with the mount, so the bike stays on until a
+   * gate. True when the step was taken over.
+   */
+  private forcedTileStep(): boolean {
+    const tiles = this.forcedMovement()?.tiles?.[this.map.id];
+    if (!tiles) return false;
+    const p = this.player;
+    const t = tiles.find((t) => t.x === p.cellX && t.y === p.cellY);
+    if (!t) return false;
+    const save = this.save as { onBike?: boolean; forcedBike?: boolean; inventory?: Record<string, number> };
+    if (t.mode === "bike") {
+      if (save.onBike) {
+        save.forcedBike = true;
+        return false;
+      }
+      if ((save.inventory?.BICYCLE ?? 0) > 0) {
+        save.onBike = true;
+        save.forcedBike = true;
+        this.syncBike();
+        this.syncSurfSong();
+        return false;
+      }
+      this.showText("You need a\nBICYCLE for the\nCycling Road!", () => {
+        this.scriptMove(p, BACK[p.facing], 1);
+      });
+      return true;
+    }
+    // a forced surf clears the bike state the way the party-menu mount does
+    if (!p.surfing) {
+      p.surfing = true;
+      (this.save as { surfing?: boolean }).surfing = true;
+      save.onBike = false;
+      this.syncBike();
+      this.syncSurfSong();
+    }
+    return false;
   }
 
   /** BIT_FORCED_WARP: set by a Seafoam current, read once by the next warp check. */
