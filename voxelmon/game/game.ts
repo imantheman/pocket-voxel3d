@@ -1016,26 +1016,48 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     const run = (rows: unknown, done: () => void) =>
       this.overworld.runScript(rows as never[], done);
 
-    run(A, () => {
+    // oak_speech2.asm ChoosePlayerName / ChooseRivalName: a menu of NEW
+    // NAME and the three presets first (DefaultNamesPlayerList, field
+    // .presetNames); NEW NAME opens the keyboard, which starts empty and
+    // falls back to the first preset on an empty confirm.
+    const presets = (this.data as {
+      field?: { presetNames?: { customOption?: string; player?: string[]; rival?: string[] } };
+    }).field?.presetNames;
+    const askName = (
+      title: string,
+      list: string[] | undefined,
+      fallback: string,
+      onDone: (name: string) => void,
+    ): void => {
+      const names = list && list.length > 0 ? list : [fallback];
+      const custom = presets?.customOption ?? "NEW NAME";
       this.push(new NamingState(this, {
-        title: "YOUR NAME?", default: "RED",
-        onDone: (name: string) => {
-          this.save.player.name = name;
-          run(B, () => {
-            this.push(new NamingState(this, {
-              title: "RIVAL'S NAME?", default: "BLUE",
-              onDone: (rival: string) => {
-                this.save.player.rival = rival;
-                run(C, () => {
-                  // The intro theme holds until something claims the music;
-                  // hand it to the spawn map once the shrink finishes.
-                  this.audio?.startMap?.("REDS_HOUSE_2F");
-                });
-              },
-            }));
-          });
+        title,
+        pick: [custom, ...names],
+        onDone: (choice: string) => {
+          if (choice !== custom) {
+            onDone(choice);
+            return;
+          }
+          this.push(new NamingState(this, { title, fallback: names[0], onDone }));
         },
       }));
+    };
+
+    run(A, () => {
+      askName("YOUR NAME?", presets?.player, "RED", (name: string) => {
+        this.save.player.name = name;
+        run(B, () => {
+          askName("RIVAL'S NAME?", presets?.rival, "BLUE", (rival: string) => {
+            this.save.player.rival = rival;
+            run(C, () => {
+              // The intro theme holds until something claims the music;
+              // hand it to the spawn map once the shrink finishes.
+              this.audio?.startMap?.("REDS_HOUSE_2F");
+            });
+          });
+        });
+      });
     });
   }
 

@@ -48,6 +48,9 @@ export interface NamingOpts {
   title?: string;
   maxLen?: number;
   default?: string;
+  /** What an empty confirm hands back (DisplayNamingScreen's '@' seed: the
+   * player/rival prompts fall back to their first preset). */
+  fallback?: string;
   onDone: (name: string) => void;
 }
 
@@ -61,12 +64,14 @@ export class NamingState implements GameState {
   private readonly maxLen: number;
   private readonly onDone: (name: string) => void;
   private readonly pick?: string[];
+  private readonly fallback: string;
 
   constructor(private game: { input: Input; pop(): void }, opts: NamingOpts) {
     this.title = opts.title ?? "YOUR NAME?";
     this.maxLen = opts.maxLen ?? 7;
     this.onDone = opts.onDone;
     this.pick = opts.pick;
+    this.fallback = opts.fallback ?? "RED";
     if (opts.default) this.glyphs = [...opts.default].slice(0, this.maxLen);
   }
 
@@ -88,7 +93,7 @@ export class NamingState implements GameState {
   private confirm(): void {
     const name = this.glyphs.join("");
     this.game.pop();
-    this.onDone(name.length > 0 ? name : "RED");
+    this.onDone(name.length > 0 ? name : this.fallback);
   }
 
   private commit(cell: string): void {
@@ -126,7 +131,7 @@ export class NamingState implements GameState {
       this.col = 0;
     }
     if (p.b) this.glyphs.pop();
-    if (p.start) this.confirm();
+    if (p.start && !this.pick) this.confirm(); // a menu has nothing to confirm
     if (p.a) {
       const cell = this.grid()[this.row]?.[this.col];
       if (cell !== undefined) this.commit(cell);

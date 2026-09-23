@@ -7993,6 +7993,35 @@ describe("DIG, TELEPORT and SOFTBOILED from the party menu", () => {
   });
 });
 
+describe("the intro's name presets", () => {
+  test.skipIf(!hasGen)("NEW NAME and three presets for you, then for the rival", () => {
+    const game = makeMenuGame();
+    game.startIntro();
+    const untilNaming = (): void => {
+      for (let t = 0; t < 6000 && game.stackKinds().at(-1) !== "naming"; t++) {
+        game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+      }
+      expect(game.stackKinds().at(-1)).toBe("naming");
+      game.tick(0); // release, so the next tap is a real edge
+    };
+    const view = () => (game.top() as any).view();
+
+    untilNaming();
+    expect(view().grid).toEqual([["NEW NAME"], ["RED"], ["ASH"], ["JACK"]]);
+    pick(game, 2); // ASH
+    expect(game.save.player.name).toBe("ASH");
+
+    untilNaming();
+    expect(view().grid).toEqual([["NEW NAME"], ["BLUE"], ["GARY"], ["JOHN"]]);
+    pick(game, 0); // NEW NAME: the keyboard, empty
+    expect(game.stackKinds().at(-1)).toBe("naming");
+    expect(view().grid[0]![0]).toBe("A");
+    expect(view().name).toBe("");
+    tap(game, VOX_BTN.start); // nothing typed: the first preset
+    expect(game.save.player.rival).toBe("BLUE");
+  });
+});
+
 describe("Silph Co 7F", () => {
   test.skipIf(!hasGen)("the rival waits at the door, and only there", () => {
     const rows = (ow: any, save: any) =>

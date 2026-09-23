@@ -14465,12 +14465,14 @@ class NamingState {
   maxLen;
   onDone;
   pick;
+  fallback;
   constructor(game, opts) {
     this.game = game;
     this.title = opts.title ?? "YOUR NAME?";
     this.maxLen = opts.maxLen ?? 7;
     this.onDone = opts.onDone;
     this.pick = opts.pick;
+    this.fallback = opts.fallback ?? "RED";
     if (opts.default)
       this.glyphs = [...opts.default].slice(0, this.maxLen);
   }
@@ -14494,7 +14496,7 @@ class NamingState {
   confirm() {
     const name = this.glyphs.join("");
     this.game.pop();
-    this.onDone(name.length > 0 ? name : "RED");
+    this.onDone(name.length > 0 ? name : this.fallback);
   }
   commit(cell) {
     if (this.pick) {
@@ -14535,7 +14537,7 @@ class NamingState {
     }
     if (p.b)
       this.glyphs.pop();
-    if (p.start)
+    if (p.start && !this.pick)
       this.confirm();
     if (p.a) {
       const cell = this.grid()[this.row]?.[this.col];
@@ -18329,26 +18331,34 @@ ${mname}!`);
       ["pic_hide"]
     ];
     const run = (rows, done) => this.overworld.runScript(rows, done);
-    run(A, () => {
+    const presets = this.data.field?.presetNames;
+    const askName = (title, list2, fallback, onDone) => {
+      const names = list2 && list2.length > 0 ? list2 : [fallback];
+      const custom = presets?.customOption ?? "NEW NAME";
       this.push(new NamingState(this, {
-        title: "YOUR NAME?",
-        default: "RED",
-        onDone: (name) => {
-          this.save.player.name = name;
-          run(B, () => {
-            this.push(new NamingState(this, {
-              title: "RIVAL'S NAME?",
-              default: "BLUE",
-              onDone: (rival) => {
-                this.save.player.rival = rival;
-                run(C, () => {
-                  this.audio?.startMap?.("REDS_HOUSE_2F");
-                });
-              }
-            }));
-          });
+        title,
+        pick: [custom, ...names],
+        onDone: (choice) => {
+          if (choice !== custom) {
+            onDone(choice);
+            return;
+          }
+          this.push(new NamingState(this, { title, fallback: names[0], onDone }));
         }
       }));
+    };
+    run(A, () => {
+      askName("YOUR NAME?", presets?.player, "RED", (name) => {
+        this.save.player.name = name;
+        run(B, () => {
+          askName("RIVAL'S NAME?", presets?.rival, "BLUE", (rival) => {
+            this.save.player.rival = rival;
+            run(C, () => {
+              this.audio?.startMap?.("REDS_HOUSE_2F");
+            });
+          });
+        });
+      });
     });
   }
   pic() {
