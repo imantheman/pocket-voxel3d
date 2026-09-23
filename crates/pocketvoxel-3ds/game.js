@@ -10020,6 +10020,7 @@ class Overworld {
     if (!def)
       throw new Error(`unknown map ${mapId}`);
     this.cameFromMapId = this.map?.id;
+    this.arrivalPending = true;
     this.pendingSeamMusic = null;
     const tileset = this.shell.data.tilesets?.[def.tileset];
     if (!tileset)
@@ -10141,6 +10142,8 @@ class Overworld {
       this.checkTrainerSight();
       scripted = this.runner.isRunning() || this.scriptMoves.length > 0 || this.emote !== undefined || this.engaging;
     }
+    if (!scripted && !this.transitioning)
+      this.arrivalTriggers();
     if (!scripted && !this.transitioning) {
       if (this.freeMoveActive()) {
         this.freeWalk();
@@ -10749,6 +10752,30 @@ GAME is over!`;
     this.startWarpTo(h.map, h.dx, h.dy, p.facing);
     return true;
   }
+  runLandTriggers() {
+    if (this.runner.isRunning())
+      return false;
+    const label3 = this.map?.id ?? "";
+    const script = MAP_SCRIPTS[label3];
+    const host = MAP_SCRIPTS[label3 + "_ONSTEP_HOST"];
+    const rows = script?.onStep?.(this, this.save) ?? host?.onStep?.(this, this.save) ?? this.coordTrigger(script) ?? this.coordTrigger(host);
+    if (!rows)
+      return false;
+    this.runScript(rows);
+    return true;
+  }
+  arrivalPending = false;
+  arrivalTriggers() {
+    if (!this.arrivalPending)
+      return;
+    if (this.transitioning || this.player.moving)
+      return;
+    if (this.runner.isRunning() || this.scriptMoves.length > 0 || this.emote || this.engaging) {
+      return;
+    }
+    this.arrivalPending = false;
+    this.runLandTriggers();
+  }
   onStepComplete() {
     if (this.safariStep())
       return;
@@ -10775,16 +10802,8 @@ wore off.`);
       return;
     if (this.spinnerStep())
       return;
-    if (!this.runner.isRunning()) {
-      const label3 = this.map?.id ?? "";
-      const script = MAP_SCRIPTS[label3];
-      const host = MAP_SCRIPTS[label3 + "_ONSTEP_HOST"];
-      const rows = script?.onStep?.(this, this.save) ?? host?.onStep?.(this, this.save) ?? this.coordTrigger(script) ?? this.coordTrigger(host);
-      if (rows) {
-        this.runScript(rows);
-        return;
-      }
-    }
+    if (this.runLandTriggers())
+      return;
     const p = this.player;
     let entry = this.warpEntryCell;
     if (entry && (p.cellX !== entry.x || p.cellY !== entry.y)) {

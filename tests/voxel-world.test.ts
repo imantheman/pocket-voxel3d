@@ -6947,6 +6947,45 @@ describe("the Route 1 sample man", () => {
   });
 });
 
+describe("a map's own script on arrival", () => {
+  test.skipIf(!hasGen)("the VIRIDIAN MART clerk calls you over as you walk in", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    game.save.flags.EVENT_GOT_STARTER = true;
+
+    // walk in through the city's mart door rather than warping by hand
+    ow.setMap("VIRIDIAN_CITY", 5, 5, "down");
+    const mart = ow.map.def.warps.findIndex((w: any) => w.destMap === "VIRIDIAN_MART");
+    expect(mart).toBeGreaterThanOrEqual(0);
+    const w = ow.map.def.warps[mart];
+    ow.setMap("VIRIDIAN_MART", 3, 7, "down");
+
+    // no step taken: the tile walked in on is enough
+    for (let t = 0; t < 240; t++) game.tick(0);
+    expect(topText(game)).toContain("PALLET TOWN");
+    // and it plays out into the parcel
+    for (let t = 0; t < 4000 && !game.save.flags.EVENT_GOT_OAKS_PARCEL; t++) {
+      game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    expect(game.save.inventory.OAKS_PARCEL).toBe(1);
+    expect(w).toBeDefined();
+  });
+
+  test.skipIf(!hasGen)("a map whose trigger declines is left alone", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    // no starter: the clerk has nothing to say, and nothing else fires
+    game.save.flags.EVENT_GOT_STARTER = false;
+    ow.setMap("VIRIDIAN_MART", 3, 7, "down");
+    for (let t = 0; t < 240; t++) game.tick(0);
+    expect(game.stackKinds()).toEqual(["overworld"]);
+    // and the player can still walk
+    const before = ow.player.cellY;
+    for (let t = 0; t < 40; t++) game.tick(VOX_BTN.up);
+    expect(ow.player.cellY).toBeLessThan(before);
+  });
+});
+
 describe("Silph Co 7F", () => {
   test.skipIf(!hasGen)("the rival waits at the door, and only there", () => {
     const rows = (ow: any, save: any) =>

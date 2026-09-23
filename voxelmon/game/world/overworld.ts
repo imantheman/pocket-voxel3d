@@ -401,6 +401,9 @@ export class Overworld implements ScriptWorld {
     // exit with it (mapscripts.ts seedElevator), so backing out of the
     // panel puts you back on the floor you stepped in from.
     this.cameFromMapId = this.map?.id;
+    // Every entry path lands here (warp, seam, boot), so this is where the
+    // arrival's land-trigger look is armed (arrivalTriggers).
+    this.arrivalPending = true;
     // crossConnection re-arms this right after; clearing here is what keeps a
     // warp or a reload from leaving a stale deferred PlayMapMusic pending
     // (OverworldController.lua:437-439).
@@ -600,6 +603,7 @@ export class Overworld implements ScriptWorld {
         this.runner.isRunning() || this.scriptMoves.length > 0 || this.emote !== undefined ||
         this.engaging;
     }
+    if (!scripted && !this.transitioning) this.arrivalTriggers();
     if (!scripted && !this.transitioning) {
       if (this.freeMoveActive()) {
         this.freeWalk();
@@ -1546,6 +1550,58 @@ export class Overworld implements ScriptWorld {
     return true;
   }
 
+  /**
+   * The map's land-triggers: its onStep hook, or a declarative coord
+   * trigger. True when one ran and owns what happens next.
+   *
+   * Run on a completed step AND on arrival (arrivalTriggers), because most
+   * of these are pokered map-script defaults that fire on map load --
+   * gen1recomp runs them from onEnter -- and the port only ever had a step
+   * to hang them on.
+   */
+  private runLandTriggers(): boolean {
+    if (this.runner.isRunning()) return false;
+    const label = (this as any).map?.id ?? "";
+    const script = (MAP_SCRIPTS as any)[label] as MapScript | undefined;
+    const host = (MAP_SCRIPTS as any)[label + "_ONSTEP_HOST"] as MapScript | undefined;
+    const rows =
+      script?.onStep?.(this, this.save) ??
+      host?.onStep?.(this, this.save) ??
+      this.coordTrigger(script) ??
+      this.coordTrigger(host);
+    if (!rows) return false;
+    this.runScript(rows);
+    return true;
+  }
+
+  /**
+   * A map entered but not yet settled on: the land triggers still owe this
+   * arrival a look, once the door walk-out and the fade are done with.
+   */
+  private arrivalPending = false;
+
+  /**
+   * ViridianMartDefaultScript and its kin run when the map LOADS, not on a
+   * step: the clerk calls you over the moment you are inside. The port hung
+   * them on onStep, so the parcel -- and every event like it -- waited for
+   * a step the player had no reason to take, on a tile that looked like the
+   * event had not fired.
+   *
+   * So: once the arrival has settled (the fade done, the door walk-out
+   * finished, nothing else running), the land triggers get their look at
+   * the tile the player came in on. Idempotent -- each entry arms it once,
+   * and a trigger that declines leaves nothing behind.
+   */
+  private arrivalTriggers(): void {
+    if (!this.arrivalPending) return;
+    if (this.transitioning || this.player.moving) return;
+    if (this.runner.isRunning() || this.scriptMoves.length > 0 || this.emote || this.engaging) {
+      return;
+    }
+    this.arrivalPending = false;
+    this.runLandTriggers();
+  }
+
   onStepComplete(): void {
     // safari_game.asm runs BEFORE the land triggers and the warp check: when
     // the timer runs out the PA takes the step over entirely.
@@ -1578,20 +1634,7 @@ export class Overworld implements ScriptWorld {
     if (this.leagueDontRun()) return;
     if (this.badgeGateStep()) return;
     if (this.spinnerStep()) return;
-    if (!this.runner.isRunning()) {
-      const label = (this as any).map?.id ?? "";
-      const script = (MAP_SCRIPTS as any)[label] as MapScript | undefined;
-      const host = (MAP_SCRIPTS as any)[label + "_ONSTEP_HOST"] as MapScript | undefined;
-      const rows =
-        script?.onStep?.(this, this.save) ??
-        host?.onStep?.(this, this.save) ??
-        this.coordTrigger(script) ??
-        this.coordTrigger(host);
-      if (rows) {
-        this.runScript(rows);
-        return;
-      }
-    }
+    if (this.runLandTriggers()) return;
 
     const p = this.player;
     // The arrival disable is POSITIONAL (issue #265): the cell we warped in
