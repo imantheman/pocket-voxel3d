@@ -136,6 +136,60 @@ function fightOnce(b: WildBattle, input: FakeInput): void {
   settle(b, input);
 }
 
+describe("catching with a full party", () => {
+  /** A wild battle whose next ball catches, with `party` mons already held. */
+  function catchGame(party: number) {
+    const mons = [];
+    for (let i = 0; i < party; i++) mons.push(newMon(data!, "SQUIRTLE", 30));
+    const save = makeSave(mons, { POKE_BALL: 5 });
+    // MAGIKARP at level 3 with a POKe BALL: the shake rolls below are what
+    // make it a catch rather than a break-out.
+    const b = new WildBattle(data!, save, seqRng(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), "MAGIKARP", 3);
+    b.enter();
+    const input = new FakeInput();
+    settle(b, input);
+    return { b, input, save };
+  }
+
+  /** Throw one ball and let the whole chain play out. */
+  function throwOne(b: WildBattle, input: FakeInput) {
+    b.openItems();
+    b.itemIndex = b.itemList.indexOf("POKE_BALL");
+    tick(b, input, ["a"]);
+    for (let i = 0; i < 8000 && !b.finished; i++) tick(b, input, ["a"]);
+  }
+
+  test.skipIf(!hasGen)("puts the caught mon in the PC instead of dropping it", () => {
+    const { b, input, save } = catchGame(6);
+    throwOne(b, input);
+    expect(b.result).toBe("caught");
+    expect(save.party.length).toBe(6); // the party is untouched
+    const boxes = (save as any).boxes as { species: string }[][];
+    expect(boxes).toBeDefined();
+    // it is in a box, and it is the mon that was caught
+    const stored = boxes.flat();
+    expect(stored.length).toBe(1);
+    expect(stored[0]!.species).toBe("MAGIKARP");
+    expect(b.messageLog.join("|")).toContain("someone's PC");
+  });
+
+  test.skipIf(!hasGen)("says BILL's PC once BILL has been met", () => {
+    const { b, input, save } = catchGame(6);
+    (save as any).flags = { EVENT_MET_BILL: true };
+    throwOne(b, input);
+    expect(b.messageLog.join("|")).toContain("BILL's PC");
+  });
+
+  test.skipIf(!hasGen)("still joins the party when there is room", () => {
+    const { b, input, save } = catchGame(3);
+    throwOne(b, input);
+    expect(b.result).toBe("caught");
+    expect(save.party.length).toBe(4);
+    expect(save.party[3]!.species).toBe("MAGIKARP");
+    expect(((save as any).boxes ?? []).flat().length).toBe(0);
+  });
+});
+
 describe("a ball thrown at a trainer's Pokemon", () => {
   test.skipIf(!hasGen)("is blocked, spends the ball and the turn, and catches nothing", () => {
     const save = makeSave([newMon(data!, "SQUIRTLE", 20)], { POKE_BALL: 2 });

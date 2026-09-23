@@ -3103,6 +3103,39 @@ ${name}!`] };
   return { kind: "failed", msgs: [notTime(data, save)] };
 }
 
+// voxelmon/game/pokemon/boxes.ts
+var BOX_COUNT = 12;
+var BOX_CAPACITY = 20;
+function ensure(save) {
+  if (!save.boxes) {
+    save.boxes = [];
+    for (let i = 0;i < BOX_COUNT; i++)
+      save.boxes[i] = [];
+    save.currentBox = 1;
+    if (Array.isArray(save.box)) {
+      for (const mon of save.box)
+        save.boxes[0].push(mon);
+      save.box = null;
+    }
+  }
+  save.currentBox = Math.max(1, Math.min(BOX_COUNT, save.currentBox ?? 1));
+  return save.boxes;
+}
+function active(save) {
+  return ensure(save)[save.currentBox - 1];
+}
+function deposit(save, mon) {
+  const boxes = ensure(save);
+  for (let off = 0;off < BOX_COUNT; off++) {
+    const i = (save.currentBox - 1 + off) % BOX_COUNT;
+    if (boxes[i].length < BOX_CAPACITY) {
+      boxes[i].push(mon);
+      return i + 1;
+    }
+  }
+  return null;
+}
+
 // voxelmon/game/rules/bag.ts
 var DEFAULT_CAPACITY = 20;
 function capacity(data) {
@@ -4787,10 +4820,18 @@ caught!`);
     if (!this.save.pokedex?.owned?.[species])
       this.caughtNewSpecies = species;
     markOwned(this.save, species);
-    if (partyAdd(this.save.party, this.enemy.mon)) {} else {
-      this.sayNext(`${this.enemy.name} was
+    if (!partyAdd(this.save.party, this.enemy.mon)) {
+      const box = deposit(this.save, this.enemy.mon);
+      if (box) {
+        const met = this.save.flags?.EVENT_MET_BILL;
+        const pc = met ? "BILL's PC" : "someone's PC";
+        this.sayNext(`${this.enemy.name} was
 transferred to
-someone's PC!`);
+${pc}!`);
+      } else {
+        this.sayNext(`But every BOX
+is full!`);
+      }
     }
     this.result = "caught";
     this.afterQueue = "finish";
@@ -15922,28 +15963,6 @@ function fishingCatch(data, rod, mapId, rand) {
   return rollFishingGroup(rodPool(data, rod, mapId), rand);
 }
 
-// voxelmon/game/pokemon/boxes.ts
-var BOX_COUNT = 12;
-var BOX_CAPACITY = 20;
-function ensure(save) {
-  if (!save.boxes) {
-    save.boxes = [];
-    for (let i = 0;i < BOX_COUNT; i++)
-      save.boxes[i] = [];
-    save.currentBox = 1;
-    if (Array.isArray(save.box)) {
-      for (const mon of save.box)
-        save.boxes[0].push(mon);
-      save.box = null;
-    }
-  }
-  save.currentBox = Math.max(1, Math.min(BOX_COUNT, save.currentBox ?? 1));
-  return save.boxes;
-}
-function active(save) {
-  return ensure(save)[save.currentBox - 1];
-}
-
 // voxelmon/game/ui/boxscreen.ts
 var ROWS7 = 4;
 var PARTY_MAX2 = 6;
@@ -16245,7 +16264,7 @@ function pcCapacityData(data) {
 function pcOrder(save) {
   return order(pcBag(save));
 }
-function deposit(save, id, qty, data) {
+function deposit2(save, id, qty, data) {
   const have = save.inventory?.[id] ?? 0;
   const n = Math.min(qty, have);
   if (n <= 0)
@@ -16329,7 +16348,7 @@ to toss away?`));
   commit(id, n) {
     const save = this.game.save;
     if (this.action === "deposit") {
-      if (!deposit(save, id, n, this.game.data)) {
+      if (!deposit2(save, id, n, this.game.data)) {
         this.game.showText(this.line("_NoRoomToStoreText", `No room left to
 store items.`));
       }

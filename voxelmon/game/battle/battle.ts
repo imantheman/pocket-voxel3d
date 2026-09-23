@@ -62,6 +62,7 @@ import {
 } from "./effects.ts";
 import { firstHealthy, newMon, partyAdd, markSeen, markOwned, type MoveSlot, type PartyMon } from "./mon.ts";
 import * as Items from "../rules/items.ts";
+import * as Boxes from "../pokemon/boxes.ts";
 import * as Bag from "../rules/bag.ts";
 
 export type BattleResult = "win" | "lose" | "run" | "caught";
@@ -2188,10 +2189,19 @@ export class WildBattle implements EffectBattle {
    */
   caughtNewSpecies: string | null = null;
 
-  /** :4387-4440 storeCaughtMon. DEVIATIONS (v1): no nickname prompt, and with
-   * a full party the mon is NOT stored — the PC transfer text prints and the
-   * mon is lost (the box system is a later rung; item_effects.asm:518-566 is
-   * the reference flow). */
+  /**
+   * :4387-4440 storeCaughtMon: into the party, or into the PC when the
+   * party is full (item_effects.asm:518-566). The text used to say the mon
+   * had gone to someone's PC and then drop it on the floor -- the box
+   * system landed later and nothing came back to connect them.
+   *
+   * The PC is named the way the ROM names it: "someone's PC" until BILL
+   * has been met, and BILL's PC after (_ItemUseBallText07/08). The one
+   * divergence is Boxes.deposit's own: a full box overflows into the next
+   * with room, where the original refuses the catch.
+   *
+   * DEVIATION (v1): still no nickname prompt for a caught mon.
+   */
   storeCaughtMon(): void {
     // BattleState.lua:4451/4465 storeCaughtMon: a caught mon is marked owned
     // (+seen) whether or not it fits the party — the mark precedes the PC
@@ -2200,10 +2210,16 @@ export class WildBattle implements EffectBattle {
     const species = this.enemy.mon.species;
     if (!this.save.pokedex?.owned?.[species]) this.caughtNewSpecies = species;
     markOwned(this.save, species);
-    if (partyAdd(this.save.party, this.enemy.mon)) {
-      // joined the party
-    } else {
-      this.sayNext(`${this.enemy.name} was\ntransferred to\nsomeone's PC!`);
+    if (!partyAdd(this.save.party, this.enemy.mon)) {
+      const box = Boxes.deposit(this.save as never, this.enemy.mon);
+      if (box) {
+        const met = (this.save as { flags?: Record<string, boolean> })
+          .flags?.EVENT_MET_BILL;
+        const pc = met ? "BILL's PC" : "someone's PC";
+        this.sayNext(`${this.enemy.name} was\ntransferred to\n${pc}!`);
+      } else {
+        this.sayNext("But every BOX\nis full!");
+      }
     }
     this.result = "caught";
     this.afterQueue = "finish";
