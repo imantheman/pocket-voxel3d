@@ -51,29 +51,77 @@ export function coinClerkRows(): ScriptRow[] {
   ];
 }
 
+/** One of the three people on the floor who hand out coins. */
+export interface CoinGiver {
+  flag: string;
+  amount: number;
+  ask: string;
+  received: string;
+  /** Has9990Coins: their own "you have plenty" line. */
+  full: string;
+  /** Asked again. */
+  already: string;
+}
+
 /**
- * The gambler by the machines (GameCornerClerk2Text) hands over 20 coins,
- * once. He needs them himself after that.
+ * The three coin giveaways on the floor (GameCornerFishingGuruText,
+ * GameCornerClerk2Text, GameCornerGentlemanText; gen1recomp flavor/
+ * game_corner.lua coinGiver), each once: the line, then the checks in the
+ * asm's order -- no COIN CASE ("Oops! Forgot the COIN CASE!"), Has9990Coins
+ * with their own excuse -- and only then the coins and the flag.
+ *
+ * The gentleman's asm tests Has9990Coins with `jr z`, the exact-9990 case
+ * only; the reference ports all three as >= 9990 and so does this.
  */
-export function coinGiftRows(): ScriptRow[] {
+export function coinGiverRows(g: CoinGiver): ScriptRow[] {
   return [
     ["face_player"],
-    ["check_flag", "EVENT_GOT_20_COINS"],
+    ["check_flag", g.flag],
     ["jump_if_true", "already"],
+    ["show_text", g.ask],
     ["check_item", "COIN_CASE"],
     ["jump_if_false", "nocase"],
-    ["show_text", "_GameCornerClerk2WantSomeCoinsText"],
-    ["give_coins", 20],
-    ["show_text", "_GameCornerClerk2Received20CoinsText"],
-    ["set_flag", "EVENT_GOT_20_COINS"],
+    ["check_coins_below", COIN_SALE_LIMIT],
+    ["jump_if_false", "full"],
+    ["give_coins", g.amount],
+    ["set_flag", g.flag],
+    ["show_text", g.received],
     ["jump", "end"],
     ["label", "already"],
-    ["show_text", "_GameCornerClerk2INeedMoreCoinsText"],
+    ["show_text", g.already],
     ["jump", "end"],
     ["label", "nocase"],
-    ["show_text", "_GameCornerClerk1DontHaveCoinCaseText"],
+    ["show_text", "_GameCornerOopsForgotCoinCaseText"],
+    ["jump", "end"],
+    ["label", "full"],
+    ["show_text", g.full],
   ];
 }
+
+/** scripts/GameCorner.asm: who gives what, under which event. */
+export const COIN_GIVERS: Record<"FISHING_GURU" | "CLERK2" | "GENTLEMAN", CoinGiver> = {
+  FISHING_GURU: {
+    flag: "EVENT_GOT_10_COINS", amount: 10,
+    ask: "_GameCornerFishingGuruWantToPlayText",
+    received: "_GameCornerFishingGuruReceived10CoinsText",
+    full: "_GameCornerFishingGuruDontNeedMyCoinsText",
+    already: "_GameCornerFishingGuruWinsComeAndGoText",
+  },
+  CLERK2: {
+    flag: "EVENT_GOT_20_COINS_2", amount: 20,
+    ask: "_GameCornerClerk2WantSomeCoinsText",
+    received: "_GameCornerClerk2Received20CoinsText",
+    full: "_GameCornerClerk2YouHaveLotsOfCoinsText",
+    already: "_GameCornerClerk2INeedMoreCoinsText",
+  },
+  GENTLEMAN: {
+    flag: "EVENT_GOT_20_COINS", amount: 20,
+    ask: "_GameCornerGentlemanThrowingMeOffText",
+    received: "_GameCornerGentlemanReceived20CoinsText",
+    full: "_GameCornerGentlemanYouGotYourOwnCoinsText",
+    already: "_GameCornerGentlemanCloselyWatchTheReelsText",
+  },
+};
 
 export interface PrizeEntry {
   kind: "mon" | "item";

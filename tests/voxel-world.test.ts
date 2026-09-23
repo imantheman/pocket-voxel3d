@@ -1291,6 +1291,38 @@ describe("the game corner", () => {
     expect(game.save.coins).toBe(20);
   });
 
+  test.skipIf(!hasGen)("the guru and the gentleman give coins once too, each under its own event", () => {
+    const ALL = ["TEXT_GAMECORNER_FISHING_GURU", "TEXT_GAMECORNER_CLERK2", "TEXT_GAMECORNER_GENTLEMAN"];
+    const game = gcGame();
+    // no case yet: "Oops!" from all three, and nothing given
+    for (const key of ALL) {
+      talkAt(game, "GAME_CORNER", key);
+      expect(game.save.coins ?? 0, key).toBe(0);
+    }
+    game.save.inventory.COIN_CASE = 1;
+    talkAt(game, "GAME_CORNER", "TEXT_GAMECORNER_FISHING_GURU");
+    expect(game.save.coins).toBe(10);
+    expect(game.save.flags.EVENT_GOT_10_COINS).toBe(true);
+    talkAt(game, "GAME_CORNER", "TEXT_GAMECORNER_GENTLEMAN");
+    expect(game.save.coins).toBe(30);
+    expect(game.save.flags.EVENT_GOT_20_COINS).toBe(true);
+    talkAt(game, "GAME_CORNER", "TEXT_GAMECORNER_CLERK2");
+    expect(game.save.coins).toBe(50);
+    expect(game.save.flags.EVENT_GOT_20_COINS_2).toBe(true);
+    // asked again, each has an excuse and no coins
+    for (const key of ALL) {
+      talkAt(game, "GAME_CORNER", key);
+      expect(game.save.coins, key).toBe(50);
+    }
+    // a case at Has9990Coins is turned down, and the gift kept for later
+    const rich = gcGame();
+    rich.save.inventory.COIN_CASE = 1;
+    rich.save.coins = 9990;
+    talkAt(rich, "GAME_CORNER", "TEXT_GAMECORNER_FISHING_GURU");
+    expect(rich.save.coins).toBe(9990);
+    expect(rich.save.flags.EVENT_GOT_10_COINS ?? false).toBe(false);
+  });
+
   test.skipIf(!hasGen)("a prize counter needs the case, then opens its own window", () => {
     const game = gcGame();
     // no case: the window never opens at all

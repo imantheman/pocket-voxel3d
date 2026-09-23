@@ -19,7 +19,7 @@
 
 import type { ScriptRow } from "./script.ts";
 import type { Dir } from "./collision.ts";
-import { coinClerkRows, coinGiftRows, prizeCounterRows } from "./gamecorner.ts";
+import { COIN_GIVERS, coinClerkRows, coinGiverRows, prizeCounterRows } from "./gamecorner.ts";
 import { floorsOf, seedExit } from "./elevator.ts";
 import { SAFARI_JOIN_CELLS, safariJoinRows, safariLeavingRows } from "./safari.ts";
 import { thirstyGirlRows, vendingRows } from "./vending.ts";
@@ -2332,7 +2332,9 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
       // counter and the gambler's one-off 20.
       TEXT_GAMECORNER_CLERK1: coinClerkRows(),
       TEXT_GAMECORNER_CLERK: coinClerkRows(), // Yellow spells him CLERK
-      TEXT_GAMECORNER_CLERK2: coinGiftRows(),
+      TEXT_GAMECORNER_CLERK2: coinGiverRows(COIN_GIVERS.CLERK2),
+      TEXT_GAMECORNER_FISHING_GURU: coinGiverRows(COIN_GIVERS.FISHING_GURU),
+      TEXT_GAMECORNER_GENTLEMAN: coinGiverRows(COIN_GIVERS.GENTLEMAN),
       TEXT_GAMECORNER_ROCKET: [
         ["engage_trainer", "GAMECORNER_ROCKET"],
         ["jump_if_false", "end"],

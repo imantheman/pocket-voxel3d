@@ -6686,25 +6686,56 @@ function coinClerkRows() {
     ["show_text", "_GameCornerClerk1CantAffordTheCoinsText"]
   ];
 }
-function coinGiftRows() {
+function coinGiverRows(g) {
   return [
     ["face_player"],
-    ["check_flag", "EVENT_GOT_20_COINS"],
+    ["check_flag", g.flag],
     ["jump_if_true", "already"],
+    ["show_text", g.ask],
     ["check_item", "COIN_CASE"],
     ["jump_if_false", "nocase"],
-    ["show_text", "_GameCornerClerk2WantSomeCoinsText"],
-    ["give_coins", 20],
-    ["show_text", "_GameCornerClerk2Received20CoinsText"],
-    ["set_flag", "EVENT_GOT_20_COINS"],
+    ["check_coins_below", COIN_SALE_LIMIT],
+    ["jump_if_false", "full"],
+    ["give_coins", g.amount],
+    ["set_flag", g.flag],
+    ["show_text", g.received],
     ["jump", "end"],
     ["label", "already"],
-    ["show_text", "_GameCornerClerk2INeedMoreCoinsText"],
+    ["show_text", g.already],
     ["jump", "end"],
     ["label", "nocase"],
-    ["show_text", "_GameCornerClerk1DontHaveCoinCaseText"]
+    ["show_text", "_GameCornerOopsForgotCoinCaseText"],
+    ["jump", "end"],
+    ["label", "full"],
+    ["show_text", g.full]
   ];
 }
+var COIN_GIVERS = {
+  FISHING_GURU: {
+    flag: "EVENT_GOT_10_COINS",
+    amount: 10,
+    ask: "_GameCornerFishingGuruWantToPlayText",
+    received: "_GameCornerFishingGuruReceived10CoinsText",
+    full: "_GameCornerFishingGuruDontNeedMyCoinsText",
+    already: "_GameCornerFishingGuruWinsComeAndGoText"
+  },
+  CLERK2: {
+    flag: "EVENT_GOT_20_COINS_2",
+    amount: 20,
+    ask: "_GameCornerClerk2WantSomeCoinsText",
+    received: "_GameCornerClerk2Received20CoinsText",
+    full: "_GameCornerClerk2YouHaveLotsOfCoinsText",
+    already: "_GameCornerClerk2INeedMoreCoinsText"
+  },
+  GENTLEMAN: {
+    flag: "EVENT_GOT_20_COINS",
+    amount: 20,
+    ask: "_GameCornerGentlemanThrowingMeOffText",
+    received: "_GameCornerGentlemanReceived20CoinsText",
+    full: "_GameCornerGentlemanYouGotYourOwnCoinsText",
+    already: "_GameCornerGentlemanCloselyWatchTheReelsText"
+  }
+};
 var PRIZE_WINDOWS = [
   [
     { kind: "mon", species: "ABRA", level: 9, cost: 180 },
@@ -8562,7 +8593,9 @@ Here, you can\vhave this TM.`,
       ],
       TEXT_GAMECORNER_CLERK1: coinClerkRows(),
       TEXT_GAMECORNER_CLERK: coinClerkRows(),
-      TEXT_GAMECORNER_CLERK2: coinGiftRows(),
+      TEXT_GAMECORNER_CLERK2: coinGiverRows(COIN_GIVERS.CLERK2),
+      TEXT_GAMECORNER_FISHING_GURU: coinGiverRows(COIN_GIVERS.FISHING_GURU),
+      TEXT_GAMECORNER_GENTLEMAN: coinGiverRows(COIN_GIVERS.GENTLEMAN),
       TEXT_GAMECORNER_ROCKET: [
         ["engage_trainer", "GAMECORNER_ROCKET"],
         ["jump_if_false", "end"],
