@@ -212,7 +212,9 @@ export function desiredCards(
     !battle.enemyHidden &&
     battle.result !== "caught"
   ) {
-    const pic = picPageFor(data, battle.enemy.mon.species);
+    // The disguise swaps the pic with the name: battle/front/ghost, cooked
+    // into every pak alongside the species pics and named GHOST by the cook.
+    const pic = picPageFor(data, battle.disguised ? "GHOST" : battle.enemy.mon.species);
     const fx = cardFx(anims, SIDE_ENEMY, towardPlayerX, towardPlayerZ);
     if (pic >= 0 && !fx.hidden) {
       out.push({ side: SIDE_ENEMY, pic, x: ex, y: ey, dx: fx.dx, dy: fx.dy, dz: fx.dz });

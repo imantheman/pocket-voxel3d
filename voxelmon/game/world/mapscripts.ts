@@ -2397,7 +2397,11 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
       const hasScope = (save?.inventory?.SILPH_SCOPE ?? 0) > 0;
       return [
         ["show_text", "_PokemonTower6FBeGoneText"],
-        ["start_battle", "wild", "MAROWAK", 30, { noCatch: true, disguised: !hasScope }],
+        // Without the scope it is the GHOST and cannot be fought; with it
+        // the fight still opens on the GHOST, and the scope unveils it
+        // (PrintBeginningBattleText .isMarowak).
+        ["start_battle", "wild", "MAROWAK", 30,
+          { noCatch: true, disguised: !hasScope, unveil: hasScope }],
         // lastCheck is the win. Losing blacks out and running leaves the
         // player on the trigger tile, which re-fires next step — vanilla
         // nudges them one tile clear instead (.did_not_defeat).

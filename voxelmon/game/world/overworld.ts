@@ -2498,7 +2498,7 @@ export class Overworld implements ScriptWorld {
   startWildBattle(
     species: string,
     level: number,
-    opts?: { noCatch?: boolean; disguised?: boolean },
+    opts?: { noCatch?: boolean; disguised?: boolean; unveil?: boolean },
     onDone?: (result: string | null) => void,
   ): void {
     const self = this as any;

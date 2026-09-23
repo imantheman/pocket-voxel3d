@@ -287,9 +287,39 @@ export class WildBattle implements EffectBattle {
   noCatch = false;
 
   /** The enemy is the GHOST the SILPH SCOPE has not identified yet
-   * (core.asm:6698-6700 InitWildBattle). Gates the name shown and the
-   * "can't be ID'd" refusal; the scope buys the unveil, not the battle. */
+   * (core.asm:6698-6700 InitWildBattle). Gates the name shown, the pic, the
+   * "too scared to move" turn and the ghost's own "Get out..." turn; the
+   * scope buys the unveil, not the battle. */
   disguised = false;
+  /** What the disguise covers, put back when the scope unveils it. */
+  ghostRealName = "";
+  /**
+   * The RESTLESS SOUL with the SILPH SCOPE in the bag. Mechanically not a
+   * ghost battle at all -- IsGhostBattle returns false the moment the scope
+   * is carried -- but InitWildBattle still enters disguised, and taking the
+   * disguise off is PrintBeginningBattleText .isMarowak's job: the unveil
+   * line, then the real name. The disguise is dropped in the intro.
+   */
+  scopeReveal = false;
+  /** A rod's catch: "The hooked X attacked!" rather than "appeared". */
+  hooked = false;
+
+  /**
+   * Pokemon Tower ghosts (core.asm InitWildBattle .isGhost): the disguise
+   * swaps only the name and the pic -- the species underneath is real, so
+   * stats and the SGB palette stay the disguised mon's.
+   */
+  makeGhost(): void {
+    this.disguised = true;
+    this.ghostRealName = this.enemy.name;
+    this.enemy.name = "GHOST";
+  }
+
+  /** The 6F MAROWAK with the scope carried: disguised for the intro only. */
+  makeUnveiledGhost(): void {
+    this.makeGhost();
+    this.scopeReveal = true;
+  }
 
   // BATTLE_TYPE_OLD_MAN demo state (BattleState.lua:806-835, :2160-2210). The
   // Viridian catch tutorial: no player mon acts, the old man auto-throws one
@@ -817,8 +847,34 @@ export class WildBattle implements EffectBattle {
   /** The enemy-appears line. Wild: "X appeared!" with its cry. Trainers
    * override this for "TRAINER sent out X!" (common_text.asm). */
   enemyIntro(): void {
+    if (this.disguised) {
+      // A ghost gets no cry (common_text.asm:43-48), and is not "seen":
+      // nothing was identified.
+      this.say("The GHOST\nappeared!");
+      if (this.scopeReveal) {
+        // .isMarowak: the unveil line over the disguise, then the real
+        // name and pic, then the ordinary appeared line under it.
+        this.say(ghostText(this.data, "_UnveiledGhostText",
+          "SILPH SCOPE\nunveiled the\nGHOST's identity!"));
+        this.act(() => {
+          this.disguised = false;
+          this.enemy.name = this.ghostRealName;
+          markSeen(this.save, this.enemy.mon.species);
+          this.audioCues.push(`cry:${this.enemy.mon.species}`);
+        });
+        this.say(`Wild ${this.ghostRealName}\nappeared!`);
+      }
+      return;
+    }
     markSeen(this.save, this.enemy.mon.species); // BattleState.lua:596 — wild mon appears -> seen
     this.act(() => this.audioCues.push(`cry:${this.enemy.mon.species}`));
+    if (this.hooked) {
+      // _HookedMonAttackedText: a bite is an attack, not an appearance.
+      this.say(ghostText(this.data, "_HookedMonAttackedText",
+        "The hooked\n{RAM:wEnemyMonNick}\nattacked!")
+        .replace("{RAM:wEnemyMonNick}", this.enemy.name));
+      return;
+    }
     this.say(`Wild ${this.enemy.name}\nappeared!`);
   }
 
@@ -1312,13 +1368,20 @@ export class WildBattle implements EffectBattle {
     // from or ended with a POKE DOLL. The scope does not win the fight, it
     // unveils the MAROWAK so an ordinary one can be had.
     //
-    // Only the PLAYER is frozen: the ghost still attacks, which is what makes
-    // standing there costly.
+    // Nobody moves. ExecuteEnemyMove opens with the same PrintGhostText the
+    // player's side does (core.asm:5462-5463), and on the ghost's turn it
+    // prints GetOutText and returns: the GHOST never attacks either. What
+    // makes standing there costly is only that nothing can end it but
+    // running.
     if (this.disguised && user === this.player) {
       this.sayAuto(
         ghostText(this.data, "_ScaredText", "{RAM:wBattleMonNick} is too\nscared to move!")
           .replace("{RAM:wBattleMonNick}", user.name),
       );
+      return;
+    }
+    if (this.disguised && user === this.enemy) {
+      this.sayAuto(ghostText(this.data, "_GetOutText", "GHOST: Get out...\nGet out..."));
       return;
     }
 

@@ -385,7 +385,7 @@ function* start_battle(ctx: ScriptContext, ...args: unknown[]): Generator<void, 
   // which leaves wBattleResult untouched and so reads as a defeat
   // (PokemonTower6FMarowakBattleScript's "and a / jr nz").
   if (kind === "wild" && w.startWildBattle) {
-    const wopts = opts as { noCatch?: boolean; disguised?: boolean };
+    const wopts = opts as { noCatch?: boolean; disguised?: boolean; unveil?: boolean };
     w.startWildBattle(id, idx, wopts, (result: string | null) => {
       ctx.lastCheck = result === "win";
       runner.resume();

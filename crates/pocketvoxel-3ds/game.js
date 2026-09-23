@@ -2895,6 +2895,18 @@ class WildBattle {
   lastBall = null;
   noCatch = false;
   disguised = false;
+  ghostRealName = "";
+  scopeReveal = false;
+  hooked = false;
+  makeGhost() {
+    this.disguised = true;
+    this.ghostRealName = this.enemy.name;
+    this.enemy.name = "GHOST";
+  }
+  makeUnveiledGhost() {
+    this.makeGhost();
+    this.scopeReveal = true;
+  }
   demo = false;
   demoName = "OLD MAN";
   demoFails = false;
@@ -3285,8 +3297,32 @@ out!`);
     this.afterQueue = "menu";
   }
   enemyIntro() {
+    if (this.disguised) {
+      this.say(`The GHOST
+appeared!`);
+      if (this.scopeReveal) {
+        this.say(ghostText(this.data, "_UnveiledGhostText", `SILPH SCOPE
+unveiled the
+GHOST's identity!`));
+        this.act(() => {
+          this.disguised = false;
+          this.enemy.name = this.ghostRealName;
+          markSeen(this.save, this.enemy.mon.species);
+          this.audioCues.push(`cry:${this.enemy.mon.species}`);
+        });
+        this.say(`Wild ${this.ghostRealName}
+appeared!`);
+      }
+      return;
+    }
     markSeen(this.save, this.enemy.mon.species);
     this.act(() => this.audioCues.push(`cry:${this.enemy.mon.species}`));
+    if (this.hooked) {
+      this.say(ghostText(this.data, "_HookedMonAttackedText", `The hooked
+{RAM:wEnemyMonNick}
+attacked!`).replace("{RAM:wEnemyMonNick}", this.enemy.name));
+      return;
+    }
     this.say(`Wild ${this.enemy.name}
 appeared!`);
   }
@@ -3677,6 +3713,11 @@ this move!`);
     if (this.disguised && user === this.player) {
       this.sayAuto(ghostText(this.data, "_ScaredText", `{RAM:wBattleMonNick} is too
 scared to move!`).replace("{RAM:wBattleMonNick}", user.name));
+      return;
+    }
+    if (this.disguised && user === this.enemy) {
+      this.sayAuto(ghostText(this.data, "_GetOutText", `GHOST: Get out...
+Get out...`));
       return;
     }
     user.boundTurns = target.trappingTurns !== undefined ? Math.max(1, target.trappingTurns) : undefined;
@@ -4792,7 +4833,7 @@ function desiredCards(data, battle, staging) {
   const fainting = (side) => anims.some((a) => a.side === side && a.kind === "faint");
   const [towardPlayerX, towardPlayerZ] = towardCell([ex, ey], [px2, py]);
   if (battle.enemy && (!battle.enemy.fainted || fainting(SIDE_ENEMY)) && !battle.enemyHidden && battle.result !== "caught") {
-    const pic = picPageFor(data, battle.enemy.mon.species);
+    const pic = picPageFor(data, battle.disguised ? "GHOST" : battle.enemy.mon.species);
     const fx = cardFx(anims, SIDE_ENEMY, towardPlayerX, towardPlayerZ);
     if (pic >= 0 && !fx.hidden) {
       out.push({ side: SIDE_ENEMY, pic, x: ex, y: ey, dx: fx.dx, dy: fx.dy, dz: fx.dz });
@@ -7766,7 +7807,13 @@ var MAP_SCRIPTS = {
       const hasScope = (save?.inventory?.SILPH_SCOPE ?? 0) > 0;
       return [
         ["show_text", "_PokemonTower6FBeGoneText"],
-        ["start_battle", "wild", "MAROWAK", 30, { noCatch: true, disguised: !hasScope }],
+        [
+          "start_battle",
+          "wild",
+          "MAROWAK",
+          30,
+          { noCatch: true, disguised: !hasScope, unveil: hasScope }
+        ],
         ["jump_if_false", "fled"],
         ["set_flag", "EVENT_BEAT_GHOST_MAROWAK"],
         ["show_text", "_PokemonTower6FGhostWasCubonesMotherText"],
@@ -15193,6 +15240,11 @@ function fishingCatch(data, rod, mapId, rand) {
   return rollFishingGroup(rodPool(data, rod, mapId), rand);
 }
 
+// voxelmon/game/world/ghost.ts
+function isGhostMap(mapId) {
+  return typeof mapId === "string" && mapId.startsWith("POKEMON_TOWER");
+}
+
 // voxelmon/game/pokemon/boxes.ts
 var BOX_COUNT = 12;
 var BOX_CAPACITY = 20;
@@ -16713,7 +16765,11 @@ ${mname}!`);
       this.push(new BattleGameState(this, species, level, new SafariBattle(this.data, this.save, this.battleRng, species, level, safari)));
       return;
     }
-    this.push(new BattleGameState(this, species, level));
+    const battle = new WildBattle(this.data, this.save, this.battleRng, species, level);
+    if (isGhostMap(this.overworld.map.id) && !(this.save.inventory?.SILPH_SCOPE > 0)) {
+      battle.makeGhost();
+    }
+    this.push(new BattleGameState(this, species, level, battle));
   }
   uiBox() {
     for (let i = this.stack.length - 1;i >= 0; i--) {
@@ -17005,7 +17061,7 @@ even near water.`);
       }
       this.showText(line("_ItsABiteText", `Oh!
 It's a bite!`), () => {
-        this.startWildBattle(hooked.species, hooked.level);
+        this.startWildBattle(hooked.species, hooked.level, { hooked: true });
       });
     });
   }
@@ -17509,7 +17565,11 @@ ${name}!`, () => {
   startWildBattle(species, level, opts, onDone) {
     const battle = new WildBattle(this.data, this.save, this.battleRng, species, level);
     battle.noCatch = opts?.noCatch === true;
-    battle.disguised = opts?.disguised === true;
+    if (opts?.disguised)
+      battle.makeGhost();
+    else if (opts?.unveil)
+      battle.makeUnveiledGhost();
+    battle.hooked = opts?.hooked === true;
     const st = new BattleGameState(this, species, level, battle);
     st.onDone = () => onDone?.(battle.finished);
     this.push(st);

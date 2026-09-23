@@ -135,6 +135,57 @@ function fightOnce(b: WildBattle, input: FakeInput): void {
   settle(b, input);
 }
 
+describe("the Pokemon Tower's GHOST", () => {
+  /** A wild battle built by hand so the disguise can go on before enter(). */
+  function ghostBattle(species: string, setup: (b: WildBattle) => void) {
+    const save = makeSave([newMon(data!, "SQUIRTLE", 5)]);
+    const b = new WildBattle(data!, save, seqRng(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+      species, 20);
+    setup(b);
+    b.enter();
+    const input = new FakeInput();
+    settle(b, input);
+    return { b, input };
+  }
+
+  test.skipIf(!hasGen)("nobody moves: you are too scared, and it only says get out", () => {
+    const { b, input } = ghostBattle("GASTLY", (b) => b.makeGhost());
+    expect(b.disguised).toBe(true);
+    expect(b.enemy.name).toBe("GHOST");
+    expect(b.messageLog[0]).toBe("The GHOST\nappeared!");
+    const hpBefore = b.player.mon.hp;
+    fightOnce(b, input);
+    // core.asm PrintGhostText on both turns: ScaredText for the player,
+    // GetOutText for the ghost. No move lands either way.
+    expect(b.messageLog).toContain("SQUIRTLE is too\nscared to move!");
+    expect(b.messageLog).toContain("GHOST: Get out...\nGet out...");
+    expect(b.messageLog.some((m) => m.includes("used"))).toBe(false);
+    expect(b.player.mon.hp).toBe(hpBefore);
+    expect(b.enemy.mon.hp).toBe(b.enemy.mon.stats.hp);
+    expect(b.phase).toBe("menu");
+  });
+
+  test.skipIf(!hasGen)("with the scope the MAROWAK enters as the GHOST and is unveiled", () => {
+    const { b } = ghostBattle("MAROWAK", (b) => b.makeUnveiledGhost());
+    // PrintBeginningBattleText .isMarowak: the ghost line, the unveil, then
+    // the real name -- and the disguise is gone before the first turn.
+    expect(b.messageLog[0]).toBe("The GHOST\nappeared!");
+    expect(b.messageLog.some((m) => m.includes("unveiled"))).toBe(true);
+    expect(b.messageLog).toContain("Wild MAROWAK\nappeared!");
+    expect(b.disguised).toBe(false);
+    expect(b.enemy.name).toBe("MAROWAK");
+  });
+
+  test.skipIf(!hasGen)("a hooked mon attacks rather than appears", () => {
+    const { b } = ghostBattle("MAGIKARP", (b) => { b.hooked = true; });
+    // the extracted line keeps its own scroll control between the name and
+    // "attacked!", so it is matched by its halves
+    expect(b.messageLog[0]?.startsWith("The hooked\nMAGIKARP")).toBe(true);
+    expect(b.messageLog[0]?.endsWith("attacked!")).toBe(true);
+    expect(b.disguised).toBe(false);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Layer 1 — HP bar tile math (HudTiles.drawHPBar + Timing.hpBarPixels)
 // ---------------------------------------------------------------------------

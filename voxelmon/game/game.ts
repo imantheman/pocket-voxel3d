@@ -82,6 +82,7 @@ import { PartyState } from "./ui/partyscreen.ts";
 import { ShopState } from "./ui/shopscreen.ts";
 import { VENDING_DRINKS } from "./world/vending.ts";
 import { fishingCatch, isRod } from "./world/fishing.ts";
+import { isGhostMap } from "./world/ghost.ts";
 import { BoxState } from "./ui/boxscreen.ts";
 import { PcState } from "./ui/pcscreen.ts";
 import { PokedexState } from "./ui/pokedexscreen.ts";
@@ -909,7 +910,14 @@ export class VoxelmonGame implements OverworldShell, SceneView {
         new SafariBattle(this.data, this.save, this.battleRng, species, level, safari)));
       return;
     }
-    this.push(new BattleGameState(this, species, level));
+    const battle = new WildBattle(this.data, this.save, this.battleRng, species, level);
+    // IsGhostBattle (core.asm): in the Pokemon Tower without the SILPH SCOPE
+    // every wild mon is the GHOST -- unidentifiable, unfightable, only fled.
+    // The scope in the bag is all it takes to see them.
+    if (isGhostMap(this.overworld.map.id) && !(this.save.inventory?.SILPH_SCOPE > 0)) {
+      battle.makeGhost();
+    }
+    this.push(new BattleGameState(this, species, level, battle));
   }
 
   // SceneView -----------------------------------------------------------
@@ -1281,7 +1289,7 @@ export class VoxelmonGame implements OverworldShell, SceneView {
         return;
       }
       this.showText(line("_ItsABiteText", "Oh!\nIt's a bite!"), () => {
-        this.startWildBattle(hooked.species, hooked.level);
+        this.startWildBattle(hooked.species, hooked.level, { hooked: true });
       });
     });
   }
@@ -2042,12 +2050,14 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   startWildBattle(
     species: string,
     level: number,
-    opts?: { noCatch?: boolean; disguised?: boolean },
+    opts?: { noCatch?: boolean; disguised?: boolean; unveil?: boolean; hooked?: boolean },
     onDone?: (result: BattleResult | null) => void,
   ): void {
     const battle = new WildBattle(this.data, this.save, this.battleRng, species, level);
     battle.noCatch = opts?.noCatch === true;
-    battle.disguised = opts?.disguised === true;
+    if (opts?.disguised) battle.makeGhost();
+    else if (opts?.unveil) battle.makeUnveiledGhost();
+    battle.hooked = opts?.hooked === true;
     const st = new BattleGameState(this, species, level, battle);
     st.onDone = () => onDone?.(battle.finished);
     this.push(st);

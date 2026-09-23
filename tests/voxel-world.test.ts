@@ -6211,6 +6211,47 @@ function takeTheGift(game: VoxelmonGame, maxTicks = 2000): void {
   game.tick(0);
 }
 
+describe("the Pokemon Tower without the SILPH SCOPE", () => {
+  /** The wild battle the grass would open on this map, as built. */
+  function wildOn(map: string, inventory: Record<string, number>) {
+    const game = makeMenuGame();
+    game.overworld.setMap(map, 5, 5, "down");
+    Object.assign(game.save.inventory, inventory);
+    game.pushStubBattle("GASTLY", 20);
+    return (game.battleView() as { battle: any } | null)?.battle;
+  }
+
+  test.skipIf(!hasGen)("every tower encounter is the GHOST until the scope is carried", () => {
+    expect(wildOn("POKEMON_TOWER_3F", {})?.disguised).toBe(true);
+    expect(wildOn("POKEMON_TOWER_3F", {})?.enemy?.name).toBe("GHOST");
+    expect(wildOn("POKEMON_TOWER_3F", { SILPH_SCOPE: 1 })?.disguised).toBe(false);
+    expect(wildOn("POKEMON_TOWER_3F", { SILPH_SCOPE: 1 })?.enemy?.name).toBe("GASTLY");
+    // and nowhere else
+    expect(wildOn("ROUTE_1", {})?.disguised).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("the 6F MAROWAK is unveiled by the scope, not skipped by it", () => {
+    const step = (MAP_SCRIPTS as any).POKEMON_TOWER_6F.onStep;
+    const rowsFor = (inventory: Record<string, number>) =>
+      step({ player: { cellX: 10, cellY: 16, facing: "up" } },
+           { flags: {}, inventory }) as ScriptRow[] | null;
+    const without = rowsFor({})!.find((r) => r[0] === "start_battle")!;
+    const withScope = rowsFor({ SILPH_SCOPE: 1 })!.find((r) => r[0] === "start_battle")!;
+    expect(without[4]).toEqual({ noCatch: true, disguised: true, unveil: false });
+    expect(withScope[4]).toEqual({ noCatch: true, disguised: false, unveil: true });
+  });
+
+  test.skipIf(!hasGen)("the GHOST has a pic of its own in the cooked atlas", () => {
+    // battle/front/ghost is cooked with the species pics, so the page sits
+    // in every pak at the same index the dataset names.
+    const shipped = JSON.parse(readFileSync(join(root, "dist/voxelmon/paks/gamedata.json"), "utf8"));
+    const pf = shipped.atlas.picFront;
+    expect(typeof pf.GHOST).toBe("number");
+    expect(pf.GHOST).toBe(pf.GEODUDE + 1); // sorted between geodude and gloom
+    expect(pf.GHOST).toBe(pf.GLOOM - 1);
+  });
+});
+
 describe("Silph Co 7F", () => {
   test.skipIf(!hasGen)("the rival waits at the door, and only there", () => {
     const rows = (ow: any, save: any) =>

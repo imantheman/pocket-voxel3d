@@ -298,6 +298,11 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
     const key = path.replace(/^assets\/generated\//, "").replace(/\.png$/, "");
     return byKey.get(key);
   };
+  // The Pokemon Tower's GHOST is a front pic with no species: the page is
+  // cooked with the rest of battle/front/*, and the battle staging asks for
+  // it by this name while the SILPH SCOPE has not identified the mon.
+  const ghost = frontPageByKey.get("battle/front/ghost");
+  if (ghost !== undefined) frontIndex.GHOST = ghost;
   for (const [id, def] of Object.entries(gen.pokemon)) {
     const front = pageForPath(frontPageByKey, def.spriteFront as string | undefined);
     if (front !== undefined) {
