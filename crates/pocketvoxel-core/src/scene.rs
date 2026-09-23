@@ -299,7 +299,8 @@ pub struct Pic {
     pub h: i16,
 }
 
-pub const PICS_MAX: usize = 4;
+/// One per party member: the party menu puts every icon on this layer.
+pub const PICS_MAX: usize = 6;
 
 /// One sprite drawn on the Kanto Gear companion (bottom screen) surface: a
 /// whole atlas `page` scaled into a rect, in the bottom screen's native

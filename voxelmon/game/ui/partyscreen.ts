@@ -3,6 +3,7 @@
 // StatusScreen2). Reads save.party directly — the same party_struct the
 // battle port already renders in battle/ui.ts.
 import type { GameState } from "../game.ts";
+import { expForLevel } from "../rules/growth.ts";
 import type { PartyMon } from "../battle/mon.ts";
 
 interface PartyGame {
@@ -23,6 +24,8 @@ export interface PartyEntry {
   hp: number;
   maxHp: number;
   status: string | null;
+  /** The species id, for the icon nook's pic. */
+  species: string;
 }
 
 export interface PartyView {
@@ -35,6 +38,17 @@ export interface PartyView {
    * CANCEL — the renderer (scene.ts) draws exactly this list, so the box
    * only needs to grow/shrink with it, never guess at its contents. */
   submenuItems: string[];
+  /** The line in the bottom box: what this screen was opened FOR
+   * (PartyMenuNormalText / PartyMenuSwapMonText / PartyMenuItemUseText). */
+  prompt: string;
+}
+
+/** The status screen's pic: seven cells from (1,0) (status_screen.asm:170). */
+export const SUMMARY_PIC_CELL = { x: 1, y: 0, w: 7, h: 7 } as const;
+
+/** A party entry's icon nook: two cells at column 1 on the entry's rows. */
+export function partyIconCell(i: number): { x: number; y: number; w: number; h: number } {
+  return { x: 1, y: i * 2, w: 2, h: 2 };
 }
 
 /** The two field moves this port wires up outside battle (PartyMenu.lua's
@@ -61,8 +75,22 @@ export class PartyState implements GameState {
    */
   constructor(
     private game: PartyGame,
-    private opts?: { onPick?: (index: number) => void; onCancel?: () => void },
+    private opts?: {
+      onPick?: (index: number) => void;
+      onCancel?: () => void;
+      /** The bottom-box line for a chooser; PartyMenuItemUseText otherwise. */
+      prompt?: string;
+    },
   ) {}
+
+  /** party_menu.asm PartyMenuMessage: the standard bottom text box's line. */
+  private prompt(): string {
+    const t = (this.game.data as { text?: Record<string, string> }).text ?? {};
+    if (this.swapFrom !== null) return t._PartyMenuSwapMonText ?? "Move POKéMON\nwhere?";
+    if (this.opts?.prompt) return this.opts.prompt;
+    if (this.opts?.onPick) return t._PartyMenuItemUseText ?? "Use item on which\nPOKéMON?";
+    return t._PartyMenuNormalText ?? "Choose a POKéMON.";
+  }
 
   private party(): PartyMon[] {
     return (this.game.save.party ?? []) as PartyMon[];
@@ -71,10 +99,11 @@ export class PartyState implements GameState {
   update(): void {
     const p = this.game.input.pressed;
     if (this.mode === "submenu") return this.updateSubmenu(p);
-    const n = this.party().length + 1; // + CANCEL
+    // No CANCEL row: the GB party menu has none, B is the way out.
+    const n = Math.max(1, this.party().length);
     if (p.up) this.index = (this.index + n - 1) % n;
     if (p.down) this.index = (this.index + 1) % n;
-    if (p.b || (p.a && this.index === n - 1)) {
+    if (p.b) {
       if (this.swapFrom !== null) { this.swapFrom = null; return; } // cancel the swap
       this.game.pop();
       this.opts?.onCancel?.();
@@ -149,6 +178,7 @@ export class PartyState implements GameState {
   view(): PartyView {
     const entries = this.party().map((m) => ({
       name: m.nickname ?? this.game.data.pokemon?.[m.species]?.name ?? m.species,
+      species: m.species,
       level: m.level,
       hp: m.hp,
       maxHp: m.stats?.hp ?? m.hp,
@@ -161,6 +191,7 @@ export class PartyState implements GameState {
       submenuIndex: this.submenuIndex,
       swapFrom: this.swapFrom,
       submenuItems: this.submenuItems(),
+      prompt: this.prompt(),
     };
   }
 }
@@ -168,35 +199,69 @@ export class PartyState implements GameState {
 export interface SummaryView {
   name: string;
   species: string;
+  /** The species id, for the pic. */
+  speciesId: string;
+  /** Pokedex number, three digits on the screen. */
+  dex: number;
   level: number;
   hp: number;
   maxHp: number;
   status: string | null;
   types: string[];
   stats: { atk: number; def: number; spd: number; spc: number };
-  moves: { name: string; pp: number }[];
+  moves: { name: string; pp: number; maxPp: number }[];
+  /** StatusScreen (1) or StatusScreen2 (2): stats, then EXP and moves. */
+  page: 1 | 2;
+  exp: number;
+  /** EXP to the next level, and that level; 0 / the cap at the cap. */
+  expToNext: number;
+  nextLevel: number;
+  otName: string;
+  otId: number;
 }
 
+/**
+ * The two status pages (engine/menus/status_screen.asm StatusScreen and
+ * StatusScreen2): A turns the page, A or B on the second closes, B on the
+ * first closes too. The renderer (scene.ts) lays each page out on the GB's
+ * own cells.
+ */
 export class SummaryState implements GameState {
   readonly kind = "summary";
+  private page: 1 | 2 = 1;
 
   constructor(private game: PartyGame, private slot: number, private mon?: PartyMon) {}
 
   update(): void {
     const p = this.game.input.pressed;
-    if (p.a || p.b) this.game.pop();
+    if (p.b) { this.game.pop(); return; }
+    if (p.a) {
+      if (this.page === 1) this.page = 2;
+      else this.game.pop();
+    }
   }
 
   view(): SummaryView {
     const m = this.mon ?? ((this.game.save.party ?? []) as PartyMon[])[this.slot];
     const def = this.game.data.pokemon?.[m.species];
-    const moves = (m.moves ?? []).map((ms) => ({
-      name: this.game.data.moves?.[ms.id]?.name ?? ms.id,
-      pp: ms.pp,
-    }));
+    const moves = (m.moves ?? []).map((ms) => {
+      const base = this.game.data.moves?.[ms.id]?.pp;
+      const maxPp = typeof base === "number"
+        ? base + ((ms as { ppUps?: number }).ppUps ?? 0) * Math.floor(base / 5)
+        : ms.pp;
+      return { name: this.game.data.moves?.[ms.id]?.name ?? ms.id, pp: ms.pp, maxPp };
+    });
+    const cap = (this.game.data as { constants?: { levelCap?: number } }).constants?.levelCap ?? 100;
+    const nextLevel = Math.min(cap, m.level + 1);
+    const expToNext = m.level < cap && def
+      ? Math.max(0, expForLevel(def.growthRate, nextLevel) - (m.exp ?? 0))
+      : 0;
+    const player = (this.game.save as { player?: { name?: string; id?: number } }).player;
     return {
       name: m.nickname ?? def?.name ?? m.species,
       species: def?.name ?? m.species,
+      speciesId: m.species,
+      dex: def?.dex ?? 0,
       level: m.level,
       hp: m.hp,
       maxHp: m.stats?.hp ?? m.hp,
@@ -209,6 +274,12 @@ export class SummaryState implements GameState {
         spc: m.stats?.special ?? 0,
       },
       moves,
+      page: this.page,
+      exp: m.exp ?? 0,
+      expToNext,
+      nextLevel,
+      otName: player?.name ?? "RED",
+      otId: player?.id ?? 0,
     };
   }
 }

@@ -54,6 +54,7 @@ import {
 import { CAMERA_SPEED_DEFAULT_Q8, CAMERA_SPEEDS, OptionsMenuState } from "./ui/optionsmenu.ts";
 import { cellsToPicRect } from "./ui/trainercard.ts";
 import { EVO_PIC_CELL } from "./ui/evoscreen.ts";
+import { partyIconCell, SUMMARY_PIC_CELL } from "./ui/partyscreen.ts";
 import { PrizeState } from "./ui/prizescreen.ts";
 import { SlotMachineState } from "./ui/slotmachine.ts";
 import { BikeShopState } from "./ui/bikeshop.ts";
@@ -1054,6 +1055,31 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       if (v.picPage < 0) return [];
       const r = CARD_PIC_RECT;
       return [{ page: v.picPage, x: r.x, y: r.y, w: r.w, h: r.h }];
+    }
+    if (top?.kind === "summary") {
+      // status_screen.asm:170 draws the front pic at (1,0), seven cells
+      // square, over the tile frame; the scene cuts those cells out. (The
+      // ROM mirrors it -- LoadFlippedFrontSpriteByMonIndex -- which the
+      // pic op cannot, so it faces the way it does everywhere else.)
+      const v = top.view() as { speciesId: string };
+      const page = picPageFor(this.data as never, v.speciesId);
+      if (page < 0) return [];
+      const r = cellsToPicRect(SUMMARY_PIC_CELL);
+      return [{ page, x: r.x, y: r.y, w: r.w, h: r.h }];
+    }
+    if (top?.kind === "party") {
+      // The icon beside each name. The ROM has a separate icon sheet; this
+      // pak carries front pics, so each mon's front pic sits in the two-
+      // cell nook the icon would, the way the gear's party panel does it.
+      const v = top.view() as { entries: { species: string }[] };
+      const out: { page: number; x: number; y: number; w: number; h: number }[] = [];
+      v.entries.forEach((e, i) => {
+        const page = picPageFor(this.data as never, e.species);
+        if (page < 0) return;
+        const r = cellsToPicRect(partyIconCell(i));
+        out.push({ page, x: r.x, y: r.y, w: r.w, h: r.h });
+      });
+      return out;
     }
     if (top?.kind === "evolution") {
       // EvolutionState.lua centres the form on the GB screen: x = (160 - w)

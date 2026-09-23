@@ -42,6 +42,7 @@ import { VoxelmonGame } from "../voxelmon/game/game.ts";
 import { encodeSave } from "../voxelmon/game/save-lua.ts";
 import { bodyClear, freeDir, slide, stickPush, STICK_MIN_THROW } from "../voxelmon/game/world/freemove.ts";
 import { OptionsMenuState } from "../voxelmon/game/ui/optionsmenu.ts";
+import { PartyState } from "../voxelmon/game/ui/partyscreen.ts";
 import { decodeSave } from "../voxelmon/game/save-read.ts";
 import {
   backfillVisited, FLY_MAP_IDS, flyDestinations, visit,
@@ -7142,6 +7143,87 @@ describe("a trainer who has already lost", () => {
     // the "!" is up and the encounter sting has started, before the walk-up
     expect((ow as any).emote).toBeDefined();
     expect((ow as any).engaging).toBe(true);
+  });
+});
+
+describe("the party menu and the status screens, as the GB lays them out", () => {
+  function partyGame() {
+    const game = makeMenuGame();
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 12, game.battleRng));
+    game.save.party.push(newMon(romData!, "PIDGEY", 9, game.battleRng));
+    game.save.party[1]!.hp = 0;
+    return game;
+  }
+
+  test.skipIf(!hasGen)("the party view says what it was opened for, and has no CANCEL row", () => {
+    const game = partyGame();
+    tap(game, VOX_BTN.start);
+    const sm = game.startMenu() as { entries: string[] };
+    pick(game, sm.entries.indexOf("POKéMON"));
+    const pv = game.party() as any;
+    expect(pv.prompt).toBe("Choose a POKéMON.");
+    expect(pv.entries.map((e: any) => e.species)).toEqual(["SQUIRTLE", "PIDGEY"]);
+    // two mons: the cursor wraps between them, never onto a third row
+    expect(pv.index).toBe(0);
+    tap(game, VOX_BTN.down);
+    expect((game.party() as any).index).toBe(1);
+    tap(game, VOX_BTN.down);
+    expect((game.party() as any).index).toBe(0);
+    // B leaves
+    tap(game, VOX_BTN.b);
+    expect(game.stackKinds().at(-1)).toBe("startmenu");
+    // the icons ride the pic layer, one per mon, in the two-cell nooks
+    tap(game, VOX_BTN.a);
+    const pics = game.pic() as { x: number; y: number; w: number; h: number }[];
+    expect(pics.length).toBe(2);
+    expect(pics[1]!.y).toBeGreaterThan(pics[0]!.y);
+  });
+
+  test.skipIf(!hasGen)("a SWITCH says where to, and a chooser says what it is for", () => {
+    const game = partyGame();
+    tap(game, VOX_BTN.start);
+    const sm = game.startMenu() as { entries: string[] };
+    pick(game, sm.entries.indexOf("POKéMON"));
+    tap(game, VOX_BTN.a); // the submenu
+    const items = (game.party() as any).submenuItems as string[];
+    pick(game, items.indexOf("SWITCH"));
+    expect((game.party() as any).prompt).toContain("where?");
+    // a chooser opened for an item
+    game.closeToOverworld();
+    game.push(new PartyState(game as never, { onPick: () => {} }));
+    expect((game.party() as any).prompt).toContain("Use item on which");
+  });
+
+  test.skipIf(!hasGen)("STATS is two pages: stats, then EXP and the moves", () => {
+    const game = partyGame();
+    const mon = game.save.party[0]!;
+    tap(game, VOX_BTN.start);
+    const sm = game.startMenu() as { entries: string[] };
+    pick(game, sm.entries.indexOf("POKéMON"));
+    tap(game, VOX_BTN.a);
+    const items = (game.party() as any).submenuItems as string[];
+    pick(game, items.indexOf("STATS"));
+    expect(game.stackKinds().at(-1)).toBe("summary");
+    const p1 = game.summary() as any;
+    expect(p1.page).toBe(1);
+    expect(p1.speciesId).toBe("SQUIRTLE");
+    expect(p1.dex).toBe(7);
+    expect(p1.otName).toBe(game.save.player.name);
+    expect(p1.otId).toBe(game.save.player.id);
+    expect(p1.types).toEqual(["WATER"]);
+    // the pic sits on the layer while the screen is up
+    expect((game.pic() as unknown[]).length).toBe(1);
+    // A turns the page
+    tap(game, VOX_BTN.a);
+    const p2 = game.summary() as any;
+    expect(p2.page).toBe(2);
+    expect(p2.exp).toBe(mon.exp);
+    expect(p2.nextLevel).toBe(13);
+    expect(p2.expToNext).toBeGreaterThan(0);
+    expect(p2.moves[0].maxPp).toBeGreaterThanOrEqual(p2.moves[0].pp);
+    // and A again closes
+    tap(game, VOX_BTN.a);
+    expect(game.stackKinds().at(-1)).toBe("party");
   });
 });
 

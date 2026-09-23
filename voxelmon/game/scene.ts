@@ -18,6 +18,8 @@ import {
   UI_TILE,
 } from "../../contracts/spec/voxel-spec.ts";
 import { CARD_PIC_CELL } from "./ui/trainercard.ts";
+import { SUMMARY_PIC_CELL } from "./ui/partyscreen.ts";
+import { hpBarTiles } from "./battle/ui.ts";
 import { EVO_PIC_CELL } from "./ui/evoscreen.ts";
 import type { WildBattle } from "./battle/battle.ts";
 import { desiredCards, type BattleStaging } from "./battle/staging.ts";
@@ -563,6 +565,148 @@ export class Scene {
     for (let i = 0; i < codes.length; i++) host.uiTile(x + i, y, codes[i]!);
   }
 
+  /** A framed box with a blank interior: (x, y) its corner, w x h outside. */
+  private frame(host: VoxelHost, x: number, y: number, w: number, h: number): void {
+    host.uiTile(x, y, BORDER_TL);
+    host.uiFill(x + 1, y, w - 2, 1, BORDER_H);
+    host.uiTile(x + w - 1, y, BORDER_TR);
+    host.uiFill(x, y + 1, 1, h - 2, BORDER_V);
+    host.uiFill(x + w - 1, y + 1, 1, h - 2, BORDER_V);
+    host.uiFill(x + 1, y + 1, w - 2, h - 2, SPACE);
+    host.uiTile(x, y + h - 1, BORDER_BL);
+    host.uiFill(x + 1, y + h - 1, w - 2, 1, BORDER_H);
+    host.uiTile(x + w - 1, y + h - 1, BORDER_BR);
+  }
+
+  /** PrintLevel: the <LV> tile then the digits, or three digits at the cap. */
+  private level(host: VoxelHost, x: number, y: number, level: number): void {
+    if (level < 100) this.stamp(host, x, y, `<LV>${level}`);
+    else this.stamp(host, x, y, String(level));
+  }
+
+  /**
+   * The party menu as party_menu.asm draws it, ported from gen1recomp
+   * PartyMenu:draw. A white screen; two rows to a Pokemon: the icon in a
+   * two-cell nook at column 1 (the pic layer, game.ts pic()), the name at
+   * column 3, <LV> and the level at 13, FNT or the status at 17; below it
+   * the HP bar from column 5 and the HP at 13. The cursor sits on the
+   * SECOND row, level with the middle of the icon (PartyMenuInit seeds
+   * wTopMenuItemY with 1). The standard text box at the bottom says what
+   * the screen was opened for, and there is no CANCEL row -- B is cancel.
+   */
+  private drawPartyMenu(host: VoxelHost, pv: any): void {
+    host.uiFill(0, 0, UI_COLS, UI_ROWS, SPACE);
+    if (pv.entries.length === 0) this.stamp(host, 2, 8, "No POKéMON!");
+    pv.entries.forEach((e: any, i: number) => {
+      const y = i * 2;
+      // the icon shows through the nook (a pic under the ui layer)
+      host.uiFill(1, y, 2, 2, 0);
+      this.stamp(host, 3, y, e.name);
+      this.level(host, 13, y, e.level);
+      if (e.hp <= 0) this.stamp(host, 17, y, "FNT");
+      else if (e.status) this.stamp(host, 17, y, e.status);
+      // DrawHP2: the bar from column 5, no cap on this screen; the numbers
+      // from 13, three digits either side
+      const bar = hpBarTiles(e.hp, e.maxHp, false).slice(0, -1);
+      bar.forEach((code, k) => host.uiTile(5 + k, y + 1, code));
+      const hp = `${String(e.hp).padStart(3, " ")}/${String(e.maxHp).padStart(3, " ")}`;
+      this.stamp(host, 13, y + 1, hp);
+      if (i === pv.index) host.uiTile(0, y + 1, ARROW_CURSOR);
+      // the held mon during a SWITCH keeps its arrow (PlaceMenuCursor's
+      // unfilled one) so both slots read
+      else if (pv.swapFrom === i) host.uiTile(0, y + 1, ARROW_CURSOR);
+    });
+    // PartyMenuMessage: the standard bottom box, rows 12-17, lines on 14/16
+    this.frame(host, 0, 12, UI_COLS, 6);
+    String(pv.prompt ?? "").split("\n").forEach((line: string, k: number) => {
+      this.stamp(host, 1, 14 + k * 2, line);
+    });
+    // the per-mon submenu: STATS / SWITCH / [CUT] / [FLASH] / CANCEL, in a
+    // box of 11 at column 9 that grows up from row 17
+    if (pv.mode === "submenu") {
+      const items: string[] = pv.submenuItems;
+      const n = items.length;
+      const sy = 17 - n * 2 - 1;
+      this.frame(host, 9, sy, 11, n * 2 + 2);
+      items.forEach((label, k) => {
+        this.stamp(host, 11, 17 - n * 2 + k * 2, label);
+        if (k === pv.submenuIndex) host.uiTile(10, 17 - n * 2 + k * 2, ARROW_CURSOR);
+      });
+    }
+  }
+
+  /**
+   * The status screens as status_screen.asm draws them, ported from
+   * gen1recomp SummaryMenu:draw. The header both pages share: the pic in
+   * seven cells from (1,0) (the pic layer, game.ts pic()), the name at
+   * (9,1), the dex number at (1,7). Page one: the level at (14,2), the HP
+   * bar at (11,3) with the numbers under it, STATUS/ at (9,6), the four
+   * stats in a box at (0,8), and TYPE1/TYPE2/IDNo/OT down column 10. Page
+   * two: EXP POINTS and the distance to the next level, then the four
+   * moves with their PP in a box across the bottom.
+   *
+   * Three single tiles the ROM's status tileset has -- '№', '<ID>' and
+   * '<to>' -- are not on the UI page, so they are spelled: No., ID, to.
+   */
+  private drawStatusScreen(host: VoxelHost, sv: any): void {
+    host.uiFill(0, 0, UI_COLS, UI_ROWS, SPACE);
+    const c = SUMMARY_PIC_CELL;
+    host.uiFill(c.x, c.y, c.w, c.h, 0);
+    this.stamp(host, 9, 1, sv.name);
+    this.stamp(host, 1, 7, `No.${String(sv.dex).padStart(3, "0")}`);
+    // the frame's right bracket beside the name block (DrawLineBox 19,1)
+    host.uiFill(19, 1, 1, 10, BORDER_V);
+    const n3 = (v: number) => String(v).padStart(3, " ");
+    if (sv.page === 1) {
+      this.level(host, 14, 2, sv.level);
+      hpBarTiles(sv.hp, sv.maxHp, false).forEach((code: number, k: number) =>
+        host.uiTile(11 + k, 3, code));
+      this.stamp(host, 12, 4, `${n3(sv.hp)}/${n3(sv.maxHp)}`);
+      this.stamp(host, 9, 6, "STATUS/");
+      this.stamp(host, 16, 6, sv.status ?? "OK");
+      this.frame(host, 0, 8, 10, 10);
+      const stats: [string, number][] = [
+        ["ATTACK", sv.stats.atk], ["DEFENSE", sv.stats.def],
+        ["SPEED", sv.stats.spd], ["SPECIAL", sv.stats.spc],
+      ];
+      stats.forEach(([label, v], k) => {
+        this.stamp(host, 1, 9 + k * 2, label);
+        this.stamp(host, 6, 10 + k * 2, n3(v));
+      });
+      this.stamp(host, 10, 9, "TYPE1/");
+      this.stamp(host, 11, 10, String(sv.types[0] ?? ""));
+      if (sv.types[1]) {
+        this.stamp(host, 10, 11, "TYPE2/");
+        this.stamp(host, 11, 12, String(sv.types[1]));
+      }
+      this.stamp(host, 10, 13, "IDNo/");
+      this.stamp(host, 12, 14, String(sv.otId).padStart(5, "0"));
+      this.stamp(host, 10, 15, "OT/");
+      this.stamp(host, 12, 16, String(sv.otName));
+    } else {
+      this.stamp(host, 9, 3, "EXP POINTS");
+      this.stamp(host, 12, 4, String(sv.exp).padStart(7, " "));
+      this.stamp(host, 9, 5, "LEVEL UP");
+      this.stamp(host, 7, 6, String(sv.expToNext).padStart(7, " "));
+      this.stamp(host, 14, 6, "to");
+      this.level(host, 16, 6, sv.nextLevel);
+      this.frame(host, 0, 8, UI_COLS, 10);
+      for (let k = 0; k < 4; k++) {
+        const mv = sv.moves[k];
+        const y = 9 + k * 2;
+        if (mv) {
+          this.stamp(host, 2, y, mv.name);
+          this.stamp(host, 11, y + 1, "PP");
+          this.stamp(host, 14, y + 1,
+            `${String(mv.pp).padStart(2, " ")}/${String(mv.maxPp).padStart(2, " ")}`);
+        } else {
+          this.stamp(host, 2, y, "-");
+          this.stamp(host, 14, y + 1, "--");
+        }
+      }
+    }
+  }
+
   // ui — the dialogue box as a retained tile-layer program: border once on
   // open, uiText for the row that is typing, uiReveal as the typewriter
   // advances (the reveal counter applies to the LAST uiText — voxel-spec),
@@ -576,7 +720,8 @@ export class Scene {
       .join("|");
     if (psig !== this.picSig) {
       this.picSig = psig;
-      for (let i = 0; i < 4; i++) {
+      // PICS_MAX (core scene.rs): six, one per party member
+      for (let i = 0; i < 6; i++) {
         const q: any = picList[i];
         if (q) host.pic(i, q.page, q.x, q.y, q.w, q.h);
         else host.picHide(i);
@@ -751,44 +896,12 @@ export class Scene {
 
     const sv = (view as unknown as { summary?: () => any }).summary?.();
     if (sv) {
-      const sig = `${sv.name},${sv.hp}/${sv.maxHp},${sv.status},${sv.level}`;
+      const sig = `${sv.name},${sv.hp}/${sv.maxHp},${sv.status},${sv.level},${sv.page},${sv.exp}`;
       if (sig !== this.summarySig) {
         this.summarySig = sig;
         this.uiOwner = null;
         host.uiClear();
-        // Full-screen frame (StatusScreen owns the tile layer).
-        host.uiTile(0, 0, BORDER_TL);
-        host.uiFill(1, 0, 18, 1, BORDER_H);
-        host.uiTile(19, 0, BORDER_TR);
-        host.uiFill(0, 1, 1, 16, BORDER_V);
-        host.uiFill(19, 1, 1, 16, BORDER_V);
-        host.uiTile(0, 17, BORDER_BL);
-        host.uiFill(1, 17, 18, 1, BORDER_H);
-        host.uiTile(19, 17, BORDER_BR);
-        host.uiFill(1, 1, 18, 16, SPACE);
-        let y = 2;
-        this.stamp(host, 2, y, sv.name);
-        this.stamp(host, 14, y, `<LV>${sv.level}`);
-        y += 2;
-        this.stamp(host, 2, y, `HP ${sv.hp}/${sv.maxHp}`);
-        y += 1;
-        this.stamp(host, 2, y, `STATUS ${sv.status ?? "OK"}`);
-        y += 1;
-        this.stamp(host, 2, y, `TYPE ${sv.types.join("/")}`);
-        y += 2;
-        this.stamp(host, 2, y, `ATK ${sv.stats.atk}`);
-        this.stamp(host, 11, y, `DEF ${sv.stats.def}`);
-        y += 1;
-        this.stamp(host, 2, y, `SPD ${sv.stats.spd}`);
-        this.stamp(host, 11, y, `SPC ${sv.stats.spc}`);
-        y += 2;
-        this.stamp(host, 2, y, "MOVES");
-        y += 1;
-        for (const mv of sv.moves as { name: string; pp: number }[]) {
-          this.stamp(host, 3, y, mv.name);
-          this.stamp(host, 15, y, `PP${mv.pp}`);
-          y += 1;
-        }
+        this.drawStatusScreen(host, sv);
       }
       return;
     }
@@ -809,60 +922,7 @@ export class Scene {
         this.partySig = sig;
         this.uiOwner = null;
         host.uiClear();
-        // Two tile-rows per mon (name, then <LV>/HP), CANCEL last.
-        const X = 0, Y = 0, W = 19, H = pv.entries.length * 2 + 1;
-        host.uiTile(X, Y, BORDER_TL);
-        host.uiFill(X + 1, Y, W - 1, 1, BORDER_H);
-        host.uiTile(X + W, Y, BORDER_TR);
-        host.uiFill(X, Y + 1, 1, H, BORDER_V);
-        host.uiFill(X + W, Y + 1, 1, H, BORDER_V);
-        host.uiFill(X + 1, Y + 1, W - 1, H, SPACE);
-        host.uiTile(X, Y + 1 + H, BORDER_BL);
-        host.uiFill(X + 1, Y + 1 + H, W - 1, 1, BORDER_H);
-        host.uiTile(X + W, Y + 1 + H, BORDER_BR);
-        const IY = Y + 1;
-        pv.entries.forEach((e: any, i: number) => {
-          const nameRow = IY + i * 2;
-          const statRow = nameRow + 1;
-          this.stamp(host, X + 2, nameRow, e.name);
-          if (e.status) this.stamp(host, X + 14, nameRow, e.status);
-          this.stamp(host, X + 3, statRow, `<LV>${e.level}`);
-          const hp = `${e.hp}/${e.maxHp}`;
-          this.stamp(host, X + W - hp.length, statRow, hp);
-          if (i === pv.index) host.uiTile(X + 1, nameRow, ARROW_CURSOR);
-        });
-        const cancelRow = IY + pv.entries.length * 2;
-        this.stamp(host, X + 2, cancelRow, "CANCEL");
-        if (pv.index === pv.entries.length) {
-          host.uiTile(X + 1, cancelRow, ARROW_CURSOR);
-        }
-        // the held mon during a SWITCH keeps a cursor so both slots are visible
-        if (pv.swapFrom !== null && pv.swapFrom !== pv.index) {
-          host.uiTile(X + 1, IY + pv.swapFrom * 2, ARROW_CURSOR);
-        }
-        // per-mon submenu: STATS / SWITCH / [CUT] / [FLASH] / CANCEL — see
-        // partyscreen.ts's submenuItems() for which of CUT/FLASH show.
-        // Height grows with the item count, anchored so it never runs off
-        // the 18-row grid (UI_ROWS, spec.rs) even at the max 5 items.
-        if (pv.mode === "submenu") {
-          const items: string[] = pv.submenuItems;
-          const sx = 10, sw = 9;
-          const innerH = items.length * 2;
-          const sy = Math.min(9, 16 - innerH);
-          host.uiTile(sx, sy, BORDER_TL);
-          host.uiFill(sx + 1, sy, sw - 1, 1, BORDER_H);
-          host.uiTile(sx + sw, sy, BORDER_TR);
-          host.uiFill(sx, sy + 1, 1, innerH, BORDER_V);
-          host.uiFill(sx + sw, sy + 1, 1, innerH, BORDER_V);
-          host.uiFill(sx + 1, sy + 1, sw - 1, innerH, SPACE);
-          host.uiTile(sx, sy + 1 + innerH, BORDER_BL);
-          host.uiFill(sx + 1, sy + 1 + innerH, sw - 1, 1, BORDER_H);
-          host.uiTile(sx + sw, sy + 1 + innerH, BORDER_BR);
-          items.forEach((label, i) => {
-            this.stamp(host, sx + 3, sy + 2 + i * 2, label);
-            if (i === pv.submenuIndex) host.uiTile(sx + 2, sy + 2 + i * 2, ARROW_CURSOR);
-          });
-        }
+        this.drawPartyMenu(host, pv);
       }
       return;
     }
