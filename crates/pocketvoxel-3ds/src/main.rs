@@ -3698,268 +3698,288 @@ fn main() {
                     neighbor_slots.len(),
                 ));
             }
-            // Both halves of the memory picture, not just the GPU's: the
-            // pak cache and the built geometry live on the APP heap, and a
-            // rebuild that cannot get its vertices there is the one that
-            // used to abort. Plus anything refused for pointing outside the
-            // pools, which should always read 0.
-            dlog(&format!(
-                "[pv] linear free {} KB, heap block {} KB, cache {} KB, oob {} before build",
-                unsafe_free_kb(),
-                probe_free_kb(16),
-                unsafe { cache_total_kb() },
-                unsafe { POOL_OOB },
-            ));
-            // The upload is where a load has died before (linear running
-            // dry): what led up to it is on the card before it starts.
-            dlog_batch_end();
-            dlog_batch_begin();
-            // Holding the outgoing buffers while the new ones allocate
-            // DOUBLES peak linear memory, and the vertex buffers are the
-            // biggest thing in it (a full map can be 18 MB). That hold only
-            // exists for the huge-map STREAM — a re-build of the map the
-            // player is already standing in, crossing a chunk boundary
-            // mid-walk, which has no fade to hide a freed buffer the GPU is
-            // still reading. An ordinary map CHANGE is masked by
-            // pushWarpFade, so there we free first and allocate second,
-            // which halves the peak.
-            //
-            // The test is "same map", not "the new map is huge". Those differ
-            // exactly when walking INTO a huge map, and that case crashed:
-            // entering SAFFRON_CITY off ROUTE_6 held Route 6's 8.5 MB of
-            // terrain plus 2.3 MB of seam strips while Saffron's own 6.4 MB
-            // (399,999 verts x 16 B) tried to allocate against 6.35 MB free,
-            // and the upload died mid-loop — twice in the same log, each time
-            // between "linear free ... before build" and the upload summary.
-            let streaming_same_map = cur_map_huge && map_i == prev_map_i;
-            if streaming_same_map {
-                chunk_infos_prev = core::mem::take(&mut chunk_infos);
-            } else {
-                chunk_infos_prev.clear();
-                chunk_infos.clear();
-                strip_hold.clear();
-                strip_infos.clear();
-                strip_verts_kb = 0;
-            }
-            prev_map_i = map_i;
-            let mut upload_fail = 0u32;
-            for s in geom.chunk_spans.iter() {
-                let n = (s.end - s.start).min(65535);
-                if n == 0 { continue; }
-                if !linear_fits(n) { upload_fail += 1; continue; }
-                let mut bi = buffer::Info::new();
-                if bi.add(buffer::Buffer::new(&geom.verts[s.start..s.start + n]), attr_info.permutation()).is_ok() {
-                    chunk_infos.push((*s, bi));
-                } else {
-                    // Silently dropping these is how a map ends up as bare
-                    // sky: the geometry built fine, the GPU buffer just
-                    // never took it.
-                    upload_fail += 1;
-                }
-            }
-            dlog(&format!(
-                "[pv] uploaded {}/{} spans (failed {})",
-                chunk_infos.len(),
-                geom.chunk_spans.len(),
-                upload_fail,
-            ));
-
-            let t_strips = now_ms();
-            // --- connected-map seam strips -------------------------------
-            // Skipped entirely on a huge map: those already spend their
-            // whole vertex budget on the map underfoot, and that path is
-            // the one that has crashed before. Everywhere else, the guest
-            // has already worked out which maps adjoin and at what offset
-            // (computeNeighbors -> mapShow), so slots 1..4 carry exactly
-            // what to load and where to put it.
-            strip_hold = core::mem::take(&mut strip_infos);
-            strip_verts_kb = 0;
-            // Strips are a luxury; the map underfoot is not. If linear
-            // memory is already tight after building it, skip them rather
-            // than fail an allocation mid-load.
-            let free_kb = unsafe_free_kb();
-            dlog(&format!("[pv] linear free {} KB after build", free_kb));
-            if !cur_map_huge && free_kb >= STRIP_MIN_FREE_KB {
-                for &(nid, ox, oy) in neighbor_slots.iter() {
-                    dlog(&format!("[pv] strip loading id={} free={}KB", nid, unsafe_free_kb()));
-                    let Some((_, nname)) = map_index.iter().find(|(id, _)| *id == nid) else {
-                        continue;
-                    };
-                    // From memory when the read-ahead already has it whole;
-                    // off the card otherwise, and always in the forest zone.
-                    let resident = if unsafe { LEGACY_ZONE } {
-                        None
-                    } else {
-                        unsafe { resident_pak(nname) }.filter(|p| strip_has_trees(p, nid))
-                    };
-                    // A resident copy that cannot supply the strip (read
-                    // under a plan that skipped the tier it wants) must fall
-                    // THROUGH to the file, not drop the neighbour: skipping
-                    // it left a map with no connected map drawn at all, and
-                    // its border ring already clipped off for one.
-                    let strip = resident
-                        .and_then(|p| {
-                            strip_from_pak(p, nid, ox, oy, geom.map_min, geom.map_max, last_tint)
-                        })
-                        .or_else(|| {
-                            let path = format!("sdmc:/3ds/voxelmon/paks/{}.vxpak", nname);
-                            load_neighbor_strip(
-                                &path, nid, ox, oy, geom.map_min, geom.map_max, last_tint,
-                            )
-                        });
-                    let Some(strip) = strip else {
-                        continue;
-                    };
-                    strip_verts_kb += strip.verts.len() * 20 / 1024;
-                    for s in strip.spans.iter() {
-                        let n = (s.end - s.start).min(65535);
-                        if n == 0 { continue; }
-                        // Same infallible-allocation trap as the terrain
-                        // upload above — see linear_fits. A neighbour strip is
-                        // scenery, so dropping one is cheap.
-                        if !linear_fits(n) { continue; }
-                        let mut bi = buffer::Info::new();
-                        if bi
-                            .add(
-                                buffer::Buffer::new(&strip.verts[s.start..s.start + n]),
-                                attr_info.permutation(),
-                            )
-                            .is_ok()
-                        {
-                            strip_infos.push((*s, bi));
-                        }
-                    }
-                    dlog(&format!(
-                        "[pv] strip {} spans={} verts={} off=({:.0},{:.0})",
-                        nname,
-                        strip.spans.len(),
-                        strip.verts.len(),
-                        ox,
-                        oy,
-                    ));
-                }
-            }
-            // --- tree instances (TINS) ----------------------------------
-            tree_bufs.clear();
-            tree_insts.clear();
-            {
-                let insts = pak_static.trees_of(map_ids[map_i]);
-                if !insts.is_empty() {
-                    tree_insts.extend_from_slice(insts);
-                    let mut shape_verts = 0usize;
-                    for m in pak_static.tree_shapes.iter() {
-                        let n = m.index_count as usize;
-                        if n == 0 || !linear_fits(n) {
-                            tree_bufs.push(None);
-                            continue;
-                        }
-                        let mut v: Vec<Vertex> = Vec::with_capacity(n);
-                        let mut gmin = [f32::MAX; 3];
-                        let mut gmax = [f32::MIN; 3];
-                        let vbase = m.vert_base as usize;
-                        for i in 0..n {
-                            let Some(pv) =
-                                pool_vert(pak_static, vbase, m.index_base as usize + i)
-                            else {
-                                break;
-                            };
-                            let a = draw::modulate_rgb(pv.abgr, last_tint);
-                            let p = [pv.x as f32, pv.y as f32, pv.z as f32];
-                            for c in 0..3 {
-                                if p[c] < gmin[c] { gmin[c] = p[c]; }
-                                if p[c] > gmax[c] { gmax[c] = p[c]; }
-                            }
-                            v.push(Vertex {
-                                pos: [pv.x, pv.y, pv.z, 0],
-                                color: [
-                                    (a & 0xff) as u8,
-                                    ((a >> 8) & 0xff) as u8,
-                                    ((a >> 16) & 0xff) as u8,
-                                    255,
-                                ],
-                                uv: [pv.uf(), pv.vf()],
-                            });
-                        }
-                        let mut bi = buffer::Info::new();
-                        if bi.add(buffer::Buffer::new(&v), attr_info.permutation()).is_ok() {
-                            shape_verts += v.len();
-                            tree_bufs.push(Some((bi, gmin, gmax)));
-                        } else {
-                            tree_bufs.push(None);
-                        }
-                    }
-                    let ok = tree_bufs.iter().filter(|b| b.is_some()).count();
-                    let first = tree_insts.first();
-                    dlog(&format!(
-                        "[pv] trees {}/{} shapes uploaded ({} verts) x {} placements; first=({},{}) near={} mid={} far={}",
-                        ok,
-                        tree_bufs.len(),
-                        shape_verts,
-                        tree_insts.len(),
-                        first.map(|i| i.x).unwrap_or(-1),
-                        first.map(|i| i.z).unwrap_or(-1),
-                        first.map(|i| i.near).unwrap_or(0),
-                        first.map(|i| i.mid).unwrap_or(0),
-                        first.map(|i| i.far).unwrap_or(0),
-                    ));
-                }
-            }
-            dlog(&format!(
-                "[pv] strips total spans={} ~{}KB",
-                strip_infos.len(),
-                strip_verts_kb,
-            ));
-            let strips_ms = now_ms().wrapping_sub(t_strips);
-            let t_tex = now_ms();
-            // Pre-warm the pages this map will ask for: decoding + uploading
-            // mid-frame is what causes the hitch the first time a sprite or
-            // the dialogue box appears.
-            if page_tex.len() < pak_static.atlases.len() {
-                page_tex.resize_with(pak_static.atlases.len(), || None);
-            }
-            let mut warmed = 0;
-            for (pi, pg) in pak_static.atlases.iter().enumerate() {
-                if pg.kind != atlas_kind::UI && pg.kind != atlas_kind::SPRITES { continue; }
-                if page_tex[pi].is_some() { continue; }
-                let (data, ptw, pth) = build_page_tex(pak_static, pi as u16, -1);
-                if let Ok(mut t) = texture::Texture::new(
-                    texture::TextureParameters::new_2d(ptw as u16, pth as u16, texture::ColorFormat::Rgba8)) {
-                    if t.load_image(&data, texture::Face::default()).is_ok() {
-                        unsafe { gsp_flush(data.as_ptr(), data.len() as u32); }
-                        sprite_filter(&mut t, pak_static, pi as u16);
-                        page_tex[pi] = Some(t);
-                        warmed += 1;
-                    }
-                }
-            }
-            let mut t = texture::Texture::new(
-                texture::TextureParameters::new_2d(geom.tw as u16, geom.th as u16, texture::ColorFormat::Rgba8),
-            ).expect("tex");
-            t.load_image(&geom.tex_rgba, texture::Face::default()).expect("upload");
-            t.set_filter(texture::Filter::Nearest, texture::Filter::Nearest);
-            tex = Some(t);
-            // GPU has its own copies now; free the CPU-side staging memory
-            // so QuickJS has room for its heap.
-            geom.tex_rgba = Vec::new();
-            geom.tex_rgba.shrink_to_fit();
-            geom.verts = Vec::new();
-            geom.verts.shrink_to_fit();
-            dist = geom.size * 1.4;
-            {
-                let tex_ms = now_ms().wrapping_sub(t_tex);
-                let total = now_ms().wrapping_sub(t_load);
-                let (js, pk) = unsafe { (LOAD_JS_MS, LOAD_PAK_MS) };
+            // Nothing was built, so there is nothing to upload -- and
+            // nothing TO upload from: the CPU-side vertices are freed the
+            // moment the GPU has them (see the end of this block), so the
+            // spans that describe them now index an empty vector. Running
+            // the upload again sliced that vector and panicked, which on
+            // hardware is an abort to the homebrew menu; the mansion's
+            // switches are a rebuild request, so flipping a second one was
+            // where it showed. The buffers the GPU already holds ARE this
+            // geometry, and they are still bound. Leave them alone.
+            if !skip_build {
+                // Both halves of the memory picture, not just the GPU's: the
+                // pak cache and the built geometry live on the APP heap, and a
+                // rebuild that cannot get its vertices there is the one that
+                // used to abort. Plus anything refused for pointing outside the
+                // pools, which should always read 0.
                 dlog(&format!(
-                    "[pv] load {}: js {} pak {} | bounds {} build+upload {} strips {} tex {} | host {} ms{}",
-                    map_index.get(map_i).map(|(_, n)| n.as_str()).unwrap_or("?"),
-                    js, pk, bounds_ms,
-                    t_strips.wrapping_sub(t_load).wrapping_sub(bounds_ms),
-                    strips_ms, tex_ms, total,
-                    if unsafe { LEGACY_ZONE } { " (forest zone: unchanged path)" } else { "" },
+                    "[pv] linear free {} KB, heap block {} KB, cache {} KB, oob {} before build",
+                    unsafe_free_kb(),
+                    probe_free_kb(16),
+                    unsafe { cache_total_kb() },
+                    unsafe { POOL_OOB },
                 ));
-                unsafe {
-                    LOAD_JS_MS = 0;
-                    LOAD_PAK_MS = 0;
+                // The upload is where a load has died before (linear running
+                // dry): what led up to it is on the card before it starts.
+                dlog_batch_end();
+                dlog_batch_begin();
+                // Holding the outgoing buffers while the new ones allocate
+                // DOUBLES peak linear memory, and the vertex buffers are the
+                // biggest thing in it (a full map can be 18 MB). That hold only
+                // exists for the huge-map STREAM — a re-build of the map the
+                // player is already standing in, crossing a chunk boundary
+                // mid-walk, which has no fade to hide a freed buffer the GPU is
+                // still reading. An ordinary map CHANGE is masked by
+                // pushWarpFade, so there we free first and allocate second,
+                // which halves the peak.
+                //
+                // The test is "same map", not "the new map is huge". Those differ
+                // exactly when walking INTO a huge map, and that case crashed:
+                // entering SAFFRON_CITY off ROUTE_6 held Route 6's 8.5 MB of
+                // terrain plus 2.3 MB of seam strips while Saffron's own 6.4 MB
+                // (399,999 verts x 16 B) tried to allocate against 6.35 MB free,
+                // and the upload died mid-loop — twice in the same log, each time
+                // between "linear free ... before build" and the upload summary.
+                let streaming_same_map = cur_map_huge && map_i == prev_map_i;
+                if streaming_same_map {
+                    chunk_infos_prev = core::mem::take(&mut chunk_infos);
+                } else {
+                    chunk_infos_prev.clear();
+                    chunk_infos.clear();
+                    strip_hold.clear();
+                    strip_infos.clear();
+                    strip_verts_kb = 0;
+                }
+                prev_map_i = map_i;
+                let mut upload_fail = 0u32;
+                for s in geom.chunk_spans.iter() {
+                    let n = (s.end - s.start).min(65535);
+                    if n == 0 { continue; }
+                    if s.start + n > geom.verts.len() { upload_fail += 1; continue; }
+                    if !linear_fits(n) { upload_fail += 1; continue; }
+                    let mut bi = buffer::Info::new();
+                    if bi.add(buffer::Buffer::new(&geom.verts[s.start..s.start + n]), attr_info.permutation()).is_ok() {
+                        chunk_infos.push((*s, bi));
+                    } else {
+                        // Silently dropping these is how a map ends up as bare
+                        // sky: the geometry built fine, the GPU buffer just
+                        // never took it.
+                        upload_fail += 1;
+                    }
+                }
+                dlog(&format!(
+                    "[pv] uploaded {}/{} spans (failed {})",
+                    chunk_infos.len(),
+                    geom.chunk_spans.len(),
+                    upload_fail,
+                ));
+                // Land it. A rebuild dying past this point used to leave the
+                // whole batch unwritten, so the log stopped at "before build"
+                // and said nothing about which of the four things after it --
+                // upload, strips, trees, texture -- was the one that died.
+                dlog_batch_end();
+                dlog_batch_begin();
+
+                let t_strips = now_ms();
+                // --- connected-map seam strips -------------------------------
+                // Skipped entirely on a huge map: those already spend their
+                // whole vertex budget on the map underfoot, and that path is
+                // the one that has crashed before. Everywhere else, the guest
+                // has already worked out which maps adjoin and at what offset
+                // (computeNeighbors -> mapShow), so slots 1..4 carry exactly
+                // what to load and where to put it.
+                strip_hold = core::mem::take(&mut strip_infos);
+                strip_verts_kb = 0;
+                // Strips are a luxury; the map underfoot is not. If linear
+                // memory is already tight after building it, skip them rather
+                // than fail an allocation mid-load.
+                let free_kb = unsafe_free_kb();
+                dlog(&format!("[pv] linear free {} KB after build", free_kb));
+                if !cur_map_huge && free_kb >= STRIP_MIN_FREE_KB {
+                    for &(nid, ox, oy) in neighbor_slots.iter() {
+                        dlog(&format!("[pv] strip loading id={} free={}KB", nid, unsafe_free_kb()));
+                        let Some((_, nname)) = map_index.iter().find(|(id, _)| *id == nid) else {
+                            continue;
+                        };
+                        // From memory when the read-ahead already has it whole;
+                        // off the card otherwise, and always in the forest zone.
+                        let resident = if unsafe { LEGACY_ZONE } {
+                            None
+                        } else {
+                            unsafe { resident_pak(nname) }.filter(|p| strip_has_trees(p, nid))
+                        };
+                        // A resident copy that cannot supply the strip (read
+                        // under a plan that skipped the tier it wants) must fall
+                        // THROUGH to the file, not drop the neighbour: skipping
+                        // it left a map with no connected map drawn at all, and
+                        // its border ring already clipped off for one.
+                        let strip = resident
+                            .and_then(|p| {
+                                strip_from_pak(p, nid, ox, oy, geom.map_min, geom.map_max, last_tint)
+                            })
+                            .or_else(|| {
+                                let path = format!("sdmc:/3ds/voxelmon/paks/{}.vxpak", nname);
+                                load_neighbor_strip(
+                                    &path, nid, ox, oy, geom.map_min, geom.map_max, last_tint,
+                                )
+                            });
+                        let Some(strip) = strip else {
+                            continue;
+                        };
+                        strip_verts_kb += strip.verts.len() * 20 / 1024;
+                        for s in strip.spans.iter() {
+                            let n = (s.end - s.start).min(65535);
+                            if n == 0 { continue; }
+                            // Same infallible-allocation trap as the terrain
+                            // upload above — see linear_fits. A neighbour strip is
+                            // scenery, so dropping one is cheap.
+                            if !linear_fits(n) { continue; }
+                            let mut bi = buffer::Info::new();
+                            if bi
+                                .add(
+                                    buffer::Buffer::new(&strip.verts[s.start..s.start + n]),
+                                    attr_info.permutation(),
+                                )
+                                .is_ok()
+                            {
+                                strip_infos.push((*s, bi));
+                            }
+                        }
+                        dlog(&format!(
+                            "[pv] strip {} spans={} verts={} off=({:.0},{:.0})",
+                            nname,
+                            strip.spans.len(),
+                            strip.verts.len(),
+                            ox,
+                            oy,
+                        ));
+                    }
+                }
+                // --- tree instances (TINS) ----------------------------------
+                tree_bufs.clear();
+                tree_insts.clear();
+                {
+                    let insts = pak_static.trees_of(map_ids[map_i]);
+                    if !insts.is_empty() {
+                        tree_insts.extend_from_slice(insts);
+                        let mut shape_verts = 0usize;
+                        for m in pak_static.tree_shapes.iter() {
+                            let n = m.index_count as usize;
+                            if n == 0 || !linear_fits(n) {
+                                tree_bufs.push(None);
+                                continue;
+                            }
+                            let mut v: Vec<Vertex> = Vec::with_capacity(n);
+                            let mut gmin = [f32::MAX; 3];
+                            let mut gmax = [f32::MIN; 3];
+                            let vbase = m.vert_base as usize;
+                            for i in 0..n {
+                                let Some(pv) =
+                                    pool_vert(pak_static, vbase, m.index_base as usize + i)
+                                else {
+                                    break;
+                                };
+                                let a = draw::modulate_rgb(pv.abgr, last_tint);
+                                let p = [pv.x as f32, pv.y as f32, pv.z as f32];
+                                for c in 0..3 {
+                                    if p[c] < gmin[c] { gmin[c] = p[c]; }
+                                    if p[c] > gmax[c] { gmax[c] = p[c]; }
+                                }
+                                v.push(Vertex {
+                                    pos: [pv.x, pv.y, pv.z, 0],
+                                    color: [
+                                        (a & 0xff) as u8,
+                                        ((a >> 8) & 0xff) as u8,
+                                        ((a >> 16) & 0xff) as u8,
+                                        255,
+                                    ],
+                                    uv: [pv.uf(), pv.vf()],
+                                });
+                            }
+                            let mut bi = buffer::Info::new();
+                            if bi.add(buffer::Buffer::new(&v), attr_info.permutation()).is_ok() {
+                                shape_verts += v.len();
+                                tree_bufs.push(Some((bi, gmin, gmax)));
+                            } else {
+                                tree_bufs.push(None);
+                            }
+                        }
+                        let ok = tree_bufs.iter().filter(|b| b.is_some()).count();
+                        let first = tree_insts.first();
+                        dlog_batch_end();
+                        dlog_batch_begin();
+                        dlog(&format!(
+                            "[pv] trees {}/{} shapes uploaded ({} verts) x {} placements; first=({},{}) near={} mid={} far={}",
+                            ok,
+                            tree_bufs.len(),
+                            shape_verts,
+                            tree_insts.len(),
+                            first.map(|i| i.x).unwrap_or(-1),
+                            first.map(|i| i.z).unwrap_or(-1),
+                            first.map(|i| i.near).unwrap_or(0),
+                            first.map(|i| i.mid).unwrap_or(0),
+                            first.map(|i| i.far).unwrap_or(0),
+                        ));
+                    }
+                }
+                dlog(&format!(
+                    "[pv] strips total spans={} ~{}KB",
+                    strip_infos.len(),
+                    strip_verts_kb,
+                ));
+                let strips_ms = now_ms().wrapping_sub(t_strips);
+                let t_tex = now_ms();
+                // Pre-warm the pages this map will ask for: decoding + uploading
+                // mid-frame is what causes the hitch the first time a sprite or
+                // the dialogue box appears.
+                if page_tex.len() < pak_static.atlases.len() {
+                    page_tex.resize_with(pak_static.atlases.len(), || None);
+                }
+                let mut warmed = 0;
+                for (pi, pg) in pak_static.atlases.iter().enumerate() {
+                    if pg.kind != atlas_kind::UI && pg.kind != atlas_kind::SPRITES { continue; }
+                    if page_tex[pi].is_some() { continue; }
+                    let (data, ptw, pth) = build_page_tex(pak_static, pi as u16, -1);
+                    if let Ok(mut t) = texture::Texture::new(
+                        texture::TextureParameters::new_2d(ptw as u16, pth as u16, texture::ColorFormat::Rgba8)) {
+                        if t.load_image(&data, texture::Face::default()).is_ok() {
+                            unsafe { gsp_flush(data.as_ptr(), data.len() as u32); }
+                            sprite_filter(&mut t, pak_static, pi as u16);
+                            page_tex[pi] = Some(t);
+                            warmed += 1;
+                        }
+                    }
+                }
+                let mut t = texture::Texture::new(
+                    texture::TextureParameters::new_2d(geom.tw as u16, geom.th as u16, texture::ColorFormat::Rgba8),
+                ).expect("tex");
+                t.load_image(&geom.tex_rgba, texture::Face::default()).expect("upload");
+                t.set_filter(texture::Filter::Nearest, texture::Filter::Nearest);
+                tex = Some(t);
+                // GPU has its own copies now; free the CPU-side staging memory
+                // so QuickJS has room for its heap.
+                geom.tex_rgba = Vec::new();
+                geom.tex_rgba.shrink_to_fit();
+                geom.verts = Vec::new();
+                geom.verts.shrink_to_fit();
+                dist = geom.size * 1.4;
+                {
+                    let tex_ms = now_ms().wrapping_sub(t_tex);
+                    let total = now_ms().wrapping_sub(t_load);
+                    let (js, pk) = unsafe { (LOAD_JS_MS, LOAD_PAK_MS) };
+                    dlog(&format!(
+                        "[pv] load {}: js {} pak {} | bounds {} build+upload {} strips {} tex {} | host {} ms{}",
+                        map_index.get(map_i).map(|(_, n)| n.as_str()).unwrap_or("?"),
+                        js, pk, bounds_ms,
+                        t_strips.wrapping_sub(t_load).wrapping_sub(bounds_ms),
+                        strips_ms, tex_ms, total,
+                        if unsafe { LEGACY_ZONE } { " (forest zone: unchanged path)" } else { "" },
+                    ));
+                    unsafe {
+                        LOAD_JS_MS = 0;
+                        LOAD_PAK_MS = 0;
+                    }
                 }
             }
             center = geom.center;
