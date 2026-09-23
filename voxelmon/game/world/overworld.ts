@@ -28,6 +28,7 @@ import { martGreetScript } from "./marts.ts";
 import { bikeAllowed, type BikeRiding } from "./bike.ts";
 import { visit } from "./fly.ts";
 import { cellOf, freeDir, quantize, slide, stickPush } from "./freemove.ts";
+import { repelled } from "../rules/items.ts";
 import { spotFor } from "./snorlax.ts";
 import { barriersFor } from "./toggleblocks.ts";
 import { fillBadgeName, gateFor, guardAt, hasBadge } from "./badgegate.ts";
@@ -1529,6 +1530,16 @@ export class Overworld implements ScriptWorld {
     // safari_game.asm runs BEFORE the land triggers and the warp check: when
     // the timer runs out the PA takes the step over entirely.
     if (this.safariStep()) return;
+    // A REPEL counts down by the step, and says so when it is spent
+    // (home/overworld.asm .repelWoreOff).
+    const rs = this.save as { repelSteps?: number };
+    if ((rs.repelSteps ?? 0) > 0) {
+      rs.repelSteps = (rs.repelSteps ?? 0) - 1;
+      if (rs.repelSteps === 0) {
+        const t = (this.shell.data as { text?: Record<string, string> }).text ?? {};
+        this.shell.showText(t._RepelWoreOffText ?? "REPEL's effect\nwore off.");
+      }
+    }
     // Daycare.asm: the boarded mon earns one exp per step the player takes,
     // anywhere. Only counted here — it is folded into the mon at collection
     // (OverworldController.lua:3522).
@@ -1605,6 +1616,9 @@ export class Overworld implements ScriptWorld {
     ) {
       enc = encounterRoll(encDef, this.shell.rng);
     }
+    // wRepelRemainingSteps (wild_encounters.asm): while a REPEL is on, a
+    // mon under the lead's level does not appear at all.
+    if (enc && repelled(this.save as never, enc.level)) enc = null;
     if (enc) {
       this.encounterCount += 1;
       this.lastEncounter = enc;

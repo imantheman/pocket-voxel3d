@@ -2798,6 +2798,392 @@ function markOwned(save, species) {
   }
 }
 
+// voxelmon/game/rules/items.ts
+var HEAL_AMOUNT = {
+  POTION: 20,
+  SUPER_POTION: 50,
+  HYPER_POTION: 200,
+  FRESH_WATER: 50,
+  SODA_POP: 60,
+  LEMONADE: 80
+};
+var STATUS_HEAL = {
+  ANTIDOTE: ["PSN"],
+  BURN_HEAL: ["BRN"],
+  ICE_HEAL: ["FRZ"],
+  AWAKENING: ["SLP"],
+  PARLYZ_HEAL: ["PAR"],
+  FULL_HEAL: ["PSN", "BRN", "FRZ", "SLP", "PAR"]
+};
+var BALLS2 = new Set(["POKE_BALL", "GREAT_BALL", "ULTRA_BALL", "MASTER_BALL", "SAFARI_BALL"]);
+var STONES = new Set(["FIRE_STONE", "WATER_STONE", "THUNDER_STONE", "LEAF_STONE", "MOON_STONE"]);
+var VITAMINS = {
+  HP_UP: "hp",
+  PROTEIN: "attack",
+  IRON: "defense",
+  CARBOS: "speed",
+  CALCIUM: "special"
+};
+var REPELS = { REPEL: 100, SUPER_REPEL: 200, MAX_REPEL: 250 };
+var X_ITEMS = {
+  X_ATTACK: "attack",
+  X_DEFEND: "defense",
+  X_SPEED: "speed",
+  X_SPECIAL: "special"
+};
+var BATTLE_ONLY = new Set([
+  ...Object.keys(X_ITEMS),
+  "X_ACCURACY",
+  "DIRE_HIT",
+  "GUARD_SPEC",
+  "POKE_DOLL"
+]);
+var CURE_TEXT = {
+  ANTIDOTE: "_AntidoteText",
+  BURN_HEAL: "_BurnHealText",
+  ICE_HEAL: "_IceHealText",
+  AWAKENING: "_AwakeningText",
+  PARLYZ_HEAL: "_ParlyzHealText",
+  FULL_HEAL: "_FullHealText"
+};
+var ESCAPE_ROPE_TILESETS = new Set(["FOREST", "CEMETERY", "CAVERN", "FACILITY", "INTERIOR"]);
+function isBall(id) {
+  return BALLS2.has(id);
+}
+function needsTarget(data, id) {
+  return HEAL_AMOUNT[id] !== undefined || STATUS_HEAL[id] !== undefined || id === "MAX_POTION" || id === "FULL_RESTORE" || id === "REVIVE" || id === "MAX_REVIVE" || id === "RARE_CANDY" || STONES.has(id) || !!data?.items?.[id]?.machine || needsMove(id) || id === "ELIXER" || id === "MAX_ELIXER" || VITAMINS[id] !== undefined;
+}
+function needsMove(id) {
+  return id === "ETHER" || id === "MAX_ETHER" || id === "PP_UP";
+}
+function refusedInBattle(data, id) {
+  return VITAMINS[id] !== undefined || STONES.has(id) || id === "PP_UP" || id === "RARE_CANDY" || id === "COIN_CASE" || REPELS[id] !== undefined || !!data?.items?.[id]?.machine;
+}
+function repelled(save, level) {
+  const steps = save.repelSteps ?? 0;
+  const lead = save.party?.[0];
+  return steps > 0 && lead !== undefined && level < lead.level;
+}
+function itemText(data, key, fallback, subs = {}) {
+  const raw = data?.text?.[key];
+  let s = typeof raw === "string" && raw.length > 0 ? raw : fallback;
+  s = s.replace(/\{RAM:wNameBuffer\}/g, String(subs.name ?? ""));
+  s = s.replace(/\{RAM:wStringBuffer\}/g, String(subs.str ?? ""));
+  s = s.replace(/\{RAM:wEnemyMonNick\}/g, String(subs.enemy ?? ""));
+  s = s.replace(/\{USER\}/g, String(subs.name ?? ""));
+  s = s.replace(/\{PLAYER\}/g, String(subs.player ?? ""));
+  s = s.replace(/\{NUM:[^}]*\}/g, String(subs.num ?? ""));
+  return s.replace(/[ \t]+$/g, "");
+}
+function notTime(data, save) {
+  return itemText(data, "_ItemUseNotTimeText", `OAK: {PLAYER}!
+This isn't the
+time to use that!`, { player: save?.player?.name ?? "RED" });
+}
+function noEffect(data) {
+  return itemText(data, "_ItemUseNoEffectText", `It won't have any
+effect.`);
+}
+function monName(data, mon) {
+  return mon.nickname ?? data?.pokemon?.[mon.species]?.name ?? mon.species;
+}
+function maxPP(data, mv) {
+  const base = data?.moves?.[mv.id]?.pp;
+  if (typeof base !== "number")
+    return null;
+  return base + (mv.ppUps ?? 0) * Math.floor(base / 5);
+}
+function cureActiveToxic(battle, target) {
+  if (!battle)
+    return;
+  for (const b of [battle.player, battle.enemy]) {
+    if (b && b.mon === target)
+      b.toxicCounter = undefined;
+  }
+}
+function useItem(data, save, itemId, target, battle, moveIndex) {
+  const def = data?.items?.[itemId];
+  const name = def?.name ?? itemId;
+  if (battle && refusedInBattle(data, itemId)) {
+    return { kind: "failed", msgs: [notTime(data, save)] };
+  }
+  if (BALLS2.has(itemId))
+    return { kind: "ball", msgs: [] };
+  if (BATTLE_ONLY.has(itemId)) {
+    if (!battle)
+      return { kind: "failed", msgs: [notTime(data, save)] };
+    const b = battle.player;
+    if (itemId === "X_ACCURACY") {
+      b.xAccuracy = true;
+      return { kind: "consumed", msgs: [`${b.name}'s
+hits will never
+miss!`] };
+    }
+    const stat = X_ITEMS[itemId];
+    if (stat) {
+      b.stages ??= {};
+      const cur = b.stages[stat] ?? 0;
+      if (cur >= 6) {
+        return { kind: "consumed", msgs: [itemText(data, "_NothingHappenedText", "Nothing happened!")] };
+      }
+      b.stages[stat] = cur + 1;
+      return { kind: "consumed", msgs: [`${b.name}'s
+${stat.toUpperCase()} rose!`] };
+    }
+    if (itemId === "DIRE_HIT") {
+      b.focusEnergy = true;
+      return { kind: "consumed", msgs: [itemText(data, "_GettingPumpedText", `{USER}'s
+getting pumped!`, { name: b.name })] };
+    }
+    if (itemId === "GUARD_SPEC") {
+      b.mist = true;
+      return { kind: "consumed", msgs: [`${b.name}'s
+protected against
+stat changes!`] };
+    }
+    if (itemId === "POKE_DOLL") {
+      if (battle.kind !== "wild")
+        return { kind: "failed", msgs: [notTime(data, save)] };
+      return {
+        kind: "consumed_escape",
+        msgs: [itemText(data, "_WildRanText", `Wild {RAM:wEnemyMonNick}
+ran!`, { enemy: battle.enemy?.name ?? "" })]
+      };
+    }
+  }
+  if (itemId === "ETHER" || itemId === "MAX_ETHER" || itemId === "ELIXER" || itemId === "MAX_ELIXER") {
+    if (!target)
+      return { kind: "failed", msgs: [noEffect(data)] };
+    const full = itemId === "MAX_ETHER" || itemId === "MAX_ELIXER";
+    const all = itemId === "ELIXER" || itemId === "MAX_ELIXER";
+    const restore = (mv) => {
+      const cap = maxPP(data, mv);
+      if (cap === null || mv.pp >= cap)
+        return false;
+      mv.pp = full ? cap : Math.min(cap, mv.pp + 10);
+      return true;
+    };
+    let restored = false;
+    if (all) {
+      for (const mv of target.moves)
+        restored = restore(mv) || restored;
+    } else {
+      const mv = target.moves[moveIndex ?? 0];
+      restored = mv ? restore(mv) : false;
+    }
+    if (!restored)
+      return { kind: "failed", msgs: [noEffect(data)] };
+    return { kind: "consumed", msgs: [itemText(data, "_PPRestoredText", "PP was restored.")] };
+  }
+  const heal = HEAL_AMOUNT[itemId];
+  if (heal !== undefined || itemId === "MAX_POTION" || itemId === "FULL_RESTORE") {
+    if (itemId === "FULL_RESTORE" && target && target.hp > 0 && target.hp >= target.stats.hp && target.status) {
+      target.status = null;
+      cureActiveToxic(battle, target);
+      return {
+        kind: "consumed",
+        msgs: [itemText(data, CURE_TEXT.FULL_HEAL, `{RAM:wNameBuffer}'s
+health returned!`, { name: monName(data, target) })]
+      };
+    }
+    if (!target || target.hp <= 0 || target.hp >= target.stats.hp) {
+      return { kind: "failed", msgs: [noEffect(data)] };
+    }
+    const before = target.hp;
+    target.hp = heal === undefined ? target.stats.hp : Math.min(target.stats.hp, target.hp + heal);
+    if (itemId === "FULL_RESTORE") {
+      target.status = null;
+      cureActiveToxic(battle, target);
+    }
+    return {
+      kind: "consumed",
+      msgs: [itemText(data, "_PotionText", `{RAM:wNameBuffer}
+recovered by {NUM}!`, { name: monName(data, target), num: target.hp - before })],
+      healedFrom: before
+    };
+  }
+  const cures = STATUS_HEAL[itemId];
+  if (cures) {
+    if (!target || !target.status || !cures.includes(target.status)) {
+      return { kind: "failed", msgs: [noEffect(data)] };
+    }
+    target.status = null;
+    cureActiveToxic(battle, target);
+    return {
+      kind: "consumed",
+      msgs: [itemText(data, CURE_TEXT[itemId], `{RAM:wNameBuffer}'s
+status returned
+to normal!`, { name: monName(data, target) })]
+    };
+  }
+  if (itemId === "REVIVE" || itemId === "MAX_REVIVE") {
+    if (!target || target.hp > 0)
+      return { kind: "failed", msgs: [noEffect(data)] };
+    target.status = null;
+    target.hp = itemId === "REVIVE" ? Math.floor(target.stats.hp / 2) : target.stats.hp;
+    return {
+      kind: "consumed",
+      msgs: [itemText(data, "_ReviveText", `{RAM:wNameBuffer}
+is revitalized!`, { name: monName(data, target) })],
+      healedFrom: 0
+    };
+  }
+  if (STONES.has(itemId)) {
+    if (!target)
+      return { kind: "failed", msgs: [noEffect(data)] };
+    for (const evo of data?.pokemon?.[target.species]?.evolutions ?? []) {
+      if (evo.method === "ITEM" && evo.item === itemId) {
+        return { kind: "consumed", msgs: [], evolveTo: evo.species };
+      }
+    }
+    return { kind: "failed", msgs: [noEffect(data)] };
+  }
+  const vit = VITAMINS[itemId];
+  if (vit) {
+    if (!target)
+      return { kind: "failed", msgs: [noEffect(data)] };
+    const se = target.statExp ??= {};
+    const cur = se[vit] ?? 0;
+    if (cur >= 25600)
+      return { kind: "failed", msgs: [noEffect(data)] };
+    se[vit] = Math.min(65535, cur + 2560);
+    const sdef = data?.pokemon?.[target.species];
+    if (sdef) {
+      target.stats = calc(sdef, target.level, target.dvs, target.statExp);
+      target.hp = Math.min(target.hp, target.stats.hp);
+    }
+    return {
+      kind: "consumed",
+      msgs: [itemText(data, "_VitaminStatRoseText", `{RAM:wNameBuffer}'s
+{RAM:wStringBuffer} rose.`, { name: monName(data, target), str: vit === "hp" ? "HEALTH" : vit.toUpperCase() })]
+    };
+  }
+  if (itemId === "PP_UP") {
+    if (!target)
+      return { kind: "failed", msgs: [noEffect(data)] };
+    const mv = target.moves[moveIndex ?? 0];
+    const base = mv ? data?.moves?.[mv.id]?.pp : undefined;
+    if (mv && typeof base === "number" && (mv.ppUps ?? 0) < 3) {
+      mv.ppUps = (mv.ppUps ?? 0) + 1;
+      mv.pp += Math.floor(base / 5);
+      return {
+        kind: "consumed",
+        msgs: [itemText(data, "_PPIncreasedText", `{RAM:wStringBuffer}'s PP
+increased.`, { str: data?.moves?.[mv.id]?.name ?? mv.id })]
+      };
+    }
+    return { kind: "failed", msgs: [noEffect(data)] };
+  }
+  if (itemId === "ESCAPE_ROPE")
+    return { kind: "escape_rope", msgs: [] };
+  if (itemId === "TOWN_MAP") {
+    if (battle)
+      return { kind: "failed", msgs: [notTime(data, save)] };
+    return { kind: "townmap", msgs: [] };
+  }
+  if (itemId === "ITEMFINDER") {
+    if (battle)
+      return { kind: "failed", msgs: [notTime(data, save)] };
+    return { kind: "itemfinder", msgs: [] };
+  }
+  if (itemId === "COIN_CASE") {
+    return {
+      kind: "failed",
+      msgs: [itemText(data, "_CoinCaseNumCoinsText", `Coins
+{NUM}`, { num: save?.coins ?? 0 })]
+    };
+  }
+  const repel = REPELS[itemId];
+  if (repel !== undefined) {
+    save.repelSteps = repel;
+    return { kind: "consumed", msgs: [`${save?.player?.name ?? "RED"} used
+${name}!`] };
+  }
+  return { kind: "failed", msgs: [notTime(data, save)] };
+}
+
+// voxelmon/game/rules/bag.ts
+var DEFAULT_CAPACITY = 20;
+function capacity(data) {
+  const configured = data?.constants?.bagSize;
+  if (typeof configured === "number" && configured >= 1) {
+    return Math.floor(configured);
+  }
+  return DEFAULT_CAPACITY;
+}
+function precious(data, id) {
+  const def = data.items?.[id];
+  return !def || id.startsWith("HM_") || def.keyItem === true || def.tossable === false;
+}
+function isBadge(id) {
+  return id.includes("BADGE");
+}
+function slots(save) {
+  let n = 0;
+  for (const id of Object.keys(save.inventory)) {
+    if (!isBadge(id))
+      n += 1;
+  }
+  return n;
+}
+function order(save) {
+  let list = save.bagOrder;
+  if (!Array.isArray(list)) {
+    list = undefined;
+  }
+  if (!list) {
+    list = [];
+    for (const id of Object.keys(save.inventory)) {
+      if (!isBadge(id))
+        list.push(id);
+    }
+    list.sort();
+    save.bagOrder = list;
+  }
+  const seen = new Set;
+  for (let i = list.length - 1;i >= 0; i--) {
+    const id = list[i];
+    if (save.inventory[id] === undefined || seen.has(id)) {
+      list.splice(i, 1);
+    } else {
+      seen.add(id);
+    }
+  }
+  for (const id of Object.keys(save.inventory)) {
+    if (!isBadge(id) && !seen.has(id))
+      list.push(id);
+  }
+  return list;
+}
+function add(save, id, qty, data) {
+  const inv = save.inventory;
+  if (inv[id] === undefined && !isBadge(id) && slots(save) >= capacity(data)) {
+    return false;
+  }
+  if (!isBadge(id) && (inv[id] ?? 0) + (qty ?? 1) > 99) {
+    return false;
+  }
+  const isNew = inv[id] === undefined;
+  inv[id] = (inv[id] ?? 0) + (qty ?? 1);
+  if (isNew && !isBadge(id)) {
+    order(save).push(id);
+  }
+  return true;
+}
+function remove(save, id, qty) {
+  const inv = save.inventory;
+  inv[id] = (inv[id] ?? 0) - (qty ?? 1);
+  if (inv[id] <= 0) {
+    delete inv[id];
+    const list = save.bagOrder;
+    if (Array.isArray(list)) {
+      const i = list.indexOf(id);
+      if (i !== -1)
+        list.splice(i, 1);
+    }
+  }
+}
+
 // voxelmon/game/battle/battle.ts
 function listStep(input) {
   if (input.wasPressed("up") || input.wasPressed("left"))
@@ -3627,7 +4013,7 @@ this move!`);
     const pMove = this.data.moves[playerAction.id] ?? null;
     const eMove = this.data.moves[enemyAction.id] ?? null;
     const pFirst = firstMover(this.player, pMove, this.enemy, eMove, this.rng);
-    const order = pFirst ? [
+    const order2 = pFirst ? [
       [this.player, this.enemy, playerAction],
       [this.enemy, this.player, enemyAction]
     ] : [
@@ -3636,7 +4022,7 @@ this move!`);
     ];
     this.phase = "messages";
     this.afterQueue = "menu";
-    for (const [user, target, action] of order) {
+    for (const [user, target, action] of order2) {
       this.act(() => {
         this.executeAction(user, target, action);
       });
@@ -4239,13 +4625,19 @@ out!`);
       this.act(() => this.endOfTurn());
     }
   }
+  isTrainerBattle() {
+    return false;
+  }
+  itemBattle() {
+    return {
+      kind: this.isTrainerBattle() ? "trainer" : "wild",
+      player: this.player,
+      enemy: this.enemy
+    };
+  }
+  itemTarget = null;
   openItems() {
-    this.itemList = Object.keys(this.save.inventory).filter((id) => {
-      if ((this.save.inventory[id] ?? 0) <= 0)
-        return false;
-      const def = this.data.items?.[id];
-      return def?.ball !== undefined || id.endsWith("_BALL");
-    });
+    this.itemList = order(this.save).filter((id) => (this.save.inventory[id] ?? 0) > 0);
     if (this.itemList.length === 0) {
       this.say(`There are no
 items to use!`);
@@ -4263,14 +4655,51 @@ items to use!`);
     } else if (input.wasPressed("b")) {
       this.phase = "menu";
     } else if (input.wasPressed("a")) {
-      const ball = this.itemList[this.itemIndex];
-      this.save.inventory[ball] = (this.save.inventory[ball] ?? 1) - 1;
-      if (this.save.inventory[ball] <= 0)
-        delete this.save.inventory[ball];
-      this.phase = "messages";
-      this.afterQueue = "menu";
-      this.throwBall(ball);
+      const id = this.itemList[this.itemIndex];
+      if (isBall(id)) {
+        this.save.inventory[id] = (this.save.inventory[id] ?? 1) - 1;
+        if (this.save.inventory[id] <= 0)
+          delete this.save.inventory[id];
+        this.phase = "messages";
+        this.afterQueue = "menu";
+        this.throwBall(id);
+        return;
+      }
+      if (needsTarget(this.data, id) && !refusedInBattle(this.data, id)) {
+        this.itemTarget = id;
+        this.partyForced = false;
+        this.partyIndex = 0;
+        this.phase = "party";
+        return;
+      }
+      this.useBattleItem(id, this.player.mon);
     }
+  }
+  useBattleItem(id, mon) {
+    const moveIndex = needsMove(id) ? Math.max(0, mon.moves.findIndex((mv) => {
+      const cap = maxPP(this.data, mv);
+      return cap !== null && mv.pp < cap;
+    })) : undefined;
+    const r = useItem(this.data, this.save, id, mon, this.itemBattle(), moveIndex);
+    this.phase = "messages";
+    this.afterQueue = "menu";
+    if (r.kind === "failed") {
+      for (const m of r.msgs)
+        this.say(m);
+      return;
+    }
+    remove(this.save, id, 1);
+    for (const m of r.msgs)
+      this.say(m);
+    if (r.kind === "consumed_escape") {
+      this.act(() => this.escape());
+      return;
+    }
+    this.act(() => {
+      this.executeAction(this.enemy, this.player, this.enemyAction());
+    });
+    this.queueResidual(this.player, this.enemy);
+    this.act(() => this.endOfTurn());
   }
   ballMissMessage(shakes) {
     if (shakes === 0)
@@ -4359,12 +4788,23 @@ someone's PC!`);
     if (pressedDir(input)) {
       this.partyIndex = gridStep(input, this.partyIndex, GEAR_GRID_COLS, party.length);
     } else if (input.wasPressed("b")) {
+      if (this.itemTarget) {
+        this.itemTarget = null;
+        this.phase = "item";
+        return;
+      }
       if (!this.partyForced)
         this.phase = "menu";
     } else if (input.wasPressed("a")) {
       const mon = party[this.partyIndex];
       if (!mon)
         return;
+      if (this.itemTarget) {
+        const id = this.itemTarget;
+        this.itemTarget = null;
+        this.useBattleItem(id, mon);
+        return;
+      }
       if (this.partyForced) {
         if (mon.hp <= 0) {
           this.say(`There's no will
@@ -4467,6 +4907,9 @@ var GYM_LEADER_PARTY = {
 };
 
 class TrainerBattle extends WildBattle {
+  isTrainerBattle() {
+    return true;
+  }
   isTrainer = true;
   trainerName;
   trainerId;
@@ -6357,7 +6800,7 @@ var FOSSIL_ORDER = ["DOME_FOSSIL", "HELIX_FOSSIL", "OLD_AMBER"];
 function fossilScientistRows(ow, save) {
   const f = save?.flags ?? {};
   const data = ow?.data ?? ow?.shell?.data;
-  const monName = (sp) => data?.pokemon?.[sp]?.name ?? sp;
+  const monName2 = (sp) => data?.pokemon?.[sp]?.name ?? sp;
   const itemName = (id) => data?.items?.[id]?.name ?? id;
   const L = "_CinnabarLabFossilRoomScientist1";
   if (f.EVENT_GAVE_FOSSIL_TO_LAB) {
@@ -6375,13 +6818,13 @@ function fossilScientistRows(ow, save) {
     }
     return [
       ...rows2,
-      ["show_text", `${L}FossilIsBackToLifeText`, { "RAM:wStringBuffer": monName(species) }],
+      ["show_text", `${L}FossilIsBackToLifeText`, { "RAM:wStringBuffer": monName2(species) }],
       ["check_party_room"],
       ["jump_if_false", "full"],
       ["play_sound", "Get_Key_Item"],
       ["give_pokemon", species, 30],
       ["show_text", `{PLAYER} got
-${monName(species)}!`],
+${monName2(species)}!`],
       ["lab_fossil"],
       ["clear_flag", "EVENT_GAVE_FOSSIL_TO_LAB"],
       ["clear_flag", "EVENT_LAB_STILL_REVIVING_FOSSIL"],
@@ -6401,7 +6844,7 @@ you do!`],
     rows.push([
       "ask",
       `${L}SeesFossilText`,
-      { "RAM:wNameBuffer": itemName(id), "RAM:wStringBuffer": monName(FOSSIL_MONS[id]) }
+      { "RAM:wNameBuffer": itemName(id), "RAM:wStringBuffer": monName2(FOSSIL_MONS[id]) }
     ], ["jump_if_true", `give${i}`]);
   });
   rows.push(["show_text", `${L}ComeAgainText`], ["jump", "end"]);
@@ -8560,88 +9003,6 @@ function pcTileAt(mapLabel, x, y, facing) {
   return tiles.some((t) => t.x === x && t.y === y && (!t.facing || t.facing === facing));
 }
 
-// voxelmon/game/rules/bag.ts
-var DEFAULT_CAPACITY = 20;
-function capacity(data) {
-  const configured = data?.constants?.bagSize;
-  if (typeof configured === "number" && configured >= 1) {
-    return Math.floor(configured);
-  }
-  return DEFAULT_CAPACITY;
-}
-function precious(data, id) {
-  const def = data.items?.[id];
-  return !def || id.startsWith("HM_") || def.keyItem === true || def.tossable === false;
-}
-function isBadge(id) {
-  return id.includes("BADGE");
-}
-function slots(save) {
-  let n = 0;
-  for (const id of Object.keys(save.inventory)) {
-    if (!isBadge(id))
-      n += 1;
-  }
-  return n;
-}
-function order(save) {
-  let list2 = save.bagOrder;
-  if (!Array.isArray(list2)) {
-    list2 = undefined;
-  }
-  if (!list2) {
-    list2 = [];
-    for (const id of Object.keys(save.inventory)) {
-      if (!isBadge(id))
-        list2.push(id);
-    }
-    list2.sort();
-    save.bagOrder = list2;
-  }
-  const seen = new Set;
-  for (let i = list2.length - 1;i >= 0; i--) {
-    const id = list2[i];
-    if (save.inventory[id] === undefined || seen.has(id)) {
-      list2.splice(i, 1);
-    } else {
-      seen.add(id);
-    }
-  }
-  for (const id of Object.keys(save.inventory)) {
-    if (!isBadge(id) && !seen.has(id))
-      list2.push(id);
-  }
-  return list2;
-}
-function add(save, id, qty, data) {
-  const inv = save.inventory;
-  if (inv[id] === undefined && !isBadge(id) && slots(save) >= capacity(data)) {
-    return false;
-  }
-  if (!isBadge(id) && (inv[id] ?? 0) + (qty ?? 1) > 99) {
-    return false;
-  }
-  const isNew = inv[id] === undefined;
-  inv[id] = (inv[id] ?? 0) + (qty ?? 1);
-  if (isNew && !isBadge(id)) {
-    order(save).push(id);
-  }
-  return true;
-}
-function remove(save, id, qty) {
-  const inv = save.inventory;
-  inv[id] = (inv[id] ?? 0) - (qty ?? 1);
-  if (inv[id] <= 0) {
-    delete inv[id];
-    const list2 = save.bagOrder;
-    if (Array.isArray(list2)) {
-      const i = list2.indexOf(id);
-      if (i !== -1)
-        list2.splice(i, 1);
-    }
-  }
-}
-
 // voxelmon/game/world/script.ts
 var EMOTE_BUBBLES = { shock: 1, question: 2, happy: 3 };
 var CUT_ANIM_BEATS = 8;
@@ -8940,7 +9301,7 @@ function* stamp(ctx, ...args) {
 function* use_cut(ctx, ...args) {
   const w = ctx.world;
   const runner = ctx.runner;
-  const monName = args[0] ?? "";
+  const monName2 = args[0] ?? "";
   const [fx, fy] = w.player.facingCell();
   const visit2 = w.cutThisVisit;
   const key = `${w.map.def.index},${fx},${fy}`;
@@ -8957,7 +9318,7 @@ function* use_cut(ctx, ...args) {
     w.stamp(w.map.def.index, fx, fy, false);
     w.map.markCut?.(fx, fy);
     visit2?.add(key);
-    w.showText(scriptText(w, "_UsedCutText", { "RAM:wNameBuffer": monName }), () => runner.resume());
+    w.showText(scriptText(w, "_UsedCutText", { "RAM:wNameBuffer": monName2 }), () => runner.resume());
   } else {
     w.showText(scriptText(w, "_NothingToCutText"), () => runner.resume());
   }
@@ -8966,13 +9327,13 @@ function* use_cut(ctx, ...args) {
 function* use_surf(ctx, ...args) {
   const w = ctx.world;
   const runner = ctx.runner;
-  const monName = args[0] ?? "";
+  const monName2 = args[0] ?? "";
   if (w.player.surfing === true || !w.canSurfHere?.()) {
-    w.showText(scriptText(w, "_NoSurfingHereText", { "RAM:wNameBuffer": monName }), () => runner.resume());
+    w.showText(scriptText(w, "_NoSurfingHereText", { "RAM:wNameBuffer": monName2 }), () => runner.resume());
     yield;
     return;
   }
-  w.showText(scriptText(w, "_SurfingGotOnText", { "RAM:wNameBuffer": monName }), () => {
+  w.showText(scriptText(w, "_SurfingGotOnText", { "RAM:wNameBuffer": monName2 }), () => {
     w.startSurfing?.();
     runner.resume();
   });
@@ -8989,9 +9350,9 @@ function* use_fly(ctx, ...args) {
 function* use_strength(ctx, ...args) {
   const w = ctx.world;
   const runner = ctx.runner;
-  const monName = args[0] ?? "";
+  const monName2 = args[0] ?? "";
   w.enableStrength?.();
-  w.showText(scriptText(w, "_UsedStrengthText", { "RAM:wNameBuffer": monName }), () => runner.resume());
+  w.showText(scriptText(w, "_UsedStrengthText", { "RAM:wNameBuffer": monName2 }), () => runner.resume());
   yield;
 }
 function* use_flash(ctx) {
@@ -10189,8 +10550,8 @@ any coins!`);
     this.scriptMove(p, dir, 1);
     return true;
   }
-  openFlyPicker(monName, onDone) {
-    this.shell.openFlyPicker?.(monName, onDone);
+  openFlyPicker(monName2, onDone) {
+    this.shell.openFlyPicker?.(monName2, onDone);
   }
   recordHallOfFame(onDone) {
     this.shell.recordHallOfFame?.(onDone);
@@ -10309,6 +10670,15 @@ GAME is over!`;
   onStepComplete() {
     if (this.safariStep())
       return;
+    const rs = this.save;
+    if ((rs.repelSteps ?? 0) > 0) {
+      rs.repelSteps = (rs.repelSteps ?? 0) - 1;
+      if (rs.repelSteps === 0) {
+        const t = this.shell.data.text ?? {};
+        this.shell.showText(t._RepelWoreOffText ?? `REPEL's effect
+wore off.`);
+      }
+    }
     const dc = this.save.daycare;
     if (dc?.mon)
       dc.steps = (dc.steps ?? 0) + 1;
@@ -10360,6 +10730,8 @@ GAME is over!`;
     } else if (indoor && this.map.def.index >= indoor.firstIndoorMap && this.map.def.tileset !== indoor.excludedTileset) {
       enc = roll(encDef, this.shell.rng);
     }
+    if (enc && repelled(this.save, enc.level))
+      enc = null;
     if (enc) {
       this.encounterCount += 1;
       this.lastEncounter = enc;
@@ -12001,8 +12373,8 @@ class Scene {
     }
     const mf = view.moveForget?.();
     if (mf) {
-      const rows = [...mf.moves, "DON'T LEARN"];
-      const sig = `f${mf.index},${rows.length}`;
+      const rows = [...mf.moves, mf.cancel ?? "DON'T LEARN"];
+      const sig = `f${mf.index},${rows.length},${rows[rows.length - 1]}`;
       if (sig !== this.menuSig) {
         this.menuSig = sig;
         this.uiOwner = null;
@@ -14171,14 +14543,19 @@ function drawForgetList(host, b) {
   if (f.index >= f.moves.length)
     host.uiTileBottom(0, cancelY, ARROW_CURSOR);
 }
+var ITEM_ROWS = 12;
+function itemListTop(b) {
+  return Math.max(0, Math.min(b.itemIndex - (ITEM_ROWS - 1), b.itemList.length - ITEM_ROWS));
+}
 function drawItemList(host, game, b) {
   host.uiClearBottom();
   drawTopBar(host, "ITEMS");
-  for (let i = 0;i < b.itemList.length && i < 12; i++) {
+  const top = itemListTop(b);
+  for (let i = top;i < b.itemList.length && i < top + ITEM_ROWS; i++) {
     const id = b.itemList[i];
     const name = game.data.items[id]?.name ?? id;
     const count2 = game.save?.inventory?.[id] ?? 0;
-    const y = 2 + i;
+    const y = 2 + (i - top);
     stampBottom(host, 2, y, name.slice(0, 13));
     stampRight(host, y, "x" + String(count2));
     if (i === b.itemIndex)
@@ -14469,8 +14846,8 @@ function gearTouchDown(game, x, y) {
       return;
     }
     case "item": {
-      const i = row - 2;
-      if (i < 0 || i >= b.itemList.length)
+      const i = row - 2 + itemListTop(b);
+      if (row < 2 || i >= b.itemList.length)
         return;
       b.itemIndex = i;
       armed = true;
@@ -14687,12 +15064,14 @@ class MoveForgetState {
   game;
   mon;
   onPick;
+  cancelLabel;
   kind = "moveforget";
   index = 0;
-  constructor(game, mon, onPick) {
+  constructor(game, mon, onPick, cancelLabel = "DON'T LEARN") {
     this.game = game;
     this.mon = mon;
     this.onPick = onPick;
+    this.cancelLabel = cancelLabel;
   }
   update() {
     const p = this.game.input.pressed;
@@ -14717,7 +15096,8 @@ class MoveForgetState {
     return {
       name: this.mon.nickname ?? this.game.data.pokemon?.[this.mon.species]?.name ?? "",
       moves: names,
-      index: this.index
+      index: this.index,
+      cancel: this.cancelLabel
     };
   }
 }
@@ -14886,13 +15266,19 @@ class SummaryState {
 
 // voxelmon/game/ui/bagscreen.ts
 var ROWS5 = 4;
-var USABLE_ON_PARTY = new Set(["RARE_CANDY"]);
 var USABLE_IN_FIELD = new Set([
   "BICYCLE",
   "POKE_FLUTE",
   "OLD_ROD",
   "GOOD_ROD",
-  "SUPER_ROD"
+  "SUPER_ROD",
+  "REPEL",
+  "SUPER_REPEL",
+  "MAX_REPEL",
+  "ESCAPE_ROPE",
+  "COIN_CASE",
+  "TOWN_MAP",
+  "ITEMFINDER"
 ]);
 
 class BagState {
@@ -14992,12 +15378,12 @@ tant to toss!`));
   }
   use(id) {
     const teach = !!this.game.data.items?.[id]?.machine?.move;
-    if (USABLE_IN_FIELD.has(id)) {
+    if (USABLE_IN_FIELD.has(id) || BATTLE_ONLY.has(id)) {
       this.game.closeToOverworld();
       this.game.useKeyItem(id);
       return;
     }
-    if (teach || USABLE_ON_PARTY.has(id)) {
+    if (teach || needsTarget(this.game.data, id)) {
       this.game.push(new PartyState(this.game, {
         onPick: (i) => teach ? this.game.teachMachine(i, id) : this.game.useItem(i, id)
       }));
@@ -17142,6 +17528,49 @@ afford it!`), comeAgain);
       this.playPokeFlute();
     else if (isRod(itemId))
       this.goFishing(itemId);
+    else
+      this.useFieldItem(itemId);
+  }
+  showLines(lines, onDone) {
+    const next = (i) => {
+      const line = lines[i];
+      if (line === undefined) {
+        onDone?.();
+        return;
+      }
+      this.showText(line, () => next(i + 1));
+    };
+    next(0);
+  }
+  useFieldItem(itemId) {
+    const r = useItem(this.data, this.save, itemId, null, null);
+    if (r.kind === "escape_rope") {
+      const map = this.overworld.map;
+      const heal = this.save.lastHeal;
+      if (!map || !ESCAPE_ROPE_TILESETS.has(map.def?.tileset) || map.id === "AGATHAS_ROOM" || !heal) {
+        this.showText(itemText(this.data, "_ItemUseNotTimeText", `OAK: {PLAYER}!
+This isn't the
+time to use that!`, { player: this.save.player?.name ?? "RED" }));
+        return;
+      }
+      remove(this.save, itemId, 1);
+      this.overworld.startWarpTo(heal.map, heal.x, heal.y, "down");
+      if (heal.outdoor)
+        this.overworld.rememberOutdoor(heal.outdoor.id, heal.outdoor.x, heal.outdoor.y);
+      return;
+    }
+    if (r.kind === "townmap") {
+      this.setGearView("map");
+      return;
+    }
+    if (r.kind === "itemfinder") {
+      this.showText(`Nope! There's no
+response.`);
+      return;
+    }
+    if (r.kind === "consumed")
+      remove(this.save, itemId, 1);
+    this.showLines(r.msgs);
   }
   goFishing(rod) {
     const t = this.data.text ?? {};
@@ -17314,14 +17743,14 @@ a while.`), onDone);
     const t = this.data.text ?? {};
     const line = (k, fallback) => t[k] ?? fallback;
     const mon = dc.mon;
-    const monName = mon.nickname ?? this.data.pokemon[mon.species]?.name ?? mon.species;
+    const monName2 = mon.nickname ?? this.data.pokemon[mon.species]?.name ?? mon.species;
     const cap = this.data.constants?.levelCap ?? 100;
     const quote2 = daycareQuote(this.data, dc, cap);
     mon.exp = quote2.exp;
     dc.steps = 0;
     const subs = {
-      wNameBuffer: monName,
-      wDayCareMonName: monName,
+      wNameBuffer: monName2,
+      wDayCareMonName: monName2,
       wDayCareNumLevelsGrown: quote2.levelsGrown,
       wDayCareTotalCost: quote2.fee
     };
@@ -17531,9 +17960,30 @@ ${why.slice(0, 24)}` : ""}`);
     this.showText(`Got ${want} RARE CANDY!
 Now x99.`);
   }
-  useItem(partyIndex, itemId) {
-    if (itemId === "RARE_CANDY")
+  useItem(partyIndex, itemId, moveIndex) {
+    if (itemId === "RARE_CANDY") {
       this.useRareCandy(partyIndex);
+      return;
+    }
+    const mon = this.save.party[partyIndex];
+    if (!mon)
+      return;
+    if (needsMove(itemId) && moveIndex === undefined) {
+      this.push(new MoveForgetState(this, mon, (slot) => {
+        if (slot >= 0)
+          this.useItem(partyIndex, itemId, slot);
+      }, "CANCEL"));
+      return;
+    }
+    const r = useItem(this.data, this.save, itemId, mon, null, moveIndex);
+    if (r.kind === "consumed")
+      remove(this.save, itemId, 1);
+    if (r.evolveTo) {
+      const to = r.evolveTo;
+      this.push(new EvolutionState(this, mon, to, "ITEM", (m, t) => apply2(this.data, m, t, this.save.pokedex), () => this.learnMovesAtLevel(mon, () => {})));
+      return;
+    }
+    this.showLines(r.msgs);
   }
   useRareCandy(partyIndex) {
     const mon = this.save.party[partyIndex];
@@ -17602,7 +18052,7 @@ to level ${mon.level}!`, () => {
     const top = this.stack[this.stack.length - 1];
     return top?.kind === "devmenu" ? top.view() : null;
   }
-  openFlyPicker(monName, onDone) {
+  openFlyPicker(monName2, onDone) {
     const t = this.data.text ?? {};
     const here = this.overworld.map?.def;
     if (here && !isOutside(here)) {

@@ -15,7 +15,7 @@ const ROWS = 4;
  * need a target too but take their own branch below, since the bag reads
  * those off the item data rather than a list.
  */
-const USABLE_ON_PARTY = new Set(["RARE_CANDY"]);
+import * as Items from "../rules/items.ts";
 
 /**
  * Key items that act on the world rather than on a Pokemon — StartMenu_Item's
@@ -27,6 +27,7 @@ const USABLE_ON_PARTY = new Set(["RARE_CANDY"]);
 // rods: they are used ON the water you are facing, not on a Pokemon.
 const USABLE_IN_FIELD = new Set([
   "BICYCLE", "POKE_FLUTE", "OLD_ROD", "GOOD_ROD", "SUPER_ROD",
+  "REPEL", "SUPER_REPEL", "MAX_REPEL", "ESCAPE_ROPE", "COIN_CASE", "TOWN_MAP", "ITEMFINDER",
 ]);
 
 /** ItemMenu's two choices for a selected item (StartMenu_Item). */
@@ -144,7 +145,9 @@ export class BagState implements GameState {
   /** What pressing USE does, by item -- unchanged from before the submenu. */
   private use(id: string): void {
     const teach = !!this.game.data.items?.[id]?.machine?.move;
-    if (USABLE_IN_FIELD.has(id)) {
+    // A battle-only item used here gets OAK's line from the same path the
+    // field items take (rules/items.ts answers "not the time").
+    if (USABLE_IN_FIELD.has(id) || Items.BATTLE_ONLY.has(id)) {
       // ItemUseBicycle closes the WHOLE start menu, not just the item
       // list: you land back on the map already riding. Leaving the start
       // menu up would also swallow the walking input that follows.
@@ -152,7 +155,7 @@ export class BagState implements GameState {
       this.game.useKeyItem(id);
       return;
     }
-    if (teach || USABLE_ON_PARTY.has(id)) {
+    if (teach || Items.needsTarget(this.game.data, id)) {
       this.game.push(
         new PartyState(this.game as never, {
           onPick: (i: number) =>

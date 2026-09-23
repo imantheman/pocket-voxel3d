@@ -27,6 +27,7 @@ import { decodeSave } from "../voxelmon/game/save-read.ts";
 import { ShopState } from "../voxelmon/game/ui/shopscreen.ts";
 import { thirstyGirlRows } from "../voxelmon/game/world/vending.ts";
 import { MAP_SCRIPTS } from "../voxelmon/game/world/mapscripts.ts";
+import * as Items from "../voxelmon/game/rules/items.ts";
 import { POST_GAME_HOME, postGameRescue } from "../voxelmon/game/world/halloffame.ts";
 import { fishingCatch, rodPool } from "../voxelmon/game/world/fishing.ts";
 import { talkScript } from "../voxelmon/game/world/mapscripts.ts";
@@ -6612,6 +6613,189 @@ describe("HM FLASH", () => {
     expect(last()).toBe(BRIGHT);
     ow.setMap("ROCK_TUNNEL_1F", 5, 5, "down");
     expect(last()).not.toBe(BRIGHT);
+  });
+});
+
+describe("using items (rules/items.ts)", () => {
+  const mon = (species: string, level: number, hp?: number) => {
+    const m = newMon(romData!, species, level);
+    if (hp !== undefined) m.hp = hp;
+    return m;
+  };
+  const save = () => ({ player: { name: "RED" }, inventory: {}, party: [] as any[], coins: 0 });
+
+  test.skipIf(!hasGen)("a POTION restores 20, capped, and refuses at full HP", () => {
+    const m = mon("PIDGEY", 20, 5);
+    const r = Items.useItem(romData!, save(), "POTION", m, null);
+    expect(r.kind).toBe("consumed");
+    expect(m.hp).toBe(25);
+    expect(r.healedFrom).toBe(5);
+    expect(r.msgs[0]).toContain("recovered by 20");
+    // capped at max
+    m.hp = m.stats.hp - 3;
+    Items.useItem(romData!, save(), "POTION", m, null);
+    expect(m.hp).toBe(m.stats.hp);
+    // full: no effect, and nothing is spent (the caller removes on consumed only)
+    const full = Items.useItem(romData!, save(), "SUPER_POTION", m, null);
+    expect(full.kind).toBe("failed");
+    expect(full.msgs[0]).toContain("won't have any");
+    // fainted: a potion is not a revive
+    m.hp = 0;
+    expect(Items.useItem(romData!, save(), "POTION", m, null).kind).toBe("failed");
+  });
+
+  test.skipIf(!hasGen)("a cure lifts its own status and no other", () => {
+    const m = mon("PIDGEY", 20);
+    m.status = "PSN";
+    expect(Items.useItem(romData!, save(), "BURN_HEAL", m, null).kind).toBe("failed");
+    expect(m.status).toBe("PSN");
+    const r = Items.useItem(romData!, save(), "ANTIDOTE", m, null);
+    expect(r.kind).toBe("consumed");
+    expect(m.status).toBeNull();
+    expect(r.msgs[0]).toContain("cured of poison");
+    m.status = "PAR";
+    expect(Items.useItem(romData!, save(), "FULL_HEAL", m, null).kind).toBe("consumed");
+    expect(m.status).toBeNull();
+    // a FULL RESTORE at full HP with a status acts as a FULL HEAL
+    m.status = "BRN";
+    const fr = Items.useItem(romData!, save(), "FULL_RESTORE", m, null);
+    expect(fr.kind).toBe("consumed");
+    expect(m.status).toBeNull();
+  });
+
+  test.skipIf(!hasGen)("a REVIVE brings half back, a MAX REVIVE all of it", () => {
+    const m = mon("PIDGEY", 20, 0);
+    m.status = "PSN";
+    expect(Items.useItem(romData!, save(), "REVIVE", mon("PIDGEY", 20), null).kind).toBe("failed");
+    const r = Items.useItem(romData!, save(), "REVIVE", m, null);
+    expect(r.kind).toBe("consumed");
+    expect(m.hp).toBe(Math.floor(m.stats.hp / 2));
+    expect(m.status).toBeNull();
+    expect(r.healedFrom).toBe(0);
+    const k = mon("PIDGEY", 20, 0);
+    Items.useItem(romData!, save(), "MAX_REVIVE", k, null);
+    expect(k.hp).toBe(k.stats.hp);
+  });
+
+  test.skipIf(!hasGen)("an ETHER restores 10 PP of the move picked; an ELIXER every move", () => {
+    const m = mon("PIDGEY", 20);
+    const cap = Items.maxPP(romData!, m.moves[0]!)!;
+    m.moves[0]!.pp = cap - 15;
+    m.moves[1]!.pp = 0;
+    const r = Items.useItem(romData!, save(), "ETHER", m, null, 0);
+    expect(r.kind).toBe("consumed");
+    expect(m.moves[0]!.pp).toBe(cap - 5);
+    expect(m.moves[1]!.pp).toBe(0);
+    Items.useItem(romData!, save(), "MAX_ELIXER", m, null);
+    expect(m.moves[0]!.pp).toBe(cap);
+    expect(m.moves[1]!.pp).toBe(Items.maxPP(romData!, m.moves[1]!));
+    // nothing to restore: no effect
+    expect(Items.useItem(romData!, save(), "ETHER", m, null, 0).kind).toBe("failed");
+  });
+
+  test.skipIf(!hasGen)("PP UP raises a move's ceiling three times, then no more", () => {
+    const m = mon("PIDGEY", 20);
+    const base = romData!.moves[m.moves[0]!.id]!.pp;
+    for (let i = 1; i <= 3; i++) {
+      expect(Items.useItem(romData!, save(), "PP_UP", m, null, 0).kind).toBe("consumed");
+      expect(Items.maxPP(romData!, m.moves[0]!)).toBe(base + i * Math.floor(base / 5));
+    }
+    expect(Items.useItem(romData!, save(), "PP_UP", m, null, 0).kind).toBe("failed");
+  });
+
+  test.skipIf(!hasGen)("the X items and the DOLL work only in a fight, the DOLL only on a wild one", () => {
+    const s = save();
+    const me = { name: "PIDGEY", mon: mon("PIDGEY", 20), stages: {} as Record<string, number> };
+    const foe = { name: "RATTATA", mon: mon("RATTATA", 5) };
+    expect(Items.useItem(romData!, s, "X_ATTACK", null, null).kind).toBe("failed");
+    const wild = { kind: "wild", player: me, enemy: foe };
+    expect(Items.useItem(romData!, s, "X_ATTACK", null, wild).kind).toBe("consumed");
+    expect(me.stages.attack).toBe(1);
+    me.stages.attack = 6;
+    const capped = Items.useItem(romData!, s, "X_ATTACK", null, wild);
+    expect(capped.kind).toBe("consumed"); // spent all the same
+    expect(capped.msgs[0]).toBe("Nothing happened!");
+    expect(me.stages.attack).toBe(6);
+    Items.useItem(romData!, s, "DIRE_HIT", null, wild);
+    expect((me as any).focusEnergy).toBe(true);
+    Items.useItem(romData!, s, "X_ACCURACY", null, wild);
+    expect((me as any).xAccuracy).toBe(true);
+    expect(Items.useItem(romData!, s, "POKE_DOLL", null, wild).kind).toBe("consumed_escape");
+    expect(Items.useItem(romData!, s, "POKE_DOLL", null, { kind: "trainer", player: me, enemy: foe }).kind).toBe("failed");
+    // and what a fight refuses
+    expect(Items.useItem(romData!, s, "RARE_CANDY", me.mon, wild).kind).toBe("failed");
+    expect(Items.useItem(romData!, s, "HP_UP", me.mon, wild).kind).toBe("failed");
+  });
+
+  test.skipIf(!hasGen)("a vitamin adds stat exp until the cap, and a stone names the evolution", () => {
+    const m = mon("PIDGEY", 20);
+    const before = m.stats.attack;
+    expect(Items.useItem(romData!, save(), "PROTEIN", m, null).kind).toBe("consumed");
+    expect((m.statExp as any).attack).toBe(2560);
+    expect(m.stats.attack).toBeGreaterThanOrEqual(before);
+    (m.statExp as any).attack = 25600;
+    expect(Items.useItem(romData!, save(), "PROTEIN", m, null).kind).toBe("failed");
+    const c = mon("CLEFAIRY", 20);
+    const r = Items.useItem(romData!, save(), "MOON_STONE", c, null);
+    expect(r.kind).toBe("consumed");
+    expect(r.evolveTo).toBe("CLEFABLE");
+    expect(Items.useItem(romData!, save(), "FIRE_STONE", c, null).kind).toBe("failed");
+  });
+
+  test.skipIf(!hasGen)("a REPEL runs for its steps and keeps the small fry away", () => {
+    const s = save();
+    s.party.push(mon("PIDGEY", 20));
+    const r = Items.useItem(romData!, s, "SUPER_REPEL", null, null);
+    expect(r.kind).toBe("consumed");
+    expect((s as any).repelSteps).toBe(200);
+    expect(Items.repelled(s as any, 12)).toBe(true);
+    expect(Items.repelled(s as any, 20)).toBe(false); // the lead's level is not under it
+    (s as any).repelSteps = 0;
+    expect(Items.repelled(s as any, 12)).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("from the bag: a POTION heals the picked mon and is spent", () => {
+    const game = makeMenuGame();
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 10, game.battleRng));
+    const m = game.save.party[0]!;
+    m.hp = 3;
+    game.save.inventory.POTION = 2;
+    game.useItem(0, "POTION");
+    dismissText(game);
+    expect(m.hp).toBe(23);
+    expect(game.save.inventory.POTION).toBe(1);
+    // and an X item from the bag is OAK's "not the time", unspent
+    game.save.inventory.X_ATTACK = 1;
+    game.useKeyItem("X_ATTACK");
+    expect(game.stackKinds().at(-1)).toBe("textbox");
+    dismissText(game);
+    expect(game.save.inventory.X_ATTACK).toBe(1);
+  });
+
+  test.skipIf(!hasGen)("in a fight: an X ATTACK from the ITEM list spends the turn", () => {
+    const game = makeMenuGame();
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 30, game.battleRng));
+    game.save.inventory.X_ATTACK = 1;
+    game.overworld.setMap("ROUTE_1", 5, 5, "down");
+    game.pushStubBattle("PIDGEY", 3);
+    for (let t = 0; t < 4000; t++) {
+      const b = (game.battleView() as any)?.battle;
+      if (b?.phase === "menu") break;
+      game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    const b = (game.battleView() as any).battle;
+    b.openItems();
+    expect(b.phase).toBe("item");
+    b.itemIndex = b.itemList.indexOf("X_ATTACK");
+    expect(b.itemIndex).toBeGreaterThanOrEqual(0);
+    tap(game, VOX_BTN.a);
+    expect(b.player.stages.attack).toBe(1);
+    expect(game.save.inventory.X_ATTACK).toBeUndefined();
+    for (let t = 0; t < 600 && b.phase === "messages"; t++) game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+    expect(b.phase).toBe("menu");
+    expect(b.messageLog.some((m: string) => m.includes("ATTACK rose"))).toBe(true);
+    // the foe had its move
+    expect(b.messageLog.some((m: string) => m.includes("Enemy PIDGEY\nused"))).toBe(true);
   });
 });
 

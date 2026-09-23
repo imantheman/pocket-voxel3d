@@ -61,6 +61,8 @@ import {
   type HitFx,
 } from "./effects.ts";
 import { firstHealthy, newMon, partyAdd, markSeen, markOwned, type MoveSlot, type PartyMon } from "./mon.ts";
+import * as Items from "../rules/items.ts";
+import * as Bag from "../rules/bag.ts";
 
 export type BattleResult = "win" | "lose" | "run" | "caught";
 
@@ -1989,13 +1991,28 @@ export class WildBattle implements EffectBattle {
   // items / catching (:4315-4575)
   // -------------------------------------------------------------------
 
-  /** :4315-4321 openItems, narrowed to balls (v1: the bag is ball-only). */
+  /** A trainer's fight, where a POKE DOLL is "not the time". */
+  isTrainerBattle(): boolean {
+    return false;
+  }
+
+  /** What rules/items.ts needs of this fight to raise a stage or end it. */
+  private itemBattle(): Items.ItemBattle {
+    return {
+      kind: this.isTrainerBattle() ? "trainer" : "wild",
+      player: this.player as unknown as Items.ItemBattler,
+      enemy: this.enemy as unknown as Items.ItemBattler,
+    };
+  }
+
+  /** The item waiting for a party member to be used on, from the ITEM list. */
+  private itemTarget: string | null = null;
+
+  /** :4315-4321 openItems: the bag as it stands, in its order. */
   openItems(): void {
-    this.itemList = Object.keys(this.save.inventory).filter((id) => {
-      if ((this.save.inventory[id] ?? 0) <= 0) return false;
-      const def = this.data.items?.[id];
-      return def?.ball !== undefined || id.endsWith("_BALL");
-    });
+    this.itemList = Bag.order(this.save as never).filter(
+      (id) => (this.save.inventory[id] ?? 0) > 0,
+    );
     if (this.itemList.length === 0) {
       // v1 stand-in for an empty battle bag; the reference opens the full
       // BagMenu screen (:4318)
@@ -2017,14 +2034,62 @@ export class WildBattle implements EffectBattle {
     } else if (input.wasPressed("b")) {
       this.phase = "menu";
     } else if (input.wasPressed("a")) {
-      const ball = this.itemList[this.itemIndex];
-      // UseBagItem consumes the ball (item_effects.asm .done)
-      this.save.inventory[ball] = (this.save.inventory[ball] ?? 1) - 1;
-      if (this.save.inventory[ball] <= 0) delete this.save.inventory[ball];
-      this.phase = "messages";
-      this.afterQueue = "menu";
-      this.throwBall(ball);
+      const id = this.itemList[this.itemIndex]!;
+      if (Items.isBall(id)) {
+        // UseBagItem consumes the ball (item_effects.asm .done)
+        this.save.inventory[id] = (this.save.inventory[id] ?? 1) - 1;
+        if (this.save.inventory[id] <= 0) delete this.save.inventory[id];
+        this.phase = "messages";
+        this.afterQueue = "menu";
+        this.throwBall(id);
+        return;
+      }
+      if (Items.needsTarget(this.data, id) && !Items.refusedInBattle(this.data, id)) {
+        // The party list, to pick who it is used on; B comes back here.
+        this.itemTarget = id;
+        this.partyForced = false;
+        this.partyIndex = 0;
+        this.phase = "party";
+        return;
+      }
+      this.useBattleItem(id, this.player.mon);
     }
+  }
+
+  /**
+   * Use an item in the fight (rules/items.ts). A refusal costs nothing and
+   * the menu comes back; anything that took is spent, and the turn goes
+   * with it -- the foe moves, the residuals tick -- the way a thrown ball's
+   * does. A POKE DOLL ends the fight instead.
+   *
+   * An ETHER in a fight has no move menu here: it restores the first move
+   * that is short of PP. (Outside a fight the bag asks which.)
+   */
+  private useBattleItem(id: string, mon: PartyMon): void {
+    const moveIndex = Items.needsMove(id)
+      ? Math.max(0, mon.moves.findIndex((mv) => {
+          const cap = Items.maxPP(this.data, mv);
+          return cap !== null && mv.pp < cap;
+        }))
+      : undefined;
+    const r = Items.useItem(this.data, this.save, id, mon, this.itemBattle(), moveIndex);
+    this.phase = "messages";
+    this.afterQueue = "menu";
+    if (r.kind === "failed") {
+      for (const m of r.msgs) this.say(m);
+      return;
+    }
+    Bag.remove(this.save as never, id, 1);
+    for (const m of r.msgs) this.say(m);
+    if (r.kind === "consumed_escape") {
+      this.act(() => this.escape());
+      return;
+    }
+    this.act(() => {
+      this.executeAction(this.enemy, this.player, this.enemyAction());
+    });
+    this.queueResidual(this.player, this.enemy);
+    this.act(() => this.endOfTurn());
   }
 
   /** :4342-4352 ballMissMessage — wobble text by shake count. */
@@ -2139,11 +2204,19 @@ export class WildBattle implements EffectBattle {
       this.partyIndex = gridStep(input, this.partyIndex, GEAR_GRID_COLS, party.length);
     } else if (input.wasPressed("b")) {
       // ChooseNextMon loops until a healthy pick (:1856-1865): B only
-      // backs out of a VOLUNTARY open
+      // backs out of a VOLUNTARY open -- to the item list when that is
+      // what opened it
+      if (this.itemTarget) { this.itemTarget = null; this.phase = "item"; return; }
       if (!this.partyForced) this.phase = "menu";
     } else if (input.wasPressed("a")) {
       const mon = party[this.partyIndex];
       if (!mon) return;
+      if (this.itemTarget) {
+        const id = this.itemTarget;
+        this.itemTarget = null;
+        this.useBattleItem(id, mon);
+        return;
+      }
       if (this.partyForced) {
         if (mon.hp <= 0) {
           this.say("There's no will\nto fight!");

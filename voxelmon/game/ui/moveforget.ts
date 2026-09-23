@@ -12,6 +12,8 @@ export interface MoveForgetView {
   name: string;
   moves: string[];
   index: number;
+  /** The last row's label: "DON'T LEARN" for a learn, "CANCEL" for an item. */
+  cancel: string;
 }
 
 export class MoveForgetState implements GameState {
@@ -23,6 +25,9 @@ export class MoveForgetState implements GameState {
     private mon: PartyMon,
     /** The chosen slot, or -1 for "don't learn it". */
     private onPick: (slot: number) => void,
+    /** The last row. The ETHERs and PP UP borrow this list as their move
+     * menu (ItemUsePPRestore / ItemUsePPUp), where nothing is forgotten. */
+    private cancelLabel = "DON'T LEARN",
   ) {}
 
   update(): void {
@@ -47,6 +52,7 @@ export class MoveForgetState implements GameState {
       name: this.mon.nickname ?? this.game.data.pokemon?.[this.mon.species]?.name ?? "",
       moves: names,
       index: this.index,
+      cancel: this.cancelLabel,
     };
   }
 }

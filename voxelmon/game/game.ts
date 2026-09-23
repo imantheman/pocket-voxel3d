@@ -84,6 +84,7 @@ import { PartyState } from "./ui/partyscreen.ts";
 import { ShopState } from "./ui/shopscreen.ts";
 import { VENDING_DRINKS } from "./world/vending.ts";
 import { fishingCatch, isRod } from "./world/fishing.ts";
+import * as Items from "./rules/items.ts";
 import { isGhostMap } from "./world/ghost.ts";
 import { BoxState } from "./ui/boxscreen.ts";
 import { PcState } from "./ui/pcscreen.ts";
@@ -1283,6 +1284,59 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     if (itemId === "BICYCLE") this.toggleBike();
     else if (itemId === "POKE_FLUTE") this.playPokeFlute();
     else if (isRod(itemId)) this.goFishing(itemId);
+    else this.useFieldItem(itemId);
+  }
+
+  /** One line after another, then `onDone`. */
+  showLines(lines: readonly string[], onDone?: () => void): void {
+    const next = (i: number): void => {
+      const line = lines[i];
+      if (line === undefined) { onDone?.(); return; }
+      this.showText(line, () => next(i + 1));
+    };
+    next(0);
+  }
+
+  /**
+   * An item used from the bag that takes no Pokemon (rules/items.ts): the
+   * REPELs, the ESCAPE ROPE, the COIN CASE, the TOWN MAP, the ITEMFINDER --
+   * and anything battle-only used outside a battle, which gets OAK's line.
+   */
+  private useFieldItem(itemId: string): void {
+    const r = Items.useItem(this.data, this.save as never, itemId, null, null);
+    if (r.kind === "escape_rope") {
+      // ItemUseEscapeRope: only inside the dungeon tilesets
+      // (escape_rope_tilesets.asm), never in Agatha's room, and it sets
+      // BIT_ESCAPE_WARP so the special warp lands at wLastBlackoutMap --
+      // the last Pokemon Center, the same as Dig and Teleport.
+      const map = this.overworld.map;
+      const heal = this.save.lastHeal as
+        | { map: string; x: number; y: number; outdoor?: { id: string; x: number; y: number } }
+        | undefined;
+      if (!map || !Items.ESCAPE_ROPE_TILESETS.has(map.def?.tileset) || map.id === "AGATHAS_ROOM" || !heal) {
+        this.showText(Items.itemText(this.data, "_ItemUseNotTimeText",
+          "OAK: {PLAYER}!\nThis isn't the\ntime to use that!", { player: this.save.player?.name ?? "RED" }));
+        return;
+      }
+      Bag.remove(this.save, itemId, 1);
+      this.overworld.startWarpTo(heal.map, heal.x, heal.y, "down");
+      if (heal.outdoor) this.overworld.rememberOutdoor(heal.outdoor.id, heal.outdoor.x, heal.outdoor.y);
+      return;
+    }
+    if (r.kind === "townmap") {
+      // The TOWN MAP is the gear's own map view, on the bottom screen.
+      this.setGearView("map");
+      return;
+    }
+    if (r.kind === "itemfinder") {
+      // ItemUseItemfinder's search is the hidden-item table, which this
+      // port does not walk yet: the honest answer is the one it gives
+      // when nothing is near.
+      this.showText("Nope! There's no\nresponse.");
+      return;
+    }
+    if (r.kind === "consumed") Bag.remove(this.save, itemId, 1);
+    this.showLines(r.msgs);
   }
 
   /**
@@ -1856,8 +1910,44 @@ export class VoxelmonGame implements OverworldShell, SceneView {
    * ItemEffects.use). Only the items ui/bagscreen.ts offers land here; every
    * other item is still inert.
    */
-  useItem(partyIndex: number, itemId: string): void {
-    if (itemId === "RARE_CANDY") this.useRareCandy(partyIndex);
+  /**
+   * An item used on a party member from the bag (rules/items.ts): the
+   * potions and cures, the revives, the ETHERs and ELIXERs, the vitamins,
+   * PP UP, the evolution stones. `moveIndex` is the move an ETHER or PP UP
+   * was pointed at; without one the move list opens first and comes back
+   * here with the pick. The RARE CANDY keeps its own path, which does the
+   * level-up's whole ceremony.
+   */
+  useItem(partyIndex: number, itemId: string, moveIndex?: number): void {
+    if (itemId === "RARE_CANDY") { this.useRareCandy(partyIndex); return; }
+    const mon = this.save.party[partyIndex];
+    if (!mon) return;
+    if (Items.needsMove(itemId) && moveIndex === undefined) {
+      this.push(new MoveForgetState(this as never, mon, (slot) => {
+        if (slot >= 0) this.useItem(partyIndex, itemId, slot);
+      }, "CANCEL"));
+      return;
+    }
+    const r = Items.useItem(this.data, this.save as never, itemId, mon, null, moveIndex);
+    if (r.kind === "consumed") Bag.remove(this.save, itemId, 1);
+    if (r.evolveTo) {
+      // ItemUseEvoStone: the stone's evolution runs the same movie a
+      // level's does, but cannot be called off, and the new form's learn
+      // check follows it.
+      const to = r.evolveTo;
+      this.push(
+        new EvolutionState(
+          this as never,
+          mon,
+          to,
+          "ITEM",
+          (m, t) => applyEvolution(this.data, m, t, (this.save as { pokedex?: never }).pokedex),
+          () => this.learnMovesAtLevel(mon, () => {}),
+        ),
+      );
+      return;
+    }
+    this.showLines(r.msgs);
   }
 
   /**

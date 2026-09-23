@@ -372,15 +372,26 @@ function drawForgetList(host: VoxelHost, b: GearBattle): void {
  * right, ▶ cursor at column 0 on the selected row (itemIndex is 0-based,
  * battle.ts:1388-1391).
  */
+/** Rows the ITEM list shows at once; the list scrolls to keep the cursor on. */
+const ITEM_ROWS = 12;
+
+/** The first item drawn, so the cursor is always among the rows shown. */
+function itemListTop(b: GearBattle): number {
+  return Math.max(0, Math.min(b.itemIndex - (ITEM_ROWS - 1), b.itemList.length - ITEM_ROWS));
+}
+
 function drawItemList(host: VoxelHost, game: GearGame, b: GearBattle): void {
   host.uiClearBottom();
   drawTopBar(host, "ITEMS");
 
-  for (let i = 0; i < b.itemList.length && i < 12; i++) {
+  // The whole bag now, not the balls alone, so it scrolls: a window of
+  // ITEM_ROWS that follows the cursor down and back up.
+  const top = itemListTop(b);
+  for (let i = top; i < b.itemList.length && i < top + ITEM_ROWS; i++) {
     const id = b.itemList[i]!;
     const name = game.data.items[id]?.name ?? id;
     const count = game.save?.inventory?.[id] ?? 0;
-    const y = 2 + i;
+    const y = 2 + (i - top);
     stampBottom(host, 2, y, name.slice(0, 13));
     stampRight(host, y, "x" + String(count));
     if (i === b.itemIndex) host.uiTileBottom(0, y, ARROW_CURSOR);
@@ -842,9 +853,10 @@ export function gearTouchDown(game: GearGame, x: number, y: number): void {
       return;
     }
     case "item": {
-      // item rows at y = 2 + i (one row each).
-      const i = row - 2;
-      if (i < 0 || i >= b.itemList.length) return;
+      // item rows at y = 2 + (i - top) (one row each), top being where the
+      // list is scrolled to (drawItemList).
+      const i = row - 2 + itemListTop(b);
+      if (row < 2 || i >= b.itemList.length) return;
       b.itemIndex = i;
       armed = true;
       return;

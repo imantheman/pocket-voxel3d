@@ -33,6 +33,10 @@ const GYM_LEADER_PARTY: Record<string, number> = {
 };
 
 export class TrainerBattle extends WildBattle {
+  override isTrainerBattle(): boolean {
+    return true;
+  }
+
   readonly isTrainer = true;
   readonly trainerName: string;
   readonly trainerId: string;

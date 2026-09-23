@@ -1096,8 +1096,8 @@ export class Scene {
     // a "DON'T LEARN" row.
     const mf = (view as unknown as { moveForget?: () => any }).moveForget?.();
     if (mf) {
-      const rows: string[] = [...mf.moves, "DON'T LEARN"];
-      const sig = `f${mf.index},${rows.length}`;
+      const rows: string[] = [...mf.moves, mf.cancel ?? "DON'T LEARN"];
+      const sig = `f${mf.index},${rows.length},${rows[rows.length - 1]}`;
       if (sig !== this.menuSig) {
         this.menuSig = sig;
         this.uiOwner = null;
