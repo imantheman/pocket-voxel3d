@@ -29,6 +29,7 @@ import { bikeAllowed, type BikeRiding } from "./bike.ts";
 import { visit } from "./fly.ts";
 import { cellOf, freeDir, quantize, slide, stickPush } from "./freemove.ts";
 import { repelled } from "../rules/items.ts";
+import { canAt, DOOR_BLOCK, openCan, rollFirst, SECOND_LOCK, trashData } from "./trashcans.ts";
 import { spotFor } from "./snorlax.ts";
 import { barriersFor } from "./toggleblocks.ts";
 import { fillBadgeName, gateFor, guardAt, hasBadge } from "./badgegate.ts";
@@ -417,6 +418,24 @@ export class Overworld implements ScriptWorld {
       this.save.flags.EVENT_VICTORY_ROAD_1_BOULDER_ON_SWITCH = false;
     }
     this.applyRoadBarriers(mapId, def);
+    // The motorized door, once both locks are open: stamped away on every
+    // entry the way the card-key doors are (VermilionGymSetDoorTile runs
+    // from the gym's own map script, so it fires on each load).
+    if (mapId === "VERMILION_GYM" && this.save?.flags?.[SECOND_LOCK]) {
+      const door = trashData(this.shell.data as never)?.doorBlock ?? DOOR_BLOCK;
+      const i = door.by * def.width + door.bx;
+      if (Array.isArray(def.blocks) && i >= 0 && i < def.blocks.length) {
+        def.blocks[i] = door.block;
+      }
+    }
+    // VermilionCity_Script .setFirstLockTrashCanIndex: every load of the
+    // city re-rolls which can hides the first switch. Unconditional, as in
+    // the ROM -- the index is only read while the first lock is shut, and
+    // the gym is only reachable through here.
+    if (mapId === "VERMILION_CITY") {
+      const save = this.save as { trashPuzzle?: { first?: number } };
+      (save.trashPuzzle ??= {}).first = rollFirst(() => this.shell.rng.int(256));
+    }
     // A cut tree grows back the moment the map is left: pokered keeps no
     // record of a cut -- the block is rewritten in the map's own RAM copy,
     // which the next map load throws away -- so every tree stands again on
@@ -1024,6 +1043,7 @@ export class Overworld implements ScriptWorld {
     if (this.tryCardKeyDoor(fx, fy)) return;
     if (this.tryMansionSwitch(fx, fy)) return;
     if (this.tryGymQuiz(fx, fy)) return;
+    if (this.tryTrashCan(fx, fy)) return;
     // Bill's PC: a hidden PC tile (OverworldController.lua:2019). Pressing A
     // facing it opens box storage.
     if (pcTileAt(this.map.id, fx, fy, p.facing)) {
@@ -2422,6 +2442,64 @@ export class Overworld implements ScriptWorld {
         });
       },
     );
+    return true;
+  }
+
+  /**
+   * LT. SURGE's trash cans (world/trashcans.ts). The cans are hidden
+   * events on the gym floor, not objects, so this is where they live: A on
+   * one asks the puzzle what that can holds and prints the answer. The
+   * beeps come as each box CLOSES, not as it opens -- the asm's text_asm
+   * tail runs after the text has printed and DisplayTextID then holds for
+   * the press.
+   *
+   * PrintTrashText's other cans -- the SS ANNE kitchen's, and the gym's own
+   * sixteenth -- are plain "only trash here" and ride the same path.
+   */
+  private tryTrashCan(fx: number, fy: number): boolean {
+    const data = this.shell.data as never;
+    const t = (this.shell.data as { text?: Record<string, string> }).text ?? {};
+    const trash = t._VermilionGymTrashText ?? "Nope, there's\nonly trash here.";
+    const plain = ((this.shell.data as {
+      field?: { hiddenExtras?: { printTrash?: Record<string, { x: number; y: number }[]> } };
+    }).field?.hiddenExtras?.printTrash ?? {})[this.map.id] ?? [];
+    if (plain.some((h) => h.x === fx && h.y === fy)) {
+      this.shell.showText(trash);
+      return true;
+    }
+    const can = canAt(data, this.map.id, fx, fy);
+    if (can === null) return false;
+    const r = openCan(data, this.save as never, can, () => this.shell.rng.int(256));
+    const say = (line: string, sfx: string): void =>
+      this.shell.showText(line, () => this.shell.audio.playSfx(sfx));
+    if (r.kind === "trash") {
+      this.shell.showText(trash);
+    } else if (r.kind === "first") {
+      say(t._VermilionGymTrashSuccessText1
+        ?? "Hey! There's a\nswitch under the\ntrash!\fThe 1st electric\nlock opened!", "Switch");
+    } else if (r.kind === "second") {
+      // VermilionGymSetDoorTile: the clear block over the doorway is what
+      // opens the motorized door.
+      const def = this.map.def as { blocks?: number[]; width: number; index: number };
+      const door = trashData(data)?.doorBlock ?? DOOR_BLOCK;
+      const i = door.by * def.width + door.bx;
+      if (Array.isArray(def.blocks) && i >= 0 && i < def.blocks.length) {
+        def.blocks[i] = door.block;
+      }
+      for (let dy = 0; dy < 2; dy++) {
+        for (let dx = 0; dx < 2; dx++) {
+          const cx = door.bx * 2 + dx;
+          const cy = door.by * 2 + dy;
+          this.stamp(def.index, cx, cy, false);
+          this.map.markOpen(cx, cy);
+        }
+      }
+      say(t._VermilionGymTrashSuccessText3
+        ?? "The 2nd electric\nlock opened!\fThe motorized door\nopened!", "Go_Inside");
+    } else {
+      say(t._VermilionGymTrashFailText
+        ?? "Nope! There's\nonly trash here.\fHey! The electric\nlocks were reset!", "Denied");
+    }
     return true;
   }
 

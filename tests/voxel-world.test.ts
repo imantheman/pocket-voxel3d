@@ -28,6 +28,7 @@ import { ShopState } from "../voxelmon/game/ui/shopscreen.ts";
 import { thirstyGirlRows } from "../voxelmon/game/world/vending.ts";
 import { MAP_SCRIPTS } from "../voxelmon/game/world/mapscripts.ts";
 import * as Items from "../voxelmon/game/rules/items.ts";
+import * as Trash from "../voxelmon/game/world/trashcans.ts";
 import { POST_GAME_HOME, postGameRescue } from "../voxelmon/game/world/halloffame.ts";
 import { fishingCatch, rodPool } from "../voxelmon/game/world/fishing.ts";
 import { talkScript } from "../voxelmon/game/world/mapscripts.ts";
@@ -6826,6 +6827,103 @@ describe("the DEV menu option", () => {
     const entries = (game.startMenu() as { entries: string[] }).entries;
     expect(entries).toContain("DEV");
     expect(entries.indexOf("DEV")).toBe(entries.indexOf("EXIT") - 1);
+  });
+});
+
+describe("LT. SURGE's trash cans", () => {
+  const byte = (...v: number[]) => { let i = 0; return () => v[Math.min(i++, v.length - 1)]!; };
+  const fresh = () => ({ flags: {} as Record<string, boolean> });
+
+  test.skipIf(!hasGen)("the first switch is in an even can, and only that one opens it", () => {
+    const data = romData!;
+    // Random & $0e: 0,2,4..14 and nothing odd, whatever byte comes back
+    for (let b = 0; b < 256; b++) {
+      const c = Trash.rollFirst(() => b);
+      expect(c % 2).toBe(0);
+      expect(c).toBeLessThanOrEqual(14);
+    }
+    const save = fresh();
+    save.trashPuzzle = { first: 6 } as never;
+    expect(Trash.openCan(data, save as never, 7, byte(0)).kind).toBe("trash");
+    expect(save.flags[Trash.FIRST_LOCK]).toBeFalsy();
+    const hit = Trash.openCan(data, save as never, 6, byte(1));
+    expect(hit.kind).toBe("first");
+    expect(save.flags[Trash.FIRST_LOCK]).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("the second switch hides next to the first, and opens the door", () => {
+    const data = romData!;
+    const adj = (data as any).field.hiddenExtras.trashCans.adjacent["6"] as number[];
+    const save = fresh();
+    save.trashPuzzle = { first: 6 } as never;
+    // masked = byte & adj.length, offset by one into the candidates
+    const r = Trash.openCan(data, save as never, 6, byte(1));
+    expect(r.kind).toBe("first");
+    const second = (r as { second: number }).second;
+    expect(adj).toContain(second);
+    expect(Trash.openCan(data, save as never, second, byte(0)).kind).toBe("second");
+    expect(save.flags[Trash.SECOND_LOCK]).toBe(true);
+    // solved: every can is just trash again
+    expect(Trash.openCan(data, save as never, second, byte(0)).kind).toBe("trash");
+  });
+
+  test.skipIf(!hasGen)("a wrong second guess resets both locks and moves the first", () => {
+    const data = romData!;
+    const save = fresh();
+    save.trashPuzzle = { first: 6 } as never;
+    Trash.openCan(data, save as never, 6, byte(1));
+    const second = (save as any).trashPuzzle.second as number;
+    const wrong = [0, 1, 2, 3, 4, 5, 7, 8].find((c) => c !== second)!;
+    const r = Trash.openCan(data, save as never, wrong, byte(8));
+    expect(r.kind).toBe("fail");
+    expect(save.flags[Trash.FIRST_LOCK]).toBe(false);
+    expect((save as any).trashPuzzle.second).toBeUndefined();
+    expect((save as any).trashPuzzle.first % 2).toBe(0);
+  });
+
+  test.skipIf(!hasGen)("a result of 0 lands the switch in can 0 (the GymTrashCans bug)", () => {
+    // `dec a` underflows and the read lands on the bank's zero padding.
+    expect(Trash.rollSecond([1, 3], () => 0)).toBe(0);
+    expect(Trash.rollSecond([1, 3], () => 4)).toBe(0); // 4 & 2 == 0
+  });
+
+  test.skipIf(!hasGen)("in the gym: A on the right can opens the lock, and the door goes", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    const cans = (romData as any).field.hiddenExtras.trashCans.cans as { can: number; x: number; y: number }[];
+    ow.setMap("VERMILION_GYM", 5, 5, "down");
+    (game.save as any).trashPuzzle = { first: cans[0]!.can };
+    // stand on the can's tile and face it
+    const c = cans[0]!;
+    ow.setMap("VERMILION_GYM", c.x, c.y + 1, "up");
+    ow.interact();
+    expect(topText(game)).toContain("1st electric");
+    dismissText(game);
+    expect(game.save.flags[Trash.FIRST_LOCK]).toBe(true);
+
+    // the second, wherever it landed
+    const second = (game.save as any).trashPuzzle.second as number;
+    const sc = cans.find((x) => x.can === second)!;
+    ow.setMap("VERMILION_GYM", sc.x, sc.y + 1, "up");
+    ow.interact();
+    expect(topText(game)).toContain("motorized door");
+    dismissText(game);
+    expect(game.save.flags[Trash.SECOND_LOCK]).toBe(true);
+    // the doorway is open, and stays open on the next visit
+    const door = Trash.DOOR_BLOCK;
+    expect(ow.map.def.blocks[door.by * ow.map.def.width + door.bx]).toBe(door.block);
+    ow.setMap("VERMILION_CITY", 5, 5, "down");
+    ow.setMap("VERMILION_GYM", 5, 5, "down");
+    expect(ow.map.def.blocks[door.by * ow.map.def.width + door.bx]).toBe(door.block);
+  });
+
+  test.skipIf(!hasGen)("walking into Vermilion City moves the first switch", () => {
+    const game = makeMenuGame();
+    (game.save as any).trashPuzzle = { first: 99 };
+    game.overworld.setMap("VERMILION_CITY", 5, 5, "down");
+    const rolled = (game.save as any).trashPuzzle.first as number;
+    expect(rolled % 2).toBe(0);
+    expect(rolled).toBeLessThanOrEqual(14);
   });
 });
 

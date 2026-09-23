@@ -8764,6 +8764,51 @@ function stickPush(stick) {
   };
 }
 
+// voxelmon/game/world/trashcans.ts
+var DOOR_BLOCK = { bx: 2, by: 2, block: 5 };
+var FIRST_LOCK = "EVENT_1ST_LOCK_OPENED";
+var SECOND_LOCK = "EVENT_2ND_LOCK_OPENED";
+function trashData(data) {
+  return data?.field?.hiddenExtras?.trashCans ?? null;
+}
+function canAt(data, mapId, x, y) {
+  const tc = trashData(data);
+  if (!tc || mapId !== "VERMILION_GYM")
+    return null;
+  const hit = (tc.cans ?? []).find((c) => c.x === x && c.y === y);
+  return hit ? hit.can : null;
+}
+function rollFirst(rand) {
+  return (rand() & 14) % 16;
+}
+function rollSecond(adj, rand) {
+  const masked = rand() & adj.length;
+  return masked === 0 ? 0 : adj[masked - 1] ?? 0;
+}
+function openCan(data, save, can, rand) {
+  if (save.flags[SECOND_LOCK])
+    return { kind: "trash" };
+  const puz = save.trashPuzzle ??= {};
+  if (puz.first === undefined)
+    puz.first = rollFirst(rand);
+  if (!save.flags[FIRST_LOCK]) {
+    if (can !== puz.first)
+      return { kind: "trash" };
+    save.flags[FIRST_LOCK] = true;
+    const adj = trashData(data)?.adjacent?.[String(puz.first)] ?? [];
+    puz.second = rollSecond(adj, rand);
+    return { kind: "first", second: puz.second };
+  }
+  if (can === puz.second) {
+    save.flags[SECOND_LOCK] = true;
+    return { kind: "second" };
+  }
+  save.flags[FIRST_LOCK] = false;
+  puz.first = rollFirst(rand);
+  puz.second = undefined;
+  return { kind: "fail", first: puz.first };
+}
+
 // voxelmon/game/world/snorlax.ts
 var SNORLAX = [
   {
@@ -9964,6 +10009,17 @@ class Overworld {
       this.save.flags.EVENT_VICTORY_ROAD_1_BOULDER_ON_SWITCH = false;
     }
     this.applyRoadBarriers(mapId, def);
+    if (mapId === "VERMILION_GYM" && this.save?.flags?.[SECOND_LOCK]) {
+      const door = trashData(this.shell.data)?.doorBlock ?? DOOR_BLOCK;
+      const i = door.by * def.width + door.bx;
+      if (Array.isArray(def.blocks) && i >= 0 && i < def.blocks.length) {
+        def.blocks[i] = door.block;
+      }
+    }
+    if (mapId === "VERMILION_CITY") {
+      const save2 = this.save;
+      (save2.trashPuzzle ??= {}).first = rollFirst(() => this.shell.rng.int(256));
+    }
     for (const key of this.cutThisVisit) {
       const [mi, cx, cy] = key.split(",").map(Number);
       this.stamp(mi, cx, cy, true);
@@ -10366,6 +10422,8 @@ class Overworld {
     if (this.tryMansionSwitch(fx, fy))
       return;
     if (this.tryGymQuiz(fx, fy))
+      return;
+    if (this.tryTrashCan(fx, fy))
       return;
     if (pcTileAt(this.map.id, fx, fy, p.facing)) {
       const t = this.shell.data.text ?? {};
@@ -11294,6 +11352,53 @@ correct!`, () => {
         });
       });
     });
+    return true;
+  }
+  tryTrashCan(fx, fy) {
+    const data = this.shell.data;
+    const t = this.shell.data.text ?? {};
+    const trash = t._VermilionGymTrashText ?? `Nope, there's
+only trash here.`;
+    const plain = (this.shell.data.field?.hiddenExtras?.printTrash ?? {})[this.map.id] ?? [];
+    if (plain.some((h) => h.x === fx && h.y === fy)) {
+      this.shell.showText(trash);
+      return true;
+    }
+    const can = canAt(data, this.map.id, fx, fy);
+    if (can === null)
+      return false;
+    const r = openCan(data, this.save, can, () => this.shell.rng.int(256));
+    const say = (line, sfx) => this.shell.showText(line, () => this.shell.audio.playSfx(sfx));
+    if (r.kind === "trash") {
+      this.shell.showText(trash);
+    } else if (r.kind === "first") {
+      say(t._VermilionGymTrashSuccessText1 ?? `Hey! There's a
+switch under the
+trash!\fThe 1st electric
+lock opened!`, "Switch");
+    } else if (r.kind === "second") {
+      const def = this.map.def;
+      const door = trashData(data)?.doorBlock ?? DOOR_BLOCK;
+      const i = door.by * def.width + door.bx;
+      if (Array.isArray(def.blocks) && i >= 0 && i < def.blocks.length) {
+        def.blocks[i] = door.block;
+      }
+      for (let dy = 0;dy < 2; dy++) {
+        for (let dx = 0;dx < 2; dx++) {
+          const cx = door.bx * 2 + dx;
+          const cy = door.by * 2 + dy;
+          this.stamp(def.index, cx, cy, false);
+          this.map.markOpen(cx, cy);
+        }
+      }
+      say(t._VermilionGymTrashSuccessText3 ?? `The 2nd electric
+lock opened!\fThe motorized door
+opened!`, "Go_Inside");
+    } else {
+      say(t._VermilionGymTrashFailText ?? `Nope! There's
+only trash here.\fHey! The electric
+locks were reset!`, "Denied");
+    }
     return true;
   }
   cardKeyDoors(mapId) {
