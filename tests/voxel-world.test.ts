@@ -6569,6 +6569,45 @@ describe("the CAMERA SPEED option", () => {
   });
 });
 
+describe("HM FLASH", () => {
+  const BRIGHT = 0xffffffff;
+
+  /** The last scene tint the overworld set. */
+  class TintHost extends MenuHost {
+    tints: number[] = [];
+    tint(abgr: number): void { this.tints.push(abgr >>> 0); }
+  }
+
+  test.skipIf(!hasGen)("lights every floor of the tunnel, and goes out outside", () => {
+    const host = new TintHost();
+    const game = new VoxelmonGame(romData!, host, 1);
+    game.newGame();
+    game.closeToOverworld();
+    const ow = game.overworld;
+    const last = () => host.tints.at(-1);
+
+    ow.setMap("ROCK_TUNNEL_1F", 5, 5, "down");
+    expect(last()).not.toBe(BRIGHT); // dark until FLASH
+    ow.runScript([["use_flash"]]);
+    dismissText(game);
+    expect(game.save.flashLit).toBe(true);
+    expect(last()).toBe(BRIGHT);
+
+    // the next floor down is still lit: one cave, one FLASH
+    ow.setMap("ROCK_TUNNEL_B1F", 5, 5, "down");
+    expect(last()).toBe(BRIGHT);
+    ow.setMap("ROCK_TUNNEL_1F", 5, 5, "down");
+    expect(last()).toBe(BRIGHT);
+
+    // stepping outside puts the light out; the tunnel is dark again next time
+    ow.setMap("ROUTE_10", 5, 5, "down");
+    expect(game.save.flashLit).toBeUndefined();
+    expect(last()).toBe(BRIGHT);
+    ow.setMap("ROCK_TUNNEL_1F", 5, 5, "down");
+    expect(last()).not.toBe(BRIGHT);
+  });
+});
+
 describe("Silph Co 7F", () => {
   test.skipIf(!hasGen)("the rival waits at the door, and only there", () => {
     const rows = (ow: any, save: any) =>

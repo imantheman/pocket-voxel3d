@@ -680,12 +680,14 @@ function* use_strength(ctx: ScriptContext, ...args: unknown[]): Generator<void, 
 }
 
 // HM FLASH's field effect: lifts the dark-cave dimming (OverworldShell's
-// DARK_MAPS / world/overworld.ts setMap) for the rest of this visit.
-// pokered lets Flash fire anywhere — harmless outside a dark cave, since
-// tint there is already full brightness — so no facing/location check.
+// DARK_MAPS / world/overworld.ts setMap) for the rest of this visit -- every
+// dark floor of it, until the player steps outside (save.flashLit, read by
+// setMap). pokered lets Flash fire anywhere — harmless outside a dark cave,
+// since tint there is already full brightness — so no facing/location check.
 function* use_flash(ctx: ScriptContext): Generator<void, void> {
   const w = ctx.world;
   const runner = ctx.runner;
+  (w.save as { flashLit?: boolean }).flashLit = true;
   w.tint(0xffff_ffff);
   w.showText(scriptText(w, "_FlashLightsAreaText"), () => runner.resume());
   yield;

@@ -8998,6 +8998,7 @@ function* use_strength(ctx, ...args) {
 function* use_flash(ctx) {
   const w = ctx.world;
   const runner = ctx.runner;
+  w.save.flashLit = true;
   w.tint(4294967295);
   w.showText(scriptText(w, "_FlashLightsAreaText"), () => runner.resume());
   yield;
@@ -9613,7 +9614,13 @@ class Overworld {
         this.map.markCut(cx, cy);
       }
     }
-    this.tint(DARK_MAPS.has(mapId) ? DARK_TINT : BRIGHT_TINT);
+    const save = this.save;
+    if (DARK_MAPS.has(mapId)) {
+      this.tint(save.flashLit ? BRIGHT_TINT : DARK_TINT);
+    } else {
+      save.flashLit = undefined;
+      this.tint(BRIGHT_TINT);
+    }
     this.rollLuckySlot();
     if (!(opts?.seamless && this.npcPool.size > 0)) {
       this.npcPool = new Map;

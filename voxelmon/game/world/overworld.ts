@@ -432,9 +432,19 @@ export class Overworld implements ScriptWorld {
         this.map.markCut(cx!, cy!);
       }
     }
-    // HM Flash only lasts the current visit (pokered: leaving and
-    // re-entering a dark cave darkens it again) — see DARK_MAPS' doc.
-    this.tint(DARK_MAPS.has(mapId) ? DARK_TINT : BRIGHT_TINT);
+    // Rock Tunnel's darkness (wMapPalOffset, home/overworld.asm): dark
+    // until FLASH is used, and the light then holds between the tunnel's
+    // floors -- 1F to B1F and back is one visit, not a new cave -- and
+    // resets once outside (gen1recomp OverworldController save.flashLit).
+    // This used to darken every floor on entry, so FLASH had to be used
+    // again on every staircase.
+    const save = this.save as { flashLit?: boolean };
+    if (DARK_MAPS.has(mapId)) {
+      this.tint(save.flashLit ? BRIGHT_TINT : DARK_TINT);
+    } else {
+      save.flashLit = undefined;
+      this.tint(BRIGHT_TINT);
+    }
     // game_corner_slots2.asm picks the lucky machine on entry, so it changes
     // every time the player walks back in.
     this.rollLuckySlot();
