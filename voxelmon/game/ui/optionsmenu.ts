@@ -51,6 +51,7 @@ interface OptionsSave {
     animations?: boolean;
     movement?: string;
     cameraSpeed?: string;
+    devMenu?: boolean;
   };
 }
 
@@ -100,6 +101,13 @@ export class OptionsMenuState implements GameState {
         choices: CAMERA_SPEEDS.map((s) => s.label),
         index: this.cameraIndex(),
       },
+      {
+        // The playtesting tools (ui/devmenu.ts). Off unless asked for, and
+        // then DEV appears on the pause menu.
+        label: "DEV MENU",
+        choices: ["OFF", "ON"],
+        index: this.opts().devMenu === true ? 1 : 0,
+      },
     ];
   }
 
@@ -113,6 +121,7 @@ export class OptionsMenuState implements GameState {
     else if (row === 1) this.opts().animations = at === 0;
     else if (row === 2) this.opts().movement = at === 1 ? "grid" : "free";
     else if (row === 3) this.opts().cameraSpeed = CAMERA_SPEEDS[at]!.key;
+    else if (row === 4) this.opts().devMenu = at === 1;
   }
 
   update(): void {

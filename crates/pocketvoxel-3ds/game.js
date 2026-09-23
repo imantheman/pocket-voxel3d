@@ -13466,7 +13466,8 @@ class StartMenuState {
     e.push([String(game.save?.player?.name ?? "RED"), "trainer"]);
     e.push(["SAVE", "save"]);
     e.push(["OPTION", "option"]);
-    e.push(["DEV", "dev"]);
+    if (game.save?.options?.devMenu === true)
+      e.push(["DEV", "dev"]);
     e.push(["EXIT", "exit"]);
     this.entries = e.map((x) => x[0]);
     this.actions = e.map((x) => x[1]);
@@ -13735,6 +13736,11 @@ class OptionsMenuState {
         label: "CAMERA SPEED",
         choices: CAMERA_SPEEDS.map((s) => s.label),
         index: this.cameraIndex()
+      },
+      {
+        label: "DEV MENU",
+        choices: ["OFF", "ON"],
+        index: this.opts().devMenu === true ? 1 : 0
       }
     ];
   }
@@ -13752,6 +13758,8 @@ class OptionsMenuState {
       this.opts().movement = at === 1 ? "grid" : "free";
     else if (row === 3)
       this.opts().cameraSpeed = CAMERA_SPEEDS[at].key;
+    else if (row === 4)
+      this.opts().devMenu = at === 1;
   }
   update() {
     const p = this.game.input.pressed;

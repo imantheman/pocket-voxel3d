@@ -26,7 +26,7 @@ export class StartMenuState implements GameState {
   private actions: MenuAction[];
 
   constructor(
-    private game: { input: any; pop(): void; save: any },
+    private game: { input: any; pop(): void; save: { options?: { devMenu?: boolean } } & any },
     private onPick: (a: MenuAction) => void,
   ) {
     const f = game.save?.flags ?? {};
@@ -40,8 +40,10 @@ export class StartMenuState implements GameState {
     e.push(["OPTION", "option"]);
     // Playtesting only, not in the original (ui/devmenu.ts): the map jump and
     // the other test tools, one level down so a mis-press lands on a submenu
-    // rather than on a debug warp.
-    e.push(["DEV", "dev"]);
+    // rather than on a debug warp. OFF unless the OPTION screen's DEV MENU
+    // row turns it on -- a row of test tools in the middle of the pause menu
+    // is not what a player opening it wants to find.
+    if (game.save?.options?.devMenu === true) e.push(["DEV", "dev"]);
     e.push(["EXIT", "exit"]);
     this.entries = e.map((x) => x[0]);
     this.actions = e.map((x) => x[1]);

@@ -734,9 +734,11 @@ function pick(game: VoxelmonGame, index: number): void {
 describe("dev menu", () => {
   test.skipIf(!hasGen)("START -> DEV -> RARE CANDY fills the stack to 99", () => {
     const game = makeMenuGame();
+    // DEV is an OPTION now, off by default (ui/optionsmenu.ts DEV MENU)
+    game.save.options.devMenu = true;
     tap(game, VOX_BTN.start);
     expect(game.stackKinds()).toEqual(["overworld", "startmenu"]);
-    // a fresh save: ITEM, <name>, SAVE, OPTION, DEV, EXIT
+    // with it on: ITEM, <name>, SAVE, OPTION, DEV, EXIT
     const sm = game.startMenu() as { entries: string[] };
     expect(sm.entries).toContain("DEV");
     expect(sm.entries).not.toContain("WARP"); // moved down a level
@@ -6796,6 +6798,34 @@ describe("using items (rules/items.ts)", () => {
     expect(b.messageLog.some((m: string) => m.includes("ATTACK rose"))).toBe(true);
     // the foe had its move
     expect(b.messageLog.some((m: string) => m.includes("Enemy PIDGEY\nused"))).toBe(true);
+  });
+});
+
+describe("the DEV menu option", () => {
+  test.skipIf(!hasGen)("is off the pause menu until the OPTION screen turns it on", () => {
+    const game = makeMenuGame();
+    tap(game, VOX_BTN.start);
+    expect((game.startMenu() as { entries: string[] }).entries).not.toContain("DEV");
+    tap(game, VOX_BTN.b);
+
+    // turn it on from OPTION, which is where it lives now
+    const menu = new OptionsMenuState(game as never);
+    const rows = menu.view().rows;
+    const dev = rows.findIndex((r) => r.label === "DEV MENU");
+    expect(dev).toBeGreaterThanOrEqual(0);
+    expect(rows[dev]!.choices).toEqual(["OFF", "ON"]);
+    expect(rows[dev]!.index).toBe(0);
+    (game as any).push?.(menu);
+    for (let i = 0; i < dev; i++) tap(game, VOX_BTN.down);
+    tap(game, VOX_BTN.right);
+    expect(game.save.options.devMenu).toBe(true);
+    tap(game, VOX_BTN.b);
+
+    // and now it is there, above EXIT
+    tap(game, VOX_BTN.start);
+    const entries = (game.startMenu() as { entries: string[] }).entries;
+    expect(entries).toContain("DEV");
+    expect(entries.indexOf("DEV")).toBe(entries.indexOf("EXIT") - 1);
   });
 });
 
