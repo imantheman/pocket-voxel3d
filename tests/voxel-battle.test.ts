@@ -15,6 +15,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { WildBattle, type BattleButton, type BattleInput, type BattleSave } from "../voxelmon/game/battle/battle.ts";
+import { TrainerBattle } from "../voxelmon/game/battle/trainer.ts";
 import { makeBattler } from "../voxelmon/game/battle/battler.ts";
 import { newMon, type PartyMon } from "../voxelmon/game/battle/mon.ts";
 import { search as arenaSearch, type Arena } from "../voxelmon/game/battle/arena.ts";
@@ -134,6 +135,35 @@ function fightOnce(b: WildBattle, input: FakeInput): void {
   expect(b.phase).toBe("messages");
   settle(b, input);
 }
+
+describe("a ball thrown at a trainer's Pokemon", () => {
+  test.skipIf(!hasGen)("is blocked, spends the ball and the turn, and catches nothing", () => {
+    const save = makeSave([newMon(data!, "SQUIRTLE", 20)], { POKE_BALL: 2 });
+    const b = new TrainerBattle(
+      data!, save, seqRng(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+      "OPP_YOUNGSTER", 1,
+    );
+    b.enter();
+    const input = new FakeInput();
+    settle(b, input);
+    expect(b.phase).toBe("menu");
+
+    // ITEM -> the ball
+    b.openItems();
+    b.itemIndex = b.itemList.indexOf("POKE_BALL");
+    expect(b.itemIndex).toBeGreaterThanOrEqual(0);
+    tick(b, input, ["a"]);
+    settle(b, input);
+
+    expect(b.messageLog.join("|")).toContain("blocked the BALL");
+    expect(b.messageLog.join("|")).toContain("thief");
+    expect(b.result).toBeNull();          // nothing was caught
+    expect(save.party.length).toBe(1);    // and nothing joined the party
+    expect(save.inventory.POKE_BALL).toBe(1); // the ball is spent
+    // the turn went with it: the foe moved
+    expect(b.messageLog.some((m) => m.startsWith("Enemy "))).toBe(true);
+  });
+});
 
 describe("the Pokemon Tower's GHOST", () => {
   /** A wild battle built by hand so the disguise can go on before enter(). */

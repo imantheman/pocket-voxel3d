@@ -4730,6 +4730,22 @@ close too!`;
     const itemName = this.data.items?.[ball]?.name ?? ball;
     this.sayAuto(`${this.save.player.name} used
 ${itemName}!`);
+    if (this.isTrainerBattle()) {
+      this.act(() => {
+        this.lastBall = ball;
+        this.animNext("TOSS_ANIM", true, undefined, ball);
+        this.actNext(() => this.audioCues.push("sfx:Faint_Thud"));
+        this.sayNext(ghostText(this.data, "_ThrowBallAtTrainerMonText1", `The trainer
+blocked the BALL!`));
+        this.sayNext(ghostText(this.data, "_ThrowBallAtTrainerMonText2", "Don't be a thief!"));
+        this.act(() => {
+          this.executeAction(this.enemy, this.player, this.enemyAction());
+        });
+        this.queueResidual(this.player, this.enemy);
+        this.act(() => this.endOfTurn());
+      });
+      return;
+    }
     if (this.noCatch) {
       this.act(() => {
         this.lastBall = ball;

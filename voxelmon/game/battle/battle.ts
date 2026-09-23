@@ -2118,6 +2118,29 @@ export class WildBattle implements EffectBattle {
   throwBall(ball: string): void {
     const itemName = this.data.items?.[ball]?.name ?? ball;
     this.sayAuto(`${this.save.player.name} used\n${itemName}!`);
+    // ThrowBallAtTrainerMon (item_effects.asm:2292-2303): a trainer's
+    // Pokemon is not yours to take. The toss still animates -- TossBall-
+    // Animation takes its .BlockBall branch -- and the ball is still spent,
+    // because UseItem_ marks the turn taken and this path never clears it,
+    // so the foe gets its move. The ball itself is gone either way: the
+    // caller removed it before this ran.
+    if (this.isTrainerBattle()) {
+      this.act(() => {
+        this.lastBall = ball;
+        this.animNext("TOSS_ANIM", true, undefined, ball);
+        this.actNext(() => this.audioCues.push("sfx:Faint_Thud"));
+        this.sayNext(ghostText(this.data, "_ThrowBallAtTrainerMonText1",
+          "The trainer\nblocked the BALL!"));
+        this.sayNext(ghostText(this.data, "_ThrowBallAtTrainerMonText2",
+          "Don't be a thief!"));
+        this.act(() => {
+          this.executeAction(this.enemy, this.player, this.enemyAction());
+        });
+        this.queueResidual(this.player, this.enemy);
+        this.act(() => this.endOfTurn());
+      });
+      return;
+    }
     // item_effects.asm:166-175 ItemUseBall .notOldManBattle: on
     // POKEMON_TOWER_6F the RESTLESS SOUL dodges the ball whether or not the
     // SILPH SCOPE revealed it, so the dodge rides the battle rather than the
