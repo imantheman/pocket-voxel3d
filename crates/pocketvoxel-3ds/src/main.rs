@@ -2902,29 +2902,10 @@ fn main() {
             println!("guest live - X toggles guest/orbit");
         }
     }
-    let pics_page: i32 = pak_static.atlases.iter()
-        .position(|p| p.kind == atlas_kind::PICS)
-        .map(|i| i as i32).unwrap_or(-1);
     {
         let n = pak_static.atlases.iter().filter(|p| p.kind == atlas_kind::PICS).count();
-        println!("PICS pages: {}  first: {}", n, pics_page);
-        if pics_page >= 0 {
-            let pg = pak_static.atlases[pics_page as usize];
-            println!("  page {}x{} frames {}", pg.w, pg.h, pg.frames);
-        }
-        let mut sizes: Vec<(u16, u16, usize)> = Vec::new();
-        for pg2 in pak_static.atlases.iter().filter(|p| p.kind == atlas_kind::PICS) {
-            match sizes.iter_mut().find(|s| s.0 == pg2.w && s.1 == pg2.h) {
-                Some(e) => e.2 += 1,
-                None => sizes.push((pg2.w, pg2.h, 1)),
-            }
-        }
-        for (w, h, n) in sizes.iter() {
-            println!("  {}x{}: {} pages", w, h, n);
-        }
+        println!("PICS pages: {}", n);
     }
-    let mut pic_on = false;
-    let mut pic_idx: i32 = 0;
     // 11025 Hz stereo, ~3 ticks per buffer (the core renders 183.75
     // frames per 60 Hz tick).
     // The synth renders at 11025, but the pump feeds fewer ticks than
@@ -3122,57 +3103,6 @@ fn main() {
         if unsafe { voxel::take_viewer_request() } { guest_drive = false; }
         if !guest_drive && guest_ok && d.contains(KeyPad::START) { guest_drive = true; }
         if guest_drive {
-        if guest_drive && pics_page >= 0 {
-            let held = hid.keys_held();
-            let mut step = 0i32;
-            if d.contains(KeyPad::Y) { if !pic_on { pic_on = true; pic_idx = pics_page; } else { step = 1; } }
-            if d.contains(KeyPad::L) { step = -10; }
-            if d.contains(KeyPad::R) { step = 10; }
-            // hold ZL/ZR to fly
-            if held.contains(KeyPad::ZL) { step = -25; }
-            if held.contains(KeyPad::ZR) { step = 25; }
-            if d.contains(KeyPad::SELECT) && pic_on {
-                pic_on = false;
-                unsafe { voxel::scene().op(34, &[0], None); }
-            }
-            // Touch the bottom screen to scrub: x maps across the whole
-            // PICS range, so any page is one tap away.
-            if pic_on {
-                let t = hid.touch_position();
-                if t.0 != 0 || t.1 != 0 {
-                    let first = pics_page.max(0);
-                    let last = pak_static.atlases.iter().rposition(|p| p.kind == atlas_kind::PICS)
-                        .map(|i| i as i32).unwrap_or(first);
-                    let span = (last - first).max(1) as f32;
-                    let want = first + ((t.0 as f32 / 320.0) * span) as i32;
-                    if want != pic_idx {
-                        pic_idx = want.clamp(first, last);
-                        let pg = pak_static.atlases[pic_idx as usize];
-                        unsafe { voxel::scene().op(33, &[0, pic_idx, 80, 20, 320, 230], None); }
-                    }
-                }
-            }
-            if pic_on && step != 0 {
-                let n = pak_static.atlases.len() as i32;
-                pic_idx = (pic_idx + step).rem_euclid(n);
-                let dir = if step > 0 { 1 } else { -1 };
-                let mut guard = 0;
-                while pak_static.atlases[pic_idx as usize].kind != atlas_kind::PICS && guard < n {
-                    pic_idx = (pic_idx + dir).rem_euclid(n);
-                    guard += 1;
-                }
-                let pg = pak_static.atlases[pic_idx as usize];
-                unsafe { voxel::scene().op(33, &[0, pic_idx, 80, 20, 320, 230], None); }
-            }
-            if pic_on && d.contains(KeyPad::Y) && step == 0 {
-                let pg = pak_static.atlases[pic_idx as usize];
-                unsafe { voxel::scene().op(33, &[0, pic_idx, 80, 20, 320, 230], None); }
-            }
-        }
-        if d.contains(KeyPad::SELECT) && pic_on {
-            pic_on = false;
-            unsafe { voxel::scene().op(34, &[0], None); }
-        }
             // The guest is a 60 Hz simulation; render rate must not change
             // game speed. Catch up on whole ticks, capped so a hitch can't
             // spiral.
@@ -3188,7 +3118,6 @@ fn main() {
                 n.max(1)
             };
             let mut b = 0i32;
-            let browsing = pic_on;
             if k.contains(KeyPad::DPAD_UP)    { b |= 1 << 0; }
             if k.contains(KeyPad::DPAD_DOWN)  { b |= 1 << 1; }
             if k.contains(KeyPad::DPAD_LEFT)  { b |= 1 << 2; }
@@ -3203,15 +3132,14 @@ fn main() {
             if k.contains(KeyPad::B)          { b |= 1 << 5; }
             if k.contains(KeyPad::START)      { b |= 1 << 6; }
             if k.contains(KeyPad::SELECT)     { b |= 1 << 7; }
-            if browsing { b = 0; }
             // Bottom-screen touch rides the free high bits of the button word,
             // so the guest can react without changing the qjs_call_frame ABI
             // (the C shim, and its `buttons: i32`, are unchanged):
             //   bit 8      = touching
             //   bits 9..17 = x (0..319)  bits 18..25 = y (0..239)
-            // The guest reads a touch-DOWN edge, so holding is one tap; the
-            // sim-step catch-up loop re-sends the same word harmlessly.
-            if !browsing {
+            // The guest reads the touch's two edges, so holding is one tap;
+            // the sim-step catch-up loop re-sends the same word harmlessly.
+            {
                 let t = hid.touch_position();
                 if t.0 != 0 || t.1 != 0 {
                     b |= 1 << 8;
@@ -3222,12 +3150,9 @@ fn main() {
             // DEBUG map-cycle: L/R ride bits 26/27 the same way touch rides
             // 8-25 — no GB equivalent, so this stays out of VOX_BTN/Input and
             // is read directly by psp-main.ts's frame() (game.debugCycleMap).
-            // `d` (this-frame press), not `held`, so one tap is one cycle;
-            // the pics-browser above already claims L/R when `browsing`.
-            if !browsing {
-                if d.contains(KeyPad::L) { b |= 1 << 27; }
-                if d.contains(KeyPad::R) { b |= 1 << 26; }
-            }
+            // `d` (this-frame press), not `held`, so one tap is one cycle.
+            if d.contains(KeyPad::L) { b |= 1 << 27; }
+            if d.contains(KeyPad::R) { b |= 1 << 26; }
             // Bits 24-25: how far the view has been swung, in quarter turns.
             // The guest rotates its WALK by this and nothing else -- a menu
             // is drawn flat on the screen and its cursor has to keep moving
@@ -4391,11 +4316,6 @@ if page_tex.len() < pak_static.atlases.len() {
                     page_tex[ui_pg] = Some(t);
                 }
             }
-        }
-        if guest_drive && pic_on && dbg_tick % 30 == 0 {
-            let sp = unsafe {
-                voxel::scene().pics.iter().filter(|p| p.shown).count()
-            };
         }
         if page_tex.len() < pak_static.atlases.len() {
             page_tex.resize_with(pak_static.atlases.len(), || None);
