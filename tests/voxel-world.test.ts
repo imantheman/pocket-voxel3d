@@ -31,6 +31,7 @@ import * as Items from "../voxelmon/game/rules/items.ts";
 import * as Trash from "../voxelmon/game/world/trashcans.ts";
 import * as Hidden from "../voxelmon/game/world/hiddenitems.ts";
 import * as Seafoam from "../voxelmon/game/world/seafoam.ts";
+import { PartyState } from "../voxelmon/game/ui/partyscreen.ts";
 import { POST_GAME_HOME, postGameRescue } from "../voxelmon/game/world/halloffame.ts";
 import { fishingCatch, rodPool } from "../voxelmon/game/world/fishing.ts";
 import { talkScript } from "../voxelmon/game/world/mapscripts.ts";
@@ -7920,6 +7921,75 @@ describe("poison on the walk", () => {
     game.overworld.setMap("PALLET_TOWN", 5, 6, "down");
     steps(game, 8);
     expect(a.hp).toBe(3);
+  });
+});
+
+describe("DIG, TELEPORT and SOFTBOILED from the party menu", () => {
+  const withMoves = (game: VoxelmonGame, species: string, ids: string[]) => {
+    const m = newMon(romData!, species, 30, game.battleRng);
+    m.moves = ids.map((id) => ({ id, pp: 10 }));
+    game.save.party.push(m);
+    return m;
+  };
+  /** Open the party screen on slot 0 and its submenu; the rows offered. */
+  const submenu = (game: VoxelmonGame): string[] => {
+    game.push(new PartyState(game as never));
+    tap(game, VOX_BTN.a);
+    return ((game.top() as any).view().submenuItems as string[]);
+  };
+
+  test.skipIf(!hasGen)("TELEPORT is offered outdoors and DIG in the dungeons, never the other way", () => {
+    const town = makeMenuGame();
+    withMoves(town, "KADABRA", ["DIG", "TELEPORT", "SOFTBOILED"]);
+    town.overworld.setMap("PALLET_TOWN", 5, 6, "down");
+    const outside = submenu(town);
+    expect(outside).toContain("TELEPORT");
+    expect(outside).toContain("SOFTBOILED");
+    expect(outside).not.toContain("DIG");
+
+    const cave = makeMenuGame();
+    withMoves(cave, "KADABRA", ["DIG", "TELEPORT"]);
+    cave.overworld.setMap("MT_MOON_1F", 5, 5, "down");
+    const inside = submenu(cave);
+    expect(inside).toContain("DIG");
+    expect(inside).not.toContain("TELEPORT");
+  });
+
+  test.skipIf(!hasGen)("DIG takes you back to the last POKeMON CENTER", () => {
+    const game = makeMenuGame();
+    withMoves(game, "SANDSHREW", ["DIG"]);
+    (game.save as any).lastHeal = { map: "PALLET_TOWN", x: 5, y: 6 };
+    game.overworld.setMap("MT_MOON_1F", 5, 5, "down");
+    const items = submenu(game);
+    pick(game, items.indexOf("DIG"));
+    for (let i = 0; i < 300; i++) game.tick(0);
+    expect(game.overworld.map.id).toBe("PALLET_TOWN");
+    expect(game.stackKinds()).toEqual(["overworld"]);
+  });
+
+  test.skipIf(!hasGen)("SOFTBOILED hands a fifth of the user's HP to a teammate, if it can spare it", () => {
+    const game = makeMenuGame();
+    const chansey = withMoves(game, "CHANSEY", ["SOFTBOILED"]);
+    const pidgey = withMoves(game, "PIDGEY", ["TACKLE"]);
+    pidgey.hp = 1;
+    game.overworld.setMap("PALLET_TOWN", 5, 6, "down");
+    const share = Math.floor(chansey.stats.hp / 5);
+    const items = submenu(game);
+    pick(game, items.indexOf("SOFTBOILED"));
+    expect(game.stackKinds().at(-1)).toBe("party"); // the chooser
+    pick(game, 1);                                   // the PIDGEY
+    expect(pidgey.hp).toBe(1 + share);
+    expect(chansey.hp).toBe(chansey.stats.hp - share);
+
+    // too little left to give: refused, nothing moves
+    chansey.hp = share - 1;
+    pidgey.hp = 1;
+    game.closeToOverworld();
+    const again = submenu(game);
+    pick(game, again.indexOf("SOFTBOILED"));
+    expect(topText(game)).toContain("Not enough");
+    dismissText(game);
+    expect(pidgey.hp).toBe(1);
   });
 });
 

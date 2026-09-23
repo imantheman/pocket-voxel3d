@@ -5821,12 +5821,217 @@ class TrainerCardState {
   }
 }
 
+// voxelmon/game/world/map.ts
+var WATER_TILES = [20];
+var SHORE_TILES = [50, 72];
+var NO_SHORE_TILESETS = new Set(["SHIP_PORT"]);
+var OUTSIDE_TILESETS = ["OVERWORLD", "PLATEAU"];
+var WARP_PAD_TILES = {
+  FACILITY: { 32: "pad", 17: "hole" },
+  CAVERN: { 34: "hole" },
+  INTERIOR: { 85: "pad" }
+};
+function walkableList(ts) {
+  return Array.isArray(ts.walkable) ? ts.walkable : [];
+}
+function waterTileSet(def, ts) {
+  const t = ts;
+  const water = new Set(t.waterTiles ?? WATER_TILES);
+  let shore = t.shoreTiles;
+  if (shore === undefined && !NO_SHORE_TILESETS.has(def.tileset))
+    shore = SHORE_TILES;
+  for (const s of shore ?? [])
+    water.add(s);
+  return water;
+}
+function defCellTile(def, ts, cx, cy) {
+  if (!def || !ts || !ts.blocks)
+    return null;
+  const tx = cx * 2;
+  const ty = cy * 2 + 1;
+  const bx = Math.floor(tx / 4);
+  const by = Math.floor(ty / 4);
+  let id;
+  if (bx < 0 || by < 0 || bx >= def.width || by >= def.height) {
+    id = def.borderBlock;
+  } else {
+    id = def.blocks[by * def.width + bx];
+  }
+  const block = ts.blocks[id ?? 0];
+  if (!block)
+    return null;
+  return block[mod4(ty) * 4 + mod4(tx)];
+}
+function mod4(n) {
+  return (n % 4 + 4) % 4;
+}
+function defIsWalkableCell(def, ts, cx, cy) {
+  if (!ts || !ts.walkable)
+    return false;
+  const tile = defCellTile(def, ts, cx, cy);
+  if (tile === null)
+    return false;
+  return walkableList(ts).includes(tile);
+}
+function defIsWaterCell(def, ts, cx, cy) {
+  if (!def || !ts)
+    return false;
+  const tile = defCellTile(def, ts, cx, cy);
+  if (tile === null)
+    return false;
+  return waterTileSet(def, ts).has(tile);
+}
+function defPassable(def, ts, cx, cy, surfing) {
+  if (!def || !ts || !ts.blocks || !ts.walkable)
+    return false;
+  if (defIsWalkableCell(def, ts, cx, cy))
+    return true;
+  if (surfing && defIsWaterCell(def, ts, cx, cy))
+    return true;
+  return false;
+}
+function isOutdoor(def) {
+  const d = def;
+  if (d.outdoor !== undefined)
+    return d.outdoor;
+  return def.tileset === "OVERWORLD";
+}
+function isOutside(def, tilesets) {
+  if (isOutdoor(def))
+    return true;
+  for (const ts of tilesets ?? OUTSIDE_TILESETS) {
+    if (ts === def.tileset)
+      return true;
+  }
+  return false;
+}
+
+class GameMap {
+  def;
+  tileset;
+  id;
+  widthCells;
+  heightCells;
+  walkable = new Set;
+  doorTiles = new Set;
+  warpTiles = new Set;
+  waterTiles;
+  warpAt = new Map;
+  signAt = new Map;
+  cuttableAt = new Set;
+  cutAt = new Set;
+  openAt = new Set;
+  constructor(def, tilesetDef) {
+    this.def = def;
+    this.tileset = tilesetDef;
+    this.id = def.id;
+    this.widthCells = def.width * 2;
+    this.heightCells = def.height * 2;
+    for (const t of walkableList(tilesetDef))
+      this.walkable.add(t);
+    for (const t of tilesetDef.doorTiles ?? [])
+      this.doorTiles.add(t);
+    for (const t of tilesetDef.warpTiles ?? [])
+      this.warpTiles.add(t);
+    this.waterTiles = waterTileSet(def, tilesetDef);
+    (def.warps ?? []).forEach((w, i) => {
+      this.warpAt.set(w.y * this.widthCells + w.x, { index: i, def: w });
+    });
+    for (const s of def.signs ?? []) {
+      this.signAt.set(s.y * this.widthCells + s.x, s);
+    }
+    for (const [cx, cy] of def.cuttableCells ?? []) {
+      this.cuttableAt.add(cy * this.widthCells + cx);
+    }
+  }
+  blockAt(bx, by) {
+    if (bx < 0 || by < 0 || bx >= this.def.width || by >= this.def.height) {
+      return this.def.borderBlock;
+    }
+    return this.def.blocks[by * this.def.width + bx];
+  }
+  tileAt(tx, ty) {
+    const bx = Math.floor(tx / 4);
+    const by = Math.floor(ty / 4);
+    const block = this.tileset.blocks[this.blockAt(bx, by)];
+    return block[mod4(ty) * 4 + mod4(tx)];
+  }
+  cellTile(cx, cy) {
+    return this.tileAt(cx * 2, cy * 2 + 1);
+  }
+  inBounds(cx, cy) {
+    return cx >= 0 && cy >= 0 && cx < this.widthCells && cy < this.heightCells;
+  }
+  isWalkableCell(cx, cy) {
+    const i = cy * this.widthCells + cx;
+    if (this.cutAt.has(i))
+      return true;
+    if (this.openAt.has(i))
+      return true;
+    return this.walkable.has(this.cellTile(cx, cy));
+  }
+  markCut(cx, cy) {
+    this.cutAt.add(cy * this.widthCells + cx);
+  }
+  markOpen(cx, cy) {
+    this.openAt.add(cy * this.widthCells + cx);
+  }
+  markShut(cx, cy) {
+    this.openAt.delete(cy * this.widthCells + cx);
+  }
+  isOpenedDoor(cx, cy) {
+    return this.openAt.has(cy * this.widthCells + cx);
+  }
+  isGrassCell(cx, cy) {
+    if (!this.inBounds(cx, cy))
+      return false;
+    const grass = this.tileset.grassTile;
+    return grass !== undefined && this.cellTile(cx, cy) === grass;
+  }
+  isWaterCell(cx, cy) {
+    return this.waterTiles.has(this.cellTile(cx, cy));
+  }
+  isDoorTileCell(cx, cy) {
+    return this.doorTiles.has(this.cellTile(cx, cy));
+  }
+  isWarpTileCell(cx, cy) {
+    const t = this.cellTile(cx, cy);
+    return this.doorTiles.has(t) || this.warpTiles.has(t);
+  }
+  warpPadOrHoleAt(cx, cy) {
+    const t = this.tileset;
+    const table = t.warpPadTiles ?? WARP_PAD_TILES[this.def.tileset];
+    if (!table)
+      return;
+    return table[this.cellTile(cx, cy)];
+  }
+  isCounterCell(cx, cy) {
+    const t = this.cellTile(cx, cy);
+    return (this.tileset.counterTiles ?? []).includes(t);
+  }
+  warpAtCell(cx, cy) {
+    return this.warpAt.get(cy * this.widthCells + cx);
+  }
+  signAtCell(cx, cy) {
+    return this.signAt.get(cy * this.widthCells + cx);
+  }
+  isCuttableCell(cx, cy) {
+    const i = cy * this.widthCells + cx;
+    if (this.cutAt.has(i))
+      return false;
+    return this.cuttableAt.has(i);
+  }
+  connection(dir) {
+    return this.def.connections?.[dir];
+  }
+}
+
 // voxelmon/game/ui/partyscreen.ts
 var SUMMARY_PIC_CELL = { x: 1, y: 0, w: 7, h: 7 };
 function partyIconCell(i) {
   return { x: 1, y: i * 2, w: 2, h: 2 };
 }
-var FIELD_MOVES = ["CUT", "FLY", "SURF", "STRENGTH", "FLASH"];
+var FIELD_MOVES = ["CUT", "FLY", "SURF", "STRENGTH", "FLASH", "DIG", "TELEPORT", "SOFTBOILED"];
 
 class PartyState {
   game;
@@ -5899,10 +6104,45 @@ POKéMON?`;
     const knows = (id) => mon?.moves?.some((m) => m.id === id) ?? false;
     const items = ["STATS", "SWITCH"];
     for (const id of FIELD_MOVES)
-      if (knows(id))
+      if (knows(id) && this.fieldMoveOffered(id))
         items.push(id);
     items.push("CANCEL");
     return items;
+  }
+  fieldMoveOffered(id) {
+    const map = this.game.overworld?.map;
+    if (id === "TELEPORT")
+      return !!map && isOutside(map.def);
+    if (id === "DIG") {
+      return !!map && ESCAPE_ROPE_TILESETS.has(map.def?.tileset ?? "") && map.id !== "AGATHAS_ROOM";
+    }
+    return true;
+  }
+  softboiled() {
+    const party = this.party();
+    const from = this.index;
+    const user = party[from];
+    if (!user)
+      return;
+    const share = Math.floor((user.stats?.hp ?? user.hp) / 5);
+    if (user.hp < share || share <= 0) {
+      this.game.showText?.("Not enough HP!");
+      return;
+    }
+    this.game.push(new PartyState(this.game, {
+      onPick: (i) => {
+        const target = party[i];
+        const max = target?.stats?.hp ?? target?.hp ?? 0;
+        if (!target || i === from || target.hp <= 0 || target.hp >= max) {
+          this.game.showText?.(`It won't have any
+effect.`);
+          return;
+        }
+        user.hp -= share;
+        target.hp = Math.min(max, target.hp + share);
+      },
+      onCancel: () => {}
+    }));
   }
   updateSubmenu(p) {
     const items = this.submenuItems();
@@ -5929,13 +6169,19 @@ POKéMON?`;
   useFieldMove(moveId) {
     const mon = this.party()[this.index];
     const name = mon?.nickname ?? this.game.data.pokemon?.[mon?.species]?.name ?? mon?.species ?? "";
+    if (moveId === "SOFTBOILED") {
+      this.softboiled();
+      return;
+    }
     this.game.closeToOverworld();
     const verb = {
       CUT: "use_cut",
       FLY: "use_fly",
       SURF: "use_surf",
       STRENGTH: "use_strength",
-      FLASH: "use_flash"
+      FLASH: "use_flash",
+      DIG: "use_dig",
+      TELEPORT: "use_teleport"
     }[moveId];
     this.game.overworld.runScript([[verb, name]]);
   }
@@ -6198,211 +6444,6 @@ function canMove(map, entities, mover, dir, tilePairs) {
     return { ok: false, why: "entity" };
   }
   return { ok: true };
-}
-
-// voxelmon/game/world/map.ts
-var WATER_TILES = [20];
-var SHORE_TILES = [50, 72];
-var NO_SHORE_TILESETS = new Set(["SHIP_PORT"]);
-var OUTSIDE_TILESETS = ["OVERWORLD", "PLATEAU"];
-var WARP_PAD_TILES = {
-  FACILITY: { 32: "pad", 17: "hole" },
-  CAVERN: { 34: "hole" },
-  INTERIOR: { 85: "pad" }
-};
-function walkableList(ts) {
-  return Array.isArray(ts.walkable) ? ts.walkable : [];
-}
-function waterTileSet(def, ts) {
-  const t = ts;
-  const water = new Set(t.waterTiles ?? WATER_TILES);
-  let shore = t.shoreTiles;
-  if (shore === undefined && !NO_SHORE_TILESETS.has(def.tileset))
-    shore = SHORE_TILES;
-  for (const s of shore ?? [])
-    water.add(s);
-  return water;
-}
-function defCellTile(def, ts, cx, cy) {
-  if (!def || !ts || !ts.blocks)
-    return null;
-  const tx = cx * 2;
-  const ty = cy * 2 + 1;
-  const bx = Math.floor(tx / 4);
-  const by = Math.floor(ty / 4);
-  let id;
-  if (bx < 0 || by < 0 || bx >= def.width || by >= def.height) {
-    id = def.borderBlock;
-  } else {
-    id = def.blocks[by * def.width + bx];
-  }
-  const block = ts.blocks[id ?? 0];
-  if (!block)
-    return null;
-  return block[mod4(ty) * 4 + mod4(tx)];
-}
-function mod4(n) {
-  return (n % 4 + 4) % 4;
-}
-function defIsWalkableCell(def, ts, cx, cy) {
-  if (!ts || !ts.walkable)
-    return false;
-  const tile = defCellTile(def, ts, cx, cy);
-  if (tile === null)
-    return false;
-  return walkableList(ts).includes(tile);
-}
-function defIsWaterCell(def, ts, cx, cy) {
-  if (!def || !ts)
-    return false;
-  const tile = defCellTile(def, ts, cx, cy);
-  if (tile === null)
-    return false;
-  return waterTileSet(def, ts).has(tile);
-}
-function defPassable(def, ts, cx, cy, surfing) {
-  if (!def || !ts || !ts.blocks || !ts.walkable)
-    return false;
-  if (defIsWalkableCell(def, ts, cx, cy))
-    return true;
-  if (surfing && defIsWaterCell(def, ts, cx, cy))
-    return true;
-  return false;
-}
-function isOutdoor(def) {
-  const d = def;
-  if (d.outdoor !== undefined)
-    return d.outdoor;
-  return def.tileset === "OVERWORLD";
-}
-function isOutside(def, tilesets) {
-  if (isOutdoor(def))
-    return true;
-  for (const ts of tilesets ?? OUTSIDE_TILESETS) {
-    if (ts === def.tileset)
-      return true;
-  }
-  return false;
-}
-
-class GameMap {
-  def;
-  tileset;
-  id;
-  widthCells;
-  heightCells;
-  walkable = new Set;
-  doorTiles = new Set;
-  warpTiles = new Set;
-  waterTiles;
-  warpAt = new Map;
-  signAt = new Map;
-  cuttableAt = new Set;
-  cutAt = new Set;
-  openAt = new Set;
-  constructor(def, tilesetDef) {
-    this.def = def;
-    this.tileset = tilesetDef;
-    this.id = def.id;
-    this.widthCells = def.width * 2;
-    this.heightCells = def.height * 2;
-    for (const t of walkableList(tilesetDef))
-      this.walkable.add(t);
-    for (const t of tilesetDef.doorTiles ?? [])
-      this.doorTiles.add(t);
-    for (const t of tilesetDef.warpTiles ?? [])
-      this.warpTiles.add(t);
-    this.waterTiles = waterTileSet(def, tilesetDef);
-    (def.warps ?? []).forEach((w, i) => {
-      this.warpAt.set(w.y * this.widthCells + w.x, { index: i, def: w });
-    });
-    for (const s of def.signs ?? []) {
-      this.signAt.set(s.y * this.widthCells + s.x, s);
-    }
-    for (const [cx, cy] of def.cuttableCells ?? []) {
-      this.cuttableAt.add(cy * this.widthCells + cx);
-    }
-  }
-  blockAt(bx, by) {
-    if (bx < 0 || by < 0 || bx >= this.def.width || by >= this.def.height) {
-      return this.def.borderBlock;
-    }
-    return this.def.blocks[by * this.def.width + bx];
-  }
-  tileAt(tx, ty) {
-    const bx = Math.floor(tx / 4);
-    const by = Math.floor(ty / 4);
-    const block = this.tileset.blocks[this.blockAt(bx, by)];
-    return block[mod4(ty) * 4 + mod4(tx)];
-  }
-  cellTile(cx, cy) {
-    return this.tileAt(cx * 2, cy * 2 + 1);
-  }
-  inBounds(cx, cy) {
-    return cx >= 0 && cy >= 0 && cx < this.widthCells && cy < this.heightCells;
-  }
-  isWalkableCell(cx, cy) {
-    const i = cy * this.widthCells + cx;
-    if (this.cutAt.has(i))
-      return true;
-    if (this.openAt.has(i))
-      return true;
-    return this.walkable.has(this.cellTile(cx, cy));
-  }
-  markCut(cx, cy) {
-    this.cutAt.add(cy * this.widthCells + cx);
-  }
-  markOpen(cx, cy) {
-    this.openAt.add(cy * this.widthCells + cx);
-  }
-  markShut(cx, cy) {
-    this.openAt.delete(cy * this.widthCells + cx);
-  }
-  isOpenedDoor(cx, cy) {
-    return this.openAt.has(cy * this.widthCells + cx);
-  }
-  isGrassCell(cx, cy) {
-    if (!this.inBounds(cx, cy))
-      return false;
-    const grass = this.tileset.grassTile;
-    return grass !== undefined && this.cellTile(cx, cy) === grass;
-  }
-  isWaterCell(cx, cy) {
-    return this.waterTiles.has(this.cellTile(cx, cy));
-  }
-  isDoorTileCell(cx, cy) {
-    return this.doorTiles.has(this.cellTile(cx, cy));
-  }
-  isWarpTileCell(cx, cy) {
-    const t = this.cellTile(cx, cy);
-    return this.doorTiles.has(t) || this.warpTiles.has(t);
-  }
-  warpPadOrHoleAt(cx, cy) {
-    const t = this.tileset;
-    const table = t.warpPadTiles ?? WARP_PAD_TILES[this.def.tileset];
-    if (!table)
-      return;
-    return table[this.cellTile(cx, cy)];
-  }
-  isCounterCell(cx, cy) {
-    const t = this.cellTile(cx, cy);
-    return (this.tileset.counterTiles ?? []).includes(t);
-  }
-  warpAtCell(cx, cy) {
-    return this.warpAt.get(cy * this.widthCells + cx);
-  }
-  signAtCell(cx, cy) {
-    return this.signAt.get(cy * this.widthCells + cx);
-  }
-  isCuttableCell(cx, cy) {
-    const i = cy * this.widthCells + cx;
-    if (this.cutAt.has(i))
-      return false;
-    return this.cuttableAt.has(i);
-  }
-  connection(dir) {
-    return this.def.connections?.[dir];
-  }
 }
 
 // voxelmon/game/world/npc.ts
@@ -10085,6 +10126,20 @@ function* use_surf(ctx, ...args) {
   });
   yield;
 }
+function* use_escape_move(ctx) {
+  const w = ctx.world;
+  if (w.escapeWarp?.())
+    return;
+  const runner = ctx.runner;
+  w.showText(scriptText(w, "_ItemUseNotTimeText"), () => runner.resume());
+  yield;
+}
+function* use_dig(ctx) {
+  yield* use_escape_move(ctx);
+}
+function* use_teleport(ctx) {
+  yield* use_escape_move(ctx);
+}
 function* use_fly(ctx, ...args) {
   const w = ctx.world;
   const runner = ctx.runner;
@@ -10354,6 +10409,8 @@ var VERBS = {
   use_flash,
   use_surf,
   use_fly,
+  use_dig,
+  use_teleport,
   use_strength,
   give_pokemon,
   hide_object,
@@ -11341,6 +11398,9 @@ any coins!`);
     this.scriptMove(boulder, dir, 1, () => this.boulderLanded());
     this.scriptMove(p, dir, 1);
     return true;
+  }
+  escapeWarp() {
+    return this.shell.escapeWarp?.() ?? false;
   }
   openFlyPicker(monName2, onDone) {
     this.shell.openFlyPicker?.(monName2, onDone);
@@ -18515,6 +18575,15 @@ afford it!`), comeAgain);
     };
     next(0);
   }
+  escapeWarp() {
+    const heal = this.save.lastHeal;
+    if (!heal)
+      return false;
+    this.overworld.startWarpTo(heal.map, heal.x, heal.y, "down");
+    if (heal.outdoor)
+      this.overworld.rememberOutdoor(heal.outdoor.id, heal.outdoor.x, heal.outdoor.y);
+    return true;
+  }
   useFieldItem(itemId) {
     const r = useItem(this.data, this.save, itemId, null, null);
     if (r.kind === "escape_rope") {
@@ -18527,9 +18596,7 @@ time to use that!`, { player: this.save.player?.name ?? "RED" }));
         return;
       }
       remove(this.save, itemId, 1);
-      this.overworld.startWarpTo(heal.map, heal.x, heal.y, "down");
-      if (heal.outdoor)
-        this.overworld.rememberOutdoor(heal.outdoor.id, heal.outdoor.x, heal.outdoor.y);
+      this.escapeWarp();
       return;
     }
     if (r.kind === "townmap") {

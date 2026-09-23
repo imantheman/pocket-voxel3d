@@ -1405,6 +1405,11 @@ export class Overworld implements ScriptWorld {
     return true;
   }
 
+  /** use_dig / use_teleport -> game.ts escapeWarp (the rope's landing). */
+  escapeWarp(): boolean {
+    return (this.shell as unknown as { escapeWarp?: () => boolean }).escapeWarp?.() ?? false;
+  }
+
   /** use_fly -> game.ts openFlyPicker (the destination list and the warp). */
   openFlyPicker(monName: string, onDone?: () => void): void {
     (this.shell as unknown as {

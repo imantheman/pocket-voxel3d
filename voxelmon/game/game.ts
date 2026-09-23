@@ -1325,6 +1325,23 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   }
 
   /**
+   * The escape warp (engine/overworld/special_warps.asm, BIT_ESCAPE_WARP): to
+   * wLastBlackoutMap, the last POKeMON CENTER -- the ESCAPE ROPE's landing,
+   * and DIG's and TELEPORT's (start_sub_menus.asm runs all three through
+   * ItemUseEscapeRope). False with nowhere to go yet.
+   */
+  escapeWarp(): boolean {
+    const heal = this.save.lastHeal as
+      | { map: string; x: number; y: number; outdoor?: { id: string; x: number; y: number } }
+      | undefined;
+    if (!heal) return false;
+    this.overworld.startWarpTo(heal.map, heal.x, heal.y, "down");
+    // the heal point exits to the town it is IN, not the map we left from
+    if (heal.outdoor) this.overworld.rememberOutdoor(heal.outdoor.id, heal.outdoor.x, heal.outdoor.y);
+    return true;
+  }
+
+  /**
    * An item used from the bag that takes no Pokemon (rules/items.ts): the
    * REPELs, the ESCAPE ROPE, the COIN CASE, the TOWN MAP, the ITEMFINDER --
    * and anything battle-only used outside a battle, which gets OAK's line.
@@ -1346,8 +1363,7 @@ export class VoxelmonGame implements OverworldShell, SceneView {
         return;
       }
       Bag.remove(this.save, itemId, 1);
-      this.overworld.startWarpTo(heal.map, heal.x, heal.y, "down");
-      if (heal.outdoor) this.overworld.rememberOutdoor(heal.outdoor.id, heal.outdoor.x, heal.outdoor.y);
+      this.escapeWarp();
       return;
     }
     if (r.kind === "townmap") {

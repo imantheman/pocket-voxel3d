@@ -657,6 +657,30 @@ function* use_surf(ctx: ScriptContext, ...args: unknown[]): Generator<void, void
  *
  * args: [monName] for _UsedFlyText's {RAM:wNameBuffer} slot.
  */
+/**
+ * DIG and TELEPORT from the party menu (engine/menus/start_sub_menus.asm
+ * .dig / .teleport): both set wCurItem = ESCAPE_ROPE and run
+ * ItemUseEscapeRope, so both land at wLastBlackoutMap, the last POKeMON
+ * CENTER. The menu offers DIG only in the rope's dungeon tilesets and
+ * TELEPORT only outdoors (CheckIfInOutsideMap); here the warp itself is all
+ * that is left to do, with OAK's line if there is nowhere to go.
+ */
+function* use_escape_move(ctx: ScriptContext): Generator<void, void> {
+  const w = ctx.world as unknown as ScriptWorld & { escapeWarp?: () => boolean };
+  if (w.escapeWarp?.()) return;
+  const runner = ctx.runner;
+  w.showText(scriptText(w as never, "_ItemUseNotTimeText"), () => runner.resume());
+  yield;
+}
+
+function* use_dig(ctx: ScriptContext): Generator<void, void> {
+  yield* use_escape_move(ctx);
+}
+
+function* use_teleport(ctx: ScriptContext): Generator<void, void> {
+  yield* use_escape_move(ctx);
+}
+
 function* use_fly(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
   const w = ctx.world as unknown as ScriptWorld & {
     openFlyPicker?: (monName: string, done: () => void) => void;
@@ -1083,6 +1107,8 @@ const VERBS: Record<string, Verb> = {
   use_flash,
   use_surf,
   use_fly,
+  use_dig,
+  use_teleport,
   use_strength,
   give_pokemon,
   hide_object,

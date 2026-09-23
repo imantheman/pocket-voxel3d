@@ -5,6 +5,8 @@
 import type { GameState } from "../game.ts";
 import { expForLevel } from "../rules/growth.ts";
 import type { PartyMon } from "../battle/mon.ts";
+import { ESCAPE_ROPE_TILESETS } from "../rules/items.ts";
+import { isOutside } from "../world/map.ts";
 
 interface PartyGame {
   input: any;
@@ -15,7 +17,11 @@ interface PartyGame {
   /** Closes every pushed menu down to the overworld — a field HM move
    * (CUT/FLASH) needs the menu gone before it runs. */
   closeToOverworld(): void;
-  overworld: { runScript(rows: unknown[], onDone?: () => void): void };
+  overworld: {
+    runScript(rows: unknown[], onDone?: () => void): void;
+    map?: { id: string; def: { tileset?: string } };
+  };
+  showText?(text: string, onDone?: () => void): void;
 }
 
 export interface PartyEntry {
@@ -51,9 +57,10 @@ export function partyIconCell(i: number): { x: number; y: number; w: number; h: 
   return { x: 1, y: i * 2, w: 2, h: 2 };
 }
 
-/** The two field moves this port wires up outside battle (PartyMenu.lua's
- * HM dispatch) — voxelmon/game/world/script.ts's use_cut/use_flash verbs. */
-const FIELD_MOVES = ["CUT", "FLY", "SURF", "STRENGTH", "FLASH"] as const;
+/** The field moves offered outside battle (start_sub_menus.asm
+ * .outOfBattleMovePointers, PartyMenu.lua's HM dispatch) — the HMs go to
+ * world/script.ts's use_* verbs; SOFTBOILED is handled here. */
+const FIELD_MOVES = ["CUT", "FLY", "SURF", "STRENGTH", "FLASH", "DIG", "TELEPORT", "SOFTBOILED"] as const;
 
 export class PartyState implements GameState {
   readonly kind = "party";
@@ -140,9 +147,55 @@ export class PartyState implements GameState {
     const mon = this.party()[this.index];
     const knows = (id: string) => mon?.moves?.some((m) => m.id === id) ?? false;
     const items = ["STATS", "SWITCH"];
-    for (const id of FIELD_MOVES) if (knows(id)) items.push(id);
+    for (const id of FIELD_MOVES) if (knows(id) && this.fieldMoveOffered(id)) items.push(id);
     items.push("CANCEL");
     return items;
+  }
+
+  /**
+   * Where a move is even listed (start_sub_menus.asm): TELEPORT outdoors
+   * only (CheckIfInOutsideMap), DIG in the ESCAPE ROPE's dungeon tilesets
+   * minus Agatha's room -- .dig IS ItemUseEscapeRope -- and the rest
+   * anywhere; their own verbs refuse on the tile.
+   */
+  private fieldMoveOffered(id: string): boolean {
+    const map = this.game.overworld?.map;
+    if (id === "TELEPORT") return !!map && isOutside(map.def as never);
+    if (id === "DIG") {
+      return !!map && ESCAPE_ROPE_TILESETS.has(map.def?.tileset ?? "") && map.id !== "AGATHAS_ROOM";
+    }
+    return true;
+  }
+
+  /**
+   * Field SOFTBOILED (start_sub_menus.asm .softboiled): a fifth of the
+   * user's max HP goes to a chosen teammate. The user needs that much to
+   * give -- "Not enough HP!" -- and the taker must be someone else, standing,
+   * and short of full, or "It won't have any effect."
+   */
+  private softboiled(): void {
+    const party = this.party();
+    const from = this.index;
+    const user = party[from];
+    if (!user) return;
+    const share = Math.floor((user.stats?.hp ?? user.hp) / 5);
+    if (user.hp < share || share <= 0) {
+      this.game.showText?.("Not enough HP!");
+      return;
+    }
+    this.game.push(new PartyState(this.game, {
+      onPick: (i: number) => {
+        const target = party[i];
+        const max = target?.stats?.hp ?? target?.hp ?? 0;
+        if (!target || i === from || target.hp <= 0 || target.hp >= max) {
+          this.game.showText?.("It won't have any\neffect.");
+          return;
+        }
+        user.hp -= share;
+        target.hp = Math.min(max, target.hp + share);
+      },
+      onCancel: () => {},
+    }));
   }
 
   private updateSubmenu(p: any): void {
@@ -167,10 +220,15 @@ export class PartyState implements GameState {
   private useFieldMove(moveId: (typeof FIELD_MOVES)[number]): void {
     const mon = this.party()[this.index];
     const name = mon?.nickname ?? this.game.data.pokemon?.[mon?.species]?.name ?? mon?.species ?? "";
+    if (moveId === "SOFTBOILED") {
+      this.softboiled();
+      return;
+    }
     this.game.closeToOverworld();
     const verb = {
       CUT: "use_cut", FLY: "use_fly", SURF: "use_surf",
       STRENGTH: "use_strength", FLASH: "use_flash",
+      DIG: "use_dig", TELEPORT: "use_teleport",
     }[moveId];
     this.game.overworld.runScript([[verb, name]]);
   }
