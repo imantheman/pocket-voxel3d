@@ -17,6 +17,8 @@ const NOT_ENOUGH = "You don't have\nenough money.";
 const BAG_FULL = "You can't carry\nany more items.";
 const UNSELLABLE = "I can't put a\nprice on that.";
 const BOUGHT = "Here you are!\nThank you!";
+// VendingMachineText's own line -- the machine has no clerk to thank you.
+const POPPED = (name: string) => `${name}\npopped out!`;
 const SOLD = "Thank you!";
 
 export type ShopMode = "menu" | "list" | "quantity" | "confirm";
@@ -66,11 +68,30 @@ export class ShopState implements GameState {
   private confirmYes = true;
   private footer: string | null = null;
 
+  /**
+   * `vending` is the Celadon rooftop machine (world/vending.ts): the same
+   * list and the same money, without the parts a machine does not have --
+   * no BUY/SELL/QUIT menu to pick BUY from, no clerk's greeting, and no
+   * quantity box, because a machine drops one can per coin slot.
+   */
   constructor(
     private game: ShopGame,
     private stock: string[],
     private onQuit?: () => void,
-  ) {}
+    private vending = false,
+  ) {
+    if (vending) {
+      this.buying = true;
+      this.buildBuyList();
+      this.mode = "list";
+      this.footer = null;
+    }
+  }
+
+  /** The clerk's idle line, which a vending machine does not say. */
+  private get greeting(): string | null {
+    return this.vending ? null : GREET;
+  }
 
   private name(id: string): string {
     return this.game.data.items?.[id]?.name ?? id;
@@ -91,7 +112,7 @@ export class ShopState implements GameState {
       .map((id) => ({ id, label: this.name(id), right: `\u00a5${this.price(id)}` }));
     this.listIndex = 0;
     this.listTop = 0;
-    this.footer = GREET;
+    this.footer = this.greeting;
   }
 
   // sell(game): Bag.order -> { label, right = "xN" } (no price in the label,
@@ -104,7 +125,7 @@ export class ShopState implements GameState {
     }));
     this.listIndex = 0;
     this.listTop = 0;
-    this.footer = GREET;
+    this.footer = this.greeting;
   }
 
   private clampWindow(): void {
@@ -141,6 +162,7 @@ export class ShopState implements GameState {
       if (p.down) this.listIndex = (this.listIndex + 1) % n;
       this.clampWindow();
       if (p.b || (p.a && this.listIndex === this.list.length)) {
+        if (this.vending) { this.quit(); return; }
         this.mode = "menu";
         this.footer = null;
         return;
@@ -154,7 +176,7 @@ export class ShopState implements GameState {
       if (p.down) this.qty = Math.max(1, this.qty - 1);
       if (p.right) this.qty = Math.min(this.maxQty, this.qty + 10);
       if (p.left) this.qty = Math.max(1, this.qty - 10);
-      if (p.b) { this.mode = "list"; this.footer = GREET; return; }
+      if (p.b) { this.mode = "list"; this.footer = this.greeting; return; }
       if (p.a) {
         const total = this.unitPrice * this.qty;
         this.footer = this.buying
@@ -168,10 +190,10 @@ export class ShopState implements GameState {
 
     if (this.mode === "confirm") {
       if (p.up || p.down) this.confirmYes = !this.confirmYes;
-      if (p.b) { this.mode = "list"; this.footer = GREET; return; }
+      if (p.b) { this.mode = "list"; this.footer = this.greeting; return; }
       if (p.a) {
         if (this.confirmYes) this.commit();
-        else { this.mode = "list"; this.footer = GREET; }
+        else { this.mode = "list"; this.footer = this.greeting; }
       }
       return;
     }
@@ -188,6 +210,12 @@ export class ShopState implements GameState {
       this.maxQty = Math.min(99, Math.floor((save.money ?? 0) / Math.max(1, price)));
       this.qty = 1;
       this.mode = "quantity";
+      if (this.vending) {
+        this.maxQty = 1;
+        this.footer = `${this.selName}?\nThat will be\n\u00a5${price}. OK?`;
+        this.confirmYes = true;
+        this.mode = "confirm";
+      }
     } else {
       if (this.unsellable(row.id)) { this.footer = UNSELLABLE; return; }
       this.selId = row.id;
@@ -210,7 +238,7 @@ export class ShopState implements GameState {
         return;
       }
       save.money = (save.money ?? 0) - total;
-      this.footer = BOUGHT;
+      this.footer = this.vending ? POPPED(this.selName) : BOUGHT;
     } else {
       save.money = Math.min(MONEY_CAP, (save.money ?? 0) + total);
       Bag.remove(save, this.selId, this.qty);

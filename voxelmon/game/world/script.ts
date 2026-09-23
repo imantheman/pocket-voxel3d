@@ -763,6 +763,19 @@ function* open_prizes(ctx: ScriptContext, ...args: unknown[]): Generator<void, v
 }
 
 /**
+ * A Celadon rooftop vending machine (world/vending.ts). The same shop screen
+ * the marts use, in its machine mode; blocks until the player walks away
+ * from it, like the mart's list.
+ */
+function* open_vending(ctx: ScriptContext): Generator<void, void> {
+  const runner = ctx.runner;
+  const w = ctx.world as unknown as { openVending?: (done: () => void) => void };
+  if (!w.openVending) return;
+  w.openVending(() => runner.resume());
+  yield;
+}
+
+/**
  * Oak's aide (engine/events/oaks_aide.asm). He reads the real dex tally back
  * into his own lines, which script rows cannot fill, so the flow is on the
  * game side (game.ts openOaksAide). args: [the aide's TEXT_* id].
@@ -1063,6 +1076,7 @@ const VERBS: Record<string, Verb> = {
   static_battle,
   trade,
   open_mart,
+  open_vending,
   open_elevator,
   walk_route,
   check_item,

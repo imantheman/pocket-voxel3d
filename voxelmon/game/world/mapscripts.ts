@@ -22,6 +22,7 @@ import type { Dir } from "./collision.ts";
 import { coinClerkRows, coinGiftRows, prizeCounterRows } from "./gamecorner.ts";
 import { floorsOf, seedExit } from "./elevator.ts";
 import { SAFARI_JOIN_CELLS, safariJoinRows, safariLeavingRows } from "./safari.ts";
+import { thirstyGirlRows, vendingRows } from "./vending.ts";
 import { SAFFRON_GATES, saffronGateScript } from "./saffrongate.ts";
 
 /** A talk handler that builds its rows from live state, or null for none. */
@@ -2547,6 +2548,17 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
   CELADON_MART_ELEVATOR: {
     onEnter: seedElevator,
     talk: { TEXT_CELADONMARTELEVATOR: [["open_elevator"]] as ScriptRow[] },
+  },
+
+  // The rooftop (story4.lua M.CELADON_MART_ROOF). Three machines, one girl,
+  // and the only drinks in Kanto worth carrying.
+  CELADON_MART_ROOF: {
+    talk: {
+      TEXT_CELADONMARTROOF_VENDING_MACHINE1: vendingRows(),
+      TEXT_CELADONMARTROOF_VENDING_MACHINE2: vendingRows(),
+      TEXT_CELADONMARTROOF_VENDING_MACHINE3: vendingRows(),
+      TEXT_CELADONMARTROOF_LITTLE_GIRL: thirstyGirlRows,
+    },
   },
 };
 

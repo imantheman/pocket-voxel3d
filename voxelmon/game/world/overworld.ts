@@ -1825,6 +1825,14 @@ export class Overworld implements ScriptWorld {
     else onDone();
   }
 
+  /** open_vending -> the rooftop machine's drink list (ui/shopscreen.ts). */
+  openVending(onDone: () => void): void {
+    const self = this as any;
+    const shell = self.shell ?? self.game ?? self.host ?? null;
+    if (shell?.openVending) shell.openVending(onDone);
+    else onDone();
+  }
+
   openShop(stock: string[], onQuit: () => void): void {
     const self = this as any;
     const shell = self.shell ?? self.game ?? self.host ?? null;

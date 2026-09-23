@@ -153,16 +153,23 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
     return new GameMap(def, tileset);
   });
 
-  // v1 bakes ONE terrain page shared by every map, so the reference's three
-  // per-map tile-id exceptions (Celadon Mart) cannot apply — none of those
-  // maps is reachable from v1's set, and cooking one silently mis-colored is
-  // worse than refusing (docs/VOXEL.md §6, "what does not match RED++").
-  if (redpp) {
+  // The reference's three per-map tile-id exceptions are all Celadon Mart,
+  // and a terrain page can only carry one of them: the page is shared by
+  // every map in the cook. A ONE-map cook has no such sharing, which is how
+  // the shipped paks are built (one map, one pak, cc_recook.py) -- so the
+  // fix applies there and the mart's ground floor, third floor and roof can
+  // be cooked at all. They could not before: refusing was the whole reason
+  // three of the mart's floors had no pak and the building was unenterable.
+  // A multi-map cook still refuses them, because silently mis-coloring one
+  // is worse (docs/VOXEL.md §6, "what does not match RED++").
+  const soleMapId = mapNames.length === 1 ? mapNames[0] : null;
+  if (redpp && !soleMapId) {
     const needExceptions = Redpp.mapExceptions(mapNames);
     if (needExceptions.length > 0) {
       throw new Error(
         `RED++ color: ${needExceptions.join(", ")} need per-map tile-id ` +
-          `exceptions, which one shared terrain page cannot carry`,
+          `exceptions, which one terrain page shared by ${mapNames.length} ` +
+          `maps cannot carry -- cook them one at a time`,
       );
     }
   }
@@ -171,7 +178,7 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
   // Page order: terrain (page 0 — the core binds the first TERRAIN page for
   // every chunk), ui, sprite sheets, emotes, pics.
   const terrainPage = 0;
-  const terrain = buildTerrainPage(gen, maps.map((m) => m.tileset), redpp);
+  const terrain = buildTerrainPage(gen, maps.map((m) => m.tileset), redpp, soleMapId);
   const pages: PageDef[] = [terrain.page];
   const pageOwners: PageOwner[] = [{ kind: terrain.page.kind }];
   const uiPage = pages.length;

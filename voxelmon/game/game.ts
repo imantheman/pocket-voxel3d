@@ -80,6 +80,7 @@ import { MoveForgetState } from "./ui/moveforget.ts";
 import { BagState } from "./ui/bagscreen.ts";
 import { PartyState } from "./ui/partyscreen.ts";
 import { ShopState } from "./ui/shopscreen.ts";
+import { VENDING_DRINKS } from "./world/vending.ts";
 import { BoxState } from "./ui/boxscreen.ts";
 import { PcState } from "./ui/pcscreen.ts";
 import { PokedexState } from "./ui/pokedexscreen.ts";
@@ -1551,6 +1552,11 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   /** open_mart verb -> push the mart shop; onQuit resumes the yielded runner. */
   openShop(stock: string[], onQuit?: () => void): void {
     this.push(new ShopState(this as any, stock, onQuit));
+  }
+
+  /** open_vending verb -> the same screen in its machine mode. */
+  openVending(onQuit?: () => void): void {
+    this.push(new ShopState(this as any, [...VENDING_DRINKS], onQuit, true));
   }
 
   /** PC tile -> Bill's PC box storage. */

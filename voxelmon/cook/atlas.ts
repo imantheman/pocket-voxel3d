@@ -154,6 +154,7 @@ export function buildTerrainPage(
   gen: GenData,
   tilesets: TilesetDef[],
   redpp?: Redpp | null,
+  soleMapId?: string | null,
 ): TerrainLayout {
   // distinct sheets, sorted by key for determinism
   const sheets = [...new Set(tilesets.map(sheetKeyOf))].sort();
@@ -212,7 +213,7 @@ export function buildTerrainPage(
     frames.push(linear);
   }
 
-  const bakedSheets = bakeGroups(gen, tilesets, redpp, frames, w, baseY);
+  const bakedSheets = bakeGroups(gen, tilesets, redpp, frames, w, baseY, soleMapId);
 
   return {
     page: { w, h, kind: ATLAS_KIND.terrain, frames, name: "terrain" },
@@ -238,6 +239,7 @@ function bakeGroups(
   frames: Uint8Array[],
   w: number,
   baseY: Map<string, number>,
+  soleMapId?: string | null,
 ): Set<string> {
   const baked = new Set<string>();
   if (!redpp) return baked;
@@ -282,9 +284,13 @@ function bakeGroups(
     for (let row = 0; row < rows; row++) {
       for (let col = 0; col < cols; col++) {
         const tileId = row * perRow + col;
-        // The page is shared across maps, so the per-MAP exception table
-        // cannot apply here — cli.ts refuses to cook a map that needs one.
-        const group = redpp.groupOf(ts.id, null, tileId);
+        // The per-MAP exception table can only apply when this page belongs
+        // to exactly one map, which a one-map cook is (every map ships its
+        // own pak, and the atlas repacker hoists a page only when it is
+        // byte-identical everywhere, so a map with a fix keeps its own copy).
+        // A multi-map cook passes null and cli.ts refuses the maps that need
+        // a fix rather than baking them a colour the reference does not use.
+        const group = redpp.groupOf(ts.id, soleMapId ?? null, tileId);
         if (group === null) continue;
         const shift = group * SHADES;
         for (const frame of frames) {

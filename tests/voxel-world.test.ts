@@ -25,6 +25,8 @@ import { destination as warpDestination } from "../voxelmon/game/world/warp.ts";
 import * as Pc from "../voxelmon/game/world/pcitems.ts";
 import { decodeSave } from "../voxelmon/game/save-read.ts";
 import { ShopState } from "../voxelmon/game/ui/shopscreen.ts";
+import { thirstyGirlRows } from "../voxelmon/game/world/vending.ts";
+import { talkScript } from "../voxelmon/game/world/mapscripts.ts";
 import { LANCE_WALK_IN } from "../voxelmon/game/world/mapscripts.ts";
 import { TrainerBattle } from "../voxelmon/game/battle/trainer.ts";
 import { seqRng } from "../voxelmon/game/rng.ts";
@@ -6117,6 +6119,94 @@ describe("what the game will not take off you", () => {
     expect(sell("POTION")).toBe(false);
     expect(game.save.inventory.TOWN_MAP).toBe(1);
     expect(game.save.money).toBe(0);
+  });
+});
+
+describe("the Celadon rooftop", () => {
+  test.skipIf(!hasGen)("a vending machine sells one can at the item's own price", () => {
+    const game = makeMenuGame();
+    game.save.money = 1000;
+    game.openVending();
+    expect(game.stackKinds().at(-1)).toBe("shop");
+    // A machine opens ON the drinks -- there is no BUY/SELL/QUIT menu in
+    // front of it -- and it lists all three, in the machine's order.
+    const view = () => (game as never as { shop(): {
+      mode: string; list: { id: string; right: string }[]; listIndex: number;
+      footer: string | null; money: number;
+    } | null }).shop()!;
+    expect(view().mode).toBe("list");
+    expect(view().list.map((r) => r.id))
+      .toEqual(["FRESH_WATER", "SODA_POP", "LEMONADE"]);
+    expect(view().list.map((r) => r.right))
+      .toEqual(["\u00a5200", "\u00a5300", "\u00a5350"]);
+
+    // FRESH WATER: straight to the price confirm, no quantity box.
+    tap(game, VOX_BTN.a);
+    expect(view().mode).toBe("confirm");
+    tap(game, VOX_BTN.a);
+    expect(game.save.money).toBe(800);
+    expect(game.save.inventory.FRESH_WATER).toBe(1);
+    expect(view().footer).toBe("FRESH WATER\npopped out!");
+    expect(view().mode).toBe("list");
+  });
+
+  test.skipIf(!hasGen)("it refuses a drink you cannot pay for, and B walks away", () => {
+    const game = makeMenuGame();
+    game.save.money = 100;
+    game.openVending();
+    tap(game, VOX_BTN.a);
+    expect(game.save.inventory.FRESH_WATER ?? 0).toBe(0);
+    expect(game.save.money).toBe(100);
+    // no menu behind the list: B closes the machine itself
+    tap(game, VOX_BTN.b);
+    expect(game.stackKinds().at(-1)).not.toBe("shop");
+  });
+
+  test.skipIf(!hasGen)("the little girl trades each drink for its own TM, once", () => {
+    const save = {
+      inventory: { LEMONADE: 1 } as Record<string, number>,
+      flags: {} as Record<string, boolean>,
+    };
+    // Only LEMONADE in the bag -> TM49, and the asking is hers, not ours.
+    let rows = thirstyGirlRows(null, save);
+    expect(rows.some((r) => r[0] === "give_item" && r[1] === "TM_TRI_ATTACK")).toBe(true);
+    expect(rows.some((r) => r[0] === "take_item" && r[1] === "LEMONADE")).toBe(true);
+    // the drink is taken AFTER the TM lands, so a full bag costs nothing
+    const give = rows.findIndex((r) => r[0] === "give_item");
+    const take = rows.findIndex((r) => r[0] === "take_item");
+    expect(give).toBeLessThan(take);
+
+    // Her TM already claimed: that drink is passed over rather than wasted.
+    save.flags.EVENT_GOT_TM49 = true;
+    save.inventory.FRESH_WATER = 1;
+    rows = thirstyGirlRows(null, save);
+    expect(rows.some((r) => r[0] === "give_item" && r[1] === "TM_ICE_BEAM")).toBe(true);
+
+    // Nothing to give: the thirsty line and no offer at all.
+    rows = thirstyGirlRows(null, { inventory: {}, flags: {} });
+    expect(rows.map((r) => r[0])).toEqual(["face_player", "show_text"]);
+  });
+
+  test.skipIf(!hasGen)("the machines are signs, and every roof script is registered", () => {
+    for (const n of [1, 2, 3]) {
+      const rows = talkScript(
+        "CELADON_MART_ROOF", `TEXT_CELADONMARTROOF_VENDING_MACHINE${n}`,
+      );
+      expect(rows).toEqual([["open_vending"]]);
+    }
+    expect(talkScript("CELADON_MART_ROOF", "TEXT_CELADONMARTROOF_LITTLE_GIRL"))
+      .toBeTypeOf("function");
+  });
+
+  test.skipIf(!hasGen)("the mart's floors are all cooked and all reachable", () => {
+    // Three of them had no pak at all: the cooker refused any map needing a
+    // per-map tile-id colour fix, and the mart owns all three such maps --
+    // including its ground floor, which is the only way in.
+    const cooked = new Set(romData!.cookedMaps ?? []);
+    for (const f of ["1F", "2F", "3F", "4F", "5F", "ROOF", "ELEVATOR"]) {
+      expect({ floor: f, cooked: cooked.has(`CELADON_MART_${f}`) })
+        .toEqual({ floor: f, cooked: true });
+    }
   });
 });
 

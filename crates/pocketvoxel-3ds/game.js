@@ -6000,6 +6000,59 @@ function safariLeavingRows(fromRightWarp) {
   ];
 }
 
+// voxelmon/game/world/vending.ts
+var VENDING_DRINKS = ["FRESH_WATER", "SODA_POP", "LEMONADE"];
+function vendingRows() {
+  return [["open_vending"]];
+}
+var GIRL_TMS = [
+  {
+    drink: "FRESH_WATER",
+    tm: "TM_ICE_BEAM",
+    flag: "EVENT_GOT_TM13",
+    yay: "_CeladonMartRoofLittleGirlYayFreshWaterText",
+    received: "_CeladonMartRoofLittleGirlReceivedTM13Text",
+    explain: "_CeladonMartRoofLittleGirlTM13ExplanationText"
+  },
+  {
+    drink: "SODA_POP",
+    tm: "TM_ROCK_SLIDE",
+    flag: "EVENT_GOT_TM48",
+    yay: "_CeladonMartRoofLittleGirlYaySodaPopText",
+    received: "_CeladonMartRoofLittleGirlReceivedTM48Text",
+    explain: "_CeladonMartRoofLittleGirlTM48ExplanationText"
+  },
+  {
+    drink: "LEMONADE",
+    tm: "TM_TRI_ATTACK",
+    flag: "EVENT_GOT_TM49",
+    yay: "_CeladonMartRoofLittleGirlYayLemonadeText",
+    received: "_CeladonMartRoofLittleGirlReceivedTM49Text",
+    explain: "_CeladonMartRoofLittleGirlTM49ExplanationText"
+  }
+];
+function thirstyGirlRows(_ow, save) {
+  const inv = save?.inventory ?? {};
+  const flags = save?.flags ?? {};
+  const g = GIRL_TMS.find((t) => (inv[t.drink] ?? 0) > 0 && !flags[t.flag]);
+  if (!g) {
+    return [
+      ["face_player"],
+      ["show_text", "_CeladonMartRoofLittleGirlImThirstyText"]
+    ];
+  }
+  return [
+    ["face_player"],
+    ["ask", "_CeladonMartRoofLittleGirlGiveHerADrinkText"],
+    ["jump_if_false", "end"],
+    ["show_text", g.yay],
+    ["give_item", g.tm, 1, g.received],
+    ["take_item", g.drink, 1],
+    ["set_flag", g.flag],
+    ["show_text", g.explain]
+  ];
+}
+
 // voxelmon/game/world/saffrongate.ts
 var GUARD_DRINKS = ["FRESH_WATER", "SODA_POP", "LEMONADE"];
 var GAVE_DRINK_FLAG = "EVENT_GAVE_GUARDS_DRINK";
@@ -7804,6 +7857,14 @@ var MAP_SCRIPTS = {
   CELADON_MART_ELEVATOR: {
     onEnter: seedElevator,
     talk: { TEXT_CELADONMARTELEVATOR: [["open_elevator"]] }
+  },
+  CELADON_MART_ROOF: {
+    talk: {
+      TEXT_CELADONMARTROOF_VENDING_MACHINE1: vendingRows(),
+      TEXT_CELADONMARTROOF_VENDING_MACHINE2: vendingRows(),
+      TEXT_CELADONMARTROOF_VENDING_MACHINE3: vendingRows(),
+      TEXT_CELADONMARTROOF_LITTLE_GIRL: thirstyGirlRows
+    }
   }
 };
 function seedElevator(ow) {
@@ -8757,6 +8818,14 @@ function* open_prizes(ctx, ...args) {
   w.openPrizes(args[0], () => runner.resume());
   yield;
 }
+function* open_vending(ctx) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  if (!w.openVending)
+    return;
+  w.openVending(() => runner.resume());
+  yield;
+}
 function* oaks_aide(ctx, ...args) {
   const runner = ctx.runner;
   const w = ctx.world;
@@ -8953,6 +9022,7 @@ var VERBS = {
   static_battle,
   trade,
   open_mart,
+  open_vending,
   open_elevator,
   walk_route,
   check_item,
@@ -10229,6 +10299,14 @@ GAME is over!`;
     const shell = this.shell;
     if (shell?.openElevator)
       shell.openElevator(this.map.id, onDone);
+    else
+      onDone();
+  }
+  openVending(onDone) {
+    const self = this;
+    const shell = self.shell ?? self.game ?? self.host ?? null;
+    if (shell?.openVending)
+      shell.openVending(onDone);
     else
       onDone();
   }
@@ -14755,12 +14833,15 @@ var UNSELLABLE = `I can't put a
 price on that.`;
 var BOUGHT = `Here you are!
 Thank you!`;
+var POPPED = (name) => `${name}
+popped out!`;
 var SOLD = "Thank you!";
 
 class ShopState {
   game;
   stock;
   onQuit;
+  vending;
   kind = "shop";
   mode = "menu";
   menuIndex = 0;
@@ -14775,10 +14856,20 @@ class ShopState {
   qty = 1;
   confirmYes = true;
   footer = null;
-  constructor(game, stock, onQuit) {
+  constructor(game, stock, onQuit, vending = false) {
     this.game = game;
     this.stock = stock;
     this.onQuit = onQuit;
+    this.vending = vending;
+    if (vending) {
+      this.buying = true;
+      this.buildBuyList();
+      this.mode = "list";
+      this.footer = null;
+    }
+  }
+  get greeting() {
+    return this.vending ? null : GREET;
   }
   name(id) {
     return this.game.data.items?.[id]?.name ?? id;
@@ -14794,7 +14885,7 @@ class ShopState {
     this.list = this.stock.filter((id) => this.game.data.items?.[id]).map((id) => ({ id, label: this.name(id), right: `¥${this.price(id)}` }));
     this.listIndex = 0;
     this.listTop = 0;
-    this.footer = GREET;
+    this.footer = this.greeting;
   }
   buildSellList() {
     this.list = order(this.game.save).map((id) => ({
@@ -14804,7 +14895,7 @@ class ShopState {
     }));
     this.listIndex = 0;
     this.listTop = 0;
-    this.footer = GREET;
+    this.footer = this.greeting;
   }
   clampWindow() {
     if (this.listIndex < this.listTop)
@@ -14848,6 +14939,10 @@ class ShopState {
         this.listIndex = (this.listIndex + 1) % n;
       this.clampWindow();
       if (p.b || p.a && this.listIndex === this.list.length) {
+        if (this.vending) {
+          this.quit();
+          return;
+        }
         this.mode = "menu";
         this.footer = null;
         return;
@@ -14867,7 +14962,7 @@ class ShopState {
         this.qty = Math.max(1, this.qty - 10);
       if (p.b) {
         this.mode = "list";
-        this.footer = GREET;
+        this.footer = this.greeting;
         return;
       }
       if (p.a) {
@@ -14886,7 +14981,7 @@ That will be
         this.confirmYes = !this.confirmYes;
       if (p.b) {
         this.mode = "list";
-        this.footer = GREET;
+        this.footer = this.greeting;
         return;
       }
       if (p.a) {
@@ -14894,7 +14989,7 @@ That will be
           this.commit();
         else {
           this.mode = "list";
-          this.footer = GREET;
+          this.footer = this.greeting;
         }
       }
       return;
@@ -14914,6 +15009,14 @@ That will be
       this.maxQty = Math.min(99, Math.floor((save.money ?? 0) / Math.max(1, price)));
       this.qty = 1;
       this.mode = "quantity";
+      if (this.vending) {
+        this.maxQty = 1;
+        this.footer = `${this.selName}?
+That will be
+¥${price}. OK?`;
+        this.confirmYes = true;
+        this.mode = "confirm";
+      }
     } else {
       if (this.unsellable(row.id)) {
         this.footer = UNSELLABLE;
@@ -14942,7 +15045,7 @@ That will be
         return;
       }
       save.money = (save.money ?? 0) - total;
-      this.footer = BOUGHT;
+      this.footer = this.vending ? POPPED(this.selName) : BOUGHT;
     } else {
       save.money = Math.min(MONEY_CAP, (save.money ?? 0) + total);
       remove(save, this.selId, this.qty);
@@ -16966,6 +17069,9 @@ your POKéMON!`), () => {
   }
   openShop(stock, onQuit) {
     this.push(new ShopState(this, stock, onQuit));
+  }
+  openVending(onQuit) {
+    this.push(new ShopState(this, [...VENDING_DRINKS], onQuit, true));
   }
   openBox() {
     this.push(new BoxState(this));
