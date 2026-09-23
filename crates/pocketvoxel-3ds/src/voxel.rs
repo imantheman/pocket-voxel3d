@@ -11,6 +11,21 @@ static mut AUDIO: &[u8] = &[];
 static mut PITCH_RUNG: i32 = -1;
 /// Host-only op (90): the title's MAP VIEWER entry. Never reaches the Scene.
 static mut VIEWER_REQ: bool = false;
+/// The circle pad as the host last read it, in ctrulib's units (about
+/// -156..156 on each axis, +y up). The guest asks for it every frame
+/// (`voxel.stick()`) to steer the free walk by the pad's own angle and
+/// throw -- the button word only carries it quantised to the d-pad bits.
+static mut STICK: (i16, i16) = (0, 0);
+
+pub unsafe fn set_stick(x: i16, y: i16) {
+    STICK = (x, y);
+}
+
+/// `(x << 16) | (y & 0xffff)`, each half a signed 16-bit.
+#[no_mangle]
+pub unsafe extern "C" fn voxel_stick() -> i32 {
+    ((STICK.0 as i32) << 16) | ((STICK.1 as i32) & 0xffff)
+}
 pub unsafe fn take_viewer_request() -> bool {
     let v = VIEWER_REQ;
     VIEWER_REQ = false;

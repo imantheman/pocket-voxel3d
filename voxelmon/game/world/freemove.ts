@@ -100,3 +100,31 @@ export function slide(
 export function cellOf(p: number): number {
   return Math.round(p / 16);
 }
+
+/**
+ * Where the pad rests before it counts as pushed, as a fraction of its
+ * throw (the host's own STICK_DEAD over its range), and the walk's floor
+ * speed the moment it does -- a bare touch is still a walk, not a shuffle.
+ */
+export const STICK_DEAD = 0.25;
+export const STICK_MIN_THROW = 0.4;
+
+/**
+ * The circle pad as a push: its direction on the pad (+y up) and how far it
+ * is pushed, 0.4..1, or null inside the dead zone. The throw past the dead
+ * zone is stretched over the floor..1 range, so the walk starts at the floor
+ * speed as the pad leaves centre and reaches full speed at the rim.
+ */
+export function stickPush(
+  stick: { x: number; y: number } | undefined,
+): { x: number; y: number; throw: number } | null {
+  if (!stick) return null;
+  const len = Math.hypot(stick.x, stick.y);
+  if (len <= STICK_DEAD) return null;
+  const t = Math.min(1, (len - STICK_DEAD) / (1 - STICK_DEAD));
+  return {
+    x: stick.x / len,
+    y: stick.y / len,
+    throw: STICK_MIN_THROW + t * (1 - STICK_MIN_THROW),
+  };
+}

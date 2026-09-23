@@ -27,7 +27,7 @@ import { LAST_MAP_REWRITES, rewrittenLastMap } from "./lastmap.ts";
 import { martGreetScript } from "./marts.ts";
 import { bikeAllowed, type BikeRiding } from "./bike.ts";
 import { visit } from "./fly.ts";
-import { cellOf, freeDir, quantize, slide } from "./freemove.ts";
+import { cellOf, freeDir, quantize, slide, stickPush } from "./freemove.ts";
 import { spotFor } from "./snorlax.ts";
 import { barriersFor } from "./toggleblocks.ts";
 import { fillBadgeName, gateFor, guardAt, hasBadge } from "./badgegate.ts";
@@ -608,6 +608,14 @@ export class Overworld implements ScriptWorld {
    * every grid-walk test stays a grid walk -- and the player can turn it off
    * in OPTIONS (MOVEMENT: GRID).
    */
+  /**
+   * The circle pad as the host last read it, -1..1 on each axis with +y UP
+   * the pad, or undefined on a host that only sends buttons. The free walk
+   * steers by it when it is pushed; the d-pad is the fallback, and every
+   * menu still sees the pad as the four directions it always did.
+   */
+  stick?: { x: number; y: number };
+
   freeMoveActive(): boolean {
     if (this.freeYaw === undefined) return false;
     const mv = (this.save as { options?: { movement?: string } }).options?.movement;
@@ -656,19 +664,27 @@ export class Overworld implements ScriptWorld {
       this.handleInput();
       return;
     }
-    const sx = (input.isDown("right") ? 1 : 0) - (input.isDown("left") ? 1 : 0);
-    const sy = (input.isDown("down") ? 1 : 0) - (input.isDown("up") ? 1 : 0);
+    // The pad itself when it is pushed -- any angle, and how far it is
+    // pushed is how fast the walk goes -- else the d-pad's four.
+    const stick = stickPush(this.stick);
+    const sx = stick ? stick.x : (input.isDown("right") ? 1 : 0) - (input.isDown("left") ? 1 : 0);
+    const sy = stick ? -stick.y : (input.isDown("down") ? 1 : 0) - (input.isDown("up") ? 1 : 0);
     const dir = freeDir(sx, sy, this.freeYaw ?? 0);
     if (!dir) return;
-    // the grid walker's own speed: one cell per stepSpeed() frames
-    const speed = 16 / p.stepSpeed();
+    // the grid walker's own speed: one cell per stepSpeed() frames, scaled
+    // by the pad's throw
+    const speed = (16 / p.stepSpeed()) * (stick ? stick.throw : 1);
     const r = slide(p.px, p.py, dir[0] * speed, dir[1] * speed, (x, y) => this.freeOpen(x, y));
     p.facing = quantize(dir[0], dir[1]);
     if (!r.moved) {
-      // Against something. From the middle of a cell, let the grid decide
-      // what that something is -- an edge to cross, a ledge to hop, a boulder
-      // to shove, a door mat, or just a wall to bonk.
-      if (Math.abs(p.px - p.cellX * 16) <= 4 && Math.abs(p.py - p.cellY * 16) <= 4) {
+      // Against something. From INSIDE the cell, let the grid decide what
+      // that something is -- an edge to cross, a ledge to hop, a boulder to
+      // shove, a door mat, or just a wall to bonk. Anywhere in the cell:
+      // this used to ask only within four pixels of its centre, and a walk
+      // that met a ledge or a doorway off-centre -- which a free walk
+      // nearly always does -- pushed against it and got nothing, neither
+      // the hop nor the door. The snap moves the body at most half a cell.
+      if (Math.abs(p.px - p.cellX * 16) <= 8 && Math.abs(p.py - p.cellY * 16) <= 8) {
         this.snapToCell();
         this.handleInput();
       }

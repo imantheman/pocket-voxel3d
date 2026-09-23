@@ -8224,6 +8224,21 @@ function slide(px2, py, dx, dy, open) {
 function cellOf(p) {
   return Math.round(p / 16);
 }
+var STICK_DEAD = 0.25;
+var STICK_MIN_THROW = 0.4;
+function stickPush(stick) {
+  if (!stick)
+    return null;
+  const len = Math.hypot(stick.x, stick.y);
+  if (len <= STICK_DEAD)
+    return null;
+  const t = Math.min(1, (len - STICK_DEAD) / (1 - STICK_DEAD));
+  return {
+    x: stick.x / len,
+    y: stick.y / len,
+    throw: STICK_MIN_THROW + t * (1 - STICK_MIN_THROW)
+  };
+}
 
 // voxelmon/game/world/snorlax.ts
 var SNORLAX = [
@@ -9626,6 +9641,7 @@ class Overworld {
       this.onStepComplete();
     }
   }
+  stick;
   freeMoveActive() {
     if (this.freeYaw === undefined)
       return false;
@@ -9660,16 +9676,17 @@ class Overworld {
       this.handleInput();
       return;
     }
-    const sx = (input.isDown("right") ? 1 : 0) - (input.isDown("left") ? 1 : 0);
-    const sy = (input.isDown("down") ? 1 : 0) - (input.isDown("up") ? 1 : 0);
+    const stick = stickPush(this.stick);
+    const sx = stick ? stick.x : (input.isDown("right") ? 1 : 0) - (input.isDown("left") ? 1 : 0);
+    const sy = stick ? -stick.y : (input.isDown("down") ? 1 : 0) - (input.isDown("up") ? 1 : 0);
     const dir = freeDir(sx, sy, this.freeYaw ?? 0);
     if (!dir)
       return;
-    const speed = 16 / p.stepSpeed();
+    const speed = 16 / p.stepSpeed() * (stick ? stick.throw : 1);
     const r = slide(p.px, p.py, dir[0] * speed, dir[1] * speed, (x, y) => this.freeOpen(x, y));
     p.facing = quantize(dir[0], dir[1]);
     if (!r.moved) {
-      if (Math.abs(p.px - p.cellX * 16) <= 4 && Math.abs(p.py - p.cellY * 16) <= 4) {
+      if (Math.abs(p.px - p.cellX * 16) <= 8 && Math.abs(p.py - p.cellY * 16) <= 8) {
         this.snapToCell();
         this.handleInput();
       }
@@ -16704,6 +16721,13 @@ class VoxelmonGame {
     const v = this.save.options?.textSpeed;
     return typeof v === "number" && v > 0 ? v : TEXT_SPEED_DEFAULT;
   }
+  setStick(x, y, range) {
+    const r = range > 0 ? range : 1;
+    this.overworld.stick = {
+      x: Math.max(-1, Math.min(1, x / r)),
+      y: Math.max(-1, Math.min(1, y / r))
+    };
+  }
   cameraSpeedQ8() {
     const v = this.save.options?.cameraSpeed;
     return CAMERA_SPEEDS.find((s) => s.key === v)?.q8 ?? CAMERA_SPEED_DEFAULT_Q8;
@@ -17679,6 +17703,7 @@ ${name}!`, () => {
 // voxelmon/game/psp-main.ts
 var SEED = 17;
 var native = globalThis.voxel;
+var STICK_RANGE = 156;
 
 class QuickJsHost {
   saveWrite(text) {
@@ -17856,6 +17881,12 @@ globalThis.frame = (buttons) => {
   prevTouch = touching;
   game.setCamTurns(buttons >> 24 & 3);
   native.camSpeed?.(game.cameraSpeedQ8());
+  const st = native.stick?.();
+  if (st !== undefined) {
+    const sx = st >> 16 << 16 >> 16;
+    const sy = st << 16 >> 16;
+    game.setStick(sx, sy, STICK_RANGE);
+  }
   {
     const e = (buttons >> 24 & 3) << 4 | buttons >>> 28 & 15;
     game.setCamYaw(((e - 8) % 64 + 64) % 64 * (Math.PI * 2 / 64));

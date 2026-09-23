@@ -3127,6 +3127,8 @@ fn main() {
             {
                 let (cx, cy) = hid.circlepad_position();
                 b |= stick_as_dpad(cx, cy);
+                // ...and the pad itself, whole, for the free walk.
+                unsafe { voxel::set_stick(cx, cy); }
             }
             if k.contains(KeyPad::A)          { b |= 1 << 4; }
             if k.contains(KeyPad::B)          { b |= 1 << 5; }

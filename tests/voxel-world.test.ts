@@ -9,7 +9,7 @@
 // encounter slot mapping driven through the overworld path, and the
 // story.tape determinism run (in-process twice + the real cli once).
 
-import { describe, expect, test } from "bun:test";
+import { stickPush, STICK_MIN_THROW, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -5020,6 +5020,23 @@ describe("free movement", () => {
     expect(slide(px, py, 0, -2, open).moved).toBe(false);
   });
 
+  test("the pad is a push past its dead zone, at the throw it is given", () => {
+    expect(stickPush(undefined)).toBeNull();
+    expect(stickPush({ x: 0.1, y: 0.1 })).toBeNull(); // inside the dead zone
+    const rim = stickPush({ x: 0, y: 1 })!;
+    expect(near(rim.x, 0) && near(rim.y, 1)).toBe(true);
+    expect(near(rim.throw, 1)).toBe(true);
+    // just past the dead zone: a walk at the floor speed, not a shuffle
+    const bare = stickPush({ x: 0.3, y: 0 })!;
+    expect(bare.throw).toBeGreaterThanOrEqual(STICK_MIN_THROW);
+    expect(bare.throw).toBeLessThan(0.5);
+    // halfway out: between the two
+    const half = stickPush({ x: 0, y: -0.6 })!;
+    expect(half.throw).toBeGreaterThan(bare.throw);
+    expect(half.throw).toBeLessThan(1);
+    expect(near(half.y, -1)).toBe(true);
+  });
+
   test("a body at rest never tests its neighbours", () => {
     const seen: string[] = [];
     bodyClear(32, 48, (x, y) => { seen.push(`${x},${y}`); return true; });
@@ -5065,6 +5082,66 @@ describe("free movement", () => {
     expect(p.px % 16).not.toBe(0);
     expect(p.moving).toBe(false);
     expect(p.py).toBe(y * 16);
+  });
+
+  test.skipIf(!hasGen)("the circle pad walks at its own angle and speed", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    const [x, y] = openRun(game, "PALLET_TOWN", 4);
+    ow.setMap("PALLET_TOWN", x, y, "right");
+    game.setCamYaw(0);
+    // pad full right: as fast as the d-pad, no d-pad held
+    game.setStick(156, 0, 156);
+    hold(game, 0, 8);
+    const full = ow.player.px - x * 16;
+    expect(full).toBeGreaterThan(0);
+    // pad half right: slower, still moving
+    ow.setMap("PALLET_TOWN", x, y, "right");
+    game.setStick(78, 0, 156);
+    hold(game, 0, 8);
+    const half = ow.player.px - x * 16;
+    expect(half).toBeGreaterThan(0);
+    expect(half).toBeLessThan(full);
+    // pad at rest: the d-pad still walks, so nothing is lost
+    ow.setMap("PALLET_TOWN", x, y, "right");
+    game.setStick(0, 0, 156);
+    hold(game, VOX_BTN.right, 8);
+    expect(ow.player.px - x * 16).toBe(full);
+    // and inside the dead zone a d-pad-free frame stands still
+    ow.setMap("PALLET_TOWN", x, y, "right");
+    game.setStick(20, 0, 156);
+    hold(game, 0, 8);
+    expect(ow.player.px).toBe(x * 16);
+  });
+
+  test.skipIf(!hasGen)("blocked off-centre, the grid still gets to decide", () => {
+    // Stand a little east of a cell's centre with a wall to the north and
+    // push north: the free body gets nowhere, and the grid's own handler
+    // runs (which is what does ledges, doors, boulders, edges) -- it used
+    // to run only within four pixels of the centre, so a walk that met a
+    // ledge off-centre just stood there.
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    ow.setMap("PALLET_TOWN", 5, 6, "down");
+    const m = ow.map;
+    let spot: [number, number] | null = null;
+    for (let cy = 1; cy < m.heightCells && !spot; cy++) {
+      for (let cx = 1; cx < m.widthCells - 1 && !spot; cx++) {
+        if (m.isWalkableCell(cx, cy) && m.isWalkableCell(cx + 1, cy) &&
+            !m.isWalkableCell(cx, cy - 1) && !m.isWalkableCell(cx + 1, cy - 1) &&
+            !m.warpAtCell(cx, cy) && !m.warpAtCell(cx + 1, cy)) spot = [cx, cy];
+      }
+    }
+    expect(spot).not.toBeNull();
+    const [cx, cy] = spot!;
+    ow.setMap("PALLET_TOWN", cx, cy, "down");
+    game.setCamYaw(0);
+    game.setStick(0, 0, 156);
+    ow.player.px = cx * 16 + 6; // off-centre, inside the cell
+    hold(game, VOX_BTN.up, 2);
+    // the grid took over: the body is back on the cell, facing the wall
+    expect(ow.player.px).toBe(cx * 16);
+    expect(ow.player.facing).toBe("up");
   });
 
   test.skipIf(!hasGen)("forward follows the camera, not the map", () => {

@@ -19,6 +19,7 @@ extern const uint8_t *voxel_game_ptr(void);
 extern uint32_t voxel_game_len(void);
 extern const uint8_t *voxel_audio_ptr(void);
 extern uint32_t voxel_audio_len(void);
+extern int32_t voxel_stick(void);
 
 /* One handler for every numeric op; `magic` carries the op code. */
 static JSValue vox_num(JSContext *ctx, JSValueConst this_val,
@@ -43,6 +44,12 @@ static JSValue vox_audiodata(JSContext *ctx, JSValueConst t, int c, JSValueConst
 
 static JSValue vox_stats(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)ctx;(void)t;(void)c;(void)v; return JS_UNDEFINED;
+}
+
+/* stick() - the circle pad, (x << 16) | (y & 0xffff), signed halves. */
+static JSValue vox_stick(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;(void)c;(void)v;
+    return JS_NewInt32(ctx, voxel_stick());
 }
 
 /* uiText(x, y, str) - the one string-bearing op (code 52). */
@@ -120,6 +127,7 @@ int qjs_register_voxel(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "gamedata",  JS_NewCFunction(ctx, vox_gamedata,  "gamedata", 0));
     JS_SetPropertyStr(ctx, o, "audiodata", JS_NewCFunction(ctx, vox_audiodata, "audiodata", 0));
     JS_SetPropertyStr(ctx, o, "stats",     JS_NewCFunction(ctx, vox_stats,     "stats", 0));
+    JS_SetPropertyStr(ctx, o, "stick",     JS_NewCFunction(ctx, vox_stick,     "stick", 0));
     JS_SetPropertyStr(ctx, o, "saveWrite", JS_NewCFunction(ctx, vox_savewrite, "saveWrite", 1));
     JS_SetPropertyStr(ctx, o, "saveData",  JS_NewCFunction(ctx, vox_savedata,  "saveData", 0));
     JS_SetPropertyStr(ctx, o, "writeTest", JS_NewCFunction(ctx, vox_writetest, "writeTest", 0));

@@ -732,6 +732,18 @@ export class VoxelmonGame implements OverworldShell, SceneView {
    * camera by (spec `camSpeed`): SLOW is half the tuned rate, FAST is
    * near twice it. Unset, or anything unknown, is NORMAL.
    */
+  /**
+   * The circle pad, from the host each frame: raw units out of `range` on
+   * each axis, +y up the pad. Kept as -1..1 for the free walk to steer by.
+   */
+  setStick(x: number, y: number, range: number): void {
+    const r = range > 0 ? range : 1;
+    this.overworld.stick = {
+      x: Math.max(-1, Math.min(1, x / r)),
+      y: Math.max(-1, Math.min(1, y / r)),
+    };
+  }
+
   cameraSpeedQ8(): number {
     const v = (this.save as { options?: { cameraSpeed?: string } }).options?.cameraSpeed;
     return CAMERA_SPEEDS.find((s) => s.key === v)?.q8 ?? CAMERA_SPEED_DEFAULT_Q8;

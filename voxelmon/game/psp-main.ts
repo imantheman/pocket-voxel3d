@@ -67,6 +67,9 @@ interface VoxelNative {
   uiPanel(side: number, x: number, y: number, w: number, h: number): void;
   /** spec `camSpeed`: the C-stick's rate multiplier, Q8. */
   camSpeed?(q8: number): void;
+  /** The circle pad as the host last read it: (x << 16) | (y & 0xffff),
+   * each a signed 16-bit in the pad's own units (-156..156 on a 3DS). */
+  stick?(): number;
   fieldFx(x: number, z: number, frame: number): void;
   arena(mapId: number, x: number, y: number, shape: number, rig: number): void;
   card(
@@ -100,6 +103,8 @@ interface VoxelNative {
 }
 
 const native = (globalThis as unknown as { voxel: VoxelNative }).voxel;
+/** The 3DS circle pad's full throw in its own units (ctrulib circlePosition). */
+const STICK_RANGE = 156;
 
 /**
  * VoxelHost over the native surface: every op forwards 1:1. `frameDone` is
@@ -357,6 +362,14 @@ let prevGearPrev = false;
   // otherwise. Optional on the native surface: an older shim has no such
   // op and the host keeps its tuned rate.
   native.camSpeed?.(game.cameraSpeedQ8());
+  // The circle pad itself, for the free walk: the button word only ever
+  // carried it quantised to the four d-pad bits.
+  const st = native.stick?.();
+  if (st !== undefined) {
+    const sx = (st >> 16) << 16 >> 16; // sign-extend the two halves
+    const sy = (st << 16) >> 16;
+    game.setStick(sx, sy, STICK_RANGE);
+  }
   // Bits 28-31 carry the low four bits of the camera's yaw in 64ths of a
   // turn; bits 24-25 are its top two (offset half a quadrant, which is what
   // makes them the rounded quarter turns the grid walk has always read).
