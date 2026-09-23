@@ -8732,6 +8732,12 @@ Here, you can\vhave this TM.`,
       ]
     }
   },
+  ROUTE_16_GATE_1F: {
+    onStep: bikeGate([[4, 7], [4, 8], [4, 9], [4, 10]], "_Route16Gate1FGuardWaitUpText", "_Route16Gate1FGuardNoPedestriansAllowedText")
+  },
+  ROUTE_18_GATE_1F: {
+    onStep: bikeGate([[4, 3], [4, 4], [4, 5], [4, 6]], "_Route18Gate1FGuardExcuseMeText", "_Route18Gate1FGuardYouNeedABicycleText")
+  },
   MR_PSYCHICS_HOUSE: {
     talk: {
       TEXT_MRPSYCHICSHOUSE_MR_PSYCHIC: giftRows({
@@ -8978,6 +8984,23 @@ function giftRows(o) {
     ["label", "already"],
     ["show_text", o.already]
   ];
+}
+function bikeGate(cells, stop, explain) {
+  const closestY = Math.min(...cells.map((c) => c[1]));
+  return (ow, save) => {
+    if ((save?.inventory?.BICYCLE ?? 0) > 0)
+      return null;
+    const p = ow?.player;
+    if (!cells.some(([x, y]) => p?.cellX === x && p?.cellY === y))
+      return null;
+    const dist = p.cellY - closestY;
+    return [
+      ["show_text", stop],
+      ["show_text", explain],
+      ...dist > 0 ? [["move_player", "up", dist]] : [],
+      ["move_player", "right", 1]
+    ];
+  };
 }
 function rodGiverRows(ask, received, after, refused, rod, flag) {
   return [

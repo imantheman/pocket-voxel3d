@@ -2621,6 +2621,24 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     },
   },
 
+  // story5.lua M.ROUTE_16_GATE_1F / M.ROUTE_18_GATE_1F (scripts/Route16
+  // Gate1F.asm, Route18Gate1F.asm): the CYCLING ROAD gates. Walkers are
+  // stopped on the cells beside the counter and turned back.
+  ROUTE_16_GATE_1F: {
+    onStep: bikeGate(
+      [[4, 7], [4, 8], [4, 9], [4, 10]],
+      "_Route16Gate1FGuardWaitUpText",
+      "_Route16Gate1FGuardNoPedestriansAllowedText",
+    ),
+  },
+  ROUTE_18_GATE_1F: {
+    onStep: bikeGate(
+      [[4, 3], [4, 4], [4, 5], [4, 6]],
+      "_Route18Gate1FGuardExcuseMeText",
+      "_Route18Gate1FGuardYouNeedABicycleText",
+    ),
+  },
+
   // story4.lua M.MR_PSYCHICS_HOUSE (scripts/MrPsychicsHouse.asm): TM29
   // PSYCHIC, once; afterwards he only explains it.
   MR_PSYCHICS_HOUSE: {
@@ -2977,6 +2995,35 @@ function giftRows(o: {
     ["label", "already"],
     ["show_text", o.already],
   ] as ScriptRow[];
+}
+
+/**
+ * A CYCLING ROAD gate guard (gen1recomp story5.lua bikeGateGuard). With no
+ * BICYCLE in the bag, stepping onto one of the cells beside his counter has
+ * him call out, explain, walk you up level with the counter -- as many
+ * tiles as you are below it, none when already there (the ROM's
+ * wCoordIndex-1) -- and then one tile right, the simulated PAD_RIGHT of
+ * Route16Gate1FGuardScript, without which you are left parked against the
+ * desk with no way past.
+ */
+function bikeGate(
+  cells: [number, number][],
+  stop: string,
+  explain: string,
+): (ow: any, save: any) => ScriptRow[] | null {
+  const closestY = Math.min(...cells.map((c) => c[1]));
+  return (ow: any, save: any): ScriptRow[] | null => {
+    if ((save?.inventory?.BICYCLE ?? 0) > 0) return null;
+    const p = ow?.player;
+    if (!cells.some(([x, y]) => p?.cellX === x && p?.cellY === y)) return null;
+    const dist = p.cellY - closestY;
+    return [
+      ["show_text", stop],
+      ["show_text", explain],
+      ...(dist > 0 ? [["move_player", "up", dist]] : []),
+      ["move_player", "right", 1],
+    ] as ScriptRow[];
+  };
 }
 
 /**

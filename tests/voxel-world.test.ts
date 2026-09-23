@@ -7519,6 +7519,51 @@ describe("the TM givers", () => {
   });
 });
 
+describe("the CYCLING ROAD gates", () => {
+  const GATES = [
+    ["ROUTE_16_GATE_1F", 4, 9, 7, "pedestrians"],
+    ["ROUTE_18_GATE_1F", 4, 5, 3, "BICYCLE"],
+  ] as const;
+
+  /** Land on a cell beside the counter and let the guard react. */
+  function stepOnto(game: VoxelmonGame, map: string, x: number, y: number): void {
+    const ow = game.overworld;
+    ow.setMap(map, x, y, "left");
+    ow.onStepComplete();
+    for (let i = 0; i < 60; i++) {
+      if (game.stackKinds().at(-1) === "textbox") break;
+      game.tick(0);
+    }
+  }
+
+  test.skipIf(!hasGen)("without a BICYCLE the guard stops you and walks you back", () => {
+    for (const [map, x, y, counterY, word] of GATES) {
+      const game = makeMenuGame();
+      const ow = game.overworld;
+      stepOnto(game, map, x, y);
+      expect(game.stackKinds().at(-1), map).toBe("textbox");
+      // read both pages, then let the walk finish
+      for (let t = 0; t < 600; t++) {
+        if (game.stackKinds().at(-1) === "overworld") break;
+        game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+      }
+      expect(topText(game) ?? "").not.toContain(word);
+      for (let t = 0; t < 600; t++) game.tick(0);
+      const p = (ow as any).player;
+      expect([p.cellX, p.cellY], map).toEqual([x + 1, counterY]);
+    }
+  });
+
+  test.skipIf(!hasGen)("with a BICYCLE nobody says a word", () => {
+    for (const [map, x, y] of GATES) {
+      const game = makeMenuGame();
+      game.save.inventory.BICYCLE = 1;
+      stepOnto(game, map, x, y);
+      expect(game.stackKinds(), map).toEqual(["overworld"]);
+    }
+  });
+});
+
 describe("Silph Co 7F", () => {
   test.skipIf(!hasGen)("the rival waits at the door, and only there", () => {
     const rows = (ow: any, save: any) =>
