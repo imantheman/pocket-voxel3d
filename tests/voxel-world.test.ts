@@ -6927,6 +6927,26 @@ describe("LT. SURGE's trash cans", () => {
   });
 });
 
+describe("the Route 1 sample man", () => {
+  test.skipIf(!hasGen)("hands over one POTION, then talks about POKe BALLs", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    ow.setMap("ROUTE_1", 5, 5, "down");
+    expect(game.save.inventory.POTION ?? 0).toBe(0);
+
+    ow.showMapText("TEXT_ROUTE1_YOUNGSTER1");
+    dismissText(game);
+    expect(game.save.inventory.POTION).toBe(1);
+    expect(game.save.flags.EVENT_GOT_POTION_SAMPLE).toBe(true);
+
+    // a second time is the mart plug, not another potion
+    ow.showMapText("TEXT_ROUTE1_YOUNGSTER1");
+    expect(topText(game)).toContain("POKé BALL");
+    dismissText(game);
+    expect(game.save.inventory.POTION).toBe(1);
+  });
+});
+
 describe("Silph Co 7F", () => {
   test.skipIf(!hasGen)("the rival waits at the door, and only there", () => {
     const rows = (ow: any, save: any) =>

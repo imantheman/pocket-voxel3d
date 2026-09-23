@@ -2592,6 +2592,21 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     },
   },
 
+  // story5.lua M.ROUTE_1 (scripts/Route1.asm): the POKeMON MART man's free
+  // POTION sample, the first item in the game that is handed over rather
+  // than found.
+  ROUTE_1: {
+    talk: {
+      TEXT_ROUTE1_YOUNGSTER1: giftRows({
+        flag: "EVENT_GOT_POTION_SAMPLE",
+        item: "POTION",
+        pre: "_Route1Youngster1MartSampleText",
+        received: "_Route1Youngster1GotPotionText",
+        already: "_Route1Youngster1AlsoGotPokeballsText",
+      }),
+    },
+  },
+
   // story4.lua M.SILPH_CO_7F (the worker's LAPRAS) + story5.lua M.SILPH_CO_7F
   // (the rival ambush). Both live on this floor, so both are here.
   //
@@ -2723,6 +2738,33 @@ function sceneWithTheme(song: string, rows: ScriptRow[]): ScriptRow[] {
       : r,
   );
   return [["play_music", song] as unknown as ScriptRow, ...bumped];
+}
+
+/**
+ * Someone who hands over one item, once (gen1recomp story5.lua `gift`): the
+ * offer, the item, and a different line ever after. give_item prints the
+ * received line itself, with the item's name folded in, and halts the
+ * script on a full bag -- the ROM burns the flag even then, and the port
+ * keeps its kinder halt-and-retry.
+ */
+function giftRows(o: {
+  flag: string;
+  item: string;
+  pre: string;
+  received: string;
+  already: string;
+}): ScriptRow[] {
+  return [
+    ["face_player"],
+    ["check_flag", o.flag],
+    ["jump_if_true", "already"],
+    ["show_text", o.pre],
+    ["give_item", o.item, 1, o.received],
+    ["set_flag", o.flag],
+    ["jump", "end"],
+    ["label", "already"],
+    ["show_text", o.already],
+  ] as ScriptRow[];
 }
 
 /**

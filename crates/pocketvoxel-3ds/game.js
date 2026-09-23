@@ -8449,6 +8449,17 @@ var MAP_SCRIPTS = {
       TEXT_ROUTE12SUPERRODHOUSE_FISHING_GURU: rodGiverRows("_Route12SuperRodHouseFishingGuruDoYouLikeToFishText", "_Route12SuperRodHouseFishingGuruReceivedSuperRodText", "_Route12SuperRodHouseFishingGuruTryFishingText", "_Route12SuperRodHouseFishingGuruThatsDisappointingText", "SUPER_ROD", "EVENT_GOT_SUPER_ROD")
     }
   },
+  ROUTE_1: {
+    talk: {
+      TEXT_ROUTE1_YOUNGSTER1: giftRows({
+        flag: "EVENT_GOT_POTION_SAMPLE",
+        item: "POTION",
+        pre: "_Route1Youngster1MartSampleText",
+        received: "_Route1Youngster1GotPotionText",
+        already: "_Route1Youngster1AlsoGotPokeballsText"
+      })
+    }
+  },
   SILPH_CO_7F: {
     onEnter: (ow, save) => {
       if (save?.flags?.EVENT_BEAT_SILPH_CO_RIVAL)
@@ -8521,6 +8532,19 @@ function sceneWithTheme(song, rows) {
   const jumps = ["jump", "jump_if_true", "jump_if_false"];
   const bumped = rows.map((r) => jumps.includes(r[0]) && typeof r[1] === "number" ? [r[0], r[1] + 1] : r);
   return [["play_music", song], ...bumped];
+}
+function giftRows(o) {
+  return [
+    ["face_player"],
+    ["check_flag", o.flag],
+    ["jump_if_true", "already"],
+    ["show_text", o.pre],
+    ["give_item", o.item, 1, o.received],
+    ["set_flag", o.flag],
+    ["jump", "end"],
+    ["label", "already"],
+    ["show_text", o.already]
+  ];
 }
 function rodGiverRows(ask, received, after, refused, rod, flag) {
   return [
