@@ -1426,6 +1426,13 @@ export class Overworld implements ScriptWorld {
     }).openFlyPicker?.(monName, onDone);
   }
 
+  /** open_diploma -> game.ts openDiploma (the completed-dex page). */
+  openDiploma(onDone?: () => void): void {
+    (this.shell as unknown as {
+      openDiploma?: (done?: () => void) => void;
+    }).openDiploma?.(onDone);
+  }
+
   /** record_hall_of_fame -> game.ts recordHallOfFame (the induction flow). */
   recordHallOfFame(onDone?: () => void): void {
     (this.shell as unknown as {

@@ -7496,6 +7496,7 @@ function towerRivalScript(playerX) {
     ["show_text", "_PokemonTower2FRivalHowsYourDexText"]
   ]);
 }
+var DEX_COMPLETE = 150;
 var MAP_SCRIPTS = {
   PEWTER_CITY: {
     onStep: (ow, save) => {
@@ -8901,6 +8902,20 @@ much!`]
       TEXT_VIRIDIANNICKNAMEHOUSE_SPEAROW: [
         ["play_cry", "SPEAROW"],
         ["show_text", "_ViridianNicknameHouseSpearowText"]
+      ]
+    }
+  },
+  CELADON_MANSION_3F: {
+    talk: {
+      TEXT_CELADONMANSION3F_GAME_DESIGNER: [
+        ["face_player"],
+        ["check_dex_owned", DEX_COMPLETE],
+        ["jump_if_false", "keepgoing"],
+        ["show_text", "_CeladonMansion3FGameDesignerCompletedDexText"],
+        ["open_diploma"],
+        ["jump", "end"],
+        ["label", "keepgoing"],
+        ["show_text", "_CeladonMansion3FGameDesignerText"]
       ]
     }
   },
@@ -10526,11 +10541,20 @@ var VERBS = {
   set_heal_point,
   old_man_demo,
   record_hall_of_fame,
+  open_diploma,
   push_screen: noop_object,
   play_sound,
   play_music,
   stop_music: noop_audio
 };
+function* open_diploma(ctx) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  if (!w.openDiploma)
+    return;
+  w.openDiploma(() => runner.resume());
+  yield;
+}
 function* record_hall_of_fame(ctx) {
   const runner = ctx.runner;
   const w = ctx.world;
@@ -11480,6 +11504,9 @@ any coins!`);
   }
   openFlyPicker(monName2, onDone) {
     this.shell.openFlyPicker?.(monName2, onDone);
+  }
+  openDiploma(onDone) {
+    this.shell.openDiploma?.(onDone);
   }
   recordHallOfFame(onDone) {
     this.shell.recordHallOfFame?.(onDone);
@@ -12828,6 +12855,7 @@ class Scene {
   partySig = null;
   dexSig = null;
   hofSig = null;
+  diplomaSig = null;
   creditsSig = null;
   evoSig = null;
   summarySig = null;
@@ -13509,7 +13537,7 @@ class Scene {
       host.uiClear();
       this.uiOwner = null;
       this.menuSig = this.titleSig = this.namingSig = null;
-      this.hofSig = this.creditsSig = this.evoSig = null;
+      this.hofSig = this.creditsSig = this.evoSig = this.diplomaSig = null;
     }
     const evo = view.evolutionScreen?.();
     if (evo) {
@@ -13522,6 +13550,33 @@ class Scene {
         const c = EVO_PIC_CELL;
         host.uiFill(c.x, c.y, c.w, c.h, 0);
         evo.lines.forEach((ln, i) => this.stamp(host, 1, 13 + i, ln));
+      }
+      return;
+    }
+    const dip = view.diplomaScreen?.();
+    if (dip) {
+      const sig = `D${dip.name}`;
+      if (sig !== this.diplomaSig) {
+        this.diplomaSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        host.uiFill(0, 0, UI_COLS, UI_ROWS, SPACE);
+        const F = UI_TILE.frame;
+        const x1 = UI_COLS - 1;
+        const y1 = UI_ROWS - 1;
+        host.uiTile(0, 0, F + 2);
+        host.uiTile(x1, 0, F + 4);
+        host.uiTile(0, y1, F + 6);
+        host.uiTile(x1, y1, F + 7);
+        host.uiFill(1, 0, UI_COLS - 2, 1, F + 3);
+        host.uiFill(1, y1, UI_COLS - 2, 1, F + 0);
+        host.uiFill(0, 1, 1, UI_ROWS - 2, F + 5);
+        host.uiFill(x1, 1, 1, UI_ROWS - 2, F + 1);
+        const centre = (s) => Math.max(1, Math.floor((UI_COLS - s.length) / 2));
+        this.stamp(host, centre(dip.title), 2, dip.title);
+        this.stamp(host, centre(dip.name), 5, dip.name);
+        dip.lines.forEach((ln, i) => this.stamp(host, 2, 8 + i, String(ln)));
+        this.stamp(host, Math.max(1, UI_COLS - 2 - dip.signature.length), 15, dip.signature);
       }
       return;
     }
@@ -14933,6 +14988,45 @@ class CreditsState {
       lines: s?.lines ?? [],
       picPage: s?.mon ? picPageFor(this.game.data, s.mon) : -1,
       theEnd: this.atEnd
+    };
+  }
+}
+
+// voxelmon/game/ui/diploma.ts
+var DIPLOMA_ARM_FRAMES = 3;
+
+class DiplomaState {
+  game;
+  onDone;
+  kind = "diploma";
+  t = 0;
+  constructor(game, onDone) {
+    this.game = game;
+    this.onDone = onDone;
+  }
+  update() {
+    this.t += 1;
+    if (this.t < DIPLOMA_ARM_FRAMES)
+      return;
+    const p = this.game.input.pressed;
+    if (p.a || p.b || p.start) {
+      this.game.pop();
+      this.onDone?.();
+    }
+  }
+  view() {
+    return {
+      title: "Diploma",
+      name: this.game.save.player?.name ?? "RED",
+      lines: [
+        "Congratulations!",
+        "This diploma",
+        "certifies that",
+        "you have",
+        "completed your",
+        "POKéDEX."
+      ],
+      signature: "GAME FREAK"
     };
   }
 }
@@ -19236,6 +19330,13 @@ to level ${mon.level}!`, () => {
   party() {
     const top = this.stack[this.stack.length - 1];
     return top?.kind === "party" ? top.view() : null;
+  }
+  openDiploma(onDone) {
+    this.push(new DiplomaState(this, onDone));
+  }
+  diplomaScreen() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "diploma" ? top.view?.() ?? null : null;
   }
   hallOfFameScreen() {
     const top = this.stack[this.stack.length - 1];

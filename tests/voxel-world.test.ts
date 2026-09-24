@@ -8219,6 +8219,55 @@ describe("water is only where the tileset has any", () => {
   });
 });
 
+describe("the GAME FREAK floor's diploma", () => {
+  /** Talk to the designer and read whatever page comes up. */
+  function talkDesigner(game: VoxelmonGame): void {
+    game.overworld.setMap("CELADON_MANSION_3F", 2, 2, "up");
+    game.overworld.showMapText("TEXT_CELADONMANSION3F_GAME_DESIGNER");
+    for (let i = 0; i < 60 && game.stackKinds().at(-1) !== "textbox"; i++) game.tick(0);
+  }
+  const ownAll = (game: VoxelmonGame, n: number) => {
+    const owned: Record<string, boolean> = {};
+    for (const id of Object.keys((romData as any).pokemon).slice(0, n)) owned[id] = true;
+    (game.save as any).pokedex = { owned, seen: { ...owned } };
+  };
+
+  test.skipIf(!hasGen)("short of 150 he only tells you to keep at it", () => {
+    const game = makeMenuGame();
+    ownAll(game, 149);
+    talkDesigner(game);
+    expect(topText(game)).toContain("game");
+    expect(topText(game)).not.toContain("completed");
+    dismissText(game);
+    for (let i = 0; i < 60; i++) game.tick(0);
+    expect(game.stackKinds()).toEqual(["overworld"]);
+  });
+
+  test.skipIf(!hasGen)("a completed dex gets the congratulations and the diploma", () => {
+    const game = makeMenuGame();
+    ownAll(game, 150);
+    game.save.player.name = "ISAAC";
+    talkDesigner(game);
+    expect(topText(game)).toContain("completed");
+    // A through the congratulations: the diploma is what it opens onto
+    for (let t = 0; t < 600 && game.stackKinds().at(-1) !== "diploma"; t++) {
+      game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    expect(game.stackKinds().at(-1)).toBe("diploma");
+    const v = game.diplomaScreen() as { title: string; name: string; lines: string[] };
+    expect(v.title).toBe("Diploma");
+    expect(v.name).toBe("ISAAC");
+    expect(v.lines.join(" ")).toContain("POK");
+    // it holds a moment, then a button closes it back to the world
+    tap(game, VOX_BTN.a);
+    expect(game.stackKinds().at(-1)).toBe("diploma");
+    for (let i = 0; i < 10; i++) game.tick(0);
+    tap(game, VOX_BTN.a);
+    for (let i = 0; i < 60; i++) game.tick(0);
+    expect(game.stackKinds()).toEqual(["overworld"]);
+  });
+});
+
 describe("Silph Co 7F", () => {
   test.skipIf(!hasGen)("the rival waits at the door, and only there", () => {
     const rows = (ow: any, save: any) =>

@@ -47,6 +47,7 @@ import { StartMenuState } from "./ui/startmenu.ts";
 import { DevMenuState } from "./ui/devmenu.ts";
 import { CARD_PIC_RECT, TrainerCardState } from "./ui/trainercard.ts";
 import { CreditsState, HallOfFameState } from "./ui/hofscreen.ts";
+import { DiplomaState } from "./ui/diploma.ts";
 import { EvolutionState, type EvolutionView } from "./ui/evoscreen.ts";
 import {
   applyPostGameHome, POST_GAME_HOME, postGameRescue, recordHallOfFame,
@@ -2135,6 +2136,17 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   party(): unknown {
     const top = this.stack[this.stack.length - 1] as any;
     return top?.kind === "party" ? top.view() : null;
+  }
+
+  /** open_diploma (world/script.ts): the completed-POKeDEX page. */
+  openDiploma(onDone?: () => void): void {
+    this.push(new DiplomaState(this as never, onDone));
+  }
+
+  /** ui/diploma.ts DiplomaState.view, for scene.ts. */
+  diplomaScreen(): unknown {
+    const top = this.stack[this.stack.length - 1] as GameState & { view?: () => unknown };
+    return top?.kind === "diploma" ? (top.view?.() ?? null) : null;
   }
 
   /** ui/hofscreen.ts HallOfFameState.view, for scene.ts. */

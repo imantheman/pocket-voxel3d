@@ -184,6 +184,7 @@ export class Scene {
   private partySig: string | null = null;
   private dexSig: string | null = null;
   private hofSig: string | null = null;
+  private diplomaSig: string | null = null;
   private creditsSig: string | null = null;
   /** The evolution movie's last drawn lines (ui/evoscreen.ts). */
   private evoSig: string | null = null;
@@ -1003,7 +1004,7 @@ export class Scene {
       host.uiClear();
       this.uiOwner = null;
       this.menuSig = this.titleSig = this.namingSig = null;
-    this.hofSig = this.creditsSig = this.evoSig = null;
+    this.hofSig = this.creditsSig = this.evoSig = this.diplomaSig = null;
     }
     // The evolution movie (ui/evoscreen.ts): the form on the pic layer,
     // "What? X is evolving!" stamped under it while the two trade places.
@@ -1032,6 +1033,40 @@ export class Scene {
     // The HALL OF FAME roll (ui/hofscreen.ts): one inductee at a time, the
     // front pic on the pic layer with its dex number, name and level stamped
     // under it. No cursor and nothing to choose -- it advances itself.
+    // The DIPLOMA (ui/diploma.ts, DisplayDiploma): a framed certificate page,
+    // drawn from the same trainer-card frame tiles, with nothing on it to
+    // choose. Above the Hall of Fame here only because both are end-game
+    // pages and this one is the shorter branch.
+    const dip = (view as unknown as { diplomaScreen?: () => any }).diplomaScreen?.();
+    if (dip) {
+      const sig = `D${dip.name}`;
+      if (sig !== this.diplomaSig) {
+        this.diplomaSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        host.uiFill(0, 0, UI_COLS, UI_ROWS, SPACE);
+        // trainer_info.png's 3x3, the same eight pieces the trainer card
+        // frames itself with: 0 bottom, 1 right, 2 tl, 3 top, 4 tr, 5 left,
+        // 6 bl, 7 br.
+        const F = UI_TILE.frame;
+        const x1 = UI_COLS - 1;
+        const y1 = UI_ROWS - 1;
+        host.uiTile(0, 0, F + 2);
+        host.uiTile(x1, 0, F + 4);
+        host.uiTile(0, y1, F + 6);
+        host.uiTile(x1, y1, F + 7);
+        host.uiFill(1, 0, UI_COLS - 2, 1, F + 3);
+        host.uiFill(1, y1, UI_COLS - 2, 1, F + 0);
+        host.uiFill(0, 1, 1, UI_ROWS - 2, F + 5);
+        host.uiFill(x1, 1, 1, UI_ROWS - 2, F + 1);
+        const centre = (s: string) => Math.max(1, Math.floor((UI_COLS - s.length) / 2));
+        this.stamp(host, centre(dip.title), 2, dip.title);
+        this.stamp(host, centre(dip.name), 5, dip.name);
+        dip.lines.forEach((ln: string, i: number) => this.stamp(host, 2, 8 + i, String(ln)));
+        this.stamp(host, Math.max(1, UI_COLS - 2 - dip.signature.length), 15, dip.signature);
+      }
+      return;
+    }
     const hof = (view as unknown as { hallOfFameScreen?: () => any }).hallOfFameScreen?.();
     if (hof) {
       const sig = `H${hof.index},${hof.mon ? hof.mon.name + hof.mon.level : "-"}`;

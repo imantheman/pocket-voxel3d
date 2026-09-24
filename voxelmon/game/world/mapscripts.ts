@@ -741,6 +741,12 @@ function towerRivalScript(playerX: number): ScriptRow[] {
   ] as ScriptRow[]);
 }
 
+/**
+ * What the GAME FREAK floor counts as a finished POKeDEX: NUM_POKEMON - 1.
+ * MEW is the one discounted, being unobtainable without the ROM's own bugs.
+ */
+const DEX_COMPLETE = 150;
+
 export const MAP_SCRIPTS: Record<string, MapScript> = {
   PEWTER_CITY: {
     // PewterGuys trigger tiles on the west-leaving path; fires until Brock is
@@ -2750,6 +2756,27 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
       TEXT_VIRIDIANNICKNAMEHOUSE_SPEAROW: [
         ["play_cry", "SPEAROW"],
         ["show_text", "_ViridianNicknameHouseSpearowText"],
+      ] as ScriptRow[],
+    },
+  },
+
+  // flavor/celadon_mansion_3f.lua (scripts/CeladonMansion3F.asm): the GAME
+  // FREAK development floor. Every dev on it counts the dex against
+  // NUM_POKEMON - 1 -- 150, discounting MEW -- and the GAME DESIGNER is the
+  // one who does anything about it: a completed dex gets the congratulations
+  // and the diploma, anything short of it gets "don't quit". The other four
+  // are plain lines the text fallback already shows.
+  CELADON_MANSION_3F: {
+    talk: {
+      TEXT_CELADONMANSION3F_GAME_DESIGNER: [
+        ["face_player"],
+        ["check_dex_owned", DEX_COMPLETE],
+        ["jump_if_false", "keepgoing"],
+        ["show_text", "_CeladonMansion3FGameDesignerCompletedDexText"],
+        ["open_diploma"],
+        ["jump", "end"],
+        ["label", "keepgoing"],
+        ["show_text", "_CeladonMansion3FGameDesignerText"],
       ] as ScriptRow[],
     },
   },

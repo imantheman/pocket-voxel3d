@@ -1161,6 +1161,7 @@ const VERBS: Record<string, Verb> = {
   set_heal_point,
   old_man_demo,
   record_hall_of_fame,
+  open_diploma,
   push_screen: noop_object,
   play_sound,
   play_music,
@@ -1173,6 +1174,16 @@ const VERBS: Record<string, Verb> = {
  * (game.ts recordHallOfFame) because it pushes screens and rewrites where the
  * save says the player lives; the verb is just the hand-off.
  */
+// DisplayDiploma (engine/events/diploma.asm): the completed-POKeDEX page,
+// held until a button like the Hall of Fame roll, then the script resumes.
+function* open_diploma(ctx: ScriptContext): Generator<void, void> {
+  const w = ctx.world as unknown as { openDiploma?: (done: () => void) => void };
+  const runner = ctx.runner;
+  if (!w.openDiploma) return;
+  w.openDiploma(() => runner.resume());
+  yield;
+}
+
 function* record_hall_of_fame(ctx: ScriptContext): Generator<void, void> {
   const runner = ctx.runner;
   const w = ctx.world as unknown as { recordHallOfFame?: (done: () => void) => void };
