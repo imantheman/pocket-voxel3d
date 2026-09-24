@@ -3019,6 +3019,19 @@ fn main() {
     let mut sim_acc: f32 = 0.0;
     let mut sim_last: u64 = 0;
     let mut fps_frames: u32 = 0;
+    // The frame's cost, averaged over each second and printed every fifth:
+    // CPU ms (sim, build, cull, submit), the GPU's own drawing time for the
+    // last frame it finished, what survived the cull, and the 3D slider.
+    let mut perf_n: u32 = 0;
+    let mut perf_secs: u32 = 0;
+    let mut perf_cpu_sum: f32 = 0.0;
+    let mut perf_cpu_max: f32 = 0.0;
+    let mut perf_gpu_sum: f32 = 0.0;
+    let mut perf_gpu_max: f32 = 0.0;
+    let mut perf_proc_sum: f32 = 0.0;
+    let mut perf_slider: f32 = 0.0;
+    let mut perf_spans: usize = 0;
+    let mut perf_trees: usize = 0;
     let mut fps_last: u64 = 0;
     let pitches: [i32; 5] = [0, 1, 2, 3, 4];
     let mut pitch_i = 0usize;
@@ -3159,6 +3172,23 @@ fn main() {
                         aud_dropped, aud_ticks, aud_queued, fps_frames,
                     );
                 }
+                // The perf line: which side of the frame is full decides the
+                // lever for a slow map, so it is measured rather than guessed.
+                perf_secs += 1;
+                if perf_n > 0 && perf_secs % 5 == 0 {
+                    println!(
+                        "perf: {} fps  cpu {:.1} avg {:.0} max ms  gpu {:.1} avg {:.0} max ms  proc {:.1} ms  spans {}/{}  trees {}/{}  3d {:.2}",
+                        fps_frames,
+                        perf_cpu_sum / perf_n as f32, perf_cpu_max,
+                        perf_gpu_sum / perf_n as f32, perf_gpu_max,
+                        perf_proc_sum / perf_n as f32,
+                        unsafe { DRAWN }, perf_spans, unsafe { TREES_DRAWN }, perf_trees,
+                        perf_slider,
+                    );
+                }
+                perf_n = 0;
+                perf_cpu_sum = 0.0; perf_cpu_max = 0.0;
+                perf_gpu_sum = 0.0; perf_gpu_max = 0.0; perf_proc_sum = 0.0;
                 fps_frames = 0; aud_ticks = 0; aud_queued = 0; aud_dropped = 0;
                 fps_last = now;
             }
@@ -4137,6 +4167,7 @@ fn main() {
             CoordinateOrientation::RightHanded,
         );
         let slider = ctru::os::current_3d_slider_state();
+        perf_slider = slider;
         let (sl, sr) = StereoDisplacement::new(slider * dist * 0.03, dist);
         let (pl, pr) = Projection::perspective(
             world_fov(),
@@ -4708,10 +4739,170 @@ if page_tex.len() < pak_static.atlases.len() {
         unsafe {
             extern "C" { fn osGetTime() -> u64; fn svcSleepThread(ns: i64); }
             let spent = osGetTime().wrapping_sub(frame_start);
+            {
+                // citro3d's own clocks: drawing is the GPU's time on the
+                // last finished frame, processing the command-list build.
+                extern "C" { fn C3D_GetDrawingTime() -> f32; fn C3D_GetProcessingTime() -> f32; }
+                let (gd, gp) = (C3D_GetDrawingTime(), C3D_GetProcessingTime());
+                let cpu = spent as f32;
+                perf_cpu_sum += cpu;
+                if cpu > perf_cpu_max { perf_cpu_max = cpu; }
+                perf_gpu_sum += gd;
+                if gd > perf_gpu_max { perf_gpu_max = gd; }
+                perf_proc_sum += gp;
+                perf_n += 1;
+            }
             if spent < 33 {
                 svcSleepThread(((33 - spent) as i64) * 1_000_000);
             }
         }
+        // Culling is per FRAME, not per eye. Every test here reads the guest
+        // camera's focus, eye and forward, which both eyes share, so the
+        // right-eye pass used to re-run the identical loop over every span
+        // and every tree instance and reach the identical answer. Decide
+        // once, draw the survivors in each pass. (With the slider down this
+        // is the same work in a different place; with it up it is half.)
+        let (mut cull_r_n, mut cull_c_n, mut cull_o_n) = (0u32, 0u32, 0u32);
+        let mut min_culled = f32::MAX;
+        let vis_spans: Vec<_> = if pic_active {
+            Vec::new()
+        } else {
+            infos_ref.iter().chain(strips_ref.iter()).filter(|(span, _bi)| {
+                let (bmin, bmax) = (&span.bmin, &span.bmax);
+                let cx = (bmin[0] + bmax[0]) * 0.5;
+                let cz = (bmin[2] + bmax[2]) * 0.5;
+                let dx = cx - focus_x;
+                let dz = cz - focus_z;
+                // Measure to the chunk's nearest point, not its centre: a
+                // 128 px chunk reaches ~90 px past its own centre, and
+                // culling on the centre alone throws away chunks that are
+                // still half on screen.
+                let hx = (bmax[0] - bmin[0]) * 0.5;
+                let hz = (bmax[2] - bmin[2]) * 0.5;
+                let extent = (hx * hx + hz * hz).sqrt();
+                let near = (dx * dx + dz * dz).sqrt() - extent;
+                if near > cull_radius {
+                    cull_r_n += 1;
+                    if near < min_culled { min_culled = near; }
+                    return false;
+                }
+                if guest_drive {
+                    let vx = cx - eye_x;
+                    let vz = cz - eye_z;
+                    let along = vx * fx + vz * fz;
+                    let side = (vx * fz - vz * fx).abs();
+                    // Project the box onto the view axes instead of using
+                    // its diagonal as a blanket pad: how far it reaches
+                    // FORWARD sets how wide the wedge is across it, how far
+                    // it reaches SIDEWAYS sets how much of that width it
+                    // needs.
+                    let fwd_half = (hx * fx).abs() + (hz * fz).abs();
+                    let lat_half = (hx * fz).abs() + (hz * fx).abs();
+                    let far = along + fwd_half;
+                    // The view does NOT converge to a point at the eye: the
+                    // camera sits cam_h above the ground, so the wedge is
+                    // already cam_h*TAN_HHALF wide at the camera's own
+                    // ground position and widens from there. Measuring at
+                    // the box's FAR edge against its NEAREST side is what
+                    // keeps a chunk whose inner edge is still on screen.
+                    let half = (far * far + cam_h * cam_h).sqrt() * TAN_HHALF;
+                    if far < -CONE_PAD || side - lat_half > half + CONE_PAD {
+                        cull_c_n += 1;
+                        if near < min_culled { min_culled = near; }
+                        return false;
+                    }
+                }
+                // The battle camera's no-clip, against this span's OWN bounds
+                // and only for spans that leave no hole behind
+                // (Span::occludable).
+                if span.occludable {
+                    if let Some((eye3, focus3, seg_len)) = occlude_seg {
+                        if segment_hits_box(
+                            eye3,
+                            focus3,
+                            seg_len,
+                            BATTLE_OCCLUDE_MARGIN_PX,
+                            span.gmin,
+                            span.gmax,
+                        ) {
+                            cull_o_n += 1;
+                            if near < min_culled { min_culled = near; }
+                            return false;
+                        }
+                    }
+                }
+                true
+            }).collect()
+        };
+        // The same shape drawn where each placement says, at the level of
+        // detail its distance earns: near ones carved, far ones coarse, and
+        // nothing dropped for want of budget the way a baked-in chunk mesh
+        // had to be.
+        let (mut t_noshape, mut t_radius, mut t_cone) = (0u32, 0u32, 0u32);
+        let vis_trees: Vec<_> = if pic_active {
+            Vec::new()
+        } else {
+            tree_insts_ref.iter().filter_map(|it| {
+                let (ix, iz) = (it.x as f32, it.z as f32);
+                // near/far by distance to the focus, the same measure the
+                // spans above cull on
+                let dx = ix + 8.0 - focus_x;
+                let dz = iz + 8.0 - focus_z;
+                let dist = (dx * dx + dz * dz).sqrt();
+                // Carved close up, coarse a bit further, a box beyond that
+                // -- and each tree decides for itself as the player moves.
+                let ladder = if dist <= TREE_NEAR_PX {
+                    [it.near, it.mid, it.far]
+                } else if dist <= TREE_MID_PX {
+                    [it.mid, it.far, it.near]
+                } else {
+                    [it.far, it.mid, it.near]
+                };
+                let id = *ladder.iter().find(|&&id| id != TREE_SHAPE_NONE)?;
+                let Some(Some((bi, gmin, gmax))) = tree_bufs_ref.get(id as usize) else {
+                    t_noshape += 1;
+                    return None;
+                };
+                // the shape's own box, put where this copy stands
+                let cx = ix + (gmin[0] + gmax[0]) * 0.5;
+                let cz = iz + (gmin[2] + gmax[2]) * 0.5;
+                let hx = (gmax[0] - gmin[0]) * 0.5;
+                let hz = (gmax[2] - gmin[2]) * 0.5;
+                let ddx = cx - focus_x;
+                let ddz = cz - focus_z;
+                let extent = (hx * hx + hz * hz).sqrt();
+                if (ddx * ddx + ddz * ddz).sqrt() - extent > cull_radius {
+                    t_radius += 1;
+                    return None;
+                }
+                if guest_drive {
+                    let vx = cx - eye_x;
+                    let vz = cz - eye_z;
+                    let along = vx * fx + vz * fz;
+                    let side = (vx * fz - vz * fx).abs();
+                    let fwd_half = (hx * fx).abs() + (hz * fz).abs();
+                    let lat_half = (hx * fz).abs() + (hz * fx).abs();
+                    let far_edge = along + fwd_half;
+                    let half = (far_edge * far_edge + cam_h * cam_h).sqrt() * TAN_HHALF;
+                    if far_edge < -CONE_PAD || side - lat_half > half + CONE_PAD {
+                        t_cone += 1;
+                        return None;
+                    }
+                }
+                Some((it, bi))
+            }).collect()
+        };
+        unsafe {
+            DRAWN = vis_spans.len() as u32;
+            CULL_RADIUS_N = cull_r_n;
+            CULL_CONE_N = cull_c_n;
+            CULL_OCCL_N = cull_o_n;
+            MIN_CULLED_D = if min_culled == f32::MAX { -1.0 } else { min_culled };
+            TREES_DRAWN = vis_trees.len() as u32;
+            TREES_CULLED = [t_noshape, t_radius, t_cone, 0];
+        }
+        perf_spans = infos_ref.len() + strips_ref.len();
+        perf_trees = tree_insts_ref.len();
         instance.render_frame_with(|mut frame| {
             fn cast_lifetime_to_closure<'frame, T>(x: T) -> T
             where
@@ -4733,171 +4924,32 @@ if page_tex.len() < pak_static.atlases.len() {
                 frame.set_texenvs(&[stage0]);
                 frame.set_attr_info(&attr_info);
                 if !pic_active {
-                let mut drawn = 0u32;
-                let (mut cull_r_n, mut cull_c_n, mut cull_o_n) = (0u32, 0u32, 0u32);
-                let mut min_culled = f32::MAX;
-                for (span, bi) in infos_ref.iter().chain(strips_ref.iter()) {
-                    let (bmin, bmax) = (&span.bmin, &span.bmax);
-                    let cx = (bmin[0] + bmax[0]) * 0.5;
-                    let cz = (bmin[2] + bmax[2]) * 0.5;
-                    let dx = cx - focus_x;
-                    let dz = cz - focus_z;
-                    // Measure to the chunk's nearest point, not its centre:
-                    // a 128 px chunk reaches ~90 px past its own centre, and
-                    // culling on the centre alone throws away chunks that
-                    // are still half on screen.
-                    let hx = (bmax[0] - bmin[0]) * 0.5;
-                    let hz = (bmax[2] - bmin[2]) * 0.5;
-                    let extent = (hx * hx + hz * hz).sqrt();
-                    let near = (dx * dx + dz * dz).sqrt() - extent;
-                    if near > cull_radius {
-                        cull_r_n += 1;
-                        if near < min_culled { min_culled = near; }
-                        continue;
-                    }
-                    if guest_drive {
-                        let vx = cx - eye_x;
-                        let vz = cz - eye_z;
-                        let along = vx * fx + vz * fz;
-                        let side = (vx * fz - vz * fx).abs();
-                        // Project the box onto the view axes instead of
-                        // using its diagonal as a blanket pad: how far it
-                        // reaches FORWARD sets how wide the wedge is across
-                        // it, how far it reaches SIDEWAYS sets how much of
-                        // that width it needs.
-                        let fwd_half = (hx * fx).abs() + (hz * fz).abs();
-                        let lat_half = (hx * fz).abs() + (hz * fx).abs();
-                        let far = along + fwd_half;
-                        // The view does NOT converge to a point at the eye:
-                        // the camera sits cam_h above the ground, so the
-                        // wedge is already cam_h*TAN_HHALF wide at the
-                        // camera's own ground position and widens from
-                        // there. Measuring at the box's FAR edge against
-                        // its NEAREST side is what keeps a chunk whose
-                        // inner edge is still on screen — evaluating at the
-                        // centre with a radius pad dropped those, which is
-                        // the pop-out along the bottom of the frame.
-                        let half = (far * far + cam_h * cam_h).sqrt() * TAN_HHALF;
-                        if far < -CONE_PAD || side - lat_half > half + CONE_PAD {
-                            cull_c_n += 1;
-                            if near < min_culled { min_culled = near; }
-                            continue;
-                        }
-                    }
-                    // The battle camera's no-clip, against this span's OWN
-                    // bounds and only for spans that leave no hole behind
-                    // (Span::occludable).
-                    if span.occludable {
-                        if let Some((eye3, focus3, seg_len)) = occlude_seg {
-                            if segment_hits_box(
-                                eye3,
-                                focus3,
-                                seg_len,
-                                BATTLE_OCCLUDE_MARGIN_PX,
-                                span.gmin,
-                                span.gmax,
-                            ) {
-                                cull_o_n += 1;
-                                if near < min_culled { min_culled = near; }
-                                continue;
-                            }
-                        }
-                    }
-                    drawn += 1;
-                    frame.draw_arrays(buffer::Primitive::Triangles, bi, None).unwrap();
+                // The survivors of this frame's cull (decided once, above the
+                // frame, for both eyes).
+                for e in vis_spans.iter() {
+                    frame.draw_arrays(buffer::Primitive::Triangles, &e.1, None).unwrap();
                 }
                 // --- tree instances -------------------------------------
                 // The same shape drawn where each placement says, at the
                 // level of detail its distance earns: near ones carved,
                 // far ones coarse, and nothing dropped for want of budget
                 // the way a baked-in chunk mesh had to be.
-                if !tree_insts_ref.is_empty() {
-                    let mut tdrawn = 0u32;
-                    let (mut t_noshape, mut t_radius, mut t_cone, mut t_err) = (0u32, 0u32, 0u32, 0u32);
-                    for it in tree_insts_ref.iter() {
-                        let (ix, iz) = (it.x as f32, it.z as f32);
-                        // near/far by distance to the focus, the same
-                        // measure the spans above cull on
-                        let dx = ix + 8.0 - focus_x;
-                        let dz = iz + 8.0 - focus_z;
-                        let dist = (dx * dx + dz * dz).sqrt();
-                        // Carved close up, coarse a bit further, a box
-                        // beyond that -- and each tree decides for itself as
-                        // the player moves, which is what the cook could
-                        // never do baking one level per chunk.
-                        let ladder = if dist <= TREE_NEAR_PX {
-                            [it.near, it.mid, it.far]
-                        } else if dist <= TREE_MID_PX {
-                            [it.mid, it.far, it.near]
-                        } else {
-                            [it.far, it.mid, it.near]
-                        };
-                        let Some(&id) = ladder.iter().find(|&&id| id != TREE_SHAPE_NONE) else {
-                            continue;
-                        };
-                        let Some(Some((bi, gmin, gmax))) = tree_bufs_ref.get(id as usize) else {
-                            t_noshape += 1;
-                            continue;
-                        };
-                        // the shape's own box, put where this copy stands
-                        let cx = ix + (gmin[0] + gmax[0]) * 0.5;
-                        let cz = iz + (gmin[2] + gmax[2]) * 0.5;
-                        let hx = (gmax[0] - gmin[0]) * 0.5;
-                        let hz = (gmax[2] - gmin[2]) * 0.5;
-                        let ddx = cx - focus_x;
-                        let ddz = cz - focus_z;
-                        let extent = (hx * hx + hz * hz).sqrt();
-                        if (ddx * ddx + ddz * ddz).sqrt() - extent > cull_radius {
-                            t_radius += 1;
-                            continue;
-                        }
-                        if guest_drive {
-                            let vx = cx - eye_x;
-                            let vz = cz - eye_z;
-                            let along = vx * fx + vz * fz;
-                            let side = (vx * fz - vz * fx).abs();
-                            let fwd_half = (hx * fx).abs() + (hz * fz).abs();
-                            let lat_half = (hx * fz).abs() + (hz * fx).abs();
-                            let far_edge = along + fwd_half;
-                            let half = (far_edge * far_edge + cam_h * cam_h).sqrt() * TAN_HHALF;
-                            if far_edge < -CONE_PAD || side - lat_half > half + CONE_PAD {
-                                t_cone += 1;
-                                continue;
-                            }
-                        }
-                        // Where this copy stands, handed to the shader,
-                        // which adds it to the vertex before the projection.
-                        //
-                        // This was a matrix edit first -- mvp * translate,
-                        // by hand, because Matrix4::translate pre-multiplies
-                        // (Mtx_Translate with bRightSide = false) and moves
-                        // the result in clip space. The arithmetic looked
-                        // right and the trees still drew somewhere invisible:
-                        // 339 of 1,238 passed the cull, none reached the
-                        // screen. An offset the shader applies to the vertex
-                        // has no convention to get wrong.
+                if !vis_trees.is_empty() {
+                    let mut t_err = 0u32;
+                    for (it, bi) in vis_trees.iter() {
+                        // Where this copy stands, handed to the shader, which
+                        // adds it to the vertex before the projection (a
+                        // matrix edit moved the trees somewhere invisible).
                         frame.bind_vertex_uniform(
                             toff_idx,
-                            FVec4::new(ix, it.y as f32, iz, 0.0),
+                            FVec4::new(it.x as f32, it.y as f32, it.z as f32, 0.0),
                         );
                         if frame.draw_arrays(buffer::Primitive::Triangles, bi, None).is_err() {
                             t_err += 1;
-                            continue;
                         }
-                        tdrawn += 1;
                     }
                     frame.bind_vertex_uniform(toff_idx, FVec4::new(0.0, 0.0, 0.0, 0.0));
-                    unsafe {
-                        TREES_DRAWN = tdrawn;
-                        TREES_CULLED = [t_noshape, t_radius, t_cone, t_err];
-                    }
-                }
-                unsafe {
-                    DRAWN = drawn;
-                    CULL_RADIUS_N = cull_r_n;
-                    CULL_CONE_N = cull_c_n;
-                    CULL_OCCL_N = cull_o_n;
-                    MIN_CULLED_D = if min_culled == f32::MAX { -1.0 } else { min_culled };
+                    unsafe { TREES_CULLED[3] = t_err; }
                 }
                 }
                 // Card UVs are already atlas-scaled here, so the shader's
