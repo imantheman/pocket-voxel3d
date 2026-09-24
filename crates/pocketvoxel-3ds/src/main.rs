@@ -2698,12 +2698,28 @@ fn build_map(
     MapGeom { floor, chunk_spans, verts, center, size, tex_rgba, tw, th, aw, ah, is_huge, map_min, map_max }
 }
 
-/// The floor under each cell of the map: the highest up-facing TERRAIN
+/// The floor under each cell of the map: the highest HORIZONTAL TERRAIN
 /// triangle in it, so a shelf the cook raised reads as its top and the
 /// base ground as 0. Whoever stands on the cell is drawn that high
 /// (core draw.rs ent_feet / cell_centre), which is what keeps the player
 /// and a staged battle out of Mt. Moon's upper floor rather than sunk to
 /// its foot.
+///
+/// Horizontal, and not UP-facing, because up-facing cannot be asked here.
+/// This tested the sign of the cross product, which is the winding, and
+/// cook/geom.ts states plainly that the cooked streams do not share one:
+/// every quad names the direction its front points in precisely because
+/// that cannot be derived from its corners. Measured over the shipped paks
+/// (examples/floor_check.rs), MT_MOON_1F has 19,968 horizontal terrain
+/// triangles and NOT ONE of them is wound the way this asked for, so the
+/// floor map came out empty and everything in the cave stood at the base
+/// height while the shelf it was on drew 16 px up. ROCK_TUNNEL_1F and
+/// SEAFOAM_ISLANDS_B3F are the same.
+///
+/// Dropping the sign costs nothing real: a box's underside is horizontal
+/// too, but it sits below that box's own top in the same cell, and the max
+/// is what is kept. VIRIDIAN_FOREST is measurably untouched -- every cell
+/// of it reads 0 under both rules.
 ///
 /// A triangle covers every cell its XZ box touches, not only the cells its
 /// corners land in: the cook merges a flat run into one quad, whose inner
@@ -2733,13 +2749,14 @@ fn floor_map_of(pak: &Pak, chunks: &[pak::Chunk], map_min: [f32; 2], map_max: [f
             ) else {
                 break;
             };
-            // up-facing: the normal's y dominates and points up
+            // horizontal: the normal's y dominates. Which SIGN it has is the
+            // winding, which this cook does not promise (see above).
             let (ax, ay, az) = ((p1.x - p0.x) as f32, (p1.y - p0.y) as f32, (p1.z - p0.z) as f32);
             let (bx, by, bz) = ((p2.x - p0.x) as f32, (p2.y - p0.y) as f32, (p2.z - p0.z) as f32);
             let ny = az * bx - ax * bz;
             let nx = ay * bz - az * by;
             let nz = ax * by - ay * bx;
-            if ny <= 0.0 || ny.abs() < nx.abs() || ny.abs() < nz.abs() {
+            if ny == 0.0 || ny.abs() < nx.abs() || ny.abs() < nz.abs() {
                 continue;
             }
             let top = p0.y.max(p1.y).max(p2.y);
@@ -3769,6 +3786,18 @@ fn main() {
                     cur_map_huge,
                     last_tint,
                 ));
+                // What the floor map came out as, so a map that draws a shelf
+                // but stands nothing on it says so in the log rather than in
+                // a photograph. `raised` is the count of cells above the base.
+                {
+                    let f = &geom.floor;
+                    let raised = f.cells.iter().filter(|h| **h > 0).count();
+                    let top = f.cells.iter().copied().max().unwrap_or(0);
+                    dlog(&format!(
+                        "[pv] floor cells={}x{} raised={} top={}",
+                        f.w, f.h, raised, top,
+                    ));
+                }
                 dlog(&format!(
                     "[pv] seams W={} E={} N={} S={} nbrs={}",
                     seam_sides[0], seam_sides[1], seam_sides[2], seam_sides[3],
