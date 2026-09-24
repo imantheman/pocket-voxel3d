@@ -197,6 +197,7 @@ int qjs_register_voxel(JSContext *ctx) {
     add_num(ctx, o, "emote",    32, 2);
     add_num(ctx, o, "pic",      33, 6);
     add_num(ctx, o, "picHide",  34, 1);
+    add_num(ctx, o, "picDepth", 35, 2);
     add_num(ctx, o, "viewer",   90, 0);
     add_num(ctx, o, "uiTile",   50, 3);
     add_num(ctx, o, "uiFill",   51, 5);

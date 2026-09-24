@@ -99,6 +99,7 @@ var ENT_FLAG = {
   walker: 1 << 2
 };
 var FX_FRAME_CUT_TREE = 3;
+var PICS_MAX = 16;
 var Q4 = 16;
 var Q8 = 256;
 var AUDIO_ENGINES = 4;
@@ -13464,6 +13465,7 @@ class Scene {
   namingSig = null;
   picSig = "";
   titleSig = null;
+  introSig = null;
   menuSig = null;
   bagSig = null;
   shopSig = null;
@@ -13539,6 +13541,23 @@ class Scene {
       if (page < 0)
         continue;
       host.animSprite(page, s.tile, s.x - 8, s.y - 16, (s.xf ? 1 : 0) | (s.yf ? 2 : 0));
+    }
+  }
+  emitIntroTiles(tiles) {
+    const host = this.host;
+    if (tiles.length === 0) {
+      if (this.animEmitted) {
+        host.animClear();
+        this.animEmitted = false;
+      }
+      return;
+    }
+    host.animClear();
+    this.animEmitted = true;
+    for (const t of tiles) {
+      if (t.page < 0)
+        continue;
+      host.animSprite(t.page, t.tile, t.x, t.y, t.flags);
     }
   }
   animEmitted = false;
@@ -13855,16 +13874,35 @@ class Scene {
     const host = this.host;
     const rawPic = view.pic?.();
     const picList = Array.isArray(rawPic) ? rawPic : rawPic ? [rawPic] : [];
-    const psig = picList.map((q, i) => `${i}:${q.page},${q.x},${q.y},${q.w},${q.h}`).join("|");
+    const psig = picList.map((q, i) => `${i}:${q.page},${q.x},${q.y},${q.w},${q.h},${q.d ?? 0}`).join("|");
     if (psig !== this.picSig) {
       this.picSig = psig;
-      for (let i = 0;i < 6; i++) {
+      for (let i = 0;i < PICS_MAX; i++) {
         const q = picList[i];
-        if (q)
-          host.pic(i, q.page, q.x, q.y, q.w, q.h);
-        else
+        if (!q) {
           host.picHide(i);
+          continue;
+        }
+        host.pic(i, q.page, q.x, q.y, q.w, q.h);
+        if (q.d)
+          host.picDepth(i, q.d);
       }
+    }
+    const intro = view.intro?.();
+    if (intro) {
+      this.emitIntroTiles(intro.tiles);
+      if (this.introSig === null) {
+        this.introSig = "open";
+        this.uiOwner = null;
+        host.uiClear();
+      }
+      return;
+    }
+    if (this.introSig !== null) {
+      this.introSig = null;
+      this.emitIntroTiles([]);
+      host.uiClear();
+      this.uiOwner = null;
     }
     const bx = view.box?.();
     if (bx) {
@@ -15452,6 +15490,447 @@ class TitleState {
       index: this.index,
       hasSave: !!this.game.hasSave
     };
+  }
+}
+
+// voxelmon/game/ui/intro.ts
+var UI_SCALE2 = VIEW_H / GB_H;
+var UI_ORIGIN_X2 = (VIEW_W - GB_W * UI_SCALE2) / 2;
+var sx = (gx) => Math.round(UI_ORIGIN_X2 + gx * UI_SCALE2);
+var sy = (gy) => Math.round(gy * UI_SCALE2);
+var sw = (gw) => Math.round(gw * UI_SCALE2);
+var COPYRIGHT_FRAMES = 180;
+var STAR_START = 64;
+var STAR_FRAMES = 40;
+var FLASH_START = STAR_START + STAR_FRAMES;
+var FLASH_FRAMES = 30;
+var WAVES_START = FLASH_START + FLASH_FRAMES;
+var WAVE_FRAMES = 24;
+var WAVES_END = WAVES_START + 6 * WAVE_FRAMES;
+var SPLASH_FRAMES = WAVES_END + 40;
+var LOGO_X = 72;
+var LOGO_Y = 56;
+var TEXT_X2 = 40;
+var TEXT_Y = 80;
+var STAR_WAVES = [
+  [40, 56, 80, 112],
+  [48, 64, 88, 104],
+  [44, 68, 76, 92],
+  [52, 84, 100, 108]
+];
+var COPY_PREFIX = [0, 1, 2, 1, 3, 1, 4];
+var COPY_NINTENDO = [5, 6, 7, 8, 9, 10];
+var COPY_CREATURES = [11, 12, 13, 14, 15, 16, 17, 18];
+var COPY_GAMEFREAK = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+var COPY_ROWS = [56, 72, 88];
+var FLAP_W = 88;
+var FLAP_H = 80;
+var FLAP_AT = [
+  { x: 0, y: 0, dx: -1, dy: -1 },
+  { x: GB_W - FLAP_W, y: 0, dx: 1, dy: -1 },
+  { x: 0, y: GB_H - FLAP_H, dx: -1, dy: 1 },
+  { x: GB_W - FLAP_W, y: GB_H - FLAP_H, dx: 1, dy: 1 }
+];
+var BANNER_AT = 6;
+var BANNER_POP = 24;
+var BANNER_BLINK = 8;
+var WHOOSH_AT = 56;
+var BREACH_AT = 82;
+var BURST_FRAMES = 46;
+var ZOOM_FRAMES = 80;
+var TEAR_FRAMES = BURST_FRAMES + ZOOM_FRAMES;
+var FIST_AT = 8;
+function burstOf(tear) {
+  return Math.max(0, Math.min(1, tear / BURST_FRAMES));
+}
+function zoomOf(tear) {
+  return Math.max(0, Math.min(1, (tear - BURST_FRAMES) / ZOOM_FRAMES));
+}
+function fistScale(tear) {
+  if (tear < FIST_AT || tear > BURST_FRAMES)
+    return 0;
+  const u = (tear - FIST_AT) / (BURST_FRAMES - FIST_AT);
+  return 0.08 + Math.pow(u, 2.4) * 3.3;
+}
+function fistPop(tear) {
+  if (tear < FIST_AT || tear > BURST_FRAMES)
+    return 0;
+  const u = (tear - FIST_AT) / (BURST_FRAMES - FIST_AT);
+  return Math.min(1, u * 1.4);
+}
+var ANIM = [
+  [[0, 0], [-2, 2], [-1, 2], [1, 2], [2, 2]],
+  [[0, 0], [-2, -2], [-1, -2], [1, -2], [2, -2]],
+  [[0, 0], [-12, 6], [-8, 6], [8, 6], [12, 6]],
+  [[0, 0], [-8, -4], [-4, -4], [4, -4], [8, -4]],
+  [[0, 0], [-8, 4], [-4, 4], [4, 4], [8, 4]],
+  [[0, 0], [2, 0], [2, 0], [0, 0]],
+  [[-8, -16], [-7, -14], [-6, -12], [-4, -10]]
+];
+var FIGHT = [
+  { move: "scrollIn", px: 80 },
+  { sfx: "Intro_Hip" },
+  { anim: 1 },
+  { sfx: "Intro_Hop" },
+  { anim: 2 },
+  { wait: 10 },
+  { sfx: "Intro_Hip" },
+  { anim: 1 },
+  { sfx: "Intro_Hop" },
+  { anim: 2 },
+  { wait: 30 },
+  { pose: 2 },
+  { sfx: "Intro_Raise" },
+  { move: "gengar", dx: -8 },
+  { wait: 30 },
+  { pose: 3 },
+  { sfx: "Intro_Crash" },
+  { move: "gengar", dx: 16 },
+  { sfx: "Intro_Hip" },
+  { frame: 2 },
+  { anim: 3 },
+  { wait: 30 },
+  { move: "gengar", dx: -8 },
+  { pose: 1 },
+  { wait: 60 },
+  { sfx: "Intro_Hip" },
+  { frame: 1 },
+  { anim: 4 },
+  { sfx: "Intro_Hop" },
+  { anim: 5 },
+  { wait: 20 },
+  { frame: 2 },
+  { anim: 6 },
+  { wait: 30 },
+  { sfx: "Intro_Lunge" },
+  { frame: 3 },
+  { anim: 7 },
+  { fade: 24 }
+];
+
+class IntroState {
+  game;
+  onDone;
+  kind = "intro";
+  phase = "copyright";
+  t = 0;
+  done = false;
+  gengarX = 104;
+  gengarY = 56;
+  nidoX = -8;
+  nidoY = 72;
+  pose = 1;
+  frame = 1;
+  op = 0;
+  opT = 0;
+  fade = 0;
+  tear = -1;
+  constructor(game, onDone) {
+    this.game = game;
+    this.onDone = onDone;
+  }
+  page(key) {
+    return namedPage(this.game.data, "picIntro", key);
+  }
+  titleArt(key) {
+    return namedPage(this.game.data, "picTitle", key);
+  }
+  animPage() {
+    const a = this.game.data.atlas;
+    return a?.animPages?.["battleanim/46ee"] ?? -1;
+  }
+  finish() {
+    if (this.done)
+      return;
+    this.done = true;
+    this.game.audio?.stop();
+    this.game.pop();
+    this.onDone();
+  }
+  update() {
+    const p = this.game.input.pressed;
+    if (p.a || p.b || p.start) {
+      this.finish();
+      return;
+    }
+    this.t += 1;
+    if (this.tear >= 0)
+      this.tear += 1;
+    if (this.phase === "copyright") {
+      if (this.t >= COPYRIGHT_FRAMES)
+        this.start("splash");
+      return;
+    }
+    if (this.phase === "splash") {
+      if (this.t === STAR_START)
+        this.game.audio?.playSfx("Shooting_Star");
+      if (this.t >= SPLASH_FRAMES)
+        this.start("punch");
+      return;
+    }
+    if (this.phase === "punch") {
+      if (this.t === WHOOSH_AT)
+        this.game.audio?.playSfx("Intro_Whoosh");
+      if (this.t >= BREACH_AT) {
+        this.game.audio?.playSfx("Intro_Crash");
+        this.tear = 0;
+        this.start("fight");
+      }
+      return;
+    }
+    this.fightStep();
+  }
+  start(phase) {
+    this.phase = phase;
+    this.t = 0;
+    if (phase === "fight")
+      this.game.audio?.playOnce("Music_IntroBattle");
+  }
+  fightStep() {
+    for (;; ) {
+      const op = FIGHT[this.op];
+      if (!op) {
+        this.finish();
+        return;
+      }
+      if (op.sfx) {
+        this.game.audio?.playSfx(op.sfx);
+      } else if (op.pose !== undefined) {
+        this.pose = op.pose;
+      } else if (op.frame !== undefined) {
+        this.frame = op.frame;
+      } else if (op.move) {
+        if (this.opT % 2 === 0) {
+          if (op.move === "scrollIn") {
+            this.gengarX -= 2;
+            this.nidoX += 2;
+          } else {
+            this.gengarX += (op.dx ?? 0) > 0 ? 2 : -2;
+          }
+        }
+        this.opT += 1;
+        if (this.opT < (op.px ?? Math.abs(op.dx ?? 0)))
+          return;
+      } else if (op.anim !== undefined) {
+        const list2 = ANIM[op.anim - 1];
+        if (this.opT % 5 === 0) {
+          const d = list2[this.opT / 5];
+          if (d) {
+            this.nidoY += d[0];
+            this.nidoX += d[1];
+          }
+        }
+        this.opT += 1;
+        if (this.opT < list2.length * 5)
+          return;
+      } else if (op.wait !== undefined) {
+        this.opT += 1;
+        if (this.opT < op.wait)
+          return;
+      } else if (op.fade !== undefined) {
+        this.opT += 1;
+        this.fade = this.opT / op.fade;
+        if (this.opT >= op.fade)
+          this.finish();
+        return;
+      }
+      this.op += 1;
+      this.opT = 0;
+    }
+  }
+  paper(out) {
+    const page = this.page("white");
+    if (page < 0)
+      return;
+    out.push({ page, x: 0, y: 0, w: VIEW_W, h: VIEW_H });
+  }
+  gb(out, key, gy, gh) {
+    const page = this.page(key);
+    if (page < 0)
+      return;
+    out.push({ page, x: sx(0), y: sy(gy), w: sw(GB_W), h: sw(gh) });
+  }
+  bars(out) {
+    const black = this.page("black");
+    if (black < 0)
+      return;
+    out.push({ page: black, x: 0, y: 0, w: VIEW_W, h: sy(32) });
+    out.push({ page: black, x: 0, y: sy(GB_H - 32), w: VIEW_W, h: VIEW_H - sy(GB_H - 32) });
+  }
+  splashArt(out, dim) {
+    const logo = this.page(dim ? "gflogo_dim" : "gflogo");
+    if (logo >= 0) {
+      out.push({ page: logo, x: sx(LOGO_X), y: sy(LOGO_Y), w: sw(16), h: sw(24) });
+    }
+    const text = this.page("gftext");
+    if (text >= 0) {
+      out.push({ page: text, x: sx(TEXT_X2), y: sy(TEXT_Y), w: sw(80), h: sw(8) });
+    }
+  }
+  marquee(out, clock) {
+    const page = this.page("in3d");
+    if (page < 0 || clock < BANNER_AT)
+      return;
+    if (Math.floor(clock / BANNER_BLINK) % 2 !== 0)
+      return;
+    const W = 60, H = 16;
+    const pop = Math.min(1, (clock - BANNER_AT) / BANNER_POP);
+    out.push({
+      page,
+      x: sx((GB_W - W) / 2),
+      y: sy(36),
+      w: sw(W),
+      h: sw(H),
+      d: Math.round(pop * 160)
+    });
+  }
+  copyrightTiles(out) {
+    const strip = this.titleArt("copyright");
+    const gf = this.titleArt("gamefreak");
+    const row = (page, seq, x, y) => {
+      if (page < 0)
+        return;
+      seq.forEach((t, i) => out.push({ page, tile: t, x: x + i * 8, y, flags: 0 }));
+    };
+    COPY_ROWS.forEach((y) => row(strip, COPY_PREFIX, 16, y));
+    row(strip, COPY_NINTENDO, 80, COPY_ROWS[0]);
+    row(strip, COPY_CREATURES, 80, COPY_ROWS[1]);
+    row(gf, COPY_GAMEFREAK, 80, COPY_ROWS[2]);
+  }
+  unbarred(y) {
+    return y >= 32 && y + 8 <= 112;
+  }
+  bigStar(out) {
+    const page = this.animPage();
+    if (page < 0)
+      return;
+    const n = this.t - STAR_START + 1;
+    const x = 152 - 4 * n;
+    const y = -16 + 4 * n;
+    for (const pair of [[3, 0], [19, 8]]) {
+      const tile = pair[0];
+      const dy = pair[1];
+      if (!this.unbarred(y + dy))
+        continue;
+      out.push({ page, tile, x, y: y + dy, flags: 0 });
+      out.push({ page, tile, x: x + 8, y: y + dy, flags: 1 });
+    }
+  }
+  fallingStars(out) {
+    const star = this.page("star");
+    const blink = this.page("star_blink");
+    if (star < 0)
+      return;
+    const substep = Math.floor((Math.min(this.t, WAVES_END) - WAVES_START) / 3);
+    const page = substep % 2 === 0 ? star : blink >= 0 ? blink : star;
+    STAR_WAVES.forEach((xs, w) => {
+      const spawn = w * 8;
+      if (substep < spawn)
+        return;
+      const y = 88 + (substep - spawn);
+      if (!this.unbarred(y))
+        return;
+      for (const x of xs)
+        out.push({ page, tile: 0, x, y, flags: 0 });
+    });
+  }
+  fightArt(out) {
+    const nido = this.page(`nido${this.frame}`);
+    if (nido >= 0) {
+      out.push({ page: nido, x: sx(this.nidoX), y: sy(this.nidoY), w: sw(48), h: sw(48) });
+    }
+    const gengar = this.page(`gengar${this.pose}`);
+    if (gengar >= 0) {
+      out.push({ page: gengar, x: sx(this.gengarX), y: sy(this.gengarY), w: sw(56), h: sw(56) });
+    }
+  }
+  tearArt(out) {
+    const tear = Math.max(0, this.tear);
+    const burst = burstOf(tear);
+    const zoom = zoomOf(tear);
+    const piece = (kind, fly, grow) => {
+      FLAP_AT.forEach((at, q) => {
+        const page = this.page(`${kind}${q}`);
+        if (page < 0)
+          return;
+        const gx = at.dx < 0 ? at.x : at.x + FLAP_W - FLAP_W * grow;
+        const gy = at.dy < 0 ? at.y : at.y + FLAP_H - FLAP_H * grow;
+        const quad = {
+          page,
+          x: sx(gx) + Math.round(at.dx * fly),
+          y: sy(gy) + Math.round(at.dy * fly * 0.75),
+          w: sw(FLAP_W * grow),
+          h: sw(FLAP_H * grow)
+        };
+        if (quad.x >= VIEW_W || quad.y >= VIEW_H)
+          return;
+        if (quad.x + quad.w <= 0 || quad.y + quad.h <= 0)
+          return;
+        out.push(quad);
+      });
+    };
+    if (zoom < 1)
+      piece("flap", zoom * zoom * 700, 1 + zoom * 2.2);
+    if (zoom < 1) {
+      piece("patch", Math.pow(burst, 0.75) * 120 + zoom * zoom * 760, 1 + burst * 0.2 + zoom * 2.4);
+    }
+    const scale = fistScale(tear);
+    if (scale <= 0)
+      return;
+    const fist = this.page("fist");
+    if (fist < 0)
+      return;
+    const size = Math.round(VIEW_H * scale);
+    const pop = fistPop(tear);
+    const away = pop * pop * pop;
+    out.push({
+      page: fist,
+      x: Math.round(VIEW_W / 2 - size / 2 - away * 150),
+      y: Math.round(VIEW_H / 2 - size / 2 + away * 90),
+      w: size,
+      h: size,
+      d: Math.round(pop * 256)
+    });
+  }
+  view() {
+    const pics = [];
+    const tiles = [];
+    this.paper(pics);
+    if (this.phase === "copyright") {
+      this.copyrightTiles(tiles);
+    } else if (this.phase === "splash") {
+      if (this.t >= STAR_START) {
+        const flashing = this.t >= FLASH_START && this.t < FLASH_START + FLASH_FRAMES;
+        this.splashArt(pics, flashing && Math.floor((this.t - FLASH_START) / 5) % 2 === 0);
+      }
+      if (this.t >= STAR_START && this.t < FLASH_START)
+        this.bigStar(tiles);
+      if (this.t >= WAVES_START)
+        this.fallingStars(tiles);
+      this.bars(pics);
+    } else if (this.phase === "punch") {
+      this.tearArt(pics);
+      this.marquee(pics, this.t);
+      this.bars(pics);
+    } else {
+      const bursting = this.tear >= 0 && burstOf(this.tear) < 1;
+      if (bursting)
+        this.gb(pics, "black", 0, GB_H);
+      else
+        this.fightArt(pics);
+      if (this.tear >= 0 && this.tear <= TEAR_FRAMES)
+        this.tearArt(pics);
+      if (bursting)
+        this.marquee(pics, BREACH_AT + this.tear);
+      this.bars(pics);
+      if (this.fade > 0) {
+        const white = this.page("white");
+        if (white >= 0 && this.fade >= 2 / 3) {
+          pics.push({ page: white, x: 0, y: 0, w: VIEW_W, h: VIEW_H });
+        }
+      }
+    }
+    return { phase: this.phase, pics, tiles };
   }
 }
 
@@ -19020,6 +19499,10 @@ class VoxelmonGame {
       this.startIntro();
     }));
   }
+  boot() {
+    this.newGame();
+    this.push(new IntroState(this, () => {}));
+  }
   blackout() {
     for (const mon of this.save.party)
       healMon(this.data, mon);
@@ -19349,6 +19832,8 @@ ${mname}!`);
     const under = this.stack[this.stack.length - 2];
     if (top?.kind === "textbox" && under?.kind === "evolution")
       top = under;
+    if (top?.kind === "intro")
+      return top.view().pics;
     if (top?.kind === "title") {
       const v = top.view();
       const out = [
@@ -20455,6 +20940,10 @@ here.`, onDone);
     const top = this.stack[this.stack.length - 1];
     return top?.kind === "title" ? top.view() : null;
   }
+  intro() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "intro" ? top.view() : null;
+  }
   showCaughtDexEntry(species) {
     const name = this.data.pokemon[species]?.name ?? species;
     this.showText(`New POKéDEX data
@@ -20576,6 +21065,9 @@ class QuickJsHost {
   pic(slot, page, x, y, w, h) {
     native.pic(slot, page, x, y, w, h);
   }
+  picDepth(slot, depthQ8) {
+    native.picDepth(slot, depthQ8);
+  }
   picHide(slot) {
     native.picHide(slot);
   }
@@ -20666,7 +21158,7 @@ var host = new QuickJsHost;
 var source = JSON.parse(native.gamedata());
 var game = new VoxelmonGame(fromObject(source), host, SEED);
 game.setAudioFromPak();
-game.newGame();
+game.boot();
 var nat = native;
 if (nat.now && nat.perf) {
   game.prof = {
@@ -20698,9 +21190,9 @@ globalThis.frame = (buttons) => {
   native.camSpeed?.(game.cameraSpeedQ8());
   const st = native.stick?.();
   if (st !== undefined) {
-    const sx = st >> 16 << 16 >> 16;
-    const sy = st << 16 >> 16;
-    game.setStick(sx, sy, STICK_RANGE);
+    const sx2 = st >> 16 << 16 >> 16;
+    const sy2 = st << 16 >> 16;
+    game.setStick(sx2, sy2, STICK_RANGE);
   }
   {
     const e = (buttons >> 24 & 3) << 4 | buttons >>> 28 & 15;

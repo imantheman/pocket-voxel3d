@@ -42,6 +42,12 @@ export interface VoxelHost {
   /** EMOTE kind; 0 clears. */
   emote(slot: number, kind: number): void;
   pic(slot: number, page: number, x: number, y: number, w: number, h: number): void;
+  /**
+   * How far out of the screen a pic stands, Q8 (256 = as far as the 3D
+   * slider allows). Applies to the slot's CURRENT picture only: `pic`
+   * resets it, so a pop has to be re-stated with the draw it belongs to.
+   */
+  picDepth(slot: number, depthQ8: number): void;
   picHide(slot: number): void;
   /** True when the bytes reached the card. False means nothing was saved. */
   saveWrite(text: string): boolean | void;
@@ -216,6 +222,9 @@ export class RecorderHost implements VoxelHost {
    */
   pic(slot: number, page: number, x: number, y: number, w: number, h: number): void {
     this.op(VOX_OP.pic, slot, page, x, y, w, h);
+  }
+  picDepth(slot: number, depthQ8: number): void {
+    this.op(VOX_OP.picDepth, slot, depthQ8);
   }
   picHide(slot: number): void {
     this.op(VOX_OP.picHide, slot);

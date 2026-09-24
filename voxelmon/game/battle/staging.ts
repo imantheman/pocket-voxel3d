@@ -44,19 +44,21 @@ interface AtlasDir {
   picBack?: Record<string, number>;
   picTrainer?: Record<string, number>;
   picTitle?: Record<string, number>;
+  picIntro?: Record<string, number>;
 }
 
 /**
  * A page the cook named, or -1.
  *
- * `which` is "picTrainer" for a portrait ("prof.oak", "red", "rival1") or
- * "picTitle" for the title art ("logo", "player"). A dataset cooked before
+ * `which` is "picTrainer" for a portrait ("prof.oak", "red", "rival1"),
+ * "picTitle" for the title art ("logo", "player") or "picIntro" for the
+ * boot movie ("gengar1", "flap0", "fist"). A dataset cooked before
  * the cook named them has neither, and the caller falls back to whatever it
  * used to hardcode -- which is right for exactly those old paks.
  */
 export function namedPage(
   data: VoxelmonData,
-  which: "picTrainer" | "picTitle",
+  which: "picTrainer" | "picTitle" | "picIntro",
   key: string,
 ): number {
   return atlasOf(data)?.[which]?.[key] ?? -1;

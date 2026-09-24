@@ -34,6 +34,7 @@ import {
   type PageDef,
 } from "./atlas.ts";
 import type { BuildingStats } from "./buildings.ts";
+import { buildIntroPages } from "./intro.ts";
 import {
   GameMap,
   GEN_DIR,
@@ -315,6 +316,27 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
       pageOwners[back].species = id;
     }
   }
+  // The boot intro's art, appended LAST on purpose: these pages postdate
+  // every index the guest still carries a literal for (ui/title.ts
+  // TITLE_PAGES), and putting them anywhere earlier would renumber it. The
+  // ROM half comes in through the `intro` import stage; the paper, the
+  // bars and the fist are cooked here (cook/intro.ts) because no cartridge
+  // has them.
+  const introPageByKey = new Map<string, number>();
+  const introKeys = Object.keys(gen.gfx)
+    .filter((k) => k.startsWith("intro/"))
+    .sort();
+  for (const key of introKeys) {
+    introPageByKey.set(key, pages.length);
+    pages.push(buildPicPage(gen, key));
+    pageOwners.push({ kind: ATLAS_KIND.pics });
+  }
+  for (const page of buildIntroPages(gen)) {
+    introPageByKey.set(page.name, pages.length);
+    pages.push(page);
+    pageOwners.push({ kind: ATLAS_KIND.pics });
+  }
+
   // The trainer back pic lives at battle/redb (no back/ prefix upstream).
   // It carries no species, so it takes no RED++ pic palette and keeps
   // today's binding (the SGB selection, else the kind ramp).
@@ -355,6 +377,7 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
   const atlas: AtlasIndex = {
     picTrainer: named(trainerPageByKey, "battle/trainer/"),
     picTitle: named(titlePageByKey, "title/"),
+    picIntro: named(introPageByKey, "intro/"),
     sprites: spriteIndex,
     picFront: frontIndex,
     picBack: backIndex,

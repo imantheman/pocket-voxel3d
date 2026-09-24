@@ -1321,6 +1321,11 @@ const UI_VIEW_H: f32 = 272.0;
 /// a guest pixel, well under a device pixel. 480 * 4 fits i16 with room to
 /// spare.
 const UI_Q: f32 = 4.0;
+/// How far a fully popped picture (`picDepth` 256) stands out of the screen,
+/// in the 480-wide ortho's pixels, with the 3D slider all the way up. Out-of
+/// -screen parallax past about this much stops fusing and starts hurting,
+/// which is the whole reason it is a small number.
+const POP_PX: f32 = 10.0;
 
 /// Guest screen coordinate -> the quantised grid `Vertex::pos` stores.
 fn qpx(v: f32) -> i16 { (v * UI_Q) as i16 }
@@ -3103,7 +3108,7 @@ fn main() {
     let mut card_hold: Vec<(usize, buffer::Info)> = Vec::new();
     let mut ui_hold: Option<buffer::Info> = None;
     let mut anim_hold: Vec<(usize, buffer::Info)> = Vec::new();
-    let mut pic_hold: Vec<(usize, buffer::Info)> = Vec::new();
+    let mut pic_hold: Vec<(usize, i16, buffer::Info)> = Vec::new();
     // Same hazard for the Kanto Gear (bottom) surface: its per-frame vertex
     // buffers were freed the instant the frame closure returned, but C3D_FrameEnd
     // is non-blocking, so under load (3D's second eye, larger maps) the GPU was
@@ -4240,7 +4245,7 @@ fn main() {
         let mut mvp_r = pr * camera;
         let mut card_groups: Vec<(u16, Vec<CardVertex>)> = Vec::new();
         let mut ui_verts: Vec<Vertex> = Vec::new();
-        let mut pic_groups: Vec<(u16, Vec<Vertex>)> = Vec::new();
+        let mut pic_groups: Vec<(u16, i16, Vec<Vertex>)> = Vec::new();
         // Move animation tiles, grouped by the sheet they come from.
         let mut anim_groups: Vec<(u16, Vec<Vertex>)> = Vec::new();
         let mut ui_page: u16 = 0;
@@ -4317,7 +4322,7 @@ fn main() {
             // still emits the player's overworld card, so drop it there.
             let pic_active_scan = list.items.iter().any(|i| matches!(i, Item::ScreenPic { .. }));
             for it in list.items.iter() {
-                if let Item::ScreenPic { x, y, w, h, page } = it {
+                if let Item::ScreenPic { x, y, w, h, page, depth_q8 } = it {
                     let pg = &pak_static.atlases[*page as usize];
                     // Via page_tex_size / page_prescale rather than po2 of the
                     // source: the content fills w * prescale texels of the
@@ -4330,11 +4335,17 @@ fn main() {
                     let (x1, y1) = (qpx(*x + *w), qpx(*y + *h));
                     let mp = |px: i16, py: i16, u: f32, v: f32| Vertex {
                         pos: [px, py, 0, 0], color: [255, 255, 255, 255], uv: [u, v] };
-                    let gi = match pic_groups.iter().position(|g| g.0 == *page) {
+                    // Grouped by page AND by pop: a picture standing out
+                    // of the screen is drawn in its own pass, shifted the
+                    // other way for each eye.
+                    let gi = match pic_groups.iter().position(|g| g.0 == *page && g.1 == *depth_q8) {
                         Some(i) => i,
-                        None => { pic_groups.push((*page, Vec::new())); pic_groups.len() - 1 }
+                        None => {
+                            pic_groups.push((*page, *depth_q8, Vec::new()));
+                            pic_groups.len() - 1
+                        }
                     };
-                    let gv = &mut pic_groups[gi].1;
+                    let gv = &mut pic_groups[gi].2;
                     gv.push(mp(x0, y0, 0.0, 1.0));
                     gv.push(mp(x1, y0, u1, 1.0));
                     gv.push(mp(x1, y1, u1, 1.0 - v1));
@@ -4487,7 +4498,7 @@ if page_tex.len() < pak_static.atlases.len() {
         if page_tex.len() < pak_static.atlases.len() {
             page_tex.resize_with(pak_static.atlases.len(), || None);
         }
-        for (pg, _) in pic_groups.iter().chain(anim_groups.iter()) {
+        for pg in pic_groups.iter().map(|g| &g.0).chain(anim_groups.iter().map(|g| &g.0)) {
             let i = *pg as usize;
             if i < page_tex.len() && page_tex[i].is_none() {
                 let (data, ptw, pth) = build_page_tex(pak_static, *pg, -1);
@@ -4501,13 +4512,14 @@ if page_tex.len() < pak_static.atlases.len() {
                 }
             }
         }
-        let pic_bufs: Vec<(usize, buffer::Info)> = pic_groups.iter().filter_map(|(pg, v)| {
-            if v.is_empty() { return None; }
-            let mut bi = buffer::Info::new();
-            let n = v.len().min(65535);
-            bi.add(buffer::Buffer::new(&v[..n]), attr_info.permutation()).ok()?;
-            Some((*pg as usize, bi))
-        }).collect();
+        let pic_bufs: Vec<(usize, i16, buffer::Info)> = pic_groups.iter()
+            .filter_map(|(pg, depth, v)| {
+                if v.is_empty() { return None; }
+                let mut bi = buffer::Info::new();
+                let n = v.len().min(65535);
+                bi.add(buffer::Buffer::new(&v[..n]), attr_info.permutation()).ok()?;
+                Some((*pg as usize, *depth, bi))
+            }).collect();
         let anim_bufs: Vec<(usize, buffer::Info)> = anim_groups.iter().filter_map(|(pg, v)| {
             if v.is_empty() { return None; }
             let mut bi = buffer::Info::new();
@@ -4979,10 +4991,14 @@ if page_tex.len() < pak_static.atlases.len() {
         instance.render_frame_with(|mut frame| {
             fn cast_lifetime_to_closure<'frame, T>(x: T) -> T
             where
-                T: Fn(&mut Frame<'frame>, &'frame mut ScreenTarget<'_>, &Matrix4),
+                T: Fn(&mut Frame<'frame>, &'frame mut ScreenTarget<'_>, &Matrix4, f32),
             { x }
 
-            let render_to = cast_lifetime_to_closure(|frame, target, mvp| {
+            // `eye` is -1 for the left pass and +1 for the right: the pic
+            // pass is the one thing here that has to know, because a
+            // picture that stands out of the screen is the same picture
+            // shifted the other way for each eye.
+            let render_to = cast_lifetime_to_closure(|frame, target, mvp, eye: f32| {
                 target.clear(
                     ClearFlags::ALL,
                     if pic_active { 0xFFFF_FFFFu32 } else { tint_rgba8(SKY, scene_tint) },
@@ -5043,11 +5059,23 @@ if page_tex.len() < pak_static.atlases.len() {
                         .screen(ScreenOrientation::Rotated).into();
                     frame.bind_vertex_uniform(projection_idx, &po);
                     frame.bind_vertex_uniform(uvx_idx, FVec4::new(1.0, 1.0, 0.0, 0.0));
-                    for (pg, pb) in pic_bufs.iter() {
+                    for (pg, depth, pb) in pic_bufs.iter() {
                         if let Some(t) = page_tex_ref.get(*pg).and_then(|o| o.as_ref()) {
                             frame.bind_texture(texture::Index::Texture0, t);
                         }
+                        // The pop, in the ortho's own units. Scaled by the
+                        // slider so the 3D control still means something,
+                        // and applied through toff (vshader.pica) rather
+                        // than baked into the verts, which would mean a
+                        // second copy of every one of them.
+                        if *depth != 0 {
+                            let px = -eye * (*depth as f32 / 256.0) * POP_PX * slider * UI_Q;
+                            frame.bind_vertex_uniform(toff_idx, FVec4::new(px, 0.0, 0.0, 0.0));
+                        }
                         frame.draw_arrays(buffer::Primitive::Triangles, pb, None).unwrap();
+                        if *depth != 0 {
+                            frame.bind_vertex_uniform(toff_idx, FVec4::new(0.0, 0.0, 0.0, 0.0));
+                        }
                     }
                     frame.bind_vertex_uniform(projection_idx, mvp);
                     unsafe { c3d_depth_test(1); }
@@ -5105,11 +5133,11 @@ if page_tex.len() < pak_static.atlases.len() {
             });
 
             frame.bind_program(&program);
-            render_to(&mut frame, &mut left_target, &mvp_l);
+            render_to(&mut frame, &mut left_target, &mvp_l, -1.0);
             // Right eye costs a full second pass; only pay it when the
             // 3D slider is actually up.
             if !guest_drive || slider > 0.05 {
-                render_to(&mut frame, &mut right_target, &mvp_r);
+                render_to(&mut frame, &mut right_target, &mvp_r, 1.0);
             }
             // Kanto Gear increment 3: the companion (bottom) screen draws its
             // own UI surface (scene.ui_b) in true 320-wide space via a 0..320

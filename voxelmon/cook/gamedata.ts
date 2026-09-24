@@ -53,6 +53,8 @@ export interface AtlasIndex {
    */
   picTrainer: Record<string, number>;
   picTitle: Record<string, number>;
+  /** The boot intro: the ROM art plus the paper, bars and fist we cook. */
+  picIntro: Record<string, number>;
 }
 
 /** The tileset subset the guest needs (collision + animation semantics). */

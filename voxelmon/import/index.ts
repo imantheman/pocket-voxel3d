@@ -24,6 +24,7 @@ import { extractPokemon } from "./stages/pokemon.ts";
 import { extractSprites } from "./stages/sprites.ts";
 import { extractText } from "./stages/text.ts";
 import { extractTitle } from "./stages/title.ts";
+import { extractIntro } from "./stages/intro.ts";
 import { extractTrainerCard } from "./stages/trainercard.ts";
 import { extractTownMap } from "./stages/townmap.ts";
 import { extractSlots } from "./stages/slots.ts";
@@ -80,6 +81,7 @@ export async function runImport(env: VoxelEnv): Promise<void> {
     ],
     ["field", () => writeJson(genDir, "field", extractField(ctx))],
     ["title", () => writeJson(genDir, "title", extractTitle(ctx))],
+    ["intro", () => writeJson(genDir, "intro", extractIntro(ctx))],
     ["trainercard", () => writeJson(genDir, "trainercard", extractTrainerCard(ctx))],
     ["townmap", () => writeJson(genDir, "townmap", extractTownMap(ctx))],
     ["slots", () => writeJson(genDir, "slots", extractSlots(ctx))],

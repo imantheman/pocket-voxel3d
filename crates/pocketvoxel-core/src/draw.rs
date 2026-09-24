@@ -229,6 +229,8 @@ pub enum Item {
         w: f32,
         h: f32,
         page: u16,
+        /// Out-of-screen parallax, Q8 (scene.rs `Pic::depth_q8`).
+        depth_q8: i16,
     },
     UiQuad {
         x: f32,
@@ -1035,6 +1037,7 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
             w: pic.w as f32,
             h: pic.h as f32,
             page: pic.page,
+            depth_q8: pic.depth_q8,
         });
     }
 

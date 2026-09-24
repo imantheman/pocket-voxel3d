@@ -31,6 +31,14 @@ import {
   loadRedpp,
   PX_CLEAR,
 } from "../voxelmon/cook/data.ts";
+import {
+  buildTearFlaps,
+  FLAP_AT,
+  FLAP_H,
+  FLAP_W,
+  GB_H,
+  GB_W,
+} from "../voxelmon/cook/intro.ts";
 import { buildCharmap, buildMapPalette } from "../voxelmon/cook/gamedata.ts";
 import {
   cullHidden,
@@ -781,4 +789,84 @@ describe.skipIf(reason !== null || packReason !== null)("voxel cook: RED++ color
     },
     120000,
   );
+});
+
+/**
+ * The boot intro's synthesised pages (cook/intro.ts). The ROM half is just
+ * tiles read at a symbol; these four are cut by an algorithm, and the one
+ * way that goes wrong is silent.
+ */
+describe("voxel cook: the intro's torn paper", () => {
+  const missing = genMissingReason();
+  if (missing) console.log(`[voxel-cook] intro: ${missing}`);
+
+  test.skipIf(!!missing)("the eight pieces cover the screen, and agree where they overlap", async () => {
+    const gen = await loadGen(GEN_DIR);
+    const flaps = buildTearFlaps(gen);
+    // four flaps and, inside them, the four patches that make up the hole
+    expect(flaps.length).toBe(8);
+    // Every GB pixel belongs to at least one piece: a pixel no piece claims
+    // is a line of backdrop showing through an intact screen. Cuts are
+    // claimed by both sides on purpose (BLEED), so where two pieces do
+    // overlap they have to carry the same pixel -- otherwise the seam
+    // flickers depending on which one is drawn second.
+    const seen = new Uint8Array(GB_W * GB_H);
+    const shade = new Uint8Array(GB_W * GB_H);
+    let doubled = 0;
+    flaps.forEach((flap, i) => {
+      const q = i % 4;
+      expect(flap.w).toBe(FLAP_W);
+      expect(flap.h).toBe(FLAP_H);
+      const at = FLAP_AT[q]!;
+      for (let y = 0; y < FLAP_H; y++) {
+        for (let x = 0; x < FLAP_W; x++) {
+          const px = flap.frames[0]![y * FLAP_W + x]!;
+          if (px === PX_CLEAR) continue;
+          const g = (at.y + y) * GB_W + at.x + x;
+          if (seen[g]) {
+            doubled++;
+            expect(shade[g], `GB ${at.x + x},${at.y + y}`).toBe(px);
+          }
+          seen[g] = 1;
+          shade[g] = px;
+        }
+      }
+    });
+    for (let i = 0; i < seen.length; i++) {
+      expect(seen[i], `GB pixel ${i % GB_W},${Math.floor(i / GB_W)}`).toBe(1);
+    }
+    // the bleed is a pixel either side of the cuts, nothing like a whole
+    // piece drawn twice
+    expect(doubled).toBeLessThan(GB_W * GB_H * 0.1);
+  });
+
+  test.skipIf(!!missing)("the paper carries the splash it is printed with", async () => {
+    const gen = await loadGen(GEN_DIR);
+    const flaps = buildTearFlaps(gen);
+    // The letterbox bars are part of the sheet, so the top-left flap's own
+    // top row is black and its middle is white paper.
+    const tl = flaps[0]!.frames[0]!;
+    expect(tl[0]).toBe(3);
+    expect(tl[40 * FLAP_W + 8]).toBe(0);
+    // ...and the hole is cut out of it, so the corner nearest the middle
+    // of the screen belongs to a patch instead
+    expect(tl[(FLAP_H - 1) * FLAP_W + FLAP_W - 1]).toBe(PX_CLEAR);
+    // ...and the GAME FREAK row is printed across the rip, which runs down
+    // the middle of the hole, so the two BOTTOM patches each carry a piece
+    // of it. (Row y=80..87, x=40..119, all of it inside the hole; the
+    // horizontal rip wanders around y=72, so the bottom pair own it.)
+    const inked = (i: number, x0: number, x1: number): number => {
+      const at = FLAP_AT[i % 4]!;
+      let n = 0;
+      for (let y = 80; y < 88; y++) {
+        for (let x = x0; x < x1; x++) {
+          const px = flaps[i]!.frames[0]![(y - at.y) * FLAP_W + (x - at.x)];
+          if (px !== undefined && px !== PX_CLEAR && px !== 0) n++;
+        }
+      }
+      return n;
+    };
+    expect(inked(6, 40, 80)).toBeGreaterThan(20);
+    expect(inked(7, 80, 120)).toBeGreaterThan(20);
+  });
 });

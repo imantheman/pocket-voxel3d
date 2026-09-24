@@ -13,7 +13,14 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { ENT_FLAG, VOX_BTN, VOX_OP } from "../contracts/spec/voxel-spec.ts";
+import {
+  ANIM_SPRITES_MAX,
+  ENT_FLAG,
+  PICS_MAX,
+  VOX_BTN,
+  VOX_OP,
+} from "../contracts/spec/voxel-spec.ts";
+import { INTRO_CLOCK, IntroState } from "../voxelmon/game/ui/intro.ts";
 import { fromGenDir as loadAudioBanks } from "../voxelmon/game/audio/banks.ts";
 import { loadRuntimeData, REQUIRED_MODULES, type VoxelmonData } from "../voxelmon/game/data.ts";
 import { WildBattle } from "../voxelmon/game/battle/battle.ts";
@@ -9412,5 +9419,148 @@ describe("the lifts", () => {
     ow.setMap("ROCKET_HIDEOUT_ELEVATOR", 3, 2, "up");
     const def = (romData!.maps as any).ROCKET_HIDEOUT_ELEVATOR;
     expect(def.warps.every((w: any) => w.destMap === "ROCKET_HIDEOUT_B2F")).toBe(true);
+  });
+});
+
+/**
+ * The boot movie (ui/intro.ts). Its art is ROM-gated but its CLOCK is not,
+ * and neither is the shape of what it asks the host to draw -- which is the
+ * part that can break without anyone noticing until a console is in hand.
+ */
+describe("the boot intro", () => {
+  /** Every page the movie can ask for, named; the indices are arbitrary. */
+  function fakeAtlas(): unknown {
+    const keys = [
+      "gengar1", "gengar2", "gengar3", "gflogo", "gflogo_dim", "gftext",
+      "nido1", "nido2", "nido3", "star", "star_blink",
+      "white", "black", "flap0", "flap1", "flap2", "flap3",
+      "patch0", "patch1", "patch2", "patch3", "fist", "in3d",
+    ];
+    const picIntro: Record<string, number> = {};
+    keys.forEach((k, i) => { picIntro[k] = 100 + i; });
+    return {
+      atlas: {
+        picIntro,
+        picTitle: { copyright: 1, gamefreak: 2, logo: 3, player: 4 },
+        animPages: { "battleanim/46ee": 70 },
+      },
+    };
+  }
+
+  function movie(): {
+    state: IntroState;
+    press(btn: "a" | "b" | "start"): void;
+    run(n: number): void;
+    over(): boolean;
+  } {
+    const pressed: Record<string, boolean> = {};
+    let done = false;
+    const state = new IntroState(
+      {
+        input: { pressed },
+        data: fakeAtlas(),
+        pop(): void {},
+        audio: { playSfx(): void {}, playOnce(): boolean { return true; }, stop(): void {} },
+      } as never,
+      () => { done = true; },
+    );
+    return {
+      state,
+      press(btn): void { pressed[btn] = true; },
+      run(n): void { for (let i = 0; i < n; i++) state.update(); },
+      over(): boolean { return done; },
+    };
+  }
+
+  const phase = (m: { state: IntroState }): string =>
+    (m.state.view() as { phase: string }).phase;
+
+  test("runs the cartridge's own clock: 180 frames of copyright, then the splash", () => {
+    const m = movie();
+    expect(phase(m)).toBe("copyright");
+    m.run(INTRO_CLOCK.copyright - 1);
+    expect(phase(m)).toBe("copyright");
+    m.run(1);
+    expect(phase(m)).toBe("splash");
+    // SPLASH_FRAMES: 64 + 40 + 30 + 6*24 + 40 (intro.asm:311-331, splash.asm)
+    m.run(INTRO_CLOCK.splash - 1);
+    expect(phase(m)).toBe("splash");
+    m.run(1);
+    expect(phase(m)).toBe("punch");
+  });
+
+  test("nothing of the fist exists until the paper is broken", () => {
+    const m = movie();
+    const before = INTRO_CLOCK.copyright + INTRO_CLOCK.splash + INTRO_CLOCK.breach;
+    // The fist is BEHIND the paper. Drawn even once over an unbroken screen
+    // and the gag inverts: it becomes something outside the screen landing
+    // on it, rather than something coming out.
+    const fistPage = 100 + 21;   // fakeAtlas() order
+    for (let f = 0; f < before; f++) {
+      const v = m.state.view() as { pics: { page: number }[] };
+      expect(v.pics.some((q) => q.page === fistPage)).toBe(false);
+      m.state.update();
+    }
+    expect(phase(m)).toBe("fight");
+    // ...and the fight is already running behind the paper as it parts, so
+    // the hole has something in it
+    const v = m.state.view() as { pics: { page: number }[] };
+    expect(v.pics.length).toBeGreaterThan(5);
+  });
+
+  test("any of A/B/START drops the whole thing (CheckForUserInterruption)", () => {
+    for (const btn of ["a", "b", "start"] as const) {
+      const m = movie();
+      m.run(50);
+      expect(m.over()).toBe(false);
+      m.press(btn);
+      m.run(1);
+      expect(m.over()).toBe(true);
+    }
+  });
+
+  test("it ends by itself, inside a minute", () => {
+    const m = movie();
+    let frames = 0;
+    while (!m.over() && frames < 60 * 60) { m.state.update(); frames += 1; }
+    expect(m.over()).toBe(true);
+    // ~18s: the card, the splash, the punch and PlayIntroScene
+    expect(frames).toBeGreaterThan(900);
+    expect(frames).toBeLessThan(1400);
+  });
+
+  test("never asks for more pictures than the host has slots, and never for a page it has not got", () => {
+    const m = movie();
+    let most = 0;
+    for (let f = 0; f < 1400 && !m.over(); f++) {
+      const v = m.state.view() as {
+        pics: { page: number }[];
+        tiles: { page: number }[];
+      };
+      most = Math.max(most, v.pics.length);
+      expect(v.pics.length).toBeLessThanOrEqual(PICS_MAX);
+      expect(v.tiles.length).toBeLessThanOrEqual(ANIM_SPRITES_MAX);
+      for (const q of v.pics) expect(q.page).toBeGreaterThanOrEqual(0);
+      for (const t of v.tiles) expect(t.page).toBeGreaterThanOrEqual(0);
+      m.state.update();
+    }
+    // the frame the fist leaves on needs the most: the white field, the
+    // two fighters, eight pieces of paper, the fist and two bars
+    expect(most).toBe(14);
+  });
+
+  test("the copyright card is the ROM's own tiles, in the ROM's own places", () => {
+    const m = movie();
+    const v = m.state.view() as {
+      tiles: { page: number; tile: number; x: number; y: number }[];
+    };
+    // 3 x prefix(7) + Nintendo(6) + Creatures inc.(8) + GAME FREAK inc.(9)
+    expect(v.tiles.length).toBe(44);
+    expect([...new Set(v.tiles.map((t) => t.y))].sort((a, b) => a - b)).toEqual([56, 72, 88]);
+    // LoadCopyrightTiles: prefix at column 2, the name at column 10
+    expect(Math.min(...v.tiles.map((t) => t.x))).toBe(16);
+    // the year is 0,1,2,1,3,1,4 -- ONE apostrophe-9 tile, placed three times
+    const row = v.tiles.filter((t) => t.y === 56 && t.x < 80).map((t) => t.tile);
+    expect(row).toEqual([0, 1, 2, 1, 3, 1, 4]);
   });
 });

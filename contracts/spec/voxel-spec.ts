@@ -669,6 +669,7 @@ export const VOX_OP = {
   emote: 32,
   pic: 33,
   picHide: 34,
+  picDepth: 35,
 
   uiTile: 50,
   uiFill: 51,
@@ -745,6 +746,14 @@ export const FX_FRAME_CUT_TREE = 3;
  * across the field and the petals fall twenty at a time.
  */
 export const ANIM_SPRITES_MAX = 64;
+
+/**
+ * Screen-space pictures on the pic layer at once (`pic`). Six was one per
+ * party member; the boot intro needs fifteen at the moment the fist comes
+ * through -- the dark behind the paper, the lit field, the two fighters,
+ * eight pieces of torn paper, the letterbox and the fist.
+ */
+export const PICS_MAX = 16;
 
 /** Battle HUD panels the core may slide: one per side (`uiPanel`). */
 export const UI_PANELS = 2;

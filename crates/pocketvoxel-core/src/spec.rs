@@ -322,6 +322,7 @@ pub mod op {
     pub const EMOTE: u32 = 32;
     pub const PIC: u32 = 33;
     pub const PIC_HIDE: u32 = 34;
+    pub const PIC_DEPTH: u32 = 35;
     pub const UI_TILE: u32 = 50;
     pub const UI_FILL: u32 = 51;
     pub const UI_TEXT: u32 = 52;

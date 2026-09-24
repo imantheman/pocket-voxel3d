@@ -47,6 +47,7 @@ interface VoxelNative {
   entHide(slot: number): void;
   emote(slot: number, kind: number): void;
   pic(slot: number, page: number, x: number, y: number, w: number, h: number): void;
+  picDepth(slot: number, depthQ8: number): void;
   picHide(slot: number): void;
   saveWrite(text: string): boolean | void;
   saveData(): string | undefined;
@@ -186,6 +187,9 @@ class QuickJsHost implements VoxelHost {
   pic(slot: number, page: number, x: number, y: number, w: number, h: number): void {
     native.pic(slot, page, x, y, w, h);
   }
+  picDepth(slot: number, depthQ8: number): void {
+    native.picDepth(slot, depthQ8);
+  }
   picHide(slot: number): void {
     native.picHide(slot);
   }
@@ -306,7 +310,7 @@ const game = new VoxelmonGame(fromObject(source), host, SEED);
 // hardware stream (main.rs gates the pump on the first op). The `audiodata`
 // op fires either way, so the op stream still matches the recorded .vtrace.
 game.setAudioFromPak();
-game.newGame();
+game.boot();
 
 // Autopilot-only guest profiling: the perf-runbook EBOOT alone registers
 // `voxel.now`/`voxel.perf`; everywhere else the hook stays undefined and

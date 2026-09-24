@@ -43,6 +43,7 @@ import {
 import { paginate, substitute, Textbox, TEXT_SPEED_DEFAULT, type TextboxOpts } from "./world/textbox.ts";
 import { NamingState } from "./ui/naming.ts";
 import { TitleState, titlePage } from "./ui/title.ts";
+import { IntroState } from "./ui/intro.ts";
 import { StartMenuState } from "./ui/startmenu.ts";
 import { DevMenuState } from "./ui/devmenu.ts";
 import { CARD_PIC_RECT, TrainerCardState } from "./ui/trainercard.ts";
@@ -584,6 +585,21 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   }
 
   /**
+   * A cold start: the world staged, the title behind it, and the boot movie
+   * on top of both (PlayIntro, engine/movie/intro.asm).
+   *
+   * Separate from `newGame` on purpose. newGame is what every test and
+   * every offline tool calls to get a staged world and a title screen, and
+   * three minutes of copyright card is not what any of them asked for --
+   * the movie belongs to the console starting up, so the console's entry
+   * point is what asks for it.
+   */
+  boot(): void {
+    this.newGame();
+    this.push(new IntroState(this as never, () => {}));
+  }
+
+  /**
    * The blackout path a lost battle takes (pokered HandleBlackOut,
    * engine/battle/core.asm:1157+: heal the party, special-warp to the last
    * Pokémon center). v1: full heal + the warp fade to save.lastHeal; the
@@ -1080,6 +1096,9 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     // movie's cut-out instead.
     const under = this.stack[this.stack.length - 2] as any;
     if (top?.kind === "textbox" && under?.kind === "evolution") top = under;
+    // The boot movie draws in screen space and has already worked out
+    // every rect it wants, so it hands the list straight through.
+    if (top?.kind === "intro") return top.view().pics;
     if (top?.kind === "title") {
       const v = top.view();
       // logo up top; Red on the left with the cycling mon beside him.
@@ -2563,6 +2582,11 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   title(): unknown {
     const top = this.stack[this.stack.length - 1] as any;
     return top?.kind === "title" ? top.view() : null;
+  }
+
+  intro(): unknown {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "intro" ? top.view() : null;
   }
 
   /**

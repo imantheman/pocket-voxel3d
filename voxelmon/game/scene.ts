@@ -11,6 +11,7 @@
 import {
   ENT_FLAG,
   ENTS_MAX,
+  PICS_MAX,
   Q4,
   Q8,
   UI_COLS,
@@ -178,6 +179,7 @@ export class Scene {
   private namingSig: string | null = null;
   private picSig = "";
   private titleSig: string | null = null;
+  private introSig: string | null = null;
   private menuSig: string | null = null;
   private bagSig: string | null = null;
   private shopSig: string | null = null;
@@ -275,6 +277,33 @@ export class Scene {
       const page = tilesets[s.ts]?.page ?? -1;
       if (page < 0) continue;
       host.animSprite(page, s.tile, s.x - 8, s.y - 16, (s.xf ? 1 : 0) | (s.yf ? 2 : 0));
+    }
+  }
+
+  /**
+   * The intro's 8x8 tiles, on the same layer the move animations use.
+   *
+   * The copyright card is a row of tiles out of the ROM's strip, and the
+   * shooting star is two tiles of a move-animation sheet mirrored -- both
+   * exactly as the cartridge composes them, so both want the tile layer
+   * rather than whole pages. Coordinates are already GAME BOY pixels here;
+   * the battle's own emitter takes OAM space off first, this one has
+   * nothing to take off.
+   */
+  private emitIntroTiles(tiles: { page: number; tile: number; x: number; y: number; flags: number }[]): void {
+    const host = this.host;
+    if (tiles.length === 0) {
+      if (this.animEmitted) {
+        host.animClear();
+        this.animEmitted = false;
+      }
+      return;
+    }
+    host.animClear();
+    this.animEmitted = true;
+    for (const t of tiles) {
+      if (t.page < 0) continue;
+      host.animSprite(t.page, t.tile, t.x, t.y, t.flags);
     }
   }
 
@@ -719,16 +748,45 @@ export class Scene {
     const rawPic = (view as unknown as { pic?: () => unknown }).pic?.();
     const picList = Array.isArray(rawPic) ? rawPic : rawPic ? [rawPic] : [];
     const psig = picList
-      .map((q: any, i: number) => `${i}:${q.page},${q.x},${q.y},${q.w},${q.h}`)
+      .map((q: any, i: number) => `${i}:${q.page},${q.x},${q.y},${q.w},${q.h},${q.d ?? 0}`)
       .join("|");
     if (psig !== this.picSig) {
       this.picSig = psig;
-      // PICS_MAX (core scene.rs): six, one per party member
-      for (let i = 0; i < 6; i++) {
+      // PICS_MAX (core scene.rs, mirrored in the spec)
+      for (let i = 0; i < PICS_MAX; i++) {
         const q: any = picList[i];
-        if (q) host.pic(i, q.page, q.x, q.y, q.w, q.h);
-        else host.picHide(i);
+        if (!q) {
+          host.picHide(i);
+          continue;
+        }
+        host.pic(i, q.page, q.x, q.y, q.w, q.h);
+        // `pic` clears the pop, so it is only sent for the pictures that
+        // want one -- today that is the intro's fist and nothing else.
+        if (q.d) host.picDepth(i, q.d);
       }
+    }
+
+    // The boot movie owns the whole frame: its pictures went out above and
+    // its 8x8 tiles -- the copyright card and the shooting star, which the
+    // cartridge composes out of tiles too -- go out here.
+    const intro = (view as unknown as { intro?: () => any }).intro?.();
+    if (intro) {
+      this.emitIntroTiles(intro.tiles);
+      // The movie says nothing on the tile layer -- even IN 3D is a
+      // picture, so that it can stand out of the screen -- so the layer is
+      // cleared once and left alone.
+      if (this.introSig === null) {
+        this.introSig = "open";
+        this.uiOwner = null;
+        host.uiClear();
+      }
+      return;
+    }
+    if (this.introSig !== null) {
+      this.introSig = null;
+      this.emitIntroTiles([]);
+      host.uiClear();
+      this.uiOwner = null;
     }
 
     const bx = (view as unknown as { box?: () => any }).box?.();

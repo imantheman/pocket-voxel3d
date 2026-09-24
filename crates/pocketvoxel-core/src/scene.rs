@@ -297,10 +297,19 @@ pub struct Pic {
     pub y: i16,
     pub w: i16,
     pub h: i16,
+    /// How far OUT of the screen this picture stands, Q8: 0 is flat on the
+    /// glass (which every picture but the intro's fist is), 256 is as far
+    /// forward as the 3D slider will carry it. A renderer with no second
+    /// eye ignores it.
+    pub depth_q8: i16,
 }
 
-/// One per party member: the party menu puts every icon on this layer.
-pub const PICS_MAX: usize = 6;
+/// Screen-space pictures at once. Six was one per party member; the boot
+/// intro needs fifteen at the moment the fist comes through -- the dark
+/// behind the paper, the lit field, the two fighters, eight pieces of torn
+/// paper, the letterbox and the fist.
+/// Mirrored by `PICS_MAX` in contracts/spec/voxel-spec.ts.
+pub const PICS_MAX: usize = 16;
 
 /// One sprite drawn on the Kanto Gear companion (bottom screen) surface: a
 /// whole atlas `page` scaled into a rect, in the bottom screen's native
@@ -590,6 +599,15 @@ impl Scene {
                     pic.y = a(3) as i16;
                     pic.w = a(4) as i16;
                     pic.h = a(5) as i16;
+                    // Flat unless the guest says otherwise IN THE SAME
+                    // frame: a slot is reused by whatever needs it next,
+                    // and a stale pop would follow it there.
+                    pic.depth_q8 = 0;
+                }
+            }
+            op::PIC_DEPTH => {
+                if let Some(pic) = self.pics.get_mut(a(0) as usize) {
+                    pic.depth_q8 = a(1).clamp(-256, 256) as i16;
                 }
             }
             op::PIC_HIDE => {
