@@ -2698,51 +2698,37 @@ fn build_map(
     MapGeom { floor, chunk_spans, verts, center, size, tex_rgba, tw, th, aw, ah, is_huge, map_min, map_max }
 }
 
-/// The floor under each cell of the map: the highest HORIZONTAL TERRAIN
-/// triangle in it, so a shelf the cook raised reads as its top and the
-/// base ground as 0. Whoever stands on the cell is drawn that high
-/// (core draw.rs ent_feet / cell_centre), which is what keeps the player
-/// and a staged battle out of Mt. Moon's upper floor rather than sunk to
-/// its foot.
+/// The floor under each cell of the map: the highest up-facing TERRAIN
+/// triangle in it. Whoever stands on the cell is drawn that high (core
+/// draw.rs ent_feet / cell_centre).
 ///
-/// Horizontal, and not UP-facing, because up-facing cannot be asked here.
-/// This tested the sign of the cross product, which is the winding, and
-/// cook/geom.ts states plainly that the cooked streams do not share one:
-/// every quad names the direction its front points in precisely because
-/// that cannot be derived from its corners. Measured over the shipped paks
-/// (examples/floor_check.rs), MT_MOON_1F has 19,968 horizontal terrain
-/// triangles and NOT ONE of them is wound the way this asked for, so the
-/// floor map came out empty and everything in the cave stood at the base
-/// height while the shelf it was on drew 16 px up. ROCK_TUNNEL_1F and
-/// SEAFOAM_ISLANDS_B3F are the same.
+/// In practice this finds NOTHING and every cell reads 0, which is why the
+/// player walks along the foot of MT. MOON's shelves instead of on top of
+/// them. That is deliberate for now, and the story is worth keeping because
+/// the obvious repair makes things worse:
 ///
-/// Dropping the sign costs nothing real: a box's underside is horizontal
-/// too, but it sits below that box's own top in the same cell, and the max
-/// is what is kept. VIRIDIAN_FOREST is measurably untouched -- every cell
-/// of it reads 0 under both rules.
+/// "Up-facing" is the sign of the cross product, i.e. the winding, and
+/// cook/geom.ts states the cooked streams do not share one -- every quad
+/// names the direction its front points in precisely because that cannot be
+/// derived from its corners. MT_MOON_1F has 19,968 horizontal terrain
+/// triangles and not one is wound the way this asks for, so the map comes
+/// out empty. ROCK_TUNNEL_1F and SEAFOAM_ISLANDS_B3F are the same.
 ///
-/// TERRAIN_KEEP as well as TERRAIN, because terrain alone is only half the
-/// ground and the half it leaves out reads as 0 -- which drew the player
-/// sunk into one cell and standing on a wall-top in the next. GROUND_BAKE
-/// is the baked ground surface itself and so the answer key here, and
-/// scoring both against it, cell for cell:
+/// Dropping the sign (84c735c) did lift the shelves, and also lifted the
+/// player onto wall tops at ladders and cave mouths, because the highest
+/// horizontal surface in a cell beside a wall IS the wall. Reading
+/// TERRAIN_KEEP too (ad65563) cut that a long way -- scored against
+/// GROUND_BAKE, which is the baked ground surface and so the answer key,
+/// MT_MOON_1F went from 1982 cells agreeing to 3104 of 3136 -- but a
+/// building roof still claimed the cell under it in CELADON, and an NPC
+/// floating over a town reads worse than a flat cave. Both are reverted.
 ///
-///                      agrees  differs  missing
-///   MT_MOON_1F  terrain   1982      514      640
-///               +keep     3104       32        0
-///   ROCK_TUNNEL terrain   1928      568      640
-///               +keep     3092       44        0
-///
-/// With both kinds there is no cell the bake covers that this does not,
-/// and what is left over in the caves is 6 px of ledge lip -- always too
-/// high, never too low, so nothing sinks. GROUND_BAKE cannot simply be
-/// read instead: mapplan does not fetch it (it is not in the draw plan),
-/// so at runtime those bytes are not there to read.
-///
-/// A triangle covers every cell its XZ box touches, not only the cells its
-/// corners land in: the cook merges a flat run into one quad, whose inner
-/// cells have no vertex of their own. The box of a rectangle's half is the
-/// rectangle, so the merged run comes out whole.
+/// The repair that would actually work is to read GROUND_BAKE and use it
+/// directly: it agrees with itself by construction, gives caves a clean two
+/// levels, and leaves VIRIDIAN_FOREST flat. mapplan does not fetch it today
+/// because it is not in the draw plan, so that is a loader change (about
+/// 300 KB a map, ~27 ms at the card's measured 11 MB/s) rather than a rule
+/// change. examples/floor_check.rs is the harness that measured all of it.
 fn floor_map_of(pak: &Pak, chunks: &[pak::Chunk], map_min: [f32; 2], map_max: [f32; 2]) -> pocketvoxel_core::scene::FloorMap {
     use pocketvoxel_core::scene::FloorMap;
     let cell = pocketvoxel_core::spec::CELL_PX as f32;
@@ -2755,13 +2741,8 @@ fn floor_map_of(pak: &Pak, chunks: &[pak::Chunk], map_min: [f32; 2], map_max: [f
         return FloorMap::default();
     }
     let mut cells = vec![0i16; w * h];
-    const GROUND_KINDS: [u16; 2] = [
-        pocketvoxel_core::spec::mesh_kind::TERRAIN,
-        pocketvoxel_core::spec::mesh_kind::TERRAIN_KEEP,
-    ];
     for chunk in chunks {
-        for kind in GROUND_KINDS {
-        let m = chunk.meshes[kind as usize];
+        let m = chunk.meshes[pocketvoxel_core::spec::mesh_kind::TERRAIN as usize];
         let vbase = m.vert_base as usize;
         for t in 0..(m.index_count as usize / 3) {
             let b = m.index_base as usize + t * 3;
@@ -2772,14 +2753,13 @@ fn floor_map_of(pak: &Pak, chunks: &[pak::Chunk], map_min: [f32; 2], map_max: [f
             ) else {
                 break;
             };
-            // horizontal: the normal's y dominates. Which SIGN it has is the
-            // winding, which this cook does not promise (see above).
+            // up-facing: the normal's y dominates and points up
             let (ax, ay, az) = ((p1.x - p0.x) as f32, (p1.y - p0.y) as f32, (p1.z - p0.z) as f32);
             let (bx, by, bz) = ((p2.x - p0.x) as f32, (p2.y - p0.y) as f32, (p2.z - p0.z) as f32);
             let ny = az * bx - ax * bz;
             let nx = ay * bz - az * by;
             let nz = ax * by - ay * bx;
-            if ny == 0.0 || ny.abs() < nx.abs() || ny.abs() < nz.abs() {
+            if ny <= 0.0 || ny.abs() < nx.abs() || ny.abs() < nz.abs() {
                 continue;
             }
             let top = p0.y.max(p1.y).max(p2.y);
@@ -2796,7 +2776,6 @@ fn floor_map_of(pak: &Pak, chunks: &[pak::Chunk], map_min: [f32; 2], map_max: [f
                     if top > cells[i] { cells[i] = top; }
                 }
             }
-        }
         }
     }
     FloorMap { x0, z0, w: w as u16, h: h as u16, cells }
