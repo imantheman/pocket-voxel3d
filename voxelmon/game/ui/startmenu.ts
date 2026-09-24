@@ -29,6 +29,18 @@ export class StartMenuState implements GameState {
     private game: { input: any; pop(): void; save: { options?: { devMenu?: boolean } } & any },
     private onPick: (a: MenuAction) => void,
   ) {
+    this.entries = [];
+    this.actions = [];
+    this.rebuild();
+  }
+
+  /**
+   * The rows depend on the save -- the Pokedex, a party, DEV MENU -- and
+   * the OPTION screen opens ON TOP of this menu, so they are rebuilt every
+   * poll rather than once: turning DEV on and pressing B has to show DEV.
+   */
+  private rebuild(): void {
+    const game = this.game;
     const f = game.save?.flags ?? {};
     const party = game.save?.party ?? [];
     const e: [string, MenuAction][] = [];
@@ -47,9 +59,11 @@ export class StartMenuState implements GameState {
     e.push(["EXIT", "exit"]);
     this.entries = e.map((x) => x[0]);
     this.actions = e.map((x) => x[1]);
+    if (this.index >= this.entries.length) this.index = this.entries.length - 1;
   }
 
   update(): void {
+    this.rebuild();
     const p = this.game.input.pressed;
     if (p.up) this.index = (this.index + this.entries.length - 1) % this.entries.length;
     if (p.down) this.index = (this.index + 1) % this.entries.length;

@@ -1461,14 +1461,26 @@ export class Scene {
     // active choice and a ▷ in the left margin marking the selected row.
     const op = (view as unknown as { optionsMenu?: () => any }).optionsMenu?.();
     if (op) {
-      const sig = `o${op.index},${op.rows.map((r: any) => r.index).join(",")}`;
+      const first: number = op.first ?? 0;
+      const visible: number = op.visible ?? op.rows.length + 1;
+      const sig = `o${op.index},${first},${op.rows.map((r: any) => r.index).join(",")}`;
       if (sig !== this.menuSig) {
         this.menuSig = sig;
         this.uiOwner = null;
         host.uiClear();
         host.uiFill(0, 0, 20, 18, SPACE);
-        op.rows.forEach((r: any, i: number) => {
-          const labelY = 1 + i * 4;
+        // Items are the rows and then CANCEL; only the window from `first`
+        // is drawn, four lines each, so the screen scrolls with the cursor.
+        for (let k = 0; k < visible; k++) {
+          const i = first + k;
+          const labelY = 1 + k * 4;
+          if (i === op.rows.length) {
+            this.stamp(host, 2, labelY, "CANCEL");
+            if (op.index === i) host.uiTile(1, labelY, ARROW_CURSOR);
+            break;
+          }
+          const r = op.rows[i];
+          if (!r) break;
           this.stamp(host, 1, labelY, r.label);
           // Choices on the row below, each preceded by its cursor cell. The
           // pitch is one blank column between entries and no more: FAST +
@@ -1481,10 +1493,9 @@ export class Scene {
             x += c.length + 2;
           });
           if (i === op.index) host.uiTile(0, labelY, ARROW_HOLLOW);
-        });
-        const cancelY = 1 + op.rows.length * 4;
-        this.stamp(host, 2, cancelY, "CANCEL");
-        if (op.index === op.rows.length) host.uiTile(1, cancelY, ARROW_CURSOR);
+        }
+        // more below: a marker on the last line, the way the bag says so
+        if (first + visible < op.rows.length + 1) host.uiTile(18, 17, ARROW_CURSOR);
       }
       return;
     }

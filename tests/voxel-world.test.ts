@@ -2531,6 +2531,45 @@ describe("options", () => {
     expect(battle.startAnim("faint", 0)).toBeGreaterThan(0);
   });
 
+  test.skipIf(!hasGen)("the screen scrolls so the selected row is always on it", () => {
+    const game = makeMenuGame();
+    tap(game, VOX_BTN.start);
+    const sm = game.startMenu() as { entries: string[] };
+    pick(game, sm.entries.indexOf("OPTION"));
+    const view = () => game.optionsMenu() as { rows: unknown[]; index: number; first: number; visible: number };
+    const n = view().rows.length + 1; // + CANCEL
+    expect(n).toBeGreaterThan(view().visible);
+    for (let i = 0; i < n; i++) {
+      const v = view();
+      expect(v.index).toBe(i);
+      expect(v.index - v.first).toBeGreaterThanOrEqual(0);
+      expect(v.index - v.first).toBeLessThan(v.visible);
+      tap(game, VOX_BTN.down);
+    }
+    // wrapped to the top: the window came back with it
+    expect(view().index).toBe(0);
+    expect(view().first).toBe(0);
+    tap(game, VOX_BTN.up); // CANCEL again, from above
+    expect(view().index).toBe(n - 1);
+    expect(view().first).toBe(n - view().visible);
+  });
+
+  test.skipIf(!hasGen)("DEV MENU turned on in OPTION shows DEV on the pause menu underneath", () => {
+    const game = makeMenuGame();
+    tap(game, VOX_BTN.start);
+    expect((game.startMenu() as { entries: string[] }).entries).not.toContain("DEV");
+    pick(game, (game.startMenu() as { entries: string[] }).entries.indexOf("OPTION"));
+    const rows = (game.optionsMenu() as { rows: { label: string }[] }).rows;
+    const dev = rows.findIndex((r) => r.label === "DEV MENU");
+    for (let i = 0; i < dev; i++) tap(game, VOX_BTN.down);
+    tap(game, VOX_BTN.right);
+    expect(game.save.options.devMenu).toBe(true);
+    tap(game, VOX_BTN.b); // back to the pause menu still open beneath
+    expect(game.stackKinds().at(-1)).toBe("startmenu");
+    game.tick(0);
+    expect((game.startMenu() as { entries: string[] }).entries).toContain("DEV");
+  });
+
   test.skipIf(!hasGen)("CANCEL closes back to the start menu", () => {
     const game = makeMenuGame();
     tap(game, VOX_BTN.start);

@@ -13935,14 +13935,26 @@ class Scene {
     }
     const op = view.optionsMenu?.();
     if (op) {
-      const sig = `o${op.index},${op.rows.map((r) => r.index).join(",")}`;
+      const first = op.first ?? 0;
+      const visible = op.visible ?? op.rows.length + 1;
+      const sig = `o${op.index},${first},${op.rows.map((r) => r.index).join(",")}`;
       if (sig !== this.menuSig) {
         this.menuSig = sig;
         this.uiOwner = null;
         host.uiClear();
         host.uiFill(0, 0, 20, 18, SPACE);
-        op.rows.forEach((r, i) => {
-          const labelY = 1 + i * 4;
+        for (let k = 0;k < visible; k++) {
+          const i = first + k;
+          const labelY = 1 + k * 4;
+          if (i === op.rows.length) {
+            this.stamp(host, 2, labelY, "CANCEL");
+            if (op.index === i)
+              host.uiTile(1, labelY, ARROW_CURSOR);
+            break;
+          }
+          const r = op.rows[i];
+          if (!r)
+            break;
           this.stamp(host, 1, labelY, r.label);
           let x = 1;
           r.choices.forEach((c, j) => {
@@ -13953,11 +13965,9 @@ class Scene {
           });
           if (i === op.index)
             host.uiTile(0, labelY, ARROW_HOLLOW);
-        });
-        const cancelY = 1 + op.rows.length * 4;
-        this.stamp(host, 2, cancelY, "CANCEL");
-        if (op.index === op.rows.length)
-          host.uiTile(1, cancelY, ARROW_CURSOR);
+        }
+        if (first + visible < op.rows.length + 1)
+          host.uiTile(18, 17, ARROW_CURSOR);
       }
       return;
     }
@@ -14730,6 +14740,12 @@ class StartMenuState {
   constructor(game, onPick) {
     this.game = game;
     this.onPick = onPick;
+    this.entries = [];
+    this.actions = [];
+    this.rebuild();
+  }
+  rebuild() {
+    const game = this.game;
     const f = game.save?.flags ?? {};
     const party = game.save?.party ?? [];
     const e = [];
@@ -14746,8 +14762,11 @@ class StartMenuState {
     e.push(["EXIT", "exit"]);
     this.entries = e.map((x) => x[0]);
     this.actions = e.map((x) => x[1]);
+    if (this.index >= this.entries.length)
+      this.index = this.entries.length - 1;
   }
   update() {
+    this.rebuild();
     const p = this.game.input.pressed;
     if (p.up)
       this.index = (this.index + this.entries.length - 1) % this.entries.length;
@@ -14963,6 +14982,7 @@ function postGameRescue(save) {
 }
 
 // voxelmon/game/ui/optionsmenu.ts
+var OPTIONS_VISIBLE = 4;
 var CAMERA_SPEEDS = [
   { key: "slow", label: "SLOW", q8: 128 },
   { key: "normal", label: "NORMAL", q8: 256 },
@@ -14974,6 +14994,7 @@ class OptionsMenuState {
   game;
   kind = "options";
   index = 0;
+  first = 0;
   constructor(game) {
     this.game = game;
   }
@@ -15044,6 +15065,10 @@ class OptionsMenuState {
       this.index = (this.index + n - 1) % n;
     if (p.down)
       this.index = (this.index + 1) % n;
+    if (this.index < this.first)
+      this.first = this.index;
+    if (this.index >= this.first + OPTIONS_VISIBLE)
+      this.first = this.index - OPTIONS_VISIBLE + 1;
     if (this.index < rows.length) {
       const r = rows[this.index];
       if (p.left)
@@ -15062,7 +15087,7 @@ class OptionsMenuState {
     }
   }
   view() {
-    return { rows: this.rows(), index: this.index };
+    return { rows: this.rows(), index: this.index, first: this.first, visible: OPTIONS_VISIBLE };
   }
 }
 

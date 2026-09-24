@@ -31,7 +31,17 @@ export interface OptionsView {
   rows: OptionsRow[];
   /** Selected row, or rows.length for CANCEL. */
   index: number;
+  /** The first item on screen (rows, then CANCEL) and how many fit. */
+  first: number;
+  visible: number;
 }
+
+/**
+ * Each row is four lines (label, blank, choices, blank) on an 18-line
+ * screen, so four items fit and the rest scroll under them. The original's
+ * three rows never needed this; this port's five plus CANCEL do.
+ */
+export const OPTIONS_VISIBLE = 4;
 
 /**
  * CAMERA SPEED: how fast the C-stick swings the view, as the Q8 multiplier
@@ -58,6 +68,7 @@ interface OptionsSave {
 export class OptionsMenuState implements GameState {
   readonly kind = "options";
   private index = 0;
+  private first = 0;
 
   constructor(private game: { input: any; pop(): void; save: OptionsSave }) {}
 
@@ -130,6 +141,9 @@ export class OptionsMenuState implements GameState {
     const n = rows.length + 1; // + CANCEL
     if (p.up) this.index = (this.index + n - 1) % n;
     if (p.down) this.index = (this.index + 1) % n;
+    // the window follows the cursor, one item at a time
+    if (this.index < this.first) this.first = this.index;
+    if (this.index >= this.first + OPTIONS_VISIBLE) this.first = this.index - OPTIONS_VISIBLE + 1;
     // Left/right walk the selected row's choices. The original wraps on
     // right and stops on left (SetCursorPositionsFromOptions); wrapping both
     // ways is friendlier on a d-pad and costs nothing to read.
@@ -147,6 +161,6 @@ export class OptionsMenuState implements GameState {
   }
 
   view(): OptionsView {
-    return { rows: this.rows(), index: this.index };
+    return { rows: this.rows(), index: this.index, first: this.first, visible: OPTIONS_VISIBLE };
   }
 }
