@@ -3030,6 +3030,7 @@ fn main() {
     let mut perf_gpu_max: f32 = 0.0;
     let mut perf_proc_sum: f32 = 0.0;
     let mut perf_slider: f32 = 0.0;
+    let mut perf_radius: f32 = 0.0;
     let mut perf_spans: usize = 0;
     let mut perf_trees: usize = 0;
     let mut fps_last: u64 = 0;
@@ -3180,13 +3181,13 @@ fn main() {
                     // build has no window for, which is why the first run of
                     // this line left no trace in pvlog.txt at all.
                     dlog(&format!(
-                        "[pv] perf: {} fps  cpu {:.1} avg {:.0} max ms  gpu {:.1} avg {:.0} max ms  proc {:.1} ms  spans {}/{}  trees {}/{}  3d {:.2}",
+                        "[pv] perf: {} fps  cpu {:.1} avg {:.0} max ms  gpu {:.1} avg {:.0} max ms  proc {:.1} ms  spans {}/{}  trees {}/{}  3d {:.2} r{:.0}",
                         fps_frames,
                         perf_cpu_sum / perf_n as f32, perf_cpu_max,
                         perf_gpu_sum / perf_n as f32, perf_gpu_max,
                         perf_proc_sum / perf_n as f32,
                         unsafe { DRAWN }, perf_spans, unsafe { TREES_DRAWN }, perf_trees,
-                        perf_slider,
+                        perf_slider, perf_radius,
                     ));
                 }
                 perf_n = 0;
@@ -4656,7 +4657,36 @@ if page_tex.len() < pak_static.atlases.len() {
         // practice: their vertex budget already stops building geometry
         // well inside this radius, so widening it draws no more of them.
         const CULL_RADIUS_PX: f32 = 288.0;
-        let cull_radius: f32 = if guest_drive { CULL_RADIUS_PX } else { 1.0e6 };
+        /// How far the world is drawn with the 3D slider up, as a fraction of
+        /// the flat radius.
+        ///
+        /// Measured on hardware in CELADON (build 221529): slider down, GPU
+        /// 49 ms a frame; slider up, 87 ms, for the same 33 chunks. The
+        /// second eye is a whole second pass and the frame is GPU-bound end
+        /// to end -- CPU sat at 12-14 ms while the GPU ran 54-65, and the
+        /// frame time tracked the GPU number to the millisecond.
+        ///
+        /// docs/VOXEL.md SS6 settled what to spend on a GPU-bound frame
+        /// here: the fetches and transforms are paid before raster, so the
+        /// lever is a geometry diet, not a culling or ordering trick.
+        /// Chunks fill the view wedge as the square of the radius, so 0.8
+        /// leaves about two thirds of them.
+        ///
+        /// Only with the slider up: flat play keeps the radius it has always
+        /// had, and so does every golden taken at it.
+        const STEREO_RADIUS_SCALE: f32 = 0.8;
+        let stereo_diet = guest_drive && !in_battle && slider > 0.05;
+        let cull_radius: f32 = if guest_drive {
+            if stereo_diet { CULL_RADIUS_PX * STEREO_RADIUS_SCALE } else { CULL_RADIUS_PX }
+        } else {
+            1.0e6
+        };
+        // The tree ladder goes on the same diet: a tree that was carved is
+        // coarse, a coarse one is a box. Trees were ~10 ms of a 65 ms frame
+        // (the log's `trees 0/26` frame against the `trees 21/26` one beside
+        // it), and a box is the cheapest thing in the pak.
+        let tree_near_px = if stereo_diet { TREE_NEAR_PX * STEREO_RADIUS_SCALE } else { TREE_NEAR_PX };
+        let tree_mid_px = if stereo_diet { TREE_MID_PX * STEREO_RADIUS_SCALE } else { TREE_MID_PX };
         // Tangent of the HORIZONTAL half-FOV: tan(atan(1/(2*CAM_FOCAL)))
         // scaled by the top screen's 400x240 aspect = 0.5 * 1.667 = 0.833,
         // plus 15% slack so the wedge test is generous rather than exact.
@@ -4864,9 +4894,9 @@ if page_tex.len() < pak_static.atlases.len() {
                 let dist = (dx * dx + dz * dz).sqrt();
                 // Carved close up, coarse a bit further, a box beyond that
                 // -- and each tree decides for itself as the player moves.
-                let ladder = if dist <= TREE_NEAR_PX {
+                let ladder = if dist <= tree_near_px {
                     [it.near, it.mid, it.far]
-                } else if dist <= TREE_MID_PX {
+                } else if dist <= tree_mid_px {
                     [it.mid, it.far, it.near]
                 } else {
                     [it.far, it.mid, it.near]
@@ -4914,6 +4944,7 @@ if page_tex.len() < pak_static.atlases.len() {
             TREES_DRAWN = vis_trees.len() as u32;
             TREES_CULLED = [t_noshape, t_radius, t_cone, 0];
         }
+        perf_radius = cull_radius.min(9999.0);
         perf_spans = infos_ref.len() + strips_ref.len();
         perf_trees = tree_insts_ref.len();
         instance.render_frame_with(|mut frame| {
