@@ -3176,15 +3176,18 @@ fn main() {
                 // lever for a slow map, so it is measured rather than guessed.
                 perf_secs += 1;
                 if perf_n > 0 && perf_secs % 5 == 0 {
-                    println!(
-                        "perf: {} fps  cpu {:.1} avg {:.0} max ms  gpu {:.1} avg {:.0} max ms  proc {:.1} ms  spans {}/{}  trees {}/{}  3d {:.2}",
+                    // dlog, not println: println goes to a debug console this
+                    // build has no window for, which is why the first run of
+                    // this line left no trace in pvlog.txt at all.
+                    dlog(&format!(
+                        "[pv] perf: {} fps  cpu {:.1} avg {:.0} max ms  gpu {:.1} avg {:.0} max ms  proc {:.1} ms  spans {}/{}  trees {}/{}  3d {:.2}",
                         fps_frames,
                         perf_cpu_sum / perf_n as f32, perf_cpu_max,
                         perf_gpu_sum / perf_n as f32, perf_gpu_max,
                         perf_proc_sum / perf_n as f32,
                         unsafe { DRAWN }, perf_spans, unsafe { TREES_DRAWN }, perf_trees,
                         perf_slider,
-                    );
+                    ));
                 }
                 perf_n = 0;
                 perf_cpu_sum = 0.0; perf_cpu_max = 0.0;
@@ -4767,7 +4770,7 @@ if page_tex.len() < pak_static.atlases.len() {
         let vis_spans: Vec<_> = if pic_active {
             Vec::new()
         } else {
-            infos_ref.iter().chain(strips_ref.iter()).filter(|(span, _bi)| {
+            infos_ref.iter().chain(strips_ref.iter()).filter_map(|(span, bi)| {
                 let (bmin, bmax) = (&span.bmin, &span.bmax);
                 let cx = (bmin[0] + bmax[0]) * 0.5;
                 let cz = (bmin[2] + bmax[2]) * 0.5;
@@ -4784,7 +4787,7 @@ if page_tex.len() < pak_static.atlases.len() {
                 if near > cull_radius {
                     cull_r_n += 1;
                     if near < min_culled { min_culled = near; }
-                    return false;
+                    return None;
                 }
                 if guest_drive {
                     let vx = cx - eye_x;
@@ -4809,7 +4812,7 @@ if page_tex.len() < pak_static.atlases.len() {
                     if far < -CONE_PAD || side - lat_half > half + CONE_PAD {
                         cull_c_n += 1;
                         if near < min_culled { min_culled = near; }
-                        return false;
+                        return None;
                     }
                 }
                 // The battle camera's no-clip, against this span's OWN bounds
@@ -4827,13 +4830,23 @@ if page_tex.len() < pak_static.atlases.len() {
                         ) {
                             cull_o_n += 1;
                             if near < min_culled { min_culled = near; }
-                            return false;
+                            return None;
                         }
                     }
                 }
-                true
+                Some((near, bi))
             }).collect()
         };
+        // Near chunks first. The terrain pass has the depth test on and no
+        // alpha test, so a fragment already covered by something closer is
+        // rejected on depth instead of being textured and combined -- but
+        // only if the closer thing was drawn first, and the pak's chunk
+        // order has nothing to do with where the player is standing. A
+        // sort of ~50 floats a frame buys whatever the overdraw is worth.
+        // Nothing about WHAT is drawn changes: these are solid,
+        // non-overlapping chunks, so no pixel depends on the order.
+        let mut vis_spans = vis_spans;
+        vis_spans.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(core::cmp::Ordering::Equal));
         // The same shape drawn where each placement says, at the level of
         // detail its distance earns: near ones carved, far ones coarse, and
         // nothing dropped for want of budget the way a baked-in chunk mesh
@@ -4927,7 +4940,7 @@ if page_tex.len() < pak_static.atlases.len() {
                 // The survivors of this frame's cull (decided once, above the
                 // frame, for both eyes).
                 for e in vis_spans.iter() {
-                    frame.draw_arrays(buffer::Primitive::Triangles, &e.1, None).unwrap();
+                    frame.draw_arrays(buffer::Primitive::Triangles, e.1, None).unwrap();
                 }
                 // --- tree instances -------------------------------------
                 // The same shape drawn where each placement says, at the
