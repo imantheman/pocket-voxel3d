@@ -5834,7 +5834,9 @@ var WARP_PAD_TILES = {
 function walkableList(ts) {
   return Array.isArray(ts.walkable) ? ts.walkable : [];
 }
-function waterTileSet(def, ts) {
+function waterTileSet(def, ts, waterTilesets) {
+  if (waterTilesets && !waterTilesets.includes(def.tileset))
+    return new Set;
   const t = ts;
   const water = new Set(t.waterTiles ?? WATER_TILES);
   let shore = t.shoreTiles;
@@ -5921,7 +5923,7 @@ class GameMap {
   cuttableAt = new Set;
   cutAt = new Set;
   openAt = new Set;
-  constructor(def, tilesetDef) {
+  constructor(def, tilesetDef, waterTilesets) {
     this.def = def;
     this.tileset = tilesetDef;
     this.id = def.id;
@@ -5933,7 +5935,7 @@ class GameMap {
       this.doorTiles.add(t);
     for (const t of tilesetDef.warpTiles ?? [])
       this.warpTiles.add(t);
-    this.waterTiles = waterTileSet(def, tilesetDef);
+    this.waterTiles = waterTileSet(def, tilesetDef, waterTilesets);
     (def.warps ?? []).forEach((w, i) => {
       this.warpAt.set(w.y * this.widthCells + w.x, { index: i, def: w });
     });
@@ -10843,7 +10845,7 @@ class Overworld {
     const tileset = this.shell.data.tilesets?.[def.tileset];
     if (!tileset)
       throw new Error(`unknown tileset ${def.tileset} for ${mapId}`);
-    this.map = new GameMap(def, tileset);
+    this.map = new GameMap(def, tileset, this.shell.data.field?.waterTilesets);
     this.applyGameCornerPoster(mapId, def);
     this.applyCardKeyDoors(mapId, def);
     this.applyToggleBlocks(mapId, def);

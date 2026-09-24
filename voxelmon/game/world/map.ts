@@ -40,7 +40,15 @@ function walkableList(ts: TilesetDef): number[] {
   return Array.isArray(ts.walkable) ? (ts.walkable as unknown as number[]) : [];
 }
 
-function waterTileSet(def: MapDef, ts: TilesetDef): Set<number> {
+/**
+ * The water a tileset has. $14 is water only where the tileset draws water
+ * at all -- field.waterTilesets, the ROM's own list (OVERWORLD, the caves,
+ * the ship ..) -- and nowhere else: in a house that same id is floor and
+ * mat, and reading it as water put the player on the surf sprite for the
+ * step off the exit mat. No list means the old stale-cache fallback.
+ */
+function waterTileSet(def: MapDef, ts: TilesetDef, waterTilesets?: string[]): Set<number> {
+  if (waterTilesets && !waterTilesets.includes(def.tileset)) return new Set();
   const t = ts as unknown as { waterTiles?: number[]; shoreTiles?: number[] };
   const water = new Set(t.waterTiles ?? WATER_TILES);
   let shore = t.shoreTiles;
@@ -164,7 +172,7 @@ export class GameMap {
   private openAt = new Set<number>();
 
   // Map.lua:112 Map.new
-  constructor(def: MapDef, tilesetDef: TilesetDef) {
+  constructor(def: MapDef, tilesetDef: TilesetDef, waterTilesets?: string[]) {
     this.def = def;
     this.tileset = tilesetDef;
     this.id = def.id;
@@ -173,7 +181,7 @@ export class GameMap {
     for (const t of walkableList(tilesetDef)) this.walkable.add(t);
     for (const t of tilesetDef.doorTiles ?? []) this.doorTiles.add(t);
     for (const t of tilesetDef.warpTiles ?? []) this.warpTiles.add(t);
-    this.waterTiles = waterTileSet(def, tilesetDef);
+    this.waterTiles = waterTileSet(def, tilesetDef, waterTilesets);
     (def.warps ?? []).forEach((w, i) => {
       this.warpAt.set(w.y * this.widthCells + w.x, { index: i, def: w });
     });

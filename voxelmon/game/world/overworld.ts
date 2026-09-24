@@ -437,7 +437,11 @@ export class Overworld implements ScriptWorld {
     this.pendingSeamMusic = null;
     const tileset = this.shell.data.tilesets?.[def.tileset];
     if (!tileset) throw new Error(`unknown tileset ${def.tileset} for ${mapId}`);
-    this.map = new GameMap(def, tileset);
+    this.map = new GameMap(
+      def,
+      tileset,
+      (this.shell.data.field as { waterTilesets?: string[] } | undefined)?.waterTilesets,
+    );
     this.applyGameCornerPoster(mapId, def);
     this.applyCardKeyDoors(mapId, def);
     this.applyToggleBlocks(mapId, def);

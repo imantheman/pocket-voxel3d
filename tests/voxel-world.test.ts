@@ -8133,6 +8133,31 @@ describe("cries in the field", () => {
   });
 });
 
+describe("water is only where the tileset has any", () => {
+  test.skipIf(!hasGen)("an exit mat indoors is not water, so leaving a house never mounts the surf sprite", () => {
+    const listed = (romData as any).field.waterTilesets as string[];
+    expect(listed).toContain("OVERWORLD");
+    // (not a GYM: the ROM lists that tileset for CERULEAN's pool)
+    for (const map of ["REDS_HOUSE_1F", "VIRIDIAN_MART", "OAKS_LAB", "PEWTER_POKECENTER"]) {
+      const game = makeMenuGame();
+      const ow = game.overworld;
+      ow.setMap(map, 1, 1, "down");
+      for (const w of ow.map.def.warps as { x: number; y: number }[]) {
+        expect(ow.map.isWaterCell(w.x, w.y), `${map} mat ${w.x},${w.y}`).toBe(false);
+      }
+      // step onto the mat: still on foot
+      const w = (ow.map.def.warps as { x: number; y: number }[])[0]!;
+      ow.setMap(map, w.x, w.y, "down");
+      ow.syncSurf();
+      expect(ow.player.surfing).toBe(false);
+    }
+    // and the sea is still the sea
+    const sea = makeMenuGame();
+    sea.overworld.setMap("PALLET_TOWN", 5, 6, "down");
+    expect(listed).toContain(sea.overworld.map.def.tileset);
+  });
+});
+
 describe("Silph Co 7F", () => {
   test.skipIf(!hasGen)("the rival waits at the door, and only there", () => {
     const rows = (ow: any, save: any) =>
