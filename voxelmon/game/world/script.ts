@@ -682,6 +682,26 @@ function* use_teleport(ctx: ScriptContext): Generator<void, void> {
 }
 
 /**
+ * One line out of several, chosen by a roll, the way a handful of NPCs in
+ * the ROM read a byte and branch on it (CeruleanCityCooltrainerF1Text's
+ * `cp 180` / `cp 100` chain, SSAnneKitchenCook7Text's bit tests).
+ *
+ * The rows are [threshold, textId] in the asm's own order: the first whose
+ * threshold the roll reaches wins, so they read down like the cp chain and
+ * the last one should be 0 to catch the rest. The roll comes off the
+ * world's npc stream rather than Math.random, so one seed replays.
+ */
+function* random_text(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const rows = (args[0] as [number, string][]) ?? [];
+  const roll = (ctx.world as unknown as { rollByte?: () => number }).rollByte?.() ?? 0;
+  const pick = rows.find(([at]) => roll >= at) ?? rows[rows.length - 1];
+  if (!pick) return;
+  const runner = ctx.runner;
+  ctx.world.showText(scriptText(ctx.world, pick[1]), () => runner.resume());
+  yield;
+}
+
+/**
  * Commands.lua play_cry (PlayCry): the species' cry, sounding over whatever
  * the next row shows -- pokered's text_asm plays it before the line for the
  * three birds and MEWTWO, and for the pets that answer with theirs.
@@ -1119,6 +1139,7 @@ const VERBS: Record<string, Verb> = {
   use_dig,
   use_teleport,
   play_cry,
+  random_text,
   use_strength,
   give_pokemon,
   hide_object,

@@ -7496,6 +7496,30 @@ function towerRivalScript(playerX) {
     ["show_text", "_PokemonTower2FRivalHowsYourDexText"]
   ]);
 }
+var JIGGLYPUFF_SPIN = ["down", "left", "up", "right"];
+var JIGGLY_SILENCE = 32;
+var JIGGLY_STEP = 24;
+var JIGGLY_TAIL = 48;
+var JIGGLY_TURNS = 12;
+function jigglypuffRows() {
+  const rows = [
+    ["face_player"],
+    ["show_text", "_PewterPokecenterJigglypuffText"],
+    ["stop_music"],
+    ["wait", JIGGLY_SILENCE],
+    ["play_music", "Music_JigglypuffSong"]
+  ];
+  for (let i = 0;i < JIGGLY_TURNS; i += 1) {
+    rows.push(["wait", JIGGLY_STEP]);
+    rows.push([
+      "face_object",
+      "PEWTERPOKECENTER_JIGGLYPUFF",
+      JIGGLYPUFF_SPIN[i % JIGGLYPUFF_SPIN.length]
+    ]);
+  }
+  rows.push(["wait", JIGGLY_TAIL]);
+  return rows;
+}
 var DEX_COMPLETE = 150;
 var MAP_SCRIPTS = {
   PEWTER_CITY: {
@@ -8227,7 +8251,15 @@ Here, you can\vhave this TM.`,
   },
   CERULEAN_CITY: {
     talk: {
-      TEXT_CERULEANCITY_ROCKET: ceruleanRocketRows
+      TEXT_CERULEANCITY_ROCKET: ceruleanRocketRows,
+      TEXT_CERULEANCITY_COOLTRAINER_F1: [
+        ["face_player"],
+        ["random_text", [
+          [180, "_CeruleanCityCooltrainerF1SlowbroUseSonicboomText"],
+          [100, "_CeruleanCityCooltrainerF1SlowbroPunchText"],
+          [0, "_CeruleanCityCooltrainerF1SlowbroWithdrawText"]
+        ]]
+      ]
     },
     onStep: (ow, save) => {
       const f = save?.flags ?? {};
@@ -8902,6 +8934,25 @@ much!`]
       TEXT_VIRIDIANNICKNAMEHOUSE_SPEAROW: [
         ["play_cry", "SPEAROW"],
         ["show_text", "_ViridianNicknameHouseSpearowText"]
+      ]
+    }
+  },
+  PEWTER_POKECENTER: {
+    talk: { TEXT_PEWTERPOKECENTER_JIGGLYPUFF: jigglypuffRows() }
+  },
+  SS_ANNE_KITCHEN: {
+    talk: {
+      TEXT_SSANNEKITCHEN_COOK7: [
+        ["face_player"],
+        ["show_text", "_SSAnneKitchenCook7MainCourseIsText"],
+        ["random_text", [
+          [128, `Salmon du Salad!\fLes guests may
+gripe it's fish\vagain, however!`],
+          [64, `Eels au Barbecue!\fLes guests will
+mutiny, I fear.`],
+          [0, `Prime Beef Steak!\fBut, have I enough
+fillets du beef?`]
+        ]]
       ]
     }
   },
@@ -10224,6 +10275,16 @@ function* use_dig(ctx) {
 function* use_teleport(ctx) {
   yield* use_escape_move(ctx);
 }
+function* random_text(ctx, ...args) {
+  const rows = args[0] ?? [];
+  const roll2 = ctx.world.rollByte?.() ?? 0;
+  const pick = rows.find(([at]) => roll2 >= at) ?? rows[rows.length - 1];
+  if (!pick)
+    return;
+  const runner = ctx.runner;
+  ctx.world.showText(scriptText(ctx.world, pick[1]), () => runner.resume());
+  yield;
+}
 function* play_cry(ctx, ...args) {
   ctx.world.playCry?.(String(args[0]));
 }
@@ -10499,6 +10560,7 @@ var VERBS = {
   use_dig,
   use_teleport,
   play_cry,
+  random_text,
   use_strength,
   give_pokemon,
   hide_object,
@@ -11495,6 +11557,9 @@ any coins!`);
     this.scriptMove(boulder, dir, 1, () => this.boulderLanded());
     this.scriptMove(p, dir, 1);
     return true;
+  }
+  rollByte() {
+    return this.shell.npcRng.byte();
   }
   playCry(species) {
     this.shell.audio.playCry?.(species);

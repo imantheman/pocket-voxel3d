@@ -742,6 +742,46 @@ function towerRivalScript(playerX: number): ScriptRow[] {
 }
 
 /**
+ * The PEWTER POKeMON CENTER's JIGGLYPUFF (scripts/PewterPokecenter.asm,
+ * gen1recomp story5.lua jigglypuffDance). It sings: the theme stops, a beat
+ * of silence, then Music_JigglypuffSong while the sprite turns a quarter at
+ * a time on the spot, and a tail of quiet before the map's own music comes
+ * back -- which the world does for itself when a script that played a
+ * one-shot ends (overworld.ts oneShotPending).
+ *
+ * The frame counts are the reference's (32 silent, 24 a turn, 48 after).
+ * The number of turns is not: it polls the channels and stops when the song
+ * does, and this port's audio surface has no end-of-song query, so the spin
+ * is a fixed twelve quarters -- about the length of the song -- rather than
+ * a poll that would never clear.
+ */
+const JIGGLYPUFF_SPIN = ["down", "left", "up", "right"] as const;
+const JIGGLY_SILENCE = 32;
+const JIGGLY_STEP = 24;
+const JIGGLY_TAIL = 48;
+const JIGGLY_TURNS = 12;
+
+function jigglypuffRows(): ScriptRow[] {
+  const rows: ScriptRow[] = [
+    ["face_player"],
+    ["show_text", "_PewterPokecenterJigglypuffText"],
+    ["stop_music"],
+    ["wait", JIGGLY_SILENCE],
+    ["play_music", "Music_JigglypuffSong"],
+  ];
+  for (let i = 0; i < JIGGLY_TURNS; i += 1) {
+    rows.push(["wait", JIGGLY_STEP]);
+    rows.push([
+      "face_object",
+      "PEWTERPOKECENTER_JIGGLYPUFF",
+      JIGGLYPUFF_SPIN[i % JIGGLYPUFF_SPIN.length]!,
+    ]);
+  }
+  rows.push(["wait", JIGGLY_TAIL]);
+  return rows;
+}
+
+/**
  * What the GAME FREAK floor counts as a finished POKeDEX: NUM_POKEMON - 1.
  * MEW is the one discounted, being unobtainable without the ROM's own bugs.
  */
@@ -1759,6 +1799,17 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
   CERULEAN_CITY: {
     talk: {
       TEXT_CERULEANCITY_ROCKET: ceruleanRocketRows,
+      // CeruleanCityCooltrainerF1Text (scripts/CeruleanCity.asm:362-393):
+      // she is drilling a SLOWBRO and the line is a roll -- cp 180 for the
+      // first, cp 100 for the second, the rest the third.
+      TEXT_CERULEANCITY_COOLTRAINER_F1: [
+        ["face_player"],
+        ["random_text", [
+          [180, "_CeruleanCityCooltrainerF1SlowbroUseSonicboomText"],
+          [100, "_CeruleanCityCooltrainerF1SlowbroPunchText"],
+          [0, "_CeruleanCityCooltrainerF1SlowbroWithdrawText"],
+        ]],
+      ] as ScriptRow[],
     },
     onStep: (ow: any, save: any) => {
       const f = save?.flags ?? {};
@@ -2756,6 +2807,30 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
       TEXT_VIRIDIANNICKNAMEHOUSE_SPEAROW: [
         ["play_cry", "SPEAROW"],
         ["show_text", "_ViridianNicknameHouseSpearowText"],
+      ] as ScriptRow[],
+    },
+  },
+
+  // flavor/pewter_pokecenter.lua: the JIGGLYPUFF that sings at you.
+  PEWTER_POKECENTER: {
+    talk: { TEXT_PEWTERPOKECENTER_JIGGLYPUFF: jigglypuffRows() },
+  },
+
+  // flavor/ss_anne_kitchen.lua (scripts/SSAnneKitchen.asm): le CHEF names
+  // tonight's main course off a roll -- bit 7 of the byte is the salmon at
+  // even odds, bit 4 without it the eels, and neither the steak, which is
+  // the same split as these thresholds. The three dishes are not in the
+  // extracted table, so they ride as literals.
+  SS_ANNE_KITCHEN: {
+    talk: {
+      TEXT_SSANNEKITCHEN_COOK7: [
+        ["face_player"],
+        ["show_text", "_SSAnneKitchenCook7MainCourseIsText"],
+        ["random_text", [
+          [128, "Salmon du Salad!\fLes guests may\ngripe it's fish\vagain, however!"],
+          [64, "Eels au Barbecue!\fLes guests will\nmutiny, I fear."],
+          [0, "Prime Beef Steak!\fBut, have I enough\nfillets du beef?"],
+        ]],
       ] as ScriptRow[],
     },
   },

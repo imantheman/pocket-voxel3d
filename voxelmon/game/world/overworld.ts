@@ -1409,6 +1409,12 @@ export class Overworld implements ScriptWorld {
     return true;
   }
 
+  /** random_text -> a 0..255 roll off the world's own stream, so a line
+   * picked at random is still picked the same way twice from one seed. */
+  rollByte(): number {
+    return this.shell.npcRng.byte();
+  }
+
   /** play_cry -> the audio's playCry (Sound.lua:307). */
   playCry(species: string): void {
     (this.shell.audio as { playCry?: (s: string) => void }).playCry?.(species);

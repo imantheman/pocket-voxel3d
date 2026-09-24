@@ -8268,6 +8268,100 @@ describe("the GAME FREAK floor's diploma", () => {
   });
 });
 
+describe("the JIGGLYPUFF and the NPCs who pick a line", () => {
+  /** Drive a talk to the end, answering nothing. */
+  function talkThrough(game: VoxelmonGame, map: string, key: string, x = 2, y = 2): void {
+    game.overworld.setMap(map, x, y, "up");
+    game.overworld.showMapText(key);
+    for (let t = 0; t < 4000; t++) {
+      const idle = !(game.overworld as any).runner.isRunning();
+      if (game.stackKinds().at(-1) === "overworld" && idle) return;
+      game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+    }
+  }
+
+  test.skipIf(!hasGen)("the JIGGLYPUFF sings, and turns on the spot while it does", () => {
+    const game = makeMenuGame();
+    const songs: string[] = [];
+    (game as any).audio.playOnce = (s: string) => { songs.push(s); return true; };
+    const ow = game.overworld;
+    ow.setMap("PEWTER_POKECENTER", 1, 4, "up");
+    const puff = () => ow.npcs.find((n: any) => n.def?.name === "PEWTERPOKECENTER_JIGGLYPUFF") as any;
+    expect(puff()).toBeTruthy();
+    ow.showMapText("TEXT_PEWTERPOKECENTER_JIGGLYPUFF");
+    // the line first
+    for (let i = 0; i < 60 && game.stackKinds().at(-1) !== "textbox"; i++) game.tick(0);
+    expect(topText(game).length).toBeGreaterThan(0);
+    dismissText(game);
+    // then the song, and the sprite ends up somewhere in its rotation
+    const facings = new Set<string>();
+    for (let t = 0; t < 2000; t++) {
+      const idle = !(ow as any).runner.isRunning();
+      if (game.stackKinds().at(-1) === "overworld" && idle) break;
+      facings.add(String(puff()?.facing));
+      game.tick(0);
+    }
+    expect(songs).toContain("Music_JigglypuffSong");
+    expect(facings.size).toBeGreaterThan(1); // it turned
+  });
+
+  test.skipIf(!hasGen)("le CHEF names one of his three courses", () => {
+    const seen = new Set<string>();
+    // the kitchen is outside the test dataset's cooked set, like the other
+    // off-path maps these tests visit
+    const data = {
+      ...(romData as object),
+      cookedMaps: [
+        ...((romData as { cookedMaps?: string[] }).cookedMaps ?? []), "SS_ANNE_KITCHEN",
+      ],
+    };
+    for (let seed = 1; seed <= 24; seed++) {
+      const game = new VoxelmonGame(data as never, new MenuHost(), seed);
+      game.newGame();
+      game.closeToOverworld();
+      game.overworld.setMap("SS_ANNE_KITCHEN", 2, 2, "up");
+      game.overworld.showMapText("TEXT_SSANNEKITCHEN_COOK7");
+      // A through "Er-hem! Indeed I am le CHEF! / Le main course is" until
+      // the dish itself is up -- dismissText would drain that box too, the
+      // second one opening the same tick the first closes.
+      let dish = "";
+      for (let t = 0; t < 600; t++) {
+        const line = topText(game);
+        if (/Salmon|Eels|Steak/.test(line)) { dish = line; break; }
+        game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+      }
+      expect(dish.length).toBeGreaterThan(0);
+      if (dish.includes("Salmon")) seen.add("salmon");
+      else if (dish.includes("Eels")) seen.add("eels");
+      else if (dish.includes("Steak")) seen.add("steak");
+      else throw new Error(`not one of the three: ${dish}`);
+      dismissText(game);
+    }
+    // three dishes behind one roll: over two dozen seeds, more than one
+    expect(seen.size).toBeGreaterThan(1);
+  });
+
+  test.skipIf(!hasGen)("the CERULEAN cooltrainer has three lines for her SLOWBRO", () => {
+    const seen = new Set<string>();
+    for (let seed = 1; seed <= 24; seed++) {
+      const game = new VoxelmonGame(romData as never, new MenuHost(), seed);
+      game.newGame();
+      game.closeToOverworld();
+      talkThroughFirstPage(game);
+      function talkThroughFirstPage(g: VoxelmonGame): void {
+        g.overworld.setMap("CERULEAN_CITY", 20, 20, "up");
+        g.overworld.showMapText("TEXT_CERULEANCITY_COOLTRAINER_F1");
+        for (let i = 0; i < 60 && g.stackKinds().at(-1) !== "textbox"; i++) g.tick(0);
+      }
+      const line = topText(game);
+      expect(line.length).toBeGreaterThan(0);
+      seen.add(line.slice(0, 12));
+      dismissText(game);
+    }
+    expect(seen.size).toBeGreaterThan(1);
+  });
+});
+
 describe("Silph Co 7F", () => {
   test.skipIf(!hasGen)("the rival waits at the door, and only there", () => {
     const rows = (ow: any, save: any) =>
