@@ -4656,37 +4656,17 @@ if page_tex.len() < pak_static.atlases.len() {
         // on screen — that is the pop-out. Huge maps are unaffected in
         // practice: their vertex budget already stops building geometry
         // well inside this radius, so widening it draws no more of them.
+        // A stereo geometry diet lived here for one build (e3ef511) and is
+        // gone because the hardware said it did nothing. Cutting the radius
+        // to 0.8 and the tree ladder with it moved the GPU not at all:
+        // across build 222452's CELADON frames the number sat at 53-64 ms
+        // whether 18 chunks were drawn or 29, and whether 0 trees were drawn
+        // or 26. Frame 61.1 ms at spans 18/87 trees 0/26 against frame
+        // 53.3 ms at spans 29/87 trees 26/26 is the whole argument: MORE
+        // geometry, LESS time. The cost is not the geometry, so a geometry
+        // diet buys nothing and the draw distance was spent for free.
         const CULL_RADIUS_PX: f32 = 288.0;
-        /// How far the world is drawn with the 3D slider up, as a fraction of
-        /// the flat radius.
-        ///
-        /// Measured on hardware in CELADON (build 221529): slider down, GPU
-        /// 49 ms a frame; slider up, 87 ms, for the same 33 chunks. The
-        /// second eye is a whole second pass and the frame is GPU-bound end
-        /// to end -- CPU sat at 12-14 ms while the GPU ran 54-65, and the
-        /// frame time tracked the GPU number to the millisecond.
-        ///
-        /// docs/VOXEL.md SS6 settled what to spend on a GPU-bound frame
-        /// here: the fetches and transforms are paid before raster, so the
-        /// lever is a geometry diet, not a culling or ordering trick.
-        /// Chunks fill the view wedge as the square of the radius, so 0.8
-        /// leaves about two thirds of them.
-        ///
-        /// Only with the slider up: flat play keeps the radius it has always
-        /// had, and so does every golden taken at it.
-        const STEREO_RADIUS_SCALE: f32 = 0.8;
-        let stereo_diet = guest_drive && !in_battle && slider > 0.05;
-        let cull_radius: f32 = if guest_drive {
-            if stereo_diet { CULL_RADIUS_PX * STEREO_RADIUS_SCALE } else { CULL_RADIUS_PX }
-        } else {
-            1.0e6
-        };
-        // The tree ladder goes on the same diet: a tree that was carved is
-        // coarse, a coarse one is a box. Trees were ~10 ms of a 65 ms frame
-        // (the log's `trees 0/26` frame against the `trees 21/26` one beside
-        // it), and a box is the cheapest thing in the pak.
-        let tree_near_px = if stereo_diet { TREE_NEAR_PX * STEREO_RADIUS_SCALE } else { TREE_NEAR_PX };
-        let tree_mid_px = if stereo_diet { TREE_MID_PX * STEREO_RADIUS_SCALE } else { TREE_MID_PX };
+        let cull_radius: f32 = if guest_drive { CULL_RADIUS_PX } else { 1.0e6 };
         // Tangent of the HORIZONTAL half-FOV: tan(atan(1/(2*CAM_FOCAL)))
         // scaled by the top screen's 400x240 aspect = 0.5 * 1.667 = 0.833,
         // plus 15% slack so the wedge test is generous rather than exact.
@@ -4766,28 +4746,19 @@ if page_tex.len() < pak_static.atlases.len() {
             ));
         }
 
-        // Lock to 30 Hz: a steady cadence reads smoother than swinging
-        // between 37 and 60. The guest still simulates at 60 (sim_acc), so
-        // this changes smoothness, not game speed.
         unsafe {
-            extern "C" { fn osGetTime() -> u64; fn svcSleepThread(ns: i64); }
-            let spent = osGetTime().wrapping_sub(frame_start);
-            {
-                // citro3d's own clocks: drawing is the GPU's time on the
-                // last finished frame, processing the command-list build.
-                extern "C" { fn C3D_GetDrawingTime() -> f32; fn C3D_GetProcessingTime() -> f32; }
-                let (gd, gp) = (C3D_GetDrawingTime(), C3D_GetProcessingTime());
-                let cpu = spent as f32;
-                perf_cpu_sum += cpu;
-                if cpu > perf_cpu_max { perf_cpu_max = cpu; }
-                perf_gpu_sum += gd;
-                if gd > perf_gpu_max { perf_gpu_max = gd; }
-                perf_proc_sum += gp;
-                perf_n += 1;
-            }
-            if spent < 33 {
-                svcSleepThread(((33 - spent) as i64) * 1_000_000);
-            }
+            extern "C" { fn osGetTime() -> u64; }
+            // citro3d's own clocks: drawing is the GPU's time on the last
+            // finished frame, processing the command-list build.
+            extern "C" { fn C3D_GetDrawingTime() -> f32; fn C3D_GetProcessingTime() -> f32; }
+            let (gd, gp) = (C3D_GetDrawingTime(), C3D_GetProcessingTime());
+            let cpu = osGetTime().wrapping_sub(frame_start) as f32;
+            perf_cpu_sum += cpu;
+            if cpu > perf_cpu_max { perf_cpu_max = cpu; }
+            perf_gpu_sum += gd;
+            if gd > perf_gpu_max { perf_gpu_max = gd; }
+            perf_proc_sum += gp;
+            perf_n += 1;
         }
         // Culling is per FRAME, not per eye. Every test here reads the guest
         // camera's focus, eye and forward, which both eyes share, so the
@@ -4894,9 +4865,9 @@ if page_tex.len() < pak_static.atlases.len() {
                 let dist = (dx * dx + dz * dz).sqrt();
                 // Carved close up, coarse a bit further, a box beyond that
                 // -- and each tree decides for itself as the player moves.
-                let ladder = if dist <= tree_near_px {
+                let ladder = if dist <= TREE_NEAR_PX {
                     [it.near, it.mid, it.far]
-                } else if dist <= tree_mid_px {
+                } else if dist <= TREE_MID_PX {
                     [it.mid, it.far, it.near]
                 } else {
                     [it.far, it.mid, it.near]
@@ -5141,6 +5112,29 @@ if page_tex.len() < pak_static.atlases.len() {
             }
             frame
         });
+
+        // Lock to 30 Hz: a steady cadence reads smoother than swinging
+        // between 37 and 60. The guest still simulates at 60 (sim_acc), so
+        // this changes smoothness, not game speed.
+        //
+        // AFTER the present, not before it. Before, the sleep ran to 33 ms
+        // and only THEN submitted, and the submit waits for a vblank of its
+        // own -- so a frame that had finished its work at 9 ms slept to 33,
+        // presented, and waited to the vblank at 50. Indoors, where the GPU
+        // draws in 2.6 ms and the CPU takes 6.6, build 222452 logged 23 fps
+        // for want of anything to do: a 30 Hz lock that cost 10 fps against
+        // no lock at all. Measuring the whole iteration instead puts the
+        // present and its vblank inside the 33 ms rather than after it.
+        //
+        // A frame already over budget sleeps not at all, so nothing about
+        // the GPU-bound maps changes.
+        unsafe {
+            extern "C" { fn osGetTime() -> u64; fn svcSleepThread(ns: i64); }
+            let spent = osGetTime().wrapping_sub(frame_start);
+            if spent < 33 {
+                svcSleepThread(((33 - spent) as i64) * 1_000_000);
+            }
+        }
 
         // Previous frame's buffers drop here, a full frame after the GPU
         // last touched them.
