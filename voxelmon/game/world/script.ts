@@ -16,6 +16,7 @@
 // screen, the dex rating — belongs to the rungs docs/VOXEL.md §10 defers.
 
 import type { VoxelmonData } from "../data.ts";
+import { LINK_WAIT_FRAMES } from "./link.ts";
 import * as Bag from "../rules/bag.ts";
 import { FADE_OUT_TO_WHITE } from "../rules/timing.ts";
 import { CELL_PX, FX_FRAME_CUT_TREE, Q4 } from "../../../contracts/spec/voxel-spec.ts";
@@ -1183,6 +1184,10 @@ const VERBS: Record<string, Verb> = {
   old_man_demo,
   record_hall_of_fame,
   open_diploma,
+  save_game,
+  link_open,
+  link_room,
+  link_enter,
   push_screen: noop_object,
   play_sound,
   play_music,
@@ -1195,6 +1200,64 @@ const VERBS: Record<string, Verb> = {
  * (game.ts recordHallOfFame) because it pushes screens and rewrites where the
  * save says the player lives; the verb is just the hand-off.
  */
+// The CABLE CLUB desk (world/cableclub.ts). Four verbs, because the waiting
+// is the interesting part: a link cannot be opened and answered inside one
+// frame, so link_open hands the runner to the overworld's own poll and is
+// resumed when a peer turns up, when the wait runs out, or when the carrier
+// goes away.
+
+/** SaveGame before the link opens, so a trade cannot be undone by resetting. */
+function* save_game(ctx: ScriptContext): Generator<void, void> {
+  (ctx.world as unknown as { saveGame?: () => void }).saveGame?.();
+}
+
+function* link_open(ctx: ScriptContext): Generator<void, void> {
+  const w = ctx.world as unknown as {
+    openLink?: () => boolean;
+    waitLink?: (until: (s: unknown) => boolean, frames: number, done: (ok: boolean) => void) => void;
+  };
+  const runner = ctx.runner;
+  // No carrier at all (a host with no radio): nobody is coming.
+  if (!w.openLink?.() || !w.waitLink) {
+    ctx.lastCheck = false;
+    return;
+  }
+  w.waitLink(
+    (s) => {
+      const st = (s as { state: string }).state;
+      return st === "linked" || st === "ready";
+    },
+    LINK_WAIT_FRAMES,
+    (ok) => {
+      ctx.lastCheck = ok;
+      runner.resume();
+    },
+  );
+  yield;
+}
+
+function* link_room(ctx: ScriptContext): Generator<void, void> {
+  const w = ctx.world as unknown as { pickLinkRoom?: (done: (ok: boolean) => void) => void };
+  const runner = ctx.runner;
+  if (!w.pickLinkRoom) {
+    ctx.lastCheck = false;
+    return;
+  }
+  w.pickLinkRoom((ok) => {
+    ctx.lastCheck = ok;
+    runner.resume();
+  });
+  yield;
+}
+
+function* link_enter(ctx: ScriptContext): Generator<void, void> {
+  const w = ctx.world as unknown as { enterLinkRoom?: (done: () => void) => void };
+  const runner = ctx.runner;
+  if (!w.enterLinkRoom) return;
+  w.enterLinkRoom(() => runner.resume());
+  yield;
+}
+
 // DisplayDiploma (engine/events/diploma.asm): the completed-POKeDEX page,
 // held until a button like the Hall of Fame roll, then the script resumes.
 function* open_diploma(ctx: ScriptContext): Generator<void, void> {

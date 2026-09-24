@@ -23,6 +23,22 @@ export interface LinkTransport {
   close(): void;
 }
 
+/**
+ * The two rooms, and where the local player stands in each.
+ *
+ * Neither map has a warp of its own -- the ROM walks you in from the
+ * receptionist's desk and walks you back out -- so the entry is scripted.
+ * The opponent object the maps already carry sits at cell (2,2), so the
+ * player goes in below it, facing across.
+ */
+export const LINK_ROOM_ENTRY = [
+  { map: "TRADE_CENTER", x: 2, y: 4, facing: "up" },
+  { map: "COLOSSEUM", x: 2, y: 4, facing: "up" },
+] as const;
+
+/** Frames the receptionist will hold the link open waiting for a peer. */
+export const LINK_WAIT_FRAMES = 60 * 20;
+
 /** Frame kinds. The wire is ours, so these are ours. */
 export const LINK_MSG = {
   /** version + player name: the first thing either side says. */

@@ -48,6 +48,9 @@ import { DevMenuState } from "./ui/devmenu.ts";
 import { CARD_PIC_RECT, TrainerCardState } from "./ui/trainercard.ts";
 import { CreditsState, HallOfFameState } from "./ui/hofscreen.ts";
 import { DiplomaState } from "./ui/diploma.ts";
+import {
+  hostTransport, LINK_ROOM, LINK_WAIT_FRAMES, type LinkSession, type LinkTransport,
+} from "./world/link.ts";
 import { EvolutionState, type EvolutionView } from "./ui/evoscreen.ts";
 import {
   applyPostGameHome, POST_GAME_HOME, postGameRescue, recordHallOfFame,
@@ -2136,6 +2139,45 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   party(): unknown {
     const top = this.stack[this.stack.length - 1] as any;
     return top?.kind === "party" ? top.view() : null;
+  }
+
+  /**
+   * The carrier for the CABLE CLUB.
+   *
+   * Handed in by a test or a host that runs both sides (world/link.ts
+   * LoopbackLink); otherwise the 3DS radio, or null on a build without one.
+   */
+  linkCarrier: LinkTransport | null = null;
+
+  linkTransport(): LinkTransport | null {
+    return this.linkCarrier ?? hostTransport();
+  }
+
+  /**
+   * TRADE CENTER / COLOSSEUM / CANCEL, then wait for the peer to ask for the
+   * same one. Written as a flow rather than script rows because the menu and
+   * the waiting interleave: the choice goes out the moment it is made, and
+   * the answer arrives whenever the other player gets round to it.
+   */
+  pickLinkRoom(session: LinkSession | null, done: (ok: boolean) => void): void {
+    if (!session) { done(false); return; }
+    const CANCEL = "CANCEL";
+    this.push(
+      new NamingState(this as never, {
+        title: "CABLE CLUB",
+        pick: ["TRADE CENTER", "COLOSSEUM", CANCEL],
+        onDone: (choice: string) => {
+          if (choice === CANCEL) {
+            session.cancel();
+            done(false);
+            return;
+          }
+          session.chooseRoom(choice === "COLOSSEUM" ? LINK_ROOM.colosseum : LINK_ROOM.trade);
+          this.showText("_CableClubNPCPleaseWaitText");
+          this.overworld.waitLink((s) => s.agreedRoom() !== null, LINK_WAIT_FRAMES, done);
+        },
+      }),
+    );
   }
 
   /** open_diploma (world/script.ts): the completed-POKeDEX page. */

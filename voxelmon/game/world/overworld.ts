@@ -52,6 +52,10 @@ import {
   SAFARI_WALK_IN_STEPS,
 } from "./safari.ts";
 import { nurseGreetScript } from "./nurses.ts";
+import { cableClubScript } from "./cableclub.ts";
+import {
+  hostTransport, LinkSession, LINK_ROOM_ENTRY, type LinkTransport,
+} from "./link.ts";
 import { pcTileAt } from "./pctiles.ts";
 import { ScriptRunner, type ScriptRow, type ScriptWorld } from "./script.ts";
 import { MAP_SCRIPTS, type MapScript } from "./mapscripts.ts";
@@ -616,6 +620,7 @@ export class Overworld implements ScriptWorld {
   // OverworldController.lua:883 update
   update(): void {
     if (this.bumpCooldown > 0) this.bumpCooldown -= 1;
+    this.pollLink();
     this.runner.update();
     // the emotion-bubble pause holds the world for a beat
     // (OverworldController.lua:1018); only the player animates through it
@@ -1166,7 +1171,8 @@ export class Overworld implements ScriptWorld {
       (typeof talk === "function" ? talk(this, this.save) : talk) ??
       itemBallScript(this.map.id, npc?.def) ??
       martGreetScript(this.shell.data as never, this.map.def.label, textConst) ??
-      nurseGreetScript(textConst);
+      nurseGreetScript(textConst) ??
+      cableClubScript(textConst);
     if (script && !this.runner.isRunning()) {
       if (npc) npc.frozen = true;
       this.runner.run(script, {
@@ -1430,6 +1436,87 @@ export class Overworld implements ScriptWorld {
     (this.shell as unknown as {
       openFlyPicker?: (name: string, done?: () => void) => void;
     }).openFlyPicker?.(monName, onDone);
+  }
+
+  // --- the CABLE CLUB link (world/link.ts, world/cableclub.ts) -----------
+  //
+  // The session lives here rather than on the shell because it is world
+  // state: it opens at a desk on a map, it is polled on the world's own
+  // tick, and walking out of the Club is what ends it.
+
+  /** The open session, or null when there is no link. */
+  link: LinkSession | null = null;
+  /** What a script is waiting for the session to do. */
+  private linkWait:
+    | { until: (s: LinkSession) => boolean; frames: number; done: (ok: boolean) => void }
+    | null = null;
+
+  /**
+   * Open a session on whatever carrier the host offers. False when there is
+   * none at all -- a build with no radio, which is where the ROM's own
+   * "reserved for 2 friends" belongs.
+   */
+  openLink(): boolean {
+    if (this.link && this.link.state !== "closed") return true;
+    const shell = this.shell as unknown as { linkTransport?: () => LinkTransport | null };
+    const t = shell.linkTransport ? shell.linkTransport() : hostTransport();
+    if (!t) return false;
+    this.link = new LinkSession(t, String(this.save.player?.name ?? "RED"));
+    this.link.open();
+    return true;
+  }
+
+  /**
+   * Hold a script until the session satisfies `until`, or `frames` pass, or
+   * the carrier drops. A link cannot be opened and answered inside one
+   * frame, and the overworld cannot block, so this is the shape the waiting
+   * has to take.
+   */
+  waitLink(
+    until: (s: LinkSession) => boolean,
+    frames: number,
+    done: (ok: boolean) => void,
+  ): void {
+    this.linkWait = { until, frames, done };
+  }
+
+  private pollLink(): void {
+    const s = this.link;
+    if (!s) return;
+    s.poll();
+    const w = this.linkWait;
+    if (!w) return;
+    if (w.until(s)) {
+      this.linkWait = null;
+      w.done(true);
+      return;
+    }
+    w.frames -= 1;
+    if (w.frames <= 0 || s.state === "closed") {
+      this.linkWait = null;
+      w.done(false);
+    }
+  }
+
+  /** link_room -> game.ts pickLinkRoom (the TRADE CENTER / COLOSSEUM menu). */
+  pickLinkRoom(done: (ok: boolean) => void): void {
+    const shell = this.shell as unknown as {
+      pickLinkRoom?: (s: LinkSession | null, d: (ok: boolean) => void) => void;
+    };
+    if (!shell.pickLinkRoom) { done(false); return; }
+    shell.pickLinkRoom(this.link, done);
+  }
+
+  /** link_enter: walk into whichever room both sides asked for. */
+  enterLinkRoom(done: () => void): void {
+    const room = this.link?.agreedRoom() ?? 0;
+    const e = LINK_ROOM_ENTRY[room] ?? LINK_ROOM_ENTRY[0];
+    this.startWarpTo(e.map, e.x, e.y, e.facing as Dir, done);
+  }
+
+  /** save_game: the Club saves before it opens the link. */
+  saveGame(): void {
+    (this.shell as unknown as { writeSave?: () => void }).writeSave?.();
   }
 
   /** open_diploma -> game.ts openDiploma (the completed-dex page). */

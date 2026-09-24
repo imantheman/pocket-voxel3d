@@ -8363,6 +8363,108 @@ describe("the JIGGLYPUFF and the NPCs who pick a line", () => {
   });
 });
 
+describe("the CABLE CLUB desk", () => {
+  const CENTER = "VIRIDIAN_POKECENTER";
+  const ROOMS = ["TRADE_CENTER", "COLOSSEUM"];
+
+  function clubGame(name: string): VoxelmonGame {
+    const data = {
+      ...(romData as object),
+      cookedMaps: [
+        ...((romData as { cookedMaps?: string[] }).cookedMaps ?? []), CENTER, ...ROOMS,
+      ],
+    };
+    const game = new VoxelmonGame(data as never, new MenuHost(), 1);
+    game.newGame();
+    game.closeToOverworld();
+    game.save.player.name = name;
+    return game;
+  }
+
+  /** Talk to her and answer the save prompt. */
+  function applyAtDesk(game: VoxelmonGame, yes: boolean): void {
+    const ow = game.overworld;
+    ow.setMap(CENTER, 5, 5, "up");
+    ow.showMapText(`TEXT_${CENTER}_LINK_RECEPTIONIST`);
+    for (let i = 0; i < 400; i++) {
+      if (game.stackKinds().at(-1) === "choice") {
+        game.tick(0);
+        if (!yes) tap(game, VOX_BTN.down);
+        tap(game, VOX_BTN.a);
+        return;
+      }
+      game.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    throw new Error("never reached the save prompt");
+  }
+
+  /** One frame on both consoles. */
+  const both = (a: VoxelmonGame, b: VoxelmonGame, n: number, mask = 0) => {
+    for (let i = 0; i < n; i++) { a.tick(mask); b.tick(mask); }
+  };
+
+  test.skipIf(!hasGen)("with no carrier she says the area is reserved for two", () => {
+    const game = clubGame("RED");
+    game.linkCarrier = null;               // a build with no radio
+    applyAtDesk(game, true);
+    let said = "";
+    for (let i = 0; i < 400; i++) {
+      const t = topText(game);
+      if (t.includes("reserved")) { said = t; break; }
+      game.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    expect(said).toContain("2");
+    expect(game.overworld.map.id).toBe(CENTER);
+  });
+
+  test.skipIf(!hasGen)("saying no to the save gets the come-again, and no link", () => {
+    const game = clubGame("RED");
+    const wire = new LoopbackLink();
+    game.linkCarrier = wire.a;
+    applyAtDesk(game, false);
+    for (let i = 0; i < 200; i++) game.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+    expect(game.overworld.link).toBeNull();
+    expect(game.overworld.map.id).toBe(CENTER);
+  });
+
+  test.skipIf(!hasGen)("two consoles link at the desk and walk into the TRADE CENTER", () => {
+    const red = clubGame("RED");
+    const blue = clubGame("BLUE");
+    const wire = new LoopbackLink();
+    red.linkCarrier = wire.a;
+    blue.linkCarrier = wire.b;
+
+    applyAtDesk(red, true);
+    applyAtDesk(blue, true);
+
+    // Drive both consoles with A, the way a player mashes through the desk.
+    // The same presses that clear her lines also take the first row of the
+    // room menu, so the menu is caught as it goes past rather than waited on.
+    let menu: string[] = [];
+    for (let i = 0; i < 1200; i++) {
+      for (const g of [red, blue]) {
+        if (g.stackKinds().at(-1) === "naming") {
+          const grid = (g.top() as unknown as { view(): { grid: string[][] } }).view().grid;
+          if (grid.length === 3) menu = grid.map((r) => r[0]!);
+        }
+      }
+      if (red.overworld.map.id === "TRADE_CENTER" && blue.overworld.map.id === "TRADE_CENTER") break;
+      both(red, blue, 1, i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+
+    // the menu she offers is the ROM's two rooms, and a way out
+    expect(menu).toEqual(["TRADE CENTER", "COLOSSEUM", "CANCEL"]);
+    // they know each other
+    expect(red.overworld.link?.peerName).toBe("BLUE");
+    expect(blue.overworld.link?.peerName).toBe("RED");
+    // and both walked into the same room, on the same agreement
+    expect(red.overworld.map.id).toBe("TRADE_CENTER");
+    expect(blue.overworld.map.id).toBe("TRADE_CENTER");
+    expect(red.overworld.link?.agreedRoom()).toBe(LINK_ROOM.trade);
+    expect(blue.overworld.link?.agreedRoom()).toBe(LINK_ROOM.trade);
+  });
+});
+
 describe("the CABLE CLUB link", () => {
   const pair = () => {
     const wire = new LoopbackLink();

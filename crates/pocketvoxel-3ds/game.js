@@ -9898,6 +9898,156 @@ you again!`]
   ];
 }
 
+// voxelmon/game/world/cableclub.ts
+function isLinkReceptionist(textConst) {
+  return /_LINK_RECEPTIONIST$/.test(textConst);
+}
+function cableClubScript(textConst) {
+  if (!isLinkReceptionist(textConst))
+    return null;
+  return [
+    ["face_player"],
+    ["show_text", "_CableClubNPCWelcomeText"],
+    ["ask", "_CableClubNPCPleaseApplyHereHaveToSaveText"],
+    ["jump_if_false", "bye"],
+    ["save_game"],
+    ["show_text", "_CableClubNPCPleaseWaitText"],
+    ["link_open"],
+    ["jump_if_false", "alone"],
+    ["link_room"],
+    ["jump_if_false", "bye"],
+    ["link_enter"],
+    ["jump", "end"],
+    ["label", "alone"],
+    ["show_text", "_CableClubNPCAreaReservedFor2FriendsLinkedByCableText"],
+    ["jump", "end"],
+    ["label", "bye"],
+    ["show_text", "_CableClubNPCPleaseComeAgainText"]
+  ];
+}
+
+// voxelmon/game/world/link.ts
+var LINK_ROOM_ENTRY = [
+  { map: "TRADE_CENTER", x: 2, y: 4, facing: "up" },
+  { map: "COLOSSEUM", x: 2, y: 4, facing: "up" }
+];
+var LINK_WAIT_FRAMES = 60 * 20;
+var LINK_MSG = {
+  hello: 1,
+  room: 2,
+  cancel: 3
+};
+var LINK_ROOM = { trade: 0, colosseum: 1 };
+var LINK_VERSION = 1;
+var MAX_NAME = 10;
+function encodeHello(name) {
+  const n = [...name].slice(0, MAX_NAME);
+  const out = new Uint8Array(2 + n.length);
+  out[0] = LINK_MSG.hello;
+  out[1] = LINK_VERSION;
+  for (let i = 0;i < n.length; i++)
+    out[2 + i] = n[i].charCodeAt(0) & 255;
+  return out;
+}
+function decodeName(frame) {
+  let s = "";
+  for (let i = 2;i < frame.length; i++)
+    s += String.fromCharCode(frame[i]);
+  return s;
+}
+
+class LinkSession {
+  transport;
+  myName;
+  state = "idle";
+  peerName = "";
+  myRoom = null;
+  peerRoom = null;
+  helloSent = false;
+  constructor(transport, myName) {
+    this.transport = transport;
+    this.myName = myName;
+  }
+  open() {
+    if (this.state === "idle")
+      this.state = "waiting";
+  }
+  chooseRoom(room) {
+    this.myRoom = room;
+    const f = new Uint8Array([LINK_MSG.room, room]);
+    this.transport.send(f);
+  }
+  cancel() {
+    if (this.state !== "closed")
+      this.transport.send(new Uint8Array([LINK_MSG.cancel]));
+    this.close();
+  }
+  close() {
+    this.state = "closed";
+    this.transport.close();
+  }
+  agreedRoom() {
+    if (this.myRoom === null || this.peerRoom === null)
+      return null;
+    return this.myRoom === this.peerRoom ? this.myRoom : null;
+  }
+  poll() {
+    if (this.state === "idle" || this.state === "closed")
+      return this.state;
+    if (!this.helloSent && this.transport.connected()) {
+      this.transport.send(encodeHello(this.myName));
+      this.helloSent = true;
+    }
+    for (;; ) {
+      const f = this.transport.recv();
+      if (!f || f.length === 0)
+        break;
+      switch (f[0]) {
+        case LINK_MSG.hello:
+          if (f[1] !== LINK_VERSION) {
+            this.close();
+            return this.state;
+          }
+          this.peerName = decodeName(f);
+          if (this.state === "waiting")
+            this.state = "linked";
+          break;
+        case LINK_MSG.room:
+          this.peerRoom = f[1] ?? 0;
+          break;
+        case LINK_MSG.cancel:
+          this.close();
+          return this.state;
+        default:
+          break;
+      }
+    }
+    if (this.state === "linked" && this.agreedRoom() !== null)
+      this.state = "ready";
+    return this.state;
+  }
+}
+function hostTransport() {
+  const v = globalThis.voxel;
+  if (!v || typeof v.linkOpen !== "function")
+    return null;
+  const call = (name, arg) => v[name](arg);
+  call("linkOpen");
+  return {
+    send: (f) => {
+      call("linkSend", f);
+    },
+    recv: () => {
+      const r = call("linkRecv");
+      return r instanceof Uint8Array && r.length > 0 ? r : null;
+    },
+    connected: () => call("linkState") === 1,
+    close: () => {
+      call("linkClose");
+    }
+  };
+}
+
 // voxelmon/game/world/pctiles.ts
 var PC_TILES = {
   VIRIDIAN_POKECENTER: [{ x: 13, y: 3, facing: "up" }],
@@ -10604,11 +10754,55 @@ var VERBS = {
   old_man_demo,
   record_hall_of_fame,
   open_diploma,
+  save_game,
+  link_open,
+  link_room,
+  link_enter,
   push_screen: noop_object,
   play_sound,
   play_music,
   stop_music: noop_audio
 };
+function* save_game(ctx) {
+  ctx.world.saveGame?.();
+}
+function* link_open(ctx) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  if (!w.openLink?.() || !w.waitLink) {
+    ctx.lastCheck = false;
+    return;
+  }
+  w.waitLink((s) => {
+    const st = s.state;
+    return st === "linked" || st === "ready";
+  }, LINK_WAIT_FRAMES, (ok) => {
+    ctx.lastCheck = ok;
+    runner.resume();
+  });
+  yield;
+}
+function* link_room(ctx) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  if (!w.pickLinkRoom) {
+    ctx.lastCheck = false;
+    return;
+  }
+  w.pickLinkRoom((ok) => {
+    ctx.lastCheck = ok;
+    runner.resume();
+  });
+  yield;
+}
+function* link_enter(ctx) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  if (!w.enterLinkRoom)
+    return;
+  w.enterLinkRoom(() => runner.resume());
+  yield;
+}
 function* open_diploma(ctx) {
   const w = ctx.world;
   const runner = ctx.runner;
@@ -11041,6 +11235,7 @@ class Overworld {
   update() {
     if (this.bumpCooldown > 0)
       this.bumpCooldown -= 1;
+    this.pollLink();
     this.runner.update();
     if (this.emote) {
       this.emote.frames -= 1;
@@ -11407,7 +11602,7 @@ the PC.`, () => {
   }
   showMapText(textConst, npc, onDone) {
     const talk = talkScript(this.map.id, textConst);
-    const script = (typeof talk === "function" ? talk(this, this.save) : talk) ?? itemBallScript(this.map.id, npc?.def) ?? martGreetScript(this.shell.data, this.map.def.label, textConst) ?? nurseGreetScript(textConst);
+    const script = (typeof talk === "function" ? talk(this, this.save) : talk) ?? itemBallScript(this.map.id, npc?.def) ?? martGreetScript(this.shell.data, this.map.def.label, textConst) ?? nurseGreetScript(textConst) ?? cableClubScript(textConst);
     if (script && !this.runner.isRunning()) {
       if (npc)
         npc.frozen = true;
@@ -11569,6 +11764,57 @@ any coins!`);
   }
   openFlyPicker(monName2, onDone) {
     this.shell.openFlyPicker?.(monName2, onDone);
+  }
+  link = null;
+  linkWait = null;
+  openLink() {
+    if (this.link && this.link.state !== "closed")
+      return true;
+    const shell = this.shell;
+    const t = shell.linkTransport ? shell.linkTransport() : hostTransport();
+    if (!t)
+      return false;
+    this.link = new LinkSession(t, String(this.save.player?.name ?? "RED"));
+    this.link.open();
+    return true;
+  }
+  waitLink(until, frames, done) {
+    this.linkWait = { until, frames, done };
+  }
+  pollLink() {
+    const s = this.link;
+    if (!s)
+      return;
+    s.poll();
+    const w = this.linkWait;
+    if (!w)
+      return;
+    if (w.until(s)) {
+      this.linkWait = null;
+      w.done(true);
+      return;
+    }
+    w.frames -= 1;
+    if (w.frames <= 0 || s.state === "closed") {
+      this.linkWait = null;
+      w.done(false);
+    }
+  }
+  pickLinkRoom(done) {
+    const shell = this.shell;
+    if (!shell.pickLinkRoom) {
+      done(false);
+      return;
+    }
+    shell.pickLinkRoom(this.link, done);
+  }
+  enterLinkRoom(done) {
+    const room = this.link?.agreedRoom() ?? 0;
+    const e = LINK_ROOM_ENTRY[room] ?? LINK_ROOM_ENTRY[0];
+    this.startWarpTo(e.map, e.x, e.y, e.facing, done);
+  }
+  saveGame() {
+    this.shell.writeSave?.();
   }
   openDiploma(onDone) {
     this.shell.openDiploma?.(onDone);
@@ -19395,6 +19641,31 @@ to level ${mon.level}!`, () => {
   party() {
     const top = this.stack[this.stack.length - 1];
     return top?.kind === "party" ? top.view() : null;
+  }
+  linkCarrier = null;
+  linkTransport() {
+    return this.linkCarrier ?? hostTransport();
+  }
+  pickLinkRoom(session, done) {
+    if (!session) {
+      done(false);
+      return;
+    }
+    const CANCEL = "CANCEL";
+    this.push(new NamingState(this, {
+      title: "CABLE CLUB",
+      pick: ["TRADE CENTER", "COLOSSEUM", CANCEL],
+      onDone: (choice) => {
+        if (choice === CANCEL) {
+          session.cancel();
+          done(false);
+          return;
+        }
+        session.chooseRoom(choice === "COLOSSEUM" ? LINK_ROOM.colosseum : LINK_ROOM.trade);
+        this.showText("_CableClubNPCPleaseWaitText");
+        this.overworld.waitLink((s) => s.agreedRoom() !== null, LINK_WAIT_FRAMES, done);
+      }
+    }));
   }
   openDiploma(onDone) {
     this.push(new DiplomaState(this, onDone));
