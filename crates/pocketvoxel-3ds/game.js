@@ -4975,17 +4975,20 @@ class TrainerBattle extends WildBattle {
   enemyParty = [];
   enemyIndex = 0;
   baseMoney;
-  constructor(data, save, rng, trainerId, partyIndex = 1, displayName2) {
+  constructor(data, save, rng, trainerId, partyIndex = 1, displayName2, monRoster) {
     const def = data.trainers[trainerId];
     const roster = def?.parties?.[partyIndex - 1] ?? def?.parties?.[0] ?? [];
-    const lead = roster[0] ?? { species: "RATTATA", level: 2 };
+    const lead = monRoster?.[0] ?? roster[0] ?? { species: "RATTATA", level: 2 };
     super(data, save, rng, lead.species, lead.level);
     this.trainerId = trainerId;
     this.partyIndex = partyIndex;
     this.trainerName = displayName2 ?? def?.name ?? trainerId;
     this.baseMoney = def?.baseMoney ?? 0;
-    this.enemyParty = roster.map((m) => newMon(data, m.species, m.level, rng));
+    this.enemyParty = monRoster ? monRoster.map((m) => ({ ...m })) : roster.map((m) => newMon(data, m.species, m.level, rng));
     this.enemyIndex = 0;
+    if (monRoster?.[0]) {
+      this.enemy = makeBattler(data, this.enemyParty[0], false);
+    }
   }
   musicKind() {
     if (this.trainerId === "OPP_RIVAL3")
@@ -9014,7 +9017,9 @@ much!`]
     }
   },
   COLOSSEUM: {
-    talk: { TEXT_COLOSSEUM_OPPONENT: [["show_text", "_ColosseumOpponentText"]] }
+    talk: {
+      TEXT_COLOSSEUM_OPPONENT: (ow) => ow?.seatedAtTable?.() && ow?.peerSeated?.() ? [["link_battle"]] : [["show_text", "_ColosseumOpponentText"]]
+    }
   },
   PEWTER_POKECENTER: {
     talk: { TEXT_PEWTERPOKECENTER_JIGGLYPUFF: jigglypuffRows() }
@@ -10019,7 +10024,9 @@ var LINK_MSG = {
   offer: 4,
   answer: 5,
   pos: 6,
-  party: 7
+  party: 7,
+  seed: 8,
+  action: 9
 };
 function asciiJson(v) {
   return JSON.stringify(v).replace(/[\u0080-\uffff]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
@@ -10077,6 +10084,8 @@ class LinkSession {
   peerAnswer = null;
   peerPos = null;
   peerParty = null;
+  peerSeed = null;
+  actions = [];
   seat() {
     if (this.peerNonce === null)
       return 0;
@@ -10111,6 +10120,20 @@ class LinkSession {
   }
   sendParty(p) {
     this.transport.send(encodeJson(LINK_MSG.party, p));
+  }
+  sendSeed(half) {
+    this.transport.send(encodeJson(LINK_MSG.seed, { s: half >>> 0 }));
+  }
+  battleSeed(myHalf) {
+    if (this.peerSeed === null)
+      return null;
+    return (myHalf ^ this.peerSeed) >>> 0 || 1;
+  }
+  sendAction(a) {
+    this.transport.send(encodeJson(LINK_MSG.action, a));
+  }
+  takeAction() {
+    return this.actions.shift() ?? null;
   }
   offer(o) {
     this.transport.send(encodeJson(LINK_MSG.offer, o));
@@ -10180,6 +10203,18 @@ class LinkSession {
               otId: Number(p.otId ?? 0)
             };
           }
+          break;
+        }
+        case LINK_MSG.seed: {
+          const v = decodeJson(f);
+          if (v && typeof v.s === "number")
+            this.peerSeed = v.s >>> 0;
+          break;
+        }
+        case LINK_MSG.action: {
+          const v = decodeJson(f);
+          if (v && typeof v === "object")
+            this.actions.push(v);
           break;
         }
         case LINK_MSG.offer: {
@@ -10952,6 +10987,7 @@ var VERBS = {
   link_room,
   link_enter,
   link_trade,
+  link_battle,
   push_screen: noop_object,
   play_sound,
   play_music,
@@ -10987,6 +11023,14 @@ function* link_room(ctx) {
     ctx.lastCheck = ok;
     runner.resume();
   });
+  yield;
+}
+function* link_battle(ctx) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  if (!w.linkBattle)
+    return;
+  w.linkBattle(() => runner.resume());
   yield;
 }
 function* link_trade(ctx) {
@@ -12057,6 +12101,14 @@ any coins!`);
       return false;
     const theirs = LINK_SEATS[s.seat() === 0 ? 1 : 0];
     return Math.round(p.x / 16) === theirs.seat.x && Math.round(p.y / 16) === theirs.seat.y;
+  }
+  linkBattle(done) {
+    const shell = this.shell;
+    if (!shell.linkBattle) {
+      done();
+      return;
+    }
+    shell.linkBattle(done);
   }
   linkTrade(done) {
     const shell = this.shell;
@@ -15722,6 +15774,47 @@ class TradeScreenState {
       prompt: this.side === 0 ? "Choose a POKéMON." : `Which POKéMON
 for theirs?`
     };
+  }
+}
+
+// voxelmon/game/battle/linkbattle.ts
+class LinkBattle extends TrainerBattle {
+  link;
+  wireAction = null;
+  pendingMine = null;
+  lastPeerAction = null;
+  constructor(data, save, rng, peerName, peerParty, link) {
+    super(data, save, rng, "", 1, peerName, peerParty);
+    this.link = link;
+  }
+  waitingForPeer() {
+    return this.pendingMine !== null;
+  }
+  enemyAction() {
+    return this.wireAction ?? { id: "STRUGGLE", pp: 1, struggle: true };
+  }
+  resolveTurn(mine) {
+    if (this.wireAction) {
+      super.resolveTurn(mine);
+      return;
+    }
+    this.pendingMine = mine;
+    this.link.sendAction(mine);
+  }
+  update(input) {
+    const mine = this.pendingMine;
+    if (mine) {
+      const theirs = this.link.takeAction();
+      if (!theirs || typeof theirs.id !== "string")
+        return;
+      this.wireAction = theirs;
+      this.lastPeerAction = theirs;
+      this.pendingMine = null;
+      super.resolveTurn(mine);
+      this.wireAction = null;
+      return;
+    }
+    super.update(input);
   }
 }
 
@@ -20076,6 +20169,47 @@ to level ${mon.level}!`, () => {
         this.overworld.waitLink((s) => s.agreedRoom() !== null, LINK_WAIT_FRAMES, done);
       }
     }));
+  }
+  linkBattle(done) {
+    const ow = this.overworld;
+    const s = ow.link;
+    const t = this.data.text ?? {};
+    const finish = () => done?.();
+    const canceled = () => this.showText(t._LinkCanceledText ?? `The link was
+canceled.`, finish);
+    if (!s || s.state === "closed") {
+      canceled();
+      return;
+    }
+    const wellFormed = (m) => {
+      const o = m;
+      return !!o && typeof o === "object" && typeof o.species === "string" && !!this.data.pokemon?.[o.species] && typeof o.level === "number" && o.level >= 1 && o.level <= 100 && typeof o.hp === "number" && !!o.stats && Array.isArray(o.moves);
+    };
+    const myHalf = Math.floor(Math.random() * 4294967295) >>> 0 || 1;
+    s.sendParty({
+      mons: JSON.parse(JSON.stringify(this.save.party)),
+      otName: String(this.save.player?.name ?? "RED"),
+      otId: Number(this.save.player?.id ?? 0)
+    });
+    s.sendSeed(myHalf);
+    ow.waitLink((x) => x.peerParty !== null && x.peerSeed !== null, LINK_WAIT_FRAMES, (ready) => {
+      const theirParty = s.peerParty;
+      const seed = s.battleSeed(myHalf);
+      if (!ready || !theirParty || seed === null) {
+        canceled();
+        return;
+      }
+      const theirs = theirParty.mons.filter(wellFormed);
+      if (theirs.length === 0 || this.save.party.length === 0) {
+        canceled();
+        return;
+      }
+      const battle = new LinkBattle(this.data, this.save, seededRng(seed), s.peerName, theirs, s);
+      const st = new BattleGameState(this, "", 0, battle);
+      st.loseable = true;
+      st.onDone = () => finish();
+      this.push(st);
+    });
   }
   linkTrade(done) {
     const ow = this.overworld;

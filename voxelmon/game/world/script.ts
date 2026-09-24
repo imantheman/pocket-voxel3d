@@ -1189,6 +1189,7 @@ const VERBS: Record<string, Verb> = {
   link_room,
   link_enter,
   link_trade,
+  link_battle,
   push_screen: noop_object,
   play_sound,
   play_music,
@@ -1248,6 +1249,14 @@ function* link_room(ctx: ScriptContext): Generator<void, void> {
     ctx.lastCheck = ok;
     runner.resume();
   });
+  yield;
+}
+
+function* link_battle(ctx: ScriptContext): Generator<void, void> {
+  const w = ctx.world as unknown as { linkBattle?: (done: () => void) => void };
+  const runner = ctx.runner;
+  if (!w.linkBattle) return;
+  w.linkBattle(() => runner.resume());
   yield;
 }
 

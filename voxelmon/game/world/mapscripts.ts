@@ -2833,7 +2833,14 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     },
   },
   COLOSSEUM: {
-    talk: { TEXT_COLOSSEUM_OPPONENT: [["show_text", "_ColosseumOpponentText"]] as ScriptRow[] },
+    talk: {
+      // The same counter the TRADE CENTER has, with a fight behind it
+      // instead of a trade: sit down opposite them and speak across it.
+      TEXT_COLOSSEUM_OPPONENT: (ow: any): ScriptRow[] =>
+        ow?.seatedAtTable?.() && ow?.peerSeated?.()
+          ? ([["link_battle"]] as ScriptRow[])
+          : ([["show_text", "_ColosseumOpponentText"]] as ScriptRow[]),
+    },
   },
 
   // flavor/pewter_pokecenter.lua: the JIGGLYPUFF that sings at you.

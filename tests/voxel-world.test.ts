@@ -34,6 +34,8 @@ import * as Seafoam from "../voxelmon/game/world/seafoam.ts";
 import {
   LinkSession, LoopbackLink, LINK_ROOM, LINK_SEATS, LINK_VERSION,
 } from "../voxelmon/game/world/link.ts";
+import { LinkBattle } from "../voxelmon/game/battle/linkbattle.ts";
+import { seededRng } from "../voxelmon/game/rng.ts";
 import { PartyState } from "../voxelmon/game/ui/partyscreen.ts";
 import { picPageFor } from "../voxelmon/game/battle/staging.ts";
 import { POST_GAME_HOME, postGameRescue } from "../voxelmon/game/world/halloffame.ts";
@@ -8362,6 +8364,121 @@ describe("the JIGGLYPUFF and the NPCs who pick a line", () => {
       dismissText(game);
     }
     expect(seen.size).toBeGreaterThan(1);
+  });
+});
+
+describe("a COLOSSEUM battle stays in step on both consoles", () => {
+  /** Two LinkBattles wired to each other, mirror images, one shared seed. */
+  function pair(seed: number, redTeam: string[], blueTeam: string[]) {
+    const wire = new LoopbackLink();
+    const red = new LinkSession(wire.a, "RED", 2);
+    const blue = new LinkSession(wire.b, "BLUE", 1);
+    red.open(); blue.open();
+    for (let i = 0; i < 4; i++) { red.poll(); blue.poll(); }
+
+    const mk = (team: string[]) => {
+      const rng = seededRng(99);
+      return team.map((sp, i) => newMon(romData!, sp, 10 + i, rng));
+    };
+    const redParty = mk(redTeam);
+    const blueParty = mk(blueTeam);
+
+    const save = (party: any[]) => ({ party, inventory: {}, flags: {}, money: 0 }) as never;
+    // each console holds its own party and fights the other's
+    const a = new LinkBattle(romData!, save(redParty), seededRng(seed), "BLUE",
+      blueParty as never, red as never);
+    const b = new LinkBattle(romData!, save(blueParty), seededRng(seed), "RED",
+      redParty as never, blue as never);
+    return { a, b, red, blue };
+  }
+
+  /** Both pick a move, both pump until the turn is resolved on both. */
+  function turn(a: LinkBattle, b: LinkBattle, red: any, blue: any,
+                aMove: number, bMove: number) {
+    a.resolveTurn(a.player.curMoves[aMove]! as never);
+    b.resolveTurn(b.player.curMoves[bMove]! as never);
+    for (let i = 0; i < 20; i++) {
+      red.poll(); blue.poll();
+      a.update({} as never);
+      b.update({} as never);
+      if (!a.waitingForPeer() && !b.waitingForPeer()) break;
+    }
+  }
+
+  const snapshot = (x: LinkBattle) => ({
+    mine: { sp: x.player.mon.species, hp: x.player.mon.hp },
+    theirs: { sp: x.enemy.mon.species, hp: x.enemy.mon.hp },
+    turn: (x as unknown as { turnCount: number }).turnCount,
+  });
+
+  test.skipIf(!hasGen)("neither console needs to be told what happened", () => {
+    const { a, b, red, blue } = pair(0xC0FFEE, ["CHARMANDER"], ["SQUIRTLE"]);
+    expect(a.player.mon.species).toBe("CHARMANDER");
+    expect(a.enemy.mon.species).toBe("SQUIRTLE");
+    // and the mirror on the other console
+    expect(b.player.mon.species).toBe("SQUIRTLE");
+    expect(b.enemy.mon.species).toBe("CHARMANDER");
+
+    for (let t = 0; t < 6; t++) {
+      turn(a, b, red, blue, t % 2, (t + 1) % 2);
+      const sa = snapshot(a);
+      const sb = snapshot(b);
+      // what A calls "mine" is what B calls "theirs", and the HP has to
+      // agree to the point -- no damage number ever crossed the wire
+      expect(sa.mine, `turn ${t}`).toEqual(sb.theirs);
+      expect(sa.theirs, `turn ${t}`).toEqual(sb.mine);
+      expect(sa.turn).toBe(sb.turn);
+      if (a.player.mon.hp <= 0 || a.enemy.mon.hp <= 0) break;
+    }
+  });
+
+  test.skipIf(!hasGen)("the enemy's move is the other player's, never an AI's", () => {
+    const { a, b, red, blue } = pair(7, ["PIDGEY"], ["RATTATA"]);
+    // BLUE picks its second move; RED should resolve against exactly that
+    const blueChoice = b.player.curMoves[1]!;
+    a.resolveTurn(a.player.curMoves[0]! as never);
+    b.resolveTurn(blueChoice as never);
+    for (let i = 0; i < 20 && a.waitingForPeer(); i++) {
+      red.poll(); blue.poll();
+      a.update({} as never);
+      b.update({} as never);
+    }
+    expect(a.waitingForPeer()).toBe(false);
+    // what the turn actually resolved against; enemyAction() is cleared
+    // once the turn is over so the next one cannot reuse it
+    expect(a.lastPeerAction?.id).toBe(blueChoice.id);
+  });
+
+  test.skipIf(!hasGen)("a console holds still until the other one has chosen", () => {
+    const { a, b, red, blue } = pair(5, ["PIDGEY"], ["RATTATA"]);
+    const before = snapshot(a);
+    a.resolveTurn(a.player.curMoves[0]! as never);
+    // BLUE has not picked; RED must not resolve anything
+    for (let i = 0; i < 20; i++) { red.poll(); blue.poll(); a.update({} as never); }
+    expect(a.waitingForPeer()).toBe(true);
+    expect(snapshot(a)).toEqual(before);
+    // once they do, it goes through
+    b.resolveTurn(b.player.curMoves[0]! as never);
+    for (let i = 0; i < 20 && a.waitingForPeer(); i++) {
+      red.poll(); blue.poll(); a.update({} as never); b.update({} as never);
+    }
+    expect(a.waitingForPeer()).toBe(false);
+    expect(snapshot(a).turn).toBe(before.turn + 1);
+  });
+
+  test.skipIf(!hasGen)("the seed is both halves, so neither console owns the luck", () => {
+    const wire = new LoopbackLink();
+    const red = new LinkSession(wire.a, "RED", 2);
+    const blue = new LinkSession(wire.b, "BLUE", 1);
+    red.open(); blue.open();
+    for (let i = 0; i < 4; i++) { red.poll(); blue.poll(); }
+    expect(red.battleSeed(0x1234)).toBeNull();   // nothing agreed yet
+    red.sendSeed(0xAAAA);
+    blue.sendSeed(0x5555);
+    for (let i = 0; i < 4; i++) { red.poll(); blue.poll(); }
+    // both arrive at the same number from opposite directions
+    expect(red.battleSeed(0xAAAA)).toBe(blue.battleSeed(0x5555));
+    expect(red.battleSeed(0xAAAA)).toBe((0xAAAA ^ 0x5555) >>> 0);
   });
 });
 

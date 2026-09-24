@@ -72,6 +72,10 @@ export const LINK_MSG = {
   pos: 6,
   /** this side's whole party, so the trade screen can show both. */
   party: 7,
+  /** half of the battle's shared random seed. */
+  seed: 8,
+  /** this side's choice for one turn of a link battle. */
+  action: 9,
 } as const;
 
 /** Where the peer is, in world pixels, as they last told us. */
@@ -203,6 +207,11 @@ export class LinkSession {
   peerPos: LinkPos | null = null;
   /** Their whole party, for the trade screen to show. */
   peerParty: PartyWire | null = null;
+  /** Their half of the battle seed, once sent. */
+  peerSeed: number | null = null;
+  /** Their turn choices, oldest first. A queue and not a slot: a console
+   * that gets a frame ahead must not overwrite the turn not yet played. */
+  private actions: unknown[] = [];
 
   /**
    * Which side of the table this console takes, 0 or 1.
@@ -260,6 +269,32 @@ export class LinkSession {
   /** Show the other side what you have. */
   sendParty(p: PartyWire): void {
     this.transport.send(encodeJson(LINK_MSG.party, p));
+  }
+
+  /**
+   * Half the battle's seed.
+   *
+   * Both halves are XORed, so neither console decides the fight's luck on
+   * its own and neither has to trust the other to have rolled fairly.
+   */
+  sendSeed(half: number): void {
+    this.transport.send(encodeJson(LINK_MSG.seed, { s: half >>> 0 }));
+  }
+
+  /** The seed both sides will run the battle on, or null until they agree. */
+  battleSeed(myHalf: number): number | null {
+    if (this.peerSeed === null) return null;
+    return ((myHalf ^ this.peerSeed) >>> 0) || 1;
+  }
+
+  /** This side's choice for one turn. */
+  sendAction(a: unknown): void {
+    this.transport.send(encodeJson(LINK_MSG.action, a));
+  }
+
+  /** The peer's next unplayed turn, or null while it has not arrived. */
+  takeAction(): unknown | null {
+    return this.actions.shift() ?? null;
   }
 
   /** Propose a swap: my `give` for your `take`. */
@@ -342,6 +377,16 @@ export class LinkSession {
               otId: Number(p.otId ?? 0),
             };
           }
+          break;
+        }
+        case LINK_MSG.seed: {
+          const v = decodeJson(f) as { s?: number } | null;
+          if (v && typeof v.s === "number") this.peerSeed = v.s >>> 0;
+          break;
+        }
+        case LINK_MSG.action: {
+          const v = decodeJson(f);
+          if (v && typeof v === "object") this.actions.push(v);
           break;
         }
         case LINK_MSG.offer: {

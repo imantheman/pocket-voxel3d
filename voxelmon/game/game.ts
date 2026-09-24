@@ -50,6 +50,7 @@ import { CreditsState, HallOfFameState } from "./ui/hofscreen.ts";
 import { DiplomaState } from "./ui/diploma.ts";
 import { TradeScreenState } from "./ui/tradescreen.ts";
 import { TradeAnimState, TRADE_PIC_CELL } from "./ui/tradeanim.ts";
+import { LinkBattle } from "./battle/linkbattle.ts";
 import { TRADE_MINE_ROW, TRADE_THEIRS_ROW } from "./ui/tradescreen.ts";
 import {
   hostTransport, LINK_ROOM, LINK_WAIT_FRAMES, type LinkSession, type LinkTransport,
@@ -2211,6 +2212,66 @@ export class VoxelmonGame implements OverworldShell, SceneView {
           this.overworld.waitLink((s) => s.agreedRoom() !== null, LINK_WAIT_FRAMES, done);
         },
       }),
+    );
+  }
+
+  /**
+   * The machine in the COLOSSEUM (engine/link/cable_club.asm's battle).
+   *
+   * Parties and half a seed each cross, and then nothing else but one
+   * choice per turn: both consoles run the whole fight and arrive at the
+   * same answer rather than one telling the other what happened. See
+   * battle/linkbattle.ts for why that holds.
+   */
+  linkBattle(done?: () => void): void {
+    const ow = this.overworld;
+    const s = ow.link;
+    const t = (this.data as { text?: Record<string, string> }).text ?? {};
+    const finish = () => done?.();
+    const canceled = () =>
+      this.showText(t._LinkCanceledText ?? "The link was\ncanceled.", finish);
+    if (!s || s.state === "closed") { canceled(); return; }
+
+    const wellFormed = (m: unknown): m is PartyMon => {
+      const o = m as PartyMon | null;
+      return (
+        !!o && typeof o === "object" &&
+        typeof o.species === "string" && !!this.data.pokemon?.[o.species] &&
+        typeof o.level === "number" && o.level >= 1 && o.level <= 100 &&
+        typeof o.hp === "number" && !!o.stats && Array.isArray(o.moves)
+      );
+    };
+
+    const myHalf = (Math.floor(Math.random() * 0xffffffff) >>> 0) || 1;
+    s.sendParty({
+      mons: JSON.parse(JSON.stringify(this.save.party)) as Record<string, unknown>[],
+      otName: String(this.save.player?.name ?? "RED"),
+      otId: Number((this.save.player as { id?: number } | undefined)?.id ?? 0),
+    });
+    s.sendSeed(myHalf);
+
+    ow.waitLink(
+      (x) => x.peerParty !== null && x.peerSeed !== null,
+      LINK_WAIT_FRAMES,
+      (ready) => {
+        const theirParty = s.peerParty;
+        const seed = s.battleSeed(myHalf);
+        if (!ready || !theirParty || seed === null) { canceled(); return; }
+        const theirs = theirParty.mons.filter(wellFormed) as unknown as PartyMon[];
+        if (theirs.length === 0 || this.save.party.length === 0) { canceled(); return; }
+
+        const battle = new LinkBattle(
+          this.data, this.save as never, seededRng(seed),
+          s.peerName, theirs, s as never,
+        );
+        const st = new BattleGameState(this, "", 0, battle);
+        // A link battle cannot be lost the way a trainer battle is -- there
+        // is no blackout and no prize, the ROM just sends you back to the
+        // room -- so the outcome is the script's to read, not money's.
+        st.loseable = true;
+        st.onDone = () => finish();
+        this.push(st);
+      },
     );
   }
 

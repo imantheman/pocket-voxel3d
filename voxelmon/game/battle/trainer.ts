@@ -4,6 +4,7 @@
 import { WildBattle, type BattleSave } from "./battle.ts";
 import type { VoxelmonData } from "../data.ts";
 import type { Rng } from "../rng.ts";
+import { makeBattler } from "./battler.ts";
 import { newMon, markSeen, type PartyMon } from "./mon.ts";
 import { TRAINER_INTRO_SFX_GAP } from "../rules/timing.ts";
 
@@ -54,19 +55,33 @@ export class TrainerBattle extends WildBattle {
     trainerId: string,
     partyIndex = 1,
     displayName?: string,
+    /**
+     * Mons to field instead of the trainer table's. A link battle's
+     * opponent is another player's actual party -- their DVs, their
+     * levels, their damage -- and rolling it from a species/level pair
+     * would be a different team with the same names on it.
+     */
+    monRoster?: PartyMon[],
   ) {
     const def = (data as unknown as { trainers: Record<string, TrainerDef> })
       .trainers[trainerId];
     const roster = def?.parties?.[partyIndex - 1] ?? def?.parties?.[0] ?? [];
-    const lead = roster[0] ?? { species: "RATTATA", level: 2 };
+    const lead = monRoster?.[0] ?? roster[0] ?? { species: "RATTATA", level: 2 };
     super(data, save, rng, lead.species, lead.level);
 
     this.trainerId = trainerId;
     this.partyIndex = partyIndex;
     this.trainerName = displayName ?? def?.name ?? trainerId;
     this.baseMoney = def?.baseMoney ?? 0;
-    this.enemyParty = roster.map((m) => newMon(data, m.species, m.level, rng));
+    this.enemyParty = monRoster
+      ? monRoster.map((m) => ({ ...m }))
+      : roster.map((m) => newMon(data, m.species, m.level, rng));
     this.enemyIndex = 0;
+    if (monRoster?.[0]) {
+      // super() built the lead from a species and a level, which re-rolled
+      // it. Put the real mon in its place.
+      this.enemy = makeBattler(data, this.enemyParty[0]!, false);
+    }
   }
 
   /**

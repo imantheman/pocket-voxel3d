@@ -1585,6 +1585,13 @@ export class Overworld implements ScriptWorld {
     );
   }
 
+  /** link_battle -> game.ts linkBattle (the machine in the COLOSSEUM). */
+  linkBattle(done: () => void): void {
+    const shell = this.shell as unknown as { linkBattle?: (d: () => void) => void };
+    if (!shell.linkBattle) { done(); return; }
+    shell.linkBattle(done);
+  }
+
   /** link_trade -> game.ts linkTrade (the table in the TRADE CENTER). */
   linkTrade(done: () => void): void {
     const shell = this.shell as unknown as { linkTrade?: (d: () => void) => void };
