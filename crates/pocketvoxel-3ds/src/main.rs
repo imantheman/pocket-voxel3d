@@ -2219,18 +2219,28 @@ fn strip_from_pak(
 
 /// Reject hidden fragments before they are textured, rather than after.
 ///
-/// The frame is fill-bound, which build 223346 settled: across CELADON the
-/// GPU time tracked how much SCREEN the world covered and not how much of
-/// it there was -- 20 chunks cost 48.6 ms and 24 chunks cost 44.2, while
-/// adding the town's 26 trees (a few hundred verts that cover a great deal
-/// of screen) cost 20 to 45. Geometry diets therefore do nothing here and
-/// one was reverted; what is left to win is the shading of fragments that
-/// something nearer already covered.
+/// OFF, because the hardware answered and the answer was no (a6ce1c5, tried
+/// in build 224111 and reverted in the next). It drew holes in the ground,
+/// so the coarse buffer was not clearing per pass the way enabling it each
+/// eye was supposed to arrange -- AND it was slower even where it drew:
 ///
-/// One word to turn off if it draws wrong -- holes in the ground or
-/// flickering terrain mean the coarse buffer is not clearing, and nothing
-/// else in the frame depends on this.
-const EARLY_DEPTH: bool = true;
+///   224111, early depth ON   16 fps  gpu 65.4 ms  spans 29/87  trees  9/26
+///   223346, early depth OFF  16 fps  gpu 62.4 ms  spans 28/87  trees 17/26
+///
+/// worse, with half the trees on screen. Whatever the PICA spends setting
+/// the coarse buffer up costs more here than the fragments it saved.
+///
+/// The reasoning that led here still holds and is worth keeping, because it
+/// is the obvious thing to try again: the frame IS fill-bound. Build 223346
+/// showed GPU time tracking how much SCREEN the world covered rather than
+/// how much world there was -- 20 chunks cost 48.6 ms against 24 chunks at
+/// 44.2, while the town's 26 trees, a few hundred verts that cover a great
+/// deal of screen, cost 20 to 45. That is why the geometry diet did nothing
+/// and why demoting a tree to its coarse tier does nothing either: a coarse
+/// tree covers the same pixels. Anyone picking this up again needs the
+/// early buffer's clear to actually happen, and should expect to prove it
+/// with the perf line before trusting it.
+const EARLY_DEPTH: bool = false;
 
 /// A map whose trees are instanced (TINS) carries no box tier in its
 /// chunks, so a seam strip built from it would be bare ground where its
