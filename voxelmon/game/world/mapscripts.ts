@@ -179,6 +179,9 @@ function staticMon(
   flag: string,
 ): ScriptRow[] {
   return [
+    // text_asm PlayCry before the line: the bird's (or MEWTWO's) cry is
+    // what you hear first
+    ["play_cry", species],
     ["show_text", text],
     ["check_flag", flag],
     ["jump_if_true", "end"],
@@ -2459,6 +2462,9 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
         ["jump_if_false", "fled"],
         ["set_flag", "EVENT_BEAT_GHOST_MAROWAK"],
         ["show_text", "_PokemonTower6FGhostWasCubonesMotherText"],
+        // PlayCry RESTLESS_SOUL (= MAROWAK) + WaitForSoundToFinish, then
+        // DelayFrames 30 before the calmed line
+        ["play_cry", "MAROWAK"],
         ["wait", 30],
         ["show_text", "_PokemonTower6FSoulWasCalmedText"],
         ["jump", "end"],
@@ -2725,6 +2731,25 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
         ["jump", "end"],
         ["label", "thanks"],
         ["show_text", "Thank you so\nmuch!"],
+      ] as ScriptRow[],
+    },
+  },
+
+  // flavor/pewter_nidoran_house.lua and viridian_nickname_house.lua: the
+  // two pets whose text_asm plays their cry (PlayCry) with the line.
+  PEWTER_NIDORAN_HOUSE: {
+    talk: {
+      TEXT_PEWTERNIDORANHOUSE_NIDORAN: [
+        ["play_cry", "NIDORAN_M"],
+        ["show_text", "_PewterNidoranHouseNidoranText"],
+      ] as ScriptRow[],
+    },
+  },
+  VIRIDIAN_NICKNAME_HOUSE: {
+    talk: {
+      TEXT_VIRIDIANNICKNAMEHOUSE_SPEAROW: [
+        ["play_cry", "SPEAROW"],
+        ["show_text", "_ViridianNicknameHouseSpearowText"],
       ] as ScriptRow[],
     },
   },

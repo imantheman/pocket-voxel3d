@@ -681,6 +681,15 @@ function* use_teleport(ctx: ScriptContext): Generator<void, void> {
   yield* use_escape_move(ctx);
 }
 
+/**
+ * Commands.lua play_cry (PlayCry): the species' cry, sounding over whatever
+ * the next row shows -- pokered's text_asm plays it before the line for the
+ * three birds and MEWTWO, and for the pets that answer with theirs.
+ */
+function* play_cry(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  (ctx.world as unknown as { playCry?: (species: string) => void }).playCry?.(String(args[0]));
+}
+
 function* use_fly(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
   const w = ctx.world as unknown as ScriptWorld & {
     openFlyPicker?: (monName: string, done: () => void) => void;
@@ -1109,6 +1118,7 @@ const VERBS: Record<string, Verb> = {
   use_fly,
   use_dig,
   use_teleport,
+  play_cry,
   use_strength,
   give_pokemon,
   hide_object,

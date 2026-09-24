@@ -8093,6 +8093,46 @@ describe("the PEWTER MUSEUM's ticket desk", () => {
   });
 });
 
+describe("cries in the field", () => {
+  const listen = (game: VoxelmonGame): string[] => {
+    const cries: string[] = [];
+    (game as any).audio.playCry = (s: string) => { cries.push(s); };
+    return cries;
+  };
+
+  test.skipIf(!hasGen)("the birds and MEWTWO cry before their line", () => {
+    for (const [map, key, species] of [
+      ["POWER_PLANT", "TEXT_POWERPLANT_ZAPDOS", "ZAPDOS"],
+      ["SEAFOAM_ISLANDS_B4F", "TEXT_SEAFOAMISLANDSB4F_ARTICUNO", "ARTICUNO"],
+      ["VICTORY_ROAD_2F", "TEXT_VICTORYROAD2F_MOLTRES", "MOLTRES"],
+      ["CERULEAN_CAVE_B1F", "TEXT_CERULEANCAVEB1F_MEWTWO", "MEWTWO"],
+    ] as const) {
+      const game = makeMenuGame();
+      const cries = listen(game);
+      game.save.flags[`EVENT_BEAT_${species}`] = true; // no fight, just the greeting
+      game.overworld.setMap(map, 1, 1, "down");
+      game.overworld.showMapText(key);
+      expect(cries, key).toEqual([species]);
+      expect(game.stackKinds().at(-1)).toBe("textbox");
+      dismissText(game);
+    }
+  });
+
+  test.skipIf(!hasGen)("the pets answer with theirs", () => {
+    const game = makeMenuGame();
+    const cries = listen(game);
+    game.overworld.setMap("PEWTER_NIDORAN_HOUSE", 2, 2, "down");
+    game.overworld.showMapText("TEXT_PEWTERNIDORANHOUSE_NIDORAN");
+    expect(cries).toEqual(["NIDORAN_M"]);
+    expect(topText(game).length).toBeGreaterThan(0);
+    dismissText(game);
+    game.overworld.setMap("VIRIDIAN_NICKNAME_HOUSE", 2, 2, "down");
+    game.overworld.showMapText("TEXT_VIRIDIANNICKNAMEHOUSE_SPEAROW");
+    expect(cries).toEqual(["NIDORAN_M", "SPEAROW"]);
+    dismissText(game);
+  });
+});
+
 describe("Silph Co 7F", () => {
   test.skipIf(!hasGen)("the rival waits at the door, and only there", () => {
     const rows = (ow: any, save: any) =>

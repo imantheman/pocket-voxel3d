@@ -1405,6 +1405,11 @@ export class Overworld implements ScriptWorld {
     return true;
   }
 
+  /** play_cry -> the audio's playCry (Sound.lua:307). */
+  playCry(species: string): void {
+    (this.shell.audio as { playCry?: (s: string) => void }).playCry?.(species);
+  }
+
   /** use_dig / use_teleport -> game.ts escapeWarp (the rope's landing). */
   escapeWarp(): boolean {
     return (this.shell as unknown as { escapeWarp?: () => boolean }).escapeWarp?.() ?? false;

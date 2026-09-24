@@ -7096,6 +7096,7 @@ function mtMoonFossil(itemId, selfName, otherName, gotFlag) {
 }
 function staticMon(map, object, text, species, level, flag) {
   return [
+    ["play_cry", species],
     ["show_text", text],
     ["check_flag", flag],
     ["jump_if_true", "end"],
@@ -8727,6 +8728,7 @@ Here, you can\vhave this TM.`,
         ["jump_if_false", "fled"],
         ["set_flag", "EVENT_BEAT_GHOST_MAROWAK"],
         ["show_text", "_PokemonTower6FGhostWasCubonesMotherText"],
+        ["play_cry", "MAROWAK"],
         ["wait", 30],
         ["show_text", "_PokemonTower6FSoulWasCalmedText"],
         ["jump", "end"],
@@ -8881,6 +8883,22 @@ You should take a\vquick nap!`],
         ["label", "thanks"],
         ["show_text", `Thank you so
 much!`]
+      ]
+    }
+  },
+  PEWTER_NIDORAN_HOUSE: {
+    talk: {
+      TEXT_PEWTERNIDORANHOUSE_NIDORAN: [
+        ["play_cry", "NIDORAN_M"],
+        ["show_text", "_PewterNidoranHouseNidoranText"]
+      ]
+    }
+  },
+  VIRIDIAN_NICKNAME_HOUSE: {
+    talk: {
+      TEXT_VIRIDIANNICKNAMEHOUSE_SPEAROW: [
+        ["play_cry", "SPEAROW"],
+        ["show_text", "_ViridianNicknameHouseSpearowText"]
       ]
     }
   },
@@ -10189,6 +10207,9 @@ function* use_dig(ctx) {
 function* use_teleport(ctx) {
   yield* use_escape_move(ctx);
 }
+function* play_cry(ctx, ...args) {
+  ctx.world.playCry?.(String(args[0]));
+}
 function* use_fly(ctx, ...args) {
   const w = ctx.world;
   const runner = ctx.runner;
@@ -10460,6 +10481,7 @@ var VERBS = {
   use_fly,
   use_dig,
   use_teleport,
+  play_cry,
   use_strength,
   give_pokemon,
   hide_object,
@@ -11447,6 +11469,9 @@ any coins!`);
     this.scriptMove(boulder, dir, 1, () => this.boulderLanded());
     this.scriptMove(p, dir, 1);
     return true;
+  }
+  playCry(species) {
+    this.shell.audio.playCry?.(species);
   }
   escapeWarp() {
     return this.shell.escapeWarp?.() ?? false;
