@@ -10,3 +10,8 @@ dist/
 target/
 node_modules/
 *.log
+
+# Build output: the console binary is produced by `bun tools/voxel.ts 3ds`
+# into target/, and a stale 34 MB copy of it once rode along in a commit.
+*.3dsx
+*.elf

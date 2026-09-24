@@ -15,6 +15,7 @@ import { packageVitaVpk } from "../vendor/pocketjs/tools/vita-package.ts";
 import { missingInputReason, resolveEnv } from "../voxelmon/import/env.ts";
 import { runImport } from "../voxelmon/import/index.ts";
 import { runParity } from "../voxelmon/import/parity.ts";
+import { cook3ds } from "./cook3ds.ts";
 import { resolvePspBuildToolchain } from "./psp-toolchain.ts";
 
 const USAGE = `usage: bun tools/voxel.ts <command>
@@ -37,6 +38,9 @@ commands:
   psp       gen+cook+trace + bundle game.js + cargo psp -> EBOOT.PBP
             (extra args pass to cargo psp, e.g. --release, --features capture)
   run       psp, then launch the EBOOT in PPSSPP
+  3ds       cook one pak per map + share the atlas + build the 3dsx, laid
+            out under dist/voxelmon/sdcard/ ready to drop on an SD card
+            (docs/3DS.md)
   vita      gen+cook+trace + bundle game.js + cargo vita -> a VPK carrying
             the pak (extra args pass to cargo vita, e.g. --release);
             --tier <psp|vita|desktop> names the quality rung the build asks
@@ -508,6 +512,44 @@ async function main(): Promise<number> {
     const bundle = await bundleGuest();
     if (bundle !== 0) return bundle;
     return await buildVpk(cargoArgs, tier);
+  }
+  if (command === "3ds") {
+    // The 3dsx first, because the card image copies it in. `include_bytes!`
+    // pins the guest bundle INTO the binary on this target, so the bundle
+    // has to be written before cargo runs -- unlike the PSP, where it goes
+    // in through the environment.
+    if (!(await Bun.file(`${ROOT}dist/voxelmon/gen/maps.json`).exists())) {
+      const rc = await run(["bun", "tools/voxel.ts", "import"]);
+      if (rc !== 0) return rc;
+    }
+    const bundle = await run([
+      "bun",
+      "build",
+      "voxelmon/game/psp-main.ts",
+      "--outfile",
+      "crates/pocketvoxel-3ds/game.js",
+      "--target=browser",
+    ]);
+    if (bundle !== 0) return bundle;
+    // Stamp the build so a log off the console can be matched to the binary
+    // that wrote it: main.rs prints `boot build=<this>`, and without it every
+    // log in the world says "dev".
+    const stamp = new Date().toISOString().slice(11, 19).replace(/:/g, "");
+    const built = await run(
+      ["cargo", "3ds", "build", "--release", ...process.argv.slice(3)],
+      `${ROOT}crates/pocketvoxel-3ds`,
+      { ...process.env, PV_BUILD_ID: stamp },
+    );
+    if (built !== 0) {
+      console.error(
+        "voxel 3ds: the console build failed. It needs devkitPro with the" +
+          " 3ds-dev package and `cargo install cargo-3ds` — docs/3DS.md §1.",
+      );
+      return built;
+    }
+    const rc = await cook3ds();
+    if (rc === 0) console.log(`  build ${stamp} — a console log's 'boot build=' says this`);
+    return rc;
   }
   if (command === "wav") {
     return await run(["bun", "voxelmon/game/audio/wav.ts", ...process.argv.slice(3)]);

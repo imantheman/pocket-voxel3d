@@ -13,8 +13,8 @@
 The same build runs on a PS Vita at 960x544 — see <a href="#run-it">Run it</a>.</em></p>
 
 A Game Boy creature-RPG, presented as a voxelized 3D diorama on handheld
-hardware — **a real PSP and a real PS Vita, from one cooked pak and one
-guest bundle**. The gameplay is a TypeScript port of the
+hardware — **a real PSP, a real PS Vita and a real Nintendo 3DS**, from one
+guest bundle and one cooker. The gameplay is a TypeScript port of the
 [gen1recomp](https://github.com/bryanthaboi/gen1recomp) Lua engine running in
 an embedded QuickJS guest; the presentation is a Rust reimplementation of the
 [DramaticShape Voxel Mod](https://github.com/DramaticShape/DramaticShapeVoxelMod)
@@ -39,7 +39,17 @@ game-content input is a canonical US Gen-1 ROM you already own. The importer
 verifies its SHA-1 before decoding one byte, everything decoded lands under
 git-ignored `dist/`, and **no ROM-derived byte is ever committed** — no
 cooked pak, no extracted art, no decoded text; the rendering goldens are
-frame *hashes*, never pixels. The screenshots above are hardware captures of
+frame *hashes*, never pixels.
+
+The colour is worth a sentence of its own, because it is the one thing that
+is neither your ROM nor this code. **Red ships no Game Boy Color code at
+all**, so there is no palette in your cartridge to read; the colours come
+from `palettes_gbc.lua` in the gen1recomp checkout, generated from
+[pokered-gbc](https://github.com/Stewmath/pokered-gbc) — its own overworld
+colouring, plus the per-species palettes from Gen 2's `MonsterPalettes`.
+None of it is committed here; it is read from a checkout you cloned, the
+same arrangement as the ROM. Build without it and the maps render in Game
+Boy grayscale, which is what the original looked like. The screenshots above are hardware captures of
 the running device, the same standard as the EBOOT's XMB art.
 
 ## How it works
@@ -99,6 +109,31 @@ bun tools/voxel.ts check    # replay the tapes, assert both rungs' hashes
 ```
 
 ## Run it
+
+### Nintendo 3DS
+
+**[docs/3DS.md](docs/3DS.md) is the full walkthrough** — start there if the
+3DS is what you came for. It assumes nothing and covers the SD card layout.
+
+The short version, once the three inputs in [Quick start](#quick-start) are
+exported:
+
+```sh
+bun tools/voxel.ts import   # your ROM -> dist/voxelmon/gen/
+bun tools/voxel.ts 3ds      # -> dist/voxelmon/sdcard/  (~15 min)
+```
+
+Then copy the `3ds` folder out of `dist/voxelmon/sdcard/` onto the root of
+your SD card and merge, and launch it from the Homebrew Launcher.
+
+The 3DS does not hold one 31 MB pak the way the PSP does — it **streams one
+pak per map** off the card, so its content build is the cooker run 222 times
+plus a pass that hoists the pages they all share into a single 7 MB
+`common.vxat`. That is what the `3ds` command is; it also builds the `.3dsx`
+and lays both out for you. Needs devkitPro with `3ds-dev`,
+`cargo install cargo-3ds`, and `python3` for the atlas hoist.
+
+Stereoscopic 3D is real on this port, not a setting: the slider drives it.
 
 ### PSP
 

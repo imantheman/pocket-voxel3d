@@ -1,0 +1,231 @@
+# Pocket Voxel on the Nintendo 3DS
+
+Build the game from your own ROM and put it on your 3DS.
+
+There is no download. **Nothing playable is distributed** — not by this
+repository and not by anyone. The game's every byte of content is built on
+your machine from a cartridge you already own, and what comes out stays on
+your machine. That is the whole arrangement, and the rest of this page is
+how to do your half of it.
+
+Budget about **twenty minutes**, most of it unattended, and **3 GB of free
+disk** while it runs.
+
+---
+
+## 1. What you need
+
+| | What | Why |
+|---|---|---|
+| **The ROM** | A canonical US **Pokémon Red** `.gb` | The only source of game content. Its SHA-1 is checked before a single byte is decoded. |
+| **Bun** | [bun.sh](https://bun.sh) | Runs the importer and the cooker. |
+| **Rust** | [rustup.rs](https://rustup.rs) | Builds the console binary. |
+| **python3** | usually already there | One step needs it: hoisting the shared atlas. |
+| **devkitPro** | [devkitpro.org](https://devkitpro.org/wiki/Getting_Started), with `3ds-dev` | The 3DS toolchain. |
+| **cargo-3ds** | `cargo install cargo-3ds` | Drives devkitARM from Rust. |
+| **Two reference checkouts** | see below | Tables this project reads but does not contain. |
+
+A 3DS running homebrew, and an SD card with **700 MB free**.
+
+### The two reference checkouts
+
+Pocket Voxel is a *reimplementation*, not a copy, so a handful of tables it
+needs live in the projects it reimplements. Clone both anywhere:
+
+```sh
+git clone https://github.com/bryanthaboi/gen1recomp
+git clone https://github.com/DramaticShape/DramaticShapeVoxelMod
+```
+
+It reads exactly three files out of them:
+
+- `gen1recomp/tools/rom_manifest.json` — the symbol table (3274 name → bank
+  and address entries) that drives the importer. We consume it rather than
+  transcribing a megabyte of addresses.
+- `gen1recomp/data/palettes_gbc.lua` — **the colour**. See
+  [§6](#6-about-the-colour) — worth reading before you build.
+- `DramaticShapeVoxelMod/data/voxel_heights.lua` — which tile is a wall, a
+  roof, a ledge; the building templates. Hand-authored by that mod, nothing
+  in it comes from a ROM.
+
+---
+
+## 2. Get the code
+
+```sh
+git clone --recursive https://github.com/<you>/pocket-voxel
+cd pocket-voxel
+bun install
+```
+
+`--recursive` matters — it pulls the `vendor/pocketjs` submodule. If you
+forgot it: `git submodule update --init`.
+
+---
+
+## 3. Point it at your three inputs
+
+```sh
+export VOXELMON_ROM=/path/to/PokemonRed.gb
+export VOXELMON_G1R=/path/to/gen1recomp
+export VOXELMON_VOXELMOD=/path/to/DramaticShapeVoxelMod
+```
+
+Put those three lines in your shell profile and you never think about them
+again. Every command below reads them; anything missing prints which one
+and stops rather than half-building.
+
+---
+
+## 4. Build it
+
+Two commands.
+
+```sh
+bun tools/voxel.ts import    # your ROM -> dist/voxelmon/gen/   (~10 seconds)
+bun tools/voxel.ts 3ds       # everything else                  (~15 minutes)
+```
+
+The second one does four things you would otherwise do by hand:
+
+1. **Cooks 222 paks, one per map.** The 3DS streams one map's pak off the
+   card at a time instead of holding a single 31 MB pak in RAM the way the
+   PSP does, so its content build is the cooker run once per map.
+2. **Hoists the shared atlas.** 654 of the ~2460 pages are byte-identical in
+   every pak — the sprites, the font, the UI, the battle furniture. They go
+   into one `common.vxat` the console reads once, instead of a megabyte
+   re-read on every map change. 937 MB becomes 617 MB + 7 MB.
+3. **Merges the dataset and writes the map index.** A single-map cook writes
+   a `gamedata.json` pinned to that one map, so the one the game boots from
+   has to be assembled out of all 222.
+4. **Lays out the card image** under `dist/voxelmon/sdcard/`, and builds the
+   `.3dsx` into it.
+
+When it finishes you have:
+
+```
+dist/voxelmon/sdcard/
+└── 3ds/
+    ├── pocketvoxel-3ds.3dsx
+    └── voxelmon/
+        └── paks/
+            ├── AGATHAS_ROOM.vxpak      (222 of these)
+            ├── common.vxat
+            ├── gamedata.json
+            └── index.txt
+```
+
+Once it is done you can delete `dist/voxelmon/paks_orig/` — it is the
+937 MB of pre-sharing intermediates and nothing reads it again.
+
+---
+
+## 5. Put it on the card
+
+**Copy the `3ds` folder from `dist/voxelmon/sdcard/` onto the root of your
+SD card, and say yes when it asks to merge.**
+
+That is the whole install. Your card already has a `/3ds` folder if you run
+homebrew, and merging adds ours beside whatever is in it.
+
+If you would rather place the files yourself, this is where they go:
+
+```
+(SD card root)
+└── 3ds/
+    ├── pocketvoxel-3ds.3dsx       ← the app
+    └── voxelmon/
+        └── paks/                  ← all 225 files, together
+```
+
+Then launch the **Homebrew Launcher** and pick Pocket Voxel from the list.
+
+The game creates two more files itself on first run, in
+`/3ds/voxelmon/`: `save.lua` (your save — back this up, nothing else will)
+and `pvlog.txt` (a log worth having if you report a problem).
+
+### The one rule about copying
+
+**`gamedata.json`, `common.vxat` and all 222 paks are ONE artifact.** Atlas
+page indices are positional, so a `gamedata.json` from one build against
+paks from another renders the wrong art everywhere — wrong sprites, wrong
+tiles, and no error message. Whenever you rebuild, copy the whole `paks`
+folder across. Never a single pak, and never just the `.3dsx`.
+
+Your `save.lua` is not part of that artifact and is safe to keep.
+
+---
+
+## 6. About the colour
+
+Worth understanding before you build, because it is the one part of this
+that is not simply your ROM.
+
+**Pokémon Red has no colour in it.** It ships no Game Boy Color code at
+all — there is no palette table in your cartridge to read. So the greens and
+reds you see on the maps cannot have come from your ROM, and they are not
+something this project's code invents either.
+
+They come from the third file in §1: `gen1recomp/data/palettes_gbc.lua`,
+which that project generates from
+[pokered-gbc](https://github.com/Stewmath/pokered-gbc), a community
+colourisation of the Red disassembly. By its own header it carries the
+overworld tile and roof colouring, and **the per-species palettes from Gen
+2's `MonsterPalettes` table**.
+
+So: the world's colours are that community project's authoring, and the
+creature colours trace back to Gold and Silver.
+
+What this repository does about it is **contain none of it**. Not a byte is
+committed here. It is read at cook time out of a checkout you cloned
+yourself, and the converted form lands in git-ignored `dist/`. Every colour
+in your build is assembled on your machine out of inputs you supplied — the
+same arrangement as the ROM itself.
+
+**If you would rather not have it**, leave `VOXELMON_G1R/data/palettes_gbc.lua`
+out of the picture and the cook degrades on purpose: no palette tail, every
+binding reads NONE, and the maps render in Game Boy grayscale — which is what
+the original actually looked like. You still need the rest of that checkout
+for the symbol table.
+
+---
+
+## 7. When it goes wrong
+
+**`ROM not found` / `SHA-1 mismatch`**
+`VOXELMON_ROM` is unset, or the file is not the canonical US Red. The
+importer refuses rather than decoding something it does not recognise.
+
+**`gen1recomp manifest not found` / `profile not found`**
+`VOXELMON_G1R` or `VOXELMON_VOXELMOD` is unset or points somewhere without
+the file named in §1.
+
+**`the atlas hoist failed`**
+That step is the one thing here that needs `python3` on your PATH.
+
+**`cargo 3ds` not found, or devkitARM errors**
+`cargo install cargo-3ds`, and make sure devkitPro's `3ds-dev` package is
+installed and `DEVKITPRO` / `DEVKITARM` are exported.
+
+**The game boots to a black screen, or the art is visibly wrong**
+Almost always a half-copied card: paks from one build, `gamedata.json` from
+another. Re-copy the whole `paks` folder.
+
+**It boots but cannot save**
+The game tests the card on startup. A write-protected or full SD card is the
+usual cause; `/3ds/voxelmon/pvlog.txt` says which.
+
+---
+
+## 8. What this is
+
+The gameplay is a TypeScript port of the
+[gen1recomp](https://github.com/bryanthaboi/gen1recomp) Lua engine, running
+in an embedded QuickJS guest. The presentation is a Rust reimplementation of
+the [DramaticShape Voxel Mod](https://github.com/DramaticShape/DramaticShapeVoxelMod)
+diorama renderer. Both upstreams are MIT and both serve here as executable
+specifications rather than vendored code — see
+[docs/VOXEL.md §1](VOXEL.md) for the content boundary in full.
+
+The same repository also builds for PSP and PS Vita; the
+[README](../README.md) covers those.

@@ -47,7 +47,16 @@ resolves them from `VOXELMON_G1R` (default `~/code/gen1recomp`) and
   assignment). It is **pokered-gbc-derived, not ROM-derived**: Pokémon Red
   ships no CGB code, so **there is no `CGBBasePalettes` for Red at all** —
   every colour in this file comes from the pokered-gbc source tree, and
-  gen1recomp commits the generated table under its own MIT licence. It
+  gen1recomp commits the generated table under its own MIT licence.
+  Worth being exact about what that tree holds, because "MIT" describes the
+  file and not its lineage: by its own header the pack carries pokered-gbc's
+  overworld tile and roof colouring **and the per-species palettes from Gen
+  2's `MonsterPalettes`**. So the world's colours are that project's
+  authoring and the creature colours trace back to Gold and Silver. Neither
+  is ours to ship, and neither is shipped: the file is read out of a
+  checkout the player cloned, exactly like the ROM. A build with the pack
+  absent is not broken — it renders in Game Boy grayscale, which is what
+  Red actually looked like. It
   converts at cook time exactly like the VoxelMod tables, into git-ignored
   `dist/voxelmon/gen/palettes_gbc.json`.
 - the VoxelMod checkout supplies `data/voxel_heights.lua` (tile class
