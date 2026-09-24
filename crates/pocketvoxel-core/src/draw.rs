@@ -457,14 +457,23 @@ fn base_camera(scene: &Scene) -> Camera {
 /// The player's feet in world px, for the free rigs to stand on: entity slot
 /// 0's position (scene.ts puts the player there), or None before the guest
 /// has placed it, when the follow point is all there is.
+///
+/// The guest's entity position is the player's CELL ORIGIN -- Player.px is
+/// cellX * 16, the cell's near-left corner, and the cook lays a cell over
+/// [cx*16, cx*16+16) -- so the middle of the cell, where a door or a sign
+/// is centred, is half a cell on from it. Standing the eye on the origin
+/// looked out from the cell's edge: facing a door, the door hung to the
+/// right of centre; the follow point, a further half cell on, looked at
+/// the seam with the next cell.
 fn rig_feet(scene: &Scene) -> Option<(f32, f32)> {
     let ent = scene.ents.first()?;
     if !ent.shown {
         return None;
     }
+    let half = CELL_PX as f32 * 0.5;
     Some((
-        ent.x as f32 / spec::Q4 as f32,
-        ent.y as f32 / spec::Q4 as f32,
+        ent.x as f32 / spec::Q4 as f32 + half,
+        ent.y as f32 / spec::Q4 as f32 + half,
     ))
 }
 
@@ -1708,15 +1717,17 @@ mod tests {
     fn free_rigs_stand_on_the_players_feet() {
         use crate::scene::Scene;
         let mut sc = Scene::new();
-        // the player at cell (3,4): the guest emits the card at px (48,64)
-        // and the follow point at (48+16, 64+8), all Q4
+        // the player at cell (3,4): the guest emits the card at the cell
+        // origin px (48,64) and the follow point at (48+16, 64+8), all Q4.
+        // The rig stands in the MIDDLE of the cell, (56,72): facing a door
+        // in the next cell up, it looks at the door's centre, not its edge.
         sc.op(op::ENT, &[0, 0, 0, 48 * 16, 64 * 16, 0, 0], None);
         sc.op(op::CAM, &[(48 + 16) * 16, (64 + 8) * 16], None);
         sc.cam_rig = 1;
         sc.cam_rig_pitch = 0.0;
         let c = camera(&sc);
-        assert!((c.eye.x - 48.0).abs() < 1e-3, "first person off the player: {}", c.eye.x);
-        assert!((c.eye.z - 64.0).abs() < 1e-3, "first person off the player: {}", c.eye.z);
+        assert!((c.eye.x - 56.0).abs() < 1e-3, "first person off the player: {}", c.eye.x);
+        assert!((c.eye.z - 72.0).abs() < 1e-3, "first person off the player: {}", c.eye.z);
         // no player placed yet: the follow point, rather than nowhere
         let mut bare = Scene::new();
         bare.op(op::CAM, &[(48 + 16) * 16, (64 + 8) * 16], None);
@@ -1760,10 +1771,11 @@ mod tests {
         sc.floor.cells[2 * 4 + 1] = 12; // cell (1,2)
         sc.cam_rig = 1;
         sc.cam_rig_pitch = 0.0;
-        // the player at cell (1,2): the first-person eye is 12 px higher
-        sc.op(op::ENT, &[0, 0, 0, (16 + 8) * 16, (32 + 8) * 16, 0, 0], None);
+        // the player at cell (1,2), emitted at the cell origin as the guest
+        // does (Player.px = cellX * 16): the first-person eye is 12 px higher
+        sc.op(op::ENT, &[0, 0, 0, 16 * 16, 32 * 16, 0, 0], None);
         let up = camera(&sc);
-        sc.op(op::ENT, &[0, 0, 0, (48 + 8) * 16, (32 + 8) * 16, 0, 0], None);
+        sc.op(op::ENT, &[0, 0, 0, 48 * 16, 32 * 16, 0, 0], None);
         let flat = camera(&sc);
         assert!((up.eye.y - flat.eye.y - 12.0).abs() < 1e-3, "{} vs {}", up.eye.y, flat.eye.y);
     }
