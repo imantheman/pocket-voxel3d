@@ -18463,7 +18463,10 @@ ${mname}!`);
     });
   }
   pic() {
-    const top = this.stack[this.stack.length - 1];
+    let top = this.stack[this.stack.length - 1];
+    const under = this.stack[this.stack.length - 2];
+    if (top?.kind === "textbox" && under?.kind === "evolution")
+      top = under;
     if (top?.kind === "title") {
       const v = top.view();
       const out = [

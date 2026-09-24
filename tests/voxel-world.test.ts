@@ -32,6 +32,7 @@ import * as Trash from "../voxelmon/game/world/trashcans.ts";
 import * as Hidden from "../voxelmon/game/world/hiddenitems.ts";
 import * as Seafoam from "../voxelmon/game/world/seafoam.ts";
 import { PartyState } from "../voxelmon/game/ui/partyscreen.ts";
+import { picPageFor } from "../voxelmon/game/battle/staging.ts";
 import { POST_GAME_HOME, postGameRescue } from "../voxelmon/game/world/halloffame.ts";
 import { fishingCatch, rodPool } from "../voxelmon/game/world/fishing.ts";
 import { talkScript } from "../voxelmon/game/world/mapscripts.ts";
@@ -7540,6 +7541,27 @@ describe("EEVEE and the stones", () => {
       expect(game.save.inventory[stone]).toBeUndefined();
       expect(game.save.pokedex?.owned?.[form]).toBe(true);
     }
+  });
+
+  test.skipIf(!hasGen)("the new form stays on screen under the congratulations", () => {
+    const game = makeMenuGame();
+    game.save.party.push(newMon(romData!, "EEVEE", 25, game.battleRng));
+    game.overworld.setMap("PALLET_TOWN", 5, 6, "down");
+    game.save.inventory.FIRE_STONE = 1;
+    game.useItem(0, "FIRE_STONE");
+    // run the movie out to its last page: a textbox over the evolution
+    let seen = false;
+    for (let t = 0; t < 6000; t++) {
+      const kinds = game.stackKinds();
+      if (kinds.at(-1) === "textbox" && kinds.at(-2) === "evolution") { seen = true; break; }
+      if (kinds.at(-1) === "naming" || kinds.at(-1) === "moveforget") { tap(game, VOX_BTN.start); continue; }
+      game.tick(0);
+    }
+    expect(seen).toBe(true);
+    expect(topText(game)).toContain("FLAREON");
+    const pics = game.pic() as { page: number }[];
+    expect(pics.length).toBe(1);
+    expect(pics[0]!.page).toBe(picPageFor(romData as never, "FLAREON"));
   });
 
   test.skipIf(!hasGen)("a stone the mon cannot use has no effect and is kept", () => {

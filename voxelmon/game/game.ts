@@ -1062,7 +1062,14 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   }
 
   pic(): unknown {
-    const top = this.stack[this.stack.length - 1] as any;
+    let top = this.stack[this.stack.length - 1] as any;
+    // The evolution movie's last page -- the congratulations, or the
+    // called-off line -- is a textbox pushed OVER the movie, and the settled
+    // form has to stay on screen under it. Falling through to the world's
+    // own pic here painted whatever the overworld last showed into the
+    // movie's cut-out instead.
+    const under = this.stack[this.stack.length - 2] as any;
+    if (top?.kind === "textbox" && under?.kind === "evolution") top = under;
     if (top?.kind === "title") {
       const v = top.view();
       // logo up top; Red on the left with the cycling mon beside him.
