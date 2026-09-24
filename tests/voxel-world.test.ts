@@ -31,6 +31,7 @@ import * as Items from "../voxelmon/game/rules/items.ts";
 import * as Trash from "../voxelmon/game/world/trashcans.ts";
 import * as Hidden from "../voxelmon/game/world/hiddenitems.ts";
 import * as Seafoam from "../voxelmon/game/world/seafoam.ts";
+import { LinkSession, LoopbackLink, LINK_ROOM } from "../voxelmon/game/world/link.ts";
 import { PartyState } from "../voxelmon/game/ui/partyscreen.ts";
 import { picPageFor } from "../voxelmon/game/battle/staging.ts";
 import { POST_GAME_HOME, postGameRescue } from "../voxelmon/game/world/halloffame.ts";
@@ -8359,6 +8360,84 @@ describe("the JIGGLYPUFF and the NPCs who pick a line", () => {
       dismissText(game);
     }
     expect(seen.size).toBeGreaterThan(1);
+  });
+});
+
+describe("the CABLE CLUB link", () => {
+  const pair = () => {
+    const wire = new LoopbackLink();
+    const red = new LinkSession(wire.a, "RED");
+    const blue = new LinkSession(wire.b, "BLUE");
+    return { red, blue };
+  };
+  /** Both sides get a frame, as they would on the overworld's own tick. */
+  const pump = (a: LinkSession, b: LinkSession, n = 4) => {
+    for (let i = 0; i < n; i++) { a.poll(); b.poll(); }
+  };
+
+  test("two sides find each other and learn each other's name", () => {
+    const { red, blue } = pair();
+    expect(red.state).toBe("idle");
+    red.open();
+    blue.open();
+    expect(red.poll()).toBe("waiting");
+    pump(red, blue);
+    expect(red.state).toBe("linked");
+    expect(blue.state).toBe("linked");
+    expect(red.peerName).toBe("BLUE");
+    expect(blue.peerName).toBe("RED");
+  });
+
+  test("the room opens only once both have asked for the same one", () => {
+    const { red, blue } = pair();
+    red.open(); blue.open(); pump(red, blue);
+
+    red.chooseRoom(LINK_ROOM.trade);
+    pump(red, blue);
+    expect(red.state).toBe("linked");          // still waiting on BLUE
+    expect(red.agreedRoom()).toBeNull();
+
+    blue.chooseRoom(LINK_ROOM.colosseum);      // a different room is no deal
+    pump(red, blue);
+    expect(red.agreedRoom()).toBeNull();
+    expect(red.state).toBe("linked");
+
+    blue.chooseRoom(LINK_ROOM.trade);          // agreeing opens it
+    pump(red, blue);
+    expect(red.agreedRoom()).toBe(LINK_ROOM.trade);
+    expect(blue.agreedRoom()).toBe(LINK_ROOM.trade);
+    expect(red.state).toBe("ready");
+    expect(blue.state).toBe("ready");
+  });
+
+  test("one side backing out closes the other", () => {
+    const { red, blue } = pair();
+    red.open(); blue.open(); pump(red, blue);
+    red.cancel();
+    pump(red, blue);
+    expect(red.state).toBe("closed");
+    expect(blue.state).toBe("closed");
+  });
+
+  test("a peer on another build is refused rather than half understood", () => {
+    const wire = new LoopbackLink();
+    const red = new LinkSession(wire.a, "RED");
+    red.open();
+    red.poll();
+    // a hello carrying a version this build does not speak
+    wire.b.send(new Uint8Array([1, 99, 66]));
+    expect(red.poll()).toBe("closed");
+    expect(red.peerName).toBe("");
+  });
+
+  test("a frame kind this build does not know is ignored, not fatal", () => {
+    const wire = new LoopbackLink();
+    const red = new LinkSession(wire.a, "RED");
+    red.open(); red.poll();
+    wire.b.send(new Uint8Array([200, 1, 2, 3]));   // from a later build
+    wire.b.send(new Uint8Array([1, 1, 66, 76, 85, 69]));
+    expect(red.poll()).toBe("linked");
+    expect(red.peerName).toBe("BLUE");
   });
 });
 
