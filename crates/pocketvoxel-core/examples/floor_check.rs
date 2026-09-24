@@ -132,9 +132,47 @@ fn main() {
         out
     };
 
+    // the same sweep, but keeping the LOWEST horizontal surface in a cell
+    let build_min = |kinds: &[usize]| -> std::collections::HashMap<(i32, i32), i16> {
+        let mut out: std::collections::HashMap<(i32, i32), i16> = std::collections::HashMap::new();
+        for c in chunks {
+            for &kind in kinds {
+                let m = c.meshes[kind];
+                let vbase = m.vert_base as usize;
+                for t in 0..(m.index_count as usize / 3) {
+                    let b = m.index_base as usize + t * 3;
+                    let (Some(p0), Some(p1), Some(p2)) =
+                        (vert(vbase, b), vert(vbase, b + 1), vert(vbase, b + 2))
+                    else { break; };
+                    let (ax, ay, az) = ((p1.x - p0.x) as f32, (p1.y - p0.y) as f32, (p1.z - p0.z) as f32);
+                    let (bx, by, bz) = ((p2.x - p0.x) as f32, (p2.y - p0.y) as f32, (p2.z - p0.z) as f32);
+                    let ny = az * bx - ax * bz;
+                    let nx = ay * bz - az * by;
+                    let nz = ax * by - ay * bx;
+                    if ny == 0.0 || ny.abs() < nx.abs() || ny.abs() < nz.abs() { continue; }
+                    let top = p0.y.max(p1.y).max(p2.y);
+                    let (lo_x, hi_x) = (p0.x.min(p1.x).min(p2.x), p0.x.max(p1.x).max(p2.x));
+                    let (lo_z, hi_z) = (p0.z.min(p1.z).min(p2.z), p0.z.max(p1.z).max(p2.z));
+                    let cx0 = ((lo_x as f32 - cell / 2.0) / cell).ceil() as i32;
+                    let cx1 = ((hi_x as f32 - cell / 2.0) / cell).floor() as i32;
+                    let cz0 = ((lo_z as f32 - cell / 2.0) / cell).ceil() as i32;
+                    let cz1 = ((hi_z as f32 - cell / 2.0) / cell).floor() as i32;
+                    for cz in cz0..=cz1 {
+                        for cx in cx0..=cx1 {
+                            out.entry((cx, cz)).and_modify(|e| { if top < *e { *e = top; } }).or_insert(top);
+                        }
+                    }
+                }
+            }
+        }
+        out
+    };
+
     let shipped = build(&[0], true);
     let blind_terrain = build(&[0], false);
     let all_ground = build(&[0, 1, 2], false);
+    let bake_only = build(&[1], false);
+    let bake_keep = build(&[1, 2], false);
 
     let hist = |name: &str, m: &std::collections::HashMap<(i32, i32), i16>| {
         let mut counts: std::collections::BTreeMap<i16, usize> = Default::default();
@@ -147,6 +185,40 @@ fn main() {
     hist("shipped (terrain, up only)", &shipped);
     hist("terrain, winding-blind", &blind_terrain);
     hist("terrain+bake+keep, blind", &all_ground);
+    hist("ground_bake ONLY, blind", &bake_only);
+    hist("bake+keep, blind", &bake_keep);
+    let min_terrain = build_min(&[0, 2]);
+    hist("terrain+keep, MIN", &min_terrain);
+
+    // ground_bake is the baked ground surface itself: the answer key. How
+    // well does each candidate agree with it, cell for cell?
+    let agree = |name: &str, m: &std::collections::HashMap<(i32, i32), i16>| {
+        let (mut same, mut diff, mut only) = (0, 0, 0);
+        for (k, want) in &bake_only {
+            match m.get(k) {
+                Some(got) if got == want => same += 1,
+                Some(_) => diff += 1,
+                None => only += 1,
+            }
+        }
+        // which way, and by how much, for the ones that differ
+        let mut over: std::collections::BTreeMap<i16, usize> = Default::default();
+        let mut under: std::collections::BTreeMap<i16, usize> = Default::default();
+        for (k, want) in &bake_only {
+            if let Some(got) = m.get(k) {
+                if got > want { *over.entry(got - want).or_insert(0) += 1; }
+                else if got < want { *under.entry(want - got).or_insert(0) += 1; }
+            }
+        }
+        println!("  {:<26} agrees {:>5}  differs {:>5}  missing {:>5}", name, same, diff, only);
+        if !over.is_empty() || !under.is_empty() {
+            println!("      too HIGH by {:?}   too LOW by {:?}", over, under);
+        }
+    };
+    println!("against ground_bake (the baked ground itself):");
+    agree("terrain+keep MAX", &all_ground);
+    agree("terrain+keep MIN", &min_terrain);
+    agree("terrain MAX", &blind_terrain);
 
     let mut lifted = 0;
     for (k, v) in &all_ground {

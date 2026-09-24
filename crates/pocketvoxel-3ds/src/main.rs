@@ -2721,6 +2721,24 @@ fn build_map(
 /// is what is kept. VIRIDIAN_FOREST is measurably untouched -- every cell
 /// of it reads 0 under both rules.
 ///
+/// TERRAIN_KEEP as well as TERRAIN, because terrain alone is only half the
+/// ground and the half it leaves out reads as 0 -- which drew the player
+/// sunk into one cell and standing on a wall-top in the next. GROUND_BAKE
+/// is the baked ground surface itself and so the answer key here, and
+/// scoring both against it, cell for cell:
+///
+///                      agrees  differs  missing
+///   MT_MOON_1F  terrain   1982      514      640
+///               +keep     3104       32        0
+///   ROCK_TUNNEL terrain   1928      568      640
+///               +keep     3092       44        0
+///
+/// With both kinds there is no cell the bake covers that this does not,
+/// and what is left over in the caves is 6 px of ledge lip -- always too
+/// high, never too low, so nothing sinks. GROUND_BAKE cannot simply be
+/// read instead: mapplan does not fetch it (it is not in the draw plan),
+/// so at runtime those bytes are not there to read.
+///
 /// A triangle covers every cell its XZ box touches, not only the cells its
 /// corners land in: the cook merges a flat run into one quad, whose inner
 /// cells have no vertex of their own. The box of a rectangle's half is the
@@ -2737,8 +2755,13 @@ fn floor_map_of(pak: &Pak, chunks: &[pak::Chunk], map_min: [f32; 2], map_max: [f
         return FloorMap::default();
     }
     let mut cells = vec![0i16; w * h];
+    const GROUND_KINDS: [u16; 2] = [
+        pocketvoxel_core::spec::mesh_kind::TERRAIN,
+        pocketvoxel_core::spec::mesh_kind::TERRAIN_KEEP,
+    ];
     for chunk in chunks {
-        let m = chunk.meshes[pocketvoxel_core::spec::mesh_kind::TERRAIN as usize];
+        for kind in GROUND_KINDS {
+        let m = chunk.meshes[kind as usize];
         let vbase = m.vert_base as usize;
         for t in 0..(m.index_count as usize / 3) {
             let b = m.index_base as usize + t * 3;
@@ -2773,6 +2796,7 @@ fn floor_map_of(pak: &Pak, chunks: &[pak::Chunk], map_min: [f32; 2], map_max: [f
                     if top > cells[i] { cells[i] = top; }
                 }
             }
+        }
         }
     }
     FloorMap { x0, z0, w: w as u16, h: h as u16, cells }
