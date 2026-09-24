@@ -9967,19 +9967,24 @@ var LINK_ROOM = { trade: 0, colosseum: 1 };
 var LINK_VERSION = 1;
 var MAX_NAME = 10;
 function encodeHello(name) {
-  const n = [...name].slice(0, MAX_NAME);
-  const out = new Uint8Array(2 + n.length);
+  const s = asciiJson([...name].slice(0, MAX_NAME).join(""));
+  const out = new Uint8Array(2 + s.length);
   out[0] = LINK_MSG.hello;
   out[1] = LINK_VERSION;
-  for (let i = 0;i < n.length; i++)
-    out[2 + i] = n[i].charCodeAt(0) & 255;
+  for (let i = 0;i < s.length; i++)
+    out[2 + i] = s.charCodeAt(i) & 255;
   return out;
 }
 function decodeName(frame) {
   let s = "";
   for (let i = 2;i < frame.length; i++)
     s += String.fromCharCode(frame[i]);
-  return s;
+  try {
+    const v = JSON.parse(s);
+    return typeof v === "string" ? v : "";
+  } catch {
+    return s;
+  }
 }
 
 class LinkSession {
@@ -10081,12 +10086,26 @@ function hostTransport() {
     return null;
   const call = (name, arg) => v[name](arg);
   call("linkOpen");
+  const toStr = (f) => {
+    let s = "";
+    for (let i = 0;i < f.length; i++)
+      s += String.fromCharCode(f[i]);
+    return s;
+  };
+  const toBytes = (s) => {
+    const out = new Uint8Array(s.length);
+    for (let i = 0;i < s.length; i++)
+      out[i] = s.charCodeAt(i) & 255;
+    return out;
+  };
   return {
     send: (f) => {
-      call("linkSend", f);
+      call("linkSend", toStr(f));
     },
     recv: () => {
       const r = call("linkRecv");
+      if (typeof r === "string" && r.length > 0)
+        return toBytes(r);
       return r instanceof Uint8Array && r.length > 0 ? r : null;
     },
     connected: () => call("linkState") === 1,

@@ -116,21 +116,32 @@ export type LinkState =
 
 const MAX_NAME = 10;
 
+/**
+ * hello is [kind][version][name as ASCII JSON].
+ *
+ * JSON for the name and not the raw characters, because a name can hold
+ * glyphs the naming screen offers that are not ASCII, and every frame has
+ * to stay ASCII: the 3DS carrier hands frames over as JS strings (the way
+ * saveData already does), and a byte over 127 would not survive the trip.
+ */
 function encodeHello(name: string): Uint8Array {
-  const n = [...name].slice(0, MAX_NAME);
-  const out = new Uint8Array(2 + n.length);
+  const s = asciiJson([...name].slice(0, MAX_NAME).join(""));
+  const out = new Uint8Array(2 + s.length);
   out[0] = LINK_MSG.hello;
   out[1] = LINK_VERSION;
-  // The ROM's name charset is its own; these are the guest's own bytes going
-  // to another copy of the guest, so the code unit's low byte is enough.
-  for (let i = 0; i < n.length; i++) out[2 + i] = n[i]!.charCodeAt(0) & 0xff;
+  for (let i = 0; i < s.length; i++) out[2 + i] = s.charCodeAt(i) & 0xff;
   return out;
 }
 
 function decodeName(frame: Uint8Array): string {
   let s = "";
   for (let i = 2; i < frame.length; i++) s += String.fromCharCode(frame[i]!);
-  return s;
+  try {
+    const v: unknown = JSON.parse(s);
+    return typeof v === "string" ? v : "";
+  } catch {
+    return s; // a build that sent the name raw
+  }
 }
 
 /**
@@ -291,10 +302,23 @@ export function hostTransport(): LinkTransport | null {
   const call = (name: string, arg?: unknown): unknown =>
     (v[name] as (a?: unknown) => unknown)(arg);
   call("linkOpen");
+  // Frames cross as strings, one character per byte. Every frame this
+  // module builds is ASCII on purpose, so the round trip is exact.
+  const toStr = (f: Uint8Array): string => {
+    let s = "";
+    for (let i = 0; i < f.length; i++) s += String.fromCharCode(f[i]!);
+    return s;
+  };
+  const toBytes = (s: string): Uint8Array => {
+    const out = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i) & 0xff;
+    return out;
+  };
   return {
-    send: (f) => { call("linkSend", f); },
+    send: (f) => { call("linkSend", toStr(f)); },
     recv: () => {
       const r = call("linkRecv");
+      if (typeof r === "string" && r.length > 0) return toBytes(r);
       return r instanceof Uint8Array && r.length > 0 ? r : null;
     },
     connected: () => call("linkState") === 1,

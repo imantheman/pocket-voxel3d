@@ -99,6 +99,50 @@ static void add_num(JSContext *ctx, JSValue obj, const char *name, int code, int
         JS_NewCFunctionMagic(ctx, vox_num, name, len, JS_CFUNC_generic_magic, code));
 }
 
+/* The CABLE CLUB radio (uds_link.c). Frames cross as JS strings, the way
+   saveData already does: the guest builds them ASCII on purpose so a string
+   carries them without a byte of it changing meaning. */
+int pv_link_open(void);
+int pv_link_state(void);
+int pv_link_send(const char *buf, int len);
+int pv_link_recv(char *buf, int cap);
+void pv_link_close(void);
+
+static JSValue vox_linkopen(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;(void)c;(void)v;
+    return JS_NewInt32(ctx, pv_link_open());
+}
+
+static JSValue vox_linkstate(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;(void)c;(void)v;
+    return JS_NewInt32(ctx, pv_link_state());
+}
+
+static JSValue vox_linksend(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 1) return JS_NewInt32(ctx, 0);
+    size_t len = 0;
+    const char *s = JS_ToCStringLen(ctx, &len, v[0]);
+    if (!s) return JS_NewInt32(ctx, 0);
+    int ok = pv_link_send(s, (int)len);
+    JS_FreeCString(ctx, s);
+    return JS_NewInt32(ctx, ok);
+}
+
+static JSValue vox_linkrecv(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;(void)c;(void)v;
+    static char frame[1400];
+    int n = pv_link_recv(frame, (int)sizeof(frame));
+    if (n <= 0) return JS_UNDEFINED;
+    return JS_NewStringLen(ctx, frame, (size_t)n);
+}
+
+static JSValue vox_linkclose(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;(void)c;(void)v;
+    pv_link_close();
+    return JS_UNDEFINED;
+}
+
 static JSValue vox_log(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t;
     for (int i = 0; i < c; i++) {
@@ -131,6 +175,11 @@ int qjs_register_voxel(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "saveWrite", JS_NewCFunction(ctx, vox_savewrite, "saveWrite", 1));
     JS_SetPropertyStr(ctx, o, "saveData",  JS_NewCFunction(ctx, vox_savedata,  "saveData", 0));
     JS_SetPropertyStr(ctx, o, "writeTest", JS_NewCFunction(ctx, vox_writetest, "writeTest", 0));
+    JS_SetPropertyStr(ctx, o, "linkOpen",  JS_NewCFunction(ctx, vox_linkopen,  "linkOpen", 0));
+    JS_SetPropertyStr(ctx, o, "linkState", JS_NewCFunction(ctx, vox_linkstate, "linkState", 0));
+    JS_SetPropertyStr(ctx, o, "linkSend",  JS_NewCFunction(ctx, vox_linksend,  "linkSend", 1));
+    JS_SetPropertyStr(ctx, o, "linkRecv",  JS_NewCFunction(ctx, vox_linkrecv,  "linkRecv", 0));
+    JS_SetPropertyStr(ctx, o, "linkClose", JS_NewCFunction(ctx, vox_linkclose, "linkClose", 0));
     JS_SetPropertyStr(ctx, o, "writeErr",  JS_NewCFunction(ctx, vox_writeerr,  "writeErr", 0));
     JS_SetPropertyStr(ctx, o, "uiText",    JS_NewCFunction(ctx, vox_uitext,    "uiText", 3));
 
