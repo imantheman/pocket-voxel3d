@@ -8413,7 +8413,35 @@ Here, you can\vhave this TM.`,
     }
   },
   MUSEUM_1F: {
+    onStep: (ow, save) => {
+      const p = ow?.player;
+      if (save?.flags?.EVENT_BOUGHT_MUSEUM_TICKET)
+        return null;
+      if (p?.cellY !== 4 || p?.cellX !== 9 && p?.cellX !== 10)
+        return null;
+      return museumTicketRows(true);
+    },
     talk: {
+      TEXT_MUSEUM1F_SCIENTIST1: (ow, save) => {
+        if (save?.flags?.EVENT_BOUGHT_MUSEUM_TICKET) {
+          return [["face_player"], ["show_text", "_Museum1FScientist1TakePlentyOfTimeText"]];
+        }
+        const x = ow?.player?.cellX ?? 0;
+        if (x === 12)
+          return [["face_player"], ["show_text", "_Museum1FScientist1GoToOtherSideText"]];
+        if (x > 12) {
+          return [
+            ["face_player"],
+            ["ask", "_Museum1FScientist1DoYouKnowWhatAmberIsText"],
+            ["jump_if_false", "explain"],
+            ["show_text", "_Museum1FScientist1TheresALabSomewhereText"],
+            ["jump", "end"],
+            ["label", "explain"],
+            ["show_text", "_Museum1FScientist1AmberIsFossilizedTreeSapText"]
+          ];
+        }
+        return [["face_player"], ...museumTicketRows(false)];
+      },
       TEXT_MUSEUM1F_SCIENTIST2: (_ow, save) => save?.flags?.EVENT_GOT_OLD_AMBER ? [["face_player"], ["show_text", "_Museum1FScientist2GetTheOldAmberCheckText"]] : [
         ["face_player"],
         ["show_text", "_Museum1FScientist2TakeThisToAPokemonLabText"],
@@ -9120,6 +9148,27 @@ function bikeGate(cells, stop, explain) {
     ];
   };
 }
+function museumTicketRows(walkBack) {
+  const back = walkBack ? [["move_player", "down", 1]] : [];
+  return [
+    ["ask", "_Museum1FScientist1WouldYouLikeToComeInText"],
+    ["jump_if_false", "no"],
+    ["check_money", MUSEUM_TICKET],
+    ["jump_if_false", "poor"],
+    ["take_money", MUSEUM_TICKET],
+    ["set_flag", "EVENT_BOUGHT_MUSEUM_TICKET"],
+    ["show_text", "_Museum1FScientist1ThankYouText"],
+    ["jump", "end"],
+    ["label", "no"],
+    ["show_text", "_Museum1FScientist1ComeAgainText"],
+    ...back,
+    ["jump", "end"],
+    ["label", "poor"],
+    ["show_text", "_Museum1FScientist1DontHaveEnoughMoneyText"],
+    ...back
+  ];
+}
+var MUSEUM_TICKET = 50;
 function rodGiverRows(ask, received, after, refused, rod, flag) {
   return [
     ["face_player"],

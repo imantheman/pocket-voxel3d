@@ -2019,7 +2019,39 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
   // the scientist in the back room hands over the OLD AMBER, and the amber
   // on display goes with it.
   MUSEUM_1F: {
+    // Museum1FDefaultScript: crossing the rope at (9,4)/(10,4) without a
+    // ticket calls the clerk over, and a no (or an empty wallet) is walked
+    // back off it.
+    onStep: (ow: any, save: any) => {
+      const p = ow?.player;
+      if (save?.flags?.EVENT_BOUGHT_MUSEUM_TICKET) return null;
+      if (p?.cellY !== 4 || (p?.cellX !== 9 && p?.cellX !== 10)) return null;
+      return museumTicketRows(true);
+    },
     talk: {
+      // Museum1FScientist1Text: which side of the desk you speak from is
+      // the whole conversation. West of him (x < 12) he sells the ticket;
+      // level with him you are asked round; past him you sneaked in and get
+      // the AMBER quiz. A ticket in hand is "take plenty of time" anywhere.
+      TEXT_MUSEUM1F_SCIENTIST1: (ow: any, save: any): ScriptRow[] => {
+        if (save?.flags?.EVENT_BOUGHT_MUSEUM_TICKET) {
+          return [["face_player"], ["show_text", "_Museum1FScientist1TakePlentyOfTimeText"]];
+        }
+        const x = ow?.player?.cellX ?? 0;
+        if (x === 12) return [["face_player"], ["show_text", "_Museum1FScientist1GoToOtherSideText"]];
+        if (x > 12) {
+          return [
+            ["face_player"],
+            ["ask", "_Museum1FScientist1DoYouKnowWhatAmberIsText"],
+            ["jump_if_false", "explain"],
+            ["show_text", "_Museum1FScientist1TheresALabSomewhereText"],
+            ["jump", "end"],
+            ["label", "explain"],
+            ["show_text", "_Museum1FScientist1AmberIsFossilizedTreeSapText"],
+          ];
+        }
+        return [["face_player"], ...museumTicketRows(false)];
+      },
       TEXT_MUSEUM1F_SCIENTIST2: (_ow: any, save: any): ScriptRow[] =>
         save?.flags?.EVENT_GOT_OLD_AMBER
           ? [["face_player"], ["show_text", "_Museum1FScientist2GetTheOldAmberCheckText"]]
@@ -3083,6 +3115,35 @@ function bikeGate(
     ] as ScriptRow[];
   };
 }
+
+/**
+ * The PEWTER MUSEUM's ticket desk (scripts/Museum1F.asm, gen1recomp story2
+ * .lua museumClerk): ¥50, yes or no, with the wallet checked after the yes.
+ * From the rope trigger a refusal walks the player back down off it.
+ */
+function museumTicketRows(walkBack: boolean): ScriptRow[] {
+  const back: ScriptRow[] = walkBack ? [["move_player", "down", 1]] : [];
+  return [
+    ["ask", "_Museum1FScientist1WouldYouLikeToComeInText"],
+    ["jump_if_false", "no"],
+    ["check_money", MUSEUM_TICKET],
+    ["jump_if_false", "poor"],
+    ["take_money", MUSEUM_TICKET],
+    ["set_flag", "EVENT_BOUGHT_MUSEUM_TICKET"],
+    ["show_text", "_Museum1FScientist1ThankYouText"],
+    ["jump", "end"],
+    ["label", "no"],
+    ["show_text", "_Museum1FScientist1ComeAgainText"],
+    ...back,
+    ["jump", "end"],
+    ["label", "poor"],
+    ["show_text", "_Museum1FScientist1DontHaveEnoughMoneyText"],
+    ...back,
+  ] as ScriptRow[];
+}
+
+/** "It's ¥50 for a child's ticket." */
+const MUSEUM_TICKET = 50;
 
 /**
  * A fishing guru (VermilionOldRodHouse.asm and its two siblings). The rod is

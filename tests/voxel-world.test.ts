@@ -8022,6 +8022,77 @@ describe("the intro's name presets", () => {
   });
 });
 
+describe("the PEWTER MUSEUM's ticket desk", () => {
+  /** Type the line out, then answer the YES/NO under it. */
+  function answerChoice(game: VoxelmonGame, yes: boolean): boolean {
+    for (let i = 0; i < 400; i++) {
+      if (game.stackKinds().at(-1) === "choice") {
+        game.tick(0);
+        if (!yes) tap(game, VOX_BTN.down);
+        tap(game, VOX_BTN.a);
+        for (let k = 0; k < 20; k++) game.tick(0);
+        return true;
+      }
+      game.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    return false;
+  }
+  const ropeGame = (money: number): VoxelmonGame => {
+    const game = makeMenuGame();
+    game.save.money = money;
+    game.overworld.setMap("MUSEUM_1F", 9, 5, "up");
+    game.overworld.setMap("MUSEUM_1F", 9, 4, "up");
+    game.overworld.onStepComplete();
+    return game;
+  };
+
+  test.skipIf(!hasGen)("the rope asks for ¥50, and a yes buys the ticket", () => {
+    const game = ropeGame(3000);
+    expect(answerChoice(game, true)).toBe(true);
+    expect(topText(game)).toContain("Thank you");
+    dismissText(game);
+    expect(game.save.money).toBe(2950);
+    expect(game.save.flags.EVENT_BOUGHT_MUSEUM_TICKET).toBe(true);
+    for (let i = 0; i < 60; i++) game.tick(0);
+    expect([game.overworld.player.cellX, game.overworld.player.cellY]).toEqual([9, 4]);
+    // with a ticket the desk only wishes you a good look
+    game.overworld.showMapText("TEXT_MUSEUM1F_SCIENTIST1");
+    expect(topText(game)).toContain("plenty");
+  });
+
+  test.skipIf(!hasGen)("a no, or an empty wallet, is walked back off the rope", () => {
+    const no = ropeGame(3000);
+    expect(answerChoice(no, false)).toBe(true);
+    expect(topText(no)).toContain("Come again");
+    dismissText(no);
+    for (let i = 0; i < 120; i++) no.tick(0);
+    expect([no.overworld.player.cellX, no.overworld.player.cellY]).toEqual([9, 5]);
+    expect(no.save.money).toBe(3000);
+
+    const poor = ropeGame(10);
+    expect(answerChoice(poor, true)).toBe(true);
+    expect(topText(poor)).toContain("enough money");
+    dismissText(poor);
+    for (let i = 0; i < 120; i++) poor.tick(0);
+    expect(poor.overworld.player.cellY).toBe(5);
+    expect(poor.save.money).toBe(10);
+    expect(poor.save.flags.EVENT_BOUGHT_MUSEUM_TICKET ?? false).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("spoken to from the wrong sides he sends you round, or quizzes you on AMBER", () => {
+    const game = makeMenuGame();
+    game.overworld.setMap("MUSEUM_1F", 12, 5, "up");
+    game.overworld.showMapText("TEXT_MUSEUM1F_SCIENTIST1");
+    expect(topText(game)).toContain("other side");
+    dismissText(game);
+    game.overworld.setMap("MUSEUM_1F", 14, 4, "left");
+    game.overworld.showMapText("TEXT_MUSEUM1F_SCIENTIST1");
+    expect(answerChoice(game, false)).toBe(true);
+    expect(topText(game)).toContain("tree sap");
+    dismissText(game);
+  });
+});
+
 describe("Silph Co 7F", () => {
   test.skipIf(!hasGen)("the rival waits at the door, and only there", () => {
     const rows = (ow: any, save: any) =>
