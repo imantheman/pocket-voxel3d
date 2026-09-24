@@ -2814,8 +2814,26 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
   // The CABLE CLUB's two rooms. Their one object each is the other player,
   // and talking to them is the table: the TRADE CENTER opens the trade, the
   // COLOSSEUM will open the battle.
+  // The one object in each room is the OTHER PLAYER's body, moved by their
+  // console (overworld.ts syncPeerBody). Talking to them says what the ROM
+  // has them say, which is "!" -- the trade is opened at the machine, by
+  // sitting down at it, not by walking up to a person and asking.
   TRADE_CENTER: {
-    talk: { TEXT_TRADECENTER_OPPONENT: [["link_trade"]] as ScriptRow[] },
+    talk: {
+      // The machine between the two of you is a COUNTER in this tileset, so
+      // pressing A into it looks straight across it at the other player --
+      // which is the ROM's own trade machine, and means the trade opens by
+      // sitting down at it and speaking across, not by walking up to
+      // somebody anywhere in the room. Until you are both in your seats
+      // they are just a person, and say what the ROM has them say.
+      TEXT_TRADECENTER_OPPONENT: (ow: any): ScriptRow[] =>
+        ow?.seatedAtTable?.() && ow?.peerSeated?.()
+          ? ([["link_trade"]] as ScriptRow[])
+          : ([["show_text", "_TradeCenterOpponentText"]] as ScriptRow[]),
+    },
+  },
+  COLOSSEUM: {
+    talk: { TEXT_COLOSSEUM_OPPONENT: [["show_text", "_ColosseumOpponentText"]] as ScriptRow[] },
   },
 
   // flavor/pewter_pokecenter.lua: the JIGGLYPUFF that sings at you.

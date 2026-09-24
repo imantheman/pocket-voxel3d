@@ -31,7 +31,9 @@ import * as Items from "../voxelmon/game/rules/items.ts";
 import * as Trash from "../voxelmon/game/world/trashcans.ts";
 import * as Hidden from "../voxelmon/game/world/hiddenitems.ts";
 import * as Seafoam from "../voxelmon/game/world/seafoam.ts";
-import { LinkSession, LoopbackLink, LINK_ROOM } from "../voxelmon/game/world/link.ts";
+import {
+  LinkSession, LoopbackLink, LINK_ROOM, LINK_SEATS, LINK_VERSION,
+} from "../voxelmon/game/world/link.ts";
 import { PartyState } from "../voxelmon/game/ui/partyscreen.ts";
 import { picPageFor } from "../voxelmon/game/battle/staging.ts";
 import { POST_GAME_HOME, postGameRescue } from "../voxelmon/game/world/halloffame.ts";
@@ -8363,6 +8365,53 @@ describe("the JIGGLYPUFF and the NPCs who pick a line", () => {
   });
 });
 
+describe("the TRADE CENTER room", () => {
+  test("the two consoles take opposite seats, and they face each other", () => {
+    const wire = new LoopbackLink();
+    const red = new LinkSession(wire.a, "RED", 2);
+    const blue = new LinkSession(wire.b, "BLUE", 1);
+    red.open(); blue.open();
+    for (let i = 0; i < 4; i++) { red.poll(); blue.poll(); }
+    // the bigger nonce takes seat 0, and the other side agrees
+    expect(red.seat()).toBe(0);
+    expect(blue.seat()).toBe(1);
+    const a = LINK_SEATS[0]!;
+    const b = LINK_SEATS[1]!;
+    expect(a.seat).not.toEqual(b.seat);
+    // both seats sit against the machine, looking into it
+    expect(a.facing).toBe("down");
+    expect(b.facing).toBe("up");
+    expect(a.seat.y + 1).toBe(4);   // the table row
+    expect(b.seat.y - 1).toBe(4);
+  });
+
+  test("a tie on the nonce still puts them on different sides", () => {
+    const wire = new LoopbackLink();
+    const red = new LinkSession(wire.a, "RED", 7);
+    const blue = new LinkSession(wire.b, "BLUE", 7);
+    red.open(); blue.open();
+    for (let i = 0; i < 4; i++) { red.poll(); blue.poll(); }
+    expect(red.seat()).not.toBe(blue.seat());
+  });
+
+  test("where the peer says they are is where their body goes", () => {
+    const wire = new LoopbackLink();
+    const red = new LinkSession(wire.a, "RED", 2);
+    const blue = new LinkSession(wire.b, "BLUE", 1);
+    red.open(); blue.open();
+    for (let i = 0; i < 4; i++) { red.poll(); blue.poll(); }
+    blue.sendPos(72, 40, "left");
+    red.poll();
+    expect(red.peerPos).toEqual({ x: 72, y: 40, facing: "left" });
+    // standing still says nothing twice
+    const before = (wire.a as unknown as { recv(): unknown }).recv;
+    void before;
+    blue.sendPos(72, 40, "left");
+    red.poll();
+    expect(red.peerPos).toEqual({ x: 72, y: 40, facing: "left" });
+  });
+});
+
 describe("the TRADE CENTER table", () => {
   const ROOMS = ["TRADE_CENTER", "COLOSSEUM"];
 
@@ -8386,10 +8435,17 @@ describe("the TRADE CENTER table", () => {
     b.linkCarrier = wire.b;
     // straight into the room with an open session, the desk already proven
     for (const g of [a, b]) {
-      g.overworld.setMap("TRADE_CENTER", 2, 4, "up");
+      g.overworld.setMap("TRADE_CENTER", 4, 2, "down");
       expect(g.overworld.openLink()).toBe(true);
     }
     for (let i = 0; i < 8; i++) { a.overworld.link!.poll(); b.overworld.link!.poll(); }
+    // each sits down on its OWN side of the machine, whichever the session
+    // gave it, and tells the other console about it
+    for (const g of [a, b]) {
+      const seat = LINK_SEATS[g.overworld.link!.seat()]!;
+      g.overworld.setMap("TRADE_CENTER", seat.seat.x, seat.seat.y, seat.facing as never);
+    }
+    for (let i = 0; i < 8; i++) { a.tick(0); b.tick(0); }
     return { a, b };
   }
 
@@ -8403,8 +8459,8 @@ describe("the TRADE CENTER table", () => {
     b.save.party.push(newMon(romData!, "RATTATA", 14, b.battleRng));
     expect(a.overworld.link?.peerName).toBe("BLUE");
 
-    a.overworld.showMapText("TEXT_TRADECENTER_OPPONENT");
-    b.overworld.showMapText("TEXT_TRADECENTER_OPPONENT");
+    a.overworld.interact();
+    b.overworld.interact();
 
     // A through both sides: pick the only mon, then say yes to the swap
     for (let i = 0; i < 3000; i++) {
@@ -8430,8 +8486,8 @@ describe("the TRADE CENTER table", () => {
     a.save.party.push(newMon(romData!, "PIDGEY", 12, a.battleRng));
     b.save.party.push(newMon(romData!, "MACHOKE", 30, b.battleRng));
 
-    a.overworld.showMapText("TEXT_TRADECENTER_OPPONENT");
-    b.overworld.showMapText("TEXT_TRADECENTER_OPPONENT");
+    a.overworld.interact();
+    b.overworld.interact();
     for (let i = 0; i < 6000; i++) {
       if (a.save.party[0]!.species === "MACHAMP") break;
       if (a.stackKinds().at(-1) === "naming" || a.stackKinds().at(-1) === "moveforget") {
@@ -8448,7 +8504,7 @@ describe("the TRADE CENTER table", () => {
     a.save.party.push(newMon(romData!, "PIDGEY", 12, a.battleRng));
     b.save.party.push(newMon(romData!, "RATTATA", 14, b.battleRng));
     // BLUE offers something that is not a Pokemon
-    a.overworld.showMapText("TEXT_TRADECENTER_OPPONENT");
+    a.overworld.interact();
     b.overworld.link!.offer({ mon: { species: "NOT_A_MON", level: 5 } as never,
       otName: "BLUE", otId: 1 });
     for (let i = 0; i < 1200; i++) {
@@ -8634,7 +8690,14 @@ describe("the CABLE CLUB link", () => {
     const red = new LinkSession(wire.a, "RED");
     red.open(); red.poll();
     wire.b.send(new Uint8Array([200, 1, 2, 3]));   // from a later build
-    wire.b.send(new Uint8Array([1, 1, 66, 76, 85, 69]));
+    // a hello this build does understand, built by hand: kind, version,
+    // then the name as ASCII JSON
+    const hello = JSON.stringify({ n: "BLUE", k: 1 });
+    const frame = new Uint8Array(2 + hello.length);
+    frame[0] = 1;
+    frame[1] = LINK_VERSION;
+    for (let i = 0; i < hello.length; i++) frame[2 + i] = hello.charCodeAt(i);
+    wire.b.send(frame);
     expect(red.poll()).toBe("linked");
     expect(red.peerName).toBe("BLUE");
   });

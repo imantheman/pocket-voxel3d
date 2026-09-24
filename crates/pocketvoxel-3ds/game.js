@@ -8938,7 +8938,12 @@ much!`]
     }
   },
   TRADE_CENTER: {
-    talk: { TEXT_TRADECENTER_OPPONENT: [["link_trade"]] }
+    talk: {
+      TEXT_TRADECENTER_OPPONENT: (ow) => ow?.seatedAtTable?.() && ow?.peerSeated?.() ? [["link_trade"]] : [["show_text", "_TradeCenterOpponentText"]]
+    }
+  },
+  COLOSSEUM: {
+    talk: { TEXT_COLOSSEUM_OPPONENT: [["show_text", "_ColosseumOpponentText"]] }
   },
   PEWTER_POKECENTER: {
     talk: { TEXT_PEWTERPOKECENTER_JIGGLYPUFF: jigglypuffRows() }
@@ -9930,9 +9935,10 @@ function cableClubScript(textConst) {
 }
 
 // voxelmon/game/world/link.ts
-var LINK_ROOM_ENTRY = [
-  { map: "TRADE_CENTER", x: 2, y: 4, facing: "up" },
-  { map: "COLOSSEUM", x: 2, y: 4, facing: "up" }
+var LINK_ROOM_MAP = ["TRADE_CENTER", "COLOSSEUM"];
+var LINK_SEATS = [
+  { enter: { x: 4, y: 2 }, seat: { x: 4, y: 3 }, facing: "down" },
+  { enter: { x: 4, y: 6 }, seat: { x: 4, y: 5 }, facing: "up" }
 ];
 var LINK_WAIT_FRAMES = 60 * 20;
 var LINK_MSG = {
@@ -9940,7 +9946,8 @@ var LINK_MSG = {
   room: 2,
   cancel: 3,
   offer: 4,
-  answer: 5
+  answer: 5,
+  pos: 6
 };
 function asciiJson(v) {
   return JSON.stringify(v).replace(/[\u0080-\uffff]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
@@ -9964,10 +9971,10 @@ function decodeJson(frame) {
   }
 }
 var LINK_ROOM = { trade: 0, colosseum: 1 };
-var LINK_VERSION = 1;
+var LINK_VERSION = 2;
 var MAX_NAME = 10;
-function encodeHello(name) {
-  const s = asciiJson([...name].slice(0, MAX_NAME).join(""));
+function encodeHello(name, nonce) {
+  const s = asciiJson({ n: [...name].slice(0, MAX_NAME).join(""), k: nonce });
   const out = new Uint8Array(2 + s.length);
   out[0] = LINK_MSG.hello;
   out[1] = LINK_VERSION;
@@ -9975,15 +9982,15 @@ function encodeHello(name) {
     out[2 + i] = s.charCodeAt(i) & 255;
   return out;
 }
-function decodeName(frame) {
+function decodeHello(frame) {
   let s = "";
   for (let i = 2;i < frame.length; i++)
     s += String.fromCharCode(frame[i]);
   try {
     const v = JSON.parse(s);
-    return typeof v === "string" ? v : "";
+    return { name: typeof v?.n === "string" ? v.n : "", nonce: Number(v?.k ?? 0) };
   } catch {
-    return s;
+    return { name: s, nonce: 0 };
   }
 }
 
@@ -9996,10 +10003,22 @@ class LinkSession {
   peerRoom = null;
   peerOffer = null;
   peerAnswer = null;
+  peerPos = null;
+  seat() {
+    if (this.peerNonce === null)
+      return 0;
+    if (this.myNonce !== this.peerNonce)
+      return this.myNonce > this.peerNonce ? 0 : 1;
+    return this.myName >= this.peerName ? 0 : 1;
+  }
   helloSent = false;
-  constructor(transport, myName) {
+  myNonce;
+  peerNonce = null;
+  lastPos = "";
+  constructor(transport, myName, nonce) {
     this.transport = transport;
     this.myName = myName;
+    this.myNonce = nonce ?? Math.floor(Math.random() * 2147483647);
   }
   open() {
     if (this.state === "idle")
@@ -10009,6 +10028,13 @@ class LinkSession {
     this.myRoom = room;
     const f = new Uint8Array([LINK_MSG.room, room]);
     this.transport.send(f);
+  }
+  sendPos(x, y, facing) {
+    const key = `${x},${y},${facing}`;
+    if (key === this.lastPos)
+      return;
+    this.lastPos = key;
+    this.transport.send(encodeJson(LINK_MSG.pos, { x, y, f: facing }));
   }
   offer(o) {
     this.transport.send(encodeJson(LINK_MSG.offer, o));
@@ -10038,7 +10064,7 @@ class LinkSession {
     if (this.state === "idle" || this.state === "closed")
       return this.state;
     if (!this.helloSent && this.transport.connected()) {
-      this.transport.send(encodeHello(this.myName));
+      this.transport.send(encodeHello(this.myName, this.myNonce));
       this.helloSent = true;
     }
     for (;; ) {
@@ -10051,10 +10077,21 @@ class LinkSession {
             this.close();
             return this.state;
           }
-          this.peerName = decodeName(f);
+          {
+            const h = decodeHello(f);
+            this.peerName = h.name;
+            this.peerNonce = h.nonce;
+          }
           if (this.state === "waiting")
             this.state = "linked";
           break;
+        case LINK_MSG.pos: {
+          const p = decodeJson(f);
+          if (p && typeof p.x === "number" && typeof p.y === "number") {
+            this.peerPos = { x: p.x, y: p.y, facing: typeof p.f === "string" ? p.f : "down" };
+          }
+          break;
+        }
         case LINK_MSG.room:
           this.peerRoom = f[1] ?? 0;
           break;
@@ -11314,6 +11351,11 @@ class Overworld {
     if (this.bumpCooldown > 0)
       this.bumpCooldown -= 1;
     this.pollLink();
+    if (this.link && this.inLinkRoom()) {
+      const p = this.player;
+      this.link.sendPos(Math.round(p.px), Math.round(p.py), p.facing);
+      this.syncPeerBody();
+    }
     this.runner.update();
     if (this.emote) {
       this.emote.frames -= 1;
@@ -11888,8 +11930,44 @@ any coins!`);
   }
   enterLinkRoom(done) {
     const room = this.link?.agreedRoom() ?? 0;
-    const e = LINK_ROOM_ENTRY[room] ?? LINK_ROOM_ENTRY[0];
-    this.startWarpTo(e.map, e.x, e.y, e.facing, done);
+    const seat = LINK_SEATS[this.link?.seat() ?? 0];
+    const map = LINK_ROOM_MAP[room] ?? LINK_ROOM_MAP[0];
+    this.startWarpTo(map, seat.enter.x, seat.enter.y, seat.facing, done);
+  }
+  inLinkRoom() {
+    return LINK_ROOM_MAP.includes(this.map?.id ?? "");
+  }
+  syncPeerBody() {
+    const s = this.link;
+    if (!s)
+      return;
+    const p = s.peerPos;
+    if (!p)
+      return;
+    const body = this.npcs.find((n) => String(n.def.name ?? "").endsWith("_OPPONENT"));
+    if (!body)
+      return;
+    body.px = p.x;
+    body.py = p.y;
+    body.cellX = Math.round(p.x / 16);
+    body.cellY = Math.round(p.y / 16);
+    body.facing = p.facing;
+  }
+  seatedAtTable() {
+    const s = this.link;
+    if (!s || !this.inLinkRoom())
+      return false;
+    const mine = LINK_SEATS[s.seat()];
+    const p = this.player;
+    return p.cellX === mine.seat.x && p.cellY === mine.seat.y;
+  }
+  peerSeated() {
+    const s = this.link;
+    const p = s?.peerPos;
+    if (!s || !p)
+      return false;
+    const theirs = LINK_SEATS[s.seat() === 0 ? 1 : 0];
+    return Math.round(p.x / 16) === theirs.seat.x && Math.round(p.y / 16) === theirs.seat.y;
   }
   linkTrade(done) {
     const shell = this.shell;

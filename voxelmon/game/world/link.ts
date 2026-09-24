@@ -31,9 +31,26 @@ export interface LinkTransport {
  * The opponent object the maps already carry sits at cell (2,2), so the
  * player goes in below it, facing across.
  */
-export const LINK_ROOM_ENTRY = [
-  { map: "TRADE_CENTER", x: 2, y: 4, facing: "up" },
-  { map: "COLOSSEUM", x: 2, y: 4, facing: "up" },
+export const LINK_ROOM_MAP = ["TRADE_CENTER", "COLOSSEUM"] as const;
+
+/**
+ * Where the two of you stand.
+ *
+ * Both rooms are the same 10x8 shell with the link machine walled off at
+ * (4,4)-(5,4), which is the table: the two seats are the cells either side
+ * of it, each facing into it, so the players face each other across the
+ * machine the way they do in the ROM. You walk in a step behind your seat
+ * rather than onto it, because walking up to the table is the part that
+ * makes it a room and not a menu.
+ */
+export const LINK_TABLE = [
+  { x: 4, y: 4 },
+  { x: 5, y: 4 },
+] as const;
+
+export const LINK_SEATS = [
+  { enter: { x: 4, y: 2 }, seat: { x: 4, y: 3 }, facing: "down" },
+  { enter: { x: 4, y: 6 }, seat: { x: 4, y: 5 }, facing: "up" },
 ] as const;
 
 /** Frames the receptionist will hold the link open waiting for a peer. */
@@ -51,7 +68,16 @@ export const LINK_MSG = {
   offer: 4,
   /** yes or no to what is on the table. */
   answer: 5,
+  /** where this player is standing, so the other can see them move. */
+  pos: 6,
 } as const;
+
+/** Where the peer is, in world pixels, as they last told us. */
+export interface LinkPos {
+  x: number;
+  y: number;
+  facing: string;
+}
 
 /**
  * What crosses the wire for one mon.
@@ -100,7 +126,7 @@ export const LINK_ROOM = { trade: 0, colosseum: 1 } as const;
 export type LinkRoom = (typeof LINK_ROOM)[keyof typeof LINK_ROOM];
 
 /** Bumped when a frame's meaning changes; a mismatch refuses the link. */
-export const LINK_VERSION = 1;
+export const LINK_VERSION = 2;
 
 export type LinkState =
   /** No session. */
@@ -124,8 +150,8 @@ const MAX_NAME = 10;
  * to stay ASCII: the 3DS carrier hands frames over as JS strings (the way
  * saveData already does), and a byte over 127 would not survive the trip.
  */
-function encodeHello(name: string): Uint8Array {
-  const s = asciiJson([...name].slice(0, MAX_NAME).join(""));
+function encodeHello(name: string, nonce: number): Uint8Array {
+  const s = asciiJson({ n: [...name].slice(0, MAX_NAME).join(""), k: nonce });
   const out = new Uint8Array(2 + s.length);
   out[0] = LINK_MSG.hello;
   out[1] = LINK_VERSION;
@@ -133,14 +159,14 @@ function encodeHello(name: string): Uint8Array {
   return out;
 }
 
-function decodeName(frame: Uint8Array): string {
+function decodeHello(frame: Uint8Array): { name: string; nonce: number } {
   let s = "";
   for (let i = 2; i < frame.length; i++) s += String.fromCharCode(frame[i]!);
   try {
-    const v: unknown = JSON.parse(s);
-    return typeof v === "string" ? v : "";
+    const v = JSON.parse(s) as { n?: string; k?: number };
+    return { name: typeof v?.n === "string" ? v.n : "", nonce: Number(v?.k ?? 0) };
   } catch {
-    return s; // a build that sent the name raw
+    return { name: s, nonce: 0 };
   }
 }
 
@@ -161,13 +187,38 @@ export class LinkSession {
   /** What the peer has put on the table, and what they said to ours. */
   peerOffer: TradeOffer | null = null;
   peerAnswer: boolean | null = null;
+  /** Where the peer is standing, once they have said. */
+  peerPos: LinkPos | null = null;
+
+  /**
+   * Which side of the table this console takes, 0 or 1.
+   *
+   * Decided by the hello's nonce so both ends agree without either being
+   * "the host": the larger nonce takes seat 0. A tie falls back to the
+   * names, and a tie there to seat 0, which two consoles cannot both reach
+   * because they would have had to roll the same number AND be called the
+   * same thing -- and if they did, they would agree on it anyway.
+   */
+  seat(): 0 | 1 {
+    if (this.peerNonce === null) return 0;
+    if (this.myNonce !== this.peerNonce) return this.myNonce > this.peerNonce ? 0 : 1;
+    return this.myName >= this.peerName ? 0 : 1;
+  }
 
   private helloSent = false;
+  private readonly myNonce: number;
+  private peerNonce: number | null = null;
+  private lastPos = "";
 
   constructor(
     private transport: LinkTransport,
     private myName: string,
-  ) {}
+    nonce?: number,
+  ) {
+    // Only has to differ from the other console's; the seat falls back to
+    // the names if it somehow does not.
+    this.myNonce = nonce ?? Math.floor(Math.random() * 0x7fffffff);
+  }
 
   open(): void {
     if (this.state === "idle") this.state = "waiting";
@@ -178,6 +229,18 @@ export class LinkSession {
     this.myRoom = room;
     const f = new Uint8Array([LINK_MSG.room, room]);
     this.transport.send(f);
+  }
+
+  /**
+   * Say where this player is, so the other console can draw them walking.
+   * Silent when nothing has moved: the room is still most of the time and
+   * a packet a frame for a player standing still is a packet wasted.
+   */
+  sendPos(x: number, y: number, facing: string): void {
+    const key = `${x},${y},${facing}`;
+    if (key === this.lastPos) return;
+    this.lastPos = key;
+    this.transport.send(encodeJson(LINK_MSG.pos, { x, y, f: facing }));
   }
 
   /** Put a mon on the table. */
@@ -218,7 +281,7 @@ export class LinkSession {
 
     // Say hello as soon as there is someone to say it to, once.
     if (!this.helloSent && this.transport.connected()) {
-      this.transport.send(encodeHello(this.myName));
+      this.transport.send(encodeHello(this.myName, this.myNonce));
       this.helloSent = true;
     }
 
@@ -232,9 +295,20 @@ export class LinkSession {
             this.close();
             return this.state;
           }
-          this.peerName = decodeName(f);
+          {
+            const h = decodeHello(f);
+            this.peerName = h.name;
+            this.peerNonce = h.nonce;
+          }
           if (this.state === "waiting") this.state = "linked";
           break;
+        case LINK_MSG.pos: {
+          const p = decodeJson(f) as { x?: number; y?: number; f?: string } | null;
+          if (p && typeof p.x === "number" && typeof p.y === "number") {
+            this.peerPos = { x: p.x, y: p.y, facing: typeof p.f === "string" ? p.f : "down" };
+          }
+          break;
+        }
         case LINK_MSG.room:
           this.peerRoom = (f[1] ?? 0) as LinkRoom;
           break;

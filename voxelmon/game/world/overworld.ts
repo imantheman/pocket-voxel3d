@@ -54,7 +54,8 @@ import {
 import { nurseGreetScript } from "./nurses.ts";
 import { cableClubScript } from "./cableclub.ts";
 import {
-  hostTransport, LinkSession, LINK_ROOM_ENTRY, type LinkTransport,
+  hostTransport, LinkSession, LINK_ROOM_MAP, LINK_SEATS,
+  type LinkTransport,
 } from "./link.ts";
 import { pcTileAt } from "./pctiles.ts";
 import { ScriptRunner, type ScriptRow, type ScriptWorld } from "./script.ts";
@@ -621,6 +622,11 @@ export class Overworld implements ScriptWorld {
   update(): void {
     if (this.bumpCooldown > 0) this.bumpCooldown -= 1;
     this.pollLink();
+    if (this.link && this.inLinkRoom()) {
+      const p = this.player;
+      this.link.sendPos(Math.round(p.px), Math.round(p.py), p.facing);
+      this.syncPeerBody();
+    }
     this.runner.update();
     // the emotion-bubble pause holds the world for a beat
     // (OverworldController.lua:1018); only the player animates through it
@@ -1507,11 +1513,64 @@ export class Overworld implements ScriptWorld {
     shell.pickLinkRoom(this.link, done);
   }
 
-  /** link_enter: walk into whichever room both sides asked for. */
+  /** link_enter: walk into whichever room both sides asked for, on my side
+   * of the table. Which side is the session's to decide, so the two
+   * consoles do not put both players on the same cell. */
   enterLinkRoom(done: () => void): void {
     const room = this.link?.agreedRoom() ?? 0;
-    const e = LINK_ROOM_ENTRY[room] ?? LINK_ROOM_ENTRY[0];
-    this.startWarpTo(e.map, e.x, e.y, e.facing as Dir, done);
+    const seat = LINK_SEATS[this.link?.seat() ?? 0]!;
+    const map = LINK_ROOM_MAP[room] ?? LINK_ROOM_MAP[0];
+    this.startWarpTo(map, seat.enter.x, seat.enter.y, seat.facing as Dir, done);
+  }
+
+  /** True while standing in one of the Cable Club's two rooms. */
+  private inLinkRoom(): boolean {
+    return (LINK_ROOM_MAP as readonly string[]).includes(this.map?.id ?? "");
+  }
+
+  /**
+   * The other player, drawn where they actually are.
+   *
+   * Each room ships one object -- TRADECENTER_OPPONENT, COLOSSEUM_OPPONENT --
+   * which the ROM uses for exactly this. It is not an NPC with a script; it
+   * is the peer's body, so it is moved to wherever their console last said
+   * they were standing, in world pixels, which is what makes them look like
+   * they are walking rather than teleporting cell to cell.
+   */
+  private syncPeerBody(): void {
+    const s = this.link;
+    if (!s) return;
+    const p = s.peerPos;
+    if (!p) return;
+    const body = this.npcs.find((n) =>
+      String((n.def as { name?: string }).name ?? "").endsWith("_OPPONENT"),
+    ) as (NPC & { px: number; py: number }) | undefined;
+    if (!body) return;
+    body.px = p.x;
+    body.py = p.y;
+    body.cellX = Math.round(p.x / 16);
+    body.cellY = Math.round(p.y / 16);
+    body.facing = p.facing as Dir;
+  }
+
+  /** Am I at my seat, and are they at theirs? The table needs both. */
+  seatedAtTable(): boolean {
+    const s = this.link;
+    if (!s || !this.inLinkRoom()) return false;
+    const mine = LINK_SEATS[s.seat()]!;
+    const p = this.player;
+    return p.cellX === mine.seat.x && p.cellY === mine.seat.y;
+  }
+
+  peerSeated(): boolean {
+    const s = this.link;
+    const p = s?.peerPos;
+    if (!s || !p) return false;
+    const theirs = LINK_SEATS[s.seat() === 0 ? 1 : 0]!;
+    return (
+      Math.round(p.x / 16) === theirs.seat.x &&
+      Math.round(p.y / 16) === theirs.seat.y
+    );
   }
 
   /** link_trade -> game.ts linkTrade (the table in the TRADE CENTER). */
