@@ -2811,6 +2811,13 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     },
   },
 
+  // The CABLE CLUB's two rooms. Their one object each is the other player,
+  // and talking to them is the table: the TRADE CENTER opens the trade, the
+  // COLOSSEUM will open the battle.
+  TRADE_CENTER: {
+    talk: { TEXT_TRADECENTER_OPPONENT: [["link_trade"]] as ScriptRow[] },
+  },
+
   // flavor/pewter_pokecenter.lua: the JIGGLYPUFF that sings at you.
   PEWTER_POKECENTER: {
     talk: { TEXT_PEWTERPOKECENTER_JIGGLYPUFF: jigglypuffRows() },

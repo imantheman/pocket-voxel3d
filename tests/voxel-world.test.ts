@@ -8363,6 +8363,103 @@ describe("the JIGGLYPUFF and the NPCs who pick a line", () => {
   });
 });
 
+describe("the TRADE CENTER table", () => {
+  const ROOMS = ["TRADE_CENTER", "COLOSSEUM"];
+
+  function linked(aName: string, bName: string) {
+    const data = {
+      ...(romData as object),
+      cookedMaps: [...((romData as { cookedMaps?: string[] }).cookedMaps ?? []), ...ROOMS],
+    };
+    const mk = (name: string) => {
+      const g = new VoxelmonGame(data as never, new MenuHost(), 1);
+      g.newGame();
+      g.closeToOverworld();
+      g.save.player.name = name;
+      g.save.party.length = 0;
+      return g;
+    };
+    const a = mk(aName);
+    const b = mk(bName);
+    const wire = new LoopbackLink();
+    a.linkCarrier = wire.a;
+    b.linkCarrier = wire.b;
+    // straight into the room with an open session, the desk already proven
+    for (const g of [a, b]) {
+      g.overworld.setMap("TRADE_CENTER", 2, 4, "up");
+      expect(g.overworld.openLink()).toBe(true);
+    }
+    for (let i = 0; i < 8; i++) { a.overworld.link!.poll(); b.overworld.link!.poll(); }
+    return { a, b };
+  }
+
+  const both = (a: VoxelmonGame, b: VoxelmonGame, n: number, mask = 0) => {
+    for (let i = 0; i < n; i++) { a.tick(mask); b.tick(mask); }
+  };
+
+  test.skipIf(!hasGen)("two consoles swap a mon, and each keeps the other's trainer on it", () => {
+    const { a, b } = linked("RED", "BLUE");
+    a.save.party.push(newMon(romData!, "PIDGEY", 12, a.battleRng));
+    b.save.party.push(newMon(romData!, "RATTATA", 14, b.battleRng));
+    expect(a.overworld.link?.peerName).toBe("BLUE");
+
+    a.overworld.showMapText("TEXT_TRADECENTER_OPPONENT");
+    b.overworld.showMapText("TEXT_TRADECENTER_OPPONENT");
+
+    // A through both sides: pick the only mon, then say yes to the swap
+    for (let i = 0; i < 3000; i++) {
+      if (a.save.party[0]!.species === "RATTATA" && b.save.party[0]!.species === "PIDGEY") break;
+      both(a, b, 1, i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+
+    const got = a.save.party[0]!;
+    expect(got.species).toBe("RATTATA");
+    expect(got.level).toBe(14);
+    expect(got.traded).toBe(true);
+    expect(got.otName).toBe("BLUE");
+    expect(b.save.party[0]!.species).toBe("PIDGEY");
+    expect(b.save.party[0]!.otName).toBe("RED");
+    // the arrival is a dex entry on both sides
+    expect((a.save as any).pokedex.owned.RATTATA).toBe(true);
+    expect(a.save.party.length).toBe(1);
+    expect(b.save.party.length).toBe(1);
+  });
+
+  test.skipIf(!hasGen)("a MACHOKE evolves the moment it changes hands", () => {
+    const { a, b } = linked("RED", "BLUE");
+    a.save.party.push(newMon(romData!, "PIDGEY", 12, a.battleRng));
+    b.save.party.push(newMon(romData!, "MACHOKE", 30, b.battleRng));
+
+    a.overworld.showMapText("TEXT_TRADECENTER_OPPONENT");
+    b.overworld.showMapText("TEXT_TRADECENTER_OPPONENT");
+    for (let i = 0; i < 6000; i++) {
+      if (a.save.party[0]!.species === "MACHAMP") break;
+      if (a.stackKinds().at(-1) === "naming" || a.stackKinds().at(-1) === "moveforget") {
+        tap(a, VOX_BTN.start); continue;
+      }
+      both(a, b, 1, i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    expect(a.save.party[0]!.species).toBe("MACHAMP");
+    expect(a.save.party[0]!.traded).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("a mon the peer never sent leaves the party alone", () => {
+    const { a, b } = linked("RED", "BLUE");
+    a.save.party.push(newMon(romData!, "PIDGEY", 12, a.battleRng));
+    b.save.party.push(newMon(romData!, "RATTATA", 14, b.battleRng));
+    // BLUE offers something that is not a Pokemon
+    a.overworld.showMapText("TEXT_TRADECENTER_OPPONENT");
+    b.overworld.link!.offer({ mon: { species: "NOT_A_MON", level: 5 } as never,
+      otName: "BLUE", otId: 1 });
+    for (let i = 0; i < 1200; i++) {
+      if (a.stackKinds().at(-1) === "overworld" && !(a.overworld as any).runner.isRunning()) break;
+      a.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    expect(a.save.party[0]!.species).toBe("PIDGEY");
+    expect(a.save.party.length).toBe(1);
+  });
+});
+
 describe("the CABLE CLUB desk", () => {
   const CENTER = "VIRIDIAN_POKECENTER";
   const ROOMS = ["TRADE_CENTER", "COLOSSEUM"];

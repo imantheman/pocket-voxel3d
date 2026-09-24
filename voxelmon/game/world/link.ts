@@ -47,7 +47,54 @@ export const LINK_MSG = {
   room: 2,
   /** back out before the room opens. */
   cancel: 3,
+  /** the mon this side is putting on the table (JSON payload). */
+  offer: 4,
+  /** yes or no to what is on the table. */
+  answer: 5,
 } as const;
+
+/**
+ * What crosses the wire for one mon.
+ *
+ * JSON, not the ROM's 44-byte party struct. Both ends are the same build --
+ * the hello's version byte has already refused anything else -- so the wire
+ * only has to be understood by us, and a shape that can be read in a log
+ * beats one that cannot. A binary Gen 1 struct is what a bridge to the
+ * Virtual Console would need, and that is a converter at the edge rather
+ * than a different wire in the middle.
+ */
+export interface TradeOffer {
+  /** A PartyMon, as sent. Structurally checked on arrival, not trusted. */
+  mon: Record<string, unknown>;
+  /** Who is sending it, so the receiver can stamp the OT. */
+  otName: string;
+  otId: number;
+}
+
+/** JSON as plain ASCII, so the byte loop below is the whole encoder. */
+function asciiJson(v: unknown): string {
+  return JSON.stringify(v).replace(/[\u0080-\uffff]/g, (c) =>
+    "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"),
+  );
+}
+
+function encodeJson(kind: number, v: unknown): Uint8Array {
+  const s = asciiJson(v);
+  const out = new Uint8Array(1 + s.length);
+  out[0] = kind;
+  for (let i = 0; i < s.length; i++) out[1 + i] = s.charCodeAt(i) & 0xff;
+  return out;
+}
+
+function decodeJson(frame: Uint8Array): unknown {
+  let s = "";
+  for (let i = 1; i < frame.length; i++) s += String.fromCharCode(frame[i]!);
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
 
 export const LINK_ROOM = { trade: 0, colosseum: 1 } as const;
 export type LinkRoom = (typeof LINK_ROOM)[keyof typeof LINK_ROOM];
@@ -100,6 +147,9 @@ export class LinkSession {
   /** The room this side asked for, and the one the peer asked for. */
   myRoom: LinkRoom | null = null;
   peerRoom: LinkRoom | null = null;
+  /** What the peer has put on the table, and what they said to ours. */
+  peerOffer: TradeOffer | null = null;
+  peerAnswer: boolean | null = null;
 
   private helloSent = false;
 
@@ -117,6 +167,22 @@ export class LinkSession {
     this.myRoom = room;
     const f = new Uint8Array([LINK_MSG.room, room]);
     this.transport.send(f);
+  }
+
+  /** Put a mon on the table. */
+  offer(o: TradeOffer): void {
+    this.transport.send(encodeJson(LINK_MSG.offer, o));
+  }
+
+  /** Yes or no to what is on the table. */
+  answer(ok: boolean): void {
+    this.transport.send(new Uint8Array([LINK_MSG.answer, ok ? 1 : 0]));
+  }
+
+  /** Clear the table, for the next trade in the same session. */
+  resetTrade(): void {
+    this.peerOffer = null;
+    this.peerAnswer = null;
   }
 
   /** Back out; the peer hears about it. */
@@ -160,6 +226,18 @@ export class LinkSession {
           break;
         case LINK_MSG.room:
           this.peerRoom = (f[1] ?? 0) as LinkRoom;
+          break;
+        case LINK_MSG.offer: {
+          const o = decodeJson(f) as TradeOffer | null;
+          // A frame that did not parse, or carries no mon, is dropped rather
+          // than put on the table: the other end is a peer, not an authority.
+          if (o && typeof o === "object" && o.mon && typeof o.mon === "object") {
+            this.peerOffer = o;
+          }
+          break;
+        }
+        case LINK_MSG.answer:
+          this.peerAnswer = f[1] === 1;
           break;
         case LINK_MSG.cancel:
           this.close();

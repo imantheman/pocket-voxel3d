@@ -30,7 +30,18 @@ export interface PartyMon {
   status: string | null; // "SLP"|"PSN"|"BRN"|"FRZ"|"PAR"
   moves: MoveSlot[];
   nickname?: string;
+  /**
+   * Came from another trainer. Gen 1 reads this for obedience (a traded mon
+   * over the badge level ignores you) and the summary shows the OT below.
+   */
   traded?: boolean;
+  /**
+   * Who caught it, when that is not you. Absent on anything you caught
+   * yourself, which is what every save written before trading existed says,
+   * so an old save reads as "all mine" and is right.
+   */
+  otName?: string;
+  otId?: number;
 }
 
 /**

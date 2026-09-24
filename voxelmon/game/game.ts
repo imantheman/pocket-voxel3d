@@ -22,7 +22,7 @@ import type { VoxelmonData } from "./data.ts";
 import type { VoxelHost } from "./host.ts";
 import { Input } from "./input.ts";
 import { seededRng, type Rng } from "./rng.ts";
-import { apply as applyEvolution, checkParty } from "./rules/evolution.ts";
+import { apply as applyEvolution, checkParty, pendingFor } from "./rules/evolution.ts";
 import { movesLearnedAt } from "./rules/experience.ts";
 import { expForLevel } from "./rules/growth.ts";
 import { calc as calcStats } from "./rules/stats.ts";
@@ -2175,6 +2175,118 @@ export class VoxelmonGame implements OverworldShell, SceneView {
           session.chooseRoom(choice === "COLOSSEUM" ? LINK_ROOM.colosseum : LINK_ROOM.trade);
           this.showText("_CableClubNPCPleaseWaitText");
           this.overworld.waitLink((s) => s.agreedRoom() !== null, LINK_WAIT_FRAMES, done);
+        },
+      }),
+    );
+  }
+
+  /**
+   * The table in the TRADE CENTER (engine/link/trade.asm).
+   *
+   * Pick one, put it on the table, wait for theirs, both say yes, swap. A
+   * flow rather than script rows because every step waits on the other
+   * console and the waiting interleaves with menus.
+   *
+   * What comes back is not trusted: the peer is another copy of the game,
+   * not an authority, so the mon is checked for shape before it is put in
+   * the party. A trade that arrives malformed is refused, not stored.
+   */
+  linkTrade(done?: () => void): void {
+    const ow = this.overworld;
+    const s = ow.link;
+    const t = (this.data as { text?: Record<string, string> }).text ?? {};
+    const finish = () => done?.();
+    const say = (k: string, f: string, subs: Record<string, string>, after: () => void) => {
+      let str = t[k] ?? f;
+      str = str.replace(/\{PLAYER\}/g, String(this.save.player?.name ?? "RED"));
+      str = str.replace(/\{RAM:(\w+)\}/g, (_m, n: string) => subs[n] ?? "");
+      this.showText(str, after);
+    };
+    const canceled = (after: () => void) =>
+      say("_LinkCanceledText", "The link was\ncanceled.", {}, after);
+    if (!s || s.state === "closed") { canceled(finish); return; }
+
+    const nameOf = (m: { nickname?: string; species: string }): string =>
+      m.nickname ?? this.data.pokemon?.[m.species]?.name ?? m.species;
+
+    /** Enough of a mon to be one. A peer can send anything. */
+    const wellFormed = (m: unknown): m is PartyMon => {
+      const o = m as PartyMon | null;
+      return (
+        !!o && typeof o === "object" &&
+        typeof o.species === "string" && !!this.data.pokemon?.[o.species] &&
+        typeof o.level === "number" && o.level >= 1 && o.level <= 100 &&
+        typeof o.hp === "number" && !!o.stats && Array.isArray(o.moves)
+      );
+    };
+
+    s.resetTrade();
+    this.push(
+      new PartyState(this as never, {
+        prompt: "Choose a POKéMON.",
+        onCancel: finish,
+        onPick: (i: number) => {
+          const mine = this.save.party[i];
+          if (!mine) { finish(); return; }
+          s.offer({
+            mon: JSON.parse(JSON.stringify(mine)) as Record<string, unknown>,
+            otName: mine.otName ?? String(this.save.player?.name ?? "RED"),
+            otId: mine.otId ?? Number(this.save.player?.id ?? 0),
+          });
+          ow.waitLink((x) => x.peerOffer !== null, LINK_WAIT_FRAMES, (arrived) => {
+            const offer = s.peerOffer;
+            if (!arrived || !offer || !wellFormed(offer.mon)) { canceled(finish); return; }
+            const theirs = offer.mon as unknown as PartyMon;
+            // "<THEM> will trade <THEIRS>" / "for <YOU>'s <MINE>." -- the
+            // ROM splits the sentence over two boxes and the yes/no rides
+            // on the second.
+            say("_TradeWillTradeText", "{RAM:wLinkEnemyTrainerName} will\ntrade {RAM:wNameBuffer}",
+              { wLinkEnemyTrainerName: s.peerName, wNameBuffer: nameOf(theirs) }, () => {
+                let ask = t._TradeforText ?? "for {PLAYER}'s\n{RAM:wStringBuffer}.";
+                ask = ask.replace(/\{PLAYER\}/g, String(this.save.player?.name ?? "RED"))
+                         .replace(/\{RAM:(\w+)\}/g, () => nameOf(mine));
+                this.showChoice(ask, (yes) => {
+                  s.answer(yes);
+                  ow.waitLink((x) => x.peerAnswer !== null, LINK_WAIT_FRAMES, (answered) => {
+                    if (!yes || !answered || s.peerAnswer !== true) {
+                      s.resetTrade();
+                      canceled(finish);
+                      return;
+                    }
+                    // The swap. The arrival keeps its own trainer, which is
+                    // what makes it a traded mon: Gen 1 reads that for
+                    // obedience and the summary shows the OT.
+                    const got: PartyMon = { ...theirs, traded: true,
+                      otName: offer.otName, otId: offer.otId };
+                    this.save.party[i] = got;
+                    const dex = (this.save as { pokedex?: { seen?: Record<string, boolean>;
+                      owned?: Record<string, boolean> } }).pokedex;
+                    if (dex) {
+                      (dex.seen ??= {})[got.species] = true;
+                      (dex.owned ??= {})[got.species] = true;
+                    }
+                    s.resetTrade();
+                    const subs = { wLinkEnemyTrainerName: s.peerName,
+                      wNameBuffer: nameOf(got), wStringBuffer: nameOf(mine),
+                      wNameOfPlayerMonToBeTraded: nameOf(mine) };
+                    say("_WillBeTradedText", "{RAM:wNameOfPlayerMonToBeTraded} and\n{RAM:wNameBuffer} will\nbe traded.", subs, () =>
+                      say("_TradeWentToText", "{RAM:wStringBuffer} went\nto {RAM:wLinkEnemyTrainerName}.", subs, () =>
+                        say("_TradeSendsText", "{RAM:wLinkEnemyTrainerName} sends\n{RAM:wNameBuffer}.", subs, () =>
+                          say("_TradeTakeCareText", "Take good care of\n{RAM:wNameBuffer}.", subs, () => {
+                            // The four that only evolve by changing hands.
+                            const hit = pendingFor(this.data, got as never, { kind: "trade" });
+                            if (!hit) { finish(); return; }
+                            this.push(new EvolutionState(
+                              this as never, got as never, hit[0], "TRADE",
+                              (mon, to) => applyEvolution(this.data, mon as never, to,
+                                (this.save as { pokedex?: never }).pokedex),
+                              finish,
+                            ));
+                          }))));
+                  });
+                });
+              });
+          });
         },
       }),
     );

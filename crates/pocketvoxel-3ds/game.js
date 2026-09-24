@@ -8937,6 +8937,9 @@ much!`]
       ]
     }
   },
+  TRADE_CENTER: {
+    talk: { TEXT_TRADECENTER_OPPONENT: [["link_trade"]] }
+  },
   PEWTER_POKECENTER: {
     talk: { TEXT_PEWTERPOKECENTER_JIGGLYPUFF: jigglypuffRows() }
   },
@@ -9935,8 +9938,31 @@ var LINK_WAIT_FRAMES = 60 * 20;
 var LINK_MSG = {
   hello: 1,
   room: 2,
-  cancel: 3
+  cancel: 3,
+  offer: 4,
+  answer: 5
 };
+function asciiJson(v) {
+  return JSON.stringify(v).replace(/[\u0080-\uffff]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+}
+function encodeJson(kind, v) {
+  const s = asciiJson(v);
+  const out = new Uint8Array(1 + s.length);
+  out[0] = kind;
+  for (let i = 0;i < s.length; i++)
+    out[1 + i] = s.charCodeAt(i) & 255;
+  return out;
+}
+function decodeJson(frame) {
+  let s = "";
+  for (let i = 1;i < frame.length; i++)
+    s += String.fromCharCode(frame[i]);
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
 var LINK_ROOM = { trade: 0, colosseum: 1 };
 var LINK_VERSION = 1;
 var MAX_NAME = 10;
@@ -9963,6 +9989,8 @@ class LinkSession {
   peerName = "";
   myRoom = null;
   peerRoom = null;
+  peerOffer = null;
+  peerAnswer = null;
   helloSent = false;
   constructor(transport, myName) {
     this.transport = transport;
@@ -9976,6 +10004,16 @@ class LinkSession {
     this.myRoom = room;
     const f = new Uint8Array([LINK_MSG.room, room]);
     this.transport.send(f);
+  }
+  offer(o) {
+    this.transport.send(encodeJson(LINK_MSG.offer, o));
+  }
+  answer(ok) {
+    this.transport.send(new Uint8Array([LINK_MSG.answer, ok ? 1 : 0]));
+  }
+  resetTrade() {
+    this.peerOffer = null;
+    this.peerAnswer = null;
   }
   cancel() {
     if (this.state !== "closed")
@@ -10014,6 +10052,16 @@ class LinkSession {
           break;
         case LINK_MSG.room:
           this.peerRoom = f[1] ?? 0;
+          break;
+        case LINK_MSG.offer: {
+          const o = decodeJson(f);
+          if (o && typeof o === "object" && o.mon && typeof o.mon === "object") {
+            this.peerOffer = o;
+          }
+          break;
+        }
+        case LINK_MSG.answer:
+          this.peerAnswer = f[1] === 1;
           break;
         case LINK_MSG.cancel:
           this.close();
@@ -10758,6 +10806,7 @@ var VERBS = {
   link_open,
   link_room,
   link_enter,
+  link_trade,
   push_screen: noop_object,
   play_sound,
   play_music,
@@ -10793,6 +10842,14 @@ function* link_room(ctx) {
     ctx.lastCheck = ok;
     runner.resume();
   });
+  yield;
+}
+function* link_trade(ctx) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  if (!w.linkTrade)
+    return;
+  w.linkTrade(() => runner.resume());
   yield;
 }
 function* link_enter(ctx) {
@@ -11812,6 +11869,14 @@ any coins!`);
     const room = this.link?.agreedRoom() ?? 0;
     const e = LINK_ROOM_ENTRY[room] ?? LINK_ROOM_ENTRY[0];
     this.startWarpTo(e.map, e.x, e.y, e.facing, done);
+  }
+  linkTrade(done) {
+    const shell = this.shell;
+    if (!shell.linkTrade) {
+      done();
+      return;
+    }
+    shell.linkTrade(done);
   }
   saveGame() {
     this.shell.writeSave?.();
@@ -19664,6 +19729,102 @@ to level ${mon.level}!`, () => {
         session.chooseRoom(choice === "COLOSSEUM" ? LINK_ROOM.colosseum : LINK_ROOM.trade);
         this.showText("_CableClubNPCPleaseWaitText");
         this.overworld.waitLink((s) => s.agreedRoom() !== null, LINK_WAIT_FRAMES, done);
+      }
+    }));
+  }
+  linkTrade(done) {
+    const ow = this.overworld;
+    const s = ow.link;
+    const t = this.data.text ?? {};
+    const finish = () => done?.();
+    const say = (k, f, subs, after) => {
+      let str = t[k] ?? f;
+      str = str.replace(/\{PLAYER\}/g, String(this.save.player?.name ?? "RED"));
+      str = str.replace(/\{RAM:(\w+)\}/g, (_m, n) => subs[n] ?? "");
+      this.showText(str, after);
+    };
+    const canceled = (after) => say("_LinkCanceledText", `The link was
+canceled.`, {}, after);
+    if (!s || s.state === "closed") {
+      canceled(finish);
+      return;
+    }
+    const nameOf = (m) => m.nickname ?? this.data.pokemon?.[m.species]?.name ?? m.species;
+    const wellFormed = (m) => {
+      const o = m;
+      return !!o && typeof o === "object" && typeof o.species === "string" && !!this.data.pokemon?.[o.species] && typeof o.level === "number" && o.level >= 1 && o.level <= 100 && typeof o.hp === "number" && !!o.stats && Array.isArray(o.moves);
+    };
+    s.resetTrade();
+    this.push(new PartyState(this, {
+      prompt: "Choose a POKéMON.",
+      onCancel: finish,
+      onPick: (i) => {
+        const mine = this.save.party[i];
+        if (!mine) {
+          finish();
+          return;
+        }
+        s.offer({
+          mon: JSON.parse(JSON.stringify(mine)),
+          otName: mine.otName ?? String(this.save.player?.name ?? "RED"),
+          otId: mine.otId ?? Number(this.save.player?.id ?? 0)
+        });
+        ow.waitLink((x) => x.peerOffer !== null, LINK_WAIT_FRAMES, (arrived) => {
+          const offer = s.peerOffer;
+          if (!arrived || !offer || !wellFormed(offer.mon)) {
+            canceled(finish);
+            return;
+          }
+          const theirs = offer.mon;
+          say("_TradeWillTradeText", `{RAM:wLinkEnemyTrainerName} will
+trade {RAM:wNameBuffer}`, { wLinkEnemyTrainerName: s.peerName, wNameBuffer: nameOf(theirs) }, () => {
+            let ask2 = t._TradeforText ?? `for {PLAYER}'s
+{RAM:wStringBuffer}.`;
+            ask2 = ask2.replace(/\{PLAYER\}/g, String(this.save.player?.name ?? "RED")).replace(/\{RAM:(\w+)\}/g, () => nameOf(mine));
+            this.showChoice(ask2, (yes) => {
+              s.answer(yes);
+              ow.waitLink((x) => x.peerAnswer !== null, LINK_WAIT_FRAMES, (answered) => {
+                if (!yes || !answered || s.peerAnswer !== true) {
+                  s.resetTrade();
+                  canceled(finish);
+                  return;
+                }
+                const got = {
+                  ...theirs,
+                  traded: true,
+                  otName: offer.otName,
+                  otId: offer.otId
+                };
+                this.save.party[i] = got;
+                const dex = this.save.pokedex;
+                if (dex) {
+                  (dex.seen ??= {})[got.species] = true;
+                  (dex.owned ??= {})[got.species] = true;
+                }
+                s.resetTrade();
+                const subs = {
+                  wLinkEnemyTrainerName: s.peerName,
+                  wNameBuffer: nameOf(got),
+                  wStringBuffer: nameOf(mine),
+                  wNameOfPlayerMonToBeTraded: nameOf(mine)
+                };
+                say("_WillBeTradedText", `{RAM:wNameOfPlayerMonToBeTraded} and
+{RAM:wNameBuffer} will
+be traded.`, subs, () => say("_TradeWentToText", `{RAM:wStringBuffer} went
+to {RAM:wLinkEnemyTrainerName}.`, subs, () => say("_TradeSendsText", `{RAM:wLinkEnemyTrainerName} sends
+{RAM:wNameBuffer}.`, subs, () => say("_TradeTakeCareText", `Take good care of
+{RAM:wNameBuffer}.`, subs, () => {
+                  const hit = pendingFor(this.data, got, { kind: "trade" });
+                  if (!hit) {
+                    finish();
+                    return;
+                  }
+                  this.push(new EvolutionState(this, got, hit[0], "TRADE", (mon, to) => apply2(this.data, mon, to, this.save.pokedex), finish));
+                }))));
+              });
+            });
+          });
+        });
       }
     }));
   }

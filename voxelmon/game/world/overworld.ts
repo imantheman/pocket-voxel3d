@@ -1514,6 +1514,13 @@ export class Overworld implements ScriptWorld {
     this.startWarpTo(e.map, e.x, e.y, e.facing as Dir, done);
   }
 
+  /** link_trade -> game.ts linkTrade (the table in the TRADE CENTER). */
+  linkTrade(done: () => void): void {
+    const shell = this.shell as unknown as { linkTrade?: (d: () => void) => void };
+    if (!shell.linkTrade) { done(); return; }
+    shell.linkTrade(done);
+  }
+
   /** save_game: the Club saves before it opens the link. */
   saveGame(): void {
     (this.shell as unknown as { writeSave?: () => void }).writeSave?.();
