@@ -19,8 +19,21 @@
  */
 
 #include <3ds.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+extern void voxel_log(const char *s, int len);
+
+static void pv_log(const char *fmt, ...) {
+    char line[160];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    if (n > 0) voxel_log(line, n > (int)sizeof(line) - 1 ? (int)sizeof(line) - 1 : n);
+}
 
 /* 'PVox'. A wlancommID is per-application: this keeps the scan from finding
    retail networks, and keeps retail scans from finding this one. */
@@ -53,11 +66,18 @@ static void pv_teardown(void) {
 }
 
 /* Scan, join what is there, host when nothing is. Returns the state. */
-int pv_link_open(void) {
+int pv_uds_open(void) {
     if (g_inited) return g_state;
 
     /* 0x3000 of shared memory is the usual figure for a two-node session. */
-    if (R_FAILED(udsInit(0x3000, NULL))) return PV_CLOSED;
+    Result rc = udsInit(0x3000, NULL);
+    if (R_FAILED(rc)) {
+        /* No UDS here. An emulator is the usual reason: its local wireless
+           is netplay between emulator instances, not 802.11, so it can
+           neither see nor be seen by a console. net_link.c covers that. */
+        pv_log("[pv] link/uds: unavailable (%08lX)", (unsigned long)rc);
+        return PV_CLOSED;
+    }
     g_inited = 1;
     g_state = PV_CLOSED;
 
@@ -75,6 +95,7 @@ int pv_link_open(void) {
                     PV_CHANNEL, UDS_DEFAULT_RECVBUFSIZE))) {
                 g_is_host = 0;
                 g_state = PV_READY;   /* joining means the host is already there */
+                pv_log("[pv] link/uds: joined a console");
             }
         }
         if (nets) free(nets);
@@ -87,6 +108,7 @@ int pv_link_open(void) {
                                          &g_bind, PV_CHANNEL, UDS_DEFAULT_RECVBUFSIZE))) {
             g_is_host = 1;
             g_state = PV_HOSTING; /* up, but nobody has walked up yet */
+            pv_log("[pv] link/uds: hosting");
         } else {
             udsExit();
             g_inited = 0;
@@ -97,18 +119,19 @@ int pv_link_open(void) {
 
 /* 1 once there is somebody on the other end, 0 otherwise. The host does not
    know that until a client joins, which is the receptionist's whole wait. */
-int pv_link_state(void) {
+int pv_uds_state(void) {
     if (!g_inited) return 0;
     if (g_is_host && g_state == PV_HOSTING) {
         udsConnectionStatus st;
         if (R_SUCCEEDED(udsGetConnectionStatus(&st)) && st.total_nodes > 1) {
             g_state = PV_READY;
+            pv_log("[pv] link/uds: a console joined");
         }
     }
     return g_state == PV_READY ? 1 : 0;
 }
 
-int pv_link_send(const char *buf, int len) {
+int pv_uds_send(const char *buf, int len) {
     if (!g_inited || len <= 0 || len > PV_FRAME_MAX) return 0;
     /* Broadcast: with two nodes there is exactly one other ear, and this
        works the same whether this console is the host or the client. */
@@ -118,7 +141,7 @@ int pv_link_send(const char *buf, int len) {
 
 /* Copies one frame into `buf` and returns its length, or 0 when none is
    waiting. Never blocks: the guest polls this once a frame. */
-int pv_link_recv(char *buf, int cap) {
+int pv_uds_recv(char *buf, int cap) {
     if (!g_inited || cap <= 0) return 0;
     size_t got = 0;
     u16 src = 0;
@@ -126,6 +149,6 @@ int pv_link_recv(char *buf, int cap) {
     return (int)got;
 }
 
-void pv_link_close(void) {
+void pv_uds_close(void) {
     pv_teardown();
 }

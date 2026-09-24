@@ -301,7 +301,12 @@ export function hostTransport(): LinkTransport | null {
   if (!v || typeof v.linkOpen !== "function") return null;
   const call = (name: string, arg?: unknown): unknown =>
     (v[name] as (a?: unknown) => unknown)(arg);
-  call("linkOpen");
+  // No wireless and no network is no carrier. Saying so here is what gets
+  // the receptionist to her "reserved for 2 friends" line at once, instead
+  // of holding the player still for twenty seconds while a session waits
+  // on a peer with no way of arriving.
+  const opened = call("linkOpen");
+  if (typeof opened === "number" && opened <= 0) return null;
   // Frames cross as strings, one character per byte. Every frame this
   // module builds is ASCII on purpose, so the round trip is exact.
   const toStr = (f: Uint8Array): string => {

@@ -10085,7 +10085,9 @@ function hostTransport() {
   if (!v || typeof v.linkOpen !== "function")
     return null;
   const call = (name, arg) => v[name](arg);
-  call("linkOpen");
+  const opened = call("linkOpen");
+  if (typeof opened === "number" && opened <= 0)
+    return null;
   const toStr = (f) => {
     let s = "";
     for (let i = 0;i < f.length; i++)
