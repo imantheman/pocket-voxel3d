@@ -47,6 +47,7 @@ extern "C" {
     fn audio3ds_free_frames() -> i32;
     fn audio3ds_queue(pcm: *const i16, frames: i32) -> i32;
     fn c3d_alpha_test(on: i32, r: i32);
+    fn c3d_early_depth(on: i32);
     fn qjs_call_frame(ctx: *mut JSContext, buttons: i32, errbuf: *mut u8, errlen: i32) -> i32;
 }
 
@@ -2215,6 +2216,21 @@ fn strip_from_pak(
     }
     Some(NeighborStrip { map_id, verts, spans })
 }
+
+/// Reject hidden fragments before they are textured, rather than after.
+///
+/// The frame is fill-bound, which build 223346 settled: across CELADON the
+/// GPU time tracked how much SCREEN the world covered and not how much of
+/// it there was -- 20 chunks cost 48.6 ms and 24 chunks cost 44.2, while
+/// adding the town's 26 trees (a few hundred verts that cover a great deal
+/// of screen) cost 20 to 45. Geometry diets therefore do nothing here and
+/// one was reverted; what is left to win is the shading of fragments that
+/// something nearer already covered.
+///
+/// One word to turn off if it draws wrong -- holes in the ground or
+/// flickering terrain mean the coarse buffer is not clearing, and nothing
+/// else in the frame depends on this.
+const EARLY_DEPTH: bool = true;
 
 /// A map whose trees are instanced (TINS) carries no box tier in its
 /// chunks, so a seam strip built from it would be bare ground where its
@@ -4935,6 +4951,9 @@ if page_tex.len() < pak_static.atlases.len() {
                 frame.bind_vertex_uniform(uvx_idx, uvx);
                 frame.bind_vertex_uniform(toff_idx, FVec4::new(0.0, 0.0, 0.0, 0.0));
                 frame.set_cull_face(CullMode::None);
+                // Per eye, not once at boot: enabling is also what flags the
+                // coarse buffer for its clear.
+                if EARLY_DEPTH { unsafe { c3d_early_depth(1); } }
                 frame.bind_texture(texture::Index::Texture0, tex_ref);
                 frame.set_texenvs(&[stage0]);
                 frame.set_attr_info(&attr_info);
@@ -4967,6 +4986,10 @@ if page_tex.len() < pak_static.atlases.len() {
                     unsafe { TREES_CULLED[3] = t_err; }
                 }
                 }
+                // Off before the ortho passes: the cards, pics, anims and UI
+                // run with the depth test disabled and must not be answered
+                // by a depth buffer they never wrote to.
+                if EARLY_DEPTH { unsafe { c3d_early_depth(0); } }
                 // Card UVs are already atlas-scaled here, so the shader's
                 // terrain uvx transform must not apply again.
                 frame.bind_vertex_uniform(uvx_idx, FVec4::new(1.0, 1.0, 0.0, 0.0));
