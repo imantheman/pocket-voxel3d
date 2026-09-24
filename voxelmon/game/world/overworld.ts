@@ -621,12 +621,6 @@ export class Overworld implements ScriptWorld {
   // OverworldController.lua:883 update
   update(): void {
     if (this.bumpCooldown > 0) this.bumpCooldown -= 1;
-    this.pollLink();
-    if (this.link && this.inLinkRoom()) {
-      const p = this.player;
-      this.link.sendPos(Math.round(p.px), Math.round(p.py), p.facing);
-      this.syncPeerBody();
-    }
     this.runner.update();
     // the emotion-bubble pause holds the world for a beat
     // (OverworldController.lua:1018); only the player animates through it
@@ -1484,6 +1478,24 @@ export class Overworld implements ScriptWorld {
     done: (ok: boolean) => void,
   ): void {
     this.linkWait = { until, frames, done };
+  }
+
+  /**
+   * Drive the link, whatever is on screen.
+   *
+   * Called from game.tick rather than from update(), because only the TOP
+   * state updates and a trade spends most of its life under a menu. A
+   * connection that stops being read the moment a menu opens is a
+   * connection that deadlocks every wait the trade depends on -- and the
+   * other player's body would freeze mid-step too.
+   */
+  serviceLink(): void {
+    this.pollLink();
+    if (this.link && this.inLinkRoom()) {
+      const p = this.player;
+      this.link.sendPos(Math.round(p.px), Math.round(p.py), p.facing);
+      this.syncPeerBody();
+    }
   }
 
   private pollLink(): void {

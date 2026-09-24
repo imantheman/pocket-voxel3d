@@ -8365,6 +8365,121 @@ describe("the JIGGLYPUFF and the NPCs who pick a line", () => {
   });
 });
 
+describe("the trade screen and the animation", () => {
+  const ROOMS = ["TRADE_CENTER", "COLOSSEUM"];
+
+  function seated(aName: string, bName: string) {
+    const data = {
+      ...(romData as object),
+      cookedMaps: [...((romData as { cookedMaps?: string[] }).cookedMaps ?? []), ...ROOMS],
+    };
+    const mk = (name: string) => {
+      const g = new VoxelmonGame(data as never, new MenuHost(), 1);
+      g.newGame();
+      g.closeToOverworld();
+      g.save.player.name = name;
+      g.save.party.length = 0;
+      return g;
+    };
+    const a = mk(aName);
+    const b = mk(bName);
+    const wire = new LoopbackLink();
+    a.linkCarrier = wire.a;
+    b.linkCarrier = wire.b;
+    for (const g of [a, b]) {
+      g.overworld.setMap("TRADE_CENTER", 4, 2, "down");
+      expect(g.overworld.openLink()).toBe(true);
+    }
+    for (let i = 0; i < 8; i++) { a.overworld.link!.poll(); b.overworld.link!.poll(); }
+    for (const g of [a, b]) {
+      const seat = LINK_SEATS[g.overworld.link!.seat()]!;
+      g.overworld.setMap("TRADE_CENTER", seat.seat.x, seat.seat.y, seat.facing as never);
+    }
+    for (let i = 0; i < 8; i++) { a.tick(0); b.tick(0); }
+    return { a, b };
+  }
+
+  const both = (a: VoxelmonGame, b: VoxelmonGame, n: number, mask = 0) => {
+    for (let i = 0; i < n; i++) { a.tick(mask); b.tick(mask); }
+  };
+
+  test.skipIf(!hasGen)("the screen shows both parties, theirs above yours", () => {
+    const { a, b } = seated("RED", "BLUE");
+    a.save.party.push(newMon(romData!, "PIDGEY", 12, a.battleRng));
+    a.save.party.push(newMon(romData!, "ODDISH", 9, a.battleRng));
+    b.save.party.push(newMon(romData!, "RATTATA", 14, b.battleRng));
+
+    a.overworld.interact();
+    b.overworld.interact();
+    for (let i = 0; i < 400; i++) {
+      if (a.stackKinds().at(-1) === "tradescreen") break;
+      both(a, b, 1);
+    }
+    const v = a.tradeScreen() as {
+      mine: { name: string }[]; theirs: { name: string }[];
+      myName: string; peerName: string; side: number;
+    };
+    expect(v.mine.map((e) => e.name)).toEqual(["PIDGEY", "ODDISH"]);
+    expect(v.theirs.map((e) => e.name)).toEqual(["RATTATA"]);
+    expect(v.myName).toBe("RED");
+    expect(v.peerName).toBe("BLUE");
+    expect(v.side).toBe(0); // it starts on your own party
+  });
+
+  test.skipIf(!hasGen)("picking yours then theirs is a proposal; B walks it back", () => {
+    const { a, b } = seated("RED", "BLUE");
+    a.save.party.push(newMon(romData!, "PIDGEY", 12, a.battleRng));
+    a.save.party.push(newMon(romData!, "ODDISH", 9, a.battleRng));
+    b.save.party.push(newMon(romData!, "RATTATA", 14, b.battleRng));
+    a.overworld.interact();
+    b.overworld.interact();
+    for (let i = 0; i < 400; i++) {
+      if (a.stackKinds().at(-1) === "tradescreen") break;
+      both(a, b, 1);
+    }
+    const view = () => a.tradeScreen() as { side: number; index: number; chosenMine: number | null };
+
+    tap(a, VOX_BTN.down);                 // to ODDISH
+    expect(view().index).toBe(1);
+    tap(a, VOX_BTN.a);                    // pick it
+    expect(view().side).toBe(1);          // the cursor crosses over
+    expect(view().chosenMine).toBe(1);
+
+    tap(a, VOX_BTN.b);                    // back to your own side
+    expect(view().side).toBe(0);
+    expect(view().chosenMine).toBeNull();
+    expect(view().index).toBe(1);         // on the one you had picked
+
+    tap(a, VOX_BTN.a);                    // pick again
+    tap(a, VOX_BTN.a);                    // and theirs: a proposal
+    for (let i = 0; i < 40; i++) both(a, b, 1);
+    expect(b.overworld.link!.peerOffer).toEqual({ give: 1, take: 0 });
+  });
+
+  test.skipIf(!hasGen)("the animation sends, pauses, receives, and calls both mons", () => {
+    const { a, b } = seated("RED", "BLUE");
+    a.save.party.push(newMon(romData!, "PIDGEY", 12, a.battleRng));
+    b.save.party.push(newMon(romData!, "RATTATA", 14, b.battleRng));
+    const cries: string[] = [];
+    (a as any).audio.playCry = (sp: string) => { cries.push(sp); };
+
+    a.overworld.interact();
+    b.overworld.interact();
+    const phases: string[] = [];
+    for (let i = 0; i < 3000; i++) {
+      const v = a.tradeAnim() as { phase: string } | null;
+      if (v && phases.at(-1) !== v.phase) phases.push(v.phase);
+      if (phases.includes("receiving") && v === null) break;
+      both(a, b, 1, i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    // the ROM's beats, in order
+    expect(phases).toEqual(["sending", "gap", "receiving"]);
+    // the one leaving is called, then the one arriving
+    expect(cries).toEqual(["PIDGEY", "RATTATA"]);
+    expect(a.save.party[0]!.species).toBe("RATTATA");
+  });
+});
+
 describe("the TRADE CENTER room", () => {
   test("the two consoles take opposite seats, and they face each other", () => {
     const wire = new LoopbackLink();

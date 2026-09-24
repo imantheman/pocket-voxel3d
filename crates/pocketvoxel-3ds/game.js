@@ -6271,6 +6271,77 @@ class SummaryState {
   }
 }
 
+// voxelmon/game/ui/tradeanim.ts
+var TRADE_SHOW_FRAMES = 60;
+var TRADE_GAP_FRAMES = 40;
+var TRADE_PIC_CELL = { x: 6, y: 3, w: 7, h: 7 };
+
+class TradeAnimState {
+  game;
+  opts;
+  kind = "tradeanim";
+  phase = "sending";
+  t = 0;
+  cried = "";
+  constructor(game, opts) {
+    this.game = game;
+    this.opts = opts;
+  }
+  cryOnce(species) {
+    if (this.cried === species)
+      return;
+    this.cried = species;
+    this.game.audio?.playCry?.(species);
+  }
+  update() {
+    this.t += 1;
+    if (this.phase === "sending") {
+      this.cryOnce(this.opts.sending.species);
+      if (this.t >= TRADE_SHOW_FRAMES) {
+        this.phase = "gap";
+        this.t = 0;
+      }
+      return;
+    }
+    if (this.phase === "gap") {
+      if (this.t >= TRADE_GAP_FRAMES) {
+        this.phase = "receiving";
+        this.t = 0;
+        this.cried = "";
+      }
+      return;
+    }
+    if (this.phase === "receiving") {
+      this.cryOnce(this.opts.receiving.species);
+      if (this.t >= TRADE_SHOW_FRAMES) {
+        this.phase = "done";
+        this.game.pop();
+        this.opts.onDone();
+      }
+    }
+  }
+  view() {
+    if (this.phase === "sending") {
+      return {
+        phase: this.phase,
+        mon: this.opts.sending,
+        line: `${this.opts.sending.name} is
+transferred.`
+      };
+    }
+    if (this.phase === "gap") {
+      return { phase: this.phase, mon: null, line: `${this.opts.peerName} waves
+farewell as` };
+    }
+    return {
+      phase: "receiving",
+      mon: this.opts.receiving,
+      line: `${this.opts.peerName} sends
+${this.opts.receiving.name}.`
+    };
+  }
+}
+
 // voxelmon/game/ui/evoscreen.ts
 var EVO_PIC_CELL = { x: 6, y: 1, w: 7, h: 7 };
 var EVO_FLASH_FRAMES = 220;
@@ -9947,7 +10018,8 @@ var LINK_MSG = {
   cancel: 3,
   offer: 4,
   answer: 5,
-  pos: 6
+  pos: 6,
+  party: 7
 };
 function asciiJson(v) {
   return JSON.stringify(v).replace(/[\u0080-\uffff]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
@@ -10004,6 +10076,7 @@ class LinkSession {
   peerOffer = null;
   peerAnswer = null;
   peerPos = null;
+  peerParty = null;
   seat() {
     if (this.peerNonce === null)
       return 0;
@@ -10035,6 +10108,9 @@ class LinkSession {
       return;
     this.lastPos = key;
     this.transport.send(encodeJson(LINK_MSG.pos, { x, y, f: facing }));
+  }
+  sendParty(p) {
+    this.transport.send(encodeJson(LINK_MSG.party, p));
   }
   offer(o) {
     this.transport.send(encodeJson(LINK_MSG.offer, o));
@@ -10095,10 +10171,21 @@ class LinkSession {
         case LINK_MSG.room:
           this.peerRoom = f[1] ?? 0;
           break;
+        case LINK_MSG.party: {
+          const p = decodeJson(f);
+          if (p && typeof p === "object" && Array.isArray(p.mons)) {
+            this.peerParty = {
+              mons: p.mons.slice(0, 6),
+              otName: typeof p.otName === "string" ? p.otName : "",
+              otId: Number(p.otId ?? 0)
+            };
+          }
+          break;
+        }
         case LINK_MSG.offer: {
           const o = decodeJson(f);
-          if (o && typeof o === "object" && o.mon && typeof o.mon === "object") {
-            this.peerOffer = o;
+          if (o && typeof o === "object" && Number.isInteger(o.give) && Number.isInteger(o.take) && o.give >= 0 && o.give < 6 && o.take >= 0 && o.take < 6) {
+            this.peerOffer = { give: o.give, take: o.take };
           }
           break;
         }
@@ -11350,12 +11437,6 @@ class Overworld {
   update() {
     if (this.bumpCooldown > 0)
       this.bumpCooldown -= 1;
-    this.pollLink();
-    if (this.link && this.inLinkRoom()) {
-      const p = this.player;
-      this.link.sendPos(Math.round(p.px), Math.round(p.py), p.facing);
-      this.syncPeerBody();
-    }
     this.runner.update();
     if (this.emote) {
       this.emote.frames -= 1;
@@ -11900,6 +11981,14 @@ any coins!`);
   }
   waitLink(until, frames, done) {
     this.linkWait = { until, frames, done };
+  }
+  serviceLink() {
+    this.pollLink();
+    if (this.link && this.inLinkRoom()) {
+      const p = this.player;
+      this.link.sendPos(Math.round(p.px), Math.round(p.py), p.facing);
+      this.syncPeerBody();
+    }
   }
   pollLink() {
     const s = this.link;
@@ -13331,6 +13420,7 @@ class Scene {
   dexSig = null;
   hofSig = null;
   diplomaSig = null;
+  tradeSig = null;
   creditsSig = null;
   evoSig = null;
   summarySig = null;
@@ -14013,6 +14103,7 @@ class Scene {
       this.uiOwner = null;
       this.menuSig = this.titleSig = this.namingSig = null;
       this.hofSig = this.creditsSig = this.evoSig = this.diplomaSig = null;
+      this.tradeSig = null;
     }
     const evo = view.evolutionScreen?.();
     if (evo) {
@@ -14025,6 +14116,59 @@ class Scene {
         const c = EVO_PIC_CELL;
         host.uiFill(c.x, c.y, c.w, c.h, 0);
         evo.lines.forEach((ln, i) => this.stamp(host, 1, 13 + i, ln));
+      }
+      return;
+    }
+    const tsv = view.tradeScreen?.();
+    if (tsv) {
+      const sig = `T${tsv.side},${tsv.index},${tsv.chosenMine}`;
+      if (sig !== this.tradeSig) {
+        this.tradeSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        host.uiFill(0, 0, UI_COLS, UI_ROWS, SPACE);
+        const list2 = (rows, row0, selected) => {
+          rows.forEach((e, i) => {
+            const y = row0 + i;
+            host.uiFill(1, y, 1, 1, 0);
+            this.stamp(host, 2, y, String(e.name).slice(0, 10));
+            this.level(host, 13, y, e.level);
+            if (e.hp <= 0)
+              this.stamp(host, 17, y, "FNT");
+            else if (e.status)
+              this.stamp(host, 17, y, e.status);
+            if (selected === i)
+              host.uiTile(19, y, ARROW_CURSOR);
+          });
+        };
+        this.stamp(host, 1, 1, String(tsv.peerName).slice(0, 10));
+        list2(tsv.theirs, 2, null);
+        this.stamp(host, 1, 9, String(tsv.myName).slice(0, 10));
+        list2(tsv.mine, 10, tsv.chosenMine);
+        const row = (tsv.side === 0 ? 10 : 2) + tsv.index;
+        host.uiTile(0, row, ARROW_CURSOR);
+        this.frame(host, 0, 16, UI_COLS, 2);
+        this.stamp(host, 1, 17, String(tsv.prompt ?? "").split(`
+`)[0] ?? "");
+      }
+      return;
+    }
+    const tav = view.tradeAnim?.();
+    if (tav) {
+      const sig = `A${tav.phase}`;
+      if (sig !== this.tradeSig) {
+        this.tradeSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        host.uiFill(0, 0, UI_COLS, UI_ROWS, SPACE);
+        if (tav.mon) {
+          const c = TRADE_PIC_CELL;
+          host.uiFill(c.x, c.y, c.w, c.h, 0);
+        }
+        String(tav.line ?? "").split(`
+`).forEach((line, k) => {
+          this.stamp(host, 1, 13 + k * 2, line);
+        });
       }
       return;
     }
@@ -15502,6 +15646,81 @@ class DiplomaState {
         "POKéDEX."
       ],
       signature: "GAME FREAK"
+    };
+  }
+}
+
+// voxelmon/game/ui/tradescreen.ts
+var TRADE_THEIRS_ROW = 2;
+var TRADE_MINE_ROW = 10;
+
+class TradeScreenState {
+  game;
+  opts;
+  kind = "tradescreen";
+  side = 0;
+  index = 0;
+  chosenMine = null;
+  closed = false;
+  constructor(game, opts) {
+    this.game = game;
+    this.opts = opts;
+  }
+  finish(choice) {
+    if (this.closed)
+      return;
+    this.closed = true;
+    this.game.pop();
+    this.opts.onDone(choice);
+  }
+  update() {
+    if (this.closed)
+      return;
+    if (this.opts.watch.peerOffer) {
+      this.finish({ kind: "incoming" });
+      return;
+    }
+    if (this.opts.watch.state === "closed") {
+      this.finish({ kind: "cancel" });
+      return;
+    }
+    const p = this.game.input.pressed;
+    const list2 = this.side === 0 ? this.opts.mine : this.opts.theirs;
+    const n = Math.max(1, list2.length);
+    if (p.up)
+      this.index = (this.index + n - 1) % n;
+    if (p.down)
+      this.index = (this.index + 1) % n;
+    if (p.b) {
+      if (this.side === 1) {
+        this.side = 0;
+        this.index = this.chosenMine ?? 0;
+        this.chosenMine = null;
+      } else
+        this.finish({ kind: "cancel" });
+      return;
+    }
+    if (!p.a || list2.length === 0)
+      return;
+    if (this.side === 0) {
+      this.chosenMine = this.index;
+      this.side = 1;
+      this.index = 0;
+      return;
+    }
+    this.finish({ kind: "propose", give: this.chosenMine ?? 0, take: this.index });
+  }
+  view() {
+    return {
+      myName: this.opts.myName,
+      peerName: this.opts.peerName,
+      mine: this.opts.mine,
+      theirs: this.opts.theirs,
+      side: this.side,
+      index: this.index,
+      chosenMine: this.chosenMine,
+      prompt: this.side === 0 ? "Choose a POKéMON." : `Which POKéMON
+for theirs?`
     };
   }
 }
@@ -18734,6 +18953,7 @@ class VoxelmonGame {
     const t0 = p ? p.now() : 0;
     this.input.setButtons(buttons);
     this.input.step();
+    this.overworld.serviceLink();
     const top = this.stack[this.stack.length - 1];
     top?.update();
     this.advancePlayTime();
@@ -19071,6 +19291,32 @@ ${mname}!`);
         const r = cellsToPicRect(partyIconCell(i));
         out.push({ page, x: r.x, y: r.y, w: r.w, h: r.h });
       });
+      return out;
+    }
+    if (top?.kind === "tradeanim") {
+      const v = top.view();
+      if (!v?.mon)
+        return [];
+      const page = picPageFor(this.data, v.mon.species);
+      if (page < 0)
+        return [];
+      const r = cellsToPicRect(TRADE_PIC_CELL);
+      return [{ page, x: r.x, y: r.y, w: r.w, h: r.h }];
+    }
+    if (top?.kind === "tradescreen") {
+      const v = top.view();
+      const out = [];
+      const add2 = (list2, row0) => {
+        list2.forEach((e, i) => {
+          const page = picPageFor(this.data, e.species);
+          if (page < 0)
+            return;
+          const r = cellsToPicRect({ x: 1, y: row0 + i, w: 1, h: 1 });
+          out.push({ page, x: r.x, y: r.y, w: r.w, h: r.h });
+        });
+      };
+      add2(v.theirs, TRADE_THEIRS_ROW);
+      add2(v.mine, TRADE_MINE_ROW);
       return out;
     }
     if (top?.kind === "evolution") {
@@ -19853,82 +20099,148 @@ canceled.`, {}, after);
       const o = m;
       return !!o && typeof o === "object" && typeof o.species === "string" && !!this.data.pokemon?.[o.species] && typeof o.level === "number" && o.level >= 1 && o.level <= 100 && typeof o.hp === "number" && !!o.stats && Array.isArray(o.moves);
     };
+    const entry = (m) => ({
+      name: nameOf(m),
+      level: m.level,
+      species: m.species,
+      hp: m.hp,
+      maxHp: m.stats?.hp ?? m.hp,
+      status: m.status ?? null
+    });
     s.resetTrade();
-    this.push(new PartyState(this, {
-      prompt: "Choose a POKéMON.",
-      onCancel: finish,
-      onPick: (i) => {
-        const mine = this.save.party[i];
-        if (!mine) {
-          finish();
+    s.sendParty({
+      mons: JSON.parse(JSON.stringify(this.save.party)),
+      otName: String(this.save.player?.name ?? "RED"),
+      otId: Number(this.save.player?.id ?? 0)
+    });
+    ow.waitLink((x) => x.peerParty !== null, LINK_WAIT_FRAMES, (arrived) => {
+      const theirParty = s.peerParty;
+      if (!arrived || !theirParty) {
+        canceled(finish);
+        return;
+      }
+      const theirs = theirParty.mons.filter(wellFormed);
+      if (theirs.length === 0) {
+        canceled(finish);
+        return;
+      }
+      const swap = (mySlot, theirSlot, after) => {
+        const mine = this.save.party[mySlot];
+        const got = theirs[theirSlot];
+        if (!mine || !got) {
+          canceled(after);
           return;
         }
-        s.offer({
-          mon: JSON.parse(JSON.stringify(mine)),
-          otName: mine.otName ?? String(this.save.player?.name ?? "RED"),
-          otId: mine.otId ?? Number(this.save.player?.id ?? 0)
-        });
-        ow.waitLink((x) => x.peerOffer !== null, LINK_WAIT_FRAMES, (arrived) => {
-          const offer = s.peerOffer;
-          if (!arrived || !offer || !wellFormed(offer.mon)) {
-            canceled(finish);
-            return;
+        const arrival = {
+          ...got,
+          traded: true,
+          otName: theirParty.otName,
+          otId: theirParty.otId
+        };
+        this.save.party[mySlot] = arrival;
+        const dex = this.save.pokedex;
+        if (dex) {
+          (dex.seen ??= {})[arrival.species] = true;
+          (dex.owned ??= {})[arrival.species] = true;
+        }
+        s.resetTrade();
+        this.push(new TradeAnimState(this, {
+          sending: entry(mine),
+          receiving: entry(arrival),
+          peerName: s.peerName,
+          onDone: () => {
+            const subs = {
+              wLinkEnemyTrainerName: s.peerName,
+              wNameBuffer: nameOf(arrival),
+              wStringBuffer: nameOf(mine),
+              wNameOfPlayerMonToBeTraded: nameOf(mine)
+            };
+            say("_TradeWentToText", `{RAM:wStringBuffer} went
+to {RAM:wLinkEnemyTrainerName}.`, subs, () => say("_TradeTakeCareText", `Take good care of
+{RAM:wNameBuffer}.`, subs, () => {
+              const hit = pendingFor(this.data, arrival, { kind: "trade" });
+              if (!hit) {
+                after();
+                return;
+              }
+              this.push(new EvolutionState(this, arrival, hit[0], "TRADE", (mon, to) => apply2(this.data, mon, to, this.save.pokedex), after));
+            }));
           }
-          const theirs = offer.mon;
-          say("_TradeWillTradeText", `{RAM:wLinkEnemyTrainerName} will
-trade {RAM:wNameBuffer}`, { wLinkEnemyTrainerName: s.peerName, wNameBuffer: nameOf(theirs) }, () => {
-            let ask2 = t._TradeforText ?? `for {PLAYER}'s
-{RAM:wStringBuffer}.`;
-            ask2 = ask2.replace(/\{PLAYER\}/g, String(this.save.player?.name ?? "RED")).replace(/\{RAM:(\w+)\}/g, () => nameOf(mine));
-            this.showChoice(ask2, (yes) => {
-              s.answer(yes);
+        }));
+      };
+      const openScreen = () => {
+        this.push(new TradeScreenState(this, {
+          myName: String(this.save.player?.name ?? "RED"),
+          peerName: s.peerName,
+          mine: this.save.party.map(entry),
+          theirs: theirs.map(entry),
+          watch: s,
+          onDone: (choice) => {
+            if (choice.kind === "cancel") {
+              s.answer(false);
+              finish();
+              return;
+            }
+            if (choice.kind === "propose") {
+              s.offer({ give: choice.give, take: choice.take });
               ow.waitLink((x) => x.peerAnswer !== null, LINK_WAIT_FRAMES, (answered) => {
-                if (!yes || !answered || s.peerAnswer !== true) {
+                if (!answered || s.peerAnswer !== true) {
                   s.resetTrade();
                   canceled(finish);
                   return;
                 }
-                const got = {
-                  ...theirs,
-                  traded: true,
-                  otName: offer.otName,
-                  otId: offer.otId
-                };
-                this.save.party[i] = got;
-                const dex = this.save.pokedex;
-                if (dex) {
-                  (dex.seen ??= {})[got.species] = true;
-                  (dex.owned ??= {})[got.species] = true;
+                swap(choice.give, choice.take, finish);
+              });
+              return;
+            }
+            const o = s.peerOffer;
+            if (!o) {
+              canceled(finish);
+              return;
+            }
+            const incoming = theirs[o.give];
+            const outgoing = this.save.party[o.take];
+            if (!incoming || !outgoing) {
+              s.answer(false);
+              canceled(finish);
+              return;
+            }
+            const subs = {
+              wLinkEnemyTrainerName: s.peerName,
+              wNameBuffer: nameOf(incoming),
+              wStringBuffer: nameOf(outgoing)
+            };
+            say("_TradeWillTradeText", `{RAM:wLinkEnemyTrainerName} will
+trade {RAM:wNameBuffer}`, subs, () => {
+              let ask2 = t._TradeforText ?? `for {PLAYER}'s
+{RAM:wStringBuffer}.`;
+              ask2 = ask2.replace(/\{PLAYER\}/g, String(this.save.player?.name ?? "RED")).replace(/\{RAM:(\w+)\}/g, () => nameOf(outgoing));
+              this.showChoice(ask2, (yes) => {
+                s.answer(yes);
+                if (!yes) {
+                  s.resetTrade();
+                  canceled(finish);
+                  return;
                 }
-                s.resetTrade();
-                const subs = {
-                  wLinkEnemyTrainerName: s.peerName,
-                  wNameBuffer: nameOf(got),
-                  wStringBuffer: nameOf(mine),
-                  wNameOfPlayerMonToBeTraded: nameOf(mine)
-                };
-                say("_WillBeTradedText", `{RAM:wNameOfPlayerMonToBeTraded} and
-{RAM:wNameBuffer} will
-be traded.`, subs, () => say("_TradeWentToText", `{RAM:wStringBuffer} went
-to {RAM:wLinkEnemyTrainerName}.`, subs, () => say("_TradeSendsText", `{RAM:wLinkEnemyTrainerName} sends
-{RAM:wNameBuffer}.`, subs, () => say("_TradeTakeCareText", `Take good care of
-{RAM:wNameBuffer}.`, subs, () => {
-                  const hit = pendingFor(this.data, got, { kind: "trade" });
-                  if (!hit) {
-                    finish();
-                    return;
-                  }
-                  this.push(new EvolutionState(this, got, hit[0], "TRADE", (mon, to) => apply2(this.data, mon, to, this.save.pokedex), finish));
-                }))));
+                swap(o.take, o.give, finish);
               });
             });
-          });
-        });
-      }
-    }));
+          }
+        }));
+      };
+      openScreen();
+    });
   }
   openDiploma(onDone) {
     this.push(new DiplomaState(this, onDone));
+  }
+  tradeAnim() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "tradeanim" ? top.view?.() ?? null : null;
+  }
+  tradeScreen() {
+    const top = this.stack[this.stack.length - 1];
+    return top?.kind === "tradescreen" ? top.view?.() ?? null : null;
   }
   diplomaScreen() {
     const top = this.stack[this.stack.length - 1];

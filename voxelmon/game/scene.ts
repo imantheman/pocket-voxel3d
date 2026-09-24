@@ -20,6 +20,7 @@ import {
 import { CARD_PIC_CELL } from "./ui/trainercard.ts";
 import { SUMMARY_PIC_CELL } from "./ui/partyscreen.ts";
 import { hpBarTiles } from "./battle/ui.ts";
+import { TRADE_PIC_CELL } from "./ui/tradeanim.ts";
 import { EVO_PIC_CELL } from "./ui/evoscreen.ts";
 import type { WildBattle } from "./battle/battle.ts";
 import { desiredCards, type BattleStaging } from "./battle/staging.ts";
@@ -185,6 +186,7 @@ export class Scene {
   private dexSig: string | null = null;
   private hofSig: string | null = null;
   private diplomaSig: string | null = null;
+  private tradeSig: string | null = null;
   private creditsSig: string | null = null;
   /** The evolution movie's last drawn lines (ui/evoscreen.ts). */
   private evoSig: string | null = null;
@@ -1005,6 +1007,7 @@ export class Scene {
       this.uiOwner = null;
       this.menuSig = this.titleSig = this.namingSig = null;
     this.hofSig = this.creditsSig = this.evoSig = this.diplomaSig = null;
+    this.tradeSig = null;
     }
     // The evolution movie (ui/evoscreen.ts): the form on the pic layer,
     // "What? X is evolving!" stamped under it while the two trade places.
@@ -1033,6 +1036,61 @@ export class Scene {
     // The HALL OF FAME roll (ui/hofscreen.ts): one inductee at a time, the
     // front pic on the pic layer with its dex number, name and level stamped
     // under it. No cursor and nothing to choose -- it advances itself.
+    // The link trade screen (ui/tradescreen.ts): theirs on top, yours
+    // underneath, one cursor crossing between them. Both lists show the
+    // name, the level and the HP the way the party menu does, because on
+    // this screen you are deciding what to give away.
+    const tsv = (view as unknown as { tradeScreen?: () => any }).tradeScreen?.();
+    if (tsv) {
+      const sig = `T${tsv.side},${tsv.index},${tsv.chosenMine}`;
+      if (sig !== this.tradeSig) {
+        this.tradeSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        host.uiFill(0, 0, UI_COLS, UI_ROWS, SPACE);
+        const list = (rows: any[], row0: number, selected: number | null) => {
+          rows.forEach((e: any, i: number) => {
+            const y = row0 + i;
+            host.uiFill(1, y, 1, 1, 0);          // the icon shows through
+            this.stamp(host, 2, y, String(e.name).slice(0, 10));
+            this.level(host, 13, y, e.level);
+            if (e.hp <= 0) this.stamp(host, 17, y, "FNT");
+            else if (e.status) this.stamp(host, 17, y, e.status);
+            if (selected === i) host.uiTile(19, y, ARROW_CURSOR);
+          });
+        };
+        this.stamp(host, 1, 1, String(tsv.peerName).slice(0, 10));
+        list(tsv.theirs, 2, null);
+        this.stamp(host, 1, 9, String(tsv.myName).slice(0, 10));
+        list(tsv.mine, 10, tsv.chosenMine);
+        // the cursor, on whichever side it is
+        const row = (tsv.side === 0 ? 10 : 2) + tsv.index;
+        host.uiTile(0, row, ARROW_CURSOR);
+        this.frame(host, 0, 16, UI_COLS, 2);
+        this.stamp(host, 1, 17, String(tsv.prompt ?? "").split("\n")[0] ?? "");
+      }
+      return;
+    }
+    // The trade animation (ui/tradeanim.ts): one mon at a time in the pic
+    // nook, with the line for the beat under it.
+    const tav = (view as unknown as { tradeAnim?: () => any }).tradeAnim?.();
+    if (tav) {
+      const sig = `A${tav.phase}`;
+      if (sig !== this.tradeSig) {
+        this.tradeSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        host.uiFill(0, 0, UI_COLS, UI_ROWS, SPACE);
+        if (tav.mon) {
+          const c = TRADE_PIC_CELL;
+          host.uiFill(c.x, c.y, c.w, c.h, 0);   // cut the nook for the pic
+        }
+        String(tav.line ?? "").split("\n").forEach((line: string, k: number) => {
+          this.stamp(host, 1, 13 + k * 2, line);
+        });
+      }
+      return;
+    }
     // The DIPLOMA (ui/diploma.ts, DisplayDiploma): a framed certificate page,
     // drawn from the same trainer-card frame tiles, with nothing on it to
     // choose. Above the Hall of Fame here only because both are end-game

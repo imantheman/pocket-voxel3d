@@ -48,6 +48,9 @@ import { DevMenuState } from "./ui/devmenu.ts";
 import { CARD_PIC_RECT, TrainerCardState } from "./ui/trainercard.ts";
 import { CreditsState, HallOfFameState } from "./ui/hofscreen.ts";
 import { DiplomaState } from "./ui/diploma.ts";
+import { TradeScreenState } from "./ui/tradescreen.ts";
+import { TradeAnimState, TRADE_PIC_CELL } from "./ui/tradeanim.ts";
+import { TRADE_MINE_ROW, TRADE_THEIRS_ROW } from "./ui/tradescreen.ts";
 import {
   hostTransport, LINK_ROOM, LINK_WAIT_FRAMES, type LinkSession, type LinkTransport,
 } from "./world/link.ts";
@@ -630,6 +633,8 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     const t0 = p ? p.now() : 0;
     this.input.setButtons(buttons);
     this.input.step();
+    // The link before the frame: it has to be read whatever is on screen.
+    this.overworld.serviceLink();
     const top = this.stack[this.stack.length - 1];
     top?.update();
     this.advancePlayTime();
@@ -1115,6 +1120,35 @@ export class VoxelmonGame implements OverworldShell, SceneView {
         const r = cellsToPicRect(partyIconCell(i));
         out.push({ page, x: r.x, y: r.y, w: r.w, h: r.h });
       });
+      return out;
+    }
+    if (top?.kind === "tradeanim") {
+      // The mon of the beat, in the same nook the summary puts one in. The
+      // gap has none on purpose: it is the part where it is in the cable.
+      const v = top.view() as { mon: { species: string } | null };
+      if (!v?.mon) return [];
+      const page = picPageFor(this.data as never, v.mon.species);
+      if (page < 0) return [];
+      const r = cellsToPicRect(TRADE_PIC_CELL);
+      return [{ page, x: r.x, y: r.y, w: r.w, h: r.h }];
+    }
+    if (top?.kind === "tradescreen") {
+      // Both parties get their icon in the nook beside the name, the way
+      // the party menu does it.
+      const v = top.view() as {
+        mine: { species: string }[]; theirs: { species: string }[];
+      };
+      const out: { page: number; x: number; y: number; w: number; h: number }[] = [];
+      const add = (list: { species: string }[], row0: number) => {
+        list.forEach((e, i) => {
+          const page = picPageFor(this.data as never, e.species);
+          if (page < 0) return;
+          const r = cellsToPicRect({ x: 1, y: row0 + i, w: 1, h: 1 });
+          out.push({ page, x: r.x, y: r.y, w: r.w, h: r.h });
+        });
+      };
+      add(v.theirs, TRADE_THEIRS_ROW);
+      add(v.mine, TRADE_MINE_ROW);
       return out;
     }
     if (top?.kind === "evolution") {
@@ -2183,13 +2217,15 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   /**
    * The table in the TRADE CENTER (engine/link/trade.asm).
    *
-   * Pick one, put it on the table, wait for theirs, both say yes, swap. A
-   * flow rather than script rows because every step waits on the other
-   * console and the waiting interleaves with menus.
+   * Both parties cross first, so the screen can show yours and theirs at
+   * once the way the ROM's does, and so neither side has to take the
+   * other's word for what it is sending: an offer is two indices into
+   * parties both consoles already hold.
    *
-   * What comes back is not trusted: the peer is another copy of the game,
-   * not an authority, so the mon is checked for shape before it is put in
-   * the party. A trade that arrives malformed is refused, not stored.
+   * Only one side ever reaches the confirm. Whoever picks a pair first is
+   * proposing; the other's screen sees the offer land and steps aside to
+   * answer it. There is no "your turn" in a Cable Club, just two people
+   * reaching for the machine, so the wire decides it rather than a lock.
    */
   linkTrade(done?: () => void): void {
     const ow = this.overworld;
@@ -2219,82 +2255,121 @@ export class VoxelmonGame implements OverworldShell, SceneView {
         typeof o.hp === "number" && !!o.stats && Array.isArray(o.moves)
       );
     };
+    const entry = (m: PartyMon) => ({
+      name: nameOf(m), level: m.level, species: m.species,
+      hp: m.hp, maxHp: m.stats?.hp ?? m.hp, status: m.status ?? null,
+    });
 
     s.resetTrade();
-    this.push(
-      new PartyState(this as never, {
-        prompt: "Choose a POKéMON.",
-        onCancel: finish,
-        onPick: (i: number) => {
-          const mine = this.save.party[i];
-          if (!mine) { finish(); return; }
-          s.offer({
-            mon: JSON.parse(JSON.stringify(mine)) as Record<string, unknown>,
-            otName: mine.otName ?? String(this.save.player?.name ?? "RED"),
-            otId: mine.otId ?? Number(this.save.player?.id ?? 0),
-          });
-          ow.waitLink((x) => x.peerOffer !== null, LINK_WAIT_FRAMES, (arrived) => {
-            const offer = s.peerOffer;
-            if (!arrived || !offer || !wellFormed(offer.mon)) { canceled(finish); return; }
-            const theirs = offer.mon as unknown as PartyMon;
-            // "<THEM> will trade <THEIRS>" / "for <YOU>'s <MINE>." -- the
-            // ROM splits the sentence over two boxes and the yes/no rides
-            // on the second.
-            say("_TradeWillTradeText", "{RAM:wLinkEnemyTrainerName} will\ntrade {RAM:wNameBuffer}",
-              { wLinkEnemyTrainerName: s.peerName, wNameBuffer: nameOf(theirs) }, () => {
-                let ask = t._TradeforText ?? "for {PLAYER}'s\n{RAM:wStringBuffer}.";
-                ask = ask.replace(/\{PLAYER\}/g, String(this.save.player?.name ?? "RED"))
-                         .replace(/\{RAM:(\w+)\}/g, () => nameOf(mine));
-                this.showChoice(ask, (yes) => {
-                  s.answer(yes);
-                  ow.waitLink((x) => x.peerAnswer !== null, LINK_WAIT_FRAMES, (answered) => {
-                    if (!yes || !answered || s.peerAnswer !== true) {
-                      s.resetTrade();
-                      canceled(finish);
-                      return;
-                    }
-                    // The swap. The arrival keeps its own trainer, which is
-                    // what makes it a traded mon: Gen 1 reads that for
-                    // obedience and the summary shows the OT.
-                    const got: PartyMon = { ...theirs, traded: true,
-                      otName: offer.otName, otId: offer.otId };
-                    this.save.party[i] = got;
-                    const dex = (this.save as { pokedex?: { seen?: Record<string, boolean>;
-                      owned?: Record<string, boolean> } }).pokedex;
-                    if (dex) {
-                      (dex.seen ??= {})[got.species] = true;
-                      (dex.owned ??= {})[got.species] = true;
-                    }
-                    s.resetTrade();
-                    const subs = { wLinkEnemyTrainerName: s.peerName,
-                      wNameBuffer: nameOf(got), wStringBuffer: nameOf(mine),
-                      wNameOfPlayerMonToBeTraded: nameOf(mine) };
-                    say("_WillBeTradedText", "{RAM:wNameOfPlayerMonToBeTraded} and\n{RAM:wNameBuffer} will\nbe traded.", subs, () =>
-                      say("_TradeWentToText", "{RAM:wStringBuffer} went\nto {RAM:wLinkEnemyTrainerName}.", subs, () =>
-                        say("_TradeSendsText", "{RAM:wLinkEnemyTrainerName} sends\n{RAM:wNameBuffer}.", subs, () =>
-                          say("_TradeTakeCareText", "Take good care of\n{RAM:wNameBuffer}.", subs, () => {
-                            // The four that only evolve by changing hands.
-                            const hit = pendingFor(this.data, got as never, { kind: "trade" });
-                            if (!hit) { finish(); return; }
-                            this.push(new EvolutionState(
-                              this as never, got as never, hit[0], "TRADE",
-                              (mon, to) => applyEvolution(this.data, mon as never, to,
-                                (this.save as { pokedex?: never }).pokedex),
-                              finish,
-                            ));
-                          }))));
-                  });
-                });
+    s.sendParty({
+      mons: JSON.parse(JSON.stringify(this.save.party)) as Record<string, unknown>[],
+      otName: String(this.save.player?.name ?? "RED"),
+      otId: Number((this.save.player as { id?: number } | undefined)?.id ?? 0),
+    });
+
+    ow.waitLink((x) => x.peerParty !== null, LINK_WAIT_FRAMES, (arrived) => {
+      const theirParty = s.peerParty;
+      if (!arrived || !theirParty) { canceled(finish); return; }
+      const theirs = theirParty.mons.filter(wellFormed) as unknown as PartyMon[];
+      if (theirs.length === 0) { canceled(finish); return; }
+
+      /** Swap slot `mySlot` of mine for `theirSlot` of theirs. */
+      const swap = (mySlot: number, theirSlot: number, after: () => void) => {
+        const mine = this.save.party[mySlot];
+        const got = theirs[theirSlot];
+        if (!mine || !got) { canceled(after); return; }
+        const arrival: PartyMon = { ...got, traded: true,
+          otName: theirParty.otName, otId: theirParty.otId };
+        this.save.party[mySlot] = arrival;
+        const dex = (this.save as { pokedex?: { seen?: Record<string, boolean>;
+          owned?: Record<string, boolean> } }).pokedex;
+        if (dex) {
+          (dex.seen ??= {})[arrival.species] = true;
+          (dex.owned ??= {})[arrival.species] = true;
+        }
+        s.resetTrade();
+        this.push(new TradeAnimState(this as never, {
+          sending: entry(mine),
+          receiving: entry(arrival),
+          peerName: s.peerName,
+          onDone: () => {
+            const subs = { wLinkEnemyTrainerName: s.peerName,
+              wNameBuffer: nameOf(arrival), wStringBuffer: nameOf(mine),
+              wNameOfPlayerMonToBeTraded: nameOf(mine) };
+            say("_TradeWentToText", "{RAM:wStringBuffer} went\nto {RAM:wLinkEnemyTrainerName}.", subs, () =>
+              say("_TradeTakeCareText", "Take good care of\n{RAM:wNameBuffer}.", subs, () => {
+                // The four that only evolve by changing hands.
+                const hit = pendingFor(this.data, arrival as never, { kind: "trade" });
+                if (!hit) { after(); return; }
+                this.push(new EvolutionState(
+                  this as never, arrival as never, hit[0], "TRADE",
+                  (mon, to) => applyEvolution(this.data, mon as never, to,
+                    (this.save as { pokedex?: never }).pokedex),
+                  after,
+                ));
+              }));
+          },
+        }));
+      };
+
+      const openScreen = () => {
+        this.push(new TradeScreenState(this as never, {
+          myName: String(this.save.player?.name ?? "RED"),
+          peerName: s.peerName,
+          mine: this.save.party.map(entry),
+          theirs: theirs.map(entry),
+          watch: s as unknown as { peerOffer: unknown; state: string },
+          onDone: (choice) => {
+            if (choice.kind === "cancel") { s.answer(false); finish(); return; }
+            if (choice.kind === "propose") {
+              s.offer({ give: choice.give, take: choice.take });
+              ow.waitLink((x) => x.peerAnswer !== null, LINK_WAIT_FRAMES, (answered) => {
+                if (!answered || s.peerAnswer !== true) { s.resetTrade(); canceled(finish); return; }
+                // I proposed: my `give` goes, their `take` comes back.
+                swap(choice.give, choice.take, finish);
               });
-          });
-        },
-      }),
-    );
+              return;
+            }
+            // They proposed: their `give` comes to me, my `take` goes.
+            const o = s.peerOffer;
+            if (!o) { canceled(finish); return; }
+            const incoming = theirs[o.give];
+            const outgoing = this.save.party[o.take];
+            if (!incoming || !outgoing) { s.answer(false); canceled(finish); return; }
+            const subs = { wLinkEnemyTrainerName: s.peerName,
+              wNameBuffer: nameOf(incoming), wStringBuffer: nameOf(outgoing) };
+            say("_TradeWillTradeText", "{RAM:wLinkEnemyTrainerName} will\ntrade {RAM:wNameBuffer}", subs, () => {
+              let ask = t._TradeforText ?? "for {PLAYER}'s\n{RAM:wStringBuffer}.";
+              ask = ask.replace(/\{PLAYER\}/g, String(this.save.player?.name ?? "RED"))
+                       .replace(/\{RAM:(\w+)\}/g, () => nameOf(outgoing));
+              this.showChoice(ask, (yes) => {
+                s.answer(yes);
+                if (!yes) { s.resetTrade(); canceled(finish); return; }
+                swap(o.take, o.give, finish);
+              });
+            });
+          },
+        }));
+      };
+      openScreen();
+    });
   }
 
   /** open_diploma (world/script.ts): the completed-POKeDEX page. */
   openDiploma(onDone?: () => void): void {
     this.push(new DiplomaState(this as never, onDone));
+  }
+
+  /** ui/tradeanim.ts TradeAnimState.view, for scene.ts. */
+  tradeAnim(): unknown {
+    const top = this.stack[this.stack.length - 1] as GameState & { view?: () => unknown };
+    return top?.kind === "tradeanim" ? (top.view?.() ?? null) : null;
+  }
+
+  /** ui/tradescreen.ts TradeScreenState.view, for scene.ts. */
+  tradeScreen(): unknown {
+    const top = this.stack[this.stack.length - 1] as GameState & { view?: () => unknown };
+    return top?.kind === "tradescreen" ? (top.view?.() ?? null) : null;
   }
 
   /** ui/diploma.ts DiplomaState.view, for scene.ts. */

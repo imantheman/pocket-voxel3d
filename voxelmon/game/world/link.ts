@@ -70,6 +70,8 @@ export const LINK_MSG = {
   answer: 5,
   /** where this player is standing, so the other can see them move. */
   pos: 6,
+  /** this side's whole party, so the trade screen can show both. */
+  party: 7,
 } as const;
 
 /** Where the peer is, in world pixels, as they last told us. */
@@ -89,10 +91,20 @@ export interface LinkPos {
  * Virtual Console would need, and that is a converter at the edge rather
  * than a different wire in the middle.
  */
+/**
+ * A proposal, in the PROPOSER's terms: give their party[give], take the
+ * receiver's party[take]. Indices rather than a mon, because both parties
+ * have already crossed and both sides can look the mon up -- which also
+ * means neither side has to take the other's word for what it is sending.
+ */
 export interface TradeOffer {
-  /** A PartyMon, as sent. Structurally checked on arrival, not trusted. */
-  mon: Record<string, unknown>;
-  /** Who is sending it, so the receiver can stamp the OT. */
+  give: number;
+  take: number;
+}
+
+/** A party as it crosses, with the trainer to stamp on anything traded. */
+export interface PartyWire {
+  mons: Record<string, unknown>[];
   otName: string;
   otId: number;
 }
@@ -189,6 +201,8 @@ export class LinkSession {
   peerAnswer: boolean | null = null;
   /** Where the peer is standing, once they have said. */
   peerPos: LinkPos | null = null;
+  /** Their whole party, for the trade screen to show. */
+  peerParty: PartyWire | null = null;
 
   /**
    * Which side of the table this console takes, 0 or 1.
@@ -243,7 +257,12 @@ export class LinkSession {
     this.transport.send(encodeJson(LINK_MSG.pos, { x, y, f: facing }));
   }
 
-  /** Put a mon on the table. */
+  /** Show the other side what you have. */
+  sendParty(p: PartyWire): void {
+    this.transport.send(encodeJson(LINK_MSG.party, p));
+  }
+
+  /** Propose a swap: my `give` for your `take`. */
   offer(o: TradeOffer): void {
     this.transport.send(encodeJson(LINK_MSG.offer, o));
   }
@@ -253,7 +272,9 @@ export class LinkSession {
     this.transport.send(new Uint8Array([LINK_MSG.answer, ok ? 1 : 0]));
   }
 
-  /** Clear the table, for the next trade in the same session. */
+  /** Clear the table, for the next trade in the same session. The parties
+   * stay: they are resent each time the screen opens, so whatever changed
+   * hands is already accounted for. */
   resetTrade(): void {
     this.peerOffer = null;
     this.peerAnswer = null;
@@ -312,12 +333,25 @@ export class LinkSession {
         case LINK_MSG.room:
           this.peerRoom = (f[1] ?? 0) as LinkRoom;
           break;
+        case LINK_MSG.party: {
+          const p = decodeJson(f) as PartyWire | null;
+          if (p && typeof p === "object" && Array.isArray(p.mons)) {
+            this.peerParty = {
+              mons: p.mons.slice(0, 6),
+              otName: typeof p.otName === "string" ? p.otName : "",
+              otId: Number(p.otId ?? 0),
+            };
+          }
+          break;
+        }
         case LINK_MSG.offer: {
           const o = decodeJson(f) as TradeOffer | null;
-          // A frame that did not parse, or carries no mon, is dropped rather
-          // than put on the table: the other end is a peer, not an authority.
-          if (o && typeof o === "object" && o.mon && typeof o.mon === "object") {
-            this.peerOffer = o;
+          // Two indices into parties both sides already hold. Anything else
+          // is dropped: the other end is a peer, not an authority.
+          if (o && typeof o === "object" &&
+              Number.isInteger(o.give) && Number.isInteger(o.take) &&
+              o.give >= 0 && o.give < 6 && o.take >= 0 && o.take < 6) {
+            this.peerOffer = { give: o.give, take: o.take };
           }
           break;
         }
