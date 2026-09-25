@@ -242,15 +242,18 @@ another. Re-copy the whole `paks` folder.
 
 **The CIA launches straight to "An error occurred (ErrDisp): The SD card
 was removed"**
-The exheader is over-privileged. That error is the FS module's answer to
-an SD-installed title whose filesystem bits claim it is a *system*
-application (or whose ARM9 side claims NAND-mounting rights). It runs fine
-in Citra, which does not enforce the exheader; hardware does. Build with
-`tools/make_cia.sh` and its RSF as shipped — the fix is in the RSF. If you
-have written your own, grant exactly `DirectSdmc` and `DirectSdmcWrite`
-under `FileSystemAccess` and nothing under `IoAccessControl`, and compare
-the result against a homebrew CIA that runs; `tools/pocketvoxel.rsf`
-explains what else has to be there.
+The title has no logo. A title launched from the HOME menu is handed its
+logo for the launch transition, and one without any fails there -- with an
+error that says nothing about logos, and that a `.3dsx` never hits because
+the Homebrew Launcher never asks. Every CIA that runs carries a `logo`
+entry in its ExeFS. `tools/make_cia.sh` passes `-exefslogo` and the RSF
+sets `Logo: Homebrew` (makerom's own splash, not one of Nintendo's); if
+you have written your own build, do both. It also runs fine in Citra,
+which does not go through the HOME menu's launch path.
+
+While there, keep the exheader honest: an SD-installed title should grant
+exactly `DirectSdmc` and `DirectSdmcWrite` under `FileSystemAccess` and
+nothing under `IoAccessControl`.
 
 **It boots but cannot save**
 The game tests the card on startup. A write-protected or full SD card is the

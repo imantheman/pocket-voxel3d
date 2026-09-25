@@ -1,17 +1,22 @@
 # makerom ROM Spec File for the 3DS CIA build (tools/make_cia.sh).
 #
-# Shaped to match what working homebrew CIAs actually carry, read back out
-# of three of them field by field (3DShell, Meteo3DS and a third) after the
-# first cut of this file launched to "The SD card was removed". The
-# differences that mattered are called out inline.
+# Shaped to match a CIA that is known to run on hardware from THIS machine
+# (stereo3ds, also a ctru-rs build), after two cuts of this file launched to
+# "An error occurred (ErrDisp): The SD card was removed." The first cut was
+# over-privileged and is cleaned up below; the actual wall was simpler and
+# is the Logo line: a title launched from the HOME menu is handed its logo
+# for the launch transition, and every CIA that runs carries one in its
+# ExeFS. A 3dsx never needs it, which is why the same binary ran from the
+# Homebrew Launcher all along.
 #
-# Deliberately carries NO boot logo: makerom's `Logo:` field embeds one of
-# Nintendo's, and this build ships nothing of theirs.
+# Homebrew is makerom's own bundled splash, not one of Nintendo's -- the
+# other options embed theirs, and this build ships nothing of theirs.
 
 BasicInfo:
   Title                   : "Pocket Voxel"
   ProductCode             : "CTR-P-PVXL"
   ContentType             : Application
+  Logo                    : Homebrew
 
 TitleInfo:
   Category                : Application
@@ -58,13 +63,10 @@ AccessControlInfo:
   SpecialMemoryArrange    : true
   CanAccessCore2          : true
 
-  # THE FIX. The first cut granted every filesystem bit there is, including
-  # CategorySystemApplication and CategoryHomeMenu. Those bits tell the FS
-  # module what kind of title it is serving, and an SD-installed title that
-  # claims to be a system application is a contradiction it answers with
-  # "The SD card was removed" -- the error this build launched to. Every
-  # working CIA read for comparison grants only these two. The paks and
-  # save.lua live on the card; this is all the card access the game needs.
+  # Only the card. The first cut granted every filesystem bit there is,
+  # including the system-application categories, which is not what an
+  # SD-installed title is; every working CIA grants exactly these two. The
+  # paks and save.lua live on the card and this is all the access they need.
   FileSystemAccess:
    - DirectSdmc
    - DirectSdmcWrite
@@ -78,13 +80,11 @@ AccessControlInfo:
 
   # Memory the process touches directly, which under the Homebrew Launcher
   # it inherited from its host and as its own title has to declare: the
-  # DSP's memory for the sound, and VRAM for citro3d's render targets and
-  # textures. Absent, the first VRAM write is a fault.
-  # The flags are stated so the descriptors come out byte-identical to a
-  # working title's (0xff81ff00 0xff81ff80 for the DSP pair, 0xff91f000
-  # 0xff91f600 for VRAM); makerom's `:r` does not mean what its name says.
-  MemoryMapping:
+  # DSP's memory for the sound, and VRAM for citro3d. Written the way the
+  # known-good recipe writes them.
+  IORegisterMapping:
    - 1ff00000-1ff7ffff
+  MemoryMapping:
    - 1f000000-1f5fffff:r
 
   # The user-mode syscall set, 0x01-0x3D. makerom reads the NUMBERS -- the
