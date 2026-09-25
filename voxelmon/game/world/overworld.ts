@@ -54,7 +54,7 @@ import {
 import { nurseGreetScript } from "./nurses.ts";
 import { cableClubScript } from "./cableclub.ts";
 import {
-  hostTransport, LinkSession, LINK_ROOM_MAP, LINK_SEATS,
+  hostTransport, LinkSession, LINK_ROOM_MAP, LINK_SEATS, LINK_TABLE,
   type LinkTransport,
 } from "./link.ts";
 import { pcTileAt } from "./pctiles.ts";
@@ -1069,6 +1069,10 @@ export class Overworld implements ScriptWorld {
   interact(): void {
     const p = this.player;
     const [fx, fy] = p.facingCell();
+    // The Cable Club's machine, before the counter reach-across: in the
+    // TRADE CENTER the machine IS a counter, and the press would otherwise
+    // reach over it to the other player and get the ROM's "!".
+    if (this.tryLinkMachine(fx, fy)) return;
     let npc = this.npcAtCell(fx, fy);
     if (!npc && this.map.isCounterCell(fx, fy)) {
       // talk across counters (mart clerks, nurses)
@@ -1446,6 +1450,20 @@ export class Overworld implements ScriptWorld {
 
   /** The open session, or null when there is no link. */
   link: LinkSession | null = null;
+  /** The last state the log was told about, so it is told once per change. */
+  private linkLogged = "";
+
+  /**
+   * One line in the host's log per turn the link takes. On a console this
+   * is pvlog.txt on the card, which is the only window anyone has into a
+   * link that did not happen; under test there is no host log and this is
+   * silent.
+   */
+  private linkLog(msg: string): void {
+    // console.log is the host's log on a console (voxel_shim.c); the
+    // presence of the `voxel` natives is what says this is one.
+    if ((globalThis as { voxel?: unknown }).voxel) console.log(`[pv] link: ${msg}`);
+  }
   /** What a script is waiting for the session to do. */
   private linkWait:
     | { until: (s: LinkSession) => boolean; frames: number; done: (ok: boolean) => void }
@@ -1460,9 +1478,11 @@ export class Overworld implements ScriptWorld {
     if (this.link && this.link.state !== "closed") return true;
     const shell = this.shell as unknown as { linkTransport?: () => LinkTransport | null };
     const t = shell.linkTransport ? shell.linkTransport() : hostTransport();
-    if (!t) return false;
+    if (!t) { this.linkLog("no carrier"); return false; }
     this.link = new LinkSession(t, String(this.save.player?.name ?? "RED"));
     this.link.open();
+    this.linkLogged = "";
+    this.linkLog("open, waiting for a peer");
     return true;
   }
 
@@ -1476,8 +1496,30 @@ export class Overworld implements ScriptWorld {
     until: (s: LinkSession) => boolean,
     frames: number,
     done: (ok: boolean) => void,
+    opts?: { pleaseWait?: boolean },
   ): void {
-    this.linkWait = { until, frames, done };
+    // "Please wait." for the waits a player sits through with nothing else
+    // on screen -- the desk, the room menu -- taken down again by the
+    // wait itself, so nobody arrives in the room still reading it. Not
+    // for the waits inside a trade, which happen under the trade's own
+    // screens.
+    if (opts?.pleaseWait) this.showLinkWait();
+    this.linkWait = { until, frames, done: (ok) => { this.hideLinkWait(); done(ok); } };
+  }
+
+  private linkWaitBox = false;
+
+  private showLinkWait(): void {
+    const t = (this.shell.data as { text?: Record<string, string> }).text ?? {};
+    this.shell.showText(t._CableClubNPCPleaseWaitText ?? "Please wait.");
+    this.linkWaitBox = true;
+  }
+
+  private hideLinkWait(): void {
+    if (!this.linkWaitBox) return;
+    this.linkWaitBox = false;
+    const g = this.shell as unknown as { top?: () => { kind: string } | undefined; pop?: () => void };
+    if (g.top?.()?.kind === "textbox") g.pop?.();
   }
 
   /**
@@ -1491,17 +1533,86 @@ export class Overworld implements ScriptWorld {
    */
   serviceLink(): void {
     this.pollLink();
-    if (this.link && this.inLinkRoom()) {
-      const p = this.player;
-      this.link.sendPos(Math.round(p.px), Math.round(p.py), p.facing);
-      this.syncPeerBody();
+    const s = this.link;
+    if (!s || !this.inLinkRoom()) return;
+    this.syncPeerBody();
+    if (s.state === "closed") return;
+    const p = this.player;
+    s.sendPos(Math.round(p.px), Math.round(p.py), p.facing);
+    // They pressed A at the machine: come to the table, as soon as this
+    // console is free to. The flow consumes the begin (takeBegin) and
+    // knows itself the responder by it.
+    if (s.peerBegin && this.freeForLink()) {
+      this.linkLog(`pulled to the machine: ${this.linkVerb()}`);
+      this.runScript([[this.linkVerb()]] as ScriptRow[]);
     }
+  }
+
+  /** The room's business: what the machine starts here. */
+  private linkVerb(): string {
+    return this.map?.id === "COLOSSEUM" ? "link_battle" : "link_trade";
+  }
+
+  /** Standing still in the overworld with nothing else going on. */
+  private freeForLink(): boolean {
+    if (this.runner.isRunning() || this.scriptMoves.length > 0) return false;
+    if (this.player.moving || this.transitioning) return false;
+    const kinds = (this.shell as unknown as { stackKinds?: () => string[] }).stackKinds?.();
+    return !kinds || kinds[kinds.length - 1] === "overworld";
+  }
+
+  /**
+   * The link machine: the two cells in the middle of either room. Press A
+   * into it and the room's business starts, with the other console pulled
+   * in from wherever its player is standing (serviceLink). The ROM has you
+   * talk across it; here it works from any side, because the COLOSSEUM's
+   * machine is a wall in the tileset and cannot be talked across at all.
+   */
+  private tryLinkMachine(fx: number, fy: number): boolean {
+    if (!this.inLinkRoom()) return false;
+    if (!LINK_TABLE.some((c) => c.x === fx && c.y === fy)) return false;
+    const s = this.link;
+    if (!s || s.state === "closed") {
+      const t = (this.shell.data as { text?: Record<string, string> }).text ?? {};
+      this.shell.showText(t._LinkCanceledText ?? "The link was\ncanceled.");
+      return true;
+    }
+    this.linkLog(`pressed the machine: ${this.linkVerb()}`);
+    this.runScript([[this.linkVerb()]] as ScriptRow[]);
+    return true;
+  }
+
+  /** The receptionist's desk, to walk back out to. Set on the way in. */
+  linkReturn: { map: string; x: number; y: number; facing: Dir } | null = null;
+
+  /**
+   * link_leave: the bottom row of either room is the way out, the way the
+   * ROM walks you out when you reach it. The session ends, the other
+   * console hears it and loses its picture of you, and you are back at the
+   * desk you applied at.
+   */
+  leaveLinkRoom(done: () => void): void {
+    this.linkLog("walked out");
+    const w = this.linkWait;
+    this.linkWait = null;
+    w?.done(false);
+    this.link?.cancel();
+    this.link = null;
+    const back = this.linkReturn;
+    this.linkReturn = null;
+    if (!back || !this.isCooked(back.map)) { done(); return; }
+    this.startWarpTo(back.map, back.x, back.y, back.facing, done);
   }
 
   private pollLink(): void {
     const s = this.link;
     if (!s) return;
     s.poll();
+    const now = `${s.state} peer=${s.peerName || "-"} room=${s.agreedRoom() ?? "-"} seat=${s.seat()}`;
+    if (now !== this.linkLogged) {
+      this.linkLogged = now;
+      this.linkLog(now);
+    }
     const w = this.linkWait;
     if (!w) return;
     if (w.until(s)) {
@@ -1512,6 +1623,7 @@ export class Overworld implements ScriptWorld {
     w.frames -= 1;
     if (w.frames <= 0 || s.state === "closed") {
       this.linkWait = null;
+      this.linkLog(s.state === "closed" ? "wait ended: link closed" : "wait ended: timed out");
       w.done(false);
     }
   }
@@ -1532,6 +1644,8 @@ export class Overworld implements ScriptWorld {
     const room = this.link?.agreedRoom() ?? 0;
     const seat = LINK_SEATS[this.link?.seat() ?? 0]!;
     const map = LINK_ROOM_MAP[room] ?? LINK_ROOM_MAP[0];
+    const p = this.player;
+    this.linkReturn = { map: this.map.id, x: p.cellX, y: p.cellY, facing: p.facing };
     this.startWarpTo(map, seat.enter.x, seat.enter.y, seat.facing as Dir, done);
   }
 
@@ -1552,12 +1666,14 @@ export class Overworld implements ScriptWorld {
   private syncPeerBody(): void {
     const s = this.link;
     if (!s) return;
-    const p = s.peerPos;
-    if (!p) return;
     const body = this.npcs.find((n) =>
       String((n.def as { name?: string }).name ?? "").endsWith("_OPPONENT"),
-    ) as (NPC & { px: number; py: number }) | undefined;
+    ) as (NPC & { px: number; py: number; hidden?: boolean }) | undefined;
     if (!body) return;
+    // Gone: walked out, switched off, or out of range. Nobody stands there.
+    if (s.state === "closed") { body.hidden = true; return; }
+    const p = s.peerPos;
+    if (!p) return;
     body.px = p.x;
     body.py = p.y;
     body.cellX = Math.round(p.x / 16);

@@ -54,7 +54,8 @@ import { TradeAnimState, TRADE_PIC_CELL } from "./ui/tradeanim.ts";
 import { LinkBattle } from "./battle/linkbattle.ts";
 import { TRADE_MINE_ROW, TRADE_THEIRS_ROW } from "./ui/tradescreen.ts";
 import {
-  hostTransport, LINK_ROOM, LINK_WAIT_FRAMES, type LinkSession, type LinkTransport,
+  hostTransport, LINK_ANSWER_FRAMES, LINK_ROOM, LINK_WAIT_FRAMES, type LinkSession,
+  type LinkTransport,
 } from "./world/link.ts";
 import { EvolutionState, type EvolutionView } from "./ui/evoscreen.ts";
 import {
@@ -2239,8 +2240,9 @@ export class VoxelmonGame implements OverworldShell, SceneView {
             return;
           }
           session.chooseRoom(choice === "COLOSSEUM" ? LINK_ROOM.colosseum : LINK_ROOM.trade);
-          this.showText("_CableClubNPCPleaseWaitText");
-          this.overworld.waitLink((s) => s.agreedRoom() !== null, LINK_WAIT_FRAMES, done);
+          this.overworld.waitLink(
+            (s) => s.agreedRoom() !== null, LINK_WAIT_FRAMES, done, { pleaseWait: true },
+          );
         },
       }),
     );
@@ -2273,6 +2275,13 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       );
     };
 
+    // Whoever pressed first is the initiator and says begin; the console
+    // pulled in by that begin finds it waiting and says nothing.
+    if (!s.takeBegin()) s.begin();
+    // A link battle leaves no mark: the ROM runs it on the party and then
+    // restores it, and pays nothing out. Both are put back on the way out.
+    const partyBefore = JSON.stringify(this.save.party);
+    const moneyBefore = (this.save as { money?: number }).money;
     const myHalf = (Math.floor(Math.random() * 0xffffffff) >>> 0) || 1;
     s.sendParty({
       mons: JSON.parse(JSON.stringify(this.save.party)) as Record<string, unknown>[],
@@ -2293,14 +2302,19 @@ export class VoxelmonGame implements OverworldShell, SceneView {
 
         const battle = new LinkBattle(
           this.data, this.save as never, seededRng(seed),
-          s.peerName, theirs, s as never,
+          s.peerName, theirs, s as never, s.seat() === 1,
         );
         const st = new BattleGameState(this, "", 0, battle);
         // A link battle cannot be lost the way a trainer battle is -- there
         // is no blackout and no prize, the ROM just sends you back to the
         // room -- so the outcome is the script's to read, not money's.
         st.loseable = true;
-        st.onDone = () => finish();
+        st.onDone = () => {
+          const party = this.save.party;
+          party.splice(0, party.length, ...(JSON.parse(partyBefore) as PartyMon[]));
+          if (typeof moneyBefore === "number") (this.save as { money?: number }).money = moneyBefore;
+          finish();
+        };
         this.push(st);
       },
     );
@@ -2330,9 +2344,14 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       str = str.replace(/\{RAM:(\w+)\}/g, (_m, n: string) => subs[n] ?? "");
       this.showText(str, after);
     };
-    const canceled = (after: () => void) =>
+    const log = (m: string) => {
+      if ((globalThis as { voxel?: unknown }).voxel) console.log(`[pv] link: trade ${m}`);
+    };
+    const canceled = (after: () => void, why = "") => {
+      log(`canceled${why ? ": " + why : ""}`);
       say("_LinkCanceledText", "The link was\ncanceled.", {}, after);
-    if (!s || s.state === "closed") { canceled(finish); return; }
+    };
+    if (!s || s.state === "closed") { canceled(finish, "no link"); return; }
 
     const nameOf = (m: { nickname?: string; species: string }): string =>
       m.nickname ?? this.data.pokemon?.[m.species]?.name ?? m.species;
@@ -2352,6 +2371,10 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       hp: m.hp, maxHp: m.stats?.hp ?? m.hp, status: m.status ?? null,
     });
 
+    // Whoever pressed first is the initiator and says begin; the console
+    // pulled in by that begin finds it waiting and says nothing. Either
+    // way the table is clear before the parties cross (link.ts begin()).
+    if (!s.takeBegin()) s.begin();
     s.resetTrade();
     s.sendParty({
       mons: JSON.parse(JSON.stringify(this.save.party)) as Record<string, unknown>[],
@@ -2361,15 +2384,17 @@ export class VoxelmonGame implements OverworldShell, SceneView {
 
     ow.waitLink((x) => x.peerParty !== null, LINK_WAIT_FRAMES, (arrived) => {
       const theirParty = s.peerParty;
-      if (!arrived || !theirParty) { canceled(finish); return; }
+      if (!arrived || !theirParty) { canceled(finish, "their party never came"); return; }
       const theirs = theirParty.mons.filter(wellFormed) as unknown as PartyMon[];
-      if (theirs.length === 0) { canceled(finish); return; }
+      if (theirs.length === 0) { canceled(finish, "their party was empty"); return; }
+      log(`screen: ${this.save.party.length} of mine, ${theirs.length} of theirs`);
 
       /** Swap slot `mySlot` of mine for `theirSlot` of theirs. */
       const swap = (mySlot: number, theirSlot: number, after: () => void) => {
         const mine = this.save.party[mySlot];
         const got = theirs[theirSlot];
-        if (!mine || !got) { canceled(after); return; }
+        if (!mine || !got) { canceled(after, "a slot was empty"); return; }
+        log(`swap: my ${mine.species} for their ${got.species}`);
         const arrival: PartyMon = { ...got, traded: true,
           otName: theirParty.otName, otId: theirParty.otId };
         this.save.party[mySlot] = arrival;
@@ -2379,6 +2404,10 @@ export class VoxelmonGame implements OverworldShell, SceneView {
           (dex.seen ??= {})[arrival.species] = true;
           (dex.owned ??= {})[arrival.species] = true;
         }
+        // Saved the moment it changes hands, on both consoles: the ROM
+        // saves before the link opens so a trade cannot be undone by a
+        // reset, and a trade that is not written down yet still could be.
+        ow.saveGame();
         s.resetTrade();
         this.push(new TradeAnimState(this as never, {
           sending: entry(mine),
@@ -2412,22 +2441,39 @@ export class VoxelmonGame implements OverworldShell, SceneView {
           theirs: theirs.map(entry),
           watch: s as unknown as { peerOffer: unknown; state: string },
           onDone: (choice) => {
-            if (choice.kind === "cancel") { s.answer(false); finish(); return; }
+            if (choice.kind === "cancel") { log("backed out of the screen"); s.answer(false); finish(); return; }
             if (choice.kind === "propose") {
+              log(`proposed: my ${choice.give} for their ${choice.take}`);
               s.offer({ give: choice.give, take: choice.take });
-              ow.waitLink((x) => x.peerAnswer !== null, LINK_WAIT_FRAMES, (answered) => {
-                if (!answered || s.peerAnswer !== true) { s.resetTrade(); canceled(finish); return; }
-                // I proposed: my `give` goes, their `take` comes back.
-                swap(choice.give, choice.take, finish);
+              // Their yes or no, however long they take over it. A no, a
+              // dropped link or a console gone quiet all end here, with
+              // nothing moved on either side.
+              ow.waitLink((x) => x.peerAnswer !== null, LINK_ANSWER_FRAMES, (answered) => {
+                if (!answered || s.peerAnswer !== true) {
+                  s.answer(false); s.resetTrade();
+                  canceled(finish, !answered ? "no answer came" : "they said no");
+                  return;
+                }
+                log("they said yes; committing");
+                // A yes. Say so, and swap only once they have heard it:
+                // the commit is what moves the mons on THEIR side, so it
+                // must have landed before it moves them on this one.
+                s.commit();
+                ow.waitLink((x) => x.unacked() === 0, LINK_WAIT_FRAMES, (heard) => {
+                  if (!heard) { s.resetTrade(); canceled(finish, "the commit never landed"); return; }
+                  // I proposed: my `give` goes, their `take` comes back.
+                  swap(choice.give, choice.take, finish);
+                });
               });
               return;
             }
             // They proposed: their `give` comes to me, my `take` goes.
             const o = s.peerOffer;
-            if (!o) { canceled(finish); return; }
+            if (!o) { canceled(finish, "the offer vanished"); return; }
             const incoming = theirs[o.give];
             const outgoing = this.save.party[o.take];
-            if (!incoming || !outgoing) { s.answer(false); canceled(finish); return; }
+            if (!incoming || !outgoing) { s.answer(false); canceled(finish, "the offer named an empty slot"); return; }
+            log(`offered: their ${incoming.species} for my ${outgoing.species}`);
             const subs = { wLinkEnemyTrainerName: s.peerName,
               wNameBuffer: nameOf(incoming), wStringBuffer: nameOf(outgoing) };
             say("_TradeWillTradeText", "{RAM:wLinkEnemyTrainerName} will\ntrade {RAM:wNameBuffer}", subs, () => {
@@ -2435,9 +2481,20 @@ export class VoxelmonGame implements OverworldShell, SceneView {
               ask = ask.replace(/\{PLAYER\}/g, String(this.save.player?.name ?? "RED"))
                        .replace(/\{RAM:(\w+)\}/g, () => nameOf(outgoing));
               this.showChoice(ask, (yes) => {
+                log(yes ? "said yes; waiting for their commit" : "said no");
                 s.answer(yes);
-                if (!yes) { s.resetTrade(); canceled(finish); return; }
-                swap(o.take, o.give, finish);
+                if (!yes) { s.resetTrade(); canceled(finish, "I said no"); return; }
+                // Their commit is the swap; a proposer that gave up in the
+                // meantime says no instead (answer false), and either way
+                // nothing moves here until they have spoken.
+                ow.waitLink((x) => x.peerCommit || x.peerAnswer === false, LINK_WAIT_FRAMES, (spoke) => {
+                  if (!spoke || !s.peerCommit) {
+                    s.resetTrade();
+                    canceled(finish, !spoke ? "their commit never came" : "they withdrew");
+                    return;
+                  }
+                  swap(o.take, o.give, finish);
+                });
               });
             });
           },

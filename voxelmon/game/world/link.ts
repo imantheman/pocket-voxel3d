@@ -11,6 +11,13 @@
 // message-oriented on every carrier this will have: UDS hands over datagrams,
 // and the loopback is a queue of them. The ROM's byte-at-a-time handshake is
 // a property of a wire we do not have.
+//
+// What the carriers do NOT promise is delivery or order: the network one is
+// UDP, and a frame the radio drops is a trade that waits twenty seconds and
+// gives up. ReliableLink below sits between the session and the carrier and
+// makes every frame arrive, once, in order, and lets a frame be bigger than
+// a datagram -- a party of six is -- so the session above it can be written
+// as if the cable were still there.
 
 /** What a carrier has to do. Datagrams, not a stream: no partial frames. */
 export interface LinkTransport {
@@ -53,8 +60,14 @@ export const LINK_SEATS = [
   { enter: { x: 4, y: 6 }, seat: { x: 4, y: 5 }, facing: "up" },
 ] as const;
 
-/** Frames the receptionist will hold the link open waiting for a peer. */
-export const LINK_WAIT_FRAMES = 60 * 20;
+/**
+ * Frames the receptionist holds the link open waiting for a peer, and the
+ * most any step of a trade or battle waits on the other console. A minute:
+ * the other player has to walk up to their own desk and answer the same
+ * questions, and the cable never hurried anyone. A peer that has actually
+ * gone is caught sooner by the link's own silence timer (LINK_DEAD_FRAMES).
+ */
+export const LINK_WAIT_FRAMES = 60 * 60;
 
 /** Frame kinds. The wire is ours, so these are ours. */
 export const LINK_MSG = {
@@ -76,7 +89,19 @@ export const LINK_MSG = {
   seed: 8,
   /** this side's choice for one turn of a link battle. */
   action: 9,
+  /** this side pressed A at the machine: come to the table. */
+  begin: 10,
+  /** the proposer, on a yes: the swap happens now, on both sides. */
+  commit: 11,
 } as const;
+
+/**
+ * Frames the proposer waits for the other player's yes or no. Long,
+ * because a person is reading the offer and deciding; the ROM never timed
+ * this out at all. The link's own silence timer still catches a console
+ * that has actually gone.
+ */
+export const LINK_ANSWER_FRAMES = 60 * 120;
 
 /** Where the peer is, in world pixels, as they last told us. */
 export interface LinkPos {
@@ -142,7 +167,7 @@ export const LINK_ROOM = { trade: 0, colosseum: 1 } as const;
 export type LinkRoom = (typeof LINK_ROOM)[keyof typeof LINK_ROOM];
 
 /** Bumped when a frame's meaning changes; a mismatch refuses the link. */
-export const LINK_VERSION = 2;
+export const LINK_VERSION = 3;
 
 export type LinkState =
   /** No session. */
@@ -186,6 +211,155 @@ function decodeHello(frame: Uint8Array): { name: string; nonce: number } {
   }
 }
 
+/** Frames between retransmissions of anything the peer has not acknowledged. */
+export const RELIABLE_RESEND_FRAMES = 6;
+/** Frames of silence after which an ack goes out on its own, so a quiet peer
+ * can still tell we are here. */
+export const RELIABLE_KEEPALIVE_FRAMES = 60;
+/** Frames without a word from a connected peer before the link is judged
+ * gone: a console switched off, or carried out of range. */
+export const LINK_DEAD_FRAMES = 60 * 8;
+/** Payload bytes per datagram. The carriers cap a frame at 1400 bytes and a
+ * party of six as JSON runs past that, so bigger frames go in pieces. */
+export const RELIABLE_MTU = 1000;
+/** Unacknowledged frames allowed in the air before the sender holds. */
+const RELIABLE_WINDOW = 32;
+const SEQ_MOD = 0x1000;
+/** Header bytes. ASCII, like everything on the wire (see encodeHello). */
+const RL_DATA = 0x7e;  // '~'  one whole frame, or the last piece of one
+const RL_MORE = 0x7c;  // '|'  a piece with more to follow
+const RL_ACK = 0x7d;   // '}'  seq = the next frame this side wants
+
+/** a strictly after b, on the 12-bit ring. */
+function seqAfter(a: number, b: number): boolean {
+  const d = (a - b) & (SEQ_MOD - 1);
+  return d !== 0 && d < SEQ_MOD / 2;
+}
+
+/**
+ * Delivery, order and size, on top of a carrier that promises none of them.
+ *
+ * Every frame out gets a sequence number and is resent every few frames
+ * until the peer's ack covers it; every frame in is taken only when it is
+ * the next one expected, so a repeat is dropped and a gap is filled by the
+ * resend rather than skipped over. A frame bigger than a datagram goes as
+ * pieces that the receiver joins back up, in order, which the sequence
+ * numbers already guarantee. And a peer that has been silent for
+ * LINK_DEAD_FRAMES is judged gone, which is the only way a switched-off
+ * console can ever be noticed.
+ *
+ * `tick()` once a frame is what drives the resends and the keepalive; the
+ * session calls it at the top of its own poll.
+ */
+export class ReliableLink implements LinkTransport {
+  private txSeq = 0;
+  private rxExpect = 0;
+  private pending: { seq: number; kind: number; body: Uint8Array }[] = [];
+  private pieces: Uint8Array[] = [];
+  private ackDue = false;
+  private sinceSend = 0;
+  private sinceRecv = 0;
+  private frame = 0;
+  private gone = false;
+
+  constructor(private inner: LinkTransport) {}
+
+  private raw(kind: number, seq: number, body?: Uint8Array): void {
+    const out = new Uint8Array(3 + (body?.length ?? 0));
+    out[0] = kind;
+    out[1] = 0x40 | (seq & 0x3f);
+    out[2] = 0x40 | ((seq >> 6) & 0x3f);
+    if (body) out.set(body, 3);
+    this.inner.send(out);
+    this.sinceSend = 0;
+  }
+
+  private queue(kind: number, body: Uint8Array): void {
+    const seq = this.txSeq;
+    this.txSeq = (seq + 1) % SEQ_MOD;
+    this.pending.push({ seq, kind, body });
+    if (this.pending.length <= RELIABLE_WINDOW) this.raw(kind, seq, body);
+  }
+
+  send(frame: Uint8Array): void {
+    let at = 0;
+    while (frame.length - at > RELIABLE_MTU) {
+      this.queue(RL_MORE, frame.subarray(at, at + RELIABLE_MTU));
+      at += RELIABLE_MTU;
+    }
+    this.queue(RL_DATA, frame.subarray(at));
+  }
+
+  recv(): Uint8Array | null {
+    for (;;) {
+      const f = this.inner.recv();
+      if (!f) return null;
+      if (f.length < 3) continue;
+      const seq = (f[1]! & 0x3f) | ((f[2]! & 0x3f) << 6);
+      this.sinceRecv = 0;
+      if (f[0] === RL_ACK) {
+        // seq is the next frame the peer wants: everything before it landed
+        this.pending = this.pending.filter((p) => !seqAfter(seq, p.seq));
+        continue;
+      }
+      if (f[0] !== RL_DATA && f[0] !== RL_MORE) continue;
+      this.ackDue = true;
+      // a repeat, or one from beyond a gap: the resend fills the gap
+      if (seq !== this.rxExpect) continue;
+      this.rxExpect = (seq + 1) % SEQ_MOD;
+      const body = f.subarray(3);
+      if (f[0] === RL_MORE) {
+        this.pieces.push(body);
+        continue;
+      }
+      if (this.pieces.length === 0) return body;
+      const whole = new Uint8Array(this.pieces.reduce((n, p) => n + p.length, 0) + body.length);
+      let at = 0;
+      for (const piece of this.pieces) { whole.set(piece, at); at += piece.length; }
+      whole.set(body, at);
+      this.pieces = [];
+      return whole;
+    }
+  }
+
+  /** Once a frame: resends, the ack, the keepalive, the silence count. */
+  tick(): void {
+    this.frame += 1;
+    this.sinceSend += 1;
+    if (!this.inner.connected()) {
+      this.sinceRecv = 0; // nobody to hear from yet
+      return;
+    }
+    this.sinceRecv += 1;
+    if (this.pending.length > 0 && this.frame % RELIABLE_RESEND_FRAMES === 0) {
+      for (const p of this.pending.slice(0, RELIABLE_WINDOW)) this.raw(p.kind, p.seq, p.body);
+    }
+    if (this.ackDue || this.sinceSend >= RELIABLE_KEEPALIVE_FRAMES) {
+      this.raw(RL_ACK, this.rxExpect);
+      this.ackDue = false;
+    }
+    if (this.sinceRecv > LINK_DEAD_FRAMES) this.gone = true;
+  }
+
+  /** Frames sent and not yet acknowledged. */
+  unacked(): number {
+    return this.pending.length;
+  }
+
+  /** True once the peer has gone quiet for too long. */
+  dead(): boolean {
+    return this.gone;
+  }
+
+  connected(): boolean {
+    return !this.gone && this.inner.connected();
+  }
+
+  close(): void {
+    this.inner.close();
+  }
+}
+
 /**
  * One side of a link.
  *
@@ -203,6 +377,8 @@ export class LinkSession {
   /** What the peer has put on the table, and what they said to ours. */
   peerOffer: TradeOffer | null = null;
   peerAnswer: boolean | null = null;
+  /** The proposer's word that the swap is on. */
+  peerCommit = false;
   /** Where the peer is standing, once they have said. */
   peerPos: LinkPos | null = null;
   /** Their whole party, for the trade screen to show. */
@@ -212,6 +388,8 @@ export class LinkSession {
   /** Their turn choices, oldest first. A queue and not a slot: a console
    * that gets a frame ahead must not overwrite the turn not yet played. */
   private actions: unknown[] = [];
+  /** They pressed A at the machine and are waiting for us at the table. */
+  peerBegin = false;
 
   /**
    * Which side of the table this console takes, 0 or 1.
@@ -232,15 +410,23 @@ export class LinkSession {
   private readonly myNonce: number;
   private peerNonce: number | null = null;
   private lastPos = "";
+  private readonly transport: ReliableLink;
 
   constructor(
-    private transport: LinkTransport,
+    carrier: LinkTransport,
     private myName: string,
     nonce?: number,
   ) {
+    // Whatever the carrier is, the session talks over it reliably.
+    this.transport = new ReliableLink(carrier);
     // Only has to differ from the other console's; the seat falls back to
     // the names if it somehow does not.
     this.myNonce = nonce ?? Math.floor(Math.random() * 0x7fffffff);
+  }
+
+  /** The link under the session, for tests that watch it work. */
+  wire(): ReliableLink {
+    return this.transport;
   }
 
   open(): void {
@@ -297,6 +483,51 @@ export class LinkSession {
     return this.actions.shift() ?? null;
   }
 
+  /** The same, left in place: for a console that wants one kind and not
+   * whatever is next. */
+  peekAction(): unknown | null {
+    return this.actions[0] ?? null;
+  }
+
+  /** True once the other console is gone: backed out, or fallen silent. */
+  closed(): boolean {
+    return this.state === "closed";
+  }
+
+  /**
+   * Press A at the machine.
+   *
+   * Clears the table on this side and tells the peer to come to it; their
+   * console starts the same flow as a responder (see takeBegin). Cleared
+   * BEFORE anything is sent so that what arrives after is this trade's,
+   * not the last one's: a party still held from an earlier trade would
+   * satisfy the wait at once, with mons the peer no longer has.
+   */
+  begin(): void {
+    this.clearTable();
+    this.transport.send(new Uint8Array([LINK_MSG.begin]));
+  }
+
+  /**
+   * Whether the peer pressed first, consumed. The flow that finds this
+   * true is the responder and sends no begin of its own; one that finds it
+   * false is the initiator and does.
+   */
+  takeBegin(): boolean {
+    const b = this.peerBegin;
+    this.peerBegin = false;
+    return b;
+  }
+
+  private clearTable(): void {
+    this.peerParty = null;
+    this.peerSeed = null;
+    this.peerOffer = null;
+    this.peerAnswer = null;
+    this.peerCommit = false;
+    this.actions.length = 0;
+  }
+
   /** Propose a swap: my `give` for your `take`. */
   offer(o: TradeOffer): void {
     this.transport.send(encodeJson(LINK_MSG.offer, o));
@@ -307,17 +538,38 @@ export class LinkSession {
     this.transport.send(new Uint8Array([LINK_MSG.answer, ok ? 1 : 0]));
   }
 
+  /**
+   * The proposer's last word: swap now. Nothing changes hands on either
+   * console before this crosses, so a proposer that gave up waiting for
+   * an answer, or a link that dropped in between, leaves both parties as
+   * they were rather than one of them short a mon.
+   */
+  commit(): void {
+    this.transport.send(new Uint8Array([LINK_MSG.commit]));
+  }
+
+  /** Frames this side has sent that the peer has not yet acknowledged. */
+  unacked(): number {
+    return this.transport.unacked();
+  }
+
   /** Clear the table, for the next trade in the same session. The parties
    * stay: they are resent each time the screen opens, so whatever changed
    * hands is already accounted for. */
   resetTrade(): void {
     this.peerOffer = null;
     this.peerAnswer = null;
+    this.peerCommit = false;
   }
 
   /** Back out; the peer hears about it. */
   cancel(): void {
-    if (this.state !== "closed") this.transport.send(new Uint8Array([LINK_MSG.cancel]));
+    if (this.state !== "closed") {
+      // Said three times, because the link closes right after and nothing
+      // will be around to resend it. A peer that misses all three finds
+      // out from the silence (LINK_DEAD_FRAMES) instead.
+      for (let i = 0; i < 3; i++) this.transport.send(new Uint8Array([LINK_MSG.cancel]));
+    }
     this.close();
   }
 
@@ -334,6 +586,13 @@ export class LinkSession {
 
   poll(): LinkState {
     if (this.state === "idle" || this.state === "closed") return this.state;
+
+    this.transport.tick();
+    if (this.transport.dead()) {
+      // They stopped answering: a console off, or out of range.
+      this.close();
+      return this.state;
+    }
 
     // Say hello as soon as there is someone to say it to, once.
     if (!this.helloSent && this.transport.connected()) {
@@ -403,6 +662,15 @@ export class LinkSession {
         case LINK_MSG.answer:
           this.peerAnswer = f[1] === 1;
           break;
+        case LINK_MSG.commit:
+          this.peerCommit = true;
+          break;
+        case LINK_MSG.begin:
+          // Their press clears our side of the table too, so what follows
+          // it on the wire is read as this trade's (see begin()).
+          this.clearTable();
+          this.peerBegin = true;
+          break;
         case LINK_MSG.cancel:
           this.close();
           return this.state;
@@ -433,6 +701,42 @@ export class LoopbackLink {
     let open = true;
     const make = (outbox: Uint8Array[], inbox: Uint8Array[]): LinkTransport => ({
       send: (f) => { if (open) outbox.push(f); },
+      recv: () => inbox.shift() ?? null,
+      connected: () => open,
+      close: () => { open = false; },
+    });
+    this.a = make(toB, toA);
+    this.b = make(toA, toB);
+  }
+}
+
+/**
+ * A loopback that drops, repeats and reorders frames on purpose, the way a
+ * radio does on a bad day. What the reliable layer is tested against.
+ */
+export class LossyLink {
+  readonly a: LinkTransport;
+  readonly b: LinkTransport;
+
+  /** `drop` in [0,1) is the share of frames lost; `dup` the share repeated. */
+  constructor(drop = 0.3, dup = 0.1, seed = 12345) {
+    let x = seed >>> 0;
+    const rnd = () => ((x = (x * 1664525 + 1013904223) >>> 0) / 0x100000000);
+    const toA: Uint8Array[] = [];
+    const toB: Uint8Array[] = [];
+    let open = true;
+    const make = (outbox: Uint8Array[], inbox: Uint8Array[]): LinkTransport => ({
+      send: (f) => {
+        if (!open) return;
+        if (rnd() < drop) return;
+        outbox.push(f);
+        if (rnd() < dup) outbox.push(f);
+        // a late arrival: swap with the one before it now and then
+        if (outbox.length > 1 && rnd() < dup) {
+          const n = outbox.length;
+          [outbox[n - 1], outbox[n - 2]] = [outbox[n - 2]!, outbox[n - 1]!];
+        }
+      },
       recv: () => inbox.shift() ?? null,
       connected: () => open,
       close: () => { open = false; },

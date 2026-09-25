@@ -43,8 +43,8 @@ export class TrainerBattle extends WildBattle {
   readonly trainerName: string;
   readonly trainerId: string;
   readonly partyIndex: number;
-  private enemyParty: PartyMon[] = [];
-  private enemyIndex = 0;
+  protected enemyParty: PartyMon[] = [];
+  protected enemyIndex = 0;
   private baseMoney: number;
 
   /** `partyIndex` is the 1-based variant from the script row. */
@@ -137,6 +137,27 @@ export class TrainerBattle extends WildBattle {
   override runRoll(_playerSpeed: number, _enemySpeed: number): boolean {
     this.say("There's no escaping\na trainer battle!");
     return false;
+  }
+
+  /** The party slots the trainer could still send out. */
+  protected enemyBench(): number[] {
+    return this.enemyParty
+      .map((m, i) => (i !== this.enemyIndex && m.hp > 0 ? i : -1))
+      .filter((i) => i >= 0);
+  }
+
+  /**
+   * The trainer's switch, mid-turn: the new mon is out before the other
+   * side's move lands, which is what a switch is for. Queued NEXT rather
+   * than at the end, because the rest of the turn is already behind it.
+   */
+  override enemySwitch(slot: number): void {
+    const next = this.enemyParty[slot];
+    if (!next || next.hp <= 0 || slot === this.enemyIndex) return;
+    this.enemyIndex = slot;
+    markSeen(this.save, next.species);
+    this.sayNext(`${this.trainerName} sent out\n${next.species}!`);
+    this.actNext(() => this.swapEnemy(next));
   }
 
   override enemyMonFainted(): void {

@@ -145,6 +145,12 @@ pub unsafe extern "C" fn voxel_log(s: *const u8, len: i32) {
     let t = String::from_utf8_lossy(b);
     // NPC dumps drown the console; keep the rest.
     if !t.starts_with("NPCS") { println!("js: {}", t); }
+    // The console is unreadable during play (see dlog), so a line the guest
+    // or the C carriers mark "[pv]" is a diagnostic meant for the log file
+    // -- the link's, above all, which is the only window into a link that
+    // did not happen. Only those: console.log is chatty and every dlog line
+    // is an SD round trip.
+    if t.starts_with("[pv]") { crate::dlog(&t); }
 }
 
 #[no_mangle]

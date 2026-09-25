@@ -4050,18 +4050,17 @@ this move!`);
     this.turnCount += 1;
     const pMove = this.data.moves[playerAction.id] ?? null;
     const eMove = this.data.moves[enemyAction.id] ?? null;
-    const pFirst = firstMover(this.player, pMove, this.enemy, eMove, this.rng);
-    const order2 = pFirst ? [
-      [this.player, this.enemy, playerAction],
-      [this.enemy, this.player, enemyAction]
-    ] : [
-      [this.enemy, this.player, enemyAction],
-      [this.player, this.enemy, playerAction]
-    ];
+    const pSwitch = playerAction.switchTo !== undefined;
+    const eSwitch = enemyAction.switchTo !== undefined;
+    const pFirst = pSwitch || eSwitch ? pSwitch : firstMover(this.player, pMove, this.enemy, eMove, this.rng, this.mirrorTie());
+    this.onTurnOrder(pFirst);
+    const order2 = pFirst ? [[true, playerAction], [false, enemyAction]] : [[false, enemyAction], [true, playerAction]];
     this.phase = "messages";
     this.afterQueue = "menu";
-    for (const [user, target, action] of order2) {
+    for (const [isPlayer, action] of order2) {
       this.act(() => {
+        const user = isPlayer ? this.player : this.enemy;
+        const target = isPlayer ? this.enemy : this.player;
         this.executeAction(user, target, action);
       });
     }
@@ -4134,6 +4133,13 @@ this move!`);
       return;
     if (!action)
       return;
+    if (action.switchTo !== undefined) {
+      if (user.isPlayer)
+        this.switchPlayer(this.save.party[action.switchTo]);
+      else
+        this.enemySwitch(action.switchTo);
+      return;
+    }
     if (this.disguised && user === this.player) {
       this.sayAuto(ghostText(this.data, "_ScaredText", `{RAM:wBattleMonNick} is too
 scared to move!`).replace("{RAM:wBattleMonNick}", user.name));
@@ -4908,25 +4914,33 @@ to fight!`);
   resolveSwitch(next) {
     this.phase = "messages";
     this.afterQueue = "menu";
-    this.act(() => {
-      this.player = makeBattler(this.data, next, true, this.save);
-      this.enemy.trappingTurns = undefined;
-      this.enemy.trapMove = undefined;
-      this.enemy.trapDamage = undefined;
-      this.markParticipant();
-      this.sendOutMonCursors();
-      this.sendingOut = true;
-      this.sayNext(this.sendOutText(this.player.name));
-      this.animNext("POOF_ANIM", false);
-      this.actNext(() => {
-        this.sendingOut = false;
-      });
-    });
+    this.act(() => this.switchPlayer(next));
     this.act(() => {
       this.executeAction(this.enemy, this.player, this.enemyAction());
     });
     this.act(() => this.endOfTurn());
   }
+  switchPlayer(next) {
+    if (!next || next.hp <= 0 || next === this.player.mon)
+      return;
+    this.player = makeBattler(this.data, next, true, this.save);
+    this.enemy.trappingTurns = undefined;
+    this.enemy.trapMove = undefined;
+    this.enemy.trapDamage = undefined;
+    this.markParticipant();
+    this.sendOutMonCursors();
+    this.sendingOut = true;
+    this.sayNext(this.sendOutText(this.player.name));
+    this.animNext("POOF_ANIM", false);
+    this.actNext(() => {
+      this.sendingOut = false;
+    });
+  }
+  enemySwitch(_slot) {}
+  mirrorTie() {
+    return false;
+  }
+  onTurnOrder(_playerFirst) {}
   sendOutMonCursors() {
     this.menuIndex = 1;
     this.moveIndex = 1;
@@ -5024,6 +5038,19 @@ out ${this.enemy.name}!`);
     this.say(`There's no escaping
 a trainer battle!`);
     return false;
+  }
+  enemyBench() {
+    return this.enemyParty.map((m, i) => i !== this.enemyIndex && m.hp > 0 ? i : -1).filter((i) => i >= 0);
+  }
+  enemySwitch(slot) {
+    const next = this.enemyParty[slot];
+    if (!next || next.hp <= 0 || slot === this.enemyIndex)
+      return;
+    this.enemyIndex = slot;
+    markSeen(this.save, next.species);
+    this.sayNext(`${this.trainerName} sent out
+${next.species}!`);
+    this.actNext(() => this.swapEnemy(next));
   }
   enemyMonFainted() {
     this.awardExp();
@@ -7599,6 +7626,10 @@ function jigglypuffRows() {
   return rows;
 }
 var DEX_COMPLETE = 150;
+function linkExitRow() {
+  const rows = [["link_leave"]];
+  return Array.from({ length: 10 }, (_, x) => ({ x, y: 7, rows }));
+}
 var MAP_SCRIPTS = {
   PEWTER_CITY: {
     onStep: (ow, save) => {
@@ -9017,13 +9048,15 @@ much!`]
   },
   TRADE_CENTER: {
     talk: {
-      TEXT_TRADECENTER_OPPONENT: (ow) => ow?.seatedAtTable?.() && ow?.peerSeated?.() ? [["link_trade"]] : [["show_text", "_TradeCenterOpponentText"]]
-    }
+      TEXT_TRADECENTER_OPPONENT: [["show_text", "_TradeCenterOpponentText"]]
+    },
+    coord: linkExitRow()
   },
   COLOSSEUM: {
     talk: {
-      TEXT_COLOSSEUM_OPPONENT: (ow) => ow?.seatedAtTable?.() && ow?.peerSeated?.() ? [["link_battle"]] : [["show_text", "_ColosseumOpponentText"]]
-    }
+      TEXT_COLOSSEUM_OPPONENT: [["show_text", "_ColosseumOpponentText"]]
+    },
+    coord: linkExitRow()
   },
   PEWTER_POKECENTER: {
     talk: { TEXT_PEWTERPOKECENTER_JIGGLYPUFF: jigglypuffRows() }
@@ -9999,7 +10032,6 @@ function cableClubScript(textConst) {
     ["ask", "_CableClubNPCPleaseApplyHereHaveToSaveText"],
     ["jump_if_false", "bye"],
     ["save_game"],
-    ["show_text", "_CableClubNPCPleaseWaitText"],
     ["link_open"],
     ["jump_if_false", "alone"],
     ["link_room"],
@@ -10016,11 +10048,15 @@ function cableClubScript(textConst) {
 
 // voxelmon/game/world/link.ts
 var LINK_ROOM_MAP = ["TRADE_CENTER", "COLOSSEUM"];
+var LINK_TABLE = [
+  { x: 4, y: 4 },
+  { x: 5, y: 4 }
+];
 var LINK_SEATS = [
   { enter: { x: 4, y: 2 }, seat: { x: 4, y: 3 }, facing: "down" },
   { enter: { x: 4, y: 6 }, seat: { x: 4, y: 5 }, facing: "up" }
 ];
-var LINK_WAIT_FRAMES = 60 * 20;
+var LINK_WAIT_FRAMES = 60 * 60;
 var LINK_MSG = {
   hello: 1,
   room: 2,
@@ -10030,8 +10066,11 @@ var LINK_MSG = {
   pos: 6,
   party: 7,
   seed: 8,
-  action: 9
+  action: 9,
+  begin: 10,
+  commit: 11
 };
+var LINK_ANSWER_FRAMES = 60 * 120;
 function asciiJson(v) {
   return JSON.stringify(v).replace(/[\u0080-\uffff]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
 }
@@ -10054,7 +10093,7 @@ function decodeJson(frame) {
   }
 }
 var LINK_ROOM = { trade: 0, colosseum: 1 };
-var LINK_VERSION = 2;
+var LINK_VERSION = 3;
 var MAX_NAME = 10;
 function encodeHello(name, nonce) {
   const s = asciiJson({ n: [...name].slice(0, MAX_NAME).join(""), k: nonce });
@@ -10076,9 +10115,130 @@ function decodeHello(frame) {
     return { name: s, nonce: 0 };
   }
 }
+var RELIABLE_RESEND_FRAMES = 6;
+var RELIABLE_KEEPALIVE_FRAMES = 60;
+var LINK_DEAD_FRAMES = 60 * 8;
+var RELIABLE_MTU = 1000;
+var RELIABLE_WINDOW = 32;
+var SEQ_MOD = 4096;
+var RL_DATA = 126;
+var RL_MORE = 124;
+var RL_ACK = 125;
+function seqAfter(a, b) {
+  const d = a - b & SEQ_MOD - 1;
+  return d !== 0 && d < SEQ_MOD / 2;
+}
+
+class ReliableLink {
+  inner;
+  txSeq = 0;
+  rxExpect = 0;
+  pending = [];
+  pieces = [];
+  ackDue = false;
+  sinceSend = 0;
+  sinceRecv = 0;
+  frame = 0;
+  gone = false;
+  constructor(inner) {
+    this.inner = inner;
+  }
+  raw(kind, seq, body) {
+    const out = new Uint8Array(3 + (body?.length ?? 0));
+    out[0] = kind;
+    out[1] = 64 | seq & 63;
+    out[2] = 64 | seq >> 6 & 63;
+    if (body)
+      out.set(body, 3);
+    this.inner.send(out);
+    this.sinceSend = 0;
+  }
+  queue(kind, body) {
+    const seq = this.txSeq;
+    this.txSeq = (seq + 1) % SEQ_MOD;
+    this.pending.push({ seq, kind, body });
+    if (this.pending.length <= RELIABLE_WINDOW)
+      this.raw(kind, seq, body);
+  }
+  send(frame) {
+    let at = 0;
+    while (frame.length - at > RELIABLE_MTU) {
+      this.queue(RL_MORE, frame.subarray(at, at + RELIABLE_MTU));
+      at += RELIABLE_MTU;
+    }
+    this.queue(RL_DATA, frame.subarray(at));
+  }
+  recv() {
+    for (;; ) {
+      const f = this.inner.recv();
+      if (!f)
+        return null;
+      if (f.length < 3)
+        continue;
+      const seq = f[1] & 63 | (f[2] & 63) << 6;
+      this.sinceRecv = 0;
+      if (f[0] === RL_ACK) {
+        this.pending = this.pending.filter((p) => !seqAfter(seq, p.seq));
+        continue;
+      }
+      if (f[0] !== RL_DATA && f[0] !== RL_MORE)
+        continue;
+      this.ackDue = true;
+      if (seq !== this.rxExpect)
+        continue;
+      this.rxExpect = (seq + 1) % SEQ_MOD;
+      const body = f.subarray(3);
+      if (f[0] === RL_MORE) {
+        this.pieces.push(body);
+        continue;
+      }
+      if (this.pieces.length === 0)
+        return body;
+      const whole = new Uint8Array(this.pieces.reduce((n, p) => n + p.length, 0) + body.length);
+      let at = 0;
+      for (const piece of this.pieces) {
+        whole.set(piece, at);
+        at += piece.length;
+      }
+      whole.set(body, at);
+      this.pieces = [];
+      return whole;
+    }
+  }
+  tick() {
+    this.frame += 1;
+    this.sinceSend += 1;
+    if (!this.inner.connected()) {
+      this.sinceRecv = 0;
+      return;
+    }
+    this.sinceRecv += 1;
+    if (this.pending.length > 0 && this.frame % RELIABLE_RESEND_FRAMES === 0) {
+      for (const p of this.pending.slice(0, RELIABLE_WINDOW))
+        this.raw(p.kind, p.seq, p.body);
+    }
+    if (this.ackDue || this.sinceSend >= RELIABLE_KEEPALIVE_FRAMES) {
+      this.raw(RL_ACK, this.rxExpect);
+      this.ackDue = false;
+    }
+    if (this.sinceRecv > LINK_DEAD_FRAMES)
+      this.gone = true;
+  }
+  unacked() {
+    return this.pending.length;
+  }
+  dead() {
+    return this.gone;
+  }
+  connected() {
+    return !this.gone && this.inner.connected();
+  }
+  close() {
+    this.inner.close();
+  }
+}
 
 class LinkSession {
-  transport;
   myName;
   state = "idle";
   peerName = "";
@@ -10086,10 +10246,12 @@ class LinkSession {
   peerRoom = null;
   peerOffer = null;
   peerAnswer = null;
+  peerCommit = false;
   peerPos = null;
   peerParty = null;
   peerSeed = null;
   actions = [];
+  peerBegin = false;
   seat() {
     if (this.peerNonce === null)
       return 0;
@@ -10101,10 +10263,14 @@ class LinkSession {
   myNonce;
   peerNonce = null;
   lastPos = "";
-  constructor(transport, myName, nonce) {
-    this.transport = transport;
+  transport;
+  constructor(carrier, myName, nonce) {
     this.myName = myName;
+    this.transport = new ReliableLink(carrier);
     this.myNonce = nonce ?? Math.floor(Math.random() * 2147483647);
+  }
+  wire() {
+    return this.transport;
   }
   open() {
     if (this.state === "idle")
@@ -10139,19 +10305,51 @@ class LinkSession {
   takeAction() {
     return this.actions.shift() ?? null;
   }
+  peekAction() {
+    return this.actions[0] ?? null;
+  }
+  closed() {
+    return this.state === "closed";
+  }
+  begin() {
+    this.clearTable();
+    this.transport.send(new Uint8Array([LINK_MSG.begin]));
+  }
+  takeBegin() {
+    const b = this.peerBegin;
+    this.peerBegin = false;
+    return b;
+  }
+  clearTable() {
+    this.peerParty = null;
+    this.peerSeed = null;
+    this.peerOffer = null;
+    this.peerAnswer = null;
+    this.peerCommit = false;
+    this.actions.length = 0;
+  }
   offer(o) {
     this.transport.send(encodeJson(LINK_MSG.offer, o));
   }
   answer(ok) {
     this.transport.send(new Uint8Array([LINK_MSG.answer, ok ? 1 : 0]));
   }
+  commit() {
+    this.transport.send(new Uint8Array([LINK_MSG.commit]));
+  }
+  unacked() {
+    return this.transport.unacked();
+  }
   resetTrade() {
     this.peerOffer = null;
     this.peerAnswer = null;
+    this.peerCommit = false;
   }
   cancel() {
-    if (this.state !== "closed")
-      this.transport.send(new Uint8Array([LINK_MSG.cancel]));
+    if (this.state !== "closed") {
+      for (let i = 0;i < 3; i++)
+        this.transport.send(new Uint8Array([LINK_MSG.cancel]));
+    }
     this.close();
   }
   close() {
@@ -10166,6 +10364,11 @@ class LinkSession {
   poll() {
     if (this.state === "idle" || this.state === "closed")
       return this.state;
+    this.transport.tick();
+    if (this.transport.dead()) {
+      this.close();
+      return this.state;
+    }
     if (!this.helloSent && this.transport.connected()) {
       this.transport.send(encodeHello(this.myName, this.myNonce));
       this.helloSent = true;
@@ -10230,6 +10433,13 @@ class LinkSession {
         }
         case LINK_MSG.answer:
           this.peerAnswer = f[1] === 1;
+          break;
+        case LINK_MSG.commit:
+          this.peerCommit = true;
+          break;
+        case LINK_MSG.begin:
+          this.clearTable();
+          this.peerBegin = true;
           break;
         case LINK_MSG.cancel:
           this.close();
@@ -10992,6 +11202,7 @@ var VERBS = {
   link_enter,
   link_trade,
   link_battle,
+  link_leave,
   push_screen: noop_object,
   play_sound,
   play_music,
@@ -11013,7 +11224,7 @@ function* link_open(ctx) {
   }, LINK_WAIT_FRAMES, (ok) => {
     ctx.lastCheck = ok;
     runner.resume();
-  });
+  }, { pleaseWait: true });
   yield;
 }
 function* link_room(ctx) {
@@ -11043,6 +11254,14 @@ function* link_trade(ctx) {
   if (!w.linkTrade)
     return;
   w.linkTrade(() => runner.resume());
+  yield;
+}
+function* link_leave(ctx) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  if (!w.leaveLinkRoom)
+    return;
+  w.leaveLinkRoom(() => runner.resume());
   yield;
 }
 function* link_enter(ctx) {
@@ -11786,6 +12005,8 @@ class Overworld {
   interact() {
     const p = this.player;
     const [fx, fy] = p.facingCell();
+    if (this.tryLinkMachine(fx, fy))
+      return;
     let npc = this.npcAtCell(fx, fy);
     if (!npc && this.map.isCounterCell(fx, fy)) {
       const [fx2, fy2] = target(fx, fy, p.facing);
@@ -12015,34 +12236,117 @@ any coins!`);
     this.shell.openFlyPicker?.(monName2, onDone);
   }
   link = null;
+  linkLogged = "";
+  linkLog(msg) {
+    if (globalThis.voxel)
+      console.log(`[pv] link: ${msg}`);
+  }
   linkWait = null;
   openLink() {
     if (this.link && this.link.state !== "closed")
       return true;
     const shell = this.shell;
     const t = shell.linkTransport ? shell.linkTransport() : hostTransport();
-    if (!t)
+    if (!t) {
+      this.linkLog("no carrier");
       return false;
+    }
     this.link = new LinkSession(t, String(this.save.player?.name ?? "RED"));
     this.link.open();
+    this.linkLogged = "";
+    this.linkLog("open, waiting for a peer");
     return true;
   }
-  waitLink(until, frames, done) {
-    this.linkWait = { until, frames, done };
+  waitLink(until, frames, done, opts) {
+    if (opts?.pleaseWait)
+      this.showLinkWait();
+    this.linkWait = { until, frames, done: (ok) => {
+      this.hideLinkWait();
+      done(ok);
+    } };
+  }
+  linkWaitBox = false;
+  showLinkWait() {
+    const t = this.shell.data.text ?? {};
+    this.shell.showText(t._CableClubNPCPleaseWaitText ?? "Please wait.");
+    this.linkWaitBox = true;
+  }
+  hideLinkWait() {
+    if (!this.linkWaitBox)
+      return;
+    this.linkWaitBox = false;
+    const g = this.shell;
+    if (g.top?.()?.kind === "textbox")
+      g.pop?.();
   }
   serviceLink() {
     this.pollLink();
-    if (this.link && this.inLinkRoom()) {
-      const p = this.player;
-      this.link.sendPos(Math.round(p.px), Math.round(p.py), p.facing);
-      this.syncPeerBody();
+    const s = this.link;
+    if (!s || !this.inLinkRoom())
+      return;
+    this.syncPeerBody();
+    if (s.state === "closed")
+      return;
+    const p = this.player;
+    s.sendPos(Math.round(p.px), Math.round(p.py), p.facing);
+    if (s.peerBegin && this.freeForLink()) {
+      this.linkLog(`pulled to the machine: ${this.linkVerb()}`);
+      this.runScript([[this.linkVerb()]]);
     }
+  }
+  linkVerb() {
+    return this.map?.id === "COLOSSEUM" ? "link_battle" : "link_trade";
+  }
+  freeForLink() {
+    if (this.runner.isRunning() || this.scriptMoves.length > 0)
+      return false;
+    if (this.player.moving || this.transitioning)
+      return false;
+    const kinds = this.shell.stackKinds?.();
+    return !kinds || kinds[kinds.length - 1] === "overworld";
+  }
+  tryLinkMachine(fx, fy) {
+    if (!this.inLinkRoom())
+      return false;
+    if (!LINK_TABLE.some((c) => c.x === fx && c.y === fy))
+      return false;
+    const s = this.link;
+    if (!s || s.state === "closed") {
+      const t = this.shell.data.text ?? {};
+      this.shell.showText(t._LinkCanceledText ?? `The link was
+canceled.`);
+      return true;
+    }
+    this.linkLog(`pressed the machine: ${this.linkVerb()}`);
+    this.runScript([[this.linkVerb()]]);
+    return true;
+  }
+  linkReturn = null;
+  leaveLinkRoom(done) {
+    this.linkLog("walked out");
+    const w = this.linkWait;
+    this.linkWait = null;
+    w?.done(false);
+    this.link?.cancel();
+    this.link = null;
+    const back = this.linkReturn;
+    this.linkReturn = null;
+    if (!back || !this.isCooked(back.map)) {
+      done();
+      return;
+    }
+    this.startWarpTo(back.map, back.x, back.y, back.facing, done);
   }
   pollLink() {
     const s = this.link;
     if (!s)
       return;
     s.poll();
+    const now = `${s.state} peer=${s.peerName || "-"} room=${s.agreedRoom() ?? "-"} seat=${s.seat()}`;
+    if (now !== this.linkLogged) {
+      this.linkLogged = now;
+      this.linkLog(now);
+    }
     const w = this.linkWait;
     if (!w)
       return;
@@ -12054,6 +12358,7 @@ any coins!`);
     w.frames -= 1;
     if (w.frames <= 0 || s.state === "closed") {
       this.linkWait = null;
+      this.linkLog(s.state === "closed" ? "wait ended: link closed" : "wait ended: timed out");
       w.done(false);
     }
   }
@@ -12069,6 +12374,8 @@ any coins!`);
     const room = this.link?.agreedRoom() ?? 0;
     const seat = LINK_SEATS[this.link?.seat() ?? 0];
     const map = LINK_ROOM_MAP[room] ?? LINK_ROOM_MAP[0];
+    const p = this.player;
+    this.linkReturn = { map: this.map.id, x: p.cellX, y: p.cellY, facing: p.facing };
     this.startWarpTo(map, seat.enter.x, seat.enter.y, seat.facing, done);
   }
   inLinkRoom() {
@@ -12078,11 +12385,15 @@ any coins!`);
     const s = this.link;
     if (!s)
       return;
-    const p = s.peerPos;
-    if (!p)
-      return;
     const body = this.npcs.find((n) => String(n.def.name ?? "").endsWith("_OPPONENT"));
     if (!body)
+      return;
+    if (s.state === "closed") {
+      body.hidden = true;
+      return;
+    }
+    const p = s.peerPos;
+    if (!p)
       return;
     body.px = p.x;
     body.py = p.y;
@@ -16260,17 +16571,36 @@ for theirs?`
 }
 
 // voxelmon/game/battle/linkbattle.ts
+var REPLACE = "REPLACE";
+
 class LinkBattle extends TrainerBattle {
   link;
+  mirror;
   wireAction = null;
   pendingMine = null;
+  awaitingReplacement = false;
   lastPeerAction = null;
-  constructor(data, save, rng, peerName, peerParty, link) {
+  constructor(data, save, rng, peerName, peerParty, link, mirror = false) {
     super(data, save, rng, "", 1, peerName, peerParty);
     this.link = link;
+    this.mirror = mirror;
+  }
+  mirrorTie() {
+    return this.mirror;
+  }
+  onTurnOrder(playerFirst) {
+    this.trace(`order: ${playerFirst ? "me" : "them"} first (mirror=${this.mirror})`);
+  }
+  awardExp() {}
+  trace(msg) {
+    if (globalThis.voxel)
+      console.log(`[pv] link: battle ${msg}`);
   }
   waitingForPeer() {
     return this.pendingMine !== null;
+  }
+  waitingForReplacement() {
+    return this.awaitingReplacement;
   }
   enemyAction() {
     return this.wireAction ?? { id: "STRUGGLE", pp: 1, struggle: true };
@@ -16283,7 +16613,69 @@ class LinkBattle extends TrainerBattle {
     this.pendingMine = mine;
     this.link.sendAction(mine);
   }
+  resolveSwitch(next) {
+    const slot = this.save.party.indexOf(next);
+    if (slot < 0)
+      return;
+    this.resolveTurn({ id: "SWITCH", pp: 0, switchTo: slot });
+  }
+  enemyMonFainted() {
+    if (this.enemyBench().length === 0) {
+      this.result = "win";
+      this.afterQueue = "finish";
+      return;
+    }
+    this.awaitingReplacement = true;
+  }
+  playerMonFainted() {
+    if (this.result)
+      return;
+    if (!firstHealthy(this.save.party)) {
+      this.sayNext(`${this.save.player.name} lost to
+${this.trainerName}!`);
+      this.result = "lose";
+      this.afterQueue = "finish";
+    }
+  }
+  replaceFainted(mon) {
+    const slot = this.save.party.indexOf(mon);
+    this.trace(`my replacement: slot ${slot} (${mon.species})`);
+    this.link.sendAction({ id: REPLACE, pp: 0, switchTo: slot });
+    super.replaceFainted(mon);
+  }
+  openItems() {
+    this.say(`Items can't be
+used here!`);
+    this.phase = "messages";
+    this.afterQueue = "menu";
+  }
   update(input) {
+    if (this.result === null && this.link.closed()) {
+      this.trace("the link closed mid-battle");
+      this.pendingMine = null;
+      this.awaitingReplacement = false;
+      this.say(`The link was
+canceled.`);
+      this.result = "run";
+      this.phase = "messages";
+      this.afterQueue = "finish";
+      return;
+    }
+    if (this.awaitingReplacement) {
+      const head = this.link.peekAction();
+      if (head && head.id === REPLACE && typeof head.switchTo === "number") {
+        this.link.takeAction();
+        this.awaitingReplacement = false;
+        this.trace(`their replacement: slot ${head.switchTo}`);
+        if (this.phase === "menu") {
+          this.phase = "messages";
+          this.afterQueue = "menu";
+        }
+        this.enemySwitch(head.switchTo);
+      } else if (this.phase === "menu" && this.player.mon.hp > 0) {
+        return;
+      }
+    }
     const mine = this.pendingMine;
     if (mine) {
       const theirs = this.link.takeAction();
@@ -16292,6 +16684,7 @@ class LinkBattle extends TrainerBattle {
       this.wireAction = theirs;
       this.lastPeerAction = theirs;
       this.pendingMine = null;
+      this.trace(`turn ${this.turnCount + 1}: ${this.player.mon.species} ${this.player.mon.hp}` + ` vs ${this.enemy.mon.species} ${this.enemy.mon.hp}; mine=${mine.id}` + `${mine.switchTo !== undefined ? "#" + mine.switchTo : ""} theirs=${theirs.id}` + `${theirs.switchTo !== undefined ? "#" + theirs.switchTo : ""}`);
       super.resolveTurn(mine);
       this.wireAction = null;
       return;
@@ -20658,8 +21051,7 @@ to level ${mon.level}!`, () => {
           return;
         }
         session.chooseRoom(choice === "COLOSSEUM" ? LINK_ROOM.colosseum : LINK_ROOM.trade);
-        this.showText("_CableClubNPCPleaseWaitText");
-        this.overworld.waitLink((s) => s.agreedRoom() !== null, LINK_WAIT_FRAMES, done);
+        this.overworld.waitLink((s) => s.agreedRoom() !== null, LINK_WAIT_FRAMES, done, { pleaseWait: true });
       }
     }));
   }
@@ -20678,6 +21070,10 @@ canceled.`, finish);
       const o = m;
       return !!o && typeof o === "object" && typeof o.species === "string" && !!this.data.pokemon?.[o.species] && typeof o.level === "number" && o.level >= 1 && o.level <= 100 && typeof o.hp === "number" && !!o.stats && Array.isArray(o.moves);
     };
+    if (!s.takeBegin())
+      s.begin();
+    const partyBefore = JSON.stringify(this.save.party);
+    const moneyBefore = this.save.money;
     const myHalf = Math.floor(Math.random() * 4294967295) >>> 0 || 1;
     s.sendParty({
       mons: JSON.parse(JSON.stringify(this.save.party)),
@@ -20697,10 +21093,16 @@ canceled.`, finish);
         canceled();
         return;
       }
-      const battle = new LinkBattle(this.data, this.save, seededRng(seed), s.peerName, theirs, s);
+      const battle = new LinkBattle(this.data, this.save, seededRng(seed), s.peerName, theirs, s, s.seat() === 1);
       const st = new BattleGameState(this, "", 0, battle);
       st.loseable = true;
-      st.onDone = () => finish();
+      st.onDone = () => {
+        const party = this.save.party;
+        party.splice(0, party.length, ...JSON.parse(partyBefore));
+        if (typeof moneyBefore === "number")
+          this.save.money = moneyBefore;
+        finish();
+      };
       this.push(st);
     });
   }
@@ -20715,10 +21117,17 @@ canceled.`, finish);
       str = str.replace(/\{RAM:(\w+)\}/g, (_m, n) => subs[n] ?? "");
       this.showText(str, after);
     };
-    const canceled = (after) => say("_LinkCanceledText", `The link was
+    const log = (m) => {
+      if (globalThis.voxel)
+        console.log(`[pv] link: trade ${m}`);
+    };
+    const canceled = (after, why = "") => {
+      log(`canceled${why ? ": " + why : ""}`);
+      say("_LinkCanceledText", `The link was
 canceled.`, {}, after);
+    };
     if (!s || s.state === "closed") {
-      canceled(finish);
+      canceled(finish, "no link");
       return;
     }
     const nameOf = (m) => m.nickname ?? this.data.pokemon?.[m.species]?.name ?? m.species;
@@ -20734,6 +21143,8 @@ canceled.`, {}, after);
       maxHp: m.stats?.hp ?? m.hp,
       status: m.status ?? null
     });
+    if (!s.takeBegin())
+      s.begin();
     s.resetTrade();
     s.sendParty({
       mons: JSON.parse(JSON.stringify(this.save.party)),
@@ -20743,21 +21154,23 @@ canceled.`, {}, after);
     ow.waitLink((x) => x.peerParty !== null, LINK_WAIT_FRAMES, (arrived) => {
       const theirParty = s.peerParty;
       if (!arrived || !theirParty) {
-        canceled(finish);
+        canceled(finish, "their party never came");
         return;
       }
       const theirs = theirParty.mons.filter(wellFormed);
       if (theirs.length === 0) {
-        canceled(finish);
+        canceled(finish, "their party was empty");
         return;
       }
+      log(`screen: ${this.save.party.length} of mine, ${theirs.length} of theirs`);
       const swap = (mySlot, theirSlot, after) => {
         const mine = this.save.party[mySlot];
         const got = theirs[theirSlot];
         if (!mine || !got) {
-          canceled(after);
+          canceled(after, "a slot was empty");
           return;
         }
+        log(`swap: my ${mine.species} for their ${got.species}`);
         const arrival = {
           ...got,
           traded: true,
@@ -20770,6 +21183,7 @@ canceled.`, {}, after);
           (dex.seen ??= {})[arrival.species] = true;
           (dex.owned ??= {})[arrival.species] = true;
         }
+        ow.saveGame();
         s.resetTrade();
         this.push(new TradeAnimState(this, {
           sending: entry(mine),
@@ -20804,34 +21218,47 @@ to {RAM:wLinkEnemyTrainerName}.`, subs, () => say("_TradeTakeCareText", `Take go
           watch: s,
           onDone: (choice) => {
             if (choice.kind === "cancel") {
+              log("backed out of the screen");
               s.answer(false);
               finish();
               return;
             }
             if (choice.kind === "propose") {
+              log(`proposed: my ${choice.give} for their ${choice.take}`);
               s.offer({ give: choice.give, take: choice.take });
-              ow.waitLink((x) => x.peerAnswer !== null, LINK_WAIT_FRAMES, (answered) => {
+              ow.waitLink((x) => x.peerAnswer !== null, LINK_ANSWER_FRAMES, (answered) => {
                 if (!answered || s.peerAnswer !== true) {
+                  s.answer(false);
                   s.resetTrade();
-                  canceled(finish);
+                  canceled(finish, !answered ? "no answer came" : "they said no");
                   return;
                 }
-                swap(choice.give, choice.take, finish);
+                log("they said yes; committing");
+                s.commit();
+                ow.waitLink((x) => x.unacked() === 0, LINK_WAIT_FRAMES, (heard) => {
+                  if (!heard) {
+                    s.resetTrade();
+                    canceled(finish, "the commit never landed");
+                    return;
+                  }
+                  swap(choice.give, choice.take, finish);
+                });
               });
               return;
             }
             const o = s.peerOffer;
             if (!o) {
-              canceled(finish);
+              canceled(finish, "the offer vanished");
               return;
             }
             const incoming = theirs[o.give];
             const outgoing = this.save.party[o.take];
             if (!incoming || !outgoing) {
               s.answer(false);
-              canceled(finish);
+              canceled(finish, "the offer named an empty slot");
               return;
             }
+            log(`offered: their ${incoming.species} for my ${outgoing.species}`);
             const subs = {
               wLinkEnemyTrainerName: s.peerName,
               wNameBuffer: nameOf(incoming),
@@ -20843,13 +21270,21 @@ trade {RAM:wNameBuffer}`, subs, () => {
 {RAM:wStringBuffer}.`;
               ask2 = ask2.replace(/\{PLAYER\}/g, String(this.save.player?.name ?? "RED")).replace(/\{RAM:(\w+)\}/g, () => nameOf(outgoing));
               this.showChoice(ask2, (yes) => {
+                log(yes ? "said yes; waiting for their commit" : "said no");
                 s.answer(yes);
                 if (!yes) {
                   s.resetTrade();
-                  canceled(finish);
+                  canceled(finish, "I said no");
                   return;
                 }
-                swap(o.take, o.give, finish);
+                ow.waitLink((x) => x.peerCommit || x.peerAnswer === false, LINK_WAIT_FRAMES, (spoke) => {
+                  if (!spoke || !s.peerCommit) {
+                    s.resetTrade();
+                    canceled(finish, !spoke ? "their commit never came" : "they withdrew");
+                    return;
+                  }
+                  swap(o.take, o.give, finish);
+                });
               });
             });
           }

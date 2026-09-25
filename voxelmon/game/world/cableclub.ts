@@ -32,8 +32,8 @@ export function cableClubScript(textConst: string): ScriptRow[] | null {
     ["ask", "_CableClubNPCPleaseApplyHereHaveToSaveText"],
     ["jump_if_false", "bye"],
     ["save_game"],
-    ["show_text", "_CableClubNPCPleaseWaitText"],
-    // Opens the session and waits for somebody. lastCheck = a peer arrived.
+    // Opens the session and waits for somebody, with her "Please wait." up
+    // for the duration (the verb shows it). lastCheck = a peer arrived.
     ["link_open"],
     ["jump_if_false", "alone"],
     // TRADE CENTER / COLOSSEUM / CANCEL, and the peer has to want the same.

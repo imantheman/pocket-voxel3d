@@ -196,6 +196,13 @@ const DEMO_MENU_HOLD = 130;
 export type BattleAction = MoveSlot & {
   struggle?: boolean;
   special?: "recharge" | "bound" | "trapping" | "bide";
+  /**
+   * A switch instead of a move: the slot of that side's party to send
+   * out. Resolved ahead of any move (core.asm: the switching side acts
+   * first). A link battle is what needs it -- the other console has to be
+   * told, and told as a turn -- but the engine resolves it for any side.
+   */
+  switchTo?: number;
 };
 
 /** :380-387 CHARGE_TEXT — ChargeEffect's per-move lines. */
@@ -1265,20 +1272,28 @@ export class WildBattle implements EffectBattle {
     this.turnCount += 1;
     const pMove = this.data.moves[playerAction.id] ?? null;
     const eMove = this.data.moves[enemyAction.id] ?? null;
-    const pFirst = firstMover(this.player, pMove, this.enemy, eMove, this.rng);
-    const order: [WildBattler, WildBattler, BattleAction][] = pFirst
-      ? [
-          [this.player, this.enemy, playerAction],
-          [this.enemy, this.player, enemyAction],
-        ]
-      : [
-          [this.enemy, this.player, enemyAction],
-          [this.player, this.enemy, playerAction],
-        ];
+    // A switch goes before any move. When both switch there are no moves
+    // in the turn and the order changes nothing; the player's is listed
+    // first so both consoles of a link list the same thing.
+    const pSwitch = playerAction.switchTo !== undefined;
+    const eSwitch = enemyAction.switchTo !== undefined;
+    const pFirst = pSwitch || eSwitch
+      ? pSwitch
+      : firstMover(this.player, pMove, this.enemy, eMove, this.rng, this.mirrorTie());
+    this.onTurnOrder(pFirst);
+    // Sides, not battlers: which mon stands on a side is read when the row
+    // RUNS, because a switch earlier in the same turn replaces it, and the
+    // move that follows has to land on the one that came in -- not on the
+    // one that left, which is what a battler captured here would do.
+    const order: [boolean, BattleAction][] = pFirst
+      ? [[true, playerAction], [false, enemyAction]]
+      : [[false, enemyAction], [true, playerAction]];
     this.phase = "messages";
     this.afterQueue = "menu";
-    for (const [user, target, action] of order) {
+    for (const [isPlayer, action] of order) {
       this.act(() => {
+        const user = isPlayer ? this.player : this.enemy;
+        const target = isPlayer ? this.enemy : this.player;
         this.executeAction(user, target, action);
       });
     }
@@ -1364,6 +1379,11 @@ export class WildBattle implements EffectBattle {
     if (this.result) return;
     if (user.mon.hp <= 0 || target.mon.hp <= 0) return;
     if (!action) return;
+    if (action.switchTo !== undefined) {
+      if (user.isPlayer) this.switchPlayer(this.save.party[action.switchTo]);
+      else this.enemySwitch(action.switchTo);
+      return;
+    }
 
     // The SILPH SCOPE's whole mechanical effect. While the RESTLESS SOUL is
     // still disguised (core.asm:6698-6700), the player's mon is too scared to
@@ -2280,7 +2300,7 @@ export class WildBattle implements EffectBattle {
 
   /** :4106-4134 openReplacementMenu onSwitch — send out with NO free enemy
    * move (ChooseNextMon). */
-  private replaceFainted(mon: PartyMon): void {
+  protected replaceFainted(mon: PartyMon): void {
     this.player = makeBattler(this.data, mon, true, this.save);
     this.markParticipant();
     this.sendOutMonCursors();
@@ -2300,26 +2320,47 @@ export class WildBattle implements EffectBattle {
   resolveSwitch(next: PartyMon): void {
     this.phase = "messages";
     this.afterQueue = "menu";
-    this.act(() => {
-      this.player = makeBattler(this.data, next, true, this.save);
-      // SendOutMon clears the FOE's trapping bit (:2341-2343)
-      this.enemy.trappingTurns = undefined;
-      this.enemy.trapMove = undefined;
-      this.enemy.trapDamage = undefined;
-      this.markParticipant();
-      this.sendOutMonCursors();
-      this.sendingOut = true;
-      this.sayNext(this.sendOutText(this.player.name));
-      this.animNext("POOF_ANIM", false);
-      this.actNext(() => {
-        this.sendingOut = false;
-      });
-    });
+    this.act(() => this.switchPlayer(next));
     this.act(() => {
       this.executeAction(this.enemy, this.player, this.enemyAction());
     });
     this.act(() => this.endOfTurn());
   }
+
+  /** The player's side of a switch: the new mon out, the foe's trap cleared. */
+  protected switchPlayer(next: PartyMon | undefined): void {
+    if (!next || next.hp <= 0 || next === this.player.mon) return;
+    this.player = makeBattler(this.data, next, true, this.save);
+    // SendOutMon clears the FOE's trapping bit (:2341-2343)
+    this.enemy.trappingTurns = undefined;
+    this.enemy.trapMove = undefined;
+    this.enemy.trapDamage = undefined;
+    this.markParticipant();
+    this.sendOutMonCursors();
+    this.sendingOut = true;
+    this.sayNext(this.sendOutText(this.player.name));
+    this.animNext("POOF_ANIM", false);
+    this.actNext(() => {
+      this.sendingOut = false;
+    });
+  }
+
+  /** The foe's side of a switch, by its party slot. A wild mon has no
+   * party and never switches; a trainer's is in battle/trainer.ts. */
+  enemySwitch(_slot: number): void {}
+
+  /**
+   * Whether a speed tie's coin flip is read the other way round. The flip
+   * says "the player first", and in a link battle the player is a
+   * different mon on each console: one of the two has to invert it or
+   * both put their own mon first and the fight forks (battle/linkbattle.ts).
+   */
+  protected mirrorTie(): boolean {
+    return false;
+  }
+
+  /** Who was put first this turn; a link battle writes it to the log. */
+  protected onTurnOrder(_playerFirst: boolean): void {}
 
   /** :1665-1668 sendOutMonCursors — every player send-out resets both. */
   private sendOutMonCursors(): void {

@@ -223,6 +223,41 @@ Your `save.lua` is not part of that artifact and is safe to keep.
 
 ---
 
+## 5b. Two players: the Cable Club
+
+The Cable Club works, without a cable. Both consoles need to be on the
+**same wifi network** (a New 3DS on the house wifi, an emulator on a PC
+on the same wifi -- any mix). With no network at all, two consoles find
+each other over 3DS local wireless instead; that path is untested.
+
+1. Both players walk up to the **receptionist on the right** of any
+   Pokémon Center and apply. She saves the game and waits up to a minute
+   for the other console to do the same.
+2. Both pick the same room -- **TRADE CENTER** or **COLOSSEUM** -- and are
+   walked in, one to each side of the machine in the middle.
+3. Either player walks up to the machine and presses **A** into it. The
+   other console is brought to the table wherever its player is standing.
+   A trade: pick one of yours, then one of theirs; the other player says
+   yes or no, and nothing changes hands until both have agreed. A battle:
+   it runs on both consoles at once, each picking its own moves and
+   switches, with no items, no running, no experience gained and the
+   party put back the way it was afterwards, as in the original.
+4. **Walk out along the bottom row** of the room to leave. The link
+   closes on both consoles and you are back at the desk. The other player
+   sees you vanish and can walk out too.
+
+Talking to the other player's body says "!", which is what the ROM has
+them say -- the machine is the thing to press.
+
+It is UDP on ports **51325-51328** between the two machines; a firewall
+that blocks those on a PC blocks the emulator from linking. Every frame
+is acknowledged and resent, so a dropped packet costs a moment, not the
+trade. A console that goes quiet for eight seconds is treated as gone.
+Two emulator instances on one PC can link with each other (they take
+consecutive ports), which is how this is tested without two consoles.
+
+---
+
 ## 6. About the colour
 
 Worth understanding before you build, because it is the one part of this

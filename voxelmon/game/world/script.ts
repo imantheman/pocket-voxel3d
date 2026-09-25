@@ -1190,6 +1190,7 @@ const VERBS: Record<string, Verb> = {
   link_enter,
   link_trade,
   link_battle,
+  link_leave,
   push_screen: noop_object,
   play_sound,
   play_music,
@@ -1216,7 +1217,10 @@ function* save_game(ctx: ScriptContext): Generator<void, void> {
 function* link_open(ctx: ScriptContext): Generator<void, void> {
   const w = ctx.world as unknown as {
     openLink?: () => boolean;
-    waitLink?: (until: (s: unknown) => boolean, frames: number, done: (ok: boolean) => void) => void;
+    waitLink?: (
+      until: (s: unknown) => boolean, frames: number, done: (ok: boolean) => void,
+      opts?: { pleaseWait?: boolean },
+    ) => void;
   };
   const runner = ctx.runner;
   // No carrier at all (a host with no radio): nobody is coming.
@@ -1224,6 +1228,8 @@ function* link_open(ctx: ScriptContext): Generator<void, void> {
     ctx.lastCheck = false;
     return;
   }
+  // "Please wait." is up for as long as this takes, and comes down by
+  // itself the moment somebody is there.
   w.waitLink(
     (s) => {
       const st = (s as { state: string }).state;
@@ -1234,6 +1240,7 @@ function* link_open(ctx: ScriptContext): Generator<void, void> {
       ctx.lastCheck = ok;
       runner.resume();
     },
+    { pleaseWait: true },
   );
   yield;
 }
@@ -1265,6 +1272,14 @@ function* link_trade(ctx: ScriptContext): Generator<void, void> {
   const runner = ctx.runner;
   if (!w.linkTrade) return;
   w.linkTrade(() => runner.resume());
+  yield;
+}
+
+function* link_leave(ctx: ScriptContext): Generator<void, void> {
+  const w = ctx.world as unknown as { leaveLinkRoom?: (done: () => void) => void };
+  const runner = ctx.runner;
+  if (!w.leaveLinkRoom) return;
+  w.leaveLinkRoom(() => runner.resume());
   yield;
 }
 

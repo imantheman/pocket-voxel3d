@@ -787,6 +787,12 @@ function jigglypuffRows(): ScriptRow[] {
  */
 const DEX_COMPLETE = 150;
 
+/** Both Club rooms are 10 cells wide; their last row (y = 7) is the exit. */
+function linkExitRow(): CoordTrigger[] {
+  const rows = [["link_leave"]] as ScriptRow[];
+  return Array.from({ length: 10 }, (_, x) => ({ x, y: 7, rows }));
+}
+
 export const MAP_SCRIPTS: Record<string, MapScript> = {
   PEWTER_CITY: {
     // PewterGuys trigger tiles on the west-leaving path; fires until Brock is
@@ -2811,36 +2817,26 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
     },
   },
 
-  // The CABLE CLUB's two rooms. Their one object each is the other player,
-  // and talking to them is the table: the TRADE CENTER opens the trade, the
-  // COLOSSEUM will open the battle.
-  // The one object in each room is the OTHER PLAYER's body, moved by their
-  // console (overworld.ts syncPeerBody). Talking to them says what the ROM
-  // has them say, which is "!" -- the trade is opened at the machine, by
-  // sitting down at it, not by walking up to a person and asking.
+  // The CABLE CLUB's two rooms. The one object in each is the OTHER
+  // PLAYER's body, moved by their console (overworld.ts syncPeerBody), and
+  // talking to them says what the ROM has them say: "!". The room's
+  // business -- the trade, the battle -- is the MACHINE in the middle
+  // (overworld.ts tryLinkMachine), and pressing A into it pulls the other
+  // console to the table wherever its player happens to be standing.
+  //
+  // The bottom row is the way out (the ROM walks you out when you reach
+  // it): a step onto it ends the link and puts you back at the desk.
   TRADE_CENTER: {
     talk: {
-      // The machine between the two of you is a COUNTER in this tileset, so
-      // pressing A into it looks straight across it at the other player --
-      // which is the ROM's own trade machine, and means the trade opens by
-      // sitting down at it and speaking across, not by walking up to
-      // somebody anywhere in the room. Until you are both in your seats
-      // they are just a person, and say what the ROM has them say.
-      TEXT_TRADECENTER_OPPONENT: (ow: any): ScriptRow[] =>
-        ow?.seatedAtTable?.() && ow?.peerSeated?.()
-          ? ([["link_trade"]] as ScriptRow[])
-          : ([["show_text", "_TradeCenterOpponentText"]] as ScriptRow[]),
+      TEXT_TRADECENTER_OPPONENT: [["show_text", "_TradeCenterOpponentText"]] as ScriptRow[],
     },
+    coord: linkExitRow(),
   },
   COLOSSEUM: {
     talk: {
-      // The same counter the TRADE CENTER has, with a fight behind it
-      // instead of a trade: sit down opposite them and speak across it.
-      TEXT_COLOSSEUM_OPPONENT: (ow: any): ScriptRow[] =>
-        ow?.seatedAtTable?.() && ow?.peerSeated?.()
-          ? ([["link_battle"]] as ScriptRow[])
-          : ([["show_text", "_ColosseumOpponentText"]] as ScriptRow[]),
+      TEXT_COLOSSEUM_OPPONENT: [["show_text", "_ColosseumOpponentText"]] as ScriptRow[],
     },
+    coord: linkExitRow(),
   },
 
   // flavor/pewter_pokecenter.lua: the JIGGLYPUFF that sings at you.

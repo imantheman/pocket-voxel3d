@@ -39,7 +39,8 @@ import * as Trash from "../voxelmon/game/world/trashcans.ts";
 import * as Hidden from "../voxelmon/game/world/hiddenitems.ts";
 import * as Seafoam from "../voxelmon/game/world/seafoam.ts";
 import {
-  LinkSession, LoopbackLink, LINK_ROOM, LINK_SEATS, LINK_VERSION,
+  LinkSession, LoopbackLink, LossyLink, ReliableLink, LINK_ANSWER_FRAMES, LINK_DEAD_FRAMES,
+  LINK_ROOM, LINK_SEATS, LINK_TABLE, LINK_VERSION, LINK_WAIT_FRAMES,
 } from "../voxelmon/game/world/link.ts";
 import { LinkBattle } from "../voxelmon/game/battle/linkbattle.ts";
 import { seededRng } from "../voxelmon/game/rng.ts";
@@ -8389,13 +8390,15 @@ describe("a COLOSSEUM battle stays in step on both consoles", () => {
     };
     const redParty = mk(redTeam);
     const blueParty = mk(blueTeam);
+    const copy = (p: any[]) => JSON.parse(JSON.stringify(p));
 
     const save = (party: any[]) => ({ party, inventory: {}, flags: {}, money: 0 }) as never;
-    // each console holds its own party and fights the other's
+    // each console holds its own party and its OWN COPY of the other's,
+    // the way the wire hands it over: nothing is shared but the seed
     const a = new LinkBattle(romData!, save(redParty), seededRng(seed), "BLUE",
-      blueParty as never, red as never);
+      copy(blueParty) as never, red as never, red.seat() === 1);
     const b = new LinkBattle(romData!, save(blueParty), seededRng(seed), "RED",
-      redParty as never, blue as never);
+      copy(redParty) as never, blue as never, blue.seat() === 1);
     return { a, b, red, blue };
   }
 
@@ -8409,6 +8412,22 @@ describe("a COLOSSEUM battle stays in step on both consoles", () => {
       a.update({} as never);
       b.update({} as never);
       if (!a.waitingForPeer() && !b.waitingForPeer()) break;
+    }
+  }
+
+  /** A battle input with nothing pressed, for pumping a menu. */
+  const idle = { wasPressed: () => false, isDown: () => false } as never;
+  /** A thumb on A, for the text and animations between turns. */
+  const mash = { wasPressed: (k: string) => k === "a", isDown: () => false } as never;
+  /** Run both message queues down to the menu (or the end). */
+  function drain(a: LinkBattle, b: LinkBattle, red: any, blue: any) {
+    for (let i = 0; i < 3000; i++) {
+      red.poll(); blue.poll();
+      const doneA = a.phase === "menu" || a.finished !== null;
+      const doneB = b.phase === "menu" || b.finished !== null;
+      if (doneA && doneB) break;
+      if (!doneA) a.update(mash);
+      if (!doneB) b.update(mash);
     }
   }
 
@@ -8428,6 +8447,7 @@ describe("a COLOSSEUM battle stays in step on both consoles", () => {
 
     for (let t = 0; t < 6; t++) {
       turn(a, b, red, blue, t % 2, (t + 1) % 2);
+      drain(a, b, red, blue);
       const sa = snapshot(a);
       const sb = snapshot(b);
       // what A calls "mine" is what B calls "theirs", and the HP has to
@@ -8437,6 +8457,24 @@ describe("a COLOSSEUM battle stays in step on both consoles", () => {
       expect(sa.turn).toBe(sb.turn);
       if (a.player.mon.hp <= 0 || a.enemy.mon.hp <= 0) break;
     }
+  });
+
+  test.skipIf(!hasGen)("identical mons -- a speed tie every turn -- stay in step", () => {
+    // the same species at the same level on both sides: every turn is a
+    // tie, and the coin flip is the one thing the two consoles read
+    // differently
+    const { a, b, red, blue } = pair(0xBEEF, ["SQUIRTLE", "PIDGEY"], ["SQUIRTLE", "PIDGEY"]);
+    for (let t = 0; t < 10; t++) {
+      turn(a, b, red, blue, 0, 0);
+      drain(a, b, red, blue);
+      const sa = snapshot(a);
+      const sb = snapshot(b);
+      expect(sa.mine, `turn ${t}`).toEqual(sb.theirs);
+      expect(sa.theirs, `turn ${t}`).toEqual(sb.mine);
+      if (a.player.mon.hp <= 0 || a.enemy.mon.hp <= 0) break;
+    }
+    // and the damage was real, the same on both
+    expect(snapshot(a).mine.hp).toBeLessThan(a.player.mon.stats.hp);
   });
 
   test.skipIf(!hasGen)("the enemy's move is the other player's, never an AI's", () => {
@@ -8471,6 +8509,122 @@ describe("a COLOSSEUM battle stays in step on both consoles", () => {
     }
     expect(a.waitingForPeer()).toBe(false);
     expect(snapshot(a).turn).toBe(before.turn + 1);
+  });
+
+
+  /** Both consoles, pumped until neither is waiting on the other. */
+  function settle(a: LinkBattle, b: LinkBattle, red: any, blue: any, n = 40) {
+    for (let i = 0; i < n; i++) {
+      red.poll(); blue.poll();
+      a.update(idle);
+      b.update(idle);
+      if (!a.waitingForPeer() && !b.waitingForPeer() &&
+          !a.waitingForReplacement() && !b.waitingForReplacement()) break;
+    }
+  }
+
+
+  test.skipIf(!hasGen)("a switch on one console is the enemy switching on the other", () => {
+    const { a, b, red, blue } = pair(11, ["PIDGEY", "RATTATA"], ["SQUIRTLE", "CHARMANDER"]);
+    // BLUE switches to its second; RED attacks
+    b.resolveSwitch(b.save.party[1]!);
+    a.resolveTurn(a.player.curMoves[0]! as never);
+    settle(a, b, red, blue);
+    expect(a.lastPeerAction?.switchTo).toBe(1);
+    drain(a, b, red, blue);
+    // the same mon is out on both consoles, and the HP agrees to the point
+    expect(b.player.mon.species).toBe("CHARMANDER");
+    expect(a.enemy.mon.species).toBe("CHARMANDER");
+    expect(snapshot(a).theirs).toEqual(snapshot(b).mine);
+  });
+
+  test.skipIf(!hasGen)("the mon sent out after a faint is the fainted side's pick", () => {
+    const { a, b, red, blue } = pair(3, ["PIDGEY"], ["RATTATA", "SQUIRTLE", "CHARMANDER"]);
+    // BLUE's lead is on its last legs, on BOTH consoles' copies of it
+    b.player.mon.hp = 1;
+    a.enemy.mon.hp = 1;
+    // a turn: whatever RED does, RATTATA goes down (a hit or a miss; keep
+    // swinging until it does)
+    for (let t = 0; t < 12 && b.player.mon.hp > 0; t++) {
+      a.resolveTurn(a.player.curMoves[0]! as never);
+      b.resolveTurn(b.player.curMoves[0]! as never);
+      settle(a, b, red, blue);
+      drain(a, b, red, blue);
+    }
+    expect(b.player.mon.hp).toBe(0);
+    // RED's console holds: its enemy has fainted and it must not guess
+    expect(a.waitingForReplacement()).toBe(true);
+    expect(a.enemy.mon.species).toBe("RATTATA");
+    a.update(idle);
+    expect(a.phase).toBe("menu");
+    // BLUE picks its THIRD, not its next
+    (b as any).replaceFainted(b.save.party[2]);
+    settle(a, b, red, blue);
+    drain(a, b, red, blue);
+    expect(a.waitingForReplacement()).toBe(false);
+    expect(b.player.mon.species).toBe("CHARMANDER");
+    expect(a.enemy.mon.species).toBe("CHARMANDER");
+  });
+
+  test.skipIf(!hasGen)("the move after a switch lands on the mon that came in, on both consoles", () => {
+    // What the emulator stalled on: the turn resolver used to capture the
+    // battlers when it queued the two actions, so after a switch the
+    // opponent's move hit the mon that had LEFT. Here RED's lead is at 1 HP;
+    // RED switches it out and back in while BLUE keeps tackling.
+    const { a, b, red, blue } = pair(0xC0DE, ["SQUIRTLE", "PIDGEY"], ["SQUIRTLE", "PIDGEY"]);
+    a.player.mon.hp = 1;
+    b.enemy.mon.hp = 1;
+    // RED switches to PIDGEY; BLUE's tackle must land on PIDGEY, not the
+    // 1-HP SQUIRTLE that just left
+    a.resolveSwitch(a.save.party[1]!);
+    b.resolveTurn(b.player.curMoves[0]! as never);
+    settle(a, b, red, blue);
+    drain(a, b, red, blue);
+    expect(a.save.party[0]!.hp).toBe(1);
+    expect(a.player.mon.species).toBe("PIDGEY");
+    expect(a.player.mon.hp).toBeLessThan(a.player.mon.stats.hp);
+    expect(snapshot(a).mine).toEqual(snapshot(b).theirs);
+    expect((b as any).result).toBeNull();
+    // and back: now the SQUIRTLE takes it and faints, on both alike
+    a.resolveSwitch(a.save.party[0]!);
+    b.resolveTurn(b.player.curMoves[0]! as never);
+    settle(a, b, red, blue);
+    drain(a, b, red, blue);
+    expect(a.player.mon.species).toBe("SQUIRTLE");
+    expect(a.player.mon.hp).toBe(0);
+    expect(b.enemy.mon.hp).toBe(0);
+    expect(b.waitingForReplacement()).toBe(true);
+    // RED sends PIDGEY back out; the fight goes on in step
+    (a as any).replaceFainted(a.save.party[1]);
+    settle(a, b, red, blue);
+    drain(a, b, red, blue);
+    expect(b.waitingForReplacement()).toBe(false);
+    a.resolveTurn(a.player.curMoves[0]! as never);
+    b.resolveTurn(b.player.curMoves[0]! as never);
+    settle(a, b, red, blue);
+    drain(a, b, red, blue);
+    expect(snapshot(a).mine).toEqual(snapshot(b).theirs);
+    expect(snapshot(a).theirs).toEqual(snapshot(b).mine);
+  });
+
+  test.skipIf(!hasGen)("a console that vanishes mid-battle ends the fight on the other", () => {
+    const { a, b, red, blue } = pair(9, ["PIDGEY"], ["RATTATA"]);
+    a.resolveTurn(a.player.curMoves[0]! as never);
+    // BLUE's console is switched off: it never answers again
+    for (let i = 0; i < LINK_DEAD_FRAMES + 30; i++) { red.poll(); a.update(idle); }
+    expect(red.state).toBe("closed");
+    drain(a, b, red, blue);
+    expect(a.waitingForPeer()).toBe(false);
+    expect(a.finished).not.toBeNull();
+    expect((a as any).result).toBe("run");   // nobody won it
+    expect(b.finished).toBeNull();           // the dead console is not our business
+  });
+
+  test.skipIf(!hasGen)("items are refused, and there is no running", () => {
+    const { a } = pair(5, ["PIDGEY"], ["RATTATA"]);
+    a.openItems();
+    expect(a.phase).toBe("messages");
+    expect(a.runRoll(999, 1)).toBe(false);
   });
 
   test.skipIf(!hasGen)("the seed is both halves, so neither console owns the luck", () => {
@@ -8819,6 +8973,33 @@ describe("the CABLE CLUB desk", () => {
     expect(game.overworld.map.id).toBe(CENTER);
   });
 
+  test.skipIf(!hasGen)("she says please wait while it takes, and stops when someone comes", () => {
+    const red = clubGame("RED");
+    const blue = clubGame("BLUE");
+    const wire = new LoopbackLink();
+    red.linkCarrier = wire.a;
+    blue.linkCarrier = wire.b;
+    // RED applies alone: the link is open and she is asking for patience
+    applyAtDesk(red, true);
+    for (let i = 0; i < 300; i++) {
+      if (red.overworld.link?.state === "waiting") break;
+      red.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    expect(red.overworld.link?.state).toBe("waiting");
+    for (let i = 0; i < 4; i++) red.tick(0);
+    expect(topText(red)).toContain("Please wait");
+    // BLUE turns up. Nothing is pressed on RED, and the box goes away by
+    // itself, straight into the room menu.
+    applyAtDesk(blue, true);
+    for (let i = 0; i < 600; i++) {
+      if (red.stackKinds().at(-1) === "naming") break;
+      red.tick(0);
+      blue.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    expect(red.stackKinds().at(-1)).toBe("naming");
+    expect(red.stackKinds()).not.toContain("textbox");
+  });
+
   test.skipIf(!hasGen)("two consoles link at the desk and walk into the TRADE CENTER", () => {
     const red = clubGame("RED");
     const blue = clubGame("BLUE");
@@ -8918,8 +9099,10 @@ describe("the CABLE CLUB link", () => {
     const red = new LinkSession(wire.a, "RED");
     red.open();
     red.poll();
-    // a hello carrying a version this build does not speak
-    wire.b.send(new Uint8Array([1, 99, 66]));
+    // a hello carrying a version this build does not speak, sent the way
+    // a peer's session would send it: through the reliable layer
+    const peer = new ReliableLink(wire.b);
+    peer.send(new Uint8Array([1, 99, 66]));
     expect(red.poll()).toBe("closed");
     expect(red.peerName).toBe("");
   });
@@ -8928,7 +9111,8 @@ describe("the CABLE CLUB link", () => {
     const wire = new LoopbackLink();
     const red = new LinkSession(wire.a, "RED");
     red.open(); red.poll();
-    wire.b.send(new Uint8Array([200, 1, 2, 3]));   // from a later build
+    const peer = new ReliableLink(wire.b);
+    peer.send(new Uint8Array([200, 1, 2, 3]));   // from a later build
     // a hello this build does understand, built by hand: kind, version,
     // then the name as ASCII JSON
     const hello = JSON.stringify({ n: "BLUE", k: 1 });
@@ -8936,7 +9120,7 @@ describe("the CABLE CLUB link", () => {
     frame[0] = 1;
     frame[1] = LINK_VERSION;
     for (let i = 0; i < hello.length; i++) frame[2 + i] = hello.charCodeAt(i);
-    wire.b.send(frame);
+    peer.send(frame);
     expect(red.poll()).toBe("linked");
     expect(red.peerName).toBe("BLUE");
   });
@@ -9613,5 +9797,306 @@ describe("the boot movie owns the music", () => {
     for (let i = 0; i < 4; i++) game.tick(0);
     // exactly one song ever started: the title's, on its second tick
     expect(started(calls)).toEqual(["play:Music_TitleScreen"]);
+  });
+});
+
+describe("the CABLE CLUB, finished", () => {
+  const CENTER = "VIRIDIAN_POKECENTER";
+  const ROOMS = ["TRADE_CENTER", "COLOSSEUM"];
+  const DESK = { map: CENTER, x: 5, y: 5, facing: "up" as const };
+
+  /** One frame on both consoles. */
+  const both = (a: VoxelmonGame, b: VoxelmonGame, n: number, mask = 0) => {
+    for (let i = 0; i < n; i++) { a.tick(mask); b.tick(mask); }
+  };
+  const pump = (a: LinkSession, b: LinkSession, n: number) => {
+    for (let i = 0; i < n; i++) { a.poll(); b.poll(); }
+  };
+
+  /**
+   * Two consoles in a room with an open session, each at its own seat,
+   * and the desk they came from remembered so the exit has somewhere to go.
+   */
+  function pairIn(room: string, aName = "RED", bName = "BLUE") {
+    const data = {
+      ...(romData as object),
+      cookedMaps: [...((romData as { cookedMaps?: string[] }).cookedMaps ?? []), CENTER, ...ROOMS],
+    };
+    const mk = (name: string) => {
+      const g = new VoxelmonGame(data as never, new MenuHost(), 1);
+      g.newGame();
+      g.closeToOverworld();
+      g.save.player.name = name;
+      g.save.party.length = 0;
+      return g;
+    };
+    const a = mk(aName);
+    const b = mk(bName);
+    const wire = new LoopbackLink();
+    a.linkCarrier = wire.a;
+    b.linkCarrier = wire.b;
+    for (const g of [a, b]) {
+      g.overworld.setMap(room, 4, 2, "down");
+      expect(g.overworld.openLink()).toBe(true);
+      g.overworld.linkReturn = { ...DESK };
+    }
+    for (let i = 0; i < 8; i++) { a.overworld.link!.poll(); b.overworld.link!.poll(); }
+    for (const g of [a, b]) {
+      const seat = LINK_SEATS[g.overworld.link!.seat()]!;
+      g.overworld.setMap(room, seat.seat.x, seat.seat.y, seat.facing as never);
+    }
+    both(a, b, 8);
+    return { a, b };
+  }
+
+  const peerBody = (g: VoxelmonGame) =>
+    (g.overworld as any).npcs.find((n: any) => String(n.def?.name ?? "").endsWith("_OPPONENT"));
+
+  test("frames arrive once, in order, and whole, over a carrier that loses them", () => {
+    const wire = new LossyLink(0.35, 0.15, 7);
+    const red = new LinkSession(wire.a, "RED", 2);
+    const blue = new LinkSession(wire.b, "BLUE", 1);
+    red.open(); blue.open();
+    pump(red, blue, 200);
+    expect(red.state).toBe("linked");
+    expect(blue.peerName).toBe("RED");
+    red.chooseRoom(LINK_ROOM.trade);
+    blue.chooseRoom(LINK_ROOM.trade);
+    pump(red, blue, 200);
+    expect(red.state).toBe("ready");
+    expect(blue.state).toBe("ready");
+
+    // a party bigger than any datagram crosses whole
+    const big = {
+      mons: Array.from({ length: 6 }, (_, i) => ({ species: "PIDGEY", level: i + 1, pad: "x".repeat(400) })),
+      otName: "RED", otId: 1,
+    };
+    red.sendParty(big);
+    pump(red, blue, 600);
+    expect(blue.peerParty?.mons.length).toBe(6);
+    expect((blue.peerParty?.mons[5] as { pad?: string }).pad?.length).toBe(400);
+
+    // twenty turns, each exactly once, in the order they were chosen
+    for (let i = 0; i < 20; i++) red.sendAction({ id: `M${i}` });
+    pump(red, blue, 900);
+    const got: string[] = [];
+    for (;;) { const a = blue.takeAction() as { id: string } | null; if (!a) break; got.push(a.id); }
+    expect(got).toEqual(Array.from({ length: 20 }, (_, i) => `M${i}`));
+    expect(red.wire().unacked()).toBe(0);
+  });
+
+  test("a peer that goes silent is noticed, and the link closes", () => {
+    const wire = new LoopbackLink();
+    const red = new LinkSession(wire.a, "RED", 2);
+    const blue = new LinkSession(wire.b, "BLUE", 1);
+    red.open(); blue.open();
+    pump(red, blue, 8);
+    expect(red.state).toBe("linked");
+    // BLUE stops polling: its console is off. RED keeps going.
+    for (let i = 0; i < LINK_DEAD_FRAMES + 20; i++) red.poll();
+    expect(red.state).toBe("closed");
+  });
+
+  test.skipIf(!hasGen)("pressing A at the machine pulls the other console to the table", () => {
+    const { a, b } = pairIn("TRADE_CENTER");
+    a.save.party.push(newMon(romData!, "PIDGEY", 12, a.battleRng));
+    b.save.party.push(newMon(romData!, "RATTATA", 14, b.battleRng));
+    // BLUE is nowhere near the machine and never presses anything
+    b.overworld.setMap("TRADE_CENTER", 7, 6, "left");
+    both(a, b, 4);
+
+    a.overworld.interact();               // RED, at the seat, into the machine
+    for (let i = 0; i < 600; i++) {
+      if (a.stackKinds().at(-1) === "tradescreen" && b.stackKinds().at(-1) === "tradescreen") break;
+      both(a, b, 1);
+    }
+    expect(a.stackKinds().at(-1)).toBe("tradescreen");
+    expect(b.stackKinds().at(-1)).toBe("tradescreen");
+
+    // and the trade goes through from there: A on both sides
+    for (let i = 0; i < 3000; i++) {
+      if (a.save.party[0]!.species === "RATTATA" && b.save.party[0]!.species === "PIDGEY") break;
+      both(a, b, 1, i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    expect(a.save.party[0]!.species).toBe("RATTATA");
+    expect(b.save.party[0]!.species).toBe("PIDGEY");
+    // written down on both consoles the moment it changed hands
+    expect((a.host as MenuHost).saved).toContain("RATTATA");
+    expect((b.host as MenuHost).saved).toContain("PIDGEY");
+  });
+
+  test.skipIf(!hasGen)("a second trade in the same session shows the party as it is now", () => {
+    const { a, b } = pairIn("TRADE_CENTER");
+    a.save.party.push(newMon(romData!, "PIDGEY", 12, a.battleRng));
+    b.save.party.push(newMon(romData!, "RATTATA", 14, b.battleRng));
+    // Mash A only while something is up: standing idle at the machine, a
+    // press IS the machine, and would open a third trade.
+    const idle = (g: VoxelmonGame) =>
+      g.stackKinds().at(-1) === "overworld" && !(g.overworld as any).runner.isRunning();
+    a.overworld.interact();
+    for (let i = 0; i < 3000; i++) {
+      if (a.save.party[0]!.species === "RATTATA" && idle(a) && idle(b)) break;
+      const mask = i % 2 === 0 ? VOX_BTN.a : 0;
+      a.tick(idle(a) ? 0 : mask);
+      b.tick(idle(b) ? 0 : mask);
+    }
+    expect(idle(a) && idle(b)).toBe(true);
+    both(a, b, 8);
+
+    // BLUE opens the second one; what RED's screen shows of BLUE is fresh
+    b.overworld.interact();
+    for (let i = 0; i < 600; i++) {
+      if (a.stackKinds().at(-1) === "tradescreen" && b.stackKinds().at(-1) === "tradescreen") break;
+      both(a, b, 1);
+    }
+    const v = a.tradeScreen() as { mine: { species: string }[]; theirs: { species: string }[] };
+    expect(v.mine.map((e) => e.species)).toEqual(["RATTATA"]);
+    expect(v.theirs.map((e) => e.species)).toEqual(["PIDGEY"]);
+  });
+
+  test.skipIf(!hasGen)("the machine works from the other side too, and in the COLOSSEUM", () => {
+    const { a, b } = pairIn("COLOSSEUM");
+    a.save.party.push(newMon(romData!, "PIDGEY", 12, a.battleRng));
+    b.save.party.push(newMon(romData!, "RATTATA", 14, b.battleRng));
+    // RED at the wrong end of the machine: the cell beside its seat
+    a.overworld.setMap("COLOSSEUM", LINK_TABLE[1].x, 3, "down");
+    b.overworld.setMap("COLOSSEUM", 8, 6, "up");
+    both(a, b, 4);
+    const before = JSON.stringify(a.save.party);
+
+    a.overworld.interact();
+    for (let i = 0; i < 600; i++) {
+      if (a.stackKinds().at(-1) === "battle" && b.stackKinds().at(-1) === "battle") break;
+      both(a, b, 1);
+    }
+    expect(a.stackKinds().at(-1)).toBe("battle");
+    expect(b.stackKinds().at(-1)).toBe("battle");
+
+    // the fight leaves no mark: whatever happened in it, the party comes
+    // back as it went in, and nobody is paid
+    a.save.party[0]!.hp = 1;
+    (a.save as any).money = 999;
+    for (const g of [a, b]) ((g.top() as any).battle as { finished: string | null }).finished = "lose";
+    both(a, b, 4);
+    expect(a.stackKinds().at(-1)).toBe("overworld");
+    expect(JSON.stringify(a.save.party)).toBe(before);
+    expect((a.save as any).money).not.toBe(999);
+    expect(a.overworld.map.id).toBe("COLOSSEUM");
+  });
+
+  test.skipIf(!hasGen)("walking out the bottom ends the link and lands both at the desk", () => {
+    const { a, b } = pairIn("TRADE_CENTER");
+    // RED walks down to the last row
+    a.overworld.setMap("TRADE_CENTER", 4, 6, "down");
+    both(a, b, 4);
+    for (let i = 0; i < 400; i++) {
+      if (a.overworld.map.id === CENTER) break;
+      a.tick(VOX_BTN.down);   // RED walks; BLUE stands where it is
+      b.tick(0);
+    }
+    expect(a.overworld.map.id).toBe(CENTER);
+    expect(a.overworld.player.cellX).toBe(DESK.x);
+    expect(a.overworld.player.cellY).toBe(DESK.y);
+    expect(a.overworld.link).toBeNull();
+
+    // BLUE's console hears it: the session closes and RED's body is gone
+    both(a, b, 8);
+    expect(b.overworld.link?.state).toBe("closed");
+    expect(peerBody(b)?.hidden).toBe(true);
+    // the machine no longer does anything but say so
+    b.overworld.setMap("TRADE_CENTER", 4, 5, "up");
+    both(a, b, 2);
+    b.overworld.interact();
+    both(a, b, 2);
+    expect(b.stackKinds().at(-1)).toBe("textbox");
+    dismissText(b);
+    // and BLUE can walk out too
+    b.overworld.setMap("TRADE_CENTER", 4, 6, "down");
+    for (let i = 0; i < 400; i++) {
+      if (b.overworld.map.id === CENTER) break;
+      a.tick(0);
+      b.tick(VOX_BTN.down);
+    }
+    expect(b.overworld.map.id).toBe(CENTER);
+    expect(b.overworld.link).toBeNull();
+  });
+
+  /** Drive RED's screen to propose its first mon for BLUE's first. */
+  function propose(a: VoxelmonGame, b: VoxelmonGame): void {
+    a.overworld.interact();
+    for (let i = 0; i < 600; i++) {
+      if (a.stackKinds().at(-1) === "tradescreen" && b.stackKinds().at(-1) === "tradescreen") break;
+      both(a, b, 1);
+    }
+    tap(a, VOX_BTN.a);   // mine
+    tap(a, VOX_BTN.a);   // theirs: a proposal
+    for (let i = 0; i < 40; i++) both(a, b, 1);
+    expect(b.overworld.link!.peerOffer).toEqual({ give: 0, take: 0 });
+  }
+
+  test.skipIf(!hasGen)("the proposer waits as long as the answer takes", () => {
+    const { a, b } = pairIn("TRADE_CENTER");
+    a.save.party.push(newMon(romData!, "PIDGEY", 12, a.battleRng));
+    b.save.party.push(newMon(romData!, "RATTATA", 14, b.battleRng));
+    propose(a, b);
+    // BLUE sits on the question for a good while -- longer than any of
+    // the link's other waits, short of the answer's own
+    for (let i = 0; i < LINK_WAIT_FRAMES + 600; i++) both(a, b, 1);
+    expect(a.save.party[0]!.species).toBe("PIDGEY");
+    expect(a.stackKinds().at(-1)).not.toBe("textbox");   // no "canceled" on RED
+    // then says yes: the swap goes through on both
+    for (let i = 0; i < 3000; i++) {
+      if (a.save.party[0]!.species === "RATTATA" && b.save.party[0]!.species === "PIDGEY") break;
+      both(a, b, 1, i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    expect(a.save.party[0]!.species).toBe("RATTATA");
+    expect(b.save.party[0]!.species).toBe("PIDGEY");
+  });
+
+  test.skipIf(!hasGen)("a yes that the proposer never commits moves nothing", () => {
+    const { a, b } = pairIn("TRADE_CENTER");
+    a.save.party.push(newMon(romData!, "PIDGEY", 12, a.battleRng));
+    b.save.party.push(newMon(romData!, "RATTATA", 14, b.battleRng));
+    propose(a, b);
+    // RED's console dies before BLUE answers
+    for (let i = 0; i < 4; i++) b.tick(0);
+    // BLUE reads the offer and says yes to nobody
+    for (let i = 0; i < LINK_DEAD_FRAMES + LINK_WAIT_FRAMES + 200; i++) {
+      if (b.stackKinds().at(-1) === "overworld" && !(b.overworld as any).runner.isRunning()) break;
+      b.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    // nothing changed hands, and the link is known to be gone
+    expect(b.save.party[0]!.species).toBe("RATTATA");
+    expect(b.save.party.length).toBe(1);
+    expect(b.overworld.link?.state).toBe("closed");
+  });
+
+  test.skipIf(!hasGen)("a proposer that gave up tells the answerer no", () => {
+    const { a, b } = pairIn("TRADE_CENTER");
+    a.save.party.push(newMon(romData!, "PIDGEY", 12, a.battleRng));
+    b.save.party.push(newMon(romData!, "RATTATA", 14, b.battleRng));
+    propose(a, b);
+    // RED runs out of patience (the long answer wait elapses) while BLUE
+    // is still reading; then BLUE says yes
+    for (let i = 0; i < LINK_ANSWER_FRAMES + 10; i++) { a.tick(i % 2 === 0 ? VOX_BTN.a : 0); b.tick(0); }
+    for (let i = 0; i < 600; i++) {
+      if (b.stackKinds().at(-1) === "overworld" && !(b.overworld as any).runner.isRunning()) break;
+      both(a, b, 1, i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    expect(a.save.party[0]!.species).toBe("PIDGEY");
+    expect(b.save.party[0]!.species).toBe("RATTATA");
+    expect(a.overworld.link?.state).not.toBe("closed");   // the link itself is fine
+  });
+
+  test.skipIf(!hasGen)("talking to the other player says what the ROM says", () => {
+    const { a, b } = pairIn("TRADE_CENTER");
+    // RED walks up beside BLUE's body rather than to the machine
+    const seatB = LINK_SEATS[b.overworld.link!.seat()]!.seat;
+    a.overworld.setMap("TRADE_CENTER", seatB.x - 1, seatB.y, "right");
+    both(a, b, 4);
+    a.overworld.interact();
+    both(a, b, 2);
+    expect(a.stackKinds().at(-1)).toBe("textbox");
+    expect(topText(a)).toBe("!");
   });
 });
