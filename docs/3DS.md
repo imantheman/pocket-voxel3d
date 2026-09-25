@@ -80,9 +80,10 @@ It reads exactly three files out of them:
   [§6](#6-about-the-colour) — worth reading before you build.
 - `potato_voxel/data/voxel_heights.lua` — which tile is a wall, a roof, a
   ledge; the building templates. Hand-authored by that mod, nothing in it
-  comes from a ROM. The mod's code carries no licence of its own, which is
-  why this project reimplements its renderer rather than copying it; this
-  one table is read off your checkout at cook time the way the ROM is.
+  comes from a ROM. The mod's code carries no licence file; its author has
+  given this project permission to use the table (asked and answered,
+  September 2026). The renderer itself is reimplemented, not copied, and
+  the table is read off your checkout at cook time the way the ROM is.
   Without it every building cooks flat.
 
 ---
@@ -311,8 +312,9 @@ The gameplay is a TypeScript port of the
 in an embedded QuickJS guest. The presentation is a Rust reimplementation of
 the DramaticShape Voxel Mod diorama renderer, as carried on by
 [PotatoVoxel](https://github.com/ShaneMcGovernIE/potato_voxel).
-gen1recomp is MIT; the voxel mod's code carries no licence, which is why it
-is reimplemented here rather than copied. Both serve as executable
+gen1recomp is MIT; the voxel mod's code carries no licence file (its author
+has okayed this project's use of its shape table), and its renderer is
+reimplemented here rather than copied. Both serve as executable
 specifications, not vendored code — see [docs/VOXEL.md §1](VOXEL.md) for
 the content boundary in full.
 

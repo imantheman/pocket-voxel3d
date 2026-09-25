@@ -84,7 +84,8 @@ BUN_SHA256 = {
 #                               a community colourisation of the Red
 #                               disassembly. Only fetched if you say yes to
 #                               colour.
-#   potato_voxel  (public on GitHub; the file carries no license of its own)
+#   potato_voxel  (no license file; its author has said this project may
+#                  use it -- asked and answered September 2026)
 #     data/voxel_heights.lua    hand-authored shape pins: which tile is a
 #                               roof, a wall, a ledge, and the building
 #                               templates. Nothing in it comes from a ROM.
@@ -98,7 +99,7 @@ DATA_FILES = {
     "colour": ("gen1recomp", "data/palettes_gbc.lua", GEN1RECOMP,
                "e194c72de82a0a520aced960b04d95325735b4ee63e9b071ad3e96bcf6615b0c", 109470, "MIT"),
     "shapes": ("potato_voxel", "data/voxel_heights.lua", POTATO_VOXEL,
-               "20e0f26e1163e4861da760d21b6f71e41a66a52813119b2a1b15ae3a8c78f934", 255629, "no license"),
+               "20e0f26e1163e4861da760d21b6f71e41a66a52813119b2a1b15ae3a8c78f934", 255629, "used with the author's permission"),
 }
 
 # The only ROM this works with. The importer checks it again before decoding.

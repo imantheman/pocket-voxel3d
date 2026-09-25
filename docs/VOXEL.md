@@ -7,7 +7,8 @@ presentation is a Rust reimplementation of the
 [DramaticShape Voxel Mod](https://github.com/ShaneMcGovernIE/potato_voxel)
 diorama renderer (as carried on by PotatoVoxel; the original repository is
 gone from GitHub). gen1recomp is MIT-licensed; the voxel mod's code carries
-no licence, which is exactly why it is reimplemented and not copied. Both
+no licence file -- PotatoVoxel's author has okayed this project's use of
+its shape table -- and its renderer is reimplemented, not copied. Both
 serve here as executable specifications, not vendored code.
 
 The runtime instance is `⟨ pocketvoxel-core, the voxel surface, the voxelmon
