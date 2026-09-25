@@ -17,7 +17,7 @@ hardware — **a real PSP, a real PS Vita and a real Nintendo 3DS**, from one
 guest bundle and one cooker. The gameplay is a TypeScript port of the
 [gen1recomp](https://github.com/bryanthaboi/gen1recomp) Lua engine running in
 an embedded QuickJS guest; the presentation is a Rust reimplementation of the
-[DramaticShape Voxel Mod](https://github.com/DramaticShape/DramaticShapeVoxelMod)
+[DramaticShape Voxel Mod](https://github.com/ShaneMcGovernIE/potato_voxel)
 diorama renderer. Both upstreams are MIT-licensed; both serve here as
 executable specifications, not vendored code.
 
@@ -101,7 +101,7 @@ cd pocket-voxel && bun install
 
 export VOXELMON_ROM=/path/to/your/rom.gb   # SHA-1 verified before any decode
 export VOXELMON_G1R=~/code/gen1recomp      # reference checkouts: the manifest
-export VOXELMON_VOXELMOD=~/code/DramaticShapeVoxelMod  # and the tile profiles
+export VOXELMON_VOXELMOD=~/code/potato_voxel           # and the tile profiles
 
 bun tools/voxel.ts import   # ROM → dist/voxelmon/gen/
 bun tools/voxel.ts cook     # gen/ → dist/voxelmon/voxelmon.vxpak
@@ -114,6 +114,8 @@ bun tools/voxel.ts check    # replay the tapes, assert both rungs' hashes
 
 **[docs/3DS.md](docs/3DS.md) is the full walkthrough** — start there if the
 3DS is what you came for. It assumes nothing and covers the SD card layout.
+Not a developer? The [`cooker`](cooker/README.txt) folder does the whole
+build from a drag-and-drop of your ROM, with nothing to install.
 
 The short version, once the three inputs in [Quick start](#quick-start) are
 exported:

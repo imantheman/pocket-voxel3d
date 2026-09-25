@@ -15,3 +15,6 @@ node_modules/
 # into target/, and a stale 34 MB copy of it once rode along in a commit.
 *.3dsx
 *.elf
+# the cooker app's downloads and result
+cooker/_work/
+cooker/output/

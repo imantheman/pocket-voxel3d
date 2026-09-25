@@ -28,6 +28,8 @@ import { join } from "node:path";
 
 import { cook } from "../voxelmon/cook/cli.ts";
 import { GEN_DIR, genMissingReason, loadGen, ROOT } from "../voxelmon/cook/data.ts";
+import { missingInputReason, resolveEnv } from "../voxelmon/import/env.ts";
+import { runImport } from "../voxelmon/import/index.ts";
 
 const DIST = join(ROOT, "dist/voxelmon");
 /** One pak per map, atlas not yet shared: the input to the hoist. */
@@ -52,6 +54,19 @@ function mb(bytes: number): string {
 }
 
 export async function cook3ds(only?: string[]): Promise<number> {
+  // The importer first, when its output is not there. The cooker app
+  // (cooker/) runs this one command and nothing else, so it has to be able
+  // to start from a bare ROM.
+  if (genMissingReason()) {
+    const env = resolveEnv();
+    const why = missingInputReason(env);
+    if (why) {
+      console.error(`cook3ds: ${why}`);
+      return 1;
+    }
+    console.log("cook3ds: importing the ROM into dist/voxelmon/gen/");
+    await runImport(env);
+  }
   const missing = genMissingReason();
   if (missing) {
     console.error(`cook3ds: ${missing}`);
@@ -106,14 +121,17 @@ export async function cook3ds(only?: string[]): Promise<number> {
   rmSync(PAKS, { recursive: true, force: true });
   mkdirSync(PAKS, { recursive: true });
   console.log("cook3ds: hoisting the pages every map shares");
+  // VOXELMON_PYTHON names the interpreter when "python3" is not the one on
+  // PATH -- on Windows it is "python", and the cooker app has its own.
+  const python = process.env.VOXELMON_PYTHON ?? "python3";
   const share = Bun.spawnSync(
-    ["python3", "tools/pak_share_atlas.py", ORIG, PAKS, "--verify"],
+    [python, "tools/pak_share_atlas.py", ORIG, PAKS, "--verify"],
     { cwd: ROOT, stdout: "inherit", stderr: "inherit" },
   );
   if (share.exitCode !== 0) {
     console.error(
-      "cook3ds: the atlas hoist failed. It needs python3 on PATH — that is the" +
-        " only thing in this pipeline that does.",
+      `cook3ds: the atlas hoist failed. It needs ${python} to run — that is the` +
+        " only thing in this pipeline that needs Python (set VOXELMON_PYTHON).",
     );
     return share.exitCode ?? 1;
   }

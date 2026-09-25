@@ -4,9 +4,11 @@ A specialized PocketJS runtime that presents a Game Boy creature-RPG as a
 voxelized 3D diorama on PSP-class hardware. The gameplay is a TypeScript port
 of the [gen1recomp](https://github.com/bryanthaboi/gen1recomp) Lua engine; the
 presentation is a Rust reimplementation of the
-[DramaticShape Voxel Mod](https://github.com/DramaticShape/DramaticShapeVoxelMod)
-diorama renderer. Both upstreams are MIT-licensed; both serve here as
-executable specifications, not vendored code.
+[DramaticShape Voxel Mod](https://github.com/ShaneMcGovernIE/potato_voxel)
+diorama renderer (as carried on by PotatoVoxel; the original repository is
+gone from GitHub). gen1recomp is MIT-licensed; the voxel mod's code carries
+no licence, which is exactly why it is reimplemented and not copied. Both
+serve here as executable specifications, not vendored code.
 
 The runtime instance is `⟨ pocketvoxel-core, the voxel surface, the voxelmon
 guest ⟩` in the RUNTIMES.md sense. What is new relative to every prior
@@ -33,7 +35,8 @@ must never blur:
 
 Reference checkouts are inputs the same way the ROM is. `tools/voxel.ts`
 resolves them from `VOXELMON_G1R` (default `~/code/gen1recomp`) and
-`VOXELMON_VOXELMOD` (default `~/code/DramaticShapeVoxelMod`):
+`VOXELMON_VOXELMOD` (default `~/code/DramaticShapeVoxelMod`; PotatoVoxel
+has the same layout):
 
 - the gen1recomp checkout supplies `tools/rom_manifest.json` — the symbol
   table (3274 name→[bank,addr] entries), charmap, and per-map metadata the
