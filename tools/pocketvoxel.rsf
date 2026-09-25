@@ -1,0 +1,193 @@
+# makerom ROM Spec File for the 3DS CIA build (tools/make_cia.sh).
+#
+# Deliberately carries NO boot logo. makerom's `Logo:` field embeds one of
+# Nintendo's, and this build ships nothing of theirs -- the icon, the banner
+# and every pixel of the game's own art either come from the player's own
+# cartridge at cook time or were drawn by tools/3ds_art.py.
+
+BasicInfo:
+  Title                   : "Pocket Voxel"
+  ProductCode             : "CTR-P-PVXL"
+  ContentType             : Application
+
+TitleInfo:
+  Category                : Application
+  # 20-bit unique id. 0xff000-0xfffff is the range homebrew takes so it can
+  # never collide with a retail title's.
+  UniqueId                : 0xff3d0
+
+Option:
+  UseOnSD                 : true
+  FreeProductCode         : true
+  MediaFootPadding        : false
+  EnableCrypt             : false
+  EnableCompress          : true
+
+AccessControlInfo:
+  CoreVersion             : 2
+  DescVersion             : 2
+
+  # The game streams map paks off the SD card and keeps a 24 MB pak cache,
+  # so it wants the large application heap on both consoles.
+  SystemMode              : 64MB
+  SystemModeExt           : 124MB
+  IdealProcessor          : 0
+  AffinityMask            : 1
+  Priority                : 16
+  MaxCpu                  : 0x9E
+
+  # Kernel bookkeeping. 512 handles is the ordinary application allowance;
+  # this one opens a pak per map change and holds a few threads.
+  HandleTableSize         : 512
+  MemoryType              : Application
+  ReleaseKernelMajor      : "02"
+  ReleaseKernelMinor      : "44"
+
+  DisableDebug            : false
+  EnableForceDebug        : false
+  CanWriteSharedPage      : true
+  CanUsePrivilegedPriority: false
+  CanUseNonAlphabetAndNumber: true
+  PermitMainFunctionArgument: true
+  CanShareDeviceMemory    : true
+  RunnableOnSleep         : false
+  SpecialMemoryArrange    : true
+
+  # SD card read/write (the paks and save.lua), plus the wireless the CABLE
+  # CLUB uses.
+  FileSystemAccess:
+   - CategorySystemApplication
+   - CategoryHardwareCheck
+   - CategoryFileSystemTool
+   - Debug
+   - TwlCardBackup
+   - TwlNandData
+   - Boss
+   - DirectSdmc
+   - Core
+   - CtrNandRo
+   - CtrNandRw
+   - CtrNandRoWrite
+   - CategorySystemSettings
+   - CardBoard
+   - ExportImportIvs
+   - DirectSdmcWrite
+   - SwitchCleanup
+   - SaveDataMove
+   - Shop
+   - Shell
+   - CategoryHomeMenu
+
+  IoAccessControl:
+   - FsMountNand
+   - FsMountNandRoWrite
+   - FsMountTwln
+   - FsMountWnand
+   - FsMountCardSpi
+   - UseSdif3
+   - CreateSeed
+   - UseCardSpi
+
+  # The user-mode syscall set, 0x01-0x3D. makerom reads the NUMBERS -- the
+  # names are labels -- and refuses anything outside 0x00-0xB8.
+  SystemCallAccess:
+    ControlMemory: 1
+    QueryMemory: 2
+    ExitProcess: 3
+    GetProcessAffinityMask: 4
+    SetProcessAffinityMask: 5
+    GetProcessIdealProcessor: 6
+    SetProcessIdealProcessor: 7
+    CreateThread: 8
+    ExitThread: 9
+    SleepThread: 10
+    GetThreadPriority: 11
+    SetThreadPriority: 12
+    GetThreadAffinityMask: 13
+    SetThreadAffinityMask: 14
+    GetThreadIdealProcessor: 15
+    SetThreadIdealProcessor: 16
+    GetCurrentProcessorNumber: 17
+    Run: 18
+    CreateMutex: 19
+    ReleaseMutex: 20
+    CreateSemaphore: 21
+    ReleaseSemaphore: 22
+    CreateEvent: 23
+    SignalEvent: 24
+    ClearEvent: 25
+    CreateTimer: 26
+    SetTimer: 27
+    CancelTimer: 28
+    ClearTimer: 29
+    CreateMemoryBlock: 30
+    MapMemoryBlock: 31
+    UnmapMemoryBlock: 32
+    CreateAddressArbiter: 33
+    ArbitrateAddress: 34
+    CloseHandle: 35
+    WaitSynchronization1: 36
+    WaitSynchronizationN: 37
+    SignalAndWait: 38
+    DuplicateHandle: 39
+    GetSystemTick: 40
+    GetHandleInfo: 41
+    GetSystemInfo: 42
+    GetProcessInfo: 43
+    GetThreadInfo: 44
+    ConnectToPort: 45
+    SendSyncRequest1: 46
+    SendSyncRequest2: 47
+    SendSyncRequest3: 48
+    SendSyncRequest4: 49
+    SendSyncRequest: 50
+    OpenProcess: 51
+    OpenThread: 52
+    GetProcessId: 53
+    GetProcessIdOfThread: 54
+    GetThreadId: 55
+    GetResourceLimit: 56
+    GetResourceLimitLimitValues: 57
+    GetResourceLimitCurrentValues: 58
+    GetThreadContext: 59
+    Break: 60
+    OutputDebugString: 61
+
+  InterruptNumbers:
+
+  ServiceAccessControl:
+   - APT:U
+   - ac:u
+   - am:net
+   - boss:U
+   - cam:u
+   - cecd:u
+   - cfg:nor
+   - cfg:u
+   - csnd:SND
+   - dsp::DSP
+   - frd:u
+   - fs:USER
+   - gsp::Gpu
+   - gsp::Lcd
+   - hid:USER
+   - http:C
+   - ir:rst
+   - ir:u
+   - ir:USER
+   - mic:u
+   - ndm:u
+   - news:u
+   - nwm::UDS
+   - ptm:sysm
+   - ptm:u
+   - pxi:dev
+   - soc:U
+   - ssl:C
+   - y2r:u
+
+
+SystemControlInfo:
+  SaveDataSize            : 0KB
+  RemasterVersion         : 0
+  StackSize               : 0x40000
