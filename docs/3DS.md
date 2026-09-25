@@ -25,7 +25,11 @@ disk** while it runs.
 | **cargo-3ds** | `cargo install cargo-3ds` | Drives devkitARM from Rust. |
 | **Two reference checkouts** | see below | Tables this project reads but does not contain. |
 
-A 3DS running homebrew, and an SD card with **700 MB free**.
+A **New 3DS** (or New 2DS XL) running homebrew, and an SD card with **700 MB
+free**. The New model is not optional: the port keeps a 92 MB heap for the
+map paks -- the Viridian Forest pak alone is 58 MB -- and only the New
+3DS's 124 MB application mode can grant it. An original 3DS/2DS cannot
+start it, as a title or from the Homebrew Launcher.
 
 ### The two reference checkouts
 
@@ -254,6 +258,12 @@ which does not go through the HOME menu's launch path.
 While there, keep the exheader honest: an SD-installed title should grant
 exactly `DirectSdmc` and `DirectSdmcWrite` under `FileSystemAccess` and
 nothing under `IoAccessControl`.
+
+**Luma's exception screen at launch: `prefetch abort (svcBreak)`, with
+`R4`/`R5` pointing at `__ctru_heap_size` / `__ctru_linear_heap_size`**
+libctru could not allocate the heap the host asks for (92 + 24 MB). Either
+the console is an original 3DS -- see §1 -- or the CIA was built with
+`SystemModeExt` set to anything but `124MB`. `tools/pocketvoxel.rsf` sets it.
 
 **It boots but cannot save**
 The game tests the card on startup. A write-protected or full SD card is the

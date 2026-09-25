@@ -37,12 +37,16 @@ AccessControlInfo:
   ReleaseKernelMajor      : "02"
   ReleaseKernelMinor      : "33"
 
-  # Memory: the ordinary application region, and the New 3DS running at
-  # its own clock with its cache on -- this port streams maps and keeps a
-  # 24 MB pak cache, and every working CIA compared against had both set.
+  # Memory. The host asks libctru for a 92 MB heap and a 24 MB linear heap
+  # (main.rs, __ctru_heap_size) -- 116 MB, which only the New 3DS's 124 MB
+  # mode can grant. Launched as a title in the ordinary 64 MB mode the
+  # allocation fails and libctru answers with svcBreak before main runs;
+  # under the Homebrew Launcher the same binary inherits its host's region
+  # and never notices. `SystemMode` is what an Old 3DS would get, and is
+  # not enough for this port.
   MemoryType              : Application
   SystemMode              : 64MB
-  SystemModeExt           : Legacy
+  SystemModeExt           : 124MB
   EnableL2Cache           : true
   CpuSpeed                : 804MHz
   IdealProcessor          : 0
