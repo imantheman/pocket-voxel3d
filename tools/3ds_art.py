@@ -9,7 +9,8 @@ ours, and the game's own font is the cartridge's.
 
     python3 tools/3ds_art.py OUTDIR
 
-writes OUTDIR/icon.png (48x48) and OUTDIR/banner.png (256x128).
+writes OUTDIR/icon.png (48x48, opaque) and OUTDIR/banner.png (256x128, with
+alpha: the title card is opaque, the cube beneath it floats on nothing).
 """
 import math
 import os
@@ -20,16 +21,17 @@ import zlib
 # --- png -------------------------------------------------------------------
 
 
-def write_png(path, w, h, rgb):
-    """rgb: bytearray of w*h*3."""
-    raw = b"".join(b"\x00" + bytes(rgb[y * w * 3:(y + 1) * w * 3]) for y in range(h))
+def write_png(path, w, h, px, channels):
+    """px: bytearray of w*h*channels; 3 = RGB, 4 = RGBA."""
+    raw = b"".join(b"\x00" + bytes(px[y * w * channels:(y + 1) * w * channels]) for y in range(h))
 
     def chunk(tag, data):
         body = tag + data
         return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
 
+    colour = 6 if channels == 4 else 2
     png = (b"\x89PNG\r\n\x1a\n"
-           + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+           + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, colour, 0, 0, 0))
            + chunk(b"IDAT", zlib.compress(raw, 9))
            + chunk(b"IEND", b""))
     with open(path, "wb") as f:
@@ -37,19 +39,32 @@ def write_png(path, w, h, rgb):
 
 
 class Canvas:
-    def __init__(self, w, h, bg=(8, 8, 12)):
+    """RGBA. A pixel starts fully transparent unless a background is given;
+    the icon needs one (SMDH icons carry no alpha), the banner does not."""
+
+    def __init__(self, w, h, bg=None):
         self.w, self.h = w, h
-        self.px = bytearray(bytes(bg) * (w * h))
+        self.px = bytearray((bytes(bg) + b"\xff" if bg else b"\x00\x00\x00\x00") * (w * h))
 
     def put(self, x, y, rgb, a=1.0):
         if not (0 <= x < self.w and 0 <= y < self.h) or a <= 0:
             return
-        i = (y * self.w + x) * 3
+        i = (y * self.w + x) * 4
         if a >= 1.0:
-            self.px[i:i + 3] = bytes(rgb)
+            self.px[i:i + 4] = bytes(rgb) + b"\xff"
             return
+        old_a = self.px[i + 3] / 255.0
+        new_a = a + old_a * (1 - a)
         for k in range(3):
-            self.px[i + k] = int(self.px[i + k] * (1 - a) + rgb[k] * a)
+            # composite over whatever is there; over nothing, it is the colour
+            under = self.px[i + k] * old_a * (1 - a)
+            self.px[i + k] = int((rgb[k] * a + under) / new_a) if new_a > 0 else rgb[k]
+        self.px[i + 3] = int(new_a * 255)
+
+    def fill(self, x0, y0, x1, y1, rgb):
+        for y in range(max(0, y0), min(self.h, y1)):
+            for x in range(max(0, x0), min(self.w, x1)):
+                self.put(x, y, rgb)
 
     def line(self, x0, y0, x1, y1, rgb, width=1.0):
         """A plain distance-to-segment line, so it comes out smooth at any
@@ -85,7 +100,6 @@ GLYPHS = {
     "L": ["#....", "#....", "#....", "#....", "#....", "#....", "#####"],
     "D": ["####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."],
     "R": ["####.", "#...#", "#...#", "####.", "#.#..", "#..#.", "#...#"],
-    "3": ["####.", "....#", "....#", ".###.", "....#", "....#", "####."],
     " ": [".....", ".....", ".....", ".....", ".....", ".....", "....."],
 }
 GW, GH = 5, 7
@@ -146,38 +160,47 @@ def draw_cube(c, cx, cy, size, yaw, pitch, rgb, width=1.4, fade_back=True):
 
 
 RED = (228, 42, 46)
-DIM_RED = (96, 20, 24)
+DIM_RED = (110, 24, 28)
 WHITE = (238, 238, 244)
+CARD = (8, 8, 12)
+GRID = (26, 26, 34)
+
+# The banner is two things: a title card, opaque, and a cube UNDER it on
+# nothing at all. The HOME menu draws the banner over its own wallpaper, so
+# everything outside the card is left transparent for that to show through.
+CARD_H = 62
 
 
 def make_banner(path):
     c = Canvas(256, 128)
-    # a hairline grid, so the cube has a floor to stand on
-    for gy in range(0, 128, 16):
-        c.line(0, gy, 255, gy, (20, 20, 28), 0.6)
+    c.fill(0, 0, 256, CARD_H, CARD)
+    for gy in range(0, CARD_H, 16):
+        c.line(0, gy, 255, gy, GRID, 0.6)
     for gx in range(0, 256, 16):
-        c.line(gx, 0, gx, 127, (20, 20, 28), 0.6)
+        c.line(gx, 0, gx, CARD_H - 1, GRID, 0.6)
 
-    top, bottom = "POCKET VOXEL", "3D RED"
-    s1, g1 = 3, 3
-    x1 = (256 - text_width(top, s1, g1)) // 2
-    draw_text(c, top, x1, 10, s1, g1, WHITE)
-    s2, g2 = 3, 3
-    x2 = (256 - text_width(bottom, s2, g2)) // 2
-    draw_text(c, bottom, x2, 36, s2, g2, RED)
+    top, bottom = "POCKET VOXEL", "RED"
+    s, g = 3, 3
+    draw_text(c, top, (256 - text_width(top, s, g)) // 2, 9, s, g, WHITE)
+    draw_text(c, bottom, (256 - text_width(bottom, s, g)) // 2, 35, s, g, RED)
 
-    # The cube, under the words. A ghost of it one step back in the spin
-    # says "this turns" -- the banner itself cannot move, so the motion has
-    # to be implied in the one frame we get.
-    draw_cube(c, 128, 90, 26, 0.55, 0.42, DIM_RED, width=1.0, fade_back=False)
-    draw_cube(c, 128, 90, 26, 0.86, 0.42, RED, width=1.5)
-    write_png(path, c.w, c.h, c.px)
+    # The cube, below the card and on nothing. A ghost of it one step back
+    # in the spin says "this turns" -- a flat banner cannot move, so the
+    # motion has to be implied in the one frame we get.
+    cy = CARD_H + (128 - CARD_H) // 2
+    draw_cube(c, 128, cy, 24, 0.55, 0.42, DIM_RED, width=1.0, fade_back=False)
+    draw_cube(c, 128, cy, 24, 0.86, 0.42, RED, width=1.6)
+    write_png(path, c.w, c.h, c.px, 4)
 
 
 def make_icon(path):
-    c = Canvas(48, 48)
+    c = Canvas(48, 48, bg=CARD)
     draw_cube(c, 24, 25, 15, 0.86, 0.42, RED, width=1.7)
-    write_png(path, c.w, c.h, c.px)
+    # SMDH icons have no alpha channel, so this one goes out opaque RGB
+    rgb = bytearray()
+    for i in range(0, len(c.px), 4):
+        rgb += c.px[i:i + 3]
+    write_png(path, c.w, c.h, rgb, 3)
 
 
 if __name__ == "__main__":
@@ -185,4 +208,4 @@ if __name__ == "__main__":
     os.makedirs(out, exist_ok=True)
     make_banner(os.path.join(out, "banner.png"))
     make_icon(os.path.join(out, "icon.png"))
-    print(f"wrote {out}/banner.png (256x128) and {out}/icon.png (48x48)")
+    print(f"wrote {out}/banner.png (256x128, RGBA) and {out}/icon.png (48x48)")
