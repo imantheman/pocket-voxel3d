@@ -464,7 +464,19 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     // map id here would jump the gun by a whole step.
     if (mapId !== this.audioMap && !this.overworld.pendingSeamMusic) {
       this.audioMap = mapId;
-      this.audio.startMap(mapId, !!this.save.onBike);
+      // The boot movie and the title own the music while they are on top:
+      // PlayIntro runs its copyright card in silence and its splash over
+      // one sound effect, and the title claims its own theme on its second
+      // tick. The staged world's theme is still NOTED, so the hand-off
+      // after the title -- the theme holding through Oak's speech until
+      // the speech itself starts the bedroom's -- sees the map as already
+      // accounted for, exactly as it did when the theme used to play.
+      const top = this.stack[this.stack.length - 1];
+      if (top?.kind === "intro" || top?.kind === "title") {
+        this.audio.noteMap(mapId);
+      } else {
+        this.audio.startMap(mapId, !!this.save.onBike);
+      }
     }
   }
 

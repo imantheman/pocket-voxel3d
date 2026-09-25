@@ -86,6 +86,19 @@ export class AudioDirector {
     if (play) this.play(play);
   }
 
+  /**
+   * Remember a map's theme WITHOUT playing it.
+   *
+   * The boot movie and the title screen own the music while they are up --
+   * the copyright card is silent, the splash has only its star, the title
+   * claims its own theme -- but the world is already staged behind them,
+   * and whatever asks for its theme later (a battle's `restore`, a seam)
+   * has to find `mapSong` set as if the map had started normally.
+   */
+  noteMap(mapId: string): void {
+    this.mapSong = this.banks?.mapSong(mapId) ?? null;
+  }
+
   /** Music.lua:357 playBattle — kind = "wild" | "trainer" | "gym" | "final". */
   playBattle(kind = "wild"): void {
     const label = this.banks?.battleSong(kind) ?? this.banks?.battleSong("wild");

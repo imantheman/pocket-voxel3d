@@ -322,6 +322,9 @@ class AudioDirector {
     if (play)
       this.play(play);
   }
+  noteMap(mapId) {
+    this.mapSong = this.banks?.mapSong(mapId) ?? null;
+  }
   playBattle(kind = "wild") {
     const label = this.banks?.battleSong(kind) ?? this.banks?.battleSong("wild");
     if (label)
@@ -19422,7 +19425,12 @@ class VoxelmonGame {
     const mapId = this.overworld.map.id;
     if (mapId !== this.audioMap && !this.overworld.pendingSeamMusic) {
       this.audioMap = mapId;
-      this.audio.startMap(mapId, !!this.save.onBike);
+      const top = this.stack[this.stack.length - 1];
+      if (top?.kind === "intro" || top?.kind === "title") {
+        this.audio.noteMap(mapId);
+      } else {
+        this.audio.startMap(mapId, !!this.save.onBike);
+      }
     }
   }
   drainBattleCues(battle) {

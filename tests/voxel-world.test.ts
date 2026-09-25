@@ -9564,3 +9564,54 @@ describe("the boot intro", () => {
     expect(row).toEqual([0, 1, 2, 1, 3, 1, 4]);
   });
 });
+
+/**
+ * The boot movie owns the music while it is up, the way PlayIntro does:
+ * the copyright card in silence, the splash over one sound effect. The
+ * world is staged behind it, and its theme used to start on the first tick
+ * regardless -- which put the bedroom's song under the copyright card.
+ */
+describe("the boot movie owns the music", () => {
+  /**
+   * The test host carries no audio banks, so the director never emits an
+   * op for anything; what CAN be observed is what the game asks the
+   * director for. Every method call is recorded as `name:args`.
+   */
+  function listen(game: VoxelmonGame): string[] {
+    const calls: string[] = [];
+    (game as unknown as { audio: unknown }).audio = new Proxy(
+      {},
+      { get: (_t, name) => (...args: unknown[]) => { calls.push(`${String(name)}:${args.join(",")}`); return true; } },
+    );
+    return calls;
+  }
+  const started = (calls: string[]): string[] =>
+    calls.filter((c) => /^(startMap|play|playOnce|playBattle|restore):/.test(c));
+
+  test.skipIf(!hasGen)("the copyright card is silent, and the splash has only its star", () => {
+    const game = new VoxelmonGame(romData!, new RecorderHost(), 1);
+    game.boot();
+    const calls = listen(game);
+    for (let i = 0; i < INTRO_CLOCK.copyright; i++) game.tick(0);
+    expect(started(calls)).toEqual([]);
+    // ...but the staged world's theme is NOTED, so the later hand-off sees
+    // the map as already accounted for
+    expect(calls).toContain("noteMap:REDS_HOUSE_2F");
+    // 64 frames into the splash the star fires (intro.asm:323-324)
+    for (let i = 0; i < 64; i++) game.tick(0);
+    expect(calls).toContain("playSfx:Shooting_Star");
+    expect(started(calls)).toEqual([]);
+  });
+
+  test.skipIf(!hasGen)("skipping it still hands the title its own theme, and only that", () => {
+    const game = new VoxelmonGame(romData!, new RecorderHost(), 1);
+    game.boot();
+    const calls = listen(game);
+    for (let i = 0; i < 30; i++) game.tick(0);
+    tap(game, VOX_BTN.a); // CheckForUserInterruption
+    expect(game.stackKinds().at(-1)).toBe("title");
+    for (let i = 0; i < 4; i++) game.tick(0);
+    // exactly one song ever started: the title's, on its second tick
+    expect(started(calls)).toEqual(["play:Music_TitleScreen"]);
+  });
+});
