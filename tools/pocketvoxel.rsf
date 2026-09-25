@@ -1,9 +1,12 @@
 # makerom ROM Spec File for the 3DS CIA build (tools/make_cia.sh).
 #
-# Deliberately carries NO boot logo. makerom's `Logo:` field embeds one of
-# Nintendo's, and this build ships nothing of theirs -- the icon, the banner
-# and every pixel of the game's own art either come from the player's own
-# cartridge at cook time or were drawn by tools/3ds_art.py.
+# Shaped to match what working homebrew CIAs actually carry, read back out
+# of three of them field by field (3DShell, Meteo3DS and a third) after the
+# first cut of this file launched to "The SD card was removed". The
+# differences that mattered are called out inline.
+#
+# Deliberately carries NO boot logo: makerom's `Logo:` field embeds one of
+# Nintendo's, and this build ships nothing of theirs.
 
 BasicInfo:
   Title                   : "Pocket Voxel"
@@ -12,7 +15,7 @@ BasicInfo:
 
 TitleInfo:
   Category                : Application
-  # 20-bit unique id. 0xff000-0xfffff is the range homebrew takes so it can
+  # 20-bit unique id in the 0xff000-0xfffff range homebrew takes, so it can
   # never collide with a retail title's.
   UniqueId                : 0xff3d0
 
@@ -26,22 +29,23 @@ Option:
 AccessControlInfo:
   CoreVersion             : 2
   DescVersion             : 2
+  ReleaseKernelMajor      : "02"
+  ReleaseKernelMinor      : "33"
 
-  # The game streams map paks off the SD card and keeps a 24 MB pak cache,
-  # so it wants the large application heap on both consoles.
+  # Memory: the ordinary application region, and the New 3DS running at
+  # its own clock with its cache on -- this port streams maps and keeps a
+  # 24 MB pak cache, and every working CIA compared against had both set.
+  MemoryType              : Application
   SystemMode              : 64MB
-  SystemModeExt           : 124MB
+  SystemModeExt           : Legacy
+  EnableL2Cache           : true
+  CpuSpeed                : 804MHz
   IdealProcessor          : 0
   AffinityMask            : 1
   Priority                : 16
   MaxCpu                  : 0x9E
-
-  # Kernel bookkeeping. 512 handles is the ordinary application allowance;
-  # this one opens a pak per map change and holds a few threads.
   HandleTableSize         : 512
-  MemoryType              : Application
-  ReleaseKernelMajor      : "02"
-  ReleaseKernelMinor      : "44"
+  ResourceLimitCategory   : Application
 
   DisableDebug            : false
   EnableForceDebug        : false
@@ -52,41 +56,36 @@ AccessControlInfo:
   CanShareDeviceMemory    : true
   RunnableOnSleep         : false
   SpecialMemoryArrange    : true
+  CanAccessCore2          : true
 
-  # SD card read/write (the paks and save.lua), plus the wireless the CABLE
-  # CLUB uses.
+  # THE FIX. The first cut granted every filesystem bit there is, including
+  # CategorySystemApplication and CategoryHomeMenu. Those bits tell the FS
+  # module what kind of title it is serving, and an SD-installed title that
+  # claims to be a system application is a contradiction it answers with
+  # "The SD card was removed" -- the error this build launched to. Every
+  # working CIA read for comparison grants only these two. The paks and
+  # save.lua live on the card; this is all the card access the game needs.
   FileSystemAccess:
-   - CategorySystemApplication
-   - CategoryHardwareCheck
-   - CategoryFileSystemTool
-   - Debug
-   - TwlCardBackup
-   - TwlNandData
-   - Boss
    - DirectSdmc
-   - Core
-   - CtrNandRo
-   - CtrNandRw
-   - CtrNandRoWrite
-   - CategorySystemSettings
-   - CardBoard
-   - ExportImportIvs
    - DirectSdmcWrite
-   - SwitchCleanup
-   - SaveDataMove
-   - Shop
-   - Shell
-   - CategoryHomeMenu
 
+  # ARM9 side: nothing beyond what makerom derives from UseOnSD and
+  # DirectSdmc (SD application, direct SDMC). The first cut also granted
+  # NAND, TWL and card-SPI mounting -- the same over-privilege as the FS
+  # bits above, on the side of the system that actually owns the card.
+  # Every working CIA read for comparison has exactly 0x300 here.
   IoAccessControl:
-   - FsMountNand
-   - FsMountNandRoWrite
-   - FsMountTwln
-   - FsMountWnand
-   - FsMountCardSpi
-   - UseSdif3
-   - CreateSeed
-   - UseCardSpi
+
+  # Memory the process touches directly, which under the Homebrew Launcher
+  # it inherited from its host and as its own title has to declare: the
+  # DSP's memory for the sound, and VRAM for citro3d's render targets and
+  # textures. Absent, the first VRAM write is a fault.
+  # The flags are stated so the descriptors come out byte-identical to a
+  # working title's (0xff81ff00 0xff81ff80 for the DSP pair, 0xff91f000
+  # 0xff91f600 for VRAM); makerom's `:r` does not mean what its name says.
+  MemoryMapping:
+   - 1ff00000-1ff7ffff
+   - 1f000000-1f5fffff:r
 
   # The user-mode syscall set, 0x01-0x3D. makerom reads the NUMBERS -- the
   # names are labels -- and refuses anything outside 0x00-0xB8.
@@ -155,6 +154,9 @@ AccessControlInfo:
 
   InterruptNumbers:
 
+  # What libctru and this port ask srv for: graphics, sound, input, the
+  # card, the config, and the wireless the CABLE CLUB uses both ways (UDS
+  # between consoles, sockets to an emulator on the same network).
   ServiceAccessControl:
    - APT:U
    - ac:u
@@ -178,6 +180,7 @@ AccessControlInfo:
    - mic:u
    - ndm:u
    - news:u
+   - nwm::EXT
    - nwm::UDS
    - ptm:sysm
    - ptm:u
@@ -186,8 +189,40 @@ AccessControlInfo:
    - ssl:C
    - y2r:u
 
-
 SystemControlInfo:
   SaveDataSize            : 0KB
   RemasterVersion         : 0
   StackSize               : 0x40000
+  # The system modules the title depends on. Every working CIA lists these
+  # thirty; the first cut listed none.
+  Dependency:
+    ac: 0x0004013000002402
+    am: 0x0004013000001502
+    boss: 0x0004013000003402
+    camera: 0x0004013000001602
+    cecd: 0x0004013000002602
+    cfg: 0x0004013000001702
+    codec: 0x0004013000001802
+    csnd: 0x0004013000002702
+    dlp: 0x0004013000002802
+    dsp: 0x0004013000001a02
+    friends: 0x0004013000003202
+    gpio: 0x0004013000001b02
+    gsp: 0x0004013000001c02
+    hid: 0x0004013000001d02
+    http: 0x0004013000002902
+    i2c: 0x0004013000001e02
+    ir: 0x0004013000003302
+    mcu: 0x0004013000001f02
+    mic: 0x0004013000002002
+    ndm: 0x0004013000002b02
+    news: 0x0004013000003502
+    nwm: 0x0004013000002c02
+    pdn: 0x0004013000002d02
+    pm: 0x0004013000002102
+    ps: 0x0004013000003102
+    ptm: 0x0004013000002202
+    qtm: 0x0004013000003702
+    ro: 0x0004013000002e02
+    socket: 0x0004013000002302
+    ssl: 0x0004013000002f02
