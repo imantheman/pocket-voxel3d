@@ -132,6 +132,14 @@ export function apply(
   const newDef: SpeciesDef | undefined = data.pokemon[newSpecies];
   if (!newDef) throw new Error(`evolve into unknown species ${newSpecies}`);
   const hpLost = mon.stats.hp - mon.hp;
+  // evos_moves.asm EvolveMon: the nickname is compared with the OLD
+  // species name and, when it is that, becomes the new one. A nickname
+  // here is anything that is not the species name, so one that is goes.
+  const oldName = (data.pokemon[mon.species]?.name ?? mon.species).toUpperCase();
+  const nick = (mon as { nickname?: string }).nickname;
+  if (nick !== undefined && nick.toUpperCase() === oldName) {
+    delete (mon as { nickname?: string }).nickname;
+  }
   mon.species = newSpecies;
   mon.stats = calc(newDef, mon.level, mon.dvs, mon.statExp);
   mon.hp = Math.max(1, mon.stats.hp - hpLost);

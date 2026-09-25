@@ -2777,6 +2777,35 @@ function healMon(data, mon) {
   }
 }
 var PARTY_MAX = 6;
+function isDefaultNickname(data, mon) {
+  const nick = mon.nickname;
+  if (!nick)
+    return false;
+  const name = (data.pokemon[mon.species]?.name ?? mon.species).toUpperCase();
+  const up = nick.toUpperCase();
+  return up === name || up.length === 7 && name.length > 7 && name.startsWith(up);
+}
+function scrubDefaultNicknames(data, save) {
+  const s = save;
+  let n = 0;
+  const scrub = (mon) => {
+    if (mon && isDefaultNickname(data, mon)) {
+      delete mon.nickname;
+      n += 1;
+    }
+  };
+  for (const mon of s.party ?? [])
+    scrub(mon);
+  for (const box of s.boxes ?? [])
+    for (const mon of box ?? [])
+      scrub(mon);
+  for (const mon of s.box ?? [])
+    scrub(mon);
+  const dc = s.daycare;
+  if (dc)
+    scrub(dc.mon ?? (dc.species ? dc : undefined));
+  return n;
+}
 function partyAdd(party, mon) {
   if (party.length >= PARTY_MAX)
     return false;
@@ -4825,7 +4854,9 @@ caught!`);
     });
   }
   caughtNewSpecies = null;
+  caughtMon = null;
   storeCaughtMon() {
+    this.caughtMon = this.enemy.mon;
     const species = this.enemy.mon.species;
     if (!this.save.pokedex?.owned?.[species])
       this.caughtNewSpecies = species;
@@ -5761,6 +5792,11 @@ function apply2(data, mon, newSpecies, pokedex) {
   if (!newDef)
     throw new Error(`evolve into unknown species ${newSpecies}`);
   const hpLost = mon.stats.hp - mon.hp;
+  const oldName = (data.pokemon[mon.species]?.name ?? mon.species).toUpperCase();
+  const nick = mon.nickname;
+  if (nick !== undefined && nick.toUpperCase() === oldName) {
+    delete mon.nickname;
+  }
   mon.species = newSpecies;
   mon.stats = calc(newDef, mon.level, mon.dvs, mon.statExp);
   mon.hp = Math.max(1, mon.stats.hp - hpLost);
@@ -19739,6 +19775,7 @@ function decodeSave(text) {
 }
 
 // voxelmon/game/game.ts
+var NICKNAME_LEN = 10;
 var SAVE_HOLD = 120;
 var SAVE_DONE_HOLD = 30;
 var SAVE_FORMAT = 4;
@@ -19896,9 +19933,22 @@ class BattleGameState {
         this.game.overworld.refreshDoors();
       this.game.runEvolutions(b.leveledUp);
       const caught = b.caughtNewSpecies;
+      const named = b.caughtMon;
+      b.caughtMon = null;
+      const ask2 = () => {
+        if (!named)
+          return;
+        const label3 = this.game.data.pokemon[named.species]?.name ?? named.species;
+        this.game.askNickname(label3, (nick) => {
+          if (nick)
+            named.nickname = nick;
+        });
+      };
       if (caught) {
         b.caughtNewSpecies = null;
-        this.game.showCaughtDexEntry(caught);
+        this.game.showCaughtDexEntry(caught, ask2);
+      } else {
+        ask2();
       }
       if (b.outOfBalls) {
         this.game.overworld.safariGameOver("_OutOfSafariBallsText");
@@ -20036,6 +20086,9 @@ class VoxelmonGame {
         if (text) {
           try {
             this.save = decodeSave(text);
+            const scrubbed = scrubDefaultNicknames(this.data, this.save);
+            if (scrubbed > 0)
+              console.log(`[pv] names: ${scrubbed} cut-short nickname(s) dropped on load`);
             backfillVisited(this.save);
             postGameRescue(this.save);
             const pl = this.save.player ?? {};
@@ -21527,20 +21580,34 @@ here.`, onDone);
     const top = this.stack[this.stack.length - 1];
     return top?.kind === "intro" ? top.view() : null;
   }
-  showCaughtDexEntry(species) {
+  showCaughtDexEntry(species, onDone) {
     const name = this.data.pokemon[species]?.name ?? species;
     this.showText(`New POKéDEX data
 will be added for
 ${name}!`, () => {
-      this.push(new PokedexState(this, undefined, { species }));
+      this.push(new PokedexState(this, onDone, { species }));
     });
   }
   askNickname(defaultName, onDone) {
-    this.push(new NamingState(this, {
-      title: `${defaultName} NICKNAME?`,
-      default: defaultName,
-      onDone: (n) => onDone(n === defaultName ? null : n)
-    }));
+    const t = this.data.text ?? {};
+    const q = (t._DoYouWantToNicknameText ?? `Do you want to
+give a nickname
+to {RAM:wNameBuffer}?`).replace(/\{RAM:wNameBuffer\}/g, defaultName).replace(/\{RAM:wBuffer\}/g, defaultName);
+    this.showChoice(q, (yes) => {
+      if (!yes) {
+        onDone(null);
+        return;
+      }
+      this.push(new NamingState(this, {
+        title: "NICKNAME?",
+        maxLen: NICKNAME_LEN,
+        fallback: "",
+        onDone: (n) => {
+          const name = n.trim();
+          onDone(name.length > 0 && name.toUpperCase() !== defaultName.toUpperCase() ? name : null);
+        }
+      }));
+    });
   }
   startTrainerBattle(trainerId, partyIndex = 1, name, onDone, loseable = false) {
     const battle = new TrainerBattle(this.data, this.save, this.battleRng, trainerId, partyIndex, name);

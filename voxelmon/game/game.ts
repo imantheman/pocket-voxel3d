@@ -14,7 +14,7 @@ import { fromSection, type AudioBanks } from "./audio/banks.ts";
 import { AudioDirector } from "./audio/music.ts";
 import { WildBattle, type BattleResult } from "./battle/battle.ts";
 import { TrainerBattle } from "./battle/trainer.ts";
-import { healMon, markOwned, newMon, type PartyMon } from "./battle/mon.ts";
+import { healMon, markOwned, newMon, scrubDefaultNicknames, type PartyMon } from "./battle/mon.ts";
 import { SafariBattle } from "./battle/safari.ts";
 import { computeStaging, namedPage, picPageFor, type BattleStaging } from "./battle/staging.ts";
 import { BattleUi } from "./battle/ui.ts";
@@ -43,6 +43,9 @@ import {
 import { paginate, substitute, Textbox, TEXT_SPEED_DEFAULT, type TextboxOpts } from "./world/textbox.ts";
 import { NamingState } from "./ui/naming.ts";
 import { TitleState, titlePage } from "./ui/title.ts";
+
+/** A nickname is ten letters (NAME_LENGTH); the player's is seven. */
+export const NICKNAME_LEN = 10;
 import { IntroState } from "./ui/intro.ts";
 import { StartMenuState } from "./ui/startmenu.ts";
 import { DevMenuState } from "./ui/devmenu.ts";
@@ -328,9 +331,23 @@ class BattleGameState implements GameState, BattleSceneView {
       // else can be queued behind it: a catch ends the battle, and awards no
       // exp, so there are no level-ups or evolutions to sequence against.
       const caught = b.caughtNewSpecies;
+      // AddPartyMon and SendNewMonToBox both end in AskName
+      // (item_effects.asm ItemUseBall .captured): the nickname question,
+      // after the dex page when there is one.
+      const named = b.caughtMon;
+      b.caughtMon = null;
+      const ask = (): void => {
+        if (!named) return;
+        const label = this.game.data.pokemon[named.species]?.name ?? named.species;
+        this.game.askNickname(label, (nick) => {
+          if (nick) named.nickname = nick;
+        });
+      };
       if (caught) {
         b.caughtNewSpecies = null;
-        this.game.showCaughtDexEntry(caught);
+        this.game.showCaughtDexEntry(caught, ask);
+      } else {
+        ask();
       }
       // Spending the last SAFARI BALL ends the GAME, not just the battle —
       // the PA calls it and the warp home belongs to the overworld, so the
@@ -570,6 +587,11 @@ export class VoxelmonGame implements OverworldShell, SceneView {
           if (text) {
             try {
               this.save = decodeSave(text) as any;
+              // Saves from before the nickname prompt asked first carry
+              // "CHARMAN"-style names: the species name cut to seven.
+              // Those are no nickname at all.
+              const scrubbed = scrubDefaultNicknames(this.data, this.save);
+              if (scrubbed > 0) console.log(`[pv] names: ${scrubbed} cut-short nickname(s) dropped on load`);
               // `visited` postdates the saves that will be loaded here, so a
               // save from before FLY existed gets its record reconstructed
               // from what it already proves -- otherwise a finished game comes
@@ -2655,23 +2677,44 @@ export class VoxelmonGame implements OverworldShell, SceneView {
    * (_ItemUseBallText06 + ShowPokedexData). The page opens in standalone
    * mode, so a button closes it rather than dropping into the dex list.
    */
-  showCaughtDexEntry(species: string): void {
+  showCaughtDexEntry(species: string, onDone?: () => void): void {
     const name = this.data.pokemon[species]?.name ?? species;
     this.showText(`New POKéDEX data\nwill be added for\n${name}!`, () => {
-      this.push(new PokedexState(this as any, undefined, { species }));
+      this.push(new PokedexState(this as any, onDone, { species }));
+    });
+  }
+
+  /**
+   * AskName (engine/menus/naming_screen.asm, by way of gen1recomp
+   * Commands.lua askNickname): "Do you want to give a nickname to X?"
+   * YES/NO, then the NICKNAME? keyboard, ten letters, nothing typed in
+   * advance. NO, or an empty confirm, or the species name itself, hands
+   * back null: the mon is called what it is, and follows its evolutions.
+   * The keyboard used to open pre-filled and seven wide, so a starter left
+   * as it was came out "CHARMAN" and stayed that through every evolution.
+   */
+  askNickname(defaultName: string, onDone: (name: string | null) => void): void {
+    const t = (this.data as { text?: Record<string, string> }).text ?? {};
+    const q = (t._DoYouWantToNicknameText ?? "Do you want to\ngive a nickname\nto {RAM:wNameBuffer}?")
+      .replace(/\{RAM:wNameBuffer\}/g, defaultName)
+      .replace(/\{RAM:wBuffer\}/g, defaultName);
+    this.showChoice(q, (yes) => {
+      if (!yes) { onDone(null); return; }
+      this.push(
+        new NamingState(this, {
+          title: "NICKNAME?",
+          maxLen: NICKNAME_LEN,
+          fallback: "",
+          onDone: (n: string) => {
+            const name = n.trim();
+            onDone(name.length > 0 && name.toUpperCase() !== defaultName.toUpperCase() ? name : null);
+          },
+        }),
+      );
     });
   }
 
   /** Script-driven trainer battle (start_battle). */
-  askNickname(defaultName: string, onDone: (name: string | null) => void): void {
-    this.push(
-      new NamingState(this, {
-        title: `${defaultName} NICKNAME?`,
-        default: defaultName,
-        onDone: (n: string) => onDone(n === defaultName ? null : n),
-      }),
-    );
-  }
 
   startTrainerBattle(trainerId: string, partyIndex = 1, name?: string, onDone?: (won: boolean) => void, loseable = false): void {
     const battle = new TrainerBattle(

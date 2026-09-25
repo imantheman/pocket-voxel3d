@@ -2208,6 +2208,8 @@ export class WildBattle implements EffectBattle {
    * Cleared by whoever consumes it.
    */
   caughtNewSpecies: string | null = null;
+  /** The mon a ball just took, for AskName once the battle hands back. */
+  caughtMon: PartyMon | null = null;
 
   /**
    * :4387-4440 storeCaughtMon: into the party, or into the PC when the
@@ -2220,9 +2222,11 @@ export class WildBattle implements EffectBattle {
    * divergence is Boxes.deposit's own: a full box overflows into the next
    * with room, where the original refuses the catch.
    *
-   * DEVIATION (v1): still no nickname prompt for a caught mon.
+   * The nickname prompt (AskName) runs once the battle hands back: the
+   * game reads caughtMon and asks over the map.
    */
   storeCaughtMon(): void {
+    this.caughtMon = this.enemy.mon;
     // BattleState.lua:4451/4465 storeCaughtMon: a caught mon is marked owned
     // (+seen) whether or not it fits the party — the mark precedes the PC
     // transfer, so a full-party catch still fills the dex. Whether the mark

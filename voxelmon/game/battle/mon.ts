@@ -114,6 +114,50 @@ export function healMon(data: VoxelmonData, mon: PartyMon): void {
 export const PARTY_MAX = 6;
 
 /** Party.lua:7-13 add — false when full (the box system is v1-out). */
+/**
+ * A nickname the cartridge would not keep as one: the species' own name
+ * (AddPartyMon seeds the nickname with it, and EvolveMon replaces exactly
+ * that), or the first seven letters of it, which is what a keyboard sized
+ * for the player's name used to hand back when the starter's name was
+ * left as it was -- "CHARMAN". Case-blind, since the keyboard has a lower
+ * case.
+ */
+export function isDefaultNickname(data: VoxelmonData, mon: { species: string; nickname?: string }): boolean {
+  const nick = mon.nickname;
+  if (!nick) return false;
+  const name = (data.pokemon[mon.species]?.name ?? mon.species).toUpperCase();
+  const up = nick.toUpperCase();
+  return up === name || (up.length === 7 && name.length > 7 && name.startsWith(up));
+}
+
+/**
+ * Drop the nicknames that are only the species name, cut short or not,
+ * from a loaded save: the party, the boxes, and the daycare. A mon that
+ * came back "CHARMAN" is a CHARMANDER again, and evolves into a
+ * CHARMELEON by name.
+ */
+export function scrubDefaultNicknames(data: VoxelmonData, save: unknown): number {
+  const s = save as {
+    party?: PartyMon[];
+    boxes?: PartyMon[][];
+    box?: PartyMon[];
+    daycare?: { mon?: PartyMon } | PartyMon | null;
+  };
+  let n = 0;
+  const scrub = (mon: PartyMon | undefined | null): void => {
+    if (mon && isDefaultNickname(data, mon)) {
+      delete mon.nickname;
+      n += 1;
+    }
+  };
+  for (const mon of s.party ?? []) scrub(mon);
+  for (const box of s.boxes ?? []) for (const mon of box ?? []) scrub(mon);
+  for (const mon of s.box ?? []) scrub(mon);
+  const dc = s.daycare as { mon?: PartyMon; species?: string } | null | undefined;
+  if (dc) scrub((dc.mon ?? (dc.species ? dc : undefined)) as PartyMon | undefined);
+  return n;
+}
+
 export function partyAdd(party: PartyMon[], mon: PartyMon): boolean {
   if (party.length >= PARTY_MAX) return false;
   party.push(mon);

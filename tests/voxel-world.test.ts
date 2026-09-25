@@ -27,7 +27,8 @@ import { TITLE_MONS, TitleState } from "../voxelmon/game/ui/title.ts";
 import { fromGenDir as loadAudioBanks } from "../voxelmon/game/audio/banks.ts";
 import { loadRuntimeData, REQUIRED_MODULES, type VoxelmonData } from "../voxelmon/game/data.ts";
 import { WildBattle } from "../voxelmon/game/battle/battle.ts";
-import { newMon, type PartyMon } from "../voxelmon/game/battle/mon.ts";
+import { newMon, scrubDefaultNicknames, type PartyMon } from "../voxelmon/game/battle/mon.ts";
+import { apply as evolveApply } from "../voxelmon/game/rules/evolution.ts";
 import { EVO_FLASH_FRAMES, flashPeriod } from "../voxelmon/game/ui/evoscreen.ts";
 import * as Bag from "../voxelmon/game/rules/bag.ts";
 import { floorsOf } from "../voxelmon/game/world/elevator.ts";
@@ -1814,6 +1815,14 @@ describe("poke marts", () => {
   });
 });
 
+/** Type the question out until its YES/NO box is up (or give up). */
+function untilChoice(game: VoxelmonGame, maxTicks = 400): void {
+  for (let i = 0; i < maxTicks && game.stackKinds().at(-1) !== "choice"; i++) {
+    game.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+  }
+  game.tick(0); // release, so the answer is a fresh edge
+}
+
 describe("catching a pokemon", () => {
   /** Run a caught battle to its finish and return the game. */
   function catchOne(game: VoxelmonGame, species: string): void {
@@ -1847,17 +1856,102 @@ describe("catching a pokemon", () => {
     expect(dex.mode).toBe("entry");
     expect(dex.entry?.name).toBe("PIDGEY");
 
-    // a button closes the whole screen rather than dropping into the list
+    // a button closes the whole screen rather than dropping into the list,
+    // and then AskName: "Do you want to give a nickname to PIDGEY?"
     tap(game, VOX_BTN.a);
+    expect(topText(game)).toContain("nickname");
+    expect(topText(game)).toContain("PIDGEY");
+    untilChoice(game);
+    expect(game.stackKinds().at(-1)).toBe("choice");
+    tap(game, VOX_BTN.down); // NO
+    tap(game, VOX_BTN.a);
+    for (let i = 0; i < 60 && game.stackKinds().at(-1) === "choice"; i++) game.tick(0);
     expect(game.stackKinds()).toEqual(["overworld"]);
+    expect(game.save.party.at(-1)!.nickname).toBeUndefined();
   });
 
-  test.skipIf(!hasGen)("a species already owned shows no entry", () => {
+  test.skipIf(!hasGen)("a species already owned shows no entry, and asks for the name straight away", () => {
     const game = makeMenuGame();
     game.save.party.push(newMon(romData!, "SQUIRTLE", 5));
     game.save.pokedex.owned.PIDGEY = true;
     catchOne(game, "PIDGEY");
+    expect(topText(game)).toContain("nickname");
+    untilChoice(game);
+    expect(game.stackKinds().at(-1)).toBe("choice");
+    // YES: the keyboard, ten letters wide and empty
+    tap(game, VOX_BTN.a);
+    for (let i = 0; i < 60 && game.stackKinds().at(-1) !== "naming"; i++) game.tick(0);
+    expect(game.stackKinds().at(-1)).toBe("naming");
+    const v = (game as any).naming().view();
+    expect(v.maxLen).toBe(10);
+    expect(v.name).toBe("");
+    // twelve presses on the first key type ten letters, the eleventh and
+    // twelfth fall off the end
+    for (let i = 0; i < 12; i++) tap(game, VOX_BTN.a);
+    expect((game as any).naming().view().name).toBe("AAAAAAAAAA");
+    tap(game, VOX_BTN.start);
+    for (let i = 0; i < 30 && game.stackKinds().length > 1; i++) game.tick(0);
     expect(game.stackKinds()).toEqual(["overworld"]);
+    expect(game.save.party.at(-1)!.nickname).toBe("AAAAAAAAAA");
+  });
+});
+
+describe("what a POKeMON is called", () => {
+  test.skipIf(!hasGen)("the lab's question: NO keeps the species name, and so does an empty keyboard", () => {
+    const game = makeMenuGame();
+    let got: string | null | undefined;
+    game.askNickname("CHARMANDER", (n) => { got = n; });
+    expect(topText(game)).toContain("give a nickname");
+    expect(topText(game)).toContain("CHARMANDER");
+    untilChoice(game);
+    expect(game.stackKinds().at(-1)).toBe("choice");
+    tap(game, VOX_BTN.down); // NO
+    tap(game, VOX_BTN.a);
+    for (let i = 0; i < 60 && got === undefined; i++) game.tick(0);
+    expect(got).toBeNull();
+
+    got = undefined;
+    game.askNickname("CHARMANDER", (n) => { got = n; });
+    untilChoice(game);
+    tap(game, VOX_BTN.a); // YES
+    for (let i = 0; i < 60 && game.stackKinds().at(-1) !== "naming"; i++) game.tick(0);
+    expect((game as any).naming().view().name).toBe(""); // nothing typed in advance
+    tap(game, VOX_BTN.start); // confirm with nothing typed
+    for (let i = 0; i < 30 && got === undefined; i++) game.tick(0);
+    expect(got).toBeNull();
+  });
+
+  test.skipIf(!hasGen)("a mon called by its own name takes the new one when it evolves; a real nickname stays", () => {
+    const bulba = newMon(romData!, "BULBASAUR", 16);
+    bulba.nickname = "BULBASAUR";
+    evolveApply(romData!, bulba, "IVYSAUR");
+    expect(bulba.species).toBe("IVYSAUR");
+    expect(bulba.nickname).toBeUndefined();
+
+    const sprout = newMon(romData!, "BULBASAUR", 16);
+    sprout.nickname = "SPROUT";
+    evolveApply(romData!, sprout, "IVYSAUR");
+    expect(sprout.nickname).toBe("SPROUT");
+  });
+
+  test.skipIf(!hasGen)("a save that was cut to seven letters gets its names back", () => {
+    const save: any = {
+      party: [
+        { species: "CHARMANDER", nickname: "CHARMAN" },
+        { species: "PIDGEY", nickname: "PIDGEY" },
+        { species: "SQUIRTLE", nickname: "CHARLIE" },
+        { species: "PIKACHU" },
+      ],
+      boxes: [[{ species: "BULBASAUR", nickname: "Bulbasa" }], []],
+    };
+    expect(scrubDefaultNicknames(romData!, save)).toBe(3);
+    expect(save.party.map((m: any) => m.nickname)).toEqual([undefined, undefined, "CHARLIE", undefined]);
+    expect(save.boxes[0][0].nickname).toBeUndefined();
+    // a seven-letter name that is not the start of the species name is a
+    // nickname someone chose
+    const kept: any = { party: [{ species: "CHARMANDER", nickname: "CHARMER" }] };
+    expect(scrubDefaultNicknames(romData!, kept)).toBe(0);
+    expect(kept.party[0].nickname).toBe("CHARMER");
   });
 });
 
@@ -6517,6 +6611,12 @@ function takeTheGift(game: VoxelmonGame, maxTicks = 2000): void {
   for (let t = 0; t < maxTicks; t++) {
     const top = game.stackKinds().at(-1);
     if (top === "textbox") game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+    else if (top === "choice") {
+      // "Do you want to give a nickname to X?" -- no
+      game.tick(0);
+      tap(game, VOX_BTN.down);
+      tap(game, VOX_BTN.a);
+    }
     else if (top === "naming") game.tick(t % 2 === 0 ? VOX_BTN.start : 0);
     else break;
   }
