@@ -7,9 +7,10 @@
 // data/generated/ (the parity reference).
 
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { missingInputReason, resolveEnv } from "../voxelmon/import/env.ts";
+import { luaModuleToJson } from "../voxelmon/import/lua.ts";
 
 const env = resolveEnv();
 const genReady = existsSync(join(env.genDir, "pokemon.json"));
@@ -241,4 +242,68 @@ describe.skipIf(!genReady)("voxel importer dataset", () => {
       }
     }
   });
+});
+
+/**
+ * The Lua data-module reader (voxelmon/import/lua.ts), which replaced
+ * shelling out to `luajit`.
+ *
+ * Its whole job is to agree with what lua-dump.lua printed, byte for byte:
+ * a cached dump written by one and read by the other has to be the same
+ * file, and a colour table that parses to the WRONG numbers is far worse
+ * than one that refuses to parse. So the subset is pinned here rather than
+ * against a Lua runtime, which is the dependency this removed.
+ */
+describe("the lua data-module reader", () => {
+  test("matches lua-dump's normalization on the whole subset", () => {
+    const src = `return {
+  -- a comment, and a --[[ long one ]] too
+  order = { "A", "B" },
+  nested = { { 1, 2 }, { 3 } },
+  mixed = { 10, 20, name = "x" },
+  ["quoted key"] = true,
+  [7] = "seven",
+  neg = -4,
+  single = 'apostrophes',
+  empty = {},
+  gone = nil,
+  zed = false,
+}`;
+    // Keys sort as STRINGS ("7" before "empty"), a dense 1..n table is an
+    // array, a table with both parts is an object, and `nil` sets no key.
+    expect(luaModuleToJson(src, "t.lua")).toBe(
+      '{"7":"seven","empty":{},"mixed":{"1":10,"2":20,"name":"x"},' +
+        '"neg":-4,"nested":[[1,2],[3]],"order":["A","B"],' +
+        '"quoted key":true,"single":"apostrophes","zed":false}\n',
+    );
+  });
+
+  test("refuses what it cannot read, with a line number", () => {
+    // Silence beats a wrong answer: anything outside the data subset has to
+    // stop the cook, not be guessed at.
+    expect(() => luaModuleToJson("return { x = foo() }", "t.lua")).toThrow(/t\.lua:1/);
+    expect(() => luaModuleToJson("local x = 1", "t.lua")).toThrow();
+    expect(() => luaModuleToJson("return { 1, nil, 3 }", "t.lua")).toThrow(/array position/);
+  });
+
+  test.skipIf(!existsSync(join(env.g1rDir, "data/palettes_gbc.lua")))(
+    "reads the real colour pack, and finds the colours in it",
+    () => {
+      const src = readFileSync(join(env.g1rDir, "data/palettes_gbc.lua"), "utf8");
+      const pack = JSON.parse(luaModuleToJson(src)) as {
+        order: string[];
+        palettes: Record<string, number[][]>;
+        pokemon: Record<string, string>;
+      };
+      // 239 named SuperPalettes and all 151 species, per docs/VOXEL.md §1
+      expect(pack.order.length).toBe(239);
+      expect(Object.keys(pack.pokemon).length).toBe(151);
+      // every palette is four RGB triples, lightest first
+      for (const name of pack.order) {
+        const pal = pack.palettes[name]!;
+        expect(pal.length, name).toBe(4);
+        for (const rgb of pal) expect(rgb.length).toBe(3);
+      }
+    },
+  );
 });

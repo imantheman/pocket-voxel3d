@@ -11,6 +11,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { luaModuleToJson } from "../import/lua.ts";
 import type { RedppPack } from "./redpp.ts";
 
 export const ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -337,7 +338,6 @@ export interface BuildingTemplate {
   wall?: unknown;
 }
 
-const LUA_DUMP = fileURLToPath(new URL("../import/lua-dump.lua", import.meta.url));
 
 export function voxelmodDir(): string {
   return process.env.VOXELMON_VOXELMOD ?? join(homedir(), "code/DramaticShapeVoxelMod");
@@ -354,16 +354,7 @@ export function loadProfile(): Profile | null {
     profileCache = null;
     return null;
   }
-  if (!Bun.which("luajit")) {
-    console.error("voxel cook: luajit is not installed (needed to read voxel_heights.lua)");
-    profileCache = null;
-    return null;
-  }
-  const proc = Bun.spawnSync(["luajit", LUA_DUMP, path]);
-  if (proc.exitCode !== 0) {
-    throw new Error(`lua-dump failed for ${path}:\n${proc.stderr.toString()}`);
-  }
-  profileCache = JSON.parse(proc.stdout.toString()) as Profile;
+  profileCache = JSON.parse(luaModuleToJson(readFileSync(path, "utf8"), path)) as Profile;
   return profileCache;
 }
 
@@ -382,7 +373,7 @@ let redppCache: RedppPack | null | undefined;
  * Load `data/palettes_gbc.lua` (pokered-gbc-derived, MIT, NOT ROM-derived),
  * dumped to `gen/palettes_gbc.json` and re-dumped whenever the source is
  * newer. Returns null — with a printed reason, the `loadProfile` discipline
- * — when the checkout or luajit is absent; the cooker then omits every
+ * — when the checkout is absent; the cooker then omits every
  * RED++ binding and the pak renders exactly as it does today.
  */
 export function loadRedpp(genDir = GEN_DIR): RedppPack | null {
@@ -400,16 +391,7 @@ export function loadRedpp(genDir = GEN_DIR): RedppPack | null {
     redppCache = JSON.parse(readFileSync(cache, "utf8")) as RedppPack;
     return redppCache;
   }
-  if (!Bun.which("luajit")) {
-    console.error("voxel cook: luajit is not installed (needed to read palettes_gbc.lua)");
-    redppCache = null;
-    return null;
-  }
-  const proc = Bun.spawnSync(["luajit", LUA_DUMP, path]);
-  if (proc.exitCode !== 0) {
-    throw new Error(`lua-dump failed for ${path}:\n${proc.stderr.toString()}`);
-  }
-  const json = proc.stdout.toString();
+  const json = luaModuleToJson(readFileSync(path, "utf8"), path);
   mkdirSync(genDir, { recursive: true });
   writeFileSync(cache, json);
   redppCache = JSON.parse(json) as RedppPack;
