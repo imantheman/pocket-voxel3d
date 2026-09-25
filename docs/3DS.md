@@ -240,6 +240,18 @@ installed and `DEVKITPRO` / `DEVKITARM` are exported.
 Almost always a half-copied card: paks from one build, `gamedata.json` from
 another. Re-copy the whole `paks` folder.
 
+**The CIA launches straight to "An error occurred (ErrDisp): The SD card
+was removed"**
+The exheader is over-privileged. That error is the FS module's answer to
+an SD-installed title whose filesystem bits claim it is a *system*
+application (or whose ARM9 side claims NAND-mounting rights). It runs fine
+in Citra, which does not enforce the exheader; hardware does. Build with
+`tools/make_cia.sh` and its RSF as shipped — the fix is in the RSF. If you
+have written your own, grant exactly `DirectSdmc` and `DirectSdmcWrite`
+under `FileSystemAccess` and nothing under `IoAccessControl`, and compare
+the result against a homebrew CIA that runs; `tools/pocketvoxel.rsf`
+explains what else has to be there.
+
 **It boots but cannot save**
 The game tests the card on startup. A write-protected or full SD card is the
 usual cause; `/3ds/voxelmon/pvlog.txt` says which.
