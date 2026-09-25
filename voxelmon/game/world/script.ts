@@ -352,6 +352,23 @@ function* play_music(ctx: ScriptContext, ...args: unknown[]): Generator<void, nu
 
 function* noop_audio(): Generator<void, number | void> { return; }
 
+// ["escort", ref, x, y]: the NPC leads to (x,y) and the player walks with
+// them, one cell behind, in lockstep (overworld.ts escort).
+function* escort(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const runner = ctx.runner;
+  (ctx.world as any).escort?.(args[0], { to: [args[1] as number, args[2] as number] },
+    () => runner.resume());
+  yield;
+}
+
+// ["escort_steps", ref, ["down", "left", ...]]: the same, along the ROM's
+// own movement list for the leader.
+function* escort_steps(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const runner = ctx.runner;
+  (ctx.world as any).escort?.(args[0], { steps: args[1] as Dir[] }, () => runner.resume());
+  yield;
+}
+
 function* walk_route(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
   // ["walk_route", ref, [[x,y],[x,y],...]]
   const runner = ctx.runner;
@@ -1157,6 +1174,8 @@ const VERBS: Record<string, Verb> = {
   open_name_rater,
   open_elevator,
   walk_route,
+  escort,
+  escort_steps,
   check_item,
   lab_fossil,
   check_party_room,

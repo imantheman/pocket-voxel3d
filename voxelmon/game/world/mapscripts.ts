@@ -316,14 +316,29 @@ function fossilScientistRows(ow: any, save: any): ScriptRow[] {
 // home to his spawn (35,16) the way walkHome does, his exit pocket being a
 // dead end. Referenced by object name PEWTERCITY_YOUNGSTER.
 function pewterEscortRows(): ScriptRow[] {
+  // RLEList_PewterGymGuy: from his spawn (35,16) down, along the bottom of
+  // town, up and around the gym, and back down to its door at (12,18). The
+  // player walks it WITH him, one cell behind (escort_steps), the way the
+  // ROM plays RLEList_PewterGymPlayer against it; wherever the trigger
+  // caught the player, they fall in behind him first.
+  const GUY_STEPS: Dir[] = [
+    "down", "down",
+    ...Array<Dir>(15).fill("left"),
+    ...Array<Dir>(5).fill("up"),
+    ...Array<Dir>(11).fill("left"),
+    ...Array<Dir>(5).fill("down"),
+    "right", "right", "right",
+  ];
   return [
     ["show_text", "_PewterCityYoungsterYoureATrainerFollowMeText"],
-    // walked to the gym entrance (11,18)/(12,18), not through the building
-    ["move_player_to", 11, 18],
-    ["move_npc_to", "PEWTERCITY_YOUNGSTER", 12, 18],
+    ["play_music", "Music_MuseumGuy"],
+    ["escort_steps", "PEWTERCITY_YOUNGSTER", GUY_STEPS],
     ["face_object", "PEWTERCITY_YOUNGSTER", "left"],
     ["show_text", "_PewterCityYoungsterGoTakeOnBrockText"],
-    // walkHome: no honest route back, so snap him to his object_event spawn
+    // MovementData_PewterGymGuyExit: five steps right into the pocket by
+    // the fence, then the ROM HideObjects him and puts him back on his
+    // spawn -- the snap below, off screen.
+    ["walk_npc", "PEWTERCITY_YOUNGSTER", ["right", "right", "right", "right", "right"]],
     ["place_npc", "PEWTERCITY_YOUNGSTER", 35, 16, "down"],
   ];
 }
@@ -1280,22 +1295,49 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
   // oaks_lab.lua onStep: Blue cuts you off on the way out for the first
   // rival battle. His party counters the starter you took (parties 1/2/3 in
   // trainers.json are SQUIRTLE/BULBASAUR/CHARMANDER).
+  // data/scripts/oaks_lab.lua onStep (scripts/OaksLab.asm OaksLabScript8 /
+  // OaksLabRivalChallengesPlayerScript): both fire at wYCoord == 6, the
+  // bookshelf row, the first row past the table. Without a starter Oak
+  // calls you back a step; with one, the rival stops you for the first
+  // battle -- he comes to a free cell beside you, faces you, and fights
+  // with the starter that counters yours (rival_battle's counter-pick:
+  // OPP_RIVAL1 parties 1/2/3 are Squirtle/Bulbasaur/Charmander). Win or
+  // lose the party is healed and the flag set, and a loss is no blackout;
+  // on a win he adds "I picked the wrong POKeMON!" before the shared
+  // "smell you later" and marches out, to the rival fanfare.
   OAKS_LAB_ONSTEP_HOST: {
     onStep: (ow: any, save: any) => {
       const f = save?.flags ?? {};
-      if (!f.EVENT_GOT_STARTER) return null;
-      if (f.EVENT_BATTLED_RIVAL_IN_OAKS_LAB) return null;
-      const py = ow?.player?.cellY;
-      if (py !== 9) return null;
-      const px = ow?.player?.cellX ?? 5;
-      const party = f.EVENT_CHOSE_BULBASAUR ? 3 : f.EVENT_CHOSE_SQUIRTLE ? 1 : 2;
+      const p = ow?.player;
+      const x: number = p?.cellX ?? 5;
+      const y: number = p?.cellY ?? 0;
+      if (y < 6) return null;
+      if (f.EVENT_FOLLOWED_OAK_INTO_LAB && !f.EVENT_GOT_STARTER) {
+        return [
+          ["show_text", "_OaksLabOakDontGoAwayYetText"],
+          ["move_player", "up", 1],
+        ] as ScriptRow[];
+      }
+      if (!f.EVENT_GOT_STARTER || f.EVENT_BATTLED_RIVAL_IN_OAKS_LAB) return null;
+      // a free cell beside the player: above first, then left, right, below
+      const free = ([cx, cy]: [number, number]) => {
+        try { return ow.map.isWalkableCell(cx, cy) && !ow.npcAtCell?.(cx, cy); } catch { return false; }
+      };
+      const target = ([[x, y - 1], [x - 1, y], [x + 1, y], [x, y + 1]] as [number, number][]).find(free);
+      const facing = !target ? "up"
+        : target[1] < y ? "down" : target[1] > y ? "up" : target[0] < x ? "right" : "left";
       return sceneWithTheme(MEET_RIVAL, [
-        ["move_npc_to", "SPRITE_BLUE", px, 10],
-        ["face_object", "SPRITE_BLUE", "up"],
         ["show_text", "_OaksLabRivalIllTakeYouOnText"],
-        ["start_battle", "trainer", "OPP_RIVAL1", party, { loseable: true }],
+        ...(target ? [["move_npc_to", "SPRITE_BLUE", target[0], target[1]] as ScriptRow] : []),
+        ["face_object", "SPRITE_BLUE", facing],
+        ["rival_battle", "OPP_RIVAL1", 1, { loseable: true }],
+        ["heal_party"],
         ["set_flag", "EVENT_BATTLED_RIVAL_IN_OAKS_LAB"],
+        ["jump_if_false", "leave"],
+        ["show_text", "_OaksLabRivalIPickedTheWrongPokemonText"],
+        ["label", "leave"],
         ["show_text", "_OaksLabRivalSmellYouLaterText"],
+        ["play_music", MEET_RIVAL],
         // He leaves through the lab door (warps at 4,11 / 5,11).
         ["move_npc_to", "SPRITE_BLUE", 4, 11],
         ["hide_object", "OAKS_LAB", "SPRITE_BLUE"],
@@ -1577,17 +1619,28 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
       if (f.EVENT_FOLLOWED_OAK_INTO_LAB || f.EVENT_GOT_STARTER) return null;
       const cy = (ow?.player as any)?.cellY;
       if (cy !== 1) return null;
-      const LAB_DOOR_X = 12, LAB_DOOR_Y = 11; // maps.json warp -> OAKS_LAB
       const px = (ow?.player as any)?.cellX ?? 0;
       const py = (ow?.player as any)?.cellY ?? 0;
+      // PalletTownOakWalkedToPlayer / OakEntryMovementRLE (story2.lua
+      // escort.oakSteps): from the player's column Oak goes left to column
+      // 10, down the town, round the lab and up into its door at (12,11);
+      // the player walks it with him, one cell behind (escort_steps), and
+      // is left on the doorstep at (12,12).
+      const OAK_STEPS: Dir[] = [
+        ...Array<Dir>(Math.max(0, px - 10)).fill("left"),
+        ...Array<Dir>(6).fill("down"),
+        "left",
+        ...Array<Dir>(5).fill("down"),
+        "right", "right", "right",
+        "up",
+      ];
       return [
         ["place_npc", "SPRITE_OAK", px, py + 4, "up"],
         ["move_npc_to", "SPRITE_OAK", px, py + 1],
         ["face_object", "SPRITE_OAK", "up"],
         ["show_text", "_PalletTownOakHeyWaitDontGoOutText"],
         ["show_text", "_PalletTownOakItsUnsafeText"],
-        ["move_npc_to", "SPRITE_OAK", LAB_DOOR_X, LAB_DOOR_Y],
-        ["move_player_to", LAB_DOOR_X, LAB_DOOR_Y + 1],
+        ["escort_steps", "SPRITE_OAK", OAK_STEPS],
         ["warp", "OAKS_LAB", 5, 11, "up"],
         ["place_npc", "SPRITE_OAK", 5, 2, "down"],
         ["move_player", "up", 8],

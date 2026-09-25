@@ -2285,6 +2285,62 @@ export class Overworld implements ScriptWorld {
     shell.askNickname(defaultName, onDone);
   }
 
+  /**
+   * An escort: the NPC leads and the player walks WITH them, one cell
+   * behind, the two stepping in the same frame -- Oak to his lab, the
+   * Pewter guide to Brock's gym (the ROM plays both as paired movement
+   * lists). The leader's route is either explicit steps (the ROM's own
+   * list) or a path found to a cell. The leader does not set off until the
+   * player is right behind: from wherever the player was stopped they
+   * first close up, then the two walk together. Only if the player can
+   * find no way to fall in does the leader go on alone.
+   */
+  escort(
+    ref: unknown,
+    spec: { to?: [number, number]; steps?: Dir[] },
+    onDone: () => void,
+  ): void {
+    const npc = this.findNpc(ref) as (NPC & { cellX: number; cellY: number }) | null;
+    const p = this.player;
+    if (!npc) { onDone(); return; }
+    const dirOf = (fx: number, fy: number, tx: number, ty: number): Dir =>
+      tx > fx ? "right" : tx < fx ? "left" : ty > fy ? "down" : "up";
+    const dirs: Dir[] = spec.steps ? spec.steps.slice() : [];
+    if (spec.to) {
+      let cx = npc.cellX, cy = npc.cellY;
+      for (const [nx, ny] of this.findPath(cx, cy, spec.to[0], spec.to[1], npc)) {
+        dirs.push(dirOf(cx, cy, nx, ny));
+        cx = nx; cy = ny;
+      }
+    }
+    let i = 0;
+    let closing = 0;
+    const alone = () => {
+      // no way to fall in behind: the leader walks the rest by itself
+      const go = () => {
+        if (i >= dirs.length) { onDone(); return; }
+        this.scriptMove(npc, dirs[i++]!, 1, go);
+      };
+      go();
+    };
+    const tick = () => {
+      if (i >= dirs.length) { onDone(); return; }
+      const beside = Math.abs(p.cellX - npc.cellX) + Math.abs(p.cellY - npc.cellY) === 1;
+      if (beside) {
+        // the same frame: the leader steps on, the player steps into the
+        // cell the leader is leaving
+        const fromX = npc.cellX, fromY = npc.cellY;
+        this.scriptMove(npc, dirs[i++]!, 1);
+        this.scriptMove(p, dirOf(p.cellX, p.cellY, fromX, fromY), 1, tick);
+        return;
+      }
+      const next = this.findPath(p.cellX, p.cellY, npc.cellX, npc.cellY, p)[0];
+      if (!next || closing++ > 64) { alone(); return; }
+      this.scriptMove(p, dirOf(p.cellX, p.cellY, next[0], next[1]), 1, tick);
+    };
+    tick();
+  }
+
   /** Walk an actor through fixed waypoints (a scripted escort route). */
   walkRoute(ref: unknown, route: [number, number][], onDone: () => void): void {
     const list = route.slice();

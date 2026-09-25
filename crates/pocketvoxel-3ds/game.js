@@ -7299,12 +7299,24 @@ you do!`],
   return rows;
 }
 function pewterEscortRows() {
+  const GUY_STEPS = [
+    "down",
+    "down",
+    ...Array(15).fill("left"),
+    ...Array(5).fill("up"),
+    ...Array(11).fill("left"),
+    ...Array(5).fill("down"),
+    "right",
+    "right",
+    "right"
+  ];
   return [
     ["show_text", "_PewterCityYoungsterYoureATrainerFollowMeText"],
-    ["move_player_to", 11, 18],
-    ["move_npc_to", "PEWTERCITY_YOUNGSTER", 12, 18],
+    ["play_music", "Music_MuseumGuy"],
+    ["escort_steps", "PEWTERCITY_YOUNGSTER", GUY_STEPS],
     ["face_object", "PEWTERCITY_YOUNGSTER", "left"],
     ["show_text", "_PewterCityYoungsterGoTakeOnBrockText"],
+    ["walk_npc", "PEWTERCITY_YOUNGSTER", ["right", "right", "right", "right", "right"]],
     ["place_npc", "PEWTERCITY_YOUNGSTER", 35, 16, "down"]
   ];
 }
@@ -7951,22 +7963,40 @@ Here, you can\vhave this TM.`,
   OAKS_LAB_ONSTEP_HOST: {
     onStep: (ow, save) => {
       const f = save?.flags ?? {};
-      if (!f.EVENT_GOT_STARTER)
+      const p = ow?.player;
+      const x = p?.cellX ?? 5;
+      const y = p?.cellY ?? 0;
+      if (y < 6)
         return null;
-      if (f.EVENT_BATTLED_RIVAL_IN_OAKS_LAB)
+      if (f.EVENT_FOLLOWED_OAK_INTO_LAB && !f.EVENT_GOT_STARTER) {
+        return [
+          ["show_text", "_OaksLabOakDontGoAwayYetText"],
+          ["move_player", "up", 1]
+        ];
+      }
+      if (!f.EVENT_GOT_STARTER || f.EVENT_BATTLED_RIVAL_IN_OAKS_LAB)
         return null;
-      const py = ow?.player?.cellY;
-      if (py !== 9)
-        return null;
-      const px2 = ow?.player?.cellX ?? 5;
-      const party = f.EVENT_CHOSE_BULBASAUR ? 3 : f.EVENT_CHOSE_SQUIRTLE ? 1 : 2;
+      const free = ([cx, cy]) => {
+        try {
+          return ow.map.isWalkableCell(cx, cy) && !ow.npcAtCell?.(cx, cy);
+        } catch {
+          return false;
+        }
+      };
+      const target2 = [[x, y - 1], [x - 1, y], [x + 1, y], [x, y + 1]].find(free);
+      const facing = !target2 ? "up" : target2[1] < y ? "down" : target2[1] > y ? "up" : target2[0] < x ? "right" : "left";
       return sceneWithTheme(MEET_RIVAL, [
-        ["move_npc_to", "SPRITE_BLUE", px2, 10],
-        ["face_object", "SPRITE_BLUE", "up"],
         ["show_text", "_OaksLabRivalIllTakeYouOnText"],
-        ["start_battle", "trainer", "OPP_RIVAL1", party, { loseable: true }],
+        ...target2 ? [["move_npc_to", "SPRITE_BLUE", target2[0], target2[1]]] : [],
+        ["face_object", "SPRITE_BLUE", facing],
+        ["rival_battle", "OPP_RIVAL1", 1, { loseable: true }],
+        ["heal_party"],
         ["set_flag", "EVENT_BATTLED_RIVAL_IN_OAKS_LAB"],
+        ["jump_if_false", "leave"],
+        ["show_text", "_OaksLabRivalIPickedTheWrongPokemonText"],
+        ["label", "leave"],
         ["show_text", "_OaksLabRivalSmellYouLaterText"],
+        ["play_music", MEET_RIVAL],
         ["move_npc_to", "SPRITE_BLUE", 4, 11],
         ["hide_object", "OAKS_LAB", "SPRITE_BLUE"]
       ]);
@@ -8178,17 +8208,25 @@ Here, you can\vhave this TM.`,
       const cy = ow?.player?.cellY;
       if (cy !== 1)
         return null;
-      const LAB_DOOR_X = 12, LAB_DOOR_Y = 11;
       const px2 = ow?.player?.cellX ?? 0;
       const py = ow?.player?.cellY ?? 0;
+      const OAK_STEPS = [
+        ...Array(Math.max(0, px2 - 10)).fill("left"),
+        ...Array(6).fill("down"),
+        "left",
+        ...Array(5).fill("down"),
+        "right",
+        "right",
+        "right",
+        "up"
+      ];
       return [
         ["place_npc", "SPRITE_OAK", px2, py + 4, "up"],
         ["move_npc_to", "SPRITE_OAK", px2, py + 1],
         ["face_object", "SPRITE_OAK", "up"],
         ["show_text", "_PalletTownOakHeyWaitDontGoOutText"],
         ["show_text", "_PalletTownOakItsUnsafeText"],
-        ["move_npc_to", "SPRITE_OAK", LAB_DOOR_X, LAB_DOOR_Y],
-        ["move_player_to", LAB_DOOR_X, LAB_DOOR_Y + 1],
+        ["escort_steps", "SPRITE_OAK", OAK_STEPS],
         ["warp", "OAKS_LAB", 5, 11, "up"],
         ["place_npc", "SPRITE_OAK", 5, 2, "down"],
         ["move_player", "up", 8],
@@ -10662,6 +10700,16 @@ function* play_music(ctx, ...args) {
 function* noop_audio() {
   return;
 }
+function* escort(ctx, ...args) {
+  const runner = ctx.runner;
+  ctx.world.escort?.(args[0], { to: [args[1], args[2]] }, () => runner.resume());
+  yield;
+}
+function* escort_steps(ctx, ...args) {
+  const runner = ctx.runner;
+  ctx.world.escort?.(args[0], { steps: args[1] }, () => runner.resume());
+  yield;
+}
 function* walk_route(ctx, ...args) {
   const runner = ctx.runner;
   ctx.world.walkRoute?.(args[0], args[1], () => runner.resume());
@@ -11169,6 +11217,8 @@ var VERBS = {
   open_name_rater,
   open_elevator,
   walk_route,
+  escort,
+  escort_steps,
   check_item,
   lab_fossil,
   check_party_room,
@@ -12798,6 +12848,56 @@ wore off.`);
       return;
     }
     shell.askNickname(defaultName, onDone);
+  }
+  escort(ref, spec, onDone) {
+    const npc = this.findNpc(ref);
+    const p = this.player;
+    if (!npc) {
+      onDone();
+      return;
+    }
+    const dirOf = (fx, fy, tx, ty) => tx > fx ? "right" : tx < fx ? "left" : ty > fy ? "down" : "up";
+    const dirs = spec.steps ? spec.steps.slice() : [];
+    if (spec.to) {
+      let { cellX: cx, cellY: cy } = npc;
+      for (const [nx, ny] of this.findPath(cx, cy, spec.to[0], spec.to[1], npc)) {
+        dirs.push(dirOf(cx, cy, nx, ny));
+        cx = nx;
+        cy = ny;
+      }
+    }
+    let i = 0;
+    let closing = 0;
+    const alone = () => {
+      const go = () => {
+        if (i >= dirs.length) {
+          onDone();
+          return;
+        }
+        this.scriptMove(npc, dirs[i++], 1, go);
+      };
+      go();
+    };
+    const tick = () => {
+      if (i >= dirs.length) {
+        onDone();
+        return;
+      }
+      const beside = Math.abs(p.cellX - npc.cellX) + Math.abs(p.cellY - npc.cellY) === 1;
+      if (beside) {
+        const { cellX: fromX, cellY: fromY } = npc;
+        this.scriptMove(npc, dirs[i++], 1);
+        this.scriptMove(p, dirOf(p.cellX, p.cellY, fromX, fromY), 1, tick);
+        return;
+      }
+      const next = this.findPath(p.cellX, p.cellY, npc.cellX, npc.cellY, p)[0];
+      if (!next || closing++ > 64) {
+        alone();
+        return;
+      }
+      this.scriptMove(p, dirOf(p.cellX, p.cellY, next[0], next[1]), 1, tick);
+    };
+    tick();
   }
   walkRoute(ref, route, onDone) {
     const list2 = route.slice();

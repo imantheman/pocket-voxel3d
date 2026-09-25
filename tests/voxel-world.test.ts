@@ -10111,3 +10111,128 @@ describe("the CABLE CLUB, finished", () => {
     expect(topText(a)).toBe("!");
   });
 });
+
+describe("the escorts walk WITH you, and the lab rival is the ROM's", () => {
+  /** Tick with a held direction until the player lands on (x,y). */
+  function stepTo(game: VoxelmonGame, btn: number, x: number, y: number): void {
+    const p = game.overworld.player;
+    for (let i = 0; i < 200; i++) {
+      if (p.cellX === x && p.cellY === y && !p.moving) return;
+      game.tick(btn);
+    }
+    throw new Error(`never reached (${x},${y}); at (${p.cellX},${p.cellY})`);
+  }
+
+  /**
+   * Run a scene, mashing A through its text, and watch the player and a
+   * leader: whether they were ever moving in the same frame, and how far
+   * apart they got while the player walked. Stops when `until` says so.
+   */
+  function watchEscort(game: VoxelmonGame, leaderRef: unknown, until: () => boolean) {
+    const ow = game.overworld as any;
+    let together = false;
+    let maxApart = 0;
+    for (let i = 0; i < 4000; i++) {
+      if (until()) break;
+      game.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+      const lead = ow.findNpc?.(leaderRef);
+      const p = ow.player;
+      if (lead && p.moving) {
+        if (lead.moving) together = true;
+        maxApart = Math.max(maxApart, Math.abs(p.cellX - lead.cellX) + Math.abs(p.cellY - lead.cellY));
+      }
+    }
+    return { together, maxApart };
+  }
+
+  test.skipIf(!hasGen)("Oak walks you to his lab; you are right behind him the whole way", () => {
+    const game = makeMenuGame();
+    const f = game.save.flags as Record<string, boolean>;
+    delete f.EVENT_GOT_STARTER;
+    delete f.EVENT_FOLLOWED_OAK_INTO_LAB;
+    const ow = game.overworld;
+    ow.setMap("PALLET_TOWN", 10, 2, "up");
+    stepTo(game, VOX_BTN.up, 10, 1);        // the grass edge: Oak's cue
+    const w = watchEscort(game, "SPRITE_OAK", () => ow.map.id === "OAKS_LAB");
+    expect(ow.map.id).toBe("OAKS_LAB");
+    expect(w.together).toBe(true);           // both stepping in the same frame
+    expect(w.maxApart).toBeLessThanOrEqual(2); // never trailing him, never left behind
+    // and the walk-in finishes the way it did
+    for (let i = 0; i < 2000; i++) {
+      if (f.EVENT_OAK_ASKED_TO_CHOOSE_MON) break;
+      game.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    expect(f.EVENT_FOLLOWED_OAK_INTO_LAB).toBe(true);
+    expect(f.EVENT_OAK_ASKED_TO_CHOOSE_MON).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("the Pewter guide walks you to the gym, not ahead of you or after", () => {
+    const game = makeMenuGame();
+    const f = game.save.flags as Record<string, boolean>;
+    delete f.EVENT_BEAT_BROCK;
+    const ow = game.overworld as any;
+    ow.setMap("PEWTER_CITY", 35, 18, "up");
+    stepTo(game, VOX_BTN.up, 35, 17);       // one of PewterGuys' trigger tiles
+    const guide = () => ow.findNpc("PEWTERCITY_YOUNGSTER");
+    const arrived = () => ow.player.cellX === 11 && ow.player.cellY === 18 && !ow.player.moving;
+    const w = watchEscort(game, "PEWTERCITY_YOUNGSTER", arrived);
+    expect(arrived()).toBe(true);
+    expect(w.together).toBe(true);
+    expect(w.maxApart).toBeLessThanOrEqual(2);
+    // his line, his exit walk, and he is back on his spawn
+    for (let i = 0; i < 1500; i++) {
+      if (!ow.runner.isRunning() && game.stackKinds().at(-1) === "overworld") break;
+      game.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    expect([guide().cellX, guide().cellY]).toEqual([35, 16]);
+    expect(f.EVENT_BEAT_BROCK).toBeFalsy();
+  });
+
+  const COUNTERS: [string, string][] = [
+    ["EVENT_CHOSE_BULBASAUR", "CHARMANDER"],
+    ["EVENT_CHOSE_CHARMANDER", "SQUIRTLE"],
+    ["EVENT_CHOSE_SQUIRTLE", "BULBASAUR"],
+  ];
+  for (const [chose, rivalLead] of COUNTERS) {
+    test.skipIf(!hasGen)(`${chose}: the lab rival leads with ${rivalLead}`, () => {
+      const game = makeMenuGame();
+      const f = game.save.flags as Record<string, boolean>;
+      f.EVENT_GOT_STARTER = true;
+      f.EVENT_FOLLOWED_OAK_INTO_LAB = true;
+      delete f.EVENT_BATTLED_RIVAL_IN_OAKS_LAB;
+      for (const c of ["EVENT_CHOSE_BULBASAUR", "EVENT_CHOSE_CHARMANDER", "EVENT_CHOSE_SQUIRTLE"]) delete f[c];
+      f[chose] = true;
+      const ow = game.overworld as any;
+      ow.setMap("OAKS_LAB", 5, 5, "down");
+      stepTo(game, VOX_BTN.down, 5, 6);      // the bookshelf row: wYCoord == 6
+      for (let i = 0; i < 2000; i++) {
+        if (game.stackKinds().at(-1) === "battle") break;
+        game.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+      }
+      expect(game.stackKinds().at(-1)).toBe("battle");
+      const b = (game.top() as any).battle;
+      expect(b.enemy.mon.species).toBe(rivalLead);
+      expect(b.trainerName).toBe(game.save.rivalName ?? b.trainerName);
+    });
+  }
+
+  test.skipIf(!hasGen)("Oak calls you back a step if you try to leave without a starter", () => {
+    const game = makeMenuGame();
+    const f = game.save.flags as Record<string, boolean>;
+    delete f.EVENT_GOT_STARTER;
+    f.EVENT_FOLLOWED_OAK_INTO_LAB = true;
+    const ow = game.overworld as any;
+    ow.setMap("OAKS_LAB", 5, 5, "down");
+    stepTo(game, VOX_BTN.down, 5, 6);
+    for (let i = 0; i < 200; i++) {
+      if (game.stackKinds().at(-1) === "textbox") break;
+      game.tick(0);
+    }
+    expect(topText(game)).toContain("go");
+    for (let i = 0; i < 600; i++) {
+      if (!ow.runner.isRunning() && game.stackKinds().at(-1) === "overworld" && !ow.player.moving) break;
+      game.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    expect(ow.player.cellY).toBe(5);
+  });
+});
