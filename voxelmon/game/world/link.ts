@@ -41,14 +41,15 @@ export interface LinkTransport {
 export const LINK_ROOM_MAP = ["TRADE_CENTER", "COLOSSEUM"] as const;
 
 /**
- * Where the two of you stand.
+ * Where the two of you sit.
  *
  * Both rooms are the same 10x8 shell with the link machine walled off at
- * (4,4)-(5,4), which is the table: the two seats are the cells either side
- * of it, each facing into it, so the players face each other across the
- * machine the way they do in the ROM. You walk in a step behind your seat
- * rather than onto it, because walking up to the table is the part that
- * makes it a room and not a menu.
+ * (4,4)-(5,4), which is the table, and a stool at each END of it: (3,4)
+ * and (6,4). Those are the seats, the way the ROM sits the two players --
+ * across the table from each other, left and right, each facing in. The
+ * stool cells are walkable; you step onto your stool and press A into the
+ * machine. You walk in a step behind your seat rather than onto it, because
+ * walking up to the table is the part that makes it a room and not a menu.
  */
 export const LINK_TABLE = [
   { x: 4, y: 4 },
@@ -56,8 +57,8 @@ export const LINK_TABLE = [
 ] as const;
 
 export const LINK_SEATS = [
-  { enter: { x: 4, y: 2 }, seat: { x: 4, y: 3 }, facing: "down" },
-  { enter: { x: 4, y: 6 }, seat: { x: 4, y: 5 }, facing: "up" },
+  { enter: { x: 2, y: 4 }, seat: { x: 3, y: 4 }, facing: "right" },
+  { enter: { x: 7, y: 4 }, seat: { x: 6, y: 4 }, facing: "left" },
 ] as const;
 
 /**

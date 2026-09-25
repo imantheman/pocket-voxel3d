@@ -234,9 +234,10 @@ each other over 3DS local wireless instead; that path is untested.
    Pokémon Center and apply. She saves the game and waits up to a minute
    for the other console to do the same.
 2. Both pick the same room -- **TRADE CENTER** or **COLOSSEUM** -- and are
-   walked in, one to each side of the machine in the middle.
-3. Either player walks up to the machine and presses **A** into it. The
-   other console is brought to the table wherever its player is standing.
+   walked in, one to each end of the table in the middle.
+3. Either player steps onto the stool at their end of the table and
+   presses **A** into the machine. The other console is brought to the
+   table wherever its player is standing.
    A trade: pick one of yours, then one of theirs; the other player says
    yes or no, and nothing changes hands until both have agreed. A battle:
    it runs on both consoles at once, each picking its own moves and

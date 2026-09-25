@@ -10053,8 +10053,8 @@ var LINK_TABLE = [
   { x: 5, y: 4 }
 ];
 var LINK_SEATS = [
-  { enter: { x: 4, y: 2 }, seat: { x: 4, y: 3 }, facing: "down" },
-  { enter: { x: 4, y: 6 }, seat: { x: 4, y: 5 }, facing: "up" }
+  { enter: { x: 2, y: 4 }, seat: { x: 3, y: 4 }, facing: "right" },
+  { enter: { x: 7, y: 4 }, seat: { x: 6, y: 4 }, facing: "left" }
 ];
 var LINK_WAIT_FRAMES = 60 * 60;
 var LINK_MSG = {

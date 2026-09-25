@@ -8759,6 +8759,17 @@ describe("the trade screen and the animation", () => {
 });
 
 describe("the TRADE CENTER room", () => {
+  test("the seats are the stools at the two ends of the table", () => {
+    // the ROM sits the players across the table left and right, each on
+    // the stool at their end, facing in; the machine is between them
+    expect(LINK_SEATS[0].seat).toEqual({ x: 3, y: 4 });
+    expect(LINK_SEATS[1].seat).toEqual({ x: 6, y: 4 });
+    expect(LINK_SEATS[0].facing).toBe("right");
+    expect(LINK_SEATS[1].facing).toBe("left");
+    expect(LINK_SEATS[0].enter.x).toBeLessThan(LINK_SEATS[0].seat.x);
+    expect(LINK_SEATS[1].enter.x).toBeGreaterThan(LINK_SEATS[1].seat.x);
+  });
+
   test("the two consoles take opposite seats, and they face each other", () => {
     const wire = new LoopbackLink();
     const red = new LinkSession(wire.a, "RED", 2);
@@ -8771,11 +8782,11 @@ describe("the TRADE CENTER room", () => {
     const a = LINK_SEATS[0]!;
     const b = LINK_SEATS[1]!;
     expect(a.seat).not.toEqual(b.seat);
-    // both seats sit against the machine, looking into it
-    expect(a.facing).toBe("down");
-    expect(b.facing).toBe("up");
-    expect(a.seat.y + 1).toBe(4);   // the table row
-    expect(b.seat.y - 1).toBe(4);
+    // both seats sit against the machine, looking into it, from its two ends
+    expect(a.facing).toBe("right");
+    expect(b.facing).toBe("left");
+    expect(a.seat.x + 1).toBe(4);   // the machine's left cell
+    expect(b.seat.x - 1).toBe(5);   // and its right cell
   });
 
   test("a tie on the nonce still puts them on different sides", () => {
@@ -10092,7 +10103,7 @@ describe("the CABLE CLUB, finished", () => {
     const { a, b } = pairIn("TRADE_CENTER");
     // RED walks up beside BLUE's body rather than to the machine
     const seatB = LINK_SEATS[b.overworld.link!.seat()]!.seat;
-    a.overworld.setMap("TRADE_CENTER", seatB.x - 1, seatB.y, "right");
+    a.overworld.setMap("TRADE_CENTER", seatB.x, seatB.y - 1, "down");
     both(a, b, 4);
     a.overworld.interact();
     both(a, b, 2);
