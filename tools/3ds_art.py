@@ -165,10 +165,13 @@ WHITE = (238, 238, 244)
 CARD = (8, 8, 12)
 GRID = (26, 26, 34)
 
-# The banner is two things: a title card, opaque, and a cube UNDER it on
-# nothing at all. The HOME menu draws the banner over its own wallpaper, so
-# everything outside the card is left transparent for that to show through.
+# The banner texture is two things: a title card, opaque, at the top, and
+# in the unused bottom-left corner three flat red patches -- light, mid,
+# dark -- that tools/3ds_banner3d.py maps onto the faces of a real cube it
+# builds under the card. Everything else is transparent: the HOME menu draws
+# the banner over its own wallpaper, and the cube stands on that.
 CARD_H = 62
+SHADES = {"light": (244, 88, 92), "mid": (214, 40, 44), "dark": (128, 22, 26)}
 
 
 def make_banner(path):
@@ -178,18 +181,13 @@ def make_banner(path):
         c.line(0, gy, 255, gy, GRID, 0.6)
     for gx in range(0, 256, 16):
         c.line(gx, 0, gx, CARD_H - 1, GRID, 0.6)
-
     top, bottom = "POCKET VOXEL", "RED"
     s, g = 3, 3
     draw_text(c, top, (256 - text_width(top, s, g)) // 2, 9, s, g, WHITE)
     draw_text(c, bottom, (256 - text_width(bottom, s, g)) // 2, 35, s, g, RED)
-
-    # The cube, below the card and on nothing. A ghost of it one step back
-    # in the spin says "this turns" -- a flat banner cannot move, so the
-    # motion has to be implied in the one frame we get.
-    cy = CARD_H + (128 - CARD_H) // 2
-    draw_cube(c, 128, cy, 24, 0.55, 0.42, DIM_RED, width=1.0, fade_back=False)
-    draw_cube(c, 128, cy, 24, 0.86, 0.42, RED, width=1.6)
+    # the cube's face colours: 16px patches at rows 112..128, x 0/16/32
+    for i, name in enumerate(("light", "mid", "dark")):
+        c.fill(i * 16, 112, i * 16 + 16, 128, SHADES[name])
     write_png(path, c.w, c.h, c.px, 4)
 
 

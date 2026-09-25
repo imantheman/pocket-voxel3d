@@ -64,10 +64,13 @@ bannertool makesmdh \
   -o "$WORK/icon.smdh"
 
 echo "=== banner"
-bannertool makebanner \
-  -i "$WORK/banner.png" \
-  -a "$WORK/banner.wav" \
-  -o "$WORK/banner.bnr"
+# Two passes. bannertool builds a flat banner from the PNG -- which is also
+# how the texture gets converted -- then tools/3ds_banner3d.py rebuilds the
+# model inside it with the title card and a real cube, and bannertool packs
+# that CGFX back (-ci), which it round-trips byte for byte.
+bannertool makebanner -i "$WORK/banner.png" -a "$WORK/banner.wav" -o "$WORK/banner_flat.bnr"
+python3 tools/3ds_banner3d.py "$WORK/banner_flat.bnr" "$WORK/banner3d.cgfx"
+bannertool makebanner -ci "$WORK/banner3d.cgfx" -a "$WORK/banner.wav" -o "$WORK/banner.bnr"
 
 echo "=== cia"
 # -exefslogo puts the RSF's logo into the ExeFS, which is where the HOME
