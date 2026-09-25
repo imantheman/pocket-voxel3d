@@ -21,6 +21,14 @@ const UI_ORIGIN_X = (VIEW_W - GB_W * UI_SCALE) / 2;
 const sx = (gx: number): number => Math.round(UI_ORIGIN_X + gx * UI_SCALE);
 const sy = (gy: number): number => Math.round(gy * UI_SCALE);
 const sw = (gw: number): number => Math.round(gw * UI_SCALE);
+/** The same three, for the title screen, which is laid out in GB space too. */
+export const gbX = sx;
+export const gbY = sy;
+export const gbW = sw;
+/** The copyright line's tiles, for the title's row 17 (title/copyright,
+ * then title/gamefreak). */
+export const COPYRIGHT_PREFIX = [0, 1, 2, 1, 3, 1, 4] as const;
+export const COPYRIGHT_GAMEFREAK = [0, 1, 2, 3, 4, 5, 6, 7, 8] as const;
 
 export interface IntroQuad {
   page: number;

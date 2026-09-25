@@ -1112,16 +1112,8 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     // The boot movie draws in screen space and has already worked out
     // every rect it wants, so it hands the list straight through.
     if (top?.kind === "intro") return top.view().pics;
-    if (top?.kind === "title") {
-      const v = top.view();
-      // logo up top; Red on the left with the cycling mon beside him.
-      const out: any[] = [
-        { page: titlePage(this.data, "logo"), x: 96, y: 16, w: 288, h: 108 },
-      ];
-      out.push({ page: this.picNamed("player"), x: 160, y: 132, w: 112, h: 112 });
-      if (v.monPage >= 0) out.push({ page: v.monPage, x: 248, y: 140, w: 104, h: 104 });
-      return out;
-    }
+    // The title lays itself out in GB space, like the movie (ui/title.ts).
+    if (top?.kind === "title") return top.view().pics;
     if (top?.kind === "trainercard") {
       // DrawTrainerInfo's portrait, upper-right of the info card. The card
       // clears those ui cells (scene.ts) so this shows through them.

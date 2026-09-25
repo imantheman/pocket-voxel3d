@@ -55,6 +55,10 @@ export interface AtlasIndex {
   picTitle: Record<string, number>;
   /** The boot intro: the ROM art plus the paper, bars and fist we cook. */
   picIntro: Record<string, number>;
+  /** The title screen's mons, species -> page: the same front pics cooked
+   * again with no species on the page, so the colour pass leaves them in
+   * the four Game Boy shades the title shows them in. */
+  picTitleMon: Record<string, number>;
 }
 
 /** The tileset subset the guest needs (collision + animation semantics). */

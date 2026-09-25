@@ -35,6 +35,17 @@ import {
 } from "./atlas.ts";
 import type { BuildingStats } from "./buildings.ts";
 import { buildIntroPages } from "./intro.ts";
+
+/**
+ * data/pokemon/title_mons.asm, the Red list: what the title screen cycles.
+ * Kept in step with game/ui/title.ts TITLE_MONS (a test holds them equal);
+ * the cook does not import from the game.
+ */
+const TITLE_MONS = [
+  "CHARMANDER", "SQUIRTLE", "BULBASAUR", "WEEDLE", "NIDORAN_M", "SCYTHER",
+  "PIKACHU", "CLEFAIRY", "RHYDON", "ABRA", "GASTLY", "DITTO",
+  "PIDGEOTTO", "ONIX", "PONYTA", "MAGIKARP",
+];
 import {
   GameMap,
   GEN_DIR,
@@ -337,6 +348,23 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
     pageOwners.push({ kind: ATLAS_KIND.pics });
   }
 
+  // The title screen's mons (data/pokemon/title_mons.asm, the Red list):
+  // the same front pic each, cooked again WITHOUT a species on the page,
+  // so the RED++ pass binds it no palette and the title shows it in the
+  // four shades of the cartridge. Appended after the intro pages, which
+  // are the last thing anyone addresses by literal index.
+  const titleMonPageByKey = new Map<string, number>();
+  for (const id of TITLE_MONS) {
+    const def = gen.pokemon[id] as { spriteFront?: string } | undefined;
+    const key = def?.spriteFront
+      ? def.spriteFront.replace(/^assets\/generated\//, "").replace(/\.png$/, "")
+      : undefined;
+    if (!key || !gen.gfx[key]) continue;
+    titleMonPageByKey.set(`title-mon/${id}`, pages.length);
+    pages.push(buildPicPage(gen, key));
+    pageOwners.push({ kind: ATLAS_KIND.pics });
+  }
+
   // The trainer back pic lives at battle/redb (no back/ prefix upstream).
   // It carries no species, so it takes no RED++ pic palette and keeps
   // today's binding (the SGB selection, else the kind ramp).
@@ -378,6 +406,7 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
     picTrainer: named(trainerPageByKey, "battle/trainer/"),
     picTitle: named(titlePageByKey, "title/"),
     picIntro: named(introPageByKey, "intro/"),
+    picTitleMon: named(titleMonPageByKey, "title-mon/"),
     sprites: spriteIndex,
     picFront: frontIndex,
     picBack: backIndex,

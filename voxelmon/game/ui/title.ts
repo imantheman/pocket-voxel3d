@@ -1,14 +1,25 @@
-// Title screen. gen1recomp src/ui/TitleState.lua: the starter art cycles
-// through mon pics while PRESS START waits, then the main menu offers
-// CONTINUE / NEW GAME / OPTION.
+// Title screen: engine/movie/title.asm, by way of gen1recomp
+// src/ui/TitleState.lua, whose tilemap this copies to the pixel. The logo
+// at tile (2,1); the "Red Version" ribbon on row 8, "Red" at column 7 and
+// "Version" at column 10; Red's title art as OAM at px (82,80), drawn over
+// the mon's box; the title mon bottom-aligned in the 7x7 box at tile
+// (5,10), in the four Game Boy shades; the copyright on row 17. Nothing
+// says PRESS START -- the cartridge waits for START or A -- and then the
+// main menu offers CONTINUE / NEW GAME / OPTION.
 import type { GameState } from "../game.ts";
 import { namedPage, picPageFor } from "../battle/staging.ts";
+import { COPYRIGHT_GAMEFREAK, COPYRIGHT_PREFIX, gbW, gbX, gbY } from "./intro.ts";
 
-/** The rotating cast the original cycles behind the logo. */
-const CYCLE = [
-  "CHARMANDER", "SQUIRTLE", "BULBASAUR", "PIKACHU", "MEWTWO",
-  "NIDOKING", "GENGAR", "ONIX", "GYARADOS", "LAPRAS",
-];
+/**
+ * data/pokemon/title_mons.asm, the Red list. The starter leads, then
+ * TitleScreenPickNewMon draws from the rest without repeating. The cook
+ * carries the same list (cook/cli.ts TITLE_MONS); a test holds them equal.
+ */
+export const TITLE_MONS = [
+  "CHARMANDER", "SQUIRTLE", "BULBASAUR", "WEEDLE", "NIDORAN_M", "SCYTHER",
+  "PIKACHU", "CLEFAIRY", "RHYDON", "ABRA", "GASTLY", "DITTO",
+  "PIDGEOTTO", "ONIX", "PONYTA", "MAGIKARP",
+] as const;
 
 /** Where a pak cooked before `atlas.picTitle` existed put the title art.
  * Only used when the dataset does not name the pages itself. */
@@ -19,13 +30,47 @@ export function titlePage(data: unknown, key: keyof typeof TITLE_PAGES): number 
   const p = namedPage(data as never, "picTitle", key);
   return p >= 0 ? p : TITLE_PAGES[key];
 }
-export const CYCLE_PAGES: Record<string, number> = {"CHARMANDER": 84, "SQUIRTLE": 202, "BULBASAUR": 79, "PIKACHU": 176, "MEWTWO": 155, "NIDOKING": 159, "GENGAR": 112, "ONIX": 169, "GYARADOS": 123, "LAPRAS": 141};
+
+/** Frames a mon holds the box before the next one (the ROM's own beat is
+ * a scroll-out and a scroll-in; this is the wait between them). */
+export const TITLE_MON_FRAMES = 150;
+
+// The tilemap, in GB pixels (title.asm; TitleState.lua:482-486).
+const LOGO = { x: 16, y: 8, w: 128, h: 48 };
+const RIBBON_Y = 64;
+const RIBBON_RED = { x: 56, tiles: [0, 1] };
+const RIBBON_VERSION = { x: 80, tiles: [5, 6, 7, 8, 9] };
+/** The mon's box: tiles (5,10)-(11,16), the mon bottom-aligned and centred. */
+const MON_BOX = { x: 40, y: 80, w: 56, h: 56 };
+const RED_AT = { x: 82, y: 80, w: 40, h: 56 };
+const COPYRIGHT_Y = 136;
 
 export type TitleChoice = "continue" | "new" | "option" | "viewer";
 
+export interface TitleQuad {
+  page: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface TitleTile {
+  page: number;
+  tile: number;
+  x: number;
+  y: number;
+  flags: number;
+}
+
 export interface TitleView {
   phase: "press" | "menu";
+  /** The mon in the box this beat, for the scene's redraw key. */
   monPage: number;
+  /** Screen-space pictures, back to front. */
+  pics: TitleQuad[];
+  /** GB-space 8x8 tiles: the ribbon and the copyright line. */
+  tiles: TitleTile[];
   menu: string[];
   index: number;
   hasSave: boolean;
@@ -35,9 +80,11 @@ export class TitleState implements GameState {
   readonly kind = "title";
   private phase: "press" | "menu" = "press";
   private timer = 0;
-  private cycleAt = 0;
   private index = 0;
   private menu: string[];
+  /** The mon on show, and the ones still to come this pass. */
+  private mon: string = TITLE_MONS[0];
+  private bag: string[] = [];
 
   constructor(
     private game: {
@@ -54,14 +101,21 @@ export class TitleState implements GameState {
       : ["NEW GAME", "OPTION", "MAP VIEWER"];
   }
 
+  /** TitleScreenPickNewMon: the next one, never the same twice in a pass. */
+  private pickNext(): void {
+    if (this.bag.length === 0) this.bag = TITLE_MONS.filter((s) => s !== this.mon);
+    const i = Math.floor(Math.random() * this.bag.length);
+    this.mon = this.bag.splice(i, 1)[0]!;
+  }
+
   private monPage(): number {
-    const species = CYCLE[this.cycleAt % CYCLE.length]!;
-    // The dataset knows where a species' front pic landed; CYCLE_PAGES is
-    // the answer for a pak cooked before it was asked.
-    const p = this.game.picPageFor
-      ? this.game.picPageFor(species)
-      : picPageFor(this.game.data, species);
-    return p >= 0 ? p : (CYCLE_PAGES[species] ?? -1);
+    // In grey, as the cartridge shows it; a pak cooked before the title
+    // had its own pages shows the coloured battle pic instead.
+    const grey = namedPage(this.game.data as never, "picTitleMon", this.mon);
+    if (grey >= 0) return grey;
+    return this.game.picPageFor
+      ? this.game.picPageFor(this.mon)
+      : picPageFor(this.game.data, this.mon);
   }
 
   update(): void {
@@ -74,8 +128,7 @@ export class TitleState implements GameState {
     }
 
     if (this.phase === "press") {
-      // TitleState.lua cycles the art on a fixed beat while waiting.
-      if (this.timer % 150 === 0) this.cycleAt += 1;   // ~2.5s per mon
+      if (this.timer % TITLE_MON_FRAMES === 0) this.pickNext();
       if (p.start || p.a) {
         this.phase = "menu";
         this.index = 0;
@@ -96,10 +149,34 @@ export class TitleState implements GameState {
     }
   }
 
+  private quad(page: number, r: { x: number; y: number; w: number; h: number }): TitleQuad {
+    return { page, x: gbX(r.x), y: gbY(r.y), w: gbW(r.w), h: gbW(r.h) };
+  }
+
   view(): TitleView {
+    const data = this.game.data;
+    const monPage = this.monPage();
+    const pics: TitleQuad[] = [this.quad(titlePage(data, "logo"), LOGO)];
+    if (monPage >= 0) pics.push(this.quad(monPage, MON_BOX));
+    // Red is OAM in the original: he draws over the mon's box edge
+    pics.push(this.quad(titlePage(data, "player"), RED_AT));
+
+    const tiles: TitleTile[] = [];
+    const row = (page: number, seq: readonly number[], x: number, y: number): void => {
+      if (page < 0) return;
+      seq.forEach((t, i) => tiles.push({ page, tile: t, x: x + i * 8, y, flags: 0 }));
+    };
+    const version = namedPage(data as never, "picTitle", "version");
+    row(version, RIBBON_RED.tiles, RIBBON_RED.x, RIBBON_Y);
+    row(version, RIBBON_VERSION.tiles, RIBBON_VERSION.x, RIBBON_Y);
+    row(titlePage(data, "copyright"), COPYRIGHT_PREFIX, 16, COPYRIGHT_Y);
+    row(titlePage(data, "gamefreak"), COPYRIGHT_GAMEFREAK, 80, COPYRIGHT_Y);
+
     return {
       phase: this.phase,
-      monPage: this.monPage(),
+      monPage,
+      pics,
+      tiles,
       menu: this.menu,
       index: this.index,
       hasSave: !!this.game.hasSave,

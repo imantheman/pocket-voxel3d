@@ -1790,14 +1790,17 @@ export class Scene {
     if (this.menuSig !== null) { this.menuSig = null; host.uiClear(); this.uiOwner = null; }
     const ttl = (view as unknown as { title?: () => any }).title?.();
     if (ttl) {
+      // The ribbon and the copyright line are 8x8 tiles in the original
+      // too; they ride the movie's tile layer, in GB space.
+      this.emitIntroTiles(ttl.tiles ?? []);
       const sig = `${ttl.phase},${ttl.index},${ttl.monPage}`;
       if (sig !== this.titleSig) {
         this.titleSig = sig;
         this.uiOwner = null;
         host.uiClear();
-        if (ttl.phase === "press") {
-          this.stamp(host, 5, 15, "PRESS START");
-        } else {
+        // Nothing on the text layer while it waits: the cartridge says no
+        // PRESS START, it just waits for one.
+        if (ttl.phase === "menu") {
           // Top-left, like the original's main menu box.
           const MX = 0, MY = 0, MW = 12;
           const MH = ttl.menu.length * 2;
@@ -1818,7 +1821,12 @@ export class Scene {
       }
       return;
     }
-    if (this.titleSig !== null) { this.titleSig = null; host.uiClear(); this.uiOwner = null; }
+    if (this.titleSig !== null) {
+      this.titleSig = null;
+      host.uiClear();
+      this.uiOwner = null;
+      this.emitIntroTiles([]);
+    }
     const nam = view.naming();
     if (nam) {
       const v = nam.view();

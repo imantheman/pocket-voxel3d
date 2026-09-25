@@ -15271,14 +15271,13 @@ class Scene {
     }
     const ttl = view.title?.();
     if (ttl) {
+      this.emitIntroTiles(ttl.tiles ?? []);
       const sig = `${ttl.phase},${ttl.index},${ttl.monPage}`;
       if (sig !== this.titleSig) {
         this.titleSig = sig;
         this.uiOwner = null;
         host.uiClear();
-        if (ttl.phase === "press") {
-          this.stamp(host, 5, 15, "PRESS START");
-        } else {
+        if (ttl.phase === "menu") {
           const MX = 0, MY = 0, MW = 12;
           const MH = ttl.menu.length * 2;
           host.uiTile(MX, MY, BORDER_TL);
@@ -15303,6 +15302,7 @@ class Scene {
       this.titleSig = null;
       host.uiClear();
       this.uiOwner = null;
+      this.emitIntroTiles([]);
     }
     const nam = view.naming();
     if (nam) {
@@ -15821,98 +15821,17 @@ class NamingState {
   }
 }
 
-// voxelmon/game/ui/title.ts
-var CYCLE = [
-  "CHARMANDER",
-  "SQUIRTLE",
-  "BULBASAUR",
-  "PIKACHU",
-  "MEWTWO",
-  "NIDOKING",
-  "GENGAR",
-  "ONIX",
-  "GYARADOS",
-  "LAPRAS"
-];
-var TITLE_PAGES = { copyright: 421, gamefreak: 422, logo: 423, player: 424 };
-function titlePage(data, key) {
-  const p = namedPage(data, "picTitle", key);
-  return p >= 0 ? p : TITLE_PAGES[key];
-}
-var CYCLE_PAGES = { CHARMANDER: 84, SQUIRTLE: 202, BULBASAUR: 79, PIKACHU: 176, MEWTWO: 155, NIDOKING: 159, GENGAR: 112, ONIX: 169, GYARADOS: 123, LAPRAS: 141 };
-
-class TitleState {
-  game;
-  onChoose;
-  kind = "title";
-  phase = "press";
-  timer = 0;
-  cycleAt = 0;
-  index = 0;
-  menu;
-  constructor(game, onChoose) {
-    this.game = game;
-    this.onChoose = onChoose;
-    this.menu = game.hasSave ? ["CONTINUE", "NEW GAME", "OPTION", "MAP VIEWER"] : ["NEW GAME", "OPTION", "MAP VIEWER"];
-  }
-  monPage() {
-    const species = CYCLE[this.cycleAt % CYCLE.length];
-    const p = this.game.picPageFor ? this.game.picPageFor(species) : picPageFor(this.game.data, species);
-    return p >= 0 ? p : CYCLE_PAGES[species] ?? -1;
-  }
-  update() {
-    const p = this.game.input.pressed;
-    this.timer += 1;
-    if (this.timer === 2) {
-      this.game.audio?.play?.("Music_TitleScreen");
-    }
-    if (this.phase === "press") {
-      if (this.timer % 150 === 0)
-        this.cycleAt += 1;
-      if (p.start || p.a) {
-        this.phase = "menu";
-        this.index = 0;
-      }
-      return;
-    }
-    if (p.up)
-      this.index = (this.index + this.menu.length - 1) % this.menu.length;
-    if (p.down)
-      this.index = (this.index + 1) % this.menu.length;
-    if (p.b) {
-      this.phase = "press";
-      return;
-    }
-    if (p.a) {
-      const pick = this.menu[this.index];
-      this.game.pop();
-      if (pick === "CONTINUE")
-        this.onChoose("continue");
-      else if (pick === "NEW GAME")
-        this.onChoose("new");
-      else if (pick === "MAP VIEWER")
-        this.onChoose("viewer");
-      else
-        this.onChoose("option");
-    }
-  }
-  view() {
-    return {
-      phase: this.phase,
-      monPage: this.monPage(),
-      menu: this.menu,
-      index: this.index,
-      hasSave: !!this.game.hasSave
-    };
-  }
-}
-
 // voxelmon/game/ui/intro.ts
 var UI_SCALE2 = VIEW_H / GB_H;
 var UI_ORIGIN_X2 = (VIEW_W - GB_W * UI_SCALE2) / 2;
 var sx = (gx) => Math.round(UI_ORIGIN_X2 + gx * UI_SCALE2);
 var sy = (gy) => Math.round(gy * UI_SCALE2);
 var sw = (gw) => Math.round(gw * UI_SCALE2);
+var gbX = sx;
+var gbY = sy;
+var gbW = sw;
+var COPYRIGHT_PREFIX = [0, 1, 2, 1, 3, 1, 4];
+var COPYRIGHT_GAMEFREAK = [0, 1, 2, 3, 4, 5, 6, 7, 8];
 var COPYRIGHT_FRAMES = 180;
 var STAR_START = 64;
 var STAR_FRAMES = 40;
@@ -16345,6 +16264,135 @@ class IntroState {
       }
     }
     return { phase: this.phase, pics, tiles };
+  }
+}
+
+// voxelmon/game/ui/title.ts
+var TITLE_MONS = [
+  "CHARMANDER",
+  "SQUIRTLE",
+  "BULBASAUR",
+  "WEEDLE",
+  "NIDORAN_M",
+  "SCYTHER",
+  "PIKACHU",
+  "CLEFAIRY",
+  "RHYDON",
+  "ABRA",
+  "GASTLY",
+  "DITTO",
+  "PIDGEOTTO",
+  "ONIX",
+  "PONYTA",
+  "MAGIKARP"
+];
+var TITLE_PAGES = { copyright: 421, gamefreak: 422, logo: 423, player: 424 };
+function titlePage(data, key) {
+  const p = namedPage(data, "picTitle", key);
+  return p >= 0 ? p : TITLE_PAGES[key];
+}
+var TITLE_MON_FRAMES = 150;
+var LOGO = { x: 16, y: 8, w: 128, h: 48 };
+var RIBBON_Y = 64;
+var RIBBON_RED = { x: 56, tiles: [0, 1] };
+var RIBBON_VERSION = { x: 80, tiles: [5, 6, 7, 8, 9] };
+var MON_BOX = { x: 40, y: 80, w: 56, h: 56 };
+var RED_AT = { x: 82, y: 80, w: 40, h: 56 };
+var COPYRIGHT_Y = 136;
+
+class TitleState {
+  game;
+  onChoose;
+  kind = "title";
+  phase = "press";
+  timer = 0;
+  index = 0;
+  menu;
+  mon = TITLE_MONS[0];
+  bag = [];
+  constructor(game, onChoose) {
+    this.game = game;
+    this.onChoose = onChoose;
+    this.menu = game.hasSave ? ["CONTINUE", "NEW GAME", "OPTION", "MAP VIEWER"] : ["NEW GAME", "OPTION", "MAP VIEWER"];
+  }
+  pickNext() {
+    if (this.bag.length === 0)
+      this.bag = TITLE_MONS.filter((s) => s !== this.mon);
+    const i = Math.floor(Math.random() * this.bag.length);
+    this.mon = this.bag.splice(i, 1)[0];
+  }
+  monPage() {
+    const grey = namedPage(this.game.data, "picTitleMon", this.mon);
+    if (grey >= 0)
+      return grey;
+    return this.game.picPageFor ? this.game.picPageFor(this.mon) : picPageFor(this.game.data, this.mon);
+  }
+  update() {
+    const p = this.game.input.pressed;
+    this.timer += 1;
+    if (this.timer === 2) {
+      this.game.audio?.play?.("Music_TitleScreen");
+    }
+    if (this.phase === "press") {
+      if (this.timer % TITLE_MON_FRAMES === 0)
+        this.pickNext();
+      if (p.start || p.a) {
+        this.phase = "menu";
+        this.index = 0;
+      }
+      return;
+    }
+    if (p.up)
+      this.index = (this.index + this.menu.length - 1) % this.menu.length;
+    if (p.down)
+      this.index = (this.index + 1) % this.menu.length;
+    if (p.b) {
+      this.phase = "press";
+      return;
+    }
+    if (p.a) {
+      const pick = this.menu[this.index];
+      this.game.pop();
+      if (pick === "CONTINUE")
+        this.onChoose("continue");
+      else if (pick === "NEW GAME")
+        this.onChoose("new");
+      else if (pick === "MAP VIEWER")
+        this.onChoose("viewer");
+      else
+        this.onChoose("option");
+    }
+  }
+  quad(page, r) {
+    return { page, x: gbX(r.x), y: gbY(r.y), w: gbW(r.w), h: gbW(r.h) };
+  }
+  view() {
+    const data = this.game.data;
+    const monPage = this.monPage();
+    const pics = [this.quad(titlePage(data, "logo"), LOGO)];
+    if (monPage >= 0)
+      pics.push(this.quad(monPage, MON_BOX));
+    pics.push(this.quad(titlePage(data, "player"), RED_AT));
+    const tiles = [];
+    const row = (page, seq, x, y) => {
+      if (page < 0)
+        return;
+      seq.forEach((t, i) => tiles.push({ page, tile: t, x: x + i * 8, y, flags: 0 }));
+    };
+    const version = namedPage(data, "picTitle", "version");
+    row(version, RIBBON_RED.tiles, RIBBON_RED.x, RIBBON_Y);
+    row(version, RIBBON_VERSION.tiles, RIBBON_VERSION.x, RIBBON_Y);
+    row(titlePage(data, "copyright"), COPYRIGHT_PREFIX, 16, COPYRIGHT_Y);
+    row(titlePage(data, "gamefreak"), COPYRIGHT_GAMEFREAK, 80, COPYRIGHT_Y);
+    return {
+      phase: this.phase,
+      monPage,
+      pics,
+      tiles,
+      menu: this.menu,
+      index: this.index,
+      hasSave: !!this.game.hasSave
+    };
   }
 }
 
@@ -20335,16 +20383,8 @@ ${mname}!`);
       top = under;
     if (top?.kind === "intro")
       return top.view().pics;
-    if (top?.kind === "title") {
-      const v = top.view();
-      const out = [
-        { page: titlePage(this.data, "logo"), x: 96, y: 16, w: 288, h: 108 }
-      ];
-      out.push({ page: this.picNamed("player"), x: 160, y: 132, w: 112, h: 112 });
-      if (v.monPage >= 0)
-        out.push({ page: v.monPage, x: 248, y: 140, w: 104, h: 104 });
-      return out;
-    }
+    if (top?.kind === "title")
+      return top.view().pics;
     if (top?.kind === "trainercard") {
       const v = top.view();
       if (v.picPage < 0)

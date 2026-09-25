@@ -20,7 +20,10 @@ import {
   VOX_BTN,
   VOX_OP,
 } from "../contracts/spec/voxel-spec.ts";
-import { INTRO_CLOCK, IntroState } from "../voxelmon/game/ui/intro.ts";
+import {
+  COPYRIGHT_GAMEFREAK, COPYRIGHT_PREFIX, gbW, gbX, gbY, INTRO_CLOCK, IntroState,
+} from "../voxelmon/game/ui/intro.ts";
+import { TITLE_MONS, TitleState } from "../voxelmon/game/ui/title.ts";
 import { fromGenDir as loadAudioBanks } from "../voxelmon/game/audio/banks.ts";
 import { loadRuntimeData, REQUIRED_MODULES, type VoxelmonData } from "../voxelmon/game/data.ts";
 import { WildBattle } from "../voxelmon/game/battle/battle.ts";
@@ -10234,5 +10237,54 @@ describe("the escorts walk WITH you, and the lab rival is the ROM's", () => {
       game.tick(i % 2 === 0 ? VOX_BTN.a : 0);
     }
     expect(ow.player.cellY).toBe(5);
+  });
+});
+
+describe("the title screen is the cartridge's", () => {
+  const atlas = {
+    picTitle: { copyright: 1, gamefreak: 2, logo: 3, player: 4, version: 5 },
+    picTitleMon: { CHARMANDER: 50 },
+    picTrainer: { red: 9 },
+  };
+  function title() {
+    return new TitleState(
+      { input: { pressed: {} }, pop() {}, data: { atlas }, hasSave: false, picPageFor: () => 9 },
+      () => {},
+    );
+  }
+
+  test("the mon sits in the box on the left, in grey, and Red stands to its right over it", () => {
+    const v = title().view();
+    // pictures back to front: logo, the mon, then Red over its box edge
+    expect(v.pics.map((q) => q.page)).toEqual([3, 50, 4]);
+    const [logo, mon, red] = v.pics;
+    expect([logo!.x, logo!.y, logo!.w, logo!.h]).toEqual([gbX(16), gbY(8), gbW(128), gbW(48)]);
+    expect([mon!.x, mon!.y]).toEqual([gbX(40), gbY(80)]);
+    expect([red!.x, red!.y]).toEqual([gbX(82), gbY(80)]);
+    expect(red!.x).toBeGreaterThan(mon!.x);
+    // the title art, not the battle portrait
+    expect(red!.page).toBe(4);
+    // the grey page, not the coloured battle pic
+    expect(mon!.page).toBe(50);
+  });
+
+  test("it says Red Version on row 8 and carries the copyright on row 17", () => {
+    const v = title().view();
+    const ribbon = v.tiles.filter((t) => t.page === 5);
+    expect(ribbon.map((t) => [t.tile, t.x, t.y])).toEqual([
+      [0, 56, 64], [1, 64, 64],
+      [5, 80, 64], [6, 88, 64], [7, 96, 64], [8, 104, 64], [9, 112, 64],
+    ]);
+    const copyright = v.tiles.filter((t) => t.y === 136);
+    expect(copyright.length).toBe(COPYRIGHT_PREFIX.length + COPYRIGHT_GAMEFREAK.length);
+    expect(copyright[0]).toEqual({ page: 1, tile: 0, x: 16, y: 136, flags: 0 });
+    expect(copyright.at(-1)).toEqual({ page: 2, tile: 8, x: 144, y: 136, flags: 0 });
+  });
+
+  test("the cast is the Red TitleMons list, the starter first, and the cook cooks the same", () => {
+    expect(TITLE_MONS[0]).toBe("CHARMANDER");
+    expect(TITLE_MONS.length).toBe(16);
+    const cli = readFileSync(join(import.meta.dir, "../voxelmon/cook/cli.ts"), "utf8");
+    for (const s of TITLE_MONS) expect(cli).toContain(`"${s}"`);
   });
 });
