@@ -1,5 +1,5 @@
-// tests/voxel-parity.test.ts — the behaviors a line-by-line audit against
-// gen1recomp found the port had drifted on, pinned so they cannot drift back.
+// tests/voxel-parity.test.ts — the behaviors an audit against gen1recomp
+// found the port had drifted on, pinned so they cannot drift back.
 //
 // Layer 1 (ROM-free): the glyph/cell boundary and the script runner's
 // branching. Layer 2 (gated on dist/voxelmon/gen): the effect registry over

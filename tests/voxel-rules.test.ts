@@ -8,7 +8,7 @@
 //
 // Layer 2 (gated, skips with a printed reason): content_red/facts.lua ground
 // truths against dist/voxelmon/gen/, and luajit micro-oracles that run the
-// REFERENCE Lua over a fixed input matrix and compare line-for-line.
+// REFERENCE Lua over a fixed input matrix and compare the results.
 
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";

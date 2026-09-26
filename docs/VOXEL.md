@@ -839,7 +839,7 @@ ROM this pipeline does not accept.
 
 ## 11. The parity pass (2026-08-07)
 
-A line-by-line re-read of the port against `gen1recomp` at HEAD `f0ed2ef`,
+A re-read of the port against `gen1recomp` at HEAD `f0ed2ef`,
 subsystem by subsystem, with every claimed divergence checked twice at its
 cited lines on both sides. The rules modules came through clean — damage,
 crit, accuracy, the type chart, catching, exp, growth, collision, ledges and

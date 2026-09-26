@@ -134,4 +134,3 @@ are still in the tree but are not built or tested here.
 ## License
 
 MIT, see [LICENSE](LICENSE). Copyright Yifeng "Evan" Wang and Isaac Dishongh.
-The ROM, and everything made from it, stays yours and stays on your machine.
