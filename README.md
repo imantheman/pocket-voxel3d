@@ -39,11 +39,6 @@ leaves your machine.
    `3ds` (that is where homebrew lives). **Open that `3ds` folder**, then
    **copy the `voxelmon` folder and the `pocketvoxel-3ds.3dsx` file into it**,
    next to whatever is already there.
-
-   Do **not** drag the whole `3ds` folder from `output` onto the card. If
-   Windows ever asks "Replace the files in the destination?" or "Merge?",
-   stop: you are one level too high. Nothing you do inside the card's own
-   `3ds` folder can remove your other homebrew.
 7. Put the card back in the 3DS. Open the **Homebrew Launcher** and pick
    **Pocket Voxel**.
 
