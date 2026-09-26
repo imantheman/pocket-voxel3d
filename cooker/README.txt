@@ -47,8 +47,13 @@ WHAT YOU GET
       SOURCES.txt                 <- everything that went into the build
 
 Then open the Homebrew Launcher on the 3DS and pick Pocket Voxel. Or
-install PocketVoxel3DRed.cia with FBI for a HOME menu icon; it reads the
-same paks.
+install PocketVoxel3DRed.cia (it is in this folder) with FBI for a HOME
+menu icon; it reads the same paks.
+
+The two game files, pocketvoxel-3ds.3dsx and PocketVoxel3DRed.cia, are in
+this folder already. They are the engine, built from the source in this
+repository; nothing from any ROM is in them. The cooker puts the .3dsx
+into output/3ds for you.
 
 The 225 files in paks/ belong together. Whenever you rebuild, copy the
 whole folder again, never one file.
