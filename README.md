@@ -83,9 +83,9 @@ up. Then step onto the stool at your end of the table and press **A**.
 
 ## What this is, for the curious
 
-The gameplay is a line-by-line port of the game's own logic, by way of the
-[gen1recomp](https://github.com/bryanthaboi/gen1recomp) engine, running in an
-embedded JavaScript guest. The 3D presentation comes from the
+The gameplay is a port of the
+[gen1recomp](https://github.com/bryanthaboi/gen1recomp) engine, with some of
+its code carried over, running in an embedded JavaScript guest. The 3D presentation comes from the
 [PotatoVoxel](https://github.com/ShaneMcGovernIE/potato_voxel) diorama
 renderer, reimplemented in Rust for the 3DS's GPU. Colour comes from the
 community colourisation [pokered-gbc](https://github.com/Stewmath/pokered-gbc);
