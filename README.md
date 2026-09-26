@@ -1,195 +1,133 @@
-# Pocket Voxel
+# Pocket Voxel 3D Red
 
-<p align="center">
-  <img src="docs/shots/psp-pallet-town.png" width="720" alt="Pallet Town as a voxel diorama on a real PSP — carved trees, gabled roofs, an NPC and the player between the houses." />
-</p>
+The first Game Boy creature-RPG, rebuilt as a 3D voxel diorama that runs on a
+**New Nintendo 3DS / New 2DS XL** with the stereoscopic slider doing real 3D.
+Trade and battle between two consoles on the same wifi. Colour, or the original
+black and white: your choice.
 
-<p align="center">
-  <img src="docs/shots/psp-bedroom.png" width="352" alt="The player's bedroom: bookshelves, bed, SNES and a potted plant, voxelized." />
-  <img src="docs/shots/psp-route-1.png" width="352" alt="Route 1: tall encounter grass, ledges, fences, and rows of carved trees." />
-</p>
+**You bring the game.** Nothing from any cartridge is in this repository or
+in the download. A small program on your computer reads *your own* Pokémon
+Red (US) `.gb` file and turns it into the files the 3DS needs. The ROM never
+leaves your machine.
 
-<p align="center"><em>All three screenshots are captures from a real PSP-2000 over PSPLINK.
-The same build runs on a PS Vita at 960x544 — see <a href="#run-it">Run it</a>.</em></p>
+---
 
-A Game Boy creature-RPG, presented as a voxelized 3D diorama on handheld
-hardware — **a real PSP, a real PS Vita and a real Nintendo 3DS**, from one
-guest bundle and one cooker. The gameplay is a TypeScript port of the
-[gen1recomp](https://github.com/bryanthaboi/gen1recomp) Lua engine running in
-an embedded QuickJS guest; the presentation is a Rust reimplementation of the
-[DramaticShape Voxel Mod](https://github.com/ShaneMcGovernIE/potato_voxel)
-diorama renderer. Both upstreams are MIT-licensed; both serve here as
-executable specifications, not vendored code.
+## Get it on your 3DS (no computer skills needed)
 
-Pocket Voxel is a specialized runtime of
-[PocketJS](https://github.com/pocket-stack/pocketjs) — the same
-`⟨ core, surface, guest ⟩` composition as
-[OpenStrike](https://github.com/pocket-stack/open-strike), with the ownership
-split inverted: **the game state lives in the guest** (world, battle, script
-VM, menus, saves — every formula cites the Lua it ports), and the Rust core
-owns only the retained scene — cooked voxel chunks, entity billboards, camera
-rungs, the battle stage, a GB UI tile layer, and the chip synth that renders
-the ROM's own sound programs to PCM. Steady-state boundary traffic is a few
-ops per tick against a measured QuickJS budget of ~8k ops per frame.
+**You need**
 
-## You bring the ROM
+- A **New** 3DS, New 3DS XL or New 2DS XL, with homebrew already on it
+  (the Homebrew Launcher, or FBI). An original 3DS / 2DS is too slow.
+- An SD card with **700 MB free**.
+- A Windows PC or a Mac, with internet for the first run.
+- Your own US Pokémon Red `.gb` file. The program checks it is the real one
+  and refuses anything else.
 
-This repository is **ROM-fed, exactly like upstream gen1recomp**: the only
-game-content input is a canonical US Gen-1 ROM you already own. The importer
-verifies its SHA-1 before decoding one byte, everything decoded lands under
-git-ignored `dist/`, and **no ROM-derived byte is ever committed** — no
-cooked pak, no extracted art, no decoded text; the rendering goldens are
-frame *hashes*, never pixels.
+**Step by step (Windows)**
 
-The colour is worth a sentence of its own, because it is the one thing that
-is neither your ROM nor this code. **Red ships no Game Boy Color code at
-all**, so there is no palette in your cartridge to read; the colours come
-from `palettes_gbc.lua` in the gen1recomp checkout, generated from
-[pokered-gbc](https://github.com/Stewmath/pokered-gbc) — its own overworld
-colouring, plus the per-species palettes from Gen 2's `MonsterPalettes`.
-None of it is committed here; it is read from a checkout you cloned, the
-same arrangement as the ROM. Build without it and the maps render in Game
-Boy grayscale, which is what the original looked like. The screenshots above are hardware captures of
-the running device, the same standard as the EBOOT's XMB art.
+1. Go to the **[Releases page](https://github.com/imantheman/pocket-voxel3d/releases/latest)**
+   and download `PocketVoxel-Cooker.zip`.
+2. Right-click the zip and choose **Extract All**. Open the folder it made.
+3. **Drag your `.gb` file onto `Cook Pocket Voxel.bat`.** A black window opens.
+4. Answer its questions. `Y` to let it download its tools (about 45 MB, each
+   one listed with a link). Then pick colour or black and white. It runs for
+   about 20 minutes; most of that is waiting.
+5. When it says **Done**, there is a new folder next to the bat called
+   `output`, and inside it a folder called `3ds`.
+6. Put your SD card in the PC. **Copy the `3ds` folder onto the very top level
+   of the SD card.** Windows asks whether to merge with the `3ds` folder that
+   is already there: say **yes**.
+7. Put the card back in the 3DS. Open the **Homebrew Launcher** and pick
+   **Pocket Voxel**.
 
-## How it works
+**Want it on the HOME menu instead?** The file `PocketVoxel3DRed.cia` is in
+the same folder as the bat. Copy it anywhere on the SD card, open **FBI** on
+the 3DS, find the file, and choose **Install**. It uses the same `3ds` folder
+from step 6, so do step 6 either way.
 
-```text
-cook time (Bun, your machine)            run time (PSP / PS Vita)
-├─ import/  ROM → gen/ (SHA-1 gated)     ├─ QuickJS guest: the gameplay port,
-├─ cook/    voxelizer: classify tiles,   │    one frame(buttons) per tick
-│    carve trees, place 42 building      ├─ voxel surface: ~10-40 ops/tick
-│    templates, bake ground+facades,     │    drive the retained scene
-│    pack chunks → voxelmon.vxpak        ├─ pocketvoxel-core: culling, camera
-└─ tapes/   intent tapes → .vtrace       │    rungs, draw list, chip synth
-     (the acceptance path)               └─ the backend for this machine:
-                                              pocketvoxel-gu  (PSP, sceGu)
-                                              pocketvoxel-gxm (Vita, GXM)
-```
+**Mac:** double-click `Cook Pocket Voxel.command` instead of step 3. If the
+Mac says it is from an unidentified developer, right-click it and choose
+**Open**. When it asks for the ROM, drag the `.gb` file into the window and
+press Return. Everything else is the same.
 
-- **One pak, many machines.** Fidelity is a runtime *ladder*, not a build
-  flag: the same 31 MB pak serves the PSP rung (30 fps present lock, 60 Hz
-  logic), the Vita rung, and the desktop identity rung — which replays the
-  pre-ladder picture pixel-for-pixel and is pinned by committed frame hashes
-  no dial edit may move. **The rung is named by the HOST, not the guest**, so
-  the guest bundle inside the Vita VPK is byte-identical to the one baked
-  into the PSP EBOOT — no `#ifdef`, no second build of the game.
-- **Each machine gets its own renderer, not its own fork.** Both consume the
-  same ordered draw list and resolve every texture's palette through the same
-  function: `pocketvoxel-gu` on the PSP's GE, `pocketvoxel-gxm` on the Vita's
-  GXM. The Vita draws it at native 960x544 while the logical viewport stays
-  the PSP's 480x272, so the layout, the cameras and every golden are
-  unchanged and only the pixel count moves.
-- **No camera-relative representation change inside the visible field.** The
-  PSP rung pays its frame budget with uniform dials only (coarse-carved
-  trees, ground baked to per-chunk pages, stratified detail density) — a
-  distance boundary that moves with the player plays as flicker, and this
-  repo's rule is that it never ships.
-- **Deterministic to the byte.** Two cooks are byte-identical; gameplay is a
-  fixed 60 Hz step with tape-recorded intent; the software rasterizer and
-  the GE resolve the same draw list within a measured pixel tolerance,
-  enforced by a PPSSPP-headless e2e at every story checkpoint.
+**Linux:** `./cook.sh /path/to/PokemonRed.gb`
 
-## Quick start
+### If something goes wrong
 
-Needs [Bun](https://bun.sh) and a Rust toolchain. Device builds need one
-console toolchain each; both are covered under [Run it](#run-it).
+- **"This is not the US Red ROM."** The file is a different version, a hack,
+  or a bad dump. Only the original US Red works.
+- **The window closes at once.** Python is missing. Run the bat again; it
+  offers to fetch a portable Python into its own folder. Say `Y`.
+- **The 3DS shows a black screen, or the game is missing maps.** The `3ds`
+  folder was copied partly. Copy the whole folder again; the 225 files in
+  `3ds/voxelmon/paks` belong together. Never copy one file on its own.
+- **It says the SD card is full.** It needs 700 MB. Free some space and copy
+  again.
+- **Homebrew Launcher does not list it.** The `.3dsx` must be at
+  `SD:/3ds/pocketvoxel-3ds.3dsx`, not inside another folder.
+- Anything else: open an issue on this page and paste what the black window
+  said. Everything it does is written to the screen.
+
+### Playing with a friend
+
+Both consoles need the game, and both need to be on the **same wifi
+network**. Walk into any Pokémon Center, talk to the receptionist at the
+right-hand counter, and pick **TRADE CENTER** or **COLOSSEUM**. The two
+consoles find each other on the wifi by themselves; there is nothing to set
+up. Then step onto the stool at your end of the table and press **A**.
+
+---
+
+## What this is, for the curious
+
+The gameplay is a line-by-line port of the game's own logic, by way of the
+[gen1recomp](https://github.com/bryanthaboi/gen1recomp) engine, running in an
+embedded JavaScript guest. The 3D presentation comes from the
+[PotatoVoxel](https://github.com/ShaneMcGovernIE/potato_voxel) diorama
+renderer, reimplemented in Rust for the 3DS's GPU. Colour comes from the
+community colourisation [pokered-gbc](https://github.com/Stewmath/pokered-gbc);
+the original cartridge has none.
+
+Every one of those, and this repository, is MIT-licensed. The one thing that
+is not free is the game content, which is why you supply it yourself: the
+converter reads your cartridge dump on your machine, and **no ROM-derived
+byte is ever committed here**. The rendering tests are frame hashes, never
+pixels.
+
+## For developers
+
+**[docs/3DS.md](docs/3DS.md)** is the full walkthrough: toolchains, the build,
+the SD card layout, the Cable Club, and how the paks are cooked and shared.
+**[docs/VOXEL.md](docs/VOXEL.md)** is the design record: the content boundary,
+the guest/core split, the pak format, the quality ladder, and the
+determinism rules.
+
+The short version:
 
 ```sh
 git clone --recursive https://github.com/imantheman/pocket-voxel3d
 cd pocket-voxel3d && bun install
 
-export VOXELMON_ROM=/path/to/your/rom.gb   # SHA-1 verified before any decode
-export VOXELMON_G1R=~/code/gen1recomp      # reference checkouts: the manifest
-export VOXELMON_VOXELMOD=~/code/potato_voxel           # and the tile profiles
+export VOXELMON_ROM=/path/to/your/rom.gb      # SHA-1 verified before any decode
+export VOXELMON_G1R=~/code/gen1recomp         # reference checkout: the manifest
+export VOXELMON_VOXELMOD=~/code/potato_voxel  # reference checkout: tile profiles
 
-bun tools/voxel.ts import   # ROM → dist/voxelmon/gen/
-bun tools/voxel.ts cook     # gen/ → dist/voxelmon/voxelmon.vxpak
-bun tools/voxel.ts check    # replay the tapes, assert both rungs' hashes
-```
-
-## Run it
-
-### Nintendo 3DS
-
-**[docs/3DS.md](docs/3DS.md) is the full walkthrough** — start there if the
-3DS is what you came for. It assumes nothing and covers the SD card layout.
-Not a developer? The [`cooker`](cooker/README.txt) folder does the whole
-build from a drag-and-drop of your ROM, with nothing to install.
-
-The short version, once the three inputs in [Quick start](#quick-start) are
-exported:
-
-```sh
 bun tools/voxel.ts import   # your ROM -> dist/voxelmon/gen/
-bun tools/voxel.ts 3ds      # -> dist/voxelmon/sdcard/  (~15 min)
+bun tools/voxel.ts 3ds      # -> dist/voxelmon/sdcard/   (about 15 minutes)
+bun test                    # the suite; ROM-gated tests skip with a reason
 ```
 
-Then copy the `3ds` folder out of `dist/voxelmon/sdcard/` onto the root of
-your SD card and merge, and launch it from the Homebrew Launcher.
+Needs [Bun](https://bun.sh), a Rust toolchain, devkitPro with `3ds-dev`,
+`cargo install cargo-3ds`, and `python3`. The `cooker/` folder is the same
+build, wrapped for people who will never open a terminal; `cooker/cooker.py`
+is one readable file and is what the release zip contains.
 
-The 3DS does not hold one 31 MB pak the way the PSP does — it **streams one
-pak per map** off the card, so its content build is the cooker run 222 times
-plus a pass that hoists the pages they all share into a single 7 MB
-`common.vxat`. That is what the `3ds` command is; it also builds the `.3dsx`
-and lays both out for you. Needs devkitPro with `3ds-dev`,
-`cargo install cargo-3ds`, and `python3` for the atlas hoist.
-
-Stereoscopic 3D is real on this port, not a setting: the slider drives it.
-
-### PSP
-
-Needs the [cargo-psp](https://github.com/overdrivenpotato/rust-psp) toolchain,
-which `tools/voxel.ts` resolves and pins for you.
-
-```sh
-bun tools/voxel.ts psp --release   # the EBOOT
-```
-
-Put `EBOOT.PBP` and `voxelmon.vxpak` in one folder under `ms0:/PSP/GAME/`, or
-develop over [PSPLINK](https://github.com/pspdev/psplinkusb) with the pak
-served from `host0:`.
-
-### PS Vita
-
-Needs [VitaSDK](https://vitasdk.org) and
-[cargo-vita](https://github.com/vita-rust/cargo-vita).
-
-```sh
-export VITASDK=~/vitasdk
-bun tools/voxel.ts vita --release   # dist/voxelmon/voxelmon.vpk
-```
-
-**The VPK carries the pak inside it and needs nothing else on the console.**
-Copy it over (VitaShell's `SELECT` starts USB or FTP), press `X` on it,
-confirm — that is the whole install. It ships libvita2d's precompiled GXM
-shaders, so a stock HENkaku console does not need Sony's runtime shader
-compiler (`libshacccg.suprx`) the way most Vita 3D homebrew does.
-
-One honest difference from the PSP picture: the GE cuts sprite art out with a
-hardware alpha test and **GXM has none**, so grass, flowers and entity
-billboards blend instead of clipping, and give up their baked ambient
-occlusion to do it. Solid geometry and the Game Boy UI layer are unaffected —
-[docs/VOXEL.md §12](docs/VOXEL.md) has the per-pass accounting.
-
-## Tests
-
-```sh
-bun test                    # 226 tests; ROM-gated suites skip with a reason
-bun tools/voxel.ts check    # both quality rungs' frame hashes
-bun tests/e2e/voxel-ppsspp.ts   # GE-vs-sim parity at 11 story marks
-```
-
-## Architecture notes
-
-The full design record is [docs/VOXEL.md](docs/VOXEL.md): the content
-boundary, the guest/core split, the VXPK format, the quality ladder and its
-identity anchor, the fetch-bound GE findings, and the determinism ceremony
-that governs when a committed hash may ever be re-based. The engine arrives
-as a pinned git submodule (`vendor/pocketjs`), the OpenStrike pattern: the
-PSP host library, the audio module and the toolchain pins all come from one
-engine commit — a mainline commit, moved forward deliberately.
+This project began as a 3DS port inside Evan Wang's
+[Pocket Voxel](https://github.com/pocket-nexus/pocket-voxel), which targets
+the PSP and PS Vita, and is now developed on its own. The PSP and Vita crates
+are still in the tree but are not built or tested here.
 
 ## License
 
-MIT. The ROM, and everything derived from it, stays yours and stays local.
+MIT, see [LICENSE](LICENSE). Copyright Yifeng "Evan" Wang and Isaac Dishongh.
+The ROM, and everything made from it, stays yours and stays on your machine.
