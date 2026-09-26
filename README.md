@@ -33,17 +33,24 @@ leaves your machine.
    one listed with a link). Then pick colour or black and white. It runs for
    about 20 minutes; most of that is waiting.
 5. When it says **Done**, there is a new folder next to the bat called
-   `output`, and inside it a folder called `3ds`.
-6. Put your SD card in the PC. **Copy the `3ds` folder onto the very top level
-   of the SD card.** Windows asks whether to merge with the `3ds` folder that
-   is already there: say **yes**.
+   `output`. Open it, then open the `3ds` folder inside it. You will see two
+   things: a folder called `voxelmon` and a file called `pocketvoxel-3ds.3dsx`.
+6. Put your SD card in the PC and open it. It already has a folder called
+   `3ds` (that is where homebrew lives). **Open that `3ds` folder**, then
+   **copy the `voxelmon` folder and the `pocketvoxel-3ds.3dsx` file into it**,
+   next to whatever is already there.
+
+   Do **not** drag the whole `3ds` folder from `output` onto the card. If
+   Windows ever asks "Replace the files in the destination?" or "Merge?",
+   stop: you are one level too high. Nothing you do inside the card's own
+   `3ds` folder can remove your other homebrew.
 7. Put the card back in the 3DS. Open the **Homebrew Launcher** and pick
    **Pocket Voxel**.
 
 **Want it on the HOME menu instead?** The file `PocketVoxel3DRed.cia` is in
 the same folder as the bat. Copy it anywhere on the SD card, open **FBI** on
-the 3DS, find the file, and choose **Install**. It uses the same `3ds` folder
-from step 6, so do step 6 either way.
+the 3DS, find the file, and choose **Install**. It reads the same `voxelmon`
+folder from step 6, so do step 6 either way.
 
 **Mac:** double-click `Cook Pocket Voxel.command` instead of step 3. If the
 Mac says it is from an unidentified developer, right-click it and choose
@@ -58,9 +65,10 @@ press Return. Everything else is the same.
   or a bad dump. Only the original US Red works.
 - **The window closes at once.** Python is missing. Run the bat again; it
   offers to fetch a portable Python into its own folder. Say `Y`.
-- **The 3DS shows a black screen, or the game is missing maps.** The `3ds`
-  folder was copied partly. Copy the whole folder again; the 225 files in
-  `3ds/voxelmon/paks` belong together. Never copy one file on its own.
+- **The 3DS shows a black screen, or the game is missing maps.** The
+  `voxelmon` folder was copied partly, or landed in the wrong place. It must
+  be at `SD:/3ds/voxelmon`, and the 225 files in `SD:/3ds/voxelmon/paks`
+  belong together. Copy the whole `voxelmon` folder again; never one file.
 - **It says the SD card is full.** It needs 700 MB. Free some space and copy
   again.
 - **Homebrew Launcher does not list it.** The `.3dsx` must be at

@@ -25,9 +25,11 @@ this section. The release zip contains a `cooker` folder:
    the three data files in [§1](#the-two-reference-checkouts), each with its
    URL and licence -- and asks. Then it asks whether you want colour
    ([§6](#6-about-the-colour)). Then it cooks.
-3. **Copy the `3ds` folder it leaves in `cooker/output/` onto the root of
-   your SD card** and merge. It offers to do that itself if it can see the
-   card.
+3. **Open the `3ds` folder on your SD card and copy `voxelmon` and
+   `pocketvoxel-3ds.3dsx` from `cooker/output/3ds/` into it.** Not the
+   whole `3ds` folder: a merge or replace prompt answered wrong takes the
+   rest of your homebrew with it. It offers to do the copy itself if it
+   can see the card.
 
 `cooker/cooker.py` is the whole program, ordinary Python written to be
 read before it is run; `cooker/README.txt` covers the rest. Nothing is
@@ -189,11 +191,13 @@ logo is makerom's own Homebrew splash, not one of Nintendo's.
 
 ## 5. Put it on the card
 
-**Copy the `3ds` folder from `dist/voxelmon/sdcard/` onto the root of your
-SD card, and say yes when it asks to merge.**
+**Open the `/3ds` folder on your SD card and copy `voxelmon` and
+`pocketvoxel-3ds.3dsx` from `dist/voxelmon/sdcard/3ds/` into it.**
 
 That is the whole install. Your card already has a `/3ds` folder if you run
-homebrew, and merging adds ours beside whatever is in it.
+homebrew; ours goes beside whatever is in it. Do not drop the whole `3ds`
+folder onto the card and answer a merge/replace prompt: a wrong answer
+replaces the folder, and your other homebrew with it.
 
 If you would rather place the files yourself, this is where they go:
 

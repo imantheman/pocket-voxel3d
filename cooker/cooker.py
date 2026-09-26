@@ -619,9 +619,12 @@ def main():
     say()
 
     # 7. the card
-    say("Done. Copy the `3ds` folder in output/ onto the ROOT of your SD card and")
-    say("merge when asked. Then launch it from the Homebrew Launcher (or install")
-    say("the .cia with FBI; it reads the same paks).")
+    say("Done. Open your SD card, open the `3ds` folder that is already on it,")
+    say("and copy the `voxelmon` folder and `pocketvoxel-3ds.3dsx` from output/3ds/")
+    say("INTO it, beside whatever is there. (Do not drag the whole `3ds` folder onto")
+    say("the card; if the PC asks about merging or replacing, you are one level")
+    say("too high.) Then launch it from the Homebrew Launcher, or install the .cia")
+    say("with FBI; it reads the same paks.")
     if not args.no_sd:
         drives = removable_drives()
         if drives:

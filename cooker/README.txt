@@ -41,10 +41,17 @@ WHAT IT ASKS
 WHAT YOU GET
 ------------
     output/
-      3ds/                        <- copy THIS onto the root of your SD card
-        pocketvoxel-3ds.3dsx        and merge when asked
-        voxelmon/paks/              225 files, about 620 MB
+      3ds/
+        pocketvoxel-3ds.3dsx      <- copy THIS FILE and the voxelmon FOLDER
+        voxelmon/paks/               INTO the 3ds folder that is already on
+                                     your SD card (225 files, about 620 MB)
       SOURCES.txt                 <- everything that went into the build
+
+Open the SD card, open its `3ds` folder, and put `voxelmon` and
+`pocketvoxel-3ds.3dsx` inside it, beside whatever else is there. Do not
+drag the whole `3ds` folder onto the card: if the PC asks about merging
+or replacing, you are one level too high, and a wrong answer there can
+wipe your other homebrew.
 
 Then open the Homebrew Launcher on the 3DS and pick Pocket Voxel. Or
 install PocketVoxel3DRed.cia (it is in this folder) with FBI for a HOME
