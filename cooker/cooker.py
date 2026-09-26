@@ -84,8 +84,7 @@ BUN_SHA256 = {
 #                               a community colourisation of the Red
 #                               disassembly. Only fetched if you say yes to
 #                               colour.
-#   potato_voxel  (no license file; its author has said this project may
-#                  use it -- asked and answered September 2026)
+#   potato_voxel  (used with its author's permission, September 2026)
 #     data/voxel_heights.lua    hand-authored shape pins: which tile is a
 #                               roof, a wall, a ledge, and the building
 #                               templates. Nothing in it comes from a ROM.

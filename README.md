@@ -91,11 +91,12 @@ renderer, reimplemented in Rust for the 3DS's GPU. Colour comes from the
 community colourisation [pokered-gbc](https://github.com/Stewmath/pokered-gbc);
 the original cartridge has none.
 
-Every one of those, and this repository, is MIT-licensed. The one thing that
-is not free is the game content, which is why you supply it yourself: the
-converter reads your cartridge dump on your machine, and **no ROM-derived
-byte is ever committed here**. The rendering tests are frame hashes, never
-pixels.
+This repository, gen1recomp and pokered-gbc are MIT-licensed. PotatoVoxel's
+shape table is used with its author's permission, and its renderer is
+reimplemented here, not copied. The one thing that is not free is the game content, which is why you supply it
+yourself: the converter reads your cartridge dump on your machine, and **no
+ROM-derived byte is ever committed here**. The rendering tests are frame
+hashes, never pixels.
 
 ## For developers
 
