@@ -18,3 +18,12 @@ node_modules/
 # the cooker app's downloads and result
 cooker/_work/
 cooker/output/
+
+# This machine's scratch: one-off patch scripts, the deploy/check scripts
+# with local paths in them, and what they leave behind.
+/apply_*.py
+/patch_*.py
+/cc_*
+/.pv_build_id
+/gamedata.json
+__pycache__/

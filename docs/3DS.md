@@ -91,8 +91,8 @@ It reads exactly three files out of them:
 ## 2. Get the code
 
 ```sh
-git clone --recursive https://github.com/<you>/pocket-voxel
-cd pocket-voxel
+git clone --recursive https://github.com/imantheman/pocket-voxel3d
+cd pocket-voxel3d
 bun install
 ```
 

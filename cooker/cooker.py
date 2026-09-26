@@ -57,7 +57,7 @@ from pathlib import Path
 # The game's own source. When this file is run from inside a checkout of it
 # (the `cooker/` folder of the repository) that checkout is used and nothing
 # is fetched; on its own, it fetches this ref as a zip (about 2 MB).
-POCKET_VOXEL_REPO = "pocket-stack/pocket-voxel"
+POCKET_VOXEL_REPO = "imantheman/pocket-voxel3d"
 POCKET_VOXEL_REF = "main"
 
 # Bun runs the importer and the cooker. MIT. https://bun.sh

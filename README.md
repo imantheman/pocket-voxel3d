@@ -96,8 +96,8 @@ Needs [Bun](https://bun.sh) and a Rust toolchain. Device builds need one
 console toolchain each; both are covered under [Run it](#run-it).
 
 ```sh
-git clone --recursive https://github.com/pocket-stack/pocket-voxel
-cd pocket-voxel && bun install
+git clone --recursive https://github.com/imantheman/pocket-voxel3d
+cd pocket-voxel3d && bun install
 
 export VOXELMON_ROM=/path/to/your/rom.gb   # SHA-1 verified before any decode
 export VOXELMON_G1R=~/code/gen1recomp      # reference checkouts: the manifest
