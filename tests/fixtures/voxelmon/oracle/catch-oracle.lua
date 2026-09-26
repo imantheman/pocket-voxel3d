@@ -1,7 +1,7 @@
 -- Catch micro-oracle: loads the REFERENCE gen1recomp Catching.lua (with its
 -- Status dependency's non-pure requires stubbed) and prints `caught shakes`
 -- for a fixed input matrix. tests/voxel-rules.test.ts runs the identical
--- matrix through the TS port and compares line-for-line. Invoked as:
+-- matrix through the TS port and compares the results. Invoked as:
 --   luajit catch-oracle.lua <gen1recomp-root>
 
 local root = assert(arg[1], "usage: luajit catch-oracle.lua <gen1recomp-root>")

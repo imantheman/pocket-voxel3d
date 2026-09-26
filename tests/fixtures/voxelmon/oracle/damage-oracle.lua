@@ -1,7 +1,7 @@
 -- Damage micro-oracle: loads the REFERENCE gen1recomp Damage.lua (with its
 -- non-pure requires stubbed) and prints `damage typeMult missed` for a fixed
 -- input matrix. tests/voxel-rules.test.ts runs the identical matrix through
--- the TS port and compares line-for-line. Invoked as:
+-- the TS port and compares the results. Invoked as:
 --   luajit damage-oracle.lua <gen1recomp-root>
 
 local root = assert(arg[1], "usage: luajit damage-oracle.lua <gen1recomp-root>")
