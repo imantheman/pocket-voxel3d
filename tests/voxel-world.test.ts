@@ -7945,14 +7945,39 @@ describe("the CYCLING ROAD's forced bike and downhill roll", () => {
     const ow = game.overworld;
     const save = game.save as any;
     save.inventory.BICYCLE = 1;
+    // placed on it, with no step: that is how the gate door hands you over
     ow.setMap("ROUTE_16", tile().x, tile().y, "left");
-    ow.onStepComplete();
     expect(save.onBike).toBe(true);
     expect(save.forcedBike).toBe(true);
     expect(game.stackKinds()).toEqual(["overworld"]);
     ow.setMap("ROUTE_16_GATE_1F", 5, 8, "right");
     expect(save.forcedBike).toBe(false);
   });
+
+  for (const [gate, x, y, road, ex, ey] of [
+    ["ROUTE_16_GATE_1F", 1, 8, "ROUTE_16", 25, 10],
+    ["ROUTE_18_GATE_1F", 1, 4, "ROUTE_18", 41, 8],
+  ] as const) {
+    test.skipIf(!hasGen)(`walking out of ${gate}'s west door puts you on the BICYCLE`, () => {
+      const game = fmGame();
+      const ow = game.overworld;
+      const save = game.save as any;
+      save.inventory.BICYCLE = 1;
+      // in from the road's east side, on foot: the warp in remembers it
+      ow.setMap(gate, x, y, "left");
+      ow.rememberOutdoor(road, ex, ey);
+      for (let i = 0; i < 400 && ow.map.id !== road; i++) game.tick(VOX_BTN.left);
+      expect(ow.map.id).toBe(road);
+      for (let i = 0; i < 120; i++) game.tick(0);
+      expect(save.onBike).toBe(true);
+      expect(save.forcedBike).toBe(true);
+      expect(ow.player.onBike).toBe(true);
+      // and the road will not let you off it
+      game.toggleBike();
+      expect(topText(game)).toContain("off");
+      expect(save.onBike).toBe(true);
+    });
+  }
 
   test.skipIf(!hasGen)("a walker is turned back", () => {
     const game = fmGame();
@@ -8003,6 +8028,26 @@ describe("the CYCLING ROAD's forced bike and downhill roll", () => {
     walking.overworld.setMap("ROUTE_17", x, y, "down");
     for (let i = 0; i < 240; i++) walking.tick(0);
     expect(walking.overworld.player.cellY).toBe(y);
+  });
+
+  test.skipIf(!hasGen)("with the circle pad's free movement the hill rolls too, and UP climbs it", () => {
+    const game = fmGame();
+    const ow = game.overworld as any;
+    (game.save as any).onBike = true;
+    ow.setMap("ROUTE_17", 5, 5, "down");
+    const [x, y] = slopeCell(ow);
+    ow.setMap("ROUTE_17", x, y + 2, "down");
+    ow.syncBike();
+    ow.freeYaw = 0; // what the 3DS host sets: free movement on
+    expect(ow.freeMoveActive()).toBe(true);
+    for (let i = 0; i < 120; i++) game.tick(0);
+    const rolled = ow.player.cellY;
+    expect(rolled).toBeGreaterThan(y + 2);
+    // holding up is the only way back up the hill
+    ow.setMap("ROUTE_17", x, y + 3, "down");
+    ow.syncBike();
+    for (let i = 0; i < 40; i++) game.tick(VOX_BTN.up);
+    expect(ow.player.cellY).toBeLessThan(y + 3);
   });
 });
 

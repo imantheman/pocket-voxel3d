@@ -565,6 +565,7 @@ export class Overworld implements ScriptWorld {
     if (FORCED_BIKE_CLEAR_MAPS.includes(mapId) || !(this.save as { onBike?: boolean }).onBike) {
       (this.save as { forcedBike?: boolean }).forcedBike = false;
     }
+    this.forcedBikeOnEntry();
     // And the same for the water. A warp can land the player on it (the
     // Seafoam drops) and a reload can put them back on it with the flag
     // cleared; either way the CELL is the authority, not the flag. After the
@@ -2869,6 +2870,29 @@ export class Overworld implements ScriptWorld {
     if (this.runner.isRunning() || this.scriptMoves.length > 0 || this.engaging) return false;
     const input = this.shell.input;
     return !(input.isDown("a") || input.isDown("b"));
+  }
+
+  /**
+   * EnterMap's unconditional CheckForceBikeOrSurf (home/overworld.asm;
+   * gen1recomp OverworldController.lua:458). The CYCLING ROAD's force tiles
+   * on Routes 16 and 18 ARE the cells the gate's west doors put you on, and
+   * a warp arrival followed by the door walk-out never completes a step --
+   * so waiting for onStepComplete let everyone leave the gate on foot, and
+   * a walker is never pulled downhill. Placed on one with a BICYCLE in the
+   * bag, you are on it. Only the mount runs here: a walker cannot reach
+   * these cells past the gate guard, and a textbox pushed from inside a
+   * warp's midpoint would sit under the fade that is about to pop.
+   */
+  private forcedBikeOnEntry(): void {
+    const tiles = this.forcedMovement()?.tiles?.[this.map.id];
+    const p = this.player;
+    if (!p || !tiles?.some((t) => t.mode === "bike" && t.x === p.cellX && t.y === p.cellY)) return;
+    const save = this.save as { onBike?: boolean; forcedBike?: boolean; inventory?: Record<string, number> };
+    if (!save.onBike && (save.inventory?.BICYCLE ?? 0) <= 0) return;
+    save.onBike = true;
+    save.forcedBike = true;
+    this.syncBike();
+    this.syncSurfSong();
   }
 
   /** The grid poll's half of the pull: one step south when nothing is held. */

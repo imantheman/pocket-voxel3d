@@ -11755,6 +11755,7 @@ class Overworld {
     if (FORCED_BIKE_CLEAR_MAPS.includes(mapId) || !this.save.onBike) {
       this.save.forcedBike = false;
     }
+    this.forcedBikeOnEntry();
     this.syncSurf();
     visit(this.save, mapId);
     MAP_SCRIPTS[mapId]?.onEnter?.(this, this.save);
@@ -13311,6 +13312,19 @@ out!`]);
       return false;
     const input = this.shell.input;
     return !(input.isDown("a") || input.isDown("b"));
+  }
+  forcedBikeOnEntry() {
+    const tiles = this.forcedMovement()?.tiles?.[this.map.id];
+    const p = this.player;
+    if (!p || !tiles?.some((t) => t.mode === "bike" && t.x === p.cellX && t.y === p.cellY))
+      return;
+    const save = this.save;
+    if (!save.onBike && (save.inventory?.BICYCLE ?? 0) <= 0)
+      return;
+    save.onBike = true;
+    save.forcedBike = true;
+    this.syncBike();
+    this.syncSurfSong();
   }
   rollDownhill() {
     if (this.dirHeld() || !this.slopeRolls())
