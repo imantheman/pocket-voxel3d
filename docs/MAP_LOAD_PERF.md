@@ -60,6 +60,17 @@ Each of these is its own commit with the reasoning in the message.
    read-ahead is adopted rather than discarded when the player crosses; the
    nearest seam is read first rather than the first neighbour in slot order.
 
+5. **Merge textured faces into rectangles at cook time** (`cook/rectmerge.ts`,
+   2026-09-29). The building emitter merged faces along one axis only, one
+   texel tall, so a flat 8x8 patch of wall was eight quads. Merging
+   neighbours whose texture coordinates are the same affine map of position
+   changes no texel (checked in `pocketvoxel-sim`: 0.1-0.2% of pixels move,
+   almost all a texel boundary landing one pixel over). Saffron went from
+   1.49M to 0.83M vertices and stopped being a huge map: it was re-reading
+   and rebuilding itself every chunk crossed, the stall every few steps.
+   Celadon went from 0.86M to 0.48M. No map is huge now; the biggest is
+   Saffron. `examples/map_budget.rs` prints any map's numbers.
+
 ## Where it stands
 
 Indoor maps are roughly 4-5x less I/O than they were. The worst outdoor maps
@@ -86,9 +97,9 @@ actually lands has not been confirmed on hardware yet.
 
 3. **If it does land and it is still slow: the geometry is too big.** Celadon
    is 94% raw terrain that genuinely gets drawn, so neither the atlas work nor
-   the plan touches it. That needs cook-time mesh reduction — merging coplanar
-   quads, dropping interior faces — which is a different job in
-   `voxelmon/cook/`.
+   the plan touches it. The coplanar-quad merge (item 5 above) took Celadon
+   down 44%; what is left of this is dropping interior faces between
+   neighbouring buildings, a different job in `voxelmon/cook/`.
 
 ## Dead ends, so they are not tried again
 

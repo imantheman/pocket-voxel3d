@@ -422,6 +422,10 @@ pub fn render(list: &DrawList, pak: &Pak, cache: &AtlasCache) -> Frame {
 
     for item in &list.items {
         match item {
+            // The 3DS host's screen-space pictures (title, intro, battle
+            // pics) and animated tile quads postdate this rasterizer; it
+            // does not draw them yet. Map geometry is unaffected.
+            Item::ScreenPic { .. } | Item::AnimQuad { .. } => {}
             Item::SkyBands {
                 colors,
                 horizon_row,

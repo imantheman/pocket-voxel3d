@@ -23,6 +23,8 @@ import {
   paletteBase,
 } from "../voxelmon/cook/atlas.ts";
 import { cook, DEFAULT_MAPS } from "../voxelmon/cook/cli.ts";
+import { mergeUvRects } from "../voxelmon/cook/rectmerge.ts";
+import { FACE, type Quad } from "../voxelmon/cook/geom.ts";
 import {
   gen1recompDir,
   GEN_DIR,
@@ -868,5 +870,87 @@ describe("voxel cook: the intro's torn paper", () => {
     };
     expect(inked(6, 40, 80)).toBeGreaterThan(20);
     expect(inked(7, 80, 120)).toBeGreaterThan(20);
+  });
+});
+
+describe("rectmerge: faces become rectangles only where no texel can change", () => {
+  /**
+   * One south-facing facade row the way buildings.ts emits it: voxel row y,
+   * columns x..x+n, sampling sheet texels (tx..tx+n, ty) with the 0.05 inset.
+   */
+  function row(x: number, y: number, n: number, tx: number, ty: number, over: Partial<Quad> = {}): Quad {
+    const [u0, u1, v0, v1] = [tx + 0.05, tx + n - 0.05, ty + 0.05, ty + 1 - 0.05];
+    return {
+      c: [[x, y, 4], [x + n, y, 4], [x + n, y + 1, 4], [x, y + 1, 4]],
+      uv: [[u0, v1], [u1, v1], [u1, v0], [u0, v0]],
+      shade: 1,
+      f: FACE.south,
+      own: true,
+      ...over,
+    };
+  }
+  /** Texel sampled at a point of a quad, by bilinear interpolation of its uv. */
+  function texelAt(q: Quad, x: number, y: number): [number, number] {
+    const xs = q.c.map((c) => c[0]);
+    const ys = q.c.map((c) => c[1]);
+    const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+    const s = (x - x0) / (x1 - x0);
+    const t = (y - y0) / (y1 - y0);
+    const pick = (cx: number, cy: number) => q.uv![q.c.findIndex((c) => c[0] === cx && c[1] === cy)];
+    const lerp = (a: [number, number], b: [number, number], k: number) => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k] as [number, number];
+    const p = lerp(lerp(pick(x0, y0), pick(x1, y0), s), lerp(pick(x0, y1), pick(x1, y1), s), t);
+    return [Math.floor(p[0]), Math.floor(p[1])];
+  }
+
+  test("a facade tile of eight strips is one quad, sampling every texel it did", () => {
+    // rows going UP the wall read texel rows going UP the sheet (ty falls)
+    const strips = Array.from({ length: 8 }, (_, i) => row(0, i, 8, 16, 23 - i));
+    const out = mergeUvRects(strips);
+    expect(out.length).toBe(1);
+    for (let y = 0; y < 8; y++) {
+      for (let x = 0; x < 8; x++) {
+        const src = strips[y]!;
+        expect(texelAt(out[0]!, x + 0.5, y + 0.5)).toEqual(texelAt(src, x + 0.5, y + 0.5));
+      }
+    }
+  });
+
+  test("rows that are not consecutive in the sheet, or run the wrong way, stay apart", () => {
+    expect(mergeUvRects([row(0, 0, 8, 16, 23), row(0, 1, 8, 16, 20)]).length).toBe(2);
+    expect(mergeUvRects([row(0, 0, 8, 16, 23), row(0, 1, 8, 16, 24)]).length).toBe(2);
+    expect(mergeUvRects([row(0, 0, 8, 16, 23), row(0, 1, 8, 24, 22)]).length).toBe(2);
+  });
+
+  test("a different shade, facing or plane never merges", () => {
+    expect(mergeUvRects([row(0, 0, 8, 16, 23), row(0, 1, 8, 16, 22, { shade: 0.78 })]).length).toBe(2);
+    expect(mergeUvRects([row(0, 0, 8, 16, 23), row(0, 1, 8, 16, 22, { f: FACE.north })]).length).toBe(2);
+    const off = row(0, 1, 8, 16, 22);
+    off.c = off.c.map(([x, y]) => [x, y, 5]) as Quad["c"];
+    expect(mergeUvRects([row(0, 0, 8, 16, 23), off]).length).toBe(2);
+  });
+
+  test("nothing crosses the 8px lattice, so nothing crosses a chunk line", () => {
+    const strips = Array.from({ length: 10 }, (_, i) => row(0, i, 8, 16, 30 - i));
+    const out = mergeUvRects(strips);
+    expect(out.length).toBe(2);
+    for (const q of out) {
+      const ys = q.c.map((c) => c[1]);
+      expect(Math.floor(Math.min(...ys) / 8)).toBe(Math.floor((Math.max(...ys) - 1e-6) / 8));
+    }
+  });
+
+  test("AO-shaded, tree and point-sampled quads pass through untouched, in place", () => {
+    const ao = row(0, 0, 8, 16, 23, { shade: [1, 1, 0.8, 0.8] });
+    const tree = row(0, 1, 8, 16, 22, { tree: true });
+    const point: Quad = { c: row(0, 2, 8, 0, 0).c, u: 3, v: 4, shade: 1, f: FACE.south };
+    const a = row(0, 4, 8, 16, 19);
+    const b = row(0, 5, 8, 16, 18);
+    const out = mergeUvRects([ao, tree, point, a, b]);
+    expect(out.length).toBe(4);
+    expect(out[0]).toBe(ao);
+    expect(out[1]).toBe(tree);
+    expect(out[2]).toBe(point);
+    const ys = out[3]!.c.map((c) => c[1]);
+    expect([Math.min(...ys), Math.max(...ys)]).toEqual([4, 6]);
   });
 });

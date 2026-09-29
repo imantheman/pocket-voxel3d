@@ -20,6 +20,10 @@ import {
 import type { GameMap } from "./data.ts";
 import { cullHidden, FACE, keyOf, PULLED, type Quad, type SGrid } from "./geom.ts";
 import { RING } from "./structures.ts";
+import { mergeUvRects } from "./rectmerge.ts";
+
+/** A/B control: `VOXEL_NO_RECTMERGE=1` cooks the terrain unmerged. */
+const NO_RECTMERGE = process.env.VOXEL_NO_RECTMERGE === "1";
 
 // VoxelMod ChunkMesher.lua:86 INSET — a sliver of a texel, deliberately not
 // half a texel (half squeezes 8 texels into a 7-texel range and drifts).
@@ -655,7 +659,10 @@ export function runGeometry(map: GameMap, S: SGrid): MapGeometry {
   // camera, so their cooked facing is not their drawn facing.
   for (const [key, quads] of stamps) stamps.set(key, cullHidden(quads));
   return {
-    terrain: cullHidden(terrain),
+    // Faces merged into rectangles where no texel can change (rectmerge.ts):
+    // what brings an all-building city like Saffron back under the huge-map
+    // line, so the console builds it once instead of re-streaming it.
+    terrain: NO_RECTMERGE ? cullHidden(terrain) : mergeUvRects(cullHidden(terrain)),
     treeCoarse: cullHidden(treeCoarse),
     treeBox: cullHidden(treeBox),
     water: cullHidden(water),

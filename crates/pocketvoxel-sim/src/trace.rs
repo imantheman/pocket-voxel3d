@@ -132,7 +132,8 @@ pub fn parse(text: &str) -> Result<Vec<Entry>, String> {
                     .and_then(|v| v.parse().ok())
                     .ok_or_else(|| err("bad op code"))?;
                 let args = tok
-                    .map(|v| v.parse::<i32>().map_err(|_| err("bad op arg")))
+                    // u32 args (a tint's 0xffffffff) arrive unsigned; keep the bits
+                    .map(|v| v.parse::<i64>().map(|x| x as i32).map_err(|_| err("bad op arg")))
                     .collect::<Result<Vec<_>, _>>()?;
                 out.push(Entry::Op {
                     code,
