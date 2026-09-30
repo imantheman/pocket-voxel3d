@@ -66,6 +66,7 @@ import { BAKE_PAGE_H, bakeGround, BAKE_MAX_Y, BAKE_TEXELS, foldFacades } from ".
 import { packMap, runGeometry, type MapGeometry, type UvTransform } from "./mesh.ts";
 import { writePak } from "./pak.ts";
 import { planColour, Redpp, type ColourPlan, type PageOwner } from "./redpp.ts";
+import { planGbc, useGbc } from "./gbc.ts";
 import { analyseMap } from "./structures.ts";
 
 export const DEFAULT_MAPS = [
@@ -105,7 +106,10 @@ export interface CookResult {
 export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): CookResult {
   const gen = loadGen(genDir);
   const profile = loadProfile();
-  const pack = loadRedpp(genDir);
+  // Yellow has colours of its own (cook/gbc.ts); the RED++ pack is Red's,
+  // keyed by Red's sprite ids, and must not touch it even when a cooker
+  // folder still holds it from an earlier Red cook
+  const pack = (gen.palettes as { cgbBase?: unknown }).cgbBase ? null : loadRedpp(genDir);
   const redpp = pack ? new Redpp(pack) : null;
 
   const maps = mapNames.map((name) => {
@@ -451,7 +455,9 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
         terrainPage,
         pages: pageOwners,
       })
-    : null;
+    : useGbc(gen)
+      ? planGbc(gen, pageOwners, packedMaps.map((m) => m.mapId)) // Yellow: its GBC palettes (cook/gbc.ts)
+      : null;
   const palettes = buildPalettes(gen, colour?.palettes ?? []);
 
   // --- the ground bake (docs/VOXEL.md §4a): per eligible chunk, one page ---

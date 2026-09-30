@@ -21,6 +21,7 @@ import {
 } from "../../contracts/spec/voxel-spec.ts";
 import { ANIM_STEPS, FLOWER_FRAMES, WATER_OFFSETS, defaultAnimatedTiles } from "./classify.ts";
 import { type Art, artOf, type GenData, PX_CLEAR, sheetKeyOf, type TilesetDef } from "./data.ts";
+import { paletteColours } from "./gbc.ts";
 import { type Redpp, SHADES } from "./redpp.ts";
 
 // ---------------------------------------------------------------------------
@@ -94,7 +95,8 @@ export function sgbPalette(rgb: [number, number, number][]): Uint32Array {
 export function buildPalettes(gen: GenData, extra: Uint32Array[] = []): Uint32Array[] {
   const defaults = Object.keys(ATLAS_KIND).map(() => gbPalette());
   const sgb = gen.palettes.order.map((name) => {
-    const rgb = gen.palettes.palettes[name];
+    // Yellow's GBC colours when it carries them (cook/gbc.ts), else the SGB set
+    const rgb = paletteColours(gen, name);
     if (!rgb) throw new Error(`palettes.json order names a missing palette: ${name}`);
     return sgbPalette(rgb);
   });

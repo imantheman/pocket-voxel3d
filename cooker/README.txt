@@ -1,18 +1,18 @@
 POCKET VOXEL COOKER
 ===================
 
-This turns YOUR Pokemon Red or Blue ROM into the files the 3DS game needs. There is
+This turns YOUR Pokemon Red, Blue or Yellow ROM into the files the 3DS game needs. There is
 no download of the game anywhere, because the game is built from your
 cartridge, on your computer. This folder does that for you.
 
 You need:  a New 3DS (or New 2DS XL) with homebrew, an SD card with 400 MB
-free, your own US Pokemon Red or Blue .gb file, and an internet connection for the
+free, your own US Pokemon Red, Blue or Yellow file, and an internet connection for the
 first run. Budget 20 minutes, most of it waiting.
 
 
 WINDOWS
 -------
-Drag your .gb file onto "Cook Pocket Voxel.bat". A window opens and walks
+Drag your .gb file (Yellow's is .gbc) onto "Cook Pocket Voxel.bat". A window opens and walks
 you through it. If Python is not on the PC it offers to fetch the official
 portable one into this folder first.
 
@@ -34,6 +34,8 @@ WHAT IT ASKS
    checksum written in cooker.py).
 2. Whether you want colour. Red and Blue are black and white; the colour is
    a community colourisation (pokered-gbc). Say no for the original look.
+   Yellow is not asked: it is a Game Boy Color game and uses its own
+   colours, read from your ROM.
 3. At the end, whether to copy the result straight onto your SD card if
    it can see one.
 
