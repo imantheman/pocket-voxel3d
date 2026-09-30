@@ -1,7 +1,9 @@
 # Cooking Blue as well as Red — a plan
 
-**Status: plan only. No code in this document has been written, and nothing
-in the Red path has been changed.**
+**Status: built, 2026-09-29, with one change of shape from this plan: Blue
+is its own title (its own `.3dsx`, `.cia`, icon and save) rather than a
+mode of one binary, and the two share one pak set. docs/3DS.md §4c is how
+it works now; this document is kept as the investigation behind it.**
 
 ## Bottom line
 

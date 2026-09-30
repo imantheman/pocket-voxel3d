@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pocket Voxel cooker: drop your Pokemon Red ROM on it, get an SD card folder.
+"""Pocket Voxel cooker: drop your Pokemon Red or Blue ROM on it, get an SD card folder.
 
     Windows:  drag your .gb file onto "Cook Pocket Voxel.bat"
     Mac:      double-click "Cook Pocket Voxel.command", then drag the .gb
@@ -13,7 +13,7 @@ Delete the folder and the machine is exactly as it was.
 
 What it does, in order:
 
-  1. Checks the ROM is the real US Pokemon Red (by SHA-1) and refuses
+  1. Checks the ROM is the real US Pokemon Red or Blue (by SHA-1) and refuses
      anything else. The ROM never leaves your machine and nothing from it
      is in this folder or on GitHub -- that is the whole point of cooking
      on YOUR computer.
@@ -97,12 +97,24 @@ DATA_FILES = {
                  "e32037dd9bd72bb14ac2449fc964f385732ae5429c37de861426fd168586962d", 1061899, "MIT"),
     "colour": ("gen1recomp", "data/palettes_gbc.lua", GEN1RECOMP,
                "e194c72de82a0a520aced960b04d95325735b4ee63e9b071ad3e96bcf6615b0c", 109470, "MIT"),
+    # Blue's import manifest, fetched only for a Blue ROM.
+    "manifest_blue": ("gen1recomp", "tools/rom_manifest_blue.json", GEN1RECOMP,
+                      "85eee6abc21df45b0528ab31ae05d933bac7f1d4c080769eec3fd5fae65cf5dd", 1061465, "MIT"),
     "shapes": ("potato_voxel", "data/voxel_heights.lua", POTATO_VOXEL,
                "20e0f26e1163e4861da760d21b6f71e41a66a52813119b2a1b15ae3a8c78f934", 255629, "used with the author's permission"),
 }
 
-# The only ROM this works with. The importer checks it again before decoding.
+# The only ROMs this works with. The importer checks again before decoding.
 RED_SHA1 = "ea9bcae617fdf159b045185467ae58b2e4a48b9a"
+BLUE_SHA1 = "d7037c83e1ae5b39bde3c30787637ba1d4c48ce2"
+GAMES = {
+    RED_SHA1: {"id": "red", "label": "Red", "manifest": "manifest",
+               "gamedata": "gamedata.json", "overlay": "version_red.vxat",
+               "dsx": "pocketvoxel-3ds.3dsx", "cia": "PocketVoxel3DRed.cia"},
+    BLUE_SHA1: {"id": "blue", "label": "Blue", "manifest": "manifest_blue",
+                "gamedata": "gamedata_blue.json", "overlay": "version_blue.vxat",
+                "dsx": "pocketvoxel-3ds-blue.3dsx", "cia": "PocketVoxel3DBlue.cia"},
+}
 
 # ---------------------------------------------------------------------------
 
@@ -362,16 +374,19 @@ def copy_tree_with_progress(src, dst, label):
     say(f"  {label}: {len(files)} files, {mb(total)}")
 
 
-def install_to_card(root, card_dir):
+def install_to_card(root, card_dir, game):
     """Merge output/3ds into <root>/3ds the way the docs say to."""
     dest = Path(root) / "3ds"
     paks = dest / "voxelmon" / "paks"
-    # The paks, gamedata.json, common.vxat and index.txt are ONE artifact:
-    # clear the old set first so nothing from a previous build survives
-    # beside the new one. save.lua lives one folder up and is untouched.
+    # The map paks, common.vxat, index.txt and THIS game's dataset and
+    # overlay are one artifact: clear them first so nothing from a previous
+    # build survives beside the new one. The OTHER game's own files stay --
+    # Red and Blue share the map paks, so a card with both keeps both.
+    # Saves live one folder up and are untouched.
+    others = {f for g in GAMES.values() if g["id"] != game["id"] for f in (g["gamedata"], g["overlay"])}
     if paks.exists():
         for p in paks.iterdir():
-            if p.is_file():
+            if p.is_file() and p.name not in others:
                 p.unlink()
     copy_tree_with_progress(card_dir, dest, "copying to the card")
     say(f"  done: {dest}")
@@ -395,7 +410,7 @@ def open_folder(path):
 def find_rom(arg, yes):
     path = arg
     if not path:
-        say("Which ROM? Drag your Pokemon Red .gb file into this window and press Return.")
+        say("Which ROM? Drag your Pokemon Red or Blue .gb file into this window and press Return.")
         if yes:
             die("no ROM given (pass --rom PATH with --yes)")
         try:
@@ -410,16 +425,17 @@ def find_rom(arg, yes):
         die(f"not a file: {rom}")
     say(f"Checking {rom.name} ...")
     digest = sha1_of(rom)
-    if digest != RED_SHA1:
-        die(f"that is not the US Pokemon Red ROM.",
-            f"\n  its SHA-1 is  {digest}\n  Red's is      {RED_SHA1}",
-            "\nOnly Red works. Blue, Yellow, other regions, ROM hacks, and files with a header",
-            "or trailing bytes will all be refused here. Nothing was read from it.")
-    say("  it is Pokemon Red (US). Good.")
-    return rom
+    game = GAMES.get(digest)
+    if not game:
+        die(f"that is not the US Pokemon Red or Blue ROM.",
+            f"\n  its SHA-1 is  {digest}\n  Red's is      {RED_SHA1}\n  Blue's is     {BLUE_SHA1}",
+            "\nOnly those two work. Yellow, other regions, colour hacks, ROM hacks, and files",
+            "with a header or trailing bytes will all be refused here. Nothing was read from it.")
+    say(f"  it is Pokemon {game['label']} (US). Good.")
+    return rom, game
 
 
-def write_sources(repo_desc, rom, colour, downloads):
+def write_sources(repo_desc, rom, colour, downloads, game):
     lines = [
         "Pocket Voxel -- what went into this build",
         "=" * 44,
@@ -428,7 +444,7 @@ def write_sources(repo_desc, rom, colour, downloads):
         "",
         "YOUR ROM (never copied, never uploaded; read on this machine only):",
         f"  {rom}",
-        f"  SHA-1 {RED_SHA1}  (Pokemon Red, US)",
+        f"  SHA-1 {[s for s, g in GAMES.items() if g is game][0]}  (Pokemon {game['label']}, US)",
         "",
         "GAME SOURCE:",
         f"  {repo_desc}",
@@ -439,7 +455,7 @@ def write_sources(repo_desc, rom, colour, downloads):
         "",
         "DATA FILES FETCHED FROM THE PROJECTS THIS BUILDS ON:",
     ]
-    for key in ("manifest", "colour", "shapes"):
+    for key in (game["manifest"], "colour", "shapes"):
         folder, rel, (repo, commit), sha, size, lic = DATA_FILES[key]
         if key == "colour" and not colour:
             lines.append(f"  (colour pack NOT fetched -- this build is Game Boy grayscale)")
@@ -480,7 +496,7 @@ def write_sources(repo_desc, rom, colour, downloads):
 def main():
     global _log
     ap = argparse.ArgumentParser(add_help=True)
-    ap.add_argument("rom", nargs="?", help="your Pokemon Red .gb file")
+    ap.add_argument("rom", nargs="?", help="your Pokemon Red or Blue .gb file")
     ap.add_argument("--rom", dest="rom_opt")
     ap.add_argument("--yes", action="store_true", help="accept every default without asking")
     ap.add_argument("--colour", "--color", dest="colour", action="store_true")
@@ -503,7 +519,8 @@ def main():
     say()
 
     # 1. the ROM
-    rom = find_rom(args.rom_opt or args.rom, args.yes)
+    rom, game = find_rom(args.rom_opt or args.rom, args.yes)
+    wanted = (game["manifest"], "shapes")
     say()
 
     # 2. the plan
@@ -515,13 +532,13 @@ def main():
         say(f"      github.com/oven-sh/bun/releases  -- checksum pinned in cooker.py")
     if not repo_ready:
         say(f"  * the game's source, {POCKET_VOXEL_REPO} @ {POCKET_VOXEL_REF}  (~2 MB, MIT)")
-    for key in ("manifest", "shapes"):
+    for key in wanted:
         folder, rel, (repo, commit), sha, size, lic = DATA_FILES[key]
         if data_file_path(key).exists():
             continue
         say(f"  * {rel} from {repo}  ({mb(size)}, {lic})")
         say(f"      commit {commit[:12]} -- checksum pinned in cooker.py")
-    if bun_ready and repo_ready and all(data_file_path(k).exists() for k in ("manifest", "shapes")):
+    if bun_ready and repo_ready and all(data_file_path(k).exists() for k in wanted):
         say("  (nothing -- everything is already here from a previous run)")
     say()
     say("It does not download a game. It builds one, on this machine, out of your ROM.")
@@ -536,7 +553,7 @@ def main():
         colour = True
     else:
         say("Colour?")
-        say("  Pokemon Red is a black-and-white game. The colour Pocket Voxel can show")
+        say(f"  Pokemon {game['label']} is a black-and-white game. The colour Pocket Voxel can show")
         say("  comes from pokered-gbc, a community colourisation of the Red disassembly,")
         say(f"  fetched as one {mb(DATA_FILES['colour'][4])} file from gen1recomp (MIT).")
         say("  Say no and the maps come out in Game Boy grayscale, like the original.")
@@ -549,7 +566,7 @@ def main():
     say(f"  bun: {bun}")
     repo, repo_desc = ensure_repo()
     say(f"  source: {repo}")
-    ensure_data_file("manifest")
+    ensure_data_file(game["manifest"])
     ensure_data_file("shapes")
     colour_file = data_file_path("colour")
     if colour:
@@ -565,6 +582,7 @@ def main():
     env["VOXELMON_G1R"] = str(WORK / "gen1recomp")
     env["VOXELMON_VOXELMOD"] = str(WORK / "potato_voxel")
     env["VOXELMON_PYTHON"] = sys.executable
+    env["VOXELMON_VERSION"] = game["id"]
     env["PYTHONIOENCODING"] = "utf-8"
     say(f"Cooking {PAK_COUNT} maps. Two to fifteen minutes depending on the machine,")
     say("and a couple of GB of disk while it works. The lines scrolling past are")
@@ -590,7 +608,7 @@ def main():
 
     # 6. collect
     card_src = repo / "dist" / "voxelmon" / "sdcard" / "3ds"
-    if not (card_src / "voxelmon" / "paks" / "gamedata.json").exists():
+    if not (card_src / "voxelmon" / "paks" / game["gamedata"]).exists():
         die(f"the cook finished but left no card image at {card_src}")
     shutil.rmtree(OUTPUT, ignore_errors=True)
     OUTPUT.mkdir()
@@ -603,27 +621,32 @@ def main():
     shutil.rmtree(repo / "dist" / "voxelmon" / "sdcard", ignore_errors=True)
     # A release ships the console binary next to this file; a checkout may
     # have built one. Either way the card wants it at /3ds/.
-    for candidate in (HERE / "pocketvoxel-3ds.3dsx",
-                      repo / "crates/pocketvoxel-3ds/target/armv6k-nintendo-3ds/release/pocketvoxel-3ds.3dsx"):
+    built = ("crates/pocketvoxel-3ds/target/armv6k-nintendo-3ds/release/pocketvoxel-3ds.3dsx"
+             if game["id"] == "red" else "dist/voxelmon/pocketvoxel-3ds-blue.3dsx")
+    for stray in card.glob("*.3dsx"):
+        stray.unlink()
+    for candidate in (HERE / game["dsx"], repo / built):
         if candidate.exists():
-            shutil.copyfile(candidate, card / "pocketvoxel-3ds.3dsx")
+            shutil.copyfile(candidate, card / game["dsx"])
             break
-    write_sources(repo_desc, rom, colour, None)
+    write_sources(repo_desc, rom, colour, None, game)
     paks = sorted((card / "voxelmon" / "paks").glob("*.vxpak"))
     size = sum(p.stat().st_size for p in (card / "voxelmon" / "paks").iterdir())
     say(f"  {len(paks)} paks, {mb(size)} -> {card}")
-    if not (card / "pocketvoxel-3ds.3dsx").exists():
-        say("  (no pocketvoxel-3ds.3dsx was next to the cooker; put the one from the")
-        say("   release into the 3ds folder yourself, or install the .cia instead)")
+    if not (card / game["dsx"]).exists():
+        say(f"  (no {game['dsx']} was next to the cooker; put the one from the")
+        say(f"   release into the 3ds folder yourself, or install {game['cia']} instead)")
     say()
 
     # 7. the card
     say("Done. Open your SD card, open the `3ds` folder that is already on it,")
-    say("and copy the `voxelmon` folder and `pocketvoxel-3ds.3dsx` from output/3ds/")
+    say(f"and copy the `voxelmon` folder and `{game['dsx']}` from output/3ds/")
     say("INTO it, beside whatever is there. (Do not drag the whole `3ds` folder onto")
     say("the card; if the PC asks about merging or replacing, you are one level")
-    say("too high.) Then launch it from the Homebrew Launcher, or install the .cia")
-    say("with FBI; it reads the same paks.")
+    say("too high.) Then launch it from the Homebrew Launcher, or install")
+    say(f"{game['cia']} with FBI; it reads the same paks.")
+    say("Red and Blue share the map files: if the other game is already on the")
+    say("card, copying this one over it is fine, and both keep working.")
     if not args.no_sd:
         drives = removable_drives()
         if drives:
@@ -647,7 +670,7 @@ def main():
                 if shutil.disk_usage(pick).free < need + (16 << 20):
                     say(f"  {pick} does not have {mb(need)} free. Skipped.")
                 else:
-                    install_to_card(pick, card)
+                    install_to_card(pick, card, game)
     if not args.no_open:
         open_folder(OUTPUT)
     say()

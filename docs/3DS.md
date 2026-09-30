@@ -187,6 +187,51 @@ letterforms, and `tools/3ds_banner3d.py` rebuilds the banner's 3D scene so
 the cube under the title is real geometry, not a picture of one. The boot
 logo is makerom's own Homebrew splash, not one of Nintendo's.
 
+## 4c. Blue
+
+Blue is a second title beside Red, not a mode of it: its own `.3dsx` and
+`.cia`, its own HOME-menu icon and banner (Red's art with every red made
+blue), its own title ID, and its own save (`save_blue.lua`, the name
+gen1recomp uses). It reads the **same** map paks Red does.
+
+That works because the two US ROMs are the same game data almost
+everywhere: of the 3274 symbols gen1recomp locates, 3251 sit at the same
+address in both, and the 23 that move are one bank shifted by a single byte
+after the credits text. Maps, tilesets, sprites and pics are identical. What
+differs is each game's dataset -- encounters, text, credits, default names,
+read from its own ROM -- and one graphic, the title's version ribbon. So
+the paks folder holds one shared set plus, per game:
+
+| | Red | Blue |
+|---|---|---|
+| dataset | `gamedata.json` | `gamedata_blue.json` |
+| title ribbon overlay | `version_red.vxat` | `version_blue.vxat` |
+| save (one folder up) | `save.lua` | `save_blue.lua` |
+
+A cook of one game never deletes the other's files, so cooking Blue onto a
+card that has Red leaves Red working, and the other way round. Cook both
+with the same version of this repository: the datasets name atlas pages by
+position.
+
+The importer knows the game from the ROM's SHA-1, so pointing
+`VOXELMON_ROM` at a Blue ROM is all it takes; `VOXELMON_VERSION=blue` says
+so explicitly. Blue imports into `dist/voxelmon/blue/gen` with
+gen1recomp's `tools/rom_manifest_blue.json`.
+
+```sh
+export VOXELMON_ROM=/path/to/your/blue.gb
+bun tools/cook3ds.ts                       # shared paks + Blue's dataset and overlay
+cd crates/pocketvoxel-3ds
+CARGO_TARGET_DIR=target-blue cargo 3ds build --release --features blue
+cd ../..
+bash tools/make_cia.sh "" blue             # -> PocketVoxel3DBlue.cia and
+                                           #    pocketvoxel-3ds-blue.3dsx
+```
+
+Red and Blue link over the Cable Club with each other exactly as two Reds
+do: the link checks only its own protocol version, and both run the same
+game code.
+
 ---
 
 ## 5. Put it on the card

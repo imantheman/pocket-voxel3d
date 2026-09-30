@@ -1,12 +1,12 @@
 POCKET VOXEL COOKER
 ===================
 
-This turns YOUR Pokemon Red ROM into the files the 3DS game needs. There is
+This turns YOUR Pokemon Red or Blue ROM into the files the 3DS game needs. There is
 no download of the game anywhere, because the game is built from your
 cartridge, on your computer. This folder does that for you.
 
 You need:  a New 3DS (or New 2DS XL) with homebrew, an SD card with 700 MB
-free, your own US Pokemon Red .gb file, and an internet connection for the
+free, your own US Pokemon Red or Blue .gb file, and an internet connection for the
 first run. Budget 20 minutes, most of it waiting.
 
 
@@ -32,7 +32,7 @@ WHAT IT ASKS
 1. Whether it may download its tools (about 45 MB, listed on screen with
    the URL and license of each one -- every download is checked against a
    checksum written in cooker.py).
-2. Whether you want colour. Pokemon Red is black and white; the colour is
+2. Whether you want colour. Red and Blue are black and white; the colour is
    a community colourisation (pokered-gbc). Say no for the original look.
 3. At the end, whether to copy the result straight onto your SD card if
    it can see one.
