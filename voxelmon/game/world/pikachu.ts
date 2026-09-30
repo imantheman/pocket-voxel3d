@@ -491,6 +491,13 @@ export function billsBeat(w: PikaWorld, stage: string): void {
       npc.facing = "up";
       billsEmotion(w, npc, QUESTION);
     });
+  } else if (stage === "park") {
+    // PewterJigglypuff's end: the song sends a healthy Pikachu to sleep
+    // where it stands (DisablePikachuFollowingPlayer) for the rest of the
+    // visit
+    if (starterInParty(w.save)?.status) return;
+    npc.parked = true;
+    w.pikaSceneOver = false;
   } else if (stage === "exit") {
     if (!w.pikaBillsScene) return;
     npc.facing = "left";

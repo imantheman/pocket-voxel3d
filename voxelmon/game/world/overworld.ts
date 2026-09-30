@@ -51,7 +51,7 @@ import {
   SAFARI_STEPS,
   SAFARI_WALK_IN_STEPS,
 } from "./safari.ts";
-import { nurseGreetScript } from "./nurses.ts";
+import { chanseyScript, nurseGreetScript } from "./nurses.ts";
 import { cableClubScript } from "./cableclub.ts";
 import {
   hostTransport, LinkSession, LINK_ROOM_MAP, LINK_SEATS, LINK_TABLE,
@@ -1252,6 +1252,7 @@ export class Overworld implements ScriptWorld {
       itemBallScript(this.map.id, npc?.def) ??
       martGreetScript(this.shell.data as never, this.map.def.label, textConst) ??
       nurseGreetScript(textConst) ??
+      chanseyScript(textConst) ??
       cableClubScript(textConst);
     if (script && !this.runner.isRunning()) {
       if (npc) npc.frozen = true;

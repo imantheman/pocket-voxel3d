@@ -650,6 +650,16 @@ export function yellowScripts(base: Record<string, MapScript>): Record<string, M
       ])),
     },
     // SafariZoneGate_2.asm: Yellow lets the short and the broke in anyway
+    // PewterPokecenter.asm: Yellow's CooltrainerF, and the lullaby
+    PEWTER_POKECENTER: {
+      talk: {
+        TEXT_PEWTERPOKECENTER_JIGGLYPUFF: [
+          ...((base.PEWTER_POKECENTER?.talk?.TEXT_PEWTERPOKECENTER_JIGGLYPUFF ?? []) as ScriptRow[]),
+          ["pikachu_bills", "park"],
+        ] as ScriptRow[],
+        TEXT_PEWTERPOKECENTER_COOLTRAINER_F: [["face_player"], ["show_text", "_PewterPokecenterText3"]] as ScriptRow[],
+      },
+    },
     // BillsHouse.asm: Pikachu's beats round the cell separator
     BILLS_HOUSE: {
       talk: {

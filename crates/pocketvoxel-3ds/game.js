@@ -1684,6 +1684,11 @@ function billsBeat(w, stage) {
       npc.facing = "up";
       billsEmotion(w, npc, QUESTION);
     });
+  } else if (stage === "park") {
+    if (starterInParty(w.save)?.status)
+      return;
+    npc.parked = true;
+    w.pikaSceneOver = false;
   } else if (stage === "exit") {
     if (!w.pikaBillsScene)
       return;
@@ -12194,6 +12199,15 @@ function yellowScripts(base) {
         }
       ]))
     },
+    PEWTER_POKECENTER: {
+      talk: {
+        TEXT_PEWTERPOKECENTER_JIGGLYPUFF: [
+          ...base.PEWTER_POKECENTER?.talk?.TEXT_PEWTERPOKECENTER_JIGGLYPUFF ?? [],
+          ["pikachu_bills", "park"]
+        ],
+        TEXT_PEWTERPOKECENTER_COOLTRAINER_F: [["face_player"], ["show_text", "_PewterPokecenterText3"]]
+      }
+    },
     BILLS_HOUSE: {
       talk: {
         TEXT_BILLSHOUSE_BILL_POKEMON: withBillsBeats(base.BILLS_HOUSE?.talk?.TEXT_BILLSHOUSE_BILL_POKEMON) ?? [],
@@ -15021,6 +15035,14 @@ function fillBadgeName(text, badge) {
 function isNurseClerk(textConst) {
   return textConst.endsWith("_NURSE");
 }
+function chanseyScript(textConst) {
+  if (!textConst.endsWith("POKECENTER_CHANSEY"))
+    return null;
+  return [
+    ["show_text", "_NurseChanseyText"],
+    ["play_cry", "CHANSEY"]
+  ];
+}
 function nurseGreetScript(textConst) {
   if (!isNurseClerk(textConst))
     return null;
@@ -16284,7 +16306,7 @@ the PC.`, () => {
   }
   showMapText(textConst, npc, onDone) {
     const talk = talkScript(this.map.id, textConst);
-    const script2 = (typeof talk === "function" ? talk(this, this.save) : talk) ?? itemBallScript(this.map.id, npc?.def) ?? martGreetScript(this.shell.data, this.map.def.label, textConst) ?? nurseGreetScript(textConst) ?? cableClubScript(textConst);
+    const script2 = (typeof talk === "function" ? talk(this, this.save) : talk) ?? itemBallScript(this.map.id, npc?.def) ?? martGreetScript(this.shell.data, this.map.def.label, textConst) ?? nurseGreetScript(textConst) ?? chanseyScript(textConst) ?? cableClubScript(textConst);
     if (script2 && !this.runner.isRunning()) {
       if (npc)
         npc.frozen = true;

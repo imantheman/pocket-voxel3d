@@ -17,6 +17,19 @@ export function isNurseClerk(textConst: string): boolean {
   return textConst.endsWith("_NURSE");
 }
 
+/**
+ * Yellow's Chansey beside every nurse (engine/events/pokecenter_chansey.asm
+ * PokecenterChanseyText): its line, then its cry. Every one is named
+ * TEXT_*POKECENTER_CHANSEY; Red and Blue have none.
+ */
+export function chanseyScript(textConst: string): ScriptRow[] | null {
+  if (!textConst.endsWith("POKECENTER_CHANSEY")) return null;
+  return [
+    ["show_text", "_NurseChanseyText"],
+    ["play_cry", "CHANSEY"],
+  ];
+}
+
 export function nurseGreetScript(textConst: string): ScriptRow[] | null {
   if (!isNurseClerk(textConst)) return null;
   // romText fallbacks kept verbatim from nurseHeal: _PokemonCenterWelcomeText

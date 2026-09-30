@@ -36,7 +36,7 @@ import {
 import { IntroState } from "../voxelmon/game/ui/intro.ts";
 import { surfingPikachuInParty } from "../voxelmon/game/ui/surfingstate.ts";
 import * as Pika from "../voxelmon/game/world/pikachu.ts";
-import { nurseGreetScript } from "../voxelmon/game/world/nurses.ts";
+import { chanseyScript, nurseGreetScript } from "../voxelmon/game/world/nurses.ts";
 import { PIKA_MAP_PAUSE_IGT, PIKA_MAP_SURF_SELECT } from "../voxelmon/game/world/script.ts";
 
 const genDir = join(import.meta.dir, "../dist/voxelmon/yellow/gen");
@@ -710,6 +710,23 @@ describe("Yellow: Pikachu follows you", () => {
     met.save.flags.EVENT_GOT_SS_TICKET = true;
     Pika.enterBillsHouse(met);
     expect(met.pikaBillsPending).toBeFalsy();
+  });
+
+  test.skipIf(!hasYellow)("Jigglypuff's song puts it to sleep; the nurses' Chansey answers", () => {
+    useScriptsFor("yellow");
+    const pewter = mapScript("PEWTER_POKECENTER")!.talk!;
+    expect((pewter.TEXT_PEWTERPOKECENTER_JIGGLYPUFF as unknown[][]).at(-1)).toEqual(["pikachu_bills", "park"]);
+    expect(pewter.TEXT_PEWTERPOKECENTER_COOLTRAINER_F).toContainEqual(["show_text", "_PewterPokecenterText3"]);
+    const w = pikaWorld("up");
+    Pika.billsBeat(w, "park");
+    expect(Pika.findFollower(w)!.parked).toBe(true);
+    w.player.targetX = 5; w.player.targetY = 6;
+    tick(w, 2);
+    expect(Pika.findFollower(w)!.parked).toBe(true); // asleep for the visit
+    expect(chanseyScript("TEXT_CERULEANPOKECENTER_CHANSEY")).toEqual([
+      ["show_text", "_NurseChanseyText"], ["play_cry", "CHANSEY"],
+    ]);
+    expect(chanseyScript("TEXT_CERULEANPOKECENTER_NURSE")).toBeNull();
   });
 
   test.skipIf(!hasYellow)("Red has no follower", () => {
