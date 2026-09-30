@@ -46,11 +46,15 @@ const THREE_DSX = join(
 
 /**
  * What each game keeps for itself inside the shared paks folder. Red and
- * Blue cook to the SAME map paks, common.vxat and index.txt -- the maps and
- * every graphic but one are the same data in both ROMs -- so a player with
- * both games carries one set. Each game adds its own dataset and a one-page
- * atlas overlay holding its title ribbon, the only graphic that differs.
- * Red keeps the name its dataset has always had.
+ * Blue cook to the SAME map paks, common.vxat and index.txt, so a player
+ * with both games carries one set. Measured by cooking both ROMs and
+ * comparing all 222 paks: the page layout is identical, and what differs is
+ * five atlas pages (the title ribbon, Blue's Jigglypuff in place of Red's
+ * Nidorino in the three intro frames, and the UI page, which carries the
+ * slot machine's reel symbols), the palette table (Blue's logo and slot
+ * palettes) and the sound programs. Each game adds its own dataset and an
+ * overlay holding exactly those. Red keeps the name its dataset has always
+ * had.
  */
 export const VERSION_FILES: Record<GameVersion, { gamedata: string; overlay: string; threeDsx: string }> = {
   red: { gamedata: "gamedata.json", overlay: "version_red.vxat", threeDsx: "pocketvoxel-3ds.3dsx" },
@@ -59,19 +63,30 @@ export const VERSION_FILES: Record<GameVersion, { gamedata: string; overlay: str
 
 const SHARED_BIT = 0x80000000;
 
+/** The atlas pages whose art differs between Red and Blue (measured, see
+ * VERSION_FILES): the title ribbon, the intro's three fighter frames, and
+ * the UI page with the slot reel symbols. */
+export function versionPages(gd: unknown): number[] {
+  const a = (gd as { atlas?: { picTitle?: Record<string, number>; picIntro?: Record<string, number>; uiPage?: number } })
+    .atlas ?? {};
+  return [a.uiPage, a.picTitle?.version, a.picIntro?.nido1, a.picIntro?.nido2, a.picIntro?.nido3]
+    .filter((p): p is number => typeof p === "number" && p >= 0);
+}
+
 /**
- * The version overlay (paks/version_<v>.vxat): the atlas pages this game
- * draws differently from the other, which the console swaps in over the
- * shared set as it reads each pak (crates/pocketvoxel-3ds main.rs
- * apply_overlay). Today that is the one page named `title/version`.
+ * The version overlay (paks/version_<v>.vxat): what this game has that the
+ * other does not, which the console swaps in over the shared set
+ * (crates/pocketvoxel-3ds main.rs apply_overlay): the listed atlas pages as
+ * it reads each pak, the palette table likewise, and the sound at boot.
  *
- *   "VXVO" u16 format(1) u16 count
+ *   "VXVO" u16 format(2) u16 count  u32 vpalLen  u32 audiLen
  *   count x { u16 page, w, h, kind, frames, 0; u32 frameLen }
  *   then each page's texels (frameLen * frames), 16-aligned
+ *   then the VPAL section verbatim (16-aligned), then AUDI verbatim
  *
- * Pages are copied byte for byte out of a cooked pak (resolving a shared
- * page against common.vxat, as pak.rs does), so the overlay is exactly the
- * page the rest of the set would have carried.
+ * Everything is copied byte for byte out of a cooked pak (resolving a
+ * shared page against common.vxat, as pak.rs does), so the overlay is
+ * exactly what this game's own cook of the set carries.
  */
 export function writeOverlay(paksDir: string, pages: number[], out: string): number {
   const pakName = readFileSync(join(paksDir, "index.txt"), "utf8").split("\n")[0]!.split(" ")[1]!;
@@ -79,10 +94,16 @@ export function writeOverlay(paksDir: string, pages: number[], out: string): num
   const common = existsSync(join(paksDir, "common.vxat")) ? readFileSync(join(paksDir, "common.vxat")) : null;
   const nsec = d.readUInt16LE(6);
   let atls = -1;
+  const section: Record<string, Buffer> = {};
   for (let s = 0; s < nsec; s++) {
     const e = 16 + s * 16;
-    if (d.toString("latin1", e, e + 4) === "ATLS") atls = d.readUInt32LE(e + 4);
+    const tag = d.toString("latin1", e, e + 4);
+    const off = d.readUInt32LE(e + 4);
+    section[tag] = d.subarray(off, off + d.readUInt32LE(e + 8));
+    if (tag === "ATLS") atls = off;
   }
+  const vpal = section.VPAL ?? Buffer.alloc(0);
+  const audi = section.AUDI ?? Buffer.alloc(0);
   if (atls < 0) throw new Error(`no ATLS section in ${pakName}.vxpak`);
   const n = d.readUInt16LE(atls);
   const entries: Buffer[] = [];
@@ -108,13 +129,15 @@ export function writeOverlay(paksDir: string, pages: number[], out: string): num
     entries.push(e);
     blobs.push(Buffer.from(src.subarray(at, at + total)));
   }
-  const head = Buffer.alloc(8);
+  const head = Buffer.alloc(16);
   head.write("VXVO", 0, "latin1");
-  head.writeUInt16LE(1, 4);
+  head.writeUInt16LE(2, 4);
   head.writeUInt16LE(pages.length, 6);
+  head.writeUInt32LE(vpal.length, 8);
+  head.writeUInt32LE(audi.length, 12);
   const parts: Buffer[] = [head, ...entries];
-  let len = 8 + entries.length * 16;
-  for (const b of blobs) {
+  let len = 16 + entries.length * 16;
+  for (const b of [...blobs, vpal, audi]) {
     const pad = (16 - (len % 16)) % 16;
     parts.push(Buffer.alloc(pad), b);
     len += pad + b.length;
@@ -247,12 +270,11 @@ export async function cook3ds(only?: string[]): Promise<number> {
   writeFileSync(join(PAKS, "index.txt"), `${index}\n`);
   console.log(`  ${files.gamedata} + index.txt for ${names.length} maps`);
 
-  // This game's title ribbon, which the other game's pages must not show.
-  const ribbon = (merged as { atlas?: { picTitle?: Record<string, number> } }).atlas?.picTitle?.version;
-  if (ribbon !== undefined) {
-    const n = writeOverlay(PAKS, [ribbon], join(PAKS, files.overlay));
-    console.log(`  ${files.overlay}: the title ribbon, page ${ribbon} (${n} bytes)`);
-  }
+  // This game's own pages, palettes and sound, which the other game's
+  // cook of the shared set would get wrong.
+  const own = versionPages(merged);
+  const n = writeOverlay(PAKS, own, join(PAKS, files.overlay));
+  console.log(`  ${files.overlay}: pages ${own.join(", ")} + palettes + sound (${n} bytes)`);
 
   // --- 4. the card ---------------------------------------------------------
   rmSync(CARD, { recursive: true, force: true });

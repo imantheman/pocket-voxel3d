@@ -187,38 +187,74 @@ const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks/version_red.vxat";
 #[cfg(feature = "blue")]
 const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks/version_blue.vxat";
 
-/// This game's own atlas pages (paks/version_<game>.vxat, written by
-/// tools/cook3ds.ts writeOverlay): page index -> page. Whatever the shared
-/// set holds at those indices -- the other game's title ribbon, if it was
-/// cooked last -- this game draws its own.
+/// This game's own overlay (paks/version_<game>.vxat, written by
+/// tools/cook3ds.ts writeOverlay): the atlas pages, palette table and sound
+/// whose bytes differ between Red and Blue. Whatever the shared set holds --
+/// the other game's, if it was cooked last -- this game uses its own.
 static mut OVERLAY: Vec<(usize, pak::AtlasPage<'static>)> = Vec::new();
+static mut OVERLAY_PALETTES: Vec<[u32; 256]> = Vec::new();
+static mut OVERLAY_AUDIO: Option<&'static [u8]> = None;
 
-/// Parse the overlay file: "VXVO" u16 format u16 count, then count x 16-byte
-/// entries {page, w, h, kind, frames, 0: u16; frame_len: u32}, then each
-/// page's texels, 16-aligned, in entry order.
-fn parse_overlay(d: &'static [u8]) -> Vec<(usize, pak::AtlasPage<'static>)> {
-    let mut out = Vec::new();
-    if d.len() < 8 || &d[0..4] != b"VXVO" { return out; }
+/// Parse the overlay file: "VXVO" u16 format u16 count, and for format 2
+/// u32 vpal_len u32 audi_len; then count x 16-byte entries {page, w, h,
+/// kind, frames, 0: u16; frame_len: u32}; then each page's texels, then the
+/// VPAL section, then AUDI -- each 16-aligned.
+#[allow(static_mut_refs)]
+fn parse_overlay(d: &'static [u8]) {
+    if d.len() < 8 || &d[0..4] != b"VXVO" { return; }
     let u16_at = |o: usize| u16::from_le_bytes([d[o], d[o + 1]]);
+    let u32_at = |o: usize| u32::from_le_bytes([d[o], d[o + 1], d[o + 2], d[o + 3]]);
+    let format = u16_at(4);
     let count = u16_at(6) as usize;
-    if d.len() < 8 + count * 16 { return out; }
-    let mut at = 8 + count * 16;
+    let head = if format >= 2 { 16 } else { 8 };
+    if d.len() < head + count * 16 { return; }
+    let (vpal_len, audi_len) = if format >= 2 { (u32_at(8) as usize, u32_at(12) as usize) } else { (0, 0) };
+    let mut at = head + count * 16;
+    let mut pages = Vec::new();
     for i in 0..count {
-        let e = 8 + i * 16;
+        let e = head + i * 16;
         let (page, w, h, kind, frames) = (u16_at(e), u16_at(e + 2), u16_at(e + 4), u16_at(e + 6), u16_at(e + 8));
-        let frame_len = u32::from_le_bytes([d[e + 12], d[e + 13], d[e + 14], d[e + 15]]);
+        let frame_len = u32_at(e + 12);
         at += (16 - at % 16) % 16;
         let total = frame_len as usize * frames.max(1) as usize;
-        if at + total > d.len() { break; }
-        out.push((page as usize, pak::AtlasPage::from_parts(w, h, kind, frames, frame_len, &d[at..at + total])));
+        if at + total > d.len() { return; }
+        pages.push((page as usize, pak::AtlasPage::from_parts(w, h, kind, frames, frame_len, &d[at..at + total])));
         at += total;
     }
-    out
+    let mut palettes = Vec::new();
+    if vpal_len >= 2 {
+        at += (16 - at % 16) % 16;
+        if at + vpal_len > d.len() { return; }
+        let v = &d[at..at + vpal_len];
+        let n = u16::from_le_bytes([v[0], v[1]]) as usize;
+        if 2 + n * 1024 <= v.len() {
+            for k in 0..n {
+                let mut pal = [0u32; 256];
+                for (j, entry) in pal.iter_mut().enumerate() {
+                    let o = 2 + k * 1024 + j * 4;
+                    *entry = u32::from_le_bytes([v[o], v[o + 1], v[o + 2], v[o + 3]]);
+                }
+                palettes.push(pal);
+            }
+        }
+        at += vpal_len;
+    }
+    let mut audio = None;
+    if audi_len > 0 {
+        at += (16 - at % 16) % 16;
+        if at + audi_len <= d.len() { audio = Some(&d[at..at + audi_len]); }
+    }
+    unsafe {
+        OVERLAY = pages;
+        OVERLAY_PALETTES = palettes;
+        OVERLAY_AUDIO = audio;
+    }
 }
 
-/// Swap this game's own pages in over whatever the shared set carried. A
-/// page is only replaced by one of the same shape, so an overlay from some
-/// other cook can never hand the renderer a page it cannot upload.
+/// Swap this game's own pages and palettes in over whatever the shared set
+/// carried. Only like for like: a page of the same shape, a palette table of
+/// the same length -- so an overlay from some other cook can never hand the
+/// renderer something it cannot use.
 #[allow(static_mut_refs)]
 fn apply_overlay(p: &mut pak::Pak<'static>) {
     for (i, page) in unsafe { OVERLAY.iter() } {
@@ -227,6 +263,10 @@ fn apply_overlay(p: &mut pak::Pak<'static>) {
                 *slot = *page;
             }
         }
+    }
+    let pals = unsafe { &OVERLAY_PALETTES };
+    if !pals.is_empty() && pals.len() == p.palettes.len() {
+        p.palettes.clone_from(pals);
     }
 }
 
@@ -2911,8 +2951,14 @@ fn main() {
     match std::fs::read(OVERLAY_PATH) {
         Ok(v) if !v.is_empty() => {
             let d: &'static [u8] = Box::leak(v.into_boxed_slice());
-            unsafe { OVERLAY = parse_overlay(d); }
-            dlog(&format!("[pv] overlay {} page(s) from {}", unsafe { OVERLAY.len() }, OVERLAY_PATH));
+            parse_overlay(d);
+            dlog(&format!(
+                "[pv] overlay {} page(s), {} palette(s), {} KB sound from {}",
+                unsafe { OVERLAY.len() },
+                unsafe { OVERLAY_PALETTES.len() },
+                unsafe { OVERLAY_AUDIO.map(|a| a.len() / 1024).unwrap_or(0) },
+                OVERLAY_PATH,
+            ));
         }
         _ => dlog(&format!("[pv] overlay: none at {}", OVERLAY_PATH)),
     }
@@ -2934,7 +2980,12 @@ fn main() {
         unsafe { load_map_pak("PALLET_TOWN", None); }
     }
     let mut pak_static: &'static pak::Pak<'static> = unsafe { cur_pak() };
-    let audi: &'static [u8] = Box::leak(pak_static.audio.to_vec().into_boxed_slice());
+    // This game's own sound programs when its overlay carries them (Red's
+    // and Blue's differ in a few bytes); else the boot pak's.
+    let audi: &'static [u8] = match unsafe { OVERLAY_AUDIO } {
+        Some(a) => a,
+        None => Box::leak(pak_static.audio.to_vec().into_boxed_slice()),
+    };
     unsafe { voxel::init(gd_static, audi); voxel::load_save_file(); }
 
 

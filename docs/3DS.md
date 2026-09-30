@@ -197,16 +197,23 @@ gen1recomp uses). It reads the **same** map paks Red does.
 That works because the two US ROMs are the same game data almost
 everywhere: of the 3274 symbols gen1recomp locates, 3251 sit at the same
 address in both, and the 23 that move are one bank shifted by a single byte
-after the credits text. Maps, tilesets, sprites and pics are identical. What
-differs is each game's dataset -- encounters, text, credits, default names,
-read from its own ROM -- and one graphic, the title's version ribbon. So
-the paks folder holds one shared set plus, per game:
+after the credits text. Cooking both ROMs and comparing all 222 paks: the
+page layout is identical, and all that differs is five atlas pages (the
+title ribbon; the intro's fighter, Nidorino in Red and Jigglypuff in Blue,
+three frames; and the UI page, which holds the slot machine's reel
+symbols), the palette table (Blue's title logo and slot palettes) and the
+sound programs. Everything else -- encounters, credits, default names --
+is each game's own dataset. So the paks folder holds one shared set plus,
+per game:
 
 | | Red | Blue |
 |---|---|---|
 | dataset | `gamedata.json` | `gamedata_blue.json` |
-| title ribbon overlay | `version_red.vxat` | `version_blue.vxat` |
+| overlay: those 5 pages, palettes, sound | `version_red.vxat` | `version_blue.vxat` |
 | save (one folder up) | `save.lua` | `save_blue.lua` |
+
+Each game's console build swaps its own overlay in over the shared set, so
+whichever game was cooked last, both play exactly as their own ROM does.
 
 A cook of one game never deletes the other's files, so cooking Blue onto a
 card that has Red leaves Red working, and the other way round. Cook both
