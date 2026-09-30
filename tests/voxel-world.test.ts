@@ -5550,6 +5550,61 @@ describe("free movement", () => {
     expect(ow.player.facing).toBe("up");
   });
 
+  test.skipIf(!hasGen)("a slanted walk over a map edge crosses it, not slides along it", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    ow.setMap("PALLET_TOWN", 5, 6, "down");
+    // a top-row cell of Pallet with open cells either side and Route 1 above
+    const m = ow.map;
+    let x0 = -1;
+    for (let cx = 1; cx < m.widthCells - 2 && x0 < 0; cx++) {
+      if (m.isWalkableCell(cx, 0) && m.isWalkableCell(cx + 1, 0) && m.isWalkableCell(cx - 1, 0)) x0 = cx;
+    }
+    expect(x0).toBeGreaterThan(0);
+    for (const sx of [70, -70]) {
+      ow.setMap("PALLET_TOWN", x0, 0, "up");
+      game.setCamYaw(0);
+      // up and a good way to one side: about 30 degrees off north
+      game.setStick(sx, 130, 156);
+      for (let i = 0; i < 90 && ow.map.id === "PALLET_TOWN"; i++) game.tick(0);
+      expect(ow.map.id).toBe("ROUTE_1");
+    }
+  });
+
+  test.skipIf(!hasGen)("a slanted walk onto a ledge hops it", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld;
+    ow.setMap("ROUTE_1", 5, 5, "down");
+    const m = ow.map;
+    const ledges = ((romData!.field as any).ledges as any[]).filter(
+      (l) => (l.tileset ?? "OVERWORLD") === m.def.tileset && l.facing === "down" && l.input === "down");
+    // a cell above a down-ledge, with open cells left and right and a
+    // landing two below
+    let spot: [number, number] | null = null;
+    for (let cy = 2; cy < m.heightCells - 3 && !spot; cy++) {
+      for (let cx = 2; cx < m.widthCells - 2 && !spot; cx++) {
+        const standing = m.cellTile(cx, cy);
+        const front = m.cellTile(cx, cy + 1);
+        if (!ledges.some((l) => l.standingTile === standing && l.ledgeTile === front)) continue;
+        if (!m.isWalkableCell(cx, cy) || !m.isWalkableCell(cx, cy + 2)) continue;
+        if (!m.isWalkableCell(cx - 1, cy) || !m.isWalkableCell(cx + 1, cy)) continue;
+        if (ow.npcs.some((n: any) => Math.abs(n.cellX - cx) < 2 && Math.abs(n.cellY - cy) < 3)) continue;
+        spot = [cx, cy];
+      }
+    }
+    expect(spot).not.toBeNull();
+    const [cx, cy] = spot!;
+    ow.setMap("ROUTE_1", cx, cy, "down");
+    game.setCamYaw(0);
+    game.setStick(60, -130, 156); // down and to the right
+    let hopped = false;
+    for (let i = 0; i < 60 && !hopped; i++) {
+      game.tick(0);
+      if ((ow.player as any).hopFrames > 0 || ow.player.cellY >= cy + 2) hopped = true;
+    }
+    expect(hopped).toBe(true);
+  });
+
   test.skipIf(!hasGen)("forward follows the camera, not the map", () => {
     const game = makeMenuGame();
     const ow = game.overworld;

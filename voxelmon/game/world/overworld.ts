@@ -27,7 +27,7 @@ import { LAST_MAP_REWRITES, rewrittenLastMap } from "./lastmap.ts";
 import { martGreetScript } from "./marts.ts";
 import { bikeAllowed, type BikeRiding } from "./bike.ts";
 import { visit } from "./fly.ts";
-import { cellOf, freeDir, quantize, slide, stickPush } from "./freemove.ts";
+import { FREE_AXIS_LEAN, cellOf, freeDir, quantize, slide, stickPush } from "./freemove.ts";
 import { repelled } from "../rules/items.ts";
 import { canAt, DOOR_BLOCK, openCan, rollFirst, SECOND_LOCK, trashData } from "./trashcans.ts";
 import { findHidden, hiddenItemNear } from "./hiddenitems.ts";
@@ -773,6 +773,22 @@ export class Overworld implements ScriptWorld {
     const speed = (16 / p.stepSpeed()) * (stick ? stick.throw : 1);
     const r = slide(p.px, p.py, dir[0] * speed, dir[1] * speed, (x, y) => this.freeOpen(x, y));
     p.facing = quantize(dir[0], dir[1]);
+    // Each axis the push leans on and could not move along gets asked on
+    // its own: is that a map edge to cross, a ledge to hop, a boulder, a
+    // door mat? Asking only when the body got nowhere at all missed every
+    // angled approach -- the other axis still slid, so a walk into the
+    // top of a route at a slant ran along the edge instead of over it, and
+    // a slanted walk onto a ledge slid along the ledge.
+    const blockedX = Math.abs(dir[0]) >= FREE_AXIS_LEAN && r.px === p.px;
+    const blockedY = Math.abs(dir[1]) >= FREE_AXIS_LEAN && r.py === p.py;
+    const axes: Dir[] = [];
+    if (blockedX) axes.push(dir[0] > 0 ? "right" : "left");
+    if (blockedY) axes.push(dir[1] > 0 ? "down" : "up");
+    // the axis pushed harder goes first
+    if (axes.length === 2 && Math.abs(dir[1]) > Math.abs(dir[0])) axes.reverse();
+    for (const a of axes) {
+      if (this.freeGridPush(a)) return;
+    }
     if (!r.moved) {
       // Against something. From INSIDE the cell, let the grid decide what
       // that something is -- an edge to cross, a ledge to hop, a boulder to
@@ -804,6 +820,48 @@ export class Overworld implements ScriptWorld {
       p.landedCount += 1;
       this.onStepComplete();
     }
+  }
+
+  /**
+   * A free push along one world axis that met something: let the grid's
+   * own handlers say what (a map edge -> the connection or an exit mat, a
+   * ledge -> the hop, a boulder -> the shove, a warp under foot -> the
+   * collision warp). Tried from the cell the body is centred in AND the
+   * neighbouring one it straddles across the push -- a body half over two
+   * columns meets the ledge under either, and rounding used to pick the
+   * column without it, so the hop never came. The body snaps onto the cell
+   * only when something happens; a plain wall leaves it where it slid.
+   */
+  private freeGridPush(dir: Dir): boolean {
+    const p = this.player;
+    const across = dir === "up" || dir === "down" ? "x" : "y";
+    const pos = across === "x" ? p.px : p.py;
+    const cands = [cellOf(pos), Math.floor(pos / 16), Math.ceil(pos / 16)]
+      .filter((v, i, a) => a.indexOf(v) === i);
+    const save = { px: p.px, py: p.py, cellX: p.cellX, cellY: p.cellY, facing: p.facing };
+    for (const c of cands) {
+      const cx = across === "x" ? c : cellOf(p.px);
+      const cy = across === "y" ? c : cellOf(p.py);
+      // only a cell the body could stand in: never try from inside a wall
+      if (!this.freeOpen(cx, cy)) continue;
+      p.cellX = cx;
+      p.cellY = cy;
+      p.px = cx * 16;
+      p.py = cy * 16;
+      p.facing = dir;
+      if (cx !== save.cellX || cy !== save.cellY) this.refreshStandingOnWarp();
+      if (this.checkEdgeExit(dir) || this.checkLedgeHop(dir) || this.checkBoulderPush(dir)) return true;
+      if (this.canCollisionWarp()) {
+        const w = onCollision(this.map, this.carpets, cx, cy, dir);
+        if (w) {
+          this.takeWarp(w.def);
+          return true;
+        }
+      }
+      Object.assign(p, save);
+      if (cx !== save.cellX || cy !== save.cellY) this.refreshStandingOnWarp();
+    }
+    return false;
   }
 
   // OverworldController.lua:1113 dirHeld (hJoyHeld & PAD_CTRL_PAD)

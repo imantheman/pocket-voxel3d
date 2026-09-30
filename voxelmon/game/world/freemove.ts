@@ -96,6 +96,14 @@ export function slide(
   return { px: nx, py: ny, moved: nx !== px || ny !== py };
 }
 
+/**
+ * How much of a push has to lean along an axis for a block on that axis to
+ * count as pushing INTO it (an edge crossed, a ledge hopped). Well under a
+ * diagonal's 0.71, so a walk at forty-five degrees still crosses; over the
+ * wobble of a pad held "straight", so sliding along a wall never trips it.
+ */
+export const FREE_AXIS_LEAN = 0.35;
+
 /** The logical cell a free position stands in: whichever centre is nearest. */
 export function cellOf(p: number): number {
   return Math.round(p / 16);

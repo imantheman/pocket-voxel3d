@@ -18775,7 +18775,9 @@ function drawArea(ctx) {
     return;
   const cx0 = Math.max(0, Math.min(p.cellX - Math.floor(VIEW_W2 / 2), map.widthCells - VIEW_W2));
   const cy0 = Math.max(0, Math.min(p.cellY - Math.floor(VIEW_H2 / 2), map.heightCells - VIEW_H2));
-  const at2 = (cx, cy) => ({ x: OX + (cx - cx0) * CELL, y: OY + (cy - cy0) * CELL });
+  const padX = Math.max(0, Math.floor((VIEW_W2 - map.widthCells) * CELL / 2));
+  const padY = Math.max(0, Math.floor((VIEW_H2 - map.heightCells) * CELL / 2));
+  const at2 = (cx, cy) => ({ x: OX + padX + (cx - cx0) * CELL, y: OY + padY + (cy - cy0) * CELL });
   for (let cy = cy0;cy < cy0 + VIEW_H2 && cy < map.heightCells; cy++) {
     for (let cx = cx0;cx < cx0 + VIEW_W2 && cx < map.widthCells; cx++) {
       const s = at2(cx, cy);
@@ -19562,7 +19564,8 @@ function drawTrainer(ctx) {
   text(host, 1, 5, `TIME/${formatPlayTime(Number(save?.playTime ?? 0))}`);
   const seen = Object.values(save?.pokedex?.seen ?? {}).filter(Boolean).length;
   const owned = Object.values(save?.pokedex?.owned ?? {}).filter(Boolean).length;
-  text(host, 1, 6, `DEX ${owned} OWN ${seen} SEEN`);
+  text(host, 1, 6, `OWN/${owned}`);
+  text(host, 1, 7, `SEEN/${seen}`);
   if (!gear.removed.steps)
     text(host, 1, 8, `STEPS ${gear.steps}`);
   const list2 = list(data);
@@ -19610,7 +19613,7 @@ function drawList(ctx) {
     const ink = lit ? "fill" : "dark";
     text(host, 0, y, String(d.dex).padStart(3, "0"), ink);
     text(host, 4, y, know ? fit(d.name, 10) : "----------", ink);
-    right(host, y, owned[id] ? "OWN" : know ? "SEEN" : "", ink, 20);
+    right(host, y, owned[id] ? "OWN" : know ? "SEEN" : "", ink);
     if (know)
       region(`dex:${id}`, 0, y, COLS, 1, () => {
         ui.species = id;
@@ -21687,6 +21690,19 @@ PC.`), () => this.game.openBox());
     }
     if (p.a)
       this.commit(id, this.qty);
+  }
+  gearMenu() {
+    if (this.mode === "root") {
+      return { title: "PC", items: ROOT, index: this.menuIndex, select: (i) => {
+        this.menuIndex = i;
+      } };
+    }
+    if (this.mode === "items") {
+      return { title: "MY PC", items: ITEMS, index: this.itemsIndex, select: (i) => {
+        this.itemsIndex = i;
+      } };
+    }
+    return null;
   }
   view() {
     const ids = this.mode === "root" || this.mode === "items" ? [] : this.ids();
@@ -24212,13 +24228,13 @@ globalThis.frame = (buttons) => {
   const phys = buttons & 255;
   const touching = (buttons >> 8 & 1) !== 0;
   if (touching && !prevTouch) {
-    const tx = buttons >> 9 & 511;
-    const ty = buttons >> 18 & 255;
+    const tx = (buttons >> 9 & 255) * 2;
+    const ty = (buttons >> 17 & 127) * 2;
     gearTouchDown(game, tx, ty);
   } else if (!touching && prevTouch) {
     gearTouchUp(game);
   } else if (touching) {
-    gearTouchMove(game, buttons >> 9 & 511, buttons >> 18 & 255);
+    gearTouchMove(game, (buttons >> 9 & 255) * 2, (buttons >> 17 & 127) * 2);
   }
   prevTouch = touching;
   game.setCamTurns(buttons >> 24 & 3);
