@@ -6,6 +6,7 @@
 // (data/voxel_heights.lua) to JSON through a LuaJIT one-shot — the same
 // mechanism the importer's parity path uses.
 
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -341,6 +342,12 @@ export interface Profile {
   heights?: Record<string, number>;
   tilesets?: Record<string, ProfileTileset>;
   buildings?: Record<string, BuildingTemplate[]>;
+  /**
+   * Gen 2 only (the Gen2Recomped-DramaticShapes profile): COLL_* class ->
+   * shape class, for every Gen 2 tileset at once (voxel_heights.lua:195).
+   * Keys are the class byte, stringified by the dump.
+   */
+  collision?: Record<string, string>;
 }
 
 export interface ProfileTileset {
@@ -396,6 +403,77 @@ export function loadProfile(): Profile | null {
   }
   profileCache = JSON.parse(luaModuleToJson(readFileSync(path, "utf8"), path)) as Profile;
   return profileCache;
+}
+
+// ---------------------------------------------------------------------------
+// the Gen 2 profile: Gen2Recomped-DramaticShapes data/voxel_heights.lua (MIT)
+// ---------------------------------------------------------------------------
+
+/** Where the Gen 2 fork of the voxel mod lives (VOXELMON_VOXELMOD_GEN2). */
+export function voxelmodGen2Dir(): string {
+  return process.env.VOXELMON_VOXELMOD_GEN2 ?? join(homedir(), "dl/Gen2Recomped-DramaticShapes");
+}
+
+/**
+ * A Gold tileset id as the fork's profile keys it: pokegold's label, so
+ * TILESET_JOHTO_MODERN is `TilesetJohtoModern` and TILESET_POKECENTER is
+ * `TilesetPokecenter` (voxel_heights.lua:374, :5699, :8299).
+ */
+export function gen2ProfileKey(tilesetId: string): string {
+  return (
+    "Tileset" +
+    tilesetId
+      .replace(/^TILESET_/, "")
+      .split("_")
+      .map((w) => w.charAt(0) + w.slice(1).toLowerCase())
+      .join("")
+  );
+}
+
+let gen2ProfileCache: Profile | null | undefined;
+
+/**
+ * Load the Gen 2 profile, re-keyed by the Gold dataset's own tileset ids.
+ *
+ * Unlike potato_voxel's `return { ... }` data module, the fork's file is a
+ * Lua PROGRAM -- `local profile = {...}`, assignments onto it, a loop that
+ * appends Johto's building catalogue to JohtoModern's (voxel_heights.lua:
+ * 6724), `return profile` -- so the in-process data reader cannot take it.
+ * It runs through the LuaJIT one-shot (import/lua-dump.lua), the importer's
+ * parity mechanism. Only the TilesetX entries are carried across (the Gen 1
+ * and Prism entries in the same file are never reachable from a Gold map),
+ * plus `heights` and the `collision` class table; `collision_prism` is
+ * Prism's overlay and Gold never reads it (TileShape.lua:717).
+ */
+export function loadGen2Profile(tilesetIds: string[]): Profile | null {
+  if (gen2ProfileCache !== undefined) return gen2ProfileCache;
+  const path = join(voxelmodGen2Dir(), "data/voxel_heights.lua");
+  if (!existsSync(path)) {
+    console.error(`voxel cook: Gen 2 profile not found: ${path} (set VOXELMON_VOXELMOD_GEN2)`);
+    gen2ProfileCache = null;
+    return null;
+  }
+  const dump = fileURLToPath(new URL("../import/lua-dump.lua", import.meta.url));
+  let raw: Profile & Record<string, unknown>;
+  try {
+    raw = JSON.parse(
+      execFileSync("luajit", [dump, path], { encoding: "utf8", maxBuffer: 64 << 20 }),
+    ) as Profile & Record<string, unknown>;
+  } catch (error) {
+    console.error(`voxel cook: Gen 2 profile failed to load (${String(error)})`);
+    gen2ProfileCache = null;
+    return null;
+  }
+  const out: Profile = { heights: raw.heights, collision: raw.collision, tilesets: {}, buildings: {} };
+  for (const id of tilesetIds) {
+    const key = gen2ProfileKey(id);
+    const ts = raw.tilesets?.[key];
+    if (ts) out.tilesets![id] = ts;
+    const list = raw.buildings?.[key];
+    if (list) out.buildings![id] = list;
+  }
+  gen2ProfileCache = out;
+  return out;
 }
 
 // ---------------------------------------------------------------------------

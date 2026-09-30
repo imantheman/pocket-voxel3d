@@ -163,6 +163,22 @@ export function analyseMap(
       const k = keyOf(tx, ty);
       let s = tileShapeAt(map, shapes, tile, tx, ty);
       if (s && voids.has(tile) && !s.authored) s = shapes.classes.void;
+      // Gen 2 interiors: the black surround stays void even where its tile id
+      // is also pinned in-room -- the Pokemon Center's border block is all
+      // $3D, which TilesetPokecenter lists as `bookcase`, and pinned it rose
+      // as a 32px black wall around the room that hid its front row. The
+      // fork answers this with a 32px `shell` (Structures.lua:444
+      // indoorShell); the runtime here frames rooms as Red's are framed, an
+      // open plate on black, so the ring keeps that reading.
+      if (
+        s &&
+        map.tileset.collision &&
+        !map.outdoor &&
+        voids.has(tile) &&
+        (tx < 0 || ty < 0 || tx >= tw || ty >= th)
+      ) {
+        s = shapes.classes.void;
+      }
       if (s) S.shapeAt.set(k, s);
       S.tileAt.set(k, tile);
     }
@@ -216,6 +232,20 @@ export function analyseMap(
     }
   }
   buildCylinders(S, map, art, groundTiles);
+
+  // Gen 2: the outdoor planters the carve left on the box path (trees.ts,
+  // the tree-wall budget) stand as authored upright boxes at the planter's
+  // 32px -- the mesher folds the drawing up their south face band by band,
+  // crown over trunk, instead of tiling one tile up a `planter`-art box.
+  if (map.tileset.collision) {
+    const folded = new Map<number, Shape>();
+    for (const [k, s] of S.shapeAt) {
+      if (s.art !== "planter" || S.round.has(k)) continue;
+      let f = folded.get(s.h);
+      if (!f) folded.set(s.h, (f = { class: "planter", h: s.h, art: "upright", flat: false, authored: true }));
+      S.shapeAt.set(k, f);
+    }
+  }
 
   // ---- flood-fill regions of structural tiles -> volumes ----
   const seen = new Set<number>();

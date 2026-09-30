@@ -21,6 +21,10 @@ const ROUND_SHADE = { front: 1.0, back: 0.68, side: 0.78, top: 1.0, bottom: 0.55
 // tiles beyond the body; the far ring is simply not built.
 export const ROUND_RING = 4;
 
+// Gen2Recomped Structures.lua:13055 COLUMN_MAX -- the longest planter run
+// one column scan reads (Gen 2 planters only).
+const COLUMN_MAX = 32;
+
 /** GB shade byte -> brightness 0..1 (white = 1), clear reads white. */
 function lum(byte: number): number {
   if (byte === 0xff) return 1;
@@ -59,16 +63,32 @@ function roundTemplate(
   groundTiles: number[],
   N: number,
   step = 1,
+  // Gen 2 planter columns (Gen2Recomped Structures.lua:13139 roundTemplate's
+  // NYin/bandCY): a canvas TALLER than it is wide, read in N-row bands, band
+  // b taken from cell row bandCY[b] (default cy + b). Absent = the square
+  // canvas every Gen 1 caller carves, unchanged.
+  NYart?: number,
+  bandCY?: number[],
 ): Carve {
   const NX = N / step;
-  const NY = NX;
+  const NY = (NYart ?? N) / step;
   const N2 = NX / 2;
   const perRow = map.tileset.tilesPerRow || 16;
 
-  const tileOf = (px: number, py: number): number | undefined =>
-    S.tileAt.get(
+  const tileOf = (px: number, py: number): number | undefined => {
+    if (bandCY) {
+      // Structures.lua:13157-13161 tileOf with bandCY
+      const apy = py * step;
+      const band = Math.floor(apy / N);
+      const srcCY = bandCY[band] ?? cy + band;
+      return S.tileAt.get(
+        keyOf(cx * 2 + Math.floor((px * step) / 8), srcCY * 2 + Math.floor((apy % N) / 8)),
+      );
+    }
+    return S.tileAt.get(
       keyOf(cx * 2 + Math.floor((px * step) / 8), cy * 2 + Math.floor((py * step) / 8)),
     );
+  };
   const texel = (px: number, py: number): [number, number] => {
     const tile = tileOf(px, py) ?? 0;
     return [
@@ -580,6 +600,95 @@ export function buildCylinders(
         grouped.add(ckey + 1);
         grouped.add(ckey + 8192);
         grouped.add(ckey + 8193);
+      } else if (s && s.art === "planter" && near) {
+        // Gen 2 (Gold): a PLANTER COLUMN -- Gen2Recomped Structures.lua:21326
+        // -21432. Johto's tree wall (block $05: $1E/$1F over $2E/$2F twice
+        // over $3E/$3F) and the house tilesets' potted plants are pinned
+        // `planter` (voxel_heights.lua:374 TilesetJohto, :8371 TilesetHouse);
+        // no Gen 1 profile class resolves to this art, so Red/Blue/Yellow
+        // never reach this branch.
+        //
+        // A run of L planter cells down a column is L - 1 TREES, each 32px
+        // tall, tree i wearing course i as its crown and the run's FOOT
+        // course as its trunk (`bandCY`), standing one cell further south
+        // than the last (:21327-21351). L = 1 is a crown with no trunk under
+        // it: the plain 16px hull off its own cell (:21368-21385). Both Gold
+        // tilesets that pin planters say `planter_spray = false`, so the
+        // spray cap (:13072) is not ported; nor is `column_foot`, which no
+        // Gold entry states.
+        //
+        // BUDGET DEVIATION (the Gen 1 wall-tree rule above, applied to Gold):
+        // outdoors a planter IS Johto's tree wall -- $2E/$2F appear in no
+        // other Johto drawing -- and it is most of every route and town
+        // edge. Carved, New Bark Town alone stamps ~270 32px hulls (1.9M
+        // verts against Pallet Town's 0.2M). So outdoor planters stay on the
+        // box path (structures.ts stands them as 32px upright folds, the
+        // two-cell height the fork's planter reading gives them); indoor
+        // planters -- the potted plants -- are carved.
+        if (S.outdoor) continue;
+        let L = 1;
+        while (L < COLUMN_MAX) {
+          const nxt = S.shapeAt.get(keyOf(cx * 2, (cy + L) * 2));
+          if (!(nxt && nxt.art === "planter")) break;
+          L++;
+        }
+        const footCY = cy + L - 1;
+        let ground: number | false = false;
+        if (L === 1) {
+          const ids = [
+            S.tileAt.get(k) ?? -1,
+            S.tileAt.get(keyOf(cx * 2 + 1, cy * 2)) ?? -1,
+            S.tileAt.get(keyOf(cx * 2, cy * 2 + 1)) ?? -1,
+            S.tileAt.get(keyOf(cx * 2 + 1, cy * 2 + 1)) ?? -1,
+          ];
+          const sig = `${tsid}|p16|${gsig}|${ids.join(":")}`;
+          let tpl = roundCache.get(sig);
+          if (!tpl) {
+            const fine = roundTemplate(S, map, art, cx, cy, groundTiles, 16);
+            const coarse = roundTemplate(S, map, art, cx, cy, [], 16, 2).quads;
+            tpl = { quads: fine.quads, coarse, bg: fine.bg };
+            roundCache.set(sig, tpl);
+          }
+          ground = tpl.bg;
+          S.roundStamps.push({ quads: tpl.quads, coarse: tpl.coarse, mx: cx * 16 + 8, mz: cy * 16 + 8 });
+        } else {
+          for (let i = 0; i <= L - 2; i++) {
+            const crownCY = cy + i;
+            const ids: number[] = [];
+            for (const ccy of [crownCY, footCY]) {
+              for (let dy = 0; dy < 2; dy++) {
+                for (let dx = 0; dx < 2; dx++) {
+                  ids.push(S.tileAt.get(keyOf(cx * 2 + dx, ccy * 2 + dy)) ?? -1);
+                }
+              }
+            }
+            const sig = `${tsid}|tree32|${gsig}|${ids.join(":")}`;
+            let tpl = roundCache.get(sig);
+            if (!tpl) {
+              const bands = [crownCY, footCY];
+              const fine = roundTemplate(S, map, art, cx, crownCY, groundTiles, 16, 1, 32, bands);
+              const coarse = roundTemplate(S, map, art, cx, crownCY, [], 16, 2, 32, bands).quads;
+              tpl = { quads: fine.quads, coarse, bg: fine.bg };
+              roundCache.set(sig, tpl);
+            }
+            ground = tpl.bg;
+            S.roundStamps.push({
+              quads: tpl.quads,
+              coarse: tpl.coarse,
+              mx: cx * 16 + 8,
+              mz: (crownCY + 1) * 16 + 8,
+            });
+          }
+        }
+        for (let dy = 0; dy <= 2 * L - 1; dy++) {
+          for (let dx = 0; dx < 2; dx++) {
+            const tk = keyOf(cx * 2 + dx, cy * 2 + dy);
+            S.skip.add(tk);
+            S.round.add(tk);
+            S.ground.set(tk, ground);
+          }
+        }
+        for (let i = 1; i <= L - 1; i++) grouped.add(ckey + i * 8192);
       } else if (s && s.art === "cylinder" && near) {
         // one 16px hull per cell (stump/can cut faces not ported: plain hull)
         const ids = [
@@ -595,6 +704,14 @@ export function buildCylinders(
         // for scenery past ROUND_RING. Carved, each cell replicates a
         // ~700-quad hull into the pools and a town pak balloons past 30MB.
         if (S.wallTiles && ids.every((t) => S.wallTiles!.has(t))) continue;
+        // The same deviation on Gen 2, read off the ROM's own class instead
+        // of the border block's tiles: Johto's lone tree ($15) and its tree
+        // WALL ($07) are cut from the same tiles and differ only in class
+        // (Gen2Recomped voxel_heights.lua:195-205), so an outdoor cylinder
+        // cell of class $07 is the wall and takes the box path, while lone
+        // and cuttable trees ($15, $12) keep their hulls. Gen 1 carries no
+        // collision bytes and never takes this branch.
+        if (map.tileset.collision && S.outdoor && map.cellCollision(cx, cy) === 0x07) continue;
         const sig = `${tsid}|${gsig}|${ids.join(":")}`;
         let tpl = roundCache.get(sig);
         if (!tpl) {

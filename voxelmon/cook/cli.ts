@@ -58,6 +58,7 @@ import {
   GEN_DIR,
   genMissingReason,
   loadGen,
+  loadGen2Profile,
   loadProfile,
   loadRedpp,
   ROOT,
@@ -69,6 +70,7 @@ import { writePak } from "./pak.ts";
 import { planColour, Redpp, type ColourPlan, type PageOwner } from "./redpp.ts";
 import { planGbc, useGbc } from "./gbc.ts";
 import { Gen2Colour, isGen2, planGen2 } from "./gen2.ts";
+import { buildGen2Gamedata } from "./gen2gamedata.ts";
 import { analyseMap } from "./structures.ts";
 
 export const DEFAULT_MAPS = [
@@ -107,7 +109,9 @@ export interface CookResult {
 
 export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): CookResult {
   const gen = loadGen(genDir);
-  const profile = loadProfile();
+  // Gold shapes from the Gen 2 fork's profile (Gen2Recomped-DramaticShapes,
+  // re-keyed TILESET_X -> TilesetX); Red/Blue/Yellow keep potato_voxel's
+  const profile = isGen2(gen) ? loadGen2Profile(Object.keys(gen.tilesets)) : loadProfile();
   // Yellow has colours of its own (cook/gbc.ts); the RED++ pack is Red's,
   // keyed by Red's sprite ids, and must not touch it even when a cooker
   // folder still holds it from an earlier Red cook
@@ -452,7 +456,7 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
     townMapCursorPage,
   };
   const gameJson = gen2
-    ? new TextEncoder().encode(JSON.stringify({ version: gen.version, generation: 2, cookedMaps: mapNames, atlas }))
+    ? buildGen2Gamedata(gen, atlas, mapNames) // Gold: the walker's dataset (cook/gen2gamedata.ts)
     : buildGamedata(gen, atlas, mapNames);
   const glyphs = gen.font ? buildCharmap(gen) : [];
   // The chip synth's input rides in its own AUDI section: the importer's
