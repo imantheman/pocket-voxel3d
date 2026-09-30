@@ -7,6 +7,7 @@
 // open a window, and a slot machine refuses to start — which is the original's
 // IsItemInBag COIN_CASE check in three places.
 
+import { gameVersion } from "../data.ts";
 import type { ScriptRow } from "./script.ts";
 
 /** wPlayerCoins is two BCD bytes; the case holds four digits. */
@@ -136,7 +137,7 @@ export interface PrizeEntry {
  * of three, not the whole catalogue: GetPrizeMenuId subtracts
  * TEXT_GAMECORNERPRIZEROOM_PRIZE_VENDOR_1 from the text id and indexes
  * PrizeDifferentMenuPtrs with the result. These are Red's; Blue restocks both
- * mon counters, and the TM window is shared by every version.
+ * mon counters (BLUE_PRIZE_WINDOWS), and the TM window is shared.
  */
 export const PRIZE_WINDOWS: PrizeEntry[][] = [
   [
@@ -155,6 +156,29 @@ export const PRIZE_WINDOWS: PrizeEntry[][] = [
     { kind: "item", item: "TM_SUBSTITUTE", cost: 7700 },
   ],
 ];
+
+/**
+ * Blue's windows (data/events/prizes.asm and prize_mon_levels.asm, _BLUE;
+ * gen1recomp data/scripts/story3.lua BLUE_PRIZE_WINDOWS).
+ */
+export const BLUE_PRIZE_WINDOWS: PrizeEntry[][] = [
+  [
+    { kind: "mon", species: "ABRA", level: 6, cost: 120 },
+    { kind: "mon", species: "CLEFAIRY", level: 12, cost: 750 },
+    { kind: "mon", species: "NIDORINO", level: 17, cost: 1200 },
+  ],
+  [
+    { kind: "mon", species: "PINSIR", level: 20, cost: 2500 },
+    { kind: "mon", species: "DRATINI", level: 24, cost: 4600 },
+    { kind: "mon", species: "PORYGON", level: 18, cost: 6500 },
+  ],
+  PRIZE_WINDOWS[2]!,
+];
+
+/** The prize windows of the game the dataset is. */
+export function prizeWindows(data: { version?: string } | null | undefined): PrizeEntry[][] {
+  return gameVersion(data) === "blue" ? BLUE_PRIZE_WINDOWS : PRIZE_WINDOWS;
+}
 
 /**
  * A prize counter. CeladonPrizeMenu checks the COIN CASE first and returns

@@ -261,6 +261,8 @@ export interface GrowthRateRecord {
 import type { AnimData } from "./battle/moveanim.ts";
 
 export interface VoxelmonData {
+  /** Which game the dataset is (gamedata.json `version`; absent = red). */
+  version?: "red" | "blue";
   /** Maps whose geometry the pak carries; absent (old gamedata) = all.
    * Anything else is a locked content boundary (world/overworld.ts). */
   cookedMaps?: string[];
@@ -295,6 +297,17 @@ export interface VoxelmonData {
 // ---------------------------------------------------------------------------
 
 /** The rules modules cannot run without these. */
+/**
+ * Red or Blue (gamedata.json `version`, stamped by the importer from the
+ * ROM's SHA-1). A dataset from before versions existed is Red's. Everything
+ * that differs between the two and is read out of the ROM -- encounters,
+ * text, credits, default names -- follows the dataset on its own; this is
+ * only for the handful of tables the guest holds itself.
+ */
+export function gameVersion(data: { version?: string } | null | undefined): "red" | "blue" {
+  return data?.version === "blue" ? "blue" : "red";
+}
+
 export const REQUIRED_MODULES = [
   "pokemon",
   "moves",

@@ -6,7 +6,7 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Ctx, check } from "./ctx.ts";
-import { RED_SHA1, type VoxelEnv } from "./env.ts";
+import { VERSIONS, type VoxelEnv } from "./env.ts";
 import { GfxBin } from "./gfx.ts";
 import { loadManifest } from "./manifest.ts";
 import { Rom } from "./rom.ts";
@@ -43,20 +43,24 @@ export async function runImport(env: VoxelEnv): Promise<void> {
   // The content boundary (docs/VOXEL.md §1): verify SHA-1 BEFORE decoding
   // one byte.
   const digest = sha1Hex(romData);
+  const want = VERSIONS[env.version];
   check(
-    digest === RED_SHA1,
-    `ROM SHA-1 mismatch: got ${digest}, need Red ${RED_SHA1} (${env.romPath})`,
+    digest === want.sha1,
+    `ROM SHA-1 mismatch: got ${digest}, need ${want.label} ${want.sha1} (${env.romPath})`,
   );
   const manifest = await loadManifest(env.manifestPath);
   check(
-    manifest.romSha1 === RED_SHA1,
-    `manifest is not for Red (romSha1 ${manifest.romSha1}); Red-only for now`,
+    manifest.romSha1 === want.sha1,
+    `manifest is not for ${want.label} (romSha1 ${manifest.romSha1}): ${env.manifestPath}`,
   );
 
   const ctx = new Ctx(new Rom(romData), manifest, new GfxBin());
   const genDir = env.genDir;
 
   const stages: [string, () => void][] = [
+    // Which game this dataset is. The cook carries it into gamedata.json,
+    // and the guest reads it for the few things that differ by version.
+    ["version", () => writeJson(genDir, "version", { version: env.version })],
     ["constants", () => writeJson(genDir, "constants", manifest.constants)],
     ["tilesets", () => writeJson(genDir, "tilesets", extractTilesets(ctx))],
     ["maps", () => writeJson(genDir, "maps", extractMaps(ctx))],

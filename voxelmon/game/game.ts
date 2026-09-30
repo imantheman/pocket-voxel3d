@@ -74,7 +74,8 @@ import { BikeShopState } from "./ui/bikeshop.ts";
 import {
   countOwned, fillAideText, oaksAideFlag, OAKS_AIDES,
 } from "./world/oaksaide.ts";
-import { PRIZE_WINDOWS } from "./world/gamecorner.ts";
+import { prizeWindows } from "./world/gamecorner.ts";
+import { gameVersion } from "./data.ts";
 import { gearViewStep } from "./ui/kantogear.ts";
 import { count as badgeCount } from "./rules/badges.ts";
 
@@ -545,8 +546,8 @@ export class VoxelmonGame implements OverworldShell, SceneView {
         x: 3,
         y: 6,
         facing: "down",
-        name: "RED",
-        rival: "BLUE",
+        name: this.defaultNames().player,
+        rival: this.defaultNames().rival,
         id: Math.floor(Math.random() * 65536),
       },
       flags: {},
@@ -1106,10 +1107,10 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     };
 
     run(A, () => {
-      askName("YOUR NAME?", presets?.player, "RED", (name: string) => {
+      askName("YOUR NAME?", presets?.player, this.defaultNames().player, (name: string) => {
         this.save.player.name = name;
         run(B, () => {
-          askName("RIVAL'S NAME?", presets?.rival, "BLUE", (rival: string) => {
+          askName("RIVAL'S NAME?", presets?.rival, this.defaultNames().rival, (rival: string) => {
             this.save.player.rival = rival;
             run(C, () => {
               // The intro theme holds until something claims the music;
@@ -1885,9 +1886,24 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     return top?.kind === "slots" ? top.view() : null;
   }
 
+  /**
+   * The names a new game starts with: the dataset's first presets
+   * (field.presetNames -- Red's player is RED and its rival BLUE, Blue's the
+   * other way round), else the version's own pair.
+   */
+  defaultNames(): { player: string; rival: string } {
+    const p = (this.data as { field?: { presetNames?: { player?: string[]; rival?: string[] } } })
+      .field?.presetNames;
+    const blue = gameVersion(this.data) === "blue";
+    return {
+      player: p?.player?.[0] ?? (blue ? "BLUE" : "RED"),
+      rival: p?.rival?.[0] ?? (blue ? "RED" : "BLUE"),
+    };
+  }
+
   /** open_prizes verb -> the GAME CORNER prize window (ui/prizescreen.ts). */
   openPrizes(window: number, onDone?: () => void): void {
-    const prizes = PRIZE_WINDOWS[window - 1];
+    const prizes = prizeWindows(this.data)[window - 1];
     if (!prizes) { onDone?.(); return; }
     this.push(new PrizeState(this as never, prizes, onDone));
   }

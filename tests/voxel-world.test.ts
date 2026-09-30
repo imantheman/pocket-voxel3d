@@ -23,7 +23,8 @@ import {
 import {
   COPYRIGHT_GAMEFREAK, COPYRIGHT_PREFIX, gbW, gbX, gbY, INTRO_CLOCK, IntroState,
 } from "../voxelmon/game/ui/intro.ts";
-import { TITLE_MONS, TitleState } from "../voxelmon/game/ui/title.ts";
+import { TITLE_MONS, TITLE_MONS_BLUE, TitleState } from "../voxelmon/game/ui/title.ts";
+import { BLUE_PRIZE_WINDOWS, PRIZE_WINDOWS, prizeWindows } from "../voxelmon/game/world/gamecorner.ts";
 import { fromGenDir as loadAudioBanks } from "../voxelmon/game/audio/banks.ts";
 import { loadRuntimeData, REQUIRED_MODULES, type VoxelmonData } from "../voxelmon/game/data.ts";
 import { WildBattle } from "../voxelmon/game/battle/battle.ts";
@@ -10429,7 +10430,56 @@ describe("the title screen is the cartridge's", () => {
   test("the cast is the Red TitleMons list, the starter first, and the cook cooks the same", () => {
     expect(TITLE_MONS[0]).toBe("CHARMANDER");
     expect(TITLE_MONS.length).toBe(16);
+    expect(TITLE_MONS_BLUE[0]).toBe("SQUIRTLE");
+    expect(TITLE_MONS_BLUE.length).toBe(16);
     const cli = readFileSync(join(import.meta.dir, "../voxelmon/cook/cli.ts"), "utf8");
-    for (const s of TITLE_MONS) expect(cli).toContain(`"${s}"`);
+    for (const s of [...TITLE_MONS, ...TITLE_MONS_BLUE]) expect(cli).toContain(`"${s}"`);
+  });
+});
+
+describe("Blue: the few tables the guest holds itself", () => {
+  const atlas = {
+    picTitle: { copyright: 1, gamefreak: 2, logo: 3, player: 4, version: 5 },
+    picTitleMon: { CHARMANDER: 50, SQUIRTLE: 51 },
+    picTrainer: { red: 9 },
+  };
+  const titleFor = (version?: string) =>
+    new TitleState(
+      { input: { pressed: {} }, pop() {}, data: { atlas, version }, hasSave: false, picPageFor: () => 9 },
+      () => {},
+    );
+
+  test("Blue's title opens on Squirtle and draws its ribbon in one run", () => {
+    const blue = titleFor("blue").view();
+    expect(blue.monPage).toBe(51);
+    expect(blue.tiles.filter((t) => t.page === 5).map((t) => [t.tile, t.x])).toEqual(
+      [0, 1, 2, 3, 4, 5, 6, 7].map((i) => [i, 56 + i * 8]),
+    );
+    // and Red's is still Red's
+    const red = titleFor(undefined).view();
+    expect(red.monPage).toBe(50);
+    expect(red.tiles.filter((t) => t.page === 5).map((t) => t.tile)).toEqual([0, 1, 5, 6, 7, 8, 9]);
+  });
+
+  test("the Game Corner restocks both mon counters in Blue, and shares the TMs", () => {
+    expect(prizeWindows({})).toBe(PRIZE_WINDOWS);
+    expect(prizeWindows({ version: "blue" })).toBe(BLUE_PRIZE_WINDOWS);
+    expect(BLUE_PRIZE_WINDOWS[1]!.map((p) => (p as { species?: string }).species)).toEqual(
+      ["PINSIR", "DRATINI", "PORYGON"],
+    );
+    expect(BLUE_PRIZE_WINDOWS[2]).toBe(PRIZE_WINDOWS[2]);
+  });
+
+  test.skipIf(!hasGen)("a new Blue game is BLUE against RED unless the player names them", () => {
+    const game = makeMenuGame();
+    (game as { data: unknown }).data = {
+      ...(game.data as object),
+      version: "blue",
+      field: {
+        ...(game.data as { field?: object }).field,
+        presetNames: { customOption: "NEW NAME", player: ["BLUE", "GARY", "JOHN"], rival: ["RED", "ASH", "JACK"] },
+      },
+    };
+    expect(game.defaultNames()).toEqual({ player: "BLUE", rival: "RED" });
   });
 });

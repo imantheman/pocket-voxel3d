@@ -12,10 +12,12 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { luaModuleToJson } from "../import/lua.ts";
+import { activeVersion, type GameVersion, genDirFor } from "../import/env.ts";
 import type { RedppPack } from "./redpp.ts";
 
 export const ROOT = fileURLToPath(new URL("../..", import.meta.url));
-export const GEN_DIR = join(ROOT, "dist/voxelmon/gen");
+/** The dataset of the game this run cooks (import/env.ts activeVersion). */
+export const GEN_DIR = genDirFor(activeVersion());
 
 // ---------------------------------------------------------------------------
 // gen/ dataset
@@ -113,6 +115,8 @@ export interface GenData {
   field: Record<string, unknown>;
   /** Battle move animations, or null in a dataset imported before them. */
   battleAnims: BattleAnims | null;
+  /** Which game the dataset was imported from (version.json; absent = red). */
+  version: GameVersion;
 }
 
 /** The tables voxelmon/import/stages/battle-anims.ts writes. */
@@ -160,6 +164,10 @@ export function loadGen(genDir = GEN_DIR): GenData {
     battleAnims: existsSync(join(genDir, "battle_anims.json"))
       ? readJson(genDir, "battle_anims.json")
       : null,
+    // A dataset imported before versions existed is Red's.
+    version: existsSync(join(genDir, "version.json"))
+      ? (readJson(genDir, "version.json") as { version: GameVersion }).version
+      : "red",
   };
 }
 

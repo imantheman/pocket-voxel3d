@@ -37,14 +37,20 @@ import type { BuildingStats } from "./buildings.ts";
 import { buildIntroPages } from "./intro.ts";
 
 /**
- * data/pokemon/title_mons.asm, the Red list: what the title screen cycles.
- * Kept in step with game/ui/title.ts TITLE_MONS (a test holds them equal);
+ * data/pokemon/title_mons.asm: what the title screen cycles, Red's list and
+ * then Blue's new names. BOTH are cooked whichever ROM this is -- they are
+ * front pics, the same in the two games -- so Red and Blue share one pak set
+ * and neither has to be cooked again for the other. Kept in step with
+ * game/ui/title.ts TITLE_MONS and TITLE_MONS_BLUE (a test holds them equal);
  * the cook does not import from the game.
  */
 const TITLE_MONS = [
   "CHARMANDER", "SQUIRTLE", "BULBASAUR", "WEEDLE", "NIDORAN_M", "SCYTHER",
   "PIKACHU", "CLEFAIRY", "RHYDON", "ABRA", "GASTLY", "DITTO",
   "PIDGEOTTO", "ONIX", "PONYTA", "MAGIKARP",
+  // Blue's, less the three starters already above
+  "MANKEY", "HITMONLEE", "VULPIX", "CHANSEY", "AERODACTYL", "JOLTEON",
+  "SNORLAX", "GLOOM", "POLIWAG", "DODUO", "PORYGON", "GENGAR", "RAICHU",
 ];
 import {
   GameMap,

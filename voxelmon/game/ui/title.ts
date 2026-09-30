@@ -8,6 +8,7 @@
 // main menu offers CONTINUE / NEW GAME / OPTION.
 import type { GameState } from "../game.ts";
 import { namedPage, picPageFor } from "../battle/staging.ts";
+import { gameVersion } from "../data.ts";
 import { COPYRIGHT_GAMEFREAK, COPYRIGHT_PREFIX, gbW, gbX, gbY } from "./intro.ts";
 
 /**
@@ -20,6 +21,19 @@ export const TITLE_MONS = [
   "PIKACHU", "CLEFAIRY", "RHYDON", "ABRA", "GASTLY", "DITTO",
   "PIDGEOTTO", "ONIX", "PONYTA", "MAGIKARP",
 ] as const;
+
+/** The Blue list (title_mons.asm _BLUE; gen1recomp BLUE_CYCLE_SPECIES):
+ * STARTER2 -- Squirtle -- leads. */
+export const TITLE_MONS_BLUE = [
+  "SQUIRTLE", "CHARMANDER", "BULBASAUR", "MANKEY", "HITMONLEE", "VULPIX",
+  "CHANSEY", "AERODACTYL", "JOLTEON", "SNORLAX", "GLOOM", "POLIWAG",
+  "DODUO", "PORYGON", "GENGAR", "RAICHU",
+] as const;
+
+/** The cast of the game the dataset is. */
+export function titleMons(data: unknown): readonly string[] {
+  return gameVersion(data as { version?: string }) === "blue" ? TITLE_MONS_BLUE : TITLE_MONS;
+}
 
 /** Where a pak cooked before `atlas.picTitle` existed put the title art.
  * Only used when the dataset does not name the pages itself. */
@@ -40,6 +54,9 @@ const LOGO = { x: 16, y: 8, w: 128, h: 48 };
 const RIBBON_Y = 64;
 const RIBBON_RED = { x: 56, tiles: [0, 1] };
 const RIBBON_VERSION = { x: 80, tiles: [5, 6, 7, 8, 9] };
+/** Blue's ribbon is one run, "Blue Version" in the first eight tiles,
+ * drawn from column 7 (gen1recomp TitleState.lua: quad 0,0,64,8 at 56,64). */
+const RIBBON_BLUE = { x: 56, tiles: [0, 1, 2, 3, 4, 5, 6, 7] };
 /** The mon's box: tiles (5,10)-(11,16), the mon bottom-aligned and centred. */
 const MON_BOX = { x: 40, y: 80, w: 56, h: 56 };
 const RED_AT = { x: 82, y: 80, w: 40, h: 56 };
@@ -83,8 +100,9 @@ export class TitleState implements GameState {
   private index = 0;
   private menu: string[];
   /** The mon on show, and the ones still to come this pass. */
-  private mon: string = TITLE_MONS[0];
+  private mon: string;
   private bag: string[] = [];
+  private cast: readonly string[];
 
   constructor(
     private game: {
@@ -99,11 +117,13 @@ export class TitleState implements GameState {
     this.menu = game.hasSave
       ? ["CONTINUE", "NEW GAME", "OPTION", "MAP VIEWER"]
       : ["NEW GAME", "OPTION", "MAP VIEWER"];
+    this.cast = titleMons(game.data);
+    this.mon = this.cast[0]!;
   }
 
   /** TitleScreenPickNewMon: the next one, never the same twice in a pass. */
   private pickNext(): void {
-    if (this.bag.length === 0) this.bag = TITLE_MONS.filter((s) => s !== this.mon);
+    if (this.bag.length === 0) this.bag = this.cast.filter((s) => s !== this.mon);
     const i = Math.floor(Math.random() * this.bag.length);
     this.mon = this.bag.splice(i, 1)[0]!;
   }
@@ -167,8 +187,12 @@ export class TitleState implements GameState {
       seq.forEach((t, i) => tiles.push({ page, tile: t, x: x + i * 8, y, flags: 0 }));
     };
     const version = namedPage(data as never, "picTitle", "version");
-    row(version, RIBBON_RED.tiles, RIBBON_RED.x, RIBBON_Y);
-    row(version, RIBBON_VERSION.tiles, RIBBON_VERSION.x, RIBBON_Y);
+    if (gameVersion(data as { version?: string }) === "blue") {
+      row(version, RIBBON_BLUE.tiles, RIBBON_BLUE.x, RIBBON_Y);
+    } else {
+      row(version, RIBBON_RED.tiles, RIBBON_RED.x, RIBBON_Y);
+      row(version, RIBBON_VERSION.tiles, RIBBON_VERSION.x, RIBBON_Y);
+    }
     row(titlePage(data, "copyright"), COPYRIGHT_PREFIX, 16, COPYRIGHT_Y);
     row(titlePage(data, "gamefreak"), COPYRIGHT_GAMEFREAK, 80, COPYRIGHT_Y);
 

@@ -195,6 +195,8 @@ export function buildGamedata(gen: GenData, atlas: AtlasIndex, cookedMaps: strin
   for (const [id, ts] of Object.entries(gen.tilesets)) tilesets[id] = tilesetSubset(ts);
 
   const game = {
+    // Red or Blue: the guest reads this for the few things that differ.
+    version: gen.version ?? "red",
     constants: gen.constants,
     // The maps whose geometry this pak actually carries. gamedata keeps
     // EVERY map def (warp targets, connection math), but the guest must
