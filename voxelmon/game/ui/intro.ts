@@ -28,6 +28,10 @@ export const gbW = sw;
 /** The copyright line's tiles, for the title's row 17 (title/copyright,
  * then title/gamefreak). */
 export const COPYRIGHT_PREFIX = [0, 1, 2, 1, 3, 1, 4] as const;
+/** Yellow's "(c)1995-1999" (pokeyellow title.asm .tileScreenCopyrightTiles
+ * $e0,$e1,$e2,$e3,$e1,$e2,$ee): its copyright tiles are 1-9 / 9 / 5- / 9,
+ * and the $ee NineTile is the same "9" as tile 4. */
+export const COPYRIGHT_PREFIX_YELLOW = [0, 1, 2, 3, 1, 2, 4] as const;
 export const COPYRIGHT_GAMEFREAK = [0, 1, 2, 3, 4, 5, 6, 7, 8] as const;
 
 export interface IntroQuad {

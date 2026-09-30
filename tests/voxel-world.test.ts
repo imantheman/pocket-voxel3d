@@ -10424,7 +10424,9 @@ describe("the title screen is the cartridge's", () => {
     const copyright = v.tiles.filter((t) => t.y === 136);
     expect(copyright.length).toBe(COPYRIGHT_PREFIX.length + COPYRIGHT_GAMEFREAK.length);
     expect(copyright[0]).toEqual({ page: 1, tile: 0, x: 16, y: 136, flags: 0 });
-    expect(copyright.at(-1)).toEqual({ page: 2, tile: 8, x: 144, y: 136, flags: 0 });
+    // one unbroken run of 16 tiles from (2,17), as title.asm writes it
+    expect(copyright.at(-1)).toEqual({ page: 2, tile: 8, x: 136, y: 136, flags: 0 });
+    expect(copyright.map((t) => t.x)).toEqual(Array.from({ length: 16 }, (_, i) => 16 + i * 8));
   });
 
   test("the cast is the Red TitleMons list, the starter first, and the cook cooks the same", () => {
@@ -10479,7 +10481,10 @@ describe("Yellow: the Pikachu title", () => {
     for (let i = 0; i < 60; i++) t.update();
     expect(sounds).toEqual(["sfx Intro_Crash", "sfx Intro_Whoosh", "cry PIKACHU", "music Music_TitleScreen"]);
     // the copyright appears with the loop, not during the drop
-    expect(t.view().tiles.filter((x) => x.y === 136).length).toBe(COPYRIGHT_PREFIX.length + COPYRIGHT_GAMEFREAK.length);
+    const line = t.view().tiles.filter((x) => x.y === 136);
+    // (c)1995-1999: 1-9, 9, 5-, 1-9, 9, 9 (pokeyellow $e0 $e1 $e2 $e3 $e1 $e2 $ee)
+    expect(line.filter((x) => x.page === 1).map((x) => x.tile)).toEqual([0, 1, 2, 3, 1, 2, 4]);
+    expect(line.map((x) => x.x)).toEqual(Array.from({ length: 16 }, (_, i) => 16 + i * 8));
     t.update();
     expect(t.view().phase).toBe("menu");
     expect(sounds.at(-1)).toBe("cry PIKACHU");

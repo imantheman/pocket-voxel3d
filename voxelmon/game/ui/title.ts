@@ -9,7 +9,7 @@
 import type { GameState } from "../game.ts";
 import { namedPage, picPageFor } from "../battle/staging.ts";
 import { gameVersion } from "../data.ts";
-import { COPYRIGHT_GAMEFREAK, COPYRIGHT_PREFIX, gbW, gbX, gbY } from "./intro.ts";
+import { COPYRIGHT_GAMEFREAK, COPYRIGHT_PREFIX, COPYRIGHT_PREFIX_YELLOW, gbW, gbX, gbY } from "./intro.ts";
 
 /**
  * data/pokemon/title_mons.asm, the Red list. The starter leads, then
@@ -75,6 +75,10 @@ const RIBBON_BLUE = { x: 56, tiles: [0, 1, 2, 3, 4, 5, 6, 7] };
 const MON_BOX = { x: 40, y: 80, w: 56, h: 56 };
 const RED_AT = { x: 82, y: 80, w: 40, h: 56 };
 const COPYRIGHT_Y = 136;
+/** Where GAME FREAK starts: title.asm writes the copyright as one run of 16
+ * tiles from (2,17), the 7-tile year prefix then the 9 GAME FREAK tiles,
+ * so it follows the prefix with no gap -- column 9. */
+const COPYRIGHT_GAMEFREAK_X = 16 + COPYRIGHT_PREFIX.length * 8;
 
 export type TitleChoice = "continue" | "new" | "option" | "viewer";
 
@@ -276,7 +280,7 @@ export class TitleState implements GameState {
       row(version, RIBBON_VERSION.tiles, RIBBON_VERSION.x, RIBBON_Y);
     }
     row(titlePage(data, "copyright"), COPYRIGHT_PREFIX, 16, COPYRIGHT_Y);
-    row(titlePage(data, "gamefreak"), COPYRIGHT_GAMEFREAK, 80, COPYRIGHT_Y);
+    row(titlePage(data, "gamefreak"), COPYRIGHT_GAMEFREAK, COPYRIGHT_GAMEFREAK_X, COPYRIGHT_Y);
 
     return {
       phase: this.phase,
@@ -308,8 +312,8 @@ export class TitleState implements GameState {
         if (page < 0) return;
         seq.forEach((t, i) => tiles.push({ page, tile: t, x: x + i * 8, y, flags: 0 }));
       };
-      row(titlePage(data, "copyright"), COPYRIGHT_PREFIX, 16, COPYRIGHT_Y);
-      row(titlePage(data, "gamefreak"), COPYRIGHT_GAMEFREAK, 80, COPYRIGHT_Y);
+      row(titlePage(data, "copyright"), COPYRIGHT_PREFIX_YELLOW, 16, COPYRIGHT_Y);
+      row(titlePage(data, "gamefreak"), COPYRIGHT_GAMEFREAK, COPYRIGHT_GAMEFREAK_X, COPYRIGHT_Y);
     }
     return {
       phase: this.phase,
