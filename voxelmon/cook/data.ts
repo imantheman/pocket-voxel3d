@@ -115,6 +115,8 @@ export interface GenData {
   field: Record<string, unknown>;
   /** Battle move animations, or null in a dataset imported before them. */
   battleAnims: BattleAnims | null;
+  /** Yellow's minigame data (import stages/minigame.ts), else null. */
+  minigame: Record<string, unknown> | null;
   /** Which game the dataset was imported from (version.json; absent = red). */
   version: GameVersion;
 }
@@ -164,6 +166,7 @@ export function loadGen(genDir = GEN_DIR): GenData {
     battleAnims: existsSync(join(genDir, "battle_anims.json"))
       ? readJson(genDir, "battle_anims.json")
       : null,
+    minigame: existsSync(join(genDir, "minigame.json")) ? readJson(genDir, "minigame.json") : null,
     // A dataset imported before versions existed is Red's.
     version: existsSync(join(genDir, "version.json"))
       ? (readJson(genDir, "version.json") as { version: GameVersion }).version

@@ -137,6 +137,15 @@ export interface VoxelHost {
   cry(bank: number, addr: number, engine: number, pitch: number, length: number): void;
   /** Yellow: one of the voiced Pikachu clips, 1-based. */
   pikaPcm?(clip: number): void;
+  /** The GB screen (voxel-spec.ts gbShow..gbColours). */
+  gbShow?(on: number): void;
+  gbTiles?(dest: number, page: number, first: number, count: number): void;
+  gbReset?(): void;
+  gbMap?(offset: number, hex: string): void;
+  gbRegs?(lcdc: number, scx: number, scy: number, wx: number, wy: number, bgp: number, obp0: number, obp1: number): void;
+  gbLines?(target: number, hex: string): void;
+  gbOam?(hex: string): void;
+  gbColours?(bg: number, obp0: number, obp1: number): void;
   /** Boot-time: a sound engine's wave-instrument table. */
   audioWaves(engine: number, bank: number, addr: number): void;
   /** Boot-time: one drum program of a sound engine. */
@@ -335,6 +344,35 @@ export class RecorderHost implements VoxelHost {
   }
   pikaPcm(clip: number): void {
     this.op(VOX_OP.pikaPcm, clip);
+  }
+  /** A string-arg op in the trace's one form: two ints, then the string. */
+  private opText(code: number, str: string, a0 = 0, a1 = 0): void {
+    this.pending.push(`s ${code} ${a0} ${a1} ${JSON.stringify(str)}`);
+    this.opCount += 1;
+  }
+  gbShow(on: number): void {
+    this.op(VOX_OP.gbShow, on);
+  }
+  gbTiles(dest: number, page: number, first: number, count: number): void {
+    this.op(VOX_OP.gbTiles, dest, page, first, count);
+  }
+  gbReset(): void {
+    this.op(VOX_OP.gbReset);
+  }
+  gbMap(offset: number, hex: string): void {
+    this.opText(VOX_OP.gbMap, hex, offset);
+  }
+  gbRegs(lcdc: number, scx: number, scy: number, wx: number, wy: number, bgp: number, obp0: number, obp1: number): void {
+    this.op(VOX_OP.gbRegs, lcdc, scx, scy, wx, wy, bgp, obp0, obp1);
+  }
+  gbLines(target: number, hex: string): void {
+    this.opText(VOX_OP.gbLines, hex, target);
+  }
+  gbOam(hex: string): void {
+    this.opText(VOX_OP.gbOam, hex);
+  }
+  gbColours(bg: number, obp0: number, obp1: number): void {
+    this.op(VOX_OP.gbColours, bg, obp0, obp1);
   }
   audioWaves(engine: number, bank: number, addr: number): void {
     this.op(VOX_OP.audioWaves, engine, bank, addr);

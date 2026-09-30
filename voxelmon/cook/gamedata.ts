@@ -59,6 +59,8 @@ export interface AtlasIndex {
    * again with no species on the page, so the colour pass leaves them in
    * the four Game Boy shades the title shows them in. */
   picTitleMon: Record<string, number>;
+  /** Yellow's minigame tile sheets, "surf_1a" -> page. */
+  picMinigame?: Record<string, number>;
 }
 
 /** The tileset subset the guest needs (collision + animation semantics). */
@@ -239,6 +241,11 @@ export function buildGamedata(gen: GenData, atlas: AtlasIndex, cookedMaps: strin
       : undefined,
     atlas,
     mapPalette: buildMapPalette(gen),
+    // SGB palette name -> its index in the pak's set (the `palette` op's
+    // and the GB screen's argument)
+    paletteIndex: Object.fromEntries(gen.palettes.order.map((name, i) => [name, i])),
+    // Yellow's Surfing Pikachu tilemaps (the sheets are atlas pages)
+    minigame: gen.minigame ?? undefined,
   };
   return new TextEncoder().encode(JSON.stringify(game));
 }

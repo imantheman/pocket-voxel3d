@@ -290,6 +290,10 @@ export interface VoxelmonData {
    * indexes the pak's SGB set). Absent pre-cook: the scene then emits -1
    * (the GB grayscale ramp) for every map. */
   mapPalette?: Record<string, number>;
+  /** SGB palette name -> index in the pak's set (the `palette` op's argument). */
+  paletteIndex?: Record<string, number>;
+  /** Yellow's Surfing Pikachu tilemaps (import stages/minigame.ts). */
+  minigame?: { surfing?: { sheets: Record<string, { tiles: number }>; tilemaps: Record<string, number[]> } };
 }
 
 // ---------------------------------------------------------------------------

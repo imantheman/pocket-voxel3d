@@ -352,6 +352,14 @@ pub mod op {
     pub const UI_SPRITE_RECT_BOTTOM: u32 = 84;
     pub const UI_RECT_BOTTOM: u32 = 85;
     pub const PIKA_PCM: u32 = 86;
+    pub const GB_SHOW: u32 = 87;
+    pub const GB_TILES: u32 = 88;
+    pub const GB_RESET: u32 = 89;
+    pub const GB_MAP: u32 = 91;
+    pub const GB_REGS: u32 = 92;
+    pub const GB_LINES: u32 = 93;
+    pub const GB_OAM: u32 = 94;
+    pub const GB_COLOURS: u32 = 95;
 }
 
 /// Fixed-point scales used by op args.

@@ -47,6 +47,9 @@ import { TitleState, titlePage } from "./ui/title.ts";
 /** A nickname is ten letters (NAME_LENGTH); the player's is seven. */
 export const NICKNAME_LEN = 10;
 import { IntroState } from "./ui/intro.ts";
+import { VIEW_H, VIEW_W } from "../../contracts/spec/voxel-spec.ts";
+import { SurfingState } from "./ui/surfingstate.ts";
+import type { GbVideo } from "./gb/video.ts";
 import { StartMenuState } from "./ui/startmenu.ts";
 import { DevMenuState } from "./ui/devmenu.ts";
 import { CARD_PIC_RECT, TrainerCardState } from "./ui/trainercard.ts";
@@ -1150,6 +1153,11 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     // The boot movie draws in screen space and has already worked out
     // every rect it wants, so it hands the list straight through.
     if (top?.kind === "intro") return top.view().pics;
+    // The surfing minigame is a GB screen (gb()) over a white field.
+    if (top?.kind === "surfing") {
+      const white = namedPage(this.data as never, "picIntro", "white");
+      return white >= 0 ? [{ page: white, x: 0, y: 0, w: VIEW_W, h: VIEW_H }] : [];
+    }
     // The title lays itself out in GB space, like the movie (ui/title.ts).
     if (top?.kind === "title") return top.view().pics;
     if (top?.kind === "trainercard") {
@@ -2714,6 +2722,24 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   intro(): unknown {
     const top = this.stack[this.stack.length - 1] as any;
     return top?.kind === "intro" ? top.view() : null;
+  }
+
+  /** The GB screen scene.ts mirrors into the core (the surfing minigame). */
+  gb(): GbVideo | null {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "surfing" ? top.video() : null;
+  }
+
+  /**
+   * SurfingPikachuMinigame (Yellow's Summer Beach House). `selectQuits` is
+   * BIT_PIKACHU_MAP_SURF_SELECT: set once a run has been had this visit.
+   * The map's own theme comes back afterwards (PlayDefaultMusic).
+   */
+  startSurfingMinigame(selectQuits: boolean, onDone: () => void): void {
+    this.push(new SurfingState(this as never, selectQuits, () => {
+      this.restoreMapMusic();
+      onDone();
+    }));
   }
 
   /**

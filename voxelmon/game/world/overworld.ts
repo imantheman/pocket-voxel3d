@@ -580,6 +580,7 @@ export class Overworld implements ScriptWorld {
     // town is what puts it on FLY's list. Nothing recorded this before, so
     // every destination would have read as never-visited.
     visit(this.save as never, mapId);
+    this.pikachuMapFlags = 0;
     // A map script's every-load hook (story5.lua M.CINNABAR_ISLAND.onEnter).
     mapScript(mapId)?.onEnter?.(this, this.save);
     // Yellow's Pikachu comes along to every map (a no-op elsewhere)
@@ -1503,6 +1504,16 @@ export class Overworld implements ScriptWorld {
   /** play_cry -> the audio's playCry (Sound.lua:307). */
   playCry(species: string): void {
     (this.shell.audio as { playCry?: (s: string) => void }).playCry?.(species);
+  }
+
+  /** wPikachuMapScriptFlags: cleared on every map load (the Beach House). */
+  pikachuMapFlags = 0;
+
+  /** surfing_minigame -> the game's surfing state. */
+  startSurfingMinigame(selectQuits: boolean, onDone: () => void): void {
+    const shell = this.shell as unknown as { startSurfingMinigame?: (s: boolean, d: () => void) => void };
+    if (shell.startSurfingMinigame) shell.startSurfingMinigame(selectQuits, onDone);
+    else onDone();
   }
 
   /** pika_clip -> Yellow's voiced clip (PlayPikachuSoundClip). */

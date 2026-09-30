@@ -65,6 +65,17 @@ static JSValue vox_uitext(JSContext *ctx, JSValueConst t, int c, JSValueConst *v
     return JS_UNDEFINED;
 }
 
+/* The GB screen's string ops: (number, hexString), op code in `magic`. */
+static JSValue vox_numtext(JSContext *ctx, JSValueConst t, int c, JSValueConst *v, int magic) {
+    (void)t;
+    int32_t a[1]; a[0] = 0;
+    if (c >= 2) JS_ToInt32(ctx, &a[0], v[0]);
+    size_t len = 0;
+    const char *s = JS_ToCStringLen(ctx, &len, v[c >= 2 ? 1 : 0]);
+    if (s) { voxel_op_text((uint32_t)magic, a, 1, s, (int)len); JS_FreeCString(ctx, s); }
+    return JS_UNDEFINED;
+}
+
 static JSValue vox_savewrite(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t;
     if (c < 1) return JS_FALSE;
@@ -231,6 +242,18 @@ int qjs_register_voxel(JSContext *ctx) {
     add_num(ctx, o, "audioWaves",23,3);
     add_num(ctx, o, "audioDrum",24, 4);
     add_num(ctx, o, "pikaPcm",  86, 1);
+    /* The GB screen (core gb.rs). */
+    add_num(ctx, o, "gbShow",    87, 1);
+    add_num(ctx, o, "gbTiles",   88, 4);
+    add_num(ctx, o, "gbReset",   89, 0);
+    add_num(ctx, o, "gbRegs",    92, 8);
+    add_num(ctx, o, "gbColours", 95, 3);
+    JS_SetPropertyStr(ctx, o, "gbMap",
+        JS_NewCFunctionMagic(ctx, vox_numtext, "gbMap", 2, JS_CFUNC_generic_magic, 91));
+    JS_SetPropertyStr(ctx, o, "gbLines",
+        JS_NewCFunctionMagic(ctx, vox_numtext, "gbLines", 2, JS_CFUNC_generic_magic, 93));
+    JS_SetPropertyStr(ctx, o, "gbOam",
+        JS_NewCFunctionMagic(ctx, vox_numtext, "gbOam", 1, JS_CFUNC_generic_magic, 94));
 
     JS_SetPropertyStr(ctx, g, "voxel", o);
     JS_FreeValue(ctx, g);

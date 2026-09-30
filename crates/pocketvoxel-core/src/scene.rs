@@ -285,6 +285,8 @@ pub struct Scene {
     /// its ring wants. A host that mounts no audio module never pumps, and
     /// the identical op stream runs silent.
     pub audio: Audio,
+    /// The GB screen (gb.rs), for the screens ported off the hardware.
+    pub gb: crate::gb::GbScreen,
     /// The tick index — the only clock (tile animation, cursors, rig drift).
     pub tick: u32,
     /// Total ops dispatched (debug counter for `stats()`).
@@ -433,6 +435,7 @@ impl Scene {
             floor: FloorMap::default(),
             quality: QUALITY_TIER_DEFAULT,
             audio: Audio::new(),
+            gb: crate::gb::GbScreen::default(),
             tick: 0,
             ops: 0,
         }
@@ -516,6 +519,9 @@ impl Scene {
         let a = |i: usize| args.get(i).copied().unwrap_or(0);
         // The audio group owns its own codes (voxel-spec.ts §audio).
         if self.audio.op(code, args) {
+            return OpResult::None;
+        }
+        if self.gb.op(code, args, s) {
             return OpResult::None;
         }
         match code {

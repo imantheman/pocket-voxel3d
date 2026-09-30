@@ -763,6 +763,35 @@ export const VOX_OP = {
   uiRectBottom: 85,
   /** Yellow's voiced Pikachu clip `clip` (1-based) -- see §audio above. */
   pikaPcm: 86,
+  /**
+   * The GB screen (crates/pocketvoxel-core gb.rs; voxelmon/game/gb/video.ts):
+   * a Game Boy's tile maps, registers, per-line overrides and OAM, drawn the
+   * way the hardware draws them, over the pictures -- for the screens ported
+   * straight off the hardware (Yellow's Surfing Pikachu). 90 is skipped: the
+   * 3DS host's viewer hook claims it.
+   *   gbShow(on)                               draw it this frame on
+   *   gbTiles(dest, page, first, count)        VRAM tiles dest.. hold `count`
+   *                                            tiles of atlas page `page`
+   *                                            from `first` (0..127 $8000,
+   *                                            128..255 $8800, 256.. $9000)
+   *   gbReset()                                maps, OAM, loads, registers
+   *   gbMap(offset, hex)                       map bytes from `offset`
+   *                                            ($9800 = 0, $9C00 = 0x400)
+   *   gbRegs(lcdc, scx, scy, wx, wy, bgp, obp0, obp1)
+   *   gbLines(target, hex)                     wLYOverrides: 144 bytes for
+   *                                            0 none, 1 SCY, 2 SCX
+   *   gbOam(hex)                               160 bytes of OAM
+   *   gbColours(bg, obp0, obp1)                SGB palette indices (the
+   *                                            `palette` op's), -1 grey
+   */
+  gbShow: 87,
+  gbTiles: 88,
+  gbReset: 89,
+  gbMap: 91,
+  gbRegs: 92,
+  gbLines: 93,
+  gbOam: 94,
+  gbColours: 95,
 } as const;
 
 /** Clips in Yellow's PikachuCriesPointerTable (NUM_PIKA_CRIES). */

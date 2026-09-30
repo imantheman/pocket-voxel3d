@@ -19,6 +19,8 @@ import {
   UI_TILE,
 } from "../../contracts/spec/voxel-spec.ts";
 import { CARD_PIC_CELL } from "./ui/trainercard.ts";
+import { GbEmitter } from "./gb/emit.ts";
+import type { GbVideo } from "./gb/video.ts";
 import { SUMMARY_PIC_CELL } from "./ui/partyscreen.ts";
 import { hpBarTiles } from "./battle/ui.ts";
 import { TRADE_PIC_CELL } from "./ui/tradeanim.ts";
@@ -180,6 +182,8 @@ export class Scene {
   private picSig = "";
   private titleSig: string | null = null;
   private introSig: string | null = null;
+  /** The GB screen's op stream (gb/emit.ts). */
+  private readonly gbEmitter = new GbEmitter();
   private menuSig: string | null = null;
   private bagSig: string | null = null;
   private shopSig: string | null = null;
@@ -764,6 +768,27 @@ export class Scene {
         // want one -- today that is the intro's fist and nothing else.
         if (q.d) host.picDepth(i, q.d);
       }
+    }
+
+    // A screen ported straight off the hardware (Yellow's Surfing Pikachu)
+    // owns the frame the same way: its pictures went out above, the GB
+    // screen goes over them, and the tile layer stays clear.
+    const gbv = (view as unknown as { gb?: () => GbVideo | null }).gb?.() ?? null;
+    const data = view.data as unknown as {
+      atlas?: { picMinigame?: Record<string, number> };
+      paletteIndex?: Record<string, number>;
+    };
+    this.gbEmitter.emit(host, gbv, {
+      page: (sheet) => data.atlas?.picMinigame?.[sheet] ?? -1,
+      palette: (name) => data.paletteIndex?.[name] ?? -1,
+    });
+    if (gbv) {
+      if (this.introSig !== "gb") {
+        this.introSig = "gb";
+        this.uiOwner = null;
+        host.uiClear();
+      }
+      return;
     }
 
     // The boot movie owns the whole frame: its pictures went out above and

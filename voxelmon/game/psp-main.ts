@@ -104,6 +104,14 @@ interface VoxelNative {
   ): void;
   cry?(bank: number, addr: number, engine: number, pitch: number, length: number): void;
   pikaPcm?(clip: number): void;
+  gbShow?(on: number): void;
+  gbTiles?(dest: number, page: number, first: number, count: number): void;
+  gbReset?(): void;
+  gbMap?(offset: number, hex: string): void;
+  gbRegs?(lcdc: number, scx: number, scy: number, wx: number, wy: number, bgp: number, obp0: number, obp1: number): void;
+  gbLines?(target: number, hex: string): void;
+  gbOam?(hex: string): void;
+  gbColours?(bg: number, obp0: number, obp1: number): void;
   audioWaves?(engine: number, bank: number, addr: number): void;
   audioDrum?(engine: number, drum: number, bank: number, addr: number): void;
 }
@@ -291,6 +299,30 @@ class QuickJsHost implements VoxelHost {
   }
   pikaPcm(clip: number): void {
     native.pikaPcm?.(clip);
+  }
+  gbShow(on: number): void {
+    native.gbShow?.(on);
+  }
+  gbTiles(dest: number, page: number, first: number, count: number): void {
+    native.gbTiles?.(dest, page, first, count);
+  }
+  gbReset(): void {
+    native.gbReset?.();
+  }
+  gbMap(offset: number, hex: string): void {
+    native.gbMap?.(offset, hex);
+  }
+  gbRegs(lcdc: number, scx: number, scy: number, wx: number, wy: number, bgp: number, obp0: number, obp1: number): void {
+    native.gbRegs?.(lcdc, scx, scy, wx, wy, bgp, obp0, obp1);
+  }
+  gbLines(target: number, hex: string): void {
+    native.gbLines?.(target, hex);
+  }
+  gbOam(hex: string): void {
+    native.gbOam?.(hex);
+  }
+  gbColours(bg: number, obp0: number, obp1: number): void {
+    native.gbColours?.(bg, obp0, obp1);
   }
   audioWaves(engine: number, bank: number, addr: number): void {
     native.audioWaves?.(engine, bank, addr);

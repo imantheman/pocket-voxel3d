@@ -3273,6 +3273,15 @@ fn main() {
     // The frame each picture page was last drawn on (see the eviction after
     // the pic loads below).
     let mut pic_seen: Vec<u32> = Vec::new();
+    // The GB screen (core gb.rs): the tile pages it reads, unswizzled once;
+    // the serial it last drew; two textures it alternates between, so the
+    // one being written is never the one the GPU is still reading.
+    let mut gb_pages: Vec<(u16, Vec<u8>, usize)> = Vec::new();
+    let mut gb_tex: [Option<texture::Texture>; 2] = [None, None];
+    let mut gb_cur: usize = 0;
+    let mut gb_drawn: Option<u32> = None;
+    let mut gb_fb = vec![0u8; pocketvoxel_core::gb::GB_W * pocketvoxel_core::gb::GB_H];
+    let mut gb_hold: Option<buffer::Info> = None;
     // TINS: one buffer per carved shape, and the placements that draw them.
     // A forest is the same few drawings thousands of times, so the geometry
     // is uploaded once and the instances only say where and how detailed.
@@ -4743,6 +4752,90 @@ if page_tex.len() < pak_static.atlases.len() {
                 }
             }
         }
+        // The GB screen: drawn again only when an op changed it, coloured
+        // through the SGB palettes it names, and laid over the Game Boy's
+        // rect of the top screen after the pictures.
+        let mut gb_buf: Option<buffer::Info> = None;
+        {
+            let sc = unsafe { voxel::scene() };
+            if sc.gb.shown {
+                if gb_drawn != Some(sc.gb.serial) {
+                    gb_drawn = Some(sc.gb.serial);
+                    for l in &sc.gb.loads[..sc.gb.load_count] {
+                        if gb_pages.iter().any(|g| g.0 == l.page) { continue; }
+                        if let Some(pg) = pak_static.atlases.get(l.page as usize) {
+                            let lin = pak::unswizzle(pg.w as usize, pg.h as usize, pg.frame(0))
+                                .unwrap_or_default();
+                            gb_pages.push((l.page, lin, pg.w as usize));
+                        }
+                    }
+                    let pages = &gb_pages;
+                    let mut pixel = |page: u16, tile: u16, x: u8, y: u8| -> u8 {
+                        let Some((_, lin, w)) = pages.iter().find(|g| g.0 == page) else { return 0 };
+                        let cols = (*w / 8).max(1);
+                        let (tx, ty) = (tile as usize % cols, tile as usize / cols);
+                        lin.get((ty * 8 + y as usize) * *w + tx * 8 + x as usize).copied().unwrap_or(0) & 3
+                    };
+                    sc.gb.render(&mut pixel, &mut gb_fb);
+                    let grey = pak_static.palettes.get(atlas_kind::PICS as usize);
+                    let mut lut = [0u32; 12];
+                    for slot in 0..3 {
+                        let idx = sc.gb.colours[slot];
+                        let pal = if idx >= 0 { pak_static.palettes.get(4 + idx as usize).or(grey) } else { grey };
+                        for sh in 0..4 {
+                            lut[slot * 4 + sh] = pal.map(|p| p[sh]).unwrap_or(0xff000000 | (0x555555 * (3 - sh as u32)));
+                        }
+                    }
+                    let (gw, gh) = (pocketvoxel_core::gb::GB_W, pocketvoxel_core::gb::GB_H);
+                    let mut data = vec![0u8; 256 * 256 * 4];
+                    for y in 0..gh {
+                        for x in 0..gw {
+                            let c = lut[gb_fb[y * gw + x] as usize % 12];
+                            let o = tiled_off(x as u32, y as u32, 256);
+                            data[o] = (c >> 24) as u8;
+                            data[o + 1] = (c >> 16) as u8;
+                            data[o + 2] = (c >> 8) as u8;
+                            data[o + 3] = c as u8;
+                        }
+                    }
+                    let next = gb_cur ^ 1;
+                    if gb_tex[next].is_none() {
+                        if let Ok(mut t) = texture::Texture::new(
+                            texture::TextureParameters::new_2d(256, 256, texture::ColorFormat::Rgba8)) {
+                            t.set_filter(texture::Filter::Nearest, texture::Filter::Nearest);
+                            t.set_wrap(texture::Wrap::ClampToEdge, texture::Wrap::ClampToEdge);
+                            gb_tex[next] = Some(t);
+                        }
+                    }
+                    if let Some(t) = gb_tex[next].as_mut() {
+                        if t.load_image(&data, texture::Face::default()).is_ok() {
+                            unsafe { gsp_flush(data.as_ptr(), data.len() as u32); }
+                            gb_cur = next;
+                        }
+                    }
+                }
+                // the Game Boy's 10:9 rect, the full height of the screen
+                let w = pocketvoxel_core::gb::GB_W as f32 * UI_VIEW_H / pocketvoxel_core::gb::GB_H as f32;
+                let ox = (UI_VIEW_W - w) / 2.0;
+                let (x0, y0, x1, y1) = (qpx(ox), qpx(0.0), qpx(ox + w), qpx(UI_VIEW_H));
+                let (u1, v1) = (160.0 / 256.0, 144.0 / 256.0);
+                let mp = |px: i16, py: i16, u: f32, v: f32| Vertex {
+                    pos: [px, py, 0, 0], color: [255, 255, 255, 255], uv: [u, v] };
+                let verts = [
+                    mp(x0, y0, 0.0, 1.0), mp(x1, y0, u1, 1.0), mp(x1, y1, u1, 1.0 - v1),
+                    mp(x0, y0, 0.0, 1.0), mp(x1, y1, u1, 1.0 - v1), mp(x0, y1, 0.0, 1.0 - v1),
+                ];
+                let mut bi = buffer::Info::new();
+                if bi.add(buffer::Buffer::new(&verts[..]), attr_info.permutation()).is_ok() {
+                    gb_buf = Some(bi);
+                }
+            } else if gb_drawn.is_some() {
+                // the screen has gone: let its pages and textures go too
+                gb_drawn = None;
+                gb_pages.clear();
+                gb_tex = [None, None];
+            }
+        }
         let pic_bufs: Vec<(usize, i16, buffer::Info)> = pic_groups.iter()
             .filter_map(|(pg, depth, v)| {
                 if v.is_empty() { return None; }
@@ -4960,6 +5053,8 @@ if page_tex.len() < pak_static.atlases.len() {
             Some((*pg as usize, bi))
         }).collect();
         let page_tex_ref = &page_tex;
+        let gb_tex_ref = gb_tex[gb_cur].as_ref();
+        let gb_buf_ref = gb_buf.as_ref();
         // Cull/view-cone focus: the guest camera's real focus/eye
         // (guest_eye_focus, captured above) when we have one, not `center`/
         // the debug-orbit `eye` — those are the player's walking position,
@@ -5308,7 +5403,7 @@ if page_tex.len() < pak_static.atlases.len() {
                 // Card UVs are already atlas-scaled here, so the shader's
                 // terrain uvx transform must not apply again.
                 frame.bind_vertex_uniform(uvx_idx, FVec4::new(1.0, 1.0, 0.0, 0.0));
-                if !pic_bufs.is_empty() {
+                if !pic_bufs.is_empty() || gb_buf_ref.is_some() {
                     unsafe { c3d_depth_test(0); }
                     let po: Matrix4 = Projection::orthographic(
                         0.0..(UI_VIEW_W * UI_Q), (UI_VIEW_H * UI_Q)..0.0,
@@ -5333,6 +5428,11 @@ if page_tex.len() < pak_static.atlases.len() {
                         if *depth != 0 {
                             frame.bind_vertex_uniform(toff_idx, FVec4::new(0.0, 0.0, 0.0, 0.0));
                         }
+                    }
+                    // the GB screen, over every picture
+                    if let (Some(gb), Some(t)) = (gb_buf_ref, gb_tex_ref) {
+                        frame.bind_texture(texture::Index::Texture0, t);
+                        frame.draw_arrays(buffer::Primitive::Triangles, gb, None).unwrap();
                     }
                     frame.bind_vertex_uniform(projection_idx, mvp);
                     unsafe { c3d_depth_test(1); }
@@ -5490,6 +5590,7 @@ if page_tex.len() < pak_static.atlases.len() {
         // last touched them.
         card_hold = card_bufs;
         pic_hold = pic_bufs;
+        gb_hold = gb_buf;
         ui_hold = ui_buf;
         anim_hold = anim_bufs;
         ui_b_hold = ui_b_buf;
@@ -5498,7 +5599,7 @@ if page_tex.len() < pak_static.atlases.len() {
         ui_b_dim_hold = ui_b_dim_buf;
         ui_b_sprite_hold = ui_b_sprite_bufs;
         let _ = (
-            &card_hold, &pic_hold, &ui_hold, &anim_hold, &ui_b_hold,
+            &card_hold, &pic_hold, &gb_hold, &ui_hold, &anim_hold, &ui_b_hold,
             &ui_b_bar_hold, &ui_b_light_hold, &ui_b_dim_hold, &ui_b_sprite_hold,
         );
     }

@@ -13,6 +13,7 @@ import { Rom } from "./rom.ts";
 import { writeJson } from "./writer.ts";
 import { extractAudio } from "./stages/audio.ts";
 import { extractPikaCries } from "./stages/pikacries.ts";
+import { extractMinigame } from "./stages/minigame.ts";
 import { extractEncounters } from "./stages/encounters.ts";
 import { extractField } from "./stages/field.ts";
 import { extractFont } from "./stages/font.ts";
@@ -90,6 +91,16 @@ export async function runImport(env: VoxelEnv): Promise<void> {
     ["trainercard", () => writeJson(genDir, "trainercard", extractTrainerCard(ctx))],
     ["townmap", () => writeJson(genDir, "townmap", extractTownMap(ctx))],
     ["slots", () => writeJson(genDir, "slots", extractSlots(ctx))],
+    [
+      "minigame",
+      () => {
+        // Yellow's Surfing Pikachu: its tile banks (gfx) and tilemaps
+        const out = extractMinigame(ctx);
+        const path = join(genDir, "minigame.json");
+        if (out) writeJson(genDir, "minigame", out);
+        else if (existsSync(path)) rmSync(path);
+      },
+    ],
     [
       "audio",
       () => {

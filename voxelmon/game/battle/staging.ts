@@ -46,6 +46,7 @@ interface AtlasDir {
   picTitle?: Record<string, number>;
   picIntro?: Record<string, number>;
   picTitleMon?: Record<string, number>;
+  picMinigame?: Record<string, number>;
 }
 
 /**
@@ -59,7 +60,7 @@ interface AtlasDir {
  */
 export function namedPage(
   data: VoxelmonData,
-  which: "picTrainer" | "picTitle" | "picIntro" | "picTitleMon",
+  which: "picTrainer" | "picTitle" | "picIntro" | "picTitleMon" | "picMinigame",
   key: string,
 ): number {
   return atlasOf(data)?.[which]?.[key] ?? -1;

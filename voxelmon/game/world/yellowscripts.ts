@@ -12,7 +12,8 @@ import { hasSevenBadges, liftKeyRocketRows, lockedDoorStep, type MapScript } fro
 import { coinClerkRows, coinGiverRows, YELLOW_COIN_GIVERS } from "./gamecorner.ts";
 import { SAFARI_JOIN_CELLS, safariJoinRows, safariLeavingRows } from "./safari.ts";
 import { gymGateFlag } from "./toggleblocks.ts";
-import type { ScriptRow } from "./script.ts";
+import { PIKA_MAP_PAUSE_IGT, PIKA_MAP_SURF_SELECT, type ScriptRow } from "./script.ts";
+import { surfingPikachuInParty } from "../ui/surfingstate.ts";
 import type { Dir } from "./collision.ts";
 
 const MEET_RIVAL = "Music_MeetRival";
@@ -177,6 +178,65 @@ function labOnStep(ow: any, save: any): ScriptRow[] | null {
     ["pika_clip", 2], // OaksLab.asm:1096 PikachuCry2
     ["show_text", "_OaksLabPikachuDislikesPokeballsText1"],
     ["show_text", "_OaksLabPikachuDislikesPokeballsText2"],
+  ] as ScriptRow[];
+}
+
+/**
+ * SummerBeachHouseSurfinDudeText. Only a Pikachu that knows SURF gets a
+ * word about surfing (BIT_PIKACHU_SPAWN_SURFING); the long pitch is the
+ * first ask each visit (BIT_PIKACHU_MAP_PAUSE_IGT, set as it is asked), the
+ * short one after.
+ */
+function surfinDude(ow: any, save: any): ScriptRow[] {
+  if (!surfingPikachuInParty(save ?? {})) {
+    return [["face_player"], ["show_text", "_SummerBeachHouseSurfinDudeText4"]] as ScriptRow[];
+  }
+  const asked = ((ow?.pikachuMapFlags ?? 0) & PIKA_MAP_PAUSE_IGT) !== 0;
+  if (ow) ow.pikachuMapFlags = (ow.pikachuMapFlags ?? 0) | PIKA_MAP_PAUSE_IGT;
+  return [
+    ["face_player"],
+    ["ask", asked ? "_SummerBeachHouseSurfinDudeText3" : "_SummerBeachHouseSurfinDudeText1"],
+    ["jump_if_false", "no"],
+    ["surfing_minigame"],
+    ["jump", "end"],
+    ["label", "no"],
+    ["show_text", "_SummerBeachHouseSurfinDudeText2"],
+    ["label", "end"],
+  ] as ScriptRow[];
+}
+
+/** SummerBeachHousePoster1-3Text: the surf-capable line once a surfing
+ * Pikachu is along. */
+function beachPoster(n: number) {
+  return (_ow: any, save: any): ScriptRow[] =>
+    [["show_text", `_SummerBeachHousePoster${n}Text${surfingPikachuInParty(save ?? {}) ? 1 : 2}`]] as ScriptRow[];
+}
+
+/**
+ * SummerBeachHousePrinterText. With a surfing Pikachu it is the SUMMER
+ * BEACH HOUSE PRINTER, and once this visit has had a run it offers the
+ * Hi-Score. YES prints (Func_f23d0) -- there is no Game Boy Printer on the
+ * link port, so the cartridge's own "PRINT error!" answers; NO shows the
+ * card (Printer_PrepareSurfingMinigameHighScoreTileMap), here as its words:
+ * the header, the player's Hi-Score and the points, since the card's own
+ * tiles (SurfingPikachu2Graphics) are not in the manifest.
+ */
+function beachPrinter(ow: any, save: any): ScriptRow[] {
+  if (!surfingPikachuInParty(save ?? {})) return [["show_text", "_SummerBeachHousePrinterText1"]] as ScriptRow[];
+  const rows: ScriptRow[] = [["show_text", "_SummerBeachHousePrinterText2"]] as ScriptRow[];
+  if (((ow?.pikachuMapFlags ?? 0) & PIKA_MAP_SURF_SELECT) === 0) return rows;
+  const bcd = save?.surfingHiScore ?? 0;
+  const score = String(Number.parseInt(bcd.toString(16), 10) || 0);
+  const name = save?.player?.name ?? "";
+  return [
+    ...rows,
+    ["ask", "_SummerBeachHousePrinterText3"],
+    ["jump_if_false", "card"],
+    ["show_text", "_SummerBeachHousePrinterText6"],
+    ["jump", "end"],
+    ["label", "card"],
+    ["show_text", `Pikachu's Beach\x0c${name}'s Hi-Score\n${score.padStart(4, " ")} Points`],
+    ["label", "end"],
   ] as ScriptRow[];
 }
 
@@ -576,6 +636,21 @@ export function yellowScripts(base: Record<string, MapScript>): Record<string, M
       ])),
     },
     // SafariZoneGate_2.asm: Yellow lets the short and the broke in anyway
+    // SummerBeachHouse.asm: Route 19's surf shack
+    SUMMER_BEACH_HOUSE: {
+      talk: {
+        TEXT_SUMMERBEACHHOUSE_SURFINDUDE: surfinDude,
+        TEXT_SUMMERBEACHHOUSE_PIKACHU: [
+          ["face_player"],
+          ["show_text", "_SummerBeachHousePikachuText"],
+          ["play_cry", "PIKACHU"],
+        ] as ScriptRow[],
+        TEXT_SUMMERBEACHHOUSE_POSTER1: beachPoster(1),
+        TEXT_SUMMERBEACHHOUSE_POSTER2: beachPoster(2),
+        TEXT_SUMMERBEACHHOUSE_POSTER3: beachPoster(3),
+        TEXT_SUMMERBEACHHOUSE_PRINTER: beachPrinter,
+      },
+    },
     SAFARI_ZONE_GATE: {
       talk: {
         TEXT_SAFARIZONEGATE_SAFARI_ZONE_WORKER1: (_ow: any, save: any): ScriptRow[] =>

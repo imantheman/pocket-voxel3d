@@ -34,6 +34,8 @@ import {
   yellowIntroPalette,
 } from "../voxelmon/game/ui/yellowintro.ts";
 import { IntroState } from "../voxelmon/game/ui/intro.ts";
+import { surfingPikachuInParty } from "../voxelmon/game/ui/surfingstate.ts";
+import { PIKA_MAP_PAUSE_IGT, PIKA_MAP_SURF_SELECT } from "../voxelmon/game/world/script.ts";
 
 const genDir = join(import.meta.dir, "../dist/voxelmon/yellow/gen");
 const hasYellow = REQUIRED_MODULES.every((m) => existsSync(join(genDir, `${m}.json`)));
@@ -179,6 +181,46 @@ describe("Yellow: its attract movie", () => {
     expect([...pages].some((pg) => pg >= 100)).toBe(true);
     for (let i = 0; i < 1100 && !done; i++) intro.update();
     expect(done).toBe(1);
+  });
+});
+
+describe("Yellow: the Summer Beach House", () => {
+  const talk = (text: string, ow: any, save: any): unknown[][] => {
+    useScriptsFor("yellow");
+    const t = mapScript("SUMMER_BEACH_HOUSE")!.talk![text]!;
+    return (typeof t === "function" ? (t as any)(ow, save) : t) as unknown[][];
+  };
+  const surfer = { species: "PIKACHU", moves: [{ id: "THUNDERSHOCK" }, { id: "SURF" }] };
+  const texts = (rows: unknown[][]) => rows.filter((r) => r[0] === "show_text" || r[0] === "ask").map((r) => r[1]);
+
+  test("only a Pikachu that knows SURF counts", () => {
+    expect(surfingPikachuInParty({ party: [surfer] } as never)).toBe(true);
+    expect(surfingPikachuInParty({ party: [{ species: "PIKACHU", moves: [{ id: "SURF" }].slice(1) }] } as never)).toBe(false);
+    expect(surfingPikachuInParty({ party: [{ species: "RAICHU", moves: [{ id: "SURF" }] }] } as never)).toBe(false);
+  });
+
+  test("the SURFIN' DUDE pitches once a visit, then asks short, and runs the game on YES", () => {
+    const ow: any = { pikachuMapFlags: 0 };
+    expect(texts(talk("TEXT_SUMMERBEACHHOUSE_SURFINDUDE", ow, { party: [] }))).toEqual(["_SummerBeachHouseSurfinDudeText4"]);
+    const first = talk("TEXT_SUMMERBEACHHOUSE_SURFINDUDE", ow, { party: [surfer] });
+    expect(texts(first)).toEqual(["_SummerBeachHouseSurfinDudeText1", "_SummerBeachHouseSurfinDudeText2"]);
+    expect(first.some((r) => r[0] === "surfing_minigame")).toBe(true);
+    expect(ow.pikachuMapFlags & PIKA_MAP_PAUSE_IGT).toBeTruthy();
+    expect(texts(talk("TEXT_SUMMERBEACHHOUSE_SURFINDUDE", ow, { party: [surfer] }))[0]).toBe("_SummerBeachHouseSurfinDudeText3");
+  });
+
+  test("the posters and the printer read the party, the printer the visit too", () => {
+    expect(texts(talk("TEXT_SUMMERBEACHHOUSE_POSTER2", {}, { party: [surfer] }))).toEqual(["_SummerBeachHousePoster2Text1"]);
+    expect(texts(talk("TEXT_SUMMERBEACHHOUSE_POSTER2", {}, { party: [] }))).toEqual(["_SummerBeachHousePoster2Text2"]);
+    expect(texts(talk("TEXT_SUMMERBEACHHOUSE_PRINTER", {}, { party: [] }))).toEqual(["_SummerBeachHousePrinterText1"]);
+    const notYet = talk("TEXT_SUMMERBEACHHOUSE_PRINTER", { pikachuMapFlags: 0 }, { party: [surfer] });
+    expect(texts(notYet)).toEqual(["_SummerBeachHousePrinterText2"]);
+    const surfed = talk("TEXT_SUMMERBEACHHOUSE_PRINTER", { pikachuMapFlags: PIKA_MAP_SURF_SELECT },
+      { party: [surfer], surfingHiScore: 0x1234, player: { name: "YELLOW" } });
+    const all = texts(surfed) as string[];
+    expect(all.slice(0, 3)).toEqual(["_SummerBeachHousePrinterText2", "_SummerBeachHousePrinterText3", "_SummerBeachHousePrinterText6"]);
+    expect(all.at(-1)).toContain("YELLOW's Hi-Score");
+    expect(all.at(-1)).toContain("1234 Points");
   });
 });
 

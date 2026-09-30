@@ -6490,6 +6490,89 @@ class TrainerCardState {
   }
 }
 
+// voxelmon/game/gb/emit.ts
+var HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
+function hex(bytes, from = 0, to = bytes.length) {
+  let s = "";
+  for (let i = from;i < to; i++)
+    s += HEX[bytes[i] & 255];
+  return s;
+}
+var MERGE_GAP = 8;
+
+class GbEmitter {
+  shown = false;
+  maps = new Uint8Array(2048);
+  loads = "";
+  regs = "";
+  lines = "";
+  oam = "";
+  colours = "";
+  emit(host, v, resolve) {
+    if (!v) {
+      if (this.shown) {
+        host.gbShow?.(0);
+        this.shown = false;
+      }
+      return;
+    }
+    if (!this.shown) {
+      host.gbReset?.();
+      host.gbShow?.(1);
+      this.shown = true;
+      this.maps.fill(0);
+      this.loads = this.regs = this.lines = this.oam = this.colours = "";
+    }
+    const loads = v.loads.map((l) => `${l.dest},${l.sheet},${l.first},${l.count}`).join("|");
+    if (loads !== this.loads) {
+      this.loads = loads;
+      for (const l of v.loads)
+        host.gbTiles?.(l.dest, resolve.page(l.sheet), l.first, l.count);
+    }
+    let i = 0;
+    while (i < 2048) {
+      if (v.maps[i] === this.maps[i]) {
+        i++;
+        continue;
+      }
+      let end = i + 1;
+      let gap = 0;
+      for (let j = i + 1;j < 2048 && gap < MERGE_GAP; j++) {
+        if (v.maps[j] !== this.maps[j]) {
+          end = j + 1;
+          gap = 0;
+        } else
+          gap++;
+      }
+      host.gbMap?.(i, hex(v.maps, i, end));
+      this.maps.set(v.maps.subarray(i, end), i);
+      i = end;
+    }
+    const regs = [v.lcdc, v.scx, v.scy, v.wx, v.wy, v.bgp, v.obp0, v.obp1].join(",");
+    if (regs !== this.regs) {
+      this.regs = regs;
+      host.gbRegs?.(v.lcdc, v.scx & 255, v.scy & 255, v.wx & 255, v.wy & 255, v.bgp, v.obp0, v.obp1);
+    }
+    const target2 = v.lineTarget === "scy" ? 1 : v.lineTarget === "scx" ? 2 : 0;
+    const lines = target2 ? `${target2}:${hex(v.lines)}` : "0";
+    if (lines !== this.lines) {
+      this.lines = lines;
+      host.gbLines?.(target2, target2 ? hex(v.lines) : "");
+    }
+    const oam = hex(v.oam);
+    if (oam !== this.oam) {
+      this.oam = oam;
+      host.gbOam?.(oam);
+    }
+    const c = v.colours;
+    const colours = `${c.bg},${c.obj0},${c.obj1}`;
+    if (colours !== this.colours) {
+      this.colours = colours;
+      host.gbColours?.(resolve.palette(c.bg), resolve.palette(c.obj0), resolve.palette(c.obj1));
+    }
+  }
+}
+
 // voxelmon/game/world/map.ts
 var WATER_TILES = [20];
 var SHORE_TILES = [50, 72];
@@ -7802,6 +7885,3593 @@ var ROUTE_23_RESET_FLAGS = [
   "EVENT_VICTORY_ROAD_3_BOULDER_ON_SWITCH2"
 ];
 
+// voxelmon/game/world/link.ts
+var LINK_ROOM_MAP = ["TRADE_CENTER", "COLOSSEUM"];
+var LINK_TABLE = [
+  { x: 4, y: 4 },
+  { x: 5, y: 4 }
+];
+var LINK_SEATS = [
+  { enter: { x: 2, y: 4 }, seat: { x: 3, y: 4 }, facing: "right" },
+  { enter: { x: 7, y: 4 }, seat: { x: 6, y: 4 }, facing: "left" }
+];
+var LINK_WAIT_FRAMES = 60 * 60;
+var LINK_MSG = {
+  hello: 1,
+  room: 2,
+  cancel: 3,
+  offer: 4,
+  answer: 5,
+  pos: 6,
+  party: 7,
+  seed: 8,
+  action: 9,
+  begin: 10,
+  commit: 11
+};
+var LINK_ANSWER_FRAMES = 60 * 120;
+function asciiJson(v) {
+  return JSON.stringify(v).replace(/[\u0080-\uffff]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+}
+function encodeJson(kind, v) {
+  const s = asciiJson(v);
+  const out = new Uint8Array(1 + s.length);
+  out[0] = kind;
+  for (let i = 0;i < s.length; i++)
+    out[1 + i] = s.charCodeAt(i) & 255;
+  return out;
+}
+function decodeJson(frame) {
+  let s = "";
+  for (let i = 1;i < frame.length; i++)
+    s += String.fromCharCode(frame[i]);
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+var LINK_ROOM = { trade: 0, colosseum: 1 };
+var LINK_VERSION = 3;
+var MAX_NAME = 10;
+function encodeHello(name, nonce) {
+  const s = asciiJson({ n: [...name].slice(0, MAX_NAME).join(""), k: nonce });
+  const out = new Uint8Array(2 + s.length);
+  out[0] = LINK_MSG.hello;
+  out[1] = LINK_VERSION;
+  for (let i = 0;i < s.length; i++)
+    out[2 + i] = s.charCodeAt(i) & 255;
+  return out;
+}
+function decodeHello(frame) {
+  let s = "";
+  for (let i = 2;i < frame.length; i++)
+    s += String.fromCharCode(frame[i]);
+  try {
+    const v = JSON.parse(s);
+    return { name: typeof v?.n === "string" ? v.n : "", nonce: Number(v?.k ?? 0) };
+  } catch {
+    return { name: s, nonce: 0 };
+  }
+}
+var RELIABLE_RESEND_FRAMES = 6;
+var RELIABLE_KEEPALIVE_FRAMES = 60;
+var LINK_DEAD_FRAMES = 60 * 8;
+var RELIABLE_MTU = 1000;
+var RELIABLE_WINDOW = 32;
+var SEQ_MOD = 4096;
+var RL_DATA = 126;
+var RL_MORE = 124;
+var RL_ACK = 125;
+function seqAfter(a, b) {
+  const d = a - b & SEQ_MOD - 1;
+  return d !== 0 && d < SEQ_MOD / 2;
+}
+
+class ReliableLink {
+  inner;
+  txSeq = 0;
+  rxExpect = 0;
+  pending = [];
+  pieces = [];
+  ackDue = false;
+  sinceSend = 0;
+  sinceRecv = 0;
+  frame = 0;
+  gone = false;
+  constructor(inner) {
+    this.inner = inner;
+  }
+  raw(kind, seq, body) {
+    const out = new Uint8Array(3 + (body?.length ?? 0));
+    out[0] = kind;
+    out[1] = 64 | seq & 63;
+    out[2] = 64 | seq >> 6 & 63;
+    if (body)
+      out.set(body, 3);
+    this.inner.send(out);
+    this.sinceSend = 0;
+  }
+  queue(kind, body) {
+    const seq = this.txSeq;
+    this.txSeq = (seq + 1) % SEQ_MOD;
+    this.pending.push({ seq, kind, body });
+    if (this.pending.length <= RELIABLE_WINDOW)
+      this.raw(kind, seq, body);
+  }
+  send(frame) {
+    let at = 0;
+    while (frame.length - at > RELIABLE_MTU) {
+      this.queue(RL_MORE, frame.subarray(at, at + RELIABLE_MTU));
+      at += RELIABLE_MTU;
+    }
+    this.queue(RL_DATA, frame.subarray(at));
+  }
+  recv() {
+    for (;; ) {
+      const f = this.inner.recv();
+      if (!f)
+        return null;
+      if (f.length < 3)
+        continue;
+      const seq = f[1] & 63 | (f[2] & 63) << 6;
+      this.sinceRecv = 0;
+      if (f[0] === RL_ACK) {
+        this.pending = this.pending.filter((p) => !seqAfter(seq, p.seq));
+        continue;
+      }
+      if (f[0] !== RL_DATA && f[0] !== RL_MORE)
+        continue;
+      this.ackDue = true;
+      if (seq !== this.rxExpect)
+        continue;
+      this.rxExpect = (seq + 1) % SEQ_MOD;
+      const body = f.subarray(3);
+      if (f[0] === RL_MORE) {
+        this.pieces.push(body);
+        continue;
+      }
+      if (this.pieces.length === 0)
+        return body;
+      const whole = new Uint8Array(this.pieces.reduce((n, p) => n + p.length, 0) + body.length);
+      let at = 0;
+      for (const piece of this.pieces) {
+        whole.set(piece, at);
+        at += piece.length;
+      }
+      whole.set(body, at);
+      this.pieces = [];
+      return whole;
+    }
+  }
+  tick() {
+    this.frame += 1;
+    this.sinceSend += 1;
+    if (!this.inner.connected()) {
+      this.sinceRecv = 0;
+      return;
+    }
+    this.sinceRecv += 1;
+    if (this.pending.length > 0 && this.frame % RELIABLE_RESEND_FRAMES === 0) {
+      for (const p of this.pending.slice(0, RELIABLE_WINDOW))
+        this.raw(p.kind, p.seq, p.body);
+    }
+    if (this.ackDue || this.sinceSend >= RELIABLE_KEEPALIVE_FRAMES) {
+      this.raw(RL_ACK, this.rxExpect);
+      this.ackDue = false;
+    }
+    if (this.sinceRecv > LINK_DEAD_FRAMES)
+      this.gone = true;
+  }
+  unacked() {
+    return this.pending.length;
+  }
+  dead() {
+    return this.gone;
+  }
+  connected() {
+    return !this.gone && this.inner.connected();
+  }
+  close() {
+    this.inner.close();
+  }
+}
+
+class LinkSession {
+  myName;
+  state = "idle";
+  peerName = "";
+  myRoom = null;
+  peerRoom = null;
+  peerOffer = null;
+  peerAnswer = null;
+  peerCommit = false;
+  peerPos = null;
+  peerParty = null;
+  peerSeed = null;
+  actions = [];
+  peerBegin = false;
+  seat() {
+    if (this.peerNonce === null)
+      return 0;
+    if (this.myNonce !== this.peerNonce)
+      return this.myNonce > this.peerNonce ? 0 : 1;
+    return this.myName >= this.peerName ? 0 : 1;
+  }
+  helloSent = false;
+  myNonce;
+  peerNonce = null;
+  lastPos = "";
+  transport;
+  constructor(carrier, myName, nonce) {
+    this.myName = myName;
+    this.transport = new ReliableLink(carrier);
+    this.myNonce = nonce ?? Math.floor(Math.random() * 2147483647);
+  }
+  wire() {
+    return this.transport;
+  }
+  open() {
+    if (this.state === "idle")
+      this.state = "waiting";
+  }
+  chooseRoom(room) {
+    this.myRoom = room;
+    const f = new Uint8Array([LINK_MSG.room, room]);
+    this.transport.send(f);
+  }
+  sendPos(x, y, facing) {
+    const key = `${x},${y},${facing}`;
+    if (key === this.lastPos)
+      return;
+    this.lastPos = key;
+    this.transport.send(encodeJson(LINK_MSG.pos, { x, y, f: facing }));
+  }
+  sendParty(p) {
+    this.transport.send(encodeJson(LINK_MSG.party, p));
+  }
+  sendSeed(half) {
+    this.transport.send(encodeJson(LINK_MSG.seed, { s: half >>> 0 }));
+  }
+  battleSeed(myHalf) {
+    if (this.peerSeed === null)
+      return null;
+    return (myHalf ^ this.peerSeed) >>> 0 || 1;
+  }
+  sendAction(a) {
+    this.transport.send(encodeJson(LINK_MSG.action, a));
+  }
+  takeAction() {
+    return this.actions.shift() ?? null;
+  }
+  peekAction() {
+    return this.actions[0] ?? null;
+  }
+  closed() {
+    return this.state === "closed";
+  }
+  begin() {
+    this.clearTable();
+    this.transport.send(new Uint8Array([LINK_MSG.begin]));
+  }
+  takeBegin() {
+    const b = this.peerBegin;
+    this.peerBegin = false;
+    return b;
+  }
+  clearTable() {
+    this.peerParty = null;
+    this.peerSeed = null;
+    this.peerOffer = null;
+    this.peerAnswer = null;
+    this.peerCommit = false;
+    this.actions.length = 0;
+  }
+  offer(o) {
+    this.transport.send(encodeJson(LINK_MSG.offer, o));
+  }
+  answer(ok) {
+    this.transport.send(new Uint8Array([LINK_MSG.answer, ok ? 1 : 0]));
+  }
+  commit() {
+    this.transport.send(new Uint8Array([LINK_MSG.commit]));
+  }
+  unacked() {
+    return this.transport.unacked();
+  }
+  resetTrade() {
+    this.peerOffer = null;
+    this.peerAnswer = null;
+    this.peerCommit = false;
+  }
+  cancel() {
+    if (this.state !== "closed") {
+      for (let i = 0;i < 3; i++)
+        this.transport.send(new Uint8Array([LINK_MSG.cancel]));
+    }
+    this.close();
+  }
+  close() {
+    this.state = "closed";
+    this.transport.close();
+  }
+  agreedRoom() {
+    if (this.myRoom === null || this.peerRoom === null)
+      return null;
+    return this.myRoom === this.peerRoom ? this.myRoom : null;
+  }
+  poll() {
+    if (this.state === "idle" || this.state === "closed")
+      return this.state;
+    this.transport.tick();
+    if (this.transport.dead()) {
+      this.close();
+      return this.state;
+    }
+    if (!this.helloSent && this.transport.connected()) {
+      this.transport.send(encodeHello(this.myName, this.myNonce));
+      this.helloSent = true;
+    }
+    for (;; ) {
+      const f = this.transport.recv();
+      if (!f || f.length === 0)
+        break;
+      switch (f[0]) {
+        case LINK_MSG.hello:
+          if (f[1] !== LINK_VERSION) {
+            this.close();
+            return this.state;
+          }
+          {
+            const h = decodeHello(f);
+            this.peerName = h.name;
+            this.peerNonce = h.nonce;
+          }
+          if (this.state === "waiting")
+            this.state = "linked";
+          break;
+        case LINK_MSG.pos: {
+          const p = decodeJson(f);
+          if (p && typeof p.x === "number" && typeof p.y === "number") {
+            this.peerPos = { x: p.x, y: p.y, facing: typeof p.f === "string" ? p.f : "down" };
+          }
+          break;
+        }
+        case LINK_MSG.room:
+          this.peerRoom = f[1] ?? 0;
+          break;
+        case LINK_MSG.party: {
+          const p = decodeJson(f);
+          if (p && typeof p === "object" && Array.isArray(p.mons)) {
+            this.peerParty = {
+              mons: p.mons.slice(0, 6),
+              otName: typeof p.otName === "string" ? p.otName : "",
+              otId: Number(p.otId ?? 0)
+            };
+          }
+          break;
+        }
+        case LINK_MSG.seed: {
+          const v = decodeJson(f);
+          if (v && typeof v.s === "number")
+            this.peerSeed = v.s >>> 0;
+          break;
+        }
+        case LINK_MSG.action: {
+          const v = decodeJson(f);
+          if (v && typeof v === "object")
+            this.actions.push(v);
+          break;
+        }
+        case LINK_MSG.offer: {
+          const o = decodeJson(f);
+          if (o && typeof o === "object" && Number.isInteger(o.give) && Number.isInteger(o.take) && o.give >= 0 && o.give < 6 && o.take >= 0 && o.take < 6) {
+            this.peerOffer = { give: o.give, take: o.take };
+          }
+          break;
+        }
+        case LINK_MSG.answer:
+          this.peerAnswer = f[1] === 1;
+          break;
+        case LINK_MSG.commit:
+          this.peerCommit = true;
+          break;
+        case LINK_MSG.begin:
+          this.clearTable();
+          this.peerBegin = true;
+          break;
+        case LINK_MSG.cancel:
+          this.close();
+          return this.state;
+        default:
+          break;
+      }
+    }
+    if (this.state === "linked" && this.agreedRoom() !== null)
+      this.state = "ready";
+    return this.state;
+  }
+}
+function hostTransport() {
+  const v = globalThis.voxel;
+  if (!v || typeof v.linkOpen !== "function")
+    return null;
+  const call = (name, arg) => v[name](arg);
+  const opened = call("linkOpen");
+  if (typeof opened === "number" && opened <= 0)
+    return null;
+  const toStr = (f) => {
+    let s = "";
+    for (let i = 0;i < f.length; i++)
+      s += String.fromCharCode(f[i]);
+    return s;
+  };
+  const toBytes = (s) => {
+    const out = new Uint8Array(s.length);
+    for (let i = 0;i < s.length; i++)
+      out[i] = s.charCodeAt(i) & 255;
+    return out;
+  };
+  return {
+    send: (f) => {
+      call("linkSend", toStr(f));
+    },
+    recv: () => {
+      const r = call("linkRecv");
+      if (typeof r === "string" && r.length > 0)
+        return toBytes(r);
+      return r instanceof Uint8Array && r.length > 0 ? r : null;
+    },
+    connected: () => call("linkState") === 1,
+    close: () => {
+      call("linkClose");
+    }
+  };
+}
+
+// voxelmon/game/world/marts.ts
+function martStock(data, mapLabel, textConst) {
+  const mart = data?.text_pointers?.[mapLabel]?.[textConst]?.mart;
+  return Array.isArray(mart) && mart.length > 0 ? mart : null;
+}
+function martGreetScript(data, mapLabel, textConst) {
+  if (!martStock(data, mapLabel, textConst))
+    return null;
+  return [
+    ["face_player"],
+    ["show_text", `Hi there!
+May I help you?`],
+    ["open_mart", textConst]
+  ];
+}
+
+// voxelmon/game/world/script.ts
+var EMOTE_BUBBLES = { shock: 1, question: 2, happy: 3 };
+var CUT_ANIM_BEATS = 8;
+var CUT_ANIM_BEAT_FRAMES = 5;
+function scriptText(w, textId, subs) {
+  let text = w.data.text?.[textId] ?? w.resolveText(textId) ?? textId;
+  if (subs) {
+    for (const [token, value] of Object.entries(subs)) {
+      text = text.replace(new RegExp(`\\{${token}:?\\w*\\}`, "g"), value);
+    }
+  }
+  return text;
+}
+function* show_text(ctx, ...args) {
+  const runner = ctx.runner;
+  const text = scriptText(ctx.world, args[0], args[1]);
+  console.log("show_text[" + String(args[0]).slice(0, 28) + "] len=" + (text?.length ?? -1));
+  ctx.world.showText(text, () => {
+    console.log("show_text done");
+    runner.resume();
+  });
+  yield;
+}
+function* ask(ctx, ...args) {
+  const runner = ctx.runner;
+  const text = scriptText(ctx.world, args[0], args[1]);
+  ctx.world.showChoice(text, (yes) => {
+    ctx.lastCheck = yes;
+    runner.resume();
+  });
+  yield;
+}
+function* set_flag(ctx, ...args) {
+  ctx.world.save.flags[args[0]] = true;
+}
+function* give_item(ctx, ...args) {
+  const itemId = args[0];
+  const count2 = args[1] ?? 1;
+  const gotText = args[2];
+  const w = ctx.world;
+  const runner = ctx.runner;
+  if (!add(w.save, itemId, count2, w.data)) {
+    w.showText(`You can't carry
+any more items!`, () => runner.resume());
+    yield;
+    return Number.POSITIVE_INFINITY;
+  }
+  const def = w.data.items?.[itemId];
+  const name = def?.name ?? itemId;
+  w.playSfx?.(def?.keyItem ? "Get_Key_Item" : "Get_Item1");
+  if (gotText !== false) {
+    const text = gotText === undefined ? `{PLAYER} got
+${name}!` : scriptText(w, gotText, { "RAM:wStringBuffer": name });
+    w.showText(text, () => runner.resume());
+    yield;
+  }
+}
+function* warp(ctx, ...args) {
+  const runner = ctx.runner;
+  ctx.world.startWarpTo(args[0], args[1], args[2], args[3], () => runner.resume());
+  yield;
+}
+function* wait(ctx, ...args) {
+  ctx.runner.waitingFrames = args[0];
+  yield;
+}
+function* move_player(ctx, ...args) {
+  const runner = ctx.runner;
+  ctx.world.scriptMove(ctx.world.player, args[0], args[1] ?? 1, () => runner.resume());
+  yield;
+}
+function* emote(ctx, ...args) {
+  const targetArg = args[0];
+  const bubble = args[1];
+  const frames = args[2] ?? 60;
+  const entity = targetArg === "player" ? ctx.world.player : targetArg !== undefined && typeof ctx.world.findNpc === "function" ? ctx.world.findNpc(targetArg) ?? ctx.npc : ctx.npc;
+  if (!entity)
+    return;
+  const runner = ctx.runner;
+  const kind = typeof bubble === "number" ? bubble : EMOTE_BUBBLES[bubble ?? "shock"] ?? 1;
+  ctx.world.setEmote(entity, kind, frames, () => runner.resume());
+  yield;
+}
+function* jump(_ctx, ...args) {
+  return args[0];
+}
+function* face_player(ctx) {
+  if (ctx.npc)
+    ctx.world.facePlayer(ctx.npc);
+}
+function* check_flag(ctx, ...args) {
+  ctx.lastCheck = ctx.world.save.flags[args[0]] === true;
+}
+function* jump_if_true(ctx, ...args) {
+  if (ctx.lastCheck)
+    return args[0];
+}
+function* jump_if_false(ctx, ...args) {
+  if (!ctx.lastCheck)
+    return args[0];
+}
+function* label2() {}
+function* heal_party(ctx) {
+  ctx.world.healParty();
+}
+function* play_once(ctx, ...args) {
+  const runner = ctx.runner;
+  ctx.world.playOnce(args[0], () => runner.resume());
+  yield;
+}
+function* fade(ctx, ...args) {
+  const dir = args[0] === "in" ? "in" : "out";
+  const frames = (typeof args[1] === "number" ? args[1] : typeof args[2] === "number" ? args[2] : undefined) ?? FADE_OUT_TO_WHITE;
+  const runner = ctx.runner;
+  ctx.world.fade(dir, frames, () => runner.resume());
+  yield;
+}
+function* give_pokemon(ctx, ...args) {
+  const species = args[0];
+  const level = args[1] ?? 5;
+  const w = ctx.world;
+  markOwned(w.save, species);
+  const party = w.save.party;
+  if (party.length >= 6)
+    return;
+  const mon = newMon(w.data, species, level);
+  party.push(mon);
+  if (args[2] === true)
+    return;
+  const runner = ctx.runner;
+  if (typeof w.askNickname === "function") {
+    const label3 = w.data.pokemon?.[species]?.name ?? species;
+    w.askNickname(label3, (name) => {
+      if (name)
+        mon.nickname = name;
+      runner.resume();
+    });
+    yield;
+  }
+}
+function* noop_object() {
+  return;
+}
+function* play_sound(ctx, ...args) {
+  ctx.world.playSfx?.(args[0]);
+}
+function* play_music(ctx, ...args) {
+  ctx.world.playOnce(args[0], () => {});
+}
+function* noop_audio() {
+  return;
+}
+function* escort(ctx, ...args) {
+  const runner = ctx.runner;
+  ctx.world.escort?.(args[0], { to: [args[1], args[2]] }, () => runner.resume());
+  yield;
+}
+function* escort_steps(ctx, ...args) {
+  const runner = ctx.runner;
+  ctx.world.escort?.(args[0], { steps: args[1] }, () => runner.resume());
+  yield;
+}
+function* walk_route(ctx, ...args) {
+  const runner = ctx.runner;
+  ctx.world.walkRoute?.(args[0], args[1], () => runner.resume());
+  yield;
+}
+function* start_battle(ctx, ...args) {
+  const kind = String(args[0] ?? "trainer");
+  const id = String(args[1] ?? "");
+  const idx = args[2] ?? 1;
+  const opts = args[3] ?? {};
+  const runner = ctx.runner;
+  const w = ctx.world;
+  if (kind === "trainer" && w.startTrainerBattle) {
+    w.startTrainerBattle(id, idx, undefined, (won) => {
+      ctx.lastCheck = !!won;
+      runner.resume();
+    }, opts.loseable === true);
+    yield;
+    return;
+  }
+  if (kind === "wild" && w.startWildBattle) {
+    const wopts = opts;
+    w.startWildBattle(id, idx, wopts, (result) => {
+      ctx.lastCheck = result === "win";
+      runner.resume();
+    });
+    yield;
+  }
+}
+function* trade(ctx, ...args) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  const data = w.data;
+  const t = (data.field?.trades ?? [])[args[0] - 1];
+  if (!t)
+    return;
+  const doneFlag = args[1];
+  const set = t.dialogset ?? 1;
+  const subs = {
+    "RAM:wInGameTradeGiveMonName": data.pokemon?.[t.give]?.name ?? t.give,
+    "RAM:wInGameTradeReceiveMonName": data.pokemon?.[t.get]?.name ?? t.get
+  };
+  const say = function* (label3) {
+    w.showText(scriptText(w, label3, subs), () => runner.resume());
+    yield;
+  };
+  if (doneFlag && w.save.flags[doneFlag]) {
+    yield* say(`_AfterTrade${set}Text`);
+    return;
+  }
+  let yes = false;
+  w.showChoice(scriptText(w, `_WannaTrade${set}Text`, subs), (y) => {
+    yes = y;
+    runner.resume();
+  });
+  yield;
+  if (!yes) {
+    yield* say(`_NoTrade${set}Text`);
+    return;
+  }
+  let picked = -1;
+  w.pickPartyMon((i) => {
+    picked = i;
+    runner.resume();
+  }, () => runner.resume());
+  yield;
+  const party = w.save.party;
+  const sent = party[picked];
+  if (!sent) {
+    yield* say(`_NoTrade${set}Text`);
+    return;
+  }
+  if (sent.species !== t.give) {
+    yield* say(`_WrongMon${set}Text`);
+    return;
+  }
+  if (doneFlag)
+    w.save.flags[doneFlag] = true;
+  yield* say("_ConnectCableText");
+  const mon = newMon(data, t.get, sent.level);
+  if (t.nickname)
+    mon.nickname = t.nickname;
+  mon.traded = true;
+  party.splice(picked, 1);
+  party.push(mon);
+  markOwned(w.save, t.get);
+  yield* say("_TradedForText");
+  yield* say(`_Thanks${set}Text`);
+}
+function* static_battle(ctx, ...args) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  if (!w.startWildBattle)
+    return;
+  w.startWildBattle(args[0], args[1], undefined, (result) => {
+    ctx.lastCheck = result !== null && result !== "lose";
+    runner.resume();
+  });
+  yield;
+}
+function* move_player_to(ctx, ...args) {
+  const runner = ctx.runner;
+  ctx.world.movePlayerTo?.(args[0], args[1], () => runner.resume());
+  yield;
+}
+function* place_npc(ctx, ...args) {
+  ctx.world.placeNpc?.(args[0], args[1], args[2], args[3] ?? "down");
+}
+function toggleObject(ctx, args, visible) {
+  const w = ctx.world;
+  const hasMap = args.length >= 2;
+  const curMap = String(w.map?.id ?? "");
+  const mapId = hasMap ? String(args[0]) : curMap;
+  const name = String(hasMap ? args[1] : args[0]);
+  const key = name.toUpperCase().replace(/^TEXT_/, "");
+  const save = w.save;
+  save.objectToggles = save.objectToggles ?? {};
+  save.objectToggles[mapId] = save.objectToggles[mapId] ?? {};
+  save.objectToggles[mapId][key] = visible;
+  if (mapId === curMap)
+    w.setObjectHidden?.(name, !visible);
+}
+function* hide_object(ctx, ...args) {
+  toggleObject(ctx, args, false);
+}
+function* show_object(ctx, ...args) {
+  toggleObject(ctx, args, true);
+}
+function* face_object(ctx, ...args) {
+  ctx.world.faceObject?.(args[0], args[1] ?? "down");
+}
+function* move_npc_to(ctx, ...args) {
+  const runner = ctx.runner;
+  ctx.world.moveNpcTo?.(args[0], args[1], args[2], () => runner.resume());
+  yield;
+}
+function* pic(ctx, ...args) {
+  ctx.world.showPic(args[0], args[1], args[2], args[3], args[4]);
+}
+function* pic_hide(ctx) {
+  ctx.world.hidePic();
+}
+function* stamp(ctx, ...args) {
+  ctx.world.stamp(args[0], args[1], args[2], args[3] !== false);
+}
+function* use_cut(ctx, ...args) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  const monName2 = args[0] ?? "";
+  const [fx, fy] = w.player.facingCell();
+  const visit = w.cutThisVisit;
+  const key = `${w.map.def.index},${fx},${fy}`;
+  const already = visit?.has(key) === true;
+  if (w.map.isCuttableCell(fx, fy) && !already) {
+    const cx = Math.round((fx * CELL_PX + CELL_PX / 2) * Q4);
+    const cz = Math.round((fy * CELL_PX + CELL_PX / 2) * Q4);
+    const bubbles = w.data.field?.emotionBubbles?.bubbles?.length;
+    const treeFrame = bubbles ?? FX_FRAME_CUT_TREE;
+    for (let beat = 0;beat < CUT_ANIM_BEATS; beat++) {
+      w.fieldFx(cx, cz, beat % 2 === 0 ? treeFrame : -1);
+      runner.waitingFrames = CUT_ANIM_BEAT_FRAMES;
+      yield;
+    }
+    w.fieldFx(0, 0, -1);
+    w.stamp(w.map.def.index, fx, fy, false);
+    w.map.markCut?.(fx, fy);
+    visit?.add(key);
+    w.showText(scriptText(w, "_UsedCutText", { "RAM:wNameBuffer": monName2 }), () => runner.resume());
+  } else {
+    w.showText(scriptText(w, "_NothingToCutText"), () => runner.resume());
+  }
+  yield;
+}
+function* use_surf(ctx, ...args) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  const monName2 = args[0] ?? "";
+  if (w.surfBlockedHere?.()) {
+    w.showText(scriptText(w, "_CurrentTooFastText"), () => runner.resume());
+    yield;
+    return;
+  }
+  if (w.player.surfing === true || !w.canSurfHere?.()) {
+    w.showText(scriptText(w, "_NoSurfingHereText", { "RAM:wNameBuffer": monName2 }), () => runner.resume());
+    yield;
+    return;
+  }
+  w.showText(scriptText(w, "_SurfingGotOnText", { "RAM:wNameBuffer": monName2 }), () => {
+    w.startSurfing?.();
+    runner.resume();
+  });
+  yield;
+}
+function* use_escape_move(ctx) {
+  const w = ctx.world;
+  if (w.escapeWarp?.())
+    return;
+  const runner = ctx.runner;
+  w.showText(scriptText(w, "_ItemUseNotTimeText"), () => runner.resume());
+  yield;
+}
+function* use_dig(ctx) {
+  yield* use_escape_move(ctx);
+}
+function* use_teleport(ctx) {
+  yield* use_escape_move(ctx);
+}
+function* random_text(ctx, ...args) {
+  const rows = args[0] ?? [];
+  const roll2 = ctx.world.rollByte?.() ?? 0;
+  const pick = rows.find(([at]) => roll2 >= at) ?? rows[rows.length - 1];
+  if (!pick)
+    return;
+  const runner = ctx.runner;
+  ctx.world.showText(scriptText(ctx.world, pick[1]), () => runner.resume());
+  yield;
+}
+function* play_cry(ctx, ...args) {
+  ctx.world.playCry?.(String(args[0]));
+}
+function* pika_clip(ctx, ...args) {
+  ctx.world.playPikaClip?.(Number(args[0]) || 1);
+}
+function* surfing_minigame(ctx) {
+  const w = ctx.world;
+  if (!w.startSurfingMinigame)
+    return;
+  const runner = ctx.runner;
+  w.startSurfingMinigame(((w.pikachuMapFlags ?? 0) & PIKA_MAP_SURF_SELECT) !== 0, () => runner.resume());
+  yield;
+  w.pikachuMapFlags = (w.pikachuMapFlags ?? 0) | PIKA_MAP_SURF_SELECT;
+}
+var PIKA_MAP_PAUSE_IGT = 1 << 0;
+var PIKA_MAP_SURF_SELECT = 1 << 1;
+function* use_fly(ctx, ...args) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  if (!w.openFlyPicker)
+    return;
+  w.openFlyPicker(args[0] ?? "", () => runner.resume());
+  yield;
+}
+function* use_strength(ctx, ...args) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  const monName2 = args[0] ?? "";
+  w.enableStrength?.();
+  w.showText(scriptText(w, "_UsedStrengthText", { "RAM:wNameBuffer": monName2 }), () => runner.resume());
+  yield;
+}
+function* use_flash(ctx) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  w.save.flashLit = true;
+  w.tint(4294967295);
+  w.showText(scriptText(w, "_FlashLightsAreaText"), () => runner.resume());
+  yield;
+}
+function* open_elevator(ctx) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  if (!w.openElevator)
+    return;
+  w.openElevator(() => runner.resume());
+  yield;
+}
+function* open_mart(ctx, ...args) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  const stock = martStock(w.data, w.map?.def?.label ?? "", String(args[0] ?? ""));
+  if (stock && w.openShop) {
+    w.openShop(stock, () => runner.resume());
+    yield;
+  }
+}
+function* check_money(ctx, ...args) {
+  const save = ctx.world.save;
+  ctx.lastCheck = (save.money ?? 0) >= args[0];
+}
+function* take_money(ctx, ...args) {
+  const save = ctx.world.save;
+  save.money = Math.max(0, (save.money ?? 0) - args[0]);
+}
+function* check_coins_below(ctx, ...args) {
+  const save = ctx.world.save;
+  ctx.lastCheck = (save.coins ?? 0) < args[0];
+}
+function* check_coins(ctx, ...args) {
+  const save = ctx.world.save;
+  ctx.lastCheck = (save.coins ?? 0) >= args[0];
+}
+function* give_coins(ctx, ...args) {
+  const save = ctx.world.save;
+  save.coins = Math.min(COIN_CAP, (save.coins ?? 0) + args[0]);
+}
+function* open_prizes(ctx, ...args) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  if (!w.openPrizes)
+    return;
+  w.openPrizes(args[0], () => runner.resume());
+  yield;
+}
+function* open_name_rater(ctx) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  if (!w.openNameRater)
+    return;
+  w.openNameRater(() => runner.resume());
+  yield;
+}
+function* open_vending(ctx) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  if (!w.openVending)
+    return;
+  w.openVending(() => runner.resume());
+  yield;
+}
+function* oaks_aide(ctx, ...args) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  if (!w.openOaksAide)
+    return;
+  w.openOaksAide(args[0], () => runner.resume());
+  yield;
+}
+function* open_bike_shop(ctx) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  if (!w.openBikeShop)
+    return;
+  w.openBikeShop(() => runner.resume());
+  yield;
+}
+function* open_daycare(ctx) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  if (!w.openDaycare)
+    return;
+  w.openDaycare(() => runner.resume());
+  yield;
+}
+function* take_guard_drink(ctx) {
+  const save = ctx.world.save;
+  for (const drink of GUARD_DRINKS) {
+    if ((save.inventory?.[drink] ?? 0) > 0) {
+      remove(save, drink, 1);
+      if (save.flags)
+        save.flags[GAVE_DRINK_FLAG] = true;
+      ctx.lastCheck = true;
+      return;
+    }
+  }
+  ctx.lastCheck = false;
+}
+function* safari_start(ctx) {
+  ctx.world.safariStart?.();
+}
+function* safari_end(ctx) {
+  ctx.world.safariEnd?.();
+}
+function* safari_walk_in(ctx) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  if (!w.safariWalkIn?.(() => runner.resume()))
+    return;
+  yield;
+}
+function* lab_fossil(ctx, ...args) {
+  const save = ctx.world.save;
+  const species = args[0];
+  if (species)
+    save.labFossilMon = species;
+  else
+    delete save.labFossilMon;
+}
+function* check_party_room(ctx) {
+  const party = ctx.world.save.party ?? [];
+  ctx.lastCheck = party.length < 6;
+}
+function* check_item(ctx, ...args) {
+  const inv = ctx.world.save.inventory ?? {};
+  ctx.lastCheck = (inv[args[0]] ?? 0) > 0;
+}
+function* take_item(ctx, ...args) {
+  remove(ctx.world.save, args[0], args[1] ?? 1);
+}
+function* clear_flag(ctx, ...args) {
+  delete ctx.world.save.flags[args[0]];
+}
+function* check_dex_owned(ctx, ...args) {
+  const need = args[0] ?? 1;
+  const owned = ctx.world.save.pokedex?.owned ?? {};
+  let n = 0;
+  for (const k in owned)
+    if (owned[k])
+      n += 1;
+  ctx.lastCheck = n >= need;
+}
+function* dex_rating() {}
+var YELLOW_RIVAL_PARTIES = {
+  OPP_RIVAL1: { 4: { party: 2, upgradeOnWin: { from: 2, to: 1 } }, 7: { party: 3 } },
+  OPP_RIVAL2: { 1: { party: 1 }, 4: { base: 1 }, 7: { base: 4 }, 10: { base: 7 } },
+  OPP_RIVAL3: { 1: { base: 0 } }
+};
+function* rival_battle(ctx, ...args) {
+  const oppClass = args[0];
+  const baseParty = args[1] ?? 1;
+  const opts = args[2] ?? {};
+  const save = ctx.world.save;
+  if (ctx.world.data.version === "yellow") {
+    const spec = YELLOW_RIVAL_PARTIES[oppClass]?.[baseParty];
+    if (spec) {
+      const starter = save.rivalStarter ?? 1;
+      yield* start_battle(ctx, "trainer", oppClass, spec.party ?? (spec.base ?? 0) + starter, { loseable: opts.loseable });
+      if (spec.upgradeOnWin && ctx.lastCheck && save.rivalStarter === spec.upgradeOnWin.from) {
+        save.rivalStarter = spec.upgradeOnWin.to;
+      }
+      return;
+    }
+  }
+  const offsets = opts.offsets ?? ctx.world.data.field?.starterCounterpicks;
+  let offset = 0;
+  if (offsets) {
+    for (const [flag, mapped] of Object.entries(offsets)) {
+      if (save.flags?.[flag]) {
+        offset = mapped;
+        break;
+      }
+    }
+  } else if (save.flags?.EVENT_CHOSE_SQUIRTLE) {
+    offset = 1;
+  } else if (save.flags?.EVENT_CHOSE_BULBASAUR) {
+    offset = 2;
+  }
+  yield* start_battle(ctx, "trainer", oppClass, baseParty + offset, { loseable: opts.loseable });
+}
+function* walk_npc(ctx, ...args) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  const ref = args[0];
+  const dirs = args[1] ?? [];
+  const entity = ref === "player" ? w.player : w.findNpc?.(ref);
+  if (!entity || dirs.length === 0)
+    return;
+  let i = 0;
+  const step = () => {
+    if (i >= dirs.length) {
+      runner.resume();
+      return;
+    }
+    w.scriptMove(entity, dirs[i++], 1, step);
+  };
+  step();
+  yield;
+}
+function* engage_trainer(ctx, ...args) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  const npc = w.findNpc?.(args[0]);
+  if (!npc || !w.engageTrainer) {
+    ctx.lastCheck = false;
+    return;
+  }
+  if (w.trainerDefeated?.(npc)) {
+    ctx.lastCheck = true;
+    return;
+  }
+  w.engageTrainer(npc, () => {
+    ctx.lastCheck = w.trainerDefeated?.(npc) === true;
+    runner.resume();
+  });
+  yield;
+}
+function* set_heal_point(ctx) {
+  const w = ctx.world;
+  const p = w.player;
+  const save = ctx.world.save;
+  save.lastHeal = {
+    map: String(w.map?.id ?? ""),
+    x: p?.cellX ?? 0,
+    y: p?.cellY ?? 0,
+    outdoor: save.lastOutdoor ? { ...save.lastOutdoor } : undefined
+  };
+}
+function* old_man_demo(ctx, ...args) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  if (typeof w.startOldManDemo === "function") {
+    const fail = args[0] === "fail";
+    const species = fail ? undefined : args[0];
+    const opts = species ? { species, level: args[1] ?? 5, name: args[2] } : fail ? { fail: true } : undefined;
+    w.startOldManDemo(() => runner.resume(), opts);
+    yield;
+  }
+}
+function* safari_low_cost(ctx) {
+  const save = ctx.world.save;
+  const start = (balls) => ctx.world.safariStart?.(balls);
+  const money = save.money ?? 0;
+  if (money > 0) {
+    yield* show_text(ctx, "_SafariZoneGateSafariZoneWorker1NotEnoughMoneyText");
+    save.money = 0;
+    yield* show_text(ctx, "_SafariZoneLowCostText1");
+    yield* show_text(ctx, "_SafariZoneLowCostText2");
+    start(Math.min(Math.floor(money / 23) + 1, 29));
+    ctx.lastCheck = true;
+    return;
+  }
+  const nag = save.safariNags ?? 0;
+  save.safariNags = nag + 1;
+  yield* show_text(ctx, `_SafariZoneLowCostText${5 + Math.min(nag, 3)}`);
+  if (nag >= 3) {
+    yield* show_text(ctx, "_SafariZoneLowCostText3");
+    start(1);
+    ctx.lastCheck = true;
+    return;
+  }
+  ctx.lastCheck = false;
+}
+function* pikachu_happy(ctx, ...args) {
+  modifyHappiness(ctx.world.save, args[0]);
+}
+function* set_field(ctx, ...args) {
+  ctx.world.save[args[0]] = args[1];
+}
+var VERBS = {
+  show_text,
+  ask,
+  jump,
+  jump_if_true,
+  jump_if_false,
+  label: label2,
+  face_player,
+  check_flag,
+  set_flag,
+  give_item,
+  warp,
+  wait,
+  move_player,
+  heal_party,
+  play_once,
+  fade,
+  emote,
+  pic,
+  pic_hide,
+  stamp,
+  use_cut,
+  use_flash,
+  use_surf,
+  use_fly,
+  use_dig,
+  use_teleport,
+  play_cry,
+  pika_clip,
+  surfing_minigame,
+  random_text,
+  use_strength,
+  give_pokemon,
+  hide_object,
+  show_object,
+  face_object,
+  move_npc_to,
+  place_npc,
+  move_player_to,
+  start_battle,
+  static_battle,
+  trade,
+  open_mart,
+  open_vending,
+  open_name_rater,
+  open_elevator,
+  walk_route,
+  escort,
+  escort_steps,
+  check_item,
+  lab_fossil,
+  check_party_room,
+  check_money,
+  take_money,
+  check_coins,
+  check_coins_below,
+  give_coins,
+  open_prizes,
+  open_daycare,
+  open_bike_shop,
+  oaks_aide,
+  safari_start,
+  safari_end,
+  take_guard_drink,
+  safari_walk_in,
+  take_item,
+  clear_flag,
+  check_dex_owned,
+  dex_rating,
+  rival_battle,
+  walk_npc,
+  engage_trainer,
+  set_heal_point,
+  old_man_demo,
+  set_field,
+  pikachu_happy,
+  safari_low_cost,
+  record_hall_of_fame,
+  open_diploma,
+  save_game,
+  link_open,
+  link_room,
+  link_enter,
+  link_trade,
+  link_battle,
+  link_leave,
+  push_screen: noop_object,
+  play_sound,
+  play_music,
+  stop_music: noop_audio
+};
+function* save_game(ctx) {
+  ctx.world.saveGame?.();
+}
+function* link_open(ctx) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  if (!w.openLink?.() || !w.waitLink) {
+    ctx.lastCheck = false;
+    return;
+  }
+  w.waitLink((s) => {
+    const st = s.state;
+    return st === "linked" || st === "ready";
+  }, LINK_WAIT_FRAMES, (ok) => {
+    ctx.lastCheck = ok;
+    runner.resume();
+  }, { pleaseWait: true });
+  yield;
+}
+function* link_room(ctx) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  if (!w.pickLinkRoom) {
+    ctx.lastCheck = false;
+    return;
+  }
+  w.pickLinkRoom((ok) => {
+    ctx.lastCheck = ok;
+    runner.resume();
+  });
+  yield;
+}
+function* link_battle(ctx) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  if (!w.linkBattle)
+    return;
+  w.linkBattle(() => runner.resume());
+  yield;
+}
+function* link_trade(ctx) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  if (!w.linkTrade)
+    return;
+  w.linkTrade(() => runner.resume());
+  yield;
+}
+function* link_leave(ctx) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  if (!w.leaveLinkRoom)
+    return;
+  w.leaveLinkRoom(() => runner.resume());
+  yield;
+}
+function* link_enter(ctx) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  if (!w.enterLinkRoom)
+    return;
+  w.enterLinkRoom(() => runner.resume());
+  yield;
+}
+function* open_diploma(ctx) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  if (!w.openDiploma)
+    return;
+  w.openDiploma(() => runner.resume());
+  yield;
+}
+function* record_hall_of_fame(ctx) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  if (!w.recordHallOfFame)
+    return;
+  w.recordHallOfFame(() => runner.resume());
+  yield;
+}
+function scanLabels(script) {
+  const labels = new Map;
+  script.forEach((row, i) => {
+    if (row[0] === "label" && typeof row[1] === "string" && !labels.has(row[1])) {
+      labels.set(row[1], i + 1);
+    }
+  });
+  return labels;
+}
+
+class ScriptRunner {
+  co = null;
+  waitingFrames = null;
+  ctx = null;
+  resuming = false;
+  world;
+  constructor(world) {
+    this.world = world;
+  }
+  isRunning() {
+    return this.co !== null;
+  }
+  run(script, extra) {
+    if (this.isRunning())
+      throw new Error("script already running");
+    const ctx = { world: this.world, runner: this, ...extra };
+    this.ctx = ctx;
+    this.co = this.exec(script, ctx);
+    this.resume();
+  }
+  *exec(script, ctx) {
+    const labels = scanLabels(script);
+    let pc = 1;
+    while (pc <= script.length) {
+      const row = script[pc - 1];
+      const name = row[0];
+      const fn = VERBS[name];
+      if (!fn) {
+        console.warn(`script: unknown command '${name}' (skipped)`);
+        pc += 1;
+        continue;
+      }
+      const jump2 = yield* fn(ctx, ...row.slice(1));
+      if (typeof jump2 === "number") {
+        pc = jump2;
+      } else if (typeof jump2 === "string") {
+        if (jump2 === "end")
+          break;
+        const target2 = labels.get(jump2);
+        if (target2 === undefined)
+          throw new Error(`jump to missing label '${jump2}' at row ${pc}`);
+        pc = target2;
+      } else {
+        pc += 1;
+      }
+    }
+    const done = ctx.onDone;
+    if (done)
+      done();
+  }
+  resume() {
+    const co = this.co;
+    if (!co)
+      return;
+    if (this.resuming) {
+      this.waitingFrames = 1;
+      return;
+    }
+    this.resuming = true;
+    let r;
+    try {
+      r = co.next();
+    } finally {
+      this.resuming = false;
+    }
+    if (r.done) {
+      if (this.co === co) {
+        this.co = null;
+        this.waitingFrames = null;
+      }
+    }
+  }
+  update() {
+    if (this.isRunning() && this.waitingFrames !== null) {
+      this.waitingFrames -= 1;
+      if (this.waitingFrames <= 0) {
+        this.waitingFrames = null;
+        this.resume();
+      }
+    }
+  }
+}
+
+// voxelmon/game/gb/video.ts
+var LCDC = {
+  on: 128,
+  winMap9C00: 64,
+  winOn: 32,
+  tiles8000: 16,
+  bgMap9C00: 8,
+  objOn: 2,
+  bgOn: 1
+};
+var SCREEN_W = 160;
+var SCREEN_H = 144;
+class GbVideo {
+  maps = new Uint8Array(2048);
+  tileMap = new Uint8Array(SCREEN_W / 8 * (SCREEN_H / 8));
+  autoBgTransfer = false;
+  autoBgTransferMap = 0;
+  oam = new Uint8Array(160);
+  lines = new Uint8Array(SCREEN_H);
+  lineTarget = "none";
+  lcdc = 0;
+  scx = 0;
+  scy = 0;
+  wx = 7;
+  wy = SCREEN_H;
+  bgp = 228;
+  obp0 = 228;
+  obp1 = 228;
+  colours = { bg: "PIKACHUS_BEACH", obj0: "PIKACHUS_BEACH", obj1: "PIKACHUS_BEACH" };
+  loads = [];
+  loadTiles(dest, sheet, first, count2) {
+    this.loads = this.loads.filter((l) => l.dest + l.count <= dest || l.dest >= dest + count2);
+    this.loads.push({ dest, sheet, first, count: count2 });
+  }
+  tileAt(vram) {
+    for (let i = this.loads.length - 1;i >= 0; i--) {
+      const l = this.loads[i];
+      if (vram >= l.dest && vram < l.dest + l.count)
+        return { sheet: l.sheet, tile: l.first + vram - l.dest };
+    }
+    return null;
+  }
+  bgTile(id) {
+    if (this.lcdc & LCDC.tiles8000)
+      return id;
+    return id < 128 ? 256 + id : id;
+  }
+  mapGet(addr) {
+    return this.maps[addr & 2047];
+  }
+  mapSet(addr, id) {
+    this.maps[addr & 2047] = id & 255;
+  }
+  static bgCoord(x, y, map = 0) {
+    return map * 1024 + (y & 31) * 32 + (x & 31);
+  }
+  vblank() {
+    if (!this.autoBgTransfer)
+      return;
+    const base = this.autoBgTransferMap * 1024;
+    for (let y = 0;y < SCREEN_H / 8; y++) {
+      for (let x = 0;x < SCREEN_W / 8; x++)
+        this.maps[base + y * 32 + x] = this.tileMap[y * 20 + x];
+    }
+  }
+  vblankThird(portion) {
+    if (!this.autoBgTransfer)
+      return portion;
+    const row = portion === 0 ? 0 : portion === 1 ? 6 : 12;
+    const base = this.autoBgTransferMap * 1024;
+    for (let y = row;y < row + 6; y++) {
+      for (let x = 0;x < SCREEN_W / 8; x++)
+        this.maps[base + y * 32 + x] = this.tileMap[y * 20 + x];
+    }
+    return portion === 0 ? 1 : portion === 1 ? 2 : 0;
+  }
+  clearOam() {
+    this.oam.fill(0);
+  }
+}
+
+// voxelmon/game/minigame/surfing-data.ts
+var SURFING_MINIGAME_FLAT_WATER_Y = 116;
+var SURFING_MINIGAME_CENTER_X = 160 / 2 + 8;
+var PIKACHU_STATE = {
+  RIDING: 0,
+  JUMPING: 1,
+  LANDING: 2,
+  CRASHED: 3,
+  GAME_END: 4,
+  INIT_RESULTS: 5,
+  RESULTS: 6
+};
+var Tempos = [117, 109, 101, 93, 85];
+var SurfingPikachuMiniPikachuTile = [254];
+var SurfingPikachuHPDigitTiles = [208, 208, 208, 208];
+var SurfingPikachuWideCloudTiles = [236, 237, 237, 238, 239];
+var SurfingPikachuNarrowCloudTiles = [236, 237, 238, 239];
+var SurfingPikachuStatusBarTiles = [23, 24, 25, 25, 25, 25, 25, 25, 25];
+var Hi_Score = [32, 46, 47, 48, 49, 44, 50, 35, 51];
+var HP_Left = [32, 33, 255, 34, 35, 36, 37];
+var Radness = [39, 40, 41, 42, 35, 38, 38];
+var Total = [43, 44, 37, 40, 45];
+var SurfingMinigame_LYOverridesInitialSineWave = [
+  0,
+  0,
+  0,
+  1,
+  1,
+  1,
+  1,
+  2,
+  2,
+  2,
+  1,
+  1,
+  1,
+  1,
+  0,
+  0,
+  0,
+  0,
+  0,
+  -1,
+  -1,
+  -1,
+  -1,
+  -2,
+  -2,
+  -2,
+  -1,
+  -1,
+  -1,
+  -1,
+  0,
+  0
+];
+var SineWave = [
+  0,
+  25,
+  50,
+  74,
+  98,
+  121,
+  142,
+  162,
+  181,
+  198,
+  213,
+  226,
+  237,
+  245,
+  251,
+  255,
+  256,
+  255,
+  251,
+  245,
+  237,
+  226,
+  213,
+  198,
+  181,
+  162,
+  142,
+  121,
+  98,
+  74,
+  50,
+  25
+];
+var SurfingMinigame_BGMetatileTable = [
+  [0, 0, 0, 0],
+  [11, 11, 11, 11],
+  [11, 2, 2, 6],
+  [3, 11, 7, 3],
+  [6, 6, 6, 6],
+  [7, 7, 7, 7],
+  [6, 4, 4, 8],
+  [5, 7, 8, 5],
+  [11, 11, 17, 18],
+  [11, 11, 19, 3],
+  [20, 18, 4, 8],
+  [19, 7, 8, 5],
+  [6, 20, 6, 20],
+  [19, 7, 19, 7],
+  [8, 8, 8, 8],
+  [20, 18, 20, 18],
+  [11, 17, 2, 20],
+  [6, 20, 6, 20],
+  [12, 12, 13, 13],
+  [13, 13, 13, 13],
+  [14, 15, 16, 11],
+  [18, 19, 18, 19]
+];
+var SurfingMinigameWavePatterns = [
+  [0, 0, 0, 1, 1, 1, 1, 1],
+  [0, 0, 0, 1, 1, 2, 4, 6],
+  [0, 0, 0, 1, 2, 4, 6, 14],
+  [0, 0, 0, 16, 17, 6, 14, 14],
+  [0, 0, 0, 21, 21, 14, 14, 14],
+  [0, 0, 0, 3, 5, 7, 14, 14],
+  [0, 0, 0, 1, 3, 5, 7, 14],
+  [0, 0, 0, 1, 1, 3, 5, 7],
+  [0, 0, 0, 1, 1, 2, 4, 6],
+  [0, 0, 0, 1, 2, 4, 6, 14],
+  [0, 0, 0, 8, 15, 10, 14, 14],
+  [0, 0, 0, 9, 13, 11, 14, 14],
+  [0, 0, 0, 1, 3, 5, 7, 14],
+  [0, 0, 0, 1, 1, 3, 5, 7],
+  [0, 0, 0, 1, 1, 2, 4, 6],
+  [0, 0, 0, 1, 16, 17, 6, 14],
+  [0, 0, 0, 1, 21, 21, 14, 14],
+  [0, 0, 0, 1, 3, 5, 7, 14],
+  [0, 0, 0, 1, 1, 3, 5, 7],
+  [0, 0, 0, 1, 1, 2, 4, 6],
+  [0, 0, 0, 1, 8, 15, 10, 14],
+  [0, 0, 0, 1, 9, 13, 11, 14],
+  [0, 0, 0, 1, 1, 3, 5, 7],
+  [0, 0, 0, 1, 1, 16, 17, 6],
+  [0, 0, 0, 1, 1, 21, 21, 14],
+  [0, 0, 0, 1, 1, 3, 5, 7],
+  [0, 0, 0, 1, 1, 8, 15, 10],
+  [0, 0, 0, 1, 1, 9, 13, 11],
+  [0, 0, 0, 20, 20, 20, 20, 20]
+];
+var SurfingMinigameBeachPattern = [0, 0, 0, 18, 19, 19, 19, 19];
+var SurfingMinigame_WaveSequenceStarts = [1, 14, 26, 41, 50, 64, 77, 92];
+var FY = SURFING_MINIGAME_FLAT_WATER_Y;
+var TILE_HEIGHT = 8;
+function load(n, b, c, then = "advance") {
+  const hex2 = n.toString(16).toUpperCase().padStart(2, "0");
+  return {
+    kind: "load",
+    label: `SurfingMinigame_LoadWavePattern${hex2}AndAdvance`,
+    b: FY - b * TILE_HEIGHT,
+    c: FY - c * TILE_HEIGHT,
+    pattern: SurfingMinigameWavePatterns[n],
+    then
+  };
+}
+var CHOOSE = { kind: "choose", label: "SurfingMinigame_ChooseNextWaveSequence" };
+var P00 = load(0, 0, 0);
+var P01 = load(1, 0, 1);
+var P02 = load(2, 2, 3);
+var P03 = load(3, 4, 5);
+var P04 = load(4, 6, 6);
+var P05 = load(5, 6, 5);
+var P06 = load(6, 4, 3);
+var P07 = load(7, 2, 1);
+var P08 = load(8, 0, 1);
+var P09 = load(9, 2, 3);
+var P0A = load(10, 4, 5);
+var P0B = load(11, 5, 5);
+var P0C = load(12, 4, 3);
+var P0D = load(13, 2, 1);
+var P0E = load(14, 0, 1);
+var P0F = load(15, 2, 3);
+var P10 = load(16, 4, 4);
+var P11 = load(17, 4, 3);
+var P12 = load(18, 2, 1);
+var P13 = load(19, 0, 1);
+var P14 = load(20, 2, 3);
+var P15 = load(21, 3, 3);
+var P16 = load(22, 2, 1);
+var P17 = load(23, 0, 1);
+var P18 = load(24, 2, 2);
+var P19 = load(25, 2, 1);
+var P1A = load(26, 0, 1);
+var P1B = load(27, 1, 1);
+var P1C = load(28, 0, 0);
+var BEACH = {
+  kind: "load",
+  label: "SurfingMinigame_LoadBeachPatternAndAdvance",
+  b: FY,
+  c: FY,
+  pattern: SurfingMinigameBeachPattern,
+  then: "advance"
+};
+var BEACH_RESET = {
+  kind: "load",
+  label: "SurfingMinigame_LoadBeachPatternAndReset",
+  b: FY,
+  c: FY,
+  pattern: SurfingMinigameBeachPattern,
+  then: "reset"
+};
+var FLAT_RESET = {
+  kind: "load",
+  label: "SurfingMinigame_LoadFlatWaveAndReset",
+  b: FY,
+  c: FY,
+  pattern: SurfingMinigameWavePatterns[0],
+  then: "reset"
+};
+var FLAT = {
+  kind: "load",
+  label: "SurfingMinigame_LoadFlatWave",
+  b: FY,
+  c: FY,
+  pattern: SurfingMinigameWavePatterns[0],
+  then: "stay"
+};
+var WaveFunctions = [
+  CHOOSE,
+  P13,
+  P14,
+  P15,
+  P16,
+  P00,
+  P17,
+  P18,
+  P19,
+  P00,
+  P00,
+  P00,
+  P00,
+  FLAT_RESET,
+  P08,
+  P09,
+  P0A,
+  P0B,
+  P0C,
+  P0D,
+  P00,
+  P00,
+  P00,
+  P00,
+  P00,
+  FLAT_RESET,
+  P0E,
+  P0F,
+  P10,
+  P11,
+  P12,
+  P0E,
+  P0F,
+  P10,
+  P11,
+  P12,
+  P00,
+  P00,
+  P00,
+  P00,
+  FLAT_RESET,
+  P13,
+  P14,
+  P15,
+  P16,
+  P00,
+  P00,
+  P00,
+  P00,
+  FLAT_RESET,
+  P17,
+  P18,
+  P19,
+  P17,
+  P18,
+  P19,
+  P17,
+  P18,
+  P19,
+  P00,
+  P00,
+  P00,
+  P00,
+  FLAT_RESET,
+  P1A,
+  P1B,
+  P0E,
+  P0F,
+  P10,
+  P11,
+  P12,
+  P1A,
+  P1B,
+  P00,
+  P00,
+  P00,
+  FLAT_RESET,
+  P08,
+  P09,
+  P0A,
+  P0B,
+  P0C,
+  P0D,
+  P00,
+  P1A,
+  P1B,
+  P1A,
+  P1B,
+  P00,
+  P00,
+  P00,
+  FLAT_RESET,
+  P0E,
+  P0F,
+  P10,
+  P11,
+  P12,
+  P13,
+  P14,
+  P15,
+  P16,
+  P00,
+  P00,
+  P00,
+  P00,
+  FLAT_RESET,
+  P01,
+  P02,
+  P03,
+  P04,
+  P05,
+  P06,
+  P07,
+  FLAT,
+  P00,
+  P1C,
+  BEACH,
+  BEACH,
+  BEACH,
+  BEACH,
+  BEACH,
+  BEACH,
+  BEACH,
+  BEACH_RESET
+];
+var SurfingPikachuObjectSpawnData = [
+  [0, 0, 0],
+  [4, 1, 0],
+  [17, 2, 0],
+  [18, 2, 0],
+  [21, 0, 0],
+  [22, 0, 0],
+  [23, 0, 0],
+  [24, 0, 0],
+  [25, 0, 0],
+  [26, 0, 0],
+  [20, 0, 0],
+  [19, 3, 0],
+  [27, 4, 0]
+];
+var OAM_XFLIP2 = 32;
+var OAM_YFLIP2 = 64;
+var OAM_PAL12 = 16;
+function frame(id, duration, ...flags) {
+  let x = duration;
+  for (const f of flags)
+    x |= f << 1;
+  return [id, x & 255];
+}
+var endanim = [255];
+var dorestart = [254];
+var dorepeat = (n) => [253, n];
+var delanim = [252];
+var script = (...parts) => parts.flat();
+var surfingAngle = (a, b, ...flags) => script(frame(a, 8, ...flags), frame(b, 8, ...flags), dorestart);
+var points = (id) => script(frame(id, 4), dorepeat(1), frame(id, 3), dorepeat(1), frame(id, 2), dorepeat(1), frame(id, 1), delanim);
+var XY = [OAM_XFLIP2, OAM_YFLIP2];
+var SurfingPikachuFrames = [
+  script(frame(0, 32), endanim),
+  surfingAngle(1, 2),
+  surfingAngle(3, 4),
+  surfingAngle(5, 6),
+  surfingAngle(7, 8),
+  surfingAngle(9, 10),
+  surfingAngle(11, 12),
+  surfingAngle(13, 14),
+  surfingAngle(1, 2, ...XY),
+  surfingAngle(3, 4, ...XY),
+  surfingAngle(5, 6, ...XY),
+  surfingAngle(7, 8, ...XY),
+  surfingAngle(9, 10, ...XY),
+  surfingAngle(11, 12, ...XY),
+  surfingAngle(13, 14, ...XY),
+  script(frame(17, 7), frame(18, 7), dorestart),
+  script(frame(19, 2), frame(20, 2), dorepeat(8), frame(21, 2), endanim),
+  script(frame(22, 32), frame(22, 32), delanim),
+  script(frame(23, 32), frame(23, 32), delanim),
+  script(frame(24, 32), endanim),
+  script(frame(25, 1), delanim),
+  points(26),
+  points(27),
+  points(28),
+  points(29),
+  points(30),
+  points(31),
+  script(frame(32, 7), frame(33, 7), frame(34, 7), frame(35, 7), dorestart)
+];
+var SingleTile = [[-4, -4, 0, 0]];
+var SurfingPikachu = [
+  [-12, -12, 0, 0],
+  [-12, -4, 1, 0],
+  [-12, 4, 2, 0],
+  [-4, -12, 16, 0],
+  [-4, -4, 17, 0],
+  [-4, 4, 18, 0],
+  [4, -12, 32, 0],
+  [4, -4, 33, 0],
+  [4, 4, 34, 0]
+];
+var TextBanner = [
+  [-8, -24, 0, 0],
+  [-8, -16, 1, 0],
+  [-8, -8, 2, 0],
+  [-8, 0, 3, 0],
+  [-8, 8, 4, 0],
+  [-8, 16, 5, 0],
+  [0, -24, 16, 0],
+  [0, -16, 17, 0],
+  [0, -8, 18, 0],
+  [0, 0, 19, 0],
+  [0, 8, 20, 0],
+  [0, 16, 21, 0]
+];
+var WaterSpray = [[-4, 11, 0, OAM_PAL12], [4, 3, 15, OAM_PAL12], [4, 11, 16, OAM_PAL12]];
+var SmallSplash = [
+  [-4, -16, 0, OAM_PAL12 | OAM_XFLIP2],
+  [-4, 8, 0, OAM_PAL12],
+  [4, -16, 16, OAM_PAL12 | OAM_XFLIP2],
+  [4, -8, 15, OAM_PAL12 | OAM_XFLIP2],
+  [4, 0, 15, OAM_PAL12],
+  [4, 8, 16, OAM_PAL12]
+];
+var LargeSplash = [
+  [-12, -16, 0, OAM_PAL12],
+  [-12, -8, 1, OAM_PAL12],
+  [-12, 0, 1, OAM_PAL12 | OAM_XFLIP2],
+  [-12, 8, 0, OAM_PAL12 | OAM_XFLIP2],
+  [-4, -16, 16, OAM_PAL12],
+  [-4, -8, 17, OAM_PAL12],
+  [-4, 0, 17, OAM_PAL12 | OAM_XFLIP2],
+  [-4, 8, 16, OAM_PAL12 | OAM_XFLIP2],
+  [4, -16, 32, OAM_PAL12],
+  [4, -8, 33, OAM_PAL12],
+  [4, 0, 33, OAM_PAL12 | OAM_XFLIP2],
+  [4, 8, 32, OAM_PAL12 | OAM_XFLIP2]
+];
+var EmptySurfboard = [[4, -12, 0, 0], [4, -4, 1, 0], [4, 4, 2, 0]];
+var pts = (a, b, c, d) => d === undefined ? [[-4, -12, a, 0], [-4, -4, b, 0], [-4, 4, c, 0]] : [[-4, -16, a, 0], [-4, -8, b, 0], [-4, 0, c, 0], [-4, 8, d, 0]];
+var IntroPikachu = [
+  [-12, -16, 3, OAM_XFLIP2],
+  [-12, -8, 2, OAM_XFLIP2],
+  [-12, 0, 1, OAM_XFLIP2],
+  [-12, 8, 0, OAM_XFLIP2],
+  [-4, -16, 19, OAM_XFLIP2],
+  [-4, -8, 18, OAM_XFLIP2],
+  [-4, 0, 17, OAM_XFLIP2],
+  [-4, 8, 16, OAM_XFLIP2],
+  [4, -16, 35, OAM_XFLIP2],
+  [4, -8, 34, OAM_XFLIP2],
+  [4, 0, 33, OAM_XFLIP2],
+  [4, 8, 32, OAM_XFLIP2]
+];
+var SurfingPikachuOAMData = [
+  { tile: 0, entries: SingleTile },
+  { tile: 0, entries: SurfingPikachu },
+  { tile: 54, entries: SurfingPikachu },
+  { tile: 3, entries: SurfingPikachu },
+  { tile: 57, entries: SurfingPikachu },
+  { tile: 6, entries: SurfingPikachu },
+  { tile: 60, entries: SurfingPikachu },
+  { tile: 9, entries: SurfingPikachu },
+  { tile: 96, entries: SurfingPikachu },
+  { tile: 12, entries: SurfingPikachu },
+  { tile: 99, entries: SurfingPikachu },
+  { tile: 48, entries: SurfingPikachu },
+  { tile: 102, entries: SurfingPikachu },
+  { tile: 51, entries: SurfingPikachu },
+  { tile: 105, entries: SurfingPikachu },
+  { tile: 108, entries: SurfingPikachu },
+  { tile: 156, entries: SurfingPikachu },
+  { tile: 160, entries: SurfingPikachu },
+  { tile: 163, entries: SurfingPikachu },
+  { tile: 167, entries: SmallSplash },
+  { tile: 168, entries: LargeSplash },
+  { tile: 152, entries: EmptySurfboard },
+  { tile: 224, entries: TextBanner },
+  { tile: 230, entries: TextBanner },
+  { tile: 202, entries: TextBanner },
+  { tile: 167, entries: WaterSpray },
+  { tile: 0, entries: pts(191, 213, 208) },
+  { tile: 0, entries: pts(191, 209, 213, 208) },
+  { tile: 0, entries: pts(191, 211, 213, 208) },
+  { tile: 0, entries: pts(191, 215, 213, 208) },
+  { tile: 0, entries: pts(191, 209, 216, 208) },
+  { tile: 0, entries: pts(191, 213, 208, 208) },
+  { tile: 128, entries: IntroPikachu },
+  { tile: 132, entries: IntroPikachu },
+  { tile: 136, entries: IntroPikachu },
+  { tile: 140, entries: IntroPikachu }
+];
+
+// voxelmon/game/minigame/surfing.ts
+var PAD_A = 1;
+var PAD_SELECT = 4;
+var PAD_RIGHT = 16;
+var PAD_LEFT = 32;
+var SCREEN_WIDTH = 20;
+var TILE_WIDTH = 8;
+var OBJ_SIZE = 4;
+var rSCY_LOW = 66;
+var rSCX_LOW = 67;
+var vBGMap0 = 38912;
+var ANIM_OBJ_INDEX = 0;
+var ANIM_OBJ_FRAME_SET = 1;
+var ANIM_OBJ_CALLBACK = 2;
+var ANIM_OBJ_TILE = 3;
+var ANIM_OBJ_X_COORD = 4;
+var ANIM_OBJ_Y_COORD = 5;
+var ANIM_OBJ_X_OFFSET = 6;
+var ANIM_OBJ_Y_OFFSET = 7;
+var ANIM_OBJ_DURATION = 8;
+var ANIM_OBJ_DURATION_OFFSET = 9;
+var ANIM_OBJ_FRAME_IDX = 10;
+var ANIM_OBJ_FIELD_B = 11;
+var ANIM_OBJ_FIELD_C = 12;
+var ANIM_OBJ_FIELD_D = 13;
+var ANIM_OBJ_FIELD_E = 14;
+var ANIM_OBJ_STRUCT_LENGTH = 16;
+var NUM_ANIM_OBJS = 10;
+var wShadowOAMSprite00TileID = 0 * OBJ_SIZE + 2;
+var wShadowOAMSprite02TileID = 2 * OBJ_SIZE + 2;
+var wShadowOAMSprite04XCoord = 4 * OBJ_SIZE + 1;
+var wShadowOAMSprite05XCoord = 5 * OBJ_SIZE + 1;
+var wShadowOAMEnd = 40 * OBJ_SIZE;
+function addDaa(a, b, carry) {
+  const sum = a + b + carry;
+  const half = (a & 15) + (b & 15) + carry > 15;
+  let c = sum > 255;
+  let r = sum & 255;
+  let adj = 0;
+  if (c || r > 153) {
+    adj |= 96;
+    c = true;
+  }
+  if (half || (r & 15) > 9)
+    adj |= 6;
+  r = r + adj & 255;
+  return [r, c ? 1 : 0];
+}
+function subDaa(a, b, carry) {
+  const diff = a - b - carry;
+  const half = (a & 15) - (b & 15) - carry < 0;
+  const c = diff < 0;
+  let r = diff & 255;
+  if (c)
+    r = r - 96 & 255;
+  if (half)
+    r = r - 6 & 255;
+  return [r, c ? 1 : 0];
+}
+function SurfingMinigame_NTimesDE(a, de) {
+  return a * de & 65535;
+}
+function SurfingPikachu_Sine(a, d) {
+  a &= 63;
+  if (a < 32)
+    return SurfingPikachu_Sine_GetSine(a, d) >> 8 & 255;
+  a &= 31;
+  const h = SurfingPikachu_Sine_GetSine(a, d) >> 8 & 255;
+  return -h & 255;
+}
+function SurfingPikachu_Sine_GetSine(e, d) {
+  return SurfingMinigame_NTimesDE(d & 255, SineWave[e]);
+}
+class AnimatedObjects {
+  shadowOam;
+  introScene;
+  structs = new Uint8Array(NUM_ANIM_OBJS * ANIM_OBJ_STRUCT_LENGTH);
+  wNumLoadedAnimatedObjects = 0;
+  wCurrentAnimatedObjectOAMBufferOffset = 0;
+  tables = null;
+  wCurAnimatedObjectOAMAttributes = 0;
+  wCurrentAnimatedObjectVTileOffset = 0;
+  wCurrentAnimatedObjectXCoord = 0;
+  wCurrentAnimatedObjectYCoord = 0;
+  wCurrentAnimatedObjectXOffset = 0;
+  wCurrentAnimatedObjectYOffset = 0;
+  wAnimatedObjectGlobalYOffset = 0;
+  wAnimatedObjectGlobalXOffset = 0;
+  constructor(shadowOam, introScene) {
+    this.shadowOam = shadowOam;
+    this.introScene = introScene;
+  }
+  ClearObjectAnimationBuffers() {
+    this.structs.fill(0);
+    this.wNumLoadedAnimatedObjects = 0;
+    this.wCurrentAnimatedObjectOAMBufferOffset = 0;
+    this.tables = null;
+    this.wCurAnimatedObjectOAMAttributes = 0;
+    this.wCurrentAnimatedObjectVTileOffset = 0;
+    this.wCurrentAnimatedObjectXCoord = 0;
+    this.wCurrentAnimatedObjectYCoord = 0;
+    this.wCurrentAnimatedObjectXOffset = 0;
+    this.wCurrentAnimatedObjectYOffset = 0;
+    this.wAnimatedObjectGlobalYOffset = 0;
+    this.wAnimatedObjectGlobalXOffset = 0;
+  }
+  RunObjectAnimations() {
+    for (let e = 0;e < NUM_ANIM_OBJS; e++) {
+      const bc = e * ANIM_OBJ_STRUCT_LENGTH;
+      if (this.structs[bc + ANIM_OBJ_INDEX] === 0)
+        continue;
+      this.ExecuteCurrentAnimatedObjectCallback(bc);
+      if (this.UpdateCurrentAnimatedObjectFrame(bc))
+        return;
+    }
+    for (let l = this.wCurrentAnimatedObjectOAMBufferOffset;l < wShadowOAMEnd; l++)
+      this.shadowOam[l] = 0;
+  }
+  SpawnAnimatedObject(a, d, e) {
+    const s = this.structs;
+    for (let i = 0;i < NUM_ANIM_OBJS; i++) {
+      const bc = i * ANIM_OBJ_STRUCT_LENGTH;
+      if (s[bc + ANIM_OBJ_INDEX] !== 0)
+        continue;
+      this.wNumLoadedAnimatedObjects = this.wNumLoadedAnimatedObjects + 1 & 255;
+      const spawn = this.tables.spawn[a];
+      s[bc + ANIM_OBJ_INDEX] = this.wNumLoadedAnimatedObjects;
+      s[bc + ANIM_OBJ_FRAME_SET] = spawn[0];
+      s[bc + ANIM_OBJ_CALLBACK] = spawn[1];
+      s[bc + ANIM_OBJ_TILE] = 0;
+      s[bc + ANIM_OBJ_X_COORD] = e & 255;
+      s[bc + ANIM_OBJ_Y_COORD] = d & 255;
+      s[bc + ANIM_OBJ_X_OFFSET] = 0;
+      s[bc + ANIM_OBJ_Y_OFFSET] = 0;
+      s[bc + ANIM_OBJ_DURATION] = 0;
+      s[bc + ANIM_OBJ_DURATION_OFFSET] = 0;
+      s[bc + ANIM_OBJ_FRAME_IDX] = 255;
+      s.fill(0, bc + ANIM_OBJ_FIELD_B, bc + ANIM_OBJ_STRUCT_LENGTH);
+      return bc;
+    }
+    return -1;
+  }
+  MaskCurrentAnimatedObjectStruct(bc) {
+    this.structs[bc + ANIM_OBJ_INDEX] = 0;
+  }
+  MaskAllAnimatedObjectStructs() {
+    for (let i = 0;i < NUM_ANIM_OBJS; i++)
+      this.structs[i * ANIM_OBJ_STRUCT_LENGTH] = 0;
+  }
+  UpdateCurrentAnimatedObjectFrame(bc) {
+    const s = this.structs;
+    this.wCurAnimatedObjectOAMAttributes = 0;
+    this.wCurrentAnimatedObjectVTileOffset = s[bc + ANIM_OBJ_TILE];
+    this.wCurrentAnimatedObjectXCoord = s[bc + ANIM_OBJ_X_COORD];
+    this.wCurrentAnimatedObjectYCoord = s[bc + ANIM_OBJ_Y_COORD];
+    this.wCurrentAnimatedObjectXOffset = s[bc + ANIM_OBJ_X_OFFSET];
+    this.wCurrentAnimatedObjectYOffset = s[bc + ANIM_OBJ_Y_OFFSET];
+    const a = this.UpdateDurationTimerAndFrameStateForCurrentAnimatedObject(bc);
+    if (a === 253)
+      return false;
+    if (a === 252) {
+      this.MaskCurrentAnimatedObjectStruct(bc);
+      return false;
+    }
+    const oam = this.tables.oam[a];
+    this.wCurrentAnimatedObjectVTileOffset = this.wCurrentAnimatedObjectVTileOffset + oam.tile & 255;
+    let e = this.wCurrentAnimatedObjectOAMBufferOffset;
+    for (const [ty, tx, tile, attr] of oam.entries) {
+      let b = this.wCurrentAnimatedObjectYCoord + this.wCurrentAnimatedObjectYOffset & 255;
+      b = b + this.wAnimatedObjectGlobalYOffset & 255;
+      this.shadowOam[e++] = this.GetCurrentAnimatedObjectTileYCoordinate(ty) + b & 255;
+      b = this.wCurrentAnimatedObjectXCoord + this.wCurrentAnimatedObjectXOffset & 255;
+      b = b + this.wAnimatedObjectGlobalXOffset & 255;
+      this.shadowOam[e++] = this.GetCurrentAnimatedObjectTileXCoordinate(tx) + b & 255;
+      this.shadowOam[e++] = this.wCurrentAnimatedObjectVTileOffset + tile & 255;
+      const at = this.SetCurrentAnimatedObjectOAMAttributes(attr);
+      if (this.introScene() !== 7)
+        this.shadowOam[e] = at;
+      e++;
+      this.wCurrentAnimatedObjectOAMBufferOffset = e & 255;
+      if ((e & 255) >= wShadowOAMEnd)
+        return true;
+    }
+    return false;
+  }
+  GetCurrentAnimatedObjectTileYCoordinate(y) {
+    let a = y & 255;
+    if (this.wCurAnimatedObjectOAMAttributes & 64)
+      a = -(a + 8) & 255;
+    return a;
+  }
+  GetCurrentAnimatedObjectTileXCoordinate(x) {
+    let a = x & 255;
+    if (this.wCurAnimatedObjectOAMAttributes & 32)
+      a = -(a + 8) & 255;
+    return a;
+  }
+  SetCurrentAnimatedObjectOAMAttributes(attr) {
+    const b = (attr ^ this.wCurAnimatedObjectOAMAttributes) & 224;
+    let a = attr & 16 | b;
+    if (a & 16)
+      a |= 4;
+    return a;
+  }
+  SetCurrentAnimatedObjectCallbackAndResetFrameStateRegisters(bc, a) {
+    this.structs[bc + ANIM_OBJ_FRAME_SET] = a & 255;
+    this.structs[bc + ANIM_OBJ_DURATION] = 0;
+    this.structs[bc + ANIM_OBJ_DURATION_OFFSET] = 0;
+    this.structs[bc + ANIM_OBJ_FRAME_IDX] = 255;
+  }
+  scriptByte(bc, k) {
+    const script2 = this.tables.frames[this.structs[bc + ANIM_OBJ_FRAME_SET]];
+    const i = this.structs[bc + ANIM_OBJ_FRAME_IDX] * 2 + k;
+    return script2?.[i] ?? 0;
+  }
+  UpdateDurationTimerAndFrameStateForCurrentAnimatedObject(bc) {
+    const s = this.structs;
+    for (;; ) {
+      if (s[bc + ANIM_OBJ_DURATION] !== 0) {
+        s[bc + ANIM_OBJ_DURATION]--;
+        const a2 = this.scriptByte(bc, 0);
+        this.wCurAnimatedObjectOAMAttributes = (this.scriptByte(bc, 1) & 192) >> 1;
+        return a2;
+      }
+      s[bc + ANIM_OBJ_FRAME_IDX] = s[bc + ANIM_OBJ_FRAME_IDX] + 1 & 255;
+      const a = this.scriptByte(bc, 0);
+      if (a === 254) {
+        s[bc + ANIM_OBJ_DURATION] = 0;
+        s[bc + ANIM_OBJ_FRAME_IDX] = 255;
+        continue;
+      }
+      if (a === 255) {
+        s[bc + ANIM_OBJ_DURATION] = 0;
+        s[bc + ANIM_OBJ_FRAME_IDX] = s[bc + ANIM_OBJ_FRAME_IDX] - 2 & 255;
+        continue;
+      }
+      const b = this.scriptByte(bc, 1);
+      s[bc + ANIM_OBJ_DURATION] = (b & 63) + s[bc + ANIM_OBJ_DURATION_OFFSET] & 255;
+      this.wCurAnimatedObjectOAMAttributes = (b & 192) >> 1;
+      return a;
+    }
+  }
+  ExecuteCurrentAnimatedObjectCallback(bc) {
+    this.tables.callbacks[this.structs[bc + ANIM_OBJ_CALLBACK]](bc);
+  }
+}
+
+class SurfingMinigame {
+  io;
+  tilemaps;
+  video;
+  gen;
+  finished = false;
+  hSCX = 0;
+  hSCY = 0;
+  hWY = SCREEN_H;
+  hLCDCPointer = 0;
+  hAutoBGTransferEnabled = 0;
+  hAutoBGTransferPortion = 0;
+  hAutoBGTransferDest = 0;
+  hFrameCounter = 0;
+  hJoyInput = 0;
+  hJoyLast = 0;
+  hJoyHeld = 0;
+  hJoyPressed = 0;
+  hJoyReleased = 0;
+  hJoy5 = 0;
+  hRedrawRowOrColumnMode = 0;
+  hRedrawRowOrColumnDest = vBGMap0;
+  hVBlankCopySize = 0;
+  hVBlankCopySource = vBGMap0;
+  wMusicTempo = 0;
+  wShadowOAM = new Uint8Array(wShadowOAMEnd);
+  wLYOverrides = new Uint8Array(512);
+  wRedrawRowOrColumnSrcTiles = new Uint8Array(SCREEN_WIDTH * 2);
+  anim;
+  wSurfingMinigameRoutineNumber = 0;
+  wSurfingMinigamePikachuState = 0;
+  wSurfingMinigameWaveFunctionNumber = 0;
+  wSurfingMinigameWaveRandomValue = 0;
+  wSurfingMinigamePikachuHP = new Uint8Array(2);
+  wSurfingMinigameRadnessMeter = 0;
+  wSurfingMinigameRadnessScore = new Uint8Array(2);
+  wSurfingMinigameTotalScore = new Uint8Array(2);
+  wSurfingMinigameBoardAngleOffset = 0;
+  wSurfingMinigameBoardAngleDecreasing = 0;
+  wSurfingMinigameBoardAngleTimer = 0;
+  wSurfingMinigameCrashTimer = 0;
+  wSurfingMinigameUnusedToggle = 0;
+  wSurfingMinigamePikachuSpeed = 0;
+  wSurfingMinigameDistance = new Uint8Array(3);
+  wSurfingMinigameWaveHeightBuffer = new Uint8Array(2);
+  wSurfingMinigamePikachuObjectHeight = 0;
+  wSurfingMinigameWaterSprayCounter = 0;
+  wSurfingMinigameJumpArcMagnitude = 0;
+  wSurfingMinigameJumpDescending = 0;
+  wSurfingMinigameJumpArcFraction = 0;
+  wSurfingMinigameBGMapReadBuffer = new Uint8Array(16);
+  wSurfingMinigameSCX = 0;
+  wSurfingMinigameSCX2 = 0;
+  wSurfingMinigameSCXHi = 0;
+  wSurfingMinigameWaveHeight = new Uint8Array(SCREEN_WIDTH);
+  wSurfingMinigameXOffset = 0;
+  wSurfingMinigameTrickFlags = 0;
+  wSurfingMinigameGameOver = 0;
+  wSurfingMinigameGameOverDelay = 0;
+  wSurfingMinigameRoutineDelay = 0;
+  wSurfingMinigameIntroAnimationFinished = 0;
+  wSurfingMinigameMusicTempoEnabled = 0;
+  wSurfingMinigameCloudScrollFraction = 0;
+  constructor(io, tilemaps, video) {
+    this.io = io;
+    this.tilemaps = tilemaps;
+    this.video = video ?? new GbVideo;
+    this.anim = new AnimatedObjects(this.wShadowOAM, () => this.wSurfingMinigameMusicTempoEnabled);
+    this.gen = this.SurfingPikachuMinigame();
+  }
+  frame(held, pressed) {
+    if (this.finished)
+      return false;
+    this.hJoyInput = (held | pressed) & 255;
+    if (this.gen.next().done)
+      this.finished = true;
+    return !this.finished;
+  }
+  get done() {
+    return this.finished;
+  }
+  *DelayFrame() {
+    this.VBlank();
+    yield;
+  }
+  *DelayFrames(n) {
+    for (let i = 0;i < n; i++)
+      yield* this.DelayFrame();
+  }
+  VBlank() {
+    const v = this.video;
+    v.scx = this.hSCX;
+    v.scy = this.hSCY;
+    v.wy = this.hWY;
+    this.AutoBgMapTransfer();
+    this.RedrawRowOrColumn();
+    this.VBlankCopy();
+    v.oam.set(this.wShadowOAM);
+    if (this.hFrameCounter !== 0)
+      this.hFrameCounter--;
+    this.LCDC();
+  }
+  LCDC() {
+    const v = this.video;
+    if (this.hLCDCPointer === rSCY_LOW)
+      v.lineTarget = "scy";
+    else if (this.hLCDCPointer === rSCX_LOW)
+      v.lineTarget = "scx";
+    else {
+      v.lineTarget = "none";
+      return;
+    }
+    v.lines[0] = v.lineTarget === "scy" ? this.hSCY : this.hSCX;
+    for (let ly = 1;ly < SCREEN_H; ly++)
+      v.lines[ly] = this.wLYOverrides[ly - 1];
+  }
+  AutoBgMapTransfer() {
+    this.video.autoBgTransfer = this.hAutoBGTransferEnabled !== 0;
+    this.video.autoBgTransferMap = this.hAutoBGTransferDest;
+    this.hAutoBGTransferPortion = this.video.vblankThird(this.hAutoBGTransferPortion);
+  }
+  RedrawRowOrColumn() {
+    if (this.hRedrawRowOrColumnMode === 0)
+      return;
+    const b = this.hRedrawRowOrColumnMode;
+    this.hRedrawRowOrColumnMode = 0;
+    if (b !== 1)
+      return;
+    let de = this.hRedrawRowOrColumnDest;
+    const src = this.wRedrawRowOrColumnSrcTiles;
+    for (let c = 0, hl = 0;c < 18; c++) {
+      this.video.mapSet(de - vBGMap0, src[hl++]);
+      de = de + 1 & 65535;
+      this.video.mapSet(de - vBGMap0, src[hl++]);
+      de = de + 31 & 65535;
+      de = (de >> 8 & 3 | 152) << 8 | de & 255;
+    }
+  }
+  VBlankCopy() {
+    if (this.hVBlankCopySize === 0)
+      return;
+    const n = this.hVBlankCopySize * 16;
+    this.hVBlankCopySize = 0;
+    for (let i = 0;i < n; i++) {
+      this.wSurfingMinigameBGMapReadBuffer[i & 15] = this.video.maps[this.hVBlankCopySource - vBGMap0 + i & 2047];
+    }
+    this.hVBlankCopySource += n;
+  }
+  Joypad() {
+    const b = this.hJoyInput;
+    const d = this.hJoyLast ^ b;
+    this.hJoyReleased = d & this.hJoyLast;
+    this.hJoyPressed = d & b;
+    this.hJoyLast = b;
+    this.hJoyHeld = this.hJoyLast;
+  }
+  *WaitForSoundToFinish() {
+    while (this.io.sfxPlaying?.())
+      yield* this.DelayFrame();
+  }
+  ClearSprites() {
+    this.wShadowOAM.fill(0);
+  }
+  DisableLCD() {
+    this.video.lcdc &= ~LCDC.on;
+  }
+  RunPaletteCommand(cmd) {
+    if (cmd === "SET_PAL_SURFING_PIKACHU_TITLE") {
+      this.video.colours = { bg: "PIKACHUS_BEACH", obj0: "PIKACHUS_BEACH", obj1: "PIKACHUS_BEACH" };
+    } else {
+      this.video.colours = { bg: "PIKACHUS_BEACH", obj0: "PIKACHUS_BEACH", obj1: "PIKACHUS_BEACH_TITLE" };
+    }
+  }
+  Random() {
+    return this.io.random() & 255;
+  }
+  *SurfingPikachuMinigame() {
+    this.SurfingPikachuMinigame_BlankPals();
+    yield* this.DelayFrame();
+    yield* this.DelayFrame();
+    yield* this.DelayFrame();
+    this.hAutoBGTransferDest = 0;
+    yield* this.SurfingPikachuMinigameIntro();
+    yield* this.SurfingPikachuLoop();
+    this.video.bgp = 0;
+    this.video.obp0 = 0;
+    this.video.obp1 = 0;
+    this.anim.ClearObjectAnimationBuffers();
+    this.ClearSprites();
+    this.hLCDCPointer = 0;
+    this.hSCX = 0;
+    this.hSCY = 0;
+    this.hWY = SCREEN_H;
+    yield* this.DelayFrame();
+  }
+  *SurfingPikachuLoop() {
+    this.SurfingPikachuMinigame_LoadGFXAndLayout();
+    yield* this.DelayFrame();
+    this.RunPaletteCommand("SET_PAL_SURFING_PIKACHU_TITLE");
+    for (;; ) {
+      if (this.wSurfingMinigameRoutineNumber & 128)
+        return;
+      this.SurfingPikachu_GetJoypad_3FrameBuffer();
+      if (this.SurfingPikachu_CheckPressedSelect())
+        return;
+      yield* this.RunSurfingMinigameRoutine();
+      this.anim.wCurrentAnimatedObjectOAMBufferOffset = 15 * OBJ_SIZE;
+      this.anim.RunObjectAnimations();
+      this.SurfingMinigame_MoveClouds();
+      yield* this.DelayFrame();
+      this.SurfingMinigame_UpdateMusicTempo();
+    }
+  }
+  SurfingPikachu_CheckPressedSelect() {
+    if (!this.io.selectQuits)
+      return false;
+    return (this.hJoyPressed & PAD_SELECT) !== 0;
+  }
+  SurfingMinigame_ToggleStartFlag() {
+    if (!(this.hJoyPressed & 8))
+      return;
+    this.wSurfingMinigameUnusedToggle ^= 1;
+  }
+  setMusicTempo(tempo) {
+    this.wMusicTempo = tempo;
+    this.io.musicTempo?.(tempo);
+  }
+  SurfingMinigame_UpdateMusicTempo() {
+    if (!this.wSurfingMinigameMusicTempoEnabled)
+      return;
+    if (!(this.io.noteDelaysAtOne?.() ?? true))
+      return;
+    const e = (this.wSurfingMinigamePikachuSpeed & 1023) << 1 >> 8 & 255;
+    const tempo = Tempos[e];
+    if (tempo !== undefined)
+      this.setMusicTempo(tempo);
+  }
+  SurfingMinigame_ResetMusicTempo() {
+    if (!(this.io.noteDelaysAtOne?.() ?? true))
+      return;
+    this.setMusicTempo(117);
+  }
+  clearSurfingMinigameData() {
+    this.wSurfingMinigameRoutineNumber = 0;
+    this.wSurfingMinigamePikachuState = 0;
+    this.wSurfingMinigameWaveFunctionNumber = 0;
+    this.wSurfingMinigameWaveRandomValue = 0;
+    this.wSurfingMinigamePikachuHP.fill(0);
+    this.wSurfingMinigameRadnessMeter = 0;
+    this.wSurfingMinigameRadnessScore.fill(0);
+    this.wSurfingMinigameTotalScore.fill(0);
+    this.wSurfingMinigameBoardAngleOffset = 0;
+    this.wSurfingMinigameBoardAngleDecreasing = 0;
+    this.wSurfingMinigameBoardAngleTimer = 0;
+    this.wSurfingMinigameCrashTimer = 0;
+    this.wSurfingMinigameUnusedToggle = 0;
+    this.wSurfingMinigamePikachuSpeed = 0;
+    this.wSurfingMinigameDistance.fill(0);
+    this.wSurfingMinigameWaveHeightBuffer.fill(0);
+    this.wSurfingMinigamePikachuObjectHeight = 0;
+    this.wSurfingMinigameWaterSprayCounter = 0;
+    this.wSurfingMinigameJumpArcMagnitude = 0;
+    this.wSurfingMinigameJumpDescending = 0;
+    this.wSurfingMinigameJumpArcFraction = 0;
+    this.wSurfingMinigameBGMapReadBuffer.fill(0);
+    this.wSurfingMinigameSCX = 0;
+    this.wSurfingMinigameSCX2 = 0;
+    this.wSurfingMinigameSCXHi = 0;
+    this.wSurfingMinigameWaveHeight.fill(0);
+    this.wSurfingMinigameXOffset = 0;
+    this.wSurfingMinigameTrickFlags = 0;
+    this.wSurfingMinigameGameOver = 0;
+    this.wSurfingMinigameGameOverDelay = 0;
+    this.wSurfingMinigameRoutineDelay = 0;
+    this.wSurfingMinigameIntroAnimationFinished = 0;
+    this.wSurfingMinigameMusicTempoEnabled = 0;
+    this.wSurfingMinigameCloudScrollFraction = 0;
+  }
+  setSurfingPikachuTables() {
+    this.anim.tables = {
+      spawn: SurfingPikachuObjectSpawnData,
+      callbacks: this.SurfingPikachuObjectCallbacks,
+      oam: SurfingPikachuOAMData,
+      frames: SurfingPikachuFrames
+    };
+  }
+  SurfingPikachuMinigame_LoadGFXAndLayout() {
+    const v = this.video;
+    this.SurfingPikachu_ClearTileMap();
+    this.ClearSprites();
+    this.DisableLCD();
+    this.clearSurfingMinigameData();
+    this.wLYOverrides.fill(0);
+    this.hAutoBGTransferEnabled = 0;
+    this.anim.ClearObjectAnimationBuffers();
+    v.loadTiles(256, "surf_1a", 0, 80);
+    v.loadTiles(0, "surf_1b", 0, 256);
+    this.setSurfingPikachuTables();
+    v.maps.fill(0);
+    v.maps.fill(11, GbVideo.bgCoord(0, 6), GbVideo.bgCoord(0, 6) + 12 * 32);
+    this.anim.SpawnAnimatedObject(1, SURFING_MINIGAME_FLAT_WATER_Y, SURFING_MINIGAME_CENTER_X);
+    this.wSurfingMinigamePikachuObjectHeight = SURFING_MINIGAME_FLAT_WATER_Y;
+    this.SurfingMinigame_InitScanlineOverrides();
+    this.hSCX = 0;
+    this.hSCY = 0;
+    this.hWY = 126;
+    this.hLCDCPointer = rSCY_LOW;
+    this.wSurfingMinigamePikachuSpeed = 64;
+    this.wSurfingMinigamePikachuHP[0] = 0;
+    this.wSurfingMinigamePikachuHP[1] = 96;
+    this.wSurfingMinigameWaveHeight.fill(SURFING_MINIGAME_FLAT_WATER_Y);
+    this.SurfingPikachuMinigame_InitStaticSpriteLayout();
+    this.SurfingPikachuMinigame_DrawStaticTilemapLayout();
+    v.lcdc = LCDC.on | LCDC.winMap9C00 | LCDC.winOn | LCDC.objOn | LCDC.bgOn;
+    this.SurfingPikachuMinigame_SetBGPals();
+    v.obp0 = ldpal(SHADE_BLACK, SHADE_DARK, SHADE_LIGHT, SHADE_WHITE);
+    v.obp1 = ldpal(SHADE_BLACK, SHADE_DARK, SHADE_WHITE, SHADE_WHITE);
+  }
+  SurfingPikachuMinigame_SetBGPals() {
+    this.video.bgp = ldpal(SHADE_BLACK, SHADE_DARK, SHADE_LIGHT, SHADE_WHITE);
+  }
+  SurfingPikachuMinigame_InitStaticSpriteLayout() {
+    let hl = 0;
+    hl = this.SurfingPikachuMinigame_PlaceSpriteRowFromTiles(hl, SurfingPikachuHPDigitTiles, 151, 128);
+    hl = this.SurfingPikachuMinigame_PlaceSpriteRowFromTiles(hl, SurfingPikachuMiniPikachuTile, 150, 80);
+    hl = this.SurfingPikachuMinigame_PlaceSpriteRowFromTiles(hl, SurfingPikachuWideCloudTiles, 20, 32);
+    this.SurfingPikachuMinigame_PlaceSpriteRowFromTiles(hl, SurfingPikachuNarrowCloudTiles, 32, 128);
+  }
+  SurfingPikachuMinigame_PlaceSpriteRowFromTiles(hl, tiles, b, c) {
+    for (const t of tiles) {
+      this.wShadowOAM[hl++] = b;
+      this.wShadowOAM[hl++] = c;
+      this.wShadowOAM[hl++] = t;
+      this.wShadowOAM[hl++] = 0;
+      c = c + TILE_WIDTH & 255;
+    }
+    return hl;
+  }
+  SurfingPikachuMinigame_DrawStaticTilemapLayout() {
+    const v = this.video;
+    let de = GbVideo.bgCoord(1, 1, 1);
+    for (const t of SurfingPikachuStatusBarTiles)
+      v.mapSet(de++, t);
+    v.mapSet(GbVideo.bgCoord(1, 0, 1), 21);
+    v.mapSet(GbVideo.bgCoord(2, 0, 1), 22);
+    v.mapSet(GbVideo.bgCoord(12, 1, 1), 27);
+    v.mapSet(GbVideo.bgCoord(13, 1, 1), 28);
+  }
+  *RunSurfingMinigameRoutine() {
+    switch (this.wSurfingMinigameRoutineNumber) {
+      case 0:
+        return this.SurfingMinigame_StartGame();
+      case 1:
+        return this.SurfingMinigame_RunGame();
+      case 2:
+        return this.SurfingMinigame_WaitToShowResults();
+      case 3:
+        return this.SurfingMinigame_ScrollToResultsScreen();
+      case 4:
+        return this.SurfingMinigame_DrawResultsScreenAndWait();
+      case 5:
+        return this.SurfingMinigame_WriteHPLeftAndWait();
+      case 6:
+        return this.SurfingMinigame_WriteRadnessAndWait();
+      case 7:
+        return this.SurfingMinigame_WriteTotalAndWait();
+      case 8:
+        return this.SurfingMinigame_AddRemainingHPToTotalAndWait();
+      case 9:
+        return yield* this.SurfingMinigame_AddRadnessToTotalAndWait();
+      case 10:
+        return this.SurfingMinigame_WaitLast();
+      case 11:
+        return this.SurfingMinigame_ExitOnPressA();
+      case 12:
+        return this.SurfingMinigame_GameOver();
+    }
+  }
+  SurfingMinigame_StartGame() {
+    this.anim.SpawnAnimatedObject(2, 72, 224);
+    this.wSurfingMinigameRoutineNumber++;
+    this.wSurfingMinigameMusicTempoEnabled = 1;
+  }
+  SurfingMinigame_RunGame() {
+    if (this.wSurfingMinigameDistance[0] >= 24) {
+      this.wSurfingMinigameRoutineNumber++;
+      this.wSurfingMinigameMusicTempoEnabled = 0;
+      this.wSurfingMinigameRoutineDelay = 192;
+      return;
+    }
+    if ((this.wSurfingMinigamePikachuHP[0] | this.wSurfingMinigamePikachuHP[1]) === 0) {
+      this.wSurfingMinigameGameOver = 1;
+      this.wSurfingMinigameRoutineNumber = 12;
+      this.wSurfingMinigameGameOverDelay = 128;
+      const bc = this.anim.SpawnAnimatedObject(11, 136, SURFING_MINIGAME_CENTER_X);
+      if (bc >= 0) {
+        this.anim.structs[bc + ANIM_OBJ_Y_OFFSET] = 128;
+        this.anim.structs[bc + ANIM_OBJ_FIELD_B] = 128;
+        this.anim.structs[bc + ANIM_OBJ_FIELD_C] = 48;
+      }
+      this.wSurfingMinigameMusicTempoEnabled = 0;
+      return;
+    }
+    this.wSurfingMinigameWaveRandomValue = this.Random();
+    this.SurfingMinigame_UpdateLYOverrides();
+    this.SurfingMinigame_SetPikachuHeight();
+    this.SurfingMinigame_ReadBGMapBuffer();
+    this.SurfingMinigame_ScrollAndGenerateBGMap();
+    this.SurfingMinigame_UpdatePikachuDistance();
+    this.SurfingMinigame_Deduct1HP();
+    this.SurfingMinigame_DrawHP();
+  }
+  SurfingMinigame_WaitToShowResults() {
+    if (this.SurfingMinigame_RunDelayTimer()) {
+      this.wSurfingMinigameRoutineNumber++;
+      this.hSCX = 144;
+      this.wSurfingMinigameWaveFunctionNumber = 114;
+      this.wSurfingMinigamePikachuState = PIKACHU_STATE.GAME_END;
+      this.hLCDCPointer = 0;
+      this.wSurfingMinigameSCX = 0;
+      this.wSurfingMinigameSCX2 = 0;
+      this.wSurfingMinigameSCXHi = 0;
+      return;
+    }
+    this.wSurfingMinigameWaveRandomValue = 0;
+    this.SurfingMinigame_UpdateLYOverrides();
+    this.SurfingMinigame_SetPikachuHeight();
+    this.SurfingMinigame_ReadBGMapBuffer();
+    this.SurfingMinigame_CoastAfterGoal();
+    this.SurfingMinigame_ResetMusicTempo();
+  }
+  SurfingMinigame_ScrollToResultsScreen() {
+    if (this.hSCX === 0) {
+      this.wSurfingMinigamePikachuSpeed = 0;
+      this.wSurfingMinigameRoutineNumber++;
+      this.wSurfingMinigamePikachuState = PIKACHU_STATE.INIT_RESULTS;
+      return;
+    }
+    this.SurfingMinigame_UpdateLYOverrides();
+    this.SurfingMinigame_SetPikachuHeight();
+    this.SurfingMinigame_ReadBGMapBuffer();
+    this.hSCX = this.hSCX - 4 & 255;
+    this.wSurfingMinigameXOffset = 256 - 32;
+    this.SurfingMinigame_GenerateBGMap();
+  }
+  SurfingMinigame_DrawResultsScreenAndWait() {
+    this.SurfingMinigame_DrawResultsScreen();
+    this.wSurfingMinigameRoutineDelay = 32;
+    this.wSurfingMinigameRoutineNumber++;
+  }
+  SurfingMinigame_WriteHPLeftAndWait() {
+    if (!this.SurfingMinigame_RunDelayTimer())
+      return;
+    this.SurfingMinigame_WriteHPLeft();
+    this.wSurfingMinigameRoutineDelay = 64;
+    this.wSurfingMinigameRoutineNumber++;
+  }
+  SurfingMinigame_WriteRadnessAndWait() {
+    if (!this.SurfingMinigame_RunDelayTimer())
+      return;
+    this.SurfingMinigame_WriteRadness();
+    this.wSurfingMinigameRoutineDelay = 64;
+    this.wSurfingMinigameRoutineNumber++;
+  }
+  SurfingMinigame_WriteTotalAndWait() {
+    if (!this.SurfingMinigame_RunDelayTimer())
+      return;
+    this.SurfingMinigame_WriteTotal();
+    this.wSurfingMinigameRoutineDelay = 64;
+    this.wSurfingMinigameRoutineNumber++;
+  }
+  SurfingMinigame_AddRemainingHPToTotalAndWait() {
+    if (!this.SurfingMinigame_RunDelayTimer())
+      return;
+    const carry = this.SurfingMinigame_AddRemainingHPToTotal();
+    this.SurfingMinigame_BCDPrintTotalScore();
+    if (!carry)
+      return;
+    this.wSurfingMinigameRoutineDelay = 64;
+    this.wSurfingMinigameRoutineNumber++;
+  }
+  *SurfingMinigame_AddRadnessToTotalAndWait() {
+    if (!this.SurfingMinigame_RunDelayTimer())
+      return;
+    const carry = this.SurfingMinigame_AddRadnessToTotal();
+    this.SurfingMinigame_BCDPrintTotalScore();
+    if (!carry)
+      return;
+    this.wSurfingMinigameRoutineDelay = 128;
+    this.wSurfingMinigameRoutineNumber++;
+    if (!(yield* this.DidPlayerGetAHighScore()))
+      return;
+    this.SurfingMinigame_PrintTextHiScore();
+    this.wSurfingMinigamePikachuState = PIKACHU_STATE.RESULTS;
+  }
+  SurfingMinigame_WaitLast() {
+    if (!this.SurfingMinigame_RunDelayTimer())
+      return;
+    this.wSurfingMinigameRoutineNumber++;
+  }
+  SurfingMinigame_ExitOnPressA() {
+    this.SurfingMinigame_UpdateLYOverrides();
+    if (!(this.hJoyPressed & PAD_A))
+      return;
+    this.wSurfingMinigameRoutineNumber |= 128;
+  }
+  SurfingMinigame_GameOver() {
+    this.SurfingMinigame_UpdateLYOverrides();
+    this.SurfingMinigame_SetPikachuHeight();
+    this.SurfingMinigame_ReadBGMapBuffer();
+    this.SurfingMinigame_ScrollAndGenerateBGMap();
+    this.SurfingMinigame_ResetMusicTempo();
+    if (this.wSurfingMinigameGameOverDelay !== 0) {
+      this.wSurfingMinigameGameOverDelay--;
+      return;
+    }
+    if (!(this.hJoyPressed & PAD_A))
+      return;
+    this.wSurfingMinigameRoutineNumber |= 128;
+  }
+  SurfingMinigame_RunDelayTimer() {
+    if (this.wSurfingMinigameRoutineDelay === 0)
+      return true;
+    this.wSurfingMinigameRoutineDelay--;
+    return false;
+  }
+  SurfingMinigame_UpdatePikachuDistance() {
+    const d = this.wSurfingMinigameDistance;
+    const hl = (d[1] << 8 | d[2]) + this.wSurfingMinigamePikachuSpeed;
+    d[1] = hl >> 8 & 255;
+    d[2] = hl & 255;
+    if (hl <= 65535)
+      return;
+    d[0] = d[0] + 1 & 255;
+    this.wShadowOAM[wShadowOAMSprite04XCoord] = this.wShadowOAM[wShadowOAMSprite04XCoord] - 2 & 255;
+  }
+  SurfingPikachuObjectCallbacks = [
+    (bc) => this.SurfingMinigameAnimatedObjectFn_nop(bc),
+    (bc) => this.SurfingMinigameAnimatedObjectFn_Pikachu(bc),
+    (bc) => this.SurfingMinigame_MoveBannerToCenter(bc),
+    (bc) => this.SurfingMinigameAnimatedObjectFn_FlippingPika(bc),
+    (bc) => this.SurfingMinigameAnimatedObjectFn_IntroAnimationPikachu(bc)
+  ];
+  get o() {
+    return this.anim.structs;
+  }
+  SurfingMinigameAnimatedObjectFn_nop(_bc) {}
+  SurfingMinigameAnimatedObjectFn_Pikachu(bc) {
+    switch (this.wSurfingMinigamePikachuState) {
+      case 0:
+        return this.SurfingMinigame_UpdateRidingPikachu(bc);
+      case 1:
+        return this.SurfingMinigame_UpdateJumpingPikachu(bc);
+      case 2:
+        return this.SurfingMinigame_UpdateLandingPikachu(bc);
+      case 3:
+        return this.SurfingMinigame_UpdateCrashedPikachu(bc);
+      case 4:
+        return this.SurfingMinigame_UpdateGameEndPikachu(bc);
+      case 5:
+        return this.SurfingMinigame_InitResultsPikachu(bc);
+      case 6:
+        return this.SurfingMinigame_UpdateResultsPikachu(bc);
+    }
+  }
+  SurfingMinigame_UpdateRidingPikachu(bc) {
+    if (this.wSurfingMinigameGameOver) {
+      this.wSurfingMinigamePikachuSpeed = 0;
+      this.wSurfingMinigamePikachuState = PIKACHU_STATE.GAME_END;
+      this.SurfingMinigame_UpdateSurfingFrame(bc);
+      return;
+    }
+    this.SurfingMinigame_SpawnWaterSpray(bc);
+    this.o[bc + ANIM_OBJ_Y_COORD] = this.wSurfingMinigamePikachuObjectHeight;
+    if (!this.SurfingMinigame_TryStartJump()) {
+      this.SurfingMinigame_UpdateSurfingFrame(bc);
+      this.SurfingMinigame_SpeedUpPikachu();
+      return;
+    }
+    this.SurfingMinigame_UpdateSurfingFrame(bc);
+    this.wSurfingMinigamePikachuState = PIKACHU_STATE.JUMPING;
+    this.o[bc + ANIM_OBJ_FIELD_C] = 0;
+    this.o[bc + ANIM_OBJ_FIELD_D] = 0;
+    this.o[bc + ANIM_OBJ_FIELD_E] = 0;
+    this.wSurfingMinigameRadnessMeter = 0;
+    this.wSurfingMinigameTrickFlags = 0;
+    this.io.playSfx("Surfing_Jump");
+  }
+  SurfingMinigame_UpdateJumpingPikachu(bc) {
+    this.SurfingMinigame_DPadAction(bc);
+    if (!this.SurfingMinigame_UpdatePikachuHeight(bc))
+      return;
+    if (this.SurfingMinigame_TileInteraction(bc)) {
+      this.wSurfingMinigamePikachuState = PIKACHU_STATE.CRASHED;
+      this.wSurfingMinigameCrashTimer = 96;
+      this.anim.SetCurrentAnimatedObjectCallbackAndResetFrameStateRegisters(bc, 16);
+      this.io.playSfx("Surfing_Crash");
+      return;
+    }
+    this.SurfingMinigame_CalculateAndAddRadnessFromStunt(bc);
+    this.o[bc + ANIM_OBJ_FIELD_C] = 0;
+    this.wSurfingMinigamePikachuState = PIKACHU_STATE.LANDING;
+  }
+  SurfingMinigame_UpdateLandingPikachu(bc) {
+    const a = this.o[bc + ANIM_OBJ_FIELD_C];
+    if (a >= 32) {
+      this.o[bc + ANIM_OBJ_Y_OFFSET] = 0;
+      this.wSurfingMinigamePikachuState = PIKACHU_STATE.RIDING;
+      return;
+    }
+    this.o[bc + ANIM_OBJ_FIELD_C] = a + 4 & 255;
+    this.o[bc + ANIM_OBJ_Y_OFFSET] = SurfingPikachu_Sine(a, 4);
+    this.SurfingMinigame_SpawnWaterSpray(bc);
+    this.o[bc + ANIM_OBJ_Y_COORD] = this.wSurfingMinigamePikachuObjectHeight;
+  }
+  SurfingMinigame_UpdateCrashedPikachu(bc) {
+    if (this.wSurfingMinigameCrashTimer !== 0) {
+      this.wSurfingMinigameCrashTimer--;
+      this.o[bc + ANIM_OBJ_Y_COORD] = this.wSurfingMinigamePikachuObjectHeight;
+      return;
+    }
+    this.wSurfingMinigamePikachuState = PIKACHU_STATE.RIDING;
+    this.anim.SetCurrentAnimatedObjectCallbackAndResetFrameStateRegisters(bc, 4);
+  }
+  SurfingMinigame_UpdateGameEndPikachu(bc) {
+    this.o[bc + ANIM_OBJ_Y_COORD] = this.wSurfingMinigamePikachuObjectHeight;
+    this.SurfingMinigame_UpdateSurfingFrame(bc);
+  }
+  SurfingMinigame_InitResultsPikachu(bc) {
+    this.anim.SetCurrentAnimatedObjectCallbackAndResetFrameStateRegisters(bc, 15);
+    this.o[bc + ANIM_OBJ_FIELD_C] = 0;
+  }
+  SurfingMinigame_UpdateResultsPikachu(bc) {
+    const a = this.o[bc + ANIM_OBJ_FIELD_C];
+    this.o[bc + ANIM_OBJ_FIELD_C] = a + 2 & 255;
+    const t = a & 63;
+    if (t < 32) {
+      this.o[bc + ANIM_OBJ_Y_OFFSET] = 0;
+      return;
+    }
+    this.o[bc + ANIM_OBJ_Y_OFFSET] = SurfingPikachu_Sine(t, 16);
+  }
+  SurfingMinigame_DPadAction(bc) {
+    const o = this.o;
+    const de = this.hJoy5;
+    if (de & PAD_LEFT) {
+      o[bc + ANIM_OBJ_FIELD_E] = 0;
+      const a = o[bc + ANIM_OBJ_FIELD_D];
+      o[bc + ANIM_OBJ_FIELD_D] = a + 1 & 255;
+      if (a >= 11) {
+        this.SurfingMinigame_DPadAction_StartTrick(bc);
+        this.wSurfingMinigameTrickFlags |= 1 << 0;
+      }
+      if (o[bc + ANIM_OBJ_FRAME_SET] >= 14)
+        o[bc + ANIM_OBJ_FRAME_SET] = 1;
+      else
+        o[bc + ANIM_OBJ_FRAME_SET]++;
+      return;
+    }
+    if (de & PAD_RIGHT) {
+      o[bc + ANIM_OBJ_FIELD_D] = 0;
+      const a = o[bc + ANIM_OBJ_FIELD_E];
+      o[bc + ANIM_OBJ_FIELD_E] = a + 1 & 255;
+      if (a >= 13) {
+        this.SurfingMinigame_DPadAction_StartTrick(bc);
+        this.wSurfingMinigameTrickFlags |= 1 << 1;
+      }
+      if (o[bc + ANIM_OBJ_FRAME_SET] === 1)
+        o[bc + ANIM_OBJ_FRAME_SET] = 14;
+      else
+        o[bc + ANIM_OBJ_FRAME_SET] = o[bc + ANIM_OBJ_FRAME_SET] - 1 & 255;
+    }
+  }
+  SurfingMinigame_DPadAction_StartTrick(bc) {
+    this.SurfingMinigame_IncreaseRadnessMeter();
+    this.o[bc + ANIM_OBJ_FIELD_D] = 0;
+    this.o[bc + ANIM_OBJ_FIELD_E] = 0;
+    this.io.playSfx("Surfing_Flip");
+  }
+  SurfingMinigame_TileInteraction(bc) {
+    const fs = this.o[bc + ANIM_OBJ_FRAME_SET];
+    const tile = this.wSurfingMinigameBGMapReadBuffer[0];
+    let row;
+    if (tile === 6)
+      row = "WWWHRCR";
+    else if (tile === 20 || tile === 18)
+      row = "WHRCCRH";
+    else if (tile === 7)
+      row = "RCRHWWW";
+    else
+      row = "WHRCRHW";
+    const r = fs >= 1 && fs <= 7 ? row[fs - 1] : "W";
+    if (r === "W") {
+      this.wSurfingMinigamePikachuSpeed = 64;
+      return true;
+    }
+    if (r === "H")
+      this.SurfingMinigame_ReduceSpeedBy128();
+    else if (r === "R")
+      this.SurfingMinigame_ReduceSpeedBy64();
+    this.io.playSfx("Surfing_Land");
+    return false;
+  }
+  SurfingMinigame_SpeedUpPikachu() {
+    if (this.wSurfingMinigamePikachuSpeed >> 8 >= 2)
+      return;
+    this.wSurfingMinigamePikachuSpeed = this.wSurfingMinigamePikachuSpeed + 2 & 65535;
+  }
+  SurfingMinigame_ReduceSpeedBy64() {
+    const s = this.wSurfingMinigamePikachuSpeed;
+    if (s >> 8 === 0 && (s & 255) < 64) {
+      this.wSurfingMinigamePikachuSpeed = s & 65280;
+      return;
+    }
+    this.wSurfingMinigamePikachuSpeed = s - 64 & 65535;
+  }
+  SurfingMinigame_ReduceSpeedBy128() {
+    const s = this.wSurfingMinigamePikachuSpeed;
+    if (s >> 8 === 0 && (s & 255) < 128) {
+      this.wSurfingMinigamePikachuSpeed = s & 65280;
+      return;
+    }
+    this.wSurfingMinigamePikachuSpeed = s - 128 & 65535;
+  }
+  SurfingMinigame_TryStartJump() {
+    const px2 = this.hSCX & 7;
+    if (px2 < 3 || px2 >= 5)
+      return false;
+    if (this.wSurfingMinigameBGMapReadBuffer[0] !== 20)
+      return false;
+    const a = this.SurfingMinigame_GetSpeedDividedBy32();
+    if (a < 10)
+      return false;
+    this.wSurfingMinigameJumpArcMagnitude = a;
+    this.SurfingMinigame_ResetJumpArc();
+    return true;
+  }
+  SurfingMinigame_UpdateSurfingFrame(bc) {
+    const px2 = this.hSCX & 7;
+    if (px2 < 3 || px2 >= 5)
+      return;
+    const t = this.wSurfingMinigameBGMapReadBuffer[0];
+    let e;
+    if (t === 6 || t === 20)
+      e = 6;
+    else if (t === 7)
+      e = 2;
+    else {
+      this.SurfingMinigame_UpdateBoardAngle();
+      this.o[bc + ANIM_OBJ_FRAME_SET] = 4;
+      return;
+    }
+    this.o[bc + ANIM_OBJ_FRAME_SET] = e + this.wSurfingMinigameBoardAngleOffset - 1 & 255;
+  }
+  SurfingMinigame_UpdateBoardAngle() {
+    const a = this.wSurfingMinigameBoardAngleTimer;
+    this.wSurfingMinigameBoardAngleTimer = a + 1 & 255;
+    if (a & 7)
+      return;
+    if (this.wSurfingMinigameBoardAngleDecreasing) {
+      if (this.wSurfingMinigameBoardAngleOffset === 0)
+        this.wSurfingMinigameBoardAngleDecreasing = 0;
+      else
+        this.wSurfingMinigameBoardAngleOffset--;
+      return;
+    }
+    if (this.wSurfingMinigameBoardAngleOffset === 2)
+      this.wSurfingMinigameBoardAngleDecreasing = 1;
+    else
+      this.wSurfingMinigameBoardAngleOffset++;
+  }
+  SurfingMinigame_GetSpeedDividedBy32() {
+    return (this.wSurfingMinigamePikachuSpeed << 3 & 65535) >> 8 & 255;
+  }
+  SurfingMinigame_SpawnWaterSpray(bc) {
+    const a = this.wSurfingMinigameWaterSprayCounter;
+    this.wSurfingMinigameWaterSprayCounter = a + 1 & 255;
+    if (a & 3)
+      return;
+    const d = this.SurfingMinigame_SpawnWaterSpray_GetYCoord();
+    const e = this.o[bc + ANIM_OBJ_X_COORD];
+    this.anim.SpawnAnimatedObject(10, d, e);
+  }
+  SurfingMinigame_SpawnWaterSpray_GetYCoord() {
+    const h = this.wSurfingMinigameWaveHeight[this.hSCX & TILE_WIDTH ? 9 : 8];
+    const t = this.wSurfingMinigameBGMapReadBuffer[1];
+    if (t === 6 || t === 20)
+      return h - (this.hSCX & 7) & 255;
+    if (t === 7)
+      return (this.hSCX & 7) + h & 255;
+    return h;
+  }
+  SurfingMinigame_MoveBannerToCenter(bc) {
+    const a = this.o[bc + ANIM_OBJ_X_COORD];
+    if (a === SURFING_MINIGAME_CENTER_X)
+      return;
+    this.o[bc + ANIM_OBJ_X_COORD] = a + 4 & 255;
+  }
+  SurfingMinigame_MaskCurrentAnimatedObject(bc) {
+    this.anim.MaskCurrentAnimatedObjectStruct(bc);
+  }
+  SurfingMinigameAnimatedObjectFn_FlippingPika(bc) {
+    const o = this.o;
+    const d = o[bc + ANIM_OBJ_FIELD_B];
+    if (d === 0)
+      return;
+    o[bc + ANIM_OBJ_FIELD_B] = d - 2 & 255;
+    const a = o[bc + ANIM_OBJ_FIELD_C];
+    o[bc + ANIM_OBJ_FIELD_C] = a + 1 & 255;
+    let s = SurfingPikachu_Sine(a, d);
+    if (s < 128)
+      s = -s & 255;
+    o[bc + ANIM_OBJ_Y_OFFSET] = s;
+  }
+  SurfingMinigameAnimatedObjectFn_IntroAnimationPikachu(bc) {
+    const o = this.o;
+    const a = o[bc + ANIM_OBJ_FIELD_B];
+    o[bc + ANIM_OBJ_FIELD_B] = a + 1 & 255;
+    if (!(a & 1))
+      return;
+    if (o[bc + ANIM_OBJ_X_COORD] === 192) {
+      this.wSurfingMinigameIntroAnimationFinished = 1;
+      this.anim.MaskCurrentAnimatedObjectStruct(bc);
+      return;
+    }
+    o[bc + ANIM_OBJ_X_COORD]++;
+  }
+  SurfingMinigame_MoveClouds() {
+    const hl = this.wSurfingMinigamePikachuSpeed + this.wSurfingMinigameCloudScrollFraction;
+    this.wSurfingMinigameCloudScrollFraction = hl & 255;
+    const d = hl >> 8 & 255;
+    for (let e = 0;e < 9; e++) {
+      const i = wShadowOAMSprite05XCoord + e * OBJ_SIZE;
+      this.wShadowOAM[i] = this.wShadowOAM[i] + d & 255;
+    }
+  }
+  SurfingMinigame_ReadBGMapBuffer() {
+    const e = (this.hSCX + 9 * TILE_WIDTH & 255) >> 3;
+    let hl = vBGMap0 + e;
+    let c = this.wSurfingMinigamePikachuObjectHeight >> 3;
+    while (c !== 0) {
+      c--;
+      hl = hl + 32 & 65535;
+      hl = (hl >> 8 & 3 | 152) << 8 | hl & 255;
+    }
+    this.hVBlankCopySource = hl;
+    this.hVBlankCopySize = 1;
+  }
+  SurfingMinigame_SetPikachuHeight() {
+    const h = this.wSurfingMinigameWaveHeight[this.hSCX & TILE_WIDTH ? 8 : 7];
+    const t = this.wSurfingMinigameBGMapReadBuffer[0];
+    if (t === 6 || t === 20)
+      this.wSurfingMinigamePikachuObjectHeight = h - (this.hSCX & 7) & 255;
+    else if (t === 7)
+      this.wSurfingMinigamePikachuObjectHeight = (this.hSCX & 7) + h & 255;
+    else
+      this.wSurfingMinigamePikachuObjectHeight = h;
+  }
+  SurfingMinigame_Deduct1HP() {
+    if (!this.SurfingMinigame_Deduct1HP_BCD_Deduct(0))
+      return;
+    this.SurfingMinigame_Deduct1HP_BCD_Deduct(1);
+  }
+  SurfingMinigame_Deduct1HP_BCD_Deduct(i) {
+    const hp = this.wSurfingMinigamePikachuHP;
+    if (hp[i] === 0) {
+      hp[i] = 153;
+      return true;
+    }
+    hp[i] = subDaa(hp[i], 1, 0)[0];
+    return false;
+  }
+  SurfingMinigame_DrawHP() {
+    const hp = this.wSurfingMinigamePikachuHP;
+    const place2 = (hl, a) => {
+      this.wShadowOAM[hl] = (a >> 4 & 15) + 208;
+      this.wShadowOAM[hl + OBJ_SIZE] = (a & 15) + 208;
+    };
+    place2(wShadowOAMSprite00TileID, hp[1]);
+    place2(wShadowOAMSprite02TileID, hp[0]);
+  }
+  tileMapCopy(src, x, y, n = src.length) {
+    const base = y * SCREEN_WIDTH + x;
+    for (let i = 0;i < n; i++) {
+      if (base + i < this.video.tileMap.length)
+        this.video.tileMap[base + i] = src[i] & 255;
+    }
+  }
+  SurfingMinigame_DrawResultsScreen() {
+    this.video.tileMap.fill(0);
+    this.tileMapCopy(this.tilemaps.beachOutro, 0, 6);
+    this.SurfingMinigame_DrawResultsScreen_PlaceTextbox();
+    this.wShadowOAM.fill(0, wShadowOAMSprite05XCoord, wShadowOAMSprite05XCoord + 9 * OBJ_SIZE);
+    this.hAutoBGTransferEnabled = 1;
+  }
+  SurfingMinigame_DrawResultsScreen_PlaceTextbox() {
+    const placeRow = (y, d, e, a) => {
+      let hl = y * SCREEN_WIDTH + 1;
+      this.video.tileMap[hl++] = d;
+      for (let c = 0;c < SCREEN_WIDTH - 4; c++)
+        this.video.tileMap[hl++] = a;
+      this.video.tileMap[hl] = e;
+    };
+    placeRow(1, 59, 60, 64);
+    for (let y = 2;y <= 8; y++)
+      placeRow(y, 63, 63, 255);
+    placeRow(9, 61, 62, 64);
+  }
+  SurfingMinigame_PrintTextHiScore() {
+    this.tileMapCopy(Hi_Score, 6, 8);
+  }
+  SurfingMinigame_WriteHPLeft() {
+    this.tileMapCopy(HP_Left, 2, 2);
+    this.SurfingMinigame_BCDPrintHPLeft();
+  }
+  SurfingMinigame_AddRemainingHPToTotal() {
+    for (let c = 99;c > 0; c--) {
+      const hp = this.wSurfingMinigamePikachuHP;
+      if ((hp[0] | hp[1]) === 0)
+        return true;
+      this.SurfingMinigame_Deduct1HP();
+      this.SurfingMinigame_AddPointsToTotal(1);
+    }
+    this.io.playSfx("Press_AB");
+    return false;
+  }
+  SurfingMinigame_BCDPrintHPLeft() {
+    let hl = 2 * SCREEN_WIDTH + 10;
+    hl = this.SurfingPikachu_PlaceBCDNumber(hl, this.wSurfingMinigamePikachuHP[1]);
+    hl++;
+    hl = this.SurfingPikachu_PlaceBCDNumber(hl, this.wSurfingMinigamePikachuHP[0]);
+    this.placePts(hl);
+  }
+  placePts(hl) {
+    hl += 2;
+    this.video.tileMap[hl++] = 33;
+    this.video.tileMap[hl++] = 37;
+    this.video.tileMap[hl] = 38;
+  }
+  SurfingMinigame_WriteRadness() {
+    this.tileMapCopy(Radness, 2, 4);
+    this.SurfingMinigame_BCDPrintRadness();
+  }
+  SurfingMinigame_AddRadnessToTotal() {
+    for (let c = 99;c > 0; c--) {
+      const r = this.wSurfingMinigameRadnessScore;
+      const e = r[0];
+      if ((e | r[1]) === 0)
+        return true;
+      const [lo, borrow] = subDaa(e, 1, 0);
+      const [hi] = subDaa(r[1], 0, borrow);
+      r[1] = hi;
+      r[0] = lo;
+      this.SurfingMinigame_AddPointsToTotal(1);
+    }
+    this.io.playSfx("Press_AB");
+    return false;
+  }
+  SurfingMinigame_BCDPrintRadness() {
+    this.SurfingPikachu_PlaceBCDNumber(4 * SCREEN_WIDTH + 10, this.wSurfingMinigameRadnessScore[1]);
+    const hl = this.SurfingPikachu_PlaceBCDNumber(4 * SCREEN_WIDTH + 12, this.wSurfingMinigameRadnessScore[0]);
+    this.placePts(hl);
+  }
+  SurfingMinigame_AddPointsToTotal(e) {
+    const t = this.wSurfingMinigameTotalScore;
+    const [lo, c] = addDaa(t[0], e, 0);
+    t[0] = lo;
+    const [hi, c2] = addDaa(t[1], 0, c);
+    t[1] = hi;
+    if (!c2)
+      return;
+    t[0] = 153;
+    t[1] = 153;
+  }
+  SurfingMinigame_BCDPrintTotalScore() {
+    this.SurfingPikachu_PlaceBCDNumber(6 * SCREEN_WIDTH + 10, this.wSurfingMinigameTotalScore[1]);
+    const hl = this.SurfingPikachu_PlaceBCDNumber(6 * SCREEN_WIDTH + 12, this.wSurfingMinigameTotalScore[0]);
+    this.placePts(hl);
+  }
+  SurfingMinigame_WriteTotal() {
+    this.tileMapCopy(Total, 2, 6);
+    this.SurfingMinigame_BCDPrintRadness();
+    this.SurfingMinigame_BCDPrintTotalScore();
+  }
+  *DidPlayerGetAHighScore() {
+    const hs = this.io.hiScore;
+    const t = this.wSurfingMinigameTotalScore;
+    let high;
+    if (t[1] !== (hs >> 8 & 255))
+      high = t[1] > (hs >> 8 & 255);
+    else
+      high = t[0] > (hs & 255);
+    if (!high) {
+      yield* this.WaitForSoundToFinish();
+      this.SurfingMinigame_PlayPikaCryIfSurfingPikaInParty(28);
+      return false;
+    }
+    this.io.setHiScore(t[1] << 8 | t[0]);
+    yield* this.WaitForSoundToFinish();
+    this.SurfingMinigame_PlayPikaCryIfSurfingPikaInParty(34);
+    this.io.playSfx("Get_Item2");
+    return true;
+  }
+  SurfingMinigame_PlayPikaCryIfSurfingPikaInParty(e) {
+    if (!this.io.surfingPikachuInParty)
+      return;
+    this.io.pikaClip(e);
+  }
+  SurfingMinigame_IncreaseRadnessMeter() {
+    let a = this.wSurfingMinigameRadnessMeter + 1;
+    if (a >= 4)
+      a = 3;
+    this.wSurfingMinigameRadnessMeter = a;
+  }
+  SurfingMinigame_CalculateAndAddRadnessFromStunt(bc) {
+    const meter = this.wSurfingMinigameRadnessMeter;
+    if (meter === 0)
+      return;
+    let spawn;
+    if ((this.wSurfingMinigameTrickFlags & 3) === 3) {
+      if (meter < 3) {
+        this.SurfingMinigame_AddRadness(80);
+        this.SurfingMinigame_AddRadness(80);
+        this.SurfingMinigame_AddRadness(80);
+        this.SurfingMinigame_AddRadness(48);
+        spawn = 8;
+      } else {
+        let a = 10;
+        do
+          this.SurfingMinigame_AddRadness(80);
+        while (--a);
+        spawn = 9;
+      }
+    } else {
+      let d2 = meter;
+      let e2 = 1;
+      let a = 0;
+      do {
+        a = a + e2 & 255;
+        e2 = e2 << 1 & 255;
+      } while (--d2);
+      do
+        this.SurfingMinigame_AddRadness(80);
+      while (a = a - 1 & 255);
+      spawn = meter + 3 & 255;
+    }
+    const d = this.o[bc + ANIM_OBJ_Y_COORD] - 16 & 255;
+    const e = this.o[bc + ANIM_OBJ_X_COORD];
+    this.anim.SpawnAnimatedObject(spawn, d, e);
+  }
+  SurfingMinigame_AddRadness(e) {
+    const r = this.wSurfingMinigameRadnessScore;
+    const [lo, c] = addDaa(r[0], e, 0);
+    r[0] = lo;
+    const [hi, c2] = addDaa(r[1], 0, c);
+    r[1] = hi;
+    if (!c2)
+      return;
+    r[0] = 153;
+    r[1] = 153;
+  }
+  SurfingMinigame_CoastAfterGoal() {
+    this.wSurfingMinigameXOffset = 160;
+    const hl = (this.hSCX << 8 | this.wSurfingMinigameSCX) + 2304;
+    this.wSurfingMinigameSCX = hl & 255;
+    this.hSCX = hl >> 8 & 255;
+    this.SurfingMinigame_GenerateBGMap();
+  }
+  SurfingMinigame_ScrollAndGenerateBGMap() {
+    this.wSurfingMinigameXOffset = 160;
+    const hl = (this.hSCX << 8 | this.wSurfingMinigameSCX) + 384;
+    this.wSurfingMinigameSCX = hl & 255;
+    this.hSCX = hl >> 8 & 255;
+    this.SurfingMinigame_GenerateBGMap();
+  }
+  SurfingMinigame_GenerateBGMap() {
+    if (this.hSCX === this.wSurfingMinigameSCX2)
+      return;
+    this.wSurfingMinigameSCX2 = this.hSCX;
+    const a = this.hSCX & 240;
+    if (a === this.wSurfingMinigameSCXHi)
+      return;
+    this.wSurfingMinigameSCXHi = a;
+    const { b, c, pattern } = this.SurfingMinigame_GetWaveDataPointers();
+    this.wSurfingMinigameWaveHeightBuffer[0] = b;
+    this.wSurfingMinigameWaveHeightBuffer[1] = c;
+    const wh = this.wSurfingMinigameWaveHeight;
+    for (let i = 0;i < SCREEN_WIDTH - 2; i++)
+      wh[i] = wh[i + 2];
+    wh[SCREEN_WIDTH - 2] = this.wSurfingMinigameWaveHeightBuffer[0];
+    wh[SCREEN_WIDTH - 1] = this.wSurfingMinigameWaveHeightBuffer[1];
+    let hl = 0;
+    for (let i = 0;i < 8; i++) {
+      const m = SurfingMinigame_BGMetatileTable[pattern[i]];
+      for (let k = 0;k < 4; k++)
+        this.wRedrawRowOrColumnSrcTiles[hl++] = m[k];
+    }
+    const e = (this.hSCX + this.wSurfingMinigameXOffset & 255 & 240) >> 3;
+    this.hRedrawRowOrColumnDest = vBGMap0 + e;
+    this.hRedrawRowOrColumnMode = 1;
+  }
+  SurfingMinigame_GetWaveDataPointers() {
+    const fn = WaveFunctions[this.wSurfingMinigameWaveFunctionNumber];
+    if (fn.kind === "choose")
+      return this.SurfingMinigame_ChooseNextWaveSequence();
+    if (fn.then === "advance")
+      this.wSurfingMinigameWaveFunctionNumber = this.wSurfingMinigameWaveFunctionNumber + 1 & 255;
+    else if (fn.then === "reset")
+      this.wSurfingMinigameWaveFunctionNumber = 0;
+    return { b: fn.b, c: fn.c, pattern: fn.pattern };
+  }
+  SurfingMinigame_ChooseNextWaveSequence() {
+    const dist = this.wSurfingMinigameDistance[0];
+    if (dist < 22) {
+      const a = this.wSurfingMinigameWaveRandomValue;
+      if (a !== 0)
+        this.wSurfingMinigameWaveFunctionNumber = SurfingMinigame_WaveSequenceStarts[a - 1 & 7];
+    } else if (dist === 22) {
+      this.wSurfingMinigameWaveFunctionNumber = 106;
+    }
+    return { b: SURFING_MINIGAME_FLAT_WATER_Y, c: SURFING_MINIGAME_FLAT_WATER_Y, pattern: SurfingMinigameWavePatterns[0] };
+  }
+  *SurfingPikachuMinigameIntro() {
+    const v = this.video;
+    this.SurfingPikachu_ClearTileMap();
+    this.ClearSprites();
+    this.DisableLCD();
+    this.hAutoBGTransferEnabled = 0;
+    this.anim.ClearObjectAnimationBuffers();
+    v.loadTiles(128, "surf_1c", 0, 144);
+    this.setSurfingPikachuTables();
+    this.anim.SpawnAnimatedObject(12, SURFING_MINIGAME_FLAT_WATER_Y, SURFING_MINIGAME_CENTER_X);
+    this.DrawSurfingPikachuMinigameIntroBackground();
+    this.hSCX = 0;
+    this.hSCY = 0;
+    this.hWY = SCREEN_H;
+    this.RunPaletteCommand("SET_PAL_SURFING_PIKACHU_MINIGAME");
+    v.lcdc = LCDC.on | LCDC.winMap9C00 | LCDC.winOn | LCDC.objOn | LCDC.bgOn;
+    this.hAutoBGTransferEnabled = 1;
+    yield* this.DelayFrame();
+    yield* this.DelayFrame();
+    yield* this.DelayFrame();
+    this.SurfingPikachuMinigame_SetBGPals();
+    v.obp0 = ldpal(SHADE_BLACK, SHADE_DARK, SHADE_LIGHT, SHADE_WHITE);
+    v.obp1 = ldpal(SHADE_BLACK, SHADE_DARK, SHADE_WHITE, SHADE_WHITE);
+    yield* this.DelayFrame();
+    this.io.playMusic("Music_SurfingPikachu");
+    this.wSurfingMinigameIntroAnimationFinished = 0;
+    for (;; ) {
+      if (this.wSurfingMinigameIntroAnimationFinished)
+        return;
+      this.anim.wCurrentAnimatedObjectOAMBufferOffset = 0;
+      this.anim.RunObjectAnimations();
+      yield* this.DelayFrame();
+    }
+  }
+  DrawSurfingPikachuMinigameIntroBackground() {
+    const tm = this.video.tileMap;
+    const t = this.tilemaps;
+    tm.fill(255);
+    this.tileMapCopy(t.beachIntro, 0, 6, 12 * SCREEN_WIDTH);
+    let de = 0;
+    for (let b = 0;b < 6; b++) {
+      for (let c = 0;c < 12; c++)
+        tm[b * SCREEN_WIDTH + 4 + c] = (t.title[de++] ?? 0) & 255;
+    }
+    for (let b = 0;b < 3; b++) {
+      for (let c = 0;c < SCREEN_WIDTH - 5; c++)
+        tm[(7 + b) * SCREEN_WIDTH + 3 + c] = 255;
+    }
+    this.tileMapCopy(t.useControlPad, 3, 7);
+    this.tileMapCopy(t.toSurfRad, 4, 9);
+  }
+  SurfingMinigame_UpdateLYOverrides() {
+    const L = this.wLYOverrides;
+    const base = 2 * 8;
+    const a = L[base];
+    for (let i = 0;i < SCREEN_H - 2 * 8; i++)
+      L[base + i] = L[base + i + 1];
+    L[base + SCREEN_H - 2 * 8] = a;
+  }
+  SurfingMinigame_InitScanlineOverrides() {
+    for (let i = 0;i < 256; i++)
+      this.wLYOverrides[i] = SurfingMinigame_LYOverridesInitialSineWave[i & 31] & 255;
+  }
+  SurfingPikachu_GetJoypad_3FrameBuffer() {
+    this.Joypad();
+    if (this.hFrameCounter !== 0) {
+      this.hJoy5 = 0;
+      return;
+    }
+    this.hJoy5 = this.hJoyHeld;
+    this.hFrameCounter = 2;
+  }
+  SurfingPikachuMinigame_BlankPals() {
+    this.video.bgp = 0;
+    this.video.obp0 = 0;
+    this.video.obp1 = 0;
+  }
+  SurfingPikachuMinigame_NormalPals() {
+    this.video.bgp = ldpal(SHADE_BLACK, SHADE_DARK, SHADE_LIGHT, SHADE_WHITE);
+    this.video.obp0 = this.video.bgp;
+    this.video.obp1 = ldpal(SHADE_BLACK, SHADE_DARK, SHADE_WHITE, SHADE_WHITE);
+  }
+  SurfingPikachu_ClearTileMap() {
+    this.video.tileMap.fill(0);
+  }
+  SurfingMinigame_ResetJumpArc() {
+    this.wSurfingMinigameJumpDescending = 0;
+    this.wSurfingMinigameJumpArcFraction = 0;
+  }
+  SurfingMinigame_UpdatePikachuHeight(bc) {
+    const o = this.o;
+    if (!this.wSurfingMinigameJumpDescending) {
+      const d = this.wSurfingMinigameJumpArcMagnitude;
+      if ((this.wSurfingMinigameJumpArcFraction | d) === 0) {
+        this.wSurfingMinigameJumpDescending = 1;
+        return false;
+      }
+      let hl2 = (d << 8 | this.wSurfingMinigameJumpArcFraction) + 65408 & 65535;
+      this.wSurfingMinigameJumpArcFraction = hl2 & 255;
+      this.wSurfingMinigameJumpArcMagnitude = hl2 >> 8;
+      const a2 = hl2 >> 8;
+      const sq2 = SurfingMinigame_NTimesDE(4, SurfingMinigame_NTimesDE(a2, a2));
+      hl2 = (~(sq2 >> 8) & 255) << 8 | -(sq2 & 255) & 255;
+      const de2 = o[bc + ANIM_OBJ_Y_COORD] << 8 | o[bc + ANIM_OBJ_FIELD_C];
+      const r2 = hl2 + de2 & 65535;
+      o[bc + ANIM_OBJ_Y_COORD] = r2 >> 8;
+      o[bc + ANIM_OBJ_FIELD_C] = r2 & 255;
+      return false;
+    }
+    const e = this.wSurfingMinigamePikachuObjectHeight;
+    const y = o[bc + ANIM_OBJ_Y_COORD];
+    if (y < SCREEN_H && y >= e) {
+      o[bc + ANIM_OBJ_Y_COORD] = this.wSurfingMinigamePikachuObjectHeight;
+      o[bc + ANIM_OBJ_FIELD_C] = 0;
+      return true;
+    }
+    const hl = (this.wSurfingMinigameJumpArcMagnitude << 8 | this.wSurfingMinigameJumpArcFraction) + 128 & 65535;
+    this.wSurfingMinigameJumpArcFraction = hl & 255;
+    this.wSurfingMinigameJumpArcMagnitude = hl >> 8;
+    const a = hl >> 8;
+    const sq = SurfingMinigame_NTimesDE(4, SurfingMinigame_NTimesDE(a, a));
+    const de = o[bc + ANIM_OBJ_Y_COORD] << 8 | o[bc + ANIM_OBJ_FIELD_C];
+    const r = sq + de & 65535;
+    o[bc + ANIM_OBJ_Y_COORD] = r >> 8;
+    o[bc + ANIM_OBJ_FIELD_C] = r & 255;
+    return false;
+  }
+  SurfingPikachu_PlaceBCDNumber(hl, a) {
+    this.video.tileMap[hl++] = (a >> 4 & 15) + 208;
+    this.video.tileMap[hl] = (a & 15) + 208;
+    return hl;
+  }
+}
+var SHADE_WHITE = 0;
+var SHADE_LIGHT = 1;
+var SHADE_DARK = 2;
+var SHADE_BLACK = 3;
+function ldpal(a, b, c, d) {
+  return a << 6 | b << 4 | c << 2 | d;
+}
+
+// voxelmon/game/ui/surfingstate.ts
+var PAD = {
+  a: 1,
+  b: 2,
+  select: 4,
+  start: 8,
+  right: 16,
+  left: 32,
+  up: 64,
+  down: 128
+};
+function surfingPikachuInParty(save) {
+  return (save.party ?? []).some((m) => m.species === "PIKACHU" && (m.moves ?? []).some((mv) => mv.id === "SURF"));
+}
+
+class SurfingState {
+  game;
+  onDone;
+  kind = "surfing";
+  minigame;
+  constructor(game, selectQuits, onDone) {
+    this.game = game;
+    this.onDone = onDone;
+    const maps = game.data.minigame?.surfing?.tilemaps;
+    const io = {
+      random: () => game.npcRng.byte(),
+      playMusic: (label3) => {
+        game.audio?.playOnce?.(label3);
+      },
+      stopMusic: () => game.audio?.stopMusic?.(),
+      playSfx: (name) => game.audio?.playSfx?.(name),
+      pikaClip: (n) => game.audio?.playPikaClip?.(n),
+      surfingPikachuInParty: surfingPikachuInParty(game.save),
+      selectQuits,
+      hiScore: game.save.surfingHiScore ?? 0,
+      setHiScore: (bcd) => {
+        game.save.surfingHiScore = bcd;
+      }
+    };
+    this.minigame = maps ? new SurfingMinigame(io, {
+      beachIntro: maps.beachIntro ?? [],
+      beachOutro: maps.beachOutro ?? [],
+      title: maps.title ?? [],
+      useControlPad: maps.useControlPad ?? [],
+      toSurfRad: maps.toSurfRad ?? [],
+      highScore1: maps.highScore1,
+      highScore2: maps.highScore2
+    }) : null;
+  }
+  update() {
+    const { state, pressed } = this.game.input;
+    let held = 0;
+    let edge = 0;
+    for (const [name, bit] of Object.entries(PAD)) {
+      if (state[name])
+        held |= bit;
+      if (pressed[name])
+        edge |= bit;
+    }
+    if (!this.minigame || !this.minigame.frame(held, edge)) {
+      this.game.pop();
+      this.onDone();
+    }
+  }
+  video() {
+    return this.minigame && !this.minigame.done ? this.minigame.video : null;
+  }
+}
+
 // voxelmon/game/world/yellowscripts.ts
 var MEET_RIVAL = "Music_MeetRival";
 function relabel(rows, swaps) {
@@ -7934,6 +11604,48 @@ function labOnStep(ow, save) {
     ["pika_clip", 2],
     ["show_text", "_OaksLabPikachuDislikesPokeballsText1"],
     ["show_text", "_OaksLabPikachuDislikesPokeballsText2"]
+  ];
+}
+function surfinDude(ow, save) {
+  if (!surfingPikachuInParty(save ?? {})) {
+    return [["face_player"], ["show_text", "_SummerBeachHouseSurfinDudeText4"]];
+  }
+  const asked = ((ow?.pikachuMapFlags ?? 0) & PIKA_MAP_PAUSE_IGT) !== 0;
+  if (ow)
+    ow.pikachuMapFlags = (ow.pikachuMapFlags ?? 0) | PIKA_MAP_PAUSE_IGT;
+  return [
+    ["face_player"],
+    ["ask", asked ? "_SummerBeachHouseSurfinDudeText3" : "_SummerBeachHouseSurfinDudeText1"],
+    ["jump_if_false", "no"],
+    ["surfing_minigame"],
+    ["jump", "end"],
+    ["label", "no"],
+    ["show_text", "_SummerBeachHouseSurfinDudeText2"],
+    ["label", "end"]
+  ];
+}
+function beachPoster(n) {
+  return (_ow, save) => [["show_text", `_SummerBeachHousePoster${n}Text${surfingPikachuInParty(save ?? {}) ? 1 : 2}`]];
+}
+function beachPrinter(ow, save) {
+  if (!surfingPikachuInParty(save ?? {}))
+    return [["show_text", "_SummerBeachHousePrinterText1"]];
+  const rows = [["show_text", "_SummerBeachHousePrinterText2"]];
+  if (((ow?.pikachuMapFlags ?? 0) & PIKA_MAP_SURF_SELECT) === 0)
+    return rows;
+  const bcd = save?.surfingHiScore ?? 0;
+  const score = String(Number.parseInt(bcd.toString(16), 10) || 0);
+  const name = save?.player?.name ?? "";
+  return [
+    ...rows,
+    ["ask", "_SummerBeachHousePrinterText3"],
+    ["jump_if_false", "card"],
+    ["show_text", "_SummerBeachHousePrinterText6"],
+    ["jump", "end"],
+    ["label", "card"],
+    ["show_text", `Pikachu's Beach\f${name}'s Hi-Score
+${score.padStart(4, " ")} Points`],
+    ["label", "end"]
   ];
 }
 var OLD_MAN2 = "VIRIDIANCITY_OLD_MAN2";
@@ -8282,6 +11994,20 @@ function yellowScripts(base) {
           return [["face_player"], ["show_text", after ?? "..."]];
         }
       ]))
+    },
+    SUMMER_BEACH_HOUSE: {
+      talk: {
+        TEXT_SUMMERBEACHHOUSE_SURFINDUDE: surfinDude,
+        TEXT_SUMMERBEACHHOUSE_PIKACHU: [
+          ["face_player"],
+          ["show_text", "_SummerBeachHousePikachuText"],
+          ["play_cry", "PIKACHU"]
+        ],
+        TEXT_SUMMERBEACHHOUSE_POSTER1: beachPoster(1),
+        TEXT_SUMMERBEACHHOUSE_POSTER2: beachPoster(2),
+        TEXT_SUMMERBEACHHOUSE_POSTER3: beachPoster(3),
+        TEXT_SUMMERBEACHHOUSE_PRINTER: beachPrinter
+      }
     },
     SAFARI_ZONE_GATE: {
       talk: {
@@ -10526,16 +14252,16 @@ function useScriptsFor(game) {
     merged.clear();
   scriptGame = g;
 }
-function mapScript(label2) {
+function mapScript(label3) {
   if (scriptGame !== "yellow")
-    return MAP_SCRIPTS[label2];
-  if (merged.has(label2))
-    return merged.get(label2);
+    return MAP_SCRIPTS[label3];
+  if (merged.has(label3))
+    return merged.get(label3);
   yellowTable ??= yellowScripts(MAP_SCRIPTS);
-  const base = MAP_SCRIPTS[label2];
-  const y = yellowTable[label2];
+  const base = MAP_SCRIPTS[label3];
+  const y = yellowTable[label3];
   const out = !y ? base : !base ? y : { ...base, ...y, talk: { ...base.talk, ...y.talk } };
-  merged.set(label2, out);
+  merged.set(label3, out);
   return out;
 }
 var MEET_RIVAL2 = "Music_MeetRival";
@@ -10625,12 +14351,12 @@ function museumTicketRows(walkBack) {
   ];
 }
 var MUSEUM_TICKET = 50;
-function rodGiverRows(ask, received, after, refused, rod, flag) {
+function rodGiverRows(ask2, received, after, refused, rod, flag) {
   return [
     ["face_player"],
     ["check_flag", flag],
     ["jump_if_true", "already"],
-    ["ask", ask],
+    ["ask", ask2],
     ["jump_if_false", "no"],
     ["give_item", rod, 1, received],
     ["set_flag", flag],
@@ -10710,22 +14436,6 @@ function rewrittenLastMap(rewrite, cellX, cellY) {
     }
   }
   return null;
-}
-
-// voxelmon/game/world/marts.ts
-function martStock(data, mapLabel, textConst) {
-  const mart = data?.text_pointers?.[mapLabel]?.[textConst]?.mart;
-  return Array.isArray(mart) && mart.length > 0 ? mart : null;
-}
-function martGreetScript(data, mapLabel, textConst) {
-  if (!martStock(data, mapLabel, textConst))
-    return null;
-  return [
-    ["face_player"],
-    ["show_text", `Hi there!
-May I help you?`],
-    ["open_mart", textConst]
-  ];
 }
 
 // voxelmon/game/world/fly.ts
@@ -11153,450 +14863,6 @@ function cableClubScript(textConst) {
   ];
 }
 
-// voxelmon/game/world/link.ts
-var LINK_ROOM_MAP = ["TRADE_CENTER", "COLOSSEUM"];
-var LINK_TABLE = [
-  { x: 4, y: 4 },
-  { x: 5, y: 4 }
-];
-var LINK_SEATS = [
-  { enter: { x: 2, y: 4 }, seat: { x: 3, y: 4 }, facing: "right" },
-  { enter: { x: 7, y: 4 }, seat: { x: 6, y: 4 }, facing: "left" }
-];
-var LINK_WAIT_FRAMES = 60 * 60;
-var LINK_MSG = {
-  hello: 1,
-  room: 2,
-  cancel: 3,
-  offer: 4,
-  answer: 5,
-  pos: 6,
-  party: 7,
-  seed: 8,
-  action: 9,
-  begin: 10,
-  commit: 11
-};
-var LINK_ANSWER_FRAMES = 60 * 120;
-function asciiJson(v) {
-  return JSON.stringify(v).replace(/[\u0080-\uffff]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
-}
-function encodeJson(kind, v) {
-  const s = asciiJson(v);
-  const out = new Uint8Array(1 + s.length);
-  out[0] = kind;
-  for (let i = 0;i < s.length; i++)
-    out[1 + i] = s.charCodeAt(i) & 255;
-  return out;
-}
-function decodeJson(frame) {
-  let s = "";
-  for (let i = 1;i < frame.length; i++)
-    s += String.fromCharCode(frame[i]);
-  try {
-    return JSON.parse(s);
-  } catch {
-    return null;
-  }
-}
-var LINK_ROOM = { trade: 0, colosseum: 1 };
-var LINK_VERSION = 3;
-var MAX_NAME = 10;
-function encodeHello(name, nonce) {
-  const s = asciiJson({ n: [...name].slice(0, MAX_NAME).join(""), k: nonce });
-  const out = new Uint8Array(2 + s.length);
-  out[0] = LINK_MSG.hello;
-  out[1] = LINK_VERSION;
-  for (let i = 0;i < s.length; i++)
-    out[2 + i] = s.charCodeAt(i) & 255;
-  return out;
-}
-function decodeHello(frame) {
-  let s = "";
-  for (let i = 2;i < frame.length; i++)
-    s += String.fromCharCode(frame[i]);
-  try {
-    const v = JSON.parse(s);
-    return { name: typeof v?.n === "string" ? v.n : "", nonce: Number(v?.k ?? 0) };
-  } catch {
-    return { name: s, nonce: 0 };
-  }
-}
-var RELIABLE_RESEND_FRAMES = 6;
-var RELIABLE_KEEPALIVE_FRAMES = 60;
-var LINK_DEAD_FRAMES = 60 * 8;
-var RELIABLE_MTU = 1000;
-var RELIABLE_WINDOW = 32;
-var SEQ_MOD = 4096;
-var RL_DATA = 126;
-var RL_MORE = 124;
-var RL_ACK = 125;
-function seqAfter(a, b) {
-  const d = a - b & SEQ_MOD - 1;
-  return d !== 0 && d < SEQ_MOD / 2;
-}
-
-class ReliableLink {
-  inner;
-  txSeq = 0;
-  rxExpect = 0;
-  pending = [];
-  pieces = [];
-  ackDue = false;
-  sinceSend = 0;
-  sinceRecv = 0;
-  frame = 0;
-  gone = false;
-  constructor(inner) {
-    this.inner = inner;
-  }
-  raw(kind, seq, body) {
-    const out = new Uint8Array(3 + (body?.length ?? 0));
-    out[0] = kind;
-    out[1] = 64 | seq & 63;
-    out[2] = 64 | seq >> 6 & 63;
-    if (body)
-      out.set(body, 3);
-    this.inner.send(out);
-    this.sinceSend = 0;
-  }
-  queue(kind, body) {
-    const seq = this.txSeq;
-    this.txSeq = (seq + 1) % SEQ_MOD;
-    this.pending.push({ seq, kind, body });
-    if (this.pending.length <= RELIABLE_WINDOW)
-      this.raw(kind, seq, body);
-  }
-  send(frame) {
-    let at = 0;
-    while (frame.length - at > RELIABLE_MTU) {
-      this.queue(RL_MORE, frame.subarray(at, at + RELIABLE_MTU));
-      at += RELIABLE_MTU;
-    }
-    this.queue(RL_DATA, frame.subarray(at));
-  }
-  recv() {
-    for (;; ) {
-      const f = this.inner.recv();
-      if (!f)
-        return null;
-      if (f.length < 3)
-        continue;
-      const seq = f[1] & 63 | (f[2] & 63) << 6;
-      this.sinceRecv = 0;
-      if (f[0] === RL_ACK) {
-        this.pending = this.pending.filter((p) => !seqAfter(seq, p.seq));
-        continue;
-      }
-      if (f[0] !== RL_DATA && f[0] !== RL_MORE)
-        continue;
-      this.ackDue = true;
-      if (seq !== this.rxExpect)
-        continue;
-      this.rxExpect = (seq + 1) % SEQ_MOD;
-      const body = f.subarray(3);
-      if (f[0] === RL_MORE) {
-        this.pieces.push(body);
-        continue;
-      }
-      if (this.pieces.length === 0)
-        return body;
-      const whole = new Uint8Array(this.pieces.reduce((n, p) => n + p.length, 0) + body.length);
-      let at = 0;
-      for (const piece of this.pieces) {
-        whole.set(piece, at);
-        at += piece.length;
-      }
-      whole.set(body, at);
-      this.pieces = [];
-      return whole;
-    }
-  }
-  tick() {
-    this.frame += 1;
-    this.sinceSend += 1;
-    if (!this.inner.connected()) {
-      this.sinceRecv = 0;
-      return;
-    }
-    this.sinceRecv += 1;
-    if (this.pending.length > 0 && this.frame % RELIABLE_RESEND_FRAMES === 0) {
-      for (const p of this.pending.slice(0, RELIABLE_WINDOW))
-        this.raw(p.kind, p.seq, p.body);
-    }
-    if (this.ackDue || this.sinceSend >= RELIABLE_KEEPALIVE_FRAMES) {
-      this.raw(RL_ACK, this.rxExpect);
-      this.ackDue = false;
-    }
-    if (this.sinceRecv > LINK_DEAD_FRAMES)
-      this.gone = true;
-  }
-  unacked() {
-    return this.pending.length;
-  }
-  dead() {
-    return this.gone;
-  }
-  connected() {
-    return !this.gone && this.inner.connected();
-  }
-  close() {
-    this.inner.close();
-  }
-}
-
-class LinkSession {
-  myName;
-  state = "idle";
-  peerName = "";
-  myRoom = null;
-  peerRoom = null;
-  peerOffer = null;
-  peerAnswer = null;
-  peerCommit = false;
-  peerPos = null;
-  peerParty = null;
-  peerSeed = null;
-  actions = [];
-  peerBegin = false;
-  seat() {
-    if (this.peerNonce === null)
-      return 0;
-    if (this.myNonce !== this.peerNonce)
-      return this.myNonce > this.peerNonce ? 0 : 1;
-    return this.myName >= this.peerName ? 0 : 1;
-  }
-  helloSent = false;
-  myNonce;
-  peerNonce = null;
-  lastPos = "";
-  transport;
-  constructor(carrier, myName, nonce) {
-    this.myName = myName;
-    this.transport = new ReliableLink(carrier);
-    this.myNonce = nonce ?? Math.floor(Math.random() * 2147483647);
-  }
-  wire() {
-    return this.transport;
-  }
-  open() {
-    if (this.state === "idle")
-      this.state = "waiting";
-  }
-  chooseRoom(room) {
-    this.myRoom = room;
-    const f = new Uint8Array([LINK_MSG.room, room]);
-    this.transport.send(f);
-  }
-  sendPos(x, y, facing) {
-    const key = `${x},${y},${facing}`;
-    if (key === this.lastPos)
-      return;
-    this.lastPos = key;
-    this.transport.send(encodeJson(LINK_MSG.pos, { x, y, f: facing }));
-  }
-  sendParty(p) {
-    this.transport.send(encodeJson(LINK_MSG.party, p));
-  }
-  sendSeed(half) {
-    this.transport.send(encodeJson(LINK_MSG.seed, { s: half >>> 0 }));
-  }
-  battleSeed(myHalf) {
-    if (this.peerSeed === null)
-      return null;
-    return (myHalf ^ this.peerSeed) >>> 0 || 1;
-  }
-  sendAction(a) {
-    this.transport.send(encodeJson(LINK_MSG.action, a));
-  }
-  takeAction() {
-    return this.actions.shift() ?? null;
-  }
-  peekAction() {
-    return this.actions[0] ?? null;
-  }
-  closed() {
-    return this.state === "closed";
-  }
-  begin() {
-    this.clearTable();
-    this.transport.send(new Uint8Array([LINK_MSG.begin]));
-  }
-  takeBegin() {
-    const b = this.peerBegin;
-    this.peerBegin = false;
-    return b;
-  }
-  clearTable() {
-    this.peerParty = null;
-    this.peerSeed = null;
-    this.peerOffer = null;
-    this.peerAnswer = null;
-    this.peerCommit = false;
-    this.actions.length = 0;
-  }
-  offer(o) {
-    this.transport.send(encodeJson(LINK_MSG.offer, o));
-  }
-  answer(ok) {
-    this.transport.send(new Uint8Array([LINK_MSG.answer, ok ? 1 : 0]));
-  }
-  commit() {
-    this.transport.send(new Uint8Array([LINK_MSG.commit]));
-  }
-  unacked() {
-    return this.transport.unacked();
-  }
-  resetTrade() {
-    this.peerOffer = null;
-    this.peerAnswer = null;
-    this.peerCommit = false;
-  }
-  cancel() {
-    if (this.state !== "closed") {
-      for (let i = 0;i < 3; i++)
-        this.transport.send(new Uint8Array([LINK_MSG.cancel]));
-    }
-    this.close();
-  }
-  close() {
-    this.state = "closed";
-    this.transport.close();
-  }
-  agreedRoom() {
-    if (this.myRoom === null || this.peerRoom === null)
-      return null;
-    return this.myRoom === this.peerRoom ? this.myRoom : null;
-  }
-  poll() {
-    if (this.state === "idle" || this.state === "closed")
-      return this.state;
-    this.transport.tick();
-    if (this.transport.dead()) {
-      this.close();
-      return this.state;
-    }
-    if (!this.helloSent && this.transport.connected()) {
-      this.transport.send(encodeHello(this.myName, this.myNonce));
-      this.helloSent = true;
-    }
-    for (;; ) {
-      const f = this.transport.recv();
-      if (!f || f.length === 0)
-        break;
-      switch (f[0]) {
-        case LINK_MSG.hello:
-          if (f[1] !== LINK_VERSION) {
-            this.close();
-            return this.state;
-          }
-          {
-            const h = decodeHello(f);
-            this.peerName = h.name;
-            this.peerNonce = h.nonce;
-          }
-          if (this.state === "waiting")
-            this.state = "linked";
-          break;
-        case LINK_MSG.pos: {
-          const p = decodeJson(f);
-          if (p && typeof p.x === "number" && typeof p.y === "number") {
-            this.peerPos = { x: p.x, y: p.y, facing: typeof p.f === "string" ? p.f : "down" };
-          }
-          break;
-        }
-        case LINK_MSG.room:
-          this.peerRoom = f[1] ?? 0;
-          break;
-        case LINK_MSG.party: {
-          const p = decodeJson(f);
-          if (p && typeof p === "object" && Array.isArray(p.mons)) {
-            this.peerParty = {
-              mons: p.mons.slice(0, 6),
-              otName: typeof p.otName === "string" ? p.otName : "",
-              otId: Number(p.otId ?? 0)
-            };
-          }
-          break;
-        }
-        case LINK_MSG.seed: {
-          const v = decodeJson(f);
-          if (v && typeof v.s === "number")
-            this.peerSeed = v.s >>> 0;
-          break;
-        }
-        case LINK_MSG.action: {
-          const v = decodeJson(f);
-          if (v && typeof v === "object")
-            this.actions.push(v);
-          break;
-        }
-        case LINK_MSG.offer: {
-          const o = decodeJson(f);
-          if (o && typeof o === "object" && Number.isInteger(o.give) && Number.isInteger(o.take) && o.give >= 0 && o.give < 6 && o.take >= 0 && o.take < 6) {
-            this.peerOffer = { give: o.give, take: o.take };
-          }
-          break;
-        }
-        case LINK_MSG.answer:
-          this.peerAnswer = f[1] === 1;
-          break;
-        case LINK_MSG.commit:
-          this.peerCommit = true;
-          break;
-        case LINK_MSG.begin:
-          this.clearTable();
-          this.peerBegin = true;
-          break;
-        case LINK_MSG.cancel:
-          this.close();
-          return this.state;
-        default:
-          break;
-      }
-    }
-    if (this.state === "linked" && this.agreedRoom() !== null)
-      this.state = "ready";
-    return this.state;
-  }
-}
-function hostTransport() {
-  const v = globalThis.voxel;
-  if (!v || typeof v.linkOpen !== "function")
-    return null;
-  const call = (name, arg) => v[name](arg);
-  const opened = call("linkOpen");
-  if (typeof opened === "number" && opened <= 0)
-    return null;
-  const toStr = (f) => {
-    let s = "";
-    for (let i = 0;i < f.length; i++)
-      s += String.fromCharCode(f[i]);
-    return s;
-  };
-  const toBytes = (s) => {
-    const out = new Uint8Array(s.length);
-    for (let i = 0;i < s.length; i++)
-      out[i] = s.charCodeAt(i) & 255;
-    return out;
-  };
-  return {
-    send: (f) => {
-      call("linkSend", toStr(f));
-    },
-    recv: () => {
-      const r = call("linkRecv");
-      if (typeof r === "string" && r.length > 0)
-        return toBytes(r);
-      return r instanceof Uint8Array && r.length > 0 ? r : null;
-    },
-    connected: () => call("linkState") === 1,
-    close: () => {
-      call("linkClose");
-    }
-  };
-}
-
 // voxelmon/game/world/pctiles.ts
 var PC_TILES = {
   VIRIDIAN_POKECENTER: [{ x: 13, y: 3, facing: "up" }],
@@ -11617,947 +14883,6 @@ function pcTileAt(mapLabel, x, y, facing) {
   if (!tiles)
     return false;
   return tiles.some((t) => t.x === x && t.y === y && (!t.facing || t.facing === facing));
-}
-
-// voxelmon/game/world/script.ts
-var EMOTE_BUBBLES = { shock: 1, question: 2, happy: 3 };
-var CUT_ANIM_BEATS = 8;
-var CUT_ANIM_BEAT_FRAMES = 5;
-function scriptText(w, textId, subs) {
-  let text = w.data.text?.[textId] ?? w.resolveText(textId) ?? textId;
-  if (subs) {
-    for (const [token, value] of Object.entries(subs)) {
-      text = text.replace(new RegExp(`\\{${token}:?\\w*\\}`, "g"), value);
-    }
-  }
-  return text;
-}
-function* show_text(ctx, ...args) {
-  const runner = ctx.runner;
-  const text = scriptText(ctx.world, args[0], args[1]);
-  console.log("show_text[" + String(args[0]).slice(0, 28) + "] len=" + (text?.length ?? -1));
-  ctx.world.showText(text, () => {
-    console.log("show_text done");
-    runner.resume();
-  });
-  yield;
-}
-function* ask(ctx, ...args) {
-  const runner = ctx.runner;
-  const text = scriptText(ctx.world, args[0], args[1]);
-  ctx.world.showChoice(text, (yes) => {
-    ctx.lastCheck = yes;
-    runner.resume();
-  });
-  yield;
-}
-function* set_flag(ctx, ...args) {
-  ctx.world.save.flags[args[0]] = true;
-}
-function* give_item(ctx, ...args) {
-  const itemId = args[0];
-  const count2 = args[1] ?? 1;
-  const gotText = args[2];
-  const w = ctx.world;
-  const runner = ctx.runner;
-  if (!add(w.save, itemId, count2, w.data)) {
-    w.showText(`You can't carry
-any more items!`, () => runner.resume());
-    yield;
-    return Number.POSITIVE_INFINITY;
-  }
-  const def = w.data.items?.[itemId];
-  const name = def?.name ?? itemId;
-  w.playSfx?.(def?.keyItem ? "Get_Key_Item" : "Get_Item1");
-  if (gotText !== false) {
-    const text = gotText === undefined ? `{PLAYER} got
-${name}!` : scriptText(w, gotText, { "RAM:wStringBuffer": name });
-    w.showText(text, () => runner.resume());
-    yield;
-  }
-}
-function* warp(ctx, ...args) {
-  const runner = ctx.runner;
-  ctx.world.startWarpTo(args[0], args[1], args[2], args[3], () => runner.resume());
-  yield;
-}
-function* wait(ctx, ...args) {
-  ctx.runner.waitingFrames = args[0];
-  yield;
-}
-function* move_player(ctx, ...args) {
-  const runner = ctx.runner;
-  ctx.world.scriptMove(ctx.world.player, args[0], args[1] ?? 1, () => runner.resume());
-  yield;
-}
-function* emote(ctx, ...args) {
-  const targetArg = args[0];
-  const bubble = args[1];
-  const frames = args[2] ?? 60;
-  const entity = targetArg === "player" ? ctx.world.player : targetArg !== undefined && typeof ctx.world.findNpc === "function" ? ctx.world.findNpc(targetArg) ?? ctx.npc : ctx.npc;
-  if (!entity)
-    return;
-  const runner = ctx.runner;
-  const kind = typeof bubble === "number" ? bubble : EMOTE_BUBBLES[bubble ?? "shock"] ?? 1;
-  ctx.world.setEmote(entity, kind, frames, () => runner.resume());
-  yield;
-}
-function* jump(_ctx, ...args) {
-  return args[0];
-}
-function* face_player(ctx) {
-  if (ctx.npc)
-    ctx.world.facePlayer(ctx.npc);
-}
-function* check_flag(ctx, ...args) {
-  ctx.lastCheck = ctx.world.save.flags[args[0]] === true;
-}
-function* jump_if_true(ctx, ...args) {
-  if (ctx.lastCheck)
-    return args[0];
-}
-function* jump_if_false(ctx, ...args) {
-  if (!ctx.lastCheck)
-    return args[0];
-}
-function* label2() {}
-function* heal_party(ctx) {
-  ctx.world.healParty();
-}
-function* play_once(ctx, ...args) {
-  const runner = ctx.runner;
-  ctx.world.playOnce(args[0], () => runner.resume());
-  yield;
-}
-function* fade(ctx, ...args) {
-  const dir = args[0] === "in" ? "in" : "out";
-  const frames = (typeof args[1] === "number" ? args[1] : typeof args[2] === "number" ? args[2] : undefined) ?? FADE_OUT_TO_WHITE;
-  const runner = ctx.runner;
-  ctx.world.fade(dir, frames, () => runner.resume());
-  yield;
-}
-function* give_pokemon(ctx, ...args) {
-  const species = args[0];
-  const level = args[1] ?? 5;
-  const w = ctx.world;
-  markOwned(w.save, species);
-  const party = w.save.party;
-  if (party.length >= 6)
-    return;
-  const mon = newMon(w.data, species, level);
-  party.push(mon);
-  if (args[2] === true)
-    return;
-  const runner = ctx.runner;
-  if (typeof w.askNickname === "function") {
-    const label3 = w.data.pokemon?.[species]?.name ?? species;
-    w.askNickname(label3, (name) => {
-      if (name)
-        mon.nickname = name;
-      runner.resume();
-    });
-    yield;
-  }
-}
-function* noop_object() {
-  return;
-}
-function* play_sound(ctx, ...args) {
-  ctx.world.playSfx?.(args[0]);
-}
-function* play_music(ctx, ...args) {
-  ctx.world.playOnce(args[0], () => {});
-}
-function* noop_audio() {
-  return;
-}
-function* escort(ctx, ...args) {
-  const runner = ctx.runner;
-  ctx.world.escort?.(args[0], { to: [args[1], args[2]] }, () => runner.resume());
-  yield;
-}
-function* escort_steps(ctx, ...args) {
-  const runner = ctx.runner;
-  ctx.world.escort?.(args[0], { steps: args[1] }, () => runner.resume());
-  yield;
-}
-function* walk_route(ctx, ...args) {
-  const runner = ctx.runner;
-  ctx.world.walkRoute?.(args[0], args[1], () => runner.resume());
-  yield;
-}
-function* start_battle(ctx, ...args) {
-  const kind = String(args[0] ?? "trainer");
-  const id = String(args[1] ?? "");
-  const idx = args[2] ?? 1;
-  const opts = args[3] ?? {};
-  const runner = ctx.runner;
-  const w = ctx.world;
-  if (kind === "trainer" && w.startTrainerBattle) {
-    w.startTrainerBattle(id, idx, undefined, (won) => {
-      ctx.lastCheck = !!won;
-      runner.resume();
-    }, opts.loseable === true);
-    yield;
-    return;
-  }
-  if (kind === "wild" && w.startWildBattle) {
-    const wopts = opts;
-    w.startWildBattle(id, idx, wopts, (result) => {
-      ctx.lastCheck = result === "win";
-      runner.resume();
-    });
-    yield;
-  }
-}
-function* trade(ctx, ...args) {
-  const w = ctx.world;
-  const runner = ctx.runner;
-  const data = w.data;
-  const t = (data.field?.trades ?? [])[args[0] - 1];
-  if (!t)
-    return;
-  const doneFlag = args[1];
-  const set = t.dialogset ?? 1;
-  const subs = {
-    "RAM:wInGameTradeGiveMonName": data.pokemon?.[t.give]?.name ?? t.give,
-    "RAM:wInGameTradeReceiveMonName": data.pokemon?.[t.get]?.name ?? t.get
-  };
-  const say = function* (label3) {
-    w.showText(scriptText(w, label3, subs), () => runner.resume());
-    yield;
-  };
-  if (doneFlag && w.save.flags[doneFlag]) {
-    yield* say(`_AfterTrade${set}Text`);
-    return;
-  }
-  let yes = false;
-  w.showChoice(scriptText(w, `_WannaTrade${set}Text`, subs), (y) => {
-    yes = y;
-    runner.resume();
-  });
-  yield;
-  if (!yes) {
-    yield* say(`_NoTrade${set}Text`);
-    return;
-  }
-  let picked = -1;
-  w.pickPartyMon((i) => {
-    picked = i;
-    runner.resume();
-  }, () => runner.resume());
-  yield;
-  const party = w.save.party;
-  const sent = party[picked];
-  if (!sent) {
-    yield* say(`_NoTrade${set}Text`);
-    return;
-  }
-  if (sent.species !== t.give) {
-    yield* say(`_WrongMon${set}Text`);
-    return;
-  }
-  if (doneFlag)
-    w.save.flags[doneFlag] = true;
-  yield* say("_ConnectCableText");
-  const mon = newMon(data, t.get, sent.level);
-  if (t.nickname)
-    mon.nickname = t.nickname;
-  mon.traded = true;
-  party.splice(picked, 1);
-  party.push(mon);
-  markOwned(w.save, t.get);
-  yield* say("_TradedForText");
-  yield* say(`_Thanks${set}Text`);
-}
-function* static_battle(ctx, ...args) {
-  const runner = ctx.runner;
-  const w = ctx.world;
-  if (!w.startWildBattle)
-    return;
-  w.startWildBattle(args[0], args[1], undefined, (result) => {
-    ctx.lastCheck = result !== null && result !== "lose";
-    runner.resume();
-  });
-  yield;
-}
-function* move_player_to(ctx, ...args) {
-  const runner = ctx.runner;
-  ctx.world.movePlayerTo?.(args[0], args[1], () => runner.resume());
-  yield;
-}
-function* place_npc(ctx, ...args) {
-  ctx.world.placeNpc?.(args[0], args[1], args[2], args[3] ?? "down");
-}
-function toggleObject(ctx, args, visible) {
-  const w = ctx.world;
-  const hasMap = args.length >= 2;
-  const curMap = String(w.map?.id ?? "");
-  const mapId = hasMap ? String(args[0]) : curMap;
-  const name = String(hasMap ? args[1] : args[0]);
-  const key = name.toUpperCase().replace(/^TEXT_/, "");
-  const save = w.save;
-  save.objectToggles = save.objectToggles ?? {};
-  save.objectToggles[mapId] = save.objectToggles[mapId] ?? {};
-  save.objectToggles[mapId][key] = visible;
-  if (mapId === curMap)
-    w.setObjectHidden?.(name, !visible);
-}
-function* hide_object(ctx, ...args) {
-  toggleObject(ctx, args, false);
-}
-function* show_object(ctx, ...args) {
-  toggleObject(ctx, args, true);
-}
-function* face_object(ctx, ...args) {
-  ctx.world.faceObject?.(args[0], args[1] ?? "down");
-}
-function* move_npc_to(ctx, ...args) {
-  const runner = ctx.runner;
-  ctx.world.moveNpcTo?.(args[0], args[1], args[2], () => runner.resume());
-  yield;
-}
-function* pic(ctx, ...args) {
-  ctx.world.showPic(args[0], args[1], args[2], args[3], args[4]);
-}
-function* pic_hide(ctx) {
-  ctx.world.hidePic();
-}
-function* stamp(ctx, ...args) {
-  ctx.world.stamp(args[0], args[1], args[2], args[3] !== false);
-}
-function* use_cut(ctx, ...args) {
-  const w = ctx.world;
-  const runner = ctx.runner;
-  const monName2 = args[0] ?? "";
-  const [fx, fy] = w.player.facingCell();
-  const visit2 = w.cutThisVisit;
-  const key = `${w.map.def.index},${fx},${fy}`;
-  const already = visit2?.has(key) === true;
-  if (w.map.isCuttableCell(fx, fy) && !already) {
-    const cx = Math.round((fx * CELL_PX + CELL_PX / 2) * Q4);
-    const cz = Math.round((fy * CELL_PX + CELL_PX / 2) * Q4);
-    const bubbles = w.data.field?.emotionBubbles?.bubbles?.length;
-    const treeFrame = bubbles ?? FX_FRAME_CUT_TREE;
-    for (let beat = 0;beat < CUT_ANIM_BEATS; beat++) {
-      w.fieldFx(cx, cz, beat % 2 === 0 ? treeFrame : -1);
-      runner.waitingFrames = CUT_ANIM_BEAT_FRAMES;
-      yield;
-    }
-    w.fieldFx(0, 0, -1);
-    w.stamp(w.map.def.index, fx, fy, false);
-    w.map.markCut?.(fx, fy);
-    visit2?.add(key);
-    w.showText(scriptText(w, "_UsedCutText", { "RAM:wNameBuffer": monName2 }), () => runner.resume());
-  } else {
-    w.showText(scriptText(w, "_NothingToCutText"), () => runner.resume());
-  }
-  yield;
-}
-function* use_surf(ctx, ...args) {
-  const w = ctx.world;
-  const runner = ctx.runner;
-  const monName2 = args[0] ?? "";
-  if (w.surfBlockedHere?.()) {
-    w.showText(scriptText(w, "_CurrentTooFastText"), () => runner.resume());
-    yield;
-    return;
-  }
-  if (w.player.surfing === true || !w.canSurfHere?.()) {
-    w.showText(scriptText(w, "_NoSurfingHereText", { "RAM:wNameBuffer": monName2 }), () => runner.resume());
-    yield;
-    return;
-  }
-  w.showText(scriptText(w, "_SurfingGotOnText", { "RAM:wNameBuffer": monName2 }), () => {
-    w.startSurfing?.();
-    runner.resume();
-  });
-  yield;
-}
-function* use_escape_move(ctx) {
-  const w = ctx.world;
-  if (w.escapeWarp?.())
-    return;
-  const runner = ctx.runner;
-  w.showText(scriptText(w, "_ItemUseNotTimeText"), () => runner.resume());
-  yield;
-}
-function* use_dig(ctx) {
-  yield* use_escape_move(ctx);
-}
-function* use_teleport(ctx) {
-  yield* use_escape_move(ctx);
-}
-function* random_text(ctx, ...args) {
-  const rows = args[0] ?? [];
-  const roll2 = ctx.world.rollByte?.() ?? 0;
-  const pick = rows.find(([at]) => roll2 >= at) ?? rows[rows.length - 1];
-  if (!pick)
-    return;
-  const runner = ctx.runner;
-  ctx.world.showText(scriptText(ctx.world, pick[1]), () => runner.resume());
-  yield;
-}
-function* play_cry(ctx, ...args) {
-  ctx.world.playCry?.(String(args[0]));
-}
-function* pika_clip(ctx, ...args) {
-  ctx.world.playPikaClip?.(Number(args[0]) || 1);
-}
-function* use_fly(ctx, ...args) {
-  const w = ctx.world;
-  const runner = ctx.runner;
-  if (!w.openFlyPicker)
-    return;
-  w.openFlyPicker(args[0] ?? "", () => runner.resume());
-  yield;
-}
-function* use_strength(ctx, ...args) {
-  const w = ctx.world;
-  const runner = ctx.runner;
-  const monName2 = args[0] ?? "";
-  w.enableStrength?.();
-  w.showText(scriptText(w, "_UsedStrengthText", { "RAM:wNameBuffer": monName2 }), () => runner.resume());
-  yield;
-}
-function* use_flash(ctx) {
-  const w = ctx.world;
-  const runner = ctx.runner;
-  w.save.flashLit = true;
-  w.tint(4294967295);
-  w.showText(scriptText(w, "_FlashLightsAreaText"), () => runner.resume());
-  yield;
-}
-function* open_elevator(ctx) {
-  const runner = ctx.runner;
-  const w = ctx.world;
-  if (!w.openElevator)
-    return;
-  w.openElevator(() => runner.resume());
-  yield;
-}
-function* open_mart(ctx, ...args) {
-  const runner = ctx.runner;
-  const w = ctx.world;
-  const stock = martStock(w.data, w.map?.def?.label ?? "", String(args[0] ?? ""));
-  if (stock && w.openShop) {
-    w.openShop(stock, () => runner.resume());
-    yield;
-  }
-}
-function* check_money(ctx, ...args) {
-  const save = ctx.world.save;
-  ctx.lastCheck = (save.money ?? 0) >= args[0];
-}
-function* take_money(ctx, ...args) {
-  const save = ctx.world.save;
-  save.money = Math.max(0, (save.money ?? 0) - args[0]);
-}
-function* check_coins_below(ctx, ...args) {
-  const save = ctx.world.save;
-  ctx.lastCheck = (save.coins ?? 0) < args[0];
-}
-function* check_coins(ctx, ...args) {
-  const save = ctx.world.save;
-  ctx.lastCheck = (save.coins ?? 0) >= args[0];
-}
-function* give_coins(ctx, ...args) {
-  const save = ctx.world.save;
-  save.coins = Math.min(COIN_CAP, (save.coins ?? 0) + args[0]);
-}
-function* open_prizes(ctx, ...args) {
-  const runner = ctx.runner;
-  const w = ctx.world;
-  if (!w.openPrizes)
-    return;
-  w.openPrizes(args[0], () => runner.resume());
-  yield;
-}
-function* open_name_rater(ctx) {
-  const runner = ctx.runner;
-  const w = ctx.world;
-  if (!w.openNameRater)
-    return;
-  w.openNameRater(() => runner.resume());
-  yield;
-}
-function* open_vending(ctx) {
-  const runner = ctx.runner;
-  const w = ctx.world;
-  if (!w.openVending)
-    return;
-  w.openVending(() => runner.resume());
-  yield;
-}
-function* oaks_aide(ctx, ...args) {
-  const runner = ctx.runner;
-  const w = ctx.world;
-  if (!w.openOaksAide)
-    return;
-  w.openOaksAide(args[0], () => runner.resume());
-  yield;
-}
-function* open_bike_shop(ctx) {
-  const runner = ctx.runner;
-  const w = ctx.world;
-  if (!w.openBikeShop)
-    return;
-  w.openBikeShop(() => runner.resume());
-  yield;
-}
-function* open_daycare(ctx) {
-  const runner = ctx.runner;
-  const w = ctx.world;
-  if (!w.openDaycare)
-    return;
-  w.openDaycare(() => runner.resume());
-  yield;
-}
-function* take_guard_drink(ctx) {
-  const save = ctx.world.save;
-  for (const drink of GUARD_DRINKS) {
-    if ((save.inventory?.[drink] ?? 0) > 0) {
-      remove(save, drink, 1);
-      if (save.flags)
-        save.flags[GAVE_DRINK_FLAG] = true;
-      ctx.lastCheck = true;
-      return;
-    }
-  }
-  ctx.lastCheck = false;
-}
-function* safari_start(ctx) {
-  ctx.world.safariStart?.();
-}
-function* safari_end(ctx) {
-  ctx.world.safariEnd?.();
-}
-function* safari_walk_in(ctx) {
-  const runner = ctx.runner;
-  const w = ctx.world;
-  if (!w.safariWalkIn?.(() => runner.resume()))
-    return;
-  yield;
-}
-function* lab_fossil(ctx, ...args) {
-  const save = ctx.world.save;
-  const species = args[0];
-  if (species)
-    save.labFossilMon = species;
-  else
-    delete save.labFossilMon;
-}
-function* check_party_room(ctx) {
-  const party = ctx.world.save.party ?? [];
-  ctx.lastCheck = party.length < 6;
-}
-function* check_item(ctx, ...args) {
-  const inv = ctx.world.save.inventory ?? {};
-  ctx.lastCheck = (inv[args[0]] ?? 0) > 0;
-}
-function* take_item(ctx, ...args) {
-  remove(ctx.world.save, args[0], args[1] ?? 1);
-}
-function* clear_flag(ctx, ...args) {
-  delete ctx.world.save.flags[args[0]];
-}
-function* check_dex_owned(ctx, ...args) {
-  const need = args[0] ?? 1;
-  const owned = ctx.world.save.pokedex?.owned ?? {};
-  let n = 0;
-  for (const k in owned)
-    if (owned[k])
-      n += 1;
-  ctx.lastCheck = n >= need;
-}
-function* dex_rating() {}
-var YELLOW_RIVAL_PARTIES = {
-  OPP_RIVAL1: { 4: { party: 2, upgradeOnWin: { from: 2, to: 1 } }, 7: { party: 3 } },
-  OPP_RIVAL2: { 1: { party: 1 }, 4: { base: 1 }, 7: { base: 4 }, 10: { base: 7 } },
-  OPP_RIVAL3: { 1: { base: 0 } }
-};
-function* rival_battle(ctx, ...args) {
-  const oppClass = args[0];
-  const baseParty = args[1] ?? 1;
-  const opts = args[2] ?? {};
-  const save = ctx.world.save;
-  if (ctx.world.data.version === "yellow") {
-    const spec = YELLOW_RIVAL_PARTIES[oppClass]?.[baseParty];
-    if (spec) {
-      const starter = save.rivalStarter ?? 1;
-      yield* start_battle(ctx, "trainer", oppClass, spec.party ?? (spec.base ?? 0) + starter, { loseable: opts.loseable });
-      if (spec.upgradeOnWin && ctx.lastCheck && save.rivalStarter === spec.upgradeOnWin.from) {
-        save.rivalStarter = spec.upgradeOnWin.to;
-      }
-      return;
-    }
-  }
-  const offsets = opts.offsets ?? ctx.world.data.field?.starterCounterpicks;
-  let offset = 0;
-  if (offsets) {
-    for (const [flag, mapped] of Object.entries(offsets)) {
-      if (save.flags?.[flag]) {
-        offset = mapped;
-        break;
-      }
-    }
-  } else if (save.flags?.EVENT_CHOSE_SQUIRTLE) {
-    offset = 1;
-  } else if (save.flags?.EVENT_CHOSE_BULBASAUR) {
-    offset = 2;
-  }
-  yield* start_battle(ctx, "trainer", oppClass, baseParty + offset, { loseable: opts.loseable });
-}
-function* walk_npc(ctx, ...args) {
-  const runner = ctx.runner;
-  const w = ctx.world;
-  const ref = args[0];
-  const dirs = args[1] ?? [];
-  const entity = ref === "player" ? w.player : w.findNpc?.(ref);
-  if (!entity || dirs.length === 0)
-    return;
-  let i = 0;
-  const step = () => {
-    if (i >= dirs.length) {
-      runner.resume();
-      return;
-    }
-    w.scriptMove(entity, dirs[i++], 1, step);
-  };
-  step();
-  yield;
-}
-function* engage_trainer(ctx, ...args) {
-  const runner = ctx.runner;
-  const w = ctx.world;
-  const npc = w.findNpc?.(args[0]);
-  if (!npc || !w.engageTrainer) {
-    ctx.lastCheck = false;
-    return;
-  }
-  if (w.trainerDefeated?.(npc)) {
-    ctx.lastCheck = true;
-    return;
-  }
-  w.engageTrainer(npc, () => {
-    ctx.lastCheck = w.trainerDefeated?.(npc) === true;
-    runner.resume();
-  });
-  yield;
-}
-function* set_heal_point(ctx) {
-  const w = ctx.world;
-  const p = w.player;
-  const save = ctx.world.save;
-  save.lastHeal = {
-    map: String(w.map?.id ?? ""),
-    x: p?.cellX ?? 0,
-    y: p?.cellY ?? 0,
-    outdoor: save.lastOutdoor ? { ...save.lastOutdoor } : undefined
-  };
-}
-function* old_man_demo(ctx, ...args) {
-  const runner = ctx.runner;
-  const w = ctx.world;
-  if (typeof w.startOldManDemo === "function") {
-    const fail = args[0] === "fail";
-    const species = fail ? undefined : args[0];
-    const opts = species ? { species, level: args[1] ?? 5, name: args[2] } : fail ? { fail: true } : undefined;
-    w.startOldManDemo(() => runner.resume(), opts);
-    yield;
-  }
-}
-function* safari_low_cost(ctx) {
-  const save = ctx.world.save;
-  const start = (balls) => ctx.world.safariStart?.(balls);
-  const money = save.money ?? 0;
-  if (money > 0) {
-    yield* show_text(ctx, "_SafariZoneGateSafariZoneWorker1NotEnoughMoneyText");
-    save.money = 0;
-    yield* show_text(ctx, "_SafariZoneLowCostText1");
-    yield* show_text(ctx, "_SafariZoneLowCostText2");
-    start(Math.min(Math.floor(money / 23) + 1, 29));
-    ctx.lastCheck = true;
-    return;
-  }
-  const nag = save.safariNags ?? 0;
-  save.safariNags = nag + 1;
-  yield* show_text(ctx, `_SafariZoneLowCostText${5 + Math.min(nag, 3)}`);
-  if (nag >= 3) {
-    yield* show_text(ctx, "_SafariZoneLowCostText3");
-    start(1);
-    ctx.lastCheck = true;
-    return;
-  }
-  ctx.lastCheck = false;
-}
-function* pikachu_happy(ctx, ...args) {
-  modifyHappiness(ctx.world.save, args[0]);
-}
-function* set_field(ctx, ...args) {
-  ctx.world.save[args[0]] = args[1];
-}
-var VERBS = {
-  show_text,
-  ask,
-  jump,
-  jump_if_true,
-  jump_if_false,
-  label: label2,
-  face_player,
-  check_flag,
-  set_flag,
-  give_item,
-  warp,
-  wait,
-  move_player,
-  heal_party,
-  play_once,
-  fade,
-  emote,
-  pic,
-  pic_hide,
-  stamp,
-  use_cut,
-  use_flash,
-  use_surf,
-  use_fly,
-  use_dig,
-  use_teleport,
-  play_cry,
-  pika_clip,
-  random_text,
-  use_strength,
-  give_pokemon,
-  hide_object,
-  show_object,
-  face_object,
-  move_npc_to,
-  place_npc,
-  move_player_to,
-  start_battle,
-  static_battle,
-  trade,
-  open_mart,
-  open_vending,
-  open_name_rater,
-  open_elevator,
-  walk_route,
-  escort,
-  escort_steps,
-  check_item,
-  lab_fossil,
-  check_party_room,
-  check_money,
-  take_money,
-  check_coins,
-  check_coins_below,
-  give_coins,
-  open_prizes,
-  open_daycare,
-  open_bike_shop,
-  oaks_aide,
-  safari_start,
-  safari_end,
-  take_guard_drink,
-  safari_walk_in,
-  take_item,
-  clear_flag,
-  check_dex_owned,
-  dex_rating,
-  rival_battle,
-  walk_npc,
-  engage_trainer,
-  set_heal_point,
-  old_man_demo,
-  set_field,
-  pikachu_happy,
-  safari_low_cost,
-  record_hall_of_fame,
-  open_diploma,
-  save_game,
-  link_open,
-  link_room,
-  link_enter,
-  link_trade,
-  link_battle,
-  link_leave,
-  push_screen: noop_object,
-  play_sound,
-  play_music,
-  stop_music: noop_audio
-};
-function* save_game(ctx) {
-  ctx.world.saveGame?.();
-}
-function* link_open(ctx) {
-  const w = ctx.world;
-  const runner = ctx.runner;
-  if (!w.openLink?.() || !w.waitLink) {
-    ctx.lastCheck = false;
-    return;
-  }
-  w.waitLink((s) => {
-    const st = s.state;
-    return st === "linked" || st === "ready";
-  }, LINK_WAIT_FRAMES, (ok) => {
-    ctx.lastCheck = ok;
-    runner.resume();
-  }, { pleaseWait: true });
-  yield;
-}
-function* link_room(ctx) {
-  const w = ctx.world;
-  const runner = ctx.runner;
-  if (!w.pickLinkRoom) {
-    ctx.lastCheck = false;
-    return;
-  }
-  w.pickLinkRoom((ok) => {
-    ctx.lastCheck = ok;
-    runner.resume();
-  });
-  yield;
-}
-function* link_battle(ctx) {
-  const w = ctx.world;
-  const runner = ctx.runner;
-  if (!w.linkBattle)
-    return;
-  w.linkBattle(() => runner.resume());
-  yield;
-}
-function* link_trade(ctx) {
-  const w = ctx.world;
-  const runner = ctx.runner;
-  if (!w.linkTrade)
-    return;
-  w.linkTrade(() => runner.resume());
-  yield;
-}
-function* link_leave(ctx) {
-  const w = ctx.world;
-  const runner = ctx.runner;
-  if (!w.leaveLinkRoom)
-    return;
-  w.leaveLinkRoom(() => runner.resume());
-  yield;
-}
-function* link_enter(ctx) {
-  const w = ctx.world;
-  const runner = ctx.runner;
-  if (!w.enterLinkRoom)
-    return;
-  w.enterLinkRoom(() => runner.resume());
-  yield;
-}
-function* open_diploma(ctx) {
-  const w = ctx.world;
-  const runner = ctx.runner;
-  if (!w.openDiploma)
-    return;
-  w.openDiploma(() => runner.resume());
-  yield;
-}
-function* record_hall_of_fame(ctx) {
-  const runner = ctx.runner;
-  const w = ctx.world;
-  if (!w.recordHallOfFame)
-    return;
-  w.recordHallOfFame(() => runner.resume());
-  yield;
-}
-function scanLabels(script) {
-  const labels = new Map;
-  script.forEach((row, i) => {
-    if (row[0] === "label" && typeof row[1] === "string" && !labels.has(row[1])) {
-      labels.set(row[1], i + 1);
-    }
-  });
-  return labels;
-}
-
-class ScriptRunner {
-  co = null;
-  waitingFrames = null;
-  ctx = null;
-  resuming = false;
-  world;
-  constructor(world) {
-    this.world = world;
-  }
-  isRunning() {
-    return this.co !== null;
-  }
-  run(script, extra) {
-    if (this.isRunning())
-      throw new Error("script already running");
-    const ctx = { world: this.world, runner: this, ...extra };
-    this.ctx = ctx;
-    this.co = this.exec(script, ctx);
-    this.resume();
-  }
-  *exec(script, ctx) {
-    const labels = scanLabels(script);
-    let pc = 1;
-    while (pc <= script.length) {
-      const row = script[pc - 1];
-      const name = row[0];
-      const fn = VERBS[name];
-      if (!fn) {
-        console.warn(`script: unknown command '${name}' (skipped)`);
-        pc += 1;
-        continue;
-      }
-      const jump2 = yield* fn(ctx, ...row.slice(1));
-      if (typeof jump2 === "number") {
-        pc = jump2;
-      } else if (typeof jump2 === "string") {
-        if (jump2 === "end")
-          break;
-        const target2 = labels.get(jump2);
-        if (target2 === undefined)
-          throw new Error(`jump to missing label '${jump2}' at row ${pc}`);
-        pc = target2;
-      } else {
-        pc += 1;
-      }
-    }
-    const done = ctx.onDone;
-    if (done)
-      done();
-  }
-  resume() {
-    const co = this.co;
-    if (!co)
-      return;
-    if (this.resuming) {
-      this.waitingFrames = 1;
-      return;
-    }
-    this.resuming = true;
-    let r;
-    try {
-      r = co.next();
-    } finally {
-      this.resuming = false;
-    }
-    if (r.done) {
-      if (this.co === co) {
-        this.co = null;
-        this.waitingFrames = null;
-      }
-    }
-  }
-  update() {
-    if (this.isRunning() && this.waitingFrames !== null) {
-      this.waitingFrames -= 1;
-      if (this.waitingFrames <= 0) {
-        this.waitingFrames = null;
-        this.resume();
-      }
-    }
-  }
 }
 
 // voxelmon/game/ui/gear/model.ts
@@ -13290,6 +15615,7 @@ class Overworld {
     this.forcedBikeOnEntry();
     this.syncSurf();
     visit(this.save, mapId);
+    this.pikachuMapFlags = 0;
     mapScript(mapId)?.onEnter?.(this, this.save);
     onMapEntered(this);
   }
@@ -13746,11 +16072,11 @@ the PC.`, () => {
   }
   showMapText(textConst, npc, onDone) {
     const talk = talkScript(this.map.id, textConst);
-    const script = (typeof talk === "function" ? talk(this, this.save) : talk) ?? itemBallScript(this.map.id, npc?.def) ?? martGreetScript(this.shell.data, this.map.def.label, textConst) ?? nurseGreetScript(textConst) ?? cableClubScript(textConst);
-    if (script && !this.runner.isRunning()) {
+    const script2 = (typeof talk === "function" ? talk(this, this.save) : talk) ?? itemBallScript(this.map.id, npc?.def) ?? martGreetScript(this.shell.data, this.map.def.label, textConst) ?? nurseGreetScript(textConst) ?? cableClubScript(textConst);
+    if (script2 && !this.runner.isRunning()) {
       if (npc)
         npc.frozen = true;
-      this.runner.run(script, {
+      this.runner.run(script2, {
         npc,
         onDone: () => {
           if (this.oneShotPending) {
@@ -13902,6 +16228,14 @@ any coins!`);
   }
   playCry(species) {
     this.shell.audio.playCry?.(species);
+  }
+  pikachuMapFlags = 0;
+  startSurfingMinigame(selectQuits, onDone) {
+    const shell = this.shell;
+    if (shell.startSurfingMinigame)
+      shell.startSurfingMinigame(selectQuits, onDone);
+    else
+      onDone();
   }
   playPikaClip(clip) {
     this.shell.audio.playPikaClip?.(clip);
@@ -14135,8 +16469,8 @@ canceled.`);
   stamp(mapId, cx, cy, on) {
     this.shell.stamp(mapId, cx, cy, on);
   }
-  fieldFx(x, z, frame) {
-    this.shell.fieldFx?.(x, z, frame);
+  fieldFx(x, z, frame2) {
+    this.shell.fieldFx?.(x, z, frame2);
   }
   tint(abgr) {
     this.shell.tint(abgr);
@@ -14234,9 +16568,9 @@ GAME is over!`;
     if (this.runner.isRunning())
       return false;
     const label3 = this.map?.id ?? "";
-    const script = mapScript(label3);
+    const script2 = mapScript(label3);
     const host = mapScript(label3 + "_ONSTEP_HOST");
-    const rows = script?.onStep?.(this, this.save) ?? host?.onStep?.(this, this.save) ?? this.coordTrigger(script) ?? this.coordTrigger(host);
+    const rows = script2?.onStep?.(this, this.save) ?? host?.onStep?.(this, this.save) ?? this.coordTrigger(script2) ?? this.coordTrigger(host);
     if (!rows)
       return false;
     this.runScript(rows);
@@ -14434,8 +16768,8 @@ wore off.`);
   hidePic() {
     this.picShown = null;
   }
-  coordTrigger(script) {
-    const coords = script?.coord;
+  coordTrigger(script2) {
+    const coords = script2?.coord;
     if (!coords)
       return null;
     const p = this.player;
@@ -14451,8 +16785,8 @@ wore off.`);
     }
     return null;
   }
-  runScript(script, onDone) {
-    this.runner.run(script, { onDone });
+  runScript(script2, onDone) {
+    this.runner.run(script2, { onDone });
   }
   findNpc(ref) {
     const list2 = this.npcs;
@@ -15526,6 +17860,7 @@ class Scene {
   picSig = "";
   titleSig = null;
   introSig = null;
+  gbEmitter = new GbEmitter;
   menuSig = null;
   bagSig = null;
   shopSig = null;
@@ -15729,16 +18064,16 @@ class Scene {
     this.sheetCache.set(spriteId, index);
     return index;
   }
-  emitSlot(slot, sheet, frame, x, y, lift, flags) {
+  emitSlot(slot, sheet, frame2, x, y, lift, flags) {
     const b = slot * 6;
     const v = this.entVals;
     this.entSeen[slot] = 1;
-    if (this.entShown[slot] !== 0 && v[b] === sheet && v[b + 1] === frame && v[b + 2] === x && v[b + 3] === y && v[b + 4] === lift && v[b + 5] === flags) {
+    if (this.entShown[slot] !== 0 && v[b] === sheet && v[b + 1] === frame2 && v[b + 2] === x && v[b + 3] === y && v[b + 4] === lift && v[b + 5] === flags) {
       return;
     }
-    this.host.ent(slot, sheet, frame, x, y, lift, flags);
+    this.host.ent(slot, sheet, frame2, x, y, lift, flags);
     v[b] = sheet;
-    v[b + 1] = frame;
+    v[b + 1] = frame2;
     v[b + 2] = x;
     v[b + 3] = y;
     v[b + 4] = lift;
@@ -15753,14 +18088,14 @@ class Scene {
     {
       const phase = p.walkPhase();
       const pf = seenAs(p.facing);
-      const frame = phase === 1 ? WALK[pf] : STAND[pf];
+      const frame2 = phase === 1 ? WALK[pf] : STAND[pf];
       const mirror = pf === "right" || (pf === "down" || pf === "up") && phase === 1 && p.animFlip();
       let flags = ENT_FLAG.ghost | ENT_FLAG.walker;
       if (mirror)
         flags |= ENT_FLAG.mirror;
       const sheet = p.surfing ? "SPRITE_SEEL" : p.onBike ? "SPRITE_RED_BIKE" : "SPRITE_RED";
       const hop = p.hopLift();
-      this.emitSlot(0, this.sheetIndex(view, sheet), frame, p.px * Q4, p.py * Q4, hop !== 0 ? hop : p.surfBob(), flags);
+      this.emitSlot(0, this.sheetIndex(view, sheet), frame2, p.px * Q4, p.py * Q4, hop !== 0 ? hop : p.surfBob(), flags);
     }
     const npcs = ow.npcs;
     for (let i = 0;i < npcs.length; i++) {
@@ -15775,12 +18110,12 @@ class Scene {
       const walker = def?.walker ?? frames > 1;
       const phase = npc.walkPhase();
       const nf = seenAs(npc.facing);
-      const frame = frames <= 1 ? 0 : phase === 1 && walker ? WALK[nf] : STAND[nf];
+      const frame2 = frames <= 1 ? 0 : phase === 1 && walker ? WALK[nf] : STAND[nf];
       const mirror = frames > 1 && (nf === "right" || (nf === "down" || nf === "up") && phase === 1 && npc.stepFlip);
       let flags = walker ? ENT_FLAG.walker : 0;
       if (mirror)
         flags |= ENT_FLAG.mirror;
-      this.emitSlot(slot, this.sheetIndex(view, npc.def.sprite), frame, npc.px * Q4, npc.py * Q4, 0, flags);
+      this.emitSlot(slot, this.sheetIndex(view, npc.def.sprite), frame2, npc.px * Q4, npc.py * Q4, 0, flags);
     }
     for (let slot = 0;slot < ENTS_MAX; slot++) {
       if (this.entSeen[slot] === 0 && this.entShown[slot] !== 0) {
@@ -15947,6 +18282,20 @@ class Scene {
         if (q.d)
           host.picDepth(i, q.d);
       }
+    }
+    const gbv = view.gb?.() ?? null;
+    const data = view.data;
+    this.gbEmitter.emit(host, gbv, {
+      page: (sheet) => data.atlas?.picMinigame?.[sheet] ?? -1,
+      palette: (name) => data.paletteIndex?.[name] ?? -1
+    });
+    if (gbv) {
+      if (this.introSig !== "gb") {
+        this.introSig = "gb";
+        this.uiOwner = null;
+        host.uiClear();
+      }
+      return;
     }
     const intro = view.intro?.();
     if (intro) {
@@ -17614,7 +19963,7 @@ var BG_ROWS = 20;
 function bgpShades(bgp) {
   return [0, 1, 2, 3].map((i) => bgp >> 2 * i & 3);
 }
-var hex = (n) => n.toString(16).padStart(2, "0");
+var hex2 = (n) => n.toString(16).padStart(2, "0");
 var STROBE_FRAMES = [15, 16, 17, 18, 19];
 var YELLOW_INTRO_PICTURES = [
   { name: "bg_letter", bg: "letter" },
@@ -17626,12 +19975,12 @@ var YELLOW_INTRO_PICTURES = [
   { name: "bg_sky1", bg: "sky", cloud: 1 },
   { name: "bg_close", bg: "close" },
   { name: "bg_close_k", bg: "close", shades: bgpShades(192) },
-  ...Object.keys(FRAMES).map((k) => ({ name: `obj_${hex(Number(k))}`, frame: Number(k) })),
+  ...Object.keys(FRAMES).map((k) => ({ name: `obj_${hex2(Number(k))}`, frame: Number(k) })),
   { name: "obj_0d_s1", frame: 13, shades: bgpShades(144) },
   { name: "obj_0d_s2", frame: 13, shades: bgpShades(64) },
-  ...STROBE_FRAMES.map((f) => ({ name: `obj_${hex(f)}_k`, frame: f, shades: bgpShades(192) }))
+  ...STROBE_FRAMES.map((f) => ({ name: `obj_${hex2(f)}_k`, frame: f, shades: bgpShades(192) }))
 ];
-var BEACH = new Set(["bg_kick", "bg_sea", "bg_sky0", "bg_sky1", "obj_0b", "obj_0c", "obj_0e"]);
+var BEACH2 = new Set(["bg_kick", "bg_sea", "bg_sky0", "bg_sky1", "obj_0b", "obj_0c", "obj_0e"]);
 var SETUP_DELAY = 3;
 var HEAD_FRAMES = 2;
 
@@ -17876,7 +20225,7 @@ class YellowIntroScenes {
       for (const o of this.objects) {
         const id = FRAMESETS[o.frameset].steps[o.step][0];
         const box = frameBox(id);
-        const base = `obj_${hex(id)}`;
+        const base = `obj_${hex2(id)}`;
         const name = suffix && `${base}${suffix}` in NAMED ? `${base}${suffix}` : base;
         let x = (o.x + box.dx - 8 + 512) % 256;
         let y = (o.y + o.yoff + box.dy - 16 + 512) % 256;
@@ -19997,10 +22346,10 @@ function sprite(host, page, x, y, w, h) {
   if (page >= 0)
     host.uiSpriteBottom(page, Math.round(x), Math.round(y), Math.round(w), Math.round(h));
 }
-function spriteFrame(host, page, x, y, size, frame = 0, mirror = false) {
+function spriteFrame(host, page, x, y, size, frame2 = 0, mirror = false) {
   if (page < 0 || !host.uiSpriteRectBottom)
     return;
-  host.uiSpriteRectBottom(page, Math.round(x), Math.round(y), size, size, 0, frame * 16, 16, 16, mirror ? 1 : 0);
+  host.uiSpriteRectBottom(page, Math.round(x), Math.round(y), size, size, 0, frame2 * 16, 16, 16, mirror ? 1 : 0);
 }
 function uiTileIcon(host, uiPage, code, x, y, size) {
   if (uiPage < 0 || !host.uiSpriteRectBottom)
@@ -24143,8 +26492,8 @@ class VoxelmonGame {
   stamp(mapId, cx, cy, on) {
     this.host.stamp(mapId, cx, cy, on ? 1 : 0);
   }
-  fieldFx(x, z, frame) {
-    this.host.fieldFx?.(x, z, frame);
+  fieldFx(x, z, frame2) {
+    this.host.fieldFx?.(x, z, frame2);
   }
   tint(abgr) {
     this.host.tint(abgr);
@@ -24408,6 +26757,10 @@ ${mname}!`);
       top2 = under;
     if (top2?.kind === "intro")
       return top2.view().pics;
+    if (top2?.kind === "surfing") {
+      const white = namedPage(this.data, "picIntro", "white");
+      return white >= 0 ? [{ page: white, x: 0, y: 0, w: VIEW_W, h: VIEW_H }] : [];
+    }
     if (top2?.kind === "title")
       return top2.view().pics;
     if (top2?.kind === "trainercard") {
@@ -25569,6 +27922,16 @@ here.`, onDone);
     const top2 = this.stack[this.stack.length - 1];
     return top2?.kind === "intro" ? top2.view() : null;
   }
+  gb() {
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "surfing" ? top2.video() : null;
+  }
+  startSurfingMinigame(selectQuits, onDone) {
+    this.push(new SurfingState(this, selectQuits, () => {
+      this.restoreMapMusic();
+      onDone();
+    }));
+  }
   showCaughtDexEntry(species, onDone) {
     const name = this.data.pokemon[species]?.name ?? species;
     this.showText(`New POKéDEX data
@@ -25700,8 +28063,8 @@ class QuickJsHost {
   palette(index) {
     native.palette(index);
   }
-  ent(slot, sheet, frame, x, y, lift, flags) {
-    native.ent(slot, sheet, frame, x, y, lift, flags);
+  ent(slot, sheet, frame2, x, y, lift, flags) {
+    native.ent(slot, sheet, frame2, x, y, lift, flags);
   }
   pic(slot, page, x, y, w, h) {
     native.pic(slot, page, x, y, w, h);
@@ -25760,8 +28123,8 @@ class QuickJsHost {
   uiPanel(side, x, y, w, h) {
     native.uiPanel(side, x, y, w, h);
   }
-  fieldFx(x, z, frame) {
-    native.fieldFx(x, z, frame);
+  fieldFx(x, z, frame2) {
+    native.fieldFx(x, z, frame2);
   }
   arena(mapId, x, y, shape, rig) {
     native.arena(mapId, x, y, shape, rig);
@@ -25795,6 +28158,30 @@ class QuickJsHost {
   }
   pikaPcm(clip) {
     native.pikaPcm?.(clip);
+  }
+  gbShow(on) {
+    native.gbShow?.(on);
+  }
+  gbTiles(dest, page, first, count2) {
+    native.gbTiles?.(dest, page, first, count2);
+  }
+  gbReset() {
+    native.gbReset?.();
+  }
+  gbMap(offset, hex3) {
+    native.gbMap?.(offset, hex3);
+  }
+  gbRegs(lcdc, scx, scy, wx, wy, bgp, obp0, obp1) {
+    native.gbRegs?.(lcdc, scx, scy, wx, wy, bgp, obp0, obp1);
+  }
+  gbLines(target2, hex3) {
+    native.gbLines?.(target2, hex3);
+  }
+  gbOam(hex3) {
+    native.gbOam?.(hex3);
+  }
+  gbColours(bg, obp0, obp1) {
+    native.gbColours?.(bg, obp0, obp1);
   }
   audioWaves(engine, bank, addr) {
     native.audioWaves?.(engine, bank, addr);

@@ -378,6 +378,15 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
     pageOwners.push({ kind: ATLAS_KIND.pics });
   }
 
+  // Yellow's minigame tile banks: raw shades, read tile by tile by the GB
+  // screen (core gb.rs), which applies the palette registers itself.
+  const minigamePageByKey = new Map<string, number>();
+  for (const key of Object.keys(gen.gfx).filter((k) => k.startsWith("minigame/")).sort()) {
+    minigamePageByKey.set(key, pages.length);
+    pages.push(buildPicPage(gen, key));
+    pageOwners.push({ kind: ATLAS_KIND.pics });
+  }
+
   // The trainer back pic lives at battle/redb (no back/ prefix upstream).
   // It carries no species, so it takes no RED++ pic palette and keeps
   // today's binding (the SGB selection, else the kind ramp).
@@ -420,6 +429,7 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
     picTitle: named(titlePageByKey, "title/"),
     picIntro: named(introPageByKey, "intro/"),
     picTitleMon: named(titleMonPageByKey, "title-mon/"),
+    picMinigame: named(minigamePageByKey, "minigame/"),
     sprites: spriteIndex,
     picFront: frontIndex,
     picBack: backIndex,
