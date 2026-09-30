@@ -3296,6 +3296,14 @@ fn main() {
     let mut gb_drawn: Option<u32> = None;
     let mut gb_fb = vec![0u8; pocketvoxel_core::gb::GB_W * pocketvoxel_core::gb::GB_H];
     let mut gb_hold: Option<buffer::Info> = None;
+    // The Gold screen (core lcd.rs), kept the same way: pages unswizzled on
+    // first use, two textures alternating, the serial last drawn.
+    let mut lcd_pages: Vec<(u16, Vec<u8>, usize)> = Vec::new();
+    let mut lcd_tex: [Option<texture::Texture>; 2] = [None, None];
+    let mut lcd_cur: usize = 0;
+    let mut lcd_drawn: Option<u32> = None;
+    let mut lcd_fb = vec![0u8; pocketvoxel_core::lcd::LCD_W * pocketvoxel_core::lcd::LCD_H];
+    let mut lcd_hold: Option<buffer::Info> = None;
     // TINS: one buffer per carved shape, and the placements that draw them.
     // A forest is the same few drawings thousands of times, so the geometry
     // is uploaded once and the instances only say where and how detailed.
@@ -4850,6 +4858,90 @@ if page_tex.len() < pak_static.atlases.len() {
                 gb_tex = [None, None];
             }
         }
+        // The Gold screen: drawn again only when an op changed it, each pixel
+        // through the screen's own RGB555 palettes, holes left clear so the
+        // world shows through a text box's surroundings; laid over the same
+        // 10:9 rect as the GB screen, above it.
+        let mut lcd_buf: Option<buffer::Info> = None;
+        {
+            let sc = unsafe { voxel::scene() };
+            if sc.lcd.shown {
+                if lcd_drawn != Some(sc.lcd.serial) {
+                    lcd_drawn = Some(sc.lcd.serial);
+                    let atl = &pak_static.atlases;
+                    let pages = &mut lcd_pages;
+                    let mut last = usize::MAX;
+                    let mut pixel = |page: u16, tile: u16, x: u8, y: u8| -> u8 {
+                        if last >= pages.len() || pages[last].0 != page {
+                            last = match pages.iter().position(|g| g.0 == page) {
+                                Some(i) => i,
+                                None => {
+                                    let Some(pg) = atl.get(page as usize) else { return 0 };
+                                    let lin = pak::unswizzle(pg.w as usize, pg.h as usize, pg.frame(0))
+                                        .unwrap_or_default();
+                                    pages.push((page, lin, pg.w as usize));
+                                    pages.len() - 1
+                                }
+                            };
+                        }
+                        let (_, lin, w) = &pages[last];
+                        let cols = (*w / 8).max(1);
+                        let (tx, ty) = (tile as usize % cols, tile as usize / cols);
+                        lin.get((ty * 8 + y as usize) * *w + tx * 8 + x as usize).copied().unwrap_or(0) & 3
+                    };
+                    sc.lcd.render(&mut pixel, &mut lcd_fb);
+                    let mut lut = [0u32; 256];
+                    for (i, c) in sc.lcd.colours.iter().enumerate() {
+                        lut[i] = pocketvoxel_core::lcd::LcdScreen::abgr(*c);
+                    }
+                    let (lw, lh) = (pocketvoxel_core::lcd::LCD_W, pocketvoxel_core::lcd::LCD_H);
+                    let mut data = vec![0u8; 256 * 256 * 4];
+                    for y in 0..lh {
+                        for x in 0..lw {
+                            let c = lut[lcd_fb[y * lw + x] as usize];
+                            let o = tiled_off(x as u32, y as u32, 256);
+                            data[o] = (c >> 24) as u8;
+                            data[o + 1] = (c >> 16) as u8;
+                            data[o + 2] = (c >> 8) as u8;
+                            data[o + 3] = c as u8;
+                        }
+                    }
+                    let next = lcd_cur ^ 1;
+                    if lcd_tex[next].is_none() {
+                        if let Ok(mut t) = texture::Texture::new(
+                            texture::TextureParameters::new_2d(256, 256, texture::ColorFormat::Rgba8)) {
+                            t.set_filter(texture::Filter::Nearest, texture::Filter::Nearest);
+                            t.set_wrap(texture::Wrap::ClampToEdge, texture::Wrap::ClampToEdge);
+                            lcd_tex[next] = Some(t);
+                        }
+                    }
+                    if let Some(t) = lcd_tex[next].as_mut() {
+                        if t.load_image(&data, texture::Face::default()).is_ok() {
+                            unsafe { gsp_flush(data.as_ptr(), data.len() as u32); }
+                            lcd_cur = next;
+                        }
+                    }
+                }
+                let w = pocketvoxel_core::lcd::LCD_W as f32 * UI_VIEW_H / pocketvoxel_core::lcd::LCD_H as f32;
+                let ox = (UI_VIEW_W - w) / 2.0;
+                let (x0, y0, x1, y1) = (qpx(ox), qpx(0.0), qpx(ox + w), qpx(UI_VIEW_H));
+                let (u1, v1) = (160.0 / 256.0, 144.0 / 256.0);
+                let mp = |px: i16, py: i16, u: f32, v: f32| Vertex {
+                    pos: [px, py, 0, 0], color: [255, 255, 255, 255], uv: [u, v] };
+                let verts = [
+                    mp(x0, y0, 0.0, 1.0), mp(x1, y0, u1, 1.0), mp(x1, y1, u1, 1.0 - v1),
+                    mp(x0, y0, 0.0, 1.0), mp(x1, y1, u1, 1.0 - v1), mp(x0, y1, 0.0, 1.0 - v1),
+                ];
+                let mut bi = buffer::Info::new();
+                if bi.add(buffer::Buffer::new(&verts[..]), attr_info.permutation()).is_ok() {
+                    lcd_buf = Some(bi);
+                }
+            } else if lcd_drawn.is_some() {
+                lcd_drawn = None;
+                lcd_pages.clear();
+                lcd_tex = [None, None];
+            }
+        }
         let pic_bufs: Vec<(usize, i16, buffer::Info)> = pic_groups.iter()
             .filter_map(|(pg, depth, v)| {
                 if v.is_empty() { return None; }
@@ -5069,6 +5161,8 @@ if page_tex.len() < pak_static.atlases.len() {
         let page_tex_ref = &page_tex;
         let gb_tex_ref = gb_tex[gb_cur].as_ref();
         let gb_buf_ref = gb_buf.as_ref();
+        let lcd_tex_ref = lcd_tex[lcd_cur].as_ref();
+        let lcd_buf_ref = lcd_buf.as_ref();
         // Cull/view-cone focus: the guest camera's real focus/eye
         // (guest_eye_focus, captured above) when we have one, not `center`/
         // the debug-orbit `eye` — those are the player's walking position,
@@ -5417,7 +5511,7 @@ if page_tex.len() < pak_static.atlases.len() {
                 // Card UVs are already atlas-scaled here, so the shader's
                 // terrain uvx transform must not apply again.
                 frame.bind_vertex_uniform(uvx_idx, FVec4::new(1.0, 1.0, 0.0, 0.0));
-                if !pic_bufs.is_empty() || gb_buf_ref.is_some() {
+                if !pic_bufs.is_empty() || gb_buf_ref.is_some() || lcd_buf_ref.is_some() {
                     unsafe { c3d_depth_test(0); }
                     let po: Matrix4 = Projection::orthographic(
                         0.0..(UI_VIEW_W * UI_Q), (UI_VIEW_H * UI_Q)..0.0,
@@ -5447,6 +5541,11 @@ if page_tex.len() < pak_static.atlases.len() {
                     if let (Some(gb), Some(t)) = (gb_buf_ref, gb_tex_ref) {
                         frame.bind_texture(texture::Index::Texture0, t);
                         frame.draw_arrays(buffer::Primitive::Triangles, gb, None).unwrap();
+                    }
+                    // the Gold screen, over that
+                    if let (Some(lb), Some(t)) = (lcd_buf_ref, lcd_tex_ref) {
+                        frame.bind_texture(texture::Index::Texture0, t);
+                        frame.draw_arrays(buffer::Primitive::Triangles, lb, None).unwrap();
                     }
                     frame.bind_vertex_uniform(projection_idx, mvp);
                     unsafe { c3d_depth_test(1); }
@@ -5605,6 +5704,7 @@ if page_tex.len() < pak_static.atlases.len() {
         card_hold = card_bufs;
         pic_hold = pic_bufs;
         gb_hold = gb_buf;
+        lcd_hold = lcd_buf;
         ui_hold = ui_buf;
         anim_hold = anim_bufs;
         ui_b_hold = ui_b_buf;
@@ -5613,7 +5713,7 @@ if page_tex.len() < pak_static.atlases.len() {
         ui_b_dim_hold = ui_b_dim_buf;
         ui_b_sprite_hold = ui_b_sprite_bufs;
         let _ = (
-            &card_hold, &pic_hold, &gb_hold, &ui_hold, &anim_hold, &ui_b_hold,
+            &card_hold, &pic_hold, &gb_hold, &lcd_hold, &ui_hold, &anim_hold, &ui_b_hold,
             &ui_b_bar_hold, &ui_b_light_hold, &ui_b_dim_hold, &ui_b_sprite_hold,
         );
     }

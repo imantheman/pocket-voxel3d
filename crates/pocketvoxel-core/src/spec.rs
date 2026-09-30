@@ -360,6 +360,14 @@ pub mod op {
     pub const GB_LINES: u32 = 93;
     pub const GB_OAM: u32 = 94;
     pub const GB_COLOURS: u32 = 95;
+    pub const LCD_SHOW: u32 = 96;
+    pub const LCD_BANK: u32 = 97;
+    pub const LCD_RESET: u32 = 98;
+    pub const LCD_CELLS: u32 = 99;
+    pub const LCD_REGS: u32 = 100;
+    pub const LCD_OBJS: u32 = 101;
+    pub const LCD_PALS: u32 = 102;
+    pub const LCD_LINES: u32 = 103;
 }
 
 /// Fixed-point scales used by op args.

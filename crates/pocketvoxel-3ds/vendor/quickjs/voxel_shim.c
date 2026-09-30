@@ -254,6 +254,19 @@ int qjs_register_voxel(JSContext *ctx) {
         JS_NewCFunctionMagic(ctx, vox_numtext, "gbLines", 2, JS_CFUNC_generic_magic, 93));
     JS_SetPropertyStr(ctx, o, "gbOam",
         JS_NewCFunctionMagic(ctx, vox_numtext, "gbOam", 1, JS_CFUNC_generic_magic, 94));
+    /* The Gold screen (core lcd.rs). */
+    add_num(ctx, o, "lcdShow",  96, 1);
+    add_num(ctx, o, "lcdBank",  97, 3);
+    add_num(ctx, o, "lcdReset", 98, 0);
+    add_num(ctx, o, "lcdRegs", 100, 5);
+    JS_SetPropertyStr(ctx, o, "lcdCells",
+        JS_NewCFunctionMagic(ctx, vox_numtext, "lcdCells", 2, JS_CFUNC_generic_magic, 99));
+    JS_SetPropertyStr(ctx, o, "lcdObjs",
+        JS_NewCFunctionMagic(ctx, vox_numtext, "lcdObjs", 1, JS_CFUNC_generic_magic, 101));
+    JS_SetPropertyStr(ctx, o, "lcdPals",
+        JS_NewCFunctionMagic(ctx, vox_numtext, "lcdPals", 2, JS_CFUNC_generic_magic, 102));
+    JS_SetPropertyStr(ctx, o, "lcdLines",
+        JS_NewCFunctionMagic(ctx, vox_numtext, "lcdLines", 2, JS_CFUNC_generic_magic, 103));
 
     JS_SetPropertyStr(ctx, g, "voxel", o);
     JS_FreeValue(ctx, g);

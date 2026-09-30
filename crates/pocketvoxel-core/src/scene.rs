@@ -287,6 +287,8 @@ pub struct Scene {
     pub audio: Audio,
     /// The GB screen (gb.rs), for the screens ported off the hardware.
     pub gb: crate::gb::GbScreen,
+    /// The Gold screen (lcd.rs): Gen 2's colour menus and text over the world.
+    pub lcd: crate::lcd::LcdScreen,
     /// The tick index — the only clock (tile animation, cursors, rig drift).
     pub tick: u32,
     /// Total ops dispatched (debug counter for `stats()`).
@@ -436,6 +438,7 @@ impl Scene {
             quality: QUALITY_TIER_DEFAULT,
             audio: Audio::new(),
             gb: crate::gb::GbScreen::default(),
+            lcd: crate::lcd::LcdScreen::default(),
             tick: 0,
             ops: 0,
         }
@@ -522,6 +525,9 @@ impl Scene {
             return OpResult::None;
         }
         if self.gb.op(code, args, s) {
+            return OpResult::None;
+        }
+        if self.lcd.op(code, args, s) {
             return OpResult::None;
         }
         match code {

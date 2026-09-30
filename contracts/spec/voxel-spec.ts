@@ -792,6 +792,37 @@ export const VOX_OP = {
   gbLines: 93,
   gbOam: 94,
   gbColours: 95,
+  /**
+   * The Gold screen (crates/pocketvoxel-core lcd.rs;
+   * voxelmon/game/gen2/platform/lcd.ts): a Game Boy Color's maps, objects
+   * and palettes without its budgets, over the 3D world. Tile ids are
+   * 16-bit and name cooked atlas tiles through banks; a cell whose
+   * attribute has bit 4 (hole) set lets the world show through.
+   *   lcdShow(on)
+   *   lcdBank(base, page, count)       tile ids base.. are page's tiles 0..
+   *   lcdReset()                       maps, objects, palettes, registers
+   *                                    (the banks stay)
+   *   lcdCells(offset, hex)            cells from `offset` (window = 1024),
+   *                                    six digits each: tile(4) attr(2)
+   *   lcdRegs(scx, scy, wx, wy, flags) flags: 1 bg, 2 window, 4 objects,
+   *                                    8 tall (8x16) objects
+   *   lcdObjs(hex)                     the whole object list, fourteen
+   *                                    digits each: y(4) x(4) signed screen
+   *                                    px, tile(4), attr(2)
+   *   lcdPals(first, hex)              RGB555 colours (4 digits) from
+   *                                    `first`: slot*4+colour, slots 0-15
+   *                                    background, 16-31 objects
+   *   lcdLines(target, hex)            144 per-line bytes: 0 none, 1 SCY,
+   *                                    2 SCX
+   */
+  lcdShow: 96,
+  lcdBank: 97,
+  lcdReset: 98,
+  lcdCells: 99,
+  lcdRegs: 100,
+  lcdObjs: 101,
+  lcdPals: 102,
+  lcdLines: 103,
 } as const;
 
 /** Clips in Yellow's PikachuCriesPointerTable (NUM_PIKA_CRIES). */
