@@ -102,6 +102,8 @@ GLYPHS = {
     "R": ["####.", "#...#", "#...#", "####.", "#.#..", "#..#.", "#...#"],
     "B": ["####.", "#...#", "#...#", "####.", "#...#", "#...#", "####."],
     "U": ["#...#", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."],
+    "Y": ["#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#.."],
+    "W": ["#...#", "#...#", "#...#", "#.#.#", "#.#.#", "##.##", "#...#"],
     " ": [".....", ".....", ".....", ".....", ".....", ".....", "....."],
 }
 GW, GH = 5, 7
@@ -163,15 +165,21 @@ def draw_cube(c, cx, cy, size, yaw, pitch, rgb, width=1.4, fade_back=True):
 
 RED = (228, 42, 46)
 DIM_RED = (110, 24, 28)
-# Which game the art is for: `python3 tools/3ds_art.py OUTDIR [red|blue]`.
+# Which game the art is for: `python3 tools/3ds_art.py OUTDIR [red|blue|yellow]`.
 GAME = sys.argv[2] if len(sys.argv) > 2 else "red"
 
 
 def tint(rgb):
     """Red's colours for Red; for Blue, the same colour with its red and blue
     channels swapped, so every red in the art -- the word, the icon's cube,
-    the banner cube's three faces -- is the matching blue."""
-    return (rgb[2], rgb[1], rgb[0]) if GAME == "blue" else rgb
+    the banner cube's three faces -- is the matching blue. For Yellow, the
+    red channel stays, green follows it and blue drops: a red of the same
+    brightness turned the matching yellow."""
+    if GAME == "blue":
+        return (rgb[2], rgb[1], rgb[0])
+    if GAME == "yellow":
+        return (rgb[0], int(rgb[0] * 0.82), rgb[1] // 2)
+    return rgb
 WHITE = (238, 238, 244)
 CARD = (8, 8, 12)
 GRID = (26, 26, 34)

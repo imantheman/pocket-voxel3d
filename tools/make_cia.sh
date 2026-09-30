@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the installable 3DS title (.cia) from the release ELF.
 #
-#   bash tools/make_cia.sh [OUTPUT.cia] [red|blue]
+#   bash tools/make_cia.sh [OUTPUT.cia] [red|blue|yellow]
 #
 # Red and Blue are two titles, side by side on the HOME menu: their own
 # title ID, name, icon and banner (Blue's art is Red's with every red made
@@ -33,7 +33,12 @@ case "$GAME" in
     LABEL=Blue; UNIQUE=0xff3d1; PCODE=CTR-P-PVXB
     ELF=crates/pocketvoxel-3ds/target-blue/armv6k-nintendo-3ds/release/pocketvoxel-3ds.elf
     WORK=dist/voxelmon/cia-blue ;;
-  *) echo "make_cia: unknown game '$GAME' (red or blue)"; exit 1 ;;
+  # Yellow reads its own pak set (paks_yellow/) beside Red and Blue's
+  yellow)
+    LABEL=Yellow; UNIQUE=0xff3d2; PCODE=CTR-P-PVXY
+    ELF=crates/pocketvoxel-3ds/target-yellow/armv6k-nintendo-3ds/release/pocketvoxel-3ds.elf
+    WORK=dist/voxelmon/cia-yellow ;;
+  *) echo "make_cia: unknown game '$GAME' (red, blue or yellow)"; exit 1 ;;
 esac
 OUT=${1:-dist/voxelmon/PocketVoxel3D$LABEL.cia}
 
@@ -113,7 +118,7 @@ ls -l "$OUT"
 echo "make_cia: $OUT"
 
 # The same ELF as a .3dsx with this title's own SMDH.
-if [ "$GAME" = blue ]; then DSX=dist/voxelmon/pocketvoxel-3ds-blue.3dsx; else DSX=dist/voxelmon/pocketvoxel-3ds.3dsx; fi
+if [ "$GAME" = red ]; then DSX=dist/voxelmon/pocketvoxel-3ds.3dsx; else DSX=dist/voxelmon/pocketvoxel-3ds-$GAME.3dsx; fi
 "${DEVKITPRO:-/opt/devkitpro}/tools/bin/3dsxtool" "$ELF" "$DSX" --smdh="$WORK/icon.smdh"
 ls -l "$DSX"
 echo "make_cia: $DSX"
