@@ -531,6 +531,20 @@ async function main(): Promise<number> {
       "--target=browser",
     ]);
     if (bundle !== 0) return bundle;
+    // Gold's engine is its own bundle (voxelmon/game/gen2); the `gold`
+    // feature embeds it instead of game.js. Whitespace and syntax are
+    // minified for QuickJS's parse; names are kept so a log's stack reads.
+    const goldBundle = await run([
+      "bun",
+      "build",
+      "voxelmon/game/gen2/main.ts",
+      "--outfile",
+      "crates/pocketvoxel-3ds/game-gold.js",
+      "--target=browser",
+      "--minify-whitespace",
+      "--minify-syntax",
+    ]);
+    if (goldBundle !== 0) return goldBundle;
     // Stamp the build so a log off the console can be matched to the binary
     // that wrote it: main.rs prints `boot build=<this>`, and without it every
     // log in the world says "dev".

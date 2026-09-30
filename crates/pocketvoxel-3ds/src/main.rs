@@ -1538,7 +1538,12 @@ fn tiled_off(x: u32, y: u32, tw: u32) -> usize {
 struct Vertex { pos: [i16; 4], color: [u8; 4], uv: [f32; 2] }
 
 static SHADER_BYTES: &[u8] = include_shader!("vshader.pica");
+// Gold runs its own engine (voxelmon/game/gen2, bundled as game-gold.js);
+// the Kanto games share game.js.
+#[cfg(not(feature = "gold"))]
 static GAME_JS: &[u8] = include_bytes!("../game.js");
+#[cfg(feature = "gold")]
+static GAME_JS: &[u8] = include_bytes!("../game-gold.js");
 const SKY: u32 = 0x68_B0_D8_FF;
 extern "C" {
     fn svcOutputDebugString(s: *const u8, len: i32) -> u32;
