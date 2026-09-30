@@ -59,7 +59,7 @@ import {
 } from "./link.ts";
 import { pcTileAt } from "./pctiles.ts";
 import { ScriptRunner, type ScriptRow, type ScriptWorld } from "./script.ts";
-import { MAP_SCRIPTS, type MapScript } from "./mapscripts.ts";
+import { mapScript, useScriptsFor, type MapScript } from "./mapscripts.ts";
 import { countGearStep } from "../ui/gear/model.ts";
 import {
   destination,
@@ -391,6 +391,7 @@ export class Overworld implements ScriptWorld {
     this.tilePairs = field?.tilePairs ?? { land: [], water: [] };
     this.carpets = field?.warpCarpets;
     this.runner = new ScriptRunner(this);
+    useScriptsFor((shell.data as { version?: string }).version);
   }
 
   get data(): VoxelmonData {
@@ -578,7 +579,7 @@ export class Overworld implements ScriptWorld {
     // every destination would have read as never-visited.
     visit(this.save as never, mapId);
     // A map script's every-load hook (story5.lua M.CINNABAR_ISLAND.onEnter).
-    (MAP_SCRIPTS as Record<string, MapScript>)[mapId]?.onEnter?.(this, this.save);
+    mapScript(mapId)?.onEnter?.(this, this.save);
   }
 
   // OverworldController.lua:110-114 objectVisible — the spawn filter. A
@@ -1987,8 +1988,8 @@ export class Overworld implements ScriptWorld {
   private runLandTriggers(): boolean {
     if (this.runner.isRunning()) return false;
     const label = (this as any).map?.id ?? "";
-    const script = (MAP_SCRIPTS as any)[label] as MapScript | undefined;
-    const host = (MAP_SCRIPTS as any)[label + "_ONSTEP_HOST"] as MapScript | undefined;
+    const script: MapScript | undefined = mapScript(label);
+    const host: MapScript | undefined = mapScript(label + "_ONSTEP_HOST");
     const rows =
       script?.onStep?.(this, this.save) ??
       host?.onStep?.(this, this.save) ??
@@ -3505,10 +3506,10 @@ export class Overworld implements ScriptWorld {
 
   /** old_man_demo hand-off (Commands.lua:807-823): delegate to the shell, the
    * same way startTrainerBattle does. onDone resumes the map script. */
-  startOldManDemo(onDone?: () => void): void {
+  startOldManDemo(onDone?: () => void, opts?: { species: string; level: number; name?: string }): void {
     const self = this as any;
     const shell = self.shell ?? self.game ?? self.host ?? null;
-    if (shell?.startOldManDemo) shell.startOldManDemo(onDone);
+    if (shell?.startOldManDemo) shell.startOldManDemo(onDone, opts);
     else onDone?.();
   }
 
@@ -3593,6 +3594,7 @@ export class Overworld implements ScriptWorld {
   }
 
   faceObject(ref: unknown, dir: string): void {
+    if (ref === "player") { (this.player as { facing: string }).facing = dir; return; }
     const npc = this.findNpc(ref);
     if (npc) npc.facing = dir;
   }

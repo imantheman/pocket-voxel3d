@@ -2410,8 +2410,10 @@ export class WildBattle implements EffectBattle {
       this.phase = "messages";
       return;
     }
-    // the no-healthy-party invariant (:4629-4634)
-    if (this.result !== "lose" && !firstHealthy(this.save.party)) {
+    // the no-healthy-party invariant (:4629-4634). Not for a demo: Yellow's
+    // Oak catches his Pikachu before the player owns a mon at all, and
+    // nothing of the demo's is the player's to lose.
+    if (this.result !== "lose" && !this.demo && !firstHealthy(this.save.party)) {
       console.warn(`battle finished ${this.result} with no healthy party; forcing blackout`);
       this.result = "lose";
     }

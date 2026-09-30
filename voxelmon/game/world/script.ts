@@ -233,7 +233,11 @@ function* emote(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
   const targetArg = args[0] as string | undefined;
   const bubble = args[1] as string | number | undefined;
   const frames = (args[2] as number | undefined) ?? 60;
-  const entity = targetArg === "player" ? ctx.world.player : ctx.npc;
+  const entity =
+    targetArg === "player" ? ctx.world.player
+    : targetArg !== undefined && typeof (ctx.world as any).findNpc === "function"
+      ? (ctx.world as any).findNpc(targetArg) ?? ctx.npc
+      : ctx.npc;
   if (!entity) return;
   const runner = ctx.runner;
   const kind =
@@ -321,6 +325,9 @@ function* give_pokemon(ctx: ScriptContext, ...args: unknown[]): Generator<void, 
   if (party.length >= 6) return;
   const mon = newMon(w.data, species, level);
   party.push(mon);
+  // Commands.lua give_pokemon's noNickname: Yellow's starter Pikachu keeps
+  // its species name (OaksLabPlayerReceivedMonText asks nothing)
+  if (args[2] === true) return;
   // The script's own _OaksLabReceivedMonText row prints the line; the
   // nickname prompt is the only thing this verb waits on.
   const runner = ctx.runner;
@@ -1005,6 +1012,21 @@ function* check_dex_owned(ctx: ScriptContext, ...args: unknown[]): Generator<voi
 // honest no-op like push_screen — the rows around it still run.
 function* dex_rating(): Generator<void, void> {}
 
+// Commands.lua:871-906 YELLOW_RIVAL_PARTIES: Yellow's rival parties key off
+// wRivalStarter (save.rivalStarter: 1 JOLTEON / 2 FLAREON / 3 VAPOREON, set
+// in the lab), not the player's starter, keyed by the Red call site's party
+// so the shared story scripts need no version branches: Route 22 #1 is
+// party 2 and a win there turns FLAREON back into JOLTEON; Cerulean 3 and
+// the S.S. Anne 1 are fixed; Tower, Silph, Route 22 #2 and the Champion
+// add the starter to a base.
+const YELLOW_RIVAL_PARTIES: Record<string, Record<number, {
+  party?: number; base?: number; upgradeOnWin?: { from: number; to: number };
+}>> = {
+  OPP_RIVAL1: { 4: { party: 2, upgradeOnWin: { from: 2, to: 1 } }, 7: { party: 3 } },
+  OPP_RIVAL2: { 1: { party: 1 }, 4: { base: 1 }, 7: { base: 4 }, 10: { base: 7 } },
+  OPP_RIVAL3: { 1: { base: 0 } },
+};
+
 // Commands.lua:895 rival_battle — the rival's team counters your starter:
 // party = baseParty + offset, offset from data.field.starterCounterpicks
 // (else the CHOSE_* fallback: Squirtle +1, Bulbasaur +2, Charmander +0),
@@ -1017,7 +1039,19 @@ function* rival_battle(ctx: ScriptContext, ...args: unknown[]): Generator<void, 
   // early Route 22 rival as heal-and-continue on a loss.
   const opts =
     (args[2] as { offsets?: Record<string, number>; loseable?: boolean } | undefined) ?? {};
-  const save = ctx.world.save as { flags: Record<string, boolean> };
+  const save = ctx.world.save as { flags: Record<string, boolean>; rivalStarter?: number };
+  if ((ctx.world.data as { version?: string }).version === "yellow") {
+    const spec = YELLOW_RIVAL_PARTIES[oppClass]?.[baseParty];
+    if (spec) {
+      const starter = save.rivalStarter ?? 1;
+      yield* start_battle(ctx, "trainer", oppClass, spec.party ?? (spec.base ?? 0) + starter,
+        { loseable: opts.loseable });
+      if (spec.upgradeOnWin && ctx.lastCheck && save.rivalStarter === spec.upgradeOnWin.from) {
+        save.rivalStarter = spec.upgradeOnWin.to;
+      }
+      return;
+    }
+  }
   const offsets =
     opts.offsets ??
     ((ctx.world.data as { field?: { starterCounterpicks?: Record<string, number> } }).field
@@ -1120,13 +1154,25 @@ function* set_heal_point(ctx: ScriptContext): Generator<void, void> {
 // blocks until the demo battle finishes (battle.onFinish -> runner.resume).
 // The demo battle engine is staged separately; until it lands, startOldManDemo
 // is absent and the tutorial dialogue simply continues past the demo.
-function* old_man_demo(ctx: ScriptContext): Generator<void, void> {
+// Yellow's Pallet intro passes ("PIKACHU", 5, "PROF.OAK") for
+// BATTLE_TYPE_PIKACHU: Oak throws, and always catches.
+function* old_man_demo(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
   const runner = ctx.runner;
   const w = ctx.world as any;
   if (typeof w.startOldManDemo === "function") {
-    w.startOldManDemo(() => runner.resume());
+    const species = args[0] as string | undefined;
+    const opts = species
+      ? { species, level: (args[1] as number | undefined) ?? 5, name: args[2] as string | undefined }
+      : undefined;
+    w.startOldManDemo(() => runner.resume(), opts);
     yield;
   }
+}
+
+// Commands.lua set_field: a plain save field a script owns -- Yellow's
+// wRivalStarter (save.rivalStarter) is the one that needs it.
+function* set_field(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  (ctx.world.save as unknown as Record<string, unknown>)[args[0] as string] = args[1];
 }
 
 const VERBS: Record<string, Verb> = {
@@ -1201,6 +1247,7 @@ const VERBS: Record<string, Verb> = {
   engage_trainer,
   set_heal_point,
   old_man_demo,
+  set_field,
   record_hall_of_fame,
   open_diploma,
   save_game,

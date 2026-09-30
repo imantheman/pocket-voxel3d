@@ -1,0 +1,140 @@
+// Pokémon Yellow: what plays differently from Red and Blue. Runs on the
+// Yellow import (dist/voxelmon/yellow/gen, from the player's own ROM) and is
+// skipped where there is none -- nothing ROM-derived is committed.
+import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { VOX_BTN } from "../contracts/spec/voxel-spec.ts";
+import { loadRuntimeData, REQUIRED_MODULES, type VoxelmonData } from "../voxelmon/game/data.ts";
+import { VoxelmonGame } from "../voxelmon/game/game.ts";
+import { RecorderHost } from "../voxelmon/game/host.ts";
+import { mapScript, useScriptsFor } from "../voxelmon/game/world/mapscripts.ts";
+
+const genDir = join(import.meta.dir, "../dist/voxelmon/yellow/gen");
+const hasYellow = REQUIRED_MODULES.every((m) => existsSync(join(genDir, `${m}.json`)));
+const yellow: VoxelmonData | null = hasYellow
+  ? { ...(await loadRuntimeData(genDir)), version: "yellow" } as VoxelmonData
+  : null;
+
+class Host extends RecorderHost {
+  saved: string | undefined;
+  pic(): void {}
+  picHide(): void {}
+  saveWrite(t: string): void { this.saved = t; }
+  saveData(): string | undefined { return this.saved; }
+}
+
+function newYellowGame(): VoxelmonGame {
+  const game = new VoxelmonGame(yellow!, new Host(), 1);
+  game.newGame();
+  game.closeToOverworld();
+  return game;
+}
+
+/** Tap A through whatever is running until the world is idle again. */
+function playOut(game: VoxelmonGame, max = 20000): number {
+  let t = 0;
+  for (; t < max; t++) {
+    const ow = game.overworld as any;
+    const idle = game.stackKinds().at(-1) === "overworld" && !ow.runner.isRunning() &&
+      !ow.player.moving && ow.scriptMoves.length === 0 && !ow.transitioning && !ow.emote;
+    if (idle && t > 2) return t;
+    game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+  }
+  return t;
+}
+
+describe("Yellow: the map scripts it lays over Red's", () => {
+  test.skipIf(!hasYellow)("the lab has one ball, the Eevee, and Red's three are not Yellow's", () => {
+    useScriptsFor("yellow");
+    const lab = mapScript("OAKS_LAB")!;
+    expect(typeof lab.talk!.TEXT_OAKSLAB_EEVEE_POKE_BALL).toBe("function");
+    // Red's Oak rows are kept, with Yellow's own lines swapped in
+    const oak = lab.talk!.TEXT_OAKSLAB_OAK1 as unknown[][];
+    const said = oak.filter((r) => r[0] === "show_text").map((r) => r[1]);
+    expect(said).toContain("_OaksLabOak1YouShouldTalkToIt");
+    expect(said).not.toContain("_OaksLabOak1RaiseYourYoungPokemonText");
+    useScriptsFor("red");
+    const red = mapScript("OAKS_LAB")!.talk!.TEXT_OAKSLAB_OAK1 as unknown[][];
+    expect(red.filter((r) => r[0] === "show_text").map((r) => r[1])).toContain("_OaksLabOak1RaiseYourYoungPokemonText");
+  });
+});
+
+describe("Yellow: the opening", () => {
+  test.skipIf(!hasYellow)("Oak stops you on row 0, catches a Pikachu himself, and walks you to the lab", () => {
+    const game = newYellowGame();
+    const ow = game.overworld as any;
+    ow.setMap("PALLET_TOWN", 10, 1, "up");
+    // one step north onto row 0
+    for (let t = 0; t < 40 && ow.player.cellY !== 0; t++) game.tick(VOX_BTN.up);
+    let sawOakBattle = false;
+    for (let t = 0; t < 30000; t++) {
+      const kinds = game.stackKinds();
+      if (kinds.includes("battle")) {
+        const b = (game.battleView() as any)?.battle;
+        if (b?.demoName === "PROF.OAK" && b?.enemy?.mon?.species === "PIKACHU") sawOakBattle = true;
+      }
+      if (game.save.flags.EVENT_OAK_ASKED_TO_CHOOSE_MON && kinds.at(-1) === "overworld" && !ow.runner.isRunning()) break;
+      game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    expect(sawOakBattle).toBe(true);
+    expect(ow.map.id).toBe("OAKS_LAB");
+    expect(game.save.flags.EVENT_FOLLOWED_OAK_INTO_LAB).toBe(true);
+    expect(game.save.flags.EVENT_FOLLOWED_OAK_INTO_LAB_2).toBe(true);
+    // the demo keeps nothing: no party yet
+    expect(game.save.party.length).toBe(0);
+  });
+
+  test.skipIf(!hasYellow)("the rival takes the Eevee, and Oak gives you Pikachu with no nickname", () => {
+    const game = newYellowGame();
+    const ow = game.overworld as any;
+    game.save.flags.EVENT_FOLLOWED_OAK_INTO_LAB = true;
+    game.save.flags.EVENT_FOLLOWED_OAK_INTO_LAB_2 = true;
+    game.save.flags.EVENT_OAK_ASKED_TO_CHOOSE_MON = true;
+    ow.setMap("OAKS_LAB", 7, 4, "up");
+    ow.showMapText("TEXT_OAKSLAB_EEVEE_POKE_BALL");
+    playOut(game);
+    expect(game.save.flags.EVENT_GOT_STARTER).toBe(true);
+    expect(game.save.flags.EVENT_CHOSE_PIKACHU).toBe(true);
+    expect(game.save.party.map((m) => m.species)).toEqual(["PIKACHU"]);
+    expect(game.save.party[0]!.nickname).toBeUndefined();
+    expect(game.stackKinds()).not.toContain("naming");
+    expect((game.save as any).rivalStarter).toBe(1);
+    // walked round the table to stand under Oak
+    expect([ow.player.cellX, ow.player.cellY]).toEqual([5, 3]);
+  });
+
+  test.skipIf(!hasYellow)("before Oak's speech the ball is only a ball", () => {
+    const game = newYellowGame();
+    const ow = game.overworld as any;
+    ow.setMap("OAKS_LAB", 7, 4, "up");
+    ow.showMapText("TEXT_OAKSLAB_EEVEE_POKE_BALL");
+    playOut(game);
+    expect(game.save.flags.EVENT_GOT_STARTER).toBeUndefined();
+    expect(game.save.party.length).toBe(0);
+  });
+
+  test.skipIf(!hasYellow)("leaving with Pikachu, the rival battles you with his Eevee and decides its future", () => {
+    const game = newYellowGame();
+    const ow = game.overworld as any;
+    for (const f of ["EVENT_FOLLOWED_OAK_INTO_LAB", "EVENT_OAK_ASKED_TO_CHOOSE_MON", "EVENT_GOT_STARTER"]) {
+      game.save.flags[f] = true;
+    }
+    (game.save as any).rivalStarter = 1;
+    const { newMon } = require("../voxelmon/game/battle/mon.ts");
+    game.save.party.push(newMon(yellow!, "PIKACHU", 5, game.battleRng));
+    ow.setMap("OAKS_LAB", 5, 5, "down");
+    let rivalMon: string | undefined;
+    for (let t = 0; t < 40 && ow.player.cellY < 6; t++) game.tick(VOX_BTN.down);
+    for (let t = 0; t < 40000; t++) {
+      const b = (game.battleView() as any)?.battle;
+      if (b?.enemy?.mon?.species) rivalMon ??= b.enemy.mon.species;
+      if (game.save.flags.EVENT_BATTLED_RIVAL_IN_OAKS_LAB && game.stackKinds().at(-1) === "overworld" && !ow.runner.isRunning()) break;
+      game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    expect(rivalMon).toBe("EEVEE");
+    expect(game.save.flags.EVENT_BATTLED_RIVAL_IN_OAKS_LAB).toBe(true);
+    // FLAREON on a win, VAPOREON on a loss
+    expect([2, 3]).toContain((game.save as any).rivalStarter);
+  });
+});

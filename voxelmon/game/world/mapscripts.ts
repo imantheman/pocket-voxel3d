@@ -24,6 +24,7 @@ import { floorsOf, seedExit } from "./elevator.ts";
 import { SAFARI_JOIN_CELLS, safariJoinRows, safariLeavingRows } from "./safari.ts";
 import { thirstyGirlRows, vendingRows } from "./vending.ts";
 import { SAFFRON_GATES, saffronGateScript } from "./saffrongate.ts";
+import { yellowScripts } from "./yellowscripts.ts";
 
 /** A talk handler that builds its rows from live state, or null for none. */
 export type TalkFn = (ow: any, save: any) => ScriptRow[] | null;
@@ -3197,7 +3198,35 @@ function liftKeyRocketRows(npc: string, afterText: string): ScriptRow[] {
  * is what the player should see.
  */
 export function talkScript(mapLabel: string, textConst: string): ScriptRow[] | TalkFn | null {
-  return MAP_SCRIPTS[mapLabel]?.talk?.[textConst] ?? null;
+  return mapScript(mapLabel)?.talk?.[textConst] ?? null;
+}
+
+/** Which game's scripts run: set by the overworld from its dataset. */
+let scriptGame = "red";
+let yellowTable: Record<string, MapScript> | null = null;
+const merged = new Map<string, MapScript | undefined>();
+
+/** Pick the game whose scripts mapScript/talkScript answer with. */
+export function useScriptsFor(game: string | undefined): void {
+  const g = game === "yellow" ? "yellow" : "red";
+  if (g !== scriptGame) merged.clear();
+  scriptGame = g;
+}
+
+/**
+ * A map's script for the active game. Yellow lays its own entries over Red's
+ * the way gen1recomp's init.lua does: talk keys merge, a hook it gives
+ * replaces Red's, the rest carries over. Red and Blue share one table.
+ */
+export function mapScript(label: string): MapScript | undefined {
+  if (scriptGame !== "yellow") return MAP_SCRIPTS[label];
+  if (merged.has(label)) return merged.get(label);
+  yellowTable ??= yellowScripts(MAP_SCRIPTS);
+  const base = MAP_SCRIPTS[label];
+  const y = yellowTable[label];
+  const out = !y ? base : !base ? y : { ...base, ...y, talk: { ...base.talk, ...y.talk } };
+  merged.set(label, out);
+  return out;
 }
 
 // Item balls (pokered engine/overworld/ItemUseOverworld + the shared
