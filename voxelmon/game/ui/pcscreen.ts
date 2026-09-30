@@ -209,6 +209,18 @@ export class PcState implements GameState {
     if (p.a) this.commit(id, this.qty);
   }
 
+  /** The Kanto Gear's touch mirror for the two menus (not the item lists,
+   * which scroll and take a quantity). */
+  gearMenu(): { title: string; items: string[]; index: number; select(i: number): void } | null {
+    if (this.mode === "root") {
+      return { title: "PC", items: ROOT, index: this.menuIndex, select: (i: number) => { this.menuIndex = i; } };
+    }
+    if (this.mode === "items") {
+      return { title: "MY PC", items: ITEMS, index: this.itemsIndex, select: (i: number) => { this.itemsIndex = i; } };
+    }
+    return null;
+  }
+
   view(): PcView {
     const ids = this.mode === "root" || this.mode === "items" ? [] : this.ids();
     return {
