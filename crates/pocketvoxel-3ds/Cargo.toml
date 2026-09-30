@@ -18,6 +18,9 @@ pocketvoxel-core = { path = "../pocketvoxel-core" }
 # (save_blue.lua) and title ribbon overlay, over the SAME shared paks Red
 # reads. `cargo 3ds build --release --features blue`.
 blue = []
+# Pokemon Yellow: its own pak set (paks_yellow/), dataset and save
+# (save_yellow.lua). `cargo 3ds build --release --features yellow`.
+yellow = []
 
 [build-dependencies]
 cc = "1"

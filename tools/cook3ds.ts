@@ -32,13 +32,25 @@ import { activeVersion, type GameVersion, missingInputReason, resolveEnv } from 
 import { runImport } from "../voxelmon/import/index.ts";
 
 const DIST = join(ROOT, "dist/voxelmon");
-/** One pak per map, atlas not yet shared: the input to the hoist. */
-const ORIG = join(DIST, "paks_orig");
-/** The shared set — this is what actually ships. */
-const PAKS = join(DIST, "paks");
 /** The folder tree to drag onto the card. */
 const CARD = join(DIST, "sdcard");
-const CARD_PAKS = join(CARD, "3ds/voxelmon/paks");
+
+/**
+ * Where a game's paks go. Red and Blue share `paks` (their pages line up one
+ * for one); Yellow's Pokemon are redrawn, its sprites differ and 32 maps
+ * changed, so it has a set of its own, `paks_yellow`, beside theirs.
+ */
+export function paksLayout(version: GameVersion): { orig: string; paks: string; cardPaks: string; dir: string } {
+  const dir = version === "yellow" ? "paks_yellow" : "paks";
+  return {
+    dir,
+    // one pak per map, atlas not yet shared: the input to the hoist
+    orig: join(DIST, version === "yellow" ? "paks_orig_yellow" : "paks_orig"),
+    // the shared set -- this is what actually ships
+    paks: join(DIST, dir),
+    cardPaks: join(CARD, "3ds/voxelmon", dir),
+  };
+}
 const THREE_DSX = join(
   ROOT,
   "crates/pocketvoxel-3ds/target/armv6k-nintendo-3ds/release/pocketvoxel-3ds.3dsx",
@@ -59,6 +71,8 @@ const THREE_DSX = join(
 export const VERSION_FILES: Record<GameVersion, { gamedata: string; overlay: string; threeDsx: string }> = {
   red: { gamedata: "gamedata.json", overlay: "version_red.vxat", threeDsx: "pocketvoxel-3ds.3dsx" },
   blue: { gamedata: "gamedata_blue.json", overlay: "version_blue.vxat", threeDsx: "pocketvoxel-3ds-blue.3dsx" },
+  // in its own folder (paksLayout), so its files keep the plain names
+  yellow: { gamedata: "gamedata.json", overlay: "version_yellow.vxat", threeDsx: "pocketvoxel-3ds-yellow.3dsx" },
 };
 
 const SHARED_BIT = 0x80000000;
@@ -243,7 +257,8 @@ export async function cook3ds(only?: string[]): Promise<number> {
   const gen = loadGen(GEN_DIR);
   const version = activeVersion();
   const files = VERSION_FILES[version];
-  console.log(`cook3ds: ${version === "blue" ? "Blue" : "Red"} (${GEN_DIR})`);
+  const { orig: ORIG, paks: PAKS, cardPaks: CARD_PAKS } = paksLayout(version);
+  console.log(`cook3ds: ${version[0]!.toUpperCase()}${version.slice(1)} (${GEN_DIR})`);
   const names = (only ?? Object.keys(gen.maps)).sort();
   if (names.length === 0) {
     console.error("cook3ds: no maps in the imported dataset");
@@ -293,7 +308,7 @@ export async function cook3ds(only?: string[]): Promise<number> {
   // same whichever ROM made it, so what the other game cooked still fits.
   const keep = new Map<string, Buffer>();
   for (const [v, f] of Object.entries(VERSION_FILES)) {
-    if (v === version) continue;
+    if (v === version || paksLayout(v as GameVersion).paks !== PAKS) continue;
     for (const name of [f.gamedata, f.overlay]) {
       if (existsSync(join(PAKS, name))) keep.set(name, readFileSync(join(PAKS, name)));
     }

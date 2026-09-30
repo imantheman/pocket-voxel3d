@@ -386,6 +386,11 @@ let redppCache: RedppPack | null | undefined;
  */
 export function loadRedpp(genDir = GEN_DIR): RedppPack | null {
   if (redppCache !== undefined) return redppCache;
+  // VOXELMON_COLOUR=none cooks Game Boy grayscale without deleting the pack
+  if (process.env.VOXELMON_COLOUR === "none") {
+    redppCache = null;
+    return null;
+  }
   const path = join(gen1recompDir(), "data/palettes_gbc.lua");
   const cache = join(genDir, "palettes_gbc.json");
   if (!existsSync(path)) {

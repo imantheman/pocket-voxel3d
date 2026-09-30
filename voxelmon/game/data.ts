@@ -262,7 +262,7 @@ import type { AnimData } from "./battle/moveanim.ts";
 
 export interface VoxelmonData {
   /** Which game the dataset is (gamedata.json `version`; absent = red). */
-  version?: "red" | "blue";
+  version?: "red" | "blue" | "yellow";
   /** Maps whose geometry the pak carries; absent (old gamedata) = all.
    * Anything else is a locked content boundary (world/overworld.ts). */
   cookedMaps?: string[];
@@ -304,8 +304,9 @@ export interface VoxelmonData {
  * text, credits, default names -- follows the dataset on its own; this is
  * only for the handful of tables the guest holds itself.
  */
-export function gameVersion(data: { version?: string } | null | undefined): "red" | "blue" {
-  return data?.version === "blue" ? "blue" : "red";
+export function gameVersion(data: { version?: string } | null | undefined): "red" | "blue" | "yellow" {
+  const v = data?.version;
+  return v === "blue" || v === "yellow" ? v : "red";
 }
 
 export const REQUIRED_MODULES = [
