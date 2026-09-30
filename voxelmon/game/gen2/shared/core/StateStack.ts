@@ -16,10 +16,23 @@ export interface State {
   [k: string]: any;
 }
 
-export const StateStack = {
+export interface StateStackApi {
+  states: State[];
+  init(): StateStackApi;
+  push(state: State, ...args: unknown[]): void;
+  pop(): State | undefined;
+  top(): State | undefined;
+  clear(): void;
+  update(dt: number): void;
+  renderVisible(state: State | undefined): boolean;
+  visibleBase(): number;
+  draw(): void;
+}
+
+export const StateStack: StateStackApi = {
   states: [] as State[],
 
-  init(): typeof StateStack {
+  init(): StateStackApi {
     StateStack.states = [];
     return StateStack;
   },

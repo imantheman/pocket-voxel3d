@@ -12,7 +12,7 @@ export const Runtime = {
   reportError(_modId: unknown, _message: unknown): void {},
   emit(_name: string, _payload?: unknown): void {},
   /** Runtime.lua:67 -- `vanilla(...args)` with no hook in the chain. */
-  call<A extends unknown[], R>(_name: string, vanilla: (...args: A) => R, ...args: A): R {
+  call<R>(_name: string, vanilla: (...args: any[]) => R, ...args: any[]): R {
     return vanilla(...args);
   },
   wants(_name: string): boolean {
