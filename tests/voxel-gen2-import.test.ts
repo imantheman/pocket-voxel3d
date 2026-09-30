@@ -6,10 +6,16 @@
 
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { GOLD_SHA1 } from "../voxelmon/import/env.ts";
+import { GOLD_SHA1, type VoxelEnv } from "../voxelmon/import/env.ts";
+import { extractFont, inkFrom1bpp, inkFrom2bpp } from "../voxelmon/import/gen2/font.ts";
+import { runImportGen2 } from "../voxelmon/import/gen2/index.ts";
+import { extractItems, extractMarts, extractMoves } from "../voxelmon/import/gen2/items.ts";
+import { extractOakSpeech } from "../voxelmon/import/gen2/oakspeech.ts";
+import { extractScriptsAndText, extractStdScripts, extractText } from "../voxelmon/import/gen2/scripts.ts";
+import { decodeGen2Text } from "../voxelmon/import/gen2/text.ts";
 import { GfxBin, TRANSPARENT } from "../voxelmon/import/gfx.ts";
 import { Rom } from "../voxelmon/import/rom.ts";
 import { extractConstants } from "../voxelmon/import/gen2/constants.ts";
@@ -567,4 +573,274 @@ describe.skipIf(!gold)("gen2 phase 1 against the Gold ROM", () => {
     expect(sprites.SPRITE_CHRIS).toMatchObject({ frames: 6, walker: true, spriteType: "WALKING_SPRITE" });
     for (const s of Object.values(sprites) as any[]) expect(ctx.gfx.has(s.image)).toBe(true);
   });
+});
+
+// ================================================================ later stages
+// Font, scripts/text, items/marts/moves, oak speech (voxelmon/import/gen2/
+// font.ts, text.ts, scripts.ts, items.ts, oakspeech.ts), then the whole
+// runImportGen2 pipeline on the real ROM. The other late stages have their
+// own files: voxel-gen2-{audio,pokemon,title,movies,menugfx,encounters}.test.ts.
+
+describe("gen2 text decoder (decodeGen2Text)", () => {
+  const charmap: Record<string, string> = { "128": "A", "129": "B", "127": " ", "74": "<PK>", "89": "<TARGET>", "117": "<……>" };
+  const run = (bytes: number[], extra?: (rom: FakeRom) => void, buffers?: (string | number)[]) => {
+    const rom = new FakeRom();
+    rom.put(0x10, 0x4000, bytes);
+    extra?.(rom);
+    return decodeGen2Text(ctxOf(rom, manifest({ symbols: {} })), 0x10, 0x4000, charmap, buffers);
+  };
+
+  test("TX_START string, line/para/cont breaks, TX_END", () => {
+    expect(run([0x00, 0x80, 0x4f, 0x81, 0x51, 0x80, 0x55, 0x81, 0x50, 0x50])).toBe("A\nB\fA\vB");
+  });
+
+  test("done/prompt markers, and none on an empty stream", () => {
+    expect(run([0x00, 0x80, 0x57])).toBe("A{DONE}");
+    expect(run([0x00, 0x80, 0x58])).toBe("A{PROMPT}");
+    expect(run([0x00, 0x57])).toBe("");
+  });
+
+  test("player/rival/POKé, name slots, ellipsis, unknown bytes and skipped controls", () => {
+    expect(run([0x00, 0x52, 0x53, 0x54, 0x59, 0x75, 0x56, 0x4a, 0x03, 0x50, 0x50])).toBe(
+      "{PLAYER}{RIVAL}POKé{TARGET}…………{BYTE:03}",
+    );
+  });
+
+  test("TX_RAM records the named buffer; TX_DECIMAL / TX_STRINGBUFFER / TX_DOTS consume operands", () => {
+    const buffers: (string | number)[] = [];
+    // text_ram wStringBuffer1, text_ram $1234, text_decimal (3 bytes),
+    // text_buffer 1, text_dots 4, a sound jingle ($0b), then a string
+    const out = run(
+      [0x01, 0x6b, 0xcf, 0x01, 0x34, 0x12, 0x09, 0x00, 0xd0, 0x21, 0x14, 0x01, 0x0c, 0x04, 0x0b, 0x00, 0x80, 0x50, 0x50],
+      undefined,
+      buffers,
+    );
+    expect(out).toBe("{STRBUF}{STRBUF}{NUM}{STRBUF}A");
+    expect(buffers).toEqual(["wStringBuffer1", 0x1234]);
+  });
+
+  test("TX_FAR continues the stream at the far address", () => {
+    const out = run([0x16, 0x00, 0x50, 0x11], (rom) => rom.put(0x11, 0x5000, [0x00, 0x81, 0x80, 0x57]));
+    expect(out).toBe("BA{DONE}");
+  });
+});
+
+describe("gen2 script disassembly (extractScriptsAndText)", () => {
+  // One map whose object runs: opentext; writetext T; checkevent $0012;
+  // iftrue S2; applymovement 3, M; callstd 0; end. S2: jumptext T.
+  function scriptRom(): FakeRom {
+    const rom = new FakeRom();
+    const B = 0x20;
+    rom.put(B, 0x4000, [
+      0x47, // opentext
+      0x4c, 0x00, 0x41, // writetext $4100
+      0x31, 0x12, 0x00, // checkevent $0012
+      0x09, 0x20, 0x40, // iftrue $4020
+      0x68, 0x03, 0x00, 0x42, // applymovement 3, $4200
+      0x0d, 0x00, 0x00, // callstd 0
+      0x90, // end
+    ]);
+    rom.put(B, 0x4020, [0x52, 0x00, 0x41]); // jumptext $4100
+    rom.put(B, 0x4100, [0x00, 0x80, 0x57]);
+    rom.put(B, 0x4200, [0x01, 0x02, 0x47, 0x99]);
+    rom.put(B, 0x4210, [0x12, 0x03]); // itemball
+    rom.put(B, 0x4220, [0x34, 0x12, 0x07]); // hiddenitem (dwb flag, item)
+    rom.put(B, 0x4300, [0xff]); // std script 0: an unknown opcode
+    // InitializeEventsScript: setevent 5 twice, variablesprite 4, $52, setflag 7, end
+    rom.put(B, 0x4400, [0x33, 0x05, 0x00, 0x33, 0x05, 0x00, 0x6c, 0x04, 0x52, 0x36, 0x07, 0x00, 0x90]);
+    rom.put(0x21, 0x4000, [B, 0x00, 0x43]); // StdScripts: dba $20:$4300
+    // readEventTables' side tables, all empty, in bank $30
+    rom.put(0x30, 0x4000, [0xff]); // no posters
+    for (let i = 0; i < 16; i++) rom.word(0x30, 0x4200 + i * 2, 0x4300); // TradeTexts -> TX_END
+    rom.put(0x30, 0x4300, [0x50]);
+    return rom;
+  }
+  const symbols: Record<string, [number, number]> = {
+    StdScripts: [0x21, 0x4000],
+    InitializeEventsScript: [0x20, 0x4400],
+    PhoneContacts: [0x30, 0x4100],
+    SpecialPhoneCallList: [0x30, 0x4100],
+    NPCTrades: [0x30, 0x4100],
+    TradeTexts: [0x30, 0x4200],
+    ElevatorFloorNames: [0x30, 0x4100],
+    DecorationDesc_PosterPointers: [0x30, 0x4000],
+    DecorationDesc_NullPoster: [0, 0],
+    "DecorationDesc_OrnamentOrConsole.OrnamentConsoleScript": [0, 0],
+    "DecorationDesc_GiantOrnament.BigDollScript": [0, 0],
+  };
+
+  test("walks pointers, follows branches, decodes text and movements, resolves callstd", () => {
+    const ctx = ctxOf(scriptRom(), manifest({ symbols, charmap: { "128": "A" } }, { stdScriptOrder: ["PokecenterNurseScript"] }));
+    const std = extractStdScripts(ctx);
+    expect(std.byId).toEqual({ "0": "PokecenterNurseScript" });
+    expect(std.scripts.PokecenterNurseScript!.key).toBe("20:4300");
+    const maps: Record<string, any> = {
+      TEST_MAP: {
+        scripts: { bank: 0x20, address: 0x4000 },
+        objects: [
+          { type: 0, script: 0x4000 },
+          { type: 1, script: 0x4210 }, // OBJECTTYPE_ITEMBALL
+          { type: 0, script: 0 }, // Lua truthiness: 0 still gets a key
+        ],
+        bgEvents: [{ kind: 7, script: 0x4220 }], // BGEVENT_ITEM
+        coordEvents: [],
+        sceneScripts: {},
+        callbacks: [],
+      },
+    };
+    const r = extractScriptsAndText(ctx, maps, std);
+    const s = r.scripts as Record<string, any>;
+    expect(s["20:4000"]).toEqual([
+      { op: "opentext" },
+      { op: "writetext", text: "20:4100" },
+      { op: "checkevent", event: 0x12 },
+      { op: "iftrue", script: "20:4020" },
+      { op: "applymovement", object: 3, movement: "20:4200" },
+      { op: "callstd", id: 0, std: "PokecenterNurseScript", script: "20:4300" },
+      { op: "end" },
+    ]);
+    expect(s["20:4020"]).toEqual([{ op: "jumptext", text: "20:4100" }]);
+    expect(s["20:4300"]).toEqual([{ op: "unknown", code: 0xff, source: "ROM:20:4300" }]);
+    expect(s.movements["20:4200"]).toEqual([0x01, 0x02, 0x47]);
+    expect((r.text as any)["20:4100"]).toBe("A{DONE}");
+    const objects = maps.TEST_MAP.objects;
+    expect(objects[0].scriptKey).toBe("20:4000");
+    expect(objects[1].itemball).toEqual({ item: 0x12, quantity: 3 });
+    expect(objects[2].scriptKey).toBe("20:0000");
+    expect(maps.TEST_MAP.bgEvents[0].hiddenItem).toEqual({ event: 0x1234, item: 7 });
+    expect(r.initialEvents).toEqual({
+      generation: 2,
+      source: "ROM:InitializeEventsScript",
+      flags: [5],
+      engineFlags: [7],
+      sprites: [{ slot: 4, sprite: 0x52 }],
+    });
+  });
+});
+
+describe("gen2 font ink", () => {
+  test("1bpp ink is black on transparent; 2bpp ink keeps shades 2-3", () => {
+    const one = inkFrom1bpp([0x80, 0, 0, 0, 0, 0, 0, 0x01], 8, 8);
+    expect(one.get(0, 0)).toBe(3);
+    expect(one.get(1, 0)).toBe(TRANSPARENT);
+    expect(one.get(7, 7)).toBe(3);
+    // row 0: pixel 0 shade 1 (low bit), pixel 1 shade 2 (high bit), pixel 2 shade 3
+    const two = inkFrom2bpp([0b10100000, 0b01100000, ...new Array(14).fill(0)], 8, 8);
+    expect([two.get(0, 0), two.get(1, 0), two.get(2, 0), two.get(3, 0)]).toEqual([TRANSPARENT, 3, 3, TRANSPARENT]);
+  });
+});
+
+describe.skipIf(!gold)("gen2 later stages against the Gold ROM", () => {
+  const ctx = gold ? new Gen2Ctx(new Rom(gold.rom), gold.manifest, new GfxBin(), GOLD_SHA1) : null!;
+
+  test("font pages, frames and the Unown font", () => {
+    const font = extractFont(ctx) as any;
+    expect(font).toMatchObject({
+      image: "fonts/font", imageExtra: "fonts/font_extra", imageFrames: "fonts/frames",
+      mainBase: 0x80, extraBase: 0x60, frameBase: 0x79,
+    });
+    expect(ctx.gfx.directory["fonts/font"]).toMatchObject({ w: 128, h: 64 });
+    expect(ctx.gfx.directory["fonts/frames"]).toMatchObject({ w: 48, h: 64 });
+    expect(ctx.gfx.directory["fonts/unown_font"]).toMatchObject({ w: 24, h: 72 });
+    expect(font.imageMapSign).toBeUndefined(); // MapEntryFrameGFX is Crystal's
+  });
+
+  test("scripts: every pointer decodes, NEW_BARK_TOWN's teacher talks", () => {
+    const maps = extractMaps(ctx) as any;
+    const std = extractStdScripts(ctx);
+    expect(std.order.length).toBe(46);
+    const r = extractScriptsAndText(ctx, maps, std);
+    const scripts = r.scripts as any;
+    const text = r.text as any;
+    const keys = Object.keys(scripts).filter((k) => k.includes(":"));
+    expect(keys.length).toBeGreaterThan(3000);
+    const bad = keys.filter((k) => scripts[k].some((c: any) => c.op === "unknown" || c.op === "truncated"));
+    expect(bad).toEqual([]);
+    const nb = maps.NEW_BARK_TOWN;
+    expect(nb.sceneScripts["0"].scriptKey).toBe("48:400d");
+    expect(scripts["48:400d"]).toEqual([{ op: "end" }]);
+    const teacher = scripts[nb.objects[0].scriptKey];
+    expect(teacher[0]).toEqual({ op: "faceplayer" });
+    const line = teacher.find((c: any) => c.op === "writetext");
+    expect(text[line.text]).toBe("Wow, your POKéGEAR\nis impressive!\fDid your mom get\nit for you?{DONE}");
+    for (const m of Object.values(maps) as any[]) {
+      for (const o of m.objects) if (o.scriptKey && !o.scriptKey.endsWith(":0000")) expect(scripts[o.scriptKey]).toBeDefined();
+    }
+    const trainers = Object.values(maps).flatMap((m: any) => m.objects.filter((o: any) => o.trainer));
+    expect(trainers.length).toBeGreaterThan(300);
+    expect(typeof text[trainers[0].trainer.seenText]).toBe("string");
+    expect(r.events.trades[0]).toMatchObject({ give: "DROWZEE", get: "MACHOP", nickname: "MUSCLE", otName: "MIKE", item: "GOLD_BERRY" });
+    expect(r.events.phone["1"]).toMatchObject({ contact: "PHONE_MOM", map: "PLAYERS_HOUSE_1F" });
+    expect(r.events.floorNames[0]).toBe("B4F");
+    expect(r.initialEvents.sprites).toContainEqual({ slot: 4, sprite: 82 });
+    expect(Object.keys(text.labels).length).toBeGreaterThan(80);
+  });
+
+  test("rom_text decodes the manifest's labels", () => {
+    const t = extractText(ctx);
+    expect(Object.keys(t).length).toBe(889);
+    expect(t.AlreadyAsleepText).toBe("{TARGET}'s\nalready asleep!{PROMPT}");
+  });
+
+  test("moves, type chart, items and marts", () => {
+    const { moves, type_chart } = extractMoves(ctx) as any;
+    expect(moves.POUND).toMatchObject({ index: 1, name: "POUND", power: 40, type: "NORMAL", accuracy: 100, pp: 35, effect: "EFFECT_NORMAL_HIT" });
+    expect(moves.BLIZZARD).toMatchObject({ power: 120, type: "ICE", accuracy: 70, pp: 5 });
+    expect(Object.keys(moves).filter((k) => k !== "generation" && k !== "source").length).toBe(251);
+    expect(type_chart.matchups).toContainEqual({ attacker: "FIRE", defender: "GRASS", multiplier: 20 });
+    expect(type_chart.foresightMatchups.length).toBe(2);
+    expect(type_chart.types.FIRE.category).toBe("special");
+    const items = extractItems(ctx) as any;
+    expect(items.POTION).toMatchObject({ name: "POTION", price: 300, pocket: "ITEM", canSelect: false, canToss: true });
+    expect(items.HM_SURF).toMatchObject({ tmLabel: "HM03", teaches: "SURF", name: "HM03" });
+    expect(items.TM_DYNAMICPUNCH).toMatchObject({ tmNumber: 1, tmLabel: "TM01", teaches: "DYNAMICPUNCH" });
+    const marts = extractMarts(ctx) as any;
+    expect(marts.lists.length).toBe(34);
+    expect(marts.lists[0]).toEqual(["POTION", "ANTIDOTE", "PARLYZ_HEAL", "AWAKENING"]); // MART_CHERRYGROVE
+    expect(marts.bargain[0]).toEqual({ item: "NUGGET", price: 4500 });
+  });
+
+  test("oak speech text, pics and the splash", () => {
+    const oak = extractOakSpeech(ctx) as any;
+    expect(oak.text._OakText1.startsWith("Hello! Sorry to\nkeep you waiting!")).toBe(true);
+    expect(oak.playerPic).toBe("intro/cal");
+    expect(ctx.gfx.directory["intro/oak"]).toMatchObject({ w: 56, h: 56 });
+    expect(oak.splash).toMatchObject({ presents: "splash/presents", logo: "splash/logo", star: "splash/star" });
+  });
+
+  test("runImportGen2: every stage, every image reference resolves", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "gen2-import-"));
+    const env = {
+      version: "gold", romPath: GOLD_ROM, g1rDir: "", voxelmodDir: "", refGeneratedDir: "",
+      genDir: dir, manifestPath: GOLD_MANIFEST,
+    } as VoxelEnv;
+    const log = console.log;
+    console.log = () => {};
+    try {
+      await runImportGen2(env, gold!.rom);
+    } finally {
+      console.log = log;
+    }
+    const want = [
+      "audio", "battle_anims", "constants", "credits", "diploma", "encounters", "events", "field", "font", "gfx", "icons",
+      "initial_events", "intro", "items", "landmarks", "maps", "marts", "menu_gfx", "moves", "oak_speech", "palettes",
+      "pokedex", "pokemon", "rom_text", "roofs", "scripts", "sprites", "std_scripts", "text", "tilesets", "title", "trade",
+      "trainers", "type_chart", "version",
+    ];
+    const files = readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "")).sort();
+    expect(files).toEqual(want);
+    expect(statSync(join(dir, "programs.bin")).size).toBe(6 * 0x4000);
+    expect(statSync(join(dir, "slots/gold_slots.tilemap")).size).toBe(240);
+    const gfxDir = JSON.parse(readFileSync(join(dir, "gfx.json"), "utf8"));
+    const missing: string[] = [];
+    const walk = (v: unknown): void => {
+      if (typeof v === "string") {
+        if (/^[a-z0-9_]+\/[a-z0-9_/.]+$/.test(v) && !v.endsWith(".tilemap") && !v.endsWith(".bin") && !(v in gfxDir)) missing.push(v);
+      } else if (Array.isArray(v)) v.forEach(walk);
+      else if (v && typeof v === "object") Object.values(v).forEach(walk);
+    };
+    for (const f of files) if (f !== "gfx") walk(JSON.parse(readFileSync(join(dir, `${f}.json`), "utf8")));
+    expect(missing).toEqual([]);
+    rmSync(dir, { recursive: true, force: true });
+  }, 60000);
 });
