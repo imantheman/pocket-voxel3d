@@ -506,6 +506,8 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     for (const cue of cues) {
       if (cue.startsWith("cry:")) {
         this.audio.playCry(cue.slice(4));
+      } else if (cue.startsWith("pika:")) {
+        this.audio.playPikaClip(Number(cue.slice(5)) || 1);
       } else if (cue.startsWith("move:")) {
         // "move:<sfx>:<pitch>:<tempo>" — a battle move's sound with the
         // modifiers its MoveSoundTable row carries.
@@ -1957,6 +1959,11 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     this.audio.playCry(species);
   }
 
+  /** Yellow's voiced Pikachu clip `clip` (PlayPikachuSoundClip). */
+  playPikaClip(clip: number): void {
+    this.audio.playPikaClip(clip);
+  }
+
   openStartMenu(): void {
     this.push(
       new StartMenuState(this as any, (act) => {
@@ -2179,7 +2186,7 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     // PIKAHAPPY_USEDITEM: a medicine, a vitamin, an ETHER spent on it
     if (r.kind === "consumed") modifyHappiness(this.save as never, "USEDITEM", mon);
     // Yellow's Pikachu says no out loud (PlayPikachuSoundClip, PikachuCry28)
-    if (r.refused) this.audio?.playCry?.("PIKACHU");
+    if (r.refused) this.audio?.playPikaClip?.(28);
     if (r.evolveTo) {
       // ItemUseEvoStone: the stone's evolution runs the same movie a
       // level's does, but cannot be called off, and the new form's learn

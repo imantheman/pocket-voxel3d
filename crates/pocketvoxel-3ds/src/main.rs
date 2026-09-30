@@ -206,6 +206,9 @@ const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks_yellow/version_yellow.vxat";
 static mut OVERLAY: Vec<(usize, pak::AtlasPage<'static>)> = Vec::new();
 static mut OVERLAY_PALETTES: Vec<[u32; 256]> = Vec::new();
 static mut OVERLAY_AUDIO: Option<&'static [u8]> = None;
+/// Yellow's voiced Pikachu clips (the overlay's PIKA trailer), for the
+/// core's PCM voice.
+static mut OVERLAY_PCM: Option<&'static [u8]> = None;
 
 /// Parse the overlay file: "VXVO" u16 format u16 count, and for format 2
 /// u32 vpal_len u32 audi_len; then count x 16-byte entries {page, w, h,
@@ -255,11 +258,20 @@ fn parse_overlay(d: &'static [u8]) {
     if audi_len > 0 {
         at += (16 - at % 16) % 16;
         if at + audi_len <= d.len() { audio = Some(&d[at..at + audi_len]); }
+        at += audi_len;
+    }
+    // Yellow's trailer: "PIKA" u32 len, then the clip table.
+    let mut pcm = None;
+    at += (16 - at % 16) % 16;
+    if at + 8 <= d.len() && &d[at..at + 4] == b"PIKA" {
+        let len = u32_at(at + 4) as usize;
+        if at + 8 + len <= d.len() { pcm = Some(&d[at + 8..at + 8 + len]); }
     }
     unsafe {
         OVERLAY = pages;
         OVERLAY_PALETTES = palettes;
         OVERLAY_AUDIO = audio;
+        OVERLAY_PCM = pcm;
     }
 }
 
@@ -3015,6 +3027,11 @@ fn main() {
     let audio_programs: &'static [u8] = pak::audio_programs_of(audi);
     dlog(&format!("[pv] sound: {} KB of programs", audio_programs.len() / 1024));
     unsafe { voxel::init(gd_static, audi); voxel::load_save_file(); }
+    if let Some(pcm) = unsafe { OVERLAY_PCM } {
+        let ok = unsafe { voxel::scene().audio.set_pcm_bank(pcm) };
+        dlog(&format!("[pv] Pikachu's voice: {} KB, {}", pcm.len() / 1024,
+            if ok { "ready" } else { "refused" }));
+    }
 
 
     let map_ids: Vec<u32> = map_index.iter().map(|(id, _)| *id).collect();

@@ -135,6 +135,8 @@ export interface VoxelHost {
     flags: number,
   ): void;
   cry(bank: number, addr: number, engine: number, pitch: number, length: number): void;
+  /** Yellow: one of the voiced Pikachu clips, 1-based. */
+  pikaPcm?(clip: number): void;
   /** Boot-time: a sound engine's wave-instrument table. */
   audioWaves(engine: number, bank: number, addr: number): void;
   /** Boot-time: one drum program of a sound engine. */
@@ -330,6 +332,9 @@ export class RecorderHost implements VoxelHost {
   }
   cry(bank: number, addr: number, engine: number, pitch: number, length: number): void {
     this.op(VOX_OP.cry, bank, addr, engine, pitch, length);
+  }
+  pikaPcm(clip: number): void {
+    this.op(VOX_OP.pikaPcm, clip);
   }
   audioWaves(engine: number, bank: number, addr: number): void {
     this.op(VOX_OP.audioWaves, engine, bank, addr);

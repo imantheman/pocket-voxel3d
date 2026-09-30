@@ -155,7 +155,9 @@ export class TitleState implements GameState {
     this.yellow = gameVersion(game.data as { version?: string }) === "yellow";
   }
 
-  private audio(): { play?(s: string): void; playSfx?(s: string): void; playCry?(s: string): void } | undefined {
+  private audio():
+    | { play?(s: string): void; playSfx?(s: string): void; playCry?(s: string): void; playPikaClip?(n: number): void }
+    | undefined {
     return (this.game as { audio?: never }).audio;
   }
 
@@ -181,7 +183,8 @@ export class TitleState implements GameState {
         this.yTimer = 0;
       }
     } else if (this.yPhase === "bubble") {
-      if (++this.yTimer === 3) this.audio()?.playCry?.("PIKACHU");
+      // title.asm:146 ldpikacry e, PikachuCry1 -- the long "Pikachuuu"
+      if (++this.yTimer === 3) this.audio()?.playPikaClip?.(1);
       // WaitForSoundToFinish before the music: a cry's length, near enough
       if (this.yTimer >= 60) {
         this.audio()?.play?.("Music_TitleScreen");
@@ -219,7 +222,7 @@ export class TitleState implements GameState {
       if (t === 0 || t === 0x80 || t === 0x90) this.blinkAt = 0;
       if (this.blinkAt >= 0 && ++this.blinkAt > 9) this.blinkAt = -1;
       if (p.start || p.a) {
-        this.audio()?.playCry?.("PIKACHU");
+        this.audio()?.playPikaClip?.(11); // title.asm:180 PikachuCry11
         this.phase = "menu";
         this.index = 0;
       }

@@ -103,6 +103,7 @@ interface VoxelNative {
     flags: number,
   ): void;
   cry?(bank: number, addr: number, engine: number, pitch: number, length: number): void;
+  pikaPcm?(clip: number): void;
   audioWaves?(engine: number, bank: number, addr: number): void;
   audioDrum?(engine: number, drum: number, bank: number, addr: number): void;
 }
@@ -287,6 +288,9 @@ class QuickJsHost implements VoxelHost {
   }
   cry(bank: number, addr: number, engine: number, pitch: number, length: number): void {
     native.cry?.(bank, addr, engine, pitch, length);
+  }
+  pikaPcm(clip: number): void {
+    native.pikaPcm?.(clip);
   }
   audioWaves(engine: number, bank: number, addr: number): void {
     native.audioWaves?.(engine, bank, addr);

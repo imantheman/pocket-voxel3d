@@ -10672,6 +10672,7 @@ describe("Yellow: the Pikachu title", () => {
       play: (s: string) => sounds.push("music " + s),
       playSfx: (s: string) => sounds.push("sfx " + s),
       playCry: (s: string) => sounds.push("cry " + s),
+      playPikaClip: (n: number) => sounds.push("pika " + n),
     };
     const t = new TitleState(
       { input, pop() {}, data: { atlas, version: "yellow" }, hasSave: false, picPageFor: () => 9, audio } as never,
@@ -10701,7 +10702,8 @@ describe("Yellow: the Pikachu title", () => {
     expect(t.view().phase).toBe("press");
     expect(t.view().pics.map((q) => q.page)).toEqual([3, 6, 7]);
     for (let i = 0; i < 60; i++) t.update();
-    expect(sounds).toEqual(["sfx Intro_Crash", "sfx Intro_Whoosh", "cry PIKACHU", "music Music_TitleScreen"]);
+    // title.asm:146 PikachuCry1 on the bubble, :180 PikachuCry11 on START
+    expect(sounds).toEqual(["sfx Intro_Crash", "sfx Intro_Whoosh", "pika 1", "music Music_TitleScreen"]);
     // the copyright appears with the loop, not during the drop
     const line = t.view().tiles.filter((x) => x.y === 136);
     // (c)1995-1999: 1-9, 9, 5-, 1-9, 9, 9 (pokeyellow $e0 $e1 $e2 $e3 $e1 $e2 $ee)
@@ -10709,7 +10711,7 @@ describe("Yellow: the Pikachu title", () => {
     expect(line.map((x) => x.x)).toEqual(Array.from({ length: 16 }, (_, i) => 16 + i * 8));
     t.update();
     expect(t.view().phase).toBe("menu");
-    expect(sounds.at(-1)).toBe("cry PIKACHU");
+    expect(sounds.at(-1)).toBe("pika 11");
   });
 
   test("Pikachu blinks half, shut, half at the top of the clock", () => {

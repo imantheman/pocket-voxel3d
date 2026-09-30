@@ -1505,6 +1505,11 @@ export class Overworld implements ScriptWorld {
     (this.shell.audio as { playCry?: (s: string) => void }).playCry?.(species);
   }
 
+  /** pika_clip -> Yellow's voiced clip (PlayPikachuSoundClip). */
+  playPikaClip(clip: number): void {
+    (this.shell.audio as { playPikaClip?: (n: number) => void }).playPikaClip?.(clip);
+  }
+
   /** use_dig / use_teleport -> game.ts escapeWarp (the rope's landing). */
   escapeWarp(): boolean {
     return (this.shell as unknown as { escapeWarp?: () => boolean }).escapeWarp?.() ?? false;

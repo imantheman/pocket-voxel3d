@@ -70,6 +70,8 @@ export interface AudioManifest {
   cryHeaders?: Record<string, ProgramHeader>;
   cryData?: { bank: number; address: number };
   source?: string;
+  /** Yellow: how many voiced Pikachu clips the overlay carries. */
+  pikaCries?: number;
 }
 
 /** The AUDI payload's two halves (contracts/spec/voxel-spec.ts §VXPK_TAG). */
@@ -191,6 +193,11 @@ export class AudioBanks {
     const def = this.manifest.cries[species];
     const ref = def && this.ref(def.header);
     return ref ? { ...ref, pitch: def.pitch, length: def.length } : null;
+  }
+
+  /** Yellow's voiced Pikachu clips (0 for Red and Blue). */
+  get pikaClips(): number {
+    return this.manifest.pikaCries ?? 0;
   }
 
   /** Music.lua:339 playMap — the overworld theme label for a map id. */

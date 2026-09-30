@@ -12,7 +12,18 @@ import { mapScript, useScriptsFor } from "../voxelmon/game/world/mapscripts.ts";
 import { prizeWindows, YELLOW_PRIZE_WINDOWS } from "../voxelmon/game/world/gamecorner.ts";
 import { newMon } from "../voxelmon/game/battle/mon.ts";
 import * as Items from "../voxelmon/game/rules/items.ts";
-import { findFollower, happiness, modifyHappiness, pikachuStep, selectEmotion } from "../voxelmon/game/world/pikachu.ts";
+import {
+  findFollower,
+  happiness,
+  isStarterPikachu,
+  modifyHappiness,
+  pikachuStep,
+  selectEmotion,
+  talkRows,
+} from "../voxelmon/game/world/pikachu.ts";
+import { AudioDirector } from "../voxelmon/game/audio/music.ts";
+import { WildBattle, type BattleButton, type BattleInput } from "../voxelmon/game/battle/battle.ts";
+import { seqRng } from "../voxelmon/game/rng.ts";
 
 const genDir = join(import.meta.dir, "../dist/voxelmon/yellow/gen");
 const hasYellow = REQUIRED_MODULES.every((m) => existsSync(join(genDir, `${m}.json`)));
@@ -414,6 +425,71 @@ describe("Yellow: Pikachu follows you", () => {
     expect(selectEmotion({ party: [{ species: "PIKACHU", hp: 1 }] } as never, "POKEMON_TOWER_3F")).toBe(22);
     expect(selectEmotion({ party: [{ species: "PIKACHU", hp: 1 }], pikachuHappiness: 90, pikachuMood: 128 } as never, "ROUTE_1")).toBe(5);
     expect(selectEmotion({ party: [{ species: "PIKACHU", hp: 1 }], pikachuHappiness: 255, pikachuMood: 255 } as never, "ROUTE_1")).toBe(20);
+  });
+
+  test("it answers in its own voice, and only where the ROM gives it one", () => {
+    const save: any = { version: "yellow", party: [{ species: "PIKACHU", hp: 10 }], pikachuHappiness: 90, pikachuMood: 128 };
+    const w: any = { save, map: { id: "ROUTE_1" }, player: { facing: "left" } };
+    // emotion 5 -> pikaemotion_pcm PikachuCry31
+    expect(talkRows(w, -1)).toContainEqual(["pika_clip", 31]);
+    expect(talkRows(w, -1).some((r) => r[0] === "play_cry")).toBe(false);
+    // emotion 6 (the skull) says nothing at all
+    save.pikachuHappiness = 40;
+    save.pikachuMood = 128;
+    expect(selectEmotion(save, "ROUTE_1")).toBe(6);
+    expect(talkRows(w, -1).some((r) => r[0] === "pika_clip" || r[0] === "play_cry")).toBe(false);
+  });
+
+  test("the director plays a clip when the cook carried them, else the chip cry", () => {
+    const calls: string[] = [];
+    const host: any = {
+      pikaPcm: (n: number) => calls.push(`pcm ${n}`),
+      cry: () => calls.push("cry"),
+    };
+    const banks = (clips: number): any => ({
+      playable: true,
+      pikaClips: clips,
+      pins: () => [],
+      cry: () => ({ bank: 0, address: 0x4000, engine: 1, pitch: 0, length: 0 }),
+    });
+    const voiced = new AudioDirector(banks(42), host);
+    voiced.playPikaClip(11);
+    voiced.playPikaClip(99);
+    voiced.playPikaClip(0);
+    expect(calls).toEqual(["pcm 11", "pcm 42", "pcm 1"]);
+    calls.length = 0;
+    new AudioDirector(banks(0), host).playPikaClip(11);
+    expect(calls).toEqual(["cry"]);
+  });
+
+  test("only your own Pikachu is the starter, and only in Yellow", () => {
+    const save = { version: "yellow", player: { name: "YELLOW", id: 7 } };
+    expect(isStarterPikachu(save, { species: "PIKACHU", otName: "YELLOW", otId: 7 })).toBe(true);
+    expect(isStarterPikachu(save, { species: "PIKACHU" })).toBe(true);
+    expect(isStarterPikachu(save, { species: "PIKACHU", otName: "BILL", otId: 3 })).toBe(false);
+    expect(isStarterPikachu(save, { species: "RAICHU", otName: "YELLOW", otId: 7 })).toBe(false);
+    expect(isStarterPikachu({ ...save, version: "red" }, { species: "PIKACHU" })).toBe(false);
+  });
+
+  test.skipIf(!hasYellow)("sent out, it says its name (sleepy when asleep)", () => {
+    class Input implements BattleInput {
+      a = false;
+      isDown(b: BattleButton): boolean { return b === "a" && this.a; }
+      wasPressed(b: BattleButton): boolean { return b === "a" && this.a; }
+    }
+    for (const [status, clip] of [[undefined, "pika:11"], ["SLP", "pika:37"]] as const) {
+      const pika = newMon(yellow!, "PIKACHU", 5);
+      if (status) (pika as any).status = status;
+      const save: any = { version: "yellow", party: [pika], inventory: {}, player: { name: "YELLOW", rival: "BLUE" } };
+      const b = new WildBattle(yellow!, save, seqRng(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), "PIDGEY", 3);
+      b.enter();
+      const input = new Input();
+      for (let i = 0; i < 4000 && b.phase === "messages"; i++) {
+        input.a = i % 2 === 0;
+        b.update(input);
+      }
+      expect(b.audioCues).toContain(clip);
+    }
   });
 
   test.skipIf(!hasYellow)("Red has no follower", () => {

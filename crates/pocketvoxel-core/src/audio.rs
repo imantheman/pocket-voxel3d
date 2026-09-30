@@ -1358,7 +1358,53 @@ enum Cmd {
         pitch: i32,
         length: u32,
     },
+    Pcm(u32),
 }
+
+/// Yellow's voiced Pikachu clips as the host hands them over (the overlay's
+/// PIKA chunk body, tools/cook3ds.ts writeOverlay):
+///
+///   u16 count  u16 rate  count x { u32 offset, u32 bytes }  then the bits
+///
+/// offsets from the start of the body. Each clip is the ROM's 1-bit PCM,
+/// MSB first (audio/pikachu_pcm.asm LoadNextSoundClipSample `and $80`).
+#[derive(Clone, Debug, Default)]
+struct PcmBank {
+    bytes: Vec<u8>,
+    count: usize,
+    rate: u32,
+}
+
+impl PcmBank {
+    /// Clip `n` (1-based): its bits, or None past the table or the body.
+    fn clip(&self, n: u32) -> Option<(usize, usize)> {
+        let i = (n as usize).checked_sub(1)?;
+        if i >= self.count {
+            return None;
+        }
+        let e = 4 + i * 8;
+        let b = &self.bytes;
+        let off = u32::from_le_bytes([b[e], b[e + 1], b[e + 2], b[e + 3]]) as usize;
+        let len = u32::from_le_bytes([b[e + 4], b[e + 5], b[e + 6], b[e + 7]]) as usize;
+        (off.checked_add(len)? <= b.len() && len > 0).then_some((off, len))
+    }
+}
+
+/// The clip playing: its bits in the bank, and where the read head is in
+/// source samples, Q16.
+#[derive(Clone, Copy, Debug)]
+struct PcmVoice {
+    start: usize,
+    samples: u64,
+    pos: u64,
+}
+
+/// A clip bit's level in mix units at full rAUDVOL: +/- half of full scale.
+/// The Game Boy toggles channel 3's level per bit with everything else off,
+/// so the clip is a lone channel at max swing; the reference plays it at
+/// 0.75 of a -1..1 output (RomExtractor.lua:2156), louder than any one chip
+/// channel ever gets. Half splits the two.
+const PCM_LEVEL: i32 = MIX_CLAMP / 2;
 
 /// A tick emits a handful of audio ops at most. A host that never renders
 /// never sounds, and its queue must not grow without bound, so the oldest
@@ -1386,6 +1432,9 @@ pub struct Audio {
     /// rAUDVOL level, AUDIO_FADE_LEVELS = full.
     level: u32,
     pending: Vec<Cmd>,
+    /// Yellow's Pikachu clips (empty for Red and Blue) and the one playing.
+    pcm_bank: PcmBank,
+    pcm: Option<PcmVoice>,
 }
 
 impl Default for Audio {
@@ -1407,6 +1456,42 @@ impl Audio {
             fade: None,
             level: AUDIO_FADE_LEVELS,
             pending: Vec::new(),
+            pcm_bank: PcmBank::default(),
+            pcm: None,
+        }
+    }
+
+    /// Hand over Yellow's Pikachu clips (see [`PcmBank`]). Boot-time host
+    /// configuration, like the rate: a reset keeps it. A malformed table is
+    /// refused whole and `pikaPcm` stays a no-op.
+    pub fn set_pcm_bank(&mut self, body: &[u8]) -> bool {
+        self.pcm = None;
+        self.pcm_bank = PcmBank::default();
+        if body.len() < 4 {
+            return false;
+        }
+        let count = u16::from_le_bytes([body[0], body[1]]) as usize;
+        let rate = u16::from_le_bytes([body[2], body[3]]) as u32;
+        if count == 0 || rate == 0 || body.len() < 4 + count * 8 {
+            return false;
+        }
+        self.pcm_bank = PcmBank { bytes: body.to_vec(), count, rate };
+        true
+    }
+
+    /// How many clips `pikaPcm` can name (0 without a bank).
+    pub fn pcm_clips(&self) -> usize {
+        self.pcm_bank.count
+    }
+
+    /// Whether a clip is sounding.
+    pub fn pcm_playing(&self) -> bool {
+        self.pcm.is_some()
+    }
+
+    fn play_pcm(&mut self, n: u32) {
+        if let Some((start, len)) = self.pcm_bank.clip(n) {
+            self.pcm = Some(PcmVoice { start, samples: len as u64 * 8, pos: 0 });
         }
     }
 
@@ -1465,6 +1550,11 @@ impl Audio {
                     self.pin_drum(a(0) as u32, a(1) as u32, a(2) as u32, a(3) as u32);
                 }
             }
+            op::PIKA_PCM => {
+                if !args.is_empty() && a(0) > 0 {
+                    self.queue(Cmd::Pcm(a(0) as u32));
+                }
+            }
             _ => return false,
         }
         true
@@ -1507,6 +1597,7 @@ impl Audio {
                     pitch,
                     length,
                 } => self.play_cry(programs, bank, address, engine, pitch, length),
+                Cmd::Pcm(n) => self.play_pcm(n),
             }
         }
     }
@@ -1734,6 +1825,7 @@ impl Audio {
     pub fn stop_all(&mut self) {
         self.music = None;
         self.effect = None;
+        self.pcm = None;
         self.ducked = false;
         self.fade = None;
         self.level = AUDIO_FADE_LEVELS;
@@ -1769,17 +1861,49 @@ impl Audio {
         let rate = self.rate;
         let cap = rate.saturating_mul(AUDIO_EFFECT_MAX_SECONDS);
         // Split borrows: the tables are read while the programs are stepped.
+        // Source samples per output frame, Q16 (22050 over 11025 = 2.0).
+        let pcm_step = if rate > 0 {
+            ((self.pcm_bank.rate as u64) << 16) / rate as u64
+        } else {
+            0
+        };
         let Audio {
             tables,
             music,
             effect,
             ducked,
             level,
+            pcm_bank,
+            pcm,
             ..
         } = self;
 
         // One iteration per output FRAME: [left, right].
         for frame in out.chunks_exact_mut(2) {
+            // A Pikachu clip plays alone: PlayPikachuSoundClip runs with
+            // interrupts off, so the sound engine does not step and the song
+            // and any effect pick up where they were once it ends. Each output
+            // frame is the mean of the source bits it spans.
+            if let Some(voice) = pcm.as_mut() {
+                let from = voice.pos >> 16;
+                let to = ((voice.pos + pcm_step) >> 16).clamp(from + 1, voice.samples);
+                let mut ones = 0i64;
+                for s in from..to {
+                    let byte = pcm_bank.bytes[voice.start + (s >> 3) as usize];
+                    ones += ((byte >> (7 - (s & 7))) & 1) as i64;
+                }
+                let n = (to - from) as i64;
+                let value = ((2 * ones - n) * (PCM_LEVEL * AUDIO_FADE_LEVELS as i32) as i64 / n) as i32;
+                let exact = value as f64 / (MIX_CLAMP as f64 * AUDIO_FADE_LEVELS as f64);
+                let sample = quantize(value, || exact);
+                frame[0] = sample;
+                frame[1] = sample;
+                voice.pos += pcm_step;
+                if to >= voice.samples {
+                    *pcm = None;
+                }
+                continue;
+            }
             let (mut left, mut right) = (0i32, 0i32);
 
             // A fanfare pauses the song rather than mixing under it, so the
@@ -1885,6 +2009,53 @@ fn quantize(value: i32, exact: impl FnOnce() -> f64) -> i16 {
 mod tests {
     use super::*;
     use alloc::vec;
+
+    /// A PIKA body with one clip per entry of `clips`.
+    fn pcm_body(rate: u16, clips: &[&[u8]]) -> Vec<u8> {
+        let mut head = Vec::new();
+        head.extend_from_slice(&(clips.len() as u16).to_le_bytes());
+        head.extend_from_slice(&rate.to_le_bytes());
+        let mut at = 4 + clips.len() * 8;
+        let mut bits = Vec::new();
+        for c in clips {
+            head.extend_from_slice(&(at as u32).to_le_bytes());
+            head.extend_from_slice(&(c.len() as u32).to_le_bytes());
+            bits.extend_from_slice(c);
+            at += c.len();
+        }
+        head.extend_from_slice(&bits);
+        head
+    }
+
+    #[test]
+    fn a_pikachu_clip_plays_its_bits_and_holds_the_song() {
+        let programs = blank_programs();
+        let mut audio = Audio::new();
+        assert!(audio.set_rate(11025));
+        // clip 1: all on then all off (16 bits = 8 frames at half rate);
+        // clip 2: alternating bits, which average to silence
+        assert!(audio.set_pcm_bank(&pcm_body(22050, &[&[0xff, 0x00], &[0xaa]])));
+        assert_eq!(audio.pcm_clips(), 2);
+        assert!(audio.op(op::PIKA_PCM, &[1]));
+        let out = audio.render_vec(&programs, 10);
+        let half = (32767 / 2) as i16;
+        for f in 0..4 {
+            assert!((out[f * 2] - half).abs() <= 1, "frame {f}: {}", out[f * 2]);
+            assert_eq!(out[f * 2], out[f * 2 + 1]);
+        }
+        for f in 4..8 {
+            assert!((out[f * 2] + half).abs() <= 1, "frame {f}: {}", out[f * 2]);
+        }
+        assert!(!audio.pcm_playing());
+        assert_eq!(&out[16..], &[0, 0, 0, 0]);
+        audio.op(op::PIKA_PCM, &[2]);
+        assert!(audio.render_vec(&programs, 4).iter().all(|&s| s == 0));
+        // past the table, or with no bank: nothing
+        audio.op(op::PIKA_PCM, &[3]);
+        audio.render_vec(&programs, 1);
+        assert!(!audio.pcm_playing());
+        assert!(!Audio::new().set_pcm_bank(&[1, 0]));
+    }
 
     /// Two banks of program space: slot 0 and slot 1.
     fn blank_programs() -> Vec<u8> {

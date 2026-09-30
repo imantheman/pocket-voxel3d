@@ -230,6 +230,7 @@ int qjs_register_voxel(JSContext *ctx) {
     add_num(ctx, o, "cry",      22, 5);
     add_num(ctx, o, "audioWaves",23,3);
     add_num(ctx, o, "audioDrum",24, 4);
+    add_num(ctx, o, "pikaPcm",  86, 1);
 
     JS_SetPropertyStr(ctx, g, "voxel", o);
     JS_FreeValue(ctx, g);

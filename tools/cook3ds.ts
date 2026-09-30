@@ -162,12 +162,15 @@ export function versionPages(gd: unknown): number[] {
  *   count x { u16 page, w, h, kind, frames, 0; u32 frameLen }
  *   then each page's texels (frameLen * frames), 16-aligned
  *   then the VPAL section verbatim (16-aligned), then AUDI verbatim
+ *   then, Yellow only (16-aligned): "PIKA" u32 len + the importer's
+ *   gen/pika_cries.bin, the voiced Pikachu clips (a trailer, so a host
+ *   that predates it reads the rest unchanged)
  *
  * Everything is copied byte for byte out of a cooked pak (resolving a
  * shared page against common.vxat, as pak.rs does), so the overlay is
  * exactly what this game's own cook of the set carries.
  */
-export function writeOverlay(paksDir: string, pages: number[], out: string): number {
+export function writeOverlay(paksDir: string, pages: number[], out: string, pika?: Buffer): number {
   const pakName = readFileSync(join(paksDir, "index.txt"), "utf8").split("\n")[0]!.split(" ")[1]!;
   const d = readFileSync(join(paksDir, `${pakName}.vxpak`));
   const common = existsSync(join(paksDir, "common.vxat")) ? readFileSync(join(paksDir, "common.vxat")) : null;
@@ -216,7 +219,14 @@ export function writeOverlay(paksDir: string, pages: number[], out: string): num
   head.writeUInt32LE(audi.length, 12);
   const parts: Buffer[] = [head, ...entries];
   let len = 16 + entries.length * 16;
-  for (const b of [...blobs, vpal, audi]) {
+  const tail: Buffer[] = [];
+  if (pika && pika.length > 0) {
+    const tag = Buffer.alloc(8);
+    tag.write("PIKA", 0, "latin1");
+    tag.writeUInt32LE(pika.length, 4);
+    tail.push(Buffer.concat([tag, pika]));
+  }
+  for (const b of [...blobs, vpal, audi, ...tail]) {
     const pad = (16 - (len % 16)) % 16;
     parts.push(Buffer.alloc(pad), b);
     len += pad + b.length;
@@ -353,8 +363,12 @@ export async function cook3ds(only?: string[]): Promise<number> {
   // This game's own pages, palettes and sound, which the other game's
   // cook of the shared set would get wrong.
   const own = versionPages(merged);
-  const n = writeOverlay(PAKS, own, join(PAKS, files.overlay));
-  console.log(`  ${files.overlay}: pages ${own.join(", ")} + palettes + sound (${n} bytes)`);
+  const pikaPath = join(GEN_DIR, "pika_cries.bin");
+  const pika = existsSync(pikaPath) ? readFileSync(pikaPath) : undefined;
+  const n = writeOverlay(PAKS, own, join(PAKS, files.overlay), pika);
+  console.log(
+    `  ${files.overlay}: pages ${own.join(", ")} + palettes + sound${pika ? " + Pikachu's voice" : ""} (${n} bytes)`,
+  );
 
   // After the overlay has its copy of the sound: what the 3DS never reads.
   const cut = stripUnread(PAKS);

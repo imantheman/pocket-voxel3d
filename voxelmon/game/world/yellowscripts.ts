@@ -174,7 +174,7 @@ function labOnStep(ow: any, save: any): ScriptRow[] | null {
     ["play_music", MEET_RIVAL],
     ["move_npc_to", "SPRITE_BLUE", 4, 11],
     ["hide_object", "OAKS_LAB", "SPRITE_BLUE"],
-    ["play_cry", "PIKACHU"],
+    ["pika_clip", 2], // OaksLab.asm:1096 PikachuCry2
     ["show_text", "_OaksLabPikachuDislikesPokeballsText1"],
     ["show_text", "_OaksLabPikachuDislikesPokeballsText2"],
   ] as ScriptRow[];

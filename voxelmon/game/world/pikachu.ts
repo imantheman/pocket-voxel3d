@@ -51,6 +51,17 @@ const HAPPINESS_CHANGES: Record<string, { d: [number, number, number]; mood: num
   TRADE: { d: [-10, -10, -20], mood: 0x00 },
 };
 
+/** IsThisPartyMonStarterPikachu: Yellow, a Pikachu, and yours (the OT
+ * name and id; a mon with neither is one this port gave you). */
+export function isStarterPikachu(
+  save: { version?: string; player?: { name?: string; id?: number } },
+  mon: { species: string; otName?: string; otId?: number } | undefined,
+): boolean {
+  if (save.version !== "yellow" || mon?.species !== "PIKACHU") return false;
+  if (mon.otName === undefined && mon.otId === undefined) return true;
+  return mon.otName === save.player?.name && mon.otId === save.player?.id;
+}
+
 /** Your own Pikachu in the party (the starter's OT check), healthy if asked. */
 export function starterInParty(save: PikaSave, needHealthy = false) {
   // gen1recomp's approximation of the OT check: any Pikachu stands in
@@ -302,11 +313,16 @@ function idleTick(_w: PikaWorld, npc: PikachuNPC, rand: (n: number) => number): 
 
 /** PikachuEmotionTable, each entry's bubble (index into the Yellow sheet,
  * 1-based as the emote verb takes it: 1 ! 2 ? 3 smile 4 skull 5 heart
- * 6 bolt 7 zzz 8 fish) and whether it turns its back. */
-const EMOTIONS: Record<number, { bubble?: number; turnAway?: boolean }> = {
-  2: { bubble: 3 }, 6: { bubble: 4 }, 9: { bubble: 4 }, 10: { bubble: 5 }, 11: { bubble: 7 },
-  14: { bubble: 6 }, 19: { bubble: 5 }, 20: { bubble: 5 }, 21: { bubble: 8 }, 24: { bubble: 1 },
-  25: { bubble: 6 }, 26: { bubble: 7 }, 30: { bubble: 5, turnAway: true },
+ * 6 bolt 7 zzz 8 fish), whether it turns its back, and its pikaemotion_pcm
+ * clip (none = it says nothing). */
+const EMOTIONS: Record<number, { bubble?: number; turnAway?: boolean; clip?: number }> = {
+  2: { bubble: 3, clip: 35 }, 3: { clip: 40 }, 4: { clip: 29 }, 5: { clip: 31 }, 6: { bubble: 4 },
+  7: { clip: 1 }, 8: { clip: 39 }, 9: { bubble: 4, clip: 6 }, 10: { bubble: 5, clip: 5 },
+  11: { bubble: 7, clip: 37 }, 14: { bubble: 6, clip: 10 }, 15: { clip: 34 }, 16: { clip: 33 },
+  17: { clip: 13 }, 19: { bubble: 5, clip: 33 }, 20: { bubble: 5, clip: 5 }, 21: { bubble: 8 },
+  22: { clip: 4 }, 23: { clip: 19 }, 24: { bubble: 1 }, 25: { bubble: 6, clip: 35 },
+  26: { bubble: 7, clip: 37 }, 27: { clip: 9 }, 28: { clip: 15 }, 29: { clip: 5 },
+  30: { bubble: 5, turnAway: true, clip: 5 }, 31: { clip: 19 }, 32: { clip: 26 },
 };
 
 /** GetPikaPicAnimationScriptIndex: mood picks the column, happiness the row. */
@@ -370,7 +386,7 @@ export function talkRows(w: PikaWorld, picPage: number): ScriptRow[] {
   const hold = (PIKAPIC_DUR[script] ?? 40) * 3;
   const rows: ScriptRow[] = [];
   if (e.turnAway) rows.push(["face_object", PIKA_NAME, w.player.facing] as unknown as ScriptRow);
-  rows.push(["play_cry", "PIKACHU"] as unknown as ScriptRow);
+  if (e.clip) rows.push(["pika_clip", e.clip] as unknown as ScriptRow);
   // the pikapic box: the front pic over the map (PlacePikapicTextBoxBorder)
   if (picPage >= 0) rows.push(["pic", picPage, 56, 40, 48, 48] as unknown as ScriptRow);
   rows.push(

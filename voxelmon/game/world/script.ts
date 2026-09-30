@@ -741,6 +741,14 @@ function* play_cry(ctx: ScriptContext, ...args: unknown[]): Generator<void, void
   (ctx.world as unknown as { playCry?: (species: string) => void }).playCry?.(String(args[0]));
 }
 
+/**
+ * Yellow's PlayPikachuSoundClip from a script: `ldpikacry e, PikachuCryN`
+ * then the call, as OaksLab and the follower do. The clip number is 1-based.
+ */
+function* pika_clip(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  (ctx.world as unknown as { playPikaClip?: (n: number) => void }).playPikaClip?.(Number(args[0]) || 1);
+}
+
 function* use_fly(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
   const w = ctx.world as unknown as ScriptWorld & {
     openFlyPicker?: (monName: string, done: () => void) => void;
@@ -1249,6 +1257,7 @@ const VERBS: Record<string, Verb> = {
   use_dig,
   use_teleport,
   play_cry,
+  pika_clip,
   random_text,
   use_strength,
   give_pokemon,

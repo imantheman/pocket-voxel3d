@@ -2921,6 +2921,11 @@ function notTime(data, save) {
 This isn't the
 time to use that!`, { player: save?.player?.name ?? "RED" });
 }
+function isOwn(save, mon) {
+  if (mon.otName === undefined && mon.otId === undefined)
+    return true;
+  return mon.otName === save?.player?.name && mon.otId === save?.player?.id;
+}
 function noEffect(data) {
   return itemText(data, "_ItemUseNoEffectText", `It won't have any
 effect.`);
@@ -3072,6 +3077,14 @@ is revitalized!`, { name: monName(data, target) })],
   if (STONES.has(itemId)) {
     if (!target)
       return { kind: "failed", msgs: [noEffect(data)] };
+    if (data?.version === "yellow" && target.species === "PIKACHU" && isOwn(save, target)) {
+      return {
+        kind: "failed",
+        msgs: [itemText(data, "_RefusingText", `{RAM:wNameBuffer}
+is refusing!`, { name: monName(data, target) })],
+        refused: true
+      };
+    }
     for (const evo of data?.pokemon?.[target.species]?.evolutions ?? []) {
       if (evo.method === "ITEM" && evo.item === itemId) {
         return { kind: "consumed", msgs: [], evolveTo: evo.species };
@@ -5007,7 +5020,7 @@ $${this.payDay}!`);
       this.phase = "messages";
       return;
     }
-    if (this.result !== "lose" && !firstHealthy(this.save.party)) {
+    if (this.result !== "lose" && !this.demo && !firstHealthy(this.save.party)) {
       console.warn(`battle finished ${this.result} with no healthy party; forcing blackout`);
       this.result = "lose";
     }
@@ -6861,10 +6874,10 @@ var COIN_CAP = 9999;
 var COIN_SALE_LIMIT = 9990;
 var COINS_PER_SALE = 50;
 var COIN_SALE_PRICE = 1000;
-function coinClerkRows() {
+function coinClerkRows(p = "_GameCornerClerk1") {
   return [
     ["face_player"],
-    ["ask", "_GameCornerClerk1DoYouNeedSomeGameCoinsText"],
+    ["ask", `${p}DoYouNeedSomeGameCoinsText`],
     ["jump_if_false", "no"],
     ["check_item", "COIN_CASE"],
     ["jump_if_false", "nocase"],
@@ -6874,19 +6887,19 @@ function coinClerkRows() {
     ["jump_if_false", "poor"],
     ["take_money", COIN_SALE_PRICE],
     ["give_coins", COINS_PER_SALE],
-    ["show_text", "_GameCornerClerk1ThanksHereAre50CoinsText"],
+    ["show_text", `${p}ThanksHereAre50CoinsText`],
     ["jump", "end"],
     ["label", "no"],
-    ["show_text", "_GameCornerClerk1PleaseComePlaySometimeText"],
+    ["show_text", `${p}PleaseComePlaySometimeText`],
     ["jump", "end"],
     ["label", "nocase"],
-    ["show_text", "_GameCornerClerk1DontHaveCoinCaseText"],
+    ["show_text", `${p}DontHaveCoinCaseText`],
     ["jump", "end"],
     ["label", "full"],
-    ["show_text", "_GameCornerClerk1CoinCaseIsFullText"],
+    ["show_text", `${p}CoinCaseIsFullText`],
     ["jump", "end"],
     ["label", "poor"],
-    ["show_text", "_GameCornerClerk1CantAffordTheCoinsText"]
+    ["show_text", `${p}CantAffordTheCoinsText`]
   ];
 }
 function coinGiverRows(g) {
@@ -6939,6 +6952,32 @@ var COIN_GIVERS = {
     already: "_GameCornerGentlemanCloselyWatchTheReelsText"
   }
 };
+var YELLOW_COIN_GIVERS = {
+  FISHING_GURU1: {
+    flag: "EVENT_GOT_10_COINS",
+    amount: 10,
+    ask: "_GameCornerFishingGuru1WantToPlayText",
+    received: "_GameCornerFishingGuru1Received10CoinsText",
+    full: "_GameCornerFishingGuru1DontNeedMyCoinsText",
+    already: "_GameCornerFishingGuru1WinsComeAndGoText"
+  },
+  MIDDLE_AGED_MAN2: {
+    flag: "EVENT_GOT_20_COINS_2",
+    amount: 20,
+    ask: "_GameCornerMiddleAgedMan2WantSomeCoinsText",
+    received: "_GameCornerMiddleAgedMan2Received20CoinsText",
+    full: "_GameCornerMiddleAgedMan2YouHaveLotsOfCoinsText",
+    already: "_GameCornerMiddleAgedMan2INeedMoreCoinsText"
+  },
+  FISHING_GURU2: {
+    flag: "EVENT_GOT_20_COINS",
+    amount: 20,
+    ask: "_GameCornerFishingGuru2ThrowingMeOffText",
+    received: "_GameCornerFishingGuru2Received20CoinsText",
+    full: "_GameCornerFishingGuru2YouGotYourOwnCoinsText",
+    already: "_GameCornerFishingGuru2CloselyWatchTheReelsText"
+  }
+};
 var PRIZE_WINDOWS = [
   [
     { kind: "mon", species: "ABRA", level: 9, cost: 180 },
@@ -6969,8 +7008,22 @@ var BLUE_PRIZE_WINDOWS = [
   ],
   PRIZE_WINDOWS[2]
 ];
+var YELLOW_PRIZE_WINDOWS = [
+  [
+    { kind: "mon", species: "ABRA", level: 15, cost: 230 },
+    { kind: "mon", species: "VULPIX", level: 18, cost: 1000 },
+    { kind: "mon", species: "WIGGLYTUFF", level: 22, cost: 2680 }
+  ],
+  [
+    { kind: "mon", species: "SCYTHER", level: 30, cost: 6500 },
+    { kind: "mon", species: "PINSIR", level: 30, cost: 6500 },
+    { kind: "mon", species: "PORYGON", level: 26, cost: 9999 }
+  ],
+  PRIZE_WINDOWS[2]
+];
 function prizeWindows(data) {
-  return gameVersion(data) === "blue" ? BLUE_PRIZE_WINDOWS : PRIZE_WINDOWS;
+  const v = gameVersion(data);
+  return v === "blue" ? BLUE_PRIZE_WINDOWS : v === "yellow" ? YELLOW_PRIZE_WINDOWS : PRIZE_WINDOWS;
 }
 function prizeCounterRows(window) {
   return [
@@ -7206,6 +7259,499 @@ function saffronGateScript(gate) {
   };
 }
 
+// voxelmon/game/world/yellowscripts.ts
+var MEET_RIVAL = "Music_MeetRival";
+function relabel(rows, swaps) {
+  return rows.map((r) => r[0] === "show_text" && typeof r[1] === "string" && swaps[r[1]] ? ["show_text", swaps[r[1]], ...r.slice(2)] : r);
+}
+function palletOnStep(ow, save) {
+  const f = save?.flags ?? {};
+  if (f.EVENT_FOLLOWED_OAK_INTO_LAB || f.EVENT_GOT_STARTER)
+    return null;
+  const p = ow?.player;
+  if (p?.cellY !== 0)
+    return null;
+  const px2 = p.cellX ?? 10;
+  const OAK_STEPS = [
+    ...Array(Math.max(0, px2 - 10)).fill("left"),
+    ...Array(6).fill("down"),
+    "left",
+    ...Array(5).fill("down"),
+    "right",
+    "right",
+    "right",
+    "up"
+  ];
+  return [
+    ["play_music", "Music_MeetProfOak"],
+    ["show_text", "_PalletTownOakHeyWaitDontGoOutText"],
+    ["emote", "player", "shock", 50],
+    ["place_npc", "SPRITE_OAK", 10, 4, "up"],
+    ["move_npc_to", "SPRITE_OAK", px2, 1],
+    ["face_object", "SPRITE_OAK", "up"],
+    ["show_text", "_PalletTownOakThatWasCloseText"],
+    ["face_object", "SPRITE_OAK", px2 === 10 ? "right" : "left"],
+    ["old_man_demo", "PIKACHU", 5, "PROF.OAK"],
+    ["face_object", "SPRITE_OAK", "up"],
+    ["show_text", "_PalletTownOakWhewText"],
+    ["show_text", "_PalletTownOakComeWithMe"],
+    ["escort_steps", "SPRITE_OAK", OAK_STEPS],
+    ["warp", "OAKS_LAB", 5, 11, "up"],
+    ["place_npc", "SPRITE_OAK", 5, 2, "down"],
+    ["move_player", "up", 8],
+    ["set_flag", "EVENT_FOLLOWED_OAK_INTO_LAB"],
+    ["set_flag", "EVENT_FOLLOWED_OAK_INTO_LAB_2"],
+    ["show_text", "_OaksLabRivalFedUpWithWaitingText"],
+    ["show_text", "_OaksLabOakChooseMonText"],
+    ["show_text", "_OaksLabRivalWhatAboutMeText"],
+    ["show_text", "_OaksLabOakBePatientText"],
+    ["set_flag", "EVENT_OAK_ASKED_TO_CHOOSE_MON"]
+  ];
+}
+function eeveeBall(ow, save) {
+  const f = save?.flags ?? {};
+  if (f.EVENT_GOT_STARTER)
+    return null;
+  if (!f.EVENT_OAK_ASKED_TO_CHOOSE_MON)
+    return [["show_text", "_OaksLabThatsAPokeball"]];
+  const below = (ow?.player?.cellY ?? 4) === 4;
+  return [
+    ["emote", "SPRITE_BLUE", "shock"],
+    ...below ? [
+      ["walk_npc", "SPRITE_BLUE", ["down", "right", "right"]],
+      ["move_player", "right", 2],
+      ["walk_npc", "SPRITE_BLUE", ["right"]]
+    ] : [["move_npc_to", "SPRITE_BLUE", 7, 4]],
+    ["face_object", "SPRITE_BLUE", "up"],
+    ["hide_object", "OAKS_LAB", "OAKSLAB_EEVEE_POKE_BALL"],
+    ["set_field", "rivalStarter", 1],
+    ["show_text", "_OaksLabRivalTakesText1"],
+    ["play_sound", "Get_Key_Item"],
+    ["show_text", "_OaksLabRivalTakesText2"],
+    ["show_text", "_OaksLabRivalTakesText3"],
+    ["show_text", "_OaksLabRivalTakesText4"],
+    ["show_text", "_OaksLabRivalTakesText5"],
+    below ? ["walk_npc", "player", ["left", "down", "left", "left", "left", "up", "up"]] : ["walk_npc", "player", ["left"]],
+    ["face_object", "player", "up"],
+    ["face_object", "SPRITE_OAK", "down"],
+    ["show_text", "_OaksLabOakGivesText"],
+    ["play_sound", "Get_Key_Item"],
+    ["show_text", "_OaksLabReceivedText", { "RAM:wNameBuffer": ow?.data?.pokemon?.PIKACHU?.name ?? "PIKACHU" }],
+    ["give_pokemon", "PIKACHU", 5, true],
+    ["set_flag", "EVENT_GOT_STARTER"],
+    ["set_flag", "EVENT_CHOSE_PIKACHU"]
+  ];
+}
+function labOnStep(ow, save) {
+  const f = save?.flags ?? {};
+  const p = ow?.player;
+  const x = p?.cellX ?? 5;
+  const y = p?.cellY ?? 0;
+  if (y < 6)
+    return null;
+  if (f.EVENT_FOLLOWED_OAK_INTO_LAB && !f.EVENT_GOT_STARTER) {
+    return [
+      ["face_object", "SPRITE_OAK", "down"],
+      ["face_object", "SPRITE_BLUE", "down"],
+      ["show_text", "_OaksLabOakDontGoAwayYetText"],
+      ["move_player", "up", 1]
+    ];
+  }
+  if (!f.EVENT_GOT_STARTER || f.EVENT_BATTLED_RIVAL_IN_OAKS_LAB)
+    return null;
+  const free = ([cx, cy]) => {
+    try {
+      return ow.map.isWalkableCell(cx, cy) && !ow.npcAtCell?.(cx, cy);
+    } catch {
+      return false;
+    }
+  };
+  const target2 = [[x, y - 1], [x - 1, y], [x + 1, y], [x, y + 1]].find(free);
+  const facing = !target2 ? "up" : target2[1] < y ? "down" : target2[1] > y ? "up" : target2[0] < x ? "right" : "left";
+  return [
+    ["face_object", "player", "up"],
+    ["play_music", MEET_RIVAL],
+    ["show_text", "_OaksLabRivalIllTakeYouOnText"],
+    ...target2 ? [["move_npc_to", "SPRITE_BLUE", target2[0], target2[1]]] : [],
+    ["face_object", "SPRITE_BLUE", facing],
+    ["start_battle", "trainer", "OPP_RIVAL1", 1, { loseable: true }],
+    ["heal_party"],
+    ["set_flag", "EVENT_BATTLED_RIVAL_IN_OAKS_LAB"],
+    ["jump_if_false", "lost"],
+    ["set_field", "rivalStarter", 2],
+    ["jump", "leave"],
+    ["label", "lost"],
+    ["set_field", "rivalStarter", 3],
+    ["label", "leave"],
+    ["wait", 20],
+    ["show_text", "_OaksLabRivalSmellYouLaterText"],
+    ["play_music", MEET_RIVAL],
+    ["move_npc_to", "SPRITE_BLUE", 4, 11],
+    ["hide_object", "OAKS_LAB", "SPRITE_BLUE"],
+    ["play_cry", "PIKACHU"],
+    ["show_text", "_OaksLabPikachuDislikesPokeballsText1"],
+    ["show_text", "_OaksLabPikachuDislikesPokeballsText2"]
+  ];
+}
+var OLD_MAN2 = "VIRIDIANCITY_OLD_MAN2";
+function oldMan2Rows(ow) {
+  const inGap = ow?.player?.cellX === 19;
+  return [
+    ["show_text", "_ViridianCityOldManHadMyCoffeeNowText"],
+    ["old_man_demo", "fail"],
+    ["set_flag", "EVENT_COMPLETED_CATCH_TRAINING"],
+    ["show_text", "_ViridianCityOldManLosingMyTouchText"],
+    ["walk_npc", OLD_MAN2, inGap ? ["down", "down", "down", "down", "down", "down"] : ["right"]],
+    ["hide_object", "VIRIDIAN_CITY", OLD_MAN2]
+  ];
+}
+function viridianOnStep(ow, save) {
+  const gym = lockedDoorStep(ow, [[32, 8]], !hasSevenBadges(save), "_ViridianCityGymLockedText");
+  if (gym)
+    return gym;
+  const f = save?.flags ?? {};
+  const x = ow?.player?.cellX;
+  const y = ow?.player?.cellY;
+  if (f.EVENT_GOT_POKEDEX) {
+    const t = (save.objectToggles ??= {}).VIRIDIAN_CITY ??= {};
+    if (t.VIRIDIANCITY_OLD_MAN_SLEEPY !== false || t.VIRIDIANCITY_OLD_MAN !== false) {
+      t.VIRIDIANCITY_OLD_MAN_SLEEPY = false;
+      t.VIRIDIANCITY_OLD_MAN = false;
+      ow.setObjectHidden?.("VIRIDIANCITY_OLD_MAN_SLEEPY", true);
+      ow.setObjectHidden?.("VIRIDIANCITY_OLD_MAN", true);
+      if (!f.EVENT_COMPLETED_CATCH_TRAINING) {
+        t[OLD_MAN2] = true;
+        ow.setObjectHidden?.(OLD_MAN2, false);
+      }
+    }
+    if (!f.EVENT_COMPLETED_CATCH_TRAINING && x === 19 && y === 9 && ow.findNpc?.(OLD_MAN2)) {
+      return [
+        ["face_object", OLD_MAN2, "right"],
+        ["face_object", "player", "left"],
+        ...oldMan2Rows(ow)
+      ];
+    }
+    return null;
+  }
+  if (x === 19 && y === 9) {
+    return [
+      ["show_text", "_ViridianCityOldManSleepyPrivatePropertyText"],
+      ["move_player", "down", 1]
+    ];
+  }
+  return null;
+}
+function giftRows(o) {
+  return [
+    ["ask", o.ask],
+    ["jump_if_false", "declined"],
+    ["check_party_room"],
+    ["jump_if_false", "full"],
+    ["play_sound", "Get_Key_Item"],
+    ["give_pokemon", o.species, o.level],
+    ["set_flag", o.flag],
+    ...o.hide ? [["hide_object", o.hide[0], o.hide[1]]] : [],
+    ["show_text", o.received],
+    ["jump", "end"],
+    ["label", "declined"],
+    ["show_text", o.declined],
+    ["jump", "end"],
+    ["label", "full"],
+    ["show_text", `You have no room
+for it!`]
+  ];
+}
+function melanieTalk(_ow, save) {
+  const f = save?.flags ?? {};
+  if (f.EVENT_GOT_BULBASAUR_IN_CERULEAN)
+    return [["face_player"], ["show_text", "MelanieText4"]];
+  if ((save?.pikachuHappiness ?? 90) < 147)
+    return [["face_player"], ["show_text", "MelanieText1"]];
+  return [
+    ["face_player"],
+    ["show_text", "MelanieText1"],
+    ...giftRows({
+      ask: "MelanieText2",
+      species: "BULBASAUR",
+      level: 10,
+      flag: "EVENT_GOT_BULBASAUR_IN_CERULEAN",
+      received: "MelanieText3",
+      declined: "MelanieText5",
+      hide: ["CERULEAN_MELANIES_HOUSE", "CERULEANMELANIESHOUSE_BULBASAUR"]
+    })
+  ];
+}
+function jennyTalk(_ow, save) {
+  const f = save?.flags ?? {};
+  if (f.EVENT_GOT_SQUIRTLE_FROM_OFFICER_JENNY)
+    return [["face_player"], ["show_text", "_OfficerJennyText5"]];
+  if (!(save?.inventory?.THUNDERBADGE > 0))
+    return [["face_player"], ["show_text", "_OfficerJennyText1"]];
+  return [
+    ["face_player"],
+    ...giftRows({
+      ask: "_OfficerJennyText2",
+      species: "SQUIRTLE",
+      level: 10,
+      flag: "EVENT_GOT_SQUIRTLE_FROM_OFFICER_JENNY",
+      received: "_OfficerJennyText3",
+      declined: "_OfficerJennyText4"
+    })
+  ];
+}
+function jessieJamesRows(j) {
+  const T = (n) => `${j.text}${n}`;
+  return [
+    ["play_music", "Music_MeetJessieJames"],
+    ...j.popIn ? [["show_object", j.map, j.jessie], ["show_object", j.map, j.james]] : [],
+    ["show_text", T(1)],
+    ["face_object", "player", j.face],
+    ["emote", "player", "shock", 30],
+    ...j.popIn ? [] : [["show_object", j.map, j.james], ["show_object", j.map, j.jessie]],
+    ...j.playerStep ? [["walk_npc", "player", [j.playerStep]]] : [],
+    ...j.walks.flatMap(([who, steps, facing]) => [
+      ["walk_npc", who, steps],
+      ["face_object", who, facing]
+    ]),
+    ["show_text", T(2)],
+    ["start_battle", "trainer", "OPP_ROCKET", j.party],
+    ["jump_if_false", "lost"],
+    ["show_text", T(3)],
+    ["show_text", T(4)],
+    ["play_music", "Music_MeetJessieJames"],
+    ["fade", "out"],
+    ["hide_object", j.map, j.jessie],
+    ["hide_object", j.map, j.james],
+    ["fade", "in"],
+    ["set_flag", j.flag],
+    ["jump", "end"],
+    ["label", "lost"],
+    ...j.hideOnLoss ? [["hide_object", j.map, j.jessie], ["hide_object", j.map, j.james]] : []
+  ];
+}
+var D = (n, d) => Array(n).fill(d);
+function mtMoonJJ(ow, save) {
+  const f = save?.flags ?? {};
+  const p = ow?.player;
+  if (p?.cellX !== 3 || p?.cellY !== 5 || f.EVENT_BEAT_MT_MOON_3_JESSIE_JAMES)
+    return null;
+  if (!(f.EVENT_GOT_DOME_FOSSIL || f.EVENT_GOT_HELIX_FOSSIL))
+    return null;
+  return jessieJamesRows({
+    map: "MT_MOON_B2F",
+    jessie: "MTMOONB2F_JESSIE",
+    james: "MTMOONB2F_JAMES",
+    text: "_MtMoonJessieJamesText",
+    party: 42,
+    flag: "EVENT_BEAT_MT_MOON_3_JESSIE_JAMES",
+    popIn: true,
+    face: "up",
+    playerStep: "up",
+    walks: [["MTMOONB2F_JESSIE", D(6, "left"), "down"], ["MTMOONB2F_JAMES", D(5, "left"), "left"]]
+  });
+}
+function hideoutJJ(ow, save) {
+  const f = save?.flags ?? {};
+  const p = ow?.player;
+  if (p?.cellY !== 14 || p.cellX !== 24 && p.cellX !== 25 || f.EVENT_BEAT_ROCKET_HIDEOUT_4_JESSIE_JAMES)
+    return null;
+  const onLeft = p.cellX === 25;
+  return jessieJamesRows({
+    map: "ROCKET_HIDEOUT_B4F",
+    jessie: "ROCKETHIDEOUTB4F_JESSIE",
+    james: "ROCKETHIDEOUTB4F_JAMES",
+    text: "_RocketHideoutJessieJamesText",
+    party: 43,
+    flag: "EVENT_BEAT_ROCKET_HIDEOUT_4_JESSIE_JAMES",
+    popIn: false,
+    face: "up",
+    hideOnLoss: true,
+    walks: [
+      ["ROCKETHIDEOUTB4F_JAMES", D(onLeft ? 3 : 4, "down"), onLeft ? "down" : "left"],
+      ["ROCKETHIDEOUTB4F_JESSIE", D(onLeft ? 4 : 3, "down"), onLeft ? "right" : "down"]
+    ]
+  });
+}
+function towerJJ(ow, save) {
+  const f = save?.flags ?? {};
+  const p = ow?.player;
+  if (p?.cellY !== 12 || p.cellX !== 10 && p.cellX !== 11 || f.EVENT_BEAT_POKEMONTOWER_7_JESSIE_JAMES)
+    return null;
+  const onLeft = p.cellX === 11;
+  return jessieJamesRows({
+    map: "POKEMON_TOWER_7F",
+    jessie: "POKEMONTOWER7F_JESSIE",
+    james: "POKEMONTOWER7F_JAMES",
+    text: "_PokemonTowerJessieJamesText",
+    party: 44,
+    flag: "EVENT_BEAT_POKEMONTOWER_7_JESSIE_JAMES",
+    popIn: true,
+    face: "up",
+    walks: [
+      ["POKEMONTOWER7F_JESSIE", D(onLeft ? 4 : 3, "down"), onLeft ? "right" : "down"],
+      ["POKEMONTOWER7F_JAMES", D(onLeft ? 3 : 4, "down"), onLeft ? "down" : "left"]
+    ]
+  });
+}
+function silphJJ(ow, save) {
+  const f = save?.flags ?? {};
+  const p = ow?.player;
+  if (p?.cellY !== 3 || p.cellX > 3 || f.EVENT_BEAT_SILPH_CO_11F_JESSIE_JAMES)
+    return null;
+  const x = p.cellX;
+  const [jamesSteps, jamesFace, jessieSteps, jessieFace] = x === 3 ? [D(5, "up"), "right", D(4, "up"), "up"] : x === 2 ? [D(4, "up"), "up", D(5, "up"), "left"] : [["up", "up", "left", "up", "up"], "up", ["up", "up", "up", "left", "up", "up"], "left"];
+  return jessieJamesRows({
+    map: "SILPH_CO_11F",
+    jessie: "SILPHCO11F_JESSIE",
+    james: "SILPHCO11F_JAMES",
+    text: "_SilphCoJessieJamesText",
+    party: 45,
+    flag: "EVENT_BEAT_SILPH_CO_11F_JESSIE_JAMES",
+    popIn: false,
+    face: "down",
+    walks: [["SILPHCO11F_JAMES", jamesSteps, jamesFace], ["SILPHCO11F_JESSIE", jessieSteps, jessieFace]]
+  });
+}
+function mottoTalk(textId) {
+  return [["face_player"], ["show_text", textId]];
+}
+function yellowScripts(base) {
+  const redOak = (base.OAKS_LAB?.talk?.TEXT_OAKSLAB_OAK1 ?? []).map((r) => r[0] === "show_object" && r[1] === "VIRIDIAN_CITY" && r[2] === "VIRIDIANCITY_OLD_MAN" ? ["show_object", "VIRIDIAN_CITY", OLD_MAN2] : r);
+  return {
+    VIRIDIAN_CITY: {
+      onStep: viridianOnStep,
+      talk: {
+        TEXT_VIRIDIANCITY_OLD_MAN2: (ow, save) => save?.flags?.EVENT_COMPLETED_CATCH_TRAINING ? [["show_text", "_ViridianCityOldManLosingMyTouchText"]] : [["face_player"], ...oldMan2Rows(ow)]
+      }
+    },
+    GAME_CORNER: {
+      talk: {
+        TEXT_GAMECORNER_CLERK: coinClerkRows("_GameCornerClerk"),
+        TEXT_GAMECORNER_FISHING_GURU1: coinGiverRows(YELLOW_COIN_GIVERS.FISHING_GURU1),
+        TEXT_GAMECORNER_MIDDLE_AGED_MAN2: coinGiverRows(YELLOW_COIN_GIVERS.MIDDLE_AGED_MAN2),
+        TEXT_GAMECORNER_FISHING_GURU2: coinGiverRows(YELLOW_COIN_GIVERS.FISHING_GURU2)
+      }
+    },
+    POKEMON_FAN_CLUB: {
+      talk: {
+        TEXT_POKEMONFANCLUB_CLEFAIRY_FAN: [
+          ["face_player"],
+          ["check_flag", "EVENT_PIKACHU_FAN_BOAST"],
+          ["jump_if_true", "better"],
+          ["show_text", "_PokemonFanClubClefairyFanNormalText"],
+          ["set_flag", "EVENT_SEEL_FAN_BOAST"],
+          ["jump", "end"],
+          ["label", "better"],
+          ["show_text", "_PokemonFanClubClefairyFanBetterText"],
+          ["clear_flag", "EVENT_PIKACHU_FAN_BOAST"]
+        ],
+        TEXT_POKEMONFANCLUB_CLEFAIRY: [
+          ["play_cry", "CLEFAIRY"],
+          ["show_text", "_PokemonFanClubClefairyText"]
+        ]
+      }
+    },
+    CERULEAN_CITY: {
+      talk: {
+        TEXT_CERULEANCITY_COOLTRAINER_F1: [
+          ["face_player"],
+          ["random_text", [
+            [180, "_CeruleanCityCooltrainerF1ElectrodeUseSonicboomText"],
+            [100, "_CeruleanCityCooltrainerF1ElectrodePunchText"],
+            [0, "_CeruleanCityCooltrainerF1ElectrodeWithdrawText"]
+          ]]
+        ],
+        TEXT_CERULEANCITY_ELECTRODE: [
+          ["random_text", [
+            [180, "_CeruleanCityElectrodeTookASnoozeText"],
+            [120, "_CeruleanCityElectrodeIsLoafingAroundText"],
+            [60, "_CeruleanCityElectrodeTurnedAwayText"],
+            [0, "_CeruleanCityElectrodeIgnoredOrdersText"]
+          ]]
+        ]
+      }
+    },
+    ROCKET_HIDEOUT_B4F: {
+      talk: {
+        TEXT_ROCKETHIDEOUTB4F_ROCKET: liftKeyRocketRows("ROCKETHIDEOUTB4F_ROCKET", "_RocketHideoutB4FRocketAfterBattleText"),
+        TEXT_ROCKETHIDEOUTB4F_JESSIE: mottoTalk("_RocketHideoutJessieJamesText1"),
+        TEXT_ROCKETHIDEOUTB4F_JAMES: mottoTalk("_RocketHideoutJessieJamesText1")
+      },
+      onStep: (ow, save) => base.ROCKET_HIDEOUT_B4F?.onStep?.(ow, save) ?? hideoutJJ(ow, save)
+    },
+    MT_MOON_B2F: {
+      talk: {
+        TEXT_MTMOONB2F_JESSIE: mottoTalk("_MtMoonJessieJamesText1"),
+        TEXT_MTMOONB2F_JAMES: mottoTalk("_MtMoonJessieJamesText1")
+      },
+      onStep: (ow, save) => base.MT_MOON_B2F?.onStep?.(ow, save) ?? mtMoonJJ(ow, save)
+    },
+    POKEMON_TOWER_7F: {
+      talk: {
+        TEXT_POKEMONTOWER7F_JESSIE: mottoTalk("_PokemonTowerJessieJamesText1"),
+        TEXT_POKEMONTOWER7F_JAMES: mottoTalk("_PokemonTowerJessieJamesText1")
+      },
+      onStep: (ow, save) => base.POKEMON_TOWER_7F?.onStep?.(ow, save) ?? towerJJ(ow, save)
+    },
+    SILPH_CO_11F: {
+      talk: {
+        TEXT_SILPHCO11F_JESSIE: mottoTalk("_SilphCoJessieJamesText1"),
+        TEXT_SILPHCO11F_JAMES: mottoTalk("_SilphCoJessieJamesText1")
+      },
+      onStep: (ow, save) => base.SILPH_CO_11F?.onStep?.(ow, save) ?? silphJJ(ow, save)
+    },
+    CERULEAN_MELANIES_HOUSE: {
+      talk: {
+        TEXT_CERULEANMELANIESHOUSE_MELANIE: melanieTalk,
+        TEXT_CERULEANMELANIESHOUSE_BULBASAUR: [["play_cry", "BULBASAUR"], ["show_text", "MelanieBulbasaurText"]],
+        TEXT_CERULEANMELANIESHOUSE_ODDISH: [["play_cry", "ODDISH"], ["show_text", "MelanieOddishText"]],
+        TEXT_CERULEANMELANIESHOUSE_SANDSHREW: [["play_cry", "SANDSHREW"], ["show_text", "MelanieSandshrewText"]]
+      }
+    },
+    ROUTE_24: {
+      talk: {
+        TEXT_ROUTE24_COOLTRAINER_M4: (_ow, save) => save?.flags?.EVENT_54F ? [["face_player"], ["show_text", "_Route24DamianText4"]] : [["face_player"], ...giftRows({
+          ask: "_Route24DamianText1",
+          species: "CHARMANDER",
+          level: 10,
+          flag: "EVENT_54F",
+          received: "_Route24DamianText2",
+          declined: "_Route24DamianText3"
+        })]
+      }
+    },
+    VERMILION_CITY: {
+      talk: { TEXT_VERMILIONCITY_OFFICER_JENNY: jennyTalk }
+    },
+    PALLET_TOWN: { onStep: palletOnStep },
+    OAKS_LAB_ONSTEP_HOST: { onStep: labOnStep },
+    OAKS_LAB: {
+      talk: {
+        TEXT_OAKSLAB_OAK1: relabel(redOak, {
+          _OaksLabRivalWhatDidYouCallMeForText: "_OaksLabRivalMyPokemonHasGrownStrongerText",
+          _OaksLabOak1RaiseYourYoungPokemonText: "_OaksLabOak1YouShouldTalkToIt",
+          _OaksLabOak1WhichPokemonDoYouWantText: "_OaksLabOak1GoAheadItsYours"
+        }),
+        TEXT_OAKSLAB_EEVEE_POKE_BALL: eeveeBall,
+        TEXT_OAKSLAB_RIVAL: [
+          ["face_player"],
+          ["check_flag", "EVENT_GOT_STARTER"],
+          ["jump_if_false", "pre_starter"],
+          ["show_text", "_OaksLabRivalMyPokemonLooksStrongerText"],
+          ["jump", "end"],
+          ["label", "pre_starter"],
+          ["check_flag", "EVENT_FOLLOWED_OAK_INTO_LAB_2"],
+          ["jump_if_false", "gramps_gone"],
+          ["show_text", "_OaksLabRivalIllGetABetterPokemonThanYou"],
+          ["jump", "end"],
+          ["label", "gramps_gone"],
+          ["show_text", "_OaksLabRivalGrampsIsntAroundText"]
+        ]
+      }
+    }
+  };
+}
+
 // voxelmon/game/world/mapscripts.ts
 function gymLeader(o) {
   const rows = [
@@ -7409,7 +7955,7 @@ you my power!`]);
   return rows;
 }
 function ceruleanRivalRows(px2) {
-  return sceneWithTheme(MEET_RIVAL, [
+  return sceneWithTheme(MEET_RIVAL2, [
     ["show_object", "CERULEAN_CITY", "CERULEANCITY_RIVAL"],
     ["move_npc_to", "CERULEANCITY_RIVAL", px2, 5],
     ["face_object", "CERULEANCITY_RIVAL", "down"],
@@ -7643,7 +8189,7 @@ function route22Scene(n, py) {
   const rx = py === 4 ? 29 : 28;
   const rivalFacing = py === 4 ? "up" : "right";
   const exit = py === 4 ? ["right", "right", "down", "down", "down", "down", "down"] : ["up", "right", "right", "right", "down", "down", "down", "down", "down", "down"];
-  return sceneWithTheme(MEET_RIVAL, [
+  return sceneWithTheme(MEET_RIVAL2, [
     ["show_object", "ROUTE_22", obj],
     ["move_npc_to", obj, rx, 5],
     ["face_object", obj, rivalFacing],
@@ -7669,7 +8215,7 @@ var TOWER_RIVAL_EXIT_RIGHT_THEN_DOWN = ["right", "down", "down", "right", "down"
 var TOWER_RIVAL_EXIT_DOWN_THEN_RIGHT = ["down", "down", "right", "right", "right", "right", "down", "down"];
 function towerRivalScript(playerX) {
   const exit = playerX === 15 ? TOWER_RIVAL_EXIT_DOWN_THEN_RIGHT : TOWER_RIVAL_EXIT_RIGHT_THEN_DOWN;
-  return sceneWithTheme(MEET_RIVAL, [
+  return sceneWithTheme(MEET_RIVAL2, [
     ["face_player"],
     ["check_flag", "EVENT_BEAT_POKEMON_TOWER_RIVAL"],
     ["jump_if_true", 12],
@@ -7969,7 +8515,7 @@ var MAP_SCRIPTS = {
   },
   VIRIDIAN_CITY: {
     talk: {
-      TEXT_VIRIDIANCITY_FISHER: giftRows({
+      TEXT_VIRIDIANCITY_FISHER: giftRows2({
         flag: "EVENT_GOT_TM42",
         item: "TM_DREAM_EATER",
         pre: `Yawn!
@@ -8056,7 +8602,7 @@ Here, you can\vhave this TM.`,
       };
       const target2 = [[x, y - 1], [x - 1, y], [x + 1, y], [x, y + 1]].find(free);
       const facing = !target2 ? "up" : target2[1] < y ? "down" : target2[1] > y ? "up" : target2[0] < x ? "right" : "left";
-      return sceneWithTheme(MEET_RIVAL, [
+      return sceneWithTheme(MEET_RIVAL2, [
         ["show_text", "_OaksLabRivalIllTakeYouOnText"],
         ...target2 ? [["move_npc_to", "SPRITE_BLUE", target2[0], target2[1]]] : [],
         ["face_object", "SPRITE_BLUE", facing],
@@ -8067,7 +8613,7 @@ Here, you can\vhave this TM.`,
         ["show_text", "_OaksLabRivalIPickedTheWrongPokemonText"],
         ["label", "leave"],
         ["show_text", "_OaksLabRivalSmellYouLaterText"],
-        ["play_music", MEET_RIVAL],
+        ["play_music", MEET_RIVAL2],
         ["move_npc_to", "SPRITE_BLUE", 4, 11],
         ["hide_object", "OAKS_LAB", "SPRITE_BLUE"]
       ]);
@@ -8583,7 +9129,7 @@ Here, you can\vhave this TM.`,
       const onLeft = x === 36;
       if (p)
         p.facing = onLeft ? "up" : "left";
-      return sceneWithTheme(MEET_RIVAL, [
+      return sceneWithTheme(MEET_RIVAL2, [
         ["show_object", "SS_ANNE_2F", "SSANNE2F_RIVAL"],
         ["move_npc_to", "SSANNE2F_RIVAL", 36, onLeft ? 7 : 8],
         ["face_object", "SSANNE2F_RIVAL", onLeft ? "down" : "right"],
@@ -9097,7 +9643,7 @@ Here, you can\vhave this TM.`,
   },
   CELADON_MART_3F: {
     talk: {
-      TEXT_CELADONMART3F_CLERK: giftRows({
+      TEXT_CELADONMART3F_CLERK: giftRows2({
         flag: "EVENT_GOT_TM18",
         item: "TM_COUNTER",
         pre: "_CeladonMart3FClerkTM18PreReceiveText",
@@ -9109,7 +9655,7 @@ Here, you can\vhave this TM.`,
   },
   SILPH_CO_2F: {
     talk: {
-      TEXT_SILPHCO2F_SILPH_WORKER_F: giftRows({
+      TEXT_SILPHCO2F_SILPH_WORKER_F: giftRows2({
         flag: "EVENT_GOT_TM36",
         item: "TM_SELFDESTRUCT",
         pre: "SilphCo2FSilphWorkerFPleaseTakeThisText",
@@ -9202,7 +9748,7 @@ fillets du beef?`]
   },
   MR_PSYCHICS_HOUSE: {
     talk: {
-      TEXT_MRPSYCHICSHOUSE_MR_PSYCHIC: giftRows({
+      TEXT_MRPSYCHICSHOUSE_MR_PSYCHIC: giftRows2({
         flag: "EVENT_GOT_TM29",
         item: "TM_PSYCHIC_M",
         pre: "_MrPsychicsHouseMrPsychicYouWantedThisText",
@@ -9214,7 +9760,7 @@ fillets du beef?`]
   },
   ROUTE_12_GATE_2F: {
     talk: {
-      TEXT_ROUTE12GATE2F_BRUNETTE_GIRL: giftRows({
+      TEXT_ROUTE12GATE2F_BRUNETTE_GIRL: giftRows2({
         flag: "EVENT_GOT_TM39",
         item: "TM_SWIFT",
         pre: "_Route12Gate2FBrunetteGirlYouCanHaveThisText",
@@ -9226,7 +9772,7 @@ fillets du beef?`]
   },
   CELADON_CITY: {
     talk: {
-      TEXT_CELADONCITY_GRAMPS3: giftRows({
+      TEXT_CELADONCITY_GRAMPS3: giftRows2({
         flag: "EVENT_GOT_TM41",
         item: "TM_SOFTBOILED",
         pre: "_CeladonCityGramps3Text",
@@ -9238,7 +9784,7 @@ fillets du beef?`]
   },
   CINNABAR_LAB_METRONOME_ROOM: {
     talk: {
-      TEXT_CINNABARLABMETRONOMEROOM_SCIENTIST1: giftRows({
+      TEXT_CINNABARLABMETRONOMEROOM_SCIENTIST1: giftRows2({
         flag: "EVENT_GOT_TM35",
         item: "TM_METRONOME",
         pre: "_CinnabarLabMetronomeRoomScientist1Text",
@@ -9273,7 +9819,7 @@ fillets du beef?`]
   },
   ROUTE_1: {
     talk: {
-      TEXT_ROUTE1_YOUNGSTER1: giftRows({
+      TEXT_ROUTE1_YOUNGSTER1: giftRows2({
         flag: "EVENT_GOT_POTION_SAMPLE",
         item: "POTION",
         pre: "_Route1Youngster1MartSampleText",
@@ -9348,7 +9894,7 @@ for it!`]
         return null;
       if (p)
         p.facing = "down";
-      return sceneWithTheme(MEET_RIVAL, [
+      return sceneWithTheme(MEET_RIVAL2, [
         ["show_object", "SILPH_CO_7F", "SILPHCO7F_RIVAL"],
         ["show_text", "_SilphCo7FRivalText"],
         ["move_npc_to", "SILPHCO7F_RIVAL", 3, y + 1],
@@ -9396,9 +9942,30 @@ function liftKeyRocketRows(npc, afterText) {
   ];
 }
 function talkScript(mapLabel, textConst) {
-  return MAP_SCRIPTS[mapLabel]?.talk?.[textConst] ?? null;
+  return mapScript(mapLabel)?.talk?.[textConst] ?? null;
 }
-var MEET_RIVAL = "Music_MeetRival";
+var scriptGame = "red";
+var yellowTable = null;
+var merged = new Map;
+function useScriptsFor(game) {
+  const g = game === "yellow" ? "yellow" : "red";
+  if (g !== scriptGame)
+    merged.clear();
+  scriptGame = g;
+}
+function mapScript(label2) {
+  if (scriptGame !== "yellow")
+    return MAP_SCRIPTS[label2];
+  if (merged.has(label2))
+    return merged.get(label2);
+  yellowTable ??= yellowScripts(MAP_SCRIPTS);
+  const base = MAP_SCRIPTS[label2];
+  const y = yellowTable[label2];
+  const out = !y ? base : !base ? y : { ...base, ...y, talk: { ...base.talk, ...y.talk } };
+  merged.set(label2, out);
+  return out;
+}
+var MEET_RIVAL2 = "Music_MeetRival";
 function sceneWithTheme(song, rows) {
   const jumps = ["jump", "jump_if_true", "jump_if_false"];
   const bumped = rows.map((r) => jumps.includes(r[0]) && typeof r[1] === "number" ? [r[0], r[1] + 1] : r);
@@ -9433,7 +10000,7 @@ for it!`]
     ];
   };
 }
-function giftRows(o) {
+function giftRows2(o) {
   return [
     ["face_player"],
     ["check_flag", o.flag],
@@ -9708,6 +10275,7 @@ function slide(px2, py, dx, dy, open) {
     ny = py + dy;
   return { px: nx, py: ny, moved: nx !== px2 || ny !== py };
 }
+var FREE_AXIS_LEAN = 0.35;
 function cellOf(p) {
   return Math.round(p / 16);
 }
@@ -10696,7 +11264,7 @@ function* emote(ctx, ...args) {
   const targetArg = args[0];
   const bubble = args[1];
   const frames = args[2] ?? 60;
-  const entity = targetArg === "player" ? ctx.world.player : ctx.npc;
+  const entity = targetArg === "player" ? ctx.world.player : targetArg !== undefined && typeof ctx.world.findNpc === "function" ? ctx.world.findNpc(targetArg) ?? ctx.npc : ctx.npc;
   if (!entity)
     return;
   const runner = ctx.runner;
@@ -10748,6 +11316,8 @@ function* give_pokemon(ctx, ...args) {
     return;
   const mon = newMon(w.data, species, level);
   party.push(mon);
+  if (args[2] === true)
+    return;
   const runner = ctx.runner;
   if (typeof w.askNickname === "function") {
     const label3 = w.data.pokemon?.[species]?.name ?? species;
@@ -11166,11 +11736,27 @@ function* check_dex_owned(ctx, ...args) {
   ctx.lastCheck = n >= need;
 }
 function* dex_rating() {}
+var YELLOW_RIVAL_PARTIES = {
+  OPP_RIVAL1: { 4: { party: 2, upgradeOnWin: { from: 2, to: 1 } }, 7: { party: 3 } },
+  OPP_RIVAL2: { 1: { party: 1 }, 4: { base: 1 }, 7: { base: 4 }, 10: { base: 7 } },
+  OPP_RIVAL3: { 1: { base: 0 } }
+};
 function* rival_battle(ctx, ...args) {
   const oppClass = args[0];
   const baseParty = args[1] ?? 1;
   const opts = args[2] ?? {};
   const save = ctx.world.save;
+  if (ctx.world.data.version === "yellow") {
+    const spec = YELLOW_RIVAL_PARTIES[oppClass]?.[baseParty];
+    if (spec) {
+      const starter = save.rivalStarter ?? 1;
+      yield* start_battle(ctx, "trainer", oppClass, spec.party ?? (spec.base ?? 0) + starter, { loseable: opts.loseable });
+      if (spec.upgradeOnWin && ctx.lastCheck && save.rivalStarter === spec.upgradeOnWin.from) {
+        save.rivalStarter = spec.upgradeOnWin.to;
+      }
+      return;
+    }
+  }
   const offsets = opts.offsets ?? ctx.world.data.field?.starterCounterpicks;
   let offset = 0;
   if (offsets) {
@@ -11235,13 +11821,19 @@ function* set_heal_point(ctx) {
     outdoor: save.lastOutdoor ? { ...save.lastOutdoor } : undefined
   };
 }
-function* old_man_demo(ctx) {
+function* old_man_demo(ctx, ...args) {
   const runner = ctx.runner;
   const w = ctx.world;
   if (typeof w.startOldManDemo === "function") {
-    w.startOldManDemo(() => runner.resume());
+    const fail = args[0] === "fail";
+    const species = fail ? undefined : args[0];
+    const opts = species ? { species, level: args[1] ?? 5, name: args[2] } : fail ? { fail: true } : undefined;
+    w.startOldManDemo(() => runner.resume(), opts);
     yield;
   }
+}
+function* set_field(ctx, ...args) {
+  ctx.world.save[args[0]] = args[1];
 }
 var VERBS = {
   show_text,
@@ -11315,6 +11907,7 @@ var VERBS = {
   engage_trainer,
   set_heal_point,
   old_man_demo,
+  set_field,
   record_hall_of_fame,
   open_diploma,
   save_game,
@@ -12130,6 +12723,7 @@ class Overworld {
     this.tilePairs = field?.tilePairs ?? { land: [], water: [] };
     this.carpets = field?.warpCarpets;
     this.runner = new ScriptRunner(this);
+    useScriptsFor(shell.data.version);
   }
   get data() {
     return this.shell.data;
@@ -12231,7 +12825,7 @@ class Overworld {
     this.forcedBikeOnEntry();
     this.syncSurf();
     visit(this.save, mapId);
-    MAP_SCRIPTS[mapId]?.onEnter?.(this, this.save);
+    mapScript(mapId)?.onEnter?.(this, this.save);
   }
   objectVisible(obj) {
     const key = objectToggleKey(obj);
@@ -12355,6 +12949,19 @@ class Overworld {
     const speed = 16 / p.stepSpeed() * (stick ? stick.throw : 1);
     const r = slide(p.px, p.py, dir[0] * speed, dir[1] * speed, (x, y) => this.freeOpen(x, y));
     p.facing = quantize(dir[0], dir[1]);
+    const blockedX = Math.abs(dir[0]) >= FREE_AXIS_LEAN && r.px === p.px;
+    const blockedY = Math.abs(dir[1]) >= FREE_AXIS_LEAN && r.py === p.py;
+    const axes = [];
+    if (blockedX)
+      axes.push(dir[0] > 0 ? "right" : "left");
+    if (blockedY)
+      axes.push(dir[1] > 0 ? "down" : "up");
+    if (axes.length === 2 && Math.abs(dir[1]) > Math.abs(dir[0]))
+      axes.reverse();
+    for (const a of axes) {
+      if (this.freeGridPush(a))
+        return;
+    }
     if (!r.moved) {
       if (Math.abs(p.px - p.cellX * 16) <= 8 && Math.abs(p.py - p.cellY * 16) <= 8) {
         this.snapToCell();
@@ -12374,6 +12981,39 @@ class Overworld {
       p.landedCount += 1;
       this.onStepComplete();
     }
+  }
+  freeGridPush(dir) {
+    const p = this.player;
+    const across = dir === "up" || dir === "down" ? "x" : "y";
+    const pos = across === "x" ? p.px : p.py;
+    const cands = [cellOf(pos), Math.floor(pos / 16), Math.ceil(pos / 16)].filter((v, i, a) => a.indexOf(v) === i);
+    const save = { px: p.px, py: p.py, cellX: p.cellX, cellY: p.cellY, facing: p.facing };
+    for (const c of cands) {
+      const cx = across === "x" ? c : cellOf(p.px);
+      const cy = across === "y" ? c : cellOf(p.py);
+      if (!this.freeOpen(cx, cy))
+        continue;
+      p.cellX = cx;
+      p.cellY = cy;
+      p.px = cx * 16;
+      p.py = cy * 16;
+      p.facing = dir;
+      if (cx !== save.cellX || cy !== save.cellY)
+        this.refreshStandingOnWarp();
+      if (this.checkEdgeExit(dir) || this.checkLedgeHop(dir) || this.checkBoulderPush(dir))
+        return true;
+      if (this.canCollisionWarp()) {
+        const w = onCollision(this.map, this.carpets, cx, cy, dir);
+        if (w) {
+          this.takeWarp(w.def);
+          return true;
+        }
+      }
+      Object.assign(p, save);
+      if (cx !== save.cellX || cy !== save.cellY)
+        this.refreshStandingOnWarp();
+    }
+    return false;
   }
   dirHeld() {
     const input = this.shell.input;
@@ -13117,8 +13757,8 @@ GAME is over!`;
     if (this.runner.isRunning())
       return false;
     const label3 = this.map?.id ?? "";
-    const script = MAP_SCRIPTS[label3];
-    const host = MAP_SCRIPTS[label3 + "_ONSTEP_HOST"];
+    const script = mapScript(label3);
+    const host = mapScript(label3 + "_ONSTEP_HOST");
     const rows = script?.onStep?.(this, this.save) ?? host?.onStep?.(this, this.save) ?? this.coordTrigger(script) ?? this.coordTrigger(host);
     if (!rows)
       return false;
@@ -14221,11 +14861,11 @@ opened the door!`));
     else
       onDone?.(null);
   }
-  startOldManDemo(onDone) {
+  startOldManDemo(onDone, opts) {
     const self = this;
     const shell = self.shell ?? self.game ?? self.host ?? null;
     if (shell?.startOldManDemo)
-      shell.startOldManDemo(onDone);
+      shell.startOldManDemo(onDone, opts);
     else
       onDone?.();
   }
@@ -14300,6 +14940,10 @@ opened the door!`));
       npc.hidden = hidden;
   }
   faceObject(ref, dir) {
+    if (ref === "player") {
+      this.player.facing = dir;
+      return;
+    }
     const npc = this.findNpc(ref);
     if (npc)
       npc.facing = dir;
@@ -23571,6 +24215,8 @@ Now x99.`);
     const r = useItem(this.data, this.save, itemId, mon, null, moveIndex);
     if (r.kind === "consumed")
       remove(this.save, itemId, 1);
+    if (r.refused)
+      this.audio?.playCry?.("PIKACHU");
     if (r.evolveTo) {
       const to = r.evolveTo;
       this.push(new EvolutionState(this, mon, to, "ITEM", (m, t) => apply2(this.data, m, t, this.save.pokedex), () => this.learnMovesAtLevel(mon, () => {})));
@@ -24021,10 +24667,12 @@ to {RAM:wNameBuffer}?`).replace(/\{RAM:wNameBuffer\}/g, defaultName).replace(/\{
     st.onDone = () => onDone?.(battle.finished);
     this.push(st);
   }
-  startOldManDemo(onDone) {
-    const om = this.data.field?.oldManBattle ?? { species: "WEEDLE", level: 5 };
-    const battle = new WildBattle(this.data, this.save, this.battleRng, om.species, om.level);
-    battle.makeOldManDemo();
+  startOldManDemo(onDone, opts) {
+    const field = this.data.field?.oldManBattle ?? { species: "WEEDLE", level: 5 };
+    const species = opts?.species ?? field.species;
+    const level = opts?.level ?? field.level;
+    const battle = new WildBattle(this.data, this.save, this.battleRng, species, level);
+    battle.makeOldManDemo(opts?.name, opts?.fail);
     const st = new BattleGameState(this, "", 0, battle);
     st.onDone = () => onDone?.();
     this.push(st);

@@ -642,6 +642,17 @@ export const EMOTE = {
 //                                          ChipSynth.lua:645). Boot-time; a
 //                                          music noise note names a drum by
 //                                          this id
+//     pikaPcm(clip)                        Yellow: one of the ROM's voiced
+//                                          Pikachu clips, 1-based
+//                                          (PikachuCriesPointerTable order,
+//                                          audio/pikachu_pcm.asm
+//                                          PlayPikachuSoundClip). The host
+//                                          hands the core the clips at boot
+//                                          (the Yellow overlay's PIKA chunk);
+//                                          without them this is a no-op. The
+//                                          song and any effect HOLD while it
+//                                          plays -- the Game Boy plays it
+//                                          with interrupts off
 //
 // Audio PCM leaves through the PocketJS audio module (contracts/spec/audio.ts,
 // capability `audio.pcm`), not through this surface: the host pumps
@@ -750,7 +761,14 @@ export const VOX_OP = {
    * Cleared by uiClearBottom with everything else.
    */
   uiRectBottom: 85,
+  /** Yellow's voiced Pikachu clip `clip` (1-based) -- see §audio above. */
+  pikaPcm: 86,
 } as const;
+
+/** Clips in Yellow's PikachuCriesPointerTable (NUM_PIKA_CRIES). */
+export const PIKA_PCM_CLIPS = 42;
+/** Their sample rate: one bit per ~190 CPU cycles (RomExtractor.lua:2151). */
+export const PIKA_PCM_RATE = 22050;
 
 /** Emote-page frame of the HM Cut tree sprite (after the 3 GB bubbles). */
 export const FX_FRAME_CUT_TREE = 3;

@@ -351,6 +351,7 @@ pub mod op {
     pub const CAM_SPEED: u32 = 83;
     pub const UI_SPRITE_RECT_BOTTOM: u32 = 84;
     pub const UI_RECT_BOTTOM: u32 = 85;
+    pub const PIKA_PCM: u32 = 86;
 }
 
 /// Fixed-point scales used by op args.

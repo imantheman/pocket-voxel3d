@@ -28,7 +28,7 @@ import { apply as expApply, movesLearnedAt } from "../rules/experience.ts";
 import { beforeMove as statusBeforeMove, residual as statusResidual } from "../rules/status.ts";
 import { effectiveSpeed, firstMover } from "../rules/turnorder.ts";
 import { createTypeChart, type TypeChart } from "../rules/typechart.ts";
-import { modifyHappiness } from "../world/pikachu.ts";
+import { isStarterPikachu, modifyHappiness } from "../world/pikachu.ts";
 import {
   BATTLE_SLIDE_IN_FRAMES,
   BATTLE_START_SENDOUT,
@@ -857,6 +857,7 @@ export class WildBattle implements EffectBattle {
       this.act(() => {
         this.sendingOut = false;
         // AnimateSendingOutMon grow-in + cry (:1604-1610) — later rung
+        this.pushStarterPikachuVoice();
       });
     }
     // BATTLE_TYPE_OLD_MAN sends out no player mon; leaving showPlayerBack true
@@ -899,6 +900,14 @@ export class WildBattle implements EffectBattle {
       return;
     }
     this.say(`Wild ${this.enemy.name}\nappeared!`);
+  }
+
+  /** Yellow's own Pikachu entering (core.asm .starterPikachu, :1808-1818):
+   * its voice, sleepy if it is asleep. Every other send-out cry is a later
+   * rung. */
+  protected pushStarterPikachuVoice(): void {
+    if (!isStarterPikachu(this.save as never, this.player.mon)) return;
+    this.audioCues.push(`pika:${this.player.mon.status === "SLP" ? 37 : 11}`);
   }
 
   /** :1353-1363 sendOutText — the shout scales with enemy HP remaining. */
@@ -1788,6 +1797,11 @@ export class WildBattle implements EffectBattle {
       const kind = this.victoryMusicKind();
       if (kind) this.actNext(() => this.audioCues.push(`music:victory:${kind}`));
     }
+    // Yellow: your own Pikachu cries out as it goes down (core.asm:1057-1059
+    // ldpikacry e, PikachuCry4, before the fainted text)
+    if (battler.isPlayer && isStarterPikachu(this.save as never, battler.mon)) {
+      this.actNext(() => this.audioCues.push("pika:4"));
+    }
     this.sayNext(`${displayName(battler)}\nfainted!`);
     // PIKAHAPPY_FAINTED: your Pikachu going down in battle
     if (battler.isPlayer) modifyHappiness(this.save as never, "FAINTED", battler.mon);
@@ -2342,6 +2356,7 @@ export class WildBattle implements EffectBattle {
     this.animNext("POOF_ANIM", false);
     this.actNext(() => {
       this.sendingOut = false;
+      this.pushStarterPikachuVoice();
     });
     this.phase = "messages";
     this.afterQueue = "menu";
@@ -2374,6 +2389,7 @@ export class WildBattle implements EffectBattle {
     this.animNext("POOF_ANIM", false);
     this.actNext(() => {
       this.sendingOut = false;
+      this.pushStarterPikachuVoice();
     });
   }
 

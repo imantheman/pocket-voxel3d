@@ -199,6 +199,23 @@ export class AudioDirector {
     this.host.cry(cry.bank, cry.address, cry.engine, cry.pitch, cry.length);
   }
 
+  /**
+   * Yellow's PlayPikachuSoundClip (audio/pikachu_pcm.asm): voiced clip
+   * `clip`, 1-based, in PikachuCriesPointerTable order. Only the sites the
+   * ROM gives a clip -- your own Pikachu, the title -- call this; every
+   * other Pikachu cry is the chip cry, as in the ROM (home/pokemon.asm
+   * PlayCry has no special case). Without the clips (a pre-voice cook) the
+   * chip cry stands in, as gen1recomp's Sound.playCry falls back.
+   */
+  playPikaClip(clip: number): void {
+    const n = this.banks?.pikaClips ?? 0;
+    if (n > 0 && this.host?.pikaPcm) {
+      this.host.pikaPcm(Math.max(1, Math.min(n, Math.floor(clip))));
+      return;
+    }
+    this.playCry("PIKACHU");
+  }
+
   /** Drop everything (a hard scene cut). */
   stop(): void {
     if (!this.banks) return;

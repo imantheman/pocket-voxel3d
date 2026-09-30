@@ -3,7 +3,7 @@
 // deferred), writing dist/voxelmon/gen/*.json + gfx.bin/gfx.json +
 // programs.bin per voxelmon/SCHEMA.md.
 
-import { writeFileSync } from "node:fs";
+import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Ctx, check } from "./ctx.ts";
 import { VERSIONS, type VoxelEnv } from "./env.ts";
@@ -12,6 +12,7 @@ import { loadManifest } from "./manifest.ts";
 import { Rom } from "./rom.ts";
 import { writeJson } from "./writer.ts";
 import { extractAudio } from "./stages/audio.ts";
+import { extractPikaCries } from "./stages/pikacries.ts";
 import { extractEncounters } from "./stages/encounters.ts";
 import { extractField } from "./stages/field.ts";
 import { extractFont } from "./stages/font.ts";
@@ -93,6 +94,16 @@ export async function runImport(env: VoxelEnv): Promise<void> {
       "audio",
       () => {
         const { json, programs } = extractAudio(ctx);
+        // Yellow's voiced Pikachu clips, beside the programs; the manifest
+        // says how many, which is how the guest knows it can ask for one.
+        const pika = extractPikaCries(ctx);
+        const pikaPath = join(genDir, "pika_cries.bin");
+        if (pika) {
+          writeFileSync(pikaPath, pika);
+          (json as { pikaCries?: number }).pikaCries = pika[0]! | (pika[1]! << 8);
+        } else if (existsSync(pikaPath)) {
+          rmSync(pikaPath);
+        }
         writeJson(genDir, "audio", json);
         writeFileSync(join(genDir, "programs.bin"), programs);
       },
