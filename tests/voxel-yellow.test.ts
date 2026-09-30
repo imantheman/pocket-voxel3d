@@ -186,6 +186,37 @@ describe("Yellow: its attract movie", () => {
   });
 });
 
+describe("Yellow: the lines it moved into Print routines", () => {
+  const rows = (map: string, text: string, ow: any, save: any): unknown[][] => {
+    useScriptsFor("yellow");
+    const t = mapScript(map)!.talk![text]!;
+    return (typeof t === "function" ? (t as any)(ow, save) : t) as unknown[][];
+  };
+  const shown = (r: unknown[][]) => r.filter((x) => x[0] === "show_text" || x[0] === "ask").map((x) => x[1]);
+
+  test("the Celadon granny reads your Pikachu, and a devoted one answers", () => {
+    const pika = { species: "PIKACHU", hp: 10 };
+    expect(shown(rows("CELADON_MANSION_1F", "TEXT_CELADONMANSION1F_GRANNY", {}, { party: [] })))
+      .toEqual(["_CeladonMansion1Text2"]);
+    expect(shown(rows("CELADON_MANSION_1F", "TEXT_CELADONMANSION1F_GRANNY", {}, { party: [pika], pikachuHappiness: 120 })))
+      .toEqual(["_CeladonMansion1Text2", "_CeladonMansion1Text6", "_CeladonMansion1Text9"]);
+    const devoted = rows("CELADON_MANSION_1F", "TEXT_CELADONMANSION1F_GRANNY", {}, { party: [pika], pikachuHappiness: 255 });
+    expect(shown(devoted).at(-1)).toBe("_CeladonMansion1Text12");
+    expect(devoted.at(-1)).toEqual(["pika_clip", 23]);
+  });
+
+  test("the TV, the girl, the guide and the Route 18 cook", () => {
+    expect(shown(rows("REDS_HOUSE_1F", "TEXT_REDSHOUSE1F_TV", { player: { facing: "left" } }, {})))
+      .toEqual(["_RedsHouse1FTVWrongSideText"]);
+    expect(shown(rows("VIRIDIAN_CITY", "TEXT_VIRIDIANCITY_GIRL", {}, { flags: { EVENT_GOT_POKEDEX: true } })))
+      .toEqual(["_ViridianCityGirlWhenIGoShopText"]);
+    expect(shown(rows("CINNABAR_GYM", "TEXT_CINNABARGYM_GYM_GUIDE", {}, { flags: {} })))
+      .toEqual(["_CinnabarGymGymGuideChampInMakingText"]);
+    expect(rows("ROUTE_18_GATE_2F", "TEXT_ROUTE18GATE2F_COOK", {}, {})).toContainEqual(["trade", 6, "EVENT_TRADED_SLOWBRO_FOR_LICKITUNG"]);
+    expect(chanseyScript("TEXT_INDIGOPLATEAULOBBY_CHANSEY")).not.toBeNull();
+  });
+});
+
 describe("Yellow: the Summer Beach House", () => {
   const talk = (text: string, ow: any, save: any): unknown[][] => {
     useScriptsFor("yellow");

@@ -182,6 +182,37 @@ function labOnStep(ow: any, save: any): ScriptRow[] | null {
   ] as ScriptRow[];
 }
 
+/** A yes/no question and its two answers (YesNoChoice: YES is item 0). */
+function askThen(question: string, yes: string, no: string): ScriptRow[] {
+  return [
+    ["face_player"],
+    ["ask", question],
+    ["jump_if_false", "no"],
+    ["show_text", yes],
+    ["jump", "end"],
+    ["label", "no"],
+    ["show_text", no],
+    ["label", "end"],
+  ] as ScriptRow[];
+}
+
+/**
+ * CeladonMansion1FGrannyText: her line; with your own Pikachu along, her
+ * reading of it by its happiness (PikachuHappinessThresholds_f1eb9: under
+ * 51, 101, 131, 161, 201, 255), and at 251 or more it answers her after 50
+ * frames with its PikachuCry23.
+ */
+function grannyTalk(_ow: any, save: any): ScriptRow[] {
+  const rows: ScriptRow[] = [["face_player"], ["show_text", "_CeladonMansion1Text2"]] as ScriptRow[];
+  if (!Pikachu.starterInParty(save ?? {}, true)) return rows;
+  const h = Pikachu.happiness(save);
+  const reading = [51, 101, 131, 161, 201, 255].findIndex((t) => h < t);
+  rows.push(["show_text", "_CeladonMansion1Text6"] as ScriptRow);
+  rows.push(["show_text", `_CeladonMansion1Text${reading < 0 ? 12 : 7 + reading}`] as ScriptRow);
+  if (h >= 251) rows.push(["wait", 50] as ScriptRow, ["pika_clip", 23] as ScriptRow);
+  return rows;
+}
+
 /** Bill-as-Pokemon's rows with Pikachu's beats laid in: watching as he
  * walks round the player, and following him up to the machine. */
 function withBillsBeats(rows: unknown): ScriptRow[] | undefined {
@@ -521,6 +552,39 @@ export function yellowScripts(base: Record<string, MapScript>): Record<string, M
           save?.flags?.EVENT_COMPLETED_CATCH_TRAINING
             ? [["show_text", "_ViridianCityOldManLosingMyTouchText"]] as ScriptRow[]
             : [["face_player"], ...oldMan2Rows(ow)] as ScriptRow[],
+        // ViridianCity_2.asm: the youngster's bug lesson (the answers are
+        // text_far'd without the underscore) and the girl on grandpa
+        TEXT_VIRIDIANCITY_YOUNGSTER2: askThen(
+          "_ViridianCityYoungster2YouWantToKnowAboutText",
+          "ViridianCityYoungster2CaterpieAndWeedleDescriptionText",
+          "ViridianCityYoungster2OkThenText",
+        ),
+        TEXT_VIRIDIANCITY_GIRL: (_ow: any, save: any): ScriptRow[] => [
+          ["face_player"],
+          ["show_text", save?.flags?.EVENT_GOT_POKEDEX
+            ? "_ViridianCityGirlWhenIGoShopText" : "_ViridianCityGirlHasntHadHisCoffeeYetText"],
+        ] as ScriptRow[],
+      },
+    },
+    // RedsHouse1F_2.asm: the TV shows a film only from the front
+    REDS_HOUSE_1F: {
+      talk: {
+        TEXT_REDSHOUSE1F_TV: (ow: any): ScriptRow[] => [
+          ["show_text", ow?.player?.facing === "up"
+            ? "_RedsHouse1FTVStandByMeMovieText" : "_RedsHouse1FTVWrongSideText"],
+        ] as ScriptRow[],
+      },
+    },
+    // CeladonMansion1F_2.asm: the granny reads your Pikachu's heart, and a
+    // devoted one answers her (PikachuCry23)
+    CELADON_MANSION_1F: {
+      talk: { TEXT_CELADONMANSION1F_GRANNY: grannyTalk },
+    },
+    // Route18Gate2F.asm: Yellow's trader is the cook (TRADE_FOR_SPIKE, the
+    // same table place as Red's)
+    ROUTE_18_GATE_2F: {
+      talk: {
+        TEXT_ROUTE18GATE2F_COOK: [["face_player"], ["trade", 6, "EVENT_TRADED_SLOWBRO_FOR_LICKITUNG"]] as ScriptRow[],
       },
     },
     // pokeyellow scripts/GameCorner.asm: the same counter and giveaways,
@@ -634,7 +698,14 @@ export function yellowScripts(base: Record<string, MapScript>): Record<string, M
     // CinnabarGym.asm (Yellow): a gate's trainer will not fight until his
     // quiz has been tried -- talked to first, he gives the room's lecture
     CINNABAR_GYM: {
-      talk: Object.fromEntries([0, 1, 2, 3, 4, 5].map((i) => [
+      talk: {
+        // CinnabarGym_3.asm CinnabarGymPrintGymGuideText
+        TEXT_CINNABARGYM_GYM_GUIDE: (_ow: any, save: any): ScriptRow[] => [
+          ["face_player"],
+          ["show_text", save?.flags?.EVENT_BEAT_BLAINE
+            ? "_CinnabarGymGymGuideBeatBlaineText" : "_CinnabarGymGymGuideChampInMakingText"],
+        ] as ScriptRow[],
+        ...Object.fromEntries([0, 1, 2, 3, 4, 5].map((i) => [
         `TEXT_CINNABARGYM_SUPER_NERD${i + 2}`,
         (ow: any, save: any): ScriptRow[] => {
           const name = `CINNABARGYM_SUPER_NERD${i + 2}`;
@@ -648,8 +719,8 @@ export function yellowScripts(base: Record<string, MapScript>): Record<string, M
           return [["face_player"], ["show_text", after ?? "..."]] as ScriptRow[];
         },
       ])),
+      },
     },
-    // SafariZoneGate_2.asm: Yellow lets the short and the broke in anyway
     // PewterPokecenter.asm: Yellow's CooltrainerF, and the lullaby
     PEWTER_POKECENTER: {
       talk: {
@@ -688,8 +759,15 @@ export function yellowScripts(base: Record<string, MapScript>): Record<string, M
         TEXT_SUMMERBEACHHOUSE_PRINTER: beachPrinter,
       },
     },
+    // SafariZoneGate_2.asm: Yellow lets the short and the broke in anyway
     SAFARI_ZONE_GATE: {
       talk: {
+        // SafariZoneGatePrintSafariZoneWorker2Text: first time? then the rules
+        TEXT_SAFARIZONEGATE_SAFARI_ZONE_WORKER2: askThen(
+          "_SafariZoneGateSafariZoneWorker2FirstTimeHereText",
+          "_SafariZoneGateSafariZoneWorker2SafariZoneExplanationText",
+          "_SafariZoneGateSafariZoneWorker2YoureARegularHereText",
+        ),
         TEXT_SAFARIZONEGATE_SAFARI_ZONE_WORKER1: (_ow: any, save: any): ScriptRow[] =>
           save?.safari
             ? [["show_text", "_SafariZoneGateSafariZoneWorker1GoodLuckText"]] as ScriptRow[]

@@ -23,7 +23,8 @@ export function isNurseClerk(textConst: string): boolean {
  * TEXT_*POKECENTER_CHANSEY; Red and Blue have none.
  */
 export function chanseyScript(textConst: string): ScriptRow[] | null {
-  if (!textConst.endsWith("POKECENTER_CHANSEY")) return null;
+  // the Indigo Plateau lobby's is the same Chansey
+  if (!textConst.endsWith("POKECENTER_CHANSEY") && !textConst.endsWith("LOBBY_CHANSEY")) return null;
   return [
     ["show_text", "_NurseChanseyText"],
     ["play_cry", "CHANSEY"],

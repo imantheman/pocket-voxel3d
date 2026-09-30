@@ -11797,6 +11797,30 @@ function labOnStep(ow, save) {
     ["show_text", "_OaksLabPikachuDislikesPokeballsText2"]
   ];
 }
+function askThen(question, yes, no) {
+  return [
+    ["face_player"],
+    ["ask", question],
+    ["jump_if_false", "no"],
+    ["show_text", yes],
+    ["jump", "end"],
+    ["label", "no"],
+    ["show_text", no],
+    ["label", "end"]
+  ];
+}
+function grannyTalk(_ow, save) {
+  const rows = [["face_player"], ["show_text", "_CeladonMansion1Text2"]];
+  if (!starterInParty(save ?? {}, true))
+    return rows;
+  const h = happiness(save);
+  const reading = [51, 101, 131, 161, 201, 255].findIndex((t) => h < t);
+  rows.push(["show_text", "_CeladonMansion1Text6"]);
+  rows.push(["show_text", `_CeladonMansion1Text${reading < 0 ? 12 : 7 + reading}`]);
+  if (h >= 251)
+    rows.push(["wait", 50], ["pika_clip", 23]);
+  return rows;
+}
 function withBillsBeats(rows) {
   if (!Array.isArray(rows))
     return;
@@ -12080,7 +12104,27 @@ function yellowScripts(base) {
     VIRIDIAN_CITY: {
       onStep: viridianOnStep,
       talk: {
-        TEXT_VIRIDIANCITY_OLD_MAN2: (ow, save) => save?.flags?.EVENT_COMPLETED_CATCH_TRAINING ? [["show_text", "_ViridianCityOldManLosingMyTouchText"]] : [["face_player"], ...oldMan2Rows(ow)]
+        TEXT_VIRIDIANCITY_OLD_MAN2: (ow, save) => save?.flags?.EVENT_COMPLETED_CATCH_TRAINING ? [["show_text", "_ViridianCityOldManLosingMyTouchText"]] : [["face_player"], ...oldMan2Rows(ow)],
+        TEXT_VIRIDIANCITY_YOUNGSTER2: askThen("_ViridianCityYoungster2YouWantToKnowAboutText", "ViridianCityYoungster2CaterpieAndWeedleDescriptionText", "ViridianCityYoungster2OkThenText"),
+        TEXT_VIRIDIANCITY_GIRL: (_ow, save) => [
+          ["face_player"],
+          ["show_text", save?.flags?.EVENT_GOT_POKEDEX ? "_ViridianCityGirlWhenIGoShopText" : "_ViridianCityGirlHasntHadHisCoffeeYetText"]
+        ]
+      }
+    },
+    REDS_HOUSE_1F: {
+      talk: {
+        TEXT_REDSHOUSE1F_TV: (ow) => [
+          ["show_text", ow?.player?.facing === "up" ? "_RedsHouse1FTVStandByMeMovieText" : "_RedsHouse1FTVWrongSideText"]
+        ]
+      }
+    },
+    CELADON_MANSION_1F: {
+      talk: { TEXT_CELADONMANSION1F_GRANNY: grannyTalk }
+    },
+    ROUTE_18_GATE_2F: {
+      talk: {
+        TEXT_ROUTE18GATE2F_COOK: [["face_player"], ["trade", 6, "EVENT_TRADED_SLOWBRO_FOR_LICKITUNG"]]
       }
     },
     GAME_CORNER: {
@@ -12183,21 +12227,27 @@ function yellowScripts(base) {
       talk: { TEXT_VERMILIONCITY_OFFICER_JENNY: jennyTalk }
     },
     CINNABAR_GYM: {
-      talk: Object.fromEntries([0, 1, 2, 3, 4, 5].map((i) => [
-        `TEXT_CINNABARGYM_SUPER_NERD${i + 2}`,
-        (ow, save) => {
-          const name = `CINNABARGYM_SUPER_NERD${i + 2}`;
-          const npc = ow?.findNpc?.(name);
-          const beaten = !!npc && ow.trainerDefeated?.(npc);
-          if (!beaten && !save?.flags?.[gymGateFlag(i)]) {
-            return [["face_player"], ["show_text", `_CinnabarGymText_${i + 1}`]];
+      talk: {
+        TEXT_CINNABARGYM_GYM_GUIDE: (_ow, save) => [
+          ["face_player"],
+          ["show_text", save?.flags?.EVENT_BEAT_BLAINE ? "_CinnabarGymGymGuideBeatBlaineText" : "_CinnabarGymGymGuideChampInMakingText"]
+        ],
+        ...Object.fromEntries([0, 1, 2, 3, 4, 5].map((i) => [
+          `TEXT_CINNABARGYM_SUPER_NERD${i + 2}`,
+          (ow, save) => {
+            const name = `CINNABARGYM_SUPER_NERD${i + 2}`;
+            const npc = ow?.findNpc?.(name);
+            const beaten = !!npc && ow.trainerDefeated?.(npc);
+            if (!beaten && !save?.flags?.[gymGateFlag(i)]) {
+              return [["face_player"], ["show_text", `_CinnabarGymText_${i + 1}`]];
+            }
+            if (!beaten)
+              return [["face_player"], ["engage_trainer", name]];
+            const after = ow.trainerHeader?.(npc)?.after;
+            return [["face_player"], ["show_text", after ?? "..."]];
           }
-          if (!beaten)
-            return [["face_player"], ["engage_trainer", name]];
-          const after = ow.trainerHeader?.(npc)?.after;
-          return [["face_player"], ["show_text", after ?? "..."]];
-        }
-      ]))
+        ]))
+      }
     },
     PEWTER_POKECENTER: {
       talk: {
@@ -12235,6 +12285,7 @@ function yellowScripts(base) {
     },
     SAFARI_ZONE_GATE: {
       talk: {
+        TEXT_SAFARIZONEGATE_SAFARI_ZONE_WORKER2: askThen("_SafariZoneGateSafariZoneWorker2FirstTimeHereText", "_SafariZoneGateSafariZoneWorker2SafariZoneExplanationText", "_SafariZoneGateSafariZoneWorker2YoureARegularHereText"),
         TEXT_SAFARIZONEGATE_SAFARI_ZONE_WORKER1: (_ow, save) => save?.safari ? [["show_text", "_SafariZoneGateSafariZoneWorker1GoodLuckText"]] : [["face_player"], ["show_text", "_SafariZoneGateSafariZoneWorker1Text"], ...safariJoinRows(true)]
       },
       onStep: (ow, save) => {
@@ -15036,7 +15087,7 @@ function isNurseClerk(textConst) {
   return textConst.endsWith("_NURSE");
 }
 function chanseyScript(textConst) {
-  if (!textConst.endsWith("POKECENTER_CHANSEY"))
+  if (!textConst.endsWith("POKECENTER_CHANSEY") && !textConst.endsWith("LOBBY_CHANSEY"))
     return null;
   return [
     ["show_text", "_NurseChanseyText"],
