@@ -3229,6 +3229,10 @@ fn main() {
     /// Leftover sixtieths of a frame, so the long-run rate is exact.
     let mut aud_rem: i32 = 0;
     let mut sim_acc: f32 = 0.0;
+    // Game ticks run and real time dropped since the last perf line: a
+    // frame slower than the tick cap drops time rather than owing it.
+    let mut perf_ticks: u32 = 0;
+    let mut perf_drop_ms: f32 = 0.0;
     let mut sim_last: u64 = 0;
     let mut fps_frames: u32 = 0;
     // The frame's cost, averaged over each second and printed every fifth:
@@ -3393,17 +3397,20 @@ fn main() {
                     // build has no window for, which is why the first run of
                     // this line left no trace in pvlog.txt at all.
                     dlog(&format!(
-                        "[pv] perf: {} fps  cpu {:.1} avg {:.0} max ms  gpu {:.1} avg {:.0} max ms  proc {:.1} ms  spans {}/{}  trees {}/{}  3d {:.2} r{:.0}",
+                        "[pv] perf: {} fps  cpu {:.1} avg {:.0} max ms  gpu {:.1} avg {:.0} max ms  proc {:.1} ms  spans {}/{}  trees {}/{}  3d {:.2} r{:.0}  ticks {} dropped {:.0} ms",
                         fps_frames,
                         perf_cpu_sum / perf_n as f32, perf_cpu_max,
                         perf_gpu_sum / perf_n as f32, perf_gpu_max,
                         perf_proc_sum / perf_n as f32,
                         unsafe { DRAWN }, perf_spans, unsafe { TREES_DRAWN }, perf_trees,
                         perf_slider, perf_radius,
+                        perf_ticks, perf_drop_ms,
                     ));
                     dlog(&format!("[pv] sound: peak {} over the last 5 s", aud_peak));
                     aud_peak = 0;
                 }
+                // ticks and drops are totals over the 5 s the line covers
+                if perf_secs % 5 == 0 { perf_ticks = 0; perf_drop_ms = 0.0; }
                 perf_n = 0;
                 perf_cpu_sum = 0.0; perf_cpu_max = 0.0;
                 perf_gpu_sum = 0.0; perf_gpu_max = 0.0; perf_proc_sum = 0.0;
@@ -3420,7 +3427,15 @@ fn main() {
         if guest_drive {
             // The guest is a 60 Hz simulation; render rate must not change
             // game speed. Catch up on whole ticks, capped so a hitch can't
-            // spiral.
+            // spiral -- and what the cap leaves over is DROPPED, not owed.
+            // It used to stay in sim_acc: with the 3D slider up a frame took
+            // longer than the three ticks it was allowed, so the game ran
+            // slow AND banked the difference, and the moment the slider came
+            // down and frames got quick again it paid the bank back at three
+            // ticks a frame -- the rubber band, a stretch of fast-forward
+            // after every stretch of 3D. Four ticks keeps the speed right
+            // down to 15 fps; slower than that the game slows, and stays
+            // honest about it.
             let steps = unsafe {
                 extern "C" { fn osGetTime() -> u64; }
                 let now = osGetTime();
@@ -3429,8 +3444,14 @@ fn main() {
                 sim_last = now;
                 sim_acc += dt.min(100.0);
                 let mut n = 0;
-                while sim_acc >= 16.667 && n < 3 { sim_acc -= 16.667; n += 1; }
-                n.max(1)
+                while sim_acc >= 16.667 && n < 4 { sim_acc -= 16.667; n += 1; }
+                if sim_acc > 16.667 {
+                    perf_drop_ms += sim_acc - 16.667;
+                    sim_acc = 16.667;
+                }
+                let n = n.max(1);
+                perf_ticks += n;
+                n
             };
             let mut b = 0i32;
             if k.contains(KeyPad::DPAD_UP)    { b |= 1 << 0; }
