@@ -15,6 +15,7 @@ import { luaModuleToJson } from "../import/lua.ts";
 import { activeVersion, type GameVersion, genDirFor } from "../import/env.ts";
 import type { RedppPack } from "./redpp.ts";
 import { isGrass as isGrassColl, isLand, isWater as isWaterColl } from "../game/gen2/permissions.ts";
+import { isGen2, normalizeGen2 } from "./gen2.ts";
 
 export const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 /** The dataset of the game this run cooks (import/env.ts activeVersion). */
@@ -149,26 +150,31 @@ function readJson<T>(genDir: string, name: string): T {
   return JSON.parse(readFileSync(join(genDir, name), "utf8")) as T;
 }
 
+/** A module a dataset may not carry: Gold's import has no Gen 1 tables yet. */
+function optionalJson<T>(genDir: string, name: string): T {
+  return (existsSync(join(genDir, name)) ? readJson(genDir, name) : undefined) as T;
+}
+
 export function loadGen(genDir = GEN_DIR): GenData {
-  return {
+  const gen: GenData = {
     maps: readJson(genDir, "maps.json"),
     tilesets: readJson(genDir, "tilesets.json"),
     palettes: readJson(genDir, "palettes.json"),
     sprites: readJson(genDir, "sprites.json"),
     gfx: readJson(genDir, "gfx.json"),
     gfxBin: new Uint8Array(readFileSync(join(genDir, "gfx.bin"))),
-    font: readJson(genDir, "font.json"),
+    font: optionalJson(genDir, "font.json"),
     constants: readJson(genDir, "constants.json"),
-    encounters: readJson(genDir, "encounters.json"),
-    moves: readJson(genDir, "moves.json"),
-    pokemon: readJson(genDir, "pokemon.json"),
-    items: readJson(genDir, "items.json"),
-    typeChart: readJson(genDir, "type_chart.json"),
-    trainers: readJson(genDir, "trainers.json"),
-    text: readJson(genDir, "text.json"),
-    textPointers: readJson(genDir, "text_pointers.json"),
-    trainerHeaders: readJson(genDir, "trainer_headers.json"),
-    field: readJson(genDir, "field.json"),
+    encounters: optionalJson(genDir, "encounters.json"),
+    moves: optionalJson(genDir, "moves.json"),
+    pokemon: optionalJson(genDir, "pokemon.json"),
+    items: optionalJson(genDir, "items.json"),
+    typeChart: optionalJson(genDir, "type_chart.json"),
+    trainers: optionalJson(genDir, "trainers.json"),
+    text: optionalJson(genDir, "text.json"),
+    textPointers: optionalJson(genDir, "text_pointers.json"),
+    trainerHeaders: optionalJson(genDir, "trainer_headers.json"),
+    field: optionalJson(genDir, "field.json"),
     // Optional: a dataset imported before the animations still cooks, and
     // the guest simply has no move animations to play.
     battleAnims: existsSync(join(genDir, "battle_anims.json"))
@@ -180,6 +186,9 @@ export function loadGen(genDir = GEN_DIR): GenData {
       ? (readJson(genDir, "version.json") as { version: GameVersion }).version
       : "red",
   };
+  // Gold: Brian's records seen the way the cook reads a map (cook/gen2.ts)
+  if (isGen2(gen)) normalizeGen2(gen);
+  return gen;
 }
 
 // ---------------------------------------------------------------------------

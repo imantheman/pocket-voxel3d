@@ -94,7 +94,8 @@ export function sgbPalette(rgb: [number, number, number][]): Uint32Array {
  */
 export function buildPalettes(gen: GenData, extra: Uint32Array[] = []): Uint32Array[] {
   const defaults = Object.keys(ATLAS_KIND).map(() => gbPalette());
-  const sgb = gen.palettes.order.map((name) => {
+  // Gold has no SGB set: its colours all ride in the plan's tail (cook/gen2.ts)
+  const sgb = (gen.palettes.order ?? []).map((name) => {
     // Yellow's GBC colours when it carries them (cook/gbc.ts), else the SGB set
     const rgb = paletteColours(gen, name);
     if (!rgb) throw new Error(`palettes.json order names a missing palette: ${name}`);
@@ -105,7 +106,7 @@ export function buildPalettes(gen: GenData, extra: Uint32Array[] = []): Uint32Ar
 
 /** The VPAL index the RED++ tail starts at (= 4 kind defaults + the SGB set). */
 export function paletteBase(gen: GenData): number {
-  return Object.keys(ATLAS_KIND).length + gen.palettes.order.length;
+  return Object.keys(ATLAS_KIND).length + (gen.palettes.order ?? []).length;
 }
 
 // ---------------------------------------------------------------------------
@@ -546,7 +547,7 @@ export function buildPicPage(gen: GenData, key: string): PageDef {
  */
 export function buildTownMapPage(gen: GenData): PageDef | null {
   const art = artOf(gen, "townmap/tiles");
-  const tm = (gen.field as { townMap?: { background?: { map?: number[] } } }).townMap;
+  const tm = (gen.field as { townMap?: { background?: { map?: number[] } } } | undefined)?.townMap;
   const layout = tm?.background?.map;
   if (!art || !Array.isArray(layout) || layout.length !== 20 * 18) return null;
   const w = 20 * 8;

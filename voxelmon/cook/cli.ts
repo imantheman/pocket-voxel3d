@@ -68,6 +68,7 @@ import { packMap, runGeometry, type MapGeometry, type UvTransform } from "./mesh
 import { writePak } from "./pak.ts";
 import { planColour, Redpp, type ColourPlan, type PageOwner } from "./redpp.ts";
 import { planGbc, useGbc } from "./gbc.ts";
+import { Gen2Colour, isGen2, planGen2 } from "./gen2.ts";
 import { analyseMap } from "./structures.ts";
 
 export const DEFAULT_MAPS = [
@@ -110,8 +111,11 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
   // Yellow has colours of its own (cook/gbc.ts); the RED++ pack is Red's,
   // keyed by Red's sprite ids, and must not touch it even when a cooker
   // folder still holds it from an earlier Red cook
-  const pack = (gen.palettes as { cgbBase?: unknown }).cgbBase ? null : loadRedpp(genDir);
+  const gen2 = isGen2(gen);
+  const pack = (gen.palettes as { cgbBase?: unknown }).cgbBase || gen2 ? null : loadRedpp(genDir);
   const redpp = pack ? new Redpp(pack) : null;
+  // Gold's own GBC colours on the same machinery (cook/gen2.ts)
+  const gen2Colour = gen2 ? new Gen2Colour(gen) : null;
 
   const maps = mapNames.map((name) => {
     const def = gen.maps[name];
@@ -143,7 +147,7 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
     // overworld.ts applyCardKeyDoors hides them once the door is unlocked.
     // Here rather than inside runGeometry for the reason above: analyseMap
     // reads the blocks first and a later override changes nothing.
-    const closed = (gen.field.cardKeyDoors as
+    const closed = (gen.field?.cardKeyDoors as
       { closedDoors?: Record<string, { bx: number; by: number; block: number }[]> }
       | undefined)?.closedDoors?.[name];
     if (closed && Array.isArray(def.blocks)) {
@@ -201,11 +205,17 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
   // Page order: terrain (page 0 — the core binds the first TERRAIN page for
   // every chunk), ui, sprite sheets, emotes, pics.
   const terrainPage = 0;
-  const terrain = buildTerrainPage(gen, maps.map((m) => m.tileset), redpp, soleMapId);
+  const terrain = buildTerrainPage(
+    gen,
+    maps.map((m) => m.tileset),
+    redpp ?? (gen2Colour as unknown as Redpp | null),
+    soleMapId,
+  );
   const pages: PageDef[] = [terrain.page];
   const pageOwners: PageOwner[] = [{ kind: terrain.page.kind }];
   const uiPage = pages.length;
-  pages.push(buildUiPage(gen));
+  // Gold's font stage is not ported yet: a blank page holds the slot
+  pages.push(gen.font ? buildUiPage(gen) : { w: 8, h: 8, kind: ATLAS_KIND.ui, frames: [new Uint8Array(64)], name: "ui" });
   pageOwners.push({ kind: ATLAS_KIND.ui });
 
   const spriteIndex: Record<string, number> = {};
@@ -326,7 +336,7 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
   // it by this name while the SILPH SCOPE has not identified the mon.
   const ghost = frontPageByKey.get("battle/front/ghost");
   if (ghost !== undefined) frontIndex.GHOST = ghost;
-  for (const [id, def] of Object.entries(gen.pokemon)) {
+  for (const [id, def] of Object.entries(gen.pokemon ?? {})) {
     const front = pageForPath(frontPageByKey, def.spriteFront as string | undefined);
     if (front !== undefined) {
       frontIndex[id] = front;
@@ -368,7 +378,7 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
   // are the last thing anyone addresses by literal index.
   const titleMonPageByKey = new Map<string, number>();
   for (const id of TITLE_MONS) {
-    const def = gen.pokemon[id] as { spriteFront?: string } | undefined;
+    const def = gen.pokemon?.[id] as { spriteFront?: string } | undefined;
     const key = def?.spriteFront
       ? def.spriteFront.replace(/^assets\/generated\//, "").replace(/\.png$/, "")
       : undefined;
@@ -441,8 +451,10 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
     townMapPage,
     townMapCursorPage,
   };
-  const gameJson = buildGamedata(gen, atlas, mapNames);
-  const glyphs = buildCharmap(gen);
+  const gameJson = gen2
+    ? new TextEncoder().encode(JSON.stringify({ version: gen.version, generation: 2, cookedMaps: mapNames, atlas }))
+    : buildGamedata(gen, atlas, mapNames);
+  const glyphs = gen.font ? buildCharmap(gen) : [];
   // The chip synth's input rides in its own AUDI section: the importer's
   // audio.json + programs.bin, spliced verbatim (the guest is the only
   // parser). Absent for a dataset imported before the audio stage existed —
@@ -468,9 +480,11 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
         terrainPage,
         pages: pageOwners,
       })
-    : useGbc(gen)
-      ? planGbc(gen, pageOwners, packedMaps.map((m) => m.mapId)) // Yellow: its GBC palettes (cook/gbc.ts)
-      : null;
+    : gen2Colour
+      ? planGen2(gen, gen2Colour, { base: paletteBase(gen), maps: maps.map((m) => m.def), terrainPage, pages: pageOwners })
+      : useGbc(gen)
+        ? planGbc(gen, pageOwners, packedMaps.map((m) => m.mapId)) // Yellow: its GBC palettes (cook/gbc.ts)
+        : null;
   const palettes = buildPalettes(gen, colour?.palettes ?? []);
 
   // --- the ground bake (docs/VOXEL.md §4a): per eligible chunk, one page ---

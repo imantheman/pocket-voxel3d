@@ -70,7 +70,7 @@ function voidTiles(map: GameMap, art: Art): Set<number> {
  *  pinned bush — these become removable STMP stamps. */
 function cuttableCells(map: GameMap, gen: GenData, S: SGrid): Set<string> {
   const out = new Set<string>();
-  const swaps = gen.field.cutTreeSwaps as { before: number; after: number }[] | undefined;
+  const swaps = gen.field?.cutTreeSwaps as { before: number; after: number }[] | undefined;
   if (!Array.isArray(swaps)) return out;
   const before = new Set(swaps.map((s) => s.before));
   for (let cy = 0; cy < map.def.height * 2; cy++) {
