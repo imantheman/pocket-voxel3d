@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { luaModuleToJson } from "../import/lua.ts";
 import { activeVersion, type GameVersion, genDirFor } from "../import/env.ts";
 import type { RedppPack } from "./redpp.ts";
+import { isGrass as isGrassColl, isLand, isWater as isWaterColl } from "../game/gen2/permissions.ts";
 
 export const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 /** The dataset of the game this run cooks (import/env.ts activeVersion). */
@@ -38,6 +39,13 @@ export interface TilesetDef {
   waterTiles?: number[];
   shoreTiles?: number[];
   animation?: string;
+  /**
+   * Gen 2: one COLL_* byte per 2x2-tile quadrant of each metatile --
+   * top-left, top-right, bottom-left, bottom-right (the `tilecoll` macro) --
+   * which is what a Gen 2 cell is judged by (game/gen2/permissions.ts).
+   * Absent for Gen 1, whose cells are judged by their bottom-left tile.
+   */
+  collision?: number[][];
 }
 
 export interface MapDef {
@@ -250,7 +258,7 @@ export class GameMap {
     this.id = def.id;
     this.widthTiles = def.width * 4;
     this.heightTiles = def.height * 4;
-    this.walkable = new Set(tileset.walkable);
+    this.walkable = new Set(tileset.walkable ?? []);
     this.doorTiles = new Set(tileset.doorTiles ?? []);
     // VoxelMod Map.lua:128-131 — water and shore share one lookup.
     this.waterTiles = new Set(tileset.waterTiles ?? WATER_TILES);
@@ -281,17 +289,29 @@ export class GameMap {
     return cx >= 0 && cy >= 0 && cx < this.def.width * 2 && cy < this.def.height * 2;
   }
 
+  /** Gen 2: the cell's collision byte, from its metatile's quadrant
+   * (border-extended like every other rule here). Undefined for Gen 1. */
+  cellCollision(cx: number, cy: number): number | undefined {
+    const quads = this.tileset.collision;
+    if (!quads) return undefined;
+    const block = this.blockAt(Math.floor(cx / 2), Math.floor(cy / 2));
+    return quads[block]?.[mod(cy, 2) * 2 + mod(cx, 2)];
+  }
+
   isWalkableCell(cx: number, cy: number): boolean {
+    if (this.tileset.collision) return isLand(this.cellCollision(cx, cy));
     return this.walkable.has(this.cellTile(cx, cy));
   }
 
   isWaterCell(cx: number, cy: number): boolean {
+    if (this.tileset.collision) return isWaterColl(this.cellCollision(cx, cy));
     return this.waterTiles.has(this.cellTile(cx, cy));
   }
 
   // Map.lua:224 isGrassCell — off-map cells never count (border filler).
   isGrassCell(cx: number, cy: number): boolean {
     if (!this.inBounds(cx, cy)) return false;
+    if (this.tileset.collision) return isGrassColl(this.cellCollision(cx, cy));
     const grass = this.tileset.grassTile;
     return grass !== undefined && this.cellTile(cx, cy) === grass;
   }
