@@ -13,5 +13,11 @@ ctru-rs = { git = "https://github.com/rust3ds/ctru-rs.git" }
 citro3d = { git = "https://github.com/rust3ds/citro3d-rs.git" }
 pocketvoxel-core = { path = "../pocketvoxel-core" }
 
+[features]
+# Pokemon Blue: its own dataset (paks/gamedata_blue.json), save
+# (save_blue.lua) and title ribbon overlay, over the SAME shared paks Red
+# reads. `cargo 3ds build --release --features blue`.
+blue = []
+
 [build-dependencies]
 cc = "1"

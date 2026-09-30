@@ -1,4 +1,7 @@
 // voxelmon/game/data.ts
+function gameVersion(data) {
+  return data?.version === "blue" ? "blue" : "red";
+}
 var REQUIRED_MODULES = [
   "pokemon",
   "moves",
@@ -6937,6 +6940,22 @@ var PRIZE_WINDOWS = [
     { kind: "item", item: "TM_SUBSTITUTE", cost: 7700 }
   ]
 ];
+var BLUE_PRIZE_WINDOWS = [
+  [
+    { kind: "mon", species: "ABRA", level: 6, cost: 120 },
+    { kind: "mon", species: "CLEFAIRY", level: 12, cost: 750 },
+    { kind: "mon", species: "NIDORINO", level: 17, cost: 1200 }
+  ],
+  [
+    { kind: "mon", species: "PINSIR", level: 20, cost: 2500 },
+    { kind: "mon", species: "DRATINI", level: 24, cost: 4600 },
+    { kind: "mon", species: "PORYGON", level: 18, cost: 6500 }
+  ],
+  PRIZE_WINDOWS[2]
+];
+function prizeWindows(data) {
+  return gameVersion(data) === "blue" ? BLUE_PRIZE_WINDOWS : PRIZE_WINDOWS;
+}
 function prizeCounterRows(window) {
   return [
     ["check_item", "COIN_CASE"],
@@ -16336,6 +16355,27 @@ var TITLE_MONS = [
   "PONYTA",
   "MAGIKARP"
 ];
+var TITLE_MONS_BLUE = [
+  "SQUIRTLE",
+  "CHARMANDER",
+  "BULBASAUR",
+  "MANKEY",
+  "HITMONLEE",
+  "VULPIX",
+  "CHANSEY",
+  "AERODACTYL",
+  "JOLTEON",
+  "SNORLAX",
+  "GLOOM",
+  "POLIWAG",
+  "DODUO",
+  "PORYGON",
+  "GENGAR",
+  "RAICHU"
+];
+function titleMons(data) {
+  return gameVersion(data) === "blue" ? TITLE_MONS_BLUE : TITLE_MONS;
+}
 var TITLE_PAGES = { copyright: 421, gamefreak: 422, logo: 423, player: 424 };
 function titlePage(data, key) {
   const p = namedPage(data, "picTitle", key);
@@ -16346,6 +16386,7 @@ var LOGO = { x: 16, y: 8, w: 128, h: 48 };
 var RIBBON_Y = 64;
 var RIBBON_RED = { x: 56, tiles: [0, 1] };
 var RIBBON_VERSION = { x: 80, tiles: [5, 6, 7, 8, 9] };
+var RIBBON_BLUE = { x: 56, tiles: [0, 1, 2, 3, 4, 5, 6, 7] };
 var MON_BOX = { x: 40, y: 80, w: 56, h: 56 };
 var RED_AT = { x: 82, y: 80, w: 40, h: 56 };
 var COPYRIGHT_Y = 136;
@@ -16358,16 +16399,19 @@ class TitleState {
   timer = 0;
   index = 0;
   menu;
-  mon = TITLE_MONS[0];
+  mon;
   bag = [];
+  cast;
   constructor(game, onChoose) {
     this.game = game;
     this.onChoose = onChoose;
     this.menu = game.hasSave ? ["CONTINUE", "NEW GAME", "OPTION", "MAP VIEWER"] : ["NEW GAME", "OPTION", "MAP VIEWER"];
+    this.cast = titleMons(game.data);
+    this.mon = this.cast[0];
   }
   pickNext() {
     if (this.bag.length === 0)
-      this.bag = TITLE_MONS.filter((s) => s !== this.mon);
+      this.bag = this.cast.filter((s) => s !== this.mon);
     const i = Math.floor(Math.random() * this.bag.length);
     this.mon = this.bag.splice(i, 1)[0];
   }
@@ -16430,8 +16474,12 @@ class TitleState {
       seq.forEach((t, i) => tiles.push({ page, tile: t, x: x + i * 8, y, flags: 0 }));
     };
     const version = namedPage(data, "picTitle", "version");
-    row(version, RIBBON_RED.tiles, RIBBON_RED.x, RIBBON_Y);
-    row(version, RIBBON_VERSION.tiles, RIBBON_VERSION.x, RIBBON_Y);
+    if (gameVersion(data) === "blue") {
+      row(version, RIBBON_BLUE.tiles, RIBBON_BLUE.x, RIBBON_Y);
+    } else {
+      row(version, RIBBON_RED.tiles, RIBBON_RED.x, RIBBON_Y);
+      row(version, RIBBON_VERSION.tiles, RIBBON_VERSION.x, RIBBON_Y);
+    }
     row(titlePage(data, "copyright"), COPYRIGHT_PREFIX, 16, COPYRIGHT_Y);
     row(titlePage(data, "gamefreak"), COPYRIGHT_GAMEFREAK, 80, COPYRIGHT_Y);
     return {
@@ -20068,8 +20116,8 @@ class VoxelmonGame {
         x: 3,
         y: 6,
         facing: "down",
-        name: "RED",
-        rival: "BLUE",
+        name: this.defaultNames().player,
+        rival: this.defaultNames().rival,
         id: Math.floor(Math.random() * 65536)
       },
       flags: {},
@@ -20430,10 +20478,10 @@ ${mname}!`);
       }));
     };
     run(A, () => {
-      askName("YOUR NAME?", presets?.player, "RED", (name) => {
+      askName("YOUR NAME?", presets?.player, this.defaultNames().player, (name) => {
         this.save.player.name = name;
         run(B, () => {
-          askName("RIVAL'S NAME?", presets?.rival, "BLUE", (rival) => {
+          askName("RIVAL'S NAME?", presets?.rival, this.defaultNames().rival, (rival) => {
             this.save.player.rival = rival;
             run(C, () => {
               this.audio?.startMap?.("REDS_HOUSE_2F");
@@ -21009,8 +21057,16 @@ your POKéMON!`), () => {
     const top = this.stack[this.stack.length - 1];
     return top?.kind === "slots" ? top.view() : null;
   }
+  defaultNames() {
+    const p = this.data.field?.presetNames;
+    const blue = gameVersion(this.data) === "blue";
+    return {
+      player: p?.player?.[0] ?? (blue ? "BLUE" : "RED"),
+      rival: p?.rival?.[0] ?? (blue ? "RED" : "BLUE")
+    };
+  }
   openPrizes(window, onDone) {
-    const prizes = PRIZE_WINDOWS[window - 1];
+    const prizes = prizeWindows(this.data)[window - 1];
     if (!prizes) {
       onDone?.();
       return;

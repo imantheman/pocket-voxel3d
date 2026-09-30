@@ -171,6 +171,65 @@ fn size_pak_cache() {
 /// page still read exactly as before.
 static mut SHARED_ATLAS: Option<&'static [u8]> = None;
 
+/// Which game this build is. Red and Blue read one shared set of map paks
+/// (the maps and every graphic but the title ribbon are the same data in
+/// both ROMs); each has its own dataset and a small atlas overlay.
+#[cfg(not(feature = "blue"))]
+const GAME: &str = "red";
+#[cfg(feature = "blue")]
+const GAME: &str = "blue";
+#[cfg(not(feature = "blue"))]
+const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks/gamedata.json";
+#[cfg(feature = "blue")]
+const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks/gamedata_blue.json";
+#[cfg(not(feature = "blue"))]
+const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks/version_red.vxat";
+#[cfg(feature = "blue")]
+const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks/version_blue.vxat";
+
+/// This game's own atlas pages (paks/version_<game>.vxat, written by
+/// tools/cook3ds.ts writeOverlay): page index -> page. Whatever the shared
+/// set holds at those indices -- the other game's title ribbon, if it was
+/// cooked last -- this game draws its own.
+static mut OVERLAY: Vec<(usize, pak::AtlasPage<'static>)> = Vec::new();
+
+/// Parse the overlay file: "VXVO" u16 format u16 count, then count x 16-byte
+/// entries {page, w, h, kind, frames, 0: u16; frame_len: u32}, then each
+/// page's texels, 16-aligned, in entry order.
+fn parse_overlay(d: &'static [u8]) -> Vec<(usize, pak::AtlasPage<'static>)> {
+    let mut out = Vec::new();
+    if d.len() < 8 || &d[0..4] != b"VXVO" { return out; }
+    let u16_at = |o: usize| u16::from_le_bytes([d[o], d[o + 1]]);
+    let count = u16_at(6) as usize;
+    if d.len() < 8 + count * 16 { return out; }
+    let mut at = 8 + count * 16;
+    for i in 0..count {
+        let e = 8 + i * 16;
+        let (page, w, h, kind, frames) = (u16_at(e), u16_at(e + 2), u16_at(e + 4), u16_at(e + 6), u16_at(e + 8));
+        let frame_len = u32::from_le_bytes([d[e + 12], d[e + 13], d[e + 14], d[e + 15]]);
+        at += (16 - at % 16) % 16;
+        let total = frame_len as usize * frames.max(1) as usize;
+        if at + total > d.len() { break; }
+        out.push((page as usize, pak::AtlasPage::from_parts(w, h, kind, frames, frame_len, &d[at..at + total])));
+        at += total;
+    }
+    out
+}
+
+/// Swap this game's own pages in over whatever the shared set carried. A
+/// page is only replaced by one of the same shape, so an overlay from some
+/// other cook can never hand the renderer a page it cannot upload.
+#[allow(static_mut_refs)]
+fn apply_overlay(p: &mut pak::Pak<'static>) {
+    for (i, page) in unsafe { OVERLAY.iter() } {
+        if let Some(slot) = p.atlases.get_mut(*i) {
+            if slot.w == page.w && slot.h == page.h && slot.kind == page.kind {
+                *slot = *page;
+            }
+        }
+    }
+}
+
 #[allow(static_mut_refs)]
 unsafe fn cache_total_kb() -> usize {
     PAK_CACHE.iter().map(|c| c.kb).sum()
@@ -225,7 +284,8 @@ unsafe fn load_map_pak(name: &str, want: Option<PlanKey>) -> bool {
             };
             let buf: Box<[u8]> = pf.buf.into_boxed_slice();
             let bytes: &'static [u8] = core::mem::transmute(buf.as_ref());
-            if let Ok(p) = pak::read_with_shared(bytes, SHARED_ATLAS) {
+            if let Ok(mut p) = pak::read_with_shared(bytes, SHARED_ATLAS) {
+                apply_overlay(&mut p);
                 while cache_total_kb() + kb > PAK_CACHE_BUDGET_KB && evict_lru(false) {}
                 PAK_CACHE.retain(|c| c.name != name);
                 PAK_CACHE.insert(0, Box::new(CachedPak {
@@ -289,7 +349,8 @@ unsafe fn load_map_pak(name: &str, want: Option<PlanKey>) -> bool {
     let buf: Box<[u8]> = v.into_boxed_slice();
     let bytes: &'static [u8] = core::mem::transmute(buf.as_ref());
     match pak::read_with_shared(bytes, unsafe { SHARED_ATLAS }) {
-        Ok(p) => {
+        Ok(mut p) => {
+            apply_overlay(&mut p);
             // A map under HUGE_MAP_THRESHOLD builds in file order, so its
             // plan does not depend on where the player stands: drop the
             // centre and the copy then serves every later position, instead
@@ -548,7 +609,8 @@ unsafe fn prefetch_step(budget_ms: u64) -> bool {
     let buf: Box<[u8]> = pf.buf.into_boxed_slice();
     let bytes: &'static [u8] = core::mem::transmute(buf.as_ref());
     match pak::read_with_shared(bytes, SHARED_ATLAS) {
-        Ok(p) => {
+        Ok(mut p) => {
+            apply_overlay(&mut p);
             // Behind the current map, so it is the first thing dropped if
             // the player walks somewhere else entirely.
             let at = PAK_CACHE.len().min(1);
@@ -2818,14 +2880,18 @@ fn main() {
     // different binary — the Desktop copy lives in OneDrive, and a sync
     // lag once made a stale .3dsx look like a code path that "did nothing".
     dlog(&format!(
-        "[pv] boot build={}",
+        "[pv] boot build={} game={}",
         option_env!("PV_BUILD_ID").unwrap_or("dev"),
+        GAME,
     ));
 
     // Hold the pak resident, as the live scene renderer will need.
     println!("loading pak...");
     // Per-map paks: memory scales with the biggest map, not the map count.
-    let gd = std::fs::read("sdmc:/3ds/voxelmon/paks/gamedata.json").unwrap_or_default();
+    let gd = std::fs::read(GAMEDATA_PATH).unwrap_or_default();
+    if gd.is_empty() {
+        dlog(&format!("[pv] no dataset at {} -- cook this game's ROM", GAMEDATA_PATH));
+    }
     println!("gamedata {} KB", gd.len() / 1024);
     let gd_static: &'static [u8] = Box::leak(gd.into_boxed_slice());
 
@@ -2840,6 +2906,15 @@ fn main() {
             unsafe { SHARED_ATLAS = Some(Box::leak(v.into_boxed_slice())); }
         }
         _ => println!("shared atlas: absent (paks carry their own pages)"),
+    }
+    // This game's own pages over the shared set, before any pak is read.
+    match std::fs::read(OVERLAY_PATH) {
+        Ok(v) if !v.is_empty() => {
+            let d: &'static [u8] = Box::leak(v.into_boxed_slice());
+            unsafe { OVERLAY = parse_overlay(d); }
+            dlog(&format!("[pv] overlay {} page(s) from {}", unsafe { OVERLAY.len() }, OVERLAY_PATH));
+        }
+        _ => dlog(&format!("[pv] overlay: none at {}", OVERLAY_PATH)),
     }
 
     let index_txt = std::fs::read_to_string("sdmc:/3ds/voxelmon/paks/index.txt")

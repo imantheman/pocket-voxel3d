@@ -230,6 +230,12 @@ pub struct AtlasPage<'a> {
 }
 
 impl<'a> AtlasPage<'a> {
+    /// A page from its parts -- the 3DS host's version overlay, whose pages
+    /// live in their own small file rather than in a pak.
+    pub fn from_parts(w: u16, h: u16, kind: u16, frames: u16, frame_len: u32, texels: &'a [u8]) -> Self {
+        AtlasPage { w, h, kind, frames, frame_len, texels }
+    }
+
     /// Swizzled CLUT8 texels of animation frame `i` (wraps past `frames`).
     pub fn frame(&self, i: u16) -> &'a [u8] {
         let i = (i % self.frames) as usize;

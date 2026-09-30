@@ -48,8 +48,13 @@ pub unsafe fn scene() -> &'static mut Scene {
     SCENE.as_mut().expect("voxel::init not called")
 }
 
-// GameVersion.saveSuffix("red") is "", so the recomp's file is save.lua.
+// GameVersion.saveSuffix: "" for Red, "_blue" for Blue -- the recomp's own
+// file names, so a save moves between the two ports unchanged, and Red and
+// Blue never write over each other.
+#[cfg(not(feature = "blue"))]
 const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save.lua";
+#[cfg(feature = "blue")]
+const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save_blue.lua";
 static mut SAVE_BUF: Vec<u8> = Vec::new();
 
 /// Read whatever is on the card at boot so CONTINUE has something to load.

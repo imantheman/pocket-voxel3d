@@ -28,7 +28,7 @@ import { join } from "node:path";
 
 import { cook } from "../voxelmon/cook/cli.ts";
 import { GEN_DIR, genMissingReason, loadGen, ROOT } from "../voxelmon/cook/data.ts";
-import { missingInputReason, resolveEnv } from "../voxelmon/import/env.ts";
+import { activeVersion, type GameVersion, missingInputReason, resolveEnv } from "../voxelmon/import/env.ts";
 import { runImport } from "../voxelmon/import/index.ts";
 
 const DIST = join(ROOT, "dist/voxelmon");
@@ -43,6 +43,86 @@ const THREE_DSX = join(
   ROOT,
   "crates/pocketvoxel-3ds/target/armv6k-nintendo-3ds/release/pocketvoxel-3ds.3dsx",
 );
+
+/**
+ * What each game keeps for itself inside the shared paks folder. Red and
+ * Blue cook to the SAME map paks, common.vxat and index.txt -- the maps and
+ * every graphic but one are the same data in both ROMs -- so a player with
+ * both games carries one set. Each game adds its own dataset and a one-page
+ * atlas overlay holding its title ribbon, the only graphic that differs.
+ * Red keeps the name its dataset has always had.
+ */
+export const VERSION_FILES: Record<GameVersion, { gamedata: string; overlay: string; threeDsx: string }> = {
+  red: { gamedata: "gamedata.json", overlay: "version_red.vxat", threeDsx: "pocketvoxel-3ds.3dsx" },
+  blue: { gamedata: "gamedata_blue.json", overlay: "version_blue.vxat", threeDsx: "pocketvoxel-3ds-blue.3dsx" },
+};
+
+const SHARED_BIT = 0x80000000;
+
+/**
+ * The version overlay (paks/version_<v>.vxat): the atlas pages this game
+ * draws differently from the other, which the console swaps in over the
+ * shared set as it reads each pak (crates/pocketvoxel-3ds main.rs
+ * apply_overlay). Today that is the one page named `title/version`.
+ *
+ *   "VXVO" u16 format(1) u16 count
+ *   count x { u16 page, w, h, kind, frames, 0; u32 frameLen }
+ *   then each page's texels (frameLen * frames), 16-aligned
+ *
+ * Pages are copied byte for byte out of a cooked pak (resolving a shared
+ * page against common.vxat, as pak.rs does), so the overlay is exactly the
+ * page the rest of the set would have carried.
+ */
+export function writeOverlay(paksDir: string, pages: number[], out: string): number {
+  const pakName = readFileSync(join(paksDir, "index.txt"), "utf8").split("\n")[0]!.split(" ")[1]!;
+  const d = readFileSync(join(paksDir, `${pakName}.vxpak`));
+  const common = existsSync(join(paksDir, "common.vxat")) ? readFileSync(join(paksDir, "common.vxat")) : null;
+  const nsec = d.readUInt16LE(6);
+  let atls = -1;
+  for (let s = 0; s < nsec; s++) {
+    const e = 16 + s * 16;
+    if (d.toString("latin1", e, e + 4) === "ATLS") atls = d.readUInt32LE(e + 4);
+  }
+  if (atls < 0) throw new Error(`no ATLS section in ${pakName}.vxpak`);
+  const n = d.readUInt16LE(atls);
+  const entries: Buffer[] = [];
+  const blobs: Buffer[] = [];
+  for (const page of pages) {
+    if (page < 0 || page >= n) throw new Error(`overlay page ${page} is not in the atlas (${n} pages)`);
+    const p = atls + 2 + page * 16;
+    const [w, h, kind, frames] = [0, 2, 4, 6].map((o) => d.readUInt16LE(p + o)) as [number, number, number, number];
+    const off = d.readUInt32LE(p + 8);
+    const frameLen = d.readUInt32LE(p + 12);
+    const total = frameLen * frames;
+    const shared = (off & SHARED_BIT) !== 0;
+    const at = off & ~SHARED_BIT & 0x7fffffff;
+    const src = shared ? common : d.subarray(atls);
+    if (!src) throw new Error(`page ${page} is shared but there is no common.vxat`);
+    const e = Buffer.alloc(16);
+    e.writeUInt16LE(page, 0);
+    e.writeUInt16LE(w, 2);
+    e.writeUInt16LE(h, 4);
+    e.writeUInt16LE(kind, 6);
+    e.writeUInt16LE(frames, 8);
+    e.writeUInt32LE(frameLen, 12);
+    entries.push(e);
+    blobs.push(Buffer.from(src.subarray(at, at + total)));
+  }
+  const head = Buffer.alloc(8);
+  head.write("VXVO", 0, "latin1");
+  head.writeUInt16LE(1, 4);
+  head.writeUInt16LE(pages.length, 6);
+  const parts: Buffer[] = [head, ...entries];
+  let len = 8 + entries.length * 16;
+  for (const b of blobs) {
+    const pad = (16 - (len % 16)) % 16;
+    parts.push(Buffer.alloc(pad), b);
+    len += pad + b.length;
+  }
+  const file = Buffer.concat(parts);
+  writeFileSync(out, file);
+  return file.length;
+}
 
 interface GameData {
   cookedMaps?: string[];
@@ -73,6 +153,9 @@ export async function cook3ds(only?: string[]): Promise<number> {
     return 1;
   }
   const gen = loadGen(GEN_DIR);
+  const version = activeVersion();
+  const files = VERSION_FILES[version];
+  console.log(`cook3ds: ${version === "blue" ? "Blue" : "Red"} (${GEN_DIR})`);
   const names = (only ?? Object.keys(gen.maps)).sort();
   if (names.length === 0) {
     console.error("cook3ds: no maps in the imported dataset");
@@ -118,8 +201,18 @@ export async function cook3ds(only?: string[]): Promise<number> {
   // Deliberately the existing, tested byte transform rather than a second
   // implementation here: it rewrites already-cooked paks and checks itself
   // page for page against its input.
+  // The other game's own files survive this cook: the shared set is the
+  // same whichever ROM made it, so what the other game cooked still fits.
+  const keep = new Map<string, Buffer>();
+  for (const [v, f] of Object.entries(VERSION_FILES)) {
+    if (v === version) continue;
+    for (const name of [f.gamedata, f.overlay]) {
+      if (existsSync(join(PAKS, name))) keep.set(name, readFileSync(join(PAKS, name)));
+    }
+  }
   rmSync(PAKS, { recursive: true, force: true });
   mkdirSync(PAKS, { recursive: true });
+  for (const [name, bytes] of keep) writeFileSync(join(PAKS, name), bytes);
   console.log("cook3ds: hoisting the pages every map shares");
   // VOXELMON_PYTHON names the interpreter when "python3" is not the one on
   // PATH -- on Windows it is "python", and the cooker app has its own.
@@ -139,7 +232,7 @@ export async function cook3ds(only?: string[]): Promise<number> {
   // --- 3. the dataset and the index they share ---------------------------
   merged.cookedMaps = names;
   for (const [name, record] of Object.entries(perMap)) merged.maps[name] = record;
-  writeFileSync(join(PAKS, "gamedata.json"), JSON.stringify(merged));
+  writeFileSync(join(PAKS, files.gamedata), JSON.stringify(merged));
 
   // index.txt is the console's map list: "<map id> <name>", and the id is
   // the ROM's own map index, NOT the line number -- the map browser loads by
@@ -152,14 +245,22 @@ export async function cook3ds(only?: string[]): Promise<number> {
     })
     .join("\n");
   writeFileSync(join(PAKS, "index.txt"), `${index}\n`);
-  console.log(`  gamedata.json + index.txt for ${names.length} maps`);
+  console.log(`  ${files.gamedata} + index.txt for ${names.length} maps`);
+
+  // This game's title ribbon, which the other game's pages must not show.
+  const ribbon = (merged as { atlas?: { picTitle?: Record<string, number> } }).atlas?.picTitle?.version;
+  if (ribbon !== undefined) {
+    const n = writeOverlay(PAKS, [ribbon], join(PAKS, files.overlay));
+    console.log(`  ${files.overlay}: the title ribbon, page ${ribbon} (${n} bytes)`);
+  }
 
   // --- 4. the card ---------------------------------------------------------
   rmSync(CARD, { recursive: true, force: true });
   mkdirSync(CARD_PAKS, { recursive: true });
   cpSync(PAKS, CARD_PAKS, { recursive: true });
-  if (existsSync(THREE_DSX)) {
-    cpSync(THREE_DSX, join(CARD, "3ds/pocketvoxel-3ds.3dsx"));
+  const dsx = version === "red" ? THREE_DSX : join(DIST, files.threeDsx);
+  if (existsSync(dsx)) {
+    cpSync(dsx, join(CARD, "3ds", files.threeDsx));
   } else {
     console.log("  (no 3dsx built yet — `bun tools/voxel.ts 3ds` builds one)");
   }
