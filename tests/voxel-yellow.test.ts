@@ -35,6 +35,8 @@ import {
 } from "../voxelmon/game/ui/yellowintro.ts";
 import { IntroState } from "../voxelmon/game/ui/intro.ts";
 import { surfingPikachuInParty } from "../voxelmon/game/ui/surfingstate.ts";
+import * as Pika from "../voxelmon/game/world/pikachu.ts";
+import { nurseGreetScript } from "../voxelmon/game/world/nurses.ts";
 import { PIKA_MAP_PAUSE_IGT, PIKA_MAP_SURF_SELECT } from "../voxelmon/game/world/script.ts";
 
 const genDir = join(import.meta.dir, "../dist/voxelmon/yellow/gen");
@@ -637,6 +639,77 @@ describe("Yellow: Pikachu follows you", () => {
       }
       expect(b.audioCues).toContain(clip);
     }
+  });
+
+  /** A bare world with the follower spawned under a player at (5,5). */
+  function pikaWorld(facing = "up"): any {
+    const emotes: number[] = [];
+    const w: any = {
+      save: { version: "yellow", flags: { EVENT_GOT_STARTER: true }, party: [{ species: "PIKACHU", hp: 10 }] },
+      data: yellow,
+      map: { id: "TEST", inBounds: () => false, cellTile: () => 0, def: { tileset: "OVERWORLD" } },
+      player: { cellX: 5, cellY: 5, px: 80, py: 80, facing },
+      npcs: [],
+      entities: [],
+      setEmote: (_e: unknown, kind: number) => emotes.push(kind),
+      emotes,
+    };
+    Pika.onMapEntered(w);
+    return w;
+  }
+  function tick(w: any, n: number): void {
+    for (let i = 0; i < n; i++) {
+      Pika.findFollower(w)?.update();
+      Pika.updateFollower(w, () => 0);
+    }
+  }
+
+  test.skipIf(!hasYellow)("it hops onto the Pokemon Center counter as the party goes in", () => {
+    const w = pikaWorld("up");
+    const npc = Pika.findFollower(w)!;
+    npc.cellY = 6; npc.py = 96; // one below the player
+    let done = false;
+    Pika.hopToCounter(w, () => { done = true; });
+    tick(w, 16);
+    expect(npc.lift).toBeGreaterThan(5); // mid-arc
+    tick(w, 20);
+    expect(done).toBe(true);
+    expect([npc.cellX, npc.cellY, npc.lift]).toEqual([5, 4, 0]);
+    // standing above the player it has no hop
+    const w2 = pikaWorld("up");
+    Pika.findFollower(w2)!.cellY = 4;
+    let done2 = false;
+    Pika.hopToCounter(w2, () => { done2 = true; });
+    expect(done2).toBe(true);
+    // and the nurse's rows carry the hop between her two lines
+    const rows = nurseGreetScript("TEXT_VIRIDIANPOKECENTER_NURSE")!.map((r) => r[0]);
+    expect(rows.indexOf("pikachu_counter_hop")).toBeGreaterThan(rows.indexOf("show_text"));
+    expect(rows.indexOf("pikachu_counter_hop")).toBeLessThan(rows.indexOf("heal_party"));
+  });
+
+  test.skipIf(!hasYellow)("in Bill's house it wanders off confused, watches the machine, and is startled by Bill", () => {
+    const w = pikaWorld("up");
+    Pika.enterBillsHouse(w);
+    tick(w, 5 * 17);
+    const npc = Pika.findFollower(w)!;
+    expect([npc.cellX, npc.cellY]).toEqual([8, 4]);
+    expect(npc.parked).toBe(true);
+    expect(w.emotes).toEqual([2]); // ?
+    Pika.billsBeat(w, "enter");
+    tick(w, 3 * 17);
+    expect([npc.cellX, npc.cellY, npc.facing]).toEqual([8, 1, "up"]);
+    Pika.billsBeat(w, "exit");
+    expect(npc.facing).toBe("left");
+    expect(w.emotes).toEqual([2, 2, 1]);
+    // the player's next step sends it after them again
+    w.player.targetX = 5; w.player.targetY = 6;
+    tick(w, 1);
+    expect(npc.parked).toBe(false);
+    // not once Bill has been met
+    const met = pikaWorld("up");
+    met.save.flags.EVENT_GOT_SS_TICKET = true;
+    Pika.enterBillsHouse(met);
+    expect(met.pikaBillsPending).toBeFalsy();
   });
 
   test.skipIf(!hasYellow)("Red has no follower", () => {

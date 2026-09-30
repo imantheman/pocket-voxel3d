@@ -14,6 +14,7 @@ import { SAFARI_JOIN_CELLS, safariJoinRows, safariLeavingRows } from "./safari.t
 import { gymGateFlag } from "./toggleblocks.ts";
 import { PIKA_MAP_PAUSE_IGT, PIKA_MAP_SURF_SELECT, type ScriptRow } from "./script.ts";
 import { surfingPikachuInParty } from "../ui/surfingstate.ts";
+import * as Pikachu from "./pikachu.ts";
 import type { Dir } from "./collision.ts";
 
 const MEET_RIVAL = "Music_MeetRival";
@@ -179,6 +180,19 @@ function labOnStep(ow: any, save: any): ScriptRow[] | null {
     ["show_text", "_OaksLabPikachuDislikesPokeballsText1"],
     ["show_text", "_OaksLabPikachuDislikesPokeballsText2"],
   ] as ScriptRow[];
+}
+
+/** Bill-as-Pokemon's rows with Pikachu's beats laid in: watching as he
+ * walks round the player, and following him up to the machine. */
+function withBillsBeats(rows: unknown): ScriptRow[] | undefined {
+  if (!Array.isArray(rows)) return undefined;
+  const out: ScriptRow[] = [];
+  for (const r of rows as ScriptRow[]) {
+    if (r[0] === "move_npc_to") out.push(["pikachu_bills", "watch"] as ScriptRow);
+    out.push(r);
+    if (r[0] === "hide_object") out.push(["pikachu_bills", "enter"] as ScriptRow);
+  }
+  return out;
 }
 
 /**
@@ -636,6 +650,19 @@ export function yellowScripts(base: Record<string, MapScript>): Record<string, M
       ])),
     },
     // SafariZoneGate_2.asm: Yellow lets the short and the broke in anyway
+    // BillsHouse.asm: Pikachu's beats round the cell separator
+    BILLS_HOUSE: {
+      talk: {
+        TEXT_BILLSHOUSE_BILL_POKEMON: withBillsBeats(base.BILLS_HOUSE?.talk?.TEXT_BILLSHOUSE_BILL_POKEMON) ?? [],
+        TEXT_BILLSHOUSE_PC: (ow: any, save: any): ScriptRow[] => {
+          const pc = base.BILLS_HOUSE?.talk?.TEXT_BILLSHOUSE_PC;
+          const rows = (typeof pc === "function" ? pc(ow, save) : pc ?? []) as ScriptRow[];
+          // Bill steps out of the machine at the end of the separation
+          return rows.some((r) => r[0] === "show_object") ? [...rows, ["pikachu_bills", "exit"] as ScriptRow] : rows;
+        },
+      },
+      onEnter: (ow: any) => Pikachu.enterBillsHouse(ow),
+    },
     // SummerBeachHouse.asm: Route 19's surf shack
     SUMMER_BEACH_HOUSE: {
       talk: {

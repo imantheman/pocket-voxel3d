@@ -554,7 +554,7 @@ export class Scene {
         frame,
         npc.px * Q4,
         npc.py * Q4,
-        0,
+        (npc as { lift?: number }).lift ?? 0, // Yellow's Pikachu hopping the counter
         flags,
       );
     }

@@ -4,8 +4,8 @@
 // NeedYourPokemon -> stop music -> Pokemon.heal each -> machine -> farewell);
 // expressed here as the same script rows the port's Mom-heal already uses
 // (mapscripts.ts REDS_HOUSE_1F: fade to white, heal_party, Music_PkmnHealed,
-// fade back), with the nurse's yes/no and text. Yellow's Pikachu-follower
-// beats (hopToCounter / setVisible) are dropped — the port has no follower.
+// fade back), with the nurse's yes/no and text. Yellow's Pikachu hops onto
+// the counter as the party goes in (world/pikachu.ts hopToCounter).
 //
 // Composed as a script so it runs through the same runner and shows up in the
 // showMapText fallback chain after talkScript/itemBall/mart. Every Pokémon
@@ -27,11 +27,13 @@ export function nurseGreetScript(textConst: string): ScriptRow[] | null {
     ["ask", "Welcome to our\nPOKéMON CENTER!\nShall we heal your\nPOKéMON?"],
     ["jump_if_false", "bye"],
     ["show_text", "OK. We'll need\nyour POKéMON."],
+    ["pikachu_counter_hop"], // Yellow: PikachuWalksToNurseJoy (a no-op elsewhere)
     ["fade", "out", "white"], // GBFadeOutToWhite
     ["heal_party"], // Pokemon.heal each — before the machine runs
     ["set_heal_point"], // last Pokémon Center becomes the blackout warp target
     ["play_once", "Music_PkmnHealed"],
     ["fade", "in", "white"], // GBFadeInFromWhite
+    ["pikachu_face_down"], // back on the counter, facing the player
     ["show_text", "Your POKéMON are\nfighting fit!"],
     ["label", "bye"],
     ["show_text", "We hope to see\nyou again!"],

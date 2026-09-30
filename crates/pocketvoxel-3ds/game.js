@@ -1368,6 +1368,8 @@ class PikachuNPC extends NPC {
   goalY;
   idle;
   idleClock = 0;
+  parked = false;
+  lift = 0;
   update() {
     if (!this.moving)
       return;
@@ -1434,6 +1436,8 @@ function makeFollower(w, x, y, facing) {
 function onMapEntered(w) {
   removeFollower(w);
   w.pikachuTrail = undefined;
+  w.pikaHop = w.pikaWalk = undefined;
+  w.pikaBillsPending = w.pikaBillsScene = w.pikaSceneOver = false;
   if (!shouldSpawn(w))
     return;
   const p = w.player;
@@ -1470,9 +1474,37 @@ function updateFollower(w, rand) {
     return;
   }
   const p = w.player;
+  if (w.pikaHop) {
+    stepHop(w, npc);
+    return;
+  }
+  if (w.pikaWalk) {
+    stepWalk(w, npc);
+    return;
+  }
+  if (w.pikaBillsPending && !npc.moving) {
+    w.pikaBillsPending = false;
+    billsHouseConfused(w, npc);
+    return;
+  }
   const trail = w.pikachuTrail ??= { x: p.cellX, y: p.cellY };
   const destX = p.targetX ?? p.cellX;
   const destY = p.targetY ?? p.cellY;
+  if (npc.parked) {
+    if (destX !== trail.x || destY !== trail.y) {
+      const before = { x: trail.x, y: trail.y };
+      trail.x = destX;
+      trail.y = destY;
+      if (w.pikaSceneOver) {
+        npc.parked = false;
+        npc.goalX = before.x;
+        npc.goalY = before.y;
+      }
+    }
+    npc.hidden = false;
+    if (npc.parked)
+      return;
+  }
   if (destX !== trail.x || destY !== trail.y) {
     const stepDir = destY > trail.y ? "down" : destY < trail.y ? "up" : destX > trail.x ? "right" : "left";
     if (trail.ledgeHop === stepDir) {
@@ -1526,6 +1558,139 @@ function updateFollower(w, rand) {
   npc.moving = true;
   npc.progress = 0;
   npc.update();
+}
+var HOP_FRAMES = 32;
+function hopToCounter(w, done) {
+  const npc = findFollower(w);
+  const p = w.player;
+  if (!npc || npc.hidden || p.facing !== "up" || npc.cellY < p.cellY) {
+    done();
+    return;
+  }
+  settle(npc);
+  npc.facing = "up";
+  w.pikaHop = { frames: 0, fromX: npc.px, fromY: npc.py, cx: p.cellX, cy: p.cellY - 1, done };
+}
+function settle(npc) {
+  npc.moving = false;
+  npc.progress = 0;
+  npc.hop = false;
+  npc.targetX = npc.targetY = undefined;
+  npc.goalX = npc.goalY = undefined;
+  npc.idle = undefined;
+  npc.px = npc.cellX * 16;
+  npc.py = npc.cellY * 16;
+}
+function stepHop(w, npc) {
+  const h = w.pikaHop;
+  h.frames += 1;
+  const t = Math.min(1, h.frames / HOP_FRAMES);
+  npc.px = Math.round(h.fromX + (h.cx * 16 - h.fromX) * t);
+  npc.py = Math.round(h.fromY + (h.cy * 16 - h.fromY) * t);
+  npc.lift = Math.floor(10 * Math.sin(t * Math.PI) + 0.5);
+  npc.hidden = false;
+  if (h.frames < HOP_FRAMES)
+    return;
+  npc.cellX = h.cx;
+  npc.cellY = h.cy;
+  npc.px = h.cx * 16;
+  npc.py = h.cy * 16;
+  npc.lift = 0;
+  w.pikaHop = undefined;
+  w.pikachuTrail = { x: w.player.cellX, y: w.player.cellY };
+  h.done();
+}
+function faceDown(w) {
+  const npc = findFollower(w);
+  if (npc && !npc.moving)
+    npc.facing = "down";
+}
+function walkPikachu(w, steps, done) {
+  const npc = findFollower(w);
+  if (!npc) {
+    done();
+    return;
+  }
+  settle(npc);
+  w.pikaWalk = { steps: steps.map(([d, n]) => [d, n]), done };
+}
+function stepWalk(w, npc) {
+  const walk = w.pikaWalk;
+  npc.hidden = false;
+  if (npc.moving)
+    return;
+  const step = walk.steps[0];
+  if (!step) {
+    w.pikaWalk = undefined;
+    walk.done();
+    return;
+  }
+  const [dir] = step;
+  step[1] -= 1;
+  if (step[1] <= 0)
+    walk.steps.shift();
+  const d = DELTA[dir];
+  npc.facing = dir;
+  npc.targetX = npc.cellX + d[0];
+  npc.targetY = npc.cellY + d[1];
+  npc.stepLen = 16;
+  npc.moving = true;
+  npc.progress = 0;
+  npc.update();
+}
+function billsEmotion(w, npc, bubble) {
+  w.setEmote?.(npc, bubble, 50, () => {});
+}
+var QUESTION = 2;
+var EXCLAIM = 1;
+function enterBillsHouse(w) {
+  const f = w.save.flags ?? {};
+  if (w.save.version !== "yellow" || f.EVENT_MET_BILL_2 || f.EVENT_GOT_SS_TICKET)
+    return;
+  if (starterInParty(w.save)?.status)
+    return;
+  w.pikaBillsPending = true;
+}
+function billsHouseConfused(w, npc) {
+  w.pikaBillsScene = true;
+  npc.parked = true;
+  walkPikachu(w, [["right", 3], ["up", 1]], () => billsEmotion(w, npc, QUESTION));
+}
+function billsBeat(w, stage) {
+  const npc = findFollower(w);
+  if (!npc || w.save.version !== "yellow")
+    return;
+  const p = w.player;
+  if (stage === "watch") {
+    if (w.pikaBillsScene || p.facing !== "down")
+      return;
+    let steps = null;
+    if (npc.cellY < p.cellY)
+      steps = [["left", 1], ["down", 1]];
+    else if (npc.cellY === p.cellY && npc.cellX > p.cellX)
+      steps = [["up", 1], ["left", 2], ["down", 1]];
+    if (!steps)
+      return;
+    npc.parked = true;
+    w.pikaSceneOver = true;
+    walkPikachu(w, steps, () => {
+      npc.facing = "right";
+    });
+  } else if (stage === "enter") {
+    if (!w.pikaBillsScene)
+      return;
+    const steps = p.facing === "down" ? [["up", 1], ["left", 1], ["up", 2], ["right", 1]] : [["up", 3]];
+    walkPikachu(w, steps, () => {
+      npc.facing = "up";
+      billsEmotion(w, npc, QUESTION);
+    });
+  } else if (stage === "exit") {
+    if (!w.pikaBillsScene)
+      return;
+    npc.facing = "left";
+    billsEmotion(w, npc, EXCLAIM);
+    w.pikaSceneOver = true;
+  }
 }
 function idleTick(_w, npc, rand) {
   npc.idleClock = (npc.idleClock + 1) % 2;
@@ -8741,6 +8906,24 @@ function* surfing_minigame(ctx) {
 }
 var PIKA_MAP_PAUSE_IGT = 1 << 0;
 var PIKA_MAP_SURF_SELECT = 1 << 1;
+function* pikachu_counter_hop(ctx) {
+  const runner = ctx.runner;
+  let waiting = true;
+  hopToCounter(ctx.world, () => {
+    if (waiting)
+      runner.resume();
+    waiting = false;
+  });
+  if (waiting)
+    yield;
+  waiting = false;
+}
+function* pikachu_face_down(ctx) {
+  faceDown(ctx.world);
+}
+function* pikachu_bills(ctx, ...args) {
+  billsBeat(ctx.world, String(args[0]));
+}
 function* use_fly(ctx, ...args) {
   const w = ctx.world;
   const runner = ctx.runner;
@@ -9064,6 +9247,9 @@ var VERBS = {
   play_cry,
   pika_clip,
   surfing_minigame,
+  pikachu_counter_hop,
+  pikachu_face_down,
+  pikachu_bills,
   random_text,
   use_strength,
   give_pokemon,
@@ -11606,6 +11792,19 @@ function labOnStep(ow, save) {
     ["show_text", "_OaksLabPikachuDislikesPokeballsText2"]
   ];
 }
+function withBillsBeats(rows) {
+  if (!Array.isArray(rows))
+    return;
+  const out = [];
+  for (const r of rows) {
+    if (r[0] === "move_npc_to")
+      out.push(["pikachu_bills", "watch"]);
+    out.push(r);
+    if (r[0] === "hide_object")
+      out.push(["pikachu_bills", "enter"]);
+  }
+  return out;
+}
 function surfinDude(ow, save) {
   if (!surfingPikachuInParty(save ?? {})) {
     return [["face_player"], ["show_text", "_SummerBeachHouseSurfinDudeText4"]];
@@ -11994,6 +12193,17 @@ function yellowScripts(base) {
           return [["face_player"], ["show_text", after ?? "..."]];
         }
       ]))
+    },
+    BILLS_HOUSE: {
+      talk: {
+        TEXT_BILLSHOUSE_BILL_POKEMON: withBillsBeats(base.BILLS_HOUSE?.talk?.TEXT_BILLSHOUSE_BILL_POKEMON) ?? [],
+        TEXT_BILLSHOUSE_PC: (ow, save) => {
+          const pc = base.BILLS_HOUSE?.talk?.TEXT_BILLSHOUSE_PC;
+          const rows = typeof pc === "function" ? pc(ow, save) : pc ?? [];
+          return rows.some((r) => r[0] === "show_object") ? [...rows, ["pikachu_bills", "exit"]] : rows;
+        }
+      },
+      onEnter: (ow) => enterBillsHouse(ow)
     },
     SUMMER_BEACH_HOUSE: {
       talk: {
@@ -14823,11 +15033,13 @@ POKéMON?`],
     ["jump_if_false", "bye"],
     ["show_text", `OK. We'll need
 your POKéMON.`],
+    ["pikachu_counter_hop"],
     ["fade", "out", "white"],
     ["heal_party"],
     ["set_heal_point"],
     ["play_once", "Music_PkmnHealed"],
     ["fade", "in", "white"],
+    ["pikachu_face_down"],
     ["show_text", `Your POKéMON are
 fighting fit!`],
     ["label", "bye"],
@@ -18115,7 +18327,7 @@ class Scene {
       let flags = walker ? ENT_FLAG.walker : 0;
       if (mirror)
         flags |= ENT_FLAG.mirror;
-      this.emitSlot(slot, this.sheetIndex(view, npc.def.sprite), frame2, npc.px * Q4, npc.py * Q4, 0, flags);
+      this.emitSlot(slot, this.sheetIndex(view, npc.def.sprite), frame2, npc.px * Q4, npc.py * Q4, npc.lift ?? 0, flags);
     }
     for (let slot = 0;slot < ENTS_MAX; slot++) {
       if (this.entSeen[slot] === 0 && this.entShown[slot] !== 0) {

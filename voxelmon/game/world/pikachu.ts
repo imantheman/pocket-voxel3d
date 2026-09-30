@@ -117,6 +117,15 @@ interface PikaWorld {
   npcs: NPC[];
   entities: unknown[];
   pikachuTrail?: { x: number; y: number; ledgeHop?: Dir };
+  /** The counter hop in flight (hopToCounter). */
+  pikaHop?: { frames: number; fromX: number; fromY: number; cx: number; cy: number; done: () => void };
+  /** A scripted walk in flight (walkPikachu): steps left, then done. */
+  pikaWalk?: { steps: [Dir, number][]; done: () => void };
+  /** Bill's house: the confused walk is owed / has run / Bill is back. */
+  pikaBillsPending?: boolean;
+  pikaBillsScene?: boolean;
+  pikaSceneOver?: boolean;
+  setEmote?(entity: unknown, kind: number, frames: number, onDone: () => void): void;
 }
 
 /** The follower NPC: its own stepping (a ledge hop covers two cells in one
@@ -129,6 +138,10 @@ export class PikachuNPC extends NPC {
   goalY?: number;
   idle?: { kind: "wait" | "look"; frames: number };
   idleClock = 0;
+  /** Off the trail for a scene (DisablePikachuFollowingPlayer). */
+  parked = false;
+  /** Height off the ground in px, for the counter hop's arc. */
+  lift = 0;
 
   override update(): void {
     if (!this.moving) return;
@@ -195,6 +208,8 @@ function makeFollower(w: PikaWorld, x: number, y: number, facing: Dir): PikachuN
 export function onMapEntered(w: PikaWorld): void {
   removeFollower(w);
   w.pikachuTrail = undefined;
+  w.pikaHop = w.pikaWalk = undefined;
+  w.pikaBillsPending = w.pikaBillsScene = w.pikaSceneOver = false;
   if (!shouldSpawn(w)) return;
   const p = w.player;
   const npc = makeFollower(w, p.cellX, p.cellY, p.facing);
@@ -237,9 +252,32 @@ export function updateFollower(w: PikaWorld, rand: (n: number) => number): void 
     return;
   }
   const p = w.player;
+  if (w.pikaHop) { stepHop(w, npc); return; }
+  if (w.pikaWalk) { stepWalk(w, npc); return; }
+  if (w.pikaBillsPending && !npc.moving) {
+    w.pikaBillsPending = false;
+    billsHouseConfused(w, npc);
+    return;
+  }
   const trail: { x: number; y: number; ledgeHop?: Dir } = (w.pikachuTrail ??= { x: p.cellX, y: p.cellY });
   const destX: number = p.targetX ?? p.cellX;
   const destY: number = p.targetY ?? p.cellY;
+  if (npc.parked) {
+    // Parked for a scene: the trail keeps up with the player, and the
+    // first step taken once the scene is over sends it after them.
+    if (destX !== trail.x || destY !== trail.y) {
+      const before = { x: trail.x, y: trail.y };
+      trail.x = destX;
+      trail.y = destY;
+      if (w.pikaSceneOver) {
+        npc.parked = false;
+        npc.goalX = before.x;
+        npc.goalY = before.y;
+      }
+    }
+    (npc as { hidden?: boolean }).hidden = false;
+    if (npc.parked) return;
+  }
   if (destX !== trail.x || destY !== trail.y) {
     const stepDir: Dir = destY > trail.y ? "down" : destY < trail.y ? "up" : destX > trail.x ? "right" : "left";
     if (trail.ledgeHop === stepDir) {
@@ -294,6 +332,171 @@ export function updateFollower(w: PikaWorld, rand: (n: number) => number): void 
   // the npc loop already ran this frame: take the step's first frame now,
   // or it trails a pixel further every cell
   npc.update();
+}
+
+// ---------------------------------------------------------------------------
+// scripted beats
+// ---------------------------------------------------------------------------
+
+/** The counter hop's length and height: the ledge hop's arc (Player
+ * hopLift, a 10 px sine over 32 frames). */
+const HOP_FRAMES = 32;
+
+/**
+ * PikachuWalksToNurseJoy (engine/pikachu/pikachu_emotions.asm, called from
+ * engine/events/pokecenter.asm once the heal is accepted): it looks up and
+ * hops onto the counter in front of the player. The original has three
+ * movement scripts by where it stands -- below the player, left of it, or
+ * right of it -- and all three land on that tile, so this animates the one
+ * hop; standing above the player it has none, and nothing happens.
+ */
+export function hopToCounter(w: PikaWorld, done: () => void): void {
+  const npc = findFollower(w);
+  const p = w.player;
+  if (!npc || (npc as { hidden?: boolean }).hidden || p.facing !== "up" || npc.cellY < p.cellY) {
+    done();
+    return;
+  }
+  settle(npc);
+  npc.facing = "up";
+  w.pikaHop = { frames: 0, fromX: npc.px, fromY: npc.py, cx: p.cellX, cy: p.cellY - 1, done };
+}
+
+function settle(npc: PikachuNPC): void {
+  npc.moving = false;
+  npc.progress = 0;
+  npc.hop = false;
+  npc.targetX = npc.targetY = undefined;
+  npc.goalX = npc.goalY = undefined;
+  npc.idle = undefined;
+  npc.px = npc.cellX * 16;
+  npc.py = npc.cellY * 16;
+}
+
+function stepHop(w: PikaWorld, npc: PikachuNPC): void {
+  const h = w.pikaHop!;
+  h.frames += 1;
+  const t = Math.min(1, h.frames / HOP_FRAMES);
+  npc.px = Math.round(h.fromX + (h.cx * 16 - h.fromX) * t);
+  npc.py = Math.round(h.fromY + (h.cy * 16 - h.fromY) * t);
+  npc.lift = Math.floor(10 * Math.sin(t * Math.PI) + 0.5);
+  (npc as { hidden?: boolean }).hidden = false;
+  if (h.frames < HOP_FRAMES) return;
+  npc.cellX = h.cx;
+  npc.cellY = h.cy;
+  npc.px = h.cx * 16;
+  npc.py = h.cy * 16;
+  npc.lift = 0;
+  w.pikaHop = undefined;
+  // the player has not moved: the trail starts again under them, and it
+  // steps back off the counter once they walk away
+  w.pikachuTrail = { x: w.player.cellX, y: w.player.cellY };
+  h.done();
+}
+
+/** After the machine: it stands on the counter facing the player
+ * (EnablePikachuOverworldSpriteDrawing's `lb bc, 15, 0`). */
+export function faceDown(w: PikaWorld): void {
+  const npc = findFollower(w);
+  if (npc && !npc.moving) npc.facing = "down";
+}
+
+/** ApplyPikachuMovementData: walk these steps, one cell a step, then done. */
+export function walkPikachu(w: PikaWorld, steps: [Dir, number][], done: () => void): void {
+  const npc = findFollower(w);
+  if (!npc) { done(); return; }
+  settle(npc);
+  w.pikaWalk = { steps: steps.map(([d, n]) => [d, n] as [Dir, number]), done };
+}
+
+function stepWalk(w: PikaWorld, npc: PikachuNPC): void {
+  const walk = w.pikaWalk!;
+  (npc as { hidden?: boolean }).hidden = false;
+  if (npc.moving) return;
+  const step = walk.steps[0];
+  if (!step) {
+    w.pikaWalk = undefined;
+    walk.done();
+    return;
+  }
+  const [dir] = step;
+  step[1] -= 1;
+  if (step[1] <= 0) walk.steps.shift();
+  const d = DELTA[dir];
+  npc.facing = dir;
+  npc.targetX = npc.cellX + d[0];
+  npc.targetY = npc.cellY + d[1];
+  npc.stepLen = 16;
+  npc.moving = true;
+  npc.progress = 0;
+  npc.update();
+}
+
+/** A bubble over the follower for 50 frames (Bill's house beats). */
+function billsEmotion(w: PikaWorld, npc: PikachuNPC, bubble: number): void {
+  w.setEmote?.(npc, bubble, 50, () => {});
+}
+const QUESTION = 2;
+const EXCLAIM = 1;
+
+/**
+ * BillsHouseScript0 -> BillsHousePikachuConfused: on the way in, before
+ * Bill is met and while the starter has no status, Pikachu wanders right
+ * three and up one and wonders at the machine. It stops following for the
+ * scene (DisablePikachuFollowingPlayer).
+ */
+export function enterBillsHouse(w: PikaWorld): void {
+  const f = w.save.flags ?? {};
+  if (w.save.version !== "yellow" || f.EVENT_MET_BILL_2 || f.EVENT_GOT_SS_TICKET) return;
+  if (starterInParty(w.save)?.status) return;
+  w.pikaBillsPending = true;
+}
+
+function billsHouseConfused(w: PikaWorld, npc: PikachuNPC): void {
+  w.pikaBillsScene = true;
+  npc.parked = true;
+  walkPikachu(w, [["right", 3], ["up", 1]], () => billsEmotion(w, npc, QUESTION));
+}
+
+/**
+ * The rest of Bill's scene, by stage (scripts/BillsHouse.asm, _2.asm):
+ *  watch -- Bill walks round a player facing down while Pikachu is still
+ *           following (the confused beat was skipped): it steps aside to
+ *           watch, by where it stands (PikachuMovement_WatchPlayer1/2)
+ *  enter -- Bill is in the machine: it walks up to look (facing down takes
+ *           the long way round -- the cartridge's two tables are named the
+ *           wrong way about, and it is the branch that counts)
+ *  exit  -- Bill is out: it turns to him, startled; the next step the
+ *           player takes, it follows again
+ */
+export function billsBeat(w: PikaWorld, stage: string): void {
+  const npc = findFollower(w);
+  if (!npc || w.save.version !== "yellow") return;
+  const p = w.player;
+  if (stage === "watch") {
+    if (w.pikaBillsScene || p.facing !== "down") return;
+    let steps: [Dir, number][] | null = null;
+    if (npc.cellY < p.cellY) steps = [["left", 1], ["down", 1]];
+    else if (npc.cellY === p.cellY && npc.cellX > p.cellX) steps = [["up", 1], ["left", 2], ["down", 1]];
+    if (!steps) return;
+    npc.parked = true;
+    w.pikaSceneOver = true;
+    walkPikachu(w, steps, () => { npc.facing = "right"; });
+  } else if (stage === "enter") {
+    if (!w.pikaBillsScene) return;
+    const steps: [Dir, number][] = p.facing === "down"
+      ? [["up", 1], ["left", 1], ["up", 2], ["right", 1]]
+      : [["up", 3]];
+    walkPikachu(w, steps, () => {
+      npc.facing = "up";
+      billsEmotion(w, npc, QUESTION);
+    });
+  } else if (stage === "exit") {
+    if (!w.pikaBillsScene) return;
+    npc.facing = "left";
+    billsEmotion(w, npc, EXCLAIM);
+    w.pikaSceneOver = true;
+  }
 }
 
 /** Standing still: now and then a glance round (Func_fc803's idle looks). */

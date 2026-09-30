@@ -17,6 +17,7 @@
 
 import type { VoxelmonData } from "../data.ts";
 import { modifyHappiness } from "./pikachu.ts";
+import * as Pikachu from "./pikachu.ts";
 import { LINK_WAIT_FRAMES } from "./link.ts";
 import * as Bag from "../rules/bag.ts";
 import { FADE_OUT_TO_WHITE } from "../rules/timing.ts";
@@ -770,6 +771,29 @@ function* surfing_minigame(ctx: ScriptContext): Generator<void, void> {
 export const PIKA_MAP_PAUSE_IGT = 1 << 0;
 export const PIKA_MAP_SURF_SELECT = 1 << 1;
 
+/** Yellow's PikachuWalksToNurseJoy: the follower hops onto the counter
+ * (world/pikachu.ts hopToCounter); a no-op without one. */
+function* pikachu_counter_hop(ctx: ScriptContext): Generator<void, void> {
+  const runner = ctx.runner;
+  let waiting = true;
+  Pikachu.hopToCounter(ctx.world as never, () => {
+    if (waiting) runner.resume();
+    waiting = false;
+  });
+  if (waiting) yield;
+  waiting = false;
+}
+
+/** After the heal machine, the follower faces the player again. */
+function* pikachu_face_down(ctx: ScriptContext): Generator<void, void> {
+  Pikachu.faceDown(ctx.world as never);
+}
+
+/** Yellow's beats in Bill's house (world/pikachu.ts billsBeat). */
+function* pikachu_bills(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  Pikachu.billsBeat(ctx.world as never, String(args[0]));
+}
+
 function* use_fly(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
   const w = ctx.world as unknown as ScriptWorld & {
     openFlyPicker?: (monName: string, done: () => void) => void;
@@ -1280,6 +1304,9 @@ const VERBS: Record<string, Verb> = {
   play_cry,
   pika_clip,
   surfing_minigame,
+  pikachu_counter_hop,
+  pikachu_face_down,
+  pikachu_bills,
   random_text,
   use_strength,
   give_pokemon,
