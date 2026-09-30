@@ -280,14 +280,12 @@ export async function cook3ds(only?: string[]): Promise<number> {
   rmSync(CARD, { recursive: true, force: true });
   mkdirSync(CARD_PAKS, { recursive: true });
   cpSync(PAKS, CARD_PAKS, { recursive: true });
-  const dsx = version === "red" ? THREE_DSX : join(DIST, files.threeDsx);
-  if (existsSync(dsx)) {
-    cpSync(dsx, join(CARD, "3ds", files.threeDsx));
-  } else {
-    console.log("  (no 3dsx built yet — `bun tools/voxel.ts 3ds` builds one)");
-  }
-  console.log(`cook3ds: card image ready at dist/voxelmon/sdcard/`);
-  console.log("  copy the `3ds` folder inside it onto the ROOT of your SD card");
+  // make_cia.sh's copy carries the game's own name and icon; cargo-3ds's
+  // (Red only) is the fallback.
+  const dsx = [join(DIST, files.threeDsx), ...(version === "red" ? [THREE_DSX] : [])].find((p) => existsSync(p));
+  if (dsx) cpSync(dsx, join(CARD, "3ds", files.threeDsx));
+  console.log(`cook3ds: card image ready at dist/voxelmon/sdcard/3ds/`);
+  console.log(`  copy \`voxelmon\`${dsx ? ` and \`${files.threeDsx}\`` : ""} into your SD card's own 3ds folder`);
   return 0;
 }
 

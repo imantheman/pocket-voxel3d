@@ -24,6 +24,8 @@ import {
 } from "../voxelmon/cook/atlas.ts";
 import { cook, DEFAULT_MAPS } from "../voxelmon/cook/cli.ts";
 import { mergeUvRects } from "../voxelmon/cook/rectmerge.ts";
+import { activeVersion, BLUE_SHA1, genDirFor, RED_SHA1, VERSIONS } from "../voxelmon/import/env.ts";
+import { VERSION_FILES, versionPages } from "../tools/cook3ds.ts";
 import { FACE, type Quad } from "../voxelmon/cook/geom.ts";
 import {
   gen1recompDir,
@@ -952,5 +954,41 @@ describe("rectmerge: faces become rectangles only where no texel can change", ()
     expect(out[2]).toBe(point);
     const ys = out[3]!.c.map((c) => c[1]);
     expect([Math.min(...ys), Math.max(...ys)]).toEqual([4, 6]);
+  });
+});
+
+describe("Red and Blue: one pak set, each game's own files", () => {
+  test("the version is named, or read off the ROM, or Red", () => {
+    const saved = { v: process.env.VOXELMON_VERSION, rom: process.env.VOXELMON_ROM };
+    try {
+      process.env.VOXELMON_VERSION = "blue";
+      expect(activeVersion()).toBe("blue");
+      delete process.env.VOXELMON_VERSION;
+      process.env.VOXELMON_ROM = "/nonexistent.gb";
+      expect(activeVersion()).toBe("red");
+    } finally {
+      if (saved.v === undefined) delete process.env.VOXELMON_VERSION; else process.env.VOXELMON_VERSION = saved.v;
+      if (saved.rom === undefined) delete process.env.VOXELMON_ROM; else process.env.VOXELMON_ROM = saved.rom;
+    }
+    expect(VERSIONS.red.sha1).toBe(RED_SHA1);
+    expect(VERSIONS.blue.sha1).toBe(BLUE_SHA1);
+    // Red keeps the dataset path it always had; Blue has its own
+    expect(genDirFor("red").endsWith("dist/voxelmon/gen")).toBe(true);
+    expect(genDirFor("blue").endsWith("dist/voxelmon/blue/gen")).toBe(true);
+  });
+
+  test("the two games never share a file of their own", () => {
+    const red = Object.values(VERSION_FILES.red);
+    const blue = Object.values(VERSION_FILES.blue);
+    for (const f of red) expect(blue).not.toContain(f);
+    // Red's dataset keeps its historical name
+    expect(VERSION_FILES.red.gamedata).toBe("gamedata.json");
+  });
+
+  test("the overlay names the five pages that differ between the ROMs", () => {
+    const gd = { atlas: { uiPage: 1, picTitle: { version: 427 }, picIntro: { nido1: 437, nido2: 438, nido3: 439 } } };
+    expect(versionPages(gd)).toEqual([1, 427, 437, 438, 439]);
+    // a dataset missing some of them yields only what it has
+    expect(versionPages({ atlas: { picTitle: { version: 9 } } })).toEqual([9]);
   });
 });

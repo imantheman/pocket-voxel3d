@@ -621,11 +621,11 @@ def main():
     shutil.rmtree(repo / "dist" / "voxelmon" / "sdcard", ignore_errors=True)
     # A release ships the console binary next to this file; a checkout may
     # have built one. Either way the card wants it at /3ds/.
-    built = ("crates/pocketvoxel-3ds/target/armv6k-nintendo-3ds/release/pocketvoxel-3ds.3dsx"
-             if game["id"] == "red" else "dist/voxelmon/pocketvoxel-3ds-blue.3dsx")
     for stray in card.glob("*.3dsx"):
         stray.unlink()
-    for candidate in (HERE / game["dsx"], repo / built):
+    for candidate in (HERE / game["dsx"], repo / "dist" / "voxelmon" / game["dsx"],
+                      repo / "crates/pocketvoxel-3ds/target/armv6k-nintendo-3ds/release/pocketvoxel-3ds.3dsx"
+                      if game["id"] == "red" else HERE / game["dsx"]):
         if candidate.exists():
             shutil.copyfile(candidate, card / game["dsx"])
             break

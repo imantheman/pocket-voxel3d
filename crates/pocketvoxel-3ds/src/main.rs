@@ -2931,6 +2931,16 @@ fn main() {
     let gd = std::fs::read(GAMEDATA_PATH).unwrap_or_default();
     if gd.is_empty() {
         dlog(&format!("[pv] no dataset at {} -- cook this game's ROM", GAMEDATA_PATH));
+        let label = if GAME == "blue" { "Blue" } else { "Red" };
+        println!();
+        println!("Pokemon {} has not been cooked", label);
+        println!("onto this SD card yet.");
+        println!();
+        println!("On your PC, drag your own US");
+        println!("Pokemon {} ROM onto the cooker,", label);
+        println!("then copy its voxelmon folder");
+        println!("into the card's 3ds folder.");
+        println!();
     }
     println!("gamedata {} KB", gd.len() / 1024);
     let gd_static: &'static [u8] = Box::leak(gd.into_boxed_slice());

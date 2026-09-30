@@ -129,6 +129,9 @@ bun tools/voxel.ts 3ds      # -> dist/voxelmon/sdcard/   (about 15 minutes)
 bun test                    # the suite; ROM-gated tests skip with a reason
 ```
 
+For Blue, point `VOXELMON_ROM` at a Blue ROM instead: the same commands cook
+it, and [docs/3DS.md §4c](docs/3DS.md) builds its own `.3dsx` and `.cia`.
+
 Needs [Bun](https://bun.sh), a Rust toolchain, devkitPro with `3ds-dev`,
 `cargo install cargo-3ds`, and `python3`. The `cooker/` folder is the same
 build, wrapped for people who will never open a terminal; `cooker/cooker.py`

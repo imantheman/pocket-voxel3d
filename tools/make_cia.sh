@@ -7,8 +7,8 @@
 # title ID, name, icon and banner (Blue's art is Red's with every red made
 # blue), and their own ELF -- Blue is `cargo 3ds build --release --features
 # blue` into target-blue/. Both read the same shared paks on the card.
-# Blue also gets a .3dsx carrying its own name and icon, so the Homebrew
-# Launcher does not show two identical entries.
+# Each also gets a .3dsx carrying its own name and icon (cargo-3ds names
+# every one after the crate, with no icon), for the Homebrew Launcher.
 #
 # cargo-3ds only emits .3dsx, so the CIA is assembled here by hand:
 #
@@ -111,10 +111,8 @@ makerom -f cia -target t -exefslogo -major 1 -minor 0 -micro 0 \
 ls -l "$OUT"
 echo "make_cia: $OUT"
 
-if [ "$GAME" = blue ]; then
-  # cargo-3ds names every .3dsx after the crate; Blue's gets its own SMDH.
-  DSX=dist/voxelmon/pocketvoxel-3ds-blue.3dsx
-  "${DEVKITPRO:-/opt/devkitpro}/tools/bin/3dsxtool" "$ELF" "$DSX" --smdh="$WORK/icon.smdh"
-  ls -l "$DSX"
-  echo "make_cia: $DSX"
-fi
+# The same ELF as a .3dsx with this title's own SMDH.
+if [ "$GAME" = blue ]; then DSX=dist/voxelmon/pocketvoxel-3ds-blue.3dsx; else DSX=dist/voxelmon/pocketvoxel-3ds.3dsx; fi
+"${DEVKITPRO:-/opt/devkitpro}/tools/bin/3dsxtool" "$ELF" "$DSX" --smdh="$WORK/icon.smdh"
+ls -l "$DSX"
+echo "make_cia: $DSX"
