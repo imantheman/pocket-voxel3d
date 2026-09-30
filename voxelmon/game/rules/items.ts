@@ -151,6 +151,8 @@ export interface ItemUseResult {
   healedFrom?: number;
   /** A stone took: the species to evolve the target into. */
   evolveTo?: string;
+  /** Yellow's own Pikachu turned a stone down (the caller plays its cry). */
+  refused?: boolean;
 }
 
 /** An extracted line by label, with the ROM's slots filled. */
@@ -174,6 +176,12 @@ export function itemText(
 function notTime(data: any, save: any): string {
   return itemText(data, "_ItemUseNotTimeText", "OAK: {PLAYER}!\nThis isn't the\ntime to use that!",
     { player: save?.player?.name ?? "RED" });
+}
+
+/** Caught (or given) by this player: no other trainer's name on it. */
+export function isOwn(save: any, mon: PartyMon): boolean {
+  if (mon.otName === undefined && mon.otId === undefined) return true;
+  return mon.otName === save?.player?.name && mon.otId === save?.player?.id;
 }
 
 function noEffect(data: any): string {
@@ -346,6 +354,16 @@ export function useItem(
 
   if (STONES.has(itemId)) {
     if (!target) return { kind: "failed", msgs: [noEffect(data)] };
+    // Yellow: your own Pikachu will not evolve (ItemUseEvoStone ->
+    // IsThisPartyMonStarterPikachu: species PIKACHU with your ID and name as
+    // its trainer). It refuses and the stone is kept.
+    if (data?.version === "yellow" && target.species === "PIKACHU" && isOwn(save, target)) {
+      return {
+        kind: "failed",
+        msgs: [itemText(data, "_RefusingText", "{RAM:wNameBuffer}\nis refusing!", { name: monName(data, target) })],
+        refused: true,
+      };
+    }
     for (const evo of data?.pokemon?.[target.species]?.evolutions ?? []) {
       if (evo.method === "ITEM" && evo.item === itemId) {
         return { kind: "consumed", msgs: [], evolveTo: evo.species };

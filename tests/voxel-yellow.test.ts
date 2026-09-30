@@ -9,6 +9,9 @@ import { loadRuntimeData, REQUIRED_MODULES, type VoxelmonData } from "../voxelmo
 import { VoxelmonGame } from "../voxelmon/game/game.ts";
 import { RecorderHost } from "../voxelmon/game/host.ts";
 import { mapScript, useScriptsFor } from "../voxelmon/game/world/mapscripts.ts";
+import { prizeWindows, YELLOW_PRIZE_WINDOWS } from "../voxelmon/game/world/gamecorner.ts";
+import { newMon } from "../voxelmon/game/battle/mon.ts";
+import * as Items from "../voxelmon/game/rules/items.ts";
 
 const genDir = join(import.meta.dir, "../dist/voxelmon/yellow/gen");
 const hasYellow = REQUIRED_MODULES.every((m) => existsSync(join(genDir, `${m}.json`)));
@@ -177,5 +180,33 @@ describe("Yellow: the people it renamed", () => {
     const man = ow.findNpc("VIRIDIANCITY_OLD_MAN2");
     expect(!man || man.hidden).toBe(true);
     expect((game.save as any).objectToggles.VIRIDIAN_CITY.VIRIDIANCITY_OLD_MAN2).toBe(false);
+  });
+});
+
+describe("Yellow: its own tables", () => {
+  test.skipIf(!hasYellow)("the Game Corner stocks Yellow's prizes, and the TMs stay the same", () => {
+    expect(prizeWindows(yellow)).toBe(YELLOW_PRIZE_WINDOWS);
+    expect(YELLOW_PRIZE_WINDOWS[0]!.map((p) => p.species)).toEqual(["ABRA", "VULPIX", "WIGGLYTUFF"]);
+    expect(YELLOW_PRIZE_WINDOWS[1]!.map((p) => [p.species, p.level, p.cost])).toEqual(
+      [["SCYTHER", 30, 6500], ["PINSIR", 30, 6500], ["PORYGON", 26, 9999]]);
+  });
+
+  test.skipIf(!hasYellow)("the in-game trades are Yellow's", () => {
+    const trades = (yellow!.field as any).trades;
+    expect(trades[0]).toMatchObject({ give: "LICKITUNG", get: "DUGTRIO" });
+    expect((yellow!.field as any).oldManBattle.species).toBe("RATTATA");
+  });
+
+  test.skipIf(!hasYellow)("your own Pikachu refuses a THUNDER STONE and keeps it; a traded one evolves", () => {
+    const game = newYellowGame();
+    const mine = newMon(yellow!, "PIKACHU", 10, game.battleRng);
+    const r = Items.useItem(yellow, game.save, "THUNDER_STONE", mine, null);
+    expect(r.kind).toBe("failed");
+    expect(r.refused).toBe(true);
+    expect(r.msgs[0]).toContain("is refusing!");
+    const traded = { ...newMon(yellow!, "PIKACHU", 10, game.battleRng), otName: "ASH", otId: 1 };
+    expect(Items.useItem(yellow, game.save, "THUNDER_STONE", traded as never, null).evolveTo).toBe("RAICHU");
+    // and Red's Pikachu never refused
+    expect(Items.useItem({ ...yellow!, version: "red" }, game.save, "THUNDER_STONE", mine, null).evolveTo).toBe("RAICHU");
   });
 });

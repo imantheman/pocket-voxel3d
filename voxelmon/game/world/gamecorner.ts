@@ -205,9 +205,25 @@ export const BLUE_PRIZE_WINDOWS: PrizeEntry[][] = [
   PRIZE_WINDOWS[2]!,
 ];
 
+/** Yellow's windows (pokeyellow data/events/prizes.asm, prize_mon_levels.asm). */
+export const YELLOW_PRIZE_WINDOWS: PrizeEntry[][] = [
+  [
+    { kind: "mon", species: "ABRA", level: 15, cost: 230 },
+    { kind: "mon", species: "VULPIX", level: 18, cost: 1000 },
+    { kind: "mon", species: "WIGGLYTUFF", level: 22, cost: 2680 },
+  ],
+  [
+    { kind: "mon", species: "SCYTHER", level: 30, cost: 6500 },
+    { kind: "mon", species: "PINSIR", level: 30, cost: 6500 },
+    { kind: "mon", species: "PORYGON", level: 26, cost: 9999 },
+  ],
+  PRIZE_WINDOWS[2]!,
+];
+
 /** The prize windows of the game the dataset is. */
 export function prizeWindows(data: { version?: string } | null | undefined): PrizeEntry[][] {
-  return gameVersion(data) === "blue" ? BLUE_PRIZE_WINDOWS : PRIZE_WINDOWS;
+  const v = gameVersion(data);
+  return v === "blue" ? BLUE_PRIZE_WINDOWS : v === "yellow" ? YELLOW_PRIZE_WINDOWS : PRIZE_WINDOWS;
 }
 
 /**

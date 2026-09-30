@@ -2171,6 +2171,8 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     }
     const r = Items.useItem(this.data, this.save as never, itemId, mon, null, moveIndex);
     if (r.kind === "consumed") Bag.remove(this.save, itemId, 1);
+    // Yellow's Pikachu says no out loud (PlayPikachuSoundClip, PikachuCry28)
+    if (r.refused) this.audio?.playCry?.("PIKACHU");
     if (r.evolveTo) {
       // ItemUseEvoStone: the stone's evolution runs the same movie a
       // level's does, but cannot be called off, and the new form's learn
