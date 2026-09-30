@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { Ctx, check } from "./ctx.ts";
 import { VERSIONS, type VoxelEnv } from "./env.ts";
 import { GfxBin } from "./gfx.ts";
+import { runImportGen2 } from "./gen2/index.ts";
 import { loadManifest } from "./manifest.ts";
 import { Rom } from "./rom.ts";
 import { writeJson } from "./writer.ts";
@@ -52,8 +53,9 @@ export async function runImport(env: VoxelEnv): Promise<void> {
   );
   if (VERSIONS[env.version].generation === 2) {
     // Gold's formats are Gen 2's throughout (docs/gold-plan.md): its stages
-    // are a port of RomExtractorGen2.lua, not these.
-    throw new Error(`the ${want.label} importer is not written yet (docs/gold-plan.md)`);
+    // are a port of RomExtractorGen2.lua (voxelmon/import/gen2/), not these.
+    await runImportGen2(env, romData);
+    return;
   }
   const manifest = await loadManifest(env.manifestPath);
   check(
