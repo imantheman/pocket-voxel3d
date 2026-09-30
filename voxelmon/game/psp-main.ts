@@ -349,12 +349,16 @@ let prevGearPrev = false;
   const phys = buttons & 0xff;
   const touching = ((buttons >> 8) & 1) !== 0;
   if (touching && !prevTouch) {
-    const tx = (buttons >> 9) & 0x1ff;
-    const ty = (buttons >> 18) & 0xff;
+    const tx = ((buttons >> 9) & 0xff) * 2;
+    const ty = ((buttons >> 17) & 0x7f) * 2;
     // Tap-to-confirm on the bottom-screen battle menus; a no-op outside battle.
     gearTouchDown(game as unknown as Parameters<typeof gearTouchDown>[0], tx, ty);
   } else if (!touching && prevTouch) {
     gearTouchUp(game as unknown as Parameters<typeof gearTouchUp>[0]);
+  } else if (touching) {
+    // held: the finger's path, for the NOTES sketch pad
+    gearTouchMove(game as unknown as Parameters<typeof gearTouchMove>[0],
+      ((buttons >> 9) & 0xff) * 2, ((buttons >> 17) & 0x7f) * 2);
   }
   prevTouch = touching;
   // Bits 24-25: quarter turns the camera has been swung, so the overworld

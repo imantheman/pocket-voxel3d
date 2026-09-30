@@ -3453,15 +3453,18 @@ fn main() {
             // so the guest can react without changing the qjs_call_frame ABI
             // (the C shim, and its `buttons: i32`, are unchanged):
             //   bit 8      = touching
-            //   bits 9..17 = x (0..319)  bits 18..25 = y (0..239)
-            // The guest reads the touch's two edges, so holding is one tap;
-            // the sim-step catch-up loop re-sends the same word harmlessly.
+            //   bits 9..16 = x / 2 (0..159)  bits 17..23 = y / 2 (0..119)
+            // Halved so they end at bit 23: bits 24-25 carry the camera's
+            // quarter turns below, and a full-size y (bits 18..25) overlapped
+            // them -- a touch with the camera turned landed up to 192 px
+            // lower than the finger, and touching disturbed the turn count.
+            // Two-pixel steps are finer than anything the gear draws.
             {
                 let t = hid.touch_position();
                 if t.0 != 0 || t.1 != 0 {
                     b |= 1 << 8;
-                    b |= ((t.0 as i32) & 0x1ff) << 9;
-                    b |= ((t.1 as i32) & 0xff) << 18;
+                    b |= (((t.0 as i32) >> 1) & 0xff) << 9;
+                    b |= (((t.1 as i32) >> 1) & 0x7f) << 17;
                 }
             }
             // DEBUG map-cycle: L/R ride bits 26/27 the same way touch rides
