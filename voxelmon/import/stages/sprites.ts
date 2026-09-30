@@ -1,5 +1,5 @@
-// Port of gen1recomp RomExtractor.lua extractSprites (lines 440-520).
-// Red has no surfing-Pikachu sheet; that Yellow-only branch is not ported.
+// Port of gen1recomp RomExtractor.lua extractSprites (lines 440-520),
+// including build_rom_data.py's Yellow-only surfing-Pikachu sheet.
 
 import { check } from "../ctx.ts";
 import type { Ctx } from "../ctx.ts";
@@ -77,5 +77,30 @@ export function extractSprites(ctx: Ctx): Record<string, unknown> {
     frames: bikeFrames,
     walker: bikeFrames >= 6,
   };
+
+  // Yellow: the surfing-Pikachu ride sheet, loaded outside the pointer
+  // table (LoadSurfingPlayerSpriteGraphics2) exactly as the bike is.
+  const surf = manifest.sprites.surfPikachu;
+  if (surf && ctx.hasSymbol(surf.label)) {
+    const surfSymbol = ctx.symbol(surf.label);
+    const surfFrames = surf.imageHeight / 16;
+    gfx.add(
+      `sprites/${surf.imageBase}`,
+      decode2bpp(
+        rom.bytes(surfSymbol.bank, surfSymbol.address, (surf.imageWidth * surf.imageHeight) / 4),
+        surf.imageWidth,
+        surf.imageHeight,
+        true,
+      ),
+      surfFrames >= 6 ? { walker: true } : undefined,
+    );
+    out.SPRITE_SURFING_PIKACHU = {
+      id: "SPRITE_SURFING_PIKACHU",
+      source: `ROM:${surf.label}`,
+      image: `assets/generated/sprites/${surf.imageBase}.png`,
+      frames: surfFrames,
+      walker: surfFrames >= 6,
+    };
+  }
   return out;
 }

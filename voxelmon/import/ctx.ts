@@ -34,6 +34,12 @@ export class Ctx {
     readonly gfx: GfxBin,
   ) {}
 
+  /** Whether the manifest locates `name` (build_rom_data.py _has_symbol):
+   * for the version-only extractions, like Yellow's CGBBasePalettes. */
+  hasSymbol(name: string): boolean {
+    return this.manifest.symbols[name] !== undefined;
+  }
+
   /** gen1recomp RomExtractor.lua:63 — a missing symbol is a hard error. */
   symbol(name: string): RomSymbol {
     const location = this.manifest.symbols[name];

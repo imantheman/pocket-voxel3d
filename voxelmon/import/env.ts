@@ -14,8 +14,10 @@ export const ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 export const RED_SHA1 = "ea9bcae617fdf159b045185467ae58b2e4a48b9a";
 /** SHA-1 of the canonical US Blue ROM (gen1recomp GameVersion.VERSIONS.blue). */
 export const BLUE_SHA1 = "d7037c83e1ae5b39bde3c30787637ba1d4c48ce2";
+/** SHA-1 of the canonical US Yellow ROM (gen1recomp GameVersion.VERSIONS.yellow). */
+export const YELLOW_SHA1 = "cc7d03262ebfaf2f06772c1a480c7d9d5f4a38e1";
 
-export type GameVersion = "red" | "blue";
+export type GameVersion = "red" | "blue" | "yellow";
 
 /**
  * The games this pipeline can cook (gen1recomp src/core/GameVersion.lua).
@@ -26,6 +28,7 @@ export type GameVersion = "red" | "blue";
 export const VERSIONS: Record<GameVersion, { sha1: string; manifest: string; label: string }> = {
   red: { sha1: RED_SHA1, manifest: "tools/rom_manifest.json", label: "Red" },
   blue: { sha1: BLUE_SHA1, manifest: "tools/rom_manifest_blue.json", label: "Blue" },
+  yellow: { sha1: YELLOW_SHA1, manifest: "tools/rom_manifest_yellow.json", label: "Yellow" },
 };
 
 /**
@@ -53,7 +56,7 @@ export function versionOfRom(path: string): GameVersion | null {
  */
 export function activeVersion(): GameVersion {
   const named = process.env.VOXELMON_VERSION?.toLowerCase();
-  if (named === "red" || named === "blue") return named;
+  if (named === "red" || named === "blue" || named === "yellow") return named;
   const rom = process.env.VOXELMON_ROM;
   return (rom && versionOfRom(rom)) || "red";
 }
@@ -82,7 +85,10 @@ export function resolveEnv(): VoxelEnv {
     g1rDir,
     voxelmodDir: process.env.VOXELMON_VOXELMOD ?? join(homedir(), "code/DramaticShapeVoxelMod"),
     manifestPath: join(g1rDir, VERSIONS[version].manifest),
-    refGeneratedDir: join(g1rDir, "data/generated"),
+    // gen1recomp's own extraction of the same ROM, for `voxel parity`: Red's
+    // at data/generated, the others under <version>/ (its cachePrefix).
+    refGeneratedDir: process.env.VOXELMON_REF_GENERATED ??
+      join(g1rDir, version === "red" ? "data/generated" : `${version}/data/generated`),
     genDir: genDirFor(version),
   };
 }

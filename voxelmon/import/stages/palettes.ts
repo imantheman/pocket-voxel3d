@@ -1,5 +1,7 @@
-// Port of gen1recomp RomExtractor.lua extractPalettes (lines 895-937).
-// Red carries no CGBBasePalettes; that Yellow branch is not ported.
+// Port of gen1recomp RomExtractor.lua extractPalettes (lines 895-937), and
+// build_rom_data.py extract_palettes' Yellow branch: Yellow is a Game Boy
+// Color game and carries CGBBasePalettes -- the colours it actually shows on
+// a GBC -- in the same order as SuperPalettes. Red and Blue have none.
 
 import type { Ctx } from "../ctx.ts";
 
@@ -32,10 +34,25 @@ export function extractPalettes(ctx: Ctx): Record<string, unknown> {
     const paletteId = rom.byte(monsterTable.bank, monsterTable.address + (i + 1));
     monsterPalettes[manifest.dexOrder[i]] = order[paletteId];
   }
-  return {
+  const out: Record<string, unknown> = {
     source: "ROM:SuperPalettes + MonsterPalettes",
     palettes,
     order,
     pokemon: monsterPalettes,
   };
+  if (ctx.hasSymbol("CGBBasePalettes")) {
+    const cgbTable = ctx.symbol("CGBBasePalettes");
+    const cgb: Record<string, number[][]> = {};
+    for (let index = 0; index < order.length; index++) {
+      const colors: number[][] = [];
+      for (let color = 0; color < 4; color++) {
+        const value = rom.word(cgbTable.bank, cgbTable.address + index * 8 + color * 2);
+        colors.push([scale5(value & 0x1f), scale5((value >> 5) & 0x1f), scale5((value >> 10) & 0x1f)]);
+      }
+      cgb[order[index]] = colors;
+    }
+    out.cgbBase = cgb;
+    out.source = `${out.source} + CGBBasePalettes`;
+  }
+  return out;
 }
