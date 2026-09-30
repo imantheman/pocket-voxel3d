@@ -3270,6 +3270,9 @@ fn main() {
     let pitches: [i32; 5] = [0, 1, 2, 3, 4];
     let mut pitch_i = 0usize;
     let mut page_tex: Vec<Option<texture::Texture>> = Vec::new();
+    // The frame each picture page was last drawn on (see the eviction after
+    // the pic loads below).
+    let mut pic_seen: Vec<u32> = Vec::new();
     // TINS: one buffer per carved shape, and the placements that draw them.
     // A forest is the same few drawings thousands of times, so the geometry
     // is uploaded once and the instances only say where and how detailed.
@@ -4714,6 +4717,29 @@ if page_tex.len() < pak_static.atlases.len() {
                         sprite_filter(&mut t, pak_static, *pg);
                         page_tex[i] = Some(t);
                     }
+                }
+            }
+        }
+        // Textures are built on first use and were kept for good, which is
+        // fine for sprites and battle pics but not for a movie: the boot
+        // intros' full-screen pictures are 256 KB each as RGBA and are never
+        // drawn again. A picture page of 256 KB or more that has gone ten
+        // seconds undrawn is let go (every loader here rebuilds on demand,
+        // and the GPU finished with it long ago).
+        if pic_seen.len() < page_tex.len() {
+            pic_seen.resize(page_tex.len(), 0);
+        }
+        for (pg, _, _) in pic_groups.iter() {
+            if let Some(seen) = pic_seen.get_mut(*pg as usize) { *seen = dbg_tick.max(1); }
+        }
+        if dbg_tick % 60 == 0 {
+            for (i, seen) in pic_seen.iter_mut().enumerate() {
+                if *seen == 0 || dbg_tick.wrapping_sub(*seen) < 600 { continue; }
+                *seen = 0;
+                let (tw, th) = page_tex_size(&pak_static.atlases[i]);
+                if tw * th * 4.0 >= 262144.0 && page_tex[i].is_some() {
+                    page_tex[i] = None;
+                    dlog(&format!("[pv] let picture page {} go ({} KB)", i, (tw * th * 4.0) as u32 / 1024));
                 }
             }
         }

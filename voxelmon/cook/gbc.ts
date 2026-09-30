@@ -45,6 +45,7 @@ export function planGbc(gen: GenData, pages: PageOwner[], mapIds: number[]): Col
   const monPal = (gen.palettes as { pokemon?: Record<string, string> }).pokemon ?? {};
   let pics = 0;
   const pagePal = pages.map((o) => {
+    if (o.palette) return byName.get(o.palette) ?? COLOR_PAL_NONE;
     if (!o.species) return COLOR_PAL_NONE;
     const idx = byName.get(monPal[o.species] ?? "");
     if (idx === undefined) return COLOR_PAL_NONE;

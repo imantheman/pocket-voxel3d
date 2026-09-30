@@ -11,9 +11,15 @@
 // the fight, so the original's running order is untouched: the paper the
 // splash is printed on tears off, and the fight is already going on behind
 // it.
+//
+// Yellow boots the same way up to the fight, and plays its own movie where
+// Red's fight would be (ui/yellowintro.ts): Pikachu is already running
+// behind the paper.
 import type { GameState } from "../game.ts";
 import { namedPage } from "../battle/staging.ts";
 import { GB_W, GB_H, VIEW_W, VIEW_H } from "../../../contracts/spec/voxel-spec.ts";
+import { gameVersion } from "../data.ts";
+import { BG_ROWS, YellowIntroScenes } from "./yellowintro.ts";
 
 /** GB pixels -> the 480x272 the pic layer measures in (core ui.rs). */
 const UI_SCALE = VIEW_H / GB_H;
@@ -230,8 +236,12 @@ export class IntroState implements GameState {
   private fade = 0;
   /** The punch's own clock, which keeps running under the fight. */
   private tear = -1;
+  /** Yellow's movie, in place of the fight (null for Red and Blue). */
+  private readonly yellow: YellowIntroScenes | null;
 
-  constructor(private game: IntroHost, private onDone: () => void) {}
+  constructor(private game: IntroHost, private onDone: () => void) {
+    this.yellow = gameVersion(game.data as { version?: string }) === "yellow" ? new YellowIntroScenes() : null;
+  }
 
   private page(key: string): number {
     return namedPage(this.game.data as never, "picIntro", key);
@@ -281,14 +291,24 @@ export class IntroState implements GameState {
       }
       return;
     }
+    if (this.yellow) {
+      this.yellow.update();
+      if (this.yellow.done) this.finish();
+      return;
+    }
     this.fightStep();
   }
 
   private start(phase: IntroView["phase"]): void {
     this.phase = phase;
     this.t = 0;
-    // intro.asm:333-338 -- the battle theme belongs to the fight.
-    if (phase === "fight") this.game.audio?.playOnce("Music_IntroBattle");
+    // intro.asm:333-338 -- the battle theme belongs to the fight; Yellow's
+    // movie starts its own (InitYellowIntroGFXAndMusic)
+    if (phase === "fight") {
+      if (!this.yellow || !this.game.audio?.playOnce("Music_YellowIntro")) {
+        this.game.audio?.playOnce("Music_IntroBattle");
+      }
+    }
   }
 
   /** One frame of FIGHT, which runs ops until one of them wants time. */
@@ -424,7 +444,8 @@ export class IntroState implements GameState {
       if (page < 0) return;
       seq.forEach((t, i) => out.push({ page, tile: t, x: x + i * 8, y, flags: 0 }));
     };
-    COPY_ROWS.forEach((y) => row(strip, COPY_PREFIX, 16, y));
+    const prefix = this.yellow ? [...COPYRIGHT_PREFIX_YELLOW] : COPY_PREFIX;
+    COPY_ROWS.forEach((y) => row(strip, prefix, 16, y));
     row(strip, COPY_NINTENDO, 80, COPY_ROWS[0]!);
     row(strip, COPY_CREATURES, 80, COPY_ROWS[1]!);
     row(gf, COPY_GAMEFREAK, 80, COPY_ROWS[2]!);
@@ -477,6 +498,32 @@ export class IntroState implements GameState {
       if (!this.unbarred(y)) return;
       for (const x of xs) out.push({ page, tile: 0, x, y, flags: 0 });
     });
+  }
+
+  /**
+   * One frame of Yellow's movie: the scene's BG picture at -SCX, wrapped
+   * every 256 px the way the BG map wraps (so it runs out to the edges of
+   * our wider screen with what the map holds there), then the objects.
+   */
+  private yellowArt(out: IntroQuad[]): void {
+    const f = this.yellow!.frame();
+    if (f.black) {
+      const black = this.page("black");
+      if (black >= 0) out.push({ page: black, x: 0, y: 0, w: VIEW_W, h: VIEW_H });
+    } else if (f.bg) {
+      const page = this.page(`yi_${f.bg.name}`);
+      if (page >= 0) {
+        for (let k = -1; k <= 1; k++) {
+          const gx = -f.bg.scx + k * 256;
+          if (sx(gx) >= VIEW_W || sx(gx + 256) <= 0) continue;
+          out.push({ page, x: sx(gx), y: sy(f.bg.dy), w: sw(256), h: sw(BG_ROWS * 8) });
+        }
+      }
+    }
+    for (const o of f.objects) {
+      const page = this.page(`yi_${o.name}`);
+      if (page >= 0) out.push({ page, x: sx(o.x), y: sy(o.y), w: sw(o.w), h: sw(o.h) });
+    }
   }
 
   private fightArt(out: IntroQuad[]): void {
@@ -597,14 +644,18 @@ export class IntroState implements GameState {
       // growing past the lens: the camera going through the hole, which is
       // where the rest of the movie happens.
       const bursting = this.tear >= 0 && burstOf(this.tear) < 1;
+      const tearing = this.tear >= 0 && this.tear <= TEAR_FRAMES;
       if (bursting) this.gb(pics, "black", 0, GB_H);
+      else if (this.yellow) this.yellowArt(pics);
       else this.fightArt(pics);
-      if (this.tear >= 0 && this.tear <= TEAR_FRAMES) this.tearArt(pics);
+      if (tearing) this.tearArt(pics);
       // The words are still standing on the paper they were standing on a
       // frame ago -- which is not moving yet -- so they stay, over it,
       // until the push takes the whole sheet with it.
       if (bursting) this.marquee(pics, BREACH_AT + this.tear);
-      this.bars(pics);
+      // Yellow's scenes carry their own letterbox when they have one; the
+      // bars stay over the paper only while it is still tearing
+      if (!this.yellow || tearing) this.bars(pics);
       if (this.fade > 0) {
         // GBFadeOutToWhite: three palettes over 24 frames. A pic cannot be
         // part transparent, so the white arrives in one step at the end

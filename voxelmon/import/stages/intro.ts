@@ -7,7 +7,71 @@
 // cartridge at the manifest's own symbols -- which is also why the shapes
 // below are asserted rather than assumed.
 import type { Ctx } from "../ctx.ts";
-import { GfxImage, blit, decode2bpp, matteColor0 } from "../gfx.ts";
+import { GfxImage, TRANSPARENT, blit, decode2bpp, matteColor0 } from "../gfx.ts";
+import { BG_MAPS, BG_ROWS, FRAMES, YELLOW_INTRO_PICTURES, frameBox } from "../../game/ui/yellowintro.ts";
+
+/**
+ * Yellow's attract movie as pictures (game/ui/yellowintro.ts): each scene's
+ * BG map laid out 32 tiles wide, each OAM frame composed, and the BGP states
+ * the strobes and the fade show. The three tile banks are the ROM's
+ * YellowIntroGraphics1 (BG ids $00-$7F), YellowIntroGraphics2 (BG ids
+ * $80-$FF and every OBJ tile) and YellowIntroCloudGFX (two 4-tile frames
+ * of BG $60-$63).
+ */
+function yellowIntro(ctx: Ctx, add: (key: string, image: GfxImage) => void): void {
+  const raw = (symbol: string, n: number): number[] => {
+    const sym = ctx.symbol(symbol);
+    return (ctx as unknown as { rom: { bytes(b: number, a: number, n: number): number[] } })
+      .rom.bytes(sym.bank, sym.address, n);
+  };
+  const g1 = decode2bpp(raw("YellowIntroGraphics1", 128 * 16), 128, 64);
+  const g2raw = raw("YellowIntroGraphics2", 256 * 16);
+  const g2 = decode2bpp(g2raw, 128, 128);
+  const g2obj = decode2bpp(g2raw, 128, 128, true); // OBJ color 0 is clear
+  const clouds = decode2bpp(raw("YellowIntroCloudGFX", 8 * 16), 32, 16);
+  const tileOf = (src: GfxImage, id: number): [number, number] => [(id % 16) * 8, Math.floor(id / 16) * 8];
+  const shade = (img: GfxImage, map?: [number, number, number, number]): GfxImage => {
+    if (!map) return img;
+    const out = new GfxImage(img.w, img.h);
+    for (let y = 0; y < img.h; y++) {
+      for (let x = 0; x < img.w; x++) {
+        const v = img.get(x, y);
+        out.set(x, y, v === TRANSPARENT ? v : map[v]!);
+      }
+    }
+    return out;
+  };
+  for (const pic of YELLOW_INTRO_PICTURES) {
+    let img: GfxImage;
+    if (pic.bg) {
+      const map = BG_MAPS[pic.bg]!();
+      img = new GfxImage(256, BG_ROWS * 8, 0);
+      map.forEach((row, ty) => row.forEach((id, tx) => {
+        if (pic.cloud !== undefined && id >= 0x60 && id <= 0x63) {
+          blit(img, clouds, tx * 8, ty * 8, (id - 0x60) * 8, pic.cloud * 8, 8, 8);
+          return;
+        }
+        const src = id < 0x80 ? g1 : g2;
+        const [sx, sy] = tileOf(src, id);
+        blit(img, src, tx * 8, ty * 8, sx, sy, 8, 8);
+      }));
+    } else {
+      const f = FRAMES[pic.frame!]!;
+      const box = frameBox(pic.frame!);
+      img = new GfxImage(box.w, box.h);
+      for (const [dy, dx, delta, flip] of f.oam) {
+        const [sx, sy] = tileOf(g2obj, f.base + delta);
+        for (let y = 0; y < 8; y++) {
+          for (let x = 0; x < 8; x++) {
+            const v = g2obj.get(sx + (flip ? 7 - x : x), sy + y);
+            if (v !== TRANSPARENT) img.set(dx - box.dx + x, dy - box.dy + y, v);
+          }
+        }
+      }
+    }
+    add(`intro/yi_${pic.name}`, shade(img, pic.shades));
+  }
+}
 
 /** Decode `count` tiles as ONE row, so tile i lands at x = i*8. */
 function strip(ctx: Ctx, symbol: string, count: number, transparent: boolean): GfxImage {
@@ -137,6 +201,16 @@ export function extractIntro(ctx: Ctx): Record<string, unknown> {
     }
   } catch (e) {
     console.warn("intro: gengar failed: " + String(e).slice(0, 100));
+  }
+
+  // --- Yellow's own movie ---------------------------------------------------
+  if (ctx.hasSymbol("YellowIntroGraphics1") && ctx.hasSymbol("YellowIntroGraphics2") &&
+      ctx.hasSymbol("YellowIntroCloudGFX")) {
+    try {
+      yellowIntro(ctx, add);
+    } catch (e) {
+      console.warn("intro: Yellow's movie failed: " + String(e).slice(0, 100));
+    }
   }
 
   return out;

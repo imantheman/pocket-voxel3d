@@ -24,6 +24,16 @@ import {
 import { AudioDirector } from "../voxelmon/game/audio/music.ts";
 import { WildBattle, type BattleButton, type BattleInput } from "../voxelmon/game/battle/battle.ts";
 import { seqRng } from "../voxelmon/game/rng.ts";
+import {
+  BG_MAPS,
+  FRAMES,
+  YELLOW_INTRO_PICTURES,
+  YellowIntroScenes,
+  bgpShades,
+  frameBox,
+  yellowIntroPalette,
+} from "../voxelmon/game/ui/yellowintro.ts";
+import { IntroState } from "../voxelmon/game/ui/intro.ts";
 
 const genDir = join(import.meta.dir, "../dist/voxelmon/yellow/gen");
 const hasYellow = REQUIRED_MODULES.every((m) => existsSync(join(genDir, `${m}.json`)));
@@ -74,6 +84,101 @@ describe("Yellow: the map scripts it lays over Red's", () => {
     useScriptsFor("red");
     const red = mapScript("OAKS_LAB")!.talk!.TEXT_OAKSLAB_OAK1 as unknown[][];
     expect(red.filter((r) => r[0] === "show_text").map((r) => r[1])).toContain("_OaksLabOak1RaiseYourYoungPokemonText");
+  });
+});
+
+describe("Yellow: its attract movie", () => {
+  /** Run the scenes, recording each frame's picture set. */
+  function run(): { frames: ReturnType<YellowIntroScenes["frame"]>[]; s: YellowIntroScenes } {
+    const s = new YellowIntroScenes();
+    const frames = [];
+    for (let t = 0; t < 2000 && !s.done; t++) {
+      s.update();
+      frames.push(s.frame());
+    }
+    return { frames, s };
+  }
+
+  test("it runs the ROM's length, scene by scene", () => {
+    const { frames, s } = run();
+    expect(s.done).toBe(true);
+    // 2 head frames, then 130/128/128/88/128/128/128-frame scenes with a
+    // 3-frame blanked setup between each, the 51-step strobe, the flash, the
+    // fade and the 64-frame hold (gen1recomp YellowIntro.lua)
+    expect(frames.length).toBe(1054);
+    const bgAt = (t: number) => frames[t - 1]!.bg?.name ?? null;
+    expect(bgAt(40)).toBe("bg_letter");
+    expect(bgAt(200)).toBe("bg_kick");
+    expect(bgAt(470)).toBe("bg_sea");
+    expect(bgAt(640)).toMatch(/^bg_sky[01]$/);
+    expect(bgAt(850)).toBe("bg_close");
+    expect(bgAt(1000)).toBeNull(); // faded to white
+    // the setup between scenes is white (rBGP $00)
+    expect(frames.some((f, i) => i > 130 && i < 140 && f.bg === null)).toBe(true);
+  });
+
+  test("the kick scrolls in to SCX $68 with eight speed bars", () => {
+    const { frames } = run();
+    const kick = frames.filter((f) => f.bg?.name === "bg_kick");
+    expect(kick.at(-1)!.bg!.scx).toBe(0x68);
+    expect(Math.max(...kick.map((f) => f.objects.filter((o) => o.name === "obj_0e").length))).toBeGreaterThanOrEqual(4);
+  });
+
+  test("the strobe flashes to black only, the flash blacks the screen, the fade steps down", () => {
+    const { frames } = run();
+    expect(frames.some((f) => f.bg?.name === "bg_close_k" && f.objects.every((o) => o.name.endsWith("_k")))).toBe(true);
+    expect(frames.some((f) => f.black && f.objects.some((o) => o.name === "obj_0d"))).toBe(true);
+    const fade = frames.map((f) => f.bg?.name).filter((n) => n?.startsWith("bg_letter_s"));
+    expect(fade).toEqual(["bg_letter_s1", "bg_letter_s1", "bg_letter_s2", "bg_letter_s2"]);
+  });
+
+  test("every picture it names is one the importer lays out", () => {
+    const names = new Set(YELLOW_INTRO_PICTURES.map((p) => p.name));
+    for (const f of run().frames) {
+      if (f.bg) expect(names.has(f.bg.name)).toBe(true);
+      for (const o of f.objects) expect(names.has(o.name)).toBe(true);
+    }
+    for (const p of YELLOW_INTRO_PICTURES) {
+      if (p.bg) expect(BG_MAPS[p.bg]).toBeDefined();
+      else expect(FRAMES[p.frame!]).toBeDefined();
+    }
+  });
+
+  test("its tables: OAM boxes, BGP shade maps and the palettes", () => {
+    expect(frameBox(0x01)).toEqual({ dx: -8, dy: -8, w: 16, h: 16 });
+    expect(frameBox(0x0b)).toEqual({ dx: -24, dy: -24, w: 48, h: 48 });
+    expect(frameBox(0x13)).toEqual({ dx: -40, dy: -8, w: 80, h: 16 });
+    expect(bgpShades(0xe4)).toEqual([0, 1, 2, 3]);
+    expect(bgpShades(0xc0)).toEqual([0, 0, 0, 3]);
+    expect(bgpShades(0x90)).toEqual([0, 0, 1, 2]);
+    expect(yellowIntroPalette("bg_sea")).toBe("PIKACHUS_BEACH");
+    expect(yellowIntroPalette("obj_0d")).toBe("MEWMON");
+    // the kick's block sits at column 20, where SCX $68 brings it on screen
+    expect(BG_MAPS.kick!()[6]![20]).toBe(0x90);
+  });
+
+  test("the boot movie plays it where Red's fight would be", () => {
+    const atlas = { picIntro: Object.fromEntries(YELLOW_INTRO_PICTURES.map((p, i) => [`yi_${p.name}`, 100 + i])) };
+    const songs: string[] = [];
+    const input = { pressed: {} as Record<string, boolean> };
+    let done = 0;
+    const intro = new IntroState(
+      {
+        input,
+        data: { version: "yellow", atlas },
+        pop() {},
+        audio: { playSfx() {}, playOnce: (s: string) => (songs.push(s), true), stop() {} },
+      } as never,
+      () => { done++; },
+    );
+    let t = 0;
+    while (intro.view().phase !== "fight" && t < 2000) { intro.update(); t++; }
+    expect(songs).toEqual(["Music_YellowIntro"]);
+    for (let i = 0; i < 400; i++) intro.update();
+    const pages = new Set(intro.view().pics.map((q) => q.page));
+    expect([...pages].some((pg) => pg >= 100)).toBe(true);
+    for (let i = 0; i < 1100 && !done; i++) intro.update();
+    expect(done).toBe(1);
   });
 });
 

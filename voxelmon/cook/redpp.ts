@@ -250,6 +250,8 @@ export interface PageOwner {
   spriteKey?: string;
   /** species id of a battle-pic page. */
   species?: string;
+  /** An SGB palette name the page is drawn in (Yellow's intro pictures). */
+  palette?: string;
 }
 
 /** One cooked map, as the planner needs it. */

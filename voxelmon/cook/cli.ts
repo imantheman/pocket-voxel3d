@@ -35,6 +35,7 @@ import {
 } from "./atlas.ts";
 import type { BuildingStats } from "./buildings.ts";
 import { buildIntroPages } from "./intro.ts";
+import { yellowIntroPalette } from "../game/ui/yellowintro.ts";
 
 /**
  * data/pokemon/title_mons.asm: what the title screen cycles, Red's list and
@@ -350,7 +351,9 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
   for (const key of introKeys) {
     introPageByKey.set(key, pages.length);
     pages.push(buildPicPage(gen, key));
-    pageOwners.push({ kind: ATLAS_KIND.pics });
+    // Yellow's movie names the palette each picture is shown in
+    const yi = key.startsWith("intro/yi_") ? key.slice("intro/yi_".length) : null;
+    pageOwners.push({ kind: ATLAS_KIND.pics, ...(yi ? { palette: yellowIntroPalette(yi) } : {}) });
   }
   for (const page of buildIntroPages(gen)) {
     introPageByKey.set(page.name, pages.length);

@@ -637,9 +637,10 @@ export class VoxelmonGame implements OverworldShell, SceneView {
    */
   boot(): void {
     this.newGame();
-    // Yellow has its own movie (intro_yellow.asm; ui/yellowintro.ts once
-    // ported) -- Red's fight scene has no frames in its ROM.
-    if (gameVersion(this.data) === "yellow") return;
+    // Yellow plays its own movie where Red's fight would be (ui/
+    // yellowintro.ts); a Yellow cook from before its pictures has no movie
+    // to play, and boots straight to the title.
+    if (gameVersion(this.data) === "yellow" && namedPage(this.data as never, "picIntro", "yi_bg_letter") < 0) return;
     this.push(new IntroState(this as never, () => {}));
   }
 
