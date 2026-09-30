@@ -1910,8 +1910,8 @@ export class Overworld implements ScriptWorld {
    * safari_start: open a game. The two steps the scripted walk into the zone
    * costs are charged there, not here (SAFARI_WALK_IN_STEPS).
    */
-  safariStart(): void {
-    this.save.safari = { balls: SAFARI_BALLS, steps: SAFARI_STEPS };
+  safariStart(balls = SAFARI_BALLS): void {
+    this.save.safari = { balls, steps: SAFARI_STEPS };
   }
 
   /** safari_end: close it, leftover balls forfeited with the game. */

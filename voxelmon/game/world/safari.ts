@@ -71,12 +71,12 @@ export function inSafariStepZone(mapId: string): boolean {
  * The port takes Red/Blue's branch on an empty wallet: refused. Yellow's
  * low-cost admission (SafariZoneGate_2.asm) is a different ROM's script.
  */
-export function safariJoinRows(): ScriptRow[] {
+export function safariJoinRows(yellow = false): ScriptRow[] {
   return [
     ["ask", "_SafariZoneGateSafariZoneWorker1WouldYouLikeToJoinText"],
     ["jump_if_false", "decline"],
     ["check_money", SAFARI_FEE],
-    ["jump_if_false", "broke"],
+    ["jump_if_false", yellow ? "discount" : "broke"],
     ["take_money", SAFARI_FEE],
     ["safari_start"],
     ["show_text", "_SafariZoneGateSafariZoneWorker1ThatllBe500PleaseText"],
@@ -88,6 +88,15 @@ export function safariJoinRows(): ScriptRow[] {
     ["jump", "end"],
     ["label", "broke"],
     ["show_text", "_SafariZoneGateSafariZoneWorker1NotEnoughMoneyText"],
+    ["move_player", "down", 1],
+    ["jump", "end"],
+    // Yellow: SafariZoneEntranceCalculateLowCostAdmission and the nags
+    ["label", "discount"],
+    ["safari_low_cost"],
+    ["jump_if_false", "turned"],
+    ["safari_walk_in"],
+    ["jump", "end"],
+    ["label", "turned"],
     ["move_player", "down", 1],
     ["jump", "end"],
     ["label", "decline"],

@@ -10,6 +10,8 @@
 
 import { hasSevenBadges, liftKeyRocketRows, lockedDoorStep, type MapScript } from "./mapscripts.ts";
 import { coinClerkRows, coinGiverRows, YELLOW_COIN_GIVERS } from "./gamecorner.ts";
+import { SAFARI_JOIN_CELLS, safariJoinRows, safariLeavingRows } from "./safari.ts";
+import { gymGateFlag } from "./toggleblocks.ts";
 import type { ScriptRow } from "./script.ts";
 import type { Dir } from "./collision.ts";
 
@@ -554,6 +556,39 @@ export function yellowScripts(base: Record<string, MapScript>): Record<string, M
     },
     VERMILION_CITY: {
       talk: { TEXT_VERMILIONCITY_OFFICER_JENNY: jennyTalk },
+    },
+    // CinnabarGym.asm (Yellow): a gate's trainer will not fight until his
+    // quiz has been tried -- talked to first, he gives the room's lecture
+    CINNABAR_GYM: {
+      talk: Object.fromEntries([0, 1, 2, 3, 4, 5].map((i) => [
+        `TEXT_CINNABARGYM_SUPER_NERD${i + 2}`,
+        (ow: any, save: any): ScriptRow[] => {
+          const name = `CINNABARGYM_SUPER_NERD${i + 2}`;
+          const npc = ow?.findNpc?.(name);
+          const beaten = !!npc && ow.trainerDefeated?.(npc);
+          if (!beaten && !save?.flags?.[gymGateFlag(i)]) {
+            return [["face_player"], ["show_text", `_CinnabarGymText_${i + 1}`]] as ScriptRow[];
+          }
+          if (!beaten) return [["face_player"], ["engage_trainer", name]] as ScriptRow[];
+          const after = ow.trainerHeader?.(npc)?.after;
+          return [["face_player"], ["show_text", after ?? "..."]] as ScriptRow[];
+        },
+      ])),
+    },
+    // SafariZoneGate_2.asm: Yellow lets the short and the broke in anyway
+    SAFARI_ZONE_GATE: {
+      talk: {
+        TEXT_SAFARIZONEGATE_SAFARI_ZONE_WORKER1: (_ow: any, save: any): ScriptRow[] =>
+          save?.safari
+            ? [["show_text", "_SafariZoneGateSafariZoneWorker1GoodLuckText"]] as ScriptRow[]
+            : [["face_player"], ["show_text", "_SafariZoneGateSafariZoneWorker1Text"], ...safariJoinRows(true)] as ScriptRow[],
+      },
+      onStep: (ow: any, save: any) => {
+        const x = ow?.player?.cellX;
+        const y = ow?.player?.cellY;
+        if (save?.safari) return y !== undefined && y <= 1 ? safariLeavingRows(x !== 3) : null;
+        return SAFARI_JOIN_CELLS.some(([cx, cy]) => cx === x && cy === y) ? safariJoinRows(true) : null;
+      },
     },
     PALLET_TOWN: { onStep: palletOnStep },
     OAKS_LAB_ONSTEP_HOST: { onStep: labOnStep },

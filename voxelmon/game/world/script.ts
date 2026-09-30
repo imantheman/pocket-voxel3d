@@ -1178,6 +1178,38 @@ function* old_man_demo(ctx: ScriptContext, ...args: unknown[]): Generator<void, 
   }
 }
 
+/**
+ * Yellow's Safari Zone discount (pokeyellow scripts/SafariZoneGate_2.asm).
+ * Short of the fee but not broke: "pay me what you have" -- all of it, for
+ * a BALL per 23 plus one, 29 at most. Broke: three refusals, and on the
+ * fourth ask one BALL for free, just this once. Leaves lastCheck = let in.
+ */
+function* safari_low_cost(ctx: ScriptContext): Generator<void, void> {
+  const save = ctx.world.save as unknown as { money?: number; safariNags?: number };
+  const start = (balls: number) =>
+    (ctx.world as unknown as { safariStart?: (b: number) => void }).safariStart?.(balls);
+  const money = save.money ?? 0;
+  if (money > 0) {
+    yield* show_text(ctx, "_SafariZoneGateSafariZoneWorker1NotEnoughMoneyText");
+    save.money = 0;
+    yield* show_text(ctx, "_SafariZoneLowCostText1");
+    yield* show_text(ctx, "_SafariZoneLowCostText2");
+    start(Math.min(Math.floor(money / 23) + 1, 29));
+    ctx.lastCheck = true;
+    return;
+  }
+  const nag = save.safariNags ?? 0;
+  save.safariNags = nag + 1;
+  yield* show_text(ctx, `_SafariZoneLowCostText${5 + Math.min(nag, 3)}`);
+  if (nag >= 3) {
+    yield* show_text(ctx, "_SafariZoneLowCostText3");
+    start(1);
+    ctx.lastCheck = true;
+    return;
+  }
+  ctx.lastCheck = false;
+}
+
 // Yellow's ModifyPikachuHappiness from a script (the gym leader's win).
 function* pikachu_happy(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
   modifyHappiness(ctx.world.save as never, args[0] as string);
@@ -1263,6 +1295,7 @@ const VERBS: Record<string, Verb> = {
   old_man_demo,
   set_field,
   pikachu_happy,
+  safari_low_cost,
   record_hall_of_fame,
   open_diploma,
   save_game,

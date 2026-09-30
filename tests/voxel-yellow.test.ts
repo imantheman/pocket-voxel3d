@@ -427,3 +427,52 @@ describe("Yellow: Pikachu follows you", () => {
     expect(findFollower(game.overworld as any)).toBeUndefined();
   });
 });
+
+describe("Yellow: rules it changed", () => {
+  test.skipIf(!hasYellow)("the Safari Zone takes what you have: a ball per 23 plus one", () => {
+    const game = newYellowGame();
+    const ow = game.overworld as any;
+    game.save.money = 230;
+    ow.setMap("SAFARI_ZONE_GATE", 3, 3, "up");
+    ow.showMapText("TEXT_SAFARIZONEGATE_SAFARI_ZONE_WORKER1");
+    playOut(game);
+    expect(game.save.money).toBe(0);
+    expect((game.save as any).safari?.balls).toBe(11);
+  });
+
+  test.skipIf(!hasYellow)("broke, you are turned away three times, then let in with one ball", () => {
+    const game = newYellowGame();
+    const ow = game.overworld as any;
+    game.save.money = 0;
+    for (let i = 0; i < 3; i++) {
+      ow.setMap("SAFARI_ZONE_GATE", 3, 3, "up");
+      ow.showMapText("TEXT_SAFARIZONEGATE_SAFARI_ZONE_WORKER1");
+      playOut(game);
+      expect((game.save as any).safari ?? null).toBeNull();
+    }
+    ow.setMap("SAFARI_ZONE_GATE", 3, 3, "up");
+    ow.showMapText("TEXT_SAFARIZONEGATE_SAFARI_ZONE_WORKER1");
+    playOut(game);
+    expect((game.save as any).safari?.balls).toBe(1);
+  });
+
+  test.skipIf(!hasYellow)("a Cinnabar gate trainer lectures until his quiz is tried", () => {
+    const game = newYellowGame();
+    const ow = game.overworld as any;
+    game.save.party.push(newMon(yellow!, "PIKACHU", 80, game.battleRng));
+    ow.setMap("CINNABAR_GYM", 18, 3, "down");
+    ow.showMapText("TEXT_CINNABARGYM_SUPER_NERD2", ow.findNpc("CINNABARGYM_SUPER_NERD2"));
+    playOut(game);
+    expect(game.stackKinds()).not.toContain("battle");
+    expect(ow.findNpc("CINNABARGYM_SUPER_NERD2") && ow.trainerDefeated(ow.findNpc("CINNABARGYM_SUPER_NERD2"))).toBe(false);
+    game.save.flags.EVENT_CINNABAR_GYM_GATE0_UNLOCKED = true;
+    ow.showMapText("TEXT_CINNABARGYM_SUPER_NERD2", ow.findNpc("CINNABARGYM_SUPER_NERD2"));
+    let fought = false;
+    for (let t = 0; t < 30000; t++) {
+      if (game.battleView()) fought = true;
+      if (fought && game.stackKinds().at(-1) === "overworld" && !ow.runner.isRunning()) break;
+      game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    expect(fought).toBe(true);
+  });
+});
