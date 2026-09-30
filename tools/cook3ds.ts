@@ -26,7 +26,8 @@
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { cook } from "../voxelmon/cook/cli.ts";
+import { cook, lcdTilesFor } from "../voxelmon/cook/cli.ts";
+import { writeGen2Container } from "../voxelmon/game/gen2/platform/container.ts";
 import { GEN_DIR, genMissingReason, loadGen, ROOT } from "../voxelmon/cook/data.ts";
 import { activeVersion, type GameVersion, missingInputReason, resolveEnv } from "../voxelmon/import/env.ts";
 import { runImport } from "../voxelmon/import/index.ts";
@@ -348,7 +349,21 @@ export async function cook3ds(only?: string[]): Promise<number> {
   // --- 3. the dataset and the index they share ---------------------------
   merged.cookedMaps = names;
   for (const [name, record] of Object.entries(perMap)) merged.maps[name] = record;
-  writeFileSync(join(PAKS, files.gamedata), JSON.stringify(merged));
+  if (version === "gold") {
+    // Gold's dataset is a container (game/gen2/platform/container.ts): the
+    // walker's record, the Gold screen's tile manifest, and every table the
+    // importer wrote, each parsed on the device only when first asked for.
+    const sections: Record<string, string> = {
+      walker: JSON.stringify(merged),
+      lcdGfx: JSON.stringify(lcdTilesFor(loadGen(GEN_DIR)).gfx),
+    };
+    for (const f of readdirSync(GEN_DIR).filter((f) => f.endsWith(".json")).sort()) {
+      sections[f.slice(0, -5)] = readFileSync(join(GEN_DIR, f), "utf8");
+    }
+    writeFileSync(join(PAKS, files.gamedata), writeGen2Container(sections));
+  } else {
+    writeFileSync(join(PAKS, files.gamedata), JSON.stringify(merged));
+  }
 
   // index.txt is the console's map list: "<map id> <name>", and the id is
   // the ROM's own map index, NOT the line number -- the map browser loads by

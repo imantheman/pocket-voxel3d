@@ -71,6 +71,17 @@ import { planColour, Redpp, type ColourPlan, type PageOwner } from "./redpp.ts";
 import { planGbc, useGbc } from "./gbc.ts";
 import { Gen2Colour, isGen2, planGen2 } from "./gen2.ts";
 import { buildGen2Gamedata } from "./gen2gamedata.ts";
+import { buildLcdTiles, type LcdTiles } from "./gen2lcd.ts";
+
+// One map cook after another reads the same dataset: pack its Gold screen
+// tiles once (cook3ds cooks every map in one process).
+// Keyed on the graphics themselves: every cook() loads its own copy.
+let lcdCache: { key: string; tiles: LcdTiles } | null = null;
+export function lcdTilesFor(gen: Parameters<typeof buildLcdTiles>[0]): LcdTiles {
+  const key = `${gen.gfxBin.length}:${Object.keys(gen.gfx).length}:${JSON.stringify(gen.gfx).length}`;
+  if (lcdCache?.key !== key) lcdCache = { key, tiles: buildLcdTiles(gen) };
+  return lcdCache.tiles;
+}
 import { analyseMap } from "./structures.ts";
 
 export const DEFAULT_MAPS = [
@@ -410,6 +421,20 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
     pageOwners.push({ kind: ATLAS_KIND.pics });
   }
 
+  // Gold: the Gold screen's tile pages (cook/gen2lcd.ts), LAST, so their
+  // indices are the same in every map's pak and the hoist shares them. The
+  // id manifest is big and the same for every map: it rides in the Gold
+  // dataset container (tools/cook3ds.ts), not in each pak.
+  let lcd: { firstPage: number; counts: number[] } | undefined;
+  if (gen2) {
+    const tiles = lcdTilesFor(gen);
+    lcd = { firstPage: pages.length, counts: tiles.counts };
+    for (const page of tiles.pages) {
+      pages.push(page);
+      pageOwners.push({ kind: ATLAS_KIND.pics });
+    }
+  }
+
   // --- mesh ---------------------------------------------------------------
   const buildingStats: BuildingStats = { built: [], claimOnly: [], skipped: [], placements: 0 };
   const mapStats: CookResult["mapStats"] = [];
@@ -454,6 +479,7 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
     trainerCardPic,
     townMapPage,
     townMapCursorPage,
+    ...(lcd ? { lcd } : {}),
   };
   const gameJson = gen2
     ? buildGen2Gamedata(gen, atlas, mapNames) // Gold: the walker's dataset (cook/gen2gamedata.ts)

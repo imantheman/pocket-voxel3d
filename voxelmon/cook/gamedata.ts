@@ -19,6 +19,9 @@ interface SpriteLike {
 }
 
 export interface AtlasIndex {
+  /** Gold: the Gold screen's tile pages (cook/gen2lcd.ts) -- page
+   *  firstPage + k holds tile ids k*1024 .. k*1024 + counts[k]. */
+  lcd?: { firstPage: number; counts: number[] };
   /** sprite sheet name ("red", "oak", ...) -> atlas page. */
   sprites: Record<string, number>;
   /** species id -> front-pic atlas page (the guest accessor contract). */
