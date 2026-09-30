@@ -28,6 +28,7 @@ import { apply as expApply, movesLearnedAt } from "../rules/experience.ts";
 import { beforeMove as statusBeforeMove, residual as statusResidual } from "../rules/status.ts";
 import { effectiveSpeed, firstMover } from "../rules/turnorder.ts";
 import { createTypeChart, type TypeChart } from "../rules/typechart.ts";
+import { modifyHappiness } from "../world/pikachu.ts";
 import {
   BATTLE_SLIDE_IN_FRAMES,
   BATTLE_START_SENDOUT,
@@ -1788,6 +1789,8 @@ export class WildBattle implements EffectBattle {
       if (kind) this.actNext(() => this.audioCues.push(`music:victory:${kind}`));
     }
     this.sayNext(`${displayName(battler)}\nfainted!`);
+    // PIKAHAPPY_FAINTED: your Pikachu going down in battle
+    if (battler.isPlayer) modifyHappiness(this.save as never, "FAINTED", battler.mon);
     if (battler.isPlayer) {
       this.act(() => this.playerMonFainted());
     } else {
@@ -1825,6 +1828,8 @@ export class WildBattle implements EffectBattle {
       );
       if (levels.length > 0) this.leveledUp.add(mon);
       const name = mon.nickname ?? this.data.pokemon[mon.species].name;
+      // PIKAHAPPY_LEVELUP, once per level gained (Yellow only)
+      for (let k = 0; k < levels.length; k++) modifyHappiness(this.save as never, "LEVELUP", mon);
       if (levels.length > 0) {
         this.gearLevelUp = {
           name,

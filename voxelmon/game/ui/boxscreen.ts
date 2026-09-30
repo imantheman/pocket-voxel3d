@@ -8,6 +8,7 @@ import type { GameState } from "../game.ts";
 import type { PartyMon } from "../battle/mon.ts";
 import * as Boxes from "../pokemon/boxes.ts";
 import { SummaryState } from "./partyscreen.ts";
+import { modifyHappiness } from "../world/pikachu.ts";
 
 const ROWS = 4;
 const PARTY_MAX = 6;
@@ -224,6 +225,8 @@ export class BoxState implements GameState {
       }
       this.party().splice(this.listIndex, 1);
       box.push(mon);
+      // PIKAHAPPY_DEPOSITED: Pikachu does not like the PC
+      modifyHappiness(this.game.save, "DEPOSITED", mon);
       this.cry(mon);
       this.toMessage(`${this.monName(mon)} was\nstored in Box ${this.game.save.currentBox}.`, "menu");
     }

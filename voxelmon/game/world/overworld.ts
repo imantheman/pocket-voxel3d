@@ -61,6 +61,8 @@ import { pcTileAt } from "./pctiles.ts";
 import { ScriptRunner, type ScriptRow, type ScriptWorld } from "./script.ts";
 import { mapScript, useScriptsFor, type MapScript } from "./mapscripts.ts";
 import { countGearStep } from "../ui/gear/model.ts";
+import * as Pikachu from "./pikachu.ts";
+import { picPageFor } from "../battle/staging.ts";
 import {
   destination,
   onArrive,
@@ -580,6 +582,8 @@ export class Overworld implements ScriptWorld {
     visit(this.save as never, mapId);
     // A map script's every-load hook (story5.lua M.CINNABAR_ISLAND.onEnter).
     mapScript(mapId)?.onEnter?.(this, this.save);
+    // Yellow's Pikachu comes along to every map (a no-op elsewhere)
+    Pikachu.onMapEntered(this as never);
   }
 
   // OverworldController.lua:110-114 objectVisible — the spawn filter. A
@@ -666,6 +670,8 @@ export class Overworld implements ScriptWorld {
         this.rollDownhill();
       }
     }
+    // Yellow's follower reads the step the player just committed
+    Pikachu.updateFollower(this as never, (n) => this.shell.npcRng.int(n));
     const stepped = this.player.update();
     // the warp-arrival cell goes stale the instant the player's real cell
     // leaves it, scripted walk-outs included (OverworldController.lua:1071)
@@ -1188,6 +1194,14 @@ export class Overworld implements ScriptWorld {
   // TEXT_* constant. Item balls, static encounters, trainer engagement and
   // TX_SCRIPT marts/nurses are the battle/menu ports' seams.
   talkTo(npc: NPC): void {
+    // Yellow's Pikachu: its own beat (TalkToPikachu), not a map text
+    if ((npc as { pikachuFollower?: boolean }).pikachuFollower) {
+      npc.facePlayer(this.player);
+      const back: Record<string, Dir> = { up: "down", down: "up", left: "right", right: "left" };
+      this.player.facing = back[npc.facing] ?? this.player.facing;
+      this.runScript(Pikachu.talkRows(this as never, picPageFor(this.shell.data as never, "PIKACHU")));
+      return;
+    }
     npc.frozen = true;
     const unfreeze = () => {
       npc.frozen = false;
@@ -2032,6 +2046,8 @@ export class Overworld implements ScriptWorld {
   onStepComplete(): void {
     // the Kanto Gear's step counter (STEPS), every step walked or ridden
     countGearStep(this.save as never);
+    // Yellow: every 256th step may cheer Pikachu up; its mood settles
+    Pikachu.pikachuStep(this.save as never, () => this.shell.npcRng.byte() < 128);
     // safari_game.asm runs BEFORE the land triggers and the warp check: when
     // the timer runs out the PA takes the step over entirely.
     if (this.safariStep()) return;

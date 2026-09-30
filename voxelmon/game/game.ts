@@ -76,6 +76,7 @@ import {
 } from "./world/oaksaide.ts";
 import { prizeWindows } from "./world/gamecorner.ts";
 import { gameVersion } from "./data.ts";
+import { modifyHappiness } from "./world/pikachu.ts";
 import { gearViewStep, type GearViewId } from "./ui/kantogear.ts";
 import { count as badgeCount } from "./rules/badges.ts";
 
@@ -540,7 +541,9 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     // recomp writes, so a save from either side opens in the other.
     this.save = {
       meta: { format: SAVE_FORMAT, mods: {} },
-      version: "red",
+      // gen1recomp's save field: Yellow says so (its Pikachu keeps its
+      // happiness in this save); Red and Blue stay "red" as they always were
+      version: gameVersion(this.data) === "yellow" ? "yellow" : "red",
       player: {
         map: "REDS_HOUSE_2F",
         x: 3,
@@ -969,6 +972,8 @@ export class VoxelmonGame implements OverworldShell, SceneView {
    */
   teachMachine(partyIndex: number, itemId: string): void {
     const mon = this.save.party[partyIndex];
+    // PIKAHAPPY_USEDTMHM (the attempt, as item_effects.asm counts it)
+    if (mon) modifyHappiness(this.save as never, "USEDTMHM", mon);
     const item = this.data.items?.[itemId];
     const moveId = item?.machine?.move;
     if (!mon || !item || !moveId) return;
@@ -2171,6 +2176,8 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     }
     const r = Items.useItem(this.data, this.save as never, itemId, mon, null, moveIndex);
     if (r.kind === "consumed") Bag.remove(this.save, itemId, 1);
+    // PIKAHAPPY_USEDITEM: a medicine, a vitamin, an ETHER spent on it
+    if (r.kind === "consumed") modifyHappiness(this.save as never, "USEDITEM", mon);
     // Yellow's Pikachu says no out loud (PlayPikachuSoundClip, PikachuCry28)
     if (r.refused) this.audio?.playCry?.("PIKACHU");
     if (r.evolveTo) {
@@ -2438,6 +2445,8 @@ export class VoxelmonGame implements OverworldShell, SceneView {
         log(`swap: my ${mine.species} for their ${got.species}`);
         const arrival: PartyMon = { ...got, traded: true,
           otName: theirParty.otName, otId: theirParty.otId };
+        // PIKAHAPPY_TRADE: trading your Pikachu away
+        modifyHappiness(this.save as never, "TRADE", mine);
         this.save.party[mySlot] = arrival;
         const dex = (this.save as { pokedex?: { seen?: Record<string, boolean>;
           owned?: Record<string, boolean> } }).pokedex;

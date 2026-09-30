@@ -95,6 +95,8 @@ function gymLeader(o: GymLeaderOpts): ScriptRow[] {
     ["start_battle", "trainer", o.trainerClass, o.party ?? 1],
     ["jump_if_false", "end"], // lost -> no reward
     ["set_flag", o.beatFlag],
+    // PIKAHAPPY_GYMLEADER (Yellow; nothing elsewhere)
+    ["pikachu_happy", "GYMLEADER"],
   ];
   for (const d of o.deactivate ?? []) rows.push(["set_flag", d]);
   rows.push(["give_item", o.badge, 1, false]); // silent add

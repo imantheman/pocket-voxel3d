@@ -12,6 +12,7 @@ import { mapScript, useScriptsFor } from "../voxelmon/game/world/mapscripts.ts";
 import { prizeWindows, YELLOW_PRIZE_WINDOWS } from "../voxelmon/game/world/gamecorner.ts";
 import { newMon } from "../voxelmon/game/battle/mon.ts";
 import * as Items from "../voxelmon/game/rules/items.ts";
+import { findFollower, happiness, modifyHappiness, pikachuStep, selectEmotion } from "../voxelmon/game/world/pikachu.ts";
 
 const genDir = join(import.meta.dir, "../dist/voxelmon/yellow/gen");
 const hasYellow = REQUIRED_MODULES.every((m) => existsSync(join(genDir, `${m}.json`)));
@@ -281,5 +282,148 @@ describe("Yellow: the gifts and the duo", () => {
     expect(game.save.flags.EVENT_BEAT_MT_MOON_3_JESSIE_JAMES).toBe(true);
     const jessie = ow.findNpc("MTMOONB2F_JESSIE");
     expect(!jessie || jessie.hidden).toBe(true);
+  });
+});
+
+describe("Yellow: Pikachu follows you", () => {
+  /** A Yellow game past the lab, Pikachu in the party, standing on a map. */
+  function withPikachu(map: string, x: number, y: number, facing = "right"): VoxelmonGame {
+    const game = newYellowGame();
+    game.save.flags.EVENT_GOT_STARTER = true;
+    game.save.party.push(newMon(yellow!, "PIKACHU", 5, game.battleRng));
+    (game.overworld as any).setMap(map, x, y, facing);
+    return game;
+  }
+  function walk(game: VoxelmonGame, btn: number, cells: number): void {
+    const ow = game.overworld as any;
+    for (let c = 0; c < cells; c++) {
+      const [sx, sy] = [ow.player.cellX, ow.player.cellY];
+      for (let t = 0; t < 40 && ow.player.cellX === sx && ow.player.cellY === sy; t++) game.tick(btn);
+    }
+    for (let t = 0; t < 24; t++) game.tick(0);
+  }
+  /** An open east-west run on a map. */
+  function openRow(game: VoxelmonGame, map: string, len: number): [number, number] {
+    const ow = game.overworld as any;
+    ow.setMap(map, 1, 1, "down");
+    const m = ow.map;
+    for (let y = 2; y < m.heightCells - 2; y++) {
+      for (let x = 2; x < m.widthCells - len - 2; x++) {
+        let ok = true;
+        for (let i = 0; i <= len && ok; i++) {
+          if (!m.isWalkableCell(x + i, y) || m.warpAtCell(x + i, y) || m.isGrassCell(x + i, y) ||
+              ow.npcs.some((n: any) => n.cellX === x + i && n.cellY === y)) ok = false;
+        }
+        if (ok) return [x, y];
+      }
+    }
+    throw new Error("no open row");
+  }
+
+  test.skipIf(!hasYellow)("it arrives under you, then trails one cell behind as you walk", () => {
+    const game = withPikachu("PALLET_TOWN", 5, 6);
+    const ow = game.overworld as any;
+    const [x, y] = openRow(game, "PALLET_TOWN", 5);
+    ow.setMap("PALLET_TOWN", x, y, "right");
+    const pika = findFollower(ow)!;
+    expect(pika).toBeTruthy();
+    expect([pika.cellX, pika.cellY]).toEqual([x, y]);
+    walk(game, VOX_BTN.right, 3);
+    const p2 = findFollower(ow)!;
+    expect([ow.player.cellX, ow.player.cellY]).toEqual([x + 3, y]);
+    expect([p2.cellX, p2.cellY]).toEqual([x + 2, y]);
+    expect(p2.facing).toBe("right");
+    expect((p2 as any).hidden).toBe(false);
+  });
+
+  test.skipIf(!hasYellow)("it never blocks: walk back through it and it goes round", () => {
+    const game = withPikachu("PALLET_TOWN", 5, 6);
+    const ow = game.overworld as any;
+    const [x, y] = openRow(game, "PALLET_TOWN", 5);
+    ow.setMap("PALLET_TOWN", x, y, "right");
+    walk(game, VOX_BTN.right, 3);
+    walk(game, VOX_BTN.left, 2); // turn, then onto Pikachu's cell
+    expect(ow.player.cellX).toBeLessThanOrEqual(x + 2);
+  });
+
+  test.skipIf(!hasYellow)("through a door it comes along to the next map", () => {
+    const game = withPikachu("PALLET_TOWN", 5, 6);
+    const ow = game.overworld as any;
+    // Red's house door is at (5,5); step up into it from (5,6)
+    ow.setMap("PALLET_TOWN", 5, 6, "up");
+    for (let t = 0; t < 200 && ow.map.id === "PALLET_TOWN"; t++) game.tick(t < 30 ? VOX_BTN.up : 0);
+    for (let t = 0; t < 120; t++) game.tick(0);
+    expect(ow.map.id).not.toBe("PALLET_TOWN");
+    expect(findFollower(ow)).toBeTruthy();
+  });
+
+  test.skipIf(!hasYellow)("on the bike it waits in its ball", () => {
+    const game = withPikachu("PALLET_TOWN", 5, 6);
+    const ow = game.overworld as any;
+    expect(findFollower(ow)).toBeTruthy();
+    (game.save as any).onBike = true;
+    game.tick(0);
+    expect(findFollower(ow)).toBeUndefined();
+    (game.save as any).onBike = false;
+    game.tick(0);
+    expect(findFollower(ow)).toBeTruthy();
+  });
+
+  test.skipIf(!hasYellow)("talking to it plays its beat and returns you to the map", () => {
+    const game = withPikachu("PALLET_TOWN", 5, 6);
+    const ow = game.overworld as any;
+    const [x, y] = openRow(game, "PALLET_TOWN", 5);
+    ow.setMap("PALLET_TOWN", x, y, "right");
+    walk(game, VOX_BTN.right, 2);
+    // turn round to face it (one cell behind) and press A
+    game.tick(VOX_BTN.left); game.tick(0);
+    for (let t = 0; t < 6; t++) game.tick(0);
+    expect(ow.player.facing).toBe("left");
+    game.tick(VOX_BTN.a);
+    expect(ow.runner.isRunning()).toBe(true);
+    playOut(game);
+    expect(game.stackKinds().at(-1)).toBe("overworld");
+  });
+
+  test.skipIf(!hasYellow)("happiness moves by the ROM's bands, and only for a Pikachu", () => {
+    const save: any = { version: "yellow", party: [{ species: "PIKACHU", hp: 10 }] };
+    expect(happiness(save)).toBe(90);
+    modifyHappiness(save, "LEVELUP", { species: "PIKACHU" });
+    expect(save.pikachuHappiness).toBe(95); // +5 under 100
+    modifyHappiness(save, "LEVELUP", { species: "PIKACHU" });
+    expect(save.pikachuHappiness).toBe(100);
+    modifyHappiness(save, "LEVELUP", { species: "PIKACHU" });
+    expect(save.pikachuHappiness).toBe(103); // +3 from 100
+    modifyHappiness(save, "LEVELUP", { species: "RATTATA" });
+    expect(save.pikachuHappiness).toBe(103);
+    modifyHappiness(save, "TRADE", { species: "PIKACHU" });
+    expect(save.pikachuHappiness).toBe(93);
+    expect(save.pikachuMood).toBe(0);
+    // the mood drifts back one a step
+    pikachuStep(save, () => false);
+    expect(save.pikachuMood).toBe(1);
+    // and a Red save never counts any of it
+    const red: any = { version: "red", party: [{ species: "PIKACHU", hp: 10 }] };
+    modifyHappiness(red, "LEVELUP", { species: "PIKACHU" });
+    expect(red.pikachuHappiness).toBeUndefined();
+  });
+
+  test("its answer: asleep, hurt, the Tower, then mood and happiness", () => {
+    expect(selectEmotion({ party: [{ species: "PIKACHU", hp: 1, status: "SLP" }] } as never, "ROUTE_1")).toBe(11);
+    expect(selectEmotion({ party: [{ species: "PIKACHU", hp: 1, status: "PSN" }] } as never, "ROUTE_1")).toBe(28);
+    expect(selectEmotion({ party: [{ species: "PIKACHU", hp: 1 }] } as never, "POKEMON_TOWER_3F")).toBe(22);
+    expect(selectEmotion({ party: [{ species: "PIKACHU", hp: 1 }], pikachuHappiness: 90, pikachuMood: 128 } as never, "ROUTE_1")).toBe(5);
+    expect(selectEmotion({ party: [{ species: "PIKACHU", hp: 1 }], pikachuHappiness: 255, pikachuMood: 255 } as never, "ROUTE_1")).toBe(20);
+  });
+
+  test.skipIf(!hasYellow)("Red has no follower", () => {
+    const game = new VoxelmonGame({ ...yellow!, version: "red" } as VoxelmonData, new Host(), 1);
+    game.newGame();
+    game.closeToOverworld();
+    game.save.flags.EVENT_GOT_STARTER = true;
+    game.save.party.push(newMon(yellow!, "PIKACHU", 5, game.battleRng));
+    (game.overworld as any).setMap("PALLET_TOWN", 5, 6, "down");
+    game.tick(0);
+    expect(findFollower(game.overworld as any)).toBeUndefined();
   });
 });

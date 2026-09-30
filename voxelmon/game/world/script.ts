@@ -16,6 +16,7 @@
 // screen, the dex rating — belongs to the rungs docs/VOXEL.md §10 defers.
 
 import type { VoxelmonData } from "../data.ts";
+import { modifyHappiness } from "./pikachu.ts";
 import { LINK_WAIT_FRAMES } from "./link.ts";
 import * as Bag from "../rules/bag.ts";
 import { FADE_OUT_TO_WHITE } from "../rules/timing.ts";
@@ -1172,6 +1173,11 @@ function* old_man_demo(ctx: ScriptContext, ...args: unknown[]): Generator<void, 
   }
 }
 
+// Yellow's ModifyPikachuHappiness from a script (the gym leader's win).
+function* pikachu_happy(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  modifyHappiness(ctx.world.save as never, args[0] as string);
+}
+
 // Commands.lua set_field: a plain save field a script owns -- Yellow's
 // wRivalStarter (save.rivalStarter) is the one that needs it.
 function* set_field(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
@@ -1251,6 +1257,7 @@ const VERBS: Record<string, Verb> = {
   set_heal_point,
   old_man_demo,
   set_field,
+  pikachu_happy,
   record_hall_of_fame,
   open_diploma,
   save_game,
