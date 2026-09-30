@@ -606,8 +606,13 @@ function* use_cut(ctx: ScriptContext, ...args: unknown[]): Generator<void, void>
     // animation state to keep.
     const cx = Math.round((fx * CELL_PX + CELL_PX / 2) * Q4);
     const cz = Math.round((fy * CELL_PX + CELL_PX / 2) * Q4);
+    // The tree sits right after the bubbles on that page: three in Red and
+    // Blue (FX_FRAME_CUT_TREE), eight in Yellow, whose frame 3 is the skull.
+    const bubbles = (w.data as { field?: { emotionBubbles?: { bubbles?: unknown[] } } }).field
+      ?.emotionBubbles?.bubbles?.length;
+    const treeFrame = bubbles ?? FX_FRAME_CUT_TREE;
     for (let beat = 0; beat < CUT_ANIM_BEATS; beat++) {
-      w.fieldFx(cx, cz, beat % 2 === 0 ? FX_FRAME_CUT_TREE : -1);
+      w.fieldFx(cx, cz, beat % 2 === 0 ? treeFrame : -1);
       runner.waitingFrames = CUT_ANIM_BEAT_FRAMES;
       yield;
     }
