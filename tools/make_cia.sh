@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # Build the installable 3DS title (.cia) from the release ELF.
 #
-#   bash tools/make_cia.sh [OUTPUT.cia]
+#   bash tools/make_cia.sh [OUTPUT.cia] [red|blue]
+#
+# Red and Blue are two titles, side by side on the HOME menu: their own
+# title ID, name, icon and banner (Blue's art is Red's with every red made
+# blue), and their own ELF -- Blue is `cargo 3ds build --release --features
+# blue` into target-blue/. Both read the same shared paks on the card.
+# Blue also gets a .3dsx carrying its own name and icon, so the Homebrew
+# Launcher does not show two identical entries.
 #
 # cargo-3ds only emits .3dsx, so the CIA is assembled here by hand:
 #
@@ -16,19 +23,29 @@
 set -e
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
-OUT=${1:-dist/voxelmon/PocketVoxel3DRed.cia}
-WORK=dist/voxelmon/cia
-ELF=crates/pocketvoxel-3ds/target/armv6k-nintendo-3ds/release/pocketvoxel-3ds.elf
+GAME=${2:-${PV_GAME:-red}}
+case "$GAME" in
+  red)
+    LABEL=Red; UNIQUE=0xff3d0; PCODE=CTR-P-PVXL
+    ELF=crates/pocketvoxel-3ds/target/armv6k-nintendo-3ds/release/pocketvoxel-3ds.elf
+    WORK=dist/voxelmon/cia ;;
+  blue)
+    LABEL=Blue; UNIQUE=0xff3d1; PCODE=CTR-P-PVXB
+    ELF=crates/pocketvoxel-3ds/target-blue/armv6k-nintendo-3ds/release/pocketvoxel-3ds.elf
+    WORK=dist/voxelmon/cia-blue ;;
+  *) echo "make_cia: unknown game '$GAME' (red or blue)"; exit 1 ;;
+esac
+OUT=${1:-dist/voxelmon/PocketVoxel3D$LABEL.cia}
 
 for t in makerom bannertool python3; do
   command -v "$t" >/dev/null || { echo "make_cia: $t is not on PATH"; exit 1; }
 done
-[ -f "$ELF" ] || { echo "make_cia: no release ELF at $ELF -- run 'bun tools/voxel.ts 3ds' first"; exit 1; }
+[ -f "$ELF" ] || { echo "make_cia: no release ELF at $ELF -- build the $LABEL 3dsx first (docs/3DS.md)"; exit 1; }
 
 mkdir -p "$WORK" "$(dirname "$OUT")"
 
 echo "=== art"
-python3 tools/3ds_art.py "$WORK"
+python3 tools/3ds_art.py "$WORK" "$GAME"
 
 # A short, quiet original phrase: the HOME menu loops the banner tune, and
 # silence is rude while a jingle that is someone else's is worse.
@@ -57,8 +74,8 @@ PY
 
 echo "=== smdh"
 bannertool makesmdh \
-  -s "Pocket Voxel 3D Red" \
-  -l "Pocket Voxel 3D Red" \
+  -s "Pocket Voxel 3D $LABEL" \
+  -l "Pocket Voxel 3D $LABEL" \
   -p "Pocket Voxel" \
   -i "$WORK/icon.png" \
   -o "$WORK/icon.smdh"
@@ -72,6 +89,14 @@ bannertool makebanner -i "$WORK/banner.png" -a "$WORK/banner.wav" -o "$WORK/bann
 python3 tools/3ds_banner3d.py "$WORK/banner_flat.bnr" "$WORK/banner3d.cgfx"
 bannertool makebanner -ci "$WORK/banner3d.cgfx" -a "$WORK/banner.wav" -o "$WORK/banner.bnr"
 
+echo "=== rsf"
+# The one RSF, with this title's own ID: two titles sharing a UniqueId
+# would install over each other.
+sed -e "s/^\(  UniqueId *: \).*/\1$UNIQUE/" \
+    -e "s/^\(  ProductCode *: \).*/\1\"$PCODE\"/" \
+  tools/pocketvoxel.rsf > "$WORK/pocketvoxel.rsf"
+grep -E "UniqueId|ProductCode" "$WORK/pocketvoxel.rsf"
+
 echo "=== cia"
 # -exefslogo puts the RSF's logo into the ExeFS, which is where the HOME
 # menu looks for it; a title without one launches to an SD-card error that
@@ -79,9 +104,17 @@ echo "=== cia"
 makerom -f cia -target t -exefslogo -major 1 -minor 0 -micro 0 \
   -o "$OUT" \
   -elf "$ELF" \
-  -rsf tools/pocketvoxel.rsf \
+  -rsf "$WORK/pocketvoxel.rsf" \
   -icon "$WORK/icon.smdh" \
   -banner "$WORK/banner.bnr"
 
 ls -l "$OUT"
 echo "make_cia: $OUT"
+
+if [ "$GAME" = blue ]; then
+  # cargo-3ds names every .3dsx after the crate; Blue's gets its own SMDH.
+  DSX=dist/voxelmon/pocketvoxel-3ds-blue.3dsx
+  "${DEVKITPRO:-/opt/devkitpro}/tools/bin/3dsxtool" "$ELF" "$DSX" --smdh="$WORK/icon.smdh"
+  ls -l "$DSX"
+  echo "make_cia: $DSX"
+fi

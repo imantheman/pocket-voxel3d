@@ -100,6 +100,8 @@ GLYPHS = {
     "L": ["#....", "#....", "#....", "#....", "#....", "#....", "#####"],
     "D": ["####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."],
     "R": ["####.", "#...#", "#...#", "####.", "#.#..", "#..#.", "#...#"],
+    "B": ["####.", "#...#", "#...#", "####.", "#...#", "#...#", "####."],
+    "U": ["#...#", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."],
     " ": [".....", ".....", ".....", ".....", ".....", ".....", "....."],
 }
 GW, GH = 5, 7
@@ -161,6 +163,15 @@ def draw_cube(c, cx, cy, size, yaw, pitch, rgb, width=1.4, fade_back=True):
 
 RED = (228, 42, 46)
 DIM_RED = (110, 24, 28)
+# Which game the art is for: `python3 tools/3ds_art.py OUTDIR [red|blue]`.
+GAME = sys.argv[2] if len(sys.argv) > 2 else "red"
+
+
+def tint(rgb):
+    """Red's colours for Red; for Blue, the same colour with its red and blue
+    channels swapped, so every red in the art -- the word, the icon's cube,
+    the banner cube's three faces -- is the matching blue."""
+    return (rgb[2], rgb[1], rgb[0]) if GAME == "blue" else rgb
 WHITE = (238, 238, 244)
 CARD = (8, 8, 12)
 GRID = (26, 26, 34)
@@ -171,7 +182,7 @@ GRID = (26, 26, 34)
 # builds under the card. Everything else is transparent: the HOME menu draws
 # the banner over its own wallpaper, and the cube stands on that.
 CARD_H = 62
-SHADES = {"light": (244, 88, 92), "mid": (214, 40, 44), "dark": (128, 22, 26)}
+SHADES = {k: tint(v) for k, v in {"light": (244, 88, 92), "mid": (214, 40, 44), "dark": (128, 22, 26)}.items()}
 
 
 def make_banner(path):
@@ -181,10 +192,10 @@ def make_banner(path):
         c.line(0, gy, 255, gy, GRID, 0.6)
     for gx in range(0, 256, 16):
         c.line(gx, 0, gx, CARD_H - 1, GRID, 0.6)
-    top, bottom = "POCKET VOXEL", "RED"
+    top, bottom = "POCKET VOXEL", GAME.upper()
     s, g = 3, 3
     draw_text(c, top, (256 - text_width(top, s, g)) // 2, 9, s, g, WHITE)
-    draw_text(c, bottom, (256 - text_width(bottom, s, g)) // 2, 35, s, g, RED)
+    draw_text(c, bottom, (256 - text_width(bottom, s, g)) // 2, 35, s, g, tint(RED))
     # the cube's face colours: 16px patches at rows 112..128, x 0/16/32
     for i, name in enumerate(("light", "mid", "dark")):
         c.fill(i * 16, 112, i * 16 + 16, 128, SHADES[name])
@@ -193,7 +204,7 @@ def make_banner(path):
 
 def make_icon(path):
     c = Canvas(48, 48, bg=CARD)
-    draw_cube(c, 24, 25, 15, 0.86, 0.42, RED, width=1.7)
+    draw_cube(c, 24, 25, 15, 0.86, 0.42, tint(RED), width=1.7)
     # SMDH icons have no alpha channel, so this one goes out opaque RGB
     rgb = bytearray()
     for i in range(0, len(c.px), 4):
