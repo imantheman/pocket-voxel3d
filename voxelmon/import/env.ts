@@ -17,7 +17,10 @@ export const BLUE_SHA1 = "d7037c83e1ae5b39bde3c30787637ba1d4c48ce2";
 /** SHA-1 of the canonical US Yellow ROM (gen1recomp GameVersion.VERSIONS.yellow). */
 export const YELLOW_SHA1 = "cc7d03262ebfaf2f06772c1a480c7d9d5f4a38e1";
 
-export type GameVersion = "red" | "blue" | "yellow";
+/** SHA-1 of Pokemon Gold (USA, Europe) (gen1recomp GameVersion.VERSIONS.gold). */
+export const GOLD_SHA1 = "d8b8a3600a465308c9953dfa04f0081c05bdcb94";
+
+export type GameVersion = "red" | "blue" | "yellow" | "gold";
 
 /**
  * The games this pipeline can cook (gen1recomp src/core/GameVersion.lua).
@@ -25,11 +28,24 @@ export type GameVersion = "red" | "blue" | "yellow";
  * ribbon -- so they cook to ONE shared pak set; what differs is each game's
  * own dataset (encounters, text, credits, default names) and that ribbon.
  */
-export const VERSIONS: Record<GameVersion, { sha1: string; manifest: string; label: string }> = {
-  red: { sha1: RED_SHA1, manifest: "tools/rom_manifest.json", label: "Red" },
-  blue: { sha1: BLUE_SHA1, manifest: "tools/rom_manifest_blue.json", label: "Blue" },
-  yellow: { sha1: YELLOW_SHA1, manifest: "tools/rom_manifest_yellow.json", label: "Yellow" },
+export const VERSIONS: Record<GameVersion, { sha1: string; manifest: string; label: string; generation: 1 | 2 }> = {
+  red: { sha1: RED_SHA1, manifest: "tools/rom_manifest.json", label: "Red", generation: 1 },
+  blue: { sha1: BLUE_SHA1, manifest: "tools/rom_manifest_blue.json", label: "Blue", generation: 1 },
+  yellow: { sha1: YELLOW_SHA1, manifest: "tools/rom_manifest_yellow.json", label: "Yellow", generation: 1 },
+  // Gen 2 comes from gen1recomp's last MIT commit, bdfac727 (docs/gold-plan.md)
+  gold: { sha1: GOLD_SHA1, manifest: "tools/rom_manifest_gold.json", label: "Gold", generation: 2 },
 };
+
+/**
+ * Where a generation's gen1recomp checkout is. Gen 1 ports from the MIT pin
+ * 943ba5dc (VOXELMON_G1R); Gen 2 only exists later, and is ported from the
+ * last MIT commit, bdfac727 (VOXELMON_G1R_GEN2) -- never from anything after
+ * the relicence (661d75ef).
+ */
+function g1rDirFor(generation: 1 | 2): string {
+  if (generation === 2) return process.env.VOXELMON_G1R_GEN2 ?? join(homedir(), "gen1recomp-mit-gen2");
+  return process.env.VOXELMON_G1R ?? join(homedir(), "code/gen1recomp");
+}
 
 /**
  * Where a version's imported dataset lives. Red keeps the path it has always
@@ -56,7 +72,7 @@ export function versionOfRom(path: string): GameVersion | null {
  */
 export function activeVersion(): GameVersion {
   const named = process.env.VOXELMON_VERSION?.toLowerCase();
-  if (named === "red" || named === "blue" || named === "yellow") return named;
+  if (named === "red" || named === "blue" || named === "yellow" || named === "gold") return named;
   const rom = process.env.VOXELMON_ROM;
   return (rom && versionOfRom(rom)) || "red";
 }
@@ -77,8 +93,8 @@ export interface VoxelEnv {
 }
 
 export function resolveEnv(): VoxelEnv {
-  const g1rDir = process.env.VOXELMON_G1R ?? join(homedir(), "code/gen1recomp");
   const version = activeVersion();
+  const g1rDir = g1rDirFor(VERSIONS[version].generation);
   return {
     version,
     romPath: process.env.VOXELMON_ROM ?? DEFAULT_ROM,

@@ -21,6 +21,9 @@ blue = []
 # Pokemon Yellow: its own pak set (paks_yellow/), dataset and save
 # (save_yellow.lua). `cargo 3ds build --release --features yellow`.
 yellow = []
+# Pokemon Gold: Gen 2 -- its own pak set (paks_gold/), dataset and save
+# (save_gold.lua). `cargo 3ds build --release --features gold`.
+gold = []
 
 [build-dependencies]
 cc = "1"

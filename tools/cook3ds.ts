@@ -41,11 +41,13 @@ const CARD = join(DIST, "sdcard");
  * changed, so it has a set of its own, `paks_yellow`, beside theirs.
  */
 export function paksLayout(version: GameVersion): { orig: string; paks: string; cardPaks: string; dir: string } {
-  const dir = version === "yellow" ? "paks_yellow" : "paks";
+  // Yellow and Gold each have a set of their own beside Red and Blue's
+  const own = version === "yellow" || version === "gold";
+  const dir = own ? `paks_${version}` : "paks";
   return {
     dir,
     // one pak per map, atlas not yet shared: the input to the hoist
-    orig: join(DIST, version === "yellow" ? "paks_orig_yellow" : "paks_orig"),
+    orig: join(DIST, own ? `paks_orig_${version}` : "paks_orig"),
     // the shared set -- this is what actually ships
     paks: join(DIST, dir),
     cardPaks: join(CARD, "3ds/voxelmon", dir),
@@ -73,6 +75,7 @@ export const VERSION_FILES: Record<GameVersion, { gamedata: string; overlay: str
   blue: { gamedata: "gamedata_blue.json", overlay: "version_blue.vxat", threeDsx: "pocketvoxel-3ds-blue.3dsx" },
   // in its own folder (paksLayout), so its files keep the plain names
   yellow: { gamedata: "gamedata.json", overlay: "version_yellow.vxat", threeDsx: "pocketvoxel-3ds-yellow.3dsx" },
+  gold: { gamedata: "gamedata.json", overlay: "version_gold.vxat", threeDsx: "pocketvoxel-3ds-gold.3dsx" },
 };
 
 const SHARED_BIT = 0x80000000;

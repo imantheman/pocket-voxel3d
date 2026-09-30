@@ -174,30 +174,44 @@ static mut SHARED_ATLAS: Option<&'static [u8]> = None;
 /// Which game this build is. Red and Blue read one shared set of map paks
 /// (the maps and every graphic but the title ribbon are the same data in
 /// both ROMs); each has its own dataset and a small atlas overlay.
-#[cfg(not(any(feature = "blue", feature = "yellow")))]
+#[cfg(not(any(feature = "blue", feature = "yellow", feature = "gold")))]
 const GAME: &str = "red";
 #[cfg(feature = "blue")]
 const GAME: &str = "blue";
 #[cfg(feature = "yellow")]
 const GAME: &str = "yellow";
-/// The pak set this game reads. Red and Blue share one; Yellow has its own
-/// (its Pokemon are redrawn and its atlas pages do not line up with theirs).
-#[cfg(not(feature = "yellow"))]
+#[cfg(feature = "gold")]
+const GAME: &str = "gold";
+/// The pak set this game reads. Red and Blue share one; Yellow and Gold have
+/// their own (their pages do not line up with Red's).
+#[cfg(not(any(feature = "yellow", feature = "gold")))]
 const PAKS_DIR: &str = "sdmc:/3ds/voxelmon/paks";
 #[cfg(feature = "yellow")]
 const PAKS_DIR: &str = "sdmc:/3ds/voxelmon/paks_yellow";
-#[cfg(not(any(feature = "blue", feature = "yellow")))]
+#[cfg(feature = "gold")]
+const PAKS_DIR: &str = "sdmc:/3ds/voxelmon/paks_gold";
+#[cfg(not(any(feature = "blue", feature = "yellow", feature = "gold")))]
 const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks/gamedata.json";
 #[cfg(feature = "blue")]
 const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks/gamedata_blue.json";
 #[cfg(feature = "yellow")]
 const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks_yellow/gamedata.json";
-#[cfg(not(any(feature = "blue", feature = "yellow")))]
+#[cfg(feature = "gold")]
+const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks_gold/gamedata.json";
+#[cfg(not(any(feature = "blue", feature = "yellow", feature = "gold")))]
 const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks/version_red.vxat";
 #[cfg(feature = "blue")]
 const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks/version_blue.vxat";
 #[cfg(feature = "yellow")]
 const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks_yellow/version_yellow.vxat";
+#[cfg(feature = "gold")]
+const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks_gold/version_gold.vxat";
+/// The map the host boots on, and the one it falls back to: the player's
+/// room, then the town outside it.
+#[cfg(not(feature = "gold"))]
+const BOOT_MAPS: [&str; 2] = ["REDS_HOUSE_2F", "PALLET_TOWN"];
+#[cfg(feature = "gold")]
+const BOOT_MAPS: [&str; 2] = ["PLAYERS_HOUSE_2F", "NEW_BARK_TOWN"];
 
 /// This game's own overlay (paks/version_<game>.vxat, written by
 /// tools/cook3ds.ts writeOverlay): the atlas pages, palette table and sound
@@ -3010,8 +3024,8 @@ fn main() {
 
     // Boot: read whole. The player position is not known yet, and a copy
     // read whole serves any plan a later build asks for.
-    if !unsafe { load_map_pak("REDS_HOUSE_2F", None) } {
-        unsafe { load_map_pak("PALLET_TOWN", None); }
+    if !unsafe { load_map_pak(BOOT_MAPS[0], None) } {
+        unsafe { load_map_pak(BOOT_MAPS[1], None); }
     }
     let mut pak_static: &'static pak::Pak<'static> = unsafe { cur_pak() };
     // This game's own sound programs when its overlay carries them (Red's

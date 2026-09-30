@@ -50,6 +50,11 @@ export async function runImport(env: VoxelEnv): Promise<void> {
     digest === want.sha1,
     `ROM SHA-1 mismatch: got ${digest}, need ${want.label} ${want.sha1} (${env.romPath})`,
   );
+  if (VERSIONS[env.version].generation === 2) {
+    // Gold's formats are Gen 2's throughout (docs/gold-plan.md): its stages
+    // are a port of RomExtractorGen2.lua, not these.
+    throw new Error(`the ${want.label} importer is not written yet (docs/gold-plan.md)`);
+  }
   const manifest = await loadManifest(env.manifestPath);
   check(
     manifest.romSha1 === want.sha1,
