@@ -196,6 +196,36 @@ function staticMon(
   ];
 }
 
+/**
+ * PewterGymGuideText. Before the BOULDERBADGE he asks whether you want his
+ * advice: YES is the pitch and the advice, NO the free service and the
+ * advice (the ROM's labels have these the wrong way round; the branch is
+ * what counts). Yellow's own Pikachu along turns YES into his aside about
+ * it (`yellow`). After the badge, his congratulations.
+ */
+export function pewterGymGuide(yellow: boolean) {
+  return (_ow: any, save: any): ScriptRow[] => {
+    if (save?.flags?.EVENT_BEAT_BROCK) {
+      return [["face_player"], ["show_text", "_PewterGymGuidePostBattleText"]];
+    }
+    const pikachu = yellow && (save?.party ?? []).some((m: { species: string; hp?: number }) =>
+      m.species === "PIKACHU" && (m.hp ?? 0) > 0);
+    return [
+      ["face_player"],
+      ["ask", "_PewterGymGuidePreAdviceText"],
+      ["jump_if_false", "free"],
+      ...(pikachu
+        ? [["show_text", "_PewterGymGuyText"], ["jump", "end"]] as ScriptRow[]
+        : [["show_text", "_PewterGymGuideBeginAdviceText"], ["jump", "advice"]] as ScriptRow[]),
+      ["label", "free"],
+      ["show_text", "_PewterGymGuideFreeServiceText"],
+      ["label", "advice"],
+      ["show_text", "_PewterGymGuideAdviceText"],
+      ["label", "end"],
+    ];
+  };
+}
+
 /** An in-game trader: face the player, then the trade verb. */
 function tradeRows(index: number, flag: string): ScriptRow[] {
   return [["face_player"], ["trade", index, flag]];
@@ -1660,6 +1690,7 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
   // scripts/PewterGym.asm + victories.lua OPP_BROCK#1 (via gymLeader).
   PEWTER_GYM: {
     talk: {
+      TEXT_PEWTERGYM_GYM_GUIDE: pewterGymGuide(false),
       TEXT_PEWTERGYM_BROCK: gymLeader({
         trainerClass: "OPP_BROCK",
         beatFlag: "EVENT_BEAT_BROCK",
@@ -1817,6 +1848,12 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
   // stays gone across re-entry.
   VIRIDIAN_GYM: {
     talk: {
+      // ViridianGymGymGuideText
+      TEXT_VIRIDIANGYM_GYM_GUIDE: (_ow: any, save: any): ScriptRow[] => [
+        ["face_player"],
+        ["show_text", save?.flags?.EVENT_BEAT_GIOVANNI
+          ? "_ViridianGymGuidePostBattleText" : "_ViridianGymGuidePreBattleText"],
+      ],
       TEXT_VIRIDIANGYM_GIOVANNI: gymLeader({
         trainerClass: "OPP_GIOVANNI",
         party: 3,
@@ -2466,6 +2503,12 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
   // trainer with no def_trainers header, so the talk entry owns the engage.
   GAME_CORNER: {
     talk: {
+      // GameCornerGymGuideText: Erika beaten, the prize tip
+      TEXT_GAMECORNER_GYM_GUIDE: (_ow: any, save: any): ScriptRow[] => [
+        ["face_player"],
+        ["show_text", save?.flags?.EVENT_BEAT_ERIKA
+          ? "_GameCornerGymGuideTheyOfferRarePokemonText" : "_GameCornerGymGuideChampInMakingText"],
+      ],
       TEXT_GAMECORNER_POSTER: [
         ["check_flag", "EVENT_FOUND_ROCKET_HIDEOUT"],
         ["jump_if_true", "known"],

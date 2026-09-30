@@ -12249,6 +12249,9 @@ function yellowScripts(base) {
         ]))
       }
     },
+    PEWTER_GYM: {
+      talk: { TEXT_PEWTERGYM_GYM_GUIDE: pewterGymGuide(true) }
+    },
     PEWTER_POKECENTER: {
       talk: {
         TEXT_PEWTERPOKECENTER_JIGGLYPUFF: [
@@ -12404,6 +12407,25 @@ function staticMon(map, object, text, species, level, flag) {
     ["hide_object", map, object],
     ["label", "end"]
   ];
+}
+function pewterGymGuide(yellow) {
+  return (_ow, save) => {
+    if (save?.flags?.EVENT_BEAT_BROCK) {
+      return [["face_player"], ["show_text", "_PewterGymGuidePostBattleText"]];
+    }
+    const pikachu = yellow && (save?.party ?? []).some((m) => m.species === "PIKACHU" && (m.hp ?? 0) > 0);
+    return [
+      ["face_player"],
+      ["ask", "_PewterGymGuidePreAdviceText"],
+      ["jump_if_false", "free"],
+      ...pikachu ? [["show_text", "_PewterGymGuyText"], ["jump", "end"]] : [["show_text", "_PewterGymGuideBeginAdviceText"], ["jump", "advice"]],
+      ["label", "free"],
+      ["show_text", "_PewterGymGuideFreeServiceText"],
+      ["label", "advice"],
+      ["show_text", "_PewterGymGuideAdviceText"],
+      ["label", "end"]
+    ];
+  };
 }
 function tradeRows(index, flag) {
   return [["face_player"], ["trade", index, flag]];
@@ -13432,6 +13454,7 @@ Here, you can\vhave this TM.`,
   },
   PEWTER_GYM: {
     talk: {
+      TEXT_PEWTERGYM_GYM_GUIDE: pewterGymGuide(false),
       TEXT_PEWTERGYM_BROCK: gymLeader({
         trainerClass: "OPP_BROCK",
         beatFlag: "EVENT_BEAT_BROCK",
@@ -13553,6 +13576,10 @@ Here, you can\vhave this TM.`,
   },
   VIRIDIAN_GYM: {
     talk: {
+      TEXT_VIRIDIANGYM_GYM_GUIDE: (_ow, save) => [
+        ["face_player"],
+        ["show_text", save?.flags?.EVENT_BEAT_GIOVANNI ? "_ViridianGymGuidePostBattleText" : "_ViridianGymGuidePreBattleText"]
+      ],
       TEXT_VIRIDIANGYM_GIOVANNI: gymLeader({
         trainerClass: "OPP_GIOVANNI",
         party: 3,
@@ -14023,6 +14050,10 @@ Here, you can\vhave this TM.`,
   },
   GAME_CORNER: {
     talk: {
+      TEXT_GAMECORNER_GYM_GUIDE: (_ow, save) => [
+        ["face_player"],
+        ["show_text", save?.flags?.EVENT_BEAT_ERIKA ? "_GameCornerGymGuideTheyOfferRarePokemonText" : "_GameCornerGymGuideChampInMakingText"]
+      ],
       TEXT_GAMECORNER_POSTER: [
         ["check_flag", "EVENT_FOUND_ROCKET_HIDEOUT"],
         ["jump_if_true", "known"],
@@ -15078,6 +15109,50 @@ function guardAt(field, save, mapId, x, y) {
 function hasBadge(save, guard) {
   return (save.inventory?.[guard.badge] ?? 0) > 0;
 }
+function gateText(texts, label3, fallback) {
+  if (!label3)
+    return fallback;
+  return texts[label3] ?? texts[`_${label3}`] ?? fallback;
+}
+function guardTalkRows(field, save, mapId, label3) {
+  const gate = gateFor(field, mapId);
+  if (!gate || !label3)
+    return null;
+  const subs = (badge) => ({ "RAM:wNameBuffer": badge });
+  if (gate.guards) {
+    const g = gate.guards.find((x) => x.text === label3);
+    if (!g)
+      return null;
+    if (hasBadge(save, g)) {
+      return [
+        ["set_flag", g.event],
+        ["show_text", `_${gate.passText ?? "Route23OhThatIsTheBadgeText"}`, subs(g.badge)],
+        ["play_sound", "Get_Item1"],
+        ["show_text", "_Route23GoRightAheadText"]
+      ];
+    }
+    return [
+      ["show_text", `_${gate.failText ?? "Route23YouDontHaveTheBadgeYetText"}`, subs(g.badge)],
+      ["play_sound", "Denied"],
+      ["move_player", "down", 1]
+    ];
+  }
+  if (gate.text !== label3 || !gate.badge)
+    return null;
+  if ((save.inventory?.[gate.badge] ?? 0) > 0) {
+    return [["show_text", `_${gate.passText}`], ["play_sound", "Get_Item1"]];
+  }
+  return [
+    ["show_text", `_${gate.failText}`],
+    ["play_sound", "Denied"],
+    ["show_text", "_Route22GateGuardICantLetYouPassText"],
+    ["move_player", "down", 1]
+  ];
+}
+function onGateCell(field, mapId, x, y) {
+  const gate = gateFor(field, mapId);
+  return !!gate?.coords?.some((c) => c.x === x && c.y === y);
+}
 function fillBadgeName(text, badge) {
   return text.replace(/\{RAM:\w+\}/g, badge);
 }
@@ -15901,6 +15976,7 @@ class Overworld {
     this.syncSurf();
     visit(this.save, mapId);
     this.pikachuMapFlags = 0;
+    this.gatePassed = false;
     mapScript(mapId)?.onEnter?.(this, this.save);
     onMapEntered(this);
   }
@@ -16357,7 +16433,7 @@ the PC.`, () => {
   }
   showMapText(textConst, npc, onDone) {
     const talk = talkScript(this.map.id, textConst);
-    const script2 = (typeof talk === "function" ? talk(this, this.save) : talk) ?? itemBallScript(this.map.id, npc?.def) ?? martGreetScript(this.shell.data, this.map.def.label, textConst) ?? nurseGreetScript(textConst) ?? chanseyScript(textConst) ?? cableClubScript(textConst);
+    const script2 = (typeof talk === "function" ? talk(this, this.save) : talk) ?? itemBallScript(this.map.id, npc?.def) ?? martGreetScript(this.shell.data, this.map.def.label, textConst) ?? nurseGreetScript(textConst) ?? chanseyScript(textConst) ?? guardTalkRows(this.shell.data.field, this.save, this.map.id, this.textLabel(textConst)) ?? cableClubScript(textConst);
     if (script2 && !this.runner.isRunning()) {
       if (npc)
         npc.frozen = true;
@@ -16773,6 +16849,10 @@ canceled.`);
   }
   facePlayer(npc) {
     npc.facePlayer(this.player);
+  }
+  textLabel(textConst) {
+    const pointers = this.shell.data.text_pointers;
+    return pointers?.[this.map.def.label]?.[textConst]?.label;
   }
   resolveText(textConst) {
     const pointers = this.shell.data.text_pointers;
@@ -17414,17 +17494,28 @@ wore off.`);
     });
     return true;
   }
+  gatePassed = false;
   badgeGateStep() {
     if (this.runner.isRunning() || this.scriptMoves.length > 0)
       return false;
     const field = this.shell.data.field;
     const p = this.player;
+    if (!this.gatePassed && onGateCell(field, this.map?.id ?? "", p.cellX, p.cellY)) {
+      const gate2 = gateFor(field, this.map.id);
+      const rows = guardTalkRows(field, this.save, this.map.id, gate2?.text);
+      if (rows) {
+        if (gate2?.badge && (this.save.inventory?.[gate2.badge] ?? 0) > 0)
+          this.gatePassed = true;
+        this.runner.run([["face_object", "ROUTE22GATE_GUARD", "left"], ...rows], {});
+        return true;
+      }
+    }
     const guard = guardAt(field, this.save, this.map?.id ?? "", p.cellX, p.cellY);
     if (!guard)
       return false;
     const gate = gateFor(field, this.map.id);
     const t = this.shell.data.text ?? {};
-    const say = (key, fallback) => fillBadgeName(t[key ?? ""] ?? fallback, guard.badge);
+    const say = (key, fallback) => fillBadgeName(gateText(t, key, fallback), guard.badge);
     if (guard.sprite !== undefined)
       this.faceObject?.(guard.sprite, "down");
     if (!hasBadge(this.save, guard)) {

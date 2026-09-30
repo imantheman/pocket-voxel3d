@@ -38,7 +38,7 @@ import {
   currentAt, defaultHiddenBoulders, FORCED_WARP_FLOORS, forcedExitAt, holesFor, isHole,
   seafoamData, surfBlockedAt, toggleToObjectName, type SeafoamField,
 } from "./seafoam.ts";
-import { fillBadgeName, gateFor, guardAt, hasBadge } from "./badgegate.ts";
+import { fillBadgeName, gateFor, gateText, guardAt, guardTalkRows, hasBadge, onGateCell } from "./badgegate.ts";
 import {
   GYM_MACHINES, gymGateFlag, gymGuardKey, LANCE_DOOR_CELLS, LEAGUE_SEALS,
   MANSION_BLOCKS, MANSION_HOLES, MANSION_SWITCHES, OPEN_BLOCK,
@@ -581,6 +581,7 @@ export class Overworld implements ScriptWorld {
     // every destination would have read as never-visited.
     visit(this.save as never, mapId);
     this.pikachuMapFlags = 0;
+    this.gatePassed = false;
     // A map script's every-load hook (story5.lua M.CINNABAR_ISLAND.onEnter).
     mapScript(mapId)?.onEnter?.(this, this.save);
     // Yellow's Pikachu comes along to every map (a no-op elsewhere)
@@ -1253,6 +1254,12 @@ export class Overworld implements ScriptWorld {
       martGreetScript(this.shell.data as never, this.map.def.label, textConst) ??
       nurseGreetScript(textConst) ??
       chanseyScript(textConst) ??
+      (guardTalkRows(
+        (this.shell.data as { field?: unknown }).field as never,
+        this.save as never,
+        this.map.id,
+        this.textLabel(textConst),
+      ) as ScriptRow[] | null) ??
       cableClubScript(textConst);
     if (script && !this.runner.isRunning()) {
       if (npc) npc.frozen = true;
@@ -1889,6 +1896,14 @@ export class Overworld implements ScriptWorld {
   // src/core/Data.lua:304 resolveText — map label + TEXT_* const through
   // text_pointers; a text_asm entry falls back to its extracted _Label
   // string when one exists (#318).
+  /** A text constant's routine label on this map (text_pointers). */
+  textLabel(textConst: string): string | undefined {
+    const pointers = this.shell.data.text_pointers as
+      | Record<string, Record<string, { label?: string }>>
+      | undefined;
+    return pointers?.[this.map.def.label]?.[textConst]?.label;
+  }
+
   resolveText(textConst: string): string | null {
     const pointers = this.shell.data.text_pointers as
       | Record<string, Record<string, { label?: string; text?: string; asm?: boolean }>>
@@ -2823,16 +2838,30 @@ export class Overworld implements ScriptWorld {
    * you are told which one you are missing and moved back a step. The road
    * runs north, so back is south.
    */
+  /** Route22GateNoopScript: waved through once this visit. */
+  gatePassed = false;
+
   private badgeGateStep(): boolean {
     if (this.runner.isRunning() || this.scriptMoves.length > 0) return false;
     const field = (this.shell.data as { field?: unknown }).field as never;
     const p = this.player;
+    // Route 22's gate: its guard turns to you on either cell of the gate
+    if (!this.gatePassed && onGateCell(field, this.map?.id ?? "", p.cellX, p.cellY)) {
+      const gate = gateFor(field, this.map.id) as { text?: string; badge?: string } | undefined;
+      const rows = guardTalkRows(field, this.save as never, this.map.id, gate?.text);
+      if (rows) {
+        if (gate?.badge && (this.save.inventory?.[gate.badge] ?? 0) > 0) this.gatePassed = true;
+        this.runner.run([["face_object", "ROUTE22GATE_GUARD", "left"], ...rows] as ScriptRow[], {});
+        return true;
+      }
+    }
     const guard = guardAt(field, this.save as never, this.map?.id ?? "", p.cellX, p.cellY);
     if (!guard) return false;
     const gate = gateFor(field, this.map.id);
     const t = (this.shell.data as { text?: Record<string, string> }).text ?? {};
+    // the dataset keys the ROM's lines `_Label`; the gate names them bare
     const say = (key: string | undefined, fallback: string): string =>
-      fillBadgeName(t[key ?? ""] ?? fallback, guard.badge);
+      fillBadgeName(gateText(t, key, fallback), guard.badge);
     if (guard.sprite !== undefined) this.faceObject?.(guard.sprite, "down");
 
     if (!hasBadge(this.save as never, guard)) {

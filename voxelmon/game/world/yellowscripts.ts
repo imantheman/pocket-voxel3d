@@ -8,7 +8,7 @@
 // Built by a function over Red's table rather than at load, so this module
 // and mapscripts.ts can import each other without an evaluation-order trap.
 
-import { hasSevenBadges, liftKeyRocketRows, lockedDoorStep, type MapScript } from "./mapscripts.ts";
+import { hasSevenBadges, liftKeyRocketRows, lockedDoorStep, pewterGymGuide, type MapScript } from "./mapscripts.ts";
 import { coinClerkRows, coinGiverRows, YELLOW_COIN_GIVERS } from "./gamecorner.ts";
 import { SAFARI_JOIN_CELLS, safariJoinRows, safariLeavingRows } from "./safari.ts";
 import { gymGateFlag } from "./toggleblocks.ts";
@@ -720,6 +720,10 @@ export function yellowScripts(base: Record<string, MapScript>): Record<string, M
         },
       ])),
       },
+    },
+    // PewterGym.asm: the guide has a word about your Pikachu
+    PEWTER_GYM: {
+      talk: { TEXT_PEWTERGYM_GYM_GUIDE: pewterGymGuide(true) },
     },
     // PewterPokecenter.asm: Yellow's CooltrainerF, and the lullaby
     PEWTER_POKECENTER: {

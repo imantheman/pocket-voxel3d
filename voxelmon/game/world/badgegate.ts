@@ -25,9 +25,13 @@ export interface BadgeGuard {
 
 interface BadgeGateField {
   badgeGates?: Record<string, {
-    guards?: BadgeGuard[];
+    guards?: (BadgeGuard & { text?: string })[];
     failText?: string;
     passText?: string;
+    /** Route 22's gate: one guard, one badge, a pair of cells. */
+    badge?: string;
+    coords?: { x: number; y: number }[];
+    text?: string;
   }>;
 }
 
@@ -69,6 +73,64 @@ export function guardAt(
 /** Does the player hold what this guard is asking for? */
 export function hasBadge(save: GateSave, guard: BadgeGuard): boolean {
   return (save.inventory?.[guard.badge] ?? 0) > 0;
+}
+
+/** A text label as the dataset keys it: the ROM's `_Label`, or as given. */
+export function gateText(texts: Record<string, string>, label: string | undefined, fallback: string): string {
+  if (!label) return fallback;
+  return texts[label] ?? texts[`_${label}`] ?? fallback;
+}
+
+type Row = unknown[];
+
+/**
+ * Talking to a badge guard (Route23Guard1Text.., Route22GateGuardText): the
+ * same check the road makes by row, asked face to face. Holding the badge
+ * passes it for good (Route 23) or is waved on (Route 22); without it the
+ * denial, SFX_DENIED, and a step back down the road. Null for anyone else.
+ */
+export function guardTalkRows(
+  field: BadgeGateField | undefined,
+  save: GateSave,
+  mapId: string,
+  label: string | undefined,
+): Row[] | null {
+  const gate = gateFor(field, mapId);
+  if (!gate || !label) return null;
+  const subs = (badge: string) => ({ "RAM:wNameBuffer": badge });
+  if (gate.guards) {
+    const g = gate.guards.find((x) => x.text === label);
+    if (!g) return null;
+    if (hasBadge(save, g)) {
+      return [
+        ["set_flag", g.event],
+        ["show_text", `_${gate.passText ?? "Route23OhThatIsTheBadgeText"}`, subs(g.badge)],
+        ["play_sound", "Get_Item1"],
+        ["show_text", "_Route23GoRightAheadText"],
+      ];
+    }
+    return [
+      ["show_text", `_${gate.failText ?? "Route23YouDontHaveTheBadgeYetText"}`, subs(g.badge)],
+      ["play_sound", "Denied"],
+      ["move_player", "down", 1],
+    ];
+  }
+  if (gate.text !== label || !gate.badge) return null;
+  if ((save.inventory?.[gate.badge] ?? 0) > 0) {
+    return [["show_text", `_${gate.passText}`], ["play_sound", "Get_Item1"]];
+  }
+  return [
+    ["show_text", `_${gate.failText}`],
+    ["play_sound", "Denied"],
+    ["show_text", "_Route22GateGuardICantLetYouPassText"],
+    ["move_player", "down", 1],
+  ];
+}
+
+/** Route22GateDefaultScript: the gate's cells, until passed this visit. */
+export function onGateCell(field: BadgeGateField | undefined, mapId: string, x: number, y: number): boolean {
+  const gate = gateFor(field, mapId);
+  return !!gate?.coords?.some((c) => c.x === x && c.y === y);
 }
 
 /** Both lines name the badge in wNameBuffer. */
