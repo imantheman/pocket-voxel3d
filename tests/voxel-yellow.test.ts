@@ -42,7 +42,9 @@ function playOut(game: VoxelmonGame, max = 20000): number {
     const idle = game.stackKinds().at(-1) === "overworld" && !ow.runner.isRunning() &&
       !ow.player.moving && ow.scriptMoves.length === 0 && !ow.transitioning && !ow.emote;
     if (idle && t > 2) return t;
-    game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+    // a nickname prompt: END it (the gift keeps its species name)
+    const naming = game.stackKinds().at(-1) === "naming";
+    game.tick(t % 2 === 0 ? (naming ? VOX_BTN.start : VOX_BTN.a) : 0);
   }
   return t;
 }
@@ -208,5 +210,76 @@ describe("Yellow: its own tables", () => {
     expect(Items.useItem(yellow, game.save, "THUNDER_STONE", traded as never, null).evolveTo).toBe("RAICHU");
     // and Red's Pikachu never refused
     expect(Items.useItem({ ...yellow!, version: "red" }, game.save, "THUNDER_STONE", mine, null).evolveTo).toBe("RAICHU");
+  });
+});
+
+describe("Yellow: the gifts and the duo", () => {
+  function withParty(game: VoxelmonGame, level = 70): void {
+    game.save.party.push(newMon(yellow!, "PIKACHU", level, game.battleRng));
+  }
+
+  test.skipIf(!hasYellow)("Officer Jenny keeps her Squirtle until the THUNDERBADGE", () => {
+    const game = newYellowGame();
+    const ow = game.overworld as any;
+    withParty(game);
+    ow.setMap("VERMILION_CITY", 19, 16, "up");
+    ow.showMapText("TEXT_VERMILIONCITY_OFFICER_JENNY");
+    playOut(game);
+    expect(game.save.party.length).toBe(1);
+    game.save.inventory.THUNDERBADGE = 1;
+    ow.showMapText("TEXT_VERMILIONCITY_OFFICER_JENNY");
+    playOut(game);
+    // YES is the default answer, so A through it takes the gift; the
+    // nickname prompt is answered by END
+    expect(game.save.party.map((m) => m.species)).toContain("SQUIRTLE");
+    expect(game.save.flags.EVENT_GOT_SQUIRTLE_FROM_OFFICER_JENNY).toBe(true);
+  });
+
+  test.skipIf(!hasYellow)("Damian on Route 24 gives his Charmander once", () => {
+    const game = newYellowGame();
+    const ow = game.overworld as any;
+    withParty(game);
+    ow.setMap("ROUTE_24", 6, 6, "up");
+    ow.showMapText("TEXT_ROUTE24_COOLTRAINER_M4");
+    playOut(game);
+    ow.showMapText("TEXT_ROUTE24_COOLTRAINER_M4");
+    playOut(game);
+    expect(game.save.party.filter((m) => m.species === "CHARMANDER").length).toBe(1);
+    expect(game.save.flags.EVENT_54F).toBe(true);
+  });
+
+  test.skipIf(!hasYellow)("Melanie holds on to her Bulbasaur until Pikachu trusts you", () => {
+    const game = newYellowGame();
+    const ow = game.overworld as any;
+    withParty(game);
+    ow.setMap("CERULEAN_MELANIES_HOUSE", 3, 2, "up");
+    ow.showMapText("TEXT_CERULEANMELANIESHOUSE_MELANIE");
+    playOut(game);
+    expect(game.save.party.length).toBe(1);
+    (game.save as any).pikachuHappiness = 200;
+    ow.showMapText("TEXT_CERULEANMELANIESHOUSE_MELANIE");
+    playOut(game);
+    expect(game.save.party.map((m) => m.species)).toContain("BULBASAUR");
+  });
+
+  test.skipIf(!hasYellow)("Jessie & James ambush Mt Moon once you have a fossil, and vanish when beaten", () => {
+    const game = newYellowGame();
+    const ow = game.overworld as any;
+    withParty(game, 90);
+    game.save.flags.EVENT_GOT_HELIX_FOSSIL = true;
+    game.save.flags.EVENT_BEAT_MT_MOON_EXIT_SUPER_NERD = true;
+    ow.setMap("MT_MOON_B2F", 3, 6, "up");
+    for (let t = 0; t < 40 && ow.player.cellY !== 5; t++) game.tick(VOX_BTN.up);
+    let rocketMons: string[] = [];
+    for (let t = 0; t < 60000; t++) {
+      const b = (game.battleView() as any)?.battle;
+      if (b?.enemy?.mon?.species && !rocketMons.includes(b.enemy.mon.species)) rocketMons.push(b.enemy.mon.species);
+      if (game.save.flags.EVENT_BEAT_MT_MOON_3_JESSIE_JAMES && game.stackKinds().at(-1) === "overworld" && !ow.runner.isRunning()) break;
+      game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    expect(rocketMons).toContain("EKANS");
+    expect(game.save.flags.EVENT_BEAT_MT_MOON_3_JESSIE_JAMES).toBe(true);
+    const jessie = ow.findNpc("MTMOONB2F_JESSIE");
+    expect(!jessie || jessie.hidden).toBe(true);
   });
 });

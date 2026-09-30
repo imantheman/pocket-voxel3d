@@ -239,6 +239,195 @@ function viridianOnStep(ow: any, save: any): ScriptRow[] | null {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// the starter gifts (yellow_gifts.lua; pokeyellow CeruleanMelaniesHouse.asm,
+// Route24.asm, VermilionCity_2.asm)
+// ---------------------------------------------------------------------------
+
+/** A gift mon: ask, room check, the mon (with the nickname prompt every gift
+ * gets), the flag, the thanks; or the "no" line. */
+function giftRows(o: {
+  ask: string; species: string; level: number; flag: string; received: string; declined: string;
+  hide?: [string, string];
+}): ScriptRow[] {
+  return [
+    ["ask", o.ask],
+    ["jump_if_false", "declined"],
+    ["check_party_room"],
+    ["jump_if_false", "full"],
+    ["play_sound", "Get_Key_Item"],
+    ["give_pokemon", o.species, o.level],
+    ["set_flag", o.flag],
+    ...(o.hide ? [["hide_object", o.hide[0], o.hide[1]] as ScriptRow] : []),
+    ["show_text", o.received],
+    ["jump", "end"],
+    ["label", "declined"],
+    ["show_text", o.declined],
+    ["jump", "end"],
+    ["label", "full"],
+    ["show_text", "You have no room\nfor it!"],
+  ] as ScriptRow[];
+}
+
+/** Melanie's Bulbasaur waits for a Pikachu that trusts you (happiness 147+,
+ * the follower's; 90 until it is there). */
+function melanieTalk(_ow: any, save: any): ScriptRow[] {
+  const f = save?.flags ?? {};
+  if (f.EVENT_GOT_BULBASAUR_IN_CERULEAN) return [["face_player"], ["show_text", "MelanieText4"]] as ScriptRow[];
+  if ((save?.pikachuHappiness ?? 90) < 147) return [["face_player"], ["show_text", "MelanieText1"]] as ScriptRow[];
+  return [
+    ["face_player"],
+    ["show_text", "MelanieText1"],
+    ...giftRows({
+      ask: "MelanieText2", species: "BULBASAUR", level: 10, flag: "EVENT_GOT_BULBASAUR_IN_CERULEAN",
+      received: "MelanieText3", declined: "MelanieText5",
+      hide: ["CERULEAN_MELANIES_HOUSE", "CERULEANMELANIESHOUSE_BULBASAUR"],
+    }),
+  ] as ScriptRow[];
+}
+
+/** Officer Jenny keeps her Squirtle until you carry the THUNDERBADGE. */
+function jennyTalk(_ow: any, save: any): ScriptRow[] {
+  const f = save?.flags ?? {};
+  if (f.EVENT_GOT_SQUIRTLE_FROM_OFFICER_JENNY) return [["face_player"], ["show_text", "_OfficerJennyText5"]] as ScriptRow[];
+  if (!(save?.inventory?.THUNDERBADGE > 0)) return [["face_player"], ["show_text", "_OfficerJennyText1"]] as ScriptRow[];
+  return [
+    ["face_player"],
+    ...giftRows({
+      ask: "_OfficerJennyText2", species: "SQUIRTLE", level: 10, flag: "EVENT_GOT_SQUIRTLE_FROM_OFFICER_JENNY",
+      received: "_OfficerJennyText3", declined: "_OfficerJennyText4",
+    }),
+  ] as ScriptRow[];
+}
+
+// ---------------------------------------------------------------------------
+// Jessie & James (yellow_jessie_james.lua; pokeyellow MtMoonB2F.asm,
+// RocketHideoutB4F.asm, PokemonTower7F.asm, SilphCo11F.asm). Every site is
+// one shape: their theme, the motto, the two close in, one battle against
+// the shared OPP_ROCKET party, their parting lines, and they are gone.
+// ---------------------------------------------------------------------------
+
+interface JessieJames {
+  map: string;
+  jessie: string;
+  james: string;
+  text: string; // the "_…JessieJamesText" stem, 1..4
+  party: number;
+  flag: string;
+  /** Show them before the motto (they were hidden until now). */
+  popIn: boolean;
+  /** Which way the player faces while they come. */
+  face: Dir;
+  /** Who walks first, their steps and their final facing. */
+  walks: [string, Dir[], Dir][];
+  /** A player step before they move (Mt Moon's simulated UP). */
+  playerStep?: Dir;
+  /** On a loss, put them away so the trigger re-arms clean (the hideout). */
+  hideOnLoss?: boolean;
+}
+
+function jessieJamesRows(j: JessieJames): ScriptRow[] {
+  const T = (n: number) => `${j.text}${n}`;
+  return [
+    ["play_music", "Music_MeetJessieJames"],
+    ...(j.popIn ? [["show_object", j.map, j.jessie], ["show_object", j.map, j.james]] as ScriptRow[] : []),
+    ["show_text", T(1)],
+    ["face_object", "player", j.face],
+    ["emote", "player", "shock", 30],
+    ...(j.popIn ? [] : [["show_object", j.map, j.james], ["show_object", j.map, j.jessie]] as ScriptRow[]),
+    ...(j.playerStep ? [["walk_npc", "player", [j.playerStep]] as ScriptRow] : []),
+    ...j.walks.flatMap(([who, steps, facing]) => [
+      ["walk_npc", who, steps] as ScriptRow,
+      ["face_object", who, facing] as ScriptRow,
+    ]),
+    ["show_text", T(2)],
+    ["start_battle", "trainer", "OPP_ROCKET", j.party],
+    ["jump_if_false", "lost"],
+    // their loss line prints on the battle screen in the original
+    // (SaveEndBattleTextPointers); here it is the first thing after it
+    ["show_text", T(3)],
+    ["show_text", T(4)],
+    ["play_music", "Music_MeetJessieJames"],
+    ["fade", "out"],
+    ["hide_object", j.map, j.jessie],
+    ["hide_object", j.map, j.james],
+    ["fade", "in"],
+    ["set_flag", j.flag],
+    ["jump", "end"],
+    ["label", "lost"],
+    ...(j.hideOnLoss ? [["hide_object", j.map, j.jessie], ["hide_object", j.map, j.james]] as ScriptRow[] : []),
+  ] as ScriptRow[];
+}
+
+const D = (n: number, d: Dir): Dir[] => Array<Dir>(n).fill(d);
+
+function mtMoonJJ(ow: any, save: any): ScriptRow[] | null {
+  const f = save?.flags ?? {};
+  const p = ow?.player;
+  if (p?.cellX !== 3 || p?.cellY !== 5 || f.EVENT_BEAT_MT_MOON_3_JESSIE_JAMES) return null;
+  if (!(f.EVENT_GOT_DOME_FOSSIL || f.EVENT_GOT_HELIX_FOSSIL)) return null;
+  return jessieJamesRows({
+    map: "MT_MOON_B2F", jessie: "MTMOONB2F_JESSIE", james: "MTMOONB2F_JAMES",
+    text: "_MtMoonJessieJamesText", party: 42, flag: "EVENT_BEAT_MT_MOON_3_JESSIE_JAMES",
+    popIn: true, face: "up", playerStep: "up",
+    walks: [["MTMOONB2F_JESSIE", D(6, "left"), "down"], ["MTMOONB2F_JAMES", D(5, "left"), "left"]],
+  });
+}
+
+function hideoutJJ(ow: any, save: any): ScriptRow[] | null {
+  const f = save?.flags ?? {};
+  const p = ow?.player;
+  if (p?.cellY !== 14 || (p.cellX !== 24 && p.cellX !== 25) || f.EVENT_BEAT_ROCKET_HIDEOUT_4_JESSIE_JAMES) return null;
+  const onLeft = p.cellX === 25; // under James's column: he walks three
+  return jessieJamesRows({
+    map: "ROCKET_HIDEOUT_B4F", jessie: "ROCKETHIDEOUTB4F_JESSIE", james: "ROCKETHIDEOUTB4F_JAMES",
+    text: "_RocketHideoutJessieJamesText", party: 43, flag: "EVENT_BEAT_ROCKET_HIDEOUT_4_JESSIE_JAMES",
+    popIn: false, face: "up", hideOnLoss: true,
+    walks: [
+      ["ROCKETHIDEOUTB4F_JAMES", D(onLeft ? 3 : 4, "down"), onLeft ? "down" : "left"],
+      ["ROCKETHIDEOUTB4F_JESSIE", D(onLeft ? 4 : 3, "down"), onLeft ? "right" : "down"],
+    ],
+  });
+}
+
+function towerJJ(ow: any, save: any): ScriptRow[] | null {
+  const f = save?.flags ?? {};
+  const p = ow?.player;
+  if (p?.cellY !== 12 || (p.cellX !== 10 && p.cellX !== 11) || f.EVENT_BEAT_POKEMONTOWER_7_JESSIE_JAMES) return null;
+  const onLeft = p.cellX === 11;
+  return jessieJamesRows({
+    map: "POKEMON_TOWER_7F", jessie: "POKEMONTOWER7F_JESSIE", james: "POKEMONTOWER7F_JAMES",
+    text: "_PokemonTowerJessieJamesText", party: 44, flag: "EVENT_BEAT_POKEMONTOWER_7_JESSIE_JAMES",
+    popIn: true, face: "up",
+    walks: [
+      ["POKEMONTOWER7F_JESSIE", D(onLeft ? 4 : 3, "down"), onLeft ? "right" : "down"],
+      ["POKEMONTOWER7F_JAMES", D(onLeft ? 3 : 4, "down"), onLeft ? "down" : "left"],
+    ],
+  });
+}
+
+function silphJJ(ow: any, save: any): ScriptRow[] | null {
+  const f = save?.flags ?? {};
+  const p = ow?.player;
+  if (p?.cellY !== 3 || p.cellX > 3 || f.EVENT_BEAT_SILPH_CO_11F_JESSIE_JAMES) return null;
+  const x = p.cellX;
+  const [jamesSteps, jamesFace, jessieSteps, jessieFace]: [Dir[], Dir, Dir[], Dir] =
+    x === 3 ? [D(5, "up"), "right", D(4, "up"), "up"]
+    : x === 2 ? [D(4, "up"), "up", D(5, "up"), "left"]
+    : [["up", "up", "left", "up", "up"], "up", ["up", "up", "up", "left", "up", "up"], "left"];
+  return jessieJamesRows({
+    map: "SILPH_CO_11F", jessie: "SILPHCO11F_JESSIE", james: "SILPHCO11F_JAMES",
+    text: "_SilphCoJessieJamesText", party: 45, flag: "EVENT_BEAT_SILPH_CO_11F_JESSIE_JAMES",
+    popIn: false, face: "down",
+    walks: [["SILPHCO11F_JAMES", jamesSteps, jamesFace], ["SILPHCO11F_JESSIE", jessieSteps, jessieFace]],
+  });
+}
+
+/** Their talk line before an ambush: the motto. */
+function mottoTalk(textId: string): ScriptRow[] {
+  return [["face_player"], ["show_text", textId]] as ScriptRow[];
+}
+
 /** The Yellow entries, over Red's table (`base`). */
 export function yellowScripts(base: Record<string, MapScript>): Record<string, MapScript> {
   // Red's Oak rows with Yellow's lines, and the Pokédex swapping in
@@ -310,12 +499,61 @@ export function yellowScripts(base: Record<string, MapScript>): Record<string, M
         ] as ScriptRow[],
       },
     },
-    // RocketHideoutB4F.asm: one unnumbered grunt has the LIFT KEY
+    // RocketHideoutB4F.asm: one unnumbered grunt has the LIFT KEY; and
+    // Jessie & James ambush the corridor on row 14
     ROCKET_HIDEOUT_B4F: {
       talk: {
         TEXT_ROCKETHIDEOUTB4F_ROCKET: liftKeyRocketRows("ROCKETHIDEOUTB4F_ROCKET",
           "_RocketHideoutB4FRocketAfterBattleText"),
+        TEXT_ROCKETHIDEOUTB4F_JESSIE: mottoTalk("_RocketHideoutJessieJamesText1"),
+        TEXT_ROCKETHIDEOUTB4F_JAMES: mottoTalk("_RocketHideoutJessieJamesText1"),
       },
+      onStep: (ow: any, save: any) => base.ROCKET_HIDEOUT_B4F?.onStep?.(ow, save) ?? hideoutJJ(ow, save),
+    },
+    MT_MOON_B2F: {
+      talk: {
+        TEXT_MTMOONB2F_JESSIE: mottoTalk("_MtMoonJessieJamesText1"),
+        TEXT_MTMOONB2F_JAMES: mottoTalk("_MtMoonJessieJamesText1"),
+      },
+      onStep: (ow: any, save: any) => base.MT_MOON_B2F?.onStep?.(ow, save) ?? mtMoonJJ(ow, save),
+    },
+    POKEMON_TOWER_7F: {
+      talk: {
+        TEXT_POKEMONTOWER7F_JESSIE: mottoTalk("_PokemonTowerJessieJamesText1"),
+        TEXT_POKEMONTOWER7F_JAMES: mottoTalk("_PokemonTowerJessieJamesText1"),
+      },
+      onStep: (ow: any, save: any) => base.POKEMON_TOWER_7F?.onStep?.(ow, save) ?? towerJJ(ow, save),
+    },
+    SILPH_CO_11F: {
+      talk: {
+        TEXT_SILPHCO11F_JESSIE: mottoTalk("_SilphCoJessieJamesText1"),
+        TEXT_SILPHCO11F_JAMES: mottoTalk("_SilphCoJessieJamesText1"),
+      },
+      onStep: (ow: any, save: any) => base.SILPH_CO_11F?.onStep?.(ow, save) ?? silphJJ(ow, save),
+    },
+    // the starter gifts
+    CERULEAN_MELANIES_HOUSE: {
+      talk: {
+        TEXT_CERULEANMELANIESHOUSE_MELANIE: melanieTalk,
+        TEXT_CERULEANMELANIESHOUSE_BULBASAUR: [["play_cry", "BULBASAUR"], ["show_text", "MelanieBulbasaurText"]] as ScriptRow[],
+        TEXT_CERULEANMELANIESHOUSE_ODDISH: [["play_cry", "ODDISH"], ["show_text", "MelanieOddishText"]] as ScriptRow[],
+        TEXT_CERULEANMELANIESHOUSE_SANDSHREW: [["play_cry", "SANDSHREW"], ["show_text", "MelanieSandshrewText"]] as ScriptRow[],
+      },
+    },
+    ROUTE_24: {
+      talk: {
+        // Damian gives away the CHARMANDER he thinks is too weak (EVENT_54F)
+        TEXT_ROUTE24_COOLTRAINER_M4: (_ow: any, save: any): ScriptRow[] =>
+          save?.flags?.EVENT_54F
+            ? [["face_player"], ["show_text", "_Route24DamianText4"]] as ScriptRow[]
+            : [["face_player"], ...giftRows({
+                ask: "_Route24DamianText1", species: "CHARMANDER", level: 10, flag: "EVENT_54F",
+                received: "_Route24DamianText2", declined: "_Route24DamianText3",
+              })] as ScriptRow[],
+      },
+    },
+    VERMILION_CITY: {
+      talk: { TEXT_VERMILIONCITY_OFFICER_JENNY: jennyTalk },
     },
     PALLET_TOWN: { onStep: palletOnStep },
     OAKS_LAB_ONSTEP_HOST: { onStep: labOnStep },
