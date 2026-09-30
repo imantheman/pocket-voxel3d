@@ -30,11 +30,12 @@ describe("gen2 lcd tiles", () => {
     bin.fill(0xff, 128);
     const gen = { gfx: { img: { off: 0, w: 16, h: 8 }, clear: { off: 128, w: 8, h: 8 } }, gfxBin: bin };
     const t = buildLcdTiles(gen as never, ["clear", "img"]);
-    expect(t.tiles).toBe(2); // blank + colour-2 tile
+    expect(t.tiles).toBe(4); // the four solid tiles; colour 2's is the image's
     expect(t.gfx.clear).toEqual([1, 1, 0, 1]);
-    expect(lcdImageTiles(t.gfx.img!).ids).toEqual([1, 1]);
+    expect(lcdImageTiles(t.gfx.img!).ids).toEqual([2, 2]);
     const page = t.pages[0]!.frames[0]!;
-    expect(page[8]).toBe(2); // tile 1's first pixel
+    expect(page[16]).toBe(2); // tile 2's first pixel
+    expect(page[8]).toBe(1);
     expect(page[0]).toBe(0);
   });
 

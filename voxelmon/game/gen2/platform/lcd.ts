@@ -224,6 +224,21 @@ export class Lcd {
     return slot;
   }
 
+  /**
+   * A palette slot already handed out this frame that has colour `c`, as
+   * slot*4 + index, or -1. Lets a flat fill reuse a text palette's paper
+   * instead of spending a slot of its own.
+   */
+  findColour(c: Rgb, obj = false): number {
+    const v = rgb555(c);
+    const keys = obj ? this.objPalKeys : this.bgPalKeys;
+    const base = obj ? 16 * 4 : 0;
+    for (let slot = 0; slot < keys.length; slot++) {
+      for (let i = 0; i < 4; i++) if (this.s.colours[base + slot * 4 + i] === v) return slot * 4 + i;
+    }
+    return -1;
+  }
+
   /** One cell. `layer` 0 background, 1 window; tx/ty in tiles. */
   cell(tx: number, ty: number, tile: number, attr = this.bgPal, layer = 0): void {
     if (tx < 0 || ty < 0 || tx > 31 || ty > 31) return;

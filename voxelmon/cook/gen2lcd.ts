@@ -19,6 +19,8 @@ import type { PageDef } from "./atlas.ts";
 import type { GenData } from "./data.ts";
 
 export const LCD_PAGE_TILES = 1024;
+/** Tile id of a solid tile of colour c (0-3); 0 is also the blank tile. */
+export const LCD_SOLID = [0, 1, 2, 3] as const;
 const PAGE_PX = 256;
 
 /**
@@ -47,10 +49,13 @@ export function lcdKeys(gen: Pick<GenData, "gfx">): string[] {
 export function buildLcdTiles(gen: Pick<GenData, "gfx" | "gfxBin">, keys = lcdKeys(gen)): LcdTiles {
   const ids = new Map<string, number>();
   const tiles: Uint8Array[] = [];
-  // id 0 is a blank tile: colour 0 everywhere
-  const blank = new Uint8Array(64);
-  ids.set(key64(blank), 0);
-  tiles.push(blank);
+  // ids 0-3 are solid tiles of colours 0-3 (LCD_SOLID): what a filled
+  // rectangle draws with, and id 0 doubles as the blank tile
+  for (let c = 0; c < 4; c++) {
+    const solid = new Uint8Array(64).fill(c);
+    ids.set(key64(solid), c);
+    tiles.push(solid);
+  }
   const gfx: LcdGfxManifest = {};
   for (const key of keys) {
     const e = gen.gfx[key]!;
