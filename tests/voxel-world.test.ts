@@ -10437,6 +10437,66 @@ describe("the title screen is the cartridge's", () => {
   });
 });
 
+describe("Yellow: the Pikachu title", () => {
+  const atlas = {
+    picTitle: { copyright: 1, gamefreak: 2, logo: 3, pika_bubble: 6, pikachu: 7, eyes_half: 8, eyes_closed: 10 },
+  };
+  function yellow() {
+    const sounds: string[] = [];
+    const input = { pressed: {} as Record<string, boolean> };
+    const audio = {
+      play: (s: string) => sounds.push("music " + s),
+      playSfx: (s: string) => sounds.push("sfx " + s),
+      playCry: (s: string) => sounds.push("cry " + s),
+    };
+    const t = new TitleState(
+      { input, pop() {}, data: { atlas, version: "yellow" }, hasSave: false, picPageFor: () => 9, audio } as never,
+      () => {},
+    );
+    return { t, sounds, input };
+  }
+
+  test("the logo drops, crashes, bounces and settles on the cartridge's rows", () => {
+    const { t, sounds } = yellow();
+    // parked a screen-half above: the composition rides hSCY = $40
+    const first = t.view().pics;
+    expect(first.map((q) => q.page)).toEqual([3, 7]);
+    expect(first[0]!.y).toBe(gbY(8 - 0x40));
+    // 32 frames of drop: -64 +12 -12 +4 -4 +2 -2 = 0
+    for (let i = 0; i < 32; i++) t.update();
+    const landed = t.view().pics;
+    expect([landed[0]!.x, landed[0]!.y, landed[0]!.w, landed[0]!.h]).toEqual([gbX(16), gbY(8), gbW(128), gbW(56)]);
+    expect([landed[1]!.x, landed[1]!.y]).toEqual([gbX(32), gbY(64)]);
+    expect(sounds).toEqual(["sfx Intro_Crash"]);
+  });
+
+  test("then the bubble and the cry, then the theme, and only then does A work", () => {
+    const { t, sounds, input } = yellow();
+    input.pressed.a = true;
+    for (let i = 0; i < 33 + 36; i++) t.update();
+    expect(t.view().phase).toBe("press");
+    expect(t.view().pics.map((q) => q.page)).toEqual([3, 6, 7]);
+    for (let i = 0; i < 60; i++) t.update();
+    expect(sounds).toEqual(["sfx Intro_Crash", "sfx Intro_Whoosh", "cry PIKACHU", "music Music_TitleScreen"]);
+    // the copyright appears with the loop, not during the drop
+    expect(t.view().tiles.filter((x) => x.y === 136).length).toBe(COPYRIGHT_PREFIX.length + COPYRIGHT_GAMEFREAK.length);
+    t.update();
+    expect(t.view().phase).toBe("menu");
+    expect(sounds.at(-1)).toBe("cry PIKACHU");
+  });
+
+  test("Pikachu blinks half, shut, half at the top of the clock", () => {
+    const { t } = yellow();
+    for (let i = 0; i < 33 + 36 + 60; i++) t.update();
+    const eyes: number[] = [];
+    for (let i = 0; i < 12; i++) {
+      t.update();
+      eyes.push(t.view().pics.length === 4 ? t.view().pics[3]!.page : 0);
+    }
+    expect(eyes).toEqual([8, 8, 8, 10, 10, 10, 8, 8, 8, 0, 0, 0]);
+  });
+});
+
 describe("Blue: the few tables the guest holds itself", () => {
   const atlas = {
     picTitle: { copyright: 1, gamefreak: 2, logo: 3, player: 4, version: 5 },

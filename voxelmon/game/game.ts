@@ -632,6 +632,9 @@ export class VoxelmonGame implements OverworldShell, SceneView {
    */
   boot(): void {
     this.newGame();
+    // Yellow has its own movie (intro_yellow.asm; ui/yellowintro.ts once
+    // ported) -- Red's fight scene has no frames in its ROM.
+    if (gameVersion(this.data) === "yellow") return;
     this.push(new IntroState(this as never, () => {}));
   }
 
@@ -1041,7 +1044,11 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     const P_OAK = this.picNamed("oak");
     const P_PLR = this.picNamed("player");
     const P_RIV = this.picNamed("rival");
-    const nido = picPageFor(this.data as never, "NIDORINO");
+    // Oak's demo mon: Nidorino in Red and Blue, Pikachu in Yellow
+    // (field.oakSpeech.demoSpecies)
+    const demo = (this.data as { field?: { oakSpeech?: { demoSpecies?: string } } }).field?.oakSpeech
+      ?.demoSpecies ?? "NIDORINO";
+    const nido = picPageFor(this.data as never, demo);
     const P_NIDO = nido >= 0 ? nido : PIC_FALLBACK.nidorino;
     const A = [
       ["pic", P_OAK, 184, 24, 112, 112],

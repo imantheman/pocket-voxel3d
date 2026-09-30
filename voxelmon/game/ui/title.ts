@@ -45,6 +45,20 @@ export function titlePage(data: unknown, key: keyof typeof TITLE_PAGES): number 
   return p >= 0 ? p : TITLE_PAGES[key];
 }
 
+/**
+ * Yellow's logo drop (title_yellow.asm .TitleScreenPokemonLogoYScrolls, by
+ * way of gen1recomp TitleState.lua DROP_STEPS): { dy per frame, frames }.
+ * hSCY starts at $40 with the composition parked above the view; the -3
+ * rebound step lands with the crash.
+ */
+const YELLOW_DROP: [number, number][] = [[-4, 16], [3, 4], [-3, 4], [2, 2], [-2, 2], [1, 2], [-1, 2]];
+/** The Yellow tilemap, GB px: logo (2,1) 16x7, bubble (6,4), Pikachu (4,8)
+ * 13x9, the eye band (56,80) 48x16. */
+const Y_LOGO = { x: 16, y: 8, w: 128, h: 56 };
+const Y_BUBBLE = { x: 48, y: 32, w: 56, h: 40 };
+const Y_PIKACHU = { x: 32, y: 64, w: 104, h: 72 };
+const Y_EYES = { x: 56, y: 80, w: 48, h: 16 };
+
 /** Frames a mon holds the box before the next one (the ROM's own beat is
  * a scroll-out and a scroll-in; this is the wait between them). */
 export const TITLE_MON_FRAMES = 150;
@@ -93,6 +107,11 @@ export interface TitleView {
   hasSave: boolean;
 }
 
+/** A title page by name, or -1 (Yellow's pieces have no literal fallback). */
+function named(data: unknown, key: string): number {
+  return namedPage(data as never, "picTitle", key);
+}
+
 export class TitleState implements GameState {
   readonly kind = "title";
   private phase: "press" | "menu" = "press";
@@ -103,6 +122,16 @@ export class TitleState implements GameState {
   private mon: string;
   private bag: string[] = [];
   private cast: readonly string[];
+  /** Yellow: the fixed Pikachu composition and its boot cinematic. */
+  private readonly yellow: boolean;
+  private yPhase: "drop" | "settle" | "bubble" | "loop" = "drop";
+  private scy = 0x40;
+  private dropStep = 0;
+  private dropLeft = -1;
+  private yTimer = 0;
+  private showBubble = false;
+  private blinkTimer = 0;
+  private blinkAt = -1;
 
   constructor(
     private game: {
@@ -119,6 +148,43 @@ export class TitleState implements GameState {
       : ["NEW GAME", "OPTION", "MAP VIEWER"];
     this.cast = titleMons(game.data);
     this.mon = this.cast[0]!;
+    this.yellow = gameVersion(game.data as { version?: string }) === "yellow";
+  }
+
+  private audio(): { play?(s: string): void; playSfx?(s: string): void; playCry?(s: string): void } | undefined {
+    return (this.game as { audio?: never }).audio;
+  }
+
+  /** The Yellow title's cinematic, one frame per call: the logo drop,
+   * 36 frames, the whoosh and the bubble, Pikachu's cry, then the theme
+   * (title_yellow.asm; gen1recomp TitleState.lua updateSequence). */
+  private yellowSequence(): void {
+    if (this.yPhase === "drop") {
+      const step = YELLOW_DROP[this.dropStep];
+      if (!step) { this.yPhase = "settle"; this.yTimer = 0; return; }
+      if (this.dropLeft < 0) {
+        this.dropLeft = step[1];
+        if (step[0] === -3) this.audio()?.playSfx?.("Intro_Crash");
+      }
+      this.scy += step[0];
+      this.dropLeft -= 1;
+      if (this.dropLeft <= 0) { this.dropStep += 1; this.dropLeft = -1; }
+    } else if (this.yPhase === "settle") {
+      if (++this.yTimer >= 36) {
+        this.audio()?.playSfx?.("Intro_Whoosh");
+        this.showBubble = true;
+        this.yPhase = "bubble";
+        this.yTimer = 0;
+      }
+    } else if (this.yPhase === "bubble") {
+      if (++this.yTimer === 3) this.audio()?.playCry?.("PIKACHU");
+      // WaitForSoundToFinish before the music: a cry's length, near enough
+      if (this.yTimer >= 60) {
+        this.audio()?.play?.("Music_TitleScreen");
+        this.yPhase = "loop";
+        this.blinkTimer = 0;
+      }
+    }
   }
 
   /** TitleScreenPickNewMon: the next one, never the same twice in a pass. */
@@ -140,6 +206,21 @@ export class TitleState implements GameState {
 
   update(): void {
     const p = this.game.input.pressed;
+    if (this.yellow && this.phase === "press") {
+      if (this.yPhase !== "loop") { this.yellowSequence(); return; } // input waits for the landing
+      // DoTitleScreenFunction's blink: at 0, $80 and $90 of an 8-bit clock,
+      // half / closed / half over nine frames
+      const t = this.blinkTimer;
+      this.blinkTimer = (t + 1) % 256;
+      if (t === 0 || t === 0x80 || t === 0x90) this.blinkAt = 0;
+      if (this.blinkAt >= 0 && ++this.blinkAt > 9) this.blinkAt = -1;
+      if (p.start || p.a) {
+        this.audio()?.playCry?.("PIKACHU");
+        this.phase = "menu";
+        this.index = 0;
+      }
+      return;
+    }
     this.timer += 1;
     // The world stages behind the title and starts its map theme on its
     // first tick, so claim the music from here rather than at push time.
@@ -175,6 +256,7 @@ export class TitleState implements GameState {
 
   view(): TitleView {
     const data = this.game.data;
+    if (this.yellow) return this.yellowView();
     const monPage = this.monPage();
     const pics: TitleQuad[] = [this.quad(titlePage(data, "logo"), LOGO)];
     if (monPage >= 0) pics.push(this.quad(monPage, MON_BOX));
@@ -200,6 +282,39 @@ export class TitleState implements GameState {
       phase: this.phase,
       monPage,
       pics,
+      tiles,
+      menu: this.menu,
+      index: this.index,
+      hasSave: !!this.game.hasSave,
+    };
+  }
+
+  /** Yellow's composition (title_yellow.asm): no ribbon, no cycling mon;
+   * everything rides the logo drop's scroll until it lands. */
+  private yellowView(): TitleView {
+    const data = this.game.data;
+    const dy = -this.scy;
+    const at = (r: { x: number; y: number; w: number; h: number }) => ({ ...r, y: r.y + dy });
+    const pics: TitleQuad[] = [this.quad(named(data, "logo"), at(Y_LOGO))];
+    if (this.showBubble) pics.push(this.quad(named(data, "pika_bubble"), at(Y_BUBBLE)));
+    pics.push(this.quad(named(data, "pikachu"), at(Y_PIKACHU)));
+    if (this.blinkAt >= 0) {
+      const eyes = this.blinkAt <= 3 || this.blinkAt > 6 ? "eyes_half" : "eyes_closed";
+      pics.push(this.quad(named(data, eyes), at(Y_EYES)));
+    }
+    const tiles: TitleTile[] = [];
+    if (this.yPhase === "loop") {
+      const row = (page: number, seq: readonly number[], x: number, y: number): void => {
+        if (page < 0) return;
+        seq.forEach((t, i) => tiles.push({ page, tile: t, x: x + i * 8, y, flags: 0 }));
+      };
+      row(titlePage(data, "copyright"), COPYRIGHT_PREFIX, 16, COPYRIGHT_Y);
+      row(titlePage(data, "gamefreak"), COPYRIGHT_GAMEFREAK, 80, COPYRIGHT_Y);
+    }
+    return {
+      phase: this.phase,
+      monPage: named(data, "pikachu"),
+      pics: pics.filter((q) => q.page >= 0),
       tiles,
       menu: this.menu,
       index: this.index,

@@ -1,6 +1,7 @@
 // voxelmon/game/data.ts
 function gameVersion(data) {
-  return data?.version === "blue" ? "blue" : "red";
+  const v = data?.version;
+  return v === "blue" || v === "yellow" ? v : "red";
 }
 var REQUIRED_MODULES = [
   "pokemon",
