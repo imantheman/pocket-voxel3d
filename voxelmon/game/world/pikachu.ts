@@ -432,6 +432,25 @@ function stepWalk(w: PikaWorld, npc: PikachuNPC): void {
   npc.update();
 }
 
+/**
+ * TryApplyPikachuMovementData: walk `steps` and face `face`, but only when
+ * the follower stands on the `where` side of the player
+ * (GetPikachuFacingDirectionAndReturnToE: above/below by row first, then
+ * left/right on a shared row) and is still following. Done either way.
+ */
+export function stepAsideIf(w: PikaWorld, where: Dir, steps: Dir[], face: Dir, done: () => void): void {
+  const npc = findFollower(w);
+  const p = w.player;
+  if (!npc || npc.parked || (npc as { hidden?: boolean }).hidden) { done(); return; }
+  const side: Dir | null = npc.cellY > p.cellY ? "down" : npc.cellY < p.cellY ? "up"
+    : npc.cellX < p.cellX ? "left" : npc.cellX > p.cellX ? "right" : null;
+  if (side !== where) { done(); return; }
+  walkPikachu(w, steps.map((d) => [d, 1] as [Dir, number]), () => {
+    npc.facing = face;
+    done();
+  });
+}
+
 /** A bubble over the follower for 50 frames (Bill's house beats). */
 function billsEmotion(w: PikaWorld, npc: PikachuNPC, bubble: number): void {
   w.setEmote?.(npc, bubble, 50, () => {});

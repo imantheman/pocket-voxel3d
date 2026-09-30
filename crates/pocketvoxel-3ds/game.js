@@ -1638,6 +1638,23 @@ function stepWalk(w, npc) {
   npc.progress = 0;
   npc.update();
 }
+function stepAsideIf(w, where, steps, face, done) {
+  const npc = findFollower(w);
+  const p = w.player;
+  if (!npc || npc.parked || npc.hidden) {
+    done();
+    return;
+  }
+  const side = npc.cellY > p.cellY ? "down" : npc.cellY < p.cellY ? "up" : npc.cellX < p.cellX ? "left" : npc.cellX > p.cellX ? "right" : null;
+  if (side !== where) {
+    done();
+    return;
+  }
+  walkPikachu(w, steps.map((d) => [d, 1]), () => {
+    npc.facing = face;
+    done();
+  });
+}
 function billsEmotion(w, npc, bubble) {
   w.setEmote?.(npc, bubble, 50, () => {});
 }
@@ -8926,6 +8943,18 @@ function* pikachu_counter_hop(ctx) {
 function* pikachu_face_down(ctx) {
   faceDown(ctx.world);
 }
+function* pikachu_step_aside(ctx, ...args) {
+  const runner = ctx.runner;
+  let waiting = true;
+  stepAsideIf(ctx.world, args[0], args[1] ?? [], args[2], () => {
+    if (waiting)
+      runner.resume();
+    waiting = false;
+  });
+  if (waiting)
+    yield;
+  waiting = false;
+}
 function* pikachu_bills(ctx, ...args) {
   billsBeat(ctx.world, String(args[0]));
 }
@@ -9255,6 +9284,7 @@ var VERBS = {
   pikachu_counter_hop,
   pikachu_face_down,
   pikachu_bills,
+  pikachu_step_aside,
   random_text,
   use_strength,
   give_pokemon,
@@ -12132,7 +12162,8 @@ function yellowScripts(base) {
         TEXT_GAMECORNER_CLERK: coinClerkRows("_GameCornerClerk"),
         TEXT_GAMECORNER_FISHING_GURU1: coinGiverRows(YELLOW_COIN_GIVERS.FISHING_GURU1),
         TEXT_GAMECORNER_MIDDLE_AGED_MAN2: coinGiverRows(YELLOW_COIN_GIVERS.MIDDLE_AGED_MAN2),
-        TEXT_GAMECORNER_FISHING_GURU2: coinGiverRows(YELLOW_COIN_GIVERS.FISHING_GURU2)
+        TEXT_GAMECORNER_FISHING_GURU2: coinGiverRows(YELLOW_COIN_GIVERS.FISHING_GURU2),
+        TEXT_GAMECORNER_ROCKET: gameCornerRocketRows(true)
       }
     },
     POKEMON_FAN_CLUB: {
@@ -12424,6 +12455,21 @@ function pewterGymGuide(yellow) {
       ["label", "advice"],
       ["show_text", "_PewterGymGuideAdviceText"],
       ["label", "end"]
+    ];
+  };
+}
+function gameCornerRocketRows(yellow) {
+  return (ow) => {
+    const p = ow?.player;
+    const direct = p?.cellY === 6 || p?.cellX === 8;
+    const route = direct ? ["right", "right", "right", "right", "right"] : ["down", "right", "right", "right", "up", "right", "right", "right"];
+    return [
+      ["engage_trainer", "GAMECORNER_ROCKET"],
+      ["jump_if_false", "end"],
+      ["show_text", "_GameCornerRocketAfterBattleText"],
+      ...yellow && !direct ? [["pikachu_step_aside", "down", ["right", "up"], "down"]] : [],
+      ["walk_npc", "GAMECORNER_ROCKET", route],
+      ["hide_object", "GAME_CORNER", "GAMECORNER_ROCKET"]
     ];
   };
 }
@@ -14070,12 +14116,7 @@ Here, you can\vhave this TM.`,
       TEXT_GAMECORNER_CLERK2: coinGiverRows(COIN_GIVERS.CLERK2),
       TEXT_GAMECORNER_FISHING_GURU: coinGiverRows(COIN_GIVERS.FISHING_GURU),
       TEXT_GAMECORNER_GENTLEMAN: coinGiverRows(COIN_GIVERS.GENTLEMAN),
-      TEXT_GAMECORNER_ROCKET: [
-        ["engage_trainer", "GAMECORNER_ROCKET"],
-        ["jump_if_false", "end"],
-        ["walk_npc", "GAMECORNER_ROCKET", ["up"]],
-        ["hide_object", "GAME_CORNER", "GAMECORNER_ROCKET"]
-      ]
+      TEXT_GAMECORNER_ROCKET: gameCornerRocketRows(false)
     },
     onStep: (ow, save) => {
       if (save?.flags?.EVENT_FOUND_ROCKET_HIDEOUT)

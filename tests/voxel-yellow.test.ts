@@ -760,6 +760,37 @@ describe("Yellow: Pikachu follows you", () => {
     expect(chanseyScript("TEXT_CERULEANPOKECENTER_NURSE")).toBeNull();
   });
 
+  test.skipIf(!hasYellow)("the Game Corner grunt walks round you, and Pikachu steps out of his way", () => {
+    const game = withPikachu("GAME_CORNER", 10, 5, "left");
+    const ow = game.overworld as any;
+    const pika = findFollower(ow)!;
+    pika.cellX = 10; pika.cellY = 6; pika.px = 160; pika.py = 96;
+    const rows = (mapScript("GAME_CORNER")!.talk!.TEXT_GAMECORNER_ROCKET as any)(ow) as unknown[][];
+    const walk = rows.find((r) => r[0] === "walk_npc")!;
+    expect(walk[2]).toEqual(["down", "right", "right", "right", "up", "right", "right", "right"]);
+    // the aftermath alone: no battle to fight here
+    const after = rows.filter((r) => r[0] === "pikachu_step_aside" || r[0] === "walk_npc");
+    ow.runner.run(after, {});
+    for (let t = 0; t < 600 && ow.runner.isRunning(); t++) game.tick(0);
+    expect(ow.runner.isRunning()).toBe(false);
+    const grunt = ow.findNpc("GAMECORNER_ROCKET");
+    expect([grunt.cellX, grunt.cellY]).toEqual([15, 5]);
+    expect([pika.cellX, pika.cellY]).toEqual([11, 5]);
+    // and it looks down as the step ends (its idle glances resume after)
+    const w = pikaWorld("left");
+    const f = Pika.findFollower(w)!;
+    f.cellY = 6; f.py = 96;
+    let faced = "";
+    Pika.stepAsideIf(w, "down", ["right", "up"], "down", () => { faced = f.facing; });
+    tick(w, 40);
+    expect([f.cellX, f.cellY, faced]).toEqual([6, 5, "down"]);
+    // from below him or on his left, straight along his row, and no Pikachu step
+    const below = (mapScript("GAME_CORNER")!.talk!.TEXT_GAMECORNER_ROCKET as any)({ player: { cellX: 9, cellY: 6 } });
+    expect(below.find((r: unknown[]) => r[0] === "walk_npc")[2]).toEqual(["right", "right", "right", "right", "right"]);
+    expect(below.some((r: unknown[]) => r[0] === "pikachu_step_aside")).toBe(false);
+    expect(below).toContainEqual(["show_text", "_GameCornerRocketAfterBattleText"]);
+  });
+
   test.skipIf(!hasYellow)("Red has no follower", () => {
     const game = new VoxelmonGame({ ...yellow!, version: "red" } as VoxelmonData, new Host(), 1);
     game.newGame();

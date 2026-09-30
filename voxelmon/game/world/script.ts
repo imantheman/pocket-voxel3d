@@ -789,6 +789,18 @@ function* pikachu_face_down(ctx: ScriptContext): Generator<void, void> {
   Pikachu.faceDown(ctx.world as never);
 }
 
+/** Yellow's TryApplyPikachuMovementData: args where, steps, face. */
+function* pikachu_step_aside(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const runner = ctx.runner;
+  let waiting = true;
+  Pikachu.stepAsideIf(ctx.world as never, args[0] as Dir, (args[1] as Dir[]) ?? [], args[2] as Dir, () => {
+    if (waiting) runner.resume();
+    waiting = false;
+  });
+  if (waiting) yield;
+  waiting = false;
+}
+
 /** Yellow's beats in Bill's house (world/pikachu.ts billsBeat). */
 function* pikachu_bills(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
   Pikachu.billsBeat(ctx.world as never, String(args[0]));
@@ -1307,6 +1319,7 @@ const VERBS: Record<string, Verb> = {
   pikachu_counter_hop,
   pikachu_face_down,
   pikachu_bills,
+  pikachu_step_aside,
   random_text,
   use_strength,
   give_pokemon,

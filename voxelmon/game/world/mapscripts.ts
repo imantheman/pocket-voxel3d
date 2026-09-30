@@ -226,6 +226,39 @@ export function pewterGymGuide(yellow: boolean) {
   };
 }
 
+/**
+ * GameCornerRocketText + GameCornerRocketBattleScript: the grunt guarding
+ * the poster fights, says the hideout may be found out, and walks off to
+ * tell the BOSS by one of two routes -- straight right along his row when
+ * the player stands below him (Y 6) or on his left (X 8), else round the
+ * player, who is then on his right: down a row, right three, back up, right
+ * three (GameCornerMovement_Rocket_WalkAroundPlayer). He is gone once he
+ * has walked (GameCornerRocketExitScript).
+ *
+ * `yellow`: on the walk round, a Pikachu trailing below the player steps
+ * out of his way first -- right, up, and it looks down
+ * (GameCornerPikachuMovementScript, applied only when it stands below).
+ */
+export function gameCornerRocketRows(yellow: boolean) {
+  return (ow: any): ScriptRow[] => {
+    const p = ow?.player;
+    const direct = p?.cellY === 6 || p?.cellX === 8;
+    const route = direct
+      ? ["right", "right", "right", "right", "right"]
+      : ["down", "right", "right", "right", "up", "right", "right", "right"];
+    return [
+      ["engage_trainer", "GAMECORNER_ROCKET"],
+      ["jump_if_false", "end"],
+      ["show_text", "_GameCornerRocketAfterBattleText"],
+      ...(yellow && !direct
+        ? [["pikachu_step_aside", "down", ["right", "up"], "down"]] as ScriptRow[]
+        : []),
+      ["walk_npc", "GAMECORNER_ROCKET", route],
+      ["hide_object", "GAME_CORNER", "GAMECORNER_ROCKET"],
+    ];
+  };
+}
+
 /** An in-game trader: face the player, then the trade verb. */
 function tradeRows(index: number, flag: string): ScriptRow[] {
   return [["face_player"], ["trade", index, flag]];
@@ -2532,12 +2565,7 @@ export const MAP_SCRIPTS: Record<string, MapScript> = {
       TEXT_GAMECORNER_CLERK2: coinGiverRows(COIN_GIVERS.CLERK2),
       TEXT_GAMECORNER_FISHING_GURU: coinGiverRows(COIN_GIVERS.FISHING_GURU),
       TEXT_GAMECORNER_GENTLEMAN: coinGiverRows(COIN_GIVERS.GENTLEMAN),
-      TEXT_GAMECORNER_ROCKET: [
-        ["engage_trainer", "GAMECORNER_ROCKET"],
-        ["jump_if_false", "end"],
-        ["walk_npc", "GAMECORNER_ROCKET", ["up"]],
-        ["hide_object", "GAME_CORNER", "GAMECORNER_ROCKET"],
-      ],
+      TEXT_GAMECORNER_ROCKET: gameCornerRocketRows(false),
     },
     onStep: (ow: any, save: any) => {
       // The poster block swap lands on the next step rather than on the text

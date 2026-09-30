@@ -8,7 +8,14 @@
 // Built by a function over Red's table rather than at load, so this module
 // and mapscripts.ts can import each other without an evaluation-order trap.
 
-import { hasSevenBadges, liftKeyRocketRows, lockedDoorStep, pewterGymGuide, type MapScript } from "./mapscripts.ts";
+import {
+  gameCornerRocketRows,
+  hasSevenBadges,
+  liftKeyRocketRows,
+  lockedDoorStep,
+  pewterGymGuide,
+  type MapScript,
+} from "./mapscripts.ts";
 import { coinClerkRows, coinGiverRows, YELLOW_COIN_GIVERS } from "./gamecorner.ts";
 import { SAFARI_JOIN_CELLS, safariJoinRows, safariLeavingRows } from "./safari.ts";
 import { gymGateFlag } from "./toggleblocks.ts";
@@ -595,6 +602,8 @@ export function yellowScripts(base: Record<string, MapScript>): Record<string, M
         TEXT_GAMECORNER_FISHING_GURU1: coinGiverRows(YELLOW_COIN_GIVERS.FISHING_GURU1),
         TEXT_GAMECORNER_MIDDLE_AGED_MAN2: coinGiverRows(YELLOW_COIN_GIVERS.MIDDLE_AGED_MAN2),
         TEXT_GAMECORNER_FISHING_GURU2: coinGiverRows(YELLOW_COIN_GIVERS.FISHING_GURU2),
+        // GameCorner_2.asm: Pikachu steps out of the grunt's way
+        TEXT_GAMECORNER_ROCKET: gameCornerRocketRows(true),
       },
     },
     // pokeyellow scripts/PokemonFanClub.asm: the boasting fan's pet is a
