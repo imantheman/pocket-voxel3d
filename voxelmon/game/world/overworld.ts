@@ -3506,7 +3506,10 @@ export class Overworld implements ScriptWorld {
 
   /** old_man_demo hand-off (Commands.lua:807-823): delegate to the shell, the
    * same way startTrainerBattle does. onDone resumes the map script. */
-  startOldManDemo(onDone?: () => void, opts?: { species: string; level: number; name?: string }): void {
+  startOldManDemo(
+    onDone?: () => void,
+    opts?: { species?: string; level?: number; name?: string; fail?: boolean },
+  ): void {
     const self = this as any;
     const shell = self.shell ?? self.game ?? self.host ?? null;
     if (shell?.startOldManDemo) shell.startOldManDemo(onDone, opts);

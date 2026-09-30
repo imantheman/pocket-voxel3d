@@ -23,10 +23,11 @@ export const COIN_SALE_PRICE = 1000;
  * refusals the asm checks in order — no case, case full, cannot afford —
  * and only then the sale.
  */
-export function coinClerkRows(): ScriptRow[] {
+export function coinClerkRows(p = "_GameCornerClerk1"): ScriptRow[] {
+  // Yellow's clerk is unnumbered (_GameCornerClerk...); same lines
   return [
     ["face_player"],
-    ["ask", "_GameCornerClerk1DoYouNeedSomeGameCoinsText"],
+    ["ask", `${p}DoYouNeedSomeGameCoinsText`],
     ["jump_if_false", "no"],
     ["check_item", "COIN_CASE"],
     ["jump_if_false", "nocase"],
@@ -36,19 +37,19 @@ export function coinClerkRows(): ScriptRow[] {
     ["jump_if_false", "poor"],
     ["take_money", COIN_SALE_PRICE],
     ["give_coins", COINS_PER_SALE],
-    ["show_text", "_GameCornerClerk1ThanksHereAre50CoinsText"],
+    ["show_text", `${p}ThanksHereAre50CoinsText`],
     ["jump", "end"],
     ["label", "no"],
-    ["show_text", "_GameCornerClerk1PleaseComePlaySometimeText"],
+    ["show_text", `${p}PleaseComePlaySometimeText`],
     ["jump", "end"],
     ["label", "nocase"],
-    ["show_text", "_GameCornerClerk1DontHaveCoinCaseText"],
+    ["show_text", `${p}DontHaveCoinCaseText`],
     ["jump", "end"],
     ["label", "full"],
-    ["show_text", "_GameCornerClerk1CoinCaseIsFullText"],
+    ["show_text", `${p}CoinCaseIsFullText`],
     ["jump", "end"],
     ["label", "poor"],
-    ["show_text", "_GameCornerClerk1CantAffordTheCoinsText"],
+    ["show_text", `${p}CantAffordTheCoinsText`],
   ];
 }
 
@@ -121,6 +122,35 @@ export const COIN_GIVERS: Record<"FISHING_GURU" | "CLERK2" | "GENTLEMAN", CoinGi
     received: "_GameCornerGentlemanReceived20CoinsText",
     full: "_GameCornerGentlemanYouGotYourOwnCoinsText",
     already: "_GameCornerGentlemanCloselyWatchTheReelsText",
+  },
+};
+
+/**
+ * Yellow's floor (pokeyellow scripts/GameCorner.asm): the same three
+ * giveaways in the same places, but the clerk's seat is a MIDDLE_AGED_MAN2
+ * and the gentleman's a FISHING_GURU2, and their lines are named for them.
+ */
+export const YELLOW_COIN_GIVERS: Record<"FISHING_GURU1" | "MIDDLE_AGED_MAN2" | "FISHING_GURU2", CoinGiver> = {
+  FISHING_GURU1: {
+    flag: "EVENT_GOT_10_COINS", amount: 10,
+    ask: "_GameCornerFishingGuru1WantToPlayText",
+    received: "_GameCornerFishingGuru1Received10CoinsText",
+    full: "_GameCornerFishingGuru1DontNeedMyCoinsText",
+    already: "_GameCornerFishingGuru1WinsComeAndGoText",
+  },
+  MIDDLE_AGED_MAN2: {
+    flag: "EVENT_GOT_20_COINS_2", amount: 20,
+    ask: "_GameCornerMiddleAgedMan2WantSomeCoinsText",
+    received: "_GameCornerMiddleAgedMan2Received20CoinsText",
+    full: "_GameCornerMiddleAgedMan2YouHaveLotsOfCoinsText",
+    already: "_GameCornerMiddleAgedMan2INeedMoreCoinsText",
+  },
+  FISHING_GURU2: {
+    flag: "EVENT_GOT_20_COINS", amount: 20,
+    ask: "_GameCornerFishingGuru2ThrowingMeOffText",
+    received: "_GameCornerFishingGuru2Received20CoinsText",
+    full: "_GameCornerFishingGuru2YouGotYourOwnCoinsText",
+    already: "_GameCornerFishingGuru2CloselyWatchTheReelsText",
   },
 };
 

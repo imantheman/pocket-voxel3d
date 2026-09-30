@@ -654,7 +654,7 @@ export function hasSevenBadges(save: any): boolean {
  * Returns the rows for the step, or null when the door is open or the player
  * is somewhere else.
  */
-function lockedDoorStep(
+export function lockedDoorStep(
   ow: any,
   at: [number, number][],
   locked: boolean,
@@ -3180,7 +3180,7 @@ const TOWER_5F_PURIFIED = new Set(["10,8", "11,8", "10,9", "11,9"]);
  * the ball; talking again only reprints. engage_trainer reports the win in
  * lastCheck, so a loss (which blacks out) never reaches the reveal.
  */
-function liftKeyRocketRows(npc: string, afterText: string): ScriptRow[] {
+export function liftKeyRocketRows(npc: string, afterText: string): ScriptRow[] {
   return [
     ["engage_trainer", npc],
     ["jump_if_false", "end"],

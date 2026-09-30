@@ -8,7 +8,8 @@
 // Built by a function over Red's table rather than at load, so this module
 // and mapscripts.ts can import each other without an evaluation-order trap.
 
-import type { MapScript } from "./mapscripts.ts";
+import { hasSevenBadges, liftKeyRocketRows, lockedDoorStep, type MapScript } from "./mapscripts.ts";
+import { coinClerkRows, coinGiverRows, YELLOW_COIN_GIVERS } from "./gamecorner.ts";
 import type { ScriptRow } from "./script.ts";
 import type { Dir } from "./collision.ts";
 
@@ -177,10 +178,145 @@ function labOnStep(ow: any, save: any): ScriptRow[] | null {
   ] as ScriptRow[];
 }
 
+/**
+ * The Viridian old man, Yellow's way (yellow_viridian_old_man.lua; pokeyellow
+ * scripts/ViridianCity.asm, ViridianCity_2.asm). The Pokédex swaps the
+ * sleeper for OLD_MAN2 on the sleeper's own cell (Red's walker at (17,5)
+ * never appears); stepping into the gap east of him, or talking to him,
+ * runs the apology and a demo he FAILS -- three shakes and the ball breaks
+ * -- then "losing my touch", and he walks off: down the corridor if you
+ * stand in the gap, a step right otherwise.
+ */
+const OLD_MAN2 = "VIRIDIANCITY_OLD_MAN2";
+
+function oldMan2Rows(ow: any): ScriptRow[] {
+  const inGap = ow?.player?.cellX === 19;
+  return [
+    ["show_text", "_ViridianCityOldManHadMyCoffeeNowText"],
+    ["old_man_demo", "fail"],
+    ["set_flag", "EVENT_COMPLETED_CATCH_TRAINING"],
+    ["show_text", "_ViridianCityOldManLosingMyTouchText"],
+    ["walk_npc", OLD_MAN2, inGap ? ["down", "down", "down", "down", "down", "down"] : ["right"]],
+    ["hide_object", "VIRIDIAN_CITY", OLD_MAN2],
+  ] as ScriptRow[];
+}
+
+function viridianOnStep(ow: any, save: any): ScriptRow[] | null {
+  const gym = lockedDoorStep(ow, [[32, 8]], !hasSevenBadges(save), "_ViridianCityGymLockedText");
+  if (gym) return gym;
+  const f = save?.flags ?? {};
+  const x = ow?.player?.cellX;
+  const y = ow?.player?.cellY;
+  if (f.EVENT_GOT_POKEDEX) {
+    // OaksLabOakGivesPokedexScript's toggles, re-derived on every visit
+    const t = ((save.objectToggles ??= {}).VIRIDIAN_CITY ??= {});
+    if (t.VIRIDIANCITY_OLD_MAN_SLEEPY !== false || t.VIRIDIANCITY_OLD_MAN !== false) {
+      t.VIRIDIANCITY_OLD_MAN_SLEEPY = false;
+      t.VIRIDIANCITY_OLD_MAN = false;
+      ow.setObjectHidden?.("VIRIDIANCITY_OLD_MAN_SLEEPY", true);
+      ow.setObjectHidden?.("VIRIDIANCITY_OLD_MAN", true);
+      if (!f.EVENT_COMPLETED_CATCH_TRAINING) {
+        t[OLD_MAN2] = true;
+        ow.setObjectHidden?.(OLD_MAN2, false);
+      }
+    }
+    // ViridianCityCheckWaitingOldMan
+    if (!f.EVENT_COMPLETED_CATCH_TRAINING && x === 19 && y === 9 && ow.findNpc?.(OLD_MAN2)) {
+      return [
+        ["face_object", OLD_MAN2, "right"],
+        ["face_object", "player", "left"],
+        ...oldMan2Rows(ow),
+      ] as ScriptRow[];
+    }
+    return null;
+  }
+  if (x === 19 && y === 9) {
+    return [
+      ["show_text", "_ViridianCityOldManSleepyPrivatePropertyText"],
+      ["move_player", "down", 1],
+    ] as ScriptRow[];
+  }
+  return null;
+}
+
 /** The Yellow entries, over Red's table (`base`). */
 export function yellowScripts(base: Record<string, MapScript>): Record<string, MapScript> {
-  const redOak = (base.OAKS_LAB?.talk?.TEXT_OAKSLAB_OAK1 ?? []) as ScriptRow[];
+  // Red's Oak rows with Yellow's lines, and the Pokédex swapping in
+  // OLD_MAN2 rather than Red's walker
+  const redOak = ((base.OAKS_LAB?.talk?.TEXT_OAKSLAB_OAK1 ?? []) as ScriptRow[]).map((r) =>
+    r[0] === "show_object" && r[1] === "VIRIDIAN_CITY" && r[2] === "VIRIDIANCITY_OLD_MAN"
+      ? (["show_object", "VIRIDIAN_CITY", OLD_MAN2] as unknown as ScriptRow)
+      : r,
+  );
   return {
+    VIRIDIAN_CITY: {
+      onStep: viridianOnStep,
+      talk: {
+        TEXT_VIRIDIANCITY_OLD_MAN2: (ow: any, save: any): ScriptRow[] =>
+          save?.flags?.EVENT_COMPLETED_CATCH_TRAINING
+            ? [["show_text", "_ViridianCityOldManLosingMyTouchText"]] as ScriptRow[]
+            : [["face_player"], ...oldMan2Rows(ow)] as ScriptRow[],
+      },
+    },
+    // pokeyellow scripts/GameCorner.asm: the same counter and giveaways,
+    // under Yellow's names for the people
+    GAME_CORNER: {
+      talk: {
+        TEXT_GAMECORNER_CLERK: coinClerkRows("_GameCornerClerk"),
+        TEXT_GAMECORNER_FISHING_GURU1: coinGiverRows(YELLOW_COIN_GIVERS.FISHING_GURU1),
+        TEXT_GAMECORNER_MIDDLE_AGED_MAN2: coinGiverRows(YELLOW_COIN_GIVERS.MIDDLE_AGED_MAN2),
+        TEXT_GAMECORNER_FISHING_GURU2: coinGiverRows(YELLOW_COIN_GIVERS.FISHING_GURU2),
+      },
+    },
+    // pokeyellow scripts/PokemonFanClub.asm: the boasting fan's pet is a
+    // CLEFAIRY now (your own PIKACHU is the famous one), same boast war
+    POKEMON_FAN_CLUB: {
+      talk: {
+        TEXT_POKEMONFANCLUB_CLEFAIRY_FAN: [
+          ["face_player"],
+          ["check_flag", "EVENT_PIKACHU_FAN_BOAST"],
+          ["jump_if_true", "better"],
+          ["show_text", "_PokemonFanClubClefairyFanNormalText"],
+          ["set_flag", "EVENT_SEEL_FAN_BOAST"],
+          ["jump", "end"],
+          ["label", "better"],
+          ["show_text", "_PokemonFanClubClefairyFanBetterText"],
+          ["clear_flag", "EVENT_PIKACHU_FAN_BOAST"],
+        ] as ScriptRow[],
+        TEXT_POKEMONFANCLUB_CLEFAIRY: [
+          ["play_cry", "CLEFAIRY"],
+          ["show_text", "_PokemonFanClubClefairyText"],
+        ] as ScriptRow[],
+      },
+    },
+    // CeruleanCity.asm: the trainer by the water drills an ELECTRODE
+    CERULEAN_CITY: {
+      talk: {
+        TEXT_CERULEANCITY_COOLTRAINER_F1: [
+          ["face_player"],
+          ["random_text", [
+            [180, "_CeruleanCityCooltrainerF1ElectrodeUseSonicboomText"],
+            [100, "_CeruleanCityCooltrainerF1ElectrodePunchText"],
+            [0, "_CeruleanCityCooltrainerF1ElectrodeWithdrawText"],
+          ]],
+        ] as ScriptRow[],
+        TEXT_CERULEANCITY_ELECTRODE: [
+          ["random_text", [
+            [180, "_CeruleanCityElectrodeTookASnoozeText"],
+            [120, "_CeruleanCityElectrodeIsLoafingAroundText"],
+            [60, "_CeruleanCityElectrodeTurnedAwayText"],
+            [0, "_CeruleanCityElectrodeIgnoredOrdersText"],
+          ]],
+        ] as ScriptRow[],
+      },
+    },
+    // RocketHideoutB4F.asm: one unnumbered grunt has the LIFT KEY
+    ROCKET_HIDEOUT_B4F: {
+      talk: {
+        TEXT_ROCKETHIDEOUTB4F_ROCKET: liftKeyRocketRows("ROCKETHIDEOUTB4F_ROCKET",
+          "_RocketHideoutB4FRocketAfterBattleText"),
+      },
+    },
     PALLET_TOWN: { onStep: palletOnStep },
     OAKS_LAB_ONSTEP_HOST: { onStep: labOnStep },
     OAKS_LAB: {

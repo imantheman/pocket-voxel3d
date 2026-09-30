@@ -138,3 +138,44 @@ describe("Yellow: the opening", () => {
     expect([2, 3]).toContain((game.save as any).rivalStarter);
   });
 });
+
+describe("Yellow: the people it renamed", () => {
+  test.skipIf(!hasYellow)("the Game Corner's middle-aged man gives his 20 coins under Yellow's lines", () => {
+    const game = newYellowGame();
+    const ow = game.overworld as any;
+    game.save.inventory.COIN_CASE = 1;
+    ow.setMap("GAME_CORNER", 14, 12, "up");
+    const shown: string[] = [];
+    const orig = ow.shell.showText.bind(ow.shell);
+    ow.shell.showText = (t: string, cb: () => void, o?: unknown) => { shown.push(t); return orig(t, cb, o); };
+    ow.showMapText("TEXT_GAMECORNER_MIDDLE_AGED_MAN2");
+    playOut(game);
+    expect((game.save as any).coins).toBe(20);
+    expect(game.save.flags.EVENT_GOT_20_COINS_2).toBe(true);
+    // every line was real text, not a label printed raw
+    expect(shown.some((t) => t.startsWith("_"))).toBe(false);
+  });
+
+  test.skipIf(!hasYellow)("the Viridian old man misses his throw, says so, and walks off", () => {
+    const game = newYellowGame();
+    const ow = game.overworld as any;
+    game.save.flags.EVENT_GOT_POKEDEX = true;
+    ow.setMap("VIRIDIAN_CITY", 19, 10, "up");
+    // one step north into the gap beside him
+    for (let t = 0; t < 40 && ow.player.cellY !== 9; t++) game.tick(VOX_BTN.up);
+    let demo: any = null;
+    for (let t = 0; t < 30000; t++) {
+      const b = (game.battleView() as any)?.battle;
+      if (b?.demo) demo ??= b;
+      if (game.save.flags.EVENT_COMPLETED_CATCH_TRAINING && game.stackKinds().at(-1) === "overworld" && !ow.runner.isRunning() && ow.scriptMoves.length === 0) break;
+      game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    expect(demo).not.toBeNull();
+    expect(demo.demoFails).toBe(true);
+    expect(demo.enemy.mon.species).toBe("RATTATA");
+    expect(game.save.flags.EVENT_COMPLETED_CATCH_TRAINING).toBe(true);
+    const man = ow.findNpc("VIRIDIANCITY_OLD_MAN2");
+    expect(!man || man.hidden).toBe(true);
+    expect((game.save as any).objectToggles.VIRIDIAN_CITY.VIRIDIANCITY_OLD_MAN2).toBe(false);
+  });
+});

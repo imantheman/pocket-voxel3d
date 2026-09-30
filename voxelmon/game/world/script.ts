@@ -1160,10 +1160,13 @@ function* old_man_demo(ctx: ScriptContext, ...args: unknown[]): Generator<void, 
   const runner = ctx.runner;
   const w = ctx.world as any;
   if (typeof w.startOldManDemo === "function") {
-    const species = args[0] as string | undefined;
+    // ["old_man_demo", "fail"]: Yellow's first lesson, the throw that
+    // breaks open (EVENT_INITIAL_CATCH_TRAINING, #636)
+    const fail = args[0] === "fail";
+    const species = fail ? undefined : (args[0] as string | undefined);
     const opts = species
       ? { species, level: (args[1] as number | undefined) ?? 5, name: args[2] as string | undefined }
-      : undefined;
+      : fail ? { fail: true } : undefined;
     w.startOldManDemo(() => runner.resume(), opts);
     yield;
   }

@@ -2783,14 +2783,18 @@ export class VoxelmonGame implements OverworldShell, SceneView {
    * BATTLE_TYPE_OLD_MAN wild battle. Built like a scripted wild battle, flagged
    * as a demo, and pushed with an onDone that resumes the map script when it
    * ends (battle.onFinish -> runner.resume). Nothing is kept. */
-  startOldManDemo(onDone?: () => void, opts?: { species: string; level: number; name?: string }): void {
-    const om =
-      opts ??
-      (this.data.field as { oldManBattle?: { species: string; level: number } } | undefined)
-        ?.oldManBattle ?? { species: "WEEDLE", level: 5 };
-    const battle = new WildBattle(this.data, this.save, this.battleRng, om.species, om.level);
-    // Yellow's Pallet intro: Oak throws at the wild Pikachu (BATTLE_TYPE_PIKACHU)
-    battle.makeOldManDemo(opts?.name);
+  startOldManDemo(
+    onDone?: () => void,
+    opts?: { species?: string; level?: number; name?: string; fail?: boolean },
+  ): void {
+    const field = (this.data.field as { oldManBattle?: { species: string; level: number } } | undefined)
+      ?.oldManBattle ?? { species: "WEEDLE", level: 5 };
+    const species = opts?.species ?? field.species;
+    const level = opts?.level ?? field.level;
+    const battle = new WildBattle(this.data, this.save, this.battleRng, species, level);
+    // Yellow's Pallet intro: Oak throws at the wild Pikachu (BATTLE_TYPE_PIKACHU);
+    // Yellow's Viridian old man misses on purpose the first time
+    battle.makeOldManDemo(opts?.name, opts?.fail);
     const st = new BattleGameState(this, "", 0, battle);
     st.onDone = () => onDone?.();
     this.push(st);
