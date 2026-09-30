@@ -53,7 +53,8 @@ echo "=== tune"
 python3 - "$WORK/banner.wav" <<'PY'
 import math, struct, sys, wave
 RATE = 32000
-notes = [(523.25, .28), (659.25, .28), (783.99, .28), (1046.50, .52)]
+# do mi sol, then the high re: C5 E5 G5 D6, a broken C chord with the added 9th
+notes = [(523.25, .28), (659.25, .28), (783.99, .28), (1174.66, .52)]
 frames = bytearray()
 t = 0
 for freq, dur in notes:
