@@ -1,7 +1,10 @@
 // voxelmon/game/data.ts
 function gameVersion(data) {
   const v = data?.version;
-  return v === "blue" || v === "yellow" ? v : "red";
+  return v === "blue" || v === "yellow" || v === "gold" ? v : "red";
+}
+function generationOf(data) {
+  return gameVersion(data) === "gold" ? 2 : 1;
 }
 var REQUIRED_MODULES = [
   "pokemon",
@@ -6760,6 +6763,307 @@ class GbEmitter {
   }
 }
 
+// voxelmon/game/gen2/permissions.ts
+var LAND = 0;
+var WATER = 1;
+var WALL = 15;
+var TABLE = [
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  15,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  15,
+  0,
+  0,
+  15,
+  0,
+  0,
+  15,
+  0,
+  0,
+  0,
+  0,
+  15,
+  0,
+  0,
+  15,
+  0,
+  0,
+  1,
+  1,
+  1,
+  0,
+  1,
+  1,
+  1,
+  15,
+  1,
+  1,
+  1,
+  0,
+  1,
+  1,
+  1,
+  15,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  15,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  15,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  15,
+  15,
+  15,
+  15,
+  15,
+  0,
+  0,
+  0,
+  15,
+  15,
+  15,
+  15,
+  15,
+  0,
+  0,
+  0,
+  15,
+  15,
+  15,
+  15,
+  15,
+  15,
+  15,
+  15,
+  15,
+  15,
+  15,
+  15,
+  15,
+  15,
+  15,
+  15,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  15
+];
+function permissionOf(coll) {
+  if (coll === undefined || coll < 0)
+    return WALL;
+  return TABLE[coll & 255] ?? WALL;
+}
+var isLand = (c) => permissionOf(c) === LAND;
+var isWater = (c) => permissionOf(c) === WATER;
+var isWalkable = isLand;
+var set = (...xs) => new Set(xs);
+var member = (s, c) => c !== undefined && c >= 0 && s.has(c & 255);
+var GRASS = set(16, 20, 24, 28);
+var SUPER_TALL_GRASS = set(20, 28);
+var ENCOUNTER = set(8, 24, 20, 40, 41, 72, 73, 74, 75, 76);
+var ICE = set(35, 43);
+var WHIRLPOOL = set(36, 44);
+var CUT_TREE = set(18, 26);
+var HEADBUTT_TREE = set(21, 29);
+var WATERFALL = set(51, 59);
+var COUNTER = set(144, 152);
+var CUTTABLE = set(18, 26, 16, 24, 20, 28);
+var isGrass = (c) => member(GRASS, c);
+var isCounter = (c) => member(COUNTER, c);
+var DOOR_FORCED = set(113, 121, 122, 123);
+function doorForcedDirection(c) {
+  return member(DOOR_FORCED, c) ? "down" : null;
+}
+var NEIGHBOR_ARM = {
+  down: set(2, 6, 7),
+  up: set(3, 4, 5),
+  right: set(1, 5, 7),
+  left: set(0, 4, 6)
+};
+function isWarpCollision(c) {
+  if (c === undefined || c < 0)
+    return false;
+  return c === 96 || c === 104 || c >> 4 === 7;
+}
+var WARP_FACING_DOWN = set(113, 121, 122, 115, 123, 116, 124, 117, 125);
+
 // voxelmon/game/world/map.ts
 var WATER_TILES = [20];
 var SHORE_TILES = [50, 72];
@@ -6900,6 +7204,16 @@ class GameMap {
   cellTile(cx, cy) {
     return this.tileAt(cx * 2, cy * 2 + 1);
   }
+  cellCollision(cx, cy) {
+    const quads = this.tileset.collision;
+    if (!quads)
+      return;
+    const block = this.blockAt(Math.floor(cx / 2), Math.floor(cy / 2));
+    return quads[block]?.[(cy % 2 + 2) % 2 * 2 + (cx % 2 + 2) % 2];
+  }
+  get byCollision() {
+    return Array.isArray(this.tileset.collision);
+  }
   inBounds(cx, cy) {
     return cx >= 0 && cy >= 0 && cx < this.widthCells && cy < this.heightCells;
   }
@@ -6909,6 +7223,8 @@ class GameMap {
       return true;
     if (this.openAt.has(i))
       return true;
+    if (this.byCollision)
+      return isWalkable(this.cellCollision(cx, cy));
     return this.walkable.has(this.cellTile(cx, cy));
   }
   markCut(cx, cy) {
@@ -6926,16 +7242,24 @@ class GameMap {
   isGrassCell(cx, cy) {
     if (!this.inBounds(cx, cy))
       return false;
+    if (this.byCollision)
+      return isGrass(this.cellCollision(cx, cy));
     const grass = this.tileset.grassTile;
     return grass !== undefined && this.cellTile(cx, cy) === grass;
   }
   isWaterCell(cx, cy) {
+    if (this.byCollision)
+      return isWater(this.cellCollision(cx, cy));
     return this.waterTiles.has(this.cellTile(cx, cy));
   }
   isDoorTileCell(cx, cy) {
+    if (this.byCollision)
+      return doorForcedDirection(this.cellCollision(cx, cy)) !== null;
     return this.doorTiles.has(this.cellTile(cx, cy));
   }
   isWarpTileCell(cx, cy) {
+    if (this.byCollision)
+      return isWarpCollision(this.cellCollision(cx, cy));
     const t = this.cellTile(cx, cy);
     return this.doorTiles.has(t) || this.warpTiles.has(t);
   }
@@ -6947,6 +7271,8 @@ class GameMap {
     return table[this.cellTile(cx, cy)];
   }
   isCounterCell(cx, cy) {
+    if (this.byCollision)
+      return isCounter(this.cellCollision(cx, cy));
     const t = this.cellTile(cx, cy);
     return (this.tileset.counterTiles ?? []).includes(t);
   }
@@ -8731,7 +9057,7 @@ function* trade(ctx, ...args) {
   if (!t)
     return;
   const doneFlag = args[1];
-  const set = t.dialogset ?? 1;
+  const set2 = t.dialogset ?? 1;
   const subs = {
     "RAM:wInGameTradeGiveMonName": data.pokemon?.[t.give]?.name ?? t.give,
     "RAM:wInGameTradeReceiveMonName": data.pokemon?.[t.get]?.name ?? t.get
@@ -8741,17 +9067,17 @@ function* trade(ctx, ...args) {
     yield;
   };
   if (doneFlag && w.save.flags[doneFlag]) {
-    yield* say(`_AfterTrade${set}Text`);
+    yield* say(`_AfterTrade${set2}Text`);
     return;
   }
   let yes = false;
-  w.showChoice(scriptText(w, `_WannaTrade${set}Text`, subs), (y) => {
+  w.showChoice(scriptText(w, `_WannaTrade${set2}Text`, subs), (y) => {
     yes = y;
     runner.resume();
   });
   yield;
   if (!yes) {
-    yield* say(`_NoTrade${set}Text`);
+    yield* say(`_NoTrade${set2}Text`);
     return;
   }
   let picked = -1;
@@ -8763,11 +9089,11 @@ function* trade(ctx, ...args) {
   const party = w.save.party;
   const sent = party[picked];
   if (!sent) {
-    yield* say(`_NoTrade${set}Text`);
+    yield* say(`_NoTrade${set2}Text`);
     return;
   }
   if (sent.species !== t.give) {
-    yield* say(`_WrongMon${set}Text`);
+    yield* say(`_WrongMon${set2}Text`);
     return;
   }
   if (doneFlag)
@@ -8781,7 +9107,7 @@ function* trade(ctx, ...args) {
   party.push(mon);
   markOwned(w.save, t.get);
   yield* say("_TradedForText");
-  yield* say(`_Thanks${set}Text`);
+  yield* say(`_Thanks${set2}Text`);
 }
 function* static_battle(ctx, ...args) {
   const runner = ctx.runner;
@@ -17485,8 +17811,8 @@ wore off.`);
     const seal = LEAGUE_SEALS[mapId];
     if (!seal)
       return;
-    const set = this.save?.flags?.[seal.flag] === true;
-    const solid = seal.whileSet ? set : !set;
+    const set2 = this.save?.flags?.[seal.flag] === true;
+    const solid = seal.whileSet ? set2 : !set2;
     for (const b of seal.blocks) {
       this.setToggleBlock(def, { ...b, solidWhenOn: false }, solid);
     }
@@ -18510,7 +18836,8 @@ class Scene {
       let flags = ENT_FLAG.ghost | ENT_FLAG.walker;
       if (mirror)
         flags |= ENT_FLAG.mirror;
-      const sheet = p.surfing ? "SPRITE_SEEL" : p.onBike ? "SPRITE_RED_BIKE" : "SPRITE_RED";
+      const gold = view.data.version === "gold";
+      const sheet = p.surfing ? gold ? "SPRITE_SURF" : "SPRITE_SEEL" : p.onBike ? gold ? "SPRITE_CHRIS_BIKE" : "SPRITE_RED_BIKE" : gold ? "SPRITE_CHRIS" : "SPRITE_RED";
       const hop = p.hopLift();
       this.emitSlot(0, this.sheetIndex(view, sheet), frame2, p.px * Q4, p.py * Q4, hop !== 0 ? hop : p.surfBob(), flags);
     }
@@ -20614,17 +20941,17 @@ class YellowIntroScenes {
         continue;
       if (--o.wait > 0)
         continue;
-      const set = FRAMESETS[o.frameset];
-      if (o.step >= set.steps.length - 1) {
-        if (set.loop) {
+      const set2 = FRAMESETS[o.frameset];
+      if (o.step >= set2.steps.length - 1) {
+        if (set2.loop) {
           o.step = 0;
-          o.wait = set.steps[0][1];
+          o.wait = set2.steps[0][1];
         } else
           o.held = true;
         continue;
       }
       o.step++;
-      o.wait = set.steps[o.step][1];
+      o.wait = set2.steps[o.step][1];
     }
   }
   frame() {
@@ -26779,6 +27106,10 @@ class VoxelmonGame {
     cues.length = 0;
   }
   newGame() {
+    if (generationOf(this.data) === 2) {
+      this.newGameGen2();
+      return;
+    }
     this.save = {
       meta: { format: SAVE_FORMAT, mods: {} },
       version: gameVersion(this.data) === "yellow" ? "yellow" : "red",
@@ -26891,6 +27222,29 @@ class VoxelmonGame {
   }
   pop() {
     this.stack.pop();
+  }
+  newGameGen2() {
+    this.save = {
+      meta: { format: SAVE_FORMAT, mods: {} },
+      version: "gold",
+      player: { map: "PLAYERS_HOUSE_2F", x: 3, y: 3, facing: "down", name: "GOLD", rival: "SILVER", id: 0 },
+      flags: {},
+      inventory: {},
+      pcItems: {},
+      party: [],
+      box: {},
+      money: 3000,
+      defeatedTrainers: {},
+      pokedex: { seen: {}, owned: {} },
+      lastHeal: { map: "NEW_BARK_TOWN", x: 13, y: 6 },
+      lastOutdoor: { id: "NEW_BARK_TOWN", x: 13, y: 6 },
+      repelSteps: 0,
+      modData: {},
+      options: {}
+    };
+    this.overworld = new Overworld(this);
+    this.stack = [new OverworldState(this.overworld)];
+    this.overworld.enter("PLAYERS_HOUSE_2F", 3, 3, "down");
   }
   closeToOverworld() {
     while (this.stack.length > 1)
