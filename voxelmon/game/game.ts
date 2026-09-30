@@ -78,7 +78,7 @@ import {
   countOwned, fillAideText, oaksAideFlag, OAKS_AIDES,
 } from "./world/oaksaide.ts";
 import { prizeWindows } from "./world/gamecorner.ts";
-import { gameVersion } from "./data.ts";
+import { gameVersion, generationOf } from "./data.ts";
 import { modifyHappiness } from "./world/pikachu.ts";
 import { gearViewStep, type GearViewId } from "./ui/kantogear.ts";
 import { count as badgeCount } from "./rules/badges.ts";
@@ -542,6 +542,10 @@ export class VoxelmonGame implements OverworldShell, SceneView {
    * has ever been outdoors.
    */
   newGame(): void {
+    if (generationOf(this.data) === 2) {
+      this.newGameGen2();
+      return;
+    }
     // SaveData.lua:1566 newGame — same shape and key set the desktop
     // recomp writes, so a save from either side opens in the other.
     this.save = {
@@ -739,6 +743,37 @@ export class VoxelmonGame implements OverworldShell, SceneView {
    * assignment). A field HM move (PartyState's CUT/FLASH submenu entries)
    * needs the menu stack fully closed before it acts on the overworld, the
    * way selecting CUT in pokered's own party menu backs all the way out. */
+  /**
+   * Gold, for now: straight into the player's room (data/maps/spawn_points.asm
+   * SPAWN_HOME, PLAYERS_HOUSE_2F 3,3), no title or intro, so the maps can be
+   * walked while the Gen 2 engine (docs/gold-plan.md) is ported. The world is
+   * the Gen 1 overworld over Gold's maps -- movement, warps and connections by
+   * collision byte (world/map.ts) -- with no scripts yet.
+   */
+  private newGameGen2(): void {
+    this.save = {
+      meta: { format: SAVE_FORMAT, mods: {} },
+      version: "gold",
+      player: { map: "PLAYERS_HOUSE_2F", x: 3, y: 3, facing: "down", name: "GOLD", rival: "SILVER", id: 0 },
+      flags: {},
+      inventory: {},
+      pcItems: {},
+      party: [],
+      box: {},
+      money: 3000,
+      defeatedTrainers: {},
+      pokedex: { seen: {}, owned: {} },
+      lastHeal: { map: "NEW_BARK_TOWN", x: 13, y: 6 },
+      lastOutdoor: { id: "NEW_BARK_TOWN", x: 13, y: 6 },
+      repelSteps: 0,
+      modData: {},
+      options: {},
+    } as any;
+    this.overworld = new Overworld(this);
+    this.stack = [new OverworldState(this.overworld)];
+    this.overworld.enter("PLAYERS_HOUSE_2F", 3, 3, "down");
+  }
+
   closeToOverworld(): void {
     while (this.stack.length > 1) this.stack.pop();
   }

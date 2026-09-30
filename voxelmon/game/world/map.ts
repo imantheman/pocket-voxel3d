@@ -7,6 +7,7 @@
 // Lua 1-based indexing folded out per SCHEMA.md: blocks/tileset arrays are
 // read 0-based here; warp indices stay 0-based in the runtime table.
 
+import * as Coll from "../gen2/permissions.ts";
 import type { MapDef, MapSign, MapWarp, TilesetDef } from "../data.ts";
 
 // Map.lua:20-22 stale-cache fallbacks (item_effects.asm
@@ -214,6 +215,23 @@ export class GameMap {
     return this.tileAt(cx * 2, cy * 2 + 1);
   }
 
+  /**
+   * Gen 2 (Gold): the cell's collision byte, one per 2x2-tile quadrant of its
+   * metatile (TL, TR, BL, BR), border-extended. Undefined for Gen 1, whose
+   * cells are judged by their bottom-left tile.
+   */
+  cellCollision(cx: number, cy: number): number | undefined {
+    const quads = (this.tileset as { collision?: number[][] }).collision;
+    if (!quads) return undefined;
+    const block = this.blockAt(Math.floor(cx / 2), Math.floor(cy / 2));
+    return quads[block]?.[((cy % 2 + 2) % 2) * 2 + ((cx % 2 + 2) % 2)];
+  }
+
+  /** True for a Gen 2 map, whose cells answer to collision bytes. */
+  get byCollision(): boolean {
+    return Array.isArray((this.tileset as { collision?: unknown }).collision);
+  }
+
   // Map.lua:216
   inBounds(cx: number, cy: number): boolean {
     return cx >= 0 && cy >= 0 && cx < this.widthCells && cy < this.heightCells;
@@ -231,6 +249,7 @@ export class GameMap {
     // CLOSED door into the map and unlocking only hides its stamp, so
     // without this the door vanishes and the doorway stays solid.
     if (this.openAt.has(i)) return true;
+    if (this.byCollision) return Coll.isWalkable(this.cellCollision(cx, cy));
     return this.walkable.has(this.cellTile(cx, cy));
   }
 
@@ -272,22 +291,27 @@ export class GameMap {
   // seam step parks the player at cellY = -1).
   isGrassCell(cx: number, cy: number): boolean {
     if (!this.inBounds(cx, cy)) return false;
+    if (this.byCollision) return Coll.isGrass(this.cellCollision(cx, cy));
     const grass = this.tileset.grassTile;
     return grass !== undefined && this.cellTile(cx, cy) === grass;
   }
 
   // Map.lua:242 — water and eastern-shore tiles share one lookup
   isWaterCell(cx: number, cy: number): boolean {
+    if (this.byCollision) return Coll.isWater(this.cellCollision(cx, cy));
     return this.waterTiles.has(this.cellTile(cx, cy));
   }
 
   // Map.lua:256 (pokered IsPlayerStandingOnDoorTile)
   isDoorTileCell(cx: number, cy: number): boolean {
+    // Gen 2: the arrival tiles that walk you out (HI_NYBBLE_WARPS .warps)
+    if (this.byCollision) return Coll.doorForcedDirection(this.cellCollision(cx, cy)) !== null;
     return this.doorTiles.has(this.cellTile(cx, cy));
   }
 
   // Map.lua:261 — door or warp-activating tile
   isWarpTileCell(cx: number, cy: number): boolean {
+    if (this.byCollision) return Coll.isWarpCollision(this.cellCollision(cx, cy));
     const t = this.cellTile(cx, cy);
     return this.doorTiles.has(t) || this.warpTiles.has(t);
   }
@@ -304,6 +328,7 @@ export class GameMap {
 
   // Map.lua:275 — counter tiles allow talking to NPCs across them
   isCounterCell(cx: number, cy: number): boolean {
+    if (this.byCollision) return Coll.isCounter(this.cellCollision(cx, cy));
     const t = this.cellTile(cx, cy);
     return (this.tileset.counterTiles ?? []).includes(t);
   }

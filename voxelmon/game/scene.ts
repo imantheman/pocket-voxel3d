@@ -505,7 +505,13 @@ export class Scene {
       // it rides the same walk cycle, so the flippers go as it moves. It
       // used to stay Red, walking on the water. Riding swaps in the bike
       // sheet the same way (SpriteRenderer.lua:300).
-      const sheet = p.surfing ? "SPRITE_SEEL" : p.onBike ? "SPRITE_RED_BIKE" : "SPRITE_RED";
+      // Gold's player is Chris, with his own bike and surf sheets
+      const gold = (view.data as { version?: string }).version === "gold";
+      const sheet = p.surfing
+        ? (gold ? "SPRITE_SURF" : "SPRITE_SEEL")
+        : p.onBike
+          ? (gold ? "SPRITE_CHRIS_BIKE" : "SPRITE_RED_BIKE")
+          : (gold ? "SPRITE_CHRIS" : "SPRITE_RED");
       const hop = p.hopLift();
       this.emitSlot(
         0,
