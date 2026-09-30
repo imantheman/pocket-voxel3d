@@ -195,6 +195,9 @@ class AudioBanks {
     const ref = def && this.ref(def.header);
     return ref ? { ...ref, pitch: def.pitch, length: def.length } : null;
   }
+  get pikaClips() {
+    return this.manifest.pikaCries ?? 0;
+  }
   mapSong(mapId) {
     return this.manifest.mapSongs[mapId];
   }
@@ -382,6 +385,14 @@ class AudioDirector {
     if (!cry || !this.host)
       return;
     this.host.cry(cry.bank, cry.address, cry.engine, cry.pitch, cry.length);
+  }
+  playPikaClip(clip) {
+    const n = this.banks?.pikaClips ?? 0;
+    if (n > 0 && this.host?.pikaPcm) {
+      this.host.pikaPcm(Math.max(1, Math.min(n, Math.floor(clip))));
+      return;
+    }
+    this.playCry("PIKACHU");
   }
   stop() {
     if (!this.banks)
@@ -1103,6 +1114,547 @@ function createTypeChart(data) {
       return mult;
     }
   };
+}
+
+// voxelmon/game/world/collision.ts
+var DIR_CYCLE = ["up", "right", "down", "left"];
+function rotateDir(d, quarterTurns) {
+  const i = DIR_CYCLE.indexOf(d);
+  if (i < 0)
+    return d;
+  const q = (Math.round(quarterTurns) % 4 + 4) % 4;
+  return DIR_CYCLE[(i + q) % 4];
+}
+var DELTA = {
+  up: [0, -1],
+  down: [0, 1],
+  left: [-1, 0],
+  right: [1, 0]
+};
+function target(cx, cy, dir) {
+  const d = DELTA[dir];
+  return [cx + d[0], cy + d[1]];
+}
+function occupied(entities, cx, cy, ignore) {
+  for (const e of entities) {
+    if (e !== ignore && !e.passable && !e.hidden) {
+      if (e.cellX === cx && e.cellY === cy || e.targetX === cx && e.targetY === cy) {
+        return e;
+      }
+    }
+  }
+  return null;
+}
+function pairBlocked(map, mover, sx, sy, tx, ty, tilePairs) {
+  if (!tilePairs)
+    return false;
+  const list = mover.surfing ? tilePairs.water : tilePairs.land;
+  if (!list || list.length === 0)
+    return false;
+  const tileset = map.def.tileset;
+  const a = map.cellTile(sx, sy);
+  const b = map.cellTile(tx, ty);
+  for (const p of list) {
+    if (p.tileset === tileset && (p.a === a && p.b === b || p.a === b && p.b === a)) {
+      return true;
+    }
+  }
+  return false;
+}
+function canMove(map, entities, mover, dir, tilePairs) {
+  const [tx, ty] = target(mover.cellX, mover.cellY, dir);
+  if (!map.inBounds(tx, ty)) {
+    return { ok: false, why: "bounds" };
+  }
+  if (!map.isWalkableCell(tx, ty)) {
+    if (!(mover.surfing && map.isWaterCell(tx, ty))) {
+      return { ok: false, why: "tile" };
+    }
+  }
+  if (pairBlocked(map, mover, mover.cellX, mover.cellY, tx, ty, tilePairs)) {
+    return { ok: false, why: "tile" };
+  }
+  if (occupied(entities, tx, ty, mover)) {
+    return { ok: false, why: "entity" };
+  }
+  return { ok: true };
+}
+
+// voxelmon/game/world/npc.ts
+var STEP_FRAMES = 16;
+var FACING_FROM_RANGE = {
+  DOWN: "down",
+  UP: "up",
+  LEFT: "left",
+  RIGHT: "right"
+};
+var ROAM_DIRS = {
+  ANY_DIR: ["up", "down", "left", "right"],
+  UP_DOWN: ["up", "down"],
+  LEFT_RIGHT: ["left", "right"]
+};
+
+class NPC {
+  def;
+  id;
+  cellX;
+  cellY;
+  px;
+  py;
+  facing;
+  moving = false;
+  progress = 0;
+  stepFlip = false;
+  frozen = false;
+  wanders;
+  roamDirs;
+  timer;
+  targetX;
+  targetY;
+  passable;
+  marching = false;
+  constructor(mapId, objDef, rng) {
+    this.def = objDef;
+    this.id = `${mapId}_obj_${objDef.index}`;
+    this.cellX = objDef.x;
+    this.cellY = objDef.y;
+    this.px = this.cellX * 16;
+    this.py = this.cellY * 16;
+    this.facing = FACING_FROM_RANGE[objDef.range] ?? "down";
+    this.wanders = objDef.movement === "WALK";
+    this.roamDirs = ROAM_DIRS[objDef.range] ?? ROAM_DIRS.ANY_DIR;
+    this.timer = randRange(rng, 30, 120);
+  }
+  facePlayer(player) {
+    const dx = player.cellX - this.cellX;
+    const dy = player.cellY - this.cellY;
+    if (Math.abs(dx) > Math.abs(dy)) {
+      this.facing = dx > 0 ? "right" : "left";
+    } else {
+      this.facing = dy > 0 ? "down" : "up";
+    }
+  }
+  update(map, entities, rng, tilePairs) {
+    const stepLen = STEP_FRAMES;
+    if (this.moving) {
+      this.progress += 1;
+      if (this.marching) {
+        if (this.progress >= stepLen) {
+          this.progress = 0;
+          this.moving = false;
+          this.marching = false;
+          this.stepFlip = !this.stepFlip;
+        }
+        return;
+      }
+      const d = DELTA[this.facing];
+      const moved = Math.floor(this.progress * 16 / stepLen);
+      this.px = this.cellX * 16 + d[0] * moved;
+      this.py = this.cellY * 16 + d[1] * moved;
+      if (this.progress >= stepLen) {
+        this.cellX = this.targetX;
+        this.cellY = this.targetY;
+        this.targetX = undefined;
+        this.targetY = undefined;
+        this.px = this.cellX * 16;
+        this.py = this.cellY * 16;
+        this.moving = false;
+        this.stepFlip = !this.stepFlip;
+      }
+      return;
+    }
+    if (this.frozen || !this.wanders)
+      return;
+    this.timer -= 1;
+    if (this.timer > 0)
+      return;
+    this.timer = randRange(rng, 30, 180);
+    const dir = this.roamDirs[rng.int(this.roamDirs.length)];
+    this.facing = dir;
+    if (rng.byte() < 128)
+      return;
+    const [tx, ty] = target(this.cellX, this.cellY, dir);
+    if (map.warpAtCell(tx, ty))
+      return;
+    if (canMove(map, entities, this, dir, tilePairs).ok) {
+      this.targetX = tx;
+      this.targetY = ty;
+      this.moving = true;
+      this.progress = 0;
+    }
+  }
+  walkPhase() {
+    if (!this.moving)
+      return 0;
+    const p = this.progress % 16;
+    return p >= 4 && p < 12 ? 1 : 0;
+  }
+}
+
+// voxelmon/game/world/pikachu.ts
+var PIKA_NAME = "PIKACHU_FOLLOWER";
+var PIKA_INDEX = 99;
+function happiness(save) {
+  save.pikachuHappiness ??= 90;
+  return save.pikachuHappiness;
+}
+var HAPPINESS_CHANGES = {
+  LEVELUP: { d: [5, 3, 2], mood: 138 },
+  USEDITEM: { d: [5, 3, 2], mood: 131 },
+  USEDXITEM: { d: [1, 1, 0], mood: 128 },
+  GYMLEADER: { d: [3, 2, 1], mood: 128 },
+  USEDTMHM: { d: [1, 1, 0], mood: 148 },
+  WALKING: { d: [2, 1, 1], mood: 128 },
+  DEPOSITED: { d: [-3, -3, -5], mood: 98 },
+  FAINTED: { d: [-1, -1, -1], mood: 108 },
+  PSNFNT: { d: [-5, -5, -10], mood: 98 },
+  CARELESSTRAINER: { d: [-5, -5, -10], mood: 108 },
+  TRADE: { d: [-10, -10, -20], mood: 0 }
+};
+function isStarterPikachu(save, mon) {
+  if (save.version !== "yellow" || mon?.species !== "PIKACHU")
+    return false;
+  if (mon.otName === undefined && mon.otId === undefined)
+    return true;
+  return mon.otName === save.player?.name && mon.otId === save.player?.id;
+}
+function starterInParty(save, needHealthy = false) {
+  return (save.party ?? []).find((m) => m.species === "PIKACHU" && (!needHealthy || (m.hp ?? 0) > 0));
+}
+function modifyHappiness(save, reason, mon) {
+  if (save.version !== "yellow")
+    return;
+  const row = HAPPINESS_CHANGES[reason];
+  if (!row)
+    return;
+  if (reason === "GYMLEADER" || reason === "WALKING") {
+    if (!starterInParty(save, true))
+      return;
+  } else if (mon?.species !== "PIKACHU") {
+    return;
+  }
+  const h = happiness(save);
+  const band = h < 100 ? 0 : h < 200 ? 1 : 2;
+  save.pikachuHappiness = Math.max(0, Math.min(255, h + row.d[band]));
+  const b = row.mood;
+  if (b !== 128) {
+    const mood = save.pikachuMood ?? 128;
+    if (b > 128) {
+      if (mood < b && !save.pikachuEmotionModifier)
+        save.pikachuMood = b;
+    } else if (mood > b) {
+      save.pikachuMood = b;
+    }
+  }
+}
+function pikachuStep(save, coin) {
+  if (save.version !== "yellow")
+    return;
+  save.pikachuWalkSteps = ((save.pikachuWalkSteps ?? 0) + 1) % 256;
+  if (save.pikachuWalkSteps === 0 && coin())
+    modifyHappiness(save, "WALKING");
+  const mood = save.pikachuMood ?? 128;
+  if (mood < 128)
+    save.pikachuMood = mood + 1;
+  else if (mood > 128)
+    save.pikachuMood = mood - 1;
+}
+
+class PikachuNPC extends NPC {
+  pikachuFollower = true;
+  stepLen = 16;
+  hop = false;
+  goalX;
+  goalY;
+  idle;
+  idleClock = 0;
+  update() {
+    if (!this.moving)
+      return;
+    this.progress += 1;
+    const d = DELTA[this.facing];
+    const cells = this.hop ? 2 : 1;
+    const moved = Math.floor(this.progress * 16 * cells / this.stepLen);
+    this.px = this.cellX * 16 + d[0] * moved;
+    this.py = this.cellY * 16 + d[1] * moved;
+    if (this.progress >= this.stepLen) {
+      this.cellX = this.targetX;
+      this.cellY = this.targetY;
+      this.targetX = undefined;
+      this.targetY = undefined;
+      this.px = this.cellX * 16;
+      this.py = this.cellY * 16;
+      this.moving = false;
+      this.hop = false;
+      this.stepFlip = !this.stepFlip;
+    }
+  }
+}
+function shouldSpawn(w) {
+  const save = w.save;
+  if (save.version !== "yellow" && w.data?.version !== "yellow")
+    return false;
+  if (!save.flags?.EVENT_GOT_STARTER)
+    return false;
+  if (save.onBike || w.player?.surfing)
+    return false;
+  if (typeof w.data?.atlas?.sprites?.pikachu !== "number" && !w.data?.sprites?.SPRITE_PIKACHU)
+    return false;
+  return !!starterInParty(save, true);
+}
+function findFollower(w) {
+  return w.npcs.find((n) => n.pikachuFollower);
+}
+function removeFollower(w) {
+  const i = w.npcs.findIndex((n) => n.pikachuFollower);
+  if (i < 0)
+    return;
+  const npc = w.npcs[i];
+  w.npcs.splice(i, 1);
+  const j = w.entities.indexOf(npc);
+  if (j >= 0)
+    w.entities.splice(j, 1);
+}
+function makeFollower(w, x, y, facing) {
+  const def = {
+    index: PIKA_INDEX,
+    name: PIKA_NAME,
+    sprite: "SPRITE_PIKACHU",
+    movement: "STAY",
+    range: "NONE",
+    x,
+    y,
+    text: "TEXT_PIKACHU_FOLLOWER"
+  };
+  const npc = new PikachuNPC(w.map.id, def, { int: () => 0, byte: () => 0 });
+  npc.passable = true;
+  npc.facing = facing;
+  return npc;
+}
+function onMapEntered(w) {
+  removeFollower(w);
+  w.pikachuTrail = undefined;
+  if (!shouldSpawn(w))
+    return;
+  const p = w.player;
+  const npc = makeFollower(w, p.cellX, p.cellY, p.facing);
+  w.npcs.push(npc);
+  w.entities.push(npc);
+  w.pikachuTrail = { x: p.cellX, y: p.cellY };
+}
+function ledgeAhead(w, cx, cy, dir) {
+  const d = DELTA[dir];
+  const fx = cx + d[0];
+  const fy = cy + d[1];
+  const m = w.map;
+  if (!m.inBounds(fx, fy) || !m.inBounds(cx + d[0] * 2, cy + d[1] * 2))
+    return false;
+  const standing = m.cellTile(cx, cy);
+  const front = m.cellTile(fx, fy);
+  const tileset = m.def.tileset;
+  for (const l of w.data.field?.ledges ?? []) {
+    if ((l.tileset ?? "OVERWORLD") === tileset && l.facing === dir && l.input === dir && l.standingTile === standing && l.ledgeTile === front)
+      return true;
+  }
+  return false;
+}
+function updateFollower(w, rand) {
+  let npc = findFollower(w);
+  if (!npc) {
+    if (shouldSpawn(w))
+      onMapEntered(w);
+    return;
+  }
+  if (!shouldSpawn(w)) {
+    removeFollower(w);
+    return;
+  }
+  const p = w.player;
+  const trail = w.pikachuTrail ??= { x: p.cellX, y: p.cellY };
+  const destX = p.targetX ?? p.cellX;
+  const destY = p.targetY ?? p.cellY;
+  if (destX !== trail.x || destY !== trail.y) {
+    const stepDir = destY > trail.y ? "down" : destY < trail.y ? "up" : destX > trail.x ? "right" : "left";
+    if (trail.ledgeHop === stepDir) {
+      trail.ledgeHop = undefined;
+    } else {
+      trail.ledgeHop = ledgeAhead(w, trail.x, trail.y, stepDir) ? stepDir : undefined;
+      npc.goalX = trail.x;
+      npc.goalY = trail.y;
+    }
+    trail.x = destX;
+    trail.y = destY;
+    npc.idle = undefined;
+  }
+  npc.hidden = !npc.moving && npc.cellX === p.cellX && npc.cellY === p.cellY;
+  if (npc.moving)
+    return;
+  if (npc.goalX === undefined || npc.goalY === undefined) {
+    idleTick(w, npc, rand);
+    return;
+  }
+  const gx = npc.goalX;
+  const gy = npc.goalY;
+  if (npc.cellX === gx && npc.cellY === gy) {
+    npc.goalX = npc.goalY = undefined;
+    idleTick(w, npc, rand);
+    return;
+  }
+  const far = Math.abs(npc.cellX - gx) + Math.abs(npc.cellY - gy);
+  if (far > 6) {
+    npc.cellX = gx;
+    npc.cellY = gy;
+    npc.px = gx * 16;
+    npc.py = gy * 16;
+    npc.goalX = npc.goalY = undefined;
+    return;
+  }
+  const dir = npc.cellX < gx ? "right" : npc.cellX > gx ? "left" : npc.cellY < gy ? "down" : "up";
+  npc.facing = dir;
+  const d = DELTA[dir];
+  npc.targetX = npc.cellX + d[0];
+  npc.targetY = npc.cellY + d[1];
+  if (ledgeAhead(w, npc.cellX, npc.cellY, dir)) {
+    npc.targetX = npc.cellX + d[0] * 2;
+    npc.targetY = npc.cellY + d[1] * 2;
+    npc.goalX = npc.targetX;
+    npc.goalY = npc.targetY;
+    npc.hop = true;
+  }
+  const stepLen = p.stepSpeed?.() ?? p.stepFrames ?? 16;
+  npc.stepLen = far > 1 && !npc.hop ? Math.max(1, Math.floor(stepLen / 2)) : stepLen;
+  npc.moving = true;
+  npc.progress = 0;
+  npc.update();
+}
+function idleTick(_w, npc, rand) {
+  npc.idleClock = (npc.idleClock + 1) % 2;
+  if (npc.idleClock !== 0)
+    return;
+  npc.idle ??= { kind: "wait", frames: 32 };
+  npc.idle.frames -= 1;
+  if (npc.idle.frames > 0)
+    return;
+  npc.facing = ["down", "up", "left", "right"][rand(4)];
+  npc.idle.frames = 32;
+}
+var EMOTIONS = {
+  2: { bubble: 3, clip: 35 },
+  3: { clip: 40 },
+  4: { clip: 29 },
+  5: { clip: 31 },
+  6: { bubble: 4 },
+  7: { clip: 1 },
+  8: { clip: 39 },
+  9: { bubble: 4, clip: 6 },
+  10: { bubble: 5, clip: 5 },
+  11: { bubble: 7, clip: 37 },
+  14: { bubble: 6, clip: 10 },
+  15: { clip: 34 },
+  16: { clip: 33 },
+  17: { clip: 13 },
+  19: { bubble: 5, clip: 33 },
+  20: { bubble: 5, clip: 5 },
+  21: { bubble: 8 },
+  22: { clip: 4 },
+  23: { clip: 19 },
+  24: { bubble: 1 },
+  25: { bubble: 6, clip: 35 },
+  26: { bubble: 7, clip: 37 },
+  27: { clip: 9 },
+  28: { clip: 15 },
+  29: { clip: 5 },
+  30: { bubble: 5, turnAway: true, clip: 5 },
+  31: { clip: 19 },
+  32: { clip: 26 }
+};
+var MOOD_THRESHOLDS = [40, 127, 128, 210, 255];
+var MOOD_MATRIX = [
+  [50, [14, 14, 6, 13, 13]],
+  [100, [9, 9, 5, 12, 12]],
+  [130, [3, 3, 1, 8, 8]],
+  [160, [3, 3, 4, 15, 15]],
+  [200, [17, 17, 7, 2, 2]],
+  [250, [17, 17, 16, 10, 10]],
+  [255, [17, 17, 19, 20, 20]]
+];
+var PIKAPIC_DUR = {
+  1: 40,
+  2: 44,
+  3: 80,
+  4: 70,
+  5: 32,
+  6: 50,
+  7: 58,
+  8: 44,
+  9: 56,
+  10: 56,
+  11: 100,
+  12: 50,
+  13: 50,
+  14: 40,
+  15: 50,
+  16: 32,
+  17: 100,
+  18: 32,
+  19: 44,
+  20: 50,
+  21: 40,
+  22: 40,
+  23: 70,
+  24: 60,
+  25: 50,
+  26: 100,
+  27: 30,
+  28: 64
+};
+var PIKAPIC_SCRIPT = { 29: 10, 30: 20, 31: 23, 32: 23 };
+var MODIFIER_EMOTIONS = [18, 21, 23, 24, 25];
+function moodEmotion(save) {
+  const mood = save.pikachuMood ?? 128;
+  let col = MOOD_THRESHOLDS.findIndex((t) => mood <= t);
+  if (col < 0)
+    col = 4;
+  const h = happiness(save);
+  const row = MOOD_MATRIX.find(([limit]) => h <= limit) ?? MOOD_MATRIX[MOOD_MATRIX.length - 1];
+  return row[1][col];
+}
+function selectEmotion(save, mapId) {
+  if (mapId === "POKEMON_FAN_CLUB")
+    return 30;
+  if (mapId === "PEWTER_POKECENTER")
+    return 26;
+  const starter = starterInParty(save);
+  if (starter?.status === "SLP")
+    return 11;
+  if (starter?.status)
+    return 28;
+  if (mapId.startsWith("POKEMON_TOWER_"))
+    return 22;
+  const m = save.pikachuEmotionModifier;
+  if (m && MODIFIER_EMOTIONS[m - 1] !== undefined) {
+    save.pikachuEmotionModifier = undefined;
+    return MODIFIER_EMOTIONS[m - 1];
+  }
+  return moodEmotion(save);
+}
+function talkRows(w, picPage) {
+  const save = w.save;
+  const emotion = selectEmotion(save, w.map.id);
+  const e = EMOTIONS[emotion] ?? {};
+  const script = PIKAPIC_SCRIPT[emotion] ?? emotion;
+  const hold = (PIKAPIC_DUR[script] ?? 40) * 3;
+  const rows = [];
+  if (e.turnAway)
+    rows.push(["face_object", PIKA_NAME, w.player.facing]);
+  if (e.clip)
+    rows.push(["pika_clip", e.clip]);
+  if (picPage >= 0)
+    rows.push(["pic", picPage, 56, 40, 48, 48]);
+  rows.push(e.bubble ? ["emote", PIKA_NAME, e.bubble, hold] : ["wait", hold]);
+  if (picPage >= 0)
+    rows.push(["pic_hide"]);
+  return rows;
 }
 
 // voxelmon/game/rules/timing.ts
@@ -1984,26 +2536,26 @@ ${label} fell!`];
 ${label}
 greatly fell!`];
 }
-function inflictStatus(battle, target, status, opts) {
-  if (target.mon.status)
+function inflictStatus(battle, target2, status, opts) {
+  if (target2.mon.status)
     return [];
-  if (target.substituteHP !== undefined && (opts.secondary || status === "PSN")) {
+  if (target2.substituteHP !== undefined && (opts.secondary || status === "PSN")) {
     return [];
   }
   if (opts.secondary && status !== "PSN") {
-    for (const t of target.curTypes ?? []) {
+    for (const t of target2.curTypes ?? []) {
       if (opts.moveType === t)
         return [];
     }
   }
-  const record = recordFor(target.statuses, status) ?? recordFor(undefined, status);
-  if (record?.canInflict && !record.canInflict(target, { moveType: opts.moveType })) {
+  const record = recordFor(target2.statuses, status) ?? recordFor(undefined, status);
+  if (record?.canInflict && !record.canInflict(target2, { moveType: opts.moveType })) {
     return [];
   }
-  target.mon.status = status;
-  const display = displayName(target);
+  target2.mon.status = status;
+  const display = displayName(target2);
   if (record?.onInflict) {
-    return record.onInflict(target, { toxic: opts.toxic }, display, battle.rng);
+    return record.onInflict(target2, { toxic: opts.toxic }, display, battle.rng);
   }
   return [`${display}
 was afflicted
@@ -2024,12 +2576,12 @@ function statusMove(status) {
     return msgs.length === 0 ? [FAILED] : msgs;
   };
 }
-function confuse(battle, target, pierceSub = false) {
-  if (target.confusedTurns !== undefined || target.substituteHP !== undefined && !pierceSub) {
+function confuse(battle, target2, pierceSub = false) {
+  if (target2.confusedTurns !== undefined || target2.substituteHP !== undefined && !pierceSub) {
     return [FAILED];
   }
-  target.confusedTurns = randRange(battle.rng, 2, 5);
-  return [`${displayName(target)}
+  target2.confusedTurns = randRange(battle.rng, 2, 5);
+  return [`${displayName(target2)}
 became confused!`];
 }
 function drainHalf(text) {
@@ -2215,38 +2767,38 @@ SUBSTITUTE!`];
 ${displayName(ctx.target)}'s!`];
   },
   TRANSFORM_EFFECT: (ctx) => {
-    const { user, target } = ctx;
+    const { user, target: target2 } = ctx;
     user.curStats = {
       ...user.mon.stats,
-      attack: target.curStats.attack,
-      defense: target.curStats.defense,
-      speed: target.curStats.speed,
-      special: target.curStats.special
+      attack: target2.curStats.attack,
+      defense: target2.curStats.defense,
+      speed: target2.curStats.speed,
+      special: target2.curStats.special
     };
-    user.curTypes = [...target.curTypes];
-    user.stages = { ...target.stages };
-    user.curMoves = target.curMoves.map((mv) => ({ id: mv.id, pp: 5 }));
-    user.transformedInto = target.mon.species;
+    user.curTypes = [...target2.curTypes];
+    user.stages = { ...target2.stages };
+    user.curMoves = target2.curMoves.map((mv) => ({ id: mv.id, pp: 5 }));
+    user.transformedInto = target2.mon.species;
     return [`${displayName(user)}
 transformed into
-${target.name}!`];
+${target2.name}!`];
   },
   DISABLE_EFFECT: (ctx) => {
-    const target = ctx.target;
-    if (target.disabledSlot !== undefined)
+    const target2 = ctx.target;
+    if (target2.disabledSlot !== undefined)
       return [FAILED];
     const usable = [];
-    target.curMoves.forEach((mv, i) => {
+    target2.curMoves.forEach((mv, i) => {
       if (mv.pp > 0)
         usable.push(i + 1);
     });
     if (usable.length === 0)
       return [FAILED];
     const slot = usable[randRange(ctx.rng, 1, usable.length) - 1];
-    target.disabledSlot = slot;
-    target.disabledTurns = randRange(ctx.rng, 1, 8);
-    const id = target.curMoves[slot - 1].id;
-    return [`${displayName(target)}'s
+    target2.disabledSlot = slot;
+    target2.disabledTurns = randRange(ctx.rng, 1, 8);
+    const id = target2.curMoves[slot - 1].id;
+    return [`${displayName(target2)}'s
 ${ctx.data.moves[id]?.name ?? id} was
 disabled!`];
   },
@@ -2457,19 +3009,19 @@ is storing energy!`);
   },
   SWITCH_AND_TELEPORT_EFFECT: {
     perform: (ctx) => {
-      const { battle, user, target, move } = ctx;
+      const { battle, user, target: target2, move } = ctx;
       if (!battle.trainerBattle) {
         const uLvl = user.mon.level;
-        const tLvl = target.mon.level;
+        const tLvl = target2.mon.level;
         let ok = uLvl >= tLvl;
         if (!ok)
           ok = randRange(ctx.rng, 0, uLvl + tLvl) >= Math.floor(tLvl / 4);
         if (ok) {
           if (move.id === "ROAR")
-            ctx.say(`${displayName(target)}
+            ctx.say(`${displayName(target2)}
 ran away scared!`);
           else if (move.id === "WHIRLWIND")
-            ctx.say(`${displayName(target)}
+            ctx.say(`${displayName(target2)}
 was blown away!`);
           else
             ctx.say(`${displayName(user)}
@@ -2481,14 +3033,14 @@ ran from battle!`);
         } else {
           battle.cancelMoveAnim();
           ctx.say(`It didn't affect
-${displayName(target)}!`);
+${displayName(target2)}!`);
         }
       } else if (move.id === "TELEPORT") {
         battle.cancelMoveAnim();
         ctx.say(FAILED);
       } else {
         battle.cancelMoveAnim();
-        ctx.say(`${displayName(target)}
+        ctx.say(`${displayName(target2)}
 is unaffected!`);
       }
     }
@@ -2540,14 +3092,14 @@ function warnUnknown(effect) {
 function effectRecord(effect) {
   return effect === undefined ? undefined : EFFECTS[effect];
 }
-function makeCtx(battle, user, target, move, moveInst, isCalled) {
+function makeCtx(battle, user, target2, move, moveInst, isCalled) {
   return {
     battle,
     data: battle.data,
     rng: battle.rng,
     ruleset: battle.ruleset,
     user,
-    target,
+    target: target2,
     move,
     moveInst,
     isCalled,
@@ -2578,9 +3130,9 @@ function hitCount(ctx, record) {
   return dist[r];
 }
 function runDamaging(battle, ctx, record) {
-  const { user, target, move, moveInst } = ctx;
+  const { user, target: target2, move, moveInst } = ctx;
   const neverMiss = record?.neverMiss;
-  if (target.invulnerable && !neverMiss) {
+  if (target2.invulnerable && !neverMiss) {
     if (!record?.explode)
       battle.cancelMoveAnim();
     missBeat(battle, record);
@@ -2601,7 +3153,7 @@ attack missed!`);
   const hitsWanted = hitCount(ctx, record);
   record?.beforeAccuracy?.(ctx);
   if (!neverMiss) {
-    if (!battle.accuracyRoll(move, user, target)) {
+    if (!battle.accuracyRoll(move, user, target2)) {
       if (!record?.explode)
         battle.cancelMoveAnim();
       missBeat(battle, record);
@@ -2615,7 +3167,7 @@ attack missed!`);
   let dmg;
   let info;
   if (move.id === "COUNTER") {
-    const lastId = target.lastMove;
+    const lastId = target2.lastMove;
     const lm = lastId && lastId !== "COUNTER" ? battle.data.moves[lastId] : undefined;
     let counterable = false;
     if (lm && (lm.power ?? 0) > 0) {
@@ -2641,7 +3193,7 @@ attack missed!`);
     dmg = chosen;
     info = typeof extra === "object" && extra ? extra : { crit: false, typeMult: 10 };
   } else {
-    [dmg, info] = battle.computeDamage(user, target, move, {
+    [dmg, info] = battle.computeDamage(user, target2, move, {
       rng: battle.rng,
       explode: record?.explode || undefined
     });
@@ -2651,7 +3203,7 @@ attack missed!`);
       battle.cancelMoveAnim();
     missBeat(battle, record);
     battle.sayNext(`It doesn't affect
-${displayName(target)}!`);
+${displayName(target2)}!`);
     record?.onMiss?.(ctx, "immune");
     return;
   }
@@ -2675,11 +3227,11 @@ attack missed!`);
   let landed = 0;
   let brokeSub = false;
   for (let h = 1;h <= hitsWanted; h++) {
-    if (target.mon.hp <= 0)
+    if (target2.mon.hp <= 0)
       break;
     const hitRow = h === 1 ? battle.moveAnimRow ?? battle.insertHitRow(null, user.isPlayer) : battle.insertHitRow(move.id, user.isPlayer);
-    const hadSub = target.substituteHP !== undefined;
-    const dealt = battle.applyDamage(target, dmg);
+    const hadSub = target2.substituteHP !== undefined;
+    const dealt = battle.applyDamage(target2, dmg);
     totalDealt += dealt;
     landed = h;
     if (dealt > 0)
@@ -2696,7 +3248,7 @@ effective!`);
       battle.sayNext(`It's not very
 effective...`);
     }
-    if (hadSub && target.substituteHP === undefined) {
+    if (hadSub && target2.substituteHP === undefined) {
       brokeSub = true;
       break;
     }
@@ -2718,15 +3270,15 @@ ${hits} times!` : `Hit ${hits} times!`);
 hit with recoil!`);
     battle.applyDamage(user, recoil);
   }
-  if (record?.run && record.kind !== "primary" && target.mon.hp > 0 && totalDealt > 0) {
+  if (record?.run && record.kind !== "primary" && target2.mon.hp > 0 && totalDealt > 0) {
     for (const m of record.run(ctx))
       battle.sayNext(m);
   }
   if (record === undefined && move.effect) {
     warnUnknown(move.effect);
   }
-  if (target.mon.hp <= 0)
-    battle.onFaint(target);
+  if (target2.mon.hp <= 0)
+    battle.onFaint(target2);
   if (user.mon.hp <= 0)
     battle.onFaint(user);
 }
@@ -2939,15 +3491,15 @@ function maxPP(data, mv) {
     return null;
   return base + (mv.ppUps ?? 0) * Math.floor(base / 5);
 }
-function cureActiveToxic(battle, target) {
+function cureActiveToxic(battle, target2) {
   if (!battle)
     return;
   for (const b of [battle.player, battle.enemy]) {
-    if (b && b.mon === target)
+    if (b && b.mon === target2)
       b.toxicCounter = undefined;
   }
 }
-function useItem(data, save, itemId, target, battle, moveIndex) {
+function useItem(data, save, itemId, target2, battle, moveIndex) {
   const def = data?.items?.[itemId];
   const name = def?.name ?? itemId;
   if (battle && refusedInBattle(data, itemId)) {
@@ -2998,7 +3550,7 @@ ran!`, { enemy: battle.enemy?.name ?? "" })]
     }
   }
   if (itemId === "ETHER" || itemId === "MAX_ETHER" || itemId === "ELIXER" || itemId === "MAX_ELIXER") {
-    if (!target)
+    if (!target2)
       return { kind: "failed", msgs: [noEffect(data)] };
     const full = itemId === "MAX_ETHER" || itemId === "MAX_ELIXER";
     const all = itemId === "ELIXER" || itemId === "MAX_ELIXER";
@@ -3011,10 +3563,10 @@ ran!`, { enemy: battle.enemy?.name ?? "" })]
     };
     let restored = false;
     if (all) {
-      for (const mv of target.moves)
+      for (const mv of target2.moves)
         restored = restore(mv) || restored;
     } else {
-      const mv = target.moves[moveIndex ?? 0];
+      const mv = target2.moves[moveIndex ?? 0];
       restored = mv ? restore(mv) : false;
     }
     if (!restored)
@@ -3023,69 +3575,69 @@ ran!`, { enemy: battle.enemy?.name ?? "" })]
   }
   const heal = HEAL_AMOUNT[itemId];
   if (heal !== undefined || itemId === "MAX_POTION" || itemId === "FULL_RESTORE") {
-    if (itemId === "FULL_RESTORE" && target && target.hp > 0 && target.hp >= target.stats.hp && target.status) {
-      target.status = null;
-      cureActiveToxic(battle, target);
+    if (itemId === "FULL_RESTORE" && target2 && target2.hp > 0 && target2.hp >= target2.stats.hp && target2.status) {
+      target2.status = null;
+      cureActiveToxic(battle, target2);
       return {
         kind: "consumed",
         msgs: [itemText(data, CURE_TEXT.FULL_HEAL, `{RAM:wNameBuffer}'s
-health returned!`, { name: monName(data, target) })]
+health returned!`, { name: monName(data, target2) })]
       };
     }
-    if (!target || target.hp <= 0 || target.hp >= target.stats.hp) {
+    if (!target2 || target2.hp <= 0 || target2.hp >= target2.stats.hp) {
       return { kind: "failed", msgs: [noEffect(data)] };
     }
-    const before = target.hp;
-    target.hp = heal === undefined ? target.stats.hp : Math.min(target.stats.hp, target.hp + heal);
+    const before = target2.hp;
+    target2.hp = heal === undefined ? target2.stats.hp : Math.min(target2.stats.hp, target2.hp + heal);
     if (itemId === "FULL_RESTORE") {
-      target.status = null;
-      cureActiveToxic(battle, target);
+      target2.status = null;
+      cureActiveToxic(battle, target2);
     }
     return {
       kind: "consumed",
       msgs: [itemText(data, "_PotionText", `{RAM:wNameBuffer}
-recovered by {NUM}!`, { name: monName(data, target), num: target.hp - before })],
+recovered by {NUM}!`, { name: monName(data, target2), num: target2.hp - before })],
       healedFrom: before
     };
   }
   const cures = STATUS_HEAL[itemId];
   if (cures) {
-    if (!target || !target.status || !cures.includes(target.status)) {
+    if (!target2 || !target2.status || !cures.includes(target2.status)) {
       return { kind: "failed", msgs: [noEffect(data)] };
     }
-    target.status = null;
-    cureActiveToxic(battle, target);
+    target2.status = null;
+    cureActiveToxic(battle, target2);
     return {
       kind: "consumed",
       msgs: [itemText(data, CURE_TEXT[itemId], `{RAM:wNameBuffer}'s
 status returned
-to normal!`, { name: monName(data, target) })]
+to normal!`, { name: monName(data, target2) })]
     };
   }
   if (itemId === "REVIVE" || itemId === "MAX_REVIVE") {
-    if (!target || target.hp > 0)
+    if (!target2 || target2.hp > 0)
       return { kind: "failed", msgs: [noEffect(data)] };
-    target.status = null;
-    target.hp = itemId === "REVIVE" ? Math.floor(target.stats.hp / 2) : target.stats.hp;
+    target2.status = null;
+    target2.hp = itemId === "REVIVE" ? Math.floor(target2.stats.hp / 2) : target2.stats.hp;
     return {
       kind: "consumed",
       msgs: [itemText(data, "_ReviveText", `{RAM:wNameBuffer}
-is revitalized!`, { name: monName(data, target) })],
+is revitalized!`, { name: monName(data, target2) })],
       healedFrom: 0
     };
   }
   if (STONES.has(itemId)) {
-    if (!target)
+    if (!target2)
       return { kind: "failed", msgs: [noEffect(data)] };
-    if (data?.version === "yellow" && target.species === "PIKACHU" && isOwn(save, target)) {
+    if (data?.version === "yellow" && target2.species === "PIKACHU" && isOwn(save, target2)) {
       return {
         kind: "failed",
         msgs: [itemText(data, "_RefusingText", `{RAM:wNameBuffer}
-is refusing!`, { name: monName(data, target) })],
+is refusing!`, { name: monName(data, target2) })],
         refused: true
       };
     }
-    for (const evo of data?.pokemon?.[target.species]?.evolutions ?? []) {
+    for (const evo of data?.pokemon?.[target2.species]?.evolutions ?? []) {
       if (evo.method === "ITEM" && evo.item === itemId) {
         return { kind: "consumed", msgs: [], evolveTo: evo.species };
       }
@@ -3094,28 +3646,28 @@ is refusing!`, { name: monName(data, target) })],
   }
   const vit = VITAMINS[itemId];
   if (vit) {
-    if (!target)
+    if (!target2)
       return { kind: "failed", msgs: [noEffect(data)] };
-    const se = target.statExp ??= {};
+    const se = target2.statExp ??= {};
     const cur = se[vit] ?? 0;
     if (cur >= 25600)
       return { kind: "failed", msgs: [noEffect(data)] };
     se[vit] = Math.min(65535, cur + 2560);
-    const sdef = data?.pokemon?.[target.species];
+    const sdef = data?.pokemon?.[target2.species];
     if (sdef) {
-      target.stats = calc(sdef, target.level, target.dvs, target.statExp);
-      target.hp = Math.min(target.hp, target.stats.hp);
+      target2.stats = calc(sdef, target2.level, target2.dvs, target2.statExp);
+      target2.hp = Math.min(target2.hp, target2.stats.hp);
     }
     return {
       kind: "consumed",
       msgs: [itemText(data, "_VitaminStatRoseText", `{RAM:wNameBuffer}'s
-{RAM:wStringBuffer} rose.`, { name: monName(data, target), str: vit === "hp" ? "HEALTH" : vit.toUpperCase() })]
+{RAM:wStringBuffer} rose.`, { name: monName(data, target2), str: vit === "hp" ? "HEALTH" : vit.toUpperCase() })]
     };
   }
   if (itemId === "PP_UP") {
-    if (!target)
+    if (!target2)
       return { kind: "failed", msgs: [noEffect(data)] };
-    const mv = target.moves[moveIndex ?? 0];
+    const mv = target2.moves[moveIndex ?? 0];
     const base = mv ? data?.moves?.[mv.id]?.pp : undefined;
     if (mv && typeof base === "number" && (mv.ppUps ?? 0) < 3) {
       mv.ppUps = (mv.ppUps ?? 0) + 1;
@@ -3764,6 +4316,7 @@ out!`);
       this.queue.push({ anim: "POOF_ANIM", attackerIsPlayer: false });
       this.act(() => {
         this.sendingOut = false;
+        this.pushStarterPikachuVoice();
       });
     }
     this.markParticipant();
@@ -3799,6 +4352,11 @@ attacked!`).replace("{RAM:wEnemyMonNick}", this.enemy.name));
     }
     this.say(`Wild ${this.enemy.name}
 appeared!`);
+  }
+  pushStarterPikachuVoice() {
+    if (!isStarterPikachu(this.save, this.player.mon))
+      return;
+    this.audioCues.push(`pika:${this.player.mon.status === "SLP" ? 37 : 11}`);
   }
   sendOutText(name) {
     const e = this.enemy.mon;
@@ -4110,8 +4668,8 @@ this move!`);
     for (const [isPlayer, action] of order2) {
       this.act(() => {
         const user = isPlayer ? this.player : this.enemy;
-        const target = isPlayer ? this.enemy : this.player;
-        this.executeAction(user, target, action);
+        const target2 = isPlayer ? this.enemy : this.player;
+        this.executeAction(user, target2, action);
       });
     }
     this.act(() => {
@@ -4176,10 +4734,10 @@ this move!`);
         b.shownStatus = b.mon.status ?? null;
     }
   }
-  executeAction(user, target, action) {
+  executeAction(user, target2, action) {
     if (this.result)
       return;
-    if (user.mon.hp <= 0 || target.mon.hp <= 0)
+    if (user.mon.hp <= 0 || target2.mon.hp <= 0)
       return;
     if (!action)
       return;
@@ -4200,36 +4758,36 @@ scared to move!`).replace("{RAM:wBattleMonNick}", user.name));
 Get out...`));
       return;
     }
-    user.boundTurns = target.trappingTurns !== undefined ? Math.max(1, target.trappingTurns) : undefined;
+    user.boundTurns = target2.trappingTurns !== undefined ? Math.max(1, target2.trappingTurns) : undefined;
     if (action.special === "recharge") {
-      if (!this.preRechargeChecks(user, target)) {
+      if (!this.preRechargeChecks(user, target2)) {
         user.mustRecharge = undefined;
         this.sayNext(`${displayName(user)}
 must recharge!`);
       }
     } else if (action.special === "bound") {
-      if (target.trappingTurns !== undefined)
-        this.statusInterrupt(user, target);
+      if (target2.trappingTurns !== undefined)
+        this.statusInterrupt(user, target2);
     } else if (action.special === "trapping") {
-      if (!this.statusInterrupt(user, target))
-        this.continueTrapping(user, target);
+      if (!this.statusInterrupt(user, target2))
+        this.continueTrapping(user, target2);
     } else if (action.special === "bide") {
-      if (!this.statusInterrupt(user, target))
-        this.continueBide(user, target);
-    } else if (!this.statusInterrupt(user, target)) {
-      this.performMove(user, target, action, false);
+      if (!this.statusInterrupt(user, target2))
+        this.continueBide(user, target2);
+    } else if (!this.statusInterrupt(user, target2)) {
+      this.performMove(user, target2, action, false);
     }
     this.actNext(() => this.syncShownStatus());
     if (this.residualAfterMove()) {
-      this.actNext(() => this.residualFor(user, target));
+      this.actNext(() => this.residualFor(user, target2));
     }
   }
-  statusInterrupt(user, target) {
+  statusInterrupt(user, target2) {
     const res = beforeMove(user, this.rng);
     for (const m of res.messages)
       this.sayNext(prefixEnemy(m, user));
     if (res.selfHit) {
-      const [dmg] = this.computeDamage(user, user, { id: "CONFUSED", power: 40, type: "NORMAL", accuracy: 100 }, { rng: this.rng, forceCrit: false, typeless: true, screens: target });
+      const [dmg] = this.computeDamage(user, user, { id: "CONFUSED", power: 40, type: "NORMAL", accuracy: 100 }, { rng: this.rng, forceCrit: false, typeless: true, screens: target2 });
       this.sayNext(`It hurt itself in
 its confusion!`);
       this.clearVolatiles(user, true);
@@ -4279,7 +4837,7 @@ its confusion!`);
       return true;
     return false;
   }
-  performMove(user, target, moveInst, isCalled) {
+  performMove(user, target2, moveInst, isCalled) {
     const move = this.data.moves[moveInst.id];
     if (!move) {
       console.warn(`unknown move instance ${moveInst.id}`);
@@ -4307,13 +4865,13 @@ used ${move.name}!`);
         this.moveAnimRow = row;
       }
     }
-    const ctx = makeCtx(this, user, target, move, moveInst, isCalled);
+    const ctx = makeCtx(this, user, target2, move, moveInst, isCalled);
     if (record?.callsMove) {
       const pick = record.callsMove(ctx);
       if (move.id === "MIRROR_MOVE" || !pick)
         this.cancelMoveAnim();
       if (pick)
-        this.performMove(user, target, { id: pick, pp: 1 }, true);
+        this.performMove(user, target2, { id: pick, pp: 1 }, true);
       return;
     }
     user.lastMove = move.id;
@@ -4340,7 +4898,7 @@ is charging up!`;
       return;
     }
     if (move.power === 0 && record?.kind === "primary" && record.run) {
-      if (record.accuracyChecked && (target.invulnerable || !this.accuracyRoll(move, user, target))) {
+      if (record.accuracyChecked && (target2.invulnerable || !this.accuracyRoll(move, user, target2))) {
         this.cancelMoveAnim();
         this.sayNext(`${displayName(user)}'s
 attack missed!`);
@@ -4366,7 +4924,7 @@ attack missed!`);
     }
     runDamaging(this, ctx, record);
   }
-  preRechargeChecks(user, target) {
+  preRechargeChecks(user, target2) {
     if (user.skipMove) {
       user.skipMove = undefined;
       return true;
@@ -4389,7 +4947,7 @@ is fast asleep!`);
 is frozen solid!`);
       return true;
     }
-    if (target.trappingTurns !== undefined) {
+    if (target2.trappingTurns !== undefined) {
       this.sayNext(`${displayName(user)}
 can't move!`);
       return true;
@@ -4402,17 +4960,17 @@ flinched!`);
     }
     return false;
   }
-  continueTrapping(user, target) {
+  continueTrapping(user, target2) {
     this.sayNext(`${displayName(user)}'s
 attack continues!`);
     if (user.trapMove)
       this.animNext(user.trapMove, user.isPlayer);
     user.trappingTurns = (user.trappingTurns ?? 1) - 1;
-    this.applyDamage(target, user.trapDamage ?? 1);
-    if (target.mon.hp <= 0)
-      this.onFaint(target);
+    this.applyDamage(target2, user.trapDamage ?? 1);
+    if (target2.mon.hp <= 0)
+      this.onFaint(target2);
   }
-  continueBide(user, target) {
+  continueBide(user, target2) {
     user.bideTurns = (user.bideTurns ?? 1) - 1;
     if (user.bideTurns > 0) {
       this.sayNext(`${displayName(user)}
@@ -4429,9 +4987,9 @@ unleashed energy!`);
       return;
     }
     this.animNext("BIDE", user.isPlayer);
-    this.applyDamage(target, dmg);
-    if (target.mon.hp <= 0)
-      this.onFaint(target);
+    this.applyDamage(target2, dmg);
+    if (target2.mon.hp <= 0)
+      this.onFaint(target2);
   }
   selfDestruct(user) {
     user.mon.hp = 0;
@@ -4445,39 +5003,39 @@ unleashed energy!`);
     this.result = "run";
     this.afterQueue = "finish";
   }
-  accuracyRoll(move, user, target) {
-    return accuracyRoll(this.ruleset, move, user, target, this.rng);
+  accuracyRoll(move, user, target2) {
+    return accuracyRoll(this.ruleset, move, user, target2, this.rng);
   }
-  computeDamage(user, target, move, opts) {
-    return compute(this.ruleset, this.chart, user, target, move, opts);
+  computeDamage(user, target2, move, opts) {
+    return compute(this.ruleset, this.chart, user, target2, move, opts);
   }
-  inflictStatus(target, status, opts) {
-    return inflictStatus(this, target, status, opts);
+  inflictStatus(target2, status, opts) {
+    return inflictStatus(this, target2, status, opts);
   }
-  applyDamage(target, dmg) {
-    if (target.substituteHP !== undefined) {
-      target.substituteHP -= dmg;
-      if (target.substituteHP <= 0) {
-        target.substituteHP = undefined;
-        this.sayNext(`${displayName(target)}'s
+  applyDamage(target2, dmg) {
+    if (target2.substituteHP !== undefined) {
+      target2.substituteHP -= dmg;
+      if (target2.substituteHP <= 0) {
+        target2.substituteHP = undefined;
+        this.sayNext(`${displayName(target2)}'s
 SUBSTITUTE broke!`);
       } else {
         this.sayNext(`The SUBSTITUTE
 took damage for
-${displayName(target)}!`);
+${displayName(target2)}!`);
       }
       return dmg;
     }
-    const dealt = Math.min(dmg, target.mon.hp);
-    target.mon.hp -= dealt;
+    const dealt = Math.min(dmg, target2.mon.hp);
+    target2.mon.hp -= dealt;
     if (dealt > 0)
-      this.drainNext(target, target.mon.hp);
-    if (target.bideTurns !== undefined) {
-      target.bideDamage = (target.bideDamage ?? 0) + dealt;
+      this.drainNext(target2, target2.mon.hp);
+    if (target2.bideTurns !== undefined) {
+      target2.bideDamage = (target2.bideDamage ?? 0) + dealt;
     }
-    if (target.rageMove && dealt > 0) {
-      target.stages.attack = Math.min(6, (target.stages.attack ?? 0) + 1);
-      this.sayNext(`${displayName(target)}'s
+    if (target2.rageMove && dealt > 0) {
+      target2.stages.attack = Math.min(6, (target2.stages.attack ?? 0) + 1);
+      this.sayNext(`${displayName(target2)}'s
 RAGE is building!`);
     }
     return dealt;
@@ -4499,8 +5057,13 @@ RAGE is building!`);
       if (kind)
         this.actNext(() => this.audioCues.push(`music:victory:${kind}`));
     }
+    if (battler.isPlayer && isStarterPikachu(this.save, battler.mon)) {
+      this.actNext(() => this.audioCues.push("pika:4"));
+    }
     this.sayNext(`${displayName(battler)}
 fainted!`);
+    if (battler.isPlayer)
+      modifyHappiness(this.save, "FAINTED", battler.mon);
     if (battler.isPlayer) {
       this.act(() => this.playerMonFainted());
     } else {
@@ -4529,6 +5092,8 @@ fainted!`);
       if (levels.length > 0)
         this.leveledUp.add(mon);
       const name = mon.nickname ?? this.data.pokemon[mon.species].name;
+      for (let k = 0;k < levels.length; k++)
+        modifyHappiness(this.save, "LEVELUP", mon);
       if (levels.length > 0) {
         this.gearLevelUp = {
           name,
@@ -4970,6 +5535,7 @@ to fight!`);
     this.animNext("POOF_ANIM", false);
     this.actNext(() => {
       this.sendingOut = false;
+      this.pushStarterPikachuVoice();
     });
     this.phase = "messages";
     this.afterQueue = "menu";
@@ -4997,6 +5563,7 @@ to fight!`);
     this.animNext("POOF_ANIM", false);
     this.actNext(() => {
       this.sendingOut = false;
+      this.pushStarterPikachuVoice();
     });
   }
   enemySwitch(_slot) {}
@@ -6235,15 +6802,15 @@ POKéMON?`;
     }
     this.game.push(new PartyState(this.game, {
       onPick: (i) => {
-        const target = party[i];
-        const max = target?.stats?.hp ?? target?.hp ?? 0;
-        if (!target || i === from || target.hp <= 0 || target.hp >= max) {
+        const target2 = party[i];
+        const max = target2?.stats?.hp ?? target2?.hp ?? 0;
+        if (!target2 || i === from || target2.hp <= 0 || target2.hp >= max) {
           this.game.showText?.(`It won't have any
 effect.`);
           return;
         }
         user.hp -= share;
-        target.hp = Math.min(max, target.hp + share);
+        target2.hp = Math.min(max, target2.hp + share);
       },
       onCancel: () => {}
     }));
@@ -6555,181 +7122,6 @@ function roll(encounterDef, rng, buckets = ENCOUNTER_BUCKETS) {
     }
   }
   return null;
-}
-
-// voxelmon/game/world/collision.ts
-var DIR_CYCLE = ["up", "right", "down", "left"];
-function rotateDir(d, quarterTurns) {
-  const i = DIR_CYCLE.indexOf(d);
-  if (i < 0)
-    return d;
-  const q = (Math.round(quarterTurns) % 4 + 4) % 4;
-  return DIR_CYCLE[(i + q) % 4];
-}
-var DELTA = {
-  up: [0, -1],
-  down: [0, 1],
-  left: [-1, 0],
-  right: [1, 0]
-};
-function target(cx, cy, dir) {
-  const d = DELTA[dir];
-  return [cx + d[0], cy + d[1]];
-}
-function occupied(entities, cx, cy, ignore) {
-  for (const e of entities) {
-    if (e !== ignore && !e.passable && !e.hidden) {
-      if (e.cellX === cx && e.cellY === cy || e.targetX === cx && e.targetY === cy) {
-        return e;
-      }
-    }
-  }
-  return null;
-}
-function pairBlocked(map, mover, sx, sy, tx, ty, tilePairs) {
-  if (!tilePairs)
-    return false;
-  const list2 = mover.surfing ? tilePairs.water : tilePairs.land;
-  if (!list2 || list2.length === 0)
-    return false;
-  const tileset = map.def.tileset;
-  const a = map.cellTile(sx, sy);
-  const b = map.cellTile(tx, ty);
-  for (const p of list2) {
-    if (p.tileset === tileset && (p.a === a && p.b === b || p.a === b && p.b === a)) {
-      return true;
-    }
-  }
-  return false;
-}
-function canMove(map, entities, mover, dir, tilePairs) {
-  const [tx, ty] = target(mover.cellX, mover.cellY, dir);
-  if (!map.inBounds(tx, ty)) {
-    return { ok: false, why: "bounds" };
-  }
-  if (!map.isWalkableCell(tx, ty)) {
-    if (!(mover.surfing && map.isWaterCell(tx, ty))) {
-      return { ok: false, why: "tile" };
-    }
-  }
-  if (pairBlocked(map, mover, mover.cellX, mover.cellY, tx, ty, tilePairs)) {
-    return { ok: false, why: "tile" };
-  }
-  if (occupied(entities, tx, ty, mover)) {
-    return { ok: false, why: "entity" };
-  }
-  return { ok: true };
-}
-
-// voxelmon/game/world/npc.ts
-var STEP_FRAMES = 16;
-var FACING_FROM_RANGE = {
-  DOWN: "down",
-  UP: "up",
-  LEFT: "left",
-  RIGHT: "right"
-};
-var ROAM_DIRS = {
-  ANY_DIR: ["up", "down", "left", "right"],
-  UP_DOWN: ["up", "down"],
-  LEFT_RIGHT: ["left", "right"]
-};
-
-class NPC {
-  def;
-  id;
-  cellX;
-  cellY;
-  px;
-  py;
-  facing;
-  moving = false;
-  progress = 0;
-  stepFlip = false;
-  frozen = false;
-  wanders;
-  roamDirs;
-  timer;
-  targetX;
-  targetY;
-  passable;
-  marching = false;
-  constructor(mapId, objDef, rng) {
-    this.def = objDef;
-    this.id = `${mapId}_obj_${objDef.index}`;
-    this.cellX = objDef.x;
-    this.cellY = objDef.y;
-    this.px = this.cellX * 16;
-    this.py = this.cellY * 16;
-    this.facing = FACING_FROM_RANGE[objDef.range] ?? "down";
-    this.wanders = objDef.movement === "WALK";
-    this.roamDirs = ROAM_DIRS[objDef.range] ?? ROAM_DIRS.ANY_DIR;
-    this.timer = randRange(rng, 30, 120);
-  }
-  facePlayer(player) {
-    const dx = player.cellX - this.cellX;
-    const dy = player.cellY - this.cellY;
-    if (Math.abs(dx) > Math.abs(dy)) {
-      this.facing = dx > 0 ? "right" : "left";
-    } else {
-      this.facing = dy > 0 ? "down" : "up";
-    }
-  }
-  update(map, entities, rng, tilePairs) {
-    const stepLen = STEP_FRAMES;
-    if (this.moving) {
-      this.progress += 1;
-      if (this.marching) {
-        if (this.progress >= stepLen) {
-          this.progress = 0;
-          this.moving = false;
-          this.marching = false;
-          this.stepFlip = !this.stepFlip;
-        }
-        return;
-      }
-      const d = DELTA[this.facing];
-      const moved = Math.floor(this.progress * 16 / stepLen);
-      this.px = this.cellX * 16 + d[0] * moved;
-      this.py = this.cellY * 16 + d[1] * moved;
-      if (this.progress >= stepLen) {
-        this.cellX = this.targetX;
-        this.cellY = this.targetY;
-        this.targetX = undefined;
-        this.targetY = undefined;
-        this.px = this.cellX * 16;
-        this.py = this.cellY * 16;
-        this.moving = false;
-        this.stepFlip = !this.stepFlip;
-      }
-      return;
-    }
-    if (this.frozen || !this.wanders)
-      return;
-    this.timer -= 1;
-    if (this.timer > 0)
-      return;
-    this.timer = randRange(rng, 30, 180);
-    const dir = this.roamDirs[rng.int(this.roamDirs.length)];
-    this.facing = dir;
-    if (rng.byte() < 128)
-      return;
-    const [tx, ty] = target(this.cellX, this.cellY, dir);
-    if (map.warpAtCell(tx, ty))
-      return;
-    if (canMove(map, entities, this, dir, tilePairs).ok) {
-      this.targetX = tx;
-      this.targetY = ty;
-      this.moving = true;
-      this.progress = 0;
-    }
-  }
-  walkPhase() {
-    if (!this.moving)
-      return 0;
-    const p = this.progress % 16;
-    return p >= 4 && p < 12 ? 1 : 0;
-  }
 }
 
 // voxelmon/game/world/player.ts
@@ -7103,12 +7495,12 @@ var SAFARI_RETURN_RIGHT = [15, 25];
 function inSafariStepZone(mapId) {
   return SAFARI_STEP_MAPS.has(mapId);
 }
-function safariJoinRows() {
+function safariJoinRows(yellow = false) {
   return [
     ["ask", "_SafariZoneGateSafariZoneWorker1WouldYouLikeToJoinText"],
     ["jump_if_false", "decline"],
     ["check_money", SAFARI_FEE],
-    ["jump_if_false", "broke"],
+    ["jump_if_false", yellow ? "discount" : "broke"],
     ["take_money", SAFARI_FEE],
     ["safari_start"],
     ["show_text", "_SafariZoneGateSafariZoneWorker1ThatllBe500PleaseText"],
@@ -7118,6 +7510,14 @@ function safariJoinRows() {
     ["jump", "end"],
     ["label", "broke"],
     ["show_text", "_SafariZoneGateSafariZoneWorker1NotEnoughMoneyText"],
+    ["move_player", "down", 1],
+    ["jump", "end"],
+    ["label", "discount"],
+    ["safari_low_cost"],
+    ["jump_if_false", "turned"],
+    ["safari_walk_in"],
+    ["jump", "end"],
+    ["label", "turned"],
     ["move_player", "down", 1],
     ["jump", "end"],
     ["label", "decline"],
@@ -7259,6 +7659,149 @@ function saffronGateScript(gate) {
   };
 }
 
+// voxelmon/game/world/toggleblocks.ts
+var OPEN_BLOCK = 14;
+var MANSION_BLOCKS = {
+  POKEMON_MANSION_1F: [
+    { bx: 12, by: 6, solid: 45, solidWhenOn: true },
+    { bx: 8, by: 3, solid: 45, solidWhenOn: false },
+    { bx: 10, by: 8, solid: 45, solidWhenOn: false },
+    { bx: 13, by: 13, solid: 45, solidWhenOn: false }
+  ],
+  POKEMON_MANSION_2F: [
+    { bx: 4, by: 2, solid: 95, solidWhenOn: true },
+    { bx: 9, by: 4, solid: 84, solidWhenOn: false },
+    { bx: 3, by: 11, solid: 95, solidWhenOn: false }
+  ],
+  POKEMON_MANSION_3F: [
+    { bx: 7, by: 2, solid: 95, solidWhenOn: true },
+    { bx: 7, by: 5, solid: 95, solidWhenOn: false }
+  ],
+  POKEMON_MANSION_B1F: [
+    { bx: 13, by: 8, solid: 45, solidWhenOn: true },
+    { bx: 6, by: 11, solid: 95, solidWhenOn: true },
+    { bx: 4, by: 3, solid: 95, solidWhenOn: false },
+    { bx: 8, by: 8, solid: 84, solidWhenOn: false }
+  ]
+};
+var MANSION_SWITCHES = {
+  POKEMON_MANSION_1F: { cells: [[2, 5]], text: "_PokemonMansion1F" },
+  POKEMON_MANSION_2F: { cells: [[2, 11]], text: "_PokemonMansion2F" },
+  POKEMON_MANSION_3F: { cells: [[10, 5]], text: "_PokemonMansion2F" },
+  POKEMON_MANSION_B1F: { cells: [[20, 3], [18, 25]], text: "_PokemonMansion2F" }
+};
+var MANSION_HOLES = [
+  { x: 16, y: 14, map: "POKEMON_MANSION_1F", dx: 16, dy: 14 },
+  { x: 17, y: 14, map: "POKEMON_MANSION_1F", dx: 16, dy: 14 },
+  { x: 19, y: 14, map: "POKEMON_MANSION_2F", dx: 18, dy: 14 }
+];
+var GYM_MACHINES = [
+  { x: 15, y: 7, yes: true, gate: { bx: 9, by: 3, solid: 84, solidWhenOn: false }, npc: 3 },
+  { x: 10, y: 1, yes: false, gate: { bx: 6, by: 3, solid: 84, solidWhenOn: false }, npc: 4 },
+  { x: 9, y: 7, yes: false, gate: { bx: 6, by: 6, solid: 84, solidWhenOn: false }, npc: 5 },
+  { x: 9, y: 13, yes: false, gate: { bx: 3, by: 8, solid: 95, solidWhenOn: false }, npc: 6 },
+  { x: 1, y: 13, yes: true, gate: { bx: 2, by: 6, solid: 84, solidWhenOn: false }, npc: 7 },
+  { x: 1, y: 7, yes: false, gate: { bx: 2, by: 3, solid: 84, solidWhenOn: false }, npc: 8 }
+];
+function gymGateFlag(i) {
+  return `EVENT_CINNABAR_GYM_GATE${i}_UNLOCKED`;
+}
+function gymGuardKey(npc) {
+  return `CINNABAR_GYM_obj_${npc}`;
+}
+var LEAGUE_SEALS = {
+  LORELEIS_ROOM: {
+    flag: "EVENT_BEAT_LORELEIS_ROOM_TRAINER_0",
+    blocks: [{ bx: 2, by: 0, solid: 36 }],
+    dontRun: { text: "_LoreleisRoomLoreleiDontRunAwayText", fromY: 10, x: [4, 5] }
+  },
+  BRUNOS_ROOM: {
+    flag: "EVENT_BEAT_BRUNOS_ROOM_TRAINER_0",
+    blocks: [{ bx: 2, by: 0, solid: 36 }],
+    dontRun: { text: "_BrunosRoomBrunoDontRunAwayText", fromY: 10, x: [4, 5] }
+  },
+  AGATHAS_ROOM: {
+    flag: "EVENT_BEAT_AGATHAS_ROOM_TRAINER_0",
+    blocks: [{ bx: 2, by: 0, solid: 59 }],
+    dontRun: { text: "_AgathasRoomAgathaDontRunAwayText", fromY: 10, x: [4, 5] }
+  },
+  LANCES_ROOM: {
+    flag: "EVENT_LANCES_ROOM_LOCK_DOOR",
+    whileSet: true,
+    blocks: [
+      { bx: 2, by: 6, solid: 114 },
+      { bx: 3, by: 6, solid: 115 }
+    ]
+  }
+};
+var LANCE_DOOR_CELLS = [[5, 11], [6, 11]];
+var ROAD_BARRIERS = {
+  VICTORY_ROAD_1F: [
+    {
+      bx: 4,
+      by: 6,
+      closed: 37,
+      open: 29,
+      flag: "EVENT_VICTORY_ROAD_1_BOULDER_ON_SWITCH",
+      switchX: 17,
+      switchY: 13
+    }
+  ],
+  VICTORY_ROAD_2F: [
+    {
+      bx: 3,
+      by: 4,
+      closed: 55,
+      open: 21,
+      flag: "EVENT_VICTORY_ROAD_2_BOULDER_ON_SWITCH1",
+      switchX: 1,
+      switchY: 16
+    },
+    {
+      bx: 11,
+      by: 7,
+      closed: 37,
+      open: 29,
+      flag: "EVENT_VICTORY_ROAD_2_BOULDER_ON_SWITCH2",
+      switchX: 9,
+      switchY: 16
+    }
+  ],
+  VICTORY_ROAD_3F: [
+    {
+      bx: 3,
+      by: 5,
+      closed: 37,
+      open: 29,
+      flag: "EVENT_VICTORY_ROAD_3_BOULDER_ON_SWITCH1",
+      switchX: 3,
+      switchY: 5
+    }
+  ]
+};
+function barriersFor(mapId) {
+  return ROAD_BARRIERS[mapId] ?? [];
+}
+var ROAD_HOLES = [
+  {
+    map: "VICTORY_ROAD_3F",
+    x: 23,
+    y: 15,
+    boulder: "VICTORYROAD3F_BOULDER4",
+    toBoulder: "VICTORYROAD2F_BOULDER3",
+    flag: "EVENT_VICTORY_ROAD_3_BOULDER_ON_SWITCH2",
+    toMap: "VICTORY_ROAD_2F",
+    dx: 22,
+    dy: 16
+  }
+];
+var ROUTE_23_RESET_FLAGS = [
+  "EVENT_VICTORY_ROAD_2_BOULDER_ON_SWITCH1",
+  "EVENT_VICTORY_ROAD_2_BOULDER_ON_SWITCH2",
+  "EVENT_VICTORY_ROAD_3_BOULDER_ON_SWITCH1",
+  "EVENT_VICTORY_ROAD_3_BOULDER_ON_SWITCH2"
+];
+
 // voxelmon/game/world/yellowscripts.ts
 var MEET_RIVAL = "Music_MeetRival";
 function relabel(rows, swaps) {
@@ -7388,7 +7931,7 @@ function labOnStep(ow, save) {
     ["play_music", MEET_RIVAL],
     ["move_npc_to", "SPRITE_BLUE", 4, 11],
     ["hide_object", "OAKS_LAB", "SPRITE_BLUE"],
-    ["play_cry", "PIKACHU"],
+    ["pika_clip", 2],
     ["show_text", "_OaksLabPikachuDislikesPokeballsText1"],
     ["show_text", "_OaksLabPikachuDislikesPokeballsText2"]
   ];
@@ -7723,6 +8266,35 @@ function yellowScripts(base) {
     VERMILION_CITY: {
       talk: { TEXT_VERMILIONCITY_OFFICER_JENNY: jennyTalk }
     },
+    CINNABAR_GYM: {
+      talk: Object.fromEntries([0, 1, 2, 3, 4, 5].map((i) => [
+        `TEXT_CINNABARGYM_SUPER_NERD${i + 2}`,
+        (ow, save) => {
+          const name = `CINNABARGYM_SUPER_NERD${i + 2}`;
+          const npc = ow?.findNpc?.(name);
+          const beaten = !!npc && ow.trainerDefeated?.(npc);
+          if (!beaten && !save?.flags?.[gymGateFlag(i)]) {
+            return [["face_player"], ["show_text", `_CinnabarGymText_${i + 1}`]];
+          }
+          if (!beaten)
+            return [["face_player"], ["engage_trainer", name]];
+          const after = ow.trainerHeader?.(npc)?.after;
+          return [["face_player"], ["show_text", after ?? "..."]];
+        }
+      ]))
+    },
+    SAFARI_ZONE_GATE: {
+      talk: {
+        TEXT_SAFARIZONEGATE_SAFARI_ZONE_WORKER1: (_ow, save) => save?.safari ? [["show_text", "_SafariZoneGateSafariZoneWorker1GoodLuckText"]] : [["face_player"], ["show_text", "_SafariZoneGateSafariZoneWorker1Text"], ...safariJoinRows(true)]
+      },
+      onStep: (ow, save) => {
+        const x = ow?.player?.cellX;
+        const y = ow?.player?.cellY;
+        if (save?.safari)
+          return y !== undefined && y <= 1 ? safariLeavingRows(x !== 3) : null;
+        return SAFARI_JOIN_CELLS.some(([cx, cy]) => cx === x && cy === y) ? safariJoinRows(true) : null;
+      }
+    },
     PALLET_TOWN: { onStep: palletOnStep },
     OAKS_LAB_ONSTEP_HOST: { onStep: labOnStep },
     OAKS_LAB: {
@@ -7760,7 +8332,8 @@ function gymLeader(o) {
     ["show_text", o.preText],
     ["start_battle", "trainer", o.trainerClass, o.party ?? 1],
     ["jump_if_false", "end"],
-    ["set_flag", o.beatFlag]
+    ["set_flag", o.beatFlag],
+    ["pikachu_happy", "GYMLEADER"]
   ];
   for (const d of o.deactivate ?? [])
     rows.push(["set_flag", d]);
@@ -10420,149 +10993,6 @@ function adjacentSnorlax(mapId, player, npcs, flags) {
   return null;
 }
 
-// voxelmon/game/world/toggleblocks.ts
-var OPEN_BLOCK = 14;
-var MANSION_BLOCKS = {
-  POKEMON_MANSION_1F: [
-    { bx: 12, by: 6, solid: 45, solidWhenOn: true },
-    { bx: 8, by: 3, solid: 45, solidWhenOn: false },
-    { bx: 10, by: 8, solid: 45, solidWhenOn: false },
-    { bx: 13, by: 13, solid: 45, solidWhenOn: false }
-  ],
-  POKEMON_MANSION_2F: [
-    { bx: 4, by: 2, solid: 95, solidWhenOn: true },
-    { bx: 9, by: 4, solid: 84, solidWhenOn: false },
-    { bx: 3, by: 11, solid: 95, solidWhenOn: false }
-  ],
-  POKEMON_MANSION_3F: [
-    { bx: 7, by: 2, solid: 95, solidWhenOn: true },
-    { bx: 7, by: 5, solid: 95, solidWhenOn: false }
-  ],
-  POKEMON_MANSION_B1F: [
-    { bx: 13, by: 8, solid: 45, solidWhenOn: true },
-    { bx: 6, by: 11, solid: 95, solidWhenOn: true },
-    { bx: 4, by: 3, solid: 95, solidWhenOn: false },
-    { bx: 8, by: 8, solid: 84, solidWhenOn: false }
-  ]
-};
-var MANSION_SWITCHES = {
-  POKEMON_MANSION_1F: { cells: [[2, 5]], text: "_PokemonMansion1F" },
-  POKEMON_MANSION_2F: { cells: [[2, 11]], text: "_PokemonMansion2F" },
-  POKEMON_MANSION_3F: { cells: [[10, 5]], text: "_PokemonMansion2F" },
-  POKEMON_MANSION_B1F: { cells: [[20, 3], [18, 25]], text: "_PokemonMansion2F" }
-};
-var MANSION_HOLES = [
-  { x: 16, y: 14, map: "POKEMON_MANSION_1F", dx: 16, dy: 14 },
-  { x: 17, y: 14, map: "POKEMON_MANSION_1F", dx: 16, dy: 14 },
-  { x: 19, y: 14, map: "POKEMON_MANSION_2F", dx: 18, dy: 14 }
-];
-var GYM_MACHINES = [
-  { x: 15, y: 7, yes: true, gate: { bx: 9, by: 3, solid: 84, solidWhenOn: false }, npc: 3 },
-  { x: 10, y: 1, yes: false, gate: { bx: 6, by: 3, solid: 84, solidWhenOn: false }, npc: 4 },
-  { x: 9, y: 7, yes: false, gate: { bx: 6, by: 6, solid: 84, solidWhenOn: false }, npc: 5 },
-  { x: 9, y: 13, yes: false, gate: { bx: 3, by: 8, solid: 95, solidWhenOn: false }, npc: 6 },
-  { x: 1, y: 13, yes: true, gate: { bx: 2, by: 6, solid: 84, solidWhenOn: false }, npc: 7 },
-  { x: 1, y: 7, yes: false, gate: { bx: 2, by: 3, solid: 84, solidWhenOn: false }, npc: 8 }
-];
-function gymGateFlag(i) {
-  return `EVENT_CINNABAR_GYM_GATE${i}_UNLOCKED`;
-}
-function gymGuardKey(npc) {
-  return `CINNABAR_GYM_obj_${npc}`;
-}
-var LEAGUE_SEALS = {
-  LORELEIS_ROOM: {
-    flag: "EVENT_BEAT_LORELEIS_ROOM_TRAINER_0",
-    blocks: [{ bx: 2, by: 0, solid: 36 }],
-    dontRun: { text: "_LoreleisRoomLoreleiDontRunAwayText", fromY: 10, x: [4, 5] }
-  },
-  BRUNOS_ROOM: {
-    flag: "EVENT_BEAT_BRUNOS_ROOM_TRAINER_0",
-    blocks: [{ bx: 2, by: 0, solid: 36 }],
-    dontRun: { text: "_BrunosRoomBrunoDontRunAwayText", fromY: 10, x: [4, 5] }
-  },
-  AGATHAS_ROOM: {
-    flag: "EVENT_BEAT_AGATHAS_ROOM_TRAINER_0",
-    blocks: [{ bx: 2, by: 0, solid: 59 }],
-    dontRun: { text: "_AgathasRoomAgathaDontRunAwayText", fromY: 10, x: [4, 5] }
-  },
-  LANCES_ROOM: {
-    flag: "EVENT_LANCES_ROOM_LOCK_DOOR",
-    whileSet: true,
-    blocks: [
-      { bx: 2, by: 6, solid: 114 },
-      { bx: 3, by: 6, solid: 115 }
-    ]
-  }
-};
-var LANCE_DOOR_CELLS = [[5, 11], [6, 11]];
-var ROAD_BARRIERS = {
-  VICTORY_ROAD_1F: [
-    {
-      bx: 4,
-      by: 6,
-      closed: 37,
-      open: 29,
-      flag: "EVENT_VICTORY_ROAD_1_BOULDER_ON_SWITCH",
-      switchX: 17,
-      switchY: 13
-    }
-  ],
-  VICTORY_ROAD_2F: [
-    {
-      bx: 3,
-      by: 4,
-      closed: 55,
-      open: 21,
-      flag: "EVENT_VICTORY_ROAD_2_BOULDER_ON_SWITCH1",
-      switchX: 1,
-      switchY: 16
-    },
-    {
-      bx: 11,
-      by: 7,
-      closed: 37,
-      open: 29,
-      flag: "EVENT_VICTORY_ROAD_2_BOULDER_ON_SWITCH2",
-      switchX: 9,
-      switchY: 16
-    }
-  ],
-  VICTORY_ROAD_3F: [
-    {
-      bx: 3,
-      by: 5,
-      closed: 37,
-      open: 29,
-      flag: "EVENT_VICTORY_ROAD_3_BOULDER_ON_SWITCH1",
-      switchX: 3,
-      switchY: 5
-    }
-  ]
-};
-function barriersFor(mapId) {
-  return ROAD_BARRIERS[mapId] ?? [];
-}
-var ROAD_HOLES = [
-  {
-    map: "VICTORY_ROAD_3F",
-    x: 23,
-    y: 15,
-    boulder: "VICTORYROAD3F_BOULDER4",
-    toBoulder: "VICTORYROAD2F_BOULDER3",
-    flag: "EVENT_VICTORY_ROAD_3_BOULDER_ON_SWITCH2",
-    toMap: "VICTORY_ROAD_2F",
-    dx: 22,
-    dy: 16
-  }
-];
-var ROUTE_23_RESET_FLAGS = [
-  "EVENT_VICTORY_ROAD_2_BOULDER_ON_SWITCH1",
-  "EVENT_VICTORY_ROAD_2_BOULDER_ON_SWITCH2",
-  "EVENT_VICTORY_ROAD_3_BOULDER_ON_SWITCH1",
-  "EVENT_VICTORY_ROAD_3_BOULDER_ON_SWITCH2"
-];
-
 // voxelmon/game/world/seafoam.ts
 function seafoamData(field) {
   return field?.seafoam;
@@ -11507,8 +11937,10 @@ function* use_cut(ctx, ...args) {
   if (w.map.isCuttableCell(fx, fy) && !already) {
     const cx = Math.round((fx * CELL_PX + CELL_PX / 2) * Q4);
     const cz = Math.round((fy * CELL_PX + CELL_PX / 2) * Q4);
+    const bubbles = w.data.field?.emotionBubbles?.bubbles?.length;
+    const treeFrame = bubbles ?? FX_FRAME_CUT_TREE;
     for (let beat = 0;beat < CUT_ANIM_BEATS; beat++) {
-      w.fieldFx(cx, cz, beat % 2 === 0 ? FX_FRAME_CUT_TREE : -1);
+      w.fieldFx(cx, cz, beat % 2 === 0 ? treeFrame : -1);
       runner.waitingFrames = CUT_ANIM_BEAT_FRAMES;
       yield;
     }
@@ -11568,6 +12000,9 @@ function* random_text(ctx, ...args) {
 }
 function* play_cry(ctx, ...args) {
   ctx.world.playCry?.(String(args[0]));
+}
+function* pika_clip(ctx, ...args) {
+  ctx.world.playPikaClip?.(Number(args[0]) || 1);
 }
 function* use_fly(ctx, ...args) {
   const w = ctx.world;
@@ -11832,6 +12267,33 @@ function* old_man_demo(ctx, ...args) {
     yield;
   }
 }
+function* safari_low_cost(ctx) {
+  const save = ctx.world.save;
+  const start = (balls) => ctx.world.safariStart?.(balls);
+  const money = save.money ?? 0;
+  if (money > 0) {
+    yield* show_text(ctx, "_SafariZoneGateSafariZoneWorker1NotEnoughMoneyText");
+    save.money = 0;
+    yield* show_text(ctx, "_SafariZoneLowCostText1");
+    yield* show_text(ctx, "_SafariZoneLowCostText2");
+    start(Math.min(Math.floor(money / 23) + 1, 29));
+    ctx.lastCheck = true;
+    return;
+  }
+  const nag = save.safariNags ?? 0;
+  save.safariNags = nag + 1;
+  yield* show_text(ctx, `_SafariZoneLowCostText${5 + Math.min(nag, 3)}`);
+  if (nag >= 3) {
+    yield* show_text(ctx, "_SafariZoneLowCostText3");
+    start(1);
+    ctx.lastCheck = true;
+    return;
+  }
+  ctx.lastCheck = false;
+}
+function* pikachu_happy(ctx, ...args) {
+  modifyHappiness(ctx.world.save, args[0]);
+}
 function* set_field(ctx, ...args) {
   ctx.world.save[args[0]] = args[1];
 }
@@ -11863,6 +12325,7 @@ var VERBS = {
   use_dig,
   use_teleport,
   play_cry,
+  pika_clip,
   random_text,
   use_strength,
   give_pokemon,
@@ -11908,6 +12371,8 @@ var VERBS = {
   set_heal_point,
   old_man_demo,
   set_field,
+  pikachu_happy,
+  safari_low_cost,
   record_hall_of_fame,
   open_diploma,
   save_game,
@@ -12826,6 +13291,7 @@ class Overworld {
     this.syncSurf();
     visit(this.save, mapId);
     mapScript(mapId)?.onEnter?.(this, this.save);
+    onMapEntered(this);
   }
   objectVisible(obj) {
     const key = objectToggleKey(obj);
@@ -12889,6 +13355,7 @@ class Overworld {
         this.rollDownhill();
       }
     }
+    updateFollower(this, (n) => this.shell.npcRng.int(n));
     const stepped = this.player.update();
     const entry = this.warpEntryCell;
     if (entry && (this.player.cellX !== entry.x || this.player.cellY !== entry.y)) {
@@ -13249,6 +13716,13 @@ the PC.`, () => {
     }
   }
   talkTo(npc) {
+    if (npc.pikachuFollower) {
+      npc.facePlayer(this.player);
+      const back = { up: "down", down: "up", left: "right", right: "left" };
+      this.player.facing = back[npc.facing] ?? this.player.facing;
+      this.runScript(talkRows(this, picPageFor(this.shell.data, "PIKACHU")));
+      return;
+    }
     npc.frozen = true;
     const unfreeze = () => {
       npc.frozen = false;
@@ -13428,6 +13902,9 @@ any coins!`);
   }
   playCry(species) {
     this.shell.audio.playCry?.(species);
+  }
+  playPikaClip(clip) {
+    this.shell.audio.playPikaClip?.(clip);
   }
   escapeWarp() {
     return this.shell.escapeWarp?.() ?? false;
@@ -13699,8 +14176,8 @@ canceled.`);
   npcAtCell(cx, cy) {
     return this.npcs.find((npc) => !npc.hidden && (npc.cellX === cx && npc.cellY === cy || npc.targetX === cx && npc.targetY === cy));
   }
-  safariStart() {
-    this.save.safari = { balls: SAFARI_BALLS, steps: SAFARI_STEPS };
+  safariStart(balls = SAFARI_BALLS) {
+    this.save.safari = { balls, steps: SAFARI_STEPS };
   }
   safariEnd() {
     this.save.safari = null;
@@ -13781,6 +14258,7 @@ GAME is over!`;
   }
   onStepComplete() {
     countGearStep(this.save);
+    pikachuStep(this.save, () => this.shell.npcRng.byte() < 128);
     if (this.safariStep())
       return;
     const rs = this.save;
@@ -16994,6 +17472,428 @@ class NamingState {
   }
 }
 
+// voxelmon/game/ui/yellowintro.ts
+function grid(rows, cols, dy0, dx0, tile) {
+  const out = [];
+  for (let r = 0;r < rows; r++)
+    for (let c = 0;c < cols; c++)
+      out.push([dy0 + r * 8, dx0 + c * 8, tile(r, c)]);
+  return out;
+}
+var OAM = {
+  fa17e: grid(2, 2, -8, -8, (r, c) => r * 16 + c),
+  fa18f: [
+    [-16, -8, 0],
+    [-16, 0, 1],
+    [-8, -8, 16],
+    [-8, 0, 17],
+    [0, -8, 32],
+    [0, 0, 32, true],
+    [8, -8, 33],
+    [8, 0, 33, true]
+  ],
+  fa1b0: [
+    [-24, -8, 0],
+    [-24, 0, 1],
+    [-16, -8, 2],
+    [-16, 0, 3],
+    [-8, -16, 4],
+    [-8, -8, 5],
+    [-8, 0, 6],
+    [-8, 8, 4, true],
+    [0, -16, 7],
+    [0, -8, 8],
+    [0, 0, 8, true],
+    [0, 8, 7, true],
+    [8, -16, 9],
+    [8, -8, 10],
+    [8, 0, 10, true],
+    [8, 8, 9, true],
+    [16, -16, 11],
+    [16, -8, 12],
+    [16, 0, 12, true],
+    [16, 8, 11, true]
+  ],
+  fa201: grid(6, 6, -24, -24, (r, c) => r * 16 + c),
+  fa292: grid(5, 5, -20, -16, (r, c) => [0, 5, 16, 21, 32][r] + c),
+  fa2f7: [[-4, -16, 0], [-4, -8, 1], [-4, 0, 1, true], [-4, 8, 0, true]],
+  fa308: [
+    [-8, -24, 0],
+    [-8, -16, 1],
+    [0, -24, 2],
+    [0, -16, 3],
+    [-8, 8, 1, true],
+    [-8, 16, 0, true],
+    [0, 8, 3, true],
+    [0, 16, 2, true]
+  ],
+  fa329: [
+    [-8, -40, 0],
+    [-8, -32, 1],
+    [-8, -24, 2],
+    [0, -40, 16],
+    [0, -32, 17],
+    [0, -24, 18],
+    [-8, 16, 2, true],
+    [-8, 24, 1, true],
+    [-8, 32, 0, true],
+    [0, 16, 18, true],
+    [0, 24, 17, true],
+    [0, 32, 16, true]
+  ]
+};
+var FRAMES = {
+  1: { base: 150, oam: OAM.fa17e },
+  2: { base: 152, oam: OAM.fa17e },
+  3: { base: 154, oam: OAM.fa17e },
+  4: { base: 12, oam: OAM.fa18f },
+  5: { base: 14, oam: OAM.fa18f },
+  6: { base: 60, oam: OAM.fa18f },
+  7: { base: 96, oam: OAM.fa1b0 },
+  8: { base: 112, oam: OAM.fa1b0 },
+  9: { base: 128, oam: OAM.fa1b0 },
+  11: { base: 0, oam: OAM.fa201 },
+  12: { base: 6, oam: OAM.fa201 },
+  13: { base: 198, oam: OAM.fa292 },
+  14: { base: 109, oam: OAM.fa2f7 },
+  15: { base: 240, oam: OAM.fa308 },
+  16: { base: 244, oam: OAM.fa308 },
+  17: { base: 248, oam: OAM.fa308 },
+  18: { base: 156, oam: OAM.fa329 },
+  19: { base: 236, oam: OAM.fa329 }
+};
+function frameBox(id) {
+  const oam = FRAMES[id].oam;
+  const dx = Math.min(...oam.map((e) => e[1]));
+  const dy = Math.min(...oam.map((e) => e[0]));
+  const w = Math.max(...oam.map((e) => e[1])) + 8 - dx;
+  const h = Math.max(...oam.map((e) => e[0])) + 8 - dy;
+  return { dx, dy, w, h };
+}
+var FRAMESETS = {
+  1: { steps: [[1, 4], [2, 4], [3, 4]], loop: true },
+  2: { steps: [[4, 4], [5, 4], [6, 4]], loop: true },
+  3: { steps: [[7, 4], [8, 4], [9, 4]], loop: true },
+  5: { steps: [[11, 32]] },
+  6: { steps: [[12, 32]] },
+  7: { steps: [[13, 32]] },
+  8: { steps: [[14, 32]] },
+  9: { steps: [[15, 31], [17, 2], [15, 2], [17, 2], [15, 31], [17, 2], [15, 23], [16, 32]] },
+  10: { steps: [[18, 4], [19, 4]], loop: true }
+};
+var SPAWN = {
+  1: [1, "static"],
+  2: [2, "static"],
+  3: [3, "static"],
+  5: [5, "surf"],
+  6: [6, "fly"],
+  7: [7, "static"],
+  8: [8, "bar"],
+  9: [9, "static"],
+  10: [10, "static"]
+};
+var SPEED_BARS = [
+  [208, 32, 2],
+  [240, 48, 4],
+  [208, 64, 6],
+  [192, 80, 8],
+  [224, 96, 8],
+  [192, 112, 6],
+  [224, 128, 4],
+  [240, 144, 2]
+];
+var WAVE = [0, 0, 1, 2, 2, 3, 3, 3, 4, 3, 3, 3, 2, 2, 1, 0, 0, 0, -1, -2, -2, -3, -3, -3, -4, -3, -3, -3, -2, -2, -1, 0];
+var STROBE = Array.from({ length: 51 }, (_, i) => i % 4 === 1 || i % 4 === 2 ? 192 : 228);
+var FADE = [228, 144, 144, 64, 64, 0, 0];
+function bob(phase) {
+  const a = phase % 64;
+  const v = Math.floor(8 * Math.sin(Math.PI * (a % 32) / 32));
+  return a < 32 ? v : -v;
+}
+var BG_ROWS = 20;
+function bgpShades(bgp) {
+  return [0, 1, 2, 3].map((i) => bgp >> 2 * i & 3);
+}
+var hex = (n) => n.toString(16).padStart(2, "0");
+var STROBE_FRAMES = [15, 16, 17, 18, 19];
+var YELLOW_INTRO_PICTURES = [
+  { name: "bg_letter", bg: "letter" },
+  { name: "bg_letter_s1", bg: "letter", shades: bgpShades(144) },
+  { name: "bg_letter_s2", bg: "letter", shades: bgpShades(64) },
+  { name: "bg_kick", bg: "kick" },
+  { name: "bg_sea", bg: "sea" },
+  { name: "bg_sky0", bg: "sky", cloud: 0 },
+  { name: "bg_sky1", bg: "sky", cloud: 1 },
+  { name: "bg_close", bg: "close" },
+  { name: "bg_close_k", bg: "close", shades: bgpShades(192) },
+  ...Object.keys(FRAMES).map((k) => ({ name: `obj_${hex(Number(k))}`, frame: Number(k) })),
+  { name: "obj_0d_s1", frame: 13, shades: bgpShades(144) },
+  { name: "obj_0d_s2", frame: 13, shades: bgpShades(64) },
+  ...STROBE_FRAMES.map((f) => ({ name: `obj_${hex(f)}_k`, frame: f, shades: bgpShades(192) }))
+];
+var BEACH = new Set(["bg_kick", "bg_sea", "bg_sky0", "bg_sky1", "obj_0b", "obj_0c", "obj_0e"]);
+var SETUP_DELAY = 3;
+var HEAD_FRAMES = 2;
+
+class YellowIntroScenes {
+  done = false;
+  scene = 0;
+  timer = 0;
+  seq = 0;
+  scx = 0;
+  bgp = 228;
+  bgName = "bg_letter";
+  waveT = 0;
+  cloud = 0;
+  objects = [];
+  delay = HEAD_FRAMES;
+  then = () => this.start(0);
+  spawn(id, x, y) {
+    const [frameset, motion] = SPAWN[id];
+    const o = {
+      id,
+      frameset,
+      motion,
+      x,
+      y,
+      yoff: 0,
+      step: 0,
+      wait: FRAMESETS[frameset].steps[0][1],
+      held: false,
+      fieldB: 0,
+      fieldC: 0
+    };
+    this.objects.push(o);
+    return o;
+  }
+  setup(scene) {
+    this.objects = [];
+    this.bgp = 0;
+    this.delay = SETUP_DELAY;
+    this.then = () => {
+      this.bgp = 228;
+      this.start(scene);
+    };
+  }
+  start(scene) {
+    this.scx = 0;
+    switch (scene) {
+      case 0:
+        this.bgName = "bg_letter";
+        this.spawn(1, 88, 88);
+        this.timer = 130;
+        this.scene = 1;
+        break;
+      case 2:
+        this.bgName = "bg_kick";
+        for (const [x, y, speed] of SPEED_BARS)
+          this.spawn(8, x, y).fieldB = speed;
+        this.timer = 128;
+        this.scene = 3;
+        break;
+      case 4:
+        this.bgName = "bg_letter";
+        this.spawn(2, 88, 88);
+        this.timer = 128;
+        this.scene = 5;
+        break;
+      case 6:
+        this.bgName = "bg_sea";
+        this.waveT = 0;
+        this.spawn(5, 248, 64);
+        this.timer = 88;
+        this.scene = 7;
+        break;
+      case 8:
+        this.bgName = "bg_letter";
+        this.spawn(3, 88, 88);
+        this.timer = 128;
+        this.scene = 9;
+        break;
+      case 10:
+        this.bgName = "bg_sky0";
+        this.cloud = 0;
+        this.spawn(6, 88, 152);
+        this.timer = 128;
+        this.scene = 11;
+        break;
+      case 12:
+        this.bgName = "bg_close";
+        this.spawn(9, 88, 96);
+        this.timer = 128;
+        this.scene = 13;
+        break;
+      default:
+        this.scene = scene;
+    }
+  }
+  update() {
+    if (this.done)
+      return;
+    if (this.delay > 0) {
+      if (--this.delay === 0) {
+        const then = this.then;
+        this.then = null;
+        then?.();
+      }
+      this.updateObjects();
+      return;
+    }
+    switch (this.scene) {
+      case 1:
+      case 5:
+      case 9:
+      case 13:
+        if (this.timer > 0)
+          this.timer--;
+        else if (this.scene === 13) {
+          this.spawn(10, 88, 104);
+          this.seq = 0;
+          this.scene = 14;
+        } else
+          this.setup(this.scene + 1);
+        break;
+      case 3:
+        if (this.timer > 0) {
+          this.timer--;
+          if (this.scx !== 104)
+            this.scx += 4;
+        } else
+          this.setup(4);
+        break;
+      case 7:
+        if (this.timer > 0) {
+          this.timer--;
+          this.scx = (this.scx + 2) % 256;
+          this.waveT++;
+        } else
+          this.setup(8);
+        break;
+      case 11:
+        if (this.timer > 0) {
+          if (this.timer % 8 === 0)
+            this.cloud = Math.floor(this.timer / 8) % 2;
+          this.bgName = `bg_sky${this.cloud}`;
+          this.timer--;
+        } else
+          this.setup(12);
+        break;
+      case 14: {
+        const v = STROBE[this.seq++];
+        if (v !== undefined)
+          this.bgp = v;
+        else {
+          this.objects = [];
+          this.bgName = "bg_letter";
+          this.delay = 3;
+          this.then = () => {
+            this.bgp = 228;
+            this.spawn(7, 88, 88);
+            this.timer = 40;
+            this.scene = 15;
+          };
+        }
+        break;
+      }
+      case 15:
+        if (this.timer > 0) {
+          if (this.timer % 4 === 0)
+            this.bgp = this.bgp === 228 ? 231 : 228;
+          this.timer--;
+        } else {
+          this.bgp = 228;
+          this.seq = 0;
+          this.scene = 16;
+        }
+        break;
+      case 16: {
+        const v = FADE[this.seq++];
+        if (v !== undefined)
+          this.bgp = v;
+        else {
+          this.timer = 64;
+          this.scene = 17;
+        }
+        break;
+      }
+      case 17:
+        if (this.timer > 0)
+          this.timer--;
+        else
+          this.done = true;
+        break;
+    }
+    this.updateObjects();
+  }
+  updateObjects() {
+    for (const o of this.objects) {
+      if (o.motion === "bar") {
+        o.x = (o.x + o.fieldB) % 256;
+      } else if (o.motion === "surf") {
+        if (o.x !== 88) {
+          o.x = (o.x + 4) % 256;
+          o.y = (o.x + 1) % 256;
+        }
+      } else if (o.motion === "fly") {
+        if (o.fieldB === 0) {
+          if (o.y !== 88)
+            o.y = (o.y - 2 + 256) % 256;
+          else
+            o.fieldB = 1;
+        }
+        if (o.fieldB === 1)
+          o.yoff = bob(o.fieldC++);
+      }
+      if (o.held)
+        continue;
+      if (--o.wait > 0)
+        continue;
+      const set = FRAMESETS[o.frameset];
+      if (o.step >= set.steps.length - 1) {
+        if (set.loop) {
+          o.step = 0;
+          o.wait = set.steps[0][1];
+        } else
+          o.held = true;
+        continue;
+      }
+      o.step++;
+      o.wait = set.steps[o.step][1];
+    }
+  }
+  frame() {
+    const bgp = this.bgp;
+    const suffix = bgp === 144 ? "_s1" : bgp === 64 ? "_s2" : bgp === 192 ? "_k" : "";
+    const white = bgp === 0;
+    let bg = null;
+    if (!white) {
+      const name = suffix && `${this.bgName}${suffix}` in NAMED ? `${this.bgName}${suffix}` : this.bgName;
+      const dy = this.bgName === "bg_sea" ? WAVE[this.waveT % 32] : 0;
+      bg = { name, scx: this.scx, dy };
+    }
+    const objects = [];
+    if (!white) {
+      for (const o of this.objects) {
+        const id = FRAMESETS[o.frameset].steps[o.step][0];
+        const box = frameBox(id);
+        const base = `obj_${hex(id)}`;
+        const name = suffix && `${base}${suffix}` in NAMED ? `${base}${suffix}` : base;
+        let x = (o.x + box.dx - 8 + 512) % 256;
+        let y = (o.y + o.yoff + box.dy - 16 + 512) % 256;
+        if (x > 160)
+          x -= 256;
+        if (y > 144)
+          y -= 256;
+        if (x >= 160 || x + box.w <= 0 || y >= 144 || y + box.h <= 0)
+          continue;
+        objects.push({ name, x, y, w: box.w, h: box.h });
+      }
+    }
+    return { bg, black: bgp === 231, objects };
+  }
+}
+var NAMED = Object.fromEntries(YELLOW_INTRO_PICTURES.map((p) => [p.name, true]));
+
 // voxelmon/game/ui/intro.ts
 var UI_SCALE2 = VIEW_H / GB_H;
 var UI_ORIGIN_X2 = (VIEW_W - GB_W * UI_SCALE2) / 2;
@@ -17132,9 +18032,11 @@ class IntroState {
   opT = 0;
   fade = 0;
   tear = -1;
+  yellow;
   constructor(game, onDone) {
     this.game = game;
     this.onDone = onDone;
+    this.yellow = gameVersion(game.data) === "yellow" ? new YellowIntroScenes : null;
   }
   page(key) {
     return namedPage(this.game.data, "picIntro", key);
@@ -17185,13 +18087,22 @@ class IntroState {
       }
       return;
     }
+    if (this.yellow) {
+      this.yellow.update();
+      if (this.yellow.done)
+        this.finish();
+      return;
+    }
     this.fightStep();
   }
   start(phase) {
     this.phase = phase;
     this.t = 0;
-    if (phase === "fight")
-      this.game.audio?.playOnce("Music_IntroBattle");
+    if (phase === "fight") {
+      if (!this.yellow || !this.game.audio?.playOnce("Music_YellowIntro")) {
+        this.game.audio?.playOnce("Music_IntroBattle");
+      }
+    }
   }
   fightStep() {
     for (;; ) {
@@ -17299,7 +18210,8 @@ class IntroState {
         return;
       seq.forEach((t, i) => out.push({ page, tile: t, x: x + i * 8, y, flags: 0 }));
     };
-    COPY_ROWS.forEach((y) => row(strip, COPY_PREFIX, 16, y));
+    const prefix = this.yellow ? [...COPYRIGHT_PREFIX_YELLOW] : COPY_PREFIX;
+    COPY_ROWS.forEach((y) => row(strip, prefix, 16, y));
     row(strip, COPY_NINTENDO, 80, COPY_ROWS[0]);
     row(strip, COPY_CREATURES, 80, COPY_ROWS[1]);
     row(gf, COPY_GAMEFREAK, 80, COPY_ROWS[2]);
@@ -17340,6 +18252,29 @@ class IntroState {
       for (const x of xs)
         out.push({ page, tile: 0, x, y, flags: 0 });
     });
+  }
+  yellowArt(out) {
+    const f = this.yellow.frame();
+    if (f.black) {
+      const black = this.page("black");
+      if (black >= 0)
+        out.push({ page: black, x: 0, y: 0, w: VIEW_W, h: VIEW_H });
+    } else if (f.bg) {
+      const page = this.page(`yi_${f.bg.name}`);
+      if (page >= 0) {
+        for (let k = -1;k <= 1; k++) {
+          const gx = -f.bg.scx + k * 256;
+          if (sx(gx) >= VIEW_W || sx(gx + 256) <= 0)
+            continue;
+          out.push({ page, x: sx(gx), y: sy(f.bg.dy), w: sw(256), h: sw(BG_ROWS * 8) });
+        }
+      }
+    }
+    for (const o of f.objects) {
+      const page = this.page(`yi_${o.name}`);
+      if (page >= 0)
+        out.push({ page, x: sx(o.x), y: sy(o.y), w: sw(o.w), h: sw(o.h) });
+    }
   }
   fightArt(out) {
     const nido = this.page(`nido${this.frame}`);
@@ -17421,15 +18356,19 @@ class IntroState {
       this.bars(pics);
     } else {
       const bursting = this.tear >= 0 && burstOf(this.tear) < 1;
+      const tearing = this.tear >= 0 && this.tear <= TEAR_FRAMES;
       if (bursting)
         this.gb(pics, "black", 0, GB_H);
+      else if (this.yellow)
+        this.yellowArt(pics);
       else
         this.fightArt(pics);
-      if (this.tear >= 0 && this.tear <= TEAR_FRAMES)
+      if (tearing)
         this.tearArt(pics);
       if (bursting)
         this.marquee(pics, BREACH_AT + this.tear);
-      this.bars(pics);
+      if (!this.yellow || tearing)
+        this.bars(pics);
       if (this.fade > 0) {
         const white = this.page("white");
         if (white >= 0 && this.fade >= 2 / 3) {
@@ -17564,7 +18503,7 @@ class TitleState {
       }
     } else if (this.yPhase === "bubble") {
       if (++this.yTimer === 3)
-        this.audio()?.playCry?.("PIKACHU");
+        this.audio()?.playPikaClip?.(1);
       if (this.yTimer >= 60) {
         this.audio()?.play?.("Music_TitleScreen");
         this.yPhase = "loop";
@@ -17598,7 +18537,7 @@ class TitleState {
       if (this.blinkAt >= 0 && ++this.blinkAt > 9)
         this.blinkAt = -1;
       if (p.start || p.a) {
-        this.audio()?.playCry?.("PIKACHU");
+        this.audio()?.playPikaClip?.(11);
         this.phase = "menu";
         this.index = 0;
       }
@@ -18818,14 +19757,14 @@ coins!`;
     }
   }
   view() {
-    const grid = this.offset.map((o, w) => {
+    const grid2 = this.offset.map((o, w) => {
       const pos = Math.floor((o + 1) / 2);
       const [b, m, t] = rowsAt(this.wheels[w] ?? [], pos);
       return [t, m, b];
     });
     return {
       stage: this.stage,
-      grid,
+      grid: grid2,
       bet: this.bet,
       betIndex: this.betIndex,
       coins: this.coins(),
@@ -19955,8 +20894,8 @@ function drawNaming(ctx, t) {
   const v = t.view();
   header(ctx, fit(v.title ?? "NAME?", 11));
   text(host, 1, 1, `${v.name}${"_".repeat(Math.max(0, (v.maxLen ?? 7) - v.name.length))}`);
-  const grid = v.grid;
-  grid.forEach((row, r) => {
+  const grid2 = v.grid;
+  grid2.forEach((row, r) => {
     const wide = row.length === 1;
     row.forEach((cell, c) => {
       const w = wide ? COLS : 2;
@@ -22040,6 +22979,7 @@ one POKéMON!`, "list");
       }
       this.party().splice(this.listIndex, 1);
       box2.push(mon);
+      modifyHappiness(this.game.save, "DEPOSITED", mon);
       this.cry(mon);
       this.toMessage(`${this.monName(mon)} was
 stored in Box ${this.game.save.currentBox}.`, "menu");
@@ -23054,6 +23994,8 @@ class VoxelmonGame {
     for (const cue of cues) {
       if (cue.startsWith("cry:")) {
         this.audio.playCry(cue.slice(4));
+      } else if (cue.startsWith("pika:")) {
+        this.audio.playPikaClip(Number(cue.slice(5)) || 1);
       } else if (cue.startsWith("move:")) {
         const [name, pitch, tempo] = cue.slice(5).split(":");
         this.audio.playSfx(name, Number(pitch) || 0, Number(tempo) || undefined);
@@ -23073,7 +24015,7 @@ class VoxelmonGame {
   newGame() {
     this.save = {
       meta: { format: SAVE_FORMAT, mods: {} },
-      version: "red",
+      version: gameVersion(this.data) === "yellow" ? "yellow" : "red",
       player: {
         map: "REDS_HOUSE_2F",
         x: 3,
@@ -23128,7 +24070,7 @@ class VoxelmonGame {
   }
   boot() {
     this.newGame();
-    if (gameVersion(this.data) === "yellow")
+    if (gameVersion(this.data) === "yellow" && namedPage(this.data, "picIntro", "yi_bg_letter") < 0)
       return;
     this.push(new IntroState(this, () => {}));
   }
@@ -23334,6 +24276,8 @@ ${mname}!`, onDone);
   }
   teachMachine(partyIndex, itemId) {
     const mon = this.save.party[partyIndex];
+    if (mon)
+      modifyHappiness(this.save, "USEDTMHM", mon);
     const item = this.data.items?.[itemId];
     const moveId = item?.machine?.move;
     if (!mon || !item || !moveId)
@@ -24062,6 +25006,9 @@ your POKéMON!`), () => {
   playCry(species) {
     this.audio.playCry(species);
   }
+  playPikaClip(clip) {
+    this.audio.playPikaClip(clip);
+  }
   openStartMenu() {
     this.push(new StartMenuState(this, (act) => {
       if (act === "pokedex") {
@@ -24215,8 +25162,10 @@ Now x99.`);
     const r = useItem(this.data, this.save, itemId, mon, null, moveIndex);
     if (r.kind === "consumed")
       remove(this.save, itemId, 1);
+    if (r.kind === "consumed")
+      modifyHappiness(this.save, "USEDITEM", mon);
     if (r.refused)
-      this.audio?.playCry?.("PIKACHU");
+      this.audio?.playPikaClip?.(28);
     if (r.evolveTo) {
       const to = r.evolveTo;
       this.push(new EvolutionState(this, mon, to, "ITEM", (m, t) => apply2(this.data, m, t, this.save.pokedex), () => this.learnMovesAtLevel(mon, () => {})));
@@ -24409,6 +25358,7 @@ canceled.`, {}, after);
           otName: theirParty.otName,
           otId: theirParty.otId
         };
+        modifyHappiness(this.save, "TRADE", mine);
         this.save.party[mySlot] = arrival;
         const dex = this.save.pokedex;
         if (dex) {
@@ -24842,6 +25792,9 @@ class QuickJsHost {
   }
   cry(bank, addr, engine, pitch, length) {
     native.cry?.(bank, addr, engine, pitch, length);
+  }
+  pikaPcm(clip) {
+    native.pikaPcm?.(clip);
   }
   audioWaves(engine, bank, addr) {
     native.audioWaves?.(engine, bank, addr);
