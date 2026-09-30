@@ -380,18 +380,7 @@ impl<'a> Pak<'a> {
     ///
     /// The layout was already validated by [`read`], so this only re-splits.
     pub fn audio_programs(&self) -> &'a [u8] {
-        if self.audio.len() < spec::VXPK_AUDIO_HEADER_SIZE {
-            return &[];
-        }
-        let json_len =
-            u32::from_le_bytes(self.audio[0..4].try_into().unwrap()) as usize;
-        let program_len =
-            u32::from_le_bytes(self.audio[4..8].try_into().unwrap()) as usize;
-        let off = (spec::VXPK_AUDIO_HEADER_SIZE + json_len).div_ceil(VXPK_ALIGN) * VXPK_ALIGN;
-        match off.checked_add(program_len) {
-            Some(end) if end <= self.audio.len() => &self.audio[off..end],
-            _ => &[],
-        }
+        audio_programs_of(self.audio)
     }
 
     /// Chunk directory entry for `map_id`.
@@ -1465,5 +1454,21 @@ pub(crate) mod tests {
         let mut b = good.clone();
         b[chnk + io] = 200; // index 200 >= vert_count 4
         must_err(&b, "index out of vertex range");
+    }
+}
+
+/// The programs half of an AUDI payload (see [`Pak::audio_programs`]), for a
+/// payload that did not come from a pak -- the 3DS host's per-game overlay
+/// carries its sound this way. Empty on a short or inconsistent payload.
+pub fn audio_programs_of(audio: &[u8]) -> &[u8] {
+    if audio.len() < spec::VXPK_AUDIO_HEADER_SIZE {
+        return &[];
+    }
+    let json_len = u32::from_le_bytes(audio[0..4].try_into().unwrap()) as usize;
+    let program_len = u32::from_le_bytes(audio[4..8].try_into().unwrap()) as usize;
+    let off = (spec::VXPK_AUDIO_HEADER_SIZE + json_len).div_ceil(VXPK_ALIGN) * VXPK_ALIGN;
+    match off.checked_add(program_len) {
+        Some(end) if end <= audio.len() => &audio[off..end],
+        _ => &[],
     }
 }

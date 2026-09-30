@@ -174,18 +174,30 @@ static mut SHARED_ATLAS: Option<&'static [u8]> = None;
 /// Which game this build is. Red and Blue read one shared set of map paks
 /// (the maps and every graphic but the title ribbon are the same data in
 /// both ROMs); each has its own dataset and a small atlas overlay.
-#[cfg(not(feature = "blue"))]
+#[cfg(not(any(feature = "blue", feature = "yellow")))]
 const GAME: &str = "red";
 #[cfg(feature = "blue")]
 const GAME: &str = "blue";
-#[cfg(not(feature = "blue"))]
+#[cfg(feature = "yellow")]
+const GAME: &str = "yellow";
+/// The pak set this game reads. Red and Blue share one; Yellow has its own
+/// (its Pokemon are redrawn and its atlas pages do not line up with theirs).
+#[cfg(not(feature = "yellow"))]
+const PAKS_DIR: &str = "sdmc:/3ds/voxelmon/paks";
+#[cfg(feature = "yellow")]
+const PAKS_DIR: &str = "sdmc:/3ds/voxelmon/paks_yellow";
+#[cfg(not(any(feature = "blue", feature = "yellow")))]
 const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks/gamedata.json";
 #[cfg(feature = "blue")]
 const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks/gamedata_blue.json";
-#[cfg(not(feature = "blue"))]
+#[cfg(feature = "yellow")]
+const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks_yellow/gamedata.json";
+#[cfg(not(any(feature = "blue", feature = "yellow")))]
 const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks/version_red.vxat";
 #[cfg(feature = "blue")]
 const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks/version_blue.vxat";
+#[cfg(feature = "yellow")]
+const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks_yellow/version_yellow.vxat";
 
 /// This game's own overlay (paks/version_<game>.vxat, written by
 /// tools/cook3ds.ts writeOverlay): the atlas pages, palette table and sound
@@ -348,7 +360,7 @@ unsafe fn load_map_pak(name: &str, want: Option<PlanKey>) -> bool {
         extern "C" { fn osGetTime() -> u64; }
         osGetTime()
     };
-    let path = format!("sdmc:/3ds/voxelmon/paks/{}.vxpak", name);
+    let path = format!("{}/{}.vxpak", PAKS_DIR, name);
     let new_kb = std::fs::metadata(&path)
         .map(|m| (m.len() / 1024) as usize)
         .unwrap_or(usize::MAX);
@@ -549,7 +561,7 @@ unsafe fn prefetch_start(name: &str) -> bool {
     // Counted as attempted the moment it starts, so every exit below --
     // finished, refused, or failed -- costs one try and not a loop.
     PREFETCH_TRIED.push(name.to_string());
-    let path = format!("sdmc:/3ds/voxelmon/paks/{}.vxpak", name);
+    let path = format!("{}/{}.vxpak", PAKS_DIR, name);
     let Ok(file) = std::fs::File::open(&path) else { return false };
     let Ok(md) = file.metadata() else { return false };
     let len = md.len() as usize;
@@ -2950,7 +2962,7 @@ fn main() {
     // The shared atlas pages, before any pak is read — every pak's page
     // directory resolves against this. Absent is fine and means the card
     // holds original paks that embed every page.
-    match std::fs::read("sdmc:/3ds/voxelmon/paks/common.vxat") {
+    match std::fs::read(format!("{}/common.vxat", PAKS_DIR)) {
         Ok(v) if !v.is_empty() => {
             println!("shared atlas {} KB", v.len() / 1024);
             unsafe { SHARED_ATLAS = Some(Box::leak(v.into_boxed_slice())); }
@@ -2973,7 +2985,7 @@ fn main() {
         _ => dlog(&format!("[pv] overlay: none at {}", OVERLAY_PATH)),
     }
 
-    let index_txt = std::fs::read_to_string("sdmc:/3ds/voxelmon/paks/index.txt")
+    let index_txt = std::fs::read_to_string(format!("{}/index.txt", PAKS_DIR))
         .unwrap_or_default();
     let map_index: Vec<(u32, String)> = index_txt
         .lines()
@@ -2996,6 +3008,12 @@ fn main() {
         Some(a) => a,
         None => Box::leak(pak_static.audio.to_vec().into_boxed_slice()),
     };
+    // What the synth renders from, every tick, whatever map is loaded: the
+    // same programs the guest was handed. The map paks carry no sound (the
+    // cook strips it), so rendering off the current pak played silence the
+    // moment the player left the boot map.
+    let audio_programs: &'static [u8] = pak::audio_programs_of(audi);
+    dlog(&format!("[pv] sound: {} KB of programs", audio_programs.len() / 1024));
     unsafe { voxel::init(gd_static, audi); voxel::load_save_file(); }
 
 
@@ -3192,6 +3210,10 @@ fn main() {
     // song per call and the music drags.
     let _ = unsafe { voxel::scene().audio.set_rate(AUDIO_RATE as u32) };
     let audio_on = unsafe { audio3ds_init(AUDIO_RATE, AUDIO_BUF) } != 0;
+    // Whether the DSP came up at all: it needs sdmc:/3ds/dspfirm.cdc, which a
+    // real console has (dumped once by DSP1) and an emulator usually lacks, so
+    // "off" here explains a silent game before anything else is suspected.
+    dlog(&format!("[pv] sound: audio {}", if audio_on { "on" } else { "OFF (no DSP firmware?)" }));
     let mut pcm: Vec<i16> = vec![0; (AUDIO_BUF * 2) as usize];
     println!("audio: {}", if audio_on { "ndsp open" } else { "unavailable" });
 
@@ -3201,6 +3223,9 @@ fn main() {
     let mut aud_ticks: u32 = 0;
     let mut aud_queued: u32 = 0;
     let mut aud_dropped: u32 = 0;
+    // loudest sample since the last perf line: 0 there means the synth is
+    // rendering silence, which is otherwise invisible in a log
+    let mut aud_peak: u16 = 0;
     /// Leftover sixtieths of a frame, so the long-run rate is exact.
     let mut aud_rem: i32 = 0;
     let mut sim_acc: f32 = 0.0;
@@ -3376,6 +3401,8 @@ fn main() {
                         unsafe { DRAWN }, perf_spans, unsafe { TREES_DRAWN }, perf_trees,
                         perf_slider, perf_radius,
                     ));
+                    dlog(&format!("[pv] sound: peak {} over the last 5 s", aud_peak));
+                    aud_peak = 0;
                 }
                 perf_n = 0;
                 perf_cpu_sum = 0.0; perf_cpu_max = 0.0;
@@ -3490,7 +3517,8 @@ fn main() {
                         aud_rem += AUDIO_RATE % 60;
                         let mut want = (AUDIO_RATE / 60) as usize;
                         if aud_rem >= 60 { aud_rem -= 60; want += 1; }
-                        voxel::scene().render_audio(pak_static, want, &mut pcm);
+                        voxel::scene().render_audio_with(audio_programs, want, &mut pcm);
+                        for s in &pcm[..want * 2] { aud_peak = aud_peak.max(s.unsigned_abs()); }
                         let got = audio3ds_queue(pcm.as_ptr(), want as i32);
                         aud_ticks += 1;
                         aud_queued += got as u32;
@@ -3831,7 +3859,7 @@ fn main() {
                         match resident {
                             Some(p) => bounds_from_pak(p, nid),
                             None => {
-                                let path = format!("sdmc:/3ds/voxelmon/paks/{}.vxpak", nname);
+                                let path = format!("{}/{}.vxpak", PAKS_DIR, nname);
                                 neighbor_bounds(&path, nid)
                             }
                         }
@@ -4069,7 +4097,7 @@ fn main() {
                                 strip_from_pak(p, nid, ox, oy, geom.map_min, geom.map_max, last_tint)
                             })
                             .or_else(|| {
-                                let path = format!("sdmc:/3ds/voxelmon/paks/{}.vxpak", nname);
+                                let path = format!("{}/{}.vxpak", PAKS_DIR, nname);
                                 load_neighbor_strip(
                                     &path, nid, ox, oy, geom.map_min, geom.map_max, last_tint,
                                 )

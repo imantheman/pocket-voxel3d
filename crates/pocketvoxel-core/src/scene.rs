@@ -439,8 +439,16 @@ impl Scene {
     /// read, so splitting one tick's frames across two calls writes the same
     /// bytes as asking for them at once.
     pub fn render_audio(&mut self, pak: &Pak<'_>, frames: usize, out: &mut [i16]) {
+        self.render_audio_with(pak.audio_programs(), frames, out);
+    }
+
+    /// [`Scene::render_audio`] over a given set of sound programs rather than
+    /// a pak's. The 3DS host renders from the game's own programs, taken once
+    /// at boot: its map paks no longer carry them, and a shared Red/Blue pak
+    /// set carries whichever game cooked last.
+    pub fn render_audio_with(&mut self, programs: &[u8], frames: usize, out: &mut [i16]) {
         let want = frames.min(out.len() / 2) * 2;
-        self.audio.render(pak.audio_programs(), &mut out[..want]);
+        self.audio.render(programs, &mut out[..want]);
     }
 
     /// The tweened camera pitch in degrees (smoothstep between the tween's
