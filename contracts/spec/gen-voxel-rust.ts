@@ -16,10 +16,14 @@ import {
   AUDIO_BANK_SIZE,
   AUDIO_DRUMS,
   AUDIO_EFFECT_MAX_SECONDS,
+  AUDIO_ENGINE_GEN2,
   AUDIO_ENGINES,
   AUDIO_FADE_LEVELS,
   AUDIO_FRAME_TICKS,
   AUDIO_GB_CLOCK,
+  AUDIO_GEN2_DRUMKITS,
+  AUDIO_GEN2_EFFECT_MAX_SECONDS,
+  AUDIO_GEN2_WAVES,
   AUDIO_MIX_UNIT,
   AUDIO_MUSIC_FLAG,
   AUDIO_SFX_FLAG,
@@ -403,6 +407,14 @@ export function generateVoxelRust(): string {
   put(`pub const AUDIO_BANK_SIZE: usize = ${AUDIO_BANK_SIZE};`);
   put("/// Sound-engine table slots. Red uses ids 1..3; slot 0 is never pinned.");
   put(`pub const AUDIO_ENGINES: usize = ${AUDIO_ENGINES};`);
+  put("/// Gold's sound driver: this engine id runs the Gen 2 interpreter.");
+  put(`pub const AUDIO_ENGINE_GEN2: usize = ${AUDIO_ENGINE_GEN2};`);
+  put("/// Gen 2 WaveSamples instruments (0-9).");
+  put(`pub const AUDIO_GEN2_WAVES: usize = ${AUDIO_GEN2_WAVES};`);
+  put("/// Gen 2 drum kits (pokegold audio/drumkits.asm).");
+  put(`pub const AUDIO_GEN2_DRUMKITS: usize = ${AUDIO_GEN2_DRUMKITS};`);
+  put("/// Longest Gen 2 one-shot (ChipSynth.lua@bdfac727:1444).");
+  put(`pub const AUDIO_GEN2_EFFECT_MAX_SECONDS: u32 = ${AUDIO_GEN2_EFFECT_MAX_SECONDS};`);
   put("/// Drum ids per sound engine.");
   put(`pub const AUDIO_DRUMS: usize = ${AUDIO_DRUMS};`);
   put("/// Wave instruments a sound engine exposes (5 read + 1 shared by 6..9).");

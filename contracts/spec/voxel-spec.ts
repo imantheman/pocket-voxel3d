@@ -599,7 +599,9 @@ export const EMOTE = {
 //     the position of that ROM bank in the manifest's `bankOrder`. `addr` is
 //     the program's GB address inside that window (0x4000..0x7fff), and
 //     `engine` is the sound-engine id whose wave/drum tables the program
-//     uses (1..3 in Red).
+//     uses (1..3 in Red). AUDIO_ENGINE_GEN2 (4) is Gold's driver: that id
+//     also selects the Gen 2 interpreter, and a cry's `length` is then its
+//     tempo word itself (no $80 base).
 //     music(bank, addr, engine, flags)     start a song; flags = MUSIC_FLAG
 //                                          (loop = the reference's
 //                                          allowLoops, ChipSynth.lua:429).
@@ -865,8 +867,26 @@ export const Q8 = 256;
 
 /** One ROM sound bank: the window a program address is read inside. */
 export const AUDIO_BANK_SIZE = 0x4000;
-/** Sound-engine table slots. Red uses ids 1..3; slot 0 is never pinned. */
-export const AUDIO_ENGINES = 4;
+/** Sound-engine table slots. Red uses ids 1..3; slot 0 is never pinned;
+ *  AUDIO_ENGINE_GEN2 is Gold's driver. */
+export const AUDIO_ENGINES = 5;
+/**
+ * Gold's sound driver (pokegold audio/engine.asm), ported from gen1recomp
+ * bdfac727 ChipSynth.lua's `generation == 2` paths. The engine id picks the
+ * INTERPRETER as well as the tables: a program started on this id runs the
+ * Gen 2 command set ($d0-$ff: octave, note_type, transpose, tempo, stereo
+ * panning, drum kits, sound_call $fe / sound_loop $fd ...). Its tables are
+ * pinned as `audioWaves(AUDIO_ENGINE_GEN2, bank, WaveSamples)` (the ten
+ * 16-byte instruments) and `audioDrum(AUDIO_ENGINE_GEN2, 0, bank, Drumkits)`
+ * (the kit pointer table; drum 0 is the whole table, not one drum).
+ */
+export const AUDIO_ENGINE_GEN2 = 4;
+/** Gen 2 WaveSamples: ten instruments, 0-9 (ChipSynth.lua@bdfac727:1214). */
+export const AUDIO_GEN2_WAVES = 10;
+/** Gen 2 Drumkits: six kits (pokegold audio/drumkits.asm), 12 drums each. */
+export const AUDIO_GEN2_DRUMKITS = 6;
+/** Longest Gen 2 one-shot (ChipSynth.lua@bdfac727:1444 `maxSeconds or 12`). */
+export const AUDIO_GEN2_EFFECT_MAX_SECONDS = 12;
 /** Drum ids per sound engine (Red's tables reach 19). */
 export const AUDIO_DRUMS = 32;
 /** Wave instruments a sound engine exposes: 5 read + 1 shared across 6..9
@@ -897,12 +917,33 @@ export const AUDIO_MIX_UNIT = 480;
 export const AUDIO_MUSIC_FLAG = {
   /** Honor `sound_loop 0` instead of ending the channel (ChipSynth.lua:429). */
   loop: 1 << 0,
+  /**
+   * Gen 2 SOUND option STEREO (ChipSynth.lua@bdfac727:40-46 stereoEnabled):
+   * the song's stereo_panning ($ef) bytes are honoured. Off = MONO, where
+   * only force_stereo_panning ($e4) pans.
+   */
+  stereo: 1 << 1,
+  /**
+   * Keep going if this same program (bank, addr, engine) is already the
+   * song: no restart, a running fade is cancelled back to full level
+   * (Music.lua:242-250, the same-song cue during a pending fade), and the
+   * `stereo` bit is re-applied live (ChipSynth.lua@bdfac727:1402
+   * applyStereo). Any other song starts as usual.
+   */
+  resume: 1 << 2,
 } as const;
 
 /** `sfx(…, flags)`. */
 export const AUDIO_SFX_FLAG = {
   /** A FANFARE: pause the song for the jingle (Sound.lua:55, Music.lua:102). */
   duck: 1 << 0,
+  /** Cut the running one-shot (a Source:stop, Sound.lua@bdfac727:436);
+   *  bank, addr, engine, pitch and tempo are ignored. */
+  stop: 1 << 1,
+  /** The low-health siren (ChipAudio.lua@bdfac727:667 newLowHealthAlarm),
+   *  looping over everything until an sfx op with `alarm | stop`. The other
+   *  arguments are ignored. */
+  alarm: 1 << 2,
 } as const;
 
 // ---------------------------------------------------------------------------

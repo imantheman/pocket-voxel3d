@@ -27,6 +27,7 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, write
 import { join } from "node:path";
 
 import { cook, lcdTilesFor } from "../voxelmon/cook/cli.ts";
+import { gen2AudioManifest } from "../voxelmon/cook/gen2audio.ts";
 import { writeGen2Container } from "../voxelmon/game/gen2/platform/container.ts";
 import { GEN_DIR, genMissingReason, loadGen, ROOT } from "../voxelmon/cook/data.ts";
 import { activeVersion, type GameVersion, missingInputReason, resolveEnv } from "../voxelmon/import/env.ts";
@@ -359,6 +360,14 @@ export async function cook3ds(only?: string[]): Promise<number> {
     };
     for (const f of readdirSync(GEN_DIR).filter((f) => f.endsWith(".json")).sort()) {
       sections[f.slice(0, -5)] = readFileSync(join(GEN_DIR, f), "utf8");
+    }
+    // The Gen 2 Sound/Music read the audio table from here, not from AUDI:
+    // with each program's measured length added (cook/gen2audio.ts), since
+    // the guest counts a one-shot's frames rather than asking the synth.
+    const programsPath = join(GEN_DIR, "programs.bin");
+    if (sections.audio && existsSync(programsPath)) {
+      const programs = new Uint8Array(readFileSync(programsPath));
+      sections.audio = JSON.stringify(gen2AudioManifest(JSON.parse(sections.audio), programs));
     }
     writeFileSync(join(PAKS, files.gamedata), writeGen2Container(sections));
   } else {

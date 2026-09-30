@@ -640,7 +640,11 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
     maps: packedMaps,
     glyphs,
     gameJson,
-    audioJson: hasAudio ? new Uint8Array(readFileSync(audioJsonPath)) : undefined,
+    // Gold: the programs only. Its manifest rides in the gamedata container
+    // (tools/cook3ds.ts, with each program's length measured), which is
+    // where the Gen 2 Sound/Music read it; the host renders from the
+    // programs half whichever game it is.
+    audioJson: hasAudio && !gen2 ? new Uint8Array(readFileSync(audioJsonPath)) : undefined,
     audioPrograms: hasAudio ? new Uint8Array(readFileSync(audioProgramPath)) : undefined,
     emotePage,
     metaFlags:

@@ -44,13 +44,38 @@
 //! a mod-authoring feature with no ROM content behind it — and the per-hardware
 //! runtime volume/pitch mix (`:36-95`), whose shipped values are all 1
 //! (`ChipAudio.lua:39-52`). Both are noted where their branch would have been.
+//!
+//! # The Gen 2 driver (Pokemon Gold)
+//!
+//! Engine id [`AUDIO_ENGINE_GEN2`] runs Gold's driver: a port of the
+//! `generation == 2` paths of ChipSynth.lua **at gen1recomp bdfac727** (its
+//! last MIT commit). Those citations read `ChipSynth.lua@bdfac727:N`; the
+//! bare `ChipSynth.lua:N` ones above are the older revision the Gen 1 port
+//! was made from, whose line numbers differ. Gen 1 is untouched: every Gen 2
+//! difference sits behind `Channel::gen2` / `Program::gen2`.
+//!
+//! What Gen 2 changes: the command set ($d0-$ff, @bdfac727:680-900), the
+//! note clock (SetNoteDuration's two truncating multiplies, :414-424), the
+//! frequency table with transpose and pitch_offset (:373-387), per-channel
+//! NR51 tracks and the stereo option (:436-459, :806-845), drum kits
+//! (:1155-1188), ten wave instruments (:1215-1230), the drum tail that rings
+//! on through rests (:1008-1054), a cry's length used as the tempo itself
+//! (:1312-1320) and a 12 s one-shot cap (:1444). The low-health siren
+//! (ChipAudio.lua@bdfac727:667) is here too, since only Gold's port plays it.
+//!
+//! Deliberately kept on the Gen 1 port's model rather than bdfac727's: the
+//! bipolar integer mix. bdfac727 renders unipolar channels through a DC
+//! high-pass, a one-pole low-pass (alpha 0.8) and a 0.5 gain
+//! (@bdfac727:150-152, :1357-1365); applying that to Gold alone would make
+//! the two generations mix differently on one host.
 
 use alloc::vec::Vec;
 
 use crate::spec::{
-    AUDIO_BANK_SIZE, AUDIO_DRUMS, AUDIO_EFFECT_MAX_SECONDS, AUDIO_ENGINES, AUDIO_FADE_LEVELS,
-    AUDIO_FRAME_TICKS, AUDIO_GB_CLOCK, AUDIO_MIX_UNIT, AUDIO_SFX_TEMPO, AUDIO_TICKS_PER_SECOND,
-    AUDIO_WAVES, music_flag, op, sfx_flag,
+    AUDIO_BANK_SIZE, AUDIO_DRUMS, AUDIO_EFFECT_MAX_SECONDS, AUDIO_ENGINE_GEN2, AUDIO_ENGINES,
+    AUDIO_FADE_LEVELS, AUDIO_FRAME_TICKS, AUDIO_GB_CLOCK, AUDIO_GEN2_DRUMKITS,
+    AUDIO_GEN2_EFFECT_MAX_SECONDS, AUDIO_GEN2_WAVES, AUDIO_MIX_UNIT, AUDIO_SFX_TEMPO,
+    AUDIO_TICKS_PER_SECOND, AUDIO_WAVES, music_flag, op, sfx_flag,
 };
 
 // ---------------------------------------------------------------------------
@@ -61,6 +86,27 @@ use crate::spec::{
 const PITCHES: [u16; 12] = [
     0xf82c, 0xf89d, 0xf907, 0xf96b, 0xf9ca, 0xfa23, 0xfa77, 0xfac7, 0xfb12, 0xfb58, 0xfb9b, 0xfbda,
 ];
+
+/// Gen 2 FrequencyTable (ChipSynth.lua@bdfac727:127-135, audio/notes.asm):
+/// index 0 = rest, then C_..B_ twice, so a transpose can walk into the next
+/// octave without an octave command.
+const GEN2_FREQUENCY: [u16; 25] = [
+    0x0000, //
+    0xf82c, 0xf89d, 0xf907, 0xf96b, 0xf9ca, 0xfa23, 0xfa77, 0xfac7, 0xfb12, 0xfb58, 0xfb9b, 0xfbda,
+    0xfc16, 0xfc4e, 0xfc83, 0xfcb5, 0xfce5, 0xfd11, 0xfd3b, 0xfd63, 0xfd89, 0xfdac, 0xfdcd, 0xfded,
+];
+
+/// Wave-instrument slots an engine table holds: Gen 1's nine (the tenth only
+/// ever repeats the shared sixth) and Gen 2's ten.
+const WAVE_SLOTS: usize = if AUDIO_GEN2_WAVES > AUDIO_WAVES {
+    AUDIO_GEN2_WAVES
+} else {
+    AUDIO_WAVES
+};
+
+/// Drums per Gen 2 kit, by note pitch: 1..12 name a drum, 0 is the rest the
+/// Lua never looks up (`pitch > 0`, ChipSynth.lua@bdfac727:1161).
+const GEN2_KIT_DRUMS: usize = 13;
 
 /// LuaGB / DMG 8-step duty tables, index 0-3 (ChipSynth.lua:102-107).
 const DUTY_PATTERNS: [[u8; 8]; 4] = [
@@ -390,7 +436,10 @@ struct Event {
     wave_level: u8,
     noise_parameter: u8,
     /// Drum instrument id (`Kind::Drum`), resolved against the engine tables.
+    /// Gen 2: the note's pitch inside `drum_kit`.
     drum: u8,
+    /// Gen 2 only: the channel's toggle_noise kit when the drum was struck.
+    drum_kit: u8,
     /// Lua's `event.drumSegmentIndex`, which starts unset (:555).
     drum_seg: Option<usize>,
     vibrato: Option<Vibrato>,
@@ -415,6 +464,7 @@ impl Event {
             wave_level: 1,
             noise_parameter: 0,
             drum: 0,
+            drum_kit: 0,
             drum_seg: None,
             vibrato: None,
             slide: None,
@@ -447,9 +497,13 @@ struct EngineTables {
     built: bool,
     has_waves: bool,
     /// 32 four-bit samples per instrument, stored as the reference's
-    /// `(nibble - 8)` in -8..7 rather than its -1..1 double.
-    waves: [[i8; 32]; AUDIO_WAVES],
+    /// `(nibble - 8)` in -8..7 rather than its -1..1 double. Gen 1 reads
+    /// the first AUDIO_WAVES, Gen 2 all AUDIO_GEN2_WAVES.
+    waves: [[i8; 32]; WAVE_SLOTS],
     drums: Vec<Vec<DrumSeg>>,
+    /// Gen 2: every kit's drums, `kit * GEN2_KIT_DRUMS + pitch`, decoded up
+    /// front (ChipSynth.lua@bdfac727:1155 decodes them on first use).
+    kits: Vec<Vec<DrumSeg>>,
 }
 
 impl Default for EngineTables {
@@ -457,16 +511,120 @@ impl Default for EngineTables {
         EngineTables {
             built: false,
             has_waves: false,
-            waves: [[0i8; 32]; AUDIO_WAVES],
+            waves: [[0i8; 32]; WAVE_SLOTS],
             drums: Vec::new(),
+            kits: Vec::new(),
         }
     }
 }
 
+impl EngineTables {
+    /// A Gen 2 drum. A kit past the six the ROM has is silence; the Lua
+    /// would read whatever follows the kit table.
+    fn kit_drum(&self, kit: u8, pitch: u8) -> &[DrumSeg] {
+        if kit as usize >= AUDIO_GEN2_DRUMKITS || pitch as usize >= GEN2_KIT_DRUMS {
+            return &[];
+        }
+        self.kits
+            .get(kit as usize * GEN2_KIT_DRUMS + pitch as usize)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+}
+
+/// ChipSynth.lua@bdfac727:1215-1230 readWavesGen2 — Gen 2 WaveSamples: ten
+/// 16-byte instruments, no shared tail.
+fn read_waves_gen2(programs: &[u8], pin: Pin) -> Option<[[i8; 32]; WAVE_SLOTS]> {
+    let mut out = [[0i8; 32]; WAVE_SLOTS];
+    for (wave, into) in out.iter_mut().enumerate().take(AUDIO_GEN2_WAVES) {
+        for byte_index in 0..16u16 {
+            let at = pin
+                .address
+                .wrapping_add(wave as u16 * 16)
+                .wrapping_add(byte_index);
+            let packed = rom_byte(programs, pin.bank, at)?;
+            into[byte_index as usize * 2] = ((packed >> 4) & 0x0f) as i8 - 8;
+            into[byte_index as usize * 2 + 1] = (packed & 0x0f) as i8 - 8;
+        }
+    }
+    Some(out)
+}
+
+/// ChipSynth.lua@bdfac727:910-921 — a drum's last segment rings on past its
+/// own length for as long as its envelope takes to reach zero:
+/// `floor(volume * (fade / 64) * rate + 0.5)` samples, which is exact in
+/// integers because fade/64 is a dyadic.
+fn extend_drum_envelope(segments: &mut [DrumSeg], rate: u32) {
+    let Some(last) = segments.last_mut() else {
+        return;
+    };
+    if last.fade <= 0 || last.volume == 0 {
+        return;
+    }
+    let ring = (last.volume as u64 * last.fade as u64 * rate as u64 + 32) / 64;
+    let ring_end = last.start as u64 + ring;
+    if ring_end > last.end as u64 {
+        last.end = ring_end as u32;
+    }
+}
+
+/// ChipSynth.lua@bdfac727:1155-1188 drumInstrumentGen2 — Drumkits -> the
+/// kit's pointer table -> the drum's noise_note script (ReadNoiseSample):
+/// rows of (length, envelope, NR43) until $ff, each lasting
+/// `(length & $f) + 1` frames. Unlike Gen 1 no command is rejected.
+fn read_drum_gen2(programs: &[u8], pin: Pin, kit: u8, pitch: u8, rate: u32) -> Vec<DrumSeg> {
+    let mut segments = Vec::new();
+    if pitch == 0 {
+        return segments;
+    }
+    let Some(kit_addr) = rom_word(programs, pin.bank, pin.address.wrapping_add(kit as u16 * 2))
+    else {
+        return segments;
+    };
+    let Some(mut address) = rom_word(programs, pin.bank, kit_addr.wrapping_add(pitch as u16 * 2))
+    else {
+        return segments;
+    };
+    let mut ticks = 0u64;
+    for _ in 0..64 {
+        let Some(command) = rom_byte(programs, pin.bank, address) else {
+            break;
+        };
+        address = address.wrapping_add(1);
+        if command == 0xff {
+            break;
+        }
+        let (Some(packed), Some(parameter)) = (
+            rom_byte(programs, pin.bank, address),
+            rom_byte(programs, pin.bank, address.wrapping_add(1)),
+        ) else {
+            break;
+        };
+        address = address.wrapping_add(2);
+        let duration = ((command & 0x0f) as u64 + 1) * AUDIO_FRAME_TICKS as u64;
+        segments.push(DrumSeg {
+            start: snap_ticks(ticks, rate) as u32,
+            end: snap_ticks(ticks + duration, rate) as u32,
+            volume: packed >> 4,
+            fade: fade_value(packed & 0x0f),
+            parameter,
+        });
+        ticks += duration;
+    }
+    extend_drum_envelope(&mut segments, rate);
+    segments
+}
+
+/// ChipSynth.lua@bdfac727:923-926 drumAudioEnd — the sample the drum's
+/// sound stops at (its last segment's end, ring included).
+fn drum_audio_end(segments: &[DrumSeg]) -> u32 {
+    segments.last().map_or(0, |s| s.end)
+}
+
 /// ChipSynth.lua:685-707 — five 16-byte wave instruments, then a sixth that
 /// fills slots 6..9 (the ROM's table is short and the driver clamps).
-fn read_waves(programs: &[u8], pin: Pin) -> Option<[[i8; 32]; AUDIO_WAVES]> {
-    let mut out = [[0i8; 32]; AUDIO_WAVES];
+fn read_waves(programs: &[u8], pin: Pin) -> Option<[[i8; 32]; WAVE_SLOTS]> {
+    let mut out = [[0i8; 32]; WAVE_SLOTS];
     let read_one = |slot: u16, into: &mut [i8; 32]| -> Option<()> {
         for byte_index in 0..16u16 {
             let at = pin.address.wrapping_add(slot * 16).wrapping_add(byte_index);
@@ -544,6 +702,9 @@ struct EngineState {
     tempo: u32,
     /// :747 — NR51; 0xFF is "every channel on both sides".
     pan: u8,
+    /// Gen 2 SOUND option STEREO (ChipSynth.lua@bdfac727:42 stereoEnabled),
+    /// per program: `music_flag::STEREO`. One-shots render mono regardless.
+    stereo: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -606,6 +767,31 @@ struct Channel {
     sweep_iters: u64,
     sweep_seeded: bool,
     sweep_dead: bool,
+
+    /// Gen 2 driver (ChipSynth.lua@bdfac727:316-333). Everything below is
+    /// only read when this is set.
+    gen2: bool,
+    /// CHANNEL_NOTE_LENGTH (note_type / drum_speed), default 1.
+    note_length: u8,
+    /// SetNoteDuration's fractional-frame carry.
+    duration_modifier: u8,
+    /// transpose: high nibble octaves, low nibble pitches.
+    transposition: u8,
+    /// pitch_offset, a signed word added to every note's register.
+    pitch_offset: i32,
+    /// toggle_noise: the drum kit, and whether noise notes strike drums.
+    noise_kit: u8,
+    noise_sampling: bool,
+    /// set_condition / sound_jump_if.
+    condition: u8,
+    /// CHANNEL_TRACKS: this channel's NR51 bits.
+    tracks: u8,
+    /// The last stereo_panning byte, kept while MONO (:329-331).
+    stereo_panning: Option<u8>,
+    /// force_stereo_panning ($e4) pans whatever the SOUND option says.
+    force_panning: bool,
+    /// The drum still ringing after its note ended (:1017-1019).
+    drum_tail: Option<Event>,
 }
 
 impl Channel {
@@ -652,7 +838,26 @@ impl Channel {
             sweep_iters: 0,
             sweep_seeded: false,
             sweep_dead: false,
+            gen2: opts.gen2,
+            note_length: 1,
+            duration_modifier: 0,
+            transposition: 0,
+            pitch_offset: 0,
+            noise_kit: 0,
+            noise_sampling: false,
+            condition: 0,
+            // ChipSynth.lua@bdfac727:299-301 — MonoTracks: $11/$22/$44/$88
+            tracks: Self::default_tracks(hardware),
+            stereo_panning: None,
+            force_panning: false,
+            drum_tail: None,
         }
+    }
+
+    /// This hardware channel's bit on both sides of NR51.
+    fn default_tracks(hardware: u8) -> u8 {
+        let mask = 1u8 << (hardware - 1);
+        (mask << 4) | mask
     }
 
     fn byte(&mut self, programs: &[u8]) -> Option<u8> {
@@ -707,9 +912,331 @@ impl Channel {
     }
 
     /// ChipSynth.lua:289-293 — NR51: high nibble left, low nibble right.
+    /// Gen 2 (ChipSynth.lua@bdfac727:438-442) reads the channel's own
+    /// CHANNEL_TRACKS instead of one engine-wide NR51.
     fn pan(&self, st: &EngineState) -> (bool, bool) {
         let mask = 1u8 << (self.hardware - 1);
+        if self.gen2 {
+            return ((self.tracks >> 4) & mask != 0, self.tracks & mask != 0);
+        }
         ((st.pan >> 4) & mask != 0, st.pan & mask != 0)
+    }
+
+    /// ChipSynth.lua@bdfac727:449-459 applyStereoMix — recompute the tracks
+    /// from the remembered panning byte and the live STEREO flag;
+    /// force_stereo_panning stays put.
+    fn apply_stereo_mix(&mut self, stereo: bool) {
+        let default = Self::default_tracks(self.hardware);
+        if self.force_panning {
+            return;
+        }
+        self.tracks = match self.stereo_panning {
+            Some(packed) if stereo => packed & default,
+            _ => default,
+        };
+    }
+
+    /// ChipSynth.lua@bdfac727:373-387 frequencyGen2 (pokegold GetFrequency):
+    /// FrequencyTable[pitch + transpose], shifted right arithmetically once
+    /// per octave below 7, then pitch_offset and the caller's modifier, each
+    /// wrapped to 11 bits. A pitch past the table reads 0, as `or 0` does.
+    fn frequency_gen2(&self, note: u8, octave: Option<i32>) -> u16 {
+        let trans = self.transposition as i32;
+        let pitch = note as i32 + (trans & 0x0f);
+        let oct = octave.unwrap_or(self.octave as i32) + (trans >> 4);
+        let table = GEN2_FREQUENCY.get(pitch as usize).copied().unwrap_or(0) as i32;
+        let signed = table - 0x10000;
+        let shifts = (7 - oct).max(0);
+        let mut register = (signed >> shifts) & 0x7ff;
+        register = (register + self.pitch_offset) & 0x7ff;
+        ((register + self.frequency_offset) & 0x7ff) as u16
+    }
+
+    /// ChipSynth.lua@bdfac727:397-424 durationTicksGen2 — SetNoteDuration's
+    /// two eight-bit multiplies, both throwing their overflow away:
+    ///   low     = LOW((length + 1) * NoteLength)
+    ///   product = LOW16(tempo * low + DurationModifier)
+    ///   frames  = HIGH(product), at least 1; the low byte carries over.
+    /// An SFX or cry channel (not toggled into music mode) counts its own
+    /// frame tempo; everything else the engine's tempo command.
+    fn duration_ticks_gen2(&mut self, length: u32, st: &EngineState) -> u64 {
+        let tempo = if self.sfx && !self.execute_music {
+            self.frame_ticks
+        } else {
+            st.tempo
+        };
+        let low = ((length + 1) * self.note_length as u32) & 0xff;
+        let product = (tempo.wrapping_mul(low) + self.duration_modifier as u32) & 0xffff;
+        self.duration_modifier = (product & 0xff) as u8;
+        let frames = (product >> 8).max(1);
+        frames as u64 * AUDIO_FRAME_TICKS as u64
+    }
+
+    /// ChipSynth.lua@bdfac727:491-500 noiseEvent.
+    fn noise_event(&mut self, ticks: u64, volume: u8, fade: i8, parameter: u8, st: &EngineState, rate: u32) -> Event {
+        let mut event = Event::blank(Kind::Noise);
+        event.volume = volume;
+        event.fade = fade;
+        event.noise_parameter = parameter;
+        let (l, r) = self.pan(st);
+        event.pan_left = l;
+        event.pan_right = r;
+        self.timed(event, ticks, rate)
+    }
+
+    /// ChipSynth.lua@bdfac727:680-900 nextEventGen2 — Gold's channel-program
+    /// interpreter (pokegold macros/scripts/audio.asm, FIRST_MUSIC_CMD $d0).
+    /// Notes pack like Gen 1's but pitch 0 is the rest; call and loop are
+    /// swapped against Gen 1 ($fe call, $fd loop) and $fc is sound_jump.
+    fn next_event_gen2(&mut self, st: &mut EngineState, programs: &[u8], rate: u32) -> Option<Event> {
+        if self.ended {
+            return None;
+        }
+        for _ in 0..WALK_GUARD {
+            let command_address = self.address;
+            let Some(command) = self.byte(programs) else {
+                self.ended = true;
+                return None;
+            };
+
+            if command < 0xd0 && self.sfx && !self.execute_music {
+                // :686-711 ParseSFXOrCry — a square_note / noise_note row: the
+                // WHOLE byte is the length handed to SetNoteDuration, then the
+                // envelope, then the raw register (two bytes) or NR43 (one).
+                let ticks = self.duration_ticks_gen2(command as u32, st);
+                let packed = self.byte(programs)?;
+                let volume = packed >> 4;
+                let fade = fade_value(packed & 0x0f);
+                if self.is_noise {
+                    let parameter = ((self.byte(programs)? as i32 + self.frequency_offset) & 0xff) as u8;
+                    return Some(self.noise_event(ticks, volume, fade, parameter, st, rate));
+                }
+                // :706-710 — the cry pitch / SFX modifier is a 16-bit add of
+                // which 11 bits reach the register.
+                let word = self.word(programs)? as i32;
+                let register = ((word + self.frequency_offset) & 0x7ff) as u16;
+                return Some(self.tone(ticks, register, Some(volume), Some(fade), st, rate));
+            } else if command < 0xd0 {
+                // :712-725 — a note: pitch (0 = rest) and length - 1
+                let note = command >> 4;
+                let length = (command & 0x0f) as u32;
+                let ticks = self.duration_ticks_gen2(length, st);
+                if note == 0 || (self.is_noise && !self.noise_sampling) {
+                    let e = Event::blank(Kind::Silence);
+                    return Some(self.timed(e, ticks, rate));
+                }
+                if self.is_noise {
+                    // :502-516 drumEvent — the note names a drum of the kit
+                    let mut event = Event::blank(Kind::Drum);
+                    event.drum = note;
+                    event.drum_kit = self.noise_kit;
+                    let (l, r) = self.pan(st);
+                    event.pan_left = l;
+                    event.pan_right = r;
+                    return Some(self.timed(event, ticks, rate));
+                }
+                let register = self.frequency_gen2(note, None);
+                return Some(self.tone(ticks, register, None, None, st, rate));
+            }
+            match command {
+                // :726-728 octave: $d0 = octave 8 (stored 0) .. $d7 = 1 (7)
+                0xd0..=0xd7 => self.octave = command & 7,
+                0xd8 => {
+                    // :729-740 note_type / drum_speed
+                    self.note_length = self.byte(programs)?;
+                    if !self.is_noise {
+                        let packed = self.byte(programs)?;
+                        self.set_envelope(packed);
+                    }
+                }
+                0xd9 => self.transposition = self.byte(programs)?, // :741-742
+                0xda => {
+                    // :743-748 tempo, big-endian; resets this channel's carry
+                    let hi = self.byte(programs)? as u32;
+                    let lo = self.byte(programs)? as u32;
+                    st.tempo = hi * 0x100 + lo;
+                    self.duration_modifier = 0;
+                }
+                0xdb => self.duty = Duty::One(self.byte(programs)? & 3), // :749-750
+                0xdc => {
+                    let packed = self.byte(programs)?; // :751-759 volume_envelope
+                    self.set_envelope(packed);
+                }
+                0xdd => {
+                    // :760-766 pitch_sweep
+                    let packed = self.byte(programs)?;
+                    self.sweep = Some(Sweep {
+                        pace: (packed >> 4) & 7,
+                        subtract: packed & 8 != 0,
+                        shift: packed & 7,
+                    });
+                }
+                0xde => {
+                    // :767-774 duty_cycle_pattern: one duty per 60 Hz frame
+                    let packed = self.byte(programs)?;
+                    self.duty = Duty::Cycle([
+                        (packed >> 6) & 3,
+                        (packed >> 4) & 3,
+                        (packed >> 2) & 3,
+                        packed & 3,
+                    ]);
+                }
+                0xdf => self.execute_music = !self.execute_music, // :775-776 toggle_sfx
+                0xe0 => {
+                    // :777-783 pitch_slide: lead-in length, then octave + note
+                    let length = self.byte(programs)?;
+                    let packed = self.byte(programs)?;
+                    let target = self.frequency_gen2(packed & 0x0f, Some((packed >> 4) as i32));
+                    self.pending_slide = Some((length, target));
+                }
+                0xe1 => {
+                    // :784-796 vibrato
+                    let delay = self.byte(programs)?;
+                    let packed = self.byte(programs)?;
+                    let depth = (packed >> 4) as u16;
+                    self.vibrato = if depth == 0 {
+                        None
+                    } else {
+                        Some(Vibrato {
+                            delay: delay as u32,
+                            above: (depth >> 1) + (depth & 1),
+                            below: depth >> 1,
+                            rate: (packed & 0x0f) as u32,
+                        })
+                    };
+                }
+                // :797-798 unknownmusic0xe2; :813-814 volume (master, not
+                // mixed); :820-821 unused
+                0xe2 | 0xe5 | 0xe7 | 0xe8 => {
+                    self.byte(programs)?;
+                }
+                // :799-805 toggle_noise, :846-852 sfx_toggle_noise — turning
+                // it ON reads the kit; turning it off reads nothing
+                0xe3 | 0xf0 => {
+                    if self.noise_sampling {
+                        self.noise_sampling = false;
+                    } else {
+                        self.noise_sampling = true;
+                        self.noise_kit = self.byte(programs)?;
+                    }
+                }
+                0xe4 => {
+                    // :806-812 force_stereo_panning
+                    let packed = self.byte(programs)?;
+                    self.tracks = packed & Self::default_tracks(self.hardware);
+                    self.force_panning = true;
+                }
+                0xe6 => {
+                    // :815-819 pitch_offset, a signed big-endian word
+                    let hi = self.byte(programs)? as i32;
+                    let lo = self.byte(programs)? as i32;
+                    let value = hi * 0x100 + lo;
+                    self.pitch_offset = if value >= 0x8000 { value - 0x10000 } else { value };
+                }
+                0xe9 => {
+                    // :822-825 tempo_relative
+                    let adj = self.byte(programs)? as i8 as i32;
+                    st.tempo = ((st.tempo as i32 + adj) & 0xffff) as u32;
+                }
+                0xea => self.address = self.word(programs)?, // :826-827 restart_channel
+                // :828-829 new_song, :832-833 unknownmusic0xee
+                0xeb | 0xee => {
+                    self.word(programs)?;
+                }
+                // :830-831 sfx_priority_on/off; :853-854 $f1-$f9: no params
+                0xec | 0xed | 0xf1..=0xf9 => {}
+                0xef => {
+                    // :834-845 stereo_panning: applied only under STEREO, the
+                    // byte kept either way
+                    let packed = self.byte(programs)?;
+                    self.stereo_panning = Some(packed);
+                    self.force_panning = false;
+                    if st.stereo {
+                        self.tracks = packed & Self::default_tracks(self.hardware);
+                    }
+                }
+                0xfa => self.condition = self.byte(programs)?, // :855-856 set_condition
+                0xfb => {
+                    // :857-859 sound_jump_if
+                    let want = self.byte(programs)?;
+                    let target = self.word(programs)?;
+                    if self.condition == want {
+                        self.address = target;
+                    }
+                }
+                0xfc => self.address = self.word(programs)?, // :860-861 sound_jump
+                0xfd => {
+                    // :862-881 sound_loop: count 0 = forever, else n-1 more
+                    let count = self.byte(programs)?;
+                    let target = self.word(programs)?;
+                    if !self.sound_loop(command_address, count, target) {
+                        return None;
+                    }
+                }
+                0xfe => {
+                    // :882-884 sound_call — the return address is past the
+                    // pointer
+                    let ret = self.address.wrapping_add(2);
+                    self.call_stack.push(ret);
+                    self.address = self.word(programs)?;
+                }
+                _ => {
+                    // 0xff, :885-892 sound_ret — an empty stack ends the channel
+                    match self.call_stack.pop() {
+                        Some(ret) => self.address = ret,
+                        None => {
+                            self.ended = true;
+                            return None;
+                        }
+                    }
+                }
+            }
+        }
+        self.ended = true; // :898-899
+        None
+    }
+
+    /// note_type / volume_envelope's packed byte: the wave channel's output
+    /// level + instrument, or a pulse's volume + fade
+    /// (ChipSynth.lua@bdfac727:733-739, :753-758).
+    fn set_envelope(&mut self, packed: u8) {
+        if self.is_wave {
+            self.wave_level = (packed >> 4) & 3;
+            self.wave_instrument = packed & 0x0f;
+        } else {
+            self.volume = packed >> 4;
+            self.fade = fade_value(packed & 0x0f);
+        }
+    }
+
+    /// sound_loop's bookkeeping (ChipSynth.lua@bdfac727:862-881, the same
+    /// rule as Gen 1's :427-446). False when a `sound_loop 0` ended a
+    /// channel that may not loop.
+    fn sound_loop(&mut self, command_address: u16, count: u8, target: u16) -> bool {
+        if count == 0 {
+            if self.allow_loops {
+                self.address = target;
+                return true;
+            }
+            self.ended = true;
+            return false;
+        }
+        let slot = self.loop_counts.iter().position(|&(a, _)| a == command_address);
+        let remaining = match slot {
+            Some(i) => self.loop_counts[i].1,
+            None => count,
+        }
+        .saturating_sub(1);
+        if remaining > 0 {
+            match slot {
+                Some(i) => self.loop_counts[i].1 = remaining,
+                None => self.loop_counts.push((command_address, remaining)),
+            }
+            self.address = target;
+        } else if let Some(i) = slot {
+            self.loop_counts.swap_remove(i);
+        }
+        true
     }
 
     /// ChipSynth.lua:295-323 tone.
@@ -762,6 +1289,10 @@ impl Channel {
     /// Runs state-only commands until one produces an event, or the program
     /// ends.
     fn next_event(&mut self, st: &mut EngineState, programs: &[u8], rate: u32) -> Option<Event> {
+        if self.gen2 {
+            // ChipSynth.lua@bdfac727:523-525
+            return self.next_event_gen2(st, programs, rate);
+        }
         if self.ended {
             return None;
         }
@@ -1047,6 +1578,9 @@ impl Channel {
         programs: &[u8],
         rate: u32,
     ) -> i32 {
+        if self.gen2 {
+            return self.sample_gen2(st, tables, programs, rate);
+        }
         // :572-577, bounded (see WALK_GUARD).
         let mut guard = 0;
         while !self.ended
@@ -1097,7 +1631,146 @@ impl Channel {
             }
             Kind::Tone => {}
         }
+        self.sample_tone(event, sample_index, tables, rate)
+    }
 
+    /// Reset what a new event starts from (ChipSynth.lua:573-576 and the
+    /// Rust port's cached modulation state) — everything but the noise
+    /// register, which the two drivers treat differently.
+    fn start_event(&mut self, rate: u32) {
+        self.phase = 0;
+        self.step_key = i64::MIN;
+        self.frame = 0;
+        self.frame_next = frame_boundary(0, rate);
+        self.sweep_reg = 0;
+        self.sweep_next = 0;
+        self.sweep_iters = 0;
+        self.sweep_seeded = false;
+        self.sweep_dead = false;
+    }
+
+    /// ChipSynth.lua@bdfac727:1008-1108 sample(), as the Gen 2 driver runs
+    /// it: the Gen 1 port's sample plus the drum tail. A drum whose sound
+    /// outlasts its note keeps ringing through the rests after it, with its
+    /// noise register running on, until another note or its own end.
+    fn sample_gen2(
+        &mut self,
+        st: &mut EngineState,
+        tables: &EngineTables,
+        programs: &[u8],
+        rate: u32,
+    ) -> i32 {
+        // :1009-1024, bounded (see WALK_GUARD).
+        let mut guard = 0;
+        while !self.ended
+            && self
+                .event
+                .as_ref()
+                .is_none_or(|e| e.sample >= e.samples)
+        {
+            let prev = self.event;
+            self.event = self.next_event(st, programs, rate);
+            self.start_event(rate);
+            let next = self.event.map(|e| e.kind);
+            if next == Some(Kind::Drum) {
+                // :1014-1016
+                self.drum_tail = None;
+                self.reset_noise();
+            } else if let Some(p) = prev.filter(|p| {
+                p.kind == Kind::Drum && p.sample < drum_audio_end(tables.kit_drum(p.drum_kit, p.drum))
+            }) {
+                // :1017-1019 — the drum outlasted its note
+                self.drum_tail = Some(p);
+            } else if !(next == Some(Kind::Silence) && self.drum_tail.is_some()) {
+                // :1020-1022
+                self.drum_tail = None;
+                self.reset_noise();
+            }
+            guard += 1;
+            if guard >= EVENT_GUARD {
+                self.ended = true;
+            }
+        }
+        let Some(event) = self.event else {
+            return self.sample_tail(tables, rate); // :1027-1037
+        };
+        let sample_index = event.sample;
+        if let Some(live) = self.event.as_mut() {
+            live.sample = sample_index + 1;
+        }
+        match event.kind {
+            Kind::Silence => return self.sample_tail(tables, rate), // :1041-1051
+            Kind::Drum => {
+                // :1052-1054
+                let segments = tables.kit_drum(event.drum_kit, event.drum);
+                let mut seg = event.drum_seg;
+                let v = self.sample_drum_at(&mut seg, sample_index, segments, rate);
+                if let Some(live) = self.event.as_mut() {
+                    live.drum_seg = seg;
+                }
+                return v;
+            }
+            Kind::Noise | Kind::Tone => {}
+        }
+        self.drum_tail = None; // :1055
+        if event.kind == Kind::Noise {
+            let volume = envelope_volume(event.volume, event.fade, sample_index, rate);
+            return self.sample_noise(event.noise_parameter, rate) * volume as i32 * VOLUME_UNIT;
+        }
+        self.sample_tone(event, sample_index, tables, rate)
+    }
+
+    /// One sample of the ringing drum tail, if any (ChipSynth.lua@bdfac727
+    /// :1028-1036): the tail keeps its own sample counter and segment.
+    fn sample_tail(&mut self, tables: &EngineTables, rate: u32) -> i32 {
+        let Some(mut tail) = self.drum_tail.take() else {
+            return 0;
+        };
+        let segments = tables.kit_drum(tail.drum_kit, tail.drum);
+        let index = tail.sample;
+        tail.sample = index + 1;
+        if index >= drum_audio_end(segments) {
+            return 0; // the tail is done and stays dropped
+        }
+        let mut seg = tail.drum_seg;
+        let v = self.sample_drum_at(&mut seg, index, segments, rate);
+        tail.drum_seg = seg;
+        self.drum_tail = Some(tail);
+        v
+    }
+
+    /// ChipSynth.lua@bdfac727:991-1006 sampleDrum, over an explicit segment
+    /// cursor so the running event and the ringing tail can each keep one.
+    fn sample_drum_at(
+        &mut self,
+        cursor: &mut Option<usize>,
+        sample_index: u32,
+        segments: &[DrumSeg],
+        rate: u32,
+    ) -> i32 {
+        let mut index = cursor.unwrap_or(0);
+        while segments.get(index).is_some_and(|s| sample_index >= s.end) {
+            index += 1;
+        }
+        let Some(segment) = segments.get(index).copied() else {
+            return 0;
+        };
+        if sample_index < segment.start {
+            return 0;
+        }
+        if *cursor != Some(index) {
+            *cursor = Some(index);
+            self.reset_noise();
+        }
+        let volume = envelope_volume(segment.volume, segment.fade, sample_index - segment.start, rate);
+        self.sample_noise(segment.parameter, rate) * volume as i32 * VOLUME_UNIT
+    }
+
+    /// ChipSynth.lua:584-640 (@bdfac727:1056-1107) — the tone half of a
+    /// sample: envelope, sweep / slide / vibrato, then the pulse duty or the
+    /// wave instrument. The same for both drivers but for how many wave
+    /// instruments the engine has.
+    fn sample_tone(&mut self, event: Event, sample_index: u32, tables: &EngineTables, rate: u32) -> i32 {
         let volume = envelope_volume(event.volume, event.fade, sample_index, rate);
 
         // The 60 Hz frame index (:596). Monotone in sample_index, so walking
@@ -1155,7 +1828,10 @@ impl Channel {
             }
             // :622-629 — 32 four-bit samples; floor(phase * 32) is the top 5
             // bits of the Q64 phase.
-            let wave = &tables.waves[(event.wave_instrument as usize).min(AUDIO_WAVES - 1)];
+            // @bdfac727:1090-1091 clamps to #waves: nine for Gen 1, ten for
+            // Gen 2.
+            let slots = if self.gen2 { AUDIO_GEN2_WAVES } else { AUDIO_WAVES };
+            let wave = &tables.waves[(event.wave_instrument as usize).min(slots - 1)];
             let index = (phase >> 59) as usize;
             return wave[index] as i32 * WAVE_LEVEL_UNITS[(event.wave_level & 3) as usize];
         }
@@ -1191,6 +1867,10 @@ struct ProgramOpts {
     /// Sum one value per frame into both outputs instead of honoring NR51
     /// (ChipSynth.lua:843-864 renderEffectData: SFX and cries render mono).
     mono: bool,
+    /// Run the Gen 2 driver (the program's engine is AUDIO_ENGINE_GEN2).
+    gen2: bool,
+    /// Gen 2 STEREO option (`music_flag::STEREO`).
+    stereo: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1206,6 +1886,11 @@ struct Program {
     /// [`Program::exact`]. Written with two integers per channel per frame;
     /// no arithmetic rides on it.
     mix: Vec<(i32, bool, bool)>,
+    /// Gen 2 driver.
+    gen2: bool,
+    /// The header this program was built from (bank slot, address), for
+    /// `music_flag::RESUME`.
+    origin: (u8, u16),
 }
 
 impl Program {
@@ -1223,7 +1908,14 @@ impl Program {
             let frame_ticks = if hardware == 4 {
                 AUDIO_FRAME_TICKS
             } else if let Some(length) = opts.cry_length {
-                0x80 + length
+                if opts.gen2 {
+                    // ChipSynth.lua@bdfac727:1312-1319 — _PlayCry writes
+                    // wCryLength, a full word, straight into CHANNEL_TEMPO:
+                    // no $80 base in Gen 2.
+                    length
+                } else {
+                    0x80 + length
+                }
             } else {
                 opts.frame_ticks.unwrap_or(AUDIO_FRAME_TICKS)
             };
@@ -1235,11 +1927,36 @@ impl Program {
             state: EngineState {
                 tempo: 0x100,
                 pan: 0xff,
+                stereo: opts.stereo,
             },
             engine,
             mono: opts.mono,
             frames: 0,
+            gen2: opts.gen2,
+            origin: (bank, address),
         })
+    }
+
+    /// ChipSynth.lua@bdfac727:1402-1408 applyStereo — a live SOUND toggle.
+    fn apply_stereo(&mut self, stereo: bool) {
+        self.state.stereo = stereo;
+        if !self.gen2 {
+            return;
+        }
+        for channel in self.channels.iter_mut() {
+            channel.apply_stereo_mix(stereo);
+        }
+    }
+
+    /// The one-shot cap in frames (ChipSynth.lua:849; @bdfac727:1444 for
+    /// Gen 2).
+    fn cap(&self, rate: u32) -> u32 {
+        let seconds = if self.gen2 {
+            AUDIO_GEN2_EFFECT_MAX_SECONDS
+        } else {
+            AUDIO_EFFECT_MAX_SECONDS
+        };
+        rate.saturating_mul(seconds)
     }
 
     /// ChipSynth.lua:776-781 — every channel ended and drained.
@@ -1265,10 +1982,16 @@ impl Program {
         for (channel, slot) in channels.iter_mut().zip(mix.iter_mut()) {
             let value = channel.sample(state, tables, programs, rate);
             // :794-795 — an event that states no pan counts as on, and a
-            // channel with no event contributes 0 either way.
-            let (l, r) = match channel.event.as_ref() {
-                Some(e) => (e.pan_left, e.pan_right),
-                None => (true, true),
+            // channel with no event contributes 0 either way. Gen 2 reads
+            // the channel's live tracks instead (@bdfac727:1386-1389), which
+            // also pans a drum tail ringing past the channel's last note.
+            let (l, r) = if channel.gen2 {
+                channel.pan(state)
+            } else {
+                match channel.event.as_ref() {
+                    Some(e) => (e.pan_left, e.pan_right),
+                    None => (true, true),
+                }
             };
             *slot = (value, l, r);
             if mono {
@@ -1435,6 +2158,36 @@ pub struct Audio {
     /// Yellow's Pikachu clips (empty for Red and Blue) and the one playing.
     pcm_bank: PcmBank,
     pcm: Option<PcmVoice>,
+    /// Gold's low-health siren, while it loops.
+    alarm: Option<Alarm>,
+}
+
+/// ChipAudio.lua@bdfac727:662-682 newLowHealthAlarm — a looping one-second
+/// buffer of two PlayDanger cycles (audio/engine.asm:531): frames 0..15 of
+/// each 30 at register $750, 16..29 at $6ee, a 50% square at a quarter of
+/// full scale on both sides. The buffer is built with its phase at zero, so
+/// every loop restarts the oscillator exactly as replaying it does.
+#[derive(Clone, Copy, Debug)]
+struct Alarm {
+    /// Sample index inside the one-second buffer.
+    pos: u32,
+    phase: u64,
+}
+
+impl Alarm {
+    /// The next sample: +1 or -1 (times a quarter of full scale).
+    fn next(&mut self, rate: u32) -> i32 {
+        if self.pos >= rate {
+            self.pos = 0;
+            self.phase = 0;
+        }
+        let frame = frame_at(self.pos, rate) % 30;
+        let register = if frame < 16 { 0x750 } else { 0x6ee };
+        // :675-677 — the phase advances BEFORE it is read
+        self.phase = advance_phase(self.phase, phase_step(register as f64, rate, false));
+        self.pos += 1;
+        if self.phase < 1u64 << 63 { 1 } else { -1 }
+    }
 }
 
 impl Default for Audio {
@@ -1458,7 +2211,13 @@ impl Audio {
             pending: Vec::new(),
             pcm_bank: PcmBank::default(),
             pcm: None,
+            alarm: None,
         }
+    }
+
+    /// Whether the low-health siren is looping.
+    pub fn alarm_playing(&self) -> bool {
+        self.alarm.is_some()
     }
 
     /// Hand over Yellow's Pikachu clips (see [`PcmBank`]). Boot-time host
@@ -1626,6 +2385,9 @@ impl Audio {
             self.ducked = false;
             self.fade = None;
             self.level = AUDIO_FADE_LEVELS;
+            if let Some(alarm) = self.alarm.as_mut() {
+                *alarm = Alarm { pos: 0, phase: 0 }; // rebuilt at the new rate
+            }
             for t in self.tables.iter_mut() {
                 t.built = false; // drum spans are in samples
             }
@@ -1684,6 +2446,33 @@ impl Audio {
         }
         let rate = self.rate;
         let wave_pin = self.wave_pins[engine];
+        if engine == AUDIO_ENGINE_GEN2 {
+            // ChipSynth.lua@bdfac727:1263-1268 readWavesGen2, and every drum
+            // of every kit behind the Drumkits pin (drum slot 0).
+            let kit_pin = self.drum_pins[engine][0];
+            let mut kits = Vec::with_capacity(AUDIO_GEN2_DRUMKITS * GEN2_KIT_DRUMS);
+            for kit in 0..AUDIO_GEN2_DRUMKITS as u8 {
+                for pitch in 0..GEN2_KIT_DRUMS as u8 {
+                    kits.push(if kit_pin.set {
+                        read_drum_gen2(programs, kit_pin, kit, pitch, rate)
+                    } else {
+                        Vec::new()
+                    });
+                }
+            }
+            let table = &mut self.tables[engine];
+            table.kits = kits;
+            table.drums = Vec::new();
+            match wave_pin.set.then(|| read_waves_gen2(programs, wave_pin)).flatten() {
+                Some(waves) => {
+                    table.waves = waves;
+                    table.has_waves = true;
+                }
+                None => table.has_waves = false,
+            }
+            table.built = true;
+            return;
+        }
         let drums: Vec<Vec<DrumSeg>> = (0..AUDIO_DRUMS)
             .map(|d| {
                 let pin = self.drum_pins[engine][d];
@@ -1713,6 +2502,20 @@ impl Audio {
         if engine >= AUDIO_ENGINES {
             return;
         }
+        let stereo = flags & music_flag::STEREO != 0;
+        if flags & music_flag::RESUME != 0
+            && let Some(song) = self.music.as_mut()
+            && song.engine == engine
+            && song.origin == (bank as u8, address as u16)
+        {
+            // Music.lua:242-250 — the same song again: keep it, drop the
+            // fade back to full; and re-apply the SOUND option live
+            // (ChipSynth.lua@bdfac727:1402 applyStereo).
+            song.apply_stereo(stereo);
+            self.fade = None;
+            self.level = AUDIO_FADE_LEVELS;
+            return;
+        }
         self.ensure_tables(engine, programs);
         let opts = ProgramOpts {
             allow_loops: flags & music_flag::LOOP != 0,
@@ -1720,6 +2523,8 @@ impl Audio {
             frame_ticks: None,
             cry_length: None,
             mono: false,
+            gen2: engine == AUDIO_ENGINE_GEN2,
+            stereo,
         };
         if let Some(program) = Program::build(programs, bank as u8, address as u16, engine, &opts) {
             self.music = Some(program);
@@ -1764,12 +2569,32 @@ impl Audio {
         tempo: u32,
         flags: u32,
     ) {
+        if flags & sfx_flag::ALARM != 0 {
+            // ChipAudio.lua@bdfac727:667 via Sound.lua@bdfac727:837
+            // startLoop / :870 stopLoop — idempotent both ways.
+            if flags & sfx_flag::STOP != 0 {
+                self.alarm = None;
+            } else if self.alarm.is_none() {
+                self.alarm = Some(Alarm { pos: 0, phase: 0 });
+            }
+            return;
+        }
+        if flags & sfx_flag::STOP != 0 {
+            // Sound.lua@bdfac727:436 / :443 / :828 — Source:stop on the
+            // running one-shot, which also ends a fanfare's hold on the song
+            // (Music.lua:74-82).
+            self.effect = None;
+            self.ducked = false;
+            return;
+        }
         let opts = ProgramOpts {
             allow_loops: false,
             frequency_offset: pitch,
             frame_ticks: Some(AUDIO_SFX_TEMPO + tempo),
             cry_length: None,
             mono: true,
+            gen2: engine as usize == AUDIO_ENGINE_GEN2,
+            stereo: false,
         };
         if self.start_effect(programs, bank, address, engine, &opts) {
             self.ducked = flags & sfx_flag::DUCK != 0;
@@ -1793,6 +2618,8 @@ impl Audio {
             frame_ticks: None,
             cry_length: Some(length),
             mono: true,
+            gen2: engine as usize == AUDIO_ENGINE_GEN2,
+            stereo: false,
         };
         if self.start_effect(programs, bank, address, engine, &opts) {
             self.ducked = false;
@@ -1826,6 +2653,7 @@ impl Audio {
         self.music = None;
         self.effect = None;
         self.pcm = None;
+        self.alarm = None;
         self.ducked = false;
         self.fade = None;
         self.level = AUDIO_FADE_LEVELS;
@@ -1859,7 +2687,6 @@ impl Audio {
     pub fn render(&mut self, programs: &[u8], out: &mut [i16]) {
         self.apply_queued(programs);
         let rate = self.rate;
-        let cap = rate.saturating_mul(AUDIO_EFFECT_MAX_SECONDS);
         // Split borrows: the tables are read while the programs are stepped.
         // Source samples per output frame, Q16 (22050 over 11025 = 2.0).
         let pcm_step = if rate > 0 {
@@ -1875,6 +2702,7 @@ impl Audio {
             level,
             pcm_bank,
             pcm,
+            alarm,
             ..
         } = self;
 
@@ -1923,6 +2751,11 @@ impl Audio {
                 left += l * AUDIO_FADE_LEVELS as i32;
                 right += r * AUDIO_FADE_LEVELS as i32;
             }
+            // Gold's siren, over everything at a quarter of full scale
+            // (ChipAudio.lua@bdfac727:677), which is one channel's worth.
+            let siren = alarm.as_mut().map_or(0, |a| a.next(rate));
+            left += siren * AUDIO_MIX_UNIT * AUDIO_FADE_LEVELS as i32;
+            right += siren * AUDIO_MIX_UNIT * AUDIO_FADE_LEVELS as i32;
 
             // The tie-break needs the reference's own double for the frame,
             // and only on a tie — see `quantize`.
@@ -1937,13 +2770,13 @@ impl Audio {
                 } else {
                     0.0
                 };
-                m * *level as f64 / AUDIO_FADE_LEVELS as f64 + e
+                m * *level as f64 / AUDIO_FADE_LEVELS as f64 + e + siren as f64 * 0.25
             };
             frame[0] = quantize(left, || exact(false));
             frame[1] = quantize(right, || exact(true));
 
             if let Some(program) = effect.as_ref()
-                && (program.finished() || program.frames >= cap)
+                && (program.finished() || program.frames >= program.cap(rate))
             {
                 *effect = None;
                 *ducked = false;
@@ -2333,5 +3166,416 @@ mod tests {
         assert!(!audio.set_rate(48000));
         assert!(!audio.set_rate(0));
         assert_eq!(audio.rate(), 11025);
+    }
+
+    // -----------------------------------------------------------------------
+    // The Gen 2 driver (ChipSynth.lua@bdfac727)
+    // -----------------------------------------------------------------------
+
+    const G2: u32 = AUDIO_ENGINE_GEN2 as u32;
+
+    fn gen2_opts() -> ProgramOpts {
+        ProgramOpts {
+            allow_loops: true,
+            frequency_offset: 0,
+            frame_ticks: None,
+            cry_length: None,
+            mono: false,
+            gen2: true,
+            stereo: false,
+        }
+    }
+
+    fn gen2_state() -> EngineState {
+        EngineState {
+            tempo: 0x100,
+            pan: 0xff,
+            stereo: false,
+        }
+    }
+
+    /// A Gen 2 music channel (hardware 1) reading `program` at 0x4100.
+    fn gen2_channel(programs: &mut [u8], program: &[u8]) -> Channel {
+        put(programs, 0, 0x4100, program);
+        Channel::new(0, 1, 0x4100, &gen2_opts(), AUDIO_FRAME_TICKS)
+    }
+
+    /// Every event the channel yields until it ends: (kind, register,
+    /// frames), at most `n`.
+    fn gen2_events(ch: &mut Channel, st: &mut EngineState, programs: &[u8], n: usize) -> Vec<(Kind, u16, u32)> {
+        let mut out = Vec::new();
+        while out.len() < n {
+            let before = ch.time_ticks;
+            let Some(e) = ch.next_event(st, programs, 44100) else {
+                break;
+            };
+            let frames = ((ch.time_ticks - before) / AUDIO_FRAME_TICKS as u64) as u32;
+            out.push((e.kind, e.register, frames));
+        }
+        out
+    }
+
+    #[test]
+    fn gen2_notes_use_the_gen2_frequency_table_octave_and_transpose() {
+        let mut programs = blank_programs();
+        // octave 4, note_type 12 / $f0, C len 1; transpose +1 octave +2
+        // pitches, C len 1; rest len 1; end
+        let mut ch = gen2_channel(
+            &mut programs,
+            &[0xd4, 0xd8, 0x0c, 0xf0, 0x10, 0xd9, 0x12, 0x10, 0x00, 0xff],
+        );
+        let mut st = gen2_state();
+        let ev = gen2_events(&mut ch, &mut st, &programs, 8);
+        // $f82c - $10000 = -2004; >> (7 - 4) = -251 -> 2048 - 251
+        // length nibble 0: (0 + 1) * 12 frames at tempo $100
+        assert_eq!(ev[0], (Kind::Tone, 1797, 12));
+        // pitch 1 + 2 = D (table $f907 = -1785), octave 5: >> 2 = -447
+        assert_eq!(ev[1], (Kind::Tone, 2048 - 447, 12));
+        // pitch 0 is the rest, still timed by note_type
+        assert_eq!(ev[2].0, Kind::Silence);
+        assert_eq!(ev[2].2, 12);
+        assert_eq!(ev.len(), 3);
+        assert!(ch.ended);
+    }
+
+    #[test]
+    fn gen2_note_duration_truncates_and_carries_like_set_note_duration() {
+        let mut programs = blank_programs();
+        // note_type 12, tempo $0085, then two C notes of length 4:
+        // low = 4 * 12 = 48; 133 * 48 = 6384 -> 24 frames, carry 240;
+        // 6384 + 240 = 6624 -> 25 frames, carry 224
+        let mut ch = gen2_channel(
+            &mut programs,
+            &[0xd4, 0xd8, 0x0c, 0xf0, 0xda, 0x00, 0x85, 0x13, 0x13, 0xff],
+        );
+        let mut st = gen2_state();
+        let ev = gen2_events(&mut ch, &mut st, &programs, 4);
+        assert_eq!(st.tempo, 0x85);
+        assert_eq!(ev[0].2, 24);
+        assert_eq!(ev[1].2, 25);
+        assert_eq!(ch.duration_modifier, 224);
+        // tempo_relative -$05 on a fresh state
+        let mut ch = gen2_channel(&mut programs, &[0xe9, 0xfb, 0xff]);
+        let mut st = gen2_state();
+        gen2_events(&mut ch, &mut st, &programs, 1);
+        assert_eq!(st.tempo, 0x100 - 5);
+    }
+
+    #[test]
+    fn gen2_call_loop_and_conditional_jump_follow_the_gen2_opcodes() {
+        let mut programs = blank_programs();
+        // $fe call sub; $fd loop 3 back to the call; $fa cond 1; $fb jump
+        // if 1 past a D note; C; end. sub: E note, ret.
+        let mut ch = gen2_channel(
+            &mut programs,
+            &[
+                0xd4, 0xd8, 0x01, 0xf0, // 0x4100 octave, note_type 1
+                0xfe, 0x00, 0x42, // 0x4104 call 0x4200
+                0xfd, 0x03, 0x04, 0x41, // 0x4107 loop 3 -> 0x4104
+                0xfa, 0x01, // 0x410b set_condition 1
+                0xfb, 0x01, 0x12, 0x41, // 0x410d jump_if 1 -> 0x4112
+                0x30, // 0x4111 D (skipped)
+                0x10, // 0x4112 C
+                0xff,
+            ],
+        );
+        put(&mut programs, 0, 0x4200, &[0x50, 0xff]); // E, ret
+        let mut st = gen2_state();
+        let ev = gen2_events(&mut ch, &mut st, &programs, 10);
+        let regs: Vec<u16> = ev.iter().map(|e| e.1).collect();
+        let e = ch.frequency_gen2(5, Some(4));
+        let c = ch.frequency_gen2(1, Some(4));
+        assert_eq!(regs, vec![e, e, e, c]);
+        // $fd 0 with loops refused ends the channel
+        let mut programs = blank_programs();
+        let mut ch = gen2_channel(&mut programs, &[0x10, 0xfd, 0x00, 0x00, 0x41]);
+        ch.allow_loops = false;
+        let mut st = gen2_state();
+        assert_eq!(gen2_events(&mut ch, &mut st, &programs, 5).len(), 1);
+    }
+
+    #[test]
+    fn gen2_sfx_rows_carry_their_own_length_envelope_and_register() {
+        let mut programs = blank_programs();
+        // square_note 3, $f0, $0700 on an sfx channel (5 = hardware 1)
+        put(&mut programs, 0, 0x4100, &[0x03, 0xf1, 0x00, 0x07, 0xff]);
+        let mut opts = gen2_opts();
+        opts.frequency_offset = 0x10;
+        let mut ch = Channel::new(0, 5, 0x4100, &opts, 0x100);
+        let mut st = gen2_state();
+        let e = ch.next_event(&mut st, &programs, 44100).unwrap();
+        assert_eq!(e.kind, Kind::Tone);
+        // the whole command byte is the length: (3 + 1) * 1 * $100 -> 4
+        assert_eq!(ch.time_ticks, 4 * AUDIO_FRAME_TICKS as u64);
+        assert_eq!((e.register, e.volume, e.fade), (0x710, 15, 1));
+        // A cry's length is its tempo WORD: $200 * LOW((127 + 1) * 1) is
+        // $10000, whose low 16 bits are 0 -> the one-frame floor. The
+        // truncation is load bearing (@bdfac727:406-408).
+        let mut programs = blank_programs();
+        put(&mut programs, 0, 0x4100, &[0x7f, 0xf0, 0x00, 0x07, 0xff]);
+        let mut ch = Channel::new(0, 5, 0x4100, &gen2_opts(), 0x200);
+        let mut st = gen2_state();
+        ch.next_event(&mut st, &programs, 44100).unwrap();
+        assert_eq!(ch.time_ticks, AUDIO_FRAME_TICKS as u64);
+        // and a Gen 2 cry program is built with that word, no $80 base
+        let mut programs = blank_programs();
+        put(&mut programs, 0, 0x4000, &[0x04, 0x00, 0x41]);
+        let mut opts = gen2_opts();
+        opts.cry_length = Some(0x200);
+        let p = Program::build(&programs, 0, 0x4000, AUDIO_ENGINE_GEN2, &opts).unwrap();
+        assert_eq!(p.channels[0].frame_ticks, 0x200);
+    }
+
+    /// A Drumkits table at 0x5000 whose kit 0 drum 1 is one two-frame
+    /// segment at volume 10, fade 1 (so it rings ~9 frames past its end).
+    fn gen2_drumkit(programs: &mut [u8]) {
+        put(programs, 0, 0x5000, &[0x10, 0x50]); // kit 0 -> 0x5010
+        put(programs, 0, 0x5010, &[0x00, 0x00, 0x40, 0x50]); // drum 1 -> 0x5040
+        put(programs, 0, 0x5040, &[0x21, 0xa1, 0x33, 0xff]);
+    }
+
+    #[test]
+    fn gen2_drums_come_from_the_kit_and_ring_through_the_rest() {
+        let mut programs = blank_programs();
+        gen2_drumkit(&mut programs);
+        // noise channel (descriptor 3): toggle_noise kit 0, drum_speed 1,
+        // drum 1 for one frame, rest for eight, end
+        put(&mut programs, 0, 0x4000, &[0x03, 0x00, 0x41]);
+        put(&mut programs, 0, 0x4100, &[0xe3, 0x00, 0xd8, 0x01, 0x10, 0x07, 0xff]);
+        let mut audio = Audio::new();
+        audio.pin_drum(G2, 0, 0, 0x5000);
+        audio.play_music(&programs, 0, 0x4000, G2, 0);
+        let pcm = audio.render_vec(&programs, 735 * 10);
+        let at = |frame: usize| &pcm[frame * 735 * 2..(frame + 1) * 735 * 2];
+        assert!(at(0).iter().any(|&v| v != 0), "the drum strikes");
+        // frames 2..5 are the rest; the drum's segment ended at frame 2,
+        // its envelope keeps it sounding
+        assert!(at(3).iter().any(|&v| v != 0), "the tail rings through the rest");
+        // without the kit pinned the same program is silent
+        let mut audio = Audio::new();
+        audio.play_music(&programs, 0, 0x4000, G2, 0);
+        assert!(audio.render_vec(&programs, 735 * 4).iter().all(|&v| v == 0));
+        // the decode: one segment, extended by volume * fade / 64 s
+        let segs = read_drum_gen2(&programs, Pin { set: true, bank: 0, address: 0x5000 }, 0, 1, 44100);
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].start, 0);
+        assert_eq!(segs[0].end, (10 * 44100 + 32) / 64);
+        assert_eq!(segs[0].parameter, 0x33);
+    }
+
+    #[test]
+    fn gen2_stereo_panning_needs_the_option_but_forced_panning_does_not() {
+        let mut programs = blank_programs();
+        header(&mut programs, 0, 0x4000, 0x4100);
+        // stereo_panning $10 (channel 1 left only), a long note, end
+        put(&mut programs, 0, 0x4100, &[0xd4, 0xd8, 0x0c, 0xf0, 0xef, 0x10, 0x1f, 0xff]);
+        let sides = |programs: &[u8], flags: u32| {
+            let mut audio = Audio::new();
+            audio.play_music(programs, 0, 0x4000, G2, flags);
+            let pcm = audio.render_vec(programs, 2000);
+            let l = pcm.iter().step_by(2).any(|&v| v != 0);
+            let r = pcm.iter().skip(1).step_by(2).any(|&v| v != 0);
+            (l, r)
+        };
+        assert_eq!(sides(&programs, 0), (true, true), "MONO ignores stereo_panning");
+        assert_eq!(sides(&programs, music_flag::STEREO), (true, false));
+        // force_stereo_panning $01 (right only) pans under MONO too
+        put(&mut programs, 0, 0x4104, &[0xe4, 0x01]);
+        assert_eq!(sides(&programs, 0), (false, true));
+    }
+
+    #[test]
+    fn resume_keeps_the_song_and_cancels_the_fade() {
+        let mut programs = blank_programs();
+        header(&mut programs, 0, 0x4000, 0x4100);
+        put(&mut programs, 0, 0x4100, &[0xd4, 0xd8, 0x0c, 0xf0, 0x1f, 0xfd, 0x00, 0x04, 0x41]);
+        let mut audio = Audio::new();
+        audio.play_music(&programs, 0, 0x4000, G2, music_flag::LOOP);
+        audio.render_vec(&programs, 1000);
+        audio.fade_music(1);
+        audio.tick();
+        assert_eq!(audio.level(), AUDIO_FADE_LEVELS - 1);
+        let frames = audio.music.as_ref().unwrap().frames;
+        audio.play_music(&programs, 0, 0x4000, G2, music_flag::LOOP | music_flag::RESUME);
+        assert_eq!(audio.level(), AUDIO_FADE_LEVELS);
+        assert_eq!(audio.music.as_ref().unwrap().frames, frames, "not restarted");
+        for _ in 0..20 {
+            audio.tick();
+        }
+        assert!(audio.music_playing(), "the fade is gone");
+    }
+
+    #[test]
+    fn the_stop_flag_cuts_the_one_shot_and_the_alarm_loops_until_stopped() {
+        let mut programs = blank_programs();
+        put(&mut programs, 0, 0x4200, &[0x04, 0x00, 0x43]);
+        put(&mut programs, 0, 0x4300, &[0x7f, 0xf0, 0x00, 0x07, 0xff]);
+        let mut audio = Audio::new();
+        audio.play_sfx(&programs, 0, 0x4200, G2, 0, AUDIO_SFX_TEMPO, 0);
+        audio.render_vec(&programs, 10);
+        assert!(audio.effect_playing());
+        audio.op(op::SFX, &[0, 0, 0, 0, 0, sfx_flag::STOP as i32]);
+        audio.render_vec(&programs, 1);
+        assert!(!audio.effect_playing());
+        // the siren: two tones, a quarter of full scale, both sides
+        audio.op(op::SFX, &[0, 0, 0, 0, 0, sfx_flag::ALARM as i32]);
+        let pcm = audio.render_vec(&programs, 88200);
+        assert!(audio.alarm_playing());
+        let peak = pcm.iter().map(|&v| (v as i32).abs()).max().unwrap();
+        assert_eq!(peak, (32767 + 2) / 4);
+        assert!(pcm.iter().step_by(2).zip(pcm.iter().skip(1).step_by(2)).all(|(l, r)| l == r));
+        // it loops on a one-second buffer
+        assert_eq!(&pcm[..88200], &pcm[88200..]);
+        audio.op(op::SFX, &[0, 0, 0, 0, 0, (sfx_flag::ALARM | sfx_flag::STOP) as i32]);
+        assert!(audio.render_vec(&programs, 100).iter().all(|&v| v == 0));
+    }
+
+    // --- against the real Gold ROM, when it has been imported --------------
+
+    /// dist/voxelmon/gold/gen: (programs.bin, audio.json), or None.
+    fn gold_audio() -> Option<(Vec<u8>, String)> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dist/voxelmon/gold/gen");
+        let programs = std::fs::read(dir.join("programs.bin")).ok()?;
+        let json = std::fs::read_to_string(dir.join("audio.json")).ok()?;
+        Some((programs, json))
+    }
+
+    /// The first integer after `field` following `key` in the importer's
+    /// compact JSON. Enough for {bank, address} lookups in a test.
+    fn json_int(json: &str, key: &str, field: &str) -> u32 {
+        let from = json.find(key).unwrap_or_else(|| panic!("{key} not in audio.json"));
+        let rest = &json[from..];
+        let at = rest.find(field).unwrap() + field.len();
+        let digits: String = rest[at..].chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit()).collect();
+        digits.parse().unwrap()
+    }
+
+    fn gold_slot(json: &str, bank: u32) -> u32 {
+        let from = json.find("\"bankOrder\":[").unwrap() + 13;
+        let list = &json[from..from + json[from..].find(']').unwrap()];
+        list.split(',').position(|b| b.trim().parse::<u32>().unwrap() == bank).unwrap() as u32
+    }
+
+    /// An Audio with Gold's wave and drum tables pinned, as the guest does.
+    fn gold_synth(json: &str, rate: u32) -> Audio {
+        let mut audio = Audio::new();
+        assert!(audio.set_rate(rate));
+        let wb = json_int(json, "\"waveBanks\"", "\"bank\"");
+        let wa = json_int(json, "\"waveBanks\"", "\"address\"");
+        audio.pin_waves(G2, gold_slot(json, wb), wa);
+        let db = json_int(json, "\"drumkits\"", "\"bank\"");
+        let da = json_int(json, "\"drumkits\"", "\"address\"");
+        audio.pin_drum(G2, 0, gold_slot(json, db), da);
+        audio
+    }
+
+    fn gold_song(json: &str, audio: &mut Audio, programs: &[u8], label: &str) {
+        let key = format!("\"{label}\":");
+        let bank = json_int(json, &key, "\"bank\"");
+        let address = json_int(json, &key, "\"address\"");
+        audio.play_music(programs, gold_slot(json, bank), address, G2, music_flag::LOOP);
+        assert!(audio.music_playing(), "{label} did not build");
+    }
+
+    #[test]
+    fn gold_new_bark_town_opens_audibly_and_deterministically() {
+        let Some((programs, json)) = gold_audio() else {
+            return; // Gold not imported on this machine
+        };
+        let render = |split: bool| {
+            let mut audio = gold_synth(&json, 44100);
+            gold_song(&json, &mut audio, &programs, "Music_NewBarkTown");
+            if split {
+                let mut v = audio.render_vec(&programs, 10000);
+                v.extend(audio.render_vec(&programs, 34100));
+                v
+            } else {
+                audio.render_vec(&programs, 44100)
+            }
+        };
+        let first = render(false);
+        let nonzero = first.iter().filter(|&&v| v != 0).count();
+        assert!(nonzero > first.len() / 2, "only {nonzero} non-zero samples");
+        let peak = first.iter().map(|&v| (v as i32).abs()).max().unwrap();
+        assert!(peak > 4000, "peak {peak}");
+        assert_eq!(first, render(false));
+        assert_eq!(first, render(true));
+        // New Bark Town is `channel_count 3` (two pulses and the wave);
+        // Route 29 adds the drums. Every channel is still going after 2 s.
+        let mut audio = gold_synth(&json, 44100);
+        gold_song(&json, &mut audio, &programs, "Music_NewBarkTown");
+        audio.render_vec(&programs, 88200);
+        let song = audio.music.as_ref().unwrap();
+        assert_eq!(song.channels.len(), 3);
+        assert!(song.channels.iter().all(|c| !c.ended));
+        assert!(audio.tables[AUDIO_ENGINE_GEN2].has_waves);
+        let mut audio = gold_synth(&json, 44100);
+        gold_song(&json, &mut audio, &programs, "Music_Route29");
+        assert!(audio.render_vec(&programs, 88200).iter().any(|&v| v != 0));
+        let song = audio.music.as_ref().unwrap();
+        assert_eq!(song.channels.len(), 4);
+        assert!(song.channels.iter().all(|c| !c.ended));
+        assert!(song.channels[3].noise_sampling, "Route 29's drums are on");
+        assert!(audio.tables[AUDIO_ENGINE_GEN2].kits.iter().any(|k| !k.is_empty()));
+    }
+
+    #[test]
+    fn gold_cries_and_sfx_render_and_end() {
+        let Some((programs, json)) = gold_audio() else {
+            return;
+        };
+        let mut audio = gold_synth(&json, 44100);
+        let key = "\"CHIKORITA\":";
+        let bank = json_int(&json, key, "\"bank\"");
+        let address = json_int(&json, key, "\"address\"");
+        let pitch = json_int(&json, key, "\"pitch\"");
+        let length = json_int(&json, key, "\"length\"");
+        audio.play_cry(&programs, gold_slot(&json, bank), address, G2, pitch as i32, length);
+        assert!(audio.effect_playing());
+        let pcm = audio.render_vec(&programs, 44100 * 3);
+        assert!(pcm.iter().any(|&v| v != 0));
+        assert!(!audio.effect_playing(), "a cry is well under three seconds");
+        let key = "\"Sfx_ReadText\":";
+        let bank = json_int(&json, key, "\"bank\"");
+        let address = json_int(&json, key, "\"address\"");
+        audio.play_sfx(&programs, gold_slot(&json, bank), address, G2, 0, AUDIO_SFX_TEMPO, 0);
+        let pcm = audio.render_vec(&programs, 44100);
+        assert!(pcm.iter().any(|&v| v != 0));
+        assert!(!audio.effect_playing());
+    }
+
+    /// Offline listening copies: with PV_GEN2_WAV_DIR set, 40 s of New Bark
+    /// Town and of Route 29 as 44.1 kHz stereo WAVs.
+    #[test]
+    fn gold_offline_wavs_when_asked() {
+        let Ok(dir) = std::env::var("PV_GEN2_WAV_DIR") else {
+            return;
+        };
+        let Some((programs, json)) = gold_audio() else {
+            return;
+        };
+        for (label, file) in [("Music_NewBarkTown", "new_bark_town.wav"), ("Music_Route29", "route_29.wav")] {
+            let mut audio = gold_synth(&json, 44100);
+            gold_song(&json, &mut audio, &programs, label);
+            let pcm = audio.render_vec(&programs, 44100 * 40);
+            let mut wav = Vec::new();
+            let data = (pcm.len() * 2) as u32;
+            wav.extend_from_slice(b"RIFF");
+            wav.extend_from_slice(&(36 + data).to_le_bytes());
+            wav.extend_from_slice(b"WAVEfmt ");
+            wav.extend_from_slice(&16u32.to_le_bytes());
+            wav.extend_from_slice(&1u16.to_le_bytes());
+            wav.extend_from_slice(&2u16.to_le_bytes());
+            wav.extend_from_slice(&44100u32.to_le_bytes());
+            wav.extend_from_slice(&(44100u32 * 4).to_le_bytes());
+            wav.extend_from_slice(&4u16.to_le_bytes());
+            wav.extend_from_slice(&16u16.to_le_bytes());
+            wav.extend_from_slice(b"data");
+            wav.extend_from_slice(&data.to_le_bytes());
+            for s in pcm {
+                wav.extend_from_slice(&s.to_le_bytes());
+            }
+            std::fs::write(std::path::Path::new(&dir).join(file), wav).unwrap();
+        }
     }
 }

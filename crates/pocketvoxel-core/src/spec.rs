@@ -381,7 +381,15 @@ pub const Q8: i32 = 256;
 /// One ROM sound bank: the window a program address is read inside.
 pub const AUDIO_BANK_SIZE: usize = 16384;
 /// Sound-engine table slots. Red uses ids 1..3; slot 0 is never pinned.
-pub const AUDIO_ENGINES: usize = 4;
+pub const AUDIO_ENGINES: usize = 5;
+/// Gold's sound driver: this engine id runs the Gen 2 interpreter.
+pub const AUDIO_ENGINE_GEN2: usize = 4;
+/// Gen 2 WaveSamples instruments (0-9).
+pub const AUDIO_GEN2_WAVES: usize = 10;
+/// Gen 2 drum kits (pokegold audio/drumkits.asm).
+pub const AUDIO_GEN2_DRUMKITS: usize = 6;
+/// Longest Gen 2 one-shot (ChipSynth.lua@bdfac727:1444).
+pub const AUDIO_GEN2_EFFECT_MAX_SECONDS: u32 = 12;
 /// Drum ids per sound engine.
 pub const AUDIO_DRUMS: usize = 32;
 /// Wave instruments a sound engine exposes (5 read + 1 shared by 6..9).
@@ -404,11 +412,15 @@ pub const AUDIO_MIX_UNIT: i32 = 480;
 /// `music(…, flags)`.
 pub mod music_flag {
     pub const LOOP: u32 = 1;
+    pub const STEREO: u32 = 2;
+    pub const RESUME: u32 = 4;
 }
 
 /// `sfx(…, flags)`.
 pub mod sfx_flag {
     pub const DUCK: u32 = 1;
+    pub const STOP: u32 = 2;
+    pub const ALARM: u32 = 4;
 }
 
 // ---------------------------------------------------------------------------
