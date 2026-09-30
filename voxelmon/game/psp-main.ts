@@ -112,6 +112,15 @@ interface VoxelNative {
   gbLines?(target: number, hex: string): void;
   gbOam?(hex: string): void;
   gbColours?(bg: number, obp0: number, obp1: number): void;
+  /** The Gold screen (voxel-spec.ts lcdShow..lcdLines; gen2/platform/lcd.ts). */
+  lcdShow?(on: number): void;
+  lcdBank?(base: number, page: number, count: number): void;
+  lcdReset?(): void;
+  lcdCells?(offset: number, hex: string): void;
+  lcdRegs?(scx: number, scy: number, wx: number, wy: number, flags: number): void;
+  lcdObjs?(hex: string): void;
+  lcdPals?(first: number, hex: string): void;
+  lcdLines?(target: number, hex: string): void;
   audioWaves?(engine: number, bank: number, addr: number): void;
   audioDrum?(engine: number, drum: number, bank: number, addr: number): void;
 }
@@ -323,6 +332,30 @@ class QuickJsHost implements VoxelHost {
   }
   gbColours(bg: number, obp0: number, obp1: number): void {
     native.gbColours?.(bg, obp0, obp1);
+  }
+  lcdShow(on: number): void {
+    native.lcdShow?.(on);
+  }
+  lcdBank(base: number, page: number, count: number): void {
+    native.lcdBank?.(base, page, count);
+  }
+  lcdReset(): void {
+    native.lcdReset?.();
+  }
+  lcdCells(offset: number, hex: string): void {
+    native.lcdCells?.(offset, hex);
+  }
+  lcdRegs(scx: number, scy: number, wx: number, wy: number, flags: number): void {
+    native.lcdRegs?.(scx, scy, wx, wy, flags);
+  }
+  lcdObjs(hex: string): void {
+    native.lcdObjs?.(hex);
+  }
+  lcdPals(first: number, hex: string): void {
+    native.lcdPals?.(first, hex);
+  }
+  lcdLines(target: number, hex: string): void {
+    native.lcdLines?.(target, hex);
   }
   audioWaves(engine: number, bank: number, addr: number): void {
     native.audioWaves?.(engine, bank, addr);

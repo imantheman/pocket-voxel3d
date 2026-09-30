@@ -146,6 +146,15 @@ export interface VoxelHost {
   gbLines?(target: number, hex: string): void;
   gbOam?(hex: string): void;
   gbColours?(bg: number, obp0: number, obp1: number): void;
+  /** The Gold screen (voxel-spec.ts lcdShow..lcdLines; gen2/platform/lcd.ts). */
+  lcdShow?(on: number): void;
+  lcdBank?(base: number, page: number, count: number): void;
+  lcdReset?(): void;
+  lcdCells?(offset: number, hex: string): void;
+  lcdRegs?(scx: number, scy: number, wx: number, wy: number, flags: number): void;
+  lcdObjs?(hex: string): void;
+  lcdPals?(first: number, hex: string): void;
+  lcdLines?(target: number, hex: string): void;
   /** Boot-time: a sound engine's wave-instrument table. */
   audioWaves(engine: number, bank: number, addr: number): void;
   /** Boot-time: one drum program of a sound engine. */
@@ -373,6 +382,30 @@ export class RecorderHost implements VoxelHost {
   }
   gbColours(bg: number, obp0: number, obp1: number): void {
     this.op(VOX_OP.gbColours, bg, obp0, obp1);
+  }
+  lcdShow(on: number): void {
+    this.op(VOX_OP.lcdShow, on);
+  }
+  lcdBank(base: number, page: number, count: number): void {
+    this.op(VOX_OP.lcdBank, base, page, count);
+  }
+  lcdReset(): void {
+    this.op(VOX_OP.lcdReset);
+  }
+  lcdCells(offset: number, hex: string): void {
+    this.opText(VOX_OP.lcdCells, hex, offset);
+  }
+  lcdRegs(scx: number, scy: number, wx: number, wy: number, flags: number): void {
+    this.op(VOX_OP.lcdRegs, scx, scy, wx, wy, flags);
+  }
+  lcdObjs(hex: string): void {
+    this.opText(VOX_OP.lcdObjs, hex);
+  }
+  lcdPals(first: number, hex: string): void {
+    this.opText(VOX_OP.lcdPals, hex, first);
+  }
+  lcdLines(target: number, hex: string): void {
+    this.opText(VOX_OP.lcdLines, hex, target);
   }
   audioWaves(engine: number, bank: number, addr: number): void {
     this.op(VOX_OP.audioWaves, engine, bank, addr);
