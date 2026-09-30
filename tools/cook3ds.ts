@@ -23,7 +23,7 @@
 //
 // The atlas page indices are positional, so gamedata.json, common.vxat and
 // all 222 paks are ONE artifact. Never copy a subset across.
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { cook } from "../voxelmon/cook/cli.ts";
@@ -62,6 +62,71 @@ export const VERSION_FILES: Record<GameVersion, { gamedata: string; overlay: str
 };
 
 const SHARED_BIT = 0x80000000;
+
+/**
+ * The maps whose sound stays in the pak: the host boots on REDS_HOUSE_2F
+ * (PALLET_TOWN if that will not load) and takes the sound from it only when
+ * no overlay carries any.
+ */
+const BOOT_MAPS = ["REDS_HOUSE_2F", "PALLET_TOWN"];
+
+/**
+ * Cut out of every shipped pak what the 3DS never reads -- 45% of the set.
+ *
+ *  - GAME: a full copy of the dataset in every pak (the PSP build's single
+ *    pak boots from it). The 3DS reads the dataset from gamedata*.json and
+ *    skips this section when it loads a pak (main.rs map_pak/prefetch):
+ *    ~1.2 MB x 222 maps.
+ *  - AUDI: the sound programs, the same bytes in every pak. The host takes
+ *    them once, at boot, from the game's own overlay (which writeOverlay
+ *    has already copied out of a pak), falling back to the boot map's.
+ *    Every pak but the boot maps drops them.
+ *
+ * pak.rs allows both sections to be empty. The payloads after them are
+ * re-laid 16-aligned in their original order, the section table and the
+ * header's total length follow, and nothing else in the file changes.
+ * Returns bytes before and after.
+ */
+export function stripUnread(paksDir: string): { before: number; after: number } {
+  let before = 0;
+  let after = 0;
+  const names = readdirSync(paksDir).filter((f) => f.endsWith(".vxpak"));
+  for (const f of names) {
+    const path = join(paksDir, f);
+    const d = readFileSync(path);
+    before += d.length;
+    const keepAudio = BOOT_MAPS.includes(f.replace(/\.vxpak$/, ""));
+    const n = d.readUInt16LE(6);
+    const secs = [];
+    for (let s = 0; s < n; s++) {
+      const e = 16 + s * 16;
+      secs.push({ i: s, tag: d.toString("latin1", e, e + 4), off: d.readUInt32LE(e + 4), len: d.readUInt32LE(e + 8) });
+    }
+    const table = 16 + n * 16;
+    const out = Buffer.from(d.subarray(0, table));
+    const parts: Buffer[] = [out];
+    let at = table;
+    for (const s of [...secs].sort((a, b) => a.off - b.off)) {
+      const cut = s.tag === "GAME" || (s.tag === "AUDI" && !keepAudio);
+      const body = cut ? Buffer.alloc(0) : d.subarray(s.off, s.off + s.len);
+      const pad = (16 - (at % 16)) % 16;
+      if (pad) parts.push(Buffer.alloc(pad));
+      at += pad;
+      out.writeUInt32LE(at, 16 + s.i * 16 + 4);
+      out.writeUInt32LE(body.length, 16 + s.i * 16 + 8);
+      parts.push(body);
+      at += body.length;
+    }
+    const pad = (16 - (at % 16)) % 16;
+    if (pad) parts.push(Buffer.alloc(pad));
+    at += pad;
+    out.writeUInt32LE(at, 8); // header total_len
+    const file = Buffer.concat(parts);
+    writeFileSync(path, file);
+    after += file.length;
+  }
+  return { before, after };
+}
 
 /** The atlas pages whose art differs between Red and Blue (measured, see
  * VERSION_FILES): the title ribbon, the intro's three fighter frames, and
@@ -275,6 +340,10 @@ export async function cook3ds(only?: string[]): Promise<number> {
   const own = versionPages(merged);
   const n = writeOverlay(PAKS, own, join(PAKS, files.overlay));
   console.log(`  ${files.overlay}: pages ${own.join(", ")} + palettes + sound (${n} bytes)`);
+
+  // After the overlay has its copy of the sound: what the 3DS never reads.
+  const cut = stripUnread(PAKS);
+  console.log(`  cut what the 3DS never reads: ${mb(cut.before)} -> ${mb(cut.after)}`);
 
   // --- 4. the card ---------------------------------------------------------
   rmSync(CARD, { recursive: true, force: true });

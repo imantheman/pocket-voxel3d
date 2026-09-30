@@ -52,7 +52,7 @@ The rest of this page is the same thing done by hand.
 | **cargo-3ds** | `cargo install cargo-3ds` | Drives devkitARM from Rust. |
 | **Two reference checkouts** | see below | Tables this project reads but does not contain. |
 
-A **New 3DS** (or New 2DS XL) running homebrew, and an SD card with **700 MB
+A **New 3DS** (or New 2DS XL) running homebrew, and an SD card with **400 MB
 free**. The New model is not optional: the port keeps a 92 MB heap for the
 map paks -- the Viridian Forest pak alone is 58 MB -- and only the New
 3DS's 124 MB application mode can grant it. An original 3DS/2DS cannot

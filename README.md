@@ -18,7 +18,7 @@ never leaves your machine.
 
 - A **New** 3DS, New 3DS XL or New 2DS XL, with homebrew already on it
   (the Homebrew Launcher, or FBI). An original 3DS / 2DS is too slow.
-- An SD card with **700 MB free**.
+- An SD card with **400 MB free**.
 - A Windows PC or a Mac, with internet for the first run.
 - Your own US Pokémon Red or Blue `.gb` file. The program checks it is the
   real one and refuses anything else. Red and Blue are separate games on
@@ -70,7 +70,7 @@ press Return. Everything else is the same.
   `voxelmon` folder was copied partly, or landed in the wrong place. It must
   be at `SD:/3ds/voxelmon`, and the 225 files in `SD:/3ds/voxelmon/paks`
   belong together. Copy the whole `voxelmon` folder again; never one file.
-- **It says the SD card is full.** It needs 700 MB. Free some space and copy
+- **It says the SD card is full.** It needs 400 MB. Free some space and copy
   again.
 - **Homebrew Launcher does not list it.** The `.3dsx` must be directly in
   `SD:/3ds/`, not inside another folder.

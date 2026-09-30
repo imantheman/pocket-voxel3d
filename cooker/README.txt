@@ -5,7 +5,7 @@ This turns YOUR Pokemon Red or Blue ROM into the files the 3DS game needs. There
 no download of the game anywhere, because the game is built from your
 cartridge, on your computer. This folder does that for you.
 
-You need:  a New 3DS (or New 2DS XL) with homebrew, an SD card with 700 MB
+You need:  a New 3DS (or New 2DS XL) with homebrew, an SD card with 400 MB
 free, your own US Pokemon Red or Blue .gb file, and an internet connection for the
 first run. Budget 20 minutes, most of it waiting.
 
@@ -44,7 +44,7 @@ WHAT YOU GET
       3ds/
         pocketvoxel-3ds.3dsx      <- copy THIS FILE and the voxelmon FOLDER
         voxelmon/paks/               INTO the 3ds folder that is already on
-                                     your SD card (225 files, about 620 MB)
+                                     your SD card (about 330 MB)
       SOURCES.txt                 <- everything that went into the build
 
 Open the SD card, open its `3ds` folder, and put `voxelmon` and

@@ -34,7 +34,7 @@ Options, for people who want them:  --yes  (accept every default, no
 questions)  --grayscale  --colour  --no-sd  --no-open  --rom PATH
 
 Needs Python 3.8 or newer and an internet connection for the first run.
-Budget up to 20 minutes, 3 GB of free disk while it runs, and 700 MB on the card.
+Budget up to 20 minutes, 3 GB of free disk while it runs, and 400 MB on the card.
 """
 import argparse
 import hashlib
@@ -614,7 +614,7 @@ def main():
     OUTPUT.mkdir()
     card = OUTPUT / "3ds"
     shutil.move(str(card_src), str(card))
-    # the 937 MB of pre-sharing intermediates and the 620 MB staging copy:
+    # the ~930 MB of pre-sharing intermediates and the ~330 MB staging copy:
     # nothing reads either again
     shutil.rmtree(repo / "dist" / "voxelmon" / "paks_orig", ignore_errors=True)
     shutil.rmtree(repo / "dist" / "voxelmon" / "paks", ignore_errors=True)
