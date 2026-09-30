@@ -2888,6 +2888,9 @@ var ESCAPE_ROPE_TILESETS = new Set(["FOREST", "CEMETERY", "CAVERN", "FACILITY", 
 function isBall(id) {
   return BALLS2.has(id);
 }
+function isStone(id) {
+  return STONES.has(id);
+}
 function needsTarget(data, id) {
   return HEAL_AMOUNT[id] !== undefined || STATUS_HEAL[id] !== undefined || id === "MAX_POTION" || id === "FULL_RESTORE" || id === "REVIVE" || id === "MAX_REVIVE" || id === "RARE_CANDY" || STONES.has(id) || !!data?.items?.[id]?.machine || needsMove(id) || id === "ELIXER" || id === "MAX_ELIXER" || VITAMINS[id] !== undefined;
 }
@@ -3376,6 +3379,7 @@ class WildBattle {
   anims = [];
   current = null;
   statBoxMon = null;
+  gearLevelUp = null;
   lines = [];
   lineIndex = 0;
   codes = [];
@@ -4506,10 +4510,21 @@ fainted!`);
       alive.push(this.player.mon);
     }
     const applyShare = (mon, split, announce) => {
+      const beforeStats = { ...mon.stats };
+      const beforeLevel = mon.level;
       const [levels, gained] = apply(this.data, mon, this.enemy.def, this.enemy.mon.level, false, split, mon.traded);
       if (levels.length > 0)
         this.leveledUp.add(mon);
       const name = mon.nickname ?? this.data.pokemon[mon.species].name;
+      if (levels.length > 0) {
+        this.gearLevelUp = {
+          name,
+          from: beforeLevel,
+          to: mon.level,
+          before: beforeStats,
+          after: { ...mon.stats }
+        };
+      }
       if (announce === "expAll") {
         this.sayNext(`${name} gained
 with EXP.ALL,\v${gained} EXP. Points!`);
@@ -11487,6 +11502,444 @@ class ScriptRunner {
   }
 }
 
+// voxelmon/game/ui/gear/model.ts
+function gearSave(save) {
+  const fallback = {
+    steps: 0,
+    trip: 0,
+    info: "enhanced",
+    caughtIcon: true,
+    clock24: false,
+    qwertz: false,
+    removed: {},
+    notes: []
+  };
+  if (!save)
+    return fallback;
+  const md = save.modData ??= {};
+  const g = md.kanto_gear ??= {};
+  g.steps ??= 0;
+  g.trip ??= 0;
+  g.info ??= "enhanced";
+  g.caughtIcon ??= true;
+  g.clock24 ??= false;
+  g.qwertz ??= false;
+  g.removed ??= {};
+  g.notes ??= [];
+  return g;
+}
+function countGearStep(save) {
+  if (!save)
+    return;
+  const g = gearSave(save);
+  g.steps = Math.min(9999999, g.steps + 1);
+  g.trip = Math.min(9999999, g.trip + 1);
+}
+function assists(save) {
+  return gearSave(save).info !== "vanilla";
+}
+function spoilers(save) {
+  return gearSave(save).info === "spoiler";
+}
+var APPS = [
+  { id: "home", title: "KANTO GEAR", short: "HOME", fixed: true, about: [] },
+  {
+    id: "party",
+    title: "PARTY",
+    short: "PARTY",
+    fixed: true,
+    about: ["CHECK YOUR TEAM AT A GLANCE.", "VIEW STATS, MOVES AND STATUS."]
+  },
+  {
+    id: "map",
+    title: "MAP",
+    short: "MAP",
+    fixed: true,
+    about: ["VIEW THE REGION MAP.", "YOUR POSITION, AT A GLANCE."]
+  },
+  {
+    id: "explorer",
+    title: "EXPLORER",
+    short: "GUIDE",
+    fixed: true,
+    about: ["EXPLORE THE AREA AROUND YOU.", "FIND POKéMON, ITEMS AND TRAINERS."]
+  },
+  {
+    id: "trainer",
+    title: "TRAINER",
+    short: "CARD",
+    fixed: true,
+    about: ["REVIEW YOUR TRAINER JOURNEY.", "BADGES, PLAY TIME AND PROGRESS."]
+  },
+  {
+    id: "pokedex",
+    title: "POKéDEX",
+    short: "DEX",
+    about: ["RESEARCH EVERY SPECIES.", "STATS, MOVES AND HABITATS."]
+  },
+  {
+    id: "bag",
+    title: "BAG",
+    short: "BAG",
+    about: ["BROWSE EVERY ITEM.", "USE THEM WITH THE GAME'S OWN EFFECTS."]
+  },
+  {
+    id: "tools",
+    title: "TOOLS",
+    short: "TOOLS",
+    about: ["ONE TAP FOR THE BIKE, THE RODS", "AND YOUR TEAM'S FIELD MOVES."]
+  },
+  {
+    id: "steps",
+    title: "STEPS",
+    short: "STEPS",
+    about: ["COUNT EVERY STEP OF YOUR JOURNEY.", "ONE SMALL STEP AT A TIME."]
+  },
+  {
+    id: "stamps",
+    title: "STAMPS",
+    short: "STAMPS",
+    about: ["COLLECT A STAMP FOR EVERY AREA", "YOU FINISH EXPLORING."]
+  },
+  {
+    id: "notes",
+    title: "NOTES",
+    short: "NOTES",
+    about: ["PLAN ROUTES AND REMINDERS.", "WRITE, CHECK TASKS AND DRAW."]
+  },
+  {
+    id: "store",
+    title: "STORE",
+    short: "STORE",
+    fixed: true,
+    about: ["ADD OR REMOVE APPS."]
+  },
+  {
+    id: "options",
+    title: "OPTIONS",
+    short: "OPTION",
+    fixed: true,
+    about: ["HOW MUCH HELP THE GEAR GIVES."]
+  }
+];
+function appOf(id) {
+  return APPS.find((a) => a.id === id);
+}
+var SLOT_CHANCE = [51, 51, 39, 25, 25, 25, 13, 13, 11, 3];
+function wildRows(data, mapId, rods = {}) {
+  const rows = [];
+  const add2 = (method, species, level, weight, total) => {
+    const pct = weight / total * 100;
+    const held = rows.find((r) => r.species === species && r.method === method);
+    if (held) {
+      held.pct += pct;
+      held.minLv = Math.min(held.minLv, level);
+      held.maxLv = Math.max(held.maxLv, level);
+    } else
+      rows.push({ species, method, pct, minLv: level, maxLv: level });
+  };
+  const enc = data.encounters?.[mapId];
+  for (const [key, method] of [["grass", "GRASS"], ["water", "WATER"]]) {
+    const t = enc?.[key];
+    if (!t || !(t.rate ?? 0) || !t.slots)
+      continue;
+    t.slots.forEach((s, i) => add2(method, s.species, s.level, SLOT_CHANCE[i] ?? 0, 256));
+  }
+  if (rods.OLD_ROD)
+    add2("OLD ROD", "MAGIKARP", 5, 1, 1);
+  if (rods.GOOD_ROD) {
+    add2("GOOD ROD", "GOLDEEN", 10, 1, 2);
+    add2("GOOD ROD", "POLIWAG", 10, 1, 2);
+  }
+  const superRod = data.field?.superRod?.[mapId];
+  if (rods.SUPER_ROD && Array.isArray(superRod) && superRod.length) {
+    for (const s of superRod)
+      add2("SUPER ROD", s.species, s.level, 1, superRod.length);
+  }
+  for (const r of rows)
+    r.pct = Math.round(r.pct);
+  return rows;
+}
+function countsAsTrainer(o) {
+  return !!o.trainerClass && !o.hidden && !/^OPP_RIVAL/.test(o.trainerClass);
+}
+function headerFor(data, label3, index) {
+  const forMap = label3 ? data.trainer_headers?.[label3] : undefined;
+  if (!forMap)
+    return;
+  if (Array.isArray(forMap))
+    return forMap[index - 1];
+  return forMap[index];
+}
+function mapTrainers(data, save, mapId) {
+  const def = data.maps[mapId];
+  const out = [];
+  for (const o of def?.objects ?? []) {
+    if (!countsAsTrainer(o))
+      continue;
+    const ev = headerFor(data, def?.label, o.index)?.event;
+    const beaten = !!save.defeatedTrainers?.[`${mapId}_obj_${o.index}`] || !!ev && !!save.flags?.[ev];
+    const t = data.trainers?.[o.trainerClass];
+    const party = t?.parties?.[(o.trainerParty ?? 1) - 1] ?? [];
+    out.push({ obj: o, cls: o.trainerClass, name: t?.name ?? o.trainerClass.replace(/^OPP_/, ""), beaten, party });
+  }
+  return out;
+}
+function mapItems(data, save, mapId) {
+  const out = [];
+  for (const o of data.maps[mapId]?.objects ?? []) {
+    if (!o.item || o.hidden || !o.text)
+      continue;
+    out.push({
+      item: o.item,
+      name: data.items?.[o.item]?.name ?? o.item,
+      hidden: false,
+      taken: !!save.flags?.[itemBallFlag(mapId, o.text)],
+      x: o.x,
+      y: o.y
+    });
+  }
+  const hidden = data.field?.hiddenItems?.[mapId] ?? [];
+  for (const h of hidden) {
+    out.push({
+      item: h.item,
+      name: data.items?.[h.item]?.name ?? h.item,
+      hidden: true,
+      taken: !!save.hiddenTaken?.[hiddenKey(mapId, h.x, h.y)],
+      x: h.x,
+      y: h.y
+    });
+  }
+  return out;
+}
+function stampAreas(data, save, withHidden) {
+  const locs = data.field?.townMap?.locations ?? {};
+  const byName = new Map;
+  for (const id of Object.keys(locs).sort()) {
+    const name = locs[id].name;
+    let a = byName.get(name);
+    if (!a) {
+      a = { name, maps: [], trainers: 0, beaten: 0, items: 0, found: 0, visited: false };
+      byName.set(name, a);
+    }
+    a.maps.push(id);
+    if (save.visited?.[id])
+      a.visited = true;
+    for (const t of mapTrainers(data, save, id)) {
+      a.trainers++;
+      if (t.beaten)
+        a.beaten++;
+    }
+    for (const it of mapItems(data, save, id)) {
+      if (it.hidden && !withHidden)
+        continue;
+      a.items++;
+      if (it.taken)
+        a.found++;
+    }
+  }
+  return [...byName.values()].filter((a) => a.trainers + a.items > 0);
+}
+function stampDone(a) {
+  return a.beaten >= a.trainers && a.found >= a.items;
+}
+var HIGH_CRIT2 = new Set(["CRABHAMMER", "KARATE_CHOP", "RAZOR_LEAF", "SLASH"]);
+var MOVE_SPECIAL = {
+  COUNTER: ["2X LAST NORMAL/FIGHT", "DAMAGE"],
+  DIG: ["DIGS UNDERGROUND", "ATTACKS NEXT TURN"],
+  DRAGON_RAGE: ["DEALS 40 FIXED DAMAGE"],
+  NIGHT_SHADE: ["DAMAGE EQUALS", "USER LEVEL"],
+  PSYWAVE: ["DEALS 1 TO 1.5X", "USER LEVEL DAMAGE"],
+  REST: ["FULLY HEALS USER", "THEN SLEEPS 2 TURNS"],
+  SEISMIC_TOSS: ["DAMAGE EQUALS", "USER LEVEL"],
+  SONICBOOM: ["DEALS 20 FIXED DAMAGE"],
+  STRUGGLE: ["USER TAKES HALF", "OF DAMAGE DEALT"],
+  TELEPORT: ["ESCAPES WILD BATTLE", "FAILS VS TRAINERS"],
+  TOXIC: ["BADLY POISONS TARGET", "DAMAGE GROWS PER TURN"]
+};
+var MOVE_EFFECTS = {
+  ATTACK_TWICE_EFFECT: ["HITS TWICE"],
+  BIDE_EFFECT: ["STORES DAMAGE 2-3", "TURNS THEN RETURNS 2X"],
+  BURN_SIDE_EFFECT1: ["10.2% CHANCE", "TO BURN TARGET"],
+  BURN_SIDE_EFFECT2: ["30.1% CHANCE", "TO BURN TARGET"],
+  CHARGE_EFFECT: ["CHARGES THIS TURN", "ATTACKS NEXT TURN"],
+  CONFUSION_EFFECT: ["CONFUSES THE TARGET"],
+  CONFUSION_SIDE_EFFECT: ["9.8% CHANCE", "TO CONFUSE TARGET"],
+  CONVERSION_EFFECT: ["COPIES TARGET TYPES"],
+  DISABLE_EFFECT: ["DISABLES RANDOM MOVE", "FOR 1-8 TURNS"],
+  DRAIN_HP_EFFECT: ["HEALS USER BY HALF", "OF DAMAGE DEALT"],
+  DREAM_EATER_EFFECT: ["ONLY HITS SLEEPING", "DRAINS HALF DAMAGE"],
+  EXPLODE_EFFECT: ["USER FAINTS AFTER", "THE ATTACK"],
+  FLINCH_SIDE_EFFECT1: ["10.2% CHANCE", "TO FLINCH TARGET"],
+  FLINCH_SIDE_EFFECT2: ["30.1% CHANCE", "TO FLINCH TARGET"],
+  FLY_EFFECT: ["FLIES UP THIS TURN", "ATTACKS NEXT TURN"],
+  FREEZE_SIDE_EFFECT1: ["10.2% CHANCE", "TO FREEZE TARGET"],
+  HAZE_EFFECT: ["CLEARS BOTH SIDES", "STATS AND CONDITIONS"],
+  HEAL_EFFECT: ["RESTORES HALF OF", "USER MAX HP"],
+  JUMP_KICK_EFFECT: ["USER LOSES 1 HP", "IF ATTACK MISSES"],
+  LEECH_SEED_EFFECT: ["DRAINS TARGET HP", "EACH TURN"],
+  LIGHT_SCREEN_EFFECT: ["DOUBLES USER SPECIAL", "DEFENSE UNTIL SWITCH"],
+  METRONOME_EFFECT: ["USES A RANDOM MOVE"],
+  MIMIC_EFFECT: ["COPIES A TARGET MOVE"],
+  MIRROR_MOVE_EFFECT: ["REPEATS TARGET LAST", "MOVE"],
+  MIST_EFFECT: ["PREVENTS ENEMY STAT", "REDUCTIONS"],
+  OHKO_EFFECT: ["ONE-HIT KO", "FAILS IF USER SLOWER"],
+  PARALYZE_EFFECT: ["PARALYZES THE TARGET"],
+  PARALYZE_SIDE_EFFECT1: ["10.2% CHANCE", "TO PARALYZE TARGET"],
+  PARALYZE_SIDE_EFFECT2: ["30.1% CHANCE", "TO PARALYZE TARGET"],
+  PAY_DAY_EFFECT: ["SCATTERS 2X LEVEL", "COINS AFTER BATTLE"],
+  POISON_EFFECT: ["POISONS THE TARGET"],
+  POISON_SIDE_EFFECT1: ["20.3% CHANCE", "TO POISON TARGET"],
+  POISON_SIDE_EFFECT2: ["40.2% CHANCE", "TO POISON TARGET"],
+  RAGE_EFFECT: ["ATTACK RISES WHEN", "USER IS HIT"],
+  RECOIL_EFFECT: ["USER TAKES 1/4", "OF DAMAGE DEALT"],
+  REFLECT_EFFECT: ["DOUBLES USER DEFENSE", "UNTIL SWITCHING"],
+  SLEEP_EFFECT: ["PUTS TARGET TO SLEEP"],
+  SPLASH_EFFECT: ["DOES NOTHING"],
+  SUBSTITUTE_EFFECT: ["USES 1/4 MAX HP", "TO CREATE A DECOY"],
+  SUPER_FANG_EFFECT: ["HALVES TARGET", "CURRENT HP"],
+  SWIFT_EFFECT: ["NEVER MISSES"],
+  SWITCH_AND_TELEPORT_EFFECT: ["ENDS WILD BATTLE", "FAILS VS TRAINERS"],
+  THRASH_PETAL_DANCE_EFFECT: ["ATTACKS 3-4 TURNS", "THEN CONFUSES USER"],
+  TRANSFORM_EFFECT: ["COPIES TARGET STATS", "TYPES AND MOVES"],
+  TRAPPING_EFFECT: ["TRAPS FOR 2-5 HITS", "TARGET CANNOT MOVE"],
+  TWINEEDLE_EFFECT: ["HITS TWICE", "20.3% POISON CHANCE"],
+  TWO_TO_FIVE_ATTACKS_EFFECT: ["HITS 2-5 TIMES"]
+};
+var STAT_WORD = {
+  ATTACK: "ATTACK",
+  DEFENSE: "DEFENSE",
+  SPEED: "SPEED",
+  SPECIAL: "SPECIAL",
+  ACCURACY: "ACCURACY",
+  EVASION: "EVASION"
+};
+var ODDS = {
+  "9.8%": "1/10",
+  "10.2%": "1/10",
+  "20.3%": "1/5",
+  "30.1%": "3/10",
+  "33.2%": "1/3",
+  "40.2%": "2/5"
+};
+function moveEffectLines(id, def) {
+  return moveEffectRaw(id, def).map((l) => l.replace(/\d+\.\d%/g, (m) => ODDS[m] ?? m));
+}
+function moveEffectRaw(id, def) {
+  const special = MOVE_SPECIAL[id];
+  if (special)
+    return special;
+  if (HIGH_CRIT2.has(id))
+    return ["HIGH CRITICAL-HIT", "RATE"];
+  const effect = def?.effect ?? "";
+  if (effect === "FOCUS_ENERGY_EFFECT")
+    return ["LOWERS CRITICAL-HIT", "RATE (GEN 1 BUG)"];
+  if (effect === "HYPER_BEAM_EFFECT")
+    return ["RECHARGES NEXT TURN", "UNLESS TARGET FAINTS"];
+  let m = /^([A-Z]+)_UP([12])_EFFECT$/.exec(effect);
+  if (m)
+    return [`RAISES USER ${STAT_WORD[m[1]] ?? m[1]}`, m[2] === "2" ? "BY TWO STAGES" : "BY ONE STAGE"];
+  m = /^([A-Z]+)_DOWN([12])_EFFECT$/.exec(effect);
+  if (m)
+    return [`LOWERS TARGET ${STAT_WORD[m[1]] ?? m[1]}`, m[2] === "2" ? "BY TWO STAGES" : "BY ONE STAGE"];
+  m = /^([A-Z]+)_DOWN_SIDE_EFFECT$/.exec(effect);
+  if (m)
+    return ["33.2% CHANCE TO LOWER", `TARGET ${STAT_WORD[m[1]] ?? m[1]}`];
+  if (MOVE_EFFECTS[effect])
+    return MOVE_EFFECTS[effect];
+  if (effect === "NO_ADDITIONAL_EFFECT" || effect === "")
+    return ["DEALS DAMAGE"];
+  return ["NO DETAILS AVAILABLE"];
+}
+var TYPES2 = [
+  "NORMAL",
+  "FIGHTING",
+  "FLYING",
+  "POISON",
+  "GROUND",
+  "ROCK",
+  "BUG",
+  "GHOST",
+  "FIRE",
+  "WATER",
+  "GRASS",
+  "ELECTRIC",
+  "PSYCHIC",
+  "ICE",
+  "DRAGON"
+];
+function typeShort(t) {
+  const s = {
+    FIGHTING: "FIGHT",
+    ELECTRIC: "ELECT",
+    PSYCHIC: "PSYCH"
+  };
+  return s[t] ?? t;
+}
+function matchups(chart, defTypes) {
+  const weak = [];
+  const resist = [];
+  if (!chart)
+    return { weak, resist };
+  for (const t of TYPES2) {
+    const e = chart.effectiveness(t, defTypes);
+    if (e > 10)
+      weak.push([t, e]);
+    else if (e < 10)
+      resist.push([t, e]);
+  }
+  weak.sort((a, b) => b[1] - a[1]);
+  resist.sort((a, b) => a[1] - b[1]);
+  return { weak, resist };
+}
+function multLabel(e10) {
+  if (e10 === 0)
+    return "0X";
+  if (e10 >= 10)
+    return `${e10 / 10}X`;
+  if (e10 === 5)
+    return "1/2";
+  if (e10 === 2 || e10 === 3)
+    return "1/4";
+  return `${e10 / 10}X`;
+}
+var TOOLS = [
+  { key: "bicycle", label: "BICYCLE", item: "BICYCLE" },
+  { key: "old_rod", label: "OLD ROD", item: "OLD_ROD" },
+  { key: "good_rod", label: "GOOD ROD", item: "GOOD_ROD" },
+  { key: "super_rod", label: "SUPER ROD", item: "SUPER_ROD" },
+  { key: "cut", label: "CUT", move: "CUT" },
+  { key: "surf", label: "SURF", move: "SURF" },
+  { key: "strength", label: "STRENGTH", move: "STRENGTH" },
+  { key: "flash", label: "FLASH", move: "FLASH" },
+  { key: "fly", label: "FLY", move: "FLY" },
+  { key: "dig", label: "DIG", move: "DIG" },
+  { key: "teleport", label: "TELEPORT", move: "TELEPORT" },
+  { key: "softboiled", label: "SOFTBOILED", move: "SOFTBOILED" }
+];
+var FIELD_BADGE = {
+  CUT: "CASCADEBADGE",
+  SURF: "SOULBADGE",
+  STRENGTH: "RAINBOWBADGE",
+  FLASH: "BOULDERBADGE",
+  FLY: "THUNDERBADGE",
+  DIG: false,
+  TELEPORT: false,
+  SOFTBOILED: false
+};
+function knowerOf(save, move) {
+  return (save.party ?? []).findIndex((m) => m.moves?.some((mv) => mv.id === move));
+}
+function toolUnlocked(t, save) {
+  const inv = save.inventory ?? {};
+  if (t.item)
+    return (inv[t.item] ?? 0) > 0;
+  if (!t.move || knowerOf(save, t.move) < 0)
+    return false;
+  const badge = FIELD_BADGE[t.move];
+  return badge === false || !!badge && (inv[badge] ?? 0) > 0;
+}
+
 // voxelmon/game/world/warp.ts
 function onArrive(map, cx, cy) {
   const w = map.warpAtCell(cx, cy);
@@ -12687,6 +13140,7 @@ GAME is over!`;
     this.runLandTriggers();
   }
   onStepComplete() {
+    countGearStep(this.save);
     if (this.safariStep())
       return;
     const rs = this.save;
@@ -15879,6 +16333,11 @@ class NamingState {
         this.commit(cell);
     }
   }
+  touchCell(row, col) {
+    this.row = row;
+    this.col = col;
+    this.clamp();
+  }
   view() {
     return {
       title: this.title,
@@ -15901,6 +16360,7 @@ var gbX = sx;
 var gbY = sy;
 var gbW = sw;
 var COPYRIGHT_PREFIX = [0, 1, 2, 1, 3, 1, 4];
+var COPYRIGHT_PREFIX_YELLOW = [0, 1, 2, 3, 1, 2, 4];
 var COPYRIGHT_GAMEFREAK = [0, 1, 2, 3, 4, 5, 6, 7, 8];
 var COPYRIGHT_FRAMES = 180;
 var STAR_START = 64;
@@ -16382,6 +16842,11 @@ function titlePage(data, key) {
   const p = namedPage(data, "picTitle", key);
   return p >= 0 ? p : TITLE_PAGES[key];
 }
+var YELLOW_DROP = [[-4, 16], [3, 4], [-3, 4], [2, 2], [-2, 2], [1, 2], [-1, 2]];
+var Y_LOGO = { x: 16, y: 8, w: 128, h: 56 };
+var Y_BUBBLE = { x: 48, y: 32, w: 56, h: 40 };
+var Y_PIKACHU = { x: 32, y: 64, w: 104, h: 72 };
+var Y_EYES = { x: 56, y: 80, w: 48, h: 16 };
 var TITLE_MON_FRAMES = 150;
 var LOGO = { x: 16, y: 8, w: 128, h: 48 };
 var RIBBON_Y = 64;
@@ -16391,6 +16856,10 @@ var RIBBON_BLUE = { x: 56, tiles: [0, 1, 2, 3, 4, 5, 6, 7] };
 var MON_BOX = { x: 40, y: 80, w: 56, h: 56 };
 var RED_AT = { x: 82, y: 80, w: 40, h: 56 };
 var COPYRIGHT_Y = 136;
+var COPYRIGHT_GAMEFREAK_X = 16 + COPYRIGHT_PREFIX.length * 8;
+function named(data, key) {
+  return namedPage(data, "picTitle", key);
+}
 
 class TitleState {
   game;
@@ -16403,12 +16872,61 @@ class TitleState {
   mon;
   bag = [];
   cast;
+  yellow;
+  yPhase = "drop";
+  scy = 64;
+  dropStep = 0;
+  dropLeft = -1;
+  yTimer = 0;
+  showBubble = false;
+  blinkTimer = 0;
+  blinkAt = -1;
   constructor(game, onChoose) {
     this.game = game;
     this.onChoose = onChoose;
     this.menu = game.hasSave ? ["CONTINUE", "NEW GAME", "OPTION", "MAP VIEWER"] : ["NEW GAME", "OPTION", "MAP VIEWER"];
     this.cast = titleMons(game.data);
     this.mon = this.cast[0];
+    this.yellow = gameVersion(game.data) === "yellow";
+  }
+  audio() {
+    return this.game.audio;
+  }
+  yellowSequence() {
+    if (this.yPhase === "drop") {
+      const step = YELLOW_DROP[this.dropStep];
+      if (!step) {
+        this.yPhase = "settle";
+        this.yTimer = 0;
+        return;
+      }
+      if (this.dropLeft < 0) {
+        this.dropLeft = step[1];
+        if (step[0] === -3)
+          this.audio()?.playSfx?.("Intro_Crash");
+      }
+      this.scy += step[0];
+      this.dropLeft -= 1;
+      if (this.dropLeft <= 0) {
+        this.dropStep += 1;
+        this.dropLeft = -1;
+      }
+    } else if (this.yPhase === "settle") {
+      if (++this.yTimer >= 36) {
+        this.audio()?.playSfx?.("Intro_Whoosh");
+        this.showBubble = true;
+        this.yPhase = "bubble";
+        this.yTimer = 0;
+      }
+    } else if (this.yPhase === "bubble") {
+      if (++this.yTimer === 3)
+        this.audio()?.playCry?.("PIKACHU");
+      if (this.yTimer >= 60) {
+        this.audio()?.play?.("Music_TitleScreen");
+        this.yPhase = "loop";
+        this.blinkTimer = 0;
+      }
+    }
   }
   pickNext() {
     if (this.bag.length === 0)
@@ -16424,6 +16942,24 @@ class TitleState {
   }
   update() {
     const p = this.game.input.pressed;
+    if (this.yellow && this.phase === "press") {
+      if (this.yPhase !== "loop") {
+        this.yellowSequence();
+        return;
+      }
+      const t = this.blinkTimer;
+      this.blinkTimer = (t + 1) % 256;
+      if (t === 0 || t === 128 || t === 144)
+        this.blinkAt = 0;
+      if (this.blinkAt >= 0 && ++this.blinkAt > 9)
+        this.blinkAt = -1;
+      if (p.start || p.a) {
+        this.audio()?.playCry?.("PIKACHU");
+        this.phase = "menu";
+        this.index = 0;
+      }
+      return;
+    }
     this.timer += 1;
     if (this.timer === 2) {
       this.game.audio?.play?.("Music_TitleScreen");
@@ -16463,6 +16999,8 @@ class TitleState {
   }
   view() {
     const data = this.game.data;
+    if (this.yellow)
+      return this.yellowView();
     const monPage = this.monPage();
     const pics = [this.quad(titlePage(data, "logo"), LOGO)];
     if (monPage >= 0)
@@ -16482,11 +17020,43 @@ class TitleState {
       row(version, RIBBON_VERSION.tiles, RIBBON_VERSION.x, RIBBON_Y);
     }
     row(titlePage(data, "copyright"), COPYRIGHT_PREFIX, 16, COPYRIGHT_Y);
-    row(titlePage(data, "gamefreak"), COPYRIGHT_GAMEFREAK, 80, COPYRIGHT_Y);
+    row(titlePage(data, "gamefreak"), COPYRIGHT_GAMEFREAK, COPYRIGHT_GAMEFREAK_X, COPYRIGHT_Y);
     return {
       phase: this.phase,
       monPage,
       pics,
+      tiles,
+      menu: this.menu,
+      index: this.index,
+      hasSave: !!this.game.hasSave
+    };
+  }
+  yellowView() {
+    const data = this.game.data;
+    const dy = -this.scy;
+    const at = (r) => ({ ...r, y: r.y + dy });
+    const pics = [this.quad(named(data, "logo"), at(Y_LOGO))];
+    if (this.showBubble)
+      pics.push(this.quad(named(data, "pika_bubble"), at(Y_BUBBLE)));
+    pics.push(this.quad(named(data, "pikachu"), at(Y_PIKACHU)));
+    if (this.blinkAt >= 0) {
+      const eyes = this.blinkAt <= 3 || this.blinkAt > 6 ? "eyes_half" : "eyes_closed";
+      pics.push(this.quad(named(data, eyes), at(Y_EYES)));
+    }
+    const tiles = [];
+    if (this.yPhase === "loop") {
+      const row = (page, seq, x, y) => {
+        if (page < 0)
+          return;
+        seq.forEach((t, i) => tiles.push({ page, tile: t, x: x + i * 8, y, flags: 0 }));
+      };
+      row(titlePage(data, "copyright"), COPYRIGHT_PREFIX_YELLOW, 16, COPYRIGHT_Y);
+      row(titlePage(data, "gamefreak"), COPYRIGHT_GAMEFREAK, COPYRIGHT_GAMEFREAK_X, COPYRIGHT_Y);
+    }
+    return {
+      phase: this.phase,
+      monPage: named(data, "pikachu"),
+      pics: pics.filter((q) => q.page >= 0),
       tiles,
       menu: this.menu,
       index: this.index,
@@ -16550,6 +17120,16 @@ class StartMenuState {
       }
       this.onPick(act);
     }
+  }
+  gearMenu() {
+    return {
+      title: "MENU",
+      items: this.entries,
+      index: this.index,
+      select: (i) => {
+        this.index = Math.max(0, Math.min(this.entries.length - 1, i));
+      }
+    };
   }
   view() {
     const s = this.game.save?.safari;
@@ -17691,48 +18271,105 @@ function fillAideText(text, subs) {
   return text.replace(/\{NUM:[^}]*\}/g, () => String(subs.num ?? "")).replace(/\{RAM:[^}]*\}/g, () => subs.item ?? "");
 }
 
-// voxelmon/game/ui/kantogear.ts
+// voxelmon/game/ui/gear/draw.ts
 var COLS = 20;
 var ROWS = 18;
 var TILE_W = 320 / COLS;
 var TILE_H = 240 / ROWS;
-function stampBottom(host, x, y, s, bit = 0) {
-  const codes = encodeGlyphs(s);
-  for (let i = 0;i < codes.length && x + i < COLS; i++) {
-    host.uiTileBottom(x + i, y, codes[i] | bit);
-  }
-}
-function stampRight(host, y, s) {
-  stampBottom(host, Math.max(0, COLS - s.length - 1), y, s);
-}
-function tilesBottom(host, x, y, tiles) {
-  for (let i = 0;i < tiles.length && x + i < COLS; i++) {
-    host.uiTileBottom(x + i, y, tiles[i]);
-  }
-}
 var LIGHT_BIT = 32768;
-function stampLight(host, x, y, s) {
-  const codes = encodeGlyphs(s);
-  for (let i = 0;i < codes.length && x + i < COLS; i++) {
-    host.uiTileBottom(x + i, y, codes[i] | LIGHT_BIT);
-  }
-}
 var FILL_BIT = 16384;
 var DARKTEXT_BIT = 8192;
-function fillCellBottom(host, x0, y0, w, h) {
-  for (let y = y0;y < y0 + h; y++) {
-    for (let x = x0;x < x0 + w && x < COLS; x++) {
-      host.uiTileBottom(x, y, SPACE | FILL_BIT);
+var INK_BIT = { dark: DARKTEXT_BIT, light: LIGHT_BIT, fill: FILL_BIT };
+var targets = [];
+var pressed = null;
+function beginTargets() {
+  targets = [];
+}
+function currentTargets() {
+  return targets;
+}
+function pressedId() {
+  return pressed;
+}
+function setPressed(id) {
+  pressed = id;
+}
+function targetAt(x, y) {
+  for (let i = targets.length - 1;i >= 0; i--) {
+    const t = targets[i];
+    if (x >= t.x && x < t.x + t.w && y >= t.y && y < t.y + t.h)
+      return t;
+  }
+  return;
+}
+function region(id, cx, cy, cw, ch, tap) {
+  targets.push({ id, x: cx * TILE_W, y: cy * TILE_H, w: cw * TILE_W, h: ch * TILE_H, tap });
+}
+function regionPx(id, x, y, w, h, tap) {
+  targets.push({ id, x, y, w, h, tap });
+}
+function text(host, x, y, s, ink = "dark") {
+  if (ink === "dark" && /[%+]/.test(s)) {
+    for (let i = 0;i < s.length; i++) {
+      if (s[i] === "%")
+        percent(host, x + width(s.slice(0, i)), y);
+      else if (s[i] === "+")
+        plus(host, x + width(s.slice(0, i)), y);
     }
   }
-}
-function stampFill(host, x, y, s) {
   const codes = encodeGlyphs(s);
+  const bit = INK_BIT[ink];
+  let n = 0;
   for (let i = 0;i < codes.length && x + i < COLS; i++) {
-    host.uiTileBottom(x + i, y, codes[i] | FILL_BIT);
+    if (x + i < 0)
+      continue;
+    host.uiTileBottom(x + i, y, codes[i] | bit);
+    n++;
+  }
+  return codes.length;
+}
+function percent(host, cx, cy) {
+  if (!host.uiRectBottom || cx < 0 || cx >= COLS)
+    return;
+  const x = Math.round(cx * TILE_W) + 3;
+  const y = Math.round(cy * TILE_H) + 2;
+  host.uiRectBottom(x, y, 3, 3, 3);
+  host.uiRectBottom(x + 7, y + 7, 3, 3, 3);
+  for (let k = 0;k < 5; k++)
+    host.uiRectBottom(x + 8 - k * 2, y + k * 2, 2, 2, 3);
+}
+function plus(host, cx, cy) {
+  if (!host.uiRectBottom || cx < 0 || cx >= COLS)
+    return;
+  const x = Math.round(cx * TILE_W);
+  const y = Math.round(cy * TILE_H);
+  host.uiRectBottom(x + 7, y + 3, 3, 8, 3);
+  host.uiRectBottom(x + 4, y + 6, 9, 2, 3);
+}
+function width(s) {
+  return encodeGlyphs(s).length;
+}
+function center(host, y, s, ink = "dark", x0 = 0, w = COLS) {
+  text(host, x0 + Math.max(0, Math.floor((w - width(s)) / 2)), y, s, ink);
+}
+function right(host, y, s, ink = "dark", rightEdge = COLS - 1) {
+  text(host, Math.max(0, rightEdge - width(s)), y, s, ink);
+}
+function tiles(host, x, y, codes, bit = 0) {
+  for (let i = 0;i < codes.length && x + i < COLS; i++)
+    host.uiTileBottom(x + i, y, codes[i] | bit);
+}
+function tile(host, x, y, code, ink = "dark") {
+  host.uiTileBottom(x, y, code | INK_BIT[ink]);
+}
+function fill(host, x0, y0, w, h) {
+  for (let y = y0;y < y0 + h; y++) {
+    for (let x = x0;x < x0 + w && x < COLS; x++)
+      host.uiTileBottom(x, y, SPACE | FILL_BIT);
   }
 }
-function boxBottom(host, x0, y0, w, h, bit = 0) {
+function box(host, x0, y0, w, h, ink = "dark") {
+  const bit = ink === "fill" ? 0 : INK_BIT[ink];
   const x1 = x0 + w - 1;
   const y1 = y0 + h - 1;
   host.uiTileBottom(x0, y0, BORDER_TL | bit);
@@ -17748,137 +18385,178 @@ function boxBottom(host, x0, y0, w, h, bit = 0) {
     host.uiTileBottom(x1, y, BORDER_V | bit);
   }
 }
-function clockStr() {
+function rule(host, y, x0 = 0, w = COLS) {
+  for (let x = x0;x < x0 + w && x < COLS; x++)
+    host.uiTileBottom(x, y, BORDER_H | DARKTEXT_BIT);
+}
+function cursor(host, x, y, ink = "dark") {
+  host.uiTileBottom(x, y, ARROW_CURSOR | INK_BIT[ink]);
+}
+function pill(host, id, x, y, w, label3, tap, on = false) {
+  const lit = on !== (pressed === id);
+  if (lit) {
+    center(host, y, label3, "dark", x, w);
+  } else {
+    fill(host, x, y, w, 1);
+    center(host, y, label3, "fill", x, w);
+  }
+  region(id, x, y, w, 1, tap);
+}
+function button(host, id, x, y, w, h, label3, tap, on = false) {
+  const lit = on || pressed === id;
+  if (lit)
+    fill(host, x, y, w, h);
+  box(host, x, y, w, h, lit ? "fill" : "dark");
+  center(host, y + Math.floor((h - 1) / 2), label3, lit ? "fill" : "dark", x + 1, w - 2);
+  region(id, x, y, w, h, tap);
+}
+function sprite(host, page, x, y, w, h) {
+  if (page >= 0)
+    host.uiSpriteBottom(page, Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+}
+function spriteFrame(host, page, x, y, size, frame = 0, mirror = false) {
+  if (page < 0 || !host.uiSpriteRectBottom)
+    return;
+  host.uiSpriteRectBottom(page, Math.round(x), Math.round(y), size, size, 0, frame * 16, 16, 16, mirror ? 1 : 0);
+}
+function uiTileIcon(host, uiPage, code, x, y, size) {
+  if (uiPage < 0 || !host.uiSpriteRectBottom)
+    return;
+  const sx2 = code % UI_PAGE_COLS * 8;
+  const sy2 = Math.floor(code / UI_PAGE_COLS) * 8;
+  host.uiSpriteRectBottom(uiPage, Math.round(x), Math.round(y), size, size, sx2, sy2, 8, 8, 0);
+}
+function badgeIcon(host, uiPage, gym, x, y, cell, face = false) {
+  const base = UI_TILE.badge + gym * UI_TILE.badgeStride + (face ? 0 : UI_TILE.badgeHalf);
+  uiTileIcon(host, uiPage, base, x, y, cell);
+  uiTileIcon(host, uiPage, base + 1, x + cell, y, cell);
+  uiTileIcon(host, uiPage, base + 2, x, y + cell, cell);
+  uiTileIcon(host, uiPage, base + 3, x + cell, y + cell, cell);
+}
+function rect(host, x, y, w, h, shade) {
+  if (w <= 0 || h <= 0)
+    return;
+  host.uiRectBottom?.(Math.round(x), Math.round(y), Math.round(w), Math.round(h), shade);
+}
+function wrap2(s, w) {
+  const out = [];
+  for (const para of s.split(`
+`)) {
+    let line = "";
+    for (const word of para.split(" ")) {
+      if (!word)
+        continue;
+      const next = line ? `${line} ${word}` : word;
+      if (width(next) <= w) {
+        line = next;
+        continue;
+      }
+      if (line)
+        out.push(line);
+      line = width(word) <= w ? word : word.slice(0, w);
+    }
+    out.push(line);
+  }
+  return out;
+}
+function fit(s, n) {
+  if (width(s) <= n)
+    return s;
+  return s.slice(0, Math.max(1, n - 1)) + ".";
+}
+var drags = [];
+function beginDrags() {
+  drags = [];
+}
+function dragPx(id, x, y, w, h, move) {
+  drags.push({ id, x, y, w, h, move });
+}
+function dragAt(x, y) {
+  return drags.find((d) => x >= d.x && x < d.x + d.w && y >= d.y && y < d.y + d.h);
+}
+function dragById(id) {
+  return drags.find((d) => d.id === id);
+}
+
+// voxelmon/game/ui/gear/ui.ts
+function ctxFor(host, game, app) {
+  const all = game.gearUi ??= {};
+  const ui = all[app] ??= {};
+  return { host, game, data: game.data, save: game.save, gear: gearSave(game.save), ui };
+}
+function clockStr(clock24) {
   try {
     const d = new Date;
     const m = d.getMinutes();
-    let h = d.getHours();
-    const ap = h >= 12 ? "PM" : "AM";
-    h = h % 12;
-    if (h === 0)
-      h = 12;
-    const mm = m < 10 ? "0" + String(m) : String(m);
-    return String(h) + ":" + mm + ap;
+    const h = d.getHours();
+    const mm = m < 10 ? `0${m}` : String(m);
+    if (clock24)
+      return `${h < 10 ? "0" : ""}${h}:${mm}`;
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return `${h12}:${mm}${h >= 12 ? "PM" : "AM"}`;
   } catch {
     return "";
   }
 }
-function drawTopBar(host, title) {
-  stampLight(host, 1, 0, title);
-  const t = clockStr();
-  if (t)
-    stampLight(host, Math.max(0, COLS - t.length - 1), 0, t);
-}
-var BATTLE_ACTIONS = ["FIGHT", "PKMN", "ITEM", "RUN"];
-var SAFARI_ACTIONS = ["BALL", "BAIT", "ROCK", "RUN"];
-function drawActionGrid(host, menuIndex, showCursor, safari) {
-  host.uiClearBottom();
-  drawTopBar(host, safari ? `SAFARI BALLS ${safari.balls}` : "BATTLE");
-  const cellW = 10;
-  const cellH = 8;
-  const colX = [0, 10];
-  const rowY = [2, 10];
-  for (let i = 0;i < 4; i++) {
-    const x0 = colX[i % 2];
-    const y0 = rowY[i / 2 | 0];
-    const label3 = (safari ? SAFARI_ACTIONS : BATTLE_ACTIONS)[i];
-    const iw = cellW - 2;
-    const lx = x0 + 1 + Math.max(0, Math.floor((iw - label3.length) / 2));
-    const ly = y0 + Math.floor(cellH / 2);
-    if (showCursor && i === menuIndex - 1) {
-      fillCellBottom(host, x0, y0, cellW, cellH);
-      boxBottom(host, x0, y0, cellW, cellH);
-      stampFill(host, lx, ly, label3);
-    } else {
-      boxBottom(host, x0, y0, cellW, cellH, DARKTEXT_BIT);
-      stampBottom(host, lx, ly, label3, DARKTEXT_BIT);
-    }
+var CLOCK_COL = COLS - 8;
+function header(ctx, title, opts = {}) {
+  const { host } = ctx;
+  const many = !!opts.arrows;
+  const w = width(title) + (many ? 4 : 0);
+  const x = Math.max(0, Math.floor((CLOCK_COL - w) / 2));
+  if (many) {
+    host.uiTileBottom(x, 0, UI_TILE.arrowLeft | LIGHT_BIT);
+    host.uiTileBottom(x + w - 1, 0, ARROW_CURSOR | LIGHT_BIT);
+    if (opts.onLeft)
+      region("hdr:left", 0, 0, x + 1, 1, opts.onLeft);
+    if (opts.onRight)
+      region("hdr:right", x + w - 1, 0, Math.max(1, CLOCK_COL - (x + w - 1)), 1, opts.onRight);
   }
+  text(host, x + (many ? 2 : 0), 0, title, "light");
+  if (opts.onTitle)
+    region("hdr:title", x + (many ? 1 : 0), 0, width(title) + 2, 1, opts.onTitle);
+  const aside = opts.aside ?? clockStr(ctx.gear.clock24);
+  if (aside)
+    text(host, Math.max(0, COLS - width(aside) - 1), 0, aside, "light");
 }
-function effLabel(e10) {
-  if (e10 % 10 === 0)
-    return String(e10 / 10) + "X";
-  return (e10 / 10).toString().replace(/^0/, "") + "X";
-}
-function drawMoveSelect(host, game, b) {
-  host.uiClearBottom();
-  drawTopBar(host, "MOVES");
-  const moves = b.player.curMoves;
-  const cellW = 10;
-  const cellH = 8;
-  const colX = [0, 10];
-  const rowY = [2, 10];
-  const qmark = encodeGlyphs("?")[0];
-  for (let i = 0;i < 4; i++) {
-    if (i >= moves.length)
-      continue;
-    const x0 = colX[i % 2];
-    const y0 = rowY[i / 2 | 0];
-    const slot = moves[i];
-    const def = game.data.moves[slot.id];
-    const name = (def?.name ?? slot.id).slice(0, 7);
-    const maxPp = def?.pp ?? slot.pp;
-    const type = (def?.type ?? "").toUpperCase().slice(0, 6);
-    const power = def?.power ?? 0;
-    const selected = i === b.moveIndex - 1;
-    const bit = selected ? FILL_BIT : DARKTEXT_BIT;
-    if (selected)
-      fillCellBottom(host, x0, y0, cellW, cellH);
-    boxBottom(host, x0, y0, cellW, cellH, selected ? 0 : DARKTEXT_BIT);
-    stampBottom(host, x0 + 1, y0 + 1, name, bit);
-    host.uiTileBottom(x0 + cellW - 2, y0 + 1, qmark | bit);
-    stampBottom(host, x0 + 1, y0 + 3, "PP " + String(slot.pp) + "/" + String(maxPp), bit);
-    stampBottom(host, x0 + 1, y0 + 5, type, bit);
-    let eff = "--";
-    if (power > 0 && b.enemy && b.chart) {
-      eff = effLabel(b.chart.effectiveness(def.type ?? "", b.enemy.curTypes));
-    }
-    stampBottom(host, x0 + cellW - 1 - eff.length, y0 + 5, eff, bit);
-  }
-}
-function drawForgetList(host, b) {
-  host.uiClearBottom();
-  const f = b.forgetView?.();
-  if (!f)
+function tabs(ctx, list2, active2, pick, y = ROWS - 1) {
+  if (list2.length === 0)
     return;
-  drawTopBar(host, ("LEARN " + f.learning).slice(0, 18));
-  stampBottom(host, 1, 2, (f.name + " FORGETS?").slice(0, 18));
-  f.moves.forEach((name, i) => {
-    const y = 4 + i * 2;
-    stampBottom(host, 2, y, name.slice(0, 14));
-    if (i === f.index)
-      host.uiTileBottom(0, y, ARROW_CURSOR);
+  const w = Math.floor(COLS / list2.length);
+  list2.forEach((t, i) => {
+    const x = i * w;
+    const cw = i === list2.length - 1 ? COLS - x : w;
+    pill(ctx.host, `tab:${t.id}`, x, y, cw, t.label, () => pick(t.id), t.id === active2);
   });
-  const cancelY = 4 + f.moves.length * 2;
-  stampBottom(host, 2, cancelY, "DON'T LEARN");
-  if (f.index >= f.moves.length)
-    host.uiTileBottom(0, cancelY, ARROW_CURSOR);
 }
-var ITEM_ROWS = 12;
-function itemListTop(b) {
-  return Math.max(0, Math.min(b.itemIndex - (ITEM_ROWS - 1), b.itemList.length - ITEM_ROWS));
+function bottomBar(ctx, label3) {
+  fill(ctx.host, 0, ROWS - 1, COLS, 1);
+  text(ctx.host, Math.max(0, Math.floor((COLS - width(label3)) / 2)), ROWS - 1, label3, "fill");
 }
-function drawItemList(host, game, b) {
-  host.uiClearBottom();
-  drawTopBar(host, "ITEMS");
-  const top = itemListTop(b);
-  for (let i = top;i < b.itemList.length && i < top + ITEM_ROWS; i++) {
-    const id = b.itemList[i];
-    const name = game.data.items[id]?.name ?? id;
-    const count2 = game.save?.inventory?.[id] ?? 0;
-    const y = 2 + (i - top);
-    stampBottom(host, 2, y, name.slice(0, 13));
-    stampRight(host, y, "x" + String(count2));
-    if (i === b.itemIndex)
-      host.uiTileBottom(0, y, ARROW_CURSOR);
-  }
+function backRow(ctx, back, other) {
+  pill(ctx.host, "back", 0, ROWS - 1, other ? 10 : COLS, "BACK", back);
+  if (other)
+    pill(ctx.host, "back:other", 10, ROWS - 1, 10, other.label, other.tap);
 }
-function drawPartyList(host, game, title, cursor) {
-  host.uiClearBottom();
-  drawTopBar(host, title);
-  const party = game.save?.party ?? [];
-  const cellW = 10;
-  const cellH = 5;
+function stepper(ctx, label3, prev, next, y = ROWS - 1) {
+  pill(ctx.host, "step:prev", 0, y, 3, "", prev);
+  ctx.host.uiTileBottom(1, y, UI_TILE.arrowLeft | FILL_BIT);
+  pill(ctx.host, "step:next", COLS - 3, y, 3, "", next);
+  ctx.host.uiTileBottom(COLS - 2, y, ARROW_CURSOR | FILL_BIT);
+  fill(ctx.host, 3, y, COLS - 6, 1);
+  text(ctx.host, 3 + Math.max(0, Math.floor((COLS - 6 - width(label3)) / 2)), y, label3, "fill");
+}
+function go(ctx, view) {
+  ctx.game.setGearView?.(view);
+}
+
+// voxelmon/game/ui/gear/apps/party.ts
+function monName2(data, m) {
+  return m.nickname ?? data.pokemon?.[m.species]?.name ?? m.species;
+}
+function drawPartyGrid(ctx, cursorAt, onTap) {
+  const { host, data } = ctx;
+  const party = ctx.save?.party ?? [];
   const colX = [0, 10];
   const rowY = [2, 7, 12];
   for (let i = 0;i < 6; i++) {
@@ -17887,27 +18565,507 @@ function drawPartyList(host, game, title, cursor) {
     if (i >= party.length)
       continue;
     const mon = party[i];
-    const full = mon.nickname ?? game.data.pokemon[mon.species]?.name ?? mon.species;
+    const full = monName2(data, mon);
     const name = full.length > 7 ? full.slice(0, 6) + "." : full;
     const maxHp = mon.stats?.hp ?? mon.hp;
-    boxBottom(host, x0, y0, cellW, cellH, DARKTEXT_BIT);
-    const spritePage = picPageFor(game.data, mon.species);
-    if (spritePage >= 0) {
-      host.uiSpriteBottom(spritePage, (x0 + 1) * TILE_W, (y0 + 1) * TILE_H, 2 * TILE_W - 2, 2 * TILE_H - 1);
-    }
-    if (cursor === i)
-      host.uiTileBottom(x0, y0, ARROW_CURSOR | DARKTEXT_BIT);
-    stampBottom(host, x0 + 3, y0 + 1, name, DARKTEXT_BIT);
-    stampBottom(host, x0 + 3, y0 + 2, "L" + String(mon.level), DARKTEXT_BIT);
-    tilesBottom(host, x0 + 1, y0 + 3, hpBarTiles(mon.hp, maxHp, true).slice(1));
+    const lit = pressedId() === `party:${i}`;
+    box(host, x0, y0, 10, 5, lit ? "light" : "dark");
+    sprite(host, picPageFor(data, mon.species), (x0 + 1) * TILE_W, (y0 + 1) * TILE_H, 2 * TILE_W - 2, 2 * TILE_H - 1);
+    if (cursorAt === i)
+      cursor(host, x0, y0);
+    text(host, x0 + 3, y0 + 1, name);
+    text(host, x0 + 3, y0 + 2, `L${mon.level}`);
+    tiles(host, x0 + 1, y0 + 3, hpBarTiles(mon.hp, maxHp, true).slice(1));
     if (mon.status)
-      stampBottom(host, x0 + 6, y0 + 2, mon.status.slice(0, 3), DARKTEXT_BIT);
+      text(host, x0 + 6, y0 + 2, mon.status.slice(0, 3));
+    if (onTap)
+      region(`party:${i}`, x0, y0, 10, 5, () => onTap(i));
   }
 }
-function drawBattleMessage(host, b) {
-  host.uiClearBottom();
-  drawTopBar(host, "BATTLE");
-  boxBottom(host, 0, 2, COLS, 14, DARKTEXT_BIT);
+function drawParty(ctx) {
+  const { ui } = ctx;
+  const party = ctx.save?.party ?? [];
+  if (typeof ui.summary === "number" && party[ui.summary]) {
+    drawSummary(ctx, ui.summary);
+    return;
+  }
+  ui.summary = null;
+  drawPartyGrid(ctx, -1, (i) => {
+    ui.summary = i;
+    ui.page ??= "info";
+  });
+  if (party.length === 0)
+    text(ctx.host, 4, 8, "NO POKéMON YET");
+  else
+    text(ctx.host, 2, 17, "TAP FOR A SUMMARY");
+}
+var PAGES = [
+  { id: "info", label: "INFO" },
+  { id: "stats", label: "STATS" },
+  { id: "moves", label: "MOVES" }
+];
+function drawSummary(ctx, i) {
+  const { host, data, ui } = ctx;
+  const party = ctx.save.party;
+  const mon = party[i];
+  const def = data.pokemon?.[mon.species] ?? {};
+  const page = ui.page ?? "info";
+  sprite(host, picPageFor(data, mon.species), 0, TILE_H * 1 + 2, 4 * TILE_W, 4 * TILE_H);
+  text(host, 5, 2, fit(monName2(data, mon), 10));
+  right(host, 2, `L${mon.level}`);
+  text(host, 5, 3, `No.${String(def.dex ?? 0).padStart(3, "0")}`);
+  tiles(host, 5, 4, hpBarTiles(mon.hp, mon.stats?.hp ?? mon.hp, true));
+  right(host, 5, `${mon.hp}/${mon.stats?.hp ?? mon.hp}`);
+  rule(host, 6);
+  if (page === "info") {
+    const types = def.types ?? [];
+    text(host, 1, 7, "TYPE");
+    text(host, 7, 7, types.join("/"));
+    text(host, 1, 8, "STATUS");
+    text(host, 8, 8, mon.status ?? "OK");
+    text(host, 1, 9, "OT");
+    text(host, 7, 9, fit(mon.otName ?? String(ctx.save.player?.name ?? "RED"), 10));
+    text(host, 1, 10, "ID No");
+    text(host, 7, 10, String(mon.otId ?? ctx.save.player?.id ?? 0).padStart(5, "0"));
+    const exp = mon.exp ?? 0;
+    text(host, 1, 12, "EXP POINTS");
+    right(host, 13, String(exp));
+    if (mon.level < 100 && def.growthRate) {
+      const next = expForLevel(def.growthRate, mon.level + 1);
+      text(host, 1, 14, `TO L${mon.level + 1}`);
+      right(host, 15, String(Math.max(0, next - exp)));
+    }
+  } else if (page === "stats") {
+    const s = mon.stats;
+    const rows = [
+      ["ATTACK", s?.attack, mon.dvs?.attack],
+      ["DEFENSE", s?.defense, mon.dvs?.defense],
+      ["SPEED", s?.speed, mon.dvs?.speed],
+      ["SPECIAL", s?.special, mon.dvs?.special]
+    ];
+    const dv = spoilers(ctx.save);
+    if (dv)
+      right(host, 7, "DV", "dark", 20);
+    rows.forEach(([label3, v, d], k) => {
+      const y = 8 + k * 2;
+      text(host, 1, y, label3);
+      text(host, 10, y, String(v ?? "-").padStart(3, " "));
+      if (dv && d !== undefined)
+        right(host, y, String(d), "dark", 20);
+    });
+  } else {
+    drawMoveList(ctx, mon.moves ?? [], 7);
+  }
+  tabs(ctx, PAGES, page, (id) => {
+    ui.page = id;
+    ui.move = null;
+  }, 16);
+  stepper(ctx, "BACK", () => {
+    ui.summary = (i + party.length - 1) % party.length;
+    ui.move = null;
+  }, () => {
+    ui.summary = (i + 1) % party.length;
+    ui.move = null;
+  });
+  region("summary:back", 3, 17, COLS - 6, 1, () => {
+    ui.summary = null;
+    ui.move = null;
+  });
+}
+function drawMoveList(ctx, moves, y0) {
+  const { host, data, ui } = ctx;
+  if (typeof ui.move === "number" && moves[ui.move]) {
+    drawMoveInfo(ctx, moves[ui.move], y0, () => {
+      ui.move = null;
+    });
+    return;
+  }
+  moves.slice(0, 4).forEach((m, k) => {
+    const d = data.moves?.[m.id] ?? {};
+    const y = y0 + k * 2;
+    const lit = pressedId() === `move:${k}`;
+    text(host, 1, y, fit(d.name ?? m.id, 12), lit ? "fill" : "dark");
+    text(host, 2, y + 1, d.type ?? "");
+    right(host, y + 1, `PP ${m.pp}/${d.pp ?? m.pp}`);
+    region(`move:${k}`, 0, y, COLS, 2, () => {
+      ui.move = k;
+    });
+  });
+}
+function drawMoveInfo(ctx, m, y0, close, vs) {
+  const { host, data } = ctx;
+  const d = data.moves?.[m.id] ?? {};
+  text(host, 1, y0, fit(d.name ?? m.id, 12));
+  right(host, y0, d.type ?? "");
+  text(host, 1, y0 + 1, `PP ${m.pp}/${d.pp ?? m.pp}`);
+  if (assists(ctx.save)) {
+    text(host, 1, y0 + 2, `PWR ${d.power ? d.power : "--"}`);
+    right(host, y0 + 2, `ACC ${d.accuracy ?? "--"}`);
+    const lines = moveEffectLines(m.id, d).flatMap((l) => wrap2(l, 18));
+    lines.slice(0, 3).forEach((l, i) => text(host, 1, y0 + 4 + i, l));
+    if (vs)
+      text(host, 1, y0 + 7, vs);
+  }
+  region("moveinfo:close", 0, y0, COLS, 9, close);
+}
+
+// voxelmon/game/ui/gear/apps/explorer.ts
+var PAGES2 = [
+  { id: "area", label: "AREA" },
+  { id: "wild", label: "WILD" },
+  { id: "trainers", label: "TRNR" },
+  { id: "items", label: "ITEM" }
+];
+function spritePage(data, sprite2) {
+  if (!sprite2)
+    return -1;
+  const key = sprite2.replace(/^SPRITE_/, "").toLowerCase();
+  const p = data.atlas?.sprites?.[key];
+  return typeof p === "number" ? p : -1;
+}
+function here(ctx) {
+  return ctx.game.overworld?.map?.id ?? "";
+}
+function drawExplorer(ctx) {
+  const { ui } = ctx;
+  const page = ui.page ?? "area";
+  if (!here(ctx)) {
+    center(ctx.host, 8, "NOWHERE YET");
+  } else if (page === "area") {
+    drawArea(ctx);
+  } else if (!assists(ctx.save)) {
+    center(ctx.host, 6, "INFO IS VANILLA:");
+    center(ctx.host, 8, "SET IT TO ENHANCED");
+    center(ctx.host, 10, "IN OPTIONS TO SEE");
+    center(ctx.host, 12, "WHAT IS HERE.");
+  } else if (page === "wild") {
+    drawWild(ctx);
+  } else if (page === "trainers") {
+    drawTrainers(ctx);
+  } else {
+    drawItems(ctx);
+  }
+  tabs(ctx, PAGES2, page, (id) => {
+    ui.page = id;
+    ui.top = 0;
+  });
+}
+var CELL = 12;
+var AREA_Y = Math.ceil(TILE_H);
+var AREA_H = Math.floor(16 * TILE_H) - AREA_Y;
+var VIEW_W2 = Math.floor(320 / CELL);
+var VIEW_H2 = Math.floor(AREA_H / CELL);
+var OX = Math.floor((320 - VIEW_W2 * CELL) / 2);
+var OY = AREA_Y + Math.floor((AREA_H - VIEW_H2 * CELL) / 2);
+function facingFrame(facing) {
+  if (facing === "up")
+    return { frame: 1, mirror: false };
+  if (facing === "left")
+    return { frame: 2, mirror: false };
+  if (facing === "right")
+    return { frame: 2, mirror: true };
+  return { frame: 0, mirror: false };
+}
+function drawArea(ctx) {
+  const { host, game, data, save } = ctx;
+  const ow = game.overworld;
+  const map = ow?.map;
+  const p = ow?.player;
+  if (!map || !p)
+    return;
+  const cx0 = Math.max(0, Math.min(p.cellX - Math.floor(VIEW_W2 / 2), map.widthCells - VIEW_W2));
+  const cy0 = Math.max(0, Math.min(p.cellY - Math.floor(VIEW_H2 / 2), map.heightCells - VIEW_H2));
+  const at2 = (cx, cy) => ({ x: OX + (cx - cx0) * CELL, y: OY + (cy - cy0) * CELL });
+  for (let cy = cy0;cy < cy0 + VIEW_H2 && cy < map.heightCells; cy++) {
+    for (let cx = cx0;cx < cx0 + VIEW_W2 && cx < map.widthCells; cx++) {
+      const s = at2(cx, cy);
+      if (map.warpAtCell?.(cx, cy)) {
+        rect(host, s.x, s.y, CELL, CELL, 3);
+        rect(host, s.x + 3, s.y + 3, CELL - 6, CELL - 6, 0);
+        continue;
+      }
+      if (map.isWaterCell?.(cx, cy))
+        rect(host, s.x, s.y, CELL, CELL, 2);
+      else if (!map.isWalkableCell(cx, cy))
+        rect(host, s.x, s.y, CELL, CELL, 3);
+      else if (map.isGrassCell?.(cx, cy))
+        rect(host, s.x, s.y, CELL, CELL, 1);
+    }
+  }
+  const inView = (cx, cy) => cx >= cx0 && cy >= cy0 && cx < cx0 + VIEW_W2 && cy < cy0 + VIEW_H2;
+  if (assists(save)) {
+    const ball = spritePage(data, "SPRITE_POKE_BALL");
+    for (const it of mapItems(data, save, map.id)) {
+      if (it.taken || !inView(it.x, it.y))
+        continue;
+      if (it.hidden && !spoilers(save))
+        continue;
+      const s = at2(it.x, it.y);
+      if (it.hidden)
+        rect(host, s.x + 4, s.y + 4, CELL - 8, CELL - 8, 2);
+      else
+        spriteFrame(host, ball, s.x, s.y, CELL);
+    }
+  }
+  for (const n of ow.npcs ?? []) {
+    if (n.hidden || !inView(n.cellX, n.cellY))
+      continue;
+    if (n.def?.item)
+      continue;
+    const s = at2(n.cellX, n.cellY);
+    const f2 = facingFrame(n.facing);
+    spriteFrame(host, spritePage(data, n.def?.sprite), s.x, s.y, CELL, f2.frame, f2.mirror);
+  }
+  const me = at2(p.cellX, p.cellY);
+  const f = facingFrame(p.facing);
+  spriteFrame(host, spritePage(data, "SPRITE_RED"), me.x, me.y, CELL, f.frame, f.mirror);
+  region("area:map", 0, 1, COLS, 15, () => {});
+}
+var PER_PAGE = 6;
+function pager(ctx, count2) {
+  const { ui } = ctx;
+  const pages = Math.max(1, Math.ceil(count2 / PER_PAGE));
+  ui.top = Math.min(ui.top ?? 0, (pages - 1) * PER_PAGE);
+  if (pages > 1) {
+    const at2 = Math.floor(ui.top / PER_PAGE);
+    stepper(ctx, `${at2 + 1}/${pages}`, () => {
+      ui.top = (at2 + pages - 1) % pages * PER_PAGE;
+    }, () => {
+      ui.top = (at2 + 1) % pages * PER_PAGE;
+    }, 16);
+  }
+  return ui.top;
+}
+function drawWild(ctx) {
+  const { host, data, save } = ctx;
+  const inv = save?.inventory ?? {};
+  const rods = { OLD_ROD: inv.OLD_ROD > 0, GOOD_ROD: inv.GOOD_ROD > 0, SUPER_ROD: inv.SUPER_ROD > 0 };
+  const rows = wildRows(data, here(ctx), rods);
+  if (rows.length === 0) {
+    center(host, 8, "NO WILD POKéMON");
+    return;
+  }
+  const top = pager(ctx, rows.length);
+  const seen = save?.pokedex?.seen ?? {};
+  const owned = save?.pokedex?.owned ?? {};
+  rows.slice(top, top + PER_PAGE).forEach((r, k) => {
+    const y0 = 2 + k * 2;
+    const known = seen[r.species] || owned[r.species] || spoilers(save);
+    const name = known ? data.pokemon?.[r.species]?.name ?? r.species : "?????";
+    if (known)
+      sprite(host, picPageFor(data, r.species), 0, y0 * TILE_H, 2 * TILE_W - 2, 2 * TILE_H - 1);
+    text(host, 2, y0, fit(name, 10));
+    const lv = r.minLv === r.maxLv ? `L${r.minLv}` : `L${r.minLv}-${r.maxLv}`;
+    right(host, y0, lv);
+    text(host, 2, y0 + 1, `${r.method} ${r.pct}%`);
+    if (owned[r.species])
+      right(host, y0 + 1, "OWN");
+  });
+}
+function drawTrainers(ctx) {
+  const { host, data, save } = ctx;
+  const rows = mapTrainers(data, save, here(ctx));
+  if (rows.length === 0) {
+    center(host, 8, "NO TRAINERS HERE");
+    return;
+  }
+  const top = pager(ctx, rows.length);
+  const left = rows.filter((r) => !r.beaten).length;
+  right(host, 1, `${left} LEFT`, "dark", 20);
+  rows.slice(top, top + PER_PAGE).forEach((r, k) => {
+    const y0 = 2 + k * 2;
+    spriteFrame(host, spritePage(data, r.obj.sprite), 2, y0 * TILE_H + 4, 2 * TILE_H - 4);
+    text(host, 2, y0, fit(r.name, 11));
+    right(host, y0, r.beaten ? "BEATEN" : "READY");
+    if (spoilers(save) && r.party.length) {
+      text(host, 2, y0 + 1, fit(r.party.map((m) => `${(data.pokemon?.[m.species]?.name ?? m.species).slice(0, 4)}${m.level}`).join(" "), 18));
+    } else {
+      text(host, 2, y0 + 1, `${r.party.length} POKéMON`);
+    }
+  });
+}
+function drawItems(ctx) {
+  const { host, save } = ctx;
+  const all = mapItems(ctx.data, save, here(ctx));
+  const hidden = all.filter((i) => i.hidden);
+  const rows = all.filter((i) => !i.hidden || spoilers(save));
+  if (rows.length === 0 && hidden.length === 0) {
+    center(host, 8, "NOTHING LEFT HERE");
+    return;
+  }
+  const top = pager(ctx, rows.length);
+  rows.slice(top, top + PER_PAGE).forEach((it, k) => {
+    const y0 = 2 + k * 2;
+    text(host, 1, y0, fit(it.name, 12));
+    right(host, y0, it.taken ? "FOUND" : "LEFT");
+    text(host, 1, y0 + 1, it.hidden ? "HIDDEN" : "ITEM BALL");
+  });
+  if (!spoilers(save) && hidden.length) {
+    const left = hidden.filter((h) => !h.taken).length;
+    text(host, 1, 15, left ? `+${left} HIDDEN SOMEWHERE` : "HIDDEN ITEMS: ALL FOUND");
+  }
+}
+
+// voxelmon/game/ui/gear/battle.ts
+var BATTLE_ACTIONS = ["FIGHT", "PKMN", "ITEM", "RUN"];
+var SAFARI_ACTIONS = ["BALL", "BAIT", "ROCK", "RUN"];
+function bstate(ctx, b) {
+  if (ctx.ui.battle !== b) {
+    ctx.ui.battle = b;
+    ctx.ui.info = false;
+    ctx.ui.moveInfo = null;
+  }
+  return ctx.ui;
+}
+function caughtMark(ctx, b) {
+  if (!ctx.gear.caughtIcon || b.isTrainerBattle?.())
+    return false;
+  const sp = b.enemy?.mon?.species;
+  return !!sp && !!ctx.save?.pokedex?.owned?.[sp];
+}
+function battleHeader(ctx, b, title) {
+  const s = bstate(ctx, b);
+  header(ctx, title, { aside: "" });
+  if (caughtMark(ctx, b)) {
+    spriteFrame(ctx.host, spritePage(ctx.data, "SPRITE_POKE_BALL"), 0, 0, Math.floor(TILE_H));
+  }
+  if (b.enemy) {
+    const label3 = s.info ? "BACK" : "INFO";
+    text(ctx.host, COLS - 5, 0, label3, "light");
+    region("b:info", COLS - 6, 0, 6, 1, () => {
+      s.info = !s.info;
+      s.moveInfo = null;
+    });
+  }
+}
+function drawActionGrid(ctx, b, showCursor) {
+  const { host } = ctx;
+  battleHeader(ctx, b, b.safari ? `BALLS ${b.safari.balls}` : "BATTLE");
+  const colX = [0, 10];
+  const rowY = [2, 10];
+  for (let i = 0;i < 4; i++) {
+    const x0 = colX[i % 2];
+    const y0 = rowY[i / 2 | 0];
+    const label3 = (b.safari ? SAFARI_ACTIONS : BATTLE_ACTIONS)[i];
+    const lx = x0 + 1 + Math.max(0, Math.floor((8 - label3.length) / 2));
+    const ly = y0 + 4;
+    if (showCursor && i === b.menuIndex - 1) {
+      fill(host, x0, y0, 10, 8);
+      box(host, x0, y0, 10, 8, "fill");
+      text(host, lx, ly, label3, "fill");
+    } else {
+      box(host, x0, y0, 10, 8);
+      text(host, lx, ly, label3);
+    }
+  }
+}
+function drawMoveSelect(ctx, b) {
+  const { host, data } = ctx;
+  const s = bstate(ctx, b);
+  battleHeader(ctx, b, "MOVES");
+  const moves = b.player.curMoves;
+  if (typeof s.moveInfo === "number" && moves[s.moveInfo]) {
+    const m = moves[s.moveInfo];
+    const d = data.moves?.[m.id] ?? {};
+    let vs;
+    if (assists(ctx.save) && d.power && b.enemy && b.chart) {
+      const e = b.chart.effectiveness(d.type ?? "", b.enemy.curTypes);
+      const stab = b.player.curTypes?.includes(d.type) ? " STAB" : "";
+      vs = `VS FOE ${multLabel(e)}${stab}`;
+    }
+    box(host, 0, 2, COLS, 14);
+    drawMoveInfo(ctx, m, 3, () => {
+      s.moveInfo = null;
+    }, vs);
+    return;
+  }
+  const colX = [0, 10];
+  const rowY = [2, 10];
+  const qmark = encodeGlyphs("?")[0];
+  const details = assists(ctx.save);
+  for (let i = 0;i < 4 && i < moves.length; i++) {
+    const x0 = colX[i % 2];
+    const y0 = rowY[i / 2 | 0];
+    const slot = moves[i];
+    const def = data.moves?.[slot.id];
+    const name = (def?.name ?? slot.id).slice(0, 7);
+    const maxPp = def?.pp ?? slot.pp;
+    const type = (def?.type ?? "").toUpperCase().slice(0, 6);
+    const selected = i === b.moveIndex - 1;
+    const ink = selected ? "fill" : "dark";
+    if (selected)
+      fill(host, x0, y0, 10, 8);
+    box(host, x0, y0, 10, 8, selected ? "fill" : "dark");
+    text(host, x0 + 1, y0 + 1, name, ink);
+    text(host, x0 + 1, y0 + 3, `PP ${slot.pp}/${maxPp}`, ink);
+    text(host, x0 + 1, y0 + 5, type, ink);
+    let eff = "--";
+    if (details && (def?.power ?? 0) > 0 && b.enemy && b.chart) {
+      eff = multLabel(b.chart.effectiveness(def.type ?? "", b.enemy.curTypes));
+    }
+    text(host, x0 + 9 - eff.length, y0 + 5, eff, ink);
+    if (details) {
+      host.uiTileBottom(x0 + 8, y0 + 1, qmark | (selected ? FILL_BIT : DARKTEXT_BIT));
+      region(`b:q${i}`, x0 + 7, y0, 3, 3, () => {
+        s.moveInfo = i;
+      });
+    }
+  }
+}
+function drawForgetList(ctx, b) {
+  const { host } = ctx;
+  const f = b.forgetView?.();
+  if (!f)
+    return;
+  header(ctx, fit(`LEARN ${f.learning}`, 18), { aside: "" });
+  text(host, 1, 2, fit(`${f.name} FORGETS?`, 18));
+  f.moves.forEach((name, i) => {
+    const y = 4 + i * 2;
+    text(host, 2, y, name.slice(0, 14));
+    if (i === f.index)
+      cursor(host, 0, y);
+  });
+  const cancelY = 4 + f.moves.length * 2;
+  text(host, 2, cancelY, "DON'T LEARN");
+  if (f.index >= f.moves.length)
+    cursor(host, 0, cancelY);
+}
+var ITEM_ROWS = 12;
+function itemListTop(b) {
+  return Math.max(0, Math.min(b.itemIndex - (ITEM_ROWS - 1), b.itemList.length - ITEM_ROWS));
+}
+function kindOf(data, id) {
+  if (/_BALL$/.test(id))
+    return "ball";
+  if (/POTION|RESTORE|REVIVE|HEAL|ANTIDOTE|AWAKENING|ETHER|ELIXER|WATER|SODA|LEMONADE/.test(id))
+    return "med";
+  return "other";
+}
+function drawItemList(ctx, b) {
+  const { host, data, save } = ctx;
+  battleHeader(ctx, b, "ITEMS");
+  const top = itemListTop(b);
+  for (let i = top;i < b.itemList.length && i < top + ITEM_ROWS; i++) {
+    const id = b.itemList[i];
+    const y = 2 + (i - top);
+    text(host, 2, y, (data.items?.[id]?.name ?? id).slice(0, 13));
+    right(host, y, `x${save?.inventory?.[id] ?? 0}`);
+    if (i === b.itemIndex)
+      cursor(host, 0, y);
+  }
+  const jump2 = (k) => {
+    const at2 = b.itemList.findIndex((id) => kindOf(data, id) === k);
+    if (at2 >= 0)
+      b.itemIndex = at2;
+  };
+  pill(host, "b:jball", 0, 15, 6, "BALLS", () => jump2("ball"));
+  pill(host, "b:jmed", 7, 15, 6, "MEDS", () => jump2("med"));
+  pill(host, "b:jother", 14, 15, 6, "OTHER", () => jump2("other"));
+}
+function drawBattleMessage(ctx, b) {
+  const { host } = ctx;
+  battleHeader(ctx, b, "BATTLE");
+  box(host, 0, 2, COLS, 14);
   const rows = [5, 7];
   b.shown.forEach((line, i) => {
     if (i >= rows.length)
@@ -17918,88 +19076,399 @@ function drawBattleMessage(host, b) {
       host.uiTileBottom(2 + c, rows[i], line.codes[c] | DARKTEXT_BIT);
     }
   });
-  if (b.msgWaiting || b.msgPrompt) {
-    for (let x = 2;x < COLS - 2; x++) {
+  const lv = b.statBoxMon ? b.gearLevelUp : null;
+  if (lv) {
+    drawLevelUp(ctx, lv);
+  } else if (b.msgWaiting || b.msgPrompt) {
+    for (let x = 2;x < COLS - 2; x++)
       host.uiTileBottom(x, 11, BORDER_H | DARKTEXT_BIT);
-    }
-    const tip = "TAP TO CONTINUE";
-    const tx = Math.max(2, Math.floor((COLS - tip.length) / 2));
-    stampBottom(host, tx, 13, tip, DARKTEXT_BIT);
+    center(host, 13, "TAP TO CONTINUE");
   }
   if (b.choiceOpen) {
-    boxBottom(host, 14, 7, 6, 5, DARKTEXT_BIT);
-    stampBottom(host, 16, 8, "YES", DARKTEXT_BIT);
-    stampBottom(host, 16, 10, "NO", DARKTEXT_BIT);
-    host.uiTileBottom(15, b.choiceYes ? 8 : 10, ARROW_CURSOR | DARKTEXT_BIT);
+    box(host, 14, 7, 6, 5);
+    text(host, 16, 8, "YES");
+    text(host, 16, 10, "NO");
+    cursor(host, 15, b.choiceYes ? 8 : 10);
   }
 }
-function drawBattleGear(host, game, b) {
+function drawLevelUp(ctx, lv) {
+  const { host } = ctx;
+  rule(host, 9, 1, COLS - 2);
+  text(host, 2, 9, fit(` ${lv.name} L${lv.to} `, 16));
+  const stats = [["hp", "HP"], ["attack", "ATK"], ["defense", "DEF"], ["speed", "SPD"], ["special", "SPC"]];
+  stats.forEach(([k, label3], i) => {
+    const y = 10 + i;
+    const a = lv.before[k] ?? 0;
+    const z = lv.after[k] ?? 0;
+    text(host, 2, y, label3);
+    text(host, 6, y, `${a}-${z}`);
+    right(host, y, `+${z - a}`, "dark", COLS - 2);
+  });
+}
+function drawEnemyInfo(ctx, b) {
+  const { host, data, save } = ctx;
+  battleHeader(ctx, b, "ENEMY");
+  const mon = b.enemy?.mon;
+  const def = b.enemy?.def ?? data.pokemon?.[mon?.species] ?? {};
+  sprite(host, picPageFor(data, mon?.species ?? ""), 0, TILE_H + 2, 5 * TILE_W, 5 * TILE_H);
+  text(host, 6, 2, fit(b.enemy?.name ?? def.name ?? "", 13));
+  text(host, 6, 3, `No.${String(def.dex ?? 0).padStart(3, "0")} L${mon?.level ?? "?"}`);
+  text(host, 6, 4, fit((b.enemy?.curTypes ?? def.types ?? []).join("/"), 14));
+  const owned = !!save?.pokedex?.owned?.[mon?.species];
+  text(host, 6, 5, `CAUGHT ${owned ? "YES" : "NO"}`);
+  if (spoilers(save) && mon?.dvs) {
+    const d = mon.dvs;
+    text(host, 6, 6, fit(`DV ${d.attack}/${d.defense}/${d.speed}/${d.special}`, 14));
+  }
+  rule(host, 7);
+  if (!assists(save)) {
+    center(host, 10, "SET INFO TO ENHANCED");
+    center(host, 11, "FOR MATCHUPS");
+    return;
+  }
+  center(host, 8, "BASE MATCHUP");
+  const { weak, resist } = matchups(b.chart, b.enemy?.curTypes ?? def.types ?? []);
+  text(host, 0, 9, `WEAK ${weak.length}`);
+  text(host, 10, 9, `RESIST ${resist.length}`);
+  for (let i = 0;i < 6; i++) {
+    const w = weak[i];
+    const r = resist[i];
+    if (w)
+      text(host, 0, 10 + i, fit(`${typeShort(w[0])} ${multLabel(w[1])}`, 10));
+    if (r)
+      text(host, 10, 10 + i, fit(`${typeShort(r[0])} ${multLabel(r[1])}`, 10));
+  }
+  for (let y = 9;y < 16; y++)
+    tile(host, 9, y, 124);
+}
+function drawBattleGear(ctx, b) {
+  const s = bstate(ctx, b);
+  if (s.info && (b.phase === "menu" || b.phase === "messages" && !b.choiceOpen)) {
+    drawEnemyInfo(ctx, b);
+    return;
+  }
+  if (b.phase !== "moveSelect")
+    s.moveInfo = null;
   switch (b.phase) {
     case "forget":
-      drawForgetList(host, b);
+      drawForgetList(ctx, b);
       return;
     case "moveSelect":
-      drawMoveSelect(host, game, b);
+      drawMoveSelect(ctx, b);
       return;
     case "party":
-      drawPartyList(host, game, "PKMN", b.partyIndex);
+      battleHeader(ctx, b, "PKMN");
+      drawPartyGrid(ctx, b.partyIndex);
       return;
     case "item":
-      drawItemList(host, game, b);
+      drawItemList(ctx, b);
       return;
     case "menu":
-      drawActionGrid(host, b.menuIndex, true, b.safari ?? null);
+      drawActionGrid(ctx, b, true);
       return;
     default:
-      drawBattleMessage(host, b);
+      drawBattleMessage(ctx, b);
       return;
   }
 }
-function gearTabs(game) {
-  const tabs = [{ id: "party", label: "PARTY" }];
-  if ((game.save?.inventory?.TOWN_MAP ?? 0) > 0 && hasTownMap(game)) {
-    tabs.push({ id: "map", label: "MAP" });
+var TAP_A = { isDown: () => false, wasPressed: (btn) => btn === "a" };
+var armed = false;
+function clampInt(v, lo, hi) {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+function battleTouchDown(ctx, b, x, y) {
+  armed = false;
+  const col = clampInt(Math.floor(x / TILE_W), 0, COLS - 1);
+  const row = clampInt(Math.floor(y / TILE_H), 0, ROWS - 1);
+  const s = bstate(ctx, b);
+  if (s.info && (b.phase === "menu" || b.phase === "messages")) {
+    s.info = false;
+    return;
   }
-  return tabs;
-}
-function hasTownMap(game) {
-  const a = game.data.atlas;
-  return typeof a?.townMapPage === "number" && a.townMapPage >= 0;
-}
-function activeView(game) {
-  const want = game.gearView ?? "party";
-  return gearTabs(game).some((t) => t.id === want) ? want : "party";
-}
-function gearViewStep(game, dir) {
-  const tabs = gearTabs(game);
-  const at2 = Math.max(0, tabs.findIndex((t) => t.id === activeView(game)));
-  return tabs[(at2 + dir + tabs.length) % tabs.length].id;
-}
-var CLOCK_COL = COLS - 8;
-function drawGearHeader(host, game, label3) {
-  const many = gearTabs(game).length > 1;
-  const w = label3.length + (many ? 4 : 0);
-  const x = Math.max(0, Math.floor((CLOCK_COL - w) / 2));
-  if (many) {
-    host.uiTileBottom(x, 0, UI_TILE.arrowLeft | LIGHT_BIT);
-    host.uiTileBottom(x + w - 1, 0, ARROW_CURSOR | LIGHT_BIT);
+  if (b.choiceOpen) {
+    if (col >= 14 && col <= 19 && row >= 7 && row <= 11)
+      b.choiceYes = row < 9;
+    armed = true;
+    return;
   }
-  stampLight(host, x + (many ? 2 : 0), 0, label3);
-  const t = clockStr();
-  if (t)
-    stampLight(host, Math.max(0, COLS - t.length - 1), 0, t);
+  const cell2x2 = () => (row < 10 ? 0 : 2) + (col < 10 ? 0 : 1);
+  switch (b.phase) {
+    case "menu":
+      if (row < 2)
+        return;
+      b.menuIndex = cell2x2() + 1;
+      armed = true;
+      return;
+    case "moveSelect": {
+      if (typeof s.moveInfo === "number") {
+        s.moveInfo = null;
+        return;
+      }
+      if (row < 2)
+        return;
+      const i = cell2x2();
+      if (i >= b.player.curMoves.length)
+        return;
+      b.moveIndex = i + 1;
+      armed = true;
+      return;
+    }
+    case "party": {
+      if (row < 2)
+        return;
+      const r = row < 7 ? 0 : row < 12 ? 1 : 2;
+      const i = r * 2 + (col < 10 ? 0 : 1);
+      if (i >= (ctx.save?.party?.length ?? 0))
+        return;
+      b.partyIndex = i;
+      armed = true;
+      return;
+    }
+    case "item": {
+      const i = row - 2 + itemListTop(b);
+      if (row < 2 || row >= 2 + ITEM_ROWS || i >= b.itemList.length)
+        return;
+      b.itemIndex = i;
+      armed = true;
+      return;
+    }
+    default:
+      b.update(TAP_A);
+  }
 }
-function headerArrowCols(game, label3) {
-  if (gearTabs(game).length < 2)
+function battleTouchUp(b) {
+  if (!armed)
+    return;
+  armed = false;
+  b?.update(TAP_A);
+}
+
+// voxelmon/game/ui/gear/mirrors.ts
+function top(game) {
+  return game.stack?.[game.stack.length - 1];
+}
+function mirrorKind(game) {
+  const t = top(game);
+  if (!t)
     return null;
-  const w = label3.length + 4;
-  const x = Math.max(0, Math.floor((CLOCK_COL - w) / 2));
-  return { left: x, right: x + w - 1 };
+  if (t.kind === "choice")
+    return "choice";
+  if (t.kind === "naming")
+    return "naming";
+  if (typeof t.gearMenu === "function" && t.gearMenu())
+    return "menu";
+  if (t.kind === "textbox")
+    return "text";
+  return null;
 }
-function drawBottomBar(host, text) {
-  fillCellBottom(host, 0, ROWS - 1, COLS, 1);
-  stampFill(host, Math.max(0, Math.floor((COLS - text.length) / 2)), ROWS - 1, text);
+function pressA(game) {
+  game.input?.injectPress?.("a");
 }
+function drawMirror(ctx) {
+  const kind = mirrorKind(ctx.game);
+  const t = top(ctx.game);
+  const { host, game } = ctx;
+  if (kind === "choice") {
+    header(ctx, "CHOOSE");
+    box(host, 2, 4, 16, 10);
+    pill(host, "m:yes", 4, 6, 12, "YES", () => {
+      t.yes = true;
+      pressA(game);
+    }, !!t.yes);
+    pill(host, "m:no", 4, 10, 12, "NO", () => {
+      t.yes = false;
+      pressA(game);
+    }, !t.yes);
+    return true;
+  }
+  if (kind === "menu") {
+    const m = t.gearMenu();
+    header(ctx, fit(m.title ?? "MENU", 11));
+    const n = m.items.length;
+    const perCol = n > 8 ? Math.ceil(n / 2) : n;
+    m.items.forEach((label3, i) => {
+      const col = Math.floor(i / perCol);
+      const row = i % perCol;
+      const w = n > 8 ? 10 : COLS;
+      pill(host, `m:${i}`, col * 10, 2 + row * 2, w, fit(label3, w - 2), () => {
+        m.select(i);
+        pressA(game);
+      }, i === m.index);
+    });
+    pill(host, "m:back", 0, ROWS - 1, COLS, "BACK", () => game.input?.injectPress?.("b"));
+    return true;
+  }
+  if (kind === "naming") {
+    drawNaming(ctx, t);
+    return true;
+  }
+  return false;
+}
+function drawNaming(ctx, t) {
+  const { host, game } = ctx;
+  const v = t.view();
+  header(ctx, fit(v.title ?? "NAME?", 11));
+  text(host, 1, 1, `${v.name}${"_".repeat(Math.max(0, (v.maxLen ?? 7) - v.name.length))}`);
+  const grid = v.grid;
+  grid.forEach((row, r) => {
+    const wide = row.length === 1;
+    row.forEach((cell, c) => {
+      const w = wide ? COLS : 2;
+      const x = wide ? 0 : c * 2 + 1;
+      const label3 = cell === "lower case" ? "lower case" : cell === "UPPER CASE" ? "UPPER CASE" : cell;
+      pill(host, `n:${r}:${c}`, x, 3 + r * 2, w, label3, () => {
+        t.touchCell?.(r, c);
+        pressA(game);
+      }, v.row === r && v.col === c);
+    });
+  });
+  pill(host, "n:del", 0, ROWS - 1, 10, "DEL", () => game.input?.injectPress?.("b"));
+  pill(host, "n:end", 10, ROWS - 1, 10, "END", () => game.input?.injectPress?.("start"));
+}
+function mirrorTapThrough(game) {
+  if (mirrorKind(game) !== "text")
+    return false;
+  pressA(game);
+  return true;
+}
+function drawTextHint(ctx) {
+  if (mirrorKind(ctx.game) !== "text")
+    return;
+  fill(ctx.host, 0, ROWS - 1, COLS, 1);
+  const s = "TAP TO CONTINUE";
+  text(ctx.host, Math.floor((COLS - width(s)) / 2), ROWS - 1, s, "fill");
+}
+
+// voxelmon/game/ui/gear/apps/home.ts
+function availableApps(game) {
+  const g = gearSave(game.save);
+  const inv = game.save?.inventory ?? {};
+  const atlas = game.data?.atlas;
+  const out = [];
+  for (const a of APPS) {
+    if (!a.fixed && g.removed[a.id])
+      continue;
+    if (a.id === "map" && !((inv.TOWN_MAP ?? 0) > 0 && typeof atlas?.townMapPage === "number" && atlas.townMapPage >= 0))
+      continue;
+    if (a.id === "pokedex" && !game.save?.flags?.EVENT_GOT_POKEDEX)
+      continue;
+    out.push(a.id);
+  }
+  return out;
+}
+function mapName(ctx) {
+  const id = ctx.game.overworld?.map?.id ?? ctx.game.overworld?.mapId;
+  const loc = ctx.data.field?.townMap?.locations?.[id];
+  return loc?.name ?? String(id ?? "").replace(/_/g, " ");
+}
+function drawHome(ctx) {
+  const { host, game, save } = ctx;
+  header(ctx, "KANTO GEAR");
+  button(host, "home:explorer", 0, 2, 10, 6, "", () => go(ctx, "explorer"));
+  const ie = pressedId() === "home:explorer" ? "fill" : "dark";
+  const id = game.overworld?.map?.id ?? "";
+  const name = mapName(ctx);
+  text(host, 1, 3, fit(name, 8), ie);
+  const wild = new Set(wildRows(ctx.data, id).map((r) => r.species)).size;
+  text(host, 1, 5, `WILD ${wild}`, ie);
+  if (!ctx.gear.removed.steps)
+    text(host, 1, 6, fit(`${ctx.gear.steps} STEPS`, 8), ie);
+  button(host, "home:party", 10, 2, 10, 6, "", () => go(ctx, "party"));
+  const ip = pressedId() === "home:party" ? "fill" : "dark";
+  const lead = save?.party?.[0];
+  if (lead) {
+    sprite(host, picPageFor(ctx.data, lead.species), 11 * TILE_W, 3 * TILE_H, 2 * TILE_W, 2 * TILE_H);
+    const nm = lead.nickname ?? ctx.data.pokemon[lead.species]?.name ?? lead.species;
+    text(host, 13, 3, fit(nm, 6), ip);
+    text(host, 13, 4, `L${lead.level}`, ip);
+    tiles(host, 11, 6, hpBarTiles(lead.hp, lead.stats?.hp ?? lead.hp, true).slice(1), 8192);
+  } else {
+    center(host, 4, "NO POKéMON", ip, 11, 8);
+  }
+  const apps = availableApps(game).filter((a) => a !== "home");
+  apps.forEach((a, i) => {
+    const col = i % 3;
+    const row = Math.floor(i / 3);
+    const x = [0, 7, 14][col];
+    const w = 6;
+    const y = 9 + row * 2;
+    if (y > 16)
+      return;
+    pill(host, `home:${a}`, x, y, w, appOf(a).short, () => go(ctx, a));
+  });
+}
+function drawSteps(ctx) {
+  const { host, gear } = ctx;
+  box(host, 1, 3, 18, 5);
+  center(host, 4, "TOTAL STEPS");
+  center(host, 6, String(gear.steps));
+  box(host, 1, 9, 18, 5);
+  center(host, 10, "TRIP");
+  center(host, 12, String(gear.trip));
+  pill(host, "steps:reset", 5, 15, 10, "RESET TRIP", () => {
+    gear.trip = 0;
+  });
+}
+function drawStore(ctx) {
+  const { host, gear, ui } = ctx;
+  const optional = APPS.filter((a2) => !a2.fixed);
+  if (ui.sel === undefined)
+    ui.sel = 0;
+  optional.forEach((a2, i) => {
+    const y = 2 + i * 2;
+    const on = !gear.removed[a2.id];
+    if (ui.sel === i)
+      cursor(host, 0, y);
+    text(host, 1, y, a2.title);
+    region(`store:${a2.id}`, 0, y, 13, 1, () => {
+      ui.sel = i;
+    });
+    pill(host, `store:t:${a2.id}`, 14, y, 6, on ? "ON" : "OFF", () => {
+      ui.sel = i;
+      gear.removed[a2.id] = on;
+    }, !on);
+  });
+  const a = optional[ui.sel] ?? optional[0];
+  box(host, 0, 14, COLS, 4);
+  wrap2(a.about.join(" "), 18).slice(0, 2).forEach((line, i) => text(host, 1, 15 + i, line));
+}
+function drawOptions(ctx) {
+  const { host, gear } = ctx;
+  const levels = ["vanilla", "enhanced", "spoiler"];
+  const rows = [
+    {
+      label: "INFO",
+      value: () => ({ vanilla: "VANILLA", enhanced: "ENHANCED", spoiler: "SPOILERS" })[gear.info],
+      step: () => {
+        gear.info = levels[(levels.indexOf(gear.info) + 1) % 3];
+      }
+    },
+    { label: "CAUGHT ICON", value: () => gear.caughtIcon ? "ON" : "OFF", step: () => {
+      gear.caughtIcon = !gear.caughtIcon;
+    } },
+    { label: "CLOCK", value: () => gear.clock24 ? "24 HOUR" : "12 HOUR", step: () => {
+      gear.clock24 = !gear.clock24;
+    } },
+    { label: "KEYBOARD", value: () => gear.qwertz ? "QWERTZ" : "QWERTY", step: () => {
+      gear.qwertz = !gear.qwertz;
+    } }
+  ];
+  rows.forEach((r, i) => {
+    const y = 2 + i * 2;
+    text(host, 1, y, r.label);
+    pill(host, `opt:${i}`, 12, y, 8, r.value(), r.step);
+  });
+  const say = {
+    vanilla: ["ONLY WHAT THE GAME", "ITSELF TELLS YOU."],
+    enhanced: ["ENCOUNTERS, TRAINERS,", "ITEMS AND MATCHUPS."],
+    spoiler: ["ALSO HIDDEN ITEMS AND", "POKéMON YOU HAVEN'T SEEN."]
+  }[gear.info];
+  box(host, 0, 11, COLS, 6);
+  text(host, 1, 12, "INFO:");
+  wrap2(say.join(" "), 18).slice(0, 3).forEach((line, i) => text(host, 1, 13 + i, line));
+}
+
+// voxelmon/game/ui/gear/apps/map.ts
 var MAP_W = 160;
 var MAP_H = 144;
 var MAP_INSET = 4;
@@ -18016,13 +19485,14 @@ function locPixel(loc) {
 function mapToScreen(px2, py) {
   return { x: MAP_X + Math.round(px2 * MAP_SCALE), y: MAP_Y + Math.round(py * MAP_SCALE) };
 }
-function townMapLocations(game) {
+function locations(game) {
   return game.data.field?.townMap?.locations ?? {};
 }
-function townMapPlaces(game) {
+function places(game) {
   const bySquare = new Map;
-  for (const id of Object.keys(townMapLocations(game)).sort()) {
-    const loc = townMapLocations(game)[id];
+  const locs = locations(game);
+  for (const id of Object.keys(locs).sort()) {
+    const loc = locs[id];
     const key = `${loc.x},${loc.y}`;
     const held = bySquare.get(key);
     if (!held || held.id.replace(/_/g, " ") !== held.loc.name && id.replace(/_/g, " ") === loc.name) {
@@ -18031,51 +19501,36 @@ function townMapPlaces(game) {
   }
   return [...bySquare.values()];
 }
-function focusedLocation(game) {
-  const locs = townMapLocations(game);
+function focused(game) {
+  const locs = locations(game);
   const picked = game.gearMapPick;
   if (picked && locs[picked])
     return { id: picked, loc: locs[picked] };
-  const ow = game.overworld;
-  const here = ow?.mapId ?? ow?.map?.id;
-  if (here && locs[here])
-    return { id: here, loc: locs[here] };
+  const here2 = game.overworld?.mapId ?? game.overworld?.map?.id;
+  if (here2 && locs[here2])
+    return { id: here2, loc: locs[here2] };
   return null;
 }
-function drawTownMapView(host, game) {
-  host.uiClearBottom();
-  const focus = focusedLocation(game);
-  drawGearHeader(host, game, "MAP");
-  drawBottomBar(host, focus?.loc.name ?? "TOWN MAP");
+function drawMap(ctx) {
+  const { host, game } = ctx;
+  const focus = focused(game);
+  bottomBar(ctx, focus?.loc.name ?? "TOWN MAP");
   const page = game.data.atlas?.townMapPage;
   if (typeof page !== "number" || page < 0) {
-    stampBottom(host, 2, 4, "NO MAP DATA", DARKTEXT_BIT);
+    text(host, 2, 4, "NO MAP DATA");
     return;
   }
-  host.uiSpriteBottom(page, MAP_X, MAP_Y, MAP_DRAW_W, MAP_DRAW_H);
+  sprite(host, page, MAP_X, MAP_Y, MAP_DRAW_W, MAP_DRAW_H);
   const cursorPage = game.data.atlas?.townMapCursorPage;
   if (focus && typeof cursorPage === "number" && cursorPage >= 0) {
     const p = locPixel(focus.loc);
     const at2 = mapToScreen(p.x - 4, p.y - 4);
     const size = Math.round(16 * MAP_SCALE);
-    host.uiSpriteBottom(cursorPage, at2.x, at2.y, size, size);
+    sprite(host, cursorPage, at2.x, at2.y, size, size);
   }
+  regionPx("map:area", MAP_X, MAP_Y, MAP_DRAW_W, MAP_DRAW_H, () => {});
 }
-function drawKantoGear(host, game) {
-  const bv = game.battleView?.();
-  const b = bv?.battle;
-  if (b) {
-    drawBattleGear(host, game, b);
-    return;
-  }
-  if (activeView(game) === "map") {
-    drawTownMapView(host, game);
-    return;
-  }
-  drawPartyList(host, game, "", -1);
-  drawGearHeader(host, game, "PARTY");
-}
-function gearMapTouch(game, x, y) {
+function mapTouch(game, x, y) {
   if (!game.setGearMapPick)
     return;
   const px2 = (x - MAP_X) / MAP_SCALE;
@@ -18084,7 +19539,7 @@ function gearMapTouch(game, x, y) {
     return;
   let bestId = null;
   let bestD = Infinity;
-  for (const { id, loc } of townMapPlaces(game)) {
+  for (const { id, loc } of places(game)) {
     const p = locPixel(loc);
     const d = (p.x + 4 - px2) ** 2 + (p.y + 4 - py) ** 2;
     if (d < bestD) {
@@ -18094,89 +19549,919 @@ function gearMapTouch(game, x, y) {
   }
   game.setGearMapPick(bestD <= 16 * 16 ? bestId : null);
 }
-var TAP_A = {
-  isDown: () => false,
-  wasPressed: (btn) => btn === "a"
-};
-function clampInt(v, lo, hi) {
-  return v < lo ? lo : v > hi ? hi : v;
+
+// voxelmon/game/ui/gear/apps/trainer.ts
+function drawTrainer(ctx) {
+  const { host, data, save, gear } = ctx;
+  const inv = save?.inventory ?? {};
+  box(host, 0, 1, COLS, 9);
+  sprite(host, data.atlas?.trainerCardPic ?? -1, 14 * TILE_W, 2 * TILE_H, 5 * TILE_W, 7 * TILE_H);
+  text(host, 1, 2, `NAME/${save?.player?.name ?? "RED"}`);
+  text(host, 1, 3, `IDNo/${String(save?.player?.id ?? 0).padStart(5, "0")}`);
+  text(host, 1, 4, `MONEY/¥${save?.money ?? 0}`);
+  text(host, 1, 5, `TIME/${formatPlayTime(Number(save?.playTime ?? 0))}`);
+  const seen = Object.values(save?.pokedex?.seen ?? {}).filter(Boolean).length;
+  const owned = Object.values(save?.pokedex?.owned ?? {}).filter(Boolean).length;
+  text(host, 1, 6, `DEX ${owned} OWN ${seen} SEEN`);
+  if (!gear.removed.steps)
+    text(host, 1, 8, `STEPS ${gear.steps}`);
+  const list2 = list(data);
+  const cell = 12;
+  list2.slice(0, 8).forEach((b, i) => {
+    const col = i % 4;
+    const row = Math.floor(i / 4);
+    const cx = col * 5;
+    const cy = 10 + row * 4;
+    const have = !!inv[itemFor(b)];
+    box(host, cx, cy, 5, 4);
+    const px2 = cx * TILE_W + (5 * TILE_W - 2 * cell) / 2;
+    const py = (cy + 1) * TILE_H - 3;
+    badgeIcon(host, data.atlas?.uiPage ?? -1, i, px2, py, cell, !have);
+  });
+  right(host, 17, `BADGES ${count(data, save)}/8`, "dark", 20);
 }
-var armed = false;
-function gearTouchDown(game, x, y) {
-  armed = false;
+
+// voxelmon/game/ui/gear/apps/pokedex.ts
+var ROWS_SHOWN = 14;
+function dexOrder(data) {
+  return Object.keys(data.pokemon ?? {}).filter((id) => (data.pokemon[id]?.dex ?? 0) > 0).sort((a, b) => data.pokemon[a].dex - data.pokemon[b].dex);
+}
+function drawPokedex(ctx) {
+  const { ui } = ctx;
+  if (ui.species) {
+    drawEntry(ctx, ui.species);
+    return;
+  }
+  drawList(ctx);
+}
+function drawList(ctx) {
+  const { host, data, save, ui } = ctx;
+  const all = dexOrder(data);
+  const seen = save?.pokedex?.seen ?? {};
+  const owned = save?.pokedex?.owned ?? {};
+  const pages = Math.ceil(all.length / ROWS_SHOWN);
+  ui.top = Math.min(ui.top ?? 0, (pages - 1) * ROWS_SHOWN);
+  const top2 = ui.top;
+  all.slice(top2, top2 + ROWS_SHOWN).forEach((id, k) => {
+    const y = 1 + k;
+    const d = data.pokemon[id];
+    const know = seen[id] || owned[id];
+    const lit = pressedId() === `dex:${id}`;
+    const ink = lit ? "fill" : "dark";
+    text(host, 0, y, String(d.dex).padStart(3, "0"), ink);
+    text(host, 4, y, know ? fit(d.name, 10) : "----------", ink);
+    right(host, y, owned[id] ? "OWN" : know ? "SEEN" : "", ink, 20);
+    if (know)
+      region(`dex:${id}`, 0, y, COLS, 1, () => {
+        ui.species = id;
+        ui.page = "info";
+      });
+  });
+  const nOwn = Object.values(owned).filter(Boolean).length;
+  const nSeen = Object.values(seen).filter(Boolean).length;
+  text(host, 0, 15, `SEEN ${nSeen}  OWN ${nOwn}`);
+  const at2 = Math.floor(top2 / ROWS_SHOWN);
+  stepper(ctx, `${at2 + 1}/${pages}`, () => {
+    ui.top = (at2 + pages - 1) % pages * ROWS_SHOWN;
+  }, () => {
+    ui.top = (at2 + 1) % pages * ROWS_SHOWN;
+  }, 17);
+}
+var PAGES3 = [
+  { id: "info", label: "INFO" },
+  { id: "stats", label: "STAT" },
+  { id: "area", label: "AREA" },
+  { id: "moves", label: "MOVE" }
+];
+function habitats(data, species) {
+  const out = [];
+  const all = { OLD_ROD: true, GOOD_ROD: true, SUPER_ROD: true };
+  for (const mapId of Object.keys(data.encounters ?? {})) {
+    for (const r of wildRows(data, mapId, all)) {
+      if (r.species !== species || r.method === "OLD ROD" || r.method === "GOOD ROD")
+        continue;
+      const place2 = data.field?.townMap?.locations?.[mapId]?.name ?? mapId.replace(/_/g, " ");
+      out.push({ map: place2, method: r.method, lv: r.minLv === r.maxLv ? `${r.minLv}` : `${r.minLv}-${r.maxLv}`, pct: r.pct });
+    }
+  }
+  if (species === "MAGIKARP")
+    out.push({ map: "ANY WATER", method: "OLD ROD", lv: "5", pct: 100 });
+  if (species === "GOLDEEN" || species === "POLIWAG")
+    out.push({ map: "ANY WATER", method: "GOOD ROD", lv: "10", pct: 50 });
+  return out;
+}
+function drawEntry(ctx, id) {
+  const { host, data, save, ui } = ctx;
+  const d = data.pokemon[id] ?? {};
+  const owned = !!save?.pokedex?.owned?.[id];
+  const page = ui.page ?? "info";
+  sprite(host, picPageFor(data, id), 0, TILE_H + 2, 4 * TILE_W, 4 * TILE_H);
+  text(host, 5, 2, fit(d.name ?? id, 10));
+  right(host, 2, owned ? "OWN" : "SEEN", "dark", 20);
+  text(host, 5, 3, `No.${String(d.dex ?? 0).padStart(3, "0")}`);
+  if (d.dexEntry?.kind)
+    text(host, 5, 4, fit(`${d.dexEntry.kind} POKéMON`, 15));
+  rule(host, 6);
+  const locked = page !== "info" && !assists(save);
+  if (locked) {
+    center(host, 9, "SET INFO TO ENHANCED");
+    center(host, 11, "IN OPTIONS");
+  } else if (page === "info") {
+    text(host, 1, 7, "TYPE");
+    text(host, 7, 7, (d.types ?? []).join("/"));
+    if (owned && d.dexEntry) {
+      text(host, 1, 9, "HT");
+      text(host, 7, 9, `${d.dexEntry.heightFt}'${String(d.dexEntry.heightIn).padStart(2, "0")}"`);
+      text(host, 1, 10, "WT");
+      text(host, 7, 10, `${(d.dexEntry.weight / 10).toFixed(1)}lb`);
+      const entry = data.text?.[d.dexEntry.text];
+      if (typeof entry === "string") {
+        entry.replace(/[\f\v]/g, `
+`).split(`
+`).filter(Boolean).slice(0, 4).forEach((l, i) => text(host, 1, 12 + i, fit(l, 18)));
+      }
+    } else {
+      text(host, 1, 9, "CATCH ONE TO LEARN");
+      text(host, 1, 10, "MORE.");
+    }
+  } else if (page === "stats") {
+    const b = d.baseStats ?? {};
+    [["HP", b.hp], ["ATTACK", b.attack], ["DEFENSE", b.defense], ["SPEED", b.speed], ["SPECIAL", b.special]].forEach(([label3, v], k) => {
+      text(host, 1, 7 + k * 2, label3);
+      text(host, 10, 7 + k * 2, String(v ?? "-").padStart(3, " "));
+    });
+    text(host, 1, 15, `CATCH RATE ${d.catchRate ?? "-"}`);
+  } else if (page === "area") {
+    const all = habitats(data, id);
+    if (all.length === 0)
+      text(host, 1, 8, "NOT FOUND IN THE WILD");
+    else if (!owned && !spoilers(save))
+      text(host, 1, 8, fit(`${all.length} PLACES. CATCH ONE`, 18));
+    else {
+      const short = {
+        GRASS: "GRS",
+        WATER: "SURF",
+        "OLD ROD": "ROD1",
+        "GOOD ROD": "ROD2",
+        "SUPER ROD": "ROD3"
+      };
+      all.slice(0, 9).forEach((h, k) => {
+        text(host, 0, 7 + k, fit(h.map, 10));
+        right(host, 7 + k, `${short[h.method] ?? h.method} L${h.lv}`, "dark", 20);
+      });
+    }
+  } else {
+    const learn = [
+      ...(d.level1Moves ?? []).map((m) => ({ level: 1, move: m })),
+      ...d.learnset ?? []
+    ];
+    learn.slice(0, 9).forEach((l, k) => {
+      text(host, 0, 7 + k, `L${String(l.level).padStart(2, " ")}`);
+      text(host, 4, 7 + k, fit(data.moves?.[l.move]?.name ?? l.move, 14));
+    });
+  }
+  tabs(ctx, PAGES3, page, (p) => {
+    ui.page = p;
+  }, 16);
+  const order2 = dexOrder(data).filter((s) => save?.pokedex?.seen?.[s] || save?.pokedex?.owned?.[s]);
+  const at2 = Math.max(0, order2.indexOf(id));
+  stepper(ctx, "BACK", () => {
+    ui.species = order2[(at2 + order2.length - 1) % order2.length];
+  }, () => {
+    ui.species = order2[(at2 + 1) % order2.length];
+  });
+  region("dex:back", 3, 17, COLS - 6, 1, () => {
+    ui.species = null;
+  });
+}
+
+// voxelmon/game/ui/gear/apps/bag.ts
+var POCKETS = [
+  { id: "items", label: "ITEM" },
+  { id: "balls", label: "BALL" },
+  { id: "key", label: "KEY" },
+  { id: "tms", label: "TM" }
+];
+var FIELD_USE = new Set([
+  "BICYCLE",
+  "POKE_FLUTE",
+  "OLD_ROD",
+  "GOOD_ROD",
+  "SUPER_ROD",
+  "REPEL",
+  "SUPER_REPEL",
+  "MAX_REPEL",
+  "ESCAPE_ROPE",
+  "COIN_CASE",
+  "TOWN_MAP",
+  "ITEMFINDER"
+]);
+function pocketOf(data, id) {
+  const it = data.items?.[id] ?? {};
+  if (it.machine || /^(TM|HM)\d/.test(id))
+    return "tms";
+  if (isBall(id))
+    return "balls";
+  if (it.keyItem)
+    return "key";
+  return "items";
+}
+function itemAbout(data, id) {
+  const it = data.items?.[id] ?? {};
+  const heal = HEAL_AMOUNT[id];
+  if (heal)
+    return [`RESTORES ${heal} HP.`];
+  if (id === "MAX_POTION")
+    return ["FULLY RESTORES HP."];
+  if (id === "FULL_RESTORE")
+    return ["FULLY RESTORES HP", "AND HEALS STATUS."];
+  if (id === "REVIVE")
+    return ["REVIVES A FAINTED", "POKéMON TO HALF HP."];
+  if (id === "MAX_REVIVE")
+    return ["REVIVES A FAINTED", "POKéMON TO FULL HP."];
+  const cure = STATUS_HEAL[id];
+  if (cure)
+    return cure.length > 1 ? ["HEALS ANY STATUS", "PROBLEM."] : [`HEALS ${cure[0]}.`];
+  const vit = VITAMINS[id];
+  if (vit)
+    return [`RAISES ${vit.toUpperCase()} (STAT EXP).`];
+  const rep = REPELS[id];
+  if (rep)
+    return [`KEEPS WEAK WILD POKéMON`, `AWAY FOR ${rep} STEPS.`];
+  const x = X_ITEMS[id];
+  if (x)
+    return [`RAISES ${x.toUpperCase()} IN BATTLE.`];
+  if (isStone(id))
+    return ["MAKES CERTAIN POKéMON", "EVOLVE."];
+  if (isBall(id)) {
+    return {
+      POKE_BALL: ["CATCHES WILD POKéMON."],
+      GREAT_BALL: ["BETTER THAN A", "POKé BALL."],
+      ULTRA_BALL: ["BETTER THAN A", "GREAT BALL."],
+      MASTER_BALL: ["NEVER FAILS."],
+      SAFARI_BALL: ["FOR THE SAFARI ZONE."]
+    }[id] ?? ["CATCHES WILD POKéMON."];
+  }
+  const own = {
+    RARE_CANDY: ["RAISES LEVEL BY ONE."],
+    ESCAPE_ROPE: ["LEADS OUT OF CAVES", "AND BUILDINGS."],
+    PP_UP: ["RAISES ONE MOVE'S", "MAX PP."],
+    ETHER: ["RESTORES 10 PP TO", "ONE MOVE."],
+    MAX_ETHER: ["RESTORES ALL PP TO", "ONE MOVE."],
+    ELIXER: ["RESTORES 10 PP TO", "EVERY MOVE."],
+    MAX_ELIXER: ["RESTORES ALL PP TO", "EVERY MOVE."],
+    X_ACCURACY: ["NEVER MISS IN BATTLE."],
+    DIRE_HIT: ["RAISES CRITICAL HITS."],
+    GUARD_SPEC: ["BLOCKS STAT DROPS."],
+    POKE_DOLL: ["ESCAPES A WILD BATTLE."],
+    BICYCLE: ["RIDE FASTER THAN", "YOU CAN WALK."],
+    OLD_ROD: ["FISH IN WATER", "YOU FACE."],
+    GOOD_ROD: ["FISH IN WATER", "YOU FACE."],
+    SUPER_ROD: ["FISH IN WATER", "YOU FACE."],
+    ITEMFINDER: ["FINDS HIDDEN ITEMS", "NEARBY."],
+    COIN_CASE: ["HOLDS YOUR COINS."],
+    TOWN_MAP: ["SHOWS WHERE YOU ARE."]
+  };
+  if (own[id])
+    return own[id];
+  const mv = it.machine?.move;
+  if (mv) {
+    const d = data.moves?.[mv] ?? {};
+    return [`TEACHES ${d.name ?? mv}.`, `${d.type ?? ""} PWR ${d.power || "--"}`, ...moveEffectLines(mv, d)];
+  }
+  if (it.keyItem)
+    return ["AN IMPORTANT ITEM."];
+  return it.price ? [`SELLS FOR ¥${Math.floor(it.price / 2)}.`] : [];
+}
+function fieldIdle(game) {
+  const top2 = game.stack?.[game.stack.length - 1];
+  return top2?.kind === "overworld" && !game.overworld?.runner?.isRunning?.() && !game.battleView?.();
+}
+function drawBag(ctx) {
+  const { host, data, save, ui, game } = ctx;
+  const pocket = ui.pocket ?? "items";
+  if (ui.pickFor) {
+    const id = ui.pickFor;
+    text(host, 0, 1, fit(`USE ${data.items?.[id]?.name ?? id} ON?`, 20));
+    drawPartyGrid(ctx, -1, (i) => {
+      ui.pickFor = null;
+      if (data.items?.[id]?.machine)
+        game.teachMachine?.(i, id);
+      else
+        game.useItem?.(i, id);
+    });
+    backRow(ctx, () => {
+      ui.pickFor = null;
+    });
+    return;
+  }
+  const ids = order(save).filter((id) => pocketOf(data, id) === pocket && (save.inventory?.[id] ?? 0) > 0);
+  if (ui.item && !ids.includes(ui.item))
+    ui.item = null;
+  if (ui.item) {
+    const id = ui.item;
+    text(host, 1, 2, fit(data.items?.[id]?.name ?? id, 13));
+    right(host, 2, `x${save.inventory?.[id] ?? 0}`);
+    itemAbout(data, id).flatMap((l) => wrap2(l, 18)).slice(0, 6).forEach((l, i) => text(host, 1, 4 + i, l));
+    const usable = FIELD_USE.has(id) || needsTarget(data, id);
+    if (ui.msg)
+      center(host, 12, ui.msg);
+    backRow(ctx, () => {
+      ui.item = null;
+      ui.msg = null;
+    }, usable ? {
+      label: "USE",
+      tap: () => {
+        if (!fieldIdle(game)) {
+          ui.msg = "NOT NOW!";
+          return;
+        }
+        ui.msg = null;
+        if (FIELD_USE.has(id)) {
+          game.closeToOverworld?.();
+          game.useKeyItem?.(id);
+          ui.item = null;
+        } else
+          ui.pickFor = id;
+      }
+    } : undefined);
+    return;
+  }
+  if (ids.length === 0)
+    center(host, 8, "NOTHING IN HERE");
+  const top2 = Math.min(ui.top ?? 0, Math.max(0, ids.length - 14));
+  ids.slice(top2, top2 + 14).forEach((id, k) => {
+    const y = 1 + k;
+    const lit = pressedId() === `bag:${id}`;
+    text(host, 1, y, fit(data.items?.[id]?.name ?? id, 13), lit ? "fill" : "dark");
+    if (pocket !== "key")
+      right(host, y, `x${save.inventory?.[id] ?? 0}`, lit ? "fill" : "dark");
+    region(`bag:${id}`, 0, y, COLS, 1, () => {
+      ui.item = id;
+    });
+  });
+  if (ids.length > 14) {
+    region("bag:more", 0, 15, COLS, 1, () => {
+      ui.top = top2 + 14 >= ids.length ? 0 : top2 + 14;
+    });
+    center(host, 15, top2 + 14 >= ids.length ? "BACK TO TOP" : "MORE...");
+  }
+  tabs(ctx, POCKETS, pocket, (p) => {
+    ui.pocket = p;
+    ui.top = 0;
+  });
+}
+
+// voxelmon/game/ui/gear/apps/tools.ts
+var VERB = {
+  CUT: "use_cut",
+  FLY: "use_fly",
+  SURF: "use_surf",
+  STRENGTH: "use_strength",
+  FLASH: "use_flash",
+  DIG: "use_dig",
+  TELEPORT: "use_teleport"
+};
+function drawTools(ctx) {
+  const { host, save, ui } = ctx;
+  if (typeof ui.softFrom === "number") {
+    drawSoftboiled(ctx, ui.softFrom);
+    return;
+  }
+  const open = TOOLS.filter((t) => toolUnlocked(t, save));
+  if (open.length === 0) {
+    center(host, 7, "NO TOOLS YET.");
+    center(host, 9, "A BIKE, A ROD OR A");
+    center(host, 10, "FIELD MOVE WILL SHOW");
+    center(host, 11, "UP HERE.");
+    return;
+  }
+  open.forEach((t, i) => {
+    const col = i % 2;
+    const row = Math.floor(i / 2);
+    const y = 2 + row * 2;
+    const x = col * 10;
+    let label3 = t.label;
+    if (t.key === "bicycle" && save?.onBike)
+      label3 = "GET OFF";
+    pill(host, `tool:${t.key}`, x, y, 10, label3, () => useTool(ctx, t.key));
+  });
+  if (ui.msg)
+    center(host, 15, fit(ui.msg, 20));
+}
+function useTool(ctx, key) {
+  const { game, save, ui, data } = ctx;
+  const t = TOOLS.find((x) => x.key === key);
+  if (!fieldIdle(game)) {
+    ui.msg = "NOT NOW!";
+    return;
+  }
+  ui.msg = null;
+  if (t.item) {
+    game.useKeyItem?.(t.item);
+    return;
+  }
+  const who = knowerOf(save, t.move);
+  if (who < 0)
+    return;
+  if (t.move === "SOFTBOILED") {
+    ui.softFrom = who;
+    return;
+  }
+  const name = monName2(data, save.party[who]);
+  game.overworld?.runScript?.([[VERB[t.move], name]]);
+}
+function drawSoftboiled(ctx, from) {
+  const { host, save, ui, game, data } = ctx;
+  const user = save.party[from];
+  text(host, 0, 1, fit(`${monName2(data, user)}: HEAL WHO?`, 20));
+  drawPartyGrid(ctx, from, (i) => {
+    const share = Math.floor((user.stats?.hp ?? user.hp) / 5);
+    const target2 = save.party[i];
+    const max = target2?.stats?.hp ?? target2?.hp ?? 0;
+    ui.softFrom = null;
+    if (user.hp < share || share <= 0) {
+      game.showText?.("Not enough HP!");
+      return;
+    }
+    if (!target2 || i === from || target2.hp <= 0 || target2.hp >= max) {
+      game.showText?.(`It won't have any
+effect.`);
+      return;
+    }
+    user.hp -= share;
+    target2.hp = Math.min(max, target2.hp + share);
+  });
+  backRow(ctx, () => {
+    ui.softFrom = null;
+  });
+}
+
+// voxelmon/game/ui/gear/apps/stamps.ts
+var PER_PAGE2 = 7;
+function drawStamps(ctx) {
+  const { host, data, save, ui } = ctx;
+  const areas = stampAreas(data, save, spoilers(save)).filter((a) => a.visited);
+  if (ui.area) {
+    const a = areas.find((x) => x.name === ui.area);
+    if (a) {
+      drawArea2(ctx, a);
+      return;
+    }
+    ui.area = null;
+  }
+  if (areas.length === 0) {
+    center(host, 7, "GO EXPLORE!");
+    center(host, 9, "EVERY AREA YOU VISIT");
+    center(host, 10, "EARNS A STAMP WHEN");
+    center(host, 11, "YOU FINISH IT.");
+    return;
+  }
+  const done = areas.filter(stampDone).length;
+  text(host, 0, 1, `STAMPS ${done}/${areas.length}`);
+  const pages = Math.ceil(areas.length / PER_PAGE2);
+  ui.top = Math.min(ui.top ?? 0, (pages - 1) * PER_PAGE2);
+  areas.slice(ui.top, ui.top + PER_PAGE2).forEach((a, k) => {
+    const y = 2 + k * 2;
+    const lit = pressedId() === `stamp:${a.name}`;
+    const ink = lit ? "fill" : "dark";
+    if (stampDone(a))
+      cursor(host, 0, y, ink);
+    text(host, 1, y, fit(a.name, 14), ink);
+    text(host, 1, y + 1, `TRAINERS ${a.beaten}/${a.trainers}`);
+    right(host, y + 1, `ITEMS ${a.found}/${a.items}`, "dark", 20);
+    if (stampDone(a))
+      right(host, y, "STAMP", ink, 20);
+    region(`stamp:${a.name}`, 0, y, COLS, 2, () => {
+      ui.area = a.name;
+    });
+  });
+  if (pages > 1) {
+    const at2 = Math.floor(ui.top / PER_PAGE2);
+    stepper(ctx, `${at2 + 1}/${pages}`, () => {
+      ui.top = (at2 + pages - 1) % pages * PER_PAGE2;
+    }, () => {
+      ui.top = (at2 + 1) % pages * PER_PAGE2;
+    }, 17);
+  }
+}
+function drawArea2(ctx, a) {
+  const { host, data, save, ui } = ctx;
+  text(host, 0, 1, fit(a.name, 20));
+  const lines = [];
+  for (const id of a.maps) {
+    const place2 = id.replace(/_/g, " ");
+    for (const t of mapTrainers(data, save, id))
+      if (!t.beaten)
+        lines.push(fit(`${t.name} ${place2}`, 20));
+    for (const it of mapItems(data, save, id)) {
+      if (it.taken || it.hidden && !spoilers(save))
+        continue;
+      lines.push(fit(`${it.hidden ? "HIDDEN " : ""}${it.name} ${place2}`, 20));
+    }
+  }
+  if (lines.length === 0)
+    center(host, 8, "ALL DONE HERE!");
+  lines.slice(0, 14).forEach((l, i) => text(host, 0, 3 + i, l));
+  backRow(ctx, () => {
+    ui.area = null;
+  });
+}
+
+// voxelmon/game/ui/gear/apps/notes.ts
+var MAX_NOTES = 12;
+var LINE_W = 18;
+function drawNotes(ctx) {
+  const { ui, gear } = ctx;
+  const note = typeof ui.open === "number" ? gear.notes[ui.open] : undefined;
+  if (!note) {
+    ui.open = null;
+    drawList2(ctx);
+    return;
+  }
+  if (note.kind === "text")
+    drawText(ctx, note);
+  else if (note.kind === "list")
+    drawChecklist(ctx, note);
+  else
+    drawSketch(ctx, note);
+}
+function drawList2(ctx) {
+  const { host, gear, ui } = ctx;
+  if (gear.notes.length === 0) {
+    center(host, 5, "NO NOTES YET.");
+    center(host, 7, "START ONE BELOW.");
+  }
+  gear.notes.slice(0, MAX_NOTES).forEach((n, i) => {
+    const y = 1 + i;
+    const lit = pressedId() === `note:${i}`;
+    const tag = { text: "TXT", list: "LST", sketch: "ART" }[n.kind];
+    text(host, 0, y, tag, lit ? "fill" : "dark");
+    text(host, 4, y, fit(n.title || "(EMPTY)", 16), lit ? "fill" : "dark");
+    region(`note:${i}`, 0, y, COLS, 1, () => {
+      ui.open = i;
+      ui.sel = null;
+      ui.typing = false;
+    });
+  });
+  if (gear.notes.length < MAX_NOTES) {
+    const add2 = (kind) => {
+      gear.notes.push({ kind, title: kind === "sketch" ? "SKETCH" : "", lines: kind === "text" ? [""] : [] });
+      ui.open = gear.notes.length - 1;
+      ui.typing = kind !== "sketch";
+      ui.sel = null;
+    };
+    text(host, 0, 15, "NEW NOTE:");
+    pill(host, "notes:text", 0, 17, 6, "TEXT", () => add2("text"));
+    pill(host, "notes:list", 7, 17, 6, "LIST", () => add2("list"));
+    pill(host, "notes:sketch", 14, 17, 6, "SKETCH", () => add2("sketch"));
+  }
+}
+function deleteNote(ctx) {
+  ctx.gear.notes.splice(ctx.ui.open, 1);
+  ctx.ui.open = null;
+}
+function drawText(ctx, note) {
+  const { host, ui } = ctx;
+  const lines = note.lines.flatMap((l) => wrap2(l, LINE_W));
+  const shown = ui.typing ? 7 : 15;
+  lines.slice(-shown).forEach((l, i) => text(host, 1, 1 + i, l));
+  if (ui.typing) {
+    const last = lines[lines.length - 1] ?? "";
+    const cy = 1 + Math.min(lines.length, shown) - 1;
+    text(host, 1 + width(last), Math.max(1, cy), "_");
+    keyboard(ctx, (k) => {
+      if (k === "DEL") {
+        const cur = note.lines[note.lines.length - 1] ?? "";
+        if (cur.length > 0)
+          note.lines[note.lines.length - 1] = cur.slice(0, -1);
+        else if (note.lines.length > 1)
+          note.lines.pop();
+      } else if (k === "NL") {
+        if (note.lines.length < 40)
+          note.lines.push("");
+      } else if (k === "OK") {
+        ui.typing = false;
+      } else {
+        const cur = note.lines[note.lines.length - 1] ?? "";
+        if (cur.length < 120)
+          note.lines[note.lines.length - 1] = cur + k;
+      }
+      note.title = (note.lines.find((l) => l.trim()) ?? "").trim().slice(0, 16);
+    });
+    return;
+  }
+  backRow(ctx, () => {
+    ctx.ui.open = null;
+  }, { label: "EDIT", tap: () => {
+    ui.typing = true;
+  } });
+  pill(host, "note:delete", 14, 16, 6, "DELETE", () => deleteNote(ctx));
+}
+var ROWS_ABC = ["QWERTYUIOP", "ASDFGHJKL-", "ZXCVBNM,.?"];
+var ROWS_123 = ["1234567890", "!?:;/()'-.", "é♂♀×&,.  "];
+function keyboard(ctx, press) {
+  const { host, ui, gear } = ctx;
+  let rows = ui.nums ? ROWS_123 : ROWS_ABC;
+  if (!ui.nums && gear.qwertz)
+    rows = rows.map((r) => r.replace("Y", "#").replace("Z", "Y").replace("#", "Z"));
+  rows.forEach((row, r) => {
+    [...row].forEach((ch, c) => {
+      if (ch === " ")
+        return;
+      pill(host, `key:${r}:${c}`, c * 2, 10 + r * 2, 2, ch, () => press(ch));
+    });
+  });
+  pill(host, "key:mode", 0, 16, 4, ui.nums ? "ABC" : "123", () => {
+    ui.nums = !ui.nums;
+  });
+  pill(host, "key:space", 4, 16, 6, "SPACE", () => press(" "));
+  pill(host, "key:del", 10, 16, 3, "DEL", () => press("DEL"));
+  pill(host, "key:nl", 13, 16, 3, "NL", () => press("NL"));
+  pill(host, "key:ok", 16, 16, 4, "OK", () => press("OK"));
+}
+function drawChecklist(ctx, note) {
+  const { host, ui } = ctx;
+  note.done ??= [];
+  if (ui.typing) {
+    const draft = ui.draft ?? "";
+    text(host, 0, 1, "NEW ITEM:");
+    text(host, 1, 3, fit(draft, LINE_W) + "_");
+    keyboard(ctx, (k) => {
+      if (k === "DEL")
+        ui.draft = draft.slice(0, -1);
+      else if (k === "NL" || k === "OK") {
+        if (draft.trim()) {
+          note.lines.push(draft.trim());
+          note.done.push(false);
+        }
+        ui.draft = "";
+        ui.typing = k === "NL";
+      } else if (draft.length < 30)
+        ui.draft = draft + k;
+      if (!note.title && note.lines[0])
+        note.title = note.lines[0].slice(0, 16);
+    });
+    return;
+  }
+  note.lines.slice(0, 13).forEach((item, i) => {
+    const y = 1 + i;
+    const sel = ui.sel === i;
+    text(host, 0, y, note.done[i] ? "[×]" : "[ ]");
+    region(`chk:${i}`, 0, y, 3, 1, () => {
+      note.done[i] = !note.done[i];
+    });
+    text(host, 4, y, fit(item, 16), sel ? "fill" : "dark");
+    region(`chkline:${i}`, 3, y, COLS - 3, 1, () => {
+      ui.sel = sel ? null : i;
+    });
+  });
+  if (note.lines.length === 0)
+    center(host, 6, "ADD SOMETHING TO DO");
+  pill(host, "chk:add", 0, 16, 6, "ADD", () => {
+    ui.typing = true;
+    ui.draft = "";
+  });
+  if (typeof ui.sel === "number") {
+    pill(host, "chk:remove", 7, 16, 6, "REMOVE", () => {
+      note.lines.splice(ui.sel, 1);
+      note.done.splice(ui.sel, 1);
+      ui.sel = null;
+    });
+  }
+  pill(host, "note:delete", 14, 16, 6, "DELETE", () => deleteNote(ctx));
+  backRow(ctx, () => {
+    ctx.ui.open = null;
+  });
+}
+var PAD_W = 80;
+var PAD_H = 50;
+var CELL2 = 4;
+var PAD_X = 0;
+var PAD_Y = Math.ceil(TILE_H) + 2;
+function encodeInk(cells) {
+  let out = "";
+  let i = 0;
+  while (i < cells.length) {
+    const v = cells[i];
+    let n = 1;
+    while (i + n < cells.length && cells[i + n] === v && n < 9999)
+      n++;
+    out += `${v}${n.toString(36)}.`;
+    i += n;
+  }
+  return out;
+}
+function decodeInk(s) {
+  const cells = new Uint8Array(PAD_W * PAD_H);
+  if (!s)
+    return cells;
+  let at2 = 0;
+  for (const run of s.split(".")) {
+    if (!run)
+      continue;
+    const v = Number(run[0]);
+    const n = parseInt(run.slice(1), 36);
+    for (let k = 0;k < n && at2 < cells.length; k++)
+      cells[at2++] = v;
+  }
+  return cells;
+}
+var pads = new WeakMap;
+function padOf(note) {
+  let p = pads.get(note);
+  if (!p) {
+    p = decodeInk(note.ink);
+    pads.set(note, p);
+  }
+  return p;
+}
+function drawSketch(ctx, note) {
+  const { host, ui } = ctx;
+  const pad = padOf(note);
+  const ink = ui.ink ?? 3;
+  rect(host, PAD_X, PAD_Y - 1, PAD_W * CELL2, 1, 2);
+  rect(host, PAD_X, PAD_Y + PAD_H * CELL2, PAD_W * CELL2, 1, 2);
+  let rects = 0;
+  for (let y2 = 0;y2 < PAD_H && rects < 700; y2++) {
+    let x = 0;
+    while (x < PAD_W) {
+      const v = pad[y2 * PAD_W + x];
+      if (v === 0) {
+        x++;
+        continue;
+      }
+      let n = 1;
+      while (x + n < PAD_W && pad[y2 * PAD_W + x + n] === v)
+        n++;
+      rect(host, PAD_X + x * CELL2, PAD_Y + y2 * CELL2, n * CELL2, CELL2, v);
+      rects++;
+      x += n;
+    }
+  }
+  dragPx("sketch:pad", PAD_X, PAD_Y, PAD_W * CELL2, PAD_H * CELL2, (px2, py, start) => {
+    const cx = Math.floor((px2 - PAD_X) / CELL2);
+    const cy = Math.floor((py - PAD_Y) / CELL2);
+    const from = start || !ui.last ? [cx, cy] : ui.last;
+    stroke(pad, from[0], from[1], cx, cy, ink === 0 ? 0 : ink);
+    ui.last = [cx, cy];
+    note.ink = encodeInk(pad);
+  });
+  const y = ROWS - 1;
+  pill(host, "ink:dark", 0, y, 4, "INK", () => {
+    ui.ink = 3;
+  }, ink === 3);
+  pill(host, "ink:grey", 4, y, 4, "GREY", () => {
+    ui.ink = 2;
+  }, ink === 2);
+  pill(host, "ink:erase", 8, y, 4, "RUB", () => {
+    ui.ink = 0;
+  }, ink === 0);
+  pill(host, "ink:clear", 12, y, 4, "WIPE", () => {
+    pad.fill(0);
+    note.ink = encodeInk(pad);
+  });
+  pill(host, "ink:back", 16, y, 4, "BACK", () => {
+    ui.open = null;
+  });
+}
+function stroke(pad, x0, y0, x1, y1, v) {
+  const dot = (x2, y2) => {
+    for (let dy2 = 0;dy2 < 2; dy2++) {
+      for (let dx2 = 0;dx2 < 2; dx2++) {
+        const px2 = x2 + dx2;
+        const py = y2 + dy2;
+        if (px2 >= 0 && py >= 0 && px2 < PAD_W && py < PAD_H)
+          pad[py * PAD_W + px2] = v;
+      }
+    }
+  };
+  const dx = Math.abs(x1 - x0);
+  const dy = Math.abs(y1 - y0);
+  const sx2 = x0 < x1 ? 1 : -1;
+  const sy2 = y0 < y1 ? 1 : -1;
+  let err = dx - dy;
+  let x = x0;
+  let y = y0;
+  for (let guard = 0;guard < 400; guard++) {
+    dot(x, y);
+    if (x === x1 && y === y1)
+      break;
+    const e2 = 2 * err;
+    if (e2 > -dy) {
+      err -= dy;
+      x += sx2;
+    }
+    if (e2 < dx) {
+      err += dx;
+      y += sy2;
+    }
+  }
+}
+// voxelmon/game/ui/kantogear.ts
+function activeView(game) {
+  const want = game.gearView ?? "home";
+  return availableApps(game).includes(want) ? want : "home";
+}
+function gearViewStep(game, dir) {
+  const list2 = availableApps(game);
+  const at2 = Math.max(0, list2.indexOf(activeView(game)));
+  return list2[(at2 + dir + list2.length) % list2.length];
+}
+var DRAW = {
+  home: drawHome,
+  party: drawParty,
+  map: drawMap,
+  explorer: drawExplorer,
+  trainer: drawTrainer,
+  pokedex: drawPokedex,
+  bag: drawBag,
+  tools: drawTools,
+  steps: drawSteps,
+  stamps: drawStamps,
+  notes: drawNotes,
+  store: drawStore,
+  options: drawOptions
+};
+var drawnFor = "";
+function drawKantoGear(host, game) {
+  beginTargets();
+  beginDrags();
+  host.uiClearBottom();
   const b = game.battleView?.()?.battle;
-  const col = clampInt(Math.floor(x / TILE_W), 0, COLS - 1);
-  const row = clampInt(Math.floor(y / TILE_H), 0, ROWS - 1);
-  if (!b) {
-    const view = activeView(game);
-    const arrows = headerArrowCols(game, view === "map" ? "MAP" : "PARTY");
-    if (row === 0 && arrows) {
-      if (col <= arrows.left) {
-        game.setGearView?.(gearViewStep(game, -1));
-        return;
-      }
-      if (col >= arrows.right && col < CLOCK_COL) {
-        game.setGearView?.(gearViewStep(game, 1));
-        return;
-      }
-      return;
-    }
-    if (view === "map")
-      gearMapTouch(game, x, y);
+  if (b) {
+    drawnFor = "battle";
+    drawBattleGear(ctxFor(host, game, "battle"), b);
     return;
   }
-  if (b.choiceOpen) {
-    if (col >= 14 && col <= 19 && row >= 7 && row <= 11) {
-      b.choiceYes = row < 9;
-    }
-    armed = true;
+  drawnFor = "field";
+  const view = activeView(game);
+  if (drawMirror(ctxFor(host, game, "mirror"))) {
     return;
   }
-  const cell2x2 = () => (row < 10 ? 0 : 2) + (col < 10 ? 0 : 1);
-  switch (b.phase) {
-    case "menu": {
-      b.menuIndex = cell2x2() + 1;
-      armed = true;
-      return;
-    }
-    case "moveSelect": {
-      const i = cell2x2();
-      if (i >= b.player.curMoves.length)
-        return;
-      b.moveIndex = i + 1;
-      armed = true;
-      return;
-    }
-    case "party": {
-      const r = row < 7 ? 0 : row < 12 ? 1 : 2;
-      const i = r * 2 + (col < 10 ? 0 : 1);
-      if (i >= (game.save?.party?.length ?? 0))
-        return;
-      b.partyIndex = i;
-      armed = true;
-      return;
-    }
-    case "item": {
-      const i = row - 2 + itemListTop(b);
-      if (row < 2 || i >= b.itemList.length)
-        return;
-      b.itemIndex = i;
-      armed = true;
-      return;
-    }
-    default:
-      b.update(TAP_A);
-      return;
+  const ctx = ctxFor(host, game, view);
+  if (view === "home") {
+    drawHome(ctx);
+  } else {
+    header(ctx, appOf(view).title, {
+      arrows: true,
+      onLeft: () => go(ctx, gearViewStep(game, -1)),
+      onRight: () => go(ctx, gearViewStep(game, 1)),
+      onTitle: () => go(ctx, "home")
+    });
+    DRAW[view]?.(ctx);
   }
+  drawTextHint(ctx);
+}
+var dragging = null;
+function gearTouchDown(game, x, y) {
+  setPressed(null);
+  dragging = null;
+  const b = game.battleView?.()?.battle;
+  const t = drawnFor === (b ? "battle" : "field") ? targetAt(x, y) : undefined;
+  if (b) {
+    if (t) {
+      setPressed(t.id);
+      return;
+    }
+    battleTouchDown(ctxFor(null, game, "battle"), b, x, y);
+    return;
+  }
+  if (mirrorTapThrough(game))
+    return;
+  const d = dragAt(x, y);
+  if (d) {
+    dragging = d.id;
+    d.move(x, y, true);
+    return;
+  }
+  if (t?.id === "map:area") {
+    mapTouch(game, x, y);
+    return;
+  }
+  if (t)
+    setPressed(t.id);
+}
+function gearTouchMove(game, x, y) {
+  if (!dragging)
+    return;
+  const d = dragById(dragging);
+  if (!d)
+    return;
+  if (x < d.x || y < d.y || x >= d.x + d.w || y >= d.y + d.h)
+    return;
+  d.move(x, y, false);
 }
 function gearTouchUp(game) {
-  if (!armed)
+  dragging = null;
+  const id = pressedId();
+  setPressed(null);
+  if (id) {
+    const t = currentTargets().find((c) => c.id === id);
+    t?.tap();
     return;
-  armed = false;
-  const b = game.battleView?.()?.battle;
-  if (!b)
-    return;
-  b.update(TAP_A);
+  }
+  battleTouchUp(game.battleView?.()?.battle);
 }
 
 // voxelmon/game/ui/warppicker.ts
@@ -18189,14 +20474,14 @@ class WarpPickerState {
   index = 0;
   top = 0;
   maps;
-  constructor(game, here, onPick) {
+  constructor(game, here2, onPick) {
     this.game = game;
     this.onPick = onPick;
     const data = game.data ?? {};
     const cooked = Array.isArray(data.cookedMaps) ? data.cookedMaps : [];
     const known = data.maps ?? {};
     this.maps = cooked.filter((m) => known[m]).sort();
-    const at2 = this.maps.indexOf(here);
+    const at2 = this.maps.indexOf(here2);
     if (at2 >= 0)
       this.index = at2;
     this.clampScroll();
@@ -18562,6 +20847,23 @@ tant to toss!`));
       this.submenuIndex = 0;
     }
   }
+  gearMenu() {
+    if (this.mode !== "list")
+      return null;
+    const items = [...this.ids().map((id) => this.game.data.items?.[id]?.name ?? id), "CANCEL"];
+    return {
+      title: "ITEM",
+      items,
+      index: this.index,
+      select: (i) => {
+        this.index = Math.max(0, Math.min(items.length - 1, i));
+        if (this.index < this.top)
+          this.top = this.index;
+        if (this.index >= this.top + ROWS5)
+          this.top = this.index - ROWS5 + 1;
+      }
+    };
+  }
   view() {
     const save = this.game.save;
     const items = this.ids().map((id) => ({
@@ -18914,8 +21216,8 @@ class BoxState {
   party() {
     return this.game.save.party ?? [];
   }
-  toMessage(text, ret) {
-    this.footer = text;
+  toMessage(text2, ret) {
+    this.footer = text2;
     this.returnMode = ret;
     this.mode = "message";
   }
@@ -19063,15 +21365,15 @@ gone forever. OK?`;
   }
   doTransfer() {
     if (this.kindOfList === "withdraw") {
-      const box = this.box();
-      const mon = box[this.listIndex];
+      const box2 = this.box();
+      const mon = box2[this.listIndex];
       if (!mon) {
         this.mode = "list";
         return;
       }
       if (this.party().length >= PARTY_MAX2)
         return this.toMessage("The party is full!", "list");
-      box.splice(this.listIndex, 1);
+      box2.splice(this.listIndex, 1);
       this.party().push(mon);
       this.cry(mon);
       this.toMessage(`${this.monName(mon)} is
@@ -19085,12 +21387,12 @@ taken out.`, "menu");
       if (this.party().length <= 1)
         return this.toMessage(`You need at least
 one POKéMON!`, "list");
-      const box = this.box();
-      if (box.length >= BOX_CAPACITY) {
+      const box2 = this.box();
+      if (box2.length >= BOX_CAPACITY) {
         return this.toMessage(`BOX ${this.game.save.currentBox} is full!`, "list");
       }
       this.party().splice(this.listIndex, 1);
-      box.push(mon);
+      box2.push(mon);
       this.cry(mon);
       this.toMessage(`${this.monName(mon)} was
 stored in Box ${this.game.save.currentBox}.`, "menu");
@@ -19115,13 +21417,13 @@ stored in Box ${this.game.save.currentBox}.`, "menu");
       this.mode = "menu";
       return;
     }
-    const box = this.box();
-    const mon = box[this.listIndex];
+    const box2 = this.box();
+    const mon = box2[this.listIndex];
     if (!mon) {
       this.mode = "list";
       return;
     }
-    box.splice(this.listIndex, 1);
+    box2.splice(this.listIndex, 1);
     this.cry(mon);
     this.toMessage(`${this.monName(mon)} was
 released outside.
@@ -19181,14 +21483,14 @@ function deposit2(save, id, qty, data) {
   return true;
 }
 function withdraw(save, id, qty, data) {
-  const box = pcBag(save);
-  const have = box.inventory?.[id] ?? 0;
+  const box2 = pcBag(save);
+  const have = box2.inventory?.[id] ?? 0;
   const n = Math.min(qty, have);
   if (n <= 0)
     return false;
   if (!add(save, id, n, data))
     return false;
-  remove(box, id, n);
+  remove(box2, id, n);
   return true;
 }
 function tossFromPc(save, id, qty) {
@@ -19825,8 +22127,8 @@ function fixArrays(save) {
     }
   }
 }
-function decodeSave(text) {
-  const p = new P(text);
+function decodeSave(text2) {
+  const p = new P(text2);
   p.skip();
   if (!p.src.startsWith("return", p.pos))
     throw new Error("not a save file");
@@ -19863,11 +22165,11 @@ class TextBoxState {
   kind = "textbox";
   box;
   choicePushed = false;
-  constructor(game, text, onDone, choice, opts) {
+  constructor(game, text2, onDone, choice, opts) {
     this.game = game;
     this.onDone = onDone;
     this.choice = choice;
-    this.box = new Textbox(text, { player: game.save.player.name, rival: game.save.player.rival }, { speed: game.textSpeed(), ...opts });
+    this.box = new Textbox(text2, { player: game.save.player.name, rival: game.save.player.rival }, { speed: game.textSpeed(), ...opts });
   }
   update() {
     if (this.choice && this.box.done) {
@@ -19996,15 +22298,15 @@ class BattleGameState {
         this.game.overworld.refreshDoors();
       this.game.runEvolutions(b.leveledUp);
       const caught = b.caughtNewSpecies;
-      const named = b.caughtMon;
+      const named2 = b.caughtMon;
       b.caughtMon = null;
       const ask2 = () => {
-        if (!named)
+        if (!named2)
           return;
-        const label3 = this.game.data.pokemon[named.species]?.name ?? named.species;
+        const label3 = this.game.data.pokemon[named2.species]?.name ?? named2.species;
         this.game.askNickname(label3, (nick) => {
           if (nick)
-            named.nickname = nick;
+            named2.nickname = nick;
         });
       };
       if (caught) {
@@ -20079,8 +22381,8 @@ class VoxelmonGame {
     const mapId = this.overworld.map.id;
     if (mapId !== this.audioMap && !this.overworld.pendingSeamMusic) {
       this.audioMap = mapId;
-      const top = this.stack[this.stack.length - 1];
-      if (top?.kind === "intro" || top?.kind === "title") {
+      const top2 = this.stack[this.stack.length - 1];
+      if (top2?.kind === "intro" || top2?.kind === "title") {
         this.audio.noteMap(mapId);
       } else {
         this.audio.startMap(mapId, !!this.save.onBike);
@@ -20145,10 +22447,10 @@ class VoxelmonGame {
         return;
       }
       if (choice === "continue") {
-        const text = this.host.saveData?.();
-        if (text) {
+        const text2 = this.host.saveData?.();
+        if (text2) {
           try {
-            this.save = decodeSave(text);
+            this.save = decodeSave(text2);
             const scrubbed = scrubDefaultNicknames(this.data, this.save);
             if (scrubbed > 0)
               console.log(`[pv] names: ${scrubbed} cut-short nickname(s) dropped on load`);
@@ -20166,6 +22468,8 @@ class VoxelmonGame {
   }
   boot() {
     this.newGame();
+    if (gameVersion(this.data) === "yellow")
+      return;
     this.push(new IntroState(this, () => {}));
   }
   blackout() {
@@ -20195,8 +22499,8 @@ class VoxelmonGame {
     this.input.setButtons(buttons);
     this.input.step();
     this.overworld.serviceLink();
-    const top = this.stack[this.stack.length - 1];
-    top?.update();
+    const top2 = this.stack[this.stack.length - 1];
+    top2?.update();
     this.advancePlayTime();
     const t1 = p ? p.now() : 0;
     this.scene.emit(this);
@@ -20253,13 +22557,13 @@ class VoxelmonGame {
     this.audioMap = mapId;
     this.audio.startMap(mapId, !!this.save.onBike);
   }
-  showText(text, onDone) {
-    this.push(new TextBoxState(this, text, onDone));
+  showText(text2, onDone) {
+    this.push(new TextBoxState(this, text2, onDone));
   }
-  showAuto(text, delay, opts) {
+  showAuto(text2, delay, opts) {
     if (opts?.sfx)
       this.audio.playSfx(opts.sfx);
-    this.push(new TextBoxState(this, text, opts?.onDone, undefined, { auto: { delay } }));
+    this.push(new TextBoxState(this, text2, opts?.onDone, undefined, { auto: { delay } }));
   }
   textSpeed() {
     const v = this.save.options?.textSpeed;
@@ -20279,8 +22583,8 @@ class VoxelmonGame {
   animationsOn() {
     return this.save.options?.animations !== false;
   }
-  showChoice(text, choice) {
-    this.push(new TextBoxState(this, text, undefined, choice));
+  showChoice(text2, choice) {
+    this.push(new TextBoxState(this, text2, undefined, choice));
   }
   pushWarpFade(frames, midpoint, onDone) {
     this.push(new WarpFadeState(this, frames, midpoint, onDone));
@@ -20298,8 +22602,8 @@ class VoxelmonGame {
     step(0);
   }
   evolutionScreen() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "evolution" ? top.view?.() ?? null : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "evolution" ? top2.view?.() ?? null : null;
   }
   learnMovesAtLevel(mon, onDone) {
     const def = this.data.pokemon[mon.species];
@@ -20428,7 +22732,8 @@ ${mname}!`);
     const P_OAK = this.picNamed("oak");
     const P_PLR = this.picNamed("player");
     const P_RIV = this.picNamed("rival");
-    const nido = picPageFor(this.data, "NIDORINO");
+    const demo = this.data.field?.oakSpeech?.demoSpecies ?? "NIDORINO";
+    const nido = picPageFor(this.data, demo);
     const P_NIDO = nido >= 0 ? nido : PIC_FALLBACK.nidorino;
     const A = [
       ["pic", P_OAK, 184, 24, 112, 112],
@@ -20493,31 +22798,31 @@ ${mname}!`);
     });
   }
   pic() {
-    let top = this.stack[this.stack.length - 1];
+    let top2 = this.stack[this.stack.length - 1];
     const under = this.stack[this.stack.length - 2];
-    if (top?.kind === "textbox" && under?.kind === "evolution")
-      top = under;
-    if (top?.kind === "intro")
-      return top.view().pics;
-    if (top?.kind === "title")
-      return top.view().pics;
-    if (top?.kind === "trainercard") {
-      const v = top.view();
+    if (top2?.kind === "textbox" && under?.kind === "evolution")
+      top2 = under;
+    if (top2?.kind === "intro")
+      return top2.view().pics;
+    if (top2?.kind === "title")
+      return top2.view().pics;
+    if (top2?.kind === "trainercard") {
+      const v = top2.view();
       if (v.picPage < 0)
         return [];
       const r = CARD_PIC_RECT;
       return [{ page: v.picPage, x: r.x, y: r.y, w: r.w, h: r.h }];
     }
-    if (top?.kind === "summary") {
-      const v = top.view();
+    if (top2?.kind === "summary") {
+      const v = top2.view();
       const page = picPageFor(this.data, v.speciesId);
       if (page < 0)
         return [];
       const r = cellsToPicRect(SUMMARY_PIC_CELL);
       return [{ page, x: r.x, y: r.y, w: r.w, h: r.h }];
     }
-    if (top?.kind === "party") {
-      const v = top.view();
+    if (top2?.kind === "party") {
+      const v = top2.view();
       const out = [];
       v.entries.forEach((e, i) => {
         const page = picPageFor(this.data, e.species);
@@ -20528,8 +22833,8 @@ ${mname}!`);
       });
       return out;
     }
-    if (top?.kind === "tradeanim") {
-      const v = top.view();
+    if (top2?.kind === "tradeanim") {
+      const v = top2.view();
       if (!v?.mon)
         return [];
       const page = picPageFor(this.data, v.mon.species);
@@ -20538,8 +22843,8 @@ ${mname}!`);
       const r = cellsToPicRect(TRADE_PIC_CELL);
       return [{ page, x: r.x, y: r.y, w: r.w, h: r.h }];
     }
-    if (top?.kind === "tradescreen") {
-      const v = top.view();
+    if (top2?.kind === "tradescreen") {
+      const v = top2.view();
       const out = [];
       const add2 = (list2, row0) => {
         list2.forEach((e, i) => {
@@ -20554,27 +22859,27 @@ ${mname}!`);
       add2(v.mine, TRADE_MINE_ROW);
       return out;
     }
-    if (top?.kind === "evolution") {
-      const v = top.view();
+    if (top2?.kind === "evolution") {
+      const v = top2.view();
       if (!v || v.picPage < 0)
         return [];
       const r = cellsToPicRect(EVO_PIC_CELL);
       return [{ page: v.picPage, x: r.x, y: r.y, w: r.w, h: r.h }];
     }
-    if (top?.kind === "halloffame") {
-      const v = top.view();
+    if (top2?.kind === "halloffame") {
+      const v = top2.view();
       if (!v.mon || v.mon.picPage < 0)
         return [];
       return [{ page: v.mon.picPage, x: 188, y: 40, w: 112, h: 112 }];
     }
-    if (top?.kind === "credits") {
-      const v = top.view();
+    if (top2?.kind === "credits") {
+      const v = top2.view();
       if (v.picPage < 0)
         return [];
       return [{ page: v.picPage, x: 40, y: 68, w: 96, h: 96 }];
     }
-    if (top?.kind === "pokedex") {
-      const v = top.view();
+    if (top2?.kind === "pokedex") {
+      const v = top2.view();
       if (v.mode === "entry" && v.entry && v.entry.spritePage >= 0) {
         return [{ page: v.entry.spritePage, x: 16, y: 24, w: 104, h: 104 }];
       }
@@ -20592,35 +22897,35 @@ ${mname}!`);
     const line = (k, fallback) => t[k] ?? fallback;
     const itemName = this.data.items?.[post.item]?.name ?? post.item;
     const flag = oaksAideFlag(post.item);
-    const fill = (k, fallback, num) => fillAideText(line(k, fallback), { num, item: itemName });
+    const fill2 = (k, fallback, num) => fillAideText(line(k, fallback), { num, item: itemName });
     if (this.save.flags?.[flag]) {
-      this.showText(fill(post.repeatText, `I gave you the
+      this.showText(fill2(post.repeatText, `I gave you the
 ${itemName}!`), onDone);
       return;
     }
-    this.showChoice(fill("_OaksAideHiText", `Hi! Remember me?
+    this.showChoice(fill2("_OaksAideHiText", `Hi! Remember me?
 I'm PROF.OAK's
 AIDE!`, post.threshold), (yes) => {
       if (!yes) {
-        this.showText(fill("_OaksAideComeBackText", "Oh. I see.", post.threshold), onDone);
+        this.showText(fill2("_OaksAideComeBackText", "Oh. I see.", post.threshold), onDone);
         return;
       }
       const owned = countOwned(this.save);
       if (owned < post.threshold) {
-        this.showText(fill("_OaksAideUhOhText", `Let's see...
+        this.showText(fill2("_OaksAideUhOhText", `Let's see...
 Uh-oh!`, owned), onDone);
         return;
       }
       if (!add(this.save, post.item, 1, this.data)) {
-        this.showText(fill("_OaksAideNoRoomText", `Oh! You have no
+        this.showText(fill2("_OaksAideNoRoomText", `Oh! You have no
 room for it.`), onDone);
         return;
       }
       this.save.flags[flag] = true;
       this.audio.playSfx("Get_Key_Item");
-      this.showText(fill("_OaksAideHereYouGoText", `Great!
+      this.showText(fill2("_OaksAideHereYouGoText", `Great!
 Here you go!`, owned), () => {
-        this.showText(fill("_OaksAideGotItemText", `{PLAYER} got the
+        this.showText(fill2("_OaksAideGotItemText", `{PLAYER} got the
 ${itemName}!`), onDone);
       });
     });
@@ -20655,19 +22960,19 @@ ${why}`);
     this.push(new PcState(this, onDone));
   }
   pc() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "pc" ? top.view() : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "pc" ? top2.view() : null;
   }
   pcCursor() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "pc" ? top.menuCursor() : 0;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "pc" ? top2.menuCursor() : 0;
   }
   playSfx(name) {
     this.audio.playSfx(name);
   }
   bikeShop() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "bikeshop" ? top.view() : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "bikeshop" ? top2.view() : null;
   }
   openBikeShop(onDone) {
     const t = this.data.text ?? {};
@@ -20893,10 +23198,10 @@ allowed here.`));
   }
   openNameRater(onDone) {
     const t = this.data.text ?? {};
-    const fill = (k, fallback, name = "") => (t[k] ?? fallback).replace(/\{RAM:wNameBuffer\}/g, name).replace(/\{RAM:wBuffer\}/g, name);
-    const bye = () => this.showText(fill("_NameRatersHouseNameRaterComeAnyTimeYouLikeText", `Fine! Come any
+    const fill2 = (k, fallback, name = "") => (t[k] ?? fallback).replace(/\{RAM:wNameBuffer\}/g, name).replace(/\{RAM:wBuffer\}/g, name);
+    const bye = () => this.showText(fill2("_NameRatersHouseNameRaterComeAnyTimeYouLikeText", `Fine! Come any
 time you like!`), onDone);
-    this.showChoice(fill("_NameRatersHouseNameRaterWantMeToRateText", `Hello, hello!
+    this.showChoice(fill2("_NameRatersHouseNameRaterWantMeToRateText", `Hello, hello!
 I am the official
 NAME RATER!\fWant me to rate
 the nicknames of
@@ -20905,7 +23210,7 @@ your POKéMON?`), (yes) => {
         bye();
         return;
       }
-      this.showText(fill("_NameRatersHouseNameRaterWhichPokemonText", `Which POKéMON
+      this.showText(fill2("_NameRatersHouseNameRaterWhichPokemonText", `Which POKéMON
 should I look at?`), () => {
         this.pickPartyMon((index) => {
           const mon = this.save.party[index];
@@ -20917,13 +23222,13 @@ should I look at?`), () => {
           const species = def?.name ?? mon.species;
           const cur = mon.nickname ?? species;
           if (mon.traded === true) {
-            this.showText(fill("_NameRatersHouseNameRaterATrulyImpeccableNameText", `{RAM:wNameBuffer}, is it?
+            this.showText(fill2("_NameRatersHouseNameRaterATrulyImpeccableNameText", `{RAM:wNameBuffer}, is it?
 That is a truly
 impeccable name!\fTake good care of
 {RAM:wNameBuffer}!`, cur), onDone);
             return;
           }
-          this.showChoice(fill("_NameRatersHouseNameRaterGiveItANiceNameText", `{RAM:wNameBuffer}, is it?
+          this.showChoice(fill2("_NameRatersHouseNameRaterGiveItANiceNameText", `{RAM:wNameBuffer}, is it?
 That is a decent
 nickname!\fBut, would you
 like me to give
@@ -20932,11 +23237,11 @@ it a nicer name?\fHow about it?`, cur), (rename) => {
               bye();
               return;
             }
-            this.showText(fill("_NameRatersHouseNameRaterWhatShouldWeNameItText", `Fine! What should
+            this.showText(fill2("_NameRatersHouseNameRaterWhatShouldWeNameItText", `Fine! What should
 we name it?`), () => {
               this.askNickname(species, (name) => {
                 mon.nickname = name ?? undefined;
-                this.showText(fill("_NameRatersHouseNameRaterPokemonHasBeenRenamedText", `OK! This POKéMON
+                this.showText(fill2("_NameRatersHouseNameRaterPokemonHasBeenRenamedText", `OK! This POKéMON
 has been renamed
 {RAM:wBuffer}!\fThat's a better
 name than before!`, mon.nickname ?? species), onDone);
@@ -21006,14 +23311,14 @@ a while.`), onDone);
     const t = this.data.text ?? {};
     const line = (k, fallback) => t[k] ?? fallback;
     const mon = dc.mon;
-    const monName2 = mon.nickname ?? this.data.pokemon[mon.species]?.name ?? mon.species;
+    const monName3 = mon.nickname ?? this.data.pokemon[mon.species]?.name ?? mon.species;
     const cap = this.data.constants?.levelCap ?? 100;
     const quote2 = daycareQuote(this.data, dc, cap);
     mon.exp = quote2.exp;
     dc.steps = 0;
     const subs = {
-      wNameBuffer: monName2,
-      wDayCareMonName: monName2,
+      wNameBuffer: monName3,
+      wDayCareMonName: monName3,
       wDayCareNumLevelsGrown: quote2.levelsGrown,
       wDayCareTotalCost: quote2.fee
     };
@@ -21055,8 +23360,8 @@ your POKéMON!`), () => {
     this.push(new SlotMachineState(this, this.battleRng, lucky));
   }
   slots() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "slots" ? top.view() : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "slots" ? top2.view() : null;
   }
   defaultNames() {
     const p = this.data.field?.presetNames;
@@ -21075,8 +23380,8 @@ your POKéMON!`), () => {
     this.push(new PrizeState(this, prizes, onDone));
   }
   prizes() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "prizes" ? top.view() : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "prizes" ? top2.view() : null;
   }
   givePrizeMon(species, level) {
     if (this.save.party.length >= 6)
@@ -21155,8 +23460,9 @@ the game!`, SAVE_DONE_HOLD, {
       });
     });
   }
-  gearView = "party";
+  gearView = "home";
   gearMapPick = null;
+  gearUi = {};
   setGearView(v) {
     this.gearView = v;
     if (v !== "map")
@@ -21195,15 +23501,15 @@ ${why.slice(0, 24)}` : ""}`);
     }
   }
   optionsMenu() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "options" ? top.view() : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "options" ? top2.view() : null;
   }
   openDevMenu() {
     this.push(new DevMenuState(this, (act) => {
       if (act === "warp") {
         const ow = this.overworld;
-        const here = String(ow.mapId ?? ow.map?.id ?? "");
-        this.push(new WarpPickerState(this, here, (mapId) => {
+        const here2 = String(ow.mapId ?? ow.map?.id ?? "");
+        this.push(new WarpPickerState(this, here2, (mapId) => {
           this.closeToOverworld();
           const def = this.data.maps?.[mapId];
           const w = (def?.warps ?? [])[0];
@@ -21280,20 +23586,20 @@ to level ${mon.level}!`, () => {
     });
   }
   bag() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "bag" ? top.view() : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "bag" ? top2.view() : null;
   }
   shop() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "shop" ? top.view() : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "shop" ? top2.view() : null;
   }
   box() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "box" ? top.view() : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "box" ? top2.view() : null;
   }
   party() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "party" ? top.view() : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "party" ? top2.view() : null;
   }
   linkCarrier = null;
   linkTransport() {
@@ -21561,49 +23867,49 @@ trade {RAM:wNameBuffer}`, subs, () => {
     this.push(new DiplomaState(this, onDone));
   }
   tradeAnim() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "tradeanim" ? top.view?.() ?? null : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "tradeanim" ? top2.view?.() ?? null : null;
   }
   tradeScreen() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "tradescreen" ? top.view?.() ?? null : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "tradescreen" ? top2.view?.() ?? null : null;
   }
   diplomaScreen() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "diploma" ? top.view?.() ?? null : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "diploma" ? top2.view?.() ?? null : null;
   }
   hallOfFameScreen() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "halloffame" ? top.view() : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "halloffame" ? top2.view() : null;
   }
   creditsScreen() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "credits" ? top.view() : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "credits" ? top2.view() : null;
   }
   pokedexScreen() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "pokedex" ? top.view() : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "pokedex" ? top2.view() : null;
   }
   summary() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "summary" ? top.view() : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "summary" ? top2.view() : null;
   }
   startMenu() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "startmenu" ? top.view() : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "startmenu" ? top2.view() : null;
   }
   trainerCard() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "trainercard" ? top.view() : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "trainercard" ? top2.view() : null;
   }
   devMenu() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "devmenu" ? top.view() : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "devmenu" ? top2.view() : null;
   }
-  openFlyPicker(monName2, onDone) {
+  openFlyPicker(monName3, onDone) {
     const t = this.data.text ?? {};
-    const here = this.overworld.map?.def;
-    if (here && !isOutside(here)) {
+    const here2 = this.overworld.map?.def;
+    if (here2 && !isOutside(here2)) {
       this.showText(t._CannotFlyHereText ?? "You cannot FLY here.", onDone);
       return;
     }
@@ -21628,28 +23934,28 @@ here.`, onDone);
     }, onDone));
   }
   floorPicker() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "floorpicker" ? top.view() : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "floorpicker" ? top2.view() : null;
   }
   flyPicker() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "flypicker" ? top.view() : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "flypicker" ? top2.view() : null;
   }
   warpPicker() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "warppicker" ? top.view() : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "warppicker" ? top2.view() : null;
   }
   moveForget() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "moveforget" ? top.view() : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "moveforget" ? top2.view() : null;
   }
   title() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "title" ? top.view() : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "title" ? top2.view() : null;
   }
   intro() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "intro" ? top.view() : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "intro" ? top2.view() : null;
   }
   showCaughtDexEntry(species, onDone) {
     const name = this.data.pokemon[species]?.name ?? species;
@@ -21708,12 +24014,12 @@ to {RAM:wNameBuffer}?`).replace(/\{RAM:wNameBuffer\}/g, defaultName).replace(/\{
     this.push(st);
   }
   naming() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "naming" ? top : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "naming" ? top2 : null;
   }
   uiChoice() {
-    const top = this.stack[this.stack.length - 1];
-    return top?.kind === "choice" ? top : null;
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "choice" ? top2 : null;
   }
   battleView() {
     for (let i = this.stack.length - 1;i >= 0; i--) {
@@ -21731,8 +24037,8 @@ var native = globalThis.voxel;
 var STICK_RANGE = 156;
 
 class QuickJsHost {
-  saveWrite(text) {
-    return native.saveWrite(text);
+  saveWrite(text2) {
+    return native.saveWrite(text2);
   }
   viewer() {
     native.viewer?.();
@@ -21798,11 +24104,11 @@ class QuickJsHost {
   emote(slot, kind) {
     native.emote(slot, kind);
   }
-  uiTile(x, y, tile) {
-    native.uiTile(x, y, tile);
+  uiTile(x, y, tile2) {
+    native.uiTile(x, y, tile2);
   }
-  uiFill(x, y, w, h, tile) {
-    native.uiFill(x, y, w, h, tile);
+  uiFill(x, y, w, h, tile2) {
+    native.uiFill(x, y, w, h, tile2);
   }
   uiText(x, y, str) {
     native.uiText(x, y, str);
@@ -21813,11 +24119,11 @@ class QuickJsHost {
   uiClear() {
     native.uiClear();
   }
-  uiTileBottom(x, y, tile) {
-    native.uiTileBottom(x, y, tile);
+  uiTileBottom(x, y, tile2) {
+    native.uiTileBottom(x, y, tile2);
   }
-  uiFillBottom(x, y, w, h, tile) {
-    native.uiFillBottom(x, y, w, h, tile);
+  uiFillBottom(x, y, w, h, tile2) {
+    native.uiFillBottom(x, y, w, h, tile2);
   }
   uiClearBottom() {
     native.uiClearBottom();
@@ -21825,8 +24131,14 @@ class QuickJsHost {
   uiSpriteBottom(page, x, y, w, h) {
     native.uiSpriteBottom(page, x, y, w, h);
   }
-  animSprite(page, tile, x, y, flags) {
-    native.animSprite(page, tile, x, y, flags);
+  uiSpriteRectBottom(page, x, y, w, h, sx2, sy2, sw2, sh, flags = 0) {
+    native.uiSpriteRectBottom?.(page, x, y, w, h, sx2 | sy2 << 16, sw2 | sh << 16, flags);
+  }
+  uiRectBottom(x, y, w, h, shade) {
+    native.uiRectBottom?.(x, y, w, h, shade);
+  }
+  animSprite(page, tile2, x, y, flags) {
+    native.animSprite(page, tile2, x, y, flags);
   }
   animClear() {
     native.animClear();
@@ -21905,6 +24217,8 @@ globalThis.frame = (buttons) => {
     gearTouchDown(game, tx, ty);
   } else if (!touching && prevTouch) {
     gearTouchUp(game);
+  } else if (touching) {
+    gearTouchMove(game, buttons >> 9 & 511, buttons >> 18 & 255);
   }
   prevTouch = touching;
   game.setCamTurns(buttons >> 24 & 3);

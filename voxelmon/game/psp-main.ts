@@ -16,7 +16,7 @@
 import { fromObject } from "./data.ts";
 import { VoxelmonGame } from "./game.ts";
 import type { VoxelHost } from "./host.ts";
-import { drawKantoGear, gearTouchDown, gearTouchUp } from "./ui/kantogear.ts";
+import { drawKantoGear, gearTouchDown, gearTouchMove, gearTouchUp } from "./ui/kantogear.ts";
 
 /** The story seed — voxelmon/tapes/story.tape is plotted against it
  * (tools/voxel.ts STORY_SEED). A save system picks its own seed later. */
@@ -343,7 +343,7 @@ if (nat.now && nat.perf) {
 }
 
 // Touch state is packed into the high bits of the button word by the 3DS host
-// (main.rs): bit 8 = touching, bits 9..17 = x, bits 18..25 = y. We act on the
+// (main.rs): bit 8 = touching, bits 9..16 = x/2, bits 17..23 = y/2. We act on the
 // two EDGES only (a held touch is one tap: the down edge aims, the up edge
 // fires), and hand game.tick just the low 8 physical-button bits so nothing
 // downstream sees the touch payload.

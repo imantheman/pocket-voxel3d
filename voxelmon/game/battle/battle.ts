@@ -352,6 +352,18 @@ export class WildBattle implements EffectBattle {
   anims: BattleAnim[] = [];
   current: QueueRow | null = null;
   statBoxMon: PartyMon | null = null;
+  /**
+   * The Kanto Gear's level-up box (the mod's level_up.lua): the stats before
+   * the EXP went in and after, for the bottom screen to show beside the
+   * stat window. The top screen's own window is untouched.
+   */
+  gearLevelUp: {
+    name: string;
+    from: number;
+    to: number;
+    before: Record<string, number>;
+    after: Record<string, number>;
+  } | null = null;
 
   // message machine state (startMessage :1021)
   private lines: MsgLine[] = [];
@@ -1800,6 +1812,8 @@ export class WildBattle implements EffectBattle {
       alive.push(this.player.mon);
     }
     const applyShare = (mon: PartyMon, split: number, announce: true | "expAll") => {
+      const beforeStats = { ...(mon.stats as unknown as Record<string, number>) };
+      const beforeLevel = mon.level;
       const [levels, gained] = expApply(
         this.data,
         mon,
@@ -1811,6 +1825,15 @@ export class WildBattle implements EffectBattle {
       );
       if (levels.length > 0) this.leveledUp.add(mon);
       const name = mon.nickname ?? this.data.pokemon[mon.species].name;
+      if (levels.length > 0) {
+        this.gearLevelUp = {
+          name,
+          from: beforeLevel,
+          to: mon.level,
+          before: beforeStats,
+          after: { ...(mon.stats as unknown as Record<string, number>) },
+        };
+      }
       if (announce === "expAll") {
         this.sayNext(`${name} gained\nwith EXP.ALL,\v${gained} EXP. Points!`);
       } else if (mon.traded) {

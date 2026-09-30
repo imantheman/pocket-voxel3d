@@ -77,7 +77,11 @@ import {
 } from "../voxelmon/game/world/halloffame.ts";
 import { RecorderHost } from "../voxelmon/game/host.ts";
 import { Input } from "../voxelmon/game/input.ts";
-import { gearMapPoint, gearTabs, gearTouchDown, gearTouchUp } from "../voxelmon/game/ui/kantogear.ts";
+import { drawKantoGear, gearMapPoint, gearTabs, gearTouchDown, gearTouchMove, gearTouchUp } from "../voxelmon/game/ui/kantogear.ts";
+import {
+  countGearStep, gearSave, mapItems, mapTrainers, moveEffectLines, stampAreas, wildRows,
+} from "../voxelmon/game/ui/gear/model.ts";
+import { decodeInk, encodeInk, PAD_H, PAD_W } from "../voxelmon/game/ui/gear/apps/notes.ts";
 import {
   checkForMatch,
   evaluate,
@@ -2401,37 +2405,68 @@ describe("the town map", () => {
     expect(game.save.inventory.TOWN_MAP).toBe(1);
   });
 
-  test.skipIf(!hasGen)("the MAP tab appears only once the map is in the bag", () => {
+  /** One frame of the gear, into the game's own recorder host. */
+  function frame(game: VoxelmonGame): void {
+    drawKantoGear((game as unknown as { host: MenuHost }).host as never, game as never);
+  }
+
+  test.skipIf(!hasGen)("the MAP app appears only once the map is in the bag", () => {
     const game = withAtlas(makeMenuGame());
-    expect(gearTabs(game as never).map((t) => t.id)).toEqual(["party"]);
+    const ids = () => gearTabs(game as never).map((t) => t.id);
+    expect(ids()[0]).toBe("home");
+    expect(ids()).not.toContain("map");
     game.save.inventory.TOWN_MAP = 1;
-    expect(gearTabs(game as never).map((t) => t.id)).toEqual(["party", "map"]);
+    expect(ids()).toContain("map");
+    // and the POKéDEX app waits for Oak's POKéDEX, as the START menu does
+    expect(ids()).not.toContain("pokedex");
+    game.save.flags.EVENT_GOT_POKEDEX = true;
+    expect(ids()).toContain("pokedex");
   });
 
-  test.skipIf(!hasGen)("a pak with no town map pages offers no MAP tab", () => {
+  test.skipIf(!hasGen)("a pak with no town map pages offers no MAP app", () => {
     const game = makeMenuGame();
     game.save.inventory.TOWN_MAP = 1;
     (game as { data: unknown }).data = { ...(game.data as object), atlas: { townMapPage: null } };
-    expect(gearTabs(game as never).map((t) => t.id)).toEqual(["party"]);
+    expect(gearTabs(game as never).map((t) => t.id)).not.toContain("map");
   });
 
-  test.skipIf(!hasGen)("L/R and the header arrows both step the view", () => {
+  test.skipIf(!hasGen)("it opens on HOME; L/R and the header arrows step the apps", () => {
     const game = withAtlas(makeMenuGame());
     game.save.inventory.TOWN_MAP = 1;
-    expect(game.gearView).toBe("party");
-
+    expect(game.gearView).toBe("home");
     game.cycleGearView(1); // the R shoulder
+    expect(game.gearView).toBe("party");
+    game.cycleGearView(1);
     expect(game.gearView).toBe("map");
-    game.cycleGearView(1); // wraps
+    game.cycleGearView(-1);
     expect(game.gearView).toBe("party");
     game.cycleGearView(-1);
-    expect(game.gearView).toBe("map");
+    game.cycleGearView(-1); // wraps past HOME to the last app
+    expect(game.gearView).toBe("options");
 
-    // the header's ▶ does the same. "◀ PARTY ▶" is 9 wide, centred in the 12
-    // columns left of the clock, so the right arrow sits at column 9.
+    // "◀ PARTY ▶" is 9 wide, centred in the 12 columns left of the clock:
+    // the right arrow is column 9. A tap fires as the finger lifts.
     game.setGearView("party");
+    frame(game);
     gearTouchDown(game as never, 9 * 16 + 8, 4);
+    expect(game.gearView).toBe("party");
+    gearTouchUp(game as never);
     expect(game.gearView).toBe("map");
+    // and the title goes HOME
+    frame(game);
+    gearTouchDown(game as never, 5 * 16, 4);
+    gearTouchUp(game as never);
+    expect(game.gearView).toBe("home");
+  });
+
+  test.skipIf(!hasGen)("HOME's buttons open their apps", () => {
+    const game = withAtlas(makeMenuGame());
+    frame(game);
+    // the second pill of the first row (7..12, row 9) is the MAP when there
+    // is one; without the map it is EXPLORER
+    gearTouchDown(game as never, 8 * 16, 9 * (240 / 18) + 4);
+    gearTouchUp(game as never);
+    expect(game.gearView).toBe("explorer");
   });
 
   test.skipIf(!hasGen)("tapping the map picks a place; tapping the sea clears it", () => {
@@ -2439,7 +2474,7 @@ describe("the town map", () => {
     game.save.inventory.TOWN_MAP = 1;
     game.overworld.setMap("PALLET_TOWN", 5, 6, "down");
     game.setGearView("map");
-    // with nothing picked the marker follows the player
+    frame(game);
     expect(game.gearMapPick).toBeNull();
 
     const locs = (romData!.field as any).townMap.locations;
@@ -2447,10 +2482,142 @@ describe("the town map", () => {
     gearTouchDown(game as never, at.x, at.y);
     expect(game.gearMapPick).toBe("CELADON_CITY");
 
-    // and a far-off corner of the sea is no place at all
     const sea = gearMapPoint({ name: "", x: 15, y: 0 });
     gearTouchDown(game as never, sea.x, sea.y);
     expect(game.gearMapPick).toBeNull();
+  });
+});
+
+describe("the Kanto Gear's apps", () => {
+  test.skipIf(!hasGen)("every step walked counts, and the trip resets on its own", () => {
+    const save: any = {};
+    for (let i = 0; i < 5; i++) countGearStep(save);
+    expect(gearSave(save).steps).toBe(5);
+    gearSave(save).trip = 0;
+    countGearStep(save);
+    expect(gearSave(save)).toMatchObject({ steps: 6, trip: 1 });
+    // it lives where the mod keeps its own
+    expect(save.modData.kanto_gear.steps).toBe(6);
+  });
+
+  test.skipIf(!hasGen)("wild odds are the ROM's slot chances, per species and method", () => {
+    const rows = wildRows(romData as never, "ROUTE_1");
+    const grass = rows.filter((r) => r.method === "GRASS");
+    expect(grass.map((r) => r.species).sort()).toEqual(["PIDGEY", "RATTATA"]);
+    // the ten slots add to 256/256; rounding each species keeps it near 100
+    const total = grass.reduce((n, r) => n + r.pct, 0);
+    expect(total).toBeGreaterThanOrEqual(99);
+    expect(total).toBeLessThanOrEqual(101);
+    const pidgey = grass.find((r) => r.species === "PIDGEY")!;
+    expect([pidgey.minLv, pidgey.maxLv]).toEqual([2, 5]);
+    // rods only once you own one
+    expect(wildRows(romData as never, "ROUTE_1").some((r) => r.method === "OLD ROD")).toBe(false);
+    expect(wildRows(romData as never, "ROUTE_1", { OLD_ROD: true }).some((r) => r.species === "MAGIKARP")).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("a map's trainers and items read the same flags the game writes", () => {
+    const save: any = { flags: {}, defeatedTrainers: {}, hiddenTaken: {} };
+    const t = mapTrainers(romData as never, save, "ROUTE_3");
+    expect(t.length).toBeGreaterThan(0);
+    expect(t.every((r) => !r.beaten)).toBe(true);
+    save.defeatedTrainers[`ROUTE_3_obj_${t[0]!.obj.index}`] = true;
+    expect(mapTrainers(romData as never, save, "ROUTE_3")[0]!.beaten).toBe(true);
+    const items = mapItems(romData as never, save, "ROUTE_2").filter((i) => !i.hidden);
+    expect(items.map((i) => i.item)).toContain("MOON_STONE");
+  });
+
+  test.skipIf(!hasGen)("an area's stamp needs every trainer and item there", () => {
+    const save: any = { flags: {}, defeatedTrainers: {}, hiddenTaken: {}, visited: { ROUTE_22: true } };
+    const areas = stampAreas(romData as never, save, false);
+    expect(areas.length).toBeGreaterThan(10);
+    expect(areas.find((a) => a.name === "ROUTE 3")!.trainers).toBeGreaterThan(0);
+  });
+
+  test("move effects read in words, odds as fractions the font can print", () => {
+    expect(moveEffectLines("THUNDERBOLT", { effect: "PARALYZE_SIDE_EFFECT1" })).toEqual(["1/10 CHANCE", "TO PARALYZE TARGET"]);
+    expect(moveEffectLines("SWORDS_DANCE", { effect: "ATTACK_UP2_EFFECT" })).toEqual(["RAISES USER ATTACK", "BY TWO STAGES"]);
+    expect(moveEffectLines("SLASH", { effect: "NO_ADDITIONAL_EFFECT" })).toEqual(["HIGH CRITICAL-HIT", "RATE"]);
+    expect(moveEffectLines("TACKLE", { effect: "NO_ADDITIONAL_EFFECT" })).toEqual(["DEALS DAMAGE"]);
+  });
+
+  test("a sketch survives the save: the run-length ink decodes to itself", () => {
+    const pad = new Uint8Array(PAD_W * PAD_H);
+    pad[5] = 3; pad[6] = 3; pad[900] = 2; pad[PAD_W * PAD_H - 1] = 3;
+    const back = decodeInk(encodeInk(pad));
+    expect([...back]).toEqual([...pad]);
+    expect(encodeInk(new Uint8Array(PAD_W * PAD_H)).length).toBeLessThan(10);
+  });
+
+  test.skipIf(!hasGen)("the sketch pad follows the stylus between the edges", () => {
+    const game = makeMenuGame();
+    const host = (game as unknown as { host: MenuHost }).host as never;
+    gearSave(game.save as never).notes.push({ kind: "sketch", title: "SKETCH", lines: [] });
+    game.setGearView("notes");
+    (game as any).gearUi.notes = { open: 0 };
+    drawKantoGear(host, game as never);
+    gearTouchDown(game as never, 40, 60);
+    gearTouchMove(game as never, 120, 60);
+    gearTouchUp(game as never);
+    const ink = decodeInk(gearSave(game.save as never).notes[0]!.ink);
+    // a line across y=60 from x=40 to 120: 4px cells 10..30 on its row
+    const row = Math.floor((60 - 16) / 4);
+    expect(ink[row * PAD_W + 10]).toBe(3);
+    expect(ink[row * PAD_W + 20]).toBe(3);
+    expect(ink[row * PAD_W + 30]).toBe(3);
+  });
+
+  test.skipIf(!hasGen)("STORE removes an optional app from HOME and the L/R cycle", () => {
+    const game = makeMenuGame();
+    expect(gearTabs(game as never).map((t) => t.id)).toContain("notes");
+    gearSave(game.save as never).removed.notes = true;
+    expect(gearTabs(game as never).map((t) => t.id)).not.toContain("notes");
+    // the fixed apps cannot be removed
+    gearSave(game.save as never).removed.party = true;
+    expect(gearTabs(game as never).map((t) => t.id)).toContain("party");
+  });
+
+  test.skipIf(!hasGen)("a YES/NO on the top screen gets two buttons below", () => {
+    const game = makeMenuGame();
+    let answer: boolean | null = null;
+    game.showChoice("Well?", (yes: boolean) => { answer = yes; });
+    for (let t = 0; t < 200 && game.stackKinds().at(-1) !== "choice"; t++) game.tick(t % 2 ? VOX_BTN.a : 0);
+    expect(game.stackKinds().at(-1)).toBe("choice");
+    drawKantoGear((game as unknown as { host: MenuHost }).host as never, game as never);
+    // NO is the pill on row 10
+    gearTouchDown(game as never, 160, 10 * (240 / 18) + 5);
+    gearTouchUp(game as never);
+    for (let t = 0; t < 40 && answer === null; t++) game.tick(0);
+    expect(answer).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("the START menu's rows are buttons below", () => {
+    const game = makeMenuGame();
+    game.save.party.push(newMon(romData!, "PIDGEY", 5, game.battleRng));
+    tap(game, VOX_BTN.start);
+    expect(game.stackKinds().at(-1)).toBe("startmenu");
+    drawKantoGear((game as unknown as { host: MenuHost }).host as never, game as never);
+    const sm = game.startMenu() as { entries: string[] };
+    const i = sm.entries.indexOf("POKéMON");
+    gearTouchDown(game as never, 100, (2 + i * 2) * (240 / 18) + 5);
+    gearTouchUp(game as never);
+    game.tick(0);
+    expect(game.stackKinds().at(-1)).toBe("party");
+  });
+
+  test.skipIf(!hasGen)("a battle level-up keeps what each stat was, for the box below", () => {
+    const game = makeMenuGame();
+    game.save.party.push(newMon(romData!, "SQUIRTLE", 5, game.battleRng));
+    game.overworld.setMap("ROUTE_1", 5, 5, "down");
+    game.pushStubBattle("PIDGEY", 40);
+    const b = (game.battleView() as any).battle;
+    const mon = game.save.party[0]!;
+    const before = mon.stats.attack;
+    b.awardExp();
+    expect(b.gearLevelUp).not.toBeNull();
+    expect(b.gearLevelUp.from).toBe(5);
+    expect(b.gearLevelUp.to).toBe(mon.level);
+    expect(b.gearLevelUp.before.attack).toBe(before);
+    expect(b.gearLevelUp.after.attack).toBe(mon.stats.attack);
   });
 });
 

@@ -190,6 +190,23 @@ export class BagState implements GameState {
     }
   }
 
+  /** The Kanto Gear's touch mirror, while the list is up (not the USE/TOSS
+   * submenu or a quantity). */
+  gearMenu(): { title: string; items: string[]; index: number; select(i: number): void } | null {
+    if (this.mode !== "list") return null;
+    const items = [...this.ids().map((id) => this.game.data.items?.[id]?.name ?? id), "CANCEL"];
+    return {
+      title: "ITEM",
+      items,
+      index: this.index,
+      select: (i: number) => {
+        this.index = Math.max(0, Math.min(items.length - 1, i));
+        if (this.index < this.top) this.top = this.index;
+        if (this.index >= this.top + ROWS) this.top = this.index - ROWS + 1;
+      },
+    };
+  }
+
   view(): BagView {
     const save = this.game.save;
     const items = this.ids().map((id) => ({

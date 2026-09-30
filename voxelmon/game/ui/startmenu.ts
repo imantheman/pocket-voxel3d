@@ -75,6 +75,16 @@ export class StartMenuState implements GameState {
     }
   }
 
+  /** The Kanto Gear's touch mirror: these rows, and where the cursor is. */
+  gearMenu(): { title: string; items: string[]; index: number; select(i: number): void } {
+    return {
+      title: "MENU",
+      items: this.entries,
+      index: this.index,
+      select: (i: number) => { this.index = Math.max(0, Math.min(this.entries.length - 1, i)); },
+    };
+  }
+
   view(): StartMenuView {
     const s = this.game.save?.safari;
     return {

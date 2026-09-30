@@ -60,6 +60,7 @@ import {
 import { pcTileAt } from "./pctiles.ts";
 import { ScriptRunner, type ScriptRow, type ScriptWorld } from "./script.ts";
 import { MAP_SCRIPTS, type MapScript } from "./mapscripts.ts";
+import { countGearStep } from "../ui/gear/model.ts";
 import {
   destination,
   onArrive,
@@ -1970,6 +1971,8 @@ export class Overworld implements ScriptWorld {
   }
 
   onStepComplete(): void {
+    // the Kanto Gear's step counter (STEPS), every step walked or ridden
+    countGearStep(this.save as never);
     // safari_game.asm runs BEFORE the land triggers and the warp check: when
     // the timer runs out the PA takes the step over entirely.
     if (this.safariStep()) return;

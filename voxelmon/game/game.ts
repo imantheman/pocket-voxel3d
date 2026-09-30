@@ -76,7 +76,7 @@ import {
 } from "./world/oaksaide.ts";
 import { prizeWindows } from "./world/gamecorner.ts";
 import { gameVersion } from "./data.ts";
-import { gearViewStep } from "./ui/kantogear.ts";
+import { gearViewStep, type GearViewId } from "./ui/kantogear.ts";
 import { count as badgeCount } from "./rules/badges.ts";
 
 /** save.asm:164-181 — DelayFrames 120 over "Now saving...", then 30. */
@@ -2031,10 +2031,12 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   // Which companion view the bottom screen shows, and where its town-map
   // marker sits. Both are presentation state, not save state: a reload
   // opens on PARTY with the marker back on the player.
-  gearView: "party" | "map" = "party";
+  gearView: GearViewId = "home";
   gearMapPick: string | null = null;
+  /** Each gear app's own screen state (page, selection, scroll), by app. */
+  gearUi: Record<string, Record<string, unknown>> = {};
 
-  setGearView(v: "party" | "map"): void {
+  setGearView(v: GearViewId): void {
     this.gearView = v;
     if (v !== "map") this.gearMapPick = null;
   }

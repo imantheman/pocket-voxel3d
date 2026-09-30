@@ -138,6 +138,13 @@ export class NamingState implements GameState {
     }
   }
 
+  /** The Kanto Gear's keyboard: aim the cursor at a cell (A commits it). */
+  touchCell(row: number, col: number): void {
+    this.row = row;
+    this.col = col;
+    this.clamp();
+  }
+
   view(): NamingView {
     return {
       title: this.title,
