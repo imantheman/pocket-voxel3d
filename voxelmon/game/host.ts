@@ -74,6 +74,14 @@ export interface VoxelHost {
    * native 320x240 pixel space. Append-only like the tile grid — up to 8
    * per frame, reset by uiClearBottom. */
   uiSpriteBottom(page: number, x: number, y: number, w: number, h: number): void;
+  /** Part of a page (sx,sy,sw,sh in page px) into a bottom-screen rect;
+   * flags bit 0 mirrors it. Optional: an older host draws nothing. */
+  uiSpriteRectBottom?(
+    page: number, x: number, y: number, w: number, h: number,
+    sx: number, sy: number, sw: number, sh: number, flags?: number,
+  ): void;
+  /** A flat bottom-screen rect under the grid, shade 0 light .. 3 darkest. */
+  uiRectBottom?(x: number, y: number, w: number, h: number, shade: number): void;
   /**
    * One 8x8 move-animation tile for this frame, in GAME BOY pixels
    * (battle/moveanim.ts converts OAM space). `flags` bit 0 is x-flip, bit
@@ -260,6 +268,15 @@ export class RecorderHost implements VoxelHost {
   }
   uiSpriteBottom(page: number, x: number, y: number, w: number, h: number): void {
     this.op(VOX_OP.uiSpriteBottom, page, x, y, w, h);
+  }
+  uiSpriteRectBottom(
+    page: number, x: number, y: number, w: number, h: number,
+    sx: number, sy: number, sw: number, sh: number, flags = 0,
+  ): void {
+    this.op(VOX_OP.uiSpriteRectBottom, page, x, y, w, h, sx | (sy << 16), sw | (sh << 16), flags);
+  }
+  uiRectBottom(x: number, y: number, w: number, h: number, shade: number): void {
+    this.op(VOX_OP.uiRectBottom, x, y, w, h, shade);
   }
 
   animSprite(page: number, tile: number, x: number, y: number, flags: number): void {

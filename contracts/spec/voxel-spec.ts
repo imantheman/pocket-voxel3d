@@ -735,6 +735,21 @@ export const VOX_OP = {
    * off the scene when it turns the stick into degrees.
    */
   camSpeed: 83,
+  /**
+   * Kanto Gear: part of an atlas page on the bottom screen -- one frame of a
+   * sprite sheet (a trainer, the item ball) or a UI tile blown up as an icon.
+   * Shares uiSpriteBottom's per-frame list and draw order (over the grid).
+   *   args: page, x, y, w, h (bottom-screen px), src = sx | sy << 16,
+   *         size = sw | sh << 16 (page px), flags (bit 0 = mirror x)
+   */
+  uiSpriteRectBottom: 84,
+  /**
+   * Kanto Gear: a flat rectangle on the bottom screen, under the tile grid
+   * -- the area map's cells and the notes pad's ink.
+   *   args: x, y, w, h (bottom-screen px), shade (0 light .. 3 darkest)
+   * Cleared by uiClearBottom with everything else.
+   */
+  uiRectBottom: 85,
 } as const;
 
 /** Emote-page frame of the HM Cut tree sprite (after the 3 GB bubbles). */

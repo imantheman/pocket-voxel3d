@@ -4754,6 +4754,24 @@ if page_tex.len() < pak_static.atlases.len() {
                 ui_b_bar_verts.push(bar(bx0, by0)); ui_b_bar_verts.push(bar(bx1, by0)); ui_b_bar_verts.push(bar(bx1, by1));
                 ui_b_bar_verts.push(bar(bx0, by0)); ui_b_bar_verts.push(bar(bx1, by1)); ui_b_bar_verts.push(bar(bx0, by1));
             }
+            // uiRectBottom: flat quads on the same REPLACE path as the bar,
+            // so they sit under every glyph. The four DMG greens.
+            {
+                const SHADES: [[u8; 4]; 4] = [
+                    [155, 188, 15, 255], // 0x9BBC0F
+                    [139, 172, 15, 255], // 0x8BAC0F
+                    [48, 98, 48, 255],   // 0x306230
+                    [15, 56, 15, 255],   // 0x0F380F
+                ];
+                for r in sc.ui_b_rects.iter().take((sc.ui_b_rect_n as usize).min(pocketvoxel_core::scene::UI_B_RECTS_MAX)) {
+                    if r.w <= 0 || r.h <= 0 { continue; }
+                    let c = SHADES[(r.shade as usize).min(3)];
+                    let (x0, y0, x1, y1) = (r.x, r.y, r.x + r.w, r.y + r.h);
+                    let f = |px: i16, py: i16| Vertex { pos: [px, py, 0, 0], color: c, uv: [0.0, 0.0] };
+                    ui_b_bar_verts.push(f(x0, y0)); ui_b_bar_verts.push(f(x1, y0)); ui_b_bar_verts.push(f(x1, y1));
+                    ui_b_bar_verts.push(f(x0, y0)); ui_b_bar_verts.push(f(x1, y1)); ui_b_bar_verts.push(f(x0, y1));
+                }
+            }
             for cy in 0..UI_ROWS {
                 for cx in 0..UI_COLS {
                     let raw = sc.ui_b[cy * UI_COLS + cx];
@@ -4803,7 +4821,15 @@ if page_tex.len() < pak_static.atlases.len() {
                 if spr.w <= 0 || spr.h <= 0 { continue; }
                 let spg = &pak_static.atlases[spr.page as usize];
                 let (spw, sph) = (po2(spg.w as u32) as f32, po2(spg.h as u32) as f32);
-                let (su1, sv1) = (spg.w as f32 / spw, spg.h as f32 / sph);
+                // A sub-rect (uiSpriteRectBottom) or the whole page. V is
+                // flipped like Item::ScreenPic: page row 0 is v = 1.
+                let (u_a, u_b, v_top, v_bot) = if spr.sw > 0 && spr.sh > 0 {
+                    (spr.sx as f32 / spw, (spr.sx + spr.sw) as f32 / spw,
+                     1.0 - spr.sy as f32 / sph, 1.0 - (spr.sy + spr.sh) as f32 / sph)
+                } else {
+                    (0.0, spg.w as f32 / spw, 1.0, 1.0 - spg.h as f32 / sph)
+                };
+                let (u_l, u_r) = if spr.flags & 1 != 0 { (u_b, u_a) } else { (u_a, u_b) };
                 let (sx0, sy0) = (spr.x, spr.y);
                 let (sx1, sy1) = (spr.x + spr.w, spr.y + spr.h);
                 let sm = |px: i16, py: i16, u: f32, v: f32| Vertex {
@@ -4813,12 +4839,12 @@ if page_tex.len() < pak_static.atlases.len() {
                     None => { ui_b_sprite_groups.push((spr.page, Vec::new())); ui_b_sprite_groups.len() - 1 }
                 };
                 let gv = &mut ui_b_sprite_groups[gi].1;
-                gv.push(sm(sx0, sy0, 0.0, 1.0));
-                gv.push(sm(sx1, sy0, su1, 1.0));
-                gv.push(sm(sx1, sy1, su1, 1.0 - sv1));
-                gv.push(sm(sx0, sy0, 0.0, 1.0));
-                gv.push(sm(sx1, sy1, su1, 1.0 - sv1));
-                gv.push(sm(sx0, sy1, 0.0, 1.0 - sv1));
+                gv.push(sm(sx0, sy0, u_l, v_top));
+                gv.push(sm(sx1, sy0, u_r, v_top));
+                gv.push(sm(sx1, sy1, u_r, v_bot));
+                gv.push(sm(sx0, sy0, u_l, v_top));
+                gv.push(sm(sx1, sy1, u_r, v_bot));
+                gv.push(sm(sx0, sy1, u_l, v_bot));
             }
         }
         let ui_b_dim_buf: Option<buffer::Info> = if ui_b_dim_verts.is_empty() { None } else {

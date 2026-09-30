@@ -258,6 +258,9 @@ pub struct Scene {
     /// Sprites written so far this frame (`uiSpriteBottom` calls since the
     /// last `uiClearBottom`).
     pub ui_b_sprite_n: u8,
+    /// This frame's `uiRectBottom` quads; `uiClearBottom` resets the count.
+    pub ui_b_rects: [BottomRect; UI_B_RECTS_MAX],
+    pub ui_b_rect_n: u16,
     /// The last `uiText` run; drawn over the grid, capped by `ui_reveal`.
     pub ui_text: Option<UiText>,
     /// Glyphs of `ui_text` shown. `uiText` resets it to "all".
@@ -322,6 +325,24 @@ pub struct BottomSprite {
     pub y: i16,
     pub w: i16,
     pub h: i16,
+    /// Source rect in page px; `sw == 0` means the whole page.
+    pub sx: u16,
+    pub sy: u16,
+    pub sw: u16,
+    pub sh: u16,
+    /// Bit 0: mirror x.
+    pub flags: u8,
+}
+
+/// One `uiRectBottom`: a flat quad in bottom-screen px, drawn under the grid.
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+pub struct BottomRect {
+    pub x: i16,
+    pub y: i16,
+    pub w: i16,
+    pub h: i16,
+    /// 0 light .. 3 darkest, the four DMG greens.
+    pub shade: u8,
 }
 
 /// A rectangle of the UI grid the core may slide as a block (`uiPanel`).
@@ -364,8 +385,12 @@ pub struct AnimSprite {
 
 /// `uiSpriteBottom` calls per frame are append-only like the tile grid: the
 /// guest re-emits every sprite each frame and `uiClearBottom` resets the
-/// count. 8 covers the party grid's 6 mons plus headroom.
-pub const UI_B_SPRITES_MAX: usize = 8;
+/// count. The Kanto Gear's lists put a sprite on every row (trainers, the
+/// area map's markers), so 48.
+pub const UI_B_SPRITES_MAX: usize = 48;
+/// `uiRectBottom` calls per frame: the area map's cells and the notes pad's
+/// strokes, both drawn as rects.
+pub const UI_B_RECTS_MAX: usize = 768;
 
 impl Scene {
     pub fn new() -> Self {
@@ -399,6 +424,8 @@ impl Scene {
             anim_sprite_n: 0,
             ui_b_sprites: [BottomSprite::default(); UI_B_SPRITES_MAX],
             ui_b_sprite_n: 0,
+            ui_b_rects: [BottomRect::default(); UI_B_RECTS_MAX],
+            ui_b_rect_n: 0,
             ui_text: None,
             ui_reveal: u32::MAX,
             battle: Battle::default(),
@@ -714,6 +741,7 @@ impl Scene {
             op::UI_CLEAR_BOTTOM => {
                 self.ui_b = [0u16; UI_COLS * UI_ROWS];
                 self.ui_b_sprite_n = 0;
+                self.ui_b_rect_n = 0;
             }
             op::UI_SPRITE_BOTTOM => {
                 if args.len() >= 5 {
@@ -725,8 +753,45 @@ impl Scene {
                             y: a(2) as i16,
                             w: a(3) as i16,
                             h: a(4) as i16,
+                            ..BottomSprite::default()
                         };
                         self.ui_b_sprite_n = n as u8 + 1;
+                    }
+                }
+            }
+            op::UI_SPRITE_RECT_BOTTOM => {
+                if args.len() >= 7 {
+                    let n = self.ui_b_sprite_n as usize;
+                    if n < UI_B_SPRITES_MAX {
+                        let (src, size) = (a(5) as u32, a(6) as u32);
+                        self.ui_b_sprites[n] = BottomSprite {
+                            page: a(0) as u16,
+                            x: a(1) as i16,
+                            y: a(2) as i16,
+                            w: a(3) as i16,
+                            h: a(4) as i16,
+                            sx: (src & 0xffff) as u16,
+                            sy: (src >> 16) as u16,
+                            sw: (size & 0xffff) as u16,
+                            sh: (size >> 16) as u16,
+                            flags: if args.len() >= 8 { a(7) as u8 } else { 0 },
+                        };
+                        self.ui_b_sprite_n = n as u8 + 1;
+                    }
+                }
+            }
+            op::UI_RECT_BOTTOM => {
+                if args.len() >= 5 {
+                    let n = self.ui_b_rect_n as usize;
+                    if n < UI_B_RECTS_MAX {
+                        self.ui_b_rects[n] = BottomRect {
+                            x: a(0) as i16,
+                            y: a(1) as i16,
+                            w: a(2) as i16,
+                            h: a(3) as i16,
+                            shade: (a(4) as u8).min(3),
+                        };
+                        self.ui_b_rect_n = n as u16 + 1;
                     }
                 }
             }

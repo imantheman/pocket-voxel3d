@@ -215,6 +215,9 @@ int qjs_register_voxel(JSContext *ctx) {
     /* Battle HUD panel rects the core slides — op 82. */
     add_num(ctx, o, "uiPanel",        82, 5);
     add_num(ctx, o, "camSpeed",       83, 1);
+    /* Kanto Gear: sprite sub-rect and flat rect on the bottom screen. */
+    add_num(ctx, o, "uiSpriteRectBottom", 84, 8);
+    add_num(ctx, o, "uiRectBottom",       85, 5);
     add_num(ctx, o, "arena",    70, 5);
     add_num(ctx, o, "card",     71, 7);
     add_num(ctx, o, "cardHide", 72, 1);

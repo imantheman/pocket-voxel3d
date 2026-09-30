@@ -63,6 +63,10 @@ interface VoxelNative {
   uiFillBottom(x: number, y: number, w: number, h: number, tile: number): void;
   uiClearBottom(): void;
   uiSpriteBottom(page: number, x: number, y: number, w: number, h: number): void;
+  uiSpriteRectBottom?(
+    page: number, x: number, y: number, w: number, h: number, src: number, size: number, flags: number,
+  ): void;
+  uiRectBottom?(x: number, y: number, w: number, h: number, shade: number): void;
   animSprite(page: number, tile: number, x: number, y: number, flags: number): void;
   animClear(): void;
   uiPanel(side: number, x: number, y: number, w: number, h: number): void;
@@ -225,6 +229,15 @@ class QuickJsHost implements VoxelHost {
   }
   uiSpriteBottom(page: number, x: number, y: number, w: number, h: number): void {
     native.uiSpriteBottom(page, x, y, w, h);
+  }
+  uiSpriteRectBottom(
+    page: number, x: number, y: number, w: number, h: number,
+    sx: number, sy: number, sw: number, sh: number, flags = 0,
+  ): void {
+    native.uiSpriteRectBottom?.(page, x, y, w, h, sx | (sy << 16), sw | (sh << 16), flags);
+  }
+  uiRectBottom(x: number, y: number, w: number, h: number, shade: number): void {
+    native.uiRectBottom?.(x, y, w, h, shade);
   }
   animSprite(page: number, tile: number, x: number, y: number, flags: number): void {
     native.animSprite(page, tile, x, y, flags);
