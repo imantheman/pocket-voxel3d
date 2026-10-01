@@ -93,7 +93,7 @@ export interface VoxelNative {
   cry?(bank: number, addr: number, engine: number, pitch: number, length: number): void;
   pikaPcm?(clip: number): void;
   gbShow?(on: number): void;
-  gbTiles?(dest: number, page: number, first: number, count: number): void;
+  gbTiles?(dest: number, page: number, first: number, count: number, wide?: number, stride?: number, map?: number): void;
   gbReset?(): void;
   gbMap?(offset: number, hex: string): void;
   gbRegs?(lcdc: number, scx: number, scy: number, wx: number, wy: number, bgp: number, obp0: number, obp1: number): void;
@@ -307,8 +307,8 @@ export class QuickJsHost implements VoxelHost {
   gbShow(on: number): void {
     native.gbShow?.(on);
   }
-  gbTiles(dest: number, page: number, first: number, count: number): void {
-    native.gbTiles?.(dest, page, first, count);
+  gbTiles(dest: number, page: number, first: number, count: number, wide = 0, stride = 0, map = 0): void {
+    native.gbTiles?.(dest, page, first, count, wide, stride, map);
   }
   gbReset(): void {
     native.gbReset?.();

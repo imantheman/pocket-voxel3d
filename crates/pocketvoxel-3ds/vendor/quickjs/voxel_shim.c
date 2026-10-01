@@ -274,7 +274,7 @@ int qjs_register_voxel(JSContext *ctx) {
     add_num(ctx, o, "pikaPcm",  86, 1);
     /* The GB screen (core gb.rs). */
     add_num(ctx, o, "gbShow",    87, 1);
-    add_num(ctx, o, "gbTiles",   88, 4);
+    add_num(ctx, o, "gbTiles",   88, 7);
     add_num(ctx, o, "gbReset",   89, 0);
     add_num(ctx, o, "gbRegs",    92, 8);
     add_num(ctx, o, "gbColours", 95, 3);

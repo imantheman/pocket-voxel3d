@@ -3514,6 +3514,18 @@ fn main() {
     let mut gb_tex: [Option<texture::Texture>; 2] = [None, None];
     let mut gb_cur: usize = 0;
     let mut gb_drawn: Option<u32> = None;
+    // the pak gb_pages were read out of: the 2D overworld reads the map's
+    // own terrain page, which every map change replaces
+    let mut gb_pak: *const pak::Pak<'static> = core::ptr::null();
+    let mut gb_terrain_map: u32 = u32::MAX;
+    // VRAM decoded once per set of loads (the 2D overworld redraws every
+    // frame it walks; reading each pixel out of its page every time was most
+    // of the frame), the loads it was decoded for, and the texture's bytes
+    // with each GB pixel's tiled offset, kept rather than made per frame.
+    let mut gb_vram: Vec<u8> = Vec::new();
+    let mut gb_vram_loads: Vec<pocketvoxel_core::gb::GbLoad> = Vec::new();
+    let mut gb_data: Vec<u8> = Vec::new();
+    let mut gb_offs: Vec<u32> = Vec::new();
     let mut gb_fb = vec![0u8; pocketvoxel_core::gb::GB_W * pocketvoxel_core::gb::GB_H];
     let mut gb_hold: Option<buffer::Info> = None;
     // The Gold screen (core lcd.rs), kept the same way: pages unswizzled on
@@ -5073,24 +5085,53 @@ if page_tex.len() < pak_static.atlases.len() {
         {
             let sc = unsafe { voxel::scene() };
             if sc.gb.shown {
+                let pak_now = pak_static as *const pak::Pak<'static>;
+                if pak_now != gb_pak {
+                    gb_pak = pak_now;
+                    gb_pages.clear();
+                    gb_vram_loads.clear();
+                    gb_drawn = None;
+                }
                 if gb_drawn != Some(sc.gb.serial) {
                     gb_drawn = Some(sc.gb.serial);
-                    for l in &sc.gb.loads[..sc.gb.load_count] {
+                    let loads = sc.gb.current_loads();
+                    let mut stale = gb_vram.is_empty() || gb_vram_loads.as_slice() != loads;
+                    for l in loads {
+                        // the 2D overworld's tiles: the map's own terrain
+                        // page, read again when the map changes
+                        if l.page == pocketvoxel_core::gb::GB_PAGE_MAP_TERRAIN && l.map != gb_terrain_map {
+                            gb_terrain_map = l.map;
+                            gb_pages.retain(|g| g.0 != l.page);
+                        }
                         if gb_pages.iter().any(|g| g.0 == l.page) { continue; }
-                        if let Some(pg) = pak_static.atlases.get(l.page as usize) {
+                        stale = true;
+                        let src = if l.page == pocketvoxel_core::gb::GB_PAGE_MAP_TERRAIN {
+                            pak_static.map_terrain_page(l.map)
+                                .or_else(|| pak_static.page_of_kind(atlas_kind::TERRAIN))
+                                .unwrap_or(u16::MAX)
+                        } else {
+                            l.page
+                        };
+                        if let Some(pg) = pak_static.atlases.get(src as usize) {
                             let lin = pak::unswizzle(pg.w as usize, pg.h as usize, pg.frame(0))
                                 .unwrap_or_default();
                             gb_pages.push((l.page, lin, pg.w as usize));
                         }
                     }
-                    let pages = &gb_pages;
-                    let mut pixel = |page: u16, tile: u16, x: u8, y: u8| -> u8 {
-                        let Some((_, lin, w)) = pages.iter().find(|g| g.0 == page) else { return 0 };
-                        let cols = (*w / 8).max(1);
-                        let (tx, ty) = (tile as usize % cols, tile as usize / cols);
-                        lin.get((ty * 8 + y as usize) * *w + tx * 8 + x as usize).copied().unwrap_or(0) & 3
-                    };
-                    sc.gb.render(&mut pixel, &mut gb_fb);
+                    if stale {
+                        gb_vram_loads = loads.to_vec();
+                        gb_vram.resize(pocketvoxel_core::gb::VRAM_BYTES, 0);
+                        let pages = &gb_pages;
+                        let mut pixel = |page: u16, tile: u16, x: u8, y: u8| -> u8 {
+                            let Some((_, lin, w)) = pages.iter().find(|g| g.0 == page) else { return 0 };
+                            let cols = (*w / 8).max(1);
+                            let (tx, ty) = (tile as usize % cols, tile as usize / cols);
+                            let px = lin.get((ty * 8 + y as usize) * *w + tx * 8 + x as usize).copied().unwrap_or(0);
+                            if px == 0xff { 0 } else { px & 3 }
+                        };
+                        sc.gb.decode_vram(&mut pixel, &mut gb_vram);
+                    }
+                    sc.gb.render_decoded(&gb_vram, &mut gb_fb);
                     let grey = pak_static.palettes.get(atlas_kind::PICS as usize);
                     let mut lut = [0u32; 12];
                     for slot in 0..3 {
@@ -5101,16 +5142,18 @@ if page_tex.len() < pak_static.atlases.len() {
                         }
                     }
                     let (gw, gh) = (pocketvoxel_core::gb::GB_W, pocketvoxel_core::gb::GB_H);
-                    let mut data = vec![0u8; 256 * 256 * 4];
-                    for y in 0..gh {
-                        for x in 0..gw {
-                            let c = lut[gb_fb[y * gw + x] as usize % 12];
-                            let o = tiled_off(x as u32, y as u32, 256);
-                            data[o] = (c >> 24) as u8;
-                            data[o + 1] = (c >> 16) as u8;
-                            data[o + 2] = (c >> 8) as u8;
-                            data[o + 3] = c as u8;
-                        }
+                    if gb_data.is_empty() {
+                        gb_data = vec![0u8; 256 * 256 * 4];
+                        gb_offs = (0..gw * gh).map(|i| tiled_off((i % gw) as u32, (i / gw) as u32, 256) as u32).collect();
+                    }
+                    let data = &mut gb_data;
+                    for (i, &o) in gb_offs.iter().enumerate() {
+                        let c = lut[gb_fb[i] as usize % 12];
+                        let o = o as usize;
+                        data[o] = (c >> 24) as u8;
+                        data[o + 1] = (c >> 16) as u8;
+                        data[o + 2] = (c >> 8) as u8;
+                        data[o + 3] = c as u8;
                     }
                     let next = gb_cur ^ 1;
                     if gb_tex[next].is_none() {
@@ -5147,6 +5190,9 @@ if page_tex.len() < pak_static.atlases.len() {
                 // the screen has gone: let its pages and textures go too
                 gb_drawn = None;
                 gb_pages.clear();
+                gb_vram_loads.clear();
+                gb_vram = Vec::new();
+                gb_data = Vec::new();
                 gb_tex = [None, None];
             }
         }

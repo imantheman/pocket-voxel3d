@@ -18,7 +18,9 @@ use crate::spec::op;
 pub const GB_W: usize = 160;
 pub const GB_H: usize = 144;
 /// VRAM tile ranges at once (the minigame loads three).
-pub const GB_LOADS_MAX: usize = 8;
+pub const GB_LOADS_MAX: usize = 16;
+/// Decoded VRAM: 384 tiles x 64 shades (`GbScreen::decode_vram`).
+pub const VRAM_BYTES: usize = 384 * 64;
 
 const LCDC_WIN_MAP_9C00: u8 = 0x40;
 const LCDC_WIN_ON: u8 = 0x20;
@@ -31,12 +33,22 @@ const ATTR_Y_FLIP: u8 = 0x40;
 const ATTR_X_FLIP: u8 = 0x20;
 const ATTR_OBP1: u8 = 0x10;
 
+/// `page` for "map `map`'s own terrain page" (the guest's -2): the host
+/// resolves it, as the pak names one per map (`Pak::map_terrain_page`).
+pub const GB_PAGE_MAP_TERRAIN: u16 = 0xfffe;
+
 /// `count` tiles of atlas page `page` from its tile `first`, at VRAM tile
 /// `dest` (0..127 $8000, 128..255 $8800, 256..383 $9000).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct GbLoad {
     pub dest: u16,
     pub page: u16,
+    /// The map whose terrain `GB_PAGE_MAP_TERRAIN` means.
+    pub map: u32,
+    /// Tiles taken a row (0: the load runs straight on through the page).
+    pub wide: u16,
+    /// The source rows' length in tiles, when `wide` is set.
+    pub stride: u16,
     pub first: u16,
     pub count: u16,
 }
@@ -123,9 +135,12 @@ impl GbScreen {
             op::GB_TILES => {
                 let load = GbLoad {
                     dest: a(0).clamp(0, 383) as u16,
-                    page: a(1).max(0) as u16,
+                    page: if a(1) == -2 { GB_PAGE_MAP_TERRAIN } else { a(1).max(0) as u16 },
+                    map: a(6).max(0) as u32,
                     first: a(2).max(0) as u16,
                     count: a(3).clamp(0, 384) as u16,
+                    wide: a(4).clamp(0, 256) as u16,
+                    stride: a(5).clamp(0, 256) as u16,
                 };
                 // a later load over the same tiles replaces what was there
                 let mut kept = [GbLoad::default(); GB_LOADS_MAX];
@@ -184,7 +199,14 @@ impl GbScreen {
             .iter()
             .rev()
             .find(|l| vram >= l.dest && vram < l.dest + l.count)
-            .map(|l| (l.page, l.first + vram - l.dest))
+            .map(|l| {
+                let k = vram - l.dest;
+                if l.wide > 0 {
+                    (l.page, l.first + (k / l.wide) * l.stride + k % l.wide)
+                } else {
+                    (l.page, l.first + k)
+                }
+            })
     }
 
     fn bg_tile(&self, id: u8) -> u16 {
@@ -198,19 +220,46 @@ impl GbScreen {
     /// Draw the frame into `out` (GB_W * GB_H). `pixel(page, tile, x, y)`
     /// is a sheet tile's raw shade 0-3.
     pub fn render(&self, pixel: &mut impl FnMut(u16, u16, u8, u8) -> u8, out: &mut [u8]) {
-        if out.len() < GB_W * GB_H {
+        let mut vram = alloc::vec![0u8; VRAM_BYTES];
+        self.decode_vram(pixel, &mut vram);
+        self.render_decoded(&vram, out);
+    }
+
+    /// Every VRAM tile's 64 shades (0-3), row by row, into `out`
+    /// (`VRAM_BYTES`): what the loads put there, read once -- a host keeps
+    /// it while the loads stand and renders from it every frame.
+    pub fn decode_vram(&self, pixel: &mut impl FnMut(u16, u16, u8, u8) -> u8, out: &mut [u8]) {
+        if out.len() < VRAM_BYTES {
             return;
         }
-        // one lookup per VRAM tile, not per pixel
-        let mut src = [(u16::MAX, 0u16); 384];
-        for (v, s) in src.iter_mut().enumerate() {
-            if let Some(t) = self.tile_source(v as u16) {
-                *s = t;
+        for v in 0..384u16 {
+            let dst = &mut out[v as usize * 64..v as usize * 64 + 64];
+            match self.tile_source(v) {
+                Some((page, tile)) => {
+                    for y in 0..8u8 {
+                        for x in 0..8u8 {
+                            dst[y as usize * 8 + x as usize] = pixel(page, tile, x, y) & 3;
+                        }
+                    }
+                }
+                None => dst.fill(0),
             }
         }
-        let mut raw = |vram: u16, x: u8, y: u8| -> u8 {
-            let (page, tile) = src[vram as usize % 384];
-            if page == u16::MAX { 0 } else { pixel(page, tile, x, y) & 3 }
+    }
+
+    /// The loads standing now (a host compares them to know when its
+    /// decoded VRAM is stale).
+    pub fn current_loads(&self) -> &[GbLoad] {
+        &self.loads[..self.load_count]
+    }
+
+    /// `render` from decoded VRAM (`decode_vram`).
+    pub fn render_decoded(&self, vram: &[u8], out: &mut [u8]) {
+        if out.len() < GB_W * GB_H || vram.len() < VRAM_BYTES {
+            return;
+        }
+        let raw = |t: u16, x: u8, y: u8| -> u8 {
+            vram[(t as usize % 384) * 64 + y as usize * 8 + x as usize]
         };
         let shade = |p: u8, s: u8| (p >> (s * 2)) & 3;
         let mut bg_raw = [0u8; GB_W];
@@ -295,6 +344,21 @@ mod tests {
     /// Tile t's pixels are all shade t % 4.
     fn flat(_page: u16, tile: u16, _x: u8, _y: u8) -> u8 {
         (tile % 4) as u8
+    }
+
+    #[test]
+    fn a_strided_load_reads_a_sheets_column_and_terrain_names_its_map() {
+        let mut gb = GbScreen::default();
+        // a walk sheet: 2 tiles a row out of a page 8 tiles wide
+        assert!(gb.op(op::GB_TILES, &[0, 9, 0, 24, 2, 8], None));
+        assert_eq!(gb.tile_source(0), Some((9, 0)));
+        assert_eq!(gb.tile_source(1), Some((9, 1)));
+        assert_eq!(gb.tile_source(2), Some((9, 8)));
+        assert_eq!(gb.tile_source(5), Some((9, 17)));
+        // page -2: the map's own terrain page, for the host to find
+        assert!(gb.op(op::GB_TILES, &[256, -2, 0, 128, 0, 0, 41], None));
+        assert_eq!(gb.tile_source(259), Some((GB_PAGE_MAP_TERRAIN, 3)));
+        assert_eq!(gb.current_loads().last().map(|l| l.map), Some(41));
     }
 
     #[test]

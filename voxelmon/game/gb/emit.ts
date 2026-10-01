@@ -27,9 +27,14 @@ export class GbEmitter {
   private shown = false;
   private readonly maps = new Uint8Array(2048);
   private loads = "";
-  private regs = "";
+  private loadsRef: unknown = null;
+  /** Bytes of OAM sent last (only the used front of it is sent). */
+  private oamLen = 0;
+  private readonly oamNow = new Uint8Array(160);
+  private readonly regsNow = new Int32Array(8);
+  private colours0 = "";
+  private colours1 = "";
   private lines = "";
-  private oam = "";
   private colours = "";
 
   /** Emit this frame's GB screen, or take it down when `v` is null. */
@@ -41,20 +46,27 @@ export class GbEmitter {
       }
       return;
     }
+    let fresh = false;
     if (!this.shown) {
       host.gbReset?.();
       host.gbShow?.(1);
       this.shown = true;
       this.maps.fill(0);
-      this.loads = this.regs = this.lines = this.oam = this.colours = "";
+      this.loads = this.lines = this.colours = "";
+      this.loadsRef = null;
+      this.oamLen = 0;
+      fresh = true;
     }
-    const loads = v.loads.map((l) => `${l.dest},${l.sheet},${l.first},${l.count}`).join("|");
-    if (loads !== this.loads) {
-      this.loads = loads;
-      for (const l of v.loads) host.gbTiles?.(l.dest, resolve.page(l.sheet), l.first, l.count);
+    if (v.loads !== this.loadsRef) {
+      this.loadsRef = v.loads;
+      const loads = v.loads.map((l) => `${l.dest},${l.sheet},${l.first},${l.count},${l.wide ?? 0},${l.stride ?? 0},${l.map ?? 0}`).join("|");
+      if (loads !== this.loads) {
+        this.loads = loads;
+        for (const l of v.loads) host.gbTiles?.(l.dest, resolve.page(l.sheet), l.first, l.count, l.wide ?? 0, l.stride ?? 0, l.map ?? 0);
+      }
     }
     // the map, as runs of changed bytes
-    let i = 0;
+    let i = fresh || v.mapsDirty !== false ? 0 : 2048;
     while (i < 2048) {
       if (v.maps[i] === this.maps[i]) { i++; continue; }
       let end = i + 1;
@@ -66,9 +78,11 @@ export class GbEmitter {
       this.maps.set(v.maps.subarray(i, end), i);
       i = end;
     }
-    const regs = [v.lcdc, v.scx, v.scy, v.wx, v.wy, v.bgp, v.obp0, v.obp1].join(",");
-    if (regs !== this.regs) {
-      this.regs = regs;
+    // the registers, compared as numbers (no string a frame)
+    const r = this.regsNow;
+    if (fresh || r[0] !== v.lcdc || r[1] !== v.scx || r[2] !== v.scy || r[3] !== v.wx || r[4] !== v.wy ||
+        r[5] !== v.bgp || r[6] !== v.obp0 || r[7] !== v.obp1) {
+      r[0] = v.lcdc; r[1] = v.scx; r[2] = v.scy; r[3] = v.wx; r[4] = v.wy; r[5] = v.bgp; r[6] = v.obp0; r[7] = v.obp1;
       host.gbRegs?.(v.lcdc, v.scx & 255, v.scy & 255, v.wx & 255, v.wy & 255, v.bgp, v.obp0, v.obp1);
     }
     const target = v.lineTarget === "scy" ? 1 : v.lineTarget === "scx" ? 2 : 0;
@@ -77,15 +91,26 @@ export class GbEmitter {
       this.lines = lines;
       host.gbLines?.(target, target ? hex(v.lines) : "");
     }
-    const oam = hex(v.oam);
-    if (oam !== this.oam) {
-      this.oam = oam;
-      host.gbOam?.(oam);
+    // OAM up to its last used entry (and over whatever was sent past that
+    // last time, to clear it)
+    const o = v.oam;
+    let used = 160;
+    while (used > 0 && o[used - 1] === 0 && o[used - 2] === 0 && o[used - 3] === 0 && o[used - 4] === 0) used -= 4;
+    const len = Math.max(used, this.oamLen);
+    // as sent last time? (bytes past `used` are zero, as they were sent)
+    const was = this.oamNow;
+    let same = !fresh && len === this.oamLen;
+    for (let k = 0; same && k < len; k++) if (o[k] !== was[k]) same = false;
+    if (!same) {
+      was.set(o);
+      this.oamLen = used;
+      host.gbOam?.(hex(o, 0, len));
     }
     const c = v.colours;
-    const colours = `${c.bg},${c.obj0},${c.obj1}`;
-    if (colours !== this.colours) {
-      this.colours = colours;
+    if (fresh || c.bg !== this.colours || c.obj0 !== this.colours0 || c.obj1 !== this.colours1) {
+      this.colours = c.bg;
+      this.colours0 = c.obj0;
+      this.colours1 = c.obj1;
       host.gbColours?.(resolve.palette(c.bg), resolve.palette(c.obj0), resolve.palette(c.obj1));
     }
   }

@@ -43,6 +43,12 @@ export interface TileLoad {
   sheet: string;
   first: number;
   count: number;
+  /** A sheet read `wide` tiles at a time out of rows `stride` tiles long
+   *  (a walk sheet's 2-tile column of a wider page); 0/absent: straight on. */
+  wide?: number;
+  stride?: number;
+  /** With the sheet "terrain": whose terrain page (the map's index). */
+  map?: number;
 }
 
 /** Which register the per-scanline table overrides (hLCDCPointer). */
@@ -73,6 +79,12 @@ export class GbVideo {
   colours = { bg: "PIKACHUS_BEACH", obj0: "PIKACHUS_BEACH", obj1: "PIKACHUS_BEACH" };
   /** VRAM tile contents, in load order (a later load over the same tiles wins). */
   loads: TileLoad[] = [];
+  /**
+   * False when the producer knows `maps` is as it was last frame, so the
+   * emitter can skip comparing all 2048 bytes; undefined (the minigame's
+   * way) always compares.
+   */
+  mapsDirty: boolean | undefined = undefined;
 
   /** FarCopyData of `count` tiles of `sheet` from `first` to VRAM tile `dest`. */
   loadTiles(dest: number, sheet: string, first: number, count: number): void {

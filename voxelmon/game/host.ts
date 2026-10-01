@@ -139,7 +139,7 @@ export interface VoxelHost {
   pikaPcm?(clip: number): void;
   /** The GB screen (voxel-spec.ts gbShow..gbColours). */
   gbShow?(on: number): void;
-  gbTiles?(dest: number, page: number, first: number, count: number): void;
+  gbTiles?(dest: number, page: number, first: number, count: number, wide?: number, stride?: number, map?: number): void;
   gbReset?(): void;
   gbMap?(offset: number, hex: string): void;
   gbRegs?(lcdc: number, scx: number, scy: number, wx: number, wy: number, bgp: number, obp0: number, obp1: number): void;
@@ -370,8 +370,8 @@ export class RecorderHost implements VoxelHost {
   gbShow(on: number): void {
     this.op(VOX_OP.gbShow, on);
   }
-  gbTiles(dest: number, page: number, first: number, count: number): void {
-    this.op(VOX_OP.gbTiles, dest, page, first, count);
+  gbTiles(dest: number, page: number, first: number, count: number, wide = 0, stride = 0, map = 0): void {
+    this.op(VOX_OP.gbTiles, dest, page, first, count, wide, stride, map);
   }
   gbReset(): void {
     this.op(VOX_OP.gbReset);

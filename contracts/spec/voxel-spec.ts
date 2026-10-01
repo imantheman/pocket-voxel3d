@@ -784,10 +784,14 @@ export const VOX_OP = {
    * straight off the hardware (Yellow's Surfing Pikachu). 90 is skipped: the
    * 3DS host's viewer hook claims it.
    *   gbShow(on)                               draw it this frame on
-   *   gbTiles(dest, page, first, count)        VRAM tiles dest.. hold `count`
+   *   gbTiles(dest, page, first, count[, wide, stride, map])
+   *                                            VRAM tiles dest.. hold `count`
    *                                            tiles of atlas page `page`
    *                                            from `first` (0..127 $8000,
-   *                                            128..255 $8800, 256.. $9000)
+   *                                            128..255 $8800, 256.. $9000);
+   *                                            with `wide`, taken `wide` a
+   *                                            row out of rows `stride` long;
+   *                                            page -2: map `map`'s terrain
    *   gbReset()                                maps, OAM, loads, registers
    *   gbMap(offset, hex)                       map bytes from `offset`
    *                                            ($9800 = 0, $9C00 = 0x400)
