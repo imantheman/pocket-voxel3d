@@ -29016,6 +29016,9 @@ class QuickJsHost {
   lcdLines(target2, hex3) {
     native.lcdLines?.(target2, hex3);
   }
+  daytime(k) {
+    native.daytime?.(k);
+  }
   audioWaves(engine, bank, addr) {
     native.audioWaves?.(engine, bank, addr);
   }
