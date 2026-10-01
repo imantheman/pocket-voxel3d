@@ -3565,8 +3565,7 @@ fn main() {
     // with each GB pixel's tiled offset, kept rather than made per frame.
     let mut gb_vram: Vec<u8> = Vec::new();
     let mut gb_vram_loads: Vec<pocketvoxel_core::gb::GbLoad> = Vec::new();
-    let mut gb_data: Vec<u8> = Vec::new();
-    let mut gb_offs: Vec<u32> = Vec::new();
+    let mut gb_data: Vec<u16> = Vec::new();
     let mut gb_fb = vec![0u8; pocketvoxel_core::gb::GB_W * pocketvoxel_core::gb::GB_H];
     let mut gb_hold: Option<buffer::Info> = None;
     // The Gold screen (core lcd.rs), kept the same way: pages unswizzled on
@@ -5165,6 +5164,8 @@ if page_tex.len() < pak_static.atlases.len() {
                 }
                 if gb_drawn != Some(sc.gb.serial) {
                     gb_drawn = Some(sc.gb.serial);
+                    // counted with the Gold screen's in the perf line's "lcd"
+                    let t_gb = now_us();
                     let loads = sc.gb.current_loads();
                     let mut stale = gb_vram.is_empty() || gb_vram_loads.as_slice() != loads;
                     let whole = stale;
@@ -5210,32 +5211,50 @@ if page_tex.len() < pak_static.atlases.len() {
                     }
                     sc.gb.render_decoded(&gb_vram, &mut gb_fb);
                     let grey = pak_static.palettes.get(atlas_kind::PICS as usize);
-                    let mut lut = [0u32; 12];
+                    // RGBA5551, as the Gold screen's texture: the SGB colours
+                    // are 15-bit to begin with, and it is half RGBA8's upload
+                    // 16 entries so a pixel's slot*4+shade (under 12) indexes
+                    // it masked, not by `% 12` -- no divide on the ARM11
+                    let mut lut = [0u16; 16];
                     for slot in 0..3 {
                         let idx = sc.gb.colours[slot];
                         let pal = if idx >= 0 { pak_static.palettes.get(4 + idx as usize).or(grey) } else { grey };
                         for sh in 0..4 {
-                            lut[slot * 4 + sh] = pal.map(|p| p[sh]).unwrap_or(0xff000000 | (0x555555 * (3 - sh as u32)));
+                            // ABGR (0xAABBGGRR), as every palette in the pak
+                            let c = pal.map(|p| p[sh]).unwrap_or(0xff000000 | (0x555555 * (3 - sh as u32)));
+                            let (r, g, b) = ((c & 0xff) >> 3, ((c >> 8) & 0xff) >> 3, ((c >> 16) & 0xff) >> 3);
+                            lut[slot * 4 + sh] = ((r << 11) | (g << 6) | (b << 1) | 1) as u16;
                         }
                     }
-                    let (gw, gh) = (pocketvoxel_core::gb::GB_W, pocketvoxel_core::gb::GB_H);
+                    let gw = pocketvoxel_core::gb::GB_W;
                     if gb_data.is_empty() {
-                        gb_data = vec![0u8; 256 * 256 * 4];
-                        gb_offs = (0..gw * gh).map(|i| tiled_off((i % gw) as u32, (i / gw) as u32, 256) as u32).collect();
+                        gb_data = vec![0u16; 256 * 256];
                     }
-                    let data = &mut gb_data;
-                    for (i, &o) in gb_offs.iter().enumerate() {
-                        let c = lut[gb_fb[i] as usize % 12];
-                        let o = o as usize;
-                        data[o] = (c >> 24) as u8;
-                        data[o + 1] = (c >> 16) as u8;
-                        data[o + 2] = (c >> 8) as u8;
-                        data[o + 3] = c as u8;
+                    // Line by line into the texture's Morton order: a pixel's
+                    // place in its 8x8 tile is MX[x] | MY[y] (tiled_off's
+                    // interleave split by axis), so the source reads straight
+                    // along and nothing is summed per pixel.
+                    const MX: [usize; 8] = [0, 1, 4, 5, 16, 17, 20, 21];
+                    const MY: [usize; 8] = [0, 2, 8, 10, 32, 34, 40, 42];
+                    let data = &mut gb_data[..];
+                    for y in 0..pocketvoxel_core::gb::GB_H {
+                        let line = &gb_fb[y * gw..(y + 1) * gw];
+                        let base = (y >> 3) * (256 / 8) * 64 + MY[y & 7];
+                        for (tx, px) in line.chunks_exact(8).enumerate() {
+                            let b = base + tx * 64;
+                            let dst = &mut data[b..b + 22];
+                            for x in 0..8 {
+                                dst[MX[x]] = lut[px[x] as usize & 15];
+                            }
+                        }
                     }
+                    // the bytes the texture takes: u16s little-endian, as the
+                    // PICA reads RGBA5551
+                    let data: &[u8] = unsafe { core::slice::from_raw_parts(gb_data.as_ptr() as *const u8, gb_data.len() * 2) };
                     let next = gb_cur ^ 1;
                     if gb_tex[next].is_none() {
                         if let Ok(mut t) = texture::Texture::new(
-                            texture::TextureParameters::new_2d(256, 256, texture::ColorFormat::Rgba8)) {
+                            texture::TextureParameters::new_2d(256, 256, texture::ColorFormat::Rgba5551)) {
                             t.set_filter(texture::Filter::Nearest, texture::Filter::Nearest);
                             t.set_wrap(texture::Wrap::ClampToEdge, texture::Wrap::ClampToEdge);
                             gb_tex[next] = Some(t);
@@ -5247,6 +5266,7 @@ if page_tex.len() < pak_static.atlases.len() {
                             gb_cur = next;
                         }
                     }
+                    unsafe { PERF_LCD_US += now_us() - t_gb; }
                 }
                 // the Game Boy's 10:9 rect, the full height of the screen
                 let w = pocketvoxel_core::gb::GB_W as f32 * UI_VIEW_H / pocketvoxel_core::gb::GB_H as f32;

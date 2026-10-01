@@ -265,7 +265,9 @@ impl GbScreen {
             return;
         }
         let raw = |t: u16, x: u8, y: u8| -> u8 {
-            vram[(t as usize % 384) * 64 + y as usize * 8 + x as usize]
+            // (a clamp, not `% 384`: the 3DS's ARM11 has no divide, and this
+            // runs for every pixel; a tile id is under 384 already)
+            vram[(t as usize).min(383) * 64 + y as usize * 8 + x as usize]
         };
         let shade = |p: u8, s: u8| (p >> (s * 2)) & 3;
         let mut bg_raw = [0u8; GB_W];
@@ -274,18 +276,28 @@ impl GbScreen {
             let row = &mut out[ly * GB_W..(ly + 1) * GB_W];
             let scy = if self.line_target == 1 { self.lines[ly] } else { self.scy };
             let scx = if self.line_target == 2 { self.lines[ly] } else { self.scx };
-            bg_raw.fill(0);
             let bg_map = if self.lcdc & LCDC_BG_MAP_9C00 != 0 { 0x400 } else { 0 };
-            for x in 0..GB_W {
-                let mut s = 0;
-                if self.lcdc & LCDC_BG_ON != 0 {
+            let bgp = [shade(self.bgp, 0), shade(self.bgp, 1), shade(self.bgp, 2), shade(self.bgp, 3)];
+            if self.lcdc & LCDC_BG_ON != 0 {
+                // a tile's row at a time: the line crosses 20 or 21 of them
+                let by = (ly as u8).wrapping_add(scy) as usize;
+                let (map_row, ty) = (bg_map + (by >> 3) * 32, (by & 7) * 8);
+                let mut x = 0;
+                while x < GB_W {
                     let bx = (x as u8).wrapping_add(scx) as usize;
-                    let by = (ly as u8).wrapping_add(scy) as usize;
-                    let id = self.maps[bg_map + (by >> 3) * 32 + (bx >> 3)];
-                    s = raw(self.bg_tile(id), (bx & 7) as u8, (by & 7) as u8);
+                    let px0 = bx & 7;
+                    let n = (8 - px0).min(GB_W - x);
+                    let t = (self.bg_tile(self.maps[map_row + (bx >> 3)]) as usize).min(383);
+                    let src = &vram[t * 64 + ty + px0..t * 64 + ty + px0 + n];
+                    for (k, &s) in src.iter().enumerate() {
+                        bg_raw[x + k] = s;
+                        row[x + k] = bgp[s as usize & 3];
+                    }
+                    x += n;
                 }
-                bg_raw[x] = s;
-                row[x] = shade(self.bgp, s);
+            } else {
+                bg_raw.fill(0);
+                row.fill(bgp[0]);
             }
             if self.lcdc & LCDC_WIN_ON != 0 && ly >= self.wy as usize && self.wx <= 166 {
                 let map = if self.lcdc & LCDC_WIN_MAP_9C00 != 0 { 0x400 } else { 0 };
