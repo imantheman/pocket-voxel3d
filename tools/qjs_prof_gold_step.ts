@@ -15,6 +15,11 @@ import * as Map from "../voxelmon/game/gen2/world/Map.ts";
 import * as Follower from "../voxelmon/game/gen2/world/Follower.ts";
 import * as CmdQueue from "../voxelmon/game/gen2/world/CmdQueue.ts";
 import { VOX_BTN } from "../contracts/spec/voxel-spec.ts";
+import { Music } from "../voxelmon/game/gen2/shared/core/Music.ts";
+import { MapNameSign } from "../voxelmon/game/gen2/world/MapNameSign.ts";
+import { Runtime as ModRuntime } from "../voxelmon/game/gen2/shared/mods/Runtime.ts";
+import { Save } from "../voxelmon/game/gen2/core/Save.ts";
+import { AutoInput } from "../voxelmon/game/gen2/core/AutoInput.ts";
 import { Lcd } from "../voxelmon/game/gen2/platform/lcd.ts";
 import { loadGenerated } from "../voxelmon/game/gen2/platform/data.ts";
 
@@ -58,6 +63,12 @@ function wrap(owner: any, label: string): void {
   }
 }
 wrap(World.prototype, "World");
+wrap(Game2.prototype, "Game2");
+wrap(Music, "Music");
+wrap(MapNameSign, "MapNameSign");
+wrap(ModRuntime, "ModRuntime");
+wrap(Save, "Save");
+wrap(AutoInput.prototype, "AutoInput");
 for (const [mod, label] of [[Npc, "Npc"], [Player, "Player"], [Map, "Map"], [Follower, "Follower"], [CmdQueue, "CmdQueue"]] as const) {
   for (const [k, v] of Object.entries(mod)) {
     if (typeof v === "function" && (v as any).prototype) wrap((v as any).prototype, `${label}:${k}`);

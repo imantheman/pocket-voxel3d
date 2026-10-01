@@ -9,6 +9,7 @@ import { Mon } from "../voxelmon/game/gen2/battle/Mon.ts";
 import { Battle } from "../voxelmon/game/gen2/battle/Battle.ts";
 import { Screens } from "../voxelmon/game/gen2/shared/ui/Screens.ts";
 
+declare const WALKONLY: boolean;
 const g = globalThis as unknown as { goldGame: any; frame: (b: number) => void };
 const game = g.goldGame;
 const mainFrame = g.frame;
@@ -31,6 +32,8 @@ g.frame = (_b: number): void => {
   if (game.world?.map) worldFrames++;
   if (worldFrames > 30 && worldFrames < 900) {
     // a step every 20 frames, round a little loop
+    b = WALK[Math.floor(worldFrames / 20) % WALK.length]!;
+  } else if (worldFrames >= 900 && typeof WALKONLY !== "undefined" && WALKONLY) {
     b = WALK[Math.floor(worldFrames / 20) % WALK.length]!;
   } else if (worldFrames >= 900) {
     if (done) {
