@@ -13,6 +13,7 @@
 import { native, QuickJsHost } from "../quickjs-host.ts";
 import { tiltShiftLevel } from "../tiltshift.ts";
 import { is2d } from "../viewmode.ts";
+import { cameraSpeedQ8 } from "../cameraspeed.ts";
 import { readGen2Container } from "./platform/container.ts";
 import { loadGenerated, setGen2Source } from "./platform/data.ts";
 import { Lcd } from "./platform/lcd.ts";
@@ -132,6 +133,8 @@ const lastStep = native.lastStep;
       companion.frame(game);
       // the OPTION screen's TILT SHIFT, stated every shown frame like Kanto's
       host.tiltShift(tiltShiftLevel(game.options?.tiltShift));
+      // CAMERA SPEED, the same way (optional on an older native shim)
+      native.camSpeed?.(cameraSpeedQ8(game.options?.cameraSpeed));
     }
   } catch (e) {
     Logger.error("gold: draw: %s", String((e as Error)?.stack ?? e));

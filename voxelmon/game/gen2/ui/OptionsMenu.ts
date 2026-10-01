@@ -50,6 +50,7 @@ import { GbcPalette } from "../shared/render/GbcPalette.ts";
 import { tonumber, tostring } from "../platform/lua.ts";
 import { TILT_SHIFTS, tiltShiftLevel } from "../../tiltshift.ts";
 import { VIEW_MODES, viewIndex } from "../../viewmode.ts";
+import { CAMERA_SPEEDS, cameraSpeedIndex } from "../../cameraspeed.ts";
 
 type Options = Record<string, any>;
 
@@ -197,6 +198,17 @@ const ROWS: OptionRow[] = [
     },
     text: (options) => Strings.get(TILT_SHIFTS[tiltShiftLevel(options.tiltShift)]!.label),
   },
+  // Not the Lua's: how fast the C-stick swings the 3D camera
+  // (voxelmon/game/cameraspeed.ts), stated to the host every frame by main.ts
+  // -- the Kanto games' CAMERA SPEED row.
+  {
+    label: Strings.source("CAMERA SPEED"), key: "cameraSpeed", port: true,
+    cycle: (options, delta) => {
+      const n = CAMERA_SPEEDS.length;
+      options.cameraSpeed = CAMERA_SPEEDS[(((cameraSpeedIndex(options.cameraSpeed) + delta) % n) + n) % n]!.key;
+    },
+    text: (options) => Strings.get(CAMERA_SPEEDS[cameraSpeedIndex(options.cameraSpeed)]!.label),
+  },
   // Not the Lua's: the 3D world or the cart's 2D screen, and the same for
   // battles (voxelmon/game/viewmode.ts).
   {
@@ -244,7 +256,7 @@ const GROUPS: Group[] = [
   },
   {
     id: "group.graphics", label: Strings.source("GRAPHICS"),
-    members: ["color", "uiLetterbox", "shaderfx", "shaderfx2", "frame", "view", "battleView", "tiltShift"],
+    members: ["color", "uiLetterbox", "shaderfx", "shaderfx2", "frame", "view", "battleView", "tiltShift", "cameraSpeed"],
   },
   { id: "group.audio", label: Strings.source("AUDIO"), members: ["sound", "musicVol", "sfxVol", "musicFilter"] },
   {

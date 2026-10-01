@@ -133,6 +133,28 @@ describe("gen2 OPTION screen", () => {
   });
 });
 
+describe("gen2 OPTION screen's port rows", () => {
+  test.skipIf(!gold)("CAMERA SPEED (the Kanto games' row) sits in GRAPHICS and cycles", async () => {
+    const { game } = await loaded();
+    game.showOptions();
+    const menu = game.stack.top() as OptionsMenu;
+    const page = menu.focusRow("cameraSpeed")!;
+    expect(page.row()!.label).toBe("CAMERA SPEED");
+    delete page.options.cameraSpeed;
+    // unset reads NORMAL; right steps to FAST, wraps to SLOW
+    press(game, "right");
+    expect(page.options.cameraSpeed).toBe("fast");
+    press(game, "right");
+    expect(page.options.cameraSpeed).toBe("slow");
+    press(game, "left");
+    expect(page.options.cameraSpeed).toBe("fast");
+    const { cameraSpeedQ8 } = await import("../voxelmon/game/cameraspeed.ts");
+    expect(cameraSpeedQ8("slow")).toBe(128);
+    expect(cameraSpeedQ8(undefined)).toBe(256);
+    expect(cameraSpeedQ8("fast")).toBe(448);
+  });
+});
+
 describe("gen2 credits", () => {
   test.skipIf(!gold)("runs the script to THE END; A then leaves", async () => {
     const { game, lcd } = await loaded();

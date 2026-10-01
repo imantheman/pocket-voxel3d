@@ -20,6 +20,7 @@ import type { GameState } from "../game.ts";
 import { TEXT_SPEEDS, TEXT_SPEED_DEFAULT } from "../world/textbox.ts";
 import { TILT_SHIFTS, tiltShiftLevel } from "../tiltshift.ts";
 import { VIEW_MODES, viewIndex } from "../viewmode.ts";
+import { CAMERA_SPEEDS } from "../cameraspeed.ts";
 
 export interface OptionsRow {
   label: string;
@@ -45,17 +46,9 @@ export interface OptionsView {
  */
 export const OPTIONS_VISIBLE = 4;
 
-/**
- * CAMERA SPEED: how fast the C-stick swings the view, as the Q8 multiplier
- * the host applies to its own tuned rates (256 = as tuned). This port's
- * row, not the original's -- the Game Boy had no camera to swing.
- */
-export const CAMERA_SPEEDS = [
-  { key: "slow", label: "SLOW", q8: 128 },
-  { key: "normal", label: "NORMAL", q8: 256 },
-  { key: "fast", label: "FAST", q8: 448 },
-] as const;
-export const CAMERA_SPEED_DEFAULT_Q8 = 256;
+// CAMERA SPEED's choices live in ../cameraspeed.ts (Gold's OPTION screen has
+// the row too); re-exported for the callers that import them from here.
+export { CAMERA_SPEED_DEFAULT_Q8, CAMERA_SPEEDS } from "../cameraspeed.ts";
 
 interface OptionsSave {
   options?: {
