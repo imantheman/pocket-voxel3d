@@ -18,7 +18,7 @@ setGen2Source(readGen2Container(native.gamedata()));
 seed(17);
 const scene = loadGenerated<{ atlas?: { lcd?: { firstPage: number; counts: number[] } } }>("scene");
 const host = {
-  lcdCells: () => {}, lcdObjs: () => {}, lcdPals: () => {}, lcdRegs: () => {}, lcdLines: () => {},
+  lcdCells: () => {}, lcdObjs: () => {}, lcdPals: () => {}, lcdRegs: () => {}, lcdLines: () => {}, lcdUnder: () => {}, lcdUnderRow: () => {}, lcdUnderAt: () => {},
   lcdShow: () => {}, lcdBank: () => {}, lcdReset: () => {},
 } as never;
 const lcd = new Lcd(host);
@@ -87,6 +87,8 @@ let inWorld = 0;
       mk += c2 - b2;
     }
     console.log(`[view2d]   updateView ${(uv / R).toFixed(1)} us, mapCacheKey ${(mk / R).toFixed(1)} us`);
+    const te = (globalThis as any).__te; const ten = (globalThis as any).__ten;
+    if (te) console.log(`[view2d]   end marks: ${te.map((v: number) => (v / ten).toFixed(1)).join(" | ")}  (show/empty | cells | palettes | objs | regs+lines)`);
     const tt = (globalThis as any).__tt; const tn = (globalThis as any).__ttn;
     if (tt) console.log(`[view2d]   marks: ${tt.map((v: number) => (v / tn).toFixed(1)).join(" | ")}  (updateView | key+tiles | palettes | cells | regs | people | sprites-setup | sprites)`);
     const q = (globalThis as any).__m2d;

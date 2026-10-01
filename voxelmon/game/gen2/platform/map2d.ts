@@ -11,9 +11,12 @@
 //
 // Cheap per frame, which is the point: a map's screen tile ids and palette
 // slots are worked out once (again only when the map, its blocks, the time
-// of day or the roof change), and a frame copies the 21x19 visible window
-// out of them; sprites keep their sheet and palette per sprite and time of
-// day.
+// of day or the roof change) and sent to the core once as the screen's
+// UNDER layer (lcd.ts under, lcd.rs), which the background's holes show at
+// the camera -- so a frame sends a position, and the text boxes and menus
+// drawn over it are the only cells. (Copying the window into the cells each
+// frame meant every 8 px of walking re-sent the whole screen.) Sprites keep
+// their sheet and palette per sprite and time of day.
 // Not yet: animated tiles (water, flowers) stand still, tall grass does not
 // cover a sprite's feet, and past the map's edge the border block shows
 // where the cart would show the connected map.
@@ -27,8 +30,6 @@ import type { Palette4 } from "./lcd.ts";
 /** pokegold LoadMapGroupRoof: nine roof tiles over vTiles2 tile $0a. */
 const ROOF_FIRST = 0x0a;
 const ROOF_COUNT = 9;
-const COLS = 21;
-const ROWS = 19;
 /** Border tiles kept round a map's grid: the camera never sees further off. */
 const PAD = 12;
 
@@ -111,22 +112,9 @@ export function drawMap2D(world: any, data: any): boolean {
     if (p) lcd.setPalette(s, p);
   }
 
-  const cells = lcd.s.cells;
-  const attrs = lcd.s.attrs;
-  const ids = t.ids;
-  const pal = t.pal;
-  const pw = t.pw;
-  // the window in padded coordinates, clamped (it never needs to be)
-  const x0 = Math.max(0, Math.min(pw - COLS, Math.floor(camX / 8) + PAD));
-  const y0 = Math.max(0, Math.min(t.ph - ROWS, Math.floor(camY / 8) + PAD));
-  // row by row, natively: a JS loop over the 399 cells was most of the frame
-  for (let r = 0; r < ROWS; r++) {
-    const src = (y0 + r) * pw + x0;
-    const dst = r << 5;
-    cells.set(ids.subarray(src, src + COLS), dst);
-    attrs.set(pal.subarray(src, src + COLS), dst);
-  }
-  lcd.regs({ scx: camX & 7, scy: camY & 7 });
+  // the map: the under layer (sent once per cache), at the camera
+  lcd.under(t, t.ids, t.pal, t.pw, t.ph);
+  lcd.underAt(camX + PAD * 8, camY + PAD * 8);
 
   // The people, from the same list the voxel view stands up (World's
   // peopleView): OBJ sprites, the Y-sorted list's later entries on top (a

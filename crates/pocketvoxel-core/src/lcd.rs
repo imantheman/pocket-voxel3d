@@ -18,12 +18,17 @@
 //! - A background or window cell can be a HOLE (attribute bit 4): nothing
 //!   of the map is drawn there and the 3D world shows through, which is how
 //!   a text box sits over the overworld.
+//! - Under the background's holes there can be an UNDER layer instead of the
+//!   world (VIEW 2D): a whole map's cells, sent once, shown at a camera
+//!   position -- the hardware's scrolling BG without its 32x32 ring, so a
+//!   step sends a position rather than a screen of cells.
 //!
 //! The frame comes out as one byte per pixel: palette slot * 4 + colour
 //! (slots 0-15 background, 16-31 objects), or `LCD_HOLE`. The host colours
 //! it through `colours`, 128 RGB555 entries.
 
 use crate::spec::op;
+use alloc::vec::Vec;
 
 pub const LCD_W: usize = 160;
 pub const LCD_H: usize = 144;
@@ -87,6 +92,16 @@ pub struct LcdScreen {
     pub line_target: u8,
     pub banks: [LcdBank; LCD_BANKS_MAX],
     pub bank_count: usize,
+    /// The under layer (`lcdUnder*`): `under_w` x `under_h` cells, tile ids
+    /// and attributes; shown while `under_on`, its pixel (under_x, under_y)
+    /// at the screen's top-left.
+    pub under: Vec<u16>,
+    pub under_attr: Vec<u8>,
+    pub under_w: usize,
+    pub under_h: usize,
+    pub under_on: bool,
+    pub under_x: i32,
+    pub under_y: i32,
     /// Bumped by every op that changes what is drawn.
     pub serial: u32,
 }
@@ -110,6 +125,13 @@ impl Default for LcdScreen {
             line_target: 0,
             banks: [LcdBank::default(); LCD_BANKS_MAX],
             bank_count: 0,
+            under: Vec::new(),
+            under_attr: Vec::new(),
+            under_w: 0,
+            under_h: 0,
+            under_on: false,
+            under_x: 0,
+            under_y: 0,
             serial: 0,
         }
     }
@@ -216,6 +238,43 @@ impl LcdScreen {
                         self.colours[at + i] = v as u16 & 0x7fff;
                     }
                 }
+            }
+            op::LCD_UNDER => {
+                // a map's worth at most (a 255x255-block map is far past any)
+                let (w, h) = (a(0).clamp(0, 1024) as usize, a(1).clamp(0, 1024) as usize);
+                self.under_w = w;
+                self.under_h = h;
+                self.under = alloc::vec![0; w * h];
+                self.under_attr = alloc::vec![ATTR_HOLE; w * h];
+                if w * h == 0 {
+                    self.under_on = false;
+                }
+            }
+            op::LCD_UNDER_ROW => {
+                let Some(t) = text else { return false };
+                let (row, x0) = (a(0), a(1));
+                if row < 0 || row as usize >= self.under_h || x0 < 0 {
+                    return false;
+                }
+                let base = row as usize * self.under_w;
+                for (i, f) in fields(t, 6).enumerate() {
+                    let x = x0 as usize + i;
+                    if x >= self.under_w {
+                        break;
+                    }
+                    let Some(v) = f else { continue };
+                    self.under[base + x] = (v >> 8) as u16;
+                    self.under_attr[base + x] = v as u8;
+                }
+            }
+            op::LCD_UNDER_AT => {
+                let (on, x, y) = (a(0) != 0 && self.under_w > 0, a(1), a(2));
+                if on == self.under_on && x == self.under_x && y == self.under_y {
+                    return true;
+                }
+                self.under_on = on;
+                self.under_x = x;
+                self.under_y = y;
             }
             op::LCD_LINES => {
                 self.line_target = a(0).clamp(0, 2) as u8;
@@ -326,6 +385,31 @@ impl LcdScreen {
                             bg_col[k] = 0;
                             bg_pri[k] = false;
                         }
+                    } else if self.under_on {
+                        // the under layer's pixels for [x, x + n) of line ly
+                        let gy = self.under_y + ly as i32;
+                        if gy < 0 || gy as usize >= self.under_h * 8 {
+                            return;
+                        }
+                        let (urow, upy) = ((gy >> 3) as usize * self.under_w, (gy & 7) as u8);
+                        for k in x..x + n {
+                            let gx = self.under_x + k as i32;
+                            if gx < 0 || gx as usize >= self.under_w * 8 {
+                                continue;
+                            }
+                            let j = urow + (gx >> 3) as usize;
+                            let ua = self.under_attr[j];
+                            if ua & ATTR_HOLE != 0 {
+                                continue;
+                            }
+                            let ty = if ua & ATTR_Y_FLIP != 0 { 7 - upy } else { upy };
+                            let r = fetch(self.under[j], ty);
+                            let px = (gx & 7) as usize;
+                            let c = r[if ua & ATTR_X_FLIP != 0 { 7 - px } else { px }];
+                            line[k] = (ua & ATTR_PAL) * 4 + c;
+                            bg_col[k] = c;
+                            bg_pri[k] = ua & ATTR_PRIORITY != 0;
+                        }
                     }
                     return;
                 }
@@ -433,6 +517,31 @@ mod tests {
         assert!(lcd.op(op::LCD_OBJS, &[], Some("00100020000500")));
         assert!(lcd.op(op::LCD_OBJS, &[], None));
         assert_eq!(lcd.obj_count, 0);
+    }
+
+    #[test]
+    fn the_under_layer_shows_through_background_holes_at_its_camera() {
+        let mut lcd = LcdScreen::default();
+        lcd.op(op::LCD_BANK, &[0, 1, 256], None);
+        // a 4x2-cell layer: tile 1 in palette 2 everywhere but cell (0, 0),
+        // tile 2 there
+        lcd.op(op::LCD_UNDER, &[4, 2], None);
+        lcd.op(op::LCD_UNDER_ROW, &[0, 0], Some("000200000102000102000102"));
+        lcd.op(op::LCD_UNDER_ROW, &[1, 0], Some("000102000102000102000102"));
+        assert!(frame(&lcd).iter().all(|&p| p == LCD_HOLE), "off until lcdUnderAt");
+        lcd.op(op::LCD_UNDER_AT, &[1, 4, 0], None);
+        let f = frame(&lcd);
+        // screen x 0..4 is the layer's x 4..8: cell (0, 0), tile 2, palette 0
+        assert_eq!(f[0], 2);
+        assert_eq!(f[4], 2 * 4 + 1);
+        // past the layer's right edge (x 28 on): a hole
+        assert_eq!(f[28], LCD_HOLE);
+        // a cell over it covers it
+        lcd.op(op::LCD_CELLS, &[0], Some("000303"));
+        assert_eq!(frame(&lcd)[0], 3 * 4 + 3);
+        // and lcdReset drops it
+        lcd.op(op::LCD_RESET, &[], None);
+        assert!(frame(&lcd).iter().all(|&p| p == LCD_HOLE));
     }
 
     #[test]

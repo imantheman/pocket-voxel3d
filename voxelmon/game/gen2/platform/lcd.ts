@@ -66,6 +66,11 @@ export class LcdState {
   flags = FLAG_BG_ON | FLAG_OBJ_ON;
   lines = new Uint8Array(LCD_H);
   lineTarget = 0;
+  /** The under layer shown this frame, its pixel (underX, underY) at the
+   *  screen's top-left (Lcd.underAt). */
+  underOn = false;
+  underX = 0;
+  underY = 0;
 
   clearMaps(): void {
     this.cells.fill(0);
@@ -176,6 +181,8 @@ export class Lcd {
   private sent = new LcdState();
   private sentObjs = "";
   private sentShown = false;
+  private sentUnderX = 0;
+  private sentUnderY = 0;
   /** The core's defaults (lcd.rs LcdScreen::default). */
   private sentRegs = `0,0,7,${LCD_H},${FLAG_BG_ON | FLAG_OBJ_ON}`;
   /** 32-bit views of the current and the sent cells (end()'s diff). */
@@ -221,6 +228,7 @@ export class Lcd {
     this.s.wy = LCD_H;
     this.s.flags = FLAG_BG_ON | FLAG_OBJ_ON;
     this.s.lineTarget = 0;
+    this.s.underOn = false;
     this.bgPal = 0;
     this.objPal = 0;
   }
@@ -362,6 +370,33 @@ export class Lcd {
     if (r.flags !== undefined) this.s.flags = r.flags & 0xff;
   }
 
+  /**
+   * The UNDER layer (VIEW 2D's map, gen2/platform/map2d.ts): a whole map's
+   * cells, sent to the core once per `key` (a new key, a new upload) and
+   * shown under the background's holes -- the frame then sends a camera
+   * position, not the screen's cells.
+   */
+  under(key: unknown, ids: Uint16Array, attrs: Uint8Array, w: number, h: number): void {
+    if (key === this.underKey) return;
+    this.underKey = key;
+    const host = this.host;
+    host.lcdUnder?.(w, h);
+    for (let y = 0; y < h; y++) {
+      let hex = "";
+      for (let x = y * w, end = x + w; x < end; x++) hex += hex4(ids[x]!) + hex2(attrs[x]!);
+      host.lcdUnderRow?.(y, hex);
+    }
+  }
+  private underKey: unknown = null;
+  private sentUnder = "0";
+
+  /** Show the under layer this frame, its pixel (x, y) at the top-left. */
+  underAt(x: number, y: number): void {
+    this.s.underOn = true;
+    this.s.underX = x | 0;
+    this.s.underY = y | 0;
+  }
+
   /** Per-line scroll for effects (1 SCY, 2 SCX); 0 turns it off. */
   lines(target: number, values?: ArrayLike<number>): void {
     this.s.lineTarget = target;
@@ -382,6 +417,15 @@ export class Lcd {
     if (!shown) return;
     const s = this.s;
     const t = this.sent;
+    {
+      const on = s.underOn;
+      if (on ? this.sentUnder === "0" || s.underX !== this.sentUnderX || s.underY !== this.sentUnderY : this.sentUnder !== "0") {
+        h.lcdUnderAt?.(on ? 1 : 0, s.underX, s.underY);
+        this.sentUnder = on ? "1" : "0";
+        this.sentUnderX = s.underX;
+        this.sentUnderY = s.underY;
+      }
+    }
     // cells: per 32-cell row, the span from the first to the last change.
     // Rows are compared 32 bits at a time first (16 words of tiles, 8 of
     // attributes): most rows do not change, and this is the frame's
@@ -472,7 +516,7 @@ export class Lcd {
 
   /** True when nothing would be drawn: every visible cell a hole, no objects. */
   empty(): boolean {
-    if (this.s.objs.length > 0) return false;
+    if (this.s.objs.length > 0 || this.s.underOn) return false;
     // a scrolled screen can show rows past the first eighteen: never hide it
     if (this.s.scx !== 0 || this.s.scy !== 0 || this.s.lineTarget !== 0) return false;
     const a32 = (this.e32 ??= new Uint32Array(this.s.attrs.buffer));
@@ -494,6 +538,9 @@ export class Lcd {
     this.sentShown = !this.shown;
     this.sentRegs = "";
     this.sentLines = "\0";
+    // lcdReset drops the core's under layer: upload it again when next asked
+    this.underKey = null;
+    this.sentUnder = "0";
     this.host.lcdReset?.();
   }
 }

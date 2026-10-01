@@ -873,6 +873,19 @@ export const VOX_OP = {
    *   cardPal(side, c0, c1, c2, c3)
    */
   cardPal: 107,
+  /**
+   * The Gold screen's UNDER layer (VIEW 2D): a whole map's cells, uploaded
+   * once, that the background's holes show at a camera position instead of
+   * the world -- so walking sends a position, not the screen's cells. Same
+   * six-digit cells as lcdCells. Cleared by lcdReset.
+   *   lcdUnder(w, h)                   size it, all hole (0 drops it)
+   *   lcdUnderRow(row, hex)            cells of row `row` from column 0
+   *   lcdUnderAt(on, x, y)             show it this frame, its pixel (x, y)
+   *                                    at the screen's top-left
+   */
+  lcdUnder: 108,
+  lcdUnderRow: 109,
+  lcdUnderAt: 110,
 } as const;
 
 /** Clips in Yellow's PikachuCriesPointerTable (NUM_PIKA_CRIES). */

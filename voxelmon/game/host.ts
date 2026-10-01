@@ -155,6 +155,10 @@ export interface VoxelHost {
   lcdObjs?(hex: string): void;
   lcdPals?(first: number, hex: string): void;
   lcdLines?(target: number, hex: string): void;
+  /** The under layer (voxel-spec.ts lcdUnder..lcdUnderAt; VIEW 2D). */
+  lcdUnder?(w: number, h: number): void;
+  lcdUnderRow?(row: number, hex: string): void;
+  lcdUnderAt?(on: number, x: number, y: number): void;
   /** Gold's time of day for the world's colours: 0 MORN .. 3 DARK. */
   daytime?(k: number): void;
   /** The OPTION screen's TILT SHIFT: 0 off, 1 soft, 2 strong. */
@@ -414,6 +418,15 @@ export class RecorderHost implements VoxelHost {
   }
   lcdLines(target: number, hex: string): void {
     this.opText(VOX_OP.lcdLines, hex, target);
+  }
+  lcdUnder(w: number, h: number): void {
+    this.op(VOX_OP.lcdUnder, w, h);
+  }
+  lcdUnderRow(row: number, hex: string): void {
+    this.opText(VOX_OP.lcdUnderRow, hex, row);
+  }
+  lcdUnderAt(on: number, x: number, y: number): void {
+    this.op(VOX_OP.lcdUnderAt, on, x, y);
   }
   daytime(k: number): void {
     this.op(VOX_OP.daytime, k);

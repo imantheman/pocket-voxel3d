@@ -301,6 +301,11 @@ int qjs_register_voxel(JSContext *ctx) {
         JS_NewCFunctionMagic(ctx, vox_numtext, "lcdPals", 2, JS_CFUNC_generic_magic, 102));
     JS_SetPropertyStr(ctx, o, "lcdLines",
         JS_NewCFunctionMagic(ctx, vox_numtext, "lcdLines", 2, JS_CFUNC_generic_magic, 103));
+    /* The Gold screen's under layer (VIEW 2D). */
+    add_num(ctx, o, "lcdUnder",   108, 2);
+    add_num(ctx, o, "lcdUnderAt", 110, 3);
+    JS_SetPropertyStr(ctx, o, "lcdUnderRow",
+        JS_NewCFunctionMagic(ctx, vox_numtext, "lcdUnderRow", 2, JS_CFUNC_generic_magic, 109));
 
     JS_SetPropertyStr(ctx, g, "voxel", o);
     JS_FreeValue(ctx, g);

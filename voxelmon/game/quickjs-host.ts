@@ -109,6 +109,10 @@ export interface VoxelNative {
   lcdObjs?(hex: string): void;
   lcdPals?(first: number, hex: string): void;
   lcdLines?(target: number, hex: string): void;
+  /** The under layer (voxel-spec.ts lcdUnder..lcdUnderAt; VIEW 2D). */
+  lcdUnder?(w: number, h: number): void;
+  lcdUnderRow?(row: number, hex: string): void;
+  lcdUnderAt?(on: number, x: number, y: number): void;
   daytime?(k: number): void;
   /** spec `tiltShift`: 0 off, 1 soft, 2 strong. */
   tiltShift?(level: number): void;
@@ -351,6 +355,15 @@ export class QuickJsHost implements VoxelHost {
   }
   lcdLines(target: number, hex: string): void {
     native.lcdLines?.(target, hex);
+  }
+  lcdUnder(w: number, h: number): void {
+    native.lcdUnder?.(w, h);
+  }
+  lcdUnderRow(row: number, hex: string): void {
+    native.lcdUnderRow?.(row, hex);
+  }
+  lcdUnderAt(on: number, x: number, y: number): void {
+    native.lcdUnderAt?.(on, x, y);
   }
   daytime(k: number): void {
     native.daytime?.(k);

@@ -372,6 +372,9 @@ pub mod op {
     pub const TILT_SHIFT: u32 = 105;
     pub const LCD_TARGET: u32 = 106;
     pub const CARD_PAL: u32 = 107;
+    pub const LCD_UNDER: u32 = 108;
+    pub const LCD_UNDER_ROW: u32 = 109;
+    pub const LCD_UNDER_AT: u32 = 110;
 }
 
 /// Fixed-point scales used by op args.

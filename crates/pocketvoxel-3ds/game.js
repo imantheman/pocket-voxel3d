@@ -29924,6 +29924,15 @@ class QuickJsHost {
   lcdLines(target2, hex3) {
     native.lcdLines?.(target2, hex3);
   }
+  lcdUnder(w, h) {
+    native.lcdUnder?.(w, h);
+  }
+  lcdUnderRow(row, hex3) {
+    native.lcdUnderRow?.(row, hex3);
+  }
+  lcdUnderAt(on, x, y) {
+    native.lcdUnderAt?.(on, x, y);
+  }
   daytime(k) {
     native.daytime?.(k);
   }
