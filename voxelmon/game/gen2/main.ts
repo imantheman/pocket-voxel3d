@@ -19,6 +19,7 @@ import { seed } from "./platform/rng.ts";
 import { WorldView } from "./platform/worldview.ts";
 import { setSaveIo } from "./platform/saveio.ts";
 import { Game2 } from "./core/Game2.ts";
+import { Companion } from "./ui/Companion.ts";
 import { Logger } from "./shared/core/Logger.ts";
 import { Sound } from "./shared/core/Sound.ts";
 
@@ -50,8 +51,9 @@ const walker =
   loadGenerated<{ atlas?: { lcd?: { firstPage: number; counts: number[] } } }>("walker");
 const lcd = new Lcd(host);
 const pages = walker?.atlas?.lcd;
+const banks = pages ? pages.counts.map((count, k) => ({ base: k * 1024, page: pages.firstPage + k, count })) : [];
 if (pages) {
-  lcd.banks(pages.counts.map((count, k) => ({ base: k * 1024, page: pages.firstPage + k, count })));
+  lcd.banks(banks);
 } else {
   Logger.error("gold: the dataset has no Gold screen pages -- recook");
 }
@@ -59,6 +61,8 @@ if (pages) {
 // ---- the game ---------------------------------------------------------------
 const game = Game2.new();
 const view = new WorldView(host, walker as ConstructorParameters<typeof WorldView>[1]);
+// the bottom screen's status panel (ui/Companion.ts)
+const companion = new Companion(host, banks);
 // for tools that wrap this entry (tools/gold_battle_entry.ts, a Citra bench)
 (globalThis as unknown as { goldGame?: Game2 }).goldGame = game;
 try {
@@ -106,6 +110,7 @@ const lastStep = native.lastStep;
     t3 = clock ? clock() : 0;
     if (compose) {
       view.emit(game);
+      companion.frame(game);
       // the OPTION screen's TILT SHIFT, stated every shown frame like Kanto's
       host.tiltShift(tiltShiftLevel(game.options?.tiltShift));
     }

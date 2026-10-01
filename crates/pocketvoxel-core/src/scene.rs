@@ -294,6 +294,10 @@ pub struct Scene {
     pub gb: crate::gb::GbScreen,
     /// The Gold screen (lcd.rs): Gen 2's colour menus and text over the world.
     pub lcd: crate::lcd::LcdScreen,
+    /// The bottom screen's Gold screen (`lcdTarget(1)`): Gold's companion.
+    pub lcd_b: crate::lcd::LcdScreen,
+    /// Which of the two the lcd* ops address (`lcdTarget`).
+    pub lcd_target: u8,
     /// The tick index — the only clock (tile animation, cursors, rig drift).
     pub tick: u32,
     /// Total ops dispatched (debug counter for `stats()`).
@@ -446,6 +450,8 @@ impl Scene {
             audio: Audio::new(),
             gb: crate::gb::GbScreen::default(),
             lcd: crate::lcd::LcdScreen::default(),
+            lcd_b: crate::lcd::LcdScreen::default(),
+            lcd_target: 0,
             tick: 0,
             ops: 0,
         }
@@ -534,7 +540,12 @@ impl Scene {
         if self.gb.op(code, args, s) {
             return OpResult::None;
         }
-        if self.lcd.op(code, args, s) {
+        if code == op::LCD_TARGET {
+            self.lcd_target = (a(0) == 1) as u8;
+            return OpResult::None;
+        }
+        let screen = if self.lcd_target == 1 { &mut self.lcd_b } else { &mut self.lcd };
+        if screen.op(code, args, s) {
             return OpResult::None;
         }
         match code {

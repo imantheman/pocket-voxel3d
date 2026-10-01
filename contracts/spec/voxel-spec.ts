@@ -840,6 +840,14 @@ export const VOX_OP = {
    *   tiltShift(level)
    */
   tiltShift: 105,
+  /**
+   * Which Gold screen the lcd* ops (96-103) that follow address: 0 the top
+   * (over the world), 1 the bottom screen (Gold's companion panel; the host
+   * shows its top 160x120 at 2x, filling the 320x240 screen). Each screen
+   * keeps its own cells, banks and palettes.
+   *   lcdTarget(k)
+   */
+  lcdTarget: 106,
 } as const;
 
 /** Clips in Yellow's PikachuCriesPointerTable (NUM_PIKA_CRIES). */
