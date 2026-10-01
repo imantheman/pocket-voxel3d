@@ -119,6 +119,13 @@ export class Game2 {
   oakSpeechData: any = null;
   fontData: any = null;
   options: any;
+  /** Quarter turns the 3D camera has been swung (the host's bits 24-25), so
+   *  the walk keeps "up" meaning away from the camera -- 0 in VIEW 2D. The
+   *  Kanto games' overworld.camTurns. */
+  camTurns = 0;
+  /** The camera's yaw in radians (5.6-degree steps), for the free walk;
+   *  undefined on a host that never sends it (tests, the desktop). */
+  camYaw: number | undefined = undefined;
   sessionStartedAt: number;
   joyLatch: { start?: boolean; select?: boolean } | null = null;
   stringBuffer?: string;

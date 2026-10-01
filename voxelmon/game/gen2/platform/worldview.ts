@@ -13,6 +13,7 @@ import type { VoxelHost } from "../../host.ts";
 import { BattleStage, type StageData } from "./battlestage.ts";
 import { is2d } from "../../viewmode.ts";
 import { Palettes } from "../world/Palettes.ts";
+import { rotateFacing } from "../world/rotate.ts";
 
 /** The `daytime` op's order (cook/gen2.ts GEN2_DAYTIMES). */
 const DAYTIMES = ["MORN", "DAY", "NITE", "DARK"];
@@ -139,7 +140,11 @@ export class WorldView {
   }
 
   /** Emit this frame's scene from the game's world, if it has one. */
-  emit(game: { world?: any; frameWorldActive?: boolean; options?: any }): void {
+  /** The camera's quarter turns this frame (Game2.camTurns). */
+  private camTurns = 0;
+
+  emit(game: { world?: any; frameWorldActive?: boolean; options?: any; camTurns?: number }): void {
+    this.camTurns = game?.camTurns ?? 0;
     if (!this.started) {
       // the overworld camera's opening rung, as the Kanto scene starts it
       // (scene.ts: PITCH_RUNGS[2] = 35 degrees); the player steers from there
@@ -308,7 +313,9 @@ export class WorldView {
     const def = a.spriteId ? this.data?.sprites?.[a.spriteId] : undefined;
     const frames = def?.frames ?? 6;
     const walker = def?.walker ?? frames > 1;
-    const facing = a.facing ?? "down";
+    // the side of them the camera sees: with it swung round, a world facing
+    // shows as the pose turned back the other way (scene.ts poseDir)
+    const facing = this.camTurns ? rotateFacing(a.facing ?? "down", -this.camTurns) : (a.facing ?? "down");
     const walking = (a.phase ?? 0) === 1;
     const frame = a.frame ?? (frames <= 1 ? 0 : walking && walker ? WALK[facing]! : STAND[facing]!);
     const mirror =

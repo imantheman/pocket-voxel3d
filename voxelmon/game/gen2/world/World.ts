@@ -24,6 +24,7 @@
 // name sign, the pokepic window) uses G, GbcPalette and Assets the way the
 // Lua's draws do. The lazy `require`s inside function bodies (Phone, PhoneRing, Happiness, Sound, GameVersion,
 // ScreenPosition, Pokegear) are hoisted to here.
+import { rotateFacing } from "./rotate.ts";
 import { osTime } from "../platform/clock.ts";
 import { Apricorns } from "../core/Apricorns.ts";
 import { Bag } from "../shared/inventory/Bag.ts";
@@ -9556,8 +9557,13 @@ export class World {
   // Lua: World.lua:11209-11213 -- DoPlayerMovement .GetDPad: a DOWNHILL map
   // with no direction held reads as DOWN (the Cycling Road rolling the
   // player along on its own).
+  // The press is screen-relative: with the 3D camera swung round, "up" is
+  // still away from it (Game2.camTurns, as the Kanto overworld's rotateDir).
+  // The downhill pull is applied after, so it stays south on the map.
   pollInput(input: any): void {
-    this.heldDir = Bike.forcedDirection(heldDirection(input), this.downhill());
+    const held = heldDirection(input);
+    const turns = this.game ? (this.game.camTurns ?? 0) : 0;
+    this.heldDir = Bike.forcedDirection(held && turns ? rotateFacing(held, turns) : held, this.downhill());
   }
 
   // Lua: World.lua:11215-11219. Zoom.step is inert (no survey zoom); the

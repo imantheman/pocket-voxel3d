@@ -12,6 +12,7 @@
 
 import { native, QuickJsHost } from "../quickjs-host.ts";
 import { tiltShiftLevel } from "../tiltshift.ts";
+import { is2d } from "../viewmode.ts";
 import { readGen2Container } from "./platform/container.ts";
 import { loadGenerated, setGen2Source } from "./platform/data.ts";
 import { Lcd } from "./platform/lcd.ts";
@@ -98,6 +99,16 @@ const lastStep = native.lastStep;
 (globalThis as unknown as { frame: (buttons: number) => void }).frame = (buttons: number): void => {
   const t0 = clock ? clock() : 0;
   const compose = lastStep ? lastStep() : (stepNo++ & 1) === 0;
+  // The camera, as the Kanto entry reads it (psp-main.ts): bits 24-25 its
+  // quarter turns, bits 28-31 the low four bits of its yaw in 64ths of a
+  // turn (offset half a quadrant, which is what rounds 24-25). VIEW 2D has
+  // no camera to be relative to.
+  {
+    const flatView = is2d(game.options?.view);
+    game.camTurns = flatView ? 0 : (buttons >> 24) & 3;
+    const e = (((buttons >> 24) & 3) << 4) | ((buttons >>> 28) & 15);
+    game.camYaw = flatView ? 0 : ((((e - 8) % 64) + 64) % 64) * ((Math.PI * 2) / 64);
+  }
   try {
     game.frame(buttons & 0xff);
     // the bottom screen's touch, packed above the pad by the host (bit 8 a
