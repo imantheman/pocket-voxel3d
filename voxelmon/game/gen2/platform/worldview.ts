@@ -164,7 +164,9 @@ export class WorldView {
     }
     this.emitTint(game);
     const world = game.world;
-    const vs: WorldViewState | null = world && world.map && typeof world.viewState === "function" ? world.viewState(true) : null;
+    // (a battle staged in 3D reads only the maps and the daytime: no people)
+    const lean = this.stage.wanted(game) ? "stage" : true;
+    const vs: WorldViewState | null = world && world.map && typeof world.viewState === "function" ? world.viewState(lean) : null;
     if (!vs) {
       this.clear();
       return;

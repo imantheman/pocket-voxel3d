@@ -44,6 +44,25 @@ static JSValue op_null(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)ctx; (void)t; (void)c; (void)v;
     return JS_NULL;
 }
+/* saveData() / optionsData(): the files named by GOLD_SAVE / GOLD_OPTIONS
+   (a card's save_gold.lua and options_gold.lua), or null. */
+static JSValue op_file(JSContext *ctx, const char *env) {
+    const char *path = getenv(env);
+    size_t n = 0;
+    char *text = path ? slurp(path, &n) : NULL;
+    if (!text) return JS_NULL;
+    JSValue s = JS_NewStringLen(ctx, text, n);
+    free(text);
+    return s;
+}
+static JSValue op_savedata(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    return op_file(ctx, "GOLD_SAVE");
+}
+static JSValue op_optionsdata(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    return op_file(ctx, "GOLD_OPTIONS");
+}
 static JSValue op_now(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t; (void)c; (void)v;
     struct timespec ts;
@@ -106,7 +125,8 @@ int main(int argc, char **argv) {
     for (int i = 0; OPS[i]; i++) JS_SetPropertyStr(ctx, vox, OPS[i], JS_NewCFunction(ctx, op_any, OPS[i], 0));
     JS_SetPropertyStr(ctx, vox, "gamedata", JS_NewCFunction(ctx, op_gamedata, "gamedata", 0));
     JS_SetPropertyStr(ctx, vox, "audiodata", JS_NewCFunction(ctx, op_null, "audiodata", 0));
-    JS_SetPropertyStr(ctx, vox, "saveData", JS_NewCFunction(ctx, op_null, "saveData", 0));
+    JS_SetPropertyStr(ctx, vox, "saveData", JS_NewCFunction(ctx, op_savedata, "saveData", 0));
+    JS_SetPropertyStr(ctx, vox, "optionsData", JS_NewCFunction(ctx, op_optionsdata, "optionsData", 0));
     if (getenv("PROF")) JS_SetPropertyStr(ctx, vox, "now", JS_NewCFunction(ctx, op_now, "now", 0));
     JS_SetPropertyStr(ctx, g, "voxel", vox);
     JSValue con = JS_NewObject(ctx);

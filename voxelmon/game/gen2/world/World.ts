@@ -9801,13 +9801,13 @@ export class World {
    * player, the actors, the palette) -- built every shown frame, so the
    * rest (the anim cells, the effect views, the ui flags) is left out.
    */
-  viewState(lean = false): WorldView {
+  viewState(lean: boolean | "stage" = false): WorldView {
     const frame = this.updateView();
     const p = this.player;
     const map = this.map;
     const ready = truthy(this.mapImage) && truthy(p);
     const crystal = truthy(this.isCrystal());
-    if (lean) return this.leanViewState(frame, ready, crystal);
+    if (lean) return this.leanViewState(frame, ready, crystal, lean !== "stage");
 
     const mapView: WorldMapView | undefined = truthy(map) ? {
       id: map.id,
@@ -9921,7 +9921,8 @@ export class World {
   }
 
   /** viewState(true)'s body: see there. */
-  private leanViewState(frame: any, ready: boolean, crystal: boolean): WorldView {
+  /** `people` false ("stage": a battle staged in 3D owns the field): no people, no player. */
+  private leanViewState(frame: any, ready: boolean, crystal: boolean, people = true): WorldView {
     const p = this.player;
     const map = this.map;
     const neighbors: WorldNeighborView[] = [];
@@ -9931,9 +9932,9 @@ export class World {
     const [hideAll, hidePlayer]: [boolean, boolean] = this.flyHides();
     const peopleHidden = truthy(this.peopleHidden);
     const actors: WorldActorEntry[] = [];
-    if (ready && !peopleHidden) peopleView_W6(this, actors, hideAll, hidePlayer, crystal, true);
+    if (people && ready && !peopleHidden) peopleView_W6(this, actors, hideAll, hidePlayer, crystal, true);
     let playerView: WorldView["player"] = undefined;
-    if (truthy(p)) {
+    if (people && truthy(p)) {
       const view = p.viewState();
       playerView = {
         view,

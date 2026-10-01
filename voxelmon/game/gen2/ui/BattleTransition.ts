@@ -728,9 +728,18 @@ export class BattleTransition {
     const top = -Math.ceil(oy / size);
     const bottom = Math.ceil((h - oy) / size);
     G.setColor(this.blackColor());
+    // On the 8px grid a row's run of black cells is one fill: the same
+    // cells as a fill each, at a fraction of the calls (the full-screen
+    // wipes filled eighty-odd cells one by one every frame). Off the grid
+    // each cell keeps its own fill (its ragged edges are objects).
+    const grid = size % 8 === 0 && (G.tx + ox) % 8 === 0 && (G.ty + oy) % 8 === 0;
     for (let row = top; row < bottom; row++) {
       for (let col = first; col < last; col++) {
-        if (this.blackAt(col, row)) G.rectangle("fill", ox + col * size, oy + row * size, size, size);
+        if (!this.blackAt(col, row)) continue;
+        let end = col + 1;
+        if (grid) while (end < last && this.blackAt(end, row)) end++;
+        G.rectangle("fill", ox + col * size, oy + row * size, size * (end - col), size);
+        col = end - 1;
       }
     }
     G.setColor(1, 1, 1, 1);
