@@ -63,23 +63,23 @@ function setPaper(pal: Colors): void {
  * rectangle with the glyphs over it comes to. Returns the width, or -1 when
  * the string is off the grid and the general path must draw it.
  */
-function gridPrint(codes: number[], x: number, y: number, pal: Colors): number {
+function gridPrint(ids: Int32Array | null, x: number, y: number, pal: Colors): number {
+  if (ids === null) return -1;
   const x0 = Math.round(x + G.tx);
   const y0 = Math.round(y + G.ty);
   if ((x0 & 7) !== 0 || (y0 & 7) !== 0 || G.objects) return -1;
-  for (let i = 0; i < codes.length; i++) if (Font.advanceOf(codes[i]!) !== 8) return -1;
   const savedPal = G.palette;
   const savedKeyed = G.keyed;
   G.setColor(1, 1, 1, 1);
   GbcPalette.useRaw(pal);
-  for (let i = 0; i < codes.length; i++) {
-    const id = Font.tileOf(codes[i]!);
-    putTile(id === undefined ? SOLID[0] : id, x0 + i * 8, y0);
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i]!;
+    putTile(id < 0 ? SOLID[0] : id, x0 + i * 8, y0);
   }
   G.palette = savedPal;
   G.keyed = savedKeyed;
   G.setColor(0, 0, 0, 1);
-  return codes.length * 8;
+  return ids.length * 8;
 }
 
 function flatPrint(text: string, tx: number, ty: number): number {
@@ -359,7 +359,7 @@ export const Chrome = {
   printThrough(text: string, tx: number, ty: number, palette?: Colors | null, invert?: boolean, raw?: boolean): number {
     if (palette) {
       const gp = raw ? Chrome.rawPalette(palette, invert) : Chrome.throughPalette(palette, invert);
-      const w = gridPrint(Font.encode(text), tx * 8, ty * 8, gp);
+      const w = gridPrint(Font.gridIds(text), tx * 8, ty * 8, gp);
       if (w >= 0) return w;
     }
     const [pal, drawGlyph, finish] = Chrome.paletteGlyphs(palette, invert, raw);
@@ -392,8 +392,8 @@ export const Chrome = {
   printRightThrough(text: string, txEnd: number, ty: number, palette?: Colors | null, invert?: boolean, raw?: boolean): number {
     if (palette) {
       const gp = raw ? Chrome.rawPalette(palette, invert) : Chrome.throughPalette(palette, invert);
-      const codes = Font.encode(text);
-      const w = gridPrint(codes, txEnd * 8 - codes.length * 8, ty * 8, gp);
+      const ids = Font.gridIds(text);
+      const w = ids ? gridPrint(ids, txEnd * 8 - ids.length * 8, ty * 8, gp) : -1;
       if (w >= 0) return w;
     }
     const [pal, drawGlyph, finish] = Chrome.paletteGlyphs(palette, invert, raw);

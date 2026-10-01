@@ -74,6 +74,12 @@ interface State {
 let state: State | null = null;
 let loadedFrom: { font: FontDef } | null = null;
 let currentFrame = 1;
+// Font.gridIds's answers, per string, one map per battle-extra state; dropped
+// when the font or its frame page changes.
+const gridPlain = new Map<string, Int32Array | null>();
+const gridExtra = new Map<string, Int32Array | null>();
+let gridState: unknown = null;
+let gridFrame = -1;
 const reported = new Set<string>();
 // Font.encode's answers, per string: a menu prints the same few strings every
 // frame. Bounded, and dropped whenever the font changes. Callers only read
@@ -319,6 +325,37 @@ export const Font = {
 
   /** The tile id a code draws as (for screens that write cells directly). */
   tileOf,
+
+  /**
+   * `text`'s tile ids, one per glyph (-1 for a code with no glyph), or null
+   * when any glyph is not a whole 8px cell. Remembered per string for the
+   * font as it stands (its battle-extra swap and frame page).
+   */
+  gridIds(text: string): Int32Array | null {
+    if (gridState !== state || gridFrame !== currentFrame) {
+      gridPlain.clear();
+      gridExtra.clear();
+      gridState = state;
+      gridFrame = currentFrame;
+    }
+    const cache = state?.battleExtra ? gridExtra : gridPlain;
+    const hit = cache.get(text);
+    if (hit !== undefined) return hit;
+    const codes = Font.encode(text);
+    let ids: Int32Array | null = new Int32Array(codes.length);
+    for (let i = 0; i < codes.length; i++) {
+      const code = codes[i]!;
+      if (Font.advanceOf(code) !== 8) {
+        ids = null;
+        break;
+      }
+      const id = tileOf(code);
+      ids[i] = id === undefined ? -1 : id;
+    }
+    if (cache.size >= 512) cache.clear();
+    cache.set(text, ids);
+    return ids;
+  },
 
   advanceOf(code: number): number {
     const page = pageFor(code);

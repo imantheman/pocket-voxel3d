@@ -228,12 +228,44 @@ export class BattleHud {
     pixels = pixels ?? HpBar.pixels(hp, maxHp);
     const colors = this.barColors(HpBar.palette(pixels), zero);
     // The "HP:" badge sits inside the bar's own attrmap region, so it wears the
-    // HP palette too.
-    this.drawTile("hpBar", FIRST_BATTLE_EXTRA, TILE_HP_LABEL, tx, ty, colors);
-    this.drawTile("hpBar", FIRST_BATTLE_EXTRA, TILE_HP_LABEL + 1, tx + 1, ty, colors);
-    this.drawBar(hp, maxHp, tx + 2, ty, zero, pixels);
-    this.drawTile("hpBar", FIRST_BATTLE_EXTRA, TILE_BAR_END, tx + 2 + HpBar.LENGTH_TILES, ty, colors);
+    // HP palette too. Label, the six cells and the end cap: one run of nine
+    // tiles from the one sheet in the one palette -- what drawTile would write
+    // a tile at a time.
+    const run = this.hpRun;
+    run[0] = TILE_HP_LABEL;
+    run[1] = TILE_HP_LABEL + 1;
+    for (let cell = 0; cell < HpBar.LENGTH_TILES; cell++) {
+      const filled = Math.max(0, Math.min(8, pixels - cell * 8));
+      run[2 + cell] = TILE_BAR_EMPTY + filled;
+    }
+    run[2 + HpBar.LENGTH_TILES] = TILE_BAR_END;
+    if (!this.drawRun("hpBar", FIRST_BATTLE_EXTRA, run, 3 + HpBar.LENGTH_TILES, tx, ty, colors)) {
+      return tx + 3 + HpBar.LENGTH_TILES;
+    }
     return tx + 3 + HpBar.LENGTH_TILES;
+  }
+  private hpRun: number[] = [];
+
+  /**
+   * `count` tiles of `list` from one sheet across from (tx, ty) through one
+   * palette: drawTile's cells, with its palette swap made once.
+   */
+  drawRun(key: string, firstTile: number | undefined, list: number[], count: number, tx: number, ty: number, colors?: Colors | null): boolean {
+    const image = this.image(key);
+    if (!image || !image.ids) return false;
+    G.setColor(1, 1, 1, 1);
+    const savedPal = G.palette;
+    const savedKeyed = G.keyed;
+    GbcPalette.use(colors ?? GbcPalette.DMG_SHADES);
+    const x = Math.round(G.tx + tx * 8);
+    const y = Math.round(G.ty + ty * 8);
+    for (let i = 0; i < count; i++) {
+      const index = list[i]! - (firstTile as number);
+      if (index >= 0 && index < image.tw && image.th > 0) putTile(image.ids[index]!, x + i * 8, y, false, false, image.obj);
+    }
+    G.palette = savedPal;
+    G.keyed = savedKeyed;
+    return true;
   }
 
   // PAL_BATTLE_BG_EXP, which the attrmap lays over (10,11)..(18,11)

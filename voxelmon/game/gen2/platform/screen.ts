@@ -276,9 +276,21 @@ export const G = {
     return [x + st.tx, y + st.ty];
   },
 
+  // Written into the state's own array: every tile and string sets a colour,
+  // and push copies it, so nothing else holds this one.
   setColor(r: number | readonly number[], g?: number, b?: number, a = 1): void {
-    if (Array.isArray(r)) st.colour = [r[0] ?? 1, r[1] ?? 1, r[2] ?? 1, r[3] ?? 1];
-    else st.colour = [r as number, g ?? 0, b ?? 0, a];
+    const c = st.colour as unknown as number[];
+    if (Array.isArray(r)) {
+      c[0] = r[0] ?? 1;
+      c[1] = r[1] ?? 1;
+      c[2] = r[2] ?? 1;
+      c[3] = r[3] ?? 1;
+    } else {
+      c[0] = r as number;
+      c[1] = g ?? 0;
+      c[2] = b ?? 0;
+      c[3] = a;
+    }
   },
   getColor(): [number, number, number, number] {
     return [...st.colour] as [number, number, number, number];
