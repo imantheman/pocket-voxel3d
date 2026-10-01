@@ -326,6 +326,20 @@ export class GoldSilverIntro {
   }
 
   /** Tile id of sheet tile `tile` (16 across), or undefined past the sheet. */
+  /**
+   * Every tile of a sheet as its Gold-screen id, SOLID[0] past the sheet
+   * (a tile past the sheet draws nothing in the Lua: the backdrop shows).
+   */
+  idTable(sheet: Sheet): Uint16Array {
+    const cached = this.idTables.get(sheet);
+    if (cached) return cached;
+    const t = new Uint16Array(256);
+    for (let i = 0; i < 256; i++) t[i] = this.tileId(sheet, i) ?? SOLID[0];
+    this.idTables.set(sheet, t);
+    return t;
+  }
+  private idTables = new Map<Sheet, Uint16Array>();
+
   tileId(sheet: Sheet, tile: number): number | undefined {
     if (tile < 0 || tile >= sheet.count) return undefined;
     const col = tile % 16;
@@ -353,12 +367,18 @@ export class GoldSilverIntro {
     const sheet = source && this.sheet(source.tiles);
     if (!sheet) return;
     const slot = lcd.palette(this.resolved(palette));
-    for (let row = 0; row < BG_TILES; row++) {
-      for (let col = 0; col < BG_TILES; col++) {
-        const id = this.tileId(sheet, mapGet(this, col, row));
-        // A tile past the sheet draws nothing in the Lua: the backdrop (colour 0) shows.
-        lcd.cell(col, row, id ?? SOLID[0], slot);
-      }
+    // The whole 32x32 map every frame, so straight into the cell arrays
+    // through a tile -> id table (one tileId per sheet tile, not per cell):
+    // this loop was most of the intro's frame on the 3DS. bgmap and the
+    // Gold screen's map share the row-major 32x32 layout.
+    const lut = this.idTable(sheet);
+    const cells = lcd.s.cells;
+    const attrs = lcd.s.attrs;
+    const bg = this.bgmap;
+    const a = slot & 0xef;
+    for (let i = 0; i < BG_TILES * BG_TILES; i++) {
+      cells[i] = lut[bg[i]! & 0xff]!;
+      attrs[i] = a;
     }
     this.mapDirty = false;
     lcd.regs({ scx: mod(this.scx, 256), scy: mod(this.scy, 256) });

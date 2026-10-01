@@ -251,6 +251,23 @@ impl LcdScreen {
     /// Draw the frame into `out` (LCD_W * LCD_H). `pixel(page, tile, x, y)`
     /// is a sheet tile's raw colour 0-3.
     pub fn render(&self, pixel: &mut impl FnMut(u16, u16, u8, u8) -> u8, out: &mut [u8]) {
+        self.render_rows(
+            &mut |page, tile, y| {
+                let mut r = [0u8; 8];
+                for (x, c) in r.iter_mut().enumerate() {
+                    *c = pixel(page, tile, x as u8, y);
+                }
+                r
+            },
+            out,
+        );
+    }
+
+    /// `render`, with the sheet read a tile row at a time: `row(page, tile,
+    /// y)` is that tile's row `y`, eight raw colours 0-3. This is the one the
+    /// 3DS host calls: a map row reads each tile's row eight pixels running,
+    /// so the host's page lookup runs once per tile per line.
+    pub fn render_rows(&self, row: &mut impl FnMut(u16, u16, u8) -> [u8; 8], out: &mut [u8]) {
         if out.len() < LCD_W * LCD_H {
             return;
         }
@@ -258,15 +275,22 @@ impl LcdScreen {
         // always share one, so the search runs once per change of bank
         // rather than once per pixel.
         let mut hit: Option<LcdBank> = None;
+        let mut last_key: u32 = u32::MAX;
+        let mut last_row = [0u8; 8];
         let mut raw = |id: u16, x: u8, y: u8| -> u8 {
-            let inside = |b: &LcdBank| id >= b.base && (id as u32) < b.base as u32 + b.count as u32;
-            if !hit.as_ref().is_some_and(inside) {
-                hit = self.banks[..self.bank_count].iter().rev().find(|b| inside(b)).copied();
+            let key = ((id as u32) << 3) | (y as u32 & 7);
+            if key != last_key {
+                let inside = |b: &LcdBank| id >= b.base && (id as u32) < b.base as u32 + b.count as u32;
+                if !hit.as_ref().is_some_and(inside) {
+                    hit = self.banks[..self.bank_count].iter().rev().find(|b| inside(b)).copied();
+                }
+                last_row = match hit {
+                    Some(b) => row(b.page, id - b.base, y),
+                    None => [0; 8],
+                };
+                last_key = key;
             }
-            match hit {
-                Some(b) => pixel(b.page, id - b.base, x, y) & 3,
-                None => 0,
-            }
+            last_row[(x & 7) as usize] & 3
         };
         // per pixel of the line: the map colour drawn, and whether that cell
         // keeps its colours above objects

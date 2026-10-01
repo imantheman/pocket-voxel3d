@@ -4908,12 +4908,12 @@ if page_tex.len() < pak_static.atlases.len() {
                     let atl = &pak_static.atlases;
                     let pages = &mut lcd_pages;
                     let mut last = usize::MAX;
-                    let mut pixel = |page: u16, tile: u16, x: u8, y: u8| -> u8 {
+                    let mut row = |page: u16, tile: u16, y: u8| -> [u8; 8] {
                         if last >= pages.len() || pages[last].0 != page {
                             last = match pages.iter().position(|g| g.0 == page) {
                                 Some(i) => i,
                                 None => {
-                                    let Some(pg) = atl.get(page as usize) else { return 0 };
+                                    let Some(pg) = atl.get(page as usize) else { return [0; 8] };
                                     let lin = pak::unswizzle(pg.w as usize, pg.h as usize, pg.frame(0))
                                         .unwrap_or_default();
                                     pages.push((page, lin, pg.w as usize));
@@ -4924,9 +4924,14 @@ if page_tex.len() < pak_static.atlases.len() {
                         let (_, lin, w) = &pages[last];
                         let cols = (*w / 8).max(1);
                         let (tx, ty) = (tile as usize % cols, tile as usize / cols);
-                        lin.get((ty * 8 + y as usize) * *w + tx * 8 + x as usize).copied().unwrap_or(0) & 3
+                        let at = (ty * 8 + y as usize) * *w + tx * 8;
+                        let mut r = [0u8; 8];
+                        if let Some(src) = lin.get(at..at + 8) {
+                            r.copy_from_slice(src);
+                        }
+                        r
                     };
-                    sc.lcd.render(&mut pixel, &mut lcd_fb);
+                    sc.lcd.render_rows(&mut row, &mut lcd_fb);
                     let mut lut = [0u32; 256];
                     for (i, c) in sc.lcd.colours.iter().enumerate() {
                         lut[i] = pocketvoxel_core::lcd::LcdScreen::abgr(*c);
