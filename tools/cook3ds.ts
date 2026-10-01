@@ -379,6 +379,13 @@ export async function cook3ds(only?: string[]): Promise<number> {
     for (const f of readdirSync(GEN_DIR).filter((f) => f.endsWith(".json") && f !== "gfx.json").sort()) {
       sections[f.slice(0, -5)] = readFileSync(join(GEN_DIR, f), "utf8");
     }
+    // the raw tilemaps the importer writes beside the tables (the card flip
+    // and slot machine boards), as byte arrays under their file names
+    for (const dir of readdirSync(GEN_DIR, { withFileTypes: true }).filter((d) => d.isDirectory())) {
+      for (const f of readdirSync(join(GEN_DIR, dir.name)).filter((f) => f.endsWith(".tilemap"))) {
+        sections[f] = JSON.stringify([...readFileSync(join(GEN_DIR, dir.name, f))]);
+      }
+    }
     // The Gen 2 Sound/Music read the audio table from here, not from AUDI:
     // with each program's measured length added (cook/gen2audio.ts), since
     // the guest counts a one-shot's frames rather than asking the synth.

@@ -12,7 +12,6 @@
 // treats as clear and a map cell shows as its palette's lightest colour --
 // the hardware's own rules.
 //
-// Map tilesets are left out: the overworld is voxels.
 
 import { ATLAS_KIND } from "../../contracts/spec/voxel-spec.ts";
 import type { PageDef } from "./atlas.ts";
@@ -39,11 +38,14 @@ export interface LcdTiles {
   tiles: number;
 }
 
-/** The gfx keys the Gold screen draws: everything but the map tilesets. */
+/**
+ * The gfx keys the Gold screen draws: every Gold graphic. That includes the
+ * map tilesets -- the overworld is voxels, but screens still draw from them
+ * (the magnet train rides through tilesets/train_station's tiles) -- which
+ * cost three pages after de-duplication.
+ */
 export function lcdKeys(gen: Pick<GenData, "gfx">): string[] {
-  return Object.keys(gen.gfx)
-    .filter((k) => !k.startsWith("tilesets/"))
-    .sort();
+  return Object.keys(gen.gfx).sort();
 }
 
 export function buildLcdTiles(gen: Pick<GenData, "gfx" | "gfxBin">, keys = lcdKeys(gen)): LcdTiles {

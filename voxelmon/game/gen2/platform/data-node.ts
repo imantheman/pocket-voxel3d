@@ -54,5 +54,14 @@ export function useGoldGen(dir = GOLD_GEN_DIR): void {
       get: () => (cached ??= readFileSync(path, "utf8")),
     });
   }
+  // the raw tilemaps beside the tables, as the cook ships them: byte arrays
+  for (const d of readdirSync(dir, { withFileTypes: true })) {
+    if (!d.isDirectory()) continue;
+    for (const f of readdirSync(join(dir, d.name))) {
+      if (!f.endsWith(".tilemap")) continue;
+      const path = join(dir, d.name, f);
+      Object.defineProperty(src, f, { enumerable: true, get: () => [...readFileSync(path)] });
+    }
+  }
   setGen2Source(src);
 }
