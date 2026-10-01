@@ -390,6 +390,13 @@ function aAt(dir: Dir, done: () => boolean, what: string): void {
   if (!done()) fail(`${what} (${describe()})`);
 }
 
+/** Face `dir` where the player stands, press A, and let it play out. */
+export function aFacing(dir: Dir): void {
+  face(dir);
+  step(VOX_BTN.a);
+  settle();
+}
+
 /** Stand next to (x, y), face it, press A, and let it all play out. */
 export function use(x: number, y: number, what: string): void {
   // next to it, or two away straight across a counter (a nurse, a clerk)
@@ -756,11 +763,17 @@ function planStep(m: string, x: number, y: number, dir: Dir, goal: (m: string, x
  *  not on), shown by the story's flags: a boulder, a guard, a still person
  *  -- what the live map would show in the way. Not unbeaten trainers (they
  *  come to the player) nor rocks a ROCK SMASH clears. */
-const STILL_MOVES = new Set([1, 3, 6, 7, 8, 9, 10]);
+// (SPRITEMOVEDATA_: STILL, SPINRANDOM_*, STANDING_*, SNORLAX $15, BOUNCE $16,
+// SUDOWOODO $17, the two spins $1e/$1f, BIGDOLL $21)
+const STILL_MOVES = new Set([1, 3, 6, 7, 8, 9, 10, 21, 22, 23, 30, 31, 33]);
 function standsAt(m: string, x: number, y: number): boolean {
   if (boulderHome(m, x, y)) return true;
   const def = world().maps[m];
-  return (def?.objects ?? []).some((o: any) => o.x === x && o.y === y && STILL_MOVES.has(o.movement)
+  // (a big sprite -- SNORLAX, a doll -- fills the 2x2 from its corner)
+  const on = (o: any): boolean => /^SPRITE_BIG_/.test(o.sprite)
+    ? x >= o.x && x <= o.x + 1 && y >= o.y && y <= o.y + 1
+    : o.x === x && o.y === y;
+  return (def?.objects ?? []).some((o: any) => on(o) && STILL_MOVES.has(o.movement)
     && o.sprite !== "SPRITE_POKE_BALL" && !(o.sprite === "SPRITE_ROCK" && can.rocksmash)
     && !(o.hours && o.hours[0] !== -1)
     && !(o.trainer && !world().events?.get(o.trainer.event))
@@ -787,7 +800,7 @@ function planTo(goal: (m: string, x: number, y: number) => boolean): Act[] | nul
   const q: [string, number, number, boolean][] = [[w.map.id, p.cellX, p.cellY, s0]];
   const seen = new Set([start]);
   let found: string | null = null;
-  for (let qi = 0; qi < q.length && qi < 600000; qi++) {
+  for (let qi = 0; qi < q.length && qi < 4000000; qi++) {
     const [m, x, y, sf] = q[qi]!;
     if (goal(m, x, y)) {
       found = `${m},${x},${y},${sf ? 1 : 0}`;
@@ -919,6 +932,51 @@ export function dropBoulders(what: string): number {
   return fell;
 }
 
+/** The POKeGEAR's radio tuned the way a player does it: START, POKeGEAR,
+ *  along the strip to the radio card, the knob wound to `station` (1-based,
+ *  RadioChannels order: 7 is the POKe FLUTE), then B back out -- a tuned
+ *  station's song stays on as the map's music (ExitPokegearRadio_HandleMusic). */
+export function pokegearRadio(station: number): void {
+  settle();
+  const sid = (): string => screen()?.screenId ?? "";
+  for (let f = 0; f < 120 && !/StartMenu/.test(sid()); f++) step(f % 10 === 0 ? VOX_BTN.start : 0);
+  if (!/StartMenu/.test(sid())) fail(`the START menu would not open (${sid()})`);
+  for (let f = 0; f < 600 && /StartMenu/.test(sid()); f++) {
+    const sm = screen();
+    const want = (sm.items ?? []).findIndex((it: any) => it.value === "pokegear") + 1;
+    if (want <= 0) fail("no POKeGEAR in the START menu");
+    step(f % 6 ? 0 : sm.list.index < want ? VOX_BTN.down : sm.list.index > want ? VOX_BTN.up : VOX_BTN.a);
+  }
+  for (let f = 0; f < 200 && /Fade/.test(sid()); f++) step(0);
+  if (!/Pokegear/.test(sid())) fail(`the POKeGEAR would not open (${sid()})`);
+  for (let f = 0; f < 600; f++) {
+    const g = screen();
+    if (!/Pokegear/.test(sid())) fail(`the POKeGEAR closed on the way to its radio (${sid()})`);
+    const card = g.card?.();
+    if (g.mode === "card" && card?.id === "radio") break;
+    if (f % 8) {
+      step(0);
+      continue;
+    }
+    // the strip: right along it, A on the radio; inside the PHONE (which
+    // opens by itself) right switches straight to the radio; a MAP card is
+    // left with B
+    if (g.mode === "strip") step(card?.id === "radio" ? VOX_BTN.a : VOX_BTN.right);
+    else step(card?.id === "map" ? VOX_BTN.b : VOX_BTN.right);
+  }
+  for (let f = 0; f < 600 && screen()?.station !== station; f++) {
+    const g = screen();
+    step(f % 8 ? 0 : (g.station ?? 0) < station ? VOX_BTN.up : VOX_BTN.down);
+  }
+  if (screen()?.station !== station) {
+    const g = screen();
+    fail(`the radio would not tune to station ${station} (mode ${g?.mode} card ${g?.card?.()?.id} station ${g?.station} cards ${(g?.cards ?? []).map((c: any) => c.id).join(",")})`);
+  }
+  for (let f = 0; f < 90; f++) step(0);
+  for (let f = 0; f < 400 && busy(); f++) step(f % 12 === 0 ? VOX_BTN.b : 0);
+  settle();
+}
+
 /** Is there a way from here to a cell `goal` accepts (no walking)? */
 export function canReach(goal: (m: string, x: number, y: number) => boolean): boolean {
   const acts = planTo(goal);
@@ -930,6 +988,7 @@ export function go(goal: (m: string, x: number, y: number) => boolean, what: str
   // steps refused on an earlier trip (a guard who has since stood aside)
   // are worth trying again
   refused.clear();
+  const bounced = new Map<string, number>();
   for (let tries = 0; tries < 300; tries++) {
     if (process.env.STORY_DEBUG) log(`    [round ${tries}] before settle: ${describe()} held=${world().heldDir}`);
     settle();
@@ -956,6 +1015,11 @@ export function go(goal: (m: string, x: number, y: number) => boolean, what: str
           }
           log(`      board ${String(y).padStart(2)} ${r}`);
         }
+      }
+      if (process.env.STORY_DEBUG) {
+        const seenMapsHere = new Set<string>();
+        planTo((m) => { seenMapsHere.add(m); return false; });
+        log(`      reachable maps: ${[...seenMapsHere].join(" ")}`);
       }
       fail(`no way to ${what} from ${describe()}; near: ${near}`);
     }
@@ -1018,7 +1082,20 @@ export function go(goal: (m: string, x: number, y: number) => boolean, what: str
         refused.add(`${here},${qx},${qy},${a.dir}`);
         break;
       }
-      if (r === "interrupted") break;
+      if (r === "interrupted") {
+        // a script that walks the player back (a gate guard: no BICYCLE)
+        // refuses the step: twice, and it is planned round. (A wild battle
+        // leaves them where the step took them.)
+        settle();
+        const now = world().player;
+        if (world().map.id === here && !(now.cellX === qx + dx && now.cellY === qy + dy)) {
+          const key = `${here},${qx},${qy},${a.dir}`;
+          const n = (bounced.get(key) ?? 0) + 1;
+          bounced.set(key, n);
+          if (n >= 2) refused.add(key);
+        }
+        break;
+      }
       if (a.leaves) {
         // on the warp and still here: a mat or a door wants a step its way.
         // (A warp can lead elsewhere on the same map: judge by where the

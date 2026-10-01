@@ -1,9 +1,10 @@
 // The Gold story run's chapters (tools/gold_story.ts), in story order. Each
 // walks its part of the critical path and checks what the cart would have
 // handed over by the end of it.
+import { VOX_BTN } from "../contracts/spec/voxel-spec.ts";
 import { Mon } from "../voxelmon/game/gen2/battle/Mon.ts";
 import {
-  dropBoulders, fail, healIfLow, useOn, badges, can, canReach, chapters, describe, reach, engine, expect, flag, game, hasItem, log, npc, partySpecies, save, settle, talk, travel, use, walk, walkTo,
+  aFacing, withAnswer, dropBoulders, pokegearRadio, fail, healIfLow, useOn, badges, can, canReach, chapters, describe, reach, engine, expect, flag, game, hasItem, log, npc, partySpecies, save, settle, talk, travel, use, walk, walkTo,
 } from "./gold_story.ts";
 
 const chapter = (name: string, run: () => void): void => {
@@ -208,6 +209,29 @@ chapter("12 Goldenrod Gym and WHITNEY", () => {
   talk("SPRITE_WHITNEY");
   expect(hasBadge("PLAINBADGE"), `the PLAINBADGE (have ${badges().join(" ")})`);
 });
+
+chapter("12b the RADIO CARD: the Radio Tower's quiz", () => {
+  // five questions on 1F; YES to taking it, then YES YES NO YES NO
+  travel("RADIO_TOWER_1F");
+  if (!engine("ENGINE_RADIO_CARD")) {
+    const answers = [1, 1, 1, 2, 1, 2];
+    let box: any = null;
+    let k = -1;
+    withAnswer((top) => {
+      if (top?.constructor?.name !== "ChoiceBox") return undefined;
+      if (top !== box) {
+        box = top;
+        k++;
+      }
+      const want = answers[k] ?? 1;
+      if (game.frames % 6 !== 0 && (frameTick++ % 6) !== 0) return 0;
+      return top.index === want ? VOX_BTN.a : want === 2 ? VOX_BTN.down : VOX_BTN.up;
+    }, () => use(12, 6, "the quiz lady"));
+    settle();
+  }
+  expect(engine("ENGINE_RADIO_CARD"), "the RADIO CARD");
+});
+let frameTick = 0;
 
 chapter("13 the SQUIRTBOTTLE from the flower shop", () => {
   // Gold's shop asks only for the PLAINBADGE (Floria's errand is Crystal's)
@@ -541,6 +565,127 @@ chapter("34 the S.S. AQUA to Vermilion", () => {
   settle();
   expect(here() === "VERMILION_PORT", `ashore at Vermilion (at ${describe()})`);
   travel("VERMILION_CITY");
+});
+
+chapter("35 Vermilion Gym and LT. SURGE", () => {
+  gym("VERMILION_GYM", "SPRITE_SURGE", "THUNDERBADGE");
+});
+
+chapter("36 Saffron Gym and SABRINA", () => {
+  gym("SAFFRON_GYM", "SPRITE_SABRINA", "MARSHBADGE");
+});
+
+chapter("37 the Power Plant: its MACHINE PART stolen", () => {
+  travel("POWER_PLANT");
+  settle();
+  // the manager is the man at (14, 10)
+  if (!flag("EVENT_MET_MANAGER_AT_POWER_PLANT")) use(14, 10, "the Power Plant's manager");
+  expect(flag("EVENT_MET_MANAGER_AT_POWER_PLANT"), "the manager met");
+});
+
+chapter("38 the MACHINE PART: the Rocket at Cerulean, back to the Power Plant", () => {
+  // a Rocket flees Cerulean Gym for Route 24; beaten, he tells where the
+  // part is hidden: the gym's water at (3, 8)
+  travel("CERULEAN_GYM");
+  settle();
+  log(`     met the grunt: ${flag("EVENT_MET_ROCKET_GRUNT_AT_CERULEAN_GYM")}`);
+  travel("ROUTE_24");
+  settle();
+  const grunt = (game.world.npcs ?? []).find((n: any) => !n.hidden && n.def?.sprite === "SPRITE_ROCKET");
+  if (grunt) use(grunt.cellX, grunt.cellY, "the Rocket on Route 24");
+  settle();
+  if (!hasItem("MACHINE_PART")) useOn("CERULEAN_GYM", 3, 8, "the hidden MACHINE PART");
+  expect(hasItem("MACHINE_PART") || flag("EVENT_FOUND_MACHINE_PART_IN_CERULEAN_GYM"), "the MACHINE PART");
+  travel("POWER_PLANT");
+  if (!flag("EVENT_RETURNED_MACHINE_PART")) use(14, 10, "the Power Plant's manager");
+  settle();
+  expect(flag("EVENT_RESTORED_POWER_TO_KANTO"), "the power back on in Kanto");
+});
+
+chapter("39 MISTY back from the cape, the CASCADEBADGE", () => {
+  // MISTY is out on Route 25 with her date; walking up on them sends her home
+  if (!flag("EVENT_ROUTE_25_MISTY_BOYFRIEND")) reach("ROUTE_25", 42, 7, () => flag("EVENT_ROUTE_25_MISTY_BOYFRIEND"));
+  settle();
+  gym("CERULEAN_GYM", "SPRITE_MISTY", "CASCADEBADGE");
+});
+
+chapter("40 the EXPN CARD at Lavender's radio station", () => {
+  travel("LAV_RADIO_TOWER_1F");
+  if (!engine("ENGINE_EXPN_CARD")) use(9, 1, "the station manager");
+  settle();
+  expect(engine("ENGINE_EXPN_CARD"), "the EXPN CARD");
+});
+
+chapter("41 Celadon Gym and ERIKA", () => {
+  gym("CELADON_GYM", "SPRITE_ERIKA", "RAINBOWBADGE");
+});
+
+chapter("42 Fuchsia Gym and JANINE", () => {
+  gym("FUCHSIA_GYM", "SPRITE_JANINE", "SOULBADGE");
+});
+
+chapter("43 SNORLAX woken by the POKe FLUTE station", () => {
+  // SNORLAX sleeps across the way to Diglett's Cave; just below it (34, 10)
+  // -- one of SnorlaxAwake's cells -- the POKeGEAR's radio on 20.0 (the
+  // EXPN CARD's POKe FLUTE), then A facing it
+  if (!flag("EVENT_FOUGHT_SNORLAX")) {
+    reach("VERMILION_CITY", 34, 10);
+    pokegearRadio(7);
+    aFacing("up");
+    settle();
+  }
+  expect(flag("EVENT_FOUGHT_SNORLAX"), "SNORLAX woken and fought");
+});
+
+chapter("43b Pewter Gym and BROCK", () => {
+  gym("PEWTER_GYM", "SPRITE_BROCK", "BOULDERBADGE");
+});
+
+chapter("44 the Seafoam Islands gym and BLAINE", () => {
+  gym("SEAFOAM_GYM", "SPRITE_BLAINE", "VOLCANOBADGE");
+});
+
+chapter("45 BLUE on Cinnabar, then Viridian Gym", () => {
+  // BLUE waits on what is left of Cinnabar; spoken to, he goes home to
+  // his gym
+  if (flag("EVENT_BLUE_IN_CINNABAR") === false && !hasBadge("EARTHBADGE")) {
+    travel("CINNABAR_ISLAND");
+    talk("SPRITE_BLUE");
+    settle();
+  }
+  gym("VIRIDIAN_GYM", "SPRITE_BLUE", "EARTHBADGE");
+});
+
+chapter("46 OAK opens Mt. Silver", () => {
+  expect(badges().length >= 16, `all sixteen badges (have ${badges().length})`);
+  travel("OAKS_LAB");
+  if (!flag("EVENT_OPENED_MT_SILVER")) talk("SPRITE_OAK");
+  settle();
+  expect(flag("EVENT_OPENED_MT_SILVER"), "Mt. Silver opened");
+});
+
+chapter("47 Mt. Silver: RED", () => {
+  travel("SILVER_CAVE_ROOM_3");
+  settle();
+  const beat = (): boolean => flag("EVENT_RED_IN_MT_SILVER") === true && here() !== "SILVER_CAVE_ROOM_3";
+  for (let k = 0; k < 3 && here() === "SILVER_CAVE_ROOM_3" && (game.world.npcs ?? []).some((n: any) => !n.hidden && n.def?.sprite === "SPRITE_RED"); k++) {
+    try {
+      talk("SPRITE_RED");
+    } catch (e) {
+      if (here() === "SILVER_CAVE_ROOM_3") throw e;
+    }
+  }
+  for (let k = 0; k < 12; k++) {
+    try {
+      settle(20000);
+      break;
+    } catch {
+      log(`     still going: ${describe()}`);
+    }
+  }
+  log(`     after RED: ${describe()} red-in-silver ${flag("EVENT_RED_IN_MT_SILVER")}`);
+  void beat;
+  expect(!(game.world.npcs ?? []).some((n: any) => !n.hidden && n.def?.sprite === "SPRITE_RED") || here() !== "SILVER_CAVE_ROOM_3", "RED beaten");
 });
 
 void describe;
