@@ -101,17 +101,23 @@ import { BattleHud } from "../voxelmon/game/gen2/ui/BattleHud.ts";
 const ptime = new Map<string, number>();
 const pcalls = new Map<string, number>();
 const done1 = new Set<string>();
+const childStack: number[] = [];
 function wrapT(obj: any, name: string, label: string): void {
   const f = obj?.[name];
   if (typeof f !== "function" || done1.has(label)) return;
   done1.add(label);
   obj[name] = function (this: unknown, ...a: unknown[]) {
     const t = now();
+    childStack.push(0);
     try {
       return f.apply(this, a);
     } finally {
-      ptime.set(label, (ptime.get(label) ?? 0) + (now() - t));
+      const dt = now() - t;
+      const kids = childStack.pop()!;
+      // self time: this call less the wrapped calls inside it
+      ptime.set(label, (ptime.get(label) ?? 0) + (dt - kids));
       pcalls.set(label, (pcalls.get(label) ?? 0) + 1);
+      if (childStack.length > 0) childStack[childStack.length - 1]! += dt;
     }
   };
 }
@@ -142,7 +148,7 @@ const prevFrame = (globalThis as any).frame;
   if (++pframes % 1500 === 0) {
     const rows = [...ptime.entries()].sort((a, b) => b[1] - a[1]).slice(0, 40)
       .map(([k, v]) => `${k} ${(v / 1500).toFixed(0)}us x${((pcalls.get(k) ?? 0) / 1500).toFixed(1)}`);
-    console.log(`[battle] profile:\n  ${rows.join("\n  ")}`);
+    console.log(`[battle] profile (self time):\n  ${rows.join("\n  ")}`);
     ptime.clear();
     pcalls.clear();
   }

@@ -59,6 +59,8 @@ if (pages) {
 // ---- the game ---------------------------------------------------------------
 const game = Game2.new();
 const view = new WorldView(host, walker as ConstructorParameters<typeof WorldView>[1]);
+// for tools that wrap this entry (tools/gold_battle_entry.ts, a Citra bench)
+(globalThis as unknown as { goldGame?: Game2 }).goldGame = game;
 try {
   game.load();
 } catch (e) {
