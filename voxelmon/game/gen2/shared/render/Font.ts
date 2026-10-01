@@ -269,8 +269,7 @@ export const Font = {
   drawCode(code: number, x: number, y: number): void {
     const id = tileOf(code);
     if (id === undefined) return;
-    const [sx, sy] = G.transformPoint(x, y);
-    putTile(id, Math.round(sx), Math.round(sy));
+    putTile(id, Math.round(x + G.tx), Math.round(y + G.ty));
   },
 
   /** The tile id a code draws as (for screens that write cells directly). */

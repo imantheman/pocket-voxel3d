@@ -44,6 +44,12 @@ static JSValue op_null(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)ctx; (void)t; (void)c; (void)v;
     return JS_NULL;
 }
+static JSValue op_now(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return JS_NewFloat64(ctx, ts.tv_sec * 1e6 + ts.tv_nsec / 1e3);
+}
 static JSValue op_log(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t;
     for (int i = 0; i < c; i++) {
@@ -100,6 +106,7 @@ int main(int argc, char **argv) {
     JS_SetPropertyStr(ctx, vox, "gamedata", JS_NewCFunction(ctx, op_gamedata, "gamedata", 0));
     JS_SetPropertyStr(ctx, vox, "audiodata", JS_NewCFunction(ctx, op_null, "audiodata", 0));
     JS_SetPropertyStr(ctx, vox, "saveData", JS_NewCFunction(ctx, op_null, "saveData", 0));
+    if (getenv("PROF")) JS_SetPropertyStr(ctx, vox, "now", JS_NewCFunction(ctx, op_now, "now", 0));
     JS_SetPropertyStr(ctx, g, "voxel", vox);
     JSValue con = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, con, "log", JS_NewCFunction(ctx, op_log, "log", 1));

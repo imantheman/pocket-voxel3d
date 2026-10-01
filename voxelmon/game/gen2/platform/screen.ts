@@ -91,6 +91,13 @@ interface DrawState {
 }
 
 let lcd: Lcd | null = null;
+// putTile's shortcuts: the target's cell arrays, and the palette slot the
+// last cell drawn used (valid for one lcd frame)
+let cellsOf = new Uint16Array(0);
+let attrsOf = new Uint8Array(0);
+let cachePal: Palette4 | null = null;
+let cacheFrame = -1;
+let cacheSlot = 0;
 let st: DrawState = fresh();
 const stack: DrawState[] = [];
 let canvasDepth = 0;
@@ -102,6 +109,9 @@ function fresh(): DrawState {
 /** The Gold screen draws land on (null: drawing is a no-op, as in tests of logic). */
 export function setLcd(target: Lcd | null): void {
   lcd = target;
+  cellsOf = target ? target.s.cells : new Uint16Array(0);
+  attrsOf = target ? target.s.attrs : new Uint8Array(0);
+  cachePal = null;
 }
 
 export function currentLcd(): Lcd | null {
@@ -128,24 +138,45 @@ function rgb255(c: readonly number[]): Rgb {
   return [Math.round(c[0]! * scale), Math.round(c[1]! * scale), Math.round(c[2]! * scale)];
 }
 
-/** Put one 8x8 tile at screen pixel (x, y). */
+/**
+ * Put one 8x8 tile at screen pixel (x, y). The cell path is written out in
+ * full rather than through clipped()/lcd.cell(): under the 3DS's QuickJS a
+ * function call costs more than everything else a tile does, and a screen
+ * puts hundreds of tiles every frame.
+ */
 export function putTile(id: number, x: number, y: number, flipX = false, flipY = false, asObj = false): void {
-  if (!lcd || canvasDepth > 0) return;
+  const l = lcd;
+  if (l === null || canvasDepth > 0) return;
+  const s = st;
   const flips = (flipX ? ATTR_X_FLIP : 0) | (flipY ? ATTR_Y_FLIP : 0);
-  if (st.map !== null && !asObj && !st.objects && (x & 7) === 0 && (y & 7) === 0) {
-    // a map cell: lcd.cell drops what falls outside the 32x32 map
-    const pal = lcd.palette(st.palette);
-    lcd.cell(x >> 3, y >> 3, id, pal | flips | (st.keyed ? ATTR_PRIORITY : 0), st.map);
+  if (!asObj && !s.objects && (x & 7) === 0 && (y & 7) === 0) {
+    const map = s.map;
+    let base = 0;
+    if (map === null) {
+      if (x < 0 || y < 0 || x >= LCD_W || y >= LCD_H) return;
+      const sc = s.scissor;
+      if (sc !== null && (x + 8 <= sc[0] || y + 8 <= sc[1] || x >= sc[0] + sc[2] || y >= sc[1] + sc[3])) return;
+    } else {
+      // a map cell: positions in that map, unclipped by the screen
+      if (x < 0 || y < 0 || x >= 256 || y >= 256) return;
+      base = map === 1 ? 1024 : 0;
+    }
+    if (base) l.windowUsed = true;
+    const i = base + (y >> 3) * 32 + (x >> 3);
+    let slot: number;
+    if (s.palette === cachePal && l.frame === cacheFrame) slot = cacheSlot;
+    else {
+      slot = l.palette(s.palette);
+      cachePal = s.palette;
+      cacheFrame = l.frame;
+      cacheSlot = slot;
+    }
+    cellsOf[i] = id & 0xffff;
+    attrsOf[i] = (slot | flips | (s.keyed ? ATTR_PRIORITY : 0)) & 0xef;
     return;
   }
   if (clipped(x, y, 8, 8)) return;
-  if (!asObj && !st.objects && (x & 7) === 0 && (y & 7) === 0) {
-    const pal = lcd.palette(st.palette);
-    lcd.cell(x >> 3, y >> 3, id, pal | flips | (st.keyed ? ATTR_PRIORITY : 0));
-  } else {
-    const pal = lcd.palette(st.palette, true);
-    lcd.obj(x, y, id, pal | flips);
-  }
+  l.obj(x, y, id, l.palette(s.palette, true) | flips);
 }
 
 /** A cell with an explicit palette slot (a fill reusing a palette on screen). */
@@ -177,6 +208,13 @@ export const G = {
     st.ty += y;
   },
   scale(_sx: number, _sy?: number): void {},
+  /** The current translation (what transformPoint adds). */
+  get tx(): number {
+    return st.tx;
+  },
+  get ty(): number {
+    return st.ty;
+  },
   transformPoint(x: number, y: number): [number, number] {
     return [x + st.tx, y + st.ty];
   },
@@ -334,11 +372,30 @@ export const G = {
     const cy0 = Math.ceil(Y0 / 8);
     const cx1 = Math.floor(X1 / 8);
     const cy1 = Math.floor(Y1 / 8);
-    for (let cy = cy0; cy < cy1; cy++) {
-      for (let cx = cx0; cx < cx1; cx++) {
-        if (cellAttr >= 0) putCell(cellTile, cx * 8, cy * 8, cellAttr);
-        else putTile(SOLID[0], cx * 8, cy * 8);
+    if (cx1 > cx0 && cy1 > cy0) {
+      // whole rows of cells at once: the screen's own clip (or the map's
+      // bounds, drawing into a map), then the scissor, then a native fill
+      const map = st.map;
+      let fx0 = cx0;
+      let fy0 = cy0;
+      let fx1 = cx1;
+      let fy1 = cy1;
+      if (map === null) {
+        fx0 = Math.max(fx0, 0);
+        fy0 = Math.max(fy0, 0);
+        fx1 = Math.min(fx1, LCD_W / 8);
+        fy1 = Math.min(fy1, LCD_H / 8);
+        const sc = st.scissor;
+        if (sc !== null) {
+          fx0 = Math.max(fx0, Math.floor(sc[0] / 8));
+          fy0 = Math.max(fy0, Math.floor(sc[1] / 8));
+          fx1 = Math.min(fx1, Math.ceil((sc[0] + sc[2]) / 8));
+          fy1 = Math.min(fy1, Math.ceil((sc[1] + sc[3]) / 8));
+        }
       }
+      const tile = cellAttr >= 0 ? cellTile : SOLID[0];
+      const attr = ((cellAttr >= 0 ? cellAttr : lcd.palette(st.palette)) | (st.keyed ? ATTR_PRIORITY : 0)) & 0xef;
+      lcd.fillCells(fx0, fy0, fx1 - fx0, fy1 - fy0, tile, attr, map ?? 0);
     }
     st.palette = [c, c, c, c];
     if (cx0 * 8 !== X0 || cy0 * 8 !== Y0 || cx1 * 8 !== X1 || cy1 * 8 !== Y1) {

@@ -175,11 +175,23 @@ export class Lcd {
   private sentShown = false;
   /** The core's defaults (lcd.rs LcdScreen::default). */
   private sentRegs = `0,0,7,${LCD_H},${FLAG_BG_ON | FLAG_OBJ_ON}`;
+  /** 32-bit views of the current and the sent cells (end()'s diff). */
+  private s32: Uint32Array[] | undefined;
+  private t32: Uint32Array[] | undefined;
   private sentLines = "0";
   shown = false;
   /** Palette slots handed out this frame, by colour key. */
   private bgPalKeys: string[] = [];
   private objPalKeys: string[] = [];
+  /** Bumped by begin(): anything cached against this frame's palette slots keys on it. */
+  frame = 0;
+  /** A draw touched the window map this frame (end() diffs its rows only then). */
+  windowUsed = false;
+  private sentWindowUsed = false;
+  private lastBgPal: Palette4 | null = null;
+  private lastBgSlot = 0;
+  private lastObjPal: Palette4 | null = null;
+  private lastObjSlot = 0;
   /** Palette slot a draw uses when it names none. */
   bgPal = 0;
   objPal = 0;
@@ -193,9 +205,13 @@ export class Lcd {
 
   /** Start a frame: every cell a hole, no objects, no palettes handed out. */
   begin(): void {
+    this.frame++;
+    this.windowUsed = false;
     this.s.clearMaps();
     this.bgPalKeys.length = 0;
     this.objPalKeys.length = 0;
+    this.lastBgPal = null;
+    this.lastObjPal = null;
     this.s.scx = 0;
     this.s.scy = 0;
     this.s.wx = 7;
@@ -212,14 +228,40 @@ export class Lcd {
    * last slot is reused (and the screen shows the overflow).
    */
   palette(p: Palette4, obj = false): number {
-    const key = p.map((c) => rgb555(c)).join(",");
+    // the hot path: the same palette object as the last call this frame
+    if (obj) {
+      if (p === this.lastObjPal) return this.lastObjSlot;
+    } else if (p === this.lastBgPal) return this.lastBgSlot;
+    const c0 = rgb555(p[0]);
+    const c1 = rgb555(p[1]);
+    const c2 = rgb555(p[2]);
+    const c3 = rgb555(p[3]);
     const keys = obj ? this.objPalKeys : this.bgPalKeys;
-    let slot = keys.indexOf(key);
+    const cols = this.s.colours;
+    const off = obj ? 16 * 4 : 0;
+    let slot = -1;
+    for (let i = 0; i < keys.length; i++) {
+      const b = off + i * 4;
+      if (cols[b] === c0 && cols[b + 1] === c1 && cols[b + 2] === c2 && cols[b + 3] === c3) {
+        slot = i;
+        break;
+      }
+    }
     if (slot < 0) {
       slot = Math.min(keys.length, LCD_PALS - 1);
-      keys[slot] = key;
-      const base = (obj ? 16 + slot : slot) * 4;
-      for (let i = 0; i < 4; i++) this.s.colours[base + i] = rgb555(p[i]!);
+      keys[slot] = "";
+      const b = off + slot * 4;
+      cols[b] = c0;
+      cols[b + 1] = c1;
+      cols[b + 2] = c2;
+      cols[b + 3] = c3;
+    }
+    if (obj) {
+      this.lastObjPal = p;
+      this.lastObjSlot = slot;
+    } else {
+      this.lastBgPal = p;
+      this.lastBgSlot = slot;
     }
     return slot;
   }
@@ -242,6 +284,7 @@ export class Lcd {
   /** One cell. `layer` 0 background, 1 window; tx/ty in tiles. */
   cell(tx: number, ty: number, tile: number, attr = this.bgPal, layer = 0): void {
     if (tx < 0 || ty < 0 || tx > 31 || ty > 31) return;
+    if (layer) this.windowUsed = true;
     const i = layer * WINDOW + ty * 32 + tx;
     this.s.cells[i] = tile & 0xffff;
     this.s.attrs[i] = attr & ~ATTR_HOLE & 0xff;
@@ -251,8 +294,27 @@ export class Lcd {
     for (let y = ty; y < ty + th; y++) for (let x = tx; x < tx + tw; x++) this.cell(x, y, tile, attr, layer);
   }
 
+  /** A rect of cells in one tile and attribute, a native fill per row (clipped to the map). */
+  fillCells(tx: number, ty: number, tw: number, th: number, tile: number, attr: number, layer = 0): void {
+    const x0 = Math.max(0, tx);
+    const x1 = Math.min(32, tx + tw);
+    const y0 = Math.max(0, ty);
+    const y1 = Math.min(32, ty + th);
+    if (x1 <= x0) return;
+    if (layer) this.windowUsed = true;
+    const cells = this.s.cells;
+    const attrs = this.s.attrs;
+    const a = attr & ~ATTR_HOLE & 0xff;
+    for (let y = y0; y < y1; y++) {
+      const i = layer * WINDOW + y * 32;
+      cells.fill(tile & 0xffff, i + x0, i + x1);
+      attrs.fill(a, i + x0, i + x1);
+    }
+  }
+
   /** Put cells back to holes: the world shows through them again. */
   hole(tx: number, ty: number, tw: number, th: number, layer = 0): void {
+    if (layer) this.windowUsed = true;
     for (let y = Math.max(0, ty); y < Math.min(32, ty + th); y++) {
       for (let x = Math.max(0, tx); x < Math.min(32, tx + tw); x++) {
         const i = layer * WINDOW + y * 32 + x;
@@ -293,8 +355,34 @@ export class Lcd {
     if (!this.shown) return;
     const s = this.s;
     const t = this.sent;
-    // cells: per 32-cell row, the span from the first to the last change
-    for (let row = 0; row < 64; row++) {
+    // cells: per 32-cell row, the span from the first to the last change.
+    // Rows are compared 32 bits at a time first (16 words of tiles, 8 of
+    // attributes): most rows do not change, and this is the frame's
+    // biggest loop under QuickJS.
+    const sc32 = (this.s32 ??= [new Uint32Array(s.cells.buffer), new Uint32Array(s.attrs.buffer)]);
+    const tc32 = (this.t32 ??= [new Uint32Array(t.cells.buffer), new Uint32Array(t.attrs.buffer)]);
+    // the window's 32 rows only when it holds something now or did when sent
+    const rows = this.windowUsed || this.sentWindowUsed ? 64 : 32;
+    this.sentWindowUsed = this.windowUsed;
+    for (let row = 0; row < rows; row++) {
+      let same = true;
+      const cw = row * 16;
+      for (let k = 0; k < 16; k++) {
+        if (sc32[0]![cw + k] !== tc32[0]![cw + k]) {
+          same = false;
+          break;
+        }
+      }
+      if (same) {
+        const aw = row * 8;
+        for (let k = 0; k < 8; k++) {
+          if (sc32[1]![aw + k] !== tc32[1]![aw + k]) {
+            same = false;
+            break;
+          }
+        }
+      }
+      if (same) continue;
       const base = row * 32;
       let a = -1;
       let b = -1;
@@ -358,6 +446,7 @@ export class Lcd {
   /** Forget what the core holds (after a host scene reset). */
   invalidate(): void {
     this.sent = new LcdState();
+    this.t32 = undefined;
     this.sent.attrs.fill(0xfe); // matches nothing: every cell resends
     this.sentObjs = "\0";
     this.sentShown = !this.shown;

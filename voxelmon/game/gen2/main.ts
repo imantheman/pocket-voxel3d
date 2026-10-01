@@ -64,17 +64,51 @@ try {
   Logger.error("gold: load failed: %s", String((e as Error)?.stack ?? e));
 }
 
+// Optional phase timing: a host that registers `voxel.now()` (microseconds;
+// the desktop QuickJS harness, a profiling build) gets a line every 300
+// frames saying where the guest's time went.
+const clock = (native as unknown as { now?: () => number }).now;
+const prof = { n: 0, step: 0, draw: 0, end: 0, view: 0 };
+
+// The 3DS shows 30 frames a second and runs the game at 60 steps a second,
+// calling frame() once per step. The logic runs every step; the Gold screen
+// is composed (game.draw + lcd.end) every other one -- every frame that is
+// shown -- and the scene follows every step, its ops being cheap and
+// delta-gated.
+let stepNo = 0;
+
 (globalThis as unknown as { frame: (buttons: number) => void }).frame = (buttons: number): void => {
+  const t0 = clock ? clock() : 0;
+  const compose = (stepNo++ & 1) === 0;
   try {
     game.frame(buttons & 0xff);
   } catch (e) {
     Logger.error("gold: step: %s", String((e as Error)?.stack ?? e));
   }
+  const t1 = clock ? clock() : 0;
+  let t2 = t1;
+  let t3 = t1;
   try {
-    game.draw(lcd);
-    lcd.end();
+    if (compose) {
+      game.draw(lcd);
+      t2 = clock ? clock() : 0;
+      lcd.end();
+    }
+    t3 = clock ? clock() : 0;
     view.emit(game);
   } catch (e) {
     Logger.error("gold: draw: %s", String((e as Error)?.stack ?? e));
+  }
+  if (clock) {
+    const t4 = clock();
+    prof.step += t1 - t0;
+    prof.draw += t2 - t1;
+    prof.end += t3 - t2;
+    prof.view += t4 - t3;
+    if (++prof.n === 300) {
+      const us = (v: number): string => (v / prof.n).toFixed(0);
+      console.log(`[gold] us/frame: step ${us(prof.step)} draw ${us(prof.draw)} lcd ${us(prof.end)} view ${us(prof.view)} (top: ${game.stack.top()?.screenId ?? (game.world ? "world" : "-")})`);
+      prof.n = prof.step = prof.draw = prof.end = prof.view = 0;
+    }
   }
 };
