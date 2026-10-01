@@ -368,6 +368,7 @@ pub mod op {
     pub const LCD_OBJS: u32 = 101;
     pub const LCD_PALS: u32 = 102;
     pub const LCD_LINES: u32 = 103;
+    pub const DAYTIME: u32 = 104;
 }
 
 /// Fixed-point scales used by op args.
@@ -476,6 +477,8 @@ pub const VXPK_COLOR_HEADER_SIZE: usize = 16;
 pub const VXPK_COLOR_VERSION: u16 = 1;
 /// VCOL flag bit 0: the terrain page carries per-tile RED++ groups.
 pub const VXPK_COLOR_FLAG_WORLD: u16 = 1;
+/// VCOL flag bit 1 (Gold): palettes come in MORN/DAY/NITE/DARK fours.
+pub const VXPK_COLOR_FLAG_DAYTIME: u16 = 2;
 /// "no VCOL palette here" — fall through to the legacy binding.
 pub const COLOR_PAL_NONE: u16 = 0xffff;
 

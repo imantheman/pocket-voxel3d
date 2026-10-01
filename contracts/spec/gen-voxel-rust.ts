@@ -99,6 +99,7 @@ import {
   VXPK_AUDIO_HEADER_SIZE,
   VXPK_CHUNK_RECORD_SIZE,
   VXPK_COLOR_FLAG_WORLD,
+  VXPK_COLOR_FLAG_DAYTIME,
   VXPK_COLOR_HEADER_SIZE,
   VXPK_COLOR_VERSION,
   VXPK_ENTRY_SIZE,
@@ -491,6 +492,8 @@ export function generateVoxelRust(): string {
   put(`pub const VXPK_COLOR_VERSION: u16 = ${VXPK_COLOR_VERSION};`);
   put("/// VCOL flag bit 0: the terrain page carries per-tile RED++ groups.");
   put(`pub const VXPK_COLOR_FLAG_WORLD: u16 = ${VXPK_COLOR_FLAG_WORLD};`);
+  put("/// VCOL flag bit 1 (Gold): palettes come in MORN/DAY/NITE/DARK fours.");
+  put(`pub const VXPK_COLOR_FLAG_DAYTIME: u16 = ${VXPK_COLOR_FLAG_DAYTIME};`);
   put('/// "no VCOL palette here" — fall through to the legacy binding.');
   put(`pub const COLOR_PAL_NONE: u16 = ${hex(COLOR_PAL_NONE, 4)};`);
   put("");

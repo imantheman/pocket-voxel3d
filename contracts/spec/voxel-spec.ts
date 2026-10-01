@@ -825,6 +825,14 @@ export const VOX_OP = {
   lcdObjs: 101,
   lcdPals: 102,
   lcdLines: 103,
+  /**
+   * Gold's time of day for the world's colours: 0 MORN, 1 DAY, 2 NITE,
+   * 3 DARK (an unlit cave). A pak whose VCOL has VXPK_COLOR_FLAG_DAYTIME
+   * cooks four palettes per map and per sprite sheet, and this picks the
+   * one drawn; other paks ignore it.
+   *   daytime(k)
+   */
+  daytime: 104,
 } as const;
 
 /** Clips in Yellow's PikachuCriesPointerTable (NUM_PIKA_CRIES). */
@@ -1050,6 +1058,10 @@ export const VXPK_COLOR_HEADER_SIZE = 16;
 export const VXPK_COLOR_VERSION = 1;
 /** VCOL flag bit 0: the terrain page carries per-tile RED++ group indices. */
 export const VXPK_COLOR_FLAG_WORLD = 1 << 0;
+/** VCOL flag bit 1 (Gold): every world_pal and page_pal names the first of
+ *  four consecutive palettes -- MORN, DAY, NITE, DARK -- and the `daytime`
+ *  op picks among them. */
+export const VXPK_COLOR_FLAG_DAYTIME = 1 << 1;
 /** "no VCOL palette here" — fall through to the legacy binding. */
 export const COLOR_PAL_NONE = 0xffff;
 

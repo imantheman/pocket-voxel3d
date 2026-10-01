@@ -259,6 +259,7 @@ int qjs_register_voxel(JSContext *ctx) {
     add_num(ctx, o, "lcdBank",  97, 3);
     add_num(ctx, o, "lcdReset", 98, 0);
     add_num(ctx, o, "lcdRegs", 100, 5);
+    add_num(ctx, o, "daytime", 104, 1);
     JS_SetPropertyStr(ctx, o, "lcdCells",
         JS_NewCFunctionMagic(ctx, vox_numtext, "lcdCells", 2, JS_CFUNC_generic_magic, 99));
     JS_SetPropertyStr(ctx, o, "lcdObjs",

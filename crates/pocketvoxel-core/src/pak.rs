@@ -127,6 +127,11 @@
 //!   count), checked here. Map ids are unique and must each name a CHNK map.
 //! ```
 
+/// Gold's time of day (0 MORN, 1 DAY, 2 NITE, 3 DARK), set by the scene's
+/// `daytime` op and read wherever a VXPK_COLOR_FLAG_DAYTIME pak resolves a
+/// palette. Process-wide because every pak read shares it.
+pub static DAYTIME: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(1);
+
 use alloc::vec::Vec;
 
 use crate::spec::{
@@ -429,7 +434,17 @@ impl<'a> Pak<'a> {
     /// water, grass and flower meshes sample. `None` = the legacy path.
     pub fn map_world_pal(&self, map_id: u32) -> Option<u16> {
         let rec = self.color.maps.iter().find(|m| m.map_id == map_id)?;
-        (rec.world_pal != COLOR_PAL_NONE).then_some(rec.world_pal)
+        (rec.world_pal != COLOR_PAL_NONE).then_some(rec.world_pal + self.daytime_offset())
+    }
+
+    /// Gold (VXPK_COLOR_FLAG_DAYTIME): which of a map's or sheet's four
+    /// palettes the current time of day draws -- the `daytime` op's value.
+    pub fn daytime_offset(&self) -> u16 {
+        if self.color.flags & spec::VXPK_COLOR_FLAG_DAYTIME != 0 {
+            DAYTIME.load(core::sync::atomic::Ordering::Relaxed).min(3) as u16
+        } else {
+            0
+        }
     }
 
     /// The map's own terrain atlas page, when VCOL names one (v1 always
@@ -444,7 +459,7 @@ impl<'a> Pak<'a> {
     /// legacy path (the `palette` op's SGB selection, else the kind ramp).
     pub fn page_pal(&self, page: u16) -> Option<u16> {
         let pal = *self.color.pages.get(page as usize)?;
-        (pal != COLOR_PAL_NONE).then_some(pal)
+        (pal != COLOR_PAL_NONE).then_some(pal + self.daytime_offset())
     }
 
     /// True when every chunk carries BOTH tree levels of detail, so the

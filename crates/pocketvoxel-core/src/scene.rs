@@ -188,6 +188,8 @@ pub struct Scene {
     pub pitch_t: u32,
     /// Global day tint, ABGR (0xffffffff = neutral).
     pub tint: u32,
+    /// Gold's time of day (the `daytime` op): 0 MORN, 1 DAY, 2 NITE, 3 DARK.
+    pub daytime: u8,
     /// The player's own camera swing, radians, on top of whatever camera the
     /// scene asks for: yaw around the focus, and elevation.
     ///
@@ -406,6 +408,7 @@ impl Scene {
             pitch_from_deg: PITCH_RUNGS[0],
             pitch_t: PITCH_TWEEN_TICKS, // settled at rung 0
             tint: 0xffff_ffff,
+            daytime: 1,
             cam_yaw_off: 0.0,
             cam_pitch_off: 0.0,
             cam_dist_scale: 1.0,
@@ -592,6 +595,11 @@ impl Scene {
                 }
             }
             op::TINT => self.tint = a(0) as u32,
+            op::DAYTIME => {
+                let k = a(0).clamp(0, 3) as u8;
+                self.daytime = k;
+                crate::pak::DAYTIME.store(k, core::sync::atomic::Ordering::Relaxed);
+            }
             op::PALETTE => {
                 if !args.is_empty() {
                     self.palette = a(0);
