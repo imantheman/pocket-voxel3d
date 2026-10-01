@@ -73,6 +73,11 @@ let state: State | null = null;
 let loadedFrom: { font: FontDef } | null = null;
 let currentFrame = 1;
 const reported = new Set<string>();
+// Font.encode's answers, per string: a menu prints the same few strings every
+// frame. Bounded, and dropped whenever the font changes. Callers only read
+// the arrays.
+let encoded = new Map<string, number[]>();
+const ENCODED_MAX = 512;
 
 // Font.lua:47
 function pagesOf(def: FontDef): Record<string, { image: string; base: number; glyphsPerRow: number; inactive?: boolean; advance?: number }> {
@@ -176,6 +181,7 @@ export const Font = {
     for (const list of s.byFirst.values()) list.sort((a, b) => b.seq.length - a.seq.length);
     Font.BORDER = { ...Font.DEFAULT_BORDER, ...(def.border ?? {}) };
     state = s;
+    encoded = new Map();
   },
 
   ttfActive(): boolean {
@@ -249,6 +255,8 @@ export const Font = {
 
   /** Font.lua:377 -- codes; an unmapped character is a space (logged once). */
   encode(text: string): number[] {
+    const hit = encoded.get(text);
+    if (hit) return hit;
     const codes: number[] = [];
     for (const span of Font.split(text)) {
       let code = span.code;
@@ -262,6 +270,8 @@ export const Font = {
       }
       codes.push(code);
     }
+    if (encoded.size >= ENCODED_MAX) encoded.clear();
+    encoded.set(text, codes);
     return codes;
   },
 

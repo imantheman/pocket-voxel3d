@@ -24,14 +24,28 @@ const CLASSIC_SHADES: Palette4 = [
   [15, 56, 15],
 ];
 
+// One Palette4 per colour table, made once: a menu swaps palettes a few
+// dozen times a frame, and building four fresh arrays each time cost more
+// than the drawing. The same object back each time also lets lcd.palette
+// answer from its last-palette check rather than matching colours again.
+// Nothing writes into a palette once made.
+const asPaletteCache = new WeakMap<object, Palette4>();
 function asPalette(colors: Colors | null | undefined): Palette4 {
   const c = colors ?? DMG_SHADES;
+  const cached = asPaletteCache.get(c);
+  if (cached) return cached;
   const at = (i: number): Rgb => {
     const e = c[i] ?? c[c.length - 1] ?? [0, 0, 0];
     return [e[0] ?? 0, e[1] ?? 0, e[2] ?? 0];
   };
-  return [at(0), at(1), at(2), at(3)];
+  const p: Palette4 = [at(0), at(1), at(2), at(3)];
+  asPaletteCache.set(c, p);
+  return p;
 }
+
+// remap's reorderings, per table and byte: the same object back for the same
+// pair, so asPalette's cache holds across a fade's frames too.
+const remapCache = new WeakMap<object, Map<number, Colors>>();
 
 export const GbcPalette = {
   MODES: ["gbc", "dmg", "classic"],
@@ -76,8 +90,18 @@ export const GbcPalette = {
   remap(colors: Colors | null | undefined, byte?: number | null): Colors | null {
     if (!colors) return null;
     if (byte == null || byte === GbcPalette.BGP_IDENTITY) return colors;
-    const shades = GbcPalette.bgpShades(byte);
-    return shades.map((s) => colors[s] ?? colors[3]!);
+    let byByte = remapCache.get(colors);
+    if (!byByte) {
+      byByte = new Map();
+      remapCache.set(colors, byByte);
+    }
+    let out = byByte.get(byte);
+    if (!out) {
+      const shades = GbcPalette.bgpShades(byte);
+      out = shades.map((s) => colors[s] ?? colors[3]!);
+      byByte.set(byte, out);
+    }
+    return out;
   },
 
   /** GbcPalette.lua:210 -- returns the previous byte. */
