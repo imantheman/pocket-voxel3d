@@ -22279,6 +22279,17 @@ function postGameRescue(save) {
   return true;
 }
 
+// voxelmon/game/tiltshift.ts
+var TILT_SHIFTS = [
+  { key: "off", label: "OFF" },
+  { key: "soft", label: "SOFT" },
+  { key: "strong", label: "STRONG" }
+];
+function tiltShiftLevel(v) {
+  const at = TILT_SHIFTS.findIndex((t) => t.key === v);
+  return at >= 0 ? at : 0;
+}
+
 // voxelmon/game/ui/optionsmenu.ts
 var OPTIONS_VISIBLE = 4;
 var CAMERA_SPEEDS = [
@@ -22332,6 +22343,11 @@ class OptionsMenuState {
         index: this.cameraIndex()
       },
       {
+        label: "TILT SHIFT",
+        choices: TILT_SHIFTS.map((t) => t.label),
+        index: tiltShiftLevel(this.opts().tiltShift)
+      },
+      {
         label: "DEV MENU",
         choices: ["OFF", "ON"],
         index: this.opts().devMenu === true ? 1 : 0
@@ -22353,6 +22369,8 @@ class OptionsMenuState {
     else if (row === 3)
       this.opts().cameraSpeed = CAMERA_SPEEDS[at].key;
     else if (row === 4)
+      this.opts().tiltShift = TILT_SHIFTS[at].key;
+    else if (row === 5)
       this.opts().devMenu = at === 1;
   }
   update() {
@@ -27337,6 +27355,9 @@ class VoxelmonGame {
       y: Math.max(-1, Math.min(1, y / r))
     };
   }
+  tiltShiftLevel() {
+    return tiltShiftLevel(this.save.options?.tiltShift);
+  }
   cameraSpeedQ8() {
     const v = this.save.options?.cameraSpeed;
     return CAMERA_SPEEDS.find((s) => s.key === v)?.q8 ?? CAMERA_SPEED_DEFAULT_Q8;
@@ -29019,6 +29040,9 @@ class QuickJsHost {
   daytime(k) {
     native.daytime?.(k);
   }
+  tiltShift(level) {
+    native.tiltShift?.(level);
+  }
   audioWaves(engine, bank, addr) {
     native.audioWaves?.(engine, bank, addr);
   }
@@ -29066,6 +29090,7 @@ globalThis.frame = (buttons) => {
   prevTouch = touching;
   game.setCamTurns(buttons >> 24 & 3);
   native.camSpeed?.(game.cameraSpeedQ8());
+  native.tiltShift?.(game.tiltShiftLevel());
   const st = native.stick?.();
   if (st !== undefined) {
     const sx2 = st >> 16 << 16 >> 16;
