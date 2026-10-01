@@ -158,8 +158,11 @@ export function renderLcd(
   return out;
 }
 
-const hex2 = (v: number): string => (v & 0xff).toString(16).padStart(2, "0");
-const hex4 = (v: number): string => (v & 0xffff).toString(16).padStart(4, "0");
+// Lookups, not toString(16).padStart: under QuickJS the formatting was a
+// large part of sending a frame (every changed cell and every object).
+const HEX2 = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
+const hex2 = (v: number): string => HEX2[v & 0xff]!;
+const hex4 = (v: number): string => HEX2[(v >> 8) & 0xff]! + HEX2[v & 0xff]!;
 
 /**
  * The frame builder the screens draw through. One per run; the host ops
