@@ -1263,7 +1263,7 @@ function animView_W6(self: World, key: string): WorldAnimCells[] | undefined {
 // Lua: World.lua:11311-11381 drawPeople (with drawEntityComposite,
 // drawGrassOver, drawGrassShake :9313-9342 and drawJumpShadow :9345-9366):
 // the Y-sorted draw list and, per entry, the effects drawn with it.
-function peopleView_W6(self: World, out: WorldActorEntry[], hideAll: boolean,
+export function peopleView_W6(self: World, out: WorldActorEntry[], hideAll: boolean,
                        hidePlayer: boolean, crystal: boolean): void {
   if (hideAll) return;
   const p = self.player;

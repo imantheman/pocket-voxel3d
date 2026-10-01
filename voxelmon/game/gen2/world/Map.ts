@@ -41,6 +41,8 @@ export class Map {
   static DELTA = DELTA;
 
   def: any;
+  /** Bumped by every block edit (the 2D view keys its tile cache on it). */
+  version = 0;
   id: string;
   tileset: any;
   width: number;
@@ -258,6 +260,8 @@ export class Map {
   setBlock(bx: number, by: number, block: number): void {
     if (bx < 0 || by < 0 || bx >= this.width || by >= this.height) return;
     this.blocks[by * this.width + bx] = block;
+    // the 2D view's tile cache keys on this (platform/map2d.ts)
+    this.version = (this.version ?? 0) + 1;
   }
 
   // Lua: Map.lua:226-237 -- graphics tile id on the 8px grid, border-extended.
