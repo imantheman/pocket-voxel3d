@@ -551,6 +551,20 @@ function planStep(m: string, x: number, y: number, dir: Dir, goal: (m: string, x
     }
     return { m: wp.destMap, x: ax, y: ay, leaves: key, surf: false };
   }
+  // ice: the player slides on until the next cell refuses them
+  if (!surf && Permissions.isIce(c)) {
+    let sx = tx;
+    let sy = ty;
+    for (let k = 0; k < 64 && Permissions.isIce(map.cellCollision(sx, sy)); k++) {
+      const nx = sx + dx;
+      const ny = sy + dy;
+      if (!Permissions.stepPermitted(collOf, sx, sy, dir)) break;
+      if (!map.inBounds(nx, ny) || !map.isWalkable(nx, ny) || (live && w.npcAt(nx, ny))) break;
+      sx = nx;
+      sy = ny;
+    }
+    return { m, x: sx, y: sy, surf: false };
+  }
   return { m, x: tx, y: ty, surf: (surf || startSurf) && water, startSurf };
 }
 
@@ -705,6 +719,12 @@ export function go(goal: (m: string, x: number, y: number) => boolean, what: str
         aAt(a.dir, () => !rockAt(q.cellX + dx, q.cellY + dy), `the rock at (${q.cellX + dx},${q.cellY + dy}) would not ROCK SMASH`);
       }
       const r = press(a.dir);
+      if (process.env.STORY_DEBUG && r !== "moved") {
+        const top = screen();
+        const vm = world().vm;
+        log(`      press ${a.dir} from (${q.cellX},${q.cellY}) -> ${r}: ${describe()} top=${top?.constructor?.name} vm=${vm?.running?.()} script=${vm?.currentKey ?? vm?.key ?? vm?.scriptKey ?? ""} tb=${JSON.stringify(Object.keys(world().textbox ?? {})).slice(0, 80)}`);
+        if (top) log(`        top: ${Object.keys(top).join(",").slice(0, 200)} | ${JSON.stringify(top.text ?? top.pages ?? top.lines ?? top.message ?? "").slice(0, 160)}`);
+      }
       if (r === "map") break;
       if (r === "blocked") {
         refused.add(`${here},${q.cellX},${q.cellY},${a.dir}`);
@@ -743,9 +763,10 @@ export function travel(to: string, _avoid: string[] = []): void {
   go((m) => m === to, to);
 }
 
-/** Stand on (x, y) of map `to`. */
-export function reach(to: string, x: number, y: number): void {
-  go((m, a, b) => m === to && a === x && b === y, `(${x},${y}) on ${to}`);
+/** Stand on (x, y) of map `to` -- or stop as soon as `done` holds (a coord
+ *  event's scene that walks the player off it again). */
+export function reach(to: string, x: number, y: number, done?: () => boolean): void {
+  go((m, a, b) => (done ? done() : false) || (m === to && a === x && b === y), `(${x},${y}) on ${to}`);
 }
 
 /** The POKeMON CENTER fewest hops away. */

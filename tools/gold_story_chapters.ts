@@ -95,8 +95,9 @@ function talkAll(sprite: string, done: () => boolean, max = 12): void {
     try {
       talk(sprite, k % list.length);
     } catch (e) {
-      // the story took the player elsewhere mid-walk (a scene's warp)
-      if (here() === map) throw e;
+      // the story took the player elsewhere mid-walk (a scene's warp), or
+      // this one is out of reach (behind a door not yet open): the next
+      if (here() === map && !/no way to|could not get to/.test(String((e as Error).message))) throw e;
     }
     settle();
   }
@@ -283,6 +284,68 @@ chapter("20 the SECRETPOTION, AMPHY cured, JASMINE", () => {
   talk("SPRITE_JASMINE");
   expect(flag("EVENT_JASMINE_RETURNED_TO_GYM"), "JASMINE back at her gym");
   gym("OLIVINE_GYM", "SPRITE_JASMINE", "MINERALBADGE");
+});
+
+chapter("21 the Lake of Rage: the red GYARADOS, LANCE", () => {
+  travel("LAKE_OF_RAGE");
+  const gyarados = (game.world.npcs ?? []).find((n: any) => n?.def?.sprite === "SPRITE_GYARADOS" && !n.hidden);
+  if (gyarados) use(gyarados.cellX, gyarados.cellY, "the red GYARADOS");
+  settle();
+  expect(hasItem("RED_SCALE"), "the RED SCALE");
+  // LANCE waits by the shore: YES to helping him
+  if (!flag("EVENT_DECIDED_TO_HELP_LANCE")) talk("SPRITE_LANCE");
+  expect(flag("EVENT_DECIDED_TO_HELP_LANCE"), "the promise to help LANCE");
+});
+
+chapter("22 the Team Rocket hideout under Mahogany", () => {
+  travel("MAHOGANY_MART_1F");
+  settle();
+  expect(flag("EVENT_UNCOVERED_STAIRCASE_IN_MAHOGANY_MART"), "the hidden staircase found");
+  // B2F: LANCE heals the party (5, 14), then the executive at (14, 11)
+  reach("TEAM_ROCKET_BASE_B2F", 5, 14, () => flag("EVENT_LANCE_HEALED_YOU_IN_TEAM_ROCKET_BASE"));
+  settle();
+  expect(flag("EVENT_LANCE_HEALED_YOU_IN_TEAM_ROCKET_BASE"), "LANCE's heal on B2F");
+  log(`     after the heal: B2F scene ${game.world.mapScenes?.TEAM_ROCKET_BASE_B2F}`);
+  // B3F: the rival (8, 10), the passwords from two grunts, the executive at
+  // the office door (10, 8), the door
+  reach("TEAM_ROCKET_BASE_B3F", 8, 10);
+  settle();
+  const pw = (): boolean => flag("EVENT_LEARNED_SLOWPOKETAIL") && flag("EVENT_LEARNED_RATICATE_TAIL");
+  for (let k = 0; k < 4 && !pw(); k++) {
+    talkAll("SPRITE_ROCKET_GIRL", pw, 3);
+    talkAll("SPRITE_ROCKET", pw, 6);
+    talkAll("SPRITE_SCIENTIST", pw, 4);
+  }
+  expect(flag("EVENT_LEARNED_SLOWPOKETAIL") && flag("EVENT_LEARNED_RATICATE_TAIL"), "both passwords");
+  // the office door takes both passwords; inside, the executive (10, 8)
+  if (!flag("EVENT_OPENED_DOOR_TO_GIOVANNIS_OFFICE")) use(10, 9, "the office door");
+  expect(flag("EVENT_OPENED_DOOR_TO_GIOVANNIS_OFFICE"), "the office door open");
+  reach("TEAM_ROCKET_BASE_B3F", 10, 8, () => flag("EVENT_BEAT_ROCKET_EXECUTIVEM_4"));
+  settle();
+  expect(flag("EVENT_BEAT_ROCKET_EXECUTIVEM_4"), "the executive in the office");
+  // the office's MURKROW (sprite slot SPRITE_MOLTRES) gives the transmitter
+  // password, HAIL GIOVANNI
+  if (!flag("EVENT_LEARNED_HAIL_GIOVANNI")) talk("SPRITE_MOLTRES");
+  expect(flag("EVENT_LEARNED_HAIL_GIOVANNI"), "the password HAIL GIOVANNI");
+  // B2F: the transmitter door, then its three ELECTRODE
+  travel("TEAM_ROCKET_BASE_B2F");
+  if (!flag("EVENT_OPENED_DOOR_TO_ROCKET_HIDEOUT_TRANSMITTER")) use(14, 12, "the transmitter door");
+  expect(flag("EVENT_OPENED_DOOR_TO_ROCKET_HIDEOUT_TRANSMITTER"), "the transmitter door open");
+  log(`     B2F scene ${game.world.mapScenes?.TEAM_ROCKET_BASE_B2F} B3F scene ${game.world.mapScenes?.TEAM_ROCKET_BASE_B3F}`);
+  // inside: the executive and LANCE (a coord event at (14, 11))
+  reach("TEAM_ROCKET_BASE_B2F", 14, 11, () => flag("EVENT_BEAT_ROCKET_EXECUTIVEF_2"));
+  settle();
+  expect(flag("EVENT_BEAT_ROCKET_EXECUTIVEF_2"), "the executive by the transmitter beaten");
+  talkAll("SPRITE_VOLTORB", () => flag("EVENT_CLEARED_ROCKET_HIDEOUT"), 10);
+  expect(flag("EVENT_CLEARED_ROCKET_HIDEOUT"), "the hideout cleared");
+  if (!flag("EVENT_GOT_HM06_WHIRLPOOL")) talk("SPRITE_LANCE");
+  expect(flag("EVENT_GOT_HM06_WHIRLPOOL"), "HM06 WHIRLPOOL from LANCE");
+  teach("WHIRLPOOL");
+  can.whirlpool = true;
+});
+
+chapter("23 Mahogany Gym and PRYCE", () => {
+  gym("MAHOGANY_GYM", "SPRITE_PRYCE", "GLACIERBADGE");
 });
 
 void describe;
