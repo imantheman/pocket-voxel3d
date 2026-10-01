@@ -1834,15 +1834,18 @@ H.RandomPhoneMon = (vm: Vm) => {
 
 // ---- 95 Snorlax -----------------------------------------------------------
 //
-// SnorlaxAwake: TRUE only when the POKe FLUTE channel is the music that is
-// playing AND the player is on one of five cells beside the Snorlax.  The
-// coordinates are the routine's own .ProximityCoords (SNORLAX_PROXIMITY below,
-// Lua: Specials.lua:1823).
+// SnorlaxAwake: TRUE only when the POKe FLUTE channel is the map's music AND
+// the player is on one of five cells beside the Snorlax.  The coordinates are
+// the routine's own .ProximityCoords (SNORLAX_PROXIMITY below, Lua:
+// Specials.lua:1823).  The music test is `ld a, [wMapMusic] / cp
+// MUSIC_POKE_FLUTE_CHANNEL`: the map music byte that leaving the POKeGEAR on
+// a tuned station writes (ExitPokegearRadio_HandleMusic), not whatever the
+// sound engine happens to be playing -- which a headless host never is.
 // Lua: Specials.lua:1828
 H.SnorlaxAwake = (vm: Vm) => {
   const h = hooks(vm);
   answer(vm, FALSE);
-  const song = h.currentMusic ? h.currentMusic() : undefined;
+  const song = h.mapMusic ? h.mapMusic() : h.currentMusic ? h.currentMusic() : undefined;
   if (song !== Specials.POKE_FLUTE_SONG) return;
   let x: any = 0;
   let y: any = 0;

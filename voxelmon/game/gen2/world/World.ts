@@ -4574,6 +4574,8 @@ export class World {
       fadeOutMusic: () => { Music.fadeOut(2); },
       stopMusic: () => { Music.stop(); },
       currentMusic: () => Music.current(),
+      // wMapMusic (a tuned POKeGEAR station left on writes it)
+      mapMusic: () => Music.mapSong(),
       fade: (kind: string) => { this.screenFade(kind); },
       reloadSprites: (withPalettes?: boolean) => { this.reloadSprites(withPalettes); },
       updatePlayerSprite: () => { this.applyPlayerState(this.playerState); },

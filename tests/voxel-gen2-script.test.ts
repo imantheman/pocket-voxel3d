@@ -473,6 +473,29 @@ gold("Vm on the Gold import", () => {
     expect(Specials.STUB_REASONS.CheckMysteryGift).toContain("Mystery Gift");
   });
 
+  test("SnorlaxAwake reads wMapMusic and the five cells beside SNORLAX", () => {
+    const order = (loadGenerated("constants") as any).specialOrder as string[];
+    Vm.SPECIALS = Specials.ALL;
+    const scripts = { awake: [{ op: "special", id: order.indexOf("SnorlaxAwake") }] };
+    const ask = (mapSong: string | null, playing: string | null, cell: [number, number]) => {
+      const world = new FakeWorld();
+      const vm = Vm.new(scripts, {}, world.events, world.hooks({
+        specials: { mapMusic: () => mapSong, currentMusic: () => playing, playerCell: () => cell },
+      }));
+      vm.start("awake");
+      world.drive(vm);
+      return vm.scriptVar;
+    };
+    const FLUTE = Specials.POKE_FLUTE_SONG;
+    // the station left on as the map's music: awake beside it, even with
+    // nothing coming out of the speaker (a headless host)
+    expect(ask(FLUTE, null, [34, 10])).toBe(1);
+    expect(ask(FLUTE, null, [33, 8])).toBe(1);
+    expect(ask(FLUTE, null, [30, 10])).toBe(0);
+    // the map's own music: asleep, whatever else is playing
+    expect(ask("Music_VermilionCity", FLUTE, [34, 10])).toBe(0);
+  });
+
   test("the movement decoder on every movement stream in the import", () => {
     const movements = (loadGenerated("scripts") as any).movements as Record<string, number[]>;
     const keys = Object.keys(movements);
