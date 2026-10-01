@@ -11,7 +11,7 @@
 // -- so the terrain bakes `slot*4 + shade` and each map gets a world palette.
 // Daytime is DAY for now; morning and night are the next step.
 
-import { COLOR_PAL_NONE, VXPK_COLOR_FLAG_WORLD } from "../../contracts/spec/voxel-spec.ts";
+import { COLOR_PAL_NONE, VXPK_COLOR_FLAG_DAYTIME, VXPK_COLOR_FLAG_WORLD } from "../../contracts/spec/voxel-spec.ts";
 import type { GenData, MapDef, TilesetDef } from "./data.ts";
 import type { ColourPlan, PageOwner } from "./redpp.ts";
 
@@ -138,10 +138,17 @@ export class Gen2Colour {
   }
 }
 
+/** Gold's times of day, in the order the `daytime` op counts them. */
+export const GEN2_DAYTIMES = ["MORN", "DAY", "NITE", "DARK"] as const;
+
 /**
- * The VCOL plan for a Gold cook: one world palette per distinct (environment,
- * roof) shown, one OBJ palette per sprite sheet, dedup'd into the VPAL tail
- * from `base` -- planColour's contract (redpp.ts) with Gold's data.
+ * The VCOL plan for a Gold cook: for every map, its world palette at each
+ * time of day (MORN, DAY, NITE, DARK) as four consecutive VPAL entries, and
+ * the same four for every sprite sheet's OBJ palette (MapObjectPals), dedup'd
+ * as whole fours into the VPAL tail from `base`. VXPK_COLOR_FLAG_DAYTIME
+ * tells the core that each binding names the first of four, and the guest's
+ * `daytime` op picks the one drawn -- Gold's own day and night, which
+ * pokegold applies by reloading exactly these palettes.
  */
 export function planGen2(
   gen: GenData,
@@ -150,19 +157,26 @@ export function planGen2(
 ): ColourPlan {
   const palettes: Uint32Array[] = [];
   const byKey = new Map<string, number>();
-  const intern = (pal: Uint32Array): number => {
-    const key = pal.join(",");
+  // a whole four, interned together so a binding's +0..+3 stay its own
+  const intern4 = (four: Uint32Array[]): number => {
+    const key = four.map((p) => p.join(",")).join("|");
     const hit = byKey.get(key);
     if (hit !== undefined) return hit;
-    palettes.push(pal);
-    byKey.set(key, input.base + palettes.length - 1);
-    return input.base + palettes.length - 1;
+    const at = input.base + palettes.length;
+    palettes.push(...four);
+    byKey.set(key, at);
+    return at;
+  };
+  const fourOf = (one: (daytime: string) => Uint32Array | null): Uint32Array[] | null => {
+    const day = one("DAY");
+    if (!day) return null;
+    return GEN2_DAYTIMES.map((t) => one(t) ?? day);
   };
   let world = 0;
   const maps = input.maps.map((def) => {
-    const pal = colour.worldPalette(def as Gen2Map);
+    const four = fourOf((t) => colour.worldPalette(def as Gen2Map, t));
     const before = palettes.length;
-    const worldPal = pal ? intern(pal) : COLOR_PAL_NONE;
+    const worldPal = four ? intern4(four) : COLOR_PAL_NONE;
     if (palettes.length !== before) world++;
     return { mapId: def.index, worldPal, terrainPage: input.terrainPage };
   });
@@ -175,10 +189,10 @@ export function planGen2(
   const pagePal = input.pages.map((owner) => {
     if (owner.spriteKey === undefined) return COLOR_PAL_NONE;
     const id = byKeySprite.get(owner.spriteKey);
-    const pal = id === undefined ? null : colour.spritePalette(id);
-    if (!pal) return COLOR_PAL_NONE;
+    const four = id === undefined ? null : fourOf((t) => colour.spritePalette(id, t));
+    if (!four) return COLOR_PAL_NONE;
     const before = palettes.length;
-    const index = intern(pal);
+    const index = intern4(four);
     if (palettes.length !== before) obj++;
     sprites++;
     return index;
@@ -187,7 +201,7 @@ export function planGen2(
     palettes,
     maps,
     pagePal,
-    flags: VXPK_COLOR_FLAG_WORLD,
+    flags: VXPK_COLOR_FLAG_WORLD | VXPK_COLOR_FLAG_DAYTIME,
     stats: { world, obj, pic: 0, sprites, pics: 0 },
   };
 }

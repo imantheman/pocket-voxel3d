@@ -103,6 +103,7 @@ export interface VoxelNative {
   lcdObjs?(hex: string): void;
   lcdPals?(first: number, hex: string): void;
   lcdLines?(target: number, hex: string): void;
+  daytime?(k: number): void;
   audioWaves?(engine: number, bank: number, addr: number): void;
   audioDrum?(engine: number, drum: number, bank: number, addr: number): void;
 }
@@ -338,6 +339,9 @@ export class QuickJsHost implements VoxelHost {
   }
   lcdLines(target: number, hex: string): void {
     native.lcdLines?.(target, hex);
+  }
+  daytime(k: number): void {
+    native.daytime?.(k);
   }
   audioWaves(engine: number, bank: number, addr: number): void {
     native.audioWaves?.(engine, bank, addr);

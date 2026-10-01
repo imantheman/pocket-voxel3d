@@ -10,6 +10,10 @@
 
 import { ENT_FLAG, ENTS_MAX, Q4 } from "../../../../contracts/spec/voxel-spec.ts";
 import type { VoxelHost } from "../../host.ts";
+import { Palettes } from "../world/Palettes.ts";
+
+/** The `daytime` op's order (cook/gen2.ts GEN2_DAYTIMES). */
+const DAYTIMES = ["MORN", "DAY", "NITE", "DARK"];
 
 // scene.ts:64 -- the walk sheet's poses
 const STAND: Record<string, number> = { down: 0, up: 1, left: 2, right: 2 };
@@ -45,6 +49,8 @@ export interface ActorView {
 }
 
 export interface WorldViewState {
+  /** "MORN" | "DAY" | "NITE" | "DARK": the palettes the map is drawn in. */
+  daytime?: string;
   mapId?: string;
   map?: { id: string };
   player?: ActorView;
@@ -88,6 +94,7 @@ export class WorldView {
   private entShown = new Uint8Array(ENTS_MAX);
   private entSeen = new Uint8Array(ENTS_MAX);
   private sheetCache = new Map<string, number>();
+  private lastDaytime = -1;
 
   constructor(
     private readonly host: VoxelHost,
@@ -106,6 +113,27 @@ export class WorldView {
     if (mapId) this.emitMaps(mapId);
     if (vs.player) this.emitCam(vs.player);
     this.emitEnts(vs);
+    this.emitDaytime(vs);
+  }
+
+  /**
+   * The world's palettes follow the clock (Palettes.lua clockDaytime), or
+   * whatever the world says it is drawn in -- a dark cave is DARK.
+   */
+  private emitDaytime(vs: WorldViewState): void {
+    let name = vs.daytime;
+    if (!name) {
+      try {
+        name = (Palettes as unknown as { clockDaytime?: () => string }).clockDaytime?.();
+      } catch {
+        name = undefined;
+      }
+    }
+    const k = Math.max(0, DAYTIMES.indexOf(name ?? "DAY"));
+    if (k !== this.lastDaytime) {
+      this.host.daytime?.(k);
+      this.lastDaytime = k;
+    }
   }
 
   /** No world: nothing on the stage. */

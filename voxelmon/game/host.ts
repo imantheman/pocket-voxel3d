@@ -155,6 +155,8 @@ export interface VoxelHost {
   lcdObjs?(hex: string): void;
   lcdPals?(first: number, hex: string): void;
   lcdLines?(target: number, hex: string): void;
+  /** Gold's time of day for the world's colours: 0 MORN .. 3 DARK. */
+  daytime?(k: number): void;
   /** Boot-time: a sound engine's wave-instrument table. */
   audioWaves(engine: number, bank: number, addr: number): void;
   /** Boot-time: one drum program of a sound engine. */
@@ -406,6 +408,9 @@ export class RecorderHost implements VoxelHost {
   }
   lcdLines(target: number, hex: string): void {
     this.opText(VOX_OP.lcdLines, hex, target);
+  }
+  daytime(k: number): void {
+    this.op(VOX_OP.daytime, k);
   }
   audioWaves(engine: number, bank: number, addr: number): void {
     this.op(VOX_OP.audioWaves, engine, bank, addr);
