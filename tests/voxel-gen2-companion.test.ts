@@ -29,8 +29,11 @@ function tap(c: Companion, game: any, cx: number, cy: number): void {
 }
 
 describe("gen2 Companion (the bottom screen)", () => {
-  test.skipIf(!gold)("tabs, a mon's page and back; every page draws to screen 1", () => {
+  test.skipIf(!gold)("tabs, a mon's page and back; every page draws to screen 1", async () => {
     useGoldGen();
+    // the cooked tile pages, so the town map has art to draw
+    const { useGoldTiles } = await import("../voxelmon/game/gen2/platform/shot-node.ts");
+    useGoldTiles();
     const game: any = Game2.new();
     game.load({ startWorld: true });
     game.save.party = [
@@ -69,6 +72,17 @@ describe("gen2 Companion (the bottom screen)", () => {
     tap(c, game, 18, 14);
     expect(page()).toBe("map");
     expect(draw()).toBeGreaterThan(0);
+    // the MAP page follows the player across the sea: one POKeGEAR, handed
+    // the new landmark (Kanto's region with it)
+    const gear = (c as any).gear;
+    const before = gear.currentLandmark;
+    game.world.setMap("VERMILION_CITY", 10, 10, "down");
+    for (let i = 0; i < 30; i++) game.frame(0);
+    expect(game.world.map.id).toBe("VERMILION_CITY");
+    expect(draw()).toBeGreaterThan(0);
+    expect((c as any).gear).toBe(gear);
+    expect(gear.currentLandmark).not.toBe(before);
+    expect(gear.region()).toBe("kanto");
     tap(c, game, 2, 14);
     expect(page()).toBe("party");
 

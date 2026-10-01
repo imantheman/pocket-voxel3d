@@ -105,7 +105,7 @@ export class Companion {
   private mon = 0;
   /** The cell the finger went down on; null while it is up. */
   private down: [number, number] | null = null;
-  /** The town map's POKeGEAR, and the landmark it was opened for. */
+  /** The town map's POKeGEAR, and the landmark it is showing. */
   private gear: Pokegear | null = null;
   private gearFor = "";
 
@@ -311,12 +311,20 @@ export class Companion {
   }
 
   private drawMap(game: any): void {
-    // a fresh one when the landmark changes (it reads it as it opens)
+    // one, kept (building it loads its art: a hitch worth paying once); a
+    // new landmark is handed to it as the town map's own open would read it
     const key = `${this.location(game)}|${game.world?.map?.id ?? ""}`;
-    if (!this.gear || this.gearFor !== key) {
+    if (!this.gear) {
       this.gear = Pokegear.new(game, { townMap: true });
-      this.gearFor = key;
+    } else if (this.gearFor !== key) {
+      try {
+        this.gear.currentLandmark = game.currentLandmark?.();
+      } catch {
+        // keep the last
+      }
+      this.gear.mapCursor = undefined;
     }
+    this.gearFor = key;
     // its drawMap inside the shift (draw() would reset it with G.origin)
     if (!this.gear.styled()) return;
     G.push();
