@@ -14,7 +14,11 @@
 //                        a tap turns to the next mon
 //                BADGES  the sixteen, Johto's and Kanto's
 //                CARD    name, ID No., POKeDEX own/seen, play time
-//   row 14     the tabs, PARTY BADGES CARD, tapped to turn the page
+//                MAP     the POKeGEAR's town map of the region you are in,
+//                        you on it (its _TownMap, drawn three rows up: the
+//                        landmark header and the bottom frame row fall off
+//                        the 15 rows shown; rows 0-1 go to it too)
+//   row 14     the tabs, <PK><MN> BADGE CARD MAP, tapped to turn the page
 //
 // A tap is the finger lifting after it went down on a target (the Kanto
 // Gear's rule). The panel redraws only when something it shows has changed,
@@ -27,6 +31,7 @@ import G, { resetDrawState, setLcd } from "../platform/screen.ts";
 import { Clock } from "../core/Clock.ts";
 import { BattleHud } from "./BattleHud.ts";
 import { Chrome } from "./Chrome.ts";
+import { Pokegear } from "./Pokegear.ts";
 
 type LcdBankSpec = { base: number; page: number; count: number };
 
@@ -36,12 +41,16 @@ const CHECK_EVERY = 15;
 const PARTY_MAX = 6;
 /** The tab row, and each tab's first column (its cursor sits one left). */
 const TAB_ROW = 14;
-type Page = "party" | "mon" | "badges" | "card";
-const TABS: { page: Page; label: string; x: number }[] = [
-  { page: "party", label: "PARTY", x: 1 },
-  { page: "badges", label: "BADGES", x: 8 },
-  { page: "card", label: "CARD", x: 16 },
+type Page = "party" | "mon" | "badges" | "card" | "map";
+/** Each tab: its label, first column and width in tiles (<PK><MN> is two). */
+const TABS: { page: Page; label: string; x: number; w: number }[] = [
+  { page: "party", label: "<PK><MN>", x: 1, w: 2 },
+  { page: "badges", label: "BADGE", x: 5, w: 5 },
+  { page: "card", label: "CARD", x: 11, w: 4 },
+  { page: "map", label: "MAP", x: 17, w: 3 },
 ];
+/** Town map rows the MAP page drops off the top (header and rule). */
+const MAP_SHIFT = 3;
 const JOHTO_BADGES = ["ZEPHYR", "HIVE", "PLAIN", "FOG", "STORM", "MINERAL", "GLACIER", "RISING"];
 const KANTO_BADGES = ["BOULDER", "CASCADE", "THUNDER", "RAINBOW", "SOUL", "MARSH", "VOLCANO", "EARTH"];
 
@@ -96,6 +105,9 @@ export class Companion {
   private mon = 0;
   /** The cell the finger went down on; null while it is up. */
   private down: [number, number] | null = null;
+  /** The town map's POKeGEAR, and the landmark it was opened for. */
+  private gear: Pokegear | null = null;
+  private gearFor = "";
 
   constructor(host: VoxelHost, banks: LcdBankSpec[]) {
     this.lcd = new Lcd(targeted(host, 1));
@@ -117,7 +129,7 @@ export class Companion {
     let mon = this.mon;
     const party = this.party(game);
     if (cy === TAB_ROW) {
-      for (const t of TABS) if (cx >= t.x - 1 && cx < t.x + t.label.length) page = t.page;
+      for (const t of TABS) if (cx >= t.x - 1 && cx < t.x + t.w) page = t.page;
     } else if (this.page === "party" && cy >= 2 && cy <= 13) {
       const i = Math.floor((cy - 2) / 2);
       if (party[i] && !isEgg(party[i])) {
@@ -198,6 +210,7 @@ export class Companion {
       if (this.page === "mon") s += `:${String(m.status ?? "")}:${(m.moves ?? []).map((v) => `${String(v?.id)}${v?.pp}`).join(",")}`;
     }
     if (this.page === "badges") s += `|${this.badges(game).join(",")}`;
+    if (this.page === "map") s += `|${game.world?.map?.id ?? ""}`;
     if (this.page === "card") {
       const dex = game.save?.pokedex ?? {};
       s += `|${this.count(dex.caught)}/${this.count(dex.seen)}|${game.save?.playTime?.hours ?? 0}:${game.save?.playTime?.minutes ?? 0}`;
@@ -297,6 +310,27 @@ export class Companion {
     Chrome.printRight(`${this.badges(game).length}`, COLS, 12);
   }
 
+  private drawMap(game: any): void {
+    // a fresh one when the landmark changes (it reads it as it opens)
+    const key = `${this.location(game)}|${game.world?.map?.id ?? ""}`;
+    if (!this.gear || this.gearFor !== key) {
+      this.gear = Pokegear.new(game, { townMap: true });
+      this.gearFor = key;
+    }
+    // its drawMap inside the shift (draw() would reset it with G.origin)
+    if (!this.gear.styled()) return;
+    G.push();
+    G.translate(0, -MAP_SHIFT * 8);
+    try {
+      this.gear.drawMap();
+    } finally {
+      G.pop();
+    }
+    // the tab row back over the map's last shown row
+    G.setColor(1, 1, 1, 1);
+    G.rectangle("fill", 0, TAB_ROW * 8, 160, 8);
+  }
+
   private draw(game: any): void {
     const lcd = this.lcd;
     setLcd(lcd);
@@ -305,7 +339,9 @@ export class Companion {
     lcd.shown = true;
     G.setColor(1, 1, 1, 1);
     G.rectangle("fill", 0, 0, 160, 144);
-    if (game?.world?.map) {
+    if (game?.world?.map && this.page === "map") {
+      this.drawMap(game);
+    } else if (game?.world?.map) {
       Chrome.print(this.location(game), 0, 0);
       Chrome.print(this.time(game), 0, 1);
       Chrome.printRight(`¥${game.save?.player?.money ?? 0}`, COLS, 1);
@@ -314,6 +350,8 @@ export class Companion {
       else if (this.page === "badges") this.drawBadges(game);
       else if (this.page === "card") this.drawCard(game);
       else this.drawParty(game);
+    }
+    if (game?.world?.map) {
       // the tabs, the cursor on the page shown (a mon's page is PARTY's)
       for (const t of TABS) {
         Chrome.print(t.label, t.x, TAB_ROW);
