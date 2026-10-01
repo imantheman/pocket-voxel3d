@@ -135,6 +135,11 @@ pub struct BattleCard {
     pub dx: i32,
     pub dy: i32,
     pub dz: i32,
+    /// The card's own colours (`cardPal`), RGB555 lightest first, when
+    /// `has_pal`: the page is drawn through these instead of its VCOL /
+    /// default palette.
+    pub pal: [u16; 4],
+    pub has_pal: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -909,10 +914,22 @@ impl Scene {
                         pic: a(1),
                         x: a(2),
                         y: a(3),
+                        pal: card.pal,
+                        has_pal: card.has_pal,
                         dx: if args.len() > 4 { a(4) } else { 0 },
                         dy: if args.len() > 5 { a(5) } else { 0 },
                         dz: if args.len() > 6 { a(6) } else { 0 },
                     };
+                }
+            }
+            op::CARD_PAL => {
+                if let Some(card) = self.battle.cards.get_mut(a(0) as usize) {
+                    if args.len() >= 5 && a(1) >= 0 {
+                        card.pal = [a(1) as u16 & 0x7fff, a(2) as u16 & 0x7fff, a(3) as u16 & 0x7fff, a(4) as u16 & 0x7fff];
+                        card.has_pal = true;
+                    } else {
+                        card.has_pal = false;
+                    }
                 }
             }
             op::CARD_HIDE => {

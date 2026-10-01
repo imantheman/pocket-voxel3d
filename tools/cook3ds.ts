@@ -367,7 +367,15 @@ export async function cook3ds(only?: string[]): Promise<number> {
     // record (game/gen2/platform/worldview.ts): page numbers, each map's pak
     // index, size and connections, and the sprite sheets' frame counts.
     const scene = {
-      atlas: { sprites: merged.atlas?.sprites ?? {}, lcd: (merged.atlas as { lcd?: unknown } | undefined)?.lcd },
+      atlas: {
+        sprites: merged.atlas?.sprites ?? {},
+        lcd: (merged.atlas as { lcd?: unknown } | undefined)?.lcd,
+        // the battle cards' pages (a 3D battle stands each mon in the
+        // arena: game/gen2/platform/battlestage.ts)
+        picFront: (merged.atlas as { picFront?: unknown } | undefined)?.picFront ?? {},
+        picBack: (merged.atlas as { picBack?: unknown } | undefined)?.picBack ?? {},
+        picTrainer: (merged.atlas as { picTrainer?: unknown } | undefined)?.picTrainer ?? {},
+      },
       cookedMaps: merged.cookedMaps,
       maps: Object.fromEntries(
         Object.entries(merged.maps).map(([id, m]) => {

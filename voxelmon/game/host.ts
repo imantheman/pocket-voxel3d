@@ -161,6 +161,8 @@ export interface VoxelHost {
   tiltShift?(level: number): void;
   /** Which Gold screen the lcd* ops address: 0 top, 1 bottom. */
   lcdTarget?(k: number): void;
+  /** A battle card's own four RGB555 colours (Gold); c0 < 0 drops them. */
+  cardPal?(side: number, c0: number, c1: number, c2: number, c3: number): void;
   /** Boot-time: a sound engine's wave-instrument table. */
   audioWaves(engine: number, bank: number, addr: number): void;
   /** Boot-time: one drum program of a sound engine. */
@@ -421,6 +423,9 @@ export class RecorderHost implements VoxelHost {
   }
   lcdTarget(k: number): void {
     this.op(VOX_OP.lcdTarget, k);
+  }
+  cardPal(side: number, c0: number, c1: number, c2: number, c3: number): void {
+    this.op(VOX_OP.cardPal, side, c0, c1, c2, c3);
   }
   audioWaves(engine: number, bank: number, addr: number): void {
     this.op(VOX_OP.audioWaves, engine, bank, addr);

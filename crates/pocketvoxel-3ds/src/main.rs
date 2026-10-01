@@ -1366,10 +1366,30 @@ fn pal_sel_now() -> i32 {
 }
 
 fn build_page_tex(pak: &Pak, pidx: u16, pal_sel: i32) -> (Vec<u8>, u32, u32) {
+    build_page_tex_custom(pak, pidx, pal_sel, None)
+}
+
+/// build_page_tex with shades 0..3 recoloured: a battle card's own colours
+/// (spec `cardPal`, RGB555 lightest first). The page's transparent index and
+/// the rest of its palette are kept.
+fn build_page_tex_custom(pak: &Pak, pidx: u16, pal_sel: i32, custom: Option<[u16; 4]>) -> (Vec<u8>, u32, u32) {
     let page = pak.atlases[pidx as usize];
     let lin = pak::unswizzle(page.w as usize, page.h as usize, page.frame(0))
         .unwrap_or_else(|_| vec![0u8; (page.w as usize) * (page.h as usize)]);
-    let palv = &pak.palettes[resolve_pal(pak, pidx, page.kind, COLOR_PAL_NONE, pal_sel)];
+    let base = &pak.palettes[resolve_pal(pak, pidx, page.kind, COLOR_PAL_NONE, pal_sel)];
+    let mut own = [0u32; 256];
+    let palv: &[u32] = match custom {
+        Some(cols) => {
+            for (i, o) in own.iter_mut().enumerate() {
+                *o = base.get(i).copied().unwrap_or(0xff00_0000);
+            }
+            for (i, c) in cols.iter().enumerate() {
+                own[i] = pocketvoxel_core::lcd::LcdScreen::abgr(*c);
+            }
+            &own
+        }
+        None => &base[..],
+    };
     let (aw, ah) = (page.w as u32, page.h as u32);
     let (gw, gh) = page_layout_dims(&page);
     let (tw, th) = (po2(gw), po2(gh));
@@ -3504,6 +3524,12 @@ fn main() {
     let mut lcd_top = LcdTex::new();
     let mut lcd_bot = LcdTex::new();
     let mut lcd_b_hold: Option<buffer::Info> = None;
+    // Battle cards' recoloured pages (spec `cardPal`): which colours each
+    // page's texture was built in, and the textures they replaced, freed a
+    // frame later (the GPU may still be reading them).
+    let mut page_tex_pal: Vec<Option<[u16; 4]>> = Vec::new();
+    let mut page_tex_retired: Vec<texture::Texture> = Vec::new();
+    let mut page_tex_retired_hold: Vec<texture::Texture> = Vec::new();
     let mut lcd_hold: Option<buffer::Info> = None;
     // TILT SHIFT's quads, held the same frame longer.
     let mut tilt_hold: [Option<buffer::Info>; 3] = [None, None, None];
@@ -4935,6 +4961,32 @@ fn main() {
 if page_tex.len() < pak_static.atlases.len() {
             page_tex.resize_with(pak_static.atlases.len(), || None);
         }
+        // A battle card that brought its own colours (spec `cardPal`, Gold's
+        // species palettes) has its page rebuilt in them; the texture it
+        // replaces is held a frame, since the GPU may still be reading it.
+        {
+            let sc = unsafe { voxel::scene() };
+            if page_tex_pal.len() < page_tex.len() {
+                page_tex_pal.resize(page_tex.len(), None);
+            }
+            for card in sc.battle.cards.iter().filter(|c| c.shown && c.has_pal) {
+                let i = card.pic as usize;
+                if i < page_tex.len() && (page_tex[i].is_none() || page_tex_pal[i] != Some(card.pal)) {
+                    let (data, ptw, pth) = build_page_tex_custom(pak_static, i as u16, pal_sel_now(), Some(card.pal));
+                    if let Ok(mut t) = texture::Texture::new(
+                        texture::TextureParameters::new_2d(ptw as u16, pth as u16, texture::ColorFormat::Rgba8)) {
+                        if t.load_image(&data, texture::Face::default()).is_ok() {
+                            unsafe { gsp_flush(data.as_ptr(), data.len() as u32); }
+                            sprite_filter(&mut t, pak_static, i as u16);
+                            if let Some(old) = page_tex[i].replace(t) {
+                                page_tex_retired.push(old);
+                            }
+                            page_tex_pal[i] = Some(card.pal);
+                        }
+                    }
+                }
+            }
+        }
         for (pg, _) in card_groups.iter() {
             let i = *pg as usize;
             if i < page_tex.len() && page_tex[i].is_none() {
@@ -6029,6 +6081,7 @@ if page_tex.len() < pak_static.atlases.len() {
         gb_hold = gb_buf;
         lcd_hold = lcd_buf;
         lcd_b_hold = lcd_b_buf;
+        page_tex_retired_hold = core::mem::take(&mut page_tex_retired);
         tilt_hold = [tilt_unit, tilt_sharp, tilt_bands];
         ui_hold = ui_buf;
         anim_hold = anim_bufs;
@@ -6038,7 +6091,7 @@ if page_tex.len() < pak_static.atlases.len() {
         ui_b_dim_hold = ui_b_dim_buf;
         ui_b_sprite_hold = ui_b_sprite_bufs;
         let _ = (
-            &card_hold, &pic_hold, &gb_hold, &lcd_hold, &lcd_b_hold, &tilt_hold, &ui_hold, &anim_hold, &ui_b_hold,
+            &card_hold, &pic_hold, &gb_hold, &lcd_hold, &lcd_b_hold, &tilt_hold, &page_tex_retired_hold, &ui_hold, &anim_hold, &ui_b_hold,
             &ui_b_bar_hold, &ui_b_light_hold, &ui_b_dim_hold, &ui_b_sprite_hold,
         );
     }

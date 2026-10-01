@@ -848,6 +848,15 @@ export const VOX_OP = {
    *   lcdTarget(k)
    */
   lcdTarget: 106,
+  /**
+   * A battle card's own four colours, lightest first, as RGB555 (Gold: the
+   * species' battle palette, shiny or not -- its pic pages carry no VCOL
+   * palette of their own). The card's page is drawn through them while that
+   * side is staged; c0 < 0 drops them. Survives `card`, cleared by
+   * `arenaEnd`.
+   *   cardPal(side, c0, c1, c2, c3)
+   */
+  cardPal: 107,
 } as const;
 
 /** Clips in Yellow's PikachuCriesPointerTable (NUM_PIKA_CRIES). */

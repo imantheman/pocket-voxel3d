@@ -292,6 +292,7 @@ int qjs_register_voxel(JSContext *ctx) {
     add_num(ctx, o, "daytime", 104, 1);
     add_num(ctx, o, "tiltShift", 105, 1);
     add_num(ctx, o, "lcdTarget", 106, 1);
+    add_num(ctx, o, "cardPal",   107, 5);
     JS_SetPropertyStr(ctx, o, "lcdCells",
         JS_NewCFunctionMagic(ctx, vox_numtext, "lcdCells", 2, JS_CFUNC_generic_magic, 99));
     JS_SetPropertyStr(ctx, o, "lcdObjs",

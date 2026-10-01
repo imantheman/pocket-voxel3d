@@ -114,6 +114,8 @@ export interface VoxelNative {
   tiltShift?(level: number): void;
   /** spec `lcdTarget`: 0 the top Gold screen, 1 the bottom. */
   lcdTarget?(k: number): void;
+  /** spec `cardPal`: a battle card's four RGB555 colours; c0 < 0 drops them. */
+  cardPal?(side: number, c0: number, c1: number, c2: number, c3: number): void;
   audioWaves?(engine: number, bank: number, addr: number): void;
   audioDrum?(engine: number, drum: number, bank: number, addr: number): void;
 }
@@ -358,6 +360,9 @@ export class QuickJsHost implements VoxelHost {
   }
   lcdTarget(k: number): void {
     native.lcdTarget?.(k);
+  }
+  cardPal(side: number, c0: number, c1: number, c2: number, c3: number): void {
+    native.cardPal?.(side, c0, c1, c2, c3);
   }
   audioWaves(engine: number, bank: number, addr: number): void {
     native.audioWaves?.(engine, bank, addr);

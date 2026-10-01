@@ -371,6 +371,7 @@ pub mod op {
     pub const DAYTIME: u32 = 104;
     pub const TILT_SHIFT: u32 = 105;
     pub const LCD_TARGET: u32 = 106;
+    pub const CARD_PAL: u32 = 107;
 }
 
 /// Fixed-point scales used by op args.
