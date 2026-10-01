@@ -9,6 +9,7 @@ declare const WALKONLY: boolean;
 declare const WARP: string;
 declare const STILL: boolean;
 declare const TO3D: boolean;
+declare const PIKA: boolean;
 const g = globalThis as unknown as { voxelmonGame: any; frame: (b: number) => void };
 const game = g.voxelmonGame;
 const mainFrame = g.frame;
@@ -50,6 +51,10 @@ g.frame = (b: number): void => {
     o.view = typeof VIEW2D !== "undefined" && VIEW2D ? "2d" : "3d";
     // TO3D: back to the voxel world partway, which must build it again
     if (typeof TO3D !== "undefined" && TO3D && worldFrames > 300) o.view = "3d";
+    // PIKA (Yellow): the starter Pikachu in the party, so the follower walks
+    if (typeof PIKA !== "undefined" && PIKA && !(game.save.party ?? []).some((m: any) => m.species === "PIKACHU")) {
+      game.save.party = [{ species: "PIKACHU", level: 5, hp: 20, maxHp: 20, moves: [{ id: "THUNDERSHOCK", pp: 30 }] }];
+    }
   }
   i++;
   mainFrame((b & ~0xff) | pad);

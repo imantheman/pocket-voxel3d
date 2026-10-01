@@ -42,6 +42,9 @@ extern "C" {
     /// Blocks until the GPU has finished the frame it is drawing
     /// (citro3d renderqueue.h). See the rebuild below for why.
     fn C3D_FrameSync();
+    /// How many frames a second C3D_FrameBegin paces to, in whole vblanks
+    /// (citro3d renderqueue.h): 30 = every second vblank.
+    fn C3D_FrameRate(fps: f32) -> f32;
     fn gsp_flush(p: *const u8, len: u32);
     fn audio3ds_init(rate: i32, frames_per_buf: i32) -> i32;
     fn audio3ds_free_frames() -> i32;
@@ -3273,6 +3276,13 @@ fn main() {
     println!("{} maps.  L/R = switch map", map_ids.len());
     println!("D-pad orbit  A/B zoom  START exit");
     let mut instance = citro3d::Instance::new().expect("citro3d");
+    // Lock to 30 Hz on the vblanks themselves: C3D_FrameBegin waits for every
+    // second one (relaxed to the next one for a heavy frame -- the perf block).
+    // (A sleep to 33 ms of osGetTime drifted against the 33.4 ms two vblanks
+    // take, so every second or two a frame landed one vblank early -- shown
+    // for 16.7 ms instead of 33, a tick run extra: the small regular hitch,
+    // worst where frames are light, as in Yellow.)
+    unsafe { C3D_FrameRate(30.0); }
     let top3d = TopScreen3D::from(&gfx.top_screen);
     let (mut top_left, mut top_right) = top3d.split_mut();
     let RawFrameBuffer { width, height, .. } = top_left.raw_framebuffer();
@@ -3511,6 +3521,8 @@ fn main() {
     let mut guest_drive = true;   // boot into the game; the title state runs there
     let mut dbg_tick: u32 = 0;
     let mut frame_start: u64 = 0;
+    // Which pace C3D_FrameRate holds (set to 30 at boot; see the perf block)
+    let mut frame_rate_30 = true;
     let mut aud_ticks: u32 = 0;
     let mut aud_queued: u32 = 0;
     let mut aud_dropped: u32 = 0;
@@ -5680,6 +5692,15 @@ if page_tex.len() < pak_static.atlases.len() {
             let cpu = osGetTime().wrapping_sub(frame_start) as f32;
             perf_cpu_sum += cpu;
             if cpu > perf_cpu_max { perf_cpu_max = cpu; }
+            // The 30 Hz lock, on the vblanks: a frame whose work fits well
+            // inside two vblanks paces to every second one (C3D_FrameRate 30,
+            // a steady 33.4 ms); a heavier one takes the next vblank (60),
+            // so a 36 ms frame shows at 50 ms rather than waiting to 66.
+            let want30 = cpu < 25.0;
+            if want30 != frame_rate_30 {
+                frame_rate_30 = want30;
+                unsafe { C3D_FrameRate(if want30 { 30.0 } else { 60.0 }); }
+            }
             perf_gpu_sum += gd;
             if gd > perf_gpu_max { perf_gpu_max = gd; }
             perf_proc_sum += gp;
@@ -6195,28 +6216,12 @@ if page_tex.len() < pak_static.atlases.len() {
             frame
         });
 
-        // Lock to 30 Hz: a steady cadence reads smoother than swinging
-        // between 37 and 60. The guest still simulates at 60 (sim_acc), so
-        // this changes smoothness, not game speed.
-        //
-        // AFTER the present, not before it. Before, the sleep ran to 33 ms
-        // and only THEN submitted, and the submit waits for a vblank of its
-        // own -- so a frame that had finished its work at 9 ms slept to 33,
-        // presented, and waited to the vblank at 50. Indoors, where the GPU
-        // draws in 2.6 ms and the CPU takes 6.6, build 222452 logged 23 fps
-        // for want of anything to do: a 30 Hz lock that cost 10 fps against
-        // no lock at all. Measuring the whole iteration instead puts the
-        // present and its vblank inside the 33 ms rather than after it.
-        //
-        // A frame already over budget sleeps not at all, so nothing about
-        // the GPU-bound maps changes.
-        unsafe {
-            extern "C" { fn osGetTime() -> u64; fn svcSleepThread(ns: i64); }
-            let spent = osGetTime().wrapping_sub(frame_start);
-            if spent < 33 {
-                svcSleepThread(((33 - spent) as i64) * 1_000_000);
-            }
-        }
+        // The 30 Hz lock is C3D_FrameRate's (boot, and the perf block's
+        // light/heavy switch): C3D_FrameBegin waits for every second vblank,
+        // so a light frame is shown for exactly two of them -- a steady
+        // cadence reads smoother than swinging between 37 and 60, and the
+        // guest still simulates at 60 (sim_acc), so this is smoothness, not
+        // game speed. A heavy frame takes the next vblank.
 
         // Previous frame's buffers drop here, a full frame after the GPU
         // last touched them.
