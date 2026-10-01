@@ -16,6 +16,7 @@ import { Logger } from "../voxelmon/game/gen2/shared/core/Logger.ts";
 import { Permissions } from "../voxelmon/game/gen2/world/Permissions.ts";
 import { FieldMoves } from "../voxelmon/game/gen2/world/FieldMoves.ts";
 import { FlagNames } from "../voxelmon/game/gen2/core/FlagNames.ts";
+import { Map as MapClass } from "../voxelmon/game/gen2/world/Map.ts";
 
 type Dir = "up" | "down" | "left" | "right";
 const DIRS: Dir[] = ["up", "down", "left", "right"];
@@ -119,7 +120,12 @@ export function describe(): string {
   const w = world();
   const p = w?.player;
   const top = screen();
-  return `${w?.map?.id} (${p?.cellX},${p?.cellY}) ${top ? "screen " + (top.screenId ?? "?") : w?.busy() ? "busy" : "free"}` +
+  const extra = top?.screenId === "Gen2BattleState"
+    ? ` phase=${top.phase} menu=${top.menuIndex} sub=${top.subScreen?.screenId ?? top.sub?.screenId ?? ""} msg=${JSON.stringify(top.message ?? top.text ?? "").slice(0, 60)} ` +
+      `player=${top.battle?.player?.mon?.species ?? top.battle?.player?.species}:${top.battle?.player?.mon?.hp ?? top.battle?.player?.hp} ` +
+      `enemy=${top.battle?.enemy?.mon?.species ?? top.battle?.enemy?.species}:${top.battle?.enemy?.mon?.hp ?? top.battle?.enemy?.hp}`
+    : "";
+  return `${w?.map?.id} (${p?.cellX},${p?.cellY}) ${top ? "screen " + (top.screenId ?? "?") + extra : w?.busy() ? "busy" : "free"}` +
     `${w?.textbox ? " text" : ""}`;
 }
 
@@ -130,7 +136,12 @@ export function describe(): string {
 const surfing = (): boolean => FieldMoves.isSurfing(world().playerState);
 /** Field moves the run may use on the way (a chapter turns them on once the
  *  story has handed over the HM and the badge). */
-export const can = { cut: false, surf: false, whirlpool: false, strength: false, waterfall: false };
+export const can = { cut: false, surf: false, whirlpool: false, strength: false, waterfall: false, rocksmash: false };
+/** A rock the run can ROCK SMASH, standing at (x, y) here? */
+function rockAt(x: number, y: number): boolean {
+  const n = world().npcAt(x, y);
+  return !!n && can.rocksmash && n.def?.sprite === "SPRITE_ROCK";
+}
 function coll(x: number, y: number): any {
   const w = world();
   return w.cellCollisionAcross(w.map, x, y);
@@ -170,7 +181,9 @@ function plan(ok: (x: number, y: number) => boolean, blocked = new Set<string>()
   const q: [number, number][] = [[p.cellX, p.cellY]];
   const seen = new Set([start]);
   // never across a warp on the way (it would take the player off the map)
-  const warps = new Set<string>((w.maps[w.map.id]?.warps ?? []).map((wp: any) => `${wp.x},${wp.y}`));
+  const warps = new Set<string>((w.maps[w.map.id]?.warps ?? [])
+    .filter((wp: any) => Permissions.isWarpCollision(w.map.cellCollision(wp.x, wp.y)))
+    .map((wp: any) => `${wp.x},${wp.y}`));
   while (q.length) {
     const [x, y] = q.shift()!;
     if (ok(x, y)) {
@@ -271,7 +284,14 @@ function face(dir: Dir): void {
 
 /** Stand next to (x, y), face it, press A, and let it all play out. */
 export function use(x: number, y: number, what: string): void {
-  walk((a, b) => Math.abs(a - x) + Math.abs(b - y) === 1, what);
+  // next to it, or two away straight across a counter (a nurse, a clerk)
+  const across = (a: number, b: number): boolean => {
+    const dx = x - a;
+    const dy = y - b;
+    if (!((Math.abs(dx) === 2 && dy === 0) || (Math.abs(dy) === 2 && dx === 0))) return false;
+    return Permissions.isCounter(world().map.cellCollision(a + dx / 2, b + dy / 2));
+  };
+  walk((a, b) => Math.abs(a - x) + Math.abs(b - y) === 1 || across(a, b), what);
   const p = world().player;
   const d: Dir = x > p.cellX ? "right" : x < p.cellX ? "left" : y > p.cellY ? "down" : "up";
   face(d);
@@ -348,10 +368,14 @@ function route(from: string, to: string, avoid: Set<string>): Hop[] | null {
   return null;
 }
 
+/** The hop that last took the player onto a new map (reach() needs it). */
+let lastHop: { from: string; key: string } | null = null;
+
 /** Take one hop: walk onto the warp (and through it), or off the edge. */
 function take(h: Hop): void {
   const w = world();
   const from = w.map.id;
+  lastHop = { from, key: hopKey(from, h) };
   if (h.kind === "warp") {
     const { x, y } = h.warp;
     // onto the warp itself (a door warps there; stairs too)...
@@ -391,26 +415,243 @@ function take(h: Hop): void {
   if (world().map.id === from) fail(`could not get from ${from} to ${h.to}`);
 }
 
-/** Go to map `to` on foot. */
-export function travel(to: string, avoid: string[] = []): void {
-  const bad = new Set(avoid);
-  for (let tries = 0; tries < 30 && world().map.id !== to; tries++) {
-    settle();
-    const r = route(world().map.id, to, bad);
-    if (!r || r.length === 0) fail(`no route from ${world().map.id} to ${to}`);
-    const h = r[0]!;
-    try {
-      take(h);
-    } catch (e) {
-      if (!(e instanceof StoryFail)) throw e;
-      // that way is shut (a wall at the edge, a roadblock): try another
-      const from = world().map.id;
-      log(`  (${e.message}; trying another way)`);
-      shut.add(hopKey(from, h));
-      void bad;
+// ---------------------------------------------------------------------------
+// the cross-map search
+// ---------------------------------------------------------------------------
+
+/** The Map a plan reads: the live one for where the player is (blocks a
+ *  script changed, a tree just cut), a fresh one for anywhere else. */
+function mapOf(id: string): any {
+  return id === world().map.id ? world().map : world().connectionMap(id);
+}
+
+/** Steps found refused while walking (a person in the way, a quirk). */
+const refused = new Set<string>();
+/** Transitions found not to work (a scripted guard, a locked door). */
+const deadEnds = new Map<string, number>();
+
+interface Act {
+  dir: Dir;
+  /** this step leaves the map (onto a warp, off an edge) */
+  leaves?: string;
+}
+
+/** One step `dir` from (x, y) on map `m`, planned: a cell on the same map,
+ *  or [map, x, y] across a warp or a connection, or null. */
+function planStep(m: string, x: number, y: number, dir: Dir, goal: (m: string, x: number, y: number) => boolean):
+  { m: string; x: number; y: number; leaves?: string } | null {
+  if (refused.has(`${m},${x},${y},${dir}`)) return null;
+  const w = world();
+  const map = mapOf(m);
+  const def = w.maps[m];
+  if (!map || !def) return null;
+  const live = m === w.map.id;
+  const collOf = (a: number, b: number): any => w.cellCollisionAcross(map, a, b);
+  if (!Permissions.stepPermitted(collOf, x, y, dir)) return null;
+  const [dx, dy] = DELTA[dir];
+  const tx = x + dx;
+  const ty = y + dy;
+  if (!map.inBounds(tx, ty)) {
+    // off the edge onto the connected map
+    const side = dir === "up" ? "north" : dir === "down" ? "south" : dir === "left" ? "west" : "east";
+    const conn = map.connection(side);
+    const to = conn?.mapId ?? conn?.map;
+    const dest = typeof to === "string" ? w.maps[to] : undefined;
+    if (!dest) return null;
+    const land = MapClass.connectionLanding(dest, conn, dir, x, y);
+    if (!land) return null;
+    const dmap = mapOf(to);
+    if (!dmap?.isWalkable(land[0], land[1])) return null;
+    const key = `${m}>${to}:edge:${dir}`;
+    if ((deadEnds.get(key) ?? 0) >= 2) return null;
+    return { m: to, x: land[0], y: land[1], leaves: key };
+  }
+  const c = map.cellCollision(tx, ty);
+  const surf = live && surfing();
+  let ok = (surf ? Permissions.surfable(c) !== undefined : map.isWalkable(tx, ty))
+    || (can.cut && Permissions.isCutTree(c));
+  if (live && ok) {
+    const npc = w.npcAt(tx, ty);
+    if (npc && !goal(m, tx, ty) && !rockAt(tx, ty)) ok = false;
+  }
+  if (!ok) {
+    // .TryJump: a ledge under the feet that faces this way
+    const f = surf ? undefined : Permissions.ledgeFacings(map.cellCollision(x, y));
+    const lx = x + 2 * dx;
+    const ly = y + 2 * dy;
+    if (f && f[dir] && map.inBounds(lx, ly) && map.isWalkable(lx, ly) && !(live && w.npcAt(lx, ly))) return { m, x: lx, y: ly };
+    return null;
+  }
+  // onto a warp: across to where it leads -- only where the tile is a warp
+  // (a door, stairs, a pit, a mat); a warp entry on plain floor is just
+  // where some other map's hole lands
+  const wi = Permissions.isWarpCollision(c) ? (def.warps ?? []).findIndex((wp: any) => wp.x === tx && wp.y === ty) : -1;
+  if (wi >= 0) {
+    const wp = def.warps[wi];
+    const dest = w.maps[wp.destMap];
+    const arrive = dest?.warps?.[(wp.destWarp ?? 1) - 1];
+    if (!dest || !arrive) return null;
+    const key = `${m}>${wp.destMap}:warp:${tx},${ty}`;
+    if ((deadEnds.get(key) ?? 0) >= 2) return null;
+    // a door, a staircase or a cave mouth walks the arriving player a step
+    // out (Permissions.doorForcedDirection): that is where they end up
+    let ax = arrive.x;
+    let ay = arrive.y;
+    const dm = mapOf(wp.destMap);
+    const forced = dm ? (Permissions.doorForcedDirection(dm.cellCollision(ax, ay)) as Dir | undefined) : undefined;
+    if (forced && dm.isWalkable(ax + DELTA[forced][0], ay + DELTA[forced][1])) {
+      ax += DELTA[forced][0];
+      ay += DELTA[forced][1];
+    }
+    return { m: wp.destMap, x: ax, y: ay, leaves: key };
+  }
+  return { m, x: tx, y: ty };
+}
+
+/** The steps from where the player stands to a cell `goal` accepts,
+ *  across maps; null when there is no way. */
+function planTo(goal: (m: string, x: number, y: number) => boolean): Act[] | null {
+  const w = world();
+  const p = w.player;
+  const start = `${w.map.id},${p.cellX},${p.cellY}`;
+  const prev = new Map<string, [string, Act]>();
+  const q: [string, number, number][] = [[w.map.id, p.cellX, p.cellY]];
+  const seen = new Set([start]);
+  let found: string | null = null;
+  for (let qi = 0; qi < q.length && qi < 400000; qi++) {
+    const [m, x, y] = q[qi]!;
+    if (goal(m, x, y)) {
+      found = `${m},${x},${y}`;
+      break;
+    }
+    for (const d of DIRS) {
+      const t = planStep(m, x, y, d, goal);
+      if (!t) continue;
+      const k = `${t.m},${t.x},${t.y}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      prev.set(k, [`${m},${x},${y}`, { dir: d, leaves: t.leaves }]);
+      q.push([t.m, t.x, t.y]);
     }
   }
-  if (world().map.id !== to) fail(`could not travel to ${to}`);
+  if (!found) return null;
+  const out: Act[] = [];
+  let k = found;
+  while (k !== start) {
+    const [pk, a] = prev.get(k)!;
+    out.push(a);
+    k = pk;
+  }
+  return out.reverse();
+}
+
+/** Walk (across maps) until standing where `goal` accepts. */
+export function go(goal: (m: string, x: number, y: number) => boolean, what: string): void {
+  for (let tries = 0; tries < 300; tries++) {
+    settle();
+    const w = world();
+    const p = w.player;
+    if (goal(w.map.id, p.cellX, p.cellY)) return;
+    const acts = planTo(goal);
+    if (!acts || acts.length === 0) fail(`no way to ${what} from ${describe()}`);
+    // walk this map's part of it
+    const here = w.map.id;
+    if (process.env.STORY_DEBUG) log(`    go ${what}: at ${describe()} plan ${acts.slice(0, 12).map((a) => a.dir[0] + (a.leaves ? `[${a.leaves}]` : "")).join("")}${acts.length > 12 ? "..." : ""} (${acts.length})`);
+    for (const a of acts) {
+      const q = world().player;
+      const [dx, dy] = DELTA[a.dir];
+      if (can.cut && Permissions.isCutTree(world().map.cellCollision(q.cellX + dx, q.cellY + dy))) {
+        face(a.dir);
+        step(VOX_BTN.a);
+        settle();
+        if (Permissions.isCutTree(world().map.cellCollision(q.cellX + dx, q.cellY + dy))) fail(`the tree at (${q.cellX + dx},${q.cellY + dy}) would not CUT`);
+      }
+      // a rock in the way: ROCK SMASH it (A facing it, YES)
+      if (rockAt(q.cellX + dx, q.cellY + dy)) {
+        face(a.dir);
+        step(VOX_BTN.a);
+        settle();
+        if (rockAt(q.cellX + dx, q.cellY + dy)) fail(`the rock at (${q.cellX + dx},${q.cellY + dy}) would not ROCK SMASH`);
+      }
+      const r = press(a.dir);
+      if (r === "map") break;
+      if (r === "blocked") {
+        refused.add(`${here},${q.cellX},${q.cellY},${a.dir}`);
+        break;
+      }
+      if (r === "interrupted") break;
+      if (a.leaves) {
+        // on the warp and still here: a mat or a door wants a step its way
+        settle();
+        if (world().map.id === here) {
+          const now = world().player;
+          const c = world().map.cellCollision(now.cellX, now.cellY);
+          const want = Permissions.carpetDirection(c) as Dir | undefined;
+          const tryDirs: Dir[] = want ? [want] : [a.dir, "down", "up", "left", "right"];
+          for (const d of tryDirs) {
+            if (world().map.id !== here) break;
+            press(d);
+            settle();
+            const n = world().player;
+            if (world().map.id === here && (n.cellX !== now.cellX || n.cellY !== now.cellY)) break;
+          }
+          if (world().map.id === here) {
+            deadEnds.set(a.leaves, (deadEnds.get(a.leaves) ?? 0) + 1);
+            log(`     (${a.leaves} did not take the player across)`);
+          }
+        }
+        break;
+      }
+    }
+  }
+  fail(`could not get to ${what}`);
+}
+
+/** Go to map `to` on foot. */
+export function travel(to: string, _avoid: string[] = []): void {
+  go((m) => m === to, to);
+}
+
+/** Stand on (x, y) of map `to`. */
+export function reach(to: string, x: number, y: number): void {
+  go((m, a, b) => m === to && a === x && b === y, `(${x},${y}) on ${to}`);
+}
+
+/** The POKeMON CENTER fewest hops away. */
+function nearestCenter(): string | null {
+  const from = world().map.id;
+  const q = [from];
+  const seen = new Set([from]);
+  while (q.length) {
+    const m = q.shift()!;
+    if (/_POKECENTER_1F$/.test(m)) return m;
+    for (const h of hops(m)) {
+      if (seen.has(h.to) || shut.has(hopKey(m, h))) continue;
+      seen.add(h.to);
+      q.push(h.to);
+    }
+  }
+  return null;
+}
+
+/** When the lead is worn down (HP or PP under half), heal it the way a
+ *  player does: the nearest POKeMON CENTER, the nurse, YES. */
+export function healIfLow(): void {
+  const lead = game.save?.party?.[0];
+  if (!lead) return;
+  const maxHp = lead.stats?.hp ?? lead.maxHp ?? lead.hp;
+  const pp = (lead.moves ?? []).reduce((a: number, m: any) => a + (m.pp ?? 0), 0);
+  const ppMax = (lead.moves ?? []).reduce((a: number, m: any) => a + (game.data.moves?.[m.id]?.pp ?? 10), 0);
+  if (lead.hp * 2 >= maxHp && pp * 2 >= ppMax) return;
+  const center = nearestCenter();
+  if (!center) return;
+  const back = world().map.id;
+  log(`     (healing at ${center}: hp ${lead.hp}/${maxHp}, pp ${pp}/${ppMax})`);
+  travel(center);
+  talk("SPRITE_NURSE");
+  const after = (game.save.party[0].moves ?? []).reduce((a: number, m: any) => a + (m.pp ?? 0), 0);
+  expect(after > pp || game.save.party[0].hp > lead.hp, "the nurse to heal the party");
+  void back;
 }
 
 // ---------------------------------------------------------------------------
@@ -469,6 +710,7 @@ for (const c of chapters) {
   const f0 = frames;
   errors.length = 0;
   try {
+    healIfLow();
     c.run();
     settle();
     done++;

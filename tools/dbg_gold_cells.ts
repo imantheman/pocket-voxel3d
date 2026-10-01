@@ -13,9 +13,9 @@ const map = w.map;
 const cx = Number(xs ?? 0);
 const cy = Number(ys ?? 0);
 console.log(map.id, map.widthCells, "x", map.heightCells, "player", w.player.cellX, w.player.cellY);
-for (let y = Math.max(0, cy - 3); y <= Math.min(map.heightCells - 1, cy + 3); y++) {
+for (let y = Math.max(0, cy - (process.env.R ? 99 : 3)); y <= Math.min(map.heightCells - 1, cy + (process.env.R ? 99 : 3)); y++) {
   let line = "";
-  for (let x = Math.max(0, cx - 4); x <= Math.min(map.widthCells - 1, cx + 4); x++) {
+  for (let x = Math.max(0, cx - (process.env.R ? 99 : 4)); x <= Math.min(map.widthCells - 1, cx + (process.env.R ? 99 : 4)); x++) {
     const c = map.cellCollision(x, y);
     const n = w.npcAt(x, y);
     line += `${c.toString(16).padStart(2, "0")}${map.isWalkable(x, y) ? "w" : "."}${n ? "N" : " "} `;

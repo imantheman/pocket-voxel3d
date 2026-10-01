@@ -3,7 +3,7 @@
 // handed over by the end of it.
 import { Mon } from "../voxelmon/game/gen2/battle/Mon.ts";
 import {
-  fail, badges, can, chapters, describe, engine, expect, flag, game, hasItem, log, npc, partySpecies, save, settle, talk, travel, use, walk, walkTo,
+  fail, badges, can, chapters, describe, reach, engine, expect, flag, game, hasItem, log, npc, partySpecies, save, settle, talk, travel, use, walk, walkTo,
 } from "./gold_story.ts";
 
 const chapter = (name: string, run: () => void): void => {
@@ -174,6 +174,70 @@ chapter("10 Ilex Forest: the Farfetch'd and HM01 CUT", () => {
 
 chapter("11 through the forest to Goldenrod", () => {
   travel("GOLDENROD_CITY");
+});
+
+chapter("12 Goldenrod Gym and WHITNEY", () => {
+  travel("GOLDENROD_GYM");
+  talk("SPRITE_WHITNEY");
+  expect(flag("EVENT_BEAT_WHITNEY"), "WHITNEY beaten");
+  // she cries (EVENT_MADE_WHITNEY_CRY); the scene's coord event at (8, 5)
+  // has the lass talk her round, and then she hands over the badge
+  walk((x, y) => x !== 8 || y !== 5, "off the consoling spot");
+  walkTo(8, 5);
+  settle();
+  talk("SPRITE_WHITNEY");
+  expect(hasBadge("PLAINBADGE"), `the PLAINBADGE (have ${badges().join(" ")})`);
+});
+
+chapter("13 the SQUIRTBOTTLE from the flower shop", () => {
+  // Gold's shop asks only for the PLAINBADGE (Floria's errand is Crystal's)
+  travel("GOLDENROD_FLOWER_SHOP");
+  talk("SPRITE_TEACHER");
+  expect(hasItem("SQUIRTBOTTLE"), "the SQUIRTBOTTLE");
+});
+
+chapter("14 the odd tree on Route 36", () => {
+  travel("ROUTE_36");
+  const tree = (game.world.npcs ?? []).find((n: any) => n?.def?.index === 3 && !n.hidden);
+  expect(!!tree, "the SUDOWOODO standing on Route 36");
+  use(tree.cellX, tree.cellY, "the odd tree");
+  settle();
+  expect(flag("EVENT_FOUGHT_SUDOWOODO"), "the SUDOWOODO fought");
+  // the fisher by the tree hands over TM08 ROCK SMASH once it is gone
+  if (!flag("EVENT_GOT_TM08_ROCK_SMASH")) talk("SPRITE_FISHER");
+  expect(flag("EVENT_GOT_TM08_ROCK_SMASH"), "TM08 ROCK SMASH");
+  teach("ROCK_SMASH");
+  can.rocksmash = true;
+});
+
+chapter("15 Ecruteak: the rival and the beasts in the Burned Tower", () => {
+  travel("BURNED_TOWER_1F");
+  settle();
+  // the rival waits a few paces in from the door: walk up to him
+  if (!flag("EVENT_RIVAL_BURNED_TOWER")) {
+    const rival = (game.world.npcs ?? []).find((n: any) => n?.def?.sprite === "SPRITE_RIVAL" && !n.hidden);
+    if (rival) use(rival.cellX, rival.cellY, "the rival");
+    settle();
+  }
+  expect(flag("EVENT_RIVAL_BURNED_TOWER"), "the rival in the Burned Tower");
+  // the beasts' scene is a coord event at (9, 5) on B1F, which only some of
+  // the holes in 1F's floor land near
+  reach("BURNED_TOWER_B1F", 9, 5);
+  settle();
+  expect(flag("EVENT_RELEASED_THE_BEASTS"), "the three beasts gone");
+});
+
+chapter("16 Ecruteak Gym and MORTY", () => {
+  gym("ECRUTEAK_GYM", "SPRITE_MORTY", "FOGBADGE");
+});
+
+chapter("17 the Kimono Girls and HM03 SURF", () => {
+  travel("DANCE_THEATER");
+  talkAll("SPRITE_KIMONO_GIRL", () => ["KUNI", "MIKI", "NAOKO", "SAYO", "ZUKI"].every((n) => flag(`EVENT_BEAT_KIMONO_GIRL_${n}`)), 20);
+  if (!flag("EVENT_GOT_HM03_SURF")) talk("SPRITE_GENTLEMAN");
+  expect(flag("EVENT_GOT_HM03_SURF"), "HM03 SURF");
+  teach("SURF");
+  can.surf = true;
 });
 
 void describe;
