@@ -1267,6 +1267,9 @@ function animView_W6(self: World, key: string): WorldAnimCells[] | undefined {
 /** How far from the player (in either axis, px) the 3D view lists people:
  *  fourteen cells, past anything its camera frames. */
 const NEAR_PX = 14 * 16;
+/** Ghosts farther than this stand still (updatePeople): two cells past NEAR_PX,
+ *  so one is already about its business when it comes into view. */
+const GHOST_AWAKE_PX = NEAR_PX + 2 * 16;
 
 // Lua: World.lua:11311-11381 drawPeople (with drawEntityComposite,
 // drawGrassOver, drawGrassShake :9313-9342 and drawJumpShadow :9345-9366):
@@ -9505,7 +9508,7 @@ export class World {
   // and hand every drawable its colours; on map entry and once a second
   // while walking. Returns true when the daytime changed (the cached map
   // images are stale and callers drop them).
-  applyPalettes(): boolean {
+  applyPalettes(spritesOnlyIfChanged = false): boolean {
     if (!truthy(this.map)) return false;
     const previous = this.daytime;
     const previousTod = this.tod;
@@ -9547,7 +9550,10 @@ export class World {
       });
     }
 
-    if (truthy(this.palettes)) {
+    // (the once-a-second poll re-tints the people only when the daytime
+    // moved: a spawn, a sprite change and a map load tint them themselves,
+    // and re-tinting fifty every second was a frame's worth on the 3DS)
+    if (truthy(this.palettes) && (changed || !spritesOnlyIfChanged)) {
       this.applySpritePalette(this.player);
       const pool = this.npcPool ?? {};
       for (const k of sortedKeys(pool)) this.applySpritePalette(pool[k]);
@@ -10963,8 +10969,21 @@ export class World {
     for (const npc of this.npcs) {
       npc.update(this.map, this.entities);
     }
+    // The ghosts (the neighbouring maps' people: the port's addition, the
+    // cart has no objects off its map) stand still while they are past the
+    // 3D view's reach and not mid-move -- the cart itself steps no object
+    // it cannot see (CheckObjectStillVisible), and fifty updates a step on
+    // Route 29 were most of the overworld step on the 3DS.
+    const p = this.player;
+    const ppx = p ? p.px : 0;
+    const ppy = p ? p.py : 0;
     for (const g of this.ghosts) {
-      g.npc.update(g.map, g.peers);
+      const n = g.npc;
+      if (!n.moving && !n.marching && !n.teleport && !n.treeShake && !n.rockSmash) {
+        const d = Math.max(Math.abs(g.ox + (n.px ?? 0) - ppx), Math.abs(g.oy + (n.py ?? 0) - ppy));
+        if (d > GHOST_AWAKE_PX) continue;
+      }
+      n.update(g.map, g.peers);
     }
   }
 
@@ -10975,7 +10994,7 @@ export class World {
     this.paletteClock = (this.paletteClock ?? 0) + 1;
     if (this.paletteClock < PALETTE_POLL_STEPS) return;
     this.paletteClock = 0;
-    if (truthy(this.applyPalettes())) {
+    if (truthy(this.applyPalettes(true))) {
       this.mapImages = {};
       this.mapImage = this.imageFor(this.map.id);
       this.rebuildNeighbors();

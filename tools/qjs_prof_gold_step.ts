@@ -32,7 +32,11 @@ const lcd = new Lcd({ lcdCells: nop, lcdObjs: nop, lcdPals: nop, lcdRegs: nop, l
 const pages = scene?.atlas?.lcd;
 if (pages) lcd.banks(pages.counts.map((count, k) => ({ base: k * 1024, page: pages.firstPage + k, count })));
 const game: any = Game2.new();
-game.load();
+// straight into the world (no intro to press through), where the Citra
+// bench's save stands; VIEW 2D=1 at bundle time walks in VIEW 2D
+declare const VIEW2D: boolean;
+game.load({ startWorld: true });
+game.world.setMap("ROUTE_29", 27, 3, "down");
 
 const stats: Record<string, { us: number; n: number }> = {};
 let depth = 0;
@@ -86,7 +90,7 @@ let steps = 0;
   if (!game.world?.map) b = f % 40 === 0 ? VOX_BTN.a : 0;
   else {
     inWorld++;
-    if (inWorld === 1) game.options.view = "2d";
+    if (inWorld === 1) game.options.view = typeof VIEW2D !== "undefined" && VIEW2D ? "2d" : "3d";
     b = WALK[Math.floor(inWorld / 20) % WALK.length]!;
   }
   f++;
