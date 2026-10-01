@@ -111,6 +111,7 @@ import { encodeSave } from "./save-lua.ts";
 import { decodeSave } from "./save-read.ts";
 import * as Bag from "./rules/bag.ts";
 import { tiltShiftLevel } from "./tiltshift.ts";
+import { is2d } from "./viewmode.ts";
 /** Must match Version.saveFormat in the recomp. */
 const SAVE_FORMAT = 4;   // Version.lua saveFormat
 /**
@@ -2894,6 +2895,16 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   uiChoice(): ChoiceSource | null {
     const top = this.stack[this.stack.length - 1];
     return top?.kind === "choice" ? (top as ChoiceState) : null;
+  }
+
+  /** The OPTION screen's BATTLES 2D (viewmode.ts). */
+  battle2d(): boolean {
+    return is2d((this.save as { options?: { battleView?: string } }).options?.battleView);
+  }
+
+  /** The OPTION screen's VIEW 2D (viewmode.ts). */
+  view2d(): boolean {
+    return is2d((this.save as { options?: { view?: string } }).options?.view);
   }
 
   battleView(): BattleSceneView | null {

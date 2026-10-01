@@ -17,6 +17,8 @@ import {
   UI_COLS,
   UI_ROWS,
   UI_TILE,
+  VIEW_H,
+  VIEW_W,
 } from "../../contracts/spec/voxel-spec.ts";
 import { CARD_PIC_CELL } from "./ui/trainercard.ts";
 import { GbEmitter } from "./gb/emit.ts";
@@ -26,7 +28,9 @@ import { hpBarTiles } from "./battle/ui.ts";
 import { TRADE_PIC_CELL } from "./ui/tradeanim.ts";
 import { EVO_PIC_CELL } from "./ui/evoscreen.ts";
 import type { WildBattle } from "./battle/battle.ts";
-import { desiredCards, type BattleStaging } from "./battle/staging.ts";
+import { backPageFor, desiredCards, namedPage, type BattleStaging } from "./battle/staging.ts";
+import { cellsToPicRect } from "./ui/trainercard.ts";
+import { ClassicBattleUi } from "./battle/ui-classic.ts";
 import type { BattleUi } from "./battle/ui.ts";
 import type { VoxelmonData } from "./data.ts";
 import type { VoxelHost } from "./host.ts";
@@ -117,6 +121,8 @@ export interface SceneView {
   /** The active battle, if any — the scene then stages the arena and hands
    * the GB tile layer to the battle ui. */
   battleView(): BattleSceneView | null;
+  /** The OPTION screen's BATTLES 2D: the flat battle screen, no arena (viewmode.ts). */
+  battle2d?(): boolean;
   /** Autopilot-only profiling hook; undefined in production and in the sim. */
   prof?: Prof;
 }
@@ -325,7 +331,7 @@ export class Scene {
       this.uiPage = -1;
       this.uiArrow = false;
       this.choiceDrawn = false;
-      if (bv.staging) {
+      if (bv.staging && !view.battle2d?.()) {
         const a = bv.staging.arena;
         host.arena(bv.staging.mapIndex, a.x, a.y, a.shape, bv.staging.rig);
         // zoom 1.0 (Q8); the solved rig constants live core-side,
@@ -335,6 +341,13 @@ export class Scene {
         host.battleCam(bv.staging.orbit ?? 0, bv.staging.pitch ?? 0, Q8);
         this.arenaStaged = true;
       }
+    }
+    if (view.battle2d?.()) {
+      this.emitFlatBattle(view, bv);
+      this.emitAnimSprites(view, bv);
+      // the cart's own layout: the box and the menus on this screen
+      (this.classicUi ??= new ClassicBattleUi()).emit(host, bv.battle);
+      return;
     }
     const desired = bv.staging ? desiredCards(view.data, bv.battle, bv.staging) : [];
     const seen = new Set<number>();
@@ -359,8 +372,59 @@ export class Scene {
     bv.ui.emit(host, bv.battle);
   }
 
+  /**
+   * BATTLES 2D: the battle screen as the cart draws it -- a white field, the
+   * enemy's front pic at hlcoord 12, 0 (7x7 cells) and the player's back pic
+   * doubled at 1, 5 (8x8), the battle ui over them -- as pictures. Which side
+   * shows, and its faint slide, come from the same rules the cards answer
+   * to (staging.ts desiredCards).
+   */
+  private emitFlatBattle(view: SceneView, bv: BattleSceneView): void {
+    const host = this.host;
+    const data = view.data;
+    const staging = bv.staging ?? ({ arena: { enemyCell: [0, 0], playerCell: [0, 3] } } as unknown as BattleStaging);
+    const desired = desiredCards(data, bv.battle, staging);
+    const pics: { page: number; x: number; y: number; w: number; h: number }[] = [];
+    const white = namedPage(data as never, "picIntro", "white");
+    if (white >= 0) pics.push({ page: white, x: 0, y: 0, w: VIEW_W, h: VIEW_H });
+    const px = cellsToPicRect({ x: 0, y: 0, w: 1, h: 1 }).w / 8; // UI px per GB px
+    for (const c of desired) {
+      const enemy = c.side === 1;
+      let page = c.pic;
+      if (!enemy) {
+        const species = (bv.battle as unknown as { player?: { mon?: { species?: string } } }).player?.mon?.species;
+        const back = species ? backPageFor(data, species) : -1;
+        if (back >= 0) page = back;
+      }
+      const r = cellsToPicRect(enemy ? { x: 12, y: 0, w: 7, h: 7 } : { x: 1, y: 5, w: 8, h: 8 });
+      // the animation offsets (Q4 px) as screen px: a lunge sideways, a
+      // faint as the pic sliding down out of its box
+      const dx = Math.round(((c.dx ?? 0) / 4) * px);
+      const dy = Math.round((-(c.dy ?? 0) / 4) * px);
+      pics.push({ page, x: r.x + dx, y: r.y + dy, w: r.w, h: r.h });
+    }
+    const sig = pics.map((q) => `${q.page},${q.x},${q.y},${q.w},${q.h}`).join("|");
+    if (sig === this.flatPicSig) return;
+    this.flatPicSig = sig;
+    for (let i = 0; i < 3; i++) {
+      const q = pics[i];
+      if (q) host.pic(i, q.page, q.x, q.y, q.w, q.h);
+      else host.picHide(i);
+    }
+  }
+  private flatPicSig = "";
+  /** BATTLES 2D's ui (battle/ui-classic.ts), one per battle. */
+  private classicUi: ClassicBattleUi | null = null;
+
   private endBattle(): void {
     const host = this.host;
+    this.classicUi = null;
+    if (this.flatPicSig !== "") {
+      for (let i = 0; i < 3; i++) host.picHide(i);
+      this.flatPicSig = "";
+      // emitUi tracks what it last sent; make it send its own again
+      this.picSig = "";
+    }
     for (const side of [...this.cardShown.keys()]) {
       host.cardHide(side);
     }

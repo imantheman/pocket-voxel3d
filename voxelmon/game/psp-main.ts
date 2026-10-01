@@ -27,6 +27,8 @@ const SEED = 17;
 const host = new QuickJsHost();
 const source = JSON.parse(native.gamedata()) as Record<string, unknown>;
 const game = new VoxelmonGame(fromObject(source), host, SEED);
+// for tools that wrap this entry (tools/kanto_view2d_entry.ts, a Citra check)
+(globalThis as unknown as { voxelmonGame?: VoxelmonGame }).voxelmonGame = game;
 // AUDIO ON. This loads the pak's AUDI manifest, which is what lets the
 // director resolve a song name to (bank, address, engine) and emit the audio
 // ops; the ROM's channel programs stay in the pak and the chip synth that
