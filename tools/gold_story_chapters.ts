@@ -452,6 +452,52 @@ chapter("29 the Dragon's Den: the DRAGON FANG, the RISINGBADGE", () => {
   expect(hasBadge("RISINGBADGE"), `the RISINGBADGE (have ${badges().join(" ")})`);
 });
 
+chapter("30 to the POKeMON LEAGUE: Route 27, Tohjo Falls, Victory Road", () => {
+  travel("INDIGO_PLATEAU_POKECENTER_1F");
+  settle();
+  expect(flag("EVENT_RIVAL_VICTORY_ROAD"), "the rival in Victory Road");
+});
+
+chapter("31 the ELITE FOUR: WILL, KOGA, BRUNO, KAREN", () => {
+  travel("INDIGO_PLATEAU_POKECENTER_1F");
+  // the last POKeMON CENTER before the doors lock behind
+  talk("SPRITE_NURSE");
+  const four: [string, string, string][] = [
+    ["WILLS_ROOM", "SPRITE_WILL", "EVENT_BEAT_ELITE_4_WILL"],
+    ["KOGAS_ROOM", "SPRITE_KOGA", "EVENT_BEAT_ELITE_4_KOGA"],
+    ["BRUNOS_ROOM", "SPRITE_BRUNO", "EVENT_BEAT_ELITE_4_BRUNO"],
+    ["KARENS_ROOM", "SPRITE_KAREN", "EVENT_BEAT_ELITE_4_KAREN"],
+  ];
+  for (const [room, who, ev] of four) {
+    travel(room);
+    settle();
+    for (let k = 0; k < 3 && !flag(ev); k++) talk(who);
+    expect(flag(ev), `${who.replace("SPRITE_", "")} beaten`);
+  }
+});
+
+chapter("32 LANCE, the HALL OF FAME, the credits", () => {
+  // LANCE's battle is a coord event at (4, 5)/(5, 5); then the HALL OF FAME
+  try {
+    reach("LANCES_ROOM", 5, 5, () => flag("EVENT_BEAT_CHAMPION_LANCE"));
+  } catch (e) {
+    if (!flag("EVENT_BEAT_CHAMPION_LANCE")) throw e;
+  }
+  expect(flag("EVENT_BEAT_CHAMPION_LANCE"), "LANCE beaten");
+  // the HALL OF FAME and the credits run long
+  for (let k = 0; k < 12; k++) {
+    try {
+      settle(20000);
+      break;
+    } catch (e) {
+      const top = game.stack.top();
+      const tb = game.world?.textbox;
+      log(`     still going: ${describe()} top=${top?.screenId ?? top?.constructor?.name} phase=${game.phase} text=${JSON.stringify(top?.page ?? tb?.text ?? top?.pages ?? "").slice(0, 120)}`);
+    }
+  }
+  log(`     after the credits: ${describe()} HoF ${JSON.stringify(save().hallOfFame?.length ?? save().hof?.length ?? null)}`);
+});
+
 void describe;
 void npc;
 void use;
