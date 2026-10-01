@@ -31,6 +31,8 @@
 // Kept: Gold's TEXT SPEED, BATTLE SCENE, BATTLE STYLE, SOUND, PRINT (hidden,
 // as the Lua hides it), MENU ACCOUNT, FRAME, BACK; and the port rows that run
 // here: MUSIC VOL, SFX VOL, MUSIC FILTER, GAME SPEED, VOID FILL, LOGIC CLOCK.
+// Added: TILT SHIFT, this port's own (voxelmon/game/tiltshift.ts), which the
+// Kanto games' OPTION screen carries too.
 
 import { Chrome } from "./Chrome.ts";
 import { Logger } from "../shared/core/Logger.ts";
@@ -46,6 +48,7 @@ import { BorderFill } from "../world/BorderFill.ts";
 import { Font } from "../shared/render/Font.ts";
 import { GbcPalette } from "../shared/render/GbcPalette.ts";
 import { tonumber, tostring } from "../platform/lua.ts";
+import { TILT_SHIFTS, tiltShiftLevel } from "../../tiltshift.ts";
 
 type Options = Record<string, any>;
 
@@ -182,6 +185,17 @@ const ROWS: OptionRow[] = [
     },
     text: (options) => Strings.get(BorderFill.voidFillLabel(options.voidFill)),
   },
+  // Not the Lua's: the 3DS host's miniature look over the voxel world
+  // (voxelmon/game/tiltshift.ts), stated to the host every frame by main.ts.
+  {
+    label: Strings.source("TILT SHIFT"), key: "tiltShift", port: true,
+    cycle: (options, delta) => {
+      const n = TILT_SHIFTS.length;
+      const at = (((tiltShiftLevel(options.tiltShift) + delta) % n) + n) % n;
+      options.tiltShift = TILT_SHIFTS[at]!.key;
+    },
+    text: (options) => Strings.get(TILT_SHIFTS[tiltShiftLevel(options.tiltShift)]!.label),
+  },
   // Lua: OptionsMenu.lua:428
   {
     label: Strings.source("LOGIC CLOCK"), key: "logicClock", port: true,
@@ -213,7 +227,7 @@ const GROUPS: Group[] = [
   },
   {
     id: "group.graphics", label: Strings.source("GRAPHICS"),
-    members: ["color", "uiLetterbox", "shaderfx", "shaderfx2", "frame"],
+    members: ["color", "uiLetterbox", "shaderfx", "shaderfx2", "frame", "tiltShift"],
   },
   { id: "group.audio", label: Strings.source("AUDIO"), members: ["sound", "musicVol", "sfxVol", "musicFilter"] },
   {

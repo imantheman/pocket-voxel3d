@@ -28,3 +28,9 @@ void c3d_early_depth(int on) {
 void gsp_flush(const void *p, u32 len) {
     GSPGPU_FlushDataCache(p, len);
 }
+
+/* C3D_RenderTargetClear is static inline (renderqueue.h); TILT SHIFT clears
+   its texture target, and the screen after it, through this. */
+void c3d_target_clear(C3D_RenderTarget* target, unsigned bits, unsigned colour, unsigned depth) {
+    C3D_RenderTargetClear(target, (C3D_ClearBits)bits, colour, depth);
+}

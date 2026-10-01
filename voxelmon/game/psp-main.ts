@@ -107,6 +107,8 @@ let prevGearPrev = false;
   // otherwise. Optional on the native surface: an older shim has no such
   // op and the host keeps its tuned rate.
   native.camSpeed?.(game.cameraSpeedQ8());
+  // TILT SHIFT, the same way.
+  native.tiltShift?.(game.tiltShiftLevel());
   // The circle pad itself, for the free walk: the button word only ever
   // carried it quantised to the four d-pad bits.
   const st = native.stick?.();

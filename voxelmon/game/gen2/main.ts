@@ -11,6 +11,7 @@
 // and emits the voxel scene under it.
 
 import { native, QuickJsHost } from "../quickjs-host.ts";
+import { tiltShiftLevel } from "../tiltshift.ts";
 import { readGen2Container } from "./platform/container.ts";
 import { loadGenerated, setGen2Source } from "./platform/data.ts";
 import { Lcd } from "./platform/lcd.ts";
@@ -96,6 +97,8 @@ let stepNo = 0;
     }
     t3 = clock ? clock() : 0;
     view.emit(game);
+    // the OPTION screen's TILT SHIFT, stated every step like Kanto's
+    host.tiltShift(tiltShiftLevel(game.options?.tiltShift));
   } catch (e) {
     Logger.error("gold: draw: %s", String((e as Error)?.stack ?? e));
   }

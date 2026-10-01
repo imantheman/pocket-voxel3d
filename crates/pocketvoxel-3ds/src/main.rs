@@ -48,6 +48,7 @@ extern "C" {
     fn audio3ds_queue(pcm: *const i16, frames: i32) -> i32;
     fn c3d_alpha_test(on: i32, r: i32);
     fn c3d_early_depth(on: i32);
+    fn c3d_target_clear(target: *mut core::ffi::c_void, bits: u32, colour: u32, depth: u32);
     fn qjs_call_frame(ctx: *mut JSContext, buttons: i32, errbuf: *mut u8, errlen: i32) -> i32;
 }
 
@@ -1475,6 +1476,23 @@ const POP_PX: f32 = 10.0;
 
 /// Guest screen coordinate -> the quantised grid `Vertex::pos` stores.
 fn qpx(v: f32) -> i16 { (v * UI_Q) as i16 }
+
+/// TILT SHIFT's blurred bands, top to bottom: (screen y as a fraction of the
+/// height, the blur's alpha there), the alpha running linearly between rows.
+/// SOFT (1) lays the half-size copy over the outer thirds; STRONG (2) the
+/// quarter-size one, solid at the edges and leaving a narrower sharp band.
+fn tilt_rows(level: u8) -> &'static [(f32, u8)] {
+    match level {
+        1 => &[(0.0, 255), (0.06, 255), (0.36, 0), (0.64, 0), (0.94, 255), (1.0, 255)],
+        _ => &[(0.0, 255), (0.16, 255), (0.43, 0), (0.57, 0), (0.84, 255), (1.0, 255)],
+    }
+}
+
+/// Whether a texture render target stores the image upside down against the
+/// GL convention (clip y +1 at v = 1). citro2d's render-to-texture subtexture
+/// (top 1.0, bottom 0.0) says it does not; the switch is here in case a
+/// hardware run says otherwise.
+const TILT_FB_FLIP: bool = false;
 
 /// Top screen height in device pixels.
 const SCREEN_H: f32 = 240.0;
@@ -3073,6 +3091,31 @@ fn main() {
     let mut right_target = instance
         .render_target(width, height, top_right, Some(DepthFormat::Depth24Stencil8))
         .expect("right target");
+    // TILT SHIFT (the OPTION screen's, spec `tiltShift`). With it on, the 3D
+    // world renders into tilt_world instead of the screen, is shrunk twice --
+    // each a bilinear draw whose taps land between texels, so each averages
+    // 2x2 -- and the screen gets the sharp world with a small copy stretched
+    // over its top and bottom: the stretch is the blur. No display transfer
+    // and no mipmap timing, only draws, so Citra and the hardware agree.
+    // VRAM, made once (~1.2 MB); None, and the option does nothing, if the
+    // VRAM is not there.
+    let tilt_tex = |w: u16, h: u16| -> Option<texture::Texture> {
+        let mut t = texture::Texture::new(
+            texture::TextureParameters::new_2d_in_vram(w, h, texture::ColorFormat::Rgba8)).ok()?;
+        t.set_filter(texture::Filter::Linear, texture::Filter::Linear);
+        t.set_wrap(texture::Wrap::ClampToEdge, texture::Wrap::ClampToEdge);
+        Some(t)
+    };
+    let tilt_targets = (|| {
+        let w = instance.render_target_texture(tilt_tex(512, 256)?, texture::Face::default(),
+            Some(DepthFormat::Depth24Stencil8)).ok()?;
+        let h = instance.render_target_texture(tilt_tex(256, 128)?, texture::Face::default(), None).ok()?;
+        let q = instance.render_target_texture(tilt_tex(128, 64)?, texture::Face::default(), None).ok()?;
+        Some((w, h, q))
+    })();
+    if tilt_targets.is_none() {
+        dlog("[pv] tilt shift: no VRAM for its targets; the option is off");
+    }
 
     let shader = shader::Library::from_bytes(SHADER_BYTES).unwrap();
     let program = shader::Program::new(shader.get(0).unwrap()).unwrap();
@@ -3100,6 +3143,13 @@ fn main() {
     // Flat-colour stage for the companion's header bar: output the vertex
     // (primary) colour directly, ignoring the texture — a guaranteed-solid fill
     // that doesn't depend on any atlas texel being opaque-white.
+    // TILT SHIFT's copies: the texture's colour, the vertex's alpha -- opaque
+    // for the shrinks and the sharp world (whatever alpha the world's own
+    // blending left in the texture), the band fade for the blur.
+    let stage_tilt = texenv::TexEnv::new()
+        .src(texenv::Mode::RGB, texenv::Source::Texture0, None, None)
+        .src(texenv::Mode::ALPHA, texenv::Source::PrimaryColor, None, None)
+        .func(texenv::Mode::BOTH, texenv::CombineFunc::Replace);
     let stage_flat = texenv::TexEnv::new()
         .src(texenv::Mode::BOTH, texenv::Source::PrimaryColor, None, None)
         .func(texenv::Mode::BOTH, texenv::CombineFunc::Replace);
@@ -3320,6 +3370,8 @@ fn main() {
     let mut lcd_drawn: Option<u32> = None;
     let mut lcd_fb = vec![0u8; pocketvoxel_core::lcd::LCD_W * pocketvoxel_core::lcd::LCD_H];
     let mut lcd_hold: Option<buffer::Info> = None;
+    // TILT SHIFT's quads, held the same frame longer.
+    let mut tilt_hold: [Option<buffer::Info>; 3] = [None, None, None];
     // The Gold screen's upload buffer, kept: only its 160x144 corner is
     // ever written, and the rest stays transparent.
     let mut lcd_data = vec![0u8; 256 * 256 * 4];
@@ -4519,6 +4571,15 @@ fn main() {
         ).stereo_matrices(sl, sr);
         let mut mvp_l = pl * camera;
         let mut mvp_r = pr * camera;
+        // The same eyes for TILT SHIFT's texture, which is not a rotated
+        // screen: the same view, unrotated.
+        let (tpl, tpr) = Projection::perspective(
+            world_fov(),
+            AspectRatio::TopScreen,
+            ClipPlanes { near: 1.0, far: 100000.0 },
+        ).screen(ScreenOrientation::None).stereo_matrices(sl, sr);
+        let mut tmvp_l = tpl * camera;
+        let mut tmvp_r = tpr * camera;
         let mut card_groups: Vec<(u16, Vec<CardVertex>)> = Vec::new();
         let mut ui_verts: Vec<Vertex> = Vec::new();
         let mut pic_groups: Vec<(u16, i16, Vec<Vertex>)> = Vec::new();
@@ -4594,6 +4655,8 @@ fn main() {
             dbg_tick += 1;
             mvp_l = pl * gcam;
             mvp_r = pr * gcam;
+            tmvp_l = tpl * gcam;
+            tmvp_r = tpr * gcam;
             // Title screen and Oak's speech own the whole frame; the guest
             // still emits the player's overworld card, so drop it there.
             let pic_active_scan = list.items.iter().any(|i| matches!(i, Item::ScreenPic { .. }));
@@ -5493,6 +5556,55 @@ if page_tex.len() < pak_static.atlases.len() {
         perf_radius = cull_radius.min(9999.0);
         perf_spans = infos_ref.len() + strips_ref.len();
         perf_trees = tree_insts_ref.len();
+        // TILT SHIFT: on only over the 3D world (a full-frame picture owns
+        // the screen), and only with its targets made.
+        // PV_TILT_FORCE=1/2 at build time pins the level, for watching it in
+        // an emulator without walking the menus.
+        let tilt_level = option_env!("PV_TILT_FORCE").and_then(|v| v.parse::<u8>().ok())
+            .unwrap_or(unsafe { voxel::scene() }.tilt_shift);
+        let tilt_ref = if tilt_level > 0 && !pic_active { tilt_targets.as_ref() } else { None };
+        let mut tilt_unit: Option<buffer::Info> = None;
+        let mut tilt_sharp: Option<buffer::Info> = None;
+        let mut tilt_bands: Option<buffer::Info> = None;
+        if tilt_ref.is_some() {
+            let v = |y: f32| if TILT_FB_FLIP { 1.0 - y } else { y };
+            let mk = |px: i16, py: i16, a: u8, u: f32, vv: f32| Vertex {
+                pos: [px, py, 0, 0], color: [255, 255, 255, a], uv: [u, vv] };
+            // A shrink: the whole target, uv = position, under a 0..1 ortho.
+            let unit = [
+                mk(0, 0, 255, 0.0, v(0.0)), mk(1, 0, 255, 1.0, v(0.0)), mk(1, 1, 255, 1.0, v(1.0)),
+                mk(0, 0, 255, 0.0, v(0.0)), mk(1, 1, 255, 1.0, v(1.0)), mk(0, 1, 255, 0.0, v(1.0)),
+            ];
+            // The screen, in the UI ortho (y down): its top is the image's top.
+            let (x0, x1) = (qpx(0.0), qpx(UI_VIEW_W));
+            let sy = |f: f32| qpx(UI_VIEW_H * f);
+            let sv = |f: f32| v(1.0 - f);
+            let sharp = [
+                mk(x0, sy(0.0), 255, 0.0, sv(0.0)), mk(x1, sy(0.0), 255, 1.0, sv(0.0)), mk(x1, sy(1.0), 255, 1.0, sv(1.0)),
+                mk(x0, sy(0.0), 255, 0.0, sv(0.0)), mk(x1, sy(1.0), 255, 1.0, sv(1.0)), mk(x0, sy(1.0), 255, 0.0, sv(1.0)),
+            ];
+            let mut bands: Vec<Vertex> = Vec::new();
+            for w in tilt_rows(tilt_level).windows(2) {
+                let ((fa, aa), (fb, ab)) = (w[0], w[1]);
+                if aa == 0 && ab == 0 { continue; }
+                bands.extend_from_slice(&[
+                    mk(x0, sy(fa), aa, 0.0, sv(fa)), mk(x1, sy(fa), aa, 1.0, sv(fa)), mk(x1, sy(fb), ab, 1.0, sv(fb)),
+                    mk(x0, sy(fa), aa, 0.0, sv(fa)), mk(x1, sy(fb), ab, 1.0, sv(fb)), mk(x0, sy(fb), ab, 0.0, sv(fb)),
+                ]);
+            }
+            let mut bi = buffer::Info::new();
+            if bi.add(buffer::Buffer::new(&unit[..]), attr_info.permutation()).is_ok() { tilt_unit = Some(bi); }
+            let mut bi = buffer::Info::new();
+            if bi.add(buffer::Buffer::new(&sharp[..]), attr_info.permutation()).is_ok() { tilt_sharp = Some(bi); }
+            let mut bi = buffer::Info::new();
+            if bi.add(buffer::Buffer::new(&bands[..]), attr_info.permutation()).is_ok() { tilt_bands = Some(bi); }
+        }
+        let tilt_ref = match (&tilt_unit, &tilt_sharp, &tilt_bands) {
+            (Some(_), Some(_), Some(_)) => tilt_ref,
+            _ => None,
+        };
+        let (tilt_unit_ref, tilt_sharp_ref, tilt_bands_ref) = (tilt_unit.as_ref(), tilt_sharp.as_ref(), tilt_bands.as_ref());
+        let (tmvp_l_ref, tmvp_r_ref) = (&tmvp_l, &tmvp_r);
         instance.render_frame_with(|mut frame| {
             fn cast_lifetime_to_closure<'frame, T>(x: T) -> T
             where
@@ -5504,13 +5616,18 @@ if page_tex.len() < pak_static.atlases.len() {
             // picture that stands out of the screen is the same picture
             // shifted the other way for each eye.
             let render_to = cast_lifetime_to_closure(|frame, target, mvp, eye: f32| {
-                target.clear(
-                    ClearFlags::ALL,
-                    if pic_active { 0xFFFF_FFFFu32 } else { tint_rgba8(SKY, scene_tint) },
-                    0,
-                );
-                frame.select_render_target(target).expect("select");
-                frame.bind_vertex_uniform(projection_idx, mvp);
+                let sky = if pic_active { 0xFFFF_FFFFu32 } else { tint_rgba8(SKY, scene_tint) };
+                if let Some((tw, _, _)) = tilt_ref {
+                    // TILT SHIFT: the world (and its cards) into the texture;
+                    // the screen gets it below, before the UI.
+                    unsafe { c3d_target_clear(tw.as_raw() as *mut core::ffi::c_void, ClearFlags::ALL.bits() as u32, sky, 0); }
+                    frame.select_render_target(tw).expect("select tilt");
+                    frame.bind_vertex_uniform(projection_idx, if eye < 0.0 { tmvp_l_ref } else { tmvp_r_ref });
+                } else {
+                    target.clear(ClearFlags::ALL, sky, 0);
+                    frame.select_render_target(target).expect("select");
+                    frame.bind_vertex_uniform(projection_idx, mvp);
+                }
                 frame.bind_vertex_uniform(uvx_idx, uvx);
                 frame.bind_vertex_uniform(toff_idx, FVec4::new(0.0, 0.0, 0.0, 0.0));
                 frame.set_cull_face(CullMode::None);
@@ -5553,6 +5670,54 @@ if page_tex.len() < pak_static.atlases.len() {
                 // run with the depth test disabled and must not be answered
                 // by a depth buffer they never wrote to.
                 if EARLY_DEPTH { unsafe { c3d_early_depth(0); } }
+                if let (Some((tw, th, tq)), Some(unit), Some(sharp), Some(bands)) =
+                    (tilt_ref, tilt_unit_ref, tilt_sharp_ref, tilt_bands_ref)
+                {
+                    // The cards are the world too: into the texture, depth-
+                    // tested against it (below, they are skipped).
+                    frame.bind_vertex_uniform(uvx_idx, FVec4::new(1.0, 1.0, 0.0, 0.0));
+                    if !card_bufs.is_empty() {
+                        frame.set_attr_info(&card_attr);
+                        for (pg, ci) in card_bufs.iter() {
+                            if let Some(t) = page_tex_ref.get(*pg).and_then(|o| o.as_ref()) {
+                                frame.bind_texture(texture::Index::Texture0, t);
+                            }
+                            frame.draw_arrays(buffer::Primitive::Triangles, ci, None).unwrap();
+                        }
+                        frame.set_attr_info(&attr_info);
+                    }
+                    // Shrink twice, then the screen: the sharp world, and the
+                    // small copy over the top and bottom.
+                    unsafe { c3d_depth_test(0); }
+                    frame.set_texenvs(&[stage_tilt]);
+                    let unit_po: Matrix4 = Projection::orthographic(
+                        0.0..1.0, 0.0..1.0, ClipPlanes { near: -1.0, far: 1.0 })
+                        .screen(ScreenOrientation::None).into();
+                    frame.bind_vertex_uniform(projection_idx, &unit_po);
+                    frame.select_render_target(th).expect("select tilt half");
+                    frame.bind_texture(texture::Index::Texture0, tw.texture());
+                    frame.draw_arrays(buffer::Primitive::Triangles, unit, None).unwrap();
+                    if tilt_level >= 2 {
+                        frame.select_render_target(tq).expect("select tilt quarter");
+                        frame.bind_texture(texture::Index::Texture0, th.texture());
+                        frame.draw_arrays(buffer::Primitive::Triangles, unit, None).unwrap();
+                    }
+                    unsafe { c3d_target_clear(target.as_raw() as *mut core::ffi::c_void, ClearFlags::ALL.bits() as u32, sky, 0); }
+                    frame.select_render_target(target).expect("select");
+                    let po: Matrix4 = Projection::orthographic(
+                        0.0..(UI_VIEW_W * UI_Q), (UI_VIEW_H * UI_Q)..0.0,
+                        ClipPlanes { near: -1.0, far: 1.0 })
+                        .screen(ScreenOrientation::Rotated).into();
+                    frame.bind_vertex_uniform(projection_idx, &po);
+                    frame.bind_texture(texture::Index::Texture0, tw.texture());
+                    frame.draw_arrays(buffer::Primitive::Triangles, sharp, None).unwrap();
+                    let blur = if tilt_level >= 2 { tq } else { th };
+                    frame.bind_texture(texture::Index::Texture0, blur.texture());
+                    frame.draw_arrays(buffer::Primitive::Triangles, bands, None).unwrap();
+                    frame.set_texenvs(&[stage0]);
+                    frame.bind_vertex_uniform(projection_idx, mvp);
+                    unsafe { c3d_depth_test(1); }
+                }
                 // Card UVs are already atlas-scaled here, so the shader's
                 // terrain uvx transform must not apply again.
                 frame.bind_vertex_uniform(uvx_idx, FVec4::new(1.0, 1.0, 0.0, 0.0));
@@ -5624,7 +5789,7 @@ if page_tex.len() < pak_static.atlases.len() {
                     frame.bind_vertex_uniform(projection_idx, mvp);
                     unsafe { c3d_depth_test(1); }
                 }
-                if !card_bufs.is_empty() {
+                if !card_bufs.is_empty() && tilt_ref.is_none() {
                     // Cards carry unrounded world coordinates in a float
                     // position attribute, so they need their own layout for
                     // the pass. The mvp is the plain one -- there is no
@@ -5763,6 +5928,7 @@ if page_tex.len() < pak_static.atlases.len() {
         pic_hold = pic_bufs;
         gb_hold = gb_buf;
         lcd_hold = lcd_buf;
+        tilt_hold = [tilt_unit, tilt_sharp, tilt_bands];
         ui_hold = ui_buf;
         anim_hold = anim_bufs;
         ui_b_hold = ui_b_buf;
@@ -5771,7 +5937,7 @@ if page_tex.len() < pak_static.atlases.len() {
         ui_b_dim_hold = ui_b_dim_buf;
         ui_b_sprite_hold = ui_b_sprite_bufs;
         let _ = (
-            &card_hold, &pic_hold, &gb_hold, &lcd_hold, &ui_hold, &anim_hold, &ui_b_hold,
+            &card_hold, &pic_hold, &gb_hold, &lcd_hold, &tilt_hold, &ui_hold, &anim_hold, &ui_b_hold,
             &ui_b_bar_hold, &ui_b_light_hold, &ui_b_dim_hold, &ui_b_sprite_hold,
         );
     }

@@ -18,6 +18,7 @@
 // (textSpeed, animations), so a save moves between the two builds intact.
 import type { GameState } from "../game.ts";
 import { TEXT_SPEEDS, TEXT_SPEED_DEFAULT } from "../world/textbox.ts";
+import { TILT_SHIFTS, tiltShiftLevel } from "../tiltshift.ts";
 
 export interface OptionsRow {
   label: string;
@@ -39,7 +40,7 @@ export interface OptionsView {
 /**
  * Each row is four lines (label, blank, choices, blank) on an 18-line
  * screen, so four items fit and the rest scroll under them. The original's
- * three rows never needed this; this port's five plus CANCEL do.
+ * three rows never needed this; this port's six plus CANCEL do.
  */
 export const OPTIONS_VISIBLE = 4;
 
@@ -61,6 +62,7 @@ interface OptionsSave {
     animations?: boolean;
     movement?: string;
     cameraSpeed?: string;
+    tiltShift?: string;
     devMenu?: boolean;
   };
 }
@@ -113,6 +115,13 @@ export class OptionsMenuState implements GameState {
         index: this.cameraIndex(),
       },
       {
+        // The miniature look (tiltshift.ts): the host blurs the top and
+        // bottom of the world. This port's row, like CAMERA SPEED.
+        label: "TILT SHIFT",
+        choices: TILT_SHIFTS.map((t) => t.label),
+        index: tiltShiftLevel(this.opts().tiltShift),
+      },
+      {
         // The playtesting tools (ui/devmenu.ts). Off unless asked for, and
         // then DEV appears on the pause menu.
         label: "DEV MENU",
@@ -132,7 +141,8 @@ export class OptionsMenuState implements GameState {
     else if (row === 1) this.opts().animations = at === 0;
     else if (row === 2) this.opts().movement = at === 1 ? "grid" : "free";
     else if (row === 3) this.opts().cameraSpeed = CAMERA_SPEEDS[at]!.key;
-    else if (row === 4) this.opts().devMenu = at === 1;
+    else if (row === 4) this.opts().tiltShift = TILT_SHIFTS[at]!.key;
+    else if (row === 5) this.opts().devMenu = at === 1;
   }
 
   update(): void {

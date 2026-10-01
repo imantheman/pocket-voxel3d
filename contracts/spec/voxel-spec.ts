@@ -833,6 +833,13 @@ export const VOX_OP = {
    *   daytime(k)
    */
   daytime: 104,
+  /**
+   * The OPTION screen's TILT SHIFT: 0 off, 1 soft, 2 strong. The host blurs
+   * the top and bottom of the 3D world (never the UI over it) and leaves a
+   * sharp band across the middle. Stated every frame.
+   *   tiltShift(level)
+   */
+  tiltShift: 105,
 } as const;
 
 /** Clips in Yellow's PikachuCriesPointerTable (NUM_PIKA_CRIES). */

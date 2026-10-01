@@ -157,6 +157,8 @@ export interface VoxelHost {
   lcdLines?(target: number, hex: string): void;
   /** Gold's time of day for the world's colours: 0 MORN .. 3 DARK. */
   daytime?(k: number): void;
+  /** The OPTION screen's TILT SHIFT: 0 off, 1 soft, 2 strong. */
+  tiltShift?(level: number): void;
   /** Boot-time: a sound engine's wave-instrument table. */
   audioWaves(engine: number, bank: number, addr: number): void;
   /** Boot-time: one drum program of a sound engine. */
@@ -411,6 +413,9 @@ export class RecorderHost implements VoxelHost {
   }
   daytime(k: number): void {
     this.op(VOX_OP.daytime, k);
+  }
+  tiltShift(level: number): void {
+    this.op(VOX_OP.tiltShift, level);
   }
   audioWaves(engine: number, bank: number, addr: number): void {
     this.op(VOX_OP.audioWaves, engine, bank, addr);

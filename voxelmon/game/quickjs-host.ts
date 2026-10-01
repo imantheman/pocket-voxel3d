@@ -104,6 +104,8 @@ export interface VoxelNative {
   lcdPals?(first: number, hex: string): void;
   lcdLines?(target: number, hex: string): void;
   daytime?(k: number): void;
+  /** spec `tiltShift`: 0 off, 1 soft, 2 strong. */
+  tiltShift?(level: number): void;
   audioWaves?(engine: number, bank: number, addr: number): void;
   audioDrum?(engine: number, drum: number, bank: number, addr: number): void;
 }
@@ -342,6 +344,9 @@ export class QuickJsHost implements VoxelHost {
   }
   daytime(k: number): void {
     native.daytime?.(k);
+  }
+  tiltShift(level: number): void {
+    native.tiltShift?.(level);
   }
   audioWaves(engine: number, bank: number, addr: number): void {
     native.audioWaves?.(engine, bank, addr);

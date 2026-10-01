@@ -369,6 +369,7 @@ pub mod op {
     pub const LCD_PALS: u32 = 102;
     pub const LCD_LINES: u32 = 103;
     pub const DAYTIME: u32 = 104;
+    pub const TILT_SHIFT: u32 = 105;
 }
 
 /// Fixed-point scales used by op args.

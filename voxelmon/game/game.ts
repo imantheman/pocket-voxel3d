@@ -110,6 +110,7 @@ import { PokedexState } from "./ui/pokedexscreen.ts";
 import { encodeSave } from "./save-lua.ts";
 import { decodeSave } from "./save-read.ts";
 import * as Bag from "./rules/bag.ts";
+import { tiltShiftLevel } from "./tiltshift.ts";
 /** Must match Version.saveFormat in the recomp. */
 const SAVE_FORMAT = 4;   // Version.lua saveFormat
 /**
@@ -857,6 +858,11 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       x: Math.max(-1, Math.min(1, x / r)),
       y: Math.max(-1, Math.min(1, y / r)),
     };
+  }
+
+  /** save.options.tiltShift -> the host's level (spec `tiltShift`). */
+  tiltShiftLevel(): number {
+    return tiltShiftLevel((this.save as { options?: { tiltShift?: string } }).options?.tiltShift);
   }
 
   cameraSpeedQ8(): number {
