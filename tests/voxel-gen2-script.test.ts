@@ -12,6 +12,7 @@ import { CallAsm } from "../voxelmon/game/gen2/script/CallAsm.ts";
 import { Movement } from "../voxelmon/game/gen2/script/Movement.ts";
 import { Opcodes } from "../voxelmon/game/gen2/script/Opcodes.ts";
 import { Specials } from "../voxelmon/game/gen2/script/Specials.ts";
+import { Clock } from "../voxelmon/game/gen2/core/Clock.ts";
 import { Coroutine, type Script, Vm } from "../voxelmon/game/gen2/script/Vm.ts";
 import { NUM_EVENT_COMMANDS, OPCODES, TERMINATORS } from "../voxelmon/import/gen2/opcodes.ts";
 
@@ -494,6 +495,23 @@ gold("Vm on the Gold import", () => {
     expect(ask(FLUTE, null, [30, 10])).toBe(0);
     // the map's own music: asleep, whatever else is playing
     expect(ask("Music_VermilionCity", FLUTE, [34, 10])).toBe(0);
+  });
+
+  test("ResetLuckyNumberShowFlag counts to Friday from the save's weekday", () => {
+    const order = (loadGenerated("constants") as any).specialOrder as string[];
+    Vm.SPECIALS = Specials.ALL;
+    const scripts = { reset: [{ op: "special", id: order.indexOf("ResetLuckyNumberShowFlag") }] };
+    // the player set the card to each weekday in turn, whatever the host's is
+    const want = [5, 4, 3, 2, 1, 7, 6]; // Sunday .. Saturday: days to the NEXT Friday
+    for (let day = 0; day < 7; day++) {
+      const world = new FakeWorld();
+      const record: any = { rtc: {} };
+      Clock.setWeekday(record, day);
+      const vm = Vm.new(scripts, {}, world.events, world.hooks({ specials: { save: () => record } }));
+      vm.start("reset");
+      world.drive(vm);
+      expect(record.luckyNumberReset?.remaining).toBe(want[day]);
+    }
   });
 
   test("the movement decoder on every movement stream in the import", () => {

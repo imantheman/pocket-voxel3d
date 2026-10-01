@@ -1550,7 +1550,9 @@ function luckyPrizeFor(shared: number): number {
 // engine/overworld/time.asm's RestartLuckyNumberCountdown: the days from
 // `weekday` until the NEXT Friday, where Friday itself is a full week away
 // rather than zero (`sub c / jr z, .friday_saturday` before the `add 7`).
-// GetWeekday counts SUNDAY 0 .. SATURDAY 6, same as BugContest.weekday.
+// GetWeekday counts SUNDAY 0 .. SATURDAY 6 -- the save's weekday (Clock.weekday:
+// the host's plus the day the player set at the start), as every GetWeekday
+// reads it.
 // Lua: Specials.lua:1538
 function daysUntilFriday(weekday: number | undefined): number {
   return mod(BugContest.FRIDAY - (weekday ?? 0) - 1, 7) + 1;
@@ -1637,7 +1639,9 @@ H.ResetLuckyNumberShowFlag = (vm: Vm) => {
   if (!truthy(record)) return;
   const now = BugContest.now();
   const timer = luckyNumberTimer(record);
-  timer.remaining = daysUntilFriday(BugContest.weekday(now));
+  // GetWeekday is wCurDay, which carries the weekday the player chose; the
+  // host's own weekday is not it (a card set to Tuesday on a Friday)
+  timer.remaining = daysUntilFriday(Clock.weekday(record));
   timer.day = now.day;
   const h = hooks(vm);
   if (h.setEngineFlag) h.setEngineFlag("ENGINE_LUCKY_NUMBER_SHOW", undefined);
