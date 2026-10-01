@@ -873,6 +873,7 @@ export class Scene {
       page: (sheet) => {
         if (sheet === "terrain") return -2; // the load's map's own terrain page (the host's to find)
         if (sheet.startsWith("sprite:")) return this.sheetIndex(view, sheet.slice(7));
+        if (sheet === "emotes") return (data.atlas as { emotePage?: number | null } | undefined)?.emotePage ?? -1;
         return data.atlas?.picMinigame?.[sheet] ?? -1;
       },
       palette: (name) => (name.startsWith("#") ? Number(name.slice(1)) : data.paletteIndex?.[name] ?? -1),

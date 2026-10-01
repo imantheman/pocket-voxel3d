@@ -89,4 +89,26 @@ describe("VIEW 2D overworld", () => {
     const after = ts.blocks[swaps.find((s) => s.before === def.blocks[bi])!.after]![0]! & 0x7f;
     expect(at(view.build(game))).toBe(after);
   });
+
+  test.skipIf(!hasGen)("a trainer's ! sits 16 px over its person, on top", () => {
+    const game = gameAt("VIRIDIAN_CITY", 20, 20);
+    const view = new OverworldView2d();
+    game.overworld.emote = { entity: game.overworld.player, kind: 1, frames: 30 };
+    const v = view.build(game)!;
+    // the bubble's four entries first, then the player's at (64, 60)
+    expect(v.oam[0]! - 16).toBe(60 - 16);
+    expect(v.oam[1]! - 8).toBe(64);
+    expect(v.oam[4 * 4]! - 16).toBe(60);
+    // its sheet is the pak's emote page
+    expect(v.loads.some((l) => l.sheet === "emotes")).toBe(true);
+  });
+
+  test.skipIf(!hasGen)("Rock Tunnel is dark in 2D until FLASH", () => {
+    const game = gameAt("ROCK_TUNNEL_1F", 15, 4);
+    const view = new OverworldView2d();
+    expect(view.build(game)!.bgp).toBe(0xfe);
+    game.save.flashLit = true;
+    const v = view.build(game)!;
+    expect([v.bgp, v.obp0, v.obp1]).toEqual([0xe4, 0xe4, 0xe4]);
+  });
 });

@@ -82,7 +82,7 @@ import type { MapWarp } from "../data.ts";
 // build time) instead of a lit circle around the player; Flash clears it
 // for the rest of the visit, matching the mechanic's actual effect (you can
 // see the room again) even though the presentation is coarser than the GB's.
-const DARK_MAPS = new Set(["ROCK_TUNNEL_1F", "ROCK_TUNNEL_B1F"]);
+export const DARK_MAPS = new Set(["ROCK_TUNNEL_1F", "ROCK_TUNNEL_B1F"]);
 /** 0xAABBGGRR. ~24% brightness: the GB blacks the screen OUTSIDE a lit
  * radius, which is only navigable because the radius exists. A uniform
  * multiply has no lit circle to walk by, so it has to stay light enough to

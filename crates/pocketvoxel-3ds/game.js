@@ -19588,6 +19588,8 @@ class Scene {
           return -2;
         if (sheet.startsWith("sprite:"))
           return this.sheetIndex(view, sheet.slice(7));
+        if (sheet === "emotes")
+          return data.atlas?.emotePage ?? -1;
         return data.atlas?.picMinigame?.[sheet] ?? -1;
       },
       palette: (name) => name.startsWith("#") ? Number(name.slice(1)) : data.paletteIndex?.[name] ?? -1
@@ -27537,6 +27539,7 @@ function decodeSave(text2) {
 }
 
 // voxelmon/game/world/view2d.ts
+var EMOTES = "@emotes";
 var STAND2 = { down: 0, up: 1, left: 2, right: 2 };
 var WALK2 = { down: 3, up: 4, left: 5, right: 5 };
 var SHEET_TILES = 24;
@@ -27590,6 +27593,10 @@ class OverworldView2d {
     this.camX = camX;
     this.camY = camY;
     const gold = game.data.version === "gold";
+    const emote2 = ow.emote;
+    if (emote2 && emote2.kind >= 1 && emote2.kind <= 3 && emote2.entity) {
+      this.put(EMOTES, emote2.entity.px, emote2.entity.py - 16, emote2.kind - 1, false);
+    }
     {
       const phase = p.walkPhase();
       const f = p.facing;
@@ -27610,7 +27617,7 @@ class OverworldView2d {
       this.loadsSize = this.slots.size;
       const loads = [{ dest: 256, sheet: "terrain", first: 0, count: 128, map: map.def.index }];
       for (const [sheet, slot] of this.slots) {
-        loads.push({ dest: slot * SHEET_TILES, sheet: `sprite:${sheet}`, first: 0, count: SHEET_TILES, wide: 2, stride: SPRITE_PAGE_TILES });
+        loads.push({ dest: slot * SHEET_TILES, sheet: sheet === EMOTES ? "emotes" : `sprite:${sheet}`, first: 0, count: SHEET_TILES, wide: 2, stride: SPRITE_PAGE_TILES });
       }
       v.loads = loads;
     }
@@ -27619,9 +27626,10 @@ class OverworldView2d {
     const c = v.colours;
     if (c.bg !== name)
       v.colours = { bg: name, obj0: name, obj1: name };
-    v.bgp = 228;
-    v.obp0 = 228;
-    v.obp1 = 228;
+    const dark = DARK_MAPS.has(map.id) && !game.save?.flashLit;
+    v.bgp = dark ? 254 : 228;
+    v.obp0 = dark ? 254 : 228;
+    v.obp1 = dark ? 248 : 228;
     return v;
   }
   loadsSize = -1;

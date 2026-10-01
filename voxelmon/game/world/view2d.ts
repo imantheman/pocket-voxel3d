@@ -27,6 +27,10 @@
 
 import { GbVideo, LCDC, OAM_ATTR, OAM_X_OFS, OAM_Y_OFS, type TileLoad } from "../gb/video.ts";
 import type { Dir } from "./collision.ts";
+import { DARK_MAPS } from "./overworld.ts";
+
+/** The slot key of the emotion bubbles' sheet (the pak's emote page). */
+const EMOTES = "@emotes";
 
 /** STAND / WALK sheet frames per facing (scene.ts's, SpriteRenderer.lua's). */
 const STAND: Record<string, number> = { down: 0, up: 1, left: 2, right: 2 };
@@ -107,6 +111,13 @@ export class OverworldView2d {
     this.camX = camX;
     this.camY = camY;
     const gold = (game.data as { version?: string }).version === "gold";
+    // an emotion bubble first, so it sits on top: 16 px over its person
+    // (ShowEmotionBubble), frame kind - 1 of the emote page as scene.ts's
+    // emote op draws it in 3D
+    const emote = ow.emote;
+    if (emote && emote.kind >= 1 && emote.kind <= 3 && emote.entity) {
+      this.put(EMOTES, emote.entity.px, emote.entity.py - 16, emote.kind - 1, false);
+    }
     {
       const phase = p.walkPhase();
       const f: Dir = p.facing;
@@ -141,7 +152,7 @@ export class OverworldView2d {
       this.loadsSize = this.slots.size;
       const loads: TileLoad[] = [{ dest: 256, sheet: "terrain", first: 0, count: 128, map: map.def.index }];
       for (const [sheet, slot] of this.slots) {
-        loads.push({ dest: slot * SHEET_TILES, sheet: `sprite:${sheet}`, first: 0, count: SHEET_TILES, wide: 2, stride: SPRITE_PAGE_TILES });
+        loads.push({ dest: slot * SHEET_TILES, sheet: sheet === EMOTES ? "emotes" : `sprite:${sheet}`, first: 0, count: SHEET_TILES, wide: 2, stride: SPRITE_PAGE_TILES });
       }
       v.loads = loads;
     }
@@ -151,9 +162,12 @@ export class OverworldView2d {
     const name = typeof pal === "number" && pal >= 0 ? `#${pal}` : "grey";
     const c = v.colours;
     if (c.bg !== name) v.colours = { bg: name, obj0: name, obj1: name };
-    v.bgp = 0xe4;
-    v.obp0 = 0xe4;
-    v.obp1 = 0xe4;
+    // Rock Tunnel unlit: wMapPalOffset 6, LoadGBPal two steps down the fade
+    // table (FadePal2) -- the lightest shade dark grey, the rest black
+    const dark = DARK_MAPS.has(map.id) && !(game.save as { flashLit?: boolean } | undefined)?.flashLit;
+    v.bgp = dark ? 0xfe : 0xe4;
+    v.obp0 = dark ? 0xfe : 0xe4;
+    v.obp1 = dark ? 0xf8 : 0xe4;
     return v;
   }
   /** Sheets the current loads array was built for (-1: build it). */
