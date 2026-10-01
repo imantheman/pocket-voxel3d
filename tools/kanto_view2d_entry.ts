@@ -29,6 +29,8 @@ g.frame = (b: number): void => {
       if (typeof WARP !== "undefined") {
         const [map, x, y] = WARP.split(",");
         game.overworld.enter(map, Number(x), Number(y), "down");
+        // no save on the card: "continue" started the intro; drop it
+        while (game.stack.length > 1 && game.stack[game.stack.length - 1].kind !== "overworld") game.pop();
       }
       game.save.options = { ...(game.save.options ?? {}), battleView: "2d", view: typeof VIEW2D !== "undefined" && VIEW2D ? "2d" : "3d" };
     } else if (i % 30 === 0) pad = START;
