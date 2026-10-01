@@ -816,6 +816,9 @@ export class Game2 {
         return;
       }
       if (base && base.isOpaque) {
+        // a battle staged in the voxel world (platform/battlestage.ts) shows
+        // the world through its open field, undimmed
+        if (base.staged3d) this.frameWorldActive = true;
         if (base.drawWidescreen) base.drawWidescreen(W, H);
         else {
           G.setColor(1, 1, 1, 1);

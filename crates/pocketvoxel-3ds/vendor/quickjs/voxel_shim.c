@@ -262,7 +262,7 @@ int qjs_register_voxel(JSContext *ctx) {
     add_num(ctx, o, "arena",    70, 5);
     add_num(ctx, o, "card",     71, 7);
     add_num(ctx, o, "cardHide", 72, 1);
-    add_num(ctx, o, "battleCam",73, 3);
+    add_num(ctx, o, "battleCam",73, 5);
     add_num(ctx, o, "arenaEnd", 74, 0);
     add_num(ctx, o, "music",    18, 4);
     add_num(ctx, o, "musicStop",19, 0);

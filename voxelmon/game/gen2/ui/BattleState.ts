@@ -4452,6 +4452,8 @@ export class BattleState {
 
   // Lua: BattleState.lua:4198
   drawPics(): void {
+    // staged: the mons stand in the arena as cards instead
+    if (this.staged3d) return;
     this.drawPic(this.activeMon("enemy"), false);
     this.drawPic(this.activeMon("player"), true);
   }
@@ -4718,7 +4720,9 @@ export class BattleState {
 
   // Lua: BattleState.lua:4472
   drawPanel(): void {
-    Chrome.clear();
+    // Staged in the voxel world (platform/battlestage.ts): the field stays
+    // open onto the arena, and only the HUDs and boxes are drawn over it.
+    if (!this.staged3d) Chrome.clear();
     if (!hasBattleSides(this)) {
       Chrome.printThrough(Strings.get("NO BATTLE"), 1, 1,
         Chrome.DEFAULT_BOX_PALETTE as any);
@@ -4871,7 +4875,12 @@ export class BattleState {
   // Lua: BattleState.lua:4621
   drawScene(bodyFn?: () => void): void {
     const previousBgp = GbcPalette.setBgp(this.exitFadeBgp() ?? GbcPalette.bgp);
-    if (bodyFn) bodyFn(); else this.drawSceneBody();
+    BattleAnimView.openField = !!this.staged3d;
+    try {
+      if (bodyFn) bodyFn(); else this.drawSceneBody();
+    } finally {
+      BattleAnimView.openField = false;
+    }
     GbcPalette.setBgp(previousBgp);
     // battle.overlay: shiny sparkles, custom HUD chrome, and so on.  Draw-only,
     // and the same name, the same payload (the battle screen) and the same place
@@ -4886,6 +4895,7 @@ export class BattleState {
   // outside the scanline blit, so the attacker's SCX never moves it.
   // Lua: BattleState.lua:4638
   drawLiftedRows(): void {
+    if (this.staged3d) return;
     const battle = this.battle;
     if (!truthy(battle)) return;
     const enemy = this.animPicState("enemy");

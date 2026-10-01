@@ -124,15 +124,23 @@ export function orbitDir(arena: Arena, rig: number, q8: number): [number, number
  * orbit 0 at the rig's own height, so a map with room everywhere still
  * opens on the framing the rig was solved for.
  */
-export function chooseView(map: GameMap, arena: Arena, rig: number): { orbit: number; pitch: number } {
-  let best = { orbit: 0, pitch: 0 };
+export function chooseView(
+  map: GameMap,
+  arena: Arena,
+  rig: number,
+  /** The orbit (Q8 turn) a change is costed from; Gold prefers a three-quarter view. */
+  preferQ8 = 0,
+): { orbit: number; pitch: number } {
+  const preferStep = Math.round(((((preferQ8 % 256) + 256) % 256) * ORBIT_STEPS) / 256) % ORBIT_STEPS;
+  let best = { orbit: Math.round((preferStep * 256) / ORBIT_STEPS), pitch: 0 };
   let bestScore = Number.POSITIVE_INFINITY;
   for (const pitchQ8 of VIEW_PITCHES) {
     for (let step = 0; step < ORBIT_STEPS; step++) {
       const q8 = Math.round((step * 256) / ORBIT_STEPS);
       const hits = sightlineHits(map, arena, rig, q8, pitchQ8);
       // The rig was solved at orbit 0 and its own height; changes earn themselves.
-      const turn = Math.min(step, ORBIT_STEPS - step) / ORBIT_STEPS;
+      const d = (step - preferStep + ORBIT_STEPS) % ORBIT_STEPS;
+      const turn = Math.min(d, ORBIT_STEPS - d) / ORBIT_STEPS;
       const score = hits.enemy * 2 + hits.player + turn * ORBIT_TURN_COST + (pitchQ8 / 256) * VIEW_PITCH_COST;
       if (score < bestScore) {
         bestScore = score;

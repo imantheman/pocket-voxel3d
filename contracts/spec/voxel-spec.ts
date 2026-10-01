@@ -589,7 +589,19 @@ export const EMOTE = {
 //                                          animations (omitted = still).
 //                                          dy lifts; negative sinks.
 //     cardHide(side)
-//     battleCam(orbit, pitch, zoom)        Q8 fixed 0..256 = 0..1 (zoom Q8 x)
+//     battleCam(orbit, pitch, zoom[, lift, dist])
+//                                          Q8 fixed 0..256 = 0..1 (zoom Q8 x);
+//                                          dist (Q8 multiplier on the rig's eye
+//                                          distance; 0 or omitted = as solved)
+//                                          stands the camera further off -- the
+//                                          3DS host draws at its own fixed fov,
+//                                          so zoom alone does not widen the shot;
+//                                          lift (Q8 of the framed height, 0 when
+//                                          omitted) aims the rig that much below
+//                                          the arena midpoint, so the mons sit
+//                                          higher on screen -- Gold keeps a
+//                                          full-width text box over the bottom
+//                                          third
 //     arenaEnd()
 //   audio (the chip synth; the core interprets the ROM's channel programs and
 //         renders PCM — the guest states WHAT to play, never a sample)

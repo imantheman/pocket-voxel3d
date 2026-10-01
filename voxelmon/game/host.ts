@@ -116,7 +116,7 @@ export interface VoxelHost {
   ): void;
   cardHide(side: number): void;
   /** Q8 fixed 0..256 = 0..1 (zoom Q8 x). */
-  battleCam(orbit: number, pitch: number, zoom: number): void;
+  battleCam(orbit: number, pitch: number, zoom: number, lift?: number, dist?: number): void;
   arenaEnd(): void;
   // audio (the chip synth: the core interprets the ROM's channel programs)
   /** `bank` is a BANK SLOT — the index of that ROM bank in the manifest's
@@ -331,8 +331,8 @@ export class RecorderHost implements VoxelHost {
   cardHide(side: number): void {
     this.op(VOX_OP.cardHide, side);
   }
-  battleCam(orbit: number, pitch: number, zoom: number): void {
-    this.op(VOX_OP.battleCam, orbit, pitch, zoom);
+  battleCam(orbit: number, pitch: number, zoom: number, lift = 0, dist = 0): void {
+    this.op(VOX_OP.battleCam, orbit, pitch, zoom, lift, dist);
   }
   arenaEnd(): void {
     this.op(VOX_OP.arenaEnd);

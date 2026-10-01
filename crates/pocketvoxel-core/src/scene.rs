@@ -161,6 +161,11 @@ pub struct Battle {
     pub pitch: i32,
     /// Q8 zoom multiplier (clamped to RIG_ZOOM_MIN..MAX at use).
     pub zoom: i32,
+    /// Q8 of the framed height to aim below the arena midpoint (battleCam's
+    /// optional fourth arg; 0 = the rig as solved).
+    pub lift: i32,
+    /// Q8 multiplier on the rig's eye distance (fifth arg; 0 = as solved).
+    pub dist: i32,
 }
 
 impl Default for Battle {
@@ -176,6 +181,8 @@ impl Default for Battle {
             orbit: 0,
             pitch: 0,
             zoom: Q8, // 1.0x
+            lift: 0,
+            dist: 0,
         }
     }
 }
@@ -942,6 +949,8 @@ impl Scene {
                     self.battle.orbit = a(0);
                     self.battle.pitch = a(1);
                     self.battle.zoom = a(2);
+                    self.battle.lift = a(3);
+                    self.battle.dist = a(4);
                 }
             }
             op::ARENA_END => self.battle = Battle::default(),

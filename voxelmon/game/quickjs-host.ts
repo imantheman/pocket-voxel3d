@@ -75,7 +75,7 @@ export interface VoxelNative {
     dz?: number,
   ): void;
   cardHide(side: number): void;
-  battleCam(orbit: number, pitch: number, zoom: number): void;
+  battleCam(orbit: number, pitch: number, zoom: number, lift?: number, dist?: number): void;
   arenaEnd(): void;
   // audio — optional on the binding: an EBOOT built before the ops existed
   // simply has no such function, and the guest must not crash on it.
@@ -273,8 +273,8 @@ export class QuickJsHost implements VoxelHost {
   cardHide(side: number): void {
     native.cardHide(side);
   }
-  battleCam(orbit: number, pitch: number, zoom: number): void {
-    native.battleCam(orbit, pitch, zoom);
+  battleCam(orbit: number, pitch: number, zoom: number, lift = 0, dist = 0): void {
+    native.battleCam(orbit, pitch, zoom, lift, dist);
   }
   arenaEnd(): void {
     native.arenaEnd();

@@ -369,6 +369,11 @@ pub struct RigInput {
     /// Yaw of the player->enemy axis around +Y; 0 = north (-Z), positive
     /// CCW seen from above. Both authored ARENA_SHAPEs stage north (yaw 0).
     pub axis_yaw: f32,
+    /// Q8 of the framed height to aim below the midpoint (0 = as solved):
+    /// the mons rise on screen by about that much.
+    pub lift_q8: i32,
+    /// Q8 multiplier on the eye's distance from the midpoint (0 = 1.0).
+    pub dist_q8: i32,
 }
 
 /// The mod's spread correction: how much of the mon-axis separation the
@@ -448,7 +453,8 @@ pub fn battle(inp: &RigInput) -> Camera {
     let e = (e0 + pitch).min(0.49 * PI);
     let dolly =
         1.0 + RIG_DOLLY * sinf(TAU * (inp.tick % RIG_DOLLY_TICKS) as f32 / RIG_DOLLY_TICKS as f32);
-    let len = o.length() * dolly;
+    let dist_mul = if inp.dist_q8 <= 0 { 1.0 } else { (inp.dist_q8 as f32 / 256.0).clamp(0.5, 4.0) };
+    let len = o.length() * dolly * dist_mul;
     let h_dir = vec3(o.x / h_len, 0.0, o.z / h_len);
     let off = h_dir
         .scale(len * cosf(e))
@@ -478,6 +484,13 @@ pub fn battle(inp: &RigInput) -> Camera {
     let zoom = (inp.zoom_q8 as f32 / 256.0).clamp(RIG_ZOOM_MIN, RIG_ZOOM_MAX);
     let gap_px = (ARENA_GAP_CELLS * CELL_PX) as f32;
     let frame_h = (r.frame_h + gap_px * axis_span(beta, elev)) / zoom;
+    // The lift: aim that fraction of the framed height lower, and frame the
+    // same height from there.
+    let lift = (inp.lift_q8 as f32 / 256.0).clamp(0.0, 0.5) * frame_h;
+    let look = look.sub(vec3(0.0, lift, 0.0));
+    let view = look.sub(eye);
+    let dist = view.length().max(1e-3);
+    let view_h = sqrtf(view.x * view.x + view.z * view.z).max(1e-6);
     let fov = 2.0 * atanf(frame_h * 0.5 / dist);
 
     // Billboard lean angle: the view direction's angle from straight down.
@@ -779,6 +792,8 @@ mod tests {
             tick: 0,
             mid: vec3(160.0, 0.0, 200.0),
             axis_yaw: 0.0,
+            lift_q8: 0,
+            dist_q8: 0,
         };
         let a = battle(&inp);
         let b = battle(&inp);

@@ -162,6 +162,9 @@ function shadeColors(colors: Colors | null | undefined, palByte: number | null |
 }
 
 export class BattleAnimView implements AnimPainter {
+  /** Set by BattleState while it draws a battle staged in 3D: leave holes open. */
+  static openField = false;
+
   static SCREEN_W = SCREEN_W;
   static SCREEN_H = SCREEN_H;
   static SLIDE_FRAMES = SLIDE_FRAMES;
@@ -329,6 +332,8 @@ export class BattleAnimView implements AnimPainter {
   // its blit instead.
   // Lua: BattleAnimView.lua:168
   fillBackground(palByte?: number | null): void {
+    // a battle staged in the voxel world keeps its field open onto the arena
+    if (BattleAnimView.openField) return;
     const lcd = currentLcd();
     if (!lcd) return;
     const previousBgp = GbcPalette.setBgp(palByte);

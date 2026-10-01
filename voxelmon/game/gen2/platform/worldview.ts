@@ -10,6 +10,7 @@
 
 import { ENT_FLAG, ENTS_MAX, Q4 } from "../../../../contracts/spec/voxel-spec.ts";
 import type { VoxelHost } from "../../host.ts";
+import { BattleStage, type StageData } from "./battlestage.ts";
 import { Palettes } from "../world/Palettes.ts";
 
 /** The `daytime` op's order (cook/gen2.ts GEN2_DAYTIMES). */
@@ -112,10 +113,14 @@ export class WorldView {
   private lastTint = -1;
   private started = false;
 
+  private readonly stage: BattleStage;
+
   constructor(
     private readonly host: VoxelHost,
     private readonly data: WalkerData | null | undefined,
-  ) {}
+  ) {
+    this.stage = new BattleStage(host, data as unknown as StageData);
+  }
 
   /**
    * What surrounds the Gold screen's 160x144 on the 3DS's wider top screen:
@@ -153,6 +158,12 @@ export class WorldView {
     }
     const mapId = vs.mapId ?? vs.map?.id ?? world.map?.id;
     if (mapId) this.emitMaps(mapId, vs.neighbors);
+    // a staged 3D battle owns the camera and the field (battlestage.ts)
+    if (this.stage.emit(game, this.palettes(game))) {
+      this.hideAllEnts();
+      this.emitDaytime(vs);
+      return;
+    }
     if (vs.camera) {
       // the 160x144 view's centre: what the Lua's camera framed
       this.emitCamAt(vs.camera.x + vs.camera.viewW / 2, vs.camera.y + vs.camera.viewH / 2);
@@ -184,8 +195,16 @@ export class WorldView {
     }
   }
 
+  /** Gold's palettes table (the battle cards' species colours), looked up once. */
+  private palettesCache: unknown;
+  private palettes(game: any): any {
+    if (this.palettesCache === undefined) this.palettesCache = game?.data?.gen2Palettes ?? game?.data?.palettes ?? null;
+    return this.palettesCache;
+  }
+
   /** No world: nothing on the stage. */
   clear(): void {
+    this.stage.end();
     for (let slot = 0; slot < 5; slot++) {
       if (this.mapSlots[slot] !== null) {
         this.host.mapHide(slot);

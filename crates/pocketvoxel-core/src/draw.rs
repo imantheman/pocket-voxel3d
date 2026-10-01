@@ -414,6 +414,8 @@ fn base_camera(scene: &Scene) -> Camera {
             tick: scene.tick,
             mid,
             axis_yaw,
+            lift_q8: b.lift,
+            dist_q8: b.dist,
         })
     } else {
         let (cx, cy) = scene.cam_px();

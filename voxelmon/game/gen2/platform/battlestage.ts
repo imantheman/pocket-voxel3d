@@ -1,0 +1,159 @@
+// Gold's 3D battles: while the battle screen is up and the world is behind
+// it, the fight is staged in the voxel world the way the Kanto games stage
+// theirs (voxelmon/game/battle/staging.ts) -- an arena found near the
+// player, a camera rig that sees both sides, and each active mon standing
+// in it as a card in its own battle colours. The battle screen then leaves
+// its field open (BattleState.staged3d) and draws only the HUDs, the text
+// box and the menus over the arena.
+//
+// The arena search and the camera choice are the Kanto ones: Gold's Map
+// answers the same per-cell questions (inBounds, isWalkableCell, ...).
+// Not the cart's: the Game Boy had no world to stand a battle in.
+
+import type { VoxelHost } from "../../host.ts";
+import { search, type Arena } from "../../battle/arena.ts";
+import { chooseView } from "../../battle/staging.ts";
+import type { GameMap } from "../../world/map.ts";
+import { Map as GoldMap } from "../world/Map.ts";
+import { FieldMoves } from "../world/FieldMoves.ts";
+
+const SIDE_PLAYER = 0;
+const SIDE_ENEMY = 1;
+const Q8 = 256;
+// Gold keeps a full-width text box over the bottom third of the screen,
+// right where the Kanto rig stands the near card: the shot is pulled back a
+// little and aimed lower (battleCam's lift) so both mons stand in the open
+// two thirds above it.
+const BATTLE_ZOOM = Q8;
+const BATTLE_LIFT = Math.round(Q8 * 0.12);
+// and stood further off (the 3DS host draws at a fixed fov, so the rig's
+// zoom does not widen the shot; distance does)
+const BATTLE_DIST = Math.round(Q8 * 1.7);
+// An eighth of a turn round from straight over the shoulder: the mons then
+// stand diagonally -- the enemy far and high, the player nearer and lower --
+// as the cart's layout has them, instead of one in front of the other.
+const BATTLE_ORBIT = 32;
+
+export interface StageData {
+  maps?: Record<string, { index: number }>;
+  atlas?: { picFront?: Record<string, number>; picBack?: Record<string, number> };
+}
+
+type Rgb = readonly number[];
+
+function rgb555(c: Rgb | undefined): number {
+  const [r = 0, g = 0, b = 0] = c ?? [];
+  return ((r >> 3) & 31) | (((g >> 3) & 31) << 5) | (((b >> 3) & 31) << 10);
+}
+
+export class BattleStage {
+  private active = false;
+  private arena: Arena | null = null;
+  private shown: (string | null)[] = [null, null];
+  private palShown: (string | null)[] = [null, null];
+
+  constructor(
+    private readonly host: VoxelHost,
+    private readonly data: StageData | null | undefined,
+  ) {}
+
+  /** The battle screen on the stack, if any. */
+  private battleState(game: any): any {
+    const states: any[] = game?.stack?.states ?? [];
+    for (let i = states.length - 1; i >= 0; i--) {
+      if (states[i] && states[i].screenId === "Gen2BattleState") return states[i];
+    }
+    return null;
+  }
+
+  /**
+   * Stage (or keep staging, or take down) the battle for this frame. True
+   * while a battle is staged: the world view then leaves the camera and the
+   * field actors to the battle.
+   */
+  emit(game: any, palettes: any): boolean {
+    const st = this.battleState(game);
+    const world = game?.world;
+    if (!st || !world?.map || !world.player) {
+      this.end();
+      return false;
+    }
+    if (!this.active) {
+      this.active = true;
+      this.arena = this.stage(world);
+      st.staged3d = this.arena !== null;
+    }
+    if (!this.arena) return false;
+    this.emitCard(st, SIDE_ENEMY, palettes, this.arena.enemyCell);
+    this.emitCard(st, SIDE_PLAYER, palettes, this.arena.playerCell);
+    return true;
+  }
+
+  private stage(world: any): Arena | null {
+    const map = world.map;
+    const mapIndex = this.data?.maps?.[map.id]?.index;
+    if (mapIndex === undefined) return null;
+    const surfing = !!FieldMoves.isSurfing(world.playerState);
+    const arena = search(map as unknown as GameMap, world.player.cellX, world.player.cellY, surfing);
+    if (!arena) return null;
+    const rig = GoldMap.isOutside(map.def) ? 0 : 1; // RIG tele outdoors, wide under a roof
+    const view = chooseView(map as unknown as GameMap, arena, rig, BATTLE_ORBIT);
+    this.host.arena(mapIndex, arena.x, arena.y, arena.shape, rig);
+    this.host.battleCam(view.orbit, view.pitch, BATTLE_ZOOM, BATTLE_LIFT, BATTLE_DIST);
+    return arena;
+  }
+
+  /** The side's mon as a card, or nothing while the battle screen hides its pic. */
+  private emitCard(st: any, side: number, palettes: any, cell: [number, number]): void {
+    const name = side === SIDE_ENEMY ? "enemy" : "player";
+    let mon: any;
+    try {
+      mon = st.activeMon(name);
+    } catch {
+      mon = null;
+    }
+    const hidden =
+      !mon ||
+      !mon.species ||
+      (side === SIDE_ENEMY && st.showEnemyTrainer) ||
+      (side === SIDE_PLAYER && st.showPlayerTrainer) ||
+      st.picBoxCleared?.(name) ||
+      st.isUnderground?.(name, mon) ||
+      (side === SIDE_PLAYER && st.showPlayerHud === undefined && !st.playerSentOut && st.slidingBackpic);
+    // Front pics on both sides, as the Kanto battles stand them: a card
+    // faces the camera, and a back sprite read as a mon facing away.
+    const page = hidden ? undefined : this.data?.atlas?.picFront?.[mon.species];
+    if (page === undefined) {
+      if (this.shown[side] !== null) {
+        this.host.cardHide(side);
+        this.shown[side] = null;
+      }
+      return;
+    }
+    const pal = palettes?.pokemon?.[mon.species]?.[mon.shiny ? "shiny" : "normal"];
+    const palKey = pal ? `${mon.species}:${mon.shiny ? 1 : 0}` : "none";
+    if (palKey !== this.palShown[side]) {
+      if (pal) this.host.cardPal?.(side, rgb555([255, 255, 255]), rgb555(pal[0]), rgb555(pal[1]), rgb555([0, 0, 0]));
+      else this.host.cardPal?.(side, -1, 0, 0, 0);
+      this.palShown[side] = palKey;
+    }
+    const key = `${page},${cell[0]},${cell[1]}`;
+    if (key !== this.shown[side]) {
+      this.host.card(side, page, cell[0], cell[1], 0, 0, 0);
+      this.shown[side] = key;
+    }
+  }
+
+  /** The battle is over: take the stage down. */
+  end(): void {
+    if (!this.active) return;
+    this.active = false;
+    for (const side of [SIDE_PLAYER, SIDE_ENEMY]) {
+      if (this.shown[side] !== null) this.host.cardHide(side);
+      this.shown[side] = null;
+      this.palShown[side] = null;
+    }
+    if (this.arena) this.host.arenaEnd();
+    this.arena = null;
+  }
+}
