@@ -26,9 +26,10 @@ const Q8 = 256;
 // two thirds above it.
 const BATTLE_ZOOM = Q8;
 const BATTLE_LIFT = Math.round(Q8 * 0.12);
-// and stood further off (the 3DS host draws at a fixed fov, so the rig's
-// zoom does not widen the shot; distance does)
-const BATTLE_DIST = Math.round(Q8 * 1.7);
+// and, under a roof, stood further off (the 3DS host draws at a fixed fov,
+// so the rig's zoom does not widen the shot; distance does). The outdoor
+// rig already stands well back.
+const BATTLE_DIST = [Q8, Math.round(Q8 * 1.7)] as const; // by rig: tele, wide
 // An eighth of a turn round from straight over the shoulder: the mons then
 // stand diagonally -- the enemy far and high, the player nearer and lower --
 // as the cart's layout has them, instead of one in front of the other.
@@ -99,7 +100,7 @@ export class BattleStage {
     const rig = GoldMap.isOutside(map.def) ? 0 : 1; // RIG tele outdoors, wide under a roof
     const view = chooseView(map as unknown as GameMap, arena, rig, BATTLE_ORBIT);
     this.host.arena(mapIndex, arena.x, arena.y, arena.shape, rig);
-    this.host.battleCam(view.orbit, view.pitch, BATTLE_ZOOM, BATTLE_LIFT, BATTLE_DIST);
+    this.host.battleCam(view.orbit, view.pitch, BATTLE_ZOOM, BATTLE_LIFT, BATTLE_DIST[rig]);
     return arena;
   }
 
