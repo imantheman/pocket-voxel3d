@@ -20,7 +20,8 @@ function walkerData(): unknown {
     const text = readFileSync(WALKER, "utf8");
     if (text.startsWith("PVG2")) {
       const { readGen2Container } = require("../voxelmon/game/gen2/platform/container.ts");
-      return JSON.parse(readGen2Container(text).walker);
+      const c = readGen2Container(text);
+      return JSON.parse(c.scene ?? c.walker);
     }
     return JSON.parse(text);
   } catch {

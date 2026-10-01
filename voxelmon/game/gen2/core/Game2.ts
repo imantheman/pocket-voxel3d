@@ -52,6 +52,28 @@ import { MenuFade } from "../ui/MenuFade.ts";
 
 function noop(): void {}
 
+/**
+ * `target[key]` = the generated table `name`, parsed the first time anything
+ * reads it rather than at boot: on the 3DS every table parsed is heap, and
+ * the credits or the battle animations need not cost anything until they
+ * run. After the first read (or any write) it is an ordinary property, so
+ * the Lua's `self.data.gen2Maps = ...` semantics are unchanged.
+ */
+function lazyTable(target: Record<string, unknown>, key: string, name: string, fallback?: unknown): void {
+  Object.defineProperty(target, key, {
+    configurable: true,
+    enumerable: true,
+    get() {
+      const value = loadGenerated(name) ?? fallback;
+      Object.defineProperty(target, key, { value, writable: true, configurable: true, enumerable: true });
+      return value;
+    },
+    set(value: unknown) {
+      Object.defineProperty(target, key, { value, writable: true, configurable: true, enumerable: true });
+    },
+  });
+}
+
 // Game2.lua:106
 function visibleBaseState(stack: typeof StateStack): State | null {
   const state = stack.states[stack.visibleBase()];
@@ -649,32 +671,32 @@ export class Game2 {
     }
     this.data.gen2HeldItems = ItemEffects.heldItemsFrom(this.data.items);
     const heldBefore = ItemEffects.heldSnapshot(this.data.gen2HeldItems);
-    this.data.gen2Palettes = loadGenerated("palettes");
-    this.data.gen2Icons = loadGenerated("icons");
-    this.data.gen2Pokedex = loadGenerated("pokedex");
-    this.data.gen2Landmarks = loadGenerated("landmarks");
-    this.data.gen2Sprites = loadGenerated("sprites");
-    this.data.gen2MenuGfx = loadGenerated("menu_gfx");
-    this.data.gen2Intro = loadGenerated("intro");
-    this.data.gen2Credits = loadGenerated("credits");
-    this.data.gen2Diploma = loadGenerated("diploma");
-    this.data.gen2Trade = loadGenerated("trade");
-    this.data.gen2Trainers = loadGenerated("trainers");
-    this.data.gen2Encounters = loadGenerated("encounters");
-    this.data.gen2BattleAnims = loadGenerated("battle_anims");
-    this.data.gen2Constants = loadGenerated("constants");
-    this.data.gen2Maps = loadGenerated("maps");
-    this.data.gen2Tilesets = loadGenerated("tilesets");
-    this.data.gen2Roofs = loadGenerated("roofs");
-    this.data.gen2Field = loadGenerated("field");
-    this.data.gen2Marts = loadGenerated("marts");
-    this.data.gen2Scripts = loadGenerated("scripts");
-    this.data.gen2StdScripts = loadGenerated("std_scripts");
-    this.data.gen2Text = loadGenerated("text");
-    this.data.text = loadGenerated("rom_text") ?? {};
-    this.data.gen2EventTables = loadGenerated("events");
-    this.data.gen2InitialEvents = loadGenerated("initial_events");
-    this.data.trainers = this.data.gen2Trainers;
+    lazyTable(this.data, "gen2Palettes", "palettes");
+    lazyTable(this.data, "gen2Icons", "icons");
+    lazyTable(this.data, "gen2Pokedex", "pokedex");
+    lazyTable(this.data, "gen2Landmarks", "landmarks");
+    lazyTable(this.data, "gen2Sprites", "sprites");
+    lazyTable(this.data, "gen2MenuGfx", "menu_gfx");
+    lazyTable(this.data, "gen2Intro", "intro");
+    lazyTable(this.data, "gen2Credits", "credits");
+    lazyTable(this.data, "gen2Diploma", "diploma");
+    lazyTable(this.data, "gen2Trade", "trade");
+    lazyTable(this.data, "gen2Trainers", "trainers");
+    lazyTable(this.data, "gen2Encounters", "encounters");
+    lazyTable(this.data, "gen2BattleAnims", "battle_anims");
+    lazyTable(this.data, "gen2Constants", "constants");
+    lazyTable(this.data, "gen2Maps", "maps");
+    lazyTable(this.data, "gen2Tilesets", "tilesets");
+    lazyTable(this.data, "gen2Roofs", "roofs");
+    lazyTable(this.data, "gen2Field", "field");
+    lazyTable(this.data, "gen2Marts", "marts");
+    lazyTable(this.data, "gen2Scripts", "scripts");
+    lazyTable(this.data, "gen2StdScripts", "std_scripts");
+    lazyTable(this.data, "gen2Text", "text");
+    lazyTable(this.data, "text", "rom_text", {});
+    lazyTable(this.data, "gen2EventTables", "events");
+    lazyTable(this.data, "gen2InitialEvents", "initial_events");
+    lazyTable(this.data, "trainers", "trainers");
     ItemEffects.applyHeldItems(this.data, heldBefore);
     Phone.useRegistry(this.data);
     Decorations.useRegistry(this.data);

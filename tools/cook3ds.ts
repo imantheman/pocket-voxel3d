@@ -352,13 +352,31 @@ export async function cook3ds(only?: string[]): Promise<number> {
   for (const [name, record] of Object.entries(perMap)) merged.maps[name] = record;
   if (version === "gold") {
     // Gold's dataset is a container (game/gen2/platform/container.ts): the
-    // walker's record, the Gold screen's tile manifest, and every table the
+    // scene table, the Gold screen's tile manifest, and every table the
     // importer wrote, each parsed on the device only when first asked for.
+    // `scene` is what the Gold engine's world view needs out of the cooked
+    // record (game/gen2/platform/worldview.ts): page numbers, each map's pak
+    // index, size and connections, and the sprite sheets' frame counts.
+    const scene = {
+      atlas: { sprites: merged.atlas?.sprites ?? {}, lcd: (merged.atlas as { lcd?: unknown } | undefined)?.lcd },
+      cookedMaps: merged.cookedMaps,
+      maps: Object.fromEntries(
+        Object.entries(merged.maps).map(([id, m]) => {
+          const d = m as { index: number; width: number; height: number; connections?: unknown };
+          return [id, { index: d.index, width: d.width, height: d.height, connections: d.connections }];
+        }),
+      ),
+      sprites: Object.fromEntries(
+        Object.entries((merged as { sprites?: Record<string, { frames?: number; walker?: boolean }> }).sprites ?? {}).map(
+          ([id, s]) => [id, { frames: s.frames, walker: s.walker }],
+        ),
+      ),
+    };
     const sections: Record<string, string> = {
-      walker: JSON.stringify(merged),
+      scene: JSON.stringify(scene),
       lcdGfx: JSON.stringify(lcdTilesFor(loadGen(GEN_DIR)).gfx),
     };
-    for (const f of readdirSync(GEN_DIR).filter((f) => f.endsWith(".json")).sort()) {
+    for (const f of readdirSync(GEN_DIR).filter((f) => f.endsWith(".json") && f !== "gfx.json").sort()) {
       sections[f.slice(0, -5)] = readFileSync(join(GEN_DIR, f), "utf8");
     }
     // The Gen 2 Sound/Music read the audio table from here, not from AUDI:

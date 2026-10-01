@@ -43,7 +43,10 @@ const snd = Sound as unknown as { setHost?: (h: unknown) => void };
 snd.setHost?.(host);
 
 // ---- the Gold screen: tile ids -> cooked pages -----------------------------
-const walker = loadGenerated<{ atlas?: { lcd?: { firstPage: number; counts: number[] } } }>("walker");
+// the cooked scene table (an older dataset carried the whole walker record)
+const walker =
+  loadGenerated<{ atlas?: { lcd?: { firstPage: number; counts: number[] } } }>("scene") ??
+  loadGenerated<{ atlas?: { lcd?: { firstPage: number; counts: number[] } } }>("walker");
 const lcd = new Lcd(host);
 const pages = walker?.atlas?.lcd;
 if (pages) {
