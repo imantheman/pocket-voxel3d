@@ -74,8 +74,10 @@ const prof = { n: 0, step: 0, draw: 0, end: 0, view: 0 };
 // The 3DS shows 30 frames a second and runs the game at 60 steps a second,
 // calling frame() once per step. The logic runs every step; the Gold screen
 // is composed (game.draw + lcd.end) every other one -- every frame that is
-// shown -- and the scene follows every step, its ops being cheap and
-// delta-gated.
+// shown -- and the scene follows on the same steps. Its ops are all state
+// (camera, actors, maps, tint), so the step between two shown frames had
+// nothing to say that the next would not overwrite; and World.viewState,
+// which feeds them, builds a sizeable object graph each call.
 let stepNo = 0;
 
 (globalThis as unknown as { frame: (buttons: number) => void }).frame = (buttons: number): void => {
@@ -96,9 +98,11 @@ let stepNo = 0;
       lcd.end();
     }
     t3 = clock ? clock() : 0;
-    view.emit(game);
-    // the OPTION screen's TILT SHIFT, stated every step like Kanto's
-    host.tiltShift(tiltShiftLevel(game.options?.tiltShift));
+    if (compose) {
+      view.emit(game);
+      // the OPTION screen's TILT SHIFT, stated every shown frame like Kanto's
+      host.tiltShift(tiltShiftLevel(game.options?.tiltShift));
+    }
   } catch (e) {
     Logger.error("gold: draw: %s", String((e as Error)?.stack ?? e));
   }
