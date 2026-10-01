@@ -12,8 +12,8 @@
 import {
   beginDrags, beginTargets, currentTargets, dragAt, dragById, pressedId, setPressed, targetAt,
 } from "./gear/draw.ts";
-import { APPS, appOf, type GearViewId } from "./gear/model.ts";
-import { ctxFor, go, header, type GearCtx } from "./gear/ui.ts";
+import { APPS, appOf, gearSave, type GearViewId } from "./gear/model.ts";
+import { clockStr, ctxFor, go, header, type GearCtx } from "./gear/ui.ts";
 import { battleTouchDown, battleTouchUp, drawBattleGear, type GearBattle } from "./gear/battle.ts";
 import { drawMirror, drawTextHint, mirrorTapThrough } from "./gear/mirrors.ts";
 import { availableApps, drawHome, drawOptions, drawSteps, drawStore } from "./gear/apps/home.ts";
@@ -27,6 +27,8 @@ import { drawTools } from "./gear/apps/tools.ts";
 import { drawStamps } from "./gear/apps/stamps.ts";
 import { drawNotes } from "./gear/apps/notes.ts";
 import type { VoxelHost } from "../host.ts";
+import type { GearHost } from "./gear/draw.ts";
+import { UI_COLS, UI_ROWS } from "../../../contracts/spec/voxel-spec.ts";
 
 export { gearMapPoint } from "./gear/apps/map.ts";
 export type { GearViewId } from "./gear/model.ts";
@@ -86,8 +88,127 @@ const DRAW: Partial<Record<GearViewId, (ctx: GearCtx) => void>> = {
  * against targets of the screen it lands on. */
 let drawnFor = "";
 
+/**
+ * What the gear draws, caught before it reaches the host: the tile grid in a
+ * mirror of the core's own (`ui_b`, retained there until uiClearBottom),
+ * sprites and rects as a list. Most frames redraw exactly what is already up
+ * -- the home screen alone is 211 tiles -- so the flush sends only the cells
+ * that changed, and clears and resends the lot only when the sprites or
+ * rects moved (they have no way to be taken back one at a time).
+ */
+class GearSink implements GearHost {
+  readonly next = new Uint16Array(UI_COLS * UI_ROWS);
+  private readonly shown = new Uint16Array(UI_COLS * UI_ROWS);
+  private extra: number[] = [];
+  private shownExtra: number[] = [];
+  /** Frames since everything was last sent (a full resend now and then
+   *  keeps the mirror honest whatever happened to the core's copy). */
+  private age = 0;
+
+  /** Send everything next flush (a different host, whose grid is unknown). */
+  forget(): void {
+    this.age = 1 << 30;
+  }
+
+  uiClearBottom(): void {
+    this.next.fill(0);
+    this.extra.length = 0;
+  }
+  uiTileBottom(x: number, y: number, tile: number): void {
+    if (x >= 0 && y >= 0 && x < UI_COLS && y < UI_ROWS) this.next[y * UI_COLS + x] = tile;
+  }
+  uiSpriteBottom(page: number, x: number, y: number, w: number, h: number): void {
+    this.extra.push(0, page, x, y, w, h);
+  }
+  uiSpriteRectBottom(page: number, x: number, y: number, w: number, h: number, sx: number, sy: number, sw: number, sh: number, flags = 0): void {
+    this.extra.push(1, page, x, y, w, h, sx, sy, sw, sh, flags);
+  }
+  uiRectBottom(x: number, y: number, w: number, h: number, shade: number): void {
+    this.extra.push(2, x, y, w, h, shade);
+  }
+
+  flush(host: VoxelHost): void {
+    const next = this.next;
+    const shown = this.shown;
+    const extra = this.extra;
+    const was = this.shownExtra;
+    let same = extra.length === was.length && ++this.age < 300;
+    for (let i = 0; same && i < extra.length; i++) if (extra[i] !== was[i]) same = false;
+    if (same) {
+      for (let i = 0; i < next.length; i++) {
+        if (next[i] !== shown[i]) host.uiTileBottom(i % UI_COLS, (i / UI_COLS) | 0, next[i]!);
+      }
+    } else {
+      this.age = 0;
+      host.uiClearBottom();
+      for (let i = 0; i < next.length; i++) {
+        if (next[i] !== 0) host.uiTileBottom(i % UI_COLS, (i / UI_COLS) | 0, next[i]!);
+      }
+      for (let i = 0; i < extra.length; ) {
+        const op = extra[i]!;
+        if (op === 0) {
+          host.uiSpriteBottom(extra[i + 1]!, extra[i + 2]!, extra[i + 3]!, extra[i + 4]!, extra[i + 5]!);
+          i += 6;
+        } else if (op === 1) {
+          host.uiSpriteRectBottom?.(extra[i + 1]!, extra[i + 2]!, extra[i + 3]!, extra[i + 4]!, extra[i + 5]!,
+            extra[i + 6]!, extra[i + 7]!, extra[i + 8]!, extra[i + 9]!, extra[i + 10]!);
+          i += 11;
+        } else {
+          host.uiRectBottom?.(extra[i + 1]!, extra[i + 2]!, extra[i + 3]!, extra[i + 4]!, extra[i + 5]!);
+          i += 6;
+        }
+      }
+      this.shownExtra = extra.slice();
+    }
+    shown.set(next);
+  }
+}
+const sink = new GearSink();
+
+/** Touches so far: anything a finger does can change any app. */
+let touchSerial = 0;
+/** What the last still frame was drawn from ("" = draw regardless). */
+let stillKey = "";
+let lastHost: VoxelHost | null = null;
+let lastGame: GearGame = null;
+
+/**
+ * Walking about with an app up, the gear shows the same thing frame after
+ * frame -- it changes on a touch, a step, the clock, the party, a screen
+ * coming or going -- and drawing it was a fifth of the 3DS's frame. So on
+ * the plain overworld (no menu, no battle) the frame is skipped while those
+ * stand still, and what is up stays up (the core keeps the bottom grid
+ * until it is cleared). EXPLORER and MAP follow people about, menus have
+ * their mirrors, a battle its own screen: those draw every frame.
+ */
+function stillFrame(game: GearGame): string {
+  const top = game.stack?.[game.stack.length - 1];
+  if (top?.kind !== "overworld" || game.battleView?.()) return "";
+  const view = activeView(game);
+  if (view === "explorer" || view === "map") return "";
+  const gear = gearSave(game.save);
+  let party = "";
+  for (const m of game.save?.party ?? []) party += `${m.species}/${m.nickname ?? ""}/${m.level}/${m.hp}/${m.stats?.hp ?? 0};`;
+  return `${view}|${pressedId() ?? ""}|${touchSerial}|${game.stack.length}|${game.overworld?.map?.id ?? ""}|` +
+    `${gear.steps}|${gear.trip}|${clockStr(gear.clock24)}|${party}`;
+}
+
 /** Redraw the companion for this frame. */
-export function drawKantoGear(host: VoxelHost, game: GearGame): void {
+export function drawKantoGear(realHost: VoxelHost, game: GearGame): void {
+  if (realHost !== lastHost || game !== lastGame) {
+    lastHost = realHost;
+    lastGame = game;
+    stillKey = "";
+    sink.forget();
+  }
+  const key = stillFrame(game);
+  if (key !== "" && key === stillKey) return;
+  stillKey = key;
+  drawGear(sink as unknown as VoxelHost, game);
+  sink.flush(realHost);
+}
+
+function drawGear(host: VoxelHost, game: GearGame): void {
   beginTargets();
   beginDrags();
   host.uiClearBottom();
@@ -125,6 +246,7 @@ let dragging: string | null = null;
 
 /** A bottom-screen touch-down, in bottom-target px (0..319, 0..239). */
 export function gearTouchDown(game: GearGame, x: number, y: number): void {
+  touchSerial++;
   setPressed(null);
   dragging = null;
   const b: GearBattle | undefined = game.battleView?.()?.battle;
@@ -148,6 +270,7 @@ export function gearTouchDown(game: GearGame, x: number, y: number): void {
 
 /** The finger moving while down (the sketch pad follows it). */
 export function gearTouchMove(game: GearGame, x: number, y: number): void {
+  touchSerial++;
   if (!dragging) return;
   const d = dragById(dragging);
   if (!d) return;
@@ -158,6 +281,7 @@ export function gearTouchMove(game: GearGame, x: number, y: number): void {
 
 /** The finger lifting: fires what the down edge lit. */
 export function gearTouchUp(game: GearGame): void {
+  touchSerial++;
   dragging = null;
   const id = pressedId();
   setPressed(null);

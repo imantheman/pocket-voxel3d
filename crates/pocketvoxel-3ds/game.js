@@ -6123,6 +6123,9 @@ function atlasOf(data) {
 function picPageFor(data, speciesId) {
   return atlasOf(data)?.picFront?.[speciesId] ?? -1;
 }
+function backPageFor(data, speciesId) {
+  return atlasOf(data)?.picBack?.[speciesId] ?? -1;
+}
 function orbitDir(arena, rig, q8) {
   const [ex, ey] = arena.enemyCell;
   const [px2, py] = arena.playerCell;
@@ -6735,9 +6738,13 @@ class GbEmitter {
   shown = false;
   maps = new Uint8Array(2048);
   loads = "";
-  regs = "";
+  loadsRef = null;
+  oamLen = 0;
+  oamNow = new Uint8Array(160);
+  regsNow = new Int32Array(8);
+  colours0 = "";
+  colours1 = "";
   lines = "";
-  oam = "";
   colours = "";
   emit(host, v, resolve) {
     if (!v) {
@@ -6747,20 +6754,27 @@ class GbEmitter {
       }
       return;
     }
+    let fresh = false;
     if (!this.shown) {
       host.gbReset?.();
       host.gbShow?.(1);
       this.shown = true;
       this.maps.fill(0);
-      this.loads = this.regs = this.lines = this.oam = this.colours = "";
+      this.loads = this.lines = this.colours = "";
+      this.loadsRef = null;
+      this.oamLen = 0;
+      fresh = true;
     }
-    const loads = v.loads.map((l) => `${l.dest},${l.sheet},${l.first},${l.count}`).join("|");
-    if (loads !== this.loads) {
-      this.loads = loads;
-      for (const l of v.loads)
-        host.gbTiles?.(l.dest, resolve.page(l.sheet), l.first, l.count);
+    if (v.loads !== this.loadsRef) {
+      this.loadsRef = v.loads;
+      const loads = v.loads.map((l) => `${l.dest},${l.sheet},${l.first},${l.count},${l.wide ?? 0},${l.stride ?? 0},${l.map ?? 0}`).join("|");
+      if (loads !== this.loads) {
+        this.loads = loads;
+        for (const l of v.loads)
+          host.gbTiles?.(l.dest, resolve.page(l.sheet), l.first, l.count, l.wide ?? 0, l.stride ?? 0, l.map ?? 0);
+      }
     }
-    let i = 0;
+    let i = fresh || v.mapsDirty !== false ? 0 : 2048;
     while (i < 2048) {
       if (v.maps[i] === this.maps[i]) {
         i++;
@@ -6779,9 +6793,16 @@ class GbEmitter {
       this.maps.set(v.maps.subarray(i, end), i);
       i = end;
     }
-    const regs = [v.lcdc, v.scx, v.scy, v.wx, v.wy, v.bgp, v.obp0, v.obp1].join(",");
-    if (regs !== this.regs) {
-      this.regs = regs;
+    const r = this.regsNow;
+    if (fresh || r[0] !== v.lcdc || r[1] !== v.scx || r[2] !== v.scy || r[3] !== v.wx || r[4] !== v.wy || r[5] !== v.bgp || r[6] !== v.obp0 || r[7] !== v.obp1) {
+      r[0] = v.lcdc;
+      r[1] = v.scx;
+      r[2] = v.scy;
+      r[3] = v.wx;
+      r[4] = v.wy;
+      r[5] = v.bgp;
+      r[6] = v.obp0;
+      r[7] = v.obp1;
       host.gbRegs?.(v.lcdc, v.scx & 255, v.scy & 255, v.wx & 255, v.wy & 255, v.bgp, v.obp0, v.obp1);
     }
     const target2 = v.lineTarget === "scy" ? 1 : v.lineTarget === "scx" ? 2 : 0;
@@ -6790,15 +6811,26 @@ class GbEmitter {
       this.lines = lines;
       host.gbLines?.(target2, target2 ? hex(v.lines) : "");
     }
-    const oam = hex(v.oam);
-    if (oam !== this.oam) {
-      this.oam = oam;
-      host.gbOam?.(oam);
+    const o = v.oam;
+    let used = 160;
+    while (used > 0 && o[used - 1] === 0 && o[used - 2] === 0 && o[used - 3] === 0 && o[used - 4] === 0)
+      used -= 4;
+    const len = Math.max(used, this.oamLen);
+    const was = this.oamNow;
+    let same = !fresh && len === this.oamLen;
+    for (let k = 0;same && k < len; k++)
+      if (o[k] !== was[k])
+        same = false;
+    if (!same) {
+      was.set(o);
+      this.oamLen = used;
+      host.gbOam?.(hex(o, 0, len));
     }
     const c = v.colours;
-    const colours = `${c.bg},${c.obj0},${c.obj1}`;
-    if (colours !== this.colours) {
-      this.colours = colours;
+    if (fresh || c.bg !== this.colours || c.obj0 !== this.colours0 || c.obj1 !== this.colours1) {
+      this.colours = c.bg;
+      this.colours0 = c.obj0;
+      this.colours1 = c.obj1;
       host.gbColours?.(resolve.palette(c.bg), resolve.palette(c.obj0), resolve.palette(c.obj1));
     }
   }
@@ -7723,6 +7755,414 @@ ${newName}!`, () => this.finish());
       picPage: showNew ? this.newPage : this.oldPage,
       lines: ["What?", `${this.oldName} is`, "evolving!"]
     };
+  }
+}
+
+// voxelmon/game/battle/ui-classic.ts
+var HUD_HP_LABEL2 = 113;
+var HUD_BAR_LEFT2 = 98;
+var HUD_BAR_EMPTY2 = 99;
+var HUD_BAR_FULL2 = 107;
+var HUD_CAP_NUB2 = 108;
+var HUD_CAP_DOUBLE2 = 109;
+var HUD_LV2 = 110;
+var HUD_TICK2 = 115;
+var HUD_EDGE_L2 = 116;
+var HUD_LINE2 = 118;
+var HUD_EDGE_DOWN2 = 119;
+var HUD_EDGE_R2 = 120;
+var HUD_HALF_ARROW2 = 111;
+var GLYPH_PK = 225;
+var GLYPH_MN = 226;
+var HP_BAR_SEGMENTS2 = HP_BAR_PIXELS / 8;
+function hpBarTiles2(hp, maxHP, playerSide) {
+  const px2 = hpBarPixels(hp, maxHP);
+  const out = [HUD_HP_LABEL2, HUD_BAR_LEFT2];
+  for (let i = 0;i < HP_BAR_SEGMENTS2; i++) {
+    const seg = Math.min(8, Math.max(0, px2 - i * 8));
+    out.push(seg >= 8 ? HUD_BAR_FULL2 : HUD_BAR_EMPTY2 + seg);
+  }
+  out.push(playerSide ? HUD_CAP_DOUBLE2 : HUD_CAP_NUB2);
+  return out;
+}
+function nameTileX2(tx, name) {
+  const n = encodeGlyphs(name).length;
+  return tx + (n <= 2 ? 2 : n <= 4 ? 1 : 0);
+}
+var MSG_X = 1;
+var MSG_ROWS = [14, 16];
+var ARROW_X2 = 18;
+var ARROW_Y2 = 16;
+
+class ClassicBattleUi {
+  mode = null;
+  msgRows = [];
+  msgVisible = false;
+  arrowShown = false;
+  enemyBar = null;
+  playerBar = null;
+  playerDigits = null;
+  enemyLevel = null;
+  playerLevel = null;
+  cursorCell = null;
+  swapCell = null;
+  choiceYes = true;
+  chromeTextDirty = false;
+  emit(host, battle) {
+    const enemyHud = this.enemyHudVisible(battle);
+    const playerHud = this.playerHudVisible(battle);
+    const mode = [
+      battle.phase,
+      enemyHud ? 1 : 0,
+      playerHud ? 1 : 0,
+      battle.choiceOpen ? 1 : 0,
+      battle.statBoxMon ? 1 : 0,
+      battle.phase === "party" ? battle.save.party.length : 0,
+      battle.phase === "item" ? battle.itemList.length : 0
+    ].join("|");
+    this.chromeTextDirty = false;
+    if (mode !== this.mode) {
+      this.mode = mode;
+      this.repaint(host, battle, enemyHud, playerHud);
+    } else {
+      this.deltas(host, battle, enemyHud, playerHud);
+    }
+    this.emitMessage(host, battle);
+  }
+  reset() {
+    this.mode = null;
+    this.msgRows = [];
+    this.msgVisible = false;
+    this.arrowShown = false;
+    this.enemyBar = null;
+    this.playerBar = null;
+    this.playerDigits = null;
+    this.enemyLevel = null;
+    this.playerLevel = null;
+    this.cursorCell = null;
+    this.swapCell = null;
+  }
+  enemyHudVisible(battle) {
+    return !!battle.enemy && !battle.introBalls && !battle.enemy.fainted;
+  }
+  playerHudVisible(battle) {
+    return !!battle.player && !battle.showPlayerBack && !battle.sendingOut;
+  }
+  box(host, x, y, w, h) {
+    host.uiTile(x, y, BORDER_TL);
+    host.uiFill(x + 1, y, w - 2, 1, BORDER_H);
+    host.uiTile(x + w - 1, y, BORDER_TR);
+    host.uiFill(x, y + 1, 1, h - 2, BORDER_V);
+    host.uiFill(x + w - 1, y + 1, 1, h - 2, BORDER_V);
+    host.uiTile(x, y + h - 1, BORDER_BL);
+    host.uiFill(x + 1, y + h - 1, w - 2, 1, BORDER_H);
+    host.uiTile(x + w - 1, y + h - 1, BORDER_BR);
+    host.uiFill(x + 1, y + 1, w - 2, h - 2, SPACE);
+  }
+  text(host, x, y, s) {
+    const glyphs = encodeGlyphs(s);
+    for (let i = 0;i < glyphs.length; i++)
+      host.uiTile(x + i, y, glyphs[i]);
+    this.chromeTextDirty = true;
+  }
+  repaint(host, battle, enemyHud, playerHud) {
+    host.uiClear();
+    this.msgRows = [];
+    this.msgVisible = false;
+    this.arrowShown = false;
+    this.enemyBar = null;
+    this.playerBar = null;
+    this.playerDigits = null;
+    this.enemyLevel = null;
+    this.playerLevel = null;
+    this.cursorCell = null;
+    this.swapCell = null;
+    this.box(host, 0, 12, 20, 6);
+    if (enemyHud)
+      this.paintEnemyHud(host, battle);
+    if (playerHud && battle.phase !== "moveSelect")
+      this.paintPlayerHud(host, battle);
+    if (battle.phase === "menu") {
+      this.box(host, 8, 12, 12, 6);
+      this.text(host, 10, 14, "FIGHT");
+      host.uiTile(16, 14, GLYPH_PK);
+      host.uiTile(17, 14, GLYPH_MN);
+      this.text(host, 10, 16, "ITEM");
+      this.text(host, 16, 16, "RUN");
+      this.paintMenuCursor(host, battle);
+    } else if (battle.phase === "moveSelect") {
+      this.box(host, 0, 8, 11, 5);
+      this.box(host, 4, 12, 16, 6);
+      host.uiTile(4, 12, BORDER_H);
+      host.uiTile(10, 12, BORDER_BR);
+      battle.player.curMoves.forEach((mv, i) => {
+        const def = battle.data.moves[mv.id];
+        this.text(host, 6, 13 + i, def?.name ?? mv.id);
+      });
+      this.text(host, 1, 9, "TYPE/");
+      const sel = battle.player.curMoves[battle.moveIndex - 1];
+      const selDef = sel ? battle.data.moves[sel.id] : undefined;
+      if (selDef) {
+        this.text(host, 2, 10, battle.chart.displayName(selDef.type));
+        const maxPP2 = selDef.pp + (sel.ppUps ?? 0) * Math.floor(selDef.pp / 5);
+        this.text(host, 5, 11, `${String(sel.pp).padStart(2)}/${String(maxPP2).padStart(2)}`);
+      }
+      this.paintMoveCursor(host, battle);
+    } else if (battle.phase === "party") {
+      const party = battle.save.party;
+      this.box(host, 0, 0, 20, Math.max(4, 2 + party.length * 2));
+      party.forEach((mon, i) => {
+        const name = mon.nickname ?? battle.data.pokemon[mon.species].name;
+        this.text(host, 2, 1 + i * 2, name);
+        this.text(host, 12, 1 + i * 2, `L${String(mon.level).padStart(2)} ${String(mon.hp).padStart(3)}/${String(mon.stats.hp).padStart(3)}`);
+      });
+      host.uiTile(1, 1 + (battle.partyIndex ?? 0) * 2, ARROW_CURSOR);
+      this.cursorCell = [1, 1 + (battle.partyIndex ?? 0) * 2];
+    } else if (battle.phase === "item") {
+      const list2 = battle.itemList;
+      this.box(host, 4, 2, 16, Math.max(4, 2 + list2.length * 2));
+      list2.forEach((id, i) => {
+        const name = battle.data.items?.[id]?.name ?? id;
+        this.text(host, 6, 3 + i * 2, name);
+        this.text(host, 15, 3 + i * 2, `x${String(battle.save.inventory[id] ?? 0).padStart(2)}`);
+      });
+      host.uiTile(5, 3 + battle.itemIndex * 2, ARROW_CURSOR);
+      this.cursorCell = [5, 3 + battle.itemIndex * 2];
+    }
+    if (battle.statBoxMon) {
+      this.box(host, 9, 2, 11, 10);
+      const s = battle.statBoxMon.stats;
+      const rows = [
+        ["ATTACK", s.attack],
+        ["DEFENSE", s.defense],
+        ["SPEED", s.speed],
+        ["SPECIAL", s.special]
+      ];
+      rows.forEach(([label2, v], i) => {
+        this.text(host, 11, 3 + i * 2, label2);
+        this.text(host, 16, 4 + i * 2, String(v).padStart(3));
+      });
+    }
+    if (battle.choiceOpen) {
+      this.box(host, 14, 7, 6, 5);
+      this.text(host, 16, 8, "YES");
+      this.text(host, 16, 10, "NO");
+      this.choiceYes = battle.choiceYes;
+      host.uiTile(15, battle.choiceYes ? 8 : 10, ARROW_CURSOR);
+    }
+  }
+  paintEnemyHud(host, battle) {
+    const e = battle.enemy;
+    this.text(host, nameTileX2(1, e.name), 0, e.name);
+    this.paintLevelOrStatus(host, battle, e, 4, 1, false);
+    host.uiTile(1, 2, HUD_TICK2);
+    this.paintBar(host, battle, e, 2, 2, false);
+    host.uiTile(1, 3, HUD_EDGE_L2);
+    host.uiFill(2, 3, 8, 1, HUD_LINE2);
+    host.uiTile(10, 3, HUD_EDGE_R2);
+  }
+  paintPlayerHud(host, battle) {
+    const p = battle.player;
+    this.text(host, nameTileX2(10, p.name), 7, p.name);
+    this.paintLevelOrStatus(host, battle, p, 14, 8, true);
+    this.paintBar(host, battle, p, 10, 9, true);
+    this.paintPlayerDigits(host, battle);
+    host.uiTile(18, 10, HUD_TICK2);
+    host.uiTile(9, 11, HUD_HALF_ARROW2);
+    host.uiFill(10, 11, 8, 1, HUD_LINE2);
+    host.uiTile(18, 11, HUD_EDGE_DOWN2);
+  }
+  paintLevelOrStatus(host, battle, b, lvX, y, player) {
+    const label2 = b.shownStatus ? b.shownStatus : String(b.mon.level);
+    if (b.shownStatus) {
+      this.text(host, lvX + 1, y, label2);
+    } else {
+      host.uiTile(lvX, y, HUD_LV2);
+      this.text(host, lvX + 1, y, label2);
+    }
+    if (player)
+      this.playerLevel = label2;
+    else
+      this.enemyLevel = label2;
+  }
+  paintBar(host, battle, b, tx, ty, player) {
+    const tiles = hpBarTiles2(battle.shownHPInt(b), b.mon.stats.hp, player);
+    tiles.forEach((t, i) => host.uiTile(tx + i, ty, t));
+    if (player)
+      this.playerBar = tiles;
+    else
+      this.enemyBar = tiles;
+  }
+  paintPlayerDigits(host, battle) {
+    const p = battle.player;
+    const digits = `${String(battle.shownHPInt(p)).padStart(3)}/${String(p.mon.stats.hp).padStart(3)}`;
+    this.text(host, 11, 10, digits);
+    this.playerDigits = digits;
+  }
+  paintMenuCursor(host, battle) {
+    const col = (battle.menuIndex - 1) % 2;
+    const row = Math.floor((battle.menuIndex - 1) / 2);
+    const cell = [col === 0 ? 9 : 15, 14 + row * 2];
+    host.uiTile(cell[0], cell[1], ARROW_CURSOR);
+    this.cursorCell = cell;
+  }
+  paintMoveCursor(host, battle) {
+    const cell = [5, 12 + battle.moveIndex];
+    host.uiTile(cell[0], cell[1], ARROW_CURSOR);
+    this.cursorCell = cell;
+    if (battle.moveSwapIndex !== null && battle.moveSwapIndex !== battle.moveIndex) {
+      const swap = [5, 12 + battle.moveSwapIndex];
+      host.uiTile(swap[0], swap[1], ARROW_HOLLOW);
+      this.swapCell = swap;
+    } else {
+      this.swapCell = null;
+    }
+  }
+  deltas(host, battle, enemyHud, playerHud) {
+    if (enemyHud) {
+      const e = battle.enemy;
+      const bar = hpBarTiles2(battle.shownHPInt(e), e.mon.stats.hp, false);
+      if (this.enemyBar) {
+        bar.forEach((t, i) => {
+          if (this.enemyBar[i] !== t)
+            host.uiTile(2 + i, 2, t);
+        });
+      }
+      this.enemyBar = bar;
+      const label2 = e.shownStatus ?? String(e.mon.level);
+      if (label2 !== this.enemyLevel)
+        this.paintLevelOrStatus(host, battle, e, 4, 1, false);
+    }
+    if (playerHud && battle.phase !== "moveSelect") {
+      const p = battle.player;
+      const bar = hpBarTiles2(battle.shownHPInt(p), p.mon.stats.hp, true);
+      if (this.playerBar) {
+        bar.forEach((t, i) => {
+          if (this.playerBar[i] !== t)
+            host.uiTile(10 + i, 9, t);
+        });
+      }
+      this.playerBar = bar;
+      const digits = `${String(battle.shownHPInt(p)).padStart(3)}/${String(p.mon.stats.hp).padStart(3)}`;
+      if (digits !== this.playerDigits)
+        this.paintPlayerDigits(host, battle);
+      const label2 = p.shownStatus ?? String(p.mon.level);
+      if (label2 !== this.playerLevel)
+        this.paintLevelOrStatus(host, battle, p, 14, 8, true);
+    }
+    if (battle.phase === "menu") {
+      const col = (battle.menuIndex - 1) % 2;
+      const row = Math.floor((battle.menuIndex - 1) / 2);
+      const cell = [col === 0 ? 9 : 15, 14 + row * 2];
+      this.moveCursor(host, cell);
+    } else if (battle.phase === "moveSelect") {
+      const cell = [5, 12 + battle.moveIndex];
+      const moved = !this.cursorCell || this.cursorCell[0] !== cell[0] || this.cursorCell[1] !== cell[1];
+      this.moveCursor(host, cell);
+      const swap = battle.moveSwapIndex !== null && battle.moveSwapIndex !== battle.moveIndex ? [5, 12 + battle.moveSwapIndex] : null;
+      const swapKey = swap ? `${swap[0]},${swap[1]}` : null;
+      const oldKey = this.swapCell ? `${this.swapCell[0]},${this.swapCell[1]}` : null;
+      if (swapKey !== oldKey) {
+        if (this.swapCell && (!swap || swap[1] !== this.swapCell[1])) {
+          if (!this.cursorCell || this.cursorCell[1] !== this.swapCell[1]) {
+            host.uiTile(this.swapCell[0], this.swapCell[1], SPACE);
+          }
+        }
+        if (swap)
+          host.uiTile(swap[0], swap[1], ARROW_HOLLOW);
+        this.swapCell = swap;
+      }
+      if (moved) {
+        const sel = battle.player.curMoves[battle.moveIndex - 1];
+        const selDef = sel ? battle.data.moves[sel.id] : undefined;
+        host.uiFill(1, 10, 9, 1, SPACE);
+        host.uiFill(1, 11, 9, 1, SPACE);
+        if (selDef) {
+          this.text(host, 2, 10, battle.chart.displayName(selDef.type));
+          const maxPP2 = selDef.pp + (sel.ppUps ?? 0) * Math.floor(selDef.pp / 5);
+          this.text(host, 5, 11, `${String(sel.pp).padStart(2)}/${String(maxPP2).padStart(2)}`);
+        }
+      }
+    } else if (battle.phase === "party") {
+      this.moveCursor(host, [1, 1 + battle.partyIndex * 2]);
+    } else if (battle.phase === "item") {
+      this.moveCursor(host, [5, 3 + battle.itemIndex * 2]);
+    }
+    if (battle.choiceOpen && battle.choiceYes !== this.choiceYes) {
+      this.choiceYes = battle.choiceYes;
+      host.uiTile(15, battle.choiceYes ? 10 : 8, SPACE);
+      host.uiTile(15, battle.choiceYes ? 8 : 10, ARROW_CURSOR);
+    }
+  }
+  moveCursor(host, cell) {
+    const old = this.cursorCell;
+    if (old && old[0] === cell[0] && old[1] === cell[1])
+      return;
+    if (old)
+      host.uiTile(old[0], old[1], SPACE);
+    host.uiTile(cell[0], cell[1], ARROW_CURSOR);
+    this.cursorCell = cell;
+  }
+  emitMessage(host, battle) {
+    const visible = battle.phase === "messages" && (battle.current !== null || battle.msgHold);
+    if (!visible) {
+      if (this.msgVisible) {
+        host.uiFill(1, 13, 18, 4, SPACE);
+        this.msgRows = [];
+        this.msgVisible = false;
+        this.arrowShown = false;
+      }
+      return;
+    }
+    this.msgVisible = true;
+    if (this.chromeTextDirty)
+      this.msgRows = [];
+    let textsEmitted = false;
+    battle.shown.forEach((line, i) => {
+      if (i >= MSG_ROWS.length)
+        return;
+      const isLast = i === battle.shown.length - 1;
+      const cached = this.msgRows[i];
+      if (!isLast) {
+        if (cached && cached.stamped && cached.text === line.text)
+          return;
+        for (let c = 0;c < line.codes.length; c++) {
+          host.uiTile(MSG_X + c, MSG_ROWS[i], line.codes[c]);
+        }
+        const pad = Math.max(0, MAX_COLS - line.codes.length);
+        if (pad > 0)
+          host.uiFill(MSG_X + line.codes.length, MSG_ROWS[i], pad, 1, SPACE);
+        this.msgRows[i] = { text: line.text, revealed: -1, stamped: true };
+        return;
+      }
+      const text = toCells(line.text);
+      if (!cached || cached.stamped || cached.text !== text) {
+        host.uiText(MSG_X, MSG_ROWS[i], text);
+        this.msgRows[i] = { text, revealed: -1, stamped: false };
+        textsEmitted = true;
+      }
+    });
+    this.msgRows.length = Math.min(battle.shown.length, MSG_ROWS.length);
+    const last = battle.shown[battle.shown.length - 1];
+    if (last && battle.shown.length <= MSG_ROWS.length) {
+      const cached = this.msgRows[battle.shown.length - 1];
+      if (cached && (textsEmitted || cached.revealed !== last.revealed)) {
+        host.uiReveal(last.revealed);
+        cached.revealed = last.revealed;
+      }
+    }
+    const arrow = (battle.msgWaiting || battle.msgPrompt) && battle.frame % 60 < 30;
+    if (arrow !== this.arrowShown) {
+      if (arrow) {
+        host.uiTile(ARROW_X2, ARROW_Y2, ARROW_MORE);
+      } else {
+        const under = battle.shown[1];
+        const idx = ARROW_X2 - MSG_X;
+        const glyph = under && under.codes.length > idx && under.revealed > idx ? under.codes[idx] : SPACE;
+        host.uiTile(ARROW_X2, ARROW_Y2, glyph);
+      }
+      this.arrowShown = arrow;
+    }
   }
 }
 
@@ -9896,8 +10336,12 @@ var LCDC = {
   objOn: 2,
   bgOn: 1
 };
+var OAM_ATTR = { behindBg: 128, yFlip: 64, xFlip: 32, obp1: 16 };
 var SCREEN_W = 160;
 var SCREEN_H = 144;
+var OAM_X_OFS = 8;
+var OAM_Y_OFS = 16;
+
 class GbVideo {
   maps = new Uint8Array(2048);
   tileMap = new Uint8Array(SCREEN_W / 8 * (SCREEN_H / 8));
@@ -9916,6 +10360,7 @@ class GbVideo {
   obp1 = 228;
   colours = { bg: "PIKACHUS_BEACH", obj0: "PIKACHUS_BEACH", obj1: "PIKACHUS_BEACH" };
   loads = [];
+  mapsDirty = undefined;
   loadTiles(dest, sheet, first, count2) {
     this.loads = this.loads.filter((l) => l.dest + l.count <= dest || l.dest >= dest + count2);
     this.loads.push({ dest, sheet, first, count: count2 });
@@ -18663,6 +19108,7 @@ class Scene {
   choiceDrawn = false;
   choiceYes = true;
   battleActive = false;
+  flatWorld = false;
   arenaStaged = false;
   cardShown = new Map;
   constructor(host) {
@@ -18676,6 +19122,18 @@ class Scene {
     }
     const p = view.prof;
     const t0 = p ? p.now() : 0;
+    const flat = !!view.overworld2d?.();
+    if (flat) {
+      if (!this.flatWorld) {
+        this.flatWorld = true;
+        this.hideAllEnts();
+      }
+      this.emitMaps(view);
+      this.emitCam(view);
+      this.emitUi(view);
+      return;
+    }
+    this.flatWorld = false;
     this.emitMaps(view);
     const t1 = p ? p.now() : 0;
     const bv = view.battleView();
@@ -18750,12 +19208,18 @@ class Scene {
       this.uiPage = -1;
       this.uiArrow = false;
       this.choiceDrawn = false;
-      if (bv.staging) {
+      if (bv.staging && !view.battle2d?.()) {
         const a = bv.staging.arena;
         host.arena(bv.staging.mapIndex, a.x, a.y, a.shape, bv.staging.rig);
         host.battleCam(bv.staging.orbit ?? 0, bv.staging.pitch ?? 0, Q8);
         this.arenaStaged = true;
       }
+    }
+    if (view.battle2d?.()) {
+      this.emitFlatBattle(view, bv);
+      this.emitAnimSprites(view, bv);
+      (this.classicUi ??= new ClassicBattleUi).emit(host, bv.battle);
+      return;
     }
     const desired = bv.staging ? desiredCards(view.data, bv.battle, bv.staging) : [];
     const seen = new Set;
@@ -18776,8 +19240,53 @@ class Scene {
     this.emitAnimSprites(view, bv);
     bv.ui.emit(host, bv.battle);
   }
+  emitFlatBattle(view, bv) {
+    const host = this.host;
+    const data = view.data;
+    const staging = bv.staging ?? { arena: { enemyCell: [0, 0], playerCell: [0, 3] } };
+    const desired = desiredCards(data, bv.battle, staging);
+    const pics = [];
+    const white = namedPage(data, "picIntro", "white");
+    if (white >= 0)
+      pics.push({ page: white, x: 0, y: 0, w: VIEW_W, h: VIEW_H });
+    const px2 = cellsToPicRect({ x: 0, y: 0, w: 1, h: 1 }).w / 8;
+    for (const c of desired) {
+      const enemy = c.side === 1;
+      let page = c.pic;
+      if (!enemy) {
+        const species = bv.battle.player?.mon?.species;
+        const back = species ? backPageFor(data, species) : -1;
+        if (back >= 0)
+          page = back;
+      }
+      const r = cellsToPicRect(enemy ? { x: 12, y: 0, w: 7, h: 7 } : { x: 1, y: 5, w: 8, h: 8 });
+      const dx = Math.round((c.dx ?? 0) / 4 * px2);
+      const dy = Math.round(-(c.dy ?? 0) / 4 * px2);
+      pics.push({ page, x: r.x + dx, y: r.y + dy, w: r.w, h: r.h });
+    }
+    const sig = pics.map((q) => `${q.page},${q.x},${q.y},${q.w},${q.h}`).join("|");
+    if (sig === this.flatPicSig)
+      return;
+    this.flatPicSig = sig;
+    for (let i = 0;i < 3; i++) {
+      const q = pics[i];
+      if (q)
+        host.pic(i, q.page, q.x, q.y, q.w, q.h);
+      else
+        host.picHide(i);
+    }
+  }
+  flatPicSig = "";
+  classicUi = null;
   endBattle() {
     const host = this.host;
+    this.classicUi = null;
+    if (this.flatPicSig !== "") {
+      for (let i = 0;i < 3; i++)
+        host.picHide(i);
+      this.flatPicSig = "";
+      this.picSig = "";
+    }
     for (const side of [...this.cardShown.keys()]) {
       host.cardHide(side);
     }
@@ -19071,10 +19580,16 @@ class Scene {
     const gbv = view.gb?.() ?? null;
     const data = view.data;
     this.gbEmitter.emit(host, gbv, {
-      page: (sheet) => data.atlas?.picMinigame?.[sheet] ?? -1,
-      palette: (name) => data.paletteIndex?.[name] ?? -1
+      page: (sheet) => {
+        if (sheet === "terrain")
+          return -2;
+        if (sheet.startsWith("sprite:"))
+          return this.sheetIndex(view, sheet.slice(7));
+        return data.atlas?.picMinigame?.[sheet] ?? -1;
+      },
+      palette: (name) => name.startsWith("#") ? Number(name.slice(1)) : data.paletteIndex?.[name] ?? -1
     });
-    if (gbv) {
+    if (gbv && !view.overworld2d?.()) {
       if (this.introSig !== "gb") {
         this.introSig = "gb";
         this.uiOwner = null;
@@ -22292,6 +22807,18 @@ function tiltShiftLevel(v) {
   return at >= 0 ? at : 0;
 }
 
+// voxelmon/game/viewmode.ts
+var VIEW_MODES = [
+  { key: "3d", label: "3D" },
+  { key: "2d", label: "2D" }
+];
+function viewIndex(v) {
+  return v === "2d" ? 1 : 0;
+}
+function is2d(v) {
+  return v === "2d";
+}
+
 // voxelmon/game/ui/optionsmenu.ts
 var OPTIONS_VISIBLE = 4;
 var CAMERA_SPEEDS = [
@@ -22350,6 +22877,16 @@ class OptionsMenuState {
         index: tiltShiftLevel(this.opts().tiltShift)
       },
       {
+        label: "VIEW",
+        choices: VIEW_MODES.map((v) => v.label),
+        index: viewIndex(this.opts().view)
+      },
+      {
+        label: "BATTLES",
+        choices: VIEW_MODES.map((v) => v.label),
+        index: viewIndex(this.opts().battleView)
+      },
+      {
         label: "DEV MENU",
         choices: ["OFF", "ON"],
         index: this.opts().devMenu === true ? 1 : 0
@@ -22373,6 +22910,10 @@ class OptionsMenuState {
     else if (row === 4)
       this.opts().tiltShift = TILT_SHIFTS[at].key;
     else if (row === 5)
+      this.opts().view = VIEW_MODES[at].key;
+    else if (row === 6)
+      this.opts().battleView = VIEW_MODES[at].key;
+    else if (row === 7)
       this.opts().devMenu = at === 1;
   }
   update() {
@@ -25122,7 +25663,105 @@ var DRAW = {
   options: drawOptions
 };
 var drawnFor = "";
-function drawKantoGear(host, game) {
+
+class GearSink {
+  next = new Uint16Array(UI_COLS * UI_ROWS);
+  shown = new Uint16Array(UI_COLS * UI_ROWS);
+  extra = [];
+  shownExtra = [];
+  age = 0;
+  forget() {
+    this.age = 1 << 30;
+  }
+  uiClearBottom() {
+    this.next.fill(0);
+    this.extra.length = 0;
+  }
+  uiTileBottom(x, y, tile2) {
+    if (x >= 0 && y >= 0 && x < UI_COLS && y < UI_ROWS)
+      this.next[y * UI_COLS + x] = tile2;
+  }
+  uiSpriteBottom(page, x, y, w, h) {
+    this.extra.push(0, page, x, y, w, h);
+  }
+  uiSpriteRectBottom(page, x, y, w, h, sx2, sy2, sw2, sh, flags = 0) {
+    this.extra.push(1, page, x, y, w, h, sx2, sy2, sw2, sh, flags);
+  }
+  uiRectBottom(x, y, w, h, shade) {
+    this.extra.push(2, x, y, w, h, shade);
+  }
+  flush(host) {
+    const next = this.next;
+    const shown = this.shown;
+    const extra = this.extra;
+    const was = this.shownExtra;
+    let same = extra.length === was.length && ++this.age < 300;
+    for (let i = 0;same && i < extra.length; i++)
+      if (extra[i] !== was[i])
+        same = false;
+    if (same) {
+      for (let i = 0;i < next.length; i++) {
+        if (next[i] !== shown[i])
+          host.uiTileBottom(i % UI_COLS, i / UI_COLS | 0, next[i]);
+      }
+    } else {
+      this.age = 0;
+      host.uiClearBottom();
+      for (let i = 0;i < next.length; i++) {
+        if (next[i] !== 0)
+          host.uiTileBottom(i % UI_COLS, i / UI_COLS | 0, next[i]);
+      }
+      for (let i = 0;i < extra.length; ) {
+        const op = extra[i];
+        if (op === 0) {
+          host.uiSpriteBottom(extra[i + 1], extra[i + 2], extra[i + 3], extra[i + 4], extra[i + 5]);
+          i += 6;
+        } else if (op === 1) {
+          host.uiSpriteRectBottom?.(extra[i + 1], extra[i + 2], extra[i + 3], extra[i + 4], extra[i + 5], extra[i + 6], extra[i + 7], extra[i + 8], extra[i + 9], extra[i + 10]);
+          i += 11;
+        } else {
+          host.uiRectBottom?.(extra[i + 1], extra[i + 2], extra[i + 3], extra[i + 4], extra[i + 5]);
+          i += 6;
+        }
+      }
+      this.shownExtra = extra.slice();
+    }
+    shown.set(next);
+  }
+}
+var sink = new GearSink;
+var touchSerial = 0;
+var stillKey = "";
+var lastHost = null;
+var lastGame = null;
+function stillFrame(game) {
+  const top2 = game.stack?.[game.stack.length - 1];
+  if (top2?.kind !== "overworld" || game.battleView?.())
+    return "";
+  const view = activeView(game);
+  if (view === "explorer" || view === "map")
+    return "";
+  const gear = gearSave(game.save);
+  let party = "";
+  for (const m of game.save?.party ?? [])
+    party += `${m.species}/${m.nickname ?? ""}/${m.level}/${m.hp}/${m.stats?.hp ?? 0};`;
+  return `${view}|${pressedId() ?? ""}|${touchSerial}|${game.stack.length}|${game.overworld?.map?.id ?? ""}|` + `${gear.steps}|${gear.trip}|${clockStr(gear.clock24)}|${party}`;
+}
+function drawKantoGear(realHost, game) {
+  if (realHost !== lastHost || game !== lastGame) {
+    lastHost = realHost;
+    lastGame = game;
+    stillKey = "";
+    sink.forget();
+  }
+  const key = stillFrame(game);
+  if (key !== "" && key === stillKey)
+    return;
+  stillKey = key;
+  drawGear(sink, game);
+  sink.flush(realHost);
+}
+function drawGear(host, game) {
   beginTargets();
   beginDrags();
   host.uiClearBottom();
@@ -25153,6 +25792,7 @@ function drawKantoGear(host, game) {
 }
 var dragging = null;
 function gearTouchDown(game, x, y) {
+  touchSerial++;
   setPressed(null);
   dragging = null;
   const b = game.battleView?.()?.battle;
@@ -25181,6 +25821,7 @@ function gearTouchDown(game, x, y) {
     setPressed(t.id);
 }
 function gearTouchMove(game, x, y) {
+  touchSerial++;
   if (!dragging)
     return;
   const d = dragById(dragging);
@@ -25191,6 +25832,7 @@ function gearTouchMove(game, x, y) {
   d.move(x, y, false);
 }
 function gearTouchUp(game) {
+  touchSerial++;
   dragging = null;
   const id = pressedId();
   setPressed(null);
@@ -26891,6 +27533,179 @@ function decodeSave(text2) {
   return save;
 }
 
+// voxelmon/game/world/view2d.ts
+var STAND2 = { down: 0, up: 1, left: 2, right: 2 };
+var WALK2 = { down: 3, up: 4, left: 5, right: 5 };
+var SHEET_TILES = 24;
+var SHEETS_MAX = 10;
+var SPRITE_PAGE_TILES = 8;
+var COLS2 = 21;
+var ROWS10 = 19;
+var PAD2 = 12;
+var BLOCK_CHECK = 32;
+
+class OverworldView2d {
+  video = new GbVideo;
+  slots = new Map;
+  tiles = null;
+  winX = NaN;
+  winY = NaN;
+  frame = 0;
+  build(game) {
+    const ow = game.overworld;
+    const map = ow?.map;
+    const p = ow?.player;
+    if (!map || !p)
+      return null;
+    const v = this.video;
+    let t = this.tiles;
+    if (!t || t.map !== map || ++this.frame % BLOCK_CHECK === 0 && !sameBlocks(t.blocks, map.def.blocks)) {
+      if (!t || t.map !== map) {
+        this.slots.clear();
+        this.loadsSize = -1;
+      }
+      t = this.tiles = buildTiles(map);
+      this.winX = NaN;
+    }
+    const camX = Math.round(p.px) - 64;
+    const camY = Math.round(p.py) - 64;
+    v.lcdc = LCDC.on | LCDC.bgOn | LCDC.objOn;
+    const tx0 = Math.floor(camX / 8);
+    const ty0 = Math.floor(camY / 8);
+    if (tx0 !== this.winX || ty0 !== this.winY) {
+      this.winX = tx0;
+      this.winY = ty0;
+      writeWindow(v.maps, t, map, tx0, ty0);
+      v.mapsDirty = true;
+    } else
+      v.mapsDirty = false;
+    v.scx = camX & 255;
+    v.scy = camY & 255;
+    const oam = v.oam;
+    oam.fill(0);
+    this.oamN = 0;
+    this.camX = camX;
+    this.camY = camY;
+    const gold = game.data.version === "gold";
+    {
+      const phase = p.walkPhase();
+      const f = p.facing;
+      this.put(p.surfing ? gold ? "SPRITE_SURF" : "SPRITE_SEEL" : p.onBike ? gold ? "SPRITE_CHRIS_BIKE" : "SPRITE_RED_BIKE" : gold ? "SPRITE_CHRIS" : "SPRITE_RED", p.px, p.py - (p.hopLift?.() ?? 0), phase === 1 ? WALK2[f] : STAND2[f], f === "right" || (f === "down" || f === "up") && phase === 1 && p.animFlip());
+    }
+    const sprites = game.data.sprites;
+    for (const npc of ow.npcs ?? []) {
+      if (npc.hidden)
+        continue;
+      const def = sprites?.[npc.def.sprite];
+      const frames = def?.frames ?? 6;
+      const walker = def?.walker ?? frames > 1;
+      const phase = npc.walkPhase();
+      const f = npc.facing;
+      this.put(npc.def.sprite, npc.px, npc.py - (npc.lift ?? 0), frames <= 1 ? 0 : phase === 1 && walker ? WALK2[f] : STAND2[f], frames > 1 && (f === "right" || (f === "down" || f === "up") && phase === 1 && npc.stepFlip));
+    }
+    if (this.slots.size !== this.loadsSize) {
+      this.loadsSize = this.slots.size;
+      const loads = [{ dest: 256, sheet: "terrain", first: 0, count: 128, map: map.def.index }];
+      for (const [sheet, slot] of this.slots) {
+        loads.push({ dest: slot * SHEET_TILES, sheet: `sprite:${sheet}`, first: 0, count: SHEET_TILES, wide: 2, stride: SPRITE_PAGE_TILES });
+      }
+      v.loads = loads;
+    }
+    const pal = game.data.mapPalette?.[map.id];
+    const name = typeof pal === "number" && pal >= 0 ? `#${pal}` : "grey";
+    const c = v.colours;
+    if (c.bg !== name)
+      v.colours = { bg: name, obj0: name, obj1: name };
+    v.bgp = 228;
+    v.obp0 = 228;
+    v.obp1 = 228;
+    return v;
+  }
+  loadsSize = -1;
+  oamN = 0;
+  camX = 0;
+  camY = 0;
+  put(sheet, px2, py, frame2, mirror) {
+    const sx2 = Math.round(px2) - this.camX;
+    const sy2 = Math.round(py) - this.camY - 4;
+    if (sx2 <= -16 || sy2 <= -16 || sx2 >= 160 || sy2 >= 144)
+      return;
+    let slot = this.slots.get(sheet);
+    if (slot === undefined) {
+      if (this.slots.size >= SHEETS_MAX)
+        return;
+      slot = this.slots.size;
+      this.slots.set(sheet, slot);
+    }
+    const oam = this.video.oam;
+    const base = slot * SHEET_TILES + frame2 * 4;
+    const attr = mirror ? OAM_ATTR.xFlip : 0;
+    for (let r = 0;r < 2; r++) {
+      for (let c = 0;c < 2; c++) {
+        if (this.oamN >= 40)
+          return;
+        const o = this.oamN++ * 4;
+        oam[o] = sy2 + r * 8 + OAM_Y_OFS & 255;
+        oam[o + 1] = sx2 + c * 8 + OAM_X_OFS & 255;
+        oam[o + 2] = base + r * 2 + (mirror ? 1 - c : c);
+        oam[o + 3] = attr;
+      }
+    }
+  }
+}
+function sameBlocks(a, b) {
+  if (!b || a.length !== b.length)
+    return false;
+  for (let i = 0;i < a.length; i++)
+    if (a[i] !== b[i])
+      return false;
+  return true;
+}
+function buildTiles(map) {
+  const def = map.def;
+  const w = def.width * 4 + PAD2 * 2;
+  const h = def.height * 4 + PAD2 * 2;
+  const ids = new Uint8Array(w * h);
+  const tsBlocks = map.tileset.blocks;
+  const pb = PAD2 / 4;
+  for (let by = -pb;by < def.height + pb; by++) {
+    for (let bx = -pb;bx < def.width + pb; bx++) {
+      const block = tsBlocks[map.blockAt(bx, by)];
+      if (!block)
+        continue;
+      const x0 = (bx + pb) * 4;
+      const y0 = (by + pb) * 4;
+      for (let r = 0;r < 4; r++) {
+        const o = (y0 + r) * w + x0;
+        ids[o] = block[r * 4] & 127;
+        ids[o + 1] = block[r * 4 + 1] & 127;
+        ids[o + 2] = block[r * 4 + 2] & 127;
+        ids[o + 3] = block[r * 4 + 3] & 127;
+      }
+    }
+  }
+  return { map, w, h, ids, blocks: [...def.blocks ?? []] };
+}
+function writeWindow(maps, t, map, tx0, ty0) {
+  const x = tx0 + PAD2;
+  const y = ty0 + PAD2;
+  const inside = x >= 0 && y >= 0 && x + COLS2 <= t.w && y + ROWS10 <= t.h;
+  const col = tx0 & 31;
+  const first = Math.min(COLS2, 32 - col);
+  for (let r = 0;r < ROWS10; r++) {
+    const row = (ty0 + r & 31) * 32;
+    if (inside) {
+      const src = (y + r) * t.w + x;
+      maps.set(t.ids.subarray(src, src + first), row + col);
+      if (first < COLS2)
+        maps.set(t.ids.subarray(src + first, src + COLS2), row);
+    } else {
+      for (let c = 0;c < COLS2; c++)
+        maps[row + (tx0 + c & 31)] = map.tileAt(tx0 + c, ty0 + r) & 127;
+    }
+  }
+}
+
 // voxelmon/game/game.ts
 var NICKNAME_LEN = 10;
 var SAVE_HOLD = 120;
@@ -27584,6 +28399,15 @@ ${mname}!`);
     });
   }
   pic() {
+    const pics = this.picFor();
+    if (this.overworld2d() && (!Array.isArray(pics) || pics.length === 0)) {
+      const black = namedPage(this.data, "picIntro", "black");
+      if (black >= 0)
+        return [{ page: black, x: 0, y: 0, w: VIEW_W, h: VIEW_H }];
+    }
+    return pics;
+  }
+  picFor() {
     let top2 = this.stack[this.stack.length - 1];
     const under = this.stack[this.stack.length - 2];
     if (top2?.kind === "textbox" && under?.kind === "evolution")
@@ -28757,8 +29581,21 @@ here.`, onDone);
   }
   gb() {
     const top2 = this.stack[this.stack.length - 1];
-    return top2?.kind === "surfing" ? top2.video() : null;
+    if (top2?.kind === "surfing")
+      return top2.video();
+    if (this.overworld2d())
+      return (this.view2dRenderer ??= new OverworldView2d).build(this);
+    return null;
   }
+  overworld2d() {
+    if (!this.view2d() || this.battleView())
+      return false;
+    const top2 = this.stack[this.stack.length - 1];
+    if (!top2 || top2.kind === "title" || top2.kind === "intro" || top2.kind === "surfing")
+      return false;
+    return !!this.overworld?.map;
+  }
+  view2dRenderer = null;
   startSurfingMinigame(selectQuits, onDone) {
     this.push(new SurfingState(this, selectQuits, () => {
       this.restoreMapMusic();
@@ -28830,6 +29667,12 @@ to {RAM:wNameBuffer}?`).replace(/\{RAM:wNameBuffer\}/g, defaultName).replace(/\{
   uiChoice() {
     const top2 = this.stack[this.stack.length - 1];
     return top2?.kind === "choice" ? top2 : null;
+  }
+  battle2d() {
+    return is2d(this.save.options?.battleView);
+  }
+  view2d() {
+    return is2d(this.save.options?.view);
   }
   battleView() {
     for (let i = this.stack.length - 1;i >= 0; i--) {
@@ -28994,8 +29837,8 @@ class QuickJsHost {
   gbShow(on) {
     native.gbShow?.(on);
   }
-  gbTiles(dest, page, first, count2) {
-    native.gbTiles?.(dest, page, first, count2);
+  gbTiles(dest, page, first, count2, wide = 0, stride = 0, map = 0) {
+    native.gbTiles?.(dest, page, first, count2, wide, stride, map);
   }
   gbReset() {
     native.gbReset?.();
@@ -29065,6 +29908,7 @@ var SEED = 17;
 var host = new QuickJsHost;
 var source = JSON.parse(native.gamedata());
 var game = new VoxelmonGame(fromObject(source), host, SEED);
+globalThis.voxelmonGame = game;
 game.setAudioFromPak();
 game.boot();
 var nat = native;
