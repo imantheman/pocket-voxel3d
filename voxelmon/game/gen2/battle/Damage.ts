@@ -60,6 +60,8 @@ export interface DamageOpts {
   itemBoostPercent?: number;
   /** DoWeatherModifiers in tenths (15 / 5 / nil) */
   weatherPercent?: number;
+  /** STRUGGLE: BattleCommand_Stab returns before weather, badge, STAB and types */
+  typeless?: boolean;
   /** DoBadgeTypeBoosts: +1/8 before STAB */
   badgeTypeBoost?: boolean;
   /** 85..100; omit to roll */
@@ -307,6 +309,21 @@ export const Damage = {
     // values are tenths (weather_modifiers.asm: MORE_EFFECTIVE 15,
     // NOT_VERY_EFFECTIVE 05), and .ApplyModifier's zero-quotient arm forces the
     // result back to 1, so a weather-halved hit never falls to nothing.
+    // STRUGGLE: BattleCommand_Stab's first test is `cp STRUGGLE / ret z`
+    // (effect_commands.asm), ahead of the weather, the badge boost, STAB and
+    // the type rows -- so it is never boosted, never resisted, and hits a
+    // GHOST: wTypeModifier stays at EFFECTIVE.
+    if (opts.typeless) {
+      let variation = opts.variation;
+      if (variation == null) {
+        variation = opts.random
+          ? Damage.MIN_VARIATION + opts.random(Damage.MAX_VARIATION - Damage.MIN_VARIATION + 1)
+          : luaRandom(Damage.MIN_VARIATION, Damage.MAX_VARIATION);
+      }
+      if (damage >= 2) damage = Math.floor((damage * variation) / 100);
+      damage = Math.max(1, Math.min(Damage.MAX_DAMAGE, damage));
+      return [damage, withGen1Names({ effectiveness: 10, critical: opts.critical ?? false, physical, stab: false, variation })];
+    }
     if (opts.weatherPercent != null && opts.weatherPercent !== 10) {
       damage = Math.max(1, Math.floor((damage * opts.weatherPercent) / 10));
     }

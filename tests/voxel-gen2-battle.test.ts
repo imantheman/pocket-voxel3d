@@ -165,6 +165,23 @@ d("gen2 battle: damage formula", () => {
     expect(Damage.calc({ ...opts, critical: true })[0]).toBe(135);
   });
 
+  test("STRUGGLE skips STAB and the type chart, so it hits a GHOST", () => {
+    // BattleCommand_Stab opens with `cp STRUGGLE / ret z`: the same hand
+    // sum as above stops at 46 (no STAB) and the GHOST row never applies.
+    const opts: any = {
+      level: 50, power: 80, moveType: "NORMAL", typeless: true,
+      attacker: { attack: 100, specialAttack: 50, types: ["NORMAL"], stages: {} },
+      defender: { defense: 80, specialDefense: 80, types: ["GHOST", "POISON"], stages: {} },
+      types: DATA.type_chart.types, matchups: DATA.type_chart.matchups,
+      variation: 100,
+    };
+    const [dmg, info] = Damage.calc(opts);
+    expect(dmg).toBe(46);
+    expect(info.effectiveness).toBe(10);
+    // without the exemption the same NORMAL hit does not affect a GHOST
+    expect(Damage.calc({ ...opts, typeless: false })[0]).toBe(0);
+  });
+
   test("a special hit into a double weakness (Steel)", () => {
     // FIRE is special in Gen 2. 22*90 = 1980; *120 = 237600; /100 = 2376;
     //   /50 = 47; +2 = 49; STAB floor(49*1.5) = 73;

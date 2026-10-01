@@ -1276,6 +1276,8 @@ export class Battle {
       screen: this.screenActive(defender, Damage.isPhysical(def.type, types)),
       // BattleCommand_DamageCalc's `srl c` (effect_commands.asm:2905-2913).
       defenseHalved: def.effect === "EFFECT_SELFDESTRUCT",
+      // BattleCommand_Stab's `cp STRUGGLE / ret z`: no type, no STAB.
+      typeless: (opts.moveId ?? def.id) === Battle.STRUGGLE,
       random: this.random,
     };
     // battle.damage, the same hook BattleState:computeDamage calls on Gen 1 and
