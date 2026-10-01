@@ -68,7 +68,7 @@ static const char *OPS[] = {
     "music", "musicStop", "musicFade", "sfx", "cry", "audioWaves", "audioDrum", "pikaPcm",
     "gbShow", "gbTiles", "gbReset", "gbRegs", "gbColours", "gbMap", "gbLines", "gbOam",
     "lcdShow", "lcdBank", "lcdReset", "lcdRegs", "lcdCells", "lcdObjs", "lcdPals", "lcdLines", "daytime",
-    "lcdUnder", "lcdUnderRow", "lcdUnderAt", "flatWorld", "tiltShift", NULL,
+    "lcdUnder", "lcdUnderRow", "lcdUnderAt", "flatWorld", "tiltShift", "lcdAlias", NULL,
 };
 
 static void dump_exception(JSContext *ctx) {

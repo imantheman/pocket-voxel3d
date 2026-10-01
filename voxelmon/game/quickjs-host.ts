@@ -115,6 +115,8 @@ export interface VoxelNative {
   lcdUnderAt?(on: number, x: number, y: number): void;
   /** voxel-spec.ts flatWorld: the 3D world is not seen; build no meshes. */
   flatWorld?(on: number): void;
+  /** voxel-spec.ts lcdAlias: the under layer's tile `from` drawn as `to`. */
+  lcdAlias?(slot: number, from: number, to: number): void;
   daytime?(k: number): void;
   /** spec `tiltShift`: 0 off, 1 soft, 2 strong. */
   tiltShift?(level: number): void;
@@ -369,6 +371,9 @@ export class QuickJsHost implements VoxelHost {
   }
   flatWorld(on: number): void {
     native.flatWorld?.(on);
+  }
+  lcdAlias(slot: number, from: number, to: number): void {
+    native.lcdAlias?.(slot, from, to);
   }
   daytime(k: number): void {
     native.daytime?.(k);

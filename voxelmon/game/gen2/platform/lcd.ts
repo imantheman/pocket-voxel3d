@@ -392,6 +392,22 @@ export class Lcd {
   private underKey: unknown = null;
   private sentUnder = "0";
 
+  /**
+   * The under layer's tile `from` drawn as `to` (an animation's frame);
+   * from < 0 empties the slot. Sent when it changes.
+   */
+  alias(slot: number, from: number, to: number): void {
+    if (slot < 0 || slot >= 16) return;
+    const f = from < 0 ? -1 : from & 0xffff;
+    const t = from < 0 ? 0 : to & 0xffff;
+    if (this.aliasFrom[slot] === f && this.aliasTo[slot] === t) return;
+    this.aliasFrom[slot] = f;
+    this.aliasTo[slot] = t;
+    this.host.lcdAlias?.(slot, f, t);
+  }
+  private readonly aliasFrom = new Int32Array(16).fill(-1);
+  private readonly aliasTo = new Int32Array(16);
+
   /** Show the under layer this frame, its pixel (x, y) at the top-left. */
   underAt(x: number, y: number): void {
     this.s.underOn = true;
@@ -557,6 +573,8 @@ export class Lcd {
     this.sentLines = "\0";
     // lcdReset drops the core's under layer: upload it again when next asked
     this.underKey = null;
+    this.aliasFrom.fill(-1);
+    this.aliasTo.fill(0);
     this.sentUnder = "0";
     this.host.lcdReset?.();
   }

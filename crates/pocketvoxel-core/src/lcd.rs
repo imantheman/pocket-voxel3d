@@ -38,6 +38,8 @@ pub const LCD_OBJS_MAX: usize = 128;
 pub const LCD_COLOURS: usize = 128;
 /// A pixel no layer covers: the host leaves it transparent.
 pub const LCD_HOLE: u8 = 0xff;
+/// `lcdAlias` slots.
+pub const LCD_ALIASES: usize = 16;
 
 /// Cell attribute bits (the CGB BG attribute byte, bank bit reused as
 /// palette bit 3 and the unused bit 4 as the hole).
@@ -102,6 +104,10 @@ pub struct LcdScreen {
     pub under_on: bool,
     pub under_x: i32,
     pub under_y: i32,
+    /// `lcdAlias`: the under layer's tile `.0` draws as `.1` (animation);
+    /// `alias_n` slots from the front may be in use, u16::MAX marks empty.
+    pub aliases: [(u16, u16); LCD_ALIASES],
+    pub alias_n: usize,
     /// Bumped by every op that changes what is drawn.
     pub serial: u32,
 }
@@ -132,6 +138,8 @@ impl Default for LcdScreen {
             under_on: false,
             under_x: 0,
             under_y: 0,
+            aliases: [(u16::MAX, 0); LCD_ALIASES],
+            alias_n: 0,
             serial: 0,
         }
     }
@@ -266,6 +274,18 @@ impl LcdScreen {
                     self.under[base + x] = (v >> 8) as u16;
                     self.under_attr[base + x] = v as u8;
                 }
+            }
+            op::LCD_ALIAS => {
+                let slot = a(0);
+                if !(0..LCD_ALIASES as i32).contains(&slot) {
+                    return false;
+                }
+                let want = if a(1) < 0 { (u16::MAX, 0) } else { (a(1).min(0xfffe) as u16, a(2).clamp(0, 0xffff) as u16) };
+                if self.aliases[slot as usize] == want {
+                    return true;
+                }
+                self.aliases[slot as usize] = want;
+                self.alias_n = self.aliases.iter().rposition(|x| x.0 != u16::MAX).map_or(0, |i| i + 1);
             }
             op::LCD_UNDER_AT => {
                 let (on, x, y) = (a(0) != 0 && self.under_w > 0, a(1), a(2));
@@ -407,7 +427,14 @@ impl LcdScreen {
                             let ua = self.under_attr[j];
                             if ua & ATTR_HOLE == 0 {
                                 let ty = if ua & ATTR_Y_FLIP != 0 { 7 - upy } else { upy };
-                                let r = fetch(self.under[j], ty);
+                                let mut id = self.under[j];
+                                for al in &self.aliases[..self.alias_n] {
+                                    if al.0 == id {
+                                        id = al.1;
+                                        break;
+                                    }
+                                }
+                                let r = fetch(id, ty);
                                 let (base, pri, flip) = ((ua & ATTR_PAL) * 4, ua & ATTR_PRIORITY != 0, ua & ATTR_X_FLIP != 0);
                                 for q in 0..run {
                                     let px = px0 + q;
@@ -548,6 +575,12 @@ mod tests {
         // a cell over it covers it
         lcd.op(op::LCD_CELLS, &[0], Some("000303"));
         assert_eq!(frame(&lcd)[0], 3 * 4 + 3);
+        // an alias draws the layer's tile 2 as tile 3 (an animation's frame)
+        lcd.op(op::LCD_CELLS, &[0], Some("000010"));
+        lcd.op(op::LCD_ALIAS, &[5, 2, 3], None);
+        assert_eq!(frame(&lcd)[0], 3);
+        lcd.op(op::LCD_ALIAS, &[5, -1, 0], None);
+        assert_eq!(frame(&lcd)[0], 2);
         // and lcdReset drops it
         lcd.op(op::LCD_RESET, &[], None);
         assert!(frame(&lcd).iter().all(|&p| p == LCD_HOLE));

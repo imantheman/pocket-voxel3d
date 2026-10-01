@@ -20,8 +20,11 @@
 // Past the map's edge the connected maps show, their blocks in this map's
 // tileset as the cart draws its connection strips (placed as
 // World.computeNeighbors places them); the border block elsewhere.
-// Not yet: animated tiles (water, flowers) stand still, and tall grass does
-// not cover a sprite's feet.
+// The water and flowers move: each animated tile's under cells are aliased
+// (lcd.ts alias, lcd.rs) to its frame strip's row for the step, as
+// World.animRow says -- one op a step, not a re-upload. (Not the "scroll"
+// kind, which rotates pixels a tile id cannot.)
+// Not yet: tall grass does not cover a sprite's feet.
 
 import { Assets } from "../shared/render/Assets.ts";
 import { Palettes } from "../world/Palettes.ts";
@@ -60,6 +63,8 @@ interface MapTiles {
   ph: number;
   ids: Uint16Array;
   pal: Uint8Array;
+  /** tileset tile -> screen tile id, as the cells were built */
+  idOf: (tile: number) => number;
 }
 
 let cached: MapTiles | null = null;
@@ -86,7 +91,7 @@ function tilesFor(world: any, map: any, key: string): MapTiles | null {
       pal[y * pw + x] = palOf(tile);
     }
   }
-  cached = { key, map, version: map.version ?? 0, pw, ph, ids, pal };
+  cached = { key, map, version: map.version ?? 0, pw, ph, ids, pal, idOf };
   return cached;
 }
 
@@ -156,6 +161,23 @@ export function drawMap2D(world: any, data: any): boolean {
   // the map: the under layer (sent once per cache), at the camera
   lcd.under(t, t.ids, t.pal, t.pw, t.ph);
   lcd.underAt(camX + PAD * 8, camY + PAD * 8);
+  // the water and flowers: each animated tile drawn as this step's frame
+  let slot = 0;
+  const anim = world.animCells?.[key];
+  if (anim) {
+    for (const k in anim) {
+      const list = anim[k];
+      const layer = list?.layer;
+      if (!layer?.sheet || layer.kind === "scroll" || slot >= 16) continue;
+      const strip = image(layer.sheet);
+      if (!strip) continue;
+      const row = (world.animRow(layer) ?? 1) - 1;
+      const to = strip.ids[row * strip.tw];
+      if (to === undefined) continue;
+      lcd.alias(slot++, t.idOf(list.tile), to);
+    }
+  }
+  for (; slot < 16; slot++) lcd.alias(slot, -1, 0);
 
   // The people, from the same list the voxel view stands up (World's
   // peopleView): OBJ sprites, the Y-sorted list's later entries on top (a

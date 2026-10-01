@@ -29954,6 +29954,9 @@ class QuickJsHost {
   flatWorld(on) {
     native.flatWorld?.(on);
   }
+  lcdAlias(slot, from, to) {
+    native.lcdAlias?.(slot, from, to);
+  }
   daytime(k) {
     native.daytime?.(k);
   }

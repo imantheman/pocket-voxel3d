@@ -894,6 +894,14 @@ export const VOX_OP = {
    *   flatWorld(on)
    */
   flatWorld: 111,
+  /**
+   * The under layer's tile aliases (Gold VIEW 2D's water and flowers): the
+   * under layer's tile `from` draws as tile `to`, so an animation step is
+   * one op, not a re-upload of every water cell. Sixteen slots; from < 0
+   * empties the slot. Cleared by lcdReset.
+   *   lcdAlias(slot, from, to)
+   */
+  lcdAlias: 112,
 } as const;
 
 /** Clips in Yellow's PikachuCriesPointerTable (NUM_PIKA_CRIES). */
