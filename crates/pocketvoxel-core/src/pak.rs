@@ -430,6 +430,20 @@ impl<'a> Pak<'a> {
             .map(|i| i as u16)
     }
 
+    /// Where this pak's own colour tail starts: the lowest VPAL index any
+    /// VCOL record names (a map's world palette, a page's CLUT). Everything
+    /// below it is the table every pak of a cook shares -- the kind defaults
+    /// and the SGB set -- and everything from it on is this pak's own (the
+    /// RED++ tail differs from map to map). `None` when the pak names none.
+    pub fn colour_tail_start(&self) -> Option<usize> {
+        let maps = self.color.maps.iter().map(|m| m.world_pal);
+        let pages = self.color.pages.iter().copied();
+        maps.chain(pages)
+            .filter(|&i| i != COLOR_PAL_NONE)
+            .map(|i| i as usize)
+            .min()
+    }
+
     /// The map's RED++ world palette (VPAL index): the CLUT its terrain,
     /// water, grass and flower meshes sample. `None` = the legacy path.
     pub fn map_world_pal(&self, map_id: u32) -> Option<u16> {
@@ -1149,6 +1163,21 @@ impl AlignedBlob {
     }
 }
 
+/// A version overlay's palettes laid over a pak's table (the 3DS host's
+/// apply_overlay): Blue's SGB set over Red's, say. Only the shared prefix --
+/// never past `tail_start`, where the pak's own per-map colours begin, which
+/// one pak's copy laid over another's would recolour (every Red/Blue map
+/// drawn in Agatha's Room's palette). An overlay longer than the pak's table
+/// is someone else's cook and is left alone.
+pub fn overlay_palettes(dst: &mut [[u32; 256]], src: &[[u32; 256]], tail_start: Option<usize>) -> usize {
+    if src.is_empty() || src.len() > dst.len() {
+        return 0;
+    }
+    let n = src.len().min(tail_start.unwrap_or(dst.len()));
+    dst[..n].copy_from_slice(&src[..n]);
+    n
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::builder::PakBuilder;
@@ -1292,6 +1321,11 @@ pub(crate) mod tests {
         assert_eq!(pak.page_pal(1), Some(COLORED_OBJ_PAL));
         assert_eq!(pak.page_pal(0), None, "terrain takes its CLUT per map");
         assert_eq!(pak.page_pal(99), None, "out-of-range page is None");
+        assert_eq!(
+            pak.colour_tail_start(),
+            Some(COLORED_WORLD_PAL.min(COLORED_OBJ_PAL) as usize),
+            "the tail starts at the lowest index a binding names"
+        );
 
         // A pak cooked without the color pack carries the section with every
         // index NONE — every lookup falls through to the legacy path.
@@ -1302,6 +1336,33 @@ pub(crate) mod tests {
         assert_eq!(pak.color.pages.len(), 3);
         assert_eq!(pak.map_world_pal(7), None);
         assert_eq!(pak.page_pal(0), None);
+        assert_eq!(pak.colour_tail_start(), None, "no bindings, no tail");
+    }
+
+    #[test]
+    fn overlay_palettes_keep_each_paks_own_tail() {
+        let pal = |v: u32| [v; 256];
+        // a pak: 2 shared entries, then its own tail from index 2
+        let mut dst = vec![pal(1), pal(2), pal(30), pal(31)];
+        // a version overlay cooked from ANOTHER map's pak: the same shared
+        // prefix with Blue's changes, and that map's tail after it
+        let src = vec![pal(10), pal(20), pal(90), pal(91)];
+        assert_eq!(overlay_palettes(&mut dst, &src, Some(2)), 2);
+        assert_eq!(dst, vec![pal(10), pal(20), pal(30), pal(31)], "the tail stays the pak's");
+        // an overlay carrying only the prefix
+        let mut dst = vec![pal(1), pal(2), pal(30)];
+        assert_eq!(overlay_palettes(&mut dst, &[pal(10), pal(20)], Some(2)), 2);
+        assert_eq!(dst, vec![pal(10), pal(20), pal(30)]);
+        // a pak with no colour tail takes the whole overlay
+        let mut dst = vec![pal(1), pal(2)];
+        assert_eq!(overlay_palettes(&mut dst, &[pal(10), pal(20)], None), 2);
+        assert_eq!(dst, vec![pal(10), pal(20)]);
+        // an overlay longer than the table is another cook's: untouched
+        let mut dst = vec![pal(1)];
+        assert_eq!(overlay_palettes(&mut dst, &[pal(10), pal(20)], None), 0);
+        assert_eq!(dst, vec![pal(1)]);
+        // nothing to lay over
+        assert_eq!(overlay_palettes(&mut dst, &[], None), 0);
     }
 
 

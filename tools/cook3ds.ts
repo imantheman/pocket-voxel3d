@@ -27,6 +27,7 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, write
 import { join } from "node:path";
 
 import { cook, lcdTilesFor } from "../voxelmon/cook/cli.ts";
+import { paletteBase } from "../voxelmon/cook/atlas.ts";
 import { gen2AudioManifest } from "../voxelmon/cook/gen2audio.ts";
 import { writeGen2Container } from "../voxelmon/game/gen2/platform/container.ts";
 import { GEN_DIR, genMissingReason, loadGen, ROOT } from "../voxelmon/cook/data.ts";
@@ -180,7 +181,7 @@ export function writeOverlay(
   pages: number[],
   out: string,
   pika?: Buffer,
-  opts: { palettes?: boolean } = {},
+  opts: { palettes?: boolean; paletteCount?: number } = {},
 ): number {
   const pakName = readFileSync(join(paksDir, "index.txt"), "utf8").split("\n")[0]!.split(" ")[1]!;
   const d = readFileSync(join(paksDir, `${pakName}.vxpak`));
@@ -198,7 +199,21 @@ export function writeOverlay(
   // Gold's palette table differs from pak to pak (each map's VCOL tail is its
   // own), so one pak's copy laid over the others would recolour them: Gold's
   // overlay carries none, and every pak keeps the table it was cooked with.
-  const vpal = opts.palettes === false ? Buffer.alloc(0) : (section.VPAL ?? Buffer.alloc(0));
+  //
+  // Red's and Blue's tables share their first `paletteCount` entries (the
+  // kind defaults and the SGB set -- where Blue's logo and slot palettes
+  // differ) and then each pak's own RED++ tail, map by map. The overlay
+  // carries the shared part only: a whole table copied from one pak (it was
+  // AGATHAS_ROOM's, the first in index.txt) drew every map in that room's
+  // colours. The host never lays it past a pak's own tail either.
+  let vpal = opts.palettes === false ? Buffer.alloc(0) : (section.VPAL ?? Buffer.alloc(0));
+  if (vpal.length >= 2 && opts.paletteCount !== undefined) {
+    const n = Math.min(vpal.readUInt16LE(0), opts.paletteCount);
+    const cut = Buffer.alloc(2 + n * 1024);
+    cut.writeUInt16LE(n, 0);
+    vpal.copy(cut, 2, 2, 2 + n * 1024);
+    vpal = cut;
+  }
   const audi = section.AUDI ?? Buffer.alloc(0);
   if (atls < 0) throw new Error(`no ATLS section in ${pakName}.vxpak`);
   const n = d.readUInt16LE(atls);
@@ -434,7 +449,10 @@ export async function cook3ds(only?: string[]): Promise<number> {
   const own = versionPages(merged);
   const pikaPath = join(GEN_DIR, "pika_cries.bin");
   const pika = existsSync(pikaPath) ? readFileSync(pikaPath) : undefined;
-  const n = writeOverlay(PAKS, own, join(PAKS, files.overlay), pika, { palettes: version !== "gold" });
+  const n = writeOverlay(PAKS, own, join(PAKS, files.overlay), pika, {
+    palettes: version !== "gold",
+    paletteCount: version !== "gold" ? paletteBase(loadGen(GEN_DIR)) : undefined,
+  });
   console.log(
     `  ${files.overlay}: pages ${own.join(", ")} + palettes + sound${pika ? " + Pikachu's voice" : ""} (${n} bytes)`,
   );

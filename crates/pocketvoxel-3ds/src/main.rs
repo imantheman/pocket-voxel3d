@@ -303,10 +303,11 @@ fn apply_overlay(p: &mut pak::Pak<'static>) {
             }
         }
     }
+    // Only the shared prefix (the kind defaults and the SGB set): the pak's
+    // own per-map colour tail stays its own (pak::overlay_palettes).
     let pals = unsafe { &OVERLAY_PALETTES };
-    if !pals.is_empty() && pals.len() == p.palettes.len() {
-        p.palettes.clone_from(pals);
-    }
+    let tail = p.colour_tail_start();
+    pak::overlay_palettes(&mut p.palettes, pals, tail);
 }
 
 #[allow(static_mut_refs)]
