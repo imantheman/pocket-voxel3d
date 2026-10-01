@@ -4,7 +4,7 @@
 import { VOX_BTN } from "../contracts/spec/voxel-spec.ts";
 import { Mon } from "../voxelmon/game/gen2/battle/Mon.ts";
 import {
-  aFacing, withAnswer, dropBoulders, pokegearRadio, fail, healIfLow, useOn, badges, can, canReach, chapters, describe, reach, engine, expect, flag, game, hasItem, log, npc, partySpecies, save, settle, talk, travel, use, walk, walkTo,
+  aFacing, frames, pace, withAnswer, dropBoulders, pokegearRadio, fail, healIfLow, useOn, badges, can, canReach, chapters, describe, reach, engine, expect, flag, game, hasItem, log, npc, partySpecies, save, settle, talk, travel, use, walk, walkTo,
 } from "./gold_story.ts";
 
 const chapter = (name: string, run: () => void): void => {
@@ -224,14 +224,13 @@ chapter("12b the RADIO CARD: the Radio Tower's quiz", () => {
         k++;
       }
       const want = answers[k] ?? 1;
-      if (game.frames % 6 !== 0 && (frameTick++ % 6) !== 0) return 0;
+      if (frames % 6 !== 0) return 0;
       return top.index === want ? VOX_BTN.a : want === 2 ? VOX_BTN.down : VOX_BTN.up;
     }, () => use(12, 6, "the quiz lady"));
     settle();
   }
   expect(engine("ENGINE_RADIO_CARD"), "the RADIO CARD");
 });
-let frameTick = 0;
 
 chapter("13 the SQUIRTBOTTLE from the flower shop", () => {
   // Gold's shop asks only for the PLAINBADGE (Floria's errand is Crystal's)
@@ -686,6 +685,84 @@ chapter("47 Mt. Silver: RED", () => {
   log(`     after RED: ${describe()} red-in-silver ${flag("EVENT_RED_IN_MT_SILVER")}`);
   void beat;
   expect(!(game.world.npcs ?? []).some((n: any) => !n.hidden && n.def?.sprite === "SPRITE_RED") || here() !== "SILVER_CAVE_ROOM_3", "RED beaten");
+});
+
+// ---- after RED: the side of the game the critical path walks past ----
+
+chapter("48 the Copycat's doll, the PASS, the Magnet Train to Goldenrod", () => {
+  if (!flag("EVENT_GOT_PASS_FROM_COPYCAT")) {
+    // the Copycat (4, 3) has lost her doll; the Fan Club's fisher (2, 3)
+    // found it; back to her, and the PASS
+    travel("COPYCATS_HOUSE_2F");
+    if (!flag("EVENT_MET_COPYCAT_FOUND_OUT_ABOUT_LOST_ITEM")) use(4, 3, "the Copycat");
+    expect(flag("EVENT_MET_COPYCAT_FOUND_OUT_ABOUT_LOST_ITEM"), "the Copycat's lost doll told of");
+    travel("POKEMON_FAN_CLUB");
+    if (!flag("EVENT_GOT_LOST_ITEM_FROM_FAN_CLUB")) use(2, 3, "the Fan Club's fisher");
+    expect(flag("EVENT_GOT_LOST_ITEM_FROM_FAN_CLUB"), "the LOST ITEM from the Fan Club");
+    travel("COPYCATS_HOUSE_2F");
+    use(4, 3, "the Copycat");
+    settle();
+  }
+  expect(flag("EVENT_GOT_PASS_FROM_COPYCAT") && hasItem("PASS"), "the PASS");
+  // the officer behind the counter (9, 9): the ride, YES
+  travel("SAFFRON_MAGNET_TRAIN_STATION");
+  use(9, 9, "the station officer");
+  settle();
+  expect(here() === "GOLDENROD_MAGNET_TRAIN_STATION", `off the Magnet Train in Goldenrod (at ${describe()})`);
+});
+
+/** Pick the party's `nth` mon of `species` when a party menu asks (deposits). */
+function pickMon(species: string): (top: any) => number | undefined {
+  return (top) => {
+    if (top?.screenId !== "Gen2PartyMenu") return undefined;
+    const party: any[] = top.party ?? save().party ?? [];
+    const want = party.findIndex((m: any) => m?.species === species) + 1;
+    if (want <= 0 || frames % 6 !== 0) return 0;
+    if (top.submenu) return VOX_BTN.a;
+    return top.index < want ? VOX_BTN.down : top.index > want ? VOX_BTN.up : VOX_BTN.a;
+  };
+}
+
+chapter("49 the Day-Care: an egg, and hatching it", () => {
+  const party = save().party;
+  const eggs = (): number => party.filter((m: any) => m?.isEgg || m?.egg).length;
+  const hatched0 = party.filter((m: any) => m?.species === "PIDGEY" && !(m.isEgg || m.egg)).length;
+  if (!engine("ENGINE_DAY_CARE_MAN_HAS_MON") && !engine("ENGINE_DAY_CARE_MAN_HAS_EGG")) {
+    // a DITTO and a PIDGEY for the couple (DITTO breeds with anything; their
+    // DVs must differ, or the pair reads as one mon twice -- compatibility
+    // 255, no eggs, as on the cart)
+    while (party.length > 4) party.pop();
+    party.push(Mon.new(game.data, "DITTO", 20, { dvs: perfect() }), Mon.new(game.data, "PIDGEY", 20, {}));
+    // he starts out by the fence on Route 34 (his inside self hidden by
+    // EVENT_DAY_CARE_MAN_IN_DAY_CARE); spoken to there, he goes in
+    if (flag("EVENT_DAY_CARE_MAN_IN_DAY_CARE")) {
+      travel("ROUTE_34");
+      use(15, 16, "the Day-Care man by the fence");
+      settle();
+    }
+    travel("DAY_CARE");
+    withAnswer(pickMon("DITTO"), () => use(2, 3, "the Day-Care man"));
+    settle();
+    expect(engine("ENGINE_DAY_CARE_MAN_HAS_MON"), "DITTO left with the Day-Care man");
+    withAnswer(pickMon("PIDGEY"), () => use(5, 3, "the Day-Care lady"));
+    settle();
+    expect(engine("ENGINE_DAY_CARE_LADY_HAS_MON"), "PIDGEY left with the Day-Care lady");
+  }
+  // out on Route 34 the man waits by the fence (15, 16) once there is an egg
+  travel("ROUTE_34");
+  reach("ROUTE_34", 8, 13);
+  const steps = pace(30000, () => engine("ENGINE_DAY_CARE_MAN_HAS_EGG"));
+  log(`     ${steps} steps for an egg`);
+  expect(engine("ENGINE_DAY_CARE_MAN_HAS_EGG"), "an egg at the Day-Care");
+  const before = eggs();
+  use(15, 16, "the Day-Care man by the fence");
+  settle();
+  expect(eggs() > before, `the egg in the party (${partySpecies().join(" ")})`);
+  // and walked until it hatches (PIDGEY: 15 cycles of 256 steps)
+  const hatched = (): boolean => party.filter((m: any) => m?.species === "PIDGEY" && !(m.isEgg || m.egg)).length > hatched0;
+  const hsteps = pace(8000, hatched);
+  log(`     ${hsteps} steps to hatch: ${partySpecies().join(" ")}`);
+  expect(hatched(), "the egg hatched");
 });
 
 void describe;

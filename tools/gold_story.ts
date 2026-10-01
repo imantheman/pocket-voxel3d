@@ -66,6 +66,11 @@ function busy(): boolean {
  *  through text and at YES/NO (YES is the cursor's start), B out of shops. */
 function busyPad(): number {
   const top = screen();
+  // a chapter's own answer comes first (a deposit's party pick, a quiz)
+  if (top && answer) {
+    const b = answer(top);
+    if (b !== undefined) return b;
+  }
   if (top && top.screenId === "Gen2BattleState") {
     const phase: string = top.phase;
     const tick = frames % 4 === 0;
@@ -103,10 +108,6 @@ function busyPad(): number {
   }
   if (top && top.screenId === "Gen2NamingScreen") return frames % 20 === 0 ? VOX_BTN.start : frames % 20 === 10 ? VOX_BTN.a : 0;
   if (top && top.screenId === "Gen2Credits") return frames % 30 === 0 ? VOX_BTN.a : 0;
-  if (top && answer) {
-    const b = answer(top);
-    if (b !== undefined) return b;
-  }
   if (top && /Mart|Shop|PC|Pack|Party|StartMenu|Pokedex|Pokegear/i.test(top.screenId ?? "")) return frames % 10 === 0 ? VOX_BTN.b : 0;
   return frames % 8 === 0 ? VOX_BTN.a : 0;
 }
@@ -391,6 +392,30 @@ function aAt(dir: Dir, done: () => boolean, what: string): void {
     settle();
   }
   if (!done()) fail(`${what} (${describe()})`);
+}
+
+/** Walk back and forth (left and right, or up and down where that is shut)
+ *  until `done` or `steps` steps are taken: the step counter's own work
+ *  (eggs, the Day-Care, POKeRUS). How many steps were taken. */
+export function pace(steps: number, done: () => boolean): number {
+  let taken = 0;
+  let dirs: Dir[] = ["left", "right"];
+  let shut = 0;
+  for (let k = 0; k < steps * 3 && taken < steps && !done(); k++) {
+    settle();
+    const d = dirs[taken % 2]!;
+    const r = press(d);
+    if (r === "moved") {
+      taken++;
+      shut = 0;
+    } else if (r === "blocked") {
+      // a wall that way: the other pair, or the other way round
+      if (++shut > 2) dirs = dirs[0] === "left" ? ["up", "down"] : ["left", "right"];
+      else dirs = [dirs[1]!, dirs[0]!];
+    }
+  }
+  settle();
+  return taken;
 }
 
 /** Face `dir` where the player stands, press A, and let it play out. */
