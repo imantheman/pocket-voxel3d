@@ -17,9 +17,11 @@
 // drawn over it are the only cells. (Copying the window into the cells each
 // frame meant every 8 px of walking re-sent the whole screen.) Sprites keep
 // their sheet and palette per sprite and time of day.
-// Not yet: animated tiles (water, flowers) stand still, tall grass does not
-// cover a sprite's feet, and past the map's edge the border block shows
-// where the cart would show the connected map.
+// Past the map's edge the connected maps show, their blocks in this map's
+// tileset as the cart draws its connection strips (placed as
+// World.computeNeighbors places them); the border block elsewhere.
+// Not yet: animated tiles (water, flowers) stand still, and tall grass does
+// not cover a sprite's feet.
 
 import { Assets } from "../shared/render/Assets.ts";
 import { Palettes } from "../world/Palettes.ts";
@@ -72,20 +74,59 @@ function tilesFor(world: any, map: any, key: string): MapTiles | null {
   const idOf = (tile: number): number =>
     ((roof && tile >= ROOF_FIRST && tile < ROOF_FIRST + ROOF_COUNT ? roof.ids[tile - ROOF_FIRST] : img.ids[tile]) ?? 0) & 0xffff;
   const palOf = (tile: number): number => ((tilePal[tile] ?? 1) - 1) & 7;
-  // tileAt reads the border block off the map, so the margin fills itself
+  // the margin: the connected maps' blocks, else the border block
   const pw = (map.width ?? 0) * 4 + 2 * PAD;
   const ph = (map.height ?? 0) * 4 + 2 * PAD;
   const ids = new Uint16Array(pw * ph);
   const pal = new Uint8Array(pw * ph);
   for (let y = 0; y < ph; y++) {
     for (let x = 0; x < pw; x++) {
-      const tile = map.tileAt(x - PAD, y - PAD) ?? 0;
+      const tile = mapTileAt(world, map, x - PAD, y - PAD);
       ids[y * pw + x] = idOf(tile);
       pal[y * pw + x] = palOf(tile);
     }
   }
   cached = { key, map, version: map.version ?? 0, pw, ph, ids, pal };
   return cached;
+}
+
+/**
+ * The block at (bx, by), map block coordinates, past the edge too: a
+ * connected map's (north at x + offset, y - its height, and so on round),
+ * else the map's own answer (its border block).
+ */
+function blockPast(map: any, maps: Record<string, any> | undefined, bx: number, by: number): number {
+  const w = map.width ?? 0;
+  const h = map.height ?? 0;
+  if (bx >= 0 && by >= 0 && bx < w && by < h) return map.blockId(bx, by);
+  const conns = map.connections as Record<string, { map?: string; mapId?: string; offset?: number }> | undefined;
+  if (conns && maps) {
+    const at = (dir: string, nbx: (d: any, off: number) => number, nby: (d: any, off: number) => number): number => {
+      const c = conns[dir];
+      if (!c) return -1;
+      const d = maps[(c.mapId ?? c.map) as string];
+      if (!d || !Array.isArray(d.blocks)) return -1;
+      const off = c.offset ?? 0;
+      const x = nbx(d, off);
+      const y = nby(d, off);
+      if (x < 0 || y < 0 || x >= d.width || y >= d.height) return -1;
+      return d.blocks[y * d.width + x] ?? -1;
+    };
+    let b = -1;
+    if (by < 0) b = at("north", (_d, off) => bx - off, (d) => by + d.height);
+    if (b < 0 && by >= h) b = at("south", (_d, off) => bx - off, () => by - h);
+    if (b < 0 && bx < 0) b = at("west", (d) => bx + d.width, (_d, off) => by - off);
+    if (b < 0 && bx >= w) b = at("east", () => bx - w, (_d, off) => by - off);
+    if (b >= 0) return b;
+  }
+  return map.blockId(bx, by);
+}
+
+/** The tileset tile at 8 px tile (tx, ty) of `map`, past its edge too
+ *  (blockPast): what the 2D view draws there. */
+export function mapTileAt(world: any, map: any, tx: number, ty: number): number {
+  const block = map.tileset?.blocks?.[blockPast(map, world?.maps, Math.floor(tx / 4), Math.floor(ty / 4))];
+  return block ? block[(ty & 3) * 4 + (tx & 3)] ?? 0 : 0;
 }
 
 // per sheet path: the sheet, and its palette per OBJ palette id and time of day
