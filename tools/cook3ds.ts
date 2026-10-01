@@ -175,7 +175,13 @@ export function versionPages(gd: unknown): number[] {
  * shared page against common.vxat, as pak.rs does), so the overlay is
  * exactly what this game's own cook of the set carries.
  */
-export function writeOverlay(paksDir: string, pages: number[], out: string, pika?: Buffer): number {
+export function writeOverlay(
+  paksDir: string,
+  pages: number[],
+  out: string,
+  pika?: Buffer,
+  opts: { palettes?: boolean } = {},
+): number {
   const pakName = readFileSync(join(paksDir, "index.txt"), "utf8").split("\n")[0]!.split(" ")[1]!;
   const d = readFileSync(join(paksDir, `${pakName}.vxpak`));
   const common = existsSync(join(paksDir, "common.vxat")) ? readFileSync(join(paksDir, "common.vxat")) : null;
@@ -189,7 +195,10 @@ export function writeOverlay(paksDir: string, pages: number[], out: string, pika
     section[tag] = d.subarray(off, off + d.readUInt32LE(e + 8));
     if (tag === "ATLS") atls = off;
   }
-  const vpal = section.VPAL ?? Buffer.alloc(0);
+  // Gold's palette table differs from pak to pak (each map's VCOL tail is its
+  // own), so one pak's copy laid over the others would recolour them: Gold's
+  // overlay carries none, and every pak keeps the table it was cooked with.
+  const vpal = opts.palettes === false ? Buffer.alloc(0) : (section.VPAL ?? Buffer.alloc(0));
   const audi = section.AUDI ?? Buffer.alloc(0);
   if (atls < 0) throw new Error(`no ATLS section in ${pakName}.vxpak`);
   const n = d.readUInt16LE(atls);
@@ -417,7 +426,7 @@ export async function cook3ds(only?: string[]): Promise<number> {
   const own = versionPages(merged);
   const pikaPath = join(GEN_DIR, "pika_cries.bin");
   const pika = existsSync(pikaPath) ? readFileSync(pikaPath) : undefined;
-  const n = writeOverlay(PAKS, own, join(PAKS, files.overlay), pika);
+  const n = writeOverlay(PAKS, own, join(PAKS, files.overlay), pika, { palettes: version !== "gold" });
   console.log(
     `  ${files.overlay}: pages ${own.join(", ")} + palettes + sound${pika ? " + Pikachu's voice" : ""} (${n} bytes)`,
   );
