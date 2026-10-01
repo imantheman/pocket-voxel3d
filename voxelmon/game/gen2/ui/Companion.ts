@@ -136,6 +136,8 @@ export class Companion {
     if (page === this.page && mon === this.mon) return;
     this.page = page;
     this.mon = mon;
+    // (a "[pv]" line: the host keeps those in pvlog.txt; one a page turn)
+    console.log(`[pv] gold panel: ${page}${page === "mon" ? ` ${mon + 1}` : ""} (tap at ${cx},${cy})`);
     // redraw on the next shown frame
     this.sig = "";
     this.wait = CHECK_EVERY;
