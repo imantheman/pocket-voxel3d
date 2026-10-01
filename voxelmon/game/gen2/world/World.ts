@@ -24,6 +24,7 @@
 // name sign, the pokepic window) uses G, GbcPalette and Assets the way the
 // Lua's draws do. The lazy `require`s inside function bodies (Phone, PhoneRing, Happiness, Sound, GameVersion,
 // ScreenPosition, Pokegear) are hoisted to here.
+import { ENTS_MAX } from "../../../../contracts/spec/voxel-spec.ts";
 import { rotateFacing } from "./rotate.ts";
 import { cellOf, FREE_AXIS_LEAN, freeDir, quantize, slide, stickPush } from "../../world/freemove.ts";
 import { osTime } from "../platform/clock.ts";
@@ -1263,34 +1264,58 @@ function animView_W6(self: World, key: string): WorldAnimCells[] | undefined {
   return out;
 }
 
+/** How far from the player (in either axis, px) the 3D view lists people:
+ *  fourteen cells, past anything its camera frames. */
+const NEAR_PX = 14 * 16;
+
 // Lua: World.lua:11311-11381 drawPeople (with drawEntityComposite,
 // drawGrassOver, drawGrassShake :9313-9342 and drawJumpShadow :9345-9366):
 // the Y-sorted draw list and, per entry, the effects drawn with it.
 export function peopleView_W6(self: World, out: WorldActorEntry[], hideAll: boolean,
-                       hidePlayer: boolean, crystal: boolean): void {
+                       hidePlayer: boolean, crystal: boolean, near = false): void {
   if (hideAll) return;
   const p = self.player;
+  // `near` (the 3D scene's lean view): only people within NEAR_PX of the
+  // player, at most ENTS_MAX of them, the nearest -- the scene has that many
+  // entity slots, and Route 29 lists fifty (most of them ghosts of the
+  // neighbouring maps' people) whose view records were most of the 3D
+  // view's cost
+  const ppx = p ? p.px : 0;
+  const ppy = p ? p.py : 0;
+  const away = (x: number, y: number): number => Math.max(Math.abs(x - ppx), Math.abs(y - ppy));
   // ../pokecrystal/engine/overworld/map_objects.asm:2191-2205
   const filter = self.spriteFilter;
   const passes = (npc: any): boolean => !filter || truthy(filter(npc));
   const list: { kind: "player" | "npc"; entity: any; ox: number; oy: number; py: number;
-    npcIndex: number }[] = [];
+    npcIndex: number; d: number }[] = [];
   if (!hidePlayer && !truthy(self.playerMasked) && !truthy(self.playerHidden)) {
-    list.push({ kind: "player", entity: p, ox: 0, oy: 0, py: p.py, npcIndex: -1 });
+    list.push({ kind: "player", entity: p, ox: 0, oy: 0, py: p.py, npcIndex: -1, d: -1 });
   }
-  seq_W6(self.npcs).forEach((npc: any, i: number) => {
+  const npcs = seq_W6(self.npcs);
+  for (let i = 0; i < npcs.length; i++) {
+    const npc = npcs[i];
     if (passes(npc) && !truthy(npc.hiddenByMovement)) {
-      list.push({ kind: "npc", entity: npc, ox: 0, oy: 0, py: npc.py, npcIndex: i });
-    }
-  });
-  for (const g of seq_W6(self.ghosts)) {
-    if (passes(g.npc)) {
-      list.push({ kind: "npc", entity: g.npc, ox: g.ox, oy: g.oy, py: g.oy + g.npc.py, npcIndex: -1 });
+      const d = near ? away(npc.px ?? 0, npc.py ?? 0) : 0;
+      if (near && d > NEAR_PX) continue;
+      list.push({ kind: "npc", entity: npc, ox: 0, oy: 0, py: npc.py, npcIndex: i, d });
     }
   }
-  list.sort((a, b) => a.py - b.py);
+  for (const g of seq_W6(self.ghosts)) {
+    const d = near ? away(g.ox + (g.npc.px ?? 0), g.oy + (g.npc.py ?? 0)) : 0;
+    if (near && d > NEAR_PX) continue;
+    if (passes(g.npc)) {
+      list.push({ kind: "npc", entity: g.npc, ox: g.ox, oy: g.oy, py: g.oy + g.npc.py, npcIndex: -1, d });
+    }
+  }
+  let shown = list;
+  if (near && list.length > ENTS_MAX) {
+    // the player (d -1) first, then the nearest
+    list.sort((a, b) => a.d - b.d);
+    shown = list.slice(0, ENTS_MAX);
+  }
+  shown.sort((a, b) => a.py - b.py);
 
-  for (const entry of list) {
+  for (const entry of shown) {
     const entity = entry.entity;
     const onMap = entry.ox === 0 && entry.oy === 0;
     const grassCond = truthy(entity.inGrass)
@@ -9764,12 +9789,19 @@ export class World {
    *   ui           textbox, choicebox, pokePic, script (VM running),
    *                moveState, mapSetup, busy (World:busy), battleActive.
    */
-  viewState(): WorldView {
+  /**
+   * `lean`: only what the 3D scene's WorldView reads (platform/worldview.ts:
+   * ready, the map's and neighbours' ids and offsets, the camera, the
+   * player, the actors, the palette) -- built every shown frame, so the
+   * rest (the anim cells, the effect views, the ui flags) is left out.
+   */
+  viewState(lean = false): WorldView {
     const frame = this.updateView();
     const p = this.player;
     const map = this.map;
     const ready = truthy(this.mapImage) && truthy(p);
     const crystal = truthy(this.isCrystal());
+    if (lean) return this.leanViewState(frame, ready, crystal);
 
     const mapView: WorldMapView | undefined = truthy(map) ? {
       id: map.id,
@@ -9880,6 +9912,51 @@ export class World {
         battleActive: truthy(this.battleActive),
       },
     };
+  }
+
+  /** viewState(true)'s body: see there. */
+  private leanViewState(frame: any, ready: boolean, crystal: boolean): WorldView {
+    const p = this.player;
+    const map = this.map;
+    const neighbors: WorldNeighborView[] = [];
+    for (const nb of seq_W6(this.neighbors)) {
+      neighbors.push({ id: nb.id, ox: nb.ox, oy: nb.oy } as WorldNeighborView);
+    }
+    const [hideAll, hidePlayer]: [boolean, boolean] = this.flyHides();
+    const peopleHidden = truthy(this.peopleHidden);
+    const actors: WorldActorEntry[] = [];
+    if (ready && !peopleHidden) peopleView_W6(this, actors, hideAll, hidePlayer, crystal, true);
+    let playerView: WorldView["player"] = undefined;
+    if (truthy(p)) {
+      const view = p.viewState();
+      playerView = {
+        view,
+        visible: ready && !peopleHidden && !hideAll && !hidePlayer
+          && !truthy(this.playerMasked) && !truthy(this.playerHidden) && view.visible,
+        moving: truthy(p.moving),
+        jumping: truthy(p.jumping),
+        state: this.playerState,
+        stateId: this.playerState != null ? PLAYER_STATE_ID[this.playerState] : undefined,
+        inGrass: truthy(p.inGrass),
+      };
+    }
+    return {
+      ready,
+      isCrystal: crystal,
+      map: truthy(map) ? ({ id: map.id } as WorldMapView) : undefined,
+      neighbors,
+      border: frame.border,
+      camera: { x: this.camera.x, y: this.camera.y, viewW: this.viewW ?? 160, viewH: this.viewH ?? 144 },
+      player: playerView,
+      actors,
+      peopleHidden,
+      hideAll,
+      hidePlayer,
+      palette: {
+        daytime: this.daytime ?? undefined,
+        dark: this.daytime === "DARK",
+      },
+    } as unknown as WorldView;
   }
 
   /**

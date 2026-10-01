@@ -83,7 +83,11 @@ try {
 // Optional phase timing: a host that registers `voxel.now()` (microseconds;
 // the desktop QuickJS harness, a profiling build) gets a line every 300
 // frames saying where the guest's time went.
-const clock = (native as unknown as { now?: () => number }).now;
+// (On the 3DS the clock is there always; the split is taken only when a
+// bench entry asks for it -- globalThis.goldProf -- and then as a "[pv]"
+// line, which the host keeps in pvlog.txt.)
+const nowFn = (native as unknown as { now?: () => number }).now;
+let clock: (() => number) | undefined;
 const prof = { n: 0, step: 0, draw: 0, end: 0, view: 0 };
 
 // The 3DS shows 30 frames a second and runs the game at 60 steps a second,
@@ -100,6 +104,7 @@ let stepNo = 0;
 const lastStep = native.lastStep;
 
 (globalThis as unknown as { frame: (buttons: number) => void }).frame = (buttons: number): void => {
+  clock = (globalThis as unknown as { goldProf?: boolean }).goldProf || !lastStep ? nowFn : undefined;
   const t0 = clock ? clock() : 0;
   const compose = lastStep ? lastStep() : (stepNo++ & 1) === 0;
   // The camera, as the Kanto entry reads it (psp-main.ts): bits 24-25 its
@@ -160,7 +165,7 @@ const lastStep = native.lastStep;
     prof.view += t4 - t3;
     if (++prof.n === 300) {
       const us = (v: number): string => (v / prof.n).toFixed(0);
-      console.log(`[gold] us/frame: step ${us(prof.step)} draw ${us(prof.draw)} lcd ${us(prof.end)} view ${us(prof.view)} (top: ${game.stack.top()?.screenId ?? (game.world ? "world" : "-")})`);
+      console.log(`[pv] gold us/frame: step ${us(prof.step)} draw ${us(prof.draw)} lcd ${us(prof.end)} view ${us(prof.view)} (top: ${game.stack.top()?.screenId ?? (game.world ? "world" : "-")})`);
       prof.n = prof.step = prof.draw = prof.end = prof.view = 0;
     }
   }

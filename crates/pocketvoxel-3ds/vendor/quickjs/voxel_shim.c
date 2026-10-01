@@ -23,6 +23,7 @@ extern uint32_t voxel_game_len(void);
 extern const uint8_t *voxel_audio_ptr(void);
 extern uint32_t voxel_audio_len(void);
 extern int32_t voxel_stick(void);
+extern double voxel_now_us(void);
 extern int32_t voxel_last_step(void);
 
 /* One handler for every numeric op; `magic` carries the op code. */
@@ -54,6 +55,12 @@ static JSValue vox_stats(JSContext *ctx, JSValueConst t, int c, JSValueConst *v)
 static JSValue vox_stick(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t;(void)c;(void)v;
     return JS_NewInt32(ctx, voxel_stick());
+}
+
+/* now() - microseconds since boot, for a guest timing its phases. */
+static JSValue vox_now(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;(void)c;(void)v;
+    return JS_NewFloat64(ctx, voxel_now_us());
 }
 
 /* lastStep() - whether this tick is the last before the host renders. */
@@ -210,6 +217,7 @@ int qjs_register_voxel(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "audiodata", JS_NewCFunction(ctx, vox_audiodata, "audiodata", 0));
     JS_SetPropertyStr(ctx, o, "stats",     JS_NewCFunction(ctx, vox_stats,     "stats", 0));
     JS_SetPropertyStr(ctx, o, "stick",     JS_NewCFunction(ctx, vox_stick,     "stick", 0));
+    JS_SetPropertyStr(ctx, o, "now",       JS_NewCFunction(ctx, vox_now,       "now", 0));
     JS_SetPropertyStr(ctx, o, "lastStep",  JS_NewCFunction(ctx, vox_laststep,  "lastStep", 0));
     JS_SetPropertyStr(ctx, o, "saveWrite", JS_NewCFunction(ctx, vox_savewrite, "saveWrite", 1));
     JS_SetPropertyStr(ctx, o, "saveData",  JS_NewCFunction(ctx, vox_savedata,  "saveData", 0));

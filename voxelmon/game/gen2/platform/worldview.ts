@@ -164,7 +164,7 @@ export class WorldView {
     }
     this.emitTint(game);
     const world = game.world;
-    const vs: WorldViewState | null = world && world.map && typeof world.viewState === "function" ? world.viewState() : null;
+    const vs: WorldViewState | null = world && world.map && typeof world.viewState === "function" ? world.viewState(true) : null;
     if (!vs) {
       this.clear();
       return;

@@ -21,6 +21,14 @@ pub unsafe fn set_stick(x: i16, y: i16) {
     STICK = (x, y);
 }
 
+/// Microseconds since boot (`voxel.now()`), for a guest timing its own
+/// phases -- Gold's step/draw/view split, which a bench entry turns on.
+#[no_mangle]
+pub unsafe extern "C" fn voxel_now_us() -> f64 {
+    extern "C" { fn svcGetSystemTick() -> u64; }
+    svcGetSystemTick() as f64 / 268.111856
+}
+
 /// `(x << 16) | (y & 0xffff)`, each half a signed 16-bit.
 #[no_mangle]
 pub unsafe extern "C" fn voxel_stick() -> i32 {
