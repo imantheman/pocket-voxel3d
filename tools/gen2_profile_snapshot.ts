@@ -19,7 +19,7 @@ if (head !== PIN) {
 }
 const profile = dumpGen2Profile(join(dir, "data/voxel_heights.lua"));
 const doc = {
-  source: `UNDERdecodedHD/Gen2Recomped-DramaticShapes @ ${PIN}, data/voxel_heights.lua`,
+  source: `UNDERdecoded/Gen2Recomped-DramaticShapes @ ${PIN}, data/voxel_heights.lua`,
   license: "MIT -- see gen2-profile.LICENSE beside this file",
   note: "heights, collision, and the TilesetX entries of tilesets and buildings, as the cook keeps them",
   profile,
