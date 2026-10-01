@@ -4974,9 +4974,12 @@ if page_tex.len() < pak_static.atlases.len() {
                     lcd_buf = Some(bi);
                 }
             } else if lcd_drawn.is_some() {
+                // Hidden (an empty frame -- most of the overworld): forget
+                // what was drawn so the next frame shown is drawn afresh, but
+                // keep the two textures. Freeing them on every hide and
+                // allocating them on every show recycled texture memory a
+                // frame after the GPU last read it.
                 lcd_drawn = None;
-                lcd_pages.clear();
-                lcd_tex = [None, None];
             }
         }
         let pic_bufs: Vec<(usize, i16, buffer::Info)> = pic_groups.iter()
@@ -5548,7 +5551,7 @@ if page_tex.len() < pak_static.atlases.len() {
                 // Card UVs are already atlas-scaled here, so the shader's
                 // terrain uvx transform must not apply again.
                 frame.bind_vertex_uniform(uvx_idx, FVec4::new(1.0, 1.0, 0.0, 0.0));
-                if !pic_bufs.is_empty() || gb_buf_ref.is_some() || lcd_buf_ref.is_some() {
+                if !pic_bufs.is_empty() || gb_buf_ref.is_some() {
                     unsafe { c3d_depth_test(0); }
                     let po: Matrix4 = Projection::orthographic(
                         0.0..(UI_VIEW_W * UI_Q), (UI_VIEW_H * UI_Q)..0.0,
@@ -5578,11 +5581,6 @@ if page_tex.len() < pak_static.atlases.len() {
                     if let (Some(gb), Some(t)) = (gb_buf_ref, gb_tex_ref) {
                         frame.bind_texture(texture::Index::Texture0, t);
                         frame.draw_arrays(buffer::Primitive::Triangles, gb, None).unwrap();
-                    }
-                    // the Gold screen, over that
-                    if let (Some(lb), Some(t)) = (lcd_buf_ref, lcd_tex_ref) {
-                        frame.bind_texture(texture::Index::Texture0, t);
-                        frame.draw_arrays(buffer::Primitive::Triangles, lb, None).unwrap();
                     }
                     frame.bind_vertex_uniform(projection_idx, mvp);
                     unsafe { c3d_depth_test(1); }
@@ -5636,6 +5634,24 @@ if page_tex.len() < pak_static.atlases.len() {
                     // Restore: render_to runs again for the right eye, and
                     // the companion screen's passes follow, both on i16.
                     frame.set_attr_info(&attr_info);
+                }
+                // The Gold screen, last of all: it is the UI (text boxes,
+                // menus, battles) and sits over every 3D thing, the cards
+                // included. Drawn any earlier, its full-rect quad -- which
+                // writes depth even with the test off -- hid the cards that
+                // were depth-tested after it.
+                if let (Some(lb), Some(t)) = (lcd_buf_ref, lcd_tex_ref) {
+                    unsafe { c3d_depth_test(0); }
+                    let po: Matrix4 = Projection::orthographic(
+                        0.0..(UI_VIEW_W * UI_Q), (UI_VIEW_H * UI_Q)..0.0,
+                        ClipPlanes { near: -1.0, far: 1.0 })
+                        .screen(ScreenOrientation::Rotated).into();
+                    frame.bind_vertex_uniform(projection_idx, &po);
+                    frame.bind_vertex_uniform(uvx_idx, FVec4::new(1.0, 1.0, 0.0, 0.0));
+                    frame.bind_texture(texture::Index::Texture0, t);
+                    frame.draw_arrays(buffer::Primitive::Triangles, lb, None).unwrap();
+                    frame.bind_vertex_uniform(projection_idx, mvp);
+                    unsafe { c3d_depth_test(1); }
                 }
             });
 

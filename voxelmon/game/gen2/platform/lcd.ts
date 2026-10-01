@@ -348,11 +348,15 @@ export class Lcd {
   /** Send what changed since the last end(). */
   end(): void {
     const h = this.host;
-    if (this.shown !== this.sentShown) {
-      h.lcdShow?.(this.shown ? 1 : 0);
-      this.sentShown = this.shown;
+    // A frame that is all holes and no objects shows nothing: the screen is
+    // hidden then, so the host neither redraws nor composites a transparent
+    // layer over the world (the overworld with no text up, most of the time).
+    const shown = this.shown && !this.empty();
+    if (shown !== this.sentShown) {
+      h.lcdShow?.(shown ? 1 : 0);
+      this.sentShown = shown;
     }
-    if (!this.shown) return;
+    if (!shown) return;
     const s = this.s;
     const t = this.sent;
     // cells: per 32-cell row, the span from the first to the last change.
@@ -442,6 +446,21 @@ export class Lcd {
       this.sentLines = lines;
     }
   }
+
+  /** True when nothing would be drawn: every visible cell a hole, no objects. */
+  empty(): boolean {
+    if (this.s.objs.length > 0) return false;
+    // a scrolled screen can show rows past the first eighteen: never hide it
+    if (this.s.scx !== 0 || this.s.scy !== 0 || this.s.lineTarget !== 0) return false;
+    const a32 = (this.e32 ??= new Uint32Array(this.s.attrs.buffer));
+    // the visible 18 rows of the background (bit 4 set in all four bytes)
+    for (let i = 0; i < 18 * 8; i++) if ((a32[i]! & 0x10101010) !== 0x10101010) return false;
+    if (this.windowUsed && this.s.flags & FLAG_WIN_ON) {
+      for (let i = 256; i < 256 + 18 * 8; i++) if ((a32[i]! & 0x10101010) !== 0x10101010) return false;
+    }
+    return true;
+  }
+  private e32: Uint32Array | undefined;
 
   /** Forget what the core holds (after a host scene reset). */
   invalidate(): void {
