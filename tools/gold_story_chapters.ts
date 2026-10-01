@@ -102,14 +102,29 @@ function talkAll(sprite: string, done: () => boolean, max = 12): void {
   }
 }
 
-/** Teach `move` to the lead (the run's stand-in for the HM menu), last slot. */
+/** Teach an HM (the run's stand-in for the HM menu). Each has a home:
+ *  CUT, ROCK SMASH and STRENGTH on the lead's slots 2-4; SURF, WHIRLPOOL
+ *  and WATERFALL on a FERALIGATR that joins for them. */
+const HOME: Record<string, [string, number]> = {
+  CUT: ["lead", 1], ROCK_SMASH: ["lead", 2], STRENGTH: ["lead", 3],
+  SURF: ["water", 1], WHIRLPOOL: ["water", 2], WATERFALL: ["water", 3],
+};
 function teach(move: string): void {
-  const lead = save().party[0];
-  const has = (lead.moves ?? []).some((m: any) => (m.id ?? m) === move);
-  if (has) return;
-  const slot = Math.min((lead.moves ?? []).length, 3);
+  const party = save().party;
+  const [who, slot] = HOME[move] ?? ["lead", 3];
+  let mon = party[0];
+  if (who === "water") {
+    mon = party.find((m: any) => m.species === "FERALIGATR" && m.level >= 60);
+    if (!mon) {
+      mon = Mon.new(game.data, "FERALIGATR", 60, { dvs: perfect() });
+      party.splice(1, 0, mon);
+      if (party.length > 6) party.length = 6;
+    }
+  }
   const mv = game.data.moves?.[move];
-  lead.moves[slot] = { id: move, pp: mv?.pp ?? 30, ppUps: 0 };
+  while (mon.moves.length <= slot) mon.moves.push({ id: "TACKLE", pp: 35, ppUps: 0 });
+  mon.moves[slot] = { id: move, pp: mv?.pp ?? 30, ppUps: 0 };
+  log(`     ${mon.species} knows ${mon.moves.map((m: any) => m.id ?? m).join(" ")}`);
 }
 
 chapter("7 Kurt and the Slowpoke Well", () => {
@@ -238,6 +253,36 @@ chapter("17 the Kimono Girls and HM03 SURF", () => {
   expect(flag("EVENT_GOT_HM03_SURF"), "HM03 SURF");
   teach("SURF");
   can.surf = true;
+});
+
+chapter("18 Olivine: the rival, JASMINE at the top of the lighthouse", () => {
+  travel("OLIVINE_CITY");
+  settle();
+  expect(flag("EVENT_RIVAL_OLIVINE_CITY"), "the rival met in Olivine");
+  travel("OLIVINE_LIGHTHOUSE_6F");
+  if (!flag("EVENT_JASMINE_EXPLAINED_AMPHYS_SICKNESS")) talk("SPRITE_JASMINE");
+  expect(flag("EVENT_JASMINE_EXPLAINED_AMPHYS_SICKNESS"), "JASMINE telling of AMPHY's sickness");
+});
+
+chapter("19 HM04 STRENGTH, across the sea to Cianwood: CHUCK", () => {
+  // the sailor in Olivine's cafe hands over STRENGTH; CHUCK's gym is
+  // behind boulders
+  travel("OLIVINE_CAFE");
+  if (!flag("EVENT_GOT_HM04_STRENGTH")) talk("SPRITE_SAILOR");
+  expect(flag("EVENT_GOT_HM04_STRENGTH"), "HM04 STRENGTH");
+  teach("STRENGTH");
+  can.strength = true;
+  gym("CIANWOOD_GYM", "SPRITE_CHUCK", "STORMBADGE");
+});
+
+chapter("20 the SECRETPOTION, AMPHY cured, JASMINE", () => {
+  travel("CIANWOOD_PHARMACY");
+  if (!flag("EVENT_GOT_SECRETPOTION_FROM_PHARMACY")) talk("SPRITE_PHARMACIST");
+  expect(flag("EVENT_GOT_SECRETPOTION_FROM_PHARMACY"), "the SECRETPOTION");
+  travel("OLIVINE_LIGHTHOUSE_6F");
+  talk("SPRITE_JASMINE");
+  expect(flag("EVENT_JASMINE_RETURNED_TO_GYM"), "JASMINE back at her gym");
+  gym("OLIVINE_GYM", "SPRITE_JASMINE", "MINERALBADGE");
 });
 
 void describe;

@@ -137,6 +137,19 @@ const surfing = (): boolean => FieldMoves.isSurfing(world().playerState);
 /** Field moves the run may use on the way (a chapter turns them on once the
  *  story has handed over the HM and the badge). */
 export const can = { cut: false, surf: false, whirlpool: false, strength: false, waterfall: false, rocksmash: false };
+/** A boulder the run can push with STRENGTH from (x, y) one step `dir`:
+ *  the cell beyond it free ground. */
+function boulderPushable(x: number, y: number, dir: Dir): boolean {
+  const w = world();
+  const n = w.npcAt(x, y);
+  if (!n || !can.strength || n.def?.sprite !== "SPRITE_BOULDER") return false;
+  const [dx, dy] = DELTA[dir];
+  const bx = x + dx;
+  const by = y + dy;
+  return w.map.inBounds(bx, by) && w.map.isWalkable(bx, by) && !w.npcAt(bx, by);
+}
+const boulderAt = (x: number, y: number): boolean => world().npcAt(x, y)?.def?.sprite === "SPRITE_BOULDER";
+
 /** A rock the run can ROCK SMASH, standing at (x, y) here? */
 function rockAt(x: number, y: number): boolean {
   const n = world().npcAt(x, y);
@@ -240,6 +253,12 @@ function press(dir: Dir): "moved" | "blocked" | "interrupted" | "map" {
  *  in the way; a script that starts on the way is let run first. */
 export function walk(ok: (x: number, y: number) => boolean, what: string, leaving = false): void {
   const map = world().map.id;
+  // staying on this map: the cross-map planner (boulders, rocks, surf, and
+  // parts of the map only reached through another one)
+  if (!leaving) {
+    go((m, x, y) => m === map && ok(x, y), what);
+    return;
+  }
   const blocked = new Set<string>();
   for (let tries = 0; tries < 40; tries++) {
     settle();
@@ -278,8 +297,23 @@ export const walkTo = (x: number, y: number): void => walk((a, b) => a === x && 
 
 /** Face `dir` without stepping (a refused press turns the player). */
 function face(dir: Dir): void {
-  for (let f = 0; f < 20 && world().player.facing !== dir; f++) step(BTN[dir]);
-  for (let f = 0; f < 6; f++) step(0);
+  for (let k = 0; k < 4; k++) {
+    settle();
+    for (let f = 0; f < 20 && world().player.facing !== dir && !busy(); f++) step(BTN[dir]);
+    for (let f = 0; f < 6 && !busy(); f++) step(0);
+    if (!busy() && world().player.facing === dir) return;
+  }
+}
+
+/** A at what is ahead (`dir`), YES to what it asks, until `done` -- a few
+ *  tries, since a wild POKeMON can step in between. */
+function aAt(dir: Dir, done: () => boolean, what: string): void {
+  for (let k = 0; k < 3 && !done(); k++) {
+    face(dir);
+    step(VOX_BTN.a);
+    settle();
+  }
+  if (!done()) fail(`${what} (${describe()})`);
 }
 
 /** Stand next to (x, y), face it, press A, and let it all play out. */
@@ -432,14 +466,18 @@ const deadEnds = new Map<string, number>();
 
 interface Act {
   dir: Dir;
+  /** this step starts surfing (A at the water, YES) */
+  surf?: boolean;
+  /** this step pushes a boulder (STRENGTH) */
+  push?: boolean;
   /** this step leaves the map (onto a warp, off an edge) */
   leaves?: string;
 }
 
 /** One step `dir` from (x, y) on map `m`, planned: a cell on the same map,
  *  or [map, x, y] across a warp or a connection, or null. */
-function planStep(m: string, x: number, y: number, dir: Dir, goal: (m: string, x: number, y: number) => boolean):
-  { m: string; x: number; y: number; leaves?: string } | null {
+function planStep(m: string, x: number, y: number, dir: Dir, goal: (m: string, x: number, y: number) => boolean, surf: boolean):
+  { m: string; x: number; y: number; leaves?: string; surf: boolean; startSurf?: boolean; push?: boolean } | null {
   if (refused.has(`${m},${x},${y},${dir}`)) return null;
   const w = world();
   const map = mapOf(m);
@@ -461,15 +499,23 @@ function planStep(m: string, x: number, y: number, dir: Dir, goal: (m: string, x
     const land = MapClass.connectionLanding(dest, conn, dir, x, y);
     if (!land) return null;
     const dmap = mapOf(to);
-    if (!dmap?.isWalkable(land[0], land[1])) return null;
+    const lc = dmap?.cellCollision(land[0], land[1]);
+    const landWater = Permissions.surfable(lc) === "water";
+    if (!(surf ? Permissions.surfable(lc) !== undefined : dmap?.isWalkable(land[0], land[1]))) return null;
     const key = `${m}>${to}:edge:${dir}`;
     if ((deadEnds.get(key) ?? 0) >= 2) return null;
-    return { m: to, x: land[0], y: land[1], leaves: key };
+    return { m: to, x: land[0], y: land[1], leaves: key, surf: surf && landWater };
   }
   const c = map.cellCollision(tx, ty);
-  const surf = live && surfing();
+  const water = Permissions.surfable(c) === "water";
   let ok = (surf ? Permissions.surfable(c) !== undefined : map.isWalkable(tx, ty))
     || (can.cut && Permissions.isCutTree(c));
+  // from the shore onto the water: SURF
+  let startSurf = false;
+  if (!ok && !surf && can.surf && water) {
+    ok = true;
+    startSurf = true;
+  }
   if (live && ok) {
     const npc = w.npcAt(tx, ty);
     if (npc && !goal(m, tx, ty) && !rockAt(tx, ty)) ok = false;
@@ -479,7 +525,7 @@ function planStep(m: string, x: number, y: number, dir: Dir, goal: (m: string, x
     const f = surf ? undefined : Permissions.ledgeFacings(map.cellCollision(x, y));
     const lx = x + 2 * dx;
     const ly = y + 2 * dy;
-    if (f && f[dir] && map.inBounds(lx, ly) && map.isWalkable(lx, ly) && !(live && w.npcAt(lx, ly))) return { m, x: lx, y: ly };
+    if (f && f[dir] && map.inBounds(lx, ly) && map.isWalkable(lx, ly) && !(live && w.npcAt(lx, ly))) return { m, x: lx, y: ly, surf: false };
     return null;
   }
   // onto a warp: across to where it leads -- only where the tile is a warp
@@ -503,9 +549,9 @@ function planStep(m: string, x: number, y: number, dir: Dir, goal: (m: string, x
       ax += DELTA[forced][0];
       ay += DELTA[forced][1];
     }
-    return { m: wp.destMap, x: ax, y: ay, leaves: key };
+    return { m: wp.destMap, x: ax, y: ay, leaves: key, surf: false };
   }
-  return { m, x: tx, y: ty };
+  return { m, x: tx, y: ty, surf: (surf || startSurf) && water, startSurf };
 }
 
 /** The steps from where the player stands to a cell `goal` accepts,
@@ -513,25 +559,26 @@ function planStep(m: string, x: number, y: number, dir: Dir, goal: (m: string, x
 function planTo(goal: (m: string, x: number, y: number) => boolean): Act[] | null {
   const w = world();
   const p = w.player;
-  const start = `${w.map.id},${p.cellX},${p.cellY}`;
+  const s0 = surfing();
+  const start = `${w.map.id},${p.cellX},${p.cellY},${s0 ? 1 : 0}`;
   const prev = new Map<string, [string, Act]>();
-  const q: [string, number, number][] = [[w.map.id, p.cellX, p.cellY]];
+  const q: [string, number, number, boolean][] = [[w.map.id, p.cellX, p.cellY, s0]];
   const seen = new Set([start]);
   let found: string | null = null;
-  for (let qi = 0; qi < q.length && qi < 400000; qi++) {
-    const [m, x, y] = q[qi]!;
+  for (let qi = 0; qi < q.length && qi < 600000; qi++) {
+    const [m, x, y, sf] = q[qi]!;
     if (goal(m, x, y)) {
-      found = `${m},${x},${y}`;
+      found = `${m},${x},${y},${sf ? 1 : 0}`;
       break;
     }
     for (const d of DIRS) {
-      const t = planStep(m, x, y, d, goal);
+      const t = planStep(m, x, y, d, goal, sf);
       if (!t) continue;
-      const k = `${t.m},${t.x},${t.y}`;
+      const k = `${t.m},${t.x},${t.y},${t.surf ? 1 : 0}`;
       if (seen.has(k)) continue;
       seen.add(k);
-      prev.set(k, [`${m},${x},${y}`, { dir: d, leaves: t.leaves }]);
-      q.push([t.m, t.x, t.y]);
+      prev.set(k, [`${m},${x},${y},${sf ? 1 : 0}`, { dir: d, leaves: t.leaves, surf: t.startSurf, push: t.push }]);
+      q.push([t.m, t.x, t.y, t.surf]);
     }
   }
   if (!found) return null;
@@ -545,6 +592,73 @@ function planTo(goal: (m: string, x: number, y: number) => boolean): Act[] | nul
   return out.reverse();
 }
 
+/**
+ * STRENGTH puzzles: a search over (player, boulders) on this map -- walking
+ * by the movement rules, pushing a boulder one cell when the cell beyond is
+ * free ground (the player stays put, as in Gen 2) -- to a cell `goal`
+ * accepts. The first step of it, or null.
+ */
+function solveBoulders(goal: (x: number, y: number) => boolean): Act | null {
+  if (!can.strength) return null;
+  const w = world();
+  const map = w.map;
+  const p = w.player;
+  const boulders: number[] = [];
+  const blockers = new Set<string>();
+  for (const n of w.npcs ?? []) {
+    if (n.hidden) continue;
+    if (n.def?.sprite === "SPRITE_BOULDER") boulders.push(n.cellX * 1000 + n.cellY);
+    else blockers.add(`${n.cellX},${n.cellY}`);
+  }
+  if (boulders.length === 0 || boulders.length > 8) return null;
+  const collOf = (a: number, b: number): any => w.cellCollisionAcross(map, a, b);
+  const freeCell = (x: number, y: number, bs: Set<number>): boolean =>
+    map.inBounds(x, y) && map.isWalkable(x, y) && !blockers.has(`${x},${y}`) && !bs.has(x * 1000 + y);
+  const key = (x: number, y: number, bs: number[]): string => `${x},${y}|${bs.join(",")}`;
+  const b0 = [...boulders].sort((a, b) => a - b);
+  const start = key(p.cellX, p.cellY, b0);
+  const prev = new Map<string, [string, Act]>();
+  const q: [number, number, number[]][] = [[p.cellX, p.cellY, b0]];
+  const seen = new Set([start]);
+  for (let qi = 0; qi < q.length && qi < 300000; qi++) {
+    const [x, y, bs] = q[qi]!;
+    if (goal(x, y)) {
+      let k = key(x, y, bs);
+      let first: Act | null = null;
+      while (k !== start) {
+        const [pk, a] = prev.get(k)!;
+        first = a;
+        k = pk;
+      }
+      return first;
+    }
+    const bset = new Set(bs);
+    for (const d of DIRS) {
+      if (!Permissions.stepPermitted(collOf, x, y, d)) continue;
+      const [dx, dy] = DELTA[d];
+      const nx = x + dx;
+      const ny = y + dy;
+      let nb = bs;
+      let px = nx;
+      let py = ny;
+      let push = false;
+      if (bset.has(nx * 1000 + ny)) {
+        if (!freeCell(nx + dx, ny + dy, bset)) continue;
+        nb = bs.map((b) => (b === nx * 1000 + ny ? (nx + dx) * 1000 + ny + dy : b)).sort((a, b) => a - b);
+        px = x;
+        py = y;
+        push = true;
+      } else if (!freeCell(nx, ny, bset)) continue;
+      const k = key(px, py, nb);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      prev.set(k, [key(x, y, bs), { dir: d, push }]);
+      q.push([px, py, nb]);
+    }
+  }
+  return null;
+}
+
 /** Walk (across maps) until standing where `goal` accepts. */
 export function go(goal: (m: string, x: number, y: number) => boolean, what: string): void {
   for (let tries = 0; tries < 300; tries++) {
@@ -552,26 +666,43 @@ export function go(goal: (m: string, x: number, y: number) => boolean, what: str
     const w = world();
     const p = w.player;
     if (goal(w.map.id, p.cellX, p.cellY)) return;
-    const acts = planTo(goal);
-    if (!acts || acts.length === 0) fail(`no way to ${what} from ${describe()}`);
+    let acts = planTo(goal);
+    // no plain way: a STRENGTH puzzle on this map?
+    if ((!acts || acts.length === 0) && can.strength) {
+      const first = solveBoulders((x, y) => goal(w.map.id, x, y));
+      if (first) acts = [first];
+    }
+    if (!acts || acts.length === 0) {
+      const near = (w.npcs ?? []).filter((n: any) => !n.hidden && Math.abs(n.cellX - p.cellX) + Math.abs(n.cellY - p.cellY) <= 6)
+        .map((n: any) => `${String(n.def?.sprite).replace("SPRITE_", "")}@${n.cellX},${n.cellY}`).join(" ");
+      fail(`no way to ${what} from ${describe()}; near: ${near}`);
+    }
     // walk this map's part of it
     const here = w.map.id;
-    if (process.env.STORY_DEBUG) log(`    go ${what}: at ${describe()} plan ${acts.slice(0, 12).map((a) => a.dir[0] + (a.leaves ? `[${a.leaves}]` : "")).join("")}${acts.length > 12 ? "..." : ""} (${acts.length})`);
+    if (process.env.STORY_DEBUG) log(`    go ${what}: at ${describe()} plan ${acts!.slice(0, 12).map((a) => a.dir[0] + (a.leaves ? `[${a.leaves}]` : "")).join("")}${acts.length > 12 ? "..." : ""} (${acts.length})`);
     for (const a of acts) {
       const q = world().player;
       const [dx, dy] = DELTA[a.dir];
       if (can.cut && Permissions.isCutTree(world().map.cellCollision(q.cellX + dx, q.cellY + dy))) {
+        aAt(a.dir, () => !Permissions.isCutTree(world().map.cellCollision(q.cellX + dx, q.cellY + dy)), `the tree at (${q.cellX + dx},${q.cellY + dy}) would not CUT`);
+      }
+      // the water ahead: SURF (A facing it, YES) -- the player hops on
+      if (a.surf && !surfing()) {
+        aAt(a.dir, surfing, `would not SURF at (${q.cellX + dx},${q.cellY + dy})`);
+        break;
+      }
+      // a boulder: STRENGTH (A facing it, YES), push, and plan again
+      if (a.push && boulderAt(q.cellX + dx, q.cellY + dy)) {
         face(a.dir);
-        step(VOX_BTN.a);
+        if (!busy()) step(VOX_BTN.a);
         settle();
-        if (Permissions.isCutTree(world().map.cellCollision(q.cellX + dx, q.cellY + dy))) fail(`the tree at (${q.cellX + dx},${q.cellY + dy}) would not CUT`);
+        press(a.dir);
+        settle();
+        break;
       }
       // a rock in the way: ROCK SMASH it (A facing it, YES)
       if (rockAt(q.cellX + dx, q.cellY + dy)) {
-        face(a.dir);
-        step(VOX_BTN.a);
-        settle();
-        if (rockAt(q.cellX + dx, q.cellY + dy)) fail(`the rock at (${q.cellX + dx},${q.cellY + dy}) would not ROCK SMASH`);
+        aAt(a.dir, () => !rockAt(q.cellX + dx, q.cellY + dy), `the rock at (${q.cellX + dx},${q.cellY + dy}) would not ROCK SMASH`);
       }
       const r = press(a.dir);
       if (r === "map") break;
