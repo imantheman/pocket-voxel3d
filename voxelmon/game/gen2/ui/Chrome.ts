@@ -15,7 +15,7 @@
 // has sixteen). What lands on screen is the same.
 
 import { format, sub } from "../platform/lua.ts";
-import G from "../platform/screen.ts";
+import G, { putTile, SOLID } from "../platform/screen.ts";
 import { Font } from "../shared/render/Font.ts";
 import { GbcPalette } from "../shared/render/GbcPalette.ts";
 
@@ -54,6 +54,32 @@ export interface ListOpts {
 function setPaper(pal: Colors): void {
   const paper = pal[0] ?? [255, 255, 255];
   G.setColor(paper[0]! / 255, paper[1]! / 255, paper[2]! / 255, 1);
+}
+
+/**
+ * printThrough's cells written straight, when they sit on the cell grid and
+ * every glyph is a whole 8px cell: each cell its glyph, or the paper
+ * (colour 0, SOLID[0]) where a code has no glyph -- which is what the paper
+ * rectangle with the glyphs over it comes to. Returns the width, or -1 when
+ * the string is off the grid and the general path must draw it.
+ */
+function gridPrint(codes: number[], x: number, y: number, pal: Colors): number {
+  const x0 = Math.round(x + G.tx);
+  const y0 = Math.round(y + G.ty);
+  if ((x0 & 7) !== 0 || (y0 & 7) !== 0 || G.objects) return -1;
+  for (let i = 0; i < codes.length; i++) if (Font.advanceOf(codes[i]!) !== 8) return -1;
+  const savedPal = G.palette;
+  const savedKeyed = G.keyed;
+  G.setColor(1, 1, 1, 1);
+  GbcPalette.useRaw(pal);
+  for (let i = 0; i < codes.length; i++) {
+    const id = Font.tileOf(codes[i]!);
+    putTile(id === undefined ? SOLID[0] : id, x0 + i * 8, y0);
+  }
+  G.palette = savedPal;
+  G.keyed = savedKeyed;
+  G.setColor(0, 0, 0, 1);
+  return codes.length * 8;
 }
 
 function flatPrint(text: string, tx: number, ty: number): number {
@@ -331,6 +357,11 @@ export const Chrome = {
 
   /** Chrome.lua:295 -- the string's cells: paper, then glyphs through the palette. */
   printThrough(text: string, tx: number, ty: number, palette?: Colors | null, invert?: boolean, raw?: boolean): number {
+    if (palette) {
+      const gp = raw ? Chrome.rawPalette(palette, invert) : Chrome.throughPalette(palette, invert);
+      const w = gridPrint(Font.encode(text), tx * 8, ty * 8, gp);
+      if (w >= 0) return w;
+    }
     const [pal, drawGlyph, finish] = Chrome.paletteGlyphs(palette, invert, raw);
     if (!pal) return flatPrint(text, tx, ty);
     const width = Font.width(text);
@@ -359,6 +390,12 @@ export const Chrome = {
   },
 
   printRightThrough(text: string, txEnd: number, ty: number, palette?: Colors | null, invert?: boolean, raw?: boolean): number {
+    if (palette) {
+      const gp = raw ? Chrome.rawPalette(palette, invert) : Chrome.throughPalette(palette, invert);
+      const codes = Font.encode(text);
+      const w = gridPrint(codes, txEnd * 8 - codes.length * 8, ty * 8, gp);
+      if (w >= 0) return w;
+    }
     const [pal, drawGlyph, finish] = Chrome.paletteGlyphs(palette, invert, raw);
     const width = Font.width(text);
     const x = txEnd * 8 - width;

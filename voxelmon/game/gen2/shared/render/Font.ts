@@ -369,13 +369,16 @@ export const Font = {
     Font.drawCode(B.tr!, (tx + tw - 1) * 8, ty * 8);
     Font.drawCode(B.bl!, tx * 8, (ty + th - 1) * 8);
     Font.drawCode(B.br!, (tx + tw - 1) * 8, (ty + th - 1) * 8);
-    for (let i = 1; i <= tw - 2; i++) {
-      Font.drawCode(B.h!, (tx + i) * 8, ty * 8);
-      Font.drawCode(B.h!, (tx + i) * 8, (ty + th - 1) * 8);
+    // the edges as four runs (the same cells drawCode would write one by one)
+    const hId = tileOf(B.h!);
+    const vId = tileOf(B.v!);
+    if (hId !== undefined && tw > 2) {
+      putTiles(hId, bx + 8, by, tw - 2, 1);
+      putTiles(hId, bx + 8, by + (th - 1) * 8, tw - 2, 1);
     }
-    for (let j = 1; j <= th - 2; j++) {
-      Font.drawCode(B.v!, tx * 8, (ty + j) * 8);
-      Font.drawCode(B.v!, (tx + tw - 1) * 8, (ty + j) * 8);
+    if (vId !== undefined && th > 2) {
+      putTiles(vId, bx, by + 8, 1, th - 2);
+      putTiles(vId, bx + (tw - 1) * 8, by + 8, 1, th - 2);
     }
   },
 };
