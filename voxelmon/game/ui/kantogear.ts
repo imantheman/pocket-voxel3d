@@ -15,7 +15,7 @@ import {
 import { APPS, appOf, gearSave, type GearViewId } from "./gear/model.ts";
 import { clockStr, ctxFor, go, header, type GearCtx } from "./gear/ui.ts";
 import { battleTouchDown, battleTouchUp, drawBattleGear, type GearBattle } from "./gear/battle.ts";
-import { drawMirror, drawTextHint, mirrorTapThrough } from "./gear/mirrors.ts";
+import { drawMirror, drawTextHint, mirrorKind, mirrorTapThrough } from "./gear/mirrors.ts";
 import { availableApps, drawHome, drawOptions, drawSteps, drawStore } from "./gear/apps/home.ts";
 import { drawParty } from "./gear/apps/party.ts";
 import { drawMap, mapTouch } from "./gear/apps/map.ts";
@@ -175,21 +175,29 @@ let lastGame: GearGame = null;
 /**
  * Walking about with an app up, the gear shows the same thing frame after
  * frame -- it changes on a touch, a step, the clock, the party, a screen
- * coming or going -- and drawing it was a fifth of the 3DS's frame. So on
- * the plain overworld (no menu, no battle) the frame is skipped while those
- * stand still, and what is up stays up (the core keeps the bottom grid
- * until it is cleared). EXPLORER and MAP follow people about, menus have
- * their mirrors, a battle its own screen: those draw every frame.
+ * coming or going -- and drawing it was a fifth of the 3DS's frame. So
+ * wherever the gear shows its own app (the overworld, the title, a text
+ * box: no live mirror, no battle) the frame is skipped while those stand
+ * still, and what is up stays up (the core keeps the bottom grid until it
+ * is cleared). EXPLORER and MAP follow people about, menus have their
+ * mirrors, a battle its own screen: those draw every frame.
  */
 function stillFrame(game: GearGame): string {
   const top = game.stack?.[game.stack.length - 1];
-  if (top?.kind !== "overworld" || game.battleView?.()) return "";
+  if (game.battleView?.()) return "";
+  // a screen with a live mirror (a choice, a menu, the naming keyboard)
+  // draws every frame; anything else -- the overworld, the title and its
+  // intro, a text box -- shows the gear's own app, which stands as still
+  // there as on the overworld (the title redrew it every frame: about three
+  // quarters of the title's frame on the 3DS)
+  const mk = mirrorKind(game);
+  if (mk === "choice" || mk === "menu" || mk === "naming") return "";
   const view = activeView(game);
   if (view === "explorer" || view === "map") return "";
   const gear = gearSave(game.save);
   let party = "";
   for (const m of game.save?.party ?? []) party += `${m.species}/${m.nickname ?? ""}/${m.level}/${m.hp}/${m.stats?.hp ?? 0};`;
-  return `${view}|${pressedId() ?? ""}|${touchSerial}|${game.stack.length}|${game.overworld?.map?.id ?? ""}|` +
+  return `${view}|${top?.kind ?? ""}|${pressedId() ?? ""}|${touchSerial}|${game.stack.length}|${game.overworld?.map?.id ?? ""}|` +
     `${gear.steps}|${gear.trip}|${clockStr(gear.clock24)}|${party}`;
 }
 
