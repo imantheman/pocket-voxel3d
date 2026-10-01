@@ -1358,6 +1358,12 @@ fn dilate_rgb(texels: &mut [u8], w: u32, h: u32) {
     }
 }
 
+/// The guest's `palette` op selection (scene.palette): which SGB/GBC palette
+/// a page with no VCOL binding of its own is drawn in. -1 is the grey ramp.
+fn pal_sel_now() -> i32 {
+    unsafe { voxel::scene() }.palette
+}
+
 fn build_page_tex(pak: &Pak, pidx: u16, pal_sel: i32) -> (Vec<u8>, u32, u32) {
     let page = pak.atlases[pidx as usize];
     let lin = pak::unswizzle(page.w as usize, page.h as usize, page.frame(0))
@@ -2657,7 +2663,7 @@ fn build_map(
     let page = pak.atlases[pidx as usize];
     let lin = pak::unswizzle(page.w as usize, page.h as usize, page.frame(0)).expect("unswizzle");
     let wp = pak.map_world_pal(map_id).unwrap_or(COLOR_PAL_NONE);
-    let palv = &pak.palettes[resolve_pal(pak, pidx, page.kind, wp, -1)];
+    let palv = &pak.palettes[resolve_pal(pak, pidx, page.kind, wp, pal_sel_now())];
     let (aw, ah) = (page.w as u32, page.h as u32);
     let (tw, th) = (po2(aw), po2(ah));
     let mut tex_rgba = vec![0u8; (tw * th * 4) as usize];
@@ -3176,13 +3182,18 @@ fn main() {
     // `tint` param doc: HM Flash changes this mid-visit and needs the same
     // kind of externally-triggered rebuild as a stamp toggle.
     let mut last_tint: u32 = 0xffff_ffff;
+    // The `palette` op's selection the textures were last built with.
+    let mut last_pal_sel: i32 = i32::MIN;
+    // Gold's time of day: the terrain textures bake their palette in, so a
+    // change rebuilds the map exactly as a tint change does.
+    let mut last_daytime: u8 = 0xff;
     /// What the geometry in hand was built from. A `reload` whose inputs are
     /// all identical to this rebuilds the same vertices to the same values,
     /// and a map like Route 8 is 651,000 of them -- the logs show maps built
     /// two and three times over with no frame drawn in between.
     ///
     /// (map id, stream centre, tint, stamp count, seam sides)
-    type BuiltKey = (u32, Option<(i32, i32)>, u32, u64, [bool; 4]);
+    type BuiltKey = (u32, Option<(i32, i32)>, u32, u64, [bool; 4], u8);
     let mut built_key: Option<BuiltKey> = None;
     /// The connected-map slots (id, offset) the built geometry and its seam
     /// strips were made for. The guest publishes these a frame or two AFTER
@@ -3346,7 +3357,7 @@ fn main() {
     page_tex.resize_with(pak_static.atlases.len(), || None);
     for pg in [408usize, 421, 422, 423, 424] {
         if pg >= page_tex.len() { continue; }
-        let (data, ptw, pth) = build_page_tex(pak_static, pg as u16, -1);
+        let (data, ptw, pth) = build_page_tex(pak_static, pg as u16, pal_sel_now());
         if let Ok(mut t) = texture::Texture::new(
             texture::TextureParameters::new_2d(ptw as u16, pth as u16, texture::ColorFormat::Rgba8)) {
             if t.load_image(&data, texture::Face::default()).is_ok() {
@@ -3676,6 +3687,23 @@ fn main() {
                         last_tint = sc.tint;
                         reload = true;
                     }
+                    if sc.daytime != last_daytime {
+                        last_daytime = sc.daytime;
+                        reload = true;
+                    }
+                    // Yellow (and any SGB cook) colours the field through the
+                    // selection: a new one rebakes the terrain and drops the
+                    // page textures it tints, which rebuild on next use. A
+                    // RED++ map or sheet has its own VCOL palette and keeps it.
+                    if sc.palette != last_pal_sel {
+                        last_pal_sel = sc.palette;
+                        reload = true;
+                        for (i, pg) in pak_static.atlases.iter().enumerate() {
+                            if i >= page_tex.len() || pg.kind == atlas_kind::UI { continue; }
+                            if pak_static.page_pal(i as u16).is_some() { continue; }
+                            page_tex[i] = None;
+                        }
+                    }
                     let (gx, gy) = sc.cam_px();
                     // Streaming maps (build_map's is_huge — currently just
                     // Viridian Forest): re-stream the moment the player's
@@ -3990,6 +4018,7 @@ fn main() {
                 last_tint,
                 stamps_key,
                 seam_sides,
+                last_daytime,
             );
             // Same map, same everything: what is on screen is already it.
             // Skipping only the BUILD, not the frame -- a `continue` here
@@ -4298,7 +4327,7 @@ fn main() {
                 for (pi, pg) in pak_static.atlases.iter().enumerate() {
                     if pg.kind != atlas_kind::UI && pg.kind != atlas_kind::SPRITES { continue; }
                     if page_tex[pi].is_some() { continue; }
-                    let (data, ptw, pth) = build_page_tex(pak_static, pi as u16, -1);
+                    let (data, ptw, pth) = build_page_tex(pak_static, pi as u16, pal_sel_now());
                     if let Ok(mut t) = texture::Texture::new(
                         texture::TextureParameters::new_2d(ptw as u16, pth as u16, texture::ColorFormat::Rgba8)) {
                         if t.load_image(&data, texture::Face::default()).is_ok() {
@@ -4703,7 +4732,7 @@ if page_tex.len() < pak_static.atlases.len() {
         for (pg, _) in card_groups.iter() {
             let i = *pg as usize;
             if i < page_tex.len() && page_tex[i].is_none() {
-                let (data, ptw, pth) = build_page_tex(pak_static, *pg, -1);
+                let (data, ptw, pth) = build_page_tex(pak_static, *pg, pal_sel_now());
                 if let Ok(mut t) = texture::Texture::new(
                     texture::TextureParameters::new_2d(ptw as u16, pth as u16, texture::ColorFormat::Rgba8)) {
                     if t.load_image(&data, texture::Face::default()).is_ok() {
@@ -4730,7 +4759,7 @@ if page_tex.len() < pak_static.atlases.len() {
         }
         let ui_pg = ui_page as usize;
         if !ui_verts.is_empty() && ui_pg < page_tex.len() && page_tex[ui_pg].is_none() {
-            let (data, ptw, pth) = build_page_tex(pak_static, ui_page, -1);
+            let (data, ptw, pth) = build_page_tex(pak_static, ui_page, pal_sel_now());
             if let Ok(mut t) = texture::Texture::new(
                 texture::TextureParameters::new_2d(ptw as u16, pth as u16, texture::ColorFormat::Rgba8)) {
                 if t.load_image(&data, texture::Face::default()).is_ok() {
@@ -4745,7 +4774,7 @@ if page_tex.len() < pak_static.atlases.len() {
         for pg in pic_groups.iter().map(|g| &g.0).chain(anim_groups.iter().map(|g| &g.0)) {
             let i = *pg as usize;
             if i < page_tex.len() && page_tex[i].is_none() {
-                let (data, ptw, pth) = build_page_tex(pak_static, *pg, -1);
+                let (data, ptw, pth) = build_page_tex(pak_static, *pg, pal_sel_now());
                 if let Ok(mut t) = texture::Texture::new(
                     texture::TextureParameters::new_2d(ptw as u16, pth as u16, texture::ColorFormat::Rgba8)) {
                     if t.load_image(&data, texture::Face::default()).is_ok() {
@@ -5145,7 +5174,7 @@ if page_tex.len() < pak_static.atlases.len() {
         for (pg, _) in ui_b_sprite_groups.iter() {
             let i = *pg as usize;
             if i < page_tex.len() && page_tex[i].is_none() {
-                let (data, ptw, pth) = build_page_tex(pak_static, *pg, -1);
+                let (data, ptw, pth) = build_page_tex(pak_static, *pg, pal_sel_now());
                 if let Ok(mut t) = texture::Texture::new(
                     texture::TextureParameters::new_2d(ptw as u16, pth as u16, texture::ColorFormat::Rgba8)) {
                     if t.load_image(&data, texture::Face::default()).is_ok() {
