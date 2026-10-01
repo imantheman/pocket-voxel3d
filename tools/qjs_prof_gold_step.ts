@@ -36,7 +36,13 @@ const game: any = Game2.new();
 // bench's save stands; VIEW 2D=1 at bundle time walks in VIEW 2D
 declare const VIEW2D: boolean;
 game.load({ startWorld: true });
-game.world.setMap("ROUTE_29", 27, 3, "down");
+// MAP=GOLDENROD_CITY at bundle time: that map, at its first door as the
+// Citra tour arrives (gold_prof_entry.ts)
+declare const MAP: string;
+if (typeof MAP !== "undefined") {
+  const door = game.world.maps[MAP]?.warps?.[0];
+  game.world.warpToMapId(MAP, door?.x ?? 5, (door?.y ?? 5) + 1, "down");
+} else game.world.setMap("ROUTE_29", 27, 3, "down");
 
 const stats: Record<string, { us: number; n: number }> = {};
 let depth = 0;

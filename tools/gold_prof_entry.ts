@@ -14,7 +14,7 @@ g.goldProf = true;
 const game = g.goldGame;
 const mainFrame = g.frame;
 
-type Stop = { name: string; map?: string; view?: "2d" | "3d"; menu?: boolean; battle?: string };
+type Stop = { name: string; map?: string; at?: [number, number]; hold?: number; view?: "2d" | "3d"; menu?: boolean; battle?: string };
 const TOUR: Stop[] = [
   { name: "Route 29 3D", map: "ROUTE_29" },
   { name: "Goldenrod 3D", map: "GOLDENROD_CITY" },
@@ -24,6 +24,9 @@ const TOUR: Stop[] = [
   { name: "Goldenrod 2D", map: "GOLDENROD_CITY", view: "2d" },
   { name: "START menu", menu: true },
   { name: "battle 3D", battle: "PIDGEY" },
+  // a border crossed on foot (stop 8): Route 29 west into Cherrygrove, the
+  // map change a player makes, its neighbour read ahead
+  { name: "Route 29 west to Cherrygrove", map: "ROUTE_29", at: [4, 7], hold: VOX_BTN.left },
 ];
 declare const ONLY: string;
 declare const INTRO: boolean;
@@ -41,7 +44,8 @@ function arrive(s: Stop): void {
   if (s.map && w) {
     const def = w.maps[s.map];
     const door = def && def.warps ? def.warps[0] : undefined;
-    if (door) w.warpToMapId(s.map, door.x, door.y + 1, "down");
+    if (s.at) w.warpToMapId(s.map, s.at[0], s.at[1], "left");
+    else if (door) w.warpToMapId(s.map, door.x, door.y + 1, "down");
   }
   if (s.menu) game.openStartMenu();
   if (s.battle && w) w.startBattle({ wild: Mon.new(game.data, s.battle, 5, {}) });
@@ -69,7 +73,7 @@ g.frame = (b: number): void => {
   let pad = 0;
   const s = tour[stop];
   if (s && !s.menu && !s.battle && game.world?.map && !game.stack.top()) {
-    pad = Math.floor(n / 90) % 2 === 0 ? VOX_BTN.left : VOX_BTN.right;
+    pad = s.hold ?? (Math.floor(n / 90) % 2 === 0 ? VOX_BTN.left : VOX_BTN.right);
   } else if (s?.battle && n % 20 === 0) {
     pad = VOX_BTN.a;
   }

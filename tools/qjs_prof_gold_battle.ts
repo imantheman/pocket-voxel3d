@@ -86,8 +86,11 @@ function wrap(owner: any, label: string): void {
   }
 }
 declare const NOWRAP: boolean;
+// TOPONLY=1: only the screen on top wrapped (less of the wrappers' own cost
+// in the small helpers' totals)
+declare const TOPONLY: boolean;
 const wrapping = typeof NOWRAP === "undefined" || !NOWRAP;
-if (wrapping) {
+if (wrapping && (typeof TOPONLY === "undefined" || !TOPONLY)) {
   wrap(Lcd.prototype, "Lcd");
   wrap(G, "G");
   wrap(TileSheet.prototype, "TileSheet");
