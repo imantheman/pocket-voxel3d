@@ -38,6 +38,11 @@ seed(SEED);
 setSaveIo({
   read: () => host.saveData() ?? undefined,
   write: (text) => host.saveWrite(text) !== false,
+  // the OPTION screen's settings in their own file (options_gold.lua), so
+  // they stick across boots whether or not the game was saved; a host
+  // without the file keeps them for the session only
+  readOptions: () => native.optionsData?.() ?? undefined,
+  writeOptions: (text) => (native.optionsWrite ? native.optionsWrite(text) !== false : false),
 });
 
 // the sound seam, when its port provides one
@@ -61,10 +66,10 @@ if (pages) {
 // ---- the game ---------------------------------------------------------------
 const game = Game2.new();
 const view = new WorldView(host, walker as ConstructorParameters<typeof WorldView>[1]);
-// the bottom screen's status panel (ui/Companion.ts)
-const companion = new Companion(host, banks);
 // for tools that wrap this entry (tools/gold_battle_entry.ts, a Citra bench)
 (globalThis as unknown as { goldGame?: Game2 }).goldGame = game;
+// the bottom screen's status panel (ui/Companion.ts)
+const companion = new Companion(host, banks);
 try {
   game.load();
 } catch (e) {

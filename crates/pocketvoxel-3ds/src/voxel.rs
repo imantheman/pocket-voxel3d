@@ -75,13 +75,46 @@ const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save_yellow.lua";
 #[cfg(feature = "gold")]
 const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save_gold.lua";
 static mut SAVE_BUF: Vec<u8> = Vec::new();
+/// The OPTION screen's settings, beside the save (`voxel.optionsData()` /
+/// `optionsWrite`): Gold keeps them out of the save the way the cart keeps
+/// its options byte apart, so they stick whether or not the game was saved.
+/// The Kanto games keep theirs in the save and never ask.
+#[cfg(feature = "gold")]
+const OPTIONS_PATH: &str = "sdmc:/3ds/voxelmon/options_gold.lua";
+#[cfg(not(feature = "gold"))]
+const OPTIONS_PATH: &str = "sdmc:/3ds/voxelmon/options.lua";
+static mut OPTIONS_BUF: Vec<u8> = Vec::new();
 
 /// Read whatever is on the card at boot so CONTINUE has something to load.
 #[allow(static_mut_refs)]
 pub unsafe fn load_save_file() {
     SAVE_BUF = std::fs::read(SAVE_PATH).unwrap_or_default();
     println!("save: {} bytes", SAVE_BUF.len());
+    OPTIONS_BUF = std::fs::read(OPTIONS_PATH).unwrap_or_default();
 }
+
+/// Write the options file; later reads this session see it too.
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub unsafe extern "C" fn voxel_options_write(s: *const u8, len: i32) -> i32 {
+    if s.is_null() || len <= 0 { return 0; }
+    let b = core::slice::from_raw_parts(s, len as usize);
+    LAST_WRITE_ERR = String::new();
+    if card_write(OPTIONS_PATH, b) {
+        OPTIONS_BUF = b.to_vec();
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub unsafe extern "C" fn voxel_options_ptr() -> *const u8 { OPTIONS_BUF.as_ptr() }
+
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub unsafe extern "C" fn voxel_options_len() -> u32 { OPTIONS_BUF.len() as u32 }
 
 /// Why the last card write failed, for the game to show the player. Empty
 /// when it worked.

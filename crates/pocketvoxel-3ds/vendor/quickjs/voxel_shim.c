@@ -12,6 +12,9 @@ extern const uint8_t *voxel_write_err_ptr(void);
 extern uint32_t voxel_write_err_len(void);
 extern const uint8_t *voxel_save_ptr(void);
 extern uint32_t voxel_save_len(void);
+extern int voxel_options_write(const char *s, int len);
+extern const uint8_t *voxel_options_ptr(void);
+extern uint32_t voxel_options_len(void);
 extern void voxel_op(uint32_t code, const int32_t *args, int n);
 extern void voxel_op_text(uint32_t code, const int32_t *args, int n,
                           const char *s, int len);
@@ -112,6 +115,23 @@ static JSValue vox_savedata(JSContext *ctx, JSValueConst t, int c, JSValueConst 
     return JS_NewStringLen(ctx, (const char *)voxel_save_ptr(), voxel_save_len());
 }
 
+/* optionsWrite(text) / optionsData() - the OPTION screen's file, beside the save. */
+static JSValue vox_optionswrite(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 1) return JS_FALSE;
+    size_t len = 0;
+    int ok = 0;
+    const char *s = JS_ToCStringLen(ctx, &len, v[0]);
+    if (s) { ok = voxel_options_write(s, (int)len); JS_FreeCString(ctx, s); }
+    return ok ? JS_TRUE : JS_FALSE;
+}
+
+static JSValue vox_optionsdata(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;(void)c;(void)v;
+    if (voxel_options_len() == 0) return JS_UNDEFINED;
+    return JS_NewStringLen(ctx, (const char *)voxel_options_ptr(), voxel_options_len());
+}
+
 static void add_num(JSContext *ctx, JSValue obj, const char *name, int code, int len) {
     JS_SetPropertyStr(ctx, obj, name,
         JS_NewCFunctionMagic(ctx, vox_num, name, len, JS_CFUNC_generic_magic, code));
@@ -193,6 +213,8 @@ int qjs_register_voxel(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "lastStep",  JS_NewCFunction(ctx, vox_laststep,  "lastStep", 0));
     JS_SetPropertyStr(ctx, o, "saveWrite", JS_NewCFunction(ctx, vox_savewrite, "saveWrite", 1));
     JS_SetPropertyStr(ctx, o, "saveData",  JS_NewCFunction(ctx, vox_savedata,  "saveData", 0));
+    JS_SetPropertyStr(ctx, o, "optionsWrite", JS_NewCFunction(ctx, vox_optionswrite, "optionsWrite", 1));
+    JS_SetPropertyStr(ctx, o, "optionsData",  JS_NewCFunction(ctx, vox_optionsdata,  "optionsData", 0));
     JS_SetPropertyStr(ctx, o, "writeTest", JS_NewCFunction(ctx, vox_writetest, "writeTest", 0));
     JS_SetPropertyStr(ctx, o, "linkOpen",  JS_NewCFunction(ctx, vox_linkopen,  "linkOpen", 0));
     JS_SetPropertyStr(ctx, o, "linkState", JS_NewCFunction(ctx, vox_linkstate, "linkState", 0));
