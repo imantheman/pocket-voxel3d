@@ -229,10 +229,16 @@ impl GbScreen {
     /// (`VRAM_BYTES`): what the loads put there, read once -- a host keeps
     /// it while the loads stand and renders from it every frame.
     pub fn decode_vram(&self, pixel: &mut impl FnMut(u16, u16, u8, u8) -> u8, out: &mut [u8]) {
+        self.decode_vram_range(pixel, out, 0, 384);
+    }
+
+    /// `decode_vram` for VRAM tiles `from..to` only (a page that animates
+    /// re-read without the rest).
+    pub fn decode_vram_range(&self, pixel: &mut impl FnMut(u16, u16, u8, u8) -> u8, out: &mut [u8], from: u16, to: u16) {
         if out.len() < VRAM_BYTES {
             return;
         }
-        for v in 0..384u16 {
+        for v in from..to.min(384) {
             let dst = &mut out[v as usize * 64..v as usize * 64 + 64];
             match self.tile_source(v) {
                 Some((page, tile)) => {

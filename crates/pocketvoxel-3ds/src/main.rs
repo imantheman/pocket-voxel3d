@@ -3518,6 +3518,8 @@ fn main() {
     // own terrain page, which every map change replaces
     let mut gb_pak: *const pak::Pak<'static> = core::ptr::null();
     let mut gb_terrain_map: u32 = u32::MAX;
+    // which of the terrain page's baked water/flower steps is decoded
+    let mut gb_terrain_frame: u16 = 0;
     // VRAM decoded once per set of loads (the 2D overworld redraws every
     // frame it walks; reading each pixel out of its page every time was most
     // of the frame), the loads it was decoded for, and the texture's bytes
@@ -5092,10 +5094,31 @@ if page_tex.len() < pak_static.atlases.len() {
                     gb_vram_loads.clear();
                     gb_drawn = None;
                 }
+                // The map's water and flowers: the terrain page's baked steps
+                // (cook/atlas.ts), one every 21 frames as the cart's
+                // UpdateMovingBgTiles steps them. A new step re-reads that
+                // page and re-decodes its VRAM tiles, nothing else.
+                let mut anim_only: Option<(u16, u16)> = None;
+                if let Some(l) = sc.gb.current_loads().iter().find(|l| l.page == pocketvoxel_core::gb::GB_PAGE_MAP_TERRAIN) {
+                    let src = pak_static.map_terrain_page(l.map)
+                        .or_else(|| pak_static.page_of_kind(atlas_kind::TERRAIN))
+                        .unwrap_or(u16::MAX);
+                    let frames = pak_static.atlases.get(src as usize).map(|pg| pg.frames.max(1)).unwrap_or(1);
+                    let f = ((sc.tick / 21) % frames as u32) as u16;
+                    if f != gb_terrain_frame {
+                        gb_terrain_frame = f;
+                        if l.map == gb_terrain_map && gb_pages.iter().any(|g| g.0 == l.page) {
+                            gb_pages.retain(|g| g.0 != l.page);
+                            anim_only = Some((l.dest, l.dest + l.count));
+                        }
+                        gb_drawn = None;
+                    }
+                }
                 if gb_drawn != Some(sc.gb.serial) {
                     gb_drawn = Some(sc.gb.serial);
                     let loads = sc.gb.current_loads();
                     let mut stale = gb_vram.is_empty() || gb_vram_loads.as_slice() != loads;
+                    let whole = stale;
                     for l in loads {
                         // the 2D overworld's tiles: the map's own terrain
                         // page, read again when the map changes
@@ -5113,11 +5136,16 @@ if page_tex.len() < pak_static.atlases.len() {
                             l.page
                         };
                         if let Some(pg) = pak_static.atlases.get(src as usize) {
-                            let lin = pak::unswizzle(pg.w as usize, pg.h as usize, pg.frame(0))
+                            let f = if l.page == pocketvoxel_core::gb::GB_PAGE_MAP_TERRAIN { gb_terrain_frame } else { 0 };
+                            let lin = pak::unswizzle(pg.w as usize, pg.h as usize, pg.frame(f))
                                 .unwrap_or_default();
                             gb_pages.push((l.page, lin, pg.w as usize));
                         }
                     }
+                    let range = match anim_only {
+                        Some(r) if !whole && !gb_vram.is_empty() => r,
+                        _ => (0, 384),
+                    };
                     if stale {
                         gb_vram_loads = loads.to_vec();
                         gb_vram.resize(pocketvoxel_core::gb::VRAM_BYTES, 0);
@@ -5129,7 +5157,7 @@ if page_tex.len() < pak_static.atlases.len() {
                             let px = lin.get((ty * 8 + y as usize) * *w + tx * 8 + x as usize).copied().unwrap_or(0);
                             if px == 0xff { 0 } else { px & 3 }
                         };
-                        sc.gb.decode_vram(&mut pixel, &mut gb_vram);
+                        sc.gb.decode_vram_range(&mut pixel, &mut gb_vram, range.0, range.1);
                     }
                     sc.gb.render_decoded(&gb_vram, &mut gb_fb);
                     let grey = pak_static.palettes.get(atlas_kind::PICS as usize);
