@@ -73,7 +73,7 @@ function busyPad(): number {
     }
     if (phase === "moves") {
       const moves: any[] = top.playerMoves();
-      const target = Math.max(1, moves.findIndex((m: any) => (m.pp ?? 1) > 0) + 1);
+      const target = bestMove(moves, top.battle?.enemy);
       if (!tick) return 0;
       return top.moveIndex < target ? VOX_BTN.down : top.moveIndex > target ? VOX_BTN.up : VOX_BTN.a;
     }
@@ -108,6 +108,31 @@ function busyPad(): number {
   return frames % 8 === 0 ? VOX_BTN.a : 0;
 }
 
+/** The move to pick (1-based): the hardest-hitting one with PP that the
+ *  foe is not immune to (Gen 2's immunities); the first with PP otherwise. */
+const IMMUNE: Record<string, string[]> = {
+  NORMAL: ["GHOST"], FIGHTING: ["GHOST"], GHOST: ["NORMAL"], GROUND: ["FLYING"],
+  ELECTRIC: ["GROUND"], PSYCHIC: ["DARK"], POISON: ["STEEL"],
+};
+function bestMove(moves: any[], foe: any): number {
+  const sp = foe?.species;
+  const types: string[] = foe?.types ?? game.data.pokemon?.[sp]?.types ?? [];
+  let best = -1;
+  let score = 0;
+  moves.forEach((m: any, i: number) => {
+    if ((m.pp ?? 1) <= 0) return;
+    const def = game.data.moves?.[m.id ?? m];
+    const immune = (IMMUNE[def?.type] ?? []).some((t) => types.includes(t));
+    const v = immune ? 0 : (def?.power ?? 0);
+    if (v > score) {
+      score = v;
+      best = i;
+    }
+  });
+  if (best < 0) best = Math.max(0, moves.findIndex((m: any) => (m.pp ?? 1) > 0));
+  return best + 1;
+}
+
 let partyTop = -1000;
 let partyFrames = 0;
 
@@ -124,11 +149,26 @@ export function withAnswer<T>(fn: (top: any) => number | undefined, body: () => 
 }
 
 /** Let whatever has the game run out; the world free for `quiet` frames. */
+let lastText = "";
+let lastBattleMsg = "";
 export function settle(max = 20000, quiet = 8): void {
   let free = 0;
-  for (let f = 0; f < max; f++) {
+  // (a battle a worn-out lead drags on with weak moves counts a fifth)
+  for (let f = 0; f < max; f += screen()?.screenId === "Gen2BattleState" ? 0.2 : 1) {
     if (busy()) {
       free = 0;
+      if (process.env.STORY_DEBUG) {
+        const top = screen();
+        const pages = top?.isTextBox ? (top.pages ?? top.text) : undefined;
+        const t = pages ? JSON.stringify(Array.isArray(pages) ? pages[(top.pageIndex ?? 1) - 1] ?? pages : pages) : "";
+        if (t && t !== lastText) log(`      text: ${t.slice(0, 160)}`);
+        lastText = t;
+        if (top?.screenId === "Gen2BattleState") {
+          const m = JSON.stringify(top.message ?? "");
+          if (m !== lastBattleMsg && m !== '""') log(`      battle: ${m.slice(0, 100)} [${top.phase}] ${(top.playerMoves?.() ?? []).map((x: any) => `${x.id}:${x.pp}`).join(" ")}`);
+          lastBattleMsg = m;
+        }
+      }
       step(busyPad());
     } else {
       if (++free >= quiet) return;
@@ -648,7 +688,7 @@ function planStep(m: string, x: number, y: number, dir: Dir, goal: (m: string, x
     const npc = w.npcAt(tx, ty);
     if (npc && !goal(m, tx, ty) && !rockAt(tx, ty) && !freshTrainerAt(tx, ty)) ok = false;
   }
-  if (!live && ok && boulderHome(m, tx, ty)) ok = false;
+  if (!live && ok && !goal(m, tx, ty) && standsAt(m, tx, ty)) ok = false;
   if (!ok) {
     // .TryJump: a ledge under the feet that faces this way
     const f = surf ? undefined : Permissions.ledgeFacings(map.cellCollision(x, y));
@@ -710,6 +750,21 @@ function planStep(m: string, x: number, y: number, dir: Dir, goal: (m: string, x
     return { m, x: sx, y: sy, surf: true };
   }
   return { m, x: tx, y: ty, surf: (surf || startSurf) && water, startSurf, whirl };
+}
+
+/** Someone who keeps to one spot at (x, y) on map `m` (one the player is
+ *  not on), shown by the story's flags: a boulder, a guard, a still person
+ *  -- what the live map would show in the way. Not unbeaten trainers (they
+ *  come to the player) nor rocks a ROCK SMASH clears. */
+const STILL_MOVES = new Set([1, 3, 6, 7, 8, 9, 10]);
+function standsAt(m: string, x: number, y: number): boolean {
+  if (boulderHome(m, x, y)) return true;
+  const def = world().maps[m];
+  return (def?.objects ?? []).some((o: any) => o.x === x && o.y === y && STILL_MOVES.has(o.movement)
+    && o.sprite !== "SPRITE_POKE_BALL" && !(o.sprite === "SPRITE_ROCK" && can.rocksmash)
+    && !(o.hours && o.hours[0] !== -1)
+    && !(o.trainer && !world().events?.get(o.trainer.event))
+    && !(o.eventFlag != null && o.eventFlag !== 65535 && world().events.get(o.eventFlag)));
 }
 
 /** A boulder standing at (x, y) on map `m` (one the player is not on):
@@ -872,6 +927,9 @@ export function canReach(goal: (m: string, x: number, y: number) => boolean): bo
 
 /** Walk (across maps) until standing where `goal` accepts. */
 export function go(goal: (m: string, x: number, y: number) => boolean, what: string): void {
+  // steps refused on an earlier trip (a guard who has since stood aside)
+  // are worth trying again
+  refused.clear();
   for (let tries = 0; tries < 300; tries++) {
     if (process.env.STORY_DEBUG) log(`    [round ${tries}] before settle: ${describe()} held=${world().heldDir}`);
     settle();

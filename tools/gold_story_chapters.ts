@@ -126,8 +126,9 @@ function teach(move: string): void {
     }
   }
   const mv = game.data.moves?.[move];
-  while (mon.moves.length <= slot) mon.moves.push({ id: "TACKLE", pp: 35, ppUps: 0 });
-  mon.moves[slot] = { id: move, pp: mv?.pp ?? 30, ppUps: 0 };
+  while (mon.moves.length <= slot) mon.moves.push({ id: "TACKLE", pp: 35, maxPp: 35, ppUps: 0 });
+  // (maxPp as the engine's own moves carry it: a POKeMON CENTER heals to it)
+  mon.moves[slot] = { id: move, pp: mv?.pp ?? 30, maxPp: mv?.pp ?? 30, ppUps: 0 };
   log(`     ${mon.species} knows ${mon.moves.map((m: any) => m.id ?? m).join(" ")}`);
 }
 
@@ -496,6 +497,50 @@ chapter("32 LANCE, the HALL OF FAME, the credits", () => {
     }
   }
   log(`     after the credits: ${describe()} HoF ${JSON.stringify(save().hallOfFame?.length ?? save().hof?.length ?? null)}`);
+});
+
+chapter("33 the S.S. TICKET from ELM", () => {
+  travel("ELMS_LAB");
+  settle();
+  if (!flag("EVENT_GOT_SS_TICKET_FROM_ELM")) talk("SPRITE_ELM");
+  expect(flag("EVENT_GOT_SS_TICKET_FROM_ELM") && hasItem("S_S_TICKET"), "the S.S. TICKET");
+});
+
+chapter("34 the S.S. AQUA to Vermilion", () => {
+  // the port's sailor sees the ticket (a coord event at (7, 15)), YES, and
+  // walks the player aboard
+  reach("OLIVINE_PORT", 7, 15, () => here() === "FAST_SHIP_1F");
+  settle();
+  expect(here() === "FAST_SHIP_1F", `aboard the S.S. AQUA (at ${describe()})`);
+  settle();
+  // B1F's sailor keeps the way west shut (stepping across whichever lane the
+  // player takes) until the lazy sailor he tells of is found and beaten
+  if (!flag("EVENT_FAST_SHIP_LAZY_SAILOR")) {
+    if (!flag("EVENT_FAST_SHIP_INFORMED_ABOUT_LAZY_SAILOR")) {
+      travel("FAST_SHIP_B1F");
+      settle();
+      const guard = (game.world.npcs ?? []).find((n: any) => !n.hidden && n.def?.sprite === "SPRITE_SAILOR" && n.cellY === 6 && n.cellX >= 30);
+      if (!guard) fail("no sailor guarding B1F's way west");
+      use(guard.cellX, guard.cellY, "B1F's sailor");
+      expect(flag("EVENT_FAST_SHIP_INFORMED_ABOUT_LAZY_SAILOR"), "told of the lazy sailor");
+    }
+    useOn("FAST_SHIP_CABINS_NNW_NNE_NE", 4, 26, "the lazy sailor");
+    settle();
+    expect(flag("EVENT_FAST_SHIP_LAZY_SAILOR"), "the lazy sailor found");
+  }
+  // the captain's granddaughter is lost in his cabin: found, she runs back
+  // to her grandfather, and the ship comes in
+  if (!flag("EVENT_FAST_SHIP_FOUND_GIRL")) useOn("FAST_SHIP_CABINS_SE_SSE_CAPTAINS_CABIN", 2, 25, "the captain's granddaughter");
+  settle();
+  expect(flag("EVENT_FAST_SHIP_FOUND_GIRL"), "the girl found");
+  expect(flag("EVENT_FAST_SHIP_HAS_ARRIVED"), "the S.S. AQUA in port");
+  // the sailor at the gangway (25, 2) sees the player ashore (its warp is
+  // "back where you came from", which no plan can follow)
+  travel("FAST_SHIP_1F");
+  use(25, 2, "the gangway sailor");
+  settle();
+  expect(here() === "VERMILION_PORT", `ashore at Vermilion (at ${describe()})`);
+  travel("VERMILION_CITY");
 });
 
 void describe;
