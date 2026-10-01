@@ -254,9 +254,17 @@ impl LcdScreen {
         if out.len() < LCD_W * LCD_H {
             return;
         }
+        // The bank a tile id falls in, remembered: neighbouring cells almost
+        // always share one, so the search runs once per change of bank
+        // rather than once per pixel.
+        let mut hit: Option<LcdBank> = None;
         let mut raw = |id: u16, x: u8, y: u8| -> u8 {
-            match self.tile_source(id) {
-                Some((page, tile)) => pixel(page, tile, x, y) & 3,
+            let inside = |b: &LcdBank| id >= b.base && (id as u32) < b.base as u32 + b.count as u32;
+            if !hit.as_ref().is_some_and(inside) {
+                hit = self.banks[..self.bank_count].iter().rev().find(|b| inside(b)).copied();
+            }
+            match hit {
+                Some(b) => pixel(b.page, id - b.base, x, y) & 3,
                 None => 0,
             }
         };

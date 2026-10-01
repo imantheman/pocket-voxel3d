@@ -3320,6 +3320,9 @@ fn main() {
     let mut lcd_drawn: Option<u32> = None;
     let mut lcd_fb = vec![0u8; pocketvoxel_core::lcd::LCD_W * pocketvoxel_core::lcd::LCD_H];
     let mut lcd_hold: Option<buffer::Info> = None;
+    // The Gold screen's upload buffer, kept: only its 160x144 corner is
+    // ever written, and the rest stays transparent.
+    let mut lcd_data = vec![0u8; 256 * 256 * 4];
     // TINS: one buffer per carved shape, and the placements that draw them.
     // A forest is the same few drawings thousands of times, so the geometry
     // is uploaded once and the instances only say where and how detailed.
@@ -4929,7 +4932,7 @@ if page_tex.len() < pak_static.atlases.len() {
                         lut[i] = pocketvoxel_core::lcd::LcdScreen::abgr(*c);
                     }
                     let (lw, lh) = (pocketvoxel_core::lcd::LCD_W, pocketvoxel_core::lcd::LCD_H);
-                    let mut data = vec![0u8; 256 * 256 * 4];
+                    let data = &mut lcd_data;
                     for y in 0..lh {
                         for x in 0..lw {
                             let c = lut[lcd_fb[y * lw + x] as usize];
@@ -4950,7 +4953,7 @@ if page_tex.len() < pak_static.atlases.len() {
                         }
                     }
                     if let Some(t) = lcd_tex[next].as_mut() {
-                        if t.load_image(&data, texture::Face::default()).is_ok() {
+                        if t.load_image(&data[..], texture::Face::default()).is_ok() {
                             unsafe { gsp_flush(data.as_ptr(), data.len() as u32); }
                             lcd_cur = next;
                         }
