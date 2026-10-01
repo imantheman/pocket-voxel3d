@@ -826,6 +826,7 @@ export class Game2 {
       }
       // the world is the voxel scene; the stack draws over its holes
       this.frameWorldActive = true;
+      this.coverFadedWorld();
       this.world.drawOverlay?.();
       if (this.stack.top()) this.stack.draw();
       return;
@@ -835,6 +836,23 @@ export class Game2 {
     G.clear(0.07, 0.05, 0.02);
     Font.draw("POKEMON GOLD", 32, 48);
     Font.draw(String(this.status ?? "No world").slice(0, 20), 0, 72);
+  }
+
+  /**
+   * The world's fade to white or black (World.lua's fade ramp: warps, the
+   * map-setup white hold, fade specials). The Lua remapped its map canvas
+   * along the ramp; the voxel world has no such pass, so past the ramp's
+   * midpoint the Gold screen covers the 3D view in the fade's colour -- a
+   * two-step fade rather than four, but no hard cut.
+   */
+  private coverFadedWorld(): void {
+    const w = this.world;
+    if (!w || !w.fade) return;
+    const level = typeof w.fadeLevel === "number" ? w.fadeLevel : 1;
+    if (level < 0.5 && w.fadeHold == null) return;
+    if (w.fade === "black") G.setColor(0, 0, 0, 1);
+    else G.setColor(1, 1, 1, 1);
+    G.rectangle("fill", 0, 0, 160, 144);
   }
 
   /** Game2.lua:2304 -- the options the 3DS still has a use for. */
