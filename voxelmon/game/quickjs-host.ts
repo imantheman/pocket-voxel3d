@@ -113,6 +113,8 @@ export interface VoxelNative {
   lcdUnder?(w: number, h: number): void;
   lcdUnderRow?(row: number, hex: string): void;
   lcdUnderAt?(on: number, x: number, y: number): void;
+  /** voxel-spec.ts flatWorld: the 3D world is not seen; build no meshes. */
+  flatWorld?(on: number): void;
   daytime?(k: number): void;
   /** spec `tiltShift`: 0 off, 1 soft, 2 strong. */
   tiltShift?(level: number): void;
@@ -364,6 +366,9 @@ export class QuickJsHost implements VoxelHost {
   }
   lcdUnderAt(on: number, x: number, y: number): void {
     native.lcdUnderAt?.(on, x, y);
+  }
+  flatWorld(on: number): void {
+    native.flatWorld?.(on);
   }
   daytime(k: number): void {
     native.daytime?.(k);

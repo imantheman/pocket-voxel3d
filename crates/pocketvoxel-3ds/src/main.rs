@@ -2828,7 +2828,44 @@ fn build_map(
     // neighbour's own ground replaces it — and kept everywhere else, where
     // removing it would leave the map ending in open sky.
     seam_sides: [bool; 4],
+    // The world is not seen (spec flatWorld, VIEW 2D): the map's bounds
+    // only -- what the read-ahead and the camera key off -- and no mesh,
+    // terrain texture or floor. Built in full when it is seen again.
+    flat: bool,
 ) -> MapGeom {
+    if flat {
+        let map = pak.maps.iter().find(|m| m.map_id == map_id).expect("map");
+        let all_chunks = &pak.chunks[map.first as usize..(map.first + map.count) as usize];
+        let mut map_min = [f32::MAX; 2];
+        let mut map_max = [f32::MIN; 2];
+        for c in all_chunks {
+            map_min[0] = map_min[0].min(c.aabb_min[0] as f32);
+            map_min[1] = map_min[1].min(c.aabb_min[2] as f32);
+            map_max[0] = map_max[0].max(c.aabb_max[0] as f32);
+            map_max[1] = map_max[1].max(c.aabb_max[2] as f32);
+        }
+        if all_chunks.is_empty() {
+            map_min = [0.0; 2];
+            map_max = [16.0; 2];
+        }
+        let center = [(map_min[0] + map_max[0]) * 0.5, 0.0, (map_min[1] + map_max[1]) * 0.5];
+        let size = (map_max[0] - map_min[0]).max(map_max[1] - map_min[1]).max(16.0);
+        return MapGeom {
+            floor: Default::default(),
+            chunk_spans: Vec::new(),
+            verts: Vec::new(),
+            center,
+            size,
+            tex_rgba: vec![0u8; 8 * 8 * 4],
+            tw: 8,
+            th: 8,
+            aw: 8,
+            ah: 8,
+            is_huge: false,
+            map_min,
+            map_max,
+        };
+    }
     let pidx = pak.map_terrain_page(map_id)
         .or_else(|| pak.page_of_kind(atlas_kind::TERRAIN))
         .expect("terrain page");
@@ -3397,8 +3434,10 @@ fn main() {
     /// two and three times over with no frame drawn in between.
     ///
     /// (map id, stream centre, tint, stamp count, seam sides)
-    type BuiltKey = (u32, Option<(i32, i32)>, u32, u64, [bool; 4], u8);
+    type BuiltKey = (u32, Option<(i32, i32)>, u32, u64, [bool; 4], u8, bool);
     let mut built_key: Option<BuiltKey> = None;
+    // whether the geometry up was built flat (spec flatWorld: no mesh)
+    let mut built_flat = false;
     /// The connected-map slots (id, offset) the built geometry and its seam
     /// strips were made for. The guest publishes these a frame or two AFTER
     /// the map itself when the player crosses a seam -- a warp arrives with
@@ -3969,6 +4008,11 @@ fn main() {
                             reload = true;
                         }
                     }
+                    // The world seen again after VIEW 2D (or hidden): build
+                    // what it now needs.
+                    if (sc.flat_world && !LEGACY_ZONE) != built_flat {
+                        reload = true;
+                    }
 
                     // Read the connected maps ahead, in whatever time is
                     // left over. The guest publishes them as extra map slots
@@ -4247,6 +4291,8 @@ fn main() {
                 }
                 h
             };
+            // (never in the forest zone: its loader stays exactly as it was)
+            let flat_now = unsafe { voxel::scene().flat_world && !LEGACY_ZONE };
             let want_key: BuiltKey = (
                 map_ids[map_i],
                 if cur_map_huge { stream_center_chunk } else { None },
@@ -4254,6 +4300,7 @@ fn main() {
                 stamps_key,
                 seam_sides,
                 last_daytime,
+                flat_now,
             );
             // Same map, same everything: what is on screen is already it.
             // Skipping only the BUILD, not the frame -- a `continue` here
@@ -4272,7 +4319,9 @@ fn main() {
                     &stamps_off_snapshot,
                     last_tint,
                     seam_sides,
+                    flat_now,
                 );
+                built_flat = flat_now;
                 cur_map_huge = geom.is_huge;
                 built_key = Some(want_key);
                 // The floor the cards stand on, for the draw pass.
@@ -4418,7 +4467,7 @@ fn main() {
                 // than fail an allocation mid-load.
                 let free_kb = unsafe_free_kb();
                 dlog(&format!("[pv] linear free {} KB after build", free_kb));
-                if !cur_map_huge && free_kb >= STRIP_MIN_FREE_KB {
+                if !cur_map_huge && free_kb >= STRIP_MIN_FREE_KB && !built_flat {
                     for &(nid, ox, oy) in neighbor_slots.iter() {
                         dlog(&format!("[pv] strip loading id={} free={}KB", nid, unsafe_free_kb()));
                         let Some((_, nname)) = map_index.iter().find(|(id, _)| *id == nid) else {
@@ -4483,7 +4532,7 @@ fn main() {
                 tree_insts.clear();
                 {
                     let insts = pak_static.trees_of(map_ids[map_i]);
-                    if !insts.is_empty() {
+                    if !insts.is_empty() && !built_flat {
                         tree_insts.extend_from_slice(insts);
                         let mut shape_verts = 0usize;
                         for m in pak_static.tree_shapes.iter() {

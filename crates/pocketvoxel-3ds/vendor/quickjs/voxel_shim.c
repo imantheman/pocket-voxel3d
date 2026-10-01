@@ -304,6 +304,7 @@ int qjs_register_voxel(JSContext *ctx) {
     /* The Gold screen's under layer (VIEW 2D). */
     add_num(ctx, o, "lcdUnder",   108, 2);
     add_num(ctx, o, "lcdUnderAt", 110, 3);
+    add_num(ctx, o, "flatWorld",  111, 1);
     JS_SetPropertyStr(ctx, o, "lcdUnderRow",
         JS_NewCFunctionMagic(ctx, vox_numtext, "lcdUnderRow", 2, JS_CFUNC_generic_magic, 109));
 

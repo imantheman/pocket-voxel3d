@@ -8,6 +8,7 @@ declare const VIEW2D: boolean;
 declare const WALKONLY: boolean;
 declare const WARP: string;
 declare const STILL: boolean;
+declare const TO3D: boolean;
 const g = globalThis as unknown as { voxelmonGame: any; frame: (b: number) => void };
 const game = g.voxelmonGame;
 const mainFrame = g.frame;
@@ -45,6 +46,8 @@ g.frame = (b: number): void => {
     const o = (game.save.options ??= {});
     o.battleView = "2d";
     o.view = typeof VIEW2D !== "undefined" && VIEW2D ? "2d" : "3d";
+    // TO3D: back to the voxel world partway, which must build it again
+    if (typeof TO3D !== "undefined" && TO3D && worldFrames > 300) o.view = "3d";
   }
   i++;
   mainFrame((b & ~0xff) | pad);

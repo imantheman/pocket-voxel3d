@@ -886,6 +886,14 @@ export const VOX_OP = {
   lcdUnder: 108,
   lcdUnderRow: 109,
   lcdUnderAt: 110,
+  /**
+   * The 3D world cannot be seen (the OPTION screen's VIEW 2D, outside a
+   * 3D battle): the host still loads each map's pak -- the 2D screens read
+   * its pages -- but builds no mesh, seam strips or trees for it, and
+   * builds them when this goes back to 0. Stated every frame.
+   *   flatWorld(on)
+   */
+  flatWorld: 111,
 } as const;
 
 /** Clips in Yellow's PikachuCriesPointerTable (NUM_PIKA_CRIES). */

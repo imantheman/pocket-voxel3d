@@ -205,6 +205,9 @@ pub struct Scene {
     /// The OPTION screen's TILT SHIFT (the `tiltShift` op): 0 off, 1 soft,
     /// 2 strong.
     pub tilt_shift: u8,
+    /// `flatWorld`: the 3D world is not seen (VIEW 2D); the host loads maps
+    /// without building their meshes.
+    pub flat_world: bool,
     /// The player's own camera swing, radians, on top of whatever camera the
     /// scene asks for: yaw around the focus, and elevation.
     ///
@@ -429,6 +432,7 @@ impl Scene {
             tint: 0xffff_ffff,
             daytime: 1,
             tilt_shift: 0,
+            flat_world: false,
             cam_yaw_off: 0.0,
             cam_pitch_off: 0.0,
             cam_dist_scale: 1.0,
@@ -628,6 +632,7 @@ impl Scene {
                 crate::pak::DAYTIME.store(k, core::sync::atomic::Ordering::Relaxed);
             }
             op::TILT_SHIFT => self.tilt_shift = a(0).clamp(0, 2) as u8,
+            op::FLAT_WORLD => self.flat_world = a(0) != 0,
             op::PALETTE => {
                 if !args.is_empty() {
                     self.palette = a(0);

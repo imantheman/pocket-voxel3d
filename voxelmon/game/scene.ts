@@ -125,6 +125,8 @@ export interface SceneView {
   battle2d?(): boolean;
   /** VIEW 2D with the overworld up: the GB screen draws it (world/view2d.ts). */
   overworld2d?(): boolean;
+  /** The 3D world cannot be seen (game.ts flatWorld; the flatWorld op). */
+  flatWorld?(): boolean;
   /** Autopilot-only profiling hook; undefined in production and in the sim. */
   prof?: Prof;
 }
@@ -214,6 +216,9 @@ export class Scene {
   private battleActive = false;
   /** VIEW 2D's overworld is up (the voxel world hidden). */
   private flatWorld = false;
+  /** The flatWorld op's last value, and frames since it was stated. */
+  private flatSent = 0;
+  private flatAge = 0;
   private arenaStaged = false;
   private cardShown = new Map<number, string>();
 
@@ -230,6 +235,14 @@ export class Scene {
     }
     const p = view.prof;
     const t0 = p ? p.now() : 0;
+    // VIEW 2D: no mesh is built for a world no one sees (the flatWorld op;
+    // restated now and then while on, in case the host's scene was reset --
+    // never sent at all in 3D, whose op stream stays as it was)
+    const flatWorld = view.flatWorld?.() ? 1 : 0;
+    if (flatWorld !== this.flatSent || (flatWorld === 1 && (this.flatAge = (this.flatAge + 1) % 120) === 0)) {
+      this.host.flatWorld?.(flatWorld);
+      this.flatSent = flatWorld;
+    }
     // VIEW 2D: the voxel world stands down -- its people hidden, and the
     // backdrop picture (emitUi) keeps the host from drawing the maps. The
     // maps still go out: the host loads the map's pak on them, and the GB

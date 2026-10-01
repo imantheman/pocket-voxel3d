@@ -159,6 +159,8 @@ export interface VoxelHost {
   lcdUnder?(w: number, h: number): void;
   lcdUnderRow?(row: number, hex: string): void;
   lcdUnderAt?(on: number, x: number, y: number): void;
+  /** voxel-spec.ts flatWorld: the 3D world is not seen; build no meshes. */
+  flatWorld?(on: number): void;
   /** Gold's time of day for the world's colours: 0 MORN .. 3 DARK. */
   daytime?(k: number): void;
   /** The OPTION screen's TILT SHIFT: 0 off, 1 soft, 2 strong. */
@@ -427,6 +429,9 @@ export class RecorderHost implements VoxelHost {
   }
   lcdUnderAt(on: number, x: number, y: number): void {
     this.op(VOX_OP.lcdUnderAt, on, x, y);
+  }
+  flatWorld(on: number): void {
+    this.op(VOX_OP.flatWorld, on);
   }
   daytime(k: number): void {
     this.op(VOX_OP.daytime, k);

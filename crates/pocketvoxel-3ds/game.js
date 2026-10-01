@@ -19112,6 +19112,8 @@ class Scene {
   choiceYes = true;
   battleActive = false;
   flatWorld = false;
+  flatSent = 0;
+  flatAge = 0;
   arenaStaged = false;
   cardShown = new Map;
   constructor(host) {
@@ -19125,6 +19127,11 @@ class Scene {
     }
     const p = view.prof;
     const t0 = p ? p.now() : 0;
+    const flatWorld = view.flatWorld?.() ? 1 : 0;
+    if (flatWorld !== this.flatSent || flatWorld === 1 && (this.flatAge = (this.flatAge + 1) % 120) === 0) {
+      this.host.flatWorld?.(flatWorld);
+      this.flatSent = flatWorld;
+    }
     const flat = !!view.overworld2d?.();
     if (flat) {
       if (!this.flatWorld) {
@@ -29637,6 +29644,9 @@ here.`, onDone);
       return (this.view2dRenderer ??= new OverworldView2d).build(this);
     return null;
   }
+  flatWorld() {
+    return this.view2d() && (!this.battleView() || this.battle2d());
+  }
   overworld2d() {
     if (!this.view2d() || this.battleView())
       return false;
@@ -29940,6 +29950,9 @@ class QuickJsHost {
   }
   lcdUnderAt(on, x, y) {
     native.lcdUnderAt?.(on, x, y);
+  }
+  flatWorld(on) {
+    native.flatWorld?.(on);
   }
   daytime(k) {
     native.daytime?.(k);

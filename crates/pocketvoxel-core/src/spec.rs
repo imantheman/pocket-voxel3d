@@ -375,6 +375,7 @@ pub mod op {
     pub const LCD_UNDER: u32 = 108;
     pub const LCD_UNDER_ROW: u32 = 109;
     pub const LCD_UNDER_AT: u32 = 110;
+    pub const FLAT_WORLD: u32 = 111;
 }
 
 /// Fixed-point scales used by op args.

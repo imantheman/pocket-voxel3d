@@ -2788,6 +2788,12 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     return null;
   }
 
+  /** The 3D world cannot be seen: VIEW 2D, outside a battle staged in 3D
+   *  (the host then loads maps without building their meshes: flatWorld). */
+  flatWorld(): boolean {
+    return this.view2d() && (!this.battleView() || this.battle2d());
+  }
+
   /** VIEW 2D with the overworld up (not a battle, the title or the boot movie). */
   overworld2d(): boolean {
     if (!this.view2d() || this.battleView()) return false;
