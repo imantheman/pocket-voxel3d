@@ -23,6 +23,16 @@ for (const b of Object.values<any>(require("../voxelmon/game/gen2/world/FieldMov
   game.save.player[b.store][b.name] = true;
 }
 const w = game.world;
+// ITEMS=A,B: in the pack
+for (const it of (process.env.ITEMS ?? "").split(",").filter(Boolean)) {
+  game.save.inventory = game.save.inventory ?? {};
+  game.save.inventory[it] = 1;
+}
+// FLAGS=EVENT_A,EVENT_B: set before the map loads
+for (const f of (process.env.FLAGS ?? "").split(",").filter(Boolean)) {
+  const { FlagNames } = require("../voxelmon/game/gen2/core/FlagNames.ts");
+  w.events.set(FlagNames.events[f], true);
+}
 w.setMap(id, Number(xs), Number(ys), face ?? "up");
 for (let i = 0; i < 30; i++) step(0);
 const BTN: Record<string, number> = { up: VOX_BTN.up, down: VOX_BTN.down, left: VOX_BTN.left, right: VOX_BTN.right };
@@ -40,12 +50,14 @@ const board = () => {
   console.log(rows.join("\n"));
 };
 board();
-// A at the boulder ahead: "use STRENGTH?" YES
-step(VOX_BTN.a);
-for (let i = 0; i < 400; i++) step(i % 8 === 0 && (w.busy() || game.stack.top()) ? VOX_BTN.a : 0);
+// A at the boulder ahead: "use STRENGTH?" YES (NOA=1 skips it)
+if (!process.env.NOA) {
+  step(VOX_BTN.a);
+  for (let i = 0; i < 400; i++) step(i % 8 === 0 && (w.busy() || game.stack.top()) ? VOX_BTN.a : 0);
+}
 for (const d of pushes) {
-  for (let i = 0; i < 6; i++) step(BTN[d]!);
+  for (let i = 0; i < Number(process.env.HOLD ?? 6); i++) step(BTN[d]!);
   for (let i = 0; i < 60; i++) step(0);
-  console.log(`-- ${d}: player (${w.player.cellX},${w.player.cellY})`);
+  console.log(`-- ${d}: ${w.map.id} player (${w.player.cellX},${w.player.cellY}) coll here ${w.map.cellCollision(w.player.cellX, w.player.cellY)?.toString(16)}`);
 }
 board();

@@ -3,7 +3,7 @@
 // handed over by the end of it.
 import { Mon } from "../voxelmon/game/gen2/battle/Mon.ts";
 import {
-  fail, badges, can, chapters, describe, reach, engine, expect, flag, game, hasItem, log, npc, partySpecies, save, settle, talk, travel, use, walk, walkTo,
+  fail, healIfLow, useOn, badges, can, canReach, chapters, describe, reach, engine, expect, flag, game, hasItem, log, npc, partySpecies, save, settle, talk, travel, use, walk, walkTo,
 } from "./gold_story.ts";
 
 const chapter = (name: string, run: () => void): void => {
@@ -89,7 +89,10 @@ chapter("6 Union Cave to Azalea Town", () => {
 /** Talk to people wearing `sprite` until `done` (trainers, a crowd). */
 function talkAll(sprite: string, done: () => boolean, max = 12): void {
   const map = here();
-  for (let k = 0; k < max && !done() && here() === map; k++) {
+  for (let k = 0; k < max && !done(); k++) {
+    // worn down: the POKeMON CENTER, and straight back
+    if (healIfLow()) travel(map);
+    if (here() !== map) break;
     const list = (game.world.npcs ?? []).filter((n: any) => n?.def?.sprite === sprite && !n.hidden);
     if (list.length === 0) break;
     try {
@@ -346,6 +349,69 @@ chapter("22 the Team Rocket hideout under Mahogany", () => {
 
 chapter("23 Mahogany Gym and PRYCE", () => {
   gym("MAHOGANY_GYM", "SPRITE_PRYCE", "GLACIERBADGE");
+});
+
+chapter("24 the Radio Tower taken: the fake director's BASEMENT KEY", () => {
+  travel("RADIO_TOWER_5F");
+  settle();
+  if (!hasItem("BASEMENT_KEY")) talk("SPRITE_GENTLEMAN");
+  expect(hasItem("BASEMENT_KEY"), "the BASEMENT KEY from the director (an impostor)");
+});
+
+/** The Underground's shutters: the four switches' settings tried, in
+ *  order, until a map `goal` accepts can be reached. */
+function shutters(goal: (m: string) => boolean, what: string): void {
+  const room = "GOLDENROD_UNDERGROUND_SWITCH_ROOM_ENTRANCES";
+  const switches: [number, number, string][] = [[16, 1, "EVENT_SWITCH_1"], [10, 1, "EVENT_SWITCH_2"], [2, 1, "EVENT_SWITCH_3"], [20, 11, "EVENT_EMERGENCY_SWITCH"]];
+  for (let combo = 0; combo < 16 && !canReach(goal); combo++) {
+    for (let k = 0; k < 4; k++) {
+      const want = ((combo >> k) & 1) === 1;
+      const [x, y, ev] = switches[k]!;
+      if (flag(ev) !== want && canReach((m, a, b) => m === room && Math.abs(a - x) + Math.abs(b - y) === 1)) {
+        useOn(room, x, y, `switch ${k + 1}`);
+      }
+    }
+    log(`     switches ${switches.map(([, , ev]) => (flag(ev) ? 1 : 0)).join("")}: ${what} ${canReach(goal) ? "open" : "shut"}`);
+  }
+  expect(canReach(goal), `a way to ${what} through the shutters`);
+}
+
+chapter("25 the Underground: the rival, the shutters, the CARD KEY", () => {
+  travel("GOLDENROD_UNDERGROUND");
+  // the basement door (18, 6) opens with the BASEMENT KEY; the switch room's
+  // shutter side is through it (its other door is the far end of the room)
+  if (!flag("EVENT_USED_BASEMENT_KEY")) useOn("GOLDENROD_UNDERGROUND", 18, 6, "the basement door");
+  expect(flag("EVENT_USED_BASEMENT_KEY"), "the basement door unlocked");
+  {
+    const mp = game.world.map;
+    log(`     basement door: on ${mp.id} coll(18,6)=${mp.cellCollision(18, 6)?.toString(16)} walk=${mp.isWalkable(18, 6)} block=${mp.blockId(9, 3)} player ${game.world.player.cellX},${game.world.player.cellY}`);
+    log(`     door warp entry ${JSON.stringify(mp.warpAt(18, 6)?.def ?? null)} cooldown ${JSON.stringify(game.world.warpCooldown ?? null)} map===connMap ${mp === game.world.connectionMap?.("GOLDENROD_UNDERGROUND")}`);
+    log(`     reach: basement ${canReach((m, x, y) => m === "GOLDENROD_UNDERGROUND" && y >= 28)} (22,27) ${canReach((m, x, y) => m === "GOLDENROD_UNDERGROUND" && x === 22 && y === 28)} switchroom-top ${canReach((m, x, y) => m === "GOLDENROD_UNDERGROUND_SWITCH_ROOM_ENTRANCES" && y <= 4)}`);
+  }
+  reach("GOLDENROD_UNDERGROUND_SWITCH_ROOM_ENTRANCES", 16, 2, () => flag("EVENT_RIVAL_GOLDENROD_UNDERGROUND"));
+  settle();
+  // the shutters: the switches' settings (four switches, 16 ways) tried
+  // until the warehouse can be reached
+  shutters((m) => m === "GOLDENROD_UNDERGROUND_WAREHOUSE", "the warehouse");
+  travel("GOLDENROD_UNDERGROUND_WAREHOUSE");
+  if (!flag("EVENT_RECEIVED_CARD_KEY")) talk("SPRITE_GENTLEMAN");
+  expect(flag("EVENT_RECEIVED_CARD_KEY"), "the CARD KEY from the real director");
+  // the warehouse put every switch back (its NEWMAP callback, as on the
+  // cart): back in the switch room, set them again for the way up to the city
+  travel("GOLDENROD_UNDERGROUND_SWITCH_ROOM_ENTRANCES");
+  shutters((m) => m === "GOLDENROD_CITY", "the way back to the city");
+  expect(flag("EVENT_RIVAL_GOLDENROD_UNDERGROUND"), "the rival in the Underground");
+});
+
+chapter("26 the Radio Tower freed", () => {
+  travel("RADIO_TOWER_3F");
+  // the card key's slot faces up at (14, 2)
+  if (!flag("EVENT_USED_THE_CARD_KEY_IN_THE_RADIO_TOWER")) use(14, 2, "the card key door");
+  expect(flag("EVENT_USED_THE_CARD_KEY_IN_THE_RADIO_TOWER"), "the card key used");
+  reach("RADIO_TOWER_5F", 16, 5, () => flag("EVENT_CLEARED_RADIO_TOWER"));
+  settle();
+  talkAll("SPRITE_ROCKET", () => flag("EVENT_CLEARED_RADIO_TOWER"), 4);
+  expect(flag("EVENT_CLEARED_RADIO_TOWER"), "the Radio Tower cleared");
 });
 
 void describe;
