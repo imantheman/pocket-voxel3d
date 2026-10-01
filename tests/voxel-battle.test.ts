@@ -19,7 +19,7 @@ import { TrainerBattle } from "../voxelmon/game/battle/trainer.ts";
 import { makeBattler } from "../voxelmon/game/battle/battler.ts";
 import { newMon, type PartyMon } from "../voxelmon/game/battle/mon.ts";
 import { search as arenaSearch, type Arena } from "../voxelmon/game/battle/arena.ts";
-import { chooseOrbit, orbitDir } from "../voxelmon/game/battle/staging.ts";
+import { chooseOrbit, chooseView, orbitDir, sightlineHits } from "../voxelmon/game/battle/staging.ts";
 import {
   HUD_BAR_EMPTY,
   HUD_BAR_FULL,
@@ -1155,6 +1155,32 @@ describe("the battle camera's opening angle", () => {
     const q8 = chooseOrbit(ground(near), arena, 0);
     const [nx] = orbitDir(arena, 0, q8);
     expect(nx).toBeGreaterThan(-0.4);
+  });
+
+  test("indoors, the opening view sees the enemy past the furniture (OAKS_LAB)", () => {
+    // The rival's battle in Oak's lab opened with the enemy behind a
+    // bookshelf. From every cell an arena can be staged on in the lab, the
+    // chosen view must see the enemy whenever any view the chooser tries can.
+    const game = new VoxelmonGame(data!, new RecorderHost(), 1);
+    game.newGame();
+    game.overworld.setMap("OAKS_LAB", 5, 6, "up");
+    const map = game.overworld.map;
+    let staged = 0;
+    for (let y = 0; y < map.def.height * 2; y++) {
+      for (let x = 0; x < map.def.width * 2; x++) {
+        if (!map.isWalkableCell(x, y)) continue;
+        const a = arenaSearch(map, x, y, false);
+        if (!a) continue;
+        staged++;
+        const view = chooseView(map, a, 1);
+        let bestEnemy = Infinity;
+        for (const p of [0, 64, 128, 192]) {
+          for (let o = 0; o < 256; o += 32) bestEnemy = Math.min(bestEnemy, sightlineHits(map, a, 1, o, p).enemy);
+        }
+        expect(sightlineHits(map, a, 1, view.orbit, view.pitch).enemy).toBe(bestEnemy);
+      }
+    }
+    expect(staged).toBeGreaterThan(0);
   });
 
   test("a real arena on ROUTE_1 gets an angle the map has room for", () => {

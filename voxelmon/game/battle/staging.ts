@@ -7,7 +7,7 @@
 import type { VoxelmonData } from "../data.ts";
 import type { GameMap } from "../world/map.ts";
 import { cardFx, SIDE_ENEMY, SIDE_PLAYER, towardCell } from "./anim.ts";
-import { RIG } from "../../../contracts/spec/voxel-spec.ts";
+import { CELL_PX, RIG, RIG_PITCH_MAX_DEG } from "../../../contracts/spec/voxel-spec.ts";
 import { search, type Arena } from "./arena.ts";
 import type { WildBattle } from "./battle.ts";
 
@@ -19,6 +19,8 @@ export interface BattleStaging {
   rig: number;
   /** Where to stand the camera: a Q8 turn around the arena (battleCam). */
   orbit: number;
+  /** How high: battleCam's pitch, Q8 of RIG_PITCH_MAX_DEG (0 = the rig's own). */
+  pitch: number;
 }
 
 export interface CardDesire {
@@ -103,65 +105,122 @@ export function orbitDir(arena: Arena, rig: number, q8: number): [number, number
 }
 
 /**
- * Which way the battle camera should look in from.
+ * Where the battle camera should look in from, and how high.
  *
  * The rig hangs its eye off the arena midpoint in the mon-axis frame and
- * the orbit turns that offset around (core cam.rs `battle`). At orbit 0 it
- * can end up behind a house, a cliff or a stand of trees -- the fight then
- * opens on the back of a wall -- so the sides are tried and the clearest
- * one wins.
+ * the orbit turns that offset around (core cam.rs `battle`). From the
+ * solved framing the eye can stand behind a house, a stand of trees -- or,
+ * indoors, where the wide rig's eye is under two cells off the floor, a
+ * bookshelf right in front of a mon -- and the fight opens on the back of
+ * it. So every orbit, and a few camera heights, are tried: the sightline
+ * from each mon's card up to the eye is walked, and a cell the player
+ * cannot walk through (and is not water) that stands taller than the line
+ * at that point hides the card. The enemy's card counts double: it is what
+ * the opening frame is for.
  *
- * What counts as blocking is what the player cannot walk through and is
- * not water: buildings, trees, rock faces. That is a floor plan, not the
- * voxel heights (the guest has none, arena.ts), but it is what stands up
- * off the ground on this map, which is what gets between a camera and a
- * battle. Ties go toward orbit 0, so a map with room everywhere still
+ * The guest has no voxel heights (arena.ts), so a blocker is taken to be
+ * as tall as the tallest thing the cook stands up off a floor plan: a
+ * bookshelf or wall indoors, a house or tree outside. Ties go toward
+ * orbit 0 at the rig's own height, so a map with room everywhere still
  * opens on the framing the rig was solved for.
  */
-export function chooseOrbit(map: GameMap, arena: Arena, rig: number): number {
-  const [ex, ey] = arena.enemyCell;
-  const [px, py] = arena.playerCell;
-  const mid = [(ex + px) / 2, (ey + py) / 2];
-  const blocked = (cx: number, cy: number): boolean => {
-    const x = Math.round(cx);
-    const y = Math.round(cy);
-    if (!map.inBounds(x, y)) return false; // off the map: nothing to block
-    return !map.isWalkableCell(x, y) && !map.isWaterCell(x, y);
-  };
-  let best = 0;
+export function chooseView(map: GameMap, arena: Arena, rig: number): { orbit: number; pitch: number } {
+  let best = { orbit: 0, pitch: 0 };
   let bestScore = Number.POSITIVE_INFINITY;
-  for (let step = 0; step < ORBIT_STEPS; step++) {
-    const q8 = Math.round((step * 256) / ORBIT_STEPS);
-    const [ux, uy] = orbitDir(arena, rig, q8);
-    let score = 0;
-    // Out along the sightline, and a cell to either side of it: the view
-    // is a cone, not a thread. Near blockers cost more -- a wall against
-    // the arena hides the fight, one ten cells out is scenery.
-    for (let d = 1; d <= ORBIT_REACH_CELLS; d++) {
-      const w = 1 + (ORBIT_REACH_CELLS - d) / ORBIT_REACH_CELLS;
-      for (const side of [0, 1, -1]) {
-        const cx = mid[0] + ux * d - uy * side;
-        const cy = mid[1] + uy * d + ux * side;
-        if (blocked(cx, cy)) score += side === 0 ? w * 2 : w;
+  for (const pitchQ8 of VIEW_PITCHES) {
+    for (let step = 0; step < ORBIT_STEPS; step++) {
+      const q8 = Math.round((step * 256) / ORBIT_STEPS);
+      const hits = sightlineHits(map, arena, rig, q8, pitchQ8);
+      // The rig was solved at orbit 0 and its own height; changes earn themselves.
+      const turn = Math.min(step, ORBIT_STEPS - step) / ORBIT_STEPS;
+      const score = hits.enemy * 2 + hits.player + turn * ORBIT_TURN_COST + (pitchQ8 / 256) * VIEW_PITCH_COST;
+      if (score < bestScore) {
+        bestScore = score;
+        best = { orbit: q8, pitch: pitchQ8 };
       }
-    }
-    // The rig was solved at orbit 0; a turn has to earn itself.
-    const turn = Math.min(step, ORBIT_STEPS - step) / ORBIT_STEPS;
-    score += turn * ORBIT_TURN_COST;
-    if (score < bestScore) {
-      bestScore = score;
-      best = q8;
     }
   }
   return best;
 }
 
+/**
+ * How many blocking cells stand taller than the sightline from each mon's
+ * card up to the battle camera's eye, for this orbit and pitch (see
+ * chooseView for the model).
+ */
+export function sightlineHits(
+  map: GameMap,
+  arena: Arena,
+  rig: number,
+  orbitQ8: number,
+  pitchQ8: number,
+): { enemy: number; player: number } {
+  const [ex, ey] = arena.enemyCell;
+  const [px, py] = arena.playerCell;
+  const mid = [(ex + px) / 2, (ey + py) / 2];
+  const blockerH = rig === 1 ? VIEW_BLOCKER_INDOOR_PX : VIEW_BLOCKER_OUTDOOR_PX;
+  const blocked = (cx: number, cy: number): boolean => {
+    const x = Math.floor(cx);
+    const y = Math.floor(cy);
+    if (!map.inBounds(x, y)) return false; // off the map: nothing to block
+    return !map.isWalkableCell(x, y) && !map.isWaterCell(x, y);
+  };
+  const r = rig === 1 ? RIG.wide : RIG.tele;
+  const hLen = Math.hypot(r.side, r.back);
+  const len = Math.hypot(hLen, r.height);
+  // cam.rs: extra elevation on the same eye distance
+  const e = Math.min(
+    Math.atan2(r.height, hLen) + (pitchQ8 / 256) * ((RIG_PITCH_MAX_DEG * Math.PI) / 180),
+    0.49 * Math.PI,
+  );
+  const eyeD = (len * Math.cos(e)) / CELL_PX; // cells out from the midpoint
+  const eyeH = len * Math.sin(e); // px up
+  const [ux, uy] = orbitDir(arena, rig, orbitQ8);
+  const eye = [mid[0] + ux * eyeD, mid[1] + uy * eyeD];
+  const count = (mon: readonly [number, number] | number[]): number => {
+    const cx0 = mon[0]! + 0.5;
+    const cy0 = mon[1]! + 0.5;
+    const dx = eye[0]! + 0.5 - cx0;
+    const dy = eye[1]! + 0.5 - cy0;
+    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / VIEW_SAMPLE_CELLS));
+    const seen = new Set<number>();
+    let hits = 0;
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const qx = cx0 + dx * t;
+      const qy = cy0 + dy * t;
+      const key = Math.floor(qx) * 4096 + Math.floor(qy);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      // the line's height over this cell, from the card's middle up to the eye
+      const lineH = VIEW_CARD_PX + (eyeH - VIEW_CARD_PX) * t;
+      if (lineH < blockerH && blocked(qx, qy)) hits++;
+    }
+    return hits;
+  };
+  return { enemy: count(arena.enemyCell), player: count(arena.playerCell) };
+}
+
+/** chooseView's orbit, for callers that only turn. */
+export function chooseOrbit(map: GameMap, arena: Arena, rig: number): number {
+  return chooseView(map, arena, rig).orbit;
+}
+
 /** How many ways round the arena the camera may be stood. */
 const ORBIT_STEPS = 8;
-/** How far down the sightline blockers are counted, in cells. */
-const ORBIT_REACH_CELLS = 8;
 /** What a half-turn away from the solved framing is worth putting up with. */
-const ORBIT_TURN_COST = 2.0;
+const ORBIT_TURN_COST = 1.5;
+/** Camera heights tried (battleCam pitch, Q8 of RIG_PITCH_MAX_DEG). */
+const VIEW_PITCHES = [0, 64, 128, 192];
+/** What lifting the camera all the way is worth putting up with. */
+const VIEW_PITCH_COST = 1.0;
+/** Sightline sampling step, in cells. */
+const VIEW_SAMPLE_CELLS = 0.25;
+/** Where on a card the line is aimed: its middle, px off the floor. */
+const VIEW_CARD_PX = 14;
+/** How tall a blocking cell is taken to be (two voxel blocks; a house/tree). */
+const VIEW_BLOCKER_INDOOR_PX = 40;
+const VIEW_BLOCKER_OUTDOOR_PX = 56;
 
 /**
  * Stage a wild battle on the current map: BattleArena.search from the
@@ -180,11 +239,13 @@ export function computeStaging(
   if (!arena) return null;
   const indoor = map.def.tileset !== "OVERWORLD";
   const rig = indoor ? 1 : 0; // RIG.tele / RIG.wide order in the spec
+  const view = chooseView(map, arena, rig);
   return {
     mapIndex: map.def.index,
     arena,
     rig,
-    orbit: chooseOrbit(map, arena, rig),
+    orbit: view.orbit,
+    pitch: view.pitch,
   };
 }
 
