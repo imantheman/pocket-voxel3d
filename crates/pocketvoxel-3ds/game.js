@@ -99,6 +99,7 @@ var RIG = {
     frameH: 55.62
   }
 };
+var RIG_PITCH_MAX_DEG = 45;
 var ENTS_MAX = 16;
 var ENT_FLAG = {
   mirror: 1 << 0,
@@ -109,14 +110,18 @@ var FX_FRAME_CUT_TREE = 3;
 var PICS_MAX = 16;
 var Q4 = 16;
 var Q8 = 256;
-var AUDIO_ENGINES = 4;
+var AUDIO_ENGINES = 5;
 var AUDIO_DRUMS = 32;
 var AUDIO_SFX_TEMPO = 128;
 var AUDIO_MUSIC_FLAG = {
-  loop: 1 << 0
+  loop: 1 << 0,
+  stereo: 1 << 1,
+  resume: 1 << 2
 };
 var AUDIO_SFX_FLAG = {
-  duck: 1 << 0
+  duck: 1 << 0,
+  stop: 1 << 1,
+  alarm: 1 << 2
 };
 var VXPK_ALIGN = 16;
 var VXPK_META_FLAG_TREE_LOD = 1 << 0;
@@ -124,6 +129,7 @@ var VXPK_META_FLAG_TREE_COARSE = 1 << 1;
 var VXPK_META_FLAG_GROUND_BAKE = 1 << 2;
 var VXPK_AUDIO_HEADER_SIZE = 16;
 var VXPK_COLOR_FLAG_WORLD = 1 << 0;
+var VXPK_COLOR_FLAG_DAYTIME = 1 << 1;
 var MESH_KINDS = 9;
 var VXPK_CHUNK_RECORD_SIZE = 20 + MESH_KINDS * 12;
 
@@ -6133,55 +6139,88 @@ function orbitDir(arena, rig, q8) {
   const len = Math.hypot(dir[0], dir[1]) || 1;
   return [dir[0] / len, dir[1] / len];
 }
-function chooseOrbit(map, arena, rig) {
-  const [ex, ey] = arena.enemyCell;
-  const [px2, py] = arena.playerCell;
-  const mid = [(ex + px2) / 2, (ey + py) / 2];
-  const blocked = (cx, cy) => {
-    const x = Math.round(cx);
-    const y = Math.round(cy);
-    if (!map.inBounds(x, y))
-      return false;
-    return !map.isWalkableCell(x, y) && !map.isWaterCell(x, y);
-  };
-  let best = 0;
+function chooseView(map, arena, rig) {
+  let best = { orbit: 0, pitch: 0 };
   let bestScore = Number.POSITIVE_INFINITY;
-  for (let step = 0;step < ORBIT_STEPS; step++) {
-    const q8 = Math.round(step * 256 / ORBIT_STEPS);
-    const [ux, uy] = orbitDir(arena, rig, q8);
-    let score = 0;
-    for (let d = 1;d <= ORBIT_REACH_CELLS; d++) {
-      const w = 1 + (ORBIT_REACH_CELLS - d) / ORBIT_REACH_CELLS;
-      for (const side of [0, 1, -1]) {
-        const cx = mid[0] + ux * d - uy * side;
-        const cy = mid[1] + uy * d + ux * side;
-        if (blocked(cx, cy))
-          score += side === 0 ? w * 2 : w;
+  for (const pitchQ8 of VIEW_PITCHES) {
+    for (let step = 0;step < ORBIT_STEPS; step++) {
+      const q8 = Math.round(step * 256 / ORBIT_STEPS);
+      const hits = sightlineHits(map, arena, rig, q8, pitchQ8);
+      const turn = Math.min(step, ORBIT_STEPS - step) / ORBIT_STEPS;
+      const score = hits.enemy * 2 + hits.player + turn * ORBIT_TURN_COST + pitchQ8 / 256 * VIEW_PITCH_COST;
+      if (score < bestScore) {
+        bestScore = score;
+        best = { orbit: q8, pitch: pitchQ8 };
       }
-    }
-    const turn = Math.min(step, ORBIT_STEPS - step) / ORBIT_STEPS;
-    score += turn * ORBIT_TURN_COST;
-    if (score < bestScore) {
-      bestScore = score;
-      best = q8;
     }
   }
   return best;
 }
+function sightlineHits(map, arena, rig, orbitQ8, pitchQ8) {
+  const [ex, ey] = arena.enemyCell;
+  const [px2, py] = arena.playerCell;
+  const mid = [(ex + px2) / 2, (ey + py) / 2];
+  const blockerH = rig === 1 ? VIEW_BLOCKER_INDOOR_PX : VIEW_BLOCKER_OUTDOOR_PX;
+  const blocked = (cx, cy) => {
+    const x = Math.floor(cx);
+    const y = Math.floor(cy);
+    if (!map.inBounds(x, y))
+      return false;
+    return !map.isWalkableCell(x, y) && !map.isWaterCell(x, y);
+  };
+  const r = rig === 1 ? RIG.wide : RIG.tele;
+  const hLen = Math.hypot(r.side, r.back);
+  const len = Math.hypot(hLen, r.height);
+  const e = Math.min(Math.atan2(r.height, hLen) + pitchQ8 / 256 * (RIG_PITCH_MAX_DEG * Math.PI / 180), 0.49 * Math.PI);
+  const eyeD = len * Math.cos(e) / CELL_PX;
+  const eyeH = len * Math.sin(e);
+  const [ux, uy] = orbitDir(arena, rig, orbitQ8);
+  const eye = [mid[0] + ux * eyeD, mid[1] + uy * eyeD];
+  const count = (mon) => {
+    const cx0 = mon[0] + 0.5;
+    const cy0 = mon[1] + 0.5;
+    const dx = eye[0] + 0.5 - cx0;
+    const dy = eye[1] + 0.5 - cy0;
+    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / VIEW_SAMPLE_CELLS));
+    const seen = new Set;
+    let hits = 0;
+    for (let i = 1;i <= steps; i++) {
+      const t = i / steps;
+      const qx = cx0 + dx * t;
+      const qy = cy0 + dy * t;
+      const key = Math.floor(qx) * 4096 + Math.floor(qy);
+      if (seen.has(key))
+        continue;
+      seen.add(key);
+      const lineH = VIEW_CARD_PX + (eyeH - VIEW_CARD_PX) * t;
+      if (lineH < blockerH && blocked(qx, qy))
+        hits++;
+    }
+    return hits;
+  };
+  return { enemy: count(arena.enemyCell), player: count(arena.playerCell) };
+}
 var ORBIT_STEPS = 8;
-var ORBIT_REACH_CELLS = 8;
-var ORBIT_TURN_COST = 2;
+var ORBIT_TURN_COST = 1.5;
+var VIEW_PITCHES = [0, 64, 128, 192];
+var VIEW_PITCH_COST = 1;
+var VIEW_SAMPLE_CELLS = 0.25;
+var VIEW_CARD_PX = 14;
+var VIEW_BLOCKER_INDOOR_PX = 40;
+var VIEW_BLOCKER_OUTDOOR_PX = 56;
 function computeStaging(map, playerCellX, playerCellY, surfing) {
   const arena = search(map, playerCellX, playerCellY, surfing);
   if (!arena)
     return null;
   const indoor = map.def.tileset !== "OVERWORLD";
   const rig = indoor ? 1 : 0;
+  const view = chooseView(map, arena, rig);
   return {
     mapIndex: map.def.index,
     arena,
     rig,
-    orbit: chooseOrbit(map, arena, rig)
+    orbit: view.orbit,
+    pitch: view.pitch
   };
 }
 function desiredCards(data, battle, staging) {
@@ -18712,7 +18751,7 @@ class Scene {
       if (bv.staging) {
         const a = bv.staging.arena;
         host.arena(bv.staging.mapIndex, a.x, a.y, a.shape, bv.staging.rig);
-        host.battleCam(bv.staging.orbit ?? 0, 0, Q8);
+        host.battleCam(bv.staging.orbit ?? 0, bv.staging.pitch ?? 0, Q8);
         this.arenaStaged = true;
       }
     }
@@ -28779,8 +28818,7 @@ to {RAM:wNameBuffer}?`).replace(/\{RAM:wNameBuffer\}/g, defaultName).replace(/\{
   }
 }
 
-// voxelmon/game/psp-main.ts
-var SEED = 17;
+// voxelmon/game/quickjs-host.ts
 var native = globalThis.voxel;
 var STICK_RANGE = 156;
 
@@ -28954,6 +28992,30 @@ class QuickJsHost {
   gbColours(bg, obp0, obp1) {
     native.gbColours?.(bg, obp0, obp1);
   }
+  lcdShow(on) {
+    native.lcdShow?.(on);
+  }
+  lcdBank(base, page, count2) {
+    native.lcdBank?.(base, page, count2);
+  }
+  lcdReset() {
+    native.lcdReset?.();
+  }
+  lcdCells(offset, hex3) {
+    native.lcdCells?.(offset, hex3);
+  }
+  lcdRegs(scx, scy, wx, wy, flags) {
+    native.lcdRegs?.(scx, scy, wx, wy, flags);
+  }
+  lcdObjs(hex3) {
+    native.lcdObjs?.(hex3);
+  }
+  lcdPals(first, hex3) {
+    native.lcdPals?.(first, hex3);
+  }
+  lcdLines(target2, hex3) {
+    native.lcdLines?.(target2, hex3);
+  }
   audioWaves(engine, bank, addr) {
     native.audioWaves?.(engine, bank, addr);
   }
@@ -28962,6 +29024,9 @@ class QuickJsHost {
   }
   frameDone(_tick, _buttons) {}
 }
+
+// voxelmon/game/psp-main.ts
+var SEED = 17;
 var host = new QuickJsHost;
 var source = JSON.parse(native.gamedata());
 var game = new VoxelmonGame(fromObject(source), host, SEED);
