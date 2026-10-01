@@ -29043,6 +29043,9 @@ class QuickJsHost {
   tiltShift(level) {
     native.tiltShift?.(level);
   }
+  lcdTarget(k) {
+    native.lcdTarget?.(k);
+  }
   audioWaves(engine, bank, addr) {
     native.audioWaves?.(engine, bank, addr);
   }
