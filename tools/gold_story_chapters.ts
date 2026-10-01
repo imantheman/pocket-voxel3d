@@ -3,6 +3,8 @@
 // handed over by the end of it.
 import { VOX_BTN } from "../contracts/spec/voxel-spec.ts";
 import { Mon } from "../voxelmon/game/gen2/battle/Mon.ts";
+import { BugContest } from "../voxelmon/game/gen2/core/BugContest.ts";
+import { Clock } from "../voxelmon/game/gen2/core/Clock.ts";
 import {
   aFacing, frames, pace, withAnswer, dropBoulders, pokegearRadio, fail, healIfLow, useOn, badges, can, canReach, chapters, describe, reach, engine, expect, flag, game, hasItem, log, npc, partySpecies, save, settle, talk, travel, use, walk, walkTo,
 } from "./gold_story.ts";
@@ -763,6 +765,39 @@ chapter("49 the Day-Care: an egg, and hatching it", () => {
   const hsteps = pace(8000, hatched);
   log(`     ${hsteps} steps to hatch: ${partySpecies().join(" ")}`);
   expect(hatched(), "the egg hatched");
+});
+
+chapter("50 the Bug-Catching Contest", () => {
+  // Tuesdays, Thursdays and Saturdays: the card's weekday set to Tuesday, the
+  // way the clock is set on the cart (a player would wait for one)
+  if (![2, 4, 6].includes(Clock.weekday(save()))) Clock.setWeekday(save(), 2);
+  Clock.setTime(save(), 10, 0);
+  const contest = (): any => BugContest.state(save());
+  const prizes0 = Object.keys(save().inventory ?? {}).length;
+  // the gate's officer: YES to joining; the lead goes in, the rest are held
+  travel("ROUTE_35_NATIONAL_PARK_GATE");
+  settle();
+  if (!BugContest.isActive(save())) talk("SPRITE_OFFICER");
+  settle();
+  expect(BugContest.isActive(save()), `in the contest (at ${describe()})`);
+  expect(here() === "NATIONAL_PARK_BUG_CONTEST", `in the park (at ${describe()})`);
+  // into the long grass; a bug, a PARK BALL (the battle menu's third box)
+  reach("NATIONAL_PARK_BUG_CONTEST", 17, 30);
+  withAnswer((top) => {
+    if (top?.screenId !== "Gen2BattleState" || top.phase !== "menu" || frames % 4 !== 0) return undefined;
+    return top.menuIndex === 3 ? VOX_BTN.a : top.menuIndex === 1 ? VOX_BTN.down : VOX_BTN.up;
+  }, () => pace(4000, () => !!contest()?.caught || !BugContest.isActive(save())));
+  const caught = contest()?.caught;
+  log(`     caught ${caught?.species ?? "nothing"} L${caught?.level ?? "?"}, ${BugContest.ballsLeft(save())} PARK BALLS left`);
+  expect(!!caught, "a bug in a PARK BALL");
+  // out through the gate: the contest ends, the judging, the prizes
+  travel("ROUTE_35_NATIONAL_PARK_GATE");
+  settle();
+  for (let k = 0; k < 6 && BugContest.isActive(save()); k++) settle();
+  log(`     after the judging: ${describe()}; active ${BugContest.isActive(save())}; party ${partySpecies().join(" ")}`);
+  expect(!BugContest.isActive(save()), "the contest over");
+  expect(save().party.length >= 2, "the held POKeMON back");
+  void prizes0;
 });
 
 void describe;

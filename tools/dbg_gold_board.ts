@@ -25,7 +25,7 @@ for (let y = 0; y < map.heightCells; y++) {
     const n = w.npcAt(x, y);
     const warp = (def.warps ?? []).some((wp: any) => wp.x === x && wp.y === y);
     r += n ? (n.def?.sprite === "SPRITE_BOULDER" ? "O" : n.def?.sprite === "SPRITE_ROCK" ? "R" : "N")
-      : warp ? "W" : Permissions.isIce(c) ? "~" : Permissions.isWaterfall(c) ? "v" : Permissions.isWhirlpool(c) ? "@" : Permissions.surfable(c) === "water" ? "=" : map.isWalkable(x, y) ? "." : "#";
+      : warp ? "W" : Permissions.isIce(c) ? "~" : Permissions.isWaterfall(c) ? "v" : Permissions.isWhirlpool(c) ? "@" : Permissions.surfable(c) === "water" ? "=" : Permissions.isGrass(c) ? "," : map.isWalkable(x, y) ? "." : "#";
   }
   console.log(String(y).padStart(2) + " " + r);
 }
