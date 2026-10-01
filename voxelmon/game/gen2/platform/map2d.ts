@@ -24,7 +24,8 @@
 // (lcd.ts alias, lcd.rs) to its frame strip's row for the step, as
 // World.animRow says -- one op a step, not a re-upload. (Not the "scroll"
 // kind, which rotates pixels a tile id cannot.)
-// Not yet: tall grass does not cover a sprite's feet.
+// In tall grass a person's lower half goes behind the background (the OBJ
+// priority bit), so the grass tile's colours cover its feet as on the cart.
 
 import { Assets } from "../shared/render/Assets.ts";
 import { Palettes } from "../world/Palettes.ts";
@@ -216,13 +217,15 @@ export function drawMap2D(world: any, data: any): boolean {
     const y0 = Math.round(v.py + (e.oy ?? 0) - camY);
     const mirror = !!v.mirror;
     const flip = mirror ? 0x20 : 0;
+    const grass = e.grassOver ? 0x80 : 0;
     for (let r = 0; r < 2; r++) {
       const row = (f * 2 + r) * sheet.tw;
       const y = y0 + r * 8;
       const a = sheet.ids[row];
       const b = sheet.ids[row + 1];
-      if (a !== undefined) lcd.obj(mirror ? x0 + 8 : x0, y, a, pal | flip);
-      if (b !== undefined) lcd.obj(mirror ? x0 : x0 + 8, y, b, pal | flip);
+      const attr = pal | flip | (r === 1 ? grass : 0);
+      if (a !== undefined) lcd.obj(mirror ? x0 + 8 : x0, y, a, attr);
+      if (b !== undefined) lcd.obj(mirror ? x0 : x0 + 8, y, b, attr);
     }
   }
   return true;
