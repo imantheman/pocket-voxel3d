@@ -3,7 +3,7 @@
 // handed over by the end of it.
 import { Mon } from "../voxelmon/game/gen2/battle/Mon.ts";
 import {
-  fail, healIfLow, useOn, badges, can, canReach, chapters, describe, reach, engine, expect, flag, game, hasItem, log, npc, partySpecies, save, settle, talk, travel, use, walk, walkTo,
+  dropBoulders, fail, healIfLow, useOn, badges, can, canReach, chapters, describe, reach, engine, expect, flag, game, hasItem, log, npc, partySpecies, save, settle, talk, travel, use, walk, walkTo,
 } from "./gold_story.ts";
 
 const chapter = (name: string, run: () => void): void => {
@@ -412,6 +412,44 @@ chapter("26 the Radio Tower freed", () => {
   settle();
   talkAll("SPRITE_ROCKET", () => flag("EVENT_CLEARED_RADIO_TOWER"), 4);
   expect(flag("EVENT_CLEARED_RADIO_TOWER"), "the Radio Tower cleared");
+});
+
+chapter("27 the Ice Path: HM07 WATERFALL, through to Blackthorn", () => {
+  travel("ICE_PATH_1F");
+  // HM07 lies on the ice of the first floor (31, 7)
+  if (!hasItem("HM_WATERFALL")) useOn("ICE_PATH_1F", 31, 7, "the HM07 ball");
+  expect(hasItem("HM_WATERFALL"), "HM07 WATERFALL");
+  teach("WATERFALL");
+  can.waterfall = true;
+  // B1F's four boulders go down its four holes: each lands on the ice of
+  // B2F below, the stoppers that make a way across it to B3F
+  if (!canReach((m) => m === "BLACKTHORN_CITY")) {
+    travel("ICE_PATH_B1F");
+    dropBoulders("B1F's boulders");
+  }
+  travel("BLACKTHORN_CITY");
+});
+
+chapter("28 Blackthorn Gym and CLAIR", () => {
+  travel("BLACKTHORN_GYM_1F");
+  // the lava: 2F's boulders go down its holes and bridge it on 1F
+  const nearClair = (m: string, x: number, y: number): boolean => m === "BLACKTHORN_GYM_1F" && Math.abs(x - 5) + Math.abs(y - 3) === 1;
+  if (!canReach(nearClair)) {
+    travel("BLACKTHORN_GYM_2F");
+    dropBoulders("2F's boulders");
+    travel("BLACKTHORN_GYM_1F");
+  }
+  if (!flag("EVENT_BEAT_CLAIR")) talk("SPRITE_CLAIR");
+  expect(flag("EVENT_BEAT_CLAIR"), "CLAIR beaten");
+});
+
+chapter("29 the Dragon's Den: the DRAGON FANG, the RISINGBADGE", () => {
+  travel("DRAGONS_DEN_B1F");
+  // the fang's ball (35, 16); CLAIR comes up behind with the badge
+  if (!flag("EVENT_DRAGONS_DEN_B1F_DRAGON_FANG")) useOn("DRAGONS_DEN_B1F", 35, 16, "the DRAGON FANG ball");
+  settle();
+  expect(hasItem("DRAGON_FANG"), "the DRAGON FANG");
+  expect(hasBadge("RISINGBADGE"), `the RISINGBADGE (have ${badges().join(" ")})`);
 });
 
 void describe;

@@ -264,7 +264,8 @@ function press(dir: Dir): "moved" | "blocked" | "interrupted" | "map" {
   const p = w.player;
   const [x0, y0] = [p.cellX, p.cellY];
   let started = false;
-  for (let f = 0; f < 80; f++) {
+  // (once under way a slide can run on for many cells: give it time)
+  for (let f = 0; f < (started ? 900 : 80); f++) {
     if (busy()) return "interrupted";
     const q = world().player;
     step(started ? 0 : BTN[dir]);
@@ -554,12 +555,16 @@ interface Act {
   push?: boolean;
   /** this step leaves the map (onto a warp, off an edge) */
   leaves?: string;
+  /** a whirlpool ahead: WHIRLPOOL clears it first */
+  whirl?: boolean;
+  /** a waterfall ahead: WATERFALL climbs it */
+  climb?: boolean;
 }
 
 /** One step `dir` from (x, y) on map `m`, planned: a cell on the same map,
  *  or [map, x, y] across a warp or a connection, or null. */
 function planStep(m: string, x: number, y: number, dir: Dir, goal: (m: string, x: number, y: number) => boolean, surf: boolean):
-  { m: string; x: number; y: number; leaves?: string; surf: boolean; startSurf?: boolean; push?: boolean } | null {
+  { m: string; x: number; y: number; leaves?: string; surf: boolean; startSurf?: boolean; push?: boolean; whirl?: boolean; climb?: boolean } | null {
   if (refused.has(`${m},${x},${y},${dir}`)) return null;
   const w = world();
   const map = mapOf(m);
@@ -617,6 +622,22 @@ function planStep(m: string, x: number, y: number, dir: Dir, goal: (m: string, x
   const water = Permissions.surfable(c) === "water";
   let ok = (surf ? Permissions.surfable(c) !== undefined : map.isWalkable(tx, ty))
     || (can.cut && Permissions.isCutTree(c));
+  // a waterfall above the surfer: only WATERFALL climbs it (the current
+  // carries anyone else back down); the climb ends on the first water past it
+  if (surf && dir === "up" && Permissions.isWaterfall(c)) {
+    if (!can.waterfall) return null;
+    let sy = ty;
+    while (map.inBounds(tx, sy) && Permissions.isWaterfall(map.cellCollision(tx, sy))) sy--;
+    if (!map.inBounds(tx, sy) || Permissions.surfable(map.cellCollision(tx, sy)) !== "water") return null;
+    return { m, x: tx, y: sy, surf: true, climb: true };
+  }
+  // a whirlpool: its permission is water, but it throws the surfer back
+  // (.CheckTile's force turn) -- only WHIRLPOOL clears it, then on as water
+  let whirl = false;
+  if (Permissions.isWhirlpool(c)) {
+    ok = surf && can.whirlpool;
+    whirl = ok;
+  }
   // from the shore onto the water: SURF
   let startSurf = false;
   if (!ok && !surf && can.surf && water) {
@@ -627,6 +648,7 @@ function planStep(m: string, x: number, y: number, dir: Dir, goal: (m: string, x
     const npc = w.npcAt(tx, ty);
     if (npc && !goal(m, tx, ty) && !rockAt(tx, ty) && !freshTrainerAt(tx, ty)) ok = false;
   }
+  if (!live && ok && boulderHome(m, tx, ty)) ok = false;
   if (!ok) {
     // .TryJump: a ledge under the feet that faces this way
     const f = surf ? undefined : Permissions.ledgeFacings(map.cellCollision(x, y));
@@ -666,13 +688,37 @@ function planStep(m: string, x: number, y: number, dir: Dir, goal: (m: string, x
       const nx = sx + dx;
       const ny = sy + dy;
       if (!Permissions.stepPermitted(collOf, sx, sy, dir)) break;
-      if (!map.inBounds(nx, ny) || !map.isWalkable(nx, ny) || (live && w.npcAt(nx, ny))) break;
+      if (!map.inBounds(nx, ny) || !map.isWalkable(nx, ny) || (live ? w.npcAt(nx, ny) : boulderHome(m, nx, ny))) break;
       sx = nx;
       sy = ny;
     }
     return { m, x: sx, y: sy, surf: false };
   }
-  return { m, x: tx, y: ty, surf: (surf || startSurf) && water, startSurf };
+  // a current: it carries the surfer its way until the water is still
+  if (surf && Permissions.currentDirection(c)) {
+    let sx = tx;
+    let sy = ty;
+    for (let k = 0; k < 64; k++) {
+      const cd = Permissions.currentDirection(map.cellCollision(sx, sy)) as Dir | undefined;
+      if (!cd) break;
+      const nx = sx + DELTA[cd][0];
+      const ny = sy + DELTA[cd][1];
+      if (!map.inBounds(nx, ny) || Permissions.surfable(map.cellCollision(nx, ny)) !== "water" || (live && w.npcAt(nx, ny))) break;
+      sx = nx;
+      sy = ny;
+    }
+    return { m, x: sx, y: sy, surf: true };
+  }
+  return { m, x: tx, y: ty, surf: (surf || startSurf) && water, startSurf, whirl };
+}
+
+/** A boulder standing at (x, y) on map `m` (one the player is not on):
+ *  the map's own objects, shown by the story's flags -- the stoppers a plan
+ *  across an ice floor needs. */
+function boulderHome(m: string, x: number, y: number): boolean {
+  const def = world().maps[m];
+  return (def?.objects ?? []).some((o: any) => o.sprite === "SPRITE_BOULDER" && o.x === x && o.y === y
+    && !(o.eventFlag != null && o.eventFlag !== 65535 && world().events.get(o.eventFlag)));
 }
 
 /** The steps from where the player stands to a cell `goal` accepts,
@@ -698,7 +744,7 @@ function planTo(goal: (m: string, x: number, y: number) => boolean): Act[] | nul
       const k = `${t.m},${t.x},${t.y},${t.surf ? 1 : 0}`;
       if (seen.has(k)) continue;
       seen.add(k);
-      prev.set(k, [`${m},${x},${y},${sf ? 1 : 0}`, { dir: d, leaves: t.leaves, surf: t.startSurf, push: t.push }]);
+      prev.set(k, [`${m},${x},${y},${sf ? 1 : 0}`, { dir: d, leaves: t.leaves, surf: t.startSurf, push: t.push, whirl: t.whirl, climb: t.climb }]);
       q.push([t.m, t.x, t.y, t.surf]);
     }
   }
@@ -719,7 +765,7 @@ function planTo(goal: (m: string, x: number, y: number) => boolean): Act[] | nul
  * free ground (the player stays put, as in Gen 2) -- to a cell `goal`
  * accepts. The first step of it, or null.
  */
-function solveBoulders(goal: (x: number, y: number) => boolean): Act | null {
+function solveBoulders(goal: (x: number, y: number, bs: number[]) => boolean): Act | null {
   if (!can.strength) return null;
   const w = world();
   const map = w.map;
@@ -733,8 +779,13 @@ function solveBoulders(goal: (x: number, y: number) => boolean): Act | null {
   }
   if (boulders.length === 0 || boulders.length > 8) return null;
   const collOf = (a: number, b: number): any => w.cellCollisionAcross(map, a, b);
+  // a hole (a pit) swallows a boulder pushed onto it (the cmd queue's
+  // stonetable); the player keeps off them, they lead off the map
+  const pit = (x: number, y: number): boolean => { const c = map.cellCollision(x, y); return c === 0x60 || c === 0x68; };
   const freeCell = (x: number, y: number, bs: Set<number>): boolean =>
     map.inBounds(x, y) && map.isWalkable(x, y) && !blockers.has(`${x},${y}`) && !bs.has(x * 1000 + y);
+  const playerCell = (x: number, y: number, bs: Set<number>): boolean =>
+    freeCell(x, y, bs) && (goal(x, y, bs) || !Permissions.isWarpCollision(map.cellCollision(x, y)));
   const key = (x: number, y: number, bs: number[]): string => `${x},${y}|${bs.join(",")}`;
   const b0 = [...boulders].sort((a, b) => a - b);
   const start = key(p.cellX, p.cellY, b0);
@@ -743,7 +794,7 @@ function solveBoulders(goal: (x: number, y: number) => boolean): Act | null {
   const seen = new Set([start]);
   for (let qi = 0; qi < q.length && qi < 300000; qi++) {
     const [x, y, bs] = q[qi]!;
-    if (goal(x, y)) {
+    if (goal(x, y, bs)) {
       let k = key(x, y, bs);
       let first: Act | null = null;
       while (k !== start) {
@@ -765,11 +816,13 @@ function solveBoulders(goal: (x: number, y: number) => boolean): Act | null {
       let push = false;
       if (bset.has(nx * 1000 + ny)) {
         if (!freeCell(nx + dx, ny + dy, bset)) continue;
-        nb = bs.map((b) => (b === nx * 1000 + ny ? (nx + dx) * 1000 + ny + dy : b)).sort((a, b) => a - b);
+        nb = pit(nx + dx, ny + dy)
+          ? bs.filter((b) => b !== nx * 1000 + ny)
+          : bs.map((b) => (b === nx * 1000 + ny ? (nx + dx) * 1000 + ny + dy : b)).sort((a, b) => a - b);
         px = x;
         py = y;
         push = true;
-      } else if (!freeCell(nx, ny, bset)) continue;
+      } else if (!playerCell(nx, ny, bset)) continue;
       const k = key(px, py, nb);
       if (seen.has(k)) continue;
       seen.add(k);
@@ -778,6 +831,37 @@ function solveBoulders(goal: (x: number, y: number) => boolean): Act | null {
     }
   }
   return null;
+}
+
+/** Push this map's boulders down its holes, one after another, until none
+ *  is left that can go (the Ice Path, Blackthorn Gym). How many fell. */
+export function dropBoulders(what: string): number {
+  const map = world().map.id;
+  const count = (): number => (world().npcs ?? []).filter((n: any) => !n.hidden && n.def?.sprite === "SPRITE_BOULDER").length;
+  let fell = 0;
+  for (let k = 0; k < 600; k++) {
+    settle();
+    if (world().map.id !== map) fail(`dropping ${what}: left ${map} for ${world().map.id}`);
+    const n = count();
+    if (n === 0) break;
+    const a = solveBoulders((_x, _y, bs) => bs.length < n);
+    if (!a) break;
+    const p = world().player;
+    const [dx, dy] = DELTA[a.dir];
+    if (a.push && boulderAt(p.cellX + dx, p.cellY + dy)) {
+      face(a.dir);
+      if (!busy()) step(VOX_BTN.a);
+      settle();
+      press(a.dir);
+      for (let f = 0; f < 90; f++) step(0);
+      settle();
+    } else press(a.dir);
+    if (count() < n) {
+      fell++;
+      log(`     a boulder down a hole on ${map} (${count()} left)`);
+    }
+  }
+  return fell;
 }
 
 /** Is there a way from here to a cell `goal` accepts (no walking)? */
@@ -834,6 +918,15 @@ export function go(goal: (m: string, x: number, y: number) => boolean, what: str
         aAt(a.dir, surfing, `would not SURF at (${q.cellX + dx},${q.cellY + dy})`);
         break;
       }
+      // a whirlpool ahead: WHIRLPOOL (A facing it, YES) clears it
+      if (a.whirl && Permissions.isWhirlpool(world().map.cellCollision(q.cellX + dx, q.cellY + dy))) {
+        aAt(a.dir, () => !Permissions.isWhirlpool(world().map.cellCollision(q.cellX + dx, q.cellY + dy)), `the whirlpool at (${q.cellX + dx},${q.cellY + dy}) would not clear`);
+      }
+      // a waterfall ahead: WATERFALL (A facing it, YES) climbs it; plan again
+      if (a.climb) {
+        aAt(a.dir, () => world().player.cellY < qy || world().map.id !== here, `would not climb the waterfall at (${qx},${qy - 1})`);
+        break;
+      }
       // a boulder: STRENGTH (A facing it, YES), push, and plan again
       if (a.push && boulderAt(q.cellX + dx, q.cellY + dy)) {
         face(a.dir);
@@ -864,7 +957,7 @@ export function go(goal: (m: string, x: number, y: number) => boolean, what: str
       }
       if (r === "map") break;
       if (r === "blocked") {
-        refused.add(`${here},${q.cellX},${q.cellY},${a.dir}`);
+        refused.add(`${here},${qx},${qy},${a.dir}`);
         break;
       }
       if (r === "interrupted") break;
