@@ -184,8 +184,11 @@ impl LcdScreen {
                 self.flags = a(4) as u8;
             }
             op::LCD_OBJS => {
-                // fourteen digits an object: y, x (signed 16), tile, attribute
-                let Some(t) = text else { return false };
+                // fourteen digits an object: y, x (signed 16), tile, attribute.
+                // No text is no objects: the guest sends "" when the last one
+                // goes, and the shim can hand an empty string over as none --
+                // ignoring it left the title's Ho-Oh over the main menu.
+                let t = text.unwrap_or("");
                 let mut n = 0;
                 for chunk in t.as_bytes().chunks_exact(14) {
                     if n == LCD_OBJS_MAX {
@@ -417,6 +420,19 @@ mod tests {
         let mut out = vec![0u8; LCD_W * LCD_H];
         lcd.render(&mut flat, &mut out);
         out
+    }
+
+    #[test]
+    fn an_empty_object_list_clears_the_objects() {
+        let mut lcd = LcdScreen::default();
+        assert!(lcd.op(op::LCD_OBJS, &[], Some("00100020000500")));
+        assert_eq!(lcd.obj_count, 1);
+        // the last object gone: "" or no text at all
+        assert!(lcd.op(op::LCD_OBJS, &[], Some("")));
+        assert_eq!(lcd.obj_count, 0);
+        assert!(lcd.op(op::LCD_OBJS, &[], Some("00100020000500")));
+        assert!(lcd.op(op::LCD_OBJS, &[], None));
+        assert_eq!(lcd.obj_count, 0);
     }
 
     #[test]
