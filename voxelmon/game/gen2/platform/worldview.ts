@@ -109,14 +109,31 @@ export class WorldView {
   private sheetCache = new Map<string, number>();
   private lastDaytime = -1;
   private lastNeighbours = "";
+  private lastTint = -1;
 
   constructor(
     private readonly host: VoxelHost,
     private readonly data: WalkerData | null | undefined,
   ) {}
 
+  /**
+   * What surrounds the Gold screen's 160x144 on the 3DS's wider top screen:
+   * the voxel world, full colour while it is the scene; dimmed behind a
+   * full-screen menu or a battle (Game2.lua paintBattleSurround's "world"
+   * mode, BG_WORLD_DIM); black before there is a world at all, where the
+   * Lua's surround was the letterbox. A tint change rebakes the map once.
+   */
+  private emitTint(game: { world?: any; frameWorldActive?: boolean }): void {
+    const want = !game.world || !game.world.map ? 0xff000000 : game.frameWorldActive === false ? 0xff707070 : 0xffffffff;
+    if (want !== this.lastTint) {
+      this.host.tint(want);
+      this.lastTint = want;
+    }
+  }
+
   /** Emit this frame's scene from the game's world, if it has one. */
   emit(game: { world?: any; frameWorldActive?: boolean }): void {
+    this.emitTint(game);
     const world = game.world;
     const vs: WorldViewState | null = world && world.map && typeof world.viewState === "function" ? world.viewState() : null;
     if (!vs) {
