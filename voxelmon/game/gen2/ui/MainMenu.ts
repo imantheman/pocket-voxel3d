@@ -105,8 +105,9 @@ export class MainMenu {
     if (this.hasSave) items.push({ label: Strings.get("CONTINUE"), value: "continue" });
     items.push({ label: Strings.get("NEW GAME"), value: "new" });
     items.push({ label: Strings.get("OPTION"), value: "option" });
-    // Not on the cart (Brian's): a row to leave the game, as the Gen 1 port has
-    items.push({ label: Strings.get("EXIT GAME"), value: "exit" });
+    // Not on the cart (Brian's): a row to leave the game, as the Gen 1 port has.
+    // The 3DS leaves through HOME, so it shows only when an owner can exit.
+    if (this.onExit) items.push({ label: Strings.get("EXIT GAME"), value: "exit" });
     const hooked = Runtime.call("ui.title_menu.items", sameItems, this.game, items);
     if (hooked && typeof hooked === "object") items = hooked as typeof items;
     else Logger.error("ui.title_menu.items returned %s; keeping the vanilla items", typeof hooked);

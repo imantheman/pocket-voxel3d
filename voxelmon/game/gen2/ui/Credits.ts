@@ -165,8 +165,10 @@ defineString("BOIS_CLUB", "  BOIS CLUB GAMES");
 defineString("THE_BOIS_CLUB", "   THE BOIS CLUB");
 defineString("PRET_POKEGOLD", "   PRET POKEGOLD");
 defineString("PRET_PROJECT", "  THE PRET PROJECT");
-defineString("LOVE2D", "       LOVE2D");
-defineString("LUAJIT", "       LUAJIT");
+// Brian's port runs on LOVE2D/LuaJIT; this one on QuickJS and Rust. The
+// BUILT WITH heading keeps its place and names what this build is built with.
+defineString("LOVE2D", "       QUICKJS");
+defineString("LUAJIT", "        RUST");
 defineString("CHIP_SYNTH", "     CHIP SYNTH");
 defineString("EVERY_TESTER", "    EVERY TESTER");
 defineString("AND_YOU", "      AND YOU");

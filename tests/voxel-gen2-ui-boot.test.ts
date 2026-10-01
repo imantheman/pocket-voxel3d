@@ -206,7 +206,7 @@ describe("gen2 boot screens", () => {
       onNewGame: () => picked.push("new"),
       onOption: () => picked.push("option"),
     });
-    expect(menu.list.items.map((i) => i.label)).toEqual(["NEW GAME", "OPTION", "EXIT GAME"]);
+    expect(menu.list.items.map((i) => i.label)).toEqual(["NEW GAME", "OPTION"]);
     game.stack.push(menu);
     game.frame(0);
     game.draw(lcd);
