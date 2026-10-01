@@ -80,6 +80,14 @@ interface DrawState {
   colour: [number, number, number, number];
   palette: Palette4;
   keyed: boolean;
+  /** Every tile drawn now is an object, even on the grid (G.objects). */
+  objects: boolean;
+  /**
+   * null: cells are screen positions (the default). 0 or 1: cells are
+   * positions in that map (0 background, 1 window), unclipped by the screen,
+   * for a screen that scrolls the BG or uses the window (G.map).
+   */
+  map: number | null;
 }
 
 let lcd: Lcd | null = null;
@@ -88,7 +96,7 @@ const stack: DrawState[] = [];
 let canvasDepth = 0;
 
 function fresh(): DrawState {
-  return { tx: 0, ty: 0, scissor: null, colour: [1, 1, 1, 1], palette: DMG_SHADES, keyed: false };
+  return { tx: 0, ty: 0, scissor: null, colour: [1, 1, 1, 1], palette: DMG_SHADES, keyed: false, objects: false, map: null };
 }
 
 /** The Gold screen draws land on (null: drawing is a no-op, as in tests of logic). */
@@ -123,9 +131,15 @@ function rgb255(c: readonly number[]): Rgb {
 /** Put one 8x8 tile at screen pixel (x, y). */
 export function putTile(id: number, x: number, y: number, flipX = false, flipY = false, asObj = false): void {
   if (!lcd || canvasDepth > 0) return;
-  if (clipped(x, y, 8, 8)) return;
   const flips = (flipX ? ATTR_X_FLIP : 0) | (flipY ? ATTR_Y_FLIP : 0);
-  if (!asObj && (x & 7) === 0 && (y & 7) === 0) {
+  if (st.map !== null && !asObj && !st.objects && (x & 7) === 0 && (y & 7) === 0) {
+    // a map cell: lcd.cell drops what falls outside the 32x32 map
+    const pal = lcd.palette(st.palette);
+    lcd.cell(x >> 3, y >> 3, id, pal | flips | (st.keyed ? ATTR_PRIORITY : 0), st.map);
+    return;
+  }
+  if (clipped(x, y, 8, 8)) return;
+  if (!asObj && !st.objects && (x & 7) === 0 && (y & 7) === 0) {
     const pal = lcd.palette(st.palette);
     lcd.cell(x >> 3, y >> 3, id, pal | flips | (st.keyed ? ATTR_PRIORITY : 0));
   } else {
@@ -136,9 +150,10 @@ export function putTile(id: number, x: number, y: number, flipX = false, flipY =
 
 /** A cell with an explicit palette slot (a fill reusing a palette on screen). */
 function putCell(id: number, x: number, y: number, slot: number): void {
-  if (!lcd || canvasDepth > 0 || clipped(x, y, 8, 8)) return;
+  if (!lcd || canvasDepth > 0) return;
+  if (st.map === null && clipped(x, y, 8, 8)) return;
   if ((x & 7) !== 0 || (y & 7) !== 0) return;
-  lcd.cell(x >> 3, y >> 3, id, slot | (st.keyed ? ATTR_PRIORITY : 0));
+  lcd.cell(x >> 3, y >> 3, id, slot | (st.keyed ? ATTR_PRIORITY : 0), st.map ?? 0);
 }
 
 export const G = {
@@ -206,6 +221,30 @@ export const G = {
   },
   set keyed(on: boolean) {
     st.keyed = on;
+  },
+
+  /**
+   * Draw everything as objects, grid-aligned or not, until turned off or
+   * popped: what the cart puts in OAM over the BG (a lifted pic band, a pic
+   * riding over scrolling scanlines) must not scroll with the BG cells.
+   */
+  get objects(): boolean {
+    return st.objects;
+  },
+  set objects(on: boolean) {
+    st.objects = on;
+  },
+
+  /**
+   * Which map grid-aligned draws land in, addressed in map space rather than
+   * screen space: null (default) the screen, 0 the background map (scrolled by
+   * SCX/SCY), 1 the window map (placed by WX/WY). Pair with lcd.regs.
+   */
+  get map(): number | null {
+    return st.map;
+  },
+  set map(layer: number | null) {
+    st.map = layer;
   },
 
   /** Hand the current palette a slot now, before anything is drawn with it. */
