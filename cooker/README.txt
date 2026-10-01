@@ -32,10 +32,13 @@ WHAT IT ASKS
 1. Whether it may download its tools (about 45 MB, listed on screen with
    the URL and license of each one -- every download is checked against a
    checksum written in cooker.py).
-2. Whether you want colour. Red and Blue are black and white; the colour is
-   a community colourisation (pokered-gbc). Say no for the original look.
-   Yellow and Gold are not asked: they are Game Boy Color games and use
-   their own colours, read from your ROM.
+2. Which colours you want.
+     Red and Blue: black and white (the original look), or the community
+     colourisation (pokered-gbc, the default).
+     Yellow: its own Game Boy Color colours read from your ROM (the
+     default), black and white, or the community colours.
+     Gold is not asked: it uses its own colours, read from your ROM.
+   (--palette dmg|gbc|community answers it without asking.)
 3. At the end, whether to copy the result straight onto your SD card if
    it can see one.
 

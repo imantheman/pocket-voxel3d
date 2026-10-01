@@ -10,8 +10,16 @@
 // the GBC colours, and every battle-pic page names its species' palette
 // through VCOL, which resolve_pal honours ahead of the map's.
 //
-// Red and Blue have no cgbBase and never take this path. VOXELMON_COLOUR=sgb
-// cooks Yellow with its Super Game Boy colours instead.
+// Red and Blue have no cgbBase and never take this path. VOXELMON_COLOUR
+// picks the colours of a Gen 1 cook (the cooker's --palette):
+//   gbc        Yellow's own GBC colours (Yellow's default; Red and Blue have
+//              none, and the cook refuses it for them -- cook/cli.ts)
+//   community  the pokered-gbc pack (cook/redpp.ts), Red's default -- and
+//              Yellow's when asked
+//   dmg        black and white: every palette packed as the Game Boy's own
+//              four greys, maps, sprites, pictures and screens alike
+//   sgb        Yellow's Super Game Boy colours (an older option, kept)
+//   none       no community pack: the SGB set (the old "grayscale")
 
 import { ATLAS_KIND, COLOR_PAL_NONE } from "../../contracts/spec/voxel-spec.ts";
 import type { GenData } from "./data.ts";
@@ -22,12 +30,22 @@ type Palettes = GenData["palettes"] & { cgbBase?: Record<string, [number, number
 /** Cook this dataset with its GBC colours? */
 export function useGbc(gen: GenData): boolean {
   const pal = gen.palettes as Palettes;
-  return !!pal.cgbBase && process.env.VOXELMON_COLOUR !== "sgb";
+  const mode = process.env.VOXELMON_COLOUR;
+  return !!pal.cgbBase && mode !== "sgb" && mode !== "dmg" && mode !== "community";
 }
+
+/** A black-and-white cook (VOXELMON_COLOUR=dmg): the Game Boy's greys. */
+export function useDmg(): boolean {
+  return process.env.VOXELMON_COLOUR === "dmg";
+}
+
+/** The DMG's four shades, lightest first (palettes.json's order). */
+const DMG_GREYS: [number, number, number][] = [[255, 255, 255], [170, 170, 170], [85, 85, 85], [0, 0, 0]];
 
 /** The colours packed for SGB name `name`: its GBC set when cooking GBC. */
 export function paletteColours(gen: GenData, name: string): [number, number, number][] | undefined {
   const pal = gen.palettes as Palettes;
+  if (useDmg()) return pal.palettes[name] ? DMG_GREYS : undefined;
   if (useGbc(gen) && pal.cgbBase?.[name]) return pal.cgbBase[name];
   return pal.palettes[name];
 }

@@ -285,6 +285,46 @@ export interface ColourPlan {
  * two maps with different roofs share one page and differ only in the CLUT
  * (which is exactly what makes the combined page survive).
  */
+/**
+ * Red's SpriteSheetPointerTable by sprite constant, the order the community
+ * pack's `spriteAssignment` is keyed by (pokered constants/sprite_constants.asm,
+ * SPRITE_RED = index 0). Yellow's table shares the names, not the order.
+ */
+const RED_SPRITE_INDEX = [
+  "SPRITE_RED", "SPRITE_BLUE", "SPRITE_OAK", "SPRITE_YOUNGSTER", "SPRITE_MONSTER", "SPRITE_COOLTRAINER_F",
+  "SPRITE_COOLTRAINER_M", "SPRITE_LITTLE_GIRL", "SPRITE_BIRD", "SPRITE_MIDDLE_AGED_MAN", "SPRITE_GAMBLER",
+  "SPRITE_SUPER_NERD", "SPRITE_GIRL", "SPRITE_HIKER", "SPRITE_BEAUTY", "SPRITE_GENTLEMAN", "SPRITE_DAISY",
+  "SPRITE_BIKER", "SPRITE_SAILOR", "SPRITE_COOK", "SPRITE_BIKE_SHOP_CLERK", "SPRITE_MR_FUJI", "SPRITE_GIOVANNI",
+  "SPRITE_ROCKET", "SPRITE_CHANNELER", "SPRITE_WAITER", "SPRITE_SILPH_WORKER_F", "SPRITE_MIDDLE_AGED_WOMAN",
+  "SPRITE_BRUNETTE_GIRL", "SPRITE_LANCE", "SPRITE_UNUSED_SCIENTIST", "SPRITE_SCIENTIST", "SPRITE_ROCKER",
+  "SPRITE_SWIMMER", "SPRITE_SAFARI_ZONE_WORKER", "SPRITE_GYM_GUIDE", "SPRITE_GRAMPS", "SPRITE_CLERK",
+  "SPRITE_FISHING_GURU", "SPRITE_GRANNY", "SPRITE_NURSE", "SPRITE_LINK_RECEPTIONIST", "SPRITE_SILPH_PRESIDENT",
+  "SPRITE_SILPH_WORKER_M", "SPRITE_WARDEN", "SPRITE_CAPTAIN", "SPRITE_FISHER", "SPRITE_KOGA", "SPRITE_GUARD",
+  "SPRITE_UNUSED_GUARD", "SPRITE_MOM", "SPRITE_BALDING_GUY", "SPRITE_LITTLE_BOY", "SPRITE_UNUSED_GAMEBOY_KID",
+  "SPRITE_GAMEBOY_KID", "SPRITE_FAIRY", "SPRITE_AGATHA", "SPRITE_BRUNO", "SPRITE_LORELEI", "SPRITE_SEEL",
+  "SPRITE_POKE_BALL", "SPRITE_FOSSIL", "SPRITE_BOULDER", "SPRITE_PAPER", "SPRITE_POKEDEX", "SPRITE_CLIPBOARD",
+  "SPRITE_SNORLAX", "SPRITE_UNUSED_OLD_AMBER", "SPRITE_OLD_AMBER", "SPRITE_UNUSED_GAMBLER_ASLEEP_1",
+  "SPRITE_UNUSED_GAMBLER_ASLEEP_2", "SPRITE_GAMBLER_ASLEEP",
+];
+
+/**
+ * Yellow's sprites Red never had, and the pack's OBJ palette each wears
+ * (0 red, 1 blue, 2 green, 3 brown, 4 pink, 7 gold): a choice made here, the
+ * pack having none for them. Yellow's three UNUSED_RED copies stay unbound.
+ */
+const YELLOW_ONLY_OBJ: Record<string, number> = {
+  SPRITE_PIKACHU: 7,
+  SPRITE_OFFICER_JENNY: 1,
+  SPRITE_SANDSHREW: 3,
+  SPRITE_ODDISH: 2,
+  SPRITE_BULBASAUR: 2,
+  SPRITE_JIGGLYPUFF: 4,
+  SPRITE_CLEFAIRY: 4,
+  SPRITE_CHANSEY: 4,
+  SPRITE_JESSIE: 0,
+  SPRITE_JAMES: 1,
+};
+
 export function planColour(
   gen: GenData,
   redpp: Redpp,
@@ -335,17 +375,35 @@ export function planColour(
   // an approximation either way — see Redpp.objGroupOf); two DIFFERENT
   // explicit assignments on one sheet are a cook error.
   const objBySheet = new Map<string, { group: number; from: string; explicit: boolean }>();
+  // Yellow (cooked with the community pack only when asked): its sprite
+  // table is Red's reordered and extended, and the pack is keyed by Red's
+  // table, so a Yellow sprite takes the palette of Red's sprite of the same
+  // name; the sprites Red never had take one picked for them.
+  const yellow = !!(gen.palettes as { cgbBase?: unknown }).cgbBase;
   for (const sprite of Object.values(gen.sprites)) {
     const key = sprite.image.replace(/^assets\/generated\//, "").replace(/\.png$/, "");
     const raw = /\[(\d+)\]/.exec(sprite.source);
-    const romIndex = raw
+    let romIndex: number | null = raw
       ? Number(raw[1])
       : /RedBikeSprite|SurfingPikachuSprite/.test(sprite.source)
         ? 0
         : null;
-    const explicit =
-      romIndex !== null && redpp.pack.world.spriteAssignment[String(romIndex)] !== "random";
-    const group = redpp.objGroupOf(sprite.source, key);
+    let source = sprite.source;
+    let explicit: boolean;
+    let group: number | null;
+    if (yellow && YELLOW_ONLY_OBJ[sprite.id] !== undefined) {
+      group = YELLOW_ONLY_OBJ[sprite.id]!;
+      explicit = true;
+    } else {
+      if (yellow && raw) {
+        const red = RED_SPRITE_INDEX.indexOf(sprite.id);
+        romIndex = red >= 0 ? red : null;
+        source = red >= 0 ? `ROM:SpriteSheetPointerTable[${red}]` : "";
+      }
+      explicit =
+        romIndex !== null && redpp.pack.world.spriteAssignment[String(romIndex)] !== "random";
+      group = romIndex === null && yellow ? null : redpp.objGroupOf(source, key);
+    }
     if (group === null) continue;
     const seen = objBySheet.get(key);
     if (!seen) {

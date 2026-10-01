@@ -523,8 +523,10 @@ let redppCache: RedppPack | null | undefined;
  */
 export function loadRedpp(genDir = GEN_DIR): RedppPack | null {
   if (redppCache !== undefined) return redppCache;
-  // VOXELMON_COLOUR=none cooks Game Boy grayscale without deleting the pack
-  if (process.env.VOXELMON_COLOUR === "none") {
+  // VOXELMON_COLOUR=none (or dmg, gbc, sgb) cooks without the pack even
+  // when the folder holds it (cook/gbc.ts lists the modes)
+  const mode = process.env.VOXELMON_COLOUR;
+  if (mode === "none" || mode === "dmg" || mode === "gbc" || mode === "sgb") {
     redppCache = null;
     return null;
   }

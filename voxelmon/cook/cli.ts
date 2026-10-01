@@ -124,10 +124,17 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
   // re-keyed TILESET_X -> TilesetX); Red/Blue/Yellow keep potato_voxel's
   const profile = isGen2(gen) ? loadGen2Profile(Object.keys(gen.tilesets)) : loadProfile();
   // Yellow has colours of its own (cook/gbc.ts); the RED++ pack is Red's,
-  // keyed by Red's sprite ids, and must not touch it even when a cooker
-  // folder still holds it from an earlier Red cook
+  // keyed by Red's sprite ids, and touches Yellow only when the cook asks
+  // for it (VOXELMON_COLOUR=community) -- never because a cooker folder
+  // still holds it from an earlier Red cook. Red and Blue have no GBC
+  // colours to cook with.
   const gen2 = isGen2(gen);
-  const pack = (gen.palettes as { cgbBase?: unknown }).cgbBase || gen2 ? null : loadRedpp(genDir);
+  const cgb = !!(gen.palettes as { cgbBase?: unknown }).cgbBase;
+  const mode = process.env.VOXELMON_COLOUR;
+  if (mode === "gbc" && !cgb && !gen2) {
+    throw new Error("VOXELMON_COLOUR=gbc: this game has no Game Boy Color colours (Red and Blue): cook it dmg or community");
+  }
+  const pack = gen2 || (cgb && mode !== "community") ? null : loadRedpp(genDir);
   const redpp = pack ? new Redpp(pack) : null;
   // Gold's own GBC colours on the same machinery (cook/gen2.ts)
   const gen2Colour = gen2 ? new Gen2Colour(gen) : null;

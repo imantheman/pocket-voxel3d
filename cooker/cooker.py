@@ -21,10 +21,11 @@ What it does, in order:
      tools run on, the game's own source, and three data files from the
      projects it builds on), with the URL and license of each, and asks.
      Every download is checked against a checksum pinned below.
-  3. Asks whether you want colour. Pokemon Red is a black-and-white game;
-     the colour comes from a community colourisation (pokered-gbc), and it
-     is your call whether to use it. (Yellow and Gold are Game Boy Color
-     games: their colours are in the ROM, and there is nothing to ask.)
+  3. Asks which colours you want. Red and Blue: black and white, as the
+     Game Boy showed them, or the community colourisation (pokered-gbc).
+     Yellow: black and white, its own Game Boy Color colours from the ROM,
+     or the community colours. (Gold has only its own colours: nothing to
+     ask.)
   4. Runs the importer (your ROM -> data, seconds) and the cooker (data ->
      222 map paks, two to fifteen minutes depending on the machine).
   5. Puts the finished `3ds` folder in `output/`, writes `SOURCES.txt`
@@ -32,7 +33,8 @@ What it does, in order:
      straight onto an SD card if it can see one.
 
 Options, for people who want them:  --yes  (accept every default, no
-questions)  --grayscale  --colour  --no-sd  --no-open  --rom PATH
+questions)  --palette dmg|gbc|community  (--grayscale = dmg, --colour =
+community)  --no-sd  --no-open  --rom PATH
 
 Needs Python 3.8 or newer and an internet connection for the first run.
 Budget up to 20 minutes, 3 GB of free disk while it runs, and 400 MB on the card.
@@ -138,6 +140,21 @@ GAMES = {
 }
 # The games whose colours come out of the ROM itself (Game Boy Color games).
 GBC_GAMES = ("yellow", "gold")
+# The colours each Gen 1 game can be cooked in (--palette), default first:
+#   dmg        black and white, the Game Boy's own four greys
+#   gbc        the game's own Game Boy Color colours (Yellow only: Red and
+#              Blue are black-and-white games and have none)
+#   community  pokered-gbc's colourisation, fetched from gen1recomp
+PALETTES = {
+    "red": ("community", "dmg"),
+    "blue": ("community", "dmg"),
+    "yellow": ("gbc", "dmg", "community"),
+}
+PALETTE_LABELS = {
+    "dmg": "black and white (the Game Boy's own greys)",
+    "gbc": "the game's own Game Boy Color colours, from your ROM",
+    "community": "the community colours (pokered-gbc)",
+}
 
 # ---------------------------------------------------------------------------
 
@@ -460,7 +477,7 @@ def find_rom(arg, yes):
     return rom, game
 
 
-def write_sources(repo_desc, rom, colour, downloads, game):
+def write_sources(repo_desc, rom, palette, downloads, game):
     lines = [
         "Pocket Voxel -- what went into this build",
         "=" * 44,
@@ -480,11 +497,11 @@ def write_sources(repo_desc, rom, colour, downloads, game):
         "",
         "DATA FILES FETCHED FROM THE PROJECTS THIS BUILDS ON:",
     ]
-    keys = (game["manifest"],) if game["id"] == "gold" else         (game["manifest"], "shapes") if game["id"] in GBC_GAMES else (game["manifest"], "colour", "shapes")
+    keys = (game["manifest"],) if game["id"] == "gold" else (game["manifest"], "colour", "shapes")
     for key in keys:
         folder, rel, (repo, commit), sha, size, lic = DATA_FILES[key]
-        if key == "colour" and not colour:
-            lines.append(f"  (colour pack NOT fetched -- this build is Game Boy grayscale)")
+        if key == "colour" and palette != "community":
+            lines.append(f"  (colour pack NOT fetched -- this build's colours: {PALETTE_LABELS.get(palette, palette)})")
             continue
         lines += [
             f"  {rel}",
@@ -544,8 +561,10 @@ def main():
     ap.add_argument("rom", nargs="?", help="your Pokemon Red, Blue, Yellow or Gold ROM file")
     ap.add_argument("--rom", dest="rom_opt")
     ap.add_argument("--yes", action="store_true", help="accept every default without asking")
-    ap.add_argument("--colour", "--color", dest="colour", action="store_true")
-    ap.add_argument("--grayscale", dest="grayscale", action="store_true")
+    ap.add_argument("--palette", choices=("dmg", "gbc", "community"),
+                    help="the colours: dmg (black and white), gbc (Yellow's own), community (pokered-gbc)")
+    ap.add_argument("--colour", "--color", dest="colour", action="store_true", help="= --palette community")
+    ap.add_argument("--grayscale", dest="grayscale", action="store_true", help="= --palette dmg")
     ap.add_argument("--no-sd", action="store_true", help="do not look for or write to an SD card")
     ap.add_argument("--no-open", action="store_true", help="do not open the output folder at the end")
     args = ap.parse_args()
@@ -594,25 +613,47 @@ def main():
     say()
 
     # 3. colour
-    if game["id"] in GBC_GAMES:
-        # A Game Boy Color game: its colours are in the ROM itself, so there
-        # is nothing to fetch and nothing to ask (for Yellow, --grayscale
-        # still asks for its Super Game Boy colours instead).
-        colour = False
-        say(f"Colour: Pokemon {game['label']}'s own Game Boy Color palettes, from your ROM.")
-        if game["id"] == "gold" and args.grayscale:
-            say("  (--grayscale does nothing for Gold: it has no Super Game Boy palettes.)")
-    elif args.grayscale:
-        colour = False
-    elif args.colour:
-        colour = True
+    asked = args.palette or ("community" if args.colour else "dmg" if args.grayscale else None)
+    if game["id"] == "gold":
+        # Gold has only its own Game Boy Color colours, read from the ROM.
+        palette = "gbc"
+        say("Colour: Pokemon Gold's own Game Boy Color palettes, from your ROM.")
+        if asked and asked != "gbc":
+            say(f"  (--palette {asked} does nothing for Gold: it has only its own colours.)")
     else:
-        say("Colour?")
-        say(f"  Pokemon {game['label']} is a black-and-white game. The colour Pocket Voxel can show")
-        say("  comes from pokered-gbc, a community colourisation of the Red disassembly,")
-        say(f"  fetched as one {mb(DATA_FILES['colour'][4])} file from gen1recomp (MIT).")
-        say("  Say no and the maps come out in Game Boy grayscale, like the original.")
-        colour = ask("Fetch the colour pack and cook in colour?", True, args.yes)
+        choices = PALETTES[game["id"]]
+        if asked and asked not in choices:
+            die(f"Pokemon {game['label']} has no {asked} colours to cook with: choose "
+                + " or ".join(choices) + ".")
+        if asked:
+            palette = asked
+        elif args.yes:
+            palette = choices[0]
+            say(f"Colour: {PALETTE_LABELS[palette]} (--yes)")
+        else:
+            say("Colour?")
+            if game["id"] == "yellow":
+                say("  Pokemon Yellow is a Game Boy Color game. Pocket Voxel can show its own")
+                say("  colours, read from your ROM, or the Game Boy's black and white, or the")
+                say("  community colourisation of Red (pokered-gbc), fetched as one")
+                say(f"  {mb(DATA_FILES['colour'][4])} file from gen1recomp (MIT).")
+            else:
+                say(f"  Pokemon {game['label']} is a black-and-white game. The colour Pocket Voxel can show")
+                say("  comes from pokered-gbc, a community colourisation of the Red disassembly,")
+                say(f"  fetched as one {mb(DATA_FILES['colour'][4])} file from gen1recomp (MIT).")
+            for n, key in enumerate(choices, 1):
+                say(f"    {n}. {PALETTE_LABELS[key]}{'  (default)' if n == 1 else ''}")
+            palette = choices[0]
+            try:
+                answer = input(f"Which? [1-{len(choices)}] ").strip()
+            except EOFError:
+                answer = ""
+            if _log:
+                _log.write(f"Colour -> {answer or '(default)'}\n")
+            if answer.isdigit() and 1 <= int(answer) <= len(choices):
+                palette = choices[int(answer) - 1]
+        say(f"  -> {PALETTE_LABELS[palette]}")
+    colour = palette == "community"
     say()
 
     # 4. get everything
@@ -627,7 +668,7 @@ def main():
     if colour:
         ensure_data_file("colour")
     elif colour_file.exists():
-        # Present means the cook uses it. Grayscale means it must not be.
+        # Only a community cook uses it (VOXELMON_COLOUR says so either way).
         colour_file.unlink()
     say()
 
@@ -639,15 +680,14 @@ def main():
     env["VOXELMON_VOXELMOD"] = str(WORK / "potato_voxel")
     env["VOXELMON_PYTHON"] = sys.executable
     env["VOXELMON_VERSION"] = game["id"]
-    if game["id"] == "yellow" and args.grayscale:
-        env["VOXELMON_COLOUR"] = "sgb"
+    # the colours to cook in (voxelmon/cook/gbc.ts lists them)
+    env["VOXELMON_COLOUR"] = palette
     env["PYTHONIOENCODING"] = "utf-8"
     say(f"Cooking {game['maps']} maps. Two to fifteen minutes depending on the machine,")
     say("and a couple of GB of disk while it works. The lines scrolling past are")
     say("the cooker's own progress.")
-    if not colour and game["id"] not in GBC_GAMES:
-        say("(Grayscale, as you chose: the cook will say the colour pack is 'not found'")
-        say(" once, which is it noticing exactly that.)")
+    if palette == "dmg":
+        say("(Black and white, as you chose.)")
     say()
     started = time.time()
     proc = subprocess.Popen(
@@ -687,7 +727,7 @@ def main():
         if candidate.exists():
             shutil.copyfile(candidate, card / game["dsx"])
             break
-    write_sources(repo_desc, rom, colour, None, game)
+    write_sources(repo_desc, rom, palette, None, game)
     paks = sorted((card / "voxelmon" / game["paks"]).glob("*.vxpak"))
     size = sum(p.stat().st_size for p in (card / "voxelmon" / game["paks"]).iterdir())
     say(f"  {len(paks)} paks, {mb(size)} -> {card}")
