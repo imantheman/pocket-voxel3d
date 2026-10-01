@@ -12,7 +12,7 @@
 // "'d") are matched greedily, longest first, as Font.split does on bytes.
 // Span positions are 1-based character indices, as in the Lua.
 
-import { putTile } from "../../platform/screen.ts";
+import { putTile, putTiles } from "../../platform/screen.ts";
 import G from "../../platform/screen.ts";
 import { Assets } from "./Assets.ts";
 import { Logger } from "../core/Logger.ts";
@@ -317,7 +317,17 @@ export const Font = {
     else G.setColor(1, 1, 1, 1);
     // with a palette active the Lua's white rectangle is drawn through it:
     // colour 0 of that palette, which is the blank tile in the palette
-    for (let j = 0; j < th; j++) for (let i = 0; i < tw; i++) putBlank((tx + i) * 8, (ty + j) * 8, fill);
+    // the interior in one block (putBlank's cells, one palette lookup)
+    const bx = Math.round(tx * 8 + G.tx);
+    const by = Math.round(ty * 8 + G.ty);
+    if (fill && fill.length >= 3) {
+      const savedPal = G.palette;
+      G.palette = [[fill[0]!, fill[1]!, fill[2]!], savedPal[1]!, savedPal[2]!, savedPal[3]!];
+      putTiles(0, bx, by, tw, th);
+      G.palette = savedPal;
+    } else {
+      putTiles(0, bx, by, tw, th);
+    }
     G.setColor(saved);
     const B = Font.BORDER;
     Font.drawCode(B.tl!, tx * 8, ty * 8);
@@ -334,20 +344,6 @@ export const Font = {
     }
   },
 };
-
-/** An interior cell: the blank tile through the current palette, or an explicit fill colour. */
-function putBlank(x: number, y: number, fill?: readonly number[]): void {
-  const [sx, sy] = G.transformPoint(x, y);
-  if (fill && fill.length >= 3) {
-    const saved = G.palette;
-    const c: [number, number, number] = [fill[0]!, fill[1]!, fill[2]!];
-    G.palette = [c, saved[1]!, saved[2]!, saved[3]!];
-    putTile(0, Math.round(sx), Math.round(sy));
-    G.palette = saved;
-  } else {
-    putTile(0, Math.round(sx), Math.round(sy));
-  }
-}
 
 Assets.register(Font.invalidate);
 

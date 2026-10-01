@@ -179,6 +179,58 @@ export function putTile(id: number, x: number, y: number, flipX = false, flipY =
   l.obj(x, y, id, l.palette(s.palette, true) | flips);
 }
 
+/**
+ * putTile(id) over a block of `cols` x `rows` cells from (x, y): the same
+ * cells putTile would write one by one, with one palette lookup and the rows
+ * filled natively. Off the 8px grid, or with every tile an object, it is
+ * putTile per cell.
+ */
+export function putTiles(id: number, x: number, y: number, cols: number, rows: number): void {
+  const l = lcd;
+  if (l === null || canvasDepth > 0 || cols <= 0 || rows <= 0) return;
+  const s = st;
+  if (s.objects || (x & 7) !== 0 || (y & 7) !== 0) {
+    for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) putTile(id, x + i * 8, y + j * 8);
+    return;
+  }
+  let cx0 = x >> 3;
+  let cy0 = y >> 3;
+  let cx1 = cx0 + cols;
+  let cy1 = cy0 + rows;
+  let layer = 0;
+  const map = s.map;
+  if (map === null) {
+    cx0 = Math.max(cx0, 0);
+    cy0 = Math.max(cy0, 0);
+    cx1 = Math.min(cx1, LCD_W / 8);
+    cy1 = Math.min(cy1, LCD_H / 8);
+    // putTile drops a cell only when it lies wholly outside the scissor
+    const sc = s.scissor;
+    if (sc !== null) {
+      cx0 = Math.max(cx0, Math.floor(sc[0] / 8));
+      cy0 = Math.max(cy0, Math.floor(sc[1] / 8));
+      cx1 = Math.min(cx1, Math.ceil((sc[0] + sc[2]) / 8));
+      cy1 = Math.min(cy1, Math.ceil((sc[1] + sc[3]) / 8));
+    }
+  } else {
+    cx0 = Math.max(cx0, 0);
+    cy0 = Math.max(cy0, 0);
+    cx1 = Math.min(cx1, 32);
+    cy1 = Math.min(cy1, 32);
+    layer = map === 1 ? 1 : 0;
+  }
+  if (cx1 <= cx0 || cy1 <= cy0) return;
+  let slot: number;
+  if (s.palette === cachePal && l.frame === cacheFrame) slot = cacheSlot;
+  else {
+    slot = l.palette(s.palette);
+    cachePal = s.palette;
+    cacheFrame = l.frame;
+    cacheSlot = slot;
+  }
+  l.fillCells(cx0, cy0, cx1 - cx0, cy1 - cy0, id, (slot | (s.keyed ? ATTR_PRIORITY : 0)) & 0xef, layer);
+}
+
 /** A cell with an explicit palette slot (a fill reusing a palette on screen). */
 function putCell(id: number, x: number, y: number, slot: number): void {
   if (!lcd || canvasDepth > 0) return;
