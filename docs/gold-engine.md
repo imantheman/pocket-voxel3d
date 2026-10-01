@@ -165,15 +165,29 @@ instead of `game.js`.
 4. Each host tick it pumps input into `Game2` and renders the Gold screen,
    the scene and the audio.
 
-## Order of work
+## Status
 
-1. **Platform** (in progress): the Gold screen, data, lua, rng; then Font,
-   GbcPalette, Assets and Chrome on the screen; then the cook's Gold tile
-   pages and manifest.
-2. **In parallel:** `script/`, `world/`, `battle/`, `core/`, and the Gen 2
-   sound engine.
-3. **Screens:** `ui/`, 73 modules, once Chrome exists.
-4. **Owner and entry:** `Game2`, `main.ts`, `worldview.ts`, the save, and the
-   3DS feature switch.
-5. **Hardware:** tune on a New 3DS, including render cost, memory, bundle
-   size and QuickJS speed.
+Steps 1 to 4 are done; step 5 is next.
+
+1. **Platform:** the Gold screen (`lcd.rs`, `lcd.ts`), data, lua, rng, Font,
+   GbcPalette, Assets, Chrome, TextBox, Input, the cook's tile pages, and the
+   dataset container.
+2. **Engine:** `script/`, `world/`, `battle/` (including the move-animation
+   engine), `core/` and the Gen 2 sound engine.
+3. **Screens:** every `ui/` module except the Crystal-only ones (CrystalIntro,
+   CrystalSplash, BattleTowerMenu) and the online ArenaState.
+4. **Owner and entry:** `Game2`, `main.ts`, `worldview.ts` (with day and night
+   through the `daytime` op), the save, the `gold` feature embedding
+   `game-gold.js`, and `cc_gold_ship.sh` for test builds.
+5. **Hardware:** tune on a New 3DS: render cost, memory, bundle size and
+   QuickJS speed. `tools/qjs_gold_harness.c` runs the bundle under the 3DS's
+   own QuickJS on the desktop. At the title it measures about 30 MB of JS heap
+   and about 1.5 ms a frame (on a PC).
+
+Known simplifications, each marked `NOT FAITHFUL` where it lives:
+
+- Battles are full-screen 2D on the Gold screen; the 3D arena comes later.
+- Map fades cover the world at the ramp midpoint instead of remapping it.
+- Front-pic animations don't play (the importer has no animation tables for
+  Gold).
+- Scaled pics draw unscaled.
