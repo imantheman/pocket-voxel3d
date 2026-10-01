@@ -10,7 +10,7 @@
 // per-line SCX over its rows, and Ho-Oh and the trails are objects through
 // title_fg.pal (hoohPalette/trailPalette).
 
-import type { Palette4 } from "../platform/lcd.ts";
+import type { Lcd, Palette4 } from "../platform/lcd.ts";
 import { tonumber } from "../platform/lua.ts";
 import { random } from "../platform/rng.ts";
 import G, { currentLcd, type LcdImage } from "../platform/screen.ts";
@@ -386,10 +386,55 @@ export class TitleState {
     return index != null ? (this.screenPalettes[index] ?? null) : null;
   }
 
+  /**
+   * The screen palette `index`'s slot this frame (null: `fallback`'s). Each of
+   * title_bg_gold.pal's palettes is resolved and matched to a slot once a
+   * frame, not once per cell.
+   */
+  private slotOf(lcd: Lcd, index: number | undefined, fallback: Palette4 | null): number {
+    if (this.slotFrame !== lcd.frame || this.slotMode !== GbcPalette.mode) {
+      this.slotFrame = lcd.frame;
+      this.slotMode = GbcPalette.mode;
+      this.slots.length = 0;
+      this.nullSlot = -1;
+    }
+    if (index == null || !this.screenPalettes?.[index]) {
+      if (fallback) return lcd.palette(fallback);
+      if (this.nullSlot < 0) this.nullSlot = lcd.palette(resolved(null));
+      return this.nullSlot;
+    }
+    let slot = this.slots[index];
+    if (slot === undefined) {
+      slot = lcd.palette(resolved(this.screenPalettes[index]));
+      this.slots[index] = slot;
+    }
+    return slot;
+  }
+  private slots: number[] = [];
+  private slotFrame = -1;
+  private slotMode = "";
+  private nullSlot = -1;
+
   /** The screen as BG cells, each through its own palette. */
   drawScreen(screen: LcdImage): void {
     if (!this.screenPalettes || !this.screenPalMap) {
       G.draw(screen, 0, 0);
+      return;
+    }
+    const lcd = currentLcd();
+    if (lcd && G.tx === 0 && G.ty === 0 && G.map == null && !G.objects) {
+      const cells = lcd.s.cells;
+      const attrs = lcd.s.attrs;
+      const map = this.screenPalMap;
+      const rows = Math.min(18, screen.th);
+      const cols = Math.min(20, screen.tw);
+      for (let row = 0; row < rows; row++) {
+        for (let col = 0; col < cols; col++) {
+          const i = row * 32 + col;
+          cells[i] = screen.ids[row * screen.tw + col]! & 0xffff;
+          attrs[i] = this.slotOf(lcd, map[row * 20 + col], null) & 0xef;
+        }
+      }
       return;
     }
     const quad = G.newQuad(0, 0, 8, 8, screen.w, screen.h);
@@ -421,8 +466,7 @@ export class TitleState {
       // 21 cells: the fine scroll brings the 21st into view.
       for (let c = 0; c <= 20; c++) {
         const src = (c + coarse) % cols;
-        const pal = this.cellPalette(src, screenRow) ?? G.palette;
-        const slot = lcd.palette(resolved(pal));
+        const slot = this.slotOf(lcd, this.screenPalMap?.[screenRow * 20 + src], G.palette);
         lcd.cell(c, screenRow, clouds.ids[r * clouds.tw + src]!, slot);
       }
     }
