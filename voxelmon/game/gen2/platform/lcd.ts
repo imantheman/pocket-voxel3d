@@ -181,6 +181,8 @@ export class Lcd {
   private sent = new LcdState();
   private sentObjs = "";
   private sentShown = false;
+  /** Rows sent as all hole (attribute exactly ATTR_HOLE throughout). */
+  private readonly sentHoleRow = new Uint8Array(64);
   private sentUnderX = 0;
   private sentUnderY = 0;
   /** The core's defaults (lcd.rs LcdScreen::default). */
@@ -435,7 +437,21 @@ export class Lcd {
     // the window's 32 rows only when it holds something now or did when sent
     const rows = this.windowUsed || this.sentWindowUsed ? 64 : 32;
     this.sentWindowUsed = this.windowUsed;
+    const holeRow = this.sentHoleRow;
     for (let row = 0; row < rows; row++) {
+      // A row that is all hole now and was all hole when sent shows nothing
+      // either time, whatever its tiles: 8 words looked at, not 24. (VIEW
+      // 2D's screen is all hole but its text: the map is the under layer.)
+      const aw0 = row * 8;
+      let hole = true;
+      for (let k = 0; k < 8; k++) {
+        if (sc32[1]![aw0 + k] !== 0x10101010) {
+          hole = false;
+          break;
+        }
+      }
+      if (hole && holeRow[row]) continue;
+      holeRow[row] = hole ? 1 : 0;
       let same = true;
       const cw = row * 16;
       for (let k = 0; k < 16; k++) {
@@ -534,6 +550,7 @@ export class Lcd {
     this.sent = new LcdState();
     this.t32 = undefined;
     this.sent.attrs.fill(0xfe); // matches nothing: every cell resends
+    this.sentHoleRow.fill(0);
     this.sentObjs = "\0";
     this.sentShown = !this.shown;
     this.sentRegs = "";
