@@ -33,28 +33,36 @@ interface WalkerData {
   sprites?: Record<string, { frames?: number; walker?: boolean }>;
 }
 
-/** One actor as World.viewState reports it (world/World.ts). */
+/** One actor as World.viewState reports it (world/Player.ts ActorView). */
 export interface ActorView {
   px: number;
   py: number;
   facing: string;
-  /** 1 mid-step (the walk frame), 0 standing. */
   phase?: number;
   mirror?: boolean;
   flip?: boolean;
   frame?: number;
   spriteId?: string;
+  /** The sheet's gfx key ("sprites/chris"). */
+  gfx?: string;
   visible?: boolean;
   lift?: number;
 }
 
+/** The parts of world/World.ts WorldView this reads. */
 export interface WorldViewState {
-  /** "MORN" | "DAY" | "NITE" | "DARK": the palettes the map is drawn in. */
-  daytime?: string;
-  mapId?: string;
+  ready?: boolean;
   map?: { id: string };
-  player?: ActorView;
+  neighbors?: { id: string; ox: number; oy: number }[];
+  camera?: { x: number; y: number; viewW: number; viewH: number };
+  actors?: { kind: "player" | "npc"; view: ActorView; ox: number; oy: number }[];
+  hideAll?: boolean;
+  palette?: { daytime?: string; dark?: boolean };
+  /** Older shapes (tests): */
+  mapId?: string;
+  player?: ActorView | { view: ActorView };
   npcs?: ActorView[];
+  daytime?: string;
 }
 
 /** overworld.ts:249 computeNeighbors, one hop: the maps a connection joins. */
@@ -85,6 +93,11 @@ function neighbours(maps: Record<string, WalkerMap>, rootId: string): { id: stri
   return out;
 }
 
+function playerOf(vs: WorldViewState): ActorView | undefined {
+  const p = vs.player as (ActorView & { view?: ActorView }) | undefined;
+  return p?.view ?? p;
+}
+
 export class WorldView {
   private mapSlots: (string | null)[] = [null, null, null, null, null];
   private lastMapId: string | null = null;
@@ -95,6 +108,7 @@ export class WorldView {
   private entSeen = new Uint8Array(ENTS_MAX);
   private sheetCache = new Map<string, number>();
   private lastDaytime = -1;
+  private lastNeighbours = "";
 
   constructor(
     private readonly host: VoxelHost,
@@ -109,9 +123,19 @@ export class WorldView {
       this.clear();
       return;
     }
+    if (vs.ready === false) {
+      this.clear();
+      return;
+    }
     const mapId = vs.mapId ?? vs.map?.id ?? world.map?.id;
-    if (mapId) this.emitMaps(mapId);
-    if (vs.player) this.emitCam(vs.player);
+    if (mapId) this.emitMaps(mapId, vs.neighbors);
+    if (vs.camera) {
+      // the 160x144 view's centre: what the Lua's camera framed
+      this.emitCamAt(vs.camera.x + vs.camera.viewW / 2, vs.camera.y + vs.camera.viewH / 2);
+    } else {
+      const p = playerOf(vs);
+      if (p) this.emitCam(p);
+    }
     this.emitEnts(vs);
     this.emitDaytime(vs);
   }
@@ -121,7 +145,7 @@ export class WorldView {
    * whatever the world says it is drawn in -- a dark cave is DARK.
    */
   private emitDaytime(vs: WorldViewState): void {
-    let name = vs.daytime;
+    let name = vs.palette?.dark ? "DARK" : (vs.daytime ?? vs.palette?.daytime);
     if (!name) {
       try {
         name = (Palettes as unknown as { clockDaytime?: () => string }).clockDaytime?.();
@@ -148,14 +172,17 @@ export class WorldView {
     this.hideAllEnts();
   }
 
-  private emitMaps(mapId: string): void {
-    if (mapId === this.lastMapId) return;
+  private emitMaps(mapId: string, given?: { id: string; ox: number; oy: number }[]): void {
+    const nkey = given ? given.map((n) => `${n.id}@${n.ox},${n.oy}`).join(";") : "";
+    if (mapId === this.lastMapId && nkey === this.lastNeighbours) return;
     this.lastMapId = mapId;
+    this.lastNeighbours = nkey;
     const maps = this.data?.maps ?? {};
     const cur = maps[mapId];
     const desired: ({ id: string; index: number; ox: number; oy: number } | null)[] = [];
     if (cur) desired.push({ id: mapId, index: cur.index, ox: 0, oy: 0 });
-    for (const n of neighbours(maps, mapId).slice(0, 4)) {
+    for (const n of (given ?? neighbours(maps, mapId)).slice(0, 4)) {
+      if (!maps[n.id]) continue;
       if (this.data?.cookedMaps && !this.data.cookedMaps.includes(n.id)) continue;
       desired.push({ id: n.id, index: maps[n.id]!.index, ox: n.ox, oy: n.oy });
     }
@@ -171,8 +198,12 @@ export class WorldView {
 
   private emitCam(p: ActorView): void {
     // scene.ts:425 -- Camera.lua follow at the 160x144 view
-    const cx = Math.round((p.px + 16) * Q4);
-    const cy = Math.round((p.py + 8) * Q4);
+    this.emitCamAt(p.px + 16, p.py + 8);
+  }
+
+  private emitCamAt(x: number, y: number): void {
+    const cx = Math.round(x * Q4);
+    const cy = Math.round(y * Q4);
     if (cx !== this.lastCamX || cy !== this.lastCamY) {
       this.host.cam(cx, cy);
       this.lastCamX = cx;
@@ -180,14 +211,15 @@ export class WorldView {
     }
   }
 
-  private sheetIndex(spriteId: string | undefined): number {
-    if (!spriteId) return -1;
-    const hit = this.sheetCache.get(spriteId);
+  private sheetIndex(spriteId: string | undefined, gfx?: string): number {
+    const id = gfx ?? spriteId;
+    if (!id) return -1;
+    const hit = this.sheetCache.get(id);
     if (hit !== undefined) return hit;
-    const name = spriteId.replace(/^SPRITE_/, "").toLowerCase();
+    const name = gfx ? gfx.replace(/^sprites\//, "") : id.replace(/^SPRITE_/, "").toLowerCase();
     const page = this.data?.atlas?.sprites?.[name];
     const index = typeof page === "number" ? page : -1;
-    this.sheetCache.set(spriteId, index);
+    this.sheetCache.set(id, index);
     return index;
   }
 
@@ -216,7 +248,7 @@ export class WorldView {
     this.entShown[slot] = 1;
   }
 
-  private actor(slot: number, a: ActorView, ghost: boolean): void {
+  private actor(slot: number, a: ActorView, ghost: boolean, ox = 0, oy = 0): void {
     if (a.visible === false) return;
     const def = a.spriteId ? this.data?.sprites?.[a.spriteId] : undefined;
     const frames = def?.frames ?? 6;
@@ -232,10 +264,10 @@ export class WorldView {
     if (mirror) flags |= ENT_FLAG.mirror;
     this.emitSlot(
       slot,
-      this.sheetIndex(a.spriteId),
+      this.sheetIndex(a.spriteId, a.gfx),
       frame ?? 0,
-      Math.round(a.px * Q4),
-      Math.round(a.py * Q4),
+      Math.round((a.px + ox) * Q4),
+      Math.round((a.py + oy) * Q4),
       Math.round(a.lift ?? 0),
       flags,
     );
@@ -243,9 +275,19 @@ export class WorldView {
 
   private emitEnts(vs: WorldViewState): void {
     this.entSeen.fill(0);
-    if (vs.player) this.actor(0, vs.player, true);
-    const npcs = vs.npcs ?? [];
-    for (let i = 0; i < npcs.length && i + 1 < ENTS_MAX; i++) this.actor(i + 1, npcs[i]!, false);
+    if (vs.actors) {
+      // the Lua's Y-sorted draw list: the player in slot 0, everyone else after
+      let slot = 1;
+      for (const e of vs.hideAll ? [] : vs.actors) {
+        if (e.kind === "player") this.actor(0, e.view, true, e.ox, e.oy);
+        else if (slot < ENTS_MAX) this.actor(slot++, e.view, false, e.ox, e.oy);
+      }
+    } else {
+      const p = playerOf(vs);
+      if (p) this.actor(0, p, true);
+      const npcs = vs.npcs ?? [];
+      for (let i = 0; i < npcs.length && i + 1 < ENTS_MAX; i++) this.actor(i + 1, npcs[i]!, false);
+    }
     for (let slot = 0; slot < ENTS_MAX; slot++) {
       if (this.entSeen[slot] === 0 && this.entShown[slot] !== 0) {
         this.host.entHide(slot);
