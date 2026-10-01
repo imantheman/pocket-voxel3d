@@ -16,9 +16,12 @@
 // so the emitter does not even compare). The map's tiles are worked out
 // once per map, from its blocks, into a padded array the rows copy out of.
 //
-// Not yet: animated tiles (water, flowers) stand still, a cut tree still
-// shows, and past the map's edge the border block shows where the cart
-// would show the connected map.
+// Past the map's edge the connected maps show, their blocks drawn in this
+// map's tileset as the cart draws its connection strips; elsewhere the
+// border block.
+//
+// Not yet: animated tiles (water, flowers) stand still, and a cut tree
+// still shows.
 
 import { GbVideo, LCDC, OAM_ATTR, OAM_X_OFS, OAM_Y_OFS, type TileLoad } from "../gb/video.ts";
 import type { Dir } from "./collision.ts";
@@ -73,7 +76,7 @@ export class OverworldView2d {
         this.slots.clear();
         this.loadsSize = -1;
       }
-      t = this.tiles = buildTiles(map);
+      t = this.tiles = buildTiles(map, game.data.maps);
       this.winX = NaN;
     }
     const camX = Math.round(p.px) - 64;
@@ -187,8 +190,40 @@ function sameBlocks(a: number[], b: number[] | undefined): boolean {
   return true;
 }
 
+interface ConnDef {
+  map: string;
+  offset: number;
+}
+
+/**
+ * The block at (bx, by), map block coordinates, past the edge too: a
+ * connected map's (overworld.ts places them -- north at x + offset, y -
+ * its height, and so on round), else the border block.
+ */
+function blockPast(map: any, maps: Record<string, any> | undefined, bx: number, by: number): number {
+  const def = map.def;
+  const w = def.width;
+  const h = def.height;
+  if (bx >= 0 && by >= 0 && bx < w && by < h) return def.blocks[by * w + bx];
+  const conns: Record<string, ConnDef> | undefined = def.connections;
+  if (conns && maps) {
+    const at = (c: ConnDef | undefined, nbx: number, nby: number): number => {
+      const d = c ? maps[c.map] : undefined;
+      if (!d || nbx < 0 || nby < 0 || nbx >= d.width || nby >= d.height) return -1;
+      return d.blocks[nby * d.width + nbx] ?? -1;
+    };
+    let b = -1;
+    if (by < 0 && conns.north) b = at(conns.north, bx - conns.north.offset, by + (maps[conns.north.map]?.height ?? 0));
+    if (b < 0 && by >= h && conns.south) b = at(conns.south, bx - conns.south.offset, by - h);
+    if (b < 0 && bx < 0 && conns.west) b = at(conns.west, bx + (maps[conns.west.map]?.width ?? 0), by - conns.west.offset);
+    if (b < 0 && bx >= w && conns.east) b = at(conns.east, bx - w, by - conns.east.offset);
+    if (b >= 0) return b;
+  }
+  return def.borderBlock;
+}
+
 /** The map's tiles, PAD tiles of border round them, block by block. */
-function buildTiles(map: any): MapTiles {
+function buildTiles(map: any, maps?: Record<string, any>): MapTiles {
   const def = map.def;
   const w = def.width * 4 + PAD * 2;
   const h = def.height * 4 + PAD * 2;
@@ -197,7 +232,7 @@ function buildTiles(map: any): MapTiles {
   const pb = PAD / 4; // padding in blocks
   for (let by = -pb; by < def.height + pb; by++) {
     for (let bx = -pb; bx < def.width + pb; bx++) {
-      const block = tsBlocks[map.blockAt(bx, by)];
+      const block = tsBlocks[blockPast(map, maps, bx, by)];
       if (!block) continue;
       const x0 = (bx + pb) * 4;
       const y0 = (by + pb) * 4;

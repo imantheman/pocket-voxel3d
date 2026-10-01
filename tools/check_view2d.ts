@@ -31,3 +31,7 @@ for (let sy = 0; sy < 18; sy++) {
   console.log(line);
 }
 console.log("mismatches", bad, "loads", JSON.stringify(v.loads));
+// the screen's 20x18 tile ids (plus one) for cc_dump_terrain.py SCREEN=...
+const screen: number[] = [];
+for (let sy = 0; sy < 19; sy++) for (let sx = 0; sx < 21; sx++) screen.push(v.maps[(((v.scy >> 3) + sy) & 31) * 32 + (((v.scx >> 3) + sx) & 31)]!);
+await Bun.write("/tmp/view2d_screen.json", JSON.stringify({ map: map.id, scx: v.scx & 7, scy: v.scy & 7, ids: screen }));

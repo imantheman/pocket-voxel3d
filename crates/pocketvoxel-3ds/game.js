@@ -27564,7 +27564,7 @@ class OverworldView2d {
         this.slots.clear();
         this.loadsSize = -1;
       }
-      t = this.tiles = buildTiles(map);
+      t = this.tiles = buildTiles(map, game.data.maps);
       this.winX = NaN;
     }
     const camX = Math.round(p.px) - 64;
@@ -27661,7 +27661,35 @@ function sameBlocks(a, b) {
       return false;
   return true;
 }
-function buildTiles(map) {
+function blockPast(map, maps, bx, by) {
+  const def = map.def;
+  const w = def.width;
+  const h = def.height;
+  if (bx >= 0 && by >= 0 && bx < w && by < h)
+    return def.blocks[by * w + bx];
+  const conns = def.connections;
+  if (conns && maps) {
+    const at2 = (c, nbx, nby) => {
+      const d = c ? maps[c.map] : undefined;
+      if (!d || nbx < 0 || nby < 0 || nbx >= d.width || nby >= d.height)
+        return -1;
+      return d.blocks[nby * d.width + nbx] ?? -1;
+    };
+    let b = -1;
+    if (by < 0 && conns.north)
+      b = at2(conns.north, bx - conns.north.offset, by + (maps[conns.north.map]?.height ?? 0));
+    if (b < 0 && by >= h && conns.south)
+      b = at2(conns.south, bx - conns.south.offset, by - h);
+    if (b < 0 && bx < 0 && conns.west)
+      b = at2(conns.west, bx + (maps[conns.west.map]?.width ?? 0), by - conns.west.offset);
+    if (b < 0 && bx >= w && conns.east)
+      b = at2(conns.east, bx - w, by - conns.east.offset);
+    if (b >= 0)
+      return b;
+  }
+  return def.borderBlock;
+}
+function buildTiles(map, maps) {
   const def = map.def;
   const w = def.width * 4 + PAD2 * 2;
   const h = def.height * 4 + PAD2 * 2;
@@ -27670,7 +27698,7 @@ function buildTiles(map) {
   const pb = PAD2 / 4;
   for (let by = -pb;by < def.height + pb; by++) {
     for (let bx = -pb;bx < def.width + pb; bx++) {
-      const block = tsBlocks[map.blockAt(bx, by)];
+      const block = tsBlocks[blockPast(map, maps, bx, by)];
       if (!block)
         continue;
       const x0 = (bx + pb) * 4;
@@ -28545,10 +28573,10 @@ ${itemName}!`), onDone);
     });
   }
   setCamTurns(q) {
-    this.overworld.camTurns = q;
+    this.overworld.camTurns = this.view2d() ? 0 : q;
   }
   setCamYaw(yaw) {
-    this.overworld.freeYaw = yaw;
+    this.overworld.freeYaw = this.view2d() ? 0 : yaw;
   }
   lastSaveOk = true;
   runWriteTest() {

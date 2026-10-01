@@ -1364,12 +1364,13 @@ export class VoxelmonGame implements OverworldShell, SceneView {
    * host's button word. Only the overworld walk uses it.
    */
   setCamTurns(q: number): void {
-    this.overworld.camTurns = q;
+    // VIEW 2D has no camera to swing: up is up, as on the cart
+    this.overworld.camTurns = this.view2d() ? 0 : q;
   }
 
   /** The camera's real yaw, radians, for free movement (world/freemove.ts). */
   setCamYaw(yaw: number): void {
-    this.overworld.freeYaw = yaw;
+    this.overworld.freeYaw = this.view2d() ? 0 : yaw;
   }
 
   /** Whether the last save reached the card (ui/devmenu.ts reports it). */
