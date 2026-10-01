@@ -24,6 +24,7 @@
 // name sign, the pokepic window) uses G, GbcPalette and Assets the way the
 // Lua's draws do. The lazy `require`s inside function bodies (Phone, PhoneRing, Happiness, Sound, GameVersion,
 // ScreenPosition, Pokegear) are hoisted to here.
+import { osTime } from "../platform/clock.ts";
 import { Apricorns } from "../core/Apricorns.ts";
 import { Bag } from "../shared/inventory/Bag.ts";
 import { Battle } from "../battle/Battle.ts";
@@ -5341,6 +5342,14 @@ export class World {
     const save = this.game ? this.game.save : undefined;
     if (!save) return false;
     if (!truthy(BugContest.isActive(save))) {
+      // The daily reset, the swarms, Pokerus and the phone's call timer all
+      // run on minutes and days: once a second answers them as the cart's
+      // every frame does, at a fraction of the cost (they were half an
+      // overworld step under QuickJS). The contest's timer below still
+      // ticks every step.
+      const second = osTime();
+      if (second === this.timeEventsSecond) return false;
+      this.timeEventsSecond = second;
       Apricorns.checkDailyResetTimer(save, undefined,
         this.engineFlagResolver ? this.engineFlagResolver() : undefined);
       // CheckSwarmFlag, second on `.do_daily` and the ONLY thing that ever
@@ -5360,6 +5369,9 @@ export class World {
     if (!truthy(BugContest.tickTimer(save))) return false;
     return this.bugContestOver("time");
   }
+
+  /** The clock second checkTimeEvents last ran its daily checks in. */
+  private timeEventsSecond = -1;
 
   // Lua: World.lua:4702-4712
   bugContestOver(reason: string): boolean {
