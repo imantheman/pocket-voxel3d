@@ -312,6 +312,60 @@ impl LcdScreen {
         true
     }
 
+    /// The whole cell map at once, as the guest holds it (`lcdCellsBin`, the
+    /// 3DS shim's typed-array path): copied, and the serial bumped, only when
+    /// it differs from what is here. The guest's own row diff and hex were
+    /// most of sending a frame under QuickJS; a memcmp here is nothing.
+    pub fn set_cells(&mut self, cells: &[u16], attrs: &[u8]) -> bool {
+        let n = cells.len().min(attrs.len()).min(self.cells.len());
+        if self.cells[..n] == cells[..n] && self.attrs[..n] == attrs[..n] {
+            return false;
+        }
+        self.cells[..n].copy_from_slice(&cells[..n]);
+        self.attrs[..n].copy_from_slice(&attrs[..n]);
+        self.serial = self.serial.wrapping_add(1);
+        true
+    }
+
+    /// The object list at once (`lcdObjsBin`): `count` objects packed four
+    /// i16s each -- y, x, tile, attribute. Bumps the serial only on a change.
+    pub fn set_objs(&mut self, packed: &[i16], count: usize) -> bool {
+        let n = count.min(packed.len() / 4).min(LCD_OBJS_MAX);
+        let mut changed = n != self.obj_count;
+        for i in 0..n {
+            let p = &packed[i * 4..i * 4 + 4];
+            let o = LcdObj { y: p[0], x: p[1], tile: p[2] as u16, attr: p[3] as u8 };
+            if self.objs[i] != o {
+                self.objs[i] = o;
+                changed = true;
+            }
+        }
+        self.obj_count = n;
+        if changed {
+            self.serial = self.serial.wrapping_add(1);
+        }
+        changed
+    }
+
+    /// The per-line registers at once (`lcdLinesBin`): `target` as LCD_LINES
+    /// takes it, the lines read only when it is 1 or 2.
+    pub fn set_lines(&mut self, target: u8, lines: &[u8]) -> bool {
+        let target = target.min(2);
+        let mut changed = target != self.line_target;
+        self.line_target = target;
+        if target != 0 {
+            let n = lines.len().min(LCD_H);
+            if self.lines[..n] != lines[..n] {
+                self.lines[..n].copy_from_slice(&lines[..n]);
+                changed = true;
+            }
+        }
+        if changed {
+            self.serial = self.serial.wrapping_add(1);
+        }
+        changed
+    }
+
     /// The page and tile a tile id holds, or None outside every bank.
     pub fn tile_source(&self, id: u16) -> Option<(u16, u16)> {
         self.banks[..self.bank_count]
@@ -650,6 +704,43 @@ mod tests {
         assert_eq!(f[0], 1);
         assert_eq!(f[16 * LCD_W], LCD_HOLE);
         assert_eq!(f[24 * LCD_W], 4 + 3);
+    }
+
+    #[test]
+    fn the_typed_array_ops_match_the_text_ones_and_bump_only_on_change() {
+        let mut a = LcdScreen::default();
+        let mut b = LcdScreen::default();
+        a.op(op::LCD_CELLS, &[33], Some("01230500ab07"));
+        let mut cells = b.cells;
+        let mut attrs = b.attrs;
+        cells[33] = 0x0123;
+        attrs[33] = 0x05;
+        cells[34] = 0x00ab;
+        attrs[34] = 0x07;
+        assert!(b.set_cells(&cells, &attrs));
+        assert_eq!(a.cells, b.cells);
+        assert_eq!(a.attrs, b.attrs);
+        let s = b.serial;
+        assert!(!b.set_cells(&cells, &attrs));
+        assert_eq!(b.serial, s);
+
+        a.op(op::LCD_OBJS, &[], Some("0010fff8abcd03"));
+        assert!(b.set_objs(&[0x10, -8, 0xabcdu16 as i16, 3], 1));
+        assert_eq!(a.objs[0], b.objs[0]);
+        assert_eq!(b.obj_count, 1);
+        let s = b.serial;
+        assert!(!b.set_objs(&[0x10, -8, 0xabcdu16 as i16, 3], 1));
+        assert_eq!(b.serial, s);
+        assert!(b.set_objs(&[], 0));
+        assert_eq!(b.obj_count, 0);
+
+        let mut lines = [0u8; LCD_H];
+        lines[5] = 3;
+        assert!(b.set_lines(2, &lines));
+        assert_eq!((b.line_target, b.lines[5]), (2, 3));
+        assert!(!b.set_lines(2, &lines));
+        assert!(b.set_lines(0, &lines));
+        assert_eq!(b.line_target, 0);
     }
 
     #[test]

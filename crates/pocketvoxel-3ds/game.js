@@ -25750,7 +25750,10 @@ var lastHost = null;
 var lastGame = null;
 function stillFrame(game) {
   const top2 = game.stack?.[game.stack.length - 1];
-  if (top2?.kind !== "overworld" || game.battleView?.())
+  if (game.battleView?.())
+    return "";
+  const mk = mirrorKind(game);
+  if (mk === "choice" || mk === "menu" || mk === "naming")
     return "";
   const view = activeView(game);
   if (view === "explorer" || view === "map")
@@ -25759,7 +25762,7 @@ function stillFrame(game) {
   let party = "";
   for (const m of game.save?.party ?? [])
     party += `${m.species}/${m.nickname ?? ""}/${m.level}/${m.hp}/${m.stats?.hp ?? 0};`;
-  return `${view}|${pressedId() ?? ""}|${touchSerial}|${game.stack.length}|${game.overworld?.map?.id ?? ""}|` + `${gear.steps}|${gear.trip}|${clockStr(gear.clock24)}|${party}`;
+  return `${view}|${top2?.kind ?? ""}|${pressedId() ?? ""}|${touchSerial}|${game.stack.length}|${game.overworld?.map?.id ?? ""}|` + `${gear.steps}|${gear.trip}|${clockStr(gear.clock24)}|${party}`;
 }
 function drawKantoGear(realHost, game) {
   if (realHost !== lastHost || game !== lastGame) {
@@ -29944,6 +29947,9 @@ class QuickJsHost {
   lcdLines(target2, hex3) {
     native.lcdLines?.(target2, hex3);
   }
+  lcdCellsBin = native.lcdCellsBin ? (cells, attrs) => native.lcdCellsBin(cells, attrs) : undefined;
+  lcdObjsBin = native.lcdObjsBin ? (packed, count2) => native.lcdObjsBin(packed, count2) : undefined;
+  lcdLinesBin = native.lcdLinesBin ? (target2, lines) => native.lcdLinesBin(target2, lines) : undefined;
   lcdUnder(w, h) {
     native.lcdUnder?.(w, h);
   }

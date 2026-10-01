@@ -546,6 +546,12 @@ impl Scene {
     /// Dispatch one op (voxel-spec.ts §Ops). `args` are the numeric args in
     /// order; `s` carries the string for the string-bearing ops (`uiText`).
     /// Unknown codes and malformed calls are no-ops.
+    /// The Gold screen the lcd* ops address now (`lcdTarget`): the host's
+    /// typed-array ops write it directly.
+    pub fn lcd_mut(&mut self) -> &mut crate::lcd::LcdScreen {
+        if self.lcd_target == 1 { &mut self.lcd_b } else { &mut self.lcd }
+    }
+
     pub fn op(&mut self, code: u32, args: &[i32], s: Option<&str>) -> OpResult {
         self.ops = self.ops.wrapping_add(1);
         let a = |i: usize| args.get(i).copied().unwrap_or(0);

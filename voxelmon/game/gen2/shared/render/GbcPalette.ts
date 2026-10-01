@@ -181,6 +181,10 @@ export const GbcPalette = {
     G.keyed = false;
     return true;
   },
+  /** The four colours use(colors) would draw with, the draw state untouched. */
+  resolvedPalette(colors: Colors | null | undefined): Palette4 {
+    return asPalette(GbcPalette.remap(GbcPalette.resolve(colors ?? DMG_SHADES), GbcPalette.bgp));
+  },
   /** GbcPalette.lua:276 -- without the rBGP byte. */
   useRaw(colors: Colors | null | undefined): boolean {
     G.palette = asPalette(colors);

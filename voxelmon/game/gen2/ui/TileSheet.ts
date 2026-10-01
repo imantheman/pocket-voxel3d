@@ -95,18 +95,27 @@ export class TileSheet {
     if (index < 0) return false;
     const quad = this.quad(index);
     if (!quad) return false;
-    const [, sy] = quad.getViewport();
-    const [, ih] = image.getDimensions();
-    if (sy >= ih) return false;
+    // the quad's top and the image's height read directly, and the palette
+    // set and restored here (GbcPalette.with's work) rather than through a
+    // closure: getViewport and getDimensions build arrays, and this runs for
+    // every tile a menu or a splash draws
+    if (quad.y >= image.h) return false;
     G.setColor(1, 1, 1, 1);
     let colors = this.palette;
     if (this.paletteFor) colors = this.paletteFor(tile, tx, ty) ?? colors;
-    const body = (): void => G.draw(image, quad, tx * 8, ty * 8);
     if (colors && GbcPalette.available()) {
-      if (this.raw) GbcPalette.withRaw(colors, body);
-      else GbcPalette.with(colors, body);
+      const pal = G.palette;
+      const keyed = G.keyed;
+      if (this.raw) GbcPalette.useRaw(colors);
+      else GbcPalette.use(colors);
+      try {
+        G.draw(image, quad, tx * 8, ty * 8);
+      } finally {
+        G.palette = pal;
+        G.keyed = keyed;
+      }
     } else {
-      body();
+      G.draw(image, quad, tx * 8, ty * 8);
     }
     return true;
   }

@@ -25,6 +25,8 @@ extern uint32_t voxel_audio_len(void);
 extern int32_t voxel_stick(void);
 extern double voxel_now_us(void);
 extern int32_t voxel_last_step(void);
+extern void voxel_lcd_bin(uint32_t which, int32_t a0, const uint8_t *p1, uint32_t l1,
+                          const uint8_t *p2, uint32_t l2);
 
 /* One handler for every numeric op; `magic` carries the op code. */
 static JSValue vox_num(JSContext *ctx, JSValueConst this_val,
@@ -90,6 +92,42 @@ static JSValue vox_numtext(JSContext *ctx, JSValueConst t, int c, JSValueConst *
     size_t len = 0;
     const char *s = JS_ToCStringLen(ctx, &len, v[c >= 2 ? 1 : 0]);
     if (s) { voxel_op_text((uint32_t)magic, a, 1, s, (int)len); JS_FreeCString(ctx, s); }
+    return JS_UNDEFINED;
+}
+
+/* A typed array's bytes (or NULL): the guest's own buffer, not a copy. */
+static const uint8_t *typed_bytes(JSContext *ctx, JSValueConst v, size_t *len) {
+    size_t off = 0, blen = 0, bpe = 0, size = 0;
+    *len = 0;
+    JSValue ab = JS_GetTypedArrayBuffer(ctx, v, &off, &blen, &bpe);
+    if (JS_IsException(ab)) { JS_FreeValue(ctx, JS_GetException(ctx)); return NULL; }
+    uint8_t *p = JS_GetArrayBuffer(ctx, &size, ab);
+    JS_FreeValue(ctx, ab);
+    if (!p || off + blen > size) return NULL;
+    *len = blen;
+    return p + off;
+}
+
+/* The Gold screen's typed-array ops, `magic` which (voxel.rs voxel_lcd_bin):
+   0 lcdCellsBin(cells, attrs), 1 lcdObjsBin(packed, n),
+   2 lcdLinesBin(target, lines). */
+static JSValue vox_lcdbin(JSContext *ctx, JSValueConst t, int c, JSValueConst *v, int magic) {
+    (void)t;
+    if (c < 2) return JS_UNDEFINED;
+    size_t l1 = 0, l2 = 0;
+    int32_t a0 = 0;
+    const uint8_t *p1 = NULL, *p2 = NULL;
+    if (magic == 0) {
+        p1 = typed_bytes(ctx, v[0], &l1);
+        p2 = typed_bytes(ctx, v[1], &l2);
+    } else if (magic == 1) {
+        p1 = typed_bytes(ctx, v[0], &l1);
+        JS_ToInt32(ctx, &a0, v[1]);
+    } else {
+        JS_ToInt32(ctx, &a0, v[0]);
+        p1 = typed_bytes(ctx, v[1], &l1);
+    }
+    voxel_lcd_bin((uint32_t)magic, a0, p1, (uint32_t)l1, p2, (uint32_t)l2);
     return JS_UNDEFINED;
 }
 
@@ -305,6 +343,12 @@ int qjs_register_voxel(JSContext *ctx) {
         JS_NewCFunctionMagic(ctx, vox_numtext, "lcdCells", 2, JS_CFUNC_generic_magic, 99));
     JS_SetPropertyStr(ctx, o, "lcdObjs",
         JS_NewCFunctionMagic(ctx, vox_numtext, "lcdObjs", 1, JS_CFUNC_generic_magic, 101));
+    JS_SetPropertyStr(ctx, o, "lcdCellsBin",
+        JS_NewCFunctionMagic(ctx, vox_lcdbin, "lcdCellsBin", 2, JS_CFUNC_generic_magic, 0));
+    JS_SetPropertyStr(ctx, o, "lcdObjsBin",
+        JS_NewCFunctionMagic(ctx, vox_lcdbin, "lcdObjsBin", 2, JS_CFUNC_generic_magic, 1));
+    JS_SetPropertyStr(ctx, o, "lcdLinesBin",
+        JS_NewCFunctionMagic(ctx, vox_lcdbin, "lcdLinesBin", 2, JS_CFUNC_generic_magic, 2));
     JS_SetPropertyStr(ctx, o, "lcdPals",
         JS_NewCFunctionMagic(ctx, vox_numtext, "lcdPals", 2, JS_CFUNC_generic_magic, 102));
     JS_SetPropertyStr(ctx, o, "lcdLines",

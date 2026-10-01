@@ -418,7 +418,8 @@ export class Lcd {
   /** Per-line scroll for effects (1 SCY, 2 SCX); 0 turns it off. */
   lines(target: number, values?: ArrayLike<number>): void {
     this.s.lineTarget = target;
-    if (values) for (let i = 0; i < LCD_H; i++) this.s.lines[i] = (values[i] ?? 0) & 0xff;
+    if (values instanceof Uint8Array && values.length === LCD_H) this.s.lines.set(values);
+    else if (values) for (let i = 0; i < LCD_H; i++) this.s.lines[i] = (values[i] ?? 0) & 0xff;
   }
 
   /** Send what changed since the last end(). */
@@ -444,6 +445,73 @@ export class Lcd {
         this.sentUnderY = s.underY;
       }
     }
+    if (h.lcdCellsBin) {
+      // the whole map to the core as it is: the core diffs it (a memcmp)
+      h.lcdCellsBin(s.cells, s.attrs);
+    } else this.sendCells(s, t, h);
+    // palettes: the span that changed
+    {
+      let a = -1;
+      let b = -1;
+      for (let i = 0; i < 128; i++) {
+        if (s.colours[i] !== t.colours[i]) {
+          if (a < 0) a = i;
+          b = i;
+        }
+      }
+      if (a >= 0) {
+        let hex = "";
+        for (let i = a; i <= b; i++) {
+          hex += hex4(s.colours[i]!);
+          t.colours[i] = s.colours[i]!;
+        }
+        h.lcdPals?.(a, hex);
+      }
+    }
+    if (h.lcdObjsBin) {
+      const n = Math.min(s.objs.length, LCD_OBJS_MAX);
+      const p = this.objPack;
+      for (let i = 0; i < n; i++) {
+        const o = s.objs[i]!;
+        const k = i * 4;
+        p[k] = o.y;
+        p[k + 1] = o.x;
+        p[k + 2] = o.tile;
+        p[k + 3] = o.attr;
+      }
+      h.lcdObjsBin(p, n);
+    } else {
+      let objs = "";
+      for (const o of s.objs) objs += hex4(o.y) + hex4(o.x) + hex4(o.tile) + hex2(o.attr);
+      if (objs !== this.sentObjs) {
+        h.lcdObjs?.(objs);
+        this.sentObjs = objs;
+      }
+    }
+    const regs = `${s.scx},${s.scy},${s.wx},${s.wy},${s.flags}`;
+    if (regs !== this.sentRegs) {
+      h.lcdRegs?.(s.scx, s.scy, s.wx, s.wy, s.flags);
+      this.sentRegs = regs;
+    }
+    if (h.lcdLinesBin) {
+      h.lcdLinesBin(s.lineTarget, s.lines);
+      return;
+    }
+    let lines = String(s.lineTarget);
+    if (s.lineTarget) {
+      lines = "";
+      for (let i = 0; i < LCD_H; i++) lines += hex2(s.lines[i]!);
+    }
+    if (lines !== this.sentLines) {
+      h.lcdLines?.(s.lineTarget, s.lineTarget ? lines : "");
+      this.sentLines = lines;
+    }
+  }
+  /** end()'s objects, packed for lcdObjsBin. */
+  private readonly objPack = new Int16Array(LCD_OBJS_MAX * 4);
+
+  /** end()'s cells by hex: per row, the span that changed since sent. */
+  private sendCells(s: LcdState, t: LcdState, h: VoxelHost): void {
     // cells: per 32-cell row, the span from the first to the last change.
     // Rows are compared 32 bits at a time first (16 words of tiles, 8 of
     // attributes): most rows do not change, and this is the frame's
@@ -504,45 +572,6 @@ export class Lcd {
         t.attrs[i] = s.attrs[i]!;
       }
       h.lcdCells?.(a, hex);
-    }
-    // palettes: the span that changed
-    {
-      let a = -1;
-      let b = -1;
-      for (let i = 0; i < 128; i++) {
-        if (s.colours[i] !== t.colours[i]) {
-          if (a < 0) a = i;
-          b = i;
-        }
-      }
-      if (a >= 0) {
-        let hex = "";
-        for (let i = a; i <= b; i++) {
-          hex += hex4(s.colours[i]!);
-          t.colours[i] = s.colours[i]!;
-        }
-        h.lcdPals?.(a, hex);
-      }
-    }
-    let objs = "";
-    for (const o of s.objs) objs += hex4(o.y) + hex4(o.x) + hex4(o.tile) + hex2(o.attr);
-    if (objs !== this.sentObjs) {
-      h.lcdObjs?.(objs);
-      this.sentObjs = objs;
-    }
-    const regs = `${s.scx},${s.scy},${s.wx},${s.wy},${s.flags}`;
-    if (regs !== this.sentRegs) {
-      h.lcdRegs?.(s.scx, s.scy, s.wx, s.wy, s.flags);
-      this.sentRegs = regs;
-    }
-    let lines = String(s.lineTarget);
-    if (s.lineTarget) {
-      lines = "";
-      for (let i = 0; i < LCD_H; i++) lines += hex2(s.lines[i]!);
-    }
-    if (lines !== this.sentLines) {
-      h.lcdLines?.(s.lineTarget, s.lineTarget ? lines : "");
-      this.sentLines = lines;
     }
   }
 

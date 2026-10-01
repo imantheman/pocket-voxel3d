@@ -252,6 +252,41 @@ pub unsafe extern "C" fn voxel_op_text(code: u32, args: *const i32, n: i32,
     }
 }
 
+/// The Gold screen's typed-array ops (voxel_shim.c `lcdCellsBin`,
+/// `lcdObjsBin`, `lcdLinesBin`): the guest's arrays as they are, no hex.
+/// `which` 0 is the cells (p1 the u16 tile ids, p2 the attributes), 1 the
+/// objects (p1 `a0` of them, four i16s each), 2 the lines (a0 the target,
+/// p1 the 144 values).
+#[no_mangle]
+pub unsafe extern "C" fn voxel_lcd_bin(which: u32, a0: i32, p1: *const u8, l1: u32, p2: *const u8, l2: u32) {
+    if p1.is_null() {
+        return;
+    }
+    let lcd = scene().lcd_mut();
+    match which {
+        0 => {
+            if p2.is_null() || (p1 as usize) & 1 != 0 {
+                return;
+            }
+            let cells = core::slice::from_raw_parts(p1 as *const u16, l1 as usize / 2);
+            let attrs = core::slice::from_raw_parts(p2, l2 as usize);
+            lcd.set_cells(cells, attrs);
+        }
+        1 => {
+            if (p1 as usize) & 1 != 0 {
+                return;
+            }
+            let packed = core::slice::from_raw_parts(p1 as *const i16, l1 as usize / 2);
+            lcd.set_objs(packed, a0.max(0) as usize);
+        }
+        2 => {
+            let lines = core::slice::from_raw_parts(p1, l1 as usize);
+            lcd.set_lines(a0.clamp(0, 2) as u8, lines);
+        }
+        _ => {}
+    }
+}
+
 #[no_mangle] pub unsafe extern "C" fn voxel_game_ptr() -> *const u8 { GAME.as_ptr() }
 #[no_mangle] pub unsafe extern "C" fn voxel_game_len() -> u32 { GAME.len() as u32 }
 #[no_mangle] pub unsafe extern "C" fn voxel_audio_ptr() -> *const u8 { AUDIO.as_ptr() }

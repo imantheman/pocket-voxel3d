@@ -28,7 +28,7 @@
 // LÖVE would have composited. That is the hardware's rule, and Gold's
 // screens were laid out for it.
 
-import { ATTR_PRIORITY, ATTR_X_FLIP, ATTR_Y_FLIP, type Lcd, LCD_H, LCD_W, type Palette4, type Rgb } from "./lcd.ts";
+import { ATTR_PRIORITY, ATTR_X_FLIP, ATTR_Y_FLIP, type Lcd, LCD_H, LCD_OBJS_MAX, LCD_W, type Palette4, type Rgb } from "./lcd.ts";
 
 /** A cooked Gold graphic: its size and the tile ids of its 8x8 grid. */
 export interface LcdImage {
@@ -98,6 +98,9 @@ let attrsOf = new Uint8Array(0);
 let cachePal: Palette4 | null = null;
 let cacheFrame = -1;
 let cacheSlot = 0;
+let cacheObjPal: Palette4 | null = null;
+let cacheObjFrame = -1;
+let cacheObjSlot = 0;
 let st: DrawState = fresh();
 const stack: DrawState[] = [];
 let canvasDepth = 0;
@@ -112,6 +115,7 @@ export function setLcd(target: Lcd | null): void {
   cellsOf = target ? target.s.cells : new Uint16Array(0);
   attrsOf = target ? target.s.attrs : new Uint8Array(0);
   cachePal = null;
+  cacheObjPal = null;
 }
 
 export function currentLcd(): Lcd | null {
@@ -176,7 +180,17 @@ export function putTile(id: number, x: number, y: number, flipX = false, flipY =
     return;
   }
   if (clipped(x, y, 8, 8)) return;
-  l.obj(x, y, id, l.palette(s.palette, true) | flips);
+  // the object palette's slot, looked up once a frame per palette as the BG
+  // one is above (a sprite is many tiles in one palette)
+  let objSlot: number;
+  if (s.palette === cacheObjPal && l.frame === cacheObjFrame) objSlot = cacheObjSlot;
+  else {
+    objSlot = l.palette(s.palette, true);
+    cacheObjPal = s.palette;
+    cacheObjFrame = l.frame;
+    cacheObjSlot = objSlot;
+  }
+  l.obj(x, y, id, objSlot | flips);
 }
 
 /**
@@ -242,6 +256,108 @@ function putCell(id: number, x: number, y: number, slot: number): void {
   if (st.map === null && clipped(x, y, 8, 8)) return;
   if ((x & 7) !== 0 || (y & 7) !== 0) return;
   lcd.cell(x >> 3, y >> 3, id, slot | (st.keyed ? ATTR_PRIORITY : 0), st.map ?? 0);
+}
+
+/**
+ * G.draw of a picture's cells onto the 8px grid, unflipped: what putTile
+ * would write cell by cell, clipped the same way (the screen and the
+ * scissor, or the map's 32x32), with one palette lookup.
+ */
+function drawCells(image: LcdImage, tx0: number, ty0: number, cols: number, rows: number, cx: number, cy: number): void {
+  const l = lcd!;
+  const s = st;
+  const map = s.map;
+  let base = 0;
+  let lx0 = 0;
+  let ly0 = 0;
+  let lx1 = 32;
+  let ly1 = 32;
+  if (map === null) {
+    lx1 = LCD_W / 8;
+    ly1 = LCD_H / 8;
+    // putTile drops a cell only when it lies wholly outside the scissor
+    const sc = s.scissor;
+    if (sc !== null) {
+      lx0 = Math.max(lx0, Math.floor(sc[0] / 8));
+      ly0 = Math.max(ly0, Math.floor(sc[1] / 8));
+      lx1 = Math.min(lx1, Math.ceil((sc[0] + sc[2]) / 8));
+      ly1 = Math.min(ly1, Math.ceil((sc[1] + sc[3]) / 8));
+    }
+  } else {
+    base = map === 1 ? 1024 : 0;
+  }
+  const tw = image.tw;
+  const i0 = Math.max(0, lx0 - cx);
+  const i1 = Math.min(cols, lx1 - cx, tw - tx0);
+  const j0 = Math.max(0, ly0 - cy);
+  const j1 = Math.min(rows, ly1 - cy, image.th - ty0);
+  if (i1 <= i0 || j1 <= j0) return;
+  if (base) l.windowUsed = true;
+  let slot: number;
+  if (s.palette === cachePal && l.frame === cacheFrame) slot = cacheSlot;
+  else {
+    slot = l.palette(s.palette);
+    cachePal = s.palette;
+    cacheFrame = l.frame;
+    cacheSlot = slot;
+  }
+  const attr = (slot | (s.keyed ? ATTR_PRIORITY : 0)) & 0xef;
+  const ids = image.ids;
+  const cells = cellsOf;
+  const attrs = attrsOf;
+  for (let j = j0; j < j1; j++) {
+    const src = (ty0 + j) * tw + tx0;
+    const dst = base + (cy + j) * 32 + cx;
+    for (let i = i0; i < i1; i++) {
+      cells[dst + i] = ids[src + i]! & 0xffff;
+      attrs[dst + i] = attr;
+    }
+  }
+}
+
+/**
+ * G.draw of a picture as objects: putTile's object path for each tile (the
+ * same clip, the same order), with one palette lookup and no call a tile.
+ */
+function drawObjs(image: LcdImage, tx0: number, ty0: number, cols: number, rows: number, x0: number, y0: number,
+                  flipX: boolean, flipY: boolean): void {
+  const l = lcd!;
+  const s = st;
+  const flips = (flipX ? ATTR_X_FLIP : 0) | (flipY ? ATTR_Y_FLIP : 0);
+  // the palette is asked for at the first tile on screen, as putTile asks:
+  // a picture wholly off screen takes no slot (slots go in order of asking)
+  let attr = -1;
+  const sc = s.scissor;
+  const objs = l.s.objs;
+  const ids = image.ids;
+  const tw = image.tw;
+  for (let j = 0; j < rows; j++) {
+    const syT = ty0 + j;
+    if (syT >= image.th) continue;
+    const y = y0 + (flipY ? rows - 1 - j : j) * 8;
+    if (y + 8 <= 0 || y >= LCD_H) continue;
+    if (sc !== null && (y + 8 <= sc[1] || y >= sc[1] + sc[3])) continue;
+    for (let i = 0; i < cols; i++) {
+      const sxT = tx0 + i;
+      if (sxT >= tw) continue;
+      const x = x0 + (flipX ? cols - 1 - i : i) * 8;
+      if (x + 8 <= 0 || x >= LCD_W) continue;
+      if (sc !== null && (x + 8 <= sc[0] || x >= sc[0] + sc[2])) continue;
+      if (attr < 0) {
+        let slot: number;
+        if (s.palette === cacheObjPal && l.frame === cacheObjFrame) slot = cacheObjSlot;
+        else {
+          slot = l.palette(s.palette, true);
+          cacheObjPal = s.palette;
+          cacheObjFrame = l.frame;
+          cacheObjSlot = slot;
+        }
+        attr = (slot | flips) & 0xff;
+      }
+      if (objs.length >= LCD_OBJS_MAX) return;
+      objs.push({ x, y, tile: ids[syT * tw + sxT]! & 0xffff, attr });
+    }
+  }
 }
 
 export const G = {
@@ -415,6 +531,16 @@ export const G = {
     const y0 = Math.round(top);
     const tx0 = Math.floor(qx / 8);
     const ty0 = Math.floor(qy / 8);
+    // The two common cases written out: under the 3DS's QuickJS a putTile
+    // call per tile was most of a full-screen picture's cost (360 calls).
+    if (!image.obj && !st.objects && !flipX && !flipY && (x0 & 7) === 0 && (y0 & 7) === 0) {
+      drawCells(image, tx0, ty0, cols, rows, x0 >> 3, y0 >> 3);
+      return;
+    }
+    if (image.obj || st.objects) {
+      drawObjs(image, tx0, ty0, cols, rows, x0, y0, flipX, flipY);
+      return;
+    }
     for (let j = 0; j < rows; j++) {
       for (let i = 0; i < cols; i++) {
         const sxT = tx0 + i;

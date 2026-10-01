@@ -109,6 +109,15 @@ export interface VoxelNative {
   lcdObjs?(hex: string): void;
   lcdPals?(first: number, hex: string): void;
   lcdLines?(target: number, hex: string): void;
+  /**
+   * The typed-array forms of lcdCells/lcdObjs/lcdLines (the 3DS shim's): the
+   * whole cell map, the objects packed y, x, tile, attribute, the line
+   * values -- the guest's own arrays, diffed natively. A host without them
+   * gets the hex ops.
+   */
+  lcdCellsBin?(cells: Uint16Array, attrs: Uint8Array): void;
+  lcdObjsBin?(packed: Int16Array, count: number): void;
+  lcdLinesBin?(target: number, lines: Uint8Array): void;
   /** The under layer (voxel-spec.ts lcdUnder..lcdUnderAt; VIEW 2D). */
   lcdUnder?(w: number, h: number): void;
   lcdUnderRow?(row: number, hex: string): void;
@@ -360,6 +369,10 @@ export class QuickJsHost implements VoxelHost {
   lcdLines(target: number, hex: string): void {
     native.lcdLines?.(target, hex);
   }
+  // only where the shim has them: Lcd.end takes their presence as the choice
+  lcdCellsBin = native.lcdCellsBin ? (cells: Uint16Array, attrs: Uint8Array): void => native.lcdCellsBin!(cells, attrs) : undefined;
+  lcdObjsBin = native.lcdObjsBin ? (packed: Int16Array, count: number): void => native.lcdObjsBin!(packed, count) : undefined;
+  lcdLinesBin = native.lcdLinesBin ? (target: number, lines: Uint8Array): void => native.lcdLinesBin!(target, lines) : undefined;
   lcdUnder(w: number, h: number): void {
     native.lcdUnder?.(w, h);
   }
