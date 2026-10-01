@@ -26,6 +26,7 @@ const TOUR: Stop[] = [
   { name: "battle 3D", battle: "PIDGEY" },
 ];
 declare const ONLY: string;
+declare const INTRO: boolean;
 const STOP_TICKS = 15 * 60;
 let started = false;
 let n = 0;
@@ -47,6 +48,11 @@ function arrive(s: Stop): void {
 }
 
 g.frame = (b: number): void => {
+  // INTRO=1 at bundle time: stay on the intro and title, no tour
+  if (typeof INTRO !== "undefined" && INTRO) {
+    mainFrame(b & ~0xff);
+    return;
+  }
   if (!started) {
     started = true;
     const [save] = Save.load();

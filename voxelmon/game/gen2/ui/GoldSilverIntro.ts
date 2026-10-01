@@ -207,6 +207,7 @@ export class GoldSilverIntro {
     this.obPals = [copyPalette(null), copyPalette(null)];
     for (let index = 0; index < BG_TILES * BG_TILES; index++) this.bgmap[index] = 0;
     for (let index = 0; index < TILEMAP_W * TILEMAP_H; index++) this.tilemap[index] = 0;
+    this.mapDirty = true;
   }
 
   static new(game: any, opts?: GoldSilverIntroOpts): GoldSilverIntro {
@@ -350,11 +351,7 @@ export class GoldSilverIntro {
 
   /** The four colours a palette draws as under the COLOR mode (what GbcPalette.use sets). */
   resolved(colors: Colors): Palette4 {
-    G.push();
-    GbcPalette.use(colors);
-    const p = G.palette;
-    G.pop();
-    return p;
+    return GbcPalette.resolvedPalette(colors);
   }
 
   // Lua: GoldSilverIntro.lua:878 / :919 -- the BG map and its scroll. The Lua
@@ -371,20 +368,45 @@ export class GoldSilverIntro {
     // through a tile -> id table (one tileId per sheet tile, not per cell):
     // this loop was most of the intro's frame on the 3DS. bgmap and the
     // Gold screen's map share the row-major 32x32 layout.
+    // The ids are kept between frames and rebuilt only when the map or the
+    // sheet changes; a frame is then two native copies.
     const lut = this.idTable(sheet);
-    const cells = lcd.s.cells;
-    const attrs = lcd.s.attrs;
     const bg = this.bgmap;
-    const a = slot & 0xef;
-    for (let i = 0; i < BG_TILES * BG_TILES; i++) {
-      cells[i] = lut[bg[i]! & 0xff]!;
-      attrs[i] = a;
+    const ids = this.cellIds;
+    if (this.mapDirty || lut !== this.cellIdsLut) {
+      for (let i = 0; i < BG_TILES * BG_TILES; i++) ids[i] = lut[bg[i]! & 0xff]!;
+      this.cellIdsLut = lut;
+    } else {
+      for (let k = 0; k < this.changedCount; k++) {
+        const i = this.changed[k]!;
+        ids[i] = lut[bg[i]! & 0xff]!;
+      }
     }
+    this.changedCount = 0;
+    lcd.s.cells.set(this.cellIds, 0);
+    lcd.s.attrs.fill(slot & 0xef, 0, BG_TILES * BG_TILES);
     this.mapDirty = false;
     lcd.regs({ scx: mod(this.scx, 256), scy: mod(this.scy, 256) });
     if (this.lyActive) lcd.lines(1, this.lyOverrides);
     else lcd.lines(0);
   }
+
+  /** The BG map as Gold-screen ids, through `cellIdsLut` (drawBackground). */
+  private readonly cellIds = new Uint16Array(BG_TILES * BG_TILES);
+  private cellIdsLut: Uint16Array | null = null;
+  /** Cells mapSet changed since drawBackground last ran (past 256: the whole map). */
+  private readonly changed = new Int16Array(256);
+  private changedCount = 0;
+  noteCell(i: number): void {
+    if (this.mapDirty) return;
+    if (this.changedCount === this.changed.length) {
+      this.mapDirty = true;
+      return;
+    }
+    this.changed[this.changedCount++] = i;
+  }
+  /** drawObjects' slot per OAM palette this frame (-1 not yet asked). */
+  private readonly objSlots = new Int16Array(8);
 
   // Lua: GoldSilverIntro.lua:946 -- one pass over wShadowOAM. The Lua draws the
   // OAM_PRIO objects under the BG and the rest over it in two passes; the
@@ -395,11 +417,20 @@ export class GoldSilverIntro {
     const source = actData(this);
     const sheet = source && this.sheet(source.sprites);
     if (!sheet) return;
-    // Earlier objects are on top on the Gold screen, as in OAM.
+    // Earlier objects are on top on the Gold screen, as in OAM. Each OAM
+    // palette resolved once a frame, not once an object (objPalette builds
+    // a fresh array, so lcd.palette's own last-palette check never hit).
+    const slots = this.objSlots;
+    slots.fill(-1);
     for (const entry of this.anims.oam) {
       const id = this.tileId(sheet, entry.tile);
       if (id === undefined) continue;
-      const slot = lcd.palette(this.resolved(objPalette(this, entry.attr % 8)), true);
+      const pal = entry.attr % 8;
+      let slot = slots[pal]!;
+      if (slot < 0) {
+        slot = lcd.palette(this.resolved(objPalette(this, pal)), true);
+        slots[pal] = slot;
+      }
       let attr = slot;
       if (entry.attr & SpriteAnims.OAM_XFLIP) attr |= ATTR_X_FLIP;
       if (entry.attr & SpriteAnims.OAM_YFLIP) attr |= ATTR_Y_FLIP;
@@ -447,8 +478,14 @@ function mapGet(self: GoldSilverIntro, col: number, row: number): number {
 
 // Lua: GoldSilverIntro.lua:192
 function mapSet(self: GoldSilverIntro, col: number, row: number, tile: number): void {
-  self.bgmap[mod(row, BG_TILES) * BG_TILES + mod(col, BG_TILES)] = tile;
-  self.mapDirty = true;
+  // (integer cells: the wrap is & 31) Only a change is noted, and only that
+  // cell: the waves rewrite their row nearly every step, mostly with the
+  // tiles already there, and a whole-map rebuild each time was most of the
+  // ocean scenes' frame on the 3DS.
+  const i = (row & (BG_TILES - 1)) * BG_TILES + (col & (BG_TILES - 1));
+  if (self.bgmap[i] === tile) return;
+  self.bgmap[i] = tile;
+  self.noteCell(i);
 }
 
 // Lua: GoldSilverIntro.lua:197
@@ -521,10 +558,12 @@ function resetLYOverrides(self: GoldSilverIntro): void {
 function updateLYOverrides(self: GoldSilverIntro): void {
   for (let line = 0; line < 16; line++) self.lyOverrides[line] = self.scy;
   const first = self.lySine[0]!;
+  const scy = self.scy;
   for (let offset = 0; offset <= 0x7f; offset++) {
     const value = self.lySine[offset + 1]!;
     self.lySine[offset] = value;
-    self.lyOverrides[16 + offset] = mod(value + self.scy, 256);
+    // mod(_, 256) of integers
+    self.lyOverrides[16 + offset] = (value + scy) & 255;
   }
   self.lySine[0x80] = first;
 }

@@ -520,19 +520,6 @@ function getFrame(st: AnimStruct): string {
   throw new Error("sprite anim frameset never yields a frame: " + String(st.framesetId));
 }
 
-// Lua: SpriteAnims.lua:596 -- AddOrSubtractY/X: a flipped object mirrors around
-// its own 8-pixel cell, which is `-8 - offset`.
-function mirror(value: number, flip: boolean): number {
-  if (!flip) return value;
-  return mod(-(value + 8), 256);
-}
-
-// Lua: SpriteAnims.lua:603 -- GetSpriteOAMAttr: the frame's flips toggle the entry's.
-function attrOf(attr: number, flags: number): number {
-  const toggled = (attr ^ flags) & OAM_FLAG_MASK;
-  return (attr & (0xff - OAM_FLAG_MASK)) + toggled;
-}
-
 export type Sequence = (sys: SpriteAnimSystem, st: AnimStruct) => void;
 
 // Lua: SpriteAnims.lua:487 -- the System metatable.
@@ -596,16 +583,28 @@ export class SpriteAnimSystem {
     }
     const set = OAMSETS[oamset];
     if (!set) throw new Error("unknown OAM set: " + String(oamset));
-    const vtile = mod(set[0], 256);
-    const yFlip = (st.oamFlags & OAM_YFLIP) !== 0;
-    const xFlip = (st.oamFlags & OAM_XFLIP) !== 0;
-    for (const entry of set[1]) {
-      if (this.oam.length >= OAM_LIMIT) return true;
-      this.oam.push({
-        y: mod(st.y + st.yOffset + this.globalY + mirror(entry.y, yFlip), 256),
-        x: mod(st.x + st.xOffset + this.globalX + mirror(entry.x, xFlip), 256),
-        tile: mod(this.vtileBase + vtile + entry.tile, 256),
-        attr: attrOf(entry.attr, st.oamFlags),
+    const flags = st.oamFlags;
+    const yFlip = (flags & OAM_YFLIP) !== 0;
+    const xFlip = (flags & OAM_XFLIP) !== 0;
+    // Lua: SpriteAnims.lua:596/603 (AddOrSubtractY/X: a flipped object
+    // mirrors around its own 8-pixel cell, -8 - offset; GetSpriteOAMAttr:
+    // the frame's flips toggle the entry's), with mod(_, 256) written out:
+    // every value here is an integer, so the byte wrap is & 255, and the
+    // calls were most of an intro step under the 3DS's QuickJS
+    const baseY = st.y + st.yOffset + this.globalY;
+    const baseX = st.x + st.xOffset + this.globalX;
+    const tileBase = this.vtileBase + set[0];
+    const entries = set[1];
+    const oam = this.oam;
+    for (let i = 0; i < entries.length; i++) {
+      if (oam.length >= OAM_LIMIT) return true;
+      const entry = entries[i]!;
+      const a = entry.attr;
+      oam.push({
+        y: (baseY + (yFlip ? -(entry.y + 8) : entry.y)) & 255,
+        x: (baseX + (xFlip ? -(entry.x + 8) : entry.x)) & 255,
+        tile: (tileBase + entry.tile) & 255,
+        attr: (a & (0xff - OAM_FLAG_MASK)) + ((a ^ flags) & OAM_FLAG_MASK),
       });
     }
     return false;

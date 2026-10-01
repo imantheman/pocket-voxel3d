@@ -47,11 +47,7 @@ function signed(value: number): number {
 
 /** The four colours a palette draws as under the COLOR mode (what GbcPalette.use sets). */
 function resolved(colors: Colors | null | undefined): Palette4 {
-  G.push();
-  GbcPalette.use(colors);
-  const p = G.palette;
-  G.pop();
-  return p;
+  return GbcPalette.resolvedPalette(colors);
 }
 
 interface Trail {
@@ -415,6 +411,42 @@ export class TitleState {
   private slotMode = "";
   private nullSlot = -1;
 
+  /**
+   * This frame's slot for each screen palette index (the distinct indices
+   * the palette map uses, each resolved once), so a cell's attribute is a
+   * table read rather than a call -- 486 calls a frame was a third of the
+   * title's cost on the 3DS. Index -1 is "no palette" (the null slot).
+   */
+  private frameSlots(lcd: Lcd): Int16Array {
+    const map = this.screenPalMap!;
+    if (!this.palIndices) {
+      const seen = new Set<number>();
+      for (let i = 0; i < map.length; i++) {
+        const v = map[i];
+        if (v != null && this.screenPalettes?.[v]) seen.add(v);
+      }
+      this.palIndices = [...seen];
+      let top = 0;
+      for (const v of seen) top = Math.max(top, v);
+      this.slotTable = new Int16Array(top + 2);
+    }
+    if (this.slotTableFrame !== lcd.frame || this.slotTableMode !== GbcPalette.mode) {
+      this.slotTableFrame = lcd.frame;
+      this.slotTableMode = GbcPalette.mode;
+      for (const v of this.palIndices) this.slotTable![v] = this.slotOf(lcd, v, null);
+    }
+    return this.slotTable!;
+  }
+  private palIndices: number[] | null = null;
+  private rowsFor: LcdImage | null = null;
+  private cellRows: Uint16Array[] = [];
+  private palRows: Int16Array[] = [];
+  private attrRows: Uint8Array[] = [];
+  private attrKey = "";
+  private slotTable: Int16Array | null = null;
+  private slotTableFrame = -1;
+  private slotTableMode = "";
+
   /** The screen as BG cells, each through its own palette. */
   drawScreen(screen: LcdImage): void {
     if (!this.screenPalettes || !this.screenPalMap) {
@@ -425,15 +457,58 @@ export class TitleState {
     if (lcd && G.tx === 0 && G.ty === 0 && G.map == null && !G.objects) {
       const cells = lcd.s.cells;
       const attrs = lcd.s.attrs;
-      const map = this.screenPalMap;
       const rows = Math.min(18, screen.th);
       const cols = Math.min(20, screen.tw);
-      for (let row = 0; row < rows; row++) {
-        for (let col = 0; col < cols; col++) {
-          const i = row * 32 + col;
-          cells[i] = screen.ids[row * screen.tw + col]! & 0xffff;
-          attrs[i] = this.slotOf(lcd, map[row * 20 + col], null) & 0xef;
+      const table = this.frameSlots(lcd);
+      // the screen's tiles and palette indices never change: cached as rows
+      // once, and the attribute rows again only when this frame's slots
+      // differ from the last -- then each row is one native copy
+      if (this.rowsFor !== screen) {
+        this.rowsFor = screen;
+        this.cellRows = [];
+        this.palRows = [];
+        const map = this.screenPalMap!;
+        const pals = this.screenPalettes!;
+        for (let row = 0; row < rows; row++) {
+          const ids = new Uint16Array(cols);
+          const pi = new Int16Array(cols);
+          for (let col = 0; col < cols; col++) {
+            ids[col] = screen.ids[row * screen.tw + col]! & 0xffff;
+            const v = map[row * 20 + col];
+            pi[col] = v != null && pals[v] ? v : -1;
+          }
+          this.cellRows.push(ids);
+          this.palRows.push(pi);
         }
+        this.attrKey = "";
+      }
+      let nul = -1;
+      let key = "";
+      for (const v of this.palIndices!) key += table[v] + ",";
+      if (key !== this.attrKey || this.attrRows.length !== rows) {
+        this.attrKey = key;
+        this.attrRows = this.palRows.map((pi) => {
+          const a = new Uint8Array(pi.length);
+          for (let c = 0; c < pi.length; c++) {
+            const v = pi[c]!;
+            let slot: number;
+            if (v >= 0) {
+              slot = table[v]!;
+            } else {
+              if (nul < 0) nul = this.slotOf(lcd, undefined, null);
+              slot = nul;
+            }
+            a[c] = slot & 0xef;
+          }
+          return a;
+        });
+      } else if (this.palRows.some((pi) => pi.includes(-1))) {
+        // the null palette still has to be registered this frame
+        this.slotOf(lcd, undefined, null);
+      }
+      for (let row = 0; row < rows; row++) {
+        cells.set(this.cellRows[row]!, row * 32);
+        attrs.set(this.attrRows[row]!, row * 32);
       }
       return;
     }
@@ -460,21 +535,75 @@ export class TitleState {
     const fine = s % 8;
     const band0 = Math.floor(top / 8);
     const cols = Math.min(20, clouds.tw);
+    const map = this.screenPalMap;
+    const pals = this.screenPalettes;
+    const table = map && pals ? this.frameSlots(lcd) : null;
+    // The band's 21-cell rows (the fine scroll brings the 21st into view):
+    // their ids and palette indices change only with the coarse scroll,
+    // their attributes only with this frame's slots, so both are kept as
+    // rows and a frame is two native copies a row.
+    if (this.cloudFor !== clouds || this.cloudCoarse !== coarse || this.cloudBand !== band0) {
+      this.cloudFor = clouds;
+      this.cloudCoarse = coarse;
+      this.cloudBand = band0;
+      this.cloudIds = [];
+      this.cloudPi = [];
+      for (let r = 0; r < clouds.th; r++) {
+        const screenRow = band0 + r;
+        const ids = new Uint16Array(21);
+        const pi = new Int16Array(21);
+        for (let c = 0; c <= 20; c++) {
+          const src = (c + coarse) % cols;
+          ids[c] = clouds.ids[r * clouds.tw + src]! & 0xffff;
+          const v = map ? map[screenRow * 20 + src] : undefined;
+          pi[c] = table && v != null && pals![v] ? v : -1;
+        }
+        this.cloudIds.push(ids);
+        this.cloudPi.push(pi);
+      }
+      this.cloudAttrKey = "";
+    }
+    let fallback = -1;
+    if (this.cloudPi.some((pi) => pi.includes(-1))) fallback = this.slotOf(lcd, undefined, G.palette);
+    let key = `${fallback}`;
+    if (table) for (const v of this.palIndices!) key += "," + table[v];
+    if (key !== this.cloudAttrKey) {
+      this.cloudAttrKey = key;
+      this.cloudAttrs = this.cloudPi.map((pi) => {
+        const a = new Uint8Array(21);
+        for (let c = 0; c <= 20; c++) a[c] = (pi[c]! >= 0 ? table![pi[c]!]! : fallback) & 0xef;
+        return a;
+      });
+    }
+    const cellArr = lcd.s.cells;
+    const attrArr = lcd.s.attrs;
     for (let r = 0; r < clouds.th; r++) {
       const screenRow = band0 + r;
       if (screenRow < 0 || screenRow > 31) continue;
-      // 21 cells: the fine scroll brings the 21st into view.
-      for (let c = 0; c <= 20; c++) {
-        const src = (c + coarse) % cols;
-        const slot = this.slotOf(lcd, this.screenPalMap?.[screenRow * 20 + src], G.palette);
-        lcd.cell(c, screenRow, clouds.ids[r * clouds.tw + src]!, slot);
-      }
+      cellArr.set(this.cloudIds[r]!, screenRow * 32);
+      attrArr.set(this.cloudAttrs[r]!, screenRow * 32);
     }
     // Per-line SCX: the band scrolls, everything else holds still.
-    const lines: number[] = [];
-    for (let ly = 0; ly < 144; ly++) lines[ly] = ly >= band0 * 8 && ly < (band0 + clouds.th) * 8 ? fine : 0;
-    lcd.lines(2, lines);
+    if (this.cloudLinesFine !== fine || this.cloudLinesBand !== band0 || this.cloudLinesRows !== clouds.th) {
+      this.cloudLinesFine = fine;
+      this.cloudLinesBand = band0;
+      this.cloudLinesRows = clouds.th;
+      const lines = this.cloudLines;
+      for (let ly = 0; ly < 144; ly++) lines[ly] = ly >= band0 * 8 && ly < (band0 + clouds.th) * 8 ? fine : 0;
+    }
+    lcd.lines(2, this.cloudLines);
   }
+  private cloudFor: LcdImage | null = null;
+  private cloudCoarse = -1;
+  private cloudBand = -1;
+  private cloudIds: Uint16Array[] = [];
+  private cloudPi: Int16Array[] = [];
+  private cloudAttrs: Uint8Array[] = [];
+  private cloudAttrKey = "";
+  private readonly cloudLines = new Uint8Array(144);
+  private cloudLinesFine = -1;
+  private cloudLinesBand = -1;
+  private cloudLinesRows = -1;
 
   // Lua: TitleState.lua:349 -- TitleScreenEntrance's interlace (Crystal): even lines
   // slide in from the left, odd from the right, converging as hSCX walks to 0.

@@ -293,6 +293,17 @@ export class GameFreakPresents {
 
   // Lua: GameFreakPresents.lua:297
   sheetFor(tile: number): TileSheet | null {
+    // the answer never changes once the sheets are looked at (a sheet's
+    // image loads once): remembered per tile, as the OAM asks every frame
+    const known = this.sheetOf.get(tile);
+    if (known !== undefined) return known;
+    const found = this.findSheet(tile);
+    this.sheetOf.set(tile, found);
+    return found;
+  }
+  private readonly sheetOf = new Map<number, TileSheet | null>();
+
+  private findSheet(tile: number): TileSheet | null {
     for (const sheet of this.sheets) {
       if (tile >= sheet.firstTile && sheet.available()) {
         const index = tile - sheet.firstTile;
@@ -323,6 +334,10 @@ export class GameFreakPresents {
     G.objects = true;
     // The Lua walks wShadowOAM backwards so entry 1 paints last (on top); the
     // Gold screen puts earlier objects on top, so walk it forwards.
+    // (the palette set when it changes, inside the push, not per object)
+    const palettes = GbcPalette.available();
+    let current: Colors | null = null;
+    G.setColor(1, 1, 1, 1);
     for (const entry of oam) {
       const isLogo = entry.attr % 8 === 1;
       const sheet = this.sheetFor(entry.tile);
@@ -330,13 +345,14 @@ export class GameFreakPresents {
       if (sheet && quad) {
         const flipX = Math.floor(entry.attr / SpriteAnims.OAM_XFLIP) % 2 === 1;
         const flipY = Math.floor(entry.attr / SpriteAnims.OAM_YFLIP) % 2 === 1;
-        const colors = isLogo ? logoPal : objPal;
-        const body = (): void => {
-          G.setColor(1, 1, 1, 1);
-          G.draw(sheet.image()!, quad, entry.x - 8 + (flipX ? 8 : 0), entry.y - 16 + (flipY ? 8 : 0), 0, flipX ? -1 : 1, flipY ? -1 : 1);
-        };
-        if (GbcPalette.available()) GbcPalette.with(colors, body);
-        else body();
+        if (palettes) {
+          const colors = isLogo ? logoPal : objPal;
+          if (colors !== current) {
+            GbcPalette.use(colors);
+            current = colors;
+          }
+        }
+        G.draw(sheet.image()!, quad, entry.x - 8 + (flipX ? 8 : 0), entry.y - 16 + (flipY ? 8 : 0), 0, flipX ? -1 : 1, flipY ? -1 : 1);
       }
     }
     G.pop();
