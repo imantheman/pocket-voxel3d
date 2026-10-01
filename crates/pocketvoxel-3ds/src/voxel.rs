@@ -26,6 +26,21 @@ pub unsafe fn set_stick(x: i16, y: i16) {
 pub unsafe extern "C" fn voxel_stick() -> i32 {
     ((STICK.0 as i32) << 16) | ((STICK.1 as i32) & 0xffff)
 }
+/// Whether the guest tick running now is the last before the host renders
+/// (`voxel.lastStep()`). A slow frame makes the host run several ticks to
+/// catch up; a guest that composes a picture per tick should do it once, on
+/// this one -- the others are overwritten before anyone sees them.
+static mut LAST_STEP: bool = true;
+
+pub unsafe fn set_last_step(last: bool) {
+    LAST_STEP = last;
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn voxel_last_step() -> i32 {
+    LAST_STEP as i32
+}
+
 pub unsafe fn take_viewer_request() -> bool {
     let v = VIEWER_REQ;
     VIEWER_REQ = false;

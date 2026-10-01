@@ -277,7 +277,9 @@ impl LcdScreen {
         let mut hit: Option<LcdBank> = None;
         let mut last_key: u32 = u32::MAX;
         let mut last_row = [0u8; 8];
-        let mut raw = |id: u16, x: u8, y: u8| -> u8 {
+        // A tile's row `y`, eight raw colours (masked to 0-3), the last one
+        // remembered.
+        let mut fetch = |id: u16, y: u8| -> [u8; 8] {
             let key = ((id as u32) << 3) | (y as u32 & 7);
             if key != last_key {
                 let inside = |b: &LcdBank| id >= b.base && (id as u32) < b.base as u32 + b.count as u32;
@@ -288,9 +290,12 @@ impl LcdScreen {
                     Some(b) => row(b.page, id - b.base, y),
                     None => [0; 8],
                 };
+                for c in last_row.iter_mut() {
+                    *c &= 3;
+                }
                 last_key = key;
             }
-            last_row[(x & 7) as usize] & 3
+            last_row
         };
         // per pixel of the line: the map colour drawn, and whether that cell
         // keeps its colours above objects
@@ -298,47 +303,64 @@ impl LcdScreen {
         let mut bg_pri = [false; LCD_W];
         let mut win_line: usize = 0;
         for ly in 0..LCD_H {
-            let row = &mut out[ly * LCD_W..(ly + 1) * LCD_W];
-            row.fill(LCD_HOLE);
+            let line = &mut out[ly * LCD_W..(ly + 1) * LCD_W];
+            line.fill(LCD_HOLE);
             bg_col.fill(0);
             bg_pri.fill(false);
             let scy = if self.line_target == 1 { self.lines[ly] } else { self.scy };
             let scx = if self.line_target == 2 { self.lines[ly] } else { self.scx };
-            let mut cell = |map: usize, cx: usize, cy: usize, px: usize, py: usize| -> Option<(u8, u8)> {
-                let i = map + (cy & 31) * 32 + (cx & 31);
+            // Screen pixels [x, x + n) from one cell of a map: the cell's
+            // row fetched once, its pixels from column px0 on. A hole cell
+            // leaves them as they are, unless `hole_clears` (the window: a
+            // window hole is a hole, not the background under it).
+            let mut span = |line: &mut [u8], bg_col: &mut [u8; LCD_W], bg_pri: &mut [bool; LCD_W],
+                            i: usize, py: usize, x: usize, px0: usize, n: usize, hole_clears: bool| {
                 let attr = self.attrs[i];
                 if attr & ATTR_HOLE != 0 {
-                    return None;
+                    if hole_clears {
+                        for k in x..x + n {
+                            line[k] = LCD_HOLE;
+                            bg_col[k] = 0;
+                            bg_pri[k] = false;
+                        }
+                    }
+                    return;
                 }
-                let tx = if attr & ATTR_X_FLIP != 0 { 7 - px } else { px };
                 let ty = if attr & ATTR_Y_FLIP != 0 { 7 - py } else { py };
-                Some((raw(self.cells[i], tx as u8, ty as u8), attr))
+                let r = fetch(self.cells[i], ty as u8);
+                let base = (attr & ATTR_PAL) * 4;
+                let pri = attr & ATTR_PRIORITY != 0;
+                let flip = attr & ATTR_X_FLIP != 0;
+                for k in 0..n {
+                    let px = px0 + k;
+                    let c = r[if flip { 7 - px } else { px }];
+                    line[x + k] = base + c;
+                    bg_col[x + k] = c;
+                    bg_pri[x + k] = pri;
+                }
             };
             if self.flags & FLAG_BG_ON != 0 {
                 let by = (ly as u8).wrapping_add(scy) as usize;
-                for x in 0..LCD_W {
+                let rowi = ((by >> 3) & 31) * 32;
+                let mut x = 0;
+                while x < LCD_W {
                     let bx = (x as u8).wrapping_add(scx) as usize;
-                    if let Some((c, attr)) = cell(0, bx >> 3, by >> 3, bx & 7, by & 7) {
-                        row[x] = (attr & ATTR_PAL) * 4 + c;
-                        bg_col[x] = c;
-                        bg_pri[x] = attr & ATTR_PRIORITY != 0;
-                    }
+                    let px0 = bx & 7;
+                    let n = (8 - px0).min(LCD_W - x);
+                    span(line, &mut bg_col, &mut bg_pri, rowi + ((bx >> 3) & 31), by & 7, x, px0, n, false);
+                    x += n;
                 }
             }
             if self.flags & FLAG_WIN_ON != 0 && ly >= self.wy as usize && self.wx <= 166 {
                 let x0 = (self.wx as usize).saturating_sub(7);
-                for x in x0..LCD_W {
+                let rowi = 1024 + ((win_line >> 3) & 31) * 32;
+                let mut x = x0;
+                while x < LCD_W {
                     let wx = x + 7 - self.wx as usize;
-                    if let Some((c, attr)) = cell(1024, wx >> 3, win_line >> 3, wx & 7, win_line & 7) {
-                        row[x] = (attr & ATTR_PAL) * 4 + c;
-                        bg_col[x] = c;
-                        bg_pri[x] = attr & ATTR_PRIORITY != 0;
-                    } else {
-                        // a window hole is a hole, not the background under it
-                        row[x] = LCD_HOLE;
-                        bg_col[x] = 0;
-                        bg_pri[x] = false;
-                    }
+                    let px0 = wx & 7;
+                    let n = (8 - px0).min(LCD_W - x);
+                    span(line, &mut bg_col, &mut bg_pri, rowi + ((wx >> 3) & 31), win_line & 7, x, px0, n, true);
+                    x += n;
                 }
                 win_line += 1;
             }
@@ -357,6 +379,7 @@ impl LcdScreen {
                     ty = h - 1 - ty;
                 }
                 let tile = if tall { (o.tile & !1) + (ty >= 8) as u16 } else { o.tile };
+                let r = fetch(tile, (ty & 7) as u8);
                 for px in 0..8i32 {
                     let x = o.x as i32 + px;
                     if !(0..LCD_W as i32).contains(&x) {
@@ -364,14 +387,14 @@ impl LcdScreen {
                     }
                     let x = x as usize;
                     let tx = if o.attr & ATTR_X_FLIP != 0 { 7 - px } else { px };
-                    let c = raw(tile, tx as u8, (ty & 7) as u8);
+                    let c = r[tx as usize];
                     if c == 0 {
                         continue;
                     }
                     if bg_col[x] != 0 && (bg_pri[x] || o.attr & ATTR_PRIORITY != 0) {
                         continue;
                     }
-                    row[x] = (16 + (o.attr & ATTR_PAL)) * 4 + c;
+                    line[x] = (16 + (o.attr & ATTR_PAL)) * 4 + c;
                 }
             }
         }

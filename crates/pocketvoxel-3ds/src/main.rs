@@ -1549,6 +1549,20 @@ fn world_fov() -> f32 {
 #[derive(Copy, Clone)]
 struct CardVertex { pos: [f32; 3], color: [u8; 4], uv: [f32; 2] }
 
+/// A texture tile's 64 texels in PICA order: entry m is (x, y) within the
+/// tile -- tiled_off's Morton interleave, inverted.
+const MORTON8: [(u8, u8); 64] = {
+    let mut t = [(0u8, 0u8); 64];
+    let mut m = 0;
+    while m < 64 {
+        let x = (m & 1) | ((m >> 1) & 2) | ((m >> 2) & 4);
+        let y = ((m >> 1) & 1) | ((m >> 2) & 2) | ((m >> 3) & 4);
+        t[m] = (x as u8, y as u8);
+        m += 1;
+    }
+    t
+};
+
 fn tiled_off(x: u32, y: u32, tw: u32) -> usize {
     let (tx, ty) = (x / 8, y / 8);
     let (px, py) = (x % 8, y % 8);
@@ -1704,6 +1718,17 @@ fn install_panic_log() {
 }
 
 /// osGetTime, for the load timings.
+/// The ARM11's tick counter in microseconds, for splitting a frame's CPU
+/// time between the guest and the host's own work (the perf line's js/lcd).
+fn now_us() -> f32 {
+    extern "C" { fn svcGetSystemTick() -> u64; }
+    (unsafe { svcGetSystemTick() } as f64 / 268.111856) as f32
+}
+/// The perf line's split, summed over its second: guest ticks, and the
+/// Gold screen's render on the host.
+static mut PERF_JS_US: f32 = 0.0;
+static mut PERF_LCD_US: f32 = 0.0;
+
 fn now_ms() -> u64 {
     extern "C" { fn osGetTime() -> u64; }
     unsafe { osGetTime() }
@@ -3374,7 +3399,7 @@ fn main() {
     let mut tilt_hold: [Option<buffer::Info>; 3] = [None, None, None];
     // The Gold screen's upload buffer, kept: only its 160x144 corner is
     // ever written, and the rest stays transparent.
-    let mut lcd_data = vec![0u8; 256 * 256 * 4];
+    let mut lcd_data = vec![0u8; 256 * 256 * 2];
     // TINS: one buffer per carved shape, and the placements that draw them.
     // A forest is the same few drawings thousands of times, so the geometry
     // is uploaded once and the instances only say where and how detailed.
@@ -3519,9 +3544,11 @@ fn main() {
                     // build has no window for, which is why the first run of
                     // this line left no trace in pvlog.txt at all.
                     dlog(&format!(
-                        "[pv] perf: {} fps  cpu {:.1} avg {:.0} max ms  gpu {:.1} avg {:.0} max ms  proc {:.1} ms  spans {}/{}  trees {}/{}  3d {:.2} r{:.0}  ticks {} dropped {:.0} ms",
+                        "[pv] perf: {} fps  cpu {:.1} avg {:.0} max ms (js {:.1} lcd {:.1})  gpu {:.1} avg {:.0} max ms  proc {:.1} ms  spans {}/{}  trees {}/{}  3d {:.2} r{:.0}  ticks {} dropped {:.0} ms",
                         fps_frames,
                         perf_cpu_sum / perf_n as f32, perf_cpu_max,
+                        unsafe { PERF_JS_US } / 1000.0 / perf_n as f32,
+                        unsafe { PERF_LCD_US } / 1000.0 / perf_n as f32,
                         perf_gpu_sum / perf_n as f32, perf_gpu_max,
                         perf_proc_sum / perf_n as f32,
                         unsafe { DRAWN }, perf_spans, unsafe { TREES_DRAWN }, perf_trees,
@@ -3534,6 +3561,7 @@ fn main() {
                 // ticks and drops are totals over the 5 s the line covers
                 if perf_secs % 5 == 0 { perf_ticks = 0; perf_drop_ms = 0.0; }
                 perf_n = 0;
+                unsafe { PERF_JS_US = 0.0; PERF_LCD_US = 0.0; }
                 perf_cpu_sum = 0.0; perf_cpu_max = 0.0;
                 perf_gpu_sum = 0.0; perf_gpu_max = 0.0; perf_proc_sum = 0.0;
                 fps_frames = 0; aud_ticks = 0; aud_queued = 0; aud_dropped = 0;
@@ -3650,7 +3678,9 @@ fn main() {
                     dlog(&format!("[pv] pak_static re-taken ({PAK_RETAKEN} so far)"));
                 }
                 let t_js = now_ms();
-                for _ in 0..steps {
+                let t_js_us = now_us();
+                for step in 0..steps {
+                    voxel::set_last_step(step + 1 == steps);
                     if qjs_call_frame(CTX, b, e2.as_mut_ptr(), 255) != 0 { failed = true; break; }
                     // Scene time and audio belong to the SIM tick, not the
                     // rendered frame: at the 30 Hz render cap they were
@@ -3674,6 +3704,7 @@ fn main() {
                         if got == 0 { aud_dropped += 1; }
                     }
                 }
+                PERF_JS_US += now_us() - t_js_us;
                 if failed {
                     let n = e2.iter().position(|&c| c == 0).unwrap_or(0);
                     println!("frame ERR: {}", String::from_utf8_lossy(&e2[..n]));
@@ -4968,6 +4999,7 @@ if page_tex.len() < pak_static.atlases.len() {
             if sc.lcd.shown {
                 if lcd_drawn != Some(sc.lcd.serial) {
                     lcd_drawn = Some(sc.lcd.serial);
+                    let t_lcd = now_us();
                     let atl = &pak_static.atlases;
                     let pages = &mut lcd_pages;
                     let mut last = usize::MAX;
@@ -4995,26 +5027,32 @@ if page_tex.len() < pak_static.atlases.len() {
                         r
                     };
                     sc.lcd.render_rows(&mut row, &mut lcd_fb);
-                    let mut lut = [0u32; 256];
+                    // RGBA5551: the screen's own RGB555 colours and its holes
+                    // exactly, at half RGBA8's upload. Written a whole 8x8
+                    // tile at a time in the texture's Morton order, so there
+                    // is no per-pixel offset sum.
+                    let mut lut = [0u16; 256];
                     for (i, c) in sc.lcd.colours.iter().enumerate() {
-                        lut[i] = pocketvoxel_core::lcd::LcdScreen::abgr(*c);
+                        let (r, g, b) = (c & 31, (c >> 5) & 31, (c >> 10) & 31);
+                        lut[i] = (r << 11) | (g << 6) | (b << 1) | 1;
                     }
-                    let (lw, lh) = (pocketvoxel_core::lcd::LCD_W, pocketvoxel_core::lcd::LCD_H);
+                    lut[pocketvoxel_core::lcd::LCD_HOLE as usize] = 0;
+                    let lw = pocketvoxel_core::lcd::LCD_W;
                     let data = &mut lcd_data;
-                    for y in 0..lh {
-                        for x in 0..lw {
-                            let c = lut[lcd_fb[y * lw + x] as usize];
-                            let o = tiled_off(x as u32, y as u32, 256);
-                            data[o] = (c >> 24) as u8;
-                            data[o + 1] = (c >> 16) as u8;
-                            data[o + 2] = (c >> 8) as u8;
-                            data[o + 3] = c as u8;
+                    for ty in 0..pocketvoxel_core::lcd::LCD_H / 8 {
+                        for tx in 0..lw / 8 {
+                            let base = (ty * (256 / 8) + tx) * 64;
+                            for (m, &(px, py)) in MORTON8.iter().enumerate() {
+                                let v = lut[lcd_fb[(ty * 8 + py as usize) * lw + tx * 8 + px as usize] as usize];
+                                data[(base + m) * 2] = v as u8;
+                                data[(base + m) * 2 + 1] = (v >> 8) as u8;
+                            }
                         }
                     }
                     let next = lcd_cur ^ 1;
                     if lcd_tex[next].is_none() {
                         if let Ok(mut t) = texture::Texture::new(
-                            texture::TextureParameters::new_2d(256, 256, texture::ColorFormat::Rgba8)) {
+                            texture::TextureParameters::new_2d(256, 256, texture::ColorFormat::Rgba5551)) {
                             t.set_filter(texture::Filter::Nearest, texture::Filter::Nearest);
                             t.set_wrap(texture::Wrap::ClampToEdge, texture::Wrap::ClampToEdge);
                             lcd_tex[next] = Some(t);
@@ -5026,6 +5064,7 @@ if page_tex.len() < pak_static.atlases.len() {
                             lcd_cur = next;
                         }
                     }
+                    unsafe { PERF_LCD_US += now_us() - t_lcd; }
                 }
                 let w = pocketvoxel_core::lcd::LCD_W as f32 * UI_VIEW_H / pocketvoxel_core::lcd::LCD_H as f32;
                 let ox = (UI_VIEW_W - w) / 2.0;

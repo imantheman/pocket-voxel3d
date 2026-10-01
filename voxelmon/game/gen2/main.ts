@@ -73,16 +73,20 @@ const prof = { n: 0, step: 0, draw: 0, end: 0, view: 0 };
 
 // The 3DS shows 30 frames a second and runs the game at 60 steps a second,
 // calling frame() once per step. The logic runs every step; the Gold screen
-// is composed (game.draw + lcd.end) every other one -- every frame that is
-// shown -- and the scene follows on the same steps. Its ops are all state
+// is composed (game.draw + lcd.end) once per frame that is shown -- on the
+// step the host says is the last before it renders (voxel.lastStep), since a
+// slow frame makes it run several steps to catch up and a picture composed
+// on any but the last is overwritten unseen. (A host without lastStep: every
+// other step.) The scene follows on the same steps. Its ops are all state
 // (camera, actors, maps, tint), so the step between two shown frames had
 // nothing to say that the next would not overwrite; and World.viewState,
 // which feeds them, builds a sizeable object graph each call.
 let stepNo = 0;
+const lastStep = native.lastStep;
 
 (globalThis as unknown as { frame: (buttons: number) => void }).frame = (buttons: number): void => {
   const t0 = clock ? clock() : 0;
-  const compose = (stepNo++ & 1) === 0;
+  const compose = lastStep ? lastStep() : (stepNo++ & 1) === 0;
   try {
     game.frame(buttons & 0xff);
   } catch (e) {

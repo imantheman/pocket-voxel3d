@@ -57,6 +57,8 @@ export interface VoxelNative {
   /** The circle pad as the host last read it: (x << 16) | (y & 0xffff),
    * each a signed 16-bit in the pad's own units (-156..156 on a 3DS). */
   stick?(): number;
+  /** Whether this tick is the last before the host renders (it may run several to catch up). */
+  lastStep?(): boolean;
   fieldFx(x: number, z: number, frame: number): void;
   arena(mapId: number, x: number, y: number, shape: number, rig: number): void;
   card(
