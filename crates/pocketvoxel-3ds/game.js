@@ -6139,14 +6139,16 @@ function orbitDir(arena, rig, q8) {
   const len = Math.hypot(dir[0], dir[1]) || 1;
   return [dir[0] / len, dir[1] / len];
 }
-function chooseView(map, arena, rig) {
-  let best = { orbit: 0, pitch: 0 };
+function chooseView(map, arena, rig, preferQ8 = 0) {
+  const preferStep = Math.round((preferQ8 % 256 + 256) % 256 * ORBIT_STEPS / 256) % ORBIT_STEPS;
+  let best = { orbit: Math.round(preferStep * 256 / ORBIT_STEPS), pitch: 0 };
   let bestScore = Number.POSITIVE_INFINITY;
   for (const pitchQ8 of VIEW_PITCHES) {
     for (let step = 0;step < ORBIT_STEPS; step++) {
       const q8 = Math.round(step * 256 / ORBIT_STEPS);
       const hits = sightlineHits(map, arena, rig, q8, pitchQ8);
-      const turn = Math.min(step, ORBIT_STEPS - step) / ORBIT_STEPS;
+      const d = (step - preferStep + ORBIT_STEPS) % ORBIT_STEPS;
+      const turn = Math.min(d, ORBIT_STEPS - d) / ORBIT_STEPS;
       const score = hits.enemy * 2 + hits.player + turn * ORBIT_TURN_COST + pitchQ8 / 256 * VIEW_PITCH_COST;
       if (score < bestScore) {
         bestScore = score;
@@ -28965,8 +28967,8 @@ class QuickJsHost {
   cardHide(side) {
     native.cardHide(side);
   }
-  battleCam(orbit, pitch, zoom) {
-    native.battleCam(orbit, pitch, zoom);
+  battleCam(orbit, pitch, zoom, lift = 0, dist = 0) {
+    native.battleCam(orbit, pitch, zoom, lift, dist);
   }
   arenaEnd() {
     native.arenaEnd();
@@ -29045,6 +29047,9 @@ class QuickJsHost {
   }
   lcdTarget(k) {
     native.lcdTarget?.(k);
+  }
+  cardPal(side, c0, c1, c2, c3) {
+    native.cardPal?.(side, c0, c1, c2, c3);
   }
   audioWaves(engine, bank, addr) {
     native.audioWaves?.(engine, bank, addr);
