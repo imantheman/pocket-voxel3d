@@ -110,6 +110,7 @@ export class WorldView {
   private lastDaytime = -1;
   private lastNeighbours = "";
   private lastTint = -1;
+  private started = false;
 
   constructor(
     private readonly host: VoxelHost,
@@ -133,6 +134,12 @@ export class WorldView {
 
   /** Emit this frame's scene from the game's world, if it has one. */
   emit(game: { world?: any; frameWorldActive?: boolean }): void {
+    if (!this.started) {
+      // the overworld camera's opening rung, as the Kanto scene starts it
+      // (scene.ts: PITCH_RUNGS[2] = 35 degrees); the player steers from there
+      this.started = true;
+      this.host.pitch(2);
+    }
     this.emitTint(game);
     const world = game.world;
     const vs: WorldViewState | null = world && world.map && typeof world.viewState === "function" ? world.viewState() : null;
