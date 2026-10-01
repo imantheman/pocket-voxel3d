@@ -1644,6 +1644,8 @@ impl LcdTex {
             r
         };
         lcd.render_rows(&mut row, &mut self.fb);
+        let t_conv = now_us();
+        unsafe { PERF_LCDR_US += t_conv - t_lcd; }
         // RGBA5551: the screen's own RGB555 colours and its holes exactly, at
         // half RGBA8's upload. Written a whole 8x8 tile at a time in the
         // texture's Morton order, so there is no per-pixel offset sum.
@@ -1672,6 +1674,7 @@ impl LcdTex {
                 }
             }
         }
+        unsafe { PERF_LCDC_US += now_us() - t_conv; }
         let next = self.cur ^ 1;
         if self.tex[next].is_none() {
             if let Ok(mut t) = texture::Texture::new(
@@ -1861,6 +1864,10 @@ fn now_us() -> f32 {
 /// Gold screen's render on the host.
 static mut PERF_JS_US: f32 = 0.0;
 static mut PERF_LCD_US: f32 = 0.0;
+/// PERF_LCD_US's parts: the Gold screen's render (lcd.rs render_rows) and its
+/// conversion to the texture's RGBA5551 (the rest is the upload).
+static mut PERF_LCDR_US: f32 = 0.0;
+static mut PERF_LCDC_US: f32 = 0.0;
 
 fn now_ms() -> u64 {
     extern "C" { fn osGetTime() -> u64; }
@@ -3744,11 +3751,13 @@ fn main() {
                     // build has no window for, which is why the first run of
                     // this line left no trace in pvlog.txt at all.
                     dlog(&format!(
-                        "[pv] perf: {} fps  cpu {:.1} avg {:.0} max ms (js {:.1} lcd {:.1})  gpu {:.1} avg {:.0} max ms  proc {:.1} ms  spans {}/{}  trees {}/{}  3d {:.2} r{:.0}  ticks {} dropped {:.0} ms",
+                        "[pv] perf: {} fps  cpu {:.1} avg {:.0} max ms (js {:.1} lcd {:.1} r {:.1} c {:.1})  gpu {:.1} avg {:.0} max ms  proc {:.1} ms  spans {}/{}  trees {}/{}  3d {:.2} r{:.0}  ticks {} dropped {:.0} ms",
                         fps_frames,
                         perf_cpu_sum / perf_n as f32, perf_cpu_max,
                         unsafe { PERF_JS_US } / 1000.0 / perf_n as f32,
                         unsafe { PERF_LCD_US } / 1000.0 / perf_n as f32,
+                        unsafe { PERF_LCDR_US } / 1000.0 / perf_n as f32,
+                        unsafe { PERF_LCDC_US } / 1000.0 / perf_n as f32,
                         perf_gpu_sum / perf_n as f32, perf_gpu_max,
                         perf_proc_sum / perf_n as f32,
                         unsafe { DRAWN }, perf_spans, unsafe { TREES_DRAWN }, perf_trees,
@@ -3761,7 +3770,7 @@ fn main() {
                 // ticks and drops are totals over the 5 s the line covers
                 if perf_secs % 5 == 0 { perf_ticks = 0; perf_drop_ms = 0.0; }
                 perf_n = 0;
-                unsafe { PERF_JS_US = 0.0; PERF_LCD_US = 0.0; }
+                unsafe { PERF_JS_US = 0.0; PERF_LCD_US = 0.0; PERF_LCDR_US = 0.0; PERF_LCDC_US = 0.0; }
                 perf_cpu_sum = 0.0; perf_cpu_max = 0.0;
                 perf_gpu_sum = 0.0; perf_gpu_max = 0.0; perf_proc_sum = 0.0;
                 fps_frames = 0; aud_ticks = 0; aud_queued = 0; aud_dropped = 0;

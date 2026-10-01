@@ -407,6 +407,310 @@ impl LcdScreen {
         if out.len() < LCD_W * LCD_H {
             return;
         }
+        let mut fetch = RowFetch {
+            banks: &self.banks[..self.bank_count],
+            row,
+            hit: None,
+            last_key: u32::MAX,
+            last_row: [0; 8],
+        };
+        // per pixel of the line: the map colour drawn, and whether that cell
+        // keeps its colours above objects -- kept only on a line an object
+        // touches (most lines of a menu or of VIEW 2D have none)
+        let mut bg_col = [0u8; LCD_W];
+        let mut bg_pri = [false; LCD_W];
+        let objs = &self.objs[..self.obj_count];
+        let obj_on = self.flags & FLAG_OBJ_ON != 0 && !objs.is_empty();
+        let tall = self.flags & FLAG_OBJ_TALL != 0;
+        let h: i32 = if tall { 16 } else { 8 };
+        let mut win_line: usize = 0;
+        // VIEW 2D: the under layer drawn first, a tile at a time, wherever
+        // the screen shows it -- a line no object touches then draws only
+        // the background's own cells over it, not the layer's row of each
+        // of its holes (most of the screen, every frame the map scrolls)
+        let blocks = self.under_on && self.flags & FLAG_BG_ON != 0;
+        // which of the layer's pixels keep their colours above objects, a
+        // bit each (an object's line reads it back with the colours)
+        let mut under_pri = [0u32; LCD_W * LCD_H / 32];
+        if blocks {
+            out[..LCD_W * LCD_H].fill(LCD_HOLE);
+            self.under_blocks(&mut fetch, out, &mut under_pri);
+        }
+        for ly in 0..LCD_H {
+            let line = &mut out[ly * LCD_W..(ly + 1) * LCD_W];
+            let lyi = ly as i32;
+            let keep = obj_on && objs.iter().any(|o| (0..h).contains(&(lyi - o.y as i32)));
+            // the layer already on this line: its pixels stay under the
+            // holes, and an object's line reads the colours under it back
+            // (colour = the pixel's low two bits; a layer hole is colour 0)
+            let laid = blocks;
+            if !laid {
+                line.fill(LCD_HOLE);
+            }
+            if keep {
+                if laid {
+                    for (x, &v) in line.iter().enumerate() {
+                        bg_col[x] = if v == LCD_HOLE { 0 } else { v & 3 };
+                        let k = ly * LCD_W + x;
+                        bg_pri[x] = under_pri[k >> 5] & (1 << (k & 31)) != 0;
+                    }
+                } else {
+                    bg_col.fill(0);
+                    bg_pri.fill(false);
+                }
+            }
+            let mut px = Line { line, bg_col: &mut bg_col, bg_pri: &mut bg_pri, keep };
+            let scy = if self.line_target == 1 { self.lines[ly] } else { self.scy };
+            let scx = if self.line_target == 2 { self.lines[ly] } else { self.scx };
+            if self.flags & FLAG_BG_ON != 0 {
+                let by = (ly as u8).wrapping_add(scy) as usize;
+                let rowi = ((by >> 3) & 31) * 32;
+                let py = (by & 7) as u8;
+                let mut x = 0;
+                while x < LCD_W {
+                    let bx = (x as u8).wrapping_add(scx) as usize;
+                    let px0 = bx & 7;
+                    let n = (8 - px0).min(LCD_W - x);
+                    let i = rowi + ((bx >> 3) & 31);
+                    let attr = self.attrs[i];
+                    if attr & ATTR_HOLE == 0 {
+                        px.cell(&mut fetch, self.cells[i], attr, py, x, px0, n);
+                    } else if self.under_on && !laid {
+                        self.under_run(&mut fetch, &mut px, ly, x, n);
+                    }
+                    x += n;
+                }
+            }
+            if self.flags & FLAG_WIN_ON != 0 && ly >= self.wy as usize && self.wx <= 166 {
+                let x0 = (self.wx as usize).saturating_sub(7);
+                let rowi = 1024 + ((win_line >> 3) & 31) * 32;
+                let py = (win_line & 7) as u8;
+                let mut x = x0;
+                while x < LCD_W {
+                    let wx = x + 7 - self.wx as usize;
+                    let px0 = wx & 7;
+                    let n = (8 - px0).min(LCD_W - x);
+                    let i = rowi + ((wx >> 3) & 31);
+                    let attr = self.attrs[i];
+                    if attr & ATTR_HOLE == 0 {
+                        px.cell(&mut fetch, self.cells[i], attr, py, x, px0, n);
+                    } else {
+                        // a window hole is a hole, not the background under it
+                        px.line[x..x + n].fill(LCD_HOLE);
+                        if px.keep {
+                            px.bg_col[x..x + n].fill(0);
+                            px.bg_pri[x..x + n].fill(false);
+                        }
+                    }
+                    x += n;
+                }
+                win_line += 1;
+            }
+            if !keep {
+                continue;
+            }
+            // a lower index on top (CGB): draw from the last one back
+            for o in objs.iter().rev() {
+                let mut ty = lyi - o.y as i32;
+                if !(0..h).contains(&ty) {
+                    continue;
+                }
+                if o.attr & ATTR_Y_FLIP != 0 {
+                    ty = h - 1 - ty;
+                }
+                let tile = if tall { (o.tile & !1) + (ty >= 8) as u16 } else { o.tile };
+                let r = fetch.get(tile, (ty & 7) as u8);
+                for p in 0..8i32 {
+                    let x = o.x as i32 + p;
+                    if !(0..LCD_W as i32).contains(&x) {
+                        continue;
+                    }
+                    let x = x as usize;
+                    let tx = if o.attr & ATTR_X_FLIP != 0 { 7 - p } else { p };
+                    let c = r[tx as usize];
+                    if c == 0 {
+                        continue;
+                    }
+                    if px.bg_col[x] != 0 && (px.bg_pri[x] || o.attr & ATTR_PRIORITY != 0) {
+                        continue;
+                    }
+                    px.line[x] = (16 + (o.attr & ATTR_PAL)) * 4 + c;
+                }
+            }
+        }
+    }
+
+    /// Screen pixels [x, x + n) of line `ly` from the under layer (the
+    /// background is a hole there): an under cell's row at a time, a hole
+    /// cell spanning at most two of them.
+    fn under_run<F: FnMut(u16, u16, u8) -> [u8; 8]>(&self, fetch: &mut RowFetch<'_, F>, px: &mut Line<'_>,
+                                                    ly: usize, x: usize, n: usize) {
+        let gy = self.under_y + ly as i32;
+        if gy < 0 || gy as usize >= self.under_h * 8 {
+            return;
+        }
+        let (urow, upy) = ((gy >> 3) as usize * self.under_w, (gy & 7) as u8);
+        let mut k = x;
+        while k < x + n {
+            let gx = self.under_x + k as i32;
+            let px0 = (gx & 7) as usize;
+            let run = (8 - px0).min(x + n - k);
+            if gx >= 0 && (gx as usize) < self.under_w * 8 {
+                let j = urow + (gx >> 3) as usize;
+                let ua = self.under_attr[j];
+                if ua & ATTR_HOLE == 0 {
+                    let mut id = self.under[j];
+                    for al in &self.aliases[..self.alias_n] {
+                        if al.0 == id {
+                            id = al.1;
+                            break;
+                        }
+                    }
+                    px.cell(fetch, id, ua, upy, k, px0, run);
+                }
+            }
+            k += run;
+        }
+    }
+
+    /// The under layer over the whole screen (`out` already all hole), an
+    /// 8x8 cell at a time: what under_run draws under every background hole
+    /// of every line, for render_rows to draw the background's own cells
+    /// over.
+    fn under_blocks<F: FnMut(u16, u16, u8) -> [u8; 8]>(&self, fetch: &mut RowFetch<'_, F>, out: &mut [u8],
+                                                       pri: &mut [u32; LCD_W * LCD_H / 32]) {
+        let (ux, uy) = (self.under_x, self.under_y);
+        let r0 = (uy >> 3).max(0);
+        let r1 = ((uy + LCD_H as i32 - 1) >> 3).min(self.under_h as i32 - 1);
+        let c0 = (ux >> 3).max(0);
+        let c1 = ((ux + LCD_W as i32 - 1) >> 3).min(self.under_w as i32 - 1);
+        for r in r0..=r1 {
+            // the screen lines this cell row covers
+            let top = r * 8 - uy;
+            let (y0, y1) = (top.max(0), (top + 8).min(LCD_H as i32));
+            for c in c0..=c1 {
+                let j = r as usize * self.under_w + c as usize;
+                let ua = self.under_attr[j];
+                if ua & ATTR_HOLE != 0 {
+                    continue;
+                }
+                let mut id = self.under[j];
+                for al in &self.aliases[..self.alias_n] {
+                    if al.0 == id {
+                        id = al.1;
+                        break;
+                    }
+                }
+                let left = c * 8 - ux;
+                let (x0, x1) = (left.max(0) as usize, (left + 8).min(LCD_W as i32) as usize);
+                let px0 = x0 - left as usize;
+                let n = x1 - x0;
+                let base = (ua & ATTR_PAL) * 4;
+                for y in y0..y1 {
+                    let ty = (y - top) as u8;
+                    let mut row = fetch.get(id, if ua & ATTR_Y_FLIP != 0 { 7 - ty } else { ty });
+                    if ua & ATTR_X_FLIP != 0 {
+                        row.reverse();
+                    }
+                    let at = y as usize * LCD_W + x0;
+                    for (d, &v) in out[at..at + n].iter_mut().zip(&row[px0..px0 + n]) {
+                        *d = base + v;
+                    }
+                    if ua & ATTR_PRIORITY != 0 {
+                        for k in at..at + n {
+                            pri[k >> 5] |= 1 << (k & 31);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// render_rows' tile-row source: the bank a tile id falls in, remembered
+/// (neighbouring cells almost always share one, so the search runs once per
+/// change of bank rather than once per pixel), and the last row fetched.
+struct RowFetch<'a, F> {
+    banks: &'a [LcdBank],
+    row: &'a mut F,
+    hit: Option<LcdBank>,
+    last_key: u32,
+    last_row: [u8; 8],
+}
+
+impl<F: FnMut(u16, u16, u8) -> [u8; 8]> RowFetch<'_, F> {
+    /// Tile `id`'s row `y`: eight raw colours, masked to 0-3.
+    fn get(&mut self, id: u16, y: u8) -> [u8; 8] {
+        let key = ((id as u32) << 3) | (y as u32 & 7);
+        if key != self.last_key {
+            let inside = |b: &LcdBank| id >= b.base && (id as u32) < b.base as u32 + b.count as u32;
+            if !self.hit.as_ref().is_some_and(inside) {
+                self.hit = self.banks.iter().rev().find(|b| inside(b)).copied();
+            }
+            self.last_row = match self.hit {
+                Some(b) => (self.row)(b.page, id - b.base, y),
+                None => [0; 8],
+            };
+            for c in self.last_row.iter_mut() {
+                *c &= 3;
+            }
+            self.last_key = key;
+        }
+        self.last_row
+    }
+}
+
+/// One line being drawn: its pixels, and (when an object touches it) the map
+/// colour and priority under each.
+struct Line<'a> {
+    line: &'a mut [u8],
+    bg_col: &'a mut [u8; LCD_W],
+    bg_pri: &'a mut [bool; LCD_W],
+    keep: bool,
+}
+
+impl Line<'_> {
+    /// Pixels [x, x + n) from one map cell (tile `id`, attribute `attr`), its
+    /// row `py` before the cell's flip, from column px0 on.
+    #[allow(clippy::too_many_arguments)]
+    #[inline]
+    fn cell<F: FnMut(u16, u16, u8) -> [u8; 8]>(&mut self, fetch: &mut RowFetch<'_, F>, id: u16, attr: u8,
+                                               py: u8, x: usize, px0: usize, n: usize) {
+        let ty = if attr & ATTR_Y_FLIP != 0 { 7 - py } else { py };
+        let mut r = fetch.get(id, ty);
+        if attr & ATTR_X_FLIP != 0 {
+            r.reverse();
+        }
+        let base = (attr & ATTR_PAL) * 4;
+        let src = &r[px0..px0 + n];
+        for (d, &c) in self.line[x..x + n].iter_mut().zip(src) {
+            *d = base + c;
+        }
+        if self.keep {
+            self.bg_col[x..x + n].copy_from_slice(src);
+            self.bg_pri[x..x + n].fill(attr & ATTR_PRIORITY != 0);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::format;
+    use alloc::string::String;
+    use alloc::vec;
+
+    /// Tile t's pixels are all colour t % 4.
+    fn flat(_page: u16, tile: u16, _x: u8, _y: u8) -> u8 {
+        (tile % 4) as u8
+    }
+
+    /// render_rows as it was before RowFetch/Line (2026-10-01): the new one
+    /// must draw exactly what this drew.
+    fn reference_render_rows(lcd: &LcdScreen, row: &mut impl FnMut(u16, u16, u8) -> [u8; 8], out: &mut [u8]) {
+        if out.len() < LCD_W * LCD_H {
+            return;
+        }
         // The bank a tile id falls in, remembered: neighbouring cells almost
         // always share one, so the search runs once per change of bank
         // rather than once per pixel.
@@ -420,7 +724,7 @@ impl LcdScreen {
             if key != last_key {
                 let inside = |b: &LcdBank| id >= b.base && (id as u32) < b.base as u32 + b.count as u32;
                 if !hit.as_ref().is_some_and(inside) {
-                    hit = self.banks[..self.bank_count].iter().rev().find(|b| inside(b)).copied();
+                    hit = lcd.banks[..lcd.bank_count].iter().rev().find(|b| inside(b)).copied();
                 }
                 last_row = match hit {
                     Some(b) => row(b.page, id - b.base, y),
@@ -443,15 +747,15 @@ impl LcdScreen {
             line.fill(LCD_HOLE);
             bg_col.fill(0);
             bg_pri.fill(false);
-            let scy = if self.line_target == 1 { self.lines[ly] } else { self.scy };
-            let scx = if self.line_target == 2 { self.lines[ly] } else { self.scx };
+            let scy = if lcd.line_target == 1 { lcd.lines[ly] } else { lcd.scy };
+            let scx = if lcd.line_target == 2 { lcd.lines[ly] } else { lcd.scx };
             // Screen pixels [x, x + n) from one cell of a map: the cell's
             // row fetched once, its pixels from column px0 on. A hole cell
             // leaves them as they are, unless `hole_clears` (the window: a
             // window hole is a hole, not the background under it).
             let mut span = |line: &mut [u8], bg_col: &mut [u8; LCD_W], bg_pri: &mut [bool; LCD_W],
                             i: usize, py: usize, x: usize, px0: usize, n: usize, hole_clears: bool| {
-                let attr = self.attrs[i];
+                let attr = lcd.attrs[i];
                 if attr & ATTR_HOLE != 0 {
                     if hole_clears {
                         for k in x..x + n {
@@ -459,30 +763,30 @@ impl LcdScreen {
                             bg_col[k] = 0;
                             bg_pri[k] = false;
                         }
-                    } else if self.under_on {
+                    } else if lcd.under_on {
                         // the under layer's pixels for [x, x + n) of line ly
-                        let gy = self.under_y + ly as i32;
-                        if gy < 0 || gy as usize >= self.under_h * 8 {
+                        let gy = lcd.under_y + ly as i32;
+                        if gy < 0 || gy as usize >= lcd.under_h * 8 {
                             return;
                         }
-                        let (urow, upy) = ((gy >> 3) as usize * self.under_w, (gy & 7) as u8);
+                        let (urow, upy) = ((gy >> 3) as usize * lcd.under_w, (gy & 7) as u8);
                         // an under cell's row at a time (a hole cell spans at
                         // most two of them)
                         let mut k = x;
                         while k < x + n {
-                            let gx = self.under_x + k as i32;
+                            let gx = lcd.under_x + k as i32;
                             let px0 = (gx & 7) as usize;
                             let run = (8 - px0).min(x + n - k);
-                            if gx < 0 || gx as usize >= self.under_w * 8 {
+                            if gx < 0 || gx as usize >= lcd.under_w * 8 {
                                 k += run;
                                 continue;
                             }
                             let j = urow + (gx >> 3) as usize;
-                            let ua = self.under_attr[j];
+                            let ua = lcd.under_attr[j];
                             if ua & ATTR_HOLE == 0 {
                                 let ty = if ua & ATTR_Y_FLIP != 0 { 7 - upy } else { upy };
-                                let mut id = self.under[j];
-                                for al in &self.aliases[..self.alias_n] {
+                                let mut id = lcd.under[j];
+                                for al in &lcd.aliases[..lcd.alias_n] {
                                     if al.0 == id {
                                         id = al.1;
                                         break;
@@ -504,7 +808,7 @@ impl LcdScreen {
                     return;
                 }
                 let ty = if attr & ATTR_Y_FLIP != 0 { 7 - py } else { py };
-                let r = fetch(self.cells[i], ty as u8);
+                let r = fetch(lcd.cells[i], ty as u8);
                 let base = (attr & ATTR_PAL) * 4;
                 let pri = attr & ATTR_PRIORITY != 0;
                 let flip = attr & ATTR_X_FLIP != 0;
@@ -516,7 +820,7 @@ impl LcdScreen {
                     bg_pri[x + k] = pri;
                 }
             };
-            if self.flags & FLAG_BG_ON != 0 {
+            if lcd.flags & FLAG_BG_ON != 0 {
                 let by = (ly as u8).wrapping_add(scy) as usize;
                 let rowi = ((by >> 3) & 31) * 32;
                 let mut x = 0;
@@ -528,12 +832,12 @@ impl LcdScreen {
                     x += n;
                 }
             }
-            if self.flags & FLAG_WIN_ON != 0 && ly >= self.wy as usize && self.wx <= 166 {
-                let x0 = (self.wx as usize).saturating_sub(7);
+            if lcd.flags & FLAG_WIN_ON != 0 && ly >= lcd.wy as usize && lcd.wx <= 166 {
+                let x0 = (lcd.wx as usize).saturating_sub(7);
                 let rowi = 1024 + ((win_line >> 3) & 31) * 32;
                 let mut x = x0;
                 while x < LCD_W {
-                    let wx = x + 7 - self.wx as usize;
+                    let wx = x + 7 - lcd.wx as usize;
                     let px0 = wx & 7;
                     let n = (8 - px0).min(LCD_W - x);
                     span(line, &mut bg_col, &mut bg_pri, rowi + ((wx >> 3) & 31), win_line & 7, x, px0, n, true);
@@ -541,13 +845,13 @@ impl LcdScreen {
                 }
                 win_line += 1;
             }
-            if self.flags & FLAG_OBJ_ON == 0 {
+            if lcd.flags & FLAG_OBJ_ON == 0 {
                 continue;
             }
-            let tall = self.flags & FLAG_OBJ_TALL != 0;
+            let tall = lcd.flags & FLAG_OBJ_TALL != 0;
             let h: i32 = if tall { 16 } else { 8 };
             // a lower index on top (CGB): draw from the last one back
-            for o in self.objs[..self.obj_count].iter().rev() {
+            for o in lcd.objs[..lcd.obj_count].iter().rev() {
                 let mut ty = ly as i32 - o.y as i32;
                 if !(0..h).contains(&ty) {
                     continue;
@@ -576,18 +880,137 @@ impl LcdScreen {
             }
         }
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use alloc::format;
-    use alloc::string::String;
-    use alloc::vec;
+    /// xorshift32: the random screens' source, the same run every time.
+    struct Rng(u32);
+    impl Rng {
+        fn next(&mut self) -> u32 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            self.0 = x;
+            x
+        }
+        fn below(&mut self, n: u32) -> u32 {
+            self.next() % n
+        }
+    }
 
-    /// Tile t's pixels are all colour t % 4.
-    fn flat(_page: u16, tile: u16, _x: u8, _y: u8) -> u8 {
-        (tile % 4) as u8
+    /// A tile row with colours past 3 too (the renderer masks them).
+    fn pattern(page: u16, tile: u16, y: u8) -> [u8; 8] {
+        let mut r = [0u8; 8];
+        for (x, c) in r.iter_mut().enumerate() {
+            *c = ((tile as u32 * 7 + page as u32 * 3 + y as u32 * 5 + x as u32 * 11) % 7) as u8;
+        }
+        r
+    }
+
+    fn random_screen(rng: &mut Rng) -> LcdScreen {
+        let mut lcd = LcdScreen::default();
+        lcd.op(op::LCD_BANK, &[0, 1, 512], None);
+        lcd.op(op::LCD_BANK, &[600, 2, 300], None);
+        for i in 0..2048 {
+            lcd.cells[i] = rng.below(1000) as u16;
+            let mut a = rng.below(256) as u8;
+            if rng.below(3) == 0 {
+                a |= ATTR_HOLE;
+            }
+            lcd.attrs[i] = a;
+        }
+        lcd.scx = rng.below(256) as u8;
+        lcd.scy = rng.below(256) as u8;
+        lcd.wx = rng.below(180) as u8;
+        lcd.wy = rng.below(160) as u8;
+        lcd.flags = rng.below(16) as u8;
+        lcd.line_target = rng.below(3) as u8;
+        for l in lcd.lines.iter_mut() {
+            *l = rng.below(256) as u8;
+        }
+        let n = rng.below(48) as usize;
+        for k in 0..n {
+            lcd.objs[k] = LcdObj {
+                x: rng.below(200) as i16 - 20,
+                y: rng.below(190) as i16 - 24,
+                tile: rng.below(1000) as u16,
+                attr: rng.below(256) as u8,
+            };
+        }
+        lcd.obj_count = n;
+        if rng.below(2) == 0 {
+            let (w, h) = (20 + rng.below(30) as i32, 15 + rng.below(30) as i32);
+            lcd.op(op::LCD_UNDER, &[w, h], None);
+            for j in 0..(w * h) as usize {
+                lcd.under[j] = rng.below(1000) as u16;
+                let mut a = rng.below(256) as u8 & !ATTR_HOLE;
+                if rng.below(5) == 0 {
+                    a |= ATTR_HOLE;
+                }
+                lcd.under_attr[j] = a;
+            }
+            lcd.under_on = true;
+            lcd.under_x = rng.below(400) as i32 - 60;
+            lcd.under_y = rng.below(400) as i32 - 60;
+            lcd.aliases[0] = (rng.below(1000) as u16, rng.below(1000) as u16);
+            lcd.aliases[1] = (lcd.under[0], 7);
+            lcd.alias_n = 2;
+        }
+        lcd
+    }
+
+    #[test]
+    fn render_rows_draws_what_the_reference_drew() {
+        let mut rng = Rng(0x2545_f491);
+        let mut a = vec![0u8; LCD_W * LCD_H];
+        let mut b = vec![0u8; LCD_W * LCD_H];
+        for case in 0..3000 {
+            let lcd = random_screen(&mut rng);
+            lcd.render_rows(&mut pattern, &mut a);
+            reference_render_rows(&lcd, &mut pattern, &mut b);
+            assert!(a == b, "case {case} differs");
+        }
+    }
+
+    /// cargo test --release lcd_render_bench -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn lcd_render_bench() {
+        extern crate std;
+        // VIEW 2D's shape: an under layer behind an all-hole background, a
+        // text row at the bottom, a few people as objects
+        let mut lcd = LcdScreen::default();
+        lcd.op(op::LCD_BANK, &[0, 1, 1024], None);
+        lcd.op(op::LCD_UNDER, &[40, 36], None);
+        let mut rng = Rng(7);
+        for j in 0..40 * 36 {
+            lcd.under[j] = rng.below(900) as u16;
+            lcd.under_attr[j] = rng.below(8) as u8;
+        }
+        lcd.under_on = true;
+        lcd.under_x = 37;
+        lcd.under_y = 21;
+        for i in 0..2048 {
+            lcd.attrs[i] = if (16..18).contains(&(i / 32)) && i % 32 < 20 { 1 } else { ATTR_HOLE };
+        }
+        for k in 0..8 {
+            lcd.objs[k] = LcdObj { x: 40 + k as i16 * 12, y: 50 + (k as i16 % 3) * 16, tile: 10 + k as u16, attr: 2 };
+        }
+        lcd.obj_count = 8;
+        let mut out = vec![0u8; LCD_W * LCD_H];
+        // rows from a table, as the 3DS host reads its unswizzled pages
+        let table: alloc::vec::Vec<[u8; 8]> = (0..1024u16 * 8).map(|k| pattern(1, k >> 3, (k & 7) as u8)).collect();
+        let mut pattern = |_page: u16, tile: u16, y: u8| table[((tile as usize) << 3 | y as usize) & (1024 * 8 - 1)];
+        for (name, new) in [("reference", false), ("render_rows", true), ("reference", false), ("render_rows", true)] {
+            let t = std::time::Instant::now();
+            for _ in 0..3000 {
+                if new {
+                    lcd.render_rows(&mut pattern, &mut out);
+                } else {
+                    reference_render_rows(&lcd, &mut pattern, &mut out);
+                }
+            }
+            std::println!("{name}: {:.1} us a frame", t.elapsed().as_secs_f64() * 1e6 / 3000.0);
+        }
     }
 
     fn frame(lcd: &LcdScreen) -> alloc::vec::Vec<u8> {
