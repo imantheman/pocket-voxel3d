@@ -9,6 +9,8 @@ import { Lcd } from "../voxelmon/game/gen2/platform/lcd.ts";
 import { seed } from "../voxelmon/game/gen2/platform/rng.ts";
 import { Game2 } from "../voxelmon/game/gen2/core/Game2.ts";
 import * as Map2d from "../voxelmon/game/gen2/platform/map2d.ts";
+import { setLcd } from "../voxelmon/game/gen2/platform/screen.ts";
+import { peopleView_W6 } from "../voxelmon/game/gen2/world/World.ts";
 import { VOX_BTN } from "../contracts/spec/voxel-spec.ts";
 
 const now = (globalThis as unknown as { voxel: { now: () => number } }).voxel.now;
@@ -56,6 +58,39 @@ let inWorld = 0;
   t.end += e - d;
   if (t.n % 300 === 0) {
     console.log(`[view2d] us/shown frame: step ${(t.step / t.n).toFixed(0)} draw ${(t.draw / t.n).toFixed(0)} lcd.end ${(t.end / t.n).toFixed(0)} (map ${game.world?.map?.id})`);
+    // the 2D map alone, and the people list it reads, timed in a loop
+    setLcd(lcd);
+    const R = 40;
+    let m = 0;
+    let pv = 0;
+    for (let k = 0; k < R; k++) {
+      lcd.begin();
+      const a1 = now();
+      Map2d.drawMap2D(game.world, game.data);
+      const b1 = now();
+      const out: any[] = [];
+      peopleView_W6(game.world, out, false, false, false);
+      const c1 = now();
+      m += b1 - a1;
+      pv += c1 - b1;
+    }
+    console.log(`[view2d]   drawMap2D ${(m / R).toFixed(0)} us (of which the people list ~${(pv / R).toFixed(0)} us)`);
+    let uv = 0;
+    let mk = 0;
+    for (let k = 0; k < R; k++) {
+      const a2 = now();
+      game.world.updateView();
+      const b2 = now();
+      game.world.mapCacheKey(game.world.map.id);
+      const c2 = now();
+      uv += b2 - a2;
+      mk += c2 - b2;
+    }
+    console.log(`[view2d]   updateView ${(uv / R).toFixed(1)} us, mapCacheKey ${(mk / R).toFixed(1)} us`);
+    const tt = (globalThis as any).__tt; const tn = (globalThis as any).__ttn;
+    if (tt) console.log(`[view2d]   marks: ${tt.map((v: number) => (v / tn).toFixed(1)).join(" | ")}  (updateView | key+tiles | palettes | cells | regs | people | sprites-setup | sprites)`);
+    const q = (globalThis as any).__m2d;
+    if (q) console.log(`[view2d]   split: setup ${(q[0] / q[4]).toFixed(0)} palettes ${(q[1] / q[4]).toFixed(0)} cells ${(q[2] / q[4]).toFixed(0)} sprites ${(q[3] / q[4]).toFixed(0)}`);
     t.n = t.step = t.draw = t.end = 0;
   }
 };

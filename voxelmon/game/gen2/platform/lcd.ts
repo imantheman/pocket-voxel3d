@@ -267,6 +267,26 @@ export class Lcd {
   }
 
   /**
+   * Put these four colours in slot `slot` this frame (the 2D map reserves
+   * BG slots 0-7 for its own eight, so its attribute bytes can be copied
+   * straight in). Slots fill in order: set 0, 1, ... before anything asks
+   * palette() for one, and later palette() calls find or follow them.
+   */
+  setPalette(slot: number, p: Palette4, obj = false): void {
+    const keys = obj ? this.objPalKeys : this.bgPalKeys;
+    if (slot < 0 || slot >= LCD_PALS || slot > keys.length) return;
+    keys[slot] = "";
+    const b = (obj ? 16 * 4 : 0) + slot * 4;
+    const cols = this.s.colours;
+    cols[b] = rgb555(p[0]);
+    cols[b + 1] = rgb555(p[1]);
+    cols[b + 2] = rgb555(p[2]);
+    cols[b + 3] = rgb555(p[3]);
+    if (obj) this.lastObjPal = null;
+    else this.lastBgPal = null;
+  }
+
+  /**
    * A palette slot already handed out this frame that has colour `c`, as
    * slot*4 + index, or -1. Lets a flat fill reuse a text palette's paper
    * instead of spending a slot of its own.

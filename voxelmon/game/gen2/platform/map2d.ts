@@ -29,6 +29,8 @@ const ROOF_FIRST = 0x0a;
 const ROOF_COUNT = 9;
 const COLS = 21;
 const ROWS = 19;
+/** Border tiles kept round a map's grid: the camera never sees further off. */
+const PAD = 12;
 
 const images = new Map<string, LcdImage | null>();
 function image(path: string | undefined): LcdImage | null {
@@ -45,19 +47,16 @@ function image(path: string | undefined): LcdImage | null {
   return img;
 }
 
-/** One map's screen tiles, worked out once. */
+/** One map's screen tiles, worked out once, with PAD tiles of border round them. */
 interface MapTiles {
   key: string;
   map: unknown;
   version: number;
-  /** tile columns and rows (blocks x 4) */
-  tw: number;
-  th: number;
+  /** padded columns and rows: (blocks x 4) + 2 * PAD */
+  pw: number;
+  ph: number;
   ids: Uint16Array;
   pal: Uint8Array;
-  /** the border block's 16 tiles, for the cells off the map */
-  borderIds: Uint16Array;
-  borderPal: Uint8Array;
 }
 
 let cached: MapTiles | null = null;
@@ -72,32 +71,24 @@ function tilesFor(world: any, map: any, key: string): MapTiles | null {
   const idOf = (tile: number): number =>
     ((roof && tile >= ROOF_FIRST && tile < ROOF_FIRST + ROOF_COUNT ? roof.ids[tile - ROOF_FIRST] : img.ids[tile]) ?? 0) & 0xffff;
   const palOf = (tile: number): number => ((tilePal[tile] ?? 1) - 1) & 7;
-  const tw = (map.width ?? 0) * 4;
-  const th = (map.height ?? 0) * 4;
-  const ids = new Uint16Array(tw * th);
-  const pal = new Uint8Array(tw * th);
-  for (let ty = 0; ty < th; ty++) {
-    for (let tx = 0; tx < tw; tx++) {
-      const tile = map.tileAt(tx, ty) ?? 0;
-      ids[ty * tw + tx] = idOf(tile);
-      pal[ty * tw + tx] = palOf(tile);
+  // tileAt reads the border block off the map, so the margin fills itself
+  const pw = (map.width ?? 0) * 4 + 2 * PAD;
+  const ph = (map.height ?? 0) * 4 + 2 * PAD;
+  const ids = new Uint16Array(pw * ph);
+  const pal = new Uint8Array(pw * ph);
+  for (let y = 0; y < ph; y++) {
+    for (let x = 0; x < pw; x++) {
+      const tile = map.tileAt(x - PAD, y - PAD) ?? 0;
+      ids[y * pw + x] = idOf(tile);
+      pal[y * pw + x] = palOf(tile);
     }
   }
-  // tileAt off the map reads the border block: its 4x4 tiles, once
-  const borderIds = new Uint16Array(16);
-  const borderPal = new Uint8Array(16);
-  for (let r = 0; r < 4; r++) {
-    for (let c = 0; c < 4; c++) {
-      const tile = map.tileAt(-4 + c, -4 + r) ?? 0;
-      borderIds[r * 4 + c] = idOf(tile);
-      borderPal[r * 4 + c] = palOf(tile);
-    }
-  }
-  cached = { key, map, version: map.version ?? 0, tw, th, ids, pal, borderIds, borderPal };
+  cached = { key, map, version: map.version ?? 0, pw, ph, ids, pal };
   return cached;
 }
 
-const spriteCache = new Map<string, { sheet: LcdImage; colours: Palette4 | null } | null>();
+// per sheet path: the sheet, and its palette per OBJ palette id and time of day
+const spriteCache = new Map<string, { sheet: LcdImage | null; pals: Map<string, Palette4 | null> }>();
 const actors: any[] = [];
 
 /** Draw the 2D overworld for this frame; false when there is nothing to draw. */
@@ -113,34 +104,27 @@ export function drawMap2D(world: any, data: any): boolean {
   const camX = Math.floor(world.camera?.x ?? 0);
   const camY = Math.floor(world.camera?.y ?? 0);
 
-  // the eight BG palettes, each matched to a screen slot once a frame
-  const slots = [0, 0, 0, 0, 0, 0, 0, 0];
+  // the eight BG palettes in screen slots 0-7, so the grid's palette bytes
+  // ARE the attribute bytes (drawn first in the frame, nothing holds a slot yet)
   for (let s = 0; s < 8; s++) {
     const p = bgSet?.[s] ?? bgSet?.[0];
-    slots[s] = p ? lcd.palette(p) & 0xef : 0;
+    if (p) lcd.setPalette(s, p);
   }
 
   const cells = lcd.s.cells;
   const attrs = lcd.s.attrs;
-  const tx0 = Math.floor(camX / 8);
-  const ty0 = Math.floor(camY / 8);
+  const ids = t.ids;
+  const pal = t.pal;
+  const pw = t.pw;
+  // the window in padded coordinates, clamped (it never needs to be)
+  const x0 = Math.max(0, Math.min(pw - COLS, Math.floor(camX / 8) + PAD));
+  const y0 = Math.max(0, Math.min(t.ph - ROWS, Math.floor(camY / 8) + PAD));
+  // row by row, natively: a JS loop over the 399 cells was most of the frame
   for (let r = 0; r < ROWS; r++) {
-    const ty = ty0 + r;
-    const inRow = ty >= 0 && ty < t.th;
-    const base = ty * t.tw;
-    const br = (((ty % 4) + 4) % 4) * 4;
-    for (let c = 0; c < COLS; c++) {
-      const tx = tx0 + c;
-      const i = r * 32 + c;
-      if (inRow && tx >= 0 && tx < t.tw) {
-        cells[i] = t.ids[base + tx]!;
-        attrs[i] = slots[t.pal[base + tx]!]!;
-      } else {
-        const b = br + (((tx % 4) + 4) % 4);
-        cells[i] = t.borderIds[b]!;
-        attrs[i] = slots[t.borderPal[b]!]!;
-      }
-    }
+    const src = (y0 + r) * pw + x0;
+    const dst = r << 5;
+    cells.set(ids.subarray(src, src + COLS), dst);
+    attrs.set(pal.subarray(src, src + COLS), dst);
   }
   lcd.regs({ scx: camX & 7, scy: camY & 7 });
 
@@ -158,23 +142,23 @@ export function drawMap2D(world: any, data: any): boolean {
     const e = actors[k];
     const v = e?.view;
     if (!v || v.visible === false) continue;
-    const gfx = v.gfx ?? sprites[v.spriteId]?.image;
-    const ck = `${gfx}|${v.spriteId}|${v.palette}|${daytime}`;
-    let s = spriteCache.get(ck);
-    if (s === undefined) {
-      const sheet = image(gfx);
-      if (sheet) {
-        const def = sprites[v.spriteId] ?? { paletteId: v.palette };
-        const colours = Palettes.spritePalette(world.palettes, daytime, def) as unknown as Palette4 | undefined;
-        s = { sheet, colours: colours ?? null };
-      } else {
-        s = null;
-      }
-      spriteCache.set(ck, s);
+    const gfx: string | undefined = v.gfx ?? sprites[v.spriteId]?.image;
+    if (!gfx) continue;
+    let s = spriteCache.get(gfx);
+    if (!s) {
+      s = { sheet: image(gfx), pals: new Map() };
+      spriteCache.set(gfx, s);
     }
-    if (!s) continue;
     const sheet = s.sheet;
-    const pal = s.colours ? lcd.palette(s.colours, true) : 0;
+    if (!sheet) continue;
+    const pk = daytime + (v.palette ?? sprites[v.spriteId]?.paletteId ?? "");
+    let colours = s.pals.get(pk);
+    if (colours === undefined) {
+      const def = sprites[v.spriteId] ?? { paletteId: v.palette };
+      colours = (Palettes.spritePalette(world.palettes, daytime, def) as unknown as Palette4 | undefined) ?? null;
+      s.pals.set(pk, colours);
+    }
+    const pal = colours ? lcd.palette(colours, true) : 0;
     const frames = Math.max(1, sheet.th >> 1);
     const f = Math.min(frames - 1, Math.max(0, v.frame ?? 0));
     const x0 = Math.round(v.px + (e.ox ?? 0) - camX);
