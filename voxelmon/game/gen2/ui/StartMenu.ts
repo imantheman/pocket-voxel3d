@@ -74,6 +74,12 @@ const ITEMS: StartMenuItem[] = [
     desc: Strings.source("Change\nsettings"),
   },
   {
+    // Not the cart's: the Kanto games' DEV entry (ui/DevMenu.ts), there only
+    // while the OPTION screen's DEV MENU is ON.
+    id: "dev", label: Strings.source("DEV"), need: "dev",
+    desc: Strings.source("Testing\ntools"),
+  },
+  {
     // Only once a mod has been discovered; never on the 3DS (no mods).
     id: "mods", label: Strings.source("MODS"), need: "mods",
     desc: Strings.source("Installed\nadd-ons"),
@@ -183,6 +189,7 @@ export class StartMenu {
       party: (save.party ?? []).length > 0,
       pack: true,
       pokegear: engine[ENGINE_POKEGEAR] === true || (inventory.POKEGEAR ?? 0) > 0 || save.pokegearReceived === true,
+      dev: ((this.game && this.game.options) || save.options || {}).devMenu === true,
     };
   }
 

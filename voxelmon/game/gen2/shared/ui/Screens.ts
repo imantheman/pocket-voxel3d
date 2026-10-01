@@ -18,6 +18,7 @@ import * as M_ContestMenu from "../../ui/ContestMenu.ts";
 import * as M_CopyrightSplash from "../../ui/CopyrightSplash.ts";
 import * as M_Credits from "../../ui/Credits.ts";
 import * as M_CrystalIntro from "../../ui/CrystalIntro.ts";
+import * as M_DevMenu from "../../ui/DevMenu.ts";
 import * as M_CrystalSplash from "../../ui/CrystalSplash.ts";
 import * as M_DayCareMenu from "../../ui/DayCareMenu.ts";
 import * as M_DecorationMenu from "../../ui/DecorationMenu.ts";
@@ -126,6 +127,7 @@ const BUILTIN: Record<string, () => Factory> = {
   Gen2ScriptMenu: () => pick(M_ScriptMenu, "ScriptMenu"),
   Gen2SlotMachine: () => pick(M_SlotMachine, "SlotMachine"),
   Gen2StartMenu: () => pick(M_StartMenu, "StartMenu"),
+  Gen2DevMenu: () => pick(M_DevMenu, "DevMenu"),
   Gen2SummaryMenu: () => pick(M_SummaryMenu, "SummaryMenu"),
   Gen2TitleState: () => pick(M_TitleState, "TitleState"),
   Gen2TradeAnim: () => pick(M_TradeAnim, "TradeAnimView"),

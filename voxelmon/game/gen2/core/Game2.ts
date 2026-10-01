@@ -352,6 +352,8 @@ export class Game2 {
       });
     } else if (id === "option") {
       this.showOptions(back);
+    } else if (id === "dev") {
+      Screens.push(this, "Gen2DevMenu", { onClose: back });
     }
   }
 

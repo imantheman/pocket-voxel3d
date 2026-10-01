@@ -235,6 +235,15 @@ const ROWS: OptionRow[] = [
     },
     text: (options) => Strings.get(VIEW_MODES[viewIndex(options.battleView)]!.label),
   },
+  // Not the Lua's: the Kanto games' DEV MENU -- a DEV entry in the START
+  // menu with the playtesting tools (ui/DevMenu.ts). OFF unless set.
+  {
+    label: Strings.source("DEV MENU"), key: "devMenu", port: true,
+    cycle: (options) => {
+      options.devMenu = options.devMenu !== true;
+    },
+    text: (options) => Strings.get(options.devMenu === true ? "ON" : "OFF"),
+  },
   // Lua: OptionsMenu.lua:428
   {
     label: Strings.source("LOGIC CLOCK"), key: "logicClock", port: true,
@@ -277,7 +286,7 @@ const GROUPS: Group[] = [
     id: "group.battle", label: Strings.source("BATTLE OPTIONS"),
     members: ["battleScene", "battleStyle", "battleLayout", "battleHud", "battleFit", "battleBg"],
   },
-  { id: "group.extras", label: Strings.source("EXTRAS"), members: ["zoom", "voidFill", "tilt"] },
+  { id: "group.extras", label: Strings.source("EXTRAS"), members: ["zoom", "voidFill", "tilt", "devMenu"] },
 ];
 
 // Lua: OptionsMenu.lua:501

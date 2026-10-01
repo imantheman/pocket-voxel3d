@@ -165,6 +165,61 @@ describe("gen2 OPTION screen's port rows", () => {
   });
 });
 
+describe("gen2 DEV menu (the Kanto games' DEV MENU option)", () => {
+  test.skipIf(!gold)("DEV in START only with DEV MENU on; RARE CANDY, CARD TEST, WARP", async () => {
+    useGoldGen();
+    const { useGoldTiles } = await import("../voxelmon/game/gen2/platform/shot-node.ts");
+    useGoldTiles();
+    const game: any = Game2.new();
+    const lcd = new Lcd(new RecorderHost());
+    setLcd(lcd);
+    game.load({ startWorld: true });
+    for (let i = 0; i < 30; i++) game.frame(0);
+    const startIds = (): string[] => {
+      game.openStartMenu();
+      const ids = (game.stack.top() as any).items.map((it: any) => it.value);
+      game.stack.pop();
+      return ids;
+    };
+    delete game.options.devMenu;
+    expect(startIds()).not.toContain("dev");
+    game.options.devMenu = true;
+    expect(startIds()).toContain("dev");
+
+    // the menu, as START -> DEV opens it
+    game.openStartMenu();
+    game.pushStartMenuItem("dev");
+    const dev: any = game.stack.top();
+    expect(dev.screenId).toBe("Gen2DevMenu");
+    game.draw(lcd);
+    await shot(lcd, "dev_menu");
+    // RARE CANDY: topped up to 99, and a word about it
+    game.save.inventory.RARE_CANDY = 5;
+    dev.pick("candy");
+    expect(game.save.inventory.RARE_CANDY).toBe(99);
+    expect(game.stack.top()).not.toBe(dev);
+    game.stack.pop();
+    // CARD TEST with no host to ask says so
+    dev.pick("cardtest");
+    expect(game.stack.top()).not.toBe(dev);
+    game.stack.pop();
+    // WARP: the list opens on the map stood in; a pick lands on that map
+    // with the menus gone
+    dev.pick("warp");
+    expect(dev.phase).toBe("warp");
+    expect(dev.maps[dev.warpList.index - 1]).toBe(game.world.map.id);
+    game.draw(lcd);
+    await shot(lcd, "dev_warp");
+    dev.page(1);
+    expect(dev.warpList.index).toBeGreaterThan(1);
+    dev.warp("ROUTE_29");
+    for (let i = 0; i < 120; i++) game.frame(0);
+    expect(game.world.map.id).toBe("ROUTE_29");
+    expect(game.stack.top()).toBeUndefined();
+    delete game.options.devMenu;
+  });
+});
+
 describe("gen2 credits", () => {
   test.skipIf(!gold)("runs the script to THE END; A then leaves", async () => {
     const { game, lcd } = await loaded();

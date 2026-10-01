@@ -72,6 +72,8 @@ const view = new WorldView(host, walker as ConstructorParameters<typeof WorldVie
 (globalThis as unknown as { goldGame?: Game2 }).goldGame = game;
 // the bottom screen's status panel (ui/Companion.ts)
 const companion = new Companion(host, banks);
+// the DEV menu's CARD TEST asks the host to write and read back a file
+(game as unknown as { host?: unknown }).host = host;
 try {
   game.load();
 } catch (e) {
