@@ -131,16 +131,40 @@ export function now(): number {
   return source.now();
 }
 
+// The engine asks the clock several times a step (the phone's call delay,
+// the daily reset, Pokerus, the swarms -- each through BugContest.now()),
+// and a local-time breakdown is a handful of Date objects and a libc
+// localtime each: most of an overworld step on the 3DS. Both directions are
+// remembered for the last second / table asked, per source; a caller gets
+// its own copy of the breakdown, so writing into it changes nothing here.
+let lastLocalSource: ClockSource | null = null;
+let lastLocalSec = Number.NaN;
+let lastLocal: LocalTime | null = null;
+let lastMkSource: ClockSource | null = null;
+let lastMkKey = "";
+let lastMk = 0;
+
 /** The local-time breakdown at `seconds` (default: now). */
 export function localTime(seconds?: number): LocalTime {
-  const s = seconds ?? source.now();
-  return (source.local ?? dateLocal)(Math.floor(s));
+  const s = Math.floor(seconds ?? source.now());
+  if (lastLocal === null || lastLocalSource !== source || lastLocalSec !== s) {
+    lastLocal = (source.local ?? dateLocal)(s);
+    lastLocalSource = source;
+    lastLocalSec = s;
+  }
+  return { ...lastLocal };
 }
 
 /** os.time([t]) */
 export function osTime(t?: Partial<LocalTime>): number {
   if (t === undefined) return Math.floor(source.now());
-  return Math.floor((source.mktime ?? dateMktime)(t));
+  const key = `${t.year},${t.month},${t.day},${t.hour},${t.min},${t.sec}`;
+  if (lastMkSource !== source || lastMkKey !== key) {
+    lastMk = Math.floor((source.mktime ?? dateMktime)(t));
+    lastMkSource = source;
+    lastMkKey = key;
+  }
+  return lastMk;
 }
 
 const pad2 = (n: number): string => String(n).padStart(2, "0");

@@ -339,10 +339,13 @@ function clockOf(ctx: PhoneCtx): PhoneClock {
       minute: tonumber(clock.minute ?? clock.min) ?? 0,
     };
   }
+  // os.date's %j, %H and %M, read off one breakdown rather than three
+  // formatted strings (this runs every overworld step)
+  const t = osDate("*t");
   return {
-    day: mod(tonumber(osDate("%j")) ?? 1, MAX_DAY),
-    hour: tonumber(osDate("%H")) ?? 0,
-    minute: tonumber(osDate("%M")) ?? 0,
+    day: mod(t.yday ?? 1, MAX_DAY),
+    hour: t.hour ?? 0,
+    minute: t.min ?? 0,
   };
 }
 
