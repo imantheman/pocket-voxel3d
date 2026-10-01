@@ -22831,14 +22831,16 @@ function is2d(v) {
   return v === "2d";
 }
 
-// voxelmon/game/ui/optionsmenu.ts
-var OPTIONS_VISIBLE = 4;
+// voxelmon/game/cameraspeed.ts
 var CAMERA_SPEEDS = [
   { key: "slow", label: "SLOW", q8: 128 },
   { key: "normal", label: "NORMAL", q8: 256 },
   { key: "fast", label: "FAST", q8: 448 }
 ];
 var CAMERA_SPEED_DEFAULT_Q8 = 256;
+
+// voxelmon/game/ui/optionsmenu.ts
+var OPTIONS_VISIBLE = 4;
 
 class OptionsMenuState {
   game;
