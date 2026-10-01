@@ -16,6 +16,7 @@ import { chooseView } from "../../battle/staging.ts";
 import type { GameMap } from "../../world/map.ts";
 import { Map as GoldMap } from "../world/Map.ts";
 import { FieldMoves } from "../world/FieldMoves.ts";
+import { is2d } from "../../viewmode.ts";
 
 const SIDE_PLAYER = 0;
 const SIDE_ENEMY = 1;
@@ -72,10 +73,15 @@ export class BattleStage {
    * while a battle is staged: the world view then leaves the camera and the
    * field actors to the battle.
    */
+  /** Would this frame stage a battle in 3D (one is up, BATTLES is 3D, a world is behind it)? */
+  wanted(game: any): boolean {
+    return !is2d(game?.options?.battleView) && !!this.battleState(game) && !!game?.world?.map;
+  }
+
   emit(game: any, palettes: any): boolean {
     const st = this.battleState(game);
     const world = game?.world;
-    if (!st || !world?.map || !world.player) {
+    if (!st || !world?.map || !world.player || is2d(game?.options?.battleView)) {
       this.end();
       return false;
     }

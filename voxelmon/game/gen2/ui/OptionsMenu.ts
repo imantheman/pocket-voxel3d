@@ -49,6 +49,7 @@ import { Font } from "../shared/render/Font.ts";
 import { GbcPalette } from "../shared/render/GbcPalette.ts";
 import { tonumber, tostring } from "../platform/lua.ts";
 import { TILT_SHIFTS, tiltShiftLevel } from "../../tiltshift.ts";
+import { VIEW_MODES, viewIndex } from "../../viewmode.ts";
 
 type Options = Record<string, any>;
 
@@ -196,6 +197,22 @@ const ROWS: OptionRow[] = [
     },
     text: (options) => Strings.get(TILT_SHIFTS[tiltShiftLevel(options.tiltShift)]!.label),
   },
+  // Not the Lua's: the 3D world or the cart's 2D screen, and the same for
+  // battles (voxelmon/game/viewmode.ts).
+  {
+    label: Strings.source("VIEW"), key: "view", port: true,
+    cycle: (options) => {
+      options.view = VIEW_MODES[1 - viewIndex(options.view)]!.key;
+    },
+    text: (options) => Strings.get(VIEW_MODES[viewIndex(options.view)]!.label),
+  },
+  {
+    label: Strings.source("BATTLES"), key: "battleView", port: true,
+    cycle: (options) => {
+      options.battleView = VIEW_MODES[1 - viewIndex(options.battleView)]!.key;
+    },
+    text: (options) => Strings.get(VIEW_MODES[viewIndex(options.battleView)]!.label),
+  },
   // Lua: OptionsMenu.lua:428
   {
     label: Strings.source("LOGIC CLOCK"), key: "logicClock", port: true,
@@ -227,7 +244,7 @@ const GROUPS: Group[] = [
   },
   {
     id: "group.graphics", label: Strings.source("GRAPHICS"),
-    members: ["color", "uiLetterbox", "shaderfx", "shaderfx2", "frame", "tiltShift"],
+    members: ["color", "uiLetterbox", "shaderfx", "shaderfx2", "frame", "view", "battleView", "tiltShift"],
   },
   { id: "group.audio", label: Strings.source("AUDIO"), members: ["sound", "musicVol", "sfxVol", "musicFilter"] },
   {

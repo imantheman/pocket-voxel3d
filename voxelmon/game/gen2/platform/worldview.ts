@@ -11,6 +11,7 @@
 import { ENT_FLAG, ENTS_MAX, Q4 } from "../../../../contracts/spec/voxel-spec.ts";
 import type { VoxelHost } from "../../host.ts";
 import { BattleStage, type StageData } from "./battlestage.ts";
+import { is2d } from "../../viewmode.ts";
 import { Palettes } from "../world/Palettes.ts";
 
 /** The `daytime` op's order (cook/gen2.ts GEN2_DAYTIMES). */
@@ -138,12 +139,23 @@ export class WorldView {
   }
 
   /** Emit this frame's scene from the game's world, if it has one. */
-  emit(game: { world?: any; frameWorldActive?: boolean }): void {
+  emit(game: { world?: any; frameWorldActive?: boolean; options?: any }): void {
     if (!this.started) {
       // the overworld camera's opening rung, as the Kanto scene starts it
       // (scene.ts: PITCH_RUNGS[2] = 35 degrees); the player steers from there
       this.started = true;
       this.host.pitch(2);
+    }
+    // VIEW 2D: the Gold screen draws the map (map2d.ts) and the voxel world
+    // stands down -- except for a battle staged in 3D (BATTLES 3D)
+    const flat = is2d(game?.options?.view) && !(this.stage.wanted(game));
+    if (flat) {
+      if (this.lastTint !== 0xff000000) {
+        this.host.tint(0xff000000);
+        this.lastTint = 0xff000000;
+      }
+      this.clear();
+      return;
     }
     this.emitTint(game);
     const world = game.world;

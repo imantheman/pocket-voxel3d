@@ -17,6 +17,8 @@
 //   the voxel scene underneath (platform/worldview.ts), and the screens
 //   draw over it, their untouched cells left as holes.
 
+import { drawMap2D } from "../platform/map2d.ts";
+import { is2d } from "../../viewmode.ts";
 import { loadGenerated } from "../platform/data.ts";
 import type { Lcd } from "../platform/lcd.ts";
 import G, { resetDrawState, setLcd } from "../platform/screen.ts";
@@ -827,8 +829,10 @@ export class Game2 {
         this.stack.draw();
         return;
       }
-      // the world is the voxel scene; the stack draws over its holes
+      // the world is the voxel scene; the stack draws over its holes -- or,
+      // with VIEW 2D, the map drawn on the Gold screen itself (map2d.ts)
       this.frameWorldActive = true;
+      if (is2d(this.options?.view)) drawMap2D(this.world, this.data);
       this.coverFadedWorld();
       this.world.drawOverlay?.();
       if (this.stack.top()) this.stack.draw();
