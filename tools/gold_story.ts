@@ -17,6 +17,7 @@ import { Permissions } from "../voxelmon/game/gen2/world/Permissions.ts";
 import { FieldMoves } from "../voxelmon/game/gen2/world/FieldMoves.ts";
 import { FlagNames } from "../voxelmon/game/gen2/core/FlagNames.ts";
 import { Map as MapClass } from "../voxelmon/game/gen2/world/Map.ts";
+import { seed } from "../voxelmon/game/gen2/platform/rng.ts";
 
 type Dir = "up" | "down" | "left" | "right";
 const DIRS: Dir[] = ["up", "down", "left", "right"];
@@ -35,6 +36,8 @@ export const fail = (msg: string): never => {
 };
 
 export const game: any = Game2.new();
+// SEED=n: the game's rolls from a chosen start (encounters, battles, AI)
+if (process.env.SEED) seed(Number(process.env.SEED));
 game.load({ startWorld: true });
 const lcd = new Lcd(new RecorderHost());
 export let frames = 0;
