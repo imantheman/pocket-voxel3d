@@ -445,24 +445,51 @@ let gen2ProfileCache: Profile | null | undefined;
  * plus `heights` and the `collision` class table; `collision_prism` is
  * Prism's overlay and Gold never reads it (TileShape.lua:717).
  */
+/**
+ * The fork's profile as the cook keeps it -- `heights`, `collision`, and the
+ * TilesetX entries of `tilesets` and `buildings` -- dumped from the Lua
+ * through LuaJIT. Only tools/gen2_profile_snapshot.ts calls this now.
+ */
+export function dumpGen2Profile(path: string): Profile {
+  const dump = fileURLToPath(new URL("../import/lua-dump.lua", import.meta.url));
+  const raw = JSON.parse(
+    execFileSync("luajit", [dump, path], { encoding: "utf8", maxBuffer: 64 << 20 }),
+  ) as Profile & Record<string, unknown>;
+  const keep = <T>(rec: Record<string, T> | undefined): Record<string, T> => {
+    const o: Record<string, T> = {};
+    for (const [k, v] of Object.entries(rec ?? {})) if (k.startsWith("Tileset")) o[k] = v;
+    return o;
+  };
+  return { heights: raw.heights, collision: raw.collision, tilesets: keep(raw.tilesets), buildings: keep(raw.buildings) };
+}
+
+/**
+ * The snapshot of the fork's profile this repository carries
+ * (voxelmon/cook/gen2-profile.json, MIT -- gen2-profile.LICENSE), so a cook
+ * needs neither the fork's checkout nor LuaJIT.
+ */
+export const GEN2_PROFILE_SNAPSHOT = fileURLToPath(new URL("./gen2-profile.json", import.meta.url));
+
 export function loadGen2Profile(tilesetIds: string[]): Profile | null {
   if (gen2ProfileCache !== undefined) return gen2ProfileCache;
-  const path = join(voxelmodGen2Dir(), "data/voxel_heights.lua");
-  if (!existsSync(path)) {
-    console.error(`voxel cook: Gen 2 profile not found: ${path} (set VOXELMON_VOXELMOD_GEN2)`);
-    gen2ProfileCache = null;
-    return null;
-  }
-  const dump = fileURLToPath(new URL("../import/lua-dump.lua", import.meta.url));
-  let raw: Profile & Record<string, unknown>;
-  try {
-    raw = JSON.parse(
-      execFileSync("luajit", [dump, path], { encoding: "utf8", maxBuffer: 64 << 20 }),
-    ) as Profile & Record<string, unknown>;
-  } catch (error) {
-    console.error(`voxel cook: Gen 2 profile failed to load (${String(error)})`);
-    gen2ProfileCache = null;
-    return null;
+  let raw: Profile;
+  if (!process.env.VOXELMON_VOXELMOD_GEN2 && existsSync(GEN2_PROFILE_SNAPSHOT)) {
+    raw = JSON.parse(readFileSync(GEN2_PROFILE_SNAPSHOT, "utf8")).profile as Profile;
+  } else {
+    // a checkout named explicitly (or no snapshot): the Lua, through LuaJIT
+    const path = join(voxelmodGen2Dir(), "data/voxel_heights.lua");
+    if (!existsSync(path)) {
+      console.error(`voxel cook: Gen 2 profile not found: ${path} (set VOXELMON_VOXELMOD_GEN2)`);
+      gen2ProfileCache = null;
+      return null;
+    }
+    try {
+      raw = dumpGen2Profile(path);
+    } catch (error) {
+      console.error(`voxel cook: Gen 2 profile failed to load (${String(error)})`);
+      gen2ProfileCache = null;
+      return null;
+    }
   }
   const out: Profile = { heights: raw.heights, collision: raw.collision, tilesets: {}, buildings: {} };
   for (const id of tilesetIds) {
