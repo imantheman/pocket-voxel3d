@@ -1625,7 +1625,13 @@ impl LcdTex {
             }
             let (_, lin, w) = &pages[last];
             let cols = (*w / 8).max(1);
-            let (tx, ty) = (tile as usize % cols, tile as usize / cols);
+            // pages are a power of two wide: a shift and a mask, where a
+            // divide would be a call on the ARM11
+            let (tx, ty) = if cols.is_power_of_two() {
+                (tile as usize & (cols - 1), tile as usize >> cols.trailing_zeros())
+            } else {
+                (tile as usize % cols, tile as usize / cols)
+            };
             let at = (ty * 8 + y as usize) * *w + tx * 8;
             let mut r = [0u8; 8];
             if let Some(src) = lin.get(at..at + 8) {
@@ -1643,14 +1649,22 @@ impl LcdTex {
             lut[i] = (r << 11) | (g << 6) | (b << 1) | 1;
         }
         lut[pocketvoxel_core::lcd::LCD_HOLE as usize] = 0;
+        // Line by line into the Morton order (MX[x] | MY[y] places a pixel
+        // in its tile), the source read straight along: the per-pixel table
+        // walk was most of this on the 3DS.
         let lw = pocketvoxel_core::lcd::LCD_W;
-        for ty in 0..pocketvoxel_core::lcd::LCD_H / 8 {
-            for tx in 0..lw / 8 {
-                let base = (ty * (256 / 8) + tx) * 64;
-                for (m, &(px, py)) in MORTON8.iter().enumerate() {
-                    let v = lut[self.fb[(ty * 8 + py as usize) * lw + tx * 8 + px as usize] as usize];
-                    self.data[(base + m) * 2] = v as u8;
-                    self.data[(base + m) * 2 + 1] = (v >> 8) as u8;
+        const MX: [usize; 8] = [0, 1, 4, 5, 16, 17, 20, 21];
+        const MY: [usize; 8] = [0, 2, 8, 10, 32, 34, 40, 42];
+        for y in 0..pocketvoxel_core::lcd::LCD_H {
+            let line = &self.fb[y * lw..(y + 1) * lw];
+            let base = (y >> 3) * (256 / 8) * 64 + MY[y & 7];
+            for (tx, px) in line.chunks_exact(8).enumerate() {
+                let b = (base + tx * 64) * 2;
+                let dst = &mut self.data[b..b + 44];
+                for x in 0..8 {
+                    let v = lut[px[x] as usize];
+                    dst[MX[x] * 2] = v as u8;
+                    dst[MX[x] * 2 + 1] = (v >> 8) as u8;
                 }
             }
         }
@@ -1677,20 +1691,6 @@ impl LcdTex {
         self.tex[self.cur].as_ref()
     }
 }
-
-/// A texture tile's 64 texels in PICA order: entry m is (x, y) within the
-/// tile -- tiled_off's Morton interleave, inverted.
-const MORTON8: [(u8, u8); 64] = {
-    let mut t = [(0u8, 0u8); 64];
-    let mut m = 0;
-    while m < 64 {
-        let x = (m & 1) | ((m >> 1) & 2) | ((m >> 2) & 4);
-        let y = ((m >> 1) & 1) | ((m >> 2) & 2) | ((m >> 3) & 4);
-        t[m] = (x as u8, y as u8);
-        m += 1;
-    }
-    t
-};
 
 fn tiled_off(x: u32, y: u32, tw: u32) -> usize {
     let (tx, ty) = (x / 8, y / 8);

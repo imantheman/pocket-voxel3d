@@ -392,23 +392,32 @@ impl LcdScreen {
                             return;
                         }
                         let (urow, upy) = ((gy >> 3) as usize * self.under_w, (gy & 7) as u8);
-                        for k in x..x + n {
+                        // an under cell's row at a time (a hole cell spans at
+                        // most two of them)
+                        let mut k = x;
+                        while k < x + n {
                             let gx = self.under_x + k as i32;
+                            let px0 = (gx & 7) as usize;
+                            let run = (8 - px0).min(x + n - k);
                             if gx < 0 || gx as usize >= self.under_w * 8 {
+                                k += run;
                                 continue;
                             }
                             let j = urow + (gx >> 3) as usize;
                             let ua = self.under_attr[j];
-                            if ua & ATTR_HOLE != 0 {
-                                continue;
+                            if ua & ATTR_HOLE == 0 {
+                                let ty = if ua & ATTR_Y_FLIP != 0 { 7 - upy } else { upy };
+                                let r = fetch(self.under[j], ty);
+                                let (base, pri, flip) = ((ua & ATTR_PAL) * 4, ua & ATTR_PRIORITY != 0, ua & ATTR_X_FLIP != 0);
+                                for q in 0..run {
+                                    let px = px0 + q;
+                                    let c = r[if flip { 7 - px } else { px }];
+                                    line[k + q] = base + c;
+                                    bg_col[k + q] = c;
+                                    bg_pri[k + q] = pri;
+                                }
                             }
-                            let ty = if ua & ATTR_Y_FLIP != 0 { 7 - upy } else { upy };
-                            let r = fetch(self.under[j], ty);
-                            let px = (gx & 7) as usize;
-                            let c = r[if ua & ATTR_X_FLIP != 0 { 7 - px } else { px }];
-                            line[k] = (ua & ATTR_PAL) * 4 + c;
-                            bg_col[k] = c;
-                            bg_pri[k] = ua & ATTR_PRIORITY != 0;
+                            k += run;
                         }
                     }
                     return;
