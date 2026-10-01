@@ -198,6 +198,16 @@ const ROWS: OptionRow[] = [
     },
     text: (options) => Strings.get(TILT_SHIFTS[tiltShiftLevel(options.tiltShift)]!.label),
   },
+  // Not the Lua's: the Kanto games' MOVEMENT row -- FREE walks with a
+  // continuous position steered by the camera (World.freeWalk), GRID the
+  // cart's cell by cell. FREE unless set, as on the Kanto games.
+  {
+    label: Strings.source("MOVEMENT"), key: "movement", port: true,
+    cycle: (options) => {
+      options.movement = options.movement === "grid" ? "free" : "grid";
+    },
+    text: (options) => Strings.get(options.movement === "grid" ? "GRID" : "FREE"),
+  },
   // Not the Lua's: how fast the C-stick swings the 3D camera
   // (voxelmon/game/cameraspeed.ts), stated to the host every frame by main.ts
   // -- the Kanto games' CAMERA SPEED row.
@@ -256,7 +266,11 @@ const GROUPS: Group[] = [
   },
   {
     id: "group.graphics", label: Strings.source("GRAPHICS"),
-    members: ["color", "uiLetterbox", "shaderfx", "shaderfx2", "frame", "view", "battleView", "tiltShift", "cameraSpeed"],
+    members: ["color", "uiLetterbox", "shaderfx", "shaderfx2", "frame", "view", "battleView", "tiltShift"],
+  },
+  // Not the Lua's: the Kanto games' MOVEMENT and CAMERA SPEED, together
+  {
+    id: "group.controls", label: Strings.source("CONTROLS"), members: ["movement", "cameraSpeed"],
   },
   { id: "group.audio", label: Strings.source("AUDIO"), members: ["sound", "musicVol", "sfxVol", "musicFilter"] },
   {
@@ -268,7 +282,7 @@ const GROUPS: Group[] = [
 
 // Lua: OptionsMenu.lua:501
 const ORDER = [
-  "group.speed", "group.video", "group.graphics", "group.audio",
+  "group.speed", "group.video", "group.graphics", "group.controls", "group.audio",
   "performance", "group.battle", "group.extras",
 ];
 

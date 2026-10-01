@@ -25,6 +25,7 @@
 // Lua's draws do. The lazy `require`s inside function bodies (Phone, PhoneRing, Happiness, Sound, GameVersion,
 // ScreenPosition, Pokegear) are hoisted to here.
 import { rotateFacing } from "./rotate.ts";
+import { cellOf, FREE_AXIS_LEAN, freeDir, quantize, slide, stickPush } from "../../world/freemove.ts";
 import { osTime } from "../platform/clock.ts";
 import { Apricorns } from "../core/Apricorns.ts";
 import { Bag } from "../shared/inventory/Bag.ts";
@@ -11031,6 +11032,9 @@ export class World {
 
     // Freeze player input while a script / textbox / cutscene move is up.
     if (this.busy()) {
+      // a free walk's body onto its cell first: a scripted step or a
+      // trainer's walk-up moves the player from the cell
+      if (this.player && !truthy(this.player.moving)) this.freeSnap();
       // Keep scripted entities animating mid-step. A step_dig spin has the
       // player standing still, so it ticks here too.
       if (this.player && (truthy(this.player.moving) || this.player.spinFrames != null)) {
@@ -11062,7 +11066,208 @@ export class World {
     // `landed` block, so a trainer whose line crosses a warp or coord-event
     // tile wins, as on hardware (events.asm:249).
     if (this.checkTrainerBattle()) return;
-    if (landed) {
+    if (landed && this.landedEvents()) return;
+
+    // People keep their anim paths even while the player is idle / mid-step.
+    this.updatePeople();
+
+    // MOVEMENT: FREE (the Kanto games' free walk, world/freemove.ts): the
+    // position is continuous and steered by the camera; the grid below still
+    // has the forced tiles and anything the body runs into.
+    if (!truthy(p.moving) && this.freeMoveActive() && this.freeWalk()) return;
+
+    this.gridInput(p);
+  }
+
+  // ---- MOVEMENT: FREE ---------------------------------------------------
+  //
+  // The Kanto games' free walk (voxelmon/game/world/overworld.ts freeWalk,
+  // world/freemove.ts), on Gold's World. The player's position is continuous
+  // and steered by the camera's yaw, so forward is where you look at any
+  // angle; THE GRID IS STILL THE GAME: the logical cell follows wherever the
+  // body stands, crossing into a cell runs landedEvents() as a grid step's
+  // landing does (warps, coord events, the step counter, encounters), and
+  // what the body runs into -- a map edge, a ledge, a boulder, the shore, a
+  // door in a wall -- is handed to the grid's movePlayer from the cell. The
+  // forced tiles (ice, currents, whirlpools, warp mats) stay the grid's.
+
+  /** Free movement wanted and possible: a host that sends the camera's yaw
+   *  (tests and the desktop never do, so they stay on the grid) and OPTIONS'
+   *  MOVEMENT not GRID. */
+  freeMoveActive(): boolean {
+    const game = this.game;
+    if (!game || game.camYaw === undefined) return false;
+    return game.options?.movement !== "grid";
+  }
+
+  /** Back onto the logical cell (a grid step starts from it). */
+  freeSnap(): void {
+    const p = this.player;
+    if (p.moving) return;
+    p.px = p.cellX * 16;
+    p.py = p.cellY * 16;
+  }
+
+  /** May the free body have a corner in cell (cx, cy)? The grid's own rules,
+   *  asked from the player's logical cell: walkable (or water, surfing), no
+   *  one there, nothing the grid has to step into itself (ice, a current, a
+   *  whirlpool), and the side walls GetMovementPermissions would
+   *  check for each axis the body crosses. */
+  freeOpen(cx: number, cy: number): boolean {
+    const p = this.player;
+    const map = this.map;
+    if (cx === p.cellX && cy === p.cellY) return true;
+    if (!map.inBounds(cx, cy)) return false;
+    const c = map.cellCollision(cx, cy);
+    if (FieldMoves.isSurfing(this.playerState)) {
+      if (Permissions.surfable(c) !== "water") return false;
+    } else if (!map.isWalkable(cx, cy)) {
+      return false;
+    }
+    // (a ledge's collision is on the cell stood on before the drop, which is
+    // walkable: the hop is the grid's, from that cell, in freeGridPush)
+    if (Permissions.isIce(c) || Permissions.isWhirlpool(c) || Permissions.currentDirection(c)) return false;
+    const collOf = (x: number, y: number): any => this.cellCollisionAcross(map, x, y);
+    const dx = Math.sign(cx - p.cellX);
+    const dy = Math.sign(cy - p.cellY);
+    if (dx !== 0 && !Permissions.stepPermitted(collOf, p.cellX, p.cellY, dx > 0 ? "right" : "left")) return false;
+    if (dy !== 0 && !Permissions.stepPermitted(collOf, p.cellX, p.cellY, dy > 0 ? "down" : "up")) return false;
+    const enter = Permissions.entryBlocks(c);
+    if (enter && ((dx > 0 && enter.right) || (dx < 0 && enter.left) || (dy > 0 && enter.down) || (dy < 0 && enter.up))) {
+      return false;
+    }
+    if (this.npcAt(cx, cy)) return false;
+    for (const e of this.entities ?? []) {
+      if (e === p || e.passable) continue;
+      if (e.cellX === cx && e.cellY === cy) return false;
+      if (truthy(e.moving) && e.targetX === cx && e.targetY === cy) return false;
+    }
+    return true;
+  }
+
+  /** One frame of the free walk. False hands the frame to the grid (a
+   *  forced tile underfoot); true when this frame was the free walk's. */
+  freeWalk(): boolean {
+    const p = this.player;
+    const game = this.game;
+    const input = game.input;
+    const coll = this.playerCollision();
+    // the forced tiles, and a warp mat that wants its own push: the grid's
+    if (Permissions.isWhirlpool(coll) || Permissions.currentDirection(coll) || Permissions.doorForcedDirection(coll)
+        || Permissions.isIce(coll) || Permissions.isWarpCollision(coll)) {
+      this.freeSnap();
+      return false;
+    }
+    // the pad itself when it is pushed (any angle, its throw the speed),
+    // else the d-pad's four, both screen-relative under the camera's yaw
+    const stick = stickPush(game.stick);
+    const sx = stick ? stick.x : (input.isDown("right") ? 1 : 0) - (input.isDown("left") ? 1 : 0);
+    const sy = stick ? -stick.y : (input.isDown("down") ? 1 : 0) - (input.isDown("up") ? 1 : 0);
+    // the Cycling Road's pull: nothing held rolls south on the map
+    let dir = freeDir(sx, sy, game.camYaw ?? 0);
+    if (!dir && truthy(this.downhill())) dir = [0, 1];
+    if (!dir) {
+      p.turnArmed = true;
+      p.bumpFrames = undefined;
+      return true;
+    }
+    const facing = quantize(dir[0], dir[1]) as Facing;
+    // the grid's own speed for this state (walk, bike, surf): a cell per
+    // step's frames, scaled by the pad's throw
+    const frames = Bike.stepFrames(this.playerState, facing, this.downhill(), Player.STEP_FRAMES);
+    const speed = (16 / Math.max(1, frames)) * (stick ? stick.throw : 1);
+    const r = slide(p.px, p.py, dir[0] * speed, dir[1] * speed, (x, y) => this.freeOpen(x, y));
+    p.facing = facing;
+    // each axis the push leans on and could not move along: is it an edge,
+    // a ledge, the shore, a boulder? (Asking only when the body got nowhere
+    // at all missed every angled approach.)
+    const axes: Facing[] = [];
+    if (Math.abs(dir[0]) >= FREE_AXIS_LEAN && r.px === p.px) axes.push(dir[0] > 0 ? "right" : "left");
+    if (Math.abs(dir[1]) >= FREE_AXIS_LEAN && r.py === p.py) axes.push(dir[1] > 0 ? "down" : "up");
+    if (axes.length === 2 && Math.abs(dir[1]) > Math.abs(dir[0])) axes.reverse();
+    for (const a of axes) {
+      if (this.freeGridPush(a)) return true;
+    }
+    if (!r.moved) return true;
+    p.px = r.px;
+    p.py = r.py;
+    // keeps the walk cycle turning over while moving (2: Player.update takes
+    // one off before the frame is drawn)
+    p.bumpFrames = 2;
+    const cx = cellOf(p.px);
+    const cy = cellOf(p.py);
+    if (cx !== p.cellX || cy !== p.cellY) {
+      p.cellX = cx;
+      p.cellY = cy;
+      p.stepFlip = !p.stepFlip;
+      p.inGrass = this.grassAt(cx, cy);
+      p.grassShake = truthy(p.inGrass) ? p.inGrass : undefined;
+      this.stepFinished = true;
+      if (this.landedEvents()) this.freeSnap();
+    }
+    return true;
+  }
+
+  /** A free push along one axis that met something: from the cell the body
+   *  is centred in (or the one it straddles across the push), is it
+   *  something the grid's movePlayer does -- an edge (the connection), a
+   *  ledge (the hop), the shore (off the water), a boulder, a door in a
+   *  wall? The body snaps onto the cell only when it is; a plain wall leaves
+   *  it where it slid, with no bump. */
+  freeGridPush(dir: Facing): boolean {
+    const p = this.player;
+    const map = this.map;
+    const across = dir === "up" || dir === "down" ? "x" : "y";
+    const pos = across === "x" ? p.px : p.py;
+    const cands = [cellOf(pos), Math.floor(pos / 16), Math.ceil(pos / 16)]
+      .filter((v, i, a) => a.indexOf(v) === i);
+    const d = Map.DELTA[dir]!;
+    const saved = { px: p.px, py: p.py, cellX: p.cellX, cellY: p.cellY, facing: p.facing };
+    for (const c of cands) {
+      const cx = across === "x" ? c : cellOf(p.px);
+      const cy = across === "y" ? c : cellOf(p.py);
+      if ((cx !== p.cellX || cy !== p.cellY) && !this.freeOpen(cx, cy)) continue;
+      const tx = cx + d[0];
+      const ty = cy + d[1];
+      const inside = map.inBounds(tx, ty);
+      const here = map.cellCollision(cx, cy);
+      const there = inside ? map.cellCollision(tx, ty) : undefined;
+      const ledge = Permissions.ledgeFacings(here);
+      const npc = inside ? this.npcAt(tx, ty) : undefined;
+      const boulder = !!npc && npc.def?.sprite === "SPRITE_BOULDER";
+      const surfing = FieldMoves.isSurfing(this.playerState);
+      const special = !inside
+        || (ledge && ledge[dir])
+        || boulder
+        || (surfing && Permissions.surfable(there) === "land")
+        || Permissions.isIce(there) || Permissions.currentDirection(there) !== undefined
+        || Permissions.isWarpCollision(there) || Permissions.isWarpCollision(here);
+      if (!special) continue;
+      p.cellX = cx;
+      p.cellY = cy;
+      p.px = cx * 16;
+      p.py = cy * 16;
+      p.facing = dir;
+      p.turnTimer = 0;
+      const result = this.movePlayer(dir);
+      if (result === "moved") return true;
+      if (result === "edge" && this.tryConnection(dir)) return true;
+      if (result === "blocked" && boulder) {
+        this.tryPushBoulder(dir, tx, ty);
+        return true;
+      }
+      if (this.checkCarpetWhileStanding()) return true;
+      Object.assign(p, saved);
+    }
+    return false;
+  }
+
+  /** What a step landing sets off, in CheckTileEvent's order; true when one
+   *  of them took the frame (a warp, a coord script, a step event, a battle).
+   *  A free walk runs it once per cell it crosses. */
+  landedEvents(): boolean {
+    const p = this.player;
+    {
       // hot path: the payload is only built when something is listening.
       // `tile` is the COLLISION byte (Gold's map has no per-cell tile id), and
       // `daytime` is the palette set beside Gen 1's `tod`.
@@ -11074,20 +11279,22 @@ export class World {
         });
       }
       this.clearWarpCooldownIfLeft();
-      if (this.checkWarpOnArrive()) return;
-      if (!this.map) return;
-      if (this.tryCoordScript()) return;
+      if (this.checkWarpOnArrive()) return true;
+      if (!this.map) return true;
+      if (this.tryCoordScript()) return true;
       // CheckTileEvent's own order: the coord events, then CountStep, then
       // RandomEncounter; a carry out of CountStep queues a player event.
-      if (this.countStep()) return;
+      if (this.countStep()) return true;
       // Grass rolls after the warp and coord checks, so stepping onto a door
       // inside grass still warps rather than starting a battle.
-      if (this.tryWildEncounter()) return;
+      if (this.tryWildEncounter()) return true;
     }
+    return false;
+  }
 
-    // People keep their anim paths even while the player is idle / mid-step.
-    this.updatePeople();
-
+  /** The grid's own input: the forced tiles, then a step in the held (or
+   *  forced) direction -- DoPlayerMovement. */
+  gridInput(p: any): void {
     // .CheckForced / CheckStandingOnIce: while the tile underfoot is ice and a
     // prior step latched .FinishFacing, THIS frame's d-pad is forced to that
     // direction, so one press slides until a non-ice landing or a bump. The

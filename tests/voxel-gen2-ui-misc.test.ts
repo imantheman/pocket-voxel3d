@@ -77,7 +77,7 @@ describe("gen2 OPTION screen", () => {
     // Brian's top level is the groups plus the ungrouped rows (MENU ACCOUNT,
     // BACK); the groups whose rows are desktop-only are gone.
     const labels = menu.visible().map((r) => r.label);
-    expect(labels).toEqual(["SPEED", "VIDEO", "GRAPHICS", "AUDIO", "BATTLE OPTIONS", "EXTRAS", "MENU ACCOUNT", "BACK"]);
+    expect(labels).toEqual(["SPEED", "VIDEO", "GRAPHICS", "CONTROLS", "AUDIO", "BATTLE OPTIONS", "EXTRAS", "MENU ACCOUNT", "BACK"]);
     game.draw(lcd);
     expect(holes(lcd)).toBe(0);
     await shot(lcd, "options");
@@ -102,7 +102,7 @@ describe("gen2 OPTION screen", () => {
     expect(game.stack.top()).toBe(menu);
     expect(done).toBe(0);
     // MENU ACCOUNT is on the top level: right flips it.
-    for (let i = 0; i < 6; i++) press(game, "down");
+    for (let i = 0; i < 7; i++) press(game, "down");
     expect(menu.row()!.label).toBe("MENU ACCOUNT");
     press(game, "right");
     expect(game.options.menuAccount).toBe(false);
@@ -134,10 +134,20 @@ describe("gen2 OPTION screen", () => {
 });
 
 describe("gen2 OPTION screen's port rows", () => {
-  test.skipIf(!gold)("CAMERA SPEED (the Kanto games' row) sits in GRAPHICS and cycles", async () => {
+  test.skipIf(!gold)("MOVEMENT flips FREE/GRID; CAMERA SPEED cycles (the Kanto games' rows, under CONTROLS)", async () => {
     const { game } = await loaded();
     game.showOptions();
     const menu = game.stack.top() as OptionsMenu;
+    const moves = menu.focusRow("movement")!;
+    expect(moves.row()!.label).toBe("MOVEMENT");
+    expect(moves.view.map((r) => r.label)).toEqual(["MOVEMENT", "CAMERA SPEED", "BACK"]);
+    delete moves.options.movement;
+    expect(moves.rows.find((r) => r.key === "movement")!.text!(moves.options)).toBe("FREE");
+    press(game, "right");
+    expect(moves.options.movement).toBe("grid");
+    press(game, "right");
+    expect(moves.options.movement).toBe("free");
+    press(game, "b");
     const page = menu.focusRow("cameraSpeed")!;
     expect(page.row()!.label).toBe("CAMERA SPEED");
     delete page.options.cameraSpeed;

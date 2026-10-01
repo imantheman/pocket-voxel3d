@@ -126,6 +126,9 @@ export class Game2 {
   /** The camera's yaw in radians (5.6-degree steps), for the free walk;
    *  undefined on a host that never sends it (tests, the desktop). */
   camYaw: number | undefined = undefined;
+  /** The circle pad, -1..1 each axis with +y UP the pad, for the free walk;
+   *  undefined on a host that only sends buttons. Menus never read it. */
+  stick: { x: number; y: number } | undefined = undefined;
   sessionStartedAt: number;
   joyLatch: { start?: boolean; select?: boolean } | null = null;
   stringBuffer?: string;
@@ -758,6 +761,11 @@ export class Game2 {
     }
     if (this.phase !== "play" || !this.world) return;
     Save.tickPlayTime(this.save);
+    // a free walk stands on its cell for a button (a menu, a talk, an item):
+    // whatever it starts steps from the cell (the Kanto free walk's snap)
+    if (this.input.wasPressed("a") || this.input.wasPressed("start") || this.input.wasPressed("select")) {
+      this.world.freeSnap?.();
+    }
     const accepts = this.world.acceptsMenuInput();
     let latch = this.joyLatch;
     if (accepts) {

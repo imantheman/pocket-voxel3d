@@ -10,7 +10,7 @@
 // host tick `frame(buttons)` runs one 60 Hz step, composes the Gold screen,
 // and emits the voxel scene under it.
 
-import { native, QuickJsHost } from "../quickjs-host.ts";
+import { native, QuickJsHost, STICK_RANGE } from "../quickjs-host.ts";
 import { tiltShiftLevel } from "../tiltshift.ts";
 import { is2d } from "../viewmode.ts";
 import { cameraSpeedQ8 } from "../cameraspeed.ts";
@@ -109,6 +109,17 @@ const lastStep = native.lastStep;
     game.camTurns = flatView ? 0 : (buttons >> 24) & 3;
     const e = (((buttons >> 24) & 3) << 4) | ((buttons >>> 28) & 15);
     game.camYaw = flatView ? 0 : ((((e - 8) % 64) + 64) % 64) * ((Math.PI * 2) / 64);
+  }
+  // The circle pad itself, for the free walk (the button word carries it
+  // only quantised to the four d-pad bits), as psp-main.ts reads it.
+  {
+    const st = native.stick?.();
+    if (st !== undefined) {
+      const sx = (st >> 16) << 16 >> 16;
+      const sy = (st << 16) >> 16;
+      const r = STICK_RANGE > 0 ? STICK_RANGE : 1;
+      game.stick = { x: Math.max(-1, Math.min(1, sx / r)), y: Math.max(-1, Math.min(1, sy / r)) };
+    }
   }
   try {
     game.frame(buttons & 0xff);
