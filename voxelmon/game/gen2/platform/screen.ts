@@ -231,6 +231,11 @@ export function putTiles(id: number, x: number, y: number, cols: number, rows: n
   l.fillCells(cx0, cy0, cx1 - cx0, cy1 - cy0, id, (slot | (s.keyed ? ATTR_PRIORITY : 0)) & 0xef, layer);
 }
 
+/** putTile at (x, y) of the current translation, rounded: a glyph's draw. */
+export function putTileAt(id: number, x: number, y: number): void {
+  putTile(id, Math.round(x + st.tx), Math.round(y + st.ty));
+}
+
 /** A cell with an explicit palette slot (a fill reusing a palette on screen). */
 function putCell(id: number, x: number, y: number, slot: number): void {
   if (!lcd || canvasDepth > 0) return;
@@ -359,12 +364,25 @@ export const G = {
   /**
    * love.graphics.draw(image, [quad,] x, y, r, sx, sy, ox, oy).
    */
-  draw(image: LcdImage, ...rest: unknown[]): void {
+  // Plain parameters, not `...rest` and a destructure: under QuickJS the
+  // destructure walks the iterator protocol, and that was most of a one-tile
+  // draw. (a..h are love.graphics.draw's [quad,] x, y, r, sx, sy, ox, oy.)
+  draw(image: LcdImage, a?: unknown, b?: unknown, c?: unknown, d?: unknown, e?: unknown, f?: unknown, g?: unknown, h?: unknown): void {
     // a canvas (or anything not cooked) has no tiles to draw
     if (!image || !image.ids || !lcd || canvasDepth > 0) return;
     let quad: Quad | null = null;
-    if (rest.length > 0 && typeof rest[0] === "object" && rest[0] !== null) quad = rest.shift() as Quad;
-    const [x = 0, y = 0, r = 0, sx = 1, sy = sx, ox = 0, oy = 0] = rest as number[];
+    let ax = a, ay = b, ar = c, asx = d, asy = e, aox = f, aoy = g;
+    if (typeof a === "object" && a !== null) {
+      quad = a as Quad;
+      ax = b; ay = c; ar = d; asx = e; asy = f; aox = g; aoy = h;
+    }
+    const x = ax === undefined ? 0 : (ax as number);
+    const y = ay === undefined ? 0 : (ay as number);
+    const r = ar === undefined ? 0 : (ar as number);
+    const sx = asx === undefined ? 1 : (asx as number);
+    const sy = asy === undefined ? sx : (asy as number);
+    const ox = aox === undefined ? 0 : (aox as number);
+    const oy = aoy === undefined ? 0 : (aoy as number);
     const qx = quad ? quad.x : 0;
     const qy = quad ? quad.y : 0;
     const qw = quad ? quad.w : image.w;

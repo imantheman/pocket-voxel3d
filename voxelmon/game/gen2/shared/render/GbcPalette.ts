@@ -29,16 +29,49 @@ const CLASSIC_SHADES: Palette4 = [
 // than the drawing. The same object back each time also lets lcd.palette
 // answer from its last-palette check rather than matching colours again.
 // Nothing writes into a palette once made.
+//
+// And one per colour CONTENT behind that: plenty of screens build their four
+// colours afresh each frame (the HP bar, every tile of it), and those should
+// land on the same palette object too. Keyed by the four colours packed two
+// to a number (48 bits, exact); cleared if a long fade fills it.
 const asPaletteCache = new WeakMap<object, Palette4>();
+const byContent = new Map<number, Map<number, Palette4>>();
+let byContentCount = 0;
+const BY_CONTENT_MAX = 4096;
+function entryOf(c: Colors, i: number): readonly number[] {
+  return c[i] ?? c[c.length - 1] ?? [0, 0, 0];
+}
 function asPalette(colors: Colors | null | undefined): Palette4 {
   const c = colors ?? DMG_SHADES;
   const cached = asPaletteCache.get(c);
   if (cached) return cached;
-  const at = (i: number): Rgb => {
-    const e = c[i] ?? c[c.length - 1] ?? [0, 0, 0];
-    return [e[0] ?? 0, e[1] ?? 0, e[2] ?? 0];
-  };
-  const p: Palette4 = [at(0), at(1), at(2), at(3)];
+  const e0 = entryOf(c, 0);
+  const e1 = entryOf(c, 1);
+  const e2 = entryOf(c, 2);
+  const e3 = entryOf(c, 3);
+  const r0 = e0[0] ?? 0, g0 = e0[1] ?? 0, b0 = e0[2] ?? 0;
+  const r1 = e1[0] ?? 0, g1 = e1[1] ?? 0, b1 = e1[2] ?? 0;
+  const r2 = e2[0] ?? 0, g2 = e2[1] ?? 0, b2 = e2[2] ?? 0;
+  const r3 = e3[0] ?? 0, g3 = e3[1] ?? 0, b3 = e3[2] ?? 0;
+  const k1 = (((r0 & 255) << 16) | ((g0 & 255) << 8) | (b0 & 255)) * 16777216
+    + (((r1 & 255) << 16) | ((g1 & 255) << 8) | (b1 & 255));
+  const k2 = (((r2 & 255) << 16) | ((g2 & 255) << 8) | (b2 & 255)) * 16777216
+    + (((r3 & 255) << 16) | ((g3 & 255) << 8) | (b3 & 255));
+  let inner = byContent.get(k1);
+  if (!inner) {
+    if (byContentCount >= BY_CONTENT_MAX) {
+      byContent.clear();
+      byContentCount = 0;
+    }
+    inner = new Map();
+    byContent.set(k1, inner);
+  }
+  let p = inner.get(k2);
+  if (!p) {
+    p = [[r0, g0, b0], [r1, g1, b1], [r2, g2, b2], [r3, g3, b3]];
+    inner.set(k2, p);
+    byContentCount++;
+  }
   asPaletteCache.set(c, p);
   return p;
 }

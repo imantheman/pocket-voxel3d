@@ -19,7 +19,7 @@
 import { Assets } from "../shared/render/Assets.ts";
 import { GbcPalette } from "../shared/render/GbcPalette.ts";
 import { HpBar } from "../battle/HpBar.ts";
-import G, { type LcdImage, type Quad } from "../platform/screen.ts";
+import G, { putTile, type LcdImage, type Quad } from "../platform/screen.ts";
 
 type Rgb = readonly number[];
 type Colors = Rgb[];
@@ -140,15 +140,22 @@ export class BattleHud {
   // One 8x8 tile out of a horizontal strip, cached per (sheet, index).
   // Lua: BattleHud.lua:85
   quad(image: LcdImage, index: number): Quad {
-    const key = `${image.key}:${index}`;
-    let quad = this.quads[key];
+    let row = this.quadRows.get(image);
+    if (!row) {
+      row = [];
+      this.quadRows.set(image, row);
+    }
+    let quad = row[index];
     if (!quad) {
       const [w, h] = image.getDimensions();
       quad = G.newQuad(index * 8, 0, 8, 8, w, h);
-      this.quads[key] = quad;
+      row[index] = quad;
     }
     return quad;
   }
+  // quad()'s cache, per sheet then index (a string key per tile was most of
+  // the cost of a bar cell)
+  private quadRows = new Map<LcdImage, Quad[]>();
 
   // Lua: BattleHud.lua:96
   available(): boolean {
@@ -161,8 +168,18 @@ export class BattleHud {
   barColors(key: string, zero?: Rgb | null): Colors | undefined {
     const pal = this.palettes && this.palettes.hpBar && this.palettes.hpBar[key];
     if (!pal) return undefined;
-    return [zero ?? [255, 255, 255], [pal[0][0], pal[0][1], pal[0][2]], [pal[1][0], pal[1][1], pal[1][2]], [0, 0, 0]];
+    // the plain (white-zero) table, made once per key: every bar cell asks
+    if (zero == null) {
+      let c = this.plainBar.get(key);
+      if (!c) {
+        c = [[255, 255, 255], [pal[0][0], pal[0][1], pal[0][2]], [pal[1][0], pal[1][1], pal[1][2]], [0, 0, 0]];
+        this.plainBar.set(key, c);
+      }
+      return c;
+    }
+    return [zero, [pal[0][0], pal[0][1], pal[0][2]], [pal[1][0], pal[1][1], pal[1][2]], [0, 0, 0]];
   }
+  private plainBar = new Map<string, Colors>();
 
   // Draw a run of tiles from a sheet whose first tile is `firstTile`, colouring
   // with `colors` when one is given.
@@ -173,16 +190,18 @@ export class BattleHud {
     const index = tile - (firstTile as number);
     if (!(index >= 0)) return false;
     G.setColor(1, 1, 1, 1);
-    const body = (): void => {
-      if (mirror) {
-        // Flip in place: the origin moves a tile right and x scales by -1.
-        G.draw(image, this.quad(image, index), tx * 8 + 8, ty * 8, 0, -1, 1);
-      } else {
-        G.draw(image, this.quad(image, index), tx * 8, ty * 8);
-      }
-    };
-    // home/fade.asm:35 (RotateThreePalettesRight)
-    GbcPalette.with(colors ?? GbcPalette.DMG_SHADES, body);
+    // home/fade.asm:35 (RotateThreePalettesRight). GbcPalette.with's swap and
+    // restore, and G.draw's one cell of the strip (tile `index` of row 0;
+    // mirrored in place, the flip leaves it where it was), written out: a
+    // bar is nine of these a side, every frame.
+    const savedPal = G.palette;
+    const savedKeyed = G.keyed;
+    GbcPalette.use(colors ?? GbcPalette.DMG_SHADES);
+    if (image.ids && index < image.tw && image.th > 0) {
+      putTile(image.ids[index]!, Math.round(G.tx + tx * 8), Math.round(G.ty + ty * 8), !!mirror, false, image.obj);
+    }
+    G.palette = savedPal;
+    G.keyed = savedKeyed;
     return true;
   }
 

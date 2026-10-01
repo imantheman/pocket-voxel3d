@@ -12,7 +12,7 @@
 // "'d") are matched greedily, longest first, as Font.split does on bytes.
 // Span positions are 1-based character indices, as in the Lua.
 
-import { putTile, putTiles } from "../../platform/screen.ts";
+import { putTileAt, putTiles } from "../../platform/screen.ts";
 import G from "../../platform/screen.ts";
 import { Assets } from "./Assets.ts";
 import { Logger } from "../core/Logger.ts";
@@ -67,6 +67,8 @@ interface State {
   frameTiles: number;
   framePages?: Page[];
   battleExtra?: boolean;
+  /** tileOf's answers off the static pages, per code (-2 unknown, -1 none). */
+  orderIds?: Int32Array;
 }
 
 let state: State | null = null;
@@ -116,8 +118,41 @@ function pageFor(code: number): Page | null {
 
 /** The tile id a code draws as, or undefined. */
 function tileOf(code: number): number | undefined {
-  const page = pageFor(code);
-  if (!page) return undefined;
+  if (!state) return undefined;
+  // pageFor's two swaps first: they change under the font
+  const frames = state.framePages;
+  if (frames && code >= state.frameBase && code < state.frameBase + state.frameTiles) {
+    const page = frames[currentFrame - 1];
+    if (page) return tileIn(page, code);
+  }
+  if (state.battleExtra && state.pages.battleExtra) {
+    const swap = state.pages.battleExtra;
+    if (code >= swap.base && code < swap.base + BATTLE_EXTRA_TILES) return tileIn(swap, code);
+  }
+  // then the static pages, whose answer per code never changes: remembered
+  if (code >= 0 && code < 512) {
+    let ids = state.orderIds;
+    if (!ids) ids = state.orderIds = new Int32Array(512).fill(-2);
+    let v = ids[code]!;
+    if (v === -2) {
+      const page = orderPageFor(code);
+      const t = page ? tileIn(page, code) : undefined;
+      v = t === undefined ? -1 : t;
+      ids[code] = v;
+    }
+    return v < 0 ? undefined : v;
+  }
+  const page = orderPageFor(code);
+  return page ? tileIn(page, code) : undefined;
+}
+
+function orderPageFor(code: number): Page | null {
+  if (!state) return null;
+  for (const page of state.order) if (code >= page.base) return page;
+  return null;
+}
+
+function tileIn(page: Page, code: number): number | undefined {
   const g = code - page.base;
   if (page.row !== undefined) {
     // a frames row: glyph g is tile g of that row
@@ -279,7 +314,7 @@ export const Font = {
   drawCode(code: number, x: number, y: number): void {
     const id = tileOf(code);
     if (id === undefined) return;
-    putTile(id, Math.round(x + G.tx), Math.round(y + G.ty));
+    putTileAt(id, x, y);
   },
 
   /** The tile id a code draws as (for screens that write cells directly). */
