@@ -20,8 +20,10 @@
 // map's tileset as the cart draws its connection strips; elsewhere the
 // border block.
 //
-// Not yet: animated tiles (water, flowers) stand still, and a cut tree
-// still shows.
+// A cut tree's block is drawn as the cart's swap leaves it
+// (field.cutTreeSwaps, CutTreeBlockSwaps); this port keeps the cut as the
+// cells it opened (map.ts markCut), so the swap is made here. The water and
+// flowers move host-side (main.rs steps the terrain page's baked frames).
 
 import { GbVideo, LCDC, OAM_ATTR, OAM_X_OFS, OAM_Y_OFS, type TileLoad } from "../gb/video.ts";
 import type { Dir } from "./collision.ts";
@@ -53,6 +55,8 @@ interface MapTiles {
   ids: Uint8Array;
   /** The blocks the cache was built from. */
   blocks: number[];
+  /** How many cut cells it was built with. */
+  cuts: number;
 }
 
 export class OverworldView2d {
@@ -71,12 +75,13 @@ export class OverworldView2d {
     if (!map || !p) return null;
     const v = this.video;
     let t = this.tiles;
-    if (!t || t.map !== map || (++this.frame % BLOCK_CHECK === 0 && !sameBlocks(t.blocks, map.def.blocks))) {
+    if (!t || t.map !== map || t.cuts !== (map.cutCells?.().size ?? 0) ||
+        (++this.frame % BLOCK_CHECK === 0 && !sameBlocks(t.blocks, map.def.blocks))) {
       if (!t || t.map !== map) {
         this.slots.clear();
         this.loadsSize = -1;
       }
-      t = this.tiles = buildTiles(map, game.data.maps);
+      t = this.tiles = buildTiles(map, game.data.maps, game.data.field?.cutTreeSwaps);
       this.winX = NaN;
     }
     const camX = Math.round(p.px) - 64;
@@ -223,16 +228,27 @@ function blockPast(map: any, maps: Record<string, any> | undefined, bx: number, 
 }
 
 /** The map's tiles, PAD tiles of border round them, block by block. */
-function buildTiles(map: any, maps?: Record<string, any>): MapTiles {
+function buildTiles(map: any, maps?: Record<string, any>, swaps?: { before: number; after: number }[]): MapTiles {
   const def = map.def;
   const w = def.width * 4 + PAD * 2;
   const h = def.height * 4 + PAD * 2;
   const ids = new Uint8Array(w * h);
   const tsBlocks: number[][] = map.tileset.blocks;
   const pb = PAD / 4; // padding in blocks
+  // the blocks holding a cut cell, and what CUT turned them into
+  const cutBlock = new Map<number, number>();
+  const cut: ReadonlySet<number> = map.cutCells?.() ?? new Set();
+  for (const i of cut) {
+    const cx = i % map.widthCells;
+    const cy = Math.floor(i / map.widthCells);
+    const bi = (cy >> 1) * def.width + (cx >> 1);
+    const sw = swaps?.find((s) => s.before === def.blocks[bi]);
+    if (sw) cutBlock.set(bi, sw.after);
+  }
   for (let by = -pb; by < def.height + pb; by++) {
     for (let bx = -pb; bx < def.width + pb; bx++) {
-      const block = tsBlocks[blockPast(map, maps, bx, by)];
+      const inside = bx >= 0 && by >= 0 && bx < def.width && by < def.height;
+      const block = tsBlocks[(inside && cutBlock.get(by * def.width + bx)) || blockPast(map, maps, bx, by)];
       if (!block) continue;
       const x0 = (bx + pb) * 4;
       const y0 = (by + pb) * 4;
@@ -245,7 +261,7 @@ function buildTiles(map: any, maps?: Record<string, any>): MapTiles {
       }
     }
   }
-  return { map, w, h, ids, blocks: [...(def.blocks ?? [])] };
+  return { map, w, h, ids, blocks: [...(def.blocks ?? [])], cuts: cut.size };
 }
 
 /** The 21x19 window from tile (tx0, ty0) into the 32x32 ring. */

@@ -263,6 +263,12 @@ export class GameMap {
     this.cutAt.add(cy * this.widthCells + cx);
   }
 
+  /** The cells markCut opened (cy * widthCells + cx): VIEW 2D draws their
+   *  blocks as the cart's cut swap leaves them (world/view2d.ts). */
+  cutCells(): ReadonlySet<number> {
+    return this.cutAt;
+  }
+
   /**
    * Record that a card-key door here is unlocked and can be walked through:
    * the live unlock and every re-entry afterwards, replayed through setMap

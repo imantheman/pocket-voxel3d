@@ -7303,6 +7303,9 @@ class GameMap {
   markCut(cx, cy) {
     this.cutAt.add(cy * this.widthCells + cx);
   }
+  cutCells() {
+    return this.cutAt;
+  }
   markOpen(cx, cy) {
     this.openAt.add(cy * this.widthCells + cx);
   }
@@ -27559,12 +27562,12 @@ class OverworldView2d {
       return null;
     const v = this.video;
     let t = this.tiles;
-    if (!t || t.map !== map || ++this.frame % BLOCK_CHECK === 0 && !sameBlocks(t.blocks, map.def.blocks)) {
+    if (!t || t.map !== map || t.cuts !== (map.cutCells?.().size ?? 0) || ++this.frame % BLOCK_CHECK === 0 && !sameBlocks(t.blocks, map.def.blocks)) {
       if (!t || t.map !== map) {
         this.slots.clear();
         this.loadsSize = -1;
       }
-      t = this.tiles = buildTiles(map, game.data.maps);
+      t = this.tiles = buildTiles(map, game.data.maps, game.data.field?.cutTreeSwaps);
       this.winX = NaN;
     }
     const camX = Math.round(p.px) - 64;
@@ -27689,16 +27692,27 @@ function blockPast(map, maps, bx, by) {
   }
   return def.borderBlock;
 }
-function buildTiles(map, maps) {
+function buildTiles(map, maps, swaps) {
   const def = map.def;
   const w = def.width * 4 + PAD2 * 2;
   const h = def.height * 4 + PAD2 * 2;
   const ids = new Uint8Array(w * h);
   const tsBlocks = map.tileset.blocks;
   const pb = PAD2 / 4;
+  const cutBlock = new Map;
+  const cut = map.cutCells?.() ?? new Set;
+  for (const i of cut) {
+    const cx = i % map.widthCells;
+    const cy = Math.floor(i / map.widthCells);
+    const bi = (cy >> 1) * def.width + (cx >> 1);
+    const sw2 = swaps?.find((s) => s.before === def.blocks[bi]);
+    if (sw2)
+      cutBlock.set(bi, sw2.after);
+  }
   for (let by = -pb;by < def.height + pb; by++) {
     for (let bx = -pb;bx < def.width + pb; bx++) {
-      const block = tsBlocks[blockPast(map, maps, bx, by)];
+      const inside = bx >= 0 && by >= 0 && bx < def.width && by < def.height;
+      const block = tsBlocks[inside && cutBlock.get(by * def.width + bx) || blockPast(map, maps, bx, by)];
       if (!block)
         continue;
       const x0 = (bx + pb) * 4;
@@ -27712,7 +27726,7 @@ function buildTiles(map, maps) {
       }
     }
   }
-  return { map, w, h, ids, blocks: [...def.blocks ?? []] };
+  return { map, w, h, ids, blocks: [...def.blocks ?? []], cuts: cut.size };
 }
 function writeWindow(maps, t, map, tx0, ty0) {
   const x = tx0 + PAD2;
