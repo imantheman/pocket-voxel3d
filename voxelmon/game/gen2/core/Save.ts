@@ -607,6 +607,13 @@ export const Save = {
     const [data, err] = readTable();
     const recovered: string | undefined = undefined;
     if (!data) return [undefined, undefined, err, undefined];
+    // The slot is shared with what came before the Gold engine: the Gen 1
+    // guest's Gold walker wrote save_gold.lua in Gen 1's shape. Every Gen 2
+    // save carries generation = 2 (newGame), so anything else is not one of
+    // ours and must not be continued from.
+    if ((data as { generation?: unknown }).generation !== 2) {
+      return [undefined, undefined, "not a Gen 2 save", undefined];
+    }
     reshape(data);
     Save.migrate(data);
     Save.normalize(data);
