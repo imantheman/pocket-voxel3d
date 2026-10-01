@@ -123,6 +123,8 @@ export interface SceneView {
   battleView(): BattleSceneView | null;
   /** The OPTION screen's BATTLES 2D: the flat battle screen, no arena (viewmode.ts). */
   battle2d?(): boolean;
+  /** VIEW 2D with the overworld up: the GB screen draws it (world/view2d.ts). */
+  overworld2d?(): boolean;
   /** Autopilot-only profiling hook; undefined in production and in the sim. */
   prof?: Prof;
 }
@@ -210,6 +212,8 @@ export class Scene {
   private choiceYes = true;
   // battle staging deltas (docs/VOXEL.md §4 battle ops)
   private battleActive = false;
+  /** VIEW 2D's overworld is up (the voxel world hidden). */
+  private flatWorld = false;
   private arenaStaged = false;
   private cardShown = new Map<number, string>();
 
@@ -226,6 +230,22 @@ export class Scene {
     }
     const p = view.prof;
     const t0 = p ? p.now() : 0;
+    // VIEW 2D: the voxel world stands down -- its people hidden, and the
+    // backdrop picture (emitUi) keeps the host from drawing the maps. The
+    // maps still go out: the host loads the map's pak on them, and the GB
+    // screen reads the map's own terrain page out of it.
+    const flat = !!view.overworld2d?.();
+    if (flat) {
+      if (!this.flatWorld) {
+        this.flatWorld = true;
+        this.hideAllEnts();
+      }
+      this.emitMaps(view);
+      this.emitCam(view);
+      this.emitUi(view);
+      return;
+    }
+    this.flatWorld = false;
     this.emitMaps(view);
     const t1 = p ? p.now() : 0;
     // The overworld camera and its ents (the player, every NPC) are only
@@ -849,10 +869,17 @@ export class Scene {
       paletteIndex?: Record<string, number>;
     };
     this.gbEmitter.emit(host, gbv, {
-      page: (sheet) => data.atlas?.picMinigame?.[sheet] ?? -1,
-      palette: (name) => data.paletteIndex?.[name] ?? -1,
+      // the 2D overworld's sheets: the pak's terrain page and the sprite pages
+      page: (sheet) => {
+        if (sheet === "terrain") return -2; // the load's map's own terrain page (the host's to find)
+        if (sheet.startsWith("sprite:")) return this.sheetIndex(view, sheet.slice(7));
+        return data.atlas?.picMinigame?.[sheet] ?? -1;
+      },
+      palette: (name) => (name.startsWith("#") ? Number(name.slice(1)) : data.paletteIndex?.[name] ?? -1),
     });
-    if (gbv) {
+    // (VIEW 2D's overworld is a GB screen too, but its text boxes and menus
+    // go on the tile layer over it as they do over the voxel world.)
+    if (gbv && !view.overworld2d?.()) {
       if (this.introSig !== "gb") {
         this.introSig = "gb";
         this.uiOwner = null;

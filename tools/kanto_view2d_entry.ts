@@ -5,6 +5,7 @@
 import "../voxelmon/game/psp-main.ts";
 
 declare const VIEW2D: boolean;
+declare const WALKONLY: boolean;
 const g = globalThis as unknown as { voxelmonGame: any; frame: (b: number) => void };
 const game = g.voxelmonGame;
 const mainFrame = g.frame;
@@ -20,12 +21,13 @@ g.frame = (b: number): void => {
   if (!continued) {
     if (top?.kind === "title") {
       continued = true;
+      game.pop(); // as the title does before it answers
       top.onChoose?.("continue");
       game.save.options = { ...(game.save.options ?? {}), battleView: "2d", view: typeof VIEW2D !== "undefined" && VIEW2D ? "2d" : "3d" };
     } else if (i % 30 === 0) pad = START;
   } else if (!game.battleView?.()) {
     worldFrames++;
-    if (worldFrames < 600) pad = WALK[Math.floor(worldFrames / 20) % WALK.length]!;
+    if (worldFrames < 600 || (typeof WALKONLY !== "undefined" && WALKONLY)) pad = WALK[Math.floor(worldFrames / 20) % WALK.length]!;
     else if (top?.kind === "overworld") {
       worldFrames = 400;
       game.startWildBattle("PIDGEY", 5);

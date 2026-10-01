@@ -112,6 +112,7 @@ import { decodeSave } from "./save-read.ts";
 import * as Bag from "./rules/bag.ts";
 import { tiltShiftLevel } from "./tiltshift.ts";
 import { is2d } from "./viewmode.ts";
+import { OverworldView2d } from "./world/view2d.ts";
 /** Must match Version.saveFormat in the recomp. */
 const SAVE_FORMAT = 4;   // Version.lua saveFormat
 /**
@@ -1184,6 +1185,17 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   }
 
   pic(): unknown {
+    const pics = this.picFor();
+    // VIEW 2D: a black backdrop under the GB screen, in place of the voxel
+    // world (the host skips the world while any picture is up)
+    if (this.overworld2d() && (!Array.isArray(pics) || pics.length === 0)) {
+      const black = namedPage(this.data as never, "picIntro", "black");
+      if (black >= 0) return [{ page: black, x: 0, y: 0, w: VIEW_W, h: VIEW_H }];
+    }
+    return pics;
+  }
+
+  private picFor(): unknown {
     let top = this.stack[this.stack.length - 1] as any;
     // The evolution movie's last page -- the congratulations, or the
     // called-off line -- is a textbox pushed OVER the movie, and the settled
@@ -2769,8 +2781,20 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   /** The GB screen scene.ts mirrors into the core (the surfing minigame). */
   gb(): GbVideo | null {
     const top = this.stack[this.stack.length - 1] as any;
-    return top?.kind === "surfing" ? top.video() : null;
+    if (top?.kind === "surfing") return top.video();
+    // VIEW 2D: the overworld through the GB screen (world/view2d.ts)
+    if (this.overworld2d()) return (this.view2dRenderer ??= new OverworldView2d()).build(this);
+    return null;
   }
+
+  /** VIEW 2D with the overworld up (not a battle, the title or the boot movie). */
+  overworld2d(): boolean {
+    if (!this.view2d() || this.battleView()) return false;
+    const top = this.stack[this.stack.length - 1] as any;
+    if (!top || top.kind === "title" || top.kind === "intro" || top.kind === "surfing") return false;
+    return !!(this as any).overworld?.map;
+  }
+  private view2dRenderer: OverworldView2d | null = null;
 
   /**
    * SurfingPikachuMinigame (Yellow's Summer Beach House). `selectQuits` is
