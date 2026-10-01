@@ -1,19 +1,51 @@
-// A Citra profile of Gold's overworld (cc_gold_bench.sh tools/gold_prof_entry.ts):
-// the card's save continued, Gold's own step/draw/lcd/view split turned on
-// (globalThis.goldProf -> "[pv] gold us/frame" lines every 300 ticks), and the
-// player walking back and forth -- left for two seconds, right for two -- so
-// the walk's cost is in it. STILL=1 at bundle time stands still. Never shipped.
+// A Citra profile of Gold (cc_gold_bench.sh tools/gold_prof_entry.ts): the
+// card's save continued, Gold's own step/draw/lcd/view split turned on
+// (globalThis.goldProf -> "[pv] gold us/frame" lines every 300 ticks), and a
+// tour of the heavy places, 15 seconds each, the player walking back and
+// forth in each -- the towns, VIEW 2D, the START menu, a wild battle. A
+// "[pv] prof scene:" line names each stop. Never shipped.
 import "../voxelmon/game/gen2/main.ts";
 import { VOX_BTN } from "../contracts/spec/voxel-spec.ts";
 import { Save } from "../voxelmon/game/gen2/core/Save.ts";
+import { Mon } from "../voxelmon/game/gen2/battle/Mon.ts";
 
-declare const STILL: boolean;
 const g = globalThis as unknown as { goldGame: any; goldProf: boolean; frame: (b: number) => void };
 g.goldProf = true;
 const game = g.goldGame;
 const mainFrame = g.frame;
+
+type Stop = { name: string; map?: string; view?: "2d" | "3d"; menu?: boolean; battle?: string };
+const TOUR: Stop[] = [
+  { name: "Route 29 3D", map: "ROUTE_29" },
+  { name: "Goldenrod 3D", map: "GOLDENROD_CITY" },
+  { name: "Ecruteak 3D", map: "ECRUTEAK_CITY" },
+  { name: "Azalea 3D", map: "AZALEA_TOWN" },
+  { name: "Olivine 3D", map: "OLIVINE_CITY" },
+  { name: "Goldenrod 2D", map: "GOLDENROD_CITY", view: "2d" },
+  { name: "START menu", menu: true },
+  { name: "battle 3D", battle: "PIDGEY" },
+];
+declare const ONLY: string;
+const STOP_TICKS = 15 * 60;
 let started = false;
 let n = 0;
+let stop = -1;
+
+function arrive(s: Stop): void {
+  console.log(`[pv] prof scene: ${s.name}`);
+  game.options.view = s.view ?? "3d";
+  game.options.battleView = "3d";
+  while (game.stack.top()) game.stack.pop();
+  const w = game.world;
+  if (s.map && w) {
+    const def = w.maps[s.map];
+    const door = def && def.warps ? def.warps[0] : undefined;
+    if (door) w.warpToMapId(s.map, door.x, door.y + 1, "down");
+  }
+  if (s.menu) game.openStartMenu();
+  if (s.battle && w) w.startBattle({ wild: Mon.new(game.data, s.battle, 5, {}) });
+}
+
 g.frame = (b: number): void => {
   if (!started) {
     started = true;
@@ -21,7 +53,19 @@ g.frame = (b: number): void => {
     game.continueGame(save);
   }
   n++;
+  // ONLY="5,7" at bundle time: just those stops (0-based, TOUR's order)
+  const tour = typeof ONLY !== "undefined" ? ONLY.split(",").map((i) => TOUR[Number(i)]!).filter(Boolean) : TOUR;
+  const at = Math.floor((n - 180) / STOP_TICKS);
+  if (n >= 180 && at !== stop && at < tour.length) {
+    stop = at;
+    arrive(tour[at]!);
+  }
   let pad = 0;
-  if (!(typeof STILL !== "undefined" && STILL) && n > 120) pad = Math.floor(n / 120) % 2 === 0 ? VOX_BTN.left : VOX_BTN.right;
+  const s = tour[stop];
+  if (s && !s.menu && !s.battle && game.world?.map && !game.stack.top()) {
+    pad = Math.floor(n / 90) % 2 === 0 ? VOX_BTN.left : VOX_BTN.right;
+  } else if (s?.battle && n % 20 === 0) {
+    pad = VOX_BTN.a;
+  }
   mainFrame((b & ~0xff) | pad);
 };

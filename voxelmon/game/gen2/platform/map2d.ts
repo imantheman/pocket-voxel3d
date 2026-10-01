@@ -186,7 +186,8 @@ export function drawMap2D(world: any, data: any): boolean {
   actors.length = 0;
   if (!world.peopleHidden) {
     const [hideAll, hidePlayer] = world.flyHides?.() ?? [false, false];
-    peopleView_W6(world, actors, hideAll, hidePlayer, false);
+    // only the people near the player (the screen is ten cells wide)
+    peopleView_W6(world, actors, hideAll, hidePlayer, false, true);
   }
   const sprites = data?.sprites ?? {};
   const daytime = world.daytime ?? "DAY";
