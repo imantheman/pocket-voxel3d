@@ -1,5 +1,7 @@
 // The PC. Ports engine/menus/pc.asm's two menus: the machine's own list
-// (SOMEONE'S PC / {PLAYER}'s PC / LOG OFF) and, inside the player's, the
+// (SOMEONE'S PC, or BILL'S PC once he is met / {PLAYER}'s PC / PROF.OAK'S PC
+// once the POKéDEX is in hand / PKMN LEAGUE once a team is in the HALL OF
+// FAME / LOG OFF -- DisplayPCMainMenu) and, inside the player's, the
 // Item Storage System of engine/items/item_pc.asm — WITHDRAW / DEPOSIT /
 // TOSS / LOG OFF over a second bag (world/pcitems.ts).
 //
@@ -35,9 +37,12 @@ interface PcGame {
   data: any;
   showText(text: string, onDone?: () => void): void;
   openBox(): void;
+  showChoice?(text: string, cb: (yes: boolean) => void): void;
+  openDexRating?(onDone?: () => void): void;
+  openHallOfFamePc?(onDone?: () => void): void;
 }
 
-const ROOT = ["SOMEONE'S PC", "MY PC", "LOG OFF"];
+type RootId = "someone" | "mine" | "oak" | "league" | "logoff";
 const ITEMS = ["WITHDRAW ITEM", "DEPOSIT ITEM", "TOSS ITEM", "LOG OFF"];
 
 export class PcState implements GameState {
@@ -145,27 +150,74 @@ export class PcState implements GameState {
     return this.updateList(p);
   }
 
+  /** DisplayPCMainMenu's rows for this save. */
+  private rootRows(): { id: RootId; label: string }[] {
+    const flags = this.game.save?.flags ?? {};
+    const rows: { id: RootId; label: string }[] = [
+      { id: "someone", label: flags.EVENT_MET_BILL ? "BILL'S PC" : "SOMEONE'S PC" },
+      { id: "mine", label: "MY PC" },
+    ];
+    if (flags.EVENT_GOT_POKEDEX) {
+      rows.push({ id: "oak", label: "PROF.OAK'S PC" });
+      // wNumHoFTeams, inside the POKéDEX check as on the cart
+      if ((this.game.save?.hallOfFame?.length ?? 0) > 0) rows.push({ id: "league", label: "PKMN LEAGUE" });
+    }
+    rows.push({ id: "logoff", label: "LOG OFF" });
+    return rows;
+  }
+
+  private rootLabels(): string[] {
+    return this.rootRows().map((r) => r.label);
+  }
+
   private updateRoot(p: PcGame["input"]["pressed"]): void {
-    const n = ROOT.length;
+    const rows = this.rootRows();
+    const n = rows.length;
+    if (this.menuIndex >= n) this.menuIndex = n - 1;
     if (p.up) this.menuIndex = (this.menuIndex + n - 1) % n;
     if (p.down) this.menuIndex = (this.menuIndex + 1) % n;
     if (p.b) { this.close(); return; }
     if (!p.a) return;
-    if (this.menuIndex === 0) {
+    const id = rows[this.menuIndex]!.id;
+    if (id === "someone") {
       // SOMEONE'S PC is the Pokemon storage this tile used to open directly.
+      const met = this.game.save?.flags?.EVENT_MET_BILL;
       this.game.showText(
-        this.line("_AccessedSomeonesPCText", "Accessed someone's\nPC."),
+        met
+          ? this.line("_AccessedBillsPCText", "Accessed BILL's\nPC.\fAccessed POKéMON\nStorage System.")
+          : this.line("_AccessedSomeonesPCText", "Accessed someone's\nPC."),
         () => this.game.openBox(),
       );
       return;
     }
-    if (this.menuIndex === 1) {
+    if (id === "mine") {
       this.game.showText(this.line("_AccessedMyPCText", "Accessed my PC."));
       this.itemsIndex = 0;
       this.mode = "items";
       return;
     }
+    if (id === "oak") return this.openOaksPc();
+    if (id === "league") {
+      // PKMNLeaguePC: the list, then back to this menu
+      this.game.showText(
+        this.line("_AccessedHoFPCText", "Accessed POKéMON\nLEAGUE's site.\fAccessed the HALL\nOF FAME List."),
+        () => this.game.openHallOfFamePc?.(),
+      );
+      return;
+    }
     this.close();
+  }
+
+  /** OpenOaksPC (engine/menus/oaks_pc.asm): accessed, rate? YES rates, closed. */
+  private openOaksPc(): void {
+    const closed = (): void => this.game.showText(this.line("_ClosedOaksPCText", "Closed link to\nPROF.OAK's PC."));
+    this.game.showText(this.line("_AccessedOaksPCText", "Accessed PROF.\nOAK's PC."), () => {
+      if (!this.game.showChoice) return closed();
+      this.game.showChoice(this.line("_GetDexRatedText", "Want to get your\nPOKéDEX rated?"), (yes) => {
+        if (yes && this.game.openDexRating) this.game.openDexRating(closed);
+        else closed();
+      });
+    });
   }
 
   private updateItems(p: PcGame["input"]["pressed"]): void {
@@ -213,7 +265,7 @@ export class PcState implements GameState {
    * which scroll and take a quantity). */
   gearMenu(): { title: string; items: string[]; index: number; select(i: number): void } | null {
     if (this.mode === "root") {
-      return { title: "PC", items: ROOT, index: this.menuIndex, select: (i: number) => { this.menuIndex = i; } };
+      return { title: "PC", items: this.rootLabels(), index: this.menuIndex, select: (i: number) => { this.menuIndex = i; } };
     }
     if (this.mode === "items") {
       return { title: "MY PC", items: ITEMS, index: this.itemsIndex, select: (i: number) => { this.itemsIndex = i; } };
@@ -229,7 +281,7 @@ export class PcState implements GameState {
       index: this.index,
       top: this.top,
       rows: ROWS,
-      labels: this.mode === "root" ? ROOT : this.mode === "items" ? ITEMS : [],
+      labels: this.mode === "root" ? this.rootLabels() : this.mode === "items" ? ITEMS : [],
       qty: this.qty,
       action: this.action.toUpperCase(),
     };

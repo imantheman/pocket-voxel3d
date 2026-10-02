@@ -66,7 +66,7 @@ import {
 } from "./world/link.ts";
 import { EvolutionState, type EvolutionView } from "./ui/evoscreen.ts";
 import {
-  applyPostGameHome, POST_GAME_HOME, postGameRescue, recordHallOfFame,
+  applyPostGameHome, POST_GAME_HOME, postGameRescue, recordHallOfFame, type HallOfFameEntry,
 } from "./world/halloffame.ts";
 import { CAMERA_SPEED_DEFAULT_Q8, CAMERA_SPEEDS, OptionsMenuState } from "./ui/optionsmenu.ts";
 import { cellsToPicRect } from "./ui/trainercard.ts";
@@ -78,6 +78,7 @@ import { BikeShopState } from "./ui/bikeshop.ts";
 import {
   countOwned, fillAideText, oaksAideFlag, OAKS_AIDES,
 } from "./world/oaksaide.ts";
+import { dexRating } from "./world/dexrating.ts";
 import { prizeWindows } from "./world/gamecorner.ts";
 import { gameVersion, generationOf } from "./data.ts";
 import { modifyHappiness } from "./world/pikachu.ts";
@@ -153,6 +154,9 @@ class TextBoxState implements GameState, UiBoxSource {
     private onDone?: () => void,
     private choice?: (yes: boolean) => void,
     opts?: TextboxOpts,
+    /** Fires once, the frame the last page has typed out (a jingle that
+     *  follows the text, as PlayPokedexRatingSfx follows the rating). */
+    private onTyped?: () => void,
   ) {
     this.box = new Textbox(
       text,
@@ -174,6 +178,11 @@ class TextBoxState implements GameState, UiBoxSource {
     const wasWaiting = this.box.waiting;
     const wasDone = this.box.done;
     this.box.update(this.game.input);
+    if (!wasDone && this.box.done && this.onTyped) {
+      const typed = this.onTyped;
+      this.onTyped = undefined;
+      typed();
+    }
     // TextBox.lua:269 and :284 — A/B both close a finished box and advance a
     // waiting one, and each plays the Press_AB beep.
     // an auto box closes on a timer, and a beep would announce a press that
@@ -829,8 +838,36 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     this.audio.startMap(mapId, !!this.save.onBike);
   }
 
-  showText(text: string, onDone?: () => void): void {
-    this.push(new TextBoxState(this, text, onDone));
+  showText(text: string, onDone?: () => void, onTyped?: () => void): void {
+    this.push(new TextBoxState(this, text, onDone, undefined, undefined, onTyped));
+  }
+
+  /**
+   * The PC's PKMN LEAGUE (PKMNLeaguePC): every HALL OF FAME team, oldest
+   * first, a mon at a time on A; B leaves the whole list.
+   */
+  openHallOfFamePc(onDone?: () => void): void {
+    const teams = ((this.save as { hallOfFame?: HallOfFameEntry[] }).hallOfFame ?? []).filter((t) => t.length > 0);
+    const show = (i: number): void => {
+      const team = teams[i];
+      if (!team) { onDone?.(); return; }
+      this.push(new HallOfFameState(this as never, team, () => show(i + 1), {
+        title: `HALL OF FAME No${String(i + 1).padStart(3, " ")}`,
+        onAbort: () => onDone?.(),
+      }));
+    };
+    show(0);
+  }
+
+  /**
+   * dex_rating (DisplayDexRating): the completion counts, then the rating
+   * line, its jingle once the line has typed out, and a press.
+   */
+  openDexRating(onDone?: () => void): void {
+    const r = dexRating((this.data as { text?: Record<string, string> }).text ?? {}, this.save);
+    this.showText(r.completion, () => {
+      this.showText(r.rating, onDone, () => this.audio.playSfx(r.sfx));
+    });
   }
 
   /**

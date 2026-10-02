@@ -1357,7 +1357,7 @@ export class Scene {
     }
     const hof = (view as unknown as { hallOfFameScreen?: () => any }).hallOfFameScreen?.();
     if (hof) {
-      const sig = `H${hof.index},${hof.mon ? hof.mon.name + hof.mon.level : "-"}`;
+      const sig = `H${hof.title},${hof.index},${hof.mon ? hof.mon.name + hof.mon.level : "-"}`;
       if (sig !== this.hofSig) {
         this.hofSig = sig;
         this.uiOwner = null;

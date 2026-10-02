@@ -51,6 +51,17 @@ function dexNumber(data: unknown, species: string): string {
   return n ? `No.${String(n).padStart(3, "0")}` : "";
 }
 
+/**
+ * The PC's PKMN LEAGUE list (engine/menus/league_pc.asm) walks the same
+ * roll by hand: no timer, A for the next mon (WaitForTextScrollButtonPress),
+ * B out of the whole list (LeaguePCShowTeam's carry), and the banner says
+ * which team it is.
+ */
+export interface HofBrowse {
+  title: string;
+  onAbort: () => void;
+}
+
 export class HallOfFameState implements GameState {
   readonly kind = "halloffame";
   private index = 0;
@@ -60,13 +71,24 @@ export class HallOfFameState implements GameState {
     private game: HofGame,
     private entry: HallOfFameEntry,
     private onDone: () => void,
+    private browse?: HofBrowse,
   ) {}
 
   update(): void {
     this.timer += 1;
     const p = this.game.input.pressed;
-    const skip = p.a === true || p.b === true || p.start === true;
-    if (!skip && this.timer < HOF_MON_FRAMES) return;
+    if (this.browse) {
+      if (p.b) {
+        const abort = this.browse.onAbort;
+        this.game.pop();
+        abort();
+        return;
+      }
+      if (!p.a) return;
+    } else {
+      const skip = p.a === true || p.b === true || p.start === true;
+      if (!skip && this.timer < HOF_MON_FRAMES) return;
+    }
     this.timer = 0;
     this.index += 1;
     if (this.index < this.entry.length) return;
@@ -84,7 +106,7 @@ export class HallOfFameState implements GameState {
     return {
       index: this.index,
       total: this.entry.length,
-      title: `${name}'s HALL OF FAME`,
+      title: this.browse ? this.browse.title : `${name}'s HALL OF FAME`,
       mon: mon
         ? {
             dexNo: dexNumber(this.game.data, mon.species),

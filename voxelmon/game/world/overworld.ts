@@ -1385,6 +1385,13 @@ export class Overworld implements ScriptWorld {
     return bikeAllowed(this.map.id, this.map.def?.tileset, rules);
   }
 
+  /** dex_rating -> PROF.OAK's rating, via the shell. */
+  openDexRating(onDone?: () => void): void {
+    const open = (this.shell as unknown as { openDexRating?: (done?: () => void) => void }).openDexRating;
+    if (open) open.call(this.shell, onDone);
+    else onDone?.();
+  }
+
   /** oaks_aide -> the aide's dex check and reward, via the shell. */
   openOaksAide(textId: string, onDone?: () => void): void {
     (this.shell as unknown as {

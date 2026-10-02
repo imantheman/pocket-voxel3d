@@ -34,6 +34,7 @@ import { EVO_FLASH_FRAMES, flashPeriod } from "../voxelmon/game/ui/evoscreen.ts"
 import * as Bag from "../voxelmon/game/rules/bag.ts";
 import { floorsOf } from "../voxelmon/game/world/elevator.ts";
 import { cableClubScript, EVENT_MEW_FLAG } from "../voxelmon/game/world/cableclub.ts";
+import { dexRating } from "../voxelmon/game/world/dexrating.ts";
 import { destination as warpDestination } from "../voxelmon/game/world/warp.ts";
 import * as Pc from "../voxelmon/game/world/pcitems.ts";
 import { decodeSave } from "../voxelmon/game/save-read.ts";
@@ -10847,5 +10848,125 @@ describe("RUNNING SHOES", () => {
     pressed.right = false;
     expect(save.options.runningShoes).toBe(false);
     expect(rows()[at].index).toBe(1);
+  });
+});
+
+
+describe("PROF.OAK's rating and the PC's other rows", () => {
+  /** Every sound the audio director was asked for, in order. */
+  function songLog(game: VoxelmonGame): string[] {
+    const audio = (game as unknown as { audio: any }).audio;
+    if (!audio.__log) {
+      audio.__log = [];
+      for (const m of ["play", "playOnce", "playSfx"]) {
+        const orig = audio[m].bind(audio);
+        audio[m] = (...args: unknown[]) => {
+          audio.__log.push(`${m}:${args[0] ?? ""}`);
+          return orig(...args);
+        };
+      }
+    }
+    return audio.__log as string[];
+  }
+
+  test("DisplayDexRating: a line per ten owned, 150 and 151 sharing the last; the jingle by OwnedMonValues", () => {
+    const text: Record<string, string> = {
+      _DexCompletionText: "{NUM:hDexRatingNumMonsSeen, 1, 3} seen\n{NUM:hDexRatingNumMonsOwned, 1, 3} owned",
+      _DexRatingText_Own0To9: "zero",
+      _DexRatingText_Own40To49: "forty",
+      _DexRatingText_Own140To149: "one-forty",
+      _DexRatingText_Own150To151: "all",
+    };
+    const save = (seen: number, owned: number) => {
+      const s: Record<string, boolean> = {};
+      const o: Record<string, boolean> = {};
+      for (let i = 0; i < seen; i++) s[`M${i}`] = true;
+      for (let i = 0; i < owned; i++) o[`M${i}`] = true;
+      return { pokedex: { seen: s, owned: o } };
+    };
+    expect(dexRating(text, save(12, 3))).toMatchObject({ completion: "12 seen\n3 owned", rating: "zero", sfx: "Denied" });
+    expect(dexRating(text, save(60, 45))).toMatchObject({ rating: "forty", sfx: "Get_Item1" });
+    expect(dexRating(text, save(150, 149)).rating).toBe("one-forty");
+    expect(dexRating(text, save(150, 149)).sfx).toBe("Get_Key_Item");
+    expect(dexRating(text, save(151, 150))).toMatchObject({ rating: "all", sfx: "Get_Item2" });
+    expect(dexRating(text, save(151, 151)).rating).toBe("all");
+    expect(dexRating(text, save(10, 10)).sfx).toBe("Pokedex_Rating");
+  });
+
+  test.skipIf(!hasGen)("Oak's dex_rating reads the counts, then his line, with its jingle", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld as any;
+    const log = songLog(game);
+    for (const m of ["BULBASAUR", "PIDGEY", "RATTATA"]) {
+      game.save.pokedex.owned[m] = true;
+      game.save.pokedex.seen[m] = true;
+    }
+    game.save.pokedex.seen.SPEAROW = true;
+    log.length = 0;
+    ow.runner.run([["dex_rating"]]);
+    const seen: string[] = [];
+    for (let i = 0; i < 1500 && ow.runner.isRunning(); i++) {
+      if (game.stackKinds().at(-1) === "textbox") seen.push(topText(game));
+      game.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    const all = [...new Set(seen)].join(" | ");
+    expect(all).toContain("4 POKéMON seen");
+    expect(all).toContain("3 POKéMON owned");
+    expect(all).toContain("grassy areas");
+    expect(log).toContain("playSfx:Denied");
+  });
+
+  test.skipIf(!hasGen)("the PC lists BILL'S PC, PROF.OAK'S PC and PKMN LEAGUE as the cart does", () => {
+    const game = makeMenuGame();
+    game.openPc();
+    expect((game.pc() as any).labels).toEqual(["SOMEONE'S PC", "MY PC", "LOG OFF"]);
+    game.pop();
+    game.save.flags.EVENT_MET_BILL = true;
+    game.save.flags.EVENT_GOT_POKEDEX = true;
+    game.openPc();
+    expect((game.pc() as any).labels).toEqual(["BILL'S PC", "MY PC", "PROF.OAK'S PC", "LOG OFF"]);
+    game.pop();
+    (game.save as any).hallOfFame = [[{ species: "PIKACHU", level: 60 }, { species: "LAPRAS", level: 55 }]];
+    game.openPc();
+    expect((game.pc() as any).labels).toEqual(["BILL'S PC", "MY PC", "PROF.OAK'S PC", "PKMN LEAGUE", "LOG OFF"]);
+  });
+
+  test.skipIf(!hasGen)("PROF.OAK'S PC rates on YES; PKMN LEAGUE walks the team on A", () => {
+    const game = makeMenuGame();
+    const log = songLog(game);
+    game.save.flags.EVENT_GOT_POKEDEX = true;
+    (game.save as any).hallOfFame = [[{ species: "PIKACHU", level: 60 }, { species: "LAPRAS", level: 55 }]];
+    game.openPc();
+    // PROF.OAK'S PC is row 2
+    tap(game, VOX_BTN.down);
+    tap(game, VOX_BTN.down);
+    log.length = 0;
+    tap(game, VOX_BTN.a);
+    const texts: string[] = [];
+    for (let i = 0; i < 2000 && game.stackKinds().at(-1) !== "pc"; i++) {
+      const top = game.stackKinds().at(-1);
+      if (top === "textbox") texts.push(topText(game));
+      // YES is the default answer
+      game.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+    }
+    const all = [...new Set(texts)].join(" | ");
+    expect(all).toContain("rated");
+    expect(all).toContain("Rating:");
+    expect(log.some((l) => l === "playSfx:Denied")).toBe(true);
+    game.tick(0);
+    // PKMN LEAGUE is row 3
+    tap(game, VOX_BTN.down);
+    tap(game, VOX_BTN.a);
+    for (let i = 0; i < 400 && game.stackKinds().at(-1) !== "halloffame"; i++) game.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+    expect(game.stackKinds().at(-1)).toBe("halloffame");
+    const view = () => (game as any).hallOfFameScreen();
+    expect(view().title).toBe("HALL OF FAME No  1");
+    expect(view().index).toBe(0);
+    for (let i = 0; i < 30; i++) game.tick(0);
+    expect(view().index).toBe(0); // no timer: it waits
+    tap(game, VOX_BTN.a);
+    expect(view().index).toBe(1);
+    tap(game, VOX_BTN.b);
+    expect(game.stackKinds().at(-1)).toBe("pc");
   });
 });

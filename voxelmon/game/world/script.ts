@@ -1107,9 +1107,15 @@ function* check_dex_owned(ctx: ScriptContext, ...args: unknown[]): Generator<voi
 }
 
 // Commands.lua dex_rating (DisplayDexRating, engine/events/pokedex_rating.asm):
-// the seen/owned tally Oak reads out. No rating UI in the slice, so this is an
-// honest no-op like push_screen — the rows around it still run.
-function* dex_rating(): Generator<void, void> {}
+// the seen/owned tally Oak reads out and his line for it, on the game side
+// (game.ts openDexRating, world/dexrating.ts).
+function* dex_rating(ctx: ScriptContext): Generator<void, void> {
+  const runner = ctx.runner;
+  const w = ctx.world as unknown as { openDexRating?: (done: () => void) => void };
+  if (!w.openDexRating) return;
+  w.openDexRating(() => runner.resume());
+  yield;
+}
 
 // Commands.lua:871-906 YELLOW_RIVAL_PARTIES: Yellow's rival parties key off
 // wRivalStarter (save.rivalStarter: 1 JOLTEON / 2 FLAREON / 3 VAPOREON, set
