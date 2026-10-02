@@ -1,18 +1,18 @@
 POCKET VOXEL COOKER
 ===================
 
-This turns YOUR Pokemon Red, Blue, Yellow or Gold ROM into the files the 3DS game needs. There is
+This turns YOUR Pokemon Red, Blue, Yellow, Gold or Silver ROM into the files the 3DS game needs. There is
 no download of the game anywhere, because the game is built from your
 cartridge, on your computer. This folder does that for you.
 
 You need:  a New 3DS (or New 2DS XL) with homebrew, an SD card with 400 MB
-free, your own US Pokemon Red, Blue, Yellow or Gold file, and an internet connection for the
+free, your own US Pokemon Red, Blue, Yellow, Gold or Silver file, and an internet connection for the
 first run. Budget 20 minutes, most of it waiting.
 
 
 WINDOWS
 -------
-Drag your .gb file (Yellow's and Gold's are .gbc) onto "Cook Pocket Voxel.bat". A window opens and walks
+Drag your .gb file (Yellow's, Gold's and Silver's are .gbc) onto "Cook Pocket Voxel.bat". A window opens and walks
 you through it. If Python is not on the PC it offers to fetch the official
 portable one into this folder first.
 
@@ -37,7 +37,8 @@ WHAT IT ASKS
      colourisation (pokered-gbc, the default).
      Yellow: its own Game Boy Color colours read from your ROM (the
      default), black and white, or the community colours.
-     Gold is not asked: it uses its own colours, read from your ROM.
+     Gold and Silver are not asked: they use their own colours, read from
+     your ROM.
    (--palette dmg|gbc|community answers it without asking.)
 3. At the end, whether to copy the result straight onto your SD card if
    it can see one.
@@ -51,6 +52,10 @@ WHAT YOU GET
         voxelmon/paks/               INTO the 3ds folder that is already on
                                      your SD card (about 330 MB)
       SOURCES.txt                 <- everything that went into the build
+
+Gold and Silver share one set of map files (voxelmon/paks_gold), the way Red
+and Blue share theirs: cook one, copy it, then cook the other and copy it over
+the top, and both play as their own cartridge.
 
 Open the SD card, open its `3ds` folder, and put `voxelmon` and
 `pocketvoxel-3ds.3dsx` inside it, beside whatever else is there. Do not
