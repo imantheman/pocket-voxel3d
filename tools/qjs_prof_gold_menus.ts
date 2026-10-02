@@ -98,9 +98,21 @@ const PER = 360;
 // checking a drawing change left every screen as it was)
 declare const HASH: boolean;
 declare const DUMP: string;
+declare const DUMPN: number;
+declare const OPEN: boolean;
+const opening = typeof OPEN !== "undefined" && OPEN;
+let sumOpen = 0;
+let sumClose = 0;
+let worstOpen = 0;
+let worstOpenAt = -1;
+let worstClose = 0;
+let worstCloseAt = -1;
 const hashing = typeof HASH !== "undefined" && HASH;
 // a frozen clock while hashing: the POKEGEAR's clock card shows the time
 if (hashing) setClockSource({ now: () => 1790000000 });
+// NOCACHE=1: every cachedBlock drawn for real, the reference for HASH
+declare const NOCACHE: boolean;
+if (typeof NOCACHE !== "undefined" && NOCACHE) (globalThis as { noBlockCache?: boolean }).noBlockCache = true;
 let h = 0x811c9dc5 | 0;
 const mix = (v: number): void => {
   h = Math.imul(h ^ (v | 0), 16777619);
@@ -110,6 +122,12 @@ let stop = -1;
 let n = 0;
 const t = { step: 0, draw: 0 };
 function report(): void {
+  if (opening && stop >= 0) {
+    console.log(`[menus] open/close ${STOPS[stop]!.name}: open worst ${worstOpen.toFixed(0)} us at frame ${worstOpenAt} (60 frames ${(sumOpen / 1000).toFixed(1)} ms), close worst ${worstClose.toFixed(0)} us at frame ${worstCloseAt} (60 frames ${(sumClose / 1000).toFixed(1)} ms), top ${game.stack.top()?.screenId}`);
+    worstOpen = worstClose = sumOpen = sumClose = 0;
+    worstOpenAt = worstCloseAt = -1;
+    return;
+  }
   if (n === 0 || stop < 0) return;
   if (hashing) {
     console.log(`[menus] hash ${STOPS[stop]!.name} ${n} ${(h >>> 0).toString(16)}`);
@@ -140,8 +158,12 @@ function report(): void {
     while (game.stack.top()) game.stack.pop();
     game.openStartMenu();
     const s = STOPS[stop]!;
-    if (s.item) game.pushStartMenuItem(s.item);
-    if (s.gearCard) {
+    if (s.item) {
+      // OPEN=1 goes the way the START menu goes: through the fade
+      if (opening) game.openStartMenuItem(s.item);
+      else game.pushStartMenuItem(s.item);
+    }
+    if (s.gearCard && !opening) {
       const gear = game.stack.top();
       gear.flags = () => new Proxy({}, { get: () => true });
       gear.cards = gear.visibleCards();
@@ -156,14 +178,35 @@ function report(): void {
   // the first 60 frames settle (the screen's fade in), then everything counts
   const counting = (f - 120) % PER > 60;
   on = counting;
+  const local = (f - 120) % PER;
   const a = now();
-  game.frame(s.step && f % 45 === 0 ? s.step : 0);
+  let pad = s.step && f % 45 === 0 ? s.step : 0;
+  if (opening) pad = local === 200 ? VOX_BTN.b : 0;
+  // HASH: every screen walked through its cursor, pages and pockets
+  if (hashing && local > 30 && local % 20 === 0) {
+    const WALK = [VOX_BTN.down, VOX_BTN.down, VOX_BTN.right, VOX_BTN.down, VOX_BTN.left, VOX_BTN.up, VOX_BTN.right, VOX_BTN.right];
+    pad = WALK[Math.floor(local / 20) % WALK.length]!;
+  }
+  game.frame(pad);
   if (counting) t.step += now() - a;
   if ((f & 1) === 0) {
     setLcd(lcd);
     const b = now();
     game.draw(lcd);
-    if (hashing && counting && n === 5 && typeof DUMP !== "undefined" && STOPS[stop]!.name === DUMP) {
+    if (opening) {
+      const spent = now() - a;
+      if (local < 60) sumOpen += spent;
+      if (local >= 200 && local < 260) sumClose += spent;
+      if (local < 60 && spent > worstOpen) {
+        worstOpen = spent;
+        worstOpenAt = local;
+      }
+      if (local >= 200 && local < 260 && spent > worstClose) {
+        worstClose = spent;
+        worstCloseAt = local;
+      }
+    }
+    if (hashing && counting && n === (typeof DUMPN !== "undefined" ? DUMPN : 5) && typeof DUMP !== "undefined" && (STOPS[stop]!.name === DUMP || String(stop) === String(DUMP))) {
       const st = lcd.s;
       console.log(`[menus] dump cells ${Array.from(st.cells.slice(0, 640)).join(",")}`);
       console.log(`[menus] dump attrs ${Array.from(st.attrs.slice(0, 640)).join(",")}`);
@@ -172,6 +215,14 @@ function report(): void {
       console.log(`[menus] dump winattr ${Array.from(st.attrs.slice(640)).join(",")}`);
       console.log(`[menus] dump objs ${st.objs.map((o) => [o.x, o.y, o.tile, o.attr].join(":")).join(",")}`);
       console.log(`[menus] dump regs ${[st.scx, st.scy, st.wx, st.wy, st.flags, st.lineTarget].join(",")}`);
+    }
+    if (hashing && counting && typeof DUMP !== "undefined" && (STOPS[stop]!.name === DUMP || String(stop) === String(DUMP))) {
+      const st = lcd.s;
+      let fh = 0x811c9dc5 | 0;
+      for (let i = 0; i < 2048; i++) fh = Math.imul(fh ^ ((st.cells[i]! << 8) | st.attrs[i]!), 16777619);
+      for (const o of st.objs) fh = Math.imul(fh ^ ((o.x << 16) ^ (o.y << 8) ^ o.tile ^ (o.attr << 24)), 16777619);
+      for (let i = 0; i < 128; i++) fh = Math.imul(fh ^ st.colours[i]!, 16777619);
+      console.log(`[menus] fh ${n} ${(fh >>> 0).toString(16)} ${st.scx},${st.scy},${st.wx},${st.wy},${st.flags},${st.lineTarget}`);
     }
     if (hashing && counting) {
       const st = lcd.s;

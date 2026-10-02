@@ -375,8 +375,15 @@ function drawObjs(image: LcdImage, tx0: number, ty0: number, cols: number, rows:
  */
 export function cachedBlock(owner: object, key: string, draw: () => void): void {
   const l = lcd;
-  if (l === null || canvasDepth > 0) {
-    draw();
+  // (globalThis.noBlockCache: every block drawn for real -- the reference a
+  // check of the cache compares against, tools/qjs_prof_gold_menus.ts)
+  if (l === null || canvasDepth > 0 || (globalThis as { noBlockCache?: boolean }).noBlockCache) {
+    G.push();
+    try {
+      draw();
+    } finally {
+      G.pop();
+    }
     return;
   }
   const s = st;
@@ -387,9 +394,22 @@ export function cachedBlock(owner: object, key: string, draw: () => void): void 
     byKey = new Map();
     blockCache.set(owner, byKey);
   }
+  // A key's first frame just draws: recording costs a little on top, and a
+  // key seen once (a list scrolling past) may never come back. Its second
+  // frame records; after that it replays.
   const rec = byKey.get(full);
+  if (rec === undefined) {
+    if (byKey.size >= 16) byKey.clear();
+    byKey.set(full, null);
+    G.push();
+    try {
+      draw();
+    } finally {
+      G.pop();
+    }
+    return;
+  }
   if (rec && replayBlock(l, rec)) return;
-  if (byKey.size >= 16) byKey.clear();
   byKey.set(full, recordBlock(l, draw));
 }
 
@@ -406,7 +426,8 @@ interface BlockRecord {
   windowUsed: boolean;
 }
 
-const blockCache = new WeakMap<object, Map<string, BlockRecord>>();
+/** Per owner, per key: the record, or null for a key seen once so far. */
+const blockCache = new WeakMap<object, Map<string, BlockRecord | null>>();
 
 /** A number standing for an object in a cachedBlock key (0 for none). */
 export function keyOf(o: unknown): number {
@@ -420,8 +441,6 @@ export function keyOf(o: unknown): number {
 }
 const objectIds = new WeakMap<object, number>();
 let objectCount = 0;
-const savedCells = new Uint16Array(2048);
-const savedAttrs = new Uint8Array(2048);
 /** An attribute no draw writes (they are masked with 0xef): "untouched". */
 const UNTOUCHED = 0xff;
 
@@ -432,8 +451,11 @@ function regsOf(l: Lcd): number[] {
 
 function recordBlock(l: Lcd, draw: () => void): BlockRecord {
   const entry = l.paletteState();
-  savedCells.set(cellsOf);
-  savedAttrs.set(attrsOf);
+  // this recording's own copy of the cells: a block recorded inside another
+  // one's recording takes its copy of the outer's marked cells, and puts them
+  // back marked, so the outer still sees what the inner wrote
+  const savedCells = cellsOf.slice();
+  const savedAttrs = attrsOf.slice();
   attrsOf.fill(UNTOUCHED);
   const objStart = l.s.objs.length;
   const regs0 = regsOf(l);

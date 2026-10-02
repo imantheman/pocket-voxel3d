@@ -801,11 +801,15 @@ export class PokedexMenu {
   drawMainBackground(): void {
     // the same cells every frame until the totals, the entry shown or the
     // colours change: recorded once, replayed after (screen.ts cachedBlock)
+    // (the entry's pic, last, is drawn outside it: the cursor moves it)
     const [seen, caught] = this.totals();
-    const cur: any = this.current();
-    const key = `bg:${seen},${caught}:${cur?.species}:${cur?.seen ? 1 : 0}${cur?.caught ? 1 : 0}`
-      + `:${this.mode()}:${keyOf(this.dexPalette)}:${keyOf(this.sheet)}:${GbcPalette.stateKey()}`;
+    const key = `bg:${seen},${caught}:${this.mode()}:${keyOf(this.dexPalette)}:${keyOf(this.sheet)}`
+      + `:${GbcPalette.stateKey()}`;
     cachedBlock(this, key, () => this.drawMainBackgroundNow());
+    G.push();
+    G.map = 0;
+    this.drawPic(this.current(), 1, 1);
+    G.pop();
   }
 
   /** drawMainBackground's drawing. */
@@ -835,8 +839,6 @@ export class PokedexMenu {
     this.tile(0x54, 8, 9);
     for (let y = 10; y <= 15; y++) this.tile(0x5a, 8, y);
     this.tile(0x5b, 8, 16);
-
-    this.drawPic(this.current(), 1, 1);
     G.pop();
   }
 
@@ -906,9 +908,11 @@ export class PokedexMenu {
 
   // Lua: PokedexMenu.lua:753
   drawCursorObjs(): void {
-    // the cursor's objects stand still until it moves (screen.ts cachedBlock)
-    const key = `cur:${this.mode()}:${this.index - this.scroll}:${keyOf(this.objs)}:${keyOf(this.gfx)}`
-      + `:${GbcPalette.stateKey()}`;
+    // the cursor's objects and the scroll bar's thumb stand still until the
+    // cursor moves -- the thumb rides the whole list, so the absolute index
+    // and the list's length are in the key (screen.ts cachedBlock)
+    const key = `cur:${this.mode()}:${this.index}:${this.scroll}:${this.rows.length}:${keyOf(this.objs)}`
+      + `:${keyOf(this.gfx)}:${keyOf(this.palettes)}:${GbcPalette.stateKey()}`;
     cachedBlock(this, key, () => this.drawCursorObjsNow());
   }
 
