@@ -35,6 +35,7 @@ import {
 } from "../voxelmon/game/ui/yellowintro.ts";
 import { IntroState } from "../voxelmon/game/ui/intro.ts";
 import { surfingPikachuInParty } from "../voxelmon/game/ui/surfingstate.ts";
+import { cableClubScript, EVENT_SURF_PIKACHU_FLAG } from "../voxelmon/game/world/cableclub.ts";
 import * as Pika from "../voxelmon/game/world/pikachu.ts";
 import { chanseyScript, nurseGreetScript } from "../voxelmon/game/world/nurses.ts";
 import { PIKA_MAP_PAUSE_IGT, PIKA_MAP_SURF_SELECT } from "../voxelmon/game/world/script.ts";
@@ -849,5 +850,29 @@ describe("Yellow: rules it changed", () => {
       game.tick(t % 2 === 0 ? VOX_BTN.a : 0);
     }
     expect(fought).toBe(true);
+  });
+});
+
+
+describe("EVENT POKéMON in Yellow: the SURFING PIKACHU", () => {
+  test.skipIf(!hasYellow)("the desk hands over MEW and a PIKACHU that knows SURF, so the beach opens", () => {
+    const game = newYellowGame();
+    const ow = game.overworld as any;
+    game.save.options = { ...(game.save.options ?? {}), eventPokemon: true };
+    const rows = cableClubScript("VIRIDIAN_POKECENTER_LINK_RECEPTIONIST", game.save, yellow)!;
+    const gifts = rows.filter((r) => r[0] === "give_pokemon").map((r) => r[1]);
+    expect(gifts).toEqual(["MEW", "PIKACHU"]);
+    expect(surfingPikachuInParty(game.save as never)).toBe(false);
+    ow.runner.run(rows.slice(0, rows.findIndex((r, i) => i > 0 && r[0] === "face_player")));
+    playOut(game);
+    const surfer = [...game.save.party, ...((game.save as any).boxes ?? []).flat()]
+      .find((m: any) => m.species === "PIKACHU" && m.moves.some((mv: any) => mv.id === "SURF"));
+    expect(surfer).toBeDefined();
+    expect(surfer.otName).toBe("GF");
+    expect(game.save.flags[EVENT_SURF_PIKACHU_FLAG]).toBe(true);
+    if (game.save.party.includes(surfer)) expect(surfingPikachuInParty(game.save as never)).toBe(true);
+    // once per save
+    expect(cableClubScript("VIRIDIAN_POKECENTER_LINK_RECEPTIONIST", game.save, yellow)!
+      .some((r) => r[0] === "give_pokemon")).toBe(false);
   });
 });

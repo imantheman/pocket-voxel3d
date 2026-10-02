@@ -330,12 +330,19 @@ function* give_pokemon(ctx: ScriptContext, ...args: unknown[]): Generator<void, 
   // a gift can be a Time Capsule shiny like anything caught
   const mon = newMon(w.data, species, level, w.shell?.giftRng);
   // A 4th arg names another trainer as the OT (the event MEW's GF): a
-  // traded mon, as the summary and obedience read it
-  const ot = args[3] as { otName?: string; otId?: number } | undefined;
+  // traded mon, as the summary and obedience read it; and may carry the
+  // mon's moves (Yellow's SURFING PIKACHU)
+  const ot = args[3] as { otName?: string; otId?: number; moves?: string[] } | undefined;
   if (ot?.otName) {
     mon.otName = ot.otName;
     mon.otId = ot.otId ?? (w.shell?.giftRng ? w.shell.giftRng.int(65536) : 0);
     mon.traded = true;
+  }
+  if (ot?.moves && ot.moves.length > 0) {
+    mon.moves = ot.moves
+      .filter((id) => w.data.moves?.[id])
+      .slice(0, 4)
+      .map((id) => ({ id, pp: w.data.moves[id].pp ?? 0 }));
   }
   // _GivePokemon: a full party sends the gift to the PC (SendNewMonToBox,
   // SetToBoxText) rather than losing it -- the Silph Co. LAPRAS used to
