@@ -252,6 +252,10 @@ export class Scene {
     // screen reads the map's own terrain page out of it.
     const flat = !!view.overworld2d?.();
     if (flat) {
+      // a battle just over: its ui, pics and cards down first (this path
+      // returns before the one below that does it -- the HP bars stayed up
+      // over the 2D overworld)
+      if (this.battleActive) this.endBattle();
       if (!this.flatWorld) {
         this.flatWorld = true;
         this.hideAllEnts();

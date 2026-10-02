@@ -14,6 +14,7 @@ declare const TO3D: boolean;
 declare const PIKA: boolean;
 declare const SHOTS: boolean;
 let battleFrames = 0;
+let afterFrames = 0;
 const g = globalThis as unknown as { voxelmonGame: any; frame: (b: number) => void };
 const game = g.voxelmonGame;
 const mainFrame = g.frame;
@@ -61,9 +62,15 @@ g.frame = (b: number): void => {
     }
   }
   // a top-screen shot two seconds into each battle (SHOTS=1 at bundle time)
+  // ... and one a second after it ends, back on the overworld
   if (typeof SHOTS !== "undefined" && game.battleView?.()) {
     if (++battleFrames === 120) native.screenshot?.();
-  } else battleFrames = 0;
+    afterFrames = 0;
+  } else {
+    if (battleFrames > 0) afterFrames = 1;
+    else if (afterFrames > 0 && ++afterFrames === 60) native.screenshot?.();
+    battleFrames = 0;
+  }
   i++;
   mainFrame((b & ~0xff) | pad);
 };

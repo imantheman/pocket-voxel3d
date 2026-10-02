@@ -19192,6 +19192,8 @@ class Scene {
     }
     const flat = !!view.overworld2d?.();
     if (flat) {
+      if (this.battleActive)
+        this.endBattle();
       if (!this.flatWorld) {
         this.flatWorld = true;
         this.hideAllEnts();
