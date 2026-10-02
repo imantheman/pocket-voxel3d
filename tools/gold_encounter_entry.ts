@@ -15,6 +15,9 @@ declare const ONLY: string;
 
 const g = globalThis as unknown as { goldGame: any; goldProf: boolean; frame: (b: number) => void };
 g.goldProf = true;
+// INTRO=1 at bundle time: the bottom screen's battle page off (A/B timing)
+declare const INTRO: boolean;
+if (typeof INTRO !== "undefined") (globalThis as { noBattlePanel?: boolean }).noBattlePanel = true;
 const game = g.goldGame;
 const mainFrame = g.frame;
 
@@ -26,6 +29,8 @@ let fired = -1;
 let lastTop = "";
 let walkLeft = true;
 let shots = 0;
+let menuSeen = 0;
+let movesSeen = 0;
 
 /** A tall-grass cell on the current map with grass on both sides of it. */
 function findGrass(w: any): [number, number] | null {
@@ -93,6 +98,27 @@ g.frame = (b: number): void => {
       }
       pad = walkLeft ? VOX_BTN.left : VOX_BTN.right;
     } else if (top.screenId === "Gen2BattleState") {
+      // ONLY: on the menu a second, a shot; FIGHT, the move list a second,
+      // a shot; back, then RUN as below
+      if (typeof ONLY !== "undefined" && top.phase === "menu" && menuSeen >= 0) {
+        menuSeen++;
+        if (menuSeen === 60 || menuSeen === 150) {
+          console.log(`[pv] bench battle ${shots++} shot (${top.phase})`);
+          native.screenshot?.();
+        }
+        if (menuSeen === 90) pad = VOX_BTN.a; // FIGHT (the cursor starts there)
+        if (menuSeen < 160) { mainFrame((b & ~0xff) | pad); return; }
+      }
+      if (typeof ONLY !== "undefined" && top.phase === "moves") {
+        movesSeen++;
+        if (movesSeen === 50) {
+          console.log(`[pv] bench battle ${shots++} shot (${top.phase})`);
+          native.screenshot?.();
+        }
+        if (movesSeen === 80) { pad = VOX_BTN.b; menuSeen = 100; }
+        mainFrame((b & ~0xff) | pad);
+        return;
+      }
       // RUN: down then right to it, A; text: A
       if (n % 12 === 0) {
         if (top.phase === "menu") {

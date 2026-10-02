@@ -171,6 +171,8 @@ const MENU: string[] = [
 ];
 const MENU_ACTION: Record<string, string> = { FIGHT: "fight", "<PK><MN>": "party",
   PACK: "item", RUN: "run" };
+/** Rows the player's HUD moves down when the battle is staged in 3D (drawHud). */
+const STAGED_PLAYER_HUD_DROP = 5;
 const MENU_BOX_X = 8;
 const MENU_COL_SPACING = 6;
 
@@ -4446,7 +4448,21 @@ export class BattleState {
     const wasBattle = Font.useBattleExtra(true);
     this.drawEnemyHud();
     this.drawPics();
-    this.drawPlayerHud();
+    if (this.staged3d) {
+      // Staged in 3D the cards stand mid-screen, round the arena the camera
+      // centres on, and the player's HUD at rows 7-11 stood in front of the
+      // near card. The text box is the bottom screen's now, so the HUD goes
+      // down to the rows it left (12-16): both HUDs on the screen's edges.
+      G.push();
+      G.translate(0, STAGED_PLAYER_HUD_DROP * 8);
+      try {
+        this.drawPlayerHud();
+      } finally {
+        G.pop();
+      }
+    } else {
+      this.drawPlayerHud();
+    }
     Font.useBattleExtra(wasBattle);
   }
 
@@ -4734,6 +4750,11 @@ export class BattleState {
       return;
     }
     this.drawHud();
+    // Staged in 3D, the text and the menus are the bottom screen's
+    // (ui/Companion.ts's battle page), as in the Kanto games' 3D battles:
+    // the top shows the arena and the HUDs. The phases that page has no
+    // view of -- the forget list, the level-up stats box -- stay here.
+    if (this.staged3d && this.phase !== "choose-forget" && this.phase !== "stats-box") return;
     this.drawBottom(0);
   }
 

@@ -20,6 +20,20 @@
 //                        the 15 rows shown; rows 0-1 go to it too)
 //   row 14     the tabs, <PK><MN> BADGE CARD MAP, tapped to turn the page
 //
+// In a battle the whole panel is the battle's (the Kanto games' 3D battles
+// put their menus on the bottom screen the same way; with BATTLES 3D the
+// top screen then shows only the arena and the HUDs):
+//
+//   row 0      the foe, name and level (BACK at the right in the move list)
+//   rows 1-6   the battle's text, typed as the top screen types it, the
+//              arrow when it waits -- a tap anywhere is A
+//   rows 7-14  FIGHT <PK><MN> PACK RUN as four boxes; the move list with the
+//              chosen move's type and PP; YES / NO; or, while the text runs,
+//              both mons with their HP
+//
+// A tap moves the battle's own cursor and presses A for it, so the battle
+// answers exactly as it answers the buttons (which work as ever).
+//
 // A tap is the finger lifting after it went down on a target (the Kanto
 // Gear's rule). The panel redraws only when something it shows has changed,
 // checked twice a second, so a still panel costs a string compare every 15
@@ -27,11 +41,13 @@
 
 import type { VoxelHost } from "../../host.ts";
 import { Lcd } from "../platform/lcd.ts";
-import G, { resetDrawState, setLcd } from "../platform/screen.ts";
+import G, { cachedBlock, resetDrawState, setLcd } from "../platform/screen.ts";
 import { Clock } from "../core/Clock.ts";
 import { BattleHud } from "./BattleHud.ts";
 import { Chrome } from "./Chrome.ts";
 import { Pokegear } from "./Pokegear.ts";
+import { Input } from "../shared/core/Input.ts";
+import { TypeChart } from "../shared/battle/TypeChart.ts";
 
 type LcdBankSpec = { base: number; page: number; count: number };
 
@@ -67,6 +83,10 @@ function targeted(host: VoxelHost, k: number): VoxelHost {
   const names = ["lcdShow", "lcdBank", "lcdReset", "lcdCells", "lcdRegs", "lcdObjs", "lcdPals", "lcdLines"];
   const out: Record<string, unknown> = {};
   for (const n of names) out[n] = wrap(n);
+  // the typed-array forms only where the host has them (Lcd.end takes their
+  // presence as the choice): the battle page redraws as its text types, and
+  // the hex path cost the frame several ms
+  for (const n of ["lcdCellsBin", "lcdObjsBin", "lcdLinesBin"]) if (h[n]) out[n] = wrap(n);
   return out as unknown as VoxelHost;
 }
 
@@ -95,6 +115,38 @@ function maxHpOf(m: MonLike): number {
 
 const isEgg = (m: MonLike | undefined): boolean => !!m && !!(m.isEgg || m.egg);
 
+/** The battle screen on the stack, if any. */
+function battleOf(game: any): any {
+  // (globalThis.noBattlePanel: the old panel in battles, for A/B timing)
+  if ((globalThis as { noBattlePanel?: boolean }).noBattlePanel) return null;
+  const states: any[] = game?.stack?.states ?? [];
+  for (let i = states.length - 1; i >= 0; i--) if (states[i]?.screenId === "Gen2BattleState") return states[i];
+  return null;
+}
+
+/** The battle's YES/NO questions (BattleState drawBottom's `asking`). */
+const ASKING = new Set(["ask-nickname", "ask-forget", "stop-learning", "ask-shift", "ask-next-mon"]);
+type BattleView = "menu" | "moves" | "ask" | "text";
+
+function battleView(st: any): BattleView {
+  if (st.phase === "menu") return "menu";
+  if (st.phase === "moves") return "moves";
+  if (ASKING.has(st.phase) && (st.messageTimer ?? 0) <= 0) return "ask";
+  return "text";
+}
+
+/** The YES/NO cursor of the question standing: 1 YES, 2 NO. */
+const ASK_FIELD: Record<string, string> = {
+  "ask-nickname": "nicknameIndex", "ask-shift": "shiftIndex", "ask-next-mon": "nextMonIndex",
+};
+function askIndex(st: any): number {
+  return Number(st[ASK_FIELD[st.phase] ?? "forgetChoice"] ?? 1);
+}
+
+/** Where the battle panel's boxes start, and the move list's first row. */
+const ACT_ROW = 7;
+const MOVE_ROW = 8;
+
 export class Companion {
   private readonly lcd: Lcd;
   private hud: BattleHud | null = null;
@@ -108,6 +160,8 @@ export class Companion {
   /** The town map's POKeGEAR, and the landmark it is showing. */
   private gear: Pokegear | null = null;
   private gearFor = "";
+  /** A button a battle tap pressed, let go on the next step. */
+  private tapBtn: string | null = null;
 
   constructor(host: VoxelHost, banks: LcdBankSpec[]) {
     this.lcd = new Lcd(targeted(host, 1));
@@ -117,6 +171,11 @@ export class Companion {
   /** Once a step: the bottom screen's touch in its own pixels (320x240) and
    *  whether a finger is on it. Acts as the finger lifts. */
   touch(game: any, x: number, y: number, held: boolean): void {
+    // the press a tap made last step has been seen: let it go
+    if (this.tapBtn) {
+      Input.sourceRelease(this.tapBtn, "companion");
+      this.tapBtn = null;
+    }
     if (held) {
       if (!this.down) this.down = [Math.floor(x / 16), Math.floor(y / 16)];
       return;
@@ -125,6 +184,11 @@ export class Companion {
     this.down = null;
     if (!at || !game?.world?.map) return;
     const [cx, cy] = at;
+    const st = battleOf(game);
+    if (st) {
+      if (game.stack.top() === st) this.battleTap(st, cx, cy);
+      return;
+    }
     let page: Page = this.page;
     let mon = this.mon;
     const party = this.party(game);
@@ -155,9 +219,37 @@ export class Companion {
     this.wait = CHECK_EVERY;
   }
 
+  /** A battle tap at cell (cx, cy): the battle's cursor there, then A (or B). */
+  private battleTap(st: any, cx: number, cy: number): void {
+    const view = battleView(st);
+    let btn = "a";
+    if (view === "menu" && cy >= ACT_ROW) {
+      st.menuIndex = (cy >= ACT_ROW + 4 ? 2 : 0) + (cx >= 10 ? 2 : 1);
+    } else if (view === "moves") {
+      if (cy === 0) btn = "b";
+      else {
+        const i = cy - MOVE_ROW + 1;
+        const moves = st.playerMoves?.() ?? [];
+        if (i < 1 || i > moves.length) return;
+        st.moveIndex = i;
+      }
+    } else if (view === "ask" && cy >= ACT_ROW && cy < ACT_ROW + 4) {
+      st[ASK_FIELD[st.phase] ?? "forgetChoice"] = cx >= 10 ? 2 : 1;
+    } else if (view !== "text") {
+      return;
+    }
+    Input.sourcePress(btn, "companion");
+    this.tapBtn = btn;
+    console.log(`[pv] gold panel: battle ${view} tap ${btn} at ${cx},${cy}`);
+    this.sig = "";
+  }
+
   /** Once per shown frame, after the top screen's compose. */
   frame(game: any): void {
-    if (this.sig !== "" && ++this.wait < CHECK_EVERY) return;
+    // a battle's text types and its cursor moves: looked at every second
+    // frame (the text then types at 15 steps a second down here)
+    const every = battleOf(game) ? 2 : CHECK_EVERY;
+    if (this.sig !== "" && ++this.wait < every) return;
     this.wait = 0;
     const sig = this.signature(game);
     if (sig === this.sig) return;
@@ -204,6 +296,8 @@ export class Companion {
 
   private signature(game: any): string {
     if (!game?.world?.map) return "boot";
+    const st = battleOf(game);
+    if (st) return this.battleSignature(game, st);
     let s = `${this.page}:${this.mon}|${this.location(game)}|${this.time(game)}|${game.save?.player?.money ?? 0}`;
     for (const m of this.party(game)) {
       s += `|${monName(m)}:${m.level ?? 0}:${m.hp ?? 0}/${maxHpOf(m)}:${isEgg(m) ? 1 : 0}`;
@@ -216,6 +310,93 @@ export class Companion {
       s += `|${this.count(dex.caught)}/${this.count(dex.seen)}|${game.save?.playTime?.hours ?? 0}:${game.save?.playTime?.minutes ?? 0}`;
     }
     return s;
+  }
+
+  private battleSignature(game: any, st: any): string {
+    st.syncTyper?.();
+    const view = battleView(st);
+    const e = st.activeMon?.("enemy") ?? {};
+    const p = st.activeMon?.("player") ?? {};
+    let s = `B|${view}|${st.phase}|${st.menuIndex}|${st.moveIndex}|${view === "ask" ? askIndex(st) : 0}`
+      + `|${(st.messageLines?.() ?? []).join("/")}|${st.messageArrowVisible?.() ? 1 : 0}`
+      + `|${monName(e)}:${e.level}:${st.shownHp?.enemy ?? e.hp}/${maxHpOf(e)}`
+      + `|${monName(p)}:${p.level}:${st.shownHp?.player ?? p.hp}/${maxHpOf(p)}|${game.stack.top() === st ? 1 : 0}`;
+    if (view === "moves") for (const m of st.playerMoves?.() ?? []) s += `|${String(m?.id)}${m?.pp}`;
+    return s;
+  }
+
+  /** One mon's name, level and HP bar from row `row`; its HP numbers too. */
+  private battleMon(mon: any, hp: number, row: number, numbers: boolean): void {
+    if (!mon || !mon.species) return;
+    Chrome.print(monName(mon), 1, row);
+    Chrome.printRight(`<LV>${mon.level ?? 1}`, COLS - 1, row);
+    const max = maxHpOf(mon);
+    const shown = Math.max(0, Math.min(max, Math.round(Number(hp ?? 0))));
+    if (this.hud!.available()) this.hud!.drawHpBar(shown, max, 1, row + 1);
+    if (numbers) Chrome.printRight(`${shown}/${max}`, COLS - 1, row + 2);
+  }
+
+  /** The battle's panel (see the header). */
+  private drawBattle(game: any, st: any): void {
+    const view = game.stack.top() === st ? battleView(st) : "text";
+    const enemy = st.activeMon?.("enemy");
+    const player = st.activeMon?.("player");
+    if (enemy?.species) Chrome.print(`${monName(enemy)} <LV>${enemy.level ?? 1}`, 0, 0);
+    if (view === "moves") {
+      Chrome.printRight("BACK", COLS, 0);
+    }
+    // Everything but the text, recorded once and replayed while it stands
+    // (screen.ts cachedBlock): the text types every other frame, and this
+    // part redrawn with it cost the battle ~7 ms a frame.
+    const e = enemy ?? {};
+    const p = player ?? {};
+    const key = `bp|${view}|${st.menuIndex}|${st.moveIndex}|${view === "ask" ? askIndex(st) : 0}`
+      + `|${monName(e)}:${e.level}:${Math.round(st.shownHp?.enemy ?? e.hp ?? 0)}/${maxHpOf(e)}`
+      + `|${monName(p)}:${p.level}:${Math.round(st.shownHp?.player ?? p.hp ?? 0)}/${maxHpOf(p)}`
+      + (view === "menu" ? `|${(st.menuLabels?.() ?? []).join(",")}` : "")
+      + (view === "moves" ? `|${(st.playerMoves?.() ?? []).map((m: any) => `${String(m?.id)}${m?.pp}`).join(",")}` : "");
+    cachedBlock(this, key, () => this.drawBattleStill(game, st, view, enemy, player));
+    // the text, on the box's two rows as the top screen sets them
+    st.syncTyper?.();
+    const lines: string[] = st.messageLines?.() ?? [];
+    for (let i = 0; i < Math.min(2, lines.length); i++) Chrome.print(lines[i]!, 1, 3 + i * 2);
+    if (st.messageArrowVisible?.()) Chrome.print("▼", 18, 6);
+  }
+
+  /** The battle panel's still part: the text's box, the boxes and lists below. */
+  private drawBattleStill(game: any, st: any, view: BattleView, enemy: any, player: any): void {
+    Chrome.box(0, 1, COLS, 6);
+    if (view === "menu" || view === "ask") {
+      const labels: string[] = view === "menu" ? (st.menuLabels?.() ?? []) : ["YES", "NO"];
+      const at = view === "menu" ? st.menuIndex : askIndex(st);
+      labels.forEach((label, k) => {
+        const x = (k % 2) * 10;
+        const y = ACT_ROW + Math.floor(k / 2) * 4;
+        Chrome.box(x, y, 10, 4);
+        Chrome.print(label, x + 2, y + 2);
+        if (k + 1 === at) Chrome.cursor(x + 1, y + 2);
+      });
+    } else if (view === "moves") {
+      Chrome.box(0, ACT_ROW, COLS, 8);
+      const moves: any[] = st.playerMoves?.() ?? [];
+      const defs = game.data?.moves ?? {};
+      moves.forEach((m, k) => {
+        const row = MOVE_ROW + k;
+        Chrome.print(String(defs[String(m?.id)]?.name ?? m?.id ?? "-").slice(0, 12), 2, row);
+        Chrome.printRight(`${m?.pp ?? 0}/${m?.maxPp ?? m?.pp ?? 0}`, COLS - 1, row);
+        if (k + 1 === st.moveIndex) Chrome.cursor(1, row);
+      });
+      const cur = moves[(st.moveIndex ?? 1) - 1];
+      if (cur) {
+        const disabled = st.battle?.player && st.battle.moveDisabled?.(st.battle.player, cur.id);
+        const type = defs[String(cur.id)]?.type;
+        Chrome.print(disabled ? "Disabled!" : `TYPE/${type ? TypeChart.displayName(type, game.data) : ""}`, 1, 13);
+      }
+    } else {
+      // while the text runs: both mons and their HP
+      this.battleMon(enemy, st.shownHp?.enemy ?? enemy?.hp, 8, false);
+      this.battleMon(player, st.shownHp?.player ?? player?.hp, 11, true);
+    }
   }
 
   private drawParty(game: any): void {
@@ -347,6 +528,13 @@ export class Companion {
     lcd.shown = true;
     G.setColor(1, 1, 1, 1);
     G.rectangle("fill", 0, 0, 160, 144);
+    const st = game?.world?.map ? battleOf(game) : null;
+    if (st) {
+      if (!this.hud) this.hud = BattleHud.new(game.data?.gen2MenuGfx, game.data?.gen2Palettes);
+      this.drawBattle(game, st);
+      lcd.end();
+      return;
+    }
     if (game?.world?.map && this.page === "map") {
       this.drawMap(game);
     } else if (game?.world?.map) {

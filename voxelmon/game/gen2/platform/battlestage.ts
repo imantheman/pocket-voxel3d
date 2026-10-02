@@ -21,12 +21,11 @@ import { is2d } from "../../viewmode.ts";
 const SIDE_PLAYER = 0;
 const SIDE_ENEMY = 1;
 const Q8 = 256;
-// Gold keeps a full-width text box over the bottom third of the screen,
-// right where the Kanto rig stands the near card: the shot is pulled back a
-// little and aimed lower (battleCam's lift) so both mons stand in the open
-// two thirds above it.
+// The text box and the menus are on the bottom screen (ui/Companion.ts's
+// battle page), as in the Kanto games' 3D battles, so the shot is centred
+// as the Kanto rig centres it -- no lift to clear a box over the bottom.
 const BATTLE_ZOOM = Q8;
-const BATTLE_LIFT = Math.round(Q8 * 0.12);
+const BATTLE_LIFT = 0;
 // and, under a roof, stood further off (the 3DS host draws at a fixed fov,
 // so the rig's zoom does not widen the shot; distance does). The outdoor
 // rig already stands well back.
@@ -34,6 +33,9 @@ const BATTLE_DIST = [Q8, Math.round(Q8 * 1.7)] as const; // by rig: tele, wide
 // An eighth of a turn round from straight over the shoulder: the mons then
 // stand diagonally -- the enemy far and high, the player nearer and lower --
 // as the cart's layout has them, instead of one in front of the other.
+// (A preference: chooseView turns away from whatever blocks the sightlines,
+// so either side can come up; the HUDs keep to the top and bottom edges,
+// clear of the cards, whichever it is -- BattleState.drawHud.)
 const BATTLE_ORBIT = 32;
 
 export interface StageData {
@@ -114,6 +116,7 @@ export class BattleStage {
     if (!arena) return null;
     const rig = GoldMap.isOutside(map.def) ? 0 : 1; // RIG tele outdoors, wide under a roof
     const view = chooseView(map as unknown as GameMap, arena, rig, BATTLE_ORBIT);
+    console.log(`[pv] gold battle cam: orbit ${view.orbit} pitch ${view.pitch} rig ${rig} (prefer ${BATTLE_ORBIT}) enemy ${arena.enemyCell} player ${arena.playerCell}`);
     this.host.arena(mapIndex, arena.x, arena.y, arena.shape, rig);
     this.host.battleCam(view.orbit, view.pitch, BATTLE_ZOOM, BATTLE_LIFT, BATTLE_DIST[rig]);
     return arena;
