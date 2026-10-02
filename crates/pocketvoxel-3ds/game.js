@@ -19371,7 +19371,19 @@ class Scene {
       this.animEmitted = false;
     }
     host.uiClear();
+    this.forgetUi();
     this.battleActive = false;
+  }
+  forgetUi() {
+    this.uiOwner = null;
+    this.uiRows = [];
+    this.uiPage = -1;
+    this.uiArrow = false;
+    this.choiceDrawn = false;
+    this.namingSig = this.titleSig = this.introSig = null;
+    this.menuSig = this.bagSig = this.shopSig = this.boxSig = this.partySig = null;
+    this.dexSig = this.hofSig = this.diplomaSig = this.tradeSig = this.creditsSig = null;
+    this.evoSig = this.summarySig = null;
   }
   emitMaps(view) {
     const ow = view.overworld;

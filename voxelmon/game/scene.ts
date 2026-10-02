@@ -483,7 +483,27 @@ export class Scene {
       this.animEmitted = false;
     }
     host.uiClear();
+    this.forgetUi();
     this.battleActive = false;
+  }
+
+  /**
+   * After a uiClear that emitUi did not ask for: everything it remembers
+   * having drawn on the tile layer is gone, so the next screen up -- a text
+   * box, the START menu, the OPTION screen -- is drawn whole, not diffed
+   * against rows the clear took away. (Isaac, VIEW 2D on hardware: menu
+   * rows missing after a battle, the map showing through where they were.)
+   */
+  private forgetUi(): void {
+    this.uiOwner = null;
+    this.uiRows = [];
+    this.uiPage = -1;
+    this.uiArrow = false;
+    this.choiceDrawn = false;
+    this.namingSig = this.titleSig = this.introSig = null;
+    this.menuSig = this.bagSig = this.shopSig = this.boxSig = this.partySig = null;
+    this.dexSig = this.hofSig = this.diplomaSig = this.tradeSig = this.creditsSig = null;
+    this.evoSig = this.summarySig = null;
   }
 
   // world — slot 0 current, 1..4 the directly connected neighbours at their

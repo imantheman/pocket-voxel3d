@@ -58,7 +58,7 @@ g.frame = (b: number): void => {
     if (typeof TO3D !== "undefined" && TO3D && worldFrames > 300) o.view = "3d";
     // PIKA (Yellow): the starter Pikachu in the party, so the follower walks
     if (typeof PIKA !== "undefined" && PIKA && !(game.save.party ?? []).some((m: any) => m.species === "PIKACHU")) {
-      game.save.party = [{ species: "PIKACHU", level: 5, hp: 20, maxHp: 20, moves: [{ id: "THUNDERSHOCK", pp: 30 }] }];
+      game.save.party = [{ species: "PIKACHU", level: typeof SHOTS !== "undefined" ? 60 : 5, hp: typeof SHOTS !== "undefined" ? 180 : 20, maxHp: typeof SHOTS !== "undefined" ? 180 : 20, moves: [{ id: "THUNDERSHOCK", pp: 30 }] }];
     }
   }
   // a top-screen shot two seconds into each battle (SHOTS=1 at bundle time)
@@ -68,8 +68,22 @@ g.frame = (b: number): void => {
     afterFrames = 0;
   } else {
     if (battleFrames > 0) afterFrames = 1;
-    else if (afterFrames > 0 && ++afterFrames === 60) native.screenshot?.();
+    else if (afterFrames > 0) {
+      ++afterFrames;
+      if (afterFrames === 60) native.screenshot?.();
+      // the START menu over it, then OPTION, a shot of each (the menus' rows
+      // after a 2D battle)
+      if (afterFrames === 90 || afterFrames === 150) pad = START;
+      if (afterFrames === 130) native.screenshot?.();
+      if (afterFrames === 200) native.screenshot?.();
+      if (afterFrames === 230 || afterFrames === 260) pad = 1 << 5; // B
+    }
     battleFrames = 0;
+  }
+  // WIDE at the widest zoom while SHOTS is on
+  if (typeof SHOTS !== "undefined" && game.save?.options) {
+    game.save.options.screen2d = "wide";
+    game.save.options.zoom2d = 60;
   }
   i++;
   mainFrame((b & ~0xff) | pad);
