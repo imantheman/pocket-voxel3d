@@ -294,7 +294,9 @@ fn parse_overlay(d: &'static [u8]) {
     unsafe {
         OVERLAY = pages;
         OVERLAY_PALETTES = palettes;
-        OVERLAY_AUDIO = audio;
+        // an empty sound section is no sound of its own: the boot pak's then,
+        // not silence
+        OVERLAY_AUDIO = audio.filter(|a| !a.is_empty());
         OVERLAY_PCM = pcm;
     }
 }

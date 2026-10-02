@@ -256,7 +256,24 @@ export function writeOverlay(
     vpal.copy(cut, 2, 2, 2 + n * 1024);
     vpal = cut;
   }
-  const audi = section.AUDI ?? Buffer.alloc(0);
+  // The sound programs: the first pak's, or -- once stripUnread has cut them
+  // from every pak but the boot maps (an overlay written again from a set
+  // already cut, `--overlay`) -- a boot map's.
+  let audi = section.AUDI ?? Buffer.alloc(0);
+  for (const boot of BOOT_MAPS) {
+    if (audi.length > 0) break;
+    const path = join(paksDir, `${boot}.vxpak`);
+    if (!existsSync(path)) continue;
+    const b = readFileSync(path);
+    const nb = b.readUInt16LE(6);
+    for (let s = 0; s < nb; s++) {
+      const e = 16 + s * 16;
+      if (b.toString("latin1", e, e + 4) === "AUDI") {
+        const off = b.readUInt32LE(e + 4);
+        audi = Buffer.from(b.subarray(off, off + b.readUInt32LE(e + 8)));
+      }
+    }
+  }
   if (atls < 0) throw new Error(`no ATLS section in ${pakName}.vxpak`);
   const n = d.readUInt16LE(atls);
   const entries: Buffer[] = [];
