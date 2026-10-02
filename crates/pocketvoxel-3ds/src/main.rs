@@ -1498,6 +1498,16 @@ const UI_Q: f32 = 4.0;
 /// which is the whole reason it is a small number.
 const POP_PX: f32 = 10.0;
 
+/// The 3D slider's eye separation, as a share of the camera's distance to
+/// what it looks at (so the depth reads the same however far the camera
+/// sits), at the slider's top.
+const STEREO_IOD: f32 = 0.03;
+/// Where the screen's plane sits, as a share of that distance: a little in
+/// front of the focus, so the world reads at or behind the glass and the
+/// screens drawn flat on it (text boxes, menus, the battle HUD) in front of
+/// it, not the world popping out past them.
+const STEREO_SCREEN: f32 = 0.9;
+
 /// Guest screen coordinate -> the quantised grid `Vertex::pos` stores.
 fn qpx(v: f32) -> i16 { (v * UI_Q) as i16 }
 
@@ -2170,12 +2180,22 @@ impl MapCanvas {
 /// rotated (240 wide, 400 tall); its format says how many bytes a pixel.
 static mut SHOT_N: u32 = 0;
 fn dump_top_screen() {
+    let n = unsafe { SHOT_N };
+    unsafe { SHOT_N += 1; }
+    dump_top_side(0, &format!("sdmc:/3ds/voxelmon/shot_{}.ppm", n));
+    // the right eye too while the slider is up (stereo checks: shot_N_r)
+    if ctru::os::current_3d_slider_state() > 0.0 {
+        dump_top_side(1, &format!("sdmc:/3ds/voxelmon/shot_{}_r.ppm", n));
+    }
+}
+
+fn dump_top_side(side: u32, path: &str) {
     extern "C" {
         fn gfxGetFramebuffer(screen: u32, side: u32, width: *mut u16, height: *mut u16) -> *mut u8;
         fn gfxGetScreenFormat(screen: u32) -> u32;
     }
     let (mut w, mut h) = (0u16, 0u16);
-    let fb = unsafe { gfxGetFramebuffer(0, 0, &mut w, &mut h) };
+    let fb = unsafe { gfxGetFramebuffer(0, side, &mut w, &mut h) };
     if fb.is_null() || w == 0 || h == 0 {
         return;
     }
@@ -2201,10 +2221,7 @@ fn dump_top_screen() {
             }
         }
     }
-    let n = unsafe { SHOT_N };
-    unsafe { SHOT_N += 1; }
-    let path = format!("sdmc:/3ds/voxelmon/shot_{}.ppm", n);
-    let ok = std::fs::write(&path, out).is_ok();
+    let ok = std::fs::write(path, out).is_ok();
     dlog(&format!("[pv] screenshot {} {}x{} bpp {} {}", path, h, w, bpp, if ok { "written" } else { "FAILED" }));
 }
 
@@ -5353,7 +5370,7 @@ fn main() {
         );
         let slider = ctru::os::current_3d_slider_state();
         perf_slider = slider;
-        let (sl, sr) = StereoDisplacement::new(slider * dist * 0.03, dist);
+        let (sl, sr) = StereoDisplacement::new(slider * dist * STEREO_IOD, dist * STEREO_SCREEN);
         let (pl, pr) = Projection::perspective(
             world_fov(),
             AspectRatio::TopScreen,
@@ -5449,10 +5466,27 @@ fn main() {
                 CoordinateOrientation::RightHanded,
             );
             dbg_tick += 1;
-            mvp_l = pl * gcam;
-            mvp_r = pr * gcam;
-            tmvp_l = tpl * gcam;
-            tmvp_r = tpr * gcam;
+            // The eyes for THIS camera: the stereo above was set up for the
+            // host's own `dist`, which the game's camera (its zoom, its
+            // modes, a battle's rig) need not be anywhere near -- the focus
+            // then sat off the screen's plane, doubled at the slider's top,
+            // and the flat screens read behind the world.
+            let gd = (dx * dx + dy * dy + dz * dz).sqrt().max(1.0);
+            let (gsl, gsr) = StereoDisplacement::new(slider * gd * STEREO_IOD, gd * STEREO_SCREEN);
+            let (gpl, gpr) = Projection::perspective(
+                world_fov(),
+                AspectRatio::TopScreen,
+                ClipPlanes { near: 1.0, far: 100000.0 },
+            ).stereo_matrices(gsl, gsr);
+            let (gtpl, gtpr) = Projection::perspective(
+                world_fov(),
+                AspectRatio::TopScreen,
+                ClipPlanes { near: 1.0, far: 100000.0 },
+            ).screen(ScreenOrientation::None).stereo_matrices(gsl, gsr);
+            mvp_l = gpl * gcam;
+            mvp_r = gpr * gcam;
+            tmvp_l = gtpl * gcam;
+            tmvp_r = gtpr * gcam;
             // Title screen and Oak's speech own the whole frame; the guest
             // still emits the player's overworld card, so drop it there.
             let pic_active_scan = list.items.iter().any(|i| matches!(i, Item::ScreenPic { .. }));
