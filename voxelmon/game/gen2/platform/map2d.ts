@@ -26,7 +26,8 @@
 // kind, which rotates pixels a tile id cannot.)
 // In tall grass a person's lower half goes behind the background (the OBJ
 // priority bit), so the grass tile's colours cover its feet as on the cart.
-// Not the cart's: the OPTION screen's 2D SCREEN WIDE and 2D ZOOM (canvasSize)
+// Not the cart's: the OPTION screen's 2D SCREEN WIDE and 2D ZOOM OUT
+// (viewmode.ts canvasSize)
 // show more of the map round the same camera -- the under layer drawn by the
 // host as a canvas of its own (lcd.ts underView), out to the top screen's
 // edges or zoomed out in the Gold screen's box, the people on it with it
@@ -36,6 +37,7 @@ import { Assets } from "../shared/render/Assets.ts";
 import { Palettes } from "../world/Palettes.ts";
 import { peopleView_W6 } from "../world/World.ts";
 import { currentLcd, type LcdImage } from "./screen.ts";
+import { canvasSize } from "../../viewmode.ts";
 import type { Palette4 } from "./lcd.ts";
 
 /** pokegold LoadMapGroupRoof: nine roof tiles over vTiles2 tile $0a. */
@@ -45,22 +47,6 @@ const ROOF_COUNT = 9;
  *  (the widest canvas reaches 132 px past the screen's sides). */
 const PAD = 30;
 
-/** 2D ZOOM's steps, percent: the map's scale on the screen. */
-export const ZOOMS_2D = [100, 80, 67, 60] as const;
-
-/**
- * The canvas (lcd.ts underView) the 2D options ask for, w x h map pixels,
- * or null for the cart's own 160x144. Box: the Gold screen's box at the
- * zoom; WIDE: the top screen's whole width, the box's pixel shape kept
- * (the host draws the 160x144 box over 302 of its 480 ortho units).
- */
-export function canvasSize(options: any): { w: number; h: number; wide: boolean } | null {
-  const wide = options?.screen2d === "wide";
-  const z = (ZOOMS_2D as readonly number[]).includes(options?.zoom2d) ? (options.zoom2d as number) / 100 : 1;
-  if (!wide && z === 1) return null;
-  const h = Math.round(144 / z);
-  return { w: Math.round(wide ? (h * 480) / 272 : 160 / z), h, wide };
-}
 
 const images = new Map<string, LcdImage | null>();
 function image(path: string | undefined): LcdImage | null {

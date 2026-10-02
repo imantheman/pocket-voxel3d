@@ -6726,6 +6726,10 @@ class TrainerCardState {
 
 // voxelmon/game/gb/emit.ts
 var HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
+var HEX4 = [];
+function hex4(v) {
+  return HEX4[v] ??= HEX[v >> 8 & 255] + HEX[v & 255];
+}
 function hex(bytes, from = 0, to = bytes.length) {
   let s = "";
   for (let i = from;i < to; i++)
@@ -6746,6 +6750,9 @@ class GbEmitter {
   colours1 = "";
   lines = "";
   colours = "";
+  wideMap = new Uint8Array(2048);
+  wide = "";
+  wideObjs = "";
   emit(host, v, resolve) {
     if (!v) {
       if (this.shown) {
@@ -6760,6 +6767,8 @@ class GbEmitter {
       host.gbShow?.(1);
       this.shown = true;
       this.maps.fill(0);
+      this.wideMap.fill(0);
+      this.wide = this.wideObjs = "";
       this.loads = this.lines = this.colours = "";
       this.loadsRef = null;
       this.oamLen = 0;
@@ -6792,6 +6801,42 @@ class GbEmitter {
       host.gbMap?.(i, hex(v.maps, i, end));
       this.maps.set(v.maps.subarray(i, end), i);
       i = end;
+    }
+    const wideOn = v.wideW > 0 && v.wideH > 0 && !!host.gbWide;
+    const wide = wideOn ? `${v.wideW},${v.wideH},${v.wideScx},${v.wideScy},${v.wideFull ? 1 : 0}` : "";
+    if (wide !== this.wide) {
+      this.wide = wide;
+      host.gbWide?.(wideOn ? v.wideW : 0, wideOn ? v.wideH : 0, v.wideScx, v.wideScy, v.wideFull ? 1 : 0);
+    }
+    if (wideOn) {
+      let j = fresh || v.wideMapDirty !== false ? 0 : 2048;
+      while (j < 2048) {
+        if (v.wideMap[j] === this.wideMap[j]) {
+          j++;
+          continue;
+        }
+        let end = j + 1;
+        let gap = 0;
+        for (let k = j + 1;k < 2048 && gap < MERGE_GAP; k++) {
+          if (v.wideMap[k] !== this.wideMap[k]) {
+            end = k + 1;
+            gap = 0;
+          } else
+            gap++;
+        }
+        host.gbMap?.(2048 + j, hex(v.wideMap, j, end));
+        this.wideMap.set(v.wideMap.subarray(j, end), j);
+        j = end;
+      }
+      let objs = "";
+      const p = v.wideObjs;
+      for (let k = 0;k < v.wideObjCount; k++) {
+        objs += hex4(p[k * 4] & 65535) + hex4(p[k * 4 + 1] & 65535) + HEX[p[k * 4 + 2] & 255] + HEX[p[k * 4 + 3] & 255];
+      }
+      if (objs !== this.wideObjs) {
+        this.wideObjs = objs;
+        host.gbWideObjs?.(objs);
+      }
     }
     const r = this.regsNow;
     if (fresh || r[0] !== v.lcdc || r[1] !== v.scx || r[2] !== v.scy || r[3] !== v.wx || r[4] !== v.wy || r[5] !== v.bgp || r[6] !== v.obp0 || r[7] !== v.obp1) {
@@ -10344,6 +10389,9 @@ var SCREEN_W = 160;
 var SCREEN_H = 144;
 var OAM_X_OFS = 8;
 var OAM_Y_OFS = 16;
+var WIDE_COLS = 64;
+var WIDE_ROWS = 32;
+var WIDE_OBJS_MAX = 96;
 
 class GbVideo {
   maps = new Uint8Array(2048);
@@ -10364,6 +10412,15 @@ class GbVideo {
   colours = { bg: "PIKACHUS_BEACH", obj0: "PIKACHUS_BEACH", obj1: "PIKACHUS_BEACH" };
   loads = [];
   mapsDirty = undefined;
+  wideW = 0;
+  wideH = 0;
+  wideScx = 0;
+  wideScy = 0;
+  wideFull = false;
+  wideMap = new Uint8Array(WIDE_COLS * WIDE_ROWS);
+  wideMapDirty = undefined;
+  wideObjs = new Int16Array(WIDE_OBJS_MAX * 4);
+  wideObjCount = 0;
   loadTiles(dest, sheet, first, count2) {
     this.loads = this.loads.filter((l) => l.dest + l.count <= dest || l.dest >= dest + count2);
     this.loads.push({ dest, sheet, first, count: count2 });
@@ -22830,6 +22887,31 @@ function viewIndex(v) {
 function is2d(v) {
   return v === "2d";
 }
+var SCREENS_2D = [
+  { key: "normal", label: "NORMAL" },
+  { key: "wide", label: "WIDE" }
+];
+var ZOOMS_2D = [
+  { pct: 100, label: "OFF" },
+  { pct: 80, label: "LOW" },
+  { pct: 67, label: "MID" },
+  { pct: 60, label: "MAX" }
+];
+function screen2dIndex(v) {
+  return v === "wide" ? 1 : 0;
+}
+function zoom2dIndex(v) {
+  const at = ZOOMS_2D.findIndex((z) => z.pct === v);
+  return at >= 0 ? at : 0;
+}
+function canvasSize(options) {
+  const wide = screen2dIndex(options?.screen2d) === 1;
+  const z = ZOOMS_2D[zoom2dIndex(options?.zoom2d)].pct / 100;
+  if (!wide && z === 1)
+    return null;
+  const h = Math.round(144 / z);
+  return { w: Math.round(wide ? h * 480 / 272 : 160 / z), h, wide };
+}
 
 // voxelmon/game/cameraspeed.ts
 var CAMERA_SPEEDS = [
@@ -22896,6 +22978,16 @@ class OptionsMenuState {
         index: viewIndex(this.opts().view)
       },
       {
+        label: "2D SCREEN",
+        choices: SCREENS_2D.map((v) => v.label),
+        index: screen2dIndex(this.opts().screen2d)
+      },
+      {
+        label: "2D ZOOM OUT",
+        choices: ZOOMS_2D.map((z) => z.label),
+        index: zoom2dIndex(this.opts().zoom2d)
+      },
+      {
         label: "BATTLES",
         choices: VIEW_MODES.map((v) => v.label),
         index: viewIndex(this.opts().battleView)
@@ -22926,8 +23018,12 @@ class OptionsMenuState {
     else if (row === 5)
       this.opts().view = VIEW_MODES[at].key;
     else if (row === 6)
-      this.opts().battleView = VIEW_MODES[at].key;
+      this.opts().screen2d = SCREENS_2D[at].key;
     else if (row === 7)
+      this.opts().zoom2d = ZOOMS_2D[at].pct;
+    else if (row === 8)
+      this.opts().battleView = VIEW_MODES[at].key;
+    else if (row === 9)
       this.opts().devMenu = at === 1;
   }
   update() {
@@ -27559,7 +27655,7 @@ var SHEETS_MAX = 10;
 var SPRITE_PAGE_TILES = 8;
 var COLS2 = 21;
 var ROWS10 = 19;
-var PAD2 = 12;
+var PAD2 = 32;
 var BLOCK_CHECK = 32;
 
 class OverworldView2d {
@@ -27588,22 +27684,58 @@ class OverworldView2d {
     const camX = Math.round(p.px) - 64;
     const camY = Math.round(p.py) - 64;
     v.lcdc = LCDC.on | LCDC.bgOn | LCDC.objOn;
-    const tx0 = Math.floor(camX / 8);
-    const ty0 = Math.floor(camY / 8);
-    if (tx0 !== this.winX || ty0 !== this.winY) {
-      this.winX = tx0;
-      this.winY = ty0;
-      writeWindow(v.maps, t, map, tx0, ty0);
-      v.mapsDirty = true;
-    } else
+    const canvas = game.host?.gbWide ? canvasSize(game.save?.options) : null;
+    if (canvas) {
+      const vx = camX - (canvas.w - 160 >> 1);
+      const vy = camY - (canvas.h - 144 >> 1);
+      const tx0 = Math.floor(vx / 8);
+      const ty0 = Math.floor(vy / 8);
+      const cols = Math.ceil(canvas.w / 8) + 1;
+      const rows = Math.ceil(canvas.h / 8) + 1;
+      if (tx0 !== this.wideX || ty0 !== this.wideY || cols !== this.wideCols || rows !== this.wideRows) {
+        this.wideX = tx0;
+        this.wideY = ty0;
+        this.wideCols = cols;
+        this.wideRows = rows;
+        writeWideWindow(v.wideMap, t, map, tx0, ty0, cols, rows);
+        v.wideMapDirty = true;
+      } else
+        v.wideMapDirty = false;
+      v.wideW = canvas.w;
+      v.wideH = canvas.h;
+      v.wideScx = vx & WIDE_COLS * 8 - 1;
+      v.wideScy = vy & WIDE_ROWS * 8 - 1;
+      v.wideFull = canvas.wide;
+      this.viewW = canvas.w;
+      this.viewH = canvas.h;
+      this.camX = vx;
+      this.camY = vy;
+      this.winX = NaN;
       v.mapsDirty = false;
-    v.scx = camX & 255;
-    v.scy = camY & 255;
+    } else {
+      v.wideW = v.wideH = 0;
+      this.wideX = NaN;
+      this.viewW = 160;
+      this.viewH = 144;
+      this.camX = camX;
+      this.camY = camY;
+      const tx0 = Math.floor(camX / 8);
+      const ty0 = Math.floor(camY / 8);
+      if (tx0 !== this.winX || ty0 !== this.winY) {
+        this.winX = tx0;
+        this.winY = ty0;
+        writeWindow(v.maps, t, map, tx0, ty0);
+        v.mapsDirty = true;
+      } else
+        v.mapsDirty = false;
+      v.scx = camX & 255;
+      v.scy = camY & 255;
+    }
+    this.wide = canvas !== null;
     const oam = v.oam;
     oam.fill(0);
     this.oamN = 0;
-    this.camX = camX;
-    this.camY = camY;
+    v.wideObjCount = 0;
     const gold = game.data.version === "gold";
     const emote2 = ow.emote;
     if (emote2 && emote2.kind >= 1 && emote2.kind <= 3 && emote2.entity) {
@@ -27648,10 +27780,17 @@ class OverworldView2d {
   oamN = 0;
   camX = 0;
   camY = 0;
+  viewW = 160;
+  viewH = 144;
+  wide = false;
+  wideX = NaN;
+  wideY = NaN;
+  wideCols = 0;
+  wideRows = 0;
   put(sheet, px2, py, frame2, mirror) {
     const sx2 = Math.round(px2) - this.camX;
     const sy2 = Math.round(py) - this.camY - 4;
-    if (sx2 <= -16 || sy2 <= -16 || sx2 >= 160 || sy2 >= 144)
+    if (sx2 <= -16 || sy2 <= -16 || sx2 >= this.viewW || sy2 >= this.viewH)
       return;
     let slot = this.slots.get(sheet);
     if (slot === undefined) {
@@ -27660,9 +27799,25 @@ class OverworldView2d {
       slot = this.slots.size;
       this.slots.set(sheet, slot);
     }
-    const oam = this.video.oam;
     const base = slot * SHEET_TILES + frame2 * 4;
     const attr = mirror ? OAM_ATTR.xFlip : 0;
+    if (this.wide) {
+      const v = this.video;
+      const objs = v.wideObjs;
+      for (let r = 0;r < 2; r++) {
+        for (let c = 0;c < 2; c++) {
+          if (v.wideObjCount >= WIDE_OBJS_MAX)
+            return;
+          const o = v.wideObjCount++ * 4;
+          objs[o] = sy2 + r * 8;
+          objs[o + 1] = sx2 + c * 8;
+          objs[o + 2] = base + r * 2 + (mirror ? 1 - c : c);
+          objs[o + 3] = attr;
+        }
+      }
+      return;
+    }
+    const oam = this.video.oam;
     for (let r = 0;r < 2; r++) {
       for (let c = 0;c < 2; c++) {
         if (this.oamN >= 40)
@@ -27747,6 +27902,25 @@ function buildTiles(map, maps, swaps) {
     }
   }
   return { map, w, h, ids, blocks: [...def.blocks ?? []], cuts: cut.size };
+}
+function writeWideWindow(maps, t, map, tx0, ty0, cols, rows) {
+  const x = tx0 + PAD2;
+  const y = ty0 + PAD2;
+  const inside = x >= 0 && y >= 0 && x + cols <= t.w && y + rows <= t.h;
+  const col = tx0 & WIDE_COLS - 1;
+  const first = Math.min(cols, WIDE_COLS - col);
+  for (let r = 0;r < rows; r++) {
+    const row = (ty0 + r & WIDE_ROWS - 1) * WIDE_COLS;
+    if (inside) {
+      const src = (y + r) * t.w + x;
+      maps.set(t.ids.subarray(src, src + first), row + col);
+      if (first < cols)
+        maps.set(t.ids.subarray(src + first, src + cols), row);
+    } else {
+      for (let c = 0;c < cols; c++)
+        maps[row + (tx0 + c & WIDE_COLS - 1)] = map.tileAt(tx0 + c, ty0 + r) & 127;
+    }
+  }
 }
 function writeWindow(maps, t, map, tx0, ty0) {
   const x = tx0 + PAD2;
@@ -29920,6 +30094,8 @@ class QuickJsHost {
   gbOam(hex3) {
     native.gbOam?.(hex3);
   }
+  gbWide = native.gbWide ? (w, h, scx, scy, full) => native.gbWide(w, h, scx, scy, full) : undefined;
+  gbWideObjs = native.gbWideObjs ? (hex3) => native.gbWideObjs(hex3) : undefined;
   gbColours(bg, obp0, obp1) {
     native.gbColours?.(bg, obp0, obp1);
   }

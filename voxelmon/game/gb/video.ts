@@ -32,6 +32,10 @@ export const SCREEN_H = 144;
 /** OAM_X_OFS / OAM_Y_OFS: an OAM entry at (8, 16) is the top-left pixel. */
 export const OAM_X_OFS = 8;
 export const OAM_Y_OFS = 16;
+/** The wide picture's ring and objects (gb.rs GB_WIDE_COLS/ROWS/OBJS_MAX). */
+export const WIDE_COLS = 64;
+export const WIDE_ROWS = 32;
+export const WIDE_OBJS_MAX = 96;
 
 /**
  * What a range of VRAM tiles holds: `count` tiles of atlas sheet `sheet`
@@ -85,6 +89,23 @@ export class GbVideo {
    * way) always compares.
    */
   mapsDirty: boolean | undefined = undefined;
+  /**
+   * The wide picture (gb.rs wide_on; the 2D overworld's 2D SCREEN WIDE / 2D
+   * ZOOM OUT): `wideW` x `wideH` pixels of `wideMap` -- a 64x32-tile ring --
+   * from pixel (wideScx, wideScy), `wideObjs` over it (y, x, tile, attr in
+   * the picture's own pixels, a lower index on top). 0 x 0: off, the
+   * hardware screen as ever. `wideFull`: over the whole top screen.
+   */
+  wideW = 0;
+  wideH = 0;
+  wideScx = 0;
+  wideScy = 0;
+  wideFull = false;
+  readonly wideMap = new Uint8Array(WIDE_COLS * WIDE_ROWS);
+  /** As mapsDirty, for wideMap. */
+  wideMapDirty: boolean | undefined = undefined;
+  readonly wideObjs = new Int16Array(WIDE_OBJS_MAX * 4);
+  wideObjCount = 0;
 
   /** FarCopyData of `count` tiles of `sheet` from `first` to VRAM tile `dest`. */
   loadTiles(dest: number, sheet: string, first: number, count: number): void {

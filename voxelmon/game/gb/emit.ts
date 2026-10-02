@@ -14,6 +14,11 @@ export interface GbResolve {
 }
 
 const HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
+/** Four digits (a 16-bit value, two's complement for the wide objects). */
+const HEX4: string[] = [];
+function hex4(v: number): string {
+  return HEX4[v] ??= HEX[(v >> 8) & 0xff]! + HEX[v & 0xff]!;
+}
 function hex(bytes: ArrayLike<number>, from = 0, to = bytes.length): string {
   let s = "";
   for (let i = from; i < to; i++) s += HEX[bytes[i]! & 0xff];
@@ -36,6 +41,9 @@ export class GbEmitter {
   private colours1 = "";
   private lines = "";
   private colours = "";
+  private readonly wideMap = new Uint8Array(2048);
+  private wide = "";
+  private wideObjs = "";
 
   /** Emit this frame's GB screen, or take it down when `v` is null. */
   emit(host: VoxelHost, v: GbVideo | null, resolve: GbResolve): void {
@@ -52,6 +60,8 @@ export class GbEmitter {
       host.gbShow?.(1);
       this.shown = true;
       this.maps.fill(0);
+      this.wideMap.fill(0);
+      this.wide = this.wideObjs = "";
       this.loads = this.lines = this.colours = "";
       this.loadsRef = null;
       this.oamLen = 0;
@@ -77,6 +87,37 @@ export class GbEmitter {
       host.gbMap?.(i, hex(v.maps, i, end));
       this.maps.set(v.maps.subarray(i, end), i);
       i = end;
+    }
+    // the wide picture: its size and scroll, its ring (offset 0x800) while
+    // it is on, its objects
+    const wideOn = v.wideW > 0 && v.wideH > 0 && !!host.gbWide;
+    const wide = wideOn ? `${v.wideW},${v.wideH},${v.wideScx},${v.wideScy},${v.wideFull ? 1 : 0}` : "";
+    if (wide !== this.wide) {
+      this.wide = wide;
+      host.gbWide?.(wideOn ? v.wideW : 0, wideOn ? v.wideH : 0, v.wideScx, v.wideScy, v.wideFull ? 1 : 0);
+    }
+    if (wideOn) {
+      let j = fresh || v.wideMapDirty !== false ? 0 : 2048;
+      while (j < 2048) {
+        if (v.wideMap[j] === this.wideMap[j]) { j++; continue; }
+        let end = j + 1;
+        let gap = 0;
+        for (let k = j + 1; k < 2048 && gap < MERGE_GAP; k++) {
+          if (v.wideMap[k] !== this.wideMap[k]) { end = k + 1; gap = 0; } else gap++;
+        }
+        host.gbMap?.(0x800 + j, hex(v.wideMap, j, end));
+        this.wideMap.set(v.wideMap.subarray(j, end), j);
+        j = end;
+      }
+      let objs = "";
+      const p = v.wideObjs;
+      for (let k = 0; k < v.wideObjCount; k++) {
+        objs += hex4(p[k * 4]! & 0xffff) + hex4(p[k * 4 + 1]! & 0xffff) + HEX[p[k * 4 + 2]! & 0xff] + HEX[p[k * 4 + 3]! & 0xff];
+      }
+      if (objs !== this.wideObjs) {
+        this.wideObjs = objs;
+        host.gbWideObjs?.(objs);
+      }
     }
     // the registers, compared as numbers (no string a frame)
     const r = this.regsNow;

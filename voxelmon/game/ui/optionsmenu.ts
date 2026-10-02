@@ -19,7 +19,7 @@
 import type { GameState } from "../game.ts";
 import { TEXT_SPEEDS, TEXT_SPEED_DEFAULT } from "../world/textbox.ts";
 import { TILT_SHIFTS, tiltShiftLevel } from "../tiltshift.ts";
-import { VIEW_MODES, viewIndex } from "../viewmode.ts";
+import { SCREENS_2D, VIEW_MODES, ZOOMS_2D, screen2dIndex, viewIndex, zoom2dIndex } from "../viewmode.ts";
 import { CAMERA_SPEEDS } from "../cameraspeed.ts";
 
 export interface OptionsRow {
@@ -58,6 +58,8 @@ interface OptionsSave {
     cameraSpeed?: string;
     tiltShift?: string;
     view?: string;
+    screen2d?: string;
+    zoom2d?: number;
     battleView?: string;
     devMenu?: boolean;
   };
@@ -125,6 +127,18 @@ export class OptionsMenuState implements GameState {
         index: viewIndex(this.opts().view),
       },
       {
+        // VIEW 2D's map out to the top screen's edges, and zoomed out
+        // (viewmode.ts canvasSize; Gold's OPTION screen has them too)
+        label: "2D SCREEN",
+        choices: SCREENS_2D.map((v) => v.label),
+        index: screen2dIndex(this.opts().screen2d),
+      },
+      {
+        label: "2D ZOOM OUT",
+        choices: ZOOMS_2D.map((z) => z.label),
+        index: zoom2dIndex(this.opts().zoom2d),
+      },
+      {
         label: "BATTLES",
         choices: VIEW_MODES.map((v) => v.label),
         index: viewIndex(this.opts().battleView),
@@ -151,8 +165,10 @@ export class OptionsMenuState implements GameState {
     else if (row === 3) this.opts().cameraSpeed = CAMERA_SPEEDS[at]!.key;
     else if (row === 4) this.opts().tiltShift = TILT_SHIFTS[at]!.key;
     else if (row === 5) this.opts().view = VIEW_MODES[at]!.key;
-    else if (row === 6) this.opts().battleView = VIEW_MODES[at]!.key;
-    else if (row === 7) this.opts().devMenu = at === 1;
+    else if (row === 6) this.opts().screen2d = SCREENS_2D[at]!.key;
+    else if (row === 7) this.opts().zoom2d = ZOOMS_2D[at]!.pct;
+    else if (row === 8) this.opts().battleView = VIEW_MODES[at]!.key;
+    else if (row === 9) this.opts().devMenu = at === 1;
   }
 
   update(): void {

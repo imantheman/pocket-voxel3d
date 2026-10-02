@@ -24,8 +24,15 @@
 // (field.cutTreeSwaps, CutTreeBlockSwaps); this port keeps the cut as the
 // cells it opened (map.ts markCut), so the swap is made here. The water and
 // flowers move host-side (main.rs steps the terrain page's baked frames).
+//
+// Not the cart's: the OPTION screen's 2D SCREEN WIDE and 2D ZOOM OUT
+// (viewmode.ts canvasSize) show more of the map round the same camera -- the
+// GB screen's wide picture (gb.rs wide_on): the same tiles in a 64x32 ring,
+// the people as its own objects, laid over the whole top screen or zoomed
+// out into the box. The text boxes and menus stay the tile layer's, full size.
 
-import { GbVideo, LCDC, OAM_ATTR, OAM_X_OFS, OAM_Y_OFS, type TileLoad } from "../gb/video.ts";
+import { GbVideo, LCDC, OAM_ATTR, OAM_X_OFS, OAM_Y_OFS, WIDE_COLS, WIDE_OBJS_MAX, WIDE_ROWS, type TileLoad } from "../gb/video.ts";
+import { canvasSize } from "../viewmode.ts";
 import type { Dir } from "./collision.ts";
 import { DARK_MAPS } from "./overworld.ts";
 
@@ -45,8 +52,9 @@ const SPRITE_PAGE_TILES = 8;
 const COLS = 21;
 const ROWS = 19;
 /** Tiles of border kept round the map in the cache (the camera's reach
- *  past the edge is 8 left/up, 10 right/down; the seam step one cell more). */
-const PAD = 12;
+ *  past the edge is 8 left/up, 10 right/down, the seam step one cell more;
+ *  the widest picture reaches 17 tiles further each side). */
+const PAD = 32;
 /** Frames between checks that the map's blocks still match the cache (a
  *  door or barrier a script stamps mid-visit). */
 const BLOCK_CHECK = 32;
@@ -91,25 +99,64 @@ export class OverworldView2d {
     const camX = Math.round(p.px) - 64;
     const camY = Math.round(p.py) - 64;
 
-    // the map: the 21x19 window from (camX, camY) into the ring
     v.lcdc = LCDC.on | LCDC.bgOn | LCDC.objOn; // BG tiles from $9000, signed
-    const tx0 = Math.floor(camX / 8);
-    const ty0 = Math.floor(camY / 8);
-    if (tx0 !== this.winX || ty0 !== this.winY) {
-      this.winX = tx0;
-      this.winY = ty0;
-      writeWindow(v.maps, t, map, tx0, ty0);
-      v.mapsDirty = true;
-    } else v.mapsDirty = false;
-    v.scx = camX & 255;
-    v.scy = camY & 255;
+    // the wide picture (2D SCREEN WIDE / 2D ZOOM OUT), where the host has it
+    const canvas = game.host?.gbWide ? canvasSize(game.save?.options) : null;
+    if (canvas) {
+      // the 160x144 centred in it: its top-left that much up and left
+      const vx = camX - ((canvas.w - 160) >> 1);
+      const vy = camY - ((canvas.h - 144) >> 1);
+      const tx0 = Math.floor(vx / 8);
+      const ty0 = Math.floor(vy / 8);
+      const cols = Math.ceil(canvas.w / 8) + 1;
+      const rows = Math.ceil(canvas.h / 8) + 1;
+      if (tx0 !== this.wideX || ty0 !== this.wideY || cols !== this.wideCols || rows !== this.wideRows) {
+        this.wideX = tx0;
+        this.wideY = ty0;
+        this.wideCols = cols;
+        this.wideRows = rows;
+        writeWideWindow(v.wideMap, t, map, tx0, ty0, cols, rows);
+        v.wideMapDirty = true;
+      } else v.wideMapDirty = false;
+      v.wideW = canvas.w;
+      v.wideH = canvas.h;
+      v.wideScx = vx & (WIDE_COLS * 8 - 1);
+      v.wideScy = vy & (WIDE_ROWS * 8 - 1);
+      v.wideFull = canvas.wide;
+      this.viewW = canvas.w;
+      this.viewH = canvas.h;
+      this.camX = vx;
+      this.camY = vy;
+      // the hardware window is written afresh when the picture goes back
+      this.winX = NaN;
+      v.mapsDirty = false;
+    } else {
+      v.wideW = v.wideH = 0;
+      this.wideX = NaN;
+      this.viewW = 160;
+      this.viewH = 144;
+      this.camX = camX;
+      this.camY = camY;
+      // the map: the 21x19 window from (camX, camY) into the ring
+      const tx0 = Math.floor(camX / 8);
+      const ty0 = Math.floor(camY / 8);
+      if (tx0 !== this.winX || ty0 !== this.winY) {
+        this.winX = tx0;
+        this.winY = ty0;
+        writeWindow(v.maps, t, map, tx0, ty0);
+        v.mapsDirty = true;
+      } else v.mapsDirty = false;
+      v.scx = camX & 255;
+      v.scy = camY & 255;
+    }
+    this.wide = canvas !== null;
 
-    // the people, straight into OAM (the player first: on top)
+    // the people, straight into OAM (the player first: on top) -- or the
+    // wide picture's objects
     const oam = v.oam;
     oam.fill(0);
     this.oamN = 0;
-    this.camX = camX;
-    this.camY = camY;
+    v.wideObjCount = 0;
     const gold = (game.data as { version?: string }).version === "gold";
     // an emotion bubble first, so it sits on top: 16 px over its person
     // (ShowEmotionBubble), frame kind - 1 of the emote page as scene.ts's
@@ -173,23 +220,47 @@ export class OverworldView2d {
   /** Sheets the current loads array was built for (-1: build it). */
   private loadsSize = -1;
   private oamN = 0;
+  /** The picture's top-left in map pixels, and its size. */
   private camX = 0;
   private camY = 0;
+  private viewW = 160;
+  private viewH = 144;
+  /** The wide picture is drawn this frame; its window in the ring. */
+  private wide = false;
+  private wideX = NaN;
+  private wideY = NaN;
+  private wideCols = 0;
+  private wideRows = 0;
 
   /** One person's four OAM entries (a 16x16 frame of its sheet). */
   private put(sheet: string, px: number, py: number, frame: number, mirror: boolean): void {
     const sx = Math.round(px) - this.camX;
     const sy = Math.round(py) - this.camY - 4;
-    if (sx <= -16 || sy <= -16 || sx >= 160 || sy >= 144) return;
+    if (sx <= -16 || sy <= -16 || sx >= this.viewW || sy >= this.viewH) return;
     let slot = this.slots.get(sheet);
     if (slot === undefined) {
       if (this.slots.size >= SHEETS_MAX) return;
       slot = this.slots.size;
       this.slots.set(sheet, slot);
     }
-    const oam = this.video.oam;
     const base = slot * SHEET_TILES + frame * 4;
     const attr = mirror ? OAM_ATTR.xFlip : 0;
+    if (this.wide) {
+      const v = this.video;
+      const objs = v.wideObjs;
+      for (let r = 0; r < 2; r++) {
+        for (let c = 0; c < 2; c++) {
+          if (v.wideObjCount >= WIDE_OBJS_MAX) return;
+          const o = v.wideObjCount++ * 4;
+          objs[o] = sy + r * 8;
+          objs[o + 1] = sx + c * 8;
+          objs[o + 2] = base + r * 2 + (mirror ? 1 - c : c);
+          objs[o + 3] = attr;
+        }
+      }
+      return;
+    }
+    const oam = this.video.oam;
     for (let r = 0; r < 2; r++) {
       for (let c = 0; c < 2; c++) {
         if (this.oamN >= 40) return;
@@ -276,6 +347,26 @@ function buildTiles(map: any, maps?: Record<string, any>, swaps?: { before: numb
     }
   }
   return { map, w, h, ids, blocks: [...(def.blocks ?? [])], cuts: cut.size };
+}
+
+/** The wide picture's `cols` x `rows` window from tile (tx0, ty0) into its
+ *  64x32 ring (writeWindow's, wider). */
+function writeWideWindow(maps: Uint8Array, t: MapTiles, map: any, tx0: number, ty0: number, cols: number, rows: number): void {
+  const x = tx0 + PAD;
+  const y = ty0 + PAD;
+  const inside = x >= 0 && y >= 0 && x + cols <= t.w && y + rows <= t.h;
+  const col = tx0 & (WIDE_COLS - 1);
+  const first = Math.min(cols, WIDE_COLS - col);
+  for (let r = 0; r < rows; r++) {
+    const row = ((ty0 + r) & (WIDE_ROWS - 1)) * WIDE_COLS;
+    if (inside) {
+      const src = (y + r) * t.w + x;
+      maps.set(t.ids.subarray(src, src + first), row + col);
+      if (first < cols) maps.set(t.ids.subarray(src + first, src + cols), row);
+    } else {
+      for (let c = 0; c < cols; c++) maps[row + ((tx0 + c) & (WIDE_COLS - 1))] = map.tileAt(tx0 + c, ty0 + r) & 0x7f;
+    }
+  }
 }
 
 /** The 21x19 window from tile (tx0, ty0) into the 32x32 ring. */

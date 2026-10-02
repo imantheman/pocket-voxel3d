@@ -21,6 +21,14 @@ pub const GB_H: usize = 144;
 pub const GB_LOADS_MAX: usize = 16;
 /// Decoded VRAM: 384 tiles x 64 shades (`GbScreen::decode_vram`).
 pub const VRAM_BYTES: usize = 384 * 64;
+/// The wide picture's largest size (`gbWide`): what one 512x256 texture holds.
+pub const GB_WIDE_W_MAX: usize = 512;
+pub const GB_WIDE_H_MAX: usize = 256;
+/// The wide BG ring: 64x32 tiles, 512x256 pixels (`gbMap` from 0x800).
+pub const GB_WIDE_COLS: usize = 64;
+pub const GB_WIDE_ROWS: usize = 32;
+/// The wide picture's objects at most (`gbWideObjs`).
+pub const GB_WIDE_OBJS_MAX: usize = 96;
 
 const LCDC_WIN_MAP_9C00: u8 = 0x40;
 const LCDC_WIN_ON: u8 = 0x20;
@@ -75,6 +83,21 @@ pub struct GbScreen {
     pub colours: [i16; 3],
     pub loads: [GbLoad; GB_LOADS_MAX],
     pub load_count: usize,
+    /// `gbWide`: the 2D overworld wider than the Game Boy's 160x144 (the
+    /// OPTION screen's 2D SCREEN WIDE / 2D ZOOM) -- a `wide_w` x `wide_h`
+    /// picture of the wide ring (`wide_map`, 64x32 tiles) from pixel
+    /// (`wide_scx`, `wide_scy`), with `wide_objs` over it in its own pixels.
+    /// 0 x 0: off, the hardware screen as ever. `wide_full`: the host lays
+    /// it over the whole top screen rather than the Game Boy's rect.
+    pub wide_w: u16,
+    pub wide_h: u16,
+    pub wide_scx: u16,
+    pub wide_scy: u16,
+    pub wide_full: bool,
+    pub wide_map: [u8; GB_WIDE_COLS * GB_WIDE_ROWS],
+    /// (y, x, tile, attr): a lower index on top, no ten-a-line limit.
+    pub wide_objs: [(i16, i16, u8, u8); GB_WIDE_OBJS_MAX],
+    pub wide_obj_count: usize,
     /// Bumped by every op that changes what is drawn, so a host can skip
     /// redrawing an unchanged frame.
     pub serial: u32,
@@ -99,6 +122,14 @@ impl Default for GbScreen {
             colours: [-1; 3],
             loads: [GbLoad::default(); GB_LOADS_MAX],
             load_count: 0,
+            wide_w: 0,
+            wide_h: 0,
+            wide_scx: 0,
+            wide_scy: 0,
+            wide_full: false,
+            wide_map: [0; GB_WIDE_COLS * GB_WIDE_ROWS],
+            wide_objs: [(0, 0, 0, 0); GB_WIDE_OBJS_MAX],
+            wide_obj_count: 0,
             serial: 0,
         }
     }
@@ -158,8 +189,33 @@ impl GbScreen {
             }
             op::GB_MAP => {
                 if let Some(t) = text {
-                    unhex(t, &mut self.maps, a(0).clamp(0, 2047) as usize);
+                    // from 0x800: the wide ring
+                    let at = a(0).clamp(0, 2048 + 2047) as usize;
+                    if at >= 2048 {
+                        unhex(t, &mut self.wide_map, at - 2048);
+                    } else {
+                        unhex(t, &mut self.maps, at);
+                    }
                 }
+            }
+            op::GB_WIDE => {
+                self.wide_w = a(0).clamp(0, GB_WIDE_W_MAX as i32) as u16;
+                self.wide_h = a(1).clamp(0, GB_WIDE_H_MAX as i32) as u16;
+                self.wide_scx = (a(2) & (GB_WIDE_COLS as i32 * 8 - 1)) as u16;
+                self.wide_scy = (a(3) & (GB_WIDE_ROWS as i32 * 8 - 1)) as u16;
+                self.wide_full = a(4) != 0;
+            }
+            op::GB_WIDE_OBJS => {
+                // twelve digits each: y, x (16-bit two's complement), tile, attr
+                let t = text.unwrap_or("");
+                let mut bytes = [0u8; GB_WIDE_OBJS_MAX * 6];
+                let n = (t.len() / 12).min(GB_WIDE_OBJS_MAX);
+                unhex(&t[..n * 12], &mut bytes, 0);
+                for i in 0..n {
+                    let b = &bytes[i * 6..i * 6 + 6];
+                    self.wide_objs[i] = (i16::from_be_bytes([b[0], b[1]]), i16::from_be_bytes([b[2], b[3]]), b[4], b[5]);
+                }
+                self.wide_obj_count = n;
             }
             op::GB_REGS => {
                 self.lcdc = a(0) as u8;
@@ -257,6 +313,153 @@ impl GbScreen {
     /// decoded VRAM is stale).
     pub fn current_loads(&self) -> &[GbLoad] {
         &self.loads[..self.load_count]
+    }
+
+    /// The wide picture is on (`gbWide`): `frame_size` is its size then.
+    pub fn wide_on(&self) -> bool {
+        self.wide_w > 0 && self.wide_h > 0
+    }
+
+    /// The picture `render_any` draws, w x h: the wide one's width rounded
+    /// up to whole tiles (the host's texture is laid out by 8x8 tiles), or
+    /// the hardware's 160x144.
+    pub fn frame_size(&self) -> (usize, usize) {
+        if self.wide_on() {
+            ((self.wide_w as usize).div_ceil(8) * 8, self.wide_h as usize)
+        } else {
+            (GB_W, GB_H)
+        }
+    }
+
+    /// `render_decoded`, or the wide picture while it is on, into `out`
+    /// (`frame_size`).
+    pub fn render_any(&self, vram: &[u8], out: &mut [u8]) {
+        if self.wide_on() {
+            self.render_wide(vram, out);
+        } else {
+            self.render_decoded(vram, out);
+        }
+    }
+
+    /// Wide ring tile (tx, ty)'s 64 pixels, slot 0 * 4 + shade as
+    /// `render_wide` puts them (the host keeps the ring as a texture and
+    /// draws only the tiles that change), and its raw colours.
+    pub fn wide_tile(&self, vram: &[u8], tx: usize, ty: usize, out: &mut [u8; 64]) {
+        let shade = |p: u8, s: u8| (p >> (s * 2)) & 3;
+        let id = self.wide_map[(ty & (GB_WIDE_ROWS - 1)) * GB_WIDE_COLS + (tx & (GB_WIDE_COLS - 1))];
+        let t = (self.bg_tile(id) as usize).min(383);
+        for (k, o) in out.iter_mut().enumerate() {
+            *o = shade(self.bgp, vram[t * 64 + k] & 3);
+        }
+    }
+
+    /// The wide picture's objects alone, as `render_wide` lays them over the
+    /// ring: `put(x, y, pixel)` per object pixel that shows (picture pixels,
+    /// a lower index winning), pixel = slot * 4 + shade.
+    pub fn wide_objects(&self, vram: &[u8], put: &mut impl FnMut(i32, i32, u8)) {
+        let (w, h) = (self.wide_w as i32, self.wide_h as i32);
+        let shade = |p: u8, s: u8| (p >> (s * 2)) & 3;
+        let (ring_w, ring_h) = (GB_WIDE_COLS * 8, GB_WIDE_ROWS * 8);
+        // the ring's raw colour under a picture pixel, for OBJ priority
+        let raw_at = |x: i32, y: i32| -> u8 {
+            let bx = (x as usize + self.wide_scx as usize) & (ring_w - 1);
+            let by = (y as usize + self.wide_scy as usize) & (ring_h - 1);
+            let id = self.wide_map[(by >> 3) * GB_WIDE_COLS + (bx >> 3)];
+            let t = (self.bg_tile(id) as usize).min(383);
+            vram[t * 64 + (by & 7) * 8 + (bx & 7)]
+        };
+        let objs = &self.wide_objs[..self.wide_obj_count];
+        let mut taken: alloc::vec::Vec<u32> = alloc::vec::Vec::new();
+        if objs.len() > 1 {
+            taken = alloc::vec![0u32; (w as usize * h as usize).div_ceil(32)];
+        }
+        for &(y, x0, tile, attr) in objs.iter() {
+            let (slot, pal) = if attr & ATTR_OBP1 != 0 { (8, self.obp1) } else { (4, self.obp0) };
+            for r in 0..8i32 {
+                let ly = y as i32 + r;
+                if ly < 0 || ly >= h {
+                    continue;
+                }
+                let ty = if attr & ATTR_Y_FLIP != 0 { 7 - r } else { r };
+                for px in 0..8i32 {
+                    let lx = x0 as i32 + px;
+                    if lx < 0 || lx >= w {
+                        continue;
+                    }
+                    let tx = if attr & ATTR_X_FLIP != 0 { 7 - px } else { px };
+                    let s = vram[(tile as usize) * 64 + ty as usize * 8 + tx as usize];
+                    if s == 0 || (attr & ATTR_BEHIND_BG != 0 && raw_at(lx, ly) != 0) {
+                        continue;
+                    }
+                    if !taken.is_empty() {
+                        let k = (ly * w + lx) as usize;
+                        if taken[k >> 5] & (1 << (k & 31)) != 0 {
+                            continue;
+                        }
+                        taken[k >> 5] |= 1 << (k & 31);
+                    }
+                    put(lx, ly, slot + shade(pal, s));
+                }
+            }
+        }
+    }
+
+    /// The wide picture from decoded VRAM: the wide ring under the BG
+    /// palette, the objects over it (OBJ priority against the ring's raw
+    /// colour, as on the hardware), a lower index on top.
+    pub fn render_wide(&self, vram: &[u8], out: &mut [u8]) {
+        let (w, h) = self.frame_size();
+        if out.len() < w * h || vram.len() < VRAM_BYTES {
+            return;
+        }
+        let shade = |p: u8, s: u8| (p >> (s * 2)) & 3;
+        let bgp = [shade(self.bgp, 0), shade(self.bgp, 1), shade(self.bgp, 2), shade(self.bgp, 3)];
+        let (ring_w, ring_h) = (GB_WIDE_COLS * 8, GB_WIDE_ROWS * 8);
+        // the ring's raw colours, kept for the objects' priority
+        let mut raw = alloc::vec![0u8; w * h];
+        for ly in 0..h {
+            let by = (ly + self.wide_scy as usize) & (ring_h - 1);
+            let (map_row, ty) = ((by >> 3) * GB_WIDE_COLS, (by & 7) * 8);
+            let row = &mut out[ly * w..(ly + 1) * w];
+            let rrow = &mut raw[ly * w..(ly + 1) * w];
+            let mut x = 0;
+            while x < w {
+                let bx = (x + self.wide_scx as usize) & (ring_w - 1);
+                let px0 = bx & 7;
+                let n = (8 - px0).min(w - x);
+                let t = (self.bg_tile(self.wide_map[map_row + (bx >> 3)]) as usize).min(383);
+                let src = &vram[t * 64 + ty + px0..t * 64 + ty + px0 + n];
+                for (k, &v) in src.iter().enumerate() {
+                    rrow[x + k] = v;
+                    row[x + k] = bgp[v as usize & 3];
+                }
+                x += n;
+            }
+        }
+        // the objects, last first, so a lower index lands on top
+        for &(y, x0, tile, attr) in self.wide_objs[..self.wide_obj_count].iter().rev() {
+            let (slot, pal) = if attr & ATTR_OBP1 != 0 { (8, self.obp1) } else { (4, self.obp0) };
+            for r in 0..8i32 {
+                let ly = y as i32 + r;
+                if ly < 0 || ly >= h as i32 {
+                    continue;
+                }
+                let ty = if attr & ATTR_Y_FLIP != 0 { 7 - r } else { r };
+                for px in 0..8i32 {
+                    let lx = x0 as i32 + px;
+                    if lx < 0 || lx >= w as i32 {
+                        continue;
+                    }
+                    let tx = if attr & ATTR_X_FLIP != 0 { 7 - px } else { px };
+                    let s = vram[(tile as usize) * 64 + ty as usize * 8 + tx as usize];
+                    let k = ly as usize * w + lx as usize;
+                    if s == 0 || (attr & ATTR_BEHIND_BG != 0 && raw[k] != 0) {
+                        continue;
+                    }
+                    out[k] = slot + shade(pal, s);
+                }
+            }
+        }
     }
 
     /// `render` from decoded VRAM (`decode_vram`).
@@ -358,6 +561,61 @@ impl GbScreen {
 mod tests {
     use super::*;
     use alloc::vec;
+
+    #[test]
+    fn the_wide_picture_reads_the_wide_ring_and_its_own_objects() {
+        let mut gb = GbScreen::default();
+        // VRAM decoded by hand: tile 257 ($9000 + 1) all shade 1, tile 3 all 2
+        let mut vram = vec![0u8; VRAM_BYTES];
+        vram[257 * 64..258 * 64].fill(1);
+        vram[3 * 64..4 * 64].fill(2);
+        gb.op(op::GB_REGS, &[0x83, 0, 0, 7, 144, 0xe4, 0xe4, 0xe4], None);
+        assert!(!gb.wide_on());
+        assert_eq!(gb.frame_size(), (GB_W, GB_H));
+        // ring tile (40, 2) is tile 1; a 254x144 picture from pixel (300, 0)
+        gb.op(op::GB_MAP, &[0x800 + 2 * 64 + 40], Some("01"));
+        assert!(gb.op(op::GB_WIDE, &[254, 144, 300, 0, 1], None));
+        assert!(gb.wide_on() && gb.wide_full);
+        assert_eq!(gb.frame_size(), (256, 144), "rounded up to whole tiles");
+        let mut out = vec![0u8; 256 * 144];
+        gb.render_any(&vram, &mut out);
+        // ring x 320..328 is picture x 20..28, rows 16..24
+        assert_eq!(out[16 * 256 + 20], 1);
+        assert_eq!(out[16 * 256 + 19], 0);
+        assert_eq!(out[15 * 256 + 20], 0);
+        // an object at x 250, y -4 (16-bit two's complement): its rows 4..8
+        // show at y 0..4, its first six columns before the frame's edge
+        assert!(gb.op(op::GB_WIDE_OBJS, &[], Some("fffc00fa0300")));
+        gb.render_any(&vram, &mut out);
+        assert_eq!(out[250], 4 + 2, "OBP0 slot, shade 2");
+        assert_eq!(out[3 * 256 + 255], 4 + 2);
+        assert_eq!(out[4 * 256 + 250], 0, "below its last row");
+        // behind the BG: hidden where the ring's colour is not 0
+        assert!(gb.op(op::GB_WIDE_OBJS, &[], Some("001000180380")));
+        gb.render_any(&vram, &mut out);
+        assert_eq!(out[16 * 256 + 24], 1, "the ring's tile wins");
+        assert_eq!(out[16 * 256 + 28], 4 + 2, "the object over colour 0");
+        // the host's way -- the ring's tiles and the objects apart -- makes
+        // the same picture
+        let mut parts = vec![0u8; 256 * 144];
+        for y in 0..144usize {
+            for x in 0..256usize {
+                let (bx, by) = ((x + 300) & 511, y);
+                let mut t = [0u8; 64];
+                gb.wide_tile(&vram, bx >> 3, by >> 3, &mut t);
+                parts[y * 256 + x] = t[(by & 7) * 8 + (bx & 7)];
+            }
+        }
+        gb.wide_objects(&vram, &mut |x, y, p| parts[y as usize * 256 + x as usize] = p);
+        for y in 0..144usize {
+            for x in 0..254usize {
+                assert_eq!(parts[y * 256 + x], out[y * 256 + x], "pixel {x},{y}");
+            }
+        }
+        // off: the hardware screen again
+        gb.op(op::GB_WIDE, &[0, 0, 0, 0, 0], None);
+        assert_eq!(gb.frame_size(), (GB_W, GB_H));
+    }
 
     /// Tile t's pixels are all shade t % 4.
     fn flat(_page: u16, tile: u16, _x: u8, _y: u8) -> u8 {

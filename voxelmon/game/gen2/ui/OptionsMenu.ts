@@ -49,11 +49,7 @@ import { Font } from "../shared/render/Font.ts";
 import { GbcPalette } from "../shared/render/GbcPalette.ts";
 import { tonumber, tostring } from "../platform/lua.ts";
 import { TILT_SHIFTS, tiltShiftLevel } from "../../tiltshift.ts";
-import { VIEW_MODES, viewIndex } from "../../viewmode.ts";
-import { ZOOMS_2D } from "../platform/map2d.ts";
-
-/** 2D ZOOM's names, by ZOOMS_2D step: how much more of the map shows. */
-const ZOOM_2D_LABELS = ["1X", "1.25X", "1.5X", "1.67X"];
+import { SCREENS_2D, VIEW_MODES, ZOOMS_2D, screen2dIndex, viewIndex, zoom2dIndex } from "../../viewmode.ts";
 import { CAMERA_SPEEDS, cameraSpeedIndex } from "../../cameraspeed.ts";
 
 type Options = Record<string, any>;
@@ -233,23 +229,22 @@ const ROWS: OptionRow[] = [
     text: (options) => Strings.get(VIEW_MODES[viewIndex(options.view)]!.label),
   },
   // Not the Lua's: VIEW 2D's map out to the top screen's edges (WIDE) or the
-  // Gold screen's box (NORMAL), and zoomed out (platform/map2d.ts
-  // canvasSize). The text boxes and menus keep the box.
+  // Gold screen's box (NORMAL), and zoomed out (viewmode.ts canvasSize) --
+  // the Kanto games' rows too. The text boxes and menus keep the box.
   {
     label: Strings.source("2D SCREEN"), key: "screen2d", port: true,
     cycle: (options) => {
-      options.screen2d = options.screen2d === "wide" ? "normal" : "wide";
+      options.screen2d = SCREENS_2D[1 - screen2dIndex(options.screen2d)]!.key;
     },
-    text: (options) => Strings.get(options.screen2d === "wide" ? "WIDE" : "NORMAL"),
+    text: (options) => Strings.get(SCREENS_2D[screen2dIndex(options.screen2d)]!.label),
   },
   {
-    label: Strings.source("2D ZOOM"), key: "zoom2d", port: true,
+    label: Strings.source("2D ZOOM OUT"), key: "zoom2d", port: true,
     cycle: (options, delta) => {
       const n = ZOOMS_2D.length;
-      const at = Math.max(0, (ZOOMS_2D as readonly number[]).indexOf(options.zoom2d));
-      options.zoom2d = ZOOMS_2D[(((at + delta) % n) + n) % n];
+      options.zoom2d = ZOOMS_2D[(((zoom2dIndex(options.zoom2d) + delta) % n) + n) % n]!.pct;
     },
-    text: (options) => Strings.get(ZOOM_2D_LABELS[Math.max(0, (ZOOMS_2D as readonly number[]).indexOf(options.zoom2d))]!),
+    text: (options) => Strings.get(ZOOMS_2D[zoom2dIndex(options.zoom2d)]!.label),
   },
   {
     label: Strings.source("BATTLES"), key: "battleView", port: true,

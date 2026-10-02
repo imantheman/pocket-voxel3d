@@ -4,7 +4,7 @@
 // back and forth through it until a wild Pokémon jumps out; then A through
 // the battle (RUN) and back to the grass, again and again. Logged: the tick
 // the encounter fires, the tick the battle's menu comes up, and Gold's own
-// step/draw/lcd/view split. ONLY=1 at bundle time: BATTLES 2D, a top-screen
+// step/draw/lcd/view split. ONLY="view,battles" at bundle time: those, a top-screen
 // shot (native screenshot) every two seconds of battle. Never shipped.
 import "../voxelmon/game/gen2/main.ts";
 import { VOX_BTN } from "../contracts/spec/voxel-spec.ts";
@@ -46,7 +46,15 @@ g.frame = (b: number): void => {
     started = true;
     const [save] = Save.load();
     game.continueGame(save);
-    game.options.battleView = typeof ONLY !== "undefined" ? "2d" : "3d";
+    // ONLY="view,battles" at bundle time (e.g. "2d,3d"); else VIEW 3D, BATTLES 3D
+    const [view, battles] = typeof ONLY !== "undefined" ? ONLY.split(",") : ["3d", "3d"];
+    game.options.view = view ?? "3d";
+    game.options.battleView = battles ?? "3d";
+    // then any key=value options after them (old option keys no row shows)
+    for (const kv of typeof ONLY !== "undefined" ? ONLY.split(",").slice(2) : []) {
+      const [k, v] = kv.split("=");
+      if (k) game.options[k] = v;
+    }
   }
   n++;
   const w = game.world;

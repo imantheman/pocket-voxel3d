@@ -1759,6 +1759,187 @@ fn canvas_off(x: usize, y: usize) -> usize {
     (((y >> 3) * (CANVAS_TW / 8) + (x >> 3)) * 64 + MX[x & 7] + MY[y & 7]) * 2
 }
 
+/// The Kanto 2D overworld's wide picture (GbScreen::wide_on: 2D SCREEN WIDE
+/// / 2D ZOOM OUT) kept the way MapCanvas keeps Gold's: the 64x32-tile wide
+/// ring as a 512x256 texture -- texel = ring pixel, wrapped, so a scroll is
+/// the quad's UVs and a step draws only the row or column it brought in --
+/// and the people on an overlay texture of their own, set and cleared by
+/// the pixel. Rendering the whole picture a frame was ~15 ms in Citra at
+/// the widest zoom.
+struct GbWide {
+    ring: [Option<texture::Texture>; 2],
+    over: [Option<texture::Texture>; 2],
+    cur: usize,
+    ring_data: Vec<u8>,
+    over_data: Vec<u8>,
+    ring_ver: u32,
+    over_ver: u32,
+    ring_tex_ver: [u32; 2],
+    over_tex_ver: [u32; 2],
+    /// The ring's tile ids as drawn, and the shading/colours they were drawn in.
+    ids: [u8; pocketvoxel_core::gb::GB_WIDE_COLS * pocketvoxel_core::gb::GB_WIDE_ROWS],
+    drawn: bool,
+    bgp: u8,
+    lut: [u16; 16],
+    over_set: Vec<(u16, u16, u16)>,
+    over_next: Vec<(u16, u16, u16)>,
+    off_for: u32,
+}
+
+impl GbWide {
+    fn new() -> Self {
+        GbWide {
+            ring: [None, None],
+            over: [None, None],
+            cur: 0,
+            ring_data: Vec::new(),
+            over_data: Vec::new(),
+            ring_ver: 1,
+            over_ver: 1,
+            ring_tex_ver: [0, 0],
+            over_tex_ver: [0, 0],
+            ids: [0; pocketvoxel_core::gb::GB_WIDE_COLS * pocketvoxel_core::gb::GB_WIDE_ROWS],
+            drawn: false,
+            bgp: 0,
+            lut: [0; 16],
+            over_set: Vec::new(),
+            over_next: Vec::new(),
+            off_for: 0,
+        }
+    }
+
+    /// Off this frame: after CANVAS_KEEP_OFF of them, let the memory go.
+    fn idle(&mut self) {
+        self.drawn = false;
+        self.off_for = self.off_for.saturating_add(1);
+        if self.off_for == CANVAS_KEEP_OFF && !self.ring_data.is_empty() {
+            self.ring_data = Vec::new();
+            self.over_data = Vec::new();
+            self.over_set.clear();
+            self.ring = [None, None];
+            self.over = [None, None];
+            self.ring_tex_ver = [0, 0];
+            self.over_tex_ver = [0, 0];
+        }
+    }
+
+    /// Bring both textures up to `gb` (its VRAM decoded in `vram`, coloured
+    /// by `lut`); `full` redraws every ring tile (new VRAM), `changed` the
+    /// ones showing those VRAM tiles (a water/flower step). True when both
+    /// textures are ready to draw.
+    fn update(&mut self, gb: &pocketvoxel_core::gb::GbScreen, vram: &[u8], lut: &[u16; 16],
+              full: bool, changed: &[u16]) -> bool {
+        self.off_for = 0;
+        if self.ring_data.is_empty() {
+            self.ring_data = vec![0u8; CANVAS_TW * CANVAS_TH * 2];
+            self.over_data = vec![0u8; CANVAS_TW * CANVAS_TH * 2];
+            self.over_set.clear();
+            self.drawn = false;
+            self.ring_ver = self.ring_ver.wrapping_add(1);
+            self.over_ver = self.over_ver.wrapping_add(1);
+        }
+        let t0 = now_us();
+        // --- the ring: the tiles whose id, VRAM or colours changed ---
+        let all = full || !self.drawn || self.bgp != gb.bgp || self.lut != *lut;
+        let mut tile = [0u8; 64];
+        let mut drew = false;
+        let cols = pocketvoxel_core::gb::GB_WIDE_COLS;
+        for i in 0..self.ids.len() {
+            let id = gb.wide_map[i];
+            let mut redo = all || self.ids[i] != id;
+            if !redo && !changed.is_empty() {
+                let v = if gb.lcdc & 0x10 != 0 || id >= 0x80 { id as u16 } else { 256 + id as u16 };
+                redo = changed.contains(&v);
+            }
+            if !redo {
+                continue;
+            }
+            self.ids[i] = id;
+            let (tx, ty) = (i % cols, i / cols);
+            gb.wide_tile(vram, tx, ty, &mut tile);
+            for y in 0..8 {
+                for x in 0..8 {
+                    let v = lut[tile[y * 8 + x] as usize & 15];
+                    let o = canvas_off(tx * 8 + x, ty * 8 + y);
+                    self.ring_data[o] = v as u8;
+                    self.ring_data[o + 1] = (v >> 8) as u8;
+                }
+            }
+            drew = true;
+        }
+        self.drawn = true;
+        self.bgp = gb.bgp;
+        self.lut = *lut;
+        if drew {
+            self.ring_ver = self.ring_ver.wrapping_add(1);
+        }
+        // --- the people ---
+        self.over_next.clear();
+        {
+            let next = &mut self.over_next;
+            gb.wide_objects(vram, &mut |x, y, p| {
+                if (x as usize) < CANVAS_TW && (y as usize) < CANVAS_TH {
+                    next.push((x as u16, y as u16, lut[p as usize & 15]));
+                }
+            });
+        }
+        if self.over_next != self.over_set {
+            for &(x, y, _) in self.over_set.iter() {
+                let o = canvas_off(x as usize, y as usize);
+                self.over_data[o] = 0;
+                self.over_data[o + 1] = 0;
+            }
+            for &(x, y, v) in self.over_next.iter() {
+                let o = canvas_off(x as usize, y as usize);
+                self.over_data[o] = v as u8;
+                self.over_data[o + 1] = (v >> 8) as u8;
+            }
+            core::mem::swap(&mut self.over_set, &mut self.over_next);
+            self.over_ver = self.over_ver.wrapping_add(1);
+        }
+        // --- the textures: the pair's other one brought up to date ---
+        let next = self.cur ^ 1;
+        let stale = self.ring_tex_ver[next] != self.ring_ver || self.over_tex_ver[next] != self.over_ver;
+        let mut ok = true;
+        if stale || self.ring[self.cur].is_none() {
+            for (tex, data, ver, tex_ver, wrap) in [
+                (&mut self.ring[next], &self.ring_data, self.ring_ver, &mut self.ring_tex_ver[next], texture::Wrap::Repeat),
+                (&mut self.over[next], &self.over_data, self.over_ver, &mut self.over_tex_ver[next], texture::Wrap::ClampToEdge),
+            ] {
+                if tex.is_none() {
+                    if let Ok(mut t) = texture::Texture::new(texture::TextureParameters::new_2d(
+                        CANVAS_TW as u16, CANVAS_TH as u16, texture::ColorFormat::Rgba5551)) {
+                        t.set_filter(texture::Filter::Nearest, texture::Filter::Nearest);
+                        t.set_wrap(wrap, wrap);
+                        *tex = Some(t);
+                    }
+                }
+                match tex.as_mut() {
+                    Some(t) if *tex_ver != ver => {
+                        if t.load_image(&data[..], texture::Face::default()).is_ok() {
+                            unsafe { gsp_flush(data.as_ptr(), data.len() as u32); }
+                            *tex_ver = ver;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Some(_) => {}
+                    None => ok = false,
+                }
+            }
+            if ok {
+                self.cur = next;
+            }
+        }
+        unsafe { PERF_LCD_US += now_us() - t0; }
+        ok && self.ring[self.cur].is_some() && self.over[self.cur].is_some()
+    }
+
+    fn textures(&self) -> (Option<&texture::Texture>, Option<&texture::Texture>) {
+        (self.ring[self.cur].as_ref(), self.over[self.cur].as_ref())
+    }
+}
+
 /// VIEW 2D's map as a canvas of its own (LcdScreen::canvas_on): the screen
 /// widened to the top screen's edges, or zoomed out, its text boxes and
 /// menus still the Gold screen's 160x144 over it.
@@ -3916,6 +4097,13 @@ fn main() {
     let mut gb_data: Vec<u16> = Vec::new();
     let mut gb_fb = vec![0u8; pocketvoxel_core::gb::GB_W * pocketvoxel_core::gb::GB_H];
     let mut gb_hold: Option<buffer::Info> = None;
+    // The wide picture's (gb.rs wide_on, the Kanto 2D SCREEN WIDE / ZOOM
+    // OUT): GbWide's ring and overlay textures, and whether they were ready
+    // last time it drew.
+    let mut gb_wide = GbWide::new();
+    let mut gb_wide_ok = false;
+    let mut gb_wide_now = false;
+    let mut gb_wide_hold: Option<[buffer::Info; 2]> = None;
     // The Gold screen (core lcd.rs), kept the same way: pages unswizzled on
     // first use, two textures alternating, the serial last drawn.
     let mut lcd_pages: Vec<(u16, Vec<u8>, usize)> = Vec::new();
@@ -5501,8 +5689,14 @@ if page_tex.len() < pak_static.atlases.len() {
         // through the SGB palettes it names, and laid over the Game Boy's
         // rect of the top screen after the pictures.
         let mut gb_buf: Option<buffer::Info> = None;
+        let mut gb_wide_bufs: Option<[buffer::Info; 2]> = None;
         {
             let sc = unsafe { voxel::scene() };
+            gb_wide_now = sc.gb.shown && sc.gb.wide_on();
+            if !gb_wide_now {
+                gb_wide.idle();
+                gb_wide_ok = false;
+            }
             if sc.gb.shown {
                 let pak_now = pak_static as *const pak::Pak<'static>;
                 if pak_now != gb_pak {
@@ -5565,6 +5759,15 @@ if page_tex.len() < pak_static.atlases.len() {
                         Some(r) if !whole && !gb_vram.is_empty() => r,
                         _ => (0, 384),
                     };
+                    // what the decode changes, for the wide ring: everything,
+                    // or the VRAM tiles of a water/flower step that differ
+                    let wide_full = stale && (whole || anim_only.is_none());
+                    let mut wide_changed: Vec<u16> = Vec::new();
+                    let before: Vec<u8> = if gb_wide_now && stale && !wide_full && gb_vram.len() >= range.1 as usize * 64 {
+                        gb_vram[range.0 as usize * 64..range.1 as usize * 64].to_vec()
+                    } else {
+                        Vec::new()
+                    };
                     if stale {
                         gb_vram_loads = loads.to_vec();
                         gb_vram.resize(pocketvoxel_core::gb::VRAM_BYTES, 0);
@@ -5578,7 +5781,14 @@ if page_tex.len() < pak_static.atlases.len() {
                         };
                         sc.gb.decode_vram_range(&mut pixel, &mut gb_vram, range.0, range.1);
                     }
-                    sc.gb.render_decoded(&gb_vram, &mut gb_fb);
+                    if !before.is_empty() {
+                        for v in range.0..range.1 {
+                            let k = (v - range.0) as usize * 64;
+                            if before[k..k + 64] != gb_vram[v as usize * 64..v as usize * 64 + 64] {
+                                wide_changed.push(v);
+                            }
+                        }
+                    }
                     let grey = pak_static.palettes.get(atlas_kind::PICS as usize);
                     // RGBA5551, as the Gold screen's texture: the SGB colours
                     // are 15-bit to begin with, and it is half RGBA8's upload
@@ -5595,7 +5805,12 @@ if page_tex.len() < pak_static.atlases.len() {
                             lut[slot * 4 + sh] = ((r << 11) | (g << 6) | (b << 1) | 1) as u16;
                         }
                     }
-                    let gw = pocketvoxel_core::gb::GB_W;
+                    if gb_wide_now {
+                        // the wide picture: the ring and the people, kept
+                        gb_wide_ok = gb_wide.update(&sc.gb, &gb_vram, &lut, wide_full, &wide_changed);
+                    } else {
+                    let (fw, fh, tw) = (pocketvoxel_core::gb::GB_W, pocketvoxel_core::gb::GB_H, 256usize);
+                    sc.gb.render_decoded(&gb_vram, &mut gb_fb);
                     if gb_data.is_empty() {
                         gb_data = vec![0u16; 256 * 256];
                     }
@@ -5606,9 +5821,9 @@ if page_tex.len() < pak_static.atlases.len() {
                     const MX: [usize; 8] = [0, 1, 4, 5, 16, 17, 20, 21];
                     const MY: [usize; 8] = [0, 2, 8, 10, 32, 34, 40, 42];
                     let data = &mut gb_data[..];
-                    for y in 0..pocketvoxel_core::gb::GB_H {
-                        let line = &gb_fb[y * gw..(y + 1) * gw];
-                        let base = (y >> 3) * (256 / 8) * 64 + MY[y & 7];
+                    for y in 0..fh {
+                        let line = &gb_fb[y * fw..(y + 1) * fw];
+                        let base = (y >> 3) * (tw / 8) * 64 + MY[y & 7];
                         for (tx, px) in line.chunks_exact(8).enumerate() {
                             let b = base + tx * 64;
                             let dst = &mut data[b..b + 22];
@@ -5635,12 +5850,35 @@ if page_tex.len() < pak_static.atlases.len() {
                             gb_cur = next;
                         }
                     }
+                    }
                     unsafe { PERF_LCD_US += now_us() - t_gb; }
                 }
-                // the Game Boy's 10:9 rect, the full height of the screen
+                // the Game Boy's 10:9 rect, the full height of the screen --
+                // or, the wide picture laid over the whole width
                 let w = pocketvoxel_core::gb::GB_W as f32 * UI_VIEW_H / pocketvoxel_core::gb::GB_H as f32;
                 let ox = (UI_VIEW_W - w) / 2.0;
-                let (x0, y0, x1, y1) = (qpx(ox), qpx(0.0), qpx(ox + w), qpx(UI_VIEW_H));
+                let (rx0, rx1) = if gb_wide_now && sc.gb.wide_full { (0.0, UI_VIEW_W) } else { (ox, ox + w) };
+                let (x0, y0, x1, y1) = (qpx(rx0), qpx(0.0), qpx(rx1), qpx(UI_VIEW_H));
+                if gb_wide_now && gb_wide_ok {
+                    // the ring wrapped at the scroll, the people over it
+                    let (vw, vh) = (sc.gb.wide_w as f32, sc.gb.wide_h as f32);
+                    let (sx, sy) = (sc.gb.wide_scx as f32, sc.gb.wide_scy as f32);
+                    let (tw, th) = (CANVAS_TW as f32, CANVAS_TH as f32);
+                    let quad = |u0: f32, v0: f32, u1: f32, v1: f32| {
+                        let mp = |px: i16, py: i16, u: f32, v: f32| Vertex {
+                            pos: [px, py, 0, 0], color: [255, 255, 255, 255], uv: [u, v] };
+                        [mp(x0, y0, u0, v0), mp(x1, y0, u1, v0), mp(x1, y1, u1, v1),
+                         mp(x0, y0, u0, v0), mp(x1, y1, u1, v1), mp(x0, y1, u0, v1)]
+                    };
+                    let ring_v = quad(sx / tw, 1.0 - sy / th, (sx + vw) / tw, 1.0 - (sy + vh) / th);
+                    let over_v = quad(0.0, 1.0, vw / tw, 1.0 - vh / th);
+                    let mut a = buffer::Info::new();
+                    let mut b = buffer::Info::new();
+                    if a.add(buffer::Buffer::new(&ring_v[..]), attr_info.permutation()).is_ok()
+                        && b.add(buffer::Buffer::new(&over_v[..]), attr_info.permutation()).is_ok() {
+                        gb_wide_bufs = Some([a, b]);
+                    }
+                }
                 let (u1, v1) = (160.0 / 256.0, 144.0 / 256.0);
                 let mp = |px: i16, py: i16, u: f32, v: f32| Vertex {
                     pos: [px, py, 0, 0], color: [255, 255, 255, 255], uv: [u, v] };
@@ -5952,6 +6190,8 @@ if page_tex.len() < pak_static.atlases.len() {
         }).collect();
         let page_tex_ref = &page_tex;
         let gb_tex_ref = gb_tex[gb_cur].as_ref();
+        let gb_wide_ref = gb_wide_bufs.as_ref();
+        let (gb_wide_ring, gb_wide_over) = gb_wide.textures();
         let gb_buf_ref = gb_buf.as_ref();
         let lcd_tex_ref = lcd_top.texture();
         let lcd_b_tex_ref = lcd_bot.texture();
@@ -6418,7 +6658,7 @@ if page_tex.len() < pak_static.atlases.len() {
                 // Card UVs are already atlas-scaled here, so the shader's
                 // terrain uvx transform must not apply again.
                 frame.bind_vertex_uniform(uvx_idx, FVec4::new(1.0, 1.0, 0.0, 0.0));
-                if !pic_bufs.is_empty() || gb_buf_ref.is_some() {
+                if !pic_bufs.is_empty() || gb_buf_ref.is_some() || gb_wide_ref.is_some() {
                     unsafe { c3d_depth_test(0); }
                     let po: Matrix4 = Projection::orthographic(
                         0.0..(UI_VIEW_W * UI_Q), (UI_VIEW_H * UI_Q)..0.0,
@@ -6444,8 +6684,13 @@ if page_tex.len() < pak_static.atlases.len() {
                             frame.bind_vertex_uniform(toff_idx, FVec4::new(0.0, 0.0, 0.0, 0.0));
                         }
                     }
-                    // the GB screen, over every picture
-                    if let (Some(gb), Some(t)) = (gb_buf_ref, gb_tex_ref) {
+                    // the GB screen, over every picture -- or its wide picture
+                    if let (Some([rb, ob]), Some(rt), Some(ot)) = (gb_wide_ref, gb_wide_ring, gb_wide_over) {
+                        frame.bind_texture(texture::Index::Texture0, rt);
+                        frame.draw_arrays(buffer::Primitive::Triangles, rb, None).unwrap();
+                        frame.bind_texture(texture::Index::Texture0, ot);
+                        frame.draw_arrays(buffer::Primitive::Triangles, ob, None).unwrap();
+                    } else if let (Some(gb), Some(t)) = (gb_buf_ref, gb_tex_ref) {
                         frame.bind_texture(texture::Index::Texture0, t);
                         frame.draw_arrays(buffer::Primitive::Triangles, gb, None).unwrap();
                     }
@@ -6651,6 +6896,7 @@ if page_tex.len() < pak_static.atlases.len() {
         card_hold = card_bufs;
         pic_hold = pic_bufs;
         gb_hold = gb_buf;
+        gb_wide_hold = gb_wide_bufs;
         lcd_hold = lcd_buf;
         lcd_b_hold = lcd_b_buf;
         canvas_hold = canvas_bufs;
@@ -6664,7 +6910,7 @@ if page_tex.len() < pak_static.atlases.len() {
         ui_b_dim_hold = ui_b_dim_buf;
         ui_b_sprite_hold = ui_b_sprite_bufs;
         let _ = (
-            &card_hold, &pic_hold, &gb_hold, &lcd_hold, &lcd_b_hold, &canvas_hold, &tilt_hold, &page_tex_retired_hold, &ui_hold, &anim_hold, &ui_b_hold,
+            &card_hold, &pic_hold, &gb_hold, &gb_wide_hold, &lcd_hold, &lcd_b_hold, &canvas_hold, &tilt_hold, &page_tex_retired_hold, &ui_hold, &anim_hold, &ui_b_hold,
             &ui_b_bar_hold, &ui_b_light_hold, &ui_b_dim_hold, &ui_b_sprite_hold,
         );
     }
