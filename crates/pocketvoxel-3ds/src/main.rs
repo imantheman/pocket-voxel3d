@@ -605,6 +605,10 @@ unsafe fn prefetch_start(name: &str) -> bool {
     if buf.try_reserve_exact(len).is_err() {
         return false;
     }
+    // and only with room still free beside it for the next build
+    if probe_free_kb(PREFETCH_HEAP_MB) < PREFETCH_HEAP_MB * 1024 {
+        return false;
+    }
     buf.resize(len, 0);
     // Header and section table first, to find the GAME section to skip.
     let mut file = file;
@@ -753,6 +757,39 @@ unsafe fn evict_lru(protect_in_use: bool) -> bool {
         }
         None => false,
     }
+}
+
+/// Heap a map build wants free in one block beside the cache: the vertex
+/// staging (Route 29 is ~6 MB of it), the map texture's pixels, the seam
+/// strips and the trees. The cache's byte budget alone cannot promise it --
+/// Gold's QuickJS heap and gamedata are far bigger than Kanto's, and the
+/// largest free block was down to 1 MB when entering Route 29 from New Bark
+/// with Routes 26, 27 and 46 read ahead (21 MB cached, under the 24 MB
+/// budget): the build after the upload died, back to the HOME Menu.
+const BUILD_HEAP_MB: usize = 16;
+/// The same headroom a read-ahead must leave behind it, or it is not kept.
+const PREFETCH_HEAP_MB: usize = 16;
+
+/// Before a build: a read-ahead in flight, then the least recent cached
+/// maps (never the one in use) let go until BUILD_HEAP_MB is free in one
+/// block or nothing more can go. Returns the block found and how many went.
+#[allow(static_mut_refs)]
+unsafe fn make_build_room() -> (usize, u32) {
+    let want = BUILD_HEAP_MB * 1024;
+    let mut free = probe_free_kb(BUILD_HEAP_MB);
+    let mut dropped = 0u32;
+    if free >= want {
+        return (free, 0);
+    }
+    if PREFETCH.take().is_some() {
+        dropped += 1;
+        free = probe_free_kb(BUILD_HEAP_MB);
+    }
+    while free < want && PAK_CACHE.len() > 1 && evict_lru(true) {
+        dropped += 1;
+        free = probe_free_kb(BUILD_HEAP_MB);
+    }
+    (free, dropped)
 }
 
 /// The GAME section's tag, the one payload this host never looks at.
@@ -3493,7 +3530,17 @@ fn build_map(
             .map(|it| all_chunks[it.chunk].meshes[it.kind].index_count as usize)
             .sum::<usize>()
             + stamp_verts;
-        let _ = verts.try_reserve_exact(want.min(budget));
+        // The budget's reservation above only proved the memory is there:
+        // reserving less on top of it keeps the whole budget (900,000 verts,
+        // 18 MB) for the rest of the load, where Route 29 draws 296,000 --
+        // 12 MB the seam strips, the trees and the map texture then could not
+        // get on Gold's heap (the abort entering Route 29 from New Bark).
+        // Hand it back and hold what the plan draws.
+        let want = want.min(budget);
+        if verts.is_empty() && verts.capacity() > want {
+            verts = Vec::new();
+        }
+        let _ = verts.try_reserve_exact(want);
     }
 
     // The border ring the cook fills beyond the map proper — bushes
@@ -4881,6 +4928,16 @@ fn main() {
             }
             let t_build = { extern "C" { fn osGetTime() -> u64; } unsafe { osGetTime() } };
             if !skip_build {
+                // room for the build, the cache giving way if it must
+                let (room_kb, dropped) = unsafe { make_build_room() };
+                if dropped > 0 || room_kb < BUILD_HEAP_MB * 1024 {
+                    dlog(&format!(
+                        "[pv] build room: {} cached/read-ahead maps let go, heap block {} KB, cache {} KB",
+                        dropped, room_kb, unsafe { cache_total_kb() },
+                    ));
+                }
+                // the last build's staging is gone already (freed after its
+                // upload); this one's is the only one alive
                 geom = build_map(
                     pak_static,
                     map_ids[map_i],
