@@ -4974,11 +4974,16 @@ fn main() {
                 }
                 prev_map_i = map_i;
                 let mut upload_fail = 0u32;
+                // what the failures dropped and the pool after: a span the
+                // pool cannot take is a chunk of the map gone (grass, built
+                // last, first -- Isaac's flat patches of Route 29 on hardware)
+                let mut fail_verts = 0usize;
+                let mut fail_low = 0u32;
                 for s in geom.chunk_spans.iter() {
                     let n = (s.end - s.start).min(65535);
                     if n == 0 { continue; }
                     if s.start + n > geom.verts.len() { upload_fail += 1; continue; }
-                    if !linear_fits(n) { upload_fail += 1; continue; }
+                    if !linear_fits(n) { upload_fail += 1; fail_low += 1; fail_verts += n; continue; }
                     let mut bi = buffer::Info::new();
                     if bi.add(buffer::Buffer::new(&geom.verts[s.start..s.start + n]), attr_info.permutation()).is_ok() {
                         chunk_infos.push((*s, bi));
@@ -4987,13 +4992,17 @@ fn main() {
                         // sky: the geometry built fine, the GPU buffer just
                         // never took it.
                         upload_fail += 1;
+                        fail_verts += n;
                     }
                 }
                 dlog(&format!(
-                    "[pv] uploaded {}/{} spans (failed {})",
+                    "[pv] uploaded {}/{} spans (failed {}: {} short of linear, {} verts; linear free {} KB after)",
                     chunk_infos.len(),
                     geom.chunk_spans.len(),
                     upload_fail,
+                    fail_low,
+                    fail_verts,
+                    unsafe_free_kb(),
                 ));
                 // Land it. A rebuild dying past this point used to leave the
                 // whole batch unwritten, so the log stopped at "before build"
