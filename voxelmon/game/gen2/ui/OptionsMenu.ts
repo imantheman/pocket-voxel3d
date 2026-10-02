@@ -51,6 +51,7 @@ import { tonumber, tostring } from "../platform/lua.ts";
 import { TILT_SHIFTS, tiltShiftLevel } from "../../tiltshift.ts";
 import { SCREENS_2D, VIEW_MODES, ZOOMS_2D, screen2dIndex, viewIndex, zoom2dIndex } from "../../viewmode.ts";
 import { CAMERA_SPEEDS, cameraSpeedIndex } from "../../cameraspeed.ts";
+import { runningShoesOn } from "../../runshoes.ts";
 
 type Options = Record<string, any>;
 
@@ -208,6 +209,15 @@ const ROWS: OptionRow[] = [
     },
     text: (options) => Strings.get(options.movement === "grid" ? "GRID" : "FREE"),
   },
+  // Not the Lua's: RUNNING SHOES, every game's row (voxelmon/game/runshoes.ts)
+  // -- hold B on foot to run. ON unless set.
+  {
+    label: Strings.source("RUNNING SHOES"), key: "runningShoes", port: true,
+    cycle: (options) => {
+      options.runningShoes = !runningShoesOn(options);
+    },
+    text: (options) => Strings.get(runningShoesOn(options) ? "ON" : "OFF"),
+  },
   // Not the Lua's: how fast the C-stick swings the 3D camera
   // (voxelmon/game/cameraspeed.ts), stated to the host every frame by main.ts
   // -- the Kanto games' CAMERA SPEED row.
@@ -297,7 +307,7 @@ const GROUPS: Group[] = [
   },
   // Not the Lua's: the Kanto games' MOVEMENT and CAMERA SPEED, together
   {
-    id: "group.controls", label: Strings.source("CONTROLS"), members: ["movement", "cameraSpeed"],
+    id: "group.controls", label: Strings.source("CONTROLS"), members: ["movement", "runningShoes", "cameraSpeed"],
   },
   { id: "group.audio", label: Strings.source("AUDIO"), members: ["sound", "musicVol", "sfxVol", "musicFilter"] },
   {

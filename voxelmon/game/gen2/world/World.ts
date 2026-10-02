@@ -26,6 +26,7 @@
 // ScreenPosition, Pokegear) are hoisted to here.
 import { W_OTHER_PLAYER_LINK_MODE } from "../core/CableClub.ts";
 import { startLinkBattle } from "../core/LinkBattle2.ts";
+import { RUN_STEP_FRAMES, runningShoesOn } from "../../runshoes.ts";
 import { LinkTradeMenu } from "../ui/LinkTradeMenu.ts";
 import { ENTS_MAX } from "../../../../contracts/spec/voxel-spec.ts";
 import { rotateFacing } from "./rotate.ts";
@@ -10534,6 +10535,19 @@ export class World {
     p.grassShake = truthy(grass) ? grass : undefined;
   }
 
+  /** A walking step's frames: the cart's 16, or with RUNNING SHOES on and B
+   * held, on foot, half that (voxelmon/game/runshoes.ts; a port addition).
+   * Bike.stepFrames uses it only on foot, and surfing keeps its own pace. */
+  walkFrames(): number {
+    const game = this.game;
+    const input = game ? game.input : undefined;
+    if (runningShoesOn(game ? game.options : undefined) && input && input.isDown && input.isDown("b")
+        && !FieldMoves.isSurfing(this.playerState) && !FieldMoves.isBiking(this.playerState)) {
+      return RUN_STEP_FRAMES;
+    }
+    return Player.STEP_FRAMES;
+  }
+
   // Lua: World.lua:10392-10474
   movePlayer(dir: Facing): string | undefined {
     const p = this.player;
@@ -10541,7 +10555,7 @@ export class World {
     // .DoStep's choice between STEP_WALK and STEP_BIKE, made fresh for every
     // step (the downhill exception can change from cell to cell).
     p.stepFrames = Bike.stepFrames(
-      this.playerState, dir, this.downhill(), Player.STEP_FRAMES);
+      this.playerState, dir, this.downhill(), this.walkFrames());
     // movement.speed, Gen 1's name and ctx keys plus `downhill` and
     // `playerState`. Per-step hot path: the ctx is only built for a chain.
     if (Runtime.wantsHook("movement.speed")) {
@@ -11318,7 +11332,7 @@ export class World {
     const facing = quantize(dir[0], dir[1]) as Facing;
     // the grid's own speed for this state (walk, bike, surf): a cell per
     // step's frames, scaled by the pad's throw
-    const frames = Bike.stepFrames(this.playerState, facing, this.downhill(), Player.STEP_FRAMES);
+    const frames = Bike.stepFrames(this.playerState, facing, this.downhill(), this.walkFrames());
     const speed = (16 / Math.max(1, frames)) * (stick ? stick.throw : 1);
     const r = slide(p.px, p.py, dir[0] * speed, dir[1] * speed, (x, y) => this.freeOpen(x, y));
     p.facing = facing;

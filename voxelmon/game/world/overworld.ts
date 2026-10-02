@@ -27,6 +27,7 @@ import { talkScript, itemBallScript, itemBallFlag, TEXT_BILLSHOUSE_PC } from "./
 import { LAST_MAP_REWRITES, rewrittenLastMap } from "./lastmap.ts";
 import { martGreetScript } from "./marts.ts";
 import { bikeAllowed, type BikeRiding } from "./bike.ts";
+import { runningShoesOn } from "../runshoes.ts";
 import { visit } from "./fly.ts";
 import { FREE_AXIS_LEAN, cellOf, freeDir, quantize, slide, stickPush } from "./freemove.ts";
 import { repelled } from "../rules/items.ts";
@@ -664,6 +665,11 @@ export class Overworld implements ScriptWorld {
         this.engaging;
     }
     if (!scripted && !this.transitioning) this.arrivalTriggers();
+    // RUNNING SHOES (../runshoes.ts): B held, on foot, the player's own walk
+    // only -- a script's steps keep the walk's pace
+    this.player.running =
+      !scripted && !this.transitioning && runningShoesOn((this.save as { options?: { runningShoes?: unknown } }).options) &&
+      this.shell.input.isDown("b");
     if (!scripted && !this.transitioning) {
       if (this.freeMoveActive()) {
         this.freeWalk();

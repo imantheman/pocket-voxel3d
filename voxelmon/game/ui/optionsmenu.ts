@@ -49,12 +49,14 @@ export const OPTIONS_VISIBLE = 4;
 // CAMERA SPEED's choices live in ../cameraspeed.ts (Gold's OPTION screen has
 // the row too); re-exported for the callers that import them from here.
 export { CAMERA_SPEED_DEFAULT_Q8, CAMERA_SPEEDS } from "../cameraspeed.ts";
+import { RUNNING_SHOES, runningShoesOn } from "../runshoes.ts";
 
 interface OptionsSave {
   options?: {
     textSpeed?: number;
     animations?: boolean;
     movement?: string;
+    runningShoes?: boolean;
     cameraSpeed?: string;
     tiltShift?: string;
     view?: string;
@@ -106,6 +108,12 @@ export class OptionsMenuState implements GameState {
         label: "MOVEMENT",
         choices: ["FREE", "GRID"],
         index: this.opts().movement === "grid" ? 1 : 0,
+      },
+      {
+        // Hold B to run (../runshoes.ts). This port's row; ON unless set.
+        label: "RUNNING SHOES",
+        choices: RUNNING_SHOES.map((r) => r.label),
+        index: runningShoesOn(this.opts()) ? 0 : 1,
       },
       {
         label: "CAMERA SPEED",
@@ -162,13 +170,14 @@ export class OptionsMenuState implements GameState {
     if (row === 0) this.opts().textSpeed = TEXT_SPEEDS[at]!.delay;
     else if (row === 1) this.opts().animations = at === 0;
     else if (row === 2) this.opts().movement = at === 1 ? "grid" : "free";
-    else if (row === 3) this.opts().cameraSpeed = CAMERA_SPEEDS[at]!.key;
-    else if (row === 4) this.opts().tiltShift = TILT_SHIFTS[at]!.key;
-    else if (row === 5) this.opts().view = VIEW_MODES[at]!.key;
-    else if (row === 6) this.opts().screen2d = SCREENS_2D[at]!.key;
-    else if (row === 7) this.opts().zoom2d = ZOOMS_2D[at]!.pct;
-    else if (row === 8) this.opts().battleView = VIEW_MODES[at]!.key;
-    else if (row === 9) this.opts().devMenu = at === 1;
+    else if (row === 3) this.opts().runningShoes = RUNNING_SHOES[at]!.key;
+    else if (row === 4) this.opts().cameraSpeed = CAMERA_SPEEDS[at]!.key;
+    else if (row === 5) this.opts().tiltShift = TILT_SHIFTS[at]!.key;
+    else if (row === 6) this.opts().view = VIEW_MODES[at]!.key;
+    else if (row === 7) this.opts().screen2d = SCREENS_2D[at]!.key;
+    else if (row === 8) this.opts().zoom2d = ZOOMS_2D[at]!.pct;
+    else if (row === 9) this.opts().battleView = VIEW_MODES[at]!.key;
+    else if (row === 10) this.opts().devMenu = at === 1;
   }
 
   update(): void {

@@ -5,6 +5,7 @@
 // the presentation frontend; this class carries only the state it needs.
 
 import { BIKE_STEP_FRAMES } from "./bike.ts";
+import { RUN_STEP_FRAMES } from "../runshoes.ts";
 import { canMove, DELTA, target, type Dir, type Mover, type TilePairs } from "./collision.ts";
 import type { GameMap } from "./map.ts";
 
@@ -37,6 +38,9 @@ export class Player implements Mover {
    * from save.onBike by the overworld, so a warp cannot desync it. */
   onBike = false;
   bikeStepFrames = BIKE_STEP_FRAMES;
+  /** RUNNING SHOES (../runshoes.ts): B held on foot, set by the overworld
+   * each poll. A port addition; the cart walks. */
+  running = false;
   turnFrames = TURN_FRAMES;
   stepFramesCur?: number;
   bumpFrames?: number;
@@ -97,9 +101,12 @@ export class Player implements Mover {
     return "moved";
   }
 
-  /** Player.lua:152 — frames per step, halved while riding. */
+  /** Player.lua:152 — frames per step, halved while riding (and, a port
+   * addition, while running on foot; never surfing). */
   stepSpeed(): number {
-    return this.onBike ? this.bikeStepFrames : this.stepFrames;
+    if (this.onBike) return this.bikeStepFrames;
+    if (this.running && !this.surfing) return RUN_STEP_FRAMES;
+    return this.stepFrames;
   }
 
   // Player.lua:168 update — advance one fixed step; true when a step just

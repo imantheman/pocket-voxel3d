@@ -325,7 +325,12 @@ export function updateFollower(w: PikaWorld, rand: (n: number) => number): void 
     npc.hop = true;
   }
   // the player's step, halved while two or more behind (FastPikachuFollow)
-  const stepLen = p.stepSpeed?.() ?? p.stepFrames ?? 16;
+  // (the step the player actually committed: RUNNING SHOES can change the
+  // speed the moment B is let go, mid-step)
+  const committed = (p as { moving?: boolean; stepFramesCur?: number }).moving
+    ? (p as { stepFramesCur?: number }).stepFramesCur
+    : undefined;
+  const stepLen = committed ?? p.stepSpeed?.() ?? p.stepFrames ?? 16;
   npc.stepLen = far > 1 && !npc.hop ? Math.max(1, Math.floor(stepLen / 2)) : stepLen;
   npc.moving = true;
   npc.progress = 0;

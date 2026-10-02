@@ -1563,7 +1563,8 @@ function updateFollower(w, rand) {
     npc.goalY = npc.targetY;
     npc.hop = true;
   }
-  const stepLen = p.stepSpeed?.() ?? p.stepFrames ?? 16;
+  const committed = p.moving ? p.stepFramesCur : undefined;
+  const stepLen = committed ?? p.stepSpeed?.() ?? p.stepFrames ?? 16;
   npc.stepLen = far > 1 && !npc.hop ? Math.max(1, Math.floor(stepLen / 2)) : stepLen;
   npc.moving = true;
   npc.progress = 0;
@@ -8270,6 +8271,16 @@ function roll(encounterDef, rng, buckets = ENCOUNTER_BUCKETS) {
   return null;
 }
 
+// voxelmon/game/runshoes.ts
+var RUN_STEP_FRAMES = 8;
+var RUNNING_SHOES = [
+  { key: true, label: "ON" },
+  { key: false, label: "OFF" }
+];
+function runningShoesOn(options) {
+  return options?.runningShoes !== false;
+}
+
 // voxelmon/game/world/player.ts
 var STEP_FRAMES2 = 16;
 var TURN_FRAMES = 4;
@@ -8291,6 +8302,7 @@ class Player {
   stepFrames = STEP_FRAMES2;
   onBike = false;
   bikeStepFrames = BIKE_STEP_FRAMES;
+  running = false;
   turnFrames = TURN_FRAMES;
   stepFramesCur;
   bumpFrames;
@@ -8338,7 +8350,11 @@ class Player {
     return "moved";
   }
   stepSpeed() {
-    return this.onBike ? this.bikeStepFrames : this.stepFrames;
+    if (this.onBike)
+      return this.bikeStepFrames;
+    if (this.running && !this.surfing)
+      return RUN_STEP_FRAMES;
+    return this.stepFrames;
   }
   update() {
     this.stepLanded = false;
@@ -16992,6 +17008,7 @@ class Overworld {
     }
     if (!scripted && !this.transitioning)
       this.arrivalTriggers();
+    this.player.running = !scripted && !this.transitioning && runningShoesOn(this.save.options) && this.shell.input.isDown("b");
     if (!scripted && !this.transitioning) {
       if (this.freeMoveActive()) {
         this.freeWalk();
@@ -23014,7 +23031,6 @@ var CAMERA_SPEEDS = [
   { key: "fast", label: "FAST", q8: 448 }
 ];
 var CAMERA_SPEED_DEFAULT_Q8 = 256;
-
 // voxelmon/game/ui/optionsmenu.ts
 var OPTIONS_VISIBLE = 4;
 
@@ -23055,6 +23071,11 @@ class OptionsMenuState {
         label: "MOVEMENT",
         choices: ["FREE", "GRID"],
         index: this.opts().movement === "grid" ? 1 : 0
+      },
+      {
+        label: "RUNNING SHOES",
+        choices: RUNNING_SHOES.map((r) => r.label),
+        index: runningShoesOn(this.opts()) ? 0 : 1
       },
       {
         label: "CAMERA SPEED",
@@ -23106,18 +23127,20 @@ class OptionsMenuState {
     else if (row === 2)
       this.opts().movement = at === 1 ? "grid" : "free";
     else if (row === 3)
-      this.opts().cameraSpeed = CAMERA_SPEEDS[at].key;
+      this.opts().runningShoes = RUNNING_SHOES[at].key;
     else if (row === 4)
-      this.opts().tiltShift = TILT_SHIFTS[at].key;
+      this.opts().cameraSpeed = CAMERA_SPEEDS[at].key;
     else if (row === 5)
-      this.opts().view = VIEW_MODES[at].key;
+      this.opts().tiltShift = TILT_SHIFTS[at].key;
     else if (row === 6)
-      this.opts().screen2d = SCREENS_2D[at].key;
+      this.opts().view = VIEW_MODES[at].key;
     else if (row === 7)
-      this.opts().zoom2d = ZOOMS_2D[at].pct;
+      this.opts().screen2d = SCREENS_2D[at].key;
     else if (row === 8)
-      this.opts().battleView = VIEW_MODES[at].key;
+      this.opts().zoom2d = ZOOMS_2D[at].pct;
     else if (row === 9)
+      this.opts().battleView = VIEW_MODES[at].key;
+    else if (row === 10)
       this.opts().devMenu = at === 1;
   }
   update() {

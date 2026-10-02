@@ -140,7 +140,7 @@ describe("gen2 OPTION screen's port rows", () => {
     const menu = game.stack.top() as OptionsMenu;
     const moves = menu.focusRow("movement")!;
     expect(moves.row()!.label).toBe("MOVEMENT");
-    expect(moves.view.map((r) => r.label)).toEqual(["MOVEMENT", "CAMERA SPEED", "BACK"]);
+    expect(moves.view.map((r) => r.label)).toEqual(["MOVEMENT", "RUNNING SHOES", "CAMERA SPEED", "BACK"]);
     delete moves.options.movement;
     expect(moves.rows.find((r) => r.key === "movement")!.text!(moves.options)).toBe("FREE");
     press(game, "right");
@@ -158,6 +158,16 @@ describe("gen2 OPTION screen's port rows", () => {
     expect(page.options.cameraSpeed).toBe("slow");
     press(game, "left");
     expect(page.options.cameraSpeed).toBe("fast");
+    press(game, "b");
+    // RUNNING SHOES: ON unless set; right turns them OFF and back
+    const shoes = menu.focusRow("runningShoes")!;
+    expect(shoes.row()!.label).toBe("RUNNING SHOES");
+    delete shoes.options.runningShoes;
+    expect(shoes.rows.find((r) => r.key === "runningShoes")!.text!(shoes.options)).toBe("ON");
+    press(game, "right");
+    expect(shoes.options.runningShoes).toBe(false);
+    press(game, "right");
+    expect(shoes.options.runningShoes).toBe(true);
     const { cameraSpeedQ8 } = await import("../voxelmon/game/cameraspeed.ts");
     expect(cameraSpeedQ8("slow")).toBe(128);
     expect(cameraSpeedQ8(undefined)).toBe(256);
@@ -447,5 +457,29 @@ describe("gen2 3D battle arena", () => {
       checked++;
     }
     expect(checked).toBeGreaterThan(300);
+  });
+});
+
+describe("gen2 RUNNING SHOES", () => {
+  test.skipIf(!gold)("B held on foot halves a step's frames; not with the option off, nor surfing", async () => {
+    useGoldGen();
+    const g: any = Game2.new();
+    g.load({ startWorld: true });
+    const w = g.world;
+    let b = false;
+    g.input = { isDown: (k: string) => k === "b" && b, wasPressed: () => false };
+    g.options = { ...(g.options ?? {}) };
+    delete g.options.runningShoes;
+    expect(w.walkFrames()).toBe(16);
+    b = true;
+    expect(w.walkFrames()).toBe(8);
+    g.options.runningShoes = false;
+    expect(w.walkFrames()).toBe(16);
+    g.options.runningShoes = true;
+    const { FieldMoves } = await import("../voxelmon/game/gen2/world/FieldMoves.ts");
+    const was = w.playerState;
+    w.playerState = FieldMoves.PLAYER_SURF;
+    expect(w.walkFrames()).toBe(16);
+    w.playerState = was;
   });
 });

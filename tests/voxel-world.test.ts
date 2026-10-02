@@ -10772,3 +10772,38 @@ describe("Blue: the few tables the guest holds itself", () => {
     expect(game.defaultNames()).toEqual({ player: "BLUE", rival: "RED" });
   });
 });
+
+describe("RUNNING SHOES", () => {
+  test("a running step is the bike's length; surfing and the bike keep their own", async () => {
+    const { Player } = await import("../voxelmon/game/world/player.ts");
+    const p = new Player(5, 5, "down");
+    expect(p.stepSpeed()).toBe(16);
+    p.running = true;
+    expect(p.stepSpeed()).toBe(8);
+    p.surfing = true;
+    expect(p.stepSpeed()).toBe(16);
+    p.surfing = false;
+    p.onBike = true;
+    expect(p.stepSpeed()).toBe(p.bikeStepFrames);
+  });
+  test("the OPTION row: ON unless set, and it turns OFF", () => {
+    const save: any = { options: {} };
+    const pressed: Record<string, boolean> = {};
+    const st = new OptionsMenuState({ input: { pressed }, pop() {}, save } as never);
+    const rows = () => st.view().rows as any[];
+    const at = rows().findIndex((r) => r.label === "RUNNING SHOES");
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(rows()[at].choices).toEqual(["ON", "OFF"]);
+    expect(rows()[at].index).toBe(0);
+    for (let i = 0; i < at; i++) {
+      pressed.down = true;
+      st.update();
+      pressed.down = false;
+    }
+    pressed.right = true;
+    st.update();
+    pressed.right = false;
+    expect(save.options.runningShoes).toBe(false);
+    expect(rows()[at].index).toBe(1);
+  });
+});
