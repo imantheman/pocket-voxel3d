@@ -2721,6 +2721,18 @@ fn push_chunk_mesh(
     // connected neighbour drawn behind it (see build_map), and ±huge on the
     // sides that do not, where the ring is still the only thing standing
     // between the player and empty sky.
+    //
+    // The tests run in integers, which on the ARM11 is most of this loop's
+    // cost saved: the coordinates are i16 and every clip line is a whole
+    // number (a chunk bound, or none), so "the centroid is past the line" is
+    // "three times the line is less than the sum" -- no divide by 3 -- and
+    // "the centroid is ON the line" (within 0.01, ring_inner_face) is the
+    // sum being exactly three times it. The same triangles come out as the
+    // float tests chose (checked against a hash of the built buffer).
+    let third = |c: f32| -> i64 { if c.abs() >= 1.0e8 { if c < 0.0 { i64::MIN / 4 } else { i64::MAX / 4 } } else { 3 * c as i64 } };
+    let (lo_x, lo_z, hi_x, hi_z) = (third(clip_min[0]), third(clip_min[1]), third(clip_max[0]), third(clip_max[1]));
+    let mut imin = [i32::MAX; 3];
+    let mut imax = [i32::MIN; 3];
     let tri_count = m.index_count as usize / 3;
     for t in 0..tri_count {
         if verts.len() + 3 > budget {
@@ -2734,31 +2746,38 @@ fn push_chunk_mesh(
         ) else {
             break;
         };
-        let mid_x = (p0.x as f32 + p1.x as f32 + p2.x as f32) / 3.0;
-        let mid_z = (p0.z as f32 + p1.z as f32 + p2.z as f32) / 3.0;
-        if mid_x < clip_min[0] || mid_x > clip_max[0]
-            || mid_z < clip_min[1] || mid_z > clip_max[1]
-        {
+        let sx = p0.x as i64 + p1.x as i64 + p2.x as i64;
+        let sz = p0.z as i64 + p1.z as i64 + p2.z as i64;
+        if sx < lo_x || sx > hi_x || sz < lo_z || sz > hi_z {
             continue;
         }
-        let pos = |v: &pak::PakVert| [v.x as f32, v.y as f32, v.z as f32];
-        if ring_inner_face([pos(&p0), pos(&p1), pos(&p2)], clip_min, clip_max) {
-            continue;
+        if sx == lo_x || sx == hi_x || sz == lo_z || sz == hi_z {
+            // on an edge: the rare full test, in floats as before
+            let pos = |v: &pak::PakVert| [v.x as f32, v.y as f32, v.z as f32];
+            if ring_inner_face([pos(&p0), pos(&p1), pos(&p2)], clip_min, clip_max) {
+                continue;
+            }
         }
         for pv in [p0, p1, p2] {
             let a = draw::modulate_rgb(pv.abgr, tint);
-            let p = [pv.x as f32, pv.y as f32, pv.z as f32];
+            let q = [pv.x as i32, pv.y as i32, pv.z as i32];
             for c in 0..3 {
-                if p[c] < cmin[c] { cmin[c] = p[c]; }
-                if p[c] > cmax[c] { cmax[c] = p[c]; }
-                if p[c] < gmin[c] { gmin[c] = p[c]; }
-                if p[c] > gmax[c] { gmax[c] = p[c]; }
+                if q[c] < imin[c] { imin[c] = q[c]; }
+                if q[c] > imax[c] { imax[c] = q[c]; }
             }
             verts.push(Vertex {
                 pos: [pv.x, pv.y, pv.z, 0],
                 color: [(a & 0xff) as u8, ((a >> 8) & 0xff) as u8, ((a >> 16) & 0xff) as u8, 255],
                 uv: [pv.uf(), pv.vf()],
             });
+        }
+    }
+    if verts.len() > span_start {
+        for c in 0..3 {
+            gmin[c] = imin[c] as f32;
+            gmax[c] = imax[c] as f32;
+            if gmin[c] < cmin[c] { cmin[c] = gmin[c]; }
+            if gmax[c] > cmax[c] { cmax[c] = gmax[c]; }
         }
     }
     if verts.len() > span_start {
