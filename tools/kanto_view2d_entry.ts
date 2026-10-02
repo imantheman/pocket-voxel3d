@@ -1,8 +1,10 @@
 // A Citra check of the Kanto games' 2D modes (cc_kanto_bench.sh): the real
 // entry, the card's save continued from the title, BATTLES (and, with
 // VIEW2D=1 at bundle time, VIEW) set to 2D, a walk about, then wild
-// battles that A carries through. Never shipped.
+// battles that A carries through; SHOTS=1, a top-screen shot of each.
+// Never shipped.
 import "../voxelmon/game/psp-main.ts";
+import { native } from "../voxelmon/game/quickjs-host.ts";
 
 declare const VIEW2D: boolean;
 declare const WALKONLY: boolean;
@@ -10,6 +12,8 @@ declare const WARP: string;
 declare const STILL: boolean;
 declare const TO3D: boolean;
 declare const PIKA: boolean;
+declare const SHOTS: boolean;
+let battleFrames = 0;
 const g = globalThis as unknown as { voxelmonGame: any; frame: (b: number) => void };
 const game = g.voxelmonGame;
 const mainFrame = g.frame;
@@ -56,6 +60,10 @@ g.frame = (b: number): void => {
       game.save.party = [{ species: "PIKACHU", level: 5, hp: 20, maxHp: 20, moves: [{ id: "THUNDERSHOCK", pp: 30 }] }];
     }
   }
+  // a top-screen shot two seconds into each battle (SHOTS=1 at bundle time)
+  if (typeof SHOTS !== "undefined" && game.battleView?.()) {
+    if (++battleFrames === 120) native.screenshot?.();
+  } else battleFrames = 0;
   i++;
   mainFrame((b & ~0xff) | pad);
 };

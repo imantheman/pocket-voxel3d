@@ -19125,6 +19125,7 @@ opened the door!`));
 }
 
 // voxelmon/game/scene.ts
+var GB_NO_RESOLVE = { page: () => -1, palette: () => -1 };
 var STAND = { down: 0, up: 1, left: 2, right: 2 };
 var WALK = { down: 3, up: 4, left: 5, right: 5 };
 function poseDir(facing, camTurns) {
@@ -19215,6 +19216,7 @@ class Scene {
       p.ents += t2 - t1;
     }
     if (bv) {
+      this.gbEmitter.emit(this.host, null, GB_NO_RESOLVE);
       this.emitBattle(view, bv);
       if (p)
         p.ui += p.now() - t2;

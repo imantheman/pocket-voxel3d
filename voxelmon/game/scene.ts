@@ -21,7 +21,7 @@ import {
   VIEW_W,
 } from "../../contracts/spec/voxel-spec.ts";
 import { CARD_PIC_CELL } from "./ui/trainercard.ts";
-import { GbEmitter } from "./gb/emit.ts";
+import { GbEmitter, type GbResolve } from "./gb/emit.ts";
 import type { GbVideo } from "./gb/video.ts";
 import { SUMMARY_PIC_CELL } from "./ui/partyscreen.ts";
 import { hpBarTiles } from "./battle/ui.ts";
@@ -62,6 +62,9 @@ import {
   TEXT_X,
   toCells,
 } from "./ui/tiles.ts";
+
+/** A GB screen taken down names nothing (GbEmitter.emit with no video). */
+const GB_NO_RESOLVE: GbResolve = { page: () => -1, palette: () => -1 };
 
 // gen1recomp src/render/SpriteRenderer.lua:85 — the walk-sheet frame order
 // (right = mirrored left, DIR order in the spec matches).
@@ -280,6 +283,11 @@ export class Scene {
       p.ents += t2 - t1;
     }
     if (bv) {
+      // VIEW 2D's overworld is a GB screen (world/view2d.ts), drawn over
+      // every picture: down for the battle, or its last frame stays up over
+      // the battle's pics (emitUi, which takes it down otherwise, is not
+      // reached from here)
+      this.gbEmitter.emit(this.host, null, GB_NO_RESOLVE);
       this.emitBattle(view, bv);
       if (p) p.ui += p.now() - t2;
       return;
