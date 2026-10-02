@@ -6057,6 +6057,9 @@ function openCell(map, cx, cy, surfing) {
 function openGrid(map, surfing) {
   const w = map.widthCells;
   const h = map.heightCells;
+  const fast = map.openCells;
+  if (typeof fast === "function")
+    return [fast.call(map, surfing), w, h];
   const grid = new Array(w * h);
   for (let cy = 0;cy < h; cy++) {
     const row = cy * w;
@@ -6066,16 +6069,7 @@ function openGrid(map, surfing) {
   }
   return [grid, w, h];
 }
-function fits(grid, gw, x, y, w, h) {
-  for (let cy = y;cy < y + h; cy++) {
-    const row = cy * gw;
-    for (let cx = x;cx < x + w; cx++) {
-      if (!grid[row + cx])
-        return false;
-    }
-  }
-  return true;
-}
+var SAT_HELD = new WeakMap;
 function place(shape, x, y) {
   return {
     shape: shape.id,
@@ -6089,12 +6083,30 @@ function place(shape, x, y) {
 }
 function search(map, fromX, fromY, surfing) {
   const [grid, gw, gh] = openGrid(map, surfing);
+  const sw = gw + 1;
+  let sat = SAT_HELD.get(grid);
+  if (!sat) {
+    sat = new Int32Array(sw * (gh + 1));
+    for (let y = 0;y < gh; y++) {
+      let run = 0;
+      for (let x = 0;x < gw; x++) {
+        if (grid[y * gw + x])
+          run++;
+        sat[(y + 1) * sw + x + 1] = sat[y * sw + x + 1] + run;
+      }
+    }
+    if (typeof grid === "object" && grid !== null && !Array.isArray(grid))
+      SAT_HELD.set(grid, sat);
+  }
+  const t = sat;
+  const openIn = (x, y, w, h) => t[(y + h) * sw + x + w] - t[y * sw + x + w] - t[(y + h) * sw + x] + t[y * sw + x];
   for (const shape of SHAPES) {
     let best = null;
     let bestD = Infinity;
+    const area = shape.w * shape.h;
     for (let y = 0;y <= gh - shape.h; y++) {
       for (let x = 0;x <= gw - shape.w; x++) {
-        if (!fits(grid, gw, x, y, shape.w, shape.h))
+        if (openIn(x, y, shape.w, shape.h) !== area)
           continue;
         const mx = x + (shape.w - 1) / 2;
         const my = y + (shape.h - 1) / 2;
@@ -6146,10 +6158,11 @@ function chooseView(map, arena, rig, preferQ8 = 0) {
   const preferStep = Math.round((preferQ8 % 256 + 256) % 256 * ORBIT_STEPS / 256) % ORBIT_STEPS;
   let best = { orbit: Math.round(preferStep * 256 / ORBIT_STEPS), pitch: 0 };
   let bestScore = Number.POSITIVE_INFINITY;
+  const solid = solidGrid(map);
   for (const pitchQ8 of VIEW_PITCHES) {
     for (let step = 0;step < ORBIT_STEPS; step++) {
       const q8 = Math.round(step * 256 / ORBIT_STEPS);
-      const hits = sightlineHits(map, arena, rig, q8, pitchQ8);
+      const hits = sightlineHits(map, arena, rig, q8, pitchQ8, solid);
       const d = (step - preferStep + ORBIT_STEPS) % ORBIT_STEPS;
       const turn = Math.min(d, ORBIT_STEPS - d) / ORBIT_STEPS;
       const score = hits.enemy * 2 + hits.player + turn * ORBIT_TURN_COST + pitchQ8 / 256 * VIEW_PITCH_COST;
@@ -6161,16 +6174,19 @@ function chooseView(map, arena, rig, preferQ8 = 0) {
   }
   return best;
 }
-function sightlineHits(map, arena, rig, orbitQ8, pitchQ8) {
+function sightlineHits(map, arena, rig, orbitQ8, pitchQ8, solid = solidGrid(map)) {
   const [ex, ey] = arena.enemyCell;
   const [px2, py] = arena.playerCell;
   const mid = [(ex + px2) / 2, (ey + py) / 2];
   const blockerH = rig === 1 ? VIEW_BLOCKER_INDOOR_PX : VIEW_BLOCKER_OUTDOOR_PX;
+  const sw = map.widthCells;
   const blocked = (cx, cy) => {
     const x = Math.floor(cx);
     const y = Math.floor(cy);
     if (!map.inBounds(x, y))
       return false;
+    if (solid)
+      return solid[y * sw + x] === 1;
     return !map.isWalkableCell(x, y) && !map.isWaterCell(x, y);
   };
   const r = rig === 1 ? RIG.wide : RIG.tele;
@@ -6187,16 +6203,16 @@ function sightlineHits(map, arena, rig, orbitQ8, pitchQ8) {
     const dx = eye[0] + 0.5 - cx0;
     const dy = eye[1] + 0.5 - cy0;
     const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / VIEW_SAMPLE_CELLS));
-    const seen = new Set;
+    let last = NaN;
     let hits = 0;
     for (let i = 1;i <= steps; i++) {
       const t = i / steps;
       const qx = cx0 + dx * t;
       const qy = cy0 + dy * t;
       const key = Math.floor(qx) * 4096 + Math.floor(qy);
-      if (seen.has(key))
+      if (key === last)
         continue;
-      seen.add(key);
+      last = key;
       const lineH = VIEW_CARD_PX + (eyeH - VIEW_CARD_PX) * t;
       if (lineH < blockerH && blocked(qx, qy))
         hits++;
@@ -6204,6 +6220,10 @@ function sightlineHits(map, arena, rig, orbitQ8, pitchQ8) {
     return hits;
   };
   return { enemy: count(arena.enemyCell), player: count(arena.playerCell) };
+}
+function solidGrid(map) {
+  const solidOf = map.solidCells;
+  return typeof solidOf === "function" ? solidOf.call(map) : null;
 }
 var ORBIT_STEPS = 8;
 var ORBIT_TURN_COST = 1.5;

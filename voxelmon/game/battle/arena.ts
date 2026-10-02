@@ -53,10 +53,15 @@ export function openCell(map: GameMap, cx: number, cy: number, surfing: boolean)
   return surfing && map.isWaterCell(cx, cy);
 }
 
-/** BattleArena.lua:153-163 openGrid — one flat boolean grid per search. */
-function openGrid(map: GameMap, surfing: boolean): [boolean[], number, number] {
+/** BattleArena.lua:153-163 openGrid — one flat boolean grid per search. A
+ *  map that can answer openCell for every cell in one pass (Gold's,
+ *  gen2/world/Map.ts openCells) does: asked cell by cell, it is five chained
+ *  predicates a cell, which the 3DS's interpreter pays for call by call. */
+function openGrid(map: GameMap, surfing: boolean): [ArrayLike<number | boolean>, number, number] {
   const w = map.widthCells;
   const h = map.heightCells;
+  const fast = (map as unknown as { openCells?: (surfing: boolean) => ArrayLike<number> }).openCells;
+  if (typeof fast === "function") return [fast.call(map, surfing), w, h];
   const grid: boolean[] = new Array(w * h);
   for (let cy = 0; cy < h; cy++) {
     const row = cy * w;
@@ -67,16 +72,8 @@ function openGrid(map: GameMap, surfing: boolean): [boolean[], number, number] {
   return [grid, w, h];
 }
 
-/** BattleArena.lua:165-173 fits. */
-function fits(grid: boolean[], gw: number, x: number, y: number, w: number, h: number): boolean {
-  for (let cy = y; cy < y + h; cy++) {
-    const row = cy * gw;
-    for (let cx = x; cx < x + w; cx++) {
-      if (!grid[row + cx]) return false;
-    }
-  }
-  return true;
-}
+/** search()'s summed-area tables, by the open grid they were built from. */
+const SAT_HELD = new WeakMap<object, Int32Array>();
 
 /** BattleArena.lua:177-192 place — the record the staging layer reads. */
 function place(shape: ArenaShapeDef, x: number, y: number): Arena {
@@ -105,12 +102,34 @@ export function search(
   surfing: boolean,
 ): Arena | null {
   const [grid, gw, gh] = openGrid(map, surfing);
+  // fits(), answered from a summed-area table of the open cells: a
+  // rectangle fits when it holds w*h of them -- four reads per position
+  // instead of w*h (the same answer; it is most of the search on the 3DS)
+  const sw = gw + 1;
+  // (a map that hands back the same grid again -- Gold's, until a block
+  // changes -- gets its table back too)
+  let sat = SAT_HELD.get(grid as object);
+  if (!sat) {
+    sat = new Int32Array(sw * (gh + 1));
+    for (let y = 0; y < gh; y++) {
+      let run = 0;
+      for (let x = 0; x < gw; x++) {
+        if (grid[y * gw + x]) run++;
+        sat[(y + 1) * sw + x + 1] = sat[y * sw + x + 1]! + run;
+      }
+    }
+    if (typeof grid === "object" && grid !== null && !Array.isArray(grid)) SAT_HELD.set(grid as object, sat);
+  }
+  const t = sat;
+  const openIn = (x: number, y: number, w: number, h: number): number =>
+    t[(y + h) * sw + x + w]! - t[y * sw + x + w]! - t[(y + h) * sw + x]! + t[y * sw + x]!;
   for (const shape of SHAPES) {
     let best: Arena | null = null;
     let bestD = Infinity;
+    const area = shape.w * shape.h;
     for (let y = 0; y <= gh - shape.h; y++) {
       for (let x = 0; x <= gw - shape.w; x++) {
-        if (!fits(grid, gw, x, y, shape.w, shape.h)) continue;
+        if (openIn(x, y, shape.w, shape.h) !== area) continue;
         const mx = x + (shape.w - 1) / 2;
         const my = y + (shape.h - 1) / 2;
         const dx = mx - fromX;

@@ -134,10 +134,11 @@ export function chooseView(
   const preferStep = Math.round(((((preferQ8 % 256) + 256) % 256) * ORBIT_STEPS) / 256) % ORBIT_STEPS;
   let best = { orbit: Math.round((preferStep * 256) / ORBIT_STEPS), pitch: 0 };
   let bestScore = Number.POSITIVE_INFINITY;
+  const solid = solidGrid(map);
   for (const pitchQ8 of VIEW_PITCHES) {
     for (let step = 0; step < ORBIT_STEPS; step++) {
       const q8 = Math.round((step * 256) / ORBIT_STEPS);
-      const hits = sightlineHits(map, arena, rig, q8, pitchQ8);
+      const hits = sightlineHits(map, arena, rig, q8, pitchQ8, solid);
       // The rig was solved at orbit 0 and its own height; changes earn themselves.
       const d = (step - preferStep + ORBIT_STEPS) % ORBIT_STEPS;
       const turn = Math.min(d, ORBIT_STEPS - d) / ORBIT_STEPS;
@@ -162,15 +163,19 @@ export function sightlineHits(
   rig: number,
   orbitQ8: number,
   pitchQ8: number,
+  /** solidGrid(map), when the caller asks many lines of one map. */
+  solid: ArrayLike<number> | null = solidGrid(map),
 ): { enemy: number; player: number } {
   const [ex, ey] = arena.enemyCell;
   const [px, py] = arena.playerCell;
   const mid = [(ex + px) / 2, (ey + py) / 2];
   const blockerH = rig === 1 ? VIEW_BLOCKER_INDOOR_PX : VIEW_BLOCKER_OUTDOOR_PX;
+  const sw = map.widthCells;
   const blocked = (cx: number, cy: number): boolean => {
     const x = Math.floor(cx);
     const y = Math.floor(cy);
     if (!map.inBounds(x, y)) return false; // off the map: nothing to block
+    if (solid) return solid[y * sw + x] === 1;
     return !map.isWalkableCell(x, y) && !map.isWaterCell(x, y);
   };
   const r = rig === 1 ? RIG.wide : RIG.tele;
@@ -191,15 +196,18 @@ export function sightlineHits(
     const dx = eye[0]! + 0.5 - cx0;
     const dy = eye[1]! + 0.5 - cy0;
     const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / VIEW_SAMPLE_CELLS));
-    const seen = new Set<number>();
+    // Each cell counts once. Along a straight line both cell coordinates
+    // only ever move one way, so a cell once left is never met again: the
+    // last cell is all there is to remember.
+    let last = NaN;
     let hits = 0;
     for (let i = 1; i <= steps; i++) {
       const t = i / steps;
       const qx = cx0 + dx * t;
       const qy = cy0 + dy * t;
       const key = Math.floor(qx) * 4096 + Math.floor(qy);
-      if (seen.has(key)) continue;
-      seen.add(key);
+      if (key === last) continue;
+      last = key;
       // the line's height over this cell, from the card's middle up to the eye
       const lineH = VIEW_CARD_PX + (eyeH - VIEW_CARD_PX) * t;
       if (lineH < blockerH && blocked(qx, qy)) hits++;
@@ -207,6 +215,13 @@ export function sightlineHits(
     return hits;
   };
   return { enemy: count(arena.enemyCell), player: count(arena.playerCell) };
+}
+
+/** "Blocks a sightline" for every cell, from a map that can answer it in
+ *  one pass (Gold's, gen2/world/Map.ts solidCells); null asks cell by cell. */
+function solidGrid(map: GameMap): ArrayLike<number> | null {
+  const solidOf = (map as unknown as { solidCells?: () => ArrayLike<number> }).solidCells;
+  return typeof solidOf === "function" ? solidOf.call(map) : null;
 }
 
 /** chooseView's orbit, for callers that only turn. */

@@ -55,6 +55,9 @@ export class Map {
   warps: WarpDef[];
   connections: Record<string, any>;
   _warpAt: Record<number, WarpRef>;
+  /** openCells / solidCells, held for the block version they were read at. */
+  private _open?: { key: string; grid: Uint8Array };
+  private _solid?: { key: number; grid: Uint8Array };
 
   // Lua: Map.lua:13-39
   constructor(def: any, tileset: any) {
@@ -284,6 +287,84 @@ export class Map {
   isWarpTileCell(cx: number, cy: number): boolean {
     if (!this.inBounds(cx, cy)) return false;
     return Permissions.isWarpCollision(this.cellCollision(cx, cy));
+  }
+
+  /** Not the Lua's: battle/arena.ts openCell for every cell, in one pass --
+   *  in bounds, no warp event, not a warp tile, not grass, walkable (or water
+   *  for a surfer) -- read straight off the block grid and the collision
+   *  quads, the predicates answered once per COLL byte. The 3D battle's
+   *  arena search asked each cell through five chained calls, which on the
+   *  3DS's interpreter was most of a 0.4 s stall as every battle began. */
+  openCells(surfing: boolean): Uint8Array {
+    // the same map (no block changed since) asks the same question at every
+    // battle: answered once (a whole-map pass is ~40 ms on the 3DS)
+    const key = `${this.version ?? 0}:${surfing ? 1 : 0}`;
+    const held = this._open;
+    if (held && held.key === key) return held.grid;
+    const grid = this.openCellsFresh(surfing);
+    this._open = { key, grid };
+    return grid;
+  }
+
+  private openCellsFresh(surfing: boolean): Uint8Array {
+    const w = this.widthCells;
+    const h = this.heightCells;
+    const out = new Uint8Array(w * h);
+    const open = new Uint8Array(256);
+    for (let c = 0; c < 256; c++) {
+      if (Permissions.isWarpCollision(c) || Permissions.isGrass(c)) continue;
+      if (Permissions.isWalkable(c) || (surfing && Permissions.isWater(c))) open[c] = 1;
+    }
+    const blocks = this.blocks;
+    const coll = this.collision;
+    const bw = this.width;
+    for (let cy = 0; cy < h; cy++) {
+      const brow = (cy >> 1) * bw;
+      const ly = (cy & 1) * 2;
+      for (let cx = 0; cx < w; cx++) {
+        const id = blocks[brow + (cx >> 1)] ?? 0;
+        // cellCollision: block 0 and a block with no quad are $ff
+        const quad = id === 0 || !coll ? undefined : coll[id];
+        const c = quad ? (quad[ly + (cx & 1)] ?? 0xff) : 0xff;
+        if (open[c & 0xff] && this._warpAt[cy * 1024 + cx] === undefined) out[cy * w + cx] = 1;
+      }
+    }
+    return out;
+  }
+
+  /** Not the Lua's: battle/staging.ts's "blocks a sightline" for every cell
+   *  in one pass (in bounds, neither walkable nor water), as openCells. */
+  solidCells(): Uint8Array {
+    const key = this.version ?? 0;
+    const held = this._solid;
+    if (held && held.key === key) return held.grid;
+    const grid = this.solidCellsFresh();
+    this._solid = { key, grid };
+    return grid;
+  }
+
+  private solidCellsFresh(): Uint8Array {
+    const w = this.widthCells;
+    const h = this.heightCells;
+    const out = new Uint8Array(w * h);
+    const solid = new Uint8Array(256);
+    for (let c = 0; c < 256; c++) {
+      if (!Permissions.isWalkable(c) && !Permissions.isWater(c)) solid[c] = 1;
+    }
+    const blocks = this.blocks;
+    const coll = this.collision;
+    const bw = this.width;
+    for (let cy = 0; cy < h; cy++) {
+      const brow = (cy >> 1) * bw;
+      const ly = (cy & 1) * 2;
+      for (let cx = 0; cx < w; cx++) {
+        const id = blocks[brow + (cx >> 1)] ?? 0;
+        const quad = id === 0 || !coll ? undefined : coll[id];
+        const c = quad ? (quad[ly + (cx & 1)] ?? 0xff) : 0xff;
+        out[cy * w + cx] = solid[c & 0xff]!;
+      }
+    }
+    return out;
   }
 
   // Lua: Map.lua:253-262 -- coordinate-only (no facing/event filter).

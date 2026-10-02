@@ -165,6 +165,11 @@ const lastStep = native.lastStep;
     prof.draw += t2 - t1;
     prof.end += t3 - t2;
     prof.view += t4 - t3;
+    // a frame long enough to be a visible hitch, split, with what was up
+    if (t4 - t0 > 100000) {
+      const top = game.stack.top();
+      console.log(`[pv] gold slow frame ${((t4 - t0) / 1000).toFixed(0)} ms: step ${((t1 - t0) / 1000).toFixed(0)} draw ${((t2 - t1) / 1000).toFixed(0)} lcd ${((t3 - t2) / 1000).toFixed(0)} view ${((t4 - t3) / 1000).toFixed(0)} (top: ${top?.screenId ?? (game.world ? "world" : "-")} ${top?.phase ?? ""})`);
+    }
     if (++prof.n === 300) {
       const us = (v: number): string => (v / prof.n).toFixed(0);
       console.log(`[pv] gold us/frame: step ${us(prof.step)} draw ${us(prof.draw)} lcd ${us(prof.end)} view ${us(prof.view)} (top: ${game.stack.top()?.screenId ?? (game.world ? "world" : "-")})`);

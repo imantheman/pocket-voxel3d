@@ -388,3 +388,64 @@ describe("gen2 RARE CANDY", () => {
     expect(g.stack.top().newSpecies).toBe("PIDGEOTTO");
   });
 });
+
+describe("gen2 3D battle arena", () => {
+  test.skipIf(!gold)("Map.openCells answers openCell for every cell of every map", async () => {
+    const { game } = await loaded();
+    const { Map: GoldMap } = await import("../voxelmon/game/gen2/world/Map.ts");
+    const { openCell, search, SHAPES } = await import("../voxelmon/game/battle/arena.ts") as any;
+    const { loadGenerated } = await import("../voxelmon/game/gen2/platform/data.ts");
+    const maps: any = (game as any).data?.gen2Maps ?? loadGenerated("maps");
+    const tilesets: any = (game as any).data?.gen2Tilesets ?? loadGenerated("tilesets");
+    let checked = 0;
+    for (const id of Object.keys(maps ?? {})) {
+      const def = maps[id];
+      const ts = tilesets?.[def?.tileset];
+      if (!def || !ts) continue;
+      const map: any = GoldMap.new(def, ts);
+      for (const surfing of [false, true]) {
+        const fast = map.openCells(surfing);
+        for (let cy = 0; cy < map.heightCells; cy++) {
+          for (let cx = 0; cx < map.widthCells; cx++) {
+            const want = openCell(map, cx, cy, surfing) ? 1 : 0;
+            if (fast[cy * map.widthCells + cx] !== want) throw new Error(`${id} (${cx},${cy}) surfing=${surfing}: ${fast[cy * map.widthCells + cx]} != ${want}`);
+          }
+        }
+      }
+      // the sightline grid, the same way
+      const solid = map.solidCells();
+      for (let cy = 0; cy < map.heightCells; cy++) {
+        for (let cx = 0; cx < map.widthCells; cx++) {
+          const want = !map.isWalkableCell(cx, cy) && !map.isWaterCell(cx, cy) ? 1 : 0;
+          if (solid[cy * map.widthCells + cx] !== want) throw new Error(`${id} (${cx},${cy}) solid ${solid[cy * map.widthCells + cx]} != ${want}`);
+        }
+      }
+      // the search (summed-area fits) against the old one, cell by cell
+      const ref = (fx: number, fy: number) => {
+        const w = map.widthCells, h = map.heightCells;
+        const grid: boolean[] = [];
+        for (let cy = 0; cy < h; cy++) for (let cx = 0; cx < w; cx++) grid[cy * w + cx] = openCell(map, cx, cy, false);
+        for (const shape of SHAPES) {
+          let best: any = null;
+          let bestD = Infinity;
+          for (let y = 0; y <= h - shape.h; y++) {
+            for (let x = 0; x <= w - shape.w; x++) {
+              let ok = true;
+              for (let cy = y; cy < y + shape.h && ok; cy++) for (let cx = x; cx < x + shape.w; cx++) if (!grid[cy * w + cx]) { ok = false; break; }
+              if (!ok) continue;
+              const dx = x + (shape.w - 1) / 2 - fx, dy = y + (shape.h - 1) / 2 - fy;
+              if (dx * dx + dy * dy < bestD) { bestD = dx * dx + dy * dy; best = { shape: shape.id, x, y }; }
+            }
+          }
+          if (best) return best;
+        }
+        return null;
+      };
+      const fx = map.widthCells >> 1, fy = map.heightCells >> 1;
+      const got = search(map, fx, fy, false);
+      expect(got ? { shape: got.shape, x: got.x, y: got.y } : null).toEqual(ref(fx, fy));
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(300);
+  });
+});
