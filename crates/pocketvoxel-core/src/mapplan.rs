@@ -27,6 +27,19 @@ pub const MAX_VERTS: usize = 900_000;
 /// Cap for a map past [`HUGE_MAP_THRESHOLD`], where a single flat buffer
 /// holding every chunk would neither look right nor fit safely.
 pub const MAX_VERTS_SAFE: usize = 400_000;
+/// A ceiling on the budget from the device itself: the vertices its GPU
+/// memory can hold once everything else is in (the 3DS host sets it at boot,
+/// from the linear memory it finds free; ordinary maps only, never the huge
+/// path). Both the loader and the build read
+/// the budget through [`build_order`], so they still plan alike. Unset, no
+/// ceiling.
+static DEVICE_CAP: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(usize::MAX);
+
+/// Set the device ceiling (see `DEVICE_CAP`).
+pub fn set_device_cap(verts: usize) {
+    DEVICE_CAP.store(verts, core::sync::atomic::Ordering::Relaxed);
+}
+
 /// Past this many indices at full detail, a map is "huge": it takes the safe
 /// cap and sorts its chunks nearest-the-player-first, so the budget is spent
 /// on what is close rather than on whatever came first in file order.
@@ -98,7 +111,9 @@ pub fn build_order(
             });
         }
     }
-    (order, huge, if huge { MAX_VERTS_SAFE } else { MAX_VERTS })
+    // (the huge path -- Viridian Forest -- keeps its own cap untouched)
+    let cap = DEVICE_CAP.load(core::sync::atomic::Ordering::Relaxed);
+    (order, huge, if huge { MAX_VERTS_SAFE } else { MAX_VERTS.min(cap) })
 }
 
 /// Replay the allocation over the records.

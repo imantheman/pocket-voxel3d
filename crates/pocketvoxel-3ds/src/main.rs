@@ -1165,6 +1165,13 @@ fn unsafe_free_kb() -> u32 {
 /// the page textures and citro3d's own command lists all live in the same
 /// pool, so the last megabyte is not ours to spend.
 const LINEAR_RESERVE_KB: u32 = 1024;
+/// Linear memory a map's own vertices must leave for everything drawn beside
+/// them (measured in Citra on Gold: sprite/UI pages ~4 MB, seam strips up to
+/// ~3 MB, the map texture ~1 MB, tree shapes ~1 MB), plus LINEAR_RESERVE_KB
+/// and a margin.
+const MAP_LINEAR_SIDE_KB: usize = 11 * 1024;
+/// The map vertex cap never goes below this, however tight the boot reading.
+const MAP_CAP_FLOOR_VERTS: usize = 200_000;
 
 /// Can `verts` vertices be uploaded without exhausting linear memory?
 ///
@@ -3609,22 +3616,26 @@ fn strip_chunk_file(
 /// infallible-allocation trap as the terrain upload -- see linear_fits).
 fn upload_spans(verts: &[Vertex], spans: &[Span], attr_info: &attrib::Info, out: &mut Vec<(Span, buffer::Info)>) {
     for s in spans.iter() {
-        let n = (s.end - s.start).min(65535);
-        if n == 0 || s.start + n > verts.len() {
-            continue;
-        }
-        if !linear_fits(n) {
-            continue;
-        }
-        let mut bi = buffer::Info::new();
-        if bi
-            .add(buffer::Buffer::new(&verts[s.start..s.start + n]), attr_info.permutation())
-            .is_ok()
-        {
-            out.push((*s, bi));
+        let mut at = s.start;
+        while at < s.end && at < verts.len() {
+            let n = (s.end - at).min(SPAN_PIECE).min(verts.len() - at);
+            if linear_fits(n) {
+                let mut bi = buffer::Info::new();
+                if bi
+                    .add(buffer::Buffer::new(&verts[at..at + n]), attr_info.permutation())
+                    .is_ok()
+                {
+                    out.push((Span { start: at, end: at + n, ..*s }, bi));
+                }
+            }
+            at += n;
         }
     }
 }
+
+/// The most vertices one GPU buffer slice takes (its count is 16 bits),
+/// rounded down to whole triangles.
+const SPAN_PIECE: usize = 65535;
 
 fn build_map(
     pak: &Pak,
@@ -3727,23 +3738,6 @@ fn build_map(
     // smaller than any reasonable draw distance, so windowing included every
     // chunk anyway while switching the budget up to the generous cap.
     let (order, is_huge, budget) = build_order(all_chunks, player_px);
-    // Ask for the whole budget UP FRONT, and fallibly.
-    //
-    // A Vec growing by doubling asks the allocator for the new block while
-    // still holding the old one, and a refusal is not an error it can
-    // return -- Rust calls handle_alloc_error, which aborts, which on this
-    // console is the homebrew menu with nothing said. Reserving once says
-    // whether the memory is there before a single vertex is written, and a
-    // no is answered by building a smaller map rather than by dying.
-    let mut budget = budget;
-    while budget > 0 && verts.try_reserve_exact(budget).is_err() {
-        dlog(&format!(
-            "[pv] no room for {} verts ({} KB); halving the budget",
-            budget,
-            budget * core::mem::size_of::<Vertex>() / 1024,
-        ));
-        budget /= 2;
-    }
     // Stamps are pushed between the ground and tree passes at ground
     // priority, so the cascade has to see their share already spent.
     let stamp_verts: usize = pak
@@ -3752,38 +3746,65 @@ fn build_map(
         .filter(|st| !stamps_off.iter().any(|&(m, x, y)| m == map_id && x == st.cx && y == st.cy))
         .map(|st| st.mesh.index_count as usize)
         .sum();
-    let plan = plan_build(all_chunks, &order, is_huge, budget, stamp_verts);
-    let chunks: Vec<pak::Chunk> = all_chunks.to_vec();
-    // Size the buffer once from the plan, instead of letting it double its
-    // way up: each doubling copies everything pushed so far, which on a
-    // 300k-vertex route is several full copies in the frame being waited on.
-    // The clip only ever removes, so this is an upper bound.
+    // Ask for the memory UP FRONT, and fallibly.
     //
-    // NOT for a huge map -- Viridian Forest. It re-builds every time the
-    // player crosses a chunk, and a reservation there asks for one 8 MB block
-    // per rebuild while the outgoing build still holds its own; on a heap its
-    // 57 MB pak has nearly filled, that eventually cannot be met and the
-    // allocator aborts. Growing by doubling reuses what it already has. The
-    // forest gets the path it has always had.
-    if !is_huge {
-        let want: usize = plan
-            .items
-            .iter()
-            .map(|it| all_chunks[it.chunk].meshes[it.kind].index_count as usize)
-            .sum::<usize>()
-            + stamp_verts;
-        // The budget's reservation above only proved the memory is there:
-        // reserving less on top of it keeps the whole budget (900,000 verts,
-        // 18 MB) for the rest of the load, where Route 29 draws 296,000 --
-        // 12 MB the seam strips, the trees and the map texture then could not
-        // get on Gold's heap (the abort entering Route 29 from New Bark).
-        // Hand it back and hold what the plan draws.
-        let want = want.min(budget);
-        if verts.is_empty() && verts.capacity() > want {
-            verts = Vec::new();
+    // A Vec growing by doubling asks the allocator for the new block while
+    // still holding the old one, and a refusal is not an error it can
+    // return -- Rust calls handle_alloc_error, which aborts, which on this
+    // console is the homebrew menu with nothing said. Reserving once says
+    // whether the memory is there before a single vertex is written, and a
+    // no is answered by building a smaller map rather than by dying.
+    let mut budget = budget;
+    let plan;
+    if is_huge {
+        // A huge map -- Viridian Forest -- keeps the path it has always had:
+        // the whole budget probed, halved until it fits, and no reservation
+        // kept (it re-builds every time the player crosses a chunk, and one
+        // 8 MB block per rebuild while the outgoing build still holds its own
+        // eventually cannot be met on a heap its 57 MB pak has nearly filled;
+        // growing by doubling reuses what it already has).
+        while budget > 0 && verts.try_reserve_exact(budget).is_err() {
+            dlog(&format!(
+                "[pv] no room for {} verts ({} KB); halving the budget",
+                budget,
+                budget * core::mem::size_of::<Vertex>() / 1024,
+            ));
+            budget /= 2;
         }
-        let _ = verts.try_reserve_exact(want);
+        plan = plan_build(all_chunks, &order, is_huge, budget, stamp_verts);
+    } else {
+        // Hold exactly what the plan draws (the clip only ever removes, so it
+        // is an upper bound), sized once instead of doubling its way up. The
+        // budget is NOT halved first: the loader read this map by the same
+        // plan, and a smaller budget re-plans the tree cascade onto tiers it
+        // never read, which then draw as zeros -- big cities going missing.
+        // Only if even that cannot be had is the plan made smaller, and said.
+        let mut p = plan_build(all_chunks, &order, is_huge, budget, stamp_verts);
+        loop {
+            let want = (p
+                .items
+                .iter()
+                .map(|it| all_chunks[it.chunk].meshes[it.kind].index_count as usize)
+                .sum::<usize>()
+                + stamp_verts)
+                .min(budget);
+            if want == 0 || verts.try_reserve_exact(want).is_ok() {
+                break;
+            }
+            dlog(&format!(
+                "[pv] no room for the plan's {} verts ({} KB); a smaller plan (tiers it may not have read)",
+                want,
+                want * core::mem::size_of::<Vertex>() / 1024,
+            ));
+            budget = want / 2;
+            p = plan_build(all_chunks, &order, is_huge, budget, stamp_verts);
+            // what the loader did not read is zeros: leave it out rather than
+            // spend the smaller budget drawing nothing
+            p.items.retain(|it| mesh_loaded(pak, all_chunks[it.chunk].meshes[it.kind]));
+        }
+        plan = p;
     }
+    let chunks: Vec<pak::Chunk> = all_chunks.to_vec();
 
     // The border ring the cook fills beyond the map proper — bushes
     // outdoors, filler indoors. It sits OUTSIDE the real map box, and the
@@ -4000,6 +4021,21 @@ fn main() {
     unsafe { log_open() };
     dlog("[pv] ---------------- boot ----------------");
     dlog(&format!("[pv] log -> {}", LOG_PATHS.join(", ")));
+    // The vertex budget an ordinary map may plan for, from the GPU memory
+    // this console actually has. Planned for more than fits, a big city's
+    // upload ran linear dry partway through its spans and everything after
+    // that point never drew (Goldenrod and Saffron on Isaac's 3DS, while the
+    // emulator, with more room, drew them whole). What else must fit beside
+    // the map is reserved: the sprite and UI pages, the map texture, the seam
+    // strips and the tree shapes. A tight console gets coarser trees on its
+    // big maps, which the plan chooses per chunk, instead of missing ground.
+    {
+        let free_kb = unsafe_free_kb() as usize;
+        let cap = (free_kb.saturating_sub(MAP_LINEAR_SIDE_KB) * 1024 / core::mem::size_of::<Vertex>())
+            .max(MAP_CAP_FLOOR_VERTS);
+        pocketvoxel_core::mapplan::set_device_cap(cap);
+        dlog(&format!("[pv] linear free {} KB at boot: map vertex cap {}", free_kb, cap));
+    }
     // Stamp the build so a log can never be mistaken for one from a
     // different binary — the Desktop copy lives in OneDrive, and a sync
     // lag once made a stale .3dsx look like a code path that "did nothing".
@@ -5303,20 +5339,26 @@ fn main() {
                 // last, first -- Isaac's flat patches of Route 29 on hardware)
                 let mut fail_verts = 0usize;
                 let mut fail_low = 0u32;
+                // A buffer's slice counts in 16 bits, so a span past 65,535
+                // vertices goes up in pieces (whole triangles each) rather
+                // than losing its tail.
                 for s in geom.chunk_spans.iter() {
-                    let n = (s.end - s.start).min(65535);
-                    if n == 0 { continue; }
-                    if s.start + n > geom.verts.len() { upload_fail += 1; continue; }
-                    if !linear_fits(n) { upload_fail += 1; fail_low += 1; fail_verts += n; continue; }
-                    let mut bi = buffer::Info::new();
-                    if bi.add(buffer::Buffer::new(&geom.verts[s.start..s.start + n]), attr_info.permutation()).is_ok() {
-                        chunk_infos.push((*s, bi));
-                    } else {
-                        // Silently dropping these is how a map ends up as bare
-                        // sky: the geometry built fine, the GPU buffer just
-                        // never took it.
-                        upload_fail += 1;
-                        fail_verts += n;
+                    let mut at = s.start;
+                    while at < s.end {
+                        let n = (s.end - at).min(SPAN_PIECE);
+                        if at + n > geom.verts.len() { upload_fail += 1; break; }
+                        if !linear_fits(n) { upload_fail += 1; fail_low += 1; fail_verts += n; at += n; continue; }
+                        let mut bi = buffer::Info::new();
+                        if bi.add(buffer::Buffer::new(&geom.verts[at..at + n]), attr_info.permutation()).is_ok() {
+                            chunk_infos.push((Span { start: at, end: at + n, ..*s }, bi));
+                        } else {
+                            // Silently dropping these is how a map ends up as bare
+                            // sky: the geometry built fine, the GPU buffer just
+                            // never took it.
+                            upload_fail += 1;
+                            fail_verts += n;
+                        }
+                        at += n;
                     }
                 }
                 dlog(&format!(
@@ -5533,8 +5575,13 @@ fn main() {
 
         // A deferred seam strip: a slice of it, onto the GPU chunk by chunk
         // (dropped if linear has run short meanwhile).
+        // (No STRIP_MIN_FREE_KB test here: that gate was passed when the job
+        // was made, as the one-shot loader passed it once for all its strips;
+        // each upload after is guarded by linear_fits, as the loader's were.
+        // Testing it again every frame dropped the strip behind the player in
+        // a big city that had left just over the gate.)
         if let Some(job) = strip_jobs.first_mut() {
-            if unsafe_free_kb() < STRIP_MIN_FREE_KB {
+            if unsafe_free_kb() < LINEAR_RESERVE_KB {
                 dlog(&format!("[pv] strips deferred dropped: linear {} KB", unsafe_free_kb()));
                 strip_jobs.clear();
             } else {
