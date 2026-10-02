@@ -2481,7 +2481,6 @@ function club(vm: Vm): CableClub | undefined {
 
 const LINK_TEXT = {
   canceled: Strings.source("The link has been\ncanceled."),
-  noBattle: Strings.source("Link battles are\nnot ready yet."),
 };
 
 H.SetBitsForLinkTradeRequest = function (vm: Vm): void {
@@ -2584,10 +2583,16 @@ H.TimeCapsule = function* (vm: Vm): Script<void> {
   yield* linkTrade(vm, true);
 };
 
+// The COLOSSEUM's machine: a link battle (core/LinkBattle2.ts), then the
+// room's way out.
 H.Colosseum = function* (vm: Vm): Script<void> {
   const h = hooks(vm);
-  yield* vm.showRaw(Strings.get(LINK_TEXT.noBattle));
-  club(vm)?.close();
+  const c = club(vm);
+  if (!c?.session || c.session.state === "closed" || !h.openLinkBattle) {
+    yield* vm.showRaw(Strings.get(LINK_TEXT.canceled));
+  } else {
+    yield* block(vm, (done) => h.openLinkBattle(() => done()));
+  }
   if (h.armLinkReturn) h.armLinkReturn();
 };
 

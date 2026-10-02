@@ -16,7 +16,10 @@ declare const ONLY: string;
 const g = globalThis as unknown as { goldGame: any; frame: (b: number) => void };
 const game = g.goldGame;
 const mainFrame = g.frame;
-const trade = typeof ONLY !== "undefined" && ONLY === "trade";
+const battle = typeof ONLY !== "undefined" && ONLY === "battle";
+const trade = battle || (typeof ONLY !== "undefined" && ONLY === "trade");
+let fought = false;
+let sawBattle = false;
 
 let started = false;
 let n = 0;
@@ -40,7 +43,8 @@ g.frame = (b: number): void => {
     if (!placed) {
       placed = true;
       // the receptionists stand at (5,2) / (9,2) / (13,3); the player below
-      if (trade) w.warpToMapId("POKECENTER_2F", 5, 3, "up");
+      if (battle) w.warpToMapId("POKECENTER_2F", 9, 3, "up");
+      else if (trade) w.warpToMapId("POKECENTER_2F", 5, 3, "up");
       else w.warpToMapId("POKECENTER_2F", 13, 4, "up");
       // the TIME CAPSULE takes only Gen 1 mons: keep those (or one GEODUDE)
       if (!trade) {
@@ -56,7 +60,15 @@ g.frame = (b: number): void => {
       // (EVENT_GAVE_MYSTERY_EGG_TO_ELM); the card's save is from before that
       w.events.set(31, true);
       firstSpecies = String(game.save.party?.[0]?.species ?? "");
-      console.log(`[pv] bench link: to the ${trade ? "TRADE CENTER" : "TIME CAPSULE"} desk, party ${game.save.party.map((m: any) => m.species).join(",")}`);
+      console.log(`[pv] bench link: to the ${battle ? "COLOSSEUM" : trade ? "TRADE CENTER" : "TIME CAPSULE"} desk, party ${game.save.party.map((m: any) => m.species).join(",")}`);
+    }
+    // a warp onto the map the save already stands on can leave the player
+    // where they were: again until they are at the desk
+    const desk = battle ? [9, 3] : trade ? [5, 3] : [13, 4];
+    if (n < 600 && n % 60 === 0 && w.map.id === "POKECENTER_2F" && !game.stack.top() && !w.vm?.running?.() &&
+        (w.player?.cellX !== desk[0] || w.player?.cellY !== desk[1])) {
+      console.log(`[pv] bench link: at (${w.player?.cellX},${w.player?.cellY}), placing again`);
+      w.warpToMapId("POKECENTER_2F", desk[0], desk[1], "up");
     }
     const top = game.stack.top();
     const topId = String(top?.screenId ?? "-");
@@ -65,7 +77,21 @@ g.frame = (b: number): void => {
       lastTop = topId;
       lastMap = w.map.id;
     }
-    if (!traded && game.save.party?.[0]?.species && game.save.party[0].species !== firstSpecies) {
+    if (battle) {
+      if (topId === "Gen2BattleState") sawBattle = true;
+      else if (sawBattle && !fought) {
+        fought = true;
+        console.log(`[pv] bench link: the battle is over (${top ? topId : w.map.id}), party ${game.save.party.map((m: any) => `${m.species}:${m.hp}`).join(",")}`);
+      }
+      // the pick after a faint: the cursor on a mon that can fight
+      if (topId === "Gen2PartyMenu" && !top.itemResult) {
+        const i = top.party.findIndex((m: any) => (m.hp ?? 0) > 0);
+        if (i >= 0) top.index = i + 1;
+      }
+      // (traded stands for "done" below)
+      traded = fought;
+    }
+    if (!battle && !traded && game.save.party?.[0]?.species && game.save.party[0].species !== firstSpecies) {
       traded = true;
       console.log(`[pv] bench link: traded ${firstSpecies} for ${game.save.party[0].species} (ot ${game.save.party[0].otName}, item ${game.save.party[0].item ?? "-"})`);
     }
@@ -73,7 +99,7 @@ g.frame = (b: number): void => {
       // (on the trade screen this side only answers: two consoles both
       // proposing wait out the answer timer on each other)
       // -- against another Gold, seat 0 proposes and seat 1 answers)
-      const proposer = trade && game.cableClub().seat() === 0;
+      const proposer = trade && !battle && game.cableClub().seat() === 0;
       if (!traded) pad = topId === "Gen2LinkTradeMenu" && top.phase === "pick" && !proposer ? 0 : VOX_BTN.a;
       // after the trade: out of the screen (B), then A through the texts out
       else pad = topId === "Gen2LinkTradeMenu" && top.phase === "pick" ? VOX_BTN.b : VOX_BTN.a;

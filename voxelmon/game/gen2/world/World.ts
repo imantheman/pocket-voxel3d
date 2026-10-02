@@ -25,6 +25,7 @@
 // Lua's draws do. The lazy `require`s inside function bodies (Phone, PhoneRing, Happiness, Sound, GameVersion,
 // ScreenPosition, Pokegear) are hoisted to here.
 import { W_OTHER_PLAYER_LINK_MODE } from "../core/CableClub.ts";
+import { startLinkBattle } from "../core/LinkBattle2.ts";
 import { LinkTradeMenu } from "../ui/LinkTradeMenu.ts";
 import { ENTS_MAX } from "../../../../contracts/spec/voxel-spec.ts";
 import { rotateFacing } from "./rotate.ts";
@@ -4597,6 +4598,12 @@ export class World {
             onDone();
           },
         }));
+      },
+      openLinkBattle: (onDone: () => void) => {
+        const game = this.game;
+        const club = game?.cableClub?.();
+        if (!(game && game.stack && club)) return onDone();
+        startLinkBattle(game, club, onDone);
       },
       armLinkReturn: () => {
         const w = this.map?.def?.warps?.[0];

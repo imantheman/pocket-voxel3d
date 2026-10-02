@@ -47,6 +47,8 @@ interface Wait {
 export class CableClub {
   session: LinkSession | null = null;
   requested: LinkRequest | null = null;
+  /** The COLOSSEUM battle being driven (core/LinkBattle2.ts), if any. */
+  battle: { service(): void } | null = null;
   private wait: Wait | null = null;
   private logged = "";
   /** A test's carrier in place of the host's. */
@@ -158,6 +160,7 @@ export class CableClub {
         w.done(false);
       }
     }
+    this.battle?.service();
     const world = this.game?.world;
     const map = world?.map;
     if (!map || !LINK_ROOMS[map.id] || s.state === "closed") return;

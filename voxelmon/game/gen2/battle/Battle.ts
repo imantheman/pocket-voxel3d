@@ -2747,7 +2747,11 @@ export class Battle {
     if ((this.enemy.hp ?? 0) <= 0) {
       if (truthy(this.linkBattle) && this.enemyFaintAnnounced === this.enemy) {
         this.faintInterrupt = true;
-        return false;
+        // Link: the player's own faint this round is still asked for (below),
+        // so both consoles pick their replacements at once -- each waiting on
+        // the other's pick first was a deadlock on a double faint.
+        if ((this.player.hp ?? 0) > 0) return false;
+        return this.resolvePlayerFaint();
       }
       this.enemyFaintAnnounced = this.enemy;
       const template = truthy(this.wild)
@@ -2761,6 +2765,19 @@ export class Battle {
         side: this.sideRecord(this.enemy) });
       this.awardExperience(this.enemy);
       const nextIndex = Battle.firstHealthy(this.enemyParty);
+      if (!truthy(nextIndex) && truthy(this.linkBattle) && !truthy(Battle.firstHealthy(this.party))) {
+        // a link battle's last two mons down in the same round: a draw on
+        // both consoles (not a win on each)
+        if (this.faintAnnounced !== this.player && (this.player.hp ?? 0) <= 0) {
+          this.faintAnnounced = this.player;
+          this.emit({ kind: "faint", side: "player",
+            text: Strings.get("%s fainted!", this.monName(this.player)) });
+        }
+        this.emit({ kind: "message", text: Strings.get("Tied against %s!",
+          this.trainer?.name ?? "TRAINER") });
+        this.endBattle("draw");
+        return true;
+      }
       if (!truthy(nextIndex)) {
         if (truthy(this.trainer)) {
           this.emit({ kind: "message", text: Strings.get("%s was defeated!",
@@ -2782,7 +2799,9 @@ export class Battle {
       if (truthy(this.linkBattle)) {
         this.pendingEnemySwitch = true;
         this.faintInterrupt = true;
-        return false;
+        // (the same: a player faint this round is asked for now)
+        if ((this.player.hp ?? 0) > 0) return false;
+        return this.resolvePlayerFaint();
       }
       const previous = this.enemy;
       this.clearVolatile(this.enemy);
@@ -2817,7 +2836,14 @@ export class Battle {
       return false;
     }
 
-    if ((this.player.hp ?? 0) <= 0) {
+    if ((this.player.hp ?? 0) <= 0) return this.resolvePlayerFaint();
+    return false;
+  }
+
+  /** resolveFaints' player arm: the faint announced once, then the choice
+   *  of the next mon (or the loss). */
+  resolvePlayerFaint(): boolean {
+    {
       // Announce a faint ONCE.  This branch emits `choose-switch` and waits for
       // the caller to pick, so the caller calls back in with the same mon still
       // at 0 HP; `faintHappiness` must be charged once per faint

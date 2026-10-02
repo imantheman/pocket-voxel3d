@@ -8,6 +8,7 @@ import { Game2 } from "../voxelmon/game/gen2/core/Game2.ts";
 import { Mon } from "../voxelmon/game/gen2/battle/Mon.ts";
 import { LinkTradeMenu } from "../voxelmon/game/gen2/ui/LinkTradeMenu.ts";
 import { TimeCapsule } from "../voxelmon/game/gen2/core/TimeCapsule.ts";
+import { startLinkBattle } from "../voxelmon/game/gen2/core/LinkBattle2.ts";
 import { LINK_SEATS, LinkSession, LoopbackLink } from "../voxelmon/game/world/link.ts";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -119,6 +120,95 @@ describe("gen2 CABLE CLUB", () => {
     a.input.press("b");
     both(5);
     expect(a.stack.top()).not.toBe(ma);
+  });
+});
+
+/** Two Gold games, linked for the COLOSSEUM, fight to the end pressing A;
+ *  every turn both consoles' HP must agree. The turns, as A saw them. */
+function colosseum(pa: [string, number][], pb: [string, number][], setup?: (a: any, b: any) => void): string[] {
+    useGoldGen();
+    const a = goldGame("AAA", pa);
+    const b = goldGame("BBB", pb);
+    setup?.(a, b);
+    const partyBefore = JSON.stringify(a.save.party);
+    const link = new LoopbackLink();
+    for (const [g, end, nonce] of [[a, link.a, 2], [b, link.b, 1]] as const) {
+      const club = g.cableClub();
+      club.request("battle");
+      club.session = new LinkSession(end, g.save.player.name, nonce, { game: "gold", gen: 2, mode: "gen2" }, false);
+      club.session.open();
+    }
+    const step = (): void => {
+      for (const g of [a, b]) {
+        g.input.step();
+        g.serviceLink();
+        g.stack.top()?.update?.();
+      }
+    };
+    for (let k = 0; k < 10; k++) step();
+    const done = { a: false, b: false };
+    startLinkBattle(a, a.cableClub(), () => { done.a = true; });
+    startLinkBattle(b, b.cableClub(), () => { done.b = true; });
+    const turns: string[] = [];
+    let seen = 0;
+    for (let k = 0; k < 60000 && !(done.a && done.b); k++) {
+      if (k % 12 === 0) {
+        for (const g of [a, b]) {
+          const top = g.stack.top();
+          // a party list (the pick after a faint): the cursor on a mon that
+          // can fight
+          if (top?.screenId === "Gen2PartyMenu" && !top.itemResult) {
+            const i = top.party.findIndex((m: any) => (m.hp ?? 0) > 0);
+            if (i >= 0) top.index = i + 1;
+          }
+          g.input.press("a");
+        }
+      }
+      step();
+      const da = a.cableClub().battle as any;
+      const db = b.cableClub().battle as any;
+      if (da && db && da.turn === db.turn && da.turn > seen) {
+        seen = da.turn;
+        const ba = da.battle;
+        const bb = db.battle;
+        turns.push(`${ba.player.species}:${ba.player.hp} ${ba.enemy.species}:${ba.enemy.hp}`);
+        // each console's player is the other's enemy, HP for HP
+        expect(ba.player.species).toBe(bb.enemy.species);
+        expect(ba.player.hp).toBe(bb.enemy.hp);
+        expect(ba.enemy.hp).toBe(bb.player.hp);
+      }
+    }
+    if (!(done.a && done.b)) {
+      for (const g of [a, b]) {
+        const d = g.cableClub().battle as any;
+        console.log(g.save.player.name, g.stack.states.map((x: any) => `${x.screenId}:${x.phase}`).join(">"),
+          "turn", d?.turn, "mine", JSON.stringify(d?.mine), "pend", d?.battle?.pendingEnemySwitch, d?.battle?.pendingSwitch,
+          "peek", JSON.stringify(g.cableClub().session?.peekAction?.()), "over", d?.battle?.over, "msg", g.stack.top()?.message);
+      }
+      console.log(turns.join(" | "));
+    }
+    expect(done.a && done.b).toBe(true);
+    expect(seen).toBeGreaterThan(1);
+    const oa = a.cableClub().battle;
+    expect(oa).toBe(null);
+    // the save's party is untouched (the battle fought on a copy)
+    expect(JSON.stringify(a.save.party)).toBe(partyBefore);
+    return turns;
+}
+
+describe("gen2 COLOSSEUM", () => {
+  test.skipIf(!gold)("two Gold games battle over the link and agree on every turn", () => {
+    for (let n = 0; n < 4; n++) {
+      const turns = colosseum([["CYNDAQUIL", 14], ["PIDGEY", 7]], [["TOTODILE", 14], ["SENTRET", 7]]);
+      expect(turns.length).toBeGreaterThan(1);
+    }
+  });
+  test.skipIf(!gold)("a double faint: both consoles pick their next mon at once", () => {
+    const turns = colosseum([["GEODUDE", 20], ["PIDGEY", 7]], [["TOTODILE", 10], ["SENTRET", 7]], (a) => {
+      a.save.party[0].moves = [{ id: "SELFDESTRUCT", pp: 5, maxPp: 5 }];
+    });
+    expect(turns[0]).toBe("GEODUDE:0 TOTODILE:0");
+    expect(turns[1]).toMatch(/^PIDGEY:\d+ SENTRET:\d+$/);
   });
 });
 
