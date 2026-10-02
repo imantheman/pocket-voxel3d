@@ -1790,7 +1790,16 @@ struct MapCanvas {
     /// The people's pixels set last frame (canvas x, y, value).
     over_set: Vec<(u16, u16, u16)>,
     over_next: Vec<(u16, u16, u16)>,
+    /// Updates in a row with the canvas off: past CANVAS_KEEP_OFF its
+    /// buffers and textures go back (512 KB of heap, 1 MB of linear memory
+    /// the 3D world wants), so they are held only while 2D SCREEN WIDE /
+    /// 2D ZOOM is in use.
+    off_for: u32,
 }
+
+/// Off this many updates (two seconds), the canvas lets its memory go. Not
+/// at once: a fade or a battle's wipe turns it off for a moment.
+const CANVAS_KEEP_OFF: u32 = 60;
 
 impl MapCanvas {
     fn new() -> Self {
@@ -1798,8 +1807,8 @@ impl MapCanvas {
             ring: [None, None],
             over: [None, None],
             cur: 0,
-            ring_data: vec![0u8; CANVAS_TW * CANVAS_TH * 2],
-            over_data: vec![0u8; CANVAS_TW * CANVAS_TH * 2],
+            ring_data: Vec::new(),
+            over_data: Vec::new(),
             ring_ver: 1,
             over_ver: 1,
             ring_tex_ver: [0, 0],
@@ -1810,6 +1819,7 @@ impl MapCanvas {
             ring_alias: [(u16::MAX, 0); pocketvoxel_core::lcd::LCD_ALIASES],
             over_set: Vec::new(),
             over_next: Vec::new(),
+            off_for: 0,
         }
     }
 
@@ -1820,7 +1830,26 @@ impl MapCanvas {
         if !lcd.shown || !lcd.canvas_on() {
             // drawn afresh when it comes back
             self.valid = None;
+            self.off_for = self.off_for.saturating_add(1);
+            if self.off_for == CANVAS_KEEP_OFF && !self.ring_data.is_empty() {
+                // long enough that the GPU read the textures last frames ago
+                self.ring_data = Vec::new();
+                self.over_data = Vec::new();
+                self.over_set.clear();
+                self.ring = [None, None];
+                self.over = [None, None];
+                self.ring_tex_ver = [0, 0];
+                self.over_tex_ver = [0, 0];
+            }
             return false;
+        }
+        self.off_for = 0;
+        if self.ring_data.is_empty() {
+            self.ring_data = vec![0u8; CANVAS_TW * CANVAS_TH * 2];
+            self.over_data = vec![0u8; CANVAS_TW * CANVAS_TH * 2];
+            self.over_set.clear();
+            self.ring_ver = self.ring_ver.wrapping_add(1);
+            self.over_ver = self.over_ver.wrapping_add(1);
         }
         let t_lcd = now_us();
         let mut last = usize::MAX;
