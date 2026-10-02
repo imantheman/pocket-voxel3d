@@ -124,6 +124,8 @@ export interface VoxelNative {
   lcdUnder?(w: number, h: number): void;
   lcdUnderRow?(row: number, hex: string): void;
   lcdUnderAt?(on: number, x: number, y: number): void;
+  /** voxel-spec.ts lcdTall: this Gold screen shown whole (the bottom screen). */
+  lcdTall?(on: number): void;
   /** voxel-spec.ts lcdUnderView, and the canvas's objects packed as lcdObjsBin's. */
   lcdUnderView?(w: number, h: number, wide: number): void;
   lcdUnderObjsBin?(packed: Int16Array, count: number): void;
@@ -387,6 +389,9 @@ export class QuickJsHost implements VoxelHost {
   lcdUnderView = native.lcdUnderView ? (w: number, h: number, wide: number): void => native.lcdUnderView!(w, h, wide) : undefined;
   lcdUnderObjsBin = native.lcdUnderObjsBin ? (packed: Int16Array, count: number): void => native.lcdUnderObjsBin!(packed, count) : undefined;
   screenshot = native.screenshot ? (): void => native.screenshot!() : undefined;
+  lcdTall(on: number): void {
+    native.lcdTall?.(on);
+  }
   lcdUnder(w: number, h: number): void {
     native.lcdUnder?.(w, h);
   }

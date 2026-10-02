@@ -6063,14 +6063,18 @@ if page_tex.len() < pak_static.atlases.len() {
                 }
             }
             // The bottom screen's: its top 160x120 at 2x fills the 320x240
-            // target exactly, in the bottom pass's 0..320 ortho.
+            // target exactly, in the bottom pass's 0..320 ortho -- or, shown
+            // whole (lcdTall: Gold's battle screens), all 160x144 at the top
+            // screen's 5/3, centred between two bars.
             if lcd_bot.update(&sc.lcd_b, atl, &mut lcd_pages) {
-                let (u1, v1) = (160.0 / 256.0, 120.0 / 256.0);
+                let tall = sc.lcd_b.tall;
+                let (u1, v1) = (160.0 / 256.0, if tall { 144.0 } else { 120.0 } / 256.0);
+                let (x0, x1): (i16, i16) = if tall { (27, 293) } else { (0, 320) };
                 let mp = |px: i16, py: i16, u: f32, v: f32| Vertex {
                     pos: [px, py, 0, 0], color: [255, 255, 255, 255], uv: [u, v] };
                 let verts = [
-                    mp(0, 0, 0.0, 1.0), mp(320, 0, u1, 1.0), mp(320, 240, u1, 1.0 - v1),
-                    mp(0, 0, 0.0, 1.0), mp(320, 240, u1, 1.0 - v1), mp(0, 240, 0.0, 1.0 - v1),
+                    mp(x0, 0, 0.0, 1.0), mp(x1, 0, u1, 1.0), mp(x1, 240, u1, 1.0 - v1),
+                    mp(x0, 0, 0.0, 1.0), mp(x1, 240, u1, 1.0 - v1), mp(x0, 240, 0.0, 1.0 - v1),
                 ];
                 let mut bi = buffer::Info::new();
                 if bi.add(buffer::Buffer::new(&verts[..]), attr_info.permutation()).is_ok() {
@@ -6920,7 +6924,10 @@ if page_tex.len() < pak_static.atlases.len() {
             // Kanto Gear: GB-green companion palette — clear to the DMG light
             // green; glyphs are tinted the darkest green in the ui_b vert build
             // above, giving the dark-on-light-green look of the real mod.
-            bottom_target.clear(ClearFlags::ALL, 0x9BBC0FFFu32, 0);
+            // Gold's bottom screen is white paper (gen2 ui/Companion.ts): the
+            // bars beside its whole-screen mode (lcdTall) white too, not green.
+            let bottom_clear = if cfg!(feature = "gold") { 0xFFFFFFFFu32 } else { 0x9BBC0FFFu32 };
+            bottom_target.clear(ClearFlags::ALL, bottom_clear, 0);
             frame.select_render_target(&mut bottom_target).expect("select bottom");
             {
                 let ortho: Matrix4 = Projection::orthographic(
@@ -6934,7 +6941,9 @@ if page_tex.len() < pak_static.atlases.len() {
                 }
                 // Header bar: flat PrimaryColor (REPLACE) -> a clean solid strip
                 // regardless of the atlas; restore the glyph texenv afterwards.
-                if let Some(bb) = ui_b_bar_buf.as_ref() {
+                // (Not Gold's: its panel covers the screen, but not the bars
+                // beside its whole-screen mode, where the strip showed green.)
+                if let (false, Some(bb)) = (cfg!(feature = "gold"), ui_b_bar_buf.as_ref()) {
                     unsafe { c3d_depth_test(0); }
                     frame.set_texenvs(&[stage_flat]);
                     frame.draw_arrays(buffer::Primitive::Triangles, bb, None).unwrap();

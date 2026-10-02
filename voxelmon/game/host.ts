@@ -171,6 +171,8 @@ export interface VoxelHost {
   lcdUnder?(w: number, h: number): void;
   lcdUnderRow?(row: number, hex: string): void;
   lcdUnderAt?(on: number, x: number, y: number): void;
+  /** voxel-spec.ts lcdTall: this Gold screen shown whole (the bottom screen). */
+  lcdTall?(on: number): void;
   /** voxel-spec.ts lcdUnderView: the under layer drawn as its own canvas. */
   lcdUnderView?(w: number, h: number, wide: number): void;
   /** The canvas's objects (the 3DS shim's), packed as lcdObjsBin's. */
@@ -458,6 +460,9 @@ export class RecorderHost implements VoxelHost {
   }
   lcdUnderView(w: number, h: number, wide: number): void {
     this.op(VOX_OP.lcdUnderView, w, h, wide);
+  }
+  lcdTall(on: number): void {
+    this.op(VOX_OP.lcdTall, on);
   }
   flatWorld(on: number): void {
     this.op(VOX_OP.flatWorld, on);

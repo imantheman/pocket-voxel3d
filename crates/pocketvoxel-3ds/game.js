@@ -30145,6 +30145,9 @@ class QuickJsHost {
   lcdUnderView = native.lcdUnderView ? (w, h, wide) => native.lcdUnderView(w, h, wide) : undefined;
   lcdUnderObjsBin = native.lcdUnderObjsBin ? (packed, count2) => native.lcdUnderObjsBin(packed, count2) : undefined;
   screenshot = native.screenshot ? () => native.screenshot() : undefined;
+  lcdTall(on) {
+    native.lcdTall?.(on);
+  }
   lcdUnder(w, h) {
     native.lcdUnder?.(w, h);
   }

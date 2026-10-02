@@ -119,6 +119,9 @@ pub struct LcdScreen {
     /// -- VIEW 2D widened to the screen's edges or zoomed out, the screen's
     /// own 160x144 centred in it. 0 x 0: off. `view_wide`: the canvas fills
     /// the whole top screen rather than the Gold screen's box.
+    /// `lcdTall`: shown whole, 160x144 (the 3DS bottom screen otherwise
+    /// shows its top 160x120 at 2x).
+    pub tall: bool,
     pub view_w: u16,
     pub view_h: u16,
     pub view_wide: bool,
@@ -161,6 +164,7 @@ impl Default for LcdScreen {
             under_y: 0,
             aliases: [(u16::MAX, 0); LCD_ALIASES],
             alias_n: 0,
+            tall: false,
             view_w: 0,
             view_h: 0,
             view_wide: false,
@@ -303,6 +307,13 @@ impl LcdScreen {
                     self.under_attr[base + x] = v as u8;
                 }
                 self.under_serial = self.under_serial.wrapping_add(1);
+            }
+            op::LCD_TALL => {
+                let on = a(0) != 0;
+                if on == self.tall {
+                    return true;
+                }
+                self.tall = on;
             }
             op::LCD_UNDER_VIEW => {
                 let (w, h) = (a(0).clamp(0, LCD_VIEW_W_MAX as i32) as u16, a(1).clamp(0, LCD_VIEW_H_MAX as i32) as u16);

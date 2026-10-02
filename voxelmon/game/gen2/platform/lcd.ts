@@ -447,6 +447,11 @@ export class Lcd {
     this.s.underY = y | 0;
   }
 
+  /** Shown whole on a screen that shows its top 160x120 otherwise (the 3DS
+   *  bottom screen: voxel-spec lcdTall). Sent by end() when it changes. */
+  tall = false;
+  private sentTall = false;
+
   /** The host draws the under layer as a canvas of its own (underView). */
   canvasSupported(): boolean {
     return !!(this.host.lcdUnderView && this.host.lcdUnderObjsBin);
@@ -496,6 +501,10 @@ export class Lcd {
       this.sentShown = shown;
     }
     if (!shown) return;
+    if (this.tall !== this.sentTall) {
+      h.lcdTall?.(this.tall ? 1 : 0);
+      this.sentTall = this.tall;
+    }
     const s = this.s;
     const t = this.sent;
     {
@@ -678,6 +687,7 @@ export class Lcd {
     this.sentUnder = "0";
     this.sentView = 0;
     this.sentUnderObjs = 0;
+    this.sentTall = false;
     this.host.lcdReset?.();
   }
 }

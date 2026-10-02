@@ -927,6 +927,15 @@ export const VOX_OP = {
    */
   gbWide: 115,
   gbWideObjs: 116,
+  /**
+   * A Gold screen shown whole (the 3DS bottom screen, which otherwise shows
+   * its top 160x120 at 2x): all 160x144 at the top screen's scale, centred.
+   * Gold's battle screens -- the party, the pack, the forget list -- drawn
+   * on the bottom screen while a battle is staged in 3D above. Addressed by
+   * lcdTarget like the other lcd ops; cleared by lcdReset.
+   *   lcdTall(on)
+   */
+  lcdTall: 117,
 } as const;
 
 /** Clips in Yellow's PikachuCriesPointerTable (NUM_PIKA_CRIES). */

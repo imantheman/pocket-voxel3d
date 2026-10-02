@@ -380,6 +380,7 @@ pub mod op {
     pub const LCD_UNDER_VIEW: u32 = 113;
     pub const GB_WIDE: u32 = 115;
     pub const GB_WIDE_OBJS: u32 = 116;
+    pub const LCD_TALL: u32 = 117;
 }
 
 /// Fixed-point scales used by op args.

@@ -357,6 +357,8 @@ int qjs_register_voxel(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "lcdUnderObjsBin",
         JS_NewCFunctionMagic(ctx, vox_lcdbin, "lcdUnderObjsBin", 2, JS_CFUNC_generic_magic, 3));
     add_num(ctx, o, "lcdUnderView", 113, 3);
+    /* the bottom screen shown whole (core lcd.rs tall) */
+    add_num(ctx, o, "lcdTall", 117, 1);
     /* debug: the top screen as shown, to the card (main.rs dump_top_screen) */
     add_num(ctx, o, "screenshot", 114, 0);
     JS_SetPropertyStr(ctx, o, "lcdPals",
