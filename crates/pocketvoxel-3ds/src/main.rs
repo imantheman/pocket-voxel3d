@@ -2219,24 +2219,27 @@ static mut SHOT_N: u32 = 0;
 fn dump_top_screen() {
     let n = unsafe { SHOT_N };
     unsafe { SHOT_N += 1; }
-    dump_top_side(0, &format!("sdmc:/3ds/voxelmon/shot_{}.ppm", n));
+    dump_top_side(0, 0, &format!("sdmc:/3ds/voxelmon/shot_{}.ppm", n));
     // the right eye too while the slider is up (stereo checks: shot_N_r)
     if ctru::os::current_3d_slider_state() > 0.0 {
-        dump_top_side(1, &format!("sdmc:/3ds/voxelmon/shot_{}_r.ppm", n));
+        dump_top_side(0, 1, &format!("sdmc:/3ds/voxelmon/shot_{}_r.ppm", n));
     }
+    // and the bottom screen (shot_N_b)
+    dump_top_side(1, 0, &format!("sdmc:/3ds/voxelmon/shot_{}_b.ppm", n));
 }
 
-fn dump_top_side(side: u32, path: &str) {
+/// Screen `screen` (0 top, 1 bottom), eye `side`, as a PPM at `path`.
+fn dump_top_side(screen: u32, side: u32, path: &str) {
     extern "C" {
         fn gfxGetFramebuffer(screen: u32, side: u32, width: *mut u16, height: *mut u16) -> *mut u8;
         fn gfxGetScreenFormat(screen: u32) -> u32;
     }
     let (mut w, mut h) = (0u16, 0u16);
-    let fb = unsafe { gfxGetFramebuffer(0, side, &mut w, &mut h) };
+    let fb = unsafe { gfxGetFramebuffer(screen, side, &mut w, &mut h) };
     if fb.is_null() || w == 0 || h == 0 {
         return;
     }
-    let bpp = match unsafe { gfxGetScreenFormat(0) } { 0 => 4, 1 => 3, _ => 2 };
+    let bpp = match unsafe { gfxGetScreenFormat(screen) } { 0 => 4, 1 => 3, _ => 2 };
     let (w, h) = (w as usize, h as usize);
     let data = unsafe { core::slice::from_raw_parts(fb, w * h * bpp) };
     let mut out = format!("P6
