@@ -4422,7 +4422,8 @@ fn main() {
             }
             if k.contains(KeyPad::A)          { b |= 1 << 4; }
             if k.contains(KeyPad::B)          { b |= 1 << 5; }
-            if k.contains(KeyPad::START)      { b |= 1 << 6; }
+            // X is START too (Isaac: X opens the menu, as on the later games)
+            if k.contains(KeyPad::START) || k.contains(KeyPad::X) { b |= 1 << 6; }
             if k.contains(KeyPad::SELECT)     { b |= 1 << 7; }
             // Bottom-screen touch rides the free high bits of the button word,
             // so the guest can react without changing the qjs_call_frame ABI
