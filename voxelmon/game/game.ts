@@ -58,6 +58,7 @@ import { DiplomaState } from "./ui/diploma.ts";
 import { TradeScreenState } from "./ui/tradescreen.ts";
 import { TradeAnimState, TRADE_PIC_CELL } from "./ui/tradeanim.ts";
 import { LinkBattle } from "./battle/linkbattle.ts";
+import { fromTimeCapsule } from "./battle/timecapsule.ts";
 import { TRADE_MINE_ROW, TRADE_THEIRS_ROW } from "./ui/tradescreen.ts";
 import {
   hostTransport, LINK_ANSWER_FRAMES, LINK_ROOM, LINK_WAIT_FRAMES, type LinkSession,
@@ -2514,8 +2515,10 @@ export class VoxelmonGame implements OverworldShell, SceneView {
         const got = theirs[theirSlot];
         if (!mine || !got) { canceled(after, "a slot was empty"); return; }
         log(`swap: my ${mine.species} for their ${got.species}`);
-        const arrival: PartyMon = { ...got, traded: true,
+        let arrival: PartyMon = { ...got, traded: true,
           otName: theirParty.otName, otId: theirParty.otId };
+        // from Gold's TIME CAPSULE: its numbers finished in Gen 1's terms
+        if (s.peerIdent?.gen === 2) arrival = fromTimeCapsule(this.data, arrival);
         // PIKAHAPPY_TRADE: trading your Pikachu away
         modifyHappiness(this.save as never, "TRADE", mine);
         this.save.party[mySlot] = arrival;

@@ -306,7 +306,8 @@ each other over 3DS local wireless instead; that path is untested.
 Talking to the other player's body says "!", which is what the ROM has
 them say -- the machine is the thing to press.
 
-It is UDP on ports **51325-51328** between the two machines; a firewall
+It is UDP on ports **41325-41328** between the two machines (below
+Windows' dynamic range, where Hyper-V and WSL reserve ports at boot); a firewall
 that blocks those on a PC blocks the emulator from linking. Every frame
 is acknowledged and resent, so a dropped packet costs a moment, not the
 trade. A console that goes quiet for eight seconds is treated as gone.

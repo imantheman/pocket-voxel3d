@@ -12,6 +12,7 @@
 // menus and the hand-ported map scripts are outside this slice.
 
 import type { EncounterDef, MapObject, VoxelmonData } from "../data.ts";
+import { gameVersion } from "../data.ts";
 import type { Rng } from "../rng.ts";
 import { roll as encounterRoll } from "../rules/encounter.ts";
 import { WARP_FADE_OUT } from "../rules/timing.ts";
@@ -1578,7 +1579,9 @@ export class Overworld implements ScriptWorld {
     const shell = this.shell as unknown as { linkTransport?: () => LinkTransport | null };
     const t = shell.linkTransport ? shell.linkTransport() : hostTransport();
     if (!t) { this.linkLog("no carrier"); return false; }
-    this.link = new LinkSession(t, String(this.save.player?.name ?? "RED"));
+    // this game, in Gen 1's terms (a Gold TIME CAPSULE speaks them too)
+    this.link = new LinkSession(t, String(this.save.player?.name ?? "RED"), undefined,
+      { game: gameVersion(this.data), gen: 1, mode: "gen1" });
     this.link.open();
     this.linkLogged = "";
     this.linkLog("open, waiting for a peer");

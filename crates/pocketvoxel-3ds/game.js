@@ -8974,10 +8974,17 @@ function decodeJson(frame) {
   }
 }
 var LINK_ROOM = { trade: 0, colosseum: 1 };
-var LINK_VERSION = 3;
+var LINK_VERSION = 4;
+var KANTO_LINK = { game: "red", gen: 1, mode: "gen1" };
 var MAX_NAME = 10;
-function encodeHello(name, nonce) {
-  const s = asciiJson({ n: [...name].slice(0, MAX_NAME).join(""), k: nonce });
+function encodeHello(name, nonce, ident) {
+  const s = asciiJson({
+    n: [...name].slice(0, MAX_NAME).join(""),
+    k: nonce,
+    g: ident.game,
+    v: ident.gen,
+    m: ident.mode
+  });
   const out = new Uint8Array(2 + s.length);
   out[0] = LINK_MSG.hello;
   out[1] = LINK_VERSION;
@@ -8991,9 +8998,17 @@ function decodeHello(frame) {
     s += String.fromCharCode(frame[i]);
   try {
     const v = JSON.parse(s);
-    return { name: typeof v?.n === "string" ? v.n : "", nonce: Number(v?.k ?? 0) };
+    return {
+      name: typeof v?.n === "string" ? v.n : "",
+      nonce: Number(v?.k ?? 0),
+      ident: {
+        game: typeof v?.g === "string" ? v.g : KANTO_LINK.game,
+        gen: v?.v === 2 ? 2 : 1,
+        mode: v?.m === "gen2" ? "gen2" : "gen1"
+      }
+    };
   } catch {
-    return { name: s, nonce: 0 };
+    return { name: s, nonce: 0, ident: KANTO_LINK };
   }
 }
 var RELIABLE_RESEND_FRAMES = 6;
@@ -9121,8 +9136,11 @@ class ReliableLink {
 
 class LinkSession {
   myName;
+  ident;
+  strict;
   state = "idle";
   peerName = "";
+  peerIdent = null;
   myRoom = null;
   peerRoom = null;
   peerOffer = null;
@@ -9145,8 +9163,10 @@ class LinkSession {
   peerNonce = null;
   lastPos = "";
   transport;
-  constructor(carrier, myName, nonce) {
+  constructor(carrier, myName, nonce, ident = KANTO_LINK, strict = true) {
     this.myName = myName;
+    this.ident = ident;
+    this.strict = strict;
     this.transport = new ReliableLink(carrier);
     this.myNonce = nonce ?? Math.floor(Math.random() * 2147483647);
   }
@@ -9251,7 +9271,7 @@ class LinkSession {
       return this.state;
     }
     if (!this.helloSent && this.transport.connected()) {
-      this.transport.send(encodeHello(this.myName, this.myNonce));
+      this.transport.send(encodeHello(this.myName, this.myNonce, this.ident));
       this.helloSent = true;
     }
     for (;; ) {
@@ -9268,6 +9288,11 @@ class LinkSession {
             const h = decodeHello(f);
             this.peerName = h.name;
             this.peerNonce = h.nonce;
+            this.peerIdent = h.ident;
+            if (this.strict && h.ident.mode !== this.ident.mode) {
+              this.cancel();
+              return this.state;
+            }
           }
           if (this.state === "waiting")
             this.state = "linked";
@@ -17536,7 +17561,7 @@ any coins!`);
       this.linkLog("no carrier");
       return false;
     }
-    this.link = new LinkSession(t, String(this.save.player?.name ?? "RED"));
+    this.link = new LinkSession(t, String(this.save.player?.name ?? "RED"), undefined, { game: gameVersion(this.data), gen: 1, mode: "gen1" });
     this.link.open();
     this.linkLogged = "";
     this.linkLog("open, waiting for a peer");
@@ -22835,6 +22860,38 @@ canceled.`);
     }
     super.update(input);
   }
+}
+
+// voxelmon/game/battle/timecapsule.ts
+function fromTimeCapsule(data, mon) {
+  const def = data.pokemon?.[mon.species];
+  if (!def)
+    return mon;
+  const level = Math.max(1, Math.min(100, Math.floor(Number(mon.level) || 1)));
+  const d = mon.dvs ?? {};
+  const bit = (v) => (v ?? 0) & 1;
+  const dvs = {
+    attack: d.attack ?? 0,
+    defense: d.defense ?? 0,
+    speed: d.speed ?? 0,
+    special: d.special ?? 0,
+    hp: 0
+  };
+  dvs.hp = bit(dvs.attack) * 8 + bit(dvs.defense) * 4 + bit(dvs.speed) * 2 + bit(dvs.special);
+  const se = mon.statExp ?? {};
+  const statExp = { hp: se.hp ?? 0, attack: se.attack ?? 0, defense: se.defense ?? 0, speed: se.speed ?? 0, special: se.special ?? 0 };
+  const stats = calc(def, level, dvs, statExp);
+  const oldMax = Math.max(1, Number(mon.stats?.hp) || stats.hp);
+  const oldHp = Math.max(0, Math.min(oldMax, Number(mon.hp) || 0));
+  const hp = oldHp <= 0 ? 0 : oldHp >= oldMax ? stats.hp : Math.max(1, Math.min(stats.hp, Math.round(oldHp * stats.hp / oldMax)));
+  const exp = expForLevel(def.growthRate, level, data.growth_rates);
+  const moves = (mon.moves ?? []).filter((m) => !!m && !!data.moves?.[m.id]).slice(0, 4).map((m) => {
+    const base = Number(data.moves?.[m.id]?.pp) || 0;
+    const ups = Math.max(0, Math.min(3, Math.floor(Number(m.ppUps) || 0)));
+    const max = base + ups * Math.floor(base / 5);
+    return { ...m, ppUps: ups, pp: Math.max(0, Math.min(max, Math.floor(Number(m.pp) || 0))) };
+  });
+  return { ...mon, level, dvs, statExp, stats, hp, exp, moves };
 }
 
 // voxelmon/game/world/halloffame.ts
@@ -29614,12 +29671,14 @@ canceled.`, {}, after);
           return;
         }
         log(`swap: my ${mine.species} for their ${got.species}`);
-        const arrival = {
+        let arrival = {
           ...got,
           traded: true,
           otName: theirParty.otName,
           otId: theirParty.otId
         };
+        if (s.peerIdent?.gen === 2)
+          arrival = fromTimeCapsule(this.data, arrival);
         modifyHappiness(this.save, "TRADE", mine);
         this.save.party[mySlot] = arrival;
         const dex = this.save.pokedex;

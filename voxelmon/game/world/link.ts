@@ -167,8 +167,30 @@ function decodeJson(frame: Uint8Array): unknown {
 export const LINK_ROOM = { trade: 0, colosseum: 1 } as const;
 export type LinkRoom = (typeof LINK_ROOM)[keyof typeof LINK_ROOM];
 
-/** Bumped when a frame's meaning changes; a mismatch refuses the link. */
-export const LINK_VERSION = 3;
+/** Bumped when a frame's meaning changes; a mismatch refuses the link.
+ *  4: the hello says which game is talking and in which generation's terms
+ *  (LinkIdent), for Gold's CABLE CLUB and its TIME CAPSULE. */
+export const LINK_VERSION = 4;
+
+/**
+ * Who is on this end of the link, said in the hello.
+ *
+ * `mode` is the generation the WIRE speaks -- the party records that cross,
+ * which room numbers mean what. The Kanto games speak Gen 1; Gold's TRADE
+ * CENTER and COLOSSEUM speak Gen 2; Gold's TIME CAPSULE speaks Gen 1 (its
+ * mons are converted at its own edge, gen2/core/TimeCapsule.ts), which is
+ * what lets a Kanto console trade with it unchanged. `gen` is the game's
+ * own generation, which Gold's receptionists ask about
+ * (wOtherPlayerLinkMode: "you can't link to the past here").
+ */
+export interface LinkIdent {
+  game: string;
+  gen: 1 | 2;
+  mode: "gen1" | "gen2";
+}
+
+/** The Kanto games' (and what an older peer is taken to be). */
+export const KANTO_LINK: LinkIdent = { game: "red", gen: 1, mode: "gen1" };
 
 export type LinkState =
   /** No session. */
@@ -192,8 +214,9 @@ const MAX_NAME = 10;
  * to stay ASCII: the 3DS carrier hands frames over as JS strings (the way
  * saveData already does), and a byte over 127 would not survive the trip.
  */
-function encodeHello(name: string, nonce: number): Uint8Array {
-  const s = asciiJson({ n: [...name].slice(0, MAX_NAME).join(""), k: nonce });
+function encodeHello(name: string, nonce: number, ident: LinkIdent): Uint8Array {
+  const s = asciiJson({ n: [...name].slice(0, MAX_NAME).join(""), k: nonce,
+    g: ident.game, v: ident.gen, m: ident.mode });
   const out = new Uint8Array(2 + s.length);
   out[0] = LINK_MSG.hello;
   out[1] = LINK_VERSION;
@@ -201,14 +224,22 @@ function encodeHello(name: string, nonce: number): Uint8Array {
   return out;
 }
 
-function decodeHello(frame: Uint8Array): { name: string; nonce: number } {
+function decodeHello(frame: Uint8Array): { name: string; nonce: number; ident: LinkIdent } {
   let s = "";
   for (let i = 2; i < frame.length; i++) s += String.fromCharCode(frame[i]!);
   try {
-    const v = JSON.parse(s) as { n?: string; k?: number };
-    return { name: typeof v?.n === "string" ? v.n : "", nonce: Number(v?.k ?? 0) };
+    const v = JSON.parse(s) as { n?: string; k?: number; g?: string; v?: number; m?: string };
+    return {
+      name: typeof v?.n === "string" ? v.n : "",
+      nonce: Number(v?.k ?? 0),
+      ident: {
+        game: typeof v?.g === "string" ? v.g : KANTO_LINK.game,
+        gen: v?.v === 2 ? 2 : 1,
+        mode: v?.m === "gen2" ? "gen2" : "gen1",
+      },
+    };
   } catch {
-    return { name: s, nonce: 0 };
+    return { name: s, nonce: 0, ident: KANTO_LINK };
   }
 }
 
@@ -372,6 +403,8 @@ export class LinkSession {
   state: LinkState = "idle";
   /** The other player's name, once they have said hello. */
   peerName = "";
+  /** Who they are (LinkIdent), once they have said hello. */
+  peerIdent: LinkIdent | null = null;
   /** The room this side asked for, and the one the peer asked for. */
   myRoom: LinkRoom | null = null;
   peerRoom: LinkRoom | null = null;
@@ -413,10 +446,19 @@ export class LinkSession {
   private lastPos = "";
   private readonly transport: ReliableLink;
 
+  /**
+   * `ident` is this side's (LinkIdent; the Kanto games' when left out).
+   * `strict` refuses a peer whose wire speaks another generation at once,
+   * which is the Kanto games' answer to a Gold TRADE CENTER; Gold's own
+   * receptionists want to see who answered first and say so in the ROM's
+   * words, so Gold's sessions are not strict.
+   */
   constructor(
     carrier: LinkTransport,
     private myName: string,
     nonce?: number,
+    readonly ident: LinkIdent = KANTO_LINK,
+    private readonly strict = true,
   ) {
     // Whatever the carrier is, the session talks over it reliably.
     this.transport = new ReliableLink(carrier);
@@ -597,7 +639,7 @@ export class LinkSession {
 
     // Say hello as soon as there is someone to say it to, once.
     if (!this.helloSent && this.transport.connected()) {
-      this.transport.send(encodeHello(this.myName, this.myNonce));
+      this.transport.send(encodeHello(this.myName, this.myNonce, this.ident));
       this.helloSent = true;
     }
 
@@ -615,6 +657,13 @@ export class LinkSession {
             const h = decodeHello(f);
             this.peerName = h.name;
             this.peerNonce = h.nonce;
+            this.peerIdent = h.ident;
+            // A wire in the other generation's terms (a Gold TRADE CENTER to
+            // a Kanto console) cannot trade with this one: refused.
+            if (this.strict && h.ident.mode !== this.ident.mode) {
+              this.cancel();
+              return this.state;
+            }
           }
           if (this.state === "waiting") this.state = "linked";
           break;

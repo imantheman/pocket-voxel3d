@@ -52,8 +52,11 @@ static void pv_log(const char *fmt, ...) {
     if (n > 0) voxel_log(line, n > (int)sizeof(line) - 1 ? (int)sizeof(line) - 1 : n);
 }
 
-#define PV_PORT         51325
-#define PV_PORTS        4            /* 51325..51328: the run one machine may use */
+/* Below Windows' dynamic range (49152 up), where Hyper-V and WSL reserve
+   random runs of UDP ports at boot: 51281-51380 was reserved on the PC the
+   two-emulator tests run on, and every bind in the old run failed. */
+#define PV_PORT         41325
+#define PV_PORTS        4            /* 41325..41328: the run one machine may use */
 #define PV_ASK          "PVLINK?"
 #define PV_ANSWER       "PVLINK!"
 #define PV_TAG_LEN      8            /* hex digits after the word */
