@@ -26,6 +26,11 @@
 // kind, which rotates pixels a tile id cannot.)
 // In tall grass a person's lower half goes behind the background (the OBJ
 // priority bit), so the grass tile's colours cover its feet as on the cart.
+// Not the cart's: the OPTION screen's 2D SCREEN WIDE and 2D ZOOM (canvasSize)
+// show more of the map round the same camera -- the under layer drawn by the
+// host as a canvas of its own (lcd.ts underView), out to the top screen's
+// edges or zoomed out in the Gold screen's box, the people on it with it
+// (underObj). The text boxes and menus stay the Gold screen's, full size.
 
 import { Assets } from "../shared/render/Assets.ts";
 import { Palettes } from "../world/Palettes.ts";
@@ -36,8 +41,26 @@ import type { Palette4 } from "./lcd.ts";
 /** pokegold LoadMapGroupRoof: nine roof tiles over vTiles2 tile $0a. */
 const ROOF_FIRST = 0x0a;
 const ROOF_COUNT = 9;
-/** Border tiles kept round a map's grid: the camera never sees further off. */
-const PAD = 12;
+/** Border tiles kept round a map's grid: the camera never sees further off
+ *  (the widest canvas reaches 132 px past the screen's sides). */
+const PAD = 30;
+
+/** 2D ZOOM's steps, percent: the map's scale on the screen. */
+export const ZOOMS_2D = [100, 80, 67, 60] as const;
+
+/**
+ * The canvas (lcd.ts underView) the 2D options ask for, w x h map pixels,
+ * or null for the cart's own 160x144. Box: the Gold screen's box at the
+ * zoom; WIDE: the top screen's whole width, the box's pixel shape kept
+ * (the host draws the 160x144 box over 302 of its 480 ortho units).
+ */
+export function canvasSize(options: any): { w: number; h: number; wide: boolean } | null {
+  const wide = options?.screen2d === "wide";
+  const z = (ZOOMS_2D as readonly number[]).includes(options?.zoom2d) ? (options.zoom2d as number) / 100 : 1;
+  if (!wide && z === 1) return null;
+  const h = Math.round(144 / z);
+  return { w: Math.round(wide ? (h * 480) / 272 : 160 / z), h, wide };
+}
 
 const images = new Map<string, LcdImage | null>();
 function image(path: string | undefined): LcdImage | null {
@@ -140,7 +163,7 @@ const spriteCache = new Map<string, { sheet: LcdImage | null; pals: Map<string, 
 const actors: any[] = [];
 
 /** Draw the 2D overworld for this frame; false when there is nothing to draw. */
-export function drawMap2D(world: any, data: any): boolean {
+export function drawMap2D(world: any, data: any, options?: any): boolean {
   const lcd = currentLcd();
   const map = world?.map;
   if (!lcd || !map || typeof world.updateView !== "function") return false;
@@ -162,6 +185,8 @@ export function drawMap2D(world: any, data: any): boolean {
   // the map: the under layer (sent once per cache), at the camera
   lcd.under(t, t.ids, t.pal, t.pw, t.ph);
   lcd.underAt(camX + PAD * 8, camY + PAD * 8);
+  const canvas = lcd.canvasSupported() ? canvasSize(options) : null;
+  if (canvas) lcd.underView(canvas.w, canvas.h, canvas.wide);
   // the water and flowers: each animated tile drawn as this step's frame
   let slot = 0;
   const anim = world.animCells?.[key];
@@ -225,8 +250,13 @@ export function drawMap2D(world: any, data: any): boolean {
       const a = sheet.ids[row];
       const b = sheet.ids[row + 1];
       const attr = pal | flip | (r === 1 ? grass : 0);
-      if (a !== undefined) lcd.obj(mirror ? x0 + 8 : x0, y, a, attr);
-      if (b !== undefined) lcd.obj(mirror ? x0 : x0 + 8, y, b, attr);
+      if (canvas) {
+        if (a !== undefined) lcd.underObj(mirror ? x0 + 8 : x0, y, a, attr);
+        if (b !== undefined) lcd.underObj(mirror ? x0 : x0 + 8, y, b, attr);
+      } else {
+        if (a !== undefined) lcd.obj(mirror ? x0 + 8 : x0, y, a, attr);
+        if (b !== undefined) lcd.obj(mirror ? x0 : x0 + 8, y, b, attr);
+      }
     }
   }
   return true;

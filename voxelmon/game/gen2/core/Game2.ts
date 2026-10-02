@@ -849,7 +849,12 @@ export class Game2 {
       // the world is the voxel scene; the stack draws over its holes -- or,
       // with VIEW 2D, the map drawn on the Gold screen itself (map2d.ts)
       this.frameWorldActive = true;
-      if (is2d(this.options?.view)) drawMap2D(this.world, this.data);
+      // (2D SCREEN / 2D ZOOM's canvas reaches past the box: not while a
+      // fade or a battle's wipe covers the box, so the sides go dark too)
+      if (is2d(this.options?.view)) {
+        const boxed = this.worldFaded() || top?.screenId === "Gen2BattleTransition";
+        drawMap2D(this.world, this.data, boxed ? undefined : this.options);
+      }
       this.coverFadedWorld();
       this.world.drawOverlay?.();
       if (this.stack.top()) this.stack.draw();
@@ -870,13 +875,18 @@ export class Game2 {
    * two-step fade rather than four, but no hard cut.
    */
   private coverFadedWorld(): void {
-    const w = this.world;
-    if (!w || !w.fade) return;
-    const level = typeof w.fadeLevel === "number" ? w.fadeLevel : 1;
-    if (level < 0.5 && w.fadeHold == null) return;
-    if (w.fade === "black") G.setColor(0, 0, 0, 1);
+    if (!this.worldFaded()) return;
+    if (this.world.fade === "black") G.setColor(0, 0, 0, 1);
     else G.setColor(1, 1, 1, 1);
     G.rectangle("fill", 0, 0, 160, 144);
+  }
+
+  /** Past the fade ramp's midpoint (or held there): coverFadedWorld covers the world. */
+  private worldFaded(): boolean {
+    const w = this.world;
+    if (!w || !w.fade) return false;
+    const level = typeof w.fadeLevel === "number" ? w.fadeLevel : 1;
+    return level >= 0.5 || w.fadeHold != null;
   }
 
   /** Game2.lua:2304 -- the options the 3DS still has a use for. */

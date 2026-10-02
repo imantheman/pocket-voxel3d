@@ -168,6 +168,12 @@ export interface VoxelHost {
   lcdUnder?(w: number, h: number): void;
   lcdUnderRow?(row: number, hex: string): void;
   lcdUnderAt?(on: number, x: number, y: number): void;
+  /** voxel-spec.ts lcdUnderView: the under layer drawn as its own canvas. */
+  lcdUnderView?(w: number, h: number, wide: number): void;
+  /** The canvas's objects (the 3DS shim's), packed as lcdObjsBin's. */
+  lcdUnderObjsBin?(packed: Int16Array, count: number): void;
+  /** Debug (the 3DS shim's): the next frame's top screen to the card. */
+  screenshot?(): void;
   /** voxel-spec.ts flatWorld: the 3D world is not seen; build no meshes. */
   flatWorld?(on: number): void;
   /** voxel-spec.ts lcdAlias: the under layer's tile `from` drawn as `to`. */
@@ -440,6 +446,9 @@ export class RecorderHost implements VoxelHost {
   }
   lcdUnderAt(on: number, x: number, y: number): void {
     this.op(VOX_OP.lcdUnderAt, on, x, y);
+  }
+  lcdUnderView(w: number, h: number, wide: number): void {
+    this.op(VOX_OP.lcdUnderView, w, h, wide);
   }
   flatWorld(on: number): void {
     this.op(VOX_OP.flatWorld, on);

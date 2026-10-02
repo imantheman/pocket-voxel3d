@@ -120,7 +120,7 @@ static JSValue vox_lcdbin(JSContext *ctx, JSValueConst t, int c, JSValueConst *v
     if (magic == 0) {
         p1 = typed_bytes(ctx, v[0], &l1);
         p2 = typed_bytes(ctx, v[1], &l2);
-    } else if (magic == 1) {
+    } else if (magic == 1 || magic == 3) {
         p1 = typed_bytes(ctx, v[0], &l1);
         JS_ToInt32(ctx, &a0, v[1]);
     } else {
@@ -349,6 +349,12 @@ int qjs_register_voxel(JSContext *ctx) {
         JS_NewCFunctionMagic(ctx, vox_lcdbin, "lcdObjsBin", 2, JS_CFUNC_generic_magic, 1));
     JS_SetPropertyStr(ctx, o, "lcdLinesBin",
         JS_NewCFunctionMagic(ctx, vox_lcdbin, "lcdLinesBin", 2, JS_CFUNC_generic_magic, 2));
+    /* VIEW 2D's canvas (core lcd.rs canvas_on): its size, and its objects */
+    JS_SetPropertyStr(ctx, o, "lcdUnderObjsBin",
+        JS_NewCFunctionMagic(ctx, vox_lcdbin, "lcdUnderObjsBin", 2, JS_CFUNC_generic_magic, 3));
+    add_num(ctx, o, "lcdUnderView", 113, 3);
+    /* debug: the top screen as shown, to the card (main.rs dump_top_screen) */
+    add_num(ctx, o, "screenshot", 114, 0);
     JS_SetPropertyStr(ctx, o, "lcdPals",
         JS_NewCFunctionMagic(ctx, vox_numtext, "lcdPals", 2, JS_CFUNC_generic_magic, 102));
     JS_SetPropertyStr(ctx, o, "lcdLines",

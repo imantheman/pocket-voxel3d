@@ -29950,6 +29950,9 @@ class QuickJsHost {
   lcdCellsBin = native.lcdCellsBin ? (cells, attrs) => native.lcdCellsBin(cells, attrs) : undefined;
   lcdObjsBin = native.lcdObjsBin ? (packed, count2) => native.lcdObjsBin(packed, count2) : undefined;
   lcdLinesBin = native.lcdLinesBin ? (target2, lines) => native.lcdLinesBin(target2, lines) : undefined;
+  lcdUnderView = native.lcdUnderView ? (w, h, wide) => native.lcdUnderView(w, h, wide) : undefined;
+  lcdUnderObjsBin = native.lcdUnderObjsBin ? (packed, count2) => native.lcdUnderObjsBin(packed, count2) : undefined;
+  screenshot = native.screenshot ? () => native.screenshot() : undefined;
   lcdUnder(w, h) {
     native.lcdUnder?.(w, h);
   }

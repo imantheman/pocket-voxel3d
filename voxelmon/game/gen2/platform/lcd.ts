@@ -19,6 +19,8 @@ import type { VoxelHost } from "../../host.ts";
 export const LCD_W = 160;
 export const LCD_H = 144;
 export const LCD_OBJS_MAX = 128;
+/** The under canvas's objects at most (lcd.rs LCD_UNDER_OBJS_MAX). */
+export const LCD_UNDER_OBJS_MAX = 96;
 export const LCD_HOLE = 0xff;
 /** Palette slots per layer. */
 export const LCD_PALS = 16;
@@ -71,6 +73,14 @@ export class LcdState {
   underOn = false;
   underX = 0;
   underY = 0;
+  /** The under layer as its own canvas this frame (Lcd.underView): its
+   *  size, 0 x 0 off; `viewWide` the whole top screen's width. */
+  viewW = 0;
+  viewH = 0;
+  viewWide = false;
+  /** The canvas's objects (Lcd.underObj), packed y, x, tile, attribute. */
+  underObjs = new Int16Array(LCD_UNDER_OBJS_MAX * 4);
+  underObjCount = 0;
 
   clearMaps(): void {
     this.cells.fill(0);
@@ -231,6 +241,10 @@ export class Lcd {
     this.s.flags = FLAG_BG_ON | FLAG_OBJ_ON;
     this.s.lineTarget = 0;
     this.s.underOn = false;
+    this.s.viewW = 0;
+    this.s.viewH = 0;
+    this.s.viewWide = false;
+    this.s.underObjCount = 0;
     this.bgPal = 0;
     this.objPal = 0;
   }
@@ -407,6 +421,8 @@ export class Lcd {
   }
   private underKey: unknown = null;
   private sentUnder = "0";
+  private sentView = 0;
+  private sentUnderObjs = 0;
 
   /**
    * The under layer's tile `from` drawn as `to` (an animation's frame);
@@ -429,6 +445,36 @@ export class Lcd {
     this.s.underOn = true;
     this.s.underX = x | 0;
     this.s.underY = y | 0;
+  }
+
+  /** The host draws the under layer as a canvas of its own (underView). */
+  canvasSupported(): boolean {
+    return !!(this.host.lcdUnderView && this.host.lcdUnderObjsBin);
+  }
+
+  /**
+   * This frame, the under layer drawn as a `w` x `h` canvas behind the
+   * screen, the screen's 160x144 centred in it (VIEW 2D's 2D SCREEN WIDE /
+   * 2D ZOOM): more of the map round the same camera. `wide` fills the top
+   * screen's width. Needs canvasSupported.
+   */
+  underView(w: number, h: number, wide: boolean): void {
+    this.s.viewW = w | 0;
+    this.s.viewH = h | 0;
+    this.s.viewWide = wide;
+  }
+
+  /** One 8x8 object on the canvas, at the 160x144's pixels (past its edges
+   *  too, out to the canvas's). Earlier objects draw on top. */
+  underObj(x: number, y: number, tile: number, attr: number): void {
+    const s = this.s;
+    if (s.underObjCount >= LCD_UNDER_OBJS_MAX) return;
+    const k = s.underObjCount++ * 4;
+    const p = s.underObjs;
+    p[k] = Math.round(y);
+    p[k + 1] = Math.round(x);
+    p[k + 2] = tile & 0xffff;
+    p[k + 3] = attr & 0xff;
   }
 
   /** Per-line scroll for effects (1 SCY, 2 SCX); 0 turns it off. */
@@ -460,6 +506,15 @@ export class Lcd {
         this.sentUnderX = s.underX;
         this.sentUnderY = s.underY;
       }
+      const view = s.underOn ? s.viewW * 4096 + s.viewH * 2 + (s.viewWide ? 1 : 0) : 0;
+      if (view !== this.sentView) {
+        h.lcdUnderView?.(s.underOn ? s.viewW : 0, s.underOn ? s.viewH : 0, s.viewWide ? 1 : 0);
+        this.sentView = view;
+      }
+      // the canvas's people (the core diffs them); none when it is off
+      const n = view ? s.underObjCount : 0;
+      if (n > 0 || this.sentUnderObjs > 0) h.lcdUnderObjsBin?.(s.underObjs, n);
+      this.sentUnderObjs = n;
     }
     if (h.lcdCellsBin) {
       // the whole map to the core as it is: the core diffs it (a memcmp)
@@ -621,6 +676,8 @@ export class Lcd {
     this.aliasFrom.fill(-1);
     this.aliasTo.fill(0);
     this.sentUnder = "0";
+    this.sentView = 0;
+    this.sentUnderObjs = 0;
     this.host.lcdReset?.();
   }
 }

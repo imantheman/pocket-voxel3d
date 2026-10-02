@@ -40,6 +40,12 @@ pub const LCD_COLOURS: usize = 128;
 pub const LCD_HOLE: u8 = 0xff;
 /// `lcdAlias` slots.
 pub const LCD_ALIASES: usize = 16;
+/// Objects the under canvas carries (`lcdUnderObjsBin`): the people on a
+/// widened or zoomed-out 2D map.
+pub const LCD_UNDER_OBJS_MAX: usize = 96;
+/// The largest under canvas (`lcdUnderView`): what fits one 512x256 texture.
+pub const LCD_VIEW_W_MAX: usize = 512;
+pub const LCD_VIEW_H_MAX: usize = 256;
 
 /// Cell attribute bits (the CGB BG attribute byte, bank bit reused as
 /// palette bit 3 and the unused bit 4 as the hole).
@@ -108,6 +114,21 @@ pub struct LcdScreen {
     /// `alias_n` slots from the front may be in use, u16::MAX marks empty.
     pub aliases: [(u16, u16); LCD_ALIASES],
     pub alias_n: usize,
+    /// `lcdUnderView`: the under layer drawn as a canvas of its own,
+    /// `view_w` x `view_h` pixels, rather than under the background's holes
+    /// -- VIEW 2D widened to the screen's edges or zoomed out, the screen's
+    /// own 160x144 centred in it. 0 x 0: off. `view_wide`: the canvas fills
+    /// the whole top screen rather than the Gold screen's box.
+    pub view_w: u16,
+    pub view_h: u16,
+    pub view_wide: bool,
+    /// The canvas's objects (the people), at screen coordinates -- the
+    /// 160x144's own -- drawn over the canvas's map with its priority rules.
+    pub under_objs: [LcdObj; LCD_UNDER_OBJS_MAX],
+    pub under_obj_count: usize,
+    /// Bumped when the under layer's cells change (a new map, rows sent):
+    /// what the host's canvas caches has to be drawn again.
+    pub under_serial: u32,
     /// Bumped by every op that changes what is drawn.
     pub serial: u32,
 }
@@ -140,6 +161,12 @@ impl Default for LcdScreen {
             under_y: 0,
             aliases: [(u16::MAX, 0); LCD_ALIASES],
             alias_n: 0,
+            view_w: 0,
+            view_h: 0,
+            view_wide: false,
+            under_objs: [LcdObj::default(); LCD_UNDER_OBJS_MAX],
+            under_obj_count: 0,
+            under_serial: 0,
             serial: 0,
         }
     }
@@ -257,6 +284,7 @@ impl LcdScreen {
                 if w * h == 0 {
                     self.under_on = false;
                 }
+                self.under_serial = self.under_serial.wrapping_add(1);
             }
             op::LCD_UNDER_ROW => {
                 let Some(t) = text else { return false };
@@ -274,6 +302,17 @@ impl LcdScreen {
                     self.under[base + x] = (v >> 8) as u16;
                     self.under_attr[base + x] = v as u8;
                 }
+                self.under_serial = self.under_serial.wrapping_add(1);
+            }
+            op::LCD_UNDER_VIEW => {
+                let (w, h) = (a(0).clamp(0, LCD_VIEW_W_MAX as i32) as u16, a(1).clamp(0, LCD_VIEW_H_MAX as i32) as u16);
+                let wide = a(2) != 0;
+                if w == self.view_w && h == self.view_h && wide == self.view_wide {
+                    return true;
+                }
+                self.view_w = w;
+                self.view_h = h;
+                self.view_wide = wide;
             }
             op::LCD_ALIAS => {
                 let slot = a(0);
@@ -366,6 +405,169 @@ impl LcdScreen {
         changed
     }
 
+    /// The canvas's objects at once (`lcdUnderObjsBin`), as set_objs takes
+    /// the screen's. Bumps the serial only on a change.
+    pub fn set_under_objs(&mut self, packed: &[i16], count: usize) -> bool {
+        let n = count.min(packed.len() / 4).min(LCD_UNDER_OBJS_MAX);
+        let mut changed = n != self.under_obj_count;
+        for i in 0..n {
+            let p = &packed[i * 4..i * 4 + 4];
+            let o = LcdObj { y: p[0], x: p[1], tile: p[2] as u16, attr: p[3] as u8 };
+            if self.under_objs[i] != o {
+                self.under_objs[i] = o;
+                changed = true;
+            }
+        }
+        self.under_obj_count = n;
+        if changed {
+            self.serial = self.serial.wrapping_add(1);
+        }
+        changed
+    }
+
+    /// The under layer drawn as its own canvas this frame (`lcdUnderView`):
+    /// then render_rows leaves the background's holes clear, and the host
+    /// draws the canvas behind the screen (canvas_tile, canvas_objects).
+    pub fn canvas_on(&self) -> bool {
+        self.under_on && self.view_w > 0 && self.view_h > 0
+    }
+
+    /// Where the screen's own 160x144 sits in the canvas: its top-left, in
+    /// canvas pixels.
+    pub fn canvas_origin(&self) -> (i32, i32) {
+        ((self.view_w as i32 - LCD_W as i32) / 2, (self.view_h as i32 - LCD_H as i32) / 2)
+    }
+
+    /// The under layer's pixel at the canvas's top-left.
+    pub fn canvas_under_xy(&self) -> (i32, i32) {
+        let (ox, oy) = self.canvas_origin();
+        (self.under_x - ox, self.under_y - oy)
+    }
+
+    /// Under cell (tx, ty)'s 8x8 pixels, row-major, slot*4+colour each (an
+    /// alias applied), or None for a hole or a cell past the layer: what the
+    /// canvas shows there. `row` is render_rows' tile-row source.
+    pub fn canvas_tile(&self, row: &mut impl FnMut(u16, u16, u8) -> [u8; 8], tx: i32, ty: i32,
+                       out: &mut [u8; 64]) -> bool {
+        if tx < 0 || ty < 0 || tx as usize >= self.under_w || ty as usize >= self.under_h {
+            return false;
+        }
+        let j = ty as usize * self.under_w + tx as usize;
+        let ua = self.under_attr[j];
+        if ua & ATTR_HOLE != 0 {
+            return false;
+        }
+        let mut id = self.under[j];
+        for al in &self.aliases[..self.alias_n] {
+            if al.0 == id {
+                id = al.1;
+                break;
+            }
+        }
+        let mut fetch = RowFetch {
+            banks: &self.banks[..self.bank_count],
+            row,
+            hit: None,
+            last_key: u32::MAX,
+            last_row: [0; 8],
+        };
+        let base = (ua & ATTR_PAL) * 4;
+        for y in 0..8u8 {
+            let mut r = fetch.get(id, if ua & ATTR_Y_FLIP != 0 { 7 - y } else { y });
+            if ua & ATTR_X_FLIP != 0 {
+                r.reverse();
+            }
+            for x in 0..8 {
+                out[y as usize * 8 + x] = base + r[x];
+            }
+        }
+        true
+    }
+
+    /// The canvas's objects over its map: `put(cx, cy, pixel)` for every
+    /// object pixel that shows, in canvas pixels (clipped to the canvas),
+    /// pixel = (16 + palette) * 4 + colour -- render_rows' object rules
+    /// against the under layer's colour and priority there, a lower index on
+    /// top.
+    pub fn canvas_objects(&self, row: &mut impl FnMut(u16, u16, u8) -> [u8; 8],
+                          put: &mut impl FnMut(i32, i32, u8)) {
+        let objs = &self.under_objs[..self.under_obj_count];
+        if objs.is_empty() {
+            return;
+        }
+        let (ox, oy) = self.canvas_origin();
+        let (gx0, gy0) = self.canvas_under_xy();
+        let (vw, vh) = (self.view_w as i32, self.view_h as i32);
+        let tall = self.flags & FLAG_OBJ_TALL != 0;
+        let h: i32 = if tall { 16 } else { 8 };
+        let mut fetch = RowFetch {
+            banks: &self.banks[..self.bank_count],
+            row,
+            hit: None,
+            last_key: u32::MAX,
+            last_row: [0; 8],
+        };
+        // the pixels already put this frame (a lower index wins): one bit each
+        let mut taken = alloc::vec![0u32; (vw as usize * vh as usize).div_ceil(32)];
+        for o in objs.iter() {
+            for ty in 0..h {
+                let cy = o.y as i32 + ty + oy;
+                if !(0..vh).contains(&cy) {
+                    continue;
+                }
+                let sy = if o.attr & ATTR_Y_FLIP != 0 { h - 1 - ty } else { ty };
+                let tile = if tall { (o.tile & !1) + (sy >= 8) as u16 } else { o.tile };
+                let r = fetch.get(tile, (sy & 7) as u8);
+                for px in 0..8i32 {
+                    let cx = o.x as i32 + px + ox;
+                    if !(0..vw).contains(&cx) {
+                        continue;
+                    }
+                    let c = r[if o.attr & ATTR_X_FLIP != 0 { 7 - px } else { px } as usize];
+                    if c == 0 {
+                        continue;
+                    }
+                    let k = (cy * vw + cx) as usize;
+                    if taken[k >> 5] & (1 << (k & 31)) != 0 {
+                        continue;
+                    }
+                    // the map's colour and priority under this pixel
+                    let (gx, gy) = (gx0 + cx, gy0 + cy);
+                    let (bg_c, bg_pri) = self.under_pixel(&mut fetch, gx, gy);
+                    if bg_c != 0 && (bg_pri || o.attr & ATTR_PRIORITY != 0) {
+                        continue;
+                    }
+                    taken[k >> 5] |= 1 << (k & 31);
+                    put(cx, cy, (16 + (o.attr & ATTR_PAL)) * 4 + c);
+                }
+            }
+        }
+    }
+
+    /// The under layer's raw colour (0-3) and priority at its pixel (gx, gy);
+    /// (0, false) on a hole or past the layer.
+    fn under_pixel<F: FnMut(u16, u16, u8) -> [u8; 8]>(&self, fetch: &mut RowFetch<'_, F>, gx: i32, gy: i32) -> (u8, bool) {
+        if gx < 0 || gy < 0 || gx as usize >= self.under_w * 8 || gy as usize >= self.under_h * 8 {
+            return (0, false);
+        }
+        let j = (gy >> 3) as usize * self.under_w + (gx >> 3) as usize;
+        let ua = self.under_attr[j];
+        if ua & ATTR_HOLE != 0 {
+            return (0, false);
+        }
+        let mut id = self.under[j];
+        for al in &self.aliases[..self.alias_n] {
+            if al.0 == id {
+                id = al.1;
+                break;
+            }
+        }
+        let y = (gy & 7) as u8;
+        let r = fetch.get(id, if ua & ATTR_Y_FLIP != 0 { 7 - y } else { y });
+        let x = (gx & 7) as usize;
+        (r[if ua & ATTR_X_FLIP != 0 { 7 - x } else { x }], ua & ATTR_PRIORITY != 0)
+    }
+
     /// The page and tile a tile id holds, or None outside every bank.
     pub fn tile_source(&self, id: u16) -> Option<(u16, u16)> {
         self.banks[..self.bank_count]
@@ -428,7 +630,9 @@ impl LcdScreen {
         // the screen shows it -- a line no object touches then draws only
         // the background's own cells over it, not the layer's row of each
         // of its holes (most of the screen, every frame the map scrolls)
-        let blocks = self.under_on && self.flags & FLAG_BG_ON != 0;
+        // (a canvas: the under layer is the host's to draw, behind the screen)
+        let under = self.under_on && !self.canvas_on();
+        let blocks = under && self.flags & FLAG_BG_ON != 0;
         // which of the layer's pixels keep their colours above objects, a
         // bit each (an object's line reads it back with the colours)
         let mut under_pri = [0u32; LCD_W * LCD_H / 32];
@@ -475,7 +679,7 @@ impl LcdScreen {
                     let attr = self.attrs[i];
                     if attr & ATTR_HOLE == 0 {
                         px.cell(&mut fetch, self.cells[i], attr, py, x, px0, n);
-                    } else if self.under_on && !laid {
+                    } else if under && !laid {
                         self.under_run(&mut fetch, &mut px, ly, x, n);
                     }
                     x += n;
@@ -1011,6 +1215,50 @@ mod tests {
             }
             std::println!("{name}: {:.1} us a frame", t.elapsed().as_secs_f64() * 1e6 / 3000.0);
         }
+    }
+
+    #[test]
+    fn the_under_canvas_takes_the_layer_off_the_screen_and_draws_it_itself() {
+        let mut lcd = LcdScreen::default();
+        lcd.op(op::LCD_BANK, &[0, 1, 256], None);
+        // a 40x30-cell layer, tile 1 in palette 2, cell (5,5) tile 2 palette 0
+        lcd.op(op::LCD_UNDER, &[40, 30], None);
+        for r in 0..30 {
+            let row: String = (0..40).map(|c| if r == 5 && c == 5 { "000200" } else { "000102" }).collect();
+            lcd.op(op::LCD_UNDER_ROW, &[r, 0], Some(&row));
+        }
+        lcd.op(op::LCD_UNDER_AT, &[1, 64, 48], None);
+        let mut pattern = |_p: u16, tile: u16, y: u8| [(tile as u8 + y) & 3; 8];
+        let mut out = vec![0u8; LCD_W * LCD_H];
+        lcd.render_rows(&mut pattern, &mut out);
+        assert_ne!(out[0], LCD_HOLE, "no canvas: the layer under the holes");
+        // a canvas 254x144, wide: the screen keeps its holes clear
+        lcd.op(op::LCD_UNDER_VIEW, &[254, 144, 1], None);
+        assert!(lcd.canvas_on());
+        lcd.render_rows(&mut pattern, &mut out);
+        assert!(out.iter().all(|&p| p == LCD_HOLE));
+        // the screen's 160x144 is centred: 47 canvas pixels in
+        assert_eq!(lcd.canvas_origin(), (47, 0));
+        assert_eq!(lcd.canvas_under_xy(), (64 - 47, 48));
+        // a cell's pixels as the screen drew them, and none past the layer
+        let mut t = [0u8; 64];
+        assert!(lcd.canvas_tile(&mut pattern, 5, 5, &mut t));
+        assert_eq!(t[0], 2); // palette 0, tile 2 row 0: colour 2
+        assert!(lcd.canvas_tile(&mut pattern, 6, 5, &mut t));
+        assert_eq!(t[8], 2 * 4 + ((1 + 1) & 3)); // palette 2, tile 1 row 1
+        assert!(!lcd.canvas_tile(&mut pattern, 40, 5, &mut t));
+        assert!(!lcd.canvas_tile(&mut pattern, -1, 0, &mut t));
+        // an object at screen (0, 0) lands at canvas (47, 0); a priority
+        // object hides behind a non-zero map colour
+        assert!(lcd.set_under_objs(&[0, 0, 3, 0, 0, 0, 3, 0x80], 2));
+        let mut put = alloc::vec::Vec::new();
+        lcd.canvas_objects(&mut pattern, &mut |x, y, p| put.push((x, y, p)));
+        assert!(put.iter().all(|&(x, y, _)| (47..55).contains(&x) && (0..8).contains(&y)));
+        assert!(put.iter().all(|&(_, _, p)| p >= 64), "object palettes are slots 16 up");
+        assert_eq!(put.iter().filter(|&&(x, y, _)| x == 47 && y == 0).count(), 1, "the lower index alone");
+        // off: back to the holes
+        lcd.op(op::LCD_UNDER_VIEW, &[0, 0, 0], None);
+        assert!(!lcd.canvas_on());
     }
 
     fn frame(lcd: &LcdScreen) -> alloc::vec::Vec<u8> {

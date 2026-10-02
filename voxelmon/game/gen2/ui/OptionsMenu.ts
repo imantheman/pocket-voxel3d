@@ -50,6 +50,10 @@ import { GbcPalette } from "../shared/render/GbcPalette.ts";
 import { tonumber, tostring } from "../platform/lua.ts";
 import { TILT_SHIFTS, tiltShiftLevel } from "../../tiltshift.ts";
 import { VIEW_MODES, viewIndex } from "../../viewmode.ts";
+import { ZOOMS_2D } from "../platform/map2d.ts";
+
+/** 2D ZOOM's names, by ZOOMS_2D step: how much more of the map shows. */
+const ZOOM_2D_LABELS = ["1X", "1.25X", "1.5X", "1.67X"];
 import { CAMERA_SPEEDS, cameraSpeedIndex } from "../../cameraspeed.ts";
 
 type Options = Record<string, any>;
@@ -228,6 +232,25 @@ const ROWS: OptionRow[] = [
     },
     text: (options) => Strings.get(VIEW_MODES[viewIndex(options.view)]!.label),
   },
+  // Not the Lua's: VIEW 2D's map out to the top screen's edges (WIDE) or the
+  // Gold screen's box (NORMAL), and zoomed out (platform/map2d.ts
+  // canvasSize). The text boxes and menus keep the box.
+  {
+    label: Strings.source("2D SCREEN"), key: "screen2d", port: true,
+    cycle: (options) => {
+      options.screen2d = options.screen2d === "wide" ? "normal" : "wide";
+    },
+    text: (options) => Strings.get(options.screen2d === "wide" ? "WIDE" : "NORMAL"),
+  },
+  {
+    label: Strings.source("2D ZOOM"), key: "zoom2d", port: true,
+    cycle: (options, delta) => {
+      const n = ZOOMS_2D.length;
+      const at = Math.max(0, (ZOOMS_2D as readonly number[]).indexOf(options.zoom2d));
+      options.zoom2d = ZOOMS_2D[(((at + delta) % n) + n) % n];
+    },
+    text: (options) => Strings.get(ZOOM_2D_LABELS[Math.max(0, (ZOOMS_2D as readonly number[]).indexOf(options.zoom2d))]!),
+  },
   {
     label: Strings.source("BATTLES"), key: "battleView", port: true,
     cycle: (options) => {
@@ -275,7 +298,7 @@ const GROUPS: Group[] = [
   },
   {
     id: "group.graphics", label: Strings.source("GRAPHICS"),
-    members: ["color", "uiLetterbox", "shaderfx", "shaderfx2", "frame", "view", "battleView", "tiltShift"],
+    members: ["color", "uiLetterbox", "shaderfx", "shaderfx2", "frame", "view", "screen2d", "zoom2d", "battleView", "tiltShift"],
   },
   // Not the Lua's: the Kanto games' MOVEMENT and CAMERA SPEED, together
   {

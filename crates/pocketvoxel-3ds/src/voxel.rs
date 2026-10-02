@@ -11,6 +11,9 @@ static mut AUDIO: &[u8] = &[];
 static mut PITCH_RUNG: i32 = -1;
 /// Host-only op (90): the title's MAP VIEWER entry. Never reaches the Scene.
 static mut VIEWER_REQ: bool = false;
+/// The `screenshot` op (114, a debug op bench entries call): the next frame's
+/// top screen goes to the card (main.rs dump_top_screen).
+static mut SHOT_REQ: bool = false;
 /// The circle pad as the host last read it, in ctrulib's units (about
 /// -156..156 on each axis, +y up). The guest asks for it every frame
 /// (`voxel.stick()`) to steer the free walk by the pad's own angle and
@@ -47,6 +50,12 @@ pub unsafe fn set_last_step(last: bool) {
 #[no_mangle]
 pub unsafe extern "C" fn voxel_last_step() -> i32 {
     LAST_STEP as i32
+}
+
+pub unsafe fn take_shot_request() -> bool {
+    let v = SHOT_REQ;
+    SHOT_REQ = false;
+    v
 }
 
 pub unsafe fn take_viewer_request() -> bool {
@@ -231,6 +240,10 @@ pub unsafe extern "C" fn voxel_op(code: u32, args: *const i32, n: i32) {
         VIEWER_REQ = true;
         return;
     }
+    if code == 114 {
+        SHOT_REQ = true;
+        return;
+    }
     if code == 13 && PITCH_RUNG >= 0 {
         return;
     }
@@ -282,6 +295,13 @@ pub unsafe extern "C" fn voxel_lcd_bin(which: u32, a0: i32, p1: *const u8, l1: u
         2 => {
             let lines = core::slice::from_raw_parts(p1, l1 as usize);
             lcd.set_lines(a0.clamp(0, 2) as u8, lines);
+        }
+        3 => {
+            if (p1 as usize) & 1 != 0 {
+                return;
+            }
+            let packed = core::slice::from_raw_parts(p1 as *const i16, l1 as usize / 2);
+            lcd.set_under_objs(packed, a0.max(0) as usize);
         }
         _ => {}
     }

@@ -902,6 +902,17 @@ export const VOX_OP = {
    *   lcdAlias(slot, from, to)
    */
   lcdAlias: 112,
+  /**
+   * The under layer as a canvas of its own (Gold VIEW 2D's 2D SCREEN WIDE and
+   * 2D ZOOM): `w` x `h` pixels (at most 512 x 256) with the screen's own
+   * 160x144 centred in it, drawn behind the screen -- its holes then show
+   * the canvas, not the layer. `wide`: the canvas fills the top screen's
+   * width rather than the Gold screen's box. 0 x 0: off. Cleared by
+   * lcdReset. The canvas's people go by lcdUnderObjsBin (the typed-array
+   * op, packed as lcdObjsBin), at the 160x144's coordinates.
+   *   lcdUnderView(w, h, wide)
+   */
+  lcdUnderView: 113,
 } as const;
 
 /** Clips in Yellow's PikachuCriesPointerTable (NUM_PIKA_CRIES). */
