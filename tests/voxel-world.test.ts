@@ -2019,6 +2019,19 @@ describe("battle and encounter music", () => {
     expect(game.save.inventory.POTION).toBe(1);
   });
 
+  test.skipIf(!hasGen)("a gift rolls its own DVs (not all zero) without moving the battle stream", () => {
+    const a = makeMenuGame(7);
+    const b = makeMenuGame(7);
+    const ow = a.overworld as any;
+    ow.runner.run([["give_pokemon", "EEVEE", 25, true]]);
+    for (let i = 0; i < 200 && ow.runner.isRunning(); i++) a.tick(i % 2 === 0 ? VOX_BTN.b : 0);
+    const eevee = a.save.party.at(-1)!;
+    expect(eevee.species).toBe("EEVEE");
+    const d = eevee.dvs;
+    expect(d.attack + d.defense + d.speed + d.special).toBeGreaterThan(0);
+    expect(a.battleRng.int(1 << 30)).toBe(b.battleRng.int(1 << 30));
+  });
+
   test.skipIf(!hasGen)("a trainer's victory theme waits for their LAST mon", () => {
     const game = makeMenuGame();
     game.save.party.push(newMon(romData!, "SQUIRTLE", 60));

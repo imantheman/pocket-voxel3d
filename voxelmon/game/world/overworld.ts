@@ -198,6 +198,9 @@ export interface OverworldShell {
   rng: Rng;
   /** NPC wander stream, separate so ambience can't perturb encounters. */
   npcRng: Rng;
+  /** Gift and in-game-trade DVs (_AddPartyMon's Random), a stream of their
+   * own so a gift never moves an encounter or a battle roll. */
+  giftRng?: Rng;
   /** Sound.lua:190 play — the field cues the overworld itself triggers. */
   audio: {
     playSfx(name: string): void;

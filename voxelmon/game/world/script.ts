@@ -26,6 +26,7 @@ import type { Dir } from "./collision.ts";
 import type { NPC } from "./npc.ts";
 
 import { newMon, markOwned } from "../battle/mon.ts";
+import * as Boxes from "../pokemon/boxes.ts";
 import { COIN_CAP } from "./gamecorner.ts";
 import { GAVE_DRINK_FLAG, GUARD_DRINKS } from "./saffrongate.ts";
 import { martStock } from "./marts.ts";
@@ -324,21 +325,40 @@ function* give_pokemon(ctx: ScriptContext, ...args: unknown[]): Generator<void, 
   // party has room, so the starter and every gift fill the dex.
   markOwned(w.save, species);
   const party = w.save.party as any[];
-  if (party.length >= 6) return;
-  const mon = newMon(w.data, species, level);
-  party.push(mon);
+  const runner = ctx.runner;
+  // _AddPartyMon rolls a gift's DVs (only a trainer's mons are fixed), so
+  // a gift can be a Time Capsule shiny like anything caught
+  const mon = newMon(w.data, species, level, w.shell?.giftRng);
+  // _GivePokemon: a full party sends the gift to the PC (SendNewMonToBox,
+  // SetToBoxText) rather than losing it -- the Silph Co. LAPRAS used to
+  // vanish here with its flag set
+  let pc: string | null = null;
+  if (party.length >= 6) {
+    if (Boxes.deposit(w.save, mon) === null) {
+      if (typeof w.showText === "function") {
+        w.showText("There's no more\nroom for POKéMON!", () => runner.resume());
+        yield;
+      }
+      return;
+    }
+    pc = w.save.flags?.EVENT_MET_BILL ? "BILL's PC" : "someone's PC";
+  } else {
+    party.push(mon);
+  }
+  const label = w.data.pokemon?.[species]?.name ?? species;
   // Commands.lua give_pokemon's noNickname: Yellow's starter Pikachu keeps
   // its species name (OaksLabPlayerReceivedMonText asks nothing)
-  if (args[2] === true) return;
   // The script's own _OaksLabReceivedMonText row prints the line; the
   // nickname prompt is the only thing this verb waits on.
-  const runner = ctx.runner;
-  if (typeof w.askNickname === "function") {
-    const label = w.data.pokemon?.[species]?.name ?? species;
+  if (args[2] !== true && typeof w.askNickname === "function") {
     w.askNickname(label, (name: string | null) => {
       if (name) mon.nickname = name;
       runner.resume();
     });
+    yield;
+  }
+  if (pc && typeof w.showText === "function") {
+    w.showText(`${mon.nickname ?? label} was\ntransferred to\n${pc}!`, () => runner.resume());
     yield;
   }
 }
@@ -481,7 +501,7 @@ function* trade(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
   }
   if (doneFlag) w.save.flags[doneFlag] = true;
   yield* say("_ConnectCableText");
-  const mon = newMon(data, t.get, sent.level);
+  const mon = newMon(data, t.get, sent.level, w.shell?.giftRng);
   if (t.nickname) mon.nickname = t.nickname;
   mon.traded = true;
   party.splice(picked, 1);

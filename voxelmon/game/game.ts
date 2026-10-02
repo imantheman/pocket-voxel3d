@@ -397,6 +397,8 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   /** Battle stream — separate so in-battle rolls (enemy DVs, crits, catch
    * wobbles) can never perturb the overworld route's determinism. */
   battleRng: Rng;
+  /** Gift / in-game-trade DVs — separate for the same reason. */
+  giftRng: Rng;
   save!: GameSave;
   overworld!: Overworld;
   /** Music, SFX and cries: the POLICY, emitting audio ops. Silent until a
@@ -426,6 +428,7 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     this.npcRng = seededRng(((seed >>> 0) ^ 0x9e3779b9) >>> 0);
     // third stream for battles (same decorrelation trick, distinct constant)
     this.battleRng = seededRng(((seed >>> 0) ^ 0x85ebca6b) >>> 0);
+    this.giftRng = seededRng(((seed >>> 0) ^ 0xc2b2ae35) >>> 0);
     this.scene = new Scene(host);
   }
 
