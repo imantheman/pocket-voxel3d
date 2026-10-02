@@ -3289,6 +3289,15 @@ is unaffected!`);
       return null;
     }
   },
+  MIMIC_EFFECT: {
+    announceAnim: false,
+    perform: (ctx) => {
+      if (ctx.battle.mimic)
+        ctx.battle.mimic(ctx);
+      else
+        ctx.say("But, it failed!");
+    }
+  },
   MIRROR_MOVE_EFFECT: {
     callsMove: (ctx) => {
       const last = ctx.target.lastMove;
@@ -4140,6 +4149,8 @@ class WildBattle {
   moveAnimFrame = 0;
   moveAnimDefender = SIDE_ENEMY;
   sparkleFrame = -1;
+  mimicPick = null;
+  mimicked = [];
   turnCount = 0;
   runAttempts = 0;
   lastDamage = 0;
@@ -4662,6 +4673,57 @@ Get'm! ${name}!`;
     this.moveAnimDefender = defender;
     return anim.frames;
   }
+  mimic(ctx) {
+    const { user, target: target2, move } = ctx;
+    this.waitNext(50);
+    if (target2.invulnerable || !this.accuracyRoll(move, user, target2)) {
+      this.sayNext("But, it failed!");
+      return;
+    }
+    const from = target2.curMoves.filter((m) => m && m.id);
+    const slot = user.curMoves.find((m) => m === ctx.moveInst) ?? (user.isPlayer ? user.curMoves[this.moveIndex - 1] : user.curMoves[0]);
+    if (from.length === 0 || !slot) {
+      this.sayNext("But, it failed!");
+      return;
+    }
+    if (user.isPlayer && this.mimicByMenu()) {
+      this.actNext(() => {
+        this.mimicPick = { user, slot, from };
+        this.moveIndex = 1;
+        this.moveSwapIndex = null;
+        this.phase = "moveSelect";
+      });
+      return;
+    }
+    let pick;
+    for (let tries = 0;tries < 64 && !pick; tries++)
+      pick = target2.curMoves[randRange(this.rng, 0, 3)];
+    this.applyMimic(user, slot, (pick ?? from[0]).id);
+  }
+  mimicByMenu() {
+    return true;
+  }
+  applyMimic(user, slot, id) {
+    if (!this.mimicked.some((m) => m.slot === slot))
+      this.mimicked.push({ battler: user, slot, id: slot.id });
+    slot.id = id;
+    this.animNext("MIMIC", user.isPlayer);
+    this.sayNext(`${displayName(user)}
+learned\v${this.data.moves[id]?.name ?? id}!`);
+  }
+  restoreMimic(who) {
+    const keep = [];
+    for (const m of this.mimicked) {
+      if (who && m.battler !== who)
+        keep.push(m);
+      else
+        m.slot.id = m.id;
+    }
+    this.mimicked = keep;
+  }
+  menuMoves() {
+    return this.mimicPick ? this.mimicPick.from : this.player.curMoves;
+  }
   animSprites() {
     return this.moveAnim ? this.moveAnim.spritesAt(this.moveAnimFrame) : [];
   }
@@ -4786,6 +4848,19 @@ moves left!`);
         } else {
           this.openParty(false);
         }
+      }
+      return;
+    }
+    if (this.phase === "moveSelect" && this.mimicPick) {
+      const pick = this.mimicPick;
+      if (pressedDir(input)) {
+        this.moveIndex = gridStep(input, this.moveIndex - 1, GEAR_GRID_COLS, pick.from.length) + 1;
+      } else if (input.wasPressed("a")) {
+        const chosen = pick.from[this.moveIndex - 1] ?? pick.from[0];
+        this.mimicPick = null;
+        this.moveIndex = 1;
+        this.applyMimic(pick.user, pick.slot, chosen.id);
+        this.phase = "messages";
       }
       return;
     }
@@ -5479,6 +5554,7 @@ ${learning}!`);
     return this.hmCache;
   }
   swapEnemy(mon) {
+    this.restoreMimic(this.enemy);
     this.enemy = makeBattler(this.data, mon, false);
     this.player.trappingTurns = undefined;
     this.player.trapMove = undefined;
@@ -5702,6 +5778,7 @@ caught!`);
   caughtNewSpecies = null;
   caughtMon = null;
   storeCaughtMon() {
+    this.restoreMimic();
     this.caughtMon = this.enemy.mon;
     const species = this.enemy.mon.species;
     if (!this.save.pokedex?.owned?.[species])
@@ -5775,6 +5852,7 @@ to fight!`);
     }
   }
   replaceFainted(mon) {
+    this.restoreMimic(this.player);
     this.player = makeBattler(this.data, mon, true, this.save);
     this.markParticipant();
     this.sendOutMonCursors();
@@ -5801,6 +5879,7 @@ to fight!`);
   switchPlayer(next) {
     if (!next || next.hp <= 0 || next === this.player.mon)
       return;
+    this.restoreMimic(this.player);
     this.player = makeBattler(this.data, next, true, this.save);
     this.enemy.trappingTurns = undefined;
     this.enemy.trapMove = undefined;
@@ -5825,6 +5904,7 @@ to fight!`);
     this.moveIndex = 1;
   }
   finish() {
+    this.restoreMimic();
     if (this.payDay > 0 && this.result === "win") {
       const save = this.save;
       if (typeof save.money === "number")
@@ -5850,6 +5930,7 @@ $${this.payDay}!`);
 }
 
 // voxelmon/game/battle/trainer.ts
+var TRAINER_DVS = { hp: 8, attack: 9, defense: 8, speed: 8, special: 8 };
 var GYM_LEADER_PARTY = {
   OPP_BROCK: 1,
   OPP_MISTY: 1,
@@ -5881,9 +5962,9 @@ class TrainerBattle extends WildBattle {
     this.partyIndex = partyIndex;
     this.trainerName = displayName2 ?? def?.name ?? trainerId;
     this.baseMoney = def?.baseMoney ?? 0;
-    this.enemyParty = monRoster ? monRoster.map((m) => ({ ...m })) : roster.map((m) => newMon(data, m.species, m.level, rng));
+    this.enemyParty = monRoster ? monRoster.map((m) => ({ ...m })) : roster.map((m) => newMon(data, m.species, m.level, undefined, { ...TRAINER_DVS }));
     this.enemyIndex = 0;
-    if (monRoster?.[0]) {
+    if (this.enemyParty[0]) {
       this.enemy = makeBattler(data, this.enemyParty[0], false);
     }
   }
@@ -8016,12 +8097,12 @@ class ClassicBattleUi {
       this.box(host, 4, 12, 16, 6);
       host.uiTile(4, 12, BORDER_H);
       host.uiTile(10, 12, BORDER_BR);
-      battle.player.curMoves.forEach((mv, i) => {
+      battle.menuMoves().forEach((mv, i) => {
         const def = battle.data.moves[mv.id];
         this.text(host, 6, 13 + i, def?.name ?? mv.id);
       });
       this.text(host, 1, 9, "TYPE/");
-      const sel = battle.player.curMoves[battle.moveIndex - 1];
+      const sel = battle.menuMoves()[battle.moveIndex - 1];
       const selDef = sel ? battle.data.moves[sel.id] : undefined;
       if (selDef) {
         this.text(host, 2, 10, battle.chart.displayName(selDef.type));
@@ -8194,7 +8275,7 @@ class ClassicBattleUi {
         this.swapCell = swap;
       }
       if (moved) {
-        const sel = battle.player.curMoves[battle.moveIndex - 1];
+        const sel = battle.menuMoves()[battle.moveIndex - 1];
         const selDef = sel ? battle.data.moves[sel.id] : undefined;
         host.uiFill(1, 10, 9, 1, SPACE);
         host.uiFill(1, 11, 9, 1, SPACE);
@@ -9631,6 +9712,9 @@ function* give_pokemon(ctx, ...args) {
     mon.otId = ot.otId ?? (w.shell?.giftRng ? w.shell.giftRng.int(65536) : 0);
     mon.traded = true;
   }
+  if (ot?.moves && ot.moves.length > 0) {
+    mon.moves = ot.moves.filter((id) => w.data.moves?.[id]).slice(0, 4).map((id) => ({ id, pp: w.data.moves[id].pp ?? 0 }));
+  }
   let pc = null;
   if (party.length >= 6) {
     if (deposit(w.save, mon) === null) {
@@ -10113,7 +10197,14 @@ function* check_dex_owned(ctx, ...args) {
       n += 1;
   ctx.lastCheck = n >= need;
 }
-function* dex_rating() {}
+function* dex_rating(ctx) {
+  const runner = ctx.runner;
+  const w = ctx.world;
+  if (!w.openDexRating)
+    return;
+  w.openDexRating(() => runner.resume());
+  yield;
+}
 var YELLOW_RIVAL_PARTIES = {
   OPP_RIVAL1: { 4: { party: 2, upgradeOnWin: { from: 2, to: 1 } }, 7: { party: 3 } },
   OPP_RIVAL2: { 1: { party: 1 }, 4: { base: 1 }, 7: { base: 4 }, 10: { base: 7 } },
@@ -16255,31 +16346,53 @@ var EVENT_OT = "GF";
 
 // voxelmon/game/world/cableclub.ts
 var EVENT_MEW_FLAG = "PV_EVENT_MEW";
-function eventRows(save) {
-  if (!eventPokemonOn(save?.options) || save?.flags?.[EVENT_MEW_FLAG])
+var EVENT_SURF_PIKACHU_FLAG = "PV_EVENT_SURF_PIKACHU";
+function pending(save, data) {
+  const out = [];
+  if (!save?.flags?.[EVENT_MEW_FLAG])
+    out.push({ flag: EVENT_MEW_FLAG, species: "MEW", name: "MEW", level: 5 });
+  if (gameVersion(data) === "yellow" && !save?.flags?.[EVENT_SURF_PIKACHU_FLAG]) {
+    out.push({
+      flag: EVENT_SURF_PIKACHU_FLAG,
+      species: "PIKACHU",
+      name: "PIKACHU",
+      level: 5,
+      moves: ["THUNDERSHOCK", "GROWL", "SURF"]
+    });
+  }
+  return out;
+}
+function eventRows(save, data) {
+  if (!eventPokemonOn(save?.options))
+    return [];
+  const gifts = pending(save, data);
+  if (gifts.length === 0)
     return [];
   const player = save?.player?.name ?? "RED";
-  return [
+  const rows = [
     ["face_player"],
     ["show_text", `Hello! You're
 ${player}, right?`],
-    ["show_text", `An event POKéMON
+    ["show_text", gifts.length > 1 ? `Event POKéMON
 came over the link
-for you!`],
-    ["show_text", `${player} received
-MEW!`],
-    ["give_pokemon", "MEW", 5, false, { otName: EVENT_OT }],
-    ["set_flag", EVENT_MEW_FLAG]
+for you!` : `An event POKéMON
+came over the link
+for you!`]
   ];
+  for (const g of gifts) {
+    rows.push(["show_text", `${player} received
+${g.name}!`], ["give_pokemon", g.species, g.level, false, { otName: EVENT_OT, moves: g.moves }], ["set_flag", g.flag]);
+  }
+  return rows;
 }
 function isLinkReceptionist(textConst) {
   return /_LINK_RECEPTIONIST$/.test(textConst);
 }
-function cableClubScript(textConst, save) {
+function cableClubScript(textConst, save, data) {
   if (!isLinkReceptionist(textConst))
     return null;
   return [
-    ...eventRows(save),
+    ...eventRows(save, data),
     ["face_player"],
     ["show_text", "_CableClubNPCWelcomeText"],
     ["ask", "_CableClubNPCPleaseApplyHereHaveToSaveText"],
@@ -17126,10 +17239,10 @@ class Overworld {
       this.warpEntryCell = undefined;
     }
     if (stepped && this.pendingSeamMusic) {
-      const pending = this.pendingSeamMusic;
+      const pending2 = this.pendingSeamMusic;
       this.pendingSeamMusic = null;
-      if (pending === this.map.id)
-        this.shell.startMapMusic(pending);
+      if (pending2 === this.map.id)
+        this.shell.startMapMusic(pending2);
     }
     if (stepped && !scripted) {
       this.onStepComplete();
@@ -17510,7 +17623,7 @@ the PC.`, () => {
   }
   showMapText(textConst, npc, onDone) {
     const talk = talkScript(this.map.id, textConst);
-    const script2 = (typeof talk === "function" ? talk(this, this.save) : talk) ?? itemBallScript(this.map.id, npc?.def) ?? martGreetScript(this.shell.data, this.map.def.label, textConst) ?? nurseGreetScript(textConst) ?? chanseyScript(textConst) ?? guardTalkRows(this.shell.data.field, this.save, this.map.id, this.textLabel(textConst)) ?? cableClubScript(textConst, this.save);
+    const script2 = (typeof talk === "function" ? talk(this, this.save) : talk) ?? itemBallScript(this.map.id, npc?.def) ?? martGreetScript(this.shell.data, this.map.def.label, textConst) ?? nurseGreetScript(textConst) ?? chanseyScript(textConst) ?? guardTalkRows(this.shell.data.field, this.save, this.map.id, this.textLabel(textConst)) ?? cableClubScript(textConst, this.save, this.shell.data);
     if (script2 && !this.runner.isRunning()) {
       if (npc)
         npc.frozen = true;
@@ -17591,6 +17704,13 @@ any coins!`);
   canRideHere() {
     const rules = this.shell.data.field?.bikeRiding;
     return bikeAllowed(this.map.id, this.map.def?.tileset, rules);
+  }
+  openDexRating(onDone) {
+    const open = this.shell.openDexRating;
+    if (open)
+      open.call(this.shell, onDone);
+    else
+      onDone?.();
   }
   openOaksAide(textId, onDone) {
     this.shell.openOaksAide?.(textId, onDone);
@@ -20252,7 +20372,7 @@ class Scene {
     }
     const hof = view.hallOfFameScreen?.();
     if (hof) {
-      const sig = `H${hof.index},${hof.mon ? hof.mon.name + hof.mon.level : "-"}`;
+      const sig = `H${hof.title},${hof.index},${hof.mon ? hof.mon.name + hof.mon.level : "-"}`;
       if (sig !== this.hofSig) {
         this.hofSig = sig;
         this.uiOwner = null;
@@ -22681,20 +22801,33 @@ class HallOfFameState {
   game;
   entry;
   onDone;
+  browse;
   kind = "halloffame";
   index = 0;
   timer = 0;
-  constructor(game, entry, onDone) {
+  constructor(game, entry, onDone, browse) {
     this.game = game;
     this.entry = entry;
     this.onDone = onDone;
+    this.browse = browse;
   }
   update() {
     this.timer += 1;
     const p = this.game.input.pressed;
-    const skip = p.a === true || p.b === true || p.start === true;
-    if (!skip && this.timer < HOF_MON_FRAMES)
-      return;
+    if (this.browse) {
+      if (p.b) {
+        const abort = this.browse.onAbort;
+        this.game.pop();
+        abort();
+        return;
+      }
+      if (!p.a)
+        return;
+    } else {
+      const skip = p.a === true || p.b === true || p.start === true;
+      if (!skip && this.timer < HOF_MON_FRAMES)
+        return;
+    }
     this.timer = 0;
     this.index += 1;
     if (this.index < this.entry.length)
@@ -22709,7 +22842,7 @@ class HallOfFameState {
     return {
       index: this.index,
       total: this.entry.length,
-      title: `${name}'s HALL OF FAME`,
+      title: this.browse ? this.browse.title : `${name}'s HALL OF FAME`,
       mon: mon ? {
         dexNo: dexNumber(this.game.data, mon.species),
         name: mon.nickname && mon.nickname.length > 0 ? mon.nickname : mon.species,
@@ -22891,6 +23024,9 @@ class LinkBattle extends TrainerBattle {
   pendingMine = null;
   awaitingReplacement = false;
   lastPeerAction = null;
+  mimicByMenu() {
+    return false;
+  }
   constructor(data, save, rng, peerName, peerParty, link, mirror = false) {
     super(data, save, rng, "", 1, peerName, peerParty);
     this.link = link;
@@ -23885,6 +24021,54 @@ function fillAideText(text, subs) {
   return text.replace(/\{NUM:[^}]*\}/g, () => String(subs.num ?? "")).replace(/\{RAM:[^}]*\}/g, () => subs.item ?? "");
 }
 
+// voxelmon/game/world/dexrating.ts
+var RATING_KEYS = [
+  [10, "_DexRatingText_Own0To9"],
+  [20, "_DexRatingText_Own10To19"],
+  [30, "_DexRatingText_Own20To29"],
+  [40, "_DexRatingText_Own30To39"],
+  [50, "_DexRatingText_Own40To49"],
+  [60, "_DexRatingText_Own50To59"],
+  [70, "_DexRatingText_Own60To69"],
+  [80, "_DexRatingText_Own70To79"],
+  [90, "_DexRatingText_Own80To89"],
+  [100, "_DexRatingText_Own90To99"],
+  [110, "_DexRatingText_Own100To109"],
+  [120, "_DexRatingText_Own110To119"],
+  [130, "_DexRatingText_Own120To129"],
+  [140, "_DexRatingText_Own130To139"],
+  [150, "_DexRatingText_Own140To149"],
+  [152, "_DexRatingText_Own150To151"]
+];
+var RATING_SFX = [
+  [10, "Denied"],
+  [40, "Pokedex_Rating"],
+  [60, "Get_Item1"],
+  [90, "Caught_Mon"],
+  [120, "Level_Up"],
+  [150, "Get_Key_Item"],
+  [152, "Get_Item2"]
+];
+function countSeen(save) {
+  const seen = save.pokedex?.seen ?? {};
+  let n = 0;
+  for (const k in seen)
+    if (seen[k])
+      n += 1;
+  return n;
+}
+function dexRating(text, save) {
+  const seen = countSeen(save);
+  const owned = countOwned(save);
+  const completion = (text._DexCompletionText ?? `POKéDEX comp-
+letion is:\f{NUM:hDexRatingNumMonsSeen, 1, 3} POKéMON seen
+{NUM:hDexRatingNumMonsOwned, 1, 3} POKéMON owned\fPROF.OAK's
+Rating:`).replace(/\{NUM:hDexRatingNumMonsSeen[^}]*\}/g, String(seen)).replace(/\{NUM:hDexRatingNumMonsOwned[^}]*\}/g, String(owned));
+  const key = RATING_KEYS.find(([cap]) => owned < cap)?.[1] ?? RATING_KEYS[RATING_KEYS.length - 1][1];
+  const sfx = RATING_SFX.find(([cap]) => owned < cap)?.[1] ?? "Get_Item2";
+  return { seen, owned, completion, rating: text[key] ?? "", sfx };
+}
+
 // voxelmon/game/ui/gear/draw.ts
 var COLS = 20;
 var ROWS = 18;
@@ -24578,8 +24762,8 @@ function drawActionGrid(ctx, b, showCursor) {
 function drawMoveSelect(ctx, b) {
   const { host, data } = ctx;
   const s = bstate(ctx, b);
-  battleHeader(ctx, b, "MOVES");
-  const moves = b.player.curMoves;
+  battleHeader(ctx, b, b.menuMoves && b.menuMoves() !== b.player.curMoves ? "MIMIC" : "MOVES");
+  const moves = b.menuMoves ? b.menuMoves() : b.player.curMoves;
   if (typeof s.moveInfo === "number" && moves[s.moveInfo]) {
     const m = moves[s.moveInfo];
     const d = data.moves?.[m.id] ?? {};
@@ -24823,7 +25007,7 @@ function battleTouchDown(ctx, b, x, y) {
       if (row < 2)
         return;
       const i = cell2x2();
-      if (i >= b.player.curMoves.length)
+      if (i >= (b.menuMoves ? b.menuMoves() : b.player.curMoves).length)
         return;
       b.moveIndex = i + 1;
       armed = true;
@@ -27221,7 +27405,6 @@ function tossFromPc(save, id, qty) {
 
 // voxelmon/game/ui/pcscreen.ts
 var ROWS8 = 4;
-var ROOT = ["SOMEONE'S PC", "MY PC", "LOG OFF"];
 var ITEMS = ["WITHDRAW ITEM", "DEPOSIT ITEM", "TOSS ITEM", "LOG OFF"];
 
 class PcState {
@@ -27315,8 +27498,28 @@ tant to toss!`));
       return this.updateQuantity(p);
     return this.updateList(p);
   }
+  rootRows() {
+    const flags = this.game.save?.flags ?? {};
+    const rows = [
+      { id: "someone", label: flags.EVENT_MET_BILL ? "BILL'S PC" : "SOMEONE'S PC" },
+      { id: "mine", label: "MY PC" }
+    ];
+    if (flags.EVENT_GOT_POKEDEX) {
+      rows.push({ id: "oak", label: "PROF.OAK'S PC" });
+      if ((this.game.save?.hallOfFame?.length ?? 0) > 0)
+        rows.push({ id: "league", label: "PKMN LEAGUE" });
+    }
+    rows.push({ id: "logoff", label: "LOG OFF" });
+    return rows;
+  }
+  rootLabels() {
+    return this.rootRows().map((r) => r.label);
+  }
   updateRoot(p) {
-    const n = ROOT.length;
+    const rows = this.rootRows();
+    const n = rows.length;
+    if (this.menuIndex >= n)
+      this.menuIndex = n - 1;
     if (p.up)
       this.menuIndex = (this.menuIndex + n - 1) % n;
     if (p.down)
@@ -27327,18 +27530,46 @@ tant to toss!`));
     }
     if (!p.a)
       return;
-    if (this.menuIndex === 0) {
-      this.game.showText(this.line("_AccessedSomeonesPCText", `Accessed someone's
+    const id = rows[this.menuIndex].id;
+    if (id === "someone") {
+      const met = this.game.save?.flags?.EVENT_MET_BILL;
+      this.game.showText(met ? this.line("_AccessedBillsPCText", `Accessed BILL's
+PC.\fAccessed POKéMON
+Storage System.`) : this.line("_AccessedSomeonesPCText", `Accessed someone's
 PC.`), () => this.game.openBox());
       return;
     }
-    if (this.menuIndex === 1) {
+    if (id === "mine") {
       this.game.showText(this.line("_AccessedMyPCText", "Accessed my PC."));
       this.itemsIndex = 0;
       this.mode = "items";
       return;
     }
+    if (id === "oak")
+      return this.openOaksPc();
+    if (id === "league") {
+      this.game.showText(this.line("_AccessedHoFPCText", `Accessed POKéMON
+LEAGUE's site.\fAccessed the HALL
+OF FAME List.`), () => this.game.openHallOfFamePc?.());
+      return;
+    }
     this.close();
+  }
+  openOaksPc() {
+    const closed = () => this.game.showText(this.line("_ClosedOaksPCText", `Closed link to
+PROF.OAK's PC.`));
+    this.game.showText(this.line("_AccessedOaksPCText", `Accessed PROF.
+OAK's PC.`), () => {
+      if (!this.game.showChoice)
+        return closed();
+      this.game.showChoice(this.line("_GetDexRatedText", `Want to get your
+POKéDEX rated?`), (yes) => {
+        if (yes && this.game.openDexRating)
+          this.game.openDexRating(closed);
+        else
+          closed();
+      });
+    });
   }
   updateItems(p) {
     const n = ITEMS.length;
@@ -27412,7 +27643,7 @@ PC.`), () => this.game.openBox());
   }
   gearMenu() {
     if (this.mode === "root") {
-      return { title: "PC", items: ROOT, index: this.menuIndex, select: (i) => {
+      return { title: "PC", items: this.rootLabels(), index: this.menuIndex, select: (i) => {
         this.menuIndex = i;
       } };
     }
@@ -27431,7 +27662,7 @@ PC.`), () => this.game.openBox());
       index: this.index,
       top: this.top,
       rows: ROWS8,
-      labels: this.mode === "root" ? ROOT : this.mode === "items" ? ITEMS : [],
+      labels: this.mode === "root" ? this.rootLabels() : this.mode === "items" ? ITEMS : [],
       qty: this.qty,
       action: this.action.toUpperCase()
     };
@@ -28193,13 +28424,15 @@ class TextBoxState {
   game;
   onDone;
   choice;
+  onTyped;
   kind = "textbox";
   box;
   choicePushed = false;
-  constructor(game, text2, onDone, choice, opts) {
+  constructor(game, text2, onDone, choice, opts, onTyped) {
     this.game = game;
     this.onDone = onDone;
     this.choice = choice;
+    this.onTyped = onTyped;
     this.box = new Textbox(text2, { player: game.save.player.name, rival: game.save.player.rival }, { speed: game.textSpeed(), ...opts });
   }
   update() {
@@ -28213,6 +28446,11 @@ class TextBoxState {
     const wasWaiting = this.box.waiting;
     const wasDone = this.box.done;
     this.box.update(this.game.input);
+    if (!wasDone && this.box.done && this.onTyped) {
+      const typed = this.onTyped;
+      this.onTyped = undefined;
+      typed();
+    }
     if (!this.box.isAuto && (wasDone && this.box.closed || wasWaiting && !this.box.waiting)) {
       this.game.audio.playSfx("Press_AB");
     }
@@ -28619,8 +28857,29 @@ class VoxelmonGame {
     this.audioMap = mapId;
     this.audio.startMap(mapId, !!this.save.onBike);
   }
-  showText(text2, onDone) {
-    this.push(new TextBoxState(this, text2, onDone));
+  showText(text2, onDone, onTyped) {
+    this.push(new TextBoxState(this, text2, onDone, undefined, undefined, onTyped));
+  }
+  openHallOfFamePc(onDone) {
+    const teams = (this.save.hallOfFame ?? []).filter((t) => t.length > 0);
+    const show = (i) => {
+      const team = teams[i];
+      if (!team) {
+        onDone?.();
+        return;
+      }
+      this.push(new HallOfFameState(this, team, () => show(i + 1), {
+        title: `HALL OF FAME No${String(i + 1).padStart(3, " ")}`,
+        onAbort: () => onDone?.()
+      }));
+    };
+    show(0);
+  }
+  openDexRating(onDone) {
+    const r = dexRating(this.data.text ?? {}, this.save);
+    this.showText(r.completion, () => {
+      this.showText(r.rating, onDone, () => this.audio.playSfx(r.sfx));
+    });
   }
   showAuto(text2, delay, opts) {
     if (opts?.sfx)
@@ -28655,11 +28914,11 @@ class VoxelmonGame {
     this.push(new WarpFadeState(this, frames, midpoint, onDone));
   }
   runEvolutions(leveledUp) {
-    const pending = checkParty(this.data, this.save.party, leveledUp);
-    if (pending.length === 0)
+    const pending2 = checkParty(this.data, this.save.party, leveledUp);
+    if (pending2.length === 0)
       return;
     const step = (i) => {
-      const row = pending[i];
+      const row = pending2[i];
       if (!row)
         return;
       this.push(new EvolutionState(this, row.mon, row.to, "LEVEL", (mon, to) => apply2(this.data, mon, to, this.save.pokedex), () => this.learnMovesAtLevel(row.mon, () => step(i + 1))));
