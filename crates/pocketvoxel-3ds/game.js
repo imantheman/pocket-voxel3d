@@ -108,6 +108,7 @@ var ENT_FLAG = {
   walker: 1 << 2
 };
 var FX_FRAME_CUT_TREE = 3;
+var FX_SPARKLE_PAGE = 65535;
 var PICS_MAX = 16;
 var Q4 = 16;
 var Q8 = 256;
@@ -487,6 +488,11 @@ function applyStage(value, stage) {
   return Math.max(1, Math.min(999, v));
 }
 var SHINY_ATK = new Set([2, 3, 6, 7, 10, 11, 14, 15]);
+function isShiny(dvs) {
+  if (typeof dvs !== "object" || dvs === null)
+    return false;
+  return (dvs.defense ?? 0) === 10 && (dvs.speed ?? 0) === 10 && (dvs.special ?? 0) === 10 && SHINY_ATK.has(dvs.attack ?? 0);
+}
 
 // voxelmon/game/rules/status.ts
 function fmt(template, ...args) {
@@ -2654,6 +2660,35 @@ class MoveAnim {
   }
 }
 
+// voxelmon/game/battle/sparkle.ts
+var CENTRE_X = 96 + 28;
+var CENTRE_Y = 28;
+var STARS = 8;
+var STAGGER = 4;
+var LIFE = 18;
+var SPARKLE_FRAMES = (STARS - 1) * STAGGER + LIFE;
+function sparkleStars(frame) {
+  const out = [];
+  for (let i = 0;i < STARS; i++) {
+    const t = frame - i * STAGGER;
+    if (t < 0 || t >= LIFE)
+      continue;
+    const life = t / (LIFE - 1);
+    const swell = 1 - Math.abs(life * 2 - 1);
+    const peak = i % 3 === 0 ? 6 : i % 3 === 1 ? 4 : 5;
+    const r = Math.max(1, Math.round(peak * swell));
+    const angle = (i * 0.4 + 0.1) * Math.PI * 2;
+    const dist = 18 + 8 * life + i % 2 * 4;
+    out.push({
+      x: Math.round(CENTRE_X + Math.cos(angle) * dist),
+      y: Math.round(CENTRE_Y + Math.sin(angle) * dist * 0.85),
+      r,
+      warm: i % 2 === 0
+    });
+  }
+  return out;
+}
+
 // voxelmon/game/battle/battler.ts
 function makeBattler(data, mon, isPlayer, save) {
   const def = data.pokemon[mon.species];
@@ -4104,6 +4139,7 @@ class WildBattle {
   moveAnim = null;
   moveAnimFrame = 0;
   moveAnimDefender = SIDE_ENEMY;
+  sparkleFrame = -1;
   turnCount = 0;
   runAttempts = 0;
   lastDamage = 0;
@@ -4533,14 +4569,16 @@ GHOST's identity!`));
           this.disguised = false;
           this.enemy.name = this.ghostRealName;
           markSeen(this.save, this.enemy.mon.species);
-          this.audioCues.push(`cry:${this.enemy.mon.species}`);
         });
+        this.pushSparkle();
+        this.act(() => this.audioCues.push(`cry:${this.enemy.mon.species}`));
         this.say(`Wild ${this.ghostRealName}
 appeared!`);
       }
       return;
     }
     markSeen(this.save, this.enemy.mon.species);
+    this.pushSparkle();
     this.act(() => this.audioCues.push(`cry:${this.enemy.mon.species}`));
     if (this.hooked) {
       this.say(ghostText(this.data, "_HookedMonAttackedText", `The hooked
@@ -4550,6 +4588,17 @@ attacked!`).replace("{RAM:wEnemyMonNick}", this.enemy.name));
     }
     this.say(`Wild ${this.enemy.name}
 appeared!`);
+  }
+  pushSparkle() {
+    if (!isShiny(this.enemy.mon.dvs))
+      return;
+    this.act(() => {
+      this.sparkleFrame = 0;
+    });
+    this.queue.push({ wait: Math.ceil(SPARKLE_FRAMES / 2) });
+  }
+  sparkles() {
+    return this.sparkleFrame >= 0 ? sparkleStars(this.sparkleFrame) : [];
   }
   pushStarterPikachuVoice() {
     if (!isStarterPikachu(this.save, this.player.mon))
@@ -4651,6 +4700,8 @@ Get'm! ${name}!`;
       if (this.moveAnim.done(this.moveAnimFrame))
         this.moveAnim = null;
     }
+    if (this.sparkleFrame >= 0 && ++this.sparkleFrame >= SPARKLE_FRAMES)
+      this.sparkleFrame = -1;
     if (this.anims.length > 0) {
       for (const a of this.anims)
         a.frame += 1;
@@ -9572,20 +9623,41 @@ function* give_pokemon(ctx, ...args) {
   const w = ctx.world;
   markOwned(w.save, species);
   const party = w.save.party;
-  if (party.length >= 6)
-    return;
-  const mon = newMon(w.data, species, level);
-  party.push(mon);
-  if (args[2] === true)
-    return;
   const runner = ctx.runner;
-  if (typeof w.askNickname === "function") {
-    const label3 = w.data.pokemon?.[species]?.name ?? species;
+  const mon = newMon(w.data, species, level, w.shell?.giftRng);
+  const ot = args[3];
+  if (ot?.otName) {
+    mon.otName = ot.otName;
+    mon.otId = ot.otId ?? (w.shell?.giftRng ? w.shell.giftRng.int(65536) : 0);
+    mon.traded = true;
+  }
+  let pc = null;
+  if (party.length >= 6) {
+    if (deposit(w.save, mon) === null) {
+      if (typeof w.showText === "function") {
+        w.showText(`There's no more
+room for POKéMON!`, () => runner.resume());
+        yield;
+      }
+      return;
+    }
+    pc = w.save.flags?.EVENT_MET_BILL ? "BILL's PC" : "someone's PC";
+  } else {
+    party.push(mon);
+  }
+  const label3 = w.data.pokemon?.[species]?.name ?? species;
+  if (args[2] !== true && typeof w.askNickname === "function") {
     w.askNickname(label3, (name) => {
       if (name)
         mon.nickname = name;
       runner.resume();
     });
+    yield;
+  }
+  if (pc && typeof w.showText === "function") {
+    w.showText(`${mon.nickname ?? label3} was
+transferred to
+${pc}!`, () => runner.resume());
     yield;
   }
 }
@@ -9690,7 +9762,7 @@ function* trade(ctx, ...args) {
   if (doneFlag)
     w.save.flags[doneFlag] = true;
   yield* say("_ConnectCableText");
-  const mon = newMon(data, t.get, sent.level);
+  const mon = newMon(data, t.get, sent.level, w.shell?.giftRng);
   if (t.nickname)
     mon.nickname = t.nickname;
   mon.traded = true;
@@ -16171,14 +16243,43 @@ you again!`]
   ];
 }
 
+// voxelmon/game/eventmons.ts
+var EVENT_POKEMON = [
+  { key: false, label: "OFF" },
+  { key: true, label: "ON" }
+];
+function eventPokemonOn(options) {
+  return options?.eventPokemon === true;
+}
+var EVENT_OT = "GF";
+
 // voxelmon/game/world/cableclub.ts
+var EVENT_MEW_FLAG = "PV_EVENT_MEW";
+function eventRows(save) {
+  if (!eventPokemonOn(save?.options) || save?.flags?.[EVENT_MEW_FLAG])
+    return [];
+  const player = save?.player?.name ?? "RED";
+  return [
+    ["face_player"],
+    ["show_text", `Hello! You're
+${player}, right?`],
+    ["show_text", `An event POKéMON
+came over the link
+for you!`],
+    ["show_text", `${player} received
+MEW!`],
+    ["give_pokemon", "MEW", 5, false, { otName: EVENT_OT }],
+    ["set_flag", EVENT_MEW_FLAG]
+  ];
+}
 function isLinkReceptionist(textConst) {
   return /_LINK_RECEPTIONIST$/.test(textConst);
 }
-function cableClubScript(textConst) {
+function cableClubScript(textConst, save) {
   if (!isLinkReceptionist(textConst))
     return null;
   return [
+    ...eventRows(save),
     ["face_player"],
     ["show_text", "_CableClubNPCWelcomeText"],
     ["ask", "_CableClubNPCPleaseApplyHereHaveToSaveText"],
@@ -17409,7 +17510,7 @@ the PC.`, () => {
   }
   showMapText(textConst, npc, onDone) {
     const talk = talkScript(this.map.id, textConst);
-    const script2 = (typeof talk === "function" ? talk(this, this.save) : talk) ?? itemBallScript(this.map.id, npc?.def) ?? martGreetScript(this.shell.data, this.map.def.label, textConst) ?? nurseGreetScript(textConst) ?? chanseyScript(textConst) ?? guardTalkRows(this.shell.data.field, this.save, this.map.id, this.textLabel(textConst)) ?? cableClubScript(textConst);
+    const script2 = (typeof talk === "function" ? talk(this, this.save) : talk) ?? itemBallScript(this.map.id, npc?.def) ?? martGreetScript(this.shell.data, this.map.def.label, textConst) ?? nurseGreetScript(textConst) ?? chanseyScript(textConst) ?? guardTalkRows(this.shell.data.field, this.save, this.map.id, this.textLabel(textConst)) ?? cableClubScript(textConst, this.save);
     if (script2 && !this.runner.isRunning()) {
       if (npc)
         npc.frozen = true;
@@ -19297,7 +19398,8 @@ class Scene {
   emitAnimSprites(view, bv) {
     const host = this.host;
     const sprites = bv.battle.animSprites();
-    if (sprites.length === 0) {
+    const stars = bv.battle.sparkles?.() ?? [];
+    if (sprites.length === 0 && stars.length === 0) {
       if (this.animEmitted) {
         host.animClear();
         this.animEmitted = false;
@@ -19313,6 +19415,8 @@ class Scene {
         continue;
       host.animSprite(page, s.tile, s.x - 8, s.y - 16, (s.xf ? 1 : 0) | (s.yf ? 2 : 0));
     }
+    for (const st of stars)
+      host.animSprite(FX_SPARKLE_PAGE, st.r, st.x, st.y, st.warm ? 4 : 0);
   }
   emitIntroTiles(tiles) {
     const host = this.host;
@@ -23108,6 +23212,11 @@ class OptionsMenuState {
         index: viewIndex(this.opts().battleView)
       },
       {
+        label: "EVENT POKéMON",
+        choices: EVENT_POKEMON.map((e) => e.label),
+        index: eventPokemonOn(this.opts()) ? 1 : 0
+      },
+      {
         label: "DEV MENU",
         choices: ["OFF", "ON"],
         index: this.opts().devMenu === true ? 1 : 0
@@ -23141,6 +23250,8 @@ class OptionsMenuState {
     else if (row === 9)
       this.opts().battleView = VIEW_MODES[at].key;
     else if (row === 10)
+      this.opts().eventPokemon = EVENT_POKEMON[at].key;
+    else if (row === 11)
       this.opts().devMenu = at === 1;
   }
   update() {
@@ -28256,6 +28367,7 @@ class VoxelmonGame {
   rng;
   npcRng;
   battleRng;
+  giftRng;
   save;
   overworld;
   audio = new AudioDirector(null);
@@ -28272,6 +28384,7 @@ class VoxelmonGame {
     this.rng = seededRng(seed >>> 0);
     this.npcRng = seededRng((seed >>> 0 ^ 2654435769) >>> 0);
     this.battleRng = seededRng((seed >>> 0 ^ 2246822507) >>> 0);
+    this.giftRng = seededRng((seed >>> 0 ^ 3266489909) >>> 0);
     this.scene = new Scene(host);
   }
   setAudio(banks) {

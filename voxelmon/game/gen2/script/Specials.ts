@@ -73,6 +73,8 @@ import { Mon } from "../battle/Mon.ts";
 import { GbcPalette } from "../shared/render/GbcPalette.ts";
 import { TrainerHouse } from "../world/TrainerHouse.ts";
 import { MysteryGift } from "../core/MysteryGift.ts";
+import { EventPokemon } from "../core/EventPokemon.ts";
+import { EVENT_OT } from "../../eventmons.ts";
 import { Bag } from "../shared/inventory/Bag.ts";
 import { crystal_story } from "./specials/crystal_story.ts";
 import { battle_tower } from "./specials/battle_tower.ts";
@@ -2115,9 +2117,13 @@ H.UnlockMysteryGift = (vm: Vm) => {
 // CheckMysteryGift (engine/events/specials.asm): sMysteryGiftItem, plus one
 // when nonzero -- the Pokecenter 2F scene script's `ifequal 0` brings out the
 // delivery man otherwise.
+//
+// Not the cart's: with EVENT POKéMON on, an event mon still waiting brings
+// him out too (core/EventPokemon.ts).
 H.CheckMysteryGift = (vm: Vm) => {
   const s = save(vm);
-  answer(vm, s && MysteryGift.waiting(s) ? 2 : 0);
+  const waiting = s && (MysteryGift.waiting(s) || EventPokemon.next(s, s.options));
+  answer(vm, waiting ? 2 : 0);
 };
 
 // GetMysteryGiftItem: into the PACK (ReceiveItem), "<PLAYER> received <item>."
@@ -2126,6 +2132,10 @@ H.GetMysteryGiftItem = function* (vm: Vm): Script<void> {
   const h = hooks(vm);
   const s = save(vm);
   const item = s ? MysteryGift.state(s).item : 0;
+  if (s && item === 0 && EventPokemon.next(s, s.options)) {
+    yield* giveEventMon(vm, s);
+    return;
+  }
   if (!s || item === 0) {
     answer(vm, FALSE);
     return;
@@ -2142,6 +2152,32 @@ H.GetMysteryGiftItem = function* (vm: Vm): Script<void> {
   yield* vm.showRaw(Strings.get("{PLAYER} received\n%s.", name));
   answer(vm, TRUE);
 };
+
+// The event mon in the delivery man's hands: GivePoke's trainer arm for the
+// OT (EVENT_OT, as the distribution carts sent them), then the ordinary
+// nickname ask. A full party is his "no space" line, and the mon waits.
+// wCurItem goes to 0 so the script's own itemnotify after a TRUE prints
+// nothing -- there is no pocket for a POKéMON.
+function* giveEventMon(vm: Vm, s: any): Script<void> {
+  const ev = EventPokemon.next(s, s.options)!;
+  const data = hooks(vm).world?.game?.data;
+  const index = data?.pokemon?.[ev.species]?.index;
+  if (index == null || !vm.givePokeFn || (s.party?.length ?? 0) >= Breeding.PARTY_SIZE) {
+    answer(vm, FALSE);
+    return;
+  }
+  const name = data.pokemon[ev.species].name ?? ev.species;
+  const mon = vm.givePokeFn(index, ev.level, 0, { otName: EVENT_OT });
+  if (!truthy(mon)) {
+    answer(vm, FALSE);
+    return;
+  }
+  EventPokemon.mark(s, ev.id);
+  vm.curItem = 0;
+  yield* vm.showRaw(Strings.get("{PLAYER} received\n%s!", name));
+  yield* Specials.askNickname(vm, mon);
+  answer(vm, TRUE);
+}
 
 // ---- the link record ---------------------------------------------------------
 //

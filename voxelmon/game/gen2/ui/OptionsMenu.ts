@@ -52,6 +52,7 @@ import { TILT_SHIFTS, tiltShiftLevel } from "../../tiltshift.ts";
 import { SCREENS_2D, VIEW_MODES, ZOOMS_2D, screen2dIndex, viewIndex, zoom2dIndex } from "../../viewmode.ts";
 import { CAMERA_SPEEDS, cameraSpeedIndex } from "../../cameraspeed.ts";
 import { runningShoesOn } from "../../runshoes.ts";
+import { eventPokemonOn } from "../../eventmons.ts";
 
 type Options = Record<string, any>;
 
@@ -218,6 +219,16 @@ const ROWS: OptionRow[] = [
     },
     text: (options) => Strings.get(runningShoesOn(options) ? "ON" : "OFF"),
   },
+  // Not the Lua's: EVENT POKéMON, every game's row (voxelmon/game/eventmons.ts)
+  // -- the Pokecenter 2F delivery man brings the event distributions.
+  // OFF unless set.
+  {
+    label: Strings.source("EVENT POKéMON"), key: "eventPokemon", port: true,
+    cycle: (options) => {
+      options.eventPokemon = !eventPokemonOn(options);
+    },
+    text: (options) => Strings.get(eventPokemonOn(options) ? "ON" : "OFF"),
+  },
   // Not the Lua's: how fast the C-stick swings the 3D camera
   // (voxelmon/game/cameraspeed.ts), stated to the host every frame by main.ts
   // -- the Kanto games' CAMERA SPEED row.
@@ -314,7 +325,7 @@ const GROUPS: Group[] = [
     id: "group.battle", label: Strings.source("BATTLE OPTIONS"),
     members: ["battleScene", "battleStyle", "battleLayout", "battleHud", "battleFit", "battleBg"],
   },
-  { id: "group.extras", label: Strings.source("EXTRAS"), members: ["zoom", "voidFill", "tilt", "devMenu"] },
+  { id: "group.extras", label: Strings.source("EXTRAS"), members: ["zoom", "voidFill", "tilt", "eventPokemon", "devMenu"] },
 ];
 
 // Lua: OptionsMenu.lua:501

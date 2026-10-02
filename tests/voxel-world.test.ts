@@ -33,6 +33,7 @@ import { apply as evolveApply } from "../voxelmon/game/rules/evolution.ts";
 import { EVO_FLASH_FRAMES, flashPeriod } from "../voxelmon/game/ui/evoscreen.ts";
 import * as Bag from "../voxelmon/game/rules/bag.ts";
 import { floorsOf } from "../voxelmon/game/world/elevator.ts";
+import { cableClubScript, EVENT_MEW_FLAG } from "../voxelmon/game/world/cableclub.ts";
 import { destination as warpDestination } from "../voxelmon/game/world/warp.ts";
 import * as Pc from "../voxelmon/game/world/pcitems.ts";
 import { decodeSave } from "../voxelmon/game/save-read.ts";
@@ -2017,6 +2018,34 @@ describe("battle and encounter music", () => {
     expect(gift("POTION")).toContain("playSfx:Get_Item1");
     expect(gift("TOWN_MAP")).toContain("playSfx:Get_Key_Item");
     expect(game.save.inventory.POTION).toBe(1);
+  });
+
+  test.skipIf(!hasGen)("EVENT POKéMON: the CABLE CLUB desk hands over MEW once, to the PC on a full party", () => {
+    const game = makeMenuGame();
+    const ow = game.overworld as any;
+    ow.setMap("VIRIDIAN_POKECENTER", 3, 4, "up");
+    const desk = (): void => {
+      const rows = cableClubScript("VIRIDIAN_POKECENTER_LINK_RECEPTIONIST", game.save)!;
+      // just the gift: her link rows would open a session
+      ow.runner.run(rows.slice(0, rows.findIndex((r, i) => i > 0 && r[0] === "face_player")));
+      // B through the lines and the nickname ask (NO)
+      for (let i = 0; i < 1200 && ow.runner.isRunning(); i++) game.tick(i % 2 === 0 ? VOX_BTN.b : 0);
+    };
+    const mews = (): number =>
+      [...game.save.party, ...((game.save as any).boxes ?? []).flat()].filter((m: any) => m.species === "MEW").length;
+
+    expect(cableClubScript("VIRIDIAN_POKECENTER_LINK_RECEPTIONIST", game.save)!.some((r) => r[0] === "give_pokemon")).toBe(false);
+    game.save.options = { ...(game.save.options ?? {}), eventPokemon: true };
+    while (game.save.party.length < 6) game.save.party.push(newMon(romData!, "RATTATA", 3));
+    desk();
+    expect(mews()).toBe(1);
+    expect(game.save.party.length).toBe(6);
+    const mew = ((game.save as any).boxes.flat() as any[]).find((m) => m.species === "MEW");
+    expect(mew.level).toBe(5);
+    expect(mew.otName).toBe("GF");
+    expect(game.save.flags[EVENT_MEW_FLAG]).toBe(true);
+    // once per save
+    expect(cableClubScript("VIRIDIAN_POKECENTER_LINK_RECEPTIONIST", game.save)!.some((r) => r[0] === "give_pokemon")).toBe(false);
   });
 
   test.skipIf(!hasGen)("a gift rolls its own DVs (not all zero) without moving the battle stream", () => {

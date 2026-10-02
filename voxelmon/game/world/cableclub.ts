@@ -11,6 +11,29 @@
 // this port's own wire (world/link.ts).
 
 import type { ScriptRow } from "./script.ts";
+import { EVENT_OT, eventPokemonOn } from "../eventmons.ts";
+
+/** The save flag set once the event MEW is handed over. */
+export const EVENT_MEW_FLAG = "PV_EVENT_MEW";
+
+/**
+ * EVENT POKéMON (../eventmons.ts): before her usual welcome, the desk hands
+ * over the event MEW the 1999-2000 events sent by link -- level 5, OT GF --
+ * once per save. A full party sends it to the PC (give_pokemon). Her lines
+ * here are this port's; the carts' events had no desk to say them.
+ */
+function eventRows(save: any): ScriptRow[] {
+  if (!eventPokemonOn(save?.options) || save?.flags?.[EVENT_MEW_FLAG]) return [];
+  const player = save?.player?.name ?? "RED";
+  return [
+    ["face_player"],
+    ["show_text", `Hello! You're\n${player}, right?`],
+    ["show_text", "An event POKéMON\ncame over the link\nfor you!"],
+    ["show_text", `${player} received\nMEW!`],
+    ["give_pokemon", "MEW", 5, false, { otName: EVENT_OT }],
+    ["set_flag", EVENT_MEW_FLAG],
+  ] as ScriptRow[];
+}
 
 /** Her object is <MAP>_LINK_RECEPTIONIST on every Center. */
 export function isLinkReceptionist(textConst: string): boolean {
@@ -24,9 +47,10 @@ export function isLinkReceptionist(textConst: string): boolean {
  * trade cannot be undone by resetting, and a trade that cannot be undone is
  * the whole reason the other player agrees to it.
  */
-export function cableClubScript(textConst: string): ScriptRow[] | null {
+export function cableClubScript(textConst: string, save?: any): ScriptRow[] | null {
   if (!isLinkReceptionist(textConst)) return null;
   return [
+    ...eventRows(save),
     ["face_player"],
     ["show_text", "_CableClubNPCWelcomeText"],
     ["ask", "_CableClubNPCPleaseApplyHereHaveToSaveText"],

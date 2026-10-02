@@ -329,6 +329,14 @@ function* give_pokemon(ctx: ScriptContext, ...args: unknown[]): Generator<void, 
   // _AddPartyMon rolls a gift's DVs (only a trainer's mons are fixed), so
   // a gift can be a Time Capsule shiny like anything caught
   const mon = newMon(w.data, species, level, w.shell?.giftRng);
+  // A 4th arg names another trainer as the OT (the event MEW's GF): a
+  // traded mon, as the summary and obedience read it
+  const ot = args[3] as { otName?: string; otId?: number } | undefined;
+  if (ot?.otName) {
+    mon.otName = ot.otName;
+    mon.otId = ot.otId ?? (w.shell?.giftRng ? w.shell.giftRng.int(65536) : 0);
+    mon.traded = true;
+  }
   // _GivePokemon: a full party sends the gift to the PC (SendNewMonToBox,
   // SetToBoxText) rather than losing it -- the Silph Co. LAPRAS used to
   // vanish here with its flag set

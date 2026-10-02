@@ -1270,7 +1270,7 @@ export class Overworld implements ScriptWorld {
         this.map.id,
         this.textLabel(textConst),
       ) as ScriptRow[] | null) ??
-      cableClubScript(textConst);
+      cableClubScript(textConst, this.save);
     if (script && !this.runner.isRunning()) {
       if (npc) npc.frozen = true;
       this.runner.run(script, {

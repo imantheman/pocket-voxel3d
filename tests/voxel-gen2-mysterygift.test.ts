@@ -11,6 +11,7 @@ import { MysteryGiftScreen } from "../voxelmon/game/gen2/ui/MysteryGiftScreen.ts
 import { TrainerHouse } from "../voxelmon/game/gen2/world/TrainerHouse.ts";
 import { MainMenu } from "../voxelmon/game/gen2/ui/MainMenu.ts";
 import { LoopbackLink, type LinkTransport } from "../voxelmon/game/world/link.ts";
+import { VOX_BTN } from "../contracts/spec/voxel-spec.ts";
 
 const gold = haveGoldGen();
 
@@ -189,5 +190,47 @@ describe("gen2 MYSTERY GIFT", () => {
     s.update();
     expect(s.phase).toBe("message");
     expect(s.pages[0]).toBe("The link has been\ncancelled.");
+  });
+});
+
+// EVENT POKéMON (voxelmon/game/eventmons.ts): the Pokecenter 2F delivery
+// man brings CELEBI when the option is on, through the ROM's own scene and
+// talk scripts -- once, and not at all with it off.
+describe("EVENT POKéMON", () => {
+  test.skipIf(!gold)("the delivery man brings CELEBI once, only with the option on", () => {
+    useGoldGen();
+    const game: any = Game2.new();
+    game.load({ startWorld: true });
+    game.writeSave = () => [true];
+    for (let k = 0; k < 30; k++) game.frame(0);
+    const visit = (): { shown: boolean; got: any } => {
+      const w = game.world;
+      w.warpToMapId("POKECENTER_2F", 1, 4, "up");
+      for (let k = 0; k < 90; k++) game.frame(0);
+      const guy = (w.map.def.objects ?? [])[3];
+      const shown = !w.events.get(guy?.eventFlag);
+      const before = (game.save.party ?? []).length;
+      if (guy?.scriptKey) w.vm.start(guy.scriptKey);
+      // A through his lines; once the mon is in, B declines the nickname
+      for (let k = 0; k < 500; k++) {
+        const press = k % 12 !== 0 ? 0 : (game.save.party ?? []).length > before ? VOX_BTN.b : VOX_BTN.a;
+        game.frame(press);
+      }
+      const party = game.save.party ?? [];
+      const got = party.length > before ? party[party.length - 1] : null;
+      w.warpToMapId("POKECENTER_1F", 3, 7, "down");
+      for (let k = 0; k < 60; k++) game.frame(0);
+      return { shown, got };
+    };
+    game.options.eventPokemon = false;
+    expect(visit()).toEqual({ shown: false, got: null });
+    game.options.eventPokemon = true;
+    const first = visit();
+    expect(first.shown).toBe(true);
+    expect(first.got?.species).toBe("CELEBI");
+    expect(first.got?.level).toBe(30);
+    expect(first.got?.otName ?? first.got?.ot).toBe("GF");
+    expect(game.save.eventPokemon).toEqual({ celebi: true });
+    expect(visit()).toEqual({ shown: false, got: null });
   });
 });

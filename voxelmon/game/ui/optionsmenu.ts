@@ -50,6 +50,7 @@ export const OPTIONS_VISIBLE = 4;
 // the row too); re-exported for the callers that import them from here.
 export { CAMERA_SPEED_DEFAULT_Q8, CAMERA_SPEEDS } from "../cameraspeed.ts";
 import { RUNNING_SHOES, runningShoesOn } from "../runshoes.ts";
+import { EVENT_POKEMON, eventPokemonOn } from "../eventmons.ts";
 
 interface OptionsSave {
   options?: {
@@ -63,6 +64,7 @@ interface OptionsSave {
     screen2d?: string;
     zoom2d?: number;
     battleView?: string;
+    eventPokemon?: boolean;
     devMenu?: boolean;
   };
 }
@@ -152,6 +154,13 @@ export class OptionsMenuState implements GameState {
         index: viewIndex(this.opts().battleView),
       },
       {
+        // The event distributions (../eventmons.ts): MEW at the CABLE CLUB
+        // desk. This port's row; OFF unless set.
+        label: "EVENT POKéMON",
+        choices: EVENT_POKEMON.map((e) => e.label),
+        index: eventPokemonOn(this.opts()) ? 1 : 0,
+      },
+      {
         // The playtesting tools (ui/devmenu.ts). Off unless asked for, and
         // then DEV appears on the pause menu.
         label: "DEV MENU",
@@ -177,7 +186,8 @@ export class OptionsMenuState implements GameState {
     else if (row === 7) this.opts().screen2d = SCREENS_2D[at]!.key;
     else if (row === 8) this.opts().zoom2d = ZOOMS_2D[at]!.pct;
     else if (row === 9) this.opts().battleView = VIEW_MODES[at]!.key;
-    else if (row === 10) this.opts().devMenu = at === 1;
+    else if (row === 10) this.opts().eventPokemon = EVENT_POKEMON[at]!.key;
+    else if (row === 11) this.opts().devMenu = at === 1;
   }
 
   update(): void {
