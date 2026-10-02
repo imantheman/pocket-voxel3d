@@ -60,6 +60,7 @@ import {
   warnUnknown,
   type AnimRowRef,
   type EffectBattle,
+  type EffectCtx,
   type EffectMsgs,
   type HitFx,
 } from "./effects.ts";
@@ -269,6 +270,10 @@ export class WildBattle implements EffectBattle {
   private moveAnimDefender = SIDE_ENEMY;
   /** Frames into the shiny sparkle (battle/sparkle.ts), -1 when none. */
   sparkleFrame = -1;
+  /** MIMIC's copy menu while it is up: whose slot, and the foe's moves. */
+  mimicPick: { user: WildBattler; slot: MoveSlot; from: MoveSlot[] } | null = null;
+  /** Slots MIMIC has written over this battle, and what to put back. */
+  private mimicked: { battler: WildBattler; slot: MoveSlot; id: string }[] = [];
   turnCount = 0;
   runAttempts = 0;
   lastDamage = 0;
@@ -1037,6 +1042,76 @@ export class WildBattle implements EffectBattle {
     return anim.frames;
   }
 
+  /**
+   * MimicEffect (engine/battle/effects.asm). After DelayFrames 50, a
+   * MoveHitTest miss -- or a foe off the field with FLY or DIG -- is "But,
+   * it failed!" with no animation. Otherwise the player picks one of the
+   * foe's moves from MoveSelectionMenu (wMoveMenuType 1: up, down, A; no B),
+   * and the foe (or anyone in a link battle) rolls BattleRandom & 3 until it
+   * lands on a filled slot. Only the move ID is written, into MIMIC's own
+   * slot: the copy keeps MIMIC's PP and drains it, and the party struct's
+   * move list is untouched -- the battle copy is reloaded on switch-out and
+   * at the end, which is mimicked's restore here.
+   */
+  mimic(ctx: EffectCtx): void {
+    const { user, target, move } = ctx;
+    this.waitNext(50);
+    if (target.invulnerable || !this.accuracyRoll(move, user, target)) {
+      this.sayNext("But, it failed!");
+      return;
+    }
+    const from = target.curMoves.filter((m) => m && m.id);
+    // the slot MIMIC was used from (a called MIMIC takes the cursor's slot,
+    // or the foe's first, as wPlayerMoveListIndex / wEnemyMoveListIndex do)
+    const slot = user.curMoves.find((m) => m === ctx.moveInst)
+      ?? (user.isPlayer ? user.curMoves[this.moveIndex - 1] : user.curMoves[0]);
+    if (from.length === 0 || !slot) {
+      this.sayNext("But, it failed!");
+      return;
+    }
+    if (user.isPlayer && this.mimicByMenu()) {
+      this.actNext(() => {
+        this.mimicPick = { user, slot, from };
+        this.moveIndex = 1;
+        this.moveSwapIndex = null;
+        this.phase = "moveSelect";
+      });
+      return;
+    }
+    let pick: MoveSlot | undefined;
+    for (let tries = 0; tries < 64 && !pick; tries++) pick = target.curMoves[randRange(this.rng, 0, 3)];
+    this.applyMimic(user, slot, (pick ?? from[0]!).id);
+  }
+
+  /** In a link battle both consoles must copy the same move: no menu. */
+  protected mimicByMenu(): boolean {
+    return true;
+  }
+
+  /** The copy, its animation, and _MimicLearnedMoveText. */
+  private applyMimic(user: WildBattler, slot: MoveSlot, id: string): void {
+    if (!this.mimicked.some((m) => m.slot === slot)) this.mimicked.push({ battler: user, slot, id: slot.id });
+    slot.id = id;
+    this.animNext("MIMIC", user.isPlayer);
+    this.sayNext(`${displayName(user)}\nlearned\v${this.data.moves[id]?.name ?? id}!`);
+  }
+
+  /** The battle copy reloaded from the party: MIMIC back in `who`'s slots
+   *  (a switch-out), or everyone's (the battle's end, a catch). */
+  restoreMimic(who?: WildBattler): void {
+    const keep: typeof this.mimicked = [];
+    for (const m of this.mimicked) {
+      if (who && m.battler !== who) keep.push(m);
+      else m.slot.id = m.id;
+    }
+    this.mimicked = keep;
+  }
+
+  /** The move list the move menu shows: the foe's while MIMIC asks. */
+  menuMoves(): MoveSlot[] {
+    return this.mimicPick ? this.mimicPick.from : this.player.curMoves;
+  }
+
   /** This frame's animation sprites, in OAM space (scene.ts places them). */
   animSprites(): MoveAnimSprite[] {
     return this.moveAnim ? this.moveAnim.spritesAt(this.moveAnimFrame) : [];
@@ -1177,6 +1252,20 @@ export class WildBattle implements EffectBattle {
         } else {
           this.openParty(false);
         }
+      }
+      return;
+    }
+
+    if (this.phase === "moveSelect" && this.mimicPick) {
+      const pick = this.mimicPick;
+      if (pressedDir(input)) {
+        this.moveIndex = gridStep(input, this.moveIndex - 1, GEAR_GRID_COLS, pick.from.length) + 1;
+      } else if (input.wasPressed("a")) {
+        const chosen = pick.from[this.moveIndex - 1] ?? pick.from[0]!;
+        this.mimicPick = null;
+        this.moveIndex = 1;
+        this.applyMimic(pick.user, pick.slot, chosen.id);
+        this.phase = "messages";
       }
       return;
     }
@@ -2000,6 +2089,7 @@ export class WildBattle implements EffectBattle {
 
   /** Swap the enemy battler (trainer send-out; makeBattler is module-local). */
   swapEnemy(mon: PartyMon): void {
+    this.restoreMimic(this.enemy);
     this.enemy = makeBattler(this.data, mon, false);
     // EnemySendOutFirstMon (core.asm:1314-1315): frees the player's trap
     this.player.trappingTurns = undefined;
@@ -2294,6 +2384,7 @@ export class WildBattle implements EffectBattle {
    * game reads caughtMon and asks over the map.
    */
   storeCaughtMon(): void {
+    this.restoreMimic();
     this.caughtMon = this.enemy.mon;
     // BattleState.lua:4451/4465 storeCaughtMon: a caught mon is marked owned
     // (+seen) whether or not it fits the party — the mark precedes the PC
@@ -2373,6 +2464,7 @@ export class WildBattle implements EffectBattle {
   /** :4106-4134 openReplacementMenu onSwitch — send out with NO free enemy
    * move (ChooseNextMon). */
   protected replaceFainted(mon: PartyMon): void {
+    this.restoreMimic(this.player);
     this.player = makeBattler(this.data, mon, true, this.save);
     this.markParticipant();
     this.sendOutMonCursors();
@@ -2403,6 +2495,7 @@ export class WildBattle implements EffectBattle {
   /** The player's side of a switch: the new mon out, the foe's trap cleared. */
   protected switchPlayer(next: PartyMon | undefined): void {
     if (!next || next.hp <= 0 || next === this.player.mon) return;
+    this.restoreMimic(this.player);
     this.player = makeBattler(this.data, next, true, this.save);
     // SendOutMon clears the FOE's trapping bit (:2341-2343)
     this.enemy.trappingTurns = undefined;
@@ -2447,6 +2540,7 @@ export class WildBattle implements EffectBattle {
   // -------------------------------------------------------------------
 
   finish(): void {
+    this.restoreMimic();
     // :4675-4682 — Pay Day's coins, picked up only on a win
     if (this.payDay > 0 && this.result === "win") {
       const save = this.save as BattleSave & { money?: number };

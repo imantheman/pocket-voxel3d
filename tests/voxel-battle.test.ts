@@ -807,12 +807,46 @@ describe("status moves and trapping (MoveEffects port)", () => {
     settle(b, input);
   }
 
-  test.skipIf(!hasGen)("every effect a move in the data uses has a record, but Mimic", () => {
+  test.skipIf(!hasGen)("every effect a move in the data uses has a record", () => {
     const missing = new Set<string>();
     for (const mv of Object.values(data!.moves)) {
       if (mv.effect && !EFFECTS[mv.effect]) missing.add(mv.effect);
     }
-    expect([...missing]).toEqual(["MIMIC_EFFECT"]);
+    expect([...missing]).toEqual([]);
+  });
+
+  test.skipIf(!hasGen)("MIMIC: the player picks one of the foe's moves; it is MIMIC again after the battle", () => {
+    for (const seed of [7, 8, 9, 10, 11]) {
+      const { b, input } = setup("PIKACHU", 20, ["MIMIC", "TACKLE"], "SQUIRTLE", 20, seed);
+      b.enemy.curMoves = [{ id: "GROWL", pp: 40 }, { id: "WATER_GUN", pp: 25 }];
+      const mon = b.player.mon;
+      tick(b, input, ["a"]); // FIGHT
+      tick(b, input, ["a"]); // MIMIC
+      settle(b, input);
+      if (!b.mimicPick) continue; // that roll missed; try the next seed
+      expect(b.phase).toBe("moveSelect");
+      expect(b.menuMoves().map((m) => m.id)).toEqual(["GROWL", "WATER_GUN"]);
+      tick(b, input, ["right"]);
+      tick(b, input, ["a"]);
+      expect(b.mimicPick).toBeNull();
+      settle(b, input);
+      expect(b.player.curMoves[0]!.id).toBe("WATER_GUN");
+      expect(b.messageLog.join("|")).toContain("learned");
+      expect(b.messageLog.join("|")).toContain("WATER GUN!");
+      // MIMIC's own PP is what the copy keeps
+      expect(b.player.curMoves[0]!.pp).toBe(39);
+      b.finish();
+      expect(mon.moves[0]!.id).toBe("MIMIC");
+      return;
+    }
+    throw new Error("MIMIC missed on every seed");
+  });
+
+  test.skipIf(!hasGen)("MIMIC: the foe copies one of the player's moves at random", () => {
+    const { b, input } = setup("PIKACHU", 5, ["GROWL"], "CLEFAIRY", 40, 3);
+    b.enemy.curMoves = [{ id: "MIMIC", pp: 10 }];
+    for (let i = 0; i < 6 && b.enemy.curMoves[0]!.id === "MIMIC"; i++) fight(b, input);
+    expect(b.enemy.curMoves[0]!.id).toBe("GROWL");
   });
 
   for (const [move, status, text] of [

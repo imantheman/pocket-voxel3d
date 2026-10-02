@@ -233,12 +233,12 @@ export class ClassicBattleUi {
       this.box(host, 4, 12, 16, 6);
       host.uiTile(4, 12, BORDER_H);
       host.uiTile(10, 12, BORDER_BR);
-      battle.player.curMoves.forEach((mv, i) => {
+      battle.menuMoves().forEach((mv, i) => {
         const def = battle.data.moves[mv.id];
         this.text(host, 6, 13 + i, def?.name ?? mv.id);
       });
       this.text(host, 1, 9, "TYPE/");
-      const sel = battle.player.curMoves[battle.moveIndex - 1];
+      const sel = battle.menuMoves()[battle.moveIndex - 1];
       const selDef = sel ? battle.data.moves[sel.id] : undefined;
       if (selDef) {
         this.text(host, 2, 10, battle.chart.displayName(selDef.type));
@@ -452,7 +452,7 @@ export class ClassicBattleUi {
       }
       if (moved) {
         // the TYPE/PP panel follows the highlighted move (PrintMenuItem)
-        const sel = battle.player.curMoves[battle.moveIndex - 1];
+        const sel = battle.menuMoves()[battle.moveIndex - 1];
         const selDef = sel ? battle.data.moves[sel.id] : undefined;
         host.uiFill(1, 10, 9, 1, SPACE);
         host.uiFill(1, 11, 9, 1, SPACE);

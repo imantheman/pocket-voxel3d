@@ -65,6 +65,11 @@ export class LinkBattle extends TrainerBattle {
    */
   lastPeerAction: BattleAction | null = null;
 
+  /** Both consoles roll the same copy (MimicEffect's link arm). */
+  protected override mimicByMenu(): boolean {
+    return false;
+  }
+
   constructor(
     data: VoxelmonData,
     save: BattleSave,

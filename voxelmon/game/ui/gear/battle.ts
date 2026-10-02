@@ -34,6 +34,8 @@ export interface GearBattle {
   choiceOpen: boolean;
   choiceYes: boolean;
   player: { name: string; curMoves: { id: string; pp: number }[]; curTypes?: readonly string[] };
+  /** The move menu's list: the foe's while MIMIC asks for one. */
+  menuMoves?(): { id: string; pp: number }[];
   shown: { text: string; codes: number[]; revealed: number }[];
   msgWaiting: boolean;
   msgPrompt: boolean;
@@ -119,8 +121,8 @@ function drawActionGrid(ctx: GearCtx, b: GearBattle, showCursor: boolean): void 
 function drawMoveSelect(ctx: GearCtx, b: GearBattle): void {
   const { host, data } = ctx;
   const s = bstate(ctx, b);
-  battleHeader(ctx, b, "MOVES");
-  const moves = b.player.curMoves;
+  battleHeader(ctx, b, b.menuMoves && b.menuMoves() !== b.player.curMoves ? "MIMIC" : "MOVES");
+  const moves = b.menuMoves ? b.menuMoves() : b.player.curMoves;
   if (typeof s.moveInfo === "number" && moves[s.moveInfo]) {
     const m = moves[s.moveInfo]!;
     const d = data.moves?.[m.id] ?? {};
@@ -362,7 +364,7 @@ export function battleTouchDown(ctx: GearCtx, b: GearBattle, x: number, y: numbe
       if (typeof s.moveInfo === "number") { s.moveInfo = null; return; }
       if (row < 2) return;
       const i = cell2x2();
-      if (i >= b.player.curMoves.length) return;
+      if (i >= (b.menuMoves ? b.menuMoves() : b.player.curMoves).length) return;
       b.moveIndex = i + 1;
       armed = true;
       return;

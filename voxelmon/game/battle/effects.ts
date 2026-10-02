@@ -71,6 +71,8 @@ export interface EffectBattle {
   ): string[];
   animNext(name: string, isPlayer: boolean): void;
   selfDestruct(user: WildBattler): void;
+  /** MIMIC_EFFECT's copy (battle.ts mimic): the menu, or a random slot. */
+  mimic?(ctx: EffectCtx): void;
   /** Pay Day's scattered coins, picked up if the battle is won. */
   payDay: number;
   /** A trainer battle: Teleport and Roar/Whirlwind do nothing there. */
@@ -705,6 +707,14 @@ const FULL: Record<string, FullSpec> = {
       return null;
     },
   },
+  // MimicEffect: the animation plays only once the copy is made
+  MIMIC_EFFECT: {
+    announceAnim: false,
+    perform: (ctx) => {
+      if (ctx.battle.mimic) ctx.battle.mimic(ctx);
+      else ctx.say("But, it failed!");
+    },
+  },
   MIRROR_MOVE_EFFECT: {
     callsMove: (ctx) => {
       const last = ctx.target.lastMove;
@@ -733,9 +743,9 @@ for (const [id, spec] of Object.entries(FULL)) {
   EFFECTS[id] = record;
 }
 
-// MIMIC_EFFECT is the one reference effect not registered: its copy menu
-// pauses the message queue mid-move, which this port's queue has no row
-// for yet. It takes the unknown-status fallback ("But, it failed!").
+// MIMIC_EFFECT pauses the queue for its copy menu the way learnMove pauses
+// it for the forget list (battle.ts mimic / the moveSelect phase's
+// mimicPick).
 
 const warned = new Set<string>();
 
