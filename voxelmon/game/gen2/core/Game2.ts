@@ -179,6 +179,11 @@ export class Game2 {
       this.phase = "error";
       return false;
     }
+    // The battle animations' table is read on the first battle's first frame
+    // otherwise, and parsing it there is a quarter-second stall on the 3DS as
+    // the battle screen comes up; here it rides the load that is already
+    // being waited on. (It stays resident either way once a battle is had.)
+    void this.data?.gen2BattleAnims;
     this.phase = "play";
     return true;
   }
