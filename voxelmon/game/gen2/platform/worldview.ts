@@ -114,6 +114,20 @@ export class WorldView {
   private lastNeighbours = "";
   private lastTint = -1;
   private started = false;
+  /** The flatWorld op's last value (-1 never stated). */
+  private lastFlat = -1;
+
+  /** No world at all (the title, the intro, the main menu): the host is
+   * told the voxel world is not seen, so it neither builds nor draws one.
+   * Only tinting it black left the map the host put up at boot standing
+   * beside the title screen -- a black wedge of room under the sky colour,
+   * on any card whose TILT SHIFT is off (a new card's default). */
+  private stateFlat(on: boolean): void {
+    const v = on ? 1 : 0;
+    if (v === this.lastFlat) return;
+    this.lastFlat = v;
+    (this.host as { flatWorld?: (on: number) => void }).flatWorld?.(v);
+  }
 
   private readonly stage: BattleStage;
 
@@ -159,11 +173,13 @@ export class WorldView {
         this.host.tint(0xff000000);
         this.lastTint = 0xff000000;
       }
+      this.stateFlat(!game.world || !game.world.map);
       this.clear();
       return;
     }
     this.emitTint(game);
     const world = game.world;
+    this.stateFlat(!world || !world.map);
     // (a battle staged in 3D reads only the maps and the daytime: no people)
     const lean = this.stage.wanted(game) ? "stage" : true;
     const vs: WorldViewState | null = world && world.map && typeof world.viewState === "function" ? world.viewState(lean) : null;

@@ -6981,7 +6981,13 @@ if page_tex.len() < pak_static.atlases.len() {
             // picture that stands out of the screen is the same picture
             // shifted the other way for each eye.
             let render_to = cast_lifetime_to_closure(|frame, target, mvp, eye: f32| {
-                let sky = if pic_active { 0xFFFF_FFFFu32 } else { tint_rgba8(SKY, scene_tint) };
+                // Gen 2 with no voxel world (the title, the intro, the main
+                // menu: worldview.ts states flatWorld then) clears to white,
+                // the Gold screen's own ground, rather than a sky tinted by the
+                // black that stood the world down -- which came out pure blue
+                // beside the title on a new card.
+                let gen2_blank = cfg!(feature = "gen2") && unsafe { voxel::scene() }.flat_world;
+                let sky = if pic_active || gen2_blank { 0xFFFF_FFFFu32 } else { tint_rgba8(SKY, scene_tint) };
                 if let Some((tw, _, _)) = tilt_ref {
                     // TILT SHIFT: the world (and its cards) into the texture;
                     // the screen gets it below, before the UI.
