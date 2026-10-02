@@ -27,6 +27,8 @@ import { Strings } from "../shared/core/Strings.ts";
 import { Screens } from "../shared/ui/Screens.ts";
 import type { LinkSession } from "../../world/link.ts";
 import type { CableClub } from "./CableClub.ts";
+import { LinkRecords, type LinkResult } from "./LinkRecords.ts";
+import { Save } from "./Save.ts";
 
 const TEXT_WAIT = Strings.source("Waiting…");
 const TEXT_NO_ITEMS = Strings.source("Items can't be\nused here.");
@@ -195,6 +197,24 @@ export class LinkBattle2 {
   }
 }
 
+/** AddLastLinkBattleToLinkRecord: the result into the record, in the save
+ *  in play and in the one on the card. On the cart the record is its own
+ *  SRAM block, written at once whatever the player does after; here it is a
+ *  field of the one save file, so only that field of the stored file changes
+ *  (the player is standing in the COLOSSEUM, which is no place to save). */
+export function recordLinkResult(game: any, name: string, id: number, result: LinkResult): void {
+  const t = LinkRecords.add(game.save, name, id, result);
+  try {
+    const [stored] = Save.load();
+    if (stored) {
+      (stored as any).linkRecord = t;
+      Save.save(stored);
+    }
+  } catch {
+    // no card (a test): the record lives in the save in play
+  }
+}
+
 /** The COLOSSEUM machine: both parties and half a seed each cross, then the
  *  battle; `done` when it is over (the party untouched). */
 export function startLinkBattle(game: any, club: CableClub, done: () => void): void {
@@ -224,8 +244,11 @@ export function startLinkBattle(game: any, club: CableClub, done: () => void): v
       battle: driver.battle,
       save: game.save,
       link: driver,
-      onDone: () => {
+      onDone: (outcome: any) => {
         club.battle = null;
+        if (outcome === "win" || outcome === "lose" || outcome === "draw") {
+          recordLinkResult(game, String(s.peerName || p.otName || "?"), Number(p.otId ?? 0), outcome);
+        }
         if (game.stack.top()?.screenId === "Gen2BattleState") game.stack.pop();
         finish();
       },

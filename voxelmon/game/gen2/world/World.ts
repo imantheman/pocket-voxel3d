@@ -4689,6 +4689,17 @@ export class World {
       showDiploma: (onDone: any) => {
         this.showDiploma(onDone);
       },
+      showLinkRecord: (onDone: any) => {
+        const game = this.game;
+        if (!(game && game.stack)) return onDone?.();
+        const ok = this.pushScreen("Gen2LinkRecord", {
+          onClose: () => {
+            game.stack.pop();
+            onDone?.();
+          },
+        });
+        if (!ok) onDone?.();
+      },
       showPhotoStudio: (mon: any, onDone: any) => {
         this.showPhotoStudio(mon, onDone);
       },

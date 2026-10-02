@@ -2099,6 +2099,19 @@ H.Diploma = function* (vm: Vm): Script<void> {
   });
 };
 
+// ---- the link record ---------------------------------------------------------
+//
+// The Pokecenter 2F's sign: _DisplayLinkRecord (engine/link/link.asm), the
+// COLOSSEUM's wins, losses and draws (core/LinkRecords.ts), then
+// WaitPressAorB_BlinkCursor. The screen is ui/LinkRecord.
+H.DisplayLinkRecord = function* (vm: Vm): Script<void> {
+  const h = hooks(vm);
+  if (!h.showLinkRecord) return;
+  yield* Specials.block(vm, (done) => {
+    h.showLinkRecord(() => done(true));
+  });
+};
+
 // ---- Mom's savings ----------------------------------------------------------
 //
 // BankOfMom (engine/events/mom.asm), reached from PlayersHouse1F's MomScript
@@ -2695,7 +2708,6 @@ const STUB_ROWS: Array<[string, number | undefined, string]> = [
   // is not kept.
   // maps/PokeCenter2F.asm:200-203: 2 is .MonMoveTooNew; 0 falls through to
   // WaitForLinkedFriend and lands on .FriendNotReady
-  ["DisplayLinkRecord", undefined, "link cable: no link record is kept"],
   // Mystery Gift.  Infrared between two carts; sMysteryGiftItem is therefore
   // permanently empty.
   ["CheckMysteryGift", 0, "Mystery Gift: no infrared, so no gift is waiting"],

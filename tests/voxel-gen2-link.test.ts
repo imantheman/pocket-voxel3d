@@ -9,6 +9,8 @@ import { Mon } from "../voxelmon/game/gen2/battle/Mon.ts";
 import { LinkTradeMenu } from "../voxelmon/game/gen2/ui/LinkTradeMenu.ts";
 import { TimeCapsule } from "../voxelmon/game/gen2/core/TimeCapsule.ts";
 import { startLinkBattle } from "../voxelmon/game/gen2/core/LinkBattle2.ts";
+import { LinkRecords } from "../voxelmon/game/gen2/core/LinkRecords.ts";
+import { LinkRecord } from "../voxelmon/game/gen2/ui/LinkRecord.ts";
 import { LINK_SEATS, LinkSession, LoopbackLink } from "../voxelmon/game/world/link.ts";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -193,6 +195,13 @@ function colosseum(pa: [string, number][], pb: [string, number][], setup?: (a: a
     expect(oa).toBe(null);
     // the save's party is untouched (the battle fought on a copy)
     expect(JSON.stringify(a.save.party)).toBe(partyBefore);
+    // the record: one battle each, against each other, mirrored
+    const ra = LinkRecords.of(a.save);
+    const rb = LinkRecords.of(b.save);
+    expect(ra.rows.map((x) => [x.name, x.id])).toEqual([["BBB", 22222]]);
+    expect(rb.rows.map((x) => [x.name, x.id])).toEqual([["AAA", 11111]]);
+    expect([ra.win, ra.lose, ra.draw]).toEqual([rb.lose, rb.win, rb.draw]);
+    expect(ra.win + ra.lose + ra.draw).toBe(1);
     return turns;
 }
 
@@ -223,6 +232,39 @@ class SaveHost extends RecorderHost {
   saveWrite(text: string): void { this.saved = text; }
   saveData(): string | undefined { return this.saved; }
 }
+
+describe("gen2 link record", () => {
+  test("five opponents, the most battles first; a sixth takes the fewest's row", () => {
+    const save: any = {};
+    for (let i = 0; i < 3; i++) LinkRecords.add(save, "ANN", 1, "win");
+    LinkRecords.add(save, "BOB", 2, "lose");
+    LinkRecords.add(save, "BOB", 2, "draw");
+    LinkRecords.add(save, "CAL", 3, "win");
+    LinkRecords.add(save, "DEE", 4, "win");
+    LinkRecords.add(save, "EVE", 5, "lose");
+    // the same name with another ID is someone else
+    LinkRecords.add(save, "ANN", 9, "lose");
+    const t = LinkRecords.of(save);
+    expect([t.win, t.lose, t.draw]).toEqual([5, 3, 1]);
+    expect(t.rows.map((x) => `${x.name}${x.id}`)).toEqual(["ANN1", "BOB2", "CAL3", "DEE4", "ANN9"]);
+    expect(t.rows[0]).toMatchObject({ win: 3, lose: 0, draw: 0 });
+  });
+  test.skipIf(!gold)("the sign's screen: the totals, then each opponent over their counts", () => {
+    useGoldGen();
+    const g = goldGame("AAA", [["CYNDAQUIL", 5]]);
+    LinkRecords.add(g.save, "BBB", 22222, "win");
+    LinkRecords.add(g.save, "BBB", 22222, "draw");
+    const screen = LinkRecord.new(g, {});
+    const at = (x: number, y: number) => screen.lines().find(([lx, ly]) => lx === x && ly === y)?.[2];
+    expect(at(1, 0)).toBe("AAA's RECORD");
+    expect(at(0, 2)).toBe("TOTAL  WIN LOSE DRAW");
+    expect([at(6, 4), at(11, 4), at(16, 4)]).toEqual(["   1", "   0", "   1"]);
+    expect(at(0, 8)).toBe("BBB");
+    expect([at(6, 9), at(11, 9), at(16, 9)]).toEqual(["   1", "   0", "   1"]);
+    expect(at(0, 10)).toBe("  ---");
+    expect([at(9, 11), at(14, 11), at(19, 11)]).toEqual(["-", "-", "-"]);
+  });
+});
 
 describe("gen2 TIME CAPSULE to a Kanto game", () => {
   test.skipIf(!gold || !hasKanto)("a Red console and Gold's TIME CAPSULE trade, each in its own terms", () => {
