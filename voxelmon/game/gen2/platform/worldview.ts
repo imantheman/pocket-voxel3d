@@ -316,7 +316,10 @@ export class WorldView {
     const frames = def?.frames ?? 6;
     const walker = def?.walker ?? frames > 1;
     // the side of them the camera sees: with it swung round, a world facing
-    // shows as the pose turned back the other way (scene.ts poseDir)
+    // shows as the pose turned back the other way (scene.ts poseDir). A view
+    // that chose its own frame (every person: Player/Npc.viewState take the
+    // camera's turns) is drawn as it is -- turning it here was skipped for
+    // those, which is why they faced the world way and moonwalked
     const facing = this.camTurns ? rotateFacing(a.facing ?? "down", -this.camTurns) : (a.facing ?? "down");
     const walking = (a.phase ?? 0) === 1;
     const frame = a.frame ?? (frames <= 1 ? 0 : walking && walker ? WALK[facing]! : STAND[facing]!);

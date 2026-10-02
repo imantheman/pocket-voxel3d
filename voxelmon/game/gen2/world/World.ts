@@ -1325,7 +1325,7 @@ export function peopleView_W6(self: World, out: WorldActorEntry[], hideAll: bool
       && !(truthy(entity.grassShake) && truthy(entity.moving));
     const item: WorldActorEntry = {
       kind: entry.kind,
-      view: entity.viewState(),
+      view: entity.viewState(self.game ? (self.game.camTurns ?? 0) : 0),
       ox: entry.ox,
       oy: entry.oy,
       onMap,
@@ -9843,7 +9843,7 @@ export class World {
 
     let playerView: WorldView["player"] = undefined;
     if (truthy(p)) {
-      const view = p.viewState();
+      const view = p.viewState(this.game ? (this.game.camTurns ?? 0) : 0);
       playerView = {
         view,
         visible: ready && !peopleHidden && !hideAll && !hidePlayer
@@ -9935,7 +9935,7 @@ export class World {
     if (people && ready && !peopleHidden) peopleView_W6(this, actors, hideAll, hidePlayer, crystal, true);
     let playerView: WorldView["player"] = undefined;
     if (people && truthy(p)) {
-      const view = p.viewState();
+      const view = p.viewState(this.game ? (this.game.camTurns ?? 0) : 0);
       playerView = {
         view,
         visible: ready && !peopleHidden && !hideAll && !hidePlayer

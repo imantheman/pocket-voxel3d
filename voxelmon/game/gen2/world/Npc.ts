@@ -14,6 +14,7 @@ import { Runtime } from "../shared/mods/Runtime.ts";
 import { random } from "../platform/rng.ts";
 import { format, tostring } from "../platform/lua.ts";
 import { SpriteHandle, spriteGfx, spritePose, type ActorView, type Facing } from "./Player.ts";
+import { rotateFacing } from "./rotate.ts";
 
 // Lua: Npc.lua:14
 const STEP_FRAMES = 16;
@@ -722,7 +723,11 @@ export class NPC {
    *  - otherwise the walking pose, with OBJECT_ACTION_BOUNCE's frame override
    *    (bounceFrame()) for a SPRITEMOVEDATA_POKEMON object.
    */
-  viewState(): ActorView {
+  viewState(camTurns = 0): ActorView {
+    // The pose is the side of them the camera sees: with it swung `camTurns`
+    // quarter turns, the world facing turned back the other way (the Kanto
+    // games' poseDir, scene.ts). The view's `facing` stays the world one.
+    const seen: Facing = camTurns ? rotateFacing(this.facing, -camTurns) : this.facing;
     const yOffset = this.spriteYOffset ?? 0;
     const extra: Record<string, unknown> = { inGrass: this.inGrass, moving: this.moving };
     const base = {
@@ -750,12 +755,12 @@ export class NPC {
     if (this.rockSmash) {
       extra.rockSmash = this.rockSmash.frame;
       const phase = this.walkPhase();
-      const [frame, mirror] = spritePose(this.sprite, this.facing, phase, this.stepFlip);
+      const [frame, mirror] = spritePose(this.sprite, seen, phase, this.stepFlip);
       return { ...base, facing: this.facing, phase, flip: this.stepFlip, frame, mirror,
         visible: (this.rockSmash.frame % 2) !== 0, extra };
     }
     const phase = this.walkPhase();
-    let [frame, mirror] = spritePose(this.sprite, this.facing, phase, this.stepFlip);
+    let [frame, mirror] = spritePose(this.sprite, seen, phase, this.stepFlip);
     const bounce = this.bounceFrame();
     // SpriteRenderer:draw's frameOverride: a frame the sheet has, unmirrored.
     if (bounce != null && bounce < this.sprite.frameCount) {

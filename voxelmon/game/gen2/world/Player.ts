@@ -9,6 +9,7 @@
 // math needs, and the OBJ palette World hands it (setObjPalette).
 
 import { Map } from "./Map.ts";
+import { rotateFacing } from "./rotate.ts";
 import { Movement } from "../script/Movement.ts";
 import { Runtime } from "../shared/mods/Runtime.ts";
 
@@ -425,9 +426,12 @@ export class Player {
    * SPIN_FACINGS every 4 frames with phase 0, and a flickering spin hides the
    * sprite on odd frames (map_objects.asm:1481-1493).
    */
-  viewState(): ActorView {
+  viewState(camTurns = 0): ActorView {
     const yOffset = this.spriteYOffset ?? 0;
     let facing: Facing = this.facing;
+    // the pose (and the rod) the camera sees, swung `camTurns` quarter turns
+    // (Npc.viewState; scene.ts poseDir); `facing` stays the world one
+    const turn = (f: Facing): Facing => (camTurns ? rotateFacing(f, -camTurns) : f);
     let phase = this.walkPhase();
     const flip = this.drawFlip();
     let visible = !this.hidden;
@@ -437,10 +441,10 @@ export class Player {
       phase = 0;
       extra.fishing = {
         sheet: this.fishSheet,
-        poseRow: FISH_ROW[facing] ?? 0,
-        rod: ROD_OAM[facing] ?? ROD_OAM.down,
+        poseRow: FISH_ROW[turn(facing)] ?? 0,
+        rod: ROD_OAM[turn(facing)] ?? ROD_OAM.down,
       };
-      const [frame] = spritePose(this.sprite, facing, 0, false);
+      const [frame] = spritePose(this.sprite, turn(facing), 0, false);
       return {
         px: this.px, py: this.py + yOffset, cellX: this.cellX, cellY: this.cellY,
         facing, phase, flip: false, frame, mirror: false,
@@ -458,7 +462,7 @@ export class Player {
     }
     if (this.jumping) extra.jumping = true;
     if (this.grassShake != null) extra.grassShake = this.grassShake;
-    const [frame, mirror] = spritePose(this.sprite, facing, phase, flip);
+    const [frame, mirror] = spritePose(this.sprite, turn(facing), phase, flip);
     return {
       px: this.px, py: this.py + yOffset, cellX: this.cellX, cellY: this.cellY,
       facing, phase, flip, frame, mirror,
