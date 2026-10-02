@@ -300,6 +300,22 @@ export class Lcd {
   }
 
   /**
+   * This frame's palette table as a string: how many slots each layer has
+   * handed out and their colours -- everything palette() and findColour()
+   * answer from. Two moments with the same string answer every palette
+   * question the same way (screen.ts cachedBlock replays on that).
+   */
+  paletteState(): string {
+    const nb = this.bgPalKeys.length;
+    const no = this.objPalKeys.length;
+    let out = `${nb},${no}:`;
+    const cols = this.s.colours;
+    for (let i = 0; i < nb * 4; i++) out += cols[i] + ",";
+    for (let i = 64; i < 64 + no * 4; i++) out += cols[i] + ",";
+    return out;
+  }
+
+  /**
    * A palette slot already handed out this frame that has colour `c`, as
    * slot*4 + index, or -1. Lets a flat fill reuse a text palette's paper
    * instead of spending a slot of its own.

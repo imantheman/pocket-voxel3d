@@ -36,7 +36,7 @@ import { Nests } from "../core/Nests.ts";
 import { Unown } from "../core/Unown.ts";
 import { FLAG_WIN_ON } from "../platform/lcd.ts";
 import { tonumber, tostring } from "../platform/lua.ts";
-import G, { currentLcd, type LcdImage, type Quad } from "../platform/screen.ts";
+import G, { currentLcd, type LcdImage, type Quad, cachedBlock, keyOf } from "../platform/screen.ts";
 import { TypeChart } from "../shared/battle/TypeChart.ts";
 import { Sound } from "../shared/core/Sound.ts";
 import { Strings } from "../shared/core/Strings.ts";
@@ -754,11 +754,8 @@ export class PokedexMenu {
 
   // Lua: PokedexMenu.lua:599
   fill(id: number, tx: number, ty: number, wide: number, high: number): void {
-    for (let y = ty; y <= ty + high - 1; y++) {
-      for (let x = tx; x <= tx + wide - 1; x++) {
-        this.tile(id, x, y);
-      }
-    }
+    // the sheet's block fill: the same cells as tile() each, one lookup
+    if (this.sheet) this.sheet.fill(id, tx, ty, wide, high);
   }
 
   // Lua: PokedexMenu.lua:607
@@ -802,6 +799,17 @@ export class PokedexMenu {
    * into the BG map and SCX scrolls it, as on the cart.
    */
   drawMainBackground(): void {
+    // the same cells every frame until the totals, the entry shown or the
+    // colours change: recorded once, replayed after (screen.ts cachedBlock)
+    const [seen, caught] = this.totals();
+    const cur: any = this.current();
+    const key = `bg:${seen},${caught}:${cur?.species}:${cur?.seen ? 1 : 0}${cur?.caught ? 1 : 0}`
+      + `:${this.mode()}:${keyOf(this.dexPalette)}:${keyOf(this.sheet)}:${GbcPalette.stateKey()}`;
+    cachedBlock(this, key, () => this.drawMainBackgroundNow());
+  }
+
+  /** drawMainBackground's drawing. */
+  private drawMainBackgroundNow(): void {
     G.push();
     G.map = 0;
     regs({ scx: SCX });
@@ -838,6 +846,16 @@ export class PokedexMenu {
    * in OLD mode) and only twelve of its columns fit.
    */
   drawMainWindow(): void {
+    // the list window is the same cells until it scrolls or the colours
+    // change (screen.ts cachedBlock)
+    const [seen, caught] = this.totals();
+    const key = `win:${this.mode()}:${this.scroll}:${keyOf(this.rows)}:${this.rows.length}:${seen},${caught}`
+      + `:${keyOf(this.sheet)}:${keyOf(this.gfx)}:${GbcPalette.stateKey()}`;
+    cachedBlock(this, key, () => this.drawMainWindowNow());
+  }
+
+  /** drawMainWindow's drawing. */
+  private drawMainWindowNow(): void {
     const old = this.mode() === "OLD";
     G.push();
     G.map = 1;
@@ -888,6 +906,14 @@ export class PokedexMenu {
 
   // Lua: PokedexMenu.lua:753
   drawCursorObjs(): void {
+    // the cursor's objects stand still until it moves (screen.ts cachedBlock)
+    const key = `cur:${this.mode()}:${this.index - this.scroll}:${keyOf(this.objs)}:${keyOf(this.gfx)}`
+      + `:${GbcPalette.stateKey()}`;
+    cachedBlock(this, key, () => this.drawCursorObjsNow());
+  }
+
+  /** drawCursorObjs's drawing. */
+  private drawCursorObjsNow(): void {
     const objs = this.objs;
     if (!(objs && objs.available())) {
       // Without the OBJ sheet, mark the row the way every other Gen 2 list does.

@@ -23,7 +23,7 @@
 // Here every tile is one Gold-screen cell (the sheet is a cooked graphic),
 // and palette zones pick the palette each cell goes through.
 
-import G, { type LcdImage, type Quad } from "../platform/screen.ts";
+import G, { type LcdImage, type Quad, putTile } from "../platform/screen.ts";
 import { Assets } from "../shared/render/Assets.ts";
 import { GbcPalette } from "../shared/render/GbcPalette.ts";
 import { Chrome } from "./Chrome.ts";
@@ -136,13 +136,27 @@ export class PackGfx {
     if (!image) return;
     G.setColor(1, 1, 1, 1);
     const colors = this.colorsAt(tx, ty);
-    const body = (): void => {
-      G.draw(image, this.quad(image, tilesWide, index), tx * 8, ty * 8);
-    };
+    // the one putTile G.draw ends in for an 8x8 quad of the sheet (what
+    // quad() frames), written out: no quad key string, no closure -- this
+    // runs a hundred times a frame for the pack's background
+    const col = index % tilesWide;
+    const row = Math.floor(index / tilesWide);
+    const id = image.ids && col < image.tw && row < image.th ? image.ids[row * image.tw + col] : undefined;
+    if (id === undefined) return;
+    const x = Math.round(G.tx + tx * 8);
+    const y = Math.round(G.ty + ty * 8);
     if (colors && GbcPalette.available()) {
-      GbcPalette.with(colors, body);
+      const pal = G.palette;
+      const keyed = G.keyed;
+      GbcPalette.use(colors);
+      try {
+        putTile(id, x, y, false, false, image.obj);
+      } finally {
+        G.palette = pal;
+        G.keyed = keyed;
+      }
     } else {
-      body();
+      putTile(id, x, y, false, false, image.obj);
     }
   }
 

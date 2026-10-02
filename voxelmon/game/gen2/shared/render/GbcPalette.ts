@@ -35,6 +35,12 @@ const CLASSIC_SHADES: Palette4 = [
 // land on the same palette object too. Keyed by the four colours packed two
 // to a number (48 bits, exact); cleared if a long fade fills it.
 const asPaletteCache = new WeakMap<object, Palette4>();
+/** stateKey's count of custom ramps seen (a new table, a new key). */
+let lastRampSeen: unknown = null;
+let rampGeneration = 0;
+/** resolvedPalette's last question and answer. */
+const lastResolved: { colors: unknown; mode: string; bgp: unknown; ramp: unknown; out: Palette4 } =
+  { colors: null, mode: "", bgp: null, ramp: null, out: null as unknown as Palette4 };
 const byContent = new Map<number, Map<number, Palette4>>();
 let byContentCount = 0;
 const BY_CONTENT_MAX = 4096;
@@ -177,13 +183,40 @@ export const GbcPalette = {
 
   /** GbcPalette.lua:271 -- draw through `colors` (rBGP folded in). */
   use(colors: Colors | null | undefined): boolean {
-    G.palette = asPalette(GbcPalette.remap(GbcPalette.resolve(colors ?? DMG_SHADES), GbcPalette.bgp));
+    G.palette = GbcPalette.resolvedPalette(colors);
     G.keyed = false;
     return true;
   },
+  /**
+   * What resolving a palette depends on besides the table itself: the COLOR
+   * mode, the custom ramp and the rBGP byte (a cachedBlock key carries it).
+   */
+  stateKey(): string {
+    if (GbcPalette.customRamp !== lastRampSeen) {
+      lastRampSeen = GbcPalette.customRamp;
+      rampGeneration++;
+    }
+    return `${GbcPalette.mode}|${GbcPalette.bgp}|${rampGeneration}`;
+  },
+
   /** The four colours use(colors) would draw with, the draw state untouched. */
   resolvedPalette(colors: Colors | null | undefined): Palette4 {
-    return asPalette(GbcPalette.remap(GbcPalette.resolve(colors ?? DMG_SHADES), GbcPalette.bgp));
+    // the last answer again for the same table under the same mode, ramp and
+    // rBGP: a screen asks for one palette many times running (a sheet's
+    // tiles), and every step below is keyed on the table's identity already
+    const c = colors ?? DMG_SHADES;
+    const last = lastResolved;
+    if (c === last.colors && GbcPalette.mode === last.mode && GbcPalette.bgp === last.bgp
+        && GbcPalette.customRamp === last.ramp) {
+      return last.out;
+    }
+    const out = asPalette(GbcPalette.remap(GbcPalette.resolve(c), GbcPalette.bgp));
+    last.colors = c;
+    last.mode = GbcPalette.mode;
+    last.bgp = GbcPalette.bgp;
+    last.ramp = GbcPalette.customRamp;
+    last.out = out;
+    return out;
   },
   /** GbcPalette.lua:276 -- without the rBGP byte. */
   useRaw(colors: Colors | null | undefined): boolean {

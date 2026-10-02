@@ -16,7 +16,8 @@ import { CommonText } from "../core/CommonText.ts";
 import { Happiness } from "../core/Happiness.ts";
 import { Save as Gen2Save } from "../core/Save.ts";
 import { format, tostring, tonumber } from "../platform/lua.ts";
-import G from "../platform/screen.ts";
+import G, { cachedBlock, keyOf } from "../platform/screen.ts";
+import { GbcPalette } from "../shared/render/GbcPalette.ts";
 import { GameVersion } from "../shared/core/GameVersion.ts";
 import { Sound } from "../shared/core/Sound.ts";
 import { Strings } from "../shared/core/Strings.ts";
@@ -1406,7 +1407,11 @@ export class PackMenu {
       // Pack_InitGFX's screen: the header strip, the patterned left column, the
       // bag picture for this pocket and the pocket plaque, then Textbox at
       // (0,12) for the item description.
-      this.gfx.draw(this.pocket().id);
+      // the pocket's background is the same cells until the pocket changes
+      // (screen.ts cachedBlock)
+      const pocketId = this.pocket().id;
+      cachedBlock(this, `gfx:${pocketId}:${keyOf(this.gfx)}:${GbcPalette.stateKey()}`,
+        () => this.gfx.draw(pocketId));
       Chrome.box(0, PackGfx.DESCRIPTION_Y, 20, 6);
       this.drawList(LIST_X, LIST_Y);
       this.drawDescription(PackGfx.DESCRIPTION_Y + 2);

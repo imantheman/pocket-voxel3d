@@ -25,7 +25,7 @@
 
 import { format, truthy } from "../platform/lua.ts";
 import { random } from "../platform/rng.ts";
-import G, { type LcdImage } from "../platform/screen.ts";
+import G, { type LcdImage, cachedBlock, keyOf } from "../platform/screen.ts";
 import { Chrome } from "./Chrome.ts";
 import { TileSheet } from "./TileSheet.ts";
 import { FieldMoves } from "../world/FieldMoves.ts";
@@ -1813,9 +1813,34 @@ export class Pokegear {
   // Lua: Pokegear.lua:1936
   drawTilemap(cells: number[] | undefined): void {
     if (!cells) return;
-    for (let index = 0; index < SCREEN_W * SCREEN_H; index++) {
-      const tile = cells[index];
-      if (tile != null) this.tile(tile, index % SCREEN_W, Math.floor(index / SCREEN_W));
+    // a card's tilemap draws the same cells every frame: recorded once,
+    // replayed after while its palettes stand (screen.ts cachedBlock)
+    const key = `tm:${keyOf(cells)}:${keyOf(this.pals())}:${keyOf(this.sheet)}:${GbcPalette.stateKey()}`;
+    cachedBlock(this, key, () => this.drawTilemapNow(cells));
+  }
+
+  /** drawTilemap's drawing. */
+  private drawTilemapNow(cells: number[]): void {
+    // A row's run of SPACE or BLANK cells is one fill on the 8px grid: the
+    // same cells as a fill each (tile() fills those two with a flat colour),
+    // at a fraction of the calls -- a card is mostly plate and ground.
+    const grid = G.tx % 8 === 0 && G.ty % 8 === 0;
+    for (let y = 0; y < SCREEN_H; y++) {
+      for (let x = 0; x < SCREEN_W; x++) {
+        const tile = cells[y * SCREEN_W + x];
+        if (tile == null) continue;
+        if (grid && (tile === SPACE_TILE || tile === BLANK_TILE)) {
+          let end = x + 1;
+          while (end < SCREEN_W && cells[y * SCREEN_W + end] === tile) end++;
+          const c = tile === SPACE_TILE ? this.paperColor() : this.groundColor();
+          G.setColor(c[0]! / 255, c[1]! / 255, c[2]! / 255, 1);
+          G.rectangle("fill", x * 8, y * 8, (end - x) * 8, 8);
+          G.setColor(1, 1, 1, 1);
+          x = end - 1;
+          continue;
+        }
+        this.tile(tile, x, y);
+      }
     }
   }
 
@@ -1850,6 +1875,14 @@ export class Pokegear {
 
   // Lua: Pokegear.lua:1967 -- Pokegear_FinishTilemap's strip.
   drawStrip(): void {
+    // the icon strip only changes with the cards (screen.ts cachedBlock)
+    const key = `strip:${keyOf(this.cards)}:${this.cards.length}:${keyOf(this.pals())}:${keyOf(this.sheet)}`
+      + `:${GbcPalette.stateKey()}`;
+    cachedBlock(this, key, () => this.drawStripNow());
+  }
+
+  /** drawStrip's drawing. */
+  private drawStripNow(): void {
     for (let x = 0; x <= 7; x++) {
       this.tile(BLANK_TILE, x, 0);
       this.tile(BLANK_TILE, x, 1);
@@ -1892,7 +1925,16 @@ export class Pokegear {
 
   // Lua: Pokegear.lua:2031
   drawClock(): void {
+    // the whole card is the same cells until the minute turns (screen.ts
+    // cachedBlock)
     const [hour, minute, weekday] = this.clockParts();
+    const key = `clock:${hour}:${minute}:${weekday}:${keyOf(this.cards)}:${keyOf(this.pals())}:${keyOf(this.sheet)}`
+      + `:${this.phoneText("PressButton")}:${GbcPalette.stateKey()}`;
+    cachedBlock(this, key, () => this.drawClockNow(hour, minute, weekday));
+  }
+
+  /** drawClock's drawing. */
+  private drawClockNow(hour: number, minute: number, weekday: number): void {
     this.drawTilemap(this.gfx && this.gfx.cards ? this.gfx.cards.clock : undefined);
     this.drawStrip();
     this.text(" " + Strings.get("SWITCH"), 12, 1);
@@ -2008,27 +2050,33 @@ export class Pokegear {
     if (this.fly) {
       this.drawFlyBubble();
     } else {
-      if (this.townMap) {
-        this.drawTownMapRule();
-      } else {
-        this.drawStrip();
-        // The header's own bottom rule: $07 across (1,2), $06 and $17 caps.
-        this.tile(0x06, 0, 2);
-        for (let x = 1; x <= 18; x++) this.tile(0x07, x, 2);
-        this.tile(0x17, 19, 2);
-      }
-
-      // PokegearMap_UpdateLandmarkName: ClearBox(8,0) 2x12 with ' ', $34 at
-      // (8,0), the name at (9,0) with <LF> stepping one row.
-      G.setColor(1, 1, 1, 1);
-      this.drawPlate(8, 0, 12, 2);
-      this.tile(0x34, 8, 0);
+      // the header and the landmark plate: the same cells until the
+      // landmark under the cursor changes (screen.ts cachedBlock)
       const name = current ? current.name ?? "" : "";
-      let row = 0;
-      for (const line of String(name).split("\n")) {
-        if (row < 2) this.text(line, 9, row);
-        row++;
-      }
+      const key = `maphead:${this.townMap ? 1 : 0}:${name}:${keyOf(this.cards)}:${keyOf(this.pals())}`
+        + `:${keyOf(this.sheet)}:${GbcPalette.stateKey()}`;
+      cachedBlock(this, key, () => {
+        if (this.townMap) {
+          this.drawTownMapRule();
+        } else {
+          this.drawStrip();
+          // The header's own bottom rule: $07 across (1,2), $06 and $17 caps.
+          this.tile(0x06, 0, 2);
+          for (let x = 1; x <= 18; x++) this.tile(0x07, x, 2);
+          this.tile(0x17, 19, 2);
+        }
+
+        // PokegearMap_UpdateLandmarkName: ClearBox(8,0) 2x12 with ' ', $34 at
+        // (8,0), the name at (9,0) with <LF> stepping one row.
+        G.setColor(1, 1, 1, 1);
+        this.drawPlate(8, 0, 12, 2);
+        this.tile(0x34, 8, 0);
+        let row = 0;
+        for (const line of String(name).split("\n")) {
+          if (row < 2) this.text(line, 9, row);
+          row++;
+        }
+      });
     }
 
     // Two OBJs: RED_WALK on the PLAYER's landmark, the POKEGEAR_ARROW on the
@@ -2183,17 +2231,37 @@ export class Pokegear {
     this.drawStrip();
     this.drawTuningKnob();
     const station = this.currentStation();
-    // UpdateRadioStation prints the name at (2,9); dead air prints nothing.
-    this.text((station && station.name) || "", 2, 9);
-    this.textbox(0, 12, 18, 4);
     const radio = this.radio;
-    if (!(station && station.station && radio)) return;
-    if (radio.top !== "") this.text(radio.top, 1, 14);
-    if (radio.bottom !== "") this.text(radio.bottom, 1, 16);
+    // the station's name and the box's two lines: the same cells until one
+    // of them changes (screen.ts cachedBlock)
+    const live = !!(station && station.station && radio);
+    const key = `radio:${(station && station.name) || ""}:${live ? `${radio!.top}\u0000${radio!.bottom}` : "-"}`
+      + `:${keyOf(this.pals())}:${GbcPalette.stateKey()}`;
+    cachedBlock(this, key, () => {
+      // UpdateRadioStation prints the name at (2,9); dead air prints nothing.
+      this.text((station && station.name) || "", 2, 9);
+      this.textbox(0, 12, 18, 4);
+      if (!live) return;
+      if (radio!.top !== "") this.text(radio!.top, 1, 14);
+      if (radio!.bottom !== "") this.text(radio!.bottom, 1, 16);
+    });
   }
 
   // Lua: Pokegear.lua:2365
   drawPhone(): void {
+    // the card is the same cells until the list, the cursor, a submenu, a
+    // call's text or the signal changes (screen.ts cachedBlock)
+    const list = this.phoneList();
+    const service = Phone.mapHasService(this.phoneContext()) ? 1 : 0;
+    const key = `phone:${list.join(",")}:${this.phoneScroll}:${this.phoneCursor}:${this.phoneSubmenu ?? ""}`
+      + `:${this.phoneSubmenuCursor}:${this.call ? (this.call.text ?? "\u0001") : "\u0000"}:${service}`
+      + `:${this.phoneText("AskWhoCall")}:${keyOf(this.cards)}:${keyOf(this.pals())}:${keyOf(this.sheet)}`
+      + `:${GbcPalette.stateKey()}`;
+    cachedBlock(this, key, () => this.drawPhoneNow());
+  }
+
+  /** drawPhone's drawing. */
+  private drawPhoneNow(): void {
     this.drawTilemap(this.gfx && this.gfx.cards ? this.gfx.cards.phone : undefined);
     this.drawStrip();
     // .PlacePhoneBars: the fourth tile only with service.

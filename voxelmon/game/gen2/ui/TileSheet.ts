@@ -10,7 +10,7 @@
 // maps to a sheet index by subtracting it. A sheet is `wide` tiles across.
 // Here the sheet is a cooked Gold graphic, and each draw is one cell.
 
-import G, { type LcdImage, type Quad } from "../platform/screen.ts";
+import G, { type LcdImage, type Quad, putTile, putTiles } from "../platform/screen.ts";
 import { Assets } from "../shared/render/Assets.ts";
 import { GbcPalette } from "../shared/render/GbcPalette.ts";
 
@@ -93,31 +93,74 @@ export class TileSheet {
     if (!image) return false;
     const index = tile - this.firstTile;
     if (index < 0) return false;
-    const quad = this.quad(index);
-    if (!quad) return false;
-    // the quad's top and the image's height read directly, and the palette
-    // set and restored here (GbcPalette.with's work) rather than through a
-    // closure: getViewport and getDimensions build arrays, and this runs for
-    // every tile a menu or a splash draws
-    if (quad.y >= image.h) return false;
+    // the sheet tile's place (what quad(index) would frame), and the one
+    // putTile G.draw would end in for an 8x8 quad -- written out, with the
+    // palette set and restored here rather than through a closure: this runs
+    // for every tile a menu draws, hundreds a frame on the #DEX, the
+    // POKeGEAR and the trainer card
+    const col = index % this.wide;
+    const row = Math.floor(index / this.wide);
+    if (row * 8 >= image.h) return false;
     G.setColor(1, 1, 1, 1);
     let colors = this.palette;
     if (this.paletteFor) colors = this.paletteFor(tile, tx, ty) ?? colors;
+    const id = image.ids && col < image.tw && row < image.th ? image.ids[row * image.tw + col] : undefined;
+    const x = Math.round(G.tx + tx * 8);
+    const y = Math.round(G.ty + ty * 8);
     if (colors && GbcPalette.available()) {
       const pal = G.palette;
       const keyed = G.keyed;
       if (this.raw) GbcPalette.useRaw(colors);
       else GbcPalette.use(colors);
       try {
-        G.draw(image, quad, tx * 8, ty * 8);
+        if (id !== undefined) putTile(id, x, y, false, false, image.obj);
+      } finally {
+        G.palette = pal;
+        G.keyed = keyed;
+      }
+    } else if (id !== undefined) {
+      putTile(id, x, y, false, false, image.obj);
+    }
+    return true;
+  }
+
+  /**
+   * draw(tile) over a block of `wide` x `high` cells from (tx, ty): the same
+   * cells, with one palette lookup and the rows filled natively (putTiles).
+   * A per-cell palette (paletteFor) or an object sheet takes draw per cell.
+   */
+  fill(tile: number, tx: number, ty: number, wide: number, high: number): void {
+    const image = this.image();
+    if (wide <= 0 || high <= 0) return;
+    if (!image || this.paletteFor || image.obj || G.objects) {
+      for (let y = ty; y < ty + high; y++) for (let x = tx; x < tx + wide; x++) this.draw(tile, x, y);
+      return;
+    }
+    const index = tile - this.firstTile;
+    if (index < 0) return;
+    const col = index % this.wide;
+    const row = Math.floor(index / this.wide);
+    if (row * 8 >= image.h) return;
+    G.setColor(1, 1, 1, 1);
+    const id = image.ids && col < image.tw && row < image.th ? image.ids[row * image.tw + col] : undefined;
+    if (id === undefined) return;
+    const x = Math.round(G.tx + tx * 8);
+    const y = Math.round(G.ty + ty * 8);
+    const colors = this.palette;
+    if (colors && GbcPalette.available()) {
+      const pal = G.palette;
+      const keyed = G.keyed;
+      if (this.raw) GbcPalette.useRaw(colors);
+      else GbcPalette.use(colors);
+      try {
+        putTiles(id, x, y, wide, high);
       } finally {
         G.palette = pal;
         G.keyed = keyed;
       }
     } else {
-      G.draw(image, quad, tx * 8, ty * 8);
+      putTiles(id, x, y, wide, high);
     }
-    return true;
   }
 
   /** Lua: TileSheet.lua:95 -- a run of consecutive ids, left to right. */

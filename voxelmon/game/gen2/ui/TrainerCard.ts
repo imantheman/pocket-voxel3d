@@ -35,7 +35,7 @@
 // leader's own palette.
 
 import { Save as Gen2Save } from "../core/Save.ts";
-import G from "../platform/screen.ts";
+import G, { cachedBlock, keyOf } from "../platform/screen.ts";
 import { Strings } from "../shared/core/Strings.ts";
 import { Font } from "../shared/render/Font.ts";
 import { GbcPalette } from "../shared/render/GbcPalette.ts";
@@ -150,6 +150,9 @@ function moneyText(amount?: number): string {
   return " ".repeat(first - 1) + "¥" + digits.slice(first - 1);
 }
 
+/** TrainerCard.pair's tables, by the stored pair they were made from. */
+const pairCache = new WeakMap<object, Colors>();
+
 export class TrainerCard {
   static isOpaque = true;
   static JOHTO_BADGES = JOHTO_BADGES;
@@ -263,7 +266,15 @@ export class TrainerCard {
    */
   pair(colors: any): Colors | undefined {
     if (!(colors && colors[0] && colors[1])) return undefined;
-    return [[255, 255, 255], colors[0], colors[1], [0, 0, 0]];
+    // one table per stored pair: every tile of a zone asks, and a fresh
+    // table each time missed every palette cache below (asPalette, the
+    // resolve memo, the screen's slot cache)
+    let made = pairCache.get(colors);
+    if (!made) {
+      made = [[255, 255, 255], colors[0], colors[1], [0, 0, 0]];
+      pairCache.set(colors, made);
+    }
+    return made;
   }
 
   // Lua: TrainerCard.lua:217
@@ -366,6 +377,16 @@ export class TrainerCard {
 
   // Lua: TrainerCard.lua:318
   drawTopHalf(): void {
+    // the frame, the name, ID, money and the portrait: the same cells until
+    // one of them changes (screen.ts cachedBlock)
+    const player = (this.save || {}).player || {};
+    const key = `top:${player.name}:${player.id}:${player.money}:${keyOf(this.card)}:${keyOf(this.palettes)}`
+      + `:${GbcPalette.stateKey()}`;
+    cachedBlock(this, key, () => this.drawTopHalfNow());
+  }
+
+  /** drawTopHalf's drawing. */
+  private drawTopHalfNow(): void {
     const player = (this.save || {}).player || {};
     this.frame(0, 5);
     this.print(Strings.get("NAME/"), 2, 2);
@@ -384,7 +405,8 @@ export class TrainerCard {
   drawCard(): void {
     const save = this.save || {};
     this.drawTopHalf();
-    this.frame(8, 6);
+    cachedBlock(this, `frame8:${keyOf(this.card)}:${keyOf(this.palettes)}:${GbcPalette.stateKey()}`,
+      () => this.frame(8, 6));
 
     // The $29..$2d caption plaque, which sits on the row the two halves share.
     TILE_STATUS.forEach((id, i) => this.tile(this.status, id, 2 + i, 8));

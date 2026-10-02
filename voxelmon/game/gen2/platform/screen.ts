@@ -360,6 +360,180 @@ function drawObjs(image: LcdImage, tx0: number, ty0: number, cols: number, rows:
   }
 }
 
+/**
+ * A block of drawing whose output is fixed by `key` (and by the draw state it
+ * starts in): the first time, `draw` runs and the cells, objects, register
+ * changes and palette requests it made are recorded; after that, while the
+ * screen's palette table stands where it stood when recorded, the palettes
+ * are asked for again in the same order and the cells written straight back
+ * -- a static menu background is a few hundred tile draws a frame otherwise,
+ * which under the 3DS's QuickJS was most of a menu's frame. Anything that
+ * does not line up (another palette table, another slot answered) draws for
+ * real and records afresh. `key` must name everything the block reads; the
+ * position, map, scissor and object mode are added to it here. The block
+ * runs between G.push and G.pop, so it leaves the draw state as it found it.
+ */
+export function cachedBlock(owner: object, key: string, draw: () => void): void {
+  const l = lcd;
+  if (l === null || canvasDepth > 0) {
+    draw();
+    return;
+  }
+  const s = st;
+  const sc = s.scissor;
+  const full = `${key}@${s.tx},${s.ty},${s.map},${s.objects ? 1 : 0},${sc ? sc.join(",") : ""}`;
+  let byKey = blockCache.get(owner);
+  if (!byKey) {
+    byKey = new Map();
+    blockCache.set(owner, byKey);
+  }
+  const rec = byKey.get(full);
+  if (rec && replayBlock(l, rec)) return;
+  if (byKey.size >= 16) byKey.clear();
+  byKey.set(full, recordBlock(l, draw));
+}
+
+interface BlockRecord {
+  entry: string;
+  exit: string;
+  pals: { p: Palette4; obj: boolean; slot: number }[];
+  idx: Uint16Array;
+  cells: Uint16Array;
+  attrs: Uint8Array;
+  objs: { x: number; y: number; tile: number; attr: number }[];
+  regs: number[] | null;
+  lines: Uint8Array | null;
+  windowUsed: boolean;
+}
+
+const blockCache = new WeakMap<object, Map<string, BlockRecord>>();
+
+/** A number standing for an object in a cachedBlock key (0 for none). */
+export function keyOf(o: unknown): number {
+  if (o === null || o === undefined || (typeof o !== "object" && typeof o !== "function")) return 0;
+  let id = objectIds.get(o as object);
+  if (id === undefined) {
+    id = ++objectCount;
+    objectIds.set(o as object, id);
+  }
+  return id;
+}
+const objectIds = new WeakMap<object, number>();
+let objectCount = 0;
+const savedCells = new Uint16Array(2048);
+const savedAttrs = new Uint8Array(2048);
+/** An attribute no draw writes (they are masked with 0xef): "untouched". */
+const UNTOUCHED = 0xff;
+
+function regsOf(l: Lcd): number[] {
+  const s = l.s;
+  return [s.scx, s.scy, s.wx, s.wy, s.flags, s.lineTarget];
+}
+
+function recordBlock(l: Lcd, draw: () => void): BlockRecord {
+  const entry = l.paletteState();
+  savedCells.set(cellsOf);
+  savedAttrs.set(attrsOf);
+  attrsOf.fill(UNTOUCHED);
+  const objStart = l.s.objs.length;
+  const regs0 = regsOf(l);
+  const lines0 = l.s.lines.slice();
+  const windowUsed0 = l.windowUsed;
+  const pals: BlockRecord["pals"] = [];
+  // the palette requests, logged through a wrapper on this Lcd -- over any
+  // wrapper an enclosing block being recorded put there, which is put back
+  // after (a block inside a block logs into both)
+  const own = l as unknown as { palette?: Lcd["palette"] };
+  const hadOwn = Object.prototype.hasOwnProperty.call(l, "palette");
+  const prev = own.palette;
+  const orig = l.palette;
+  // Only each palette's FIRST request is kept: asking again for one the
+  // table already holds changes nothing, so the first requests in order
+  // rebuild the same table (a town map asks 146 times for six palettes).
+  const seen = new Set<Palette4>();
+  const seenObj = new Set<Palette4>();
+  own.palette = function (this: Lcd, p: Palette4, obj = false): number {
+    const slot = orig.call(this, p, obj);
+    const set = obj ? seenObj : seen;
+    if (!set.has(p)) {
+      set.add(p);
+      pals.push({ p, obj, slot });
+    }
+    return slot;
+  };
+  G.push();
+  try {
+    draw();
+  } finally {
+    G.pop();
+    if (hadOwn) own.palette = prev;
+    else delete own.palette;
+  }
+  // the cells the block wrote, and everything else put back as it was
+  const idx: number[] = [];
+  for (let i = 0; i < 2048; i++) {
+    if (attrsOf[i] !== UNTOUCHED) idx.push(i);
+    else {
+      cellsOf[i] = savedCells[i]!;
+      attrsOf[i] = savedAttrs[i]!;
+    }
+  }
+  const n = idx.length;
+  const rec: BlockRecord = {
+    entry,
+    exit: l.paletteState(),
+    pals,
+    idx: new Uint16Array(idx),
+    cells: new Uint16Array(n),
+    attrs: new Uint8Array(n),
+    objs: l.s.objs.slice(objStart).map((o) => ({ x: o.x, y: o.y, tile: o.tile, attr: o.attr })),
+    regs: null,
+    lines: null,
+    windowUsed: l.windowUsed && !windowUsed0,
+  };
+  for (let k = 0; k < n; k++) {
+    rec.cells[k] = cellsOf[idx[k]!]!;
+    rec.attrs[k] = attrsOf[idx[k]!]!;
+  }
+  const regs1 = regsOf(l);
+  if (regs1.some((v, i) => v !== regs0[i])) rec.regs = regs1;
+  const lines1 = l.s.lines;
+  for (let i = 0; i < lines1.length; i++) {
+    if (lines1[i] !== lines0[i]) {
+      rec.lines = lines1.slice();
+      break;
+    }
+  }
+  return rec;
+}
+
+function replayBlock(l: Lcd, rec: BlockRecord): boolean {
+  if (l.paletteState() !== rec.entry) return false;
+  for (const q of rec.pals) {
+    if (l.palette(q.p, q.obj) !== q.slot) return false;
+  }
+  if (l.paletteState() !== rec.exit) return false;
+  const idx = rec.idx;
+  const cells = rec.cells;
+  const attrs = rec.attrs;
+  for (let k = 0; k < idx.length; k++) {
+    cellsOf[idx[k]!] = cells[k]!;
+    attrsOf[idx[k]!] = attrs[k]!;
+  }
+  const objs = l.s.objs;
+  for (const o of rec.objs) {
+    if (objs.length >= LCD_OBJS_MAX) break;
+    objs.push({ x: o.x, y: o.y, tile: o.tile, attr: o.attr });
+  }
+  if (rec.regs) {
+    const s = l.s;
+    [s.scx, s.scy, s.wx, s.wy, s.flags, s.lineTarget] = rec.regs as [number, number, number, number, number, number];
+  }
+  if (rec.lines) l.s.lines.set(rec.lines);
+  if (rec.windowUsed) l.windowUsed = true;
+  return true;
+}
+
 export const G = {
   getWidth: (): number => LCD_W,
   getHeight: (): number => LCD_H,
