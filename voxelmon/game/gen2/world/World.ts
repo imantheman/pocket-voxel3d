@@ -441,6 +441,22 @@ function givePokeMon(data: any, speciesIndex: any, level: any, itemIndex: any, o
   });
 }
 
+// Not the Lua's (it never modeled them): InitEnemyMon's `.WildItem` roll
+// (engine/battle/core.asm LoadEnemyMon). BattleRandom < 75 percent + 1 holds
+// nothing; otherwise a second roll < 8 percent takes Item2, else Item1 --
+// 75% none, 23% Item1, 2% Item2. An empty slot rolls to nothing, as on the
+// cart. pokemon.json writes the two slots as an array, or as a sparse
+// {"2": ...} object when only Item2 is set.
+export function rollWildItem(def: any, roll: (n: number) => number = (n) => random(n) - 1): string | undefined {
+  const it = def ? def.items : undefined;
+  if (!it || typeof it !== "object") return undefined;
+  const item1 = Array.isArray(it) ? it[0] : it["1"];
+  const item2 = Array.isArray(it) ? it[1] : it["2"];
+  if (!item1 && !item2) return undefined;
+  if (roll(256) < 192) return undefined;
+  return (roll(256) < 20 ? item2 : item1) || undefined;
+}
+
 // Lua: World.lua:468-469 -- GivePoke's trainer arm
 // (engine/pokemon/move_mon.asm:1698-1736)
 const RANDY_OT_ID = 1001;
@@ -7508,6 +7524,13 @@ export class World {
       return false;
     }
     this.cancelMapNameSign();
+    // every wild path comes through here; a FORCEITEM battle already holds
+    // its Item1, and a trainer's mons hold what their party data says
+    if (!truthy(opts.trainer) && truthy(opts.wild) && opts.wild.item == null) {
+      const def = game.data && game.data.pokemon ? game.data.pokemon[opts.wild.species] : undefined;
+      const held = rollWildItem(def);
+      if (held) opts.wild.item = held;
+    }
     const battle = Battle.new({
       data: game.data,
       // BATTLETYPE_TUTORIAL fights with an EMPTY party: engine/battle/core.asm
