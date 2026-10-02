@@ -65,6 +65,16 @@ export const Effects = {
     EFFECT_SPEED_DOWN_2: ["speed", -2, "foe"],
   } as Record<string, StatChange>,
 
+  // data/moves/present_power.asm: PresentPower's thresholds against one
+  // BattleRandom byte -- 40 power under 40%, 80 under 70%, 120 under 80% --
+  // and 0 past them, which is the heal (move_effects/present.asm).
+  presentPower(roll: number): number {
+    if (roll < 102) return 40;
+    if (roll < 179) return 80;
+    if (roll < 205) return 120;
+    return 0;
+  },
+
   // pokegold data/moves/effects.asm:187-352, :1488, :2068
   // ../pokecrystal/data/moves/effects_pointers.asm, effects.asm
   // ../pokecrystal/engine/battle/effect_commands.asm:5448

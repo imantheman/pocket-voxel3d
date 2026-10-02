@@ -639,8 +639,7 @@ export class Battle {
   // Lua: Battle.lua:524
   playerMatchupScore(): number {
     let score: number = Ai.BASE_SWITCH_SCORE;
-    const enemyTypes = (this.speciesDef(this.enemy) ?? {}).types
-      ?? this.enemy.types ?? [];
+    const enemyTypes = this.battleTypes(this.enemy);
     const matchups = truthy(this.data.type_chart) ? this.data.type_chart.matchups : undefined;
     for (const id of this.volatile(this.player).usedMoves ?? []) {
       const def = this.moveDef(id);
@@ -723,10 +722,8 @@ export class Battle {
       }
     }
 
-    const enemyTypes = (this.speciesDef(this.enemy) ?? {}).types
-      ?? this.enemy.types ?? [];
-    const playerTypes = (this.speciesDef(this.player) ?? {}).types
-      ?? this.player.types ?? [];
+    const enemyTypes = this.battleTypes(this.enemy);
+    const playerTypes = this.battleTypes(this.player);
     // `cp SPECIAL` against wBattleMonType1/2: AI_Smart_SpDefenseUp2 and
     // AI_Smart_Curse ask the same question, "is EITHER player type special".
     // nil rather than false when the types are unknown, so the branch stays shut.
@@ -891,6 +888,17 @@ export class Battle {
   speciesDef(mon: BattleMon): any {
     return truthy(mon) && truthy(this.data.pokemon)
       ? orNil(this.data.pokemon[mon.species]) : undefined;
+  }
+
+  // A battler's two types as the battle sees them: CONVERSION and
+  // CONVERSION2 write both type bytes of the BATTLE struct
+  // (move_effects/conversion.asm, conversion2.asm), which the next switch
+  // reloads from the party -- so the override sits in the volatile and goes
+  // with it.  Otherwise the species' types (a Transform swaps the species).
+  battleTypes(mon: BattleMon): string[] {
+    const override = truthy(mon) && truthy(mon.volatile) ? mon.volatile.typeOverride : undefined;
+    if (truthy(override)) return override;
+    return (this.speciesDef(mon) ?? {}).types ?? (truthy(mon) ? mon.types : undefined) ?? [];
   }
 
   // One badge, read the way FieldMoves.hasBadge reads it: save.player.badges /
@@ -1249,13 +1257,13 @@ export class Battle {
       attacker: {
         attack,
         specialAttack: this.battleStat(attacker, "specialAttack"),
-        types: (this.speciesDef(attacker) ?? {}).types ?? attacker.types,
+        types: this.battleTypes(attacker),
         stages: attackerStages,
       },
       defender: {
         defense: this.battleStat(defender, "defense"),
         specialDefense: this.battleStat(defender, "specialDefense"),
-        types: (this.speciesDef(defender) ?? {}).types ?? defender.types,
+        types: this.battleTypes(defender),
         stages: defenderStages,
       },
       types,
@@ -1409,6 +1417,20 @@ export class Battle {
     // SUBSTATUS_RAGE: being hit while raging raises the rager's Attack.
     if (truthy(defenderState.rage) && dmg > 0 && (defender.hp ?? 0) > 0) {
       this.changeStage(defender, "attack", 1);
+    }
+    // SUBSTATUS_DESTINY_BOND: a move that knocks the bonded mon out takes its
+    // user down too (BattleCommand_CheckFaint, TookDownWithItText).  Only a
+    // move's own damage: residual chip and recoil own no `move`.
+    if (dmg > 0 && (defender.hp ?? 0) <= 0 && truthy(defenderState.destinyBond)
+        && truthy(opts.move) && truthy(attacker) && attacker !== defender
+        && (attacker.hp ?? 0) > 0) {
+      defenderState.destinyBond = undefined;
+      const lost = attacker.hp;
+      attacker.hp = 0;
+      this.emit({ kind: "message", text: Strings.get("%s took down with it, %s!",
+        this.monName(defender), this.monName(attacker)) });
+      this.emit({ kind: "damage", side: this.sideOf(attacker), amount: lost,
+        hp: 0, anim: false });
     }
     // battle.damage_dealt, the payload src/battle/EffectRegistry.lua emits once
     // per landed hit on Gen 1, guarded the same way so an unsubscribed boot
@@ -1857,6 +1879,35 @@ export class Battle {
     // move_effects/selfdestruct.asm:6-12, run before applydamage.
     if (def.effect === "EFFECT_SELFDESTRUCT") this.selfdestructUser(attacker);
 
+    // BattleCommand_Present (move_effects/present.asm): an immune target ends
+    // it; otherwise one BattleRandom byte against PresentPower picks 40, 80 or
+    // 120 power (40%, 30%, 10%), and past the table the target is HEALED a
+    // quarter of its max HP instead -- or, already full, can't receive it.
+    if (def.effect === "EFFECT_PRESENT") {
+      const defenderTypes = this.battleTypes(defender);
+      if (Damage.typeMultiplier(def.type, defenderTypes, this.matchupsAgainst(defender)) === 0) {
+        this.markMissed();
+        this.emit({ kind: "message",
+          text: Strings.get("It doesn't affect %s...", this.monName(defender)) });
+        return;
+      }
+      const roll = rand(this.random, 256);
+      const power = Effects.presentPower(roll);
+      if (power === 0) {
+        const maxHp = defender.maxHp ?? defender.stats?.hp ?? 1;
+        if ((defender.hp ?? 0) >= maxHp) {
+          this.emit({ kind: "message",
+            text: Strings.get("%s can't receive the gift!", this.monName(defender)) });
+          return;
+        }
+        this.heal(defender, Math.max(1, Math.floor(maxHp / 4)));
+        this.emit({ kind: "message",
+          text: Strings.get("%s regained health!", this.monName(defender)) });
+        return;
+      }
+      powerOverride = power;
+    }
+
     // Substitute: a quarter of max HP, refused when the user has no more than
     // that to give.
     if (def.effect === "EFFECT_SUBSTITUTE") {
@@ -1886,7 +1937,7 @@ export class Battle {
       // `stab`, and that command misses the move outright when the matchup byte
       // is 0 (effect_commands.asm:1480-1493) -- an immune target is the one
       // thing that stops SONIC BOOM, NIGHT SHADE or SUPER FANG.
-      const defenderTypes = (this.speciesDef(defender) ?? {}).types ?? defender.types;
+      const defenderTypes = this.battleTypes(defender);
       const matchups = this.matchupsAgainst(defender);
       if (Damage.typeMultiplier(def.type, defenderTypes, matchups) === 0) {
         this.markMissed();
@@ -2236,6 +2287,15 @@ export class Battle {
   // Lua: Battle.lua:2456
   untransform(mon: any): boolean {
     const state = truthy(mon) ? mon.volatile : undefined;
+    // MIMIC's copy lives in the battle struct only (move_effects/mimic.asm
+    // writes wBattleMonMoves, not the party), so whatever reloads that struct
+    // puts the MIMIC slot back -- the same routes that end a Transform.  First,
+    // so a Mimic made while transformed lands back on the transformed moves
+    // the Transform restore then replaces.
+    if (truthy(state) && truthy(state.preMimic)) {
+      mon.moves = state.preMimic;
+      delete state.preMimic;
+    }
     const before = truthy(state) ? state.preTransform : undefined;
     if (!truthy(before)) return false;
     mon.species = before.species;
@@ -2472,7 +2532,7 @@ export class Battle {
     if (!(status === "paralyze" || status === "poison" || status === "toxic")) {
       return false;
     }
-    const types: string[] = this.speciesDef(defender)?.types ?? defender.types ?? [];
+    const types: string[] = this.battleTypes(defender);
     if (truthy(moveType)) {
       const matchups = this.matchupsAgainst(defender);
       if (Damage.typeMultiplier(moveType, types, matchups) === 0) return true;
@@ -3635,8 +3695,7 @@ export class Battle {
 
     // CheckAbleToSwitch, then the class's own probability.
     const bench: any[] = [];
-    const playerTypes = (self.speciesDef(self.player) ?? {}).types
-      ?? self.player.types ?? [];
+    const playerTypes = self.battleTypes(self.player);
     const matchups = self.data.type_chart && self.data.type_chart.matchups;
     for (let i = 0; i < self.enemyParty.length; i++) {
       const index = i + 1;
@@ -3807,7 +3866,7 @@ export class Battle {
       attacker: {
         level: this.enemy.level,
         stats: this.enemy.stats,
-        types: (this.speciesDef(this.enemy) ?? {}).types ?? this.enemy.types,
+        types: this.battleTypes(this.enemy),
       },
       defender: {
         hp: this.player.hp,
@@ -3816,7 +3875,7 @@ export class Battle {
         // AI_Basic reads SUBSTATUS_CONFUSED for the confusion moves, not the
         // status byte.
         confused: this.volatile(this.player).confuseCount != null,
-        types: (this.speciesDef(this.player) ?? {}).types ?? this.player.types,
+        types: this.battleTypes(this.player),
       },
       typeChart: this.data.type_chart,
       // The dataset itself, which is where Ai.layersFor reads the merged
@@ -3888,8 +3947,7 @@ export class Battle {
     for (const mon of [this.player, this.enemy]) {
       if (mon == null) break; // ipairs stops at the first nil
       if ((mon.hp ?? 0) > 0 && !truthy(this.volatile(mon).vanished)) {
-        const def = this.speciesDef(mon);
-        const types = (truthy(def) && truthy(def.types)) ? def.types : mon.types;
+        const types = this.battleTypes(mon);
         if (Effects.sandstormHits(types)) {
           const maxHp = mon.maxHp ?? ((truthy(mon.stats) ? mon.stats.hp : undefined) ?? 8);
           const damage = Effects.sandstormDamage(maxHp);
@@ -3964,6 +4022,20 @@ export class Battle {
         hp: mon.hp, anim: "ANIM_SAP" });
       const other = (mon === this.player && truthy(this.enemy)) ? this.enemy : this.player;
       if ((other.hp ?? 0) > 0) this.heal(other, damage);
+    }
+    // HandleNightmare's arm, between the seed and the curse (core.asm
+    // ResidualDamage): a quarter while the sufferer sleeps; waking ends it.
+    if (truthy(state.nightmare) && (mon.hp ?? 0) > 0) {
+      if (mon.status !== "sleep") {
+        state.nightmare = undefined;
+      } else {
+        const damage = Math.max(1, Math.floor(maxHp / 4));
+        mon.hp = Math.max(0, mon.hp - damage);
+        this.emit({ kind: "message",
+          text: Strings.get("%s has a NIGHTMARE!", this.monName(mon)) });
+        this.emit({ kind: "damage", side: this.sideOf(mon), amount: damage,
+          hp: mon.hp, anim: "ANIM_IN_NIGHTMARE", animSide: this.sideOf(mon) });
+      }
     }
     if (truthy(state.cursed) && (mon.hp ?? 0) > 0) {
       const damage = Math.max(1, Math.floor(maxHp / 4));
@@ -4468,6 +4540,14 @@ Battle.MOVE_EFFECTS.EFFECT_TRANSFORM = function (self: Battle, attacker: any, de
     return fail(self);
   }
   state.transformed = true;
+  // a mimicked move is put back before the moves are saved, so the copy the
+  // Transform keeps to restore is the mon's own; the target's types replace
+  // any CONVERSION
+  if (truthy(state.preMimic)) {
+    attacker.moves = state.preMimic;
+    delete state.preMimic;
+  }
+  state.typeOverride = undefined;
   const attackerName = self.monName(attacker);
   // The cart copies the target into BATTLE ram (wBattleMon / wEnemyMon) and
   // leaves the struct the mon was loaded FROM alone, so every route out of the
@@ -4530,13 +4610,13 @@ Battle.MOVE_EFFECTS.EFFECT_FUTURE_SIGHT = function (self: Battle, attacker: any,
     attacker: {
       attack: (attacker.stats ?? {}).attack,
       specialAttack: (attacker.stats ?? {}).specialAttack,
-      types: (self.speciesDef(attacker) ?? {}).types ?? attacker.types,
+      types: self.battleTypes(attacker),
       stages: self.stages[self.sideOf(attacker)],
     },
     defender: {
       defense: (defender.stats ?? {}).defense,
       specialDefense: (defender.stats ?? {}).specialDefense,
-      types: (self.speciesDef(defender) ?? {}).types ?? defender.types,
+      types: self.battleTypes(defender),
       stages: self.stages[self.sideOf(defender)],
     },
     types: truthy(self.data.type_chart) ? self.data.type_chart.types : undefined,
@@ -4762,8 +4842,7 @@ Battle.MOVE_EFFECTS.EFFECT_SAFEGUARD = function (self: Battle, attacker: any) {
 // Lua: Battle.lua:2733
 Battle.MOVE_EFFECTS.EFFECT_CURSE = function (self: Battle, attacker: any, defender: any) {
   let ghost = false;
-  for (const type_ of (self.speciesDef(attacker) ?? {}).types
-      ?? attacker.types ?? []) {
+  for (const type_ of self.battleTypes(attacker)) {
     if (type_ === "GHOST") ghost = true;
   }
   const name = self.monName(attacker);
@@ -4840,8 +4919,7 @@ Battle.MOVE_EFFECTS.EFFECT_LEECH_SEED = function (self: Battle, attacker: any, d
       text: Strings.get("%s evaded the attack!", self.monName(defender)) });
     return;
   }
-  for (const type_ of (self.speciesDef(defender) ?? {}).types
-      ?? defender.types ?? []) {
+  for (const type_ of self.battleTypes(defender)) {
     if (type_ === "GRASS") {
       self.markMissed();
       self.emit({ kind: "message",
@@ -4898,6 +4976,260 @@ Battle.MOVE_EFFECTS.EFFECT_SPITE = function (self: Battle, attacker: any, defend
   self.emit({ kind: "message",
     text: Strings.get("%s's %s was reduced by %d!", self.monName(defender),
       moveName, loss) });
+};
+
+// The effect lists of the moves below carry checkhit unless NO_CHECKHIT says
+// otherwise (data/moves/effects.asm); MOVE_EFFECTS handlers run ahead of
+// useMove's own roll, so each makes it here.
+function landed(self: Battle, def: any, attacker: any, defender: any, sureHit?: any): boolean {
+  if (truthy((Effects.NO_CHECKHIT as Record<string, any>)[def.effect]) || truthy(sureHit)) return true;
+  return truthy(self.accuracyRoll(def, attacker, defender));
+}
+
+// BattleCommand_Mist (effect_commands.asm): SUBSTATUS_MIST, once.
+Battle.MOVE_EFFECTS.EFFECT_MIST = function (self: Battle, attacker: any) {
+  const state = self.volatile(attacker);
+  if (truthy(state.mist)) return fail(self);
+  state.mist = true;
+  self.emit({ kind: "message",
+    text: Strings.get("%s's shrouded in MIST!", self.monName(attacker)) });
+};
+
+// BattleCommand_FocusEnergy (effect_commands.asm): SUBSTATUS_FOCUS_ENERGY,
+// once -- the +1 critical level BattleCommand_Critical reads.
+Battle.MOVE_EFFECTS.EFFECT_FOCUS_ENERGY = function (self: Battle, attacker: any) {
+  const state = self.volatile(attacker);
+  if (truthy(state.focusEnergy)) return fail(self);
+  state.focusEnergy = true;
+  self.emit({ kind: "message",
+    text: Strings.get("%s's getting pumped!", self.monName(attacker)) });
+};
+
+// BattleCommand_ResetStats (HAZE): every stat level on both sides back to
+// neutral; it never fails.
+Battle.MOVE_EFFECTS.EFFECT_RESET_STATS = function (self: Battle) {
+  for (const side of ["player", "enemy"]) {
+    const stages = self.stages[side];
+    if (!truthy(stages)) continue;
+    for (const key of Object.keys(stages)) stages[key] = 0;
+  }
+  self.emit({ kind: "message", text: Strings.get("All stat changes\nwere eliminated!") });
+};
+
+// BattleCommand_Conversion (move_effects/conversion.asm): the type of one of
+// the user's moves, picked at random, that is neither "???" nor one of the
+// user's own types, written to both type bytes.
+Battle.MOVE_EFFECTS.EFFECT_CONVERSION = function (self: Battle, attacker: any) {
+  const own = self.battleTypes(attacker);
+  const picks: string[] = [];
+  for (const move of attacker.moves ?? []) {
+    const t = (self.moveDef(move.id) ?? {}).type;
+    if (!truthy(t) || t === "CURSE_TYPE" || own.includes(t)) continue;
+    picks.push(t);
+  }
+  if (picks.length === 0) return fail(self);
+  const type_ = picks[rand(self.random, picks.length)]!;
+  self.volatile(attacker).typeOverride = [type_, type_];
+  self.emit({ kind: "message", text: Strings.get("%s transformed into the %s-type!",
+    self.monName(attacker), typeName(self, type_)) });
+};
+
+// BattleCommand_Conversion2 (move_effects/conversion2.asm): a random type
+// that resists (or is immune to) the type of the move the TARGET used last,
+// on both of the user's type bytes.  No last move, or a "???" one, fails.
+Battle.MOVE_EFFECTS.EFFECT_CONVERSION2 = function (self: Battle, attacker: any, defender: any,
+    def: any, _moveId?: any, sureHit?: any) {
+  if (!landed(self, def, attacker, defender, sureHit)) return fail(self);
+  const last = self.volatile(defender).lastMove;
+  const lastType = truthy(last) ? (self.moveDef(last) ?? {}).type : undefined;
+  if (!truthy(lastType) || lastType === "CURSE_TYPE") return fail(self);
+  // the draw: `and $1f` against TYPES_END, the UNUSED_TYPES block rejected,
+  // then BattleCheckTypeMatchup under EFFECTIVE -- uniform over what passes
+  const chart = self.data.type_chart ?? {};
+  const matchups = chart.matchups;
+  const picks: string[] = [];
+  for (const [id, t] of Object.entries(chart.types ?? {}) as [string, any][]) {
+    const index = t.index ?? -1;
+    if (!(index >= 0 && index < 10) && !(index >= 20 && index < 28)) continue;
+    if (Damage.typeMultiplier(lastType, [id], matchups) < 10) picks.push(id);
+  }
+  if (picks.length === 0) return fail(self);
+  const type_ = picks[rand(self.random, picks.length)]!;
+  self.volatile(attacker).typeOverride = [type_, type_];
+  self.emit({ kind: "message", text: Strings.get("%s transformed into the %s-type!",
+    self.monName(attacker), typeName(self, type_)) });
+};
+
+// The type's printed name (GetTypeName): "???" for CURSE_TYPE.
+function typeName(self: Battle, type_: string): string {
+  const t = ((self.data.type_chart ?? {}).types ?? {})[type_];
+  return (truthy(t) && t.name) || type_;
+}
+
+// BattleCommand_Sketch (move_effects/sketch.asm): the target's last move,
+// for good -- the party struct as well as the battle one, at the move's own
+// PP.  Not in a link battle; not through a Substitute or at a transformed
+// target; not with no last move, STRUGGLE, or one the user already knows.
+Battle.MOVE_EFFECTS.EFFECT_SKETCH = function (self: Battle, attacker: any, defender: any,
+    _def?: any, moveId?: any) {
+  const target = self.volatile(defender);
+  const last = target.lastMove;
+  const didntAffect = (): void => {
+    self.markMissed();
+    self.emit({ kind: "message",
+      text: Strings.get("It didn't affect %s!", self.monName(defender)) });
+  };
+  if (truthy(self.linkBattle) || (target.substitute ?? 0) > 0 || truthy(target.transformed)
+      || !truthy(last) || last === Battle.STRUGGLE || truthy(self.findMove(attacker, last))) {
+    return didntAffect();
+  }
+  const sketchId = moveId ?? "SKETCH";
+  const pp = (self.moveDef(last) ?? {}).pp ?? 5;
+  let wrote = false;
+  for (const moves of [attacker.moves, self.volatile(attacker).preTransform?.moves,
+    self.volatile(attacker).preMimic]) {
+    for (const move of moves ?? []) {
+      if (move.id === sketchId) {
+        move.id = last;
+        move.pp = pp;
+        move.maxPp = pp;
+        move.ppUps = 0;
+        wrote = true;
+        break;
+      }
+    }
+  }
+  if (!wrote) return didntAffect();
+  self.emit({ kind: "message", text: Strings.get("%s SKETCHED %s!",
+    self.monName(attacker), (self.moveDef(last) ?? {}).name ?? last) });
+};
+
+// BattleCommand_Mimic (move_effects/mimic.asm): the target's last move in
+// place of MIMIC, at 5 PP, in the battle struct only (put back by
+// untransform, on the routes that reload it).
+Battle.MOVE_EFFECTS.EFFECT_MIMIC = function (self: Battle, attacker: any, defender: any,
+    def: any, moveId?: any, sureHit?: any) {
+  if (!landed(self, def, attacker, defender, sureHit)) return fail(self);
+  const last = self.volatile(defender).lastMove;
+  if (!truthy(last) || last === Battle.STRUGGLE || truthy(self.findMove(attacker, last))) {
+    return fail(self);
+  }
+  const mimicId = moveId ?? "MIMIC";
+  const moves: any[] = attacker.moves ?? [];
+  let slot = -1;
+  for (let i = moves.length - 1; i >= 0; i--) if (moves[i].id === mimicId) slot = i;
+  if (slot < 0) return fail(self);
+  const state = self.volatile(attacker);
+  // the other slots stay the very entries they were, so their PP still
+  // spends from the mon's own moves
+  if (!truthy(state.preMimic)) state.preMimic = moves;
+  attacker.moves = moves.map((m, i) => (i === slot ? { id: last, pp: 5, maxPp: 5 } : m));
+  self.emit({ kind: "message", text: Strings.get("%s learned %s!",
+    self.monName(attacker), (self.moveDef(last) ?? {}).name ?? last) });
+};
+
+// BattleCommand_Nightmare (move_effects/nightmare.asm): a sleeping target
+// that is not hidden, not behind a Substitute and not already dreaming.
+Battle.MOVE_EFFECTS.EFFECT_NIGHTMARE = function (self: Battle, attacker: any, defender: any,
+    def: any, _moveId?: any, sureHit?: any) {
+  const target = self.volatile(defender);
+  if (!landed(self, def, attacker, defender, sureHit) || truthy(target.vanished)
+      || (target.substitute ?? 0) > 0 || defender.status !== "sleep" || truthy(target.nightmare)) {
+    return fail(self);
+  }
+  target.nightmare = true;
+  self.emit({ kind: "message",
+    text: Strings.get("%s started to have a NIGHTMARE!", self.monName(defender)) });
+};
+
+// BattleCommand_DestinyBond (move_effects/destiny_bond.asm): the flag; the
+// KO it answers is in dealDamage, the clearing in the turn loop.
+Battle.MOVE_EFFECTS.EFFECT_DESTINY_BOND = function (self: Battle, attacker: any) {
+  self.volatile(attacker).destinyBond = true;
+  self.emit({ kind: "message", text: Strings.get("%s's trying to take its opponent with it!",
+    self.monName(attacker)) });
+};
+
+// BattleCommand_HealBell (move_effects/heal_bell.asm): SUBSTATUS_NIGHTMARE
+// off, then the status byte of the battler and of every member of the
+// user's party cleared.
+Battle.MOVE_EFFECTS.EFFECT_HEAL_BELL = function (self: Battle, attacker: any) {
+  self.volatile(attacker).nightmare = undefined;
+  const party = attacker === self.player ? self.party : self.enemyParty;
+  for (const mon of [attacker, ...(party ?? [])]) {
+    if (!truthy(mon)) continue;
+    delete mon.status;
+    delete mon.statusTurns;
+    delete mon.toxicCount;
+  }
+  self.emit({ kind: "status", side: self.sideOf(attacker), status: undefined,
+    text: Strings.get("A bell chimed!") });
+};
+
+// BattleCommand_PsychUp (move_effects/psych_up.asm): every stat level of the
+// target copied onto the user; a target with none moved fails.
+Battle.MOVE_EFFECTS.EFFECT_PSYCH_UP = function (self: Battle, attacker: any, defender: any) {
+  const theirs = self.stages[self.sideOf(defender)] ?? {};
+  const mine = self.stages[self.sideOf(attacker)] ?? {};
+  if (!Object.values(theirs).some((v) => (v ?? 0) !== 0)) return fail(self);
+  for (const key of Object.keys(theirs)) mine[key] = theirs[key];
+  self.emit({ kind: "message", text: Strings.get("%s copied the stat changes of %s!",
+    self.monName(attacker), self.monName(defender)) });
+};
+
+// SWAGGER (data/moves/effects.asm): checkhit, the TARGET's Attack up two
+// (switchturn / attackup2 -- its own stat, so neither Mist nor a Substitute
+// stops it, and a maxed one just prints nothing), then confusetarget, which
+// quietly passes over a Substitute, a Safeguard or a target already
+// confused.
+Battle.MOVE_EFFECTS.EFFECT_SWAGGER = function (self: Battle, attacker: any, defender: any,
+    def: any, _moveId?: any, sureHit?: any) {
+  if (!landed(self, def, attacker, defender, sureHit)) {
+    self.markMissed();
+    self.emit({ kind: "message",
+      text: Strings.get("%s's attack missed!", self.monName(attacker)) });
+    return;
+  }
+  const applied = Effects.applyStage(self.stages[self.sideOf(defender)], "attack", 2);
+  if (truthy(applied)) {
+    self.emit({ kind: "stage", side: self.sideOf(defender), stat: "attack",
+      stages: applied, text: Effects.stageMessage(self.monName(defender), "attack", applied as number) });
+  }
+  const target = self.volatile(defender);
+  if ((target.substitute ?? 0) > 0 || truthy(target.confuseCount)
+      || truthy(self.safeguarded(defender))) {
+    return;
+  }
+  self.applyConfusion(defender, undefined, attacker);
+};
+
+// BattleCommand_PainSplit (move_effects/pain_split.asm): both battlers set to
+// the average of their HP, neither past its own max; a miss or a Substitute
+// is DidntAffect2.
+Battle.MOVE_EFFECTS.EFFECT_PAIN_SPLIT = function (self: Battle, attacker: any, defender: any,
+    def: any, _moveId?: any, sureHit?: any) {
+  if (!landed(self, def, attacker, defender, sureHit)
+      || (self.volatile(defender).substitute ?? 0) > 0) {
+    self.markMissed();
+    self.emit({ kind: "message",
+      text: Strings.get("It didn't affect %s!", self.monName(defender)) });
+    return;
+  }
+  const average = Math.floor(((attacker.hp ?? 0) + (defender.hp ?? 0)) / 2);
+  // the user's bar, then the target's (UpdateHPBar for each side)
+  for (const mon of [attacker, defender]) {
+    const maxHp = mon.maxHp ?? mon.stats?.hp ?? 1;
+    const before = mon.hp ?? 0;
+    const after = Math.min(average, maxHp);
+    mon.hp = after;
+    if (after > before) {
+      self.emit({ kind: "heal", side: self.sideOf(mon), amount: after - before, hp: after });
+    } else if (after < before) {
+      self.emit({ kind: "damage", side: self.sideOf(mon), amount: before - after,
+        hp: after, anim: false });
+    }
+  }
+  self.emit({ kind: "message", text: Strings.get("The battlers\nshared pain!") });
 };
 
 // BattleCommand_ArenaTrap (effect_commands.asm:6238): Mean Look and Spider
@@ -5097,6 +5429,8 @@ Battle.STATUSES = {
       if (mon.statusTurns <= 0) {
         delete mon.status;
         delete mon.statusTurns;
+        // waking ends SUBSTATUS_NIGHTMARE (effect_commands.asm, .woke_up)
+        if (truthy(mon.volatile)) mon.volatile.nightmare = undefined;
         // engine/battle/effect_commands.asm:175-181
         battle.emit({ kind: "status", side: battle.sideOf(mon), status: undefined,
           text: Strings.get("%s woke up!", name) });
@@ -5461,8 +5795,23 @@ function runTurn(self: any, action?: any, enemyAction?: any): any[] {
     return truthy(self.faintInterrupt);
   };
 
-  if (playerFirst) {
+  // PlayerTurn_EndOpponentProtectEndureDestinyBond and its enemy twin
+  // (core.asm): a side's own Destiny Bond ends as its turn starts
+  // (EndUserDestinyBond), the other side's once that turn is done -- so the
+  // bond covers exactly the opponent's next action.
+  const playerTurn = (): void => {
+    if (truthy(self.player)) self.volatile(self.player).destinyBond = undefined;
     playerAttack();
+    if (truthy(self.enemy)) self.volatile(self.enemy).destinyBond = undefined;
+  };
+  const enemyTurn = (): void => {
+    if (truthy(self.enemy)) self.volatile(self.enemy).destinyBond = undefined;
+    enemyAttack();
+    if (truthy(self.player)) self.volatile(self.player).destinyBond = undefined;
+  };
+
+  if (playerFirst) {
+    playerTurn();
     // A wild Roar or Whirlwind ends the battle from THIS half of the turn the
     // same way a flee ends it from the other: `.wild_force_flee` writes DRAW
     // into wBattleResult and the turn loop's `.quit` takes the round with it.
@@ -5474,13 +5823,13 @@ function runTurn(self: any, action?: any, enemyAction?: any): any[] {
     // still runs (HandleBetweenTurnEffects, core.asm:196).
     if (!residualHalf(self.player) && !truthy(self.over)
         && (self.player.hp ?? 0) > 0) {
-      enemyAttack();
+      enemyTurn();
       if (truthy(self.over)) return self.takeEvents();
       if (self.resolveFaints()) return self.takeEvents();
       residualHalf(self.enemy);
     }
   } else {
-    enemyAttack();
+    enemyTurn();
     // A flee ends the battle where it stands: the cart jumps straight to
     // WildFled_EnemyFled_LinkBattleCanceled and never reaches the player's
     // half of the turn or the residual damage.
@@ -5490,7 +5839,7 @@ function runTurn(self: any, action?: any, enemyAction?: any): any[] {
     // takes the rest of the attack phase with it.
     if (!residualHalf(self.enemy) && !truthy(self.over)
         && (self.player.hp ?? 0) > 0) {
-      playerAttack();
+      playerTurn();
       if (truthy(self.over)) return self.takeEvents();
       if (self.resolveFaints()) return self.takeEvents();
       residualHalf(self.player);
