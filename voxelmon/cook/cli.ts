@@ -286,8 +286,10 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
     .filter((k) => k.startsWith("battle/back/"))
     .sort();
 
+  // (Gold's importer writes them under battle/trainers/ -- menugfx.ts --
+  // where Red's are battle/trainer/; either way one page each)
   const backKeysTrainer = Object.keys(gen.gfx)
-    .filter((k) => k.startsWith("battle/trainer/"))
+    .filter((k) => k.startsWith("battle/trainer/") || k.startsWith("battle/trainers/"))
     .sort();
   const titleKeys = Object.keys(gen.gfx)
     .filter((k) => k.startsWith("title/"))
@@ -471,7 +473,9 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
     return out;
   };
   const atlas: AtlasIndex = {
-    picTrainer: named(trainerPageByKey, "battle/trainer/"),
+    picTrainer: Object.fromEntries(
+      [...trainerPageByKey].map(([key, page]) => [key.replace(/^battle\/trainers?\//, ""), page]),
+    ),
     picTitle: named(titlePageByKey, "title/"),
     picIntro: named(introPageByKey, "intro/"),
     picTitleMon: named(titleMonPageByKey, "title-mon/"),

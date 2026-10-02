@@ -38,7 +38,7 @@ const BATTLE_ORBIT = 32;
 
 export interface StageData {
   maps?: Record<string, { index: number }>;
-  atlas?: { picFront?: Record<string, number>; picBack?: Record<string, number> };
+  atlas?: { picFront?: Record<string, number>; picBack?: Record<string, number>; picTrainer?: Record<string, number> };
 }
 
 type Rgb = readonly number[];
@@ -119,6 +119,22 @@ export class BattleStage {
     } catch {
       mon = null;
     }
+    // The trainers' own pics while the battle screen shows them (the enemy's
+    // frontpic until EnemySwitch slides it out, the player's until the
+    // send-out), each through its class's palette, as Kanto's 3D battles
+    // stand them: the player is CAL, the class pokegold draws with the
+    // player's own pic.
+    const trainerKey = side === SIDE_ENEMY
+      ? (st.showEnemyTrainer ? picKey(st.enemyTrainerPath) : undefined)
+      : (st.showPlayerTrainer ? "cal" : undefined);
+    if (trainerKey !== undefined && !st.picBoxCleared?.(name)) {
+      const tpage = this.data?.atlas?.picTrainer?.[trainerKey];
+      if (tpage !== undefined) {
+        const cls = side === SIDE_ENEMY ? st.enemyTrainerClass : "PLAYER";
+        this.showCard(side, tpage, cell, palettes?.trainers?.[cls], `trainer:${cls}`);
+        return;
+      }
+    }
     const hidden =
       !mon ||
       !mon.species ||
@@ -138,7 +154,12 @@ export class BattleStage {
       return;
     }
     const pal = palettes?.pokemon?.[mon.species]?.[mon.shiny ? "shiny" : "normal"];
-    const palKey = pal ? `${mon.species}:${mon.shiny ? 1 : 0}` : "none";
+    this.showCard(side, page, cell, pal, `${mon.species}:${mon.shiny ? 1 : 0}`);
+  }
+
+  /** A card on `side`: `page` at `cell`, its two middle colours `pal` (white and black around them). */
+  private showCard(side: number, page: number, cell: [number, number], pal: any, palId: string): void {
+    const palKey = pal ? palId : "none";
     if (palKey !== this.palShown[side]) {
       if (pal) this.host.cardPal?.(side, rgb555([255, 255, 255]), rgb555(pal[0]), rgb555(pal[1]), rgb555([0, 0, 0]));
       else this.host.cardPal?.(side, -1, 0, 0, 0);
@@ -163,4 +184,10 @@ export class BattleStage {
     if (this.arena) this.host.arenaEnd();
     this.arena = null;
   }
+}
+
+/** A trainer pic's atlas key out of its asset path: battle/trainers/falkner(.png) -> falkner. */
+function picKey(path: unknown): string | undefined {
+  if (typeof path !== "string" || path === "") return undefined;
+  return path.replace(/\.png$/, "").replace(/^.*\//, "");
 }
