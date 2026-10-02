@@ -37,7 +37,11 @@ It is a second engine, not branches inside Gen 1. A Gold boot never loads his Ge
 
 - **In total:** about 109k lines. His Gen 1 was about 80k lines, which became our 42k lines of TypeScript. On that basis Gold is roughly two to two and a half times the Gen 1 port.
 - **The big saving:** the script VM runs the ROM's own map scripts. Nothing like `mapscripts.ts` (3.6k hand-ported lines for Gen 1) needs writing for Johto.
-- **Deliberately stubbed upstream:** link cable, Time Capsule, Mystery Gift.
+- **Deliberately stubbed upstream:** link cable, Time Capsule, Mystery Gift. All
+  three are now ported over the 3DS wireless link (2026-10-02): CABLE CLUB
+  trades and COLOSSEUM battles Gold to Gold, the TIME CAPSULE to Red/Blue/Yellow,
+  the link record, and MYSTERY GIFT between two Gold consoles (which also
+  gives the Viridian TRAINER HOUSE its CAL2).
 
 ## What we keep unchanged
 

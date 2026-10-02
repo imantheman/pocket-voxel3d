@@ -232,6 +232,10 @@ export class Game2 {
       onNewGame: () => this.newGame(),
       onContinue: (save: any) => this.continueGame(save),
       onOption: () => this.showOptions(() => this.showMainMenu()),
+      onMysteryGift: (save: any) => {
+        this.stack.clear();
+        Screens.push(this, "Gen2MysteryGift", { save, onClose: () => this.showMainMenu() });
+      },
       onExit: this.onExit,
     });
   }

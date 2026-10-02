@@ -448,7 +448,7 @@ gold("Vm on the Gold import", () => {
     expect(run(3).texts()[0]).toBe(text("40:469f"));
   });
 
-  test("a special with no world dependency: the party searches and a stub", () => {
+  test("a special with no world dependency: the party searches, no gift, a stub", () => {
     const world = new FakeWorld();
     world.party = [{ species: "CYNDAQUIL", level: 12, happiness: 70 }];
     const order = (loadGenerated("constants") as any).specialOrder as string[];
@@ -469,9 +469,10 @@ gold("Vm on the Gold import", () => {
     expect(answer("above")).toBe(1);
     expect(answer("above2")).toBe(0);
     expect(answer("happy")).toBe(1);
-    expect(answer("gift")).toBe(0); // stub: no infrared, no gift
-    expect(answer("link")).toBe(9); // stub that writes no wScriptVar
-    expect(Specials.STUB_REASONS.CheckMysteryGift).toContain("Mystery Gift");
+    expect(answer("gift")).toBe(0); // no MYSTERY GIFT waiting
+    expect(answer("link")).toBe(9); // CloseLink writes no wScriptVar
+    expect(Specials.STUB_REASONS.CheckMysteryGift).toBeUndefined();
+    expect(Specials.STUB_REASONS.UnusedMemoryGame).toContain("unused");
   });
 
   test("SnorlaxAwake reads wMapMusic and the five cells beside SNORLAX", () => {

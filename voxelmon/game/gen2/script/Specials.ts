@@ -72,6 +72,8 @@ import { Clock } from "../core/Clock.ts";
 import { Mon } from "../battle/Mon.ts";
 import { GbcPalette } from "../shared/render/GbcPalette.ts";
 import { TrainerHouse } from "../world/TrainerHouse.ts";
+import { MysteryGift } from "../core/MysteryGift.ts";
+import { Bag } from "../shared/inventory/Bag.ts";
 import { crystal_story } from "./specials/crystal_story.ts";
 import { battle_tower } from "./specials/battle_tower.ts";
 import { crystal_extras } from "./specials/crystal_extras.ts";
@@ -2062,8 +2064,8 @@ H.GameboyCheck = (vm: Vm) => {
 };
 
 // TrainerHouse: sMysteryGiftTrainerHouseFlag, the byte a Mystery Gift trade
-// leaves behind so the Viridian Trainer House has somebody to fight.  Mystery
-// Gift is out of scope, so the flag is permanently 0.  world/TrainerHouse owns
+// leaves behind so the Viridian Trainer House has somebody to fight
+// (core/MysteryGift.ts sets it, with the partner's name and party).  world/TrainerHouse owns
 // the byte, so the answer cannot drift from the party the battle then loads.
 // Lua: Specials.lua:2091
 H.TrainerHouse = (vm: Vm) => {
@@ -2097,6 +2099,48 @@ H.Diploma = function* (vm: Vm): Script<void> {
   yield* Specials.block(vm, (done) => {
     h.showDiploma(() => done(true));
   });
+};
+
+// ---- Mystery Gift ------------------------------------------------------------
+//
+// core/MysteryGift.ts keeps the SRAM bytes; the exchange itself is the main
+// menu's (ui/MysteryGiftScreen).
+//
+// UnlockMysteryGift: Carrie in the Goldenrod Dept. Store 5F.
+H.UnlockMysteryGift = (vm: Vm) => {
+  const s = save(vm);
+  if (s) MysteryGift.unlock(s);
+};
+
+// CheckMysteryGift (engine/events/specials.asm): sMysteryGiftItem, plus one
+// when nonzero -- the Pokecenter 2F scene script's `ifequal 0` brings out the
+// delivery man otherwise.
+H.CheckMysteryGift = (vm: Vm) => {
+  const s = save(vm);
+  answer(vm, s && MysteryGift.waiting(s) ? 2 : 0);
+};
+
+// GetMysteryGiftItem: into the PACK (ReceiveItem), "<PLAYER> received <item>."
+// and TRUE; a full PACK keeps the gift waiting and answers FALSE.
+H.GetMysteryGiftItem = function* (vm: Vm): Script<void> {
+  const h = hooks(vm);
+  const s = save(vm);
+  const item = s ? MysteryGift.state(s).item : 0;
+  if (!s || item === 0) {
+    answer(vm, FALSE);
+    return;
+  }
+  const data = h.world?.game?.data;
+  if (!Bag.add(s, item, 1, data)) {
+    answer(vm, FALSE);
+    return;
+  }
+  MysteryGift.take(s);
+  const index = h.itemIndex ? h.itemIndex(item) : undefined;
+  if (index != null) vm.curItem = index;
+  const name = h.itemName ? h.itemName(item) : item;
+  yield* vm.showRaw(Strings.get("{PLAYER} received\n%s.", name));
+  answer(vm, TRUE);
 };
 
 // ---- the link record ---------------------------------------------------------
@@ -2703,16 +2747,8 @@ H.SampleKenjiBreakCountdown = (vm: Vm) => {
 // wScriptVar.
 // Lua: Specials.lua:2604
 const STUB_ROWS: Array<[string, number | undefined, string]> = [
-  // The link cable's last row: the CABLE CLUB itself is ported (core/
-  // CableClub.ts, the handlers under "the CABLE CLUB" above); the link record
-  // is not kept.
-  // maps/PokeCenter2F.asm:200-203: 2 is .MonMoveTooNew; 0 falls through to
-  // WaitForLinkedFriend and lands on .FriendNotReady
-  // Mystery Gift.  Infrared between two carts; sMysteryGiftItem is therefore
-  // permanently empty.
-  ["CheckMysteryGift", 0, "Mystery Gift: no infrared, so no gift is waiting"],
-  ["GetMysteryGiftItem", 0, "Mystery Gift: nothing to hand over"],
-  ["UnlockMysteryGift", undefined, "Mystery Gift: nothing to unlock"],
+  // (The link cable and Mystery Gift are ported: the CABLE CLUB and the link
+  // record above, MYSTERY GIFT under "Mystery Gift".)
   // The Game Boy Printer.  None of the three specials that want it is stubbed
   // any more (PhotoStudio, UnownPrinter above; PrintDiploma in
   // specials/crystal_extras).  The row below is superseded by that handler

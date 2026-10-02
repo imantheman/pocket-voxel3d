@@ -186,7 +186,8 @@ export const LINK_VERSION = 4;
 export interface LinkIdent {
   game: string;
   gen: 1 | 2;
-  mode: "gen1" | "gen2";
+  /** "gift": Gold's MYSTERY GIFT screen, which talks only to another. */
+  mode: "gen1" | "gen2" | "gift";
 }
 
 /** The Kanto games' (and what an older peer is taken to be). */
@@ -235,7 +236,7 @@ function decodeHello(frame: Uint8Array): { name: string; nonce: number; ident: L
       ident: {
         game: typeof v?.g === "string" ? v.g : KANTO_LINK.game,
         gen: v?.v === 2 ? 2 : 1,
-        mode: v?.m === "gen2" ? "gen2" : "gen1",
+        mode: v?.m === "gen2" || v?.m === "gift" ? v.m : "gen1",
       },
     };
   } catch {

@@ -5,7 +5,9 @@
 // (MainMenu_GetWhichMenu reads wSaveFileExists):
 //   no save  -> NEW GAME, OPTION
 //   save     -> CONTINUE, NEW GAME, OPTION
-// MYSTERY GIFT needs the link cable, so it is not offered.
+//   save + MYSTERY GIFT unlocked (Carrie, Goldenrod Dept. Store 5F) -> CONTINUE,
+//            NEW GAME, OPTION, MYSTERY GIFT (MAINMENU_MYSTERY; the cart also
+//            asks for a Game Boy Color, which every 3DS is)
 //
 // With a save present the menu also shows the clock box: the GAME clock (the
 // RTC through the save's own start base), the same read the overworld makes.
@@ -20,6 +22,7 @@ import { Strings } from "../shared/core/Strings.ts";
 import { Runtime } from "../shared/mods/Runtime.ts";
 import { Chrome, type List } from "./Chrome.ts";
 import { InitClock } from "./InitClock.ts";
+import { MysteryGift } from "../core/MysteryGift.ts";
 import { SaveMenu } from "./SaveMenu.ts";
 
 // Lua: MainMenu.lua:31 -- ../pokecrystal/engine/menus/intro_menu.asm:487
@@ -38,6 +41,7 @@ export interface MainMenuOpts {
   onNewGame?: () => void;
   onContinue?: (save: any) => void;
   onOption?: () => void;
+  onMysteryGift?: (save: any) => void;
   onExit?: () => void;
   hasSave?: boolean;
   save?: any;
@@ -60,6 +64,7 @@ export class MainMenu {
   onNewGame: (() => void) | undefined;
   onContinue: ((save: any) => void) | undefined;
   onOption: (() => void) | undefined;
+  onMysteryGift: ((save: any) => void) | undefined;
   onExit: (() => void) | undefined;
   clock: MainMenuOpts["clock"];
   save: any;
@@ -73,6 +78,7 @@ export class MainMenu {
     this.onNewGame = opts.onNewGame;
     this.onContinue = opts.onContinue;
     this.onOption = opts.onOption;
+    this.onMysteryGift = opts.onMysteryGift;
     this.onExit = opts.onExit;
     this.clock = opts.clock;
     this.save = opts.save;
@@ -105,6 +111,9 @@ export class MainMenu {
     if (this.hasSave) items.push({ label: Strings.get("CONTINUE"), value: "continue" });
     items.push({ label: Strings.get("NEW GAME"), value: "new" });
     items.push({ label: Strings.get("OPTION"), value: "option" });
+    if (this.hasSave && this.onMysteryGift && MysteryGift.unlocked(this.save)) {
+      items.push({ label: Strings.get("MYSTERY GIFT"), value: "gift" });
+    }
     // Not on the cart (Brian's): a row to leave the game, as the Gen 1 port has.
     // The 3DS leaves through HOME, so it shows only when an owner can exit.
     if (this.onExit) items.push({ label: Strings.get("EXIT GAME"), value: "exit" });
@@ -132,6 +141,8 @@ export class MainMenu {
       if (this.onNewGame) this.onNewGame();
     } else if (value === "option") {
       if (this.onOption) this.onOption();
+    } else if (value === "gift") {
+      if (this.onMysteryGift) this.onMysteryGift(this.save);
     } else if (value === "exit") {
       // love.event.quit has no 3DS form: only the owner's onExit
       if (this.onExit) this.onExit();

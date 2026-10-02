@@ -19,10 +19,9 @@
 //   GetTrainerName    same file -- with the flag set CAL's name is copied out
 //                     of sMysteryGiftPartnerName.
 //
-// MYSTERY GIFT IS OUT OF SCOPE (one of the six peripheral stubs in
-// script/Specials): there is no second cartridge.  So the flag is permanently
-// clear -- a cartridge that has never been linked -- and every routine takes
-// its no-custom-data arm:
+// MYSTERY GIFT (core/MysteryGift.ts) sets the flag and leaves the last
+// partner's name and party on save.mysteryGift; CAL2 is then that party.
+// Until a first Mystery Gift every routine takes its no-custom-data arm:
 //   * the script gets FALSE both times and fights CAL3 (MEGANIUM, TYPHLOSION,
 //     FERALIGATR at 50);
 //   * a CAL2 lookup that reaches here anyway is answered with CAL3, because
@@ -50,9 +49,7 @@ export const TrainerHouse = {
   ENGINE_FOUGHT_IN_TRAINER_HALL_TODAY: 86,
 
   // Lua: TrainerHouse.lua:68 -- sMysteryGiftTrainerHouseFlag (ram/sram.asm).
-  // STUB, and a deliberate one: nothing in this port can run the infrared
-  // trade that writes it.  A function so the day Mystery Gift lands there is
-  // one place to teach about save.mysteryGift.
+  // Written by core/MysteryGift.ts's receive, on save.mysteryGift.
   hasCustomTrainer(save: any): boolean {
     const gift = save != null && typeof save === "object" ? save.mysteryGift : undefined;
     return !!(gift && gift.trainerHouse != null && gift.trainerHouse !== false);
@@ -82,8 +79,21 @@ export const TrainerHouse = {
   // Lua: TrainerHouse.lua:99 -- the lookup the World hands to the VM, with
   // the CAL2 redirect applied.  `trainerData` is the trainers table.
   lookup(trainerData: any, save: any, cls: number, member: number): TrainerRecord | undefined {
-    return Trainers.lookup(trainerData, cls,
+    const entry = Trainers.lookup(trainerData, cls,
       TrainerHouse.resolveMember(save, cls, member));
+    // ReadTrainerParty's `.cal2` arm: sMysteryGiftTrainer, a MOVES party
+    // (level, species, moves), and sMysteryGiftPartnerName
+    const party = save?.mysteryGift?.trainer;
+    if (entry && cls === TrainerHouse.CAL && member === TrainerHouse.CAL2
+      && TrainerHouse.hasCustomTrainer(save) && Array.isArray(party) && party.length > 0) {
+      return {
+        ...entry,
+        name: TrainerHouse.customName(save, cls) ?? entry.name,
+        trainerType: "TRAINERTYPE_MOVES",
+        roster: party.map((m: any) => ({ level: m.level, species: m.species, moves: [...(m.moves ?? [])] })),
+      };
+    }
+    return entry;
   },
 
   // Lua: TrainerHouse.lua:104

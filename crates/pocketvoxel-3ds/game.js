@@ -9004,7 +9004,7 @@ function decodeHello(frame) {
       ident: {
         game: typeof v?.g === "string" ? v.g : KANTO_LINK.game,
         gen: v?.v === 2 ? 2 : 1,
-        mode: v?.m === "gen2" ? "gen2" : "gen1"
+        mode: v?.m === "gen2" || v?.m === "gift" ? v.m : "gen1"
       }
     };
   } catch {
