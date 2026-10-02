@@ -210,6 +210,15 @@ pub enum Item {
         pull: f32,
         abgr: u32,
     },
+    /// A flat-colour quad standing in a battle card's own plane (verts bl,
+    /// br, tr, tl, world space, pulled toward the eye like a card): a piece
+    /// of a drawn effect with no sheet -- the shiny sparkle's stars
+    /// ([`spec::FX_SPARKLE_PAGE`]). Blended over the card, no depth write.
+    Spark {
+        verts: [[f32; 3]; 4],
+        abgr: u32,
+        pull: f32,
+    },
     /// A billboard card. Verts: bl, br, tr, tl (world space, unleaned pull —
     /// backends displace by `pull` along each vertex's eye ray). `uv` is
     /// `[u0, v0, u1, v1]` with v0 the texture top; `mirror` swaps u0/u1.
@@ -362,6 +371,70 @@ fn card_screen_rect(cam: &Camera, verts: &[[f32; 3]; 4]) -> Option<ui::Rect> {
         y1 = y1.max(sy);
     }
     Some(ui::Rect::of(x0, y0, x1, y1))
+}
+
+/// Sparkle tones, ABGR: a soft outer cross and a hot centre.
+const SPARKLE_WHITE: [u32; 2] = [0xe0ff_f0e0, 0xffff_ffff];
+const SPARKLE_WARM: [u32; 2] = [0xe060_d8ff, 0xffc0_f8ff];
+/// The GB enemy pic's centre (7x7 tiles at tile 12, 0): the sparkle's stars
+/// arrive in GB px around it.
+const GB_ENEMY_PIC_CENTRE: (f32, f32) = (96.0 + 28.0, 28.0);
+/// How far in front of the card the stars stand, world px.
+const SPARKLE_PULL: f32 = 6.0;
+/// A battle card is a few dozen px on the top screen, where the GB pic was
+/// 56: the stars are drawn this much bigger, and the ring this much wider,
+/// than their GB numbers, or they shrink to specks round the mon.
+const SPARKLE_SIZE: f32 = 2.2;
+const SPARKLE_SPREAD: f32 = 1.25;
+
+/// The shiny sparkle ([`spec::FX_SPARKLE_PAGE`] anim sprites), laid out on
+/// the enemy's card: each star's GB offset from the pic centre becomes the
+/// same offset across the card's own plane, one GB px to `px` world px, so
+/// the ring sits round the mon whatever the camera does. A star is a long
+/// thin cross with a short fat one and a bright core over it -- four
+/// points that taper, out of nothing but flat quads. No sheet, no art.
+fn push_sparkles(scene: &Scene, card: &[[f32; 3]; 4], px: f32, pull: f32, items: &mut Vec<Item>) {
+    let [bl, br, _, tl] = *card;
+    let right = [(br[0] - bl[0]), (br[1] - bl[1]), (br[2] - bl[2])];
+    let up = [(tl[0] - bl[0]), (tl[1] - bl[1]), (tl[2] - bl[2])];
+    let rl = crate::math::sqrtf(right[0] * right[0] + right[1] * right[1] + right[2] * right[2]).max(1e-6);
+    let ul = crate::math::sqrtf(up[0] * up[0] + up[1] * up[1] + up[2] * up[2]).max(1e-6);
+    let r1 = [right[0] / rl, right[1] / rl, right[2] / rl];
+    let u1 = [up[0] / ul, up[1] / ul, up[2] / ul];
+    let centre = [
+        bl[0] + right[0] * 0.5 + up[0] * 0.5,
+        bl[1] + right[1] * 0.5 + up[1] * 0.5,
+        bl[2] + right[2] * 0.5 + up[2] * 0.5,
+    ];
+    // GB (x right, y down) to world, around the centre
+    let at = |gx: f32, gy: f32| -> [f32; 3] {
+        [
+            centre[0] + (r1[0] * gx - u1[0] * gy) * px,
+            centre[1] + (r1[1] * gx - u1[1] * gy) * px,
+            centre[2] + (r1[2] * gx - u1[2] * gy) * px,
+        ]
+    };
+    for s in scene.anim_sprites[..scene.anim_sprite_n as usize].iter().filter(|s| s.page == spec::FX_SPARKLE_PAGE) {
+        let cx = (s.x as f32 - GB_ENEMY_PIC_CENTRE.0) * SPARKLE_SPREAD;
+        let cy = (s.y as f32 - GB_ENEMY_PIC_CENTRE.1) * SPARKLE_SPREAD;
+        let r = s.tile.clamp(1, 8) as f32 * SPARKLE_SIZE;
+        let tones = if s.flags & 4 != 0 { SPARKLE_WARM } else { SPARKLE_WHITE };
+        // the core a step nearer than the long cross, so the two never
+        // fight over the same depth
+        let mut quad = |hw: f32, hh: f32, abgr: u32, near: f32| {
+            items.push(Item::Spark {
+                verts: [at(cx - hw, cy + hh), at(cx + hw, cy + hh), at(cx + hw, cy - hh), at(cx - hw, cy - hh)],
+                abgr,
+                pull: pull + SPARKLE_PULL + near,
+            });
+        };
+        let thin = (r * 0.14).max(0.4);
+        quad(r, thin, tones[0], 0.0);
+        quad(thin, r, tones[0], 0.0);
+        let fat = (r * 0.26).max(0.5);
+        quad(r * 0.5, fat, tones[1], 1.0);
+        quad(fat, r * 0.5, tones[1], 1.0);
+    }
 }
 
 fn alpha_abgr(alpha: f32) -> u32 {
@@ -1005,6 +1078,9 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
                 mirror: (side == 0) == enemy_on_right,
                 pull: pull_card,
             });
+            if side == 1 {
+                push_sparkles(scene, &verts, scale, pull_card, &mut items);
+            }
         }
     }
 
@@ -1165,12 +1241,37 @@ mod tests {
             Item::StampMesh { .. } => 2,
             Item::ShadowDecal { .. } => 4,
             Item::Ghost { .. } => 5,
-            Item::Card { .. } => 6,
+            Item::Card { .. } | Item::Spark { .. } => 6,
             Item::ScreenPic { .. } => 8,
             // over the scene, under the UI: OAM sprites sit above the
             // background the text box is drawn in
             Item::AnimQuad { .. } => 8,
             Item::UiQuad { .. } => 9,
+        }
+    }
+
+    #[test]
+    fn a_sparkle_stands_its_stars_on_the_enemy_card() {
+        let mut s = Scene::new();
+        // a star 10 GB px right of the pic centre, radius 4, warm; and an
+        // ordinary anim tile, which is not ours to draw here
+        s.op(op::ANIM_SPRITE, &[spec::FX_SPARKLE_PAGE as i32, 4, 124 + 10, 28, 4], None);
+        s.op(op::ANIM_SPRITE, &[3, 7, 0, 16, 0], None);
+        // a 56x56 card standing at the origin, facing -z
+        let card = [[0.0, 0.0, 0.0], [56.0, 0.0, 0.0], [56.0, 56.0, 0.0], [0.0, 56.0, 0.0]];
+        let mut items = Vec::new();
+        push_sparkles(&s, &card, 1.0, 2.0, &mut items);
+        assert_eq!(items.len(), 4);
+        for it in &items {
+            let Item::Spark { verts, abgr, pull } = *it else { panic!("expected a Spark") };
+            let cx = (verts[0][0] + verts[2][0]) * 0.5;
+            let cy = (verts[0][1] + verts[2][1]) * 0.5;
+            // the pic centre (28, 28) plus the star's spread-out offset
+            assert!((cx - (28.0 + 10.0 * SPARKLE_SPREAD)).abs() < 1e-3, "x {cx}");
+            assert!((cy - 28.0).abs() < 1e-3, "y {cy}");
+            assert!(verts.iter().all(|v| v[2] == 0.0));
+            assert!(SPARKLE_WARM.contains(&abgr));
+            assert!(pull > 2.0);
         }
     }
 

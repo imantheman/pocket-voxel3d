@@ -954,6 +954,14 @@ export const FX_FRAME_CUT_TREE = 3;
 export const ANIM_SPRITES_MAX = 64;
 
 /**
+ * The `animSprite` page that is not a page: a four-point star the core
+ * draws itself out of flat rects (no sheet, no cooked art), centred on
+ * (x, y) in GB pixels. `tile` is its radius in GB px (1..8); flags bit 2
+ * picks the warm tone over white. The Kanto shiny sparkle.
+ */
+export const FX_SPARKLE_PAGE = 0xffff;
+
+/**
  * Screen-space pictures on the pic layer at once (`pic`). Six was one per
  * party member; the boot intro needs fifteen at the moment the fist comes
  * through -- the dark behind the paper, the lit field, the two fighters,

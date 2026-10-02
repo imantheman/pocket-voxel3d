@@ -4512,6 +4512,7 @@ fn main() {
     // across the map for a frame -- which is exactly when it was seen:
     // talking to someone, where the box is rebuilt on every letter.
     let mut card_hold: Vec<(usize, buffer::Info)> = Vec::new();
+    let mut spark_hold: Option<buffer::Info> = None;
     let mut ui_hold: Option<buffer::Info> = None;
     let mut anim_hold: Vec<(usize, buffer::Info)> = Vec::new();
     let mut pic_hold: Vec<(usize, i16, buffer::Info)> = Vec::new();
@@ -5769,6 +5770,8 @@ fn main() {
         let mut tmvp_l = tpl * camera;
         let mut tmvp_r = tpr * camera;
         let mut card_groups: Vec<(u16, Vec<CardVertex>)> = Vec::new();
+        // The shiny sparkle's stars: flat quads on the enemy card's plane.
+        let mut spark_verts: Vec<CardVertex> = Vec::new();
         let mut ui_verts: Vec<Vertex> = Vec::new();
         let mut pic_groups: Vec<(u16, i16, Vec<Vertex>)> = Vec::new();
         // Move animation tiles, grouped by the sheet they come from.
@@ -5998,6 +6001,22 @@ fn main() {
                     gv.push(mk(q[0])); gv.push(mk(q[1])); gv.push(mk(q[2]));
                     gv.push(mk(q[0])); gv.push(mk(q[2])); gv.push(mk(q[3]));
                 }
+                if let Item::Spark { verts, abgr, pull } = it {
+                    // A card's placement and pull, a flat colour for a page
+                    let c = [*abgr as u8, (*abgr >> 8) as u8, (*abgr >> 16) as u8, (*abgr >> 24) as u8];
+                    let pv = *pull;
+                    let mk = |q: [f32; 3]| {
+                        let (dx, dy, dz) = (e.x - q[0], e.y - q[1], e.z - q[2]);
+                        let l = (dx * dx + dy * dy + dz * dz).sqrt().max(1e-6);
+                        CardVertex {
+                            pos: [q[0] + dx / l * pv - sox + 8.0, q[1] + dy / l * pv, q[2] + dz / l * pv - soy + 8.0],
+                            color: c,
+                            uv: [0.0, 0.0],
+                        }
+                    };
+                    let v = verts.map(mk);
+                    spark_verts.extend_from_slice(&[v[0], v[1], v[2], v[0], v[2], v[3]]);
+                }
             }
         }
         let vs = geom.ah as f32 / geom.th as f32;
@@ -6053,6 +6072,10 @@ if page_tex.len() < pak_static.atlases.len() {
             bi.add(buffer::Buffer::new(&v[..n]), card_attr.permutation()).ok()?;
             Some((*pg as usize, bi))
         }).collect();
+        let spark_buf: Option<buffer::Info> = if spark_verts.is_empty() { None } else {
+            let mut bi = buffer::Info::new();
+            bi.add(buffer::Buffer::new(&spark_verts[..]), card_attr.permutation()).ok().map(|_| bi)
+        };
         if guest_drive && dbg_tick % 60 == 0 {
             let pgx = &pak_static.atlases[ui_page as usize];
         }
@@ -7057,6 +7080,11 @@ if page_tex.len() < pak_static.atlases.len() {
                             }
                             frame.draw_arrays(buffer::Primitive::Triangles, ci, None).unwrap();
                         }
+                        if let Some(sb) = spark_buf.as_ref() {
+                            frame.set_texenvs(&[stage_flat]);
+                            let _ = frame.draw_arrays(buffer::Primitive::Triangles, sb, None);
+                            frame.set_texenvs(&[stage0]);
+                        }
                         frame.set_attr_info(&attr_info);
                     }
                     // Shrink twice, then the screen: the sharp world, and the
@@ -7178,6 +7206,12 @@ if page_tex.len() < pak_static.atlases.len() {
                             frame.bind_texture(texture::Index::Texture0, t);
                         }
                         frame.draw_arrays(buffer::Primitive::Triangles, ci, None).unwrap();
+                    }
+                    // the sparkle, over the card it stands in front of
+                    if let Some(sb) = spark_buf.as_ref() {
+                        frame.set_texenvs(&[stage_flat]);
+                        let _ = frame.draw_arrays(buffer::Primitive::Triangles, sb, None);
+                        frame.set_texenvs(&[stage0]);
                     }
                     // Restore: render_to runs again for the right eye, and
                     // the companion screen's passes follow, both on i16.
@@ -7335,6 +7369,7 @@ if page_tex.len() < pak_static.atlases.len() {
         // Previous frame's buffers drop here, a full frame after the GPU
         // last touched them.
         card_hold = card_bufs;
+        spark_hold = spark_buf;
         pic_hold = pic_bufs;
         gb_hold = gb_buf;
         gb_wide_hold = gb_wide_bufs;
@@ -7351,7 +7386,7 @@ if page_tex.len() < pak_static.atlases.len() {
         ui_b_dim_hold = ui_b_dim_buf;
         ui_b_sprite_hold = ui_b_sprite_bufs;
         let _ = (
-            &card_hold, &pic_hold, &gb_hold, &gb_wide_hold, &lcd_hold, &lcd_b_hold, &canvas_hold, &tilt_hold, &page_tex_retired_hold, &ui_hold, &anim_hold, &ui_b_hold,
+            &card_hold, &spark_hold, &pic_hold, &gb_hold, &gb_wide_hold, &lcd_hold, &lcd_b_hold, &canvas_hold, &tilt_hold, &page_tex_retired_hold, &ui_hold, &anim_hold, &ui_b_hold,
             &ui_b_bar_hold, &ui_b_light_hold, &ui_b_dim_hold, &ui_b_sprite_hold,
         );
     }

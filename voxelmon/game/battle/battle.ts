@@ -44,6 +44,8 @@ import {
 import { encodeGlyphs } from "../ui/tiles.ts";
 import { animFrames, SIDE_ENEMY, SIDE_PLAYER, type AnimKind, type BattleAnim } from "./anim.ts";
 import { MoveAnim, type AnimEvent, type AnimSprite as MoveAnimSprite } from "./moveanim.ts";
+import { SPARKLE_FRAMES, sparkleStars, type SparkleStar } from "./sparkle.ts";
+import { isShiny } from "../rules/stats.ts";
 
 /** What a move's record carries for its sound (moves.json `anim`). */
 interface MoveSoundDef {
@@ -265,6 +267,8 @@ export class WildBattle implements EffectBattle {
   moveAnim: MoveAnim | null = null;
   moveAnimFrame = 0;
   private moveAnimDefender = SIDE_ENEMY;
+  /** Frames into the shiny sparkle (battle/sparkle.ts), -1 when none. */
+  sparkleFrame = -1;
   turnCount = 0;
   runAttempts = 0;
   lastDamage = 0;
@@ -884,13 +888,15 @@ export class WildBattle implements EffectBattle {
           this.disguised = false;
           this.enemy.name = this.ghostRealName;
           markSeen(this.save, this.enemy.mon.species);
-          this.audioCues.push(`cry:${this.enemy.mon.species}`);
         });
+        this.pushSparkle();
+        this.act(() => this.audioCues.push(`cry:${this.enemy.mon.species}`));
         this.say(`Wild ${this.ghostRealName}\nappeared!`);
       }
       return;
     }
     markSeen(this.save, this.enemy.mon.species); // BattleState.lua:596 — wild mon appears -> seen
+    this.pushSparkle();
     this.act(() => this.audioCues.push(`cry:${this.enemy.mon.species}`));
     if (this.hooked) {
       // _HookedMonAttackedText: a bite is an attack, not an appearance.
@@ -900,6 +906,25 @@ export class WildBattle implements EffectBattle {
       return;
     }
     this.say(`Wild ${this.enemy.name}\nappeared!`);
+  }
+
+  /**
+   * A wild mon whose DVs would be shiny in Gold and Silver gets our own
+   * star sparkle before its cry, the way Gold's shiny arm plays before
+   * the cry -- Kanto carts had no shinies, so nothing here is ported.
+   * Half of it plays before the cry and the line; the rest runs under them.
+   */
+  protected pushSparkle(): void {
+    if (!isShiny(this.enemy.mon.dvs)) return;
+    this.act(() => {
+      this.sparkleFrame = 0;
+    });
+    this.queue.push({ wait: Math.ceil(SPARKLE_FRAMES / 2) });
+  }
+
+  /** The shiny sparkle's stars this frame, in GB pixels (scene.ts). */
+  sparkles(): SparkleStar[] {
+    return this.sparkleFrame >= 0 ? sparkleStars(this.sparkleFrame) : [];
   }
 
   /** Yellow's own Pikachu entering (core.asm .starterPikachu, :1808-1818):
@@ -1060,6 +1085,7 @@ export class WildBattle implements EffectBattle {
       for (const e of this.moveAnim.eventsIn(from, this.moveAnimFrame)) this.applyAnimEvent(e);
       if (this.moveAnim.done(this.moveAnimFrame)) this.moveAnim = null;
     }
+    if (this.sparkleFrame >= 0 && ++this.sparkleFrame >= SPARKLE_FRAMES) this.sparkleFrame = -1;
     if (this.anims.length > 0) {
       for (const a of this.anims) a.frame += 1;
       this.anims = this.anims.filter((a) => a.frame < a.total);

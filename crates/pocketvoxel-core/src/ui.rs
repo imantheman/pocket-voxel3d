@@ -21,7 +21,7 @@ use crate::draw::Item;
 use crate::pak::Pak;
 use crate::scene::Scene;
 use crate::scene::UiPanel;
-use crate::spec::{GB_H, GB_W, TILE_PX, UI_COLS, UI_PANELS, UI_ROWS, VIEW_H, VIEW_W, atlas_kind};
+use crate::spec::{FX_SPARKLE_PAGE, GB_H, GB_W, TILE_PX, UI_COLS, UI_PANELS, UI_ROWS, VIEW_H, VIEW_W, atlas_kind};
 
 /// GB → screen scale, pinned (see module docs).
 pub const UI_SCALE: f32 = VIEW_H as f32 / GB_H as f32;
@@ -127,6 +127,10 @@ pub fn append_anim(scene: &Scene, cards: &[Option<Rect>; UI_PANELS], items: &mut
     let tile = TILE_PX as f32 * scale;
     for i in 0..scene.anim_sprite_n as usize {
         let s = scene.anim_sprites[i];
+        // the sparkle is no sheet: draw.rs stands its stars on the card
+        if s.page == FX_SPARKLE_PAGE {
+            continue;
+        }
         items.push(Item::AnimQuad {
             x: ox + anim_x(s.x, mirrored) * scale,
             y: oy + s.y as f32 * scale,

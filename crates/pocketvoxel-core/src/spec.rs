@@ -452,6 +452,8 @@ pub const EVENT_CAP: usize = 64;
 pub const UI_PANELS: usize = 2;
 /// Move-animation sprites on screen at once (`animSprite`).
 pub const ANIM_SPRITES_MAX: usize = 64;
+/// `animSprite`'s drawn-star page: a flat-rect sparkle, no sheet.
+pub const FX_SPARKLE_PAGE: u16 = 0x0000ffff;
 pub const VXPK_MAGIC: u32 = 0x4b505856; // 'VXPK'
 pub const VXPK_VERSION: u16 = 8;
 /// The version a pak carrying TINS declares; readers take both, so

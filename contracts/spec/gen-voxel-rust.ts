@@ -111,6 +111,7 @@ import {
   VXPK_META_FLAG_TREE_LOD,
   VXPK_META_SIZE,
   ANIM_SPRITES_MAX,
+  FX_SPARKLE_PAGE,
   UI_PANELS,
   VXPK_TAG,
   VXPK_TREE_INST_SIZE,
@@ -455,6 +456,8 @@ export function generateVoxelRust(): string {
   put(`pub const UI_PANELS: usize = ${UI_PANELS};`);
   put("/// Move-animation sprites on screen at once (`animSprite`).");
   put(`pub const ANIM_SPRITES_MAX: usize = ${ANIM_SPRITES_MAX};`);
+  put("/// `animSprite`'s drawn-star page: a flat-rect sparkle, no sheet.");
+  put(`pub const FX_SPARKLE_PAGE: u16 = ${hex(FX_SPARKLE_PAGE)};`);
   put(`pub const VXPK_MAGIC: u32 = ${hex(VXPK_MAGIC)}; // 'VXPK'`);
   put(`pub const VXPK_VERSION: u16 = ${VXPK_VERSION};`);
   put("/// The version a pak carrying TINS declares; readers take both, so");

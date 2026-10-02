@@ -11,6 +11,7 @@
 import {
   ENT_FLAG,
   ENTS_MAX,
+  FX_SPARKLE_PAGE,
   PICS_MAX,
   Q4,
   Q8,
@@ -318,7 +319,8 @@ export class Scene {
   private emitAnimSprites(view: SceneView, bv: BattleSceneView): void {
     const host = this.host;
     const sprites = bv.battle.animSprites();
-    if (sprites.length === 0) {
+    const stars = bv.battle.sparkles?.() ?? [];
+    if (sprites.length === 0 && stars.length === 0) {
       if (this.animEmitted) {
         host.animClear();
         this.animEmitted = false;
@@ -333,6 +335,8 @@ export class Scene {
       if (page < 0) continue;
       host.animSprite(page, s.tile, s.x - 8, s.y - 16, (s.xf ? 1 : 0) | (s.yf ? 2 : 0));
     }
+    // the shiny sparkle: drawn stars, already in GB pixels
+    for (const st of stars) host.animSprite(FX_SPARKLE_PAGE, st.r, st.x, st.y, st.warm ? 4 : 0);
   }
 
   /**

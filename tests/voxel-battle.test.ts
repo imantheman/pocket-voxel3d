@@ -37,6 +37,7 @@ import type { VoxelHost } from "../voxelmon/game/host.ts";
 import { RecorderHost } from "../voxelmon/game/host.ts";
 import { seededRng, seqRng } from "../voxelmon/game/rng.ts";
 import { MoveAnim, type AnimData } from "../voxelmon/game/battle/moveanim.ts";
+import { SPARKLE_FRAMES, sparkleStars } from "../voxelmon/game/battle/sparkle.ts";
 import { EFFECTS } from "../voxelmon/game/battle/effects.ts";
 import { attempt as catchAttempt } from "../voxelmon/game/rules/catching.ts";
 import { compute as damageCompute, GEN1_FAITHFUL } from "../voxelmon/game/rules/damage.ts";
@@ -1255,5 +1256,53 @@ describe("the move cursor", () => {
     tick(b, input, ["left"]);
     tick(b, input, ["down"]);
     expect(b.moveIndex).toBe(3);
+  });
+});
+
+describe("the Kanto shiny sparkle", () => {
+  /** Tick from enter() and note the frames the sparkle and the cry start. */
+  function intro(rolls: number[]) {
+    const save = makeSave([newMon(data!, "SQUIRTLE", 5)]);
+    const b = new WildBattle(data!, save, seqRng(...rolls), "PIDGEY", 3);
+    b.enter();
+    const input = new FakeInput();
+    let firstStar = -1;
+    let cry = -1;
+    let most = 0;
+    for (let f = 0; f < 600 && b.phase === "messages"; f++) {
+      tick(b, input, f % 2 ? ["a"] : []);
+      const n = b.sparkles().length;
+      most = Math.max(most, n);
+      if (n > 0 && firstStar < 0) firstStar = f;
+      if (cry < 0 && b.audioCues.some((c) => c.startsWith("cry:"))) cry = f;
+    }
+    return { firstStar, cry, most, b };
+  }
+
+  test.skipIf(!hasGen)("a mon with shiny DVs sparkles before its cry, then stops", () => {
+    // attack, defense, speed, special = 10: shiny once in Gold
+    const { firstStar, cry, most, b } = intro([10, 10, 10, 10, 0, 0, 0, 0, 0, 0, 0, 0]);
+    expect(firstStar).toBeGreaterThanOrEqual(0);
+    expect(cry).toBeGreaterThan(firstStar);
+    expect(most).toBeGreaterThan(1);
+    expect(b.sparkleFrame).toBe(-1);
+    expect(b.sparkles()).toEqual([]);
+  });
+
+  test.skipIf(!hasGen)("an ordinary mon gets none", () => {
+    const { firstStar, cry } = intro([10, 10, 10, 9, 0, 0, 0, 0, 0, 0, 0, 0]);
+    expect(firstStar).toBe(-1);
+    expect(cry).toBeGreaterThanOrEqual(0);
+  });
+
+  test("the stars stay small and around the enemy pic", () => {
+    for (let f = 0; f < SPARKLE_FRAMES; f++) {
+      for (const s of sparkleStars(f)) {
+        expect(s.r).toBeGreaterThanOrEqual(1);
+        expect(s.r).toBeLessThanOrEqual(8);
+        expect(Math.hypot(s.x - 124, s.y - 28)).toBeLessThan(40);
+      }
+    }
+    expect(sparkleStars(SPARKLE_FRAMES)).toEqual([]);
   });
 });
