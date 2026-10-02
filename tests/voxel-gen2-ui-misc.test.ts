@@ -369,3 +369,22 @@ describe("gen2 Hall of Fame", () => {
     expect(done2).toBe(1);
   });
 });
+
+describe("gen2 RARE CANDY", () => {
+  test.skipIf(!gold)("evolves only a mon that has reached its level", async () => {
+    const { game } = await loaded();
+    const g: any = game;
+    const young = Mon.new(g.data, "PIDGEY", 6, {});
+    const ready = Mon.new(g.data, "PIDGEY", 18, {});
+    g.save.party = [young, ready];
+    let done = 0;
+    // a level short of PIDGEOTTO: no evolution screen, straight on
+    g.afterRareCandy(young, { learned: [] }, () => done++);
+    expect(g.stack.top()?.screenId).not.toBe("Gen2EvolutionAnim");
+    expect(done).toBe(1);
+    // at 18: the screen, evolving into PIDGEOTTO
+    g.afterRareCandy(ready, { learned: [] }, () => done++);
+    expect(g.stack.top()?.screenId).toBe("Gen2EvolutionAnim");
+    expect(g.stack.top().newSpecies).toBe("PIDGEOTTO");
+  });
+});

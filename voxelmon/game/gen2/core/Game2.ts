@@ -490,7 +490,8 @@ export class Game2 {
     const data = this.data;
     const queue: string[] = [...(result.learned ?? [])];
     const evolve = (): void => {
-      const entry = Evolution.checkMon(data, mon, { timeOfDay: Palettes.clockDaytime() });
+      // (checkMon answers [entry, consumesItem]: the entry alone decides)
+      const [entry] = Evolution.checkMon(data, mon, { timeOfDay: Palettes.clockDaytime() });
       if (!entry) {
         onDone?.();
         return;
