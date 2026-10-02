@@ -325,10 +325,23 @@ describe("gen2 Hall of Fame", () => {
     let shotSlide = false;
     let shot2 = false;
     let shotBack = false;
+    let shotRating = false;
     const seen = new Set<string>();
+    const rated: string[] = [];
     for (let i = 0; i < 3000 && done === 0; i++) {
-      game.frame(0);
+      // PROF.OAK's rating waits on A between its pages
+      game.frame(hof.phase === "rating" && i % 8 === 0 ? VOX_BTN.a : 0);
       seen.add(hof.phase!);
+      if (hof.phase === "rating") {
+        const m = (hof as any).message;
+        const page = m?.pages?.[m.page - 1];
+        if (page) rated.push((typeof page === "string" ? page : page.join(" ")));
+        if (!shotRating && m?.page === m?.pages?.length && (hof as any).typer?.done()) {
+          game.draw(lcd);
+          await shot(lcd, "hof_rating");
+          shotRating = true;
+        }
+      }
       if (!shotSlide && hof.phase === "frontpic" && hof.scx === 0x40) {
         game.draw(lcd);
         await shot(lcd, "hof_slide");
@@ -353,7 +366,12 @@ describe("gen2 Hall of Fame", () => {
       }
     }
     expect(shot1 && shot2).toBe(true);
-    for (const p of ["backpic", "frontpic", "display", "playerBack", "playerFront", "player"]) expect(seen.has(p)).toBe(true);
+    for (const p of ["backpic", "frontpic", "display", "playerBack", "playerFront", "rating", "player"]) expect(seen.has(p)).toBe(true);
+    // ProfOaksPCRating: the counts, "PROF.OAK's Rating:", then the line
+    const all = [...new Set(rated)].join(" | ");
+    expect(all).toContain("owned");
+    expect(all).toContain("Rating:");
+    expect(shotRating).toBe(true);
     expect(done).toBe(1);
   });
 

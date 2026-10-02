@@ -71,7 +71,7 @@ const TEXT = {
  * `\v` = cont (home/text.asm:442 _ContTextNoPause); two rows to a page
  * (constants/text_constants.asm:32).
  */
-function pagesOf(body: unknown): Page[] {
+export function pagesOf(body: unknown): Page[] {
   const pages: Page[] = [];
   const chunks = (tostring(body) + "\f").split("\f");
   chunks.pop(); // gmatch("(.-)\f") never yields the tail after the last \f

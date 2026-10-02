@@ -22,11 +22,17 @@
 // objects over the blank white BG -- the same picture the scrolled BG gives,
 // since nothing else is on screen. Once settled it lands on the grid as cells.
 //
-// ProfOaksPCRating, which the cart prints into the bottom box afterwards,
-// needs Oak's PC (still a stub in Brian's Specials) and so the box is drawn
-// empty, exactly as it is before that farcall.
+// ProfOaksPCRating then prints into the bottom box (the "rating" phase):
+// OakPCText3's seen/owned counts and "PROF.OAK's Rating:", a button, then
+// the rating line with its fanfare over a stopped theme, and a button --
+// the same table Oak's PC rates from (Specials.findOakRating). Only the
+// induction rates; the HALL OF FAME viewer never did.
 
 import { Assets } from "../shared/render/Assets.ts";
+import { pagesOf } from "./CenterPcMenu.ts";
+import { Specials } from "../script/Specials.ts";
+import { Strings } from "../shared/core/Strings.ts";
+import { Typer } from "./Typer.ts";
 import { Chrome } from "./Chrome.ts";
 import { CommonText } from "../core/CommonText.ts";
 import { HallOfFame as Core, type HofEntry } from "../core/HallOfFame.ts";
@@ -500,13 +506,13 @@ export class HallOfFame {
 
     if (this.phase === "playerFront") {
       if (this.slideFrontpic()) {
-        this.phase = "player";
-        this.timer = END_FRAMES;
-        // wMusicFade = 4: the Hall of Fame theme rings out under the card.
-        Music.fadeOut(4);
+        if (this.mode === "view") this.enterEnd();
+        else this.enterRating();
       }
       return false;
     }
+
+    if (this.phase === "rating") return false;
 
     if (this.phase === "player") {
       this.timer = this.timer - 1;
@@ -515,6 +521,51 @@ export class HallOfFame {
     }
 
     return false;
+  }
+
+  // Not the Lua's (Oak's PC was a stub there): HOF_AnimatePlayerPic's
+  // `farcall ProfOaksPCRating` -- Rate's OakPCText3 (counts, then "PROF.OAK's
+  // Rating:"), JoyWaitAorB, then FindOakRating's line, its fanfare played
+  // after PlayMusic MUSIC_NONE, and WaitButton.
+  enterRating(): void {
+    this.phase = "rating";
+    const [seen, caught] = Specials.dexCounts(this.save);
+    const rating = Specials.findOakRating(caught);
+    const pages: any[] = pagesOf(Strings.get(Specials.OAK_PC_TEXT.counts, seen, caught));
+    const ratingPages: any[] = pagesOf(Strings.get(rating.text));
+    if (ratingPages[0]) ratingPages[0].sfx = rating.sfx;
+    for (const page of ratingPages) pages.push(page);
+    Typer.say(this, pages, () => this.enterEnd());
+  }
+
+  // .done: wMusicFade = 4 and the 8-frame hold, then the credits.
+  enterEnd(): void {
+    this.phase = "player";
+    this.timer = END_FRAMES;
+    // wMusicFade = 4: the Hall of Fame theme rings out under the card.
+    Music.fadeOut(4);
+  }
+
+  // The rating's pages: typed, A or B for the next, the fanfare on its page.
+  updateRating(input: any): void {
+    const m = (this as any).message;
+    if (!m) return;
+    Typer.step(this);
+    if (Typer.typing(this)) return;
+    if (!(input && (input.wasPressed("a") || input.wasPressed("b")))) return;
+    if (m.page < m.pages.length) {
+      Typer.turn(this, m);
+      const page = m.pages[m.page - 1];
+      if (page && typeof page !== "string" && page.sfx) {
+        Music.stop();
+        const data = this.game ? this.game.data : undefined;
+        const sfx = data && data.audio && data.audio.sfx;
+        if (sfx && sfx[Sound.resolve(data, page.sfx)]) Sound.play(data, page.sfx);
+      }
+      return;
+    }
+    (this as any).message = undefined;
+    if (m.onDone) m.onDone();
   }
 
   // Lua: HallOfFame.lua:502 -- A is the next mon, START the next team, B out.
@@ -550,6 +601,7 @@ export class HallOfFame {
       if (this.stepPicAnim()) return;
       return this.viewInput(this.game ? this.game.input : undefined);
     }
+    if (this.phase === "rating") return this.updateRating(this.game ? this.game.input : undefined);
     this.step();
   }
 
@@ -730,6 +782,13 @@ export class HallOfFame {
       this.drawPortrait(TRAINERPIC_X, TRAINERPIC_Y);
     } else if (this.phase === "player") {
       this.drawPlayerPanel();
+    } else if (this.phase === "rating") {
+      this.drawPlayerPanel();
+      // the (0,12) box's text rows, 14 and 16
+      const m = (this as any).message;
+      const page = m ? m.pages[m.page - 1] : undefined;
+      const lines = Typer.text(this, typeof page === "string" ? page.split("\n") : page) as string[] | undefined;
+      (lines ?? []).slice(0, 2).forEach((line, i) => Chrome.print(line, 1, 14 + i * 2));
     }
     Font.useBattleExtra(wasBattle);
     G.setColor(1, 1, 1, 1);
