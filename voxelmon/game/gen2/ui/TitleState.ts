@@ -61,6 +61,8 @@ export interface TitleStateOpts {
   title?: any;
   onContinue?: () => void;
   onTimeout?: () => void;
+  /** Down + Select + B held: TITLESCREENOPTION_RESET_CLOCK. */
+  onResetClock?: () => void;
 }
 
 export class TitleState {
@@ -69,6 +71,7 @@ export class TitleState {
   isOpaque = true;
   game: any;
   onContinue: (() => void) | undefined;
+  onResetClock: (() => void) | undefined;
   onTimeout: (() => void) | undefined;
   title: any;
   screenColor: LcdImage | null;
@@ -139,6 +142,7 @@ export class TitleState {
   constructor(game: any, opts: TitleStateOpts = {}) {
     this.game = game;
     this.onContinue = opts.onContinue;
+    this.onResetClock = opts.onResetClock;
     const title = opts.title ?? {};
     this.title = title;
     this.screenColor = tryImage(title.screen ?? "assets/generated/title/title_screen.png");
@@ -352,6 +356,14 @@ export class TitleState {
     }
 
     const input = this.game.input;
+    // TitleScreenMain: D_DOWN + B_BUTTON + SELECT together is the clock
+    // reset (Up + B + Select, the save delete, is not ported)
+    if (input && this.onResetClock && input.isDown("down") && input.isDown("b") && input.isDown("select")) {
+      const go = this.onResetClock;
+      this.onResetClock = undefined;
+      go();
+      return;
+    }
     if (input && (input.wasPressed("a") || input.wasPressed("start"))) {
       if (this.onContinue) this.onContinue();
     }

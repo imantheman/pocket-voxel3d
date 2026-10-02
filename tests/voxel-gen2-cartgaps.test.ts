@@ -6,6 +6,8 @@ import { haveGoldGen, useGoldGen } from "../voxelmon/game/gen2/platform/data-nod
 import { Game2 } from "../voxelmon/game/gen2/core/Game2.ts";
 import { rollWildItem } from "../voxelmon/game/gen2/world/World.ts";
 import { VOX_BTN } from "../contracts/spec/voxel-spec.ts";
+import { ResetClock, clockResetPassword } from "../voxelmon/game/gen2/ui/ResetClock.ts";
+import { Clock } from "../voxelmon/game/gen2/core/Clock.ts";
 
 const gold = haveGoldGen();
 
@@ -76,5 +78,106 @@ describe("the wall TOWN MAP", () => {
     expect(game.stack.top()?.townMap).toBeUndefined();
     for (let k = 0; k < 20; k++) game.frame(0);
     expect(w.vm.running()).toBe(false);
+  });
+});
+
+describe("the clock reset password", () => {
+  function fakeGame() {
+    let now = new Set<string>();
+    let held = new Set<string>();
+    return {
+      options: {},
+      input: {
+        wasPressed: (b: string) => now.has(b),
+        isDown: (b: string) => now.has(b) || held.has(b),
+      },
+      tap(screen: any, b?: string) {
+        now = new Set(b ? [b] : []);
+        screen.update();
+        now = new Set();
+        for (let i = 0; i < 120 && screen.typer && !screen.typer.done(); i++) screen.update();
+      },
+      hold(bs: string[]) {
+        held = new Set(bs);
+      },
+    };
+  }
+
+  test.skipIf(!gold)(".CalculatePassword: ID bytes + the name's first five + the money's three", () => {
+    useGoldGen();
+    Game2.new().load({ startWorld: false });
+    // GOLD = $86 $8E $8B $83 (546); ID $1234 (18 + 52); 3000 = $000BB8 (0 + 11 + 184)
+    expect(clockResetPassword({ player: { id: 0x1234, name: "GOLD", money: 3000 } })).toBe(811);
+    // only five characters count
+    const five = clockResetPassword({ player: { id: 0, name: "ABCDE", money: 0 } });
+    expect(clockResetPassword({ player: { id: 0, name: "ABCDEFG", money: 0 } })).toBe(five);
+  });
+
+  test.skipIf(!gold)("the right password flags the save; CONTINUE then sets the clock", () => {
+    useGoldGen();
+    Game2.new().load({ startWorld: false });
+    const save: any = { player: { id: 7, name: "GOLD", money: 0 }, rtc: {} };
+    const pw = clockResetPassword(save);
+    const g = fakeGame();
+    let saved = 0;
+    let outcome: boolean | undefined;
+    const s: any = ResetClock.new(g, { mode: "password", save, persist: () => saved++, onDone: (ok) => (outcome = ok) });
+    g.tap(s);
+    expect(s.step).toBe("ask");
+    g.tap(s, "down"); // NO -> YES
+    g.tap(s, "a");
+    g.tap(s);
+    expect(s.step).toBe("digits");
+    // dial the password in, digit by digit from the left
+    const want = String(pw).padStart(5, "0").split("").map(Number);
+    for (let i = 0; i < 4; i++) g.tap(s, "left");
+    want.forEach((d, i) => {
+      for (let k = 0; k < d; k++) g.tap(s, "up");
+      if (i < 4) g.tap(s, "right");
+    });
+    g.tap(s, "a");
+    expect(save.rtc.resetPending).toBe(true);
+    expect(saved).toBe(1);
+    for (let i = 0; i < 4 && outcome === undefined; i++) g.tap(s, "a");
+    expect(outcome).toBe(true);
+
+    // the restart: Saturday 23:59
+    const r: any = ResetClock.new(g, { mode: "restart", save, persist: () => saved++, onDone: (ok) => (outcome = ok) });
+    outcome = undefined;
+    for (let i = 0; i < 6 && r.step !== "edit"; i++) g.tap(r, "a");
+    expect(r.step).toBe("edit");
+    r.day = 6;
+    r.hour = 23;
+    r.field = 2;
+    r.minute = 58;
+    g.tap(r, "up");
+    expect(r.minute).toBe(59);
+    g.tap(r, "a");
+    g.tap(r);
+    expect(r.step).toBe("confirm");
+    g.tap(r, "a"); // YES
+    for (let i = 0; i < 4 && outcome === undefined; i++) g.tap(r, "a");
+    expect(outcome).toBe(true);
+    expect(save.rtc.resetPending).toBeUndefined();
+    expect(Clock.weekday(save)).toBe(6);
+    expect(Clock.hour(save)).toBe(23);
+    expect(Clock.minute(save)).toBe(59);
+  });
+
+  test.skipIf(!gold)("a wrong password changes nothing", () => {
+    useGoldGen();
+    Game2.new().load({ startWorld: false });
+    const save: any = { player: { id: 7, name: "GOLD", money: 0 }, rtc: {} };
+    const g = fakeGame();
+    let outcome: boolean | undefined;
+    const s: any = ResetClock.new(g, { mode: "password", save, onDone: (ok) => (outcome = ok) });
+    g.tap(s);
+    g.tap(s, "down");
+    g.tap(s, "a");
+    g.tap(s);
+    g.tap(s, "a"); // 00000
+    for (let i = 0; i < 4 && outcome === undefined; i++) g.tap(s, "a");
+    expect(outcome).toBe(false);
+    expect(save.rtc.resetPending).toBeUndefined();
   });
 });

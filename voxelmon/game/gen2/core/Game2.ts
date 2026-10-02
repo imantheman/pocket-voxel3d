@@ -27,6 +27,7 @@ import { osTime as clockNow } from "../platform/clock.ts";
 import { AutoInput } from "./AutoInput.ts";
 import { Clock } from "./Clock.ts";
 import { Save } from "./Save.ts";
+import { clockResetPending } from "../ui/ResetClock.ts";
 import { GameVersion } from "../shared/core/GameVersion.ts";
 import { Input } from "../shared/core/Input.ts";
 import { Logger } from "../shared/core/Logger.ts";
@@ -218,6 +219,18 @@ export class Game2 {
       this.newGame();
       return;
     }
+    // Continue_CheckRTC_RestartClock: a password-reset clock is set before
+    // the game goes on; B there cancels the CONTINUE
+    if (clockResetPending(save)) {
+      this.stack.clear();
+      Screens.push(this, "Gen2ResetClock", {
+        mode: "restart",
+        save,
+        persist: (s: any) => Save.save(s),
+        onDone: (ok: boolean) => (ok ? this.continueGame(save) : this.showMainMenu()),
+      });
+      return;
+    }
     this.save = save;
     this.sessionStartedAt = clockNow();
     this.adoptSave(save);
@@ -279,6 +292,20 @@ export class Game2 {
       title: this.titleData ?? {},
       onContinue: () => this.showMainMenu(),
       onTimeout: () => this.showCopyright(),
+      onResetClock: () => this.showResetClock(),
+    });
+  }
+
+  /** _ResetClock off the title: on a saved game only, then the reset (Init). */
+  showResetClock(): void {
+    const [save] = Save.load();
+    if (!save) return this.showTitle();
+    this.stack.clear();
+    Screens.push(this, "Gen2ResetClock", {
+      mode: "password",
+      save,
+      persist: (s: any) => Save.save(s),
+      onDone: () => this.softReset(),
     });
   }
 

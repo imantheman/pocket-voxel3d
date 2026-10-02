@@ -25,6 +25,7 @@ import * as M_DecorationMenu from "../../ui/DecorationMenu.ts";
 import * as M_Diploma from "../../ui/Diploma.ts";
 import * as M_EggHatchAnim from "../../ui/EggHatchAnim.ts";
 import * as M_LinkRecord from "../../ui/LinkRecord.ts";
+import * as M_ResetClock from "../../ui/ResetClock.ts";
 import * as M_MysteryGiftScreen from "../../ui/MysteryGiftScreen.ts";
 import * as M_ElevatorMenu from "../../ui/ElevatorMenu.ts";
 import * as M_EvolutionAnim from "../../ui/EvolutionAnim.ts";
@@ -96,6 +97,7 @@ const BUILTIN: Record<string, () => Factory> = {
   Gen2Diploma: () => pick(M_Diploma, "Diploma"),
   Gen2EggHatchAnim: () => pick(M_EggHatchAnim, "EggHatchAnim"),
   Gen2LinkRecord: () => pick(M_LinkRecord, "LinkRecord"),
+  Gen2ResetClock: () => pick(M_ResetClock, "ResetClock"),
   Gen2MysteryGift: () => pick(M_MysteryGiftScreen, "MysteryGiftScreen"),
   Gen2ElevatorMenu: () => pick(M_ElevatorMenu, "ElevatorMenu"),
   Gen2EvolutionAnim: () => pick(M_EvolutionAnim, "EvolutionAnim"),
