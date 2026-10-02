@@ -130,6 +130,8 @@ const lastStep = native.lastStep;
   }
   try {
     game.frame(buttons & 0xff);
+    // the CABLE CLUB's link (polled every step, as the carrier needs)
+    game.serviceLink();
     // the bottom screen's touch, packed above the pad by the host (bit 8 a
     // finger down, bits 9-16 x/2, bits 17-23 y/2 -- psp-main.ts reads the same)
     companion.touch(game, ((buttons >> 9) & 0xff) * 2, ((buttons >> 17) & 0x7f) * 2, (buttons & 0x100) !== 0);

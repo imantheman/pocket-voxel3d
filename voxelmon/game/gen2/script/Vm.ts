@@ -1653,6 +1653,7 @@ export class Vm {
   // WaitSFX (pokegold engine/overworld/scripting.asm:485).  Lua: Vm.lua:2451
   *showRaw(body?: string, stay?: any, hold?: number, sfxWait?: any): Script<void> {
     if (!body || body === "") body = "...";
+    body = this.fillBuffers(body);
     if (this.stringBuffer && this.stringBuffer !== "") {
       body = body.split("{STRBUF}").join(this.stringBuffer);
     }
@@ -1668,12 +1669,25 @@ export class Vm {
     }
   }
 
+  /** A special's several buffers (wStringBuffer1, 2...), set for the one
+   *  text that reads them all: each {STRBUF} takes the next, once. */
+  stringBuffers?: string[];
+  fillBuffers(body: string): string {
+    const bufs = this.stringBuffers;
+    if (!bufs || bufs.length === 0 || !body.includes("{STRBUF}")) return body;
+    let k = 0;
+    const out = body.replace(/\{STRBUF\}/g, () => bufs[Math.min(k++, bufs.length - 1)] ?? "");
+    this.stringBuffers = undefined;
+    return out;
+  }
+
   // Lua: Vm.lua:2469
   *showText(textKey?: any): Script<void> {
     let body = textKey != null ? this.text[textKey] : undefined;
     // wScriptTextAddr: JumpTextScript's `repeattext -1, -1` prints it.
     if (textKey != null) this.lastTextKey = textKey;
     if (!body || body === "") body = "...";
+    body = this.fillBuffers(String(body));
     if (this.stringBuffer && this.stringBuffer !== "") {
       // Only the {STRBUF} marker reads the (stale by design) buffer.
       body = String(body).split("{STRBUF}").join(this.stringBuffer);

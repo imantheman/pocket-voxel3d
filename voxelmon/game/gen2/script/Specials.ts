@@ -53,6 +53,8 @@
 //   BugContest data/wild/bug_contest_mons.asm, ContestScore's tally, the ten
 //              contestants and the podium, plus the twenty minute clock.
 //   Apricorns  data/items/apricorn_balls.asm and FindApricornsInBag's walk.
+import { LINK_WAIT_FRAMES, type CableClub } from "../core/CableClub.ts";
+import { TimeCapsule } from "../core/TimeCapsule.ts";
 import { Apricorns } from "../core/Apricorns.ts"; // Lua: Specials.lua:53
 import { BugContest } from "../core/BugContest.ts";
 import { GameVersion } from "../shared/core/GameVersion.ts";
@@ -2465,6 +2467,130 @@ H.TryQuickSave = function* (vm: Vm): Script<void> {
   answer(vm, TRUE);
 };
 
+// ---- the CABLE CLUB --------------------------------------------------------
+//
+// maps/PokeCenter2F.asm's three receptionists, the link rooms' machines, and
+// the TIME CAPSULE's check, on the session core/CableClub.ts keeps (the same
+// wire as the Kanto games', world/link.ts). The cart's own scripts run as
+// they are; these are the routines they call.
+
+function club(vm: Vm): CableClub | undefined {
+  const h = hooks(vm);
+  return h.cableClub ? h.cableClub() : undefined;
+}
+
+const LINK_TEXT = {
+  canceled: Strings.source("The link has been\ncanceled."),
+  noBattle: Strings.source("Link battles are\nnot ready yet."),
+};
+
+H.SetBitsForLinkTradeRequest = function (vm: Vm): void {
+  club(vm)?.request("trade");
+};
+H.SetBitsForBattleRequest = function (vm: Vm): void {
+  club(vm)?.request("battle");
+};
+H.SetBitsForTimeCapsuleRequest = function (vm: Vm): void {
+  club(vm)?.request("capsule");
+};
+
+// engine/link/link.asm WaitForLinkedFriend: TRUE once another console has
+// answered (said hello), FALSE when none does in the wait -- "Your friend is
+// not ready."
+H.WaitForLinkedFriend = function* (vm: Vm): Script<void> {
+  const c = club(vm);
+  if (!(c && c.open())) {
+    answer(vm, FALSE);
+    return;
+  }
+  const ok = yield* block(vm, (done) =>
+    c.waitFor((s) => !!s.peerIdent, LINK_WAIT_FRAMES, (heard) => done(heard || c.heardPeer())));
+  if (!ok) c.close();
+  answer(vm, ok ? TRUE : FALSE);
+};
+
+// engine/link/link.asm CheckLinkTimeout_Receptionist: after the save, the two
+// consoles still hear each other. Here: each side says its room and hears the
+// other's. A partner whose wire speaks the other generation's terms (a Gen 1
+// game at the TRADE CENTER, a TRADE CENTER at the TIME CAPSULE) is let through,
+// for wOtherPlayerLinkMode and CheckBothSelectedSameRoom to say why not.
+H.CheckLinkTimeout_Receptionist = function* (vm: Vm): Script<void> {
+  const c = club(vm);
+  const s = c?.session;
+  if (!(c && s && c.heardPeer())) {
+    answer(vm, FALSE);
+    return;
+  }
+  if (!c.sameMode()) {
+    answer(vm, TRUE);
+    return;
+  }
+  s.chooseRoom(c.room());
+  const ok = yield* block(vm, (done) => c.waitFor((x) => x.peerRoom !== null, LINK_WAIT_FRAMES, done));
+  if (!ok) c.close();
+  answer(vm, ok ? TRUE : FALSE);
+};
+
+H.CheckBothSelectedSameRoom = function (vm: Vm): void {
+  answer(vm, club(vm)?.sameRoom() ? TRUE : FALSE);
+};
+
+H.FailedLinkToPast = function (vm: Vm): void {
+  club(vm)?.close();
+};
+H.CloseLink = function (vm: Vm): void {
+  club(vm)?.close();
+};
+H.WaitForOtherPlayerToExit = function (vm: Vm): void {
+  club(vm)?.close();
+};
+
+// engine/link/link.asm:1970 CheckTimeCapsuleCompatibility: 1 a species from
+// after the past (or an EGG), 2 a move from after it, 3 MAIL; the texts read
+// the mon (and the move) from the string buffers.
+H.CheckTimeCapsuleCompatibility = function (vm: Vm): void {
+  const a = TimeCapsule.compatibility(data(vm), party(vm));
+  if (a.code !== 0) {
+    vm.stringBuffers = a.buffers;
+    vm.stringBuffer = a.buffers[0] ?? "";
+  }
+  answer(vm, a.code);
+};
+
+H.EnterTimeCapsule = function (_vm: Vm): void {
+  // the TIME CAPSULE's terms were set at the desk (SetBitsForTimeCapsuleRequest)
+};
+
+// TRUE for the ROM's player 2 (the right-hand seat), whose friend sits left.
+H.CableClubCheckWhichChris = function (vm: Vm): void {
+  answer(vm, club(vm)?.seat() === 1 ? TRUE : FALSE);
+};
+
+function* linkTrade(vm: Vm, capsule: boolean): Script<void> {
+  const h = hooks(vm);
+  const s = club(vm)?.session;
+  if (!s || s.state === "closed") {
+    yield* vm.showRaw(Strings.get(LINK_TEXT.canceled));
+  } else if (h.openLinkTrade) {
+    yield* block(vm, (done) => h.openLinkTrade(capsule, () => done()));
+  }
+  if (h.armLinkReturn) h.armLinkReturn();
+}
+
+H.TradeCenter = function* (vm: Vm): Script<void> {
+  yield* linkTrade(vm, false);
+};
+H.TimeCapsule = function* (vm: Vm): Script<void> {
+  yield* linkTrade(vm, true);
+};
+
+H.Colosseum = function* (vm: Vm): Script<void> {
+  const h = hooks(vm);
+  yield* vm.showRaw(Strings.get(LINK_TEXT.noBattle));
+  club(vm)?.close();
+  if (h.armLinkReturn) h.armLinkReturn();
+};
+
 // ---- 111 the dummy --------------------------------------------------------
 // UnusedDummySpecial is a bare `ret`.  Listed so the name resolves to a
 // handler rather than to the unimplemented ledger.
@@ -2559,26 +2685,11 @@ H.SampleKenjiBreakCountdown = (vm: Vm) => {
 // wScriptVar.
 // Lua: Specials.lua:2604
 const STUB_ROWS: Array<[string, number | undefined, string]> = [
-  // Everything link cable.  Two Game Boys and a cable; none of the Gen 2
-  // cable-club protocol is ported.  The values are the "no partner turned up"
-  // arm of each routine, which is what an unplugged cartridge sees.
-  ["SetBitsForLinkTradeRequest", undefined, "link cable: no Gen 2 cable club"],
-  ["WaitForLinkedFriend", 0, "link cable: nobody ever connects"],
-  ["CheckLinkTimeout_Receptionist", 1, "link cable: always times out"],
-  ["CheckBothSelectedSameRoom", 0, "link cable: no second player"],
-  ["FailedLinkToPast", 1, "link cable: the Time Capsule is not ported"],
-  ["CloseLink", undefined, "link cable: nothing to close"],
-  ["WaitForOtherPlayerToExit", undefined, "link cable: nobody to wait for"],
-  ["SetBitsForBattleRequest", undefined, "link cable: no Gen 2 cable club"],
-  ["SetBitsForTimeCapsuleRequest", undefined, "link cable: no Time Capsule"],
+  // The link cable's last row: the CABLE CLUB itself is ported (core/
+  // CableClub.ts, the handlers under "the CABLE CLUB" above); the link record
+  // is not kept.
   // maps/PokeCenter2F.asm:200-203: 2 is .MonMoveTooNew; 0 falls through to
   // WaitForLinkedFriend and lands on .FriendNotReady
-  ["CheckTimeCapsuleCompatibility", 0, "link cable: no Gen 1 partner"],
-  ["EnterTimeCapsule", undefined, "link cable: no Time Capsule"],
-  ["TradeCenter", undefined, "link cable: no trade room"],
-  ["Colosseum", undefined, "link cable: no battle room"],
-  ["TimeCapsule", undefined, "link cable: no Time Capsule"],
-  ["CableClubCheckWhichChris", 0, "link cable: only one player exists"],
   ["DisplayLinkRecord", undefined, "link cable: no link record is kept"],
   // Mystery Gift.  Infrared between two carts; sMysteryGiftItem is therefore
   // permanently empty.

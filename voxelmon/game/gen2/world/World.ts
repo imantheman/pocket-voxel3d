@@ -24,6 +24,8 @@
 // name sign, the pokepic window) uses G, GbcPalette and Assets the way the
 // Lua's draws do. The lazy `require`s inside function bodies (Phone, PhoneRing, Happiness, Sound, GameVersion,
 // ScreenPosition, Pokegear) are hoisted to here.
+import { W_OTHER_PLAYER_LINK_MODE } from "../core/CableClub.ts";
+import { LinkTradeMenu } from "../ui/LinkTradeMenu.ts";
 import { ENTS_MAX } from "../../../../contracts/spec/voxel-spec.ts";
 import { rotateFacing } from "./rotate.ts";
 import { cellOf, FREE_AXIS_LEAN, freeDir, quantize, slide, stickPush } from "../../world/freemove.ts";
@@ -4579,6 +4581,28 @@ export class World {
   specialHooks(): Record<string, any> {
     return {
       world: this,
+      // the CABLE CLUB (core/CableClub.ts): the session, the trade screen at a
+      // link room's machine, and the room's way back out (newloadmap
+      // MAPSETUP_LINKRETURN takes the warp armed here)
+      cableClub: () => this.game?.cableClub?.(),
+      openLinkTrade: (capsule: boolean, onDone: () => void) => {
+        const game = this.game;
+        const club = game?.cableClub?.();
+        if (!(game && game.stack && club)) return onDone();
+        game.stack.push(LinkTradeMenu.new(game, {
+          club,
+          capsule,
+          onDone: () => {
+            if (game.stack.top()?.screenId === "Gen2LinkTradeMenu") game.stack.pop();
+            onDone();
+          },
+        }));
+      },
+      armLinkReturn: () => {
+        const w = this.map?.def?.warps?.[0];
+        const entry = w ? this.map.warpAt(w.x, w.y) : undefined;
+        if (entry) this.pendingWarp = entry.def;
+      },
       healParty: () => { this.healParty(); },
       warpToSpawn: () => { this.warpToSpawn(); },
       openPc: () => { this.openPc(); },
@@ -6278,6 +6302,11 @@ export class World {
 
   // Lua: World.lua:5637-5642
   scriptReadMem(addr: any): number | undefined {
+    // wOtherPlayerLinkMode: 0 when the console on the other end is a Gen 1
+    // game (the receptionists' "you can't link to the past here")
+    if (addr === W_OTHER_PLAYER_LINK_MODE) {
+      return this.game?.cableClub?.()?.otherPlayerLinkMode() ?? 1;
+    }
     if (addr === this.tempWildMonSpeciesAddress()) {
       return (this.tempWildMon && this.tempWildMon.species) ?? 0;
     }

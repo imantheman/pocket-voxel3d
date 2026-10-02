@@ -17,6 +17,7 @@
 //   the voxel scene underneath (platform/worldview.ts), and the screens
 //   draw over it, their untouched cells left as holes.
 
+import { CableClub } from "./CableClub.ts";
 import { drawMap2D } from "../platform/map2d.ts";
 import { is2d } from "../../viewmode.ts";
 import { loadGenerated } from "../platform/data.ts";
@@ -877,6 +878,16 @@ export class Game2 {
     G.clear(0.07, 0.05, 0.02);
     Font.draw("POKEMON GOLD", 32, 48);
     Font.draw(String(this.status ?? "No world").slice(0, 20), 0, 72);
+  }
+
+  /** The CABLE CLUB's session (core/CableClub.ts), made on first use. */
+  private club: CableClub | null = null;
+  cableClub(): CableClub {
+    return (this.club ??= new CableClub(this));
+  }
+  /** Once a frame (gen2/main.ts): the link, when one is open. */
+  serviceLink(): void {
+    this.club?.service();
   }
 
   /**
