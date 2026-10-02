@@ -2658,7 +2658,7 @@ struct MapGeom {
     is_huge: bool,
     /// The map's FULL world bounds in XZ, over every chunk it has — not
     /// just the ones the vertex budget built. Neighbour strips key off this
-    /// to find the shared seam (see load_neighbor_strip).
+    /// to find the shared seam (see StripJob::begin_file).
     map_min: [f32; 2],
     map_max: [f32; 2],
 }
@@ -2871,13 +2871,8 @@ const STRIP_MAX_VERTS: usize = 48_000;
 /// transition dies.
 const STRIP_MIN_FREE_KB: u32 = 6 * 1024;
 
-/// One connected map's seam strip: geometry only, drawn with the CURRENT
-/// map's terrain texture.
-struct NeighborStrip {
-    map_id: u32,
-    verts: Vec<Vertex>,
-    spans: Vec<Span>,
-}
+// A connected map's seam strip is geometry only, drawn with the CURRENT
+// map's terrain texture (StripJob builds it).
 
 /// The neighbour's real map box in its OWN coords, read cheaply: header,
 /// section table and chunk records only, no geometry (~10 KB).
@@ -2990,136 +2985,304 @@ fn mesh_loaded(pak: &Pak, m: pak::MeshRange) -> bool {
     !(t[0] == t[1] && t[1] == t[2])
 }
 
-/// `load_neighbor_strip`, from a pak already in memory (a read-ahead copy):
-/// the same chunks, the same order, the same cap, the same clip -- and no
-/// SD traffic, where the file path costs a seek and two reads per chunk and
-/// mesh kind, in the frame the player is crossing the seam.
-fn strip_from_pak(
-    pak: &Pak,
+/// A seam strip being built, a few chunks at a time.
+///
+/// Building every neighbour's strip in the frame the player crosses a seam
+/// was most of a crossing's freeze (Route 29: 750 ms of strips against a
+/// 368 ms map build). A crossing only needs one of them at once, the map the
+/// player has just stepped out of, which is right behind them; the others
+/// are a whole map away and can arrive over the next frames. So a strip is
+/// a job: the chunk records read and the candidates ordered up front (cheap),
+/// then the chunks themselves, nearest the seam first, either all at once
+/// (`run`) or a time slice per frame (`step`). Both read and clip exactly as
+/// the one-shot loaders did; only when the work happens changed.
+enum StripSrc {
+    /// A resident copy of the pak, looked up by name at every step: the cache
+    /// may let it go between frames.
+    Resident(String),
+    /// The pak file, open, with what its header said.
+    File { f: std::fs::File, recs: Vec<u8>, verts_off: usize, indices_off: usize },
+}
+
+struct StripJob {
     map_id: u32,
+    name: String,
     ox: f32,
     oy: f32,
     cur_min: [f32; 2],
     cur_max: [f32; 2],
     tint: u32,
-) -> Option<NeighborStrip> {
-    let map = pak.maps.iter().find(|m| m.map_id == map_id)?;
-    if map.count == 0 {
-        return None;
-    }
-    let chunks = &pak.chunks[map.first as usize..(map.first + map.count) as usize];
-    let (nb_real_min, nb_real_max) = bounds_from_pak(pak, map_id)?;
+    nb_real_min: [f32; 2],
+    nb_real_max: [f32; 2],
+    /// Chunk indices (the pak's global index on the resident path, the
+    /// map's own record index on the file path), nearest the seam first.
+    cand: Vec<usize>,
+    next: usize,
+    verts: Vec<Vertex>,
+    spans: Vec<Span>,
+    /// Spans already on the GPU (`drain`): a strip appears chunk by chunk,
+    /// nearest the seam first, rather than all at the end.
+    uploaded: usize,
+    src: StripSrc,
+}
 
-    let mut cand: Vec<(usize, f32)> = Vec::new();
-    for (ci, c) in chunks.iter().enumerate() {
-        let (x0, z0) = (c.aabb_min[0] as f32 + ox, c.aabb_min[2] as f32 + oy);
-        let (x1, z1) = (c.aabb_max[0] as f32 + ox, c.aabb_max[2] as f32 + oy);
-        let dx = (cur_min[0] - x1).max(x0 - cur_max[0]).max(0.0);
-        let dz = (cur_min[1] - z1).max(z0 - cur_max[1]).max(0.0);
-        if dx > STRIP_DEPTH_PX || dz > STRIP_DEPTH_PX {
-            continue;
-        }
-        cand.push((ci, dx.max(dz)));
-    }
-    cand.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(core::cmp::Ordering::Equal));
+/// What one chunk came to.
+enum StripChunk {
+    Ok,
+    /// The resident copy cannot supply it: start over from the file.
+    Fallback,
+    /// The file could not be read: no strip.
+    Abort,
+}
 
-    let mut verts: Vec<Vertex> = Vec::new();
-    let mut spans: Vec<Span> = Vec::new();
-    for (ci, _) in cand {
-        if verts.len() >= STRIP_MAX_VERTS {
-            break;
+/// Time a deferred strip may take per frame, ms (plus the chunk in hand).
+const STRIP_STEP_MS: u64 = 3;
+/// Time the strip behind the player gets in the crossing frame itself: its
+/// nearest chunks, the ones on screen; the rest follow a slice per frame.
+const STRIP_BEHIND_MS: u64 = 90;
+
+impl StripJob {
+    /// A job for `name`'s strip: from the resident copy when the cache has a
+    /// usable one, from the file otherwise (and always in the forest zone).
+    fn start(name: &str, map_id: u32, ox: f32, oy: f32, cur_min: [f32; 2], cur_max: [f32; 2], tint: u32) -> Option<StripJob> {
+        let resident = if unsafe { LEGACY_ZONE } {
+            None
+        } else {
+            unsafe { resident_pak(name) }.filter(|p| strip_has_trees(p, map_id))
+        };
+        if let Some(p) = resident {
+            if let Some(j) = StripJob::begin_resident(p, name, map_id, ox, oy, cur_min, cur_max, tint) {
+                return Some(j);
+            }
         }
-        let c = &chunks[ci];
-        let (x0, z0) = (c.aabb_min[0] as f32 + ox, c.aabb_min[2] as f32 + oy);
-        let (x1, z1) = (c.aabb_max[0] as f32 + ox, c.aabb_max[2] as f32 + oy);
-        let (y0, y1) = (c.aabb_min[1] as f32, c.aabb_max[1] as f32);
-        // The BOX tier only, exactly what the file path reads.
-        //
-        // Substituting a finer tier when a planned copy had not read the box
-        // was a mistake: a hull is several times the vertices, so the strip
-        // hit STRIP_MAX_VERTS partway along and the chunks past it were
-        // dropped -- seams with holes in them. A copy without the box is
-        // simply not usable here, and the file path takes over.
-        if c.meshes[TREE_BOX_KIND].index_count > 0 && !mesh_loaded(pak, c.meshes[TREE_BOX_KIND]) {
+        StripJob::begin_file(name, map_id, ox, oy, cur_min, cur_max, tint)
+    }
+
+    fn begin_resident(
+        pak: &Pak,
+        name: &str,
+        map_id: u32,
+        ox: f32,
+        oy: f32,
+        cur_min: [f32; 2],
+        cur_max: [f32; 2],
+        tint: u32,
+    ) -> Option<StripJob> {
+        let map = pak.maps.iter().find(|m| m.map_id == map_id)?;
+        if map.count == 0 {
             return None;
         }
-        for kind in 0..MESH_KINDS_N {
-            if !(GROUND_KINDS.contains(&kind) || kind == TREE_BOX_KIND) {
+        let first = map.first as usize;
+        let chunks = &pak.chunks[first..(map.first + map.count) as usize];
+        let (nb_real_min, nb_real_max) = bounds_from_pak(pak, map_id)?;
+        let mut cand: Vec<(usize, f32)> = Vec::new();
+        for (ci, c) in chunks.iter().enumerate() {
+            let (x0, z0) = (c.aabb_min[0] as f32 + ox, c.aabb_min[2] as f32 + oy);
+            let (x1, z1) = (c.aabb_max[0] as f32 + ox, c.aabb_max[2] as f32 + oy);
+            let dx = (cur_min[0] - x1).max(x0 - cur_max[0]).max(0.0);
+            let dz = (cur_min[1] - z1).max(z0 - cur_max[1]).max(0.0);
+            if dx > STRIP_DEPTH_PX || dz > STRIP_DEPTH_PX {
                 continue;
             }
-            let m = c.meshes[kind];
-            if m.index_count == 0 {
-                continue;
+            cand.push((first + ci, dx.max(dz)));
+        }
+        cand.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(core::cmp::Ordering::Equal));
+        Some(StripJob {
+            map_id,
+            name: name.to_string(),
+            ox,
+            oy,
+            cur_min,
+            cur_max,
+            tint,
+            nb_real_min,
+            nb_real_max,
+            cand: cand.into_iter().map(|c| c.0).collect(),
+            next: 0,
+            verts: Vec::new(),
+            spans: Vec::new(),
+            uploaded: 0,
+            src: StripSrc::Resident(name.to_string()),
+        })
+    }
+
+    /// Switch a resident job to the file, from the start.
+    fn to_file(&mut self) -> bool {
+        if let StripSrc::File { .. } = self.src {
+            return false;
+        }
+        match StripJob::begin_file(&self.name, self.map_id, self.ox, self.oy, self.cur_min, self.cur_max, self.tint) {
+            Some(j) => {
+                // The chunks already uploaded stay: the file orders the same
+                // candidates the same way, so it carries on past them.
+                let done = if self.uploaded > 0 { self.next.min(j.cand.len()) } else { 0 };
+                *self = j;
+                self.next = done;
+                true
             }
-            if !mesh_loaded(pak, m) {
-                return None; // geometry this copy never read: use the file
-            }
-            let span_start = verts.len();
-            let mut gmin = [f32::MAX; 3];
-            let mut gmax = [f32::MIN; 3];
-            let vbase = m.vert_base as usize;
-            for t in 0..m.index_count as usize / 3 {
-                let b = m.index_base as usize + t * 3;
-                let (Some(v0), Some(v1), Some(v2)) = (
-                    pool_vert(pak, vbase, b),
-                    pool_vert(pak, vbase, b + 1),
-                    pool_vert(pak, vbase, b + 2),
-                ) else {
-                    break;
-                };
-                let p = [v0, v1, v2];
-                let mid_x = (p[0].x as f32 + p[1].x as f32 + p[2].x as f32) / 3.0;
-                let mid_z = (p[0].z as f32 + p[1].z as f32 + p[2].z as f32) / 3.0;
-                if mid_x < nb_real_min[0] || mid_x > nb_real_max[0]
-                    || mid_z < nb_real_min[1] || mid_z > nb_real_max[1]
-                {
+            None => false,
+        }
+    }
+
+    /// Up to `budget_ms` of chunks (all of them for None); true once the
+    /// strip is finished (or there is none to be had).
+    fn step(&mut self, budget_ms: Option<u64>) -> bool {
+        let t0 = now_ms();
+        loop {
+            if self.next >= self.cand.len() || self.verts.len() >= STRIP_MAX_VERTS {
+                // a resident copy that yielded nothing: the file's turn, as
+                // the one-shot path fell through to it
+                if self.spans.is_empty() && self.to_file() {
                     continue;
                 }
-                let tri = [
-                    [p[0].x as f32, p[0].y as f32, p[0].z as f32],
-                    [p[1].x as f32, p[1].y as f32, p[1].z as f32],
-                    [p[2].x as f32, p[2].y as f32, p[2].z as f32],
-                ];
-                if ring_inner_face(tri, nb_real_min, nb_real_max) {
-                    continue;
-                }
-                for pv in p {
-                    let (px, py, pz) = (pv.x as f32 + ox, pv.y as f32, pv.z as f32 + oy);
-                    let a = draw::modulate_rgb(pv.abgr, tint);
-                    let q = [px, py, pz];
-                    for k in 0..3 {
-                        if q[k] < gmin[k] { gmin[k] = q[k]; }
-                        if q[k] > gmax[k] { gmax[k] = q[k]; }
+                return true;
+            }
+            let ci = self.cand[self.next];
+            let res = match &mut self.src {
+                StripSrc::Resident(name) => match unsafe { resident_pak(name) } {
+                    Some(p) => strip_chunk_resident(
+                        p, ci, self.ox, self.oy, self.nb_real_min, self.nb_real_max, self.tint,
+                        &mut self.verts, &mut self.spans,
+                    ),
+                    None => StripChunk::Fallback,
+                },
+                StripSrc::File { f, recs, verts_off, indices_off } => strip_chunk_file(
+                    f, recs, ci, *verts_off, *indices_off, self.ox, self.oy, self.nb_real_min,
+                    self.nb_real_max, self.tint, &mut self.verts, &mut self.spans,
+                ),
+            };
+            match res {
+                StripChunk::Ok => self.next += 1,
+                StripChunk::Fallback => {
+                    // (a resident chunk half-read leaves nothing behind: spans
+                    // are pushed only once a mesh kind is whole, and the file
+                    // job starts with its own)
+                    if !self.to_file() {
+                        return true;
                     }
-                    verts.push(Vertex {
-                        pos: [px as i16, py as i16, pz as i16, 0],
-                        color: [
-                            (a & 0xff) as u8,
-                            ((a >> 8) & 0xff) as u8,
-                            ((a >> 16) & 0xff) as u8,
-                            255,
-                        ],
-                        uv: [pv.uf(), pv.vf()],
-                    });
+                }
+                StripChunk::Abort => return true,
+            }
+            if let Some(b) = budget_ms {
+                if now_ms().wrapping_sub(t0) >= b {
+                    return false;
                 }
             }
-            if verts.len() > span_start {
-                spans.push(Span {
-                    bmin: [x0, y0, z0],
-                    bmax: [x1, y1, z1],
-                    gmin,
-                    gmax,
-                    occludable: kind == TREE_BOX_KIND,
-                    start: span_start,
-                    end: verts.len(),
+        }
+    }
+
+    /// The spans finished since the last drain, onto the GPU; their vertex
+    /// count.
+    fn drain(&mut self, attr_info: &attrib::Info, out: &mut Vec<(Span, buffer::Info)>) -> usize {
+        let mut n = 0;
+        for s in self.spans[self.uploaded..].iter() {
+            n += s.end - s.start;
+        }
+        upload_spans(&self.verts, &self.spans[self.uploaded..], attr_info, out);
+        self.uploaded = self.spans.len();
+        n
+    }
+}
+
+/// One chunk of a resident copy into the strip: the BOX tier only, exactly
+/// what the file path reads.
+#[allow(clippy::too_many_arguments)]
+fn strip_chunk_resident(
+    pak: &Pak,
+    gi: usize,
+    ox: f32,
+    oy: f32,
+    nb_real_min: [f32; 2],
+    nb_real_max: [f32; 2],
+    tint: u32,
+    verts: &mut Vec<Vertex>,
+    spans: &mut Vec<Span>,
+) -> StripChunk {
+    let Some(c) = pak.chunks.get(gi) else { return StripChunk::Fallback };
+    let (x0, z0) = (c.aabb_min[0] as f32 + ox, c.aabb_min[2] as f32 + oy);
+    let (x1, z1) = (c.aabb_max[0] as f32 + ox, c.aabb_max[2] as f32 + oy);
+    let (y0, y1) = (c.aabb_min[1] as f32, c.aabb_max[1] as f32);
+    // Substituting a finer tier when a planned copy had not read the box
+    // was a mistake: a hull is several times the vertices, so the strip
+    // hit STRIP_MAX_VERTS partway along and the chunks past it were
+    // dropped -- seams with holes in them. A copy without the box is
+    // simply not usable here, and the file path takes over.
+    if c.meshes[TREE_BOX_KIND].index_count > 0 && !mesh_loaded(pak, c.meshes[TREE_BOX_KIND]) {
+        return StripChunk::Fallback;
+    }
+    for kind in 0..MESH_KINDS_N {
+        if !(GROUND_KINDS.contains(&kind) || kind == TREE_BOX_KIND) {
+            continue;
+        }
+        let m = c.meshes[kind];
+        if m.index_count == 0 {
+            continue;
+        }
+        if !mesh_loaded(pak, m) {
+            return StripChunk::Fallback; // geometry this copy never read: use the file
+        }
+        let span_start = verts.len();
+        let mut gmin = [f32::MAX; 3];
+        let mut gmax = [f32::MIN; 3];
+        let vbase = m.vert_base as usize;
+        for t in 0..m.index_count as usize / 3 {
+            let b = m.index_base as usize + t * 3;
+            let (Some(v0), Some(v1), Some(v2)) = (
+                pool_vert(pak, vbase, b),
+                pool_vert(pak, vbase, b + 1),
+                pool_vert(pak, vbase, b + 2),
+            ) else {
+                break;
+            };
+            let p = [v0, v1, v2];
+            let mid_x = (p[0].x as f32 + p[1].x as f32 + p[2].x as f32) / 3.0;
+            let mid_z = (p[0].z as f32 + p[1].z as f32 + p[2].z as f32) / 3.0;
+            if mid_x < nb_real_min[0] || mid_x > nb_real_max[0]
+                || mid_z < nb_real_min[1] || mid_z > nb_real_max[1]
+            {
+                continue;
+            }
+            let tri = [
+                [p[0].x as f32, p[0].y as f32, p[0].z as f32],
+                [p[1].x as f32, p[1].y as f32, p[1].z as f32],
+                [p[2].x as f32, p[2].y as f32, p[2].z as f32],
+            ];
+            if ring_inner_face(tri, nb_real_min, nb_real_max) {
+                continue;
+            }
+            for pv in p {
+                let (px, py, pz) = (pv.x as f32 + ox, pv.y as f32, pv.z as f32 + oy);
+                let a = draw::modulate_rgb(pv.abgr, tint);
+                let q = [px, py, pz];
+                for k in 0..3 {
+                    if q[k] < gmin[k] { gmin[k] = q[k]; }
+                    if q[k] > gmax[k] { gmax[k] = q[k]; }
+                }
+                verts.push(Vertex {
+                    pos: [px as i16, py as i16, pz as i16, 0],
+                    color: [
+                        (a & 0xff) as u8,
+                        ((a >> 8) & 0xff) as u8,
+                        ((a >> 16) & 0xff) as u8,
+                        255,
+                    ],
+                    uv: [pv.uf(), pv.vf()],
                 });
             }
         }
+        if verts.len() > span_start {
+            spans.push(Span {
+                bmin: [x0, y0, z0],
+                bmax: [x1, y1, z1],
+                gmin,
+                gmax,
+                occludable: kind == TREE_BOX_KIND,
+                start: span_start,
+                end: verts.len(),
+            });
+        }
     }
-    if spans.is_empty() {
-        return None;
-    }
-    Some(NeighborStrip { map_id, verts, spans })
+    StripChunk::Ok
 }
 
 /// Reject hidden fragments before they are textured, rather than after.
@@ -3168,223 +3331,280 @@ fn strip_has_trees(pak: &Pak, map_id: u32) -> bool {
 /// palette 41, with at most 2 of 256 palette entries differing, so the
 /// strip draws correctly with the texture already bound for the current
 /// map. That is what makes this cheap enough to be worth doing.
-fn load_neighbor_strip(
-    path: &str,
-    map_id: u32,
+impl StripJob {
+    fn begin_file(
+        name: &str,
+        map_id: u32,
+        ox: f32,
+        oy: f32,
+        cur_min: [f32; 2],
+        cur_max: [f32; 2],
+        tint: u32,
+    ) -> Option<StripJob> {
+        use std::io::{Read, Seek, SeekFrom};
+        let path = format!("{}/{}.vxpak", PAKS_DIR, name);
+        let mut f = std::fs::File::open(&path).ok()?;
+
+        let mut hdr = [0u8; 16];
+        f.read_exact(&mut hdr).ok()?;
+        let sec_count = u16::from_le_bytes([hdr[6], hdr[7]]) as usize;
+        let mut table = vec![0u8; sec_count * 16];
+        f.read_exact(&mut table).ok()?;
+        let rd32 = |b: &[u8], o: usize| {
+            u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]) as usize
+        };
+        let mut chnk_off = 0usize;
+        for i in 0..sec_count {
+            let e = i * 16;
+            if &table[e..e + 4] == b"CHNK" {
+                chnk_off = rd32(&table, e + 4);
+            }
+        }
+        if chnk_off == 0 {
+            return None;
+        }
+
+        // CHNK header: map_count, then chunk_total + the pool offsets.
+        let mut ch = [0u8; 32];
+        f.seek(SeekFrom::Start(chnk_off as u64)).ok()?;
+        f.read_exact(&mut ch).ok()?;
+        let map_count = u16::from_le_bytes([ch[0], ch[1]]) as usize;
+        let verts_off = chnk_off + rd32(&ch, 8);
+        let indices_off = chnk_off + rd32(&ch, 16);
+
+        // Map directory, then this map's chunk records.
+        let mut dir = vec![0u8; map_count * 12];
+        f.read_exact(&mut dir).ok()?;
+        let (mut first, mut count) = (0usize, 0usize);
+        for i in 0..map_count {
+            let e = i * 12;
+            if rd32(&dir, e) as u32 == map_id {
+                first = rd32(&dir, e + 4);
+                count = rd32(&dir, e + 8);
+            }
+        }
+        if count == 0 {
+            return None;
+        }
+        const REC: usize = 128;
+        let rec0 = chnk_off + 32 + map_count * 12;
+        let mut recs = vec![0u8; count * REC];
+        f.seek(SeekFrom::Start((rec0 + first * REC) as u64)).ok()?;
+        f.read_exact(&mut recs).ok()?;
+
+        // Pick the seam-side chunks first and order them by how far OUTSIDE the
+        // current map they sit, so if the vertex cap bites it sheds the chunks
+        // furthest from the seam — the ones least likely to be on screen.
+        // The neighbour has a border ring of its own, and it points back over
+        // the map the player is standing on — that ring is the wall of bushes
+        // sitting across the pathway between two connected maps. Derive its
+        // real box the same way build_map does (bounds are symmetric about the
+        // ring) and clip the strip to it, in the neighbour's LOCAL coords,
+        // before the connection offset is applied.
+        let mut nb_min = [f32::MAX; 2];
+        let mut nb_max = [f32::MIN; 2];
+        for ci in 0..count {
+            let r = &recs[ci * REC..(ci + 1) * REC];
+            let g = |o: usize| i16::from_le_bytes([r[o], r[o + 1]]) as f32;
+            nb_min[0] = nb_min[0].min(g(4));
+            nb_min[1] = nb_min[1].min(g(8));
+            nb_max[0] = nb_max[0].max(g(10));
+            nb_max[1] = nb_max[1].max(g(14));
+        }
+        let nb_ring = [(-nb_min[0]).max(0.0), (-nb_min[1]).max(0.0)];
+        let nb_real_min = [nb_min[0] + nb_ring[0], nb_min[1] + nb_ring[1]];
+        let nb_real_max = [nb_max[0] - nb_ring[0], nb_max[1] - nb_ring[1]];
+
+        let mut cand: Vec<(usize, f32)> = Vec::new();
+        for ci in 0..count {
+            let r = &recs[ci * REC..(ci + 1) * REC];
+            let i16at = |o: usize| i16::from_le_bytes([r[o], r[o + 1]]) as f32;
+            let (x0, z0) = (i16at(4) + ox, i16at(8) + oy);
+            let (x1, z1) = (i16at(10) + ox, i16at(14) + oy);
+            let dx = (cur_min[0] - x1).max(x0 - cur_max[0]).max(0.0);
+            let dz = (cur_min[1] - z1).max(z0 - cur_max[1]).max(0.0);
+            if dx > STRIP_DEPTH_PX || dz > STRIP_DEPTH_PX {
+                continue;
+            }
+            cand.push((ci, dx.max(dz)));
+        }
+        cand.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(core::cmp::Ordering::Equal));
+        Some(StripJob {
+            map_id,
+            name: name.to_string(),
+            ox,
+            oy,
+            cur_min,
+            cur_max,
+            tint,
+            nb_real_min,
+            nb_real_max,
+            cand: cand.into_iter().map(|c| c.0).collect(),
+            next: 0,
+            verts: Vec::new(),
+            spans: Vec::new(),
+            uploaded: 0,
+            src: StripSrc::File { f, recs, verts_off, indices_off },
+        })
+    }
+}
+
+/// One chunk of the file into the strip.
+#[allow(clippy::too_many_arguments)]
+fn strip_chunk_file(
+    f: &mut std::fs::File,
+    recs: &[u8],
+    ci: usize,
+    verts_off: usize,
+    indices_off: usize,
     ox: f32,
     oy: f32,
-    cur_min: [f32; 2],
-    cur_max: [f32; 2],
+    nb_real_min: [f32; 2],
+    nb_real_max: [f32; 2],
     tint: u32,
-) -> Option<NeighborStrip> {
+    verts: &mut Vec<Vertex>,
+    spans: &mut Vec<Span>,
+) -> StripChunk {
     use std::io::{Read, Seek, SeekFrom};
-    let mut f = std::fs::File::open(path).ok()?;
-
-    let mut hdr = [0u8; 16];
-    f.read_exact(&mut hdr).ok()?;
-    let sec_count = u16::from_le_bytes([hdr[6], hdr[7]]) as usize;
-    let mut table = vec![0u8; sec_count * 16];
-    f.read_exact(&mut table).ok()?;
+    const REC: usize = 128;
     let rd32 = |b: &[u8], o: usize| {
         u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]) as usize
     };
-    let mut chnk_off = 0usize;
-    for i in 0..sec_count {
-        let e = i * 16;
-        if &table[e..e + 4] == b"CHNK" {
-            chnk_off = rd32(&table, e + 4);
-        }
-    }
-    if chnk_off == 0 {
-        return None;
-    }
-
-    // CHNK header: map_count, then chunk_total + the pool offsets.
-    let mut ch = [0u8; 32];
-    f.seek(SeekFrom::Start(chnk_off as u64)).ok()?;
-    f.read_exact(&mut ch).ok()?;
-    let map_count = u16::from_le_bytes([ch[0], ch[1]]) as usize;
-    let chunk_total = rd32(&ch, 4);
-    let verts_off = chnk_off + rd32(&ch, 8);
-    let indices_off = chnk_off + rd32(&ch, 16);
-
-    // Map directory, then this map's chunk records.
-    let mut dir = vec![0u8; map_count * 12];
-    f.read_exact(&mut dir).ok()?;
-    let (mut first, mut count) = (0usize, 0usize);
-    for i in 0..map_count {
-        let e = i * 12;
-        if rd32(&dir, e) as u32 == map_id {
-            first = rd32(&dir, e + 4);
-            count = rd32(&dir, e + 8);
-        }
-    }
-    if count == 0 {
-        return None;
-    }
-    const REC: usize = 128;
-    let rec0 = chnk_off + 32 + map_count * 12;
-    let mut recs = vec![0u8; count * REC];
-    f.seek(SeekFrom::Start((rec0 + first * REC) as u64)).ok()?;
-    f.read_exact(&mut recs).ok()?;
-    let _ = chunk_total;
-
-    let mut verts: Vec<Vertex> = Vec::new();
-    let mut spans: Vec<Span> = Vec::new();
-    // Pick the seam-side chunks first and order them by how far OUTSIDE the
-    // current map they sit, so if the vertex cap bites it sheds the chunks
-    // furthest from the seam — the ones least likely to be on screen.
-    // The neighbour has a border ring of its own, and it points back over
-    // the map the player is standing on — that ring is the wall of bushes
-    // sitting across the pathway between two connected maps. Derive its
-    // real box the same way build_map does (bounds are symmetric about the
-    // ring) and clip the strip to it, in the neighbour's LOCAL coords,
-    // before the connection offset is applied.
-    let mut nb_min = [f32::MAX; 2];
-    let mut nb_max = [f32::MIN; 2];
-    for ci in 0..count {
-        let r = &recs[ci * REC..(ci + 1) * REC];
-        let g = |o: usize| i16::from_le_bytes([r[o], r[o + 1]]) as f32;
-        nb_min[0] = nb_min[0].min(g(4));
-        nb_min[1] = nb_min[1].min(g(8));
-        nb_max[0] = nb_max[0].max(g(10));
-        nb_max[1] = nb_max[1].max(g(14));
-    }
-    let nb_ring = [(-nb_min[0]).max(0.0), (-nb_min[1]).max(0.0)];
-    let nb_real_min = [nb_min[0] + nb_ring[0], nb_min[1] + nb_ring[1]];
-    let nb_real_max = [nb_max[0] - nb_ring[0], nb_max[1] - nb_ring[1]];
-
-    let mut cand: Vec<(usize, f32)> = Vec::new();
-    for ci in 0..count {
-        let r = &recs[ci * REC..(ci + 1) * REC];
-        let i16at = |o: usize| i16::from_le_bytes([r[o], r[o + 1]]) as f32;
-        let (x0, z0) = (i16at(4) + ox, i16at(8) + oy);
-        let (x1, z1) = (i16at(10) + ox, i16at(14) + oy);
-        let dx = (cur_min[0] - x1).max(x0 - cur_max[0]).max(0.0);
-        let dz = (cur_min[1] - z1).max(z0 - cur_max[1]).max(0.0);
-        if dx > STRIP_DEPTH_PX || dz > STRIP_DEPTH_PX {
+    let Some(r) = recs.get(ci * REC..(ci + 1) * REC) else { return StripChunk::Abort };
+    let i16at = |o: usize| i16::from_le_bytes([r[o], r[o + 1]]) as f32;
+    // AABB in the neighbour's own space, shifted by the connection
+    // offset the guest already computed (scene.maps[slot].ox/oy).
+    let (x0, z0) = (i16at(4) + ox, i16at(8) + oy);
+    let (x1, z1) = (i16at(10) + ox, i16at(14) + oy);
+    let (y0, y1) = (i16at(6), i16at(12));
+    for kind in 0..MESH_KINDS_N {
+        let m = 20 + kind * 12;
+        let vert_base = rd32(r, m);
+        let index_count = u16::from_le_bytes([r[m + 6], r[m + 7]]) as usize;
+        let index_base = rd32(r, m + 8);
+        if index_count == 0 {
             continue;
         }
-        cand.push((ci, dx.max(dz)));
-    }
-    cand.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(core::cmp::Ordering::Equal));
-
-    for (ci, _) in cand {
-        if verts.len() >= STRIP_MAX_VERTS {
-            break;
+        // A seam strip only has to stop the wall of border bushes, and
+        // it is always at the far end of the view: ground, water and
+        // BOXED trees give the silhouette. The fine/coarse tree hulls
+        // are the bulk of any map's geometry and would dominate the
+        // read for detail nobody can resolve at that distance; grass
+        // and flowers are ankle-height and invisible out there. Kind 1
+        // (groundBake) is skipped because build_map does not use it
+        // either, and drawing both would double up the ground.
+        let want = GROUND_KINDS.contains(&kind) || kind == TREE_BOX_KIND;
+        if !want {
+            continue;
         }
-        let r = &recs[ci * REC..(ci + 1) * REC];
-        let i16at = |o: usize| i16::from_le_bytes([r[o], r[o + 1]]) as f32;
-        // AABB in the neighbour's own space, shifted by the connection
-        // offset the guest already computed (scene.maps[slot].ox/oy).
-        let (x0, z0) = (i16at(4) + ox, i16at(8) + oy);
-        let (x1, z1) = (i16at(10) + ox, i16at(14) + oy);
-        let (y0, y1) = (i16at(6), i16at(12));
-        for kind in 0..MESH_KINDS_N {
-            let m = 20 + kind * 12;
-            let vert_base = rd32(r, m);
-            let index_count = u16::from_le_bytes([r[m + 6], r[m + 7]]) as usize;
-            let index_base = rd32(r, m + 8);
-            if index_count == 0 {
+        let mut idx = vec![0u8; index_count * 2];
+        if f.seek(SeekFrom::Start((indices_off + index_base * 2) as u64)).is_err()
+            || f.read_exact(&mut idx).is_err()
+        {
+            return StripChunk::Abort;
+        }
+        let span_start = verts.len();
+        let mut gmin = [f32::MAX; 3];
+        let mut gmax = [f32::MIN; 3];
+        // One contiguous read of the chunk's vertex pool beats a seek
+        // per index by a wide margin on SD.
+        let vmax = (0..index_count)
+            .map(|k| u16::from_le_bytes([idx[k * 2], idx[k * 2 + 1]]) as usize)
+            .max()
+            .unwrap_or(0);
+        let mut vbuf = vec![0u8; (vmax + 1) * 16];
+        if f.seek(SeekFrom::Start((verts_off + vert_base * 16) as u64)).is_err() {
+            return StripChunk::Abort;
+        }
+        if f.read_exact(&mut vbuf).is_err() {
+            continue;
+        }
+        let at = |vi: usize| -> (f32, f32, f32, f32, f32, u32) {
+            let b = &vbuf[vi * 16..vi * 16 + 16];
+            (
+                u16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0,
+                u16::from_le_bytes([b[2], b[3]]) as f32 / 32768.0,
+                i16::from_le_bytes([b[8], b[9]]) as f32,
+                i16::from_le_bytes([b[10], b[11]]) as f32,
+                i16::from_le_bytes([b[12], b[13]]) as f32,
+                u32::from_le_bytes([b[4], b[5], b[6], b[7]]),
+            )
+        };
+        for t in 0..index_count / 3 {
+            let i0 = u16::from_le_bytes([idx[t * 6], idx[t * 6 + 1]]) as usize;
+            let i1 = u16::from_le_bytes([idx[t * 6 + 2], idx[t * 6 + 3]]) as usize;
+            let i2 = u16::from_le_bytes([idx[t * 6 + 4], idx[t * 6 + 5]]) as usize;
+            let (t0, t1, t2) = (at(i0), at(i1), at(i2));
+            // Drop the neighbour's own border ring — in LOCAL coords,
+            // before the offset — so it cannot spill back across the
+            // seam onto the map the player is walking on.
+            let mid_x = (t0.2 + t1.2 + t2.2) / 3.0;
+            let mid_z = (t0.4 + t1.4 + t2.4) / 3.0;
+            if mid_x < nb_real_min[0] || mid_x > nb_real_max[0]
+                || mid_z < nb_real_min[1] || mid_z > nb_real_max[1]
+            {
                 continue;
             }
-            // A seam strip only has to stop the wall of border bushes, and
-            // it is always at the far end of the view: ground, water and
-            // BOXED trees give the silhouette. The fine/coarse tree hulls
-            // are the bulk of any map's geometry and would dominate the
-            // read for detail nobody can resolve at that distance; grass
-            // and flowers are ankle-height and invisible out there. Kind 1
-            // (groundBake) is skipped because build_map does not use it
-            // either, and drawing both would double up the ground.
-            let want = GROUND_KINDS.contains(&kind) || kind == TREE_BOX_KIND;
-            if !want {
+            let tri = [[t0.2, t0.3, t0.4], [t1.2, t1.3, t1.4], [t2.2, t2.3, t2.4]];
+            if ring_inner_face(tri, nb_real_min, nb_real_max) {
                 continue;
             }
-            let mut idx = vec![0u8; index_count * 2];
-            f.seek(SeekFrom::Start((indices_off + index_base * 2) as u64)).ok()?;
-            f.read_exact(&mut idx).ok()?;
-            let span_start = verts.len();
-            let mut gmin = [f32::MAX; 3];
-            let mut gmax = [f32::MIN; 3];
-            // One contiguous read of the chunk's vertex pool beats a seek
-            // per index by a wide margin on SD.
-            let vmax = (0..index_count)
-                .map(|k| u16::from_le_bytes([idx[k * 2], idx[k * 2 + 1]]) as usize)
-                .max()
-                .unwrap_or(0);
-            let mut vbuf = vec![0u8; (vmax + 1) * 16];
-            f.seek(SeekFrom::Start((verts_off + vert_base * 16) as u64)).ok()?;
-            if f.read_exact(&mut vbuf).is_err() {
-                continue;
-            }
-            let at = |vi: usize| -> (f32, f32, f32, f32, f32, u32) {
-                let b = &vbuf[vi * 16..vi * 16 + 16];
-                (
-                    u16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0,
-                    u16::from_le_bytes([b[2], b[3]]) as f32 / 32768.0,
-                    i16::from_le_bytes([b[8], b[9]]) as f32,
-                    i16::from_le_bytes([b[10], b[11]]) as f32,
-                    i16::from_le_bytes([b[12], b[13]]) as f32,
-                    u32::from_le_bytes([b[4], b[5], b[6], b[7]]),
-                )
-            };
-            for t in 0..index_count / 3 {
-                let i0 = u16::from_le_bytes([idx[t * 6], idx[t * 6 + 1]]) as usize;
-                let i1 = u16::from_le_bytes([idx[t * 6 + 2], idx[t * 6 + 3]]) as usize;
-                let i2 = u16::from_le_bytes([idx[t * 6 + 4], idx[t * 6 + 5]]) as usize;
-                let (t0, t1, t2) = (at(i0), at(i1), at(i2));
-                // Drop the neighbour's own border ring — in LOCAL coords,
-                // before the offset — so it cannot spill back across the
-                // seam onto the map the player is walking on.
-                let mid_x = (t0.2 + t1.2 + t2.2) / 3.0;
-                let mid_z = (t0.4 + t1.4 + t2.4) / 3.0;
-                if mid_x < nb_real_min[0] || mid_x > nb_real_max[0]
-                    || mid_z < nb_real_min[1] || mid_z > nb_real_max[1]
-                {
-                    continue;
+            for vt in [t0, t1, t2] {
+                let (u, v, lx, ly, lz, abgr) = vt;
+                let (px, py, pz) = (lx + ox, ly, lz + oy);
+                let a = draw::modulate_rgb(abgr, tint);
+                let p = [px, py, pz];
+                for c in 0..3 {
+                    if p[c] < gmin[c] { gmin[c] = p[c]; }
+                    if p[c] > gmax[c] { gmax[c] = p[c]; }
                 }
-                let tri = [[t0.2, t0.3, t0.4], [t1.2, t1.3, t1.4], [t2.2, t2.3, t2.4]];
-                if ring_inner_face(tri, nb_real_min, nb_real_max) {
-                    continue;
-                }
-                for vt in [t0, t1, t2] {
-                    let (u, v, lx, ly, lz, abgr) = vt;
-                    let (px, py, pz) = (lx + ox, ly, lz + oy);
-                    let a = draw::modulate_rgb(abgr, tint);
-                    let p = [px, py, pz];
-                    for c in 0..3 {
-                        if p[c] < gmin[c] { gmin[c] = p[c]; }
-                        if p[c] > gmax[c] { gmax[c] = p[c]; }
-                    }
-                    verts.push(Vertex {
-                        pos: [px as i16, py as i16, pz as i16, 0],
-                        color: [
-                            (a & 0xff) as u8,
-                            ((a >> 8) & 0xff) as u8,
-                            ((a >> 16) & 0xff) as u8,
-                            255,
-                        ],
-                        uv: [u, v],
-                    });
-                }
-            }
-            if verts.len() > span_start {
-                spans.push(Span {
-                    bmin: [x0, y0, z0],
-                    bmax: [x1, y1, z1],
-                    gmin,
-                    gmax,
-                    occludable: kind == TREE_BOX_KIND,
-                    start: span_start,
-                    end: verts.len(),
+                verts.push(Vertex {
+                    pos: [px as i16, py as i16, pz as i16, 0],
+                    color: [
+                        (a & 0xff) as u8,
+                        ((a >> 8) & 0xff) as u8,
+                        ((a >> 16) & 0xff) as u8,
+                        255,
+                    ],
+                    uv: [u, v],
                 });
             }
         }
+        if verts.len() > span_start {
+            spans.push(Span {
+                bmin: [x0, y0, z0],
+                bmax: [x1, y1, z1],
+                gmin,
+                gmax,
+                occludable: kind == TREE_BOX_KIND,
+                start: span_start,
+                end: verts.len(),
+            });
+        }
     }
-    if spans.is_empty() {
-        return None;
+    StripChunk::Ok
+}
+
+/// Strip spans into GPU buffers, beside the ones already there. A neighbour
+/// strip is scenery, so a span linear cannot take is dropped (the same
+/// infallible-allocation trap as the terrain upload -- see linear_fits).
+fn upload_spans(verts: &[Vertex], spans: &[Span], attr_info: &attrib::Info, out: &mut Vec<(Span, buffer::Info)>) {
+    for s in spans.iter() {
+        let n = (s.end - s.start).min(65535);
+        if n == 0 || s.start + n > verts.len() {
+            continue;
+        }
+        if !linear_fits(n) {
+            continue;
+        }
+        let mut bi = buffer::Info::new();
+        if bi
+            .add(buffer::Buffer::new(&verts[s.start..s.start + n]), attr_info.permutation())
+            .is_ok()
+        {
+            out.push((*s, bi));
+        }
     }
-    Some(NeighborStrip { map_id, verts, spans })
 }
 
 fn build_map(
@@ -3988,6 +4208,9 @@ fn main() {
     let mut strip_infos: Vec<(Span, buffer::Info)> = Vec::new();
     let mut strip_hold: Vec<(Span, buffer::Info)> = Vec::new();
     let mut strip_verts_kb = 0usize;
+    // The strips still to come after a seam crossing, one built a slice per
+    // frame (StripJob), cleared by the next rebuild.
+    let mut strip_jobs: Vec<StripJob> = Vec::new();
     // A "huge" map (build_map's is_huge) streams a window of chunks instead
     // of building the whole thing, and re-streams whenever the player
     // crosses into a new chunk. chunk_infos_prev holds the outgoing window
@@ -5052,6 +5275,8 @@ fn main() {
                     strip_infos.clear();
                     strip_verts_kb = 0;
                 }
+                // (the map being left, for the seam strips below)
+                let prev_map_id = map_ids.get(prev_map_i).copied();
                 prev_map_i = map_i;
                 let mut upload_fail = 0u32;
                 // what the failures dropped and the pool after: a span the
@@ -5106,61 +5331,53 @@ fn main() {
                 // than fail an allocation mid-load.
                 let free_kb = unsafe_free_kb();
                 dlog(&format!("[pv] linear free {} KB after build", free_kb));
+                // A seam CROSSING (the map just left is one of this map's
+                // neighbours) builds only that one now -- it is right behind
+                // the player -- and the rest a slice per frame after (see
+                // StripJob). A warp builds them all here, behind its fade;
+                // the forest zone keeps its loader exactly as it was.
+                let crossing_from = prev_map_id
+                    .filter(|p| !unsafe { LEGACY_ZONE } && neighbor_slots.iter().any(|s| s.0 == *p));
+                strip_jobs.clear();
                 if !cur_map_huge && free_kb >= STRIP_MIN_FREE_KB && !built_flat {
                     for &(nid, ox, oy) in neighbor_slots.iter() {
                         dlog(&format!("[pv] strip loading id={} free={}KB", nid, unsafe_free_kb()));
                         let Some((_, nname)) = map_index.iter().find(|(id, _)| *id == nid) else {
                             continue;
                         };
-                        // From memory when the read-ahead already has it whole;
-                        // off the card otherwise, and always in the forest zone.
-                        let resident = if unsafe { LEGACY_ZONE } {
-                            None
-                        } else {
-                            unsafe { resident_pak(nname) }.filter(|p| strip_has_trees(p, nid))
-                        };
-                        // A resident copy that cannot supply the strip (read
-                        // under a plan that skipped the tier it wants) must fall
-                        // THROUGH to the file, not drop the neighbour: skipping
-                        // it left a map with no connected map drawn at all, and
-                        // its border ring already clipped off for one.
-                        let strip = resident
-                            .and_then(|p| {
-                                strip_from_pak(p, nid, ox, oy, geom.map_min, geom.map_max, last_tint)
-                            })
-                            .or_else(|| {
-                                let path = format!("{}/{}.vxpak", PAKS_DIR, nname);
-                                load_neighbor_strip(
-                                    &path, nid, ox, oy, geom.map_min, geom.map_max, last_tint,
-                                )
-                            });
-                        let Some(strip) = strip else {
+                        let Some(mut job) =
+                            StripJob::start(nname, nid, ox, oy, geom.map_min, geom.map_max, last_tint)
+                        else {
                             continue;
                         };
-                        strip_verts_kb += strip.verts.len() * 20 / 1024;
-                        for s in strip.spans.iter() {
-                            let n = (s.end - s.start).min(65535);
-                            if n == 0 { continue; }
-                            // Same infallible-allocation trap as the terrain
-                            // upload above — see linear_fits. A neighbour strip is
-                            // scenery, so dropping one is cheap.
-                            if !linear_fits(n) { continue; }
-                            let mut bi = buffer::Info::new();
-                            if bi
-                                .add(
-                                    buffer::Buffer::new(&strip.verts[s.start..s.start + n]),
-                                    attr_info.permutation(),
-                                )
-                                .is_ok()
-                            {
-                                strip_infos.push((*s, bi));
+                        if crossing_from.is_some() {
+                            // behind the player: its nearest chunks now, the
+                            // rest first in the queue; the others queued
+                            let behind = crossing_from == Some(nid);
+                            let done = behind && job.step(Some(STRIP_BEHIND_MS));
+                            let n = job.drain(&attr_info, &mut strip_infos);
+                            strip_verts_kb += n * 20 / 1024;
+                            dlog(&format!(
+                                "[pv] strip {} {} ({} of {} chunks now, {} verts)",
+                                nname,
+                                if done { "built" } else if behind { "begun" } else { "deferred" },
+                                job.next,
+                                job.cand.len(),
+                                n,
+                            ));
+                            if !done {
+                                if behind { strip_jobs.insert(0, job) } else { strip_jobs.push(job) }
                             }
+                            continue;
                         }
+                        job.step(None);
+                        let n = job.drain(&attr_info, &mut strip_infos);
+                        strip_verts_kb += n * 20 / 1024;
                         dlog(&format!(
                             "[pv] strip {} spans={} verts={} off=({:.0},{:.0})",
                             nname,
-                            strip.spans.len(),
-                            strip.verts.len(),
+                            job.spans.len(),
+                            n,
                             ox,
                             oy,
                         ));
@@ -5293,6 +5510,29 @@ fn main() {
                 }
             }
             center = geom.center;
+        }
+
+        // A deferred seam strip: a slice of it, onto the GPU chunk by chunk
+        // (dropped if linear has run short meanwhile).
+        if let Some(job) = strip_jobs.first_mut() {
+            if unsafe_free_kb() < STRIP_MIN_FREE_KB {
+                dlog(&format!("[pv] strips deferred dropped: linear {} KB", unsafe_free_kb()));
+                strip_jobs.clear();
+            } else {
+                let t_step = now_ms();
+                let done = job.step(Some(STRIP_STEP_MS));
+                strip_verts_kb += job.drain(&attr_info, &mut strip_infos) * 20 / 1024;
+                if done {
+                    dlog(&format!(
+                        "[pv] strip {} (deferred) done: spans={} verts={} last slice {} ms",
+                        job.name,
+                        job.spans.len(),
+                        job.verts.len(),
+                        now_ms().wrapping_sub(t_step),
+                    ));
+                    strip_jobs.remove(0);
+                }
+            }
         }
 
         if guest_drive {
