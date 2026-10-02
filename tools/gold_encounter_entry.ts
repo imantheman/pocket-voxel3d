@@ -31,6 +31,7 @@ let walkLeft = true;
 let shots = 0;
 let menuSeen = 0;
 let movesSeen = 0;
+let overSeen = 0;
 
 /** A tall-grass cell on the current map with grass on both sides of it. */
 function findGrass(w: any): [number, number] | null {
@@ -107,7 +108,11 @@ g.frame = (b: number): void => {
           native.screenshot?.();
         }
         if (menuSeen === 90) pad = VOX_BTN.a; // FIGHT (the cursor starts there)
-        if (menuSeen < 160) { mainFrame((b & ~0xff) | pad); return; }
+        // then <PK><MN> and PACK, each opened on the bottom screen a second
+        if (menuSeen === 170) { top.menuIndex = 2; pad = VOX_BTN.a; }
+        if (menuSeen === 200) { top.menuIndex = 3; pad = VOX_BTN.a; }
+        if (menuSeen === 230) top.menuIndex = 1;
+        if (menuSeen < 240) { mainFrame((b & ~0xff) | pad); return; }
       }
       if (typeof ONLY !== "undefined" && top.phase === "moves") {
         movesSeen++;
@@ -126,6 +131,14 @@ g.frame = (b: number): void => {
           pad = (top.menuIndex ?? 1) < run ? (n % 24 === 0 ? VOX_BTN.right : VOX_BTN.down) : VOX_BTN.a;
         } else pad = VOX_BTN.a;
       }
+    } else if (typeof ONLY !== "undefined" && (top.screenId === "Gen2PartyMenu" || top.screenId === "Gen2PackMenu")) {
+      // a second on it, a shot (both screens), then B back to the battle
+      overSeen++;
+      if (overSeen === 60) {
+        console.log(`[pv] bench battle ${shots++} shot (${top.screenId})`);
+        native.screenshot?.();
+      }
+      if (overSeen === 90) { pad = VOX_BTN.b; overSeen = 0; }
     } else if (n % 12 === 0) pad = VOX_BTN.a;
   }
   mainFrame((b & ~0xff) | pad);

@@ -34,6 +34,15 @@
 // A tap moves the battle's own cursor and presses A for it, so the battle
 // answers exactly as it answers the buttons (which work as ever).
 //
+// With BATTLES 3D, what the battle opens -- the party (and its SWITCH /
+// STATS / CANCEL), the pack (and its USE prompts, the mon to use it on) --
+// is drawn here too, whole (lcdTall: all 160x144 at the top screen's scale),
+// the screens themselves unchanged, while the top keeps the arena
+// (Game2.stagedBattleBelow). So are the battle's forget list and level-up
+// stats box (its own drawBottom). Taps there go to the row under the finger:
+// a mon, a submenu line, an item, a move to forget; the bag picture turns
+// the pocket, the pack's top rows close it.
+//
 // A tap is the finger lifting after it went down on a target (the Kanto
 // Gear's rule). The panel redraws only when something it shows has changed,
 // checked twice a second, so a still panel costs a string compare every 15
@@ -80,7 +89,7 @@ function targeted(host: VoxelHost, k: number): VoxelHost {
     f.apply(host, a);
     host.lcdTarget?.(0);
   };
-  const names = ["lcdShow", "lcdBank", "lcdReset", "lcdCells", "lcdRegs", "lcdObjs", "lcdPals", "lcdLines"];
+  const names = ["lcdShow", "lcdBank", "lcdReset", "lcdCells", "lcdRegs", "lcdObjs", "lcdPals", "lcdLines", "lcdTall"];
   const out: Record<string, unknown> = {};
   for (const n of names) out[n] = wrap(n);
   // the typed-array forms only where the host has them (Lcd.end takes their
@@ -143,6 +152,15 @@ function askIndex(st: any): number {
   return Number(st[ASK_FIELD[st.phase] ?? "forgetChoice"] ?? 1);
 }
 
+/** The battle phases drawn here whole, with the battle's own drawBottom. */
+function tallPhase(st: any): boolean {
+  return !!st?.staged3d && ((st.phase === "choose-forget" && (st.messageTimer ?? 0) <= 0) || st.phase === "stats-box");
+}
+
+/** The bottom screen in whole mode: 160x144 at 5/3 between bars 27 px wide. */
+const TALL_X0 = 27;
+const TALL_SCALE = 240 / 144;
+
 /** Where the battle panel's boxes start, and the move list's first row. */
 const ACT_ROW = 7;
 const MOVE_ROW = 8;
@@ -162,6 +180,10 @@ export class Companion {
   private gearFor = "";
   /** A button a battle tap pressed, let go on the next step. */
   private tapBtn: string | null = null;
+  /** Where the finger went down, in the bottom screen's pixels. */
+  private downPx: [number, number] | null = null;
+  /** Bumped per whole-screen redraw: those views change every frame. */
+  private tick = 0;
 
   constructor(host: VoxelHost, banks: LcdBankSpec[]) {
     this.lcd = new Lcd(targeted(host, 1));
@@ -177,7 +199,10 @@ export class Companion {
       this.tapBtn = null;
     }
     if (held) {
-      if (!this.down) this.down = [Math.floor(x / 16), Math.floor(y / 16)];
+      if (!this.down) {
+        this.down = [Math.floor(x / 16), Math.floor(y / 16)];
+        this.downPx = [x, y];
+      }
       return;
     }
     const at = this.down;
@@ -186,6 +211,16 @@ export class Companion {
     const [cx, cy] = at;
     const st = battleOf(game);
     if (st) {
+      // the whole-screen views: the cell under the finger in the 160x144
+      const routed = game.stagedBattleBelow?.();
+      if (routed || (game.stack.top() === st && tallPhase(st))) {
+        const tx = Math.floor(((this.downPx![0] - TALL_X0) / TALL_SCALE) / 8);
+        const ty = Math.floor((this.downPx![1] / TALL_SCALE) / 8);
+        if (tx < 0 || tx >= COLS) return;
+        if (routed) this.screenTap(game.stack.top(), tx, ty);
+        else this.tallBattleTap(st, tx, ty);
+        return;
+      }
       if (game.stack.top() === st) this.battleTap(st, cx, cy);
       return;
     }
@@ -244,11 +279,80 @@ export class Companion {
     this.sig = "";
   }
 
+  /** Press `btn` for the step after this one (released the step after). */
+  private press(btn: string, what: string, tx: number, ty: number): void {
+    Input.sourcePress(btn, "companion");
+    this.tapBtn = btn;
+    console.log(`[pv] gold panel: ${what} tap ${btn} at ${tx},${ty}`);
+    this.sig = "";
+  }
+
+  /** The battle's forget list and stats box, drawn here whole: tile (tx, ty). */
+  private tallBattleTap(st: any, tx: number, ty: number): void {
+    if (st.phase === "choose-forget") {
+      // ForgetMoveList: moves at rows 4, 6, 8, 10 right of column 5
+      const slot = Math.floor((ty - 4) / 2) + 1;
+      if (tx < 5 || slot < 1 || slot > 4) return;
+      st.forgetIndex = slot;
+    }
+    this.press("a", `battle ${st.phase}`, tx, ty);
+  }
+
+  /** A screen the battle opened, drawn here whole: tile (tx, ty) tapped. */
+  private screenTap(screen: any, tx: number, ty: number): void {
+    const id = String(screen?.screenId ?? "");
+    if (id === "Gen2PartyMenu") {
+      const menu = screen.submenu;
+      if (menu) {
+        // the battle submenu (SWITCH / STATS / CANCEL): a box at (11,11),
+        // its lines at rows 12, 14, 16; a tap off it closes it
+        const line = Math.floor((ty - 12) / 2) + 1;
+        if (menu.battle && tx >= 11 && line >= 1 && line <= menu.items.length) {
+          menu.index = line;
+          this.press("a", "party submenu", tx, ty);
+        } else {
+          this.press("b", "party submenu", tx, ty);
+        }
+        return;
+      }
+      // a mon's two rows from row 1; CANCEL on the row after the last
+      const slot = Math.floor((ty - 1) / 2) + 1;
+      const n = (screen.party ?? []).length;
+      if (ty >= 1 && slot >= 1 && slot <= n + 1) {
+        screen.index = slot;
+        this.press("a", "party", tx, ty);
+      }
+      return;
+    }
+    if (id === "Gen2PackMenu") {
+      const busy = screen.submenu || screen.qtyState || screen.confirm || screen.message !== undefined
+        || screen.switching !== undefined;
+      if (ty <= 1) return this.press("b", "pack", tx, ty);
+      if (busy) return this.press("a", "pack prompt", tx, ty);
+      // the bag picture: the next pocket
+      if (tx < 7 && ty < 12) return this.press("right", "pack pocket", tx, ty);
+      // the list: five rows from row 2, two rows each
+      const row = Math.floor((ty - 2) / 2) + 1;
+      if (tx >= 7 && row >= 1 && row <= 5) {
+        const i = row + (screen.scroll ?? 0);
+        if (i <= (screen.total?.() ?? 0)) {
+          screen.index = i;
+          this.press("a", "pack", tx, ty);
+        }
+      }
+      return;
+    }
+    // anything else the battle opens (a stats page, a nickname's naming
+    // screen...): a tap is A
+    this.press("a", id || "screen", tx, ty);
+  }
+
   /** Once per shown frame, after the top screen's compose. */
   frame(game: any): void {
     // a battle's text types and its cursor moves: looked at every second
     // frame (the text then types at 15 steps a second down here)
     const every = battleOf(game) ? 2 : CHECK_EVERY;
+    if (this.lcd.tall && !this.tallWanted(game)) this.sig = "";
     if (this.sig !== "" && ++this.wait < every) return;
     this.wait = 0;
     const sig = this.signature(game);
@@ -294,8 +398,18 @@ export class Companion {
     return n;
   }
 
+  /** Whether this frame's view is a whole-screen one (see the header). */
+  private tallWanted(game: any): boolean {
+    const st = game?.world?.map ? battleOf(game) : null;
+    if (!st) return false;
+    return !!game.stagedBattleBelow?.() || (game.stack.top() === st && tallPhase(st));
+  }
+
   private signature(game: any): string {
     if (!game?.world?.map) return "boot";
+    // the whole-screen views animate (cursors, icons, typed text): redrawn
+    // each time they are looked at
+    if (this.tallWanted(game)) return `T${++this.tick}`;
     const st = battleOf(game);
     if (st) return this.battleSignature(game, st);
     let s = `${this.page}:${this.mon}|${this.location(game)}|${this.time(game)}|${game.save?.player?.money ?? 0}`;
@@ -397,6 +511,27 @@ export class Companion {
       this.battleMon(enemy, st.shownHp?.enemy ?? enemy?.hp, 8, false);
       this.battleMon(player, st.shownHp?.player ?? player?.hp, 11, true);
     }
+  }
+
+  /** The screens over a staged battle, as Game2.draw would draw them on
+   *  top: a widescreen face (the top one's, else the topmost opaque one's)
+   *  alone when it is the top's, else from the topmost opaque one up. */
+  private drawScreens(above: any[]): void {
+    let base = 0;
+    for (let i = above.length - 1; i >= 0; i--) {
+      if (above[i]?.isOpaque) {
+        base = i;
+        break;
+      }
+    }
+    const top = above[above.length - 1];
+    const wideOf = (s: any): any => (s && s.drawsWidescreen?.() && s.drawWidescreen ? s : null);
+    const wide = wideOf(top) ?? (above[base]?.isOpaque ? wideOf(above[base]) : null);
+    if (wide) {
+      wide.drawWidescreen(160, 144);
+      if (wide === top) return;
+    }
+    for (let i = base; i < above.length; i++) above[i]?.draw?.();
   }
 
   private drawParty(game: any): void {
@@ -529,6 +664,19 @@ export class Companion {
     G.setColor(1, 1, 1, 1);
     G.rectangle("fill", 0, 0, 160, 144);
     const st = game?.world?.map ? battleOf(game) : null;
+    const routed = st ? game.stagedBattleBelow?.() : null;
+    lcd.tall = !!routed || (!!st && game.stack.top() === st && tallPhase(st));
+    if (routed) {
+      this.drawScreens(routed.above);
+      lcd.end();
+      return;
+    }
+    if (st && lcd.tall) {
+      // the forget list or the stats box, as the top screen would draw them
+      st.drawBottom(0);
+      lcd.end();
+      return;
+    }
     if (st) {
       if (!this.hud) this.hud = BattleHud.new(game.data?.gen2MenuGfx, game.data?.gen2Palettes);
       this.drawBattle(game, st);

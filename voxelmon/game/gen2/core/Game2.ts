@@ -829,6 +829,18 @@ export class Game2 {
       return;
     }
     if (this.world && this.world.map) {
+      // A battle staged in 3D with screens over it (its party, its pack and
+      // what they open): those are the bottom screen's (ui/Companion.ts),
+      // and the top keeps the arena and the HUDs, as the Kanto games' 3D
+      // battles keep theirs.
+      const routed = this.stagedBattleBelow();
+      if (routed) {
+        this.frameWorldActive = true;
+        const b = routed.battle;
+        if (b.drawsWidescreen && b.drawsWidescreen() && b.drawWidescreen) b.drawWidescreen(W, H);
+        else b.draw?.();
+        return;
+      }
       if (wide) {
         wide.drawWidescreen(W, H);
         if (wide !== top) this.stack.draw();
@@ -865,6 +877,22 @@ export class Game2 {
     G.clear(0.07, 0.05, 0.02);
     Font.draw("POKEMON GOLD", 32, 48);
     Font.draw(String(this.status ?? "No world").slice(0, 20), 0, 72);
+  }
+
+  /**
+   * The battle staged in 3D on the stack and the screens standing over it,
+   * or null when there is none or nothing is over it: those screens draw on
+   * the bottom screen (ui/Companion.ts) and the top keeps the battle.
+   */
+  stagedBattleBelow(): { battle: State; above: State[] } | null {
+    const states = this.stack.states;
+    for (let i = states.length - 1; i >= 0; i--) {
+      const s = states[i] as State & { screenId?: string; staged3d?: boolean };
+      if (s && s.screenId === "Gen2BattleState") {
+        return s.staged3d && i < states.length - 1 ? { battle: s, above: states.slice(i + 1) } : null;
+      }
+    }
+    return null;
   }
 
   /**

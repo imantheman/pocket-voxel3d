@@ -4751,10 +4751,10 @@ export class BattleState {
     }
     this.drawHud();
     // Staged in 3D, the text and the menus are the bottom screen's
-    // (ui/Companion.ts's battle page), as in the Kanto games' 3D battles:
-    // the top shows the arena and the HUDs. The phases that page has no
-    // view of -- the forget list, the level-up stats box -- stay here.
-    if (this.staged3d && this.phase !== "choose-forget" && this.phase !== "stats-box") return;
+    // (ui/Companion.ts: its battle page, and this drawBottom drawn there
+    // whole for the forget list and the level-up stats box), as in the
+    // Kanto games' 3D battles: the top shows the arena and the HUDs.
+    if (this.staged3d) return;
     this.drawBottom(0);
   }
 
