@@ -1501,6 +1501,23 @@ const POP_PX: f32 = 10.0;
 /// Guest screen coordinate -> the quantised grid `Vertex::pos` stores.
 fn qpx(v: f32) -> i16 { (v * UI_Q) as i16 }
 
+/// Gold's dim: the tint Gold's world view sends while an opaque screen (a
+/// menu, a battle before its stage is up) covers the world
+/// (gen2/platform/worldview.ts emitTint).
+const GOLD_DIM_TINT: u32 = 0xff70_7070;
+/// The same darkening as a black quad's opacity: 1 - 0x70/0xff of the way to
+/// black is 143/255.
+const GOLD_DIM_ALPHA: u8 = 143;
+
+/// The tint the world's geometry is baked with. In Gold the dim is drawn as
+/// a quad over the world instead (`GOLD_DIM_ALPHA`): baked, every menu that
+/// opened or closed -- and the start of every battle, twice -- rebuilt the
+/// whole map, most of a second each time on the 3DS. Everywhere else the
+/// tint is baked as it always was.
+fn geometry_tint(tint: u32) -> u32 {
+    if cfg!(feature = "gold") && tint == GOLD_DIM_TINT { 0xffff_ffff } else { tint }
+}
+
 /// TILT SHIFT's blurred bands, top to bottom: (screen y as a fraction of the
 /// height, the blur's alpha there), the alpha running linearly between rows.
 /// SOFT (1) lays the half-size copy over the outer thirds; STRONG (2) the
@@ -3603,6 +3620,15 @@ fn main() {
     let mut page_tex_retired: Vec<texture::Texture> = Vec::new();
     let mut page_tex_retired_hold: Vec<texture::Texture> = Vec::new();
     let mut lcd_hold: Option<buffer::Info> = None;
+    // Gold's dim quad (geometry_tint): black over the whole top screen at
+    // GOLD_DIM_ALPHA, in the UI ortho the Gold screen draws in. Built once.
+    let dim_buf: Option<buffer::Info> = {
+        let (x0, y0, x1, y1) = (qpx(0.0), qpx(0.0), qpx(UI_VIEW_W), qpx(UI_VIEW_H));
+        let mp = |px: i16, py: i16| Vertex { pos: [px, py, 0, 0], color: [0, 0, 0, GOLD_DIM_ALPHA], uv: [0.0, 0.0] };
+        let verts = [mp(x0, y0), mp(x1, y0), mp(x1, y1), mp(x0, y0), mp(x1, y1), mp(x0, y1)];
+        let mut bi = buffer::Info::new();
+        if bi.add(buffer::Buffer::new(&verts[..]), attr_info.permutation()).is_ok() { Some(bi) } else { None }
+    };
     // TILT SHIFT's quads, held the same frame longer.
     let mut tilt_hold: [Option<buffer::Info>; 3] = [None, None, None];
     // The Gold screen's upload buffer, kept: only its 160x144 corner is
@@ -3978,8 +4004,8 @@ fn main() {
                     if sc.stamps_off != stamps_off_seen {
                         reload = true;
                     }
-                    if sc.tint != last_tint {
-                        last_tint = sc.tint;
+                    if geometry_tint(sc.tint) != last_tint {
+                        last_tint = geometry_tint(sc.tint);
                         reload = true;
                     }
                     if sc.daytime != last_daytime {
@@ -4203,7 +4229,7 @@ fn main() {
             let scene_now = unsafe { voxel::scene() };
             let stamps_off_snapshot: Vec<(u32, i16, i16)> = scene_now.stamps_off.clone();
             stamps_off_seen = stamps_off_snapshot.clone();
-            last_tint = scene_now.tint;
+            last_tint = geometry_tint(scene_now.tint);
             // Which sides a neighbour will be drawn on, read from the slots
             // the guest already publishes. Needed BEFORE build_map so the
             // border ring can be clipped away on exactly those sides.
@@ -4851,7 +4877,13 @@ fn main() {
         // can't reach: the sky clear below and the entity cards built in
         // this same block. All three have to agree or a dark cave only
         // half-darkens.
-        let scene_tint = unsafe { voxel::scene() }.tint;
+        let scene_tint = geometry_tint(unsafe { voxel::scene() }.tint);
+        // Gold's dim, drawn over the world this frame (see geometry_tint)
+        let dim_ref = if cfg!(feature = "gold") && unsafe { voxel::scene() }.tint == GOLD_DIM_TINT {
+            dim_buf.as_ref()
+        } else {
+            None
+        };
         // A battle's camera sits back from a fixed arena and can't dodge
         // whatever's in between the way the free-roam camera dodges by
         // following the player — a house or a tall tree between the eye and
@@ -6127,6 +6159,22 @@ if page_tex.len() < pak_static.atlases.len() {
                 // included. Drawn any earlier, its full-rect quad -- which
                 // writes depth even with the test off -- hid the cards that
                 // were depth-tested after it.
+                // Gold's dim, over the world and its cards, under the Gold
+                // screen (geometry_tint)
+                if let Some(db) = dim_ref {
+                    unsafe { c3d_depth_test(0); }
+                    let po: Matrix4 = Projection::orthographic(
+                        0.0..(UI_VIEW_W * UI_Q), (UI_VIEW_H * UI_Q)..0.0,
+                        ClipPlanes { near: -1.0, far: 1.0 })
+                        .screen(ScreenOrientation::Rotated).into();
+                    frame.bind_vertex_uniform(projection_idx, &po);
+                    frame.bind_vertex_uniform(uvx_idx, FVec4::new(1.0, 1.0, 0.0, 0.0));
+                    frame.set_texenvs(&[stage_flat]);
+                    frame.draw_arrays(buffer::Primitive::Triangles, db, None).unwrap();
+                    frame.set_texenvs(&[stage0]);
+                    frame.bind_vertex_uniform(projection_idx, mvp);
+                    unsafe { c3d_depth_test(1); }
+                }
                 if let (Some(lb), Some(t)) = (lcd_buf_ref, lcd_tex_ref) {
                     unsafe { c3d_depth_test(0); }
                     let po: Matrix4 = Projection::orthographic(
