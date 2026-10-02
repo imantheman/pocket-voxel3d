@@ -83,7 +83,7 @@ pub unsafe fn scene() -> &'static mut Scene {
 // GameVersion.saveSuffix: "" for Red, "_blue" for Blue -- the recomp's own
 // file names, so a save moves between the two ports unchanged, and Red and
 // Blue never write over each other.
-#[cfg(not(any(feature = "blue", feature = "yellow", feature = "gold")))]
+#[cfg(not(any(feature = "blue", feature = "yellow", feature = "gen2")))]
 const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save.lua";
 #[cfg(feature = "blue")]
 const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save_blue.lua";
@@ -91,6 +91,8 @@ const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save_blue.lua";
 const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save_yellow.lua";
 #[cfg(feature = "gold")]
 const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save_gold.lua";
+#[cfg(feature = "silver")]
+const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save_silver.lua";
 static mut SAVE_BUF: Vec<u8> = Vec::new();
 /// The OPTION screen's settings, beside the save (`voxel.optionsData()` /
 /// `optionsWrite`): Gold keeps them out of the save the way the cart keeps
@@ -98,7 +100,9 @@ static mut SAVE_BUF: Vec<u8> = Vec::new();
 /// The Kanto games keep theirs in the save and never ask.
 #[cfg(feature = "gold")]
 const OPTIONS_PATH: &str = "sdmc:/3ds/voxelmon/options_gold.lua";
-#[cfg(not(feature = "gold"))]
+#[cfg(feature = "silver")]
+const OPTIONS_PATH: &str = "sdmc:/3ds/voxelmon/options_silver.lua";
+#[cfg(not(feature = "gen2"))]
 const OPTIONS_PATH: &str = "sdmc:/3ds/voxelmon/options.lua";
 static mut OPTIONS_BUF: Vec<u8> = Vec::new();
 

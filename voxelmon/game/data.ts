@@ -308,14 +308,15 @@ export interface VoxelmonData {
  * text, credits, default names -- follows the dataset on its own; this is
  * only for the handful of tables the guest holds itself.
  */
-export function gameVersion(data: { version?: string } | null | undefined): "red" | "blue" | "yellow" | "gold" {
+export function gameVersion(data: { version?: string } | null | undefined): "red" | "blue" | "yellow" | "gold" | "silver" {
   const v = data?.version;
-  return v === "blue" || v === "yellow" || v === "gold" ? v : "red";
+  return v === "blue" || v === "yellow" || v === "gold" || v === "silver" ? v : "red";
 }
 
-/** Gen 2 (Gold) runs its own engine (docs/gold-plan.md); Gen 1 the rest. */
+/** Gen 2 (Gold, Silver) runs its own engine (docs/gold-plan.md); Gen 1 the rest. */
 export function generationOf(data: { version?: string } | null | undefined): 1 | 2 {
-  return gameVersion(data) === "gold" ? 2 : 1;
+  const v = gameVersion(data);
+  return v === "gold" || v === "silver" ? 2 : 1;
 }
 
 export const REQUIRED_MODULES = [

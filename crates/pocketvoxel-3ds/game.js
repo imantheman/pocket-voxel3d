@@ -1,10 +1,11 @@
 // voxelmon/game/data.ts
 function gameVersion(data) {
   const v = data?.version;
-  return v === "blue" || v === "yellow" || v === "gold" ? v : "red";
+  return v === "blue" || v === "yellow" || v === "gold" || v === "silver" ? v : "red";
 }
 function generationOf(data) {
-  return gameVersion(data) === "gold" ? 2 : 1;
+  const v = gameVersion(data);
+  return v === "gold" || v === "silver" ? 2 : 1;
 }
 var REQUIRED_MODULES = [
   "pokemon",

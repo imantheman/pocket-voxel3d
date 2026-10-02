@@ -25,6 +25,7 @@
 import { BugContest } from "./BugContest.ts";
 import { Decorations } from "./Decorations.ts";
 import { random } from "../platform/rng.ts";
+import { GameVersion } from "../shared/core/GameVersion.ts";
 
 export const MAX_MYSTERY_GIFT_PARTNERS = 5;
 
@@ -181,7 +182,7 @@ export const MysteryGift = {
       }));
     void data;
     return {
-      game: "gold",
+      game: GameVersion.get(),
       id,
       name: String(save?.player?.name ?? "?"),
       caught: Math.min(255, caught),

@@ -3,9 +3,10 @@
 // TitleScreenGFX1/2), Ho-Oh's five OAM poses (TitleScreenGFX4), the trail
 // sparkle (TitleScreenGFX3) and the copyright splash (CopyrightGFX).
 //
-// Gold only: Crystal's branch (:2046-2048, CrystalMovie) is dropped, and so
-// is every `silver` switch (Lugia's oamsets, Silver's BG/OBJ palettes and
-// registers, its trail/bob/scroll numbers) -- only Gold's values are kept.
+// Gold and Silver (ctx.edition): Crystal's branch (:2046-2048, CrystalMovie)
+// is dropped. Silver's switches are Brian's -- Lugia's oamsets, Silver's BG
+// and OBJ palettes and registers, its trail/bob/scroll numbers -- under the
+// Gold names the title screen reads (`hooh*` is whichever bird it is).
 //
 // DEVIATION from Brian (the gfx format stores shades, not RGB): where he
 // `colorize`s an image through a palette and saves the RGB result
@@ -39,10 +40,21 @@ export const TITLE_BG_PALS_5: Pal5[] = [
   [[31, 31, 31], [29, 25, 0], [15, 20, 31], [17, 10, 1]],
   [[31, 31, 31], [23, 26, 31], [18, 23, 31], [0, 0, 0]],
 ];
+/** :2082-2088 (Silver branch) — gfx/title/title_bg_silver.pal. */
+export const TITLE_BG_PALS_SILVER_5: Pal5[] = [
+  [[31, 31, 31], [0, 12, 15], [4, 8, 21], [0, 0, 0]],
+  [[31, 21, 0], [15, 17, 15], [4, 8, 21], [0, 0, 17]],
+  [[31, 31, 31], [31, 0, 0], [4, 8, 21], [0, 0, 0]],
+  [[31, 31, 31], [24, 23, 25], [4, 8, 21], [8, 8, 9]],
+  [[31, 31, 31], [5, 10, 11], [0, 12, 15], [0, 0, 0]],
+];
 /** :2097-2099 — title_fg.pal pal 0, Ho-Oh. */
 const OBJ_HOOH_5: Pal5 = [[31, 31, 31], [7, 6, 3], [7, 6, 3], [7, 6, 3]];
 /** :2100-2102 — title_fg.pal pal 1, the trail sparks. */
 const OBJ_TRAIL_5: Pal5 = [[31, 31, 31], [31, 31, 0], [26, 22, 0], [0, 0, 0]];
+/** :2105-2111 — Silver: DmgToCgbObjPal0 %11100000 makes OBJ pal 0
+ * {c0, c0, c2, c3}, and the trail draws with it too (attribute 0). */
+const OBJ_SILVER_5: Pal5 = [OBJ_HOOH_5[0]!, OBJ_HOOH_5[0]!, OBJ_HOOH_5[2]!, OBJ_HOOH_5[3]!];
 
 /** :2125 — Gold's rBGP %11011000 as a shade -> shade map. */
 export const DMG_BGP = [0, 2, 1, 3];
@@ -50,6 +62,8 @@ export const DMG_BGP = [0, 2, 1, 3];
 export const DMG_OBP0 = [3, 3, 3, 3];
 /** :2128 — Gold's rOBP1 %11111000: the trail. */
 export const DMG_OBP1 = [0, 2, 3, 3];
+/** :2130-2131 — Silver writes %11110000 to both OBPs. */
+export const DMG_OBP_SILVER = [0, 0, 3, 3];
 
 const toRgb = (pal: Pal5): Rgb[] => pal.map(([r, g, b]) => [scale5(r), scale5(g), scale5(b)] as Rgb);
 
@@ -174,13 +188,45 @@ const HOOH_FRAMES: Oam[][] = [
     [3, -2, 0, 0, 0x22], [3, 0, 0, 0, 0x24],
   ],
 ];
+/** :2236-2253 — .OAMData_GSIntroLugia1 / 2 (data/sprite_anims/oam.asm:736-773). */
+const LUGIA_1: Oam[] = [
+  [-5, -2, 0, 0, 0x00], [-5, 0, 0, 0, 0x02],
+  [-4, -2, 0, 0, 0x04], [-4, 0, 0, 0, 0x06],
+  [-3, -1, 0, 0, 0x08], [-2, -1, 0, 0, 0x0a],
+  [-1, -2, 0, 0, 0x0c], [-1, 0, 0, 0, 0x0e],
+  [0, -2, 0, 0, 0x10], [0, 0, 0, 0, 0x12],
+  [1, -2, 0, 0, 0x14], [1, 0, 0, 0, 0x16],
+  [2, -2, 0, 0, 0x18], [2, 0, 0, 0, 0x1a],
+  [3, -1, 0, 0, 0x1c], [4, -1, 0, 0, 0x1e],
+];
+const LUGIA_2: Oam[] = [
+  [-5, -2, 0, 0, 0x00], [-5, 0, 0, 0, 0x02],
+  [-4, -2, 0, 0, 0x04], [-4, 0, 0, 0, 0x06],
+  [-3, -1, 0, 0, 0x08], [-2, -1, 0, 0, 0x0a],
+  [-1, -2, 0, 0, 0x0c], [-1, 0, 0, 0, 0x0e],
+  [0, -2, 0, 0, 0x10], [0, 0, 0, 0, 0x12],
+  [1, -2, 0, 0, 0x14], [1, 0, 0, 0, 0x16],
+  [2, -2, 0, 0, 0x18], [2, 0, 0, 0, 0x1a],
+  [3, -2, 0, 0, 0x1c], [4, -2, 0, 0, 0x1e],
+];
+/** :2300-2304 — Silver's five oamsets, [layout, vtile base] (oam.asm:103-107). */
+const LUGIA_FRAMES: [Oam[], number][] = [
+  [LUGIA_1, 0x00], [LUGIA_1, 0x20], [LUGIA_2, 0x40], [LUGIA_2, 0x60], [LUGIA_1, 0x00],
+];
 /** :2308-2314 — Frameset_GSIntroHoOhLugia, Gold: [1-based frame, duration]. */
 const HOOH_SEQUENCE: [number, number][] = [[1, 10], [2, 9], [3, 10], [4, 10], [3, 9], [5, 10]];
-/** :2316-2317 — the pose canvas and its origin (Gold). */
+/** :2305-2307 — the same frameset, Silver, on a faster clock. */
+const LUGIA_SEQUENCE: [number, number][] = [
+  [2, 3], [1, 7], [2, 7], [3, 7], [3, 7], [4, 7], [4, 7], [3, 7], [2, 3],
+];
+/** :2316-2317 — the pose canvas and its origin (Gold; Silver's Lugia spans
+ * x tiles -5..4, four tiles wider than Ho-Oh's -4..3). */
 const POSE_W = 64;
 const POSE_H = 64;
 const ORIGIN_X = 32;
 const ORIGIN_Y = 24;
+const POSE_W_SILVER = 80;
+const ORIGIN_X_SILVER = 40;
 
 /** :2371-2378 — PlaceString lines over CopyrightGFX ($60-based ids). */
 const COPY_LINES = [
@@ -189,15 +235,16 @@ const COPY_LINES = [
   [0x60, 0x61, 0x62, 0x63, 0x7a, 0x7b, 0x7c, 0x7d, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x71, 0x72],
 ];
 
-/** :2321-2334 — one Ho-Oh pose from its oamset, on an EMPTY (transparent)
- * canvas: each entry is an 8x16 object, tiles vtile and vtile+1. */
-export function hoohPose(tiles: GfxImage[], oam: Oam[]): GfxImage {
-  const pose = new GfxImage(POSE_W, POSE_H, TRANSPARENT);
+/** :2321-2334 — one Ho-Oh (or Lugia) pose from its oamset, on an EMPTY
+ * (transparent) canvas: each entry is an 8x16 object, tiles base+vtile and
+ * base+vtile+1. */
+export function hoohPose(tiles: GfxImage[], oam: Oam[], base = 0, originX = ORIGIN_X, poseW = POSE_W): GfxImage {
+  const pose = new GfxImage(poseW, POSE_H, TRANSPARENT);
   for (const [tx, ty, dx, dy, vtile] of oam) {
-    const px = ORIGIN_X + tx * 8 + dx;
+    const px = originX + tx * 8 + dx;
     const py = ORIGIN_Y + ty * 8 + dy;
-    blitSprite(pose, tiles[vtile], px, py);
-    blitSprite(pose, tiles[vtile + 1], px, py + 8);
+    blitSprite(pose, tiles[base + vtile], px, py);
+    blitSprite(pose, tiles[base + vtile + 1], px, py + 8);
   }
   return pose;
 }
@@ -221,6 +268,14 @@ export function hoohPose(tiles: GfxImage[], oam: Oam[]): GfxImage {
  */
 export function extractTitle(ctx: Gen2Ctx): Record<string, unknown> {
   const { rom } = ctx;
+  const silver = ctx.edition === "silver";
+  const bgPals = silver ? TITLE_BG_PALS_SILVER_5 : TITLE_BG_PALS_5;
+  const objBird = silver ? OBJ_SILVER_5 : OBJ_HOOH_5;
+  const objTrail = silver ? OBJ_SILVER_5 : OBJ_TRAIL_5;
+  const obp0 = silver ? DMG_OBP_SILVER : DMG_OBP0;
+  const obp1 = silver ? DMG_OBP_SILVER : DMG_OBP1;
+  const originX = silver ? ORIGIN_X_SILVER : ORIGIN_X;
+  const poseW = silver ? POSE_W_SILVER : POSE_W;
 
   // :2177-2185 — GFX1 is vTiles2 ($00-$7F), GFX2 vTiles1 ($80+).
   const vtiles2 = tilesFrom2bpp(ctx.decompressLz3Symbol("TitleScreenGFX1"));
@@ -247,21 +302,27 @@ export function extractTitle(ctx: Gen2Ctx): Record<string, unknown> {
   const hoohTiles = tilesFrom2bpp(ctx.decompressLz3Symbol("TitleScreenGFX4"), true);
   const hoohFrames: string[] = [];
   const hoohFramesGray: string[] = [];
-  HOOH_FRAMES.forEach((oam, i) => {
-    const pose = hoohPose(hoohTiles, oam);
+  const frames: [Oam[], number][] = silver ? LUGIA_FRAMES : HOOH_FRAMES.map((oam) => [oam, 0]);
+  frames.forEach(([oam, base], i) => {
+    const pose = hoohPose(hoohTiles, oam, base, originX, poseW);
     hoohFrames.push(save(ctx, pose, `title/hooh_${i + 1}.png`));
-    hoohFramesGray.push(save(ctx, throughRegister(pose, DMG_OBP0), `title/hooh_${i + 1}_gray.png`));
+    hoohFramesGray.push(save(ctx, throughRegister(pose, obp0), `title/hooh_${i + 1}_gray.png`));
     if (i === 0) save(ctx, pose, "title/hooh.png");
   });
 
-  // :2345-2363 — the trail: raw 2bpp, Gold's one 8x16 object.
+  // :2345-2363 — the trail: raw 2bpp; Gold's OAM is one 8x16 object,
+  // Silver's two side by side, and only 4 of Silver's 8 copied tiles exist.
   const trailSym = ctx.symbol("TitleScreenGFX3");
-  const trailTiles = tilesFrom2bpp(rom.bytes(trailSym.bank, trailSym.address, 8 * 16), true);
-  const trail = new GfxImage(8, 16, TRANSPARENT);
+  const trailTiles = tilesFrom2bpp(rom.bytes(trailSym.bank, trailSym.address, (silver ? 4 : 8) * 16), true);
+  const trail = new GfxImage(silver ? 16 : 8, 16, TRANSPARENT);
   blitSprite(trail, trailTiles[0], 0, 0);
   blitSprite(trail, trailTiles[1], 0, 8);
+  if (silver) {
+    blitSprite(trail, trailTiles[2], 8, 0);
+    blitSprite(trail, trailTiles[3], 8, 8);
+  }
   const trailKey = save(ctx, trail, "title/trail.png");
-  const trailGrayKey = save(ctx, throughRegister(trail, DMG_OBP1), "title/trail_gray.png");
+  const trailGrayKey = save(ctx, throughRegister(trail, obp1), "title/trail_gray.png");
 
   // :2365-2389 — copyright tiles and the splash (hlcoord 2, 7 + line).
   const copyright = ctx.symbol("CopyrightGFX");
@@ -280,7 +341,7 @@ export function extractTitle(ctx: Gen2Ctx): Record<string, unknown> {
   });
   const splashKey = save(ctx, splash, "title/copyright_splash.png");
 
-  const bg = TITLE_BG_PALS_5;
+  const bg = bgPals;
   const f31 = (c: [number, number, number]) => [c[0] / 31, c[1] / 31, c[2] / 31];
   // :2392-2462
   return {
@@ -297,31 +358,34 @@ export function extractTitle(ctx: Gen2Ctx): Record<string, unknown> {
       cloudsGray: cloudsGrayKey,
       hoohFramesGray,
       trailGray: trailGrayKey,
-      hoohSequence: HOOH_SEQUENCE,
-      hoohBobAmplitude: 2,
-      hoohBobStep: 1,
-      hoohX: 80 - ORIGIN_X,
+      hoohSequence: silver ? LUGIA_SEQUENCE : HOOH_SEQUENCE,
+      hoohBobAmplitude: silver ? 8 : 2,
+      hoohBobStep: silver ? -1 : 1,
+      hoohX: 80 - originX,
       hoohY: 80 - ORIGIN_Y,
       trail: trailKey,
       copyright: copyrightKey,
       copyrightSplash: splashKey,
-      cloudScrollEvery: 8,
+      // Silver decrements the cloud band's SCX every frame, Gold every 8
+      cloudScrollEvery: silver ? 1 : 8,
       cloudY: 88,
       sky: f31(bg[0]![2]!),
-      below: f31(bg[0]![0]!),
-      trailMode: "gold",
-      trailSpawns: [[80, 88], [104, 88], [104, 88], [120, 88], [120, 88], [88, 88]],
+      // under the band: Gold's cloud field (colour 0), Silver's sea floor (3)
+      below: f31(bg[0]![silver ? 3 : 0]!),
+      trailMode: silver ? "silver" : "gold",
+      trailSpawns: silver ? [[72, 100]] : [[80, 88], [104, 88], [104, 88], [120, 88], [120, 88], [88, 88]],
       trailSpawnEvery: 4,
       trailStepX: 4,
-      trailStepY: 1,
-      trailBobAmplitude: 2,
-      trailPhaseStep: 3,
-      timeoutFrames: 84 * 60 + 16,
+      trailStepY: silver ? 0 : 1,
+      trailBobAmplitude: silver ? 3 : 2,
+      trailPhaseStep: silver ? 7 : 3,
+      ...(silver ? { trailPhase: 0 } : {}),
+      timeoutFrames: silver ? 73 * 60 + 36 : 84 * 60 + 16,
       // DEVIATION (file comment): the colours Brian baked into the sheets.
       screenPalettes: bg.map(toRgb),
       screenPalMap,
-      hoohPalette: toRgb(OBJ_HOOH_5),
-      trailPalette: toRgb(OBJ_TRAIL_5),
+      hoohPalette: toRgb(objBird),
+      trailPalette: toRgb(objTrail),
     },
   };
 }

@@ -105,6 +105,8 @@ GLYPHS = {
     "Y": ["#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#.."],
     "W": ["#...#", "#...#", "#...#", "#.#.#", "#.#.#", "##.##", "#...#"],
     "G": [".####", "#....", "#....", "#.###", "#...#", "#...#", ".###."],
+    "S": [".####", "#....", "#....", ".###.", "....#", "....#", "####."],
+    "I": ["#####", "..#..", "..#..", "..#..", "..#..", "..#..", "#####"],
     " ": [".....", ".....", ".....", ".....", ".....", ".....", "....."],
 }
 GW, GH = 5, 7
@@ -166,7 +168,7 @@ def draw_cube(c, cx, cy, size, yaw, pitch, rgb, width=1.4, fade_back=True):
 
 RED = (228, 42, 46)
 DIM_RED = (110, 24, 28)
-# Which game the art is for: `python3 tools/3ds_art.py OUTDIR [red|blue|yellow|gold]`.
+# Which game the art is for: `python3 tools/3ds_art.py OUTDIR [red|blue|yellow|gold|silver]`.
 GAME = sys.argv[2] if len(sys.argv) > 2 else "red"
 
 
@@ -183,6 +185,10 @@ def tint(rgb):
     if GAME == "gold":
         # a deeper, browner yellow than Yellow's: metal rather than Pikachu
         return (int(rgb[0] * 0.86), int(rgb[0] * 0.64), rgb[1] // 3)
+    if GAME == "silver":
+        # the same brightness as a cool, slightly blue grey: metal again
+        v = int(rgb[0] * 0.78)
+        return (v, v, min(255, int(v * 1.12)))
     return rgb
 WHITE = (238, 238, 244)
 CARD = (8, 8, 12)

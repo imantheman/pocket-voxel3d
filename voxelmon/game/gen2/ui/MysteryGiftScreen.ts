@@ -18,6 +18,7 @@ import { Save } from "../core/Save.ts";
 import { CableClub } from "../core/CableClub.ts";
 import { hostTransport, LinkSession } from "../../world/link.ts";
 import G from "../platform/screen.ts";
+import { GameVersion } from "../shared/core/GameVersion.ts";
 
 const TEXT = {
   prompt: Strings.source("Press A to\nlink by wireless\nPress B to\ncancel it."),
@@ -92,7 +93,7 @@ export class MysteryGiftScreen {
       return;
     }
     const name = String(this.save?.player?.name ?? "GOLD");
-    this.session = new LinkSession(t, name, undefined, { game: "gold", gen: 2, mode: "gift" }, true);
+    this.session = new LinkSession(t, name, undefined, { game: GameVersion.get(), gen: 2, mode: "gift" }, true);
     this.session.open();
     this.mine = MysteryGift.stage(this.save, this.game?.data);
     this.theirs = null;

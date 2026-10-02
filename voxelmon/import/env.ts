@@ -19,8 +19,10 @@ export const YELLOW_SHA1 = "cc7d03262ebfaf2f06772c1a480c7d9d5f4a38e1";
 
 /** SHA-1 of Pokemon Gold (USA, Europe) (gen1recomp GameVersion.VERSIONS.gold). */
 export const GOLD_SHA1 = "d8b8a3600a465308c9953dfa04f0081c05bdcb94";
+/** SHA-1 of Pokemon Silver (USA, Europe) (gen1recomp GameVersion.VERSIONS.silver). */
+export const SILVER_SHA1 = "49b163f7e57702bc939d642a18f591de55d92dae";
 
-export type GameVersion = "red" | "blue" | "yellow" | "gold";
+export type GameVersion = "red" | "blue" | "yellow" | "gold" | "silver";
 
 /**
  * The games this pipeline can cook (gen1recomp src/core/GameVersion.lua).
@@ -34,6 +36,9 @@ export const VERSIONS: Record<GameVersion, { sha1: string; manifest: string; lab
   yellow: { sha1: YELLOW_SHA1, manifest: "tools/rom_manifest_yellow.json", label: "Yellow", generation: 1 },
   // Gen 2 comes from gen1recomp's last MIT commit, bdfac727 (docs/gold-plan.md)
   gold: { sha1: GOLD_SHA1, manifest: "tools/rom_manifest_gold.json", label: "Gold", generation: 2 },
+  // Silver's manifest is upstream's too, at the same pin (998cb03d, an
+  // ancestor of bdfac727): the same 2062 symbols at Silver's addresses
+  silver: { sha1: SILVER_SHA1, manifest: "tools/rom_manifest_silver.json", label: "Silver", generation: 2 },
 };
 
 /**
@@ -72,7 +77,7 @@ export function versionOfRom(path: string): GameVersion | null {
  */
 export function activeVersion(): GameVersion {
   const named = process.env.VOXELMON_VERSION?.toLowerCase();
-  if (named === "red" || named === "blue" || named === "yellow" || named === "gold") return named;
+  if (named === "red" || named === "blue" || named === "yellow" || named === "gold" || named === "silver") return named;
   const rom = process.env.VOXELMON_ROM;
   return (rom && versionOfRom(rom)) || "red";
 }

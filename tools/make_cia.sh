@@ -43,7 +43,12 @@ case "$GAME" in
     LABEL=Gold; UNIQUE=0xff3d3; PCODE=CTR-P-PVXG
     ELF=crates/pocketvoxel-3ds/target-gold/armv6k-nintendo-3ds/release/pocketvoxel-3ds.elf
     WORK=dist/voxelmon/cia-gold ;;
-  *) echo "make_cia: unknown game '$GAME' (red, blue, yellow or gold)"; exit 1 ;;
+  # Silver: Gen 2, sharing Gold's pak set (paks_gold/), its own save
+  silver)
+    LABEL=Silver; UNIQUE=0xff3d4; PCODE=CTR-P-PVXS
+    ELF=crates/pocketvoxel-3ds/target-silver/armv6k-nintendo-3ds/release/pocketvoxel-3ds.elf
+    WORK=dist/voxelmon/cia-silver ;;
+  *) echo "make_cia: unknown game '$GAME' (red, blue, yellow, gold or silver)"; exit 1 ;;
 esac
 OUT=${1:-dist/voxelmon/PocketVoxel3D$LABEL.cia}
 

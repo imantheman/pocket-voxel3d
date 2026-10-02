@@ -40,7 +40,7 @@ interface Gen2Tileset extends TilesetDef {
 }
 
 export function isGen2(gen: { version?: string; palettes?: unknown }): boolean {
-  return gen.version === "gold" || (gen.palettes as { generation?: number } | undefined)?.generation === 2;
+  return gen.version === "gold" || gen.version === "silver" || (gen.palettes as { generation?: number } | undefined)?.generation === 2;
 }
 
 /** A Gold map's number in the paks and index.txt: its (group, map) pair. */

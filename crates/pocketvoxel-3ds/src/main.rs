@@ -178,7 +178,7 @@ static mut SHARED_ATLAS: Option<&'static [u8]> = None;
 /// Which game this build is. Red and Blue read one shared set of map paks
 /// (the maps and every graphic but the title ribbon are the same data in
 /// both ROMs); each has its own dataset and a small atlas overlay.
-#[cfg(not(any(feature = "blue", feature = "yellow", feature = "gold")))]
+#[cfg(not(any(feature = "blue", feature = "yellow", feature = "gen2")))]
 const GAME: &str = "red";
 #[cfg(feature = "blue")]
 const GAME: &str = "blue";
@@ -186,15 +186,17 @@ const GAME: &str = "blue";
 const GAME: &str = "yellow";
 #[cfg(feature = "gold")]
 const GAME: &str = "gold";
-/// The pak set this game reads. Red and Blue share one; Yellow and Gold have
-/// their own (their pages do not line up with Red's).
-#[cfg(not(any(feature = "yellow", feature = "gold")))]
+#[cfg(feature = "silver")]
+const GAME: &str = "silver";
+/// The pak set this game reads. Red and Blue share one; Yellow has its own;
+/// Gold and Silver share theirs (paks_gold), as Red and Blue do.
+#[cfg(not(any(feature = "yellow", feature = "gen2")))]
 const PAKS_DIR: &str = "sdmc:/3ds/voxelmon/paks";
 #[cfg(feature = "yellow")]
 const PAKS_DIR: &str = "sdmc:/3ds/voxelmon/paks_yellow";
-#[cfg(feature = "gold")]
+#[cfg(feature = "gen2")]
 const PAKS_DIR: &str = "sdmc:/3ds/voxelmon/paks_gold";
-#[cfg(not(any(feature = "blue", feature = "yellow", feature = "gold")))]
+#[cfg(not(any(feature = "blue", feature = "yellow", feature = "gen2")))]
 const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks/gamedata.json";
 #[cfg(feature = "blue")]
 const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks/gamedata_blue.json";
@@ -202,7 +204,9 @@ const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks/gamedata_blue.json";
 const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks_yellow/gamedata.json";
 #[cfg(feature = "gold")]
 const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks_gold/gamedata.json";
-#[cfg(not(any(feature = "blue", feature = "yellow", feature = "gold")))]
+#[cfg(feature = "silver")]
+const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks_gold/gamedata_silver.json";
+#[cfg(not(any(feature = "blue", feature = "yellow", feature = "gen2")))]
 const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks/version_red.vxat";
 #[cfg(feature = "blue")]
 const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks/version_blue.vxat";
@@ -210,11 +214,13 @@ const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks/version_blue.vxat";
 const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks_yellow/version_yellow.vxat";
 #[cfg(feature = "gold")]
 const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks_gold/version_gold.vxat";
+#[cfg(feature = "silver")]
+const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks_gold/version_silver.vxat";
 /// The map the host boots on, and the one it falls back to: the player's
 /// room, then the town outside it.
-#[cfg(not(feature = "gold"))]
+#[cfg(not(feature = "gen2"))]
 const BOOT_MAPS: [&str; 2] = ["REDS_HOUSE_2F", "PALLET_TOWN"];
-#[cfg(feature = "gold")]
+#[cfg(feature = "gen2")]
 const BOOT_MAPS: [&str; 2] = ["PLAYERS_HOUSE_2F", "NEW_BARK_TOWN"];
 
 /// This game's own overlay (paks/version_<game>.vxat, written by
@@ -1569,7 +1575,7 @@ const GOLD_DIM_ALPHA: u8 = 143;
 /// whole map, most of a second each time on the 3DS. Everywhere else the
 /// tint is baked as it always was.
 fn geometry_tint(tint: u32) -> u32 {
-    if cfg!(feature = "gold") && tint == GOLD_DIM_TINT { 0xffff_ffff } else { tint }
+    if cfg!(feature = "gen2") && tint == GOLD_DIM_TINT { 0xffff_ffff } else { tint }
 }
 
 /// TILT SHIFT's blurred bands, top to bottom: (screen y as a fraction of the
@@ -2287,9 +2293,9 @@ struct Vertex { pos: [i16; 4], color: [u8; 4], uv: [f32; 2] }
 static SHADER_BYTES: &[u8] = include_shader!("vshader.pica");
 // Gold runs its own engine (voxelmon/game/gen2, bundled as game-gold.js);
 // the Kanto games share game.js.
-#[cfg(not(feature = "gold"))]
+#[cfg(not(feature = "gen2"))]
 static GAME_JS: &[u8] = include_bytes!("../game.js");
-#[cfg(feature = "gold")]
+#[cfg(feature = "gen2")]
 static GAME_JS: &[u8] = include_bytes!("../game-gold.js");
 const SKY: u32 = 0x68_B0_D8_FF;
 extern "C" {
@@ -4051,7 +4057,13 @@ fn main() {
     let gd = std::fs::read(GAMEDATA_PATH).unwrap_or_default();
     if gd.is_empty() {
         dlog(&format!("[pv] no dataset at {} -- cook this game's ROM", GAMEDATA_PATH));
-        let label = if GAME == "blue" { "Blue" } else { "Red" };
+        let label = match GAME {
+            "blue" => "Blue",
+            "yellow" => "Yellow",
+            "gold" => "Gold",
+            "silver" => "Silver",
+            _ => "Red",
+        };
         println!();
         println!("Pokemon {} has not been cooked", label);
         println!("onto this SD card yet.");
@@ -5777,7 +5789,7 @@ fn main() {
         // half-darkens.
         let scene_tint = geometry_tint(unsafe { voxel::scene() }.tint);
         // Gold's dim, drawn over the world this frame (see geometry_tint)
-        let dim_ref = if cfg!(feature = "gold") && unsafe { voxel::scene() }.tint == GOLD_DIM_TINT {
+        let dim_ref = if cfg!(feature = "gen2") && unsafe { voxel::scene() }.tint == GOLD_DIM_TINT {
             dim_buf.as_ref()
         } else {
             None
@@ -7232,7 +7244,7 @@ if page_tex.len() < pak_static.atlases.len() {
             // above, giving the dark-on-light-green look of the real mod.
             // Gold's bottom screen is white paper (gen2 ui/Companion.ts): the
             // bars beside its whole-screen mode (lcdTall) white too, not green.
-            let bottom_clear = if cfg!(feature = "gold") { 0xFFFFFFFFu32 } else { 0x9BBC0FFFu32 };
+            let bottom_clear = if cfg!(feature = "gen2") { 0xFFFFFFFFu32 } else { 0x9BBC0FFFu32 };
             bottom_target.clear(ClearFlags::ALL, bottom_clear, 0);
             frame.select_render_target(&mut bottom_target).expect("select bottom");
             {
@@ -7249,7 +7261,7 @@ if page_tex.len() < pak_static.atlases.len() {
                 // regardless of the atlas; restore the glyph texenv afterwards.
                 // (Not Gold's: its panel covers the screen, but not the bars
                 // beside its whole-screen mode, where the strip showed green.)
-                if let (false, Some(bb)) = (cfg!(feature = "gold"), ui_b_bar_buf.as_ref()) {
+                if let (false, Some(bb)) = (cfg!(feature = "gen2"), ui_b_bar_buf.as_ref()) {
                     unsafe { c3d_depth_test(0); }
                     frame.set_texenvs(&[stage_flat]);
                     frame.draw_arrays(buffer::Primitive::Triangles, bb, None).unwrap();

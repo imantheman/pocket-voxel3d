@@ -110,6 +110,25 @@ Johto and Kanto maps, 16 badges, a Gen 2 Pokédex, and Johto apps.
 
 **Silver** is cheap afterwards: its manifest is derived from Gold's. **Crystal** is its own step: its own manifest, two-bank tilesets and Battle Tower.
 
+## Silver (2026-10-02)
+
+- **ROM:** Pokémon Silver (USA, Europe), SHA-1 `49b163f7e57702bc939d642a18f591de55d92dae`, at `Desktop/mGBA/silver.gbc`.
+- **Manifest:** upstream's `tools/rom_manifest_silver.json`, committed in `998cb03d`, an ancestor of the MIT pin `bdfac727`. It has the same 2062 symbols as Gold's at Silver's addresses.
+- **What differs** (measured by importing both ROMs and diffing every table, then cooking both and diffing all 368 paks):
+  - **Datasets:** the wild encounters and the Pokédex text differ. Every map, tileset, palette, trainer, item, sprite and sound table is identical. The scripts differ only by bank $03 sitting 2 bytes earlier, which `CallAsm`'s `SITES_SILVER` already handles.
+  - **Graphics:** 242 of the 251 battle front pics differ, and so does the title screen (Lugia over the sea instead of Ho-Oh over the clouds).
+  - **Paks:** the page layout is identical in all 368. What differs is the front-pic pages, the Gold screen's tile pages (the title is wider, so every tile after it moves) and the sound programs.
+- **One shared set:** Silver shares `paks_gold` the way Blue shares Red's `paks`.
+  - Each game keeps its own dataset there (`gamedata.json` / `gamedata_silver.json`) and its own overlay (`version_gold.vxat` / `version_silver.vxat`). The overlay carries that game's front-pic pages, all of its tile pages, and its sound (`tools/cook3ds.ts` `versionPages`). It is about 2.3 MB, held by the host from boot.
+  - Whichever game cooked the set last, each plays as its own cart.
+  - A cook that finds the other game's files made against a different page count drops them and says so.
+- **Importer:** `import/gen2/title.ts` has Brian's Silver branch: the palettes, Lugia's oamsets, the trail, and the bob and scroll numbers. `Gen2Ctx.edition` comes from the manifest's ROM SHA-1.
+- **Device:** the entry calls `GameVersion.set` from the dataset's `version`, so `checkver`, the Game Corner prizes, the preset names, the rival's default name and the credits follow the cart.
+  - The host has a `silver` feature. Both `gold` and `silver` turn on `gen2`, which picks the engine and its behaviour.
+  - Silver has its own save (`save_silver.lua`) and options file (`options_silver.lua`).
+  - CIA unique ID `0xff3d4`, product code `CTR-P-PVXS`.
+- **Cook it:** `cc_silver_cook3ds.sh` (`VOXELMON_VERSION=silver`, `VOXELMON_ROM=.../silver.gbc`). Build with `cc_build_silver.sh`, package with `make_cia.sh "" silver`.
+
 ## Needed from Isaac
 
 - A Gold ROM matching the SHA-1 above, in `Desktop/mGBA` like the others.

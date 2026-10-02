@@ -24,6 +24,7 @@ import { Game2 } from "./core/Game2.ts";
 import { Companion } from "./ui/Companion.ts";
 import { Logger } from "./shared/core/Logger.ts";
 import { Sound } from "./shared/core/Sound.ts";
+import { GameVersion } from "./shared/core/GameVersion.ts";
 
 /** Same seed as the Gen 1 story tapes; the save carries nothing of it. */
 const SEED = 17;
@@ -35,6 +36,11 @@ Logger.sink = (line) => console.log(line);
 // ---- the dataset ----------------------------------------------------------
 const sections = readGen2Container(native.gamedata());
 setGen2Source(sections);
+// Which cart this dataset was cooked from (the importer's version.json):
+// Gold and Silver run this one engine, and the few things that differ at
+// run time read it -- `checkver`, the Game Corner prizes, the preset names,
+// the rival's default name, the credits.
+GameVersion.set(String(loadGenerated<{ version?: string }>("version")?.version ?? "gold"));
 seed(SEED);
 // the Gold save lives in the host's one slot (save_gold.lua on the card)
 setSaveIo({

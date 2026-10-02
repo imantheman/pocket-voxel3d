@@ -44,9 +44,13 @@ const CARD = join(DIST, "sdcard");
  * changed, so it has a set of its own, `paks_yellow`, beside theirs.
  */
 export function paksLayout(version: GameVersion): { orig: string; paks: string; cardPaks: string; dir: string } {
-  // Yellow and Gold each have a set of their own beside Red and Blue's
-  const own = version === "yellow" || version === "gold";
-  const dir = own ? `paks_${version}` : "paks";
+  // Yellow has a set of its own beside Red and Blue's, and so does Gen 2.
+  // Gold and Silver share theirs the way Red and Blue do (measured: every
+  // map, tileset and palette identical; the battle front pics, the Gold
+  // screen's tile pages and the sound are each game's own, in its overlay).
+  // The shared Gen 2 folder keeps the name it was first cooked under.
+  const own = version === "yellow" || version === "gold" || version === "silver";
+  const dir = version === "silver" ? "paks_gold" : own ? `paks_${version}` : "paks";
   return {
     dir,
     // one pak per map, atlas not yet shared: the input to the hoist
@@ -79,7 +83,11 @@ export const VERSION_FILES: Record<GameVersion, { gamedata: string; overlay: str
   // in its own folder (paksLayout), so its files keep the plain names
   yellow: { gamedata: "gamedata.json", overlay: "version_yellow.vxat", threeDsx: "pocketvoxel-3ds-yellow.3dsx" },
   gold: { gamedata: "gamedata.json", overlay: "version_gold.vxat", threeDsx: "pocketvoxel-3ds-gold.3dsx" },
+  silver: { gamedata: "gamedata_silver.json", overlay: "version_silver.vxat", threeDsx: "pocketvoxel-3ds-silver.3dsx" },
 };
+
+/** Gold and Silver (and, one day, Crystal): one Gen 2 engine, one dataset shape. */
+const isGen2Version = (v: GameVersion): boolean => v === "gold" || v === "silver";
 
 const SHARED_BIT = 0x80000000;
 
@@ -151,11 +159,45 @@ export function stripUnread(paksDir: string): { before: number; after: number } 
 /** The atlas pages whose art differs between Red and Blue (measured, see
  * VERSION_FILES): the title ribbon, the intro's three fighter frames, and
  * the UI page with the slot reel symbols. */
-export function versionPages(gd: unknown): number[] {
-  const a = (gd as { atlas?: { picTitle?: Record<string, number>; picIntro?: Record<string, number>; uiPage?: number } })
-    .atlas ?? {};
+export function versionPages(gd: unknown, version?: GameVersion): number[] {
+  const a = (gd as {
+    atlas?: {
+      picTitle?: Record<string, number>;
+      picIntro?: Record<string, number>;
+      picFront?: Record<string, number>;
+      lcd?: { firstPage: number; counts: number[] };
+      uiPage?: number;
+    };
+  }).atlas ?? {};
+  if (version && isGen2Version(version)) {
+    // Gold and Silver (measured by cooking both and comparing all 368
+    // paks): the battle front pics differ for 242 of the 251 species, and
+    // the Gold screen's tile pages carry them and the title (Lugia's poses
+    // are wider than Ho-Oh's, so every tile after the title moves). Those
+    // are the only pages the Gen 2 engine draws that differ; its title and
+    // intro come through the tile pages, not picTitle/picIntro.
+    const lcd = a.lcd ? a.lcd.counts.map((_, k) => a.lcd!.firstPage + k) : [];
+    return [a.uiPage, ...Object.values(a.picFront ?? {}), ...lcd]
+      .filter((p, i, all): p is number => typeof p === "number" && p >= 0 && all.indexOf(p) === i)
+      .sort((x, y) => x - y);
+  }
   return [a.uiPage, a.picTitle?.version, a.picIntro?.nido1, a.picIntro?.nido2, a.picIntro?.nido3]
     .filter((p): p is number => typeof p === "number" && p >= 0);
+}
+
+/** How many atlas pages a cooked pak carries: the layout two games sharing
+ * a folder must agree on (a page is found by its index). */
+export function atlasPageCount(paksDir: string): number {
+  // any pak will do: every pak in a set carries the same page table
+  const pak = readdirSync(paksDir).filter((f) => f.endsWith(".vxpak")).sort()[0];
+  if (!pak) return 0;
+  const d = readFileSync(join(paksDir, pak));
+  const nsec = d.readUInt16LE(6);
+  for (let s = 0; s < nsec; s++) {
+    const e = 16 + s * 16;
+    if (d.toString("latin1", e, e + 4) === "ATLS") return d.readUInt16LE(d.readUInt32LE(e + 4));
+  }
+  return 0;
 }
 
 /**
@@ -352,6 +394,9 @@ export async function cook3ds(only?: string[]): Promise<number> {
       if (existsSync(join(PAKS, name))) keep.set(name, readFileSync(join(PAKS, name)));
     }
   }
+  // The page layout the kept files were made against: a page is found by
+  // its index, so if this cook's differs they no longer fit (checked below).
+  const keptPages = keep.size > 0 && existsSync(join(PAKS, "index.txt")) ? atlasPageCount(PAKS) : -1;
   rmSync(PAKS, { recursive: true, force: true });
   mkdirSync(PAKS, { recursive: true });
   for (const [name, bytes] of keep) writeFileSync(join(PAKS, name), bytes);
@@ -371,10 +416,20 @@ export async function cook3ds(only?: string[]): Promise<number> {
     return share.exitCode ?? 1;
   }
 
+  if (keptPages >= 0 && atlasPageCount(PAKS) !== keptPages) {
+    // The other game's dataset and overlay index pages this set no longer
+    // has in the same places: drop them rather than draw it the wrong art.
+    for (const name of keep.keys()) rmSync(join(PAKS, name), { force: true });
+    console.warn(
+      `cook3ds: this cook's atlas has ${atlasPageCount(PAKS)} pages where the other game's files were` +
+        ` made against ${keptPages}; they are dropped -- cook that game again to put it back`,
+    );
+  }
+
   // --- 3. the dataset and the index they share ---------------------------
   merged.cookedMaps = names;
   for (const [name, record] of Object.entries(perMap)) merged.maps[name] = record;
-  if (version === "gold") {
+  if (isGen2Version(version)) {
     // Gold's dataset is a container (game/gen2/platform/container.ts): the
     // scene table, the Gold screen's tile manifest, and every table the
     // importer wrote, each parsed on the device only when first asked for.
@@ -446,12 +501,12 @@ export async function cook3ds(only?: string[]): Promise<number> {
 
   // This game's own pages, palettes and sound, which the other game's
   // cook of the shared set would get wrong.
-  const own = versionPages(merged);
+  const own = versionPages(merged, version);
   const pikaPath = join(GEN_DIR, "pika_cries.bin");
   const pika = existsSync(pikaPath) ? readFileSync(pikaPath) : undefined;
   const n = writeOverlay(PAKS, own, join(PAKS, files.overlay), pika, {
-    palettes: version !== "gold",
-    paletteCount: version !== "gold" ? paletteBase(loadGen(GEN_DIR)) : undefined,
+    palettes: !isGen2Version(version),
+    paletteCount: !isGen2Version(version) ? paletteBase(loadGen(GEN_DIR)) : undefined,
   });
   console.log(
     `  ${files.overlay}: pages ${own.join(", ")} + palettes + sound${pika ? " + Pikachu's voice" : ""} (${n} bytes)`,
@@ -474,8 +529,31 @@ export async function cook3ds(only?: string[]): Promise<number> {
   return 0;
 }
 
+/**
+ * `--overlay`: write this game's overlay again from the set it cooked last
+ * (its own paks_orig gamedata for the page numbers, the shared folder for
+ * the bytes), without cooking. Only right while the shared folder is still
+ * this game's own cook -- the overlay is copied out of it.
+ */
+function overlayOnly(): number {
+  const version = activeVersion();
+  const files = VERSION_FILES[version];
+  const { orig: ORIG, paks: PAKS } = paksLayout(version);
+  const merged = JSON.parse(readFileSync(join(ORIG, "gamedata.json"), "utf8")) as GameData;
+  const own = versionPages(merged, version);
+  const pikaPath = join(GEN_DIR, "pika_cries.bin");
+  const pika = existsSync(pikaPath) ? readFileSync(pikaPath) : undefined;
+  const n = writeOverlay(PAKS, own, join(PAKS, files.overlay), pika, {
+    palettes: !isGen2Version(version),
+    paletteCount: !isGen2Version(version) ? paletteBase(loadGen(GEN_DIR)) : undefined,
+  });
+  console.log(`cook3ds --overlay: ${files.overlay}: ${own.length} pages + palettes + sound (${n} bytes)`);
+  return 0;
+}
+
 if (import.meta.main) {
   const args = process.argv.slice(2);
+  if (args.includes("--overlay")) process.exit(overlayOnly());
   const at = args.indexOf("--only");
   const only = at >= 0 && args[at + 1] ? args[at + 1]!.split(",").filter(Boolean) : undefined;
   process.exit(await cook3ds(only));

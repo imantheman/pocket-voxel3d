@@ -886,7 +886,7 @@ export class Game2 {
     // Game2.lua:2000 -- the boot failed
     GbcPalette.clear();
     G.clear(0.07, 0.05, 0.02);
-    Font.draw("POKEMON GOLD", 32, 48);
+    Font.draw(GameVersion.info().displayName.toUpperCase(), 32, 48);
     Font.draw(String(this.status ?? "No world").slice(0, 20), 0, 72);
   }
 

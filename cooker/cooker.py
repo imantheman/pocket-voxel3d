@@ -112,6 +112,9 @@ DATA_FILES = {
     # Gold's, fetched only for a Gold ROM (from the last MIT commit, above).
     "manifest_gold": ("gen1recomp-gen2", "tools/rom_manifest_gold.json", GEN1RECOMP_GEN2,
                       "61485a7a445bb61990a46a5abeab3a2e0fb0e42c91c0ccd9283b110ed1100179", 420887, "MIT"),
+    # Silver's, fetched only for a Silver ROM (same commit: it is an ancestor).
+    "manifest_silver": ("gen1recomp-gen2", "tools/rom_manifest_silver.json", GEN1RECOMP_GEN2,
+                        "6ceb7506c6590fbfcb96f854eb092769a001c02e8664cd85a5446f9e75f1475a", 420887, "MIT"),
     "shapes": ("potato_voxel", "data/voxel_heights.lua", POTATO_VOXEL,
                "20e0f26e1163e4861da760d21b6f71e41a66a52813119b2a1b15ae3a8c78f934", 255629, "used with the author's permission"),
 }
@@ -121,6 +124,7 @@ RED_SHA1 = "ea9bcae617fdf159b045185467ae58b2e4a48b9a"
 BLUE_SHA1 = "d7037c83e1ae5b39bde3c30787637ba1d4c48ce2"
 YELLOW_SHA1 = "cc7d03262ebfaf2f06772c1a480c7d9d5f4a38e1"
 GOLD_SHA1 = "d8b8a3600a465308c9953dfa04f0081c05bdcb94"
+SILVER_SHA1 = "49b163f7e57702bc939d642a18f591de55d92dae"
 # Red and Blue share one paks folder (their maps line up); Yellow's maps and
 # Pokemon are redrawn, so it has a folder of its own beside theirs, and Gold
 # (Johto, a different engine) has one too.
@@ -137,9 +141,16 @@ GAMES = {
     GOLD_SHA1: {"id": "gold", "label": "Gold", "manifest": "manifest_gold", "paks": "paks_gold",
                 "maps": 368, "gamedata": "gamedata.json", "overlay": "version_gold.vxat",
                 "dsx": "pocketvoxel-3ds-gold.3dsx", "cia": "PocketVoxel3DGold.cia"},
+    # Silver shares Gold's paks folder the way Blue shares Red's: every map
+    # is the same; its own dataset and overlay sit beside Gold's.
+    SILVER_SHA1: {"id": "silver", "label": "Silver", "manifest": "manifest_silver", "paks": "paks_gold",
+                  "maps": 368, "gamedata": "gamedata_silver.json", "overlay": "version_silver.vxat",
+                  "dsx": "pocketvoxel-3ds-silver.3dsx", "cia": "PocketVoxel3DSilver.cia"},
 }
 # The games whose colours come out of the ROM itself (Game Boy Color games).
-GBC_GAMES = ("yellow", "gold")
+GBC_GAMES = ("yellow", "gold", "silver")
+# Gen 2: one engine, shapes from the game source, colours only from the ROM.
+GEN2_GAMES = ("gold", "silver")
 # The colours each Gen 1 game can be cooked in (--palette), default first:
 #   dmg        black and white, the Game Boy's own four greys
 #   gbc        the game's own Game Boy Color colours (Yellow only: Red and
@@ -468,10 +479,10 @@ def find_rom(arg, yes):
     digest = sha1_of(rom)
     game = GAMES.get(digest)
     if not game:
-        die(f"that is not the US Pokemon Red, Blue, Yellow or Gold ROM.",
+        die(f"that is not the US Pokemon Red, Blue, Yellow, Gold or Silver ROM.",
             f"\n  its SHA-1 is  {digest}\n  Red's is      {RED_SHA1}\n  Blue's is     {BLUE_SHA1}",
-            f"\n  Yellow's is   {YELLOW_SHA1}\n  Gold's is     {GOLD_SHA1}",
-            "\nOnly those four work. Silver, Crystal, other regions, colour hacks, ROM hacks, and",
+            f"\n  Yellow's is   {YELLOW_SHA1}\n  Gold's is     {GOLD_SHA1}\n  Silver's is   {SILVER_SHA1}",
+            "\nOnly those five work. Crystal, other regions, colour hacks, ROM hacks, and",
             "files with a header or trailing bytes will all be refused here. Nothing was read from it.")
     say(f"  it is Pokemon {game['label']} (US). Good.")
     return rom, game
@@ -497,7 +508,7 @@ def write_sources(repo_desc, rom, palette, downloads, game):
         "",
         "DATA FILES FETCHED FROM THE PROJECTS THIS BUILDS ON:",
     ]
-    keys = (game["manifest"],) if game["id"] == "gold" else (game["manifest"], "colour", "shapes")
+    keys = (game["manifest"],) if game["id"] in GEN2_GAMES else (game["manifest"], "colour", "shapes")
     for key in keys:
         folder, rel, (repo, commit), sha, size, lic = DATA_FILES[key]
         if key == "colour" and palette != "community":
@@ -509,10 +520,10 @@ def write_sources(repo_desc, rom, palette, downloads, game):
             f"    url    {data_file_url(key)}",
             f"    sha256 {sha}",
         ]
-    if game["id"] == "gold":
+    if game["id"] in GEN2_GAMES:
         lines += [
             "  voxelmon/cook/gen2-profile.json  (in the game source above)",
-            "    the Gold shapes: a snapshot of data/voxel_heights.lua from",
+            "    the Gold and Silver shapes: a snapshot of data/voxel_heights.lua from",
             "    https://github.com/UNDERdecoded/Gen2Recomped-DramaticShapes  commit 726782f  (MIT)",
         ]
     if game["id"] in GBC_GAMES:
@@ -586,7 +597,7 @@ def main():
     rom, game = find_rom(args.rom_opt or args.rom, args.yes)
     # Gold's shapes are in the game source (gen2-profile.json); the Gen 1
     # games' come from potato_voxel
-    wanted = (game["manifest"],) if game["id"] == "gold" else (game["manifest"], "shapes")
+    wanted = (game["manifest"],) if game["id"] in GEN2_GAMES else (game["manifest"], "shapes")
     say()
 
     # 2. the plan
@@ -614,12 +625,12 @@ def main():
 
     # 3. colour
     asked = args.palette or ("community" if args.colour else "dmg" if args.grayscale else None)
-    if game["id"] == "gold":
-        # Gold has only its own Game Boy Color colours, read from the ROM.
+    if game["id"] in GEN2_GAMES:
+        # Gold and Silver have only their own Game Boy Color colours, read from the ROM.
         palette = "gbc"
-        say("Colour: Pokemon Gold's own Game Boy Color palettes, from your ROM.")
+        say(f"Colour: Pokemon {game['label']}'s own Game Boy Color palettes, from your ROM.")
         if asked and asked != "gbc":
-            say(f"  (--palette {asked} does nothing for Gold: it has only its own colours.)")
+            say(f"  (--palette {asked} does nothing for {game['label']}: it has only its own colours.)")
     else:
         choices = PALETTES[game["id"]]
         if asked and asked not in choices:
@@ -714,7 +725,7 @@ def main():
     shutil.move(str(card_src), str(card))
     # the ~930 MB of pre-sharing intermediates and the ~330 MB staging copy:
     # nothing reads either again
-    for d in ("paks_orig", "paks", "paks_orig_yellow", "paks_yellow", "paks_orig_gold", "paks_gold"):
+    for d in ("paks_orig", "paks", "paks_orig_yellow", "paks_yellow", "paks_orig_gold", "paks_gold", "paks_orig_silver"):
         shutil.rmtree(repo / "dist" / "voxelmon" / d, ignore_errors=True)
     shutil.rmtree(repo / "dist" / "voxelmon" / "sdcard", ignore_errors=True)
     # A release ships the console binary next to this file; a checkout may

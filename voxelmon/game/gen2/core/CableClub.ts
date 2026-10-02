@@ -25,6 +25,7 @@
 // begin pulls this player to it, as the Kanto games' overworld does.
 
 import { hostTransport, LINK_WAIT_FRAMES, LinkSession, type LinkTransport } from "../../world/link.ts";
+import { GameVersion } from "../shared/core/GameVersion.ts";
 
 export type LinkRequest = "trade" | "battle" | "capsule";
 
@@ -80,7 +81,7 @@ export class CableClub {
       return false;
     }
     const name = String(this.game?.save?.player?.name ?? "GOLD");
-    this.session = new LinkSession(t, name, undefined, { game: "gold", gen: 2, mode: this.mode() }, false);
+    this.session = new LinkSession(t, name, undefined, { game: GameVersion.get(), gen: 2, mode: this.mode() }, false);
     this.session.open();
     this.logged = "";
     this.log(`open for ${this.requested ?? "?"}, waiting for a peer`);

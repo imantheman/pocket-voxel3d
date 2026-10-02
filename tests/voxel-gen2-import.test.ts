@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { GOLD_SHA1, type VoxelEnv } from "../voxelmon/import/env.ts";
+import { GOLD_SHA1, SILVER_SHA1, type VoxelEnv } from "../voxelmon/import/env.ts";
 import { extractFont, inkFrom1bpp, inkFrom2bpp } from "../voxelmon/import/gen2/font.ts";
 import { runImportGen2 } from "../voxelmon/import/gen2/index.ts";
 import { extractItems, extractMarts, extractMoves } from "../voxelmon/import/gen2/items.ts";
@@ -841,6 +841,59 @@ describe.skipIf(!gold)("gen2 later stages against the Gold ROM", () => {
     };
     for (const f of files) if (f !== "gfx") walk(JSON.parse(readFileSync(join(dir, `${f}.json`), "utf8")));
     expect(missing).toEqual([]);
+    rmSync(dir, { recursive: true, force: true });
+  }, 60000);
+});
+
+// ---------------------------------------------------------------- Silver
+
+const SILVER_ROM = process.env.VOXELMON_SILVER_ROM ?? "/mnt/c/Users/isaac/OneDrive/Desktop/mGBA/silver.gbc";
+const SILVER_MANIFEST = join(
+  process.env.VOXELMON_G1R_GEN2 ?? join(homedir(), "gen1recomp-mit-gen2"),
+  "tools/rom_manifest_silver.json",
+);
+function silverInputs(): { rom: Uint8Array; manifest: Gen2Manifest } | null {
+  if (!existsSync(SILVER_ROM) || !existsSync(SILVER_MANIFEST)) return null;
+  const rom = new Uint8Array(readFileSync(SILVER_ROM));
+  if (createHash("sha1").update(rom).digest("hex") !== SILVER_SHA1) return null;
+  return { rom, manifest: JSON.parse(readFileSync(SILVER_MANIFEST, "utf8")) };
+}
+const silver = silverInputs();
+if (!silver) console.log(`voxel-gen2-import: skipping the Silver ROM checks — no verified ROM at ${SILVER_ROM}`);
+
+describe.skipIf(!silver)("gen2 against the Silver ROM", () => {
+  test("the same importer, Silver's own: its encounters, Pokedex, title and version", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "gen2-silver-"));
+    const env = {
+      version: "silver", romPath: SILVER_ROM, g1rDir: "", voxelmodDir: "", refGeneratedDir: "",
+      genDir: dir, manifestPath: SILVER_MANIFEST,
+    } as VoxelEnv;
+    const log = console.log;
+    console.log = () => {};
+    try {
+      await runImportGen2(env, silver!.rom);
+    } finally {
+      console.log = log;
+    }
+    const read = (f: string) => JSON.parse(readFileSync(join(dir, `${f}.json`), "utf8"));
+    expect(read("version")).toEqual({ version: "silver" });
+    // Ice Path: Silver's DELIBIRD where Gold has ZUBAT
+    const enc = read("encounters");
+    expect(enc.grass.ICE_PATH_1F.slots.DAY[2].species).toBe("DELIBIRD");
+    // Silver's own Pokedex text
+    expect(read("pokedex").entries.ABRA.text.startsWith("If it decides to")).toBe(true);
+    // Lugia over the sea, on Silver's clock (RomExtractorGen2.lua's silver branch)
+    const t = read("title");
+    const title = t.title ?? t;
+    expect(title.trailMode).toBe("silver");
+    expect(title.hoohSequence).toEqual([[2, 3], [1, 7], [2, 7], [3, 7], [3, 7], [4, 7], [4, 7], [3, 7], [2, 3]]);
+    expect(title.hoohX).toBe(40);
+    expect(title.cloudScrollEvery).toBe(1);
+    expect(title.below).toEqual([0, 0, 0]);
+    expect(title.timeoutFrames).toBe(73 * 60 + 36);
+    const gfx = JSON.parse(readFileSync(join(dir, "gfx.json"), "utf8"));
+    expect(gfx["title/hooh_1"]).toMatchObject({ w: 80, h: 64 });
+    expect(gfx["title/trail"]).toMatchObject({ w: 16, h: 16 });
     rmSync(dir, { recursive: true, force: true });
   }, 60000);
 });
