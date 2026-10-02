@@ -1048,6 +1048,25 @@ H.MapRadio = function* (vm: Vm): Script<void> {
   });
 };
 
+// OverworldTownMap (engine/events/specials.asm): the wall TOWN MAP's
+// TownMapScript says "It's the TOWN MAP." and runs FadeToMenu / _TownMap /
+// ExitAllMenus -- the region map with the player's landmark marked, UP and
+// DOWN walking the landmarks, B to leave. That is the POKeGEAR's MAP card
+// in its townMap mode (ui/Pokegear.ts), which pops itself on B.
+H.OverworldTownMap = function* (vm: Vm): Script<void> {
+  const h = hooks(vm);
+  if (!h.pushScreen) return;
+  const s = save(vm);
+  yield* Specials.block(vm, (done) => {
+    const ok = h.pushScreen("Gen2Pokegear", {
+      townMap: true,
+      save: s,
+      onClose: () => done(true),
+    });
+    if (!truthy(ok)) done(false);
+  });
+};
+
 // ---- 42-44 the Game Corner ------------------------------------------------
 //
 // StartGameCornerGame is CheckCoinsAndCoinCase and then the machine.  The
@@ -2790,11 +2809,8 @@ const STUB_ROWS: Array<[string, number | undefined, string]> = [
   // specials/crystal_extras).  The row below is superseded by that handler
   // and survives only as the reason.
   ["PrintDiploma", undefined, "printer: no Game Boy Printer"],
-  // OverworldTownMap's row is superseded by H.OverworldTownMap
-  // (specials/crystal_extras) and survives only as the reason.
   // ../pokecrystal/data/events/special_pointers.asm:58 and pokegold's :63 both
   // carry `add_special UnusedMemoryGame ; unused`, and no script names it.
-  ["OverworldTownMap", undefined, "needs the POKeGEAR map card in view mode"],
   ["UnusedMemoryGame", undefined, "unused on both carts; no script reaches _MemoryGame"],
   // data/events/special_pointers.asm:124-181, the rows only Crystal has.
   ["BattleTowerRoomMenu", 10, "Battle Tower: $a is the menu's back-out arm"],

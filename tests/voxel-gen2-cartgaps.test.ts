@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { haveGoldGen, useGoldGen } from "../voxelmon/game/gen2/platform/data-node.ts";
 import { Game2 } from "../voxelmon/game/gen2/core/Game2.ts";
 import { rollWildItem } from "../voxelmon/game/gen2/world/World.ts";
+import { VOX_BTN } from "../contracts/spec/voxel-spec.ts";
 
 const gold = haveGoldGen();
 
@@ -53,5 +54,27 @@ describe("wild held items", () => {
     // 25% expected: comfortably inside 10..45%
     expect(held).toBeGreaterThan(20);
     expect(held).toBeLessThan(90);
+  });
+});
+
+describe("the wall TOWN MAP", () => {
+  test.skipIf(!gold)("OverworldTownMap opens the region map; B puts it away and the script goes on", () => {
+    useGoldGen();
+    const game: any = Game2.new();
+    game.load({ startWorld: true });
+    game.writeSave = () => [true];
+    for (let k = 0; k < 30; k++) game.frame(0);
+    const w = game.world;
+    const id = w.constants.specialOrder.indexOf("OverworldTownMap");
+    expect(id).toBeGreaterThanOrEqual(0);
+    w.vm.start([{ op: "special", id }, { op: "end" }]);
+    for (let k = 0; k < 20; k++) game.frame(0);
+    const top = game.stack.top();
+    expect(top?.screenId ?? top?.constructor?.name).toContain("Pokegear");
+    expect(top.townMap).toBe(true);
+    for (let k = 0; k < 6; k++) game.frame(k === 0 ? VOX_BTN.b : 0);
+    expect(game.stack.top()?.townMap).toBeUndefined();
+    for (let k = 0; k < 20; k++) game.frame(0);
+    expect(w.vm.running()).toBe(false);
   });
 });
