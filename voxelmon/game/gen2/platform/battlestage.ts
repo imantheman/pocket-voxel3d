@@ -50,6 +50,8 @@ function rgb555(c: Rgb | undefined): number {
 
 export class BattleStage {
   private active = false;
+  /** The battle screen the log last named (one line a battle). */
+  private logged: unknown = null;
   private arena: Arena | null = null;
   private shown: (string | null)[] = [null, null];
   private palShown: (string | null)[] = [null, null];
@@ -81,6 +83,13 @@ export class BattleStage {
   emit(game: any, palettes: any): boolean {
     const st = this.battleState(game);
     const world = game?.world;
+    if (st && st !== this.logged) {
+      // one line a battle, to the card's log: what the options said as it
+      // began (Isaac's BATTLES 2D came up staged in 3D on hardware only)
+      this.logged = st;
+      const o = game?.options ?? {};
+      console.log(`[pv] gold battle: view ${String(o.view)} battles ${String(o.battleView)} options ${o === game?.save?.options ? "same" : "apart"} -> ${is2d(o.battleView) ? "2D" : "3D stage"}`);
+    }
     if (!st || !world?.map || !world.player || is2d(game?.options?.battleView)) {
       this.end();
       return false;

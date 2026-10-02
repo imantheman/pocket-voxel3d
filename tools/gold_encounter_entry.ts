@@ -5,7 +5,7 @@
 // the battle (RUN) and back to the grass, again and again. Logged: the tick
 // the encounter fires, the tick the battle's menu comes up, and Gold's own
 // step/draw/lcd/view split. ONLY="view,battles" at bundle time: those, a top-screen
-// shot (native screenshot) every two seconds of battle. Never shipped.
+// shot (native screenshot) of every battle's menu. Never shipped.
 import "../voxelmon/game/gen2/main.ts";
 import { VOX_BTN } from "../contracts/spec/voxel-spec.ts";
 import { Save } from "../voxelmon/game/gen2/core/Save.ts";
@@ -67,10 +67,14 @@ g.frame = (b: number): void => {
   }
   if (top?.screenId === "Gen2BattleState" && top.phase === "menu" && fired >= 0) {
     console.log(`[pv] bench encounter to battle menu: ${n - fired} ticks`);
+    // a shot of every battle's menu (ONLY), numbered as the log counts them
+    if (typeof ONLY !== "undefined") {
+      console.log(`[pv] bench battle ${shots++} shot`);
+      native.screenshot?.();
+    }
     fired = -2;
   }
   let pad = 0;
-  if (typeof ONLY !== "undefined" && top && n % 120 === 0 && shots++ < 12) native.screenshot?.();
   if (w?.map && n > 120) {
     if (!placed) {
       placed = true;

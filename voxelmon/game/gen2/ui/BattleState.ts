@@ -4722,6 +4722,11 @@ export class BattleState {
   drawPanel(): void {
     // Staged in the voxel world (platform/battlestage.ts): the field stays
     // open onto the arena, and only the HUDs and boxes are drawn over it.
+    if (this.loggedStage !== !!this.staged3d) {
+      // to the card's log as the screen first draws, and on any change
+      this.loggedStage = !!this.staged3d;
+      console.log(`[pv] gold battle screen: ${this.staged3d ? "staged in 3D (open field)" : "2D (white field)"}`);
+    }
     if (!this.staged3d) Chrome.clear();
     if (!hasBattleSides(this)) {
       Chrome.printThrough(Strings.get("NO BATTLE"), 1, 1,

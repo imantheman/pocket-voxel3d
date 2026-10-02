@@ -4279,7 +4279,7 @@ fn main() {
                     // build has no window for, which is why the first run of
                     // this line left no trace in pvlog.txt at all.
                     dlog(&format!(
-                        "[pv] perf: {} fps  cpu {:.1} avg {:.0} max ms (js {:.1} lcd {:.1} r {:.1} c {:.1})  gpu {:.1} avg {:.0} max ms  proc {:.1} ms  spans {}/{}  trees {}/{}  3d {:.2} r{:.0}  ticks {} dropped {:.0} ms",
+                        "[pv] perf: {} fps  cpu {:.1} avg {:.0} max ms (js {:.1} lcd {:.1} r {:.1} c {:.1})  gpu {:.1} avg {:.0} max ms  proc {:.1} ms  spans {}/{}  trees {}/{}  3d {:.2} r{:.0}  ticks {} dropped {:.0} ms  linear {} KB",
                         fps_frames,
                         perf_cpu_sum / perf_n as f32, perf_cpu_max,
                         unsafe { PERF_JS_US } / 1000.0 / perf_n as f32,
@@ -4291,6 +4291,8 @@ fn main() {
                         unsafe { DRAWN }, perf_spans, unsafe { TREES_DRAWN }, perf_trees,
                         perf_slider, perf_radius,
                         perf_ticks, perf_drop_ms,
+                        // the vertex/texture pool left: a slow leak shows as this falling
+                        unsafe_free_kb(),
                     ));
                     dlog(&format!("[pv] sound: peak {} over the last 5 s", aud_peak));
                     aud_peak = 0;
