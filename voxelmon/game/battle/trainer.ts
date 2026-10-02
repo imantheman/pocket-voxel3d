@@ -8,6 +8,14 @@ import { makeBattler } from "./battler.ts";
 import { newMon, markSeen, type PartyMon } from "./mon.ts";
 import { TRAINER_INTRO_SFX_GAP } from "../rules/timing.ts";
 
+/**
+ * A trainer's mons all carry the same DVs: LoadEnemyMon reads wTrainerClass
+ * and, for a trainer battle, loads ATKDEFDV_TRAINER / SPDSPCDV_TRAINER
+ * ($98, $88) instead of rolling -- Atk 9, Def 8, Spd 8, Spc 8, so HP 8.
+ * Never shiny in Gold, which is why no trainer's mon ever came over shiny.
+ */
+export const TRAINER_DVS = { hp: 8, attack: 9, defense: 8, speed: 8, special: 8 } as const;
+
 interface TrainerDef {
   id: string;
   name: string;
@@ -75,12 +83,13 @@ export class TrainerBattle extends WildBattle {
     this.baseMoney = def?.baseMoney ?? 0;
     this.enemyParty = monRoster
       ? monRoster.map((m) => ({ ...m }))
-      : roster.map((m) => newMon(data, m.species, m.level, rng));
+      : roster.map((m) => newMon(data, m.species, m.level, undefined, { ...TRAINER_DVS }));
     this.enemyIndex = 0;
-    if (monRoster?.[0]) {
-      // super() built the lead from a species and a level, which re-rolled
-      // it. Put the real mon in its place.
-      this.enemy = makeBattler(data, this.enemyParty[0]!, false);
+    if (this.enemyParty[0]) {
+      // super() built the lead from a species and a level, which rolled it
+      // wild. Put the real mon -- a linked player's, or the trainer's own
+      // fixed-DV one -- in its place.
+      this.enemy = makeBattler(data, this.enemyParty[0], false);
     }
   }
 
