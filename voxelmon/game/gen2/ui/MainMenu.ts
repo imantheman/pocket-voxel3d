@@ -14,6 +14,7 @@
 // Choosing CONTINUE shows the save panel (DisplaySaveInfoOnContinue) and waits
 // for A to confirm or B to back out (ConfirmContinue).
 
+import { clockResetPending } from "./ResetClock.ts";
 import { Clock } from "../core/Clock.ts";
 import { Save } from "../core/Save.ts";
 import { Logger } from "../shared/core/Logger.ts";
@@ -42,6 +43,8 @@ export interface MainMenuOpts {
   onContinue?: (save: any) => void;
   onOption?: () => void;
   onMysteryGift?: (save: any) => void;
+  /** Not the cart's: set the game clock straight from here. */
+  onSetClock?: (save: any) => void;
   onExit?: () => void;
   hasSave?: boolean;
   save?: any;
@@ -65,6 +68,7 @@ export class MainMenu {
   onContinue: ((save: any) => void) | undefined;
   onOption: (() => void) | undefined;
   onMysteryGift: ((save: any) => void) | undefined;
+  onSetClock: ((save: any) => void) | undefined;
   onExit: (() => void) | undefined;
   clock: MainMenuOpts["clock"];
   save: any;
@@ -79,6 +83,7 @@ export class MainMenu {
     this.onContinue = opts.onContinue;
     this.onOption = opts.onOption;
     this.onMysteryGift = opts.onMysteryGift;
+    this.onSetClock = opts.onSetClock;
     this.onExit = opts.onExit;
     this.clock = opts.clock;
     this.save = opts.save;
@@ -114,6 +119,8 @@ export class MainMenu {
     if (this.hasSave && this.onMysteryGift && MysteryGift.unlocked(this.save)) {
       items.push({ label: Strings.get("MYSTERY GIFT"), value: "gift" });
     }
+    // Not on the cart: the clock without the title's password dance
+    if (this.hasSave && this.onSetClock) items.push({ label: Strings.get("SET CLOCK"), value: "clock" });
     // Not on the cart (Brian's): a row to leave the game, as the Gen 1 port has.
     // The 3DS leaves through HOME, so it shows only when an owner can exit.
     if (this.onExit) items.push({ label: Strings.get("EXIT GAME"), value: "exit" });
@@ -143,6 +150,8 @@ export class MainMenu {
       if (this.onOption) this.onOption();
     } else if (value === "gift") {
       if (this.onMysteryGift) this.onMysteryGift(this.save);
+    } else if (value === "clock") {
+      if (this.onSetClock) this.onSetClock(this.save);
     } else if (value === "exit") {
       // love.event.quit has no 3DS form: only the owner's onExit
       if (this.onExit) this.onExit();
@@ -193,6 +202,11 @@ export class MainMenu {
   /** Lua: MainMenu.lua:176 -- ../pokecrystal/engine/menus/main_menu.asm:286 */
   drawClockBox(): void {
     Chrome.textbox(0, 14, 18, 2);
+    // .PlaceTime -> .PrintTimeNotSet while sRTCStatusFlags holds RTC_RESET
+    if (clockResetPending(this.save)) {
+      Chrome.print(Strings.get("TIME NOT SET"), 1, 15);
+      return;
+    }
     const [hour, minute, weekday] = this.clockParts();
     Chrome.print(Clock.weekdayName(weekday) ?? Strings.get(DAY_LABEL), 1, 15);
     Chrome.print(MainMenu.timeString(hour, minute), 4, 16);

@@ -83,6 +83,8 @@ export interface ResetClockOpts {
   persist?: (save: any) => void;
   /** password: the cart resets either way; restart: true once the clock is set. */
   onDone?: (ok: boolean) => void;
+  /** restart: skip "The clock's time may be wrong" (the menu's SET CLOCK). */
+  asked?: boolean;
 }
 
 type Step = "ask" | "digits" | "edit" | "confirm" | "message";
@@ -137,9 +139,11 @@ export class ResetClock {
       self.day = Clock.weekday(self.save);
       self.hour = Clock.hour(self.save);
       self.minute = Clock.minute(self.save);
-      self.say(TEXT.mayBeWrong, () => self.say(TEXT.howTo, () => {
+      const edit = (): void => self.say(TEXT.howTo, () => {
         self.step = "edit";
-      }));
+      });
+      if (opts.asked) edit();
+      else self.say(TEXT.mayBeWrong, edit);
     }
     return self;
   }

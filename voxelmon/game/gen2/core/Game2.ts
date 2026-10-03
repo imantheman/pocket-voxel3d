@@ -254,6 +254,17 @@ export class Game2 {
         this.stack.clear();
         Screens.push(this, "Gen2MysteryGift", { save, onClose: () => this.showMainMenu() });
       },
+      // the restart editor, asked for: day, hour, minute, saved on YES
+      onSetClock: (save: any) => {
+        this.stack.clear();
+        Screens.push(this, "Gen2ResetClock", {
+          mode: "restart",
+          asked: true,
+          save,
+          persist: (s: any) => Save.save(s),
+          onDone: () => this.showMainMenu(),
+        });
+      },
       onExit: this.onExit,
     });
   }

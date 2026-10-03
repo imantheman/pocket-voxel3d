@@ -2225,9 +2225,9 @@ H.DisplayLinkRecord = function* (vm: Vm): Script<void> {
 //     overflows Mom's account still tops her out at 999999 without touching
 //     the wallet.
 //
-// Not ported: the `.nope` arm of IsThisAboutYourMoney calls DSTChecks, which
-// nudges wStartHour/wStartDay.  This port has no wStartHour to nudge, so the
-// conversation falls straight through to MomJustDoWhatYouCanText.
+// The `.nope` arm of IsThisAboutYourMoney runs DSTChecks (engine/rtc/
+// timeset.asm) before MomJustDoWhatYouCanText: the clock goes forward or back
+// an hour through Clock.setTime, and save.rtc.dst is wDST's bit.
 //
 // data/text/common_1.asm, with the cart's own page structure: `para` is `\f`,
 // `cont` is `\v`.
@@ -2340,6 +2340,40 @@ function* transactionSfx(vm: Vm): Script<void> {
   yield { kind: "waitsfx" };
 }
 
+// DSTChecks, data/text/common_3.asm's lines.
+const DST_TEXT = {
+  askDst: Strings.source("Do you want to\nswitch to Daylight\vSaving Time?"),
+  dst: Strings.source("I set the clock\nforward by one\vhour."),
+  askNotDst: Strings.source("Is Daylight Saving\nTime over?"),
+  notDst: Strings.source("I put the clock\nback one hour."),
+  askAdjust: Strings.source("Do you want to\nadjust your clock\ffor Daylight\nSaving Time?"),
+  lostBooklet: Strings.source("I lost the in-\nstruction booklet\vfor the #GEAR.\fCome back again in\na while."),
+};
+
+// Not the Lua's (it skipped this arm): DSTChecks. An hour's move that would
+// cross midnight -- turning DST on at 23:xx, or off at 0:xx -- is refused
+// with Mom's lost booklet; otherwise YES moves the clock and flips the bit.
+function* dstChecks(vm: Vm): Script<void> {
+  const record = save(vm);
+  if (!truthy(record)) return;
+  record.rtc = lor(record.rtc, {});
+  const dst = truthy(record.rtc.dst);
+  const w = hooks(vm).world;
+  const hour = lor(w && w.hour && w.hour(), Clock.hour(record));
+  const minute = Clock.minute(record);
+  if ((dst && hour === 0) || (!dst && hour === 23)) {
+    yield* showRawHeld(vm, Strings.get(DST_TEXT.askAdjust));
+    if (!truthy(yield { kind: "yesorno" })) return;
+    yield* vm.showRaw(Strings.get(DST_TEXT.lostBooklet));
+    return;
+  }
+  yield* showRawHeld(vm, Strings.get(dst ? DST_TEXT.askNotDst : DST_TEXT.askDst));
+  if (!truthy(yield { kind: "yesorno" })) return;
+  record.rtc.dst = !dst;
+  Clock.setTime(record, hour + (dst ? -1 : 1), minute);
+  yield* vm.showRaw(Strings.get(dst ? DST_TEXT.notDst : DST_TEXT.dst));
+}
+
 // Lua: Specials.lua:2272
 H.BankOfMom = function* (vm: Vm): Script<void> {
   const record = save(vm);
@@ -2371,7 +2405,8 @@ H.BankOfMom = function* (vm: Vm): Script<void> {
   yield* showRawHeld(vm, Strings.get(MOM_TEXT.isThisAboutMoney));
   const aboutMoney = yield { kind: "yesorno" };
   if (!truthy(aboutMoney)) {
-    // .nope: DSTChecks does not apply here; see the header note above.
+    // .nope: DSTChecks, then her usual line
+    yield* dstChecks(vm);
     yield* justDoWhatYouCan();
     return;
   }
@@ -2953,6 +2988,7 @@ export const Specials = {
   // The whose-PC menu's PROF.OAK's PC row runs ProfOaksPC's rating flow
   // inside a screen, so the counts, the rating pick and the two OakPC texts
   // are exported here rather than transcribed a second time.
+  dstChecks, // Mom's DST arm, for the tests
   dexCounts, // Lua: Specials.lua:2059
   findOakRating,
   OAK_PC_TEXT,

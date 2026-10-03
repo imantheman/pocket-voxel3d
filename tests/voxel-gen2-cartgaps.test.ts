@@ -6,7 +6,9 @@ import { haveGoldGen, useGoldGen } from "../voxelmon/game/gen2/platform/data-nod
 import { Game2 } from "../voxelmon/game/gen2/core/Game2.ts";
 import { rollWildItem } from "../voxelmon/game/gen2/world/World.ts";
 import { VOX_BTN } from "../contracts/spec/voxel-spec.ts";
-import { ResetClock, clockResetPassword } from "../voxelmon/game/gen2/ui/ResetClock.ts";
+import { ResetClock, clockResetPassword, clockResetPending } from "../voxelmon/game/gen2/ui/ResetClock.ts";
+import { Specials } from "../voxelmon/game/gen2/script/Specials.ts";
+import { MainMenu } from "../voxelmon/game/gen2/ui/MainMenu.ts";
 import { Clock } from "../voxelmon/game/gen2/core/Clock.ts";
 import { Save } from "../voxelmon/game/gen2/core/Save.ts";
 
@@ -227,5 +229,75 @@ describe("the title's save delete", () => {
     Save.erase();
     expect(Save.exists()).toBe(false);
     expect(Save.load()[0]).toBeUndefined();
+  });
+});
+
+
+describe("the clock: Mom's DST, SET CLOCK, TIME NOT SET", () => {
+  /** Run a special's generator with scripted YES/NO answers; returns the lines it showed. */
+  function drive(gen: Generator<any, any, any>, answers: boolean[]): string[] {
+    const shown: string[] = [];
+    let r = gen.next();
+    for (let i = 0; i < 50 && !r.done; i++) {
+      if (r.value && r.value.kind === "yesorno") r = gen.next(answers.shift() ?? false);
+      else r = gen.next();
+    }
+    return shown;
+  }
+  function fakeVm(save: any, hour: number, shown: string[]): any {
+    return {
+      specials: { save: () => save, world: { hour: () => hour } },
+      showRaw: function* (body: string) { shown.push(body); },
+    };
+  }
+
+  test.skipIf(!gold)("DSTChecks: YES moves the clock an hour and flips the flag; NO leaves it", () => {
+    useGoldGen();
+    Game2.new().load({ startWorld: false });
+    const save: any = { rtc: {} };
+    Clock.setTime(save, 10, 30);
+    const shown: string[] = [];
+    drive(Specials.dstChecks(fakeVm(save, 10, shown)), [true]);
+    expect(save.rtc.dst).toBe(true);
+    expect(Clock.hour(save)).toBe(11);
+    expect(Clock.minute(save)).toBe(30);
+    expect(shown.join("|")).toContain("forward by one");
+    // over again: back an hour
+    drive(Specials.dstChecks(fakeVm(save, 11, shown)), [true]);
+    expect(save.rtc.dst).toBe(false);
+    expect(Clock.hour(save)).toBe(10);
+    drive(Specials.dstChecks(fakeVm(save, 10, shown)), [false]);
+    expect(save.rtc.dst).toBe(false);
+    expect(Clock.hour(save)).toBe(10);
+  });
+
+  test.skipIf(!gold)("DSTChecks: a move across midnight is the lost booklet, and nothing changes", () => {
+    useGoldGen();
+    Game2.new().load({ startWorld: false });
+    const save: any = { rtc: {} };
+    Clock.setTime(save, 23, 10);
+    const shown: string[] = [];
+    drive(Specials.dstChecks(fakeVm(save, 23, shown)), [true]);
+    expect(save.rtc.dst).toBeFalsy();
+    expect(Clock.hour(save)).toBe(23);
+    expect(shown.join("|")).toContain("booklet");
+  });
+
+  test.skipIf(!gold)("the main menu offers SET CLOCK with a save, and shows TIME NOT SET after a reset", () => {
+    useGoldGen();
+    const game: any = Game2.new();
+    game.load({ startWorld: false });
+    let asked: any = null;
+    const save: any = Save.newGame();
+    const menu: any = new MainMenu(game, { save, hasSave: true, onSetClock: (s: any) => (asked = s) });
+    const values = menu.list.items.map((i: any) => i.value);
+    expect(values).toContain("clock");
+    menu.choose("clock");
+    expect(asked).toBe(save);
+    const fresh: any = new MainMenu(game, { hasSave: false, onSetClock: () => {} });
+    expect(fresh.list.items.map((i: any) => i.value)).not.toContain("clock");
+    expect(clockResetPending(save)).toBe(false);
+    save.rtc.resetPending = true;
+    expect(clockResetPending(save)).toBe(true);
   });
 });
