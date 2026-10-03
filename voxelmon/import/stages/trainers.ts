@@ -48,6 +48,63 @@ function trainerParties(
   return parties;
 }
 
+/** One party's extra moves: [mon (1-based), slot (1-4), move id]. */
+export type SpecialMoveRow = [number, number, string];
+
+/**
+ * Yellow's SpecialTrainerMoves (data/trainers/special_moves.asm, read by
+ * engine/battle/read_trainer_party.asm after the party loads): records of
+ * trainer class, party number, then (mon, slot, move) triples ending 0, the
+ * table ending $FF. Red and Blue have no such table -- they use LoneMoves /
+ * TeamMoves, kept in game/battle/trainer.ts -- so nothing is found there.
+ *
+ * The manifest has no symbol for it, so it is found by shape in the trainer
+ * data's own bank: the longest run of well-formed records that ends in $FF,
+ * ten records at least. In US Yellow it is 17 records at $0E:5C6B.
+ */
+export function findSpecialTrainerMoves(
+  ctx: Ctx, bank: number, classCount: number,
+): Map<number, Map<number, SpecialMoveRow[]>> | null {
+  const { rom } = ctx;
+  const parse = (start: number): [number, number, SpecialMoveRow[]][] | null => {
+    const recs: [number, number, SpecialMoveRow[]][] = [];
+    let a = start;
+    while (a < 0x7ffd) {
+      const c = rom.byte(bank, a);
+      if (c === 0xff) return recs;
+      const p = rom.byte(bank, a + 1);
+      if (c < 1 || c > classCount || p < 1 || p > 40) return null;
+      a += 2;
+      const rows: SpecialMoveRow[] = [];
+      while (a < 0x7ffd) {
+        const m = rom.byte(bank, a);
+        if (m === 0) { a += 1; break; }
+        const s = rom.byte(bank, a + 1);
+        const mv = rom.byte(bank, a + 2);
+        const id = ctx.move(mv);
+        if (m > 6 || s < 1 || s > 4 || !id || id.startsWith("MOVE_")) return null;
+        rows.push([m, s, id]);
+        a += 3;
+      }
+      if (rows.length === 0) return null;
+      recs.push([c, p, rows]);
+    }
+    return null;
+  };
+  let best: [number, number, SpecialMoveRow[]][] | null = null;
+  for (let a = 0x4000; a < 0x7ff0; a++) {
+    const recs = parse(a);
+    if (recs && recs.length >= 10 && (!best || recs.length > best.length)) best = recs;
+  }
+  if (!best) return null;
+  const out = new Map<number, Map<number, SpecialMoveRow[]>>();
+  for (const [c, p, rows] of best) {
+    if (!out.has(c)) out.set(c, new Map());
+    out.get(c)!.set(p, rows);
+  }
+  return out;
+}
+
 export function extractTrainers(ctx: Ctx): Record<string, unknown> {
   // The player's intro portrait lives outside TrainerPicAndMoneyPointers
   // (pokered RedPicFront); pull it so the Oak speech can show the player.
@@ -98,6 +155,7 @@ export function extractTrainers(ctx: Ctx): Record<string, unknown> {
   // the TrainerAI symbol.
   const partyEnds = [...partyStarts.slice(1), ctx.symbol("TrainerAI").address];
 
+  const special = findSpecialTrainerMoves(ctx, pointers.bank, order.length);
   const out: Record<string, unknown> = {};
   for (let i = 0; i < order.length; i++) {
     const label = order[i];
@@ -134,6 +192,10 @@ export function extractTrainers(ctx: Ctx): Record<string, unknown> {
       baseMoney: Math.floor(Rom.bcd(rawMoney) / 100),
       aiMods: aiMods[i],
       parties,
+      // party number (1-based, as a string key) -> its extra moves
+      specialMoves: special?.has(index)
+        ? Object.fromEntries([...special.get(index)!].map(([p, rows]) => [String(p), rows]))
+        : undefined,
     };
   }
   return out;

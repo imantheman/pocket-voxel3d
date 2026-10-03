@@ -93,6 +93,21 @@ function giveThirdMove(data: VoxelmonData, mon: PartyMon | undefined, move: stri
 export function applySpecialTrainerMoves(
   data: VoxelmonData, trainerId: string, partyIndex: number, party: PartyMon[],
 ): void {
+  // Yellow: its own SpecialTrainerMoves table, read from the ROM by the
+  // import (trainers.json specialMoves) -- (mon, slot, move) into that slot
+  const def = (data as unknown as { trainers?: Record<string, { specialMoves?: Record<string, [number, number, string][]> }> })
+    .trainers?.[trainerId];
+  const rows = def?.specialMoves?.[String(partyIndex)];
+  if (rows) {
+    for (const [n, slot, move] of rows) {
+      const mon = party[n - 1];
+      if (!mon || !data.moves[move]) continue;
+      const entry = { id: move, pp: data.moves[move]!.pp ?? 0 };
+      if (slot - 1 < mon.moves.length) mon.moves[slot - 1] = entry;
+      else if (!mon.moves.some((m) => m.id === move)) mon.moves.push(entry);
+    }
+    return;
+  }
   const v = (data as { version?: string }).version;
   if (v === "yellow" || v === "gold" || v === "silver") return;
   const lone = LONE_MOVES[trainerId];

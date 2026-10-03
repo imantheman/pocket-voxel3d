@@ -11,6 +11,7 @@ import { RecorderHost } from "../voxelmon/game/host.ts";
 import { mapScript, useScriptsFor } from "../voxelmon/game/world/mapscripts.ts";
 import { prizeWindows, YELLOW_PRIZE_WINDOWS } from "../voxelmon/game/world/gamecorner.ts";
 import { newMon } from "../voxelmon/game/battle/mon.ts";
+import { TrainerBattle } from "../voxelmon/game/battle/trainer.ts";
 import * as Items from "../voxelmon/game/rules/items.ts";
 import {
   findFollower,
@@ -889,5 +890,19 @@ describe("EVENT POKéMON in Yellow: the SURFING PIKACHU", () => {
     // once per save
     expect(cableClubScript("VIRIDIAN_POKECENTER_LINK_RECEPTIONIST", game.save, yellow)!
       .some((r) => r[0] === "give_pokemon")).toBe(false);
+  });
+});
+
+
+describe("Yellow trainers' special moves (its own SpecialTrainerMoves)", () => {
+  test.skipIf(!hasYellow)("BROCK's ONIX gets BIND and BIDE in slots 3 and 4; MISTY's STARMIE BUBBLEBEAM", () => {
+    if (!(yellow as any).trainers.OPP_BROCK.specialMoves) return; // a dataset imported before the table was read
+    const save: any = { party: [newMon(yellow!, "MEWTWO", 70)], inventory: {}, player: { name: "RED", rival: "BLUE" } };
+    const brock = (new TrainerBattle(yellow!, save, seqRng(0), "OPP_BROCK", 1) as any).enemyParty;
+    expect(brock[1].species).toBe("ONIX");
+    expect(brock[1].moves[2].id).toBe("BIND");
+    expect(brock[1].moves[3].id).toBe("BIDE");
+    const misty = (new TrainerBattle(yellow!, save, seqRng(0), "OPP_MISTY", 1) as any).enemyParty;
+    expect(misty[1].moves[3].id).toBe("BUBBLEBEAM");
   });
 });
