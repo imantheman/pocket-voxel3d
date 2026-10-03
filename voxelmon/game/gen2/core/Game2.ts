@@ -293,6 +293,19 @@ export class Game2 {
       onContinue: () => this.showMainMenu(),
       onTimeout: () => this.showCopyright(),
       onResetClock: () => this.showResetClock(),
+      onDeleteSave: () => this.showDeleteSave(),
+    });
+  }
+
+  /** _DeleteSaveData off the title, then the title again (`jp Init`). */
+  showDeleteSave(): void {
+    if (!Save.exists()) return this.showTitle();
+    this.stack.clear();
+    Screens.push(this, "Gen2ResetClock", {
+      mode: "delete",
+      save: this.save,
+      erase: () => Save.erase(),
+      onDone: () => this.softReset(),
     });
   }
 

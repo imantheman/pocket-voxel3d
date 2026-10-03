@@ -21,6 +21,10 @@
 // back to the editor. B cancels the CONTINUE.
 //
 // The flag is the port's save.rtc.resetPending, written through Save.save.
+//
+// "delete" -- the title's Up + B + Select (TITLESCREENOPTION_DELETE_SAVE_DATA
+// -> _DeleteSaveData): "Clear all save data?" over NO / YES; YES erases the
+// slot. The same NO-first menu, so it lives here too.
 
 import { Chrome } from "./Chrome.ts";
 import { Clock } from "../core/Clock.ts";
@@ -32,6 +36,7 @@ import G from "../platform/screen.ts";
 
 const TEXT = {
   ask: Strings.source("Reset the clock?"),
+  clearAll: Strings.source("Clear all save\ndata?"),
   enter: Strings.source("Please enter the\npassword."),
   wrong: Strings.source("Wrong password!"),
   ok: Strings.source("Password OK.\nSelect CONTINUE &\vreset settings."),
@@ -70,7 +75,9 @@ export function clockResetPending(save: any): boolean {
 }
 
 export interface ResetClockOpts {
-  mode: "password" | "restart";
+  mode: "password" | "restart" | "delete";
+  /** delete: empties the save slot (Save.erase in the game). */
+  erase?: () => void;
   save: any;
   /** Writes the save (Save.save in the game). */
   persist?: (save: any) => void;
@@ -87,7 +94,8 @@ export class ResetClock {
   screenId = "Gen2ResetClock";
 
   game: any;
-  mode: "password" | "restart" = "password";
+  mode: "password" | "restart" | "delete" = "password";
+  erase?: () => void;
   save: any;
   persist?: (save: any) => void;
   onDone?: (ok: boolean) => void;
@@ -112,7 +120,14 @@ export class ResetClock {
     self.save = opts.save;
     self.persist = opts.persist;
     self.onDone = opts.onDone;
-    if (self.mode === "password") {
+    self.erase = opts.erase;
+    if (self.mode === "delete") {
+      self.say(TEXT.clearAll, () => {
+        self.step = "ask";
+        self.choice = 0;
+      });
+      self.nextAtOnce = true;
+    } else if (self.mode === "password") {
       self.say(TEXT.ask, () => {
         self.step = "ask";
         self.choice = 0;
@@ -176,6 +191,10 @@ export class ResetClock {
         return;
       }
       if (!pressed("a")) return;
+      if (this.step === "ask" && this.mode === "delete") {
+        if (this.erase) this.erase();
+        return this.finish(true);
+      }
       if (this.step === "ask") {
         this.digits = [0, 0, 0, 0, 0];
         this.cursor = DIGITS - 1;
@@ -276,6 +295,8 @@ export class ResetClock {
       // the howTo's last page stays up under the editor
       const how = Strings.get(TEXT.howTo).split("\f").pop()!.split("\n");
       how.slice(0, 2).forEach((l, i) => Chrome.print(l, 1, 14 + i * 2));
+    } else if (this.step === "ask" && this.mode === "delete") {
+      Strings.get(TEXT.clearAll).split("\n").forEach((l, i) => Chrome.print(l, 1, 14 + i * 2));
     } else if (this.step === "ask") {
       Chrome.print(Strings.get(TEXT.ask), 1, 14);
     } else if (this.step === "confirm") {

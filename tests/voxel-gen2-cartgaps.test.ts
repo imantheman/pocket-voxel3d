@@ -8,6 +8,7 @@ import { rollWildItem } from "../voxelmon/game/gen2/world/World.ts";
 import { VOX_BTN } from "../contracts/spec/voxel-spec.ts";
 import { ResetClock, clockResetPassword } from "../voxelmon/game/gen2/ui/ResetClock.ts";
 import { Clock } from "../voxelmon/game/gen2/core/Clock.ts";
+import { Save } from "../voxelmon/game/gen2/core/Save.ts";
 
 const gold = haveGoldGen();
 
@@ -179,5 +180,52 @@ describe("the clock reset password", () => {
     for (let i = 0; i < 4 && outcome === undefined; i++) g.tap(s, "a");
     expect(outcome).toBe(false);
     expect(save.rtc.resetPending).toBeUndefined();
+  });
+});
+
+
+describe("the title's save delete", () => {
+  function tapper() {
+    let now = new Set<string>();
+    return {
+      options: {},
+      input: { wasPressed: (b: string) => now.has(b), isDown: (b: string) => now.has(b) },
+      tap(screen: any, b?: string) {
+        now = new Set(b ? [b] : []);
+        screen.update();
+        now = new Set();
+        for (let i = 0; i < 120 && screen.typer && !screen.typer.done(); i++) screen.update();
+      },
+    };
+  }
+
+  test.skipIf(!gold)("\"Clear all save data?\": NO keeps it, YES erases the slot", () => {
+    useGoldGen();
+    Game2.new().load({ startWorld: false });
+    const g = tapper();
+    let erased = 0;
+    const no: any = ResetClock.new(g, { mode: "delete", save: {}, erase: () => erased++ });
+    g.tap(no);
+    expect(no.step).toBe("ask");
+    expect(no.choice).toBe(0); // NO
+    g.tap(no, "a");
+    expect(no.done).toBe(true);
+    expect(erased).toBe(0);
+    const yes: any = ResetClock.new(g, { mode: "delete", save: {}, erase: () => erased++ });
+    g.tap(yes);
+    g.tap(yes, "down");
+    g.tap(yes, "a");
+    expect(erased).toBe(1);
+  });
+
+  test.skipIf(!gold)("Save.erase leaves no save to CONTINUE", () => {
+    useGoldGen();
+    const game: any = Game2.new();
+    game.load({ startWorld: false });
+    Save.save(Save.newGame());
+    expect(Save.exists()).toBe(true);
+    Save.erase();
+    expect(Save.exists()).toBe(false);
+    expect(Save.load()[0]).toBeUndefined();
   });
 });

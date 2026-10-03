@@ -144,6 +144,8 @@ export class TitleState implements GameState {
       data: any;
       hasSave?: boolean;
       picPageFor?: (species: string) => number;
+      showChoice?: (text: string, cb: (yes: boolean) => void, opts?: { defaultNo?: boolean }) => void;
+      deleteSave?: () => void;
     },
     private onChoose: (c: TitleChoice) => void,
   ) {
@@ -211,8 +213,28 @@ export class TitleState implements GameState {
       : picPageFor(this.game.data, this.mon);
   }
 
+  /**
+   * The title's UP + SELECT + B (DisplayTitleScreen -> DoClearSaveDialogue,
+   * engine/menus/save.asm): "Clear all saved data?" over NO / YES, NO first.
+   * YES empties the card's save, and the title's menu loses CONTINUE.
+   */
+  private clearSaveChord(): boolean {
+    const i = this.game.input;
+    if (!(i.isDown?.("up") && i.isDown?.("select") && i.isDown?.("b"))) return false;
+    if (!this.game.showChoice || !this.game.deleteSave) return false;
+    const text = (this.game.data?.text ?? {})._ClearSaveDataText ?? "Clear all saved\ndata?";
+    this.game.showChoice(text, (yes) => {
+      if (!yes) return;
+      this.game.deleteSave!();
+      this.menu = this.menu.filter((m) => m !== "CONTINUE");
+      this.index = 0;
+    }, { defaultNo: true });
+    return true;
+  }
+
   update(): void {
     const p = this.game.input.pressed;
+    if (this.phase === "press" && (!this.yellow || this.yPhase === "loop") && this.clearSaveChord()) return;
     if (this.yellow && this.phase === "press") {
       if (this.yPhase !== "loop") { this.yellowSequence(); return; } // input waits for the landing
       // DoTitleScreenFunction's blink: at 0, $80 and $90 of an 8-bit clock,

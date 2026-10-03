@@ -63,6 +63,8 @@ export interface TitleStateOpts {
   onTimeout?: () => void;
   /** Down + Select + B held: TITLESCREENOPTION_RESET_CLOCK. */
   onResetClock?: () => void;
+  /** Up + Select + B held: TITLESCREENOPTION_DELETE_SAVE_DATA. */
+  onDeleteSave?: () => void;
 }
 
 export class TitleState {
@@ -72,6 +74,7 @@ export class TitleState {
   game: any;
   onContinue: (() => void) | undefined;
   onResetClock: (() => void) | undefined;
+  onDeleteSave: (() => void) | undefined;
   onTimeout: (() => void) | undefined;
   title: any;
   screenColor: LcdImage | null;
@@ -143,6 +146,7 @@ export class TitleState {
     this.game = game;
     this.onContinue = opts.onContinue;
     this.onResetClock = opts.onResetClock;
+    this.onDeleteSave = opts.onDeleteSave;
     const title = opts.title ?? {};
     this.title = title;
     this.screenColor = tryImage(title.screen ?? "assets/generated/title/title_screen.png");
@@ -357,10 +361,16 @@ export class TitleState {
 
     const input = this.game.input;
     // TitleScreenMain: D_DOWN + B_BUTTON + SELECT together is the clock
-    // reset (Up + B + Select, the save delete, is not ported)
+    // reset, D_UP + B_BUTTON + SELECT the save delete
     if (input && this.onResetClock && input.isDown("down") && input.isDown("b") && input.isDown("select")) {
       const go = this.onResetClock;
       this.onResetClock = undefined;
+      go();
+      return;
+    }
+    if (input && this.onDeleteSave && input.isDown("up") && input.isDown("b") && input.isDown("select")) {
+      const go = this.onDeleteSave;
+      this.onDeleteSave = undefined;
       go();
       return;
     }

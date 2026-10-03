@@ -10989,3 +10989,25 @@ describe("the soft reset", () => {
     expect(game.save.money ?? 0).not.toBe(4321);
   });
 });
+
+
+describe("the title's save delete", () => {
+  test.skipIf(!hasGen)("UP + SELECT + B asks to clear the save, NO first; YES empties it and CONTINUE goes", () => {
+    const host = new MenuHost();
+    host.saveWrite("{ saved = true }");
+    const game = new VoxelmonGame(romData!, host, 1);
+    game.newGame();
+    expect(game.stackKinds().at(-1)).toBe("title");
+    expect((game.top() as any).menu).toContain("CONTINUE");
+    for (let i = 0; i < 3; i++) game.tick(VOX_BTN.up | VOX_BTN.select | VOX_BTN.b);
+    game.tick(0);
+    for (let i = 0; i < 200 && game.stackKinds().at(-1) !== "choice"; i++) game.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+    expect(game.stackKinds().at(-1)).toBe("choice");
+    expect((game.top() as any).yes).toBe(false); // NO first
+    tap(game, VOX_BTN.up);
+    tap(game, VOX_BTN.a);
+    for (let i = 0; i < 40 && game.stackKinds().at(-1) !== "title"; i++) game.tick(0);
+    expect(host.saveData() ?? "").toBe("");
+    expect((game.top() as any).menu).not.toContain("CONTINUE");
+  });
+});

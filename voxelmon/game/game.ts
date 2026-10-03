@@ -160,6 +160,8 @@ class TextBoxState implements GameState, UiBoxSource {
     /** Fires once, the frame the last page has typed out (a jingle that
      *  follows the text, as PlayPokedexRatingSfx follows the rating). */
     private onTyped?: () => void,
+    /** The YES/NO menu's options (some prompts open on NO). */
+    private choiceOpts?: { defaultNo?: boolean },
   ) {
     this.box = new Textbox(
       text,
@@ -174,7 +176,7 @@ class TextBoxState implements GameState, UiBoxSource {
     if (this.choice && this.box.done) {
       if (!this.choicePushed) {
         this.choicePushed = true;
-        this.game.push(new ChoiceState(this.game, this.choice));
+        this.game.push(new ChoiceState(this.game, this.choice, this.choiceOpts));
       }
       return;
     }
@@ -199,7 +201,7 @@ class TextBoxState implements GameState, UiBoxSource {
     if (this.choice && this.box.done) {
       if (!this.choicePushed) {
         this.choicePushed = true;
-        this.game.push(new ChoiceState(this.game, this.choice));
+        this.game.push(new ChoiceState(this.game, this.choice, this.choiceOpts));
       }
       return;
     }
@@ -958,8 +960,14 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     return (this.save as { options?: { animations?: boolean } }).options?.animations !== false;
   }
 
-  showChoice(text: string, choice: (yes: boolean) => void): void {
-    this.push(new TextBoxState(this, text, undefined, choice));
+  showChoice(text: string, choice: (yes: boolean) => void, opts?: { defaultNo?: boolean }): void {
+    this.push(new TextBoxState(this, text, undefined, choice, undefined, undefined, opts));
+  }
+
+  /** DoClearSaveDialogue's YES: the card's save is emptied. */
+  deleteSave(): void {
+    this.host.saveWrite("");
+    (this as { hasSave?: boolean }).hasSave = false;
   }
 
   pushWarpFade(frames: number, midpoint: () => void, onDone?: () => void): void {

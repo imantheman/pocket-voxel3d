@@ -195,7 +195,7 @@ function scrubPlayerState(save: SaveTable, report: SaveReport): void {
 // Lua: Save.lua:883-893, reading the seam instead of a path.
 function readTable(): [SaveTable | undefined, string?] {
   const raw = saveio.read();
-  if (raw === undefined) return [undefined, "missing"];
+  if (raw === undefined || raw === "") return [undefined, "missing"];
   const value = SaveSerializer.decode(raw);
   if (!isTable(value)) return [undefined, `corrupt: ${tostring(value)}`];
   return [value];
@@ -596,7 +596,13 @@ export const Save = {
 
   // Lua: Save.lua:876-881 -- MainMenu_GetWhichMenu's wSaveFileExists.
   exists(_version?: string): boolean {
-    return saveio.read() !== undefined;
+    const text = saveio.read();
+    return text !== undefined && text !== "";
+  },
+
+  /** _DeleteSaveData's YES (the title's UP + B + SELECT): the slot emptied. */
+  erase(): boolean {
+    return saveio.write("");
   },
 
   /**
