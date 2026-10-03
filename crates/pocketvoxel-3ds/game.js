@@ -20567,7 +20567,7 @@ class Scene {
     }
     const p = view.prof;
     const t0 = p ? p.now() : 0;
-    const flatWorld = view.flatWorld?.() ? 1 : 0;
+    const flatWorld = view.flatWorld?.() ? view.battle2d?.() ? 2 : 1 : 0;
     if (flatWorld !== this.flatSent || flatWorld === 1 && (this.flatAge = (this.flatAge + 1) % 120) === 0) {
       this.host.flatWorld?.(flatWorld);
       this.flatSent = flatWorld;
@@ -28386,7 +28386,7 @@ class OverworldView2d {
         this.slots.clear();
         this.loadsSize = -1;
       }
-      t = this.tiles = buildTiles(map, game.data.maps, game.data.field?.cutTreeSwaps);
+      t = this.tiles = tilesFor(map, game.data.maps, game.data.field?.cutTreeSwaps);
       this.winX = NaN;
     }
     const camX = Math.round(p.px) - 64;
@@ -28547,69 +28547,118 @@ function sameBlocks(a, b) {
       return false;
   return true;
 }
-function blockPast(map, maps, bx, by) {
-  const def = map.def;
-  const w = def.width;
-  const h = def.height;
-  if (bx >= 0 && by >= 0 && bx < w && by < h)
-    return def.blocks[by * w + bx];
-  const conns = def.connections;
-  if (conns && maps) {
-    const at2 = (c, nbx, nby) => {
-      const d = c ? maps[c.map] : undefined;
-      if (!d || nbx < 0 || nby < 0 || nbx >= d.width || nby >= d.height)
-        return -1;
-      return d.blocks[nby * d.width + nbx] ?? -1;
-    };
-    let b = -1;
-    if (by < 0 && conns.north)
-      b = at2(conns.north, bx - conns.north.offset, by + (maps[conns.north.map]?.height ?? 0));
-    if (b < 0 && by >= h && conns.south)
-      b = at2(conns.south, bx - conns.south.offset, by - h);
-    if (b < 0 && bx < 0 && conns.west)
-      b = at2(conns.west, bx + (maps[conns.west.map]?.width ?? 0), by - conns.west.offset);
-    if (b < 0 && bx >= w && conns.east)
-      b = at2(conns.east, bx - w, by - conns.east.offset);
-    if (b >= 0)
-      return b;
+var recent = new Map;
+var RECENT_MAX = 6;
+function tilesFor(map, maps, swaps) {
+  const cuts = map.cutCells?.().size ?? 0;
+  const hit = recent.get(map.id);
+  if (hit && cuts === 0 && hit.cuts === 0 && hit.tileset === map.tileset.blocks && sameBlocks(hit.blocks, map.def.blocks)) {
+    hit.map = map;
+    recent.delete(map.id);
+    recent.set(map.id, hit);
+    return hit;
   }
-  return def.borderBlock;
+  const t = buildTiles(map, maps, swaps);
+  if (cuts === 0) {
+    recent.delete(map.id);
+    recent.set(map.id, t);
+    if (recent.size > RECENT_MAX)
+      recent.delete(recent.keys().next().value);
+  }
+  return t;
+}
+var blockRows = new WeakMap;
+function rowsOf(tsBlocks) {
+  let rows = blockRows.get(tsBlocks);
+  if (!rows) {
+    rows = new Uint32Array(tsBlocks.length * 4);
+    for (let b = 0;b < tsBlocks.length; b++) {
+      const bl = tsBlocks[b];
+      if (!bl)
+        continue;
+      for (let r = 0;r < 4; r++) {
+        rows[b * 4 + r] = (bl[r * 4] & 127 | (bl[r * 4 + 1] & 127) << 8 | (bl[r * 4 + 2] & 127) << 16 | (bl[r * 4 + 3] & 127) << 24) >>> 0;
+      }
+    }
+    blockRows.set(tsBlocks, rows);
+  }
+  return rows;
 }
 function buildTiles(map, maps, swaps) {
   const def = map.def;
-  const w = def.width * 4 + PAD2 * 2;
-  const h = def.height * 4 + PAD2 * 2;
-  const ids = new Uint8Array(w * h);
-  const tsBlocks = map.tileset.blocks;
+  const mw = def.width;
+  const mh = def.height;
   const pb = PAD2 / 4;
-  const cutBlock = new Map;
+  const gw = mw + pb * 2;
+  const gh = mh + pb * 2;
+  const grid2 = new Int32Array(gw * gh).fill(def.borderBlock ?? 0);
+  const paint = (c, ox, oy, side) => {
+    const d = c && maps ? maps[c.map] : undefined;
+    if (!d?.blocks)
+      return;
+    for (let y = 0;y < d.height; y++) {
+      const gy = y + oy + pb;
+      if (gy < 0 || gy >= gh)
+        continue;
+      for (let x = 0;x < d.width; x++) {
+        const gx = x + ox + pb;
+        if (gx < 0 || gx >= gw || !side(gx - pb, gy - pb))
+          continue;
+        const b = d.blocks[y * d.width + x];
+        if (b !== undefined)
+          grid2[gy * gw + gx] = b;
+      }
+    }
+  };
+  const conns = def.connections;
+  if (conns && maps) {
+    const { east, west, south, north } = conns;
+    if (east)
+      paint(east, mw, east.offset, (bx) => bx >= mw);
+    if (west)
+      paint(west, -(maps[west.map]?.width ?? 0), west.offset, (bx) => bx < 0);
+    if (south)
+      paint(south, south.offset, mh, (_bx, by) => by >= mh);
+    if (north)
+      paint(north, north.offset, -(maps[north.map]?.height ?? 0), (_bx, by) => by < 0);
+  }
+  const blocks = def.blocks ?? [];
+  for (let by = 0;by < mh; by++) {
+    const g0 = (by + pb) * gw + pb;
+    for (let bx = 0;bx < mw; bx++)
+      grid2[g0 + bx] = blocks[by * mw + bx];
+  }
   const cut = map.cutCells?.() ?? new Set;
   for (const i of cut) {
     const cx = i % map.widthCells;
     const cy = Math.floor(i / map.widthCells);
-    const bi = (cy >> 1) * def.width + (cx >> 1);
-    const sw2 = swaps?.find((s) => s.before === def.blocks[bi]);
+    const bi = (cy >> 1) * mw + (cx >> 1);
+    const sw2 = swaps?.find((s) => s.before === blocks[bi]);
     if (sw2)
-      cutBlock.set(bi, sw2.after);
+      grid2[((cy >> 1) + pb) * gw + (cx >> 1) + pb] = sw2.after;
   }
-  for (let by = -pb;by < def.height + pb; by++) {
-    for (let bx = -pb;bx < def.width + pb; bx++) {
-      const inside = bx >= 0 && by >= 0 && bx < def.width && by < def.height;
-      const block = tsBlocks[inside && cutBlock.get(by * def.width + bx) || blockPast(map, maps, bx, by)];
-      if (!block)
+  const w = gw * 4;
+  const h = gh * 4;
+  const ids = new Uint8Array(w * h);
+  const ids32 = new Uint32Array(ids.buffer);
+  const rows = rowsOf(map.tileset.blocks);
+  const nBlocks = rows.length >> 2;
+  const wq = w >> 2;
+  for (let gy = 0;gy < gh; gy++) {
+    const o = gy * 4 * wq;
+    for (let gx = 0;gx < gw; gx++) {
+      const b = grid2[gy * gw + gx];
+      if (b < 0 || b >= nBlocks)
         continue;
-      const x0 = (bx + pb) * 4;
-      const y0 = (by + pb) * 4;
-      for (let r = 0;r < 4; r++) {
-        const o = (y0 + r) * w + x0;
-        ids[o] = block[r * 4] & 127;
-        ids[o + 1] = block[r * 4 + 1] & 127;
-        ids[o + 2] = block[r * 4 + 2] & 127;
-        ids[o + 3] = block[r * 4 + 3] & 127;
-      }
+      const s = b * 4;
+      const at2 = o + gx;
+      ids32[at2] = rows[s];
+      ids32[at2 + wq] = rows[s + 1];
+      ids32[at2 + 2 * wq] = rows[s + 2];
+      ids32[at2 + 3 * wq] = rows[s + 3];
     }
   }
-  return { map, w, h, ids, blocks: [...def.blocks ?? []], cuts: cut.size };
+  return { map, tileset: map.tileset.blocks, w, h, ids, blocks: blocks.slice(), cuts: cut.size };
 }
 function writeWideWindow(maps, t, map, tx0, ty0, cols, rows) {
   const x = tx0 + PAD2;
@@ -30901,6 +30950,7 @@ class QuickJsHost {
   lcdLinesBin = native.lcdLinesBin ? (target2, lines) => native.lcdLinesBin(target2, lines) : undefined;
   lcdUnderView = native.lcdUnderView ? (w, h, wide) => native.lcdUnderView(w, h, wide) : undefined;
   lcdUnderObjsBin = native.lcdUnderObjsBin ? (packed, count2) => native.lcdUnderObjsBin(packed, count2) : undefined;
+  lcdUnderBin = native.lcdUnderBin ? (cells, attrs) => native.lcdUnderBin(cells, attrs) : undefined;
   screenshot = native.screenshot ? () => native.screenshot() : undefined;
   lcdTall(on) {
     native.lcdTall?.(on);
