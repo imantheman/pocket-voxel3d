@@ -368,5 +368,8 @@ describe("gen2 TIME CAPSULE", () => {
     expect(back.shiny).toBe(true); // ATK 15 / DEF SPD SPC 10
     expect(TimeCapsule.toGen2(game.data, { ...snorlax, catchRate: 255 }).item).toBe("BERRY");
     expect(TimeCapsule.toGen2(game.data, { ...snorlax, species: "FARFETCHD" }).species).toBe("FARFETCH_D");
+    // Yellow's starter PIKACHU ($A3) and any Yellow KADABRA ($60)
+    expect(TimeCapsule.toGen2(game.data, { ...snorlax, species: "PIKACHU", catchRate: 0xa3 }).item).toBe("LIGHT_BALL");
+    expect(TimeCapsule.toGen2(game.data, { ...snorlax, species: "KADABRA", catchRate: 0x60 }).item).toBe("TWISTEDSPOON");
   });
 });

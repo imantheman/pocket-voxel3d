@@ -62,6 +62,21 @@ export function movesAtLevel(speciesDef: SpeciesDef, level: number): string[] {
 }
 
 /**
+ * Yellow writes two catch-rate bytes the other carts do not, both held
+ * items once the mon goes through Gold's TIME CAPSULE (which reads the
+ * byte as the item): every KADABRA added to the party gets
+ * TWISTEDSPOON_GSC ($60, _AddPartyMon), and the starter PIKACHU gets
+ * LIGHT_BALL_GSC ($A3, give_pokemon's starter arm in script.ts).
+ */
+export const YELLOW_TWISTEDSPOON_GSC = 0x60;
+export const YELLOW_LIGHT_BALL_GSC = 0xa3;
+
+function catchRateByte(data: VoxelmonData, species: string, base: number): number {
+  if ((data as { version?: string }).version === "yellow" && species === "KADABRA") return YELLOW_TWISTEDSPOON_GSC;
+  return base;
+}
+
+/**
  * Pokemon.lua:62-88 new — DVs, calc'd stats, full HP, derived move list.
  * `dvs` injected (tests, the fixed-DV starter grant) or rolled off `rng` —
  * four rand(0..15) in attack/defense/speed/special order (Stats.randomDVs).
@@ -90,7 +105,7 @@ export function newMon(
     statExp: { hp: 0, attack: 0, defense: 0, speed: 0, special: 0 },
     stats,
     hp: stats.hp,
-    catchRate: def.catchRate,
+    catchRate: catchRateByte(data, species, def.catchRate),
     status: null,
     moves,
   };

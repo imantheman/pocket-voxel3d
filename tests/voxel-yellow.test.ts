@@ -854,6 +854,21 @@ describe("Yellow: rules it changed", () => {
 });
 
 
+describe("Yellow's catch-rate bytes that Gold reads as held items", () => {
+  test.skipIf(!hasYellow)("the starter PIKACHU carries LIGHT_BALL_GSC; a KADABRA, TWISTEDSPOON_GSC", () => {
+    const game = newYellowGame();
+    const ow = game.overworld as any;
+    game.save.party.length = 0;
+    ow.runner.run([["give_pokemon", "PIKACHU", 5, true]]);
+    playOut(game);
+    expect(game.save.party[0]!.species).toBe("PIKACHU");
+    expect(game.save.party[0]!.catchRate).toBe(0xa3);
+    expect(newMon(yellow!, "KADABRA", 20).catchRate).toBe(0x60);
+    // a wild PIKACHU keeps its own byte
+    expect(newMon(yellow!, "PIKACHU", 5).catchRate).toBe(yellow!.pokemon.PIKACHU!.catchRate);
+  });
+});
+
 describe("EVENT POKéMON in Yellow: the SURFING PIKACHU", () => {
   test.skipIf(!hasYellow)("the desk hands over MEW and a PIKACHU that knows SURF, so the beach opens", () => {
     const game = newYellowGame();

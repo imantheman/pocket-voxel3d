@@ -25,7 +25,7 @@ import { CELL_PX, FX_FRAME_CUT_TREE, Q4 } from "../../../contracts/spec/voxel-sp
 import type { Dir } from "./collision.ts";
 import type { NPC } from "./npc.ts";
 
-import { newMon, markOwned } from "../battle/mon.ts";
+import { newMon, markOwned, YELLOW_LIGHT_BALL_GSC } from "../battle/mon.ts";
 import * as Boxes from "../pokemon/boxes.ts";
 import { COIN_CAP } from "./gamecorner.ts";
 import { GAVE_DRINK_FLAG, GUARD_DRINKS } from "./saffrongate.ts";
@@ -329,6 +329,11 @@ function* give_pokemon(ctx: ScriptContext, ...args: unknown[]): Generator<void, 
   // _AddPartyMon rolls a gift's DVs (only a trainer's mons are fixed), so
   // a gift can be a Time Capsule shiny like anything caught
   const mon = newMon(w.data, species, level, w.shell?.giftRng);
+  // Yellow's starter PIKACHU (the noNickname gift) carries LIGHT_BALL_GSC in
+  // its catch-rate byte: a LIGHT BALL in its paws in Gold
+  if (args[2] === true && species === "PIKACHU" && (w.data as { version?: string }).version === "yellow") {
+    mon.catchRate = YELLOW_LIGHT_BALL_GSC;
+  }
   // A 4th arg names another trainer as the OT (the event MEW's GF): a
   // traded mon, as the summary and obedience read it; and may carry the
   // mon's moves (Yellow's SURFING PIKACHU)
