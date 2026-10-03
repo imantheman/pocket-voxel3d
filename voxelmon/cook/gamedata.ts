@@ -64,6 +64,8 @@ export interface AtlasIndex {
   picTitleMon: Record<string, number>;
   /** Yellow's minigame tile sheets, "surf_1a" -> page. */
   picMinigame?: Record<string, number>;
+  /** Yellow's PIKACHU face frames, "f000" -> page (import stages/pikapic.ts). */
+  picPikapic?: Record<string, number>;
 }
 
 /** The tileset subset the guest needs (collision + animation semantics). */
@@ -249,6 +251,7 @@ export function buildGamedata(gen: GenData, atlas: AtlasIndex, cookedMaps: strin
     paletteIndex: Object.fromEntries(gen.palettes.order.map((name, i) => [name, i])),
     // Yellow's Surfing Pikachu tilemaps (the sheets are atlas pages)
     minigame: gen.minigame ?? undefined,
+    pikapic: gen.pikapic ?? undefined,
   };
   return new TextEncoder().encode(JSON.stringify(game));
 }

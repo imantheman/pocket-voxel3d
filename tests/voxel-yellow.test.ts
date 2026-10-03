@@ -906,3 +906,63 @@ describe("Yellow trainers' special moves (its own SpecialTrainerMoves)", () => {
     expect(misty[1].moves[3].id).toBe("BUBBLEBEAM");
   });
 });
+
+
+describe("Yellow's PIKACHU faces (the cart's pikapic scripts, run by the import)", () => {
+  /** Yellow's dataset with every face frame on a made-up page, as a cook lays them out. */
+  function withFaces(): VoxelmonData | null {
+    const pk = (yellow as any)?.pikapic;
+    if (!pk) return null;
+    const picPikapic: Record<string, number> = {};
+    for (let i = 0; i < pk.frames; i++) picPikapic[`f${String(i).padStart(3, "0")}`] = 1000 + i;
+    return { ...(yellow as any), atlas: { ...((yellow as any).atlas ?? {}), picPikapic } } as VoxelmonData;
+  }
+
+  test.skipIf(!hasYellow)("the import ran all 29 scripts into frames, cries and the thunderbolt", () => {
+    const pk = (yellow as any).pikapic;
+    if (!pk) return; // a dataset imported before the faces were
+    expect(pk.scripts.length).toBe(29);
+    expect(pk.scripts[0].ticks.length).toBe(40); // setduration 40
+    expect(pk.scripts[0].cry).toEqual({ tick: 1, clip: 3 }); // PikachuCry3
+    expect(pk.scripts[25].thunderbolt).toBe(15);
+    expect(typeof pk.scripts[25].flash).toBe("number");
+  });
+
+  test.skipIf(!hasYellow)("talking plays the face a frame a tick, three frames a tick, then puts it away", () => {
+    const data = withFaces();
+    if (!data) return;
+    const game = new VoxelmonGame(data, new Host(), 1);
+    game.newGame();
+    game.closeToOverworld();
+    const ow = game.overworld as any;
+    expect(ow.hasPikapic()).toBe(true);
+    let done = false;
+    expect(ow.playPikapic(10, () => { done = true; })).toBe(true);
+    const ticks = (data as any).pikapic.scripts[10].ticks as number[];
+    const seen: number[] = [];
+    for (let f = 0; f < ticks.length * 3 + 10 && !done; f++) {
+      game.tick(0);
+      if (ow.picShown) seen.push(ow.picShown.page);
+    }
+    expect(done).toBe(true);
+    expect(ow.picShown).toBeNull();
+    // every frame the script's ticks named showed up, three frames apiece
+    expect(new Set(seen)).toEqual(new Set(ticks.map((t) => 1000 + t)));
+  });
+
+  test.skipIf(!hasYellow)("A puts the face away early", () => {
+    const data = withFaces();
+    if (!data) return;
+    const game = new VoxelmonGame(data, new Host(), 1);
+    game.newGame();
+    game.closeToOverworld();
+    const ow = game.overworld as any;
+    let done = false;
+    ow.playPikapic(17, () => { done = true; });
+    for (let f = 0; f < 6; f++) game.tick(0);
+    expect(done).toBe(false);
+    game.tick(VOX_BTN.a);
+    game.tick(0);
+    expect(done).toBe(true);
+  });
+});

@@ -786,6 +786,14 @@ function* play_cry(ctx: ScriptContext, ...args: unknown[]): Generator<void, void
  * Yellow's PlayPikachuSoundClip from a script: `ldpikacry e, PikachuCryN`
  * then the call, as OaksLab and the follower do. The clip number is 1-based.
  */
+/** StarterPikachuEmotionCommand_pikapic: the framed face, run to its end (or A/B). */
+function* pikapic(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
+  const w = ctx.world as unknown as { playPikapic?: (script: number, done: () => void) => boolean };
+  const runner = ctx.runner;
+  if (!w.playPikapic || !w.playPikapic(Number(args[0]) || 0, () => runner.resume())) return;
+  yield;
+}
+
 function* pika_clip(ctx: ScriptContext, ...args: unknown[]): Generator<void, void> {
   (ctx.world as unknown as { playPikaClip?: (n: number) => void }).playPikaClip?.(Number(args[0]) || 1);
 }
@@ -1361,6 +1369,7 @@ const VERBS: Record<string, Verb> = {
   use_teleport,
   play_cry,
   pika_clip,
+  pikapic,
   surfing_minigame,
   pikachu_counter_hop,
   pikachu_face_down,

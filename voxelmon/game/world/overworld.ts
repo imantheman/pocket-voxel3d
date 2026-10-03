@@ -64,7 +64,8 @@ import { ScriptRunner, type ScriptRow, type ScriptWorld } from "./script.ts";
 import { mapScript, useScriptsFor, type MapScript } from "./mapscripts.ts";
 import { countGearStep } from "../ui/gear/model.ts";
 import * as Pikachu from "./pikachu.ts";
-import { picPageFor } from "../battle/staging.ts";
+import { namedPage, picPageFor } from "../battle/staging.ts";
+import { gbW, gbX, gbY } from "../ui/intro.ts";
 import {
   destination,
   onArrive,
@@ -636,6 +637,12 @@ export class Overworld implements ScriptWorld {
   update(): void {
     if (this.bumpCooldown > 0) this.bumpCooldown -= 1;
     this.runner.update();
+    // the framed face holds the world the same way the bubble does
+    if (this.pikapic) {
+      this.stepPikapic();
+      this.player.update();
+      return;
+    }
     // the emotion-bubble pause holds the world for a beat
     // (OverworldController.lua:1018); only the player animates through it
     if (this.emote) {
@@ -1211,7 +1218,7 @@ export class Overworld implements ScriptWorld {
       npc.facePlayer(this.player);
       const back: Record<string, Dir> = { up: "down", down: "up", left: "right", right: "left" };
       this.player.facing = back[npc.facing] ?? this.player.facing;
-      this.runScript(Pikachu.talkRows(this as never, picPageFor(this.shell.data as never, "PIKACHU")));
+      this.runScript(Pikachu.talkRows(this as never, picPageFor(this.shell.data as never, "PIKACHU"), this.hasPikapic()));
       return;
     }
     npc.frozen = true;
@@ -2344,6 +2351,81 @@ export class Overworld implements ScriptWorld {
 
   // Intro portrait state; scene.ts turns this into the voxel pic op.
   picShown: { page: number; x: number; y: number; w: number; h: number } | null = null;
+
+  /** Yellow's PIKACHU face while one plays (stepPikapic). */
+  private pikapic: {
+    ticks: number[]; pages: number[]; t: number; f: number;
+    cry?: { tick: number; clip: number }; bolt?: number; flash?: number; boltLeft: number;
+    onDone: () => void;
+  } | null = null;
+
+  private pikapicData(): { scripts: { ticks: number[]; cry?: { tick: number; clip: number }; thunderbolt?: number; flash?: number }[] } | undefined {
+    return (this.shell.data as { pikapic?: never }).pikapic;
+  }
+
+  hasPikapic(): boolean {
+    const d = this.pikapicData();
+    return !!d && d.scripts.length > 0 && namedPage(this.shell.data as never, "picPikapic", "f000") >= 0;
+  }
+
+  /**
+   * StarterPikachuEmotionCommand_pikapic's .RunPikapic, from the frames the
+   * import ran it into: the box at (6,5), a frame every tick (Delay3: three
+   * frames), its cry on its tick, .FlashScreen for a thunderbolt (the black-
+   * only frame and the frame, four frames each, ten times), done when the
+   * ticks run out or on A or B (PikaPicAnimTimerAndJoypad). False when this
+   * dataset has no faces.
+   */
+  playPikapic(script: number, onDone: () => void): boolean {
+    const d = this.pikapicData();
+    const s = d?.scripts[script < (d?.scripts.length ?? 0) ? script : 0];
+    if (!s || s.ticks.length === 0) return false;
+    const pages = s.ticks.map((i) => namedPage(this.shell.data as never, "picPikapic", `f${String(i).padStart(3, "0")}`));
+    if (pages.some((p) => p < 0)) return false;
+    const flash = s.flash !== undefined
+      ? namedPage(this.shell.data as never, "picPikapic", `f${String(s.flash).padStart(3, "0")}`)
+      : undefined;
+    this.pikapic = { ticks: s.ticks, pages, t: 0, f: 0, cry: s.cry, bolt: s.thunderbolt, flash, boltLeft: 0, onDone };
+    this.showPikapicFrame(pages[0]!);
+    return true;
+  }
+
+  /** The box: 7x7 tiles at (6,5) on the GB screen, in the pic layer's space. */
+  private showPikapicFrame(page: number): void {
+    this.showPic(page, gbX(48), gbY(40), gbW(56), gbW(56));
+  }
+
+  private stepPikapic(): void {
+    const p = this.pikapic!;
+    // .FlashScreen: the whole thunderbolt holds the face
+    if (p.boltLeft > 0) {
+      p.boltLeft -= 1;
+      const on = Math.floor(p.boltLeft / 4) % 2 === 0;
+      if (p.flash !== undefined && p.flash >= 0) this.showPikapicFrame(on ? p.pages[p.t]! : p.flash);
+      if (p.boltLeft === 0) this.showPikapicFrame(p.pages[p.t]!);
+      return;
+    }
+    if (p.f === 0) {
+      this.showPikapicFrame(p.pages[p.t]!);
+      if (p.cry && p.cry.tick === p.t) this.playPikaClip(p.cry.clip);
+      if (p.bolt === p.t) {
+        (this.shell.audio as { playSfx(n: string, pitch?: number, tempo?: number): void }).playSfx("Battle_2F", 32, 128);
+        p.boltLeft = 80;
+        p.bolt = undefined;
+        return;
+      }
+    }
+    p.f += 1;
+    const skip = this.shell.input.wasPressed("a") || this.shell.input.wasPressed("b");
+    if (p.f < 3 && !skip) return;
+    p.f = 0;
+    p.t += 1;
+    if (skip || p.t >= p.ticks.length) {
+      this.pikapic = null;
+      this.hidePic();
+      p.onDone();
+    }
+  }
 
   showPic(page: number, x: number, y: number, w: number, h: number): void {
     this.picShown = { page, x, y, w, h };

@@ -294,6 +294,12 @@ export interface VoxelmonData {
   paletteIndex?: Record<string, number>;
   /** Yellow's Surfing Pikachu tilemaps (import stages/minigame.ts). */
   minigame?: { surfing?: { sheets: Record<string, { tiles: number }>; tilemaps: Record<string, number[]> } };
+  /** Yellow's PIKACHU faces, run by the import (stages/pikapic.ts): per
+   *  script the frame of every tick, its cry, its thunderbolt. */
+  pikapic?: {
+    frames: number;
+    scripts: { ticks: number[]; cry?: { tick: number; clip: number }; thunderbolt?: number; flash?: number }[];
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -339,6 +345,7 @@ export const GEN_MODULES = [
   "text",
   "text_pointers",
   "trainer_headers",
+  "pikapic",
 ] as const;
 
 /**

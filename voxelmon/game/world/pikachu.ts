@@ -612,13 +612,23 @@ export function selectEmotion(save: PikaSave, mapId: string): number {
  * cry, and its framed picture over the map with the bubble for as long as
  * the emotion's own picture script lasts.
  */
-export function talkRows(w: PikaWorld, picPage: number): ScriptRow[] {
+export function talkRows(w: PikaWorld, picPage: number, faces = false): ScriptRow[] {
   const save = w.save;
   const emotion = selectEmotion(save, w.map.id);
   const e = EMOTIONS[emotion] ?? {};
   const script = PIKAPIC_SCRIPT[emotion] ?? emotion;
   const hold = (PIKAPIC_DUR[script] ?? 40) * 3;
   const rows: ScriptRow[] = [];
+  if (faces) {
+    // A dataset with the cart's faces (import stages/pikapic.ts) runs the
+    // emotion the cart's way: the bubble over the follower (EmotionBubble's
+    // beat), its clip, then the framed face playing its own script.
+    if (e.turnAway) rows.push(["face_object", PIKA_NAME, w.player.facing] as unknown as ScriptRow);
+    if (e.bubble) rows.push(["emote", PIKA_NAME, e.bubble, 60] as unknown as ScriptRow);
+    if (e.clip) rows.push(["pika_clip", e.clip] as unknown as ScriptRow);
+    rows.push(["pikapic", script] as unknown as ScriptRow);
+    return rows;
+  }
   if (e.turnAway) rows.push(["face_object", PIKA_NAME, w.player.facing] as unknown as ScriptRow);
   if (e.clip) rows.push(["pika_clip", e.clip] as unknown as ScriptRow);
   // the pikapic box: the front pic over the map (PlacePikapicTextBoxBorder)

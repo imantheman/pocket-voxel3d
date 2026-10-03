@@ -430,6 +430,18 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
     pageOwners.push({ kind: ATLAS_KIND.pics });
   }
 
+  // Yellow's PIKACHU faces (import stages/pikapic.ts): one page a frame,
+  // AFTER every page a Kanto cook had before them, so a dataset that gains
+  // them leaves every older page's index where it was.
+  // Each names PIKACHU, so the colour pass draws it in Pikachu's own
+  // palette (LoadOverworldPikachuFrontpicPalettes), not the map's.
+  const pikapicPageByKey = new Map<string, number>();
+  for (const key of Object.keys(gen.gfx).filter((k) => k.startsWith("pikapic/")).sort()) {
+    pikapicPageByKey.set(key, pages.length);
+    pages.push(buildPicPage(gen, key));
+    pageOwners.push({ kind: ATLAS_KIND.pics, species: "PIKACHU" });
+  }
+
   // Gold: the Gold screen's tile pages (cook/gen2lcd.ts), LAST, so their
   // indices are the same in every map's pak and the hoist shares them. The
   // id manifest is big and the same for every map: it rides in the Gold
@@ -480,6 +492,7 @@ export function cook(mapNames: string[], outPath: string, genDir = GEN_DIR): Coo
     picIntro: named(introPageByKey, "intro/"),
     picTitleMon: named(titleMonPageByKey, "title-mon/"),
     picMinigame: named(minigamePageByKey, "minigame/"),
+    picPikapic: named(pikapicPageByKey, "pikapic/"),
     sprites: spriteIndex,
     picFront: frontIndex,
     picBack: backIndex,

@@ -15,6 +15,7 @@ import { writeJson } from "./writer.ts";
 import { extractAudio } from "./stages/audio.ts";
 import { extractPikaCries } from "./stages/pikacries.ts";
 import { extractMinigame } from "./stages/minigame.ts";
+import { extractPikapic } from "./stages/pikapic.ts";
 import { extractEncounters } from "./stages/encounters.ts";
 import { extractField } from "./stages/field.ts";
 import { extractFont } from "./stages/font.ts";
@@ -105,6 +106,16 @@ export async function runImport(env: VoxelEnv): Promise<void> {
         const out = extractMinigame(ctx);
         const path = join(genDir, "minigame.json");
         if (out) writeJson(genDir, "minigame", out);
+        else if (existsSync(path)) rmSync(path);
+      },
+    ],
+    [
+      "pikapic",
+      () => {
+        // Yellow's PIKACHU faces: each script run here, its frames as gfx
+        const out = extractPikapic(ctx);
+        const path = join(genDir, "pikapic.json");
+        if (out) writeJson(genDir, "pikapic", out);
         else if (existsSync(path)) rmSync(path);
       },
     ],
