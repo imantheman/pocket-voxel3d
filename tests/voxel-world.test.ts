@@ -10970,3 +10970,22 @@ describe("PROF.OAK's rating and the PC's other rows", () => {
     expect(game.stackKinds().at(-1)).toBe("pc");
   });
 });
+
+
+describe("the soft reset", () => {
+  test.skipIf(!hasGen)("A+B+START+SELECT held restarts at the boot and drops unsaved progress", () => {
+    const game = makeMenuGame();
+    game.save.money = 4321;
+    const before = game.stackKinds().join(",");
+    const all = VOX_BTN.a | VOX_BTN.b | VOX_BTN.start | VOX_BTN.select;
+    // a moment held is not enough, nor with a direction in
+    for (let i = 0; i < 8; i++) game.tick(all);
+    game.tick(0);
+    for (let i = 0; i < 30; i++) game.tick(all | VOX_BTN.up);
+    expect(game.stackKinds().join(",")).toBe(before);
+    for (let i = 0; i < 20; i++) game.tick(all);
+    const kinds = game.stackKinds();
+    expect(kinds).toContain("title");
+    expect(game.save.money ?? 0).not.toBe(4321);
+  });
+});

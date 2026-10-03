@@ -144,6 +144,9 @@ class OverworldState implements GameState {
   }
 }
 
+/** Frames the soft-reset chord is held before it fires (Gold's Input uses 16). */
+const SOFT_RESET_FRAMES = 16;
+
 class TextBoxState implements GameState, UiBoxSource {
   readonly kind = "textbox";
   readonly box: Textbox;
@@ -712,12 +715,49 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     save.playTime = Math.floor(save.playTime ?? 0) + 1;
   }
 
+  /** Frames A+B+START+SELECT has been held, for the soft reset. */
+  private softResetFrames = 0;
+
+  /**
+   * SoftReset (home/init.asm, polled by the joypad reader): A + B + START +
+   * SELECT together, no direction, restarts the cart from the copyright
+   * card -- anything unsaved is gone, the save on the card is not touched.
+   * The host's scene goes with it (op reset), so a battle, a menu or a song
+   * in the middle of playing does not survive into the new boot.
+   */
+  softReset(): void {
+    this.softResetFrames = 0;
+    this.audio.stop();
+    this.host.reset();
+    this.scene = new Scene(this.host);
+    this.input.reset();
+    this.boot();
+  }
+
+  private softResetHeld(): boolean {
+    const i = this.input;
+    if (!(i.isDown("a") && i.isDown("b") && i.isDown("start") && i.isDown("select"))) return false;
+    return !(i.isDown("up") || i.isDown("down") || i.isDown("left") || i.isDown("right"));
+  }
+
   /** One guest turn per host tick — exactly once. */
   tick(buttons: number): void {
     const p = this.prof;
     const t0 = p ? p.now() : 0;
     this.input.setButtons(buttons);
     this.input.step();
+    // held a moment, so a stray chord in the middle of a menu does not reset
+    if (this.softResetHeld()) {
+      this.softResetFrames += 1;
+      if (this.softResetFrames >= SOFT_RESET_FRAMES) {
+        this.softReset();
+        this.host.frameDone(this.tickIndex, buttons);
+        this.tickIndex += 1;
+        return;
+      }
+    } else {
+      this.softResetFrames = 0;
+    }
     // The link before the frame: it has to be read whatever is on screen.
     this.overworld.serviceLink();
     const top = this.stack[this.stack.length - 1];
