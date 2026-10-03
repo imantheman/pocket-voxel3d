@@ -3886,7 +3886,10 @@ export class Battle {
     if (flags === 0) {
       return moves[rand(this.random, moves.length)].id;
     }
-    const chosen = Ai.choose({
+    // Ai.choose answers [move, scores] (the Lua's two returns): only the move
+    // is the enemy's pick. Taking the pair whole handed the turn a non-move,
+    // and every AI trainer's mon stood there doing nothing.
+    const [chosen] = Ai.choose({
       moves,
       moveDef: (id: any) => this.moveDef(id),
       attacker: {

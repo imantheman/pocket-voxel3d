@@ -11,6 +11,7 @@ import { Specials } from "../voxelmon/game/gen2/script/Specials.ts";
 import { MainMenu } from "../voxelmon/game/gen2/ui/MainMenu.ts";
 import { Clock } from "../voxelmon/game/gen2/core/Clock.ts";
 import { Save } from "../voxelmon/game/gen2/core/Save.ts";
+import { Mon } from "../voxelmon/game/gen2/battle/Mon.ts";
 
 const gold = haveGoldGen();
 
@@ -299,5 +300,31 @@ describe("the clock: Mom's DST, SET CLOCK, TIME NOT SET", () => {
     expect(clockResetPending(save)).toBe(false);
     save.rtc.resetPending = true;
     expect(clockResetPending(save)).toBe(true);
+  });
+});
+
+
+describe("trainer AI picks a move", () => {
+  test.skipIf(!gold)("the first rival's CHIKORITA attacks: the AI's pick is a move, not [move, scores]", () => {
+    useGoldGen();
+    const game: any = Game2.new();
+    game.load({ startWorld: true });
+    game.writeSave = () => [true];
+    for (let k = 0; k < 30; k++) game.frame(0);
+    const w = game.world;
+    game.save.party = [Mon.stampOT(game.save, Mon.new(game.data, "TOTODILE", 6, {}))];
+    const rival = Object.values<any>(game.data.trainers.classes).find((c: any) => c.id === "RIVAL1");
+    w.vm.start([{ op: "loadtrainer", class: rival.index, member: 1 }, { op: "startbattle" }, { op: "end" }]);
+    let battle: any = null;
+    let enemyMoved: string | undefined;
+    for (let k = 0; k < 3000 && !enemyMoved; k++) {
+      game.frame(k % 10 === 0 ? VOX_BTN.a : 0);
+      const top = game.stack.top();
+      if (top?.battle) battle = top.battle;
+      if (battle) enemyMoved = battle.volatile(battle.enemy)?.lastMove;
+    }
+    expect(battle).not.toBeNull();
+    expect(typeof enemyMoved).toBe("string");
+    expect(["TACKLE", "GROWL"]).toContain(enemyMoved);
   });
 });
