@@ -53,6 +53,14 @@ WHAT YOU GET
                                      your SD card (about 330 MB)
       SOURCES.txt                 <- everything that went into the build
 
+That is Red's. Each game has its own .3dsx and map folder:
+
+    Red      pocketvoxel-3ds.3dsx          voxelmon/paks
+    Blue     pocketvoxel-3ds-blue.3dsx     voxelmon/paks
+    Yellow   pocketvoxel-3ds-yellow.3dsx   voxelmon/paks_yellow
+    Gold     pocketvoxel-3ds-gold.3dsx     voxelmon/paks_gold
+    Silver   pocketvoxel-3ds-silver.3dsx   voxelmon/paks_gold
+
 Gold and Silver share one set of map files (voxelmon/paks_gold), the way Red
 and Blue share theirs: cook one, copy it, then cook the other and copy it over
 the top, and both play as their own cartridge.
@@ -64,15 +72,16 @@ or replacing, you are one level too high, and a wrong answer there can
 wipe your other homebrew.
 
 Then open the Homebrew Launcher on the 3DS and pick Pocket Voxel. Or
-install PocketVoxel3DRed.cia (it is in this folder) with FBI for a HOME
-menu icon; it reads the same paks.
+install the game's .cia (PocketVoxel3DRed.cia, PocketVoxel3DBlue.cia,
+PocketVoxel3DYellow.cia, PocketVoxel3DGold.cia or PocketVoxel3DSilver.cia,
+all in this folder) with FBI for a HOME menu icon; it reads the same maps.
 
-The two game files, pocketvoxel-3ds.3dsx and PocketVoxel3DRed.cia, are in
-this folder already. They are the engine, built from the source in this
-repository; nothing from any ROM is in them. The cooker puts the .3dsx
-into output/3ds for you.
+The game files, each game's .3dsx and .cia, are in this folder already.
+They are the engine, built from the source in this repository; nothing
+from any ROM is in them. The cooker puts the right .3dsx into output/3ds
+for you.
 
-The 225 files in paks/ belong together. Whenever you rebuild, copy the
+The files in a map folder belong together. Whenever you rebuild, copy the
 whole folder again, never one file.
 
 

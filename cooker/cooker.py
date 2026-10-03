@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Pocket Voxel cooker: drop your Pokemon Red, Blue, Yellow or Gold ROM on it, get an SD card folder.
+"""Pocket Voxel cooker: drop your Pokemon Red, Blue, Yellow, Gold or Silver ROM on it, get an SD card folder.
 
-    Windows:  drag your .gb (or Yellow / Gold .gbc) file onto "Cook Pocket Voxel.bat"
+    Windows:  drag your .gb (or Yellow / Gold / Silver .gbc) file onto "Cook Pocket Voxel.bat"
     Mac:      double-click "Cook Pocket Voxel.command", then drag the .gb
               file into the window it opens and press Return
     Linux:    ./cook.sh /path/to/PokemonRed.gb
@@ -13,7 +13,7 @@ Delete the folder and the machine is exactly as it was.
 
 What it does, in order:
 
-  1. Checks the ROM is the real US Pokemon Red, Blue, Yellow or Gold (by SHA-1) and refuses
+  1. Checks the ROM is the real US Pokemon Red, Blue, Yellow, Gold or Silver (by SHA-1) and refuses
      anything else. The ROM never leaves your machine and nothing from it
      is in this folder or on GitHub -- that is the whole point of cooking
      on YOUR computer.
@@ -24,8 +24,8 @@ What it does, in order:
   3. Asks which colours you want. Red and Blue: black and white, as the
      Game Boy showed them, or the community colourisation (pokered-gbc).
      Yellow: black and white, its own Game Boy Color colours from the ROM,
-     or the community colours. (Gold has only its own colours: nothing to
-     ask.)
+     or the community colours. (Gold and Silver have only their own
+     colours: nothing to ask.)
   4. Runs the importer (your ROM -> data, seconds) and the cooker (data ->
      222 map paks, two to fifteen minutes depending on the machine).
   5. Puts the finished `3ds` folder in `output/`, writes `SOURCES.txt`
@@ -462,7 +462,7 @@ def open_folder(path):
 def find_rom(arg, yes):
     path = arg
     if not path:
-        say("Which ROM? Drag your Pokemon Red, Blue, Yellow or Gold file into this window and press Return.")
+        say("Which ROM? Drag your Pokemon Red, Blue, Yellow, Gold or Silver file into this window and press Return.")
         if yes:
             die("no ROM given (pass --rom PATH with --yes)")
         try:
