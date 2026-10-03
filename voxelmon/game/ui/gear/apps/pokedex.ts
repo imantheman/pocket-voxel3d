@@ -61,7 +61,7 @@ const PAGES = [
 ];
 
 /** Every map a species lives on: method and levels (the mod's habitats). */
-function habitats(data: any, species: string): { map: string; method: string; lv: string; pct: number }[] {
+export function habitats(data: any, species: string): { map: string; method: string; lv: string; pct: number }[] {
   const out: { map: string; method: string; lv: string; pct: number }[] = [];
   const all = { OLD_ROD: true, GOOD_ROD: true, SUPER_ROD: true };
   for (const mapId of Object.keys(data.encounters ?? {})) {

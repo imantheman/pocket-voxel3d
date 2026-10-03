@@ -1403,6 +1403,8 @@ export class Scene {
         sig = `L,${dx.index},${dx.top},${dx.entries.length}`;
       } else if (dx.mode === "submenu") {
         sig = `S,${dx.index},${dx.submenuIndex}`;
+      } else if (dx.mode === "area") {
+        sig = `A,${dx.area ? dx.area.title : "?"}`;
       } else {
         const e = dx.entry;
         sig = `E,${e ? e.name + "," + e.owned + "," + e.lines.length : "?"}`;
@@ -1411,7 +1413,13 @@ export class Scene {
         this.dexSig = sig;
         this.uiOwner = null;
         host.uiClear();
-        if (dx.mode === "entry" && dx.entry) {
+        if (dx.mode === "area" && dx.area) {
+          // the TOWN MAP's header line, then the nests' places
+          this.stamp(host, 1, 1, dx.area.title);
+          if (dx.area.places.length === 0) this.stamp(host, 4, 8, "AREA UNKNOWN");
+          dx.area.places.slice(0, 7).forEach((p: string, i: number) => this.stamp(host, 2, 4 + i * 2, p.slice(0, 17)));
+          if (dx.area.places.length > 7) host.uiTile(18, 16, ARROW_MORE);
+        } else if (dx.mode === "entry" && dx.entry) {
           const e = dx.entry;
           // right column beside the pic; flavor text fills the lower rows
           this.stamp(host, 9, 1, e.name);

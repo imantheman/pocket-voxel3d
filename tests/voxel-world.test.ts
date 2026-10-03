@@ -35,6 +35,7 @@ import * as Bag from "../voxelmon/game/rules/bag.ts";
 import { floorsOf } from "../voxelmon/game/world/elevator.ts";
 import { cableClubScript, EVENT_MEW_FLAG } from "../voxelmon/game/world/cableclub.ts";
 import { dexRating } from "../voxelmon/game/world/dexrating.ts";
+import { PokedexState } from "../voxelmon/game/ui/pokedexscreen.ts";
 import { destination as warpDestination } from "../voxelmon/game/world/warp.ts";
 import * as Pc from "../voxelmon/game/world/pcitems.ts";
 import { decodeSave } from "../voxelmon/game/save-read.ts";
@@ -11009,5 +11010,37 @@ describe("the title's save delete", () => {
     for (let i = 0; i < 40 && game.stackKinds().at(-1) !== "title"; i++) game.tick(0);
     expect(host.saveData() ?? "").toBe("");
     expect((game.top() as any).menu).not.toContain("CONTINUE");
+  });
+});
+
+
+describe("the POKéDEX's AREA", () => {
+  test.skipIf(!hasGen)("DATA / CRY / AREA / QUIT; AREA lists the nests, or AREA UNKNOWN", () => {
+    const game = makeMenuGame();
+    game.save.pokedex.seen.PIDGEY = true;
+    game.save.pokedex.seen.MEW = true;
+    const dex = new PokedexState(game as never);
+    game.push(dex);
+    const view = () => game.pokedexScreen() as any;
+    const open = (species: string) => {
+      const at = view().entries.findIndex((r: any) => r.value === species);
+      (dex as any).index = at;
+      tap(game, VOX_BTN.a);
+      expect(view().mode).toBe("submenu");
+      expect(view().submenu).toEqual(["DATA", "CRY", "AREA", "QUIT"]);
+      tap(game, VOX_BTN.down);
+      tap(game, VOX_BTN.down);
+      tap(game, VOX_BTN.a);
+      expect(view().mode).toBe("area");
+      return view().area;
+    };
+    const pidgey = open("PIDGEY");
+    expect(pidgey.title).toBe("PIDGEY's NEST");
+    expect(pidgey.places.join("|")).toContain("ROUTE 1");
+    tap(game, VOX_BTN.b);
+    expect(view().mode).toBe("submenu");
+    tap(game, VOX_BTN.b);
+    const mew = open("MEW");
+    expect(mew.places).toEqual([]);
   });
 });

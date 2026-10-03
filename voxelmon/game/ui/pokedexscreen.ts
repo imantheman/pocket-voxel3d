@@ -7,14 +7,18 @@
 // reference's PC menu stack.
 //
 // Deviations from the reference, all dependency-driven:
-//   * AREA is dropped — it opens the Town Map (Screens.push "TownMap"), which
-//     the port has no screen for yet. DATA/CRY/QUIT are faithful.
+//   * AREA (ShowPokedexArea's "<MON>'s NEST" over the TOWN MAP with the
+//     nests blinking) is the nests as a list of place names under the same
+//     header -- the port has no Town Map screen to blink them on -- and
+//     "AREA UNKNOWN" when the mon is not found in the wild, as on the cart.
+//     DATA/CRY/QUIT are faithful.
 //   * PRNT is Yellow-only (Game Boy Printer) and out of scope on Red/Blue.
 //   * The owned marker is a text glyph, not the GB pokéball tile (the UI atlas
 //     has no pokéball); swap OWNED_MARK for a real tile id if one is cooked.
 import { picPageFor } from "../battle/staging.ts";
 import type { GameState } from "../game.ts";
 import type { SpeciesDef, VoxelmonData } from "../data.ts";
+import { habitats } from "./gear/apps/pokedex.ts";
 
 interface DexGame {
   input: { pressed: Partial<Record<string, boolean>> };
@@ -37,7 +41,7 @@ export interface DexRow {
 }
 
 export interface DexView {
-  mode: "list" | "submenu" | "entry";
+  mode: "list" | "submenu" | "entry" | "area";
   // list
   rows: number;
   top: number;
@@ -49,6 +53,8 @@ export interface DexView {
   submenu: string[];
   // entry
   entry: DexEntryView | null;
+  // area: the header and the nests' places (empty: AREA UNKNOWN)
+  area: { title: string; places: string[] } | null;
 }
 
 export interface DexEntryView {
@@ -64,7 +70,7 @@ export interface DexEntryView {
 
 export class PokedexState implements GameState {
   readonly kind = "pokedex";
-  private mode: "list" | "submenu" | "entry" = "list";
+  private mode: "list" | "submenu" | "entry" | "area" = "list";
   private index = 0; // into entries
   private top = 0; // scroll window start
   private submenuIndex = 0;
@@ -74,8 +80,8 @@ export class PokedexState implements GameState {
   private seen = 0;
   private owned = 0;
   private digits: number;
-  // PokedexMenu.lua side menu: DATA / CRY / QUIT (AREA dropped, see header).
-  private static SUBMENU = ["DATA", "CRY", "QUIT"];
+  // PokedexMenu.lua side menu: DATA / CRY / AREA / QUIT.
+  private static SUBMENU = ["DATA", "CRY", "AREA", "QUIT"];
 
   /**
    * ShowPokedexData mode: the screen opens straight on one species' data page
@@ -129,6 +135,11 @@ export class PokedexState implements GameState {
 
   update(): void {
     const p = this.game.input.pressed;
+    // ShowPokedexArea waits for A or B, then the side menu again
+    if (this.mode === "area") {
+      if (p.a || p.b) this.mode = "submenu";
+      return;
+    }
     if (this.mode === "entry") {
       // DexEntryMenu.lua:update — A or B pops the page back to the side menu,
       // or closes the screen outright when the page IS the screen.
@@ -194,6 +205,10 @@ export class PokedexState implements GameState {
         // PokedexMenu.lua CRY keepOpen: play the cry, stay on the side menu.
         this.game.playCry?.(value);
         break;
+      case "AREA":
+        this.entrySpecies = value;
+        this.mode = "area";
+        break;
       case "QUIT":
         // .exitPokedex: drop the whole dex back to whoever opened it.
         this.close();
@@ -209,6 +224,16 @@ export class PokedexState implements GameState {
   private syncScroll(): void {
     if (this.index < this.top) this.top = this.index;
     if (this.index >= this.top + ROWS) this.top = this.index - ROWS + 1;
+  }
+
+  /** ShowPokedexArea's header and the places the nests are on, once each. */
+  private buildArea(): { title: string; places: string[] } | null {
+    const id = this.entrySpecies;
+    if (!id) return null;
+    const name = this.game.data.pokemon[id]?.name ?? id;
+    const places: string[] = [];
+    for (const h of habitats(this.game.data, id)) if (!places.includes(h.map)) places.push(h.map);
+    return { title: `${name}'s NEST`, places };
   }
 
   private buildEntry(): DexEntryView | null {
@@ -259,6 +284,7 @@ export class PokedexState implements GameState {
       submenuIndex: this.submenuIndex,
       submenu: PokedexState.SUBMENU,
       entry: this.mode === "entry" ? this.buildEntry() : null,
+      area: this.mode === "area" ? this.buildArea() : null,
     };
   }
 }
