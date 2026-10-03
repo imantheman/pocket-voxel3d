@@ -890,7 +890,9 @@ export const VOX_OP = {
    * The 3D world cannot be seen (the OPTION screen's VIEW 2D, outside a
    * 3D battle): the host still loads each map's pak -- the 2D screens read
    * its pages -- but builds no mesh, seam strips or trees for it, and
-   * builds them when this goes back to 0. Stated every frame.
+   * builds them when this goes back to 0. Stated every frame. 2 is 1 with
+   * BATTLES 2D as well: no battle will stand in the world either, so the
+   * host may read each pak without its vertex and index pools.
    *   flatWorld(on)
    */
   flatWorld: 111,

@@ -4865,7 +4865,7 @@ fn main() {
                                 // this frame -- the same value `center` is
                                 // assigned a few lines below, and the same one
                                 // the build will plan against.
-                                let key = if sc.flat_world && !unsafe { LEGACY_ZONE } {
+                                let key = if sc.flat_reads && !unsafe { LEGACY_ZONE } {
                                     flat_key(want)
                                 } else {
                                     plan_key(want, sc.cam_px())
@@ -5090,8 +5090,8 @@ fn main() {
             if let Some((id, nm)) = map_index.get(map_i) {
                 // The same position build_map is about to be handed, so the
                 // geometry read is exactly the geometry built.
-                // (VIEW 2D: the flat read, no pools)
-                let flat = unsafe { voxel::scene().flat_world && !LEGACY_ZONE };
+                // (VIEW 2D with BATTLES 2D: the flat read, no pools)
+                let flat = unsafe { voxel::scene().flat_reads && !LEGACY_ZONE };
                 let key = guest_drive.then(|| {
                     if flat { flat_key(*id) } else { plan_key(*id, (center[0], center[2])) }
                 });

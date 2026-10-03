@@ -208,6 +208,9 @@ pub struct Scene {
     /// `flatWorld`: the 3D world is not seen (VIEW 2D); the host loads maps
     /// without building their meshes.
     pub flat_world: bool,
+    /// `flatWorld` 2: nor will a battle be staged in it (BATTLES 2D too), so
+    /// the host may read paks without their vertex and index pools.
+    pub flat_reads: bool,
     /// The player's own camera swing, radians, on top of whatever camera the
     /// scene asks for: yaw around the focus, and elevation.
     ///
@@ -433,6 +436,7 @@ impl Scene {
             daytime: 1,
             tilt_shift: 0,
             flat_world: false,
+            flat_reads: false,
             cam_yaw_off: 0.0,
             cam_pitch_off: 0.0,
             cam_dist_scale: 1.0,
@@ -638,7 +642,10 @@ impl Scene {
                 crate::pak::DAYTIME.store(k, core::sync::atomic::Ordering::Relaxed);
             }
             op::TILT_SHIFT => self.tilt_shift = a(0).clamp(0, 2) as u8,
-            op::FLAT_WORLD => self.flat_world = a(0) != 0,
+            op::FLAT_WORLD => {
+                self.flat_world = a(0) != 0;
+                self.flat_reads = a(0) == 2;
+            }
             op::PALETTE => {
                 if !args.is_empty() {
                     self.palette = a(0);

@@ -242,7 +242,10 @@ export class Scene {
     // VIEW 2D: no mesh is built for a world no one sees (the flatWorld op;
     // restated now and then while on, in case the host's scene was reset --
     // never sent at all in 3D, whose op stream stays as it was)
-    const flatWorld = view.flatWorld?.() ? 1 : 0;
+    // 2: flat with BATTLES 2D too, so nothing on this map will want its
+    // mesh and the host may read paks without their pools; 1: flat, but a
+    // 3D battle may yet stand in the world
+    const flatWorld = view.flatWorld?.() ? (view.battle2d?.() ? 2 : 1) : 0;
     if (flatWorld !== this.flatSent || (flatWorld === 1 && (this.flatAge = (this.flatAge + 1) % 120) === 0)) {
       this.host.flatWorld?.(flatWorld);
       this.flatSent = flatWorld;
