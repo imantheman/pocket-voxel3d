@@ -15,11 +15,21 @@ const chapter = (name: string, run: () => void): void => {
 const here = (): string => game.world.map.id;
 const perfect = () => ({ attack: 15, defense: 15, speed: 15, special: 15 });
 
-/** A level-100 lead, so the run tests the story and not the battles. */
+/** A level-100 lead, so the run tests the story and not the battles. Its
+ *  moves are TMs a player could teach it (FLAMETHROWER is its own) with
+ *  three PP UPs each: since trainers fight back, the level-up set ran dry
+ *  and fainted before LANCE (his dragons shrug off fire, AERODACTYL is
+ *  weak to steel). */
 function strongLead(): void {
   const party = save().party;
   if (party.some((m: any) => m.species === "TYPHLOSION" && m.level >= 100)) return;
   const mon = Mon.new(game.data, "TYPHLOSION", 100, { dvs: perfect() });
+  mon.moves = ["FLAMETHROWER", "EARTHQUAKE", "IRON_TAIL", "SWIFT"].map((id) => {
+    const base = game.data.moves[id].pp;
+    // maxPp as ItemEffects' PP UP leaves it: a POKeMON CENTER heals to it
+    const maxPp = base + Math.floor(base / 5) * 3;
+    return { id, pp: maxPp, maxPp, ppUps: 3 };
+  });
   party.unshift(mon);
   if (party.length > 6) party.length = 6;
 }
@@ -110,23 +120,24 @@ function talkAll(sprite: string, done: () => boolean, max = 12): void {
 }
 
 /** Teach an HM (the run's stand-in for the HM menu). Each has a home:
- *  CUT, ROCK SMASH and STRENGTH on the lead's slots 2-4; SURF, WHIRLPOOL
- *  and WATERFALL on a FERALIGATR that joins for them. */
+ *  CUT, ROCK SMASH and STRENGTH on a SANDSLASH, SURF, WHIRLPOOL and
+ *  WATERFALL on a FERALIGATR, each joining for them -- the field needs only
+ *  someone in the party who knows the move, and the lead keeps its battle
+ *  moves (on the lead, the HMs left it one fire move for the whole run). */
 const HOME: Record<string, [string, number]> = {
-  CUT: ["lead", 1], ROCK_SMASH: ["lead", 2], STRENGTH: ["lead", 3],
+  CUT: ["field", 1], ROCK_SMASH: ["field", 2], STRENGTH: ["field", 3],
   SURF: ["water", 1], WHIRLPOOL: ["water", 2], WATERFALL: ["water", 3],
 };
+const HM_MON: Record<string, string> = { field: "SANDSLASH", water: "FERALIGATR" };
 function teach(move: string): void {
   const party = save().party;
-  const [who, slot] = HOME[move] ?? ["lead", 3];
-  let mon = party[0];
-  if (who === "water") {
-    mon = party.find((m: any) => m.species === "FERALIGATR" && m.level >= 60);
-    if (!mon) {
-      mon = Mon.new(game.data, "FERALIGATR", 60, { dvs: perfect() });
-      party.splice(1, 0, mon);
-      if (party.length > 6) party.length = 6;
-    }
+  const [who, slot] = HOME[move] ?? ["field", 3];
+  const species = HM_MON[who]!;
+  let mon = party.find((m: any) => m.species === species && m.level >= 60);
+  if (!mon) {
+    mon = Mon.new(game.data, species, 60, { dvs: perfect() });
+    party.splice(1, 0, mon);
+    if (party.length > 6) party.length = 6;
   }
   const mv = game.data.moves?.[move];
   while (mon.moves.length <= slot) mon.moves.push({ id: "TACKLE", pp: 35, maxPp: 35, ppUps: 0 });

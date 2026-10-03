@@ -18,6 +18,8 @@ import { FieldMoves } from "../voxelmon/game/gen2/world/FieldMoves.ts";
 import { FlagNames } from "../voxelmon/game/gen2/core/FlagNames.ts";
 import { Map as MapClass } from "../voxelmon/game/gen2/world/Map.ts";
 import { seed } from "../voxelmon/game/gen2/platform/rng.ts";
+import { Damage } from "../voxelmon/game/gen2/battle/Damage.ts";
+import { World } from "../voxelmon/game/gen2/world/World.ts";
 
 type Dir = "up" | "down" | "left" | "right";
 const DIRS: Dir[] = ["up", "down", "left", "right"];
@@ -34,6 +36,31 @@ export class StoryFail extends Error {}
 export const fail = (msg: string): never => {
   throw new StoryFail(msg);
 };
+
+// A wild POKeMON that jumped out of the grass or a cave floor is run from,
+// as a player hurrying along the story does: fighting every one drained the
+// lead's PP to nothing between POKeMON CENTERs, and once trainers fought
+// back the run fainted its way into the League. Scripted wild battles (the
+// red GYARADOS, SNORLAX, the odd tree, the contest) are still fought.
+let wildRoll = false;
+let runFromThis = false;
+{
+  const proto = World.prototype as any;
+  const roll = proto.tryWildEncounter;
+  proto.tryWildEncounter = function (...args: unknown[]) {
+    wildRoll = true;
+    try {
+      return roll.apply(this, args);
+    } finally {
+      wildRoll = false;
+    }
+  };
+  const start = proto.startBattle;
+  proto.startBattle = function (opts: any, ...rest: unknown[]) {
+    runFromThis = wildRoll && !!opts?.wild && !opts?.contest;
+    return start.call(this, opts, ...rest);
+  };
+}
 
 export const game: any = Game2.new();
 // SEED=n: the game's rolls from a chosen start (encounters, battles, AI)
@@ -74,6 +101,13 @@ function busyPad(): number {
   if (top && top.screenId === "Gen2BattleState") {
     const phase: string = top.phase;
     const tick = frames % 4 === 0;
+    if (phase === "menu" && runFromThis) {
+      // RUN: the bottom-right of FIGHT <PK><MN> / PACK RUN
+      if (!tick || (top.messageTimer ?? 0) > 0) return 0;
+      const col = (top.menuIndex - 1) % 2;
+      const row = Math.floor((top.menuIndex - 1) / 2);
+      return col < 1 ? VOX_BTN.right : row < 1 ? VOX_BTN.down : VOX_BTN.a;
+    }
     if (phase === "menu") {
       if (tick && top.menuIndex === 1 && (top.messageTimer ?? 0) <= 0) return VOX_BTN.a;
       if (tick && top.menuIndex !== 1) return VOX_BTN.up;
@@ -81,7 +115,7 @@ function busyPad(): number {
     }
     if (phase === "moves") {
       const moves: any[] = top.playerMoves();
-      const target = bestMove(moves, top.battle?.enemy);
+      const target = bestMove(moves, top.battle?.enemy, top.battle?.player);
       if (!tick) return 0;
       return top.moveIndex < target ? VOX_BTN.down : top.moveIndex > target ? VOX_BTN.up : VOX_BTN.a;
     }
@@ -112,22 +146,22 @@ function busyPad(): number {
   return frames % 8 === 0 ? VOX_BTN.a : 0;
 }
 
-/** The move to pick (1-based): the hardest-hitting one with PP that the
- *  foe is not immune to (Gen 2's immunities); the first with PP otherwise. */
-const IMMUNE: Record<string, string[]> = {
-  NORMAL: ["GHOST"], FIGHTING: ["GHOST"], GHOST: ["NORMAL"], GROUND: ["FLYING"],
-  ELECTRIC: ["GROUND"], PSYCHIC: ["DARK"], POISON: ["STEEL"],
-};
-function bestMove(moves: any[], foe: any): number {
-  const sp = foe?.species;
-  const types: string[] = foe?.types ?? game.data.pokemon?.[sp]?.types ?? [];
+/** The move to pick (1-based): the one with PP that hits hardest -- power
+ *  times the cart's type chart times STAB, as a player would weigh it; the
+ *  first with PP otherwise. (Raw power alone did while trainers never hit
+ *  back; against foes that fight, a resisted move loses the League.) */
+function bestMove(moves: any[], foe: any, me?: any): number {
+  const typesOf = (mon: any): string[] => mon?.types ?? game.data.pokemon?.[mon?.species]?.types ?? [];
+  const types = typesOf(foe);
+  const mine = typesOf(me);
+  const matchups = game.data.type_chart?.matchups;
   let best = -1;
   let score = 0;
   moves.forEach((m: any, i: number) => {
     if ((m.pp ?? 1) <= 0) return;
     const def = game.data.moves?.[m.id ?? m];
-    const immune = (IMMUNE[def?.type] ?? []).some((t) => types.includes(t));
-    const v = immune ? 0 : (def?.power ?? 0);
+    const mult = Damage.typeMultiplier(def?.type, types, matchups) / 10;
+    const v = (def?.power ?? 0) * mult * (mine.includes(def?.type) ? 1.5 : 1);
     if (v > score) {
       score = v;
       best = i;
@@ -1295,4 +1329,4 @@ for (const c of chapters) {
   if (last && c.name.startsWith(last)) break;
 }
 log(`${done}/${chapters.length} chapters, ${frames} frames, ${((performance.now() - t0) / 1000).toFixed(1)} s; at ${describe()}`);
-log(`party: ${partySpecies().join(" ")}`);
+log(`party: ${(game.save?.party ?? []).map((m: any) => `${m.species}:${m.level}`).join(" ")}`);
