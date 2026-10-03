@@ -3542,6 +3542,13 @@ function movesAtLevel(speciesDef, level) {
     moves.shift();
   return moves;
 }
+var YELLOW_TWISTEDSPOON_GSC = 96;
+var YELLOW_LIGHT_BALL_GSC = 163;
+function catchRateByte(data, species, base) {
+  if (data.version === "yellow" && species === "KADABRA")
+    return YELLOW_TWISTEDSPOON_GSC;
+  return base;
+}
 function newMon(data, species, level, rng, dvs) {
   const def = data.pokemon[species];
   if (!def)
@@ -3560,7 +3567,7 @@ function newMon(data, species, level, rng, dvs) {
     statExp: { hp: 0, attack: 0, defense: 0, speed: 0, special: 0 },
     stats,
     hp: stats.hp,
-    catchRate: def.catchRate,
+    catchRate: catchRateByte(data, species, def.catchRate),
     status: null,
     moves
   };
@@ -4260,6 +4267,10 @@ caught!`);
   sayChoice(text, onChoose) {
     this.queue.push({ text, choice: onChoose });
   }
+  sayChoiceNext(text, onChoose) {
+    this.insertNext({ text, choice: onChoose });
+  }
+  shiftSwitch = false;
   act(fn) {
     this.queue.push({ fn });
   }
@@ -5809,6 +5820,16 @@ is full!`);
     const party = this.save.party;
     if (pressedDir(input)) {
       this.partyIndex = gridStep(input, this.partyIndex, GEAR_GRID_COLS, party.length);
+    } else if (this.shiftSwitch && (input.wasPressed("b") || input.wasPressed("a"))) {
+      const mon = party[this.partyIndex];
+      if (input.wasPressed("a") && (!mon || mon.hp <= 0 || mon === this.player.mon))
+        return;
+      this.shiftSwitch = false;
+      this.phase = "messages";
+      if (input.wasPressed("a")) {
+        this.nextInsert = 0;
+        this.switchPlayer(mon);
+      }
     } else if (input.wasPressed("b")) {
       if (this.itemTarget) {
         this.itemTarget = null;
@@ -5941,6 +5962,54 @@ var GYM_LEADER_PARTY = {
   OPP_BLAINE: 1,
   OPP_GIOVANNI: 3
 };
+var LONE_MOVES = {
+  OPP_BROCK: [1, "BIDE"],
+  OPP_MISTY: [1, "BUBBLEBEAM"],
+  OPP_LT_SURGE: [2, "THUNDERBOLT"],
+  OPP_ERIKA: [2, "MEGA_DRAIN"],
+  OPP_KOGA: [3, "TOXIC"],
+  OPP_SABRINA: [3, "PSYWAVE"],
+  OPP_BLAINE: [3, "FIRE_BLAST"],
+  OPP_GIOVANNI: [4, "FISSURE"]
+};
+var TEAM_MOVES = {
+  OPP_LORELEI: "BLIZZARD",
+  OPP_BRUNO: "FISSURE",
+  OPP_AGATHA: "TOXIC",
+  OPP_LANCE: "BARRIER"
+};
+var CHAMPION_STARTER_MOVE = {
+  BLASTOISE: "BLIZZARD",
+  VENUSAUR: "MEGA_DRAIN",
+  CHARIZARD: "FIRE_BLAST"
+};
+function giveThirdMove(data, mon, move) {
+  if (!mon || !data.moves[move])
+    return;
+  const slot = { id: move, pp: data.moves[move].pp ?? 0 };
+  if (mon.moves.length >= 3)
+    mon.moves[2] = slot;
+  else if (!mon.moves.some((m) => m.id === move))
+    mon.moves.push(slot);
+}
+function applySpecialTrainerMoves(data, trainerId, partyIndex, party) {
+  const v = data.version;
+  if (v === "yellow" || v === "gold" || v === "silver")
+    return;
+  const lone = LONE_MOVES[trainerId];
+  if (lone && GYM_LEADER_PARTY[trainerId] === partyIndex)
+    giveThirdMove(data, party[lone[0]], lone[1]);
+  const team = TEAM_MOVES[trainerId];
+  if (team)
+    giveThirdMove(data, party[4], team);
+  if (trainerId === "OPP_RIVAL3") {
+    giveThirdMove(data, party[0], "SKY_ATTACK");
+    const starter = party[5];
+    const move = starter ? CHAMPION_STARTER_MOVE[starter.species] : undefined;
+    if (move)
+      giveThirdMove(data, starter, move);
+  }
+}
 
 class TrainerBattle extends WildBattle {
   isTrainerBattle() {
@@ -5963,6 +6032,8 @@ class TrainerBattle extends WildBattle {
     this.trainerName = displayName2 ?? def?.name ?? trainerId;
     this.baseMoney = def?.baseMoney ?? 0;
     this.enemyParty = monRoster ? monRoster.map((m) => ({ ...m })) : roster.map((m) => newMon(data, m.species, m.level, undefined, { ...TRAINER_DVS }));
+    if (!monRoster)
+      applySpecialTrainerMoves(data, trainerId, partyIndex, this.enemyParty);
     this.enemyIndex = 0;
     if (this.enemyParty[0]) {
       this.enemy = makeBattler(data, this.enemyParty[0], false);
@@ -6031,9 +6102,28 @@ $${money}!`);
     }
     this.enemyIndex = this.enemyParty.indexOf(next);
     markSeen(this.save, next.species);
+    if (this.offersShift()) {
+      const name = this.data.pokemon[next.species]?.name ?? next.species;
+      const text = (this.data.text?._TrainerAboutToUseText ?? `{RAM:wTrainerName} is
+about to use\v{RAM:wEnemyMonNick}!\fWill {PLAYER}
+change POKéMON?`).replace(/\{RAM:wTrainerName\}/g, this.trainerName).replace(/\{RAM:wEnemyMonNick\}/g, name).replace(/\{PLAYER\}/g, this.save.player?.name ?? "RED");
+      this.sayChoiceNext(text, (yes) => {
+        if (!yes)
+          return;
+        this.shiftSwitch = true;
+        this.openParty(false);
+      });
+    }
     this.sayNext(`${this.trainerName} sent out
 ${next.species}!`);
     this.act(() => this.swapEnemy(next));
+  }
+  offersShift() {
+    if (this.save.options?.battleStyle === "set")
+      return false;
+    if (!this.player?.mon || this.player.mon.hp <= 0)
+      return false;
+    return this.save.party.some((m) => m !== this.player.mon && m.hp > 0);
   }
 }
 
@@ -9706,6 +9796,9 @@ function* give_pokemon(ctx, ...args) {
   const party = w.save.party;
   const runner = ctx.runner;
   const mon = newMon(w.data, species, level, w.shell?.giftRng);
+  if (args[2] === true && species === "PIKACHU" && w.data.version === "yellow") {
+    mon.catchRate = YELLOW_LIGHT_BALL_GSC;
+  }
   const ot = args[3];
   if (ot?.otName) {
     mon.otName = ot.otName;
@@ -20413,6 +20506,8 @@ class Scene {
         sig = `L,${dx.index},${dx.top},${dx.entries.length}`;
       } else if (dx.mode === "submenu") {
         sig = `S,${dx.index},${dx.submenuIndex}`;
+      } else if (dx.mode === "area") {
+        sig = `A,${dx.area ? dx.area.title : "?"}`;
       } else {
         const e = dx.entry;
         sig = `E,${e ? e.name + "," + e.owned + "," + e.lines.length : "?"}`;
@@ -20421,7 +20516,14 @@ class Scene {
         this.dexSig = sig;
         this.uiOwner = null;
         host.uiClear();
-        if (dx.mode === "entry" && dx.entry) {
+        if (dx.mode === "area" && dx.area) {
+          this.stamp(host, 1, 1, dx.area.title);
+          if (dx.area.places.length === 0)
+            this.stamp(host, 4, 8, "AREA UNKNOWN");
+          dx.area.places.slice(0, 7).forEach((p, i) => this.stamp(host, 2, 4 + i * 2, p.slice(0, 17)));
+          if (dx.area.places.length > 7)
+            host.uiTile(18, 16, ARROW_MORE);
+        } else if (dx.mode === "entry" && dx.entry) {
           const e = dx.entry;
           this.stamp(host, 9, 1, e.name);
           this.stamp(host, 9, 3, e.no);
@@ -22544,8 +22646,27 @@ class TitleState {
       return grey;
     return this.game.picPageFor ? this.game.picPageFor(this.mon) : picPageFor(this.game.data, this.mon);
   }
+  clearSaveChord() {
+    const i = this.game.input;
+    if (!(i.isDown?.("up") && i.isDown?.("select") && i.isDown?.("b")))
+      return false;
+    if (!this.game.showChoice || !this.game.deleteSave)
+      return false;
+    const text = (this.game.data?.text ?? {})._ClearSaveDataText ?? `Clear all saved
+data?`;
+    this.game.showChoice(text, (yes) => {
+      if (!yes)
+        return;
+      this.game.deleteSave();
+      this.menu = this.menu.filter((m) => m !== "CONTINUE");
+      this.index = 0;
+    }, { defaultNo: true });
+    return true;
+  }
   update() {
     const p = this.game.input.pressed;
+    if (this.phase === "press" && (!this.yellow || this.yPhase === "loop") && this.clearSaveChord())
+      return;
     if (this.yellow && this.phase === "press") {
       if (this.yPhase !== "loop") {
         this.yellowSequence();
@@ -23024,6 +23145,9 @@ class LinkBattle extends TrainerBattle {
   pendingMine = null;
   awaitingReplacement = false;
   lastPeerAction = null;
+  offersShift() {
+    return false;
+  }
   mimicByMenu() {
     return false;
   }
@@ -23308,6 +23432,11 @@ class OptionsMenuState {
         index: this.opts().animations === false ? 1 : 0
       },
       {
+        label: "BATTLE STYLE",
+        choices: ["SHIFT", "SET"],
+        index: this.opts().battleStyle === "set" ? 1 : 0
+      },
+      {
         label: "MOVEMENT",
         choices: ["FREE", "GRID"],
         index: this.opts().movement === "grid" ? 1 : 0
@@ -23370,24 +23499,26 @@ class OptionsMenuState {
     else if (row === 1)
       this.opts().animations = at === 0;
     else if (row === 2)
-      this.opts().movement = at === 1 ? "grid" : "free";
+      this.opts().battleStyle = at === 1 ? "set" : "shift";
     else if (row === 3)
-      this.opts().runningShoes = RUNNING_SHOES[at].key;
+      this.opts().movement = at === 1 ? "grid" : "free";
     else if (row === 4)
-      this.opts().cameraSpeed = CAMERA_SPEEDS[at].key;
+      this.opts().runningShoes = RUNNING_SHOES[at].key;
     else if (row === 5)
-      this.opts().tiltShift = TILT_SHIFTS[at].key;
+      this.opts().cameraSpeed = CAMERA_SPEEDS[at].key;
     else if (row === 6)
-      this.opts().view = VIEW_MODES[at].key;
+      this.opts().tiltShift = TILT_SHIFTS[at].key;
     else if (row === 7)
-      this.opts().screen2d = SCREENS_2D[at].key;
+      this.opts().view = VIEW_MODES[at].key;
     else if (row === 8)
-      this.opts().zoom2d = ZOOMS_2D[at].pct;
+      this.opts().screen2d = SCREENS_2D[at].key;
     else if (row === 9)
-      this.opts().battleView = VIEW_MODES[at].key;
+      this.opts().zoom2d = ZOOMS_2D[at].pct;
     else if (row === 10)
-      this.opts().eventPokemon = EVENT_POKEMON[at].key;
+      this.opts().battleView = VIEW_MODES[at].key;
     else if (row === 11)
+      this.opts().eventPokemon = EVENT_POKEMON[at].key;
+    else if (row === 12)
       this.opts().devMenu = at === 1;
   }
   update() {
@@ -27687,7 +27818,7 @@ class PokedexState {
   seen = 0;
   owned = 0;
   digits;
-  static SUBMENU = ["DATA", "CRY", "QUIT"];
+  static SUBMENU = ["DATA", "CRY", "AREA", "QUIT"];
   standalone = false;
   constructor(game, onCancel, opts) {
     this.game = game;
@@ -27733,6 +27864,11 @@ class PokedexState {
   }
   update() {
     const p = this.game.input.pressed;
+    if (this.mode === "area") {
+      if (p.a || p.b)
+        this.mode = "submenu";
+      return;
+    }
     if (this.mode === "entry") {
       if (p.a || p.b) {
         if (this.standalone) {
@@ -27800,6 +27936,10 @@ class PokedexState {
       case "CRY":
         this.game.playCry?.(value);
         break;
+      case "AREA":
+        this.entrySpecies = value;
+        this.mode = "area";
+        break;
       case "QUIT":
         this.close();
         break;
@@ -27815,6 +27955,17 @@ class PokedexState {
       this.top = this.index;
     if (this.index >= this.top + ROWS9)
       this.top = this.index - ROWS9 + 1;
+  }
+  buildArea() {
+    const id = this.entrySpecies;
+    if (!id)
+      return null;
+    const name = this.game.data.pokemon[id]?.name ?? id;
+    const places2 = [];
+    for (const h of habitats(this.game.data, id))
+      if (!places2.includes(h.map))
+        places2.push(h.map);
+    return { title: `${name}'s NEST`, places: places2 };
   }
   buildEntry() {
     const id = this.entrySpecies;
@@ -27861,7 +28012,8 @@ class PokedexState {
       footer: `SEEN ${String(this.seen).padStart(3)}  OWN ${String(this.owned).padStart(3)}`,
       submenuIndex: this.submenuIndex,
       submenu: PokedexState.SUBMENU,
-      entry: this.mode === "entry" ? this.buildEntry() : null
+      entry: this.mode === "entry" ? this.buildEntry() : null,
+      area: this.mode === "area" ? this.buildArea() : null
     };
   }
 }
@@ -28419,27 +28571,30 @@ class OverworldState {
     this.ow.update();
   }
 }
+var SOFT_RESET_FRAMES = 16;
 
 class TextBoxState {
   game;
   onDone;
   choice;
   onTyped;
+  choiceOpts;
   kind = "textbox";
   box;
   choicePushed = false;
-  constructor(game, text2, onDone, choice, opts, onTyped) {
+  constructor(game, text2, onDone, choice, opts, onTyped, choiceOpts) {
     this.game = game;
     this.onDone = onDone;
     this.choice = choice;
     this.onTyped = onTyped;
+    this.choiceOpts = choiceOpts;
     this.box = new Textbox(text2, { player: game.save.player.name, rival: game.save.player.rival }, { speed: game.textSpeed(), ...opts });
   }
   update() {
     if (this.choice && this.box.done) {
       if (!this.choicePushed) {
         this.choicePushed = true;
-        this.game.push(new ChoiceState(this.game, this.choice));
+        this.game.push(new ChoiceState(this.game, this.choice, this.choiceOpts));
       }
       return;
     }
@@ -28457,7 +28612,7 @@ class TextBoxState {
     if (this.choice && this.box.done) {
       if (!this.choicePushed) {
         this.choicePushed = true;
-        this.game.push(new ChoiceState(this.game, this.choice));
+        this.game.push(new ChoiceState(this.game, this.choice, this.choiceOpts));
       }
       return;
     }
@@ -28770,11 +28925,37 @@ class VoxelmonGame {
     const save = this.save;
     save.playTime = Math.floor(save.playTime ?? 0) + 1;
   }
+  softResetFrames = 0;
+  softReset() {
+    this.softResetFrames = 0;
+    this.audio.stop();
+    this.host.reset();
+    this.scene = new Scene(this.host);
+    this.input.reset();
+    this.boot();
+  }
+  softResetHeld() {
+    const i = this.input;
+    if (!(i.isDown("a") && i.isDown("b") && i.isDown("start") && i.isDown("select")))
+      return false;
+    return !(i.isDown("up") || i.isDown("down") || i.isDown("left") || i.isDown("right"));
+  }
   tick(buttons) {
     const p = this.prof;
     const t0 = p ? p.now() : 0;
     this.input.setButtons(buttons);
     this.input.step();
+    if (this.softResetHeld()) {
+      this.softResetFrames += 1;
+      if (this.softResetFrames >= SOFT_RESET_FRAMES) {
+        this.softReset();
+        this.host.frameDone(this.tickIndex, buttons);
+        this.tickIndex += 1;
+        return;
+      }
+    } else {
+      this.softResetFrames = 0;
+    }
     this.overworld.serviceLink();
     const top2 = this.stack[this.stack.length - 1];
     top2?.update();
@@ -28907,8 +29088,12 @@ class VoxelmonGame {
   animationsOn() {
     return this.save.options?.animations !== false;
   }
-  showChoice(text2, choice) {
-    this.push(new TextBoxState(this, text2, undefined, choice));
+  showChoice(text2, choice, opts) {
+    this.push(new TextBoxState(this, text2, undefined, choice, undefined, undefined, opts));
+  }
+  deleteSave() {
+    this.host.saveWrite("");
+    this.hasSave = false;
   }
   pushWarpFade(frames, midpoint, onDone) {
     this.push(new WarpFadeState(this, frames, midpoint, onDone));
