@@ -24,7 +24,8 @@ var GEN_MODULES = [
   "field",
   "text",
   "text_pointers",
-  "trainer_headers"
+  "trainer_headers",
+  "pikapic"
 ];
 function fromObject(source) {
   for (const name of REQUIRED_MODULES) {
@@ -1842,13 +1843,23 @@ function selectEmotion(save, mapId) {
   }
   return moodEmotion(save);
 }
-function talkRows(w, picPage) {
+function talkRows(w, picPage, faces = false) {
   const save = w.save;
   const emotion = selectEmotion(save, w.map.id);
   const e = EMOTIONS[emotion] ?? {};
   const script = PIKAPIC_SCRIPT[emotion] ?? emotion;
   const hold = (PIKAPIC_DUR[script] ?? 40) * 3;
   const rows = [];
+  if (faces) {
+    if (e.turnAway)
+      rows.push(["face_object", PIKA_NAME, w.player.facing]);
+    if (e.bubble)
+      rows.push(["emote", PIKA_NAME, e.bubble, 60]);
+    if (e.clip)
+      rows.push(["pika_clip", e.clip]);
+    rows.push(["pikapic", script]);
+    return rows;
+  }
   if (e.turnAway)
     rows.push(["face_object", PIKA_NAME, w.player.facing]);
   if (e.clip)
@@ -10095,6 +10106,13 @@ function* random_text(ctx, ...args) {
 function* play_cry(ctx, ...args) {
   ctx.world.playCry?.(String(args[0]));
 }
+function* pikapic(ctx, ...args) {
+  const w = ctx.world;
+  const runner = ctx.runner;
+  if (!w.playPikapic || !w.playPikapic(Number(args[0]) || 0, () => runner.resume()))
+    return;
+  yield;
+}
 function* pika_clip(ctx, ...args) {
   ctx.world.playPikaClip?.(Number(args[0]) || 1);
 }
@@ -10468,6 +10486,7 @@ var VERBS = {
   use_teleport,
   play_cry,
   pika_clip,
+  pikapic,
   surfing_minigame,
   pikachu_counter_hop,
   pikachu_face_down,
@@ -16980,6 +16999,914 @@ function toolUnlocked(t, save) {
   return badge === false || !!badge && (inv[badge] ?? 0) > 0;
 }
 
+// voxelmon/game/ui/yellowintro.ts
+function grid(rows, cols, dy0, dx0, tile) {
+  const out = [];
+  for (let r = 0;r < rows; r++)
+    for (let c = 0;c < cols; c++)
+      out.push([dy0 + r * 8, dx0 + c * 8, tile(r, c)]);
+  return out;
+}
+var OAM = {
+  fa17e: grid(2, 2, -8, -8, (r, c) => r * 16 + c),
+  fa18f: [
+    [-16, -8, 0],
+    [-16, 0, 1],
+    [-8, -8, 16],
+    [-8, 0, 17],
+    [0, -8, 32],
+    [0, 0, 32, true],
+    [8, -8, 33],
+    [8, 0, 33, true]
+  ],
+  fa1b0: [
+    [-24, -8, 0],
+    [-24, 0, 1],
+    [-16, -8, 2],
+    [-16, 0, 3],
+    [-8, -16, 4],
+    [-8, -8, 5],
+    [-8, 0, 6],
+    [-8, 8, 4, true],
+    [0, -16, 7],
+    [0, -8, 8],
+    [0, 0, 8, true],
+    [0, 8, 7, true],
+    [8, -16, 9],
+    [8, -8, 10],
+    [8, 0, 10, true],
+    [8, 8, 9, true],
+    [16, -16, 11],
+    [16, -8, 12],
+    [16, 0, 12, true],
+    [16, 8, 11, true]
+  ],
+  fa201: grid(6, 6, -24, -24, (r, c) => r * 16 + c),
+  fa292: grid(5, 5, -20, -16, (r, c) => [0, 5, 16, 21, 32][r] + c),
+  fa2f7: [[-4, -16, 0], [-4, -8, 1], [-4, 0, 1, true], [-4, 8, 0, true]],
+  fa308: [
+    [-8, -24, 0],
+    [-8, -16, 1],
+    [0, -24, 2],
+    [0, -16, 3],
+    [-8, 8, 1, true],
+    [-8, 16, 0, true],
+    [0, 8, 3, true],
+    [0, 16, 2, true]
+  ],
+  fa329: [
+    [-8, -40, 0],
+    [-8, -32, 1],
+    [-8, -24, 2],
+    [0, -40, 16],
+    [0, -32, 17],
+    [0, -24, 18],
+    [-8, 16, 2, true],
+    [-8, 24, 1, true],
+    [-8, 32, 0, true],
+    [0, 16, 18, true],
+    [0, 24, 17, true],
+    [0, 32, 16, true]
+  ]
+};
+var FRAMES = {
+  1: { base: 150, oam: OAM.fa17e },
+  2: { base: 152, oam: OAM.fa17e },
+  3: { base: 154, oam: OAM.fa17e },
+  4: { base: 12, oam: OAM.fa18f },
+  5: { base: 14, oam: OAM.fa18f },
+  6: { base: 60, oam: OAM.fa18f },
+  7: { base: 96, oam: OAM.fa1b0 },
+  8: { base: 112, oam: OAM.fa1b0 },
+  9: { base: 128, oam: OAM.fa1b0 },
+  11: { base: 0, oam: OAM.fa201 },
+  12: { base: 6, oam: OAM.fa201 },
+  13: { base: 198, oam: OAM.fa292 },
+  14: { base: 109, oam: OAM.fa2f7 },
+  15: { base: 240, oam: OAM.fa308 },
+  16: { base: 244, oam: OAM.fa308 },
+  17: { base: 248, oam: OAM.fa308 },
+  18: { base: 156, oam: OAM.fa329 },
+  19: { base: 236, oam: OAM.fa329 }
+};
+function frameBox(id) {
+  const oam = FRAMES[id].oam;
+  const dx = Math.min(...oam.map((e) => e[1]));
+  const dy = Math.min(...oam.map((e) => e[0]));
+  const w = Math.max(...oam.map((e) => e[1])) + 8 - dx;
+  const h = Math.max(...oam.map((e) => e[0])) + 8 - dy;
+  return { dx, dy, w, h };
+}
+var FRAMESETS = {
+  1: { steps: [[1, 4], [2, 4], [3, 4]], loop: true },
+  2: { steps: [[4, 4], [5, 4], [6, 4]], loop: true },
+  3: { steps: [[7, 4], [8, 4], [9, 4]], loop: true },
+  5: { steps: [[11, 32]] },
+  6: { steps: [[12, 32]] },
+  7: { steps: [[13, 32]] },
+  8: { steps: [[14, 32]] },
+  9: { steps: [[15, 31], [17, 2], [15, 2], [17, 2], [15, 31], [17, 2], [15, 23], [16, 32]] },
+  10: { steps: [[18, 4], [19, 4]], loop: true }
+};
+var SPAWN = {
+  1: [1, "static"],
+  2: [2, "static"],
+  3: [3, "static"],
+  5: [5, "surf"],
+  6: [6, "fly"],
+  7: [7, "static"],
+  8: [8, "bar"],
+  9: [9, "static"],
+  10: [10, "static"]
+};
+var SPEED_BARS = [
+  [208, 32, 2],
+  [240, 48, 4],
+  [208, 64, 6],
+  [192, 80, 8],
+  [224, 96, 8],
+  [192, 112, 6],
+  [224, 128, 4],
+  [240, 144, 2]
+];
+var WAVE = [0, 0, 1, 2, 2, 3, 3, 3, 4, 3, 3, 3, 2, 2, 1, 0, 0, 0, -1, -2, -2, -3, -3, -3, -4, -3, -3, -3, -2, -2, -1, 0];
+var STROBE = Array.from({ length: 51 }, (_, i) => i % 4 === 1 || i % 4 === 2 ? 192 : 228);
+var FADE = [228, 144, 144, 64, 64, 0, 0];
+function bob(phase) {
+  const a = phase % 64;
+  const v = Math.floor(8 * Math.sin(Math.PI * (a % 32) / 32));
+  return a < 32 ? v : -v;
+}
+var BG_ROWS = 20;
+function bgpShades(bgp) {
+  return [0, 1, 2, 3].map((i) => bgp >> 2 * i & 3);
+}
+var hex2 = (n) => n.toString(16).padStart(2, "0");
+var STROBE_FRAMES = [15, 16, 17, 18, 19];
+var YELLOW_INTRO_PICTURES = [
+  { name: "bg_letter", bg: "letter" },
+  { name: "bg_letter_s1", bg: "letter", shades: bgpShades(144) },
+  { name: "bg_letter_s2", bg: "letter", shades: bgpShades(64) },
+  { name: "bg_kick", bg: "kick" },
+  { name: "bg_sea", bg: "sea" },
+  { name: "bg_sky0", bg: "sky", cloud: 0 },
+  { name: "bg_sky1", bg: "sky", cloud: 1 },
+  { name: "bg_close", bg: "close" },
+  { name: "bg_close_k", bg: "close", shades: bgpShades(192) },
+  ...Object.keys(FRAMES).map((k) => ({ name: `obj_${hex2(Number(k))}`, frame: Number(k) })),
+  { name: "obj_0d_s1", frame: 13, shades: bgpShades(144) },
+  { name: "obj_0d_s2", frame: 13, shades: bgpShades(64) },
+  ...STROBE_FRAMES.map((f) => ({ name: `obj_${hex2(f)}_k`, frame: f, shades: bgpShades(192) }))
+];
+var BEACH2 = new Set(["bg_kick", "bg_sea", "bg_sky0", "bg_sky1", "obj_0b", "obj_0c", "obj_0e"]);
+var SETUP_DELAY = 3;
+var HEAD_FRAMES = 2;
+
+class YellowIntroScenes {
+  done = false;
+  scene = 0;
+  timer = 0;
+  seq = 0;
+  scx = 0;
+  bgp = 228;
+  bgName = "bg_letter";
+  waveT = 0;
+  cloud = 0;
+  objects = [];
+  delay = HEAD_FRAMES;
+  then = () => this.start(0);
+  spawn(id, x, y) {
+    const [frameset, motion] = SPAWN[id];
+    const o = {
+      id,
+      frameset,
+      motion,
+      x,
+      y,
+      yoff: 0,
+      step: 0,
+      wait: FRAMESETS[frameset].steps[0][1],
+      held: false,
+      fieldB: 0,
+      fieldC: 0
+    };
+    this.objects.push(o);
+    return o;
+  }
+  setup(scene) {
+    this.objects = [];
+    this.bgp = 0;
+    this.delay = SETUP_DELAY;
+    this.then = () => {
+      this.bgp = 228;
+      this.start(scene);
+    };
+  }
+  start(scene) {
+    this.scx = 0;
+    switch (scene) {
+      case 0:
+        this.bgName = "bg_letter";
+        this.spawn(1, 88, 88);
+        this.timer = 130;
+        this.scene = 1;
+        break;
+      case 2:
+        this.bgName = "bg_kick";
+        for (const [x, y, speed] of SPEED_BARS)
+          this.spawn(8, x, y).fieldB = speed;
+        this.timer = 128;
+        this.scene = 3;
+        break;
+      case 4:
+        this.bgName = "bg_letter";
+        this.spawn(2, 88, 88);
+        this.timer = 128;
+        this.scene = 5;
+        break;
+      case 6:
+        this.bgName = "bg_sea";
+        this.waveT = 0;
+        this.spawn(5, 248, 64);
+        this.timer = 88;
+        this.scene = 7;
+        break;
+      case 8:
+        this.bgName = "bg_letter";
+        this.spawn(3, 88, 88);
+        this.timer = 128;
+        this.scene = 9;
+        break;
+      case 10:
+        this.bgName = "bg_sky0";
+        this.cloud = 0;
+        this.spawn(6, 88, 152);
+        this.timer = 128;
+        this.scene = 11;
+        break;
+      case 12:
+        this.bgName = "bg_close";
+        this.spawn(9, 88, 96);
+        this.timer = 128;
+        this.scene = 13;
+        break;
+      default:
+        this.scene = scene;
+    }
+  }
+  update() {
+    if (this.done)
+      return;
+    if (this.delay > 0) {
+      if (--this.delay === 0) {
+        const then = this.then;
+        this.then = null;
+        then?.();
+      }
+      this.updateObjects();
+      return;
+    }
+    switch (this.scene) {
+      case 1:
+      case 5:
+      case 9:
+      case 13:
+        if (this.timer > 0)
+          this.timer--;
+        else if (this.scene === 13) {
+          this.spawn(10, 88, 104);
+          this.seq = 0;
+          this.scene = 14;
+        } else
+          this.setup(this.scene + 1);
+        break;
+      case 3:
+        if (this.timer > 0) {
+          this.timer--;
+          if (this.scx !== 104)
+            this.scx += 4;
+        } else
+          this.setup(4);
+        break;
+      case 7:
+        if (this.timer > 0) {
+          this.timer--;
+          this.scx = (this.scx + 2) % 256;
+          this.waveT++;
+        } else
+          this.setup(8);
+        break;
+      case 11:
+        if (this.timer > 0) {
+          if (this.timer % 8 === 0)
+            this.cloud = Math.floor(this.timer / 8) % 2;
+          this.bgName = `bg_sky${this.cloud}`;
+          this.timer--;
+        } else
+          this.setup(12);
+        break;
+      case 14: {
+        const v = STROBE[this.seq++];
+        if (v !== undefined)
+          this.bgp = v;
+        else {
+          this.objects = [];
+          this.bgName = "bg_letter";
+          this.delay = 3;
+          this.then = () => {
+            this.bgp = 228;
+            this.spawn(7, 88, 88);
+            this.timer = 40;
+            this.scene = 15;
+          };
+        }
+        break;
+      }
+      case 15:
+        if (this.timer > 0) {
+          if (this.timer % 4 === 0)
+            this.bgp = this.bgp === 228 ? 231 : 228;
+          this.timer--;
+        } else {
+          this.bgp = 228;
+          this.seq = 0;
+          this.scene = 16;
+        }
+        break;
+      case 16: {
+        const v = FADE[this.seq++];
+        if (v !== undefined)
+          this.bgp = v;
+        else {
+          this.timer = 64;
+          this.scene = 17;
+        }
+        break;
+      }
+      case 17:
+        if (this.timer > 0)
+          this.timer--;
+        else
+          this.done = true;
+        break;
+    }
+    this.updateObjects();
+  }
+  updateObjects() {
+    for (const o of this.objects) {
+      if (o.motion === "bar") {
+        o.x = (o.x + o.fieldB) % 256;
+      } else if (o.motion === "surf") {
+        if (o.x !== 88) {
+          o.x = (o.x + 4) % 256;
+          o.y = (o.x + 1) % 256;
+        }
+      } else if (o.motion === "fly") {
+        if (o.fieldB === 0) {
+          if (o.y !== 88)
+            o.y = (o.y - 2 + 256) % 256;
+          else
+            o.fieldB = 1;
+        }
+        if (o.fieldB === 1)
+          o.yoff = bob(o.fieldC++);
+      }
+      if (o.held)
+        continue;
+      if (--o.wait > 0)
+        continue;
+      const set2 = FRAMESETS[o.frameset];
+      if (o.step >= set2.steps.length - 1) {
+        if (set2.loop) {
+          o.step = 0;
+          o.wait = set2.steps[0][1];
+        } else
+          o.held = true;
+        continue;
+      }
+      o.step++;
+      o.wait = set2.steps[o.step][1];
+    }
+  }
+  frame() {
+    const bgp = this.bgp;
+    const suffix = bgp === 144 ? "_s1" : bgp === 64 ? "_s2" : bgp === 192 ? "_k" : "";
+    const white = bgp === 0;
+    let bg = null;
+    if (!white) {
+      const name = suffix && `${this.bgName}${suffix}` in NAMED ? `${this.bgName}${suffix}` : this.bgName;
+      const dy = this.bgName === "bg_sea" ? WAVE[this.waveT % 32] : 0;
+      bg = { name, scx: this.scx, dy };
+    }
+    const objects = [];
+    if (!white) {
+      for (const o of this.objects) {
+        const id = FRAMESETS[o.frameset].steps[o.step][0];
+        const box = frameBox(id);
+        const base = `obj_${hex2(id)}`;
+        const name = suffix && `${base}${suffix}` in NAMED ? `${base}${suffix}` : base;
+        let x = (o.x + box.dx - 8 + 512) % 256;
+        let y = (o.y + o.yoff + box.dy - 16 + 512) % 256;
+        if (x > 160)
+          x -= 256;
+        if (y > 144)
+          y -= 256;
+        if (x >= 160 || x + box.w <= 0 || y >= 144 || y + box.h <= 0)
+          continue;
+        objects.push({ name, x, y, w: box.w, h: box.h });
+      }
+    }
+    return { bg, black: bgp === 231, objects };
+  }
+}
+var NAMED = Object.fromEntries(YELLOW_INTRO_PICTURES.map((p) => [p.name, true]));
+
+// voxelmon/game/ui/intro.ts
+var UI_SCALE2 = VIEW_H / GB_H;
+var UI_ORIGIN_X2 = (VIEW_W - GB_W * UI_SCALE2) / 2;
+var sx = (gx) => Math.round(UI_ORIGIN_X2 + gx * UI_SCALE2);
+var sy = (gy) => Math.round(gy * UI_SCALE2);
+var sw = (gw) => Math.round(gw * UI_SCALE2);
+var gbX = sx;
+var gbY = sy;
+var gbW = sw;
+var COPYRIGHT_PREFIX = [0, 1, 2, 1, 3, 1, 4];
+var COPYRIGHT_PREFIX_YELLOW = [0, 1, 2, 3, 1, 2, 4];
+var COPYRIGHT_GAMEFREAK = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+var COPYRIGHT_FRAMES = 180;
+var STAR_START = 64;
+var STAR_FRAMES = 40;
+var FLASH_START = STAR_START + STAR_FRAMES;
+var FLASH_FRAMES = 30;
+var WAVES_START = FLASH_START + FLASH_FRAMES;
+var WAVE_FRAMES = 24;
+var WAVES_END = WAVES_START + 6 * WAVE_FRAMES;
+var SPLASH_FRAMES = WAVES_END + 40;
+var LOGO_X = 72;
+var LOGO_Y = 56;
+var TEXT_X2 = 40;
+var TEXT_Y = 80;
+var STAR_WAVES = [
+  [40, 56, 80, 112],
+  [48, 64, 88, 104],
+  [44, 68, 76, 92],
+  [52, 84, 100, 108]
+];
+var COPY_PREFIX = [0, 1, 2, 1, 3, 1, 4];
+var COPY_NINTENDO = [5, 6, 7, 8, 9, 10];
+var COPY_CREATURES = [11, 12, 13, 14, 15, 16, 17, 18];
+var COPY_GAMEFREAK = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+var COPY_ROWS = [56, 72, 88];
+var FLAP_W = 88;
+var FLAP_H = 80;
+var FLAP_AT = [
+  { x: 0, y: 0, dx: -1, dy: -1 },
+  { x: GB_W - FLAP_W, y: 0, dx: 1, dy: -1 },
+  { x: 0, y: GB_H - FLAP_H, dx: -1, dy: 1 },
+  { x: GB_W - FLAP_W, y: GB_H - FLAP_H, dx: 1, dy: 1 }
+];
+var BANNER_AT = 6;
+var BANNER_POP = 24;
+var BANNER_BLINK = 8;
+var WHOOSH_AT = 56;
+var BREACH_AT = 82;
+var BURST_FRAMES = 46;
+var ZOOM_FRAMES = 80;
+var TEAR_FRAMES = BURST_FRAMES + ZOOM_FRAMES;
+var FIST_AT = 8;
+function burstOf(tear) {
+  return Math.max(0, Math.min(1, tear / BURST_FRAMES));
+}
+function zoomOf(tear) {
+  return Math.max(0, Math.min(1, (tear - BURST_FRAMES) / ZOOM_FRAMES));
+}
+function fistScale(tear) {
+  if (tear < FIST_AT || tear > BURST_FRAMES)
+    return 0;
+  const u = (tear - FIST_AT) / (BURST_FRAMES - FIST_AT);
+  return 0.08 + Math.pow(u, 2.4) * 3.3;
+}
+function fistPop(tear) {
+  if (tear < FIST_AT || tear > BURST_FRAMES)
+    return 0;
+  const u = (tear - FIST_AT) / (BURST_FRAMES - FIST_AT);
+  return Math.min(1, u * 1.4);
+}
+var ANIM = [
+  [[0, 0], [-2, 2], [-1, 2], [1, 2], [2, 2]],
+  [[0, 0], [-2, -2], [-1, -2], [1, -2], [2, -2]],
+  [[0, 0], [-12, 6], [-8, 6], [8, 6], [12, 6]],
+  [[0, 0], [-8, -4], [-4, -4], [4, -4], [8, -4]],
+  [[0, 0], [-8, 4], [-4, 4], [4, 4], [8, 4]],
+  [[0, 0], [2, 0], [2, 0], [0, 0]],
+  [[-8, -16], [-7, -14], [-6, -12], [-4, -10]]
+];
+var FIGHT = [
+  { move: "scrollIn", px: 80 },
+  { sfx: "Intro_Hip" },
+  { anim: 1 },
+  { sfx: "Intro_Hop" },
+  { anim: 2 },
+  { wait: 10 },
+  { sfx: "Intro_Hip" },
+  { anim: 1 },
+  { sfx: "Intro_Hop" },
+  { anim: 2 },
+  { wait: 30 },
+  { pose: 2 },
+  { sfx: "Intro_Raise" },
+  { move: "gengar", dx: -8 },
+  { wait: 30 },
+  { pose: 3 },
+  { sfx: "Intro_Crash" },
+  { move: "gengar", dx: 16 },
+  { sfx: "Intro_Hip" },
+  { frame: 2 },
+  { anim: 3 },
+  { wait: 30 },
+  { move: "gengar", dx: -8 },
+  { pose: 1 },
+  { wait: 60 },
+  { sfx: "Intro_Hip" },
+  { frame: 1 },
+  { anim: 4 },
+  { sfx: "Intro_Hop" },
+  { anim: 5 },
+  { wait: 20 },
+  { frame: 2 },
+  { anim: 6 },
+  { wait: 30 },
+  { sfx: "Intro_Lunge" },
+  { frame: 3 },
+  { anim: 7 },
+  { fade: 24 }
+];
+
+class IntroState {
+  game;
+  onDone;
+  kind = "intro";
+  phase = "copyright";
+  t = 0;
+  done = false;
+  gengarX = 104;
+  gengarY = 56;
+  nidoX = -8;
+  nidoY = 72;
+  pose = 1;
+  frame = 1;
+  op = 0;
+  opT = 0;
+  fade = 0;
+  tear = -1;
+  yellow;
+  constructor(game, onDone) {
+    this.game = game;
+    this.onDone = onDone;
+    this.yellow = gameVersion(game.data) === "yellow" ? new YellowIntroScenes : null;
+  }
+  page(key) {
+    return namedPage(this.game.data, "picIntro", key);
+  }
+  titleArt(key) {
+    return namedPage(this.game.data, "picTitle", key);
+  }
+  animPage() {
+    const a = this.game.data.atlas;
+    return a?.animPages?.["battleanim/46ee"] ?? -1;
+  }
+  finish() {
+    if (this.done)
+      return;
+    this.done = true;
+    this.game.audio?.stop();
+    this.game.pop();
+    this.onDone();
+  }
+  update() {
+    const p = this.game.input.pressed;
+    if (p.a || p.b || p.start) {
+      this.finish();
+      return;
+    }
+    this.t += 1;
+    if (this.tear >= 0)
+      this.tear += 1;
+    if (this.phase === "copyright") {
+      if (this.t >= COPYRIGHT_FRAMES)
+        this.start("splash");
+      return;
+    }
+    if (this.phase === "splash") {
+      if (this.t === STAR_START)
+        this.game.audio?.playSfx("Shooting_Star");
+      if (this.t >= SPLASH_FRAMES)
+        this.start("punch");
+      return;
+    }
+    if (this.phase === "punch") {
+      if (this.t === WHOOSH_AT)
+        this.game.audio?.playSfx("Intro_Whoosh");
+      if (this.t >= BREACH_AT) {
+        this.game.audio?.playSfx("Intro_Crash");
+        this.tear = 0;
+        this.start("fight");
+      }
+      return;
+    }
+    if (this.yellow) {
+      this.yellow.update();
+      if (this.yellow.done)
+        this.finish();
+      return;
+    }
+    this.fightStep();
+  }
+  start(phase) {
+    this.phase = phase;
+    this.t = 0;
+    if (phase === "fight") {
+      if (!this.yellow || !this.game.audio?.playOnce("Music_YellowIntro")) {
+        this.game.audio?.playOnce("Music_IntroBattle");
+      }
+    }
+  }
+  fightStep() {
+    for (;; ) {
+      const op = FIGHT[this.op];
+      if (!op) {
+        this.finish();
+        return;
+      }
+      if (op.sfx) {
+        this.game.audio?.playSfx(op.sfx);
+      } else if (op.pose !== undefined) {
+        this.pose = op.pose;
+      } else if (op.frame !== undefined) {
+        this.frame = op.frame;
+      } else if (op.move) {
+        if (this.opT % 2 === 0) {
+          if (op.move === "scrollIn") {
+            this.gengarX -= 2;
+            this.nidoX += 2;
+          } else {
+            this.gengarX += (op.dx ?? 0) > 0 ? 2 : -2;
+          }
+        }
+        this.opT += 1;
+        if (this.opT < (op.px ?? Math.abs(op.dx ?? 0)))
+          return;
+      } else if (op.anim !== undefined) {
+        const list2 = ANIM[op.anim - 1];
+        if (this.opT % 5 === 0) {
+          const d = list2[this.opT / 5];
+          if (d) {
+            this.nidoY += d[0];
+            this.nidoX += d[1];
+          }
+        }
+        this.opT += 1;
+        if (this.opT < list2.length * 5)
+          return;
+      } else if (op.wait !== undefined) {
+        this.opT += 1;
+        if (this.opT < op.wait)
+          return;
+      } else if (op.fade !== undefined) {
+        this.opT += 1;
+        this.fade = this.opT / op.fade;
+        if (this.opT >= op.fade)
+          this.finish();
+        return;
+      }
+      this.op += 1;
+      this.opT = 0;
+    }
+  }
+  paper(out) {
+    const page = this.page("white");
+    if (page < 0)
+      return;
+    out.push({ page, x: 0, y: 0, w: VIEW_W, h: VIEW_H });
+  }
+  gb(out, key, gy, gh) {
+    const page = this.page(key);
+    if (page < 0)
+      return;
+    out.push({ page, x: sx(0), y: sy(gy), w: sw(GB_W), h: sw(gh) });
+  }
+  bars(out) {
+    const black = this.page("black");
+    if (black < 0)
+      return;
+    out.push({ page: black, x: 0, y: 0, w: VIEW_W, h: sy(32) });
+    out.push({ page: black, x: 0, y: sy(GB_H - 32), w: VIEW_W, h: VIEW_H - sy(GB_H - 32) });
+  }
+  splashArt(out, dim) {
+    const logo = this.page(dim ? "gflogo_dim" : "gflogo");
+    if (logo >= 0) {
+      out.push({ page: logo, x: sx(LOGO_X), y: sy(LOGO_Y), w: sw(16), h: sw(24) });
+    }
+    const text = this.page("gftext");
+    if (text >= 0) {
+      out.push({ page: text, x: sx(TEXT_X2), y: sy(TEXT_Y), w: sw(80), h: sw(8) });
+    }
+  }
+  marquee(out, clock) {
+    const page = this.page("in3d");
+    if (page < 0 || clock < BANNER_AT)
+      return;
+    if (Math.floor(clock / BANNER_BLINK) % 2 !== 0)
+      return;
+    const W = 60, H = 16;
+    const pop = Math.min(1, (clock - BANNER_AT) / BANNER_POP);
+    out.push({
+      page,
+      x: sx((GB_W - W) / 2),
+      y: sy(36),
+      w: sw(W),
+      h: sw(H),
+      d: Math.round(pop * 160)
+    });
+  }
+  copyrightTiles(out) {
+    const strip = this.titleArt("copyright");
+    const gf = this.titleArt("gamefreak");
+    const row = (page, seq, x, y) => {
+      if (page < 0)
+        return;
+      seq.forEach((t, i) => out.push({ page, tile: t, x: x + i * 8, y, flags: 0 }));
+    };
+    const prefix = this.yellow ? [...COPYRIGHT_PREFIX_YELLOW] : COPY_PREFIX;
+    COPY_ROWS.forEach((y) => row(strip, prefix, 16, y));
+    row(strip, COPY_NINTENDO, 80, COPY_ROWS[0]);
+    row(strip, COPY_CREATURES, 80, COPY_ROWS[1]);
+    row(gf, COPY_GAMEFREAK, 80, COPY_ROWS[2]);
+  }
+  unbarred(y) {
+    return y >= 32 && y + 8 <= 112;
+  }
+  bigStar(out) {
+    const page = this.animPage();
+    if (page < 0)
+      return;
+    const n = this.t - STAR_START + 1;
+    const x = 152 - 4 * n;
+    const y = -16 + 4 * n;
+    for (const pair of [[3, 0], [19, 8]]) {
+      const tile = pair[0];
+      const dy = pair[1];
+      if (!this.unbarred(y + dy))
+        continue;
+      out.push({ page, tile, x, y: y + dy, flags: 0 });
+      out.push({ page, tile, x: x + 8, y: y + dy, flags: 1 });
+    }
+  }
+  fallingStars(out) {
+    const star = this.page("star");
+    const blink = this.page("star_blink");
+    if (star < 0)
+      return;
+    const substep = Math.floor((Math.min(this.t, WAVES_END) - WAVES_START) / 3);
+    const page = substep % 2 === 0 ? star : blink >= 0 ? blink : star;
+    STAR_WAVES.forEach((xs, w) => {
+      const spawn = w * 8;
+      if (substep < spawn)
+        return;
+      const y = 88 + (substep - spawn);
+      if (!this.unbarred(y))
+        return;
+      for (const x of xs)
+        out.push({ page, tile: 0, x, y, flags: 0 });
+    });
+  }
+  yellowArt(out) {
+    const f = this.yellow.frame();
+    if (f.black) {
+      const black = this.page("black");
+      if (black >= 0)
+        out.push({ page: black, x: 0, y: 0, w: VIEW_W, h: VIEW_H });
+    } else if (f.bg) {
+      const page = this.page(`yi_${f.bg.name}`);
+      if (page >= 0) {
+        for (let k = -1;k <= 1; k++) {
+          const gx = -f.bg.scx + k * 256;
+          if (sx(gx) >= VIEW_W || sx(gx + 256) <= 0)
+            continue;
+          out.push({ page, x: sx(gx), y: sy(f.bg.dy), w: sw(256), h: sw(BG_ROWS * 8) });
+        }
+      }
+    }
+    for (const o of f.objects) {
+      const page = this.page(`yi_${o.name}`);
+      if (page >= 0)
+        out.push({ page, x: sx(o.x), y: sy(o.y), w: sw(o.w), h: sw(o.h) });
+    }
+  }
+  fightArt(out) {
+    const nido = this.page(`nido${this.frame}`);
+    if (nido >= 0) {
+      out.push({ page: nido, x: sx(this.nidoX), y: sy(this.nidoY), w: sw(48), h: sw(48) });
+    }
+    const gengar = this.page(`gengar${this.pose}`);
+    if (gengar >= 0) {
+      out.push({ page: gengar, x: sx(this.gengarX), y: sy(this.gengarY), w: sw(56), h: sw(56) });
+    }
+  }
+  tearArt(out) {
+    const tear = Math.max(0, this.tear);
+    const burst = burstOf(tear);
+    const zoom = zoomOf(tear);
+    const piece = (kind, fly, grow) => {
+      FLAP_AT.forEach((at, q) => {
+        const page = this.page(`${kind}${q}`);
+        if (page < 0)
+          return;
+        const gx = at.dx < 0 ? at.x : at.x + FLAP_W - FLAP_W * grow;
+        const gy = at.dy < 0 ? at.y : at.y + FLAP_H - FLAP_H * grow;
+        const quad = {
+          page,
+          x: sx(gx) + Math.round(at.dx * fly),
+          y: sy(gy) + Math.round(at.dy * fly * 0.75),
+          w: sw(FLAP_W * grow),
+          h: sw(FLAP_H * grow)
+        };
+        if (quad.x >= VIEW_W || quad.y >= VIEW_H)
+          return;
+        if (quad.x + quad.w <= 0 || quad.y + quad.h <= 0)
+          return;
+        out.push(quad);
+      });
+    };
+    if (zoom < 1)
+      piece("flap", zoom * zoom * 700, 1 + zoom * 2.2);
+    if (zoom < 1) {
+      piece("patch", Math.pow(burst, 0.75) * 120 + zoom * zoom * 760, 1 + burst * 0.2 + zoom * 2.4);
+    }
+    const scale = fistScale(tear);
+    if (scale <= 0)
+      return;
+    const fist = this.page("fist");
+    if (fist < 0)
+      return;
+    const size = Math.round(VIEW_H * scale);
+    const pop = fistPop(tear);
+    const away = pop * pop * pop;
+    out.push({
+      page: fist,
+      x: Math.round(VIEW_W / 2 - size / 2 - away * 150),
+      y: Math.round(VIEW_H / 2 - size / 2 + away * 90),
+      w: size,
+      h: size,
+      d: Math.round(pop * 256)
+    });
+  }
+  view() {
+    const pics = [];
+    const tiles = [];
+    this.paper(pics);
+    if (this.phase === "copyright") {
+      this.copyrightTiles(tiles);
+    } else if (this.phase === "splash") {
+      if (this.t >= STAR_START) {
+        const flashing = this.t >= FLASH_START && this.t < FLASH_START + FLASH_FRAMES;
+        this.splashArt(pics, flashing && Math.floor((this.t - FLASH_START) / 5) % 2 === 0);
+      }
+      if (this.t >= STAR_START && this.t < FLASH_START)
+        this.bigStar(tiles);
+      if (this.t >= WAVES_START)
+        this.fallingStars(tiles);
+      this.bars(pics);
+    } else if (this.phase === "punch") {
+      this.tearArt(pics);
+      this.marquee(pics, this.t);
+      this.bars(pics);
+    } else {
+      const bursting = this.tear >= 0 && burstOf(this.tear) < 1;
+      const tearing = this.tear >= 0 && this.tear <= TEAR_FRAMES;
+      if (bursting)
+        this.gb(pics, "black", 0, GB_H);
+      else if (this.yellow)
+        this.yellowArt(pics);
+      else
+        this.fightArt(pics);
+      if (tearing)
+        this.tearArt(pics);
+      if (bursting)
+        this.marquee(pics, BREACH_AT + this.tear);
+      if (!this.yellow || tearing)
+        this.bars(pics);
+      if (this.fade > 0) {
+        const white = this.page("white");
+        if (white >= 0 && this.fade >= 2 / 3) {
+          pics.push({ page: white, x: 0, y: 0, w: VIEW_W, h: VIEW_H });
+        }
+      }
+    }
+    return { phase: this.phase, pics, tiles };
+  }
+}
+
 // voxelmon/game/world/warp.ts
 function onArrive(map, cx, cy) {
   const w = map.warpAtCell(cx, cy);
@@ -17309,6 +18236,11 @@ class Overworld {
     if (this.bumpCooldown > 0)
       this.bumpCooldown -= 1;
     this.runner.update();
+    if (this.pikapic) {
+      this.stepPikapic();
+      this.player.update();
+      return;
+    }
     if (this.emote) {
       this.emote.frames -= 1;
       if (this.emote.frames <= 0) {
@@ -17393,9 +18325,9 @@ class Overworld {
       return;
     }
     const stick = stickPush(this.stick);
-    const sx = stick ? stick.x : (input.isDown("right") ? 1 : 0) - (input.isDown("left") ? 1 : 0);
-    const sy = stick ? -stick.y : (input.isDown("down") ? 1 : 0) - (input.isDown("up") ? 1 : 0);
-    const dir = sx === 0 && sy === 0 && this.slopeRolls() ? freeDir(0, 1, 0) : freeDir(sx, sy, this.freeYaw ?? 0);
+    const sx2 = stick ? stick.x : (input.isDown("right") ? 1 : 0) - (input.isDown("left") ? 1 : 0);
+    const sy2 = stick ? -stick.y : (input.isDown("down") ? 1 : 0) - (input.isDown("up") ? 1 : 0);
+    const dir = sx2 === 0 && sy2 === 0 && this.slopeRolls() ? freeDir(0, 1, 0) : freeDir(sx2, sy2, this.freeYaw ?? 0);
     if (!dir)
       return;
     const speed = 16 / p.stepSpeed() * (stick ? stick.throw : 1);
@@ -17705,7 +18637,7 @@ the PC.`, () => {
       npc.facePlayer(this.player);
       const back = { up: "down", down: "up", left: "right", right: "left" };
       this.player.facing = back[npc.facing] ?? this.player.facing;
-      this.runScript(talkRows(this, picPageFor(this.shell.data, "PIKACHU")));
+      this.runScript(talkRows(this, picPageFor(this.shell.data, "PIKACHU"), this.hasPikapic()));
       return;
     }
     npc.frozen = true;
@@ -18432,6 +19364,64 @@ wore off.`);
     }
   }
   picShown = null;
+  pikapic = null;
+  pikapicData() {
+    return this.shell.data.pikapic;
+  }
+  hasPikapic() {
+    const d = this.pikapicData();
+    return !!d && d.scripts.length > 0 && namedPage(this.shell.data, "picPikapic", "f000") >= 0;
+  }
+  playPikapic(script2, onDone) {
+    const d = this.pikapicData();
+    const s = d?.scripts[script2 < (d?.scripts.length ?? 0) ? script2 : 0];
+    if (!s || s.ticks.length === 0)
+      return false;
+    const pages = s.ticks.map((i) => namedPage(this.shell.data, "picPikapic", `f${String(i).padStart(3, "0")}`));
+    if (pages.some((p) => p < 0))
+      return false;
+    const flash = s.flash !== undefined ? namedPage(this.shell.data, "picPikapic", `f${String(s.flash).padStart(3, "0")}`) : undefined;
+    this.pikapic = { ticks: s.ticks, pages, t: 0, f: 0, cry: s.cry, bolt: s.thunderbolt, flash, boltLeft: 0, onDone };
+    this.showPikapicFrame(pages[0]);
+    return true;
+  }
+  showPikapicFrame(page) {
+    this.showPic(page, gbX(48), gbY(40), gbW(56), gbW(56));
+  }
+  stepPikapic() {
+    const p = this.pikapic;
+    if (p.boltLeft > 0) {
+      p.boltLeft -= 1;
+      const on = Math.floor(p.boltLeft / 4) % 2 === 0;
+      if (p.flash !== undefined && p.flash >= 0)
+        this.showPikapicFrame(on ? p.pages[p.t] : p.flash);
+      if (p.boltLeft === 0)
+        this.showPikapicFrame(p.pages[p.t]);
+      return;
+    }
+    if (p.f === 0) {
+      this.showPikapicFrame(p.pages[p.t]);
+      if (p.cry && p.cry.tick === p.t)
+        this.playPikaClip(p.cry.clip);
+      if (p.bolt === p.t) {
+        this.shell.audio.playSfx("Battle_2F", 32, 128);
+        p.boltLeft = 80;
+        p.bolt = undefined;
+        return;
+      }
+    }
+    p.f += 1;
+    const skip = this.shell.input.wasPressed("a") || this.shell.input.wasPressed("b");
+    if (p.f < 3 && !skip)
+      return;
+    p.f = 0;
+    p.t += 1;
+    if (skip || p.t >= p.ticks.length) {
+      this.pikapic = null;
+      this.hidePic();
+      p.onDone();
+    }
+  }
   showPic(page, x, y, w, h) {
     this.picShown = { page, x, y, w, h };
   }
@@ -19441,12 +20431,12 @@ opened the door!`));
     if (npc)
       npc.facing = dir;
   }
-  findPath(sx, sy, tx, ty, mover) {
+  findPath(sx2, sy2, tx, ty, mover) {
     const W = 64, H = 64;
     const key = (x, y) => y * W + x;
     const prev = new Map;
-    const seen = new Set([key(sx, sy)]);
-    let q = [[sx, sy]];
+    const seen = new Set([key(sx2, sy2)]);
+    let q = [[sx2, sy2]];
     const ok = (x, y) => {
       if (x < 0 || y < 0 || x >= W || y >= H)
         return false;
@@ -19462,7 +20452,7 @@ opened the door!`));
         if (x === tx && y === ty) {
           const out = [];
           let k = key(x, y);
-          while (k !== key(sx, sy)) {
+          while (k !== key(sx2, sy2)) {
             out.push([k % W, Math.floor(k / W)]);
             const p2 = prev.get(k);
             if (p2 === undefined)
@@ -19971,8 +20961,8 @@ class Scene {
     if (pv.mode === "submenu") {
       const items = pv.submenuItems;
       const n = items.length;
-      const sy = 17 - n * 2 - 1;
-      this.frame(host, 9, sy, 11, n * 2 + 2);
+      const sy2 = 17 - n * 2 - 1;
+      this.frame(host, 9, sy2, 11, n * 2 + 2);
       items.forEach((label3, k) => {
         this.stamp(host, 11, 17 - n * 2 + k * 2, label3);
         if (k === pv.submenuIndex)
@@ -20943,7 +21933,7 @@ class Scene {
         host.uiClear();
         host.uiFill(0, 0, UI_COLS, UI_ROWS, SPACE);
         const F = UI_TILE.frame;
-        const frameBox = (tx, ty, tw, th) => {
+        const frameBox2 = (tx, ty, tw, th) => {
           const x1 = tx + tw - 1;
           const y1 = ty + th - 1;
           host.uiTile(tx, ty, F + 2);
@@ -20955,7 +21945,7 @@ class Scene {
           host.uiFill(tx, ty + 1, 1, th - 2, F + 5);
           host.uiFill(x1, ty + 1, 1, th - 2, F + 1);
         };
-        frameBox(0, 0, UI_COLS, 9);
+        frameBox2(0, 0, UI_COLS, 9);
         if (tc.picPage >= 0) {
           const c = CARD_PIC_CELL;
           host.uiFill(c.x, c.y, c.w, c.h, 0);
@@ -20963,11 +21953,11 @@ class Scene {
         this.stamp(host, 2, 2, `NAME/${tc.name}`);
         this.stamp(host, 2, 4, `MONEY/¥${tc.money}`);
         this.stamp(host, 2, 6, `TIME/${tc.time}`);
-        frameBox(0, 9, UI_COLS, 3);
+        frameBox2(0, 9, UI_COLS, 3);
         host.uiTile(6, 10, UI_TILE.circle);
         this.stamp(host, 7, 10, "BADGES");
         host.uiTile(13, 10, UI_TILE.circle);
-        frameBox(0, 12, UI_COLS, 6);
+        frameBox2(0, 12, UI_COLS, 6);
         tc.badges.forEach((b, i) => {
           const cx = 2 + i % 4 * 4;
           const cy = 13 + Math.floor(i / 4) * 2;
@@ -21607,914 +22597,6 @@ class NamingState {
       name: this.glyphs.join(""),
       maxLen: this.maxLen
     };
-  }
-}
-
-// voxelmon/game/ui/yellowintro.ts
-function grid(rows, cols, dy0, dx0, tile) {
-  const out = [];
-  for (let r = 0;r < rows; r++)
-    for (let c = 0;c < cols; c++)
-      out.push([dy0 + r * 8, dx0 + c * 8, tile(r, c)]);
-  return out;
-}
-var OAM = {
-  fa17e: grid(2, 2, -8, -8, (r, c) => r * 16 + c),
-  fa18f: [
-    [-16, -8, 0],
-    [-16, 0, 1],
-    [-8, -8, 16],
-    [-8, 0, 17],
-    [0, -8, 32],
-    [0, 0, 32, true],
-    [8, -8, 33],
-    [8, 0, 33, true]
-  ],
-  fa1b0: [
-    [-24, -8, 0],
-    [-24, 0, 1],
-    [-16, -8, 2],
-    [-16, 0, 3],
-    [-8, -16, 4],
-    [-8, -8, 5],
-    [-8, 0, 6],
-    [-8, 8, 4, true],
-    [0, -16, 7],
-    [0, -8, 8],
-    [0, 0, 8, true],
-    [0, 8, 7, true],
-    [8, -16, 9],
-    [8, -8, 10],
-    [8, 0, 10, true],
-    [8, 8, 9, true],
-    [16, -16, 11],
-    [16, -8, 12],
-    [16, 0, 12, true],
-    [16, 8, 11, true]
-  ],
-  fa201: grid(6, 6, -24, -24, (r, c) => r * 16 + c),
-  fa292: grid(5, 5, -20, -16, (r, c) => [0, 5, 16, 21, 32][r] + c),
-  fa2f7: [[-4, -16, 0], [-4, -8, 1], [-4, 0, 1, true], [-4, 8, 0, true]],
-  fa308: [
-    [-8, -24, 0],
-    [-8, -16, 1],
-    [0, -24, 2],
-    [0, -16, 3],
-    [-8, 8, 1, true],
-    [-8, 16, 0, true],
-    [0, 8, 3, true],
-    [0, 16, 2, true]
-  ],
-  fa329: [
-    [-8, -40, 0],
-    [-8, -32, 1],
-    [-8, -24, 2],
-    [0, -40, 16],
-    [0, -32, 17],
-    [0, -24, 18],
-    [-8, 16, 2, true],
-    [-8, 24, 1, true],
-    [-8, 32, 0, true],
-    [0, 16, 18, true],
-    [0, 24, 17, true],
-    [0, 32, 16, true]
-  ]
-};
-var FRAMES = {
-  1: { base: 150, oam: OAM.fa17e },
-  2: { base: 152, oam: OAM.fa17e },
-  3: { base: 154, oam: OAM.fa17e },
-  4: { base: 12, oam: OAM.fa18f },
-  5: { base: 14, oam: OAM.fa18f },
-  6: { base: 60, oam: OAM.fa18f },
-  7: { base: 96, oam: OAM.fa1b0 },
-  8: { base: 112, oam: OAM.fa1b0 },
-  9: { base: 128, oam: OAM.fa1b0 },
-  11: { base: 0, oam: OAM.fa201 },
-  12: { base: 6, oam: OAM.fa201 },
-  13: { base: 198, oam: OAM.fa292 },
-  14: { base: 109, oam: OAM.fa2f7 },
-  15: { base: 240, oam: OAM.fa308 },
-  16: { base: 244, oam: OAM.fa308 },
-  17: { base: 248, oam: OAM.fa308 },
-  18: { base: 156, oam: OAM.fa329 },
-  19: { base: 236, oam: OAM.fa329 }
-};
-function frameBox(id) {
-  const oam = FRAMES[id].oam;
-  const dx = Math.min(...oam.map((e) => e[1]));
-  const dy = Math.min(...oam.map((e) => e[0]));
-  const w = Math.max(...oam.map((e) => e[1])) + 8 - dx;
-  const h = Math.max(...oam.map((e) => e[0])) + 8 - dy;
-  return { dx, dy, w, h };
-}
-var FRAMESETS = {
-  1: { steps: [[1, 4], [2, 4], [3, 4]], loop: true },
-  2: { steps: [[4, 4], [5, 4], [6, 4]], loop: true },
-  3: { steps: [[7, 4], [8, 4], [9, 4]], loop: true },
-  5: { steps: [[11, 32]] },
-  6: { steps: [[12, 32]] },
-  7: { steps: [[13, 32]] },
-  8: { steps: [[14, 32]] },
-  9: { steps: [[15, 31], [17, 2], [15, 2], [17, 2], [15, 31], [17, 2], [15, 23], [16, 32]] },
-  10: { steps: [[18, 4], [19, 4]], loop: true }
-};
-var SPAWN = {
-  1: [1, "static"],
-  2: [2, "static"],
-  3: [3, "static"],
-  5: [5, "surf"],
-  6: [6, "fly"],
-  7: [7, "static"],
-  8: [8, "bar"],
-  9: [9, "static"],
-  10: [10, "static"]
-};
-var SPEED_BARS = [
-  [208, 32, 2],
-  [240, 48, 4],
-  [208, 64, 6],
-  [192, 80, 8],
-  [224, 96, 8],
-  [192, 112, 6],
-  [224, 128, 4],
-  [240, 144, 2]
-];
-var WAVE = [0, 0, 1, 2, 2, 3, 3, 3, 4, 3, 3, 3, 2, 2, 1, 0, 0, 0, -1, -2, -2, -3, -3, -3, -4, -3, -3, -3, -2, -2, -1, 0];
-var STROBE = Array.from({ length: 51 }, (_, i) => i % 4 === 1 || i % 4 === 2 ? 192 : 228);
-var FADE = [228, 144, 144, 64, 64, 0, 0];
-function bob(phase) {
-  const a = phase % 64;
-  const v = Math.floor(8 * Math.sin(Math.PI * (a % 32) / 32));
-  return a < 32 ? v : -v;
-}
-var BG_ROWS = 20;
-function bgpShades(bgp) {
-  return [0, 1, 2, 3].map((i) => bgp >> 2 * i & 3);
-}
-var hex2 = (n) => n.toString(16).padStart(2, "0");
-var STROBE_FRAMES = [15, 16, 17, 18, 19];
-var YELLOW_INTRO_PICTURES = [
-  { name: "bg_letter", bg: "letter" },
-  { name: "bg_letter_s1", bg: "letter", shades: bgpShades(144) },
-  { name: "bg_letter_s2", bg: "letter", shades: bgpShades(64) },
-  { name: "bg_kick", bg: "kick" },
-  { name: "bg_sea", bg: "sea" },
-  { name: "bg_sky0", bg: "sky", cloud: 0 },
-  { name: "bg_sky1", bg: "sky", cloud: 1 },
-  { name: "bg_close", bg: "close" },
-  { name: "bg_close_k", bg: "close", shades: bgpShades(192) },
-  ...Object.keys(FRAMES).map((k) => ({ name: `obj_${hex2(Number(k))}`, frame: Number(k) })),
-  { name: "obj_0d_s1", frame: 13, shades: bgpShades(144) },
-  { name: "obj_0d_s2", frame: 13, shades: bgpShades(64) },
-  ...STROBE_FRAMES.map((f) => ({ name: `obj_${hex2(f)}_k`, frame: f, shades: bgpShades(192) }))
-];
-var BEACH2 = new Set(["bg_kick", "bg_sea", "bg_sky0", "bg_sky1", "obj_0b", "obj_0c", "obj_0e"]);
-var SETUP_DELAY = 3;
-var HEAD_FRAMES = 2;
-
-class YellowIntroScenes {
-  done = false;
-  scene = 0;
-  timer = 0;
-  seq = 0;
-  scx = 0;
-  bgp = 228;
-  bgName = "bg_letter";
-  waveT = 0;
-  cloud = 0;
-  objects = [];
-  delay = HEAD_FRAMES;
-  then = () => this.start(0);
-  spawn(id, x, y) {
-    const [frameset, motion] = SPAWN[id];
-    const o = {
-      id,
-      frameset,
-      motion,
-      x,
-      y,
-      yoff: 0,
-      step: 0,
-      wait: FRAMESETS[frameset].steps[0][1],
-      held: false,
-      fieldB: 0,
-      fieldC: 0
-    };
-    this.objects.push(o);
-    return o;
-  }
-  setup(scene) {
-    this.objects = [];
-    this.bgp = 0;
-    this.delay = SETUP_DELAY;
-    this.then = () => {
-      this.bgp = 228;
-      this.start(scene);
-    };
-  }
-  start(scene) {
-    this.scx = 0;
-    switch (scene) {
-      case 0:
-        this.bgName = "bg_letter";
-        this.spawn(1, 88, 88);
-        this.timer = 130;
-        this.scene = 1;
-        break;
-      case 2:
-        this.bgName = "bg_kick";
-        for (const [x, y, speed] of SPEED_BARS)
-          this.spawn(8, x, y).fieldB = speed;
-        this.timer = 128;
-        this.scene = 3;
-        break;
-      case 4:
-        this.bgName = "bg_letter";
-        this.spawn(2, 88, 88);
-        this.timer = 128;
-        this.scene = 5;
-        break;
-      case 6:
-        this.bgName = "bg_sea";
-        this.waveT = 0;
-        this.spawn(5, 248, 64);
-        this.timer = 88;
-        this.scene = 7;
-        break;
-      case 8:
-        this.bgName = "bg_letter";
-        this.spawn(3, 88, 88);
-        this.timer = 128;
-        this.scene = 9;
-        break;
-      case 10:
-        this.bgName = "bg_sky0";
-        this.cloud = 0;
-        this.spawn(6, 88, 152);
-        this.timer = 128;
-        this.scene = 11;
-        break;
-      case 12:
-        this.bgName = "bg_close";
-        this.spawn(9, 88, 96);
-        this.timer = 128;
-        this.scene = 13;
-        break;
-      default:
-        this.scene = scene;
-    }
-  }
-  update() {
-    if (this.done)
-      return;
-    if (this.delay > 0) {
-      if (--this.delay === 0) {
-        const then = this.then;
-        this.then = null;
-        then?.();
-      }
-      this.updateObjects();
-      return;
-    }
-    switch (this.scene) {
-      case 1:
-      case 5:
-      case 9:
-      case 13:
-        if (this.timer > 0)
-          this.timer--;
-        else if (this.scene === 13) {
-          this.spawn(10, 88, 104);
-          this.seq = 0;
-          this.scene = 14;
-        } else
-          this.setup(this.scene + 1);
-        break;
-      case 3:
-        if (this.timer > 0) {
-          this.timer--;
-          if (this.scx !== 104)
-            this.scx += 4;
-        } else
-          this.setup(4);
-        break;
-      case 7:
-        if (this.timer > 0) {
-          this.timer--;
-          this.scx = (this.scx + 2) % 256;
-          this.waveT++;
-        } else
-          this.setup(8);
-        break;
-      case 11:
-        if (this.timer > 0) {
-          if (this.timer % 8 === 0)
-            this.cloud = Math.floor(this.timer / 8) % 2;
-          this.bgName = `bg_sky${this.cloud}`;
-          this.timer--;
-        } else
-          this.setup(12);
-        break;
-      case 14: {
-        const v = STROBE[this.seq++];
-        if (v !== undefined)
-          this.bgp = v;
-        else {
-          this.objects = [];
-          this.bgName = "bg_letter";
-          this.delay = 3;
-          this.then = () => {
-            this.bgp = 228;
-            this.spawn(7, 88, 88);
-            this.timer = 40;
-            this.scene = 15;
-          };
-        }
-        break;
-      }
-      case 15:
-        if (this.timer > 0) {
-          if (this.timer % 4 === 0)
-            this.bgp = this.bgp === 228 ? 231 : 228;
-          this.timer--;
-        } else {
-          this.bgp = 228;
-          this.seq = 0;
-          this.scene = 16;
-        }
-        break;
-      case 16: {
-        const v = FADE[this.seq++];
-        if (v !== undefined)
-          this.bgp = v;
-        else {
-          this.timer = 64;
-          this.scene = 17;
-        }
-        break;
-      }
-      case 17:
-        if (this.timer > 0)
-          this.timer--;
-        else
-          this.done = true;
-        break;
-    }
-    this.updateObjects();
-  }
-  updateObjects() {
-    for (const o of this.objects) {
-      if (o.motion === "bar") {
-        o.x = (o.x + o.fieldB) % 256;
-      } else if (o.motion === "surf") {
-        if (o.x !== 88) {
-          o.x = (o.x + 4) % 256;
-          o.y = (o.x + 1) % 256;
-        }
-      } else if (o.motion === "fly") {
-        if (o.fieldB === 0) {
-          if (o.y !== 88)
-            o.y = (o.y - 2 + 256) % 256;
-          else
-            o.fieldB = 1;
-        }
-        if (o.fieldB === 1)
-          o.yoff = bob(o.fieldC++);
-      }
-      if (o.held)
-        continue;
-      if (--o.wait > 0)
-        continue;
-      const set2 = FRAMESETS[o.frameset];
-      if (o.step >= set2.steps.length - 1) {
-        if (set2.loop) {
-          o.step = 0;
-          o.wait = set2.steps[0][1];
-        } else
-          o.held = true;
-        continue;
-      }
-      o.step++;
-      o.wait = set2.steps[o.step][1];
-    }
-  }
-  frame() {
-    const bgp = this.bgp;
-    const suffix = bgp === 144 ? "_s1" : bgp === 64 ? "_s2" : bgp === 192 ? "_k" : "";
-    const white = bgp === 0;
-    let bg = null;
-    if (!white) {
-      const name = suffix && `${this.bgName}${suffix}` in NAMED ? `${this.bgName}${suffix}` : this.bgName;
-      const dy = this.bgName === "bg_sea" ? WAVE[this.waveT % 32] : 0;
-      bg = { name, scx: this.scx, dy };
-    }
-    const objects = [];
-    if (!white) {
-      for (const o of this.objects) {
-        const id = FRAMESETS[o.frameset].steps[o.step][0];
-        const box = frameBox(id);
-        const base = `obj_${hex2(id)}`;
-        const name = suffix && `${base}${suffix}` in NAMED ? `${base}${suffix}` : base;
-        let x = (o.x + box.dx - 8 + 512) % 256;
-        let y = (o.y + o.yoff + box.dy - 16 + 512) % 256;
-        if (x > 160)
-          x -= 256;
-        if (y > 144)
-          y -= 256;
-        if (x >= 160 || x + box.w <= 0 || y >= 144 || y + box.h <= 0)
-          continue;
-        objects.push({ name, x, y, w: box.w, h: box.h });
-      }
-    }
-    return { bg, black: bgp === 231, objects };
-  }
-}
-var NAMED = Object.fromEntries(YELLOW_INTRO_PICTURES.map((p) => [p.name, true]));
-
-// voxelmon/game/ui/intro.ts
-var UI_SCALE2 = VIEW_H / GB_H;
-var UI_ORIGIN_X2 = (VIEW_W - GB_W * UI_SCALE2) / 2;
-var sx = (gx) => Math.round(UI_ORIGIN_X2 + gx * UI_SCALE2);
-var sy = (gy) => Math.round(gy * UI_SCALE2);
-var sw = (gw) => Math.round(gw * UI_SCALE2);
-var gbX = sx;
-var gbY = sy;
-var gbW = sw;
-var COPYRIGHT_PREFIX = [0, 1, 2, 1, 3, 1, 4];
-var COPYRIGHT_PREFIX_YELLOW = [0, 1, 2, 3, 1, 2, 4];
-var COPYRIGHT_GAMEFREAK = [0, 1, 2, 3, 4, 5, 6, 7, 8];
-var COPYRIGHT_FRAMES = 180;
-var STAR_START = 64;
-var STAR_FRAMES = 40;
-var FLASH_START = STAR_START + STAR_FRAMES;
-var FLASH_FRAMES = 30;
-var WAVES_START = FLASH_START + FLASH_FRAMES;
-var WAVE_FRAMES = 24;
-var WAVES_END = WAVES_START + 6 * WAVE_FRAMES;
-var SPLASH_FRAMES = WAVES_END + 40;
-var LOGO_X = 72;
-var LOGO_Y = 56;
-var TEXT_X2 = 40;
-var TEXT_Y = 80;
-var STAR_WAVES = [
-  [40, 56, 80, 112],
-  [48, 64, 88, 104],
-  [44, 68, 76, 92],
-  [52, 84, 100, 108]
-];
-var COPY_PREFIX = [0, 1, 2, 1, 3, 1, 4];
-var COPY_NINTENDO = [5, 6, 7, 8, 9, 10];
-var COPY_CREATURES = [11, 12, 13, 14, 15, 16, 17, 18];
-var COPY_GAMEFREAK = [0, 1, 2, 3, 4, 5, 6, 7, 8];
-var COPY_ROWS = [56, 72, 88];
-var FLAP_W = 88;
-var FLAP_H = 80;
-var FLAP_AT = [
-  { x: 0, y: 0, dx: -1, dy: -1 },
-  { x: GB_W - FLAP_W, y: 0, dx: 1, dy: -1 },
-  { x: 0, y: GB_H - FLAP_H, dx: -1, dy: 1 },
-  { x: GB_W - FLAP_W, y: GB_H - FLAP_H, dx: 1, dy: 1 }
-];
-var BANNER_AT = 6;
-var BANNER_POP = 24;
-var BANNER_BLINK = 8;
-var WHOOSH_AT = 56;
-var BREACH_AT = 82;
-var BURST_FRAMES = 46;
-var ZOOM_FRAMES = 80;
-var TEAR_FRAMES = BURST_FRAMES + ZOOM_FRAMES;
-var FIST_AT = 8;
-function burstOf(tear) {
-  return Math.max(0, Math.min(1, tear / BURST_FRAMES));
-}
-function zoomOf(tear) {
-  return Math.max(0, Math.min(1, (tear - BURST_FRAMES) / ZOOM_FRAMES));
-}
-function fistScale(tear) {
-  if (tear < FIST_AT || tear > BURST_FRAMES)
-    return 0;
-  const u = (tear - FIST_AT) / (BURST_FRAMES - FIST_AT);
-  return 0.08 + Math.pow(u, 2.4) * 3.3;
-}
-function fistPop(tear) {
-  if (tear < FIST_AT || tear > BURST_FRAMES)
-    return 0;
-  const u = (tear - FIST_AT) / (BURST_FRAMES - FIST_AT);
-  return Math.min(1, u * 1.4);
-}
-var ANIM = [
-  [[0, 0], [-2, 2], [-1, 2], [1, 2], [2, 2]],
-  [[0, 0], [-2, -2], [-1, -2], [1, -2], [2, -2]],
-  [[0, 0], [-12, 6], [-8, 6], [8, 6], [12, 6]],
-  [[0, 0], [-8, -4], [-4, -4], [4, -4], [8, -4]],
-  [[0, 0], [-8, 4], [-4, 4], [4, 4], [8, 4]],
-  [[0, 0], [2, 0], [2, 0], [0, 0]],
-  [[-8, -16], [-7, -14], [-6, -12], [-4, -10]]
-];
-var FIGHT = [
-  { move: "scrollIn", px: 80 },
-  { sfx: "Intro_Hip" },
-  { anim: 1 },
-  { sfx: "Intro_Hop" },
-  { anim: 2 },
-  { wait: 10 },
-  { sfx: "Intro_Hip" },
-  { anim: 1 },
-  { sfx: "Intro_Hop" },
-  { anim: 2 },
-  { wait: 30 },
-  { pose: 2 },
-  { sfx: "Intro_Raise" },
-  { move: "gengar", dx: -8 },
-  { wait: 30 },
-  { pose: 3 },
-  { sfx: "Intro_Crash" },
-  { move: "gengar", dx: 16 },
-  { sfx: "Intro_Hip" },
-  { frame: 2 },
-  { anim: 3 },
-  { wait: 30 },
-  { move: "gengar", dx: -8 },
-  { pose: 1 },
-  { wait: 60 },
-  { sfx: "Intro_Hip" },
-  { frame: 1 },
-  { anim: 4 },
-  { sfx: "Intro_Hop" },
-  { anim: 5 },
-  { wait: 20 },
-  { frame: 2 },
-  { anim: 6 },
-  { wait: 30 },
-  { sfx: "Intro_Lunge" },
-  { frame: 3 },
-  { anim: 7 },
-  { fade: 24 }
-];
-
-class IntroState {
-  game;
-  onDone;
-  kind = "intro";
-  phase = "copyright";
-  t = 0;
-  done = false;
-  gengarX = 104;
-  gengarY = 56;
-  nidoX = -8;
-  nidoY = 72;
-  pose = 1;
-  frame = 1;
-  op = 0;
-  opT = 0;
-  fade = 0;
-  tear = -1;
-  yellow;
-  constructor(game, onDone) {
-    this.game = game;
-    this.onDone = onDone;
-    this.yellow = gameVersion(game.data) === "yellow" ? new YellowIntroScenes : null;
-  }
-  page(key) {
-    return namedPage(this.game.data, "picIntro", key);
-  }
-  titleArt(key) {
-    return namedPage(this.game.data, "picTitle", key);
-  }
-  animPage() {
-    const a = this.game.data.atlas;
-    return a?.animPages?.["battleanim/46ee"] ?? -1;
-  }
-  finish() {
-    if (this.done)
-      return;
-    this.done = true;
-    this.game.audio?.stop();
-    this.game.pop();
-    this.onDone();
-  }
-  update() {
-    const p = this.game.input.pressed;
-    if (p.a || p.b || p.start) {
-      this.finish();
-      return;
-    }
-    this.t += 1;
-    if (this.tear >= 0)
-      this.tear += 1;
-    if (this.phase === "copyright") {
-      if (this.t >= COPYRIGHT_FRAMES)
-        this.start("splash");
-      return;
-    }
-    if (this.phase === "splash") {
-      if (this.t === STAR_START)
-        this.game.audio?.playSfx("Shooting_Star");
-      if (this.t >= SPLASH_FRAMES)
-        this.start("punch");
-      return;
-    }
-    if (this.phase === "punch") {
-      if (this.t === WHOOSH_AT)
-        this.game.audio?.playSfx("Intro_Whoosh");
-      if (this.t >= BREACH_AT) {
-        this.game.audio?.playSfx("Intro_Crash");
-        this.tear = 0;
-        this.start("fight");
-      }
-      return;
-    }
-    if (this.yellow) {
-      this.yellow.update();
-      if (this.yellow.done)
-        this.finish();
-      return;
-    }
-    this.fightStep();
-  }
-  start(phase) {
-    this.phase = phase;
-    this.t = 0;
-    if (phase === "fight") {
-      if (!this.yellow || !this.game.audio?.playOnce("Music_YellowIntro")) {
-        this.game.audio?.playOnce("Music_IntroBattle");
-      }
-    }
-  }
-  fightStep() {
-    for (;; ) {
-      const op = FIGHT[this.op];
-      if (!op) {
-        this.finish();
-        return;
-      }
-      if (op.sfx) {
-        this.game.audio?.playSfx(op.sfx);
-      } else if (op.pose !== undefined) {
-        this.pose = op.pose;
-      } else if (op.frame !== undefined) {
-        this.frame = op.frame;
-      } else if (op.move) {
-        if (this.opT % 2 === 0) {
-          if (op.move === "scrollIn") {
-            this.gengarX -= 2;
-            this.nidoX += 2;
-          } else {
-            this.gengarX += (op.dx ?? 0) > 0 ? 2 : -2;
-          }
-        }
-        this.opT += 1;
-        if (this.opT < (op.px ?? Math.abs(op.dx ?? 0)))
-          return;
-      } else if (op.anim !== undefined) {
-        const list2 = ANIM[op.anim - 1];
-        if (this.opT % 5 === 0) {
-          const d = list2[this.opT / 5];
-          if (d) {
-            this.nidoY += d[0];
-            this.nidoX += d[1];
-          }
-        }
-        this.opT += 1;
-        if (this.opT < list2.length * 5)
-          return;
-      } else if (op.wait !== undefined) {
-        this.opT += 1;
-        if (this.opT < op.wait)
-          return;
-      } else if (op.fade !== undefined) {
-        this.opT += 1;
-        this.fade = this.opT / op.fade;
-        if (this.opT >= op.fade)
-          this.finish();
-        return;
-      }
-      this.op += 1;
-      this.opT = 0;
-    }
-  }
-  paper(out) {
-    const page = this.page("white");
-    if (page < 0)
-      return;
-    out.push({ page, x: 0, y: 0, w: VIEW_W, h: VIEW_H });
-  }
-  gb(out, key, gy, gh) {
-    const page = this.page(key);
-    if (page < 0)
-      return;
-    out.push({ page, x: sx(0), y: sy(gy), w: sw(GB_W), h: sw(gh) });
-  }
-  bars(out) {
-    const black = this.page("black");
-    if (black < 0)
-      return;
-    out.push({ page: black, x: 0, y: 0, w: VIEW_W, h: sy(32) });
-    out.push({ page: black, x: 0, y: sy(GB_H - 32), w: VIEW_W, h: VIEW_H - sy(GB_H - 32) });
-  }
-  splashArt(out, dim) {
-    const logo = this.page(dim ? "gflogo_dim" : "gflogo");
-    if (logo >= 0) {
-      out.push({ page: logo, x: sx(LOGO_X), y: sy(LOGO_Y), w: sw(16), h: sw(24) });
-    }
-    const text = this.page("gftext");
-    if (text >= 0) {
-      out.push({ page: text, x: sx(TEXT_X2), y: sy(TEXT_Y), w: sw(80), h: sw(8) });
-    }
-  }
-  marquee(out, clock) {
-    const page = this.page("in3d");
-    if (page < 0 || clock < BANNER_AT)
-      return;
-    if (Math.floor(clock / BANNER_BLINK) % 2 !== 0)
-      return;
-    const W = 60, H = 16;
-    const pop = Math.min(1, (clock - BANNER_AT) / BANNER_POP);
-    out.push({
-      page,
-      x: sx((GB_W - W) / 2),
-      y: sy(36),
-      w: sw(W),
-      h: sw(H),
-      d: Math.round(pop * 160)
-    });
-  }
-  copyrightTiles(out) {
-    const strip = this.titleArt("copyright");
-    const gf = this.titleArt("gamefreak");
-    const row = (page, seq, x, y) => {
-      if (page < 0)
-        return;
-      seq.forEach((t, i) => out.push({ page, tile: t, x: x + i * 8, y, flags: 0 }));
-    };
-    const prefix = this.yellow ? [...COPYRIGHT_PREFIX_YELLOW] : COPY_PREFIX;
-    COPY_ROWS.forEach((y) => row(strip, prefix, 16, y));
-    row(strip, COPY_NINTENDO, 80, COPY_ROWS[0]);
-    row(strip, COPY_CREATURES, 80, COPY_ROWS[1]);
-    row(gf, COPY_GAMEFREAK, 80, COPY_ROWS[2]);
-  }
-  unbarred(y) {
-    return y >= 32 && y + 8 <= 112;
-  }
-  bigStar(out) {
-    const page = this.animPage();
-    if (page < 0)
-      return;
-    const n = this.t - STAR_START + 1;
-    const x = 152 - 4 * n;
-    const y = -16 + 4 * n;
-    for (const pair of [[3, 0], [19, 8]]) {
-      const tile = pair[0];
-      const dy = pair[1];
-      if (!this.unbarred(y + dy))
-        continue;
-      out.push({ page, tile, x, y: y + dy, flags: 0 });
-      out.push({ page, tile, x: x + 8, y: y + dy, flags: 1 });
-    }
-  }
-  fallingStars(out) {
-    const star = this.page("star");
-    const blink = this.page("star_blink");
-    if (star < 0)
-      return;
-    const substep = Math.floor((Math.min(this.t, WAVES_END) - WAVES_START) / 3);
-    const page = substep % 2 === 0 ? star : blink >= 0 ? blink : star;
-    STAR_WAVES.forEach((xs, w) => {
-      const spawn = w * 8;
-      if (substep < spawn)
-        return;
-      const y = 88 + (substep - spawn);
-      if (!this.unbarred(y))
-        return;
-      for (const x of xs)
-        out.push({ page, tile: 0, x, y, flags: 0 });
-    });
-  }
-  yellowArt(out) {
-    const f = this.yellow.frame();
-    if (f.black) {
-      const black = this.page("black");
-      if (black >= 0)
-        out.push({ page: black, x: 0, y: 0, w: VIEW_W, h: VIEW_H });
-    } else if (f.bg) {
-      const page = this.page(`yi_${f.bg.name}`);
-      if (page >= 0) {
-        for (let k = -1;k <= 1; k++) {
-          const gx = -f.bg.scx + k * 256;
-          if (sx(gx) >= VIEW_W || sx(gx + 256) <= 0)
-            continue;
-          out.push({ page, x: sx(gx), y: sy(f.bg.dy), w: sw(256), h: sw(BG_ROWS * 8) });
-        }
-      }
-    }
-    for (const o of f.objects) {
-      const page = this.page(`yi_${o.name}`);
-      if (page >= 0)
-        out.push({ page, x: sx(o.x), y: sy(o.y), w: sw(o.w), h: sw(o.h) });
-    }
-  }
-  fightArt(out) {
-    const nido = this.page(`nido${this.frame}`);
-    if (nido >= 0) {
-      out.push({ page: nido, x: sx(this.nidoX), y: sy(this.nidoY), w: sw(48), h: sw(48) });
-    }
-    const gengar = this.page(`gengar${this.pose}`);
-    if (gengar >= 0) {
-      out.push({ page: gengar, x: sx(this.gengarX), y: sy(this.gengarY), w: sw(56), h: sw(56) });
-    }
-  }
-  tearArt(out) {
-    const tear = Math.max(0, this.tear);
-    const burst = burstOf(tear);
-    const zoom = zoomOf(tear);
-    const piece = (kind, fly, grow) => {
-      FLAP_AT.forEach((at, q) => {
-        const page = this.page(`${kind}${q}`);
-        if (page < 0)
-          return;
-        const gx = at.dx < 0 ? at.x : at.x + FLAP_W - FLAP_W * grow;
-        const gy = at.dy < 0 ? at.y : at.y + FLAP_H - FLAP_H * grow;
-        const quad = {
-          page,
-          x: sx(gx) + Math.round(at.dx * fly),
-          y: sy(gy) + Math.round(at.dy * fly * 0.75),
-          w: sw(FLAP_W * grow),
-          h: sw(FLAP_H * grow)
-        };
-        if (quad.x >= VIEW_W || quad.y >= VIEW_H)
-          return;
-        if (quad.x + quad.w <= 0 || quad.y + quad.h <= 0)
-          return;
-        out.push(quad);
-      });
-    };
-    if (zoom < 1)
-      piece("flap", zoom * zoom * 700, 1 + zoom * 2.2);
-    if (zoom < 1) {
-      piece("patch", Math.pow(burst, 0.75) * 120 + zoom * zoom * 760, 1 + burst * 0.2 + zoom * 2.4);
-    }
-    const scale = fistScale(tear);
-    if (scale <= 0)
-      return;
-    const fist = this.page("fist");
-    if (fist < 0)
-      return;
-    const size = Math.round(VIEW_H * scale);
-    const pop = fistPop(tear);
-    const away = pop * pop * pop;
-    out.push({
-      page: fist,
-      x: Math.round(VIEW_W / 2 - size / 2 - away * 150),
-      y: Math.round(VIEW_H / 2 - size / 2 + away * 90),
-      w: size,
-      h: size,
-      d: Math.round(pop * 256)
-    });
-  }
-  view() {
-    const pics = [];
-    const tiles = [];
-    this.paper(pics);
-    if (this.phase === "copyright") {
-      this.copyrightTiles(tiles);
-    } else if (this.phase === "splash") {
-      if (this.t >= STAR_START) {
-        const flashing = this.t >= FLASH_START && this.t < FLASH_START + FLASH_FRAMES;
-        this.splashArt(pics, flashing && Math.floor((this.t - FLASH_START) / 5) % 2 === 0);
-      }
-      if (this.t >= STAR_START && this.t < FLASH_START)
-        this.bigStar(tiles);
-      if (this.t >= WAVES_START)
-        this.fallingStars(tiles);
-      this.bars(pics);
-    } else if (this.phase === "punch") {
-      this.tearArt(pics);
-      this.marquee(pics, this.t);
-      this.bars(pics);
-    } else {
-      const bursting = this.tear >= 0 && burstOf(this.tear) < 1;
-      const tearing = this.tear >= 0 && this.tear <= TEAR_FRAMES;
-      if (bursting)
-        this.gb(pics, "black", 0, GB_H);
-      else if (this.yellow)
-        this.yellowArt(pics);
-      else
-        this.fightArt(pics);
-      if (tearing)
-        this.tearArt(pics);
-      if (bursting)
-        this.marquee(pics, BREACH_AT + this.tear);
-      if (!this.yellow || tearing)
-        this.bars(pics);
-      if (this.fade > 0) {
-        const white = this.page("white");
-        if (white >= 0 && this.fade >= 2 / 3) {
-          pics.push({ page: white, x: 0, y: 0, w: VIEW_W, h: VIEW_H });
-        }
-      }
-    }
-    return { phase: this.phase, pics, tiles };
   }
 }
 
