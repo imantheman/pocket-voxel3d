@@ -93,7 +93,16 @@ fn plan_key(map_id: u32, px: (f32, f32)) -> PlanKey {
             (px.0 / CHUNK_PX as f32).floor() as i32,
             (px.1 / CHUNK_PX as f32).floor() as i32,
         )),
+        flat: false,
     }
+}
+
+/// The read VIEW 2D wants (spec flatWorld): everything but the vertex and
+/// index pools. A flat build reads only the chunk records' bounds, and the
+/// pools are 80-90% of every pak -- Saffron's 11 MB is 10 MB of them, two
+/// seconds of SD card on a first visit for a world nobody sees.
+fn flat_key(map_id: u32) -> PlanKey {
+    PlanKey { map_id, center: None, flat: true }
 }
 
 /// Identifies the geometry a planned read kept: the map, and the chunk the
@@ -103,6 +112,9 @@ fn plan_key(map_id: u32, px: (f32, f32)) -> PlanKey {
 struct PlanKey {
     map_id: u32,
     center: Option<(i32, i32)>,
+    /// Read for VIEW 2D: the pools left out (zeros), so only a flat build
+    /// can be served from it.
+    flat: bool,
 }
 /// The resident paks, most recently used first.
 ///
@@ -340,8 +352,11 @@ unsafe fn load_map_pak(name: &str, want: Option<PlanKey>) -> bool {
             && match (c.plan, want) {
                 (None, _) => true, // read whole: covers anything
                 (Some(_), None) => false, // a planned copy cannot serve a full read
+                // a flat want takes any copy of the map; a flat copy serves
+                // only a flat want
                 (Some(a), Some(b)) => {
-                    a.map_id == b.map_id && (a.center.is_none() || a.center == b.center)
+                    a.map_id == b.map_id
+                        && (b.flat || (!a.flat && (a.center.is_none() || a.center == b.center)))
                 }
             }
     };
@@ -358,6 +373,13 @@ unsafe fn load_map_pak(name: &str, want: Option<PlanKey>) -> bool {
     // A read-ahead already in flight for THIS map: finish it rather than
     // throw away the megabytes it has and start the file again. Crossing a
     // seam before it completed used to cost the whole read twice over.
+    //
+    // Not for a flat read: finishing a whole-file read-ahead can cost several
+    // times the flat read it would replace, so it is dropped instead.
+    let flat_want = want.is_some_and(|k| k.flat);
+    if flat_want && PREFETCH.as_ref().is_some_and(|pf| pf.name == name) {
+        PREFETCH = None;
+    }
     let adopted = match PREFETCH.as_ref() {
         Some(pf) if pf.name == name => PREFETCH.take(),
         _ => None,
@@ -425,7 +447,7 @@ unsafe fn load_map_pak(name: &str, want: Option<PlanKey>) -> bool {
         ));
         (k.map_id, px)
     });
-    let Some(v) = map_pak(&path, plan_for) else {
+    let Some(v) = map_pak(&path, plan_for, flat_want) else {
         println!("pak missing: {}", name);
         return false;
     };
@@ -453,7 +475,7 @@ unsafe fn load_map_pak(name: &str, want: Option<PlanKey>) -> bool {
                 let chunks = &p.chunks[map.first as usize..(map.first + map.count) as usize];
                 let (_, huge, _) = build_order(chunks, None);
                 if !huge {
-                    plan = Some(PlanKey { map_id: k.map_id, center: None });
+                    plan = Some(PlanKey { map_id: k.map_id, center: None, flat: k.flat });
                 }
             }
             // Only now drop a stale copy of the SAME map -- one read under
@@ -972,12 +994,14 @@ fn map_pak_packed(
 fn map_pak(
     path: &str,
     plan_for: Option<(u32, Option<(f32, f32)>)>,
+    // VIEW 2D (flat_key): the pools are left as zeros and nothing is planned
+    flat: bool,
 ) -> Option<Vec<u8>> {
     use std::io::{Read, Seek, SeekFrom};
     let mut f = std::fs::File::open(path).ok()?;
     let len = f.metadata().ok()?.len() as usize;
     // A map too big to hold whole is packed down to what it will draw.
-    if len / 1024 >= COMPACT_MIN_KB {
+    if len / 1024 >= COMPACT_MIN_KB && !flat {
         if let Some((map_id, px)) = plan_for {
             if let Some(v) = map_pak_packed(path, len, map_id, px) {
                 return Some(v);
@@ -1057,7 +1081,7 @@ fn map_pak(
     // (verts_at, indices_at, section end) -- header words 8 and 16 are the
     // two pool offsets, relative to the payload start.
     let mut pools: Option<(usize, usize, usize)> = None;
-    if plan_for.is_some() {
+    if plan_for.is_some() || flat {
         if let Some((c_off, c_end)) = section(TAG_CHNK) {
             let mut h = [0u8; 32];
             if f.seek(SeekFrom::Start(c_off as u64)).is_ok() && f.read_exact(&mut h).is_ok() {
@@ -1088,6 +1112,9 @@ fn map_pak(
     }
     if !read_runs(&mut f, &mut v, &keep) {
         return None;
+    }
+    if flat {
+        return Some(v);
     }
 
     // Nothing to plan: the pools were read above along with everything else.
@@ -4838,7 +4865,11 @@ fn main() {
                                 // this frame -- the same value `center` is
                                 // assigned a few lines below, and the same one
                                 // the build will plan against.
-                                let key = plan_key(want, sc.cam_px());
+                                let key = if sc.flat_world && !unsafe { LEGACY_ZONE } {
+                                    flat_key(want)
+                                } else {
+                                    plan_key(want, sc.cam_px())
+                                };
                                 LOAD_JS_MS = now_ms().wrapping_sub(t_js);
                                 let t_pak = now_ms();
                                 if unsafe { load_map_pak(nm, Some(key)) } {
@@ -5059,7 +5090,11 @@ fn main() {
             if let Some((id, nm)) = map_index.get(map_i) {
                 // The same position build_map is about to be handed, so the
                 // geometry read is exactly the geometry built.
-                let key = guest_drive.then(|| plan_key(*id, (center[0], center[2])));
+                // (VIEW 2D: the flat read, no pools)
+                let flat = unsafe { voxel::scene().flat_world && !LEGACY_ZONE };
+                let key = guest_drive.then(|| {
+                    if flat { flat_key(*id) } else { plan_key(*id, (center[0], center[2])) }
+                });
                 if unsafe { load_map_pak(nm, key) } {
                     pak_static = unsafe { cur_pak() };
                 }
