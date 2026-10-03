@@ -273,7 +273,8 @@ pub unsafe extern "C" fn voxel_op_text(code: u32, args: *const i32, n: i32,
 /// `lcdObjsBin`, `lcdLinesBin`): the guest's arrays as they are, no hex.
 /// `which` 0 is the cells (p1 the u16 tile ids, p2 the attributes), 1 the
 /// objects (p1 `a0` of them, four i16s each), 2 the lines (a0 the target,
-/// p1 the 144 values).
+/// p1 the 144 values), 3 the canvas's objects (as 1), 4 the under layer's
+/// cells (as 0, into the size lcdUnder set).
 #[no_mangle]
 pub unsafe extern "C" fn voxel_lcd_bin(which: u32, a0: i32, p1: *const u8, l1: u32, p2: *const u8, l2: u32) {
     if p1.is_null() {
@@ -306,6 +307,14 @@ pub unsafe extern "C" fn voxel_lcd_bin(which: u32, a0: i32, p1: *const u8, l1: u
             }
             let packed = core::slice::from_raw_parts(p1 as *const i16, l1 as usize / 2);
             lcd.set_under_objs(packed, a0.max(0) as usize);
+        }
+        4 => {
+            if p2.is_null() || (p1 as usize) & 1 != 0 {
+                return;
+            }
+            let cells = core::slice::from_raw_parts(p1 as *const u16, l1 as usize / 2);
+            let attrs = core::slice::from_raw_parts(p2, l2 as usize);
+            lcd.set_under(cells, attrs);
         }
         _ => {}
     }

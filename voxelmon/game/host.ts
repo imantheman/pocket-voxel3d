@@ -177,6 +177,8 @@ export interface VoxelHost {
   lcdUnderView?(w: number, h: number, wide: number): void;
   /** The canvas's objects (the 3DS shim's), packed as lcdObjsBin's. */
   lcdUnderObjsBin?(packed: Int16Array, count: number): void;
+  /** The under layer's cells at once (the 3DS shim's), after lcdUnder. */
+  lcdUnderBin?(cells: Uint16Array, attrs: Uint8Array): void;
   /** Debug (the 3DS shim's): the next frame's top screen to the card. */
   screenshot?(): void;
   /** voxel-spec.ts flatWorld: the 3D world is not seen; build no meshes. */

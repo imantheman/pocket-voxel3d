@@ -110,14 +110,15 @@ static const uint8_t *typed_bytes(JSContext *ctx, JSValueConst v, size_t *len) {
 
 /* The Gold screen's typed-array ops, `magic` which (voxel.rs voxel_lcd_bin):
    0 lcdCellsBin(cells, attrs), 1 lcdObjsBin(packed, n),
-   2 lcdLinesBin(target, lines). */
+   2 lcdLinesBin(target, lines), 3 lcdUnderObjsBin(packed, n),
+   4 lcdUnderBin(cells, attrs). */
 static JSValue vox_lcdbin(JSContext *ctx, JSValueConst t, int c, JSValueConst *v, int magic) {
     (void)t;
     if (c < 2) return JS_UNDEFINED;
     size_t l1 = 0, l2 = 0;
     int32_t a0 = 0;
     const uint8_t *p1 = NULL, *p2 = NULL;
-    if (magic == 0) {
+    if (magic == 0 || magic == 4) {
         p1 = typed_bytes(ctx, v[0], &l1);
         p2 = typed_bytes(ctx, v[1], &l2);
     } else if (magic == 1 || magic == 3) {
@@ -356,6 +357,9 @@ int qjs_register_voxel(JSContext *ctx) {
     /* VIEW 2D's canvas (core lcd.rs canvas_on): its size, and its objects */
     JS_SetPropertyStr(ctx, o, "lcdUnderObjsBin",
         JS_NewCFunctionMagic(ctx, vox_lcdbin, "lcdUnderObjsBin", 2, JS_CFUNC_generic_magic, 3));
+    /* VIEW 2D's under layer, the whole grid at once (no hex rows) */
+    JS_SetPropertyStr(ctx, o, "lcdUnderBin",
+        JS_NewCFunctionMagic(ctx, vox_lcdbin, "lcdUnderBin", 2, JS_CFUNC_generic_magic, 4));
     add_num(ctx, o, "lcdUnderView", 113, 3);
     /* the bottom screen shown whole (core lcd.rs tall) */
     add_num(ctx, o, "lcdTall", 117, 1);

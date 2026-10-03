@@ -416,6 +416,18 @@ impl LcdScreen {
         changed
     }
 
+    /// The under layer's cells at once (`lcdUnderBin`, after LCD_UNDER sized
+    /// it): the tile ids and attributes as the guest holds them. As hex rows
+    /// (LCD_UNDER_ROW) a Goldenrod-sized grid was ~7 ms of QuickJS on the PC
+    /// -- most of a second on the console -- at every map change.
+    pub fn set_under(&mut self, cells: &[u16], attrs: &[u8]) {
+        let n = cells.len().min(attrs.len()).min(self.under.len()).min(self.under_attr.len());
+        self.under[..n].copy_from_slice(&cells[..n]);
+        self.under_attr[..n].copy_from_slice(&attrs[..n]);
+        self.under_serial = self.under_serial.wrapping_add(1);
+        self.serial = self.serial.wrapping_add(1);
+    }
+
     /// The canvas's objects at once (`lcdUnderObjsBin`), as set_objs takes
     /// the screen's. Bumps the serial only on a change.
     pub fn set_under_objs(&mut self, packed: &[i16], count: usize) -> bool {
@@ -1432,5 +1444,32 @@ mod tests {
         assert_eq!(lcd.colours[4], 0x7fff);
         assert_eq!(LcdScreen::abgr(lcd.colours[4]), 0xffff_ffff);
         assert_eq!(LcdScreen::abgr(lcd.colours[5]), 0xff00_00ff);
+    }
+
+    #[test]
+    fn the_under_layer_takes_its_cells_whole_as_hex_rows_would_set_them() {
+        let (w, h) = (6i32, 3i32);
+        let ids: alloc::vec::Vec<u16> = (0..(w * h) as u16).map(|i| 0x100 + i * 7).collect();
+        let attrs: alloc::vec::Vec<u8> = (0..(w * h) as u8).map(|i| i * 3).collect();
+        // the hex rows (LCD_UNDER_ROW), as the PC host sends them
+        let mut a = LcdScreen::default();
+        a.op(op::LCD_UNDER, &[w, h], None);
+        for y in 0..h {
+            let mut row = String::new();
+            for x in 0..w {
+                let j = (y * w + x) as usize;
+                row.push_str(&format!("{:04x}{:02x}", ids[j], attrs[j]));
+            }
+            a.op(op::LCD_UNDER_ROW, &[y, 0], Some(&row));
+        }
+        // the arrays at once (lcdUnderBin), as the 3DS shim sends them
+        let mut b = LcdScreen::default();
+        b.op(op::LCD_UNDER, &[w, h], None);
+        let (s0, u0) = (b.serial, b.under_serial);
+        b.set_under(&ids, &attrs);
+        assert_eq!(a.under, b.under);
+        assert_eq!(a.under_attr, b.under_attr);
+        assert_ne!(b.serial, s0);
+        assert_ne!(b.under_serial, u0);
     }
 }

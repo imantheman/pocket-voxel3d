@@ -44,8 +44,10 @@ import type { Palette4 } from "./lcd.ts";
 const ROOF_FIRST = 0x0a;
 const ROOF_COUNT = 9;
 /** Border tiles kept round a map's grid: the camera never sees further off
- *  (the widest canvas reaches 132 px past the screen's sides). */
-const PAD = 30;
+ *  (the widest canvas reaches 132 px past the screen's sides). A whole
+ *  number of blocks, so every block's rows land on word boundaries
+ *  (buildTiles). */
+const PAD = 32;
 
 
 const images = new Map<string, LcdImage | null>();
@@ -75,12 +77,52 @@ interface MapTiles {
   pal: Uint8Array;
   /** tileset tile -> screen tile id, as the cells were built */
   idOf: (tile: number) => number;
+  /** The map's blocks the grid was built from (a later visit's map may
+   *  have had a door or a barrier stamped on entry). */
+  blocks: number[];
 }
 
 let cached: MapTiles | null = null;
+/** Grids worked out lately, by cache key (map, time of day, roof):
+ *  walking back over a seam, or out of a door and in again, finds them. */
+const recent = new Map<string, MapTiles>();
+const RECENT_MAX = 6;
 
-function tilesFor(world: any, map: any, key: string): MapTiles | null {
+function sameBlocks(a: number[], b: number[] | undefined): boolean {
+  if (!b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+export function tilesFor(world: any, map: any, key: string): MapTiles | null {
   if (cached && cached.key === key && cached.map === map && cached.version === (map.version ?? 0)) return cached;
+  const hit = recent.get(key);
+  if (hit && sameBlocks(hit.blocks, map.blocks)) {
+    hit.map = map;
+    hit.version = map.version ?? 0;
+    recent.delete(key);
+    recent.set(key, hit);
+    return (cached = hit);
+  }
+  const t = buildTiles(world, map, key);
+  if (t) {
+    recent.delete(key);
+    recent.set(key, t);
+    if (recent.size > RECENT_MAX) recent.delete(recent.keys().next().value!);
+  }
+  return (cached = t);
+}
+
+/**
+ * The map's grid: screen tile ids and palette slots, PAD tiles of margin
+ * round it. Blocks first, on a block grid -- the border block, each
+ * connected map painted over its side (east, west, south, north: blockPast's
+ * order, the later winning a corner), the map's own -- then each block's
+ * sixteen tiles through per-tile tables. Worked out a tile at a time
+ * through mapTileAt this was ~13-41 ms under QuickJS on the PC, a second
+ * and more on the console, at every map change in VIEW 2D.
+ */
+function buildTiles(world: any, map: any, key: string): MapTiles | null {
   const [atlas, tileset] = world.atlasFor(map.def);
   const img = image(atlas?.image);
   if (!img || !tileset) return null;
@@ -89,20 +131,91 @@ function tilesFor(world: any, map: any, key: string): MapTiles | null {
   const idOf = (tile: number): number =>
     ((roof && tile >= ROOF_FIRST && tile < ROOF_FIRST + ROOF_COUNT ? roof.ids[tile - ROOF_FIRST] : img.ids[tile]) ?? 0) & 0xffff;
   const palOf = (tile: number): number => ((tilePal[tile] ?? 1) - 1) & 7;
-  // the margin: the connected maps' blocks, else the border block
-  const pw = (map.width ?? 0) * 4 + 2 * PAD;
-  const ph = (map.height ?? 0) * 4 + 2 * PAD;
-  const ids = new Uint16Array(pw * ph);
-  const pal = new Uint8Array(pw * ph);
-  for (let y = 0; y < ph; y++) {
-    for (let x = 0; x < pw; x++) {
-      const tile = mapTileAt(world, map, x - PAD, y - PAD);
-      ids[y * pw + x] = idOf(tile);
-      pal[y * pw + x] = palOf(tile);
+  const TILES = 512;
+  const idT = new Uint16Array(TILES);
+  const palT = new Uint8Array(TILES);
+  for (let k = 0; k < TILES; k++) {
+    idT[k] = idOf(k);
+    palT[k] = palOf(k);
+  }
+  const mw = map.width ?? 0;
+  const mh = map.height ?? 0;
+  const pw = mw * 4 + 2 * PAD;
+  const ph = mh * 4 + 2 * PAD;
+  // the block grid: every block a padded tile can fall in
+  const pb = Math.ceil(PAD / 4);
+  const gw = mw + 2 * pb;
+  const gh = mh + 2 * pb;
+  const grid = new Int32Array(gw * gh).fill(map.blockId(-1, -1));
+  const maps: Record<string, any> | undefined = world?.maps;
+  const conns = map.connections as Record<string, { map?: string; mapId?: string; offset?: number }> | undefined;
+  // a connected map's blocks onto the grid where they fall inside its side
+  const paint = (dir: string, place: (d: any, off: number, x: number, y: number) => [number, number], side: (bx: number, by: number) => boolean): void => {
+    const c = conns?.[dir];
+    if (!c || !maps) return;
+    const d = maps[(c.mapId ?? c.map) as string];
+    if (!d || !Array.isArray(d.blocks)) return;
+    const off = c.offset ?? 0;
+    for (let y = 0; y < d.height; y++) {
+      for (let x = 0; x < d.width; x++) {
+        const [bx, by] = place(d, off, x, y);
+        const gx = bx + pb;
+        const gy = by + pb;
+        if (gx < 0 || gy < 0 || gx >= gw || gy >= gh || !side(bx, by)) continue;
+        const b = d.blocks[y * d.width + x];
+        if (b !== undefined) grid[gy * gw + gx] = b;
+      }
+    }
+  };
+  paint("east", (_d, off, x, y) => [x + mw, y + off], (bx) => bx >= mw);
+  paint("west", (d, off, x, y) => [x - d.width, y + off], (bx) => bx < 0);
+  paint("south", (_d, off, x, y) => [x + off, y + mh], (_bx, by) => by >= mh);
+  paint("north", (d, off, x, y) => [x + off, y - d.height], (_bx, by) => by < 0);
+  const blocks: number[] = map.blocks ?? [];
+  for (let by = 0; by < mh; by++) {
+    const g0 = (by + pb) * gw + pb;
+    for (let bx = 0; bx < mw; bx++) grid[g0 + bx] = blocks[by * mw + bx] ?? 0;
+  }
+  // the grid out to tiles (no block: tile 0, as mapTileAt answers). PAD
+  // is whole blocks, so the block grid is the padded grid exactly and each
+  // block row is two words of ids and one of palettes, from per-block rows
+  // worked out the first time a block is met.
+  const ids = new Uint16Array(pw * ph).fill(idT[0]!);
+  const pal = new Uint8Array(pw * ph).fill(palT[0]!);
+  const ids32 = new Uint32Array(ids.buffer);
+  const pal32 = new Uint32Array(pal.buffer);
+  const tsBlocks: number[][] = map.tileset?.blocks ?? [];
+  const nb = tsBlocks.length;
+  const bIds = new Uint32Array(nb * 8);
+  const bPal = new Uint32Array(nb * 4);
+  const ready = new Uint8Array(nb);
+  const tid = (tile: number): number => (tile < TILES ? idT[tile]! : idOf(tile));
+  const tpal = (tile: number): number => (tile < TILES ? palT[tile]! : palOf(tile));
+  for (let gy = 0; gy < gh; gy++) {
+    for (let gx = 0; gx < gw; gx++) {
+      const b = grid[gy * gw + gx]!;
+      if (b < 0 || b >= nb) continue;
+      if (!ready[b]) {
+        const block = tsBlocks[b];
+        if (!block) continue;
+        ready[b] = 1;
+        for (let r = 0; r < 4; r++) {
+          const t0 = block[r * 4] ?? 0, t1 = block[r * 4 + 1] ?? 0, t2 = block[r * 4 + 2] ?? 0, t3 = block[r * 4 + 3] ?? 0;
+          bIds[b * 8 + r * 2] = (tid(t0) | (tid(t1) << 16)) >>> 0;
+          bIds[b * 8 + r * 2 + 1] = (tid(t2) | (tid(t3) << 16)) >>> 0;
+          bPal[b * 4 + r] = (tpal(t0) | (tpal(t1) << 8) | (tpal(t2) << 16) | (tpal(t3) << 24)) >>> 0;
+        }
+      }
+      const at = gy * 4 * pw + gx * 4; // the block's top-left cell
+      for (let r = 0; r < 4; r++) {
+        const cell = at + r * pw;
+        ids32[cell >> 1] = bIds[b * 8 + r * 2]!;
+        ids32[(cell >> 1) + 1] = bIds[b * 8 + r * 2 + 1]!;
+        pal32[cell >> 2] = bPal[b * 4 + r]!;
+      }
     }
   }
-  cached = { key, map, version: map.version ?? 0, pw, ph, ids, pal, idOf };
-  return cached;
+  return { key, map, version: map.version ?? 0, pw, ph, ids, pal, idOf, blocks: blocks.slice() };
 }
 
 /**

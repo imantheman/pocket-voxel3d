@@ -129,6 +129,8 @@ export interface VoxelNative {
   /** voxel-spec.ts lcdUnderView, and the canvas's objects packed as lcdObjsBin's. */
   lcdUnderView?(w: number, h: number, wide: number): void;
   lcdUnderObjsBin?(packed: Int16Array, count: number): void;
+  /** The under layer's cells at once, into the size lcdUnder set. */
+  lcdUnderBin?(cells: Uint16Array, attrs: Uint8Array): void;
   /** Debug: the next frame's top screen to the card (main.rs dump_top_screen). */
   screenshot?(): void;
   /** voxel-spec.ts flatWorld: the 3D world is not seen; build no meshes. */
@@ -388,6 +390,7 @@ export class QuickJsHost implements VoxelHost {
   // the 2D canvas only where the shim has it: Lcd.canvasSupported asks
   lcdUnderView = native.lcdUnderView ? (w: number, h: number, wide: number): void => native.lcdUnderView!(w, h, wide) : undefined;
   lcdUnderObjsBin = native.lcdUnderObjsBin ? (packed: Int16Array, count: number): void => native.lcdUnderObjsBin!(packed, count) : undefined;
+  lcdUnderBin = native.lcdUnderBin ? (cells: Uint16Array, attrs: Uint8Array): void => native.lcdUnderBin!(cells, attrs) : undefined;
   screenshot = native.screenshot ? (): void => native.screenshot!() : undefined;
   lcdTall(on: number): void {
     native.lcdTall?.(on);

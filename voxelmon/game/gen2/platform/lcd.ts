@@ -413,6 +413,11 @@ export class Lcd {
     this.underKey = key;
     const host = this.host;
     host.lcdUnder?.(w, h);
+    // the 3DS shim takes the arrays as they are
+    if (host.lcdUnderBin) {
+      host.lcdUnderBin(ids.length === w * h ? ids : ids.subarray(0, w * h), attrs.length === w * h ? attrs : attrs.subarray(0, w * h));
+      return;
+    }
     for (let y = 0; y < h; y++) {
       let hex = "";
       for (let x = y * w, end = x + w; x < end; x++) hex += hex4(ids[x]!) + hex2(attrs[x]!);
