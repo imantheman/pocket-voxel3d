@@ -494,6 +494,17 @@ export class WildBattle implements EffectBattle {
     this.queue.push({ text, choice: onChoose });
   }
 
+  /** sayChoice, right after the current queue item. */
+  protected sayChoiceNext(text: string, onChoose: (yes: boolean) => void): void {
+    this.insertNext({ text, choice: onChoose });
+  }
+
+  /**
+   * BATTLE STYLE SHIFT's offer is open: the party menu is a free switch
+   * (no foe move after it), and B just carries on to the foe's send-out.
+   */
+  protected shiftSwitch = false;
+
   act(fn: () => void): void {
     this.queue.push({ fn });
   }
@@ -2424,6 +2435,17 @@ export class WildBattle implements EffectBattle {
     if (pressedDir(input)) {
       // Two mons to a row on the gear, same as the moves.
       this.partyIndex = gridStep(input, this.partyIndex, GEAR_GRID_COLS, party.length);
+    } else if (this.shiftSwitch && (input.wasPressed("b") || input.wasPressed("a"))) {
+      // EnemySendOut's SHIFT arm: a healthy pick other than the mon out
+      // goes in for free, before the foe's next mon; B keeps the mon out
+      const mon = party[this.partyIndex];
+      if (input.wasPressed("a") && (!mon || mon.hp <= 0 || mon === this.player.mon)) return;
+      this.shiftSwitch = false;
+      this.phase = "messages";
+      if (input.wasPressed("a")) {
+        this.nextInsert = 0;
+        this.switchPlayer(mon);
+      }
     } else if (input.wasPressed("b")) {
       // ChooseNextMon loops until a healthy pick (:1856-1865): B only
       // backs out of a VOLUNTARY open -- to the item list when that is

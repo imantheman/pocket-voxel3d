@@ -5731,10 +5731,11 @@ describe("free movement", () => {
   test("the OPTIONS screen offers FREE and GRID", () => {
     const save: any = {};
     const st = new OptionsMenuState({ input: { pressed: {} }, pop() {}, save } as never);
-    const row = (st.view().rows as any[]).find((r) => r.label === "MOVEMENT");
+    const rows = st.view().rows as any[];
+    const row = rows.find((r) => r.label === "MOVEMENT");
     expect(row.choices).toEqual(["FREE", "GRID"]);
     expect(row.index).toBe(0); // free by default
-    (st as any).set(2, 1);
+    (st as any).set(rows.indexOf(row), 1);
     expect(save.options.movement).toBe("grid");
   });
 });
@@ -11042,5 +11043,69 @@ describe("the POKéDEX's AREA", () => {
     tap(game, VOX_BTN.b);
     const mew = open("MEW");
     expect(mew.places).toEqual([]);
+  });
+});
+
+
+describe("BATTLE STYLE", () => {
+  test("the OPTIONS screen offers SHIFT (default) and SET", () => {
+    const save: any = {};
+    const st = new OptionsMenuState({ input: { pressed: {} }, pop() {}, save } as never);
+    const rows = st.view().rows as any[];
+    const row = rows.find((r) => r.label === "BATTLE STYLE");
+    expect(row.choices).toEqual(["SHIFT", "SET"]);
+    expect(row.index).toBe(0);
+    (st as any).set(rows.indexOf(row), 1);
+    expect(save.options.battleStyle).toBe("set");
+  });
+
+  /** A two-mon trainer, the player's lead knocking out the first in one hit. */
+  function shiftBattle(style?: string) {
+    const lead = newMon(romData!, "MEWTWO", 70);
+    lead.moves = [{ id: "THUNDERBOLT", pp: 15 }];
+    const bench = newMon(romData!, "PIDGEY", 10);
+    const save: any = { party: [lead, bench], inventory: {}, player: { name: "RED", rival: "BLUE" }, options: { battleStyle: style } };
+    const b = new TrainerBattle(romData!, save, seededRng(5), "OPP_BUG_CATCHER", 1);
+    b.enter();
+    const input = { down: new Set<string>(), edges: new Set<string>(), isDown(k: string) { return this.down.has(k); }, wasPressed(k: string) { return this.edges.has(k); } };
+    const tickB = (btns: string[] = []) => {
+      input.edges = new Set(btns);
+      input.down = new Set(btns);
+      b.update(input as never);
+    };
+    return { b, save, lead, bench, tickB };
+  }
+
+  test.skipIf(!hasGen)('SHIFT: after the foe faints, "Will RED change POKéMON?" and a free switch', () => {
+    const { b, bench, tickB } = shiftBattle();
+    for (let i = 0; i < 600 && b.phase !== "menu"; i++) tickB(i % 2 ? [] : ["a"]);
+    tickB(["a"]); // FIGHT
+    tickB(["a"]); // THUNDERBOLT
+    let asked = false;
+    for (let i = 0; i < 1500 && b.phase !== "party"; i++) {
+      if ((b as any).choiceOpen) asked = true;
+      tickB(i % 2 ? [] : ["a"]); // A says YES
+    }
+    expect(asked).toBe(true);
+    expect(b.phase).toBe("party");
+    // pick the PIDGEY: slot 2
+    tickB(["right"]);
+    tickB(["a"]);
+    expect(b.player.mon).toBe(bench);
+    for (let i = 0; i < 1500 && b.phase !== "menu"; i++) tickB(i % 2 ? [] : ["a"]);
+    expect(b.enemy.mon).toBe((b as any).enemyParty[1]);
+    // the switch was free: the PIDGEY took no hit before the menu came back
+    expect(bench.hp).toBe(bench.stats.hp);
+    expect(b.messageLog.join("|")).toContain("change POKéMON?");
+  });
+
+  test.skipIf(!hasGen)("SET: no offer, the foe just sends out the next", () => {
+    const { b, tickB } = shiftBattle("set");
+    for (let i = 0; i < 600 && b.phase !== "menu"; i++) tickB(i % 2 ? [] : ["a"]);
+    tickB(["a"]);
+    tickB(["a"]);
+    for (let i = 0; i < 1500 && b.phase !== "menu"; i++) tickB(i % 2 ? [] : ["a"]);
+    expect(b.messageLog.join("|")).not.toContain("change POKéMON?");
+    expect(b.enemy.mon).toBe((b as any).enemyParty[1]);
   });
 });

@@ -186,7 +186,32 @@ export class TrainerBattle extends WildBattle {
     }
     this.enemyIndex = this.enemyParty.indexOf(next);
     markSeen(this.save, next.species); // BattleState.lua:3256/3945 — enemy send-out -> seen
+    if (this.offersShift()) {
+      // EnemySendOut, BATTLE STYLE SHIFT: TrainerAboutToUseText over a
+      // YES/NO; YES opens the party for a free switch first
+      const name = this.data.pokemon[next.species]?.name ?? next.species;
+      const text = ((this.data as { text?: Record<string, string> }).text?._TrainerAboutToUseText
+        ?? "{RAM:wTrainerName} is\nabout to use\v{RAM:wEnemyMonNick}!\fWill {PLAYER}\nchange POKéMON?")
+        .replace(/\{RAM:wTrainerName\}/g, this.trainerName)
+        .replace(/\{RAM:wEnemyMonNick\}/g, name)
+        .replace(/\{PLAYER\}/g, this.save.player?.name ?? "RED");
+      this.sayChoiceNext(text, (yes) => {
+        if (!yes) return;
+        this.shiftSwitch = true;
+        this.openParty(false);
+      });
+    }
     this.sayNext(`${this.trainerName} sent out\n${next.species}!`);
     this.act(() => this.swapEnemy(next));
+  }
+
+  /**
+   * The SHIFT offer: the option (the cart's default), the player's mon still
+   * standing, and someone on the bench to send in. Never in a link battle.
+   */
+  protected offersShift(): boolean {
+    if ((this.save as { options?: { battleStyle?: string } }).options?.battleStyle === "set") return false;
+    if (!this.player?.mon || this.player.mon.hp <= 0) return false;
+    return this.save.party.some((m) => m !== this.player.mon && m.hp > 0);
   }
 }

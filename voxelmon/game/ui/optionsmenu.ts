@@ -8,11 +8,10 @@
 //
 // Upstream's menu is much longer, but nearly all of it is desktop-renderer
 // settings (video mode, tilt, zoom, GBC FX, window scaling) or a mod manager,
-// none of which exists here. What is left is the three vanilla rows, and of
-// those BATTLE STYLE is deliberately absent: SHIFT needs the "will you change
-// POKéMON?" prompt before a trainer's next send-out, and that needs a free
-// switch through the battle's message queue, which this port has no path for
-// yet. A row that stores a setting nothing honours is worse than no row.
+// none of which exists here. What is left is the three vanilla rows --
+// TEXT SPEED, BATTLE ANIMATION, BATTLE STYLE (SHIFT, the cart's default,
+// offers a free switch before a trainer's next mon; SET does not) -- and
+// this port's own.
 //
 // The settings live in save.options under gen1recomp's own key names
 // (textSpeed, animations), so a save moves between the two builds intact.
@@ -56,6 +55,7 @@ interface OptionsSave {
   options?: {
     textSpeed?: number;
     animations?: boolean;
+    battleStyle?: string;
     movement?: string;
     runningShoes?: boolean;
     cameraSpeed?: string;
@@ -103,6 +103,11 @@ export class OptionsMenuState implements GameState {
         label: "BATTLE ANIMATION",
         choices: ["ON", "OFF"],
         index: this.opts().animations === false ? 1 : 0,
+      },
+      {
+        label: "BATTLE STYLE",
+        choices: ["SHIFT", "SET"],
+        index: this.opts().battleStyle === "set" ? 1 : 0,
       },
       {
         // FREE walks at any angle, steered by the camera (world/freemove.ts);
@@ -178,16 +183,17 @@ export class OptionsMenuState implements GameState {
     const at = Math.max(0, Math.min(r.choices.length - 1, to));
     if (row === 0) this.opts().textSpeed = TEXT_SPEEDS[at]!.delay;
     else if (row === 1) this.opts().animations = at === 0;
-    else if (row === 2) this.opts().movement = at === 1 ? "grid" : "free";
-    else if (row === 3) this.opts().runningShoes = RUNNING_SHOES[at]!.key;
-    else if (row === 4) this.opts().cameraSpeed = CAMERA_SPEEDS[at]!.key;
-    else if (row === 5) this.opts().tiltShift = TILT_SHIFTS[at]!.key;
-    else if (row === 6) this.opts().view = VIEW_MODES[at]!.key;
-    else if (row === 7) this.opts().screen2d = SCREENS_2D[at]!.key;
-    else if (row === 8) this.opts().zoom2d = ZOOMS_2D[at]!.pct;
-    else if (row === 9) this.opts().battleView = VIEW_MODES[at]!.key;
-    else if (row === 10) this.opts().eventPokemon = EVENT_POKEMON[at]!.key;
-    else if (row === 11) this.opts().devMenu = at === 1;
+    else if (row === 2) this.opts().battleStyle = at === 1 ? "set" : "shift";
+    else if (row === 3) this.opts().movement = at === 1 ? "grid" : "free";
+    else if (row === 4) this.opts().runningShoes = RUNNING_SHOES[at]!.key;
+    else if (row === 5) this.opts().cameraSpeed = CAMERA_SPEEDS[at]!.key;
+    else if (row === 6) this.opts().tiltShift = TILT_SHIFTS[at]!.key;
+    else if (row === 7) this.opts().view = VIEW_MODES[at]!.key;
+    else if (row === 8) this.opts().screen2d = SCREENS_2D[at]!.key;
+    else if (row === 9) this.opts().zoom2d = ZOOMS_2D[at]!.pct;
+    else if (row === 10) this.opts().battleView = VIEW_MODES[at]!.key;
+    else if (row === 11) this.opts().eventPokemon = EVENT_POKEMON[at]!.key;
+    else if (row === 12) this.opts().devMenu = at === 1;
   }
 
   update(): void {

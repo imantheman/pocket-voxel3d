@@ -65,6 +65,11 @@ export class LinkBattle extends TrainerBattle {
    */
   lastPeerAction: BattleAction | null = null;
 
+  /** EnemySendOut skips the SHIFT offer in a link battle. */
+  protected override offersShift(): boolean {
+    return false;
+  }
+
   /** Both consoles roll the same copy (MimicEffect's link arm). */
   protected override mimicByMenu(): boolean {
     return false;
