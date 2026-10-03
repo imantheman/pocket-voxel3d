@@ -90,6 +90,12 @@ export class SpriteHandle {
     this.objColors = colors;
     this.objGroup = group ?? "gen2";
   }
+  /** What World.applySpritePalette last tinted this sprite from: the
+   *  daytime, object def, sprite def and palette set (it skips a repeat). */
+  tintDaytime?: unknown;
+  tintDef?: unknown;
+  tintSpriteDef?: unknown;
+  tintPalettes?: unknown;
 }
 
 /**

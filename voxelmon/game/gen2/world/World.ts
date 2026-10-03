@@ -8490,7 +8490,9 @@ export class World {
     // resolveSprite answers with the built def itself rather than a name.
     const spriteDef = (name !== null && typeof name === "object") ? name : this.sprites[name];
     if (!truthy(spriteDef)) return undefined;
-    const key = format("%s_obj_%d", mapId, obj.index ?? 0);
+    // (format("%s_obj_%d", ...)'s key, without its regex: a map switch
+    // pools every person here and on the maps round it)
+    const key = `${mapId}_obj_${Math.trunc(Number(obj.index ?? 0))}`;
     let npc: NPC | undefined = this.npcPool[key];
     if (!npc) {
       npc = NPC.new(mapId, obj, spriteDef);
@@ -9544,12 +9546,25 @@ export class World {
     // sprite's (Palettes.objectPaletteId; AddMapObject, player_object.asm:187).
     let def = entity.def;
     if (entity === this.player) def = this.playerObjectDef();
+    // Already tinted from these same inputs: nothing to do. A map load tints
+    // the whole pool twice (applyPalettes, before and after rebuildPeople),
+    // and the pool keeps every person met across seamless crossings -- 120
+    // tints a switch, most of them unchanged, a frame's worth on the 3DS.
+    const s = entity.sprite;
+    if (s.tintDaytime === daytime && s.tintDef === def && s.tintSpriteDef === entity.spriteDef
+        && s.tintPalettes === this.palettes) {
+      return;
+    }
     const colors = Palettes.spritePalette(this.palettes, daytime, entity.spriteDef, def);
     if (!truthy(colors)) return;
     // The bake cache key has to be the palette actually chosen, or the three
     // beasts -- one sheet, three object palettes -- would share the first.
     const id = Palettes.objectPaletteId(def) ?? entity.spriteDef.paletteId ?? 0;
     entity.sprite.setObjPalette(colors, format("gen2:%s:%d", tostring(daytime), id));
+    s.tintDaytime = daytime;
+    s.tintDef = def;
+    s.tintSpriteDef = entity.spriteDef;
+    s.tintPalettes = this.palettes;
   }
 
   // Lua: World.lua:9708-9735 -- world.tod: what time of day the WORLD is in.
