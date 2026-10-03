@@ -61,6 +61,8 @@ const BLOCK_CHECK = 32;
 
 interface MapTiles {
   map: any;
+  /** The tileset's blocks the cache was built from. */
+  tileset: unknown;
   /** Padded size in tiles. */
   w: number;
   h: number;
@@ -93,7 +95,7 @@ export class OverworldView2d {
         this.slots.clear();
         this.loadsSize = -1;
       }
-      t = this.tiles = buildTiles(map, game.data.maps, game.data.field?.cutTreeSwaps);
+      t = this.tiles = tilesFor(map, game.data.maps, game.data.field?.cutTreeSwaps);
       this.winX = NaN;
     }
     const camX = Math.round(p.px) - 64;
@@ -312,41 +314,128 @@ function blockPast(map: any, maps: Record<string, any> | undefined, bx: number, 
   return def.borderBlock;
 }
 
-/** The map's tiles, PAD tiles of border round them, block by block. */
-function buildTiles(map: any, maps?: Record<string, any>, swaps?: { before: number; after: number }[]): MapTiles {
+/** Maps whose tiles were worked out lately, by id: walking back over a
+ *  seam (or out of a door and in again) finds its map's tiles here. */
+const recent = new Map<string, MapTiles>();
+const RECENT_MAX = 6;
+
+/** The map's tiles: the recent copy while its blocks, tileset and cuts
+ *  still match, else worked out afresh. */
+function tilesFor(map: any, maps?: Record<string, any>, swaps?: { before: number; after: number }[]): MapTiles {
+  const cuts = map.cutCells?.().size ?? 0;
+  const hit = recent.get(map.id);
+  if (hit && cuts === 0 && hit.cuts === 0 && hit.tileset === map.tileset.blocks && sameBlocks(hit.blocks, map.def.blocks)) {
+    hit.map = map;
+    recent.delete(map.id); // to the back: most recent
+    recent.set(map.id, hit);
+    return hit;
+  }
+  const t = buildTiles(map, maps, swaps);
+  if (cuts === 0) {
+    recent.delete(map.id);
+    recent.set(map.id, t);
+    if (recent.size > RECENT_MAX) recent.delete(recent.keys().next().value!);
+  }
+  return t;
+}
+
+/** Each tileset's blocks as rows of four tile ids, one 32-bit word a row
+ *  (tile 0 in the low byte: the little-endian order a Uint8Array reads
+ *  back over the same buffer, on the 3DS and the PC alike). */
+const blockRows = new WeakMap<object, Uint32Array>();
+function rowsOf(tsBlocks: number[][]): Uint32Array {
+  let rows = blockRows.get(tsBlocks);
+  if (!rows) {
+    rows = new Uint32Array(tsBlocks.length * 4);
+    for (let b = 0; b < tsBlocks.length; b++) {
+      const bl = tsBlocks[b];
+      if (!bl) continue;
+      for (let r = 0; r < 4; r++) {
+        rows[b * 4 + r] = ((bl[r * 4]! & 0x7f) | ((bl[r * 4 + 1]! & 0x7f) << 8) |
+          ((bl[r * 4 + 2]! & 0x7f) << 16) | ((bl[r * 4 + 3]! & 0x7f) << 24)) >>> 0;
+      }
+    }
+    blockRows.set(tsBlocks, rows);
+  }
+  return rows;
+}
+
+/**
+ * The map's tiles, PAD tiles of border round them. The blocks are laid out
+ * first on a padded block grid -- the border block, then each connected
+ * map's blocks painted over its side (east, west, south, north: blockPast's
+ * order, the later winning a corner), then the map's own, then CUT's swaps
+ * -- and each block's four tile rows written as one word apiece. Worked out
+ * a block (or a tile) at a time this took ~130-430 ms on the console at a
+ * map switch, a freeze at every seam the cart crosses without a pause.
+ */
+export function buildTiles(map: any, maps?: Record<string, any>, swaps?: { before: number; after: number }[]): MapTiles {
   const def = map.def;
-  const w = def.width * 4 + PAD * 2;
-  const h = def.height * 4 + PAD * 2;
-  const ids = new Uint8Array(w * h);
-  const tsBlocks: number[][] = map.tileset.blocks;
+  const mw = def.width;
+  const mh = def.height;
   const pb = PAD / 4; // padding in blocks
-  // the blocks holding a cut cell, and what CUT turned them into
-  const cutBlock = new Map<number, number>();
+  const gw = mw + pb * 2;
+  const gh = mh + pb * 2;
+  const grid = new Int32Array(gw * gh).fill(def.borderBlock ?? 0);
+  // a connected map's blocks onto the grid, where they fall inside `side`
+  const paint = (c: ConnDef | undefined, ox: number, oy: number, side: (gx: number, gy: number) => boolean): void => {
+    const d = c && maps ? maps[c.map] : undefined;
+    if (!d?.blocks) return;
+    for (let y = 0; y < d.height; y++) {
+      const gy = y + oy + pb;
+      if (gy < 0 || gy >= gh) continue;
+      for (let x = 0; x < d.width; x++) {
+        const gx = x + ox + pb;
+        if (gx < 0 || gx >= gw || !side(gx - pb, gy - pb)) continue;
+        const b = d.blocks[y * d.width + x];
+        if (b !== undefined) grid[gy * gw + gx] = b;
+      }
+    }
+  };
+  const conns: Record<string, ConnDef> | undefined = def.connections;
+  if (conns && maps) {
+    const east = conns.east, west = conns.west, south = conns.south, north = conns.north;
+    if (east) paint(east, mw, east.offset, (bx) => bx >= mw);
+    if (west) paint(west, -(maps[west.map]?.width ?? 0), west.offset, (bx) => bx < 0);
+    if (south) paint(south, south.offset, mh, (_bx, by) => by >= mh);
+    if (north) paint(north, north.offset, -(maps[north.map]?.height ?? 0), (_bx, by) => by < 0);
+  }
+  const blocks: number[] = def.blocks ?? [];
+  for (let by = 0; by < mh; by++) {
+    const g0 = (by + pb) * gw + pb;
+    for (let bx = 0; bx < mw; bx++) grid[g0 + bx] = blocks[by * mw + bx]!;
+  }
+  // the blocks holding a cut cell, as CUT left them
   const cut: ReadonlySet<number> = map.cutCells?.() ?? new Set();
   for (const i of cut) {
     const cx = i % map.widthCells;
     const cy = Math.floor(i / map.widthCells);
-    const bi = (cy >> 1) * def.width + (cx >> 1);
-    const sw = swaps?.find((s) => s.before === def.blocks[bi]);
-    if (sw) cutBlock.set(bi, sw.after);
+    const bi = (cy >> 1) * mw + (cx >> 1);
+    const sw = swaps?.find((s) => s.before === blocks[bi]);
+    if (sw) grid[((cy >> 1) + pb) * gw + (cx >> 1) + pb] = sw.after;
   }
-  for (let by = -pb; by < def.height + pb; by++) {
-    for (let bx = -pb; bx < def.width + pb; bx++) {
-      const inside = bx >= 0 && by >= 0 && bx < def.width && by < def.height;
-      const block = tsBlocks[(inside && cutBlock.get(by * def.width + bx)) || blockPast(map, maps, bx, by)];
-      if (!block) continue;
-      const x0 = (bx + pb) * 4;
-      const y0 = (by + pb) * 4;
-      for (let r = 0; r < 4; r++) {
-        const o = (y0 + r) * w + x0;
-        ids[o] = block[r * 4]! & 0x7f;
-        ids[o + 1] = block[r * 4 + 1]! & 0x7f;
-        ids[o + 2] = block[r * 4 + 2]! & 0x7f;
-        ids[o + 3] = block[r * 4 + 3]! & 0x7f;
-      }
+  // the grid out to tiles: four words a block
+  const w = gw * 4;
+  const h = gh * 4;
+  const ids = new Uint8Array(w * h);
+  const ids32 = new Uint32Array(ids.buffer);
+  const rows = rowsOf(map.tileset.blocks);
+  const nBlocks = rows.length >> 2;
+  const wq = w >> 2; // a tile row in words: one word per block column
+  for (let gy = 0; gy < gh; gy++) {
+    const o = gy * 4 * wq;
+    for (let gx = 0; gx < gw; gx++) {
+      const b = grid[gy * gw + gx]!;
+      if (b < 0 || b >= nBlocks) continue;
+      const s = b * 4;
+      const at = o + gx;
+      ids32[at] = rows[s]!;
+      ids32[at + wq] = rows[s + 1]!;
+      ids32[at + 2 * wq] = rows[s + 2]!;
+      ids32[at + 3 * wq] = rows[s + 3]!;
     }
   }
-  return { map, w, h, ids, blocks: [...(def.blocks ?? [])], cuts: cut.size };
+  return { map, tileset: map.tileset.blocks, w, h, ids, blocks: blocks.slice(), cuts: cut.size };
 }
 
 /** The wide picture's `cols` x `rows` window from tile (tx0, ty0) into its
