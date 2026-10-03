@@ -1340,3 +1340,38 @@ describe("the Kanto shiny sparkle", () => {
     expect(sparkleStars(SPARKLE_FRAMES)).toEqual([]);
   });
 });
+
+
+describe("Red/Blue trainers' special moves (LoneMoves / TeamMoves / the champion)", () => {
+  const party = (id: string, n: number) => {
+    const b = new TrainerBattle(data!, makeSave([newMon(data!, "MEWTWO", 70)]) as never, seededRng(1), id, n);
+    return (b as any).enemyParty as PartyMon[];
+  };
+  const third = (m: PartyMon) => m.moves.map((x) => x.id);
+
+  test.skipIf(!hasGen)("gym leaders: BROCK's ONIX knows BIDE, LT.SURGE's RAICHU THUNDERBOLT, the gym GIOVANNI's RHYDON FISSURE", () => {
+    const brock = party("OPP_BROCK", 1);
+    expect(brock[1]!.species).toBe("ONIX");
+    expect(third(brock[1]!)).toContain("BIDE");
+    expect(third(brock[0]!)).not.toContain("BIDE");
+    const surge = party("OPP_LT_SURGE", 1);
+    expect(surge[2]!.species).toBe("RAICHU");
+    expect(third(surge[2]!)).toContain("THUNDERBOLT");
+    const gio = party("OPP_GIOVANNI", 3);
+    expect(gio[4]!.species).toBe("RHYDON");
+    expect(gio[4]!.moves[2]!.id).toBe("FISSURE");
+    // the Rocket Hideout GIOVANNI is not the gym's: no lone move
+    expect(party("OPP_GIOVANNI", 1).some((m) => third(m).includes("FISSURE") && m.species !== "RHYDON")).toBe(false);
+  });
+
+  test.skipIf(!hasGen)("the ELITE FOUR's fifth mon, and the champion's PIDGEOT and starter", () => {
+    const lorelei = party("OPP_LORELEI", 1);
+    expect(lorelei[4]!.species).toBe("LAPRAS");
+    expect(lorelei[4]!.moves[2]!.id).toBe("BLIZZARD");
+    expect(party("OPP_LANCE", 1)[4]!.moves[2]!.id).toBe("BARRIER");
+    const champ = party("OPP_RIVAL3", 3);
+    expect(champ[0]!.moves[2]!.id).toBe("SKY_ATTACK");
+    expect(champ[5]!.species).toBe("CHARIZARD");
+    expect(champ[5]!.moves[2]!.id).toBe("FIRE_BLAST");
+  });
+});

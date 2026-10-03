@@ -42,6 +42,71 @@ const GYM_LEADER_PARTY: Record<string, number> = {
   OPP_GIOVANNI: 3,
 };
 
+/**
+ * Red and Blue's extra moves for the big fights (engine/battle/
+ * read_trainer_party.asm), written into the THIRD move slot after the party
+ * loads. Checked byte for byte against both ROMs (one copy each, bank $0E):
+ *
+ *   LoneMoves   a gym leader's script sets wLoneAttackNo to its gym's
+ *               number; the entry names a party mon (counting from 0) and
+ *               the move -- Brock's ONIX BIDE ... Giovanni's RHYDON FISSURE
+ *   TeamMoves   by class, to the FIFTH mon: Lorelei's LAPRAS BLIZZARD,
+ *               Bruno's MACHAMP FISSURE, Agatha's GENGAR TOXIC, Lance's
+ *               DRAGONITE BARRIER
+ *   .ChampionRival  PIDGEOT gets SKY ATTACK, and his starter (the sixth)
+ *               BLIZZARD / MEGA DRAIN / FIRE BLAST for BLASTOISE / VENUSAUR /
+ *               CHARIZARD
+ *
+ * Yellow writes its trainers' moves another way (its own table, read from
+ * the Yellow ROM) and takes none of these.
+ */
+const LONE_MOVES: Record<string, [number, string]> = {
+  OPP_BROCK: [1, "BIDE"],
+  OPP_MISTY: [1, "BUBBLEBEAM"],
+  OPP_LT_SURGE: [2, "THUNDERBOLT"],
+  OPP_ERIKA: [2, "MEGA_DRAIN"],
+  OPP_KOGA: [3, "TOXIC"],
+  OPP_SABRINA: [3, "PSYWAVE"],
+  OPP_BLAINE: [3, "FIRE_BLAST"],
+  OPP_GIOVANNI: [4, "FISSURE"],
+};
+const TEAM_MOVES: Record<string, string> = {
+  OPP_LORELEI: "BLIZZARD",
+  OPP_BRUNO: "FISSURE",
+  OPP_AGATHA: "TOXIC",
+  OPP_LANCE: "BARRIER",
+};
+const CHAMPION_STARTER_MOVE: Record<string, string> = {
+  BLASTOISE: "BLIZZARD",
+  VENUSAUR: "MEGA_DRAIN",
+  CHARIZARD: "FIRE_BLAST",
+};
+
+/** `ld [wEnemyMon<n>Moves + 2], move`: the third slot (or the next, on a mon with fewer). */
+function giveThirdMove(data: VoxelmonData, mon: PartyMon | undefined, move: string): void {
+  if (!mon || !data.moves[move]) return;
+  const slot = { id: move, pp: data.moves[move]!.pp ?? 0 };
+  if (mon.moves.length >= 3) mon.moves[2] = slot;
+  else if (!mon.moves.some((m) => m.id === move)) mon.moves.push(slot);
+}
+
+export function applySpecialTrainerMoves(
+  data: VoxelmonData, trainerId: string, partyIndex: number, party: PartyMon[],
+): void {
+  const v = (data as { version?: string }).version;
+  if (v === "yellow" || v === "gold" || v === "silver") return;
+  const lone = LONE_MOVES[trainerId];
+  if (lone && GYM_LEADER_PARTY[trainerId] === partyIndex) giveThirdMove(data, party[lone[0]], lone[1]);
+  const team = TEAM_MOVES[trainerId];
+  if (team) giveThirdMove(data, party[4], team);
+  if (trainerId === "OPP_RIVAL3") {
+    giveThirdMove(data, party[0], "SKY_ATTACK");
+    const starter = party[5];
+    const move = starter ? CHAMPION_STARTER_MOVE[starter.species] : undefined;
+    if (move) giveThirdMove(data, starter, move);
+  }
+}
+
 export class TrainerBattle extends WildBattle {
   override isTrainerBattle(): boolean {
     return true;
@@ -84,6 +149,7 @@ export class TrainerBattle extends WildBattle {
     this.enemyParty = monRoster
       ? monRoster.map((m) => ({ ...m }))
       : roster.map((m) => newMon(data, m.species, m.level, undefined, { ...TRAINER_DVS }));
+    if (!monRoster) applySpecialTrainerMoves(data, trainerId, partyIndex, this.enemyParty);
     this.enemyIndex = 0;
     if (this.enemyParty[0]) {
       // super() built the lead from a species and a level, which rolled it
