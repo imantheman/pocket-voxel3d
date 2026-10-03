@@ -5993,6 +5993,21 @@ function giveThirdMove(data, mon, move) {
     mon.moves.push(slot);
 }
 function applySpecialTrainerMoves(data, trainerId, partyIndex, party) {
+  const def = data.trainers?.[trainerId];
+  const rows = def?.specialMoves?.[String(partyIndex)];
+  if (rows) {
+    for (const [n, slot, move] of rows) {
+      const mon = party[n - 1];
+      if (!mon || !data.moves[move])
+        continue;
+      const entry = { id: move, pp: data.moves[move].pp ?? 0 };
+      if (slot - 1 < mon.moves.length)
+        mon.moves[slot - 1] = entry;
+      else if (!mon.moves.some((m) => m.id === move))
+        mon.moves.push(entry);
+    }
+    return;
+  }
   const v = data.version;
   if (v === "yellow" || v === "gold" || v === "silver")
     return;
