@@ -13,9 +13,12 @@ import G, { setLcd } from "../voxelmon/game/gen2/platform/screen.ts";
 import { TileSheet } from "../voxelmon/game/gen2/ui/TileSheet.ts";
 import { Chrome } from "../voxelmon/game/gen2/ui/Chrome.ts";
 import { Scenes } from "../voxelmon/game/gen2/ui/GoldSilverIntro.ts";
+import { GameVersion } from "../voxelmon/game/gen2/shared/core/GameVersion.ts";
 
 const now = (globalThis as unknown as { voxel: { now: () => number } }).voxel.now;
 setGen2Source(readGen2Container(native.gamedata()));
+// the dataset says which game it is (as gen2/main.ts reads it)
+GameVersion.set(String(loadGenerated<{ version?: string }>("version")?.version ?? "gold"));
 seed(17);
 const scene = loadGenerated<{ atlas?: { lcd?: { firstPage: number; counts: number[] } } }>("scene");
 const nop = (): void => {};
@@ -34,7 +37,8 @@ function wrap(owner: any, label: string): void {
   if (!owner || done.has(owner)) return;
   done.add(owner);
   for (const name of Object.getOwnPropertyNames(owner)) {
-    if (name === "constructor") continue;
+    // classes hung on a namespace (Chrome.List) keep their statics unwrapped
+    if (name === "constructor" || /^[A-Z]/.test(name)) continue;
     const d = Object.getOwnPropertyDescriptor(owner, name);
     if (!d || typeof d.value !== "function" || d.get || d.set) continue;
     const orig = d.value;
@@ -71,19 +75,21 @@ let f = 0;
 let us = 0;
 let n = 0;
 let lastTop = "";
-(globalThis as any).frame = (): void => {
+// the harness's buttons (its press-every argument) go through as the 3DS
+// host's low byte does, so the menus past the title can be profiled too
+(globalThis as any).frame = (buttons?: number): void => {
   f++;
   stats = stepStats;
   on = true;
   const s0 = now();
-  game.frame(0);
+  game.frame((buttons ?? 0) & 0xff);
   stepUs += now() - s0;
   on = false;
   stats = drawStats;
   if ((f & 1) !== 0) return;
   const top = game.stack.top();
   // the intro reported scene by scene (its scenes differ a lot)
-  const name = (top?.screenId ?? "-") + (top?.screenId === "Gen2GoldSilverIntro" ? `:${top.scene}` : "");
+  const name = (top?.screenId ?? "-") + (typeof top?.scene === "number" ? `:${top.scene}` : "");
   if (top && wrapping) {
     wrap(Object.getPrototypeOf(top), `top:${top.screenId}`);
     if (top.anims) {

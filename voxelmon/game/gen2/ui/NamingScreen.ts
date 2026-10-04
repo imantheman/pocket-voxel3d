@@ -17,7 +17,7 @@
 // NOT FAITHFUL: name lengths count JS characters, not Lua bytes, so × é ♂ ♀
 // take one slot (the Lua counted their UTF-8 bytes and could cut one in half).
 
-import G, { type LcdImage, type Quad } from "../platform/screen.ts";
+import G, { putTiles, type LcdImage, type Quad } from "../platform/screen.ts";
 import { format } from "../platform/lua.ts";
 import { Strings } from "../shared/core/Strings.ts";
 import { Runtime } from "../shared/mods/Runtime.ts";
@@ -361,6 +361,15 @@ export class NamingScreen {
     }
     const blit = (): void => {
       G.setColor(1, 1, 1, 1);
+      // one cell over the whole screen: a native fill of the same cells, not
+      // 360 draws (most of this screen's frame under the 3DS's QuickJS)
+      const id = tile.ids?.[0];
+      const x0 = Math.round(G.tx);
+      const y0 = Math.round(G.ty);
+      if (tile.tw === 1 && tile.th === 1 && !tile.obj && id !== undefined && (x0 & 7) === 0 && (y0 & 7) === 0) {
+        putTiles(id, x0, y0, Chrome.SCREEN_W, Chrome.SCREEN_H);
+        return;
+      }
       for (let ty = 0; ty < Chrome.SCREEN_H; ty++) {
         for (let tx = 0; tx < Chrome.SCREEN_W; tx++) G.draw(tile, tx * 8, ty * 8);
       }

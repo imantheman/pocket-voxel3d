@@ -297,6 +297,8 @@ const flatPals = (color: Rgb): Rgb[][] => Array.from({ length: 8 }, () => [color
 interface Sheet {
   image: LcdImage;
   count: number;
+  /** Gold-screen id of each sheet tile, -1 past the image */
+  lut: Int32Array;
 }
 
 interface Act {
@@ -586,7 +588,17 @@ export class CrystalIntro {
       this.sheets[path] = false;
       return null;
     }
-    const made: Sheet = { image, count: Math.floor(image.w / 8) * Math.floor(image.h / 8) };
+    const count = Math.floor(image.w / 8) * Math.floor(image.h / 8);
+    const lut = new Int32Array(count).fill(-1);
+    for (let tile = 0; tile < count; tile++) {
+      const col = tile % 16;
+      const row = Math.floor(tile / 16);
+      if (col < image.tw && row < image.th) {
+        const id = image.ids[row * image.tw + col];
+        if (id !== undefined) lut[tile] = id;
+      }
+    }
+    const made: Sheet = { image, count, lut };
     this.sheets[path] = made;
     return made;
   }
@@ -594,38 +606,55 @@ export class CrystalIntro {
   /** Gold-screen id of sheet tile `tile` (16 across), or undefined past it. */
   tileId(sheet: Sheet, tile: number): number | undefined {
     if (tile < 0 || tile >= sheet.count) return undefined;
-    const col = tile % 16;
-    const row = Math.floor(tile / 16);
-    if (col >= sheet.image.tw || row >= sheet.image.th) return undefined;
-    return sheet.image.ids[row * sheet.image.tw + col];
+    const id = sheet.lut[tile]!;
+    return id < 0 ? undefined : id;
   }
 
   private readonly cellIds = new Uint16Array(BG_TILES * BG_TILES);
   private readonly cellAttrs = new Uint8Array(BG_TILES * BG_TILES);
   private readonly bgSlots = new Int16Array(8);
+  private readonly lastSlots = new Int16Array(8).fill(-1);
   private readonly lineScx = new Uint8Array(SCREEN_H);
 
   // the BG map: each cell's id (the grass frames over $09-$0c), its palette
-  // slot and its priority bit; colour 0 of the cell's palette is the backdrop
+  // slot and its priority bit; colour 0 of the cell's palette is the backdrop.
+  // The ids are worked out again only when the map changes and the attrs
+  // when it or a palette slot does: 1024 lookups a frame cost the 3DS ~20 ms.
   drawBackground(): void {
     const lcd = currentLcd();
     if (!lcd) return;
     const act = this.actData();
     const sheet = act && this.sheet(act.tiles);
     if (!sheet) return;
-    const grass = this.grassFrame != null ? this.sheet(this.assets?.grassFrames) : null;
     const slots = this.bgSlots;
     for (let pal = 0; pal < 8; pal++) slots[pal] = lcd.palette(GbcPalette.resolvedPalette(this.bgPals[pal] as Colors) as Palette4);
     const ids = this.cellIds;
     const attrs = this.cellAttrs;
-    for (let i = 0; i < BG_TILES * BG_TILES; i++) {
-      const id = this.map[i]!;
-      let tile: number | undefined;
-      if (grass && id >= 0x09 && id <= 0x0c) tile = this.tileId(grass, (this.grassFrame! - 1) * 4 + id - 0x09);
-      else tile = this.tileId(sheet, id);
-      const a = this.attr[i]!;
-      ids[i] = tile ?? SOLID[0];
-      attrs[i] = (slots[a % 8]! & 0x0f) | (a >= 0x80 ? ATTR_PRIORITY : 0);
+    const last = this.lastSlots;
+    let slotsMoved = false;
+    for (let pal = 0; pal < 8; pal++) if (last[pal] !== slots[pal]) slotsMoved = true;
+    if (this.mapDirty) {
+      const grass = this.grassFrame != null ? this.sheet(this.assets?.grassFrames) : null;
+      const grassBase = grass ? (this.grassFrame! - 1) * 4 - 0x09 : 0;
+      const lut = sheet.lut;
+      const count = sheet.count;
+      const solid = SOLID[0]!;
+      for (let i = 0; i < BG_TILES * BG_TILES; i++) {
+        const id = this.map[i]!;
+        let tile: number;
+        if (grass && id >= 0x09 && id <= 0x0c) {
+          const t = grassBase + id;
+          tile = t >= 0 && t < grass.count ? grass.lut[t]! : -1;
+        } else tile = id < count ? lut[id]! : -1;
+        ids[i] = tile < 0 ? solid : tile;
+      }
+    }
+    if (this.mapDirty || slotsMoved) {
+      for (let i = 0; i < BG_TILES * BG_TILES; i++) {
+        const a = this.attr[i]!;
+        attrs[i] = (slots[a % 8]! & 0x0f) | (a >= 0x80 ? ATTR_PRIORITY : 0);
+      }
+      last.set(slots);
     }
     lcd.s.cells.set(ids, 0);
     lcd.s.attrs.set(attrs, 0);
