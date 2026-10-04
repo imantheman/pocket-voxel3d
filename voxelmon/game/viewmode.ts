@@ -28,12 +28,16 @@ export const SCREENS_2D = [
   { key: "wide", label: "WIDE" },
 ] as const;
 
-/** 2D ZOOM OUT's steps: the map's scale on the screen, percent. */
+/** 2D ZOOM OUT's steps: the map's scale on the screen, percent. At 60 a
+ *  Game Boy pixel is about one of the top screen's; FAR and MAX shrink the
+ *  map below that (smoothed: the host's big canvas filters as it shrinks). */
 export const ZOOMS_2D = [
   { pct: 100, label: "OFF" },
   { pct: 80, label: "LOW" },
   { pct: 67, label: "MID" },
-  { pct: 60, label: "MAX" },
+  { pct: 60, label: "HIGH" },
+  { pct: 50, label: "FAR" },
+  { pct: 40, label: "MAX" },
 ] as const;
 
 export function screen2dIndex(v: unknown): number {

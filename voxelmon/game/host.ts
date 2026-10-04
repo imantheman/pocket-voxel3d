@@ -146,7 +146,7 @@ export interface VoxelHost {
   gbLines?(target: number, hex: string): void;
   gbOam?(hex: string): void;
   /** voxel-spec.ts gbWide / gbWideObjs: the 2D overworld's wide picture. */
-  gbWide?(w: number, h: number, scx: number, scy: number, full: number): void;
+  gbWide?(w: number, h: number, scx: number, scy: number, full: number, cols?: number, rows?: number): void;
   gbWideObjs?(hex: string): void;
   gbColours?(bg: number, obp0: number, obp1: number): void;
   /** The Gold screen (voxel-spec.ts lcdShow..lcdLines; gen2/platform/lcd.ts). */
@@ -418,8 +418,8 @@ export class RecorderHost implements VoxelHost {
   gbOam(hex: string): void {
     this.opText(VOX_OP.gbOam, hex);
   }
-  gbWide(w: number, h: number, scx: number, scy: number, full: number): void {
-    this.op(VOX_OP.gbWide, w, h, scx, scy, full);
+  gbWide(w: number, h: number, scx: number, scy: number, full: number, cols = 64, rows = 32): void {
+    this.op(VOX_OP.gbWide, w, h, scx, scy, full, cols, rows);
   }
   gbWideObjs(hex: string): void {
     this.opText(VOX_OP.gbWideObjs, hex);

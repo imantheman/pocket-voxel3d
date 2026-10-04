@@ -31,7 +31,7 @@
 // the people as its own objects, laid over the whole top screen or zoomed
 // out into the box. The text boxes and menus stay the tile layer's, full size.
 
-import { GbVideo, LCDC, OAM_ATTR, OAM_X_OFS, OAM_Y_OFS, WIDE_COLS, WIDE_OBJS_MAX, WIDE_ROWS, type TileLoad } from "../gb/video.ts";
+import { GbVideo, LCDC, OAM_ATTR, OAM_X_OFS, OAM_Y_OFS, WIDE_COLS, WIDE_COLS_MAX, WIDE_OBJS_MAX, WIDE_ROWS, WIDE_ROWS_MAX, type TileLoad } from "../gb/video.ts";
 import { canvasSize } from "../viewmode.ts";
 import type { Dir } from "./collision.ts";
 import { DARK_MAPS } from "./overworld.ts";
@@ -53,7 +53,8 @@ const COLS = 21;
 const ROWS = 19;
 /** Tiles of border kept round the map in the cache (the camera's reach
  *  past the edge is 8 left/up, 10 right/down, the seam step one cell more;
- *  the widest picture reaches 17 tiles further each side). */
+ *  the widest picture -- WIDE at 2D ZOOM OUT MAX -- reaches 30 tiles
+ *  further each side). */
 const PAD = 32;
 /** Frames between checks that the map's blocks still match the cache (a
  *  door or barrier a script stamps mid-visit). */
@@ -112,18 +113,38 @@ export class OverworldView2d {
       const ty0 = Math.floor(vy / 8);
       const cols = Math.ceil(canvas.w / 8) + 1;
       const rows = Math.ceil(canvas.h / 8) + 1;
-      if (tx0 !== this.wideX || ty0 !== this.wideY || cols !== this.wideCols || rows !== this.wideRows) {
+      // the ring: 64x32 tiles while the window fits in it, else 128x64 (2D
+      // ZOOM OUT's FAR and MAX); a change of size writes the window afresh
+      const big = cols > WIDE_COLS || rows > WIDE_ROWS;
+      const rc = big ? WIDE_COLS_MAX : WIDE_COLS;
+      const rr = big ? WIDE_ROWS_MAX : WIDE_ROWS;
+      if (rc !== v.wideCols || rr !== v.wideRows) {
+        v.wideCols = rc;
+        v.wideRows = rr;
+        this.wideX = NaN;
+      }
+      if (tx0 !== this.wideX || ty0 !== this.wideY || cols !== this.wideCols || rows !== this.wideRows || t !== this.wideTiles) {
+        // one tile over with the same window and tiles: only the row or
+        // column it brought in (the rest of the ring is where it was)
+        const dx = tx0 - this.wideX;
+        const dy = ty0 - this.wideY;
+        const step = cols === this.wideCols && rows === this.wideRows && t === this.wideTiles && Math.abs(dx) + Math.abs(dy) === 1;
+        if (step && dx === 1) writeWideRect(v, t, map, tx0 + cols - 1, ty0, 1, rows);
+        else if (step && dx === -1) writeWideRect(v, t, map, tx0, ty0, 1, rows);
+        else if (step && dy === 1) writeWideRect(v, t, map, tx0, ty0 + rows - 1, cols, 1);
+        else if (step) writeWideRect(v, t, map, tx0, ty0, cols, 1);
+        else writeWideRect(v, t, map, tx0, ty0, cols, rows);
         this.wideX = tx0;
         this.wideY = ty0;
         this.wideCols = cols;
         this.wideRows = rows;
-        writeWideWindow(v.wideMap, t, map, tx0, ty0, cols, rows);
+        this.wideTiles = t;
         v.wideMapDirty = true;
       } else v.wideMapDirty = false;
       v.wideW = canvas.w;
       v.wideH = canvas.h;
-      v.wideScx = vx & (WIDE_COLS * 8 - 1);
-      v.wideScy = vy & (WIDE_ROWS * 8 - 1);
+      v.wideScx = vx & (rc * 8 - 1);
+      v.wideScy = vy & (rr * 8 - 1);
       v.wideFull = canvas.wide;
       this.viewW = canvas.w;
       this.viewH = canvas.h;
@@ -233,6 +254,9 @@ export class OverworldView2d {
   private wideY = NaN;
   private wideCols = 0;
   private wideRows = 0;
+  /** The tiles the ring was written from (a rebuilt cache -- a cut, a
+   *  stamped block -- writes the window again). */
+  private wideTiles: MapTiles | null = null;
 
   /** One person's four OAM entries (a 16x16 frame of its sheet). */
   private put(sheet: string, px: number, py: number, frame: number, mirror: boolean): void {
@@ -438,23 +462,32 @@ export function buildTiles(map: any, maps?: Record<string, any>, swaps?: { befor
   return { map, tileset: map.tileset.blocks, w, h, ids, blocks: blocks.slice(), cuts: cut.size };
 }
 
-/** The wide picture's `cols` x `rows` window from tile (tx0, ty0) into its
- *  64x32 ring (writeWindow's, wider). */
-function writeWideWindow(maps: Uint8Array, t: MapTiles, map: any, tx0: number, ty0: number, cols: number, rows: number): void {
+/** The wide picture's `cols` x `rows` tiles from tile (tx0, ty0) into its
+ *  ring (writeWindow's, wider; the ring v.wideCols x v.wideRows), each row
+ *  marked written for the emitter. */
+function writeWideRect(v: GbVideo, t: MapTiles, map: any, tx0: number, ty0: number, cols: number, rows: number): void {
+  const maps = v.wideMap;
+  const rc = v.wideCols;
+  const rr = v.wideRows;
   const x = tx0 + PAD;
   const y = ty0 + PAD;
   const inside = x >= 0 && y >= 0 && x + cols <= t.w && y + rows <= t.h;
-  const col = tx0 & (WIDE_COLS - 1);
-  const first = Math.min(cols, WIDE_COLS - col);
+  const col = tx0 & (rc - 1);
+  const first = Math.min(cols, rc - col);
   for (let r = 0; r < rows; r++) {
-    const row = ((ty0 + r) & (WIDE_ROWS - 1)) * WIDE_COLS;
+    const row = ((ty0 + r) & (rr - 1)) * rc;
     if (inside) {
       const src = (y + r) * t.w + x;
-      maps.set(t.ids.subarray(src, src + first), row + col);
-      if (first < cols) maps.set(t.ids.subarray(src + first, src + cols), row);
+      if (cols === 1) maps[row + col] = t.ids[src]!;
+      else {
+        maps.set(t.ids.subarray(src, src + first), row + col);
+        if (first < cols) maps.set(t.ids.subarray(src + first, src + cols), row);
+      }
     } else {
-      for (let c = 0; c < cols; c++) maps[row + ((tx0 + c) & (WIDE_COLS - 1))] = map.tileAt(tx0 + c, ty0 + r) & 0x7f;
+      for (let c = 0; c < cols; c++) maps[row + ((tx0 + c) & (rc - 1))] = map.tileAt(tx0 + c, ty0 + r) & 0x7f;
     }
+    v.markWide(row + col, row + col + first);
+    if (first < cols) v.markWide(row, row + cols - first);
   }
 }
 

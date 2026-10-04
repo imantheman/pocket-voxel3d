@@ -1,6 +1,8 @@
 
 #include <3ds.h>
 #include <citro3d.h>
+#include <stdlib.h>
+#include <string.h>
 
 void c3d_depth_test(int on) {
     C3D_DepthTest(on ? true : false, GPU_GREATER, GPU_WRITE_ALL);
@@ -33,4 +35,28 @@ void gsp_flush(const void *p, u32 len) {
    its texture target, and the screen after it, through this. */
 void c3d_target_clear(C3D_RenderTarget* target, unsigned bits, unsigned colour, unsigned depth) {
     C3D_RenderTargetClear(target, (C3D_ClearBits)bits, colour, depth);
+}
+
+/* VIEW 2D's canvas textures (main.rs CanvasTex): raw RGBA5551 textures in
+   linear memory the host writes into itself, a changed tile row at a time,
+   instead of uploading the whole picture on every change (1 MB at 2D ZOOM
+   OUT MAX). `smooth`: linear when the texture shrinks onto the screen;
+   `repeat`: wrapped (the map ring) rather than clamped (the people). */
+void *c3d_tex_new(int w, int h, int smooth, int repeat) {
+    C3D_Tex *t = (C3D_Tex *)malloc(sizeof(C3D_Tex));
+    if (!t) return NULL;
+    if (!C3D_TexInit(t, (u16)w, (u16)h, GPU_RGBA5551)) { free(t); return NULL; }
+    C3D_TexSetFilter(t, GPU_NEAREST, smooth ? GPU_LINEAR : GPU_NEAREST);
+    GPU_TEXTURE_WRAP_PARAM wrap = repeat ? GPU_REPEAT : GPU_CLAMP_TO_EDGE;
+    C3D_TexSetWrap(t, wrap, wrap);
+    memset(t->data, 0, (size_t)w * (size_t)h * 2);
+    GSPGPU_FlushDataCache(t->data, (u32)w * (u32)h * 2);
+    return t;
+}
+void *c3d_tex_data(void *t) { return t ? ((C3D_Tex *)t)->data : NULL; }
+void c3d_tex_bind(void *t) { if (t) C3D_TexBind(0, (C3D_Tex *)t); }
+void c3d_tex_free(void *t) {
+    if (!t) return;
+    C3D_TexDelete((C3D_Tex *)t);
+    free(t);
 }

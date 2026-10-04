@@ -22,7 +22,12 @@ const STOPS: Stop[] = [
   { screen2d: "normal", zoom2d: 60 },
   { screen2d: "wide", zoom2d: 80 },
   { screen2d: "wide", zoom2d: 60 },
+  { screen2d: "wide", zoom2d: 50 },
+  { screen2d: "wide", zoom2d: 40 },
+  { screen2d: "normal", zoom2d: 40 },
+  { screen2d: "wide", zoom2d: 40, menu: true },
   { screen2d: "wide", zoom2d: 60, menu: true },
+  { screen2d: "normal", zoom2d: 100, menu: true },
 ];
 const STOP_TICKS = 6 * 60;
 let continued = false;

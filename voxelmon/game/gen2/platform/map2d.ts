@@ -44,7 +44,8 @@ import type { Palette4 } from "./lcd.ts";
 const ROOF_FIRST = 0x0a;
 const ROOF_COUNT = 9;
 /** Border tiles kept round a map's grid: the camera never sees further off
- *  (the widest canvas reaches 132 px past the screen's sides). A whole
+ *  (the widest canvas -- WIDE at 2D ZOOM OUT MAX -- reaches 238 px past the
+ *  screen's sides). A whole
  *  number of blocks, so every block's rows land on word boundaries
  *  (buildTiles). */
 const PAD = 32;

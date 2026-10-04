@@ -32,10 +32,13 @@ export const SCREEN_H = 144;
 /** OAM_X_OFS / OAM_Y_OFS: an OAM entry at (8, 16) is the top-left pixel. */
 export const OAM_X_OFS = 8;
 export const OAM_Y_OFS = 16;
-/** The wide picture's ring and objects (gb.rs GB_WIDE_COLS/ROWS/OBJS_MAX). */
+/** The wide picture's ring and objects (gb.rs GB_WIDE_COLS/ROWS/OBJS_MAX):
+ *  64x32 tiles, or 128x64 (the _MAX pair) for a picture too big for that. */
 export const WIDE_COLS = 64;
 export const WIDE_ROWS = 32;
-export const WIDE_OBJS_MAX = 96;
+export const WIDE_COLS_MAX = 128;
+export const WIDE_ROWS_MAX = 64;
+export const WIDE_OBJS_MAX = 160;
 
 /**
  * What a range of VRAM tiles holds: `count` tiles of atlas sheet `sheet`
@@ -101,9 +104,28 @@ export class GbVideo {
   wideScx = 0;
   wideScy = 0;
   wideFull = false;
-  readonly wideMap = new Uint8Array(WIDE_COLS * WIDE_ROWS);
+  readonly wideMap = new Uint8Array(WIDE_COLS_MAX * WIDE_ROWS_MAX);
+  /** The ring's size in tiles: WIDE_COLS x WIDE_ROWS or the _MAX pair. */
+  wideCols = WIDE_COLS;
+  wideRows = WIDE_ROWS;
   /** As mapsDirty, for wideMap. */
   wideMapDirty: boolean | undefined = undefined;
+  /** The ring index ranges written since the emitter last sent them, as
+   *  [from, to) pairs, so it compares only those (a step writes one row or
+   *  one column); `wideSpansAll` when it must compare the whole ring. */
+  readonly wideSpans: number[] = [];
+  wideSpansAll = false;
+
+  /** Ring indices [from, to) were written. */
+  markWide(from: number, to: number): void {
+    if (this.wideSpansAll || to <= from) return;
+    if (this.wideSpans.length >= 4096) {
+      this.wideSpans.length = 0;
+      this.wideSpansAll = true;
+      return;
+    }
+    this.wideSpans.push(from, to);
+  }
   readonly wideObjs = new Int16Array(WIDE_OBJS_MAX * 4);
   wideObjCount = 0;
 

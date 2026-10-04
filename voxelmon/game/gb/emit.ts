@@ -3,7 +3,7 @@
 // frame -- a scrolling minigame rewrites a column of the map every few
 // frames, not the map.
 import type { VoxelHost } from "../host.ts";
-import type { GbVideo } from "./video.ts";
+import { WIDE_COLS_MAX, WIDE_ROWS_MAX, type GbVideo } from "./video.ts";
 
 /** How the emitter names things the core addresses by number. */
 export interface GbResolve {
@@ -41,7 +41,7 @@ export class GbEmitter {
   private colours1 = "";
   private lines = "";
   private colours = "";
-  private readonly wideMap = new Uint8Array(2048);
+  private readonly wideMap = new Uint8Array(WIDE_COLS_MAX * WIDE_ROWS_MAX);
   private wide = "";
   private wideObjs = "";
 
@@ -91,24 +91,32 @@ export class GbEmitter {
     // the wide picture: its size and scroll, its ring (offset 0x800) while
     // it is on, its objects
     const wideOn = v.wideW > 0 && v.wideH > 0 && !!host.gbWide;
-    const wide = wideOn ? `${v.wideW},${v.wideH},${v.wideScx},${v.wideScy},${v.wideFull ? 1 : 0}` : "";
+    const wide = wideOn ? `${v.wideW},${v.wideH},${v.wideScx},${v.wideScy},${v.wideFull ? 1 : 0},${v.wideCols},${v.wideRows}` : "";
     if (wide !== this.wide) {
       this.wide = wide;
-      host.gbWide?.(wideOn ? v.wideW : 0, wideOn ? v.wideH : 0, v.wideScx, v.wideScy, v.wideFull ? 1 : 0);
+      host.gbWide?.(wideOn ? v.wideW : 0, wideOn ? v.wideH : 0, v.wideScx, v.wideScy, v.wideFull ? 1 : 0, v.wideCols, v.wideRows);
     }
     if (wideOn) {
-      let j = fresh || v.wideMapDirty !== false ? 0 : 2048;
-      while (j < 2048) {
-        if (v.wideMap[j] === this.wideMap[j]) { j++; continue; }
-        let end = j + 1;
-        let gap = 0;
-        for (let k = j + 1; k < 2048 && gap < MERGE_GAP; k++) {
-          if (v.wideMap[k] !== this.wideMap[k]) { end = k + 1; gap = 0; } else gap++;
+      // only the ring ranges written since the last send (a step's row or
+      // column), each compared against what the core holds
+      const send = (from: number, to: number): void => {
+        let j = from;
+        while (j < to) {
+          if (v.wideMap[j] === this.wideMap[j]) { j++; continue; }
+          let end = j + 1;
+          let gap = 0;
+          for (let k = j + 1; k < to && gap < MERGE_GAP; k++) {
+            if (v.wideMap[k] !== this.wideMap[k]) { end = k + 1; gap = 0; } else gap++;
+          }
+          host.gbMap?.(0x800 + j, hex(v.wideMap, j, end));
+          this.wideMap.set(v.wideMap.subarray(j, end), j);
+          j = end;
         }
-        host.gbMap?.(0x800 + j, hex(v.wideMap, j, end));
-        this.wideMap.set(v.wideMap.subarray(j, end), j);
-        j = end;
-      }
+      };
+      if (fresh || v.wideSpansAll) send(0, v.wideCols * v.wideRows);
+      else for (let s = 0; s < v.wideSpans.length; s += 2) send(v.wideSpans[s]!, v.wideSpans[s + 1]!);
+      v.wideSpans.length = 0;
+      v.wideSpansAll = false;
       let objs = "";
       const p = v.wideObjs;
       for (let k = 0; k < v.wideObjCount; k++) {

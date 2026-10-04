@@ -177,3 +177,85 @@ describe("VIEW 2D tile cache", () => {
     expect((view as any).tiles).toBe(first);
   });
 });
+
+describe("VIEW 2D wide ring", () => {
+  /** A stand-in for the core's GbScreen: the wide ring as the ops leave it. */
+  function coreMirror() {
+    const st = { cols: 64, rows: 32, scx: 0, scy: 0, w: 0, h: 0, ring: new Uint8Array(128 * 64), ops: 0 };
+    const host = new Proxy({} as any, {
+      get: (_t, name: string) => {
+        if (name === "gbWide") return (w: number, h: number, scx: number, scy: number, _f: number, cols = 64, rows = 32) => {
+          Object.assign(st, { w, h, cols: cols === 128 ? 128 : 64, rows: rows === 64 ? 64 : 32 });
+          st.scx = scx & (st.cols * 8 - 1);
+          st.scy = scy & (st.rows * 8 - 1);
+        };
+        if (name === "gbMap") return (at: number, hex: string) => {
+          st.ops++;
+          if (at < 0x800) return;
+          for (let i = 0; i < hex.length / 2; i++) st.ring[at - 0x800 + i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+        };
+        return () => {};
+      },
+    });
+    return { st, host };
+  }
+
+  for (const zoom of [60, 50, 40]) {
+    test.skipIf(!hasGen)(`walking at 2D ZOOM OUT ${zoom}% WIDE, the core's ring holds the map under the whole picture`, async () => {
+      const { GbEmitter } = await import("../voxelmon/game/gb/emit.ts");
+      const game = gameAt("VIRIDIAN_CITY", 18, 20);
+      game.save.options = { ...(game.save.options ?? {}), view: "2d", screen2d: "wide", zoom2d: zoom };
+      game.host.gbWide ??= () => {};
+      const view = new OverworldView2d();
+      const emitter = new GbEmitter();
+      const { st, host } = coreMirror();
+      const resolve = { page: () => 0, palette: () => 0 };
+      const p = game.overworld.player;
+      const map = game.overworld.map;
+      // a walk: right 3 tiles a pixel at a time, down 2, left 5, up 4, then a jump
+      const path: [number, number][] = [];
+      for (let k = 0; k < 24; k++) path.push([1, 0]);
+      for (let k = 0; k < 16; k++) path.push([0, 1]);
+      for (let k = 0; k < 40; k++) path.push([-1, 0]);
+      for (let k = 0; k < 32; k++) path.push([0, -1]);
+      path.push([64, 40]);
+      // the expected tiles: the cache (proven against the block-at-a-time
+      // reference above, connections included -- map.tileAt answers the
+      // border past an edge)
+      const t = buildTiles(map, data!.maps as any, (data as any).field?.cutTreeSwaps);
+      const pad = (t.w - map.def.width * 4) / 2;
+      let checked = 0;
+      for (const [dx, dy] of path) {
+        p.px += dx;
+        p.py += dy;
+        const v = view.build(game)!;
+        emitter.emit(host, v, resolve);
+        expect(st.w).toBe(v.wideW);
+        expect(st.cols).toBe(v.wideCols);
+        // every tile the picture shows (each 8 px and its last pixel),
+        // read through the core's ring at its scroll
+        const vx = Math.round(p.px) - 64 - ((st.w - 160) >> 1);
+        const vy = Math.round(p.py) - 64 - ((st.h - 144) >> 1);
+        const xs: number[] = [];
+        for (let x = 0; x < st.w; x += 8) xs.push(x);
+        xs.push(st.w - 1);
+        const ys: number[] = [];
+        for (let y = 0; y < st.h; y += 8) ys.push(y);
+        ys.push(st.h - 1);
+        for (const y of ys) {
+          for (const x of xs) {
+            const rx = (st.scx + x) & (st.cols * 8 - 1);
+            const ry = (st.scy + y) & (st.rows * 8 - 1);
+            const got = st.ring[(ry >> 3) * st.cols + (rx >> 3)];
+            const want = t.ids[(Math.floor((vy + y) / 8) + pad) * t.w + Math.floor((vx + x) / 8) + pad];
+            if (got !== want) throw new Error(`zoom ${zoom} at (${p.px},${p.py}) picture (${x},${y}): ${got} != ${want}`);
+            checked++;
+          }
+        }
+      }
+      expect(checked).toBeGreaterThan(1000);
+      // the ring is the big one past HIGH
+      expect(st.cols).toBe(zoom < 60 ? 128 : 64);
+    });
+  }
+});

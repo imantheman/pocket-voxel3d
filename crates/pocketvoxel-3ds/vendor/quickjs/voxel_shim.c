@@ -332,7 +332,7 @@ int qjs_register_voxel(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "gbOam",
         JS_NewCFunctionMagic(ctx, vox_numtext, "gbOam", 1, JS_CFUNC_generic_magic, 94));
     /* the 2D overworld's wide picture (core gb.rs wide_on) */
-    add_num(ctx, o, "gbWide",   115, 5);
+    add_num(ctx, o, "gbWide",   115, 7);
     JS_SetPropertyStr(ctx, o, "gbWideObjs",
         JS_NewCFunctionMagic(ctx, vox_numtext, "gbWideObjs", 1, JS_CFUNC_generic_magic, 116));
     /* The Gold screen (core lcd.rs). */

@@ -917,14 +917,15 @@ export const VOX_OP = {
   lcdUnderView: 113,
   /**
    * The GB screen's wide picture (the Kanto games' 2D SCREEN WIDE / 2D ZOOM):
-   * a `w` x `h` picture (at most 512 x 256) of the wide BG ring -- 64x32
-   * tiles, sent by gbMap from offset 0x800 -- from its pixel (scx, scy),
-   * in place of the hardware's 160x144. `full`: laid over the whole top
-   * screen, else the Game Boy's rect. 0 x 0: off. Cleared by gbReset.
-   *   gbWide(w, h, scx, scy, full)
+   * a `w` x `h` picture (at most 1024 x 512) of the wide BG ring --
+   * `cols` x `rows` tiles, 64x32 or 128x64 (anything else is 64x32), sent
+   * by gbMap from offset 0x800 -- from its pixel (scx, scy), in place of
+   * the hardware's 160x144. `full`: laid over the whole top screen, else
+   * the Game Boy's rect. 0 x 0: off. Cleared by gbReset.
+   *   gbWide(w, h, scx, scy, full, cols, rows)
    * Its objects, in the picture's own pixels, a lower index on top, OAM's
    * attribute bits; twelve digits each (y, x 16-bit two's complement,
-   * tile, attr), 96 at most:
+   * tile, attr), 160 at most:
    *   gbWideObjs(hex)
    */
   gbWide: 115,

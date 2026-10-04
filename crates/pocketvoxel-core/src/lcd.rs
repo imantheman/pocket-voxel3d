@@ -42,10 +42,12 @@ pub const LCD_HOLE: u8 = 0xff;
 pub const LCD_ALIASES: usize = 16;
 /// Objects the under canvas carries (`lcdUnderObjsBin`): the people on a
 /// widened or zoomed-out 2D map.
-pub const LCD_UNDER_OBJS_MAX: usize = 96;
-/// The largest under canvas (`lcdUnderView`): what fits one 512x256 texture.
-pub const LCD_VIEW_W_MAX: usize = 512;
-pub const LCD_VIEW_H_MAX: usize = 256;
+pub const LCD_UNDER_OBJS_MAX: usize = 160;
+/// The largest under canvas (`lcdUnderView`): what fits one 1024x512
+/// texture (2D ZOOM OUT's farthest steps; the host keeps a 512x256 one for
+/// a canvas that fits in it).
+pub const LCD_VIEW_W_MAX: usize = 1024;
+pub const LCD_VIEW_H_MAX: usize = 512;
 
 /// Cell attribute bits (the CGB BG attribute byte, bank bit reused as
 /// palette bit 3 and the unused bit 4 as the hole).

@@ -99,7 +99,7 @@ export interface VoxelNative {
   gbRegs?(lcdc: number, scx: number, scy: number, wx: number, wy: number, bgp: number, obp0: number, obp1: number): void;
   gbLines?(target: number, hex: string): void;
   gbOam?(hex: string): void;
-  gbWide?(w: number, h: number, scx: number, scy: number, full: number): void;
+  gbWide?(w: number, h: number, scx: number, scy: number, full: number, cols: number, rows: number): void;
   gbWideObjs?(hex: string): void;
   gbColours?(bg: number, obp0: number, obp1: number): void;
   /** The Gold screen (voxel-spec.ts lcdShow..lcdLines; gen2/platform/lcd.ts). */
@@ -354,7 +354,7 @@ export class QuickJsHost implements VoxelHost {
     native.gbOam?.(hex);
   }
   // the wide picture only where the shim has it: view2d asks (wideSupported)
-  gbWide = native.gbWide ? (w: number, h: number, scx: number, scy: number, full: number): void => native.gbWide!(w, h, scx, scy, full) : undefined;
+  gbWide = native.gbWide ? (w: number, h: number, scx: number, scy: number, full: number, cols = 64, rows = 32): void => native.gbWide!(w, h, scx, scy, full, cols, rows) : undefined;
   gbWideObjs = native.gbWideObjs ? (hex: string): void => native.gbWideObjs!(hex) : undefined;
   gbColours(bg: number, obp0: number, obp1: number): void {
     native.gbColours?.(bg, obp0, obp1);

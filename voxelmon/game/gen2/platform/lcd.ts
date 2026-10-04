@@ -20,7 +20,7 @@ export const LCD_W = 160;
 export const LCD_H = 144;
 export const LCD_OBJS_MAX = 128;
 /** The under canvas's objects at most (lcd.rs LCD_UNDER_OBJS_MAX). */
-export const LCD_UNDER_OBJS_MAX = 96;
+export const LCD_UNDER_OBJS_MAX = 160;
 export const LCD_HOLE = 0xff;
 /** Palette slots per layer. */
 export const LCD_PALS = 16;

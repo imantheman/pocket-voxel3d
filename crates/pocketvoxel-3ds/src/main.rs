@@ -1836,37 +1836,179 @@ fn lcd_page_row(pages: &mut Vec<(u16, Vec<u8>, usize)>, atl: &[pak::AtlasPage], 
     r
 }
 
-/// The canvas textures' size: one 512x256 RGBA5551 each.
+/// The canvas textures' size: 512x256 RGBA5551 each, or 1024x512 for a
+/// picture too big for that (2D ZOOM OUT's FAR and MAX), which is also
+/// smoothed as it shrinks onto the screen.
 const CANVAS_TW: usize = 512;
 const CANVAS_TH: usize = 256;
+const CANVAS_TW_BIG: usize = 1024;
+const CANVAS_TH_BIG: usize = 512;
 
-/// A pixel's byte offset in a CANVAS_TW-wide RGBA5551 texture's Morton
-/// tile order (LcdTex's MX/MY, an 8x8 tile at a time).
-fn canvas_off(x: usize, y: usize) -> usize {
+/// A pixel's byte offset in a `tw`-wide RGBA5551 texture's Morton tile
+/// order (LcdTex's MX/MY, an 8x8 tile at a time).
+fn canvas_off(x: usize, y: usize, tw: usize) -> usize {
     const MX: [usize; 8] = [0, 1, 4, 5, 16, 17, 20, 21];
     const MY: [usize; 8] = [0, 2, 8, 10, 32, 34, 40, 42];
-    (((y >> 3) * (CANVAS_TW / 8) + (x >> 3)) * 64 + MX[x & 7] + MY[y & 7]) * 2
+    (((y >> 3) * (tw / 8) + (x >> 3)) * 64 + MX[x & 7] + MY[y & 7]) * 2
+}
+
+extern "C" {
+    fn c3d_tex_new(w: i32, h: i32, smooth: i32, repeat: i32) -> *mut core::ffi::c_void;
+    fn c3d_tex_data(t: *mut core::ffi::c_void) -> *mut u8;
+    fn c3d_tex_bind(t: *mut core::ffi::c_void);
+    fn c3d_tex_free(t: *mut core::ffi::c_void);
+}
+
+/// A VIEW 2D canvas texture (c3d_state.c c3d_tex_*): a raw citro3d texture
+/// the host writes into itself, so a changed tile row is copied straight in
+/// and flushed alone. Uploading the whole picture on any change was ~1 MB a
+/// frame at 2D ZOOM OUT MAX (the people move every frame), 20 ms of the
+/// frame in Citra. A big canvas's ring filters linearly as it shrinks (below
+/// a Game Boy pixel a screen pixel, nearest drops rows and columns and
+/// shimmers as the map scrolls).
+struct CanvasTex {
+    t: *mut core::ffi::c_void,
+    len: usize,
+}
+
+impl CanvasTex {
+    fn new(tw: usize, th: usize, smooth: bool, repeat: bool) -> Option<Self> {
+        let t = unsafe { c3d_tex_new(tw as i32, th as i32, smooth as i32, repeat as i32) };
+        (!t.is_null()).then_some(CanvasTex { t, len: tw * th * 2 })
+    }
+
+    /// The tile rows set in `rows` (8 pixels tall, contiguous in the Morton
+    /// order: `tw` x 8 texels apiece) copied from `src` and flushed.
+    fn copy_rows(&mut self, src: &[u8], tw: usize, rows: u64) {
+        let row_bytes = tw * 8 * 2;
+        let dst = unsafe { c3d_tex_data(self.t) };
+        if dst.is_null() {
+            return;
+        }
+        let mut r = 0usize;
+        while r < 64 {
+            if rows & (1u64 << r) == 0 {
+                r += 1;
+                continue;
+            }
+            // a run of rows at once
+            let mut end = r + 1;
+            while end < 64 && rows & (1u64 << end) != 0 {
+                end += 1;
+            }
+            let (o, n) = (r * row_bytes, (end - r) * row_bytes);
+            if o + n <= src.len() && o + n <= self.len {
+                unsafe {
+                    core::ptr::copy_nonoverlapping(src.as_ptr().add(o), dst.add(o), n);
+                    gsp_flush(dst.add(o), n as u32);
+                }
+            }
+            r = end;
+        }
+    }
+
+    fn bind(&self) {
+        unsafe { c3d_tex_bind(self.t) };
+    }
+}
+
+impl Drop for CanvasTex {
+    fn drop(&mut self) {
+        unsafe { c3d_tex_free(self.t) };
+    }
+}
+
+/// Canvas textures let go when the canvas changes size, dropped a few
+/// updates later: the GPU may still be reading last frame's.
+struct Retired(Vec<(CanvasTex, u8)>);
+impl Retired {
+    fn add(&mut self, tex: &mut [Option<CanvasTex>; 2]) {
+        for t in tex.iter_mut() {
+            if let Some(t) = t.take() {
+                self.0.push((t, 3));
+            }
+        }
+    }
+    fn tick(&mut self) {
+        for e in self.0.iter_mut() {
+            e.1 = e.1.saturating_sub(1);
+        }
+        self.0.retain(|e| e.1 > 0);
+    }
+}
+
+/// One picture's two textures -- the one written is never the one the GPU
+/// is reading -- and, for each, the tile rows of the CPU copy it has not
+/// taken yet (bit r: rows 8r..8r+7).
+struct TexPair {
+    tex: [Option<CanvasTex>; 2],
+    dirty: [u64; 2],
+    repeat: bool,
+}
+
+impl TexPair {
+    fn new(repeat: bool) -> Self {
+        TexPair { tex: [None, None], dirty: [u64::MAX; 2], repeat }
+    }
+    /// Tile row `row` of the CPU copy changed.
+    fn mark(&mut self, row: usize) {
+        let b = 1u64 << (row & 63);
+        self.dirty[0] |= b;
+        self.dirty[1] |= b;
+    }
+    fn mark_all(&mut self) {
+        self.dirty = [u64::MAX; 2];
+    }
+    /// Both textures to `retired`; made afresh (and filled whole) next time.
+    fn retire(&mut self, retired: &mut Retired) {
+        retired.add(&mut self.tex);
+        self.mark_all();
+    }
+    /// Texture `k` brought up to `data` (`tw` x `th`); false when it could
+    /// not be made.
+    fn refresh(&mut self, k: usize, data: &[u8], tw: usize, th: usize) -> bool {
+        if self.tex[k].is_none() {
+            self.tex[k] = CanvasTex::new(tw, th, self.repeat && tw > CANVAS_TW, self.repeat);
+            self.dirty[k] = u64::MAX;
+        }
+        let rows = th / 8;
+        let live = if rows >= 64 { u64::MAX } else { (1u64 << rows) - 1 };
+        match self.tex[k].as_mut() {
+            Some(t) => {
+                let want = self.dirty[k] & live;
+                if want != 0 {
+                    t.copy_rows(data, tw, want);
+                }
+                self.dirty[k] = 0;
+                true
+            }
+            None => false,
+        }
+    }
+    fn get(&self, k: usize) -> Option<&CanvasTex> {
+        self.tex[k].as_ref()
+    }
 }
 
 /// The Kanto 2D overworld's wide picture (GbScreen::wide_on: 2D SCREEN WIDE
-/// / 2D ZOOM OUT) kept the way MapCanvas keeps Gold's: the 64x32-tile wide
-/// ring as a 512x256 texture -- texel = ring pixel, wrapped, so a scroll is
-/// the quad's UVs and a step draws only the row or column it brought in --
-/// and the people on an overlay texture of their own, set and cleared by
-/// the pixel. Rendering the whole picture a frame was ~15 ms in Citra at
-/// the widest zoom.
+/// / 2D ZOOM OUT) kept the way MapCanvas keeps Gold's: the core's wide ring
+/// (64x32 tiles, or 128x64 at FAR / MAX) as a texture -- texel = ring pixel,
+/// wrapped, so a scroll is the quad's UVs and a step draws only the row or
+/// column it brought in -- and the people on an overlay texture of their
+/// own, set and cleared by the pixel. Rendering the whole picture a frame
+/// was ~15 ms in Citra at the widest zoom.
 struct GbWide {
-    ring: [Option<texture::Texture>; 2],
-    over: [Option<texture::Texture>; 2],
+    ring: TexPair,
+    over: TexPair,
     cur: usize,
     ring_data: Vec<u8>,
     over_data: Vec<u8>,
-    ring_ver: u32,
-    over_ver: u32,
-    ring_tex_ver: [u32; 2],
-    over_tex_ver: [u32; 2],
     /// The ring's tile ids as drawn, and the shading/colours they were drawn in.
-    ids: [u8; pocketvoxel_core::gb::GB_WIDE_COLS * pocketvoxel_core::gb::GB_WIDE_ROWS],
+    ids: Vec<u8>,
+    /// The textures' size: the core's ring in pixels (gbWide's cols x rows).
+    tw: usize,
+    th: usize,
+    retired: Retired,
     drawn: bool,
     bgp: u8,
     lut: [u16; 16],
@@ -1878,16 +2020,15 @@ struct GbWide {
 impl GbWide {
     fn new() -> Self {
         GbWide {
-            ring: [None, None],
-            over: [None, None],
+            ring: TexPair::new(true),
+            over: TexPair::new(false),
             cur: 0,
             ring_data: Vec::new(),
             over_data: Vec::new(),
-            ring_ver: 1,
-            over_ver: 1,
-            ring_tex_ver: [0, 0],
-            over_tex_ver: [0, 0],
-            ids: [0; pocketvoxel_core::gb::GB_WIDE_COLS * pocketvoxel_core::gb::GB_WIDE_ROWS],
+            ids: Vec::new(),
+            tw: CANVAS_TW,
+            th: CANVAS_TH,
+            retired: Retired(Vec::new()),
             drawn: false,
             bgp: 0,
             lut: [0; 16],
@@ -1901,14 +2042,13 @@ impl GbWide {
     fn idle(&mut self) {
         self.drawn = false;
         self.off_for = self.off_for.saturating_add(1);
+        self.retired.tick();
         if self.off_for == CANVAS_KEEP_OFF && !self.ring_data.is_empty() {
             self.ring_data = Vec::new();
             self.over_data = Vec::new();
             self.over_set.clear();
-            self.ring = [None, None];
-            self.over = [None, None];
-            self.ring_tex_ver = [0, 0];
-            self.over_tex_ver = [0, 0];
+            self.ring = TexPair::new(true);
+            self.over = TexPair::new(false);
         }
     }
 
@@ -1919,20 +2059,34 @@ impl GbWide {
     fn update(&mut self, gb: &pocketvoxel_core::gb::GbScreen, vram: &[u8], lut: &[u16; 16],
               full: bool, changed: &[u16]) -> bool {
         self.off_for = 0;
+        self.retired.tick();
+        // the core's ring decides the textures' size; a new size starts over
+        let (cols, rows) = (gb.wide_cols as usize, gb.wide_rows as usize);
+        if (cols * 8, rows * 8) != (self.tw, self.th) {
+            self.tw = cols * 8;
+            self.th = rows * 8;
+            self.ring.retire(&mut self.retired);
+            self.over.retire(&mut self.retired);
+            self.ring_data = Vec::new();
+            self.over_data = Vec::new();
+        }
+        let (tw, th) = (self.tw, self.th);
+        if self.ids.len() != cols * rows {
+            self.ids = vec![0; cols * rows];
+            self.drawn = false;
+        }
         if self.ring_data.is_empty() {
-            self.ring_data = vec![0u8; CANVAS_TW * CANVAS_TH * 2];
-            self.over_data = vec![0u8; CANVAS_TW * CANVAS_TH * 2];
+            self.ring_data = vec![0u8; tw * th * 2];
+            self.over_data = vec![0u8; tw * th * 2];
             self.over_set.clear();
             self.drawn = false;
-            self.ring_ver = self.ring_ver.wrapping_add(1);
-            self.over_ver = self.over_ver.wrapping_add(1);
+            self.ring.mark_all();
+            self.over.mark_all();
         }
         let t0 = now_us();
         // --- the ring: the tiles whose id, VRAM or colours changed ---
         let all = full || !self.drawn || self.bgp != gb.bgp || self.lut != *lut;
         let mut tile = [0u8; 64];
-        let mut drew = false;
-        let cols = pocketvoxel_core::gb::GB_WIDE_COLS;
         for i in 0..self.ids.len() {
             let id = gb.wide_map[i];
             let mut redo = all || self.ids[i] != id;
@@ -1949,83 +2103,53 @@ impl GbWide {
             for y in 0..8 {
                 for x in 0..8 {
                     let v = lut[tile[y * 8 + x] as usize & 15];
-                    let o = canvas_off(tx * 8 + x, ty * 8 + y);
+                    let o = canvas_off(tx * 8 + x, ty * 8 + y, tw);
                     self.ring_data[o] = v as u8;
                     self.ring_data[o + 1] = (v >> 8) as u8;
                 }
             }
-            drew = true;
+            self.ring.mark(ty);
         }
         self.drawn = true;
         self.bgp = gb.bgp;
         self.lut = *lut;
-        if drew {
-            self.ring_ver = self.ring_ver.wrapping_add(1);
-        }
         // --- the people ---
         self.over_next.clear();
         {
             let next = &mut self.over_next;
             gb.wide_objects(vram, &mut |x, y, p| {
-                if (x as usize) < CANVAS_TW && (y as usize) < CANVAS_TH {
+                if (x as usize) < tw && (y as usize) < th {
                     next.push((x as u16, y as u16, lut[p as usize & 15]));
                 }
             });
         }
         if self.over_next != self.over_set {
             for &(x, y, _) in self.over_set.iter() {
-                let o = canvas_off(x as usize, y as usize);
+                let o = canvas_off(x as usize, y as usize, tw);
                 self.over_data[o] = 0;
                 self.over_data[o + 1] = 0;
+                self.over.mark(y as usize >> 3);
             }
             for &(x, y, v) in self.over_next.iter() {
-                let o = canvas_off(x as usize, y as usize);
+                let o = canvas_off(x as usize, y as usize, tw);
                 self.over_data[o] = v as u8;
                 self.over_data[o + 1] = (v >> 8) as u8;
+                self.over.mark(y as usize >> 3);
             }
             core::mem::swap(&mut self.over_set, &mut self.over_next);
-            self.over_ver = self.over_ver.wrapping_add(1);
         }
         // --- the textures: the pair's other one brought up to date ---
         let next = self.cur ^ 1;
-        let stale = self.ring_tex_ver[next] != self.ring_ver || self.over_tex_ver[next] != self.over_ver;
-        let mut ok = true;
-        if stale || self.ring[self.cur].is_none() {
-            for (tex, data, ver, tex_ver, wrap) in [
-                (&mut self.ring[next], &self.ring_data, self.ring_ver, &mut self.ring_tex_ver[next], texture::Wrap::Repeat),
-                (&mut self.over[next], &self.over_data, self.over_ver, &mut self.over_tex_ver[next], texture::Wrap::ClampToEdge),
-            ] {
-                if tex.is_none() {
-                    if let Ok(mut t) = texture::Texture::new(texture::TextureParameters::new_2d(
-                        CANVAS_TW as u16, CANVAS_TH as u16, texture::ColorFormat::Rgba5551)) {
-                        t.set_filter(texture::Filter::Nearest, texture::Filter::Nearest);
-                        t.set_wrap(wrap, wrap);
-                        *tex = Some(t);
-                    }
-                }
-                match tex.as_mut() {
-                    Some(t) if *tex_ver != ver => {
-                        if t.load_image(&data[..], texture::Face::default()).is_ok() {
-                            unsafe { gsp_flush(data.as_ptr(), data.len() as u32); }
-                            *tex_ver = ver;
-                        } else {
-                            ok = false;
-                        }
-                    }
-                    Some(_) => {}
-                    None => ok = false,
-                }
-            }
-            if ok {
-                self.cur = next;
-            }
+        let ok = self.ring.refresh(next, &self.ring_data, tw, th) & self.over.refresh(next, &self.over_data, tw, th);
+        if ok {
+            self.cur = next;
         }
         unsafe { PERF_LCD_US += now_us() - t0; }
-        ok && self.ring[self.cur].is_some() && self.over[self.cur].is_some()
+        ok && self.ring.get(self.cur).is_some() && self.over.get(self.cur).is_some()
     }
 
-    fn textures(&self) -> (Option<&texture::Texture>, Option<&texture::Texture>) {
-        (self.ring[self.cur].as_ref(), self.over[self.cur].as_ref())
+    fn textures(&self) -> (Option<&CanvasTex>, Option<&CanvasTex>) {
+        (self.ring.get(self.cur), self.over.get(self.cur))
     }
 }
 
@@ -2033,24 +2157,20 @@ impl GbWide {
 /// widened to the top screen's edges, or zoomed out, its text boxes and
 /// menus still the Gold screen's 160x144 over it.
 ///
-/// The map is a ring texture over the under layer -- texel (gx mod 512,
-/// gy mod 256) holds the layer's pixel (gx, gy) -- drawn wrapping, so a
-/// step draws only the tiles it brings into view (and those whose animation
-/// frame turned); the GPU scrolls the rest. The people are a second,
-/// transparent texture the canvas's size, redrawn where they stand. Each
-/// is kept on the CPU and uploaded whole when it changed, double-buffered
-/// so the texture written is never the one the GPU is reading.
+/// The map is a ring texture over the under layer -- texel (gx mod tw,
+/// gy mod th) holds the layer's pixel (gx, gy) -- drawn wrapping, so a step
+/// draws only the tiles it brings into view (and those whose animation frame
+/// turned); the GPU scrolls the rest. The people are a second, transparent
+/// texture the canvas's size, redrawn where they stand. Each is kept on the
+/// CPU and its changed tile rows copied into the texture (TexPair),
+/// double-buffered so the texture written is never the one the GPU is
+/// reading.
 struct MapCanvas {
-    ring: [Option<texture::Texture>; 2],
-    over: [Option<texture::Texture>; 2],
+    ring: TexPair,
+    over: TexPair,
     cur: usize,
     ring_data: Vec<u8>,
     over_data: Vec<u8>,
-    /// What each texture of the pair was last uploaded from.
-    ring_ver: u32,
-    over_ver: u32,
-    ring_tex_ver: [u32; 2],
-    over_tex_ver: [u32; 2],
     /// The tile rect the ring holds, [x0, x1) x [y0, y1) in layer tiles.
     valid: Option<(i32, i32, i32, i32)>,
     /// The layer, map palettes and animation frames the ring was drawn with.
@@ -2062,9 +2182,14 @@ struct MapCanvas {
     over_next: Vec<(u16, u16, u16)>,
     /// Updates in a row with the canvas off: past CANVAS_KEEP_OFF its
     /// buffers and textures go back (512 KB of heap, 1 MB of linear memory
-    /// the 3D world wants), so they are held only while 2D SCREEN WIDE /
-    /// 2D ZOOM is in use.
+    /// the 3D world wants; four times that for the big canvas), so they are
+    /// held only while 2D SCREEN WIDE / 2D ZOOM is in use.
     off_for: u32,
+    /// The textures' size: 512x256 while the view (and a tile of scroll)
+    /// fits in it, else 1024x512.
+    tw: usize,
+    th: usize,
+    retired: Retired,
 }
 
 /// Off this many updates (two seconds), the canvas lets its memory go. Not
@@ -2074,15 +2199,11 @@ const CANVAS_KEEP_OFF: u32 = 60;
 impl MapCanvas {
     fn new() -> Self {
         MapCanvas {
-            ring: [None, None],
-            over: [None, None],
+            ring: TexPair::new(true),
+            over: TexPair::new(false),
             cur: 0,
             ring_data: Vec::new(),
             over_data: Vec::new(),
-            ring_ver: 1,
-            over_ver: 1,
-            ring_tex_ver: [0, 0],
-            over_tex_ver: [0, 0],
             valid: None,
             ring_serial: u32::MAX,
             ring_cols: [0; 32],
@@ -2090,6 +2211,9 @@ impl MapCanvas {
             over_set: Vec::new(),
             over_next: Vec::new(),
             off_for: 0,
+            tw: CANVAS_TW,
+            th: CANVAS_TH,
+            retired: Retired(Vec::new()),
         }
     }
 
@@ -2097,6 +2221,7 @@ impl MapCanvas {
     /// layer draws under the screen's holes then, or not at all).
     fn update(&mut self, lcd: &pocketvoxel_core::lcd::LcdScreen, atl: &[pak::AtlasPage],
               pages: &mut Vec<(u16, Vec<u8>, usize)>) -> bool {
+        self.retired.tick();
         if !lcd.shown || !lcd.canvas_on() {
             // drawn afresh when it comes back
             self.valid = None;
@@ -2106,20 +2231,30 @@ impl MapCanvas {
                 self.ring_data = Vec::new();
                 self.over_data = Vec::new();
                 self.over_set.clear();
-                self.ring = [None, None];
-                self.over = [None, None];
-                self.ring_tex_ver = [0, 0];
-                self.over_tex_ver = [0, 0];
+                self.ring = TexPair::new(true);
+                self.over = TexPair::new(false);
             }
             return false;
         }
         self.off_for = 0;
+        let big = lcd.view_w as usize + 8 > CANVAS_TW || lcd.view_h as usize + 8 > CANVAS_TH;
+        let size = if big { (CANVAS_TW_BIG, CANVAS_TH_BIG) } else { (CANVAS_TW, CANVAS_TH) };
+        if size != (self.tw, self.th) {
+            (self.tw, self.th) = size;
+            self.ring.retire(&mut self.retired);
+            self.over.retire(&mut self.retired);
+            self.ring_data = Vec::new();
+            self.over_data = Vec::new();
+            self.valid = None;
+        }
+        let (tw, th) = (self.tw, self.th);
         if self.ring_data.is_empty() {
-            self.ring_data = vec![0u8; CANVAS_TW * CANVAS_TH * 2];
-            self.over_data = vec![0u8; CANVAS_TW * CANVAS_TH * 2];
+            self.ring_data = vec![0u8; tw * th * 2];
+            self.over_data = vec![0u8; tw * th * 2];
             self.over_set.clear();
-            self.ring_ver = self.ring_ver.wrapping_add(1);
-            self.over_ver = self.over_ver.wrapping_add(1);
+            self.valid = None;
+            self.ring.mark_all();
+            self.over.mark_all();
         }
         let t_lcd = now_us();
         let mut last = usize::MAX;
@@ -2151,7 +2286,6 @@ impl MapCanvas {
         }
         let held = self.valid;
         let mut tile = [0u8; 64];
-        let mut drew = false;
         for ty in need.1..need.3 {
             for tx in need.0..need.2 {
                 let inside = held.is_some_and(|v| tx >= v.0 && tx < v.2 && ty >= v.1 && ty < v.3);
@@ -2164,92 +2298,62 @@ impl MapCanvas {
                     continue;
                 }
                 let shows = lcd.canvas_tile(&mut row, tx, ty, &mut tile);
-                let (sx, sy) = (tx.rem_euclid((CANVAS_TW / 8) as i32) as usize * 8,
-                                ty.rem_euclid((CANVAS_TH / 8) as i32) as usize * 8);
+                let (sx, sy) = (tx.rem_euclid((tw / 8) as i32) as usize * 8,
+                                ty.rem_euclid((th / 8) as i32) as usize * 8);
                 for y in 0..8 {
                     for x in 0..8 {
                         let v = if shows { lut[tile[y * 8 + x] as usize] } else { 0 };
-                        let o = canvas_off(sx + x, sy + y);
+                        let o = canvas_off(sx + x, sy + y, tw);
                         self.ring_data[o] = v as u8;
                         self.ring_data[o + 1] = (v >> 8) as u8;
                     }
                 }
-                drew = true;
+                self.ring.mark(sy >> 3);
             }
         }
         self.valid = Some(need);
         self.ring_serial = lcd.under_serial;
         self.ring_cols = cols;
         self.ring_alias = lcd.aliases;
-        if drew {
-            self.ring_ver = self.ring_ver.wrapping_add(1);
-        }
 
         // --- the people: cleared where they were, drawn where they are ---
         self.over_next.clear();
         {
             let next = &mut self.over_next;
             lcd.canvas_objects(&mut row, &mut |x, y, p| {
-                if (x as usize) < CANVAS_TW && (y as usize) < CANVAS_TH {
+                if (x as usize) < tw && (y as usize) < th {
                     next.push((x as u16, y as u16, lut[p as usize]));
                 }
             });
         }
         if self.over_next != self.over_set {
             for &(x, y, _) in self.over_set.iter() {
-                let o = canvas_off(x as usize, y as usize);
+                let o = canvas_off(x as usize, y as usize, tw);
                 self.over_data[o] = 0;
                 self.over_data[o + 1] = 0;
+                self.over.mark(y as usize >> 3);
             }
             for &(x, y, v) in self.over_next.iter() {
-                let o = canvas_off(x as usize, y as usize);
+                let o = canvas_off(x as usize, y as usize, tw);
                 self.over_data[o] = v as u8;
                 self.over_data[o + 1] = (v >> 8) as u8;
+                self.over.mark(y as usize >> 3);
             }
             core::mem::swap(&mut self.over_set, &mut self.over_next);
-            self.over_ver = self.over_ver.wrapping_add(1);
         }
 
         // --- the textures: the pair's other one brought up to date ---
         let next = self.cur ^ 1;
-        let stale = self.ring_tex_ver[next] != self.ring_ver || self.over_tex_ver[next] != self.over_ver;
-        let mut ok = true;
-        if stale || self.ring[self.cur].is_none() {
-            for (tex, data, ver, tex_ver, wrap) in [
-                (&mut self.ring[next], &self.ring_data, self.ring_ver, &mut self.ring_tex_ver[next], texture::Wrap::Repeat),
-                (&mut self.over[next], &self.over_data, self.over_ver, &mut self.over_tex_ver[next], texture::Wrap::ClampToEdge),
-            ] {
-                if tex.is_none() {
-                    if let Ok(mut t) = texture::Texture::new(texture::TextureParameters::new_2d(
-                        CANVAS_TW as u16, CANVAS_TH as u16, texture::ColorFormat::Rgba5551)) {
-                        t.set_filter(texture::Filter::Nearest, texture::Filter::Nearest);
-                        t.set_wrap(wrap, wrap);
-                        *tex = Some(t);
-                    }
-                }
-                match tex.as_mut() {
-                    Some(t) if *tex_ver != ver => {
-                        if t.load_image(&data[..], texture::Face::default()).is_ok() {
-                            unsafe { gsp_flush(data.as_ptr(), data.len() as u32); }
-                            *tex_ver = ver;
-                        } else {
-                            ok = false;
-                        }
-                    }
-                    Some(_) => {}
-                    None => ok = false,
-                }
-            }
-            if ok {
-                self.cur = next;
-            }
+        let ok = self.ring.refresh(next, &self.ring_data, tw, th) & self.over.refresh(next, &self.over_data, tw, th);
+        if ok {
+            self.cur = next;
         }
         unsafe { PERF_LCD_US += now_us() - t_lcd; }
-        ok && self.ring[self.cur].is_some() && self.over[self.cur].is_some()
+        ok && self.ring.get(self.cur).is_some() && self.over.get(self.cur).is_some()
     }
 
-    fn textures(&self) -> (Option<&texture::Texture>, Option<&texture::Texture>) {
-        (self.ring[self.cur].as_ref(), self.over[self.cur].as_ref())
+    fn textures(&self) -> (Option<&CanvasTex>, Option<&CanvasTex>) {
+        (self.ring.get(self.cur), self.over.get(self.cur))
     }
 }
 
@@ -6347,7 +6451,7 @@ if page_tex.len() < pak_static.atlases.len() {
                     // the ring wrapped at the scroll, the people over it
                     let (vw, vh) = (sc.gb.wide_w as f32, sc.gb.wide_h as f32);
                     let (sx, sy) = (sc.gb.wide_scx as f32, sc.gb.wide_scy as f32);
-                    let (tw, th) = (CANVAS_TW as f32, CANVAS_TH as f32);
+                    let (tw, th) = (gb_wide.tw as f32, gb_wide.th as f32);
                     let quad = |u0: f32, v0: f32, u1: f32, v1: f32| {
                         let mp = |px: i16, py: i16, u: f32, v: f32| Vertex {
                             pos: [px, py, 0, 0], color: [255, 255, 255, 255], uv: [u, v] };
@@ -6407,7 +6511,7 @@ if page_tex.len() < pak_static.atlases.len() {
                 };
                 let (x0, y0, x1, y1) = (qpx(rx0), qpx(0.0), qpx(rx1), qpx(UI_VIEW_H));
                 let (gx0, gy0) = sc.lcd.canvas_under_xy();
-                let (tw, th) = (CANVAS_TW as f32, CANVAS_TH as f32);
+                let (tw, th) = (map_canvas.tw as f32, map_canvas.th as f32);
                 let quad = |u0: f32, v0: f32, u1: f32, v1: f32| {
                     let mp = |px: i16, py: i16, u: f32, v: f32| Vertex {
                         pos: [px, py, 0, 0], color: [255, 255, 255, 255], uv: [u, v] };
@@ -7185,9 +7289,9 @@ if page_tex.len() < pak_static.atlases.len() {
                     }
                     // the GB screen, over every picture -- or its wide picture
                     if let (Some([rb, ob]), Some(rt), Some(ot)) = (gb_wide_ref, gb_wide_ring, gb_wide_over) {
-                        frame.bind_texture(texture::Index::Texture0, rt);
+                        rt.bind();
                         frame.draw_arrays(buffer::Primitive::Triangles, rb, None).unwrap();
-                        frame.bind_texture(texture::Index::Texture0, ot);
+                        ot.bind();
                         frame.draw_arrays(buffer::Primitive::Triangles, ob, None).unwrap();
                     } else if let (Some(gb), Some(t)) = (gb_buf_ref, gb_tex_ref) {
                         frame.bind_texture(texture::Index::Texture0, t);
@@ -7268,9 +7372,9 @@ if page_tex.len() < pak_static.atlases.len() {
                         .screen(ScreenOrientation::Rotated).into();
                     frame.bind_vertex_uniform(projection_idx, &po);
                     frame.bind_vertex_uniform(uvx_idx, FVec4::new(1.0, 1.0, 0.0, 0.0));
-                    frame.bind_texture(texture::Index::Texture0, rt);
+                    rt.bind();
                     frame.draw_arrays(buffer::Primitive::Triangles, rb, None).unwrap();
-                    frame.bind_texture(texture::Index::Texture0, ot);
+                    ot.bind();
                     frame.draw_arrays(buffer::Primitive::Triangles, ob, None).unwrap();
                     frame.bind_vertex_uniform(projection_idx, mvp);
                     unsafe { c3d_depth_test(1); }
