@@ -10,10 +10,11 @@ downloads its symbol tables and data. Both use the MIT-licensed version at
 commit `943ba5dcbfa62cf831e881684857ffd4867fe774` (August 2026), which
 `cooker/cooker.py` pins.
 
-The Gold port (Gen 2) carries the same project's Gen 2 support from its last
-MIT-licensed commit, `bdfac727aaccfea696be49a23c5f501451be50d5` (18 September
-2026), under the same licence; nothing after the project's relicensing is
-used.
+The Gen 2 games (Gold, Silver and Crystal) carry the same project's Gen 2
+support from its last MIT-licensed commit,
+`bdfac727aaccfea696be49a23c5f501451be50d5` (18 September 2026), under the
+same licence, and the converter downloads their manifests from that commit;
+nothing after the project's relicensing is used.
 
 https://github.com/bryanthaboi/gen1recomp
 
@@ -77,9 +78,9 @@ https://github.com/ShaneMcGovernIE/potato_voxel
 
 ## Gen2Recomped-DramaticShapes
 
-Gold's voxel shape rules (the Gen 2 collision classes, the Gen 2
+The Gen 2 games' voxel shape rules (the Gen 2 collision classes, the Gen 2
 building templates and the Gen 2 tile classifier) are ported from this Gen 2
-edition of the Dramatic Shape voxel mod, commit `726782f`, and the Gold cook
+edition of the Dramatic Shape voxel mod, commit `726782f`, and the Gen 2 cook
 reads its height profile.
 
 https://github.com/UNDERdecoded/Gen2Recomped-DramaticShapes

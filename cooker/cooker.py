@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Pocket Voxel cooker: drop your Red, Blue, Yellow, Gold or Silver ROM on it, get an SD card folder.
+"""Pocket Voxel cooker: drop your Red, Blue, Yellow, Gold, Silver or Crystal ROM on it, get an SD card folder.
 
-    Windows:  drag your .gb (or Yellow / Gold / Silver .gbc) file onto "Cook Pocket Voxel.bat"
+    Windows:  drag your .gb (or Yellow / Gold / Silver / Crystal .gbc) file onto "Cook Pocket Voxel.bat"
     Mac:      double-click "Cook Pocket Voxel.command", then drag the .gb
               file into the window it opens and press Return
     Linux:    ./cook.sh /path/to/red.gb
@@ -13,7 +13,7 @@ Delete the folder and the machine is exactly as it was.
 
 What it does, in order:
 
-  1. Checks the ROM is the real US Red, Blue, Yellow, Gold or Silver (by SHA-1) and refuses
+  1. Checks the ROM is the real US Red, Blue, Yellow, Gold, Silver or Crystal (by SHA-1) and refuses
      anything else. The ROM never leaves your machine and nothing from it
      is in this folder or on GitHub -- that is the whole point of cooking
      on YOUR computer.
@@ -24,8 +24,8 @@ What it does, in order:
   3. Asks which colours you want. Red and Blue: black and white, as the
      original handheld showed them, or the community colourisation.
      Yellow: black and white, its own colours from the ROM,
-     or the community colours. (Gold and Silver have only their own
-     colours: nothing to ask.)
+     or the community colours. (Gold, Silver and Crystal have only their
+     own colours: nothing to ask.)
   4. Runs the importer (your ROM -> data, seconds) and the cooker (data ->
      222 map paks, two to fifteen minutes depending on the machine).
   5. Puts the finished `3ds` folder in `output/`, writes `SOURCES.txt`
@@ -115,6 +115,10 @@ DATA_FILES = {
     # Silver's, fetched only for a Silver ROM (same commit: it is an ancestor).
     "manifest_silver": ("gen1recomp-gen2", "tools/rom_manifest_silver.json", GEN1RECOMP_GEN2,
                         "6ceb7506c6590fbfcb96f854eb092769a001c02e8664cd85a5446f9e75f1475a", 420887, "MIT"),
+    # Crystal's, fetched only for a Crystal ROM (same commit). One manifest
+    # serves both of its US revisions.
+    "manifest_crystal": ("gen1recomp-gen2", "tools/rom_manifest_crystal.json", GEN1RECOMP_GEN2,
+                         "9c4c5826d440c58fa47d4097a8a7b882af6fa928bba89b1b66b0728b8e177932", 500013, "MIT"),
     "shapes": ("potato_voxel", "data/voxel_heights.lua", POTATO_VOXEL,
                "20e0f26e1163e4861da760d21b6f71e41a66a52813119b2a1b15ae3a8c78f934", 255629, "used with the author's permission"),
 }
@@ -125,6 +129,12 @@ BLUE_SHA1 = "d7037c83e1ae5b39bde3c30787637ba1d4c48ce2"
 YELLOW_SHA1 = "cc7d03262ebfaf2f06772c1a480c7d9d5f4a38e1"
 GOLD_SHA1 = "d8b8a3600a465308c9953dfa04f0081c05bdcb94"
 SILVER_SHA1 = "49b163f7e57702bc939d642a18f591de55d92dae"
+# Crystal was sold as 1.0 and 1.1; both are the same game to the importer.
+CRYSTAL_SHA1 = "f4cd194bdee0d04ca4eac29e09b8e4e9d818c133"
+CRYSTAL_11_SHA1 = "f2f52230b536214ef7c9924f483392993e226cfb"
+CRYSTAL = {"id": "crystal", "label": "Crystal", "manifest": "manifest_crystal", "paks": "paks_crystal",
+           "maps": 388, "gamedata": "gamedata.json", "overlay": "version_crystal.vxat",
+           "dsx": "pocketvoxel-3ds-crystal.3dsx", "cia": "PocketVoxel3DCrystal.cia"}
 # Red and Blue share one paks folder (their maps line up); Yellow's maps and
 # monsters are redrawn, so it has a folder of its own beside theirs, and Gold
 # (Gen 2, a different engine) has one too.
@@ -146,11 +156,14 @@ GAMES = {
     SILVER_SHA1: {"id": "silver", "label": "Silver", "manifest": "manifest_silver", "paks": "paks_gold",
                   "maps": 368, "gamedata": "gamedata_silver.json", "overlay": "version_silver.vxat",
                   "dsx": "pocketvoxel-3ds-silver.3dsx", "cia": "PocketVoxel3DSilver.cia"},
+    # Crystal's maps and tiles are its own, so it has a folder of its own.
+    CRYSTAL_SHA1: CRYSTAL,
+    CRYSTAL_11_SHA1: CRYSTAL,
 }
 # The games whose colours come out of the ROM itself (colour-handheld games).
-GBC_GAMES = ("yellow", "gold", "silver")
+GBC_GAMES = ("yellow", "gold", "silver", "crystal")
 # Gen 2: one engine, shapes from the game source, colours only from the ROM.
-GEN2_GAMES = ("gold", "silver")
+GEN2_GAMES = ("gold", "silver", "crystal")
 # The colours each Gen 1 game can be cooked in (--palette), default first:
 #   dmg        black and white, the original handheld's four greys
 #   gbc        the game's own colours (Yellow only: Red and
@@ -462,7 +475,7 @@ def open_folder(path):
 def find_rom(arg, yes):
     path = arg
     if not path:
-        say("Which ROM? Drag your Red, Blue, Yellow, Gold or Silver file into this window and press Return.")
+        say("Which ROM? Drag your Red, Blue, Yellow, Gold, Silver or Crystal file into this window and press Return.")
         if yes:
             die("no ROM given (pass --rom PATH with --yes)")
         try:
@@ -479,13 +492,15 @@ def find_rom(arg, yes):
     digest = sha1_of(rom)
     game = GAMES.get(digest)
     if not game:
-        die(f"that is not the US Red, Blue, Yellow, Gold or Silver ROM.",
+        die(f"that is not the US Red, Blue, Yellow, Gold, Silver or Crystal ROM.",
             f"\n  its SHA-1 is  {digest}\n  Red's is      {RED_SHA1}\n  Blue's is     {BLUE_SHA1}",
             f"\n  Yellow's is   {YELLOW_SHA1}\n  Gold's is     {GOLD_SHA1}\n  Silver's is   {SILVER_SHA1}",
-            "\nOnly those five work. Crystal, other regions, colour hacks, ROM hacks, and",
+            f"\n  Crystal's is  {CRYSTAL_SHA1} (1.0) or {CRYSTAL_11_SHA1} (1.1)",
+            "\nOnly those work. Other regions, colour hacks, ROM hacks, and",
             "files with a header or trailing bytes will all be refused here. Nothing was read from it.")
     say(f"  it is {game['label']} (US). Good.")
-    return rom, game
+    # which of the game's ROMs it was (Crystal has two), for SOURCES.txt
+    return rom, dict(game, sha1=digest)
 
 
 def write_sources(repo_desc, rom, palette, downloads, game):
@@ -497,7 +512,7 @@ def write_sources(repo_desc, rom, palette, downloads, game):
         "",
         "YOUR ROM (never copied, never uploaded; read on this machine only):",
         f"  {rom}",
-        f"  SHA-1 {[s for s, g in GAMES.items() if g is game][0]}  ({game['label']}, US)",
+        f"  SHA-1 {game['sha1']}  ({game['label']}, US)",
         "",
         "GAME SOURCE:",
         f"  {repo_desc}",
@@ -523,7 +538,7 @@ def write_sources(repo_desc, rom, palette, downloads, game):
     if game["id"] in GEN2_GAMES:
         lines += [
             "  voxelmon/cook/gen2-profile.json  (in the game source above)",
-            "    the Gold and Silver shapes: a snapshot of data/voxel_heights.lua from",
+            "    the Gen 2 shapes: a snapshot of data/voxel_heights.lua from",
             "    https://github.com/UNDERdecoded/Gen2Recomped-DramaticShapes  commit 726782f  (MIT)",
         ]
     if game["id"] in GBC_GAMES:
@@ -569,7 +584,7 @@ def write_sources(repo_desc, rom, palette, downloads, game):
 def main():
     global _log
     ap = argparse.ArgumentParser(add_help=True)
-    ap.add_argument("rom", nargs="?", help="your Red, Blue, Yellow, Gold or Silver ROM file")
+    ap.add_argument("rom", nargs="?", help="your Red, Blue, Yellow, Gold, Silver or Crystal ROM file")
     ap.add_argument("--rom", dest="rom_opt")
     ap.add_argument("--yes", action="store_true", help="accept every default without asking")
     ap.add_argument("--palette", choices=("dmg", "gbc", "community"),
@@ -626,7 +641,7 @@ def main():
     # 3. colour
     asked = args.palette or ("community" if args.colour else "dmg" if args.grayscale else None)
     if game["id"] in GEN2_GAMES:
-        # Gold and Silver have only their own colours, read from the ROM.
+        # Gold, Silver and Crystal have only their own colours, read from the ROM.
         palette = "gbc"
         say(f"Colour: {game['label']}'s own colour palettes, from your ROM.")
         if asked and asked != "gbc":
@@ -725,7 +740,8 @@ def main():
     shutil.move(str(card_src), str(card))
     # the ~930 MB of pre-sharing intermediates and the ~330 MB staging copy:
     # nothing reads either again
-    for d in ("paks_orig", "paks", "paks_orig_yellow", "paks_yellow", "paks_orig_gold", "paks_gold", "paks_orig_silver"):
+    for d in ("paks_orig", "paks", "paks_orig_yellow", "paks_yellow", "paks_orig_gold", "paks_gold", "paks_orig_silver",
+              "paks_orig_crystal", "paks_crystal"):
         shutil.rmtree(repo / "dist" / "voxelmon" / d, ignore_errors=True)
     shutil.rmtree(repo / "dist" / "voxelmon" / "sdcard", ignore_errors=True)
     # A release ships the console binary next to this file; a checkout may

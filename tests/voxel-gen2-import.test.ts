@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { GOLD_SHA1, SILVER_SHA1, type VoxelEnv } from "../voxelmon/import/env.ts";
+import { CRYSTAL_11_SHA1, CRYSTAL_SHA1, GOLD_SHA1, SILVER_SHA1, type VoxelEnv } from "../voxelmon/import/env.ts";
 import { extractFont, inkFrom1bpp, inkFrom2bpp } from "../voxelmon/import/gen2/font.ts";
 import { runImportGen2 } from "../voxelmon/import/gen2/index.ts";
 import { extractItems, extractMarts, extractMoves } from "../voxelmon/import/gen2/items.ts";
@@ -896,4 +896,71 @@ describe.skipIf(!silver)("gen2 against the Silver ROM", () => {
     expect(gfx["title/trail"]).toMatchObject({ w: 16, h: 16 });
     rmSync(dir, { recursive: true, force: true });
   }, 60000);
+});
+
+// ---------------------------------------------------------------- Crystal
+
+const CRYSTAL_ROM = process.env.VOXELMON_CRYSTAL_ROM ?? join(homedir(), "roms/crystal.gbc");
+const CRYSTAL_MANIFEST = join(
+  process.env.VOXELMON_G1R_GEN2 ?? join(homedir(), "gen1recomp-mit-gen2"),
+  "tools/rom_manifest_crystal.json",
+);
+function crystalInputs(): { rom: Uint8Array; manifest: Gen2Manifest } | null {
+  if (!existsSync(CRYSTAL_ROM) || !existsSync(CRYSTAL_MANIFEST)) return null;
+  const rom = new Uint8Array(readFileSync(CRYSTAL_ROM));
+  const sha = createHash("sha1").update(rom).digest("hex");
+  // either US revision (1.0 or 1.1): one manifest serves both
+  if (sha !== CRYSTAL_SHA1 && sha !== CRYSTAL_11_SHA1) return null;
+  return { rom, manifest: JSON.parse(readFileSync(CRYSTAL_MANIFEST, "utf8")) };
+}
+const crystal = crystalInputs();
+if (!crystal) console.log(`voxel-gen2-import: skipping the Crystal ROM checks — no verified ROM at ${CRYSTAL_ROM}`);
+
+describe.skipIf(!crystal)("gen2 against the Crystal ROM", () => {
+  test("the same importer, Crystal's own: its maps, intro, title, Battle Tower and Unown walls", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "gen2-crystal-"));
+    const env = {
+      version: "crystal", romPath: CRYSTAL_ROM, g1rDir: "", voxelmodDir: "", refGeneratedDir: "",
+      genDir: dir, manifestPath: CRYSTAL_MANIFEST,
+    } as VoxelEnv;
+    const log = console.log;
+    console.log = () => {};
+    try {
+      await runImportGen2(env, crystal!.rom);
+    } finally {
+      console.log = log;
+    }
+    const read = (f: string) => JSON.parse(readFileSync(join(dir, `${f}.json`), "utf8"));
+    expect(read("version")).toEqual({ version: "crystal" });
+    // 20 more maps than Gold's 368 (the Battle Tower, the mobile rooms, the chambers)
+    const maps = read("maps");
+    expect(Object.keys(maps).length).toBe(388);
+    expect(maps.BATTLE_TOWER_1F).toBeDefined();
+    // every map's tileset is there, and Crystal's two-bank sheets with it
+    const tilesets = read("tilesets");
+    for (const m of Object.values(maps) as any[]) expect(tilesets[m.tileset]).toBeDefined();
+    // the engine flags by name: Crystal's are one higher than pokegold's from 16 on
+    const order = read("constants").engineFlagOrder;
+    expect(order.length).toBe(162);
+    expect(order.indexOf("ENGINE_REACHED_GOLDENROD")).toBe(22);
+    expect(order.indexOf("ENGINE_TIME_CAPSULE")).toBe(83);
+    // the professor shows WOOPER, and the girl has her own pic
+    const oak = read("oak_speech");
+    expect(oak.demoSpecies).toBe("WOOPER");
+    expect([oak.playerPic, oak.playerPicFemale]).toEqual(["intro/chris", "intro/kris"]);
+    expect(oak.splash.ditto).toBe("splash/ditto");
+    // the opening movie and the Suicune title
+    expect(read("intro").layout).toBe("crystal");
+    expect(Object.keys(read("intro").acts)).toEqual(["unownA", "unownHI", "unowns", "background", "suicuneJump", "suicuneClose", "suicuneBack", "crystalUnowns"]);
+    const title = read("title").title ?? read("title");
+    expect(title.layout).toBe("crystal_title");
+    // the Battle Tower roster: 70 trainers, ten level groups of 21 mons
+    const tower = read("trainers").battleTower;
+    expect([tower.trainers.length, tower.groups.length, tower.groups[0].length, tower.levelGroups]).toEqual([70, 10, 21, 10]);
+    // the Ruins of Alph walls and Crystal's seven in-game trades
+    const events = read("events");
+    expect(events.unownWalls[0].word).toBe("ESCAPE");
+    expect(events.trades.length).toBe(7);
+    rmSync(dir, { recursive: true, force: true });
+  }, 120000);
 });

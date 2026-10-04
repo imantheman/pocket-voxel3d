@@ -1,18 +1,18 @@
 POCKET VOXEL COOKER
 ===================
 
-This turns YOUR Red, Blue, Yellow, Gold or Silver ROM into the files the 3DS game needs. There is
+This turns YOUR Red, Blue, Yellow, Gold, Silver or Crystal ROM into the files the 3DS game needs. There is
 no download of the game anywhere, because the game is built from your
 cartridge, on your computer. This folder does that for you.
 
 You need:  a New 3DS (or New 2DS XL) with homebrew, an SD card with 400 MB
-free, your own US Red, Blue, Yellow, Gold or Silver file, and an internet connection for the
+free, your own US Red, Blue, Yellow, Gold, Silver or Crystal file, and an internet connection for the
 first run. Budget 20 minutes, most of it waiting.
 
 
 WINDOWS
 -------
-Drag your .gb file (Yellow's, Gold's and Silver's are .gbc) onto "Cook Pocket Voxel.bat". A window opens and walks
+Drag your .gb file (Yellow's, Gold's, Silver's and Crystal's are .gbc) onto "Cook Pocket Voxel.bat". A window opens and walks
 you through it. If Python is not on the PC it offers to fetch the official
 portable one into this folder first.
 
@@ -37,8 +37,8 @@ WHAT IT ASKS
      colourisation (the default).
      Yellow: its own colours read from your ROM (the
      default), black and white, or the community colours.
-     Gold and Silver are not asked: they use their own colours, read from
-     your ROM.
+     Gold, Silver and Crystal are not asked: they use their own colours,
+     read from your ROM.
    (--palette dmg|gbc|community answers it without asking.)
 3. At the end, whether to copy the result straight onto your SD card if
    it can see one.
@@ -60,10 +60,13 @@ That is Red's. Each game has its own .3dsx and map folder:
     Yellow   pocketvoxel-3ds-yellow.3dsx   voxelmon/paks_yellow
     Gold     pocketvoxel-3ds-gold.3dsx     voxelmon/paks_gold
     Silver   pocketvoxel-3ds-silver.3dsx   voxelmon/paks_gold
+    Crystal  pocketvoxel-3ds-crystal.3dsx  voxelmon/paks_crystal
 
 Gold and Silver share one set of map files (voxelmon/paks_gold), the way Red
 and Blue share theirs: cook one, copy it, then cook the other and copy it over
-the top, and both play as their own cartridge.
+the top, and both play as their own cartridge. Crystal's maps are its own
+(voxelmon/paks_crystal), so it sits beside the others untouched. Its 1.0 and
+1.1 ROMs both work.
 
 Open the SD card, open its `3ds` folder, and put `voxelmon` and
 `pocketvoxel-3ds.3dsx` inside it, beside whatever else is there. Do not
@@ -73,7 +76,8 @@ wipe your other homebrew.
 
 Then open the Homebrew Launcher on the 3DS and pick Pocket Voxel. Or
 install the game's .cia (PocketVoxel3DRed.cia, PocketVoxel3DBlue.cia,
-PocketVoxel3DYellow.cia, PocketVoxel3DGold.cia or PocketVoxel3DSilver.cia,
+PocketVoxel3DYellow.cia, PocketVoxel3DGold.cia, PocketVoxel3DSilver.cia or
+PocketVoxel3DCrystal.cia,
 all in this folder) with FBI for a HOME menu icon; it reads the same maps.
 
 The game files, each game's .3dsx and .cia, are in this folder already.
