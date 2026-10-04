@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Pocket Voxel cooker, Mac and Linux front door.
 #
-#   ./cook.sh /path/to/PokemonRed.gb
+#   ./cook.sh /path/to/red.gb
 #
 # On a Mac, double-click "Cook Pocket Voxel.command" instead, then drag the
 # .gb file into the window it opens and press Return. Everything it does is

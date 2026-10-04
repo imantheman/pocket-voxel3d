@@ -47,7 +47,7 @@ has the same layout):
   pack: 239 named SuperPalettes, 151 species→name entries, and the
   `world` table (per-tileset tile→palette-group vectors, per-group colours,
   the per-town roof pairs, 8 OBJ palettes and their ROM-picture-id
-  assignment). It is **pokered-gbc-derived, not ROM-derived**: Pokémon Red
+  assignment). It is **pokered-gbc-derived, not ROM-derived**: Red
   ships no CGB code, so **there is no `CGBBasePalettes` for Red at all** —
   every colour in this file comes from the pokered-gbc source tree, and
   gen1recomp commits the generated table under its own MIT licence.

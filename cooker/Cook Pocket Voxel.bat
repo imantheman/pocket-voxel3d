@@ -1,7 +1,7 @@
 @echo off
 rem Pocket Voxel cooker, Windows front door.
 rem
-rem   Drag your Pokemon Red or Blue .gb file onto this file.
+rem   Drag your Red or Blue .gb file onto this file.
 rem
 rem Everything it does is in cooker.py, next to this file, which is plain
 rem Python you can open in Notepad. This .bat only finds a Python to run it

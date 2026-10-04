@@ -1,13 +1,13 @@
 # Pocket Voxel 3D
 
-Pokémon Red, Blue, Yellow, Gold and Silver, rebuilt as 3D voxel dioramas that
+Five Game Boy creature-RPGs -- Red, Blue, Yellow, Gold and Silver -- rebuilt as 3D voxel dioramas that
 run on a **New Nintendo 3DS / New 2DS XL** with the stereoscopic slider doing
 real 3D. Trade and battle between two consoles on the same wifi. Each game can
 also be played on the original flat Game Boy screen, in its OPTION menu.
 
 **You bring the game.** Nothing from any cartridge is in this repository or
-in the download. A small program on your computer reads *your own* US Pokémon
-Red, Blue, Yellow, Gold or Silver file and turns it into the files the 3DS
+in the download. A small program on your computer reads *your own* US
+Red, Blue, Yellow, Gold or Silver cartridge file and turns it into the files the 3DS
 needs. The ROM never leaves your machine.
 
 ---
@@ -22,7 +22,7 @@ needs. The ROM never leaves your machine.
   maps), **350 MB** for Yellow, **500 MB** for Gold and Silver (they share
   theirs).
 - A Windows PC or a Mac, with internet for the first run.
-- Your own US Pokémon Red, Blue or Yellow (`.gb`, Yellow's may be `.gbc`) or
+- Your own US Red, Blue or Yellow cartridge file (`.gb`, Yellow's may be `.gbc`) or
   Gold or Silver (`.gbc`) file. The program checks it is the real one and
   refuses anything else. Each game is its own game on the 3DS, with its own
   save; cook whichever you have, one after another.
@@ -67,7 +67,7 @@ press Return. Everything else is the same.
 
 ### If something goes wrong
 
-- **"That is not the US Pokemon Red, Blue, Yellow, Gold or Silver ROM."**
+- **"That is not the US Red, Blue, Yellow, Gold or Silver ROM."**
   The file is a different version (Crystal is not supported), a hack,
   another region, or a bad dump. Only the original US games work.
 - **The window closes at once.** Python is missing. Run the bat again; it
@@ -87,7 +87,7 @@ press Return. Everything else is the same.
 ### Playing with a friend
 
 Both consoles need the game, and both need to be on the **same wifi
-network**. Walk into any Pokémon Center, talk to the receptionist at the
+network**. Walk into any healing center, talk to the receptionist at the
 right-hand counter, and pick **TRADE CENTER** or **COLOSSEUM**. The two
 consoles find each other on the wifi by themselves; there is nothing to set
 up. Then step onto the stool at your end of the table and press **A**.

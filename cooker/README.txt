@@ -1,12 +1,12 @@
 POCKET VOXEL COOKER
 ===================
 
-This turns YOUR Pokemon Red, Blue, Yellow, Gold or Silver ROM into the files the 3DS game needs. There is
+This turns YOUR Red, Blue, Yellow, Gold or Silver ROM into the files the 3DS game needs. There is
 no download of the game anywhere, because the game is built from your
 cartridge, on your computer. This folder does that for you.
 
 You need:  a New 3DS (or New 2DS XL) with homebrew, an SD card with 400 MB
-free, your own US Pokemon Red, Blue, Yellow, Gold or Silver file, and an internet connection for the
+free, your own US Red, Blue, Yellow, Gold or Silver file, and an internet connection for the
 first run. Budget 20 minutes, most of it waiting.
 
 
@@ -24,7 +24,7 @@ the ROM, drag the .gb file into the window and press Return.
 
 LINUX
 -----
-    ./cook.sh /path/to/PokemonRed.gb
+    ./cook.sh /path/to/red.gb
 
 
 WHAT IT ASKS

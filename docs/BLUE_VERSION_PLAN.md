@@ -110,7 +110,7 @@ game data.
    Red keeping its current paths so `cc_*` scripts and the deploy keep
    working untouched.
 4. The importer stamps the version into `gamedata.json` — there is no
-   version field today, only `field.source: "canonical Pokemon Red ROM …"`
+   version field today, only `field.source: "canonical Red ROM …"`
    as prose. A real `version: "red" | "blue"` key is what the guest reads.
 
 ### The guest reads the stamp, in one place
