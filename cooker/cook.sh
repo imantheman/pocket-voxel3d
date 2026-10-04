@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Pocket Voxel cooker, Mac and Linux front door.
 #
-#   ./cook.sh /path/to/red.gb
+#   ./cook.sh /path/to/your-rom.gb      (or a .gbc: Yellow, Gold, Silver, Crystal)
 #
 # On a Mac, double-click "Cook Pocket Voxel.command" instead, then drag the
-# .gb file into the window it opens and press Return. Everything it does is
+# ROM file into the window it opens and press Return. Everything it does is
 # in cooker.py, next to this file. It needs python3; a Mac without it will
 # offer Apple's Command Line Tools, which is where python3 comes from there.
 cd "$(dirname "$0")" || exit 1

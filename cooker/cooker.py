@@ -61,7 +61,9 @@ from pathlib import Path
 # (the `cooker/` folder of the repository) that checkout is used and nothing
 # is fetched; on its own, it fetches this ref as a zip (about 2 MB).
 POCKET_VOXEL_REPO = "imantheman/pocket-voxel3d"
-POCKET_VOXEL_REF = "main"
+# The release this cooker ships with: its source is what the .3dsx and .cia
+# files beside it were built from.
+POCKET_VOXEL_REF = "v2.1.0"
 
 # Bun runs the importer and the cooker. MIT. https://bun.sh
 BUN_VERSION = "1.4.2"
@@ -354,7 +356,11 @@ def ensure_repo():
     if (checkout / "tools" / "cook3ds.ts").exists():
         return checkout, "the checkout this cooker is part of"
     repo = WORK / "pocket-voxel"
-    if (repo / "tools" / "cook3ds.ts").exists():
+    # A fetched copy is used again only if it is this cooker's release: a new
+    # cooker unzipped over an old folder must not cook with the old source.
+    stamp = repo / ".pocket-voxel-ref"
+    fetched = stamp.read_text(encoding="utf-8").strip() if stamp.exists() else ""
+    if (repo / "tools" / "cook3ds.ts").exists() and fetched == POCKET_VOXEL_REF:
         return repo, f"{POCKET_VOXEL_REPO} @ {POCKET_VOXEL_REF} (already fetched)"
     # (POCKET_VOXEL_ZIP in the environment names another zip -- a file://
     # one, say -- which is how the repository's tests exercise this path.)
@@ -368,6 +374,7 @@ def ensure_repo():
         zf.extractall(WORK)
     (WORK / top.pop()).rename(repo)
     z.unlink()
+    stamp.write_text(POCKET_VOXEL_REF + "\n", encoding="utf-8")
     return repo, f"{POCKET_VOXEL_REPO} @ {POCKET_VOXEL_REF}"
 
 

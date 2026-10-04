@@ -89,6 +89,48 @@ The files in a map folder belong together. Whenever you rebuild, copy the
 whole folder again, never one file.
 
 
+UPDATING AND COOKING AGAIN
+--------------------------
+A new release comes with its own cooker. Unzip it into a new folder (over
+the old one works too: it fetches the new source by itself), install each
+game's new .cia with FBI (or copy its .3dsx into SD:/3ds/), and cook again
+only when the release notes say a game's maps changed or to add a new game.
+When you do cook again, delete that game's old map folder on the card
+(SD:/3ds/voxelmon/paks, paks_yellow, paks_gold or paks_crystal) before
+copying the new voxelmon folder in. Red and Blue share paks, Gold and Silver
+share paks_gold: cook again one of a pair, and cook and copy the other too.
+Never delete the save files.
+
+
+YOUR SAVES
+----------
+Each game's save is one file in SD:/3ds/voxelmon/:
+
+    Red      save.lua            Gold     save_gold.lua
+    Blue     save_blue.lua       Silver   save_silver.lua
+    Yellow   save_yellow.lua     Crystal  save_crystal.lua
+
+Copy it to your computer to back it up; copy it back to restore.
+
+They are the same format as gen1recomp's saves on a PC, so a game moves
+between the two either way. gen1recomp keeps them in its data folder: on
+Windows, type %APPDATA% into File Explorer's address bar and open
+gen1recomp's folder (the one holding a "saves" folder and options.lua).
+Inside "saves" is a folder per game (red, blue, yellow, gold, silver,
+crystal) with slot1.lua in it.
+
+    PC to 3DS:  copy saves/<game>/slot1.lua to SD:/3ds/voxelmon/ and rename
+                it as in the list above (saves/gold/slot1.lua -> save_gold.lua).
+                An older Gold, Silver or Crystal save may be save_<game>.lua
+                right in the data folder instead; copy that.
+    3DS to PC:  copy the card's file into saves/<game>/ (make the folder if
+                needed) and rename it slot1.lua. Close gen1recomp first.
+
+Keep a copy of whatever you replace. A save the game cannot read is never
+written over: the title screen says why, and the file is copied to
+<name>.unreadable first.
+
+
 HOW TO READ IT
 --------------
 cooker.py is the whole program. It is about 500 lines of ordinary Python

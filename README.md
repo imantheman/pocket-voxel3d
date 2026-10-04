@@ -65,6 +65,63 @@ press Return. Everything else is the same.
 
 **Linux:** `./cook.sh /path/to/your-rom.gb`
 
+### Updating, and cooking again
+
+Each release's cooker zip carries that release's games, and a cook made with
+an older cooker can need the newer one. To update:
+
+1. Download the new `PocketVoxel-Cooker.zip` and unzip it into a **new**
+   folder. Unzipping over the old one works too: the cooker notices and
+   fetches the new source by itself.
+2. Install each game's new `.cia` with FBI (or copy its new `.3dsx` into
+   `SD:/3ds/`). Your saves are separate files and are not touched.
+3. Cook again only when the release notes say a game's maps changed, or to
+   add a game you have not cooked yet. Cook the ROM as in steps 3 to 5, then,
+   on the card, **delete that game's old map folder** (`paks`, `paks_yellow`,
+   `paks_gold` or `paks_crystal` inside `SD:/3ds/voxelmon/`) before copying
+   the new `voxelmon` folder in, so nothing old is left beside the new files.
+   Red and Blue share `paks`, and Gold and Silver share `paks_gold`: after
+   cooking one of a pair again, cook and copy the other as well.
+
+Never delete the `save...lua` files in `SD:/3ds/voxelmon/`: those are your
+saves.
+
+### Your saves: backing up, and moving them to and from gen1recomp
+
+Every game keeps its save as one file in `SD:/3ds/voxelmon/`:
+
+| Game | Save file on the SD card |
+|---|---|
+| Red | `save.lua` |
+| Blue | `save_blue.lua` |
+| Yellow | `save_yellow.lua` |
+| Gold | `save_gold.lua` |
+| Silver | `save_silver.lua` |
+| Crystal | `save_crystal.lua` |
+
+**Back up** by copying that file to your computer. To restore, copy it back.
+
+The saves are the same format as [gen1recomp](https://github.com/bryanthaboi/gen1recomp)'s
+on a PC, so a game can move between the two in either direction. Its saves
+are in its data folder: on Windows, type `%APPDATA%` into File Explorer's
+address bar and open gen1recomp's folder there (the one holding a `saves`
+folder and an `options.lua`). Inside `saves` there is one folder per game
+(`red`, `blue`, `yellow`, `gold`, `silver`, `crystal`), each holding
+`slot1.lua` (and more slots if you made them).
+
+- **PC to 3DS:** copy `saves/<game>/slot1.lua` to the SD card's
+  `3ds/voxelmon/` folder and rename it to the name in the table above
+  (`saves/gold/slot1.lua` becomes `save_gold.lua`). A Gold, Silver or Crystal
+  game saved before gen1recomp had slots may instead be a file called
+  `save_<game>.lua` right in its data folder; copy that one.
+- **3DS to PC:** copy the file from the card into `saves/<game>/` (make the
+  folder if it is not there) and rename it `slot1.lua`. Close gen1recomp
+  first.
+- Copy over a save only while neither game is running, and keep a copy of
+  the file you are replacing. If a save cannot be read, the game says so on
+  the title screen and keeps the file as it was (it copies it to
+  `<name>.unreadable` before ever writing over it).
+
 ### If something goes wrong
 
 - **"That is not the US Red, Blue, Yellow, Gold, Silver or Crystal ROM."**
