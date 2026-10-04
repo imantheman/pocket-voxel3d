@@ -22,8 +22,8 @@ What it does, in order:
      projects it builds on), with the URL and license of each, and asks.
      Every download is checked against a checksum pinned below.
   3. Asks which colours you want. Red and Blue: black and white, as the
-     Game Boy showed them, or the community colourisation (pokered-gbc).
-     Yellow: black and white, its own Game Boy Color colours from the ROM,
+     original handheld showed them, or the community colourisation.
+     Yellow: black and white, its own colours from the ROM,
      or the community colours. (Gold and Silver have only their own
      colours: nothing to ask.)
   4. Runs the importer (your ROM -> data, seconds) and the cooker (data ->
@@ -127,7 +127,7 @@ GOLD_SHA1 = "d8b8a3600a465308c9953dfa04f0081c05bdcb94"
 SILVER_SHA1 = "49b163f7e57702bc939d642a18f591de55d92dae"
 # Red and Blue share one paks folder (their maps line up); Yellow's maps and
 # monsters are redrawn, so it has a folder of its own beside theirs, and Gold
-# (Johto, a different engine) has one too.
+# (Gen 2, a different engine) has one too.
 GAMES = {
     RED_SHA1: {"id": "red", "label": "Red", "manifest": "manifest", "paks": "paks", "maps": 222,
                "gamedata": "gamedata.json", "overlay": "version_red.vxat",
@@ -147,13 +147,13 @@ GAMES = {
                   "maps": 368, "gamedata": "gamedata_silver.json", "overlay": "version_silver.vxat",
                   "dsx": "pocketvoxel-3ds-silver.3dsx", "cia": "PocketVoxel3DSilver.cia"},
 }
-# The games whose colours come out of the ROM itself (Game Boy Color games).
+# The games whose colours come out of the ROM itself (colour-handheld games).
 GBC_GAMES = ("yellow", "gold", "silver")
 # Gen 2: one engine, shapes from the game source, colours only from the ROM.
 GEN2_GAMES = ("gold", "silver")
 # The colours each Gen 1 game can be cooked in (--palette), default first:
-#   dmg        black and white, the Game Boy's own four greys
-#   gbc        the game's own Game Boy Color colours (Yellow only: Red and
+#   dmg        black and white, the original handheld's four greys
+#   gbc        the game's own colours (Yellow only: Red and
 #              Blue are black-and-white games and have none)
 #   community  pokered-gbc's colourisation, fetched from gen1recomp
 PALETTES = {
@@ -162,8 +162,8 @@ PALETTES = {
     "yellow": ("gbc", "dmg", "community"),
 }
 PALETTE_LABELS = {
-    "dmg": "black and white (the Game Boy's own greys)",
-    "gbc": "the game's own Game Boy Color colours, from your ROM",
+    "dmg": "black and white (the original greys)",
+    "gbc": "the game's own colours, from your ROM",
     "community": "the community colours (pokered-gbc)",
 }
 
@@ -530,7 +530,7 @@ def write_sources(repo_desc, rom, palette, downloads, game):
         lines += [
             "",
             "ABOUT THE COLOUR:",
-            f"  {game['label']} is a Game Boy Color game; every colour in this",
+            f"  {game['label']} is a colour game; every colour in this",
             "  build was read out of your ROM on this machine.",
             "",
             "EVERYTHING ELSE in the `3ds` folder was computed on this machine from",
@@ -555,7 +555,7 @@ def write_sources(repo_desc, rom, palette, downloads, game):
     else:
         lines += [
             "  You chose grayscale, so the colour pack was not fetched and the maps",
-            "  render the way the original Game Boy showed them.",
+            "  render the way the original handheld showed them.",
         ]
     lines += [
         "",
@@ -626,9 +626,9 @@ def main():
     # 3. colour
     asked = args.palette or ("community" if args.colour else "dmg" if args.grayscale else None)
     if game["id"] in GEN2_GAMES:
-        # Gold and Silver have only their own Game Boy Color colours, read from the ROM.
+        # Gold and Silver have only their own colours, read from the ROM.
         palette = "gbc"
-        say(f"Colour: {game['label']}'s own Game Boy Color palettes, from your ROM.")
+        say(f"Colour: {game['label']}'s own colour palettes, from your ROM.")
         if asked and asked != "gbc":
             say(f"  (--palette {asked} does nothing for {game['label']}: it has only its own colours.)")
     else:
@@ -644,8 +644,8 @@ def main():
         else:
             say("Colour?")
             if game["id"] == "yellow":
-                say("  Yellow is a Game Boy Color game. Pocket Voxel can show its own")
-                say("  colours, read from your ROM, or the Game Boy's black and white, or the")
+                say("  Yellow is a colour game. Pocket Voxel can show its own")
+                say("  colours, read from your ROM, or the original black and white, or the")
                 say("  community colourisation of Red (pokered-gbc), fetched as one")
                 say(f"  {mb(DATA_FILES['colour'][4])} file from gen1recomp (MIT).")
             else:

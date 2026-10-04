@@ -1,9 +1,9 @@
 # Pocket Voxel 3D
 
-Five Game Boy creature-RPGs -- Red, Blue, Yellow, Gold and Silver -- rebuilt as 3D voxel dioramas that
-run on a **New Nintendo 3DS / New 2DS XL** with the stereoscopic slider doing
+Five classic 8-bit handheld RPGs -- Red, Blue, Yellow, Gold and Silver -- rebuilt as 3D voxel dioramas that
+run on a **New 3DS / New 2DS XL** with the stereoscopic slider doing
 real 3D. Trade and battle between two consoles on the same wifi. Each game can
-also be played on the original flat Game Boy screen, in its OPTION menu.
+also be played on the original flat handheld screen, in its OPTION menu.
 
 **You bring the game.** Nothing from any cartridge is in this repository or
 in the download. A small program on your computer reads *your own* US
@@ -107,19 +107,16 @@ its code carried over, running in an embedded JavaScript guest. The 3D presentat
 renderer, reimplemented in Rust for the 3DS's GPU; Gold and Silver's shapes
 come from UNDERdecoded's
 [Gen2Recomped-DramaticShapes](https://github.com/UNDERdecoded/Gen2Recomped-DramaticShapes)
-(MIT). Red and Blue's colour comes from the community colourisation
-[pokered-gbc](https://github.com/Stewmath/pokered-gbc) (the original
-cartridge has none); Yellow, Gold and Silver use their own Game Boy Color
-colours, read from your ROM.
-
-The bottom screen is modelled on the
-[Kanto Gear](https://github.com/AverageConsumer/kanto-gear) mod.
+(MIT). Red and Blue's colour comes from a community colourisation (the
+original cartridge has none); Yellow, Gold and Silver use their own colour
+palettes, read from your ROM. The bottom screen is modelled on a community
+companion mod.
 
 This repository is MIT-licensed, and so are the gen1recomp version it builds
-on and Kanto Gear; their notices are in
+on and the companion mod; every credit and licence notice is in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). PotatoVoxel's shape table is
 used with its author's permission, and its renderer is reimplemented here, not
-copied. The pokered-gbc colours are downloaded by the converter on your
+copied. The colourisation's palettes are downloaded by the converter on your
 machine and never shipped here. The one thing that is not free is the game content, which is why you supply it
 yourself: the converter reads your cartridge dump on your machine, and **no
 ROM-derived byte is ever committed here**. The rendering tests are frame

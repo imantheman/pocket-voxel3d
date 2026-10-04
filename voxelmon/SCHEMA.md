@@ -30,7 +30,7 @@ One JSON file per gen1recomp `data/generated` module, **same field names and
 record shapes as the Lua tables** so parity diffing is mechanical:
 
 `constants.json, tilesets.json, maps.json, font.json, sprites.json,
-moves.json, items.json, type_chart.json, palettes.json, pokemon.json,
+moves.json, items.json, type_chart.json, palettes.json, the species table,
 trainers.json, encounters.json, text.json, text_pointers.json,
 trainer_headers.json, field.json, audio.json`
 
@@ -64,18 +64,18 @@ manifest's audio block plus what the importer resolves from the ROM:
 
 ```json
 { "bankOrder": [2, 8, 31], "programFile": "programs.bin", "runtime": true,
-  "songs":  { "Music_PalletTown": { "bank": 2, "address": 16969, "engine": 1 }, ... },
+  "songs":  { "Music_Town1": { "bank": 2, "address": 16969, "engine": 1 }, ... },
   "sfx":    { "Press_AB": { "bank": 2, "address": 16816, "engine": 1 }, ... },
-  "cries":  { "PIDGEY": { "header": {...}, "pitch": 0, "length": 0 }, ... },
-  "mapSongs": { "PALLET_TOWN": "Music_PalletTown", ... },
+  "cries":  { "SPECIES_1": { "header": {...}, "pitch": 0, "length": 0 }, ... },
+  "mapSongs": { "TOWN_1": "Music_Town1", ... },
   "battle":   { "wild": "Music_WildBattle", "wildWin": "Music_DefeatedWildMon", ... },
   "waveBanks": { "1": { "bank": 2, "address": 17267 }, ... },
   "noiseHeaders": { "1": { "1": {...}, ... }, ... } }
 ```
 
 `cries` is keyed by INTERNAL species slot, so it carries 154 entries — the
-151 Pokedex species plus `FOSSIL_KABUTOPS`, `FOSSIL_AERODACTYL` and
-`MON_GHOST`, which have cries but no dex entry. MISSINGNO/UNUSED rows are
+151 dex species plus two fossil forms and the ghost form, which have
+cries but no dex entry. MISSINGNO/UNUSED rows are
 read (the index must advance) and dropped.
 
 `gen/palettes_gbc.json` is the one file here the importer does NOT produce:
@@ -146,7 +146,7 @@ a pre-colour pak did.
 
 The cooker packs the gameplay subset of `gen/` into the pak's GAME section as
 JSON bytes: constants, maps (layout + collision-relevant tileset fields +
-warps/signs/objects/connections), encounters, moves, pokemon, items,
+warps/signs/objects/connections), encounters, moves, species, items,
 type_chart, trainers, text, text_pointers, trainer_headers, field, plus two
 cook-time products: `atlas` (the page-index maps) and `mapPalette` (map id →
 SGB palette index into the pak's SGB set — the static port of pokered's

@@ -6,5 +6,3 @@ title = "VOXELMON"
 # XMB cover art (the Psp.toml standard the pocket-<product> apps follow):
 # both images are real device captures — Pallet Town as the diorama renders
 # it on hardware, not mock-ups.
-xmb_icon_png = "assets/ICON0.png"
-xmb_background_png = "assets/PIC1.png"

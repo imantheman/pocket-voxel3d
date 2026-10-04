@@ -1,4 +1,4 @@
-# Pocket Voxel on the Nintendo 3DS
+# Pocket Voxel on the New 3DS
 
 Build the game from your own ROM and put it on your 3DS.
 
@@ -54,7 +54,7 @@ The rest of this page is the same thing done by hand.
 
 A **New 3DS** (or New 2DS XL) running homebrew, and an SD card with **400 MB
 free**. The New model is not optional: the port keeps a 92 MB heap for the
-map paks -- the Viridian Forest pak alone is 58 MB -- and only the New
+map paks -- the first forest's pak alone is 58 MB -- and only the New
 3DS's 124 MB application mode can grant it. An original 3DS/2DS cannot
 start it, as a title or from the Homebrew Launcher.
 
@@ -185,7 +185,7 @@ is the one to use.
 The icon and banner are ours: `tools/3ds_art.py` draws them from authored
 letterforms, and `tools/3ds_banner3d.py` rebuilds the banner's 3D scene so
 the cube under the title is real geometry, not a picture of one. The boot
-logo is makerom's own Homebrew splash, not one of Nintendo's.
+logo is makerom's own Homebrew splash, not the console maker's.
 
 ## 4c. Blue
 
@@ -199,7 +199,7 @@ everywhere: of the 3274 symbols gen1recomp locates, 3251 sit at the same
 address in both, and the 23 that move are one bank shifted by a single byte
 after the credits text. Cooking both ROMs and comparing all 222 paks: the
 page layout is identical, and all that differs is five atlas pages (the
-title ribbon; the intro's fighter, Nidorino in Red and Jigglypuff in Blue,
+title ribbon; the intro's fighter, a different monster in each game,
 three frames; and the UI page, which holds the slot machine's reel
 symbols), the palette table (Blue's title logo and slot palettes) and the
 sound programs. Everything else -- encounters, credits, default names --
@@ -321,7 +321,7 @@ consecutive ports), which is how this is tested without two consoles.
 Worth understanding before you build, because it is the one part of this
 that is not simply your ROM.
 
-**Red has no colour in it.** It ships no Game Boy Color code at
+**Red has no colour in it.** It ships no colour-handheld code at
 all — there is no palette table in your cartridge to read. So the greens and
 reds you see on the maps cannot have come from your ROM, and they are not
 something this project's code invents either.
@@ -344,7 +344,7 @@ same arrangement as the ROM itself.
 
 **If you would rather not have it**, leave `VOXELMON_G1R/data/palettes_gbc.lua`
 out of the picture and the cook degrades on purpose: no palette tail, every
-binding reads NONE, and the maps render in Game Boy grayscale — which is what
+binding reads NONE, and the maps render in the original grayscale — which is what
 the original actually looked like. You still need the rest of that checkout
 for the symbol table.
 
@@ -378,7 +378,7 @@ logo for the launch transition, and one without any fails there -- with an
 error that says nothing about logos, and that a `.3dsx` never hits because
 the Homebrew Launcher never asks. Every CIA that runs carries a `logo`
 entry in its ExeFS. `tools/make_cia.sh` passes `-exefslogo` and the RSF
-sets `Logo: Homebrew` (makerom's own splash, not one of Nintendo's); if
+sets `Logo: Homebrew` (makerom's own splash, not the console maker's); if
 you have written your own build, do both. It also runs fine in Citra,
 which does not go through the HOME menu's launch path.
 
