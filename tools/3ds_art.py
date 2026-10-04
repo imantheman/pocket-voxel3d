@@ -107,6 +107,7 @@ GLYPHS = {
     "G": [".####", "#....", "#....", "#.###", "#...#", "#...#", ".###."],
     "S": [".####", "#....", "#....", ".###.", "....#", "....#", "####."],
     "I": ["#####", "..#..", "..#..", "..#..", "..#..", "..#..", "#####"],
+    "A": [".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
     " ": [".....", ".....", ".....", ".....", ".....", ".....", "....."],
 }
 GW, GH = 5, 7
@@ -168,7 +169,7 @@ def draw_cube(c, cx, cy, size, yaw, pitch, rgb, width=1.4, fade_back=True):
 
 RED = (228, 42, 46)
 DIM_RED = (110, 24, 28)
-# Which game the art is for: `python3 tools/3ds_art.py OUTDIR [red|blue|yellow|gold|silver]`.
+# Which game the art is for: `python3 tools/3ds_art.py OUTDIR [red|blue|yellow|gold|silver|crystal]`.
 GAME = sys.argv[2] if len(sys.argv) > 2 else "red"
 
 
@@ -189,6 +190,10 @@ def tint(rgb):
         # the same brightness as a cool, slightly blue grey: metal again
         v = int(rgb[0] * 0.78)
         return (v, v, min(255, int(v * 1.12)))
+    if GAME == "crystal":
+        # an icy cyan of the same brightness: the gem rather than the metals
+        v = rgb[0]
+        return (int(v * 0.42), int(v * 0.86), min(255, int(v * 1.04)))
     return rgb
 WHITE = (238, 238, 244)
 CARD = (8, 8, 12)

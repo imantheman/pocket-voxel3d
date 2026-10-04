@@ -22,7 +22,7 @@ blue = []
 # (save_yellow.lua). `cargo 3ds build --release --features yellow`.
 yellow = []
 # The Gen 2 engine (game-gold.js) and the host behaviour that goes with it;
-# turned on by gold and silver, not asked for on its own.
+# turned on by gold, silver and crystal, not asked for on its own.
 gen2 = []
 # Pokemon Gold: Gen 2 -- its own pak set (paks_gold/), dataset and save
 # (save_gold.lua). `cargo 3ds build --release --features gold`.
@@ -31,6 +31,9 @@ gold = ["gen2"]
 # shares Red's, with its own dataset (gamedata_silver.json), overlay
 # (version_silver.vxat) and save (save_silver.lua).
 silver = ["gen2"]
+# Pokemon Crystal: Gen 2 -- its own pak set (paks_crystal/: two-bank
+# tilesets, its own maps and palettes), dataset and save (save_crystal.lua).
+crystal = ["gen2"]
 
 [build-dependencies]
 cc = "1"

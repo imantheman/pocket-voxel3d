@@ -24,6 +24,9 @@ interface Gen2Palettes {
   objects: Record<string, Rgb[][]>;
   roofs: Record<string, { mornDay: Rgb[]; nite: Rgb[] }>;
   roofSlot: number;
+  /** Crystal: tilesets whose BG set LoadSpecialMapPalette replaces outright
+   * (engine/tilesets/tileset_palettes.asm), from the importer. */
+  specialTilesets?: Record<string, Rgb[][]>;
 }
 
 interface Gen2Map extends MapDef {
@@ -40,7 +43,7 @@ interface Gen2Tileset extends TilesetDef {
 }
 
 export function isGen2(gen: { version?: string; palettes?: unknown }): boolean {
-  return gen.version === "gold" || gen.version === "silver" || (gen.palettes as { generation?: number } | undefined)?.generation === 2;
+  return gen.version === "gold" || gen.version === "silver" || gen.version === "crystal" || (gen.palettes as { generation?: number } | undefined)?.generation === 2;
 }
 
 /** A Gold map's number in the paks and index.txt: its (group, map) pair. */
@@ -119,9 +122,19 @@ export class Gen2Colour {
   /** A map's world CLUT at `daytime`: its environment's eight BG palettes,
    * the roof slot's middle two colours from its map group outdoors. */
   worldPalette(def: Gen2Map, daytime = "DAY"): Uint32Array | null {
-    const env = this.pal.environments[def.environment]?.[daytime];
-    if (!env) return null;
-    const slots = env.map((i) => [...(this.pal.bg[i - 1] ?? [])] as Rgb[]);
+    // Crystal's LoadSpecialMapPalette wins over the pool (engine/gfx/
+    // color.asm:1198) -- the same rule as the runtime's Palettes.specialSet:
+    // Ice Path's own set only off the INDOOR environment
+    const tileset = (def as Gen2Map & { tileset?: string }).tileset;
+    const special = tileset ? this.pal.specialTilesets?.[tileset] : undefined;
+    let slots: Rgb[][];
+    if (special && !(tileset === "TILESET_ICE_PATH" && def.environment === "INDOOR")) {
+      slots = special.map((p) => [...p] as Rgb[]);
+    } else {
+      const env = this.pal.environments[def.environment]?.[daytime];
+      if (!env) return null;
+      slots = env.map((i) => [...(this.pal.bg[i - 1] ?? [])] as Rgb[]);
+    }
     const roof = this.pal.roofs[String(def.group)];
     const rs = this.pal.roofSlot - 1;
     if (roof && def.outdoor && slots[rs]) {

@@ -49,7 +49,8 @@ export function paksLayout(version: GameVersion): { orig: string; paks: string; 
   // map, tileset and palette identical; the battle front pics, the Gold
   // screen's tile pages and the sound are each game's own, in its overlay).
   // The shared Gen 2 folder keeps the name it was first cooked under.
-  const own = version === "yellow" || version === "gold" || version === "silver";
+  // Crystal has a set of its own (two-bank tilesets, new maps and palettes).
+  const own = version === "yellow" || version === "gold" || version === "silver" || version === "crystal";
   const dir = version === "silver" ? "paks_gold" : own ? `paks_${version}` : "paks";
   return {
     dir,
@@ -84,10 +85,12 @@ export const VERSION_FILES: Record<GameVersion, { gamedata: string; overlay: str
   yellow: { gamedata: "gamedata.json", overlay: "version_yellow.vxat", threeDsx: "pocketvoxel-3ds-yellow.3dsx" },
   gold: { gamedata: "gamedata.json", overlay: "version_gold.vxat", threeDsx: "pocketvoxel-3ds-gold.3dsx" },
   silver: { gamedata: "gamedata_silver.json", overlay: "version_silver.vxat", threeDsx: "pocketvoxel-3ds-silver.3dsx" },
+  // in its own folder (paks_crystal), so its files keep the plain names
+  crystal: { gamedata: "gamedata.json", overlay: "version_crystal.vxat", threeDsx: "pocketvoxel-3ds-crystal.3dsx" },
 };
 
-/** Gold and Silver (and, one day, Crystal): one Gen 2 engine, one dataset shape. */
-const isGen2Version = (v: GameVersion): boolean => v === "gold" || v === "silver";
+/** Gold, Silver and Crystal: one Gen 2 engine, one dataset shape. */
+const isGen2Version = (v: GameVersion): boolean => v === "gold" || v === "silver" || v === "crystal";
 
 const SHARED_BIT = 0x80000000;
 

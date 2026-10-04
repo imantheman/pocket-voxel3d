@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the installable 3DS title (.cia) from the release ELF.
 #
-#   bash tools/make_cia.sh [OUTPUT.cia] [red|blue|yellow]
+#   bash tools/make_cia.sh [OUTPUT.cia] [red|blue|yellow|gold|silver|crystal]
 #
 # Red and Blue are two titles, side by side on the HOME menu: their own
 # title ID, name, icon and banner (Blue's art is Red's with every red made
@@ -48,7 +48,12 @@ case "$GAME" in
     LABEL=Silver; UNIQUE=0xff3d4; PCODE=CTR-P-PVXS
     ELF=crates/pocketvoxel-3ds/target-silver/armv6k-nintendo-3ds/release/pocketvoxel-3ds.elf
     WORK=dist/voxelmon/cia-silver ;;
-  *) echo "make_cia: unknown game '$GAME' (red, blue, yellow, gold or silver)"; exit 1 ;;
+  # Crystal: Gen 2, its own pak set (paks_crystal/) and save
+  crystal)
+    LABEL=Crystal; UNIQUE=0xff3d5; PCODE=CTR-P-PVXC
+    ELF=crates/pocketvoxel-3ds/target-crystal/armv6k-nintendo-3ds/release/pocketvoxel-3ds.elf
+    WORK=dist/voxelmon/cia-crystal ;;
+  *) echo "make_cia: unknown game '$GAME' (red, blue, yellow, gold, silver or crystal)"; exit 1 ;;
 esac
 OUT=${1:-dist/voxelmon/PocketVoxel3D$LABEL.cia}
 

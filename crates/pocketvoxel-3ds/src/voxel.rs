@@ -93,6 +93,8 @@ const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save_yellow.lua";
 const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save_gold.lua";
 #[cfg(feature = "silver")]
 const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save_silver.lua";
+#[cfg(feature = "crystal")]
+const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save_crystal.lua";
 static mut SAVE_BUF: Vec<u8> = Vec::new();
 /// The OPTION screen's settings, beside the save (`voxel.optionsData()` /
 /// `optionsWrite`): Gold keeps them out of the save the way the cart keeps
@@ -102,6 +104,8 @@ static mut SAVE_BUF: Vec<u8> = Vec::new();
 const OPTIONS_PATH: &str = "sdmc:/3ds/voxelmon/options_gold.lua";
 #[cfg(feature = "silver")]
 const OPTIONS_PATH: &str = "sdmc:/3ds/voxelmon/options_silver.lua";
+#[cfg(feature = "crystal")]
+const OPTIONS_PATH: &str = "sdmc:/3ds/voxelmon/options_crystal.lua";
 #[cfg(not(feature = "gen2"))]
 const OPTIONS_PATH: &str = "sdmc:/3ds/voxelmon/options.lua";
 static mut OPTIONS_BUF: Vec<u8> = Vec::new();

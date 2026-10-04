@@ -200,14 +200,19 @@ const GAME: &str = "yellow";
 const GAME: &str = "gold";
 #[cfg(feature = "silver")]
 const GAME: &str = "silver";
+#[cfg(feature = "crystal")]
+const GAME: &str = "crystal";
 /// The pak set this game reads. Red and Blue share one; Yellow has its own;
-/// Gold and Silver share theirs (paks_gold), as Red and Blue do.
+/// Gold and Silver share theirs (paks_gold), as Red and Blue do; Crystal has
+/// its own (paks_crystal).
 #[cfg(not(any(feature = "yellow", feature = "gen2")))]
 const PAKS_DIR: &str = "sdmc:/3ds/voxelmon/paks";
 #[cfg(feature = "yellow")]
 const PAKS_DIR: &str = "sdmc:/3ds/voxelmon/paks_yellow";
-#[cfg(feature = "gen2")]
+#[cfg(all(feature = "gen2", not(feature = "crystal")))]
 const PAKS_DIR: &str = "sdmc:/3ds/voxelmon/paks_gold";
+#[cfg(feature = "crystal")]
+const PAKS_DIR: &str = "sdmc:/3ds/voxelmon/paks_crystal";
 #[cfg(not(any(feature = "blue", feature = "yellow", feature = "gen2")))]
 const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks/gamedata.json";
 #[cfg(feature = "blue")]
@@ -218,6 +223,8 @@ const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks_yellow/gamedata.json";
 const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks_gold/gamedata.json";
 #[cfg(feature = "silver")]
 const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks_gold/gamedata_silver.json";
+#[cfg(feature = "crystal")]
+const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks_crystal/gamedata.json";
 #[cfg(not(any(feature = "blue", feature = "yellow", feature = "gen2")))]
 const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks/version_red.vxat";
 #[cfg(feature = "blue")]
@@ -228,6 +235,8 @@ const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks_yellow/version_yellow.vxat";
 const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks_gold/version_gold.vxat";
 #[cfg(feature = "silver")]
 const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks_gold/version_silver.vxat";
+#[cfg(feature = "crystal")]
+const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks_crystal/version_crystal.vxat";
 /// The map the host boots on, and the one it falls back to: the player's
 /// room, then the town outside it.
 #[cfg(not(feature = "gen2"))]
@@ -4195,6 +4204,7 @@ fn main() {
             "yellow" => "Yellow",
             "gold" => "Gold",
             "silver" => "Silver",
+            "crystal" => "Crystal",
             _ => "Red",
         };
         println!();
