@@ -83,6 +83,7 @@ import { unown_words } from "./specials/unown_words.ts";
 import { format, idiv, mod, removeAt, sub, tonumber, tostring, truthy } from "../platform/lua.ts";
 import { random } from "../platform/rng.ts";
 import { osDate } from "../platform/clock.ts";
+import { engineFlagIdFor } from "../core/EngineFlagIds.ts";
 import type { Script, Vm } from "./Vm.ts";
 // A value import, but only ever touched inside functions (Vm.ts imports this).
 import { Coroutine } from "./Vm.ts";
@@ -1669,7 +1670,9 @@ H.ResetLuckyNumberShowFlag = (vm: Vm) => {
   timer.remaining = daysUntilFriday(Clock.weekday(record));
   timer.day = now.day;
   const h = hooks(vm);
-  if (h.setEngineFlag) h.setEngineFlag("ENGINE_LUCKY_NUMBER_SHOW", undefined);
+  // the flag by its number (77 on pokegold, 78 on Crystal): the ROM's
+  // checkflag reads the number, so clearing a key named after it did nothing
+  if (h.setEngineFlag) h.setEngineFlag(engineFlagIdFor("ENGINE_LUCKY_NUMBER_SHOW", 77), false);
   record.luckyNumber = Specials.random(0, 99999);
 };
 

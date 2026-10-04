@@ -17,6 +17,7 @@ import { BugContest } from "./BugContest.ts";
 import { Runtime } from "../shared/mods/Runtime.ts";
 import { mod, tonumber } from "../platform/lua.ts";
 import { random as rngRandom } from "../platform/rng.ts";
+import { engineFlagIdFor } from "./EngineFlagIds.ts";
 
 /** A party record, as far as this module reads it. */
 export interface PokerusMon {
@@ -232,7 +233,8 @@ export const Pokerus = {
     const flags = save.engineFlags || {};
     return Pokerus.give(party || save.party || [], {
       random: opts.random,
-      reachedGoldenrod: flags[Pokerus.ENGINE_REACHED_GOLDENROD] === true,
+      // 21 on pokegold, 22 on Crystal
+      reachedGoldenrod: flags[engineFlagIdFor("ENGINE_REACHED_GOLDENROD", Pokerus.ENGINE_REACHED_GOLDENROD)] === true,
     });
   },
 };

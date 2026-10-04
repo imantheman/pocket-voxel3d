@@ -15,6 +15,7 @@
 
 import { truthy } from "../platform/lua.ts";
 import { random as luaRandom } from "../platform/rng.ts";
+import { engineFlagIdFor } from "../core/EngineFlagIds.ts";
 
 export interface BerryJuiceOpts {
   /** a function of no arguments returning 0..255 (the Pokerus convention) */
@@ -62,7 +63,7 @@ export const BerryJuice = {
     const flags = save.engineFlags ?? {};
     return BerryJuice.convert(party ?? save.party ?? [], {
       random: o.random,
-      reachedGoldenrod: flags[BerryJuice.ENGINE_REACHED_GOLDENROD] === true,
+      reachedGoldenrod: flags[engineFlagIdFor("ENGINE_REACHED_GOLDENROD", BerryJuice.ENGINE_REACHED_GOLDENROD)] === true,
     });
   },
 };

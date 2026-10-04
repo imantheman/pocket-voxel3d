@@ -51,7 +51,8 @@ g.frame = (b: number): void => {
         // and opens once BILL has been met (EVENT_MET_BILL cleared; it starts
         // set, hiding him) -- the card's save is from before that
         w.events.set(1810, false);
-        w.setEngineFlag(82, false);
+        // ENGINE_TIME_CAPSULE: 82 on Gold and Silver, 83 on Crystal
+        w.setEngineFlag(w.engineFlagId ? w.engineFlagId("ENGINE_TIME_CAPSULE", 82) : 82, false);
         const party = game.save.party.filter((m: any) => TimeCapsule.isGen1Species(game.data, m.species));
         if (party.length === 0) party.push(Mon.stampOT(game.save, Mon.new(game.data, "GEODUDE", 15, {})));
         game.save.party = party;
@@ -111,11 +112,16 @@ g.frame = (b: number): void => {
       const right = game.cableClub().seat() === 1;
       const tx = right ? 6 : 3;
       const face = right ? "left" : "right";
-      if (p && p.cellY > 5) pad = VOX_BTN.up;
-      else if (p && p.cellY === 5 && p.cellX < tx) pad = VOX_BTN.right;
-      else if (p && p.cellY === 5 && p.cellX > tx) pad = VOX_BTN.left;
-      else if (p && p.cellY === 5) pad = VOX_BTN.up;
+      // seated straight onto the stool, as the desk placement above is: the
+      // taps a walk would take bump on the console against a Kanto peer, and
+      // this bench is about the machine, not the walk
+      if (p && (p.cellX !== tx || p.cellY !== 4)) w.setMap(w.map.id, tx, 4, face);
       else if (p && p.facing !== face) pad = right ? VOX_BTN.left : VOX_BTN.right;
+    }
+    // where the walk to the stool stands, now and then
+    if (!traded && w.map.id !== "POKECENTER_2F" && n % 120 === 15) {
+      const p = w.player;
+      console.log(`[pv] bench link: room ${w.map.id} at (${p?.cellX},${p?.cellY}) facing ${p?.facing} seat ${game.cableClub().seat()} busy ${!!w.busy?.()} top ${topId} vm ${!!w.vm?.running?.()} pad ${pad}`);
     }
   }
   mainFrame((b & ~0xff) | pad);

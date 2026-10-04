@@ -38,6 +38,9 @@ export const LINK_ROOMS: Record<string, LinkRequest> = {
 
 /** wOtherPlayerLinkMode's address (pokegold wram.asm), read by `readmem`. */
 export const W_OTHER_PLAYER_LINK_MODE = 0xce51;
+/** The same byte by engine: Crystal's WRAM puts it a page higher (its
+ * receptionists `readmem $cf51`, pokecrystal ram/wram.asm). */
+export const W_OTHER_PLAYER_LINK_MODE_BY_ENGINE: Record<string, number> = { gs: 0xce51, crystal: 0xcf51 };
 
 interface Wait {
   until: (s: LinkSession) => boolean;

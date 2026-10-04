@@ -24,7 +24,7 @@
 // name sign, the pokepic window) uses G, GbcPalette and Assets the way the
 // Lua's draws do. The lazy `require`s inside function bodies (Phone, PhoneRing, Happiness, Sound, GameVersion,
 // ScreenPosition, Pokegear) are hoisted to here.
-import { W_OTHER_PLAYER_LINK_MODE } from "../core/CableClub.ts";
+import { W_OTHER_PLAYER_LINK_MODE, W_OTHER_PLAYER_LINK_MODE_BY_ENGINE } from "../core/CableClub.ts";
 import { startLinkBattle } from "../core/LinkBattle2.ts";
 import { RUN_STEP_FRAMES, runningShoesOn } from "../../runshoes.ts";
 import { LinkTradeMenu } from "../ui/LinkTradeMenu.ts";
@@ -3529,9 +3529,11 @@ export class World {
   mapMusicSong(mapId: any): string | undefined {
     const audio = this.game && this.game.data ? this.game.data.audio : undefined;
     const def = this.maps ? this.maps[mapId] : undefined;
-    // ENGINE_ROCKETS_IN_MAHOGANY / _RADIO_TOWER (data/events/engine_flags.asm:40,:36)
+    // ENGINE_ROCKETS_IN_MAHOGANY / _RADIO_TOWER (data/events/engine_flags.asm:40,:36;
+    // one higher on Crystal)
     return World.mapMusicLabel(audio, def ? def.music : undefined,
-      this.engineFlag(22), this.engineFlag(18));
+      this.engineFlag(this.engineFlagId("ENGINE_ROCKETS_IN_MAHOGANY", 22)),
+      this.engineFlag(this.engineFlagId("ENGINE_ROCKETS_IN_RADIO_TOWER", 18)));
   }
 
   // Lua: World.lua:2679
@@ -6335,11 +6337,18 @@ export class World {
     return WRAM_TEMP_WILD_MON_SPECIES[engine] ?? WRAM_TEMP_WILD_MON_SPECIES.gs!;
   }
 
+  /** wOtherPlayerLinkMode's address on this cart (Crystal's is $cf51). */
+  otherPlayerLinkModeAddress(): number {
+    const save = this.game ? this.game.save : undefined;
+    const engine = GameVersion.engine((save && save.version) || GameVersion.get());
+    return W_OTHER_PLAYER_LINK_MODE_BY_ENGINE[engine] ?? W_OTHER_PLAYER_LINK_MODE;
+  }
+
   // Lua: World.lua:5637-5642
   scriptReadMem(addr: any): number | undefined {
     // wOtherPlayerLinkMode: 0 when the console on the other end is a Gen 1
     // game (the receptionists' "you can't link to the past here")
-    if (addr === W_OTHER_PLAYER_LINK_MODE) {
+    if (addr === this.otherPlayerLinkModeAddress()) {
       return this.game?.cableClub?.()?.otherPlayerLinkMode() ?? 1;
     }
     if (addr === this.tempWildMonSpeciesAddress()) {

@@ -19,6 +19,7 @@
 import { BugContest } from "./BugContest.ts";
 import { Runtime } from "../shared/mods/Runtime.ts";
 import { tostring, truthy } from "../platform/lua.ts";
+import { engineFlagIdFor } from "./EngineFlagIds.ts";
 
 /** One apricorn_balls.asm row; `index` is its 1-based table position. */
 export interface ApricornRow {
@@ -172,7 +173,9 @@ export const Apricorns = {
     { id: 90, name: "ENGINE_GOLDENROD_DEPT_STORE_TM27_RETURN" },
     { id: 91, name: "ENGINE_DAISYS_GROOMING" },
     { id: 92, name: "ENGINE_INDIGO_PLATEAU_RIVAL_FIGHT" },
-    // ../pokecrystal/constants/engine_flags.asm:113-114
+    // ../pokecrystal/constants/engine_flags.asm:113-114 (and Crystal's name
+    // for the swarm flag, which pokegold calls ENGINE_SWARM)
+    { name: "ENGINE_QWILFISH_SWARM" },
     { name: "ENGINE_DAILY_MOVE_TUTOR" },
     { name: "ENGINE_BUENAS_PASSWORD" },
   ] as { id?: number; name: string }[],
@@ -399,9 +402,11 @@ export const Apricorns = {
   tryResetFruitTrees(save: SaveLike): boolean {
     const flags = engineFlags(save);
     if (!flags) return false;
-    if (flags[Apricorns.ENGINE_ALL_FRUIT_TREES]) return false;
+    // 83 on pokegold, 84 on Crystal (83 is its TIME CAPSULE)
+    const id = engineFlagIdFor("ENGINE_ALL_FRUIT_TREES", Apricorns.ENGINE_ALL_FRUIT_TREES);
+    if (flags[id]) return false;
     save!.fruitTrees = {};
-    flags[Apricorns.ENGINE_ALL_FRUIT_TREES] = true;
+    flags[id] = true;
     return true;
   },
 
