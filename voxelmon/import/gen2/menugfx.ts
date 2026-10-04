@@ -6,10 +6,11 @@
 // plus the screens in menugfx-screens.ts (#DEX, Bill's PC, POKeGEAR,
 // trainer card, Unown puzzle), called at the point Brian calls them.
 //
-// Gold only: KrisBackpic, ChrisPic/KrisPic (HOF), _CGB_PackPals.ChrisPackPals
-// / KrisPackPals and KrisFishingGFX are Crystal labels, absent from Gold's
-// manifest, and dropped. Brian's `self:trace` on a failed trainer pic is
-// dropped too (the pic is just skipped, as in Lua).
+// Crystal's labels ride along where Brian reads them: KrisBackpic,
+// ChrisPic/KrisPic (HOF), _CGB_PackPals.ChrisPackPals / KrisPackPals and
+// KrisFishingGFX (absent from Gold's manifest, so Gold is unchanged).
+// Brian's `self:trace` on a failed trainer pic is dropped (the pic is just
+// skipped, as in Lua).
 //
 // Every image is a shade sheet (0..3, 0xff transparent). The slot machine
 // actor sheet (:6218) is composed on ImageWriter.blank(.., 1, 1, 1, 0) --
@@ -17,7 +18,7 @@
 // plain shade image too; no RGB is written anywhere in this stage.
 // Palettes ride the JSON as [r, g, b] 0-255 (Brian's self:colors).
 
-import { GfxImage, TRANSPARENT, blit, decode2bpp } from "../gfx.ts";
+import { GfxImage, TRANSPARENT, blit, decode2bpp, matteColor0 } from "../gfx.ts";
 import type { Gen2Ctx } from "./ctx.ts";
 import { decompressLz3 } from "./lz.ts";
 import { columnsToRows, deinterleave, picBank, save, write2bpp, writeCompressedPic } from "./helpers.ts";
@@ -173,7 +174,17 @@ export function extractMenuGfx(ctx: Gen2Ctx): Record<string, unknown> {
       /* Lua pcall: leave playerBack unset */
     }
   }
-  // :5827-5842 KrisBackpic is Crystal-only: dropped.
+  // :5827-5842 GetKrisBackpic: six tiles square like Chris but raw, not lz3
+  // (pokecrystal engine/gfx/player_gfx.asm:209-217).
+  const krisBack = ctx.location("KrisBackpic");
+  if (krisBack) {
+    try {
+      const pixels = columnsToRows(ctx.rom.bytes(krisBack[0], krisBack[1], 6 * 6 * 16), 6, 6);
+      hud.playerBackFemale = save(ctx, matteColor0(decode2bpp(pixels, 48, 48)), "battle/player_back_female.png");
+    } catch {
+      /* Lua pcall */
+    }
+  }
   // :5847-5852 DudeBackpic, the catching tutorial's.
   if (ctx.location("DudeBackpic")) {
     try {
@@ -193,7 +204,7 @@ export function extractMenuGfx(ctx: Gen2Ctx): Record<string, unknown> {
     for (let j = 1; j < classOrder.length; j++) {
       const cls = classOrder[j]!;
       const base = symbol.address + (j - 1) * 3;
-      const bank = picBank(ctx.rom.byte(symbol.bank, base));
+      const bank = picBank(ctx.rom.byte(symbol.bank, base), ctx.crystal);
       const address = ctx.rom.word(symbol.bank, base + 1);
       const rel = `battle/trainers/${cls.toLowerCase()}.png`;
       try {
@@ -205,7 +216,18 @@ export function extractMenuGfx(ctx: Gen2Ctx): Record<string, unknown> {
         /* Lua: trace and skip */
       }
     }
-    // :5895-5910 ChrisPic/KrisPic (HOF) are Crystal labels: dropped.
+    // :5895-5910 HOF_LoadTrainerFrontpic: CHRIS / KRIS load ChrisPic / KrisPic
+    // (pokecrystal engine/gfx/player_gfx.asm:138,203,206), raw 7x7.
+    for (const [cls, label] of [["CHRIS", "ChrisPic"], ["KRIS", "KrisPic"]] as const) {
+      const sym = ctx.location(label);
+      if (!sym) continue;
+      try {
+        const pixels = columnsToRows(ctx.rom.bytes(sym[0], sym[1], 7 * 7 * 16), 7, 7);
+        pics[cls] = write2bpp(ctx, pixels, 56, 56, `battle/trainers/${cls.toLowerCase()}.png`);
+      } catch {
+        /* Lua: trace and skip */
+      }
+    }
     hud.trainerPics = pics;
   }
 
@@ -245,11 +267,19 @@ export function extractMenuGfx(ctx: Gen2Ctx): Record<string, unknown> {
   const pocketRaw = bytesOf("DrawPocketName.tilemap", 60);
   pack.pocketName = [0, 1, 2, 3].map((block) => pocketRaw.slice(block * 15, block * 15 + 15));
   pack.pocketOrder = ["ITEM", "BALL", "KEY_ITEM", "TM_HM"];
-  // :6008-6022 Gold's _CGB_PackPals.PackPals (Crystal's Chris/Kris split dropped).
-  const packPals = ctx.symbol("_CGB_PackPals.PackPals");
-  const packPalettes: Rgb[][] = [];
-  for (let i = 0; i < 6; i++) packPalettes.push(colors(ctx, packPals.bank, packPals.address + i * 8, 4));
-  pack.palettes = packPalettes;
+  // :6008-6022 _CGB_PackPals: Gold's PackPals, or Crystal's split by player
+  // gender (pokecrystal engine/gfx/cgb_layouts.asm:818,821).
+  const packPalettesAt = (bank: number, address: number): Rgb[][] => {
+    const list: Rgb[][] = [];
+    for (let i = 0; i < 6; i++) list.push(colors(ctx, bank, address + i * 8, 4));
+    return list;
+  };
+  const packPals = ctx.location("_CGB_PackPals.PackPals")
+    ? ctx.symbol("_CGB_PackPals.PackPals")
+    : ctx.symbol("_CGB_PackPals.ChrisPackPals");
+  pack.palettes = packPalettesAt(packPals.bank, packPals.address);
+  const krisPack = ctx.location("_CGB_PackPals.KrisPackPals");
+  if (krisPack) pack.palettesFemale = packPalettesAt(krisPack[0], krisPack[1]);
   pack.paletteZones = [
     [0, 0, 10, 1, 2],
     [10, 0, 10, 1, 3],
@@ -293,7 +323,8 @@ export function extractMenuGfx(ctx: Gen2Ctx): Record<string, unknown> {
   objSheet("JumpShadowGFX", 1, 8, 8, "emotes/jump_shadow.png", "jumpShadow");
   objSheet("CutGrassGFX", 4, 32, 8, "emotes/cut_grass.png", "cutGrass");
   objSheet("FishingGFX", 8, 16, 32, "emotes/fishing.png", "fishing");
-  // :6095 KrisFishingGFX is Crystal-only: dropped.
+  // :6094 pokecrystal engine/events/fishing_gfx.asm:41, Kris' half of the art
+  objSheet("KrisFishingGFX", 8, 16, 32, "emotes/fishing_female.png", "fishingFemale");
   out.emotes = emotes;
 
   // :6112-6121 heal machine OBJ art + gfx/overworld/heal_machine.pal.

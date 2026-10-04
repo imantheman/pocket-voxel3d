@@ -13,7 +13,7 @@
 import { type Gen2Ctx, orderName, scriptKey } from "./ctx.ts";
 import { mapNameByIds } from "./maps.ts";
 import { lua, speciesName } from "./helpers.ts";
-import { OPCODES, TERMINATORS } from "./opcodes.ts";
+import { opcodesFor, TERMINATORS } from "./opcodes.ts";
 import { attempt, decodeGen2Text } from "./text.ts";
 
 /** :83 OBJECTTYPE_* / :89 BGEVENT_ITEM (constants/script_constants.asm). */
@@ -31,6 +31,11 @@ const NPCTRADE_STRUCT_LENGTH = 32;
 const MON_NAME_LENGTH = 11;
 const NAME_LENGTH = 11;
 const NUM_NPC_TRADES = 6;
+/** :114 — pokecrystal constants/npc_trade_constants.asm:23 adds NPC_TRADE_FOREST. */
+const NUM_NPC_TRADES_CRYSTAL = 7;
+/** :120-121 — pokecrystal constants/script_constants.asm:323-324. */
+const NUM_UNOWN_WALLS = 4;
+const UNOWN_WALL_HEADER_SIZE = 5;
 /** :117 */
 const NUM_BUG_CONTESTANTS = 10;
 /** :132-133 */
@@ -121,7 +126,7 @@ interface ScriptRef {
  * - bugContestFlags: [10 EVENT_* numbers]; floorNames: [FLOOR_* strings];
  * - decorations {DECODESC_*: ScriptRef (POSTER also has posters [...])},
  *   decorationOrder.
- * unownWalls is Crystal-only (UnownWalls is not a Gold symbol) -- omitted.
+ * unownWalls is Crystal-only (UnownWalls is not a Gold symbol).
  */
 export function readEventTables(ctx: Gen2Ctx): Record<string, any> {
   const { rom } = ctx;
@@ -200,7 +205,8 @@ export function readEventTables(ctx: Gen2Ctx): Record<string, any> {
   const trades = ctx.symbol("NPCTrades");
   const itemOrder: string[] = consts.itemOrder ?? [];
   const tradeRows: unknown[] = [];
-  for (let row = 0; row < NUM_NPC_TRADES; row++) {
+  const tradeCount = ctx.crystal ? NUM_NPC_TRADES_CRYSTAL : NUM_NPC_TRADES;
+  for (let row = 0; row < tradeCount; row++) {
     const base = trades.address + row * NPCTRADE_STRUCT_LENGTH;
     const raw = rom.bytes(trades.bank, base, 3);
     const dvBase = base + 3 + MON_NAME_LENGTH;
@@ -224,7 +230,9 @@ export function readEventTables(ctx: Gen2Ctx): Record<string, any> {
 
   // :3232 TradeTexts: dialog-major, `TradeTexts + 6 * dialog + 2 * set`.
   const tradeTexts = ctx.symbol("TradeTexts");
-  const tradeStride = 6;
+  // Crystal's fourth dialogset makes the row stride 8
+  // (pokecrystal engine/events/npc_trade.asm:389-399 `ld bc, 2 * 4`)
+  const tradeStride = ctx.crystal ? 8 : 6;
   const dialogs = [
     "TRADE_DIALOG_INTRO", "TRADE_DIALOG_CANCEL", "TRADE_DIALOG_WRONG",
     "TRADE_DIALOG_COMPLETE", "TRADE_DIALOG_AFTER",
@@ -303,7 +311,32 @@ export function readEventTables(ctx: Gen2Ctx): Record<string, any> {
     DECODESC_CONSOLE: ref(ornament.bank, ornament.address),
   };
   out.decorationOrder = consts.decoDescOrder;
-  // :3335-3362 unownWalls: Crystal's UnownWalls/MenuHeaders_UnownWalls -- not Gold.
+  // :3335-3362 — pokecrystal data/events/unown_walls.asm:7 UnownWalls and
+  // :15 MenuHeaders_UnownWalls; macros/coords.asm:71 `menu_coords` is y first.
+  const unownWalls = ctx.location("UnownWalls");
+  const unownHeaders = ctx.location("MenuHeaders_UnownWalls");
+  const unownMap = (ctx.manifest as { unownCharmap?: Record<string, string> }).unownCharmap;
+  if (unownWalls && unownHeaders && unownMap) {
+    const walls: Record<string, unknown>[] = [];
+    let address = unownWalls[1];
+    for (let wall = 0; wall < NUM_UNOWN_WALLS; wall++) {
+      const chars: number[] = [];
+      const word: string[] = [];
+      for (;;) {
+        const byte = rom.byte(unownWalls[0], address);
+        address += 1;
+        if (byte === 0xff) break;
+        chars.push(byte);
+        word.push(unownMap[String(byte)] ?? "?");
+      }
+      const head = rom.bytes(unownHeaders[0], unownHeaders[1] + wall * UNOWN_WALL_HEADER_SIZE, UNOWN_WALL_HEADER_SIZE);
+      walls.push({
+        id: wall, word: word.join(""), chars,
+        flags: head[0], y1: head[1], x1: head[2], y2: head[3], x2: head[4],
+      });
+    }
+    out.unownWalls = walls;
+  }
   return out;
 }
 
@@ -683,7 +716,7 @@ export function extractScriptsAndText(
         commands.push({ op: "truncated", reason: "read" });
         break;
       }
-      const info = OPCODES.get(opcode);
+      const info = opcodesFor(ctx.edition).get(opcode);
       if (!info) {
         commands.push({ op: "unknown", code: opcode, source: `ROM:${item.key}` });
         break;
@@ -713,6 +746,9 @@ export function extractScriptsAndText(
         case "jumptextfaceplayer":
           cmd.text = ensureText(bank, wordFromArgs(args));
           break;
+        // farjumptext is Crystal's new $52 and carries a dba, not a dw
+        // (pokecrystal engine/overworld/scripting.asm:318-327)
+        case "farjumptext":
         case "farwritetext": {
           const [tBank, tAddr] = dbaFromArgs(args);
           cmd.text = ensureText(tBank, tAddr);
@@ -967,7 +1003,7 @@ export function extractInitialEvents(ctx: Gen2Ctx): Record<string, unknown> {
     if (!romAddrOk(bank, pc)) break;
     const opcode = attempt(() => rom.byte(bank, pc));
     if (opcode === undefined) break;
-    const info = OPCODES.get(opcode);
+    const info = opcodesFor(ctx.edition).get(opcode);
     if (!info) break;
     const size = info.size;
     let args: number[] = [];

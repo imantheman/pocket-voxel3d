@@ -22,7 +22,13 @@ export const GOLD_SHA1 = "d8b8a3600a465308c9953dfa04f0081c05bdcb94";
 /** SHA-1 of Pokemon Silver (USA, Europe) (gen1recomp GameVersion.VERSIONS.silver). */
 export const SILVER_SHA1 = "49b163f7e57702bc939d642a18f591de55d92dae";
 
-export type GameVersion = "red" | "blue" | "yellow" | "gold" | "silver";
+/** SHA-1s of Pokemon Crystal (USA, Europe) 1.0 and 1.1 (gen1recomp
+ * GameVersion.VERSIONS.crystal.revisions at bdfac727): one manifest, the
+ * 1.1 addresses in its symbolRevisions. */
+export const CRYSTAL_SHA1 = "f4cd194bdee0d04ca4eac29e09b8e4e9d818c133";
+export const CRYSTAL_11_SHA1 = "f2f52230b536214ef7c9924f483392993e226cfb";
+
+export type GameVersion = "red" | "blue" | "yellow" | "gold" | "silver" | "crystal";
 
 /**
  * The games this pipeline can cook (gen1recomp src/core/GameVersion.lua).
@@ -30,7 +36,10 @@ export type GameVersion = "red" | "blue" | "yellow" | "gold" | "silver";
  * ribbon -- so they cook to ONE shared pak set; what differs is each game's
  * own dataset (encounters, text, credits, default names) and that ribbon.
  */
-export const VERSIONS: Record<GameVersion, { sha1: string; manifest: string; label: string; generation: 1 | 2 }> = {
+export const VERSIONS: Record<
+  GameVersion,
+  { sha1: string; manifest: string; label: string; generation: 1 | 2; revisions?: string[] }
+> = {
   red: { sha1: RED_SHA1, manifest: "tools/rom_manifest.json", label: "Red", generation: 1 },
   blue: { sha1: BLUE_SHA1, manifest: "tools/rom_manifest_blue.json", label: "Blue", generation: 1 },
   yellow: { sha1: YELLOW_SHA1, manifest: "tools/rom_manifest_yellow.json", label: "Yellow", generation: 1 },
@@ -39,6 +48,14 @@ export const VERSIONS: Record<GameVersion, { sha1: string; manifest: string; lab
   // Silver's manifest is upstream's too, at the same pin (998cb03d, an
   // ancestor of bdfac727): the same 2062 symbols at Silver's addresses
   silver: { sha1: SILVER_SHA1, manifest: "tools/rom_manifest_silver.json", label: "Silver", generation: 2 },
+  // Crystal's manifest is upstream's at bdfac727 too (MIT), 1.0 and 1.1
+  crystal: {
+    sha1: CRYSTAL_SHA1,
+    manifest: "tools/rom_manifest_crystal.json",
+    label: "Crystal",
+    generation: 2,
+    revisions: [CRYSTAL_SHA1, CRYSTAL_11_SHA1],
+  },
 };
 
 /**
@@ -66,7 +83,9 @@ export function genDirFor(version: GameVersion): string {
 export function versionOfRom(path: string): GameVersion | null {
   if (!existsSync(path)) return null;
   const digest = createHash("sha1").update(readFileSync(path)).digest("hex");
-  for (const [v, info] of Object.entries(VERSIONS)) if (info.sha1 === digest) return v as GameVersion;
+  for (const [v, info] of Object.entries(VERSIONS)) {
+    if (info.sha1 === digest || info.revisions?.includes(digest)) return v as GameVersion;
+  }
   return null;
 }
 
@@ -77,7 +96,7 @@ export function versionOfRom(path: string): GameVersion | null {
  */
 export function activeVersion(): GameVersion {
   const named = process.env.VOXELMON_VERSION?.toLowerCase();
-  if (named === "red" || named === "blue" || named === "yellow" || named === "gold" || named === "silver") return named;
+  if (named && named in VERSIONS) return named as GameVersion;
   const rom = process.env.VOXELMON_ROM;
   return (rom && versionOfRom(rom)) || "red";
 }

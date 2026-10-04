@@ -338,7 +338,7 @@ export function extractPokemon(ctx: Gen2Ctx): Record<string, unknown> {
       const entry: Record<string, unknown> = {};
       let frontStream: number[] | undefined;
       const readPic = (offset: number, size: number, folder: string, key: string): void => {
-        const bank = picBank(rom.byte(symbol.bank, base + offset));
+        const bank = picBank(rom.byte(symbol.bank, base + offset), ctx.crystal);
         const address = rom.word(symbol.bank, base + offset + 1);
         const rel = `battle/${folder}/unown_${letter.toLowerCase()}.png`;
         try {

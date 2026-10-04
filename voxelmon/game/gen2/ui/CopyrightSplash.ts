@@ -5,6 +5,7 @@
 // The cart's card is the three Nintendo / Creatures / GAME FREAK lines from
 // CopyrightGFX, composed by the importer into title/copyright_splash.
 
+import { GbcPalette } from "../shared/render/GbcPalette.ts";
 import G, { type LcdImage } from "../platform/screen.ts";
 import { Runtime } from "../shared/mods/Runtime.ts";
 import { Assets } from "../shared/render/Assets.ts";
@@ -54,6 +55,7 @@ export class CopyrightSplash {
   lines: string[] | undefined;
   frames = 0;
   done = false;
+  palette: readonly (readonly number[])[] | null = null;
 
   constructor(game: any, opts: CopyrightSplashOpts = {}) {
     this.game = game;
@@ -63,6 +65,9 @@ export class CopyrightSplash {
     this.image = tryImage(opts.image) ?? tryImage(title.copyrightSplash) ?? tryImage("assets/generated/title/copyright_splash.png");
     this.backdrop = opts.backdrop ?? title.copyrightBackdrop ?? DEFAULT_BACKDROP;
     this.ink = opts.ink ?? title.copyrightInk ?? DEFAULT_INK;
+    // Crystal: the card runs on PREDEFPAL_GAMEFREAK_LOGO_BG (the importer
+    // ships the shade image and this palette, crystalmovie.ts); Gold has none
+    this.palette = Array.isArray(title.copyrightPalette) ? title.copyrightPalette : null;
     // text fallback only when the ROM extract is missing (tests / bare boots)
     this.lines = opts.lines;
   }
@@ -111,7 +116,9 @@ export class CopyrightSplash {
     this.fillBackdrop(SCREEN_W, SCREEN_H);
     if (this.image) {
       G.setColor(1, 1, 1, 1);
-      G.draw(this.image, 0, 0);
+      const image = this.image;
+      if (this.palette) GbcPalette.with(this.palette, () => G.draw(image, 0, 0));
+      else G.draw(image, 0, 0);
       return;
     }
     if (!this.lines) return;

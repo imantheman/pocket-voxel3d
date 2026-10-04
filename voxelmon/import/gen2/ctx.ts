@@ -1,22 +1,24 @@
 // The Gen 2 importer context: RomExtractorGen2.lua:215 new() + :254 symbol()
-// + :303 decompressLz3Symbol, over the shared Rom/GfxBin. Gold and Silver:
-// the Crystal edition switches (palMapBank, picBank's PICS_FIX, the
-// renumbered opcodes) are dropped. `edition` is Brian's self.edition
-// (GameVersion.forSha1(manifest.romSha1), :218) for the two it can be.
+// + :303 decompressLz3Symbol, over the shared Rom/GfxBin. `edition` is
+// Brian's self.edition (GameVersion.forSha1(manifest.romSha1), :218): Gold,
+// Silver or Crystal, and the Crystal switches (palMapBank, picBank's
+// PICS_FIX, the renumbered opcodes, ...) key off it.
 
 import { check, type RomSymbol } from "../ctx.ts";
 import type { GfxBin } from "../gfx.ts";
 import type { Rom } from "../rom.ts";
 import { decompressLz3 } from "./lz.ts";
 import type { Gen2Manifest } from "./manifest.ts";
-import { SILVER_SHA1 } from "../env.ts";
+import { CRYSTAL_SHA1, SILVER_SHA1 } from "../env.ts";
+
+export type Gen2Edition = "gold" | "silver" | "crystal";
 
 export class Gen2Ctx {
   /** RomExtractorGen2.lua:219-227 — manifest symbols with the ROM
    * revision's overrides merged over them. */
   readonly symbols: Record<string, [number, number]>;
   /** Which of the two carts this is (RomExtractorGen2.lua:218). */
-  readonly edition: "gold" | "silver";
+  readonly edition: Gen2Edition;
 
   constructor(
     readonly rom: Rom,
@@ -26,7 +28,13 @@ export class Gen2Ctx {
   ) {
     const revision = romSha1 ? manifest.symbolRevisions?.[romSha1] : undefined;
     this.symbols = revision ? { ...manifest.symbols, ...revision } : manifest.symbols;
-    this.edition = manifest.romSha1 === SILVER_SHA1 ? "silver" : "gold";
+    this.edition =
+      manifest.romSha1 === SILVER_SHA1 ? "silver" : manifest.romSha1 === CRYSTAL_SHA1 ? "crystal" : "gold";
+  }
+
+  /** Brian's `self.edition == "crystal"`. */
+  get crystal(): boolean {
+    return this.edition === "crystal";
   }
 
   /** `self.symbols[name]`: the optional lookup (nil when absent). */

@@ -9,6 +9,7 @@
 // engine's port of GoldSilverIntro.lua to run the same routines over.
 // Palettes are [r,g,b] 0-255 (palettes.ts colors / helpers.predefPal).
 
+import { extractCrystalIntro } from "./crystalmovie.ts";
 import type { Gen2Ctx } from "./ctx.ts";
 import { predefPal, write2bpp } from "./helpers.ts";
 import { type Rgb, colors } from "./palettes.ts";
@@ -148,6 +149,9 @@ export function layStarters(sprites: number[], pics: number[][]): number[] {
  * transparent.
  */
 export function extractIntro(ctx: Gen2Ctx): Record<string, unknown> {
+  // :5685 — Crystal's intro is a different program with its own asset set
+  // (pokecrystal engine/movie/intro.asm:1 CrystalIntro)
+  if (ctx.crystal) return extractCrystalIntro(ctx);
   // :5693-5700 — act 1, underwater.
   const water = introBackground(ctx, "Intro_WaterGFX1", "Intro_WaterMeta", "Intro_WaterTilemap",
     INTRO_WATER_TILEMAP_ROWS, "intro/water_tiles.png");

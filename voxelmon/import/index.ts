@@ -49,7 +49,7 @@ export async function runImport(env: VoxelEnv): Promise<void> {
   const digest = sha1Hex(romData);
   const want = VERSIONS[env.version];
   check(
-    digest === want.sha1,
+    digest === want.sha1 || (want.revisions ?? []).includes(digest),
     `ROM SHA-1 mismatch: got ${digest}, need ${want.label} ${want.sha1} (${env.romPath})`,
   );
   if (VERSIONS[env.version].generation === 2) {

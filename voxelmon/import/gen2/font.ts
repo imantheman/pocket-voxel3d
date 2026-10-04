@@ -87,6 +87,16 @@ export function extractFont(ctx: Gen2Ctx): Record<string, unknown> {
     blit(extraImg, solidImg, 0, 0, 0, 0, 8, 8); // $60
     blit(extraImg, solidImg, 8, 0, 8, 0, 8, 8); // $61
   }
+  // :480-493 — Crystal splits the pair and makes the arrow 2bpp: black.1bpp
+  // at $60, up_arrow.2bpp at $61 (pokecrystal gfx/font.asm:51,63).
+  const solidCrystal = ctx.location("FontsExtra_SolidBlackGFX");
+  if (solidCrystal) {
+    blit(extraImg, inkFrom1bpp(rom.bytes(solidCrystal[0], solidCrystal[1], 8), 8, 8), 0, 0, 0, 0, 8, 8);
+  }
+  const arrow = ctx.location("FontsExtra2_UpArrowGFX");
+  if (arrow) {
+    blit(extraImg, inkFrom2bpp(rom.bytes(arrow[0], arrow[1], 16), 8, 8), 8, 0, 0, 0, 8, 8);
+  }
   const phone = ctx.location("PokegearPhoneIconGFX");
   if (phone) {
     blit(extraImg, inkFrom2bpp(rom.bytes(phone[0], phone[1], 16), 8, 8), 16, 0, 0, 0, 8, 8); // $62

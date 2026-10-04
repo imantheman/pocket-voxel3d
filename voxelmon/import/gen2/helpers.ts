@@ -73,9 +73,14 @@ export function deinterleave(raw: number[], width: number, bytesPerTile = 16): n
 /** RomExtractorGen2.lua:18 FIX_PIC_BANK (engine/gfx/load_pics.asm FixPicBank). */
 export const FIX_PIC_BANK: Record<number, number> = { 0x13: 0x1f, 0x14: 0x20, 0x1f: 0x2e };
 
-/** RomExtractorGen2.lua:249 picBank — Gold's three-entry remap (Crystal's
- * flat `+ PICS_FIX` dropped: Gold only). */
-export function picBank(stored: number): number {
+/** :25 — pokecrystal engine/gfx/load_pics.asm:250 PICS_FIX; macros/data.asm
+ * stores BANK(pic) - PICS_FIX flat. */
+export const PICS_FIX = 0x36;
+
+/** RomExtractorGen2.lua:249 picBank — Gold's three-entry remap, or Crystal's
+ * flat `+ PICS_FIX`. */
+export function picBank(stored: number, crystal = false): number {
+  if (crystal) return stored + PICS_FIX;
   return FIX_PIC_BANK[stored] ?? stored;
 }
 

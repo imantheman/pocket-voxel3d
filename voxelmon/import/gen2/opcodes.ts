@@ -1,11 +1,15 @@
 // Gen 2 script opcodes: port of gen1recomp src/script/gen2/Opcodes.lua
 // (bdfac727), from pokegold/macros/scripts/events.asm. `size` is operand
 // bytes after the opcode, for the import-time disassembly. Gold and Silver
-// share this dialect (events.asm:540); Crystal's renumbered table
-// (Opcodes.lua:175-270, farjumptext at $52) is dropped: Gold only.
+// share this dialect (events.asm:540); Crystal renumbers from $52
+// (Opcodes.lua:175-270, farjumptext at $52): `opcodesFor("crystal")` hands
+// back the runtime port's CRYSTAL table (game/gen2/script/Opcodes.ts), the
+// one the VM runs, so the two can never disagree.
 // Notes kept from the Lua: givepoke is variable length (4, or 8 when the
 // trainer byte is set; the extractor special-cases it); swarm is a bare
 // map_id, 2 bytes (Opcodes.lua:163-169).
+
+import { Opcodes } from "../../game/gen2/script/Opcodes.ts";
 
 export interface OpcodeInfo {
   name: string;
@@ -179,6 +183,23 @@ const ROWS: [number, string, number][] = [
 
 /** Opcodes.lua:4 — opcode byte -> {name, size}. */
 export const OPCODES: Map<number, OpcodeInfo> = new Map(ROWS.map(([code, name, size]) => [code, { name, size }]));
+
+let crystalOpcodes: Map<number, OpcodeInfo> | undefined;
+
+/** Opcodes.lua:333 forEdition: Gold and Silver share OPCODES; Crystal's
+ * renumbered dialect comes from the runtime table. */
+export function opcodesFor(edition: string): Map<number, OpcodeInfo> {
+  if (edition !== "crystal") return OPCODES;
+  if (!crystalOpcodes) {
+    const table = Opcodes.forEdition("crystal") as unknown as Record<number, OpcodeInfo>;
+    crystalOpcodes = new Map();
+    for (let byte = 0; byte < 0x100; byte++) {
+      const row = table[byte];
+      if (row) crystalOpcodes.set(byte, { name: row.name, size: row.size });
+    }
+  }
+  return crystalOpcodes;
+}
 
 /** Opcodes.lua:172 — pokegold/macros/scripts/events.asm:1015. */
 export const NUM_EVENT_COMMANDS = 0xa2;

@@ -1,7 +1,6 @@
 // Port of gen1recomp RomExtractorGen2.lua:346-883 (bdfac727): color/colors,
-// battleObjectPals and extractPalettes. Gold only: specialTilesetPalettes
-// (:714-746) returns nil on anything but Crystal, so it is dropped and
-// `specialTilesets` is always omitted.
+// battleObjectPals, specialTilesetPalettes (:714-746, Crystal only) and
+// extractPalettes.
 //
 // engine/gfx/color.asm LoadMapPals is the overworld colour pipeline
 // (RomExtractorGen2.lua:351-359): EnvironmentColorsPointers[env] gives 4
@@ -28,6 +27,42 @@ const ENV_POINTER_COUNT = 8;
 export const MAP_GROUP_COUNT = 26;
 
 export type Rgb = [number, number, number];
+
+/** :714 — engine/tilesets/tileset_palettes.asm:1, the tilesets whose BG set
+ * Crystal swaps for a palette of their own. */
+const SPECIAL_TILESET_PALETTES: Record<string, string> = {
+  TILESET_POKECOM_CENTER: "PokeComPalette",
+  TILESET_BATTLE_TOWER_INSIDE: "BattleTowerInsidePalette",
+  TILESET_ICE_PATH: "IcePathPalette",
+  TILESET_HOUSE: "HousePalette",
+  TILESET_RADIO_TOWER: "RadioTowerPalette",
+  TILESET_MANSION: "MansionPalette1",
+};
+const PAL_BG_WATER = 3;
+const PAL_BG_YELLOW = 4;
+
+/** :723 specialTilesetPalettes — undefined on Gold and Silver. */
+export function specialTilesetPalettes(ctx: Gen2Ctx): Record<string, Rgb[][]> | undefined {
+  if (!ctx.crystal) return undefined;
+  let out: Record<string, Rgb[][]> | undefined;
+  for (const [tileset, label] of Object.entries(SPECIAL_TILESET_PALETTES)) {
+    const at = ctx.location(label);
+    if (!at) continue;
+    const set: Rgb[][] = [];
+    for (let slot = 0; slot < 8; slot++) set.push(colors(ctx, at[0], at[1] + slot * 8, 4));
+    (out ??= {})[tileset] = set;
+  }
+  // MansionPalette1's ninth palette -- engine/tilesets/tileset_palettes.asm:113
+  const one = ctx.location("MansionPalette1");
+  const two = ctx.location("MansionPalette2");
+  const mansion = out?.TILESET_MANSION;
+  if (mansion && one && two) {
+    mansion[PAL_BG_YELLOW] = colors(ctx, two[0], two[1], 4);
+    mansion[PAL_BG_WATER] = colors(ctx, one[0], one[1] + 6 * 8, 4);
+    mansion[PAL_BG_ROOF] = colors(ctx, one[0], one[1] + 8 * 8, 4);
+  }
+  return out;
+}
 
 /** RomExtractorGen2.lua:363 — 5-bit channel to 0-255, rounded. */
 export function scale5(value: number): number {
@@ -174,7 +209,7 @@ export function extractPalettes(ctx: Gen2Ctx): Record<string, unknown> {
     roofSlot: PAL_BG_ROOF + 1,
     bg,
     environments,
-    // specialTilesets: Crystal only (RomExtractorGen2.lua:724) -- omitted.
+    specialTilesets: specialTilesetPalettes(ctx),
     objects,
     roofs,
     pokemon,

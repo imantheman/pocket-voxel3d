@@ -3,8 +3,8 @@
 // TitleScreenGFX1/2), Ho-Oh's five OAM poses (TitleScreenGFX4), the trail
 // sparkle (TitleScreenGFX3) and the copyright splash (CopyrightGFX).
 //
-// Gold and Silver (ctx.edition): Crystal's branch (:2046-2048, CrystalMovie)
-// is dropped. Silver's switches are Brian's -- Lugia's oamsets, Silver's BG
+// Gold and Silver (ctx.edition); Crystal's branch (:2046-2048) hands over to
+// crystalmovie.ts. Silver's switches are Brian's -- Lugia's oamsets, Silver's BG
 // and OBJ palettes and registers, its trail/bob/scroll numbers -- under the
 // Gold names the title screen reads (`hooh*` is whichever bird it is).
 //
@@ -27,6 +27,7 @@
 import { check } from "../ctx.ts";
 import { GfxImage, TRANSPARENT, blit, decode2bpp } from "../gfx.ts";
 import type { Gen2Ctx } from "./ctx.ts";
+import { extractCrystalTitle } from "./crystalmovie.ts";
 import { save, write2bpp } from "./helpers.ts";
 import { type Rgb, scale5 } from "./palettes.ts";
 
@@ -267,6 +268,8 @@ export function hoohPose(tiles: GfxImage[], oam: Oam[], base = 0, originX = ORIG
  * nil for Gold, so omitted.
  */
 export function extractTitle(ctx: Gen2Ctx): Record<string, unknown> {
+  // :2044 — Crystal has no title tilemap: DrawTitleGraphic composes on the fly
+  if (ctx.crystal) return extractCrystalTitle(ctx);
   const { rom } = ctx;
   const silver = ctx.edition === "silver";
   const bgPals = silver ? TITLE_BG_PALS_SILVER_5 : TITLE_BG_PALS_5;

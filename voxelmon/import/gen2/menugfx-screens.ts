@@ -4,15 +4,15 @@
 // unownPuzzlePicture / unownPuzzleGfx, pokedexGfx, billsPcGfx,
 // readTilemapRLE, readFlatTilemap, pokegearGfx, trainerCardGfx.
 //
-// Gold only: Crystal's gender splits (MalePokegearPals/FemalePokegearPals,
-// ChrisCardPic/KrisCardPic + TrainerCardGFX) are not in Gold's manifest
-// and are dropped; Gold's single-label paths are kept.
+// Crystal's gender splits (MalePokegearPals/FemalePokegearPals,
+// ChrisCardPic/KrisCardPic + TrainerCardGFX) are read where Brian reads
+// them; Gold's single-label paths are unchanged.
 //
 // Palettes are carried as [r, g, b] 0-255 triples (Brian's self:colors /
 // predefPal); every sheet is a shade image (0..3, 0xff transparent).
 
 import type { Gen2Ctx } from "./ctx.ts";
-import { predefPal, save, write2bpp, writeCompressedPic } from "./helpers.ts";
+import { columnsToRows, predefPal, save, write2bpp, writeCompressedPic } from "./helpers.ts";
 import { type Rgb, colors } from "./palettes.ts";
 import { decode1bpp } from "../gfx.ts";
 
@@ -346,9 +346,16 @@ export function pokegearGfx(ctx: Gen2Ctx): PokegearGfx {
   const nest = ctx.location("PokedexNestIconGFX");
   if (nest) gear.nestIcon = write2bpp(ctx, ctx.rom.bytes(nest[0], nest[1], 16), 8, 8, "pokegear/nest_icon.png", true);
 
-  // :6724-6736 — Gold's single PokegearPals (Crystal's Male/Female pair dropped).
-  const pals = ctx.symbol("PokegearPals");
+  // :6722-6736 — Gold's single PokegearPals; Crystal picks the set by player
+  // gender (pokecrystal engine/gfx/color.asm:1330,1333).
+  const pals = ctx.location("PokegearPals") ? ctx.symbol("PokegearPals") : ctx.symbol("MalePokegearPals");
   for (let i = 0; i < 6; i++) gear.palettes.push(colors(ctx, pals.bank, pals.address + i * 8, 4));
+  const female = ctx.location("FemalePokegearPals");
+  if (female) {
+    const list: Rgb[][] = [];
+    for (let i = 0; i < 6; i++) list.push(colors(ctx, female[0], female[1] + i * 8, 4));
+    (gear as PokegearGfx & { palettesFemale?: Rgb[][] }).palettesFemale = list;
+  }
 
   // :6739-6745 TownMapPals.PalMap, low nybble even ids, high odd.
   const palMap = ctx.symbol("TownMapPals.PalMap");
@@ -373,6 +380,8 @@ export interface BadgeOam {
 export interface TrainerCardGfx {
   /** 128x24: 35 portrait tiles (5x7) then 6 frame tiles at $23, padded. */
   card: string;
+  /** Crystal: Kris's card. */
+  cardFemale?: string;
   cardTilesWide: number;
   portraitTiles: number;
   portraitWide: number;
@@ -396,12 +405,34 @@ export interface TrainerCardGfx {
 
 /** RomExtractorGen2.lua:6760 trainerCardGfx. */
 export function trainerCardGfx(ctx: Gen2Ctx): TrainerCardGfx {
-  // :6780-6786 Gold's ChrisPicAndTrainerCardGFX: 41 tiles in one INCBIN
-  // pair (Crystal's ChrisCardPic + TrainerCardGFX / KrisCardPic dropped).
-  const sym = ctx.symbol("ChrisPicAndTrainerCardGFX");
-  const cardTiles = ctx.rom.bytes(sym.bank, sym.address, 41 * 16);
-  while (cardTiles.length < 48 * 16) cardTiles.push(0);
-  const card = write2bpp(ctx, cardTiles, 128, 24, "trainer_card/card.png");
+  // :6760-6795 Gold's ChrisPicAndTrainerCardGFX: 41 tiles in one INCBIN
+  // pair. Crystal keeps the $23-portrait-then-6-frame-tiles layout but splits
+  // it: Chris/KrisCardPic (5x7, built --columns) then 6 tiles of
+  // TrainerCardGFX (pokecrystal engine/gfx/player_gfx.asm:96-112).
+  const cardSheet = (portraitLabel: string, frameLabel: string | undefined, relative: string): string => {
+    let cardTiles: number[];
+    if (frameLabel) {
+      const portrait = ctx.symbol(portraitLabel);
+      const frame = ctx.symbol(frameLabel);
+      cardTiles = [
+        ...columnsToRows(ctx.rom.bytes(portrait.bank, portrait.address, 35 * 16), 5, 7),
+        ...ctx.rom.bytes(frame.bank, frame.address, 6 * 16),
+      ];
+    } else {
+      const sym = ctx.symbol(portraitLabel);
+      cardTiles = ctx.rom.bytes(sym.bank, sym.address, 41 * 16);
+    }
+    while (cardTiles.length < 48 * 16) cardTiles.push(0);
+    return write2bpp(ctx, cardTiles, 128, 24, relative);
+  };
+  let card: string;
+  let cardFemale: string | undefined;
+  if (ctx.location("ChrisPicAndTrainerCardGFX")) {
+    card = cardSheet("ChrisPicAndTrainerCardGFX", undefined, "trainer_card/card.png");
+  } else {
+    card = cardSheet("ChrisCardPic", "TrainerCardGFX", "trainer_card/card.png");
+    if (ctx.location("KrisCardPic")) cardFemale = cardSheet("KrisCardPic", "TrainerCardGFX", "trainer_card/card_f.png");
+  }
 
   const status = ctx.symbol("CardStatusGFX");
   const statusKey = write2bpp(ctx, ctx.rom.bytes(status.bank, status.address, 6 * 16), 48, 8, "trainer_card/status.png");
@@ -431,6 +462,7 @@ export function trainerCardGfx(ctx: Gen2Ctx): TrainerCardGfx {
 
   return {
     card,
+    cardFemale,
     cardTilesWide: 16,
     portraitTiles: 35,
     portraitWide: 5,

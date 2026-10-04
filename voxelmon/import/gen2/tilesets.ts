@@ -1,8 +1,9 @@
 // Port of gen1recomp RomExtractorGen2.lua:616-1168 (bdfac727): readPalMap,
 // the tileset animation programs (animStrip/readTilesetAnim),
-// extractTilesets and extractRoofs. Gold only: the Crystal two-VRAM-bank
-// sheet (crystalTilesetSheet, readCrystalPalMap, decodePalByte/tileAttrs)
-// is dropped -- `tileAttrs` is Crystal-only and always omitted here.
+// extractTilesets and extractRoofs, with the Crystal two-VRAM-bank sheet
+// (crystalTilesetSheet, readCrystalPalMap, decodePalNibble, tileAttrs):
+// Crystal's sheet is 256 tiles (bank 1 from tile $80) and its PalMap 112
+// bytes; `tileAttrs` is Crystal-only.
 //
 // Image paths: Brian's `assets/generated/<rel>.png` become the gfx key
 // `<rel>` (e.g. "tilesets/johto"), the entry in gen/gfx.json.
@@ -14,6 +15,80 @@ import { decompressLz3 } from "./lz.ts";
 /** RomExtractorGen2.lua:58 — gfx/tileset_palette_maps.asm is in "bank2"
  * (main.asm) and the Tilesets row stores only a 16-bit pointer. */
 export const PAL_MAP_BANK = 0x02;
+/** :59 — Crystal moved the include to "bank13" (pokecrystal main.asm:192-195). */
+export const PAL_MAP_BANK_CRYSTAL = 0x13;
+/** :66 — home/map.asm:1368 copies a second $60 tiles to VRAM bank 1; the
+ * id's bit 7 carries the bank (engine/tilesets/map_palettes.asm:40). */
+export const TILESET_VRAM_TILES = 256;
+/** :67 */
+const CRYSTAL_PAL_MAP_BYTES = 112;
+
+/** RomExtractorGen2.lua:241 palMapBank. */
+export function palMapBank(ctx: Gen2Ctx): number {
+  return ctx.crystal ? PAL_MAP_BANK_CRYSTAL : PAL_MAP_BANK;
+}
+
+/** :621 decodePalNibble — one PalMap nibble's GBC attributes (palette
+ * 1-BASED like tilePalettes; bit 3 the VRAM bank). */
+export interface TileAttr {
+  palette: number;
+  vramBank: number;
+  xFlip: boolean;
+  yFlip: boolean;
+  priority: boolean;
+}
+
+function decodePalNibble(n: number): TileAttr {
+  n %= 16;
+  return { palette: (n % 8) + 1, vramBank: Math.floor(n / 8) % 2, xFlip: false, yFlip: false, priority: false };
+}
+
+/**
+ * RomExtractorGen2.lua:662 readCrystalPalMap — 48 bytes for bank 0, $ff
+ * padding, 48 bytes for bank 1, two tiles a byte (low nibble first). Bank-1
+ * entries land on tile ids $80-$df, so both arrays are indexed by tile id
+ * (sparse between $60 and $7f).
+ */
+export function readCrystalPalMap(ctx: Gen2Ctx, address: number): { palettes: number[]; attrs: TileAttr[] } {
+  const raw = ctx.rom.bytes(palMapBank(ctx), address, CRYSTAL_PAL_MAP_BYTES);
+  const palettes: number[] = [];
+  const attrs: TileAttr[] = [];
+  const pair = (tileId: number, byte: number): void => {
+    [byte % 16, Math.floor(byte / 16) % 16].forEach((n, i) => {
+      const a = decodePalNibble(n);
+      attrs[tileId + i] = a;
+      palettes[tileId + i] = a.palette;
+    });
+  };
+  let i = 0;
+  let tileId = 0;
+  for (let count = 0; i < raw.length && count < 48; count++, i++) {
+    if (raw[i] === 0xff) break;
+    pair(tileId, raw[i]!);
+    tileId += 2;
+  }
+  while (i < raw.length && raw[i] === 0xff) i++;
+  tileId = 0x80;
+  for (let count = 0; i < raw.length && count < 48; count++, i++) {
+    if (raw[i] === 0xff) break;
+    pair(tileId, raw[i]!);
+    tileId += 2;
+  }
+  return { palettes, attrs };
+}
+
+/** :1004 crystalTilesetSheet — LoadTilesetGFX's two CopyBytes: the first
+ * 96 tiles to bank 0, the next 96 to bank 1 at tile $80. */
+export function crystalTilesetSheet(pixels: number[]): number[] {
+  const half = TILESET_TILE_COUNT * 16;
+  const bank1 = (TILESET_VRAM_TILES / 2) * 16;
+  const out = new Array<number>(bank1 + half).fill(0);
+  for (let i = 0; i < half; i++) {
+    out[i] = pixels[i] ?? 0;
+    out[bank1 + i] = pixels[half + i] ?? 0;
+  }
+  return out;
+}
 /** :63 — a Gold tileset sheet is 96 tiles, 128x48. */
 export const TILESET_TILE_COUNT = 96;
 /** :73 — 128 metatiles (16 tile ids each) and 128 collision quads. */
@@ -39,8 +114,10 @@ export function decodePalMap(raw: number[]): number[] {
   return out;
 }
 
-/** RomExtractorGen2.lua:698 readPalMap — TILESET_TILE_COUNT/2 bytes in bank 2. */
+/** RomExtractorGen2.lua:698 readPalMap — TILESET_TILE_COUNT/2 bytes in bank
+ * 2 on Gold, the 112-byte two-bank map on Crystal. */
 export function readPalMap(ctx: Gen2Ctx, address: number): number[] {
+  if (ctx.crystal) return readCrystalPalMap(ctx, address).palettes;
   return decodePalMap(ctx.rom.bytes(PAL_MAP_BANK, address, TILESET_TILE_COUNT / 2));
 }
 
@@ -254,8 +331,11 @@ export function extractTilesets(ctx: Gen2Ctx): Record<string, unknown> {
   const { rom, gfx } = ctx;
   const order = ctx.manifest.constants.tilesetOrder;
   const headers = ctx.symbol("Tilesets");
+  // :1025 — Crystal's sheet is both VRAM banks, 256 tiles (128x128)
+  const twoBank = ctx.crystal;
+  const sheetTiles = twoBank ? TILESET_VRAM_TILES : TILESET_TILE_COUNT;
   const imageWidth = 128;
-  const imageHeight = (TILESET_TILE_COUNT / (imageWidth / 8)) * 8;
+  const imageHeight = (sheetTiles / (imageWidth / 8)) * 8;
   const byteLength = (imageWidth * imageHeight) / 4;
 
   // :1033 — only symbols in bank $3f can be a program's function.
@@ -275,7 +355,8 @@ export function extractTilesets(ctx: Gen2Ctx): Record<string, unknown> {
 
     // :1057 — lz3, handed everything to the bank end; padded or truncated
     // to the 96-tile sheet.
-    const pixels = decompressLz3(ctx.toBankEnd(h.gfxBank, h.gfxAddress));
+    let pixels = decompressLz3(ctx.toBankEnd(h.gfxBank, h.gfxAddress));
+    if (twoBank) pixels = crystalTilesetSheet(pixels);
     while (pixels.length < byteLength) pixels.push(0);
     pixels.length = byteLength;
     const base = constName.toLowerCase().replace(/^tileset_/, "");
@@ -295,8 +376,14 @@ export function extractTilesets(ctx: Gen2Ctx): Record<string, unknown> {
       collision: readCollision(ctx, h.collBank, h.collAddress),
       // Anim programs live in bank $3f (data/tilesets.asm).
       anim: readTilesetAnim(ctx, h.animAddress, animByAddress, animStrips),
-      palMap: { bank: PAL_MAP_BANK, address: h.palMapAddress },
-      tilePalettes: readPalMap(ctx, h.palMapAddress),
+      palMap: { bank: palMapBank(ctx), address: h.palMapAddress },
+      ...(twoBank
+        ? (() => {
+            // :1085 — Crystal: the full attribute per tile id beside the slots
+            const map = readCrystalPalMap(ctx, h.palMapAddress);
+            return { tilePalettes: map.palettes, tileAttrs: map.attrs };
+          })()
+        : { tilePalettes: readPalMap(ctx, h.palMapAddress) }),
     };
   }
 

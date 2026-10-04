@@ -10,7 +10,7 @@
 // per-line SCX over its rows, and Ho-Oh and the trails are objects through
 // title_fg.pal (hoohPalette/trailPalette).
 
-import type { Lcd, Palette4 } from "../platform/lcd.ts";
+import { ATTR_PRIORITY, type Lcd, type Palette4 } from "../platform/lcd.ts";
 import { tonumber } from "../platform/lua.ts";
 import { random } from "../platform/rng.ts";
 import G, { currentLcd, type LcdImage } from "../platform/screen.ts";
@@ -138,6 +138,12 @@ export class TitleState {
   // The importer's palettes for the shade sheets (see the header).
   screenPalettes: Colors[] | null;
   screenPalMap: number[] | null;
+  /** Crystal: the palettes the importer ships for the shade sheets
+   * (crystalmovie.ts) -- Suicune through BG palette 0, the gem through OBJ 0. */
+  suicunePalette: Colors | null;
+  gemPalette: Colors | null;
+  /** Crystal: the logo's cells beat the gem (title.asm:81-85,334, OAM_PRIO). */
+  screenKeyed: boolean;
   hoohPalette: Colors | null;
   trailPalette: Colors | null;
 
@@ -227,6 +233,9 @@ export class TitleState {
 
     this.screenPalettes = Array.isArray(title.screenPalettes) ? title.screenPalettes : null;
     this.screenPalMap = Array.isArray(title.screenPalMap) ? title.screenPalMap : null;
+    this.suicunePalette = Array.isArray(title.suicunePalette) ? title.suicunePalette : null;
+    this.gemPalette = Array.isArray(title.gemPalette) ? title.gemPalette : null;
+    this.screenKeyed = !!title.gem;
     this.hoohPalette = Array.isArray(title.hoohPalette) ? title.hoohPalette : null;
     this.trailPalette = Array.isArray(title.trailPalette) ? title.trailPalette : null;
   }
@@ -520,7 +529,9 @@ export class TitleState {
               if (nul < 0) nul = this.slotOf(lcd, undefined, null);
               slot = nul;
             }
-            a[c] = slot & 0xef;
+            // Crystal: BG priority, so the OAM_PRIO gem only shows through
+            // the logo's colour 0
+            a[c] = (slot & 0xef) | (this.screenKeyed ? ATTR_PRIORITY : 0);
           }
           return a;
         });
@@ -662,16 +673,6 @@ export class TitleState {
       G.setColor(fill[0]!, fill[1]!, fill[2]!, 1);
       G.rectangle("fill", 0, 0, 160, 144);
       G.setColor(1, 1, 1, 1);
-      if (gem) {
-        G.push();
-        G.objects = true;
-        G.draw(gem, this.gemX, this.gemY);
-        G.pop();
-      }
-      if (suicuneFrames) {
-        const frame = suicuneFrames[this.suicuneFrame - 1] ?? suicuneFrames[0];
-        if (frame) G.draw(frame, this.suicuneX, this.suicuneY);
-      }
       if (this.entranceScx <= 0) {
         // The pal-7 window line covers the BG once hWY lands at $88.
         const bandTop = this.entranceHideBelow ?? 136;
@@ -680,7 +681,27 @@ export class TitleState {
         G.rectangle("fill", 0, bandTop, 160, 144 - bandTop);
         G.setColor(1, 1, 1, 1);
       }
+      // The logo first: on the Gold screen it writes every one of its cells,
+      // the empty ones too, so Suicune's cells go in after it; the logo's
+      // BG priority (screenKeyed) is what keeps the gem behind it.
       if (screen) this.drawEntranceScreen(screen);
+      if (gem) {
+        G.push();
+        G.objects = true;
+        GbcPalette.with(this.gray() ? null : this.gemPalette, () => G.draw(gem, this.gemX, this.gemY));
+        G.pop();
+      }
+      if (suicuneFrames) {
+        const frame = suicuneFrames[this.suicuneFrame - 1] ?? suicuneFrames[0];
+        if (frame) GbcPalette.with(this.gray() ? null : this.suicunePalette, () => G.draw(frame, this.suicuneX, this.suicuneY));
+      }
+      // the copyright line is the WINDOW at hWY = $88 (title.asm:114-119),
+      // over Suicune's bottom row: put the logo's row 17 back on top
+      const lcd = currentLcd();
+      if (lcd && this.cellRows.length > 17 && this.attrRows.length > 17) {
+        lcd.s.cells.set(this.cellRows[17]!, 17 * 32);
+        lcd.s.attrs.set(this.attrRows[17]!, 17 * 32);
+      }
       return;
     }
 

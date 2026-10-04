@@ -2,8 +2,8 @@
 // and its tables (:135-187): the Gen 2 text-command walker that turns a
 // text stream into the string the overworld VM prints, with {STRBUF},
 // {NUM}, {PLAYER}, {RIVAL}, {USER}/{TARGET}/{ENEMY}, {PROMPT}/{DONE} and
-// {BYTE:xx} markers. Crystal's buffer addresses (TEXT_BUFFERS_CRYSTAL) and
-// its $14 <PLAY_G> in-string case are dropped: Gold only.
+// {BYTE:xx} markers, with Crystal's buffer addresses (TEXT_BUFFERS_CRYSTAL)
+// and its $14 <PLAY_G> in-string case.
 
 import { hex2 } from "../ctx.ts";
 import type { Gen2Ctx } from "./ctx.ts";
@@ -21,6 +21,20 @@ export const TEXT_BUFFERS: Record<number, string> = {
   0xc5e7: "wPlayerTrademonSenderName",
   0xc602: "wOTTrademonSpeciesName",
   0xc618: "wOTTrademonSenderName",
+};
+
+/** :156 TEXT_BUFFERS_CRYSTAL — pokecrystal ram/wram.asm:1925,2333. */
+export const TEXT_BUFFERS_CRYSTAL: Record<number, string> = {
+  0xd050: "wMonOrItemNameBuffer",
+  0xd073: "wStringBuffer1",
+  0xd086: "wStringBuffer2",
+  0xd099: "wStringBuffer3",
+  0xd0ac: "wStringBuffer4",
+  0xd0bf: "wStringBuffer5",
+  0xc6d1: "wPlayerTrademonSpeciesName",
+  0xc6e7: "wPlayerTrademonSenderName",
+  0xc703: "wOTTrademonSpeciesName",
+  0xc719: "wOTTrademonSenderName",
 };
 
 /** :171 TEXT_NO_GLYPH — TX_LOW, TX_SCROLL, TX_PAUSE, TX_WAIT_BUTTON,
@@ -79,7 +93,7 @@ export function decodeGen2Text(
       out.push("{STRBUF}");
       if (buffers) {
         const target = rom.word(bank, address + i + 1);
-        buffers.push(TEXT_BUFFERS[target] ?? target);
+        buffers.push((ctx.crystal ? TEXT_BUFFERS_CRYSTAL : TEXT_BUFFERS)[target] ?? target);
       }
       i += 2;
     } else if (b === 0x4e || b === 0x4f) {
@@ -88,7 +102,9 @@ export function decodeGen2Text(
       out.push("\f");
     } else if (b === 0x55) {
       out.push("\v");
-    } else if (b === 0x52) {
+    } else if (b === 0x52 || (b === 0x14 && inString && ctx.crystal)) {
+      // pokecrystal constants/charmap.asm:6 <PLAY_G>, home/text.asm:243,380
+      // PlaceGenderedPlayerName
       out.push("{PLAYER}");
     } else if (b === 0x53) {
       out.push("{RIVAL}");

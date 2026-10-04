@@ -89,6 +89,9 @@ export function extractAudio(
 ): Record<string, unknown> {
   // :2809-2823 — each bank's whole $4000-$7FFF window, concatenated in order.
   const bankOrder = [...GEN2_PROGRAM_BANKS];
+  // :2811 — "Songs 5" and "Crystal Sound Effects" are bank $5e
+  // (pokecrystal layout.link:246-249)
+  if (ctx.crystal) bankOrder.push(0x5e);
   const programs = new Uint8Array(bankOrder.length * BANK_SIZE);
   bankOrder.forEach((bank, index) => {
     programs.set(Uint8Array.from(ctx.rom.bytes(bank, BANK_SIZE, BANK_SIZE)), index * BANK_SIZE);

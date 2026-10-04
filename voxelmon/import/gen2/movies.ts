@@ -1,9 +1,8 @@
 // Port of gen1recomp RomExtractorGen2.lua (bdfac727) :2493-2802
 // extractCredits / extractDiploma / extractTrade, and :7416-7480
 // readMagnetTrain / extractStubs: the cutscene art that is not a battle or a
-// map. Gold only: CREDITS_SCENES_CRYSTAL (:2501, Pichu/Smoochum/Ditto/
-// Igglybuff), Crystal's 12 credits palette sets / 3 per scene (:2570) and
-// Crystal's theEndY 9 (:2543) are dropped.
+// map. Crystal's credits: CREDITS_SCENES_CRYSTAL (:2501, Pichu/Smoochum/
+// Ditto/Igglybuff), 12 palette sets / 3 per scene (:2570), theEndY 9 (:2543).
 //
 // Every stage tolerates missing symbols the way Brian's does (`if
 // self.symbols[label]`): the field is simply omitted. All images are shade
@@ -23,7 +22,14 @@ export const CREDITS_SCENES = [
   { species: "ELEKID", label: "CreditsElekidGFX", frames: 3 },
   { species: "SENTRET", label: "CreditsSentretGFX", frames: 4 },
 ];
-// :2501 CREDITS_SCENES_CRYSTAL: Crystal only -- dropped.
+/** :2501 CREDITS_SCENES_CRYSTAL — pokecrystal engine/movie/credits.asm:610-613;
+ * each is $400 bytes, so all four run 4 frames of 4x4 tiles. */
+export const CREDITS_SCENES_CRYSTAL = [
+  { species: "PICHU", label: "CreditsPichuGFX", frames: 4 },
+  { species: "SMOOCHUM", label: "CreditsSmoochumGFX", frames: 4 },
+  { species: "DITTO", label: "CreditsDittoGFX", frames: 4 },
+  { species: "IGGLYBUFF", label: "CreditsIgglybuffGFX", frames: 4 },
+];
 const CREDITS_BORDER_TILES = 9; // :2507
 const CREDITS_THEEND_TILES = 16; // :2508
 /** :2572 — Gold's CreditsPalettes is 6 sets, one per scene (Crystal 12/3). */
@@ -76,11 +82,12 @@ export function extractCredits(ctx: Gen2Ctx): Record<string, unknown> {
     // :2540 Credits_TheEnd: hlcoord 6, 8, eight tiles a row (Crystal: 6, 9).
     data.theEndX = 6;
     data.theEndWidth = 8;
-    data.theEndY = 8;
+    data.theEndY = ctx.crystal ? 9 : 8;
   }
 
+  const sceneList = ctx.crystal ? CREDITS_SCENES_CRYSTAL : CREDITS_SCENES;
   const scenes: CreditsScene[] = [];
-  for (const scene of CREDITS_SCENES) {
+  for (const scene of sceneList) {
     if (!ctx.location(scene.label)) continue;
     const sym = ctx.symbol(scene.label);
     const raw = rom.bytes(sym.bank, sym.address, scene.frames * 16 * 16);
@@ -88,14 +95,16 @@ export function extractCredits(ctx: Gen2Ctx): Record<string, unknown> {
     scenes.push({ species: scene.species, image, frames: scene.frames, width: 32, height: 32 });
   }
   // :2564 — all or nothing.
-  if (scenes.length === CREDITS_SCENES.length) data.scenes = scenes;
+  if (scenes.length === sceneList.length) data.scenes = scenes;
 
   if (ctx.location("CreditsPalettes")) {
     const pal = ctx.symbol("CreditsPalettes");
     const palettes: Rgb[][] = [];
-    for (let set = 0; set < CREDITS_PALETTE_SETS; set++) palettes.push(colors(ctx, pal.bank, pal.address + set * 8, 4));
+    // pokecrystal engine/movie/credits.asm:502 — Crystal: 12 sets, 3 a scene
+    const setCount = ctx.crystal ? 12 : CREDITS_PALETTE_SETS;
+    for (let set = 0; set < setCount; set++) palettes.push(colors(ctx, pal.bank, pal.address + set * 8, 4));
     data.palettes = palettes;
-    data.palettesPerScene = 1;
+    data.palettesPerScene = ctx.crystal ? 3 : 1;
   }
 
   return { credits: data };

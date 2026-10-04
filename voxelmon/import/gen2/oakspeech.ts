@@ -1,13 +1,14 @@
 // Port of gen1recomp RomExtractorGen2.lua (bdfac727): splashGfx (:4146-4233)
-// and extractOakSpeech (:4269). Crystal-only pieces are dropped: the Ditto
-// splash (GameFreakDittoGFX / GameFreakDittoPaletteFade /
-// _CGB_GamefreakLogo.GamefreakDittoPalette) and the Chris/Kris player pics
-// (ChrisPic/KrisPic) -- none are Gold symbols, so Gold's playerPic falls
-// back to CalPic exactly as Brian's does, and the demo mon is MARILL.
+// and extractOakSpeech (:4269), with Crystal's pieces: the Ditto splash
+// (GameFreakDittoGFX / GameFreakDittoPaletteFade /
+// _CGB_GamefreakLogo.GamefreakDittoPalette), the Chris/Kris player pics
+// (ChrisPic/KrisPic) and WOOPER as the demo mon. None are Gold symbols, so
+// Gold's playerPic falls back to CalPic exactly as Brian's does.
 
 import type { Gen2Ctx } from "./ctx.ts";
 import { inkFrom1bpp } from "./font.ts";
-import { gfxKey, predefPal, save, write2bpp, writeCompressedPic } from "./helpers.ts";
+import { columnsToRows, gfxKey, predefPal, save, write2bpp, writeCompressedPic } from "./helpers.ts";
+import { colors } from "./palettes.ts";
 import { attempt, decodeGen2Text } from "./text.ts";
 
 /** :4151-4153 constants/scgb_constants.asm */
@@ -43,7 +44,24 @@ export function splashGfx(ctx: Gen2Ctx): Record<string, unknown> | undefined {
     out.star = write2bpp(ctx, ctx.rom.bytes(stars[0], stars[1], 2 * 16), 8, 16, "splash/star.png", true);
     out.sparkle = write2bpp(ctx, ctx.rom.bytes(stars[0], stars[1] + 2 * 16, 3 * 16), 24, 8, "splash/sparkle.png", true);
   }
-  // :4205-4230 Ditto / ditto fade / ditto palette: Crystal only.
+  // :4205 — Crystal has no stars: GameFreakPresentsInit decompresses
+  // ditto.2bpp.lz (pokecrystal engine/movie/splash.asm:61-88). The whole
+  // sheet is one 16-wide page so tile n is (n % 16, n / 16).
+  if (ctx.location("GameFreakDittoGFX")) {
+    const ditto = ctx.decompressLz3Symbol("GameFreakDittoGFX");
+    const tiles = Math.floor(ditto.length / 16);
+    const rows = Math.ceil(tiles / 16);
+    while (ditto.length < rows * 16 * 16) ditto.push(0);
+    out.ditto = write2bpp(ctx, ditto, 128, rows * 8, "splash/ditto.png", true);
+    out.dittoTiles = tiles;
+    out.dittoTilesWide = 16;
+  }
+  // gfx/splash/ditto_fade.pal, one colour per step of Ditto's fade
+  const fade = ctx.location("GameFreakDittoPaletteFade");
+  if (fade) out.dittoFade = colors(ctx, fade[0], fade[1], 16);
+  // gfx/splash/ditto.pal (pokecrystal engine/gfx/cgb_layouts.asm:876-893)
+  const dpal = ctx.location("_CGB_GamefreakLogo.GamefreakDittoPalette");
+  if (dpal) out.dittoPalette = colors(ctx, dpal[0], dpal[1], 4);
   return out;
 }
 
@@ -69,8 +87,23 @@ export function extractOakSpeech(ctx: Gen2Ctx, pokemon?: Record<string, any>): R
   // :4281 — pcall'd: a bad shrink pic costs only that frame.
   if (ctx.location("Shrink1Pic")) attempt(() => writeCompressedPic(ctx, "Shrink1Pic", 7, "intro/shrink1.png"));
   if (ctx.location("Shrink2Pic")) attempt(() => writeCompressedPic(ctx, "Shrink2Pic", 7, "intro/shrink2.png"));
+  // :4287 — Crystal's DrawIntroPlayerPic picks Chris/Kris by gender
+  // (pokecrystal engine/gfx/player_gfx.asm:170-201), both raw column-major
+  // 7x7 2bpp (Makefile:319,321)
+  let playerPic: string | undefined;
+  let playerPicFemale: string | undefined;
+  for (const [key, label] of [["chris", "ChrisPic"], ["kris", "KrisPic"]] as const) {
+    const sym = ctx.location(label);
+    if (!sym) continue;
+    const pixels = columnsToRows(ctx.rom.bytes(sym[0], sym[1], 7 * 7 * 16), 7, 7);
+    const image = write2bpp(ctx, pixels, 56, 56, `intro/${key}.png`);
+    if (key === "chris") playerPic = image;
+    else playerPicFemale = image;
+  }
   const splash = splashGfx(ctx);
-  const demoSpecies = "MARILL"; // pokegold engine/menus/intro_menu.asm:519
+  // MARILL on Gold (pokegold engine/menus/intro_menu.asm:519), WOOPER on
+  // Crystal (pokecrystal engine/menus/intro_menu.asm:652)
+  const demoSpecies = ctx.crystal ? "WOOPER" : "MARILL";
   const demoMon = pokemon?.[demoSpecies];
   return {
     generation: 2,
@@ -79,7 +112,8 @@ export function extractOakSpeech(ctx: Gen2Ctx, pokemon?: Record<string, any>): R
     demoSpecies,
     oakPic: "intro/oak",
     // ChrisPic is Crystal's: Gold falls back to CalPic (:4316)
-    playerPic: "intro/cal",
+    playerPic: playerPic ?? "intro/cal",
+    playerPicFemale,
     marillPic: demoMon?.spriteFront ? gfxKey(demoMon.spriteFront) : `battle/front/${demoSpecies.toLowerCase()}`,
     shrink1: "intro/shrink1",
     shrink2: "intro/shrink2",

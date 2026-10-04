@@ -8,6 +8,7 @@
 // `self:write(name, ...)` -> gen/<name>.json); a `*.bin` key is a binary
 // blob written as is.
 
+import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { check } from "../ctx.ts";
@@ -48,7 +49,9 @@ export async function runImportGen2(env: VoxelEnv, romData: Uint8Array): Promise
     `manifest is not for ${want.label} (romSha1 ${manifest.romSha1}): ${env.manifestPath}`,
   );
 
-  const ctx = new Gen2Ctx(new Rom(romData), manifest, new GfxBin(), want.sha1);
+  // the ROM's own SHA-1 picks the revision's symbol overrides (Crystal 1.1)
+  const romSha1 = createHash("sha1").update(romData).digest("hex");
+  const ctx = new Gen2Ctx(new Rom(romData), manifest, new GfxBin(), romSha1);
   const genDir = env.genDir;
   const emit = (files: Files): void => {
     for (const [name, value] of Object.entries(files)) {
