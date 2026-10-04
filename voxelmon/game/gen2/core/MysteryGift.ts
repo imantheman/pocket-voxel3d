@@ -24,6 +24,7 @@
 
 import { BugContest } from "./BugContest.ts";
 import { Decorations } from "./Decorations.ts";
+import { Events } from "../world/Events.ts";
 import { random } from "../platform/rng.ts";
 import { GameVersion } from "../shared/core/GameVersion.ts";
 
@@ -246,10 +247,11 @@ export const MysteryGift = {
   giveDecoration(save: any, deco: number): void {
     if (!save) return;
     save.events = save.events ?? {};
-    // (from the main menu: no world, so the save's own event bytes)
-    Decorations.giveFlag({
-      get: (f: number) => save.events[f],
-      set: (f: number, v: boolean) => { save.events[f] = v; },
-    }, deco);
+    // (from the main menu: no world, so the save's own event bytes -- byte
+    // index to byte, as world/Events keeps them; a flag written as its own
+    // key landed past Save.EVENT_BYTES and was dropped on save)
+    const events = new Events();
+    events.flags = save.events;
+    Decorations.giveFlag(events, deco);
   },
 };
