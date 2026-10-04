@@ -37,13 +37,18 @@ function serialize(v: unknown, indent = 0): string {
   if (typeof v === "string") return quote(v);
   if (v === null || v === undefined) return "nil";
 
-  // Arrays become 1-based integer-keyed Lua tables.
+  // Arrays become 1-based integer-keyed Lua tables. A null or undefined
+  // value is a key Lua does not have, so it is left out: gen1recomp's
+  // reader refuses a bare `nil` value (and so the whole save) -- a
+  // freshly made mon's `status: null` used to put one in every party.
   let entries: [string | number, unknown][];
   if (Array.isArray(v)) {
-    entries = v.map((x, i) => [i + 1, x] as [number, unknown]);
+    entries = v
+      .map((x, i) => [i + 1, x] as [number, unknown])
+      .filter(([, x]) => x !== undefined && x !== null);
   } else if (typeof v === "object") {
     entries = Object.entries(v as Record<string, unknown>)
-      .filter(([, x]) => x !== undefined)
+      .filter(([, x]) => x !== undefined && x !== null)
       .map(([k, x]) => [/^\d+$/.test(k) ? Number(k) : k, x]);
   } else {
     throw new Error("cannot serialize " + typeof v);

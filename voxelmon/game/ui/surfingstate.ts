@@ -15,7 +15,7 @@ export interface SurfingHost {
   input: { state: Partial<Record<string, boolean>>; pressed: Partial<Record<string, boolean>> };
   pop(): void;
   data: { minigame?: { surfing?: { tilemaps: Record<string, number[]> } } };
-  save: { surfingHiScore?: number; party?: { species: string; moves?: { id: string }[] }[] };
+  save: { surfingHighScore?: number; party?: { species: string; moves?: { id: string }[] }[] };
   npcRng: { byte(): number };
   audio?: {
     playOnce?(song: string): boolean;
@@ -44,8 +44,8 @@ export class SurfingState implements GameState {
       pikaClip: (n) => game.audio?.playPikaClip?.(n),
       surfingPikachuInParty: surfingPikachuInParty(game.save),
       selectQuits,
-      hiScore: game.save.surfingHiScore ?? 0,
-      setHiScore: (bcd) => { game.save.surfingHiScore = bcd; },
+      hiScore: game.save.surfingHighScore ?? 0,
+      setHiScore: (bcd) => { game.save.surfingHighScore = bcd; },
     };
     // A dataset imported before the minigame's banks has nothing to draw
     // with: the state closes on its first tick rather than showing garbage.

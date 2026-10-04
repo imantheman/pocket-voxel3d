@@ -19,6 +19,13 @@ export interface SaveIo {
   read(): string | undefined;
   /** Commit the save text. False means nothing was saved. */
   write(text: string): boolean;
+  /**
+   * Keep the save that is in storage now (as the host first read it) aside,
+   * before a save the game could not read is written over. False: it was
+   * not kept, and nothing may be written. Optional: a store without it
+   * keeps no copy, and the write goes ahead.
+   */
+  backup?(): boolean;
   /** options.lua's text, or undefined. Optional: default is memory. */
   readOptions?(): string | undefined;
   /** Commit options.lua's text. Optional: default is memory. */
@@ -26,10 +33,18 @@ export interface SaveIo {
 }
 
 /** A memory-only store: the default, and what tests use. */
-export function memorySaveIo(initial?: string, initialOptions?: string): SaveIo & { text: string | undefined; options: string | undefined } {
+export function memorySaveIo(
+  initial?: string,
+  initialOptions?: string,
+): SaveIo & { text: string | undefined; options: string | undefined; backups: string[] } {
   const io = {
     text: initial,
     options: initialOptions,
+    backups: [] as string[],
+    backup() {
+      if (io.text !== undefined) io.backups.push(io.text);
+      return true;
+    },
     read: () => io.text,
     write(t: string) {
       io.text = t;
@@ -76,6 +91,15 @@ export function write(text: string): boolean {
   }
 }
 
+/** Keep the stored save aside (SaveIo.backup); true when there is no such channel. */
+export function backup(): boolean {
+  try {
+    return io.backup ? io.backup() !== false : true;
+  } catch {
+    return false;
+  }
+}
+
 /** options.lua's text, or undefined. */
 export function readOptions(): string | undefined {
   try {
@@ -100,5 +124,5 @@ export function writeOptions(text: string): boolean {
   return true;
 }
 
-export const SaveIoSeam = { read, write, readOptions, writeOptions, setSaveIo, saveIo, memorySaveIo };
+export const SaveIoSeam = { read, write, backup, readOptions, writeOptions, setSaveIo, saveIo, memorySaveIo };
 export default SaveIoSeam;

@@ -27,6 +27,7 @@ import { osTime as clockNow } from "../platform/clock.ts";
 import { AutoInput } from "./AutoInput.ts";
 import { Clock } from "./Clock.ts";
 import { Save } from "./Save.ts";
+import { gen2ScrubLines, scrubGen2Save } from "./SaveScrub.ts";
 import { clockResetPending } from "../ui/ResetClock.ts";
 import { GameVersion } from "../shared/core/GameVersion.ts";
 import { Input } from "../shared/core/Input.ts";
@@ -231,6 +232,10 @@ export class Game2 {
       });
       return;
     }
+    // what this build does not have (a mod's or Crystal's mon, item or
+    // move) set aside rather than crashing the first screen that reads it
+    const scrubbed = scrubGen2Save(save, this.data);
+    const told = gen2ScrubLines(scrubbed);
     this.save = save;
     this.sessionStartedAt = clockNow();
     this.adoptSave(save);
@@ -240,6 +245,10 @@ export class Game2 {
     this.stack.clear();
     this.world = null;
     this.startWorld();
+    if (told.length) {
+      Logger.warn("gold load: %d mon(s), %d item(s) set aside", scrubbed.lostMons.length, scrubbed.lostItems.length);
+      this.stack.push(TextBox.new(this, told.join("\f")));
+    }
     if (ModRuntime.wants("save.loaded")) ModRuntime.emit("save.loaded", { save, meta: save.meta });
   }
 

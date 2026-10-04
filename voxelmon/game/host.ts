@@ -52,6 +52,12 @@ export interface VoxelHost {
   /** True when the bytes reached the card. False means nothing was saved. */
   saveWrite(text: string): boolean | void;
   saveData(): string | undefined;
+  /**
+   * Keep the save the card had at boot as `<save>.unreadable` before the
+   * game writes over a save it could not read. False: the copy is not on
+   * the card, and the game must not save. Absent: the host keeps no copy.
+   */
+  saveBackup?(): boolean;
   /** Write a file and read it back: is this card writable at all? */
   writeTest?(): boolean;
   /** Why the last write failed, from the host. */
@@ -302,6 +308,12 @@ export class RecorderHost implements VoxelHost {
   }
   saveData(): string | undefined {
     return this.savedText;
+  }
+  /** What `saveBackup` kept: the save text as it was before. */
+  backedUp: string[] = [];
+  saveBackup(): boolean {
+    if (this.savedText !== undefined) this.backedUp.push(this.savedText);
+    return true;
   }
 
   uiText(x: number, y: number, str: string): void {

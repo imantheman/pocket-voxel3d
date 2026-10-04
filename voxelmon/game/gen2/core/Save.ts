@@ -196,9 +196,27 @@ function scrubPlayerState(save: SaveTable, report: SaveReport): void {
 function readTable(): [SaveTable | undefined, string?] {
   const raw = saveio.read();
   if (raw === undefined || raw === "") return [undefined, "missing"];
-  const value = SaveSerializer.decode(raw);
+  let value: unknown;
+  try {
+    value = SaveSerializer.decode(raw);
+  } catch (e) {
+    return [undefined, `corrupt: ${tostring((e as Error)?.message ?? e)}`];
+  }
   if (!isTable(value)) return [undefined, `corrupt: ${tostring(value)}`];
   return [value];
+}
+
+// Not in the Lua (his keeps .bak/.tmp copies): a save in the slot that
+// load() could not read. Nothing may write over it -- save() or erase() --
+// until saveio.backup() has kept it aside as <save>.unreadable.
+let unreadable = false;
+
+function keepUnreadable(): string | undefined {
+  if (!unreadable) return undefined;
+  if (!saveio.backup()) return "the unreadable save could not be kept";
+  unreadable = false;
+  Logger.info("gold save: unreadable save kept as .unreadable");
+  return undefined;
 }
 
 // Not in the Lua: the JS shape of a decoded table (SaveSerializer.ts header).
@@ -210,6 +228,8 @@ const MAP_FIELDS: string[][] = [
   ["events"], ["scriptMem"], ["mapScenes"], ["flags"], ["inventory"], ["pcItems"],
   ["phoneContacts"], ["tradeFlags"], ["pokedex", "seen"], ["pokedex", "caught"],
   ["player", "badges"], ["player", "kantoBadges"],
+  // (not in the Lua: his [n] = sprite keys, read here as a holey array)
+  ["variableSprites"],
 ];
 
 function asObject(v: unknown): unknown {
@@ -602,7 +622,13 @@ export const Save = {
 
   /** _DeleteSaveData's YES (the title's UP + B + SELECT): the slot emptied. */
   erase(): boolean {
+    if (keepUnreadable()) return false;
     return saveio.write("");
+  },
+
+  /** Whether the slot holds a save load() could not read (and not yet kept aside). */
+  unreadable(): boolean {
+    return unreadable;
   },
 
   /**
@@ -612,18 +638,29 @@ export const Save = {
   load(_version?: string): [SaveTable | undefined, string | undefined, string | undefined, SaveReport | undefined] {
     const [data, err] = readTable();
     const recovered: string | undefined = undefined;
-    if (!data) return [undefined, undefined, err, undefined];
+    if (!data) {
+      unreadable = err !== "missing";
+      return [undefined, undefined, err, undefined];
+    }
     // The slot is shared with what came before the Gold engine: the Gen 1
     // guest's Gold walker wrote save_gold.lua in Gen 1's shape. Every Gen 2
     // save carries generation = 2 (newGame), so anything else is not one of
-    // ours and must not be continued from.
+    // ours and must not be continued from -- nor quietly written over.
     if ((data as { generation?: unknown }).generation !== 2) {
+      unreadable = true;
       return [undefined, undefined, "not a Gen 2 save", undefined];
     }
-    reshape(data);
-    Save.migrate(data);
-    Save.normalize(data);
-    const report = Save.validate(data);
+    let report: SaveReport;
+    try {
+      reshape(data);
+      Save.migrate(data);
+      Save.normalize(data);
+      report = Save.validate(data);
+    } catch (e) {
+      unreadable = true;
+      return [undefined, undefined, `corrupt: ${tostring((e as Error)?.message ?? e)}`, undefined];
+    }
+    unreadable = false;
     if (!Save.emptyReport(report)) {
       Logger.warn(
         "gold load report: %d script memory byte(s), %d MAIL struct(s), " +
@@ -637,6 +674,11 @@ export const Save = {
   /** Lua: Save.lua:930-984 -- [ok, err]; the seam's write is atomic. */
   save(save: unknown): [boolean, string?] {
     if (!isTable(save)) return [false, "no save"];
+    const kept = keepUnreadable();
+    if (kept) {
+      Logger.error("gold save refused: %s", kept);
+      return [false, kept];
+    }
     Save.normalize(save);
     const version = save.version;
     {

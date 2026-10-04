@@ -251,7 +251,7 @@ describe("Yellow: the Summer Beach House", () => {
     const notYet = talk("TEXT_SUMMERBEACHHOUSE_PRINTER", { pikachuMapFlags: 0 }, { party: [surfer] });
     expect(texts(notYet)).toEqual(["_SummerBeachHousePrinterText2"]);
     const surfed = talk("TEXT_SUMMERBEACHHOUSE_PRINTER", { pikachuMapFlags: PIKA_MAP_SURF_SELECT },
-      { party: [surfer], surfingHiScore: 0x1234, player: { name: "YELLOW" } });
+      { party: [surfer], surfingHighScore: 0x1234, player: { name: "YELLOW" } });
     const all = texts(surfed) as string[];
     expect(all.slice(0, 3)).toEqual(["_SummerBeachHousePrinterText2", "_SummerBeachHousePrinterText3", "_SummerBeachHousePrinterText6"]);
     expect(all.at(-1)).toContain("YELLOW's Hi-Score");

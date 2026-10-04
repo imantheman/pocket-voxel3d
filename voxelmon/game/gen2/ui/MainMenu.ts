@@ -25,6 +25,7 @@ import { Chrome, type List } from "./Chrome.ts";
 import { InitClock } from "./InitClock.ts";
 import { MysteryGift } from "../core/MysteryGift.ts";
 import { SaveMenu } from "./SaveMenu.ts";
+import { TextBox } from "../shared/render/TextBox.ts";
 
 // Lua: MainMenu.lua:31 -- ../pokecrystal/engine/menus/intro_menu.asm:487
 // (SaveMenu.PANEL is read lazily: the two modules import each other's graph)
@@ -88,10 +89,13 @@ export class MainMenu {
     this.clock = opts.clock;
     this.save = opts.save;
     if (this.save == null && opts.hasSave !== false) {
-      const [loaded] = Save.load();
+      const [loaded, , err] = Save.load();
       this.save = loaded;
+      // a save that is there but cannot be read keeps CONTINUE, which says
+      // why instead of going on; NEW GAME's first save keeps a copy of it
+      if (!loaded && err && err !== "missing") this.loadErr = err;
     }
-    this.hasSave = opts.hasSave ?? this.save != null;
+    this.hasSave = opts.hasSave ?? (this.save != null || this.loadErr !== undefined);
     this.buildList();
   }
 
@@ -116,11 +120,11 @@ export class MainMenu {
     if (this.hasSave) items.push({ label: Strings.get("CONTINUE"), value: "continue" });
     items.push({ label: Strings.get("NEW GAME"), value: "new" });
     items.push({ label: Strings.get("OPTION"), value: "option" });
-    if (this.hasSave && this.onMysteryGift && MysteryGift.unlocked(this.save)) {
+    if (this.save != null && this.onMysteryGift && MysteryGift.unlocked(this.save)) {
       items.push({ label: Strings.get("MYSTERY GIFT"), value: "gift" });
     }
     // Not on the cart: the clock without the title's password dance
-    if (this.hasSave && this.onSetClock) items.push({ label: Strings.get("SET CLOCK"), value: "clock" });
+    if (this.save != null && this.onSetClock) items.push({ label: Strings.get("SET CLOCK"), value: "clock" });
     // Not on the cart (Brian's): a row to leave the game, as the Gen 1 port has.
     // The 3DS leaves through HOME, so it shows only when an owner can exit.
     if (this.onExit) items.push({ label: Strings.get("EXIT GAME"), value: "exit" });
@@ -139,9 +143,27 @@ export class MainMenu {
     } as any);
   }
 
+  /** Why the save in the slot could not be read, when it could not. */
+  loadErr?: string;
+
+  /** CONTINUE on a save that could not be read: say so, stay on the menu. */
+  private sayUnreadable(): void {
+    const why = String(this.loadErr ?? "").replace(/\s+/g, " ").slice(0, 54);
+    const rows: string[] = [];
+    for (let i = 0; i < why.length && rows.length < 3; i += 18) rows.push(why.slice(i, i + 18));
+    const text =
+      "The save file could\nnot be read.\f" +
+      (rows.length ? `${rows.join("\n")}\f` : "") +
+      "It is left as it is.\nSaving a new game\nkeeps a copy of it\nas .unreadable.";
+    Logger.warn("gold continue refused: %s", String(this.loadErr));
+    this.game?.stack?.push?.(TextBox.new(this.game, text));
+  }
+
   /** Lua: MainMenu.lua:115 */
   choose(value: unknown): void {
-    if (value === "continue") {
+    if (value === "continue" && this.save == null && this.loadErr !== undefined) {
+      this.sayUnreadable();
+    } else if (value === "continue") {
       this.phase = "confirm";
       this.confirmDelay = 20; // ld c, 20 / DelayFrames before input is read
     } else if (value === "new") {
@@ -245,7 +267,7 @@ export class MainMenu {
     // two rows per entry plus the border; EXIT GAME grows it
     Chrome.box(0, 0, 17, Math.min(this.list.items.length * 2 + 2, Chrome.SCREEN_H));
     this.list.draw();
-    if (this.hasSave) this.drawClockBox();
+    if (this.save != null) this.drawClockBox();
   }
 
   /** Lua: MainMenu.lua:221 */

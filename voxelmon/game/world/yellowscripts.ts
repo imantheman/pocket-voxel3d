@@ -277,7 +277,7 @@ function beachPrinter(ow: any, save: any): ScriptRow[] {
   if (!surfingPikachuInParty(save ?? {})) return [["show_text", "_SummerBeachHousePrinterText1"]] as ScriptRow[];
   const rows: ScriptRow[] = [["show_text", "_SummerBeachHousePrinterText2"]] as ScriptRow[];
   if (((ow?.pikachuMapFlags ?? 0) & PIKA_MAP_SURF_SELECT) === 0) return rows;
-  const bcd = save?.surfingHiScore ?? 0;
+  const bcd = save?.surfingHighScore ?? 0;
   const score = String(Number.parseInt(bcd.toString(16), 10) || 0);
   const name = save?.player?.name ?? "";
   return [

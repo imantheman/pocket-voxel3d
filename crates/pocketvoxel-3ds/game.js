@@ -1331,9 +1331,7 @@ var HAPPINESS_CHANGES = {
 function isStarterPikachu(save, mon) {
   if (save.version !== "yellow" || mon?.species !== "PIKACHU")
     return false;
-  if (mon.otName === undefined && mon.otId === undefined)
-    return true;
-  return mon.otName === save.player?.name && mon.otId === save.player?.id;
+  return (mon.otName ?? save.player?.name) === save.player?.name && (mon.otId ?? save.player?.id) === save.player?.id;
 }
 function starterInParty(save, needHealthy = false) {
   return (save.party ?? []).find((m) => m.species === "PIKACHU" && (!needHealthy || (m.hp ?? 0) > 0));
@@ -10532,6 +10530,7 @@ function* set_heal_point(ctx) {
   const w = ctx.world;
   const p = w.player;
   const save = ctx.world.save;
+  save.usedPokecenter = true;
   save.lastHeal = {
     map: String(w.map?.id ?? ""),
     x: p?.cellX ?? 0,
@@ -12907,9 +12906,9 @@ class SurfingState {
       pikaClip: (n) => game.audio?.playPikaClip?.(n),
       surfingPikachuInParty: surfingPikachuInParty(game.save),
       selectQuits,
-      hiScore: game.save.surfingHiScore ?? 0,
+      hiScore: game.save.surfingHighScore ?? 0,
       setHiScore: (bcd) => {
-        game.save.surfingHiScore = bcd;
+        game.save.surfingHighScore = bcd;
       }
     };
     this.minigame = maps ? new SurfingMinigame(io, {
@@ -13140,7 +13139,7 @@ function beachPrinter(ow, save) {
   const rows = [["show_text", "_SummerBeachHousePrinterText2"]];
   if (((ow?.pikachuMapFlags ?? 0) & PIKA_MAP_SURF_SELECT) === 0)
     return rows;
-  const bcd = save?.surfingHiScore ?? 0;
+  const bcd = save?.surfingHighScore ?? 0;
   const score = String(Number.parseInt(bcd.toString(16), 10) || 0);
   const name = save?.player?.name ?? "";
   return [
@@ -18243,7 +18242,7 @@ class Overworld {
       if (obj.hidden)
         return false;
     }
-    if (obj.item && this.save?.flags?.[itemBallFlag(this.map.id, obj.text)]) {
+    if (obj.item && (this.save?.flags?.[itemBallFlag(this.map.id, obj.text)] || this.save?.itemsTaken?.[`${this.map.id}_obj_${obj.index}`])) {
       return false;
     }
     return true;
@@ -27616,10 +27615,294 @@ Bye ${this.monName(mon)}!`, "release-list");
   }
 }
 
+// voxelmon/game/savecompat.ts
+var GEN1RECOMP_FORMAT = 5;
+var known = (table, id) => typeof id === "string" && !!table && Object.prototype.hasOwnProperty.call(table, id);
+function eachMon(save, fn) {
+  for (const mon of save.party ?? [])
+    if (mon && typeof mon === "object")
+      fn(mon);
+  for (const box2 of save.boxes ?? [])
+    for (const mon of box2 ?? [])
+      if (mon && typeof mon === "object")
+        fn(mon);
+  if (save.daycare?.mon && typeof save.daycare.mon === "object")
+    fn(save.daycare.mon);
+}
+function orphaned(save) {
+  save.orphaned ??= {};
+  save.orphaned.mons ??= [];
+  save.orphaned.items ??= [];
+  return save.orphaned;
+}
+function scrubMons(list2, where, save, data, report) {
+  if (!Array.isArray(list2) || !data.pokemon)
+    return;
+  for (let i = list2.length - 1;i >= 0; i--) {
+    const mon = list2[i];
+    if (!mon || typeof mon !== "object" || !known(data.pokemon, mon.species)) {
+      list2.splice(i, 1);
+      orphaned(save).mons.push(mon);
+      report.lostMons.push({ species: mon?.species, from: where });
+      continue;
+    }
+    scrubMoves(mon, data, report);
+  }
+}
+function scrubMoves(mon, data, report) {
+  if (!Array.isArray(mon.moves) || !data.moves)
+    return;
+  const had = mon.moves.length > 0;
+  for (let j = mon.moves.length - 1;j >= 0; j--) {
+    const slot = mon.moves[j];
+    const id = slot && typeof slot === "object" ? slot.id : slot;
+    if (!known(data.moves, id)) {
+      mon.moves.splice(j, 1);
+      report.droppedMoves.push({ species: String(mon.species), move: String(id) });
+    }
+  }
+  if (mon.moves.length > 4)
+    mon.moves.length = 4;
+  if (had && mon.moves.length === 0) {
+    const fallback = data.constants?.fallbackMove ?? "TACKLE";
+    const def = data.moves[fallback];
+    if (def)
+      mon.moves.push({ id: fallback, pp: def.pp ?? 35 });
+  }
+}
+function scrubItems(map, where, save, data, report) {
+  if (!map || typeof map !== "object" || !data.items)
+    return;
+  for (const [id, count2] of Object.entries(map)) {
+    if (known(data.items, id))
+      continue;
+    delete map[id];
+    const n = Number(count2) || 0;
+    orphaned(save).items.push({ id, count: n, from: where });
+    report.lostItems.push({ id, count: n, from: where });
+  }
+}
+function reclaim(save, data, report) {
+  const o = save.orphaned;
+  if (!o)
+    return;
+  const mons = o.mons ?? [];
+  for (let i = mons.length - 1;i >= 0; i--) {
+    const mon = mons[i];
+    if (!mon || !known(data.pokemon, mon.species))
+      continue;
+    save.boxes ??= [];
+    for (let b = 0;b < 12; b++)
+      save.boxes[b] ??= [];
+    const box2 = save.boxes.find((bx) => bx.length < 20);
+    if (!box2)
+      continue;
+    box2.push(mon);
+    mons.splice(i, 1);
+    report.restoredMons.push({ species: mon.species });
+  }
+  const items = o.items ?? [];
+  for (let i = items.length - 1;i >= 0; i--) {
+    const e = items[i];
+    if (!e || !known(data.items, e.id))
+      continue;
+    save.pcItems ??= {};
+    save.pcItems[e.id] = Math.min(99, (Number(save.pcItems[e.id]) || 0) + (Number(e.count) || 0));
+    if (!Array.isArray(save.pcOrder))
+      save.pcOrder = [];
+    if (!save.pcOrder.includes(e.id))
+      save.pcOrder.push(e.id);
+    items.splice(i, 1);
+    report.restoredItems.push({ id: e.id, count: Number(e.count) || 0 });
+  }
+  if (mons.length === 0 && items.length === 0)
+    delete save.orphaned;
+}
+function scrubMaps(save, data, report) {
+  if (!data.maps)
+    return;
+  const spawn = { map: "REDS_HOUSE_2F", x: 3, y: 6 };
+  if (save.lastHeal && !known(data.maps, save.lastHeal.map)) {
+    report.remappedMaps.push({ id: save.lastHeal.map, to: spawn.map, field: "lastHeal" });
+    save.lastHeal = { ...spawn };
+  }
+  if (save.player && !known(data.maps, save.player.map)) {
+    const heal = save.lastHeal ?? spawn;
+    report.remappedMaps.push({ id: save.player.map, to: heal.map, field: "player" });
+    save.player.map = heal.map;
+    save.player.x = heal.x;
+    save.player.y = heal.y;
+  }
+  if (save.lastOutdoor && !known(data.maps, save.lastOutdoor.id)) {
+    report.remappedMaps.push({ id: save.lastOutdoor.id, field: "lastOutdoor" });
+    delete save.lastOutdoor;
+  }
+  if (save.lastHeal?.outdoor && !known(data.maps, save.lastHeal.outdoor.id))
+    delete save.lastHeal.outdoor;
+}
+function migratePc(save) {
+  const old = save.pc;
+  if (!old || typeof old !== "object")
+    return;
+  if (!save.pcItems || typeof save.pcItems !== "object")
+    save.pcItems = {};
+  if (!Array.isArray(save.pcOrder))
+    save.pcOrder = [];
+  for (const [id, n] of Object.entries(old.inventory ?? {})) {
+    save.pcItems[id] = Math.min(99, (Number(save.pcItems[id]) || 0) + (Number(n) || 0));
+  }
+  const was = Array.isArray(old.bagOrder) ? old.bagOrder : [];
+  for (const id of [...was, ...Object.keys(save.pcItems)]) {
+    if (save.pcItems[id] > 0 && !save.pcOrder.includes(id))
+      save.pcOrder.push(id);
+  }
+  delete save.pc;
+}
+function syncItemBalls(save, maps) {
+  if (!maps || !save || typeof save !== "object")
+    return;
+  if (!save.flags || typeof save.flags !== "object")
+    save.flags = {};
+  const had = save.itemsTaken && typeof save.itemsTaken === "object";
+  const taken = had ? save.itemsTaken : {};
+  for (const [mapId, map] of Object.entries(maps)) {
+    for (const o of map?.objects ?? []) {
+      if (!o.item || !o.text || o.index === undefined)
+        continue;
+      const key = `${mapId}_obj_${o.index}`;
+      const flag = `EVENT_ITEMBALL_${mapId}_${o.text}`;
+      if (taken[key])
+        save.flags[flag] = true;
+      else if (save.flags[flag])
+        taken[key] = true;
+    }
+  }
+  if (had || Object.keys(taken).length > 0)
+    save.itemsTaken = taken;
+}
+function fromDisk(save, data) {
+  const report = { lostMons: [], lostItems: [], remappedMaps: [], droppedMoves: [], restoredMons: [], restoredItems: [] };
+  if (!save || typeof save !== "object")
+    throw new Error("not a save table");
+  if (!save.player || typeof save.player !== "object")
+    throw new Error("the save has no player");
+  const fmt2 = Number(save.meta?.format);
+  if (Number.isFinite(fmt2) && fmt2 > GEN1RECOMP_FORMAT)
+    report.newerFormat = fmt2;
+  const name = save.player.name;
+  const id = save.player.id;
+  eachMon(save, (mon) => {
+    if (mon.otName === undefined && typeof mon.ot === "string") {
+      const mine = mon.ot === name && (mon.otId === undefined || mon.otId === id);
+      if (!mine)
+        mon.otName = mon.ot;
+    }
+    if (mon.traded === undefined && mon.otId !== undefined && id !== undefined && mon.otId !== id)
+      mon.traded = true;
+  });
+  migratePc(save);
+  if (save.surfingHighScore === undefined && save.surfingHiScore !== undefined)
+    save.surfingHighScore = save.surfingHiScore;
+  delete save.surfingHiScore;
+  if (save.usedPokecenter === undefined && typeof save.lastHeal?.map === "string" && save.lastHeal.map.includes("POKECENTER")) {
+    save.usedPokecenter = true;
+  }
+  reclaim(save, data, report);
+  scrubMons(save.party, "party", save, data, report);
+  (save.boxes ?? []).forEach((box2, b) => scrubMons(box2, `box ${b + 1}`, save, data, report));
+  if (save.daycare?.mon && data.pokemon) {
+    const mon = save.daycare.mon;
+    if (!known(data.pokemon, mon.species)) {
+      orphaned(save).mons.push(mon);
+      report.lostMons.push({ species: mon.species, from: "daycare" });
+      delete save.daycare.mon;
+    } else
+      scrubMoves(mon, data, report);
+  }
+  scrubItems(save.inventory, "bag", save, data, report);
+  scrubItems(save.pcItems, "PC", save, data, report);
+  for (const key of ["bagOrder", "pcOrder"]) {
+    if (Array.isArray(save[key]))
+      save[key] = save[key].filter((i) => known(data.items, i));
+  }
+  scrubMaps(save, data, report);
+  for (const k of data.pokemon ? ["seen", "owned"] : []) {
+    const set2 = save.pokedex?.[k];
+    if (set2 && typeof set2 === "object") {
+      for (const s of Object.keys(set2))
+        if (!known(data.pokemon, s))
+          delete set2[s];
+    }
+  }
+  return report;
+}
+function reportLines(r) {
+  const out = [];
+  if (r.newerFormat !== undefined)
+    out.push(`This save is from a
+newer version; some
+of it may not carry
+over.`);
+  if (r.lostMons.length)
+    out.push(`${r.lostMons.length} POKéMON this
+game does not know
+were set aside.`);
+  if (r.lostItems.length)
+    out.push(`${r.lostItems.length} item(s) this
+game does not know
+were set aside.`);
+  if (r.remappedMaps.some((m) => m.field === "player"))
+    out.push(`This game does not
+have that place, so
+you are back at the
+last POKéMON CENTER.`);
+  if (r.restoredMons.length || r.restoredItems.length) {
+    out.push(`${r.restoredMons.length} POKéMON and
+${r.restoredItems.length} item(s) set
+aside before are
+back (PC).`);
+  }
+  return out;
+}
+function toDisk(save) {
+  const out = JSON.parse(JSON.stringify(save ?? {}));
+  const name = out.player?.name;
+  const id = out.player?.id;
+  eachMon(out, (mon) => {
+    if (mon.ot === undefined && !(mon.traded && mon.otName === undefined))
+      mon.ot = mon.otName ?? name;
+    if (mon.otId === undefined && !mon.traded && id !== undefined)
+      mon.otId = id;
+  });
+  if (!out.meta || typeof out.meta !== "object")
+    out.meta = { mods: {} };
+  if (!(Number(out.meta.format) >= GEN1RECOMP_FORMAT)) {
+    out.meta.format = GEN1RECOMP_FORMAT;
+  }
+  return out;
+}
+
 // voxelmon/game/world/pcitems.ts
 var PC_ITEM_CAPACITY = 50;
 function pcBag(save) {
-  return save.pc ??= { inventory: {}, bagOrder: [] };
+  if (save.pc)
+    migratePc(save);
+  if (!save.pcItems || typeof save.pcItems !== "object")
+    save.pcItems = {};
+  return {
+    get inventory() {
+      return save.pcItems ??= {};
+    },
+    set inventory(v) {
+      save.pcItems = v;
+    },
+    get bagOrder() {
+      return save.pcOrder;
+    },
+    set bagOrder(v) {
+      save.pcOrder = v;
+    }
+  };
 }
 function pcCapacityData(data) {
   const cap = data?.field?.pcItemCap;
@@ -28185,9 +28468,9 @@ function serialize(v, indent = 0) {
     return "nil";
   let entries;
   if (Array.isArray(v)) {
-    entries = v.map((x, i) => [i + 1, x]);
+    entries = v.map((x, i) => [i + 1, x]).filter(([, x]) => x !== undefined && x !== null);
   } else if (typeof v === "object") {
-    entries = Object.entries(v).filter(([, x]) => x !== undefined).map(([k, x]) => [/^\d+$/.test(k) ? Number(k) : k, x]);
+    entries = Object.entries(v).filter(([, x]) => x !== undefined && x !== null).map(([k, x]) => [/^\d+$/.test(k) ? Number(k) : k, x]);
   } else {
     throw new Error("cannot serialize " + typeof v);
   }
@@ -28329,6 +28612,9 @@ var ARRAY_FIELDS = [
   ["bagOrder"],
   ["pc", "bagOrder"],
   ["pcItems", "bagOrder"],
+  ["pcOrder"],
+  ["orphaned", "mons"],
+  ["orphaned", "items"],
   ["box"],
   ["boxes"],
   ["boxes", "*"],
@@ -28762,7 +29048,7 @@ function writeWindow(maps, t, map, tx0, ty0) {
 var NICKNAME_LEN = 10;
 var SAVE_HOLD = 120;
 var SAVE_DONE_HOLD = 30;
-var SAVE_FORMAT = 4;
+var SAVE_FORMAT = 5;
 var PIC_NAMES = { oak: "prof.oak", player: "red", rival: "rival1" };
 var PIC_FALLBACK = { oak: 406, player: 408, rival: 409, nidorino: 164 };
 
@@ -29086,8 +29372,13 @@ class VoxelmonGame {
       if (choice === "continue") {
         const text2 = this.host.saveData?.();
         if (text2) {
+          const fresh = this.save;
           try {
-            this.save = decodeSave(text2);
+            const loaded = decodeSave(text2);
+            const report = fromDisk(loaded, this.data);
+            syncItemBalls(loaded, this.data.maps);
+            this.save = loaded;
+            const told = reportLines(report);
             const scrubbed = scrubDefaultNicknames(this.data, this.save);
             if (scrubbed > 0)
               console.log(`[pv] names: ${scrubbed} cut-short nickname(s) dropped on load`);
@@ -29096,12 +29387,66 @@ class VoxelmonGame {
             const pl = this.save.player ?? {};
             const lo = this.save.lastOutdoor ?? {};
             this.overworld.enter(pl.map ?? lo.id ?? "PALLET_TOWN", pl.x ?? lo.x ?? 5, pl.y ?? lo.y ?? 6, pl.facing ?? "down");
+            this.unreadableSave = false;
+            if (told.length)
+              this.showText(told.join("\f"));
             return;
-          } catch {}
+          } catch (e) {
+            this.save = fresh;
+            try {
+              this.overworld.enter("REDS_HOUSE_2F", 3, 6, "down");
+            } catch {}
+            this.saveUnreadable(e);
+            return;
+          }
         }
       }
       this.startIntro();
     }));
+  }
+  saveUnreadable(e) {
+    this.unreadableSave = true;
+    const why = String(e?.message ?? e ?? "").replace(/\s+/g, " ").trim();
+    console.log(`[pv] save: unreadable: ${why}`);
+    const words = why.split(" ");
+    const lines = [];
+    let line = "";
+    for (const w of words) {
+      const next = line ? `${line} ${w}` : w;
+      if (next.length > 18 && line) {
+        lines.push(line);
+        line = w.slice(0, 18);
+      } else
+        line = next.slice(0, 18);
+      if (lines.length >= 3)
+        break;
+    }
+    if (line && lines.length < 3)
+      lines.push(line);
+    const text2 = `The save file could
+not be read.\f` + (lines.length ? `${lines.join(`
+`)}\f` : "") + `It is left as it is.
+Saving a new game
+keeps a copy of it
+as .unreadable.`;
+    this.showText(text2, () => this.newGame());
+  }
+  unreadableSave = false;
+  keepUnreadable(h) {
+    if (!this.unreadableSave)
+      return true;
+    if (h.saveBackup?.() === true) {
+      this.unreadableSave = false;
+      console.log("[pv] save: unreadable save kept as .unreadable");
+      return true;
+    }
+    const why = h.writeErr?.() ?? "";
+    this.showText(`SAVE FAILED!
+The old save could
+not be copied, so
+it was kept as is.${why ? `
+${why.slice(0, 18)}` : ""}`);
+    return false;
   }
   boot() {
     this.newGame();
@@ -29297,6 +29642,8 @@ class VoxelmonGame {
     this.push(new TextBoxState(this, text2, undefined, choice, undefined, undefined, opts));
   }
   deleteSave() {
+    if (!this.keepUnreadable(this.host))
+      return;
     this.host.saveWrite("");
     this.hasSave = false;
   }
@@ -30217,12 +30564,18 @@ the game!`, SAVE_DONE_HOLD, {
     p.x = at2?.x ?? ow.player?.cellX ?? p.x;
     p.y = at2?.y ?? ow.player?.cellY ?? p.y;
     p.facing = at2?.facing ?? ow.player?.facing ?? p.facing;
+    p.surfing = !at2 && ow.player?.surfing === true;
     const h = this.host ?? this.hostApi ?? globalThis.voxel;
     if (!h?.saveWrite) {
       console.log("save: no host.saveWrite");
       return;
     }
-    const ok = h.saveWrite(encodeSave(this.save));
+    if (!this.keepUnreadable(h)) {
+      this.lastSaveOk = false;
+      return;
+    }
+    syncItemBalls(this.save, this.data.maps);
+    const ok = h.saveWrite(encodeSave(toDisk(this.save)));
     this.lastSaveOk = ok !== false;
     if (ok === false) {
       const why = h.writeErr?.() ?? "";
@@ -30823,6 +31176,9 @@ class QuickJsHost {
   }
   saveData() {
     return native.saveData();
+  }
+  saveBackup() {
+    return native.saveBackup ? native.saveBackup() === true : false;
   }
   gamedata() {
     return null;

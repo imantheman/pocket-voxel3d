@@ -111,12 +111,13 @@ import { PcState } from "./ui/pcscreen.ts";
 import { PokedexState } from "./ui/pokedexscreen.ts";
 import { encodeSave } from "./save-lua.ts";
 import { decodeSave } from "./save-read.ts";
+import { fromDisk, reportLines, syncItemBalls, toDisk } from "./savecompat.ts";
 import * as Bag from "./rules/bag.ts";
 import { tiltShiftLevel } from "./tiltshift.ts";
 import { is2d } from "./viewmode.ts";
 import { OverworldView2d } from "./world/view2d.ts";
 /** Must match Version.saveFormat in the recomp. */
-const SAVE_FORMAT = 4;   // Version.lua saveFormat
+const SAVE_FORMAT = 5;   // Version.lua saveFormat (savecompat.ts GEN1RECOMP_FORMAT)
 /**
  * The intro's portraits, by the name the cook files them under. The numbers
  * are the pages a pak cooked before `atlas.picTrainer` existed put them on;
@@ -619,8 +620,15 @@ export class VoxelmonGame implements OverworldShell, SceneView {
         if (choice === "continue") {
           const text = this.host.saveData?.();
           if (text) {
+            const fresh = this.save;
             try {
-              this.save = decodeSave(text) as any;
+              const loaded = decodeSave(text) as any;
+              // gen1recomp's fields read as ours, and anything this game
+              // does not have set aside rather than crashing (savecompat.ts)
+              const report = fromDisk(loaded, this.data as never);
+              syncItemBalls(loaded, (this.data as { maps?: never }).maps);
+              this.save = loaded;
+              const told = reportLines(report);
               // Saves from before the nickname prompt asked first carry
               // "CHARMAN"-style names: the species name cut to seven.
               // Those are no nickname at all.
@@ -644,13 +652,79 @@ export class VoxelmonGame implements OverworldShell, SceneView {
                 pl.y ?? lo.y ?? 6,
                 pl.facing ?? "down",
               );
+              this.unreadableSave = false;
+              if (told.length) this.showText(told.join("\f"));
               return;
-            } catch { /* fall through to a new game */ }
+            } catch (e) {
+              // Never quietly a new game: the save stays on the card as it
+              // is, the player is told why, and the title comes back. The
+              // first save written over it keeps a copy (writeSave).
+              this.save = fresh;
+              try {
+                this.overworld.enter("REDS_HOUSE_2F", 3, 6, "down");
+              } catch { /* the bedroom is the fresh save's own spot */ }
+              this.saveUnreadable(e);
+              return;
+            }
           }
         }
         this.startIntro();
       }),
     );
+  }
+
+  /**
+   * The save on the card could not be read (a damaged file, or one from a
+   * build this one cannot open). Say so and why, and put the title back;
+   * the file is left alone, and the first save over it keeps a copy.
+   */
+  private saveUnreadable(e: unknown): void {
+    this.unreadableSave = true;
+    const why = String((e as Error)?.message ?? e ?? "").replace(/\s+/g, " ").trim();
+    console.log(`[pv] save: unreadable: ${why}`);
+    // three 18-column lines of the reason are plenty for a text box
+    const words = why.split(" ");
+    const lines: string[] = [];
+    let line = "";
+    for (const w of words) {
+      const next = line ? `${line} ${w}` : w;
+      if (next.length > 18 && line) {
+        lines.push(line);
+        line = w.slice(0, 18);
+      } else line = next.slice(0, 18);
+      if (lines.length >= 3) break;
+    }
+    if (line && lines.length < 3) lines.push(line);
+    const text =
+      "The save file could\nnot be read.\f" +
+      (lines.length ? `${lines.join("\n")}\f` : "") +
+      "It is left as it is.\nSaving a new game\nkeeps a copy of it\nas .unreadable.";
+    // back to a fresh title (CONTINUE still there, and still refusing)
+    this.showText(text, () => this.newGame());
+  }
+
+  /**
+   * A save read at CONTINUE failed and has not been backed up yet: the
+   * next write (or DELETE) must copy it aside first, or refuse.
+   */
+  unreadableSave = false;
+
+  /**
+   * Before anything writes over an unreadable save: keep a copy, or say
+   * why not and return false (the caller must not write).
+   */
+  private keepUnreadable(h: { saveBackup?: () => boolean; writeErr?: () => string | undefined }): boolean {
+    if (!this.unreadableSave) return true;
+    if (h.saveBackup?.() === true) {
+      this.unreadableSave = false;
+      console.log("[pv] save: unreadable save kept as .unreadable");
+      return true;
+    }
+    const why = h.writeErr?.() ?? "";
+    this.showText(
+      `SAVE FAILED!\nThe old save could\nnot be copied, so\nit was kept as is.${why ? `\n${why.slice(0, 18)}` : ""}`,
+    );
+    return false;
   }
 
   /**
@@ -966,6 +1040,7 @@ export class VoxelmonGame implements OverworldShell, SceneView {
 
   /** DoClearSaveDialogue's YES: the card's save is emptied. */
   deleteSave(): void {
+    if (!this.keepUnreadable(this.host as never)) return;
     this.host.saveWrite("");
     (this as { hasSave?: boolean }).hasSave = false;
   }
@@ -2240,16 +2315,27 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     p.x = at?.x ?? ow.player?.cellX ?? p.x;
     p.y = at?.y ?? ow.player?.cellY ?? p.y;
     p.facing = at?.facing ?? ow.player?.facing ?? p.facing;
+    // wWalkBikeSurfState: gen1recomp reads player.surfing at boot (this
+    // port reads the cell, which says the same)
+    p.surfing = !at && ow.player?.surfing === true;
     const h: any = (this as any).host ?? (this as any).hostApi ?? (globalThis as any).voxel;
     if (!h?.saveWrite) {
       console.log("save: no host.saveWrite");
       return;
     }
+    if (!this.keepUnreadable(h)) {
+      this.lastSaveOk = false;
+      return;
+    }
+    // item balls taken here, under gen1recomp's itemsTaken keys too
+    syncItemBalls(this.save, (this.data as { maps?: never }).maps);
     // A save that silently took nothing is the worst outcome there is: the
     // player is told it saved and finds out hours later. The host reports
     // whether the card actually took it, and if it did not, say so here
     // rather than anywhere the player will never look.
-    const ok = h.saveWrite(encodeSave(this.save));
+    // the card's copy carries every mon's original trainer the way
+    // gen1recomp writes it; the live save keeps this port's convention
+    const ok = h.saveWrite(encodeSave(toDisk(this.save)));
     this.lastSaveOk = ok !== false;
     if (ok === false) {
       const why = h.writeErr?.() ?? "";

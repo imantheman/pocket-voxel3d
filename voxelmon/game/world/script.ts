@@ -1260,7 +1260,11 @@ function* set_heal_point(ctx: ScriptContext): Generator<void, void> {
       outdoor?: { id: string; x: number; y: number };
     };
     lastOutdoor?: { id: string; x: number; y: number };
+    usedPokecenter?: boolean;
   };
+  // BIT_USED_POKECENTER (gen1recomp's usedPokecenter): his blackout and his
+  // nurse read it, so a save healed here says so in his game too
+  save.usedPokecenter = true;
   save.lastHeal = {
     map: String(w.map?.id ?? ""),
     x: (p?.cellX as number) ?? 0,

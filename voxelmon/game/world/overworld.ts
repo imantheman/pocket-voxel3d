@@ -119,6 +119,13 @@ export interface SaveSlice {
   player: { name: string; rival: string };
   lastOutdoor?: LastOutdoor;
   lastHeal?: { map: string; x: number; y: number; outdoor?: LastOutdoor };
+  /** The PC's items (world/pcitems.ts), in gen1recomp's fields. */
+  pcItems?: Record<string, number>;
+  pcOrder?: string[];
+  /** gen1recomp's record of item balls taken, "<map>_obj_<index>" (savecompat.ts). */
+  itemsTaken?: Record<string, boolean>;
+  /** BIT_USED_POKECENTER (set at the nurse). */
+  usedPokecenter?: boolean;
   /**
    * gen1recomp WorldAPI.lua:125-133 / the wToggleableObjectFlags array: per
    * map, per object name, an explicit visible flag written by ShowObject /
@@ -616,7 +623,11 @@ export class Overworld implements ScriptWorld {
     }
     // A collected item ball stays gone across reloads: its pickup flag hides
     // it at spawn the way pokered's missable-object flag keeps it despawned.
-    if (obj.item && this.save?.flags?.[itemBallFlag(this.map.id, obj.text)]) {
+    // (gen1recomp's itemsTaken too, should a save not have been synced)
+    if (
+      obj.item &&
+      (this.save?.flags?.[itemBallFlag(this.map.id, obj.text)] || this.save?.itemsTaken?.[`${this.map.id}_obj_${obj.index}`])
+    ) {
       return false;
     }
     return true;

@@ -33,6 +33,8 @@ export interface VoxelNative {
   picHide(slot: number): void;
   saveWrite(text: string): boolean | void;
   saveData(): string | undefined;
+  /** Copy the boot-time save to <save>.unreadable; false if it did not take. */
+  saveBackup?(): boolean;
   writeTest?(): boolean;
   writeErr?(): string | undefined;
   viewer?(): void;
@@ -176,6 +178,10 @@ export class QuickJsHost implements VoxelHost {
 
   saveData(): string | undefined {
     return native.saveData();
+  }
+
+  saveBackup(): boolean {
+    return native.saveBackup ? native.saveBackup() === true : false;
   }
 
   gamedata(): ArrayBuffer | null {

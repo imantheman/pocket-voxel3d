@@ -58,8 +58,10 @@ export function isStarterPikachu(
   mon: { species: string; otName?: string; otId?: number } | undefined,
 ): boolean {
   if (save.version !== "yellow" || mon?.species !== "PIKACHU") return false;
-  if (mon.otName === undefined && mon.otId === undefined) return true;
-  return mon.otName === save.player?.name && mon.otId === save.player?.id;
+  // a missing half is yours: a save gen1recomp wrote stamps your ID on your
+  // own mon with no separate name (savecompat.ts reads his `ot` as ours
+  // only when it is someone else's)
+  return (mon.otName ?? save.player?.name) === save.player?.name && (mon.otId ?? save.player?.id) === save.player?.id;
 }
 
 /** Your own Pikachu in the party (the starter's OT check), healthy if asked. */

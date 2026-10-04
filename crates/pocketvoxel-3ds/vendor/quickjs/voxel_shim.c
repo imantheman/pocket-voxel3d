@@ -7,6 +7,7 @@
 /* Rust side */
 extern void voxel_log(const char *s, int len);
 extern int voxel_save_write(const char *s, int len);
+extern int voxel_save_backup(void);
 extern int voxel_write_test(void);
 extern const uint8_t *voxel_write_err_ptr(void);
 extern uint32_t voxel_write_err_len(void);
@@ -142,6 +143,13 @@ static JSValue vox_savewrite(JSContext *ctx, JSValueConst t, int c, JSValueConst
     return ok ? JS_TRUE : JS_FALSE;
 }
 
+/* Copy the save the card had at boot to <save>.unreadable: the game asks
+   before it writes over a save it could not read. */
+static JSValue vox_savebackup(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)ctx;(void)t;(void)c;(void)v;
+    return voxel_save_backup() ? JS_TRUE : JS_FALSE;
+}
+
 /* Write a file and read it back, so the game can say whether the card is
    writable at all rather than leaving it to be guessed at from outside. */
 static JSValue vox_writetest(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
@@ -260,6 +268,7 @@ int qjs_register_voxel(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "lastStep",  JS_NewCFunction(ctx, vox_laststep,  "lastStep", 0));
     JS_SetPropertyStr(ctx, o, "saveWrite", JS_NewCFunction(ctx, vox_savewrite, "saveWrite", 1));
     JS_SetPropertyStr(ctx, o, "saveData",  JS_NewCFunction(ctx, vox_savedata,  "saveData", 0));
+    JS_SetPropertyStr(ctx, o, "saveBackup", JS_NewCFunction(ctx, vox_savebackup, "saveBackup", 0));
     JS_SetPropertyStr(ctx, o, "optionsWrite", JS_NewCFunction(ctx, vox_optionswrite, "optionsWrite", 1));
     JS_SetPropertyStr(ctx, o, "optionsData",  JS_NewCFunction(ctx, vox_optionsdata,  "optionsData", 0));
     JS_SetPropertyStr(ctx, o, "writeTest", JS_NewCFunction(ctx, vox_writetest, "writeTest", 0));

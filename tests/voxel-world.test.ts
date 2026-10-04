@@ -6387,8 +6387,14 @@ describe("the PC item storage", () => {
     settle(game);
   }
 
+  test.skipIf(!hasGen)("a new game's PC holds the one POTION (pokered, gen1recomp newGame)", () => {
+    const game = makeMenuGame();
+    expect(Pc.pcBag(game.save as never).inventory).toEqual({ POTION: 1 });
+  });
+
   test.skipIf(!hasGen)("depositing moves it out of the bag and into the PC", () => {
     const game = makeMenuGame();
+    game.save.pcItems = {};
     Bag.add(game.save, "POTION", 5);
     itemAction(game, 1); // DEPOSIT ITEM
     expect(pcv(game).mode).toBe("list");
@@ -6398,33 +6404,36 @@ describe("the PC item storage", () => {
     tap(game, VOX_BTN.a);
     settle(game);
     expect(game.save.inventory.POTION).toBe(3);
-    expect(game.save.pc?.inventory.POTION).toBe(2);
+    expect(game.save.pcItems?.POTION).toBe(2);
   });
 
   test.skipIf(!hasGen)("withdrawing brings it back", () => {
     const game = makeMenuGame();
-    game.save.pc = { inventory: { POTION: 4 }, bagOrder: ["POTION"] };
+    game.save.pcItems = { POTION: 4 };
+    game.save.pcOrder = ["POTION"];
     itemAction(game, 0); // WITHDRAW ITEM
     tap(game, VOX_BTN.a);
     tap(game, VOX_BTN.a); // take 1
     settle(game);
     expect(game.save.inventory.POTION).toBe(1);
-    expect(game.save.pc?.inventory.POTION).toBe(3);
+    expect(game.save.pcItems?.POTION).toBe(3);
   });
 
   test.skipIf(!hasGen)("tossing from the PC just removes it", () => {
     const game = makeMenuGame();
-    game.save.pc = { inventory: { POTION: 2 }, bagOrder: ["POTION"] };
+    game.save.pcItems = { POTION: 2 };
+    game.save.pcOrder = ["POTION"];
     itemAction(game, 2); // TOSS ITEM
     tap(game, VOX_BTN.a);
     tap(game, VOX_BTN.a); // 1 of them
     settle(game);
-    expect(game.save.pc?.inventory.POTION).toBe(1);
+    expect(game.save.pcItems?.POTION).toBe(1);
     expect(game.save.inventory.POTION ?? 0).toBe(0); // not into the bag
   });
 
   test.skipIf(!hasGen)("an empty box says so instead of opening a list", () => {
     const game = makeMenuGame();
+    game.save.pcItems = {};
     itemAction(game, 0); // WITHDRAW with nothing stored
     expect(pcv(game)?.mode).toBe("items");
   });
@@ -6463,16 +6472,16 @@ describe("the PC item storage", () => {
     expect(deposit(save, "ETHER", 1, data)).toBe(false);
     // refused, and NOT taken out of the bag on the way
     expect(save.inventory.ETHER).toBe(1);
-    expect(save.pc.inventory.ETHER).toBeUndefined();
+    expect(save.pcItems.ETHER).toBeUndefined();
   });
 
   test("a full bag keeps the item in the box", () => {
-    const save: any = { inventory: {}, bagOrder: [], pc: { inventory: { POTION: 1 }, bagOrder: ["POTION"] } };
+    const save: any = { inventory: {}, bagOrder: [], pcItems: { POTION: 1 }, pcOrder: ["POTION"] };
     const data: any = { constants: { bagSize: 1 } };
     save.inventory.ETHER = 1;
     save.bagOrder.push("ETHER");
     expect(withdraw(save, "POTION", 1, data)).toBe(false);
-    expect(save.pc.inventory.POTION).toBe(1);
+    expect(save.pcItems.POTION).toBe(1);
   });
 });
 
@@ -9894,16 +9903,22 @@ describe("a save that was written with an empty list", () => {
       "  bagOrder = {},",
       "  inventory = { POTION = 3 },",
       "  pc = { inventory = {}, bagOrder = {} },",
+      "  pcItems = {},",
+      "  pcOrder = {},",
       "}",
     ].join("\n");
     const save = decodeSave(text) as {
       party: unknown;
       bagOrder: unknown;
       pc: { bagOrder: unknown };
+      pcItems: unknown;
+      pcOrder: unknown;
     };
     expect(Array.isArray(save.party)).toBe(true);
     expect(Array.isArray(save.bagOrder)).toBe(true);
     expect(Array.isArray(save.pc.bagOrder)).toBe(true);
+    expect(Array.isArray(save.pcOrder)).toBe(true);
+    expect(Array.isArray(save.pcItems)).toBe(false);
   });
 
   test.skipIf(!hasGen)("storage boxes and move lists too, however deep", () => {
@@ -9951,7 +9966,8 @@ describe("a save that was written with an empty list", () => {
     const game = makeMenuGame();
     game.save.inventory.POTION = 3;
     // The shape a save written with an empty PC comes back as.
-    (game.save as { pc?: unknown }).pc = { inventory: {}, bagOrder: {} };
+    (game.save as { pcItems?: unknown; pcOrder?: unknown }).pcItems = {};
+    (game.save as { pcItems?: unknown; pcOrder?: unknown }).pcOrder = {};
     expect(() => Pc.deposit(game.save as never, "POTION", 2, game.data)).not.toThrow();
     expect(Pc.pcBag(game.save as never).inventory.POTION).toBe(2);
     expect(game.save.inventory.POTION).toBe(1);

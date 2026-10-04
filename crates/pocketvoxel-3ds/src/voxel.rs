@@ -208,6 +208,43 @@ pub unsafe extern "C" fn voxel_save_write(s: *const u8, len: i32) -> i32 {
     }
 }
 
+/// Keep the save that was on the card at boot beside it, as
+/// `<save>.unreadable` (then `.unreadable2` ... `9`, never over an earlier
+/// one), before the game writes over a save it could not read. Returns 1
+/// when the copy is on the card -- read back, not taken on trust -- and 0
+/// when it is not, in which case the game does not save.
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub unsafe extern "C" fn voxel_save_backup() -> i32 {
+    LAST_WRITE_ERR = String::new();
+    if SAVE_BUF.is_empty() { return 1; }
+    for n in 1..10 {
+        let path = if n == 1 {
+            format!("{}.unreadable", SAVE_PATH)
+        } else {
+            format!("{}.unreadable{}", SAVE_PATH, n)
+        };
+        match std::fs::read(&path) {
+            Ok(got) if got == SAVE_BUF => return 1,
+            Ok(_) => continue,
+            Err(_) => {}
+        }
+        if !card_write(&path, &SAVE_BUF) { return 0; }
+        return match std::fs::read(&path) {
+            Ok(got) if got == SAVE_BUF => {
+                println!("save: kept the unreadable save as {}", path);
+                1
+            }
+            _ => {
+                LAST_WRITE_ERR = format!("{} did not read back", path);
+                0
+            }
+        };
+    }
+    LAST_WRITE_ERR = String::from("nine .unreadable copies already");
+    0
+}
+
 #[no_mangle]
 #[allow(static_mut_refs)]
 pub unsafe extern "C" fn voxel_save_ptr() -> *const u8 { SAVE_BUF.as_ptr() }
