@@ -1,6 +1,6 @@
 # Pocket Voxel
 
-A specialized PocketJS runtime that presents a Game Boy creature-RPG as a
+A specialized PocketJS runtime that presents a classic 8-bit handheld RPG as a
 voxelized 3D diorama on PSP-class hardware. The gameplay is a TypeScript port
 of the [gen1recomp](https://github.com/bryanthaboi/gen1recomp) Lua engine; the
 presentation is a Rust reimplementation of the
@@ -58,7 +58,7 @@ has the same layout):
   authoring and the creature colours trace back to Gold and Silver. Neither
   is ours to ship, and neither is shipped: the file is read out of a
   checkout the player cloned, exactly like the ROM. A build with the pack
-  absent is not broken — it renders in Game Boy grayscale, which is what
+  absent is not broken — it renders in the original grayscale, which is what
   Red actually looked like. It
   converts at cook time exactly like the VoxelMod tables, into git-ignored
   `dist/voxelmon/gen/palettes_gbc.json`.
@@ -306,7 +306,7 @@ jumps to 117 272 at 160 px**. 128 px is the point in that plateau where every
 pixel the swap costs sits at the horizon or the frame's top edge — 886 px of a
 480×272 frame at `battle-intro`, 438 px in an 11-px strip at the top of
 `encounter-seen`, and nothing at all at the nine other story checkpoints.
-Below it the boundary walks into the near field: at 96 px Pallet Town's whole
+Below it the boundary walks into the near field: at 96 px the first town's whole
 roadside tree column turns to slabs (1908 px at `sign-read`) and so does the
 boulder beside the battle stage (9824 px). The rung takes **15% off the mean
 story frame (57 339 → 48 959 triangles) and 11% off the worst (124 392 →
@@ -395,8 +395,8 @@ differently off-focus) with the PPSSPP e2e green at every mark.
 **Where the frame went after the 2026-08-06 CPU work** (autopilot phase
 telemetry, story tape, means per 300-tick window): guest JS 16–19 ms, draw
 list build ~0.7 ms, CPU record ~0.5–1 ms, GE (hidden under the guest's
-window, surfacing as sync wait) 0–53 ms, vblank ~5–8 ms. Pallet Town
-102 → 81 ms, the Pallet↔Route-1 seam 129 → 68 ms, Route 1 128 → 54 ms,
+window, surfacing as sync wait) 0–53 ms, vblank ~5–8 ms. The first town
+102 → 81 ms, the town↔first-route seam 129 → 68 ms, the first route 128 → 54 ms,
 interiors 33 ms; the arena-pressure JS collections that used to hitch
 mid-walk (2 × 175 ms a run) now never fire outside boot, because the
 delta-emit gates stopped allocating (scene.ts — numeric and identity gates
@@ -520,7 +520,7 @@ whole RED++ colour set is 18–20 distinct colours (measured), so the entire
 per-tile assignment fits inside the byte the page already stored: **zero
 delta in page dimensions, texel count, texture format, fill rate, vertex
 count, draw calls and guest ops**. The CLUT bound for a chunk mesh becomes
-the shown map's world palette, so Pallet Town's white roofs and Viridian's
+the shown map's world palette, so the first town's white roofs and the next city's
 green roofs share one terrain page and cost one CLUT load each. The runtime
 cost is a few extra 1 KB pool-staged CLUTs per frame.
 
@@ -575,7 +575,7 @@ A third finding, from the autopilot phase telemetry (2026-08-06 device
 A/B/A over the story tape), is about WHERE the frame's time actually goes:
 **the GE here is fetch-bound, and what it fetches from matters less than
 whether the CPU just wrote it.** Splicing each mesh's index range through
-the frame pool made the GE ~17 ms/frame faster on Pallet Town than drawing
+the frame pool made the GE ~17 ms/frame faster on the first town than drawing
 the same bytes in place from the pak — but a boot-time copy of the whole
 index pool into its own block reproduced NONE of that win (GE time
 identical to in-place), so the splice's advantage was the recency of its
@@ -600,12 +600,12 @@ Every item here is a deliberate limit with a stated reason:
   colour by fill (`GetHealthBarColor`) waits on the same op.
 - **Dark caves.** `wMapPalOffset`/`FadePal2` shifts the palettes feeding the
   bake, not a shader. v1's seven maps contain no dark map.
-- **The Celadon Mart tile exceptions and the `$37 → $5a` alias tiles.** v1
+- **The department store's tile exceptions and the `$37 → $5a` alias tiles.** v1
   bakes ONE terrain page shared by every map, so a per-map tile-id exception
   cannot apply; `cook/redpp.ts` carries the reference's tables and the
   cooker **refuses to cook** a map that needs one rather than mis-colouring
   it silently.
-- **The Route 6 / Saffron roof y-split.** The reference's own atlas path
+- **The big city's roof y-split.** The reference's own atlas path
   skips it too, so skipping it *is* parity with RED++ as implemented.
 - **Per-NPC `"random"` sprite palettes.** The reference resolves the
   `"random"` sentinel from a stable per-instance seed; the CLUT here belongs
@@ -863,22 +863,22 @@ made, and cues fired from the wrong moment.
   code point per multi-character charmap entry (`LIGATURE_BASE + code`) and
   `toCells` emits it.
 - **Two reachable move effects were unregistered.** `SPEED_DOWN1_EFFECT`
-  (WEEDLE's STRING SHOT, Route 2 grass) printed "But, it failed!" every
+  (a wild bug's speed-lowering move, in an early route's grass) printed "But, it failed!" every
   time and never touched the speed stage; `POISON_SIDE_EFFECT1` (POISON
   STING) could never poison. The census was re-derived from the cooked map
   set rather than patched — `DEFENSE_UP1_EFFECT`, `FLINCH_SIDE_EFFECT1`,
   `TWO_TO_FIVE_ATTACKS_EFFECT` and `FOCUS_ENERGY_EFFECT` become reachable
   once a caught mon grinds, and are registered too.
 - **`EvolveAfterBattle` was never wired.** `battle.leveledUp` was written
-  and never read, so a SQUIRTLE that reached 16 on Route 1 stayed a
-  SQUIRTLE forever (the offer is gated on levelling *this* battle, so there
+  and never read, so a starter that reached its evolution level on
+  the first route never evolved (the offer is gated on levelling *this* battle, so there
   is no catching up later). `Evolution.checkParty`'s decision half is
   ported; `game.ts` runs the pages, the apply and the evolved species'
   exact-level learn check on the way out of a battle.
 - **The hand-ported map scripts have a call site.** The 8-verb runner had
   no caller: `showMapText` went straight to extracted text, and a text_asm
   pointer extracts only its FIRST branch — so Mom offered the wake-up line
-  to a trainer who already had a starter, forever, and Oak never stopped
+  to a trainer who already had a starter, forever, and the professor never stopped
   barring the grass. `world/mapscripts.ts` carries the scripts for the maps
   this pak cooks, transcribed from `data/scripts/`, and the verb set grew
   to what they invoke (`check_flag`, `jump`/`jump_if_true`/`jump_if_false`,

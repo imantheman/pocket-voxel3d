@@ -27,3 +27,10 @@ cooker/output/
 /.pv_build_id
 /gamedata.json
 __pycache__/
+
+# working notes kept off the public tree (full of the games' names)
+docs/YELLOW_VERSION_PLAN.md
+docs/BLUE_VERSION_PLAN.md
+docs/gold-plan.md
+docs/gold-engine.md
+docs/MAP_LOAD_PERF.md

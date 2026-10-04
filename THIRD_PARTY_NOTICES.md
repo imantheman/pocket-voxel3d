@@ -77,7 +77,7 @@ https://github.com/ShaneMcGovernIE/potato_voxel
 
 ## Gen2Recomped-DramaticShapes
 
-Gold's voxel shape rules (the Gen 2 collision classes, the Johto
+Gold's voxel shape rules (the Gen 2 collision classes, the Gen 2
 building templates and the Gen 2 tile classifier) are ported from this Gen 2
 edition of the Dramatic Shape voxel mod, commit `726782f`, and the Gold cook
 reads its height profile.

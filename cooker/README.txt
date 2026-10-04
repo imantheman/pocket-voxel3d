@@ -34,8 +34,8 @@ WHAT IT ASKS
    checksum written in cooker.py).
 2. Which colours you want.
      Red and Blue: black and white (the original look), or the community
-     colourisation (pokered-gbc, the default).
-     Yellow: its own Game Boy Color colours read from your ROM (the
+     colourisation (the default).
+     Yellow: its own colours read from your ROM (the
      default), black and white, or the community colours.
      Gold and Silver are not asked: they use their own colours, read from
      your ROM.
