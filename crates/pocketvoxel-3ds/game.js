@@ -6994,6 +6994,120 @@ class TrainerCardState {
   }
 }
 
+// voxelmon/game/gb/video.ts
+var LCDC = {
+  on: 128,
+  winMap9C00: 64,
+  winOn: 32,
+  tiles8000: 16,
+  bgMap9C00: 8,
+  objOn: 2,
+  bgOn: 1
+};
+var OAM_ATTR = { behindBg: 128, yFlip: 64, xFlip: 32, obp1: 16 };
+var SCREEN_W = 160;
+var SCREEN_H = 144;
+var OAM_X_OFS = 8;
+var OAM_Y_OFS = 16;
+var WIDE_COLS = 64;
+var WIDE_ROWS = 32;
+var WIDE_COLS_MAX = 128;
+var WIDE_ROWS_MAX = 64;
+var WIDE_OBJS_MAX = 160;
+
+class GbVideo {
+  maps = new Uint8Array(2048);
+  tileMap = new Uint8Array(SCREEN_W / 8 * (SCREEN_H / 8));
+  autoBgTransfer = false;
+  autoBgTransferMap = 0;
+  oam = new Uint8Array(160);
+  lines = new Uint8Array(SCREEN_H);
+  lineTarget = "none";
+  lcdc = 0;
+  scx = 0;
+  scy = 0;
+  wx = 7;
+  wy = SCREEN_H;
+  bgp = 228;
+  obp0 = 228;
+  obp1 = 228;
+  colours = { bg: "PIKACHUS_BEACH", obj0: "PIKACHUS_BEACH", obj1: "PIKACHUS_BEACH" };
+  loads = [];
+  mapsDirty = undefined;
+  wideW = 0;
+  wideH = 0;
+  wideScx = 0;
+  wideScy = 0;
+  wideFull = false;
+  wideMap = new Uint8Array(WIDE_COLS_MAX * WIDE_ROWS_MAX);
+  wideCols = WIDE_COLS;
+  wideRows = WIDE_ROWS;
+  wideMapDirty = undefined;
+  wideSpans = [];
+  wideSpansAll = false;
+  markWide(from, to) {
+    if (this.wideSpansAll || to <= from)
+      return;
+    if (this.wideSpans.length >= 4096) {
+      this.wideSpans.length = 0;
+      this.wideSpansAll = true;
+      return;
+    }
+    this.wideSpans.push(from, to);
+  }
+  wideObjs = new Int16Array(WIDE_OBJS_MAX * 4);
+  wideObjCount = 0;
+  loadTiles(dest, sheet, first, count2) {
+    this.loads = this.loads.filter((l) => l.dest + l.count <= dest || l.dest >= dest + count2);
+    this.loads.push({ dest, sheet, first, count: count2 });
+  }
+  tileAt(vram) {
+    for (let i = this.loads.length - 1;i >= 0; i--) {
+      const l = this.loads[i];
+      if (vram >= l.dest && vram < l.dest + l.count)
+        return { sheet: l.sheet, tile: l.first + vram - l.dest };
+    }
+    return null;
+  }
+  bgTile(id) {
+    if (this.lcdc & LCDC.tiles8000)
+      return id;
+    return id < 128 ? 256 + id : id;
+  }
+  mapGet(addr) {
+    return this.maps[addr & 2047];
+  }
+  mapSet(addr, id) {
+    this.maps[addr & 2047] = id & 255;
+  }
+  static bgCoord(x, y, map = 0) {
+    return map * 1024 + (y & 31) * 32 + (x & 31);
+  }
+  vblank() {
+    if (!this.autoBgTransfer)
+      return;
+    const base = this.autoBgTransferMap * 1024;
+    for (let y = 0;y < SCREEN_H / 8; y++) {
+      for (let x = 0;x < SCREEN_W / 8; x++)
+        this.maps[base + y * 32 + x] = this.tileMap[y * 20 + x];
+    }
+  }
+  vblankThird(portion) {
+    if (!this.autoBgTransfer)
+      return portion;
+    const row = portion === 0 ? 0 : portion === 1 ? 6 : 12;
+    const base = this.autoBgTransferMap * 1024;
+    for (let y = row;y < row + 6; y++) {
+      for (let x = 0;x < SCREEN_W / 8; x++)
+        this.maps[base + y * 32 + x] = this.tileMap[y * 20 + x];
+    }
+    return portion === 0 ? 1 : portion === 1 ? 2 : 0;
+  }
+  clearOam() {
+    this.oam.fill(0);
+  }
+}
+
 // voxelmon/game/gb/emit.ts
 var HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
 var HEX4 = [];
@@ -7020,7 +7134,7 @@ class GbEmitter {
   colours1 = "";
   lines = "";
   colours = "";
-  wideMap = new Uint8Array(2048);
+  wideMap = new Uint8Array(WIDE_COLS_MAX * WIDE_ROWS_MAX);
   wide = "";
   wideObjs = "";
   emit(host, v, resolve) {
@@ -7073,31 +7187,40 @@ class GbEmitter {
       i = end;
     }
     const wideOn = v.wideW > 0 && v.wideH > 0 && !!host.gbWide;
-    const wide = wideOn ? `${v.wideW},${v.wideH},${v.wideScx},${v.wideScy},${v.wideFull ? 1 : 0}` : "";
+    const wide = wideOn ? `${v.wideW},${v.wideH},${v.wideScx},${v.wideScy},${v.wideFull ? 1 : 0},${v.wideCols},${v.wideRows}` : "";
     if (wide !== this.wide) {
       this.wide = wide;
-      host.gbWide?.(wideOn ? v.wideW : 0, wideOn ? v.wideH : 0, v.wideScx, v.wideScy, v.wideFull ? 1 : 0);
+      host.gbWide?.(wideOn ? v.wideW : 0, wideOn ? v.wideH : 0, v.wideScx, v.wideScy, v.wideFull ? 1 : 0, v.wideCols, v.wideRows);
     }
     if (wideOn) {
-      let j = fresh || v.wideMapDirty !== false ? 0 : 2048;
-      while (j < 2048) {
-        if (v.wideMap[j] === this.wideMap[j]) {
-          j++;
-          continue;
+      const send = (from, to) => {
+        let j = from;
+        while (j < to) {
+          if (v.wideMap[j] === this.wideMap[j]) {
+            j++;
+            continue;
+          }
+          let end = j + 1;
+          let gap = 0;
+          for (let k = j + 1;k < to && gap < MERGE_GAP; k++) {
+            if (v.wideMap[k] !== this.wideMap[k]) {
+              end = k + 1;
+              gap = 0;
+            } else
+              gap++;
+          }
+          host.gbMap?.(2048 + j, hex(v.wideMap, j, end));
+          this.wideMap.set(v.wideMap.subarray(j, end), j);
+          j = end;
         }
-        let end = j + 1;
-        let gap = 0;
-        for (let k = j + 1;k < 2048 && gap < MERGE_GAP; k++) {
-          if (v.wideMap[k] !== this.wideMap[k]) {
-            end = k + 1;
-            gap = 0;
-          } else
-            gap++;
-        }
-        host.gbMap?.(2048 + j, hex(v.wideMap, j, end));
-        this.wideMap.set(v.wideMap.subarray(j, end), j);
-        j = end;
-      }
+      };
+      if (fresh || v.wideSpansAll)
+        send(0, v.wideCols * v.wideRows);
+      else
+        for (let s = 0;s < v.wideSpans.length; s += 2)
+          send(v.wideSpans[s], v.wideSpans[s + 1]);
+      v.wideSpans.length = 0;
+      v.wideSpansAll = false;
       let objs = "";
       const p = v.wideObjs;
       for (let k = 0;k < v.wideObjCount; k++) {
@@ -10723,104 +10846,6 @@ class ScriptRunner {
         this.resume();
       }
     }
-  }
-}
-
-// voxelmon/game/gb/video.ts
-var LCDC = {
-  on: 128,
-  winMap9C00: 64,
-  winOn: 32,
-  tiles8000: 16,
-  bgMap9C00: 8,
-  objOn: 2,
-  bgOn: 1
-};
-var OAM_ATTR = { behindBg: 128, yFlip: 64, xFlip: 32, obp1: 16 };
-var SCREEN_W = 160;
-var SCREEN_H = 144;
-var OAM_X_OFS = 8;
-var OAM_Y_OFS = 16;
-var WIDE_COLS = 64;
-var WIDE_ROWS = 32;
-var WIDE_OBJS_MAX = 96;
-
-class GbVideo {
-  maps = new Uint8Array(2048);
-  tileMap = new Uint8Array(SCREEN_W / 8 * (SCREEN_H / 8));
-  autoBgTransfer = false;
-  autoBgTransferMap = 0;
-  oam = new Uint8Array(160);
-  lines = new Uint8Array(SCREEN_H);
-  lineTarget = "none";
-  lcdc = 0;
-  scx = 0;
-  scy = 0;
-  wx = 7;
-  wy = SCREEN_H;
-  bgp = 228;
-  obp0 = 228;
-  obp1 = 228;
-  colours = { bg: "PIKACHUS_BEACH", obj0: "PIKACHUS_BEACH", obj1: "PIKACHUS_BEACH" };
-  loads = [];
-  mapsDirty = undefined;
-  wideW = 0;
-  wideH = 0;
-  wideScx = 0;
-  wideScy = 0;
-  wideFull = false;
-  wideMap = new Uint8Array(WIDE_COLS * WIDE_ROWS);
-  wideMapDirty = undefined;
-  wideObjs = new Int16Array(WIDE_OBJS_MAX * 4);
-  wideObjCount = 0;
-  loadTiles(dest, sheet, first, count2) {
-    this.loads = this.loads.filter((l) => l.dest + l.count <= dest || l.dest >= dest + count2);
-    this.loads.push({ dest, sheet, first, count: count2 });
-  }
-  tileAt(vram) {
-    for (let i = this.loads.length - 1;i >= 0; i--) {
-      const l = this.loads[i];
-      if (vram >= l.dest && vram < l.dest + l.count)
-        return { sheet: l.sheet, tile: l.first + vram - l.dest };
-    }
-    return null;
-  }
-  bgTile(id) {
-    if (this.lcdc & LCDC.tiles8000)
-      return id;
-    return id < 128 ? 256 + id : id;
-  }
-  mapGet(addr) {
-    return this.maps[addr & 2047];
-  }
-  mapSet(addr, id) {
-    this.maps[addr & 2047] = id & 255;
-  }
-  static bgCoord(x, y, map = 0) {
-    return map * 1024 + (y & 31) * 32 + (x & 31);
-  }
-  vblank() {
-    if (!this.autoBgTransfer)
-      return;
-    const base = this.autoBgTransferMap * 1024;
-    for (let y = 0;y < SCREEN_H / 8; y++) {
-      for (let x = 0;x < SCREEN_W / 8; x++)
-        this.maps[base + y * 32 + x] = this.tileMap[y * 20 + x];
-    }
-  }
-  vblankThird(portion) {
-    if (!this.autoBgTransfer)
-      return portion;
-    const row = portion === 0 ? 0 : portion === 1 ? 6 : 12;
-    const base = this.autoBgTransferMap * 1024;
-    for (let y = row;y < row + 6; y++) {
-      for (let x = 0;x < SCREEN_W / 8; x++)
-        this.maps[base + y * 32 + x] = this.tileMap[y * 20 + x];
-    }
-    return portion === 0 ? 1 : portion === 1 ? 2 : 0;
-  }
-  clearOam() {
-    this.oam.fill(0);
   }
 }
 
@@ -23467,7 +23492,9 @@ var ZOOMS_2D = [
   { pct: 100, label: "OFF" },
   { pct: 80, label: "LOW" },
   { pct: 67, label: "MID" },
-  { pct: 60, label: "MAX" }
+  { pct: 60, label: "HIGH" },
+  { pct: 50, label: "FAR" },
+  { pct: 40, label: "MAX" }
 ];
 function screen2dIndex(v) {
   return v === "wide" ? 1 : 0;
@@ -28400,19 +28427,40 @@ class OverworldView2d {
       const ty0 = Math.floor(vy / 8);
       const cols = Math.ceil(canvas.w / 8) + 1;
       const rows = Math.ceil(canvas.h / 8) + 1;
-      if (tx0 !== this.wideX || ty0 !== this.wideY || cols !== this.wideCols || rows !== this.wideRows) {
+      const big = cols > WIDE_COLS || rows > WIDE_ROWS;
+      const rc = big ? WIDE_COLS_MAX : WIDE_COLS;
+      const rr = big ? WIDE_ROWS_MAX : WIDE_ROWS;
+      if (rc !== v.wideCols || rr !== v.wideRows) {
+        v.wideCols = rc;
+        v.wideRows = rr;
+        this.wideX = NaN;
+      }
+      if (tx0 !== this.wideX || ty0 !== this.wideY || cols !== this.wideCols || rows !== this.wideRows || t !== this.wideTiles) {
+        const dx = tx0 - this.wideX;
+        const dy = ty0 - this.wideY;
+        const step = cols === this.wideCols && rows === this.wideRows && t === this.wideTiles && Math.abs(dx) + Math.abs(dy) === 1;
+        if (step && dx === 1)
+          writeWideRect(v, t, map, tx0 + cols - 1, ty0, 1, rows);
+        else if (step && dx === -1)
+          writeWideRect(v, t, map, tx0, ty0, 1, rows);
+        else if (step && dy === 1)
+          writeWideRect(v, t, map, tx0, ty0 + rows - 1, cols, 1);
+        else if (step)
+          writeWideRect(v, t, map, tx0, ty0, cols, 1);
+        else
+          writeWideRect(v, t, map, tx0, ty0, cols, rows);
         this.wideX = tx0;
         this.wideY = ty0;
         this.wideCols = cols;
         this.wideRows = rows;
-        writeWideWindow(v.wideMap, t, map, tx0, ty0, cols, rows);
+        this.wideTiles = t;
         v.wideMapDirty = true;
       } else
         v.wideMapDirty = false;
       v.wideW = canvas.w;
       v.wideH = canvas.h;
-      v.wideScx = vx & WIDE_COLS * 8 - 1;
-      v.wideScy = vy & WIDE_ROWS * 8 - 1;
+      v.wideScx = vx & rc * 8 - 1;
+      v.wideScy = vy & rr * 8 - 1;
       v.wideFull = canvas.wide;
       this.viewW = canvas.w;
       this.viewH = canvas.h;
@@ -28495,6 +28543,7 @@ class OverworldView2d {
   wideY = NaN;
   wideCols = 0;
   wideRows = 0;
+  wideTiles = null;
   put(sheet, px2, py, frame2, mirror) {
     const sx2 = Math.round(px2) - this.camX;
     const sy2 = Math.round(py) - this.camY - 4;
@@ -28660,23 +28709,33 @@ function buildTiles(map, maps, swaps) {
   }
   return { map, tileset: map.tileset.blocks, w, h, ids, blocks: blocks.slice(), cuts: cut.size };
 }
-function writeWideWindow(maps, t, map, tx0, ty0, cols, rows) {
+function writeWideRect(v, t, map, tx0, ty0, cols, rows) {
+  const maps = v.wideMap;
+  const rc = v.wideCols;
+  const rr = v.wideRows;
   const x = tx0 + PAD2;
   const y = ty0 + PAD2;
   const inside = x >= 0 && y >= 0 && x + cols <= t.w && y + rows <= t.h;
-  const col = tx0 & WIDE_COLS - 1;
-  const first = Math.min(cols, WIDE_COLS - col);
+  const col = tx0 & rc - 1;
+  const first = Math.min(cols, rc - col);
   for (let r = 0;r < rows; r++) {
-    const row = (ty0 + r & WIDE_ROWS - 1) * WIDE_COLS;
+    const row = (ty0 + r & rr - 1) * rc;
     if (inside) {
       const src = (y + r) * t.w + x;
-      maps.set(t.ids.subarray(src, src + first), row + col);
-      if (first < cols)
-        maps.set(t.ids.subarray(src + first, src + cols), row);
+      if (cols === 1)
+        maps[row + col] = t.ids[src];
+      else {
+        maps.set(t.ids.subarray(src, src + first), row + col);
+        if (first < cols)
+          maps.set(t.ids.subarray(src + first, src + cols), row);
+      }
     } else {
       for (let c = 0;c < cols; c++)
-        maps[row + (tx0 + c & WIDE_COLS - 1)] = map.tileAt(tx0 + c, ty0 + r) & 127;
+        maps[row + (tx0 + c & rc - 1)] = map.tileAt(tx0 + c, ty0 + r) & 127;
     }
+    v.markWide(row + col, row + col + first);
+    if (first < cols)
+      v.markWide(row, row + cols - first);
   }
 }
 function writeWindow(maps, t, map, tx0, ty0) {
@@ -30916,7 +30975,7 @@ class QuickJsHost {
   gbOam(hex3) {
     native.gbOam?.(hex3);
   }
-  gbWide = native.gbWide ? (w, h, scx, scy, full) => native.gbWide(w, h, scx, scy, full) : undefined;
+  gbWide = native.gbWide ? (w, h, scx, scy, full, cols = 64, rows = 32) => native.gbWide(w, h, scx, scy, full, cols, rows) : undefined;
   gbWideObjs = native.gbWideObjs ? (hex3) => native.gbWideObjs(hex3) : undefined;
   gbColours(bg, obp0, obp1) {
     native.gbColours?.(bg, obp0, obp1);
