@@ -1,4 +1,4 @@
-# Pokémon Gold: what a port needs
+# Gold: what a port needs
 
 Survey of 2026-09-30. Nothing here is built yet.
 
@@ -13,7 +13,7 @@ Survey of 2026-09-30. Nothing here is built yet.
 - **Other Gen 2 projects are unusable:**
   - UNDERdecoded/Gen2Recomped is "source-available, all rights reserved".
   - abdillahinur/Gen2Recomp and the rest have no licence.
-- **ROM:** Pokémon Gold (USA, Europe), SHA-1 `d8b8a3600a465308c9953dfa04f0081c05bdcb94`, 2 MiB.
+- **ROM:** Gold (USA, Europe), SHA-1 `d8b8a3600a465308c9953dfa04f0081c05bdcb94`, 2 MiB.
 - **Scale:** 368 maps in 52 groups, and 251 species plus the Unown forms and the egg.
 - **Delivery:** same codebase and same cook. Gold gets its own 3dsx and CIA, its own `paks_gold` set and its own save, as Yellow did.
 
@@ -112,7 +112,7 @@ Johto and Kanto maps, 16 badges, a Gen 2 Pokédex, and Johto apps.
 
 ## Silver (2026-10-02)
 
-- **ROM:** Pokémon Silver (USA, Europe), SHA-1 `49b163f7e57702bc939d642a18f591de55d92dae`, at `Desktop/mGBA/silver.gbc`.
+- **ROM:** Silver (USA, Europe), SHA-1 `49b163f7e57702bc939d642a18f591de55d92dae`, at `Desktop/mGBA/silver.gbc`.
 - **Manifest:** upstream's `tools/rom_manifest_silver.json`, committed in `998cb03d`, an ancestor of the MIT pin `bdfac727`. It has the same 2062 symbols as Gold's at Silver's addresses.
 - **What differs** (measured by importing both ROMs and diffing every table, then cooking both and diffing all 368 paks):
   - **Datasets:** the wild encounters and the Pokédex text differ. Every map, tileset, palette, trainer, item, sprite and sound table is identical. The scripts differ only by bank $03 sitting 2 bytes earlier, which `CallAsm`'s `SITES_SILVER` already handles.

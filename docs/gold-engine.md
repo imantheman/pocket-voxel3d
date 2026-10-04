@@ -1,6 +1,6 @@
 # The Gold engine
 
-How Pokémon Gold runs in pocket-voxel. Gen 1 and Gen 2 share the host, the
+How Gold runs in pocket-voxel. Gen 1 and Gen 2 share the host, the
 core, the cooker and the importer framework. The Gold *game* is a separate
 guest engine: a module-for-module TypeScript port of gen1recomp's Gen 2
 engine.

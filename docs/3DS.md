@@ -18,7 +18,7 @@ disk** while it runs.
 If you are not here to work on the code, you do not need anything below
 this section. The release zip contains a `cooker` folder:
 
-1. **Drag your Pokémon Red `.gb` file onto `Cook Pocket Voxel.bat`**
+1. **Drag your Red `.gb` file onto `Cook Pocket Voxel.bat`**
    (Windows), or double-click `Cook Pocket Voxel.command` (Mac) and drag
    the `.gb` file into the window it opens.
 2. It tells you what it wants to download -- Bun, the game's source, and
@@ -44,7 +44,7 @@ The rest of this page is the same thing done by hand.
 
 | | What | Why |
 |---|---|---|
-| **The ROM** | A canonical US **Pokémon Red** `.gb` | The only source of game content. Its SHA-1 is checked before a single byte is decoded. |
+| **The ROM** | A canonical US **Red** `.gb` | The only source of game content. Its SHA-1 is checked before a single byte is decoded. |
 | **Bun** | [bun.sh](https://bun.sh) | Runs the importer and the cooker. |
 | **Rust** | [rustup.rs](https://rustup.rs) | Builds the console binary. |
 | **python3** | usually already there | One step needs it: hoisting the shared atlas. |
@@ -106,7 +106,7 @@ forgot it: `git submodule update --init`.
 ## 3. Point it at your three inputs
 
 ```sh
-export VOXELMON_ROM=/path/to/PokemonRed.gb
+export VOXELMON_ROM=/path/to/red.gb
 export VOXELMON_G1R=/path/to/gen1recomp
 export VOXELMON_VOXELMOD=/path/to/potato_voxel
 ```
@@ -287,7 +287,7 @@ on the same wifi -- any mix). With no network at all, two consoles find
 each other over 3DS local wireless instead; that path is untested.
 
 1. Both players walk up to the **receptionist on the right** of any
-   Pokémon Center and apply. She saves the game and waits up to a minute
+   healing center and apply. She saves the game and waits up to a minute
    for the other console to do the same.
 2. Both pick the same room -- **TRADE CENTER** or **COLOSSEUM** -- and are
    walked in, one to each end of the table in the middle.
@@ -321,7 +321,7 @@ consecutive ports), which is how this is tested without two consoles.
 Worth understanding before you build, because it is the one part of this
 that is not simply your ROM.
 
-**Pokémon Red has no colour in it.** It ships no Game Boy Color code at
+**Red has no colour in it.** It ships no Game Boy Color code at
 all — there is no palette table in your cartridge to read. So the greens and
 reds you see on the maps cannot have come from your ROM, and they are not
 something this project's code invents either.

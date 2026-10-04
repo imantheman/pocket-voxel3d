@@ -8,14 +8,14 @@ against gen1recomp's Yellow port and its Yellow ROM manifest.
 
 Yellow is not a data swap the way Blue was. Blue shared every map and every
 graphic but one with Red; Yellow is a different ROM layout with redrawn
-Pokémon, changed maps, a different opening, and a companion Pikachu that
+monsters, changed maps, a different opening, and a companion Pikachu that
 touches the overworld, battles, items and the PC. gen1recomp carries about
 **3,700 lines of Yellow-only Lua** plus 31 `isYellow()` branches in 15
 engine files. Most of it ports the same way the rest of this game was
 ported; the Pikachu follower and the Pikachu voice are the two genuinely new
 systems.
 
-The ROM we need is on hand: `Desktop/mGBA/Pokemon-Yellow.gbc` is the
+The ROM we need is on hand: `Desktop/mGBA/g.gbc` is the
 canonical US Yellow (SHA-1 `cc7d03262ebfaf2f06772c1a480c7d9d5f4a38e1`, the
 hash gen1recomp's `rom_manifest_yellow.json` expects).
 
@@ -25,7 +25,7 @@ hash gen1recomp's `rom_manifest_yellow.json` expects).
 |---|---|
 | Symbols | 4,507 in Yellow vs 3,274 in Red; only **58** sit at the same address. 1,319 are new, 86 of Red's are gone. The whole ROM moved. |
 | Our importer | Names 64 ROM symbols. **60 exist in Yellow.** The 4 missing are the intro's fight-scene frames (`FightIntroBackMon`, `FightIntroFrontMon1-3`) -- Yellow has its own intro (`YellowIntroGraphics1/2`, `YellowIntroCloudGFX`). |
-| Maps | 223 vs 222: `CERULEAN_MELANIES_HOUSE` replaces `CERULEAN_TRADE_HOUSE`, `SUMMER_BEACH_HOUSE` is new. **30 more maps differ** (every Pokémon Center -- Chansey beside the nurse -- plus Cerulean, Vermilion, Saffron, Route 6/9/24, Oak's Lab, Blue's House, Mt Moon B2F, Rocket Hideout B4F, Pokémon Tower 7F, Silph 11F, Game Corner, Fan Club, Indigo lobby, Cerulean Cave, ...). |
+| Maps | 223 vs 222: `CERULEAN_MELANIES_HOUSE` replaces `CERULEAN_TRADE_HOUSE`, `SUMMER_BEACH_HOUSE` is new. **30 more maps differ** (every healing center -- Chansey beside the nurse -- plus Cerulean, Vermilion, Saffron, Route 6/9/24, Oak's Lab, Blue's House, Mt Moon B2F, Rocket Hideout B4F, Lavender's tower 7F, Silph 11F, Game Corner, Fan Club, Indigo lobby, Cerulean Cave, ...). |
 | Field data | Differs in credits, emotion bubbles, Oak's speech, the old man's battle, preset names, title, town map, trades. |
 | Sprites | New `surfPikachu`; the sprite order differs. The walking Pikachu is its own sheet (`PikachuSprite`). |
 | Audio | New program banks; cries, map songs and music headers differ; a `PikachuCriesPointerTable` (the digitised Pikachu voice). |
@@ -33,7 +33,7 @@ hash gen1recomp's `rom_manifest_yellow.json` expects).
 | Colour | Yellow is a Game Boy Color game with its own palettes in ROM (SuperPalettes + CGBBasePalettes + MonsterPalettes; gen1recomp writes them to `data/palettes_yellow.lua`). |
 
 **Consequence for the SD card:** Red and Blue share one pak set because their
-pages line up one for one. Yellow's Pokémon are redrawn, its sprite order is
+pages line up one for one. Yellow's monsters are redrawn, its sprite order is
 different and 32 maps changed, so its atlas pages will not line up. Plan on
 Yellow having **its own pak set** (~300 MB, in its own folder beside
 `voxelmon`), not an overlay. This is worth measuring on the first import
@@ -48,7 +48,7 @@ before it is final.
 | **Rival's party** -- keyed off `rivalStarter` (Jolteon / Flareon / Vaporeon) set by the lab and Route 22 outcomes | `src/script/Commands.lua:871-906` | table + hook |
 | **Yellow intro movie** (18 scenes) and **title screen** (Pikachu, no cycling mons, no ribbon) | `src/ui/YellowIntro.lua`, `TitleState.lua` yellowLayout | 831 + branches |
 | **Starter gifts** -- Bulbasaur from Melanie (needs Pikachu happiness ≥ 147), Charmander on Route 24, Squirtle from Officer Jenny | `data/scripts/yellow_gifts.lua` | 113 |
-| **Jessie & James** at Mt Moon B2F, Rocket Hideout B4F, Pokémon Tower 7F, Silph 11F | `data/scripts/yellow_jessie_james.lua` | 308 |
+| **Jessie & James** at Mt Moon B2F, Rocket Hideout B4F, Lavender's tower 7F, Silph 11F | `data/scripts/yellow_jessie_james.lua` | 308 |
 | **Viridian old man** Yellow variant (catch demo is a Rattata) | `yellow_viridian_old_man.lua`, `Data.lua:78` | 151 |
 | **Summer Beach House + Surfing Pikachu minigame** (needs a Pikachu with SURF) | `yellow_beach_house.lua`, `src/ui/SurfingMinigame.lua` | 131 + 547 |
 | **Pikachu refuses the Thunder Stone** (your own Pikachu only) | `src/inventory/ItemEffects.lua:396` | small |
@@ -92,7 +92,7 @@ stand-in has no 3DS equivalent worth building.
 
 - **Colour.** Yellow's authentic GBC palettes (per-screen, from the ROM), or
   the per-tile RED++ colouring Red and Blue use (pokered-gbc), with Yellow's
-  own Pokémon palettes? The first is faithful to the cartridge; the second
+  own monster palettes? The first is faithful to the cartridge; the second
   matches how Red and Blue look in this port.
 - **SD space.** A separate ~300 MB pak set for Yellow, unless measuring
   shows real sharing is possible.

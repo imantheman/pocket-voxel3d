@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Pocket Voxel cooker: drop your Pokemon Red, Blue, Yellow, Gold or Silver ROM on it, get an SD card folder.
+"""Pocket Voxel cooker: drop your Red, Blue, Yellow, Gold or Silver ROM on it, get an SD card folder.
 
     Windows:  drag your .gb (or Yellow / Gold / Silver .gbc) file onto "Cook Pocket Voxel.bat"
     Mac:      double-click "Cook Pocket Voxel.command", then drag the .gb
               file into the window it opens and press Return
-    Linux:    ./cook.sh /path/to/PokemonRed.gb
+    Linux:    ./cook.sh /path/to/red.gb
 
 Everything this does is in this one file, on purpose, so that anyone can
 read it before they run it. There is no installer and nothing is written
@@ -13,7 +13,7 @@ Delete the folder and the machine is exactly as it was.
 
 What it does, in order:
 
-  1. Checks the ROM is the real US Pokemon Red, Blue, Yellow, Gold or Silver (by SHA-1) and refuses
+  1. Checks the ROM is the real US Red, Blue, Yellow, Gold or Silver (by SHA-1) and refuses
      anything else. The ROM never leaves your machine and nothing from it
      is in this folder or on GitHub -- that is the whole point of cooking
      on YOUR computer.
@@ -126,7 +126,7 @@ YELLOW_SHA1 = "cc7d03262ebfaf2f06772c1a480c7d9d5f4a38e1"
 GOLD_SHA1 = "d8b8a3600a465308c9953dfa04f0081c05bdcb94"
 SILVER_SHA1 = "49b163f7e57702bc939d642a18f591de55d92dae"
 # Red and Blue share one paks folder (their maps line up); Yellow's maps and
-# Pokemon are redrawn, so it has a folder of its own beside theirs, and Gold
+# monsters are redrawn, so it has a folder of its own beside theirs, and Gold
 # (Johto, a different engine) has one too.
 GAMES = {
     RED_SHA1: {"id": "red", "label": "Red", "manifest": "manifest", "paks": "paks", "maps": 222,
@@ -462,7 +462,7 @@ def open_folder(path):
 def find_rom(arg, yes):
     path = arg
     if not path:
-        say("Which ROM? Drag your Pokemon Red, Blue, Yellow, Gold or Silver file into this window and press Return.")
+        say("Which ROM? Drag your Red, Blue, Yellow, Gold or Silver file into this window and press Return.")
         if yes:
             die("no ROM given (pass --rom PATH with --yes)")
         try:
@@ -479,12 +479,12 @@ def find_rom(arg, yes):
     digest = sha1_of(rom)
     game = GAMES.get(digest)
     if not game:
-        die(f"that is not the US Pokemon Red, Blue, Yellow, Gold or Silver ROM.",
+        die(f"that is not the US Red, Blue, Yellow, Gold or Silver ROM.",
             f"\n  its SHA-1 is  {digest}\n  Red's is      {RED_SHA1}\n  Blue's is     {BLUE_SHA1}",
             f"\n  Yellow's is   {YELLOW_SHA1}\n  Gold's is     {GOLD_SHA1}\n  Silver's is   {SILVER_SHA1}",
             "\nOnly those five work. Crystal, other regions, colour hacks, ROM hacks, and",
             "files with a header or trailing bytes will all be refused here. Nothing was read from it.")
-    say(f"  it is Pokemon {game['label']} (US). Good.")
+    say(f"  it is {game['label']} (US). Good.")
     return rom, game
 
 
@@ -497,7 +497,7 @@ def write_sources(repo_desc, rom, palette, downloads, game):
         "",
         "YOUR ROM (never copied, never uploaded; read on this machine only):",
         f"  {rom}",
-        f"  SHA-1 {[s for s, g in GAMES.items() if g is game][0]}  (Pokemon {game['label']}, US)",
+        f"  SHA-1 {[s for s, g in GAMES.items() if g is game][0]}  ({game['label']}, US)",
         "",
         "GAME SOURCE:",
         f"  {repo_desc}",
@@ -530,7 +530,7 @@ def write_sources(repo_desc, rom, palette, downloads, game):
         lines += [
             "",
             "ABOUT THE COLOUR:",
-            f"  Pokemon {game['label']} is a Game Boy Color game; every colour in this",
+            f"  {game['label']} is a Game Boy Color game; every colour in this",
             "  build was read out of your ROM on this machine.",
             "",
             "EVERYTHING ELSE in the `3ds` folder was computed on this machine from",
@@ -545,7 +545,7 @@ def write_sources(repo_desc, rom, palette, downloads, game):
     ]
     if colour:
         lines += [
-            "  Pokemon Red has no colour in it. The palettes here come from",
+            "  Red has no colour in it. The palettes here come from",
             "  pokered-gbc (https://github.com/Stewmath/pokered-gbc), a community",
             "  colourisation of the Red disassembly, as generated into",
             "  palettes_gbc.lua by gen1recomp. Its creature colours follow Gen 2's",
@@ -569,7 +569,7 @@ def write_sources(repo_desc, rom, palette, downloads, game):
 def main():
     global _log
     ap = argparse.ArgumentParser(add_help=True)
-    ap.add_argument("rom", nargs="?", help="your Pokemon Red, Blue, Yellow or Gold ROM file")
+    ap.add_argument("rom", nargs="?", help="your Red, Blue, Yellow, Gold or Silver ROM file")
     ap.add_argument("--rom", dest="rom_opt")
     ap.add_argument("--yes", action="store_true", help="accept every default without asking")
     ap.add_argument("--palette", choices=("dmg", "gbc", "community"),
@@ -628,13 +628,13 @@ def main():
     if game["id"] in GEN2_GAMES:
         # Gold and Silver have only their own Game Boy Color colours, read from the ROM.
         palette = "gbc"
-        say(f"Colour: Pokemon {game['label']}'s own Game Boy Color palettes, from your ROM.")
+        say(f"Colour: {game['label']}'s own Game Boy Color palettes, from your ROM.")
         if asked and asked != "gbc":
             say(f"  (--palette {asked} does nothing for {game['label']}: it has only its own colours.)")
     else:
         choices = PALETTES[game["id"]]
         if asked and asked not in choices:
-            die(f"Pokemon {game['label']} has no {asked} colours to cook with: choose "
+            die(f"{game['label']} has no {asked} colours to cook with: choose "
                 + " or ".join(choices) + ".")
         if asked:
             palette = asked
@@ -644,12 +644,12 @@ def main():
         else:
             say("Colour?")
             if game["id"] == "yellow":
-                say("  Pokemon Yellow is a Game Boy Color game. Pocket Voxel can show its own")
+                say("  Yellow is a Game Boy Color game. Pocket Voxel can show its own")
                 say("  colours, read from your ROM, or the Game Boy's black and white, or the")
                 say("  community colourisation of Red (pokered-gbc), fetched as one")
                 say(f"  {mb(DATA_FILES['colour'][4])} file from gen1recomp (MIT).")
             else:
-                say(f"  Pokemon {game['label']} is a black-and-white game. The colour Pocket Voxel can show")
+                say(f"  {game['label']} is a black-and-white game. The colour Pocket Voxel can show")
                 say("  comes from pokered-gbc, a community colourisation of the Red disassembly,")
                 say(f"  fetched as one {mb(DATA_FILES['colour'][4])} file from gen1recomp (MIT).")
             for n, key in enumerate(choices, 1):
