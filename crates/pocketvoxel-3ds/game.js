@@ -29048,6 +29048,21 @@ function writeWindow(maps, t, map, tx0, ty0) {
 var NICKNAME_LEN = 10;
 var SAVE_HOLD = 120;
 var SAVE_DONE_HOLD = 30;
+var FULL_SCREEN_KINDS = new Set([
+  "pokedex",
+  "party",
+  "summary",
+  "naming",
+  "trainercard",
+  "options",
+  "evolution",
+  "halloffame",
+  "credits",
+  "diploma",
+  "tradeanim",
+  "tradescreen",
+  "slots"
+]);
 var SAVE_FORMAT = 5;
 var PIC_NAMES = { oak: "prof.oak", player: "red", rival: "rival1" };
 var PIC_FALLBACK = { oak: 406, player: 408, rival: 409, nidorino: 164 };
@@ -31065,6 +31080,8 @@ here.`, onDone);
       return false;
     const top2 = this.stack[this.stack.length - 1];
     if (!top2 || top2.kind === "title" || top2.kind === "intro" || top2.kind === "surfing")
+      return false;
+    if (FULL_SCREEN_KINDS.has(top2.kind))
       return false;
     return !!this.overworld?.map;
   }
