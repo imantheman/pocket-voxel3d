@@ -53,6 +53,10 @@ export class Shader {
   readonly effect: Effect;
   readonly id: number;
   uniforms: Record<string, unknown> = {};
+  /** Bumped by send; the packed draw-list params are re-made only then. */
+  version = 0;
+  packedVersion = -1;
+  packed: number[] = [];
   constructor(readonly name: string) {
     const e = effectByName(name);
     if (!e) throw new Error(`newShader: no effect named '${name}' (platform/effects)`);
@@ -62,6 +66,7 @@ export class Shader {
   /** shader:send(name, value...) -- several values make an array uniform */
   send(name: string, ...values: unknown[]): void {
     this.uniforms[name] = values.length === 1 ? values[0] : values;
+    this.version++;
   }
   hasUniform(_name: string): boolean { return true; }
   type(): string { return "Shader"; }
@@ -107,7 +112,11 @@ function syncState(): void {
   const sh = st.shader;
   if (sh && sh.effect.pack) {
     effect = sh.id;
-    params = sh.effect.pack(sh.uniforms);
+    if (sh.packedVersion !== sh.version) {
+      sh.packed = sh.effect.pack(sh.uniforms);
+      sh.packedVersion = sh.version;
+    }
+    params = sh.packed;
   }
   list.state(blendCode(), effect, params, st.scissor);
 }
@@ -231,12 +240,13 @@ export const G = {
     list.clear(0, 0, 0, 1);
     if (st.canvas) list.target(st.canvas.id);
   },
-  endFrame(): number[] {
+  endFrame(): Float32Array {
     frameOpen = false;
-    const out = list.buf.slice();
+    const out = list.buf;
     getHost().draw(out);
     list.reset();
     list.target(st.canvas ? st.canvas.id : 0);
+    // NOTE: a view of reused storage, valid until the next draw call
     return out;
   },
   /** Drop all graphics state (tests; a soft reset). */
@@ -416,7 +426,8 @@ export const G = {
 };
 
 function toNums(t: unknown): number[] {
-  if (Array.isArray(t)) return t.map(Number);
+  // a runtime sequence ([null, x1, y1, ...], lt.ts) or a plain JS array
+  if (Array.isArray(t)) return (t[0] == null && t.length > 1 ? t.slice(1) : t).map(Number);
   const o = t as Record<string, number>;
   const out: number[] = [];
   for (let i = 1; o[i] !== undefined; i++) out.push(Number(o[i]));

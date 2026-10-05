@@ -12,7 +12,8 @@ export interface G3Host {
   canvasNew(id: number, w: number, h: number): void;
   texFree(id: number): void;
   /** One composed frame's draw list (drawlist.ts). */
-  draw(list: number[]): void;
+  /** The view is valid only during the call (the guest reuses the storage). */
+  draw(list: Float32Array): void;
   /** A cache file's bytes as a byte string, or undefined. */
   read(path: string): string | undefined;
   exists(path: string): boolean;

@@ -24,7 +24,6 @@ function bytesToString(b: Uint8Array): string {
   return parts.join("");
 }
 
-let drawBuf = new Float32Array(16384);
 const prof = { frames: 0, scene: 0, conv: 0, len: 0 };
 
 class QuickJsG3Host implements G3Host {
@@ -37,11 +36,10 @@ class QuickJsG3Host implements G3Host {
   }
   canvasNew(id: number, w: number, h: number): void { n.g3Canvas!(id, w, h); }
   texFree(id: number): void { n.g3TexFree!(id); }
-  draw(list: number[]): void {
+  draw(list: Float32Array): void {
     const t = clock();
-    if (drawBuf.length < list.length) drawBuf = new Float32Array(Math.max(list.length, drawBuf.length * 2));
-    drawBuf.set(list);
-    n.g3Draw!(drawBuf.subarray(0, list.length));
+    // the draw list is already f32 storage (drawlist.ts): handed over as is
+    n.g3Draw!(list);
     prof.conv += clock() - t;
     prof.len += list.length;
   }

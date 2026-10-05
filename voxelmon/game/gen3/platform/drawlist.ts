@@ -34,57 +34,105 @@ export const BLEND_SUBTRACT = 6;
 export const STATE_PARAMS = 16;
 
 export class DrawList {
-  /** The numbers, in the layout above. */
-  buf: number[] = [];
+  // The numbers, in the layout above, written straight into f32 storage: the
+  // 3DS host takes the floats as they are (a JS number[] cost 2.8 ms a frame
+  // to convert there). Grown by doubling, never shrunk.
+  private f = new Float32Array(16384);
+  private n = 0;
   // the state last written, so OP_STATE goes out only on a change
   private blend = -1;
   private effect = -1;
   private params: number[] = [];
+  private paramsRef: number[] | undefined;
   private scissor: [number, number, number, number] = [-2, -2, -2, -2];
 
+  /** The list so far (a view: valid until the next write after a reset). */
+  get buf(): Float32Array {
+    return this.f.subarray(0, this.n);
+  }
+  get length(): number {
+    return this.n;
+  }
+
+  private room(k: number): void {
+    if (this.n + k <= this.f.length) return;
+    let cap = this.f.length * 2;
+    while (cap < this.n + k) cap *= 2;
+    const g = new Float32Array(cap);
+    g.set(this.f.subarray(0, this.n));
+    this.f = g;
+  }
+
   reset(): void {
-    this.buf.length = 0;
+    this.n = 0;
     this.blend = -1;
     this.effect = -1;
     this.params = [];
+    this.paramsRef = undefined;
     this.scissor = [-2, -2, -2, -2];
   }
 
   target(canvasId: number): void {
-    this.buf.push(OP_TARGET, canvasId);
+    this.room(2);
+    this.f[this.n++] = OP_TARGET;
+    this.f[this.n++] = canvasId;
     // a new target starts from unknown state on the host
     this.blend = -1;
   }
 
   clear(r: number, g: number, b: number, a: number): void {
-    this.buf.push(OP_CLEAR, r, g, b, a);
+    this.room(5);
+    const f = this.f;
+    let n = this.n;
+    f[n++] = OP_CLEAR; f[n++] = r; f[n++] = g; f[n++] = b; f[n++] = a;
+    this.n = n;
   }
 
   state(blend: number, effect: number, params: number[], scissor: [number, number, number, number] | undefined): void {
-    const sc = scissor ?? [-1, -1, -1, -1];
+    const sc = scissor ?? NO_SCISSOR;
     if (blend === this.blend && effect === this.effect && sc[0] === this.scissor[0] && sc[1] === this.scissor[1]
-        && sc[2] === this.scissor[2] && sc[3] === this.scissor[3] && sameParams(params, this.params)) return;
+        && sc[2] === this.scissor[2] && sc[3] === this.scissor[3]
+        && (params === this.paramsRef || sameParams(params, this.params))) return;
     this.blend = blend;
     this.effect = effect;
     this.params = params.slice();
+    this.paramsRef = params;
     this.scissor = [sc[0], sc[1], sc[2], sc[3]];
-    this.buf.push(OP_STATE, blend, effect, Math.min(params.length, STATE_PARAMS));
-    for (let i = 0; i < STATE_PARAMS; i++) this.buf.push(params[i] ?? 0);
-    this.buf.push(sc[0], sc[1], sc[2], sc[3]);
+    this.room(4 + STATE_PARAMS + 4);
+    const f = this.f;
+    let n = this.n;
+    f[n++] = OP_STATE; f[n++] = blend; f[n++] = effect; f[n++] = Math.min(params.length, STATE_PARAMS);
+    for (let i = 0; i < STATE_PARAMS; i++) f[n++] = params[i] ?? 0;
+    f[n++] = sc[0]; f[n++] = sc[1]; f[n++] = sc[2]; f[n++] = sc[3];
+    this.n = n;
   }
 
   quad(tex: number, c: number[], u0: number, v0: number, u1: number, v1: number,
     r: number, g: number, b: number, a: number): void {
-    this.buf.push(OP_QUAD, tex, c[0]!, c[1]!, c[2]!, c[3]!, c[4]!, c[5]!, c[6]!, c[7]!, u0, v0, u1, v1, r, g, b, a);
+    this.room(18);
+    const f = this.f;
+    let n = this.n;
+    f[n++] = OP_QUAD; f[n++] = tex;
+    f[n++] = c[0]!; f[n++] = c[1]!; f[n++] = c[2]!; f[n++] = c[3]!;
+    f[n++] = c[4]!; f[n++] = c[5]!; f[n++] = c[6]!; f[n++] = c[7]!;
+    f[n++] = u0; f[n++] = v0; f[n++] = u1; f[n++] = v1;
+    f[n++] = r; f[n++] = g; f[n++] = b; f[n++] = a;
+    this.n = n;
   }
 
   tris(points: number[], r: number, g: number, b: number, a: number): void {
-    const n = Math.floor(points.length / 6);
-    if (n === 0) return;
-    this.buf.push(OP_TRIS, n, r, g, b, a);
-    for (let i = 0; i < n * 6; i++) this.buf.push(points[i]!);
+    const k = Math.floor(points.length / 6);
+    if (k === 0) return;
+    this.room(6 + k * 6);
+    const f = this.f;
+    let n = this.n;
+    f[n++] = OP_TRIS; f[n++] = k; f[n++] = r; f[n++] = g; f[n++] = b; f[n++] = a;
+    for (let i = 0; i < k * 6; i++) f[n++] = points[i]!;
+    this.n = n;
   }
 }
+
+const NO_SCISSOR: [number, number, number, number] = [-1, -1, -1, -1];
 
 function sameParams(a: number[], b: number[]): boolean {
   if (a.length !== b.length) return false;

@@ -23,7 +23,9 @@ export class Rasterizer {
     this.frame = { w, h, px: new Uint8Array(w * h * 4), repeat: false };
   }
 
-  run(buf: number[]): void {
+  run(list: ArrayLike<number>): void {
+    // desktop only: plain numbers are simplest to slice
+    const buf: number[] = Array.from(list);
     let target = this.frame;
     let blend = BLEND_ALPHA, effect = 0;
     let params: number[] = [];
@@ -113,15 +115,28 @@ export class Rasterizer {
   private tri(t: Tex, p: number[], col: Rgba, blend: number, effect: number, params: number[], sc: number[] | undefined): void {
     const [x0, y0, x1, y1] = this.bounds(t, [p[0]!, p[2]!, p[4]!], [p[1]!, p[3]!, p[5]!], sc);
     const fx = effectById(effect);
-    const area = (p[2]! - p[0]!) * (p[5]! - p[1]!) - (p[4]! - p[0]!) * (p[3]! - p[1]!);
+    // wind the triangle one way (edge functions positive inside), then fill
+    // by the top-left rule as the GPU does: a pixel centre exactly on an edge
+    // belongs to the triangle only if that edge is a top or a left edge, so
+    // two triangles sharing an edge (a rectangle's diagonal) never both draw it
+    let ax = p[0]!, ay = p[1]!, bx = p[2]!, by = p[3]!, cx = p[4]!, cy = p[5]!;
+    let area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
     if (area === 0) return;
+    if (area < 0) { [bx, by, cx, cy] = [cx, cy, bx, by]; area = -area; }
+    const edge = (ex0: number, ey0: number, ex1: number, ey1: number, px: number, py: number) =>
+      (ex1 - ex0) * (py - ey0) - (ey1 - ey0) * (px - ex0);
+    const topLeft = (ex0: number, ey0: number, ex1: number, ey1: number) => {
+      const dy = ey1 - ey0, dx = ex1 - ex0;
+      return dy < 0 || (dy === 0 && dx > 0);
+    };
+    const tl0 = topLeft(bx, by, cx, cy), tl1 = topLeft(cx, cy, ax, ay), tl2 = topLeft(ax, ay, bx, by);
     for (let y = y0; y < y1; y++) {
       for (let x = x0; x < x1; x++) {
-        const cx = x + 0.5, cy = y + 0.5;
-        const w0 = (p[2]! - cx) * (p[5]! - cy) - (p[4]! - cx) * (p[3]! - cy);
-        const w1 = (p[4]! - cx) * (p[1]! - cy) - (p[0]! - cx) * (p[5]! - cy);
-        const w2 = (p[0]! - cx) * (p[3]! - cy) - (p[2]! - cx) * (p[1]! - cy);
-        const inside = area > 0 ? w0 >= 0 && w1 >= 0 && w2 >= 0 : w0 <= 0 && w1 <= 0 && w2 <= 0;
+        const qx = x + 0.5, qy = y + 0.5;
+        const w0 = edge(bx, by, cx, cy, qx, qy);
+        const w1 = edge(cx, cy, ax, ay, qx, qy);
+        const w2 = edge(ax, ay, bx, by, qx, qy);
+        const inside = (w0 > 0 || (w0 === 0 && tl0)) && (w1 > 0 || (w1 === 0 && tl1)) && (w2 > 0 || (w2 === 0 && tl2));
         if (!inside) continue;
         const out = fx ? fx.pixel([1, 1, 1, 1], col, 0, 0, x, y, params, { u: {} }) : col;
         if (out) blendPx(t, x, y, out, blend);

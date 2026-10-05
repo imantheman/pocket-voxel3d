@@ -37,8 +37,8 @@ export class DesktopHost implements G3Host {
     this.raster.tex.set(id, { w, h, px: new Uint8Array(w * h * 4), repeat: false });
   }
   texFree(id: number): void { this.raster.tex.delete(id); }
-  draw(list: number[]): void {
-    this.lastList = list.slice();
+  draw(list: Float32Array): void {
+    this.lastList = Array.from(list);
     this.raster.run(list);
     this.frames++;
   }

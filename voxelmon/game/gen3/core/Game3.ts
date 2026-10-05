@@ -146,6 +146,8 @@ import { EasyChat as SR46 } from "../ui/easy_chat.ts";
 import { Dive as SR47 } from "./dive.ts";
 import { RotatingGate as SR48 } from "./rotating_gate.ts";
 import { Fade as SR49 } from "../ui/fade.ts";
+// every lazily-required module that has a port registers itself in G3Lazy
+import "./lazy_modules.ts";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
