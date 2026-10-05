@@ -108,6 +108,8 @@ GLYPHS = {
     "S": [".####", "#....", "#....", ".###.", "....#", "....#", "####."],
     "I": ["#####", "..#..", "..#..", "..#..", "..#..", "..#..", "#####"],
     "A": [".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
+    "F": ["#####", "#....", "#....", "####.", "#....", "#....", "#...."],
+    "N": ["#...#", "##..#", "#.#.#", "#.#.#", "#..##", "#...#", "#...#"],
     " ": [".....", ".....", ".....", ".....", ".....", ".....", "....."],
 }
 GW, GH = 5, 7
@@ -169,7 +171,7 @@ def draw_cube(c, cx, cy, size, yaw, pitch, rgb, width=1.4, fade_back=True):
 
 RED = (228, 42, 46)
 DIM_RED = (110, 24, 28)
-# Which game the art is for: `python3 tools/3ds_art.py OUTDIR [red|blue|yellow|gold|silver|crystal]`.
+# Which game the art is for: `python3 tools/3ds_art.py OUTDIR [red|blue|yellow|gold|silver|crystal|firered|leafgreen]`.
 GAME = sys.argv[2] if len(sys.argv) > 2 else "red"
 
 
@@ -194,6 +196,13 @@ def tint(rgb):
         # an icy cyan of the same brightness: the gem rather than the metals
         v = rgb[0]
         return (int(v * 0.42), int(v * 0.86), min(255, int(v * 1.04)))
+    if GAME == "firered":
+        # a hot orange-red: the flame rather than Red's plain red
+        return (min(255, int(rgb[0] * 1.04)), int(rgb[0] * 0.40), rgb[2] // 4)
+    if GAME == "leafgreen":
+        # a fresh leaf green of the same brightness
+        v = rgb[0]
+        return (int(v * 0.36), int(v * 0.80), int(v * 0.30))
     return rgb
 WHITE = (238, 238, 244)
 CARD = (8, 8, 12)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the installable 3DS title (.cia) from the release ELF.
 #
-#   bash tools/make_cia.sh [OUTPUT.cia] [red|blue|yellow|gold|silver|crystal]
+#   bash tools/make_cia.sh [OUTPUT.cia] [red|blue|yellow|gold|silver|crystal|firered|leafgreen]
 #
 # Red and Blue are two titles, side by side on the HOME menu: their own
 # title ID, name, icon and banner (Blue's art is Red's with every red made
@@ -53,7 +53,17 @@ case "$GAME" in
     LABEL=Crystal; UNIQUE=0xff3d5; PCODE=CTR-P-PVXC
     ELF=crates/pocketvoxel-3ds/target-crystal/armv6k-nintendo-3ds/release/pocketvoxel-3ds.elf
     WORK=dist/voxelmon/cia-crystal ;;
-  *) echo "make_cia: unknown game '$GAME' (red, blue, yellow, gold, silver or crystal)"; exit 1 ;;
+  # FireRed: Gen 3 (the GPLv3 edition), its own pak set (paks_firered/), data and save
+  firered)
+    LABEL=FireRed; UNIQUE=0xff3d6; PCODE=CTR-P-PVXF
+    ELF=crates/pocketvoxel-3ds/target-firered/armv6k-nintendo-3ds/release/pocketvoxel-3ds.elf
+    WORK=dist/voxelmon/cia-firered ;;
+  # LeafGreen: Gen 3, sharing FireRed's pak set as Blue shares Red's
+  leafgreen)
+    LABEL=LeafGreen; UNIQUE=0xff3d7; PCODE=CTR-P-PVXN
+    ELF=crates/pocketvoxel-3ds/target-leafgreen/armv6k-nintendo-3ds/release/pocketvoxel-3ds.elf
+    WORK=dist/voxelmon/cia-leafgreen ;;
+  *) echo "make_cia: unknown game '$GAME' (red, blue, yellow, gold, silver, crystal, firered or leafgreen)"; exit 1 ;;
 esac
 OUT=${1:-dist/voxelmon/PocketVoxel3D$LABEL.cia}
 
