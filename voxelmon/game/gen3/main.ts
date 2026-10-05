@@ -18,6 +18,12 @@
 //   hosttest  the old host test card (hosttest.ts), one picture per frame;
 //             frame HOSTTEST_SHOT_FRAME goes to sdmc:/3ds/voxelmon/firered/g3shot_0.ppm.
 // (worldbench.ts is a separate entry: the world without the runtime.)
+//
+// BUNDLE IT AS AN IIFE (bun build --format iife, as cc_build_firered.sh
+// does). The host evaluates the bundle as a global script, where every
+// module's top-level function would become a global, and setFrame's
+// globalThis.frame would replace the title screen's `frame` (the title then
+// re-ran the whole game tick each step: a black screen at 1 fps).
 
 // FIRST: the host and the sound, before any runtime module is evaluated.
 import { clock, drawProf, nativeProf, readProf } from "./platform/qjs_host.ts";
