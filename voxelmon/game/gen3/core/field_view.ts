@@ -1257,6 +1257,9 @@ function releaseVoidFrom(from: VoidFrom | undefined): void {
   }
 }
 
+/** drawNativeTiles' last fill completed (its skip, below). */
+let nativeFillDone = false;
+
 // Lua: field_view.lua:953
 /**
  * Mark one cell of the drawn map's layout for re-sampling on the next draw
@@ -1616,14 +1619,21 @@ function drawNativeTiles(mapDef: any, camX: number, camY: number, canvasW: numbe
 
   FieldView._nativeSwap = false;
   FieldView._nativeResetting = !!reset;
-  if (!fill()) {
-    // An atlas was reloaded while its cells were live: rebuild everything
-    // this frame rather than swap the batch under their sprite indices.
-    FieldView._nativeSwap = false;
-    reset = true;
-    resetNative();
-    FieldView._nativeResetting = true;
-    fill();
+  // NOT FAITHFUL (performance, same picture): standing still, with nothing
+  // reset or invalidated since a fill that completed, the fill would only
+  // find every cell in place and re-mark the pairs it marked last time
+  // (visiblePairs is cleared only on a move or a reset); it is skipped.
+  if (reset || moved || dirtyCells || !nativeFillDone) {
+    nativeFillDone = fill();
+    if (!nativeFillDone) {
+      // An atlas was reloaded while its cells were live: rebuild everything
+      // this frame rather than swap the batch under their sprite indices.
+      FieldView._nativeSwap = false;
+      reset = true;
+      resetNative();
+      FieldView._nativeResetting = true;
+      nativeFillDone = fill();
+    }
   }
   FieldView._nativeResetting = false;
   FieldView._nativeSwap = false;
