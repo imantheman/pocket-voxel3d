@@ -195,8 +195,8 @@ function composeGfWindow(text: Image | null | undefined, logo: Image | null | un
 // Lua: intro_movie.lua:264
 function createSprite(_self: IntroMovie, tmpl: any, x: number, y: number, sub: number): Sprite | null {
   const [id, spr] = Oam.createSprite(tmpl, x, y, sub);
-  if (!truthy(spr)) return null;
-  spr._id = id;
+  if (spr == null) return null;
+  spr._id = id!;
   spr.palSlot = Pal.objSlot(tmpl.palSlot ?? 0);
   spr.objBlend = tmpl.objBlend;
   if (truthy(tmpl.double)) {
@@ -460,7 +460,7 @@ function Scene3_Task_GengarEnter(self: IntroMovie, t: Task): void {
   d.moves = (d.moves ?? 0) + 1;
   if (d.moves >= 40 && d.speed > 16) d.speed = d.speed - 16;
   Bg.changeBgX(BG_SCENE3_GENGAR, d.speed, Bg.COORD_ADD);
-  const scroll = Bg.get(BG_SCENE3_GENGAR).scrollX * 256;
+  const scroll = Bg.get(BG_SCENE3_GENGAR)!.scrollX * 256;
   if (scroll >= 0x8000) self.win0 = null;
   if (scroll >= 0xEF00) {
     Bg.changeBgX(BG_SCENE3_GENGAR, 0xEF00, Bg.COORD_SET);
@@ -1542,7 +1542,7 @@ export class IntroMovie {
         if (b != null) b.data.paused = true;
         p.gengarAttackLanded = false;
         const t = self.createTask(Scene3_Task_GengarAttack, 4);
-        t.data = { state: 0, sinIdx: 64, baseX: Bg.get(BG_SCENE3_GENGAR).scrollX * 256 };
+        t.data = { state: 0, sinIdx: 64, baseX: Bg.get(BG_SCENE3_GENGAR)!.scrollX * 256 };
         p.timer = 0;
         p.state = 4;
       }
@@ -1707,7 +1707,7 @@ export class IntroMovie {
     const bld = this.bld;
     const alpha = this.bldAlpha ?? { eva: 0, evb: 16 };
     for (let bg = 0; bg <= 3; bg++) {
-      const L = Bg.get(bg);
+      const L = Bg.get(bg)!;
       const slot = this.bgPal[bg];
       const fx = slot != null ? pal.fx(slot) : null;
       L.fx = truthy(fx) ? fx : null;
@@ -1716,7 +1716,7 @@ export class IntroMovie {
     }
     const objClip = this.bgClip("obj");
     for (let i = 0; i <= Oam.MAX_SPRITES - 1; i++) {
-      const s = Oam._sprites[i];
+      const s = Oam._sprites![i]!;
       if (truthy(s.inUse)) {
         const fx = truthy(s.palSlot) ? pal.fx(s.palSlot) : null;
         s.fx = truthy(fx) ? fx : null;

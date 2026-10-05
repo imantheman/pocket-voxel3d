@@ -2274,7 +2274,8 @@ Field.setMetatile = function (xIn: any, yIn: any, metatile: any, isImpassableIn?
     }
     // applyOverride already invalidated the view cell (FieldView.invalidateLayoutCell).
     // package.loaded["src.core.game3.field_view"] / ["src.core.game3.layout_native"]
-    if (FieldView && !(FieldView.invalidateLayoutCell && LayoutNative
+    // Brian tests that the function exists (field.lua:2179); it is not a call.
+    if (FieldView && !(FieldView.invalidateLayoutCell != null && LayoutNative
         && layout.applyOverride === LayoutNative.prototype.applyOverride)) {
       FieldView._nativeDirty = true;
     }

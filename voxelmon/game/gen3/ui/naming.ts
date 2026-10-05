@@ -464,10 +464,12 @@ function drawPlayerIcon(st: NamingState): void {
   const spr = OwSprites.get(gid);
   if (spr && spr.image) {
     const tick = mod(Math.floor((st.blink ?? 0) * 60 / 8), 4);
+    // pose returns (frame, flip); Brian keeps only the frame (facing "down"
+    // never flips).
     const frame = OwSprites.pose(spr, "down", false, false, {
       frame: PLAYER_FRAMES[tick + 1] ?? 0,
-    });
-    const q = spr.quads[frame];
+    })[0];
+    const q = spr.quads![frame];
     if (q) {
       const ox = tlX + (L.iconW - spr.width) / 2;
       const oy = tlY + (L.iconH - spr.height);

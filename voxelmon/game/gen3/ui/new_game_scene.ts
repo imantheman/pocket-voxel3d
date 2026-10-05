@@ -320,8 +320,8 @@ function destroyTask(t: Task | null | undefined): void {
 // Lua: new_game_scene.lua:346
 function createSprite(_self: Scene, tmpl: any, x: number, y: number, sub: number): any {
   const [id, spr] = Oam.createSprite(tmpl, x, y, sub);
-  if (!truthy(spr)) return null;
-  spr._id = id;
+  if (spr == null) return null;
+  spr._id = id!;
   spr.palSlot = Pal.objSlot(tmpl.palSlot ?? 0);
   spr.objBlend = tmpl.objBlend;
   spr.coordOffset = tmpl.coordOffset;
@@ -820,7 +820,7 @@ export class Scene {
   // Lua: new_game_scene.lua:596
   ballOpen(ball: any, mask: number): void {
     Oam.startAnim(ball, 1);
-    BallOpen.startParticles(ball.x, ball.y);
+    BallOpen.startParticles(ball.x, ball.y, undefined); // Brian passes no ball item (nil)
     this.launchBallFadeMon(mask);
   }
 
@@ -1905,7 +1905,7 @@ export class Scene {
     const blend = this.bld && this.bld.pic ? this.bldAlpha : null;
     const pikaBlend = this.bld && this.bld.bg0 ? this.bldAlpha : null;
     for (let i = 0; i <= Oam.MAX_SPRITES - 1; i++) {
-      const s = Oam._sprites[i];
+      const s = Oam._sprites![i]!;
       if (truthy(s.inUse)) {
         let fx: any = null;
         if (s.palSlot != null) fx = this.pal.fx(s.palSlot);

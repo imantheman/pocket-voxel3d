@@ -204,7 +204,8 @@ function continueInfoFromSave(save: any): any {
   const n = Dex.summaryCount(save);
   const name = tostring(lor(lor(save.name, save.playerName), ""));
   const forVersion = typeof save.version === "string" ? Flags.forVersion(save.version) : null;
-  const ids = lor(forVersion, Flags).IDS;
+  // forVersion is a table (truthy) or null, so `??` is Lua's `or` here.
+  const ids = (forVersion ?? Flags).IDS;
   return {
     name: FrlgFont.truncate(name, 7),
     gender: tonumber(save.gender) ?? 0,

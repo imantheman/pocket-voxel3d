@@ -67,11 +67,11 @@ describe("gen3 display cores: pure logic", () => {
     const seen: unknown[] = [];
     for (let f = 0; f < 6; f++) { Oam.animateSprite(a!); seen.push(a!.quad); }
     expect(seen).toEqual(["q0", "q0", "q4", "q0", "q0", "q4"]);
-    const [, e] = Oam.createSprite({ anims: [seq({ img: 8, dur: 1 }, "end")], animQuads: quads }, 0, 0);
+    const [, e] = Oam.createSprite({ anims: [seq<unknown>({ img: 8, dur: 1 }, "end")], animQuads: quads }, 0, 0);
     Oam.animateSprite(e!); Oam.animateSprite(e!);
     expect(e!.animEnded).toBe(true);
     // affine zoom anim: scale accumulates per frame
-    Oam.startAffineAnim(e!, seq({ v: 256, dur: 0 }, { v: 32, dur: 2 }, "end"));
+    Oam.startAffineAnim(e!, seq<unknown>({ v: 256, dur: 0 }, { v: 32, dur: 2 }, "end"));
     Oam.animateSprite(e!);
     expect(e!.affineScale).toBe(1);
     Oam.animateSprite(e!);

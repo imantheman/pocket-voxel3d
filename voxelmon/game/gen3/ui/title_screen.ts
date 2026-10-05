@@ -790,32 +790,32 @@ function applyFx(T: TitleState): void {
   const pal = T.pal;
   const slot = FX_SLOT;
   for (let bg = 0; bg <= 3; bg++) {
-    const L = Bg.get(bg);
+    const L = Bg.get(bg)!;
     L.fx = pal.fx(slot[bg]);
     L.clip = null;
     L.offsetX = 0;
   }
-  const L = Bg.get(BG_COPYRIGHT);
+  const L = Bg.get(BG_COPYRIGHT)!;
   L.image = T.pressStartHidden ? T.copyNoPress : T.copyWithPress;
   if (T.band != null && !T.bandStop) {
-    const mon = Bg.get(BG_MON);
+    const mon = Bg.get(BG_MON)!;
     mon.fx = pal.fx(PAL_MON, { band: T.band }) || { band: T.band };
   }
   const s = T.slash;
   if (T.slashWin && s && s.inUse && !s.invisible && T.slashImage) {
-    const logo = Bg.get(BG_LOGO);
+    const logo = Bg.get(BG_LOGO)!;
     logo.fx = pal.fx(0, { objWin: { image: T.slashImage, x: s.x - 32, y: s.y - 32, w: 64, h: 64, bldy: 13 } });
   }
   const w = T.win0;
   if (w && w.mode === "border") {
-    Bg.get(BG_BORDER).clip = { x: 0, y: 0, w: w.x, h: Display.H };
+    Bg.get(BG_BORDER)!.clip = { x: 0, y: 0, w: w.x, h: Display.H };
   } else if (w && w.mode === "copyright") {
-    const c = Bg.get(BG_COPYRIGHT);
+    const c = Bg.get(BG_COPYRIGHT)!;
     c.clip = { x: w.x, y: 0, w: Display.W - w.x, h: Display.H };
     c.offsetX = w.x;
   }
   for (let i = 0; i <= Oam.MAX_SPRITES - 1; i++) {
-    const spr = Oam._sprites[i];
+    const spr = Oam._sprites![i]!;
     if (spr.inUse && spr.palSlot != null) spr.fx = pal.fx(spr.palSlot);
   }
 }

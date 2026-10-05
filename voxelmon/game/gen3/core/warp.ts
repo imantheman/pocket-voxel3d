@@ -483,7 +483,7 @@ function startEscalator(mod: any, game: any, destMap: MapId, destX: number, dest
 function exitStairsArrival(game: any, destX: number, destY: number, fromMode: number, finish: Done): void {
   const destBeh = Collision.behavior(destX, destY);
   const facing = Collision.stairArrivalFacing(destBeh);
-  if (truthy(facing)) {
+  if (facing != null) {
     Player.facing = facing;
     Player.syncSavePosition(game);
   }

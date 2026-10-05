@@ -237,8 +237,7 @@ function adapter_for(st: any, opts?: AiOpts | null): any {
   if (truthy(ad) && ad._st === st) return ad;
   ad = ad_cache.get(st);
   if (!truthy(ad)) {
-    // (Adapter as any): AdapterModule declares `new(...)` as a construct signature
-    ad = (Adapter as any).new(st, function () { /* no say */ });
+    ad = Adapter.new(st, function () { /* no say */ });
     ad_cache.set(st, ad);
   }
   return ad;

@@ -232,19 +232,15 @@ describe.skipIf(!existsSync(ROOT))("gen3 rt data: save schema round trip", () =>
     expect(out.options).toBeDefined();
     expect(out.party[1].species).toBe(4);
     const save = clone(out);
-    let back: Record<string, any> | undefined;
-    try {
-      back = Schema.fromSaveTable(save);
-    } catch (e) {
-      // scripting/flags (Overworld_ResetStateOnContinue) is not ported yet
-      expect(e).toBeInstanceOf(NotPortedError);
-      expect((e as NotPortedError).what).toMatch(/^Flags\./);
-    }
-    if (back) {
-      expect(back).toMatchObject({ name: "RED", money: 3000, map: "FR_PALLET_TOWN", x: 5, y: 6, trainerId: 4321 });
-      expect(back.party[1]).toMatchObject({ species: 4, level: 7, pokeball: 4, otSecretId: 999, metLocation: 88 });
-      expect(Schema.toSaveTable(back)!.party).toEqual(out.party);
-    }
+    const back = Schema.fromSaveTable(save)!;
+    expect(back).toMatchObject({ name: "RED", money: 3000, map: "FR_PALLET_TOWN", x: 5, y: 6, trainerId: 4321 });
+    expect(back.party[1]).toMatchObject({ species: 4, level: 7, pokeball: 4, otSecretId: 999, metLocation: 88 });
+    // fromSaveTable fills the mon's missing ball / OT secret id / met location
+    // (save_schema_firered.lua), so the second save has those 3 fields more.
+    // Brian's Lua does the same (checked by running save_schema_firered.lua
+    // under luajit on this session through toSaveTable/fromSaveTable/toSaveTable).
+    const again = Schema.toSaveTable(back)!.party;
+    expect(again).toEqual([null, { ...out.party[1], pokeball: 4, otSecretId: 999, metLocation: 88 }]);
   });
 });
 }
@@ -404,7 +400,7 @@ describe.skipIf(!existsSync(root))("gen3 rt data A: pokemon", () => {
     expect(Pokemon.displayName({ species: 6, nickname: "ZARD" })).toBe("ZARD");
     expect(Pokemon.displayMonName({ species: 25 })).toBe("PIKACHU");
     expect(Pokemon.savedName({ species: 25, name: "X" })).toBe("X");
-    expect(() => Pokemon.displayName({ species: 412 })).toThrow(NotPortedError); // Space.ensureBundle
+    expect(Pokemon.displayName({ species: 412 })).toBe("EGG"); // gText_EggNickname
   });
 
   test("onReload hooks run on install", () => {
@@ -434,7 +430,8 @@ describe.skipIf(!existsSync(root))("gen3 rt data A: rom_text / map_ids / trainer
     expect(RomText.sources(ir)[1].source).toBe("HELLO");
     expect(RomText.lazy({ hi: "T_TEST" }).hi).toBe("HELLO");
     delete RomText.overrides["T_TEST"];
-    expect(() => RomText.ir("gText_EggNickname")).toThrow(NotPortedError); // Space.ensureBundle
+    expect(RomText.has("gText_EggNickname")).toBe(true);
+    expect(RomText.plain("gText_EggNickname")).toBe("EGG");
   });
 
   test("map_ids", () => {
@@ -625,8 +622,8 @@ describe.skipIf(!existsSync(root))("gen3 data+save B: items, bag, storage, party
     expect(Storage.countTotalMons(st)).toBe(30);
 
     const session: any = { storage: st, party: seq({ species: 4, hp: 1, maxHp: 20 }, { species: 7, hp: 0, maxHp: 22, status: 1 }) };
-    // deposit: mutates, then the quest log (stub) throws
-    expect(() => Storage.deposit(session, 2, 1)).toThrow(NotPortedError);
+    // deposit returns (true, box, slot)
+    expect(Storage.deposit(session, 2, 1)).toEqual([true, 1, 1]);
     expect(len(session.party)).toBe(1);
     const dep = Storage.getBoxMon(st, 1, 1);
     expect(dep.species).toBe(7);
@@ -661,7 +658,7 @@ describe.skipIf(!existsSync(root))("gen3 data+save B: items, bag, storage, party
   test("storage withdrawItem moves to the bag", () => {
     const session: any = { bag: Bag.new() };
     Storage.ensure(session);
-    expect(() => Storage.withdrawItem(session, 1, 1)).toThrow(NotPortedError); // quest log stub, after the bag add
+    expect(Storage.withdrawItem(session, 1, 1)).toEqual([true]);
     expect(Bag.get(session.bag, 13)).toBe(1);
   });
 
@@ -829,7 +826,8 @@ describe.skipIf(!existsSync(root))("gen3 rt data C (FireRed cache)", () => {
     expect(total).toBeGreaterThan(20);
 
     // a dex without the National Dex flag falls through to Runtime.getSession()
-    expect(() => PokedexData.getOrderList("numerical_kanto", d)).toThrow(NotPortedError);
+    // (none here: national locked); every species seen here is Kanto anyway
+    expect(toArray(PokedexData.getOrderList("numerical_kanto", d))).toEqual(Array.from({ length: 33 }, (_, i) => i + 1));
     d.nationalUnlocked = true; // every species seen here is Kanto: same lists
     expect(toArray(PokedexData.getOrderList("numerical_kanto", d))).toEqual(Array.from({ length: 33 }, (_, i) => i + 1));
     // atoz: alphabetical, only seen (national numbers -> internal ids)
@@ -851,9 +849,23 @@ describe.skipIf(!existsSync(root))("gen3 rt data C (FireRed cache)", () => {
     expect(PokedexData.isNationalUnlocked({ save: { national_dex_unlocked: true } })).toBe(true);
   });
 
-  test("pokedex_data: getEntry reaches RomText (scripting.space still a stub)", () => {
-    // gText_Lbs comes through rom_text -> Space.ensureBundle (not ported)
-    expect(() => PokedexData.getEntry(1)).toThrow(NotPortedError);
+  test("pokedex_data: getEntry (units and category text from RomText)", () => {
+    // entries.lua [1]: height 7 dm, weight 69 hg, description2 "" (falls back)
+    const desc = "There is a plant seed on its back right\nfrom the day this POK\xC3\xA9MON is born.\nThe seed slowly grows larger.";
+    expect(PokedexData.getEntry(1)).toEqual({
+      category: "SEED",
+      categoryName: "SEED POK\xC3\xA9MON", // .. gText_PokedexPokemon
+      heightDm: 7,
+      weightHg: 69,
+      heightFormatted: " 2'04\"",
+      weightFormatted: "  15.2 lbs.", // .. gText_Lbs
+      description: desc,
+      description2: desc,
+      pokemonScale: 356,
+      pokemonOffset: 16,
+      trainerScale: 256,
+      trainerOffset: -2,
+    });
   });
 
   // ---------------------------------------------------------------- evolution
@@ -981,8 +993,8 @@ describe.skipIf(!existsSync(root))("gen3 rt data C (FireRed cache)", () => {
     expect(SummaryData.eggCycles(undefined)).toBe(40);
   });
 
-  test("summary_data: descriptions; ROM text sits behind scripting.space", () => {
-    expect(() => SummaryData.nature({ personality: 26 })).toThrow(NotPortedError); // rom_text -> space
+  test("summary_data: nature and descriptions", () => {
+    expect(SummaryData.nature({ personality: 26 })).toEqual([1, "LONELY"]); // 26 % 25
     expect(SummaryData.moveDescription(1, "POUND")).toBe("A physical attack\ndelivered with a\nlong tail or a\nforeleg, etc.");
     // the ROM's own name for the id wins over the shown one (translation mods)
     expect(SummaryData.moveDescription(1, "NO SUCH MOVE")).toBe(SummaryData.moveDescription(1, "POUND"));
@@ -1391,9 +1403,13 @@ describe("battle_bridge (pure parts)", () => {
     expect(BattleBridge.applyLeagueFriendship(undefined, seq(), {}, {})).toBe(false);
   });
 
-  test("money loss reaches unported neighbours", () => {
-    expect(() => BattleBridge.calcMoneyLossFrlg({ party: seq() }, undefined)).toThrow(NotPortedError);
-    expect(() => BattleBridge.applyWhiteoutMoneyLoss({ money: 1000 })).toThrow(NotPortedError);
+  test("money loss (FRLG: top level * 4 * badge multiplier)", () => {
+    // empty party: maxLv 1; no badges: BADGE_LOSS_MULT[1] = 2
+    expect(BattleBridge.calcMoneyLossFrlg({ party: seq() }, undefined)).toBe(8);
+    const s: any = { money: 1000 };
+    // battle/profile.lua: FRLG rules.whiteout = "frlg" -> applyFrlgMoneyLoss: (loss, money)
+    expect(BattleBridge.applyWhiteoutMoneyLoss(s)).toEqual([8, 992]);
+    expect(s.money).toBe(992);
   });
 
   test("reset / finishPending run a pending finish once", () => {
@@ -1407,8 +1423,8 @@ describe("battle_bridge (pure parts)", () => {
     expect(BattleBridge._remap).toBeUndefined();
   });
 
-  test("start needs the runtime session (unported)", () => {
-    expect(() => BattleBridge.start(undefined, {}, {}, {})).toThrow(NotPortedError);
+  test("start without a runtime session", () => {
+    expect(BattleBridge.start(undefined, {}, {}, {})).toEqual([null, "no session"]);
   });
 });
 }
