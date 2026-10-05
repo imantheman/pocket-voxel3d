@@ -64,28 +64,28 @@ export const WirelessIcon = {
 
   connectState,
 
-  // Lua: wireless_icon.lua:61
+  // Lua: wireless_icon.lua:59
   setVisible(visible: unknown): void {
     WirelessIcon._visible = !!visible;
   },
 
-  // Lua: wireless_icon.lua:65
+  // Lua: wireless_icon.lua:63
   isVisible(): boolean {
     return WirelessIcon._visible;
   },
 
-  // Lua: wireless_icon.lua:69
+  // Lua: wireless_icon.lua:67
   force(anim: string | false | undefined): void {
     WirelessIcon._forced = anim;
   },
 
-  // Lua: wireless_icon.lua:73
+  // Lua: wireless_icon.lua:71
   anim(): string | undefined {
     if (WirelessIcon._forced != null) return WirelessIcon._forced || undefined;
     return WirelessIcon.STATE_ANIM[connectState()];
   },
 
-  // Lua: wireless_icon.lua:78
+  // Lua: wireless_icon.lua:76
   update(dt: unknown): void {
     WirelessIcon._acc = WirelessIcon._acc + (tonumber(dt) ?? 0) * 60;
     const whole = Math.floor(WirelessIcon._acc);
@@ -95,7 +95,7 @@ export const WirelessIcon = {
     }
   },
 
-  // Lua: wireless_icon.lua:87
+  // Lua: wireless_icon.lua:85
   frameFor(anim: string, frames: unknown): number | undefined {
     const list = WirelessIcon.ANIMS[anim];
     if (!list) return undefined;
@@ -109,7 +109,7 @@ export const WirelessIcon = {
     return list[1]![1];
   },
 
-  // Lua: wireless_icon.lua:100
+  // Lua: wireless_icon.lua:98
   frame(): number | undefined {
     const anim = WirelessIcon.anim();
     if (anim !== WirelessIcon._anim) {
@@ -121,7 +121,7 @@ export const WirelessIcon = {
   },
 
   // pokefirered/src/link_rfu_3.c:492
-  // Lua: wireless_icon.lua:111
+  // Lua: wireless_icon.lua:109
   load(): Image {
     if (WirelessIcon._image) return WirelessIcon._image;
     const cache = Dataset.cache();
@@ -150,7 +150,7 @@ export const WirelessIcon = {
     return image;
   },
 
-  // Lua: wireless_icon.lua:139
+  // Lua: wireless_icon.lua:135
   draw(cxIn?: unknown, cyIn?: unknown): boolean {
     if (!WirelessIcon._visible) return false;
     // (love.graphics and love.image are always here)
@@ -166,7 +166,7 @@ export const WirelessIcon = {
     return true;
   },
 
-  // Lua: wireless_icon.lua:154
+  // Lua: wireless_icon.lua:150
   onLinkMap(mapId: unknown): boolean {
     if (typeof mapId !== "string") return false;
     if (WirelessIcon.LINK_MAPS[mapId]) return true;
@@ -178,7 +178,7 @@ export const WirelessIcon = {
   },
 
   // pokefirered/src/overworld.c:1829
-  // Lua: wireless_icon.lua:173
+  // Lua: wireless_icon.lua:170
   drawField(): boolean {
     if (!WirelessIcon.onLinkMap(currentMap())) {
       WirelessIcon._lastTime = undefined;
@@ -194,7 +194,7 @@ export const WirelessIcon = {
     return WirelessIcon.draw(WirelessIcon.X, WirelessIcon.Y);
   },
 
-  // Lua: wireless_icon.lua:188
+  // Lua: wireless_icon.lua:186
   reset(): void {
     WirelessIcon._visible = true;
     WirelessIcon._frames = 0;
@@ -205,7 +205,7 @@ export const WirelessIcon = {
   },
 };
 
-// Lua: wireless_icon.lua:46
+// Lua: wireless_icon.lua:43
 function connectState(): string {
   // package.loaded["src.online.Connect"] / ["src.online.Client"]: online is
   // deferred, so neither is loaded unless a later port registers it
