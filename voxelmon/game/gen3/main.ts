@@ -39,9 +39,16 @@ const MODE = typeof PV_G3_MODE === "string" ? PV_G3_MODE : "game";
 // pvlog.txt too: the host files only lines that start "[pv]" (voxel.rs).
 {
   const raw = console.log;
+  // a line the runtime repeats (every frame, say) is filed 3 times, then every
+  // 1000th time with its count: each filed line is an SD write
+  const seen = new Map<string, number>();
   const fwd = (...a: unknown[]): void => {
     const s = a.map((x) => (typeof x === "string" ? x : String(x))).join(" ");
-    raw(s.startsWith("[pv]") ? s : "[pv] js: " + s);
+    if (s.startsWith("[pv]")) { raw(s); return; }
+    const k = (seen.get(s) ?? 0) + 1;
+    if (seen.size < 4096 || k > 1) seen.set(s, k);
+    if (k <= 3) raw("[pv] js: " + s);
+    else if (k % 1000 === 0) raw(`[pv] js: (x${k}) ${s}`);
   };
   console.log = fwd; console.warn = fwd; console.error = fwd;
 }

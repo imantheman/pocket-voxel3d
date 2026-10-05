@@ -69,6 +69,11 @@ typedef struct G3Tex {
     uint8_t fresh;       /* a canvas not cleared yet */
     uint32_t serial;     /* unique per allocation (CPU variant keys) */
     C3D_RenderTarget *rt;
+    /* An image taller than the GPU's 1024 (the font sheets are 256x1040)
+       is kept folded: rows fold.. sit beside rows 0..fold-1, so w x h holds
+       a lw x lh image (w = 2 lw). 0 = not folded. emit_poly maps the image's
+       u, v onto the halves. */
+    int fold, lw, lh;
 } G3Tex;
 
 static G3Tex **texs;
@@ -180,8 +185,34 @@ static void tex_sample(const G3Tex *t, float u, float v, float out[4]) {
     tex_texel(t, ix, iy, out);
 }
 
+/* An image of 1025..1536 rows and up to 512 columns, folded in two columns
+   at FOLD_ROW (a multiple of 16, so a font's glyph rows never straddle it;
+   a quad that does is cut there by emit_poly). */
+#define FOLD_ROW 512
+static G3Tex *tex_alloc_folded(int w, int h, const uint8_t *rgba) {
+    if (w <= 0 || w > 512 || h <= 1024 || h - FOLD_ROW > 1024) return NULL;
+    int pw = w * 2, ph = h - FOLD_ROW > FOLD_ROW ? h - FOLD_ROW : FOLD_ROW;
+    uint8_t *px = (uint8_t *)malloc((size_t)pw * ph * 4);
+    if (!px) return NULL;
+    for (int y = 0; y < ph; y++) {
+        /* left: rows y; right: rows FOLD_ROW + y (edge-repeated past the image) */
+        int yl = y < FOLD_ROW ? y : FOLD_ROW - 1;
+        int yr = FOLD_ROW + y < h ? FOLD_ROW + y : h - 1;
+        memcpy(px + ((size_t)y * pw) * 4, rgba + (size_t)yl * w * 4, (size_t)w * 4);
+        memcpy(px + ((size_t)y * pw + w) * 4, rgba + (size_t)yr * w * 4, (size_t)w * 4);
+    }
+    G3Tex *t = tex_alloc(pw, ph, 0, 0);
+    if (t) { tex_fill(t, px); t->fold = FOLD_ROW; t->lw = w; t->lh = h; }
+    free(px);
+    return t;
+}
+
 int g3_tex_upload(int id, int w, int h, const uint8_t *rgba, size_t len, int repeat) {
     if (!rgba || len < (size_t)w * h * 4) return 0;
+    if (h > 1024 && !repeat) {
+        G3Tex *f = tex_alloc_folded(w, h, rgba);
+        if (f) { tex_set(id, f); return 1; }
+    }
     G3Tex *t = tex_alloc(w, h, repeat, 0);
     if (!t) { g3log("texUpload %d: cannot make %dx%d", id, w, h); return 0; }
     tex_fill(t, rgba);
@@ -800,7 +831,7 @@ static G3Tex *variant(G3Tex *src, const float *col) {
         }
     }
     G3Tex *t = tex_alloc(w, h, src->repeat, 0);
-    if (t) tex_fill(t, px);
+    if (t) { tex_fill(t, px); t->fold = src->fold; t->lw = src->lw; t->lh = src->lh; }
     free(px);
     if (!t) return src;
     v->tex = t;
@@ -871,10 +902,32 @@ static void emit_fan(const PV *p, int n, float du, float dv) {
     }
 }
 
+static void emit_poly1(PV *poly, int n);
+
 /* Emit a polygon (3 or 4 vertices) clipped to the scissor and target, split
    into periods when the texture repeats without being a power of two, and
-   at the gba_fx band's kinks. */
+   at the gba_fx band's kinks. A folded texture's polygon is cut at the fold
+   row and each part's u, v moved onto its half of the allocation. */
 static void emit_poly(PV *poly, int n) {
+    if (!P_tex || !P_tex->fold) { emit_poly1(poly, n); return; }
+    const G3Tex *t = P_tex;
+    float fv = (float)t->fold / t->lh;
+    PV a[PMAX], b[PMAX];
+    int m = clip(poly, n, a, 3, fv, -1); /* the rows above the fold: the left half */
+    for (int i = 0; i < m; i++) {
+        a[i].a[2] = a[i].a[2] * t->lw / t->w;
+        a[i].a[3] = a[i].a[3] * t->lh / t->h;
+    }
+    if (m >= 3) emit_poly1(a, m);
+    m = clip(poly, n, b, 3, fv, 1);      /* the rows from the fold: the right half */
+    for (int i = 0; i < m; i++) {
+        b[i].a[2] = (b[i].a[2] * t->lw + t->lw) / t->w;
+        b[i].a[3] = (b[i].a[3] * t->lh - t->fold) / t->h;
+    }
+    if (m >= 3) emit_poly1(b, m);
+}
+
+static void emit_poly1(PV *poly, int n) {
     G3Tex *tg = S.target ? S.target : frame_tex;
     float x0 = 0, y0 = 0, x1 = (float)tg->w, y1 = (float)tg->h;
     if (S.sc_on) {
