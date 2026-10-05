@@ -17,6 +17,8 @@ pub mod audio;
 pub mod cam;
 pub mod draw;
 pub mod gb;
+#[cfg(feature = "gen3")]
+pub mod gen3;
 pub mod lcd;
 pub mod mapplan;
 pub mod math;

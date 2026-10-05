@@ -13,6 +13,10 @@ default = ["std"]
 std = []
 # Math backend for no_std targets (mutually exclusive with std in practice).
 libm = ["dep:libm"]
+# The FireRed/LeafGreen M4A sound engine (src/gen3/), a port of gen1recomp's
+# Lua under GPLv3 + additional terms (src/gen3/LICENSE.md). Only the Gen 3
+# builds turn it on, so the MIT games' binaries never contain it.
+gen3 = []
 
 [dependencies]
 libm = { version = "0.2", optional = true }
