@@ -52,6 +52,7 @@ function lor<T, U>(a: T, b: U): T | U {
 }
 
 const PHASE = {
+  CREDIT: "pv_credit", // pocket-voxel: the credit page (not in Brian's boot)
   INTRO: "intro",
   COPYRIGHT: "copyright",
   TITLE: "title",
@@ -158,7 +159,8 @@ function newBoot(game?: any): any {
   };
 
   const state = {
-    phase: Boot.PHASE.INTRO,
+    // pocket-voxel: the credit page first, then Brian's boot (INTRO)
+    phase: Boot.PHASE.CREDIT,
     timer: 0,
     blink: 0,
     menuIndex: 1,
@@ -400,6 +402,16 @@ function update(state: any, input: any, dt?: number): any {
   const down = (): any => {
     return input && input.wasPressed && input.wasPressed("down");
   };
+
+  // pocket-voxel: the credit the licence terms require, shown at every boot
+  // for CREDIT_SECONDS (A or START skips), then Brian's boot as he wrote it.
+  if (state.phase === Boot.PHASE.CREDIT) {
+    if (state.timer >= CREDIT_SECONDS || a()) {
+      state.phase = Boot.PHASE.INTRO;
+      state.timer = 0;
+    }
+    return null;
+  }
 
   if (state.phase === Boot.PHASE.INTRO) {
     if (!state.introMovie) {
@@ -653,6 +665,33 @@ function drawSaveError(state: any, W: number, H: number): void {
   G.setColor(1, 1, 1, 1);
 }
 
+// pocket-voxel: the credit page. Brian's terms require this line, word for
+// word, visibly in the game; it is ours, not part of his boot.
+const CREDIT_SECONDS = 3;
+// (the one line, wrapped to the 240 px screen in the small face)
+const CREDIT_LINES = [
+  "Based on the Pokemon Gen 1 Recompilation",
+  "Project by BOIS CLUB GAMES, LLC",
+  "(https://github.com/bryanthaboi/gen1recomp)",
+];
+const CREDIT_NOTE = ["Free software under the GNU GPL v3:", "see LICENSE.md."];
+function drawCredit(): void {
+  G.clear(0, 0, 0, 1);
+  const white = col(1, 1, 1, 1), shadow = col(98 / 255, 98 / 255, 98 / 255, 1);
+  const grey = col(213 / 255, 213 / 255, 205 / 255, 1);
+  let y = 40;
+  for (const line of CREDIT_LINES) {
+    FrlgFont.draw(line, 6, y, { small: true, maxWidth: 232, colors: { fg: white, shadow, bg: undefined } });
+    y += 15;
+  }
+  y += 14;
+  for (const line of CREDIT_NOTE) {
+    FrlgFont.draw(line, 6, y, { small: true, maxWidth: 232, colors: { fg: grey, shadow, bg: undefined } });
+    y += 15;
+  }
+  G.setColor(1, 1, 1, 1);
+}
+
 // Lua: boot.lua:599
 function draw(state: any): void {
   if (state.custom) return BootModules.draw(Boot, state);
@@ -661,6 +700,11 @@ function draw(state: any): void {
 
   if (state.phase === Boot.PHASE.INTRO && state.introMovie) {
     state.introMovie.draw();
+    return;
+  }
+
+  if (state.phase === Boot.PHASE.CREDIT) {
+    drawCredit();
     return;
   }
 
