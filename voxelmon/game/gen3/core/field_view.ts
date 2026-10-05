@@ -21,7 +21,7 @@
 //   walk the stores with for...in rather than the ipairs/pairs generators, so
 //   the frame does not allocate where Brian's does not.
 
-import { G } from "../platform/graphics.ts";
+import { G, type CapturedQuad } from "../platform/graphics.ts";
 import type { Image, Quad, SpriteBatch } from "../platform/image.ts";
 import { len, pairs, remove, sort, type LuaTable } from "../platform/lt.ts";
 import { mod, tonumber, tostring, truthy } from "../../../import/gen3/lua.ts";
@@ -91,6 +91,15 @@ export interface WorldFrame {
   px: number;
   py: number;
   mapId: any;
+  /** What the 2D field would draw in the map's places, as textured quads in
+   *  map px (G.captureBegin with the camera at 0, 0; platform/world_fx.ts):
+   *  the door animation, the effects under the actors (surf blob, tall
+   *  grass, tracks, ripples), those over them (particles, the bird, the warp
+   *  arrow), and the Pokemon Center machine's balls and monitor. */
+  doors: CapturedQuad[];
+  behind: CapturedQuad[];
+  front: CapturedQuad[];
+  heal: CapturedQuad[];
 }
 
 export interface FieldViewModule {
@@ -1928,6 +1937,81 @@ function drawFlashMask(w: number, h: number): void {
 
 const NO_OPTS: DrawOpts = {};
 
+/**
+ * pocket-voxel: FieldView.draw's frame while the 3DS host draws the field as
+ * its voxel world (DrawOpts.world3d). The actors are collected as the 2D
+ * draw collects them; the draws the field makes in the map's places (doors,
+ * field effects, the heal machine) are captured as quads in map px for the
+ * world's billboards (platform/game3_world.ts); and what the field draws on
+ * the screen itself -- the overlays (the Flash move's light, Sweet Scent,
+ * the Itemfinder, the field-move picture), the weather and the darkness of
+ * a cave before Flash -- still goes on the 2D layer, from the GBA screen's
+ * own view (the camera of a 240x160 canvas), the layer the host lays over
+ * the world's middle.
+ */
+function drawWorld3d(game: any, mapDef: any, mapId: any, camX: number, camY: number, canvasW: number, canvasH: number,
+  px: number, py: number, facing: any, walkPhase: any, stepFlip: any, playerYOff: number, playerXOff: number): void {
+  const frame: WorldFrame = FieldView._worldFrame ?? {
+    actors: [], camX: 0, camY: 0, px: 0, py: 0, mapId: undefined, doors: [], behind: [], front: [], heal: [],
+  };
+  frame.actors.length = 0;
+  if (!truthy(FieldView.hideActors)) {
+    const [under, over] = collectGame3Actors(
+      game, mapDef, camX, camY, px, py, facing, walkPhase, stepFlip, playerYOff, playerXOff);
+    for (let i = 1; under[i] != null; i++) frame.actors.push(under[i]);
+    for (let i = 1; over[i] != null; i++) frame.actors.push(over[i]);
+  }
+  frame.camX = camX + canvasW / 2;
+  frame.camY = camY + canvasH / 2;
+  frame.px = px;
+  frame.py = py;
+  frame.mapId = mapId;
+  FieldView._worldFrame = frame;
+
+  // the map's places: drawn with the camera at 0, 0, so in map px
+  const FieldEffects = modFieldEffects();
+  const Doors = modDoors();
+  const Heal = modHeal();
+  const SSAnne = modSSAnne();
+  const BIG = 1e9;
+  frame.doors.length = 0;
+  frame.behind.length = 0;
+  frame.front.length = 0;
+  frame.heal.length = 0;
+  G.push();
+  G.origin();
+  G.captureBegin(frame.doors);
+  if (Doors && Doors.draw) Doors.draw(0, 0, BIG, BIG);
+  G.captureBegin(frame.behind);
+  if (FieldEffects && FieldEffects.drawBehind) FieldEffects.drawBehind(0, 0);
+  if (SSAnne && SSAnne.drawWake) SSAnne.drawWake(0, 0);
+  G.captureBegin(frame.heal);
+  if (Heal && (Heal.drawBalls || Heal.drawMonitor)) {
+    const [sx, sy] = screenAnchor(px, py, 0, 0);
+    G.push();
+    G.translate(sx, sy);
+    if (Heal.drawBalls) Heal.drawBalls(0, 0);
+    if (Heal.drawMonitor) Heal.drawMonitor(0, 0);
+    G.pop();
+  }
+  G.captureBegin(frame.front);
+  if (FieldEffects && FieldEffects.drawFront) FieldEffects.drawFront(0, 0, py);
+  if (SSAnne && SSAnne.drawSmoke) SSAnne.drawSmoke(0, 0);
+  G.captureEnd();
+  G.pop();
+
+  // the screen: the GBA's own view of the field (FieldView.draw's camera for
+  // a Display.W x Display.H canvas)
+  const gx = camX + Math.floor((canvasW - Display.W) / 2);
+  const gy = camY + Math.floor((canvasH - Display.H) / 2);
+  const FieldWeather = modFieldWeather();
+  if (FieldWeather && FieldWeather.drawBelow) FieldWeather.drawBelow(gx, gy, Display.W, Display.H);
+  if (FieldEffects && FieldEffects.drawOverlay) FieldEffects.drawOverlay(gx, gy);
+  if (FieldWeather && FieldWeather.draw) FieldWeather.draw(gx, gy, Display.W, Display.H, undefined);
+  drawFlashMask(Display.W, Display.H);
+  G.setColor(1, 1, 1, 1);
+}
+
 // Lua: field_view.lua:1562
 FieldView.draw = function (game: any, canvasWIn?: number, canvasHIn?: number, optsIn?: DrawOpts): void {
   const canvasW = canvasWIn ?? Display.W;
@@ -2014,22 +2098,10 @@ FieldView.draw = function (game: any, canvasWIn?: number, canvasHIn?: number, op
   }
 
   // pocket-voxel seam (DrawOpts.world3d): the voxel world is the picture;
-  // hand it this frame's actors and draw nothing.
+  // hand it this frame's actors and what is drawn in the map's places, and
+  // draw only what lies on the screen itself.
   if (truthy(opts.world3d)) {
-    const frame: WorldFrame = FieldView._worldFrame ?? { actors: [], camX: 0, camY: 0, px: 0, py: 0, mapId: undefined };
-    frame.actors.length = 0;
-    if (!truthy(FieldView.hideActors)) {
-      const [under, over] = collectGame3Actors(
-        game, mapDef, camX, camY, px, py, facing, walkPhase, stepFlip, playerYOff, playerXOff);
-      for (let i = 1; under[i] != null; i++) frame.actors.push(under[i]);
-      for (let i = 1; over[i] != null; i++) frame.actors.push(over[i]);
-    }
-    frame.camX = camX + canvasW / 2;
-    frame.camY = camY + canvasH / 2;
-    frame.px = px;
-    frame.py = py;
-    frame.mapId = mapId;
-    FieldView._worldFrame = frame;
+    drawWorld3d(game, mapDef, mapId, camX, camY, canvasW, canvasH, px, py, facing, walkPhase, stepFlip, playerYOff, playerXOff);
     return;
   }
 

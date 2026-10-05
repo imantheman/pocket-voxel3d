@@ -37,6 +37,10 @@ export class Fade {
   static _accum: number | undefined = undefined;
   static lockInput: unknown = undefined;
   static MODE = MODE;
+  /** pocket-voxel: the veil draw() put over the screen this frame (r, g, b,
+   *  a), or null; cleared before each frame by platform/game3_world.ts, which
+   *  carries it to the voxel world's edges beyond the 2D layer. */
+  static shown: [number, number, number, number] | null = null;
 
   /**
    * Start a fade. done() called when complete.
@@ -120,6 +124,7 @@ export class Fade {
     }
 
     G.setColor(r, g, b, a);
+    Fade.shown = [r, g, b, a];
     let w: number = Display.W, h: number = Display.H;
     const curCanvas = G.getCanvas();
     if (curCanvas) {

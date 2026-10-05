@@ -97,6 +97,26 @@ let frameOpen = false;
 /** The screen clear's alpha (G.setFrameClearAlpha). */
 let frameClearA = 1;
 
+/**
+ * One textured quad drawn while capturing (G.captureBegin, not LÖVE): its
+ * image, its corners after the transform (top-left, top-right, bottom-right,
+ * bottom-left as the image's frame runs), the frame over the image and the
+ * colour's alpha. The voxel world turns what the 2D field draws in the
+ * map's places into billboards from these (platform/world_fx.ts).
+ */
+export interface CapturedQuad {
+  img: Image;
+  /** x0 y0 x1 y1 x2 y2 x3 y3 */
+  xy: number[];
+  u0: number;
+  v0: number;
+  u1: number;
+  v1: number;
+  alpha: number;
+}
+/** Where captured quads go; null when drawing as usual. */
+let capture: CapturedQuad[] | null = null;
+
 function blendCode(): number {
   switch (st.blend) {
     case "add": return st.alphaMode === "premultiplied" ? BLEND_ADD_PREMUL : BLEND_ADD;
@@ -174,7 +194,6 @@ function emitQuadS(img: Image, la: number, lb: number, lc: number, ld: number, l
   const sh0 = st.shader;
   if (sh0 && !sh0.effect.pack) tex = variantFor(img, sh0);
   tex.sync();
-  syncState();
   const m = st.m;
   // m * local
   const a = m[0] * la + m[2] * lb, b = m[1] * la + m[3] * lb;
@@ -182,6 +201,12 @@ function emitQuadS(img: Image, la: number, lb: number, lc: number, ld: number, l
   const e = m[0] * le + m[2] * lf + m[4], f = m[1] * le + m[3] * lf + m[5];
   const ax = a * qw, bx = b * qw, cy = c * qh, dy = d * qh;
   const col = st.color;
+  if (capture) {
+    capture.push({ img: tex, xy: [e, f, e + ax, f + bx, e + ax + cy, f + bx + dy, e + cy, f + dy],
+      u0: qx / sw, v0: qy / sh, u1: (qx + qw) / sw, v1: (qy + qh) / sh, alpha: col[3] });
+    return;
+  }
+  syncState();
   list.quad8(tex.id, e, f, e + ax, f + bx, e + ax + cy, f + bx + dy, e + cy, f + dy,
     qx / sw, qy / sh, (qx + qw) / sw, (qy + qh) / sh, col[0], col[1], col[2], col[3]);
 }
@@ -237,6 +262,7 @@ function drawMatrix(x = 0, y = 0, r = 0, sx = 1, sy?: number, ox = 0, oy = 0): M
 }
 
 function flatTris(points: number[]): void {
+  if (capture) return; // only textured quads are captured
   syncState();
   const m = st.m;
   const out = new Array<number>(points.length);
@@ -324,6 +350,14 @@ export const G = {
    * (worldview.ts), so what the frame leaves undrawn shows the world.
    */
   setFrameClearAlpha(a: number): void { frameClearA = a; },
+  /**
+   * Until captureEnd (not LÖVE): every textured quad drawn goes into `out`
+   * (CapturedQuad) instead of the draw list, and untextured shapes and
+   * sprite batches draw nothing -- how the voxel world learns where the 2D
+   * field would have drawn a door or a field effect.
+   */
+  captureBegin(out: CapturedQuad[]): void { capture = out; },
+  captureEnd(): void { capture = null; },
   /** Drop all graphics state (tests; a soft reset). */
   resetState(): void {
     st = fresh();
@@ -335,6 +369,7 @@ export const G = {
   draw(drawable: Image | SpriteBatch, p1?: unknown, p2?: unknown, p3?: unknown, p4?: unknown, p5?: unknown,
     p6?: unknown, p7?: unknown, p8?: unknown): void {
     if (drawable instanceof SpriteBatch) {
+      if (capture) return; // only single textured quads are captured
       drawMatrixInto((p1 as number) ?? 0, (p2 as number) ?? 0, (p3 as number) ?? 0, (p4 as number) ?? 1,
         (p5 as number) ?? (p4 as number) ?? 1, (p6 as number) ?? 0, (p7 as number) ?? 0);
       const ba = DM[0]!, bb = DM[1]!, bc = DM[2]!, bd = DM[3]!, be = DM[4]!, bf = DM[5]!;
