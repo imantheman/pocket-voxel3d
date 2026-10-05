@@ -17,6 +17,7 @@
      g3PngDecode(byte string) -> [w, h, Uint8Array] | undefined
                                                        (RGBA8, what platform/
                                                         pngdecode.ts gives)
+     g3Bytes(byte string) -> Uint8Array | undefined    (lua.ts toBytes' bytes)
 
    Paths are the cache's (data/generated/gba/...), under
    sdmc:/3ds/voxelmon/firered/. */
@@ -222,6 +223,30 @@ static JSValue g3_readbuf(JSContext *ctx, JSValueConst t, int c, JSValueConst *v
     JS_FreeCString(ctx, path);
     if (!b) return JS_UNDEFINED;
     return JS_NewArrayBuffer(ctx, b, n, 0, g3_realloc_buf, NULL, false);
+}
+
+/* A byte string's bytes (lua.ts toBytes, in C): undefined if a char is
+   over 0xFF, which toBytes alone handles (it keeps the low byte). */
+static JSValue g3_bytes_js(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 1 || !JS_IsString(v[0])) return JS_UNDEFINED;
+    size_t ulen = 0;
+    const char *u = JS_ToCStringLen(ctx, &ulen, v[0]);
+    if (!u) { JS_FreeValue(ctx, JS_GetException(ctx)); return JS_UNDEFINED; }
+    uint8_t *b = (uint8_t *)malloc(ulen + 1);
+    size_t n = 0;
+    int bad = !b;
+    for (size_t i = 0; !bad && i < ulen; i++) {
+        uint8_t x = (uint8_t)u[i];
+        if (x < 0x80) b[n++] = x;
+        else if ((x == 0xC2 || x == 0xC3) && i + 1 < ulen) { b[n++] = (uint8_t)(((x & 0x1F) << 6) | ((uint8_t)u[i + 1] & 0x3F)); i++; }
+        else bad = 1;
+    }
+    JS_FreeCString(ctx, u);
+    if (bad) { free(b); return JS_UNDEFINED; }
+    JSValue arr = JS_NewUint8Array(ctx, b, n, g3_realloc_buf, NULL, false);
+    if (JS_IsException(arr)) { free(b); JS_FreeValue(ctx, JS_GetException(ctx)); return JS_UNDEFINED; }
+    return arr;
 }
 
 /* A PNG (a byte string, as g3Read gives) decoded here rather than by the
@@ -448,13 +473,18 @@ static JSValue g3_runbytecode(JSContext *ctx, JSValueConst t, int c, JSValueCons
 extern char *fake_heap_start, *fake_heap_end;
 unsigned int linearSpaceFree(void);
 
+/* g3Mem([cheap]): [QuickJS heap, app heap used, app heap size, linear free,
+   app heap high water, GC threshold]. JS_ComputeMemoryUsage walks every
+   object of the QuickJS heap (~130 ms of a frame at 300% clock in the
+   field), so a cheap call -- the perf lines' -- gives -1 for the first. */
 static JSValue g3_mem(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
-    (void)t; (void)c; (void)v;
+    (void)t;
+    int cheap = c > 0 && JS_ToBool(ctx, v[0]);
     JSMemoryUsage mu;
-    JS_ComputeMemoryUsage(JS_GetRuntime(ctx), &mu);
+    if (!cheap) JS_ComputeMemoryUsage(JS_GetRuntime(ctx), &mu);
     struct mallinfo mi = mallinfo();
     JSValue a = JS_NewArray(ctx);
-    JS_SetPropertyUint32(ctx, a, 0, JS_NewFloat64(ctx, (double)mu.malloc_size));
+    JS_SetPropertyUint32(ctx, a, 0, JS_NewFloat64(ctx, cheap ? -1.0 : (double)mu.malloc_size));
     JS_SetPropertyUint32(ctx, a, 1, JS_NewFloat64(ctx, (double)(unsigned)mi.uordblks));
     JS_SetPropertyUint32(ctx, a, 2, JS_NewFloat64(ctx, (double)(fake_heap_end - fake_heap_start)));
     JS_SetPropertyUint32(ctx, a, 3, JS_NewFloat64(ctx, (double)linearSpaceFree()));
@@ -506,6 +536,7 @@ int qjs_register_g3(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "g3Gc", JS_NewCFunction(ctx, g3_gc, "g3Gc", 1));
     JS_SetPropertyStr(ctx, o, "g3Strips", JS_NewCFunction(ctx, g3_strips, "g3Strips", 5));
     JS_SetPropertyStr(ctx, o, "g3PngDecode", JS_NewCFunction(ctx, g3_pngdecode, "g3PngDecode", 1));
+    JS_SetPropertyStr(ctx, o, "g3Bytes", JS_NewCFunction(ctx, g3_bytes_js, "g3Bytes", 1));
     static const struct { const char *name; JSCFunction *fn; int n; } snd[] = {
         { "g3SongPlay", g3_songplay, 1 }, { "g3SongStop", g3_songstop, 0 },
         { "g3SongPause", g3_songpause, 0 }, { "g3SongResume", g3_songresume, 0 },

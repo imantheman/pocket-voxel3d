@@ -63,14 +63,34 @@ const MODE = typeof PV_G3_MODE === "string" ? PV_G3_MODE : "game";
 }
 
 /** The boot natives some binaries have (g3_shim.c). */
-const g3n = n as unknown as { g3Mem?(): number[]; g3Gc?(hold: boolean): void };
+const g3n = n as unknown as { g3Mem?(cheap?: boolean): number[]; g3Gc?(hold: boolean): void };
 
-/** The heaps (g3_shim.c g3Mem): QuickJS, the app heap, linear memory. */
-function memText(): string {
-  const m = g3n.g3Mem?.();
+/** The heaps (g3_shim.c g3Mem): QuickJS, the app heap, linear memory. A
+ *  cheap reading (the perf lines') leaves out the QuickJS heap, whose count
+ *  walks every object (a hitch of over 100 ms on the console). */
+function memText(cheap = false): string {
+  const m = g3n.g3Mem?.(cheap);
   if (!m) return "mem n/a";
   const mb = (b: number): string => (b / 1048576).toFixed(1);
-  return `js heap ${mb(m[0]!)} MB, app heap ${mb(m[1]!)} of ${mb(m[2]!)} MB used (high water ${mb(m[4] ?? 0)}), gc at ${mb(m[5] ?? 0)} MB, linear free ${Math.round(m[3]! / 1024)} KB`;
+  return `${m[0]! >= 0 ? `js heap ${mb(m[0]!)} MB, ` : ""}app heap ${mb(m[1]!)} of ${mb(m[2]!)} MB used (high water ${mb(m[4] ?? 0)}), gc at ${mb(m[5] ?? 0)} MB, linear free ${Math.round(m[3]! / 1024)} KB`;
+}
+
+/** Bench builds: the host's byte-string conversion (g3Bytes) against lua.ts's own, on the files the load read. */
+function benchBytesCheck(paths: string[]): void {
+  const nb = (n as unknown as { g3Bytes?(s: string): Uint8Array | undefined }).g3Bytes;
+  if (!nb) return;
+  let files = 0, bytes = 0, bad = 0, left = 0;
+  for (const p of paths.slice(0, 300)) {
+    const s = n.g3Read?.(p);
+    if (typeof s !== "string") continue;
+    const a = nb(s);
+    if (!a) { left++; continue; }
+    files++; bytes += s.length;
+    let same = a.length === s.length;
+    for (let i = 0; same && i < s.length; i++) if (a[i] !== (s.charCodeAt(i) & 255)) same = false;
+    if (!same) bad++;
+  }
+  console.log(`[pv] g3 bench: g3Bytes against toBytes on ${files} files (${(bytes / 1048576).toFixed(1)} MB): ${bad} differ, ${left} left to toBytes`);
 }
 
 function hostTestMain(): void {
@@ -129,6 +149,7 @@ function gameMain(bench: boolean): void {
     for (const [k, e] of [...by].sort((a, b) => b[1][1] + b[1][2] - a[1][1] - a[1][2]).slice(0, 10)) {
       console.log(`[pv] g3 load:   ${((e[1] + e[2]) / 1000).toFixed(0)} ms (read ${(e[1] / 1000).toFixed(0)}) in ${e[0]} reads of ${k}`);
     }
+    if (bench) benchBytesCheck(l.map((r) => r.path));
     readProf.list = [];
   }
   if (ok && bench) {
@@ -205,7 +226,7 @@ function gameMain(bench: boolean): void {
       console.log(`[pv] g3 guest: update ${(prof.update / prof.ticks / 1000).toFixed(2)} ms/tick (max ${(prof.updateMax / 1000).toFixed(1)}, ${prof.ticks} ticks), ` +
         `draw ${(prof.draw / f / 1000).toFixed(2)} ms (max ${(prof.drawMax / 1000).toFixed(1)}; game.draw ${(prof.game / f / 1000).toFixed(2)}, g3Draw ${(drawProf.conv / f / 1000).toFixed(2)}, ` +
         `${Math.round(drawProf.len / f)} floats), world ${(prof.emit / f / 1000).toFixed(2)} ms, ` +
-        `3d=${field.world3d} ents=${view.entCount} phase=${game.phase}${++prof.memEvery % 4 === 1 ? "; " + memText() : ""}`);
+        `3d=${field.world3d} ents=${view.entCount} phase=${game.phase}${++prof.memEvery % 4 === 1 ? "; " + memText(true) : ""}`);
       const np = nativeProf;
       if (np.up + np.cache + np.rd + np.ex + np.au + np.png > 0) {
         console.log(`[pv] g3 natives over ${f} frames: texUpload ${np.up} (${Math.round(np.upKB)} KB, ${(np.upUs / 1000).toFixed(0)} ms), ` +

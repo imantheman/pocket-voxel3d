@@ -9,11 +9,17 @@
 import { native } from "../../quickjs-host.ts";
 import { setHost, type G3Host } from "./host.ts";
 import { setAudio, type CryParams, type G3Audio, type SeOptions } from "./audio.ts";
+import { setNativeBytes } from "../../../import/gen3/lua.ts";
 
 const n = native;
 export const clock = (): number => (n.now ? n.now() : Date.now() * 1000);
 /** The natives only newer binaries have. */
-const pngNative = n as typeof n & { g3PngDecode?(png: string): [number, number, Uint8Array] | undefined };
+const pngNative = n as typeof n & {
+  g3PngDecode?(png: string): [number, number, Uint8Array] | undefined;
+  g3Bytes?(s: string): Uint8Array | undefined;
+};
+// byte strings to bytes in C (g3_shim.c g3Bytes), for lua.ts toBytes
+if (pngNative.g3Bytes) setNativeBytes((s) => pngNative.g3Bytes!(s));
 
 /** Draw-list timing, summed until read (main.ts's perf lines). */
 export const drawProf = { conv: 0, len: 0 };

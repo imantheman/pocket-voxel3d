@@ -50,12 +50,22 @@ export class BenchSuite {
     console.log(`[pv] g3 suite: ${this.phase}: ${this.draw.n} frames, ${tick - this.t0} ticks; update ${this.up.text()} ms/tick, ` +
       `draw ${this.draw.text()} ms, a frame at 60 ${this.frame.text()} ms`);
     this.up = new Stat(); this.draw = new Stat(); this.frame = new Stat();
+    this.slowLogged = 0;
   }
 
   /** The guest's cost of one tick's update (us). */
-  noteUpdate(us: number): void { this.up.add(us); this.lastUp = us; }
+  noteUpdate(us: number): void {
+    this.up.add(us); this.lastUp = us;
+    // the slow ticks themselves, a few a phase, to see what repeats
+    if (us > 12000 && this.slowLogged++ < 12) console.log(`[pv] g3 suite: slow update ${(us / 1000).toFixed(1)} ms at tick ${this.tick} (${this.phase})`);
+  }
   /** The guest's cost of one shown frame's draw and world (us). */
-  noteDraw(us: number): void { this.draw.add(us); this.frame.add(this.lastUp + us); }
+  noteDraw(us: number): void {
+    this.draw.add(us); this.frame.add(this.lastUp + us);
+    if (us > 12000 && this.slowLogged++ < 12) console.log(`[pv] g3 suite: slow draw ${(us / 1000).toFixed(1)} ms at tick ${this.tick} (${this.phase})`);
+  }
+  private slowLogged = 0;
+  private tick = 0;
 
   private inBattle(game: any): boolean {
     return game && game.speedCategory && game.speedCategory() === "battle";
@@ -78,6 +88,7 @@ export class BenchSuite {
 
   /** The buttons held at `tick` (and the phase's actions). */
   at(tick: number, game: any): number {
+    this.tick = tick;
     if (this.done) return 0;
     if (tick === 1) this.begin("field 3D, standing", tick);
     if (tick < 600) return 0;

@@ -309,9 +309,24 @@ export function rep(s: string, n: number, sep = ""): string {
 
 /** A byte string's bytes. */
 export function toBytes(s: string): Uint8Array {
+  // a host's own conversion where it has one (the 3DS guest's g3Bytes: the
+  // same bytes, in C), for strings long enough to be worth the call
+  if (nativeBytes && s.length > 64) {
+    const b = nativeBytes(s);
+    if (b) return b;
+  }
   const out = new Uint8Array(s.length);
   for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
   return out;
+}
+
+let nativeBytes: ((s: string) => Uint8Array | undefined) | undefined;
+/**
+ * A host's toBytes (gen3 platform/qjs_host.ts on the 3DS): it must give
+ * exactly toBytes' bytes, or undefined for a string it leaves to toBytes.
+ */
+export function setNativeBytes(f: ((s: string) => Uint8Array | undefined) | undefined): void {
+  nativeBytes = f;
 }
 
 /** Bytes as a byte string (chunked so big buffers don't overflow the stack). */
