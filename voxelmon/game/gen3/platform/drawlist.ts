@@ -45,6 +45,9 @@ export class DrawList {
   private params: number[] = [];
   private paramsRef: number[] | undefined;
   private scissor: [number, number, number, number] = [-2, -2, -2, -2];
+  /** Bumped whenever the host's state is unknown again (reset, target):
+   *  graphics.ts re-sends its state when this moves. */
+  epoch = 0;
 
   /** The list so far (a view: valid until the next write after a reset). */
   get buf(): Float32Array {
@@ -64,6 +67,7 @@ export class DrawList {
   }
 
   reset(): void {
+    this.epoch++;
     this.n = 0;
     this.blend = -1;
     this.effect = -1;
@@ -78,6 +82,7 @@ export class DrawList {
     this.f[this.n++] = canvasId;
     // a new target starts from unknown state on the host
     this.blend = -1;
+    this.epoch++;
   }
 
   clear(r: number, g: number, b: number, a: number): void {
@@ -115,6 +120,20 @@ export class DrawList {
     f[n++] = OP_QUAD; f[n++] = tex;
     f[n++] = c[0]!; f[n++] = c[1]!; f[n++] = c[2]!; f[n++] = c[3]!;
     f[n++] = c[4]!; f[n++] = c[5]!; f[n++] = c[6]!; f[n++] = c[7]!;
+    f[n++] = u0; f[n++] = v0; f[n++] = u1; f[n++] = v1;
+    f[n++] = r; f[n++] = g; f[n++] = b; f[n++] = a;
+    this.n = n;
+  }
+
+  /** quad() with its corners as scalars (the hot path: no array per quad). */
+  quad8(tex: number, x0: number, y0: number, x1: number, y1: number, x2: number, y2: number, x3: number, y3: number,
+    u0: number, v0: number, u1: number, v1: number, r: number, g: number, b: number, a: number): void {
+    if (this.n + 18 > this.f.length) this.room(18);
+    const f = this.f;
+    let n = this.n;
+    f[n++] = OP_QUAD; f[n++] = tex;
+    f[n++] = x0; f[n++] = y0; f[n++] = x1; f[n++] = y1;
+    f[n++] = x2; f[n++] = y2; f[n++] = x3; f[n++] = y3;
     f[n++] = u0; f[n++] = v0; f[n++] = u1; f[n++] = v1;
     f[n++] = r; f[n++] = g; f[n++] = b; f[n++] = a;
     this.n = n;

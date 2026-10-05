@@ -106,7 +106,17 @@ function blendCode(): number {
 }
 
 /** Emit the state the next primitive draws with; [effect params] or none. */
+// what syncState last sent, so a run of primitives in one state costs a few
+// compares (the host learns a state only when it changes)
+let lastBlend = "", lastAlpha = "", lastShader: Shader | undefined | null = null;
+let lastVer = -1, lastScissor: unknown = 0, lastEpoch = -1;
 function syncState(): void {
+  const sh0 = st.shader;
+  const ver = sh0 ? sh0.version : -1;
+  if (st.blend === lastBlend && st.alphaMode === lastAlpha && sh0 === lastShader && ver === lastVer
+      && st.scissor === lastScissor && list.epoch === lastEpoch) return;
+  lastBlend = st.blend; lastAlpha = st.alphaMode; lastShader = sh0; lastVer = ver;
+  lastScissor = st.scissor;
   let effect = 0;
   let params: number[] = [];
   const sh = st.shader;
@@ -119,6 +129,7 @@ function syncState(): void {
     params = sh.packed;
   }
   list.state(blendCode(), effect, params, st.scissor);
+  lastEpoch = list.epoch;
 }
 
 // CPU variant effects: a recoloured copy of the image per (image, uniforms)
@@ -147,15 +158,44 @@ function variantFor(img: Image, sh: Shader): Image {
 }
 
 function emitQuad(img: Image, local: M, qx: number, qy: number, qw: number, qh: number, sw: number, sh: number): void {
+  emitQuadS(img, local[0], local[1], local[2], local[3], local[4], local[5], qx, qy, qw, qh, sw, sh);
+}
+
+/**
+ * One textured quad: the image's sub-rect (qx, qy, qw, qh of sw x sh) under
+ * the local affine (la..lf, drawMatrix's layout) and the current transform.
+ * The hot path of every screen -- scalars only, nothing allocated.
+ */
+function emitQuadS(img: Image, la: number, lb: number, lc: number, ld: number, le: number, lf: number,
+  qx: number, qy: number, qw: number, qh: number, sw: number, sh: number): void {
   let tex = img;
-  if (st.shader && !st.shader.effect.pack) tex = variantFor(img, st.shader);
+  const sh0 = st.shader;
+  if (sh0 && !sh0.effect.pack) tex = variantFor(img, sh0);
   tex.sync();
   syncState();
-  const m = mul(st.m, local);
-  const corner = (x: number, y: number): [number, number] => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
-  const [x0, y0] = corner(0, 0), [x1, y1] = corner(qw, 0), [x2, y2] = corner(qw, qh), [x3, y3] = corner(0, qh);
-  const c = st.color;
-  list.quad(tex.id, [x0, y0, x1, y1, x2, y2, x3, y3], qx / sw, qy / sh, (qx + qw) / sw, (qy + qh) / sh, c[0], c[1], c[2], c[3]);
+  const m = st.m;
+  // m * local
+  const a = m[0] * la + m[2] * lb, b = m[1] * la + m[3] * lb;
+  const c = m[0] * lc + m[2] * ld, d = m[1] * lc + m[3] * ld;
+  const e = m[0] * le + m[2] * lf + m[4], f = m[1] * le + m[3] * lf + m[5];
+  const ax = a * qw, bx = b * qw, cy = c * qh, dy = d * qh;
+  const col = st.color;
+  list.quad8(tex.id, e, f, e + ax, f + bx, e + ax + cy, f + bx + dy, e + cy, f + dy,
+    qx / sw, qy / sh, (qx + qw) / sw, (qy + qh) / sh, col[0], col[1], col[2], col[3]);
+}
+
+/** drawMatrix's six numbers into the scratch below (no array per draw). */
+const DM = [1, 0, 0, 1, 0, 0];
+function drawMatrixInto(x: number, y: number, r: number, sx: number, sy: number, ox: number, oy: number): void {
+  let a: number, b: number, cc: number, d: number;
+  if (r === 0) {
+    a = sx; b = 0; cc = 0; d = sy;
+  } else {
+    const co = Math.cos(r), s = Math.sin(r);
+    a = co * sx; b = s * sx; cc = -s * sy; d = co * sy;
+  }
+  DM[0] = a; DM[1] = b; DM[2] = cc; DM[3] = d;
+  DM[4] = x - (a * ox + cc * oy); DM[5] = y - (b * ox + d * oy);
 }
 
 /** LÖVE's draw transform: translate(x,y) rotate(r) scale(sx,sy) translate(-ox,-oy) [shear ignored]. */
@@ -257,27 +297,40 @@ export const G = {
   isFrameOpen(): boolean { return frameOpen; },
 
   // ---- drawing
-  draw(drawable: Image | SpriteBatch, ...a: unknown[]): void {
+  draw(drawable: Image | SpriteBatch, p1?: unknown, p2?: unknown, p3?: unknown, p4?: unknown, p5?: unknown,
+    p6?: unknown, p7?: unknown, p8?: unknown): void {
     if (drawable instanceof SpriteBatch) {
-      const [x = 0, y = 0, r = 0, sx = 1, sy, ox = 0, oy = 0] = a as number[];
-      const base = drawMatrix(x, y, r, sx, sy, ox, oy);
+      drawMatrixInto((p1 as number) ?? 0, (p2 as number) ?? 0, (p3 as number) ?? 0, (p4 as number) ?? 1,
+        (p5 as number) ?? (p4 as number) ?? 1, (p6 as number) ?? 0, (p7 as number) ?? 0);
+      const ba = DM[0]!, bb = DM[1]!, bc = DM[2]!, bd = DM[3]!, be = DM[4]!, bf = DM[5]!;
       const img = drawable.texture;
-      for (const e of drawable.entries) {
+      const ents = drawable.entries;
+      for (let i = 0; i < ents.length; i++) {
+        const e = ents[i];
         if (!e || e.x < -1e5 || e.y < -1e5) continue; // hidden cells (field_view parks them at -1e6)
-        const local = mul(base, drawMatrix(e.x, e.y, e.r, e.sx, e.sy));
-        if (e.quad) emitQuad(img, local, e.quad.x, e.quad.y, e.quad.w, e.quad.h, e.quad.sw, e.quad.sh);
-        else emitQuad(img, local, 0, 0, img.w, img.h, img.w, img.h);
+        drawMatrixInto(e.x, e.y, e.r ?? 0, e.sx ?? 1, e.sy ?? e.sx ?? 1, 0, 0);
+        // base * entry
+        const la = ba * DM[0]! + bc * DM[1]!, lb = bb * DM[0]! + bd * DM[1]!;
+        const lc = ba * DM[2]! + bc * DM[3]!, ld = bb * DM[2]! + bd * DM[3]!;
+        const le = ba * DM[4]! + bc * DM[5]! + be, lf = bb * DM[4]! + bd * DM[5]! + bf;
+        const q = e.quad;
+        if (q) emitQuadS(img, la, lb, lc, ld, le, lf, q.x, q.y, q.w, q.h, q.sw, q.sh);
+        else emitQuadS(img, la, lb, lc, ld, le, lf, 0, 0, img.w, img.h, img.w, img.h);
       }
       return;
     }
-    if (a[0] instanceof Quad) {
-      const q = a[0] as Quad;
-      const [x, y, r, sx, sy, ox, oy] = a.slice(1) as number[];
-      emitQuad(drawable, drawMatrix(x, y, r, sx, sy, ox, oy), q.x, q.y, q.w, q.h, q.sw, q.sh);
+    if (p1 instanceof Quad) {
+      const q = p1;
+      const sx = (p5 as number) ?? 1;
+      drawMatrixInto((p2 as number) ?? 0, (p3 as number) ?? 0, (p4 as number) ?? 0, sx, (p6 as number) ?? sx,
+        (p7 as number) ?? 0, (p8 as number) ?? 0);
+      emitQuadS(drawable, DM[0]!, DM[1]!, DM[2]!, DM[3]!, DM[4]!, DM[5]!, q.x, q.y, q.w, q.h, q.sw, q.sh);
       return;
     }
-    const [x, y, r, sx, sy, ox, oy] = a as number[];
-    emitQuad(drawable, drawMatrix(x, y, r, sx, sy, ox, oy), 0, 0, drawable.w, drawable.h, drawable.w, drawable.h);
+    const sx = (p4 as number) ?? 1;
+    drawMatrixInto((p1 as number) ?? 0, (p2 as number) ?? 0, (p3 as number) ?? 0, sx, (p5 as number) ?? sx,
+      (p6 as number) ?? 0, (p7 as number) ?? 0);
+    emitQuadS(drawable, DM[0]!, DM[1]!, DM[2]!, DM[3]!, DM[4]!, DM[5]!, 0, 0, drawable.w, drawable.h, drawable.w, drawable.h);
   },
 
   rectangle(mode: string, x: number, y: number, w: number, h: number, rx?: number, ry?: number): void {
@@ -336,7 +389,15 @@ export const G = {
   printf(..._a: unknown[]): void { /* debug fallbacks only in FRLG */ },
 
   // ---- colour
-  setColor(r: number | number[] | Record<string, number>, g?: number, b?: number, a?: number): void { st.color = colorArgs(r, g, b, a); },
+  setColor(r: number | number[] | Record<string, number>, g?: number, b?: number, a?: number): void {
+    if (typeof r === "number") {
+      // the common call: no array made (push copies the colour, so writing in place is safe)
+      const c = st.color;
+      c[0] = r; c[1] = g ?? 1; c[2] = b ?? 1; c[3] = a ?? 1;
+      return;
+    }
+    st.color = colorArgs(r, g, b, a);
+  },
   getColor(): Rgba { return [...st.color] as Rgba; },
   setBackgroundColor(): void {},
 
