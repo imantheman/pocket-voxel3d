@@ -9,6 +9,7 @@ import { ENT_FLOATS, parseWorldJson, type WorldJson, type WorldOps } from "./wor
 /** The natives, with the ones only some binaries have. */
 export const nat = native as typeof native & {
   g3Ents?(records: Float32Array, count: number): void;
+  g3Strips?(mode: number, r: number, g: number, b: number, a: number): void;
   flatWorld?(on: number): void;
   screenshot?(): void;
 };
@@ -24,6 +25,7 @@ export function worldOps(): WorldOps {
     tint: (c) => n.tint(c),
     flatWorld: (on) => n.flatWorld?.(on),
     g3Ents: (r, k) => n.g3Ents?.(r.subarray(0, k * ENT_FLOATS), k),
+    strips: (mode, r, g, b, a) => n.g3Strips?.(mode, r, g, b, a),
   };
 }
 

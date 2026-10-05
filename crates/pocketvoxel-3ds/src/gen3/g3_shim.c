@@ -12,6 +12,8 @@
      g3Exists(path) -> bool
      g3Ents(Float32Array, n)                           (the field's billboards,
                                                         platform/worldview.ts)
+     g3Strips(mode, r, g, b, a)                        (the top screen's side
+                                                        strips, worldview.ts)
 
    Paths are the cache's (data/generated/gba/...), under
    sdmc:/3ds/voxelmon/firered/. */
@@ -31,6 +33,7 @@ void g3_draw(const float *f, size_t n);
 void g3_batch_upload(int id, int tex, const float *q, int n);
 void g3_batch_free(int id);
 void g3_ents_set(const float *f, int n);
+void g3_strips_set(int mode, float r, float g, float b, float a);
 uint8_t *g3_read_file(const char *path, size_t *len);
 int g3_exists(const char *path);
 
@@ -135,7 +138,7 @@ static JSValue g3_batchfree(JSContext *ctx, JSValueConst t, int c, JSValueConst 
 }
 
 /* g3Ents(Float32Array, n): the field's billboards for the world pass
-   (worldview.ts ENT_FLOATS = 11 floats each), kept until the next call. */
+   (worldview.ts ENT_FLOATS = 13 floats each), kept until the next call. */
 static JSValue g3_ents(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t;
     if (c < 2) return JS_UNDEFINED;
@@ -143,8 +146,25 @@ static JSValue g3_ents(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     JS_ToInt32(ctx, &n, v[1]);
     size_t len = 0;
     const uint8_t *p = g3_bytes(ctx, v[0], &len);
-    if (n < 0 || (p == NULL && n > 0) || ((uintptr_t)p & 3) || len / 4 < (size_t)n * 11) return JS_UNDEFINED;
+    if (n < 0 || (p == NULL && n > 0) || ((uintptr_t)p & 3) || len / 4 < (size_t)n * 13) return JS_UNDEFINED;
     g3_ents_set((const float *)p, (int)n);
+    return JS_UNDEFINED;
+}
+
+/* g3Strips(mode, r, g, b, a): the side strips beside the 2D layer
+   (worldview.ts WorldStrips: 0 off, 1 a colour, 2 the layer's edge columns
+   stretched), kept until the next call. */
+static JSValue g3_strips(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 5) return JS_UNDEFINED;
+    int32_t mode = 0;
+    double r = 0, g = 0, b = 0, a = 0;
+    JS_ToInt32(ctx, &mode, v[0]);
+    JS_ToFloat64(ctx, &r, v[1]);
+    JS_ToFloat64(ctx, &g, v[2]);
+    JS_ToFloat64(ctx, &b, v[3]);
+    JS_ToFloat64(ctx, &a, v[4]);
+    g3_strips_set((int)mode, (float)r, (float)g, (float)b, (float)a);
     return JS_UNDEFINED;
 }
 
@@ -445,6 +465,7 @@ int qjs_register_g3(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "g3RunBytecode", JS_NewCFunction(ctx, g3_runbytecode, "g3RunBytecode", 0));
     JS_SetPropertyStr(ctx, o, "g3Mem", JS_NewCFunction(ctx, g3_mem, "g3Mem", 0));
     JS_SetPropertyStr(ctx, o, "g3Gc", JS_NewCFunction(ctx, g3_gc, "g3Gc", 1));
+    JS_SetPropertyStr(ctx, o, "g3Strips", JS_NewCFunction(ctx, g3_strips, "g3Strips", 5));
     static const struct { const char *name; JSCFunction *fn; int n; } snd[] = {
         { "g3SongPlay", g3_songplay, 1 }, { "g3SongStop", g3_songstop, 0 },
         { "g3SongPause", g3_songpause, 0 }, { "g3SongResume", g3_songresume, 0 },

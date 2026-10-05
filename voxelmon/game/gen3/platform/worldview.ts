@@ -11,7 +11,16 @@
 //   - cam(x, y): the view centre in map px, Q4;
 //   - g3Ents(records, n): the people, each a sprite frame of a 2D-layer
 //     texture on a billboard standing in its cell, drawn by the host in the
-//     world's pass (crates/pocketvoxel-3ds/src/gen3);
+//     world's pass (crates/pocketvoxel-3ds/src/gen3); with them what the 2D
+//     field draws in the map's places -- door animations as decals on the
+//     facade, ground effects flat on the floor, the rest standing as cards
+//     (platform/world_fx.ts);
+//   - strips(mode, r, g, b, a): the screen's sides. The 2D layer covers the
+//     middle 360 px of the 400 px top screen, so a fade or a battle
+//     transition drawn there would leave the world bare at the edges: the
+//     host colours the two 20 px strips (STRIPS_COLOUR, a full-screen fade)
+//     or stretches the layer's edge columns over them (STRIPS_EDGE, a wipe
+//     or the flash's darkness, which reach the screen's edges);
 //   - tint, pitch, flatWorld as Gold's (flatWorld(1): no world this frame,
 //     so the host neither builds nor draws one).
 //
@@ -32,6 +41,8 @@ export interface WorldOps {
   flatWorld?(on: number): void;
   /** The frame's billboards: `n` records of ENT_FLOATS floats (see WorldEnt). */
   g3Ents?(records: Float32Array, n: number): void;
+  /** The side strips (WorldStrips). */
+  strips?(mode: number, r: number, g: number, b: number, a: number): void;
 }
 
 /** One map's record in paks_firered/world.json (cook/gen3cook.ts mapRecord). */
@@ -66,7 +77,32 @@ export interface WorldEnt {
   u1: number;
   v1: number;
   alpha: number;
+  /** ENT_CARD (omitted), ENT_GROUND or ENT_WALL. */
+  kind?: number;
+  /** A card's extra pull toward the eye, px (negative: away); a wall's lean
+   *  back from upright, radians. */
+  param?: number;
 }
+
+/** A billboard standing up facing the eye: the people (feet at x, z). */
+export const ENT_CARD = 0;
+/** Flat on the floor, centred on x, z: w along x, h along z (v down = south). */
+export const ENT_GROUND = 1;
+/** On a south-facing wall leaned back by `param` from upright: its foot
+ *  centred on x, z, w along x, h up the wall (a door on its facade). */
+export const ENT_WALL = 2;
+
+/** The side strips (see WorldOps.strips). */
+export interface WorldStrips {
+  mode: number;
+  r: number;
+  g: number;
+  b: number;
+  a: number;
+}
+export const STRIPS_OFF = 0;
+export const STRIPS_COLOUR = 1;
+export const STRIPS_EDGE = 2;
 
 /** The world for one frame, or null for none (a battle, a menu screen, VIEW 2D). */
 export interface WorldState {
@@ -78,14 +114,16 @@ export interface WorldState {
   ents: WorldEnt[];
   /** The day tint (ABGR); white when omitted -- FRLG has no clock tint. */
   tint?: number;
+  /** The side strips; off when omitted. */
+  strips?: WorldStrips;
 }
 
 /** Map px per cell: a metatile, as the cook lays the world. */
 export const CELL = 16;
-/** A billboard record's floats: tex x z lift w h u0 v0 u1 v1 alpha. */
-export const ENT_FLOATS = 11;
+/** A billboard record's floats: tex x z lift w h u0 v0 u1 v1 alpha kind param. */
+export const ENT_FLOATS = 13;
 /** Billboards a frame (the host keeps this many). */
-export const G3_ENTS_MAX = 64;
+export const G3_ENTS_MAX = 96;
 
 /** One hop of connections: the maps beside `id`, placed relative to it (px). */
 export function neighbours(maps: Record<string, WorldMap>, id: string): { id: string; ox: number; oy: number; dir: string }[] {
@@ -140,6 +178,7 @@ export class WorldView {
   private recs = new Float32Array(G3_ENTS_MAX * ENT_FLOATS);
   private prev = new Float32Array(G3_ENTS_MAX * ENT_FLOATS);
   private lastN = -1;
+  private lastStrips = "";
   /** Billboards sent last frame (perf/debug). */
   entCount = 0;
 
@@ -163,9 +202,11 @@ export class WorldView {
     if (!state || !this.has(state.map)) {
       this.stateFlat(true);
       this.clear();
+      this.emitStrips(undefined);
       return;
     }
     this.stateFlat(false);
+    this.emitStrips(state.strips);
     const tint = state.tint ?? 0xffffffff;
     if (tint !== this.lastTint) {
       this.lastTint = tint;
@@ -214,6 +255,15 @@ export class WorldView {
     }
   }
 
+  private emitStrips(s: WorldStrips | undefined): void {
+    const mode = s ? s.mode : STRIPS_OFF;
+    const r = s ? s.r : 0, g = s ? s.g : 0, b = s ? s.b : 0, a = s ? s.a : 0;
+    const key = `${mode},${r},${g},${b},${a}`;
+    if (key === this.lastStrips) return;
+    this.lastStrips = key;
+    this.ops.strips?.(mode, r, g, b, a);
+  }
+
   private emitCam(x: number, y: number): void {
     const cx = Math.round(x * Q4);
     const cy = Math.round(y * Q4);
@@ -240,6 +290,8 @@ export class WorldView {
       r[o + 8] = e.u1;
       r[o + 9] = e.v1;
       r[o + 10] = e.alpha;
+      r[o + 11] = e.kind ?? ENT_CARD;
+      r[o + 12] = e.param ?? 0;
     }
     this.sendEnts(n);
   }

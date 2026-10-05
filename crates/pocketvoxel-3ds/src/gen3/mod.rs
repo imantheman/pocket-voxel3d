@@ -19,7 +19,9 @@
 //!   2D layer's own textures, standing in their cells) are turned into quads
 //!   facing the scene's camera ([`prepare_billboards`], once a frame) and
 //!   drawn in each eye's world pass, depth-tested against the terrain
-//!   ([`world_pass`]).
+//!   ([`world_pass`]). Two more kinds ride the same records: decals flat on
+//!   the floor (the ground's field effects) and decals on a facade leaned
+//!   back as the cook leans it (the door animations).
 //! - **Sound** is the M4A engine (audio.rs) on its own thread, started
 //!   before the guest boots ([`before_guest`]); the Kanto synth stays off
 //!   (main.rs's `audio3ds_init` is replaced for this build and says so).
@@ -120,11 +122,14 @@ pub fn offscreen_pass() {
     prepare_billboards();
 }
 
-/// The guest's billboards as quads facing the scene's camera: each stands
-/// on the floor of its cell (the same floor the Kanto cards stand on),
-/// leaned back to face the eye as draw::card_verts leans them, and pulled
-/// toward it the way main.rs pulls the cards, so a wall behind does not cut
-/// into it.
+/// The guest's billboards as quads: a card stands on the floor of its cell
+/// (the same floor the Kanto cards stand on), leaned back to face the eye as
+/// draw::card_verts leans them; a ground decal lies on that floor; a wall
+/// decal stands on it leaned back by its own angle, facing south as the
+/// cook's facades do (voxelmon/cook/gen3terrain.ts). All are pulled toward
+/// the eye the way main.rs pulls the cards (a card by its record's extra
+/// pull too, so grass over the feet or a balloon over a head wins against
+/// the person it sits on), so a wall behind does not cut into them.
 fn prepare_billboards() {
     unsafe { g3_bb_reset() };
     let mut n = 0i32;
@@ -144,24 +149,47 @@ fn prepare_billboards() {
     let pull = draw::card_pull(camera.a);
     let e = camera.eye;
     for r in recs.chunks_exact(ENT_FLOATS) {
-        let (x, z) = (r[1], r[2]);
-        let ground = sc.floor.height_at(x - sox, z - soy);
-        let feet = pocketvoxel_core::math::vec3(x - sox, ground + r[3], z - soy);
-        let v = draw::card_verts(feet, r[4], r[5], camera.a, fx, fz);
+        let (x, z) = (r[1] - sox, r[2] - soy);
+        let (w, h) = (r[4], r[5]);
+        let kind = r[11] as i32;
+        let (v, pull_here) = match kind {
+            ENT_GROUND => {
+                // flat on the floor of its middle, a hair above it
+                let y = sc.floor.height_at(x, z) + r[3] + 0.25;
+                let (x0, x1, z0, z1) = (x - w * 0.5, x + w * 0.5, z - h * 0.5, z + h * 0.5);
+                ([[x0, y, z1], [x1, y, z1], [x1, y, z0], [x0, y, z0]], 1.0)
+            }
+            ENT_WALL => {
+                // the floor in front of the foot (the foot is a cell's south edge)
+                let y = sc.floor.height_at(x, z + 1.0) + r[3];
+                let (sl, cl) = (r[12].sin(), r[12].cos());
+                let (x0, x1) = (x - w * 0.5, x + w * 0.5);
+                let (yt, zt) = (y + h * cl, z - h * sl);
+                ([[x0, y, z], [x1, y, z], [x1, yt, zt], [x0, yt, zt]], 0.75)
+            }
+            _ => {
+                let ground = sc.floor.height_at(x, z);
+                let feet = pocketvoxel_core::math::vec3(x, ground + r[3], z);
+                (draw::card_verts(feet, w, h, camera.a, fx, fz), pull + r[12])
+            }
+        };
         let mut xyz = [0f32; 12];
         for (i, q) in v.iter().enumerate() {
             let (dx, dy, dz) = (e.x - q[0], e.y - q[1], e.z - q[2]);
             let l = (dx * dx + dy * dy + dz * dz).sqrt().max(1e-6);
-            xyz[i * 3] = q[0] + dx / l * pull;
-            xyz[i * 3 + 1] = q[1] + dy / l * pull;
-            xyz[i * 3 + 2] = q[2] + dz / l * pull;
+            xyz[i * 3] = q[0] + dx / l * pull_here;
+            xyz[i * 3 + 1] = q[1] + dy / l * pull_here;
+            xyz[i * 3 + 2] = q[2] + dz / l * pull_here;
         }
         unsafe { g3_bb_quad(r[0] as i32, xyz.as_ptr(), r[6], r[7], r[8], r[9], r[10]) };
     }
 }
 
 /// A billboard record's floats (worldview.ts ENT_FLOATS).
-const ENT_FLOATS: usize = 11;
+const ENT_FLOATS: usize = 13;
+/// A record's kinds (worldview.ts ENT_*): a card is anything else.
+const ENT_GROUND: i32 = 1;
+const ENT_WALL: i32 = 2;
 
 /// In each eye's world pass, after the terrain and the trees: the people.
 pub fn world_pass(mvp: &Matrix4) {

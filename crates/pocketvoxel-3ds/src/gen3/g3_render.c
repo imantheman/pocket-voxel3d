@@ -12,8 +12,10 @@
      which the shared world loop (main.rs, through gen3/mod.rs) lays over
      the top screen at 1.5x (360x240, centred) as the 2D layer: over the
      voxel world where the guest drew, the world showing where it left the
-     frame clear (g3_composite). The guest's billboards (the field's
-     people) are drawn in the world's own pass (g3_bb_*).
+     frame clear (g3_composite), and the 20 px strips either side of it
+     coloured or edge-stretched while a fade or a wipe covers the screen
+     (g3_strips_set). The guest's billboards (the field's people, doors and
+     field effects) are drawn in the world's own pass (g3_bb_*).
    - One vertex buffer per frame (two, alternating); primitives are batched
      until the target, texture or state changes.
    - Blend modes per LOVE 11 (rasterize.ts blendPx). Scissor, the target's
@@ -1189,6 +1191,21 @@ static inline void put_raw(float x, float y, float z, u32 col, float u, float v)
 /* the composite quad's place in this frame's buffer (-1: none yet) */
 static int comp_start = -1;
 
+/* The side strips (worldview.ts WorldStrips): 0 off; 1 the colour below
+   (a full-screen fade); 2 the frame's first and last columns stretched over
+   the strips (a battle transition's wipe, the flash's darkness: whatever
+   the guest drew at the frame's edge carries on to the screen's). Set by
+   the guest's frame, laid out in g3_frame_offscreen, drawn after the
+   composite. */
+static int strip_mode;
+static float strip_col[4];
+static int strip_start = -1;
+
+void g3_strips_set(int mode, float r, float g, float b, float a) {
+    strip_mode = (mode == 1 || mode == 2) ? mode : 0;
+    strip_col[0] = clamp01(r); strip_col[1] = clamp01(g); strip_col[2] = clamp01(b); strip_col[3] = clamp01(a);
+}
+
 /* First in the frame (inside citro3d-rs's frame, before the eyes): the
    newest list (if one came since the last frame) into the frame target and
    its canvases; then the composite quad for the eyes to draw. */
@@ -1225,6 +1242,28 @@ void g3_frame_offscreen(void) {
         u32 c = 0xFFFFFFFFu;
         put_raw(20, 0, 0.5f, c, 0, 1);   put_raw(380, 0, 0.5f, c, u1, 1);    put_raw(380, 240, 0.5f, c, u1, v1);
         put_raw(20, 0, 0.5f, c, 0, 1);   put_raw(380, 240, 0.5f, c, u1, v1); put_raw(20, 240, 0.5f, c, 0, v1);
+        /* the strips: 0..20 and 380..400, from the frame's edge texels or a
+           colour (premultiplied, as the frame is) over the white texture */
+        strip_start = -1;
+        if (strip_mode) {
+            float ul, ur;
+            u32 sc = 0xFFFFFFFFu;
+            if (strip_mode == 2) {
+                ul = 0.5f / frame_tex->tw;
+                ur = ((float)frame_tex->w - 0.5f) / frame_tex->tw;
+            } else {
+                float a = strip_col[3];
+                sc = rgba32(strip_col[0] * a, strip_col[1] * a, strip_col[2] * a, a);
+                ul = ur = 0.5f;
+                v1 = 0.5f;
+            }
+            float vt = strip_mode == 2 ? 1.0f : 0.5f;
+            strip_start = vn;
+            put_raw(0, 0, 0.5f, sc, ul, vt);   put_raw(20, 0, 0.5f, sc, ul, vt);    put_raw(20, 240, 0.5f, sc, ul, v1);
+            put_raw(0, 0, 0.5f, sc, ul, vt);   put_raw(20, 240, 0.5f, sc, ul, v1);  put_raw(0, 240, 0.5f, sc, ul, v1);
+            put_raw(380, 0, 0.5f, sc, ur, vt); put_raw(400, 0, 0.5f, sc, ur, vt);   put_raw(400, 240, 0.5f, sc, ur, v1);
+            put_raw(380, 0, 0.5f, sc, ur, vt); put_raw(400, 240, 0.5f, sc, ur, v1); put_raw(380, 240, 0.5f, sc, ur, v1);
+        }
     }
     vstart = vn;
     st_verts += vn;
@@ -1251,6 +1290,11 @@ void g3_composite(void) {
     C3D_TexBind(0, &frame_tex->tex);
     C3D_DrawArrays(GPU_TRIANGLES, comp_start, 6);
     st_calls++;
+    if (strip_start >= 0) {
+        if (strip_mode != 2) C3D_TexBind(0, &white->tex);
+        C3D_DrawArrays(GPU_TRIANGLES, strip_start, 12);
+        st_calls++;
+    }
     restore_main();
 }
 
@@ -1258,10 +1302,11 @@ void g3_composite(void) {
 
 /* The guest's billboards (g3Ents, worldview.ts): records of G3_ENT_FLOATS
    floats -- texture id, feet x, feet z, lift, width, height, u0 v0 u1 v1
-   (over the image, v down), alpha -- kept until the next call. gen3/mod.rs
-   reads them, faces them to the camera and hands back the quads. */
-#define G3_ENTS_MAX 64
-#define G3_ENT_FLOATS 11
+   (over the image, v down), alpha, kind, param -- kept until the next call.
+   gen3/mod.rs reads them, lays each out (a card facing the camera, a decal
+   on the floor or on a facade) and hands back the quads. */
+#define G3_ENTS_MAX 96
+#define G3_ENT_FLOATS 13
 static float ents[G3_ENTS_MAX * G3_ENT_FLOATS];
 static int nents;
 
