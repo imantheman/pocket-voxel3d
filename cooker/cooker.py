@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pocket Voxel cooker: drop your Red, Blue, Yellow, Gold, Silver or Crystal ROM on it, get an SD card folder.
+"""Pocket Voxel cooker: drop your Red, Blue, Yellow, Gold, Silver, Crystal, FireRed or LeafGreen ROM on it, get an SD card folder.
 
     Windows:  drag your .gb (or Yellow / Gold / Silver / Crystal .gbc) file onto "Cook Pocket Voxel.bat"
     Mac:      double-click "Cook Pocket Voxel.command", then drag the .gb
@@ -137,6 +137,22 @@ CRYSTAL_11_SHA1 = "f2f52230b536214ef7c9924f483392993e226cfb"
 CRYSTAL = {"id": "crystal", "label": "Crystal", "manifest": "manifest_crystal", "paks": "paks_crystal",
            "maps": 388, "gamedata": "gamedata.json", "overlay": "version_crystal.vxat",
            "dsx": "pocketvoxel-3ds-crystal.3dsx", "cia": "PocketVoxel3DCrystal.cia"}
+# FireRed and LeafGreen (Gen 3, the GPLv3 edition: see the README), 1.0 and
+# 1.1 each. They share one paks folder, as Red and Blue do; each keeps its
+# own data and save folder (3ds/voxelmon/firered/, .../leafgreen/).
+FIRERED_SHA1 = "41cb23d8dccc8ebd7c649cd8fbb58eeace6e2fdc"
+FIRERED_11_SHA1 = "dd5945db9b930750cb39d00c84da8571feebf417"
+LEAFGREEN_SHA1 = "574fa542ffebb14be69902d1d36f1ec0a4afd71e"
+LEAFGREEN_11_SHA1 = "7862c67bdecbe21d1d69ce082ce34327e1c6ed5e"
+FIRERED = {"id": "firered", "label": "FireRed", "manifest": None, "paks": "paks_firered", "data": "firered",
+           "maps": 425, "gamedata": "world.json", "overlay": None,
+           "dsx": "pocketvoxel-3ds-firered.3dsx", "cia": "PocketVoxel3DFireRed.cia"}
+LEAFGREEN = {"id": "leafgreen", "label": "LeafGreen", "manifest": None, "paks": "paks_firered", "data": "leafgreen",
+             "maps": 425, "gamedata": "world.json", "overlay": None,
+             "dsx": "pocketvoxel-3ds-leafgreen.3dsx", "cia": "PocketVoxel3DLeafGreen.cia"}
+# The credit the Gen 3 engine's licence terms require, word for word.
+GEN3_CREDIT = ("Based on the Pokemon Gen 1 Recompilation Project by BOIS CLUB GAMES, LLC "
+               "(https://github.com/bryanthaboi/gen1recomp)")
 # Red and Blue share one paks folder (their maps line up); Yellow's maps and
 # monsters are redrawn, so it has a folder of its own beside theirs, and Gold
 # (Gen 2, a different engine) has one too.
@@ -161,11 +177,17 @@ GAMES = {
     # Crystal's maps and tiles are its own, so it has a folder of its own.
     CRYSTAL_SHA1: CRYSTAL,
     CRYSTAL_11_SHA1: CRYSTAL,
+    FIRERED_SHA1: FIRERED,
+    FIRERED_11_SHA1: FIRERED,
+    LEAFGREEN_SHA1: LEAFGREEN,
+    LEAFGREEN_11_SHA1: LEAFGREEN,
 }
 # The games whose colours come out of the ROM itself (colour-handheld games).
-GBC_GAMES = ("yellow", "gold", "silver", "crystal")
+GBC_GAMES = ("yellow", "gold", "silver", "crystal", "firered", "leafgreen")
 # Gen 2: one engine, shapes from the game source, colours only from the ROM.
 GEN2_GAMES = ("gold", "silver", "crystal")
+# Gen 3: its own importer and cook (tools/cook3ds_gen3.ts); nothing to fetch.
+GEN3_GAMES = ("firered", "leafgreen")
 # The colours each Gen 1 game can be cooked in (--palette), default first:
 #   dmg        black and white, the original handheld's four greys
 #   gbc        the game's own colours (Yellow only: Red and
@@ -482,7 +504,7 @@ def open_folder(path):
 def find_rom(arg, yes):
     path = arg
     if not path:
-        say("Which ROM? Drag your Red, Blue, Yellow, Gold, Silver or Crystal file into this window and press Return.")
+        say("Which ROM? Drag your Red, Blue, Yellow, Gold, Silver, Crystal, FireRed or LeafGreen file into this window and press Return.")
         if yes:
             die("no ROM given (pass --rom PATH with --yes)")
         try:
@@ -499,10 +521,12 @@ def find_rom(arg, yes):
     digest = sha1_of(rom)
     game = GAMES.get(digest)
     if not game:
-        die(f"that is not the US Red, Blue, Yellow, Gold, Silver or Crystal ROM.",
+        die(f"that is not the US Red, Blue, Yellow, Gold, Silver, Crystal, FireRed or LeafGreen ROM.",
             f"\n  its SHA-1 is  {digest}\n  Red's is      {RED_SHA1}\n  Blue's is     {BLUE_SHA1}",
             f"\n  Yellow's is   {YELLOW_SHA1}\n  Gold's is     {GOLD_SHA1}\n  Silver's is   {SILVER_SHA1}",
             f"\n  Crystal's is  {CRYSTAL_SHA1} (1.0) or {CRYSTAL_11_SHA1} (1.1)",
+            f"\n  FireRed's is  {FIRERED_SHA1} (1.0) or {FIRERED_11_SHA1} (1.1)",
+            f"\n  LeafGreen's is {LEAFGREEN_SHA1} (1.0) or {LEAFGREEN_11_SHA1} (1.1)",
             "\nOnly those work. Other regions, colour hacks, ROM hacks, and",
             "files with a header or trailing bytes will all be refused here. Nothing was read from it.")
     say(f"  it is {game['label']} (US). Good.")
@@ -530,7 +554,8 @@ def write_sources(repo_desc, rom, palette, downloads, game):
         "",
         "DATA FILES FETCHED FROM THE PROJECTS THIS BUILDS ON:",
     ]
-    keys = (game["manifest"],) if game["id"] in GEN2_GAMES else (game["manifest"], "colour", "shapes")
+    keys = () if game["id"] in GEN3_GAMES else (game["manifest"],) if game["id"] in GEN2_GAMES \
+        else (game["manifest"], "colour", "shapes")
     for key in keys:
         folder, rel, (repo, commit), sha, size, lic = DATA_FILES[key]
         if key == "colour" and palette != "community":
@@ -547,6 +572,19 @@ def write_sources(repo_desc, rom, palette, downloads, game):
             "  voxelmon/cook/gen2-profile.json  (in the game source above)",
             "    the Gen 2 shapes: a snapshot of data/voxel_heights.lua from",
             "    https://github.com/UNDERdecoded/Gen2Recomped-DramaticShapes  commit 726782f  (MIT)",
+        ]
+    if game["id"] in GEN3_GAMES:
+        lines += [
+            "  (none: the Gen 3 importer and cook are in the game source above)",
+            "",
+            "LICENCE OF THIS EDITION:",
+            f"  {game['label']}'s engine is ported from gen1recomp's current version,",
+            "  GPLv3 with additional terms (voxelmon/game/gen3/LICENSE.md in the",
+            "  game source); so is the console binary built from it. As those",
+            "  terms require:",
+            "    " + GEN3_CREDIT,
+            "  The 3D world follows Gummygamer's gen1recomp-voxel-frlg terrain",
+            "  rules (MIT): https://github.com/Gummygamer/gen1recomp-voxel-frlg",
         ]
     if game["id"] in GBC_GAMES:
         lines += [
@@ -591,7 +629,7 @@ def write_sources(repo_desc, rom, palette, downloads, game):
 def main():
     global _log
     ap = argparse.ArgumentParser(add_help=True)
-    ap.add_argument("rom", nargs="?", help="your Red, Blue, Yellow, Gold, Silver or Crystal ROM file")
+    ap.add_argument("rom", nargs="?", help="your Red, Blue, Yellow, Gold, Silver, Crystal, FireRed or LeafGreen ROM file")
     ap.add_argument("--rom", dest="rom_opt")
     ap.add_argument("--yes", action="store_true", help="accept every default without asking")
     ap.add_argument("--palette", choices=("dmg", "gbc", "community"),
@@ -619,7 +657,8 @@ def main():
     rom, game = find_rom(args.rom_opt or args.rom, args.yes)
     # Gold's shapes are in the game source (gen2-profile.json); the Gen 1
     # games' come from potato_voxel
-    wanted = (game["manifest"],) if game["id"] in GEN2_GAMES else (game["manifest"], "shapes")
+    wanted = () if game["id"] in GEN3_GAMES else (game["manifest"],) if game["id"] in GEN2_GAMES \
+        else (game["manifest"], "shapes")
     say()
 
     # 2. the plan
@@ -647,8 +686,9 @@ def main():
 
     # 3. colour
     asked = args.palette or ("community" if args.colour else "dmg" if args.grayscale else None)
-    if game["id"] in GEN2_GAMES:
-        # Gold, Silver and Crystal have only their own colours, read from the ROM.
+    if game["id"] in GEN2_GAMES or game["id"] in GEN3_GAMES:
+        # Gold, Silver, Crystal, FireRed and LeafGreen have only their own
+        # colours, read from the ROM.
         palette = "gbc"
         say(f"Colour: {game['label']}'s own colour palettes, from your ROM.")
         if asked and asked != "gbc":
@@ -721,10 +761,19 @@ def main():
     say("the cooker's own progress.")
     if palette == "dmg":
         say("(Black and white, as you chose.)")
+    if game["id"] in GEN3_GAMES:
+        say(f"{game['label']}'s engine is GPLv3 (with its additional terms); the README says")
+        say("which parts. As those terms require:")
+        say("  " + GEN3_CREDIT)
     say()
     started = time.time()
+    gen3_out = repo / "dist" / "voxelmon" / "sdcard_gen3"
+    cmd = [str(bun), "tools/cook3ds.ts"]
+    if game["id"] in GEN3_GAMES:
+        shutil.rmtree(gen3_out, ignore_errors=True)
+        cmd = [str(bun), "tools/cook3ds_gen3.ts", str(rom), str(gen3_out), "--game", game["id"]]
     proc = subprocess.Popen(
-        [str(bun), "tools/cook3ds.ts"], cwd=str(repo), env=env,
+        cmd, cwd=str(repo), env=env,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
     )
     assert proc.stdout is not None
@@ -739,6 +788,8 @@ def main():
 
     # 6. collect
     card_src = repo / "dist" / "voxelmon" / "sdcard" / "3ds"
+    if game["id"] in GEN3_GAMES:
+        card_src = gen3_out / "3ds"
     if not (card_src / "voxelmon" / game["paks"] / game["gamedata"]).exists():
         die(f"the cook finished but left no card image at {card_src}")
     shutil.rmtree(OUTPUT, ignore_errors=True)
@@ -751,6 +802,7 @@ def main():
               "paks_orig_crystal", "paks_crystal"):
         shutil.rmtree(repo / "dist" / "voxelmon" / d, ignore_errors=True)
     shutil.rmtree(repo / "dist" / "voxelmon" / "sdcard", ignore_errors=True)
+    shutil.rmtree(gen3_out, ignore_errors=True)
     # A release ships the console binary next to this file; a checkout may
     # have built one. Either way the card wants it at /3ds/.
     for stray in card.glob("*.3dsx"):
@@ -777,7 +829,10 @@ def main():
     say("the card; if the PC asks about merging or replacing, you are one level")
     say("too high.) Then launch it from the Homebrew Launcher, or install")
     say(f"{game['cia']} with FBI; it reads the same paks.")
-    if game["id"] in GBC_GAMES:
+    if game["id"] in GEN3_GAMES:
+        say("FireRed and LeafGreen share the map files (voxelmon/paks_firered); each keeps its")
+        say(f"own data and save in voxelmon/{game['data']}, beside the other games on the card.")
+    elif game["id"] in GBC_GAMES:
         say(f"{game['label']} keeps its files in its own folder (voxelmon/{game['paks']}), so it")
         say("sits beside the other games on the same card without touching them.")
     else:
