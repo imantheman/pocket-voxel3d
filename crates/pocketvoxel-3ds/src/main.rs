@@ -7692,8 +7692,10 @@ if page_tex.len() < pak_static.atlases.len() {
 // byte-identical.
 #[cfg(feature = "gen3")]
 mod gen3;
-#[cfg(feature = "gen3")]
+#[cfg(all(feature = "gen3", not(feature = "leafgreen")))]
 const GAME: &str = "firered";
+#[cfg(feature = "leafgreen")]
+const GAME: &str = "leafgreen";
 #[cfg(feature = "gen3")]
 const PAKS_DIR: &str = "sdmc:/3ds/voxelmon/paks_firered";
 /// FireRed has no gamedata container yet: the guest is handed the world

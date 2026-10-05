@@ -40,6 +40,9 @@ crystal = ["gen2"]
 gen3 = ["pocketvoxel-core/gen3"]
 # FireRed: Gen 3. `cargo 3ds build --release --features firered`.
 firered = ["gen3"]
+# LeafGreen: the same engine and paks_firered; its own data and saves
+# (3ds/voxelmon/leafgreen/). `cargo 3ds build --release --features leafgreen`.
+leafgreen = ["gen3"]
 
 [build-dependencies]
 cc = "1"

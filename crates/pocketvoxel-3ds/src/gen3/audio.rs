@@ -27,9 +27,9 @@ use pocketvoxel_core::gen3::{build_blob, AudioPack, CryParams, M4a, SeOptions};
 
 use super::dlog;
 
-const AUDIO_DIR: &str = "sdmc:/3ds/voxelmon/firered/data/generated/gba/audio/";
-const BLOB_PATH: &str = "sdmc:/3ds/voxelmon/firered/audio.m4ap";
-const KEY_PATH: &str = "sdmc:/3ds/voxelmon/firered/audio.m4ap.key";
+const AUDIO_DIR: &str = concat!(g3_root!(), "data/generated/gba/audio/");
+const BLOB_PATH: &str = concat!(g3_root!(), "audio.m4ap");
+const KEY_PATH: &str = concat!(g3_root!(), "audio.m4ap.key");
 /// The start of the key the card cook writes beside its blob (gen3data.ts CARD_AUDIO_KEY).
 const CARD_KEY: &[u8] = b"M4AP1 card\n";
 
@@ -246,7 +246,7 @@ fn dump(buf: &[i16], peak: u32) {
         for s in d.iter() {
             w.extend_from_slice(&s.to_le_bytes());
         }
-        let _ = std::fs::write("sdmc:/3ds/voxelmon/firered/g3audio_dump.wav", &w);
+        let _ = std::fs::write(concat!(g3_root!(), "g3audio_dump.wav"), &w);
         *d = Vec::new();
     }
 }

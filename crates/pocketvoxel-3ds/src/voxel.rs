@@ -370,7 +370,11 @@ pub unsafe extern "C" fn voxel_lcd_bin(which: u32, a0: i32, p1: *const u8, l1: u
 // here, as main.rs's gen3 items are, so no line above moves.) The Gen 3
 // guest saves through its own store; these only keep the shared natives off
 // Red's files.
-#[cfg(feature = "gen3")]
+#[cfg(all(feature = "gen3", not(feature = "leafgreen")))]
 const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/firered/save_voxel.lua";
-#[cfg(feature = "gen3")]
+#[cfg(all(feature = "gen3", not(feature = "leafgreen")))]
 const OPTIONS_PATH: &str = "sdmc:/3ds/voxelmon/firered/options_voxel.lua";
+#[cfg(feature = "leafgreen")]
+const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/leafgreen/save_voxel.lua";
+#[cfg(feature = "leafgreen")]
+const OPTIONS_PATH: &str = "sdmc:/3ds/voxelmon/leafgreen/options_voxel.lua";

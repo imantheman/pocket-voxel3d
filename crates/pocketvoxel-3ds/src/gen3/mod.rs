@@ -35,6 +35,13 @@ use pocketvoxel_core::{cam, draw};
 
 use super::{dlog, JSContext};
 
+/// This game's folder on the card: FireRed's and LeafGreen's data and saves
+/// sit side by side (they share paks_firered, as Red and Blue share paks).
+#[cfg(not(feature = "leafgreen"))]
+macro_rules! g3_root { () => { "sdmc:/3ds/voxelmon/firered/" } }
+#[cfg(feature = "leafgreen")]
+macro_rules! g3_root { () => { "sdmc:/3ds/voxelmon/leafgreen/" } }
+
 mod audio;
 
 extern "C" {
@@ -49,6 +56,7 @@ extern "C" {
     fn g3_composite();
     fn qjs_register_g3(ctx: *mut JSContext) -> i32;
     fn g3_set_bytecode(p: *const u8, n: usize);
+    fn g3_files_root(root: *const u8);
 }
 
 /// The guest as QuickJS bytecode (cc_build_firered.sh: the bundle compiled on
@@ -91,7 +99,9 @@ pub fn size_pak_cache() {
 /// Before the guest is evaluated: the 2D layer's GPU side, the sound (so
 /// the guest finds it at load) and the gen3 natives.
 pub fn before_guest() {
-    let _ = std::fs::create_dir_all("sdmc:/3ds/voxelmon/firered");
+    let _ = std::fs::create_dir_all(g3_root!());
+    // the cache/pack reader's folder (g3_files.c defaults to FireRed's)
+    unsafe { g3_files_root(concat!(g3_root!(), "\0").as_ptr()) };
     let lin0 = super::unsafe_free_kb();
     let gi = unsafe { g3_gpu_init_shared(super::SHADER_BYTES.as_ptr(), super::SHADER_BYTES.len() as u32) };
     unsafe { GPU_OK = gi == 1 };
@@ -229,7 +239,7 @@ pub fn shot(n: u32) {
     if !unsafe { GPU_OK } {
         return;
     }
-    let path = format!("sdmc:/3ds/voxelmon/firered/g3shot_{}.ppm\0", n);
+    let path = format!(concat!(g3_root!(), "g3shot_{}.ppm\0"), n);
     let ok = unsafe { g3_shot(path.as_ptr()) } != 0;
     dlog(&format!("[pv] g3: shot {} {}", &path[..path.len() - 1], if ok { "written" } else { "FAILED" }));
 }
