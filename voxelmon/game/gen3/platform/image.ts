@@ -52,6 +52,9 @@ export function newImageData(a: number | FileData | string, h?: number, _fmt?: s
   if (typeof a === "number") return new ImageData(a, h!, data);
   const bytes = typeof a === "string" ? getHost().read(a) : a.bytes;
   if (bytes === undefined) throw new Error(`newImageData: cannot read ${typeof a === "string" ? a : a.name}`);
+  // the host's decoder where it has one and gives the same pixels (G3Host.pngDecode)
+  const nat = getHost().pngDecode?.(bytes);
+  if (nat) return new ImageData(nat[0], nat[1], nat[2]);
   const png = decodePngBytes(toBytes(bytes));
   return new ImageData(png.w, png.h, png.rgba);
 }

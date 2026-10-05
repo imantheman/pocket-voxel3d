@@ -14,6 +14,9 @@
                                                         platform/worldview.ts)
      g3Strips(mode, r, g, b, a)                        (the top screen's side
                                                         strips, worldview.ts)
+     g3PngDecode(byte string) -> [w, h, Uint8Array] | undefined
+                                                       (RGBA8, what platform/
+                                                        pngdecode.ts gives)
 
    Paths are the cache's (data/generated/gba/...), under
    sdmc:/3ds/voxelmon/firered/. */
@@ -36,6 +39,8 @@ void g3_ents_set(const float *f, int n);
 void g3_strips_set(int mode, float r, float g, float b, float a);
 uint8_t *g3_read_file(const char *path, size_t *len);
 int g3_exists(const char *path);
+uint8_t *g3_png_decode(const uint8_t *png, size_t len, int *ow, int *oh);
+int g3_png_same(const uint8_t *png, size_t len);
 
 /* The bytes of an ArrayBuffer or a typed array (the guest's own memory). */
 static const uint8_t *g3_bytes(JSContext *ctx, JSValueConst v, size_t *len) {
@@ -217,6 +222,40 @@ static JSValue g3_readbuf(JSContext *ctx, JSValueConst t, int c, JSValueConst *v
     JS_FreeCString(ctx, path);
     if (!b) return JS_UNDEFINED;
     return JS_NewArrayBuffer(ctx, b, n, 0, g3_realloc_buf, NULL, false);
+}
+
+/* A PNG (a byte string, as g3Read gives) decoded here rather than by the
+   guest's inflate: [w, h, RGBA8 Uint8Array], or undefined when g3_png_same
+   says no or it fails (the guest then decodes it itself). */
+static JSValue g3_pngdecode(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 1) return JS_UNDEFINED;
+    size_t ulen = 0;
+    const char *u = JS_ToCStringLen(ctx, &ulen, v[0]);
+    if (!u) { JS_FreeValue(ctx, JS_GetException(ctx)); return JS_UNDEFINED; }
+    /* the string's UTF-8 back to its bytes (each char is one byte, 0..255) */
+    uint8_t *b = (uint8_t *)malloc(ulen + 1);
+    size_t n = 0;
+    int bad = !b;
+    for (size_t i = 0; !bad && i < ulen; i++) {
+        uint8_t x = (uint8_t)u[i];
+        if (x < 0x80) b[n++] = x;
+        else if ((x & 0xE0) == 0xC0 && i + 1 < ulen) { b[n++] = (uint8_t)(((x & 0x1F) << 6) | ((uint8_t)u[i + 1] & 0x3F)); i++; }
+        else bad = 1;
+    }
+    JS_FreeCString(ctx, u);
+    if (bad || !g3_png_same(b, n)) { free(b); return JS_UNDEFINED; }
+    int w = 0, h = 0;
+    uint8_t *rgba = g3_png_decode(b, n, &w, &h);
+    free(b);
+    if (!rgba) return JS_UNDEFINED;
+    JSValue arr = JS_NewUint8Array(ctx, rgba, (size_t)w * h * 4, g3_realloc_buf, NULL, false);
+    if (JS_IsException(arr)) { free(rgba); return arr; }
+    JSValue a = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, a, 0, JS_NewInt32(ctx, w));
+    JS_SetPropertyUint32(ctx, a, 1, JS_NewInt32(ctx, h));
+    JS_SetPropertyUint32(ctx, a, 2, arr);
+    return a;
 }
 
 static JSValue g3_exists_js(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
@@ -466,6 +505,7 @@ int qjs_register_g3(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "g3Mem", JS_NewCFunction(ctx, g3_mem, "g3Mem", 0));
     JS_SetPropertyStr(ctx, o, "g3Gc", JS_NewCFunction(ctx, g3_gc, "g3Gc", 1));
     JS_SetPropertyStr(ctx, o, "g3Strips", JS_NewCFunction(ctx, g3_strips, "g3Strips", 5));
+    JS_SetPropertyStr(ctx, o, "g3PngDecode", JS_NewCFunction(ctx, g3_pngdecode, "g3PngDecode", 1));
     static const struct { const char *name; JSCFunction *fn; int n; } snd[] = {
         { "g3SongPlay", g3_songplay, 1 }, { "g3SongStop", g3_songstop, 0 },
         { "g3SongPause", g3_songpause, 0 }, { "g3SongResume", g3_songresume, 0 },

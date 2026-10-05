@@ -22,6 +22,12 @@ export interface G3Host {
    */
   batchUpload?(id: number, tex: number, quads: Float32Array, count: number): void;
   batchFree?(id: number): void;
+  /**
+   * Optional: a PNG (a byte string) decoded by the host -- [w, h, RGBA8] --
+   * or undefined, when the guest's own decoder (pngdecode.ts) is to do it.
+   * Only where the pixels are exactly the guest decoder's.
+   */
+  pngDecode?(png: string): [number, number, Uint8Array] | undefined;
   /** A cache file's bytes as a byte string, or undefined. */
   read(path: string): string | undefined;
   exists(path: string): boolean;

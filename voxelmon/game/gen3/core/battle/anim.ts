@@ -103,6 +103,22 @@ function punch_gba_transparent(imageData: ImageData): ImageData {
   if (!imageData || !imageData.mapPixel) return imageData;
   // Exact pret key color and near-matches (98/255, 41/255, 1)
   const kr = 98 / 255, kg = 41 / 255, kb = 1;
+  const px = (imageData as { px?: Uint8Array }).px;
+  if (px) {
+    // NOT FAITHFUL (performance, same pixels): mapPixel's test below, run
+    // over the bytes in place (no closure call and arrays per pixel); a
+    // pixel it keeps is left as it is, which is what mapPixel writes back
+    for (let o = 0; o < px.length; o += 4) {
+      const r = px[o]! / 255, g = px[o + 1]! / 255, b = px[o + 2]! / 255, a = px[o + 3]! / 255;
+      if (a < 0.01
+        || (Math.abs(r - kr) < 0.004 && Math.abs(g - kg) < 0.004 && Math.abs(b - kb) < 0.004)
+        || (b > 0.95 && r > 0.30 && r < 0.50 && g < 0.25)) {
+        px[o] = 0; px[o + 1] = 0; px[o + 2] = 0; px[o + 3] = 0;
+      }
+    }
+    imageData.version++;
+    return imageData;
+  }
   imageData.mapPixel((_x, _y, r, g, b, a) => {
     if (a < 0.01) return [0, 0, 0, 0];
     // Exact key
@@ -130,6 +146,45 @@ function hydrate_tag_images(pack: LuaTable): void {
   const root = "data/generated/gba/pokemon/battle_anims/";
   for (const [tag, info] of pairs<any>(pack.tags)) {
     if (info != null && typeof info === "object" && !info.image && info.file) {
+      // NOT FAITHFUL (performance and memory): each tag's sheet is
+      // hydrated the first time anything reads it (lazy_tag), not all ~580
+      // at once -- that was over a minute of decoding at the first move on
+      // a New 3DS, and every sheet's texture in linear memory
+      lazy_tag(info, () => hydrate_tag(cache, root, tag, info));
+    }
+  }
+}
+
+/** The fields hydrate_tag sets on a tag's info. */
+const LAZY_TAG_KEYS = ["image", "w", "h", "idxImage", "idxData"];
+
+/**
+ * Stand-ins for hydrate_tag's fields on `info`: the first read or write of
+ * any of them takes them off and hydrates the tag, so every reader sees
+ * what an eager hydration would have left.
+ */
+function lazy_tag(info: any, hydrate: () => void): void {
+  let done = false;
+  const run = (): void => {
+    if (done) return;
+    done = true;
+    for (const k of LAZY_TAG_KEYS) delete info[k];
+    hydrate();
+  };
+  for (const k of LAZY_TAG_KEYS) {
+    Object.defineProperty(info, k, {
+      configurable: true,
+      enumerable: false,
+      get(): unknown { run(); return info[k]; },
+      set(v: unknown): void { run(); info[k] = v; },
+    });
+  }
+}
+
+// One tag of Lua anim.lua:655's loop.
+function hydrate_tag(cache: any, root: string, tag: unknown, info: any): void {
+  {
+    {
       let bytes: string | undefined;
       const rel = root + info.file;
       if (cache && cache.read) {

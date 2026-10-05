@@ -291,3 +291,27 @@ uint8_t *g3_png_decode(const uint8_t *png, size_t len, int *ow, int *oh) {
     *ow = (int)w; *oh = (int)h;
     return out;
 }
+
+/* Whether g3_png_decode gives exactly what the guest's own decoder
+   (platform/pngdecode.ts) does for this PNG: 8-bit, not interlaced, and no
+   tRNS on a grey or RGB image (which g3_png_decode honours and the guest's
+   ignores). Anything else is left to the guest. */
+int g3_png_same(const uint8_t *png, size_t len) {
+    if (len < 33 || png[1] != 'P' || png[2] != 'N' || png[3] != 'G') return 0;
+    int ctype = -1;
+    size_t p = 8;
+    while (p + 12 <= len) {
+        uint32_t n = ((uint32_t)png[p] << 24) | ((uint32_t)png[p + 1] << 16) | ((uint32_t)png[p + 2] << 8) | png[p + 3];
+        const uint8_t *t = png + p + 4, *d = png + p + 8;
+        if (p + 12 + n > len) return 0;
+        if (!memcmp(t, "IHDR", 4)) {
+            if (n < 13 || d[8] != 8 || d[12] != 0) return 0;
+            ctype = d[9];
+            if (ctype != 0 && ctype != 2 && ctype != 3 && ctype != 4 && ctype != 6) return 0;
+        } else if (!memcmp(t, "tRNS", 4)) {
+            if (ctype == 0 || ctype == 2) return 0;
+        } else if (!memcmp(t, "IEND", 4)) break;
+        p += 12 + n;
+    }
+    return ctype >= 0;
+}

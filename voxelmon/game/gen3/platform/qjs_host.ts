@@ -12,12 +12,14 @@ import { setAudio, type CryParams, type G3Audio, type SeOptions } from "./audio.
 
 const n = native;
 export const clock = (): number => (n.now ? n.now() : Date.now() * 1000);
+/** The natives only newer binaries have. */
+const pngNative = n as typeof n & { g3PngDecode?(png: string): [number, number, Uint8Array] | undefined };
 
 /** Draw-list timing, summed until read (main.ts's perf lines). */
 export const drawProf = { conv: 0, len: 0 };
 
 /** The other natives' calls and time (us), summed until main.ts's perf line reads them. */
-export const nativeProf = { up: 0, upUs: 0, upKB: 0, cache: 0, cacheUs: 0, rd: 0, rdUs: 0, ex: 0, exUs: 0, au: 0, auUs: 0, auTop: {} as Record<string, number> };
+export const nativeProf = { up: 0, upUs: 0, upKB: 0, cache: 0, cacheUs: 0, rd: 0, rdUs: 0, ex: 0, exUs: 0, au: 0, auUs: 0, png: 0, pngUs: 0, auTop: {} as Record<string, number> };
 
 /**
  * Cache reads while `on` (main.ts turns it on for Game3.load): each read's
@@ -54,6 +56,13 @@ class QuickJsG3Host implements G3Host {
     ? (id: number, tex: number, quads: Float32Array, count: number): void => n.g3BatchUpload!(id, tex, quads, count)
     : undefined;
   batchFree = n.g3BatchFree ? (id: number): void => n.g3BatchFree!(id) : undefined;
+  // PNGs decoded by the host (g3_shim.c g3PngDecode), where the binary has it
+  pngDecode = pngNative.g3PngDecode ? (png: string): [number, number, Uint8Array] | undefined => {
+    const t = clock();
+    const r = pngNative.g3PngDecode!(png);
+    nativeProf.png++; nativeProf.pngUs += clock() - t;
+    return r;
+  } : undefined;
   draw(list: Float32Array): void {
     const t = clock();
     // the draw list is already f32 storage (drawlist.ts): handed over as is
