@@ -10,6 +10,7 @@
 
 import { G, type Shader } from "./platform/graphics.ts";
 import { newImageData, type Canvas, type Image } from "./platform/image.ts";
+import { getAudio } from "./platform/audio.ts";
 
 const ROOT = "data/generated/gba/";
 
@@ -18,6 +19,44 @@ export const HOSTTEST_FILES = [
   "intro/title_logo.png", "intro/oak.png", "intro/pikachu_body.png", "intro/nidoran_f.png",
   "intro/intro_scene2_gengar.png", "intro/intro_star.png", "region_map/navel_rock_patch.png",
 ];
+
+/** The sound part of the card, by shown frame (30 a second): song 300
+ * (Pallet Town) from the start, an SE every 3 s (select, door, ball, bang,
+ * success in turn), a cry every 7 s (Pikachu, Bulbasaur, Charizard, Mewtwo,
+ * cry modes 0/2/5/0), and at 20 s the heal fanfare over the paused song. The
+ * host's pvlog line "g3 sound: peak N" is the check. */
+const TEST_SES = [5, 241, 15, 20, 25];
+const TEST_CRIES: [number, number][] = [[25, 0], [1, 2], [6, 5], [150, 0]];
+let fanfareUntil = -1;
+export function hostTestSound(f: number): void {
+  const a = getAudio();
+  if (f === 1) {
+    a.setSongVolume(1);
+    a.playSong(300);
+    console.log(`[pv] g3 sound test: song 300 -> now ${a.song()}`);
+  }
+  if (f > 0 && f % 90 === 45) {
+    const id = TEST_SES[Math.floor(f / 90) % TEST_SES.length]!;
+    a.playSe(id, { pan: 0, gain: 1 });
+    console.log(`[pv] g3 sound test: se ${id} playing ${a.sePlaying(id)}`);
+  }
+  if (f > 0 && f % 210 === 100) {
+    const [sp, mode] = TEST_CRIES[Math.floor(f / 210) % TEST_CRIES.length]!;
+    const frames = a.playCry(sp, { mode }, 0, 1);
+    console.log(`[pv] g3 sound test: cry ${sp} mode ${mode} -> ${frames} frames, playing ${a.cryPlaying()}`);
+  }
+  if (f === 600) {
+    a.pauseSong();
+    a.playFanfare(256, 1);
+    fanfareUntil = 0;
+    console.log(`[pv] g3 sound test: fanfare 256 playing ${a.fanfarePlaying()}, song paused ${a.songPaused()}`);
+  }
+  if (fanfareUntil === 0 && f > 600 && !a.fanfarePlaying()) {
+    fanfareUntil = f;
+    a.resumeSong();
+    console.log(`[pv] g3 sound test: fanfare done after ${((f - 600) / 30).toFixed(1)} s; song resumed`);
+  }
+}
 
 /** The frame the 3DS photographs (and the desktop renders) for the comparison. */
 export const HOSTTEST_SHOT_FRAME = 90;

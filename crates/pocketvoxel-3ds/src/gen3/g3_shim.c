@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "quickjs.h"
 
 int g3_tex_upload(int id, int w, int h, const uint8_t *rgba, size_t len, int repeat);
@@ -190,6 +191,162 @@ static JSValue g3_exists_js(JSContext *ctx, JSValueConst t, int c, JSValueConst 
     return JS_NewBool(ctx, ok);
 }
 
+/* ------------------------------------------------------------------ sound
+   The G3Audio natives (platform/audio.ts), over the M4A engine in
+   src/gen3/audio.rs (g3a_*):
+
+     g3SongPlay(id) -> bool, g3SongStop(), g3SongPause(), g3SongResume(),
+     g3SongVolume(gain), g3Song() -> id | -1, g3SongPaused() -> bool,
+     g3SeMono(bool)
+     g3SePlay(id, looping?, maxSec?, pan, gain) -> bool
+     g3SeStop(id | -1 | undefined), g3SePlaying(id | -1 | undefined) -> bool,
+     g3SePan(pan) -> pan
+     g3FanfarePlay(id, volume) -> bool, g3FanfarePlaying() -> bool,
+     g3FanfareStop()
+     g3CryPlay(species, mode, pan, volume, length?, release?, pitch?,
+               chorus?, reverse?, cryVolume?) -> frames | undefined
+     g3CryStop(), g3CryPlaying() -> bool, g3AudioStopAll(), g3AudioReady()
+
+   A missing optional argument is undefined (Lua nil): -1 for an id or a
+   flag, NaN for a number. */
+
+int g3a_ready(void);
+int g3a_song_play(int id);
+void g3a_song_stop(void);
+void g3a_song_pause(void);
+void g3a_song_resume(void);
+void g3a_song_volume(double gain);
+int g3a_song(void);
+int g3a_song_paused(void);
+void g3a_mono(int mono);
+int g3a_se_play(int id, int looping, double max_sec, double pan, double gain);
+void g3a_se_stop(int id);
+int g3a_se_playing(int id);
+double g3a_se_pan(double pan);
+int g3a_fanfare_play(int id, double volume);
+int g3a_fanfare_playing(void);
+void g3a_fanfare_stop(void);
+double g3a_cry_play(int species, int mode, double pan, double volume, const double *ov);
+void g3a_cry_stop(void);
+int g3a_cry_playing(void);
+void g3a_stop_all(void);
+
+static int g3_arg_int(JSContext *ctx, int c, JSValueConst *v, int i, int def) {
+    int32_t x = def;
+    if (i >= c || JS_IsUndefined(v[i]) || JS_IsNull(v[i])) return def;
+    if (JS_ToInt32(ctx, &x, v[i])) { JS_FreeValue(ctx, JS_GetException(ctx)); return def; }
+    return (int)x;
+}
+
+static double g3_arg_num(JSContext *ctx, int c, JSValueConst *v, int i, double def) {
+    double x = def;
+    if (i >= c || JS_IsUndefined(v[i]) || JS_IsNull(v[i])) return def;
+    if (JS_ToFloat64(ctx, &x, v[i])) { JS_FreeValue(ctx, JS_GetException(ctx)); return def; }
+    return x;
+}
+
+/* true/false (or a number), -1 when not given */
+static int g3_arg_flag(JSContext *ctx, int c, JSValueConst *v, int i) {
+    if (i >= c || JS_IsUndefined(v[i]) || JS_IsNull(v[i])) return -1;
+    return JS_ToBool(ctx, v[i]) ? 1 : 0;
+}
+
+static JSValue g3_songplay(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    return JS_NewBool(ctx, g3a_song_play(g3_arg_int(ctx, c, v, 0, -1)));
+}
+static JSValue g3_songstop(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    g3a_song_stop();
+    return JS_UNDEFINED;
+}
+static JSValue g3_songpause(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    g3a_song_pause();
+    return JS_UNDEFINED;
+}
+static JSValue g3_songresume(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    g3a_song_resume();
+    return JS_UNDEFINED;
+}
+static JSValue g3_songvolume(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    g3a_song_volume(g3_arg_num(ctx, c, v, 0, 1.0));
+    return JS_UNDEFINED;
+}
+static JSValue g3_song(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    return JS_NewInt32(ctx, g3a_song());
+}
+static JSValue g3_songpaused(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    return JS_NewBool(ctx, g3a_song_paused());
+}
+static JSValue g3_semono(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    g3a_mono(g3_arg_flag(ctx, c, v, 0) == 1);
+    return JS_UNDEFINED;
+}
+static JSValue g3_seplay(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    return JS_NewBool(ctx, g3a_se_play(g3_arg_int(ctx, c, v, 0, -1), g3_arg_flag(ctx, c, v, 1),
+        g3_arg_num(ctx, c, v, 2, NAN), g3_arg_num(ctx, c, v, 3, 0.0), g3_arg_num(ctx, c, v, 4, 1.0)));
+}
+static JSValue g3_sestop(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    g3a_se_stop(g3_arg_int(ctx, c, v, 0, -1));
+    return JS_UNDEFINED;
+}
+static JSValue g3_seplaying(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    return JS_NewBool(ctx, g3a_se_playing(g3_arg_int(ctx, c, v, 0, -1)));
+}
+static JSValue g3_sepan(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    return JS_NewFloat64(ctx, g3a_se_pan(g3_arg_num(ctx, c, v, 0, 0.0)));
+}
+static JSValue g3_fanfareplay(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    return JS_NewBool(ctx, g3a_fanfare_play(g3_arg_int(ctx, c, v, 0, -1), g3_arg_num(ctx, c, v, 1, 1.0)));
+}
+static JSValue g3_fanfareplaying(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    return JS_NewBool(ctx, g3a_fanfare_playing());
+}
+static JSValue g3_fanfarestop(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    g3a_fanfare_stop();
+    return JS_UNDEFINED;
+}
+static JSValue g3_cryplay(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    double ov[6];
+    for (int i = 0; i < 6; i++) ov[i] = g3_arg_num(ctx, c, v, 4 + i, NAN);
+    double frames = g3a_cry_play(g3_arg_int(ctx, c, v, 0, -1), g3_arg_int(ctx, c, v, 1, 0),
+        g3_arg_num(ctx, c, v, 2, 0.0), g3_arg_num(ctx, c, v, 3, 1.0), ov);
+    if (isnan(frames)) return JS_UNDEFINED;
+    return JS_NewFloat64(ctx, frames);
+}
+static JSValue g3_crystop(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    g3a_cry_stop();
+    return JS_UNDEFINED;
+}
+static JSValue g3_cryplaying(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    return JS_NewBool(ctx, g3a_cry_playing());
+}
+static JSValue g3_stopall(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    g3a_stop_all();
+    return JS_UNDEFINED;
+}
+static JSValue g3_audioready(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    return JS_NewBool(ctx, g3a_ready());
+}
+
 int qjs_register_g3(JSContext *ctx) {
     JSValue g = JS_GetGlobalObject(ctx);
     JSValue o = JS_GetPropertyStr(ctx, g, "voxel");
@@ -204,6 +361,20 @@ int qjs_register_g3(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "g3Read", JS_NewCFunction(ctx, g3_read, "g3Read", 1));
     JS_SetPropertyStr(ctx, o, "g3ReadBuf", JS_NewCFunction(ctx, g3_readbuf, "g3ReadBuf", 1));
     JS_SetPropertyStr(ctx, o, "g3Exists", JS_NewCFunction(ctx, g3_exists_js, "g3Exists", 1));
+    static const struct { const char *name; JSCFunction *fn; int n; } snd[] = {
+        { "g3SongPlay", g3_songplay, 1 }, { "g3SongStop", g3_songstop, 0 },
+        { "g3SongPause", g3_songpause, 0 }, { "g3SongResume", g3_songresume, 0 },
+        { "g3SongVolume", g3_songvolume, 1 }, { "g3Song", g3_song, 0 },
+        { "g3SongPaused", g3_songpaused, 0 }, { "g3SeMono", g3_semono, 1 },
+        { "g3SePlay", g3_seplay, 5 }, { "g3SeStop", g3_sestop, 1 },
+        { "g3SePlaying", g3_seplaying, 1 }, { "g3SePan", g3_sepan, 1 },
+        { "g3FanfarePlay", g3_fanfareplay, 2 }, { "g3FanfarePlaying", g3_fanfareplaying, 0 },
+        { "g3FanfareStop", g3_fanfarestop, 0 }, { "g3CryPlay", g3_cryplay, 10 },
+        { "g3CryStop", g3_crystop, 0 }, { "g3CryPlaying", g3_cryplaying, 0 },
+        { "g3AudioStopAll", g3_stopall, 0 }, { "g3AudioReady", g3_audioready, 0 },
+    };
+    for (size_t i = 0; i < sizeof(snd) / sizeof(snd[0]); i++)
+        JS_SetPropertyStr(ctx, o, snd[i].name, JS_NewCFunction(ctx, snd[i].fn, snd[i].name, snd[i].n));
     JS_FreeValue(ctx, o);
     JS_FreeValue(ctx, g);
     return 0;

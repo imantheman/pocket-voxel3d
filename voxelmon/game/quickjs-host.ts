@@ -169,6 +169,33 @@ export interface VoxelNative {
   /** A cache file's bytes, or undefined. */
   g3ReadBuf?(path: string): ArrayBuffer | undefined;
   g3Exists?(path: string): boolean;
+  // The Gen 3 sound (gen3/platform/audio.ts G3Audio) over the host's M4A
+  // engine (crates/pocketvoxel-3ds/src/gen3/audio.rs). An id of -1 means
+  // any/all; an omitted optional argument is Lua's nil.
+  g3AudioReady?(): boolean;
+  g3SongPlay?(id: number): boolean;
+  g3SongStop?(): void;
+  g3SongPause?(): void;
+  g3SongResume?(): void;
+  g3SongVolume?(gain: number): void;
+  /** The song on the BGM player, or -1. */
+  g3Song?(): number;
+  g3SongPaused?(): boolean;
+  g3SeMono?(mono: boolean): void;
+  g3SePlay?(id: number, looping: boolean | undefined, maxSec: number | undefined, pan: number, gain: number): boolean;
+  g3SeStop?(id?: number): void;
+  g3SePlaying?(id?: number): boolean;
+  g3SePan?(pan: number): number;
+  g3FanfarePlay?(id: number, volume: number): boolean;
+  g3FanfarePlaying?(): boolean;
+  g3FanfareStop?(): void;
+  /** The cry's length in 60 Hz frames, or undefined (no cry). Overrides: undefined = the mode's. */
+  g3CryPlay?(species: number, mode: number, pan: number, volume: number,
+    length?: number, release?: number, pitch?: number, chorus?: number, reverse?: number,
+    cryVolume?: number): number | undefined;
+  g3CryStop?(): void;
+  g3CryPlaying?(): boolean;
+  g3AudioStopAll?(): void;
 }
 
 export const native = (globalThis as unknown as { voxel: VoxelNative }).voxel;

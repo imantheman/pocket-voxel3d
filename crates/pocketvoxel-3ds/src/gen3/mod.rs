@@ -9,6 +9,8 @@ use ctru::prelude::*;
 
 use super::{dlog, JSContext};
 
+mod audio;
+
 static GAME_JS: &[u8] = include_bytes!("../../game-firered.js");
 
 extern "C" {
@@ -48,6 +50,9 @@ pub fn run() {
         }
         return;
     }
+    // sound before the guest, so its first song is heard (audio.rs)
+    let sound_on = audio::init();
+    println!("sound: {}", if sound_on { "on" } else { "off" });
     let mut guest_ok = false;
     unsafe {
         let mut err = [0u8; 256];
@@ -67,6 +72,8 @@ pub fn run() {
         }
     }
 
+    // the sound stats start with the loop (boot is not in the first line)
+    let _ = audio::take_stats(1.0);
     let mut sim_last: u64 = 0;
     let mut sim_acc: f32 = 0.0;
     let mut shot_n: u32 = 0;
@@ -146,9 +153,11 @@ pub fn run() {
                 js_us / 1000.0 / fr, ticks, p[7], p[8],
                 p[2] / p[1].max(1.0), p[3] / p[1].max(1.0), p[4] / fr, p[5] / fr, p[6], p[9],
             ));
+            dlog(&format!("[pv] g3 {}", audio::take_stats(now.wrapping_sub(perf_last) as f32 / 1000.0)));
             js_us = 0.0;
             ticks = 0;
             perf_last = now;
         }
     }
+    audio::exit();
 }

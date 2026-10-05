@@ -491,3 +491,82 @@ fn gen3_m4a_blob_minimal() {
     assert!(out.iter().any(|&s| s != 0));
     assert_eq!(engine::normalize_pan(99.0), 63.0);
 }
+
+/// Boot and render cost on the desktop (the 3DS host's budget estimate):
+/// `cargo test --release --features gen3 gen3_m4a_bench -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn gen3_m4a_bench() {
+    let t = std::time::Instant::now();
+    let Some(b) = build_pack_blob() else {
+        println!("no reference cache");
+        return;
+    };
+    println!("build_blob (read + parse + build): {:.1} ms, {} KB", t.elapsed().as_secs_f64() * 1e3, b.len() / 1024);
+    let dir = cache_dir();
+    let index = std::fs::read(dir.join("index.lua")).unwrap();
+    let t = std::time::Instant::now();
+    let _ = super::lualit::parse(&index).unwrap();
+    println!("  of which lualit::parse(index.lua, {} KB): {:.1} ms", index.len() / 1024, t.elapsed().as_secs_f64() * 1e3);
+    let t = std::time::Instant::now();
+    let p = AudioPack::from_blob(b.clone()).unwrap();
+    println!("from_blob: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+    let mut e = M4a::new(p, 22050);
+    let mut out = std::vec![0i16; 368 * 2];
+    for song in [300u16, 296, 298, 299, 278] {
+        let t0 = std::time::Instant::now();
+        if !e.play_song(song) { println!("song {} missing", song); continue; }
+        println!("  play_song {}: {:.3} ms", song, t0.elapsed().as_secs_f64() * 1e3);
+        let t = std::time::Instant::now();
+        let mut worst = 0f64;
+        for tick in 0..600 {
+            let t1 = std::time::Instant::now();
+            if tick % 120 == 10 { e.play_se(5, SeOptions::default()); }
+            if tick % 200 == 20 { e.play_cry(25, &CryParams::from_mode(0, None), 0.0, 1.0); }
+            let tc = t1.elapsed().as_secs_f64();
+            if tc > 0.0002 { println!("  tick {}: calls {:.3} ms", tick, tc * 1e3); }
+            e.render(&mut out);
+            worst = worst.max(t1.elapsed().as_secs_f64());
+        }
+        println!("song {}: 10 s rendered in {:.1} ms ({:.3} ms/tick avg, {:.3} worst)", song,
+            t.elapsed().as_secs_f64() * 1e3, t.elapsed().as_secs_f64() * 1e3 / 600.0, worst * 1e3);
+    }
+}
+
+/// A 3DS capture (the FireRed host built with PV_G3_AUDIO_DUMP; the test
+/// card starts song 300 at volume 1) against the same song rendered here:
+/// `M4A_DUMP=/tmp/g3audio_dump.wav cargo test --release --features gen3
+/// gen3_m4a_3ds_dump -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn gen3_m4a_3ds_dump() {
+    let Ok(path) = std::env::var("M4A_DUMP") else { return };
+    let Some(b) = blob() else { return };
+    let w = std::fs::read(&path).unwrap();
+    let got: Vec<i16> = w[44..].chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect();
+    let mut e = M4a::new(AudioPack::from_blob(b.clone()).unwrap(), 22050);
+    e.set_song_volume(1.0);
+    e.play_song(300);
+    let mut exp: Vec<i16> = Vec::new();
+    let mut started = false;
+    let mut buf = std::vec![0i16; 368 * 2];
+    while exp.len() < got.len() {
+        e.render(&mut buf);
+        if !started && buf.iter().all(|&s| s == 0) { continue; }
+        started = true;
+        exp.extend_from_slice(&buf);
+    }
+    let n = got.len() / 2;
+    let first = (0..got.len()).find(|&i| got[i] != exp[i]).map(|i| i / 2);
+    let mut max = 0i32;
+    let lim = first.unwrap_or(n).max(1);
+    for i in 0..(lim * 2).min(got.len()) { max = max.max((got[i] as i32 - exp[i] as i32).abs()); }
+    println!("3DS dump {} frames ({:.2} s); identical to the desktop render for the first {} frames ({:.3} s)",
+        n, n as f64 / 22050.0, first.unwrap_or(n), first.unwrap_or(n) as f64 / 22050.0);
+    // after the first difference (the test card's first SE), how far apart
+    if let Some(f) = first {
+        let mut m = 0i32;
+        for i in f * 2..(f * 2 + 2000).min(got.len()) { m = m.max((got[i] as i32 - exp[i] as i32).abs()); }
+        println!("  first difference at frame {} ({:.3} s): max |d| over the next 1000 frames {}", f, f as f64 / 22050.0, m);
+    }
+}
