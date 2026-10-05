@@ -11,17 +11,15 @@
 //   set trap the same way rawset bypasses __newindex.
 // - Abilities.escapeBlocker returns (foe, ability): a tuple.
 // - BattleText.key returns (key, fill): Brian takes the first value.
-// - NOT FAITHFUL: no coroutines here. coroutine.running() reads as the main
-//   thread (nil), so the interactive Baton Pass choice (the link branch and
-//   the interactive player branch, which yield {kind = "baton_pass"} to the
-//   engine) is never offered: an interactive player's Baton Pass goes to the
-//   first candidate unless st.batonPassChooser is set. The engine port needs
-//   its own way to suspend a move for that choice.
+// - Coroutines go through the engine's shim (engine.ts: CoYield):
+//   coroutine.running() is Engine.coRunning(), and Baton Pass's
+//   coroutine.yield({kind = "baton_pass"}) throws Engine.coYield(req, cont),
+//   where cont is the rest of batonPass (finish) given the resumed value.
+//   Effects.run carries the yield through its pcall (effects/init.ts).
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { truthy, tonumber } from "../../../../../import/gen3/lua.ts";
 import { ipairs, pairs, len, seq, type LuaTable } from "../../../platform/lt.ts";
-import { notPorted } from "../../../notported.ts";
 import type { EffectContext } from "../effect_ctx.ts";
 import H from "./_helpers.ts";
 import Types from "../types.ts";
@@ -45,14 +43,9 @@ function rawset(t: any, k: string, v: any): void {
   Object.defineProperty(t, k, { value: v, writable: true, enumerable: true, configurable: true });
 }
 
-/** coroutine.running(): NOT FAITHFUL, always the main thread here. */
-function coroutine_running(): any {
-  return null;
-}
-
-/** coroutine.yield: unreachable (coroutine_running() is nil). */
-function coroutine_yield(_req: any): any {
-  return notPorted("coroutine.yield (Baton Pass choice)");
+/** coroutine.running(): truthy inside an engine coroutine (engine.ts shim). */
+function coroutine_running(): boolean {
+  return EngineMod.coRunning();
 }
 
 // Lua: special.lua:8
@@ -296,36 +289,43 @@ export const Special = {
     const candidates = engine().switchCandidates(st, truthy(st.double) ? user.id : user.side);
     if (len(candidates) === 0) return H.sayFail(ctx);
     H.attackAnim(ctx);
+    // The rest of batonPass once `pick` is known (also the coroutine
+    // continuation of the two yields below).
+    const finish = (pick: any): void => {
+      let slot = candidates[1];
+      for (const [, c] of ipairs(candidates)) {
+        if (c === pick) slot = pick;
+      }
+      const nb = engine().performSwitch(st, ad, truthy(st.double) ? user.id : user.side, slot, { batonPass: true, reason: "baton_pass" });
+      if (truthy(nb)) {
+        const M = H.move(ctx);
+        if (truthy(M)) M.user = nb;
+        const fill = sent_out_fill(ctx, nb);
+        const text = BattleText.get(BattleText.SWITCHINMON, fill);
+        // pokefirered/data/battle_scripts_1.s:1705
+        ad.pushEvent({ kind: "msg", text, wait: 0, id: BattleText.key(BattleText.SWITCHINMON, fill)[0] });
+        ad._say(text);
+        engine().switchInEffects(st, ad, nb, { spikes: true, deferIntimidate: true });
+      }
+    };
     let pick: any;
     if (typeof st.batonPassChooser === "function") {
       let ok = true, v: any;
       try { v = st.batonPassChooser(user.side, candidates); } catch (e) { ok = false; v = e; }
       if (ok) pick = tonumber(v);
-    } else if (truthy(st.link) && truthy(st.interactiveChoices) && truthy(coroutine_running())) {
+    } else if (truthy(st.link) && truthy(st.interactiveChoices) && coroutine_running()) {
       // pokefirered/src/battle_script_commands.c:4626
-      pick = tonumber(coroutine_yield({ kind: "baton_pass", side: user.side, battler: user.id, candidates }));
-    } else if (user.side === "player" && truthy(st.interactiveChoices) && truthy(coroutine_running())) {
+      throw engine().coYield({ kind: "baton_pass", side: user.side, battler: user.id, candidates },
+        (v: any) => finish(tonumber(v)));
+    } else if (user.side === "player" && truthy(st.interactiveChoices) && coroutine_running()) {
       // pokefirered/src/battle_script_commands.c:4626
-      pick = tonumber(coroutine_yield({ kind: "baton_pass", side: user.side, battler: user.id, candidates }));
+      throw engine().coYield({ kind: "baton_pass", side: user.side, battler: user.id, candidates },
+        (v: any) => finish(tonumber(v)));
     } else if (user.side === "enemy") {
       // pokefirered/src/battle_controller_opponent.c:1410
       pick = engine().mostSuitableMon(st, ad, truthy(st.double) ? user.id : "enemy");
     }
-    let slot = candidates[1];
-    for (const [, c] of ipairs(candidates)) {
-      if (c === pick) slot = pick;
-    }
-    const nb = engine().performSwitch(st, ad, truthy(st.double) ? user.id : user.side, slot, { batonPass: true, reason: "baton_pass" });
-    if (truthy(nb)) {
-      const M = H.move(ctx);
-      if (truthy(M)) M.user = nb;
-      const fill = sent_out_fill(ctx, nb);
-      const text = BattleText.get(BattleText.SWITCHINMON, fill);
-      // pokefirered/data/battle_scripts_1.s:1705
-      ad.pushEvent({ kind: "msg", text, wait: 0, id: BattleText.key(BattleText.SWITCHINMON, fill)[0] });
-      ad._say(text);
-      engine().switchInEffects(st, ad, nb, { spikes: true, deferIntimidate: true });
-    }
+    finish(pick);
   },
 
   // Lua: special.lua:266

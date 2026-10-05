@@ -12,6 +12,12 @@
 //   first Effects.get/run/runForMove/ids. The registry is private, so no
 //   caller can tell the difference.
 // - pcall(fn, ctx) + error(err, 0) is try/catch with a rethrow after pop().
+//   LuaJIT's pcall is yieldable: a coroutine yield inside the handler (Baton
+//   Pass asking for a party slot) suspends with the EffectCtx still pushed.
+//   With the engine's shim (engine.ts: CoYield) that is a CoYield thrown
+//   through here: Effects.run folds the handler's continuations into one
+//   tail that runs them, then pops / rethrows / returns true, and rethrows
+//   the CoYield without popping.
 // - Effects.ids() returns a sorted Lua sequence (slot 0 unused).
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -29,6 +35,7 @@ import Special from "./special.ts";
 import EffectCtx, { type EffectContext } from "../effect_ctx.ts";
 import Moves from "../moves.ts";
 import EffectIds from "../effect_ids.ts";
+import { CoYield } from "../engine.ts";
 
 export type EffectFn = (ctx: EffectContext) => any;
 
@@ -137,6 +144,42 @@ function reg_table(): Record<string, EffectFn> {
   return registry;
 }
 
+/**
+ * The rest of Effects.run after a yield inside the handler (engine.ts
+ * coroutine shim): run the handler's own continuations (`inner`, innermost
+ * first), then what follows `pcall(fn, ctx)`: pop, rethrow a failure, return
+ * true. A further yield inside `inner` folds the remaining handler tail again.
+ */
+function run_tail(inner: ((v: any) => any)[]): (v: any) => any {
+  return (v: any): any => {
+    let ok = true;
+    let err: unknown;
+    let x = v;
+    for (let i = 0; i < inner.length; i++) {
+      try {
+        x = inner[i]!(x);
+      } catch (e) {
+        if (e instanceof CoYield) {
+          for (let j = i + 1; j < inner.length; j++) e.conts.push(inner[j]!);
+          fold_run_tail(e);
+          throw e;
+        }
+        ok = false; err = e;
+        break;
+      }
+    }
+    EffectCtx.pop();
+    if (!ok) throw err;
+    return true;
+  };
+}
+
+/** Replace the handler's continuations on `e` with one Effects.run tail. */
+function fold_run_tail(e: CoYield): void {
+  const inner = e.conts.splice(0, e.conts.length);
+  e.conts.push(run_tail(inner));
+}
+
 export const Effects = {
   // Lua: init.lua:111
   get(id: string): EffectFn | undefined {
@@ -150,7 +193,14 @@ export const Effects = {
     const ctx = EffectCtx.push(adapter, user, target, move, truthy(moveId) ? moveId : id, adapter.rng(), moveCtx);
     let ok = true;
     let err: unknown;
-    try { fn(ctx); } catch (e) { ok = false; err = e; }
+    try {
+      fn(ctx);
+    } catch (e) {
+      // A yield (Baton Pass choice) crossing pcall: the context stays pushed
+      // while suspended; the tail pops it once the handler finishes.
+      if (e instanceof CoYield) { fold_run_tail(e); throw e; }
+      ok = false; err = e;
+    }
     EffectCtx.pop();
     if (!ok) throw err;
     return true;
