@@ -116,6 +116,14 @@ import * as Bag from "./rules/bag.ts";
 import { tiltShiftLevel } from "./tiltshift.ts";
 import { is2d } from "./viewmode.ts";
 import { OverworldView2d } from "./world/view2d.ts";
+
+/** Screens that cover the whole frame (the overworld is not drawn under them
+ *  in VIEW 2D, as it is not on the cartridge); menus over the field (start
+ *  menu, bag, shop, PC, box, fly list) are not among them. */
+const FULL_SCREEN_KINDS = new Set([
+  "pokedex", "party", "summary", "naming", "trainercard", "options", "evolution",
+  "halloffame", "credits", "diploma", "tradeanim", "tradescreen", "slots",
+]);
 /** Must match Version.saveFormat in the recomp. */
 const SAVE_FORMAT = 5;   // Version.lua saveFormat (savecompat.ts GEN1RECOMP_FORMAT)
 /**
@@ -2971,11 +2979,17 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     return this.view2d() && (!this.battleView() || this.battle2d());
   }
 
-  /** VIEW 2D with the overworld up (not a battle, the title or the boot movie). */
+  /** VIEW 2D with the overworld up (not a battle, the title or the boot movie,
+   *  nor a screen that covers the whole frame). */
   overworld2d(): boolean {
     if (!this.view2d() || this.battleView()) return false;
     const top = this.stack[this.stack.length - 1] as any;
     if (!top || top.kind === "title" || top.kind === "intro" || top.kind === "surfing") return false;
+    // A full-screen screen hides the overworld, as on the cartridge: the GB
+    // screen that draws the 2D map sits over the picture layer, so leaving it
+    // up put the map over the dex page's white and its mon (Isaac, a catch in
+    // VIEW 2D: map tiles behind the entry text, the pic pushed aside).
+    if (FULL_SCREEN_KINDS.has(top.kind)) return false;
     return !!(this as any).overworld?.map;
   }
   private view2dRenderer: OverworldView2d | null = null;
