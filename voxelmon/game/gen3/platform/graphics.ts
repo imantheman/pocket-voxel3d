@@ -205,7 +205,10 @@ const autoSegs = (r: number): number => Math.max(8, Math.ceil(Math.max(1, r) * 2
 
 function colorArgs(r: number | number[] | Record<string, number>, g?: number, b?: number, a?: number): Rgba {
   if (typeof r === "object") {
-    const t = Array.isArray(r) ? r : [r[1] ?? r["1"] ?? 1, r[2] ?? r["2"] ?? 1, r[3] ?? r["3"] ?? 1, r[4] ?? r["4"]];
+    // a JS array [r, g, b, a] (LÖVE's table as JS), a runtime-port sequence
+    // [null, r, g, b, a] (lt.ts: slot 0 unused), or an object keyed 1..4
+    const seqShaped = Array.isArray(r) && r[0] == null && r.length >= 4;
+    const t = Array.isArray(r) ? (seqShaped ? r.slice(1) : r) : [r[1] ?? r["1"] ?? 1, r[2] ?? r["2"] ?? 1, r[3] ?? r["3"] ?? 1, r[4] ?? r["4"]];
     return [Number(t[0] ?? 1), Number(t[1] ?? 1), Number(t[2] ?? 1), t[3] === undefined ? 1 : Number(t[3])];
   }
   return [r, g ?? 1, b ?? 1, a ?? 1];
@@ -215,17 +218,31 @@ function colorArgs(r: number | number[] | Record<string, number>, g?: number, b?
 
 export const G = {
   // frame plumbing (not LÖVE): the platform calls these around Game3:draw
+  // As LÖVE's run loop: graphics state (colour, blend, shader, canvas,
+  // scissor) persists from frame to frame; each frame starts with
+  // origin() and a clear of the screen. Draws made BETWEEN frames (a
+  // screen compositing into a canvas during update) stay in the list and
+  // reach the host with the next frame, ahead of that clear.
   beginFrame(): void {
-    list.reset();
-    st = fresh();
     stack.length = 0;
+    st.m = [...IDENT];
     frameOpen = true;
     list.target(0);
+    list.clear(0, 0, 0, 1);
+    if (st.canvas) list.target(st.canvas.id);
   },
   endFrame(): number[] {
     frameOpen = false;
-    getHost().draw(list.buf);
-    return list.buf;
+    const out = list.buf.slice();
+    getHost().draw(out);
+    list.reset();
+    list.target(st.canvas ? st.canvas.id : 0);
+    return out;
+  },
+  /** Drop all graphics state (tests; a soft reset). */
+  resetState(): void {
+    st = fresh();
+    stack.length = 0;
   },
   isFrameOpen(): boolean { return frameOpen; },
 

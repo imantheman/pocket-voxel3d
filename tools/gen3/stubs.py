@@ -40,6 +40,8 @@ INERT = {
 }
 # deferred: link / online / mystery gift / mods UI -- stubs that throw
 DEFERRED = re.compile(r"\.link\.|union_room|union_plaza|mystery_gift|mod_manager|^src\.(link|online|net|sync)\.")
+# required dynamically (pcall(require, ...)), so the static closure misses them
+EXTRA = ["src.ui.game3.braille", "src.ui.game3.map_name_popup", "src.core.game3.bike"]
 # being written by an importer-cluster worker right now: never stub
 SKIP_TS = {
     "core/scripting/disasm.ts", "core/scripting/movement.ts", "core/encounters.ts",
@@ -131,6 +133,12 @@ g3 = sorted(m for m in deps if is_g3(m))
 shared = sorted({d for m in g3 for d in deps[m]
                  if not is_g3(d) and not d.startswith("src.import.gba") and d.startswith("src.")
                  and os.path.exists(os.path.join(SRC, d.replace(".", "/") + ".lua"))})
+def lua_file(mod):
+    p = os.path.join(SRC, mod.replace(".", "/") + ".lua")
+    return p if os.path.exists(p) else os.path.join(SRC, mod.replace(".", "/"), "init.lua")
+
+
+g3 = sorted(set(g3) | set(EXTRA))
 wrote = kept = skipped = 0
 for mod in g3 + shared:
     rel = ts_rel(mod)
@@ -144,7 +152,7 @@ for mod in g3 + shared:
                 kept += 1
                 continue
     os.makedirs(os.path.dirname(dest), exist_ok=True)
-    text = open(os.path.join(SRC, mod.replace(".", "/") + ".lua"), encoding="latin1").read()
+    text = open(lua_file(mod), encoding="latin1").read()
     with open(dest, "w", encoding="utf-8", newline="") as fh:
         fh.write(stub(mod, rel, text))
     wrote += 1
