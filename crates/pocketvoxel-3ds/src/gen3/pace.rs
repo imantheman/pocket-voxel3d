@@ -21,11 +21,12 @@
 //!   hardware; an emulator reports next to nothing).
 //! - **Up to 60** once 45 frames in a row would have fitted (`FIT_MS`, a
 //!   vblank less a margin): a second and a half of headroom.
-//! - **Down to 30** when frames stop fitting: a frame over `MISS_MS`, or one
-//!   shown a vblank late for a reason the cost does not see (the GPU), adds
-//!   to a strain that fades by a tenth a frame; past 1.5 (two misses close
-//!   together) the pace drops to 30 and stays there at least a second. One
-//!   hitch -- a map loading -- does not flip it.
+//! - **Down to 30** when frames stop fitting: a frame over `MISS_MS` adds 1
+//!   to a strain that fades by a tenth a frame, and one shown a vblank late
+//!   for a reason its own cost does not show (the GPU, or the render of one
+//!   frame and the ticks of the next meeting across a vblank) adds 0.6;
+//!   past 1.5 (two misses close together) the pace drops to 30 and stays
+//!   there at least a second. One hitch -- a map loading -- does not flip it.
 //! - **At 30**, main.rs's rule stands: after a frame of `HEAVY_MS` or more,
 //!   the next is shown at the next vblank (rate 60 for that frame).
 //! - **Game speed** is the ticks' business, not the pace's: main.rs runs
@@ -54,6 +55,8 @@ const UP_AFTER: u32 = 45;
 const HOLD_30: u32 = 30;
 /// A frame shown this long after the last at 60 was a vblank late.
 const LATE_MS: f32 = 25.0;
+/// What a late frame (not over budget itself) adds to the strain.
+const LATE_WEIGHT: f32 = 0.6;
 /// At 30, a frame this long has the next shown at the next vblank (main.rs's 25 ms).
 const HEAVY_MS: f32 = 25.0;
 
@@ -105,6 +108,12 @@ fn p() -> &'static mut Pace {
 
 /// The loop's top (main.rs, where it reads the clock for the frame).
 pub fn frame_top() {
+    // The frame's log lines -- the perf block's, the guest's -- go to the
+    // card in one write when the next frame's top commits them (main.rs's
+    // dlog batch, as a map load's are): each line was a file opened,
+    // appended to and closed, ~15 ms apiece on Citra at 300%, so the perf
+    // block every 5 s was a hitch of its own.
+    crate::dlog_batch_begin();
     let p = p();
     p.prev_top = p.t_top;
     p.t_top = now_ms();
@@ -163,8 +172,9 @@ pub fn after_render() {
         if late { p.late += 1; }
         let over = est > MISS_MS;
         p.prev_over = over;
-        let miss = over || late;
-        p.strain = p.strain * 0.9 + if miss { 1.0 } else { 0.0 };
+        // a late frame weighs less: it is often two frames' halves meeting
+        // (one's render after the vblank, the next one's ticks before it)
+        p.strain = p.strain * 0.9 + if over { 1.0 } else if late { LATE_WEIGHT } else { 0.0 };
         if p.at60 {
             if p.strain > 1.5 {
                 p.at60 = false;
