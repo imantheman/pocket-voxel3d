@@ -1935,7 +1935,7 @@ function handle_player_faint(optsIn?: Tbl): any {
   };
 
   if (truthy(st.spectate)) {
-    const nextI = lor(Engine.nextLivingMonIndex(st.playerParty, land(st.player, tk(st.player, "partyIndex"))), 1);
+    const nextI = lor(Engine.nextLivingMonIndex(st.playerParty, land(st.player, tk(st.player, "partyIndex"))), 1) as number;
     return with_link_replacement(st, nextI, (slot: any) => {
       SwitchSeq.beginSendOut(st, "player", slot, {
         headless: Battle._headless,
@@ -1947,7 +1947,7 @@ function handle_player_faint(optsIn?: Tbl): any {
   }
 
   if (Battle._headless || Battle._auto) {
-    const nextI = lor(Engine.nextLivingMonIndex(st.playerParty, land(st.player, tk(st.player, "partyIndex"))), 1);
+    const nextI = lor(Engine.nextLivingMonIndex(st.playerParty, land(st.player, tk(st.player, "partyIndex"))), 1) as number;
     if (truthy(st.link)) {
       const LB = link_battle();
       if (truthy(LB)) LB.sendSwitch(nextI);
@@ -1962,7 +1962,7 @@ function handle_player_faint(optsIn?: Tbl): any {
 
   if (truthy(st.facility) && truthy(st.facility.fixedOrder)) {
     // pokeemerald/src/battle_controller_player.c:2672
-    const nextI = lor(Engine.nextLivingMonIndex(st.playerParty, land(st.player, tk(st.player, "partyIndex"))), 1);
+    const nextI = lor(Engine.nextLivingMonIndex(st.playerParty, land(st.player, tk(st.player, "partyIndex"))), 1) as number;
     SwitchSeq.beginSendOut(st, "player", nextI, {
       headless: false,
       pushMsg: (t: any) => { Ui.push(t); },
@@ -4366,7 +4366,7 @@ function update_body(dt: number | null | undefined, game: Tbl): void {
       Battle._shiftAsked = true;
       Ui.askYesNo((yes: any) => {
         Battle._shiftAsked = false;
-        const nextEnemyIdx = Battle._shiftEnemyIdx;
+        const nextEnemyIdx = Battle._shiftEnemyIdx as number;
         Battle._shiftEnemyIdx = undefined;
         const st = Battle._st;
         if (truthy(yes) && truthy(st)) {

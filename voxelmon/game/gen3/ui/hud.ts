@@ -351,10 +351,10 @@ export const Hud = {
     }
 
     if (SummaryMenu.isOpen() && SummaryMenu.update) {
-      SummaryMenu.update(_dt ?? (1 / 60));
+      SummaryMenu.update((_dt as number | undefined) ?? (1 / 60));
     }
     if (PartyMenu.isOpen() && PartyMenu.update) {
-      PartyMenu.update(_dt ?? (1 / 60));
+      PartyMenu.update((_dt as number | undefined) ?? (1 / 60));
     }
 
     update_top_menu(input);

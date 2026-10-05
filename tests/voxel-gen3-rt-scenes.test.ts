@@ -309,8 +309,8 @@ describe.skipIf(!existsSync(GBA))("gen3 runtime: scenes and screens", () => {
     expect(FameCheckerUi.show(session)).toBe(true);
     const rows = FameCheckerUi.rows();
     expect(len(rows)).toBeGreaterThan(1); // OAK (+ cancel)
-    expect(rows[len(rows)].cancel).toBe(true);
-    expect(FameCheckerUi.personName(rows[1].person)).toBe("OAK"); // the list's short name (pack.listNames)
+    expect(rows[len(rows)]!.cancel).toBe(true);
+    expect(FameCheckerUi.personName(rows[1]!.person)).toBe("OAK"); // the list's short name (pack.listNames)
     frame("fame", () => FameCheckerUi.draw());
     expect(colours(0, 0, 240, 112)).toBeGreaterThan(4);
     FameCheckerUi.close();

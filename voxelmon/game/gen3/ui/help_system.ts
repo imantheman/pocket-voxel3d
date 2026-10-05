@@ -40,7 +40,7 @@ export interface HelpModule {
   _tiles?: Record<number, Image> | null;
   enabled?: boolean;
   contextOverride?: number | null;
-  contextBackup?: unknown;
+  contextBackup?: number | null;
   session?: any;
   contextId?: number;
   _held?: string | null;
