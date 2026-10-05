@@ -31,7 +31,7 @@ export const BLEND_MULTIPLY = 4;
 export const BLEND_REPLACE = 5;
 export const BLEND_SUBTRACT = 6;
 
-export const STATE_PARAMS = 8;
+export const STATE_PARAMS = 16;
 
 export class DrawList {
   /** The numbers, in the layout above. */

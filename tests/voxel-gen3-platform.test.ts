@@ -82,6 +82,51 @@ describe("gen3 platform", () => {
     expect(px(host, 52, 2)).toEqual([0, 255, 0, 255]);
   });
 
+  test("shader effects: GPU-packed and CPU variants", () => {
+    const d = new ImageData(2, 1);
+    d.setPixel(0, 0, 1, 0, 0, 1);
+    d.setPixel(1, 0, 0, 0, 0, 0);
+    const img = G.newImage(d);
+    G.beginFrame();
+    G.clear(0, 0, 1, 1);
+    G.setColor(1, 1, 1, 1);
+    // blend5: red (31,0,0) halfway (coeff 8) to white -> (31, 15, 15)
+    const b5 = G.newShader("blend5");
+    b5.send("coeff", 8);
+    b5.send("target", [31, 31, 31]);
+    G.setShader(b5);
+    G.draw(img, 0, 0);
+    // silhouette: green where the texel is opaque, discard where not
+    const sil = G.newShader("silhouette");
+    G.setShader(sil);
+    G.setColor(0, 1, 0, 1);
+    G.draw(img, 4, 0);
+    G.setColor(1, 1, 1, 1);
+    // anim_pal (CPU variant): index = red * 15 -> index 15 = yellow
+    const pal = G.newShader("anim_pal");
+    const cols = Array.from({ length: 16 }, () => [0, 0, 0, 1]);
+    cols[15] = [1, 1, 0, 1];
+    pal.send("pal", ...cols);
+    G.setShader(pal);
+    G.draw(img, 8, 0);
+    // gba_fx: fade to black by 16 -> black, opaque (mode 0 keeps the vertex alpha)
+    const fx = G.newShader("gba_fx");
+    fx.send("fadeY", 16); fx.send("fadeColor", [0, 0, 0]); fx.send("gray", 0); fx.send("bldy", 0);
+    fx.send("mode", 0); fx.send("k", 1); fx.send("bandOn", 0); fx.send("bandY", 0); fx.send("winOn", 0);
+    G.setShader(fx);
+    G.draw(img, 12, 0);
+    G.setShader();
+    G.endFrame();
+    expect(px(host, 0, 0)).toEqual([255, 123, 123, 255]);
+    expect(px(host, 1, 0)).toEqual([0, 0, 255, 255]); // transparent texel: blue shows
+    expect(px(host, 4, 0)).toEqual([0, 255, 0, 255]);
+    expect(px(host, 5, 0)).toEqual([0, 0, 255, 255]); // discarded
+    expect(px(host, 8, 0)).toEqual([255, 255, 0, 255]);
+    expect(px(host, 9, 0)).toEqual([0, 0, 255, 255]); // alpha < 0.5 -> transparent
+    expect(px(host, 12, 0)).toEqual([0, 0, 0, 255]);
+    expect(px(host, 13, 0)).toEqual([0, 0, 255, 255]);
+  });
+
   test("PNG decode: stored, zlib-compressed, through newImageData", () => {
     const rgba = new Uint8Array(3 * 2 * 4).map((_, i) => (i * 37) & 255);
     const ours = decodePngBytes(encodePng(3, 2, rgba));

@@ -3,7 +3,7 @@
 // small LÖVE fragment shaders from GLSL sources; the port creates them BY NAME
 // (love.graphics.newShader("blend5")) and each name is registered here with:
 //
-//   pack(uniforms) -> up to 8 floats for OP_STATE (texture uniforms by id), or
+//   pack(uniforms) -> up to 16 floats for OP_STATE (texture uniforms by id), or
 //   undefined when the effect is a CPU VARIANT effect (the shim then renders a
 //   recoloured copy of the drawn image instead -- palette lookups, colour
 //   remaps -- cached by image and uniforms);
@@ -20,6 +20,8 @@ export interface EffectCtx {
   u: Record<string, unknown>;
   /** Sample another texture (Image uniforms) at uv; the rasteriser supplies it. */
   sample?: (texId: number, u: number, v: number) => Rgba;
+  /** Sample the texture being drawn at another uv (mosaic); the rasteriser supplies it. */
+  self?: (u: number, v: number) => Rgba;
 }
 
 export interface Effect {
@@ -67,6 +69,18 @@ export const glsl = {
     }
     return Array.from({ length: n }, () => Number(v) || 0);
   },
+  /** an array uniform (send(name, v1, v2, ...) or one table of tables) -> n vectors */
+  arr(v: unknown, count: number, n = 3): number[][] {
+    let items: unknown[] = [];
+    if (Array.isArray(v) && v.length > 0 && (Array.isArray(v[0]) || typeof v[0] === "object")) items = v;
+    else if (v && typeof v === "object" && !Array.isArray(v)) {
+      const o = v as Record<string, unknown>;
+      for (let i = 1; o[i] !== undefined; i++) items.push(o[i]);
+    } else if (v !== undefined) items = [v];
+    return Array.from({ length: count }, (_, i) => glsl.vec(items[i] ?? 0, n));
+  },
+  /** a 5-bit channel, as `floor(x * 31.0 + 0.5)` */
+  c5: (x: number): number => Math.floor(x * 31 + 0.5),
   num(v: unknown, dflt = 0): number {
     return typeof v === "number" ? v : typeof v === "boolean" ? (v ? 1 : 0) : dflt;
   },

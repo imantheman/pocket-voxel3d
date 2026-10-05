@@ -92,7 +92,11 @@ export class Rasterizer {
         const u = u0 + (u1 - u0) * s, v = v0 + (v1 - v0) * tt;
         const texel = tex ? sample(tex, u, v) : ([1, 1, 1, 1] as Rgba);
         let out: Rgba | undefined;
-        if (fx) out = fx.pixel(texel, col, u, v, x, y, params, { u: {}, sample: (id, su, sv) => { const st = this.tex.get(id); return st ? sample(st, su, sv) : [0, 0, 0, 0]; } });
+        if (fx) out = fx.pixel(texel, col, u, v, x, y, params, {
+          u: {},
+          sample: (id, su, sv) => { const st = this.tex.get(id); return st ? sample(st, su, sv) : [0, 0, 0, 0]; },
+          self: (su, sv) => (tex ? sample(tex, su, sv) : [1, 1, 1, 1]),
+        });
         else out = [texel[0] * col[0], texel[1] * col[1], texel[2] * col[2], texel[3] * col[3]];
         if (out) blendPx(t, x, y, out, blend);
       }

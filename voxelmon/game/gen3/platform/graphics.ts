@@ -8,6 +8,7 @@ import {
   DrawList, BLEND_ADD, BLEND_ADD_PREMUL, BLEND_ALPHA, BLEND_ALPHA_PREMUL, BLEND_MULTIPLY, BLEND_REPLACE, BLEND_SUBTRACT,
 } from "./drawlist.ts";
 import { effectByName, effectId, type Effect, type Rgba } from "./effects.ts";
+import "./effects/index.ts";
 import { getHost } from "./host.ts";
 import { Canvas, Image, ImageData, Quad, SpriteBatch, newImage as makeImage, FileData } from "./image.ts";
 
