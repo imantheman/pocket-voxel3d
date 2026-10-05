@@ -11,7 +11,6 @@ import { setHost } from "../voxelmon/game/gen3/platform/host.ts";
 import { G } from "../voxelmon/game/gen3/platform/graphics.ts";
 import { encodePng } from "../voxelmon/import/gen3/png.ts";
 import { NotPortedError } from "../voxelmon/game/gen3/notported.ts";
-import { Display } from "../voxelmon/game/gen3/core/display.ts";
 
 const ROOT = join(homedir(), "gen3ref/frfull");
 const GBA = join(ROOT, "data/generated/gba");
@@ -22,7 +21,6 @@ const GEN3 = join(import.meta.dir, "../voxelmon/game/gen3");
 function stubbed(rel: string): boolean {
   return readFileSync(join(GEN3, rel), "latin1").startsWith("// @gen3-stub");
 }
-const displayStub = stubbed("core/display.ts");
 const screenDepsStubbed = ["core/display.ts", "core/bg.ts", "core/oam.ts", "core/pal_fade.ts"].some(stubbed);
 
 function shot(host: DesktopHost, name: string): void {
@@ -54,11 +52,6 @@ function near(a: number[], b: number[], tol = 1): boolean {
 describe.skipIf(!existsSync(GBA))("gen3 runtime: text, chrome, boot screens", async () => {
   const host = new DesktopHost(ROOT);
   setHost(host);
-  // TEST FIXTURE: core/display.ts is another cluster's stub, so its
-  // constants are undefined. chrome/window read Display.TILE at load, so
-  // give the stub display.lua's values (W 240, H 160, TILE 8, COLS 30,
-  // ROWS 20) before importing them. No-op once display.ts is ported.
-  if (displayStub) Object.assign(Display, { W: 240, H: 160, TILE: 8, COLS: 30, ROWS: 20 });
   const { FrlgFont } = await import("../voxelmon/game/gen3/ui/frlg_font.ts");
   const { Chrome } = await import("../voxelmon/game/gen3/ui/chrome.ts");
   const { Window } = await import("../voxelmon/game/gen3/ui/window.ts");

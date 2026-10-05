@@ -34,6 +34,12 @@ silver = ["gen2"]
 # Pokemon Crystal: Gen 2 -- its own pak set (paks_crystal/: two-bank
 # tilesets, its own maps and palettes), dataset and save (save_crystal.lua).
 crystal = ["gen2"]
+# The Gen 3 engine (game-firered.js), its host loop and display (src/gen3/,
+# GPLv3 + additional terms) and the core's M4A sound engine; turned on by
+# firered, not asked for on its own. The MIT games never compile any of it.
+gen3 = ["pocketvoxel-core/gen3"]
+# FireRed: Gen 3. `cargo 3ds build --release --features firered`.
+firered = ["gen3"]
 
 [build-dependencies]
 cc = "1"

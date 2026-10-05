@@ -148,6 +148,24 @@ export interface VoxelNative {
   cardPal?(side: number, c0: number, c1: number, c2: number, c3: number): void;
   audioWaves?(engine: number, bank: number, addr: number): void;
   audioDrum?(engine: number, drum: number, bank: number, addr: number): void;
+  /** Microseconds since boot (the 3DS shim's clock). */
+  now?(): number;
+  // The Gen 3 (FireRed) display and cache (gen3/platform/host.ts G3Host),
+  // registered only by the gen3 builds (crates/pocketvoxel-3ds/src/gen3).
+  /** Texture `id` from w x h RGBA8 pixels. */
+  g3TexUpload?(id: number, w: number, h: number, rgba: ArrayBuffer | Uint8Array, repeat: boolean): boolean;
+  /** Texture `id` from a cache PNG, decoded by the host: [w, h], or undefined. */
+  g3TexFromCache?(id: number, path: string): [number, number] | undefined;
+  /** Texture `id` as a w x h render target. */
+  g3Canvas?(id: number, w: number, h: number): void;
+  g3TexFree?(id: number): void;
+  /** The frame's draw list (gen3/platform/drawlist.ts), as f32. */
+  g3Draw?(list: Float32Array): void;
+  /** A cache file as a byte string (one char per byte), or undefined. */
+  g3Read?(path: string): string | undefined;
+  /** A cache file's bytes, or undefined. */
+  g3ReadBuf?(path: string): ArrayBuffer | undefined;
+  g3Exists?(path: string): boolean;
 }
 
 export const native = (globalThis as unknown as { voxel: VoxelNative }).voxel;

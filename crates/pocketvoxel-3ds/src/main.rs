@@ -1,4 +1,4 @@
-#![feature(allocator_api)]
+#![feature(allocator_api)] #![cfg_attr(feature = "gen3", allow(unused, static_mut_refs))]
 mod voxel;
 
 use citro3d::macros::include_shader;
@@ -2435,7 +2435,7 @@ struct Vertex { pos: [i16; 4], color: [u8; 4], uv: [f32; 2] }
 static SHADER_BYTES: &[u8] = include_shader!("vshader.pica");
 // Gold runs its own engine (voxelmon/game/gen2, bundled as game-gold.js);
 // the Kanto games share game.js.
-#[cfg(not(feature = "gen2"))]
+#[cfg(not(any(feature = "gen2", feature = "gen3")))]
 static GAME_JS: &[u8] = include_bytes!("../game.js");
 #[cfg(feature = "gen2")]
 static GAME_JS: &[u8] = include_bytes!("../game-gold.js");
@@ -4257,7 +4257,7 @@ fn floor_map_of(pak: &Pak, chunks: &[pak::Chunk], map_min: [f32; 2], map_max: [f
 static mut RT: *mut JSRuntime = core::ptr::null_mut();
 static mut CTX: *mut JSContext = core::ptr::null_mut();
 
-fn main() {
+#[cfg(not(feature = "gen3"))] fn main() {
     // Before anything that can fail: a crash has to leave a line.
     install_panic_log();
     let gfx = Gfx::new().expect("gfx");
@@ -7681,4 +7681,16 @@ if page_tex.len() < pak_static.atlases.len() {
             &ui_b_bar_hold, &ui_b_light_hold, &ui_b_dim_hold, &ui_b_sprite_hold,
         );
     }
+}
+
+// FireRed (gen3): its own main loop and the Gen 3 display, src/gen3/ (GPLv3 +
+// additional terms; src/gen3/LICENSE.md), compiled only by the gen3 builds,
+// which use none of the Kanto/Johto loop above (hence line 1's allow). Kept
+// down here and the cfg on main's own line, so no line above moves: panic
+// locations carry line numbers, and the MIT builds stay byte-identical.
+#[cfg(feature = "gen3")]
+mod gen3;
+#[cfg(feature = "gen3")]
+fn main() {
+    gen3::run()
 }

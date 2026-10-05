@@ -45,4 +45,24 @@ fn main() {
         b.file(&p);
     }
     b.compile("quickjs");
+    // The FireRed host (src/gen3/*.c: the Gen 3 display and natives, GPLv3 +
+    // additional terms), only for the gen3 builds.
+    if std::env::var_os("CARGO_FEATURE_GEN3").is_some() {
+        let mut g = cc::Build::new();
+        g.compiler(format!("{dkp}/devkitARM/bin/arm-none-eabi-gcc"))
+            .archiver(format!("{dkp}/devkitARM/bin/arm-none-eabi-ar"))
+            .include("vendor/quickjs")
+            .include(format!("{dkp}/libctru/include"))
+            .include(format!("{dkp}/portlibs/3ds/include"))
+            .flag("-march=armv6k").flag("-mtune=mpcore")
+            .flag("-mfloat-abi=hard").flag("-mtp=soft")
+            .flag("-fno-strict-aliasing")
+            .define("__3DS__", None).define("ARM11", None)
+            .opt_level(2).warnings(false);
+        for n in ["g3_png.c", "g3_render.c", "g3_shim.c"] {
+            println!("cargo:rerun-if-changed=src/gen3/{n}");
+            g.file(format!("src/gen3/{n}"));
+        }
+        g.compile("pvgen3");
+    }
 }
