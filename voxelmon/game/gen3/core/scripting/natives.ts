@@ -59,9 +59,19 @@ import Braille from "../../ui/braille.ts";
 import PokedexData from "../pokedex_data.ts";
 import Field from "../field.ts";
 import Corner from "./natives_corner.ts";
+import Cutscene from "./natives_cutscene.ts";
+import Daycare from "./natives_daycare.ts";
+import Elevator from "./natives_elevator.ts";
 import Events from "./natives_events.ts";
+import Fame from "./natives_fame.ts";
+import FanClub from "./natives_fan_club.ts";
 import Gift from "./natives_gift.ts";
+import ListMenu from "./natives_listmenu.ts";
+import MoveTeach from "./natives_moveteach.ts";
 import Queries from "./natives_queries.ts";
+import SeagallopNatives from "./natives_seagallop.ts";
+import SizeRecordNatives from "./natives_size_record.ts";
+import TowerNatives from "./natives_tower.ts";
 import Trade from "./natives_trade.ts";
 import NativesTv from "./natives_tv.ts";
 
@@ -927,16 +937,23 @@ const KNOWN_MODULES: LuaTable = seq(
 // NOT FAITHFUL: no filesystem module discovery. The natives_* modules that
 // have a file in the port, in `ls` order; each entry loads its module (a thunk,
 // so a module still initialising in an import cycle reads as a failed require).
-// FRLG's profile also names natives_cutscene, natives_daycare,
-// natives_elevator, natives_fame, natives_fan_club, natives_link,
-// natives_listmenu, natives_moveteach, natives_seagallop, natives_size_record,
-// natives_tower and natives_wireless, which have no file in the port: their
-// require fails, as in Lua when a module is missing.
+// FRLG's profile also names natives_link and natives_wireless, which have no
+// file in the port: their require fails, as in Lua when a module is missing.
 const NATIVE_FILES: Record<string, () => any> = {
   natives_corner: () => Corner,
+  natives_cutscene: () => Cutscene,
+  natives_daycare: () => Daycare,
+  natives_elevator: () => Elevator,
   natives_events: () => Events,
+  natives_fame: () => Fame,
+  natives_fan_club: () => FanClub,
   natives_gift: () => Gift,
+  natives_listmenu: () => ListMenu,
+  natives_moveteach: () => MoveTeach,
   natives_queries: () => Queries,
+  natives_seagallop: () => SeagallopNatives,
+  natives_size_record: () => SizeRecordNatives,
+  natives_tower: () => TowerNatives,
   natives_trade: () => Trade,
   natives_tv: () => NativesTv,
 };
