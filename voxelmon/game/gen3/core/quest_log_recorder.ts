@@ -34,6 +34,47 @@ const SpaceOf = (): any => SpaceMod;
 const MapOf = (): any => MapMod;
 const RuntimeOf = (): any => RuntimeMod;
 
+// ---- fillTiles' memo (not in the Lua)
+
+/** tostring(x) .. "," .. tostring(y), kept. */
+const keys = new Map<number, string>();
+function cellKey(x: number, y: number): string {
+  const k = (y + 4096) * 8192 + (x + 4096);
+  let s = keys.get(k);
+  if (s === undefined) {
+    if (keys.size >= 65536) keys.clear();
+    s = tostring(x) + "," + tostring(y);
+    keys.set(k, s);
+  }
+  return s;
+}
+
+/**
+ * What fillTiles' cells came from last time: the table written, the map,
+ * the world and neighbour lists, and each layout they reach with its
+ * override count (LayoutNative._revision). Any change and every cell is
+ * read again.
+ */
+const fill = { out: null as any, def: null as any, world: null as any, nl: null as any, refs: [] as any[], revs: [] as number[], cx: 0, cy: 0 };
+
+function fillSame(out: any, def: any, Map: any): boolean {
+  const world = Map.world, nl = Map.neighborList;
+  let same = fill.out === out && fill.def === def && fill.world === world && fill.nl === nl;
+  const refs = fill.refs, revs = fill.revs;
+  let i = 0;
+  const note = (L: any): void => {
+    const r = L ? (L._revision ?? 0) : 0;
+    if (same && (refs[i] !== L || revs[i] !== r)) same = false;
+    refs[i] = L; revs[i] = r; i++;
+  };
+  note(def.midLayout);
+  if (world) for (let k = 1; world[k] != null; k++) note(world[k].def ? world[k].def.midLayout : null);
+  if (nl) for (let k = 1; nl[k] != null; k++) note(nl[k].def ? nl[k].def.midLayout : null);
+  if (refs.length !== i) { same = false; refs.length = i; revs.length = i; }
+  fill.out = out; fill.def = def; fill.world = world; fill.nl = nl;
+  return same;
+}
+
 export const R = {
   // Lua: quest_log_recorder.lua:4 -- [name] or [name, gsubCount]
   location(game: any, session: any): [string] | [string, number] {
@@ -84,14 +125,33 @@ export const R = {
     const def = game && game.data && game.data.maps && game.data.maps[session.map];
     if (!def || !def.midLayout) return out;
     const cx = Math.floor(frame.x / 16); const cy = Math.floor(frame.y / 16);
+    // NOT FAITHFUL (performance, same tiles): this runs every sixth tick over
+    // 13x17 cells, most of them unchanged since the last call. While the
+    // table and everything a cell's tile comes from are as they were (fill
+    // memo), the cells the last call already wrote are skipped -- all of
+    // them standing still, all but the new edge after a step -- and a cell
+    // inside the map reads its layout directly, as worldMidAt does there.
+    const same = fillSame(out, def, Map);
+    const px = same ? fill.cx : NaN, py = same ? fill.cy : NaN;
+    const layout = def.midLayout;
+    const lw = layout.width ?? 0, lh = layout.height ?? 0;
+    const lpair = layout.pair ?? def.pair;
     for (let y = cy - 6; y <= cy + 6; y++) for (let x = cx - 8; x <= cx + 8; x++) {
-      const [mid, pair] = Map.worldMidAt(x, y, def);
-      const key = tostring(x) + "," + tostring(y);
+      if (x >= px - 8 && x <= px + 8 && y >= py - 6 && y <= py + 6) continue;
+      let mid: any, pair: any;
+      if (x >= 0 && y >= 0 && x < lw && y < lh) {
+        mid = layout.midAt(x, y); pair = lpair;
+      } else {
+        const sm = Map.worldMidAt(x, y, def);
+        mid = sm[0]; pair = sm[1];
+      }
+      const key = cellKey(x, y);
       const t = out[key];
       if (t === null || typeof t !== "object" || t[1] !== mid || t[2] !== pair) {
         out[key] = seq(mid, pair);
       }
     }
+    fill.cx = cx; fill.cy = cy;
     return out;
   },
 
