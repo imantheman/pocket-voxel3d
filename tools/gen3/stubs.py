@@ -41,7 +41,15 @@ INERT = {
 # deferred: link / online / mystery gift / mods UI -- stubs that throw
 DEFERRED = re.compile(r"\.link\.|union_room|union_plaza|mystery_gift|mod_manager|^src\.(link|online|net|sync)\.")
 # required dynamically (pcall(require, ...)), so the static closure misses them
-EXTRA = ["src.ui.game3.braille", "src.ui.game3.map_name_popup", "src.core.game3.bike"]
+EXTRA = ["src.ui.game3.braille", "src.ui.game3.map_name_popup", "src.core.game3.bike",
+         "src.core.game3.trainer_fan_club", "src.core.game3.pokemon_size_record", "src.core.game3.roamer",
+         "src.core.game3.battle.builtin_moves", "src.core.game3.scripting.collision_std",
+         "src.core.game3.itemfinder", "src.core.game3.field_move_show_mon", "src.core.game3.coord_weather",
+         "src.core.game3.scripting.natives_corner", "src.ui.game3.whiteout_rush",
+         "src.core.game3.renewable_hidden_items", "src.core.game3.rotating_gate", "src.ui.game3.seagallop",
+         "src.core.game3.scripting.natives_events"]
+# shared modules reached the same way
+EXTRA_SHARED = ["src.world.gen2.Permissions"]
 # being written by an importer-cluster worker right now: never stub
 SKIP_TS = {
     "core/scripting/disasm.ts", "core/scripting/movement.ts", "core/encounters.ts",
@@ -139,6 +147,7 @@ def lua_file(mod):
 
 
 g3 = sorted(set(g3) | set(EXTRA))
+shared = sorted(set(shared) | set(EXTRA_SHARED))
 wrote = kept = skipped = 0
 for mod in g3 + shared:
     rel = ts_rel(mod)

@@ -2,8 +2,10 @@
 // Per-game pret constant tables (byName / byId per kind). The Lua loads each
 // kind lazily with require("src.core.game3.constants.<game>.<kind>"); here
 // FireRed's converted tables are imported statically (LeafGreen shares them).
-// NOT FAITHFUL: Emerald's tables are not converted (out of scope); reading a
-// kind of the "emerald" set throws, where the Lua would load it.
+// NOT FAITHFUL: of Emerald's tables only the two FRLG code reads are
+// converted (metatile_behaviors -- mb.lua; movement -- object_prepare's
+// WALK_SLOWLY_IN_PLACE ids); reading any other "emerald" kind throws, where
+// the Lua would load it.
 
 import { GameVersion } from "../../../import/gen3/game_version.ts";
 import { Profile } from "./profile.ts";
@@ -31,6 +33,8 @@ import event_objects from "./constants/firered/event_objects.ts";
 import metatile_labels from "./constants/firered/metatile_labels.ts";
 import region_map_sections from "./constants/firered/region_map_sections.ts";
 import heal_locations from "./constants/firered/heal_locations.ts";
+import emerald_metatile_behaviors from "./constants/emerald/metatile_behaviors.ts";
+import emerald_movement from "./constants/emerald/movement.ts";
 
 /** One kind's converted table (byName, byId, and any extra fields). */
 export type ConstKind = Record<string, any>;
@@ -42,6 +46,9 @@ const TABLES: Record<string, Record<string, ConstKind>> = {
     flags, items, map_groups, metatile_behaviors, moves, movement, script_cmds,
     songs, specials, species, trainer_classes, trainers, vars, weather,
     event_objects, metatile_labels, region_map_sections, heal_locations,
+  } as Record<string, ConstKind>,
+  emerald: {
+    metatile_behaviors: emerald_metatile_behaviors, movement: emerald_movement,
   } as Record<string, ConstKind>,
 };
 
@@ -162,6 +169,7 @@ function newSet(game: string): ConstantSet {
       const tables = TABLES[target.game as string];
       if (!tables) throw new Error(`game3 constants: tables for ${String(target.game)} are not ported`);
       const t = tables[k];
+      if (t === undefined) throw new Error(`game3 constants: ${String(target.game)}.${k} is not ported`);
       target[k] = t;
       return t;
     },

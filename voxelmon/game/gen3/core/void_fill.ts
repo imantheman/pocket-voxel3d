@@ -6,8 +6,8 @@
 // modules (never requiring them, so the importer can use this module alone).
 // Here those runtime modules register themselves in `VoidFill.loaded` when
 // they load; an unregistered module reads as "not loaded", like the probe.
-// Border mids are 0-based arrays (layout.borderMids[i - 1] for the Lua's
-// layout.borderMids[i]; the same for the returned b.mids).
+// A layout's borderMids is a Lua sequence (lt.ts: layout.borderMids[i] as in
+// the Lua); the returned b.mids is a 0-based array (field_plan reads it so).
 
 import { Family, type FamilyDesc } from "../../../import/gen3/family.ts";
 import { Versions } from "../../../import/gen3/versions.ts";
@@ -165,7 +165,7 @@ export const VoidFill = {
     if (w < 1 || h < 1) return undefined;
     const mids: number[] = [];
     for (let i = 1; i <= w * h; i++) {
-      const mid = layout.borderMids[i - 1];
+      const mid = layout.borderMids[i];
       if (typeof mid !== "number" || mid < 0 || mid >= VoidFill.PRIMARY_MIDS) return undefined;
       mids[i - 1] = mid;
     }
