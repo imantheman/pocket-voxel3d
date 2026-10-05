@@ -3,7 +3,7 @@
 // powder boxes, on real FireRed cache data, drawn through the love.graphics
 // shim into the DesktopHost rasteriser. Screenshots go to /tmp/g3shots/.
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { DesktopHost } from "../voxelmon/game/gen3/platform/desktop.ts";
@@ -68,6 +68,22 @@ describe.skipIf(!existsSync(GBA))("gen3 runtime: menus B", async () => {
     }
     return n;
   }
+  /**
+   * The share of the screen's pixels (where the sheet is opaque) that equal a
+   * 240x160 cache chrome sheet: the real FRLG background is on screen.
+   */
+  function chromeShare(rel: string): number {
+    const sheet = new Uint8Array(readFileSync(join(GBA, rel)));
+    expect(sheet.length).toBe(240 * 160 * 4);
+    const p = host.pixels();
+    let same = 0, opaque = 0;
+    for (let o = 0; o < sheet.length; o += 4) {
+      if (sheet[o + 3] !== 255) continue;
+      opaque++;
+      if (p[o] === sheet[o] && p[o + 1] === sheet[o + 1] && p[o + 2] === sheet[o + 2]) same++;
+    }
+    return opaque ? same / opaque : 0;
+  }
   /** Draw `fn` over a field-ish backdrop and save it. */
   function frame(name: string, fn: () => void, bg: [number, number, number] = [0.25, 0.5, 0.35]): void {
     G.beginFrame();
@@ -84,9 +100,10 @@ describe.skipIf(!existsSync(GBA))("gen3 runtime: menus B", async () => {
   const { BagMenu } = await import("../voxelmon/game/gen3/ui/bag_menu.ts");
   const { ShopMenu } = await import("../voxelmon/game/gen3/ui/shop_menu.ts");
   const { TmCase } = await import("../voxelmon/game/gen3/ui/tm_case.ts");
+  const { BerryPouch } = await import("../voxelmon/game/gen3/ui/berry_pouch.ts");
   const { Fade } = await import("../voxelmon/game/gen3/ui/fade.ts");
   const { seq } = await import("../voxelmon/game/gen3/platform/lt.ts");
-  const POTION = 13, ANTIDOTE = 14, POKE_BALL = 4, TM01 = 289, TM28 = 316, BICYCLE = 360;
+  const POTION = 13, ANTIDOTE = 14, POKE_BALL = 4, TM01 = 289, TM28 = 316, BICYCLE = 360, ORAN = 139, PECHA = 136;
 
   // A FireRed session part-way through: two badges, a Pokédex, some mons.
   // NOT Schema.newGame: its newGameInit still reaches the trainer_fan_club stub.
@@ -193,7 +210,10 @@ describe.skipIf(!existsSync(GBA))("gen3 runtime: menus B", async () => {
     const rows: any = TmCase.list();
     expect(rows[1].id).toBe(TM01);
     expect(rows[2].id).toBe(TM28);
+    expect(G3Lazy["src.ui.game3.tm_case_chrome"].ready()).toBe(true);
     frame("menus_b_tmcase.png", () => TmCase.draw());
+    // FRLG's TM case background (items/tm_case/bg_male.rgba) fills the screen
+    expect(chromeShare("items/tm_case/bg_male.rgba")).toBeGreaterThan(0.6);
     TmCase.handleInput(pad("a"));
     expect(TmCase.mode).toBe("action");
     TmCase.handleInput(pad("b"));
@@ -214,7 +234,10 @@ describe.skipIf(!existsSync(GBA))("gen3 runtime: menus B", async () => {
     frame("menus_b_shop_root.png", () => ShopMenu.draw());
     pump("a"); // BUY
     expect(ShopMenu.mode).toBe("buy");
+    expect(G3Lazy["src.ui.game3.shop_chrome"].ready()).toBe(true);
     frame("menus_b_shop_buy.png", () => ShopMenu.draw());
+    // the Poké Mart buy screen's background (items/shop/bg.rgba)
+    expect(chromeShare("items/shop/bg.rgba")).toBeGreaterThan(0.6);
     pump("a"); // POTION -> quantity
     expect(ShopMenu.mode).toBe("buy_qty");
     pump("a"); // x01
@@ -228,6 +251,20 @@ describe.skipIf(!existsSync(GBA))("gen3 runtime: menus B", async () => {
     pump("b");
     pump("b");
     expect(ShopMenu.open).toBe(false);
+  });
+
+  test("berry pouch: FRLG's pouch screen", () => {
+    Stack.clear();
+    Bag.add(session.bag, ORAN, 3);
+    Bag.add(session.bag, PECHA, 1);
+    BerryPouch.show(session, session.bag, {});
+    const rows: any = BerryPouch.list();
+    expect([rows[1].id, rows[2].id].sort()).toEqual([PECHA, ORAN].sort());
+    expect(G3Lazy["src.ui.game3.berry_pouch_chrome"].ready()).toBe(true);
+    frame("menus_b_berry_pouch.png", () => BerryPouch.draw());
+    expect(chromeShare("items/berry_pouch/bg_male.rgba")).toBeGreaterThan(0.6);
+    BerryPouch.handleInput(pad("b"));
+    expect(BerryPouch.open).toBe(false);
   });
 
   test("options: rows, change TEXT SPEED, page in and out of a group", () => {

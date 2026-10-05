@@ -12,6 +12,9 @@
 
 import "../ui/coins_box.ts";
 import "../ui/berry_powder_box.ts";
+import "../ui/shop_chrome.ts";
+import "../ui/tm_case_chrome.ts";
+import "../ui/berry_pouch_chrome.ts";
 import "../ui/stat_growth.ts";
 import "../ui/ui_pass.ts";
 import "../ui/credits.ts";
@@ -31,5 +34,10 @@ import "./truck_sequence.ts";
 import "./fldeff_misc.ts";
 import "./scripting/natives_listmenu.ts";
 import "../ui/elevator_window.ts";
+import "../ui/trade_scene.ts";
+import "./slot_machine.ts";
+import "../ui/slot_machine.ts";
+import "../ui/prize_corner.ts";
+import "../ui/teachy_tv.ts";
 
 export {};
