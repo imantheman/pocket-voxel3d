@@ -12,6 +12,7 @@
  *   memPeakReset()        start a new peak from the current use
  *   gc()                  run the cycle collector
  *   gcHold(on)            hold the collector off / run it and re-arm (g3Gc)
+ *   pngDecode(bytes)      the host PNG decoder (g3PngDecode): [w, h, Uint8Array] or undefined
  * QJS_LIMIT_MB=<n> sets JS_SetMemoryLimit, as a console's heap would.
  *
  *   qjs_run --compile <script.js> <out.qbc> [strip]
@@ -130,6 +131,42 @@ static JSValue js_readfile(JSContext *ctx, JSValueConst t, int c, JSValueConst *
     return s;
 }
 
+/* pngDecode(byteString): the 3DS host's g3PngDecode (src/gen3/g3_shim.c):
+   [w, h, Uint8Array] when g3_png_same, else undefined */
+uint8_t *g3_png_decode(const uint8_t *png, size_t len, int *ow, int *oh);
+int g3_png_same(const uint8_t *png, size_t len);
+static void *js_realloc_buf(JSRuntime *rt, void *opaque, void *ptr, size_t size) {
+    (void)rt; (void)opaque;
+    if (size == 0) { free(ptr); return NULL; }
+    return realloc(ptr, size);
+}
+static JSValue js_pngdecode(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 1) return JS_UNDEFINED;
+    size_t ulen = 0;
+    const char *u = JS_ToCStringLen(ctx, &ulen, v[0]);
+    if (!u) return JS_UNDEFINED;
+    uint8_t *b = malloc(ulen + 1);
+    size_t n = 0;
+    for (size_t i = 0; i < ulen; i++) {
+        uint8_t x = (uint8_t)u[i];
+        if (x < 0x80) b[n++] = x;
+        else { b[n++] = (uint8_t)(((x & 0x1F) << 6) | ((uint8_t)u[i + 1] & 0x3F)); i++; }
+    }
+    JS_FreeCString(ctx, u);
+    if (!g3_png_same(b, n)) { free(b); return JS_UNDEFINED; }
+    int w = 0, h = 0;
+    uint8_t *rgba = g3_png_decode(b, n, &w, &h);
+    free(b);
+    if (!rgba) return JS_UNDEFINED;
+    JSValue arr = JS_NewUint8Array(ctx, rgba, (size_t)w * h * 4, js_realloc_buf, NULL, false);
+    JSValue a = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, a, 0, JS_NewInt32(ctx, w));
+    JS_SetPropertyUint32(ctx, a, 1, JS_NewInt32(ctx, h));
+    JS_SetPropertyUint32(ctx, a, 2, arr);
+    return a;
+}
+
 static JSValue js_nowus(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t; (void)c; (void)v;
     struct timespec ts;
@@ -196,7 +233,11 @@ int main(int argc, char **argv) {
     JS_SetPropertyStr(ctx, g, "memPeakReset", JS_NewCFunction(ctx, js_mempeakreset, "memPeakReset", 0));
     JS_SetPropertyStr(ctx, g, "gc", JS_NewCFunction(ctx, js_gc, "gc", 0));
     JS_SetPropertyStr(ctx, g, "gcHold", JS_NewCFunction(ctx, js_gchold, "gcHold", 1));
+    JS_SetPropertyStr(ctx, g, "pngDecode", JS_NewCFunction(ctx, js_pngdecode, "pngDecode", 1));
     JS_FreeValue(ctx, g);
+#ifdef QJS_PROF
+    { void qjs_prof_install(JSRuntime *, JSContext *); qjs_prof_install(rt, ctx); } /* tools/gen3/qjs_prof.c */
+#endif
     static const char pre[] = "globalThis.console={log:print,warn:print,error:print,info:print};";
     JS_FreeValue(ctx, JS_Eval(ctx, pre, sizeof pre - 1, "<pre>", JS_EVAL_TYPE_GLOBAL));
     double te = 0;

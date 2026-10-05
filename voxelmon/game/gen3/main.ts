@@ -14,7 +14,9 @@
 //             (6,8), skipping the intro; PV_G3_BENCH_SCRIPT ("tick:KEYS,..."
 //             as tools/gen3/boot_harness.ts, keys held until the next entry)
 //             walks it, and the screen is photographed at PV_G3_BENCH_SHOTS
-//             (shown frames, comma list).
+//             (shown frames, comma list). PV_G3_BENCH_SCRIPT="suite" runs
+//             platform/bench_suite.ts instead: each kind of screen in turn,
+//             with a cost line per phase.
 //   hosttest  the old host test card (hosttest.ts), one picture per frame;
 //             frame HOSTTEST_SHOT_FRAME goes to sdmc:/3ds/voxelmon/firered/g3shot_0.ppm.
 // (worldbench.ts is a separate entry: the world without the runtime.)
@@ -34,6 +36,7 @@ import { Game3 } from "./core/Game3.ts";
 import { Input } from "./shared/core/Input.ts";
 import { WorldView } from "./platform/worldview.ts";
 import { Game3World } from "./platform/game3_world.ts";
+import { BenchSuite } from "./platform/bench_suite.ts";
 
 declare const PV_G3_MODE: string;
 declare const PV_G3_BENCH_SCRIPT: string;
@@ -144,43 +147,54 @@ function gameMain(bench: boolean): void {
   const field = new Game3World(view);
   // game mode takes a script and shots too when the build gives them (a
   // title/new-game check that presses the game's own buttons)
-  const script = new BenchScript(typeof PV_G3_BENCH_SCRIPT === "string" ? PV_G3_BENCH_SCRIPT : "");
+  const scriptText = typeof PV_G3_BENCH_SCRIPT === "string" ? PV_G3_BENCH_SCRIPT : "";
+  // bench mode's screen suite (platform/bench_suite.ts) instead of a key script
+  const suite = bench && scriptText === "suite" ? new BenchSuite() : null;
+  const script = new BenchScript(suite ? "" : scriptText);
   const shots = shotSet(typeof PV_G3_BENCH_SHOTS === "string" ? PV_G3_BENCH_SHOTS : bench ? "90,300" : "");
   let tick = 0;
   let shown = 0;
   let failedUpdate = false, failedDraw = false;
-  const prof = { frames: 0, update: 0, draw: 0, emit: 0, ticks: 0, memEvery: 0 };
+  const prof = { frames: 0, update: 0, draw: 0, emit: 0, ticks: 0, memEvery: 0, game: 0, updateMax: 0, drawMax: 0 };
 
   setFrame((buttons: number): void => {
     if (!ok) return;
     tick++;
     const t1 = clock();
     try {
-      Input.hostButtons(padBits(buttons) | script.at(tick));
+      Input.hostButtons(padBits(buttons) | (suite ? suite.at(tick, game) : script.at(tick)));
       game.update(1 / 60);
     } catch (e) {
       if (!failedUpdate) console.log(`[pv] g3: update failed: ${errText(e)}`);
       failedUpdate = true;
     }
-    prof.update += clock() - t1;
+    const tu = clock() - t1;
+    if (suite) suite.noteUpdate(tu);
+    prof.update += tu;
+    if (tu > prof.updateMax) prof.updateMax = tu;
     prof.ticks++;
     // one picture per shown frame (the host runs several steps to catch up)
     if (n.lastStep && !n.lastStep()) return;
     const t2 = clock();
     field.begin(game);
     G.beginFrame();
+    const t2b = clock();
     try {
       game.draw();
     } catch (e) {
       if (!failedDraw) console.log(`[pv] g3: draw failed: ${errText(e)}`);
       failedDraw = true;
     }
+    const t2c = clock();
     G.endFrame();
     const t3 = clock();
     view.emit(field.state(game));
     const t4 = clock();
     prof.draw += t3 - t2;
+    prof.game += t2c - t2b;
+    if (t3 - t2 > prof.drawMax) prof.drawMax = t3 - t2;
     prof.emit += t4 - t3;
+    if (suite) suite.noteDraw(t4 - t2);
     shown++;
     if (shots.has(shown)) {
       n.screenshot?.();
@@ -188,20 +202,20 @@ function gameMain(bench: boolean): void {
     }
     if (++prof.frames === 150) {
       const f = prof.frames;
-      console.log(`[pv] g3 guest: update ${(prof.update / prof.ticks / 1000).toFixed(2)} ms/tick (${prof.ticks} ticks), ` +
-        `draw ${(prof.draw / f / 1000).toFixed(2)} ms (g3Draw ${(drawProf.conv / f / 1000).toFixed(2)}, ` +
+      console.log(`[pv] g3 guest: update ${(prof.update / prof.ticks / 1000).toFixed(2)} ms/tick (max ${(prof.updateMax / 1000).toFixed(1)}, ${prof.ticks} ticks), ` +
+        `draw ${(prof.draw / f / 1000).toFixed(2)} ms (max ${(prof.drawMax / 1000).toFixed(1)}; game.draw ${(prof.game / f / 1000).toFixed(2)}, g3Draw ${(drawProf.conv / f / 1000).toFixed(2)}, ` +
         `${Math.round(drawProf.len / f)} floats), world ${(prof.emit / f / 1000).toFixed(2)} ms, ` +
         `3d=${field.world3d} ents=${view.entCount} phase=${game.phase}${++prof.memEvery % 4 === 1 ? "; " + memText() : ""}`);
       const np = nativeProf;
-      if (np.up + np.cache + np.rd + np.ex + np.au > 0) {
+      if (np.up + np.cache + np.rd + np.ex + np.au + np.png > 0) {
         console.log(`[pv] g3 natives over ${f} frames: texUpload ${np.up} (${Math.round(np.upKB)} KB, ${(np.upUs / 1000).toFixed(0)} ms), ` +
-          `texFromCache ${np.cache} (${(np.cacheUs / 1000).toFixed(0)} ms), read ${np.rd} (${(np.rdUs / 1000).toFixed(0)} ms), exists ${np.ex} (${(np.exUs / 1000).toFixed(0)} ms), ` +
+          `texFromCache ${np.cache} (${(np.cacheUs / 1000).toFixed(0)} ms), pngDecode ${np.png} (${(np.pngUs / 1000).toFixed(0)} ms), read ${np.rd} (${(np.rdUs / 1000).toFixed(0)} ms), exists ${np.ex} (${(np.exUs / 1000).toFixed(0)} ms), ` +
           `sound ${np.au} (${(np.auUs / 1000).toFixed(0)} ms: ${Object.entries(np.auTop).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, v]) => k + " " + v).join(", ")})`);
-        np.up = np.upUs = np.upKB = np.cache = np.cacheUs = np.rd = np.rdUs = np.ex = np.exUs = np.au = np.auUs = 0;
+        np.up = np.upUs = np.upKB = np.cache = np.cacheUs = np.rd = np.rdUs = np.ex = np.exUs = np.au = np.auUs = np.png = np.pngUs = 0;
         np.auTop = {};
       }
       (globalThis as { __g3ProfDump?: () => void }).__g3ProfDump?.(); // tools/gen3/qjs_loadprof_gen.ts --device builds only
-      prof.frames = prof.update = prof.draw = prof.emit = prof.ticks = 0;
+      prof.frames = prof.update = prof.draw = prof.emit = prof.ticks = prof.game = prof.updateMax = prof.drawMax = 0;
       drawProf.conv = drawProf.len = 0;
     }
   });

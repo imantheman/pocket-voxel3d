@@ -50,6 +50,7 @@ const host: G3Host = {
   // is that many times slower there): catch-up-to-the-clock code shows up
   now: () => (nowUs() / 1e6) * (typeof QJS_TIME_SCALE === "number" ? QJS_TIME_SCALE : 1),
 };
-setHost(host);
+// tools/gen3/perf_check.ts runs qjs_perf.ts under Bun on its own host
+setHost((globalThis as { __perfHost?: G3Host }).__perfHost ?? host);
 setSaveStore(memorySaveStore());
 setAudio(silentAudio());
