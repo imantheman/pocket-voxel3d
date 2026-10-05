@@ -14,6 +14,7 @@ import { Versions } from "../../../import/gen3/versions.ts";
 import { CachePaths } from "./cache_paths.ts";
 import { NativeTileset as NativeTilesetMod } from "./tileset_native.ts";
 import { FieldView } from "./field_view.ts";
+import { Display } from "./display_table.ts";
 import { tostring, sub, mod, truthy } from "../../../import/gen3/lua.ts";
 import { len, type LuaTable } from "../platform/lt.ts";
 import { luaLoad } from "../platform/luadata.ts";
@@ -197,6 +198,8 @@ export const TilesetAnim = {
   _enabled: true,
   _manifests: undefined as Record<string, LuaTable> | undefined,
   _rse: undefined as LuaTable,
+  /** The visible atlases' frames were left behind while the world was 3D (step). */
+  _behind: false,
 
   // Lua: tileset_anim.lua:25
   install(cache: AnimCache | undefined): void {
@@ -407,6 +410,22 @@ export const TilesetAnim = {
         TilesetAnim._flowerFrame = frame;
       }
     }
+    // NOT FAITHFUL (performance, same picture): while the field is the
+    // 3DS's voxel world (Display.world3d) no 2D atlas is drawn, so their
+    // frames wait; catchUp (field_view.ts drawNativeTiles, before the next
+    // 2D draw) or the next step in 2D brings each to the current frames, as
+    // this loop would have -- an atlas only ever shows its kinds' current
+    // frames.
+    if ((Display as any).world3d) {
+      TilesetAnim._behind = true;
+      return;
+    }
+    TilesetAnim._behind = false;
+    TilesetAnim._applyVisible();
+  },
+
+  /** step's loop: the visible atlases to the current frames. */
+  _applyVisible(): void {
     const visible = TilesetAnim._visible;
     for (const pair in visible) {
       const entry = TilesetAnim._pairs[pair];
@@ -416,6 +435,13 @@ export const TilesetAnim = {
         TilesetAnim._applyKind(entry, "flower", TilesetAnim._flowerFrame);
       }
     }
+  },
+
+  /** Before a 2D draw: the frames step left while the world was 3D. */
+  catchUp(): void {
+    if (!TilesetAnim._behind) return;
+    TilesetAnim._behind = false;
+    TilesetAnim._applyVisible();
   },
 };
 

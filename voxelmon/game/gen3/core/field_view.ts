@@ -1407,6 +1407,11 @@ function drawNativeTiles(mapDef: any, camX: number, camY: number, canvasW: numbe
   }
   const mainTs = nativeAtlas(NativeTileset, pair);
   if (!mainTs) return false;
+  {
+    // (pocket-voxel: TilesetAnim.step leaves the atlases while the world is 3D)
+    const TA: any = TilesetAnimMod;
+    if (TA && TA._behind) TA.catchUp();
+  }
 
   G.setColor(0, 0, 0, 1);
   G.rectangle("fill", 0, 0, canvasW, canvasH);
