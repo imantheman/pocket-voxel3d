@@ -16,6 +16,7 @@ import "../ui/shop_chrome.ts";
 import "../ui/tm_case_chrome.ts";
 import "../ui/berry_pouch_chrome.ts";
 import "../ui/stat_growth.ts";
+import "../ui/battle_transition_chrome.ts";
 import "../ui/ui_pass.ts";
 import "../ui/credits.ts";
 import "../ui/diploma.ts";
