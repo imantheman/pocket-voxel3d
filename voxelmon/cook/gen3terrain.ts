@@ -42,6 +42,16 @@
 //     vertex beyond its colour; faces take spec FACE_SHADE, and the side
 //     faces the tile's average colour times that shade (Terrain.lua:218-249).
 //   - water is static: the mod rebinds the engine's animated atlas each frame.
+//   - buildings: NOT FAITHFUL, on purpose (Isaac's call, 2026-10-05, from a
+//     reference shot of how a house should look). The mod's rule makes every
+//     cell of a building a flat-topped column (Terrain.lua:512-516) and
+//     stands only the bottom row's art on the south face (Terrain.lua:557),
+//     so the whole facade lies on the roof and the door row shows twice.
+//     Outdoors, a building's run of box cells is instead split into a ROOF
+//     (its north rows) and a FACADE (its south rows): the facade stands up,
+//     leaned back by the mod's own card lean so it reads at the size the
+//     characters do; the roof lies over the rest at the facade's top. See
+//     `buildingRuns` below. FR_FACADE=0 cooks the mod's boxes unchanged.
 
 import { FACE_SHADE } from "../../contracts/spec/voxel-spec.ts";
 import { FACE, type Quad } from "./geom.ts";
@@ -81,6 +91,27 @@ const PROP_LIFT = 0.2;
  * 35 degrees off straight down).
  */
 export const CARD_LEAN = ((90 - 35) * 0.8 * Math.PI) / 180;
+
+/**
+ * The building rule (NOT FAITHFUL -- ours, see the header). Nothing in a
+ * metatile says which rows of a building are roof and which are wall: FRLG
+ * puts everything above a building's bottom row in the over layer, roof and
+ * wall alike, so the player can pass behind it; the over layer only marks
+ * "the player may be under this". So the split is by count: the north
+ * FACADE_ROOF_MIN rows of a run are roof (40% of a deep one), the rest
+ * stands as the facade. That is right for the houses, the lab, the centres,
+ * the marts and the gyms (a 5-deep run: 3 roof rows counting the eave row
+ * behind, 2 wall rows) and close on the big city blocks.
+ */
+export const FACADE = process.env.FR_FACADE !== "0";
+const FACADE_ROOF_MIN = 3;
+const FACADE_ROOF_SHARE = 0.4;
+/** The tallest a facade stands, in rows of art at the card lean (~35 px). */
+const FACADE_MAX_ROWS = 3;
+/** How far the roof's front edge overhangs the facade, game px. */
+const ROOF_OVERHANG = 2;
+/** The roof plane rises toward its back edge at this many degrees. */
+const ROOF_RISE_DEG = Number(process.env.FR_ROOF_RISE ?? 12);
 
 /** How many cells of border the cook meshes around a map (the Gen 1 cook's
  * RING: 12 tiles = 6 cells, cook/structures.ts). */
@@ -275,6 +306,40 @@ export function averageColour(pair: FrPair, slot: number): [number, number, numb
   return [r / 256, g / 256, b / 256];
 }
 
+/**
+ * The same over the under+over composite. NOT FAITHFUL (the building rule):
+ * a roof cell's under layer is the ground below the eave, so its average is
+ * grass; a building's side walls take the composite of its wall instead.
+ */
+export function averageColourFull(pair: FrPair, slot: number): [number, number, number] {
+  const W = pair.cols * 16;
+  const sx = (slot % pair.cols) * 16;
+  const sy = Math.floor(slot / pair.cols) * 16;
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      const i = (sy + y) * W + sx + x;
+      const o = pair.over[i]!;
+      const c = pair.rgb[o !== 0 ? o : pair.under[i]!]!;
+      r += c[0];
+      g += c[1];
+      b += c[2];
+    }
+  }
+  return [r / 256, g / 256, b / 256];
+}
+
+/** The first texel row of a slot's over layer with anything in it (16 if none). */
+function firstOverRow(pair: FrPair, slot: number): number {
+  const W = pair.cols * 16;
+  const sx = (slot % pair.cols) * 16;
+  const sy = Math.floor(slot / pair.cols) * 16;
+  for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) if (pair.over[(sy + y) * W + sx + x] !== 0) return y;
+  return 16;
+}
+
 // ---------------------------------------------------------------------------
 // what stands up, and what stands as a card (Terrain.lua:93-216)
 // ---------------------------------------------------------------------------
@@ -398,6 +463,8 @@ export interface TerrainStats {
   cards: number;
   boxes: number;
   sheets: number;
+  /** Building runs stood as roof + facade (the building rule). */
+  facades: number;
 }
 
 export interface TerrainGeometry {
@@ -457,6 +524,128 @@ function rects(mask: (x: number, y: number) => boolean): [number, number, number
   return runs;
 }
 
+type CellInfo = { rec: CellRec; h: number; prop: boolean; attached: boolean };
+
+/** One column of a building, stood as roof + facade (the building rule). */
+interface BuildingRun {
+  x: number;
+  /** First (north) and last (south) cell of the run; first facade row. */
+  ya: number;
+  yb: number;
+  yf: number;
+  /** Facade: foot z (the run's south edge), top z and height. */
+  zs: number;
+  zt: number;
+  H: number;
+  /** Roof back edge z and height; texel rows of the back row left off. */
+  zn: number;
+  Hb: number;
+  skip: number;
+  /** Every run, by each of its cells (shared). */
+  byCell: Map<number, BuildingRun>;
+}
+
+/**
+ * NOT FAITHFUL (see FACADE): find the outdoor buildings and lay out each
+ * column of one. A building cell is a box the mod would raise (Terrain.lua:
+ * 449-450: a wall, or an overhang attached to one, that is not a prop); a
+ * run is the cells of one column of them, north to south. Its south rows are
+ * the facade, the rest the roof (FACADE_ROOF_MIN / _SHARE). The facade is
+ * leaned back by the mod's card lean (CARD_LEAN, main.lua:109) with its art
+ * at full length, so it stands as tall as the characters read; every run of
+ * one building (4-connected) takes the height of its commonest facade, so a
+ * roof is one level. Runs shorter than four cells keep the mod's boxes.
+ */
+function buildingRuns(
+  pair: FrPair,
+  info: Map<number, CellInfo>,
+  key: (x: number, y: number) => number,
+  mx0: number,
+  my0: number,
+  mw: number,
+  mh: number,
+): BuildingRun[] {
+  const isBuilding = (x: number, y: number): boolean => {
+    const c = info.get(key(x, y));
+    return !!c && !c.prop && c.h > 0 && (c.rec.class === "wall" || c.attached);
+  };
+  const byCell = new Map<number, BuildingRun>();
+  const runs: BuildingRun[] = [];
+  const facadeRows = new Map<BuildingRun, number>();
+  for (let x = mx0; x < mx0 + mw; x++) {
+    let y = my0;
+    while (y < my0 + mh) {
+      if (!isBuilding(x, y)) {
+        y++;
+        continue;
+      }
+      const ya = y;
+      while (y < my0 + mh && isBuilding(x, y)) y++;
+      const yb = y - 1;
+      const L = yb - ya + 1;
+      if (L < 4) continue;
+      const R = Math.max(FACADE_ROOF_MIN, Math.round(L * FACADE_ROOF_SHARE));
+      const run: BuildingRun = { x, ya, yb, yf: ya + R, zs: 0, zt: 0, H: 0, zn: 0, Hb: 0, skip: 0, byCell };
+      runs.push(run);
+      facadeRows.set(run, L - R);
+      for (let yy = ya; yy <= yb; yy++) byCell.set(key(x, yy), run);
+    }
+  }
+  // one height per building: its commonest facade (ties to the lower)
+  const seen = new Set<BuildingRun>();
+  const cosL = Math.cos(CARD_LEAN);
+  for (const start of runs) {
+    if (seen.has(start)) continue;
+    const comp: BuildingRun[] = [];
+    const stack = [start];
+    seen.add(start);
+    while (stack.length) {
+      const r = stack.pop()!;
+      comp.push(r);
+      for (let yy = r.ya; yy <= r.yb; yy++) {
+        for (const nx of [r.x - 1, r.x + 1]) {
+          const n = byCell.get(key(nx, yy));
+          if (n && !seen.has(n)) {
+            seen.add(n);
+            stack.push(n);
+          }
+        }
+      }
+    }
+    const votes = new Map<number, number>();
+    for (const r of comp) votes.set(facadeRows.get(r)!, (votes.get(facadeRows.get(r)!) ?? 0) + 1);
+    let F = 0;
+    let best = -1;
+    for (const [f, n] of [...votes].sort((a, b) => a[0] - b[0])) {
+      if (n > best) {
+        F = f;
+        best = n;
+      }
+    }
+    // a deep city block would stand as tall as its whole facade and hide the
+    // streets behind it: its facade leans further back instead
+    const H = Math.round(CELL * Math.min(F, FACADE_MAX_ROWS) * cosL);
+    for (const r of comp) {
+      const len = CELL * (r.yb - r.yf + 1);
+      r.zs = (r.yb + 1) * CELL;
+      r.zt = r.zs - (len > H ? Math.sqrt(len * len - H * H) : 0);
+      r.H = H;
+      // the back row of a roof is often the eave over open ground (an
+      // attached cell, Terrain.lua:120): its picture starts where the eave does
+      const back = info.get(key(r.x, r.ya))!;
+      r.skip = back.rec.class === "ground" ? Math.min(CELL - 1, firstOverRow(pair, back.rec.slot)) : 0;
+      r.zn = r.ya * CELL + r.skip;
+      if (r.zt > r.zn) {
+        r.Hb = H + (r.zt - r.zn) * Math.tan((ROOF_RISE_DEG * Math.PI) / 180);
+      } else {
+        r.zn = r.zt;
+        r.Hb = H;
+      }
+    }
+  }
+  return runs;
+}
+
 export function meshTerrain(root: string, map: FrMap, pair: FrPair, art: TileArt): TerrainGeometry {
   // Terrain.lua:427 -- open sky, and not under the sea
   const outdoor = map.outdoor && map.mapType !== MAP_TYPE.underwater;
@@ -509,7 +698,10 @@ export function meshTerrain(root: string, map: FrMap, pair: FrPair, art: TileArt
   const water: Quad[] = [];
   const cards: Quad[] = [];
   const sheets: Quad[] = [];
-  const stats: TerrainStats = { cells: 0, walls: 0, water: 0, ledges: 0, voids: 0, props: 0, cards: 0, boxes: 0, sheets: 0 };
+  const stats: TerrainStats = { cells: 0, walls: 0, water: 0, ledges: 0, voids: 0, props: 0, cards: 0, boxes: 0, sheets: 0, facades: 0 };
+  const runs = FACADE && outdoor ? buildingRuns(pair, info, key, mx0, my0, mw, mh) : [];
+  const inRun = new Set<number>();
+  for (const run of runs) for (let y = run.ya; y <= run.yb; y++) inRun.add(key(run.x, y));
   const grid = { x0: mx0, y0: my0, w: mw, h: mh, cls: [] as string[], height: [] as number[], prop: [] as boolean[] };
   const white = art.white;
   const cosL = Math.cos(CARD_LEAN);
@@ -536,6 +728,8 @@ export function meshTerrain(root: string, map: FrMap, pair: FrPair, art: TileArt
       grid.cls.push(r.class);
       grid.height.push(c.h);
       grid.prop.push(c.prop);
+      // a building's cells are meshed by their run (below)
+      if (inRun.has(key(x, y))) continue;
 
       const wx = x * CELL;
       const wz = y * CELL;
@@ -682,6 +876,113 @@ export function meshTerrain(root: string, map: FrMap, pair: FrPair, art: TileArt
       side(-1, 0, FACE.west, [wx, wz], [wx, wz + CELL]);
       side(0, -1, FACE.north, [wx + CELL, wz], [wx, wz]);
     }
+  }
+
+  // the building rule (NOT FAITHFUL, see the header and FACADE): each run
+  // stands as a leaned facade under a roof plane
+  for (const run of runs) {
+    stats.facades++;
+    const X0 = run.x * CELL;
+    const X1 = X0 + CELL;
+    const zs = run.zs;
+    const zt = run.zt;
+    const H = run.H;
+    const zn = run.zn;
+    const Hb = run.Hb;
+    const uvCell = (slot: number, v0: number, v1: number): [number, number][] => {
+      const [fx, fy] = art.full(slot);
+      return [
+        [fx + E, fy + v0 + E],
+        [fx + CELL - E, fy + v0 + E],
+        [fx + CELL - E, fy + v1 - E],
+        [fx + E, fy + v1 - E],
+      ];
+    };
+    // the facade: its rows top to bottom down the leaned plane, each its own
+    // under+over picture, the bottom row (the door's) at the ground
+    const F = run.yb - run.yf + 1;
+    for (let i = 0; i < F; i++) {
+      const slot = info.get(key(run.x, run.yf + i))!.rec.slot;
+      const t0 = i / F;
+      const t1 = (i + 1) / F;
+      const z0 = zt + (zs - zt) * t0;
+      const z1 = zt + (zs - zt) * t1;
+      const h0 = H * (1 - t0);
+      const h1 = H * (1 - t1);
+      terrain.push({
+        c: [
+          [X0, h0, z0],
+          [X1, h0, z0],
+          [X1, h1, z1],
+          [X0, h1, z1],
+        ],
+        uv: uvCell(slot, 0, CELL),
+        shade: FACE_SHADE.south,
+        f: FACE.south,
+      });
+    }
+    // the roof: its rows back to front over the plane from the back edge to
+    // the overhang, the art of each in proportion (the back row from where
+    // its eave's art starts)
+    const R = run.yf - run.ya;
+    if (R > 0 && zt > zn) {
+      const slope = (Hb - H) / (zt - zn);
+      const zf = zt + ROOF_OVERHANG;
+      const hf = H - ROOF_OVERHANG * slope;
+      const total = R * CELL - run.skip;
+      let acc = 0;
+      for (let j = 0; j < R; j++) {
+        const slot = info.get(key(run.x, run.ya + j))!.rec.slot;
+        const v0 = j === 0 ? run.skip : 0;
+        const len = CELL - v0;
+        const s0 = acc / total;
+        const s1 = (acc + len) / total;
+        acc += len;
+        const za = zn + (zf - zn) * s0;
+        const zb = zn + (zf - zn) * s1;
+        const ha = Hb + (hf - Hb) * s0;
+        const hb = Hb + (hf - Hb) * s1;
+        terrain.push({
+          c: [
+            [X0, ha, za],
+            [X1, ha, za],
+            [X1, hb, zb],
+            [X0, hb, zb],
+          ],
+          uv: uvCell(slot, v0, CELL),
+          shade: FACE_SHADE.up,
+          f: FACE.up,
+        });
+      }
+    }
+    // the side walls: one flat colour (the wall's), under the roof end and
+    // down the facade's slope; skipped where the neighbouring run has the
+    // same profile (the face would be inside the building)
+    const wallAvg = averageColourFull(pair, info.get(key(run.x, run.yb))!.rec.slot);
+    const flatSide = (f: number, corners: [number, number, number][]) => {
+      const s = f === FACE.east ? FACE_SHADE.east : f === FACE.west ? FACE_SHADE.west : FACE_SHADE.north;
+      terrain.push({
+        c: corners,
+        uv: [white, white, white, white],
+        shade: s,
+        abgr: abgr(wallAvg[0] * s, wallAvg[1] * s, wallAvg[2] * s),
+        f: f as Quad["f"],
+      });
+    };
+    const sameProfile = (nx: number) => {
+      const n = run.byCell.get(key(nx, run.yb));
+      return n !== undefined && n.yb === run.yb && n.zt === zt && n.H === H && n.zn <= zn && n.Hb >= Hb;
+    };
+    if (!sameProfile(run.x + 1)) {
+      if (zt > zn) flatSide(FACE.east, [[X1, H, zt], [X1, Hb, zn], [X1, 0, zn], [X1, 0, zt]]);
+      flatSide(FACE.east, [[X1, 0, zs], [X1, H, zt], [X1, 0, zt], [X1, 0, zs]]);
+    }
+    if (!sameProfile(run.x - 1)) {
+      if (zt > zn) flatSide(FACE.west, [[X0, Hb, zn], [X0, H, zt], [X0, 0, zt], [X0, 0, zn]]);
+      flatSide(FACE.west, [[X0, H, zt], [X0, 0, zs], [X0, 0, zs], [X0, 0, zt]]);
+    }
+    // the back wall
+    flatSide(FACE.north, [[X1, Hb, zn], [X0, Hb, zn], [X0, 0, zn], [X1, 0, zn]]);
   }
   return { terrain, water, cards, sheets, stats, grid };
 }
