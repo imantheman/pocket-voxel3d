@@ -689,17 +689,20 @@ function stack_module(): typeof Stack {
 }
 
 const HIDDEN_MENUS: LuaTable = seq("src.ui.game3.bag_menu", "src.ui.game3.start_menu");
-// package.loaded[name] for the HIDDEN_MENUS (both are in the bundle)
-const LOADED: Record<string, any> = {
-  "src.ui.game3.bag_menu": BagMenu,
-  "src.ui.game3.start_menu": StartMenu,
-};
+// package.loaded[name] for the HIDDEN_MENUS (both are in the bundle). A
+// function, not a table built at load: inside the import cycle BagMenu and
+// StartMenu may not be initialised when this module runs.
+function loaded(name: string): any {
+  if (name === "src.ui.game3.bag_menu") return BagMenu;
+  if (name === "src.ui.game3.start_menu") return StartMenu;
+  return undefined;
+}
 
 // Lua: pokedude.lua:559
 function hide_menus(saved: any): void {
   saved.menus = {};
   for (const [, name] of ipairs<string>(HIDDEN_MENUS)) {
-    const mod = LOADED[name];
+    const mod = loaded(name);
     if (truthy(mod) && truthy(mod.open)) {
       saved.menus[name] = true;
       mod.open = false;
@@ -710,7 +713,7 @@ function hide_menus(saved: any): void {
 // Lua: pokedude.lua:570
 function show_menus(saved: any): void {
   for (const [name] of pairs(lor(saved.menus, {}))) {
-    const mod = LOADED[name as string];
+    const mod = loaded(name as string);
     if (truthy(mod)) mod.open = true;
   }
 }
