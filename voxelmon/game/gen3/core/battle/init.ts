@@ -42,6 +42,7 @@
 //   never reach the link stub.
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { G3Lazy } from "../lazy_registry.ts";
 import { NotPortedError, notPorted } from "../../notported.ts";
 import { seq, len, ipairs, pairs, insert, remove, sort, type LuaTable } from "../../platform/lt.ts";
 import { truthy, tostring, tonumber, format, sub, mod as lmod } from "../../../../import/gen3/lua.ts";
@@ -176,7 +177,8 @@ function probeOpen(M: any): boolean {
 }
 
 // package.loaded["src.ui.game3.stat_growth"]: no file in the port, reads nil.
-const StatGrowthLoaded: any = undefined;
+// package.loaded["src.ui.game3.stat_growth"]: a lazy module, registered in G3Lazy
+function statGrowthLoaded(): any { return G3Lazy["src.ui.game3.stat_growth"]; }
 // package.loaded["src.ui.game3.rse.pyramid_bag"]: no file in the port, reads nil.
 const PyramidBagLoaded: any = undefined;
 
@@ -4128,7 +4130,7 @@ function update_body(dt: number | null | undefined, game: Tbl): void {
   // A stat window whose phase can no longer dismiss it must not linger (#2324).
   if (!Battle.statWindowPhase()) {
     // package.loaded["src.ui.game3.stat_growth"]
-    const StatGrowth = StatGrowthLoaded;
+    const StatGrowth = statGrowthLoaded();
     if (probeOpen(StatGrowth)) {
       StatGrowth.close({ silent: true });
     }
@@ -4275,7 +4277,7 @@ function update_body(dt: number | null | undefined, game: Tbl): void {
       return;
     }
     // package.loaded["src.ui.game3.stat_growth"]
-    const StatGrowth = StatGrowthLoaded;
+    const StatGrowth = statGrowthLoaded();
     if (probeOpen(StatGrowth)) {
       if (truthy(StatGrowth.handleInput(game.input))) {
         return;
