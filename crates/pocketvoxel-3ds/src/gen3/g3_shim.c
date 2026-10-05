@@ -18,6 +18,9 @@
                                                        (RGBA8, what platform/
                                                         pngdecode.ts gives)
      g3Bytes(byte string) -> Uint8Array | undefined    (lua.ts toBytes' bytes)
+     g3Log(line)                                       (to the log file alone:
+                                                        console.log also prints
+                                                        it to stdout, slowly)
 
    Paths are the cache's (data/generated/gba/...), under
    sdmc:/3ds/voxelmon/firered/. */
@@ -42,6 +45,7 @@ uint8_t *g3_read_file(const char *path, size_t *len);
 int g3_exists(const char *path);
 uint8_t *g3_png_decode(const uint8_t *png, size_t len, int *ow, int *oh);
 int g3_png_same(const uint8_t *png, size_t len);
+void g3_dlog(const char *s, int len);
 
 /* The bytes of an ArrayBuffer or a typed array (the guest's own memory). */
 static const uint8_t *g3_bytes(JSContext *ctx, JSValueConst v, size_t *len) {
@@ -223,6 +227,17 @@ static JSValue g3_readbuf(JSContext *ctx, JSValueConst t, int c, JSValueConst *v
     JS_FreeCString(ctx, path);
     if (!b) return JS_UNDEFINED;
     return JS_NewArrayBuffer(ctx, b, n, 0, g3_realloc_buf, NULL, false);
+}
+
+static JSValue g3_log_js(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 1) return JS_UNDEFINED;
+    size_t len = 0;
+    const char *s = JS_ToCStringLen(ctx, &len, v[0]);
+    if (!s) { JS_FreeValue(ctx, JS_GetException(ctx)); return JS_UNDEFINED; }
+    g3_dlog(s, (int)len);
+    JS_FreeCString(ctx, s);
+    return JS_UNDEFINED;
 }
 
 /* A byte string's bytes (lua.ts toBytes, in C): undefined if a char is
@@ -537,6 +552,7 @@ int qjs_register_g3(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "g3Strips", JS_NewCFunction(ctx, g3_strips, "g3Strips", 5));
     JS_SetPropertyStr(ctx, o, "g3PngDecode", JS_NewCFunction(ctx, g3_pngdecode, "g3PngDecode", 1));
     JS_SetPropertyStr(ctx, o, "g3Bytes", JS_NewCFunction(ctx, g3_bytes_js, "g3Bytes", 1));
+    JS_SetPropertyStr(ctx, o, "g3Log", JS_NewCFunction(ctx, g3_log_js, "g3Log", 1));
     static const struct { const char *name; JSCFunction *fn; int n; } snd[] = {
         { "g3SongPlay", g3_songplay, 1 }, { "g3SongStop", g3_songstop, 0 },
         { "g3SongPause", g3_songpause, 0 }, { "g3SongResume", g3_songresume, 0 },

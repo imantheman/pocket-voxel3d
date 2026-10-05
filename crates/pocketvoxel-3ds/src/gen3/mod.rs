@@ -250,6 +250,20 @@ pub fn shot(n: u32) {
     dlog(&format!("[pv] g3: shot {} {}", &path[..path.len() - 1], if ok { "written" } else { "FAILED" }));
 }
 
+/// The guest's log lines (g3_shim.c g3Log): to the log file as voxel_log
+/// files them, without its println to stdout (~20 ms a line on Citra).
+#[no_mangle]
+pub unsafe extern "C" fn g3_dlog(s: *const u8, len: i32) {
+    if s.is_null() || len <= 0 {
+        return;
+    }
+    let b = core::slice::from_raw_parts(s, len as usize);
+    let t = String::from_utf8_lossy(b);
+    if t.starts_with("[pv]") {
+        dlog(&t);
+    }
+}
+
 /// After the loop: the sound thread down and NDSP closed.
 pub fn exit() {
     audio::exit();

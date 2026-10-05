@@ -46,8 +46,12 @@ const MODE = typeof PV_G3_MODE === "string" ? PV_G3_MODE : "game";
 
 // The runtime's own log lines (Logger, its "[game3] ... failed" notes) go to
 // pvlog.txt too: the host files only lines that start "[pv]" (voxel.rs).
+// Where the binary has g3Log they go to the log file alone: console.log
+// also prints each line to stdout, ~20 ms a line on Citra at 300% clock,
+// which made every perf line a dropped frame at 60 fps.
 {
-  const raw = console.log;
+  const g3log = (n as unknown as { g3Log?(s: string): void }).g3Log;
+  const raw: (s: string) => void = g3log ? (s) => g3log(s) : console.log;
   // a line the runtime repeats (every frame, say) is filed 3 times, then every
   // 1000th time with its count: each filed line is an SD write
   const seen = new Map<string, number>();
@@ -60,6 +64,19 @@ const MODE = typeof PV_G3_MODE === "string" ? PV_G3_MODE : "game";
     else if (k % 1000 === 0) raw(`[pv] js: (x${k}) ${s}`);
   };
   console.log = fwd; console.warn = fwd; console.error = fwd;
+}
+
+/** Microseconds as ms with two / one decimals, by integer arithmetic (toFixed's
+ *  float formatting is slow under QuickJS, and these lines are printed in play). */
+function ms2(us: number): string {
+  const v = Math.round(us / 10);
+  const c = v % 100;
+  return `${(v - c) / 100}.${c < 10 ? "0" : ""}${c}`;
+}
+function ms1(us: number): string {
+  const v = Math.round(us / 100);
+  const c = v % 10;
+  return `${(v - c) / 10}.${c}`;
 }
 
 /** The boot natives some binaries have (g3_shim.c). */
@@ -176,7 +193,7 @@ function gameMain(bench: boolean): void {
   let tick = 0;
   let shown = 0;
   let failedUpdate = false, failedDraw = false;
-  const prof = { frames: 0, update: 0, draw: 0, emit: 0, ticks: 0, memEvery: 0, game: 0, updateMax: 0, drawMax: 0 };
+  const prof = { frames: 0, update: 0, draw: 0, emit: 0, ticks: 0, memEvery: 0, game: 0, updateMax: 0, drawMax: 0, logUs: 0 };
 
   setFrame((buttons: number): void => {
     if (!ok) return;
@@ -221,14 +238,22 @@ function gameMain(bench: boolean): void {
       n.screenshot?.();
       console.log(`[pv] g3 bench: shot at shown frame ${shown} (tick ${tick}) 3d=${field.world3d} ents=${view.entCount}`);
     }
-    if (++prof.frames === 150) {
+    // every 600 shown frames (10 s at 60 fps): formatting these lines costs
+    // a frame's worth of time on the console (QuickJS's number formatting),
+    // so they are a hitch of their own; the next line says how long the
+    // last one took
+    if (++prof.frames === 600) {
+      const tLog = clock();
       const f = prof.frames;
-      console.log(`[pv] g3 guest: update ${(prof.update / prof.ticks / 1000).toFixed(2)} ms/tick (max ${(prof.updateMax / 1000).toFixed(1)}, ${prof.ticks} ticks), ` +
-        `draw ${(prof.draw / f / 1000).toFixed(2)} ms (max ${(prof.drawMax / 1000).toFixed(1)}; game.draw ${(prof.game / f / 1000).toFixed(2)}, g3Draw ${(drawProf.conv / f / 1000).toFixed(2)}, ` +
-        `${Math.round(drawProf.len / f)} floats), world ${(prof.emit / f / 1000).toFixed(2)} ms, ` +
-        `3d=${field.world3d} ents=${view.entCount} phase=${game.phase}${++prof.memEvery % 4 === 1 ? "; " + memText(true) : ""}`);
+      console.log(`[pv] g3 guest: update ${ms2(prof.update / prof.ticks)} ms/tick (max ${ms1(prof.updateMax)}, ${prof.ticks} ticks), ` +
+        `draw ${ms2(prof.draw / f)} ms (max ${ms1(prof.drawMax)}; game.draw ${ms2(prof.game / f)}, g3Draw ${ms2(drawProf.conv / f)}, ` +
+        `${Math.round(drawProf.len / f)} floats), world ${ms2(prof.emit / f)} ms, ` +
+        `3d=${field.world3d} ents=${view.entCount} phase=${game.phase}; log ${ms1(prof.logUs)} ms` +
+        // the heaps every sixth line: g3Mem's mallinfo walks the app heap's free lists
+        `${++prof.memEvery % 6 === 1 ? "; " + memText(true) : ""}`);
       const np = nativeProf;
-      if (np.up + np.cache + np.rd + np.ex + np.au + np.png > 0) {
+      // (sound calls alone are every tick's: the line is for loads and reads)
+      if (np.up + np.cache + np.rd + np.ex + np.png > 0) {
         console.log(`[pv] g3 natives over ${f} frames: texUpload ${np.up} (${Math.round(np.upKB)} KB, ${(np.upUs / 1000).toFixed(0)} ms), ` +
           `texFromCache ${np.cache} (${(np.cacheUs / 1000).toFixed(0)} ms), pngDecode ${np.png} (${(np.pngUs / 1000).toFixed(0)} ms), read ${np.rd} (${(np.rdUs / 1000).toFixed(0)} ms), exists ${np.ex} (${(np.exUs / 1000).toFixed(0)} ms), ` +
           `sound ${np.au} (${(np.auUs / 1000).toFixed(0)} ms: ${Object.entries(np.auTop).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, v]) => k + " " + v).join(", ")})`);
@@ -238,6 +263,7 @@ function gameMain(bench: boolean): void {
       (globalThis as { __g3ProfDump?: () => void }).__g3ProfDump?.(); // tools/gen3/qjs_loadprof_gen.ts --device builds only
       prof.frames = prof.update = prof.draw = prof.emit = prof.ticks = prof.game = prof.updateMax = prof.drawMax = 0;
       drawProf.conv = drawProf.len = 0;
+      prof.logUs = clock() - tLog;
     }
   });
 }

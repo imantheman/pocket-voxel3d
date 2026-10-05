@@ -84,6 +84,9 @@ struct Pace {
     n30: u32,
     work_sum: f32,
     work_max: f32,
+    /// The costliest frame's two halves: before the render call, and in it.
+    max_pre: f32,
+    max_post: f32,
     est_sum: f32,
     est_max: f32,
     ups: u32,
@@ -94,7 +97,7 @@ struct Pace {
 static mut P: Pace = Pace {
     new3ds: None, at60: false, rate: 30, t_top: 0.0, prev_top: 0.0, t_pre: 0.0, t_in: 0.0, t_step0: 0.0,
     t_last_step: 0.0, fits: 0, hold: 0, since: 0, prev_over: false, strain: 0.0, n60: 0, n30: 0,
-    work_sum: 0.0, work_max: 0.0, est_sum: 0.0, est_max: 0.0, ups: 0, downs: 0, late: 0,
+    work_sum: 0.0, work_max: 0.0, max_pre: 0.0, max_post: 0.0, est_sum: 0.0, est_max: 0.0, ups: 0, downs: 0, late: 0,
 };
 
 fn now_ms() -> f64 {
@@ -152,7 +155,11 @@ pub fn after_render() {
     let period = if p.prev_top > 0.0 { (p.t_top - p.prev_top) as f32 } else { 0.0 };
     if p.at60 { p.n60 += 1 } else { p.n30 += 1 }
     p.work_sum += work;
-    p.work_max = p.work_max.max(work);
+    if work > p.work_max {
+        p.work_max = work;
+        p.max_pre = (p.t_pre - p.t_top) as f32;
+        p.max_post = (t_end - p.t_in) as f32;
+    }
     p.est_sum += est;
     p.est_max = p.est_max.max(est);
 
@@ -213,9 +220,9 @@ pub fn perf_line() {
     let p = p();
     let n = (p.n60 + p.n30).max(1) as f32;
     dlog(&format!(
-        "[pv] g3 pace: {} frames at 60, {} at 30 (now {})  cpu {:.1} avg {:.1} max ms  at-60 cost {:.1} avg {:.1} max ms  up {} down {} late {}",
+        "[pv] g3 pace: {} frames at 60, {} at 30 (now {})  cpu {:.1} avg {:.1} max ms ({:.1} before the render, {:.1} in it)  at-60 cost {:.1} avg {:.1} max ms  up {} down {} late {}",
         p.n60, p.n30, if p.at60 { 60 } else { 30 },
-        p.work_sum / n, p.work_max, p.est_sum / n, p.est_max, p.ups, p.downs, p.late,
+        p.work_sum / n, p.work_max, p.max_pre, p.max_post, p.est_sum / n, p.est_max, p.ups, p.downs, p.late,
     ));
     p.n60 = 0; p.n30 = 0; p.work_sum = 0.0; p.work_max = 0.0; p.est_sum = 0.0; p.est_max = 0.0;
     p.ups = 0; p.downs = 0; p.late = 0;
