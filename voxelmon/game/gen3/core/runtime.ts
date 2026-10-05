@@ -54,7 +54,8 @@ import { len } from "../platform/lt.ts";
  * "src.ui.game3.arena_state", "src.core.game3.truck_sequence". Their ports
  * register here (G3Lazy[name] = Module); until then they read as absent.
  */
-export const G3Lazy: Record<string, any> = {};
+import { G3Lazy } from "./lazy_registry.ts";
+export { G3Lazy };
 
 // Lua: runtime.lua:23
 function log(msg: unknown): void {
