@@ -8,7 +8,7 @@
 // text below, which yields the same bytes the Lua literals hold.
 
 import { mod, tonumber, tostring, truthy } from "../../../import/gen3/lua.ts";
-import { G } from "../platform/graphics.ts";
+import { G, DrawMemo } from "../platform/graphics.ts";
 import { newImageData, type Image, type ImageData, type Quad } from "../platform/image.ts";
 import { Fs } from "../platform/fs.ts";
 import { luaLoad } from "../platform/luadata.ts";
@@ -76,6 +76,13 @@ function viaCacheFs<T>(f: () => T): T | undefined {
 }
 
 const hasOwn = Object.prototype.hasOwnProperty;
+
+/**
+ * Bumped whenever what a glyph looks like may have changed: the palette
+ * (applyPalette writes STDPAL's colours in place), the faces (invalidate),
+ * the game version (sync): every kept run is stale then (FrlgFont.draw's text memo).
+ */
+let fontEpoch = 0;
 
 // 1:1 Standard Text Palettes from pokefirered/graphics/text_window/stdpal_0.pal
 // GBA 15-bit BGR555 -> 8-bit RGB888 / normalized 0.0-1.0
@@ -364,6 +371,7 @@ function loadTable(path: string): LuaTable | undefined {
 
 // Lua: frlg_font.lua:344
 function applyPalette(spec: LuaTable | undefined): void {
+  fontEpoch++; // (the text memo)
   let pal = spec && spec.palette ? loadTable(spec.palette.file) : undefined;
   pal = pal ? pal[spec.palette.key] : undefined;
   if (pal !== null && typeof pal === "object") {
@@ -410,6 +418,7 @@ function sync(): LuaTable | undefined {
     ?? (GV && truthy(GV.current) ? GV.current : undefined) ?? "";
   if (v === FrlgFont._syncVersion) return FrlgFont._spec;
   FrlgFont._syncVersion = v;
+  fontEpoch++; // (the text memo)
   const [spec, id] = resolveSpec();
   const key = spec ? id : "frlg";
   if (FrlgFont._specKey !== key) {
@@ -1200,6 +1209,28 @@ export const FrlgFont = {
   measure(text?: unknown, opts?: FontOpts): number {
     opts = opts || {};
     const ls = opts.letterSpacing ?? 0;
+    // NOT FAITHFUL (performance, same answer): a text's width is kept per
+    // inputs (the UI measures the same strings every frame)
+    const str = tostring(text != null ? text : "");
+    const small = !!opts.small, font = opts.font;
+    if (measureEpoch !== fontEpoch) { measureMemo.clear(); measureEpoch = fontEpoch; }
+    let ml = measureMemo.get(str);
+    if (ml) {
+      for (let i = 0; i < ml.length; i++) {
+        const e = ml[i]!;
+        if (e.small === small && e.font === font && e.ls === ls) return e.w;
+      }
+    }
+    const w = FrlgFont._measure(str, opts, ls);
+    if (measureMemo.size >= MEMO_MAX) { measureMemo.clear(); ml = undefined; }
+    if (!ml) { ml = []; measureMemo.set(str, ml); }
+    if (ml.length >= MEMO_PER_KEY) ml.shift();
+    ml.push({ small, font, ls, w });
+    return w;
+  },
+
+  /** measure's own work, below its memo (the rest of Lua frlg_font.lua:1104). */
+  _measure(text: string, opts: FontOpts, ls: number): number {
     let minW = 0, jpn = false;
     let line = 0, maxLine = 0;
     const next = FrlgFont.scanTokens(text);
@@ -1359,7 +1390,19 @@ export const FrlgFont = {
     }
     if (atlas && (atlas.src !== quads || !sh)) atlas = undefined;
 
-    const next = FrlgFont.scanTokens(text, baseColors);
+    // NOT FAITHFUL (performance, same picture): the run this call draws is
+    // kept (textMemo) and replayed when the same text is drawn again with
+    // the same inputs, as the UI does every frame.
+    const str = tostring(text != null ? text : "");
+    const sig = textSig(x, y, useSmall, maxW, limit, ls, pitch, baseColors);
+    const hit = memoFind(textMemos, str, sig, face);
+    if (hit && G.memoReplay(hit.memo)) return [hit.r0, hit.r1, hit.r2];
+    const ent = hit ?? memoAdd(textMemos, str, sig, face);
+    const recording = G.memoBegin(ent.memo);
+    let finished = false;
+    try {
+
+    const next = FrlgFont.scanTokens(str, baseColors);
     for (let t = next(); t; t = next()) {
       const ttype = t[0], val = t[1], curCol = t[2];
       if (limit != null && drawn >= limit) break;
@@ -1435,6 +1478,15 @@ export const FrlgFont = {
       }
     }
     G.setColor(1, 1, 1, 1);
+    finished = true;
+
+    } finally {
+      if (recording) {
+        G.memoEnd(ent.memo);
+        if (!finished) ent.memo.clear();
+      }
+    }
+    ent.r0 = drawn; ent.r1 = x + penX; ent.r2 = y + penY;
     return [drawn, x + penX, y + penY];
   },
 
@@ -1457,6 +1509,29 @@ export const FrlgFont = {
       }
     }
     const colors = opts.colors || (useSmall ? COLOR.PARTY! : undefined) || COLOR.NORMAL!;
+    // NOT FAITHFUL (performance, same picture): kept and replayed as draw's runs are
+    const sig = textSig(x, y, useSmall, 0, undefined, 0, 0, colors);
+    const hit = memoFind(glyphMemos, glyphId, sig, face);
+    if (hit && G.memoReplay(hit.memo)) return hit.r0;
+    const ent = hit ?? memoAdd(glyphMemos, glyphId, sig, face);
+    const recording = G.memoBegin(ent.memo);
+    let finished = false;
+    let adv = 0;
+    try {
+      adv = FrlgFont._drawGlyph(glyphId, x, y, face, useSmall, colors);
+      finished = true;
+    } finally {
+      if (recording) {
+        G.memoEnd(ent.memo);
+        if (!finished) ent.memo.clear();
+      }
+    }
+    ent.r0 = adv;
+    return adv;
+  },
+
+  /** drawGlyph's drawing, below its memo (the rest of Lua frlg_font.lua:1349). */
+  _drawGlyph(glyphId: number, x: number, y: number, face: Face | undefined, useSmall: boolean, colors: Colors): number {
     let fg: Image, sh: Image | undefined, quads: Record<number, Quad>;
     if (face) {
       [fg, sh, quads] = [face.fg, face.sh, face.quads];
@@ -1524,6 +1599,7 @@ export const FrlgFont = {
 
   // Lua: frlg_font.lua:1430
   invalidate(): void {
+    fontEpoch++; // (the text memo)
     FrlgFont._faces = {};
     FrlgFont._metrics = undefined;
     FrlgFont._fg = undefined;
@@ -1567,6 +1643,62 @@ const restore_ext = TextIR.restoreExt;
 
 const ADVANCE_SMALL: FontOpts = { small: true };
 const ADVANCE_NORMAL: FontOpts = {};
+
+// ---- the text memo (not in the Lua: see FrlgFont.draw)
+
+
+interface TextMemo { sig: Float64Array; face: Face | undefined; memo: DrawMemo; r0: number; r1: number; r2: number }
+interface MemoTable { map: Map<string | number, TextMemo[]>; count: number; epoch: number }
+const textMemos: MemoTable = { map: new Map(), count: 0, epoch: 0 };
+const glyphMemos: MemoTable = { map: new Map(), count: 0, epoch: 0 };
+const measureMemo = new Map<string, { small: boolean; font: string | undefined; ls: number; w: number }[]>();
+let measureEpoch = 0;
+const MEMO_PER_KEY = 8;
+const MEMO_MAX = 3000;
+const SIG_N = 21;
+const sigScratch = new Float64Array(SIG_N);
+
+/** The inputs of a draw besides its text and face, in the scratch signature. */
+function textSig(x: number, y: number, small: boolean, maxW: number, limit: number | undefined, ls: number,
+  pitch: number, colors: Colors | undefined): Float64Array {
+  const s = sigScratch;
+  s[0] = x; s[1] = y; s[2] = small ? 1 : 0; s[3] = maxW; s[4] = limit == null ? -1e300 : limit;
+  s[5] = ls; s[6] = pitch; s[7] = fontEpoch;
+  const fg = colors ? colors.fg : undefined, sh = colors ? colors.shadow : undefined, bg = colors ? colors.bg : undefined;
+  s[8] = colors ? 1 : 0;
+  if (fg) { s[9] = fg[1] ?? -2; s[10] = fg[2] ?? -2; s[11] = fg[3] ?? -2; s[12] = fg[4] ?? -2; } else s[9] = s[10] = s[11] = s[12] = -1;
+  if (sh) { s[13] = sh[1] ?? -2; s[14] = sh[2] ?? -2; s[15] = sh[3] ?? -2; s[16] = sh[4] ?? -2; } else s[13] = s[14] = s[15] = s[16] = -1;
+  if (bg) { s[17] = bg[1] ?? -2; s[18] = bg[2] ?? -2; s[19] = bg[3] ?? -2; s[20] = bg[4] ?? -2; } else s[17] = s[18] = s[19] = s[20] = -1;
+  return s;
+}
+
+function sameSig(a: Float64Array, b: Float64Array): boolean {
+  return a[0] === b[0] && a[1] === b[1] && a[7] === b[7] && a[2] === b[2] && a[3] === b[3] && a[4] === b[4]
+    && a[5] === b[5] && a[6] === b[6] && a[8] === b[8] && a[9] === b[9] && a[10] === b[10] && a[11] === b[11]
+    && a[12] === b[12] && a[13] === b[13] && a[14] === b[14] && a[15] === b[15] && a[16] === b[16]
+    && a[17] === b[17] && a[18] === b[18] && a[19] === b[19] && a[20] === b[20];
+}
+
+function memoFind(t: MemoTable, key: string | number, sig: Float64Array, face: Face | undefined): TextMemo | undefined {
+  if (t.epoch !== fontEpoch) { t.map.clear(); t.count = 0; t.epoch = fontEpoch; return undefined; }
+  const l = t.map.get(key);
+  if (!l) return undefined;
+  for (let i = 0; i < l.length; i++) {
+    const e = l[i]!;
+    if (e.face === face && sameSig(e.sig, sig)) return e;
+  }
+  return undefined;
+}
+
+function memoAdd(t: MemoTable, key: string | number, sig: Float64Array, face: Face | undefined): TextMemo {
+  if (t.count >= MEMO_MAX) { t.map.clear(); t.count = 0; }
+  let l = t.map.get(key);
+  if (!l) { l = []; t.map.set(key, l); }
+  const e: TextMemo = { sig: sig.slice(), face, memo: new DrawMemo(), r0: 0, r1: 0, r2: 0 };
+  if (l.length >= MEMO_PER_KEY) l.shift(); else t.count++;
+  l.push(e);
+  return e;
+}
 
 // Lua: frlg_font.lua:1204
 function set_col(c: Col | undefined): void {

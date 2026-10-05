@@ -5,7 +5,7 @@
 // Assets: sevii/gba/chrome/*_rgba.png (pret PNGs + stdpal_* baked).
 
 import { format, mod, tonumber, tostring, truthy } from "../../../import/gen3/lua.ts";
-import { G } from "../platform/graphics.ts";
+import { G, MemoSet } from "../platform/graphics.ts";
 import { newImageData, type Image, type ImageData, type Quad } from "../platform/image.ts";
 import { Fs } from "../platform/fs.ts";
 import { len, seq, type LuaTable } from "../platform/lt.ts";
@@ -228,6 +228,14 @@ function fillRect(px: number, py: number, pw: number, ph: number, r: number, g: 
  */
 // Lua: chrome.lua:234
 function drawMessageBox(atlas: TileAtlas, L: number, Top: number, W: number, H: number): void {
+  // NOT FAITHFUL (performance, same picture): kept and replayed as
+  // drawNineSlice's runs are; the fill colour is read first, not last
+  const c = Chrome.windowFillColor();
+  (boxMemo ??= new MemoSet(4)).run(atlas, L, Top, W * 4096 + H, c[1]!, c[2]!, c[3]!, () => drawMessageBoxRun(atlas, L, Top, W, H, c));
+}
+let boxMemo: MemoSet | undefined;
+
+function drawMessageBoxRun(atlas: TileAtlas, L: number, Top: number, W: number, H: number, c: Col): void {
   G.setColor(1, 1, 1, 1);
   const cell = (tile: number, tx: number, ty: number, vflip?: boolean): void => {
     blitTile(atlas, tile, tx * T, ty * T, vflip);
@@ -250,7 +258,6 @@ function drawMessageBox(atlas: TileAtlas, L: number, Top: number, W: number, H: 
   fill(4, L, Top + H, W - 1, 1, true);
   fill(5, L + W - 1, Top + H, 1, 1, true);
   fill(6, L + W, Top + H, 1, 1, true);
-  const c = Chrome.windowFillColor();
   fillRect(L * T, Top * T, W * T, H * T, c[1]!, c[2]!, c[3]!, 1);
 }
 
@@ -328,6 +335,13 @@ function ensureUser(frameType: unknown): TileAtlas | undefined {
 
 // Lua: chrome.lua:520
 function drawNineSlice(atlas: TileAtlas, tx: number, ty: number, tw: number, th: number): void {
+  // NOT FAITHFUL (performance, same picture): the frame's run is kept and
+  // replayed while the atlas and the rectangle stay the same (MemoSet)
+  (nineMemo ??= new MemoSet(8)).run(atlas, tx, ty, tw, th, 0, 0, () => drawNineSliceRun(atlas, tx, ty, tw, th));
+}
+let nineMemo: MemoSet | undefined;
+
+function drawNineSliceRun(atlas: TileAtlas, tx: number, ty: number, tw: number, th: number): void {
   G.setColor(1, 1, 1, 1);
   const L = tx, Top = ty, W = tw, H = th;
   const cell = (tile: number, cx: number, cy: number): void => {
@@ -351,6 +365,8 @@ function drawNineSlice(atlas: TileAtlas, tx: number, ty: number, tw: number, th:
   hspan(7, L, Top + H, W);
   cell(8, L + W, Top + H);
 }
+
+let frameMemo: MemoSet | undefined;
 
 export const Chrome = {
   DLG_LEFT: 2,
@@ -430,7 +446,12 @@ export const Chrome = {
       fillRect(2, 14 * T + 2, 30 * T - 4, 6 * T - 4, 1, 1, 1, 1);
       return;
     }
+    // NOT FAITHFUL (performance, same picture): kept and replayed (MemoSet)
+    (frameMemo ??= new MemoSet(4)).run(atlas, 0, L, Top, W, H, 0, () => Chrome._dialogueFrameRun(atlas, L, Top, W, H));
+  },
 
+  /** dialogueFrame's tiles, below its memo (the rest of Lua chrome.lua:271). */
+  _dialogueFrameRun(atlas: TileAtlas, L: number, Top: number, W: number, H: number): void {
     G.setColor(1, 1, 1, 1);
     const cell = (tile: number, tx: number, ty: number, vflip?: boolean): void => {
       blitTile(atlas, tile, tx * T, ty * T, vflip);
@@ -489,7 +510,12 @@ export const Chrome = {
       // Fall back to dialogue chrome if signpost missing.
       return Chrome.dialogueFrame();
     }
+    // NOT FAITHFUL (performance, same picture): kept and replayed (MemoSet)
+    (frameMemo ??= new MemoSet(4)).run(atlas, 1, L, Top, W, H, 0, () => Chrome._signFrameRun(atlas, L, Top, W, H));
+  },
 
+  /** signFrame's tiles, below its memo (the rest of Lua chrome.lua:342). */
+  _signFrameRun(atlas: TileAtlas, L: number, Top: number, W: number, H: number): void {
     G.setColor(1, 1, 1, 1);
     const cell = (tile: number, tx: number, ty: number, vflip?: boolean): void => {
       blitTile(atlas, tile, tx * T, ty * T, vflip);

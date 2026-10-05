@@ -52,6 +52,10 @@ export class DrawList {
   /** Bumped whenever the host's state is unknown again (reset, target):
    *  graphics.ts re-sends its state when this moves. */
   epoch = 0;
+  /** Counts the ops that are not primitives (target, clear, state), so a
+   *  stretch of the list can be checked to hold primitives only (graphics.ts
+   *  DrawMemo). */
+  stateOps = 0;
 
   /** The list so far (a view: valid until the next write after a reset). */
   get buf(): Float32Array {
@@ -80,7 +84,21 @@ export class DrawList {
     this.scissor = [-2, -2, -2, -2];
   }
 
+  /** A copy of the list from `start` to its end. */
+  copyFrom(start: number): Float32Array {
+    return this.f.slice(start, this.n);
+  }
+
+  /** Recorded primitives (copyFrom), appended as they are. */
+  append(src: Float32Array): void {
+    const k = src.length;
+    if (this.n + k > this.f.length) this.room(k);
+    this.f.set(src, this.n);
+    this.n += k;
+  }
+
   target(canvasId: number): void {
+    this.stateOps++;
     this.room(2);
     this.f[this.n++] = OP_TARGET;
     this.f[this.n++] = canvasId;
@@ -90,6 +108,7 @@ export class DrawList {
   }
 
   clear(r: number, g: number, b: number, a: number): void {
+    this.stateOps++;
     this.room(5);
     const f = this.f;
     let n = this.n;
@@ -102,6 +121,7 @@ export class DrawList {
     if (blend === this.blend && effect === this.effect && sc[0] === this.scissor[0] && sc[1] === this.scissor[1]
         && sc[2] === this.scissor[2] && sc[3] === this.scissor[3]
         && (params === this.paramsRef || sameParams(params, this.params))) return;
+    this.stateOps++;
     this.blend = blend;
     this.effect = effect;
     this.params = params.slice();
@@ -146,11 +166,27 @@ export class DrawList {
   batch(id: number, tex: number, a: number, b: number, c: number, d: number, e: number, f0: number,
     r: number, g: number, bl: number, al: number): void {
     if (this.n + 13 > this.f.length) this.room(13);
+    // a batch's quads live on the host, re-sent only when graphics.ts draws
+    // it: a replayed copy of this op could draw stale ones (DrawMemo)
+    this.stateOps++;
     const f = this.f;
     let n = this.n;
     f[n++] = OP_BATCH; f[n++] = id; f[n++] = tex;
     f[n++] = a; f[n++] = b; f[n++] = c; f[n++] = d; f[n++] = e; f[n++] = f0;
     f[n++] = r; f[n++] = g; f[n++] = bl; f[n++] = al;
+    this.n = n;
+  }
+
+  /** A quad's two flat triangles (p0 p1 p2, p0 p2 p3), as tris() writes a
+   *  rectangle's six points: the scalar hot path, nothing allocated. */
+  rect(x0: number, y0: number, x1: number, y1: number, x2: number, y2: number, x3: number, y3: number,
+    r: number, g: number, b: number, a: number): void {
+    if (this.n + 18 > this.f.length) this.room(18);
+    const f = this.f;
+    let n = this.n;
+    f[n++] = OP_TRIS; f[n++] = 2; f[n++] = r; f[n++] = g; f[n++] = b; f[n++] = a;
+    f[n++] = x0; f[n++] = y0; f[n++] = x1; f[n++] = y1; f[n++] = x2; f[n++] = y2;
+    f[n++] = x0; f[n++] = y0; f[n++] = x2; f[n++] = y2; f[n++] = x3; f[n++] = y3;
     this.n = n;
   }
 

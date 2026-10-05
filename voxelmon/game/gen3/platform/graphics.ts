@@ -194,6 +194,7 @@ function emitQuadS(img: Image, la: number, lb: number, lc: number, ld: number, l
   const sh0 = st.shader;
   if (sh0 && !sh0.effect.pack) tex = variantFor(img, sh0);
   tex.sync();
+  if (recs.length) recImage(tex);
   const m = st.m;
   // m * local
   const a = m[0] * la + m[2] * lb, b = m[1] * la + m[3] * lb;
@@ -210,6 +211,112 @@ function emitQuadS(img: Image, la: number, lb: number, lc: number, ld: number, l
   list.quad8(tex.id, e, f, e + ax, f + bx, e + ax + cy, f + bx + dy, e + cy, f + dy,
     qx / sw, qy / sh, (qx + qw) / sw, (qy + qh) / sh, col[0], col[1], col[2], col[3]);
 }
+
+// ------------------------------------------------------------ draw memos
+
+/**
+ * What a run of drawing put in the draw list, kept so the same run can be
+ * replayed by copying it (not LÖVE; G.memoBegin / memoEnd / memoReplay).
+ * The UI draws the same text and window frames every frame; replaying the
+ * primitives they made last time skips the tokenising, the layout and the
+ * per-glyph calls, and gives the same list, float for float. The caller
+ * decides when its inputs are the same; this checks the rest: the same
+ * transform, primitives only (no state change, canvas switch, clear or
+ * sprite batch inside the run), the state left as it was found but for the
+ * colour (which the replay restores), and no capture or CPU effect.
+ */
+export class DrawMemo {
+  floats: Float32Array | null = null;
+  images: Image[] = [];
+  /** The transform it was recorded under. */
+  m: M = [1, 0, 0, 1, 0, 0];
+  /** The colour the run left. */
+  color: Rgba = [1, 1, 1, 1];
+  clear(): void { this.floats = null; this.images = []; }
+}
+
+/** A DrawMemo with its inputs: an object and up to six numbers (MemoSet). */
+class KeyedMemo extends DrawMemo {
+  ref: unknown = undefined;
+  k0 = NaN; k1 = NaN; k2 = NaN; k3 = NaN; k4 = NaN; k5 = NaN;
+}
+
+/**
+ * A few memos of one drawing function, by its inputs (an object, such as
+ * the atlas it draws from, and up to six numbers): `run` replays the run
+ * those inputs drew last time, or draws it with `fn` and keeps it. The
+ * caller passes every input the drawing depends on.
+ */
+export class MemoSet {
+  private l: KeyedMemo[] = [];
+  private next = 0;
+  constructor(private readonly size = 8) {}
+  run(ref: unknown, k0: number, k1: number, k2: number, k3: number, k4: number, k5: number, fn: () => void): void {
+    const l = this.l;
+    let m: KeyedMemo | undefined;
+    for (let i = 0; i < l.length; i++) {
+      const e = l[i]!;
+      if (e.ref === ref && e.k0 === k0 && e.k1 === k1 && e.k2 === k2 && e.k3 === k3 && e.k4 === k4 && e.k5 === k5) { m = e; break; }
+    }
+    if (m && G.memoReplay(m)) return;
+    if (!m) {
+      if (l.length < this.size) { m = new KeyedMemo(); l.push(m); } else { m = l[this.next]!; this.next = (this.next + 1) % this.size; }
+      m.ref = ref; m.k0 = k0; m.k1 = k1; m.k2 = k2; m.k3 = k3; m.k4 = k4; m.k5 = k5;
+      m.clear();
+    }
+    const rec = G.memoBegin(m);
+    let ok = false;
+    try {
+      fn();
+      ok = true;
+    } finally {
+      if (rec) {
+        G.memoEnd(m);
+        if (!ok) m.clear();
+      }
+    }
+  }
+}
+
+interface Rec {
+  memo: DrawMemo;
+  start: number;
+  stateOps: number;
+  images: Image[];
+  m: M;
+  blend: string;
+  alphaMode: string;
+  shader: Shader | undefined;
+  scissor: [number, number, number, number] | undefined;
+  canvas: Canvas | undefined;
+}
+/** The recordings under way (nested runs record into each). */
+const recs: Rec[] = [];
+
+function recImage(img: Image): void {
+  for (let i = 0; i < recs.length; i++) {
+    const l = recs[i]!.images;
+    if (l[l.length - 1] !== img && l.indexOf(img) < 0) l.push(img);
+  }
+}
+
+function sameM(a: M, b: M): boolean {
+  return a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3] && a[4] === b[4] && a[5] === b[5];
+}
+
+function sameScissor(a: [number, number, number, number] | undefined, b: [number, number, number, number] | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3];
+}
+
+/** Whether a run drawn now could be recorded or replayed at all. */
+function memoable(): boolean {
+  const sh = st.shader;
+  return memoOn && !capture && !(sh && !sh.effect.pack);
+}
+/** G.setMemo: memos on (false: every run is drawn plainly; tools/gen3/perf_check.ts compares the two). */
+let memoOn = true;
 
 /** A sprite batch's quads, batch-local, to the host (G3Host.batchUpload). */
 let batchScratch = new Float32Array(12 * 256);
@@ -365,6 +472,54 @@ export const G = {
   },
   isFrameOpen(): boolean { return frameOpen; },
 
+  /**
+   * Replay `memo` (DrawMemo) if it holds a run recorded under the current
+   * transform and a run can be replayed now; true if it did. The caller has
+   * already checked that the run's own inputs are the same.
+   */
+  memoReplay(memo: DrawMemo): boolean {
+    const fl = memo.floats;
+    if (!fl || !sameM(st.m, memo.m) || !memoable()) return false;
+    syncState();
+    const imgs = memo.images;
+    for (let i = 0; i < imgs.length; i++) {
+      const img = imgs[i]!;
+      img.sync();
+      if (recs.length) recImage(img);
+    }
+    list.append(fl);
+    const c = st.color, mc = memo.color;
+    c[0] = mc[0]; c[1] = mc[1]; c[2] = mc[2]; c[3] = mc[3];
+    return true;
+  },
+  /** Draw memos on or off (tests: the same frames either way). */
+  setMemo(on: boolean): void { memoOn = on; },
+  /** Start recording a run into `memo` (false: this run cannot be recorded; draw it plainly). */
+  memoBegin(memo: DrawMemo): boolean {
+    if (!memoable()) return false;
+    syncState();
+    recs.push({
+      memo, start: list.length, stateOps: list.stateOps, images: [], m: [...st.m] as M,
+      blend: st.blend, alphaMode: st.alphaMode, shader: st.shader, scissor: st.scissor, canvas: st.canvas,
+    });
+    return true;
+  },
+  /** End the recording memoBegin started (after the run, even if it threw). */
+  memoEnd(memo: DrawMemo): void {
+    const r = recs.pop();
+    if (!r || r.memo !== memo) { memo.clear(); recs.length = 0; return; }
+    if (list.stateOps !== r.stateOps || !sameM(st.m, r.m) || st.blend !== r.blend || st.alphaMode !== r.alphaMode
+        || st.shader !== r.shader || !sameScissor(st.scissor, r.scissor) || st.canvas !== r.canvas || capture) {
+      memo.clear();
+      return;
+    }
+    memo.floats = list.copyFrom(r.start);
+    memo.images = r.images;
+    memo.m = r.m;
+    const c = st.color;
+    memo.color = [c[0], c[1], c[2], c[3]];
+  },
+
   // ---- drawing
   draw(drawable: Image | SpriteBatch, p1?: unknown, p2?: unknown, p3?: unknown, p4?: unknown, p5?: unknown,
     p6?: unknown, p7?: unknown, p8?: unknown): void {
@@ -405,6 +560,11 @@ export const G = {
     }
     if (p1 instanceof Quad) {
       const q = p1;
+      if (p4 === undefined && p5 === undefined && p6 === undefined && p7 === undefined && p8 === undefined) {
+        // the common call, draw(image, quad, x, y): drawMatrixInto's identity
+        emitQuadS(drawable, 1, 0, 0, 1, (p2 as number) ?? 0, (p3 as number) ?? 0, q.x, q.y, q.w, q.h, q.sw, q.sh);
+        return;
+      }
       const sx = (p5 as number) ?? 1;
       drawMatrixInto((p2 as number) ?? 0, (p3 as number) ?? 0, (p4 as number) ?? 0, sx, (p6 as number) ?? sx,
         (p7 as number) ?? 0, (p8 as number) ?? 0);
@@ -432,8 +592,18 @@ export const G = {
       if (mode === "fill") flatTris(fan(pts)); else outline(pts, true);
       return;
     }
-    if (mode === "fill") flatTris([x, y, x + w, y, x + w, y + h, x, y, x + w, y + h, x, y + h]);
-    else outline([x, y, x + w, y, x + w, y + h, x, y + h], true);
+    if (mode === "fill") {
+      // flatTris of the rectangle's two triangles, without the arrays
+      if (capture) return;
+      syncState();
+      const m = st.m;
+      const x1 = x + w, y1 = y + h;
+      const c = st.color;
+      list.rect(m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5],
+        m[0] * x1 + m[2] * y + m[4], m[1] * x1 + m[3] * y + m[5],
+        m[0] * x1 + m[2] * y1 + m[4], m[1] * x1 + m[3] * y1 + m[5],
+        m[0] * x + m[2] * y1 + m[4], m[1] * x + m[3] * y1 + m[5], c[0], c[1], c[2], c[3]);
+    } else outline([x, y, x + w, y, x + w, y + h, x, y + h], true);
   },
 
   circle(mode: string, x: number, y: number, r: number, segs?: number): void {

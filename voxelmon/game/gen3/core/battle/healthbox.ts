@@ -23,7 +23,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { format, tonumber, tostring, truthy } from "../../../../import/gen3/lua.ts";
 import { seq, len, ipairs, type LuaTable } from "../../platform/lt.ts";
-import { G, type Shader } from "../../platform/graphics.ts";
+import { G, MemoSet, type Shader } from "../../platform/graphics.ts";
 import type { Image, Quad } from "../../platform/image.ts";
 import { NotPortedError } from "../../notported.ts";
 import BattleChrome from "../../ui/battle_chrome.ts";
@@ -222,6 +222,13 @@ function small_opts(colors?: object): any {
 
 // Lua: healthbox.lua:152
 function erase_placeholder_ink(boxX: number, boxY: number, pts: LuaTable): void {
+  // NOT FAITHFUL (performance, same picture): the run of 1 px rectangles is
+  // kept and replayed while the box stays put (graphics.ts MemoSet)
+  (inkMemo ??= new MemoSet(4)).run(pts, boxX, boxY, 0, 0, 0, 0, () => erase_placeholder_ink_run(boxX, boxY, pts));
+}
+let inkMemo: MemoSet | undefined;
+
+function erase_placeholder_ink_run(boxX: number, boxY: number, pts: LuaTable): void {
   G.setColor(CREAM);
   for (let i = 1; i <= len(pts); i++) {
     const p = pts[i];
