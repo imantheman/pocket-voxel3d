@@ -62,7 +62,8 @@ export const glsl = {
   floor: Math.floor,
   /** a vec3/vec4 uniform sent as a Lua table (1-based or array) -> [x, y, z, w] */
   vec(v: unknown, n = 3): number[] {
-    if (Array.isArray(v)) return v.slice(0, n).map(Number);
+    // a runtime sequence ([null, x, y, z], lt.ts) or a plain JS array
+    if (Array.isArray(v)) return (v[0] == null && v.length > n ? v.slice(1, n + 1) : v.slice(0, n)).map(Number);
     if (v && typeof v === "object") {
       const o = v as Record<string, number>;
       return Array.from({ length: n }, (_, i) => Number(o[i + 1] ?? o[String(i + 1)] ?? 0));

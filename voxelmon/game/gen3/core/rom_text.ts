@@ -226,7 +226,9 @@ function list(nm: string, ctx?: any): LuaTable {
 // Lua: rom_text.lua:168
 function lazy(map: Record<string, string>, ctx?: any): Record<string, string | undefined> {
   return new Proxy({} as Record<string, string | undefined>, {
-    get(_t, k) {
+    get(t, k) {
+      // Brian's __index metatable: raw fields stored on the table win
+      if (k in t) return (t as Record<string | symbol, unknown>)[k] as string | undefined;
       if (typeof k !== "string") return undefined;
       const k2 = map[k];
       if (k2 == null) return undefined;

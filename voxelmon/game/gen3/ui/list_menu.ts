@@ -14,7 +14,8 @@ import { BagChrome } from "./bag_chrome.ts";
 import { Window, type TemplateLike } from "./window.ts";
 import { FrlgFont, type Colors } from "./frlg_font.ts";
 
-const T: number = Display.TILE;
+// Display.TILE, read when used (no top-level reads of imports: the cycle)
+function tile(): number { return Display.TILE; }
 
 export interface ListItem {
   label?: unknown; colors?: Colors; locked?: boolean; disabled?: boolean;
@@ -65,7 +66,12 @@ export class ListMenu {
   static LOCK_W = 10;
 
   // pokefirered/src/union_room.c:4072
-  static COLOR_WHITE: Colors = { fg: FrlgFont.STDPAL[1], shadow: FrlgFont.STDPAL[3], bg: FrlgFont.STDPAL[0] };
+  // built on first read: FrlgFont may not be initialised when this class is
+  // defined (the import cycle; no top-level reads of imports)
+  private static colorWhite: Colors | undefined;
+  static get COLOR_WHITE(): Colors {
+    return (ListMenu.colorWhite ??= { fg: FrlgFont.STDPAL[1], shadow: FrlgFont.STDPAL[3], bg: FrlgFont.STDPAL[0] });
+  }
 
   static _arrows: ArrowArt | undefined = undefined;
   static _locks: Record<string, Image> = {};
@@ -320,7 +326,7 @@ export class ListMenu {
 
   // Lua: list_menu.lua:240
   rowY(i: number): number {
-    return (this.template.top ?? this.template.tilemapTop)! * T + i * this.rowHeight + this.upTextY;
+    return (this.template.top ?? this.template.tilemapTop)! * tile() + i * this.rowHeight + this.upTextY;
   }
 
   // Lua: list_menu.lua:244
@@ -331,7 +337,7 @@ export class ListMenu {
     } else if (this.frame === "fixed") {
       Window.fixedStdFrame(tpl);
     }
-    const ox = (tpl.left ?? tpl.tilemapLeft)! * T;
+    const ox = (tpl.left ?? tpl.tilemapLeft)! * tile();
     const shown = this.shown();
     for (let i = 0; i <= shown - 1; i++) {
       const index = this.scroll + i + 1;
@@ -437,9 +443,9 @@ export class ListMenu {
     const top = (template.top ?? template.tilemapTop)!;
     const w = (template.w ?? template.width)!;
     const h = (template.h ?? template.height)!;
-    const cx = (left + w / 2) * T;
-    if (showUp) ListMenu.drawArrow("up", cx, top * T, t);
-    if (showDown) ListMenu.drawArrow("down", cx, (top + h) * T, t);
+    const cx = (left + w / 2) * tile();
+    if (showUp) ListMenu.drawArrow("up", cx, top * tile(), t);
+    if (showDown) ListMenu.drawArrow("down", cx, (top + h) * tile(), t);
   }
 }
 

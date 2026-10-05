@@ -9,6 +9,7 @@
 // fallback when the planes fail.
 
 // The table first: see display_table.ts (load order).
+import { G3Lazy } from "./lazy_registry.ts";
 import { Display } from "./display_table.ts";
 import { tostring } from "../../../import/gen3/lua.ts";
 import { G } from "../platform/graphics.ts";
@@ -123,10 +124,9 @@ let uiPass: any;
 function drawUiPass(): unknown {
   if (uiRenderer) return uiRenderer();
   if (uiPass == null) {
-    // `pcall(require, "src.ui.game3.ui_pass")`: src/ui/game3/ui_pass.lua has
-    // no file in the port yet (tools/gen3/stubs.py missed it: only this
-    // pcall requires it), so this is Brian's failed-require path.
-    uiPass = false;
+    // `pcall(require, "src.ui.game3.ui_pass")`: a lazily-required module,
+    // registered in G3Lazy by its port (absent = Brian's failed-require path)
+    uiPass = G3Lazy["src.ui.game3.ui_pass"] ?? false;
   }
   if (uiPass && typeof uiPass.drawUi === "function") uiPass.drawUi();
   return undefined;
