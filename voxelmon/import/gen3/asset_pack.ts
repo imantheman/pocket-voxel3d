@@ -12,6 +12,8 @@
 // and runs the chunk with an empty environment; this reads only table
 // constructors of strings, numbers, booleans and nil (all those chunks hold)
 // and throws on anything else, which the callers' pcall turns into nil.
+// A chunk the 3DS card cook pre-converted (cooked_data.ts COOKED_TAG) is
+// read from its JSON into the same shape.
 
 import { Lz77 } from "./lz77.ts";
 import { BgBake, type Bytes, type PalBank } from "./bg_bake.ts";
@@ -19,6 +21,7 @@ import { format, fromBytes, tostring } from "./lua.ts";
 import { luaGet, luaKeys, type LuaKey } from "./luatable.ts";
 import type { Cache } from "./cache.ts";
 import type { Rom } from "./rom.ts";
+import { isCooked, readCookedLiteral } from "./cooked_data.ts";
 
 export interface FrameSpec { tile: number; hflip?: boolean; vflip?: boolean }
 export interface BgOpts { alpha0?: boolean; backdrop?: number; x0?: number; y0?: number }
@@ -302,6 +305,7 @@ class LiteralReader {
  * keys as object keys). Throws where the Lua chunk would not be pure data.
  */
 export function readLuaLiteral(src: string): unknown {
+  if (isCooked(src)) return readCookedLiteral(src);
   return new LiteralReader(src).chunk();
 }
 

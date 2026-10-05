@@ -165,6 +165,42 @@ function decodeValue(s: string, iIn: number, depthIn: number): [unknown, number]
   }
 }
 
+const FAST_NO: unique symbol = Symbol("no fast path");
+
+/**
+ * decodeValue's result for `s` by JSON.parse, or FAST_NO. Taken only where
+ * the two agree: no \u escapes (decodeString turns one above 0x7F into UTF-8
+ * bytes), no "__proto__" key (a plain object assignment there sets the
+ * prototype), nesting well inside MAX_DEPTH. JSON.parse refuses everything
+ * decodeValue reads differently (raw control characters, unknown escapes,
+ * "01" or "1." numbers, trailing text) and the port reads those. The shape:
+ * an array is a sequence that skips nulls (arr[#arr + 1] = nil appends
+ * nothing), an object drops null members.
+ */
+function fastDecode(s: string): unknown {
+  if (s.includes("\\u") || s.includes("__proto__")) return FAST_NO;
+  let v: unknown;
+  try { v = JSON.parse(s); } catch { return FAST_NO; }
+  const shape = (x: unknown, depth: number): unknown => {
+    if (x === null || typeof x !== "object") return x;
+    if (depth > Json.MAX_DEPTH - 4) throw FAST_NO;
+    if (Array.isArray(x)) {
+      const arr: unknown[] = [null];
+      for (const e of x) if (e !== null) arr.push(shape(e, depth + 1));
+      return arr;
+    }
+    const o = x as Record<string, unknown>;
+    for (const k of Object.keys(o)) {
+      const e = o[k];
+      if (e === null) delete o[k];
+      else if (typeof e === "object") o[k] = shape(e, depth + 1);
+    }
+    return o;
+  };
+  if (v === null) return undefined; // decodeValue's nil
+  try { return shape(v, 1); } catch (e) { if (e === FAST_NO) return FAST_NO; throw e; }
+}
+
 export const Json = {
   MAX_DEPTH: 64,
 
@@ -181,6 +217,12 @@ export const Json = {
     if (maxLength && s.length > maxLength) {
       return [undefined, format("json input is %d bytes (max %d)", s.length, maxLength)];
     }
+    // NOT FAITHFUL (speed): plain JSON goes through the engine's JSON.parse,
+    // shaped as decodeValue shapes it (fastDecode); anything the fast path
+    // cannot vouch for takes the port below. 425 map headers at boot took
+    // ~1 ms each on the desktop and ~28 s in all on the 3DS this way.
+    const fast = fastDecode(s);
+    if (fast !== FAST_NO) return [fast];
     try {
       return [decodeValue(s, 1, 0)[0]];
     } catch (e) {

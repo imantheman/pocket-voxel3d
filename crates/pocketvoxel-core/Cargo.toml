@@ -18,5 +18,9 @@ libm = ["dep:libm"]
 # builds turn it on, so the MIT games' binaries never contain it.
 gen3 = []
 
+[[example]]
+name = "g3_m4ap"
+required-features = ["gen3"]
+
 [dependencies]
 libm = { version = "0.2", optional = true }

@@ -18,12 +18,16 @@
 // cache does that only to file equal records under both (scripts/marts.lua),
 // and the luadata test checks every such pair is equal.
 //
-// On the 3DS the cook converts each cache .lua file once into the same shape
-// as JSON behind COOKED_TAG, and luaLoad JSON.parses that instead -- the same
-// call sites, a fraction of the time. Strings are byte strings throughout.
+// On the 3DS the card cook (voxelmon/cook/gen3data.ts) converts each cache
+// .lua file once into the same shape as JSON behind COOKED_TAG (or
+// COOKED_STEPS_TAG), and luaLoad
+// JSON.parses that instead -- the same call sites, a fraction of the time and
+// heap. Strings are byte strings throughout.
 
-/** The prefix of a cooked (pre-converted) data chunk. */
-export const COOKED_TAG = "\x00PVJ1\n";
+import { COOKED_TAG, isCooked, readCooked } from "../../../import/gen3/cooked_data.ts";
+
+/** The prefix of a cooked (pre-converted) data chunk (cooked_data.ts). */
+export { COOKED_TAG };
 
 type Val = number | string | boolean | null | Tbl;
 class Tbl {
@@ -318,7 +322,7 @@ function shape(v: Val, memo: Map<Tbl, unknown>): unknown {
 
 /** Evaluate a data chunk's source (Lua, or cooked) to the runtime table shape. */
 export function evalData(src: string, name = "=data"): unknown {
-  if (src.startsWith(COOKED_TAG)) return JSON.parse(src.slice(COOKED_TAG.length));
+  if (isCooked(src)) return readCooked(src);
   return shape(evaluate(src, name), new Map());
 }
 
