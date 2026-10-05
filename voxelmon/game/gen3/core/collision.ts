@@ -8,10 +8,6 @@
 //   scriptConnection -> [x, y] or []; stairSpeeds -> [dx, dy];
 //   nextElevation -> [elevation, committed]. Everything else returns one value.
 //
-// Plumbing: src.world.gen2.Permissions has no gen3 port. collision.lua reads
-// five of its members; `GenPermissions` below carries exactly those (three are
-// CollPermissions' own, two are ported from Permissions.lua), so the
-// behaviour is Brian's.
 
 import { ipairs, len, type LuaTable } from "../platform/lt.ts";
 import { find } from "../platform/lpattern.ts";
@@ -19,6 +15,7 @@ import { format, mod, tonumber, tostring, truthy } from "../../../import/gen3/lu
 import { MapCatalog } from "../../../import/gen3/map_catalog.ts";
 import { Versions } from "../../../import/gen3/versions.ts";
 import { CollPermissions } from "../shared/core/CollPermissions.ts";
+import { Permissions as GenPermissionsMod } from "../shared/world/gen2/Permissions.ts";
 import { Connections } from "./connections.ts";
 import { MB } from "./mb.ts";
 import { InteractionScripts } from "./scripting/interaction_scripts.ts";
@@ -90,61 +87,12 @@ function log(msg: unknown): void {
   console.log("[game3/collision] " + tostring(msg));
 }
 
-// src/world/gen2/Permissions.lua -- the members collision.lua reads.
-interface GenPermissions {
-  isWater(coll: number | null | undefined): boolean;
-  isWalkable(coll: number | null | undefined): boolean;
-  isLedge(coll: number | null | undefined): boolean;
-  isGrass(coll: number | null | undefined): boolean;
-  ledgeFacings(coll: number | null | undefined): DirSet | undefined;
-}
-
-// Lua: Permissions.lua:34
-const GRASS: Record<number, boolean> = {
-  [0x10]: true, // COLL_TALL_GRASS_10 (unused)
-  [0x14]: true, // COLL_LONG_GRASS
-  [0x18]: true, // COLL_TALL_GRASS
-  [0x1c]: true, // COLL_LONG_GRASS_1C (unused)
-};
-
-// Lua: Permissions.lua:179
-const LEDGE_FACINGS: Record<number, DirSet> = {
-  [0x0]: { right: true },              // COLL_HOP_RIGHT
-  [0x1]: { left: true },               // COLL_HOP_LEFT
-  [0x2]: { up: true },                 // COLL_HOP_UP (unused)
-  [0x3]: { down: true },               // COLL_HOP_DOWN
-  [0x4]: { down: true, right: true },  // COLL_HOP_DOWN_RIGHT
-  [0x5]: { down: true, left: true },   // COLL_HOP_DOWN_LEFT
-  [0x6]: { up: true, right: true },    // COLL_HOP_UP_RIGHT (unused)
-  [0x7]: { up: true, left: true },     // COLL_HOP_UP_LEFT (unused)
-};
-
-const GenPermissionsMod: GenPermissions = {
-  // Lua: Permissions.lua:12-15 (aliases of CollPermissions)
-  isWater: CollPermissions.isWater,
-  isWalkable: CollPermissions.isWalkable,
-  isLedge: CollPermissions.isLedge,
-
-  // Lua: Permissions.lua:41
-  isGrass(coll: number | null | undefined): boolean {
-    if (coll == null) return false;
-    return GRASS[mod(coll, 256)] === true;
-  },
-
-  // Lua: Permissions.lua:191
-  ledgeFacings(coll: number | null | undefined): DirSet | undefined {
-    if (!CollPermissions.isLedge(coll)) return undefined;
-    return LEDGE_FACINGS[mod(coll as number, 8)];
-  },
-};
-
 // Lua: collision.lua:41
 let permsLoaded = false;
-let permsMod: GenPermissions | undefined;
-function permissions(): GenPermissions | undefined {
+let permsMod: typeof GenPermissionsMod | undefined;
+function permissions(): typeof GenPermissionsMod | undefined {
   if (!permsLoaded) {
-    // pcall(lazyReq, "src.world.gen2.Permissions"): no gen3 port of that
-    // module; GenPermissionsMod carries the members used here.
+    // pcall(lazyReq, "src.world.gen2.Permissions"): always loaded in the bundle.
     permsMod = GenPermissionsMod;
     permsLoaded = true;
   }
