@@ -4,10 +4,14 @@
 // (an importer's output tree: the folder holding data/generated/gba).
 
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import type { G3Host } from "./host.ts";
 import { Rasterizer } from "./rasterize.ts";
 import { decodePngBytes } from "./pngdecode.ts";
+
+/** A cache path on disk: the path is a byte string (fsio.ts diskPath). */
+function join(root: string, rel: string): Buffer {
+  return Buffer.concat([Buffer.from(root, "utf8"), Buffer.from("/" + rel, "latin1")]);
+}
 
 export class DesktopHost implements G3Host {
   readonly raster = new Rasterizer(240, 160);

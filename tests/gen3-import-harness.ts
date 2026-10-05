@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { diskPath } from "../voxelmon/import/gen3/fsio.ts";
 import { inflateSync } from "node:zlib";
 import { memoryCache, CacheFs, type Cache } from "../voxelmon/import/gen3/cache.ts";
 import { makeImports } from "../voxelmon/import/gen3/fsio.ts";
@@ -118,7 +119,7 @@ export function compareWrites(files: Map<string, string | Uint8Array>, only?: (p
   const bad: Mismatch[] = [];
   for (const [path, body] of files) {
     if (only && !only(path)) continue;
-    const refPath = join(REF_ROOT, path);
+    const refPath = diskPath(REF_ROOT, path);
     if (!existsSync(refPath)) { bad.push({ path, why: "not in the reference (gen1recomp did not write it)" }); continue; }
     const ours = asBytes(body);
     const ref = new Uint8Array(readFileSync(refPath));
@@ -142,14 +143,15 @@ export function compareWrites(files: Map<string, string | Uint8Array>, only?: (p
 /** Reference files under a cache-relative prefix (to see what a stage should write). */
 export function referenceFiles(prefix: string): string[] {
   const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
-  const out = execFileSync("find", [join(REF_ROOT, prefix), "-type", "f"], { encoding: "utf8" });
+  // paths are byte strings: read find's output as latin1, one char per byte
+  const out = execFileSync("find", [join(REF_ROOT, prefix), "-type", "f"], { encoding: "latin1" });
   return out.split("\n").filter(Boolean).map((p) => p.slice(REF_ROOT.length + 1)).sort();
 }
 
 /** Seed the recording cache with reference files (inputs a stage reads that another stage writes). */
 export function seedFromReference(cache: Cache, paths: string[]): void {
   for (const p of paths) {
-    const full = join(REF_ROOT, p);
+    const full = diskPath(REF_ROOT, p);
     if (existsSync(full)) cache.write(p, readFileSync(full).toString("latin1"));
   }
 }

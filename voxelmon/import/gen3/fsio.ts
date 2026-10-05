@@ -9,24 +9,34 @@ import { dirname, join } from "node:path";
 import type { Cache } from "./cache.ts";
 import type { Imports } from "./revision_view.ts";
 
+/**
+ * A cache path on disk. Cache paths are byte strings too (a footprint is
+ * `nidoran\xe2\x99\x80.rgba`): hand Node the bytes, not a JS string it would
+ * re-encode as UTF-8.
+ */
+export function diskPath(root: string, rel: string): Buffer {
+  return Buffer.concat([Buffer.from(root, "utf8"), Buffer.from("/" + rel, "latin1")]);
+}
+
 // Lua: file_io.lua:31
 export function makeCache(root: string): Cache {
   mkdirSync(root, { recursive: true });
   const made = new Set<string>();
   return {
     write(rel, bytes) {
-      const path = join(root, rel);
-      const dir = dirname(path);
-      if (!made.has(dir)) { mkdirSync(dir, { recursive: true }); made.add(dir); }
+      const path = diskPath(root, rel);
+      const dir = diskPath(root, dirname(rel));
+      const key = dir.toString("latin1");
+      if (!made.has(key)) { mkdirSync(dir, { recursive: true }); made.add(key); }
       writeFileSync(path, typeof bytes === "string" ? Buffer.from(bytes, "latin1") : bytes);
       return true;
     },
     read(rel) {
-      const path = join(root, rel);
+      const path = diskPath(root, rel);
       return existsSync(path) ? readFileSync(path).toString("latin1") : undefined;
     },
-    exists(rel) { return existsSync(join(root, rel)); },
-    info(rel) { return existsSync(join(root, rel)) ? { type: "file" } : undefined; },
+    exists(rel) { return existsSync(diskPath(root, rel)); },
+    info(rel) { return existsSync(diskPath(root, rel)) ? { type: "file" } : undefined; },
   };
 }
 
