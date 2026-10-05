@@ -2799,7 +2799,7 @@ struct MapGeom {
     /// The floor under each cell, measured off the terrain (floor_map_of).
     floor: pocketvoxel_core::scene::FloorMap,
     chunk_spans: Vec<Span>,
-    verts: Vec<Vertex>,
+    verts: VertStore,
     center: [f32; 3],
     size: f32,
     tex_rgba: Vec<u8>,
@@ -2848,6 +2848,112 @@ fn ring_inner_face(p: [[f32; 3]; 3], clip_min: [f32; 2], clip_max: [f32; 2]) -> 
 
 /// Stops (silent, last-resort backstop) if `verts` is already at `budget` —
 /// callers that care about it check `verts.len()` before choosing `kind`.
+/// The map build's vertices, kept in segments instead of one block.
+///
+/// One Vec<Vertex> for a whole map wants ~12 MB of CONTIGUOUS heap for a big
+/// city at the device cap. Isaac's console had the memory but not in one
+/// piece (pvlog 2026-10-05, Goldenrod: "heap block 8192 KB" against an
+/// 11,736 KB plan), so the reservation failed, the plan was halved, and the
+/// half kept was the north of the city -- the blocks around the player went.
+/// Segments of SEG_VERTS fit the gaps a pak read leaves. A mesh never
+/// straddles two segments: a span has to be one slice for its upload.
+struct VertStore {
+    segs: Vec<Vec<Vertex>>,
+    /// The global index of each opened segment's first vertex; the segments
+    /// past `starts.len()` are reserved and not yet opened.
+    starts: Vec<usize>,
+    len: usize,
+}
+
+/// Two GPU slices' worth (2.6 MB): small enough for a fragmented heap,
+/// big enough that leaving a segment's tail unused (a mesh that does not fit
+/// opens the next) wastes little.
+const SEG_VERTS: usize = 2 * SPAN_PIECE;
+
+impl VertStore {
+    fn new() -> Self {
+        VertStore { segs: Vec::new(), starts: Vec::new(), len: 0 }
+    }
+    fn len(&self) -> usize {
+        self.len
+    }
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+    fn alloc(cap: usize) -> Option<Vec<Vertex>> {
+        let mut v: Vec<Vertex> = Vec::new();
+        v.try_reserve_exact(cap).ok()?;
+        Some(v)
+    }
+    /// Room for `total` vertices up front, all or nothing, plus one segment
+    /// of slack for the tails meshes leave. False frees what it got.
+    fn try_reserve(&mut self, total: usize) -> bool {
+        self.segs = Vec::new();
+        self.starts.clear();
+        self.len = 0;
+        let n = total.div_ceil(SEG_VERTS) + 1;
+        let mut segs: Vec<Vec<Vertex>> = Vec::new();
+        if segs.try_reserve_exact(n).is_err() {
+            return false;
+        }
+        for _ in 0..n {
+            match Self::alloc(SEG_VERTS) {
+                Some(v) => segs.push(v),
+                None => return false,
+            }
+        }
+        self.segs = segs;
+        true
+    }
+    /// Room for a mesh of at most `max` vertices in one segment: the open
+    /// one if its tail is long enough, else the next reserved one, else a new
+    /// one (fallibly). False: none could be had, and the mesh is left out.
+    fn begin_span(&mut self, max: usize) -> bool {
+        let open = self.starts.len();
+        if open > 0 {
+            let s = &self.segs[open - 1];
+            if s.capacity() - s.len() >= max {
+                return true;
+            }
+        }
+        if open < self.segs.len() && self.segs[open].capacity() >= max {
+            self.starts.push(self.len);
+            return true;
+        }
+        match Self::alloc(max.max(SEG_VERTS)) {
+            Some(v) => {
+                self.segs.insert(open, v);
+                self.starts.push(self.len);
+                true
+            }
+            None => false,
+        }
+    }
+    /// One vertex into the open segment (begin_span made the room).
+    fn push(&mut self, v: Vertex) {
+        let i = self.starts.len() - 1;
+        self.segs[i].push(v);
+        self.len += 1;
+    }
+    /// `n` vertices from global index `at`, which lie in one segment (a span
+    /// or a piece of one), or None.
+    fn slice(&self, at: usize, n: usize) -> Option<&[Vertex]> {
+        // the LAST segment opened at or before `at` (an opened segment that
+        // took no vertices shares its start with the next one)
+        let i = self.starts.partition_point(|&s| s <= at).checked_sub(1)?;
+        let s = &self.segs[i];
+        let off = at - self.starts[i];
+        if off + n > s.len() {
+            return None;
+        }
+        Some(&s[off..off + n])
+    }
+    /// Let the reserved segments nothing was written to go.
+    fn trim(&mut self) {
+        self.segs.truncate(self.starts.len());
+    }
+}
+
 fn push_chunk_mesh(
     pak: &Pak,
     chunk: &pak::Chunk,
@@ -2856,13 +2962,16 @@ fn push_chunk_mesh(
     tint: u32,
     clip_min: [f32; 2],
     clip_max: [f32; 2],
-    verts: &mut Vec<Vertex>,
+    verts: &mut VertStore,
     chunk_spans: &mut Vec<Span>,
     cmin: &mut [f32; 3],
     cmax: &mut [f32; 3],
 ) {
     let m = chunk.meshes[kind];
     if m.index_count == 0 {
+        return;
+    }
+    if !verts.begin_span(m.index_count as usize) {
         return;
     }
     let span_start = verts.len();
@@ -2981,13 +3090,16 @@ fn push_stamp_mesh(
     stamp: &pak::Stamp,
     budget: usize,
     tint: u32,
-    verts: &mut Vec<Vertex>,
+    verts: &mut VertStore,
     chunk_spans: &mut Vec<Span>,
     cmin: &mut [f32; 3],
     cmax: &mut [f32; 3],
 ) {
     let m = stamp.mesh;
     if m.index_count == 0 {
+        return;
+    }
+    if !verts.begin_span(m.index_count as usize) {
         return;
     }
     let span_start = verts.len();
@@ -3828,7 +3940,7 @@ fn build_map(
         return MapGeom {
             floor: Default::default(),
             chunk_spans: Vec::new(),
-            verts: Vec::new(),
+            verts: VertStore::new(),
             center,
             size,
             tex_rgba: vec![0u8; 8 * 8 * 4],
@@ -3862,7 +3974,7 @@ fn build_map(
         }
     }
 
-    let mut verts: Vec<Vertex> = Vec::new();
+    let mut verts = VertStore::new();
     let mut chunk_spans: Vec<Span> = Vec::new();
     let mut cmin = [f32::MAX; 3];
     let mut cmax = [f32::MIN; 3];
@@ -3911,7 +4023,7 @@ fn build_map(
         // 8 MB block per rebuild while the outgoing build still holds its own
         // eventually cannot be met on a heap its 57 MB pak has nearly filled;
         // growing by doubling reuses what it already has).
-        while budget > 0 && verts.try_reserve_exact(budget).is_err() {
+        while budget > 0 && !verts.try_reserve(budget) {
             dlog(&format!(
                 "[pv] no room for {} verts ({} KB); halving the budget",
                 budget,
@@ -3936,7 +4048,7 @@ fn build_map(
                 .sum::<usize>()
                 + stamp_verts)
                 .min(budget);
-            if want == 0 || verts.try_reserve_exact(want).is_ok() {
+            if want == 0 || verts.try_reserve(want) {
                 break;
             }
             dlog(&format!(
@@ -4033,6 +4145,7 @@ fn build_map(
     for it in plan.items.iter().filter(|i| FILLER_KINDS.contains(&i.kind)) {
         push_chunk_mesh(pak, &chunks[it.chunk], it.kind, budget, tint, clip_min, clip_max, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax);
     }
+    verts.trim();
     if verts.is_empty() { cmin = [0.0; 3]; cmax = [16.0; 3]; }
     let center = [
         (cmin[0] + cmax[0]) * 0.5,
@@ -4406,7 +4519,7 @@ fn main() {
     let mut map_i = 0usize;
     let mut geom = MapGeom {
         floor: Default::default(),
-        chunk_spans: Vec::new(), verts: Vec::new(), center: [0.0; 3], size: 16.0,
+        chunk_spans: Vec::new(), verts: VertStore::new(), center: [0.0; 3], size: 16.0,
         tex_rgba: Vec::new(), tw: 8, th: 8, aw: 8, ah: 8, is_huge: false,
         map_min: [0.0; 2], map_max: [0.0; 2],
     };
@@ -5506,14 +5619,44 @@ fn main() {
                 // A buffer's slice counts in 16 bits, so a span past 65,535
                 // vertices goes up in pieces (whole triangles each) rather
                 // than losing its tail.
-                for s in geom.chunk_spans.iter() {
+                // Up nearest-first within each of the plan's passes (ground
+                // and stamps, trees, then grass and flowers), so that when
+                // linear runs short it is the far edge of the map that goes,
+                // not the blocks around the player (Isaac's Goldenrod, pvlog
+                // 2026-10-05: 11.3 MB free for an 11.7 MB plan).
+                let first_tree = geom.chunk_spans.iter().position(|s| s.occludable);
+                let last_tree = geom.chunk_spans.iter().rposition(|s| s.occludable);
+                let pass = |i: usize, s: &Span| -> u8 {
+                    if s.occludable {
+                        1
+                    } else if first_tree.is_some_and(|f| i > f) && last_tree.is_some_and(|l| i > l) {
+                        2
+                    } else {
+                        0
+                    }
+                };
+                let mut up_order: Vec<usize> = (0..geom.chunk_spans.len()).collect();
+                if let Some((px, pz)) = player_px {
+                    let d2 = |s: &Span| {
+                        let dx = (s.bmin[0] + s.bmax[0]) * 0.5 - px;
+                        let dz = (s.bmin[2] + s.bmax[2]) * 0.5 - pz;
+                        dx * dx + dz * dz
+                    };
+                    let spans = &geom.chunk_spans;
+                    up_order.sort_by(|&a, &b| {
+                        pass(a, &spans[a]).cmp(&pass(b, &spans[b]))
+                            .then(d2(&spans[a]).partial_cmp(&d2(&spans[b])).unwrap_or(core::cmp::Ordering::Equal))
+                    });
+                }
+                for &si in up_order.iter() {
+                    let s = &geom.chunk_spans[si];
                     let mut at = s.start;
                     while at < s.end {
                         let n = (s.end - at).min(SPAN_PIECE);
-                        if at + n > geom.verts.len() { upload_fail += 1; break; }
+                        let Some(piece) = geom.verts.slice(at, n) else { upload_fail += 1; break; };
                         if !linear_fits(n) { upload_fail += 1; fail_low += 1; fail_verts += n; at += n; continue; }
                         let mut bi = buffer::Info::new();
-                        if bi.add(buffer::Buffer::new(&geom.verts[at..at + n]), attr_info.permutation()).is_ok() {
+                        if bi.add(buffer::Buffer::new(piece), attr_info.permutation()).is_ok() {
                             chunk_infos.push((Span { start: at, end: at + n, ..*s }, bi));
                         } else {
                             // Silently dropping these is how a map ends up as bare
@@ -5713,8 +5856,7 @@ fn main() {
                 // so QuickJS has room for its heap.
                 geom.tex_rgba = Vec::new();
                 geom.tex_rgba.shrink_to_fit();
-                geom.verts = Vec::new();
-                geom.verts.shrink_to_fit();
+                geom.verts = VertStore::new();
                 dist = geom.size * 1.4;
                 {
                     let tex_ms = now_ms().wrapping_sub(t_tex);
