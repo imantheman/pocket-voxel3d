@@ -731,7 +731,7 @@ function packQuads(quads: Quad[], uvt: UvTransform): PackedMesh {
       verts.push({
         u: uPx / uvt.pageW,
         v: (vPx + uvt.baseY) / uvt.pageH,
-        abgr: shadeColor(shade),
+        abgr: q.abgr ?? shadeColor(shade),
         x: Math.round(x),
         y: Math.round(y),
         z: Math.round(z),

@@ -34,6 +34,12 @@ export interface Quad {
   v?: number;
   /** Flat shade, or per-corner shades (AO-folded). */
   shade: number | number[];
+  /**
+   * A full vertex colour (ABGR) that replaces the grey `shade` when packed.
+   * Only the FireRed cook sets it (cook/gen3terrain.ts: a box side's average
+   * tile colour); every other pass leaves it undefined and packs as before.
+   */
+  abgr?: number;
   /** Which way this face points (see FACE). Required: it drives the cull. */
   f: Facing;
   /** A body-anchored building's own quad — exempt from edge keep-rules. */
