@@ -139,7 +139,8 @@ fresh process and lists the ones that fail; your files must not be in it.
 failed-require path. To port one:
 1. Create its file at the normal path.
 2. End it with `G3Lazy["src.ui.game3.credits"] = Credits;`, using its Lua
-   module name.
+   module name. Import G3Lazy from `core/lazy_registry.ts` (a leaf module with
+   no imports), NEVER from runtime.ts: the registration runs at load time.
 3. Add `import "./<path>.ts";` (relative to core/) to `core/lazy_modules.ts`.
 
 Script natives are listed in the VM's static `NATIVE_FILES` table in

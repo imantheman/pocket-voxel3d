@@ -94,6 +94,8 @@ let st: State = fresh();
 const stack: { all: boolean; s: State }[] = [];
 const list = new DrawList();
 let frameOpen = false;
+/** The screen clear's alpha (G.setFrameClearAlpha). */
+let frameClearA = 1;
 
 function blendCode(): number {
   switch (st.blend) {
@@ -304,7 +306,7 @@ export const G = {
     st.m = [...IDENT];
     frameOpen = true;
     list.target(0);
-    list.clear(0, 0, 0, 1);
+    list.clear(0, 0, 0, frameClearA);
     if (st.canvas) list.target(st.canvas.id);
   },
   endFrame(): Float32Array {
@@ -316,6 +318,12 @@ export const G = {
     // NOTE: a view of reused storage, valid until the next draw call
     return out;
   },
+  /**
+   * The alpha beginFrame clears the screen to (not LÖVE): 1 as LÖVE's run
+   * loop, 0 while the 3DS host draws the voxel world under this frame
+   * (worldview.ts), so what the frame leaves undrawn shows the world.
+   */
+  setFrameClearAlpha(a: number): void { frameClearA = a; },
   /** Drop all graphics state (tests; a soft reset). */
   resetState(): void {
     st = fresh();

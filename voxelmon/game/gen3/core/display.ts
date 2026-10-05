@@ -86,6 +86,18 @@ function prepareRenderer(game: any, kind: string): any {
   return Renderer;
 }
 
+// pocket-voxel: with `Display.world3d` set (platform/worldview.ts, each
+// frame before the draw), the field is the 3DS host's voxel world, not
+// pictures on the GBA screen. FieldView.draw then runs for its bookkeeping
+// (the session's cell, the camera, Map.world, this frame's actors for the
+// world's people) and draws nothing; the frame's undrawn pixels stay clear
+// so the world shows through round the text boxes and menus. The view is
+// the top screen's reach rather than the GBA's, so the people of the maps
+// beside this one are collected as far as the world is seen.
+const WORLD3D_VIEW_W = 400;
+const WORLD3D_VIEW_H = 320;
+const WORLD3D_OPTS = { world3d: true };
+
 // Lua: display.lua:225
 function drawFieldPlane(game: any, vw: number, vh: number, R: any): void {
   // package.loaded["src.core.game3.battle_transition"]: always loaded here
@@ -96,7 +108,11 @@ function drawFieldPlane(game: any, vw: number, vh: number, R: any): void {
   const exchange = (current: any, replacement: any): any => {
     return R && R.exchangeWorldCanvas(current, replacement);
   };
-  if (Tilt.active() && !transitioning && R && R.beginUprightPass) {
+  if ((Display as any).world3d) {
+    // pocket-voxel seam: the 3DS host draws the voxel world instead
+    // (platform/worldview.ts); the field keeps its bookkeeping only.
+    FieldView.draw(game, WORLD3D_VIEW_W, WORLD3D_VIEW_H, WORLD3D_OPTS);
+  } else if (Tilt.active() && !transitioning && R && R.beginUprightPass) {
     FieldView.draw(game, vw, vh, { skipActors: true, exchangeCanvas: exchange });
     R.beginUprightPass();
     FieldView.draw(game, vw, vh, { actorsOnly: true, billboard: true });
@@ -231,12 +247,16 @@ function presentFlat(game: any, winW: number, winH: number): boolean {
   try {
     (() => {
       if (Help.isOpen()) { Help.draw(); return; }
-      G.clear(0.06, 0.12, 0.20, 1);
+      const world3d = !!(Display as any).world3d && !Battle.isActive();
+      // (with the voxel world under the frame, the canvas stays clear)
+      if (!world3d) G.clear(0.06, 0.12, 0.20, 1);
 
       Oam.resetFrame();
 
       if (Battle.isActive()) {
         Battle.draw(game, Display.W, Display.H);
+      } else if (world3d) {
+        FieldView.draw(game, WORLD3D_VIEW_W, WORLD3D_VIEW_H, WORLD3D_OPTS);
       } else {
         FieldView.draw(game, Display.W, Display.H);
       }
@@ -265,8 +285,11 @@ function presentFlat(game: any, winW: number, winH: number): boolean {
   }
 
   // Void bars + blit our frame (game3 letterbox, not Gen2 Playfield).
-  G.setColor(0.02, 0.04, 0.08, 1);
-  G.rectangle("fill", 0, 0, winW, winH);
+  // (none over the voxel world: the frame's clear pixels must stay clear)
+  if (!(Display as any).world3d) {
+    G.setColor(0.02, 0.04, 0.08, 1);
+    G.rectangle("fill", 0, 0, winW, winH);
+  }
   const [scale, ox, oy, , , scaleY] = Display.fit(winW, winH);
   G.setColor(1, 1, 1, 1);
   G.draw(canvas, ox, oy, 0, scale, scaleY);

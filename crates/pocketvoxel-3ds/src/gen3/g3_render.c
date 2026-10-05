@@ -9,7 +9,11 @@
      wants in VRAM; a fresh one is cleared by a memory fill at the start of
      the next frame (before anything can draw into it).
    - Each list is executed into a 256x256 target (the 240x160 GBA screen),
-     which is then drawn on the top screen at 1.5x (360x240, centred).
+     which the shared world loop (main.rs, through gen3/mod.rs) lays over
+     the top screen at 1.5x (360x240, centred) as the 2D layer: over the
+     voxel world where the guest drew, the world showing where it left the
+     frame clear (g3_composite). The guest's billboards (the field's
+     people) are drawn in the world's own pass (g3_bb_*).
    - One vertex buffer per frame (two, alternating); primitives are batched
      until the target, texture or state changes.
    - Blend modes per LOVE 11 (rasterize.ts blendPx). Scissor, the target's
@@ -254,6 +258,9 @@ void g3_tex_free(int id) {
 typedef struct { float x, y, z; uint8_t c[4]; float u, v; } Vtx;
 
 #define VBUF_VERTS 24576
+/* what a draw list may fill: the rest of the frame's buffer is the
+   composite quad's and the billboards' (G3_ENTS_MAX quads) */
+#define VBUF_LIST_VERTS (VBUF_VERTS - 512)
 static Vtx *vbuf[2];
 static int vcur;          /* which buffer this frame writes */
 static int vn;            /* vertices written this frame */
@@ -263,13 +270,6 @@ static int vdropped;
 static shaderProgram_s prog;
 static DVLB_s *dvlb;
 static int loc_proj, loc_uvx, loc_toff;
-static C3D_RenderTarget *top;
-
-#define DISPLAY_TRANSFER_FLAGS \
-    (GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) | \
-     GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB8) | \
-     GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO))
-
 /* the latest draw list from the guest, not drawn yet */
 static float *list;
 static size_t list_n, list_cap;
@@ -279,12 +279,11 @@ static int list_new;
 static uint32_t st_frames, st_lists, st_quads, st_tris, st_calls, st_verts, st_vars;
 static double st_build_us;
 
-int g3_gpu_init(const uint8_t *shbin, uint32_t len) {
-    if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE)) return -1;
-    C3D_FrameRate(30.0f);
-    top = C3D_RenderTargetCreate(240, 400, GPU_RB_RGBA8, GPU_RB_DEPTH24_STENCIL8);
-    if (!top) return -2;
-    C3D_RenderTargetSetOutput(top, GFX_TOP, GFX_LEFT, DISPLAY_TRANSFER_FLAGS);
+/* The 2D layer's GPU side, inside the shared loop's citro3d (main.rs made
+   the instance and owns the screens): the program (main.rs's own shader
+   bytes, so the same uniform registers as its program), the two per-frame
+   vertex buffers, the white texture and the frame target. */
+int g3_gpu_init_shared(const uint8_t *shbin, uint32_t len) {
     /* the shader wants its bytes word-aligned, and keeps pointing into them */
     u32 *sh = (u32 *)malloc((len + 3) & ~3u);
     if (!sh) return -3;
@@ -311,7 +310,7 @@ int g3_gpu_init(const uint8_t *shbin, uint32_t len) {
     frame_tex->rt = C3D_RenderTargetCreateFromTex(&frame_tex->tex, GPU_TEXFACE_2D, 0, -1);
     if (!frame_tex->rt) return -8;
     frame_tex->canvas = 1;
-    g3log("gpu ready: frame %dx%d in %dx%d, %d verts/frame", frame_tex->w, frame_tex->h, frame_tex->tw, frame_tex->th, VBUF_VERTS);
+    g3log("gpu ready (shared loop): frame %dx%d in %dx%d, %d verts/frame", frame_tex->w, frame_tex->h, frame_tex->tw, frame_tex->th, VBUF_VERTS);
     return 1;
 }
 
@@ -894,7 +893,7 @@ static inline void put_vtx(const PV *p, float du, float dv) {
 
 static void emit_fan(const PV *p, int n, float du, float dv) {
     if (n < 3) return;
-    if (vn + (n - 2) * 3 > VBUF_VERTS - 6) { vdropped++; return; }
+    if (vn + (n - 2) * 3 > VBUF_LIST_VERTS - 6) { vdropped++; return; }
     for (int i = 1; i + 1 < n; i++) {
         put_vtx(&p[0], du, dv);
         put_vtx(&p[i], du, dv);
@@ -1123,10 +1122,54 @@ static void run_list(const float *f, size_t n) {
 
 static inline double tick_us(void) { return (double)svcGetSystemTick() / 268.111856; }
 
-/* One shown frame: the newest list (if one came since the last frame) into
-   the frame target and its canvases, then the frame onto the top screen. */
-void g3_render_frame(void) {
-    C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+/* ---------------------------------------------------------------- the shared loop's passes */
+
+/* The vertex layout and buffer of this file's draws (main.rs's cards use the
+   same float layout; its terrain does not, hence restore_main). */
+static void use_g3_vertices(void) {
+    C3D_AttrInfo *ai = C3D_GetAttrInfo();
+    AttrInfo_Init(ai);
+    AttrInfo_AddLoader(ai, 0, GPU_FLOAT, 3);
+    AttrInfo_AddLoader(ai, 1, GPU_UNSIGNED_BYTE, 4);
+    AttrInfo_AddLoader(ai, 2, GPU_FLOAT, 2);
+    C3D_BufInfo *bi = C3D_GetBufInfo();
+    BufInfo_Init(bi);
+    BufInfo_Add(bi, vbuf[vcur], sizeof(Vtx), 3, 0x210);
+}
+
+/* Back to the state main.rs's passes assume (citro3d-rs's frame defaults
+   plus what its render_to sets): depth GREATER/all, no alpha test, alpha
+   blend, stage 0 = texture x vertex colour and the rest pass-through, no
+   culling, and its i16 terrain vertex layout. */
+static void restore_main(void) {
+    C3D_DepthTest(true, GPU_GREATER, GPU_WRITE_ALL);
+    C3D_AlphaTest(false, GPU_ALWAYS, 0);
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
+    for (int i = 0; i < 6; i++) C3D_SetTexEnv(i, &prog_plain.env[i]);
+    C3D_TexEnvBufUpdate(C3D_Both, 0);
+    C3D_CullFace(GPU_CULL_NONE);
+    C3D_AttrInfo *ai = C3D_GetAttrInfo();
+    AttrInfo_Init(ai);
+    AttrInfo_AddLoader(ai, 0, GPU_SHORT, 4);
+    AttrInfo_AddLoader(ai, 1, GPU_UNSIGNED_BYTE, 4);
+    AttrInfo_AddLoader(ai, 2, GPU_FLOAT, 2);
+    bound_valid = 0;
+}
+
+static inline void put_raw(float x, float y, float z, u32 col, float u, float v) {
+    Vtx *o = &vbuf[vcur][vn++];
+    o->x = x; o->y = y; o->z = z;
+    memcpy(o->c, &col, 4);
+    o->u = u; o->v = v;
+}
+
+/* the composite quad's place in this frame's buffer (-1: none yet) */
+static int comp_start = -1;
+
+/* First in the frame (inside citro3d-rs's frame, before the eyes): the
+   newest list (if one came since the last frame) into the frame target and
+   its canvases; then the composite quad for the eyes to draw. */
+void g3_frame_offscreen(void) {
     double t0 = tick_us();
     frame_no++;
     retire_tick();
@@ -1137,49 +1180,120 @@ void g3_render_frame(void) {
     }
     vcur ^= 1;
     vn = vstart = 0;
-    C3D_BindProgram(&prog);
-    C3D_AttrInfo *ai = C3D_GetAttrInfo();
-    AttrInfo_Init(ai);
-    AttrInfo_AddLoader(ai, 0, GPU_FLOAT, 3);
-    AttrInfo_AddLoader(ai, 1, GPU_UNSIGNED_BYTE, 4);
-    AttrInfo_AddLoader(ai, 2, GPU_FLOAT, 2);
-    C3D_BufInfo *bi = C3D_GetBufInfo();
-    BufInfo_Init(bi);
-    BufInfo_Add(bi, vbuf[vcur], sizeof(Vtx), 3, 0x210);
-    C3D_FVUnifSet(GPU_VERTEX_SHADER, loc_uvx, 1.0f, 1.0f, 0.0f, 0.0f);
-    C3D_FVUnifSet(GPU_VERTEX_SHADER, loc_toff, 0.0f, 0.0f, 0.0f, 0.0f);
-    C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
-    C3D_CullFace(GPU_CULL_NONE);
-    bound_valid = 0;
     if (list_new) {
+        C3D_BindProgram(&prog);
+        use_g3_vertices();
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, loc_uvx, 1.0f, 1.0f, 0.0f, 0.0f);
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, loc_toff, 0.0f, 0.0f, 0.0f, 0.0f);
+        C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+        C3D_CullFace(GPU_CULL_NONE);
+        bound_valid = 0;
         run_list(list, list_n);
         list_new = 0;
         st_lists++;
+        flush();
+        restore_main();
     }
-    /* present: the 240x160 frame at 1.5x, centred on the 400x240 screen */
-    C3D_RenderTargetClear(top, C3D_CLEAR_ALL, 0x000000FF, 0);
-    flush();
-    C3D_FrameDrawOn(top);
-    C3D_Mtx m;
-    Mtx_OrthoTilt(&m, 0.0f, 400.0f, 240.0f, 0.0f, -1.0f, 1.0f, true);
-    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, loc_proj, &m);
-    memset(&S, 0, sizeof(S));
-    S.blend = BLEND_REPLACE;
-    S.prog = prog_plain;
-    S.serial = 0xFFFFFFF1u;
-    bound_valid = 0;
-    float wcol[4] = {1, 1, 1, 1};
-    prim_begin(frame_tex, wcol);
-    /* not through emit_poly: its bounds are the frame's, not the screen's */
+    /* the 240x160 frame at 1.5x, centred on the 400x240 screen; a texture's
+       first row is v = 1 (see the top of this file) */
+    comp_start = vn;
     {
-        PV q[4] = {{{20, 0, 0, 0}}, {{380, 0, 1, 0}}, {{380, 240, 1, 1}}, {{20, 240, 0, 1}}};
-        emit_fan(q, 4, 0, 0);
+        float u1 = (float)frame_tex->w / frame_tex->tw, v1 = 1.0f - (float)frame_tex->h / frame_tex->th;
+        u32 c = 0xFFFFFFFFu;
+        put_raw(20, 0, 0.5f, c, 0, 1);   put_raw(380, 0, 0.5f, c, u1, 1);    put_raw(380, 240, 0.5f, c, u1, v1);
+        put_raw(20, 0, 0.5f, c, 0, 1);   put_raw(380, 240, 0.5f, c, u1, v1); put_raw(20, 240, 0.5f, c, 0, v1);
     }
-    flush();
+    vstart = vn;
     st_verts += vn;
     st_frames++;
     st_build_us += tick_us() - t0;
-    C3D_FrameEnd(0);
+}
+
+/* Last in each eye's pass: the frame over the screen. The frame holds
+   colour already multiplied by its alpha (drawn with alpha blending over a
+   clear of 0), so it goes on premultiplied. */
+void g3_composite(void) {
+    if (comp_start < 0) return;
+    use_g3_vertices();
+    C3D_Mtx m;
+    Mtx_OrthoTilt(&m, 0.0f, 400.0f, 240.0f, 0.0f, -1.0f, 1.0f, true);
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, loc_proj, &m);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, loc_uvx, 1.0f, 1.0f, 0.0f, 0.0f);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, loc_toff, 0.0f, 0.0f, 0.0f, 0.0f);
+    C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+    C3D_AlphaTest(false, GPU_ALWAYS, 0);
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
+    for (int i = 0; i < 6; i++) C3D_SetTexEnv(i, &prog_plain.env[i]);
+    C3D_TexEnvBufUpdate(C3D_Both, 0);
+    C3D_TexBind(0, &frame_tex->tex);
+    C3D_DrawArrays(GPU_TRIANGLES, comp_start, 6);
+    st_calls++;
+    restore_main();
+}
+
+/* ---------------------------------------------------------------- billboards */
+
+/* The guest's billboards (g3Ents, worldview.ts): records of G3_ENT_FLOATS
+   floats -- texture id, feet x, feet z, lift, width, height, u0 v0 u1 v1
+   (over the image, v down), alpha -- kept until the next call. gen3/mod.rs
+   reads them, faces them to the camera and hands back the quads. */
+#define G3_ENTS_MAX 64
+#define G3_ENT_FLOATS 11
+static float ents[G3_ENTS_MAX * G3_ENT_FLOATS];
+static int nents;
+
+void g3_ents_set(const float *f, int n) {
+    if (n < 0) n = 0;
+    if (n > G3_ENTS_MAX) n = G3_ENTS_MAX;
+    if (n) memcpy(ents, f, sizeof(float) * G3_ENT_FLOATS * (size_t)n);
+    nents = n;
+}
+
+const float *g3_ents_get(int *n) { *n = nents; return ents; }
+
+typedef struct { G3Tex *tex; int start; } BbRun;
+static BbRun bb_runs[G3_ENTS_MAX];
+static int nbb;
+
+void g3_bb_reset(void) { nbb = 0; }
+
+/* One billboard: corners bottom-left, bottom-right, top-right, top-left
+   (xyz, terrain space), the frame's uv over the image (u0 > u1 mirrors). */
+void g3_bb_quad(int texid, const float *p, float u0, float v0, float u1, float v1, float alpha) {
+    G3Tex *t = tex_get(texid);
+    if (!t || t->canvas || nbb >= G3_ENTS_MAX || vn + 6 > VBUF_VERTS) return;
+    float ua = (float)t->w / t->tw, va = (float)t->h / t->th;
+    const float uu[4] = {u0, u1, u1, u0}, vv[4] = {v1, v1, v0, v0};
+    static const int order[6] = {0, 1, 2, 0, 2, 3};
+    u32 col = 0x00FFFFFFu | ((u32)(clamp01(alpha) * 255.0f + 0.5f) << 24);
+    bb_runs[nbb].tex = t;
+    bb_runs[nbb].start = vn;
+    for (int i = 0; i < 6; i++) {
+        int k = order[i];
+        put_raw(p[k * 3], p[k * 3 + 1], p[k * 3 + 2], col, uu[k] * ua, 1.0f - vv[k] * va);
+    }
+    nbb++;
+}
+
+/* In each eye's world pass (after the terrain and trees, depth on): the
+   billboards under that eye's matrix, their clear texels cut by the alpha
+   test so they hide nothing behind them. */
+void g3_bb_draw(const C3D_Mtx *mvp) {
+    if (nbb == 0) return;
+    use_g3_vertices();
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, loc_proj, mvp);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, loc_uvx, 1.0f, 1.0f, 0.0f, 0.0f);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, loc_toff, 0.0f, 0.0f, 0.0f, 0.0f);
+    C3D_DepthTest(true, GPU_GREATER, GPU_WRITE_ALL);
+    C3D_AlphaTest(true, GPU_GREATER, 0x7F);
+    for (int i = 0; i < 6; i++) C3D_SetTexEnv(i, &prog_plain.env[i]);
+    C3D_TexEnvBufUpdate(C3D_Both, 0);
+    for (int i = 0; i < nbb; i++) {
+        C3D_TexBind(0, &bb_runs[i].tex->tex);
+        C3D_DrawArrays(GPU_TRIANGLES, bb_runs[i].start, 6);
+        st_calls++;
+    }
+    restore_main();
 }
 
 /* The perf line's numbers since the last call: frames, lists, quads, tris,

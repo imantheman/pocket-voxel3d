@@ -46,7 +46,7 @@ extern "C" {
     /// (citro3d renderqueue.h): 30 = every second vblank.
     fn C3D_FrameRate(fps: f32) -> f32;
     fn gsp_flush(p: *const u8, len: u32);
-    fn audio3ds_init(rate: i32, frames_per_buf: i32) -> i32;
+    #[cfg(not(feature = "gen3"))] fn audio3ds_init(rate: i32, frames_per_buf: i32) -> i32;
     fn audio3ds_free_frames() -> i32;
     fn audio3ds_queue(pcm: *const i16, frames: i32) -> i32;
     fn c3d_alpha_test(on: i32, r: i32);
@@ -190,7 +190,7 @@ static mut SHARED_ATLAS: Option<&'static [u8]> = None;
 /// Which game this build is. Red and Blue read one shared set of map paks
 /// (the maps and every graphic but the title ribbon are the same data in
 /// both ROMs); each has its own dataset and a small atlas overlay.
-#[cfg(not(any(feature = "blue", feature = "yellow", feature = "gen2")))]
+#[cfg(not(any(feature = "blue", feature = "yellow", feature = "gen2", feature = "gen3")))]
 const GAME: &str = "red";
 #[cfg(feature = "blue")]
 const GAME: &str = "blue";
@@ -205,7 +205,7 @@ const GAME: &str = "crystal";
 /// The pak set this game reads. Red and Blue share one; Yellow has its own;
 /// Gold and Silver share theirs (paks_gold), as Red and Blue do; Crystal has
 /// its own (paks_crystal).
-#[cfg(not(any(feature = "yellow", feature = "gen2")))]
+#[cfg(not(any(feature = "yellow", feature = "gen2", feature = "gen3")))]
 const PAKS_DIR: &str = "sdmc:/3ds/voxelmon/paks";
 #[cfg(feature = "yellow")]
 const PAKS_DIR: &str = "sdmc:/3ds/voxelmon/paks_yellow";
@@ -213,7 +213,7 @@ const PAKS_DIR: &str = "sdmc:/3ds/voxelmon/paks_yellow";
 const PAKS_DIR: &str = "sdmc:/3ds/voxelmon/paks_gold";
 #[cfg(feature = "crystal")]
 const PAKS_DIR: &str = "sdmc:/3ds/voxelmon/paks_crystal";
-#[cfg(not(any(feature = "blue", feature = "yellow", feature = "gen2")))]
+#[cfg(not(any(feature = "blue", feature = "yellow", feature = "gen2", feature = "gen3")))]
 const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks/gamedata.json";
 #[cfg(feature = "blue")]
 const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks/gamedata_blue.json";
@@ -225,7 +225,7 @@ const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks_gold/gamedata.json";
 const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks_gold/gamedata_silver.json";
 #[cfg(feature = "crystal")]
 const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks_crystal/gamedata.json";
-#[cfg(not(any(feature = "blue", feature = "yellow", feature = "gen2")))]
+#[cfg(not(any(feature = "blue", feature = "yellow", feature = "gen2", feature = "gen3")))]
 const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks/version_red.vxat";
 #[cfg(feature = "blue")]
 const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks/version_blue.vxat";
@@ -239,7 +239,7 @@ const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks_gold/version_silver.vxat";
 const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks_crystal/version_crystal.vxat";
 /// The map the host boots on, and the one it falls back to: the player's
 /// room, then the town outside it.
-#[cfg(not(feature = "gen2"))]
+#[cfg(not(any(feature = "gen2", feature = "gen3")))]
 const BOOT_MAPS: [&str; 2] = ["REDS_HOUSE_2F", "PALLET_TOWN"];
 #[cfg(feature = "gen2")]
 const BOOT_MAPS: [&str; 2] = ["PLAYERS_HOUSE_2F", "NEW_BARK_TOWN"];
@@ -2380,7 +2380,7 @@ fn dump_top_screen() {
         dump_top_side(0, 1, &format!("sdmc:/3ds/voxelmon/shot_{}_r.ppm", n));
     }
     // and the bottom screen (shot_N_b)
-    dump_top_side(1, 0, &format!("sdmc:/3ds/voxelmon/shot_{}_b.ppm", n));
+    dump_top_side(1, 0, &format!("sdmc:/3ds/voxelmon/shot_{}_b.ppm", n)); #[cfg(feature = "gen3")] gen3::shot(n);
 }
 
 /// Screen `screen` (0 top, 1 bottom), eye `side`, as a PPM at `path`.
@@ -4257,7 +4257,7 @@ fn floor_map_of(pak: &Pak, chunks: &[pak::Chunk], map_min: [f32; 2], map_max: [f
 static mut RT: *mut JSRuntime = core::ptr::null_mut();
 static mut CTX: *mut JSContext = core::ptr::null_mut();
 
-#[cfg(not(feature = "gen3"))] fn main() {
+fn main() {
     // Before anything that can fail: a crash has to leave a line.
     install_panic_log();
     let gfx = Gfx::new().expect("gfx");
@@ -4293,7 +4293,7 @@ static mut CTX: *mut JSContext = core::ptr::null_mut();
     {
         let free_kb = unsafe_free_kb() as usize;
         let cap = (free_kb.saturating_sub(MAP_LINEAR_SIDE_KB) * 1024 / core::mem::size_of::<Vertex>())
-            .max(MAP_CAP_FLOOR_VERTS);
+            .max(MAP_CAP_FLOOR_VERTS); #[cfg(feature = "gen3")] let cap = gen3::map_cap(free_kb, cap);
         pocketvoxel_core::mapplan::set_device_cap(cap);
         dlog(&format!("[pv] linear free {} KB at boot: map vertex cap {}", free_kb, cap));
     }
@@ -4333,7 +4333,7 @@ static mut CTX: *mut JSContext = core::ptr::null_mut();
     println!("gamedata {} KB", gd.len() / 1024);
     let gd_static: &'static [u8] = Box::leak(gd.into_boxed_slice());
 
-    size_pak_cache();
+    size_pak_cache(); #[cfg(feature = "gen3")] gen3::size_pak_cache();
 
     // The shared atlas pages, before any pak is read — every pak's page
     // directory resolves against this. Absent is fine and means the card
@@ -4593,7 +4593,7 @@ static mut CTX: *mut JSContext = core::ptr::null_mut();
     let mut guest_ok = false;
     unsafe {
         let mut err = [0u8; 256];
-        qjs_register_voxel(CTX);
+        qjs_register_voxel(CTX); #[cfg(feature = "gen3")] gen3::before_guest();
         let mut src = GAME_JS.to_vec();
         src.push(0);
         if qjs_eval(CTX, src.as_ptr(), GAME_JS.len() as i32, err.as_mut_ptr(), 255) != 0 {
@@ -4908,7 +4908,7 @@ static mut CTX: *mut JSContext = core::ptr::null_mut();
                         // the vertex/texture pool left: a slow leak shows as this falling
                         unsafe_free_kb(),
                     ));
-                    dlog(&format!("[pv] sound: peak {} over the last 5 s", aud_peak));
+                    dlog(&format!("[pv] sound: peak {} over the last 5 s", aud_peak)); #[cfg(feature = "gen3")] gen3::perf_line();
                     aud_peak = 0;
                 }
                 // ticks and drops are totals over the 5 s the line covers
@@ -7286,7 +7286,7 @@ if page_tex.len() < pak_static.atlases.len() {
         };
         let (tilt_unit_ref, tilt_sharp_ref, tilt_bands_ref) = (tilt_unit.as_ref(), tilt_sharp.as_ref(), tilt_bands.as_ref());
         let (tmvp_l_ref, tmvp_r_ref) = (&tmvp_l, &tmvp_r);
-        instance.render_frame_with(|mut frame| {
+        instance.render_frame_with(|mut frame| { #[cfg(feature = "gen3")] gen3::offscreen_pass();
             fn cast_lifetime_to_closure<'frame, T>(x: T) -> T
             where
                 T: Fn(&mut Frame<'frame>, &'frame mut ScreenTarget<'_>, &Matrix4, f32),
@@ -7303,7 +7303,7 @@ if page_tex.len() < pak_static.atlases.len() {
                 // black that stood the world down -- which came out pure blue
                 // beside the title on a new card.
                 let gen2_blank = cfg!(feature = "gen2") && unsafe { voxel::scene() }.flat_world;
-                let sky = if pic_active || gen2_blank { 0xFFFF_FFFFu32 } else { tint_rgba8(SKY, scene_tint) };
+                let sky = if pic_active || gen2_blank { 0xFFFF_FFFFu32 } else { tint_rgba8(SKY, scene_tint) }; #[cfg(feature = "gen3")] let sky = if unsafe { voxel::scene() }.flat_world { 0x0000_00FFu32 } else { sky };
                 if let Some((tw, _, _)) = tilt_ref {
                     // TILT SHIFT: the world (and its cards) into the texture;
                     // the screen gets it below, before the UI.
@@ -7352,7 +7352,7 @@ if page_tex.len() < pak_static.atlases.len() {
                     frame.bind_vertex_uniform(toff_idx, FVec4::new(0.0, 0.0, 0.0, 0.0));
                     unsafe { TREES_CULLED[3] = t_err; }
                 }
-                }
+                } #[cfg(feature = "gen3")] gen3::world_pass(if tilt_ref.is_some() { if eye < 0.0 { tmvp_l_ref } else { tmvp_r_ref } } else { mvp });
                 // Off before the ortho passes: the cards, pics, anims and UI
                 // run with the depth test disabled and must not be answered
                 // by a depth buffer they never wrote to.
@@ -7559,7 +7559,7 @@ if page_tex.len() < pak_static.atlases.len() {
                     frame.draw_arrays(buffer::Primitive::Triangles, lb, None).unwrap();
                     frame.bind_vertex_uniform(projection_idx, mvp);
                     unsafe { c3d_depth_test(1); }
-                }
+                } #[cfg(feature = "gen3")] gen3::composite();
             });
 
             frame.bind_program(&program);
@@ -7577,7 +7577,7 @@ if page_tex.len() < pak_static.atlases.len() {
             // above, giving the dark-on-light-green look of the real mod.
             // Gold's bottom screen is white paper (gen2 ui/Companion.ts): the
             // bars beside its whole-screen mode (lcdTall) white too, not green.
-            let bottom_clear = if cfg!(feature = "gen2") { 0xFFFFFFFFu32 } else { 0x9BBC0FFFu32 };
+            let bottom_clear = if cfg!(feature = "gen2") { 0xFFFFFFFFu32 } else { 0x9BBC0FFFu32 }; #[cfg(feature = "gen3")] let bottom_clear = 0x0000_00FFu32;
             bottom_target.clear(ClearFlags::ALL, bottom_clear, 0);
             frame.select_render_target(&mut bottom_target).expect("select bottom");
             {
@@ -7594,7 +7594,7 @@ if page_tex.len() < pak_static.atlases.len() {
                 // regardless of the atlas; restore the glyph texenv afterwards.
                 // (Not Gold's: its panel covers the screen, but not the bars
                 // beside its whole-screen mode, where the strip showed green.)
-                if let (false, Some(bb)) = (cfg!(feature = "gen2"), ui_b_bar_buf.as_ref()) {
+                if let (false, Some(bb)) = (cfg!(any(feature = "gen2", feature = "gen3")), ui_b_bar_buf.as_ref()) {
                     unsafe { c3d_depth_test(0); }
                     frame.set_texenvs(&[stage_flat]);
                     frame.draw_arrays(buffer::Primitive::Triangles, bb, None).unwrap();
@@ -7680,17 +7680,38 @@ if page_tex.len() < pak_static.atlases.len() {
             &card_hold, &spark_hold, &pic_hold, &gb_hold, &gb_wide_hold, &lcd_hold, &lcd_b_hold, &canvas_hold, &tilt_hold, &page_tex_retired_hold, &ui_hold, &anim_hold, &ui_b_hold,
             &ui_b_bar_hold, &ui_b_light_hold, &ui_b_dim_hold, &ui_b_sprite_hold,
         );
-    }
+    } #[cfg(feature = "gen3")] gen3::exit();
 }
 
-// FireRed (gen3): its own main loop and the Gen 3 display, src/gen3/ (GPLv3 +
-// additional terms; src/gen3/LICENSE.md), compiled only by the gen3 builds,
-// which use none of the Kanto/Johto loop above (hence line 1's allow). Kept
-// down here and the cfg on main's own line, so no line above moves: panic
-// locations carry line numbers, and the MIT builds stay byte-identical.
+// FireRed (gen3): src/gen3/ (GPLv3 + additional terms; src/gen3/LICENSE.md),
+// compiled only by the gen3 builds. FireRed runs the `main` above -- the
+// shared world loop -- with its own pieces hooked in by `#[cfg(feature =
+// "gen3")]` statements added at the ENDS of existing lines (gen3/mod.rs
+// lists them) and its constants down here, so no line above moves: panic
+// locations carry line numbers and columns, and the MIT builds stay
+// byte-identical.
 #[cfg(feature = "gen3")]
 mod gen3;
 #[cfg(feature = "gen3")]
-fn main() {
-    gen3::run()
+const GAME: &str = "firered";
+#[cfg(feature = "gen3")]
+const PAKS_DIR: &str = "sdmc:/3ds/voxelmon/paks_firered";
+/// FireRed has no gamedata container yet: the guest is handed the world
+/// paks' world.json (each map's pak index, size and connections) as its
+/// `gamedata()`, which is what platform/worldview.ts reads.
+#[cfg(feature = "gen3")]
+const GAMEDATA_PATH: &str = "sdmc:/3ds/voxelmon/paks_firered/world.json";
+#[cfg(feature = "gen3")]
+const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks_firered/version_firered.vxat";
+#[cfg(feature = "gen3")]
+const BOOT_MAPS: [&str; 2] = ["FR_PLAYERS_HOUSE_2F", "FR_PALLET_TOWN"];
+#[cfg(feature = "gen3")]
+static GAME_JS: &[u8] = include_bytes!("../game-firered.js");
+/// The Kanto synth's NDSP stays closed for FireRed: its sound is the M4A
+/// engine's (gen3/audio.rs, started by gen3::before_guest before the guest
+/// boots), so `main`'s `audio_on` is false and the synth is never pumped.
+#[cfg(feature = "gen3")]
+unsafe fn audio3ds_init(_rate: i32, _frames_per_buf: i32) -> i32 {
+    dlog("[pv] sound: the Kanto synth is off (FireRed's M4A engine has NDSP)");
+    0
 }

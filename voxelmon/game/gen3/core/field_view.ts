@@ -74,6 +74,23 @@ export interface DrawOpts {
   actorsOnly?: boolean;
   skipActors?: boolean;
   exchangeCanvas?: any;
+  /** pocket-voxel: the 3DS host draws the field as its voxel world (display.ts
+   *  WORLD3D_OPTS): keep the bookkeeping, collect the actors into
+   *  FieldView._worldActors, draw nothing. */
+  world3d?: boolean;
+}
+
+/** pocket-voxel: what FieldView.draw left for the voxel world (platform/worldview.ts). */
+export interface WorldFrame {
+  /** The frame's actors, under then over, as drawSingleActor would get them. */
+  actors: any[];
+  /** The view's centre in map px (the camera, pans included). */
+  camX: number;
+  camY: number;
+  /** The player's map px (cell origin) and the map drawn. */
+  px: number;
+  py: number;
+  mapId: any;
 }
 
 export interface FieldViewModule {
@@ -124,6 +141,8 @@ export interface FieldViewModule {
   _viewH: number | undefined;
   _bgPalOverride: { pair: string; slot: any } | undefined;
   hideActors: boolean | undefined;
+  /** pocket-voxel: the last world3d draw's frame (DrawOpts.world3d). */
+  _worldFrame: WorldFrame | undefined;
 
   MAX_FLASH_LEVEL: number;
   flashLevel: number;
@@ -1991,6 +2010,26 @@ FieldView.draw = function (game: any, canvasWIn?: number, canvasHIn?: number, op
     if (Map.refreshWorld) {
       Map.refreshWorld(game, Math.ceil(canvasW / CELL), Math.ceil(canvasH / CELL), mapId);
     }
+  }
+
+  // pocket-voxel seam (DrawOpts.world3d): the voxel world is the picture;
+  // hand it this frame's actors and draw nothing.
+  if (truthy(opts.world3d)) {
+    const frame: WorldFrame = FieldView._worldFrame ?? { actors: [], camX: 0, camY: 0, px: 0, py: 0, mapId: undefined };
+    frame.actors.length = 0;
+    if (!truthy(FieldView.hideActors)) {
+      const [under, over] = collectGame3Actors(
+        game, mapDef, camX, camY, px, py, facing, walkPhase, stepFlip, playerYOff, playerXOff);
+      for (let i = 1; under[i] != null; i++) frame.actors.push(under[i]);
+      for (let i = 1; over[i] != null; i++) frame.actors.push(over[i]);
+    }
+    frame.camX = camX + canvasW / 2;
+    frame.camY = camY + canvasH / 2;
+    frame.px = px;
+    frame.py = py;
+    frame.mapId = mapId;
+    FieldView._worldFrame = frame;
+    return;
   }
 
   let usedNative = FieldView._nativeOverPair != null;

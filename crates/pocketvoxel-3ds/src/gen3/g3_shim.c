@@ -10,6 +10,8 @@
      g3Read(path) -> byte string | undefined           (one char per byte)
      g3ReadBuf(path) -> ArrayBuffer | undefined
      g3Exists(path) -> bool
+     g3Ents(Float32Array, n)                           (the field's billboards,
+                                                        platform/worldview.ts)
 
    Paths are the cache's (data/generated/gba/...), under
    sdmc:/3ds/voxelmon/firered/. */
@@ -27,6 +29,7 @@ void g3_tex_free(int id);
 void g3_draw(const float *f, size_t n);
 void g3_batch_upload(int id, int tex, const float *q, int n);
 void g3_batch_free(int id);
+void g3_ents_set(const float *f, int n);
 uint8_t *g3_read_file(const char *path, size_t *len);
 int g3_exists(const char *path);
 
@@ -127,6 +130,20 @@ static JSValue g3_batchfree(JSContext *ctx, JSValueConst t, int c, JSValueConst 
     int32_t id = 0;
     if (c >= 1) JS_ToInt32(ctx, &id, v[0]);
     g3_batch_free((int)id);
+    return JS_UNDEFINED;
+}
+
+/* g3Ents(Float32Array, n): the field's billboards for the world pass
+   (worldview.ts ENT_FLOATS = 11 floats each), kept until the next call. */
+static JSValue g3_ents(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 2) return JS_UNDEFINED;
+    int32_t n = 0;
+    JS_ToInt32(ctx, &n, v[1]);
+    size_t len = 0;
+    const uint8_t *p = g3_bytes(ctx, v[0], &len);
+    if (n < 0 || (p == NULL && n > 0) || ((uintptr_t)p & 3) || len / 4 < (size_t)n * 11) return JS_UNDEFINED;
+    g3_ents_set((const float *)p, (int)n);
     return JS_UNDEFINED;
 }
 
@@ -361,6 +378,7 @@ int qjs_register_g3(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "g3Read", JS_NewCFunction(ctx, g3_read, "g3Read", 1));
     JS_SetPropertyStr(ctx, o, "g3ReadBuf", JS_NewCFunction(ctx, g3_readbuf, "g3ReadBuf", 1));
     JS_SetPropertyStr(ctx, o, "g3Exists", JS_NewCFunction(ctx, g3_exists_js, "g3Exists", 1));
+    JS_SetPropertyStr(ctx, o, "g3Ents", JS_NewCFunction(ctx, g3_ents, "g3Ents", 2));
     static const struct { const char *name; JSCFunction *fn; int n; } snd[] = {
         { "g3SongPlay", g3_songplay, 1 }, { "g3SongStop", g3_songstop, 0 },
         { "g3SongPause", g3_songpause, 0 }, { "g3SongResume", g3_songresume, 0 },

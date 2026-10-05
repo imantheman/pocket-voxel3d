@@ -83,7 +83,7 @@ pub unsafe fn scene() -> &'static mut Scene {
 // GameVersion.saveSuffix: "" for Red, "_blue" for Blue -- the recomp's own
 // file names, so a save moves between the two ports unchanged, and Red and
 // Blue never write over each other.
-#[cfg(not(any(feature = "blue", feature = "yellow", feature = "gen2")))]
+#[cfg(not(any(feature = "blue", feature = "yellow", feature = "gen2", feature = "gen3")))]
 const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save.lua";
 #[cfg(feature = "blue")]
 const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save_blue.lua";
@@ -106,7 +106,7 @@ const OPTIONS_PATH: &str = "sdmc:/3ds/voxelmon/options_gold.lua";
 const OPTIONS_PATH: &str = "sdmc:/3ds/voxelmon/options_silver.lua";
 #[cfg(feature = "crystal")]
 const OPTIONS_PATH: &str = "sdmc:/3ds/voxelmon/options_crystal.lua";
-#[cfg(not(feature = "gen2"))]
+#[cfg(not(any(feature = "gen2", feature = "gen3")))]
 const OPTIONS_PATH: &str = "sdmc:/3ds/voxelmon/options.lua";
 static mut OPTIONS_BUF: Vec<u8> = Vec::new();
 
@@ -365,3 +365,12 @@ pub unsafe extern "C" fn voxel_lcd_bin(which: u32, a0: i32, p1: *const u8, l1: u
 #[no_mangle] pub unsafe extern "C" fn voxel_game_len() -> u32 { GAME.len() as u32 }
 #[no_mangle] pub unsafe extern "C" fn voxel_audio_ptr() -> *const u8 { AUDIO.as_ptr() }
 #[no_mangle] pub unsafe extern "C" fn voxel_audio_len() -> u32 { AUDIO.len() as u32 }
+
+// FireRed (gen3): its own files beside its other ones, never Red's. (Down
+// here, as main.rs's gen3 items are, so no line above moves.) The Gen 3
+// guest saves through its own store; these only keep the shared natives off
+// Red's files.
+#[cfg(feature = "gen3")]
+const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/firered/save_voxel.lua";
+#[cfg(feature = "gen3")]
+const OPTIONS_PATH: &str = "sdmc:/3ds/voxelmon/firered/options_voxel.lua";

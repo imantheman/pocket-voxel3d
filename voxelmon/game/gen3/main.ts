@@ -1,135 +1,135 @@
 // pocket-voxel host entry for the gen3 (FireRed) port (GPLv3 + additional terms; see LICENSE.md).
 //
 // The QuickJS entry for FireRed, bundled into crates/pocketvoxel-3ds/game-firered.js
-// (cc_build_firered.sh; the `firered` feature embeds it). For now it is the
-// HOST TEST CARD (hosttest.ts): the game runtime is still being ported. It
-// binds G3Host over the gen3 natives (crates/pocketvoxel-3ds/src/gen3/g3_shim.c)
-// and draws one test frame per shown frame; frame HOSTTEST_SHOT_FRAME is
-// photographed to the card (sdmc:/3ds/voxelmon/firered/g3shot_0.ppm) for the
-// comparison with the desktop rasteriser (tools/gen3/hosttest_shot.ts).
+// (cc_build_firered.sh; the `firered` feature embeds it). The host runs it
+// inside the shared world loop (crates/pocketvoxel-3ds/src/main.rs, with the
+// gen3 pieces in src/gen3/): the guest's draw list is the 2D layer over the
+// voxel world, and the field becomes scene ops (platform/game3_world.ts ->
+// platform/worldview.ts).
+//
+// Modes, chosen when the bundle is built (bun --define PV_G3_MODE='"..."'):
+//   game      (default) Game3 boots as on the desktop: title, menus, field.
+//   bench     Game3 boots, then a new game is put straight on FR_PALLET_TOWN
+//             (6,8), skipping the intro; PV_G3_BENCH_SCRIPT ("tick:KEYS,..."
+//             as tools/gen3/boot_harness.ts, keys held until the next entry)
+//             walks it, and the screen is photographed at PV_G3_BENCH_SHOTS
+//             (shown frames, comma list).
+//   hosttest  the old host test card (hosttest.ts), one picture per frame;
+//             frame HOSTTEST_SHOT_FRAME goes to sdmc:/3ds/voxelmon/firered/g3shot_0.ppm.
+// (worldbench.ts is a separate entry: the world without the runtime.)
 
-import { native } from "../quickjs-host.ts";
-import { setHost, type G3Host } from "./platform/host.ts";
-import { setAudio, type CryParams, type G3Audio, type SeOptions } from "./platform/audio.ts";
+// FIRST: the host and the sound, before any runtime module is evaluated.
+import { clock, drawProf } from "./platform/qjs_host.ts";
+import { BenchScript, errText, loadWorld, nat as n, padBits, setFrame, shotSet, worldOps } from "./platform/qjs_world.ts";
+import { G } from "./platform/graphics.ts";
 import { HostTest, HOSTTEST_SHOT_FRAME, hostTestSound } from "./hosttest.ts";
+import { Game3 } from "./core/Game3.ts";
+import { Input } from "./shared/core/Input.ts";
+import { WorldView } from "./platform/worldview.ts";
+import { Game3World } from "./platform/game3_world.ts";
 
-const n = native;
-const clock = (): number => (n.now ? n.now() : Date.now() * 1000);
+declare const PV_G3_MODE: string;
+declare const PV_G3_BENCH_SCRIPT: string;
+declare const PV_G3_BENCH_SHOTS: string;
 
-/** Bytes to a byte string (one char per byte), in chunks. */
-function bytesToString(b: Uint8Array): string {
-  const parts: string[] = [];
-  for (let i = 0; i < b.length; i += 8192) {
-    parts.push(String.fromCharCode.apply(null, b.subarray(i, i + 8192) as unknown as number[]));
+const MODE = typeof PV_G3_MODE === "string" ? PV_G3_MODE : "game";
+
+function hostTestMain(): void {
+  let test: HostTest | undefined;
+  try {
+    test = new HostTest();
+  } catch (e) {
+    console.log(`[pv] g3 host test: setup failed: ${errText(e)}`);
   }
-  return parts.join("");
+  let frameNo = 0;
+  setFrame((_buttons: number): void => {
+    // one picture per shown frame (the host runs several steps to catch up)
+    if (n.lastStep && !n.lastStep()) return;
+    hostTestSound(frameNo);
+    if (test) test.frame(frameNo);
+    if (frameNo === HOSTTEST_SHOT_FRAME) n.screenshot?.();
+    frameNo++;
+  });
 }
 
-const prof = { frames: 0, scene: 0, conv: 0, len: 0 };
-
-class QuickJsG3Host implements G3Host {
-  texUpload(id: number, w: number, h: number, rgba: Uint8Array, repeat: boolean): void {
-    n.g3TexUpload!(id, w, h, rgba, repeat);
+function gameMain(bench: boolean): void {
+  const t0 = clock();
+  const game: any = Game3.new();
+  let ok = true;
+  try {
+    game.load({});
+  } catch (e) {
+    ok = false;
+    console.log(`[pv] g3: Game3 load failed: ${errText(e)}`);
   }
-  texFromCache(id: number, path: string): [number, number] | undefined {
-    const r = n.g3TexFromCache!(id, path);
-    return r ? [r[0], r[1]] : undefined;
+  console.log(`[pv] g3: Game3 loaded in ${((clock() - t0) / 1000).toFixed(0)} ms (phase ${game.phase})`);
+  if (ok && bench) {
+    try {
+      game._handleBootAction({
+        action: "new_game", name: "RED", rivalName: "BLUE", gender: 0,
+        start: { map: "FR_PALLET_TOWN", x: 6, y: 8, facing: "down" },
+      });
+      console.log(`[pv] g3 bench: new game on FR_PALLET_TOWN (6,8), phase ${game.phase}`);
+    } catch (e) {
+      console.log(`[pv] g3 bench: new game failed: ${errText(e)}`);
+    }
   }
-  canvasNew(id: number, w: number, h: number): void { n.g3Canvas!(id, w, h); }
-  texFree(id: number): void { n.g3TexFree!(id); }
-  // sprite batches kept host-side, where the binary has them (an older one
-  // without the natives is sent the quads every frame instead)
-  batchUpload = n.g3BatchUpload
-    ? (id: number, tex: number, quads: Float32Array, count: number): void => n.g3BatchUpload!(id, tex, quads, count)
-    : undefined;
-  batchFree = n.g3BatchFree ? (id: number): void => n.g3BatchFree!(id) : undefined;
-  draw(list: Float32Array): void {
-    const t = clock();
-    // the draw list is already f32 storage (drawlist.ts): handed over as is
-    n.g3Draw!(list);
-    prof.conv += clock() - t;
-    prof.len += list.length;
-  }
-  read(path: string): string | undefined { return n.g3Read!(path); }
-  exists(path: string): boolean { return n.g3Exists!(path); }
-  now(): number { return clock() / 1e6; }
-}
 
-setHost(new QuickJsG3Host());
+  const view = new WorldView(worldOps(), loadWorld());
+  const field = new Game3World(view);
+  const script = new BenchScript(bench && typeof PV_G3_BENCH_SCRIPT === "string" ? PV_G3_BENCH_SCRIPT : "");
+  const shots = shotSet(bench ? (typeof PV_G3_BENCH_SHOTS === "string" ? PV_G3_BENCH_SHOTS : "90,300") : "");
+  let tick = 0;
+  let shown = 0;
+  let failedUpdate = false, failedDraw = false;
+  const prof = { frames: 0, update: 0, draw: 0, emit: 0, ticks: 0 };
 
-/** G3Audio over the host's M4A engine (crates/pocketvoxel-3ds/src/gen3/audio.rs). */
-class QuickJsG3Audio implements G3Audio {
-  playSong(id: number): void { n.g3SongPlay!(id); }
-  stopSong(): void { n.g3SongStop!(); }
-  pauseSong(): void { n.g3SongPause!(); }
-  resumeSong(): void { n.g3SongResume!(); }
-  setSongVolume(gain: number): void { n.g3SongVolume!(gain); }
-  song(): number { return n.g3Song!(); }
-  songPaused(): boolean { return n.g3SongPaused!(); }
-  setMono(mono: boolean): void { n.g3SeMono!(mono); }
-  playSe(id: number, opts: SeOptions): void {
-    n.g3SePlay!(id, opts.looping, opts.maxSec, opts.pan ?? 0, opts.gain ?? 1);
-  }
-  stopSe(id?: number): void { n.g3SeStop!(id ?? -1); }
-  sePlaying(id?: number): boolean { return n.g3SePlaying!(id ?? -1); }
-  setSePan(pan: number): void { n.g3SePan!(pan); }
-  playFanfare(id: number, volume: number): void { n.g3FanfarePlay!(id, volume); }
-  fanfarePlaying(): boolean { return n.g3FanfarePlaying!(); }
-  stopFanfare(): void { n.g3FanfareStop!(); }
-  playCry(species: number, params: CryParams, pan: number, volume: number): number | undefined {
-    // the fields the profile overrode (or the volume the caller gave); the host fills in the rest
-    return n.g3CryPlay!(species, params.mode, pan, volume,
-      params.length, params.release, params.pitch, params.chorus, params.reverse, params.volume);
-  }
-  stopCry(): void { n.g3CryStop!(); }
-  cryPlaying(): boolean { return n.g3CryPlaying!(); }
-  stopAll(): void { n.g3AudioStopAll!(); }
-}
-
-// a binary without the natives (or without an audio pack) keeps the silent engine
-if (n.g3SongPlay && n.g3AudioReady?.()) setAudio(new QuickJsG3Audio());
-console.log(`[pv] g3 sound: guest audio ${n.g3SongPlay ? (n.g3AudioReady?.() ? "on the host engine" : "silent (host has no pack)") : "silent (no natives)"}`);
-
-// Which read is faster on a big file: the C side re-encoding to UTF-8 for an
-// 8-bit string, or an ArrayBuffer turned into a string here.
-{
-  const big = "data/generated/gba/scripts/text.lua";
-  if (n.g3Exists!(big)) {
-    const t0 = clock();
-    const a = n.g3Read!(big);
+  setFrame((buttons: number): void => {
+    if (!ok) return;
+    tick++;
     const t1 = clock();
-    const buf = n.g3ReadBuf!(big);
+    try {
+      Input.hostButtons(padBits(buttons) | script.at(tick));
+      game.update(1 / 60);
+    } catch (e) {
+      if (!failedUpdate) console.log(`[pv] g3: update failed: ${errText(e)}`);
+      failedUpdate = true;
+    }
+    prof.update += clock() - t1;
+    prof.ticks++;
+    // one picture per shown frame (the host runs several steps to catch up)
+    if (n.lastStep && !n.lastStep()) return;
     const t2 = clock();
-    const b = buf ? bytesToString(new Uint8Array(buf)) : undefined;
+    field.begin(game);
+    G.beginFrame();
+    try {
+      game.draw();
+    } catch (e) {
+      if (!failedDraw) console.log(`[pv] g3: draw failed: ${errText(e)}`);
+      failedDraw = true;
+    }
+    G.endFrame();
     const t3 = clock();
-    console.log(`[pv] g3 read ${big}: ${a?.length ?? -1} chars: g3Read ${((t1 - t0) / 1000).toFixed(1)} ms; ` +
-      `g3ReadBuf ${((t2 - t1) / 1000).toFixed(1)} ms + to string ${((t3 - t2) / 1000).toFixed(1)} ms; same ${a === b}`);
-  } else {
-    console.log(`[pv] g3 read test: ${big} not on the card`);
-  }
+    view.emit(field.state(game));
+    const t4 = clock();
+    prof.draw += t3 - t2;
+    prof.emit += t4 - t3;
+    shown++;
+    if (shots.has(shown)) {
+      n.screenshot?.();
+      console.log(`[pv] g3 bench: shot at shown frame ${shown} (tick ${tick}) 3d=${field.world3d} ents=${view.entCount}`);
+    }
+    if (++prof.frames === 150) {
+      const f = prof.frames;
+      console.log(`[pv] g3 guest: update ${(prof.update / prof.ticks / 1000).toFixed(2)} ms/tick (${prof.ticks} ticks), ` +
+        `draw ${(prof.draw / f / 1000).toFixed(2)} ms (g3Draw ${(drawProf.conv / f / 1000).toFixed(2)}, ` +
+        `${Math.round(drawProf.len / f)} floats), world ${(prof.emit / f / 1000).toFixed(2)} ms, ` +
+        `3d=${field.world3d} ents=${view.entCount} phase=${game.phase}`);
+      prof.frames = prof.update = prof.draw = prof.emit = prof.ticks = 0;
+      drawProf.conv = drawProf.len = 0;
+    }
+  });
 }
 
-let test: HostTest | undefined;
-try {
-  test = new HostTest();
-} catch (e) {
-  console.log(`[pv] g3 host test: setup failed: ${String((e as Error)?.stack ?? e)}`);
-}
-
-let frameNo = 0;
-(globalThis as unknown as { frame: (buttons: number) => void }).frame = (_buttons: number): void => {
-  // one picture per shown frame (the host runs several steps to catch up)
-  if (n.lastStep && !n.lastStep()) return;
-  hostTestSound(frameNo);
-  if (!test) { frameNo++; return; }
-  const t = clock();
-  test.frame(frameNo);
-  prof.scene += clock() - t;
-  if (frameNo === HOSTTEST_SHOT_FRAME) n.screenshot?.();
-  frameNo++;
-  if (++prof.frames === 150) {
-    console.log(`[pv] g3 host test: frame ${frameNo}: scene ${(prof.scene / prof.frames / 1000).toFixed(2)} ms ` +
-      `(of which list to f32 + g3Draw ${(prof.conv / prof.frames / 1000).toFixed(2)} ms, ${Math.round(prof.len / prof.frames)} floats)`);
-    prof.frames = prof.scene = prof.conv = prof.len = 0;
-  }
-};
+if (MODE === "hosttest") hostTestMain();
+else gameMain(MODE === "bench");
