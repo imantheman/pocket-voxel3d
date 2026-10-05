@@ -22,6 +22,20 @@ export interface EffectCtx {
   sample?: (texId: number, u: number, v: number) => Rgba;
   /** Sample the texture being drawn at another uv (mosaic); the rasteriser supplies it. */
   self?: (u: number, v: number) => Rgba;
+  /**
+   * The uniforms as an effect has parsed them, kept for the context's life
+   * (one CPU variant, whose uniforms do not change): a variant effect reads
+   * its arrays once rather than once a pixel (graphics.ts variantFor).
+   */
+  memo?: Record<string, unknown>;
+}
+
+/** `ctx.memo[key]`, made by `make` the first time (EffectCtx.memo). */
+export function ctxMemo<T>(ctx: EffectCtx, key: string, make: () => T): T {
+  const m = ctx.memo ?? (ctx.memo = {});
+  let v = m[key] as T | undefined;
+  if (v === undefined) { v = make(); m[key] = v; }
+  return v;
 }
 
 export interface Effect {
@@ -35,6 +49,18 @@ export interface Effect {
    */
   pixel: (texel: Rgba, color: Rgba, tu: number, tv: number, sx: number, sy: number,
     params: number[], ctx: EffectCtx) => Rgba | undefined;
+  /**
+   * Optional, for a CPU variant effect: the whole recoloured copy at once --
+   * exactly the bytes graphics.ts variantFor's per-pixel loop would write
+   * from `pixel` (vertex colour white) -- without an array per pixel.
+   */
+  variant?: (src: Uint8Array, w: number, h: number, ctx: EffectCtx) => Uint8Array;
+}
+
+/** ImageData:setPixel's byte for a channel (variant hooks write what it would). */
+export function toByte(v: number): number {
+  const b = Math.floor(v * 255 + 0.5);
+  return b < 0 ? 0 : b > 255 ? 255 : b;
 }
 
 const BY_NAME = new Map<string, Effect>();

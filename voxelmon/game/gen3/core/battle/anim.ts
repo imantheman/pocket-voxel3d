@@ -158,27 +158,41 @@ function hydrate_tag_images(pack: LuaTable): void {
 /** The fields hydrate_tag sets on a tag's info. */
 const LAZY_TAG_KEYS = ["image", "w", "h", "idxImage", "idxData"];
 
+/** A tag's pending hydration and the prototype it had (lazy_tag). */
+const lazyTags = new WeakMap<object, { hydrate: () => void; proto: object | null }>();
+let lazyTagProto: object | undefined;
+
+/** The first read or write of a lazy field: the tag's own prototype back, then hydrate it. */
+function lazy_run(info: any): boolean {
+  const e = lazyTags.get(info);
+  if (!e) return false;
+  lazyTags.delete(info);
+  Object.setPrototypeOf(info, e.proto);
+  e.hydrate();
+  return true;
+}
+
 /**
- * Stand-ins for hydrate_tag's fields on `info`: the first read or write of
- * any of them takes them off and hydrates the tag, so every reader sees
- * what an eager hydration would have left.
+ * Stand-ins for hydrate_tag's fields on `info`: a prototype whose accessors
+ * hydrate the tag on the first read or write of any of them, so every
+ * reader sees what an eager hydration would have left. (A prototype, set
+ * once per tag, rather than five properties each: the pack's ~580 tags.)
  */
 function lazy_tag(info: any, hydrate: () => void): void {
-  let done = false;
-  const run = (): void => {
-    if (done) return;
-    done = true;
-    for (const k of LAZY_TAG_KEYS) delete info[k];
-    hydrate();
-  };
-  for (const k of LAZY_TAG_KEYS) {
-    Object.defineProperty(info, k, {
-      configurable: true,
-      enumerable: false,
-      get(): unknown { run(); return info[k]; },
-      set(v: unknown): void { run(); info[k] = v; },
-    });
+  if (!lazyTagProto) {
+    const proto: any = {};
+    for (const k of LAZY_TAG_KEYS) {
+      Object.defineProperty(proto, k, {
+        configurable: true,
+        enumerable: false,
+        get(this: any): unknown { return lazy_run(this) ? this[k] : undefined; },
+        set(this: any, v: unknown): void { lazy_run(this); Object.defineProperty(this, k, { value: v, writable: true, enumerable: true, configurable: true }); },
+      });
+    }
+    lazyTagProto = proto;
   }
+  lazyTags.set(info, { hydrate, proto: Object.getPrototypeOf(info) });
+  Object.setPrototypeOf(info, lazyTagProto!);
 }
 
 // One tag of Lua anim.lua:655's loop.
@@ -1127,11 +1141,18 @@ export const Anim: Record<string, any> = {
     let data: ImageData | null;
     try { data = newImageData(Fs.newFileData(bytes, rel)); } catch { data = null; }
     if (!data) return null;
-    data.mapPixel((_x, _y, r, _g, _b, a) => {
-      if (a < 0.5) return [0, 0, 0, 0];
+    // NOT FAITHFUL (performance, same pixels): the mapPixel below, run over
+    // the bytes in place with the same arithmetic (no closure call and
+    // arrays per pixel); toByte is mapPixel's own write-back
+    const px = data.px;
+    const toByte = (v: number): number => { const b = Math.floor(v * 255 + 0.5); return b < 0 ? 0 : b > 255 ? 255 : b; };
+    for (let o = 0; o < px.length; o += 4) {
+      const r = px[o]! / 255, a = px[o + 3]! / 255;
+      if (a < 0.5) { px[o] = 0; px[o + 1] = 0; px[o + 2] = 0; px[o + 3] = 0; continue; }
       const c = row[Math.floor(r * 255 / 16 + 0.5) + 1] ?? row[1];
-      return [c[1] / 255, c[2] / 255, c[3] / 255, 1];
-    });
+      px[o] = toByte(c[1] / 255); px[o + 1] = toByte(c[2] / 255); px[o + 2] = toByte(c[3] / 255); px[o + 3] = toByte(1);
+    }
+    data.version++;
     const img = G.newImage(data);
     img.setFilter("nearest", "nearest");
     img.setWrap("repeat", "repeat");

@@ -57,6 +57,9 @@ export class Shader {
   version = 0;
   packedVersion = -1;
   packed: number[] = [];
+  /** variantFor's key text for the uniforms, and the version it was made at. */
+  key = "";
+  keyVersion = -1;
   constructor(readonly name: string) {
     const e = effectByName(name);
     if (!e) throw new Error(`newShader: no effect named '${name}' (platform/effects)`);
@@ -156,15 +159,24 @@ function syncState(): void {
 
 // CPU variant effects: a recoloured copy of the image per (image, uniforms)
 const variants = new Map<string, Image>();
+/** A shader's uniforms as variantFor's key text, made again only after a send. */
+function uniformKey(sh: Shader): string {
+  if (sh.keyVersion !== sh.version) {
+    sh.key = JSON.stringify(sh.uniforms, (_k, v) => (v instanceof Image ? `#${v.id}` : v));
+    sh.keyVersion = sh.version;
+  }
+  return sh.key;
+}
 function variantFor(img: Image, sh: Shader): Image {
   if (!img.data) return img; // NOT FAITHFUL: a host-only image cannot be recoloured guest-side
-  const key = `${img.id}:${img.data.version}:${sh.name}:${JSON.stringify(sh.uniforms, (_k, v) => (v instanceof Image ? `#${v.id}` : v))}`;
+  const key = `${img.id}:${img.data.version}:${sh.name}:${uniformKey(sh)}`;
   const hit = variants.get(key);
   if (hit) return hit;
   const src = img.data.px;
-  const out = new ImageData(img.w, img.h);
   const ctx = { u: sh.uniforms };
-  for (let y = 0; y < img.h; y++) {
+  const fast = sh.effect.variant;
+  const out = fast ? new ImageData(img.w, img.h, fast(src, img.w, img.h, ctx)) : new ImageData(img.w, img.h);
+  if (!fast) for (let y = 0; y < img.h; y++) {
     for (let x = 0; x < img.w; x++) {
       const o = (y * img.w + x) * 4;
       const t: Rgba = [src[o]! / 255, src[o + 1]! / 255, src[o + 2]! / 255, src[o + 3]! / 255];
@@ -329,11 +341,18 @@ function uploadBatch(host: ReturnType<typeof getHost>, sb: SpriteBatch): void {
   for (let i = 0; i < ents.length; i++) {
     const e = ents[i];
     if (!e || e.x < -1e5 || e.y < -1e5) continue; // hidden cells (field_view parks them at -1e6)
-    drawMatrixInto(e.x, e.y, e.r ?? 0, e.sx ?? 1, e.sy ?? e.sx ?? 1, 0, 0);
+    let a: number, b: number, c: number, d: number, ex: number, fy: number;
+    const er = e.r ?? 0, esx = e.sx ?? 1, esy = e.sy ?? e.sx ?? 1;
+    if (er === 0 && esx === 1 && esy === 1) {
+      // drawMatrixInto's numbers for the plain cell, without the call
+      a = 1; b = 0; c = 0; d = 1; ex = e.x - 0; fy = e.y - 0;
+    } else {
+      drawMatrixInto(e.x, e.y, er, esx, esy, 0, 0);
+      a = DM[0]!; b = DM[1]!; c = DM[2]!; d = DM[3]!; ex = DM[4]!; fy = DM[5]!;
+    }
     const q = e.quad;
     const qx = q ? q.x : 0, qy = q ? q.y : 0, qw = q ? q.w : img.w, qh = q ? q.h : img.h;
     const sw = q ? q.sw : img.w, sh = q ? q.sh : img.h;
-    const a = DM[0]!, b = DM[1]!, c = DM[2]!, d = DM[3]!, ex = DM[4]!, fy = DM[5]!;
     const ax = a * qw, bx = b * qw, cy = c * qh, dy = d * qh;
     const o = n * 12;
     q8[o] = ex; q8[o + 1] = fy; q8[o + 2] = ex + ax; q8[o + 3] = fy + bx;

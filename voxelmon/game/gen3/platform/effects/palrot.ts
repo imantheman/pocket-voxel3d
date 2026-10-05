@@ -1,7 +1,7 @@
 // pocket-voxel platform for the gen3 (FireRed) port (GPLv3 + additional terms;
 // see LICENSE.md). Effect 'palrot': the shader at gen1recomp src/core/game3/battle/anim_port/g2_pret.lua:779, in JS.
 
-import { glsl, registerEffect, type Rgba } from "../effects.ts";
+import { ctxMemo, glsl, registerEffect, type Rgba } from "../effects.ts";
 
 // A CPU variant effect (a 16-colour array uniform). Uniforms: rot, lo, hi, count, cols[16].
 registerEffect({
@@ -10,7 +10,7 @@ registerEffect({
     const mul = (o: number[]): Rgba => [o[0]! * c[0], o[1]! * c[1], o[2]! * c[2], t[3] * c[3]];
     if (t[3] < 0.01) return mul(t);
     const rot = glsl.num(ctx.u.rot), lo = glsl.num(ctx.u.lo), hi = glsl.num(ctx.u.hi), count = glsl.num(ctx.u.count);
-    const cols = glsl.arr(ctx.u.cols, 16);
+    const cols = ctxMemo(ctx, "cols", () => glsl.arr(ctx.u.cols, 16));
     let best = 1e9, bi = -1;
     for (let i = 1; i < 16; i++) {
       if (i >= lo && i <= hi) {
