@@ -184,6 +184,33 @@ function emitQuadS(img: Image, la: number, lb: number, lc: number, ld: number, l
     qx / sw, qy / sh, (qx + qw) / sw, (qy + qh) / sh, col[0], col[1], col[2], col[3]);
 }
 
+/** A sprite batch's quads, batch-local, to the host (G3Host.batchUpload). */
+let batchScratch = new Float32Array(12 * 256);
+function uploadBatch(host: ReturnType<typeof getHost>, sb: SpriteBatch): void {
+  const ents = sb.entries;
+  const img = sb.texture;
+  if (batchScratch.length < ents.length * 12) batchScratch = new Float32Array(ents.length * 12 * 2);
+  const q8 = batchScratch;
+  let n = 0;
+  for (let i = 0; i < ents.length; i++) {
+    const e = ents[i];
+    if (!e || e.x < -1e5 || e.y < -1e5) continue; // hidden cells (field_view parks them at -1e6)
+    drawMatrixInto(e.x, e.y, e.r ?? 0, e.sx ?? 1, e.sy ?? e.sx ?? 1, 0, 0);
+    const q = e.quad;
+    const qx = q ? q.x : 0, qy = q ? q.y : 0, qw = q ? q.w : img.w, qh = q ? q.h : img.h;
+    const sw = q ? q.sw : img.w, sh = q ? q.sh : img.h;
+    const a = DM[0]!, b = DM[1]!, c = DM[2]!, d = DM[3]!, ex = DM[4]!, fy = DM[5]!;
+    const ax = a * qw, bx = b * qw, cy = c * qh, dy = d * qh;
+    const o = n * 12;
+    q8[o] = ex; q8[o + 1] = fy; q8[o + 2] = ex + ax; q8[o + 3] = fy + bx;
+    q8[o + 4] = ex + ax + cy; q8[o + 5] = fy + bx + dy; q8[o + 6] = ex + cy; q8[o + 7] = fy + dy;
+    q8[o + 8] = qx / sw; q8[o + 9] = qy / sh; q8[o + 10] = (qx + qw) / sw; q8[o + 11] = (qy + qh) / sh;
+    n++;
+  }
+  host.batchUpload!(sb.id, img.id, q8.subarray(0, n * 12), n);
+  sb.uploaded = sb.version;
+}
+
 /** drawMatrix's six numbers into the scratch below (no array per draw). */
 const DM = [1, 0, 0, 1, 0, 0];
 function drawMatrixInto(x: number, y: number, r: number, sx: number, sy: number, ox: number, oy: number): void {
@@ -304,6 +331,20 @@ export const G = {
         (p5 as number) ?? (p4 as number) ?? 1, (p6 as number) ?? 0, (p7 as number) ?? 0);
       const ba = DM[0]!, bb = DM[1]!, bc = DM[2]!, bd = DM[3]!, be = DM[4]!, bf = DM[5]!;
       const img = drawable.texture;
+      const host = getHost();
+      const sh0 = st.shader;
+      if (host.batchUpload && !(sh0 && !sh0.effect.pack)) {
+        // the host holds the batch: one op a frame, the quads re-sent only after a change
+        if (drawable.uploaded !== drawable.version) uploadBatch(host, drawable);
+        img.sync();
+        syncState();
+        const m = st.m;
+        const col = st.color;
+        list.batch(drawable.id, img.id,
+          m[0] * ba + m[2] * bb, m[1] * ba + m[3] * bb, m[0] * bc + m[2] * bd, m[1] * bc + m[3] * bd,
+          m[0] * be + m[2] * bf + m[4], m[1] * be + m[3] * bf + m[5], col[0], col[1], col[2], col[3]);
+        return;
+      }
       const ents = drawable.entries;
       for (let i = 0; i < ents.length; i++) {
         const e = ents[i];

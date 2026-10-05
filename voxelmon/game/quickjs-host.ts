@@ -161,6 +161,9 @@ export interface VoxelNative {
   g3TexFree?(id: number): void;
   /** The frame's draw list (gen3/platform/drawlist.ts), as f32. */
   g3Draw?(list: Float32Array): void;
+  /** A sprite batch the gen3 renderer keeps (platform/host.ts batchUpload). */
+  g3BatchUpload?(id: number, tex: number, quads: Float32Array, count: number): void;
+  g3BatchFree?(id: number): void;
   /** A cache file as a byte string (one char per byte), or undefined. */
   g3Read?(path: string): string | undefined;
   /** A cache file's bytes, or undefined. */

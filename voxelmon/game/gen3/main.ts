@@ -36,6 +36,12 @@ class QuickJsG3Host implements G3Host {
   }
   canvasNew(id: number, w: number, h: number): void { n.g3Canvas!(id, w, h); }
   texFree(id: number): void { n.g3TexFree!(id); }
+  // sprite batches kept host-side, where the binary has them (an older one
+  // without the natives is sent the quads every frame instead)
+  batchUpload = n.g3BatchUpload
+    ? (id: number, tex: number, quads: Float32Array, count: number): void => n.g3BatchUpload!(id, tex, quads, count)
+    : undefined;
+  batchFree = n.g3BatchFree ? (id: number): void => n.g3BatchFree!(id) : undefined;
   draw(list: Float32Array): void {
     const t = clock();
     // the draw list is already f32 storage (drawlist.ts): handed over as is

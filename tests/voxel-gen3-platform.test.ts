@@ -127,6 +127,37 @@ describe("gen3 platform", () => {
     expect(px(host, 13, 0)).toEqual([0, 0, 255, 255]);
   });
 
+  test("sprite batches the host holds draw exactly as the per-quad fallback", () => {
+    const d = new ImageData(16, 16);
+    for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) d.setPixel(x, y, x / 15, y / 15, (x ^ y) & 1, 1);
+    const shot = (withBatches: boolean): number[] => {
+      const h = new DesktopHost(mkdtempSync(join(tmpdir(), "g3b-")));
+      if (!withBatches) (h as any).batchUpload = undefined;
+      setHost(h);
+      const img = G.newImage(d);
+      const sb = G.newSpriteBatch(img);
+      const qa = G.newQuad(0, 0, 8, 8, 16, 16), qb = G.newQuad(8, 8, 8, 8, 16, 16);
+      for (let i = 0; i < 6; i++) sb.add(i & 1 ? qa : qb, i * 9, (i % 3) * 7, 0, 1 + (i % 2));
+      for (let f = 0; f < 3; f++) {
+        if (f === 2) sb.set(3, qa, 40, 30); // a change after the first upload
+        G.beginFrame();
+        G.clear(0, 0, 0, 1);
+        G.push();
+        G.translate(5, 4);
+        G.setColor(1, 0.8, 0.9, 1);
+        G.draw(sb, 10, 20, 0.3, 1.5, 1.25, 2, 1);
+        G.pop();
+        G.setColor(1, 1, 1, 1);
+        G.endFrame();
+      }
+      return Array.from(h.pixels());
+    };
+    const a = shot(true), b = shot(false);
+    setHost(host);
+    expect(a.some((v, i) => i % 4 !== 3 && v > 0)).toBe(true);
+    expect(a).toEqual(b);
+  });
+
   test("PNG decode: stored, zlib-compressed, through newImageData", () => {
     const rgba = new Uint8Array(3 * 2 * 4).map((_, i) => (i * 37) & 255);
     const ours = decodePngBytes(encodePng(3, 2, rgba));

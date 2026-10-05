@@ -37,6 +37,10 @@ export class DesktopHost implements G3Host {
     this.raster.tex.set(id, { w, h, px: new Uint8Array(w * h * 4), repeat: false });
   }
   texFree(id: number): void { this.raster.tex.delete(id); }
+  batchUpload(id: number, tex: number, quads: Float32Array, count: number): void {
+    this.raster.batches.set(id, { tex, q: quads.slice(0, count * 12), n: count });
+  }
+  batchFree(id: number): void { this.raster.batches.delete(id); }
   draw(list: Float32Array): void {
     this.lastList = Array.from(list);
     this.raster.run(list);

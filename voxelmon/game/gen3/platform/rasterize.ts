@@ -6,7 +6,7 @@
 // framebuffer), blend modes follow LÖVE 11's blend functions.
 
 import {
-  OP_CLEAR, OP_QUAD, OP_STATE, OP_TARGET, OP_TRIS, STATE_PARAMS,
+  OP_BATCH, OP_CLEAR, OP_QUAD, OP_STATE, OP_TARGET, OP_TRIS, STATE_PARAMS,
   BLEND_ADD, BLEND_ADD_PREMUL, BLEND_ALPHA, BLEND_ALPHA_PREMUL, BLEND_MULTIPLY, BLEND_REPLACE, BLEND_SUBTRACT,
 } from "./drawlist.ts";
 import { effectById, type Rgba } from "./effects.ts";
@@ -16,6 +16,8 @@ export interface Tex { w: number; h: number; px: Uint8Array; repeat: boolean }
 export class Rasterizer {
   /** Textures and canvases by id (canvases are textures too). */
   tex = new Map<number, Tex>();
+  /** Sprite batches the host holds (OP_BATCH): quads of 12 floats, batch-local. */
+  batches = new Map<number, { tex: number; q: Float32Array; n: number }>();
   /** The frame (target 0). */
   frame: Tex;
 
@@ -56,6 +58,20 @@ export class Rasterizer {
         const col = buf.slice(i + 14, i + 18) as Rgba;
         this.quad(target, this.tex.get(texId), c, u0, v0, u1, v1, col, blend, effect, params, scissor);
         i += 18;
+      } else if (op === OP_BATCH) {
+        const bt = this.batches.get(buf[i + 1]!);
+        const tex = this.tex.get(buf[i + 2]!);
+        const [a, b, c, d, e, f] = buf.slice(i + 3, i + 9) as [number, number, number, number, number, number];
+        const col = buf.slice(i + 9, i + 13) as Rgba;
+        if (bt) {
+          for (let k = 0; k < bt.n; k++) {
+            const o = k * 12, q = bt.q;
+            const cs: number[] = [];
+            for (let j = 0; j < 8; j += 2) cs.push(a * q[o + j]! + c * q[o + j + 1]! + e, b * q[o + j]! + d * q[o + j + 1]! + f);
+            this.quad(target, tex, cs, q[o + 8]!, q[o + 9]!, q[o + 10]!, q[o + 11]!, col, blend, effect, params, scissor);
+          }
+        }
+        i += 13;
       } else if (op === OP_TRIS) {
         const n = buf[i + 1]!;
         const col = buf.slice(i + 2, i + 6) as Rgba;

@@ -14,6 +14,14 @@ export interface G3Host {
   /** One composed frame's draw list (drawlist.ts). */
   /** The view is valid only during the call (the guest reuses the storage). */
   draw(list: Float32Array): void;
+  /**
+   * Optional: hold sprite batch `id` -- `count` quads of 12 floats each
+   * (x0 y0 x1 y1 x2 y2 x3 y3 u0 v0 u1 v1, batch-local, corners TL TR BR BL)
+   * on texture `tex` -- for OP_BATCH to draw. Replaces any batch with that id.
+   * A host without it is sent the quads every frame instead.
+   */
+  batchUpload?(id: number, tex: number, quads: Float32Array, count: number): void;
+  batchFree?(id: number): void;
   /** A cache file's bytes as a byte string, or undefined. */
   read(path: string): string | undefined;
   exists(path: string): boolean;

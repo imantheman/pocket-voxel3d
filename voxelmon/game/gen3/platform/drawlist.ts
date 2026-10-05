@@ -9,6 +9,9 @@
 //   OP_STATE   blend effect nParams p0..p7 scissorX scissorY scissorW scissorH (scissor -1 = none)
 //   OP_QUAD    tex x0 y0 x1 y1 x2 y2 x3 y3 u0 v0 u1 v1 r g b a     (corners TL TR BR BL)
 //   OP_TRIS    n r g b a  x0 y0 x1 y1 x2 y2 ...                   (n flat triangles)
+//   OP_BATCH   batch tex a b c d e f r g b a                       (a sprite batch the host holds
+//              -- G3Host.batchUpload -- drawn under the affine x' = a x + c y + e,
+//              y' = b x + d y + f, every quad tinted r g b a)
 //
 // Texture ids name host textures: cooked pack images, guest uploads and
 // canvases (see textures.ts).
@@ -18,6 +21,7 @@ export const OP_CLEAR = 2;
 export const OP_STATE = 3;
 export const OP_QUAD = 4;
 export const OP_TRIS = 5;
+export const OP_BATCH = 6;
 
 export const BLEND_ALPHA = 0;
 /** "alpha", "premultiplied" */
@@ -136,6 +140,17 @@ export class DrawList {
     f[n++] = x2; f[n++] = y2; f[n++] = x3; f[n++] = y3;
     f[n++] = u0; f[n++] = v0; f[n++] = u1; f[n++] = v1;
     f[n++] = r; f[n++] = g; f[n++] = b; f[n++] = a;
+    this.n = n;
+  }
+
+  batch(id: number, tex: number, a: number, b: number, c: number, d: number, e: number, f0: number,
+    r: number, g: number, bl: number, al: number): void {
+    if (this.n + 13 > this.f.length) this.room(13);
+    const f = this.f;
+    let n = this.n;
+    f[n++] = OP_BATCH; f[n++] = id; f[n++] = tex;
+    f[n++] = a; f[n++] = b; f[n++] = c; f[n++] = d; f[n++] = e; f[n++] = f0;
+    f[n++] = r; f[n++] = g; f[n++] = bl; f[n++] = al;
     this.n = n;
   }
 

@@ -315,6 +315,44 @@ int g3_gpu_init(const uint8_t *shbin, uint32_t len) {
     return 1;
 }
 
+/* ---------------------------------------------------------------- sprite batches */
+
+/* The guest's sprite batches (OP_BATCH): quads of 12 floats each -- x0 y0 x1
+   y1 x2 y2 x3 y3 u0 v0 u1 v1, batch-local -- kept until replaced or freed,
+   so a batch that did not change costs one op a frame instead of its quads. */
+typedef struct { int tex; float *q; int n, cap; } G3Batch;
+static G3Batch *batches;
+static int nbatches;
+
+void g3_batch_upload(int id, int tex, const float *q, int n) {
+    if (id <= 0 || n < 0) return;
+    if (id >= nbatches) {
+        int c = nbatches ? nbatches : 64;
+        while (c <= id) c *= 2;
+        G3Batch *nb = (G3Batch *)realloc(batches, (size_t)c * sizeof(G3Batch));
+        if (!nb) return;
+        memset(nb + nbatches, 0, (size_t)(c - nbatches) * sizeof(G3Batch));
+        batches = nb;
+        nbatches = c;
+    }
+    G3Batch *b = &batches[id];
+    if (n * 12 > b->cap) {
+        float *nq = (float *)realloc(b->q, (size_t)n * 12 * sizeof(float));
+        if (!nq) { b->n = 0; return; }
+        b->q = nq;
+        b->cap = n * 12;
+    }
+    if (n) memcpy(b->q, q, (size_t)n * 12 * sizeof(float));
+    b->n = n;
+    b->tex = tex;
+}
+
+void g3_batch_free(int id) {
+    if (id <= 0 || id >= nbatches) return;
+    free(batches[id].q);
+    memset(&batches[id], 0, sizeof(G3Batch));
+}
+
 void g3_draw(const float *f, size_t n) {
     if (n > list_cap) {
         size_t c = list_cap ? list_cap : 4096;
@@ -1041,6 +1079,28 @@ static void run_list(const float *f, size_t n) {
             emit_poly(p, 4);
             st_quads++;
             i += 18;
+        } else if (op == 6) { /* OP_BATCH: id tex a b c d e f r g b a */
+            if (i + 13 > n) break;
+            int id = (int)f[i + 1];
+            const float *m = f + i + 3;
+            G3Batch *b = (id > 0 && id < nbatches) ? &batches[id] : NULL;
+            if (b && b->n > 0) {
+                G3Tex *t = tex_get((int)f[i + 2]);
+                prim_begin(t, f + i + 9);
+                const float *q = b->q;
+                for (int k = 0; k < b->n; k++, q += 12) {
+                    float u0 = q[8], v0 = q[9], u1 = q[10], v1 = q[11];
+                    PV p[4] = {
+                        {{m[0] * q[0] + m[2] * q[1] + m[4], m[1] * q[0] + m[3] * q[1] + m[5], u0, v0}},
+                        {{m[0] * q[2] + m[2] * q[3] + m[4], m[1] * q[2] + m[3] * q[3] + m[5], u1, v0}},
+                        {{m[0] * q[4] + m[2] * q[5] + m[4], m[1] * q[4] + m[3] * q[5] + m[5], u1, v1}},
+                        {{m[0] * q[6] + m[2] * q[7] + m[4], m[1] * q[6] + m[3] * q[7] + m[5], u0, v1}},
+                    };
+                    emit_poly(p, 4);
+                }
+                st_quads += b->n;
+            }
+            i += 13;
         } else if (op == 5) { /* OP_TRIS */
             if (i + 6 > n) break;
             int nt = (int)f[i + 1];

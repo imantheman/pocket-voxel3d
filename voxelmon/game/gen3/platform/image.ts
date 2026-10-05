@@ -4,7 +4,7 @@
 // (a render target), Quad, SpriteBatch; and love.image's ImageData /
 // love.filesystem's FileData for PNG bytes.
 
-import { getHost } from "./host.ts";
+import { getHost, hasHost } from "./host.ts";
 import { ImageData as BaseImageData } from "../../../import/gen3/imagedata.ts";
 import { decodePngBytes } from "./pngdecode.ts";
 import { toBytes } from "../../../import/gen3/lua.ts";
@@ -147,12 +147,20 @@ export class Quad {
 
 export interface BatchEntry { quad: Quad | undefined; x: number; y: number; r: number; sx: number; sy: number }
 
+let nextBatchId = 1;
+
 export class SpriteBatch {
   texture: Image;
   entries: BatchEntry[] = [];
+  /** The host's name for this batch (G3Host.batchUpload). */
+  readonly id = nextBatchId++;
+  /** Bumped by every change; the host copy is re-sent only then. */
+  version = 0;
+  uploaded = -1;
   constructor(texture: Image, readonly capacity = 1000) { this.texture = texture; }
   /** add(quad, x, y[, r, sx, sy]) -> 1-based index */
   add(quad: Quad | number, x?: number, y?: number, r = 0, sx = 1, sy?: number): number {
+    this.version++;
     if (typeof quad === "number") {
       this.entries.push({ quad: undefined, x: quad, y: x ?? 0, r: y ?? 0, sx: 1, sy: 1 });
     } else {
@@ -161,13 +169,24 @@ export class SpriteBatch {
     return this.entries.length;
   }
   set(index: number, quad: Quad, x = 0, y = 0, r = 0, sx = 1, sy?: number): void {
-    this.entries[index - 1] = { quad, x, y, r, sx, sy: sy ?? sx };
+    const e = this.entries[index - 1];
+    const syv = sy ?? sx;
+    // re-setting a cell to what it already shows is common (field_view re-samples)
+    if (e && e.quad === quad && e.x === x && e.y === y && e.r === r && e.sx === sx && e.sy === syv) return;
+    this.version++;
+    if (e) { e.quad = quad; e.x = x; e.y = y; e.r = r; e.sx = sx; e.sy = syv; }
+    else this.entries[index - 1] = { quad, x, y, r, sx, sy: syv };
   }
-  clear(): void { this.entries.length = 0; }
+  clear(): void { if (this.entries.length) this.version++; this.entries.length = 0; }
   getCount(): number { return this.entries.length; }
   getTexture(): Image { return this.texture; }
-  setTexture(t: Image): void { this.texture = t; }
+  setTexture(t: Image): void { if (t !== this.texture) this.version++; this.texture = t; }
   flush(): void {}
-  release(): void { this.entries.length = 0; }
+  release(): void {
+    this.entries.length = 0;
+    this.version++;
+    if (hasHost()) getHost().batchFree?.(this.id);
+    this.uploaded = -1;
+  }
   type(): string { return "SpriteBatch"; }
 }

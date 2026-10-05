@@ -24,6 +24,8 @@ int g3_tex_from_cache(int id, const char *path, int *ow, int *oh);
 void g3_canvas_new(int id, int w, int h);
 void g3_tex_free(int id);
 void g3_draw(const float *f, size_t n);
+void g3_batch_upload(int id, int tex, const float *q, int n);
+void g3_batch_free(int id);
 uint8_t *g3_read_file(const char *path, size_t *len);
 int g3_exists(const char *path);
 
@@ -103,6 +105,30 @@ static JSValue g3_drawlist(JSContext *ctx, JSValueConst t, int c, JSValueConst *
     return JS_UNDEFINED;
 }
 
+/* g3BatchUpload(id, tex, Float32Array, count) / g3BatchFree(id): a sprite
+   batch the renderer keeps for OP_BATCH (platform/host.ts batchUpload). */
+static JSValue g3_batchupload(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 4) return JS_UNDEFINED;
+    int32_t id = 0, tex = 0, n = 0; /* int32_t is long on devkitARM */
+    JS_ToInt32(ctx, &id, v[0]);
+    JS_ToInt32(ctx, &tex, v[1]);
+    JS_ToInt32(ctx, &n, v[3]);
+    size_t len = 0;
+    const uint8_t *p = g3_bytes(ctx, v[2], &len);
+    if (n < 0 || (p == NULL && n > 0) || ((uintptr_t)p & 3) || len / 4 < (size_t)n * 12) return JS_UNDEFINED;
+    g3_batch_upload((int)id, (int)tex, (const float *)p, (int)n);
+    return JS_UNDEFINED;
+}
+
+static JSValue g3_batchfree(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    int32_t id = 0;
+    if (c >= 1) JS_ToInt32(ctx, &id, v[0]);
+    g3_batch_free((int)id);
+    return JS_UNDEFINED;
+}
+
 /* The file as a JS string of one char per byte: the bytes re-encoded as
    UTF-8 (0x80..0xff take two), which QuickJS decodes into an 8-bit string. */
 static JSValue g3_read(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
@@ -173,6 +199,8 @@ int qjs_register_g3(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "g3Canvas", JS_NewCFunction(ctx, g3_canvas, "g3Canvas", 3));
     JS_SetPropertyStr(ctx, o, "g3TexFree", JS_NewCFunction(ctx, g3_texfree, "g3TexFree", 1));
     JS_SetPropertyStr(ctx, o, "g3Draw", JS_NewCFunction(ctx, g3_drawlist, "g3Draw", 1));
+    JS_SetPropertyStr(ctx, o, "g3BatchUpload", JS_NewCFunction(ctx, g3_batchupload, "g3BatchUpload", 4));
+    JS_SetPropertyStr(ctx, o, "g3BatchFree", JS_NewCFunction(ctx, g3_batchfree, "g3BatchFree", 1));
     JS_SetPropertyStr(ctx, o, "g3Read", JS_NewCFunction(ctx, g3_read, "g3Read", 1));
     JS_SetPropertyStr(ctx, o, "g3ReadBuf", JS_NewCFunction(ctx, g3_readbuf, "g3ReadBuf", 1));
     JS_SetPropertyStr(ctx, o, "g3Exists", JS_NewCFunction(ctx, g3_exists_js, "g3Exists", 1));
