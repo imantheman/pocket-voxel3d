@@ -117,6 +117,8 @@ function special(x: number, upper: boolean): string | undefined {
 
 /** tostring(n) as LuaJIT prints it ("%.14g"). */
 export function numberToString(n: number): string {
+  // the common case first, as below gives it: an int32 (but -0) is its digits
+  if ((n | 0) === n && (n !== 0 || 1 / n > 0)) return "" + n;
   if (Number.isNaN(n)) return "nan";
   if (n === Infinity) return "inf";
   if (n === -Infinity) return "-inf";
