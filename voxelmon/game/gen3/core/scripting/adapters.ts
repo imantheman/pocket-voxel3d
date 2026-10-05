@@ -44,6 +44,7 @@ import { HouseNpcs as HouseNpcsMod } from "../house_npcs_stub.ts";
 // house_npcs_stub has no pushText (Brian guards it: `if HouseNpcs and HouseNpcs.pushText`).
 const HouseNpcs: any = HouseNpcsMod;
 import Runtime from "../runtime.ts";
+import { G3Lazy } from "../lazy_registry.ts";
 import { Hud } from "../../ui/hud.ts";
 import { Message } from "../../ui/message.ts";
 import { Choice } from "../../ui/choice.ts";
@@ -82,7 +83,9 @@ import { EasyChat } from "../../ui/easy_chat.ts";
 type Fn = (...a: any[]) => any;
 
 // pcall(require, name) for a module with no file in the port: [false, err].
-function pcallMissing(name: string): [false, string] {
+// A lazily-required module registered in G3Lazy is a successful require.
+function pcallMissing(name: string): [boolean, any] {
+  if (G3Lazy[name] != null) return [true, G3Lazy[name]];
   try {
     notPorted(`require("${name}") (no such module in the port yet)`);
   } catch (e) {
@@ -111,10 +114,12 @@ function stdString(idIn: any): string | null {
 
 // pokeemerald/src/scrcmd.c:1599 StringCopy(..., gDecorations[decorId].name)
 // Lua: adapters.lua:31
-function decorationName(_src: any): string | null {
-  // pcall(require, "src.core.game3.rse.decoration_inventory")
-  const [ok] = pcallMissing("src.core.game3.rse.decoration_inventory");
-  if (!ok) return null;
+function decorationName(src: any): string | null {
+  const [ok, DecorInv] = pcallMissing("src.core.game3.rse.decoration_inventory");
+  if (!ok || DecorInv === null || typeof DecorInv !== "object" || !DecorInv.info) return null;
+  let info: any;
+  try { info = DecorInv.info(src); } catch { return null; }
+  if (info !== null && typeof info === "object" && typeof info.name === "string" && info.name !== "") return info.name;
   return null;
 }
 
@@ -1101,9 +1106,9 @@ export const Adapters = {
           }
           const ok = Game3Bag.add(session.bag, storeId, qty)[0];
           if (ok && (id === "TOWN_MAP" || num === 361)) {
-            // pcall(require, "src.core.game3.town_map_stub"): no such module
-            const [tmOk] = pcallMissing("src.core.game3.town_map_stub");
-            void tmOk;
+            // Lua: adapters.lua:1020 pcall(require, "src.core.game3.town_map_stub")
+            const [tmOk, TownMap] = pcallMissing("src.core.game3.town_map_stub");
+            if (tmOk && TownMap.unlockSeviiMap) TownMap.unlockSeviiMap(mod);
           }
           if (ok && ItemsData.pocketOf(storeId) === "KEY_ITEMS"
             && FieldModules.enabled("questLog", session)) {
@@ -1134,9 +1139,11 @@ export const Adapters = {
         }
         const ok = HostBag.add(g.save, id, qty);
         if (ok && id === "TOWN_MAP") {
-          // pcall(require, "src.core.game3.town_map_stub"): no such module
-          const [tmOk] = pcallMissing("src.core.game3.town_map_stub");
-          void tmOk;
+          // Lua: adapters.lua:1053 pcall(require, "src.core.game3.town_map_stub")
+          const [tmOk, TownMap] = pcallMissing("src.core.game3.town_map_stub");
+          if (tmOk && TownMap.unlockSeviiMap) {
+            TownMap.unlockSeviiMap(mod);
+          }
         }
         return ok ? true : false;
       },
@@ -1250,16 +1257,15 @@ export const Adapters = {
       },
       // pokefirered/src/field_specials.c:1094
       // Lua: adapters.lua:1177
-      elevatorWindow: (_floorLabel: any) => {
-        // pcall(require, "src.ui.game3.elevator_window"): no such module
-        const [ok] = pcallMissing("src.ui.game3.elevator_window");
-        void ok;
+      elevatorWindow: (floorLabel: any) => {
+        const [ok, Window] = pcallMissing("src.ui.game3.elevator_window");
+        if (ok && Window && Window.show) Window.show(floorLabel);
       },
       // pokefirered/src/field_specials.c:1113
       // Lua: adapters.lua:1182
       elevatorWindowClose: () => {
-        const [ok] = pcallMissing("src.ui.game3.elevator_window");
-        void ok;
+        const [ok, Window] = pcallMissing("src.ui.game3.elevator_window");
+        if (ok && Window && Window.hide) Window.hide();
       },
       // pokefirered/src/overworld.c:605
       // Lua: adapters.lua:1187

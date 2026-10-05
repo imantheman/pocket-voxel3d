@@ -4,7 +4,10 @@
 
 import { tostring } from "../../../import/gen3/lua.ts";
 import { G } from "../platform/graphics.ts";
-import { Display } from "../core/display.ts";
+// The Display data fields (TILE, COLS) come from the leaf table, so reading
+// them at load is safe in the import cycle; display.ts is still loaded here.
+import { Display } from "../core/display_table.ts";
+import "../core/display.ts";
 import { Chrome } from "./chrome.ts";
 import { FrlgFont, type Colors, type FontOpts } from "./frlg_font.ts";
 

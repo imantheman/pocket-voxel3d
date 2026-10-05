@@ -5,10 +5,11 @@
 //
 // The RSE engine (src.core.game3.field_weather_rse) is Emerald only and has
 // no port: rseEngine() is nil for FireRed's profile and throws for an "rse"
-// one. src.core.game3.field_weather has no module at all, so apply() takes
-// Brian's failed-require path for it.
+// one. src.core.game3.field_weather is a lazily-required module: apply()
+// looks it up in G3Lazy and takes Brian's failed-require path when absent.
 
 import { mod, tonumber } from "../../../import/gen3/lua.ts";
+import { G3Lazy } from "./lazy_registry.ts";
 import { luaLoad } from "../platform/luadata.ts";
 import { Profile } from "./profile.ts";
 import { Dataset } from "./dataset.ts";
@@ -312,8 +313,12 @@ export const Weather = {
     Weather.current = tonumber(id) ?? Weather.NONE;
     Weather._active = Weather.current !== Weather.NONE && Weather.current !== Weather.SUNNY;
 
-    // pcall(lazyReq, "src.core.game3.field_weather"): there is no such module
-    // (in Brian's tree either), so the require fails and this is skipped.
+    // Lua: weather.lua:270 pcall(lazyReq, "src.core.game3.field_weather");
+    // a missing G3Lazy entry is the failed require
+    const FieldWeather = G3Lazy["src.core.game3.field_weather"];
+    if (FieldWeather && FieldWeather.setWeather) {
+      FieldWeather.setWeather(Weather.current);
+    }
 
     const game = Runtime ? Runtime._game : null;
     const world = game ? (game.overworld ?? game.world) : null;

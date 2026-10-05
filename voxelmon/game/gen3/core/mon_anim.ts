@@ -3581,7 +3581,8 @@ const sheets: Record<string, { image: Image; w: number; h: number } | false> = {
 let silhouette: Shader | false | undefined;
 
 export const MonAnim = {
-  Data,
+  // a getter: mon_anim_data imports this module (import cycle)
+  get Data() { return Data; },
   oob: 0,
   F,
   s16, u16, u8, s8, div, mod,

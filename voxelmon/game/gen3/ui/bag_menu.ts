@@ -148,11 +148,17 @@ const SHAKE_ROT = seq(-2, -4, -2, 0, 2, 4, 2, 0, -2, -4, -2, 0) as (number | nul
 // src/item_use.c:159
 const FIELD_EXIT_FADE: Record<string, boolean> = { bike: true, rod: true };
 
-// src/bag.c:13
-const WIN_WHITE: Colors = { fg: FrlgFont.STDPAL[1], shadow: FrlgFont.STDPAL[2], bg: FrlgFont.STDPAL[0] };
-const CURSOR_SELECTED: Colors = { fg: FrlgFont.STDPAL[3], shadow: FrlgFont.STDPAL[2], bg: FrlgFont.STDPAL[0] };
-// src/item_menu.c:285
-const ITEM_BLUE: Colors = { fg: FrlgFont.STDPAL[8], shadow: FrlgFont.STDPAL[9], bg: FrlgFont.STDPAL[0] };
+// Built on first use: FrlgFont is in the import cycle.
+let bagColors: { WIN_WHITE: Colors; CURSOR_SELECTED: Colors; ITEM_BLUE: Colors } | undefined;
+function BC(): { WIN_WHITE: Colors; CURSOR_SELECTED: Colors; ITEM_BLUE: Colors } {
+  return (bagColors ??= {
+    // src/bag.c:13
+    WIN_WHITE: { fg: FrlgFont.STDPAL[1], shadow: FrlgFont.STDPAL[2], bg: FrlgFont.STDPAL[0] },
+    CURSOR_SELECTED: { fg: FrlgFont.STDPAL[3], shadow: FrlgFont.STDPAL[2], bg: FrlgFont.STDPAL[0] },
+    // src/item_menu.c:285
+    ITEM_BLUE: { fg: FrlgFont.STDPAL[8], shadow: FrlgFont.STDPAL[9], bg: FrlgFont.STDPAL[0] },
+  });
+}
 
 const sessionState = new WeakMap<object, BagState>();
 
@@ -1526,7 +1532,7 @@ BagMenu.draw = function (): void {
     // src/bag.c:226
     const pLabel = ItemsData.POCKET_LABEL[pocket];
     const tw = FrlgFont.measure(pLabel);
-    FrlgFont.draw(pLabel, 8 + Math.floor((72 - tw) / 2), 9, { colors: WIN_WHITE });
+    FrlgFont.draw(pLabel, 8 + Math.floor((72 - tw) / 2), 9, { colors: BC().WIN_WHITE });
   }
 
   if (!chrome) {
@@ -1540,7 +1546,7 @@ BagMenu.draw = function (): void {
       const y = 10 + (i - 1) * 16;
       if (idx === BagMenu.cursor) {
         if (selected) {
-          FrlgFont.drawGlyph(FrlgFont.CHAR_SELECTOR_ARROW, 89, y, { colors: CURSOR_SELECTED });
+          FrlgFont.drawGlyph(FrlgFont.CHAR_SELECTOR_ARROW, 89, y, { colors: BC().CURSOR_SELECTED });
         } else {
           Window.cursorPx(89, y);
         }
@@ -1557,7 +1563,7 @@ BagMenu.draw = function (): void {
         }
         const num = ItemsData.toNumericId(r.id);
         const colors = (num === ItemsData.ITEM_TM_CASE || num === ItemsData.ITEM_BERRY_POUCH)
-          ? ITEM_BLUE : FrlgFont.COLOR.NORMAL;
+          ? BC().ITEM_BLUE : FrlgFont.COLOR.NORMAL;
         FrlgFont.draw(label, 97, y, { maxWidth: 96, colors });
         const info = r.info || ItemsData.info(r.id);
         const important = info && (tonumber(info.importance) ?? 0) !== 0;
@@ -1608,7 +1614,7 @@ BagMenu.draw = function (): void {
     if (!sel) desc = RomText.plain("gText_CloseBag");
     if (truthy(desc)) {
       // src/item_menu.c:756 (window 1 at (5, 14), x=0, y=3, maxWidth=200, linePitch=14)
-      FrlgFont.draw(desc, 40, 115, { colors: WIN_WHITE, maxWidth: 200, linePitch: 14 });
+      FrlgFont.draw(desc, 40, 115, { colors: BC().WIN_WHITE, maxWidth: 200, linePitch: 14 });
     }
   }
 

@@ -5,9 +5,10 @@
 // - package.loaded[...] / require / pcall(require, ...): every module of the
 //   closure is in the bundle, so each is a static import used exactly as
 //   Brian guards it (a stub's functions throw NotPortedError when reached).
-//   Modules with no file in the port at all take Brian's failed-require path
-//   (pcallReqMissing): src.ui.game3.coins_box, src.core.game3.town_map_stub,
-//   src.ui.game3.prize_corner, src.ui.game3.slot_machine.
+//   Lazily-required modules (src.ui.game3.coins_box,
+//   src.core.game3.town_map_stub, src.ui.game3.prize_corner,
+//   src.ui.game3.slot_machine) are looked up in G3Lazy (pcallReqMissing); a
+//   missing entry takes Brian's failed-require path.
 // - src.import.gba.extract_island1 (no file in the port) is only read for
 //   NATIVE_ROOT / CACHE_ROOT, which extract_island1.lua:21 forwards to
 //   cache_paths; this reads CachePaths directly (as core/dataset.ts does).
@@ -73,15 +74,17 @@ import Prize from "../battle/prize.ts";
 import Multichoice from "./multichoice.ts";
 import Gift from "./natives_gift.ts";
 import VirtualObjects from "../virtual_objects.ts";
+import { G3Lazy } from "../lazy_registry.ts";
 import HelpWindow from "../../ui/help_window.ts";
 import MysteryGift from "../mystery_gift.ts";
 
 type Row = any;
 type DispatchFn = (vm: Vm, row: Row) => any;
 
-// pcall(require, X) of a module that has no file in the port: the require
-// fails, as in Lua (Brian's failed-require path).
+// pcall(require, X) of a lazily-required module: its G3Lazy entry, or (no
+// entry) the failed require, as in Lua (Brian's failed-require path).
 function pcallReqMissing(name: string): [boolean, any] {
+  if (G3Lazy[name] != null) return [true, G3Lazy[name]];
   return [false, "module '" + name + "' not found (no such module in the port yet)"];
 }
 
@@ -260,7 +263,7 @@ function ql_avoid_display(): boolean {
 // pokefirered/src/coins.c:79
 // Lua: ops_a.lua:149
 function coins_box(fn: string, ...args: any[]): boolean {
-  // pcall(require, "src.ui.game3.coins_box"): no such module in the port
+  // pcall(require, "src.ui.game3.coins_box")
   const [okReq, Box] = pcallReqMissing("src.ui.game3.coins_box");
   if (!(okReq && Box != null && typeof Box === "object" && typeof Box[fn] === "function")) return false;
   try { Box[fn](...args); return true; } catch { return false; }
@@ -864,7 +867,7 @@ let dispatch: DispatchFn = function (vm: Vm, row: Row): any {
     // Host Sevii Town Map unlock (One Island region map page).
     if (tonumber(flag) === Flags.IDS.WORLD_MAP_ONE_ISLAND
         || tonumber(flag) === Flags.IDS.SYS_SEVII_MAP_123) {
-      // pcall(require, "src.core.game3.town_map_stub"): no such module in the port
+      // pcall(require, "src.core.game3.town_map_stub")
       const [ok, TownMap] = pcallReqMissing("src.core.game3.town_map_stub");
       if (ok && TownMap.unlockSeviiMap) {
         // package.loaded["src.core.game3.scripting.space"]
@@ -2070,7 +2073,7 @@ let dispatch: DispatchFn = function (vm: Vm, row: Row): any {
   } else if (op === "playslotmachine") {
     // pokefirered/src/scrcmd.c:1980
     const machineIdx = var_get(store, ctx, row[1] ?? row.id);
-    // pcall(require, "src.ui.game3.slot_machine"): no such module in the port
+    // pcall(require, "src.ui.game3.slot_machine")
     const [okUi, SlotUi] = pcallReqMissing("src.ui.game3.slot_machine");
     if (!(okUi && SlotUi != null && typeof SlotUi === "object" && typeof SlotUi.show === "function")) {
       if (a.log) a.log("[game3] playslotmachine skipped (no screen)");
@@ -2131,7 +2134,7 @@ let dispatch: DispatchFn = function (vm: Vm, row: Row): any {
         ctx.nativePoll = null;
         if (truthy(took)) return false;
       }
-      // pcall(require, "src.ui.game3.prize_corner"): no such module in the port
+      // pcall(require, "src.ui.game3.prize_corner")
       const [okP, PrizeCorner] = pcallReqMissing("src.ui.game3.prize_corner");
       if (okP && PrizeCorner != null && typeof PrizeCorner === "object" && truthy(PrizeCorner.isPrizeList(listId))) {
         const labels = Multichoice.resolve(listId);

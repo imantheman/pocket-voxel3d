@@ -94,11 +94,8 @@ function setStringVar(ctx: any, adapters: any, index: number, text: string): voi
   if (ctx && truthy(ctx.stringVars)) ctx.stringVars[index] = text;
 }
 
-// Lua: natives_daycare.lua:67
-const speciesOf = Model.speciesOf;
-const nicknameOf = Model.nickname;
-const slotMon = Model.mon;
-const eggPending = Model.isEggPending;
+// Lua: natives_daycare.lua:67 (local speciesOf = Model.speciesOf, ...)
+// The aliases are read through Model at each call (import cycle).
 
 // Lua: natives_daycare.lua:73
 // data/maps/FourIsland_PokemonDayCare/scripts.inc:86-88, data/maps/FourIsland/scripts.inc:95-104, data/scripts/day_care.inc:79-81, daycare.c, src/daycare.c:525, :1081
@@ -106,7 +103,7 @@ function partyIsFull(session: any): boolean {
   const party = lor(session && session.party, {} as any);
   let count = 0;
   for (let i = 1; i <= PARTY_SIZE; i++) {
-    if (speciesOf(party[i]) !== SPECIES_NONE) count = count + 1;
+    if (Model.speciesOf(party[i]) !== SPECIES_NONE) count = count + 1;
   }
   return count >= PARTY_SIZE;
 }
@@ -131,7 +128,7 @@ const BY_NAME: Record<string, Handler> = {
     const dc = Daycare.stateOf();
     let state = DAYCARE_NO_MONS;
     if (truthy(dc)) {
-      if (eggPending(dc)) {
+      if (Model.isEggPending(dc)) {
         state = DAYCARE_EGG_WAITING;
       } else {
         const n = Daycare.count(dc);
@@ -146,7 +143,7 @@ const BY_NAME: Record<string, Handler> = {
   // pokefirered/src/daycare.c:1575
   IsThereMonInRoute5Daycare: (_ctx) => {
     const r5 = Daycare.route5Of();
-    return boolReturn(speciesOf(r5 && r5.mon) !== SPECIES_NONE);
+    return boolReturn(Model.speciesOf(r5 && r5.mon) !== SPECIES_NONE);
   },
   // Lua: natives_daycare.lua:163
   // pokefirered/src/daycare.c:1244
@@ -189,12 +186,12 @@ const BY_NAME: Record<string, Handler> = {
     }
     const dc = Daycare.stateOf(session);
     const index = varGet(ctx, VAR_0x8004) + 1;
-    const mon = slotMon(dc, index);
+    const mon = Model.mon(dc, index);
     if (!truthy(mon)) {
       setResult(ctx, SPECIES_NONE);
       return [false, SPECIES_NONE];
     }
-    setStringVar(ctx, adapters, 1, nicknameOf(mon));
+    setStringVar(ctx, adapters, 1, Model.nickname(mon));
     return [false, Model.take(session, index)];
   },
   // Lua: natives_daycare.lua:208
@@ -212,7 +209,7 @@ const BY_NAME: Record<string, Handler> = {
       setResult(ctx, SPECIES_NONE);
       return [false, SPECIES_NONE];
     }
-    setStringVar(ctx, adapters, 1, nicknameOf(mon));
+    setStringVar(ctx, adapters, 1, Model.nickname(mon));
     return [false, Model.takeRoute5(session)];
   },
   // Lua: natives_daycare.lua:225
@@ -220,8 +217,8 @@ const BY_NAME: Record<string, Handler> = {
   GetDaycareCost: (ctx, adapters) => {
     const dc = Daycare.stateOf();
     const index = varGet(ctx, VAR_0x8004) + 1;
-    const mon = slotMon(dc, index);
-    setStringVar(ctx, adapters, 1, nicknameOf(mon));
+    const mon = Model.mon(dc, index);
+    setStringVar(ctx, adapters, 1, Model.nickname(mon));
     const cost = truthy(mon) ? lor(Daycare.cost(mon, dc.steps[index]), 0) : 0;
     varSet(ctx, VAR_0x8005, cost);
     setStringVar(ctx, adapters, 2, tostring(cost));
@@ -232,7 +229,7 @@ const BY_NAME: Record<string, Handler> = {
   GetCostToWithdrawRoute5DaycareMon: (ctx, adapters) => {
     const r5 = Daycare.route5Of();
     const mon = r5 && r5.mon;
-    setStringVar(ctx, adapters, 1, nicknameOf(mon));
+    setStringVar(ctx, adapters, 1, Model.nickname(mon));
     const cost = truthy(mon) ? lor(Daycare.cost(mon, r5.steps), 0) : 0;
     varSet(ctx, VAR_0x8005, cost);
     setStringVar(ctx, adapters, 2, tostring(cost));
@@ -243,10 +240,10 @@ const BY_NAME: Record<string, Handler> = {
   GetNumLevelsGainedFromDaycare: (ctx, adapters) => {
     const dc = Daycare.stateOf();
     const index = varGet(ctx, VAR_0x8004) + 1;
-    const mon = slotMon(dc, index);
+    const mon = Model.mon(dc, index);
     if (!truthy(mon)) return [false, 0];
     const gained = Daycare.levelsGained(mon, dc.steps[index]);
-    setStringVar(ctx, adapters, 1, nicknameOf(mon));
+    setStringVar(ctx, adapters, 1, Model.nickname(mon));
     setStringVar(ctx, adapters, 2, tostring(gained));
     return [false, gained];
   },
@@ -257,7 +254,7 @@ const BY_NAME: Record<string, Handler> = {
     const mon = r5 && r5.mon;
     if (!truthy(mon)) return [false, 0];
     const gained = Daycare.levelsGained(mon, r5.steps);
-    setStringVar(ctx, adapters, 1, nicknameOf(mon));
+    setStringVar(ctx, adapters, 1, Model.nickname(mon));
     setStringVar(ctx, adapters, 2, tostring(gained));
     return [false, gained];
   },
@@ -265,13 +262,13 @@ const BY_NAME: Record<string, Handler> = {
   // pokefirered/src/daycare.c:1200 _GetDaycareMonNicknames
   GetDaycareMonNicknames: (ctx, adapters) => {
     const dc = Daycare.stateOf();
-    const first = slotMon(dc, 1);
+    const first = Model.mon(dc, 1);
     if (truthy(first)) {
-      setStringVar(ctx, adapters, 1, nicknameOf(first));
+      setStringVar(ctx, adapters, 1, Model.nickname(first));
       setStringVar(ctx, adapters, 3, tostring(lor(lor(first.otName, first.ot), "")));
     }
-    const second = slotMon(dc, 2);
-    if (truthy(second)) setStringVar(ctx, adapters, 2, nicknameOf(second));
+    const second = Model.mon(dc, 2);
+    if (truthy(second)) setStringVar(ctx, adapters, 2, Model.nickname(second));
     return [false];
   },
   // Lua: natives_daycare.lua:279
@@ -312,7 +309,7 @@ const BY_NAME: Record<string, Handler> = {
   // pokefirered/src/daycare.c:1133 GiveEggFromDaycare
   GiveEggFromDaycare: () => {
     const dc = Daycare.stateOf();
-    if (!eggPending(dc)) return [false];
+    if (!Model.isEggPending(dc)) return [false];
     const session = sessionOf();
     // pokefirered/data/maps/FourIsland/scripts.inc:96
     if (partyIsFull(session)) return [false];
@@ -324,8 +321,8 @@ const BY_NAME: Record<string, Handler> = {
   GetDaycareCostAndPrepareString: (ctx, adapters) => {
     const dc = Daycare.stateOf();
     const index = varGet(ctx, VAR_0x8004) + 1;
-    const mon = slotMon(dc, index);
-    setStringVar(ctx, adapters, 1, nicknameOf(mon));
+    const mon = Model.mon(dc, index);
+    setStringVar(ctx, adapters, 1, Model.nickname(mon));
     const cost = truthy(mon) ? lor(Daycare.cost(mon, dc.steps[index]), 0) : 0;
     setStringVar(ctx, adapters, 2, tostring(cost));
     varSet(ctx, VAR_0x8005, cost);
@@ -337,10 +334,10 @@ const BY_NAME: Record<string, Handler> = {
     const session = sessionOf();
     const dc = Daycare.stateOf(session);
     const index = varGet(ctx, VAR_0x8004) + 1;
-    const mon = slotMon(dc, index);
+    const mon = Model.mon(dc, index);
     const mail = truthy(dc) && truthy(dc.mail) ? dc.mail[index] : undefined;
     if (!(truthy(mon) && mail != null && typeof mail === "object" && !Mail.isEmpty(mail.message))) return boolReturn(false);
-    const nick = nicknameOf(mon);
+    const nick = Model.nickname(mon);
     const player = tostring(lor(session && lor(session.name, session.playerName), ""));
     if (nick !== mail.monName || player !== mail.otName) {
       setStringVar(ctx, adapters, 1, nick);
@@ -353,20 +350,20 @@ const BY_NAME: Record<string, Handler> = {
 };
 
 export const Daycare = {
-  SAVE_KEY: Model.SAVE_KEY,
-  stateOf: Model.stateOf,
-  route5Of: Model.route5Of,
-  count: Model.count,
-  levelAfterSteps: Model.levelAfterSteps,
-  levelsGained: Model.levelsGained,
-  cost: Model.cost,
-  applyExperience: Model.applyExperience,
-  teachMove: Model.teachMove,
-  withdraw: Model.withdraw,
-  step: Model.step,
+  get SAVE_KEY() { return Model.SAVE_KEY; },
+  get stateOf() { return Model.stateOf; },
+  get route5Of() { return Model.route5Of; },
+  get count() { return Model.count; },
+  get levelAfterSteps() { return Model.levelAfterSteps; },
+  get levelsGained() { return Model.levelsGained; },
+  get cost() { return Model.cost; },
+  get applyExperience() { return Model.applyExperience; },
+  get teachMove() { return Model.teachMove; },
+  get withdraw() { return Model.withdraw; },
+  get step() { return Model.step; },
 
   // pokefirered/src/daycare.c:1271 GetDaycareCompatibilityScore
-  compatibility: Breeding.compatibility,
+  get compatibility() { return Breeding.compatibility; },
 
   // Lua: natives_daycare.lua:98
   // pokefirered/src/strings.c:1252 sCompatibilityMessages

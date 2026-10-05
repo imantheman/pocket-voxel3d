@@ -12,6 +12,11 @@
 //   converted to Lua sequences for LayoutNative.fromDecoded at the call site.
 // - pcall(require, X) and package.loaded[X] are static imports (every module
 //   is in the bundle).
+// - The importer modules the runtime calls (map_sections_extract and others)
+//   read through the importer's CacheFs (import/gen3/cache.ts), where Brian's
+//   Lua reads Dataset.cache() / the one shared CacheFs. mountExtractRoots
+//   binds it to an adapter over Dataset.cache() when nothing else (a test, the
+//   cook) has bound it.
 
 import { Versions } from "../../../import/gen3/versions.ts";
 import { CachePaths } from "./cache_paths.ts";
@@ -42,6 +47,7 @@ import { luaLoad } from "../platform/luadata.ts";
 import { fromArray, ipairs, isEmpty, pairs, type LuaTable } from "../platform/lt.ts";
 import { gsub } from "../platform/lpattern.ts";
 import { format, tonumber, tostring } from "../../../import/gen3/lua.ts";
+import { CacheFs as ImportCacheFs, type Cache as ImportCache } from "../../../import/gen3/cache.ts";
 
 export interface DatasetCache {
   assetWorkerSpec(root: string, kind: string, key: unknown): { prefix: string; directory: string | undefined } | undefined;
@@ -115,6 +121,21 @@ function loveCache(): DatasetCache {
 // The cache object is stateless (every read resolves CacheFs, love.filesystem
 // and Dataset.cacheRootOverride at call time), so one instance is shared.
 let sharedCache: DatasetCache | undefined;
+
+// The importer's Cache over Dataset.cache() (see the port notes).
+function bindImportCache(): void {
+  try {
+    ImportCacheFs.bound();
+    return; // already bound
+  } catch { /* none bound */ }
+  const adapter: ImportCache = {
+    read: (rel) => Dataset.cache().read(rel),
+    write: (rel, bytes) => Dataset.cache().write(rel, bytes)[0],
+    exists: (rel) => Dataset.cache().exists(rel),
+    info: (rel) => (Dataset.cache().exists(rel) ? { type: "file" } : undefined),
+  };
+  ImportCacheFs.bind(adapter);
+}
 
 let dsLoadWarned = false;
 
@@ -381,6 +402,7 @@ export const Dataset = {
     Dataset.invalidateManifestCache();
     // package.loaded["src.core.game3.heal_locations"]
     if (HealLocations && HealLocations.invalidate) HealLocations.invalidate();
+    bindImportCache();
   },
 
   // Lua: dataset.lua:375

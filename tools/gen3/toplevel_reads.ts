@@ -22,9 +22,61 @@ const files: string[] = [];
 // leaves that import nothing from the cycle are safe to read at load
 const SAFE_SOURCES = /platform\/|lazy_registry|notported|\/import\/gen3\/|constants\/|\/data\/|lua\.ts|luatable\.ts/;
 
+// Any other import is safe to read at load when the imported module is not in
+// the importer's import cycle (strongly connected component): ES modules
+// finish evaluating a dependency outside the cycle before the importer's body
+// starts. Edges are every non-type-only relative import / re-export /
+// side-effect import, so membership errs towards "in the cycle".
+const parsed = new Map<string, ts.SourceFile>();
+function parse(f: string): ts.SourceFile {
+  let s = parsed.get(f);
+  if (!s) parsed.set(f, s = ts.createSourceFile(f, readFileSync(f, "utf8"), ts.ScriptTarget.Latest, true));
+  return s;
+}
+function edges(f: string): string[] {
+  const out: string[] = [];
+  for (const st of parse(f).statements) {
+    let spec: ts.Expression | undefined;
+    if (ts.isImportDeclaration(st)) { if (st.importClause?.isTypeOnly) continue; spec = st.moduleSpecifier; }
+    else if (ts.isExportDeclaration(st)) { if (st.isTypeOnly) continue; spec = st.moduleSpecifier; }
+    if (!spec || !ts.isStringLiteral(spec) || !spec.text.startsWith(".")) continue;
+    const p = resolve(dirname(f), spec.text);
+    try { if (statSync(p).isFile()) out.push(p); } catch { /* missing: no edge */ }
+  }
+  return out;
+}
+// Tarjan's SCC over every module reachable from the gen3 runtime
+const sccOf = new Map<string, number>();
+{
+  const index = new Map<string, number>(), low = new Map<string, number>(), stack: string[] = [], on = new Set<string>();
+  let next = 0, comp = 0;
+  const strong = (v: string): void => {
+    index.set(v, next); low.set(v, next); next++; stack.push(v); on.add(v);
+    for (const w of edges(v)) {
+      if (!index.has(w)) { strong(w); low.set(v, Math.min(low.get(v)!, low.get(w)!)); }
+      else if (on.has(w)) low.set(v, Math.min(low.get(v)!, index.get(w)!));
+    }
+    if (low.get(v) === index.get(v)) {
+      let w: string;
+      do { w = stack.pop()!; on.delete(w); sccOf.set(w, comp); } while (w !== v);
+      comp++;
+    }
+  };
+  const all: string[] = [];
+  (function walk(d: string): void {
+    for (const n of readdirSync(d)) {
+      const p = join(d, n);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (n.endsWith(".ts")) all.push(resolve(p));
+    }
+  })(ROOT);
+  for (const f of all) if (!index.has(f)) strong(f);
+}
+const inCycleWith = (a: string, b: string): boolean => sccOf.get(resolve(a)) === sccOf.get(resolve(b));
+
 let total = 0;
 for (const f of files.sort()) {
-  const src = ts.createSourceFile(f, readFileSync(f, "utf8"), ts.ScriptTarget.Latest, true);
+  const src = parse(resolve(f));
   const imported = new Set<string>();
   for (const st of src.statements) {
     if (!ts.isImportDeclaration(st) || !st.importClause) continue;
@@ -32,6 +84,7 @@ for (const f of files.sort()) {
     if (!from.startsWith(".")) continue;
     // judge the RESOLVED path: platform/, the importer and the data tables import nothing in the cycle
     if (SAFE_SOURCES.test(resolve(dirname(f), from))) continue;
+    if (!inCycleWith(f, resolve(dirname(f), from))) continue;
     if (st.importClause.isTypeOnly) continue;
     if (st.importClause.name) imported.add(st.importClause.name.text);
     const nb = st.importClause.namedBindings;

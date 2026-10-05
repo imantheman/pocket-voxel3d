@@ -25,7 +25,9 @@ import { ItemsData } from "../items_data.ts";
 import { Bag } from "../bag.ts";
 import ItemUse from "../item_use.ts";
 import { Pokemon } from "../pokemon.ts";
-import Types from "./types.ts";
+// required at load by items.lua:8 (unused there too); a bare import, so the
+// binding is never read while the import cycle loads
+import "./types.ts";
 import Catching from "./catching.ts";
 import { Strings } from "../../shared/core/Strings.ts";
 import { RomText } from "../rom_text.ts";
@@ -37,8 +39,6 @@ import BattleProfile from "./profile.ts";
 import { Storage } from "../storage.ts";
 import Oak from "./oak_advice.ts";
 import AiItems from "./ai_items.ts";
-
-void Types; // required at load by items.lua:8 (unused there too)
 
 export type UseResult = [string, LuaTable, boolean, boolean, any?];
 

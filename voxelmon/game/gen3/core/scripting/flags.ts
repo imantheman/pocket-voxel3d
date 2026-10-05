@@ -54,9 +54,13 @@ export interface VersionFlags {
 const FT: any = FlagsTable;
 
 // Lua: flags.lua:329 (require(path) of the profile's saveRules module)
-const SAVE_RULES: Record<string, any> = {
-  "src.core.game3.profiles.firered_rules": FireredRules,
-};
+// Built on first use: firered_rules imports this module (import cycle).
+let saveRules: Record<string, any> | undefined;
+function SAVE_RULES(): Record<string, any> {
+  return (saveRules ??= {
+    "src.core.game3.profiles.firered_rules": FireredRules,
+  });
+}
 
 // Table-driven flag definitions with backwards-compatible aliases
 // Lua: flags.lua:17
@@ -215,7 +219,7 @@ function repairForGame(store: any): void {
   const path = Profile.forSession(store).saveRules;
   let rules: any = null;
   if (typeof path === "string") {
-    rules = SAVE_RULES[path];
+    rules = SAVE_RULES()[path];
     if (rules == null) notPorted(`require("${path}") (no such module in the port yet)`);
   }
   if (rules && rules.repairSaveState) rules.repairSaveState(store);

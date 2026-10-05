@@ -10,8 +10,9 @@
 //   Record<string, any>.
 // - A sheet's `quads` / `quadsFront` keep Brian's 0-based frame keys (JS array
 //   indices 0..frames-1), as ow_sprites does.
-// - src.core.game3.field_effects_rse and fldeff_misc are Emerald only (no
-//   port): rse() is nil for FireRed's manifest and throws for an "rse" one.
+// - src.core.game3.field_effects_rse is Emerald only (no port): rse() is nil
+//   for FireRed's manifest and throws for an "rse" one. fldeff_misc (reached
+//   only behind rse()) is a lazily-required module, looked up in G3Lazy.
 // - `love` is always present here (try_load_rgba's love.image guard is constant true).
 
 import { mod, tonumber, tostring, truthy } from "../../../import/gen3/lua.ts";
@@ -43,6 +44,7 @@ import { SE } from "./se_ids.ts";
 import { Trig } from "./trig.ts";
 import { WarpArrow } from "./warp_arrow.ts";
 import { Constants } from "./constants.ts";
+import { G3Lazy } from "./lazy_registry.ts";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -2451,8 +2453,11 @@ FieldEffects.HANDLERS = HANDLERS;
 function handlerFor(name: string | null): (() => any) | undefined {
   const fn = HANDLERS[name ?? ""];
   if (fn || !rse()) return fn;
-  // NOT FAITHFUL: Emerald only -- src.core.game3.fldeff_misc is not ported (rse() throws first).
-  return undefined;
+  // lazyReq("src.core.game3.fldeff_misc"): a lazily-required module (G3Lazy);
+  // a missing entry is lazyReq's error
+  const Misc = G3Lazy["src.core.game3.fldeff_misc"];
+  if (Misc == null) throw new Error("module 'src.core.game3.fldeff_misc' not found");
+  return Misc.HANDLERS[name ?? ""];
 }
 FieldEffects.handlerFor = handlerFor;
 
@@ -2494,7 +2499,9 @@ FieldEffects.isFieldEffectActive = function (id: unknown): boolean {
   const R = rse();
   if (R) {
     if (R.isActive(name)) return true;
-    // package.loaded["src.core.game3.fldeff_misc"] is never loaded here.
+    // package.loaded["src.core.game3.fldeff_misc"]: its G3Lazy entry
+    const Misc = G3Lazy["src.core.game3.fldeff_misc"];
+    if (Misc && Misc.isActive(name)) return true;
   }
   return false;
 };

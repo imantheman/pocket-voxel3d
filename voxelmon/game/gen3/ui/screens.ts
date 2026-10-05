@@ -23,24 +23,29 @@ import * as pc_menu from "./pc_menu.ts";
 import * as shop_menu from "./shop_menu.ts";
 import * as naming from "./naming.ts";
 
-/** `require(path)` for the screen modules this file names. */
-const MODULES: Record<string, { default: unknown }> = {
-  "src.ui.game3.start_menu": start_menu,
-  "src.ui.game3.bag_menu": bag_menu,
-  "src.ui.game3.party_menu": party_menu,
-  "src.ui.game3.summary_menu": summary_menu,
-  "src.ui.game3.pokedex": pokedex,
-  "src.ui.game3.region_map": region_map,
-  "src.ui.game3.option_menu": option_menu,
-  "src.ui.game3.save_menu": save_menu,
-  "src.ui.game3.trainer_card": trainer_card,
-  "src.ui.game3.pc_menu": pc_menu,
-  "src.ui.game3.shop_menu": shop_menu,
-  "src.ui.game3.naming": naming,
-};
+/** `require(path)` for the screen modules this file names. Built on first
+ *  use: the screen modules are in the import cycle. */
+let modules: Record<string, { default: unknown }> | undefined;
+function MODULES(): Record<string, { default: unknown }> {
+  return (modules ??= {
+    "src.ui.game3.start_menu": start_menu,
+    "src.ui.game3.bag_menu": bag_menu,
+    "src.ui.game3.party_menu": party_menu,
+    "src.ui.game3.summary_menu": summary_menu,
+    "src.ui.game3.pokedex": pokedex,
+    "src.ui.game3.region_map": region_map,
+    "src.ui.game3.option_menu": option_menu,
+    "src.ui.game3.save_menu": save_menu,
+    "src.ui.game3.trainer_card": trainer_card,
+    "src.ui.game3.pc_menu": pc_menu,
+    "src.ui.game3.shop_menu": shop_menu,
+    "src.ui.game3.naming": naming,
+  });
+}
 
 function requireScreen(p: string): any {
-  const m = Object.prototype.hasOwnProperty.call(MODULES, p) ? MODULES[p] : undefined;
+  const mods = MODULES();
+  const m = Object.prototype.hasOwnProperty.call(mods, p) ? mods[p] : undefined;
   // NOT FAITHFUL: src.ui.game3.controls_menu (desktop key bindings) and any
   // module outside MODULES is not in the port; Lua's require would raise too
   if (!m) throw new Error("module '" + p + "' not found");

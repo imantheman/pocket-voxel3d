@@ -165,16 +165,14 @@ describe.skipIf(!existsSync(ROOT))("gen3 runtime: script VM on FireRed data", ()
       expect(vm.start("g3:08165850")).toBe(true);
       for (let i = 0; i < 20 && vm.isRunning(); i++) vm.tick();
     } catch (e) { err = e; }
-    // loadword stored the text key, callstd 3 pushed a frame into std:3
+    // loadword stored the text key; callstd 3 ran the sign's standard script
+    // (lockall, message, waitmessage, waitbuttonpress, releaseall) to its end
     expect(vm.ctx.data[0]).toBe("g3:0817d87f");
-    expect(vm.ctx.pc!.listKey).toBe("std:3");
-    expect(len(vm.ctx.stack)).toBe(1);
-    expect(vm.ctx.stack[1]).toEqual({ listKey: "g3:08165850", index: 3 });
+    expect(err).toBeUndefined();
+    expect(vm.isRunning()).toBe(false);
     // the sign's text, PLAYER expanded from the adapters
     expect(messages.length).toBe(1);
     expect(messages[0]).toBe("RED's house");
-    // waitmessage then reaches the unported map preview screen
-    if (err !== undefined) expect(err).toBeInstanceOf(NotPortedError);
   });
 
   test("VM: unknown script and halt", () => {

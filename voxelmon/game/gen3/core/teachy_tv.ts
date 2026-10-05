@@ -1,8 +1,9 @@
 // Port of gen1recomp src/core/game3/teachy_tv.lua (GPLv3 + additional terms; see LICENSE.md).
 // pokefirered/src/teachy_tv.c:420 InitTeachyTvController
 //
-// The screen itself is src.ui.game3.teachy_tv, which has no module (in
-// Brian's tree either): show() takes his failed-require path and returns false.
+// The screen itself is src.ui.game3.teachy_tv, a lazily-required module:
+// show() looks it up in G3Lazy and takes Brian's failed-require path (returns
+// false) when it is absent.
 
 import { tonumber } from "../../../import/gen3/lua.ts";
 import { fromArray, ipairs, len, seq, type LuaTable } from "../platform/lt.ts";
@@ -12,6 +13,7 @@ import { Bag } from "./bag.ts";
 import { ItemsData } from "./items_data.ts";
 import { Runtime } from "./runtime.ts";
 import { Pokedude } from "./battle/pokedude.ts";
+import { G3Lazy } from "./lazy_registry.ts";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -588,11 +590,15 @@ export const TeachyTv = {
   },
 
   // Lua: teachy_tv.lua:577 -- pokefirered/src/item_use.c:534 InitTeachyTvFromBag
-  show(sessionIn: any, _bag?: any, _opts?: any): boolean {
+  show(sessionIn: any, bag?: any, opts?: any): boolean {
     const session = sessionOf(sessionIn);
     TeachyTv.initController(session, TeachyTv.MODE.FRESH);
-    // pcall(require, "src.ui.game3.teachy_tv"): no such module, so the
-    // require fails and Brian returns false.
+    // pcall(require, "src.ui.game3.teachy_tv")
+    const Ui = G3Lazy["src.ui.game3.teachy_tv"];
+    if (Ui != null && typeof Ui === "object" && Ui.show) {
+      Ui.show(session, bag, opts);
+      return true;
+    }
     return false;
   },
 };

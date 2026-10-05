@@ -10,7 +10,10 @@ import { newImageData, type Image, type ImageData, type Quad } from "../platform
 import { Fs } from "../platform/fs.ts";
 import { len, seq, type LuaTable } from "../platform/lt.ts";
 import { NotPortedError } from "../notported.ts";
-import { Display } from "../core/display.ts";
+// Display.TILE comes from the leaf data table, so reading it at load is safe
+// in the import cycle; display.ts is still loaded here.
+import { Display } from "../core/display_table.ts";
+import "../core/display.ts";
 import { CacheFs } from "../shared/import/CacheFs.ts";
 import { Profile } from "../core/profile.ts";
 import { Runtime } from "../core/runtime.ts";

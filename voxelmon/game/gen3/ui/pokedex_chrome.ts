@@ -11,7 +11,9 @@ import { newImageData, type Image, type Quad } from "../platform/image.ts";
 import { Fs } from "../platform/fs.ts";
 import { luaLoad } from "../platform/luadata.ts";
 import { NotPortedError } from "../notported.ts";
-import { Display } from "../core/display.ts";
+// required at load by Brian's module; nothing here calls it (a bare import:
+// no binding is read while the import cycle loads)
+import "../core/display.ts";
 import { Extract } from "../../../import/gen3/extract_island1.ts";
 import { PokedexData } from "../core/pokedex_data.ts";
 import { Dataset } from "../core/dataset.ts";
@@ -21,8 +23,6 @@ import { SummaryChrome } from "./summary_chrome.ts";
 import { Pokemon } from "../core/pokemon.ts";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-
-void Display; // required at load by Brian's module; nothing here calls it
 
 /**
  * Lua's `pcall(require, X)` followed by a call into it: while X is still a
