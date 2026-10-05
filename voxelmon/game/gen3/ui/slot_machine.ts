@@ -18,6 +18,7 @@
 //   HELP_ROWS are Lua sequences (slot 0 unused).
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { late, lateOnce } from "../platform/late.ts";
 import { seq, len, ipairs, type LuaTable } from "../platform/lt.ts";
 import { tonumber, mod, format } from "../../../import/gen3/lua.ts";
 import { G } from "../platform/graphics.ts";
@@ -37,9 +38,9 @@ import { CacheFs } from "../shared/import/CacheFs.ts";
 import SE from "../core/se_ids.ts";
 import Audio from "../core/audio.ts";
 
-const ICON = Model.ICON;
+const ICON: any = late(() => Model.ICON);
 
-const PLACEHOLDER: Record<number, [number[], string]> = {
+const PLACEHOLDER: Record<number, [number[], string]> = lateOnce(() => ({
   [ICON.SEVEN]: [[0.90, 0.16, 0.16], Strings("7")],
   [ICON.ROCKET]: [[0.12, 0.12, 0.16], Strings("R")],
   [ICON.PIKACHU]: [[0.98, 0.84, 0.16], Strings("PI")],
@@ -47,7 +48,7 @@ const PLACEHOLDER: Record<number, [number[], string]> = {
   [ICON.CHERRIES]: [[0.85, 0.20, 0.42], Strings("CH")],
   [ICON.MAGNEMITE]: [[0.64, 0.70, 0.78], Strings("MA")],
   [ICON.SHELLDER]: [[0.55, 0.72, 0.95], Strings("SH")],
-};
+}));
 
 // Lua: slot_machine.lua:90
 // pokefirered/src/slot_machine.c:1638
@@ -61,10 +62,14 @@ function help_icons(rank: number): LuaTable {
 
 // Lua: slot_machine.lua:99
 // pokefirered/src/slot_machine.c:388
-const HELP_ROWS: LuaTable = seq<any>();
-for (let rank = Model.NUM_PAYOUT_TYPES - 1; rank >= Model.PAYOUT.CHERRIES2; rank--) {
-  HELP_ROWS[len(HELP_ROWS) + 1] = { icons: help_icons(rank), payout: Model.payoutFor(rank) };
-}
+// built on first use (the import cycle: no reads at load)
+const HELP_ROWS: LuaTable = lateOnce(() => {
+  const rows: LuaTable = seq<any>();
+  for (let rank = Model.NUM_PAYOUT_TYPES - 1; rank >= Model.PAYOUT.CHERRIES2; rank--) {
+    rows[len(rows) + 1] = { icons: help_icons(rank), payout: Model.payoutFor(rank) };
+  }
+  return rows;
+});
 
 // Lua: slot_machine.lua:104
 function cache_root(): string {

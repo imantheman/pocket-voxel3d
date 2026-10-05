@@ -13,6 +13,7 @@
 // - RSE / Emerald-only branches throw "NOT FAITHFUL: Emerald only".
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { requireLua } from "./require_map.ts";
 import { notPorted } from "../notported.ts";
 import { seq, len, ipairs, pairs, concat, type LuaTable } from "../platform/lt.ts";
 import { truthy, tostring, tonumber, format, char } from "../../../import/gen3/lua.ts";
@@ -81,6 +82,8 @@ import LayoutNative from "./layout_native.ts";
 // Lua: field.lua:3 (lazyReq) -- for a module that has no file in the port yet
 // (it is outside the stubbed require closure): require fails, as in Lua.
 function lazyReqMissing(name: string): any {
+  const m = requireLua(name); // ported since this file was written
+  if (m !== undefined) return m;
   return notPorted(`require("${name}") (no such module in the port yet)`);
 }
 

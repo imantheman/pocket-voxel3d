@@ -169,6 +169,9 @@ const MAP_TYPE_KIND: Record<number, [string, string]> = {
 
 let manifestLayouts: Record<string, any> = {};
 
+/** The link modules (Union Room, trades, battles) are not in this release. */
+const LINK_PORTED = false;
+
 export const Dataset = {
   cacheRootOverride: undefined as string | undefined,
   // Brian's Dataset has no `map`; map.lua / warp.lua probe it (`Dataset.map`), so it reads nil.
@@ -469,7 +472,9 @@ export const Dataset = {
       Space.ensureBundle(undefined);
       nEvents = Space.attachEventsToMaps(game.data.maps, Space.bundle) ?? 0;
     }
-    if (FieldModules.enabled("unionPlaza")) {
+    // NOT FAITHFUL: link deferred -- the Union Room plaza (link/union_plaza_map)
+    // is not in this release; its map is not built
+    if (FieldModules.enabled("unionPlaza") && LINK_PORTED) {
       UnionPlazaMap.ensure(game);
     }
 

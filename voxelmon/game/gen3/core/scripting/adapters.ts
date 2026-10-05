@@ -19,6 +19,7 @@
 // - mod.log:info / print -> Logger.info.
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { requireLua } from "../require_map.ts";
 import { ipairs, pairs, len, seq, fromArray, type LuaTable } from "../../platform/lt.ts";
 import { format, tonumber, tostring, truthy, mod as lmod } from "../../../../import/gen3/lua.ts";
 import { match } from "../../platform/lpattern.ts";
@@ -85,7 +86,8 @@ type Fn = (...a: any[]) => any;
 // pcall(require, name) for a module with no file in the port: [false, err].
 // A lazily-required module registered in G3Lazy is a successful require.
 function pcallMissing(name: string): [boolean, any] {
-  if (G3Lazy[name] != null) return [true, G3Lazy[name]];
+  const m = requireLua(name); // G3Lazy, or ported since this file was written
+  if (m !== undefined) return [true, m];
   try {
     notPorted(`require("${name}") (no such module in the port yet)`);
   } catch (e) {

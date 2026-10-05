@@ -26,6 +26,7 @@
 //   Gift.runWonderCardScript returns [yield, jumped].
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { requireLua } from "../require_map.ts";
 import { len, ipairs, pairs, remove, unpack, seq, toArray } from "../../platform/lt.ts";
 import { truthy, tostring, tonumber, format, mod, sub } from "../../../../import/gen3/lua.ts";
 import { gsub } from "../../platform/lpattern.ts";
@@ -84,7 +85,8 @@ type DispatchFn = (vm: Vm, row: Row) => any;
 // pcall(require, X) of a lazily-required module: its G3Lazy entry, or (no
 // entry) the failed require, as in Lua (Brian's failed-require path).
 function pcallReqMissing(name: string): [boolean, any] {
-  if (G3Lazy[name] != null) return [true, G3Lazy[name]];
+  const m = requireLua(name); // G3Lazy, or ported since this file was written
+  if (m !== undefined) return [true, m];
   return [false, "module '" + name + "' not found (no such module in the port yet)"];
 }
 

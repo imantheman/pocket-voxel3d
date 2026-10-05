@@ -15,9 +15,7 @@ export const FieldModules = {
     renewableHiddenItems: true,
     leagueLighting: true,
     ssAnne: true,
-    // NOT FAITHFUL: link deferred -- the Union Room plaza (link/union_plaza_map)
-    // is not in this release, so its field module is off (Brian: true)
-    unionPlaza: false,
+    unionPlaza: true,
     seafoamSurf: true,
     viridianForestEscape: true,
   } as Record<string, boolean>,

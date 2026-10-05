@@ -23,6 +23,7 @@
 // - print -> Logger.info.
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { requireLua } from "../require_map.ts";
 import { ipairs, pairs, len, seq, toArray, type LuaTable } from "../../platform/lt.ts";
 import { format, tonumber, tostring, truthy, mod as lmod } from "../../../../import/gen3/lua.ts";
 import { luaLoad } from "../../platform/luadata.ts";
@@ -56,7 +57,9 @@ import "../encounter_rules/frlg.ts";
 
 // Lua: space.lua:3 (lazyReq) for a module with no file in the port: the
 // require fails, as in Lua; pcall(lazyReq, name) reads [false, err].
-function pcallMissing(name: string): [false, string] {
+function pcallMissing(name: string): [boolean, any] {
+  const m = requireLua(name); // ported since this file was written
+  if (m !== undefined) return [true, m];
   try {
     notPorted(`require("${name}") (no such module in the port yet)`);
   } catch (e) {

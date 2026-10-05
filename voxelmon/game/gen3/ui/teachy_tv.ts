@@ -19,6 +19,7 @@
 //   0..3 (a JS array with slot 0 used).
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { late, lateOnce } from "../platform/late.ts";
 import { seq, len, ipairs, type LuaTable } from "../platform/lt.ts";
 import { tonumber, tostring, mod } from "../../../import/gen3/lua.ts";
 import { G } from "../platform/graphics.ts";
@@ -46,9 +47,10 @@ import OwSpritesMod from "../core/ow_sprites.ts";
 import Trig from "../core/trig.ts";
 import BagChrome from "./bag_chrome.ts";
 
-const BagMenu: any = BagMenuMod;
-const TmCase: any = TmCaseMod;
-const TTV: any = TeachyTv;
+// late-bound (the import cycle: no reads at load)
+const BagMenu: any = late(() => BagMenuMod as any);
+const TmCase: any = late(() => TmCaseMod as any);
+const TTV: any = late(() => TeachyTv as any);
 
 // pokefirered/src/teachy_tv.c:236 upText_Y
 const ROW_PITCH = 16;
@@ -58,13 +60,13 @@ const LIST_TPL = { left: 4, top: 1, width: 22, height: 12 };
 const BODY_TPL = { left: 2, top: 15, width: 26, height: 4 };
 
 // (Brian's LIST_WIN / BODY_WIN templates; unused by his draw code, kept for parity)
-const LIST_WIN = Window.template(LIST_TPL.left, LIST_TPL.top, LIST_TPL.width, LIST_TPL.height);
-const BODY_WIN = Window.template(BODY_TPL.left, BODY_TPL.top, BODY_TPL.width, BODY_TPL.height);
+const LIST_WIN = lateOnce(() => Window.template(LIST_TPL.left, LIST_TPL.top, LIST_TPL.width, LIST_TPL.height) as any);
+const BODY_WIN = lateOnce(() => Window.template(BODY_TPL.left, BODY_TPL.top, BODY_TPL.width, BODY_TPL.height) as any);
 
 // pokefirered/src/teachy_tv.c:679 AddTextPrinterParameterized2(0, FONT_MALE, text, speed, 0, 1, 0xC, 3)
-const BODY_COLOR = { fg: FrlgFont.STDPAL[1], shadow: FrlgFont.STDPAL[3], bg: FrlgFont.STDPAL[0] };
+const BODY_COLOR = lateOnce(() => ({ fg: FrlgFont.STDPAL[1], shadow: FrlgFont.STDPAL[3], bg: FrlgFont.STDPAL[0] }));
 // pokefirered/src/teachy_tv.c:237 cursorPal
-const LIST_COLOR = FrlgFont.COLOR.WHITE;
+const LIST_COLOR: any = late(() => FrlgFont.COLOR.WHITE as any);
 
 // pokefirered/src/teachy_tv.c:620 TeachyTvSetWindowRegs
 const WIN0_X0 = 0x1C, WIN0_X1 = 0xD4, WIN0_Y0 = 0x0C, WIN0_Y1 = 0x64;
@@ -119,7 +121,7 @@ const GRASS_MAP: LuaTable = seq(
 
 // pokefirered/include/constants/songs.h:354 MUS_TEACHY_TV_MENU (Song = song_ids)
 
-const T: any = TTV.TIMING;
+const T: any = late(() => TTV.TIMING);
 
 // Lua: teachy_tv.lua:103
 function se(id: any): void {

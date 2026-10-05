@@ -2,16 +2,14 @@
 // FireRed / LeafGreen save rules: the per-game half of save_schema_firered
 // (New Game defaults, continue warps, load-time repairs). The profile row
 // names this module as `saveRules`.
-//
-// NOT FAITHFUL (plumbing): trainer_fan_club, pokemon_size_record and roamer
-// have no stub yet (they are reached only through this module's dynamic
-// require), so newGameInit and repairRoamer stop with notPorted where the Lua
-// requires them.
+
 
 import { ipairs, seq } from "../../platform/lt.ts";
 import { format, tonumber, tostring, truthy } from "../../../../import/gen3/lua.ts";
 import { find, match } from "../../platform/lpattern.ts";
-import { notPorted } from "../../notported.ts";
+import { TrainerFanClub } from "../trainer_fan_club.ts";
+import { SizeRecord } from "../pokemon_size_record.ts";
+import { Roamer } from "../roamer.ts";
 import { Flags } from "../scripting/flags.ts";
 import { Safari } from "../safari.ts";
 import { Field } from "../field.ts";
@@ -180,12 +178,12 @@ export const FireredRules = {
   },
 
   // Lua: firered_rules.lua:145
-  newGameInit(_session: Session, _opts?: unknown): void {
+  newGameInit(session: Session, _opts?: unknown): void {
     // pokefirered/src/new_game.c:143 ResetTrainerFanClub
-    // NOT FAITHFUL (plumbing): src.core.game3.trainer_fan_club has no stub.
-    notPorted("trainer_fan_club.reset");
+    TrainerFanClub.reset(session, undefined);
     // pokefirered/src/new_game.c:132 InitMagikarpSizeRecord
-    // (pokemon_size_record.initMagikarpSizeRecord / initHeracrossSizeRecord)
+    SizeRecord.initMagikarpSizeRecord(session, undefined);
+    SizeRecord.initHeracrossSizeRecord(session, undefined);
   },
 
   // Lua: firered_rules.lua:154
@@ -203,10 +201,8 @@ export const FireredRules = {
     const vars = session.vars ?? {};
     const sceneVal = tonumber(vars[VAR_MAP_SCENE_ONE_ISLAND_POKEMON_CENTER_1F] ?? vars["VAR_MAP_SCENE_ONE_ISLAND_POKEMON_CENTER_1F"]) ?? 0;
     if (hasLink || sceneVal >= 6) {
-      // NOT FAITHFUL (plumbing): src.core.game3.roamer has no stub; the Lua
-      // calls Roamer.init(session, tonumber(vars[VAR_STARTER_MON]) or 0).
-      void VAR_STARTER_MON;
-      notPorted("roamer.init");
+      const starter = tonumber(vars[VAR_STARTER_MON] ?? vars["VAR_STARTER_MON"]) ?? 0;
+      Roamer.init(session, starter);
     }
   },
 };

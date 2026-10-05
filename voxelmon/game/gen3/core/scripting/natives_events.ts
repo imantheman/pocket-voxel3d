@@ -10,6 +10,7 @@
 //   pcall(require) is a failed require (lazyReqMissing below).
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { requireLua } from "../require_map.ts";
 import { seq, len, ipairs, type LuaTable } from "../../platform/lt.ts";
 import { truthy, tonumber, mod } from "../../../../import/gen3/lua.ts";
 import { notPorted } from "../../notported.ts";
@@ -39,6 +40,8 @@ function lor<A, B>(a: A, b: B): A | B {
 
 // Lua's require of a module that has no file in the port: it fails.
 function lazyReqMissing(name: string): any {
+  const m = requireLua(name); // ported since this file was written
+  if (m !== undefined) return m;
   return notPorted(`require("${name}") (no such module in the port yet)`);
 }
 

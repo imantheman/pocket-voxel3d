@@ -20,6 +20,7 @@
 // - Event objects are plain records built by object_prepare (Prepare.instance).
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { requireLua } from "./require_map.ts";
 import { NotPortedError, notPorted } from "../notported.ts";
 import { seq, len, ipairs, pairs, fromArray, type LuaTable } from "../platform/lt.ts";
 import { truthy, tostring, tonumber, format, mod } from "../../../import/gen3/lua.ts";
@@ -65,6 +66,8 @@ interface Bounds { w: number; h: number }
 // Lua: objects.lua:5 (lazyReq) -- for a module that has no file in the port
 // (Emerald only): require fails, as in Lua.
 function lazyReqMissing(name: string): any {
+  const m = requireLua(name); // ported since this file was written
+  if (m !== undefined) return m;
   return notPorted(`require("${name}") (no such module in the port)`);
 }
 

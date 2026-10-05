@@ -42,6 +42,7 @@
 //   never reach the link stub.
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { requireLua } from "../require_map.ts";
 import { G3Lazy } from "../lazy_registry.ts";
 import { NotPortedError, notPorted } from "../../notported.ts";
 import { seq, len, ipairs, pairs, insert, remove, sort, type LuaTable } from "../../platform/lt.ts";
@@ -158,6 +159,8 @@ function orNil(v: any): any {
 
 /** A plain `require` of a module that has no file in the port: fails, as in Lua. */
 function requireMissing(name: string): any {
+  const m = requireLua(name); // ported since this file was written
+  if (m !== undefined) return m;
   return notPorted(`require("${name}") (no such module in the port)`);
 }
 
