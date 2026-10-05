@@ -25,6 +25,8 @@
 //! - **Sound** is the M4A engine (audio.rs) on its own thread, started
 //!   before the guest boots ([`before_guest`]); the Kanto synth stays off
 //!   (main.rs's `audio3ds_init` is replaced for this build and says so).
+//! - **The pace.** 60 frames a second on a New 3DS while a frame fits in a
+//!   vblank, else 30, the game ticking at 60 either way (pace.rs).
 //! - **Memory.** The 2D layer's textures live in linear memory beside the
 //!   map's vertices, so the map plans for less ([`map_cap`]); FireRed's paks
 //!   are small, so its pak cache is too, leaving the heap to QuickJS
@@ -43,6 +45,8 @@ macro_rules! g3_root { () => { "sdmc:/3ds/voxelmon/firered/" } }
 macro_rules! g3_root { () => { "sdmc:/3ds/voxelmon/leafgreen/" } }
 
 mod audio;
+mod pace;
+pub use pace::{after_render, before_render, borrow_tick, frame_top, step_begin};
 
 extern "C" {
     fn g3_gpu_init_shared(shbin: *const u8, len: u32) -> i32;
@@ -125,6 +129,7 @@ pub fn before_guest() {
 /// guest's newest draw list into the frame texture, and the people's quads
 /// for this frame's camera.
 pub fn offscreen_pass() {
+    pace::render_start();
     if !unsafe { GPU_OK } {
         return;
     }
@@ -219,6 +224,7 @@ pub fn composite() {
 
 /// The perf block's extra lines (every 5 s): the 2D layer's and the sound's.
 pub fn perf_line() {
+    pace::perf_line();
     if unsafe { GPU_OK } {
         let mut p = [0f32; 10];
         unsafe { g3_perf(p.as_mut_ptr()) };

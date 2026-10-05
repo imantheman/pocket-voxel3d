@@ -4868,7 +4868,7 @@ fn main() {
         // START belongs to the game (menu). Exit with START+SELECT.
         unsafe {
             extern "C" { fn osGetTime() -> u64; }
-            frame_start = osGetTime();
+            frame_start = osGetTime(); #[cfg(feature = "gen3")] gen3::frame_top();
         }
         {
             extern "C" { fn osGetTime() -> u64; }
@@ -4952,7 +4952,7 @@ fn main() {
                 if sim_acc > 16.667 {
                     perf_drop_ms += sim_acc - 16.667;
                     sim_acc = 16.667;
-                }
+                } #[cfg(feature = "gen3")] gen3::borrow_tick(n, &mut sim_acc);
                 let n = n.max(1);
                 perf_ticks += n;
                 n
@@ -5035,7 +5035,7 @@ fn main() {
                 let t_js = now_ms();
                 let t_js_us = now_us();
                 for step in 0..steps {
-                    voxel::set_last_step(step + 1 == steps);
+                    voxel::set_last_step(step + 1 == steps); #[cfg(feature = "gen3")] gen3::step_begin(step, steps);
                     if qjs_call_frame(CTX, b, e2.as_mut_ptr(), 255) != 0 { failed = true; break; }
                     // Scene time and audio belong to the SIM tick, not the
                     // rendered frame: at the 30 Hz render cap they were
@@ -7069,7 +7069,7 @@ if page_tex.len() < pak_static.atlases.len() {
             // inside two vblanks paces to every second one (C3D_FrameRate 30,
             // a steady 33.4 ms); a heavier one takes the next vblank (60),
             // so a 36 ms frame shows at 50 ms rather than waiting to 66.
-            let want30 = cpu < 25.0;
+            let want30 = cpu < 25.0; #[cfg(feature = "gen3")] let want30 = true;
             if want30 != frame_rate_30 {
                 frame_rate_30 = want30;
                 unsafe { C3D_FrameRate(if want30 { 30.0 } else { 60.0 }); }
@@ -7285,7 +7285,7 @@ if page_tex.len() < pak_static.atlases.len() {
             _ => None,
         };
         let (tilt_unit_ref, tilt_sharp_ref, tilt_bands_ref) = (tilt_unit.as_ref(), tilt_sharp.as_ref(), tilt_bands.as_ref());
-        let (tmvp_l_ref, tmvp_r_ref) = (&tmvp_l, &tmvp_r);
+        let (tmvp_l_ref, tmvp_r_ref) = (&tmvp_l, &tmvp_r); #[cfg(feature = "gen3")] gen3::before_render();
         instance.render_frame_with(|mut frame| { #[cfg(feature = "gen3")] gen3::offscreen_pass();
             fn cast_lifetime_to_closure<'frame, T>(x: T) -> T
             where
@@ -7659,7 +7659,7 @@ if page_tex.len() < pak_static.atlases.len() {
 
         // Previous frame's buffers drop here, a full frame after the GPU
         // last touched them.
-        card_hold = card_bufs;
+        card_hold = card_bufs; #[cfg(feature = "gen3")] gen3::after_render();
         spark_hold = spark_buf;
         pic_hold = pic_bufs;
         gb_hold = gb_buf;
