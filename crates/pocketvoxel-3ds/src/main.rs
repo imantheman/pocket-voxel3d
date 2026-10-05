@@ -7722,6 +7722,10 @@ unsafe fn audio3ds_init(_rate: i32, _frames_per_buf: i32) -> i32 {
 /// A fixed 92 MB with the 8 MB binary is the whole of a New 3DS's 124 MB, so
 /// a bigger build failed its linear allocation at boot, and an Old 3DS (64
 /// MB) never booted at all; the Gen 3 runtime takes what there is.
+/// `static mut`, so it lands in .data: libctru's __system_allocateHeaps
+/// WRITES the size it picks back into a 0 here, and a plain static sits in
+/// read-only .rodata -- a data abort on a real console (Citra does not
+/// enforce page permissions, so it booted there).
 #[cfg(feature = "gen3")]
 #[no_mangle]
-pub static __ctru_heap_size: u32 = 0;
+pub static mut __ctru_heap_size: u32 = 0;
