@@ -817,7 +817,8 @@ function drawSingleActor(game: any, mapDef: any, a: any, camX: number, camY: num
   const billboarded = pushBillboard(a.x, a.y, camX, camY);
   let drew = false;
   if (a.draw) {
-    a.draw(camX, camY);
+    // Lua: field_view.lua:561 (a:draw(camX, camY): the actor is self)
+    a.draw(a, camX, camY);
     drew = true;
   }
   if (!drew && a.renderer) {
