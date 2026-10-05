@@ -128,10 +128,17 @@ V.select = (identity: string): void => {
 // Lua: versions_frlg.lua:2926 -- set by versions.ts (it owns VersionsGame)
 V.game = undefined;
 
-/** map_catalog, bound by its own module once ported (breaks the import cycle). */
-let mapCatalog: { mapIdFor(group: unknown, num: unknown): string | undefined } | undefined;
+/**
+ * map_catalog, bound by its own module when it loads (the Lua requires it
+ * lazily inside frMapFor). It is imported below so it is always loaded; in
+ * the import cycle map_catalog.ts may run before this module's body, so the
+ * binding is a `var` (hoisted, no TDZ) and is never re-initialised here.
+ */
+// eslint-disable-next-line no-var
+var mapCatalog: { mapIdFor(group: unknown, num: unknown): string | undefined } | undefined;
 export function bindMapCatalog(mc: typeof mapCatalog): void {
   mapCatalog = mc;
 }
+import "./map_catalog.ts";
 
 export default VersionsFrlg;
