@@ -55,38 +55,8 @@ static void g3log(const char *fmt, ...) {
 
 /* ---------------------------------------------------------------- files */
 
-#define G3_ROOT "sdmc:/3ds/voxelmon/firered/"
-
-static FILE *g3_open(const char *path) {
-    char full[512];
-    snprintf(full, sizeof(full), G3_ROOT "%s", path);
-    return fopen(full, "rb");
-}
-
-/* A cache file's bytes (malloc'd), or NULL. */
-uint8_t *g3_read_file(const char *path, size_t *len) {
-    *len = 0;
-    FILE *f = g3_open(path);
-    if (!f) return NULL;
-    fseek(f, 0, SEEK_END);
-    long n = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (n < 0) { fclose(f); return NULL; }
-    uint8_t *b = (uint8_t *)malloc(n > 0 ? (size_t)n : 1);
-    if (!b) { fclose(f); return NULL; }
-    size_t got = n > 0 ? fread(b, 1, (size_t)n, f) : 0;
-    fclose(f);
-    if ((long)got != n) { free(b); return NULL; }
-    *len = (size_t)n;
-    return b;
-}
-
-int g3_exists(const char *path) {
-    FILE *f = g3_open(path);
-    if (!f) return 0;
-    fclose(f);
-    return 1;
-}
+/* g3_files.c: the pack, loose files, deflated files */
+uint8_t *g3_read_file(const char *path, size_t *len);
 
 /* ---------------------------------------------------------------- textures */
 

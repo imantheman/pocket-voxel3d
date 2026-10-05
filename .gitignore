@@ -15,6 +15,8 @@ node_modules/
 # into target/, and a stale 34 MB copy of it once rode along in a commit.
 *.3dsx
 *.elf
+# FireRed's bundle compiled to QuickJS bytecode (cc_build_firered.sh)
+crates/pocketvoxel-3ds/game-firered.qbc
 # the cooker app's downloads and result
 cooker/_work/
 cooker/output/

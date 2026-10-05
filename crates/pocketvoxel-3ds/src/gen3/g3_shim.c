@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <malloc.h>
 #include "quickjs.h"
 
 int g3_tex_upload(int id, int w, int h, const uint8_t *rgba, size_t len, int repeat);
@@ -359,6 +360,68 @@ static JSValue g3_stopall(JSContext *ctx, JSValueConst t, int c, JSValueConst *v
     g3a_stop_all();
     return JS_UNDEFINED;
 }
+/* ------------------------------------------------------------------ boot
+   The guest's code as QuickJS bytecode (cc_build_firered.sh compiles the
+   bundle on the PC, tools/gen3/qjs_run.c --compile, source stripped): the
+   console skips parsing 6 MB of JavaScript and keeps no copy of the source
+   per function. game-firered.js is then just `voxel.g3RunBytecode()`. */
+
+static const uint8_t *g3_bc;
+static size_t g3_bc_len;
+
+void g3_set_bytecode(const uint8_t *p, size_t n) { g3_bc = p; g3_bc_len = n; }
+
+static JSValue g3_runbytecode(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    if (!g3_bc || !g3_bc_len) return JS_ThrowInternalError(ctx, "no bytecode in this build");
+    JSValue fn = JS_ReadObject(ctx, g3_bc, g3_bc_len, JS_READ_OBJ_BYTECODE);
+    if (JS_IsException(fn)) return fn;
+    JSValue r = JS_EvalFunction(ctx, fn);
+    if (JS_IsException(r)) return r;
+    JS_FreeValue(ctx, r);
+    return JS_UNDEFINED;
+}
+
+/* g3Mem() -> [QuickJS heap bytes, app heap used, app heap size, linear free,
+   app heap high water (newlib's arena), QuickJS GC threshold]
+   (the boot and perf lines; JS_ComputeMemoryUsage walks the heap, so not
+   every frame) */
+extern char *fake_heap_start, *fake_heap_end;
+unsigned int linearSpaceFree(void);
+
+static JSValue g3_mem(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    JSMemoryUsage mu;
+    JS_ComputeMemoryUsage(JS_GetRuntime(ctx), &mu);
+    struct mallinfo mi = mallinfo();
+    JSValue a = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, a, 0, JS_NewFloat64(ctx, (double)mu.malloc_size));
+    JS_SetPropertyUint32(ctx, a, 1, JS_NewFloat64(ctx, (double)(unsigned)mi.uordblks));
+    JS_SetPropertyUint32(ctx, a, 2, JS_NewFloat64(ctx, (double)(fake_heap_end - fake_heap_start)));
+    JS_SetPropertyUint32(ctx, a, 3, JS_NewFloat64(ctx, (double)linearSpaceFree()));
+    JS_SetPropertyUint32(ctx, a, 4, JS_NewFloat64(ctx, (double)(unsigned)mi.arena));
+    JS_SetPropertyUint32(ctx, a, 5, JS_NewFloat64(ctx, (double)JS_GetGCThreshold(JS_GetRuntime(ctx))));
+    return a;
+}
+
+/* g3Gc(hold): true holds QuickJS's cycle collector off (Game3.load builds
+   tens of MB of tables that hold no cycles, and each collection walks all of
+   them: seconds on the console); false runs one collection now and puts the
+   threshold back where QuickJS would (1.5x the heap in use). */
+static JSValue g3_gc(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    JSRuntime *rt = JS_GetRuntime(ctx);
+    if (c > 0 && JS_ToBool(ctx, v[0])) {
+        JS_SetGCThreshold(rt, (size_t)-1);
+    } else {
+        JS_RunGC(rt);
+        JSMemoryUsage mu;
+        JS_ComputeMemoryUsage(rt, &mu);
+        JS_SetGCThreshold(rt, (size_t)(mu.malloc_size + mu.malloc_size / 2));
+    }
+    return JS_UNDEFINED;
+}
+
 static JSValue g3_audioready(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t; (void)c; (void)v;
     return JS_NewBool(ctx, g3a_ready());
@@ -379,6 +442,9 @@ int qjs_register_g3(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "g3ReadBuf", JS_NewCFunction(ctx, g3_readbuf, "g3ReadBuf", 1));
     JS_SetPropertyStr(ctx, o, "g3Exists", JS_NewCFunction(ctx, g3_exists_js, "g3Exists", 1));
     JS_SetPropertyStr(ctx, o, "g3Ents", JS_NewCFunction(ctx, g3_ents, "g3Ents", 2));
+    JS_SetPropertyStr(ctx, o, "g3RunBytecode", JS_NewCFunction(ctx, g3_runbytecode, "g3RunBytecode", 0));
+    JS_SetPropertyStr(ctx, o, "g3Mem", JS_NewCFunction(ctx, g3_mem, "g3Mem", 0));
+    JS_SetPropertyStr(ctx, o, "g3Gc", JS_NewCFunction(ctx, g3_gc, "g3Gc", 1));
     static const struct { const char *name; JSCFunction *fn; int n; } snd[] = {
         { "g3SongPlay", g3_songplay, 1 }, { "g3SongStop", g3_songstop, 0 },
         { "g3SongPause", g3_songpause, 0 }, { "g3SongResume", g3_songresume, 0 },

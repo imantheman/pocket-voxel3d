@@ -59,10 +59,32 @@ fn main() {
             .flag("-fno-strict-aliasing")
             .define("__3DS__", None).define("ARM11", None)
             .opt_level(2).warnings(false);
-        for n in ["g3_png.c", "g3_render.c", "g3_shim.c"] {
+        for n in ["g3_png.c", "g3_files.c", "g3_render.c", "g3_shim.c"] {
             println!("cargo:rerun-if-changed=src/gen3/{n}");
             g.file(format!("src/gen3/{n}"));
         }
         g.compile("pvgen3");
+        // The guest's boot: QuickJS bytecode when cc_build_firered.sh made a
+        // game-firered.qbc at least as new as the bundle (main.rs then runs a
+        // one-line stub that loads it, src/gen3/mod.rs), else the bundle's
+        // source as before.
+        let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+        println!("cargo:rerun-if-changed=game-firered.js");
+        println!("cargo:rerun-if-changed=game-firered.qbc");
+        let mtime = |p: &str| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+        let fresh = match (mtime("game-firered.qbc"), mtime("game-firered.js")) {
+            (Some(q), Some(j)) => q >= j && std::fs::metadata("game-firered.qbc").map(|m| m.len() > 0).unwrap_or(false),
+            _ => false,
+        };
+        if fresh {
+            std::fs::copy("game-firered.qbc", out.join("g3.qbc")).unwrap();
+            std::fs::write(out.join("g3_boot.js"), "voxel.g3RunBytecode();\n").unwrap();
+        } else {
+            if mtime("game-firered.qbc").is_some() {
+                println!("cargo:warning=game-firered.qbc is older than game-firered.js: booting from the source");
+            }
+            std::fs::write(out.join("g3.qbc"), b"").unwrap();
+            std::fs::copy("game-firered.js", out.join("g3_boot.js")).unwrap();
+        }
     }
 }

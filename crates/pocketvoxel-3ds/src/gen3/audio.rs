@@ -30,6 +30,8 @@ use super::dlog;
 const AUDIO_DIR: &str = "sdmc:/3ds/voxelmon/firered/data/generated/gba/audio/";
 const BLOB_PATH: &str = "sdmc:/3ds/voxelmon/firered/audio.m4ap";
 const KEY_PATH: &str = "sdmc:/3ds/voxelmon/firered/audio.m4ap.key";
+/// The start of the key the card cook writes beside its blob (gen3data.ts CARD_AUDIO_KEY).
+const CARD_KEY: &[u8] = b"M4AP1 card\n";
 
 /// Output rate: the Kanto host's (and one the M4A oracle tests cover).
 pub const RATE: i32 = 22050;
@@ -126,6 +128,20 @@ fn song_files() -> Vec<(u32, String)> {
 /// (and written for next time).
 fn load_blob() -> Result<Vec<u8>, String> {
     let t0 = unsafe { svcGetSystemTick() };
+    // a blob the card cook built on the PC (voxelmon/cook/gen3data.ts) comes
+    // with a card key: taken as is (the cache is in data.pvpk, where this
+    // thread does not look, and its audio sources are not on the card)
+    if let Ok(k) = std::fs::read(KEY_PATH) {
+        if k.starts_with(CARD_KEY) {
+            if let Ok(b) = std::fs::read(BLOB_PATH) {
+                if b.len() >= 64 && &b[0..4] == b"M4AP" {
+                    dlog(&format!("[pv] g3 sound: the card's audio.m4ap ({} KB) in {:.0} ms",
+                        b.len() / 1024, us_since(t0) as f32 / 1000.0));
+                    return Ok(b);
+                }
+            }
+        }
+    }
     let songs = song_files();
     let key = cache_key(songs.len()).ok_or_else(|| format!("no {AUDIO_DIR}meta.json"))?;
     let t_key = us_since(t0);

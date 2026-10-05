@@ -162,6 +162,18 @@ static int inflate_raw(Inf *s) {
     return 0;
 }
 
+/* A raw deflate stream to exactly raw_len bytes (malloc'd), or NULL: the
+   card's deflated files (g3_files.c g3_read_file). */
+uint8_t *g3_inflate(const uint8_t *src, size_t len, size_t raw_len) {
+    Inf s;
+    memset(&s, 0, sizeof(s));
+    s.src = src; s.len = len;
+    s.outcap = raw_len ? raw_len : 1;
+    s.out = (uint8_t *)malloc(s.outcap);
+    if (!s.out || inflate_raw(&s) != 0 || s.outlen != raw_len) { free(s.out); return NULL; }
+    return s.out;
+}
+
 /* ------------------------------------------------------------ PNG */
 
 static uint32_t be32(const uint8_t *p) { return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3]; }

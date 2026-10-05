@@ -46,7 +46,15 @@ extern "C" {
     fn g3_bb_draw(mvp: *const core::ffi::c_void);
     fn g3_composite();
     fn qjs_register_g3(ctx: *mut JSContext) -> i32;
+    fn g3_set_bytecode(p: *const u8, n: usize);
 }
+
+/// The guest as QuickJS bytecode (cc_build_firered.sh: the bundle compiled on
+/// the PC with its source stripped; empty when the build boots the source,
+/// build.rs). With it, what main.rs evaluates is only
+/// `voxel.g3RunBytecode()` (g3_shim.c), so the console never parses the
+/// bundle nor keeps each function's source.
+static G3_BYTECODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/g3.qbc"));
 
 /// Linear memory kept back from the map's vertex plan for the 2D layer:
 /// the frame texture and canvases are VRAM, but every guest texture (fonts,
@@ -90,6 +98,7 @@ pub fn before_guest() {
     }
     let sound = audio::init();
     unsafe { SOUND_ON = sound };
+    unsafe { g3_set_bytecode(G3_BYTECODE.as_ptr(), G3_BYTECODE.len()) };
     unsafe { qjs_register_g3(super::CTX) };
     dlog(&format!(
         "[pv] g3: 2D layer {}, sound {}, linear {} KB -> {} KB",

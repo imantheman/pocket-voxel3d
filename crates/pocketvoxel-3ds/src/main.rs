@@ -1553,7 +1553,7 @@ static mut DRAWN: u32 = 0;
 // under the Homebrew Launcher. 64+24 leaves room for libctru's own needs.
 // The forest pak alone is 58 MB; at a 64 MB app heap the read left nothing
 // for QuickJS or the geometry staging Vec.
-#[no_mangle]
+#[no_mangle] #[cfg(not(feature = "gen3"))]
 pub static __ctru_heap_size: u32 = 92 * 1024 * 1024;
 #[no_mangle]
 pub static __ctru_linear_heap_size: u32 = 24 * 1024 * 1024;
@@ -7706,7 +7706,7 @@ const OVERLAY_PATH: &str = "sdmc:/3ds/voxelmon/paks_firered/version_firered.vxat
 #[cfg(feature = "gen3")]
 const BOOT_MAPS: [&str; 2] = ["FR_PLAYERS_HOUSE_2F", "FR_PALLET_TOWN"];
 #[cfg(feature = "gen3")]
-static GAME_JS: &[u8] = include_bytes!("../game-firered.js");
+static GAME_JS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/g3_boot.js")); // build.rs: game-firered.js, or the stub that loads its bytecode
 /// The Kanto synth's NDSP stays closed for FireRed: its sound is the M4A
 /// engine's (gen3/audio.rs, started by gen3::before_guest before the guest
 /// boots), so `main`'s `audio_on` is false and the synth is never pumped.
@@ -7715,3 +7715,11 @@ unsafe fn audio3ds_init(_rate: i32, _frames_per_buf: i32) -> i32 {
     dlog("[pv] sound: the Kanto synth is off (FireRed's M4A engine has NDSP)");
     0
 }
+/// FireRed's app heap: 0 = everything the console has left once the code and
+/// the (shared, 24 MB) linear heap are placed (libctru's automatic sizing).
+/// A fixed 92 MB with the 8 MB binary is the whole of a New 3DS's 124 MB, so
+/// a bigger build failed its linear allocation at boot, and an Old 3DS (64
+/// MB) never booted at all; the Gen 3 runtime takes what there is.
+#[cfg(feature = "gen3")]
+#[no_mangle]
+pub static __ctru_heap_size: u32 = 0;
