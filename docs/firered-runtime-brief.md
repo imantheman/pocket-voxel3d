@@ -219,8 +219,25 @@ with `describe.skipIf(!existsSync(<root>))`.
   modules is fine.
 - Do not "improve" logic. Do not leave TODOs in place of logic: port it, or
   mark it `NOT FAITHFUL: <why>` when it truly cannot run here.
-- Performance matters (3DS, about 25 ms a frame at most). Avoid allocating in
-  hot per-frame paths where Brian didn't, but keep the structure.
+- Performance matters: on a New 3DS the game runs at 60 fps when a frame
+  fits in ~15 ms (crates/pocketvoxel-3ds/src/gen3/pace.rs), else 30. Avoid
+  allocating in hot per-frame paths where Brian didn't, but keep the
+  structure. Three things cost far more under QuickJS on the console than
+  they look:
+  - **a throw every frame**: a QuickJS exception builds a backtrace through
+    the whole stack (a stub's NotPortedError caught each frame was 9.5 ms);
+  - **console.log in play**: each line is a file write on the card;
+  - **per-pixel closures and arrays** (mapPixel callbacks, effect pixel
+    functions parsing uniforms per pixel): loop over the bytes instead,
+    with the same arithmetic.
+  Drawing that repeats every frame unchanged can be replayed:
+  `G.memoBegin/memoEnd/memoReplay` (platform/graphics.ts DrawMemo) or a
+  `MemoSet` keyed by the drawing's inputs, as FrlgFont.draw and Chrome's
+  frames do; mark it `NOT FAITHFUL (performance, same picture)`.
+  `bash cc_g3_qjsperf.sh` (local; tools/gen3/qjs_perf.ts + qjs_prof.c) profiles
+  the screens under the 3DS's QuickJS; `bun tools/gen3/perf_check.ts`
+  hashes every frame of the same run, to show a speed-up changed no
+  picture.
 
 ## Testing (definition of done)
 
