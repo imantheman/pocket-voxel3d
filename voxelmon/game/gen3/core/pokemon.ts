@@ -131,6 +131,10 @@ function load_lua(cache: any, rel: string): LuaTable {
 function norm_key(s: unknown): string | null {
   if (s == null) return null;
   let k = upper(tostring(s));
+  // NOT FAITHFUL (speed, same result): a name of only A-Z and 0-9 comes
+  // through every substitution below unchanged (each needs a '_', '.', '-',
+  // "'" or a gender glyph, or puts back the text it matched), so skip them.
+  if (/^[A-Z0-9]*$/.test(k)) return k;
   // Common host aliases before stripping.
   k = gsub(gsub(k, "NIDORAN_F", "NIDORANF")[0], "NIDORAN_M", "NIDORANM")[0];
   k = gsub(gsub(k, "MR_MIME", "MRMIME")[0], "MIME_JR", "MIMEJR")[0];

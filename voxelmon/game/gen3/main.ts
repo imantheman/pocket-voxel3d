@@ -9,6 +9,7 @@
 //
 // Modes, chosen when the bundle is built (bun --define PV_G3_MODE='"..."'):
 //   game      (default) Game3 boots as on the desktop: title, menus, field.
+//             PV_G3_BENCH_SCRIPT / PV_G3_BENCH_SHOTS work here too when given.
 //   bench     Game3 boots, then a new game is put straight on FR_PALLET_TOWN
 //             (6,8), skipping the intro; PV_G3_BENCH_SCRIPT ("tick:KEYS,..."
 //             as tools/gen3/boot_harness.ts, keys held until the next entry)
@@ -19,7 +20,7 @@
 // (worldbench.ts is a separate entry: the world without the runtime.)
 
 // FIRST: the host and the sound, before any runtime module is evaluated.
-import { clock, drawProf } from "./platform/qjs_host.ts";
+import { clock, drawProf, nativeProf, readProf } from "./platform/qjs_host.ts";
 import { BenchScript, errText, loadWorld, nat as n, padBits, setFrame, shotSet, worldOps } from "./platform/qjs_world.ts";
 import { G } from "./platform/graphics.ts";
 import { HostTest, HOSTTEST_SHOT_FRAME, hostTestSound } from "./hosttest.ts";
@@ -33,6 +34,28 @@ declare const PV_G3_BENCH_SCRIPT: string;
 declare const PV_G3_BENCH_SHOTS: string;
 
 const MODE = typeof PV_G3_MODE === "string" ? PV_G3_MODE : "game";
+
+// The runtime's own log lines (Logger, its "[game3] ... failed" notes) go to
+// pvlog.txt too: the host files only lines that start "[pv]" (voxel.rs).
+{
+  const raw = console.log;
+  const fwd = (...a: unknown[]): void => {
+    const s = a.map((x) => (typeof x === "string" ? x : String(x))).join(" ");
+    raw(s.startsWith("[pv]") ? s : "[pv] js: " + s);
+  };
+  console.log = fwd; console.warn = fwd; console.error = fwd;
+}
+
+/** The boot natives some binaries have (g3_shim.c). */
+const g3n = n as unknown as { g3Mem?(): number[]; g3Gc?(hold: boolean): void };
+
+/** The heaps (g3_shim.c g3Mem): QuickJS, the app heap, linear memory. */
+function memText(): string {
+  const m = g3n.g3Mem?.();
+  if (!m) return "mem n/a";
+  const mb = (b: number): string => (b / 1048576).toFixed(1);
+  return `js heap ${mb(m[0]!)} MB, app heap ${mb(m[1]!)} of ${mb(m[2]!)} MB used (high water ${mb(m[4] ?? 0)}), gc at ${mb(m[5] ?? 0)} MB, linear free ${Math.round(m[3]! / 1024)} KB`;
+}
 
 function hostTestMain(): void {
   let test: HostTest | undefined;
@@ -53,6 +76,10 @@ function hostTestMain(): void {
 }
 
 function gameMain(bench: boolean): void {
+  console.log(`[pv] g3: before load: ${memText()}`);
+  readProf.on = true;
+  // no cycle collections while the tables are built (g3_shim.c g3Gc); one after
+  g3n.g3Gc?.(true);
   const t0 = clock();
   const game: any = Game3.new();
   let ok = true;
@@ -62,7 +89,32 @@ function gameMain(bench: boolean): void {
     ok = false;
     console.log(`[pv] g3: Game3 load failed: ${errText(e)}`);
   }
-  console.log(`[pv] g3: Game3 loaded in ${((clock() - t0) / 1000).toFixed(0)} ms (phase ${game.phase})`);
+  readProf.close();
+  readProf.on = false;
+  const tGc = clock();
+  g3n.g3Gc?.(false);
+  console.log(`[pv] g3: after load: cycle collection ${((clock() - tGc) / 1000).toFixed(0)} ms`);
+  console.log(`[pv] g3: Game3 loaded in ${((clock() - t0) / 1000).toFixed(0)} ms (phase ${game.phase}); ${memText()}`);
+  {
+    const l = readProf.list;
+    let host = 0, bytes = 0;
+    for (const r of l) { host += r.host; bytes += Math.max(0, r.size); }
+    console.log(`[pv] g3 load: ${l.length} cache reads, ${(bytes / 1048576).toFixed(1)} MB, host read time ${(host / 1000).toFixed(0)} ms`);
+    for (const r of [...l].sort((a, b) => b.host + b.after - a.host - a.after).slice(0, 16)) {
+      console.log(`[pv] g3 load:   ${((r.host + r.after) / 1000).toFixed(0)} ms (read ${(r.host / 1000).toFixed(0)}) ${r.size} B ${r.path}`);
+    }
+    const by = new Map<string, [number, number, number]>();
+    for (const r of l) {
+      const k = r.path.replace(/^data\/generated\/gba\//, "").replace(/\/[^/]*$/, "/*").replace(/^[^/]*\.(\w+)$/, "*.$1");
+      const e = by.get(k) ?? [0, 0, 0];
+      e[0]++; e[1] += r.host; e[2] += r.after;
+      by.set(k, e);
+    }
+    for (const [k, e] of [...by].sort((a, b) => b[1][1] + b[1][2] - a[1][1] - a[1][2]).slice(0, 10)) {
+      console.log(`[pv] g3 load:   ${((e[1] + e[2]) / 1000).toFixed(0)} ms (read ${(e[1] / 1000).toFixed(0)}) in ${e[0]} reads of ${k}`);
+    }
+    readProf.list = [];
+  }
   if (ok && bench) {
     try {
       game._handleBootAction({
@@ -77,12 +129,14 @@ function gameMain(bench: boolean): void {
 
   const view = new WorldView(worldOps(), loadWorld());
   const field = new Game3World(view);
-  const script = new BenchScript(bench && typeof PV_G3_BENCH_SCRIPT === "string" ? PV_G3_BENCH_SCRIPT : "");
-  const shots = shotSet(bench ? (typeof PV_G3_BENCH_SHOTS === "string" ? PV_G3_BENCH_SHOTS : "90,300") : "");
+  // game mode takes a script and shots too when the build gives them (a
+  // title/new-game check that presses the game's own buttons)
+  const script = new BenchScript(typeof PV_G3_BENCH_SCRIPT === "string" ? PV_G3_BENCH_SCRIPT : "");
+  const shots = shotSet(typeof PV_G3_BENCH_SHOTS === "string" ? PV_G3_BENCH_SHOTS : bench ? "90,300" : "");
   let tick = 0;
   let shown = 0;
   let failedUpdate = false, failedDraw = false;
-  const prof = { frames: 0, update: 0, draw: 0, emit: 0, ticks: 0 };
+  const prof = { frames: 0, update: 0, draw: 0, emit: 0, ticks: 0, memEvery: 0 };
 
   setFrame((buttons: number): void => {
     if (!ok) return;
@@ -124,7 +178,16 @@ function gameMain(bench: boolean): void {
       console.log(`[pv] g3 guest: update ${(prof.update / prof.ticks / 1000).toFixed(2)} ms/tick (${prof.ticks} ticks), ` +
         `draw ${(prof.draw / f / 1000).toFixed(2)} ms (g3Draw ${(drawProf.conv / f / 1000).toFixed(2)}, ` +
         `${Math.round(drawProf.len / f)} floats), world ${(prof.emit / f / 1000).toFixed(2)} ms, ` +
-        `3d=${field.world3d} ents=${view.entCount} phase=${game.phase}`);
+        `3d=${field.world3d} ents=${view.entCount} phase=${game.phase}${++prof.memEvery % 4 === 1 ? "; " + memText() : ""}`);
+      const np = nativeProf;
+      if (np.up + np.cache + np.rd + np.ex + np.au > 0) {
+        console.log(`[pv] g3 natives over ${f} frames: texUpload ${np.up} (${Math.round(np.upKB)} KB, ${(np.upUs / 1000).toFixed(0)} ms), ` +
+          `texFromCache ${np.cache} (${(np.cacheUs / 1000).toFixed(0)} ms), read ${np.rd} (${(np.rdUs / 1000).toFixed(0)} ms), exists ${np.ex} (${(np.exUs / 1000).toFixed(0)} ms), ` +
+          `sound ${np.au} (${(np.auUs / 1000).toFixed(0)} ms: ${Object.entries(np.auTop).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, v]) => k + " " + v).join(", ")})`);
+        np.up = np.upUs = np.upKB = np.cache = np.cacheUs = np.rd = np.rdUs = np.ex = np.exUs = np.au = np.auUs = 0;
+        np.auTop = {};
+      }
+      (globalThis as { __g3ProfDump?: () => void }).__g3ProfDump?.(); // tools/gen3/qjs_loadprof_gen.ts --device builds only
       prof.frames = prof.update = prof.draw = prof.emit = prof.ticks = 0;
       drawProf.conv = drawProf.len = 0;
     }

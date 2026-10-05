@@ -16,12 +16,34 @@ export const clock = (): number => (n.now ? n.now() : Date.now() * 1000);
 /** Draw-list timing, summed until read (main.ts's perf lines). */
 export const drawProf = { conv: 0, len: 0 };
 
+/** The other natives' calls and time (us), summed until main.ts's perf line reads them. */
+export const nativeProf = { up: 0, upUs: 0, upKB: 0, cache: 0, cacheUs: 0, rd: 0, rdUs: 0, ex: 0, exUs: 0, au: 0, auUs: 0, auTop: {} as Record<string, number> };
+
+/**
+ * Cache reads while `on` (main.ts turns it on for Game3.load): each read's
+ * path, size, the host's time for it, and the time until the next read (the
+ * guest's work on that file), in microseconds.
+ */
+export const readProf = {
+  on: false,
+  list: [] as { path: string; size: number; host: number; after: number; t: number }[],
+  /** Close the last read's `after` now. */
+  close(): void {
+    const l = readProf.list[readProf.list.length - 1];
+    if (l && l.after < 0) l.after = clock() - l.t;
+  },
+};
+
 class QuickJsG3Host implements G3Host {
   texUpload(id: number, w: number, h: number, rgba: Uint8Array, repeat: boolean): void {
+    const t = clock();
     n.g3TexUpload!(id, w, h, rgba, repeat);
+    nativeProf.up++; nativeProf.upUs += clock() - t; nativeProf.upKB += (w * h * 4) / 1024;
   }
   texFromCache(id: number, path: string): [number, number] | undefined {
+    const t = clock();
     const r = n.g3TexFromCache!(id, path);
+    nativeProf.cache++; nativeProf.cacheUs += clock() - t;
     return r ? [r[0], r[1]] : undefined;
   }
   canvasNew(id: number, w: number, h: number): void { n.g3Canvas!(id, w, h); }
@@ -39,8 +61,26 @@ class QuickJsG3Host implements G3Host {
     drawProf.conv += clock() - t;
     drawProf.len += list.length;
   }
-  read(path: string): string | undefined { return n.g3Read!(path); }
-  exists(path: string): boolean { return n.g3Exists!(path); }
+  read(path: string): string | undefined {
+    if (!readProf.on) {
+      const t = clock();
+      const s = n.g3Read!(path);
+      nativeProf.rd++; nativeProf.rdUs += clock() - t;
+      return s;
+    }
+    readProf.close();
+    const t = clock();
+    const s = n.g3Read!(path);
+    const t2 = clock();
+    readProf.list.push({ path, size: s?.length ?? -1, host: t2 - t, after: -1, t: t2 });
+    return s;
+  }
+  exists(path: string): boolean {
+    const t = clock();
+    const r = n.g3Exists!(path);
+    nativeProf.ex++; nativeProf.exUs += clock() - t;
+    return r;
+  }
   now(): number { return clock() / 1e6; }
 }
 
@@ -76,5 +116,20 @@ class QuickJsG3Audio implements G3Audio {
 }
 
 // a binary without the natives (or without an audio pack) keeps the silent engine
-if (n.g3SongPlay && n.g3AudioReady?.()) setAudio(new QuickJsG3Audio());
+if (n.g3SongPlay && n.g3AudioReady?.()) {
+  const a = new QuickJsG3Audio() as unknown as Record<string, (...x: unknown[]) => unknown>;
+  // every sound native call counted and timed (main.ts's perf lines)
+  for (const k of Object.getOwnPropertyNames(QuickJsG3Audio.prototype)) {
+    if (k === "constructor") continue;
+    const f = a[k]!;
+    a[k] = (...x: unknown[]): unknown => {
+      const t = clock();
+      try { return f.apply(a, x); } finally {
+        nativeProf.au++; nativeProf.auUs += clock() - t;
+        nativeProf.auTop[k] = (nativeProf.auTop[k] ?? 0) + 1;
+      }
+    };
+  }
+  setAudio(a as unknown as G3Audio);
+}
 console.log(`[pv] g3 sound: guest audio ${n.g3SongPlay ? (n.g3AudioReady?.() ? "on the host engine" : "silent (host has no pack)") : "silent (no natives)"}`);

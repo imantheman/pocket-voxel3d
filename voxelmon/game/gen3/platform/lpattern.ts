@@ -23,6 +23,23 @@ class MatchState {
   capLen: number[] = [];
   depth = 0;
   constructor(readonly src: string, readonly pat: string) {}
+  /** Ready for the next start position (lstrlib.c resets ms.level per try). */
+  reset(): MatchState { this.level = 0; this.depth = 0; return this; }
+}
+
+/**
+ * The literal text every match of `pat` (from p0) must start with: its
+ * leading ordinary characters, less the last one if a '*', '?' or '-' makes
+ * that one optional. A match can only start where this text occurs, so the
+ * searches below jump there instead of trying each position (the result is
+ * the same: a try elsewhere fails on its first characters). Port speed-up;
+ * not in lstrlib.c.
+ */
+function literalPrefix(pat: string, p0: number): string {
+  let k = p0;
+  while (k < pat.length && !SPECIALS.includes(pat[k]!) && pat[k] !== ")" && pat[k] !== "]") k++;
+  if (k < pat.length && k > p0 && (pat[k] === "*" || pat[k] === "?" || pat[k] === "-")) k--;
+  return pat.slice(p0, k);
 }
 
 function classEnd(ms: MatchState, p: number): number {
@@ -255,10 +272,12 @@ export function find(s: string, pat: string, init?: number, plain?: boolean): [n
   }
   const anchor = pat[0] === "^";
   const p0 = anchor ? 1 : 0;
+  const pre = anchor ? "" : literalPrefix(pat, p0);
+  const ms = new MatchState(s, pat);
   let s1 = st;
   do {
-    const ms = new MatchState(s, pat);
-    const e = doMatch(ms, s1, p0);
+    if (pre) { s1 = s.indexOf(pre, s1); if (s1 < 0) return undefined; }
+    const e = doMatch(ms.reset(), s1, p0);
     if (e !== -1) return [s1 + 1, e, ...captures(ms, s1, e, false)];
     s1++;
   } while (s1 <= s.length && !anchor);
@@ -270,10 +289,12 @@ export function matchAll(s: string, pat: string, init?: number): Cap[] | undefin
   const st = startIndex(s.length, init);
   const anchor = pat[0] === "^";
   const p0 = anchor ? 1 : 0;
+  const pre = anchor ? "" : literalPrefix(pat, p0);
+  const ms = new MatchState(s, pat);
   let s1 = st;
   do {
-    const ms = new MatchState(s, pat);
-    const e = doMatch(ms, s1, p0);
+    if (pre) { s1 = s.indexOf(pre, s1); if (s1 < 0) return undefined; }
+    const e = doMatch(ms.reset(), s1, p0);
     if (e !== -1) return captures(ms, s1, e, true);
     s1++;
   } while (s1 <= s.length && !anchor);
@@ -288,11 +309,13 @@ export function match(s: string, pat: string, init?: number): Cap | undefined {
 /** string.gmatch: each match's captures as a tuple (Lua 5.1 gmatch_aux; '^' is literal). */
 export function* gmatch(s: string, pat: string): Generator<Cap[]> {
   let pos = 0;
+  const pre = literalPrefix(pat, 0);
+  const ms = new MatchState(s, pat);
   while (pos <= s.length) {
     let found = false;
     for (let src = pos; src <= s.length; src++) {
-      const ms = new MatchState(s, pat);
-      const e = doMatch(ms, src, 0);
+      if (pre) { src = s.indexOf(pre, src); if (src < 0) return; }
+      const e = doMatch(ms.reset(), src, 0);
       if (e !== -1) {
         pos = e === src ? src + 1 : e;
         found = true;
@@ -313,9 +336,17 @@ export function gsub(s: string, pat: string, repl: GsubRepl, maxN?: number): [st
   const limit = maxN ?? s.length + 1;
   let src = 0, n = 0;
   let out = "";
+  const pre = anchor ? "" : literalPrefix(pat, p0);
+  const ms = new MatchState(s, pat);
   while (n < limit) {
-    const ms = new MatchState(s, pat);
-    const e = doMatch(ms, src, p0);
+    if (pre) {
+      // no match can start before the next occurrence of the prefix
+      const next = s.indexOf(pre, src);
+      if (next < 0) break;
+      out += s.slice(src, next);
+      src = next;
+    }
+    const e = doMatch(ms.reset(), src, p0);
     if (e !== -1) {
       n++;
       const whole = s.slice(src, e);

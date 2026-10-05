@@ -52,6 +52,19 @@ export class ImageData {
   }
 
   paste(src: ImageData, dx: number, dy: number, sx = 0, sy = 0, sw = src.w, sh = src.h): void {
+    if (src !== this) {
+      // a row at a time (the pixel loop below made a typed-array view per
+      // pixel: seconds for a font sheet on the 3DS); the same pixels land
+      const x0 = Math.max(0, -dx), x1 = Math.min(sw, this.w - dx);
+      if (x1 <= x0) return;
+      for (let y = 0; y < sh; y++) {
+        const ty = dy + y;
+        if (ty < 0 || ty >= this.h) continue;
+        const so = ((sy + y) * src.w + sx + x0) * 4, to = (ty * this.w + dx + x0) * 4;
+        this.px.set(src.px.subarray(so, so + (x1 - x0) * 4), to);
+      }
+      return;
+    }
     for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) {
       const tx = dx + x, ty = dy + y;
       if (tx < 0 || ty < 0 || tx >= this.w || ty >= this.h) continue;

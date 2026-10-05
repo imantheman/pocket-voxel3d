@@ -139,6 +139,32 @@ function bindImportCache(): void {
 
 let dsLoadWarned = false;
 
+/**
+ * A layout.mid's header as NativePack.decodeMidLayout reads it (the same
+ * magic and length check), or undefined where that decode would fail.
+ */
+function midHeader(blob: unknown): { trueWidth: number; trueHeight: number } | undefined {
+  if (typeof blob !== "string" || blob.length < 14 || blob.slice(0, 4) !== NativePack.MAGIC_MID) return undefined;
+  const u16 = (i: number): number => blob.charCodeAt(i - 1) + blob.charCodeAt(i) * 256; // native_pack.ts read_u16
+  return { trueWidth: u16(11), trueHeight: u16(13) };
+}
+
+/**
+ * obj[key] made by `make()` on its first read and kept from then on (an
+ * assignment first replaces it unmade). Enumerable, like the plain field.
+ */
+function lazyField(obj: any, key: string, make: () => unknown): void {
+  const settle = (v: unknown): void => {
+    Object.defineProperty(obj, key, { value: v, writable: true, enumerable: true, configurable: true });
+  };
+  Object.defineProperty(obj, key, {
+    enumerable: true,
+    configurable: true,
+    get() { const v = make(); settle(v); return v; },
+    set(v: unknown) { settle(v); },
+  });
+}
+
 // Lua: dataset.lua:127
 function load_lua_rel(rel: string): any {
   const cache = loveCache();
@@ -434,15 +460,24 @@ export const Dataset = {
           + ((info && info.file) ?? ("layouts/" + mapId + ".mid"));
         const blob = cache.read(rel);
         if (blob != null) {
-          const [decoded] = NativePack.decodeMidLayout(blob);
-          if (decoded) {
+          // NOT FAITHFUL (3DS load time and heap): the layout is decoded when
+          // def.midLayout is first read, not here -- every map's cells as
+          // tables was ~40% of the boot heap and ~11 s of the console's boot.
+          // The same values come back; the header (decodeMidLayout's own
+          // check and sizes, native_pack.lua) is read now for the def.
+          const head = midHeader(blob);
+          if (head) {
             const pair = (info && info.pair) ?? def.pair;
-            // decodeMidLayout's cells / borderMids are 0-based: Lua sequences for LayoutNative
-            def.midLayout = LayoutNative.fromDecoded(
-              { ...decoded, cells: fromArray(decoded.cells), borderMids: fromArray(decoded.borderMids) },
-              mapId as string, pair, blob);
-            const tw = decoded.trueWidth ?? decoded.width;
-            const th = decoded.trueHeight ?? decoded.height;
+            lazyField(def, "midLayout", () => {
+              const [decoded] = NativePack.decodeMidLayout(blob);
+              // decodeMidLayout's cells / borderMids are 0-based: Lua sequences for LayoutNative
+              return LayoutNative.fromDecoded(
+                { ...decoded!, cells: fromArray(decoded!.cells), borderMids: fromArray(decoded!.borderMids) },
+                mapId as string, pair, blob);
+            });
+            // (decodeMidLayout's trueWidth/trueHeight are always numbers, so its `?? width` never applies)
+            const tw = head.trueWidth;
+            const th = head.trueHeight;
             if (tw && tw > 0) def.width = tw;
             if (th && th > 0) def.height = th;
             if (pair != null) def.pair = pair;
