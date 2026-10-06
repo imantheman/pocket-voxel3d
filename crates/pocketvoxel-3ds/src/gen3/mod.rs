@@ -22,6 +22,13 @@
 //!   ([`world_pass`]). Two more kinds ride the same records: decals flat on
 //!   the floor (the ground's field effects) and decals on a facade leaned
 //!   back as the cook leans it (the door animations).
+//! - **The lean.** The cook stores buildings and prop cards upright and
+//!   lean-coded (voxelmon/cook/gen3terrain.ts, "the lean code");
+//!   [`lean_on`] swaps in g3_world.pica around main.rs's terrain and tree
+//!   loops, which leans the facades back for the camera's pitch (as much as
+//!   the camera faces them) and turns the cards to face it, with this
+//!   frame's numbers ([`lean_frame`]). [`lean_vert`] hands a coded vertex to
+//!   it untinted, as main.rs builds each pak vertex.
 //! - **Sound** is the M4A engine (audio.rs) on its own thread, started
 //!   before the guest boots ([`before_guest`]); the Kanto synth stays off
 //!   (main.rs's `audio3ds_init` is replaced for this build and says so).
@@ -32,6 +39,7 @@
 //!   are small, so its pak cache is too, leaving the heap to QuickJS
 //!   ([`size_pak_cache`]).
 
+use citro3d::macros::include_shader;
 use citro3d::math::Matrix4;
 use pocketvoxel_core::{cam, draw};
 
@@ -63,7 +71,14 @@ extern "C" {
     fn g3_files_root(root: *const u8);
     fn g3_host_keys_get() -> u32;
     fn g3_cmd_used(size: *mut i32) -> i32;
+    fn g3_world_init(wsh: *const u8, wlen: u32, msh: *const u8, mlen: u32) -> i32;
+    fn g3_world_params(p: *const f32);
+    fn g3_world_on();
+    fn g3_world_off();
 }
+
+/// The world shader (g3_world.pica): main.rs's vshader.pica plus the lean.
+static G3_WORLD_SHADER: &[u8] = include_shader!("g3_world.pica");
 
 /// The guest as QuickJS bytecode (cc_build_firered.sh: the bundle compiled on
 /// the PC with its source stripped; empty when the build boots the source,
@@ -85,6 +100,9 @@ const G3_LINEAR_KB: usize = 8 * 1024;
 const G3_PAK_CACHE_KB: usize = 6 * 1024;
 
 static mut GPU_OK: bool = false;
+static mut LEAN_OK: bool = false;
+/// This frame's facade lean (radians back from upright), for the door decals.
+static mut LEAN_F: f32 = 0.0;
 static mut SOUND_ON: bool = false;
 
 /// The map vertex cap with the 2D layer's linear share taken off (main.rs
@@ -114,6 +132,16 @@ pub fn before_guest() {
     if gi != 1 {
         dlog(&format!("[pv] g3: 2D layer GPU init FAILED (step {})", -gi));
     }
+    let wi = unsafe {
+        g3_world_init(
+            G3_WORLD_SHADER.as_ptr(),
+            G3_WORLD_SHADER.len() as u32,
+            super::SHADER_BYTES.as_ptr(),
+            super::SHADER_BYTES.len() as u32,
+        )
+    };
+    unsafe { LEAN_OK = wi == 1 };
+    dlog(&format!("[pv] g3: world lean shader {}", if wi == 1 { "ready" } else { "FAILED (buildings and cards stand upright)" }));
     let sound = audio::init();
     unsafe { SOUND_ON = sound };
     unsafe { g3_set_bytecode(G3_BYTECODE.as_ptr(), G3_BYTECODE.len()) };
@@ -146,11 +174,74 @@ fn cmd_check() {
 }
 pub fn offscreen_pass() {
     pace::render_start();
+    lean_frame();
     if !unsafe { GPU_OK } {
         return;
     }
     unsafe { g3_frame_offscreen() };
     prepare_billboards();
+}
+
+/// The roof's rise toward its back edge (gen3terrain.ts ROOF_RISE_DEG).
+const G3_ROOF_RISE_DEG: f32 = 12.0;
+
+/// The mod's card lean for a view `a` radians from straight down:
+/// main.lua:109's (90 - tilt) * 0.8 degrees, none for a view level or above.
+fn card_lean(a: f32) -> f32 {
+    let deg = (90.0 - a.to_degrees()) * 0.8;
+    deg.clamp(0.0, 72.0).to_radians()
+}
+
+/// This frame's lean (g3_world.pica's uniforms), from the camera the world
+/// is drawn with: the facade lean is the card lean as far as the camera
+/// faces the facades' south fronts (cos of its yaw from looking north, none
+/// from the side or behind); the cards face the camera's yaw and take the
+/// card lean whole.
+fn lean_frame() {
+    let sc = unsafe { super::voxel::scene() };
+    let camera = draw::camera(sc);
+    let (e, f) = (camera.eye, camera.focus);
+    let (dx, dy, dz) = (f.x - e.x, f.y - e.y, f.z - e.z);
+    let a = (dx * dx + dz * dz).sqrt().atan2(-dy);
+    let (fx, fz) = cam::forward_h(&camera);
+    let lean = card_lean(a);
+    let lf = lean * (-fz).max(0.0);
+    unsafe { LEAN_F = lf };
+    let t = G3_ROOF_RISE_DEG.to_radians().tan();
+    let tint = super::geometry_tint(sc.tint);
+    let ch = |s: u32| ((tint >> s) & 0xff) as f32 / 255.0;
+    let p: [f32; 16] = [
+        lf.sin(), lf.cos() - 1.0, t * lf.sin(), 0.0,
+        -fz, fx, fx * lean.sin(), fz * lean.sin(),
+        lean.cos(), 0.0, 0.0, 0.0,
+        ch(0), ch(8), ch(16), 1.0,
+    ];
+    unsafe { g3_world_params(p.as_ptr()) };
+}
+
+/// Before main.rs's terrain spans and tree instances (each eye): the world
+/// shader in. [`world_pass`], right after them, puts main.rs's back.
+pub fn lean_on() {
+    if unsafe { LEAN_OK } {
+        unsafe { g3_world_on() };
+    }
+}
+
+/// A pak vertex as main.rs just built it, fixed up for the world shader: a
+/// lean-coded one (alpha below 255) keeps its colour bytes untinted -- they
+/// are its numbers -- and its spare i16. Others are left as they are.
+#[inline]
+pub fn lean_vert(v: &mut super::Vertex, abgr: u32, w: i16) {
+    if abgr >> 24 != 0xff {
+        v.color = [abgr as u8, (abgr >> 8) as u8, (abgr >> 16) as u8, (abgr >> 24) as u8];
+        v.pos[3] = w;
+    }
+}
+
+/// The spare i16 of vertex `i` of a raw pak vertex pool (16-byte records).
+#[inline]
+pub fn pool_w(vbuf: &[u8], i: usize) -> i16 {
+    vbuf.get(i * 16 + 14..i * 16 + 16).map(|b| i16::from_le_bytes([b[0], b[1]])).unwrap_or(0)
 }
 
 /// The guest's billboards as quads: a card stands on the floor of its cell
@@ -191,9 +282,12 @@ fn prepare_billboards() {
                 ([[x0, y, z1], [x1, y, z1], [x1, y, z0], [x0, y, z0]], 1.0)
             }
             ENT_WALL => {
-                // the floor in front of the foot (the foot is a cell's south edge)
+                // the floor in front of the foot (the foot is a cell's south
+                // edge), leaned back as the facades are this frame (the
+                // record's lean is the cook's rest lean)
                 let y = sc.floor.height_at(x, z + 1.0) + r[3];
-                let (sl, cl) = (r[12].sin(), r[12].cos());
+                let lean = if unsafe { LEAN_OK } { unsafe { LEAN_F } } else { r[12] };
+                let (sl, cl) = (lean.sin(), lean.cos());
                 let (x0, x1) = (x - w * 0.5, x + w * 0.5);
                 let (yt, zt) = (y + h * cl, z - h * sl);
                 ([[x0, y, z], [x1, y, z], [x1, yt, zt], [x0, yt, zt]], 0.75)
@@ -224,6 +318,7 @@ const ENT_WALL: i32 = 2;
 
 /// In each eye's world pass, after the terrain and the trees: the people.
 pub fn world_pass(mvp: &Matrix4) {
+    unsafe { g3_world_off() };
     if !unsafe { GPU_OK } {
         return;
     }

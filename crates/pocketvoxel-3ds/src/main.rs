@@ -3033,7 +3033,7 @@ fn push_chunk_mesh(
                 pos: [pv.x, pv.y, pv.z, 0],
                 color: [(a & 0xff) as u8, ((a >> 8) & 0xff) as u8, ((a >> 16) & 0xff) as u8, 255],
                 uv: [pv.uf(), pv.vf()],
-            });
+            }); #[cfg(feature = "gen3")] if let Some(g3v) = verts.last_mut() { gen3::lean_vert(g3v, pv.abgr, pv.pad); }
         }
     }
     if verts.len() > span_start {
@@ -3125,7 +3125,7 @@ fn push_stamp_mesh(
             pos: [pv.x, pv.y, pv.z, 0],
             color: [(a & 0xff) as u8, ((a >> 8) & 0xff) as u8, ((a >> 16) & 0xff) as u8, 255],
             uv: [pv.uf(), pv.vf()],
-        });
+        }); #[cfg(feature = "gen3")] if let Some(g3v) = verts.last_mut() { gen3::lean_vert(g3v, pv.abgr, pv.pad); }
     }
     if verts.len() > span_start {
         chunk_spans.push(Span {
@@ -3553,7 +3553,7 @@ fn strip_chunk_resident(
                         255,
                     ],
                     uv: [pv.uf(), pv.vf()],
-                });
+                }); #[cfg(feature = "gen3")] if let Some(g3v) = verts.last_mut() { gen3::lean_vert(g3v, pv.abgr, pv.pad); }
             }
         }
         if verts.len() > span_start {
@@ -3820,7 +3820,7 @@ fn strip_chunk_file(
             let i0 = u16::from_le_bytes([idx[t * 6], idx[t * 6 + 1]]) as usize;
             let i1 = u16::from_le_bytes([idx[t * 6 + 2], idx[t * 6 + 3]]) as usize;
             let i2 = u16::from_le_bytes([idx[t * 6 + 4], idx[t * 6 + 5]]) as usize;
-            let (t0, t1, t2) = (at(i0), at(i1), at(i2));
+            let (t0, t1, t2) = (at(i0), at(i1), at(i2)); #[cfg(feature = "gen3")] let mut g3w = [gen3::pool_w(&vbuf, i0), gen3::pool_w(&vbuf, i1), gen3::pool_w(&vbuf, i2)].into_iter();
             // Drop the neighbour's own border ring — in LOCAL coords,
             // before the offset — so it cannot spill back across the
             // seam onto the map the player is walking on.
@@ -3853,7 +3853,7 @@ fn strip_chunk_file(
                         255,
                     ],
                     uv: [u, v],
-                });
+                }); #[cfg(feature = "gen3")] if let Some(g3v) = verts.last_mut() { gen3::lean_vert(g3v, abgr, g3w.next().unwrap_or(0)); }
             }
         }
         if verts.len() > span_start {
@@ -5790,7 +5790,7 @@ fn main() {
                                         255,
                                     ],
                                     uv: [pv.uf(), pv.vf()],
-                                });
+                                }); #[cfg(feature = "gen3")] if let Some(g3v) = v.last_mut() { gen3::lean_vert(g3v, pv.abgr, pv.pad); }
                             }
                             let mut bi = buffer::Info::new();
                             if bi.add(buffer::Buffer::new(&v), attr_info.permutation()).is_ok() {
@@ -7324,7 +7324,7 @@ if page_tex.len() < pak_static.atlases.len() {
                 frame.bind_texture(texture::Index::Texture0, tex_ref);
                 frame.set_texenvs(&[stage0]);
                 frame.set_attr_info(&attr_info);
-                if !pic_active {
+                if !pic_active { #[cfg(feature = "gen3")] gen3::lean_on();
                 // The survivors of this frame's cull (decided once, above the
                 // frame, for both eyes).
                 for e in vis_spans.iter() {
@@ -7729,3 +7729,12 @@ unsafe fn audio3ds_init(_rate: i32, _frames_per_buf: i32) -> i32 {
 #[cfg(feature = "gen3")]
 #[no_mangle]
 pub static mut __ctru_heap_size: u32 = 0;
+/// The vertex just pushed, for gen3::lean_vert (the world shader's lean-coded
+/// vertices keep their colour bytes and spare i16).
+#[cfg(feature = "gen3")]
+impl VertStore {
+    fn last_mut(&mut self) -> Option<&mut Vertex> {
+        let i = self.starts.len().checked_sub(1)?;
+        self.segs[i].last_mut()
+    }
+}
