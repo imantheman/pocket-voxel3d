@@ -17,6 +17,14 @@ export interface G3Host {
   texFromCache(id: number, path: string): [number, number] | undefined;
   /** Make texture `id` a w x h render target (a canvas). */
   canvasNew(id: number, w: number, h: number): void;
+  /**
+   * Optional: texture `id`'s w x h image read back as RGBA8, exactly the
+   * pixels last uploaded to it, or undefined when it cannot be (no such
+   * texture, not that size, a canvas). `probe`: only whether it can be (the
+   * result is then any non-empty array). A host without it keeps every
+   * image's pixels (image.ts tryDropPixels).
+   */
+  texRead?(id: number, w: number, h: number, probe?: boolean): Uint8Array | undefined;
   texFree(id: number): void;
   /** One composed frame's draw list (drawlist.ts). */
   /** The view is valid only during the call (the guest reuses the storage). */

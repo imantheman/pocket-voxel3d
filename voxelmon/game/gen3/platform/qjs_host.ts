@@ -11,7 +11,7 @@ import { setHost, type G3Host } from "./host.ts";
 import { memorySaveStore, setSaveStore, type SaveStore } from "./savefs.ts";
 import { setAudio, type CryParams, type G3Audio, type SeOptions } from "./audio.ts";
 import { setNativeBytes } from "../../../import/gen3/lua.ts";
-import { setNativeBlit } from "./image.ts";
+import { setNativeBlit, setRefCount } from "./image.ts";
 import { Fast } from "./fast.ts";
 
 const n = native;
@@ -22,6 +22,8 @@ const pngNative = n as typeof n & {
   g3Bytes?(s: string): Uint8Array | undefined;
   g3TexSub?(id: number, w: number, h: number, rects: Int32Array, n: number, rgba: Uint8Array): boolean;
   g3Blit?(dst: Uint8Array, dw: number, dx: number, dy: number, src: Uint8Array, sw: number, sx: number, sy: number, w: number, h: number): boolean;
+  g3TexRead?(id: number, w: number, h: number, probe: boolean): Uint8Array | boolean | undefined;
+  g3RefCount?(v: unknown): number;
 };
 // byte strings to bytes in C (g3_shim.c g3Bytes), for lua.ts toBytes
 if (pngNative.g3Bytes) setNativeBytes((s) => pngNative.g3Bytes!(s));
@@ -88,6 +90,14 @@ class QuickJsG3Host implements G3Host {
     return r ? [r[0], r[1]] : undefined;
   }
   canvasNew(id: number, w: number, h: number): void { n.g3Canvas!(id, w, h); }
+  // a texture read back (g3_shim.c g3TexRead), where the binary has it
+  texRead = pngNative.g3TexRead
+    ? (id: number, w: number, h: number, probe?: boolean): Uint8Array | undefined => {
+      const r = pngNative.g3TexRead!(id, w, h, !!probe);
+      if (probe) return r ? PROBE_HIT : undefined;
+      return r instanceof Uint8Array ? r : undefined;
+    }
+    : undefined;
   texFree(id: number): void { n.g3TexFree!(id); }
   // sprite batches kept host-side, where the binary has them (an older one
   // without the natives is sent the quads every frame instead)
@@ -135,7 +145,12 @@ class QuickJsG3Host implements G3Host {
   now(): number { return clock() / 1e6; }
 }
 
+const PROBE_HIT = new Uint8Array(1);
 setHost(new QuickJsG3Host());
+// images' pixel copies let go once uploaded where nothing else holds them
+// (QuickJS's own reference counts, g3_shim.c g3RefCount) and the texture
+// gives them back exactly (g3TexRead): image.ts tryDropPixels
+if (pngNative.g3TexRead && pngNative.g3RefCount) setRefCount(pngNative.g3RefCount);
 
 // The save store: the card (g3_save.c, 3ds/voxelmon/<game>/save/), so a save
 // outlives the power going off. Without the natives (a desktop QuickJS run)

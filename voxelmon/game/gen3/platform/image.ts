@@ -1,6 +1,7 @@
 // pocket-voxel platform for the gen3 (FireRed) port (GPLv3 + additional terms;
 // see LICENSE.md). LÖVE's drawables as the port uses them: Image (a host
-// texture, with its source ImageData kept when the guest made it), Canvas
+// texture, with its source ImageData when the guest made it -- let go once
+// uploaded where nothing else holds it, see tryDropPixels), Canvas
 // (a render target), Quad, SpriteBatch; and love.image's ImageData /
 // love.filesystem's FileData for PNG bytes.
 
@@ -119,6 +120,7 @@ export function collectTextures(scan: boolean): void {
       if (img === undefined) { freeLater.add(watchIds[i]!); continue; }
       if (!img.watched) continue; // released: no longer watched (watch() again on its next upload)
       watchRefs[j] = r; watchIds[j] = watchIds[i]!; j++;
+      if (rcFn) img.tryDropPixels();
     }
     watchRefs.length = j; watchIds.length = j;
     j = 0;
@@ -133,6 +135,54 @@ export function collectTextures(scan: boolean): void {
   }
 }
 
+// ---- pixel copies given back (not LÖVE; a 3DS memory measure)
+//
+// An Image made from an ImageData keeps the pixels after uploading them,
+// for a CPU colour variant, a world billboard's backing or a re-upload --
+// an app-heap copy of every texture the game holds. Where nothing else can
+// reach that ImageData (QuickJS's own reference counts say so: the host's
+// g3RefCount), the copy is let go once uploaded, and made again from the
+// texture itself (G3Host.texRead, exact in every texel format) if it is
+// ever asked for. Nothing else can reach it, so nothing can change it:
+// the texture is the image. A host without the two natives keeps every copy.
+let rcFn: ((v: unknown) => number) | undefined;
+/** What refsOf gives for an Image's ImageData that nothing else holds. */
+let rcSole: [number, number, number] = [0, 0, 0];
+/** Smaller copies are kept (not worth a texture read). */
+const DROP_MIN = 4096;
+/** The reference counts of an image's pixels: the ImageData, its bytes, their buffer. */
+function refsOf(d: ImageData): [number, number, number] {
+  return [rcFn!(d), rcFn!(d.px), rcFn!(d.px.buffer)];
+}
+/**
+ * The host's reference count (g3_shim.c g3RefCount). Calibrated on an
+ * Image of its own, the same expressions as tryDropPixels; and checked to
+ * see a holder more (a count that does not is no use: nothing is dropped).
+ */
+export function setRefCount(f: (v: unknown) => number): void {
+  rcFn = f;
+  const probe = new Image(4, 4, new ImageData(32, 32), -1);
+  const sole = refsOf(probe._data!);
+  const held = probe._data!, heldPx = held.px, view = heldPx.subarray(0, 4);
+  const more = refsOf(probe._data!);
+  rcFn = undefined;
+  if (!(sole[0] > 0 && more[0] === sole[0] + 1 && more[1] === sole[1] + 1 && more[2] > sole[2] && view.length === 4)) return;
+  rcSole = sole;
+  rcFn = f;
+}
+/**
+ * Pixel copies let go, and made again from textures (tools). `verify`
+ * (the bench): each copy is compared with the texture's read before it goes.
+ */
+export const pixelDrop = { dropped: 0, droppedBytes: 0, remade: 0, verify: false, mismatches: 0 };
+
+/** Tools (tools/gen3/qjs_leak.ts): told of every ImageData made. */
+let imageDataTrack: ((d: ImageData) => void) | undefined;
+export function setImageDataTrack(f: ((d: ImageData) => void) | undefined): void { imageDataTrack = f; }
+/** Tools: told of every Image made. */
+let imageTrack: ((img: Image) => void) | undefined;
+export function setImageTrack(f: ((img: Image) => void) | undefined): void { imageTrack = f; }
+
 /** The textures watched (tools: the live count). */
 export function watchedTextures(): number { return watchRefs.length; }
 
@@ -140,6 +190,11 @@ export function watchedTextures(): number { return watchRefs.length; }
 export class ImageData extends BaseImageData {
   /** Bumped on every change, so an Image made from it can tell it is stale. */
   version = 0;
+
+  constructor(w: number, h: number, bytes?: string | Uint8Array) {
+    super(w, h, bytes);
+    if (imageDataTrack) imageDataTrack(this);
+  }
 
   // Where it changed (not LÖVE): an Image made from it uploads only the
   // rects that changed since its last upload when the host can do that
@@ -268,8 +323,12 @@ export class Image {
   readonly id: number;
   w: number;
   h: number;
-  /** The pixels, when the guest made this image (needed for CPU effect variants). */
-  data: ImageData | undefined;
+  /** The pixels (`data`), or undefined while they are let go (`dropped`). */
+  _data: ImageData | undefined;
+  /** The pixels were let go once uploaded (tryDropPixels): the texture is the image. */
+  private dropped = false;
+  /** Made again once: its pixels are kept from then on (whoever asked may ask again). */
+  private noDrop = false;
   private uploaded = -1;
   filter = "nearest";
   wrap = "clamp";
@@ -285,12 +344,63 @@ export class Image {
     this.id = id;
     this.w = w;
     this.h = h;
-    this.data = data;
+    this._data = data;
+    if (imageTrack) imageTrack(this);
+  }
+
+  /** The pixels, when the guest made this image (needed for CPU effect variants). */
+  get data(): ImageData | undefined {
+    if (this.dropped) this.pixelsBack();
+    return this._data;
+  }
+  set data(d: ImageData | undefined) {
+    this._data = d;
+    this.dropped = false;
+  }
+
+  /**
+   * Let the pixels go if this image alone holds them and the host has them
+   * as uploaded (collectTextures, every few frames). Nothing else can reach
+   * them, so nothing can change them: they come back from the texture
+   * exactly (G3Host.texRead) if they are ever asked for.
+   */
+  tryDropPixels(): void {
+    // (no local holds the ImageData until it is counted: a local is a holder)
+    if (!rcFn || !this._data || this.dropped || this.noDrop || this.freed || this.isCanvas
+        || this.uploaded !== this._data.version || this._data.px.length < DROP_MIN) return;
+    const r = refsOf(this._data);
+    if (r[0] > rcSole[0] || r[1] > rcSole[1] || r[2] > rcSole[2]) return;
+    const d = this._data;
+    const host = getHost();
+    if (!host.texRead) return;
+    if (pixelDrop.verify) {
+      const back = host.texRead(this.id, this.w, this.h);
+      let same = !!back && back.length === d.px.length;
+      for (let i = 0; same && i < back!.length; i++) if (back![i] !== d.px[i]) same = false;
+      if (!same) { pixelDrop.mismatches++; this.noDrop = true; return; }
+    } else if (!host.texRead(this.id, this.w, this.h, true)) return;
+    pixelDrop.dropped++;
+    pixelDrop.droppedBytes += d.px.length;
+    this._data = undefined;
+    this.dropped = true;
+  }
+
+  /** The pixels let go, made again from the texture (kept from now on). */
+  private pixelsBack(): void {
+    this.dropped = false;
+    this.noDrop = true;
+    const px = getHost().texRead!(this.id, this.w, this.h);
+    if (!px) throw new Error(`Image ${this.id}: its pixels were let go and the texture is gone`);
+    const d = new ImageData(this.w, this.h, px);
+    d.uploadedNow();
+    this._data = d;
+    this.uploaded = d.version;
+    pixelDrop.remade++;
   }
 
   /** The host has this image's current pixels. */
   sync(): void {
-    const d = this.data;
+    const d = this._data;
     if (d && this.uploaded !== d.version) {
       if (this.freed) { this.freed = false; unfree(this.id); }
       const host = getHost();
@@ -329,6 +439,7 @@ export class Image {
   getFilter(): [string, string] { return [this.filter, this.filter]; }
   setWrap(h: string, _v?: string): void {
     this.wrap = h;
+    if (this.dropped) this.pixelsBack(); // (the upload needs them)
     this.uploaded = -1; // the host learns the wrap on upload
   }
   /** Image:replacePixels(imageData) -- whole image. */
@@ -336,7 +447,7 @@ export class Image {
     // the same data again (the field's double-buffered atlases): the host
     // holds this image's pixels as of its last upload, and sync sends what
     // changed since
-    if (d !== this.data || this.w !== d.w || this.h !== d.h) this.uploaded = -1;
+    if (d !== this._data || this.w !== d.w || this.h !== d.h) this.uploaded = -1;
     this.data = d;
   }
   /**
@@ -347,6 +458,7 @@ export class Image {
    */
   release(): void {
     if (this.freed) return;
+    if (this.dropped) this.pixelsBack(); // the texture goes: the pixels come back first
     this.freed = true;
     this.watched = false;
     this.uploaded = -1;

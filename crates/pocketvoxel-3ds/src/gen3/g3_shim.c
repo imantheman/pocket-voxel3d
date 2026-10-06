@@ -18,6 +18,9 @@
                                                        (RGBA8, what platform/
                                                         pngdecode.ts gives)
      g3Bytes(byte string) -> Uint8Array | undefined    (lua.ts toBytes' bytes)
+     g3TexRead(id, w, h, probe) -> Uint8Array | bool   (a texture read back,
+                                                        image.ts tryDropPixels)
+     g3RefCount(object) -> int                         (QuickJS's count of it)
      g3Log(line)                                       (to the log file alone:
                                                         console.log also prints
                                                         it to stdout, slowly)
@@ -39,6 +42,7 @@
 int g3_tex_upload(int id, int w, int h, const uint8_t *rgba, size_t len, int repeat);
 int g3_tex_sub(int id, int w, int h, int x0, int y0, int x1, int y1, const uint8_t *rgba, size_t len);
 int g3_tex_from_cache(int id, const char *path, int *ow, int *oh);
+int g3_tex_read(int id, int w, int h, uint8_t *out);
 void g3_canvas_new(int id, int w, int h);
 void g3_tex_free(int id);
 void g3_tex_stats(uint32_t out[4]);
@@ -309,6 +313,40 @@ static JSValue g3_readbuf(JSContext *ctx, JSValueConst t, int c, JSValueConst *v
     if (!b) return JS_UNDEFINED;
     g3_ext_add(b);
     return JS_NewArrayBuffer(ctx, b, n, 0, g3_realloc_buf, NULL, false);
+}
+
+/* g3TexRead(id, w, h, probe) -> the texture's w x h image as an RGBA8
+   Uint8Array (g3_render.c g3_tex_read), or undefined; probe: true / false,
+   whether it can be read. */
+static JSValue g3_texread(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 4) return JS_UNDEFINED;
+    int32_t id = 0, w = 0, h = 0;
+    JS_ToInt32(ctx, &id, v[0]); JS_ToInt32(ctx, &w, v[1]); JS_ToInt32(ctx, &h, v[2]);
+    if (JS_ToBool(ctx, v[3])) return JS_NewBool(ctx, g3_tex_read(id, w, h, NULL));
+    if (!g3_tex_read(id, w, h, NULL)) return JS_UNDEFINED;
+    size_t n = (size_t)w * h * 4;
+    uint8_t *b = (uint8_t *)malloc(n);
+    if (!b) return JS_UNDEFINED;
+    g3_tex_read(id, w, h, b);
+    g3_ext_add(b);
+    JSValue arr = JS_NewUint8Array(ctx, b, n, g3_realloc_buf, NULL, false);
+    if (JS_IsException(arr)) { g3_realloc_buf(NULL, NULL, b, 0); JS_FreeValue(ctx, JS_GetException(ctx)); return JS_UNDEFINED; }
+    return arr;
+}
+
+/* g3RefCount(object) -> QuickJS's reference count of it (-1 for a
+   non-object). This QuickJS keeps the count in the allocator's 8-byte block
+   header before every allocation (vendor quickjs.c JSMallocBlockHeader:
+   ref_count at byte 4 of it). image.ts calibrates it on an object of its
+   own, and checks that a holder more shows, before trusting it. */
+static JSValue g3_refcount(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 1 || !JS_IsObject(v[0])) return JS_NewInt32(ctx, -1);
+    const uint8_t *p = (const uint8_t *)JS_VALUE_GET_PTR(v[0]);
+    int32_t rc;
+    memcpy(&rc, p - 8 + 4, sizeof rc);
+    return JS_NewInt32(ctx, rc);
 }
 
 static JSValue g3_log_js(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
@@ -785,6 +823,8 @@ int qjs_register_g3(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "g3TexUpload", JS_NewCFunction(ctx, g3_texupload, "g3TexUpload", 5));
     JS_SetPropertyStr(ctx, o, "g3TexSub", JS_NewCFunction(ctx, g3_texsub, "g3TexSub", 6));
     JS_SetPropertyStr(ctx, o, "g3Blit", JS_NewCFunction(ctx, g3_blit, "g3Blit", 10));
+    JS_SetPropertyStr(ctx, o, "g3TexRead", JS_NewCFunction(ctx, g3_texread, "g3TexRead", 4));
+    JS_SetPropertyStr(ctx, o, "g3RefCount", JS_NewCFunction(ctx, g3_refcount, "g3RefCount", 1));
     JS_SetPropertyStr(ctx, o, "g3TexFromCache", JS_NewCFunction(ctx, g3_texfromcache, "g3TexFromCache", 2));
     JS_SetPropertyStr(ctx, o, "g3Canvas", JS_NewCFunction(ctx, g3_canvas, "g3Canvas", 3));
     JS_SetPropertyStr(ctx, o, "g3TexFree", JS_NewCFunction(ctx, g3_texfree, "g3TexFree", 1));

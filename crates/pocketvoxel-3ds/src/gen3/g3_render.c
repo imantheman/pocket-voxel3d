@@ -378,6 +378,39 @@ int g3_tex_sub(int id, int w, int h, int x0, int y0, int x1, int y1, const uint8
     return 1;
 }
 
+/* Texture id's w x h image back as RGBA8 into out (w*h*4 bytes), exactly as
+   uploaded: every texel format holds its upload's pixels exactly (pick_fmt),
+   and a folded image's rows from FOLD_ROW are read from its right half.
+   out NULL: only whether it can be read. 0 when it cannot (no texture, not
+   that size, a canvas -- the GPU writes those). For the guest's pixel copies
+   let go once uploaded (image.ts tryDropPixels). */
+int g3_tex_read(int id, int w, int h, uint8_t *out) {
+    G3Tex *t = (id > 0 && id < ntexs) ? texs[id] : NULL;
+    if (!t || t->canvas || w <= 0 || h <= 0) return 0;
+    if (t->fold ? (t->lw != w || t->lh != h) : (t->w != w || t->h != h)) return 0;
+    if (!out) return 1;
+    const uint8_t *data = (const uint8_t *)t->tex.data;
+    for (int y = 0; y < h; y++) {
+        int tx0 = 0, ty = y;
+        if (t->fold && y >= t->fold) { tx0 = w; ty = y - t->fold; }
+        uint8_t *o = out + (size_t)y * w * 4;
+        for (int x = 0; x < w; x++, o += 4) {
+            uint32_t i = tile_idx(tx0 + x, ty, t->tw);
+            if (t->fmt == TF_LA4) {
+                uint8_t v = data[i];
+                o[0] = o[1] = o[2] = (uint8_t)((v >> 4) * 17); o[3] = (uint8_t)((v & 15) * 17);
+            } else if (t->fmt == TF_LA8) {
+                uint16_t v = ((const uint16_t *)data)[i];
+                o[0] = o[1] = o[2] = (uint8_t)(v >> 8); o[3] = (uint8_t)v;
+            } else {
+                uint32_t v = ((const uint32_t *)data)[i];
+                o[0] = (uint8_t)(v >> 24); o[1] = (uint8_t)(v >> 16); o[2] = (uint8_t)(v >> 8); o[3] = (uint8_t)v;
+            }
+        }
+    }
+    return 1;
+}
+
 int g3_tex_from_cache(int id, const char *path, int *ow, int *oh) {
     size_t n = strlen(path);
     if (n < 4 || strcmp(path + n - 4, ".png") != 0) return 0;
