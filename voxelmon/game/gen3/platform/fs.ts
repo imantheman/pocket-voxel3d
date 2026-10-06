@@ -17,9 +17,40 @@ function norm(path: string): string {
 
 export interface FileInfo { type: "file" | "directory"; size?: number; modtime?: number }
 
+// NOT FAITHFUL (memory): the runtime writes derived pixel caches back
+// through love.filesystem -- a tileset pair's baked atlas layers
+// (data/generated/gba/native/<pair>/atlas_*.rgba), up to 1.4 MB a pair --
+// so the next boot need not bake them. On the 3DS there is no next boot to
+// spare (the card holds the cooked cache) and the save store kept them in
+// memory: a tour of the region kept 22 MB of them. They are held here
+// instead, the last used up to DERIVED_CAP bytes; one let go is baked again
+// when its pair is next decoded, as on a first visit.
+const DERIVED_CAP = 3 * 1024 * 1024;
+const derived = new Map<string, string>();
+let derivedBytes = 0;
+const isDerived = (p: string): boolean => p.startsWith("data/") && p.endsWith(".rgba");
+
+function derivedPut(p: string, text: string): void {
+  const old = derived.get(p);
+  if (old !== undefined) { derivedBytes -= old.length; derived.delete(p); }
+  if (text.length > DERIVED_CAP) return;
+  derived.set(p, text);
+  derivedBytes += text.length;
+  // a Map iterates in insertion order: the first is the least recently used
+  for (const [k, v] of derived) {
+    if (derivedBytes <= DERIVED_CAP) break;
+    derived.delete(k);
+    derivedBytes -= v.length;
+  }
+}
+
 /** love.filesystem.read(path) -> contents (byte string), or undefined (Lua nil). */
 export function read(path: string): string | undefined {
   const p = norm(path);
+  if (isDerived(p)) {
+    const d = derived.get(p);
+    if (d !== undefined) { derived.delete(p); derived.set(p, d); return d; }
+  }
   const saved = saveStore().read(p);
   if (saved !== undefined) return saved;
   return getHost().read(p);
@@ -28,7 +59,7 @@ export function read(path: string): string | undefined {
 /** love.filesystem.getInfo(path [, filtertype]) */
 export function getInfo(path: string, filter?: "file" | "directory"): FileInfo | undefined {
   const p = norm(path);
-  const saved = saveStore().read(p);
+  const saved = (isDerived(p) ? derived.get(p) : undefined) ?? saveStore().read(p);
   if (saved !== undefined) return filter === "directory" ? undefined : { type: "file", size: saved.length };
   const st = saveStore();
   if (filter !== "file" && st.list && st.list().some((n) => n.startsWith(p + "/"))) return { type: "directory" };
@@ -43,7 +74,9 @@ export function getInfo(path: string, filter?: "file" | "directory"): FileInfo |
 /** love.filesystem.write(path, data) -> success */
 export function write(path: string, data: string | Uint8Array): boolean {
   const text = typeof data === "string" ? data : bytesToString(data);
-  return saveStore().write(norm(path), text);
+  const p = norm(path);
+  if (isDerived(p)) { derivedPut(p, text); return true; }
+  return saveStore().write(p, text);
 }
 
 /** love.filesystem.remove(path) */
