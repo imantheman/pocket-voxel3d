@@ -69,6 +69,7 @@ extern "C" {
     fn qjs_register_g3(ctx: *mut JSContext) -> i32;
     fn g3_set_bytecode(p: *const u8, n: usize);
     fn g3_files_root(root: *const u8);
+    fn g3_save_root(root: *const u8);
     fn g3_host_keys_get() -> u32;
     fn g3_cmd_used(size: *mut i32) -> i32;
     fn g3_world_init(wsh: *const u8, wlen: u32, msh: *const u8, mlen: u32) -> i32;
@@ -126,6 +127,9 @@ pub fn before_guest() {
     let _ = std::fs::create_dir_all(g3_root!());
     // the cache/pack reader's folder (g3_files.c defaults to FireRed's)
     unsafe { g3_files_root(concat!(g3_root!(), "\0").as_ptr()) };
+    // the save store (g3_save.c): the game's saves and options, under save/
+    let _ = std::fs::create_dir_all(concat!(g3_root!(), "save"));
+    unsafe { g3_save_root(concat!(g3_root!(), "save/\0").as_ptr()) };
     let lin0 = super::unsafe_free_kb();
     let gi = unsafe { g3_gpu_init_shared(super::SHADER_BYTES.as_ptr(), super::SHADER_BYTES.len() as u32) };
     unsafe { GPU_OK = gi == 1 };

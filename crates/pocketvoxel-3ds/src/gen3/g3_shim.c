@@ -544,6 +544,8 @@ static JSValue g3_audioready(JSContext *ctx, JSValueConst t, int c, JSValueConst
     return JS_NewBool(ctx, g3a_ready());
 }
 
+void g3_save_register(JSContext *ctx, JSValue o); /* g3_save.c */
+
 int qjs_register_g3(JSContext *ctx) {
     JSValue g = JS_GetGlobalObject(ctx);
     JSValue o = JS_GetPropertyStr(ctx, g, "voxel");
@@ -564,6 +566,7 @@ int qjs_register_g3(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "g3Gc", JS_NewCFunction(ctx, g3_gc, "g3Gc", 1));
     JS_SetPropertyStr(ctx, o, "g3Strips", JS_NewCFunction(ctx, g3_strips, "g3Strips", 5));
     JS_SetPropertyStr(ctx, o, "g3HostKeys", JS_NewCFunction(ctx, g3_hostkeys, "g3HostKeys", 1));
+    g3_save_register(ctx, o);
     JS_SetPropertyStr(ctx, o, "g3PngDecode", JS_NewCFunction(ctx, g3_pngdecode, "g3PngDecode", 1));
     JS_SetPropertyStr(ctx, o, "g3Bytes", JS_NewCFunction(ctx, g3_bytes_js, "g3Bytes", 1));
     JS_SetPropertyStr(ctx, o, "g3Log", JS_NewCFunction(ctx, g3_log_js, "g3Log", 1));

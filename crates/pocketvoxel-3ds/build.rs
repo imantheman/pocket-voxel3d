@@ -59,7 +59,7 @@ fn main() {
             .flag("-fno-strict-aliasing")
             .define("__3DS__", None).define("ARM11", None)
             .opt_level(2).warnings(false);
-        for n in ["g3_png.c", "g3_files.c", "g3_render.c", "g3_shim.c", "g3_world.c"] {
+        for n in ["g3_png.c", "g3_files.c", "g3_render.c", "g3_shim.c", "g3_world.c", "g3_save.c"] {
             println!("cargo:rerun-if-changed=src/gen3/{n}");
             g.file(format!("src/gen3/{n}"));
         }

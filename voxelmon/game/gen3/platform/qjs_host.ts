@@ -8,6 +8,7 @@
 
 import { native } from "../../quickjs-host.ts";
 import { setHost, type G3Host } from "./host.ts";
+import { memorySaveStore, setSaveStore, type SaveStore } from "./savefs.ts";
 import { setAudio, type CryParams, type G3Audio, type SeOptions } from "./audio.ts";
 import { setNativeBytes } from "../../../import/gen3/lua.ts";
 
@@ -100,6 +101,35 @@ class QuickJsG3Host implements G3Host {
 }
 
 setHost(new QuickJsG3Host());
+
+// The save store: the card (g3_save.c, 3ds/voxelmon/<game>/save/), so a save
+// outlives the power going off. Without the natives (a desktop QuickJS run)
+// the memory store stays.
+const saveNative = n as typeof n & {
+  g3SaveRead?(name: string): string | undefined;
+  g3SaveWrite?(name: string, text: string): boolean;
+  g3SaveRemove?(name: string): boolean;
+  g3SaveList?(): string[];
+};
+if (saveNative.g3SaveRead && saveNative.g3SaveWrite) {
+  // The runtime also writes caches back under data/ (rebuilt tile atlases):
+  // big, rebuilt every boot, and slow to write to the card mid-play, so they
+  // stay in memory as before; everything else (the save, options) is the card.
+  const mem = memorySaveStore();
+  const isCache = (name: string): boolean => name.startsWith("data/");
+  const card: SaveStore = {
+    read: (name) => (isCache(name) ? mem.read(name) : saveNative.g3SaveRead!(name)),
+    write: (name, text) => {
+      if (isCache(name)) return mem.write(name, text);
+      const ok = saveNative.g3SaveWrite!(name, text);
+      if (!ok) console.log(`[pv] g3 save: writing ${name} FAILED`);
+      return ok;
+    },
+    remove: (name) => (isCache(name) ? mem.remove!(name) : saveNative.g3SaveRemove?.(name) ?? false),
+    list: () => [...(saveNative.g3SaveList?.() ?? []), ...mem.list!()],
+  };
+  setSaveStore(card);
+}
 
 /** G3Audio over the host's M4A engine (crates/pocketvoxel-3ds/src/gen3/audio.rs). */
 class QuickJsG3Audio implements G3Audio {
