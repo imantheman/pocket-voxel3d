@@ -6,6 +6,10 @@
 import { setHost, type G3Host } from "../../voxelmon/game/gen3/platform/host.ts";
 import { setSaveStore, memorySaveStore } from "../../voxelmon/game/gen3/platform/savefs.ts";
 import { setAudio, silentAudio } from "../../voxelmon/game/gen3/platform/audio.ts";
+import { setNativeBytes } from "../../voxelmon/import/gen3/lua.ts";
+import { setNativeBlit } from "../../voxelmon/game/gen3/platform/image.ts";
+
+type Blit = (dst: Uint8Array, dw: number, dx: number, dy: number, src: Uint8Array, sw: number, sx: number, sy: number, w: number, h: number) => boolean;
 
 declare const readFile: (p: string) => string | undefined;
 declare const print: (s: string) => void;
@@ -50,6 +54,15 @@ const host: G3Host = {
   // is that many times slower there): catch-up-to-the-clock code shows up
   now: () => (nowUs() / 1e6) * (typeof QJS_TIME_SCALE === "number" ? QJS_TIME_SCALE : 1),
 };
+// the 3DS host's C helpers, where qjs_run.c has them (its nativeBytes /
+// nativeBlit / pngDecode), so a profile here pays for what the console pays
+// for: byte strings to bytes, ImageData:paste's rect copies, PNG decoding
+{
+  const g = globalThis as { nativeBytes?: (s: string) => Uint8Array | undefined; nativeBlit?: Blit; pngDecode?: (s: string) => [number, number, Uint8Array] | undefined };
+  if (g.nativeBytes) setNativeBytes(g.nativeBytes);
+  if (g.nativeBlit) setNativeBlit(g.nativeBlit);
+  if (g.pngDecode) host.pngDecode = (s) => g.pngDecode!(s);
+}
 // tools/gen3/perf_check.ts runs qjs_perf.ts under Bun on its own host
 setHost((globalThis as { __perfHost?: G3Host }).__perfHost ?? host);
 setSaveStore(memorySaveStore());

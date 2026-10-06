@@ -184,6 +184,61 @@ static JSValue js_pngdecode(JSContext *ctx, JSValueConst t, int c, JSValueConst 
     return a;
 }
 
+/* The bytes of a typed array. */
+static uint8_t *ta_bytes(JSContext *ctx, JSValueConst v, size_t *len) {
+    size_t off = 0, blen = 0, bpe = 0, size = 0;
+    *len = 0;
+    JSValue ab = JS_GetTypedArrayBuffer(ctx, v, &off, &blen, &bpe);
+    if (JS_IsException(ab)) { JS_FreeValue(ctx, JS_GetException(ctx)); return NULL; }
+    uint8_t *p = JS_GetArrayBuffer(ctx, &size, ab);
+    JS_FreeValue(ctx, ab);
+    if (!p || off + blen > size) return NULL;
+    *len = blen;
+    return p + off;
+}
+
+/* nativeBytes(s): a byte string's bytes, as the 3DS host's g3Bytes (undefined
+   for a char over 0xFF) -- so a profile here pays what the console pays */
+static JSValue js_nativebytes(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 1 || !JS_IsString(v[0])) return JS_UNDEFINED;
+    size_t ulen = 0;
+    const char *u = JS_ToCStringLen(ctx, &ulen, v[0]);
+    if (!u) return JS_UNDEFINED;
+    uint8_t *b = malloc(ulen + 1);
+    size_t n = 0;
+    int bad = !b;
+    for (size_t i = 0; !bad && i < ulen; i++) {
+        uint8_t x = (uint8_t)u[i];
+        if (x < 0x80) b[n++] = x;
+        else if ((x == 0xC2 || x == 0xC3) && i + 1 < ulen) { b[n++] = (uint8_t)(((x & 0x1F) << 6) | ((uint8_t)u[i + 1] & 0x3F)); i++; }
+        else bad = 1;
+    }
+    JS_FreeCString(ctx, u);
+    if (bad) { free(b); return JS_UNDEFINED; }
+    return JS_NewUint8Array(ctx, b, n, js_realloc_buf, NULL, false);
+}
+
+/* nativeBlit(dst, dw, dx, dy, src, sw, sx, sy, w, h): the 3DS host's g3Blit */
+static JSValue js_nativeblit(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 10) return JS_FALSE;
+    int32_t a[8];
+    size_t dl = 0, sl = 0;
+    uint8_t *d = ta_bytes(ctx, v[0], &dl);
+    const uint8_t *s = ta_bytes(ctx, v[4], &sl);
+    JS_ToInt32(ctx, &a[0], v[1]); JS_ToInt32(ctx, &a[1], v[2]); JS_ToInt32(ctx, &a[2], v[3]);
+    JS_ToInt32(ctx, &a[3], v[5]); JS_ToInt32(ctx, &a[4], v[6]); JS_ToInt32(ctx, &a[5], v[7]);
+    JS_ToInt32(ctx, &a[6], v[8]); JS_ToInt32(ctx, &a[7], v[9]);
+    int dw = a[0], dx = a[1], dy = a[2], sw = a[3], sx = a[4], sy = a[5], w = a[6], h = a[7];
+    if (!d || !s || dw <= 0 || sw <= 0 || w <= 0 || h <= 0 || dx < 0 || dy < 0 || sx < 0 || sy < 0
+        || dx + w > dw || sx + w > sw
+        || ((size_t)(dy + h) * dw * 4) > dl || ((size_t)(sy + h) * sw * 4) > sl) return JS_FALSE;
+    for (int y = 0; y < h; y++)
+        memcpy(d + ((size_t)(dy + y) * dw + dx) * 4, s + ((size_t)(sy + y) * sw + sx) * 4, (size_t)w * 4);
+    return JS_TRUE;
+}
+
 static JSValue js_nowus(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t; (void)c; (void)v;
     struct timespec ts;
@@ -252,6 +307,8 @@ int main(int argc, char **argv) {
     JS_SetPropertyStr(ctx, g, "gc", JS_NewCFunction(ctx, js_gc, "gc", 0));
     JS_SetPropertyStr(ctx, g, "gcHold", JS_NewCFunction(ctx, js_gchold, "gcHold", 1));
     JS_SetPropertyStr(ctx, g, "pngDecode", JS_NewCFunction(ctx, js_pngdecode, "pngDecode", 1));
+    JS_SetPropertyStr(ctx, g, "nativeBytes", JS_NewCFunction(ctx, js_nativebytes, "nativeBytes", 1));
+    JS_SetPropertyStr(ctx, g, "nativeBlit", JS_NewCFunction(ctx, js_nativeblit, "nativeBlit", 10));
     JS_FreeValue(ctx, g);
 #ifdef QJS_PROF
     { void qjs_prof_install(JSRuntime *, JSContext *); qjs_prof_install(rt, ctx); } /* tools/gen3/qjs_prof.c */
