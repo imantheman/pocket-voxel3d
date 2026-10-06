@@ -265,8 +265,11 @@ export class BenchLeak {
           yield* this.battle(`wild #${sp} L${lv}`, () => (BattleBridge as any).startWild(Runtime._mod, this.game, { species: sp, level: lv }, {}));
         }
         battles++;
-        // heal the party now and then (a long session of fights would faint it)
-        if (battles % 4 === 0) (Party as any).healAll(s.party);
+        // heal the party after every fight: a lost one leaves the field's UI
+        // busy for good (whited out from a battle the bench started, not a
+        // trainer's script: the same in the tree before this bench), and
+        // the tour stalls there
+        (Party as any).healAll(s.party);
       }
       if (i % 11 === 10) yield* this.menus();
     }
