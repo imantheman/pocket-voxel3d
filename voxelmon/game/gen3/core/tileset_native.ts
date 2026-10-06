@@ -90,10 +90,50 @@ function* uploadPair(data: PairData & { layered?: boolean; overBlob?: string; an
   return ts;
 }
 
+// NOT FAITHFUL (memory): Brian's _pairs keeps every pair's atlas for the
+// session -- its RGBA layers, their images and the pair's animation banks,
+// over a megabyte for a town's tileset -- which a desktop can afford and the
+// 3DS's app heap cannot: a long session through the towns ran out of it.
+// Here at most RESIDENT_PAIRS atlases stay, the ones last used; the pairs
+// the map's warm-up still wants (the current map's and its neighbours',
+// given to the stream's retain) are never let go. A pair let go is decoded
+// again from the cache when it is wanted again, as on its first use.
+const RESIDENT_PAIRS = 2;
+let useClock = 0;
+const lastUse: Record<string, number> = {};
+let wantedPairs: Record<string, unknown> = {};
+
+function touch(pair: string): void { lastUse[pair] = ++useClock; }
+
+/** Let go of the least recently used atlases beyond RESIDENT_PAIRS (none the warm-up wants). */
+function evictPairs(): void {
+  const resident = Object.keys(NativeTileset._pairs).filter((p) => NativeTileset._pairs[p]);
+  if (resident.length <= RESIDENT_PAIRS) return;
+  // (not one with a palette slot patched by a script: the patch lives on the atlas)
+  const patched = (p: string): boolean => {
+    const s = NativeTileset._pairs[p]?.patchedSlots;
+    for (const k in s ?? {}) if (s![k as unknown as number]) return true;
+    return false;
+  };
+  const spare = resident.filter((p) => !wantedPairs[p] && !patched(p)).sort((a, b) => (lastUse[a] ?? 0) - (lastUse[b] ?? 0));
+  let n = resident.length;
+  for (const p of spare) {
+    if (n <= RESIDENT_PAIRS) break;
+    delete NativeTileset._pairs[p];
+    delete lastUse[p];
+    // the pair's animation entry holds the atlas (and its banks): the next atlas binds a new one
+    if (TilesetAnim && TilesetAnim._pairs[p]) delete TilesetAnim._pairs[p];
+    if (FieldView && FieldView.forgetNativePair) FieldView.forgetNativePair(p);
+    n--;
+  }
+}
+
 // Lua: tileset_native.lua:90
 function makeStream(): AssetStream {
-  return Stream.new("pair", NativeTileset._cache, nativeRoot(), uploadPair, (pair: string, ts: NativeAtlas) => {
+  const s = Stream.new("pair", NativeTileset._cache, nativeRoot(), uploadPair, (pair: string, ts: NativeAtlas) => {
     NativeTileset._pairs[pair] = ts;
+    touch(pair);
+    evictPairs();
     bind_anim(pair, ts, ts.preparedAnim);
     ts.preparedAnim = undefined;
     if (!NativeTileset._logged[pair]) {
@@ -102,6 +142,15 @@ function makeStream(): AssetStream {
       NativeTileset._logged[pair] = true;
     }
   });
+  // the warm-up's wanted pairs (map.ts gives them to retain): kept resident, and touched
+  const retain = s.retain;
+  s.retain = (wanted: Record<string, unknown>): void => {
+    retain.call(s, wanted);
+    wantedPairs = wanted;
+    for (const p in wanted) if (NativeTileset._pairs[p]) touch(p);
+    evictPairs();
+  };
+  return s;
 }
 
 // Lua: tileset_native.lua:162 -- Lua sequence of [null, x, y, colourIndex]
@@ -232,7 +281,7 @@ export const NativeTileset = {
     if (pair == null) return undefined;
     const key = pair as string;
     const cached = NativeTileset._pairs[key];
-    if (cached) { bind_anim(key, cached); return cached; }
+    if (cached) { touch(key); bind_anim(key, cached); return cached; }
     const stream = NativeTileset._stream;
     if (!stream) return undefined;
     const [ts, err] = stream.get(key);

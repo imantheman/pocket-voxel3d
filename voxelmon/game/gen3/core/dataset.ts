@@ -34,6 +34,7 @@ import { Space } from "./scripting/space.ts";
 import { FieldModules } from "./field_modules.ts";
 import { Plaza as UnionPlazaMap } from "./link/union_plaza_map.ts";
 import { NativeTileset } from "./tileset_native.ts";
+import { Map as MapM } from "./map.ts";
 import { OwSprites } from "./ow_sprites.ts";
 import { FieldEffects } from "./field_effects.ts";
 import { Pokemon } from "./pokemon.ts";
@@ -152,17 +153,58 @@ function midHeader(blob: unknown): { trueWidth: number; trueHeight: number } | u
 /**
  * obj[key] made by `make()` on its first read and kept from then on (an
  * assignment first replaces it unmade). Enumerable, like the plain field.
+ * `made` hears of each value made (lazyLayout's residency).
  */
-function lazyField(obj: any, key: string, make: () => unknown): void {
+function lazyField(obj: any, key: string, make: () => unknown, made?: (v: unknown) => void): void {
   const settle = (v: unknown): void => {
     Object.defineProperty(obj, key, { value: v, writable: true, enumerable: true, configurable: true });
   };
   Object.defineProperty(obj, key, {
     enumerable: true,
     configurable: true,
-    get() { const v = make(); settle(v); return v; },
+    get() { const v = make(); settle(v); if (made) made(v); return v; },
     set(v: unknown) { settle(v); },
   });
+}
+
+// NOT FAITHFUL (memory): a map's layout, decoded on its first read (see
+// attachMidLayouts), is not kept for the whole session: a long session on
+// the 3DS decodes the layouts of every map it walks past (the warm-up reads
+// the neighbours' too), and none came back. At most LAYOUTS_RESIDENT decoded
+// layouts stay; past that the oldest goes back to being decoded on its next
+// read -- never one of the maps the field is on or beside (Map.world), whose
+// layouts the field's own state holds. The same values come back.
+const LAYOUTS_RESIDENT = 16;
+const decodedLayouts: { def: any; id: string; v: unknown; make: () => unknown }[] = [];
+
+function lazyLayout(def: any, id: string, make: () => unknown): void {
+  lazyField(def, "midLayout", make, (v) => {
+    decodedLayouts.push({ def, id, v, make });
+    if (decodedLayouts.length > LAYOUTS_RESIDENT) forgetLayouts();
+  });
+}
+
+/** The oldest decoded layouts beyond LAYOUTS_RESIDENT go back to their getters (not the field's maps). */
+function forgetLayouts(): void {
+  const keep = new Set<string>();
+  const M: any = MapM;
+  if (M) {
+    if (M.current) keep.add(M.current);
+    for (const [, e] of ipairs<any>(M.world ?? [null])) if (e && e.id) keep.add(e.id);
+  }
+  for (let i = 0; i < decodedLayouts.length && decodedLayouts.length > LAYOUTS_RESIDENT; i++) {
+    const e = decodedLayouts[i]!;
+    if (keep.has(e.id)) continue;
+    decodedLayouts.splice(i, 1);
+    i--;
+    // only a layout still as the getter made it (an assignment since replaced
+    // it for good), and with no cell edits (setmetatile's overrides live on it)
+    const d = Object.getOwnPropertyDescriptor(e.def, "midLayout");
+    const ov = (e.v as { overrides?: Record<number, unknown> } | undefined)?.overrides;
+    let edited = false;
+    for (const _ in ov ?? {}) { edited = true; break; }
+    if (d && "value" in d && d.value === e.v && !edited) lazyLayout(e.def, e.id, e.make);
+  }
 }
 
 // Lua: dataset.lua:127
@@ -468,7 +510,7 @@ export const Dataset = {
           const head = midHeader(blob);
           if (head) {
             const pair = (info && info.pair) ?? def.pair;
-            lazyField(def, "midLayout", () => {
+            lazyLayout(def, mapId as string, () => {
               const [decoded] = NativePack.decodeMidLayout(blob);
               // decodeMidLayout's cells / borderMids are 0-based: Lua sequences for LayoutNative
               return LayoutNative.fromDecoded(

@@ -1180,6 +1180,12 @@ function nativeAtlas(NativeTileset: any, pair: string): any {
   return ts;
 }
 
+// pocket-voxel (NOT FAITHFUL: memory): tileset_native.ts lets go of an atlas
+// no map near the player uses; this cache must not keep it
+FieldView.forgetNativePair = function (pair: string): void {
+  delete nativeAtlasByPair[pair];
+};
+
 // Physical sprite slots per layer (free-list reuse does not grow them).
 const nativeSlots: Record<string, number> = { under: 0, over: 0 };
 
