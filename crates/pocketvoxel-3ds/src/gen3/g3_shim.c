@@ -36,6 +36,7 @@ int g3_tex_upload(int id, int w, int h, const uint8_t *rgba, size_t len, int rep
 int g3_tex_from_cache(int id, const char *path, int *ow, int *oh);
 void g3_canvas_new(int id, int w, int h);
 void g3_tex_free(int id);
+void g3_tex_stats(uint32_t out[3]);
 void g3_draw(const float *f, size_t n);
 void g3_batch_upload(int id, int tex, const float *q, int n);
 void g3_batch_free(int id);
@@ -502,7 +503,8 @@ extern char *fake_heap_start, *fake_heap_end;
 unsigned int linearSpaceFree(void);
 
 /* g3Mem([cheap]): [QuickJS heap, app heap used, app heap size, linear free,
-   app heap high water, GC threshold]. JS_ComputeMemoryUsage walks every
+   app heap high water, GC threshold, live textures, their linear bytes,
+   VRAM bytes]. JS_ComputeMemoryUsage walks every
    object of the QuickJS heap (~130 ms of a frame at 300% clock in the
    field), so a cheap call -- the perf lines' -- gives -1 for the first. */
 static JSValue g3_mem(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
@@ -518,6 +520,10 @@ static JSValue g3_mem(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     JS_SetPropertyUint32(ctx, a, 3, JS_NewFloat64(ctx, (double)linearSpaceFree()));
     JS_SetPropertyUint32(ctx, a, 4, JS_NewFloat64(ctx, (double)(unsigned)mi.arena));
     JS_SetPropertyUint32(ctx, a, 5, JS_NewFloat64(ctx, (double)JS_GetGCThreshold(JS_GetRuntime(ctx))));
+    /* the 2D layer's textures (g3_render.c): live count, linear bytes, VRAM bytes */
+    uint32_t ts[3];
+    g3_tex_stats(ts);
+    for (int i = 0; i < 3; i++) JS_SetPropertyUint32(ctx, a, 6 + i, JS_NewFloat64(ctx, (double)ts[i]));
     return a;
 }
 

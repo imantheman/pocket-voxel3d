@@ -37,6 +37,7 @@ import { Input } from "./shared/core/Input.ts";
 import { WorldView } from "./platform/worldview.ts";
 import { Game3World } from "./platform/game3_world.ts";
 import { BenchSuite } from "./platform/bench_suite.ts";
+import { BenchLeak } from "./platform/bench_leak.ts";
 
 declare const PV_G3_MODE: string;
 declare const PV_G3_BENCH_SCRIPT: string;
@@ -97,7 +98,9 @@ function memText(cheap = false): string {
   const m = g3n.g3Mem?.(cheap);
   if (!m) return "mem n/a";
   const mb = (b: number): string => (b / 1048576).toFixed(1);
-  return `${m[0]! >= 0 ? `js heap ${mb(m[0]!)} MB, ` : ""}app heap ${mb(m[1]!)} of ${mb(m[2]!)} MB used (high water ${mb(m[4] ?? 0)}), gc at ${mb(m[5] ?? 0)} MB, linear free ${Math.round(m[3]! / 1024)} KB`;
+  return `${m[0]! >= 0 ? `js heap ${mb(m[0]!)} MB, ` : ""}app heap ${mb(m[1]!)} of ${mb(m[2]!)} MB used (high water ${mb(m[4] ?? 0)}), gc at ${mb(m[5] ?? 0)} MB, linear free ${Math.round(m[3]! / 1024)} KB` +
+    // the 2D layer's textures (g3_render.c g3_tex_stats), where the binary counts them
+    (m[6] !== undefined ? `, textures ${m[6]} (${Math.round(m[7]! / 1024)} KB linear, ${Math.round(m[8]! / 1024)} KB VRAM)` : "");
 }
 
 /** Bench builds: the host's byte-string conversion (g3Bytes) against lua.ts's own, on the files the load read. */
@@ -196,7 +199,9 @@ function gameMain(bench: boolean): void {
   const scriptText = typeof PV_G3_BENCH_SCRIPT === "string" ? PV_G3_BENCH_SCRIPT : "";
   // bench mode's screen suite (platform/bench_suite.ts) instead of a key script
   const suite = bench && scriptText === "suite" ? new BenchSuite() : null;
-  const script = new BenchScript(suite ? "" : scriptText);
+  // ... or its long session (platform/bench_leak.ts): memory over many battles and maps
+  const leak = bench && scriptText === "leak" ? new BenchLeak(game, () => memText(true)) : null;
+  const script = new BenchScript(suite || leak ? "" : scriptText);
   const shots = shotSet(typeof PV_G3_BENCH_SHOTS === "string" ? PV_G3_BENCH_SHOTS : bench ? "90,300" : "");
   let tick = 0;
   let shown = 0;
@@ -208,7 +213,7 @@ function gameMain(bench: boolean): void {
     tick++;
     const t1 = clock();
     try {
-      Input.hostButtons(padBits(buttons) | (suite ? suite.at(tick, game) : script.at(tick)));
+      Input.hostButtons(padBits(buttons) | (suite ? suite.at(tick, game) : leak ? leak.at(tick, game) : script.at(tick)));
       game.update(1 / 60);
     } catch (e) {
       if (!failedUpdate) console.log(`[pv] g3: update failed: ${errText(e)}`);

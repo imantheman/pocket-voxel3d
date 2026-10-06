@@ -76,7 +76,17 @@ typedef struct G3Tex {
        a lw x lh image (w = 2 lw). 0 = not folded. emit_poly maps the image's
        u, v onto the halves. */
     int fold, lw, lh;
+    uint8_t vram;        /* allocated in VRAM (canvases, the frame) */
+    uint32_t bytes;      /* the allocation's size (g3_tex_stats) */
 } G3Tex;
+
+/* Live textures (allocated, retired ones included until destroyed): count
+   and bytes in linear memory, bytes in VRAM (g3_tex_stats). */
+static int tex_live_n;
+static uint32_t tex_live_lin, tex_live_vram;
+/* canvases made and not cleared yet (g3_frame_offscreen walks the table
+   only while there are some) */
+static int tex_fresh_n;
 
 static G3Tex **texs;
 static int ntexs;
@@ -93,7 +103,17 @@ static void tex_destroy(G3Tex *t) {
     if (!t) return;
     if (t->rt) C3D_RenderTargetDelete(t->rt);
     C3D_TexDelete(&t->tex);
+    tex_live_n--;
+    if (t->vram) tex_live_vram -= t->bytes; else tex_live_lin -= t->bytes;
+    if (t->fresh) tex_fresh_n--;
     free(t);
+}
+
+/* [live textures, their bytes in linear memory, bytes in VRAM] */
+void g3_tex_stats(uint32_t out[3]) {
+    out[0] = (uint32_t)tex_live_n;
+    out[1] = tex_live_lin;
+    out[2] = tex_live_vram;
 }
 
 static void tex_retire(G3Tex *t) {
@@ -149,6 +169,10 @@ static G3Tex *tex_alloc(int w, int h, int repeat, int vram) {
     t->serial = tex_serial++;
     if (!(vram ? C3D_TexInitVRAM(&t->tex, (u16)t->tw, (u16)t->th, GPU_RGBA8)
                : C3D_TexInit(&t->tex, (u16)t->tw, (u16)t->th, GPU_RGBA8))) { free(t); return NULL; }
+    t->vram = (uint8_t)(vram != 0);
+    t->bytes = (uint32_t)t->tw * t->th * 4;
+    tex_live_n++;
+    if (vram) tex_live_vram += t->bytes; else tex_live_lin += t->bytes;
     C3D_TexSetFilter(&t->tex, GPU_NEAREST, GPU_NEAREST);
     /* the GPU's repeat wraps at the allocation: right only for a power of two
        (the rest is split into periods on the CPU, see emit_poly) */
@@ -246,6 +270,7 @@ void g3_canvas_new(int id, int w, int h) {
     if (!t->rt) { g3log("canvas %d: no render target", id); tex_destroy(t); return; }
     t->canvas = 1;
     t->fresh = 1;
+    tex_fresh_n++;
     tex_set(id, t);
 }
 
@@ -1214,9 +1239,11 @@ void g3_frame_offscreen(void) {
     frame_no++;
     retire_tick();
     if (frame_tex->fresh) { C3D_RenderTargetClear(frame_tex->rt, C3D_CLEAR_COLOR, 0, 0); frame_tex->fresh = 0; }
-    for (int i = 1; i < ntexs; i++) {
+    /* (texture ids are never reused, so the table only grows: walked only
+       while a new canvas waits for its clear) */
+    for (int i = 1; tex_fresh_n > 0 && i < ntexs; i++) {
         G3Tex *t = texs[i];
-        if (t && t->fresh) { C3D_RenderTargetClear(t->rt, C3D_CLEAR_COLOR, 0, 0); t->fresh = 0; }
+        if (t && t->fresh) { C3D_RenderTargetClear(t->rt, C3D_CLEAR_COLOR, 0, 0); t->fresh = 0; tex_fresh_n--; }
     }
     vcur ^= 1;
     vn = vstart = 0;
