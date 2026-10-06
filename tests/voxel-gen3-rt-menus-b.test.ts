@@ -274,7 +274,7 @@ describe.skipIf(!existsSync(GBA))("gen3 runtime: menus B", async () => {
     const top = OptionMenu._pages[1];
     const ids: string[] = [];
     for (let i = 1; top.rows[i]; i++) ids.push(top.rows[i].id);
-    expect(ids).toEqual(["group.speed", "group.video", "group.graphics", "group.audio", "performance",
+    expect(ids).toEqual(["pvView", "group.speed", "group.video", "group.graphics", "group.audio", "performance",
       "group.battle", "group.extras", "buttonMode", "controls", "mods"]);
     // touch rows and ORIENTATION are dropped on a non-mobile host
     const flat: string[] = [];
@@ -283,7 +283,8 @@ describe.skipIf(!existsSync(GBA))("gen3 runtime: menus B", async () => {
     expect(flat).not.toContain("touchControls");
     frame("menus_b_options_top.png", () => OptionMenu.draw());
 
-    // SPEED group -> TEXT SPEED
+    // SPEED group -> TEXT SPEED (VIEW is the first row)
+    OptionMenu.handleInput(pad("down"));
     OptionMenu.handleInput(pad("a"));
     const speed = OptionMenu._pages[2];
     expect(speed.rows[1].id).toBe("textSpeed");

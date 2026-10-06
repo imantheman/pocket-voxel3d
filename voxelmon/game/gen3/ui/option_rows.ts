@@ -124,6 +124,20 @@ export const Rows = {
     const rows: (OptionRow | null)[] = seq();
     const add = (row: OptionRow): void => { rows[len(rows) + 1] = row; };
 
+    // pocket-voxel (not in Brian's menu): the voxel world or the original
+    // flat picture, as the other games' OPTION has it. platform/game3_world.ts
+    // reads options.view; it is saved with the rest of options.lua.
+    add({
+      id: "pvView", label: Strings("VIEW"),
+      value: (c) => (c.options.view === "2d" ? "2D" : "3D"),
+      step: (c, _dir) => {
+        const next = c.options.view === "2d" ? "3d" : "2d";
+        c.options.view = next;
+        if (c.game?.options && c.game.options !== c.options) c.game.options.view = next;
+        return true;
+      },
+    });
+
     add({
       id: "textSpeed", label: cartName(0),
       value: (c) => cartLabel(c, "textSpeed", "sTextSpeedOptions"),
@@ -424,8 +438,9 @@ export const Rows = {
       members: seq("tilt", "zoom", "voidFill", "eventTickets") },
   ),
 
+  // pocket-voxel: VIEW first (not in Brian's menu; see build)
   ORDER: seq(
-    "group.speed", "group.video", "group.graphics", "group.audio",
+    "pvView", "group.speed", "group.video", "group.graphics", "group.audio",
     "performance", "group.battle", "group.extras", "buttonMode", "controls", "mods",
   ),
 
