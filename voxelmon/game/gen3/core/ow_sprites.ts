@@ -111,9 +111,50 @@ function resetPalettes(changed: boolean): void {
   for (const [, o] of pairs<OwPaletteOverride>(OwSprites._overrides || {})) o.spr = undefined;
 }
 
+// NOT FAITHFUL (memory): a sheet's `imageData` is its image's own pixels
+// (newImage keeps the ImageData it is made from), so it is read through the
+// image: the sheet holding it as well would keep the image from letting its
+// copy go once uploaded (image.ts tryDropPixels). Reading it makes the
+// pixels again, the same ones.
+function imageDataViaImage(sheet: OwSheet, image: Image): void {
+  Object.defineProperty(sheet, "imageData", {
+    get: () => image.data,
+    set: (d: ImageData | undefined) => {
+      Object.defineProperty(sheet, "imageData", { value: d, writable: true, enumerable: true, configurable: true });
+    },
+    enumerable: true,
+    configurable: true,
+  });
+}
+
+// NOT FAITHFUL (memory): Brian's _loaded keeps every sheet the session has
+// drawn -- and its texture -- which the leak bench's tour of the region grew
+// to 70-odd sheets, several MB of the 3DS's texture memory. Here at most
+// RESIDENT_SHEETS stay, the ones last asked for (get runs for every object
+// drawn, every frame); one let go is decoded again, at once, on its next
+// get, as on its first (the same pixels), and its reflection with it.
+const RESIDENT_SHEETS = 40;
+let sheetClock = 0;
+const sheetUse: Record<number, number> = {};
+function evictSheets(keep: number): void {
+  const ids = Object.keys(OwSprites._loaded).map(Number);
+  if (ids.length <= RESIDENT_SHEETS) return;
+  ids.sort((a, b) => (sheetUse[a] ?? 0) - (sheetUse[b] ?? 0));
+  let n = ids.length;
+  for (let i = 0; i < ids.length && n > RESIDENT_SHEETS; i++) {
+    const gid = ids[i]!;
+    if (gid === keep) continue;
+    delete OwSprites._loaded[gid];
+    delete OwSprites._reflectionLoaded[gid];
+    delete sheetUse[gid];
+    n--;
+  }
+}
+
 // Lua: ow_sprites.lua:84
 function* uploadSprite(meta: any): Generator<unknown, any, unknown> {
   const image = G.newImage(meta.imageData);
+  imageDataViaImage(meta, image);
   image.setFilter("nearest", "nearest");
   yield "texture";
   const w = meta.width, h = meta.height, n = meta.frameCount;
@@ -131,6 +172,8 @@ function* uploadSprite(meta: any): Generator<unknown, any, unknown> {
 function makeStream(): AssetStream {
   return Stream.new("sprite", OwSprites._cache, owRoot(), uploadSprite, (gid: any, spr: any) => {
     OwSprites._loaded[gid] = spr;
+    sheetUse[gid] = ++sheetClock;
+    evictSheets(gid);
     if (!OwSprites._logged) {
       console.log(format("[game3/ow] sprites ready (%s sheets)",
         tostring((OwSprites._manifest && OwSprites._manifest.count) ?? "?")));
@@ -272,7 +315,7 @@ function recolour_sprite(spr: OwSheet | undefined, from: LuaTable, to: LuaTable)
 
   const copy: OwSheet = Object.assign({}, spr);
   copy.image = img;
-  copy.imageData = data;
+  imageDataViaImage(copy, img); // (`data`, read through the image)
   return copy;
 }
 
@@ -351,7 +394,7 @@ export const OwSprites = {
     const graphicsId = tonumber(graphicsIdIn);
     if (graphicsId == null) return undefined;
     const cached = OwSprites._loaded[graphicsId];
-    if (cached) return cached;
+    if (cached) { sheetUse[graphicsId] = ++sheetClock; return cached; }
     if (!OwSprites._manifestAttempted) loadManifest();
     // s:get returns [value, err]; the Lua keeps the first value
     return (OwSprites._stream && OwSprites._stream.get(graphicsId)[0]) || undefined;

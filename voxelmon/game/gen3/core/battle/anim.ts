@@ -1117,6 +1117,24 @@ export const Anim: Record<string, any> = {
     p.substituteY = p.substitute ? Anim.substituteY(side) : null;
   },
 
+  /**
+   * NOT FAITHFUL (memory): at a battle's end, the images Brian's caches keep
+   * for the session -- the stat-change masks, the move backgrounds (256-512
+   * KB textures each on the 3DS) -- are let go; the next battle that wants
+   * one makes it again from the pack (the same pixels). Battle.finish and
+   * Battle.reset call it.
+   */
+  forgetImages(): void {
+    Anim._statMaskImgs = {};
+    const bgs = Anim._pack && Anim._pack.animBgs;
+    if (bgs && typeof bgs === "object") {
+      for (const k in bgs) {
+        const info = bgs[k];
+        if (info && typeof info === "object") { info.image = undefined; info.idxImage = undefined; }
+      }
+    }
+  },
+
   // Lua: anim.lua:1003 -- pokefirered/src/battle_anim_utility_funcs.c:464
   statMaskImage(tilemap: unknown, pal: unknown): Image | null {
     if (typeof tilemap === "string" && tonumber(tilemap) == null) {

@@ -473,6 +473,10 @@ export const MapPreviewScreen = {
       throw new Error("missing baked artwork " + rel);
     }
     const image = rgba_to_image(bytes, MapPreviewExtract.WIDTH, MapPreviewExtract.HEIGHT);
+    // NOT FAITHFUL (memory): Brian's keeps every artwork shown this session
+    // (a 256 KB texture each on the 3DS); the screen shows one at a time, so
+    // two stay at most (another is baked again from the cache when shown)
+    if (Object.keys(MapPreviewScreen._images).length >= 2) MapPreviewScreen._images = {};
     MapPreviewScreen._images[artwork] = image;
     return image;
   },

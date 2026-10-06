@@ -704,6 +704,7 @@ function finish(result?: any): void {
   LearnMove.reset();
   SwitchSeq.reset();
   Anim.reset({ headless: true });
+  Anim.forgetImages(); // NOT FAITHFUL (memory): see anim.ts
   // pcall(require, "src.ui.game3.message") succeeds: it is linked in.
   const okM = true;
   if (okM && truthy(Message)) {
@@ -4681,6 +4682,7 @@ Battle.reset = function (): void {
   LearnMove.reset();
   SwitchSeq.reset();
   Anim.reset({ headless: true });
+  Anim.forgetImages(); // NOT FAITHFUL (memory): see anim.ts
   if (truthy(Ui.clearLinger)) Ui.clearLinger();
 };
 

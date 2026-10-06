@@ -1608,6 +1608,7 @@ function icon(speciesIn: unknown): MonIcon | null {
     quads[f] = G.newQuad(0, f * h, w, h, w, actualH);
   }
   const entry: MonIcon = { image, w, h, sheetH: actualH, frames, quads };
+  forgetPicsPast(Pokemon._icons, ICONS_KEPT); // NOT FAITHFUL (memory): see pic_entry
   Pokemon._icons[species] = entry;
   return entry;
 }
@@ -1644,8 +1645,23 @@ function pic_entry(store: PicStore, key: string | number, rgba: string | null | 
   const image = image_from_rgba(rgba, 64, 64);
   if (!image) return null;
   const entry: MonPic = { image, w: 64, h: 64 };
+  forgetPicsPast(store, PICS_KEPT);
   store[key] = entry;
   return entry;
+}
+
+// NOT FAITHFUL (memory): Brian's pic and icon stores keep every species'
+// picture the session has shown (a 32 KB texture each on the 3DS, 8 KB an
+// icon) -- a stroll through the Pokedex alone shows hundreds. Past these
+// counts a store lets its pictures go (not the known-missing marks); one
+// wanted again is read again from the cache (the same pixels).
+const PICS_KEPT = 48;
+const ICONS_KEPT = 96;
+function forgetPicsPast(store: Record<string | number, unknown>, kept: number): void {
+  let n = 0;
+  for (const k in store) if (store[k]) n++;
+  if (n < kept) return;
+  for (const k in store) if (store[k]) delete store[k];
 }
 
 // pokefirered/src/data/pokemon_graphics/shiny_palette_table.h:415

@@ -272,6 +272,10 @@ BattleChrome.terrain = function (key: any): TerrainEntry | undefined {
     w,
     h,
   };
+  // NOT FAITHFUL (memory): Brian's keeps every terrain's five sheets for the
+  // session (over a megabyte of textures each on the 3DS); a battle shows
+  // one terrain, so only the last stays (another is read again when wanted)
+  for (const k of Object.keys(cache)) delete cache[k];
   cache[key] = entry;
   return entry;
 };
