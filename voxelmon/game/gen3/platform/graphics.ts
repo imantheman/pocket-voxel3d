@@ -11,7 +11,7 @@ import { effectByName, effectId, type Effect, type Rgba } from "./effects.ts";
 import "./effects/index.ts";
 import { getHost } from "./host.ts";
 import {
-  Canvas, Image, ImageData, Quad, SpriteBatch, newImage as makeImage, FileData, collectTextures, texturesListSent,
+  Canvas, Image, ImageData, Quad, SpriteBatch, newImage as makeImage, FileData, collectTextures, texturesListSent, batchUploaded,
 } from "./image.ts";
 
 export const SCREEN_W = 240;
@@ -334,17 +334,46 @@ function memoable(): boolean {
 /** G.setMemo: memos on (false: every run is drawn plainly; tools/gen3/perf_check.ts compares the two). */
 let memoOn = true;
 
-/** A sprite batch's quads, batch-local, to the host (G3Host.batchUpload). */
-let batchScratch = new Float32Array(12 * 256);
+/**
+ * A sprite batch's quads, batch-local, to the host (G3Host.batchUpload):
+ * 12 floats per entry in entry order, a hidden entry's all -1e6 (the host
+ * skips a quad whose first corner is that far out, as the list would have
+ * left it out). Only the entries changed since the last upload are worked
+ * out again (SpriteBatch.dirty): a walk's step changes a row of the field's
+ * cells, not the hundreds the batch holds.
+ */
 function uploadBatch(host: ReturnType<typeof getHost>, sb: SpriteBatch): void {
   const ents = sb.entries;
+  const n = ents.length;
+  let q8 = sb.out;
+  if (!q8 || q8.length < n * 12) {
+    const nq = new Float32Array(Math.max(n, 64) * 12 * 2);
+    if (q8 && !sb.dirtyAll) nq.set(q8);
+    sb.out = q8 = nq;
+  }
+  if (sb.dirtyAll || sb.dirty.length * 2 > n) {
+    for (let i = 0; i < n; i++) batchQuad(q8, sb, i);
+  } else {
+    const dl = sb.dirty;
+    for (let k = 0; k < dl.length; k++) if (dl[k]! < n) batchQuad(q8, sb, dl[k]!);
+  }
+  sb.dirty.length = 0;
+  sb.dirtyAll = false;
+  host.batchUpload!(sb.id, sb.texture.id, q8.subarray(0, n * 12), n);
+  batchUploaded(sb);
+  sb.uploaded = sb.version;
+}
+
+/** Entry i of sprite batch sb as 12 floats at q8[i * 12] (uploadBatch). */
+function batchQuad(q8: Float32Array, sb: SpriteBatch, i: number): void {
+  const e = sb.entries[i];
   const img = sb.texture;
-  if (batchScratch.length < ents.length * 12) batchScratch = new Float32Array(ents.length * 12 * 2);
-  const q8 = batchScratch;
-  let n = 0;
-  for (let i = 0; i < ents.length; i++) {
-    const e = ents[i];
-    if (!e || e.x < -1e5 || e.y < -1e5) continue; // hidden cells (field_view parks them at -1e6)
+  const o = i * 12;
+  if (!e || e.x < -1e5 || e.y < -1e5) { // hidden cells (field_view parks them at -1e6)
+    for (let k = 0; k < 12; k++) q8[o + k] = -1e6;
+    return;
+  }
+  {
     let a: number, b: number, c: number, d: number, ex: number, fy: number;
     const er = e.r ?? 0, esx = e.sx ?? 1, esy = e.sy ?? e.sx ?? 1;
     if (er === 0 && esx === 1 && esy === 1) {
@@ -358,14 +387,10 @@ function uploadBatch(host: ReturnType<typeof getHost>, sb: SpriteBatch): void {
     const qx = q ? q.x : 0, qy = q ? q.y : 0, qw = q ? q.w : img.w, qh = q ? q.h : img.h;
     const sw = q ? q.sw : img.w, sh = q ? q.sh : img.h;
     const ax = a * qw, bx = b * qw, cy = c * qh, dy = d * qh;
-    const o = n * 12;
     q8[o] = ex; q8[o + 1] = fy; q8[o + 2] = ex + ax; q8[o + 3] = fy + bx;
     q8[o + 4] = ex + ax + cy; q8[o + 5] = fy + bx + dy; q8[o + 6] = ex + cy; q8[o + 7] = fy + dy;
     q8[o + 8] = qx / sw; q8[o + 9] = qy / sh; q8[o + 10] = (qx + qw) / sw; q8[o + 11] = (qy + qh) / sh;
-    n++;
   }
-  host.batchUpload!(sb.id, img.id, q8.subarray(0, n * 12), n);
-  sb.uploaded = sb.version;
 }
 
 /** drawMatrix's six numbers into the scratch below (no array per draw). */

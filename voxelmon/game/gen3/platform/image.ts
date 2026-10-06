@@ -43,6 +43,26 @@ function unfree(id: number): void {
 export function texturesListSent(): void {
   for (const id of freeLater) freeReady.push(id);
   freeLater.clear();
+  for (const id of batchFreeLater) batchFreeReady.push(id);
+  batchFreeLater.clear();
+}
+
+// The same for the host's copies of sprite batches (G3Host.batchUpload):
+// a batch drawn by id goes when its SpriteBatch is collected or released.
+const batchRefs: WeakRef<SpriteBatch>[] = [];
+const batchIds: number[] = [];
+const batchFreeLater = new Set<number>();
+let batchFreeReady: number[] = [];
+
+/** Sprite batch `sb` was just sent to the host (graphics.ts uploadBatch). */
+export function batchUploaded(sb: SpriteBatch): void {
+  batchFreeLater.delete(sb.id);
+  const i = batchFreeReady.indexOf(sb.id);
+  if (i >= 0) batchFreeReady.splice(i, 1);
+  if (!hasWeakRef || sb.watched) return;
+  sb.watched = true;
+  batchRefs.push(new WeakRef(sb));
+  batchIds.push(sb.id);
 }
 
 function watch(img: Image): void {
@@ -64,6 +84,11 @@ export function collectTextures(scan: boolean): void {
     for (let i = 0; i < freeReady.length; i++) host.texFree(freeReady[i]!);
     freeReady = [];
   }
+  if (batchFreeReady.length) {
+    const host = getHost();
+    for (let i = 0; i < batchFreeReady.length; i++) host.batchFree?.(batchFreeReady[i]!);
+    batchFreeReady = [];
+  }
   if (scan) {
     let j = 0;
     for (let i = 0; i < watchRefs.length; i++) {
@@ -74,6 +99,15 @@ export function collectTextures(scan: boolean): void {
       watchRefs[j] = r; watchIds[j] = watchIds[i]!; j++;
     }
     watchRefs.length = j; watchIds.length = j;
+    j = 0;
+    for (let i = 0; i < batchRefs.length; i++) {
+      const r = batchRefs[i]!;
+      const sb = r.deref();
+      if (sb === undefined) { batchFreeLater.add(batchIds[i]!); continue; }
+      if (!sb.watched) continue;
+      batchRefs[j] = r; batchIds[j] = batchIds[i]!; j++;
+    }
+    batchRefs.length = j; batchIds.length = j;
   }
 }
 
@@ -270,6 +304,16 @@ export class SpriteBatch {
   /** Bumped by every change; the host copy is re-sent only then. */
   version = 0;
   uploaded = -1;
+  /** Watched for collection (collectTextures): the host holds a copy. */
+  watched = false;
+  /**
+   * The host copy's quads as last sent (graphics.ts uploadBatch), 12 floats
+   * per entry in entry order (a hidden entry's are -1e6: the host skips
+   * it), and the entries changed since: only those are worked out again.
+   */
+  out: Float32Array | null = null;
+  dirty: number[] = [];
+  dirtyAll = true;
   constructor(texture: Image, readonly capacity = 1000) { this.texture = texture; }
   /** add(quad, x, y[, r, sx, sy]) -> 1-based index */
   add(quad: Quad | number, x?: number, y?: number, r = 0, sx = 1, sy?: number): number {
@@ -279,6 +323,7 @@ export class SpriteBatch {
     } else {
       this.entries.push({ quad, x: x ?? 0, y: y ?? 0, r, sx, sy: sy ?? sx });
     }
+    this.dirty.push(this.entries.length - 1);
     return this.entries.length;
   }
   set(index: number, quad: Quad, x = 0, y = 0, r = 0, sx = 1, sy?: number): void {
@@ -288,17 +333,29 @@ export class SpriteBatch {
     if (e && e.quad === quad && e.x === x && e.y === y && e.r === r && e.sx === sx && e.sy === syv) return;
     this.version++;
     if (e) { e.quad = quad; e.x = x; e.y = y; e.r = r; e.sx = sx; e.sy = syv; }
-    else this.entries[index - 1] = { quad, x, y, r, sx, sy: syv };
+    else { if (index - 1 > this.entries.length) this.dirtyAll = true; this.entries[index - 1] = { quad, x, y, r, sx, sy: syv }; }
+    this.dirty.push(index - 1);
   }
-  clear(): void { if (this.entries.length) this.version++; this.entries.length = 0; }
+  clear(): void { if (this.entries.length) this.version++; this.entries.length = 0; this.dirtyAll = true; }
   getCount(): number { return this.entries.length; }
   getTexture(): Image { return this.texture; }
-  setTexture(t: Image): void { if (t !== this.texture) this.version++; this.texture = t; }
+  setTexture(t: Image): void {
+    // the host draws a batch with the texture its draw op names, and the
+    // quads it holds depend on the texture only through its size (a quadless
+    // cell's frame): another texture of the same size needs no re-send (the
+    // field's double-buffered atlases swap on every tile animation step)
+    const o = this.texture;
+    if (t !== o && (t.w !== o.w || t.h !== o.h)) { this.version++; this.dirtyAll = true; }
+    this.texture = t;
+  }
   flush(): void {}
   release(): void {
     this.entries.length = 0;
+    this.dirtyAll = true;
     this.version++;
-    if (hasHost()) getHost().batchFree?.(this.id);
+    // the host's copy goes once the list naming it has been rendered (collectTextures)
+    if (hasHost()) batchFreeLater.add(this.id);
+    this.watched = false;
     this.uploaded = -1;
   }
   type(): string { return "SpriteBatch"; }

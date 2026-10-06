@@ -1198,6 +1198,8 @@ static void run_list(const float *f, size_t n) {
                 prim_begin(t, f + i + 9);
                 const float *q = b->q;
                 for (int k = 0; k < b->n; k++, q += 12) {
+                    /* a hidden entry (graphics.ts uploadBatch parks it at -1e6) */
+                    if (q[0] < -1e5f || q[1] < -1e5f) continue;
                     float u0 = q[8], v0 = q[9], u1 = q[10], v1 = q[11];
                     PV p[4] = {
                         {{m[0] * q[0] + m[2] * q[1] + m[4], m[1] * q[0] + m[3] * q[1] + m[5], u0, v0}},

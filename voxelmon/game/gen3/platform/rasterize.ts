@@ -66,6 +66,7 @@ export class Rasterizer {
         if (bt) {
           for (let k = 0; k < bt.n; k++) {
             const o = k * 12, q = bt.q;
+            if (q[o]! < -1e5 || q[o + 1]! < -1e5) continue; // a hidden entry (graphics.ts uploadBatch)
             const cs: number[] = [];
             for (let j = 0; j < 8; j += 2) cs.push(a * q[o + j]! + c * q[o + j + 1]! + e, b * q[o + j]! + d * q[o + j + 1]! + f);
             this.quad(target, tex, cs, q[o + 8]!, q[o + 9]!, q[o + 10]!, q[o + 11]!, col, blend, effect, params, scissor);
