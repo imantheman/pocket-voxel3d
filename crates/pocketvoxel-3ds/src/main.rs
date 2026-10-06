@@ -1555,7 +1555,7 @@ static mut DRAWN: u32 = 0;
 // for QuickJS or the geometry staging Vec.
 #[no_mangle] #[cfg(not(feature = "gen3"))]
 pub static __ctru_heap_size: u32 = 92 * 1024 * 1024;
-#[no_mangle]
+#[no_mangle] #[cfg(not(feature = "gen3"))]
 pub static __ctru_linear_heap_size: u32 = 24 * 1024 * 1024;
 
 fn po2(n: u32) -> u32 { let mut p = 8u32; while p < n { p <<= 1; } p }
@@ -7718,7 +7718,7 @@ unsafe fn audio3ds_init(_rate: i32, _frames_per_buf: i32) -> i32 {
     0
 }
 /// FireRed's app heap: 0 = everything the console has left once the code and
-/// the (shared, 24 MB) linear heap are placed (libctru's automatic sizing).
+/// the linear heap (18 MB, below) are placed (libctru's automatic sizing).
 /// A fixed 92 MB with the 8 MB binary is the whole of a New 3DS's 124 MB, so
 /// a bigger build failed its linear allocation at boot, and an Old 3DS (64
 /// MB) never booted at all; the Gen 3 runtime takes what there is.
@@ -7738,3 +7738,14 @@ impl VertStore {
         self.segs[i].last_mut()
     }
 }
+/// FireRed's linear heap: 18 MB, not the shared 24. Its 2D layer now levels
+/// off near 6 MB of textures (collected with their images, grey sheets as
+/// LA4), and a Kanto map's spans and strips take a megabyte or two, so the
+/// shared size left ~14 MB of linear memory idle all session while the app
+/// heap -- QuickJS's tables and the map build's staging block -- ran out
+/// first: a long session's town after several battles was built with no
+/// spans at all. The 6 MB go to the app heap (its size is automatic above).
+/// Never written by libctru (only a zero heap size is), so a plain static.
+#[cfg(feature = "gen3")]
+#[no_mangle]
+pub static __ctru_linear_heap_size: u32 = 18 * 1024 * 1024;
