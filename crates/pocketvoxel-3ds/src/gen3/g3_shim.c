@@ -36,7 +36,7 @@ int g3_tex_upload(int id, int w, int h, const uint8_t *rgba, size_t len, int rep
 int g3_tex_from_cache(int id, const char *path, int *ow, int *oh);
 void g3_canvas_new(int id, int w, int h);
 void g3_tex_free(int id);
-void g3_tex_stats(uint32_t out[3]);
+void g3_tex_stats(uint32_t out[4]);
 void g3_draw(const float *f, size_t n);
 void g3_batch_upload(int id, int tex, const float *q, int n);
 void g3_batch_free(int id);
@@ -224,11 +224,19 @@ static JSValue g3_read(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     return r;
 }
 
+/* Bytes of the app heap held by buffers handed to the guest as ArrayBuffers
+   (QuickJS does not count them in its own heap: g3Mem item 9). */
+static size_t g3_ext_bytes;
+static void g3_ext_add(void *p) { if (p) g3_ext_bytes += malloc_usable_size(p); }
+
 /* the buffer's realloc hook: size 0 frees it (the only call a fixed buffer gets) */
 static void *g3_realloc_buf(JSRuntime *rt, void *opaque, void *ptr, size_t size) {
     (void)rt; (void)opaque;
+    if (ptr) g3_ext_bytes -= malloc_usable_size(ptr);
     if (size == 0) { free(ptr); return NULL; }
-    return realloc(ptr, size);
+    void *p = realloc(ptr, size);
+    g3_ext_add(p);
+    return p;
 }
 
 static JSValue g3_readbuf(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
@@ -240,6 +248,7 @@ static JSValue g3_readbuf(JSContext *ctx, JSValueConst t, int c, JSValueConst *v
     uint8_t *b = g3_read_file(path, &n);
     JS_FreeCString(ctx, path);
     if (!b) return JS_UNDEFINED;
+    g3_ext_add(b);
     return JS_NewArrayBuffer(ctx, b, n, 0, g3_realloc_buf, NULL, false);
 }
 
@@ -273,8 +282,9 @@ static JSValue g3_bytes_js(JSContext *ctx, JSValueConst t, int c, JSValueConst *
     }
     JS_FreeCString(ctx, u);
     if (bad) { free(b); return JS_UNDEFINED; }
+    g3_ext_add(b);
     JSValue arr = JS_NewUint8Array(ctx, b, n, g3_realloc_buf, NULL, false);
-    if (JS_IsException(arr)) { free(b); JS_FreeValue(ctx, JS_GetException(ctx)); return JS_UNDEFINED; }
+    if (JS_IsException(arr)) { g3_realloc_buf(NULL, NULL, b, 0); JS_FreeValue(ctx, JS_GetException(ctx)); return JS_UNDEFINED; }
     return arr;
 }
 
@@ -303,8 +313,9 @@ static JSValue g3_pngdecode(JSContext *ctx, JSValueConst t, int c, JSValueConst 
     uint8_t *rgba = g3_png_decode(b, n, &w, &h);
     free(b);
     if (!rgba) return JS_UNDEFINED;
+    g3_ext_add(rgba);
     JSValue arr = JS_NewUint8Array(ctx, rgba, (size_t)w * h * 4, g3_realloc_buf, NULL, false);
-    if (JS_IsException(arr)) { free(rgba); return arr; }
+    if (JS_IsException(arr)) { g3_realloc_buf(NULL, NULL, rgba, 0); return arr; }
     JSValue a = JS_NewArray(ctx);
     JS_SetPropertyUint32(ctx, a, 0, JS_NewInt32(ctx, w));
     JS_SetPropertyUint32(ctx, a, 1, JS_NewInt32(ctx, h));
@@ -520,10 +531,14 @@ static JSValue g3_mem(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     JS_SetPropertyUint32(ctx, a, 3, JS_NewFloat64(ctx, (double)linearSpaceFree()));
     JS_SetPropertyUint32(ctx, a, 4, JS_NewFloat64(ctx, (double)(unsigned)mi.arena));
     JS_SetPropertyUint32(ctx, a, 5, JS_NewFloat64(ctx, (double)JS_GetGCThreshold(JS_GetRuntime(ctx))));
-    /* the 2D layer's textures (g3_render.c): live count, linear bytes, VRAM bytes */
-    uint32_t ts[3];
+    /* the 2D layer's textures (g3_render.c): live count, linear bytes, VRAM
+       bytes; then the host's sprite batches' bytes and the guest's
+       ArrayBuffers on the app heap outside QuickJS's count */
+    uint32_t ts[4];
     g3_tex_stats(ts);
     for (int i = 0; i < 3; i++) JS_SetPropertyUint32(ctx, a, 6 + i, JS_NewFloat64(ctx, (double)ts[i]));
+    JS_SetPropertyUint32(ctx, a, 9, JS_NewFloat64(ctx, (double)ts[3]));
+    JS_SetPropertyUint32(ctx, a, 10, JS_NewFloat64(ctx, (double)g3_ext_bytes));
     return a;
 }
 

@@ -145,6 +145,9 @@ const idle = (n: number): void => { for (let i = 0; i < n; i++) frame(0); };
 
 const mb = (b: number): string => (b / 1048576).toFixed(2);
 let lastIds = new Set<number>();
+let lastTypes: Record<string, number> = {};
+const SNAP = opt("--snap") ? opt("--snap")!.split(",").map(Number) : undefined;
+let snapA: any;
 /** Bun keeps a WeakRef's target alive until the current job ends: a turn of
  *  the event loop and a full collection, then a few frames for the guest's
  *  scan (QuickJS frees an unreachable image at once, without either). */
@@ -157,7 +160,15 @@ async function report(what: string): Promise<void> {
   await settleGc();
   let n = 0, lin = 0, vn = 0, vram = 0;
   for (const t of live.values()) { if (t.vram) { vn++; vram += t.bytes; } else { n++; lin += t.bytes; } }
-  console.log(`[tex] f${String(f).padStart(6)} ${what.padEnd(52)} linear ${String(n).padStart(4)} tex ${mb(lin).padStart(6)} MB | vram ${vn} ${mb(vram)} MB | maps ${mapChanges}`);
+  const jsc = await import("bun:jsc");
+  const hs = jsc.heapStats();
+  console.log(`[tex] f${String(f).padStart(6)} ${what.padEnd(52)} linear ${String(n).padStart(4)} tex ${mb(lin).padStart(6)} MB | vram ${vn} ${mb(vram)} MB | maps ${mapChanges} | js heap ${mb(hs.heapSize)} MB (${hs.objectCount} objects)`);
+  if (argv.includes("--types")) {
+    const c = hs.objectTypeCounts as Record<string, number>;
+    const d = Object.entries(c).map(([k, v]) => [k, v - (lastTypes[k] ?? 0)] as [string, number]).filter((e) => e[1] !== 0).sort((a, b) => b[1] - a[1]);
+    console.log(`[types]   ${d.slice(0, 10).map(([k, v]) => `${k} ${v > 0 ? "+" : ""}${v}`).join(", ")}`);
+    lastTypes = { ...c };
+  }
   if (SITES) {
     const by = new Map<string, [number, number]>();
     for (const [id, t] of live) {
@@ -171,6 +182,15 @@ async function report(what: string): Promise<void> {
     }
   }
   lastIds = new Set(live.keys());
+  // --snap a,b: the heap's growth between steps a and b, by holder (heap_diff.ts)
+  if (SNAP) {
+    if (step === SNAP[0]) snapA = Bun.generateHeapSnapshot();
+    if (step === SNAP[1] && snapA) {
+      const { heapDiff } = await import("./heap_diff.ts");
+      for (const l of heapDiff(snapA, Bun.generateHeapSnapshot() as any, Number(opt("--snap-top") ?? 40), Number(opt("--snap-depth") ?? 3))) console.log(l);
+      snapA = undefined;
+    }
+  }
   step++;
 }
 

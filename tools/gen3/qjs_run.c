@@ -10,6 +10,7 @@
  *   nowUs()               microseconds, monotonic
  *   memUsage()            [bytes in use, peak bytes] of the QuickJS heap
  *   memPeakReset()        start a new peak from the current use
+ *   memDetail()           the heap by kind (JS_ComputeMemoryUsage): {str, obj, binary, ...} bytes
  *   gc()                  run the cycle collector
  *   gcHold(on)            hold the collector off / run it and re-arm (g3Gc)
  *   pngDecode(bytes)      the host PNG decoder (g3PngDecode): [w, h, Uint8Array] or undefined
@@ -78,6 +79,22 @@ static JSValue js_memusage(JSContext *ctx, JSValueConst t, int c, JSValueConst *
     JS_SetPropertyUint32(ctx, a, 0, JS_NewFloat64(ctx, (double)g_use));
     JS_SetPropertyUint32(ctx, a, 1, JS_NewFloat64(ctx, (double)g_peak));
     return a;
+}
+/* memDetail() -> {str, obj, prop, shape, func, code, binary, ...}: the
+   QuickJS heap by kind of thing (JS_ComputeMemoryUsage), sizes in bytes */
+static JSValue js_memdetail(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    JSMemoryUsage mu;
+    JS_ComputeMemoryUsage(g_rt, &mu);
+    JSValue o = JS_NewObject(ctx);
+#define MD(k, x) JS_SetPropertyStr(ctx, o, k, JS_NewFloat64(ctx, (double)(x)))
+    MD("total", mu.malloc_size); MD("str", mu.str_size); MD("strN", mu.str_count);
+    MD("obj", mu.obj_size); MD("objN", mu.obj_count); MD("prop", mu.prop_size); MD("shape", mu.shape_size);
+    MD("func", mu.js_func_size); MD("code", mu.js_func_code_size); MD("pc2line", mu.js_func_pc2line_size);
+    MD("arrayN", mu.array_count); MD("fastArrayN", mu.fast_array_count); MD("fastElems", mu.fast_array_elements);
+    MD("binary", mu.binary_object_size); MD("binaryN", mu.binary_object_count); MD("atoms", mu.atom_size);
+#undef MD
+    return o;
 }
 static JSValue js_mempeakreset(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)ctx; (void)t; (void)c; (void)v;
@@ -230,7 +247,8 @@ int main(int argc, char **argv) {
     JS_SetPropertyStr(ctx, g, "readFile", JS_NewCFunction(ctx, js_readfile, "readFile", 1));
     JS_SetPropertyStr(ctx, g, "nowUs", JS_NewCFunction(ctx, js_nowus, "nowUs", 0));
     JS_SetPropertyStr(ctx, g, "memUsage", JS_NewCFunction(ctx, js_memusage, "memUsage", 0));
-    JS_SetPropertyStr(ctx, g, "memPeakReset", JS_NewCFunction(ctx, js_mempeakreset, "memPeakReset", 0));
+    JS_SetPropertyStr(ctx, g, "memDetail", JS_NewCFunction(ctx, js_memdetail, "memDetail", 0));
+    JS_SetPropertyStr(ctx, g, "memPeakReset",JS_NewCFunction(ctx, js_mempeakreset, "memPeakReset", 0));
     JS_SetPropertyStr(ctx, g, "gc", JS_NewCFunction(ctx, js_gc, "gc", 0));
     JS_SetPropertyStr(ctx, g, "gcHold", JS_NewCFunction(ctx, js_gchold, "gcHold", 1));
     JS_SetPropertyStr(ctx, g, "pngDecode", JS_NewCFunction(ctx, js_pngdecode, "pngDecode", 1));

@@ -44,6 +44,11 @@ fn main() {
         println!("cargo:rerun-if-changed=vendor/quickjs/{n}");
         b.file(&p);
     }
+    // FireRed: QuickJS counts its heap by newlib's chunk sizes (cutils.h
+    // js__malloc_usable_size); the MIT games' QuickJS is built as before
+    if std::env::var_os("CARGO_FEATURE_GEN3").is_some() {
+        b.define("PV_QJS_USABLE_SIZE", None);
+    }
     b.compile("quickjs");
     // The FireRed host (src/gen3/*.c: the Gen 3 display and natives, GPLv3 +
     // additional terms), only for the gen3 builds.

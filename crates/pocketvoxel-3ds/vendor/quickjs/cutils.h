@@ -606,6 +606,12 @@ static inline size_t js__malloc_usable_size(const void *ptr)
     return _msize((void *)ptr);
 #elif defined(__linux__) || defined(__ANDROID__) || defined(__CYGWIN__) || defined(__FreeBSD__) || defined(__GLIBC__)
     return malloc_usable_size((void *)ptr);
+#elif defined(PV_QJS_USABLE_SIZE)
+    /* pocket-voxel, the FireRed builds only (build.rs): newlib's chunk size,
+       so the heap QuickJS counts (and collects by) is the heap it uses --
+       without it every block past the arena's sizes counted as 0 bytes */
+    extern size_t malloc_usable_size(void *);
+    return malloc_usable_size((void *)ptr);
 #else
     return 0;
 #endif

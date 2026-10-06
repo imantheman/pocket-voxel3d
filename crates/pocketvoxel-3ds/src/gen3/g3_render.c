@@ -119,11 +119,14 @@ static void tex_destroy(G3Tex *t) {
     free(t);
 }
 
-/* [live textures, their bytes in linear memory, bytes in VRAM] */
-void g3_tex_stats(uint32_t out[3]) {
+/* the quads the host's sprite batches hold (g3_batch_upload) */
+static uint32_t batch_bytes;
+/* [live textures, their bytes in linear memory, bytes in VRAM, batch bytes] */
+void g3_tex_stats(uint32_t out[4]) {
     out[0] = (uint32_t)tex_live_n;
     out[1] = tex_live_lin;
     out[2] = tex_live_vram;
+    out[3] = batch_bytes;
 }
 
 static void tex_retire(G3Tex *t) {
@@ -422,6 +425,7 @@ void g3_batch_upload(int id, int tex, const float *q, int n) {
         float *nq = (float *)realloc(b->q, (size_t)n * 12 * sizeof(float));
         if (!nq) { b->n = 0; return; }
         b->q = nq;
+        batch_bytes += (uint32_t)(n * 12 - b->cap) * 4;
         b->cap = n * 12;
     }
     if (n) memcpy(b->q, q, (size_t)n * 12 * sizeof(float));
@@ -431,6 +435,7 @@ void g3_batch_upload(int id, int tex, const float *q, int n) {
 
 void g3_batch_free(int id) {
     if (id <= 0 || id >= nbatches) return;
+    batch_bytes -= (uint32_t)batches[id].cap * 4;
     free(batches[id].q);
     memset(&batches[id], 0, sizeof(G3Batch));
 }
