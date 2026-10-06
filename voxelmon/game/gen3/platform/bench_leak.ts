@@ -229,13 +229,15 @@ export class BenchLeak {
     const trainers = [0x66, 0x67, 0x68, 0x8e, 0x8f, 0x9c, 0xa1, 0xb0, 0xc0, 0x70, 0x80, 0x90];
     // a tour of the region: every town (a door in and out of each), routes and
     // the forest between them -- each a map the session has not seen yet,
-    // the way a playthrough goes on meeting new ones
+    // the way a playthrough goes on meeting new ones. (Not One, Two or Three
+    // Island: their terrain page is 256x1200, over the 3DS's 1024, and the
+    // host's map build panics making its texture -- a cook matter, not memory.)
     const tour = ["FR_VIRIDIAN_CITY", "FR_ROUTE_2", "FR_VIRIDIAN_FOREST", "FR_PEWTER_CITY", "FR_ROUTE_3", "FR_ROUTE_4",
       "FR_CERULEAN_CITY", "FR_ROUTE_24", "FR_ROUTE_25", "FR_ROUTE_5", "FR_ROUTE_6", "FR_VERMILION_CITY", "FR_ROUTE_11",
       "FR_ROUTE_9", "FR_ROUTE_10", "FR_LAVENDER_TOWN", "FR_ROUTE_8", "FR_ROUTE_7", "FR_CELADON_CITY", "FR_ROUTE_16",
       "FR_ROUTE_17", "FR_ROUTE_18", "FR_FUCHSIA_CITY", "FR_ROUTE_15", "FR_ROUTE_14", "FR_ROUTE_13", "FR_ROUTE_12",
       "FR_SAFFRON_CITY", "FR_ROUTE_19", "FR_ROUTE_20", "FR_CINNABAR_ISLAND", "FR_ROUTE_21_NORTH", "FR_ROUTE_22",
-      "FR_ROUTE_23", "FR_INDIGO_PLATEAU_EXTERIOR", "SEVII_ONE_ISLAND", "FR_TWO_ISLAND", "FR_THREE_ISLAND", "FR_FOUR_ISLAND",
+      "FR_ROUTE_23", "FR_INDIGO_PLATEAU_EXTERIOR", "FR_FOUR_ISLAND",
       "FR_FIVE_ISLAND", "FR_SIX_ISLAND", "FR_SEVEN_ISLAND", "FR_PALLET_TOWN", "FR_ROUTE_1"];
     const towns = /CITY$|TOWN$|ISLAND$/;
     let battles = 0;
