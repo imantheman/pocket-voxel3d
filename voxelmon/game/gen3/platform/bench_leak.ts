@@ -122,14 +122,22 @@ export class BenchLeak {
   }
 
   private *teleport(map: string, x?: number, y?: number): Gen {
-    const w = this.warpsOf(map)[0];
+    // its first warp's doorstep, else (a route with no warps) the map's middle
+    const wl = this.warpsOf(map)[0];
+    const def = this.game?.data?.maps?.[map];
+    const w = wl ?? (def ? { x: Math.floor((def.width ?? 20) / 2), y: Math.floor((def.height ?? 20) / 2) - 1 } : undefined);
     if (!w && x === undefined) return;
     const before = this.lastMap;
-    try { (Warp as any).request(Runtime._mod, this.game, map, x ?? w.x, y ?? w.y + 1, "down"); } catch (e) {
+    if (before === map) return;
+    let r: any;
+    try { r = (Warp as any).request(Runtime._mod, this.game, map, x ?? w.x, y ?? w.y + 1, "down"); } catch (e) {
       console.log(`[pv] g3 leak: teleport ${map} failed: ${String(e)}`);
       return;
     }
     for (let i = 0; i < 600 && this.lastMap === before; i++) yield 0;
+    if (this.lastMap === before) {
+      console.log(`[pv] g3 leak: teleport ${map} did not happen (request gave ${String(Array.isArray(r) ? r.join(" ") : r)}; phase ${this.game?.phase}, ui busy ${Runtime.uiBusy?.()}, warp busy ${(Warp as any)._busy}, battle ${this.inBattle()})`);
+    }
     yield* this.idle(60);
   }
 
@@ -216,30 +224,49 @@ export class BenchLeak {
     for (const [sp, lv] of [[4, 24], [1, 24], [7, 24], [25, 26], [92, 26], [66, 26]]) (Party as any).giveMon(s, sp, lv);
     (Options as any).ensure(s).battleStyle = 1; // SET: no "will you change?" between a trainer's mons
     this.log("begins");
-    const wilds: [number, number][] = [[16, 4], [19, 5], [10, 3], [41, 6], [74, 7], [129, 5], [43, 6], [21, 5], [56, 8], [60, 6], [23, 6], [100, 9]];
-    const trainers = [0x66, 0x67, 0x68, 0x8e, 0x8f, 0x9c, 0xa1, 0xb0, 0xc0];
-    const cities = ["FR_VIRIDIAN_CITY", "FR_PEWTER_CITY", "FR_CERULEAN_CITY", "FR_CELADON_CITY", "FR_SAFFRON_CITY", "FR_VERMILION_CITY", "FR_PALLET_TOWN"];
-    for (let i = 0; i < 12; i++) {
-      const p = s.party;
-      const k = 1 + (i % 6);
-      if (p && p[k]) { const t = p[1]; p[1] = p[k]; p[k] = t; }
-      if (i % 3 === 2) {
-        const id = trainers[i % trainers.length]!;
-        const foe = (Trainers as any).foeFromId(id);
-        if (foe) yield* this.battle(`trainer ${id}`, () => (BattleBridge as any).start(Runtime._mod, this.game, foe, { trainerId: id }));
-      } else {
-        const [sp, lv] = wilds[i % wilds.length]!;
-        yield* this.battle(`wild #${sp} L${lv}`, () => (BattleBridge as any).startWild(Runtime._mod, this.game, { species: sp, level: lv }, {}));
-      }
-      const city = cities[i % cities.length]!;
+    const wilds: [number, number][] = [[16, 4], [19, 5], [10, 3], [41, 6], [74, 7], [129, 5], [43, 6], [21, 5], [56, 8], [60, 6],
+      [23, 6], [100, 9], [27, 12], [35, 10], [52, 14], [58, 15], [63, 12], [72, 18], [77, 20], [84, 16], [88, 22], [96, 18]];
+    const trainers = [0x66, 0x67, 0x68, 0x8e, 0x8f, 0x9c, 0xa1, 0xb0, 0xc0, 0x70, 0x80, 0x90];
+    // a tour of the region: every town (a door in and out of each), routes and
+    // the forest between them -- each a map the session has not seen yet,
+    // the way a playthrough goes on meeting new ones
+    const tour = ["FR_VIRIDIAN_CITY", "FR_ROUTE_2", "FR_VIRIDIAN_FOREST", "FR_PEWTER_CITY", "FR_ROUTE_3", "FR_ROUTE_4",
+      "FR_CERULEAN_CITY", "FR_ROUTE_24", "FR_ROUTE_25", "FR_ROUTE_5", "FR_ROUTE_6", "FR_VERMILION_CITY", "FR_ROUTE_11",
+      "FR_ROUTE_9", "FR_ROUTE_10", "FR_LAVENDER_TOWN", "FR_ROUTE_8", "FR_ROUTE_7", "FR_CELADON_CITY", "FR_ROUTE_16",
+      "FR_ROUTE_17", "FR_ROUTE_18", "FR_FUCHSIA_CITY", "FR_ROUTE_15", "FR_ROUTE_14", "FR_ROUTE_13", "FR_ROUTE_12",
+      "FR_SAFFRON_CITY", "FR_ROUTE_19", "FR_ROUTE_20", "FR_CINNABAR_ISLAND", "FR_ROUTE_21_NORTH", "FR_ROUTE_22",
+      "FR_ROUTE_23", "FR_INDIGO_PLATEAU_EXTERIOR", "SEVII_ONE_ISLAND", "FR_TWO_ISLAND", "FR_THREE_ISLAND", "FR_FOUR_ISLAND",
+      "FR_FIVE_ISLAND", "FR_SIX_ISLAND", "FR_SEVEN_ISLAND", "FR_PALLET_TOWN", "FR_ROUTE_1"];
+    const towns = /CITY$|TOWN$|ISLAND$/;
+    let battles = 0;
+    for (let i = 0; i < tour.length; i++) {
+      const city = tour[i]!;
       yield* this.teleport(city);
       yield* this.settle();
       this.log(`teleport ${city} -> ${this.lastMap}`);
-      yield* this.door(); yield* this.settle(); yield* this.idle(60);
-      this.log(`  in ${this.lastMap}`);
-      yield* this.door(); yield* this.settle(); yield* this.idle(60);
-      this.log(`  out to ${this.lastMap}`);
-      if (i % 4 === 3) yield* this.menus();
+      if (towns.test(city)) {
+        yield* this.door(); yield* this.settle(); yield* this.idle(60);
+        this.log(`  in ${this.lastMap}`);
+        yield* this.door(); yield* this.settle(); yield* this.idle(60);
+        this.log(`  out to ${this.lastMap}`);
+      }
+      if (i % 3 === 1) {
+        const p = s.party;
+        const k = 1 + (battles % 6);
+        if (p && p[k]) { const t = p[1]; p[1] = p[k]; p[k] = t; }
+        if (battles % 3 === 2) {
+          const id = trainers[battles % trainers.length]!;
+          const foe = (Trainers as any).foeFromId(id);
+          if (foe) yield* this.battle(`trainer ${id}`, () => (BattleBridge as any).start(Runtime._mod, this.game, foe, { trainerId: id }));
+        } else {
+          const [sp, lv] = wilds[battles % wilds.length]!;
+          yield* this.battle(`wild #${sp} L${lv}`, () => (BattleBridge as any).startWild(Runtime._mod, this.game, { species: sp, level: lv }, {}));
+        }
+        battles++;
+        // heal the party now and then (a long session of fights would faint it)
+        if (battles % 4 === 0) (Party as any).healAll(s.party);
+      }
+      if (i % 11 === 10) yield* this.menus();
     }
     // a connection both ways (Viridian's south edge: Pallet's north one runs the professor's script)
     yield* this.teleport("FR_VIRIDIAN_CITY");
