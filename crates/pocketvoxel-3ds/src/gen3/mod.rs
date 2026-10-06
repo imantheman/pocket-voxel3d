@@ -61,6 +61,8 @@ extern "C" {
     fn qjs_register_g3(ctx: *mut JSContext) -> i32;
     fn g3_set_bytecode(p: *const u8, n: usize);
     fn g3_files_root(root: *const u8);
+    fn g3_host_keys_get() -> u32;
+    fn g3_cmd_used(size: *mut i32) -> i32;
 }
 
 /// The guest as QuickJS bytecode (cc_build_firered.sh: the bundle compiled on
@@ -128,6 +130,20 @@ pub fn before_guest() {
 /// First thing in the frame (inside citro3d's frame, before the eyes): the
 /// guest's newest draw list into the frame texture, and the people's quads
 /// for this frame's camera.
+/// The command buffer's high water, logged when a frame passes three
+/// quarters of it (CMDBUF_BYTES), so a heavier view shows up long before
+/// it can overflow.
+static mut CMD_HW: i32 = 0;
+fn cmd_check() {
+    let mut size = 0i32;
+    let used = unsafe { g3_cmd_used(&mut size) };
+    if used > unsafe { CMD_HW } {
+        unsafe { CMD_HW = used };
+        if used * 4 > size * 3 {
+            dlog(&format!("[pv] g3 cmdbuf: WARNING {} words of {}", used, size));
+        }
+    }
+}
 pub fn offscreen_pass() {
     pace::render_start();
     if !unsafe { GPU_OK } {
@@ -220,6 +236,7 @@ pub fn composite() {
         return;
     }
     unsafe { g3_composite() };
+    cmd_check();
 }
 
 /// The perf block's extra lines (every 5 s): the 2D layer's and the sound's.
@@ -268,3 +285,38 @@ pub unsafe extern "C" fn g3_dlog(s: *const u8, len: i32) {
 pub fn exit() {
     audio::exit();
 }
+
+/// A bench's host buttons (g3HostKeys) laid over the console's: held is the
+/// union, down is what the bench newly pressed this frame. The console's own
+/// keys are untouched when no bench is pressing anything.
+static mut HOST_KEYS_PREV: u32 = 0;
+pub fn inject_keys(k: ctru::services::hid::KeyPad, d: ctru::services::hid::KeyPad)
+    -> (ctru::services::hid::KeyPad, ctru::services::hid::KeyPad) {
+    use ctru::services::hid::KeyPad;
+    let m = unsafe { g3_host_keys_get() };
+    let prev = unsafe { HOST_KEYS_PREV };
+    unsafe { HOST_KEYS_PREV = m };
+    if m == 0 && prev == 0 {
+        return (k, d);
+    }
+    let map = |m: u32| -> KeyPad {
+        let mut out = KeyPad::empty();
+        if m & 1 != 0 { out |= KeyPad::ZL; }
+        if m & 2 != 0 { out |= KeyPad::ZR; }
+        if m & 4 != 0 { out |= KeyPad::CSTICK_LEFT; }
+        if m & 8 != 0 { out |= KeyPad::CSTICK_RIGHT; }
+        if m & 16 != 0 { out |= KeyPad::CSTICK_UP; }
+        if m & 32 != 0 { out |= KeyPad::CSTICK_DOWN; }
+        out
+    };
+    (k | map(m), d | map(m & !prev))
+}
+
+/// The GPU command buffer (C3D_Init) for FireRed: the default 256 KB is 64K
+/// words, and a normal stereo field frame already takes ~42K (the world
+/// draw, ~18K per eye, with up to four neighbouring maps around the current
+/// one). The flat (top-down) camera took it past the end -- GPUCMD_Add's
+/// svcBreak, the R/ZR crash on hardware. Measured peaks: 78.9K words
+/// (FR_PALLET_TOWN, flat), 64.5K (FR_CELADON_CITY, flat); 768 KB = 196K
+/// words, 2.5x the worst seen. It is linear memory, so no bigger than that.
+pub const CMDBUF_BYTES: usize = 0xC0000;

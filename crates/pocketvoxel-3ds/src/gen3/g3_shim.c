@@ -164,6 +164,19 @@ static JSValue g3_ents(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
 /* g3Strips(mode, r, g, b, a): the side strips beside the 2D layer
    (worldview.ts WorldStrips: 0 off, 1 a colour, 2 the layer's edge columns
    stretched), kept until the next call. */
+/* g3HostKeys(mask): buttons a bench script holds on the HOST's side (the
+   camera's ZL/ZR and C-stick, which the guest never sees), so camera modes
+   can be driven in Citra. Bits: 0 ZL, 1 ZR, 2-5 C-stick left/right/up/down. */
+static uint32_t host_keys;
+uint32_t g3_host_keys_get(void) { return host_keys; }
+static JSValue g3_hostkeys(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    int32_t m = 0;
+    if (c >= 1) JS_ToInt32(ctx, &m, v[0]);
+    host_keys = (uint32_t)m;
+    return JS_UNDEFINED;
+}
+
 static JSValue g3_strips(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t;
     if (c < 5) return JS_UNDEFINED;
@@ -550,6 +563,7 @@ int qjs_register_g3(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "g3Mem", JS_NewCFunction(ctx, g3_mem, "g3Mem", 0));
     JS_SetPropertyStr(ctx, o, "g3Gc", JS_NewCFunction(ctx, g3_gc, "g3Gc", 1));
     JS_SetPropertyStr(ctx, o, "g3Strips", JS_NewCFunction(ctx, g3_strips, "g3Strips", 5));
+    JS_SetPropertyStr(ctx, o, "g3HostKeys", JS_NewCFunction(ctx, g3_hostkeys, "g3HostKeys", 1));
     JS_SetPropertyStr(ctx, o, "g3PngDecode", JS_NewCFunction(ctx, g3_pngdecode, "g3PngDecode", 1));
     JS_SetPropertyStr(ctx, o, "g3Bytes", JS_NewCFunction(ctx, g3_bytes_js, "g3Bytes", 1));
     JS_SetPropertyStr(ctx, o, "g3Log", JS_NewCFunction(ctx, g3_log_js, "g3Log", 1));

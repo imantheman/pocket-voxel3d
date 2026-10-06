@@ -10,6 +10,7 @@ import { ENT_FLOATS, parseWorldJson, type WorldJson, type WorldOps } from "./wor
 export const nat = native as typeof native & {
   g3Ents?(records: Float32Array, count: number): void;
   g3Strips?(mode: number, r: number, g: number, b: number, a: number): void;
+  g3HostKeys?(mask: number): void;
   flatWorld?(on: number): void;
   screenshot?(): void;
 };
@@ -53,6 +54,9 @@ export function padBits(b: number): number {
 
 const KEY_BIT: Record<string, number> = { UP: 0, DOWN: 1, LEFT: 2, RIGHT: 3, A: 4, B: 5, START: 6, SELECT: 7, L: 8, R: 9 };
 
+/** Host buttons a bench can hold (gen3::inject_keys): the camera's. */
+const HOST_KEY_BIT: Record<string, number> = { ZL: 0, ZR: 1, CL: 2, CR: 3, CU: 4, CD: 5 };
+
 /** A bench walk, "tick:KEYS,..." (keys joined by +; held until the next entry). */
 export class BenchScript {
   private steps: [number, number][] = [];
@@ -62,15 +66,21 @@ export class BenchScript {
     for (const part of s.split(",").filter(Boolean)) {
       const [t, keys] = part.split(":");
       let m = 0;
-      for (const k of (keys ?? "").split("+").filter(Boolean)) m |= 1 << (KEY_BIT[k.toUpperCase()] ?? 31);
-      this.steps.push([Number(t), m & 0xfff]);
+      let h = 0;
+      for (const k of (keys ?? "").split("+").filter(Boolean)) {
+        const hk = HOST_KEY_BIT[k.toUpperCase()];
+        if (hk != null) h |= 1 << hk;
+        else m |= 1 << (KEY_BIT[k.toUpperCase()] ?? 31);
+      }
+      this.steps.push([Number(t), (m & 0xfff) | (h << 16)]);
     }
     this.steps.sort((a, b) => a[0] - b[0]);
   }
-  /** The keys held at `tick`. */
+  /** The guest keys held at `tick` (and the host's, sent to g3HostKeys). */
   at(tick: number): number {
     while (this.i < this.steps.length && this.steps[this.i]![0] <= tick) this.held = this.steps[this.i++]![1];
-    return this.held;
+    nat.g3HostKeys?.(this.held >>> 16);
+    return this.held & 0xffff;
   }
 }
 

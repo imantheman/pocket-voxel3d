@@ -41,6 +41,14 @@ import { BenchSuite } from "./platform/bench_suite.ts";
 declare const PV_G3_MODE: string;
 declare const PV_G3_BENCH_SCRIPT: string;
 declare const PV_G3_BENCH_SHOTS: string;
+declare const PV_G3_BENCH_MAP: string;
+
+/** bench: where the new game starts (PV_G3_BENCH_MAP="MAP:x:y", default the first town). */
+function benchStart(): { map: string; x: number; y: number; facing: string } {
+  const s = typeof PV_G3_BENCH_MAP === "string" ? PV_G3_BENCH_MAP : "";
+  const [map, x, y] = s.split(":");
+  return map ? { map, x: Number(x ?? 0), y: Number(y ?? 0), facing: "down" } : { map: "FR_PALLET_TOWN", x: 6, y: 8, facing: "down" };
+}
 
 const MODE = typeof PV_G3_MODE === "string" ? PV_G3_MODE : "game";
 
@@ -173,7 +181,7 @@ function gameMain(bench: boolean): void {
     try {
       game._handleBootAction({
         action: "new_game", name: "RED", rivalName: "BLUE", gender: 0,
-        start: { map: "FR_PALLET_TOWN", x: 6, y: 8, facing: "down" },
+        start: benchStart(),
       });
       console.log(`[pv] g3 bench: new game on FR_PALLET_TOWN (6,8), phase ${game.phase}`);
     } catch (e) {

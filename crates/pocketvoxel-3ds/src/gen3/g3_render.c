@@ -1274,6 +1274,15 @@ void g3_frame_offscreen(void) {
 /* Last in each eye's pass: the frame over the screen. The frame holds
    colour already multiplied by its alpha (drawn with alpha blending over a
    clear of 0), so it goes on premultiplied. */
+/* The GPU command buffer: words used so far this frame, and its size
+   (gen3/mod.rs warns past three quarters). */
+int g3_cmd_used(int *size) {
+    u32 *addr; u32 sz = 0, off = 0;
+    GPUCMD_GetBuffer(&addr, &sz, &off);
+    if (size) *size = (int)sz;
+    return (int)off;
+}
+
 void g3_composite(void) {
     if (comp_start < 0) return;
     use_g3_vertices();

@@ -4401,7 +4401,7 @@ fn main() {
     let map_ids: Vec<u32> = map_index.iter().map(|(id, _)| *id).collect();
     println!("{} maps.  L/R = switch map", map_ids.len());
     println!("D-pad orbit  A/B zoom  START exit");
-    let mut instance = citro3d::Instance::new().expect("citro3d");
+    let mut instance = citro3d::Instance::new().expect("citro3d"); #[cfg(feature = "gen3")] let mut instance = { drop(instance); citro3d::Instance::with_cmdbuf_size(gen3::CMDBUF_BYTES).expect("citro3d") };
     // Lock to 30 Hz on the vblanks themselves: C3D_FrameBegin waits for every
     // second one (relaxed to the next one for a heavy frame -- the perf block).
     // (A sleep to 33 ms of osGetTime drifted against the 33.4 ms two vblanks
@@ -4862,7 +4862,7 @@ fn main() {
     while apt.main_loop() {
         hid.scan_input();
         let k = hid.keys_held();
-        let d = hid.keys_down();
+        let d = hid.keys_down(); #[cfg(feature = "gen3")] let (k, d) = gen3::inject_keys(k, d);
         // Commit whatever the last map load logged, in one write.
         dlog_batch_end();
         // START belongs to the game (menu). Exit with START+SELECT.
