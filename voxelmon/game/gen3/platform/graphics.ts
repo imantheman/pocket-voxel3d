@@ -163,6 +163,13 @@ function syncState(): void {
 
 // CPU variant effects: a recoloured copy of the image per (image, uniforms)
 const variants = new Map<string, Image>();
+let variantBytes = 0;
+/** Tools: the variant cache's entries and pixel bytes. */
+export function variantCacheStats(): [number, number] {
+  let b = 0;
+  for (const v of variants.values()) b += v._data ? v._data.px.length : 0; // (not `data`: that makes let-go pixels again)
+  return [variants.size, b];
+}
 /** A shader's uniforms as variantFor's key text, made again only after a send. */
 function uniformKey(sh: Shader): string {
   if (sh.keyVersion !== sh.version) {
@@ -190,7 +197,10 @@ function variantFor(img: Image, sh: Shader): Image {
   }
   const v = new Image(img.w, img.h, out);
   v.wrap = img.wrap;
-  if (variants.size > 256) variants.clear(); // NOT FAITHFUL: a crude bound on the cache
+  // NOT FAITHFUL: a crude bound on the cache -- 256 copies, or 2 MB of them
+  // (a palette fade over a battle background makes a 256 KB copy a step)
+  variantBytes += out.px.length;
+  if (variants.size > 256 || variantBytes > 2 * 1024 * 1024) { variants.clear(); variantBytes = out.px.length; }
   variants.set(key, v);
   return v;
 }

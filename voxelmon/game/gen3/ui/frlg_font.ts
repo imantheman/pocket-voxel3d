@@ -1648,9 +1648,11 @@ const ADVANCE_NORMAL: FontOpts = {};
 
 
 interface TextMemo { sig: Float64Array; face: Face | undefined; memo: DrawMemo; r0: number; r1: number; r2: number }
-interface MemoTable { map: Map<string | number, TextMemo[]>; count: number; epoch: number }
-const textMemos: MemoTable = { map: new Map(), count: 0, epoch: 0 };
-const glyphMemos: MemoTable = { map: new Map(), count: 0, epoch: 0 };
+interface MemoTable { map: Map<string | number, TextMemo[]>; count: number; epoch: number; max: number }
+// (a text memo holds its whole run's floats, and a typewriter adds one a
+// frame: 600 of them is about half a megabyte at most; glyph memos are small)
+const textMemos: MemoTable = { map: new Map(), count: 0, epoch: 0, max: 600 };
+const glyphMemos: MemoTable = { map: new Map(), count: 0, epoch: 0, max: 3000 };
 const measureMemo = new Map<string, { small: boolean; font: string | undefined; ls: number; w: number }[]>();
 let measureEpoch = 0;
 const MEMO_PER_KEY = 8;
@@ -1691,7 +1693,7 @@ function memoFind(t: MemoTable, key: string | number, sig: Float64Array, face: F
 }
 
 function memoAdd(t: MemoTable, key: string | number, sig: Float64Array, face: Face | undefined): TextMemo {
-  if (t.count >= MEMO_MAX) { t.map.clear(); t.count = 0; }
+  if (t.count >= t.max) { t.map.clear(); t.count = 0; }
   let l = t.map.get(key);
   if (!l) { l = []; t.map.set(key, l); }
   const e: TextMemo = { sig: sig.slice(), face, memo: new DrawMemo(), r0: 0, r1: 0, r2: 0 };
