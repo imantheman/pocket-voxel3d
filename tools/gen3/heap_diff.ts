@@ -43,8 +43,20 @@ function byPath(s: Snap, depth: number): Map<string, number> {
     }
   }
   const agg = new Map<string, number>();
+  const cls = new Map<number, string>();
+  for (let i = 0; i < s.nodes.length; i += NF) cls.set(s.nodes[i]!, s.nodeClassNames[s.nodes[i + 2]!]!);
+  // an object no named path reaches: by its class, and the name of a
+  // reference into it from another such object
+  const inName = new Map<number, string>();
+  for (let i = 0; i < s.edges.length; i += EF) {
+    const t = s.edges[i + 1]!;
+    if (key.has(t) || inName.has(t)) continue;
+    const ty = s.edges[i + 2]!;
+    if (ty === internal) continue;
+    inName.set(t, ty === index ? "[]" : (s.edgeNames[s.edges[i + 3]!] ?? "?"));
+  }
   for (const [id, sz] of size) {
-    const k = key.get(id) ?? "(unreached)";
+    const k = key.get(id) ?? `(unreached ${cls.get(id)} .${inName.get(id) ?? "-"})`;
     agg.set(k, (agg.get(k) ?? 0) + sz);
   }
   return agg;

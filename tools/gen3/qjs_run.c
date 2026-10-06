@@ -14,6 +14,12 @@
  *   gc()                  run the cycle collector
  *   gcHold(on)            hold the collector off / run it and re-arm (g3Gc)
  *   pngDecode(bytes)      the host PNG decoder (g3PngDecode): [w, h, Uint8Array] or undefined
+ *   texStore(id, w, h, rgba) / texDrop(id) / texRead(id, w, h, probe) / texBytes()
+ *                         textures kept outside the QuickJS heap, read back as
+ *                         the 3DS host's g3TexRead
+ *   refCount(object)      QuickJS's reference count of it (the host's g3RefCount)
+ *   gcThreshold()         the heap size at which QuickJS next collects cycles
+ *   gcClamp()             the console's hold on that threshold (g3_shim.c g3_gc_clamp)
  * QJS_LIMIT_MB=<n> sets JS_SetMemoryLimit, as a console's heap would.
  *
  *   qjs_run --compile <script.js> <out.qbc> [strip]
@@ -309,6 +315,95 @@ static JSValue js_nativebake(JSContext *ctx, JSValueConst t, int c, JSValueConst
     return r;
 }
 
+/* The host's textures, as the 3DS keeps them, outside the QuickJS heap:
+   texStore(id, w, h, rgba) keeps a copy, texDrop(id) lets it go,
+   texRead(id, w, h, probe) is the 3DS host's g3TexRead (its pixels back as
+   a Uint8Array, or undefined; probe: whether it can be). */
+typedef struct { int w, h; uint8_t *px; } Tex;
+static Tex *g_tex;
+static int g_ntex;
+static size_t g_tex_bytes;
+static JSValue js_texstore(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 4) return JS_UNDEFINED;
+    int32_t id = 0, w = 0, h = 0;
+    JS_ToInt32(ctx, &id, v[0]); JS_ToInt32(ctx, &w, v[1]); JS_ToInt32(ctx, &h, v[2]);
+    size_t len = 0;
+    const uint8_t *p = ta_bytes(ctx, v[3], &len);
+    if (id <= 0 || w <= 0 || h <= 0 || !p || len < (size_t)w * h * 4) return JS_UNDEFINED;
+    if (id >= g_ntex) {
+        int n = g_ntex ? g_ntex : 256;
+        while (n <= id) n *= 2;
+        g_tex = realloc(g_tex, sizeof(Tex) * n);
+        memset(g_tex + g_ntex, 0, sizeof(Tex) * (n - g_ntex));
+        g_ntex = n;
+    }
+    Tex *x = &g_tex[id];
+    if (x->px) g_tex_bytes -= (size_t)x->w * x->h * 4;
+    free(x->px);
+    x->w = w; x->h = h;
+    x->px = malloc((size_t)w * h * 4);
+    memcpy(x->px, p, (size_t)w * h * 4);
+    g_tex_bytes += (size_t)w * h * 4;
+    return JS_UNDEFINED;
+}
+static JSValue js_texdrop(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    int32_t id = 0;
+    if (c < 1) return JS_UNDEFINED;
+    JS_ToInt32(ctx, &id, v[0]);
+    if (id > 0 && id < g_ntex && g_tex[id].px) {
+        g_tex_bytes -= (size_t)g_tex[id].w * g_tex[id].h * 4;
+        free(g_tex[id].px);
+        g_tex[id].px = NULL;
+    }
+    return JS_UNDEFINED;
+}
+static JSValue js_texread(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 4) return JS_UNDEFINED;
+    int32_t id = 0, w = 0, h = 0;
+    JS_ToInt32(ctx, &id, v[0]); JS_ToInt32(ctx, &w, v[1]); JS_ToInt32(ctx, &h, v[2]);
+    int ok = id > 0 && id < g_ntex && g_tex[id].px && g_tex[id].w == w && g_tex[id].h == h;
+    if (JS_ToBool(ctx, v[3])) return JS_NewBool(ctx, ok);
+    if (!ok) return JS_UNDEFINED;
+    uint8_t *b = malloc((size_t)w * h * 4);
+    memcpy(b, g_tex[id].px, (size_t)w * h * 4);
+    return JS_NewUint8Array(ctx, b, (size_t)w * h * 4, js_realloc_buf, NULL, false);
+}
+/* gcClamp(): the console's per-frame hold on the collector's next threshold
+   (src/gen3/g3_shim.c g3_gc_clamp: 6 MB past the heap in use at most);
+   the number of collections QuickJS ran since the last call. */
+static size_t g_gc_set;
+static JSValue js_gcclamp(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    JSRuntime *rt = JS_GetRuntime(ctx);
+    size_t th = JS_GetGCThreshold(rt);
+    if (th == g_gc_set || th == (size_t)-1) return JS_NewInt32(ctx, 0);
+    size_t used = th / 3 * 2, head = (size_t)6 << 20;
+    g_gc_set = used + (used / 2 < head ? used / 2 : head);
+    JS_SetGCThreshold(rt, g_gc_set);
+    return JS_NewInt32(ctx, 1);
+}
+static JSValue js_gcthreshold(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    return JS_NewFloat64(ctx, (double)JS_GetGCThreshold(JS_GetRuntime(ctx)));
+}
+static JSValue js_texbytes(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    return JS_NewFloat64(ctx, (double)g_tex_bytes);
+}
+/* refCount(object): the 3DS host's g3RefCount (the allocator block header's
+   ref_count, vendor quickjs.c JSMallocBlockHeader) */
+static JSValue js_refcount(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 1 || !JS_IsObject(v[0])) return JS_NewInt32(ctx, -1);
+    const uint8_t *p = (const uint8_t *)JS_VALUE_GET_PTR(v[0]);
+    int32_t rc;
+    memcpy(&rc, p - 8 + 4, sizeof rc);
+    return JS_NewInt32(ctx, rc);
+}
+
 static JSValue js_nowus(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t; (void)c; (void)v;
     struct timespec ts;
@@ -383,6 +478,13 @@ int main(int argc, char **argv) {
         JS_SetPropertyStr(ctx, g, "nativeMd5", JS_NewCFunction(ctx, js_nativemd5, "nativeMd5", 1));
         JS_SetPropertyStr(ctx, g, "nativeBake", JS_NewCFunction(ctx, js_nativebake, "nativeBake", 6));
     }
+    JS_SetPropertyStr(ctx, g, "texStore", JS_NewCFunction(ctx, js_texstore, "texStore", 4));
+    JS_SetPropertyStr(ctx, g, "texDrop", JS_NewCFunction(ctx, js_texdrop, "texDrop", 1));
+    JS_SetPropertyStr(ctx, g, "texRead", JS_NewCFunction(ctx, js_texread, "texRead", 4));
+    JS_SetPropertyStr(ctx, g, "texBytes", JS_NewCFunction(ctx, js_texbytes, "texBytes", 0));
+    JS_SetPropertyStr(ctx, g, "refCount", JS_NewCFunction(ctx, js_refcount, "refCount", 1));
+    JS_SetPropertyStr(ctx, g, "gcThreshold", JS_NewCFunction(ctx, js_gcthreshold, "gcThreshold", 0));
+    JS_SetPropertyStr(ctx, g, "gcClamp", JS_NewCFunction(ctx, js_gcclamp, "gcClamp", 0));
     JS_FreeValue(ctx, g);
 #ifdef QJS_PROF
     { void qjs_prof_install(JSRuntime *, JSContext *); qjs_prof_install(rt, ctx); } /* tools/gen3/qjs_prof.c */

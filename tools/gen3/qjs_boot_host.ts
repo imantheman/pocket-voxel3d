@@ -7,7 +7,7 @@ import { setHost, type G3Host } from "../../voxelmon/game/gen3/platform/host.ts"
 import { setSaveStore, memorySaveStore } from "../../voxelmon/game/gen3/platform/savefs.ts";
 import { setAudio, silentAudio } from "../../voxelmon/game/gen3/platform/audio.ts";
 import { setNativeBytes } from "../../voxelmon/import/gen3/lua.ts";
-import { setNativeBlit } from "../../voxelmon/game/gen3/platform/image.ts";
+import { setNativeBlit, setRefCount } from "../../voxelmon/game/gen3/platform/image.ts";
 import { Fast } from "../../voxelmon/game/gen3/platform/fast.ts";
 
 type Blit = (dst: Uint8Array, dw: number, dx: number, dy: number, src: Uint8Array, sw: number, sx: number, sy: number, w: number, h: number) => boolean;
@@ -67,6 +67,28 @@ const host: G3Host = {
   const h = globalThis as { nativeMd5?: typeof Fast.md5; nativeBake?: typeof Fast.bake };
   if (h.nativeMd5) Fast.md5 = h.nativeMd5;
   if (h.nativeBake) Fast.bake = h.nativeBake;
+}
+// textures kept outside the heap, as the console's are, and read back as its
+// g3TexRead; QuickJS's reference counts as its g3RefCount: the guest's pixel
+// copies are let go as on the console (image.ts tryDropPixels)
+{
+  const g = globalThis as {
+    texStore?: (id: number, w: number, h: number, px: Uint8Array) => void; texDrop?: (id: number) => void;
+    texRead?: (id: number, w: number, h: number, probe: boolean) => Uint8Array | boolean | undefined;
+    refCount?: (v: unknown) => number;
+  };
+  if (g.texStore && g.texDrop && g.texRead && g.refCount) {
+    const upload = host.texUpload;
+    host.texUpload = (id, w, h, px, repeat) => { upload(id, w, h, px, repeat); g.texStore!(id, w, h, px); };
+    host.texFree = (id) => g.texDrop!(id);
+    const hit = new Uint8Array(1);
+    host.texRead = (id, w, h, probe) => {
+      const r = g.texRead!(id, w, h, !!probe);
+      if (probe) return r ? hit : undefined;
+      return r instanceof Uint8Array ? r : undefined;
+    };
+    setRefCount(g.refCount);
+  }
 }
 // tools/gen3/perf_check.ts runs qjs_perf.ts under Bun on its own host
 setHost((globalThis as { __perfHost?: G3Host }).__perfHost ?? host);
