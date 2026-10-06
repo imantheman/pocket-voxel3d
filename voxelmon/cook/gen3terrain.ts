@@ -27,11 +27,14 @@
 // way the mod does is noted where it happens:
 //
 //   - cards: the mod re-leans prop cards every frame to follow the camera's
-//     tilt (Terrain.lua:718). A pak is static, so the lean is baked for the
-//     runtime's rest pitch (rung 2, 35 degrees: lean = (90-35)*0.8,
-//     main.lua:109). Our terrain pass has no alpha test, so a card is not one
-//     quad over keyed art (its clear texels would still write depth): it is
-//     the keyed tile cut into opaque rectangles, each its own quad.
+//     tilt (Terrain.lua:718). A pak is static, so the cards are stored
+//     upright and lean-coded, and the 3DS host's world shader leans them --
+//     and, since our camera also swings round, turns them to face it (see
+//     "the lean code"; FR_LEAN=0 bakes the lean for the runtime's rest pitch,
+//     rung 2, 35 degrees: lean = (90-35)*0.8, main.lua:109, as before). Our
+//     terrain pass has no alpha test, so a card is not one quad over keyed
+//     art (its clear texels would still write depth): it is the keyed tile
+//     cut into opaque rectangles, each its own quad.
 //   - over layer: drawn by the mod as a second, depth-biased quad on a solid
 //     top ("d", Terrain.lua:537-548). Here the tile page carries the
 //     under+over composite and a solid's top samples it -- the same picture
@@ -52,6 +55,9 @@
 //     leaned back by the mod's own card lean so it reads at the size the
 //     characters do; the roof lies over the rest at the facade's top. See
 //     `buildingRuns` below. FR_FACADE=0 cooks the mod's boxes unchanged.
+//     The facade's lean follows the camera like the cards' (LEAN), so from
+//     the side or behind a building is an upright box under its roof, its
+//     sides and back dressed in its own wall art.
 
 import { FACE_SHADE } from "../../contracts/spec/voxel-spec.ts";
 import { FACE, type Quad } from "./geom.ts";
@@ -110,8 +116,93 @@ const FACADE_ROOF_SHARE = 0.4;
 const FACADE_MAX_ROWS = 3;
 /** How far the roof's front edge overhangs the facade, game px. */
 const ROOF_OVERHANG = 2;
-/** The roof plane rises toward its back edge at this many degrees. */
-const ROOF_RISE_DEG = Number(process.env.FR_ROOF_RISE ?? 12);
+/**
+ * The roof plane rises toward its back edge at this many degrees. Fixed: the
+ * 3DS host's world shader knows it too (g3_world.c G3_ROOF_RISE_DEG), since
+ * the rise is redrawn with the lean.
+ */
+const ROOF_RISE_DEG = 12;
+
+// ---------------------------------------------------------------------------
+// the lean code (ours: the camera-following lean, 2026-10-05)
+// ---------------------------------------------------------------------------
+//
+// A pak is static, but the mod re-leans its cards every frame (Terrain.lua:
+// 718) and our host's camera also swings round the map, which no baked lean
+// survives: seen from the side a baked facade is a slanted parallelogram over
+// flat grey walls, and a baked card an edge-on streak. So with LEAN the cook
+// stores the buildings and the cards at their UPRIGHT pose (lean 0) and
+// tags each vertex with what the lean does to it; the 3DS host's world
+// shader (crates/pocketvoxel-3ds/src/gen3/g3_world.pica) applies the lean
+// for the frame's camera:
+//
+//   - a building (its facade, roof, side and back walls) leans its facade
+//     back by the mod's card lean at the CURRENT pitch, (90 - pitch) * 0.8
+//     degrees (main.lua:109), scaled by how squarely the camera faces the
+//     south front (cos of the camera's yaw, none from the side or behind).
+//     At the rest pitch from the south that is CARD_LEAN, exactly today's
+//     look; from the side the building is an upright box under a real
+//     sloped roof, its sides and back dressed in its own wall art.
+//   - a prop card turns about its foot to face the camera's yaw and leans
+//     back by the card lean, as the mod's cards and our people do. A
+//     two-cell prop (a tree) turns as one card about its middle.
+//
+// Two of these ideas -- dressing a building's sides and back in its own
+// plain wall art, and turning a two-cell tree as one card -- come from
+// ZallaxDev/pokeemerald-3Ds-dualscreen (MIT, Copyright (c) 2026 ZallaxDev and
+// its contributors; 3ds_port/scripts/voxel_building.py and
+// 3ds_port/src/voxel/voxel_tree.c, read at 38dac1e; THIRD_PARTY_NOTICES.md).
+// No code of theirs is here: their buildings are modelled by hand.
+//
+// The vertex's colour alpha says which (255: no lean, drawn as stored), and
+// the colour bytes plus the vertex's spare i16 (`w`) carry the numbers --
+// see g3_world.pica's header for the decoding. FR_LEAN=0 bakes the old
+// static lean instead (no codes), for an A/B.
+export const LEAN = process.env.FR_LEAN !== "0";
+const ROOF_T = Math.tan((ROOF_RISE_DEG * Math.PI) / 180);
+
+/**
+ * A building vertex: stored upright, it moves by
+ *   y' = y + K (cos t - 1) - T B sin t,   z' = z - A sin t
+ * for the facade lean t (T = ROOF_T). Shade 0..1.
+ */
+export function buildingCode(shade: number, K: number, A: number, B: number): { w: number; abgr: number } {
+  const w = Math.round(A * 64);
+  const r = Math.round(K * 4);
+  const b256 = Math.round(B * 256);
+  const a = Math.round(shade * 127);
+  if (w < 0 || w > 32767 || r < 0 || r > 255 || b256 < 0 || b256 > 65535 || a < 0 || a > 127) {
+    throw new Error(`lean code out of range: K ${K} A ${A} B ${B} shade ${shade}`);
+  }
+  return { w, abgr: ((a << 24) | ((b256 & 255) << 16) | ((b256 >> 8) << 8) | r) >>> 0 };
+}
+
+/** A card vertex `dx` px east of its pivot (shade 1: alpha 254). */
+export function cardCode(dx: number): { w: number; abgr: number } {
+  const w = Math.round(dx * 64);
+  if (w < -32768 || w > 32767) throw new Error(`card pivot out of range: ${dx}`);
+  return { w, abgr: 0xfeffffff };
+}
+
+/** The most texels of one colour in a slot's under+over composite (a plain wall scores high). */
+function plainness(pair: FrPair, slot: number): number {
+  const W = pair.cols * 16;
+  const sx = (slot % pair.cols) * 16;
+  const sy = Math.floor(slot / pair.cols) * 16;
+  const hist = new Map<number, number>();
+  let best = 0;
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      const i = (sy + y) * W + sx + x;
+      const o = pair.over[i]!;
+      const k = o !== 0 ? o : pair.under[i]! + 256;
+      const n = (hist.get(k) ?? 0) + 1;
+      hist.set(k, n);
+      if (n > best) best = n;
+    }
+  }
+  return best;
+}
 
 /** How many cells of border the cook meshes around a map (the Gen 1 cook's
  * RING: 12 tiles = 6 cells, cook/structures.ts). */
@@ -543,6 +634,15 @@ interface BuildingRun {
   skip: number;
   /** Every run, by each of its cells (shared). */
   byCell: Map<number, BuildingRun>;
+  /**
+   * LEAN: the facade's height and depth coefficients (its top stands at
+   * Ky cos t, zs - Sz sin t for the lean t; at CARD_LEAN that is H, zt), and
+   * the building's plainest wall cell per facade row from the bottom (its
+   * sides and back are dressed in them).
+   */
+  Ky: number;
+  Sz: number;
+  sideArt: number[];
 }
 
 /**
@@ -585,7 +685,7 @@ function buildingRuns(
       const L = yb - ya + 1;
       if (L < 4) continue;
       const R = Math.max(FACADE_ROOF_MIN, Math.round(L * FACADE_ROOF_SHARE));
-      const run: BuildingRun = { x, ya, yb, yf: ya + R, zs: 0, zt: 0, H: 0, zn: 0, Hb: 0, skip: 0, byCell };
+      const run: BuildingRun = { x, ya, yb, yf: ya + R, zs: 0, zt: 0, H: 0, zn: 0, Hb: 0, skip: 0, byCell, Ky: 0, Sz: 0, sideArt: [] };
       runs.push(run);
       facadeRows.set(run, L - R);
       for (let yy = ya; yy <= yb; yy++) byCell.set(key(x, yy), run);
@@ -625,6 +725,37 @@ function buildingRuns(
     // a deep city block would stand as tall as its whole facade and hide the
     // streets behind it: its facade leans further back instead
     const H = Math.round(CELL * Math.min(F, FACADE_MAX_ROWS) * cosL);
+    // LEAN: the same facade as coefficients of the lean (see BuildingRun).
+    // A facade of up to three rows is its art leaned rigidly (Sz = Ky = its
+    // length); a deeper one keeps the capped height and leans further back.
+    // Sz stops at 255 px, what the lean code holds (a facade of 11+ rows
+    // then leans a little less than the cook's rule).
+    const Ky = CELL * Math.min(F, FACADE_MAX_ROWS);
+    const H0 = Ky * cosL;
+    const sinL = Math.sin(CARD_LEAN);
+    // the plainest wall cell of each facade row, counted from the bottom
+    const sideArt: number[] = [];
+    for (let row = 0; ; row++) {
+      let best = -1;
+      let slot = -1;
+      for (const r of comp) {
+        if (r.yb - row < r.yf) continue;
+        const s = info.get(key(r.x, r.yb - row))!.rec.slot;
+        const p = plainness(pair, s);
+        if (p > best) {
+          best = p;
+          slot = s;
+        }
+      }
+      if (slot < 0) break;
+      sideArt.push(slot);
+    }
+    for (const r of comp) {
+      const len = CELL * (r.yb - r.yf + 1);
+      r.Ky = Ky;
+      r.Sz = len > H0 ? Math.min(255, Math.round((Math.sqrt(len * len - H0 * H0) / sinL) * 64) / 64) : 0;
+      r.sideArt = sideArt;
+    }
     for (const r of comp) {
       const len = CELL * (r.yb - r.yf + 1);
       r.zs = (r.yb + 1) * CELL;
@@ -712,6 +843,110 @@ export function meshTerrain(root: string, map: FrMap, pair: FrPair, art: TileArt
     if (layer === pair.over && b === 0) return null; // clear
     return k ? k.isGround(pair.rgb[b]!) : false;
   };
+  // a card's keyed art (Terrain.lua:755-756): the over layer's non-ground
+  // texels win over the under layer's
+  const cardMasks = (r: CellRec) => {
+    const fromOver = (x2: number, y2: number) => r.hasOver && isGroundAt(pair.over, r.slot, x2, y2) === false;
+    const fromUnder = (x2: number, y2: number) => !fromOver(x2, y2) && isGroundAt(pair.under, r.slot, x2, y2) === false;
+    return { fromOver, fromUnder };
+  };
+  // Terrain.lua:520-533: how many prop cells below this one its card stacks on
+  const belowOf = (x: number, y: number): number => {
+    let below = 0;
+    for (let d = 1; d <= MAX_STACK; d++) {
+      if (isProp(get, k, x, y + d, outdoor)) below++;
+      else break;
+    }
+    return below >= MAX_STACK ? 0 : below;
+  };
+
+  // LEAN: each card's pivot, the foot of the vertical axis it turns about.
+  // Cards standing on the same foot row in neighbouring columns turn
+  // together, as one card about their middle, when they are one thing:
+  //   - foliage (a tree) and one-cell props (fences, signs, posts): in
+  //     pairs, where two columns read as one picture -- their art runs on
+  //     across the seam between them and stops at the outer edges, as a
+  //     two-cell tree's halves do (Terrain.lua:194 PROP_MAX_WIDTH, the
+  //     widest prop); a lone column, or a run whose seams carry no more art
+  //     than its outer edges (a fence), turns column by column;
+  //   - a stack of two or more rows that is not foliage (a small building
+  //     the mod stands as a card, Terrain.lua:199 PROP_MAX_RUN): its whole
+  //     run, up to STRUCT_MAX columns, so it turns as one cut-out rather than
+  //     in slices.
+  const STRUCT_MAX = 10;
+  const pivots = new Map<number, number>();
+  if (LEAN && k !== null) {
+    // (foot row) -> column -> its stack: edge texels [left, right], rows, foliage
+    type Stack = { edge: [number, number]; rows: number; foliage: boolean };
+    const feet = new Map<number, Map<number, Stack>>();
+    for (let y = my0; y < my0 + mh; y++) {
+      for (let x = mx0; x < mx0 + mw; x++) {
+        const c = info.get(key(x, y))!;
+        if (!c.prop || inRun.has(key(x, y))) continue;
+        const foot = y + belowOf(x, y);
+        let row = feet.get(foot);
+        if (!row) feet.set(foot, (row = new Map()));
+        const st = row.get(x) ?? { edge: [0, 0], rows: 0, foliage: false };
+        st.rows++;
+        if (k.foliage[c.rec.slot]) st.foliage = true;
+        const { fromOver, fromUnder } = cardMasks(c.rec);
+        for (let ty = 0; ty < 16; ty++) {
+          if (fromOver(0, ty) || fromUnder(0, ty)) st.edge[0]++;
+          if (fromOver(15, ty) || fromUnder(15, ty)) st.edge[1]++;
+        }
+        row.set(x, st);
+      }
+    }
+    const kind = (st: Stack) => (st.foliage ? 0 : st.rows > 1 ? 2 : 1);
+    for (const [foot, row] of feet) {
+      const xs = [...row.keys()].sort((a, b) => a - b);
+      let i = 0;
+      while (i < xs.length) {
+        // a run xs[i..j]: neighbouring columns of one kind
+        const kd = kind(row.get(xs[i]!)!);
+        let j = i;
+        while (j + 1 < xs.length && xs[j + 1] === xs[j]! + 1 && kind(row.get(xs[j + 1]!)!) === kd) j++;
+        if (kd === 2) {
+          // a structure: the run whole, in equal parts of at most STRUCT_MAX
+          const n = j - i + 1;
+          const parts = Math.ceil(n / STRUCT_MAX);
+          for (let p = 0; p < parts; p++) {
+            const a = i + Math.floor((p * n) / parts);
+            const b = i + Math.floor(((p + 1) * n) / parts) - 1;
+            const pivot = ((xs[a]! + xs[b]! + 1) * CELL) / 2;
+            for (let q = a; q <= b; q++) pivots.set(key(xs[q]!, foot), pivot);
+          }
+          i = j + 1;
+          continue;
+        }
+        // pairs, in the phase whose seams carry the most art
+        const score = (phase: number): number => {
+          let sc = 0;
+          for (let p = i + phase; p + 1 <= j; p += 2) {
+            const a = row.get(xs[p]!)!.edge;
+            const b = row.get(xs[p + 1]!)!.edge;
+            sc += a[1] + b[0] - a[0] - b[1];
+          }
+          return sc;
+        };
+        const s0 = score(0);
+        const s1 = score(1);
+        const phase = s0 >= s1 ? 0 : 1;
+        const paired = Math.max(s0, s1) > 0;
+        for (let p = i; p <= j; p++) {
+          const x = xs[p]!;
+          let pivot = x * CELL + CELL / 2;
+          if (paired && p >= i + phase) {
+            const first = (p - i - phase) % 2 === 0;
+            if (first && p + 1 <= j) pivot = (x + 1) * CELL;
+            else if (!first) pivot = x * CELL;
+          }
+          pivots.set(key(x, foot), pivot);
+        }
+        i = j + 1;
+      }
+    }
+  }
 
   for (let ly = 0; ly < mh; ly++) {
     for (let lx = 0; lx < mw; lx++) {
@@ -766,21 +1001,17 @@ export function meshTerrain(root: string, map: FrMap, pair: FrPair, art: TileArt
       // Terrain.lua:520-533 -- a prop stands as a card, stacked on the prop
       // cells below it in its column
       if (card) {
-        let below = 0;
-        for (let d = 1; d <= MAX_STACK; d++) {
-          if (isProp(get, k, x, y + d, outdoor)) below++;
-          else break;
-        }
-        if (below >= MAX_STACK) below = 0;
+        const below = belowOf(x, y);
         const zfoot = (y + below + 1) * CELL;
         // Terrain.lua:723-747: one 16x16 card per cell, lifted, leaned back
+        // (LEAN: stored upright, the lean and the turn to the camera are the
+        // host's, about the card's pivot)
         const zf = zfoot - 1.5;
         const lo = CELL * below;
-        const pt = (px: number, up: number): [number, number, number] => [px, PROP_LIFT + cosL * up, zf - sinL * up];
-        // the keyed art: the over layer's non-ground texels win over the
-        // under layer's (the mod draws "o" over "u", Terrain.lua:755-756)
-        const fromOver = (x2: number, y2: number) => r.hasOver && isGroundAt(pair.over, r.slot, x2, y2) === false;
-        const fromUnder = (x2: number, y2: number) => !fromOver(x2, y2) && isGroundAt(pair.under, r.slot, x2, y2) === false;
+        const pivot = pivots.get(key(x, y + below)) ?? wx + CELL / 2;
+        const pt = (px: number, up: number): [number, number, number] =>
+          LEAN ? [px, PROP_LIFT + up, zf] : [px, PROP_LIFT + cosL * up, zf - sinL * up];
+        const { fromOver, fromUnder } = cardMasks(r);
         for (const [mask, at] of [
           [fromUnder, art.under(r.slot)],
           [fromOver, art.full(r.slot)],
@@ -788,7 +1019,7 @@ export function meshTerrain(root: string, map: FrMap, pair: FrPair, art: TileArt
           for (const [x0, x1, y0, y1] of rects(mask)) {
             const upTop = lo + (CELL - y0);
             const upBot = lo + (CELL - y1);
-            cards.push({
+            const q: Quad = {
               c: [pt(wx + x0, upTop), pt(wx + x1, upTop), pt(wx + x1, upBot), pt(wx + x0, upBot)],
               uv: [
                 [at[0] + x0 + E, at[1] + y0 + E],
@@ -798,7 +1029,13 @@ export function meshTerrain(root: string, map: FrMap, pair: FrPair, art: TileArt
               ],
               shade: 1,
               f: FACE.south,
-            });
+            };
+            if (LEAN) {
+              const codes = [x0, x1, x1, x0].map((xx) => cardCode(wx + xx - pivot));
+              q.w = codes.map((cd) => cd.w);
+              q.abgrs = codes.map((cd) => cd.abgr);
+            }
+            cards.push(q);
           }
         }
         stats.cards++;
@@ -878,9 +1115,143 @@ export function meshTerrain(root: string, map: FrMap, pair: FrPair, art: TileArt
     }
   }
 
+  // LEAN: one run as an upright box under its roof plane, every vertex
+  // lean-coded (see "the lean code"). With t the facade lean, the facade's
+  // top is at (Ky cos t, zt = zs - Sz sin t); the roof runs from its back
+  // edge (zn, Hb) over the facade's top to the overhang, rising ROOF_T per
+  // px toward the back (Hb = Ky cos t + (zt - zn) T); the side walls fill
+  // under it, each in columns along z that slide with zt and rows that keep
+  // their share of the height; under the leaned facade the wall is a wedge
+  // that closes to nothing when the facade stands upright. At t = CARD_LEAN
+  // every corner is where the static rule below puts it.
+  const leanRun = (run: BuildingRun) => {
+    const X0 = run.x * CELL;
+    const X1 = X0 + CELL;
+    const { zs, zn, Ky, Sz } = run;
+    const D = zs - zn;
+    const vert = (x: number, y: number, z: number, shade: number, K: number, A: number, B: number) => ({
+      p: [x, y, z] as [number, number, number],
+      code: buildingCode(shade, K, A, B),
+    });
+    type V = ReturnType<typeof vert>;
+    const push = (vs: V[], uv: [number, number][], shade: number, f: Quad["f"]) => {
+      terrain.push({
+        c: vs.map((v) => v.p),
+        uv,
+        shade,
+        abgrs: vs.map((v) => v.code.abgr),
+        w: vs.map((v) => v.code.w),
+        f,
+      });
+    };
+    const cellUv = (at: [number, number], u0: number, u1: number, v0: number, v1: number): [number, number][] => [
+      [at[0] + u0 + E, at[1] + v0 + E],
+      [at[0] + u1 - E, at[1] + v0 + E],
+      [at[0] + u1 - E, at[1] + v1 - E],
+      [at[0] + u0 + E, at[1] + v1 - E],
+    ];
+    // the facade: its rows top to bottom, a point f of the way up it is
+    // (Ky f cos t, zs - Sz f sin t)
+    const F = run.yb - run.yf + 1;
+    const sS = FACE_SHADE.south;
+    const fac = (x: number, f: number, shade: number = sS) => {
+      const y = Math.round(Ky * f);
+      return vert(x, y, zs, shade, y, Sz * f, 0);
+    };
+    for (let i = 0; i < F; i++) {
+      const slot = info.get(key(run.x, run.yf + i))!.rec.slot;
+      const f0 = 1 - i / F;
+      const f1 = 1 - (i + 1) / F;
+      push([fac(X0, f0), fac(X1, f0), fac(X1, f1), fac(X0, f1)], cellUv(art.full(slot), 0, CELL, 0, CELL), sS, FACE.south);
+    }
+    // the roof: a point s of the way from its back edge to the overhang
+    const R = run.yf - run.ya;
+    const sU = FACE_SHADE.up;
+    const roof = (x: number, s: number) => {
+      const z = zn + (zs + ROOF_OVERHANG - zn) * s;
+      return vert(x, Ky + ROOF_T * (zs - z), z, sU, Ky, Sz * s, Sz * (1 - s));
+    };
+    if (R > 0) {
+      const total = R * CELL - run.skip;
+      let acc = 0;
+      for (let j = 0; j < R; j++) {
+        const slot = info.get(key(run.x, run.ya + j))!.rec.slot;
+        const v0 = j === 0 ? run.skip : 0;
+        const s0 = acc / total;
+        const s1 = (acc + CELL - v0) / total;
+        acc += CELL - v0;
+        push([roof(X0, s0), roof(X1, s0), roof(X1, s1), roof(X0, s1)], cellUv(art.full(slot), 0, CELL, v0, CELL), sU, FACE.up);
+      }
+    }
+    // the walls under it: n rows of the building's plainest wall art (each
+    // row's share t of the height at every column), columns a cell deep
+    // from the front; a point l of the way from the back wall to zt, t up
+    const n = Math.max(1, Math.round((Ky + (D * ROOF_T) / 2) / CELL));
+    const art_ = (row: number) => art.full(run.sideArt[Math.min(row, run.sideArt.length - 1)] ?? run.sideArt[0]!);
+    const wall = (x: number, l: number, t: number, shade: number) =>
+      vert(x, t * (Ky + (1 - l) * D * ROOF_T), zn + l * D, shade, t * Ky, l * Sz, t * (1 - l) * Sz);
+    // under the leaned facade: the facade's line, and the wall's front edge
+    const wedge = (x: number, t: number, shade: number) => [fac(x, t, shade), wall(x, 1, t, shade)];
+    const side = (x: number, f: Quad["f"], east: boolean) => {
+      const sh = east ? FACE_SHADE.east : FACE_SHADE.west;
+      // column edges, front to back: zs, zs - 16, ..., zn
+      const zEdges: number[] = [];
+      for (let z = zs; z > zn; z -= CELL) zEdges.push(z);
+      zEdges.push(zn);
+      for (let j = 0; j < n; j++) {
+        const t0 = j / n;
+        const t1 = (j + 1) / n;
+        const at = art_(j);
+        // the art's top row is up: v runs top (t1) to bottom (t0)
+        for (let c = 0; c + 1 < zEdges.length; c++) {
+          const za = zEdges[c]!;
+          const zb = zEdges[c + 1]!;
+          const la = (za - zn) / D;
+          const lb = (zb - zn) / D;
+          // east: south on the viewer's left; west: mirrored
+          const ua = east ? zs - CELL * c - za : CELL - (zs - CELL * c - za);
+          const ub = east ? zs - CELL * c - zb : CELL - (zs - CELL * c - zb);
+          push(
+            [wall(x, la, t1, sh), wall(x, lb, t1, sh), wall(x, lb, t0, sh), wall(x, la, t0, sh)],
+            [
+              [at[0] + ua + (east ? E : -E), at[1] + E],
+              [at[0] + ub + (east ? -E : E), at[1] + E],
+              [at[0] + ub + (east ? -E : E), at[1] + CELL - E],
+              [at[0] + ua + (east ? E : -E), at[1] + CELL - E],
+            ],
+            sh,
+            f,
+          );
+        }
+        // the wedge's row: from the facade's line to the wall's front edge
+        const [fa, wa] = wedge(x, t1, sh);
+        const [fb, wb] = wedge(x, t0, sh);
+        push([fa, wa, wb, fb], cellUv(at, 0, CELL, 0, CELL), sh, f);
+      }
+    };
+    const sameProfile = (nx: number) => {
+      const o = run.byCell.get(key(nx, run.yb));
+      return o !== undefined && o.yb === run.yb && o.Ky === Ky && o.Sz === Sz && o.zn <= zn;
+    };
+    if (!sameProfile(run.x + 1)) side(X1, FACE.east, true);
+    if (!sameProfile(run.x - 1)) side(X0, FACE.west, false);
+    // the back wall
+    const sN = FACE_SHADE.north;
+    for (let j = 0; j < n; j++) {
+      const t0 = j / n;
+      const t1 = (j + 1) / n;
+      push([wall(X1, 0, t1, sN), wall(X0, 0, t1, sN), wall(X0, 0, t0, sN), wall(X1, 0, t0, sN)], cellUv(art_(j), 0, CELL, 0, CELL), sN, FACE.north);
+    }
+  };
+
   // the building rule (NOT FAITHFUL, see the header and FACADE): each run
   // stands as a leaned facade under a roof plane
   for (const run of runs) {
+    if (LEAN) {
+      stats.facades++;
+      leanRun(run);
+      continue;
+    }
     stats.facades++;
     const X0 = run.x * CELL;
     const X1 = X0 + CELL;

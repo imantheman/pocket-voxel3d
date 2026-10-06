@@ -130,6 +130,73 @@ lib/Mat4.lua is adapted from the Dramatic Shape Voxel Mod
 Copyright (c) 2026 DramaticShape
 ```
 
+## pokeemerald-3Ds-dualscreen
+
+Two ideas of the third-generation world's camera-following lean
+(`voxelmon/cook/gen3terrain.ts`, "the lean code") come from this port's
+voxel overworld, read at `38dac1e` (and its fork Just-a-Spider/
+pokeemerald-3Ds-dualscreen at `4cac7b2`), from its MIT-licensed port code
+only (`3ds_port/`): a building's sides and back are dressed in its own plain
+wall art rather than a flat colour (`3ds_port/scripts/voxel_building.py`,
+`Tile`, and the plain-wall column its building specs name), and a two-cell
+tree turns toward the camera as one card about its middle
+(`3ds_port/src/voxel/voxel_tree.c`). No code was copied: their buildings are
+modelled by hand per building and their trees from their own art, and ours
+are generated from the map. Their voxel code credits its own source,
+pokeemerald-multiplatform (MIT), whose notice follows theirs.
+
+https://github.com/ZallaxDev/pokeemerald-3Ds-dualscreen
+
+```
+MIT License
+
+Copyright (c) 2026 ZallaxDev and Pokémon Emerald 3Ds Dual Screen contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+https://github.com/gradenGnostic/pokeemerald-multiplatform
+
+```
+MIT License
+
+Copyright (c) 2026 pokeemerald-multiplatform contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## Gen2Recomped-DramaticShapes
 
 The Gen 2 games' voxel shape rules (the Gen 2 collision classes, the Gen 2
