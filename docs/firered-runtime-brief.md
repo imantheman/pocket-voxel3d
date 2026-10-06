@@ -238,6 +238,20 @@ with `describe.skipIf(!existsSync(<root>))`.
   the screens under the 3DS's QuickJS; `bun tools/gen3/perf_check.ts`
   hashes every frame of the same run, to show a speed-up changed no
   picture.
+- Memory is the other budget. The console's app heap (about 96 MB) holds
+  the QuickJS heap and the map builds' staging; the 18 MB linear heap holds
+  the textures and the world's vertices. Textures come back as in LÖVE: an
+  Image's host texture is freed once the Image is collected
+  (platform/image.ts collectTextures), so dropping an image is fine and
+  `release()` is optional (a released image a memo replays is uploaded
+  again). What costs is what stays reachable: a session cache that grows
+  with every map, species or move seen never comes back. Bound such caches
+  (as tileset_native.ts's atlases and dataset.ts's layouts are) and mark
+  it `NOT FAITHFUL (memory)`. Grey images are stored as LA4/LA8 by the
+  host. A bench build with `PV_G3_BENCH_SCRIPT=leak` (platform/
+  bench_leak.ts) gives a long session's memory on the device; on the
+  desktop, `bun tools/gen3/tex_leak.ts` the textures (`--snap a,b`: where
+  the heap grew) and tools/gen3/qjs_leak.ts the QuickJS heap.
 
 ## Testing (definition of done)
 
