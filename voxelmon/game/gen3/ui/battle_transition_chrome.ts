@@ -146,14 +146,25 @@ function rgba_to_data(rgba: string | undefined, w: number, h: number, keyed?: bo
   try { imageData = newImageData(w, h, "rgba8", rgba); } catch { imageData = undefined; }
   if (!imageData) return undefined;
   if (keyed) {
-    const [kr, kg, kb] = imageData.getPixel(0, 0);
-    imageData.mapPixel((_x, _y, r, g, b, a) => {
-      if (r === kr && g === kg && b === kb) return [r, g, b, 0];
-      return [r, g, b, a];
-    });
+    // NOT FAITHFUL (performance, same pixels): the mapPixel below, over the
+    // bytes in place -- a pixel the colour of the corner's gets alpha 0, the
+    // rest keep theirs (setPixel writes back the very bytes getPixel read).
+    // A closure and its arrays per pixel took seconds on the console at the
+    // first trainer battle.
+    //   const [kr, kg, kb] = imageData.getPixel(0, 0);
+    //   imageData.mapPixel((_x, _y, r, g, b, a) => r === kr && g === kg && b === kb ? [r, g, b, 0] : [r, g, b, a]);
+    const px = imageData.px;
+    const kr = px[0], kg = px[1], kb = px[2];
+    for (let o = 0; o < px.length; o += 4) {
+      if (px[o] === kr && px[o + 1] === kg && px[o + 2] === kb) px[o + 3] = 0;
+    }
+    imageData.version++;
   }
   return imageData;
 }
+
+/** The VS bars install found, not read yet (vsbar reads one on its first use). */
+let vsbarPath: Record<string, string> = {};
 
 // Lua: battle_transition_chrome.lua:92
 function data_to_image(imageData: ImageData | undefined, wrap?: boolean): Image | undefined {
@@ -179,6 +190,7 @@ BattleTransitionChrome.install = function (cache?: any): void {
   BattleTransitionChrome._gridQuads = {};
   BattleTransitionChrome._gridFrames = [];
   BattleTransitionChrome._vsbars = {};
+  vsbarPath = {};
   BattleTransitionChrome._banners = {};
   BattleTransitionChrome._logged = false;
   BattleTransitionChrome._rseManifest = undefined;
@@ -216,10 +228,10 @@ BattleTransitionChrome.install = function (cache?: any): void {
   for (const [, key] of ipairs<string>(manifest.mugshots ?? MUGSHOT_KEYS)) {
     for (const [, gender] of ipairs<string>(manifest.genders ?? GENDER_KEYS)) {
       const vsKey = key + "_" + gender;
-      const vsRgba = read_bytes(root + "/vsbar_" + vsKey + ".rgba");
-      if (truthy(vsRgba)) {
-        BattleTransitionChrome._vsbars[vsKey] = rgba_to_image(vsRgba, 256, 160, true, true);
-      }
+      // NOT FAITHFUL (load time and memory, same pictures): a VS bar is read
+      // and keyed when vsbar() first asks for it -- the ten are the Elite
+      // Four's and the Champion's, not every trainer battle's
+      vsbarPath[vsKey] = root + "/vsbar_" + vsKey + ".rgba";
     }
     const bRgba = read_bytes(root + "/banner_" + key + ".rgba");
     if (truthy(bRgba)) {
@@ -391,6 +403,15 @@ BattleTransitionChrome.vsbar = function (mugshotKey?: any, genderKey?: any): Ima
   BattleTransitionChrome.ensureInstalled();
   genderKey = (genderKey === "female" || genderKey === 1) ? "female" : "male";
   const key = tostring(truthy(mugshotKey) ? mugshotKey : "lorelei").toLowerCase() + "_" + genderKey;
+  // (install's loop, for this bar alone, on its first use)
+  const path = vsbarPath[key];
+  if (path !== undefined) {
+    delete vsbarPath[key];
+    const vsRgba = read_bytes(path);
+    if (truthy(vsRgba)) {
+      BattleTransitionChrome._vsbars[key] = rgba_to_image(vsRgba, 256, 160, true, true);
+    }
+  }
   return BattleTransitionChrome._vsbars[key];
 };
 

@@ -20,6 +20,7 @@ import { Collision } from "../../voxelmon/game/gen3/core/collision.ts";
 import { Field } from "../../voxelmon/game/gen3/core/field.ts";
 import { Party } from "../../voxelmon/game/gen3/core/party.ts";
 import { BattleBridge } from "../../voxelmon/game/gen3/core/battle_bridge.ts";
+import Trainers from "../../voxelmon/game/gen3/core/scripting/trainers.ts";
 import { WorldView, parseWorldJson } from "../../voxelmon/game/gen3/platform/worldview.ts";
 import { Game3World } from "../../voxelmon/game/gen3/platform/game3_world.ts";
 
@@ -35,6 +36,7 @@ declare const QJS_WORLD3D: number;
 declare const QJS_PROF_N: number;
 declare const QJS_MAX: number;
 declare const QJS_SPIKE_MS: number;
+declare const QJS_TRAINER: number;
 
 const W3D = typeof QJS_WORLD3D === "number" && QJS_WORLD3D > 0;
 const PROF_N = typeof QJS_PROF_N === "number" ? QJS_PROF_N : 30;
@@ -294,6 +296,18 @@ try {
   wildBattle(19, 4);
   startSeg("field: after the battle");
   idle(120);
+  if (typeof QJS_TRAINER === "number" && QJS_TRAINER > 0) {
+    // QJS_TRAINER=<id>: a trainer battle too (its transition and pictures load on first use)
+    startSeg(`battle: trainer ${QJS_TRAINER} (first: the transition, the intro)`);
+    const foe = (Trainers as any).foeFromId(QJS_TRAINER);
+    const [ok, err] = foe ? (BattleBridge as any).start((Runtime as any)._mod, game, foe, { trainerId: QJS_TRAINER }) : [false, "no party"];
+    if (!ok) print(`[perf] trainer battle failed to start: ${err}`);
+    for (let i = 0; i < 600 && !inBattle(); i++) frame(0);
+    for (let i = 0; i < 400; i++) frame(0); // the intro, up to the action menu
+    startSeg("field: after the battle");
+    (BattleBridge as any).finishPending("win");
+    idle(120);
+  }
   startSeg("menu: start menu, party, summary, bag");
   tap("START", 4, 40);
   tap("A", 4, 90); // the first row (no dex yet): the party
