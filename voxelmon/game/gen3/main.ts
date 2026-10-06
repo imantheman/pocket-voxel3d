@@ -31,6 +31,7 @@
 import { clock, drawProf, nativeProf, readProf } from "./platform/qjs_host.ts";
 import { BenchScript, errText, loadWorld, nat as n, padBits, setFrame, shotSet, worldOps } from "./platform/qjs_world.ts";
 import { G } from "./platform/graphics.ts";
+import { watchedTextures } from "./platform/image.ts";
 import { HostTest, HOSTTEST_SHOT_FRAME, hostTestSound } from "./hosttest.ts";
 import { Game3 } from "./core/Game3.ts";
 import { Input } from "./shared/core/Input.ts";
@@ -100,7 +101,7 @@ function memText(cheap = false): string {
   const mb = (b: number): string => (b / 1048576).toFixed(1);
   return `${m[0]! >= 0 ? `js heap ${mb(m[0]!)} MB, ` : ""}app heap ${mb(m[1]!)} of ${mb(m[2]!)} MB used (high water ${mb(m[4] ?? 0)}), gc at ${mb(m[5] ?? 0)} MB, linear free ${Math.round(m[3]! / 1024)} KB` +
     // the 2D layer's textures (g3_render.c g3_tex_stats), where the binary counts them
-    (m[6] !== undefined ? `, textures ${m[6]} (${Math.round(m[7]! / 1024)} KB linear, ${Math.round(m[8]! / 1024)} KB VRAM)` : "");
+    (m[6] !== undefined ? `, textures ${m[6]} (${Math.round(m[7]! / 1024)} KB linear, ${Math.round(m[8]! / 1024)} KB VRAM; ${watchedTextures()} watched)` : "");
 }
 
 /** Bench builds: the host's byte-string conversion (g3Bytes) against lua.ts's own, on the files the load read. */

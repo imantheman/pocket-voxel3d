@@ -10,7 +10,9 @@ import {
 import { effectByName, effectId, type Effect, type Rgba } from "./effects.ts";
 import "./effects/index.ts";
 import { getHost } from "./host.ts";
-import { Canvas, Image, ImageData, Quad, SpriteBatch, newImage as makeImage, FileData } from "./image.ts";
+import {
+  Canvas, Image, ImageData, Quad, SpriteBatch, newImage as makeImage, FileData, collectTextures, texturesListSent,
+} from "./image.ts";
 
 export const SCREEN_W = 240;
 export const SCREEN_H = 160;
@@ -97,6 +99,8 @@ let st: State = fresh();
 const stack: { all: boolean; s: State }[] = [];
 const list = new DrawList();
 let frameOpen = false;
+/** Frames begun (collectTextures scans every 8th). */
+let frameNo = 0;
 /** The screen clear's alpha (G.setFrameClearAlpha). */
 let frameClearA = 1;
 
@@ -454,6 +458,9 @@ export const G = {
   // screen compositing into a canvas during update) stay in the list and
   // reach the host with the next frame, ahead of that clear.
   beginFrame(): void {
+    // the host textures of collected or released images (image.ts): every
+    // frame the frees already due, every 8th the scan for collected ones
+    collectTextures((++frameNo & 7) === 0);
     stack.length = 0;
     st.m = [...IDENT];
     frameOpen = true;
@@ -465,6 +472,7 @@ export const G = {
     frameOpen = false;
     const out = list.buf;
     getHost().draw(out);
+    texturesListSent();
     list.reset();
     list.target(st.canvas ? st.canvas.id : 0);
     // NOTE: a view of reused storage, valid until the next draw call
