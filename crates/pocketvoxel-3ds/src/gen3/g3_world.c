@@ -21,7 +21,7 @@ static DVLB_s *dv_world, *dv_main;
 static int ok, bound;
 static int loc_f, loc_c, loc_c2, loc_tint;
 /* the frame's numbers (g3_world_params) */
-static float u_f[4], u_c[4] = {1, 0, 0, 0}, u_c2[4] = {1, 0, 0, 0}, u_tint[4] = {1, 1, 1, 1};
+static float u_f[4], u_c[4] = {1, 0, 0, 0}, u_c2[4], u_tint[4] = {1, 1, 1, 1};
 
 static DVLB_s *parse(const uint8_t *shbin, uint32_t len) {
     /* the shader wants its bytes word-aligned, and keeps pointing into them */

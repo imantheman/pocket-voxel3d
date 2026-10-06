@@ -9,29 +9,37 @@
 ;
 ; A vertex whose colour alpha is 255 is drawn exactly as vshader.pica draws
 ; it. Any other alpha is a lean code, and the colour bytes carry its numbers
-; (the host hands them over untinted; the tint comes from g3tint):
+; (the host hands them over untinted; the tint comes from g3tint). Every
+; coded vertex is stored at the REST pose -- leaned back by L0 = the cook's
+; CARD_LEAN, facing south -- and moves from there:
 ;
-;   alpha 0..127    a building vertex, shade alpha/127, stored at its upright
-;                   pose (lean 0). With A = w/64, K = r/4, B = g + b/256:
-;                     y' = y + K (cos t - 1) - T B sin t
-;                     z' = z - A sin t
-;                   t the facade lean (g3f), T the roof's rise (tan 12).
-;   alpha 128..254  a prop card standing upright facing south, its pivot
-;                   dx = w/64 west of the vertex; turned to face the camera
-;                   and leaned back by the card lean (g3c, g3c2):
-;                     x' = x - dx + dx rx + y fx sin c
-;                     z' = z      + dx rz + y fz sin c
-;                     y' = y cos c
-;                   shade (alpha-128)/126.
+;   alpha 0..127    a building vertex, shade alpha/127. With A = w/64,
+;                   K = r/2, B = g + b/256 and t the facade lean:
+;                     y' = y + K (cos t - cos L0) - T B (sin t - sin L0)
+;                     z' = z - A (sin t - sin L0)
+;                   (T the roof's rise, tan 12).
+;   alpha 128..191  a foliage card vertex K = r/2 up its card, its pivot
+;                   dx = w/64 west of it; turned to face the camera and
+;                   leaned back by the card lean c:
+;                     x' = x - dx + dx rx + K fx sin c
+;                     z' = z + K sin L0 + dx rz + K fz sin c
+;                     y' = y + K (cos c - cos L0)
+;                   shade (alpha-128)/63.
+;   alpha 192..253  a built prop vertex, K = r/2 up its card, D = w/64 deep:
+;                     y' = y + K (cos t - cos L0)
+;                     z' = z - K (sin t - sin L0) - D (1 - weight)
+;                   shade (alpha-192)/61.
+;   alpha 254       a lying prop vertex (a north-south fence): the same with
+;                   the lying angle u for t, D = 0, shade 1.
 
 .fvec projection[4]
 .fvec uvx
 .fvec toff
-; (sin t, cos t - 1, T sin t, 0)
+; (sin t - sin L0, cos t - cos L0, T (sin t - sin L0), 1 - facade weight)
 .fvec g3f
 ; (rx, rz, fx sin c, fz sin c)
 .fvec g3c
-; (cos c, 0, 0, 0)
+; (cos c - cos L0, sin u - sin L0, cos u - cos L0, sin L0): u = the lying props' angle
 .fvec g3c2
 ; the scene tint, 0..1, w = 1
 .fvec g3tint
@@ -39,10 +47,12 @@
 .constf ones(1.0, 1.0, 1.0, 1.0)
 .constf inv255(0.003921569, 0.003921569, 0.003921569, 0.003921569)
 ; x: a coded vertex's alpha is below, y: a building's alpha is below,
-; z: 1/64, w: 1/4
-.constf kc(254.5, 127.5, 0.015625, 0.25)
-; x: 1/256, y: 1/127, z: 1/126, w: 128
-.constf kd(0.00390625, 0.007874016, 0.007936508, 128.0)
+; z: 1/64, w: 1/2
+.constf kc(254.5, 127.5, 0.015625, 0.5)
+; x: 1/256, y: 1/127, z: 1/63, w: 128
+.constf kd(0.00390625, 0.007874016, 0.015873016, 128.0)
+; x: a card's alpha is below, y: 192, z: 1/61, w: a lying prop's alpha is above
+.constf ke(191.5, 192.0, 0.016393443, 253.5)
 
 .out outpos position
 .out outclr color
@@ -72,20 +82,46 @@
 			add r0.z, r0, -r7
 			mul r8, kd.yyyy, r1.wwww
 		.else
-			; a prop card
+		cmp ke, gt, gt, r1.wwww
+		ifc cmp.x
+			; a foliage card (r4 dx, r3 K)
 			mul r4, kc.zzzz, r2
+			mul r3, kc.wwww, r1.xxxx
 			mul r6, g3c.xxxx, r4
 			add r6, r6, -r4
-			mul r7, g3c.zzzz, r0.yyyy
+			mul r7, g3c.zzzz, r3
 			add r6, r6, r7
 			add r0.x, r0, r6
 			mul r6, g3c.yyyy, r4
-			mul r7, g3c.wwww, r0.yyyy
+			mul r7, g3c.wwww, r3
+			add r6, r6, r7
+			mul r7, g3c2.wwww, r3
 			add r6, r6, r7
 			add r0.z, r0, r6
-			mul r0.y, g3c2.xxxx, r0
+			mul r6, g3c2.xxxx, r3
+			add r0.y, r0, r6
 			add r8, -kd.wwww, r1.wwww
 			mul r8, kd.zzzz, r8
+		.else
+			; a built prop (r11: sin, cos - 1 of its angle; w: 1 - weight)
+			mov r11, g3f
+			cmp ke.wwww, lt, lt, r1.wwww
+			ifc cmp.x
+				; a lying one: the lying angle (its D is 0)
+				mov r11.xy, g3c2.yzzz
+			.end
+			mul r3, kc.wwww, r1.xxxx
+			mul r4, kc.zzzz, r2
+			mul r6, r11.yyyy, r3
+			add r0.y, r0, r6
+			mul r7, r11.xxxx, r3
+			mul r6, r11.wwww, r4
+			add r7, r7, r6
+			add r0.z, r0, -r7
+			add r8, -ke.yyyy, r1.wwww
+			mul r8, ke.zzzz, r8
+			min r8, ones, r8
+		.end
 		.end
 		mul r10, g3tint, r8
 		mov r10.w, ones

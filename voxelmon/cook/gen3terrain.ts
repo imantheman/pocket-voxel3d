@@ -131,21 +131,43 @@ const ROOF_RISE_DEG = 12;
 // 718) and our host's camera also swings round the map, which no baked lean
 // survives: seen from the side a baked facade is a slanted parallelogram over
 // flat grey walls, and a baked card an edge-on streak. So with LEAN the cook
-// stores the buildings and the cards at their UPRIGHT pose (lean 0) and
-// tags each vertex with what the lean does to it; the 3DS host's world
+// stores the buildings and the cards at the REST pose (the lean the static
+// rule used, CARD_LEAN, facing south: what an older host draws, and the
+// bounds the host culls by) and tags each vertex with what the lean does
+// to it from there; the 3DS host's world
 // shader (crates/pocketvoxel-3ds/src/gen3/g3_world.pica) applies the lean
 // for the frame's camera:
 //
 //   - a building (its facade, roof, side and back walls) leans its facade
 //     back by the mod's card lean at the CURRENT pitch, (90 - pitch) * 0.8
-//     degrees (main.lua:109), scaled by how squarely the camera faces the
-//     south front (cos of the camera's yaw, none from the side or behind).
-//     At the rest pitch from the south that is CARD_LEAN, exactly today's
-//     look; from the side the building is an upright box under a real
-//     sloped roof, its sides and back dressed in its own wall art.
-//   - a prop card turns about its foot to face the camera's yaw and leans
-//     back by the card lean, as the mod's cards and our people do. A
-//     two-cell prop (a tree) turns as one card about its middle.
+//     degrees (main.lua:109), while the camera looks at the south front:
+//     all of it within 10 degrees of the default yaw, eased to none by 28
+//     (gen3/mod.rs facade_weight). At the rest pitch from the south that is
+//     CARD_LEAN, exactly today's look; turned further the building is a
+//     true box -- upright front, side and back walls meeting at the
+//     corners -- under a real sloped roof, its sides and back dressed in its
+//     own wall art.
+//   - a built prop (a fence, a sign, a mailbox, a post, a railing, a small
+//     building the mod stands as a card -- every card that is not foliage)
+//     is world geometry: it keeps its place and its line along x, and
+//     leans exactly as a facade does (upright once the camera turns away),
+//     with its silhouette extruded a few px deep (a small building as deep
+//     as its stack) as the lean fades. One exception: a narrow stack of
+//     three or more rows is a fence or railing running north-south, which
+//     the mod's stacking stands as one tall card; it lies down onto its own
+//     cells as the camera turns (its art is drawn from above), rather than
+//     standing up as a wall across the street.
+//     Which cards are built and which are foliage is the mod's own colour
+//     test (Keyed.foliage), not an id table: it needs no per-map data and
+//     it already sorted FireRed's trees and bushes from its fences, signs
+//     and posts in every map checked (the first town, the big city, Route
+//     4). Ledges, water and its edges, paths and tall grass are terrain,
+//     not cards, and are untouched by any of this.
+//   - foliage (a tree, a bush: the mod's own foliage test, Keyed.foliage,
+//     Terrain.lua:338-360 -- the cell's art is mostly green) turns about its
+//     foot to face the camera's yaw and leans back by the card lean, as the
+//     mod's cards and our people do. A two-cell tree turns as one card
+//     about its middle.
 //
 // Two of these ideas -- dressing a building's sides and back in its own
 // plain wall art, and turning a two-cell tree as one card -- come from
@@ -164,11 +186,12 @@ const ROOF_T = Math.tan((ROOF_RISE_DEG * Math.PI) / 180);
 /**
  * A building vertex: stored upright, it moves by
  *   y' = y + K (cos t - 1) - T B sin t,   z' = z - A sin t
- * for the facade lean t (T = ROOF_T). Shade 0..1.
+ * for the facade lean t (T = ROOF_T). Shade 0..1. K is held in half px up to
+ * 127.5 (a taller stack of built props leans its top a little short).
  */
 export function buildingCode(shade: number, K: number, A: number, B: number): { w: number; abgr: number } {
   const w = Math.round(A * 64);
-  const r = Math.round(K * 4);
+  const r = Math.min(255, Math.round(K * 2));
   const b256 = Math.round(B * 256);
   const a = Math.round(shade * 127);
   if (w < 0 || w > 32767 || r < 0 || r > 255 || b256 < 0 || b256 > 65535 || a < 0 || a > 127) {
@@ -177,11 +200,34 @@ export function buildingCode(shade: number, K: number, A: number, B: number): { 
   return { w, abgr: ((a << 24) | ((b256 & 255) << 16) | ((b256 >> 8) << 8) | r) >>> 0 };
 }
 
-/** A card vertex `dx` px east of its pivot (shade 1: alpha 254). */
-export function cardCode(dx: number): { w: number; abgr: number } {
+/**
+ * A lying prop vertex `K` px up its card (shade 1, alpha 254): it leans by
+ * the card lean at the default view and on down to lie flat as the facade
+ * lean fades (g3_world.pica: y' = y + K (cos u - 1), z' = z - K sin u).
+ */
+export function lyingCode(K: number): { w: number; abgr: number } {
+  return { w: 0, abgr: (0xfeffff00 | Math.min(255, Math.round(K * 2))) >>> 0 };
+}
+
+/** A foliage card vertex `dx` px east of its pivot, `K` px up the card (shade 1: alpha 191). */
+export function cardCode(dx: number, K: number): { w: number; abgr: number } {
   const w = Math.round(dx * 64);
   if (w < -32768 || w > 32767) throw new Error(`card pivot out of range: ${dx}`);
-  return { w, abgr: 0xfeffffff };
+  return { w, abgr: (0xbfffff00 | Math.min(255, Math.round(K * 2))) >>> 0 };
+}
+
+/**
+ * A built prop vertex `K` px up its card, stored upright on the card's
+ * plane; it leans as a facade does (y' = y + K (cos t - 1), z' = z - K sin t)
+ * and is pushed `D` px back by as much as the facade lean has faded
+ * (z' -= D (1 - weight)): the prop's depth, none at the default view.
+ */
+export function propCode(shade: number, K: number, D: number): { w: number; abgr: number } {
+  const w = Math.round(D * 64);
+  const r = Math.min(255, Math.round(K * 2));
+  const a = 192 + Math.round(shade * 61);
+  if (w < 0 || w > 32767 || r < 0) throw new Error(`prop code out of range: K ${K} D ${D}`);
+  return { w, abgr: ((a << 24) | 0x00ff_ff00 | r) >>> 0 };
 }
 
 /** The most texels of one colour in a slot's under+over composite (a plain wall scores high). */
@@ -860,24 +906,28 @@ export function meshTerrain(root: string, map: FrMap, pair: FrPair, art: TileArt
     return below >= MAX_STACK ? 0 : below;
   };
 
-  // LEAN: each card's pivot, the foot of the vertical axis it turns about.
-  // Cards standing on the same foot row in neighbouring columns turn
-  // together, as one card about their middle, when they are one thing:
-  //   - foliage (a tree) and one-cell props (fences, signs, posts): in
-  //     pairs, where two columns read as one picture -- their art runs on
-  //     across the seam between them and stops at the outer edges, as a
-  //     two-cell tree's halves do (Terrain.lua:194 PROP_MAX_WIDTH, the
-  //     widest prop); a lone column, or a run whose seams carry no more art
-  //     than its outer edges (a fence), turns column by column;
-  //   - a stack of two or more rows that is not foliage (a small building
-  //     the mod stands as a card, Terrain.lua:199 PROP_MAX_RUN): its whole
-  //     run, up to STRUCT_MAX columns, so it turns as one cut-out rather than
-  //     in slices.
-  const STRUCT_MAX = 10;
+  // LEAN: the foliage cards' pivots, the foot of the vertical axis each
+  // turns about (a card with no pivot is a built prop and leans like a
+  // facade instead). A column's stack of cards -- every prop cell standing
+  // on one foot -- is foliage when any of its cells is (the trunk row of a
+  // tree is often not green itself). Foliage stacks on the same foot row in
+  // neighbouring columns turn together in pairs, as one card about their
+  // seam, where the two read as one picture: their art runs on across the
+  // seam and stops at the outer edges, as a two-cell tree's halves do
+  // (Terrain.lua:194 PROP_MAX_WIDTH, the widest prop). A lone column, or a
+  // run whose seams carry no more art than its outer edges, turns column by
+  // column.
   const pivots = new Map<number, number>();
+  // LEAN: the built props' stacks, by foot: how many rows, and whether a
+  // neighbouring column on the same foot is built too (a wide thing: a
+  // small building, a fence along x). A narrow stack of three or more rows
+  // is a fence or railing running north-south, which the mod's stacking
+  // stands up as one tall card: it lies down onto its own cells as the
+  // camera turns, rather than standing up as a wall (see "the lean code").
+  const built = new Map<number, { rows: number; wide: boolean }>();
   if (LEAN && k !== null) {
-    // (foot row) -> column -> its stack: edge texels [left, right], rows, foliage
-    type Stack = { edge: [number, number]; rows: number; foliage: boolean };
+    type Stack = { edge: [number, number]; foliage: boolean; rows: number };
+    // (foot row) -> column -> its stack
     const feet = new Map<number, Map<number, Stack>>();
     for (let y = my0; y < my0 + mh; y++) {
       for (let x = mx0; x < mx0 + mw; x++) {
@@ -886,7 +936,7 @@ export function meshTerrain(root: string, map: FrMap, pair: FrPair, art: TileArt
         const foot = y + belowOf(x, y);
         let row = feet.get(foot);
         if (!row) feet.set(foot, (row = new Map()));
-        const st = row.get(x) ?? { edge: [0, 0], rows: 0, foliage: false };
+        const st = row.get(x) ?? { edge: [0, 0], foliage: false, rows: 0 };
         st.rows++;
         if (k.foliage[c.rec.slot]) st.foliage = true;
         const { fromOver, fromUnder } = cardMasks(c.rec);
@@ -897,28 +947,17 @@ export function meshTerrain(root: string, map: FrMap, pair: FrPair, art: TileArt
         row.set(x, st);
       }
     }
-    const kind = (st: Stack) => (st.foliage ? 0 : st.rows > 1 ? 2 : 1);
     for (const [foot, row] of feet) {
-      const xs = [...row.keys()].sort((a, b) => a - b);
+      const isBuilt = (x: number) => row.has(x) && !row.get(x)!.foliage;
+      for (const [x, st] of row) {
+        if (!st.foliage) built.set(key(x, foot), { rows: st.rows, wide: isBuilt(x - 1) || isBuilt(x + 1) });
+      }
+      const xs = [...row.keys()].filter((x) => row.get(x)!.foliage).sort((a, b) => a - b);
       let i = 0;
       while (i < xs.length) {
-        // a run xs[i..j]: neighbouring columns of one kind
-        const kd = kind(row.get(xs[i]!)!);
+        // a run xs[i..j] of neighbouring foliage columns
         let j = i;
-        while (j + 1 < xs.length && xs[j + 1] === xs[j]! + 1 && kind(row.get(xs[j + 1]!)!) === kd) j++;
-        if (kd === 2) {
-          // a structure: the run whole, in equal parts of at most STRUCT_MAX
-          const n = j - i + 1;
-          const parts = Math.ceil(n / STRUCT_MAX);
-          for (let p = 0; p < parts; p++) {
-            const a = i + Math.floor((p * n) / parts);
-            const b = i + Math.floor(((p + 1) * n) / parts) - 1;
-            const pivot = ((xs[a]! + xs[b]! + 1) * CELL) / 2;
-            for (let q = a; q <= b; q++) pivots.set(key(xs[q]!, foot), pivot);
-          }
-          i = j + 1;
-          continue;
-        }
+        while (j + 1 < xs.length && xs[j + 1] === xs[j]! + 1) j++;
         // pairs, in the phase whose seams carry the most art
         const score = (phase: number): number => {
           let sc = 0;
@@ -1008,9 +1047,12 @@ export function meshTerrain(root: string, map: FrMap, pair: FrPair, art: TileArt
         // host's, about the card's pivot)
         const zf = zfoot - 1.5;
         const lo = CELL * below;
-        const pivot = pivots.get(key(x, y + below)) ?? wx + CELL / 2;
+        const pivot = pivots.get(key(x, y + below));
+        const stack = built.get(key(x, y + below));
+        // a narrow tall stack (a north-south fence) lies down, not up
+        const lying = stack !== undefined && !stack.wide && stack.rows >= 3;
         const pt = (px: number, up: number): [number, number, number] =>
-          LEAN ? [px, PROP_LIFT + up, zf] : [px, PROP_LIFT + cosL * up, zf - sinL * up];
+          [px, PROP_LIFT + cosL * up, zf - sinL * up];
         const { fromOver, fromUnder } = cardMasks(r);
         for (const [mask, at] of [
           [fromUnder, art.under(r.slot)],
@@ -1031,11 +1073,116 @@ export function meshTerrain(root: string, map: FrMap, pair: FrPair, art: TileArt
               f: FACE.south,
             };
             if (LEAN) {
-              const codes = [x0, x1, x1, x0].map((xx) => cardCode(wx + xx - pivot));
+              // foliage turns about its pivot; a built prop leans like a facade
+              const codes =
+                pivot !== undefined
+                  ? [x0, x1, x1, x0].map((xx, i) => cardCode(wx + xx - pivot, i < 2 ? upTop : upBot))
+                  : [upTop, upTop, upBot, upBot].map((u) => (lying ? lyingCode(u) : propCode(1, u, 0)));
               q.w = codes.map((cd) => cd.w);
               q.abgrs = codes.map((cd) => cd.abgr);
             }
             cards.push(q);
+          }
+        }
+        // LEAN: a built prop is world geometry, so it has some depth: its
+        // silhouette extruded back (a back face, and a strip along every
+        // edge of the silhouette in the edge texel's colour) -- a sign, a
+        // mailbox or a fence a few px, a small building a card stands for as
+        // deep as its stack allows. The depth comes in as the facade lean
+        // fades (propCode): seen from the side the prop is a slab, not a
+        // line; at the default view it is the card it was, the back face a
+        // px behind it and the strips a px deep.
+        if (LEAN && pivot === undefined && !lying) {
+          // a wide stack of rows is a small building, as deep as its stack
+          // allows; anything else (a sign, a mailbox, a post, a fence along
+          // x) a few px
+          const rows = stack?.rows ?? 1;
+          const deep = rows > 1 && stack?.wide === true;
+          const D = deep ? Math.min(32, CELL * (rows - 1)) : 4;
+          const solid = (x2: number, y2: number) =>
+            x2 >= 0 && x2 < 16 && y2 >= 0 && y2 < 16 && (fromOver(x2, y2) || fromUnder(x2, y2));
+          const at = art.full(r.slot);
+          const zb = zf - 1;
+          const face = (
+            c: [number, number, number][],
+            ups: number[],
+            uv: [number, number][],
+            shade: number,
+            f: Quad["f"],
+          ) => {
+            // a corner on the back plane (zb) takes the depth; each is
+            // stored at the rest lean, K = u up the card
+            const codes = ups.map((u, i) => propCode(shade, u, c[i]![2] === zb ? D - 1 : 0));
+            const at0 = c.map((p, i): [number, number, number] => {
+              const u = (codes[i]!.abgr & 255) / 2;
+              return [p[0], p[1] + u * (cosL - 1), p[2] - u * sinL];
+            });
+            cards.push({ c: at0, uv, shade, f, w: codes.map((cd) => cd.w), abgrs: codes.map((cd) => cd.abgr) });
+          };
+          const up = (row: number) => lo + (CELL - row);
+          // the back face, the silhouette's rectangles again
+          for (const [x0, x1, y0, y1] of rects(solid)) {
+            const [ua, ub] = [up(y0), up(y1)];
+            face(
+              [[wx + x1, PROP_LIFT + ua, zb], [wx + x0, PROP_LIFT + ua, zb], [wx + x0, PROP_LIFT + ub, zb], [wx + x1, PROP_LIFT + ub, zb]],
+              [ua, ua, ub, ub],
+              [[at[0] + x1 - E, at[1] + y0 + E], [at[0] + x0 + E, at[1] + y0 + E], [at[0] + x0 + E, at[1] + y1 - E], [at[0] + x1 - E, at[1] + y1 - E]],
+              FACE_SHADE.north,
+              FACE.north,
+            );
+          }
+          // the top and bottom edges: runs along x of texels open above/below
+          for (const [dy, f, sh] of [[-1, FACE.up, FACE_SHADE.up], [1, FACE.down, FACE_SHADE.down]] as const) {
+            for (let ty = 0; ty < 16; ty++) {
+              let tx = 0;
+              while (tx < 16) {
+                if (!(solid(tx, ty) && !solid(tx, ty + dy))) {
+                  tx++;
+                  continue;
+                }
+                const t0 = tx;
+                while (tx < 16 && solid(tx, ty) && !solid(tx, ty + dy)) tx++;
+                const u = up(dy < 0 ? ty : ty + 1);
+                // a small building's top takes the art's rows down from its
+                // edge, front to back (its roof reads as roof from above);
+                // any other edge, its edge row stretched
+                let span = 1;
+                if (dy < 0 && deep) while (ty + span < 16 && solid(t0, ty + span)) span++;
+                const vf = at[1] + ty + (span > 1 ? E : 0.5);
+                const vb = span > 1 ? at[1] + ty + span - E : vf;
+                face(
+                  [[wx + t0, PROP_LIFT + u, zf], [wx + tx, PROP_LIFT + u, zf], [wx + tx, PROP_LIFT + u, zb], [wx + t0, PROP_LIFT + u, zb]],
+                  [u, u, u, u],
+                  [[at[0] + t0 + E, vf], [at[0] + tx - E, vf], [at[0] + tx - E, vb], [at[0] + t0 + E, vb]],
+                  sh,
+                  f,
+                );
+              }
+            }
+          }
+          // the left and right edges: runs along y of texels open beside
+          for (const [dx, f, sh] of [[-1, FACE.west, FACE_SHADE.west], [1, FACE.east, FACE_SHADE.east]] as const) {
+            for (let tx = 0; tx < 16; tx++) {
+              let ty = 0;
+              while (ty < 16) {
+                if (!(solid(tx, ty) && !solid(tx + dx, ty))) {
+                  ty++;
+                  continue;
+                }
+                const t0 = ty;
+                while (ty < 16 && solid(tx, ty) && !solid(tx + dx, ty)) ty++;
+                const X = wx + (dx < 0 ? tx : tx + 1);
+                const [ua, ub] = [up(t0), up(ty)];
+                const u = at[0] + tx + 0.5;
+                face(
+                  [[X, PROP_LIFT + ua, zf], [X, PROP_LIFT + ua, zb], [X, PROP_LIFT + ub, zb], [X, PROP_LIFT + ub, zf]],
+                  [ua, ua, ub, ub],
+                  [[u, at[1] + t0 + E], [u, at[1] + t0 + E], [u, at[1] + ty - E], [u, at[1] + ty - E]],
+                  sh,
+                  f,
+                );
+              }
+            }
           }
         }
         stats.cards++;
@@ -1129,10 +1276,20 @@ export function meshTerrain(root: string, map: FrMap, pair: FrPair, art: TileArt
     const X1 = X0 + CELL;
     const { zs, zn, Ky, Sz } = run;
     const D = zs - zn;
-    const vert = (x: number, y: number, z: number, shade: number, K: number, A: number, B: number) => ({
-      p: [x, y, z] as [number, number, number],
-      code: buildingCode(shade, K, A, B),
-    });
+    // stored at the rest lean (see "the lean code"): the upright corner
+    // moved as the code moves it for t = CARD_LEAN
+    const sL = Math.sin(CARD_LEAN);
+    const cL = Math.cos(CARD_LEAN);
+    const vert = (x: number, y: number, z: number, shade: number, K: number, A: number, B: number) => {
+      const code = buildingCode(shade, K, A, B);
+      const Kq = (code.abgr & 255) / 2;
+      const Aq = code.w / 64;
+      const Bq = ((code.abgr >>> 8) & 255) + ((code.abgr >>> 16) & 255) / 256;
+      return {
+        p: [x, y + Kq * (cL - 1) - ROOF_T * Bq * sL, z - Aq * sL] as [number, number, number],
+        code,
+      };
+    };
     type V = ReturnType<typeof vert>;
     const push = (vs: V[], uv: [number, number][], shade: number, f: Quad["f"]) => {
       terrain.push({

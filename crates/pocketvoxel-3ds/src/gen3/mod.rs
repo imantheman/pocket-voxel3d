@@ -196,10 +196,19 @@ fn card_lean(a: f32) -> f32 {
     deg.clamp(0.0, 72.0).to_radians()
 }
 
+/// How much of the card lean the facades (and built props) take for a
+/// camera `yaw` radians from looking north: all of it within 10 degrees,
+/// none past 28, a smoothstep between -- so a building is a true box as soon
+/// as the camera has turned from its front, not a slanted one.
+fn facade_weight(yaw: f32) -> f32 {
+    let (full, none) = (10f32.to_radians(), 28f32.to_radians());
+    let t = ((none - yaw.abs()) / (none - full)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 /// This frame's lean (g3_world.pica's uniforms), from the camera the world
-/// is drawn with: the facade lean is the card lean as far as the camera
-/// faces the facades' south fronts (cos of its yaw from looking north, none
-/// from the side or behind); the cards face the camera's yaw and take the
+/// is drawn with: the facade lean is the card lean times facade_weight of
+/// the camera's yaw; the foliage cards face the camera's yaw and take the
 /// card lean whole.
 fn lean_frame() {
     let sc = unsafe { super::voxel::scene() };
@@ -209,15 +218,22 @@ fn lean_frame() {
     let a = (dx * dx + dz * dz).sqrt().atan2(-dy);
     let (fx, fz) = cam::forward_h(&camera);
     let lean = card_lean(a);
-    let lf = lean * (-fz).max(0.0);
+    let fw = facade_weight(fx.atan2(-fz));
+    let lf = lean * fw;
+    // the lying props (north-south fences): the card lean at the default
+    // view, down to flat as the facade lean fades
+    let lie = lean * fw + core::f32::consts::FRAC_PI_2 * (1.0 - fw);
     unsafe { LEAN_F = lf };
     let t = G3_ROOF_RISE_DEG.to_radians().tan();
+    // the rest lean every coded vertex is stored at (gen3terrain.ts CARD_LEAN)
+    let l0 = ((90.0f32 - 35.0) * 0.8).to_radians();
+    let (s0, c0) = (l0.sin(), l0.cos());
     let tint = super::geometry_tint(sc.tint);
     let ch = |s: u32| ((tint >> s) & 0xff) as f32 / 255.0;
     let p: [f32; 16] = [
-        lf.sin(), lf.cos() - 1.0, t * lf.sin(), 0.0,
+        lf.sin() - s0, lf.cos() - c0, t * (lf.sin() - s0), 1.0 - fw,
         -fz, fx, fx * lean.sin(), fz * lean.sin(),
-        lean.cos(), 0.0, 0.0, 0.0,
+        lean.cos() - c0, lie.sin() - s0, lie.cos() - c0, s0,
         ch(0), ch(8), ch(16), 1.0,
     ];
     unsafe { g3_world_params(p.as_ptr()) };
