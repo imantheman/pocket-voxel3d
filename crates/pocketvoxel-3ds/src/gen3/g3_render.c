@@ -2,9 +2,11 @@
    terms; see LICENSE.md). The Gen 3 display: the guest's per-frame draw list
    (voxelmon/game/gen3/platform/drawlist.ts) drawn on the GPU with citro3d.
 
-   - Textures by id (guest uploads, cache PNGs, canvases): RGBA8, allocated a
-     power of two (8..1024) and swizzled on upload; the padding repeats the
-     last row and column, so a clamped tap past the image reads its edge.
+   - Textures by id (guest uploads, cache PNGs, canvases): RGBA8 (or, for an
+     image every pixel of which is grey, luminance + alpha: the same values
+     sampled in a half or a quarter of the memory), allocated a power of two
+     (8..1024) and swizzled on upload; the padding repeats the last row and
+     column, so a clamped tap past the image reads its edge.
    - Canvases are render targets (citro3d render-to-texture), which citro3d
      wants in VRAM; a fresh one is cleared by a memory fill at the start of
      the next frame (before anything can draw into it).
@@ -77,8 +79,16 @@ typedef struct G3Tex {
        u, v onto the halves. */
     int fold, lw, lh;
     uint8_t vram;        /* allocated in VRAM (canvases, the frame) */
+    uint8_t fmt;         /* TF_*: how the texels are stored */
     uint32_t bytes;      /* the allocation's size (g3_tex_stats) */
 } G3Tex;
+
+/* Texel formats. An upload whose every pixel a smaller format holds exactly
+   is stored in it (pick_fmt): grey images -- the font sheets, white glyphs
+   the guest tints -- as luminance + alpha. The GPU reads LA texels as
+   (L, L, L, A), so it samples the very values RGBA8 would have held. */
+enum { TF_RGBA8, TF_LA8, TF_LA4 };
+static const uint8_t TF_BPP[3] = {4, 2, 1};
 
 /* Live textures (allocated, retired ones included until destroyed): count
    and bytes in linear memory, bytes in VRAM (g3_tex_stats). */
@@ -153,24 +163,40 @@ static void tex_set(int id, G3Tex *t) {
     texs[id] = t;
 }
 
-/* Byte offset of texel (x, y) in a tw-wide RGBA8 texture's 8x8 Morton tiles. */
-static inline uint32_t tile_off(int x, int y, int tw) {
+/* Index of texel (x, y) in a tw-wide texture's 8x8 Morton tiles. */
+static inline uint32_t tile_idx(int x, int y, int tw) {
     static const uint8_t MX[8] = {0, 1, 4, 5, 16, 17, 20, 21};
     static const uint8_t MY[8] = {0, 2, 8, 10, 32, 34, 40, 42};
-    return ((((y >> 3) * (tw >> 3) + (x >> 3)) << 6) + MX[x & 7] + MY[y & 7]) << 2;
+    return (((y >> 3) * (tw >> 3) + (x >> 3)) << 6) + MX[x & 7] + MY[y & 7];
+}
+/* Byte offset of texel (x, y) in a tw-wide RGBA8 texture. */
+static inline uint32_t tile_off(int x, int y, int tw) { return tile_idx(x, y, tw) << 2; }
+
+/* The smallest format that holds every pixel of w x h RGBA8 exactly. */
+static int pick_fmt(const uint8_t *rgba, int w, int h) {
+    int la4 = 1;
+    const uint8_t *p = rgba, *e = rgba + (size_t)w * h * 4;
+    for (; p < e; p += 4) {
+        if (p[0] != p[1] || p[1] != p[2]) return TF_RGBA8;
+        /* a 4-bit channel n is read as n * 17 */
+        if (la4 && (p[0] % 17 || p[3] % 17)) la4 = 0;
+    }
+    return la4 ? TF_LA4 : TF_LA8;
 }
 
-static G3Tex *tex_alloc(int w, int h, int repeat, int vram) {
+static G3Tex *tex_alloc_fmt(int w, int h, int repeat, int vram, int fmt) {
     if (w <= 0 || h <= 0 || w > 1024 || h > 1024) return NULL;
     G3Tex *t = (G3Tex *)calloc(1, sizeof(G3Tex));
     if (!t) return NULL;
     t->w = w; t->h = h; t->tw = po2(w); t->th = po2(h);
     t->repeat = (uint8_t)(repeat != 0);
     t->serial = tex_serial++;
-    if (!(vram ? C3D_TexInitVRAM(&t->tex, (u16)t->tw, (u16)t->th, GPU_RGBA8)
-               : C3D_TexInit(&t->tex, (u16)t->tw, (u16)t->th, GPU_RGBA8))) { free(t); return NULL; }
+    GPU_TEXCOLOR gf = fmt == TF_LA4 ? GPU_LA4 : fmt == TF_LA8 ? GPU_LA8 : GPU_RGBA8;
+    if (!(vram ? C3D_TexInitVRAM(&t->tex, (u16)t->tw, (u16)t->th, gf)
+               : C3D_TexInit(&t->tex, (u16)t->tw, (u16)t->th, gf))) { free(t); return NULL; }
     t->vram = (uint8_t)(vram != 0);
-    t->bytes = (uint32_t)t->tw * t->th * 4;
+    t->fmt = (uint8_t)fmt;
+    t->bytes = (uint32_t)t->tw * t->th * TF_BPP[fmt];
     tex_live_n++;
     if (vram) tex_live_vram += t->bytes; else tex_live_lin += t->bytes;
     C3D_TexSetFilter(&t->tex, GPU_NEAREST, GPU_NEAREST);
@@ -181,26 +207,54 @@ static G3Tex *tex_alloc(int w, int h, int repeat, int vram) {
     return t;
 }
 
-/* Swizzle w*h RGBA8 into t (padding = the edge texels), and flush. */
-static void tex_fill(G3Tex *t, const uint8_t *rgba) {
-    uint32_t *d = (uint32_t *)t->tex.data;
-    for (int y = 0; y < t->th; y++) {
-        const uint8_t *row = rgba + (size_t)(y < t->h ? y : t->h - 1) * t->w * 4;
-        for (int x = 0; x < t->tw; x++) {
-            const uint8_t *p = row + (x < t->w ? x : t->w - 1) * 4;
-            /* RGBA8 texel: bytes A, B, G, R */
-            d[tile_off(x, y, t->tw) >> 2] = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
-        }
-    }
-    GSPGPU_FlushDataCache(t->tex.data, (u32)t->tw * t->th * 4);
+static G3Tex *tex_alloc(int w, int h, int repeat, int vram) { return tex_alloc_fmt(w, h, repeat, vram, TF_RGBA8); }
+
+/* Texel (x, y) of t from an RGBA8 pixel, in t's format. */
+static inline void tex_put(G3Tex *t, int x, int y, const uint8_t *p) {
+    void *data = t->tex.data;
+    uint32_t i = tile_idx(x, y, t->tw);
+    if (t->fmt == TF_LA4)      /* LA4 texel: L in the high nibble, A in the low */
+        ((uint8_t *)data)[i] = (uint8_t)(((p[0] / 17) << 4) | (p[3] / 17));
+    else if (t->fmt == TF_LA8) /* LA8 texel: bytes A, L */
+        ((uint16_t *)data)[i] = (uint16_t)((p[0] << 8) | p[3]);
+    else                       /* RGBA8 texel: bytes A, B, G, R */
+        ((uint32_t *)data)[i] = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
 }
 
+/* Rows y0..y1-1 and columns x0..x1-1 of t from its w x h RGBA8 image -- the
+   padding past the image's right and bottom edges repeating its edge
+   texels when the rect reaches them -- and the touched tile rows flushed. */
+static void tex_fill_rect(G3Tex *t, const uint8_t *rgba, int x0, int y0, int x1, int y1) {
+    int xe = x1 >= t->w ? t->tw : x1, ye = y1 >= t->h ? t->th : y1;
+    for (int y = y0; y < ye; y++) {
+        const uint8_t *row = rgba + (size_t)(y < t->h ? y : t->h - 1) * t->w * 4;
+        for (int x = x0; x < xe; x++) tex_put(t, x, y, row + (x < t->w ? x : t->w - 1) * 4);
+    }
+    uint32_t rowb = (uint32_t)(t->tw >> 3) * 64 * TF_BPP[t->fmt]; /* one row of 8x8 tiles */
+    uint32_t r0 = (uint32_t)y0 >> 3, r1 = ((uint32_t)ye + 7) >> 3;
+    GSPGPU_FlushDataCache((uint8_t *)t->tex.data + r0 * rowb, (r1 - r0) * rowb);
+}
+
+/* Swizzle w*h RGBA8 into t in its format (padding = the edge texels), and flush. */
+static void tex_fill(G3Tex *t, const uint8_t *rgba) { tex_fill_rect(t, rgba, 0, 0, t->w, t->h); }
+
 static inline void tex_texel(const G3Tex *t, int x, int y, float out[4]) {
-    uint32_t v = ((const uint32_t *)t->tex.data)[tile_off(x, y, t->tw) >> 2];
-    out[0] = (float)(v >> 24) / 255.0f;
-    out[1] = (float)((v >> 16) & 255) / 255.0f;
-    out[2] = (float)((v >> 8) & 255) / 255.0f;
-    out[3] = (float)(v & 255) / 255.0f;
+    uint32_t i = tile_idx(x, y, t->tw);
+    uint32_t r, g, b, a;
+    if (t->fmt == TF_LA4) {
+        uint8_t v = ((const uint8_t *)t->tex.data)[i];
+        r = g = b = (uint32_t)(v >> 4) * 17; a = (uint32_t)(v & 15) * 17;
+    } else if (t->fmt == TF_LA8) {
+        uint16_t v = ((const uint16_t *)t->tex.data)[i];
+        r = g = b = v >> 8; a = v & 255;
+    } else {
+        uint32_t v = ((const uint32_t *)t->tex.data)[i];
+        r = v >> 24; g = (v >> 16) & 255; b = (v >> 8) & 255; a = v & 255;
+    }
+    out[0] = (float)r / 255.0f;
+    out[1] = (float)g / 255.0f;
+    out[2] = (float)b / 255.0f;
+    out[3] = (float)a / 255.0f;
 }
 
 /* Nearest sample at (u, v) over the image, clamped (rasterize.ts sample). */
@@ -227,8 +281,9 @@ static G3Tex *tex_alloc_folded(int w, int h, const uint8_t *rgba) {
         memcpy(px + ((size_t)y * pw) * 4, rgba + (size_t)yl * w * 4, (size_t)w * 4);
         memcpy(px + ((size_t)y * pw + w) * 4, rgba + (size_t)yr * w * 4, (size_t)w * 4);
     }
-    G3Tex *t = tex_alloc(pw, ph, 0, 0);
+    G3Tex *t = tex_alloc_fmt(pw, ph, 0, 0, pick_fmt(rgba, w, h));
     if (t) { tex_fill(t, px); t->fold = FOLD_ROW; t->lw = w; t->lh = h; }
+    if (t) g3log("texUpload %dx%d folded: %s, %u KB", w, h, t->fmt == TF_LA4 ? "LA4" : t->fmt == TF_LA8 ? "LA8" : "RGBA8", (unsigned)(t->bytes >> 10));
     free(px);
     return t;
 }
@@ -239,7 +294,7 @@ int g3_tex_upload(int id, int w, int h, const uint8_t *rgba, size_t len, int rep
         G3Tex *f = tex_alloc_folded(w, h, rgba);
         if (f) { tex_set(id, f); return 1; }
     }
-    G3Tex *t = tex_alloc(w, h, repeat, 0);
+    G3Tex *t = tex_alloc_fmt(w, h, repeat, 0, pick_fmt(rgba, w, h));
     if (!t) { g3log("texUpload %d: cannot make %dx%d", id, w, h); return 0; }
     tex_fill(t, rgba);
     tex_set(id, t);

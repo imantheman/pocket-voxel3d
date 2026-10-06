@@ -27,9 +27,21 @@ const NBATTLES = Number(opt("--battles") ?? 8);
 
 // ---- the 3DS host's allocation of a texture (g3_render.c tex_alloc / tex_alloc_folded)
 const po2 = (n: number): number => { let p = 8; while (p < n) p <<= 1; return p; };
-function linBytes(w: number, h: number, repeat: boolean): number {
-  if (h > 1024 && !repeat && w <= 512) { const pw = w * 2, ph = Math.max(h - 512, 512); return po2(pw) * po2(ph) * 4; }
-  return po2(w) * po2(h) * 4;
+/** g3_render.c pick_fmt's bytes per texel: 1 (LA4), 2 (LA8) or 4 (RGBA8); --rgba8: always 4 (the host before it). */
+const ALL_RGBA8 = argv.includes("--rgba8");
+function texelBytes(px: Uint8Array | undefined, n: number): number {
+  if (ALL_RGBA8 || !px) return 4;
+  let la4 = true;
+  for (let o = 0; o < n * 4; o += 4) {
+    if (px[o] !== px[o + 1] || px[o + 1] !== px[o + 2]) return 4;
+    if (la4 && (px[o]! % 17 || px[o + 3]! % 17)) la4 = false;
+  }
+  return la4 ? 1 : 2;
+}
+function linBytes(w: number, h: number, repeat: boolean, px?: Uint8Array): number {
+  const bpp = texelBytes(px, w * h);
+  if (h > 1024 && !repeat && w <= 512) { const pw = w * 2, ph = Math.max(h - 512, 512); return po2(pw) * po2(ph) * bpp; }
+  return po2(w) * po2(h) * bpp;
 }
 interface Live { bytes: number; vram: boolean; site: string; w: number; h: number; born: number }
 const live = new Map<number, Live>();
@@ -53,12 +65,12 @@ const host = new DesktopHost(root);
   const up = h.texUpload.bind(host), fc = h.texFromCache.bind(host), cv = h.canvasNew.bind(host), fr = h.texFree.bind(host);
   h.texUpload = (id: number, w: number, hh: number, px: Uint8Array, rep: boolean): void => {
     const old = live.get(id);
-    live.set(id, { bytes: linBytes(w, hh, rep), vram: false, site: old?.site ?? site(), w, h: hh, born: old?.born ?? step });
+    live.set(id, { bytes: linBytes(w, hh, rep, px), vram: false, site: old?.site ?? site(), w, h: hh, born: old?.born ?? step });
     if (DRAW) up(id, w, hh, px, rep);
   };
   h.texFromCache = (id: number, p: string): [number, number] | undefined => {
     const r = fc(id, p);
-    if (r) live.set(id, { bytes: linBytes(r[0], r[1], false), vram: false, site: SITES ? `cache ${p.replace(/^data\/generated\/gba\//, "")} < ${site()}` : "", w: r[0], h: r[1], born: step });
+    if (r) live.set(id, { bytes: linBytes(r[0], r[1], false, h.raster.tex.get(id)?.px), vram: false, site: SITES ? `cache ${p.replace(/^data\/generated\/gba\//, "")} < ${site()}` : "", w: r[0], h: r[1], born: step });
     return r;
   };
   h.canvasNew = (id: number, w: number, hh: number): void => {
