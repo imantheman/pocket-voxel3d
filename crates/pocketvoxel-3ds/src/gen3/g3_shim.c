@@ -33,6 +33,7 @@
 #include "quickjs.h"
 
 int g3_tex_upload(int id, int w, int h, const uint8_t *rgba, size_t len, int repeat);
+int g3_tex_sub(int id, int w, int h, int x0, int y0, int x1, int y1, const uint8_t *rgba, size_t len);
 int g3_tex_from_cache(int id, const char *path, int *ow, int *oh);
 void g3_canvas_new(int id, int w, int h);
 void g3_tex_free(int id);
@@ -75,6 +76,60 @@ static JSValue g3_texupload(JSContext *ctx, JSValueConst t, int c, JSValueConst 
     size_t len = 0;
     const uint8_t *p = g3_bytes(ctx, v[3], &len);
     return JS_NewBool(ctx, p && g3_tex_upload(id, w, h, p, len, rep));
+}
+
+/* The bytes of a typed array (no exception tried first, as g3_bytes's
+   ArrayBuffer test throws for one: a call made hundreds of times a step). */
+static uint8_t *g3_tbytes(JSContext *ctx, JSValueConst v, size_t *len) {
+    size_t off = 0, blen = 0, bpe = 0, size = 0;
+    *len = 0;
+    JSValue ab = JS_GetTypedArrayBuffer(ctx, v, &off, &blen, &bpe);
+    if (JS_IsException(ab)) { JS_FreeValue(ctx, JS_GetException(ctx)); return NULL; }
+    uint8_t *p = JS_GetArrayBuffer(ctx, &size, ab);
+    JS_FreeValue(ctx, ab);
+    if (!p || off + blen > size) return NULL;
+    *len = blen;
+    return p + off;
+}
+
+/* g3Blit(dst, dstW, dx, dy, src, srcW, sx, sy, w, h): ImageData:paste of a
+   rect that lies inside both images (RGBA8 Uint8Arrays), a row at a time.
+   false when it does not (the guest pastes it itself). */
+static JSValue g3_blit(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 10) return JS_FALSE;
+    int32_t a[8];
+    size_t dl = 0, sl = 0;
+    uint8_t *d = g3_tbytes(ctx, v[0], &dl);
+    const uint8_t *s = g3_tbytes(ctx, v[4], &sl);
+    JS_ToInt32(ctx, &a[0], v[1]); JS_ToInt32(ctx, &a[1], v[2]); JS_ToInt32(ctx, &a[2], v[3]);
+    JS_ToInt32(ctx, &a[3], v[5]); JS_ToInt32(ctx, &a[4], v[6]); JS_ToInt32(ctx, &a[5], v[7]);
+    JS_ToInt32(ctx, &a[6], v[8]); JS_ToInt32(ctx, &a[7], v[9]);
+    int dw = a[0], dx = a[1], dy = a[2], sw = a[3], sx = a[4], sy = a[5], w = a[6], h = a[7];
+    if (!d || !s || dw <= 0 || sw <= 0 || w <= 0 || h <= 0 || dx < 0 || dy < 0 || sx < 0 || sy < 0
+        || dx + w > dw || sx + w > sw
+        || ((size_t)(dy + h) * dw * 4) > dl || ((size_t)(sy + h) * sw * 4) > sl) return JS_FALSE;
+    for (int y = 0; y < h; y++)
+        memcpy(d + ((size_t)(dy + y) * dw + dx) * 4, s + ((size_t)(sy + y) * sw + sx) * 4, (size_t)w * 4);
+    return JS_TRUE;
+}
+
+/* g3TexSub(id, w, h, rects Int32Array, n, rgba) -> true when the n rects
+   (x0 y0 x1 y1 each) were written in place (g3_render.c g3_tex_sub);
+   false: upload the whole image */
+static JSValue g3_texsub(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 6) return JS_FALSE;
+    int32_t id = 0, w = 0, h = 0, n = 0;
+    JS_ToInt32(ctx, &id, v[0]); JS_ToInt32(ctx, &w, v[1]); JS_ToInt32(ctx, &h, v[2]); JS_ToInt32(ctx, &n, v[4]);
+    size_t rl = 0, len = 0;
+    const uint8_t *rb = g3_tbytes(ctx, v[3], &rl);
+    const uint8_t *p = g3_tbytes(ctx, v[5], &len);
+    if (!rb || !p || n <= 0 || (size_t)n * 16 > rl) return JS_FALSE;
+    const int32_t *r = (const int32_t *)rb;
+    for (int k = 0; k < n; k++, r += 4)
+        if (!g3_tex_sub(id, w, h, r[0], r[1], r[2], r[3], p, len)) return JS_FALSE;
+    return JS_TRUE;
 }
 
 static JSValue g3_texfromcache(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
@@ -572,6 +627,8 @@ int qjs_register_g3(JSContext *ctx) {
     JSValue o = JS_GetPropertyStr(ctx, g, "voxel");
     if (!JS_IsObject(o)) { JS_FreeValue(ctx, o); JS_FreeValue(ctx, g); return -1; }
     JS_SetPropertyStr(ctx, o, "g3TexUpload", JS_NewCFunction(ctx, g3_texupload, "g3TexUpload", 5));
+    JS_SetPropertyStr(ctx, o, "g3TexSub", JS_NewCFunction(ctx, g3_texsub, "g3TexSub", 6));
+    JS_SetPropertyStr(ctx, o, "g3Blit", JS_NewCFunction(ctx, g3_blit, "g3Blit", 10));
     JS_SetPropertyStr(ctx, o, "g3TexFromCache", JS_NewCFunction(ctx, g3_texfromcache, "g3TexFromCache", 2));
     JS_SetPropertyStr(ctx, o, "g3Canvas", JS_NewCFunction(ctx, g3_canvas, "g3Canvas", 3));
     JS_SetPropertyStr(ctx, o, "g3TexFree", JS_NewCFunction(ctx, g3_texfree, "g3TexFree", 1));

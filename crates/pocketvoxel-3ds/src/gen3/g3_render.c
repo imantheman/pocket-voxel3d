@@ -81,6 +81,7 @@ typedef struct G3Tex {
     uint8_t vram;        /* allocated in VRAM (canvases, the frame) */
     uint8_t fmt;         /* TF_*: how the texels are stored */
     uint32_t bytes;      /* the allocation's size (g3_tex_stats) */
+    uint32_t used;       /* the last frame (frame_no) that looked it up to draw */
 } G3Tex;
 
 /* Texel formats. An upload whose every pixel a smaller format holds exactly
@@ -151,7 +152,16 @@ static void retire_tick(void) {
 
 static int po2(int n) { int p = 8; while (p < n) p <<= 1; return p; }
 
-static G3Tex *tex_get(int id) { return (id > 0 && id < ntexs) ? texs[id] : NULL; }
+/* Frames rendered (g3_frame_offscreen); a texture drawn in the latest may
+   still be read by the GPU while the guest runs. */
+static uint32_t frame_no;
+
+/* Texture `id` to draw with (stamped as used this frame: see g3_tex_sub). */
+static G3Tex *tex_get(int id) {
+    G3Tex *t = (id > 0 && id < ntexs) ? texs[id] : NULL;
+    if (t) t->used = frame_no;
+    return t;
+}
 
 static void tex_set(int id, G3Tex *t) {
     if (id <= 0) { tex_retire(t); return; }
@@ -301,6 +311,45 @@ int g3_tex_upload(int id, int w, int h, const uint8_t *rgba, size_t len, int rep
     if (!t) { g3log("texUpload %d: cannot make %dx%d", id, w, h); return 0; }
     tex_fill(t, rgba);
     tex_set(id, t);
+    return 1;
+}
+
+/* The rect x0..x1-1, y0..y1-1 of texture id's w x h image (RGBA8, the whole
+   image's pixels) written into it in place -- a tile animation's few cells
+   instead of the whole atlas swizzled into a new allocation. 0 when it
+   cannot be done so, and the caller uploads the whole image instead: the
+   texture missing or not this image as uploaded (resized, folded), drawn
+   in the frame rendered last (the GPU may still be reading it), or a pixel
+   in the rect its format cannot hold. */
+int g3_tex_sub(int id, int w, int h, int x0, int y0, int x1, int y1, const uint8_t *rgba, size_t len) {
+    G3Tex *t = (id > 0 && id < ntexs) ? texs[id] : NULL; /* (not tex_get: not a draw) */
+    if (!t || t->canvas || t->fold || t->w != w || t->h != h || !rgba || len < (size_t)w * h * 4) return 0;
+    if (t->used == frame_no) {
+        /* the GPU may still read it: a copy of its texels takes its place
+           (the old one is retired as an upload's would be), and the rect
+           goes into the copy -- far cheaper than swizzling the whole image */
+        G3Tex *n = tex_alloc_fmt(t->w, t->h, t->repeat, 0, t->fmt);
+        if (!n) return 0;
+        memcpy(n->tex.data, t->tex.data, t->bytes);
+        GSPGPU_FlushDataCache(n->tex.data, n->bytes);
+        tex_set(id, n);
+        t = n;
+    }
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > w) x1 = w;
+    if (y1 > h) y1 = h;
+    if (x1 <= x0 || y1 <= y0) return 1;
+    if (t->fmt != TF_RGBA8) {
+        for (int y = y0; y < y1; y++) {
+            const uint8_t *p = rgba + ((size_t)y * w + x0) * 4;
+            for (int x = x0; x < x1; x++, p += 4) {
+                if (p[0] != p[1] || p[1] != p[2]) return 0;
+                if (t->fmt == TF_LA4 && (p[0] % 17 || p[3] % 17)) return 0;
+            }
+        }
+    }
+    tex_fill_rect(t, rgba, x0, y0, x1, y1);
     return 1;
 }
 
@@ -820,7 +869,6 @@ typedef struct {
 
 #define NVARS 48
 static Var vars[NVARS];
-static uint32_t frame_no;
 
 static void fx_pixel_cpu(int effect, const float *t, const float *c, const float *q, float tu, float tv,
                          const G3Tex *mask, float out[4], int *discard) {

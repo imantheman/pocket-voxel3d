@@ -268,11 +268,12 @@ function gameMain(bench: boolean): void {
         `${++prof.memEvery % 6 === 1 ? "; " + memText(true) : ""}`);
       const np = nativeProf;
       // (sound calls alone are every tick's: the line is for loads and reads)
-      if (np.up + np.cache + np.rd + np.ex + np.png > 0) {
+      if (np.up + np.sub + np.cache + np.rd + np.ex + np.png > 0) {
         console.log(`[pv] g3 natives over ${f} frames: texUpload ${np.up} (${Math.round(np.upKB)} KB, ${(np.upUs / 1000).toFixed(0)} ms), ` +
+          `texSub ${np.sub} (${Math.round(np.subKB)} KB, ${(np.subUs / 1000).toFixed(0)} ms), ` +
           `texFromCache ${np.cache} (${(np.cacheUs / 1000).toFixed(0)} ms), pngDecode ${np.png} (${(np.pngUs / 1000).toFixed(0)} ms), read ${np.rd} (${(np.rdUs / 1000).toFixed(0)} ms), exists ${np.ex} (${(np.exUs / 1000).toFixed(0)} ms), ` +
           `sound ${np.au} (${(np.auUs / 1000).toFixed(0)} ms: ${Object.entries(np.auTop).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, v]) => k + " " + v).join(", ")})`);
-        np.up = np.upUs = np.upKB = np.cache = np.cacheUs = np.rd = np.rdUs = np.ex = np.exUs = np.au = np.auUs = np.png = np.pngUs = 0;
+        np.up = np.upUs = np.upKB = np.sub = np.subUs = np.subKB = np.cache = np.cacheUs = np.rd = np.rdUs = np.ex = np.exUs = np.au = np.auUs = np.png = np.pngUs = 0;
         np.auTop = {};
       }
       (globalThis as { __g3ProfDump?: () => void }).__g3ProfDump?.(); // tools/gen3/qjs_loadprof_gen.ts --device builds only

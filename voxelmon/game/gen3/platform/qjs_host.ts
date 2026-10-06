@@ -11,6 +11,7 @@ import { setHost, type G3Host } from "./host.ts";
 import { memorySaveStore, setSaveStore, type SaveStore } from "./savefs.ts";
 import { setAudio, type CryParams, type G3Audio, type SeOptions } from "./audio.ts";
 import { setNativeBytes } from "../../../import/gen3/lua.ts";
+import { setNativeBlit } from "./image.ts";
 
 const n = native;
 export const clock = (): number => (n.now ? n.now() : Date.now() * 1000);
@@ -18,15 +19,19 @@ export const clock = (): number => (n.now ? n.now() : Date.now() * 1000);
 const pngNative = n as typeof n & {
   g3PngDecode?(png: string): [number, number, Uint8Array] | undefined;
   g3Bytes?(s: string): Uint8Array | undefined;
+  g3TexSub?(id: number, w: number, h: number, rects: Int32Array, n: number, rgba: Uint8Array): boolean;
+  g3Blit?(dst: Uint8Array, dw: number, dx: number, dy: number, src: Uint8Array, sw: number, sx: number, sy: number, w: number, h: number): boolean;
 };
 // byte strings to bytes in C (g3_shim.c g3Bytes), for lua.ts toBytes
 if (pngNative.g3Bytes) setNativeBytes((s) => pngNative.g3Bytes!(s));
+// ImageData:paste's rect copies in C (g3_shim.c g3Blit)
+if (pngNative.g3Blit) setNativeBlit(pngNative.g3Blit);
 
 /** Draw-list timing, summed until read (main.ts's perf lines). */
 export const drawProf = { conv: 0, len: 0 };
 
 /** The other natives' calls and time (us), summed until main.ts's perf line reads them. */
-export const nativeProf = { up: 0, upUs: 0, upKB: 0, cache: 0, cacheUs: 0, rd: 0, rdUs: 0, ex: 0, exUs: 0, au: 0, auUs: 0, png: 0, pngUs: 0, auTop: {} as Record<string, number> };
+export const nativeProf = { up: 0, upUs: 0, upKB: 0, sub: 0, subUs: 0, subKB: 0, cache: 0, cacheUs: 0, rd: 0, rdUs: 0, ex: 0, exUs: 0, au: 0, auUs: 0, png: 0, pngUs: 0, auTop: {} as Record<string, number> };
 
 /**
  * Cache reads while `on` (main.ts turns it on for Game3.load): each read's
@@ -49,6 +54,18 @@ class QuickJsG3Host implements G3Host {
     n.g3TexUpload!(id, w, h, rgba, repeat);
     nativeProf.up++; nativeProf.upUs += clock() - t; nativeProf.upKB += (w * h * 4) / 1024;
   }
+  // a changed rect written in place (g3_shim.c g3TexSub), where the binary has it
+  texSub = pngNative.g3TexSub
+    ? (id: number, w: number, h: number, rects: Int32Array, n: number, rgba: Uint8Array): boolean => {
+      const t = clock();
+      const ok = pngNative.g3TexSub!(id, w, h, rects, n, rgba);
+      if (ok) {
+        nativeProf.sub++; nativeProf.subUs += clock() - t;
+        for (let k = 0; k < n; k++) nativeProf.subKB += ((rects[k * 4 + 2]! - rects[k * 4]!) * (rects[k * 4 + 3]! - rects[k * 4 + 1]!) * 4) / 1024;
+      }
+      return ok;
+    }
+    : undefined;
   texFromCache(id: number, path: string): [number, number] | undefined {
     const t = clock();
     const r = n.g3TexFromCache!(id, path);

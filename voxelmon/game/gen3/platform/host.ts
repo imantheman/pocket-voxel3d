@@ -6,6 +6,13 @@
 export interface G3Host {
   /** Upload RGBA8 pixels as texture `id` (replacing any texture with that id). */
   texUpload(id: number, w: number, h: number, rgba: Uint8Array, repeat: boolean): void;
+  /**
+   * Optional: `n` rects of texture `id`'s w x h image (rects[i*4..]: x0 y0
+   * x1 y1, ends exclusive) replaced in place from `rgba` (the whole image's
+   * pixels); false when the host could not (the caller then uploads the
+   * whole image).
+   */
+  texSub?(id: number, w: number, h: number, rects: Int32Array, n: number, rgba: Uint8Array): boolean;
   /** Make texture `id` from a cooked image in the cache (`path`); its [w, h], or undefined. */
   texFromCache(id: number, path: string): [number, number] | undefined;
   /** Make texture `id` a w x h render target (a canvas). */

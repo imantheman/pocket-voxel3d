@@ -11,6 +11,28 @@ import { toBytes } from "../../../import/gen3/lua.ts";
 
 let nextTexId = 1;
 export function allocTexId(): number { return nextTexId++; }
+/** Image.sync's scratch: the changed rects. */
+const SUB: number[] = [];
+let SUB32 = new Int32Array(4 * 64);
+/** Rects a segment keeps before they become their bounding rect. */
+const MAX_RECTS = 64;
+/** The rects x0 y0 x1 y1... in r as their one bounding rect. */
+function boundRects(r: number[]): void {
+  let x0 = 1 << 30, y0 = 1 << 30, x1 = -(1 << 30), y1 = -(1 << 30);
+  for (let i = 0; i < r.length; i += 4) {
+    if (r[i]! < x0) x0 = r[i]!;
+    if (r[i + 1]! < y0) y0 = r[i + 1]!;
+    if (r[i + 2]! > x1) x1 = r[i + 2]!;
+    if (r[i + 3]! > y1) y1 = r[i + 3]!;
+  }
+  r.length = 4;
+  r[0] = x0; r[1] = y0; r[2] = x1; r[3] = y1;
+}
+
+type Blit = (dst: Uint8Array, dw: number, dx: number, dy: number, src: Uint8Array, sw: number, sx: number, sy: number, w: number, h: number) => boolean;
+/** The host's rect copy (g3_shim.c g3Blit), where the binary has it: true when it copied. */
+let nativeBlit: Blit | undefined;
+export function setNativeBlit(f: Blit): void { nativeBlit = f; }
 
 // ---- host textures given back (not LÖVE's API; LÖVE frees on GC)
 //
@@ -118,18 +140,99 @@ export function watchedTextures(): number { return watchRefs.length; }
 export class ImageData extends BaseImageData {
   /** Bumped on every change, so an Image made from it can tell it is stale. */
   version = 0;
+
+  // Where it changed (not LÖVE): an Image made from it uploads only the
+  // rects that changed since its last upload when the host can do that
+  // (G3Host.texSub) -- the field's tile animations paste a bank of 16x16
+  // cells into a whole atlas. Changes are kept in segments, one per upload
+  // of any Image from this data (from version, to version, rects x0 y0 x1 y1
+  // with exclusive ends), and the open one since the last upload. A change
+  // made without the methods below (px written and version bumped by hand)
+  // leaves `tracked` behind `version`: the next upload is then a whole one.
+  /** The version after the last change these methods saw. */
+  private tracked = 0;
+  /** The open segment: from this version, these rects. */
+  private segFrom = 0;
+  private rects: number[] = [];
+  private segs: { from: number; to: number; rects: number[] }[] = [];
+
+  private mark(x0: number, y0: number, x1: number, y1: number): void {
+    const r = this.rects, n = r.length;
+    if (n >= 4 && r[n - 3] === y0 && r[n - 1] === y1 && r[n - 2] === x0) r[n - 2] = x1; // a run along its rows
+    else if (n >= 4 && x0 >= r[n - 4]! && y0 >= r[n - 3]! && x1 <= r[n - 2]! && y1 <= r[n - 1]!) { /* inside the last */ }
+    else if (n >= MAX_RECTS * 4) { r.push(x0, y0, x1, y1); boundRects(r); }
+    else r.push(x0, y0, x1, y1);
+    this.tracked = this.version;
+  }
+
+  /**
+   * The rects holding every change since version `from` (an upload's), into
+   * `out` (x0 y0 x1 y1 each, inside the image); their count, or -1 when that
+   * is not known (an untracked change, or `from` older than the segments kept).
+   */
+  changedSince(from: number, out: number[]): number {
+    if (this.tracked !== this.version) return -1;
+    out.length = 0;
+    for (const v of this.rects) out.push(v);
+    let at = this.segFrom;
+    const s = this.segs;
+    for (let i = s.length - 1; at > from && i >= 0; i--) {
+      if (s[i]!.to !== at) return -1;
+      at = s[i]!.from;
+      for (const v of s[i]!.rects) out.push(v);
+    }
+    if (at !== from) return -1;
+    if (out.length > MAX_RECTS * 8) boundRects(out);
+    let n = 0;
+    for (let i = 0; i < out.length; i += 4) {
+      const x0 = Math.max(0, out[i]!), y0 = Math.max(0, out[i + 1]!), x1 = Math.min(this.w, out[i + 2]!), y1 = Math.min(this.h, out[i + 3]!);
+      if (x1 <= x0 || y1 <= y0) continue;
+      out[n * 4] = x0; out[n * 4 + 1] = y0; out[n * 4 + 2] = x1; out[n * 4 + 3] = y1;
+      n++;
+    }
+    out.length = n * 4;
+    return n;
+  }
+
+  /** An Image uploaded this version: the open segment closes here. */
+  uploadedNow(): void {
+    if (this.tracked !== this.version) {
+      this.segs.length = 0;
+      this.tracked = this.version;
+    } else if (this.rects.length) {
+      this.segs.push({ from: this.segFrom, to: this.version, rects: this.rects });
+      if (this.segs.length > 4) this.segs.shift();
+      this.rects = [];
+    }
+    this.segFrom = this.version;
+  }
+
   override setPixel(x: number, y: number, r: number, g: number, b: number, a = 1): void {
     super.setPixel(x, y, r, g, b, a);
     this.version++;
+    if (!this.bulk) this.mark(x, y, x + 1, y + 1);
   }
+  /** Inside mapPixel: its rect is marked once, not each pixel. */
+  private bulk = false;
   override paste(src: BaseImageData, dx: number, dy: number, sx?: number, sy?: number, sw?: number, sh?: number): void {
-    super.paste(src, dx, dy, sx, sy, sw, sh);
+    // a rect inside both images, by the host's copy where it has one (NOT
+    // FAITHFUL: performance, the same bytes) -- the base's row copies make a
+    // typed-array view per row, and a tile animation step pastes a whole
+    // bank of 16x16 cells
+    if (!(nativeBlit && src !== this
+        && nativeBlit(this.px, this.w, dx, dy, src.px, src.w, sx ?? 0, sy ?? 0, sw ?? src.w, sh ?? src.h))) {
+      super.paste(src, dx, dy, sx, sy, sw, sh);
+    }
     this.version++;
+    this.mark(dx, dy, dx + (sw ?? src.w), dy + (sh ?? src.h));
   }
   override mapPixel(fn: (x: number, y: number, r: number, g: number, b: number, a: number) => [number, number, number, number],
     x0?: number, y0?: number, w?: number, h?: number): void {
-    super.mapPixel(fn, x0, y0, w, h);
+    this.bulk = true;
+    try { super.mapPixel(fn, x0, y0, w, h); } finally { this.bulk = false; }
     this.version++;
+    const ax = x0 ?? 0, ay = y0 ?? 0;
+    this.mark(ax, ay, ax + (w ?? this.w), ay + (h ?? this.h));
   }
   clone(): ImageData {
     return new ImageData(this.w, this.h, this.px.slice());
@@ -187,10 +290,22 @@ export class Image {
 
   /** The host has this image's current pixels. */
   sync(): void {
-    if (this.data && this.uploaded !== this.data.version) {
+    const d = this.data;
+    if (d && this.uploaded !== d.version) {
       if (this.freed) { this.freed = false; unfree(this.id); }
-      getHost().texUpload(this.id, this.w, this.h, this.data.px, this.wrap === "repeat");
-      this.uploaded = this.data.version;
+      const host = getHost();
+      // only what changed since this image's last upload, where the host
+      // can write it in place (NOT FAITHFUL: performance, same pixels)
+      const n = this.uploaded >= 0 && host.texSub ? d.changedSince(this.uploaded, SUB) : -1;
+      if (n > 0) {
+        if (SUB32.length < n * 4) SUB32 = new Int32Array(n * 8);
+        for (let i = 0; i < n * 4; i++) SUB32[i] = SUB[i]!;
+      }
+      if (n !== 0 && !(n > 0 && host.texSub!(this.id, this.w, this.h, SUB32, n, d.px))) {
+        host.texUpload(this.id, this.w, this.h, d.px, this.wrap === "repeat");
+      }
+      d.uploadedNow();
+      this.uploaded = d.version;
       watch(this);
     } else if (this.freed) this.remake();
   }
@@ -218,8 +333,11 @@ export class Image {
   }
   /** Image:replacePixels(imageData) -- whole image. */
   replacePixels(d: ImageData): void {
+    // the same data again (the field's double-buffered atlases): the host
+    // holds this image's pixels as of its last upload, and sync sends what
+    // changed since
+    if (d !== this.data || this.w !== d.w || this.h !== d.h) this.uploaded = -1;
     this.data = d;
-    this.uploaded = -1;
   }
   /**
    * The host texture back (at the next frame, collectTextures). The pixels

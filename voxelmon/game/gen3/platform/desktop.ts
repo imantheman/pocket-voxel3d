@@ -32,6 +32,20 @@ export class DesktopHost implements G3Host {
   texUpload(id: number, w: number, h: number, rgba: Uint8Array, repeat: boolean): void {
     this.raster.tex.set(id, { w, h, px: rgba.slice(0, w * h * 4), repeat });
   }
+  /** Counted (tools): rects written in place, and the bytes. */
+  subs = 0;
+  subBytes = 0;
+  texSub(id: number, w: number, h: number, rects: Int32Array, n: number, rgba: Uint8Array): boolean {
+    const t = this.raster.tex.get(id);
+    if (!t || t.w !== w || t.h !== h) return false;
+    for (let k = 0; k < n; k++) {
+      const x0 = rects[k * 4]!, y0 = rects[k * 4 + 1]!, x1 = rects[k * 4 + 2]!, y1 = rects[k * 4 + 3]!;
+      for (let y = y0; y < y1; y++) t.px.set(rgba.subarray((y * w + x0) * 4, (y * w + x1) * 4), (y * w + x0) * 4);
+      this.subBytes += (x1 - x0) * (y1 - y0) * 4;
+    }
+    this.subs++;
+    return true;
+  }
   texFromCache(id: number, path: string): [number, number] | undefined {
     const bytes = this.readBytes(path);
     if (!bytes || !path.endsWith(".png")) return undefined;
