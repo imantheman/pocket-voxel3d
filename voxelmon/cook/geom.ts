@@ -40,6 +40,15 @@ export interface Quad {
    * tile colour); every other pass leaves it undefined and packs as before.
    */
   abgr?: number;
+  /**
+   * Per-corner colours (ABGR) that replace `abgr`/`shade`, and per-corner
+   * values for the vertex's spare i16 (the pak's pad, 0 otherwise). Only the
+   * FireRed cook sets them: a lean-coded vertex (cook/gen3terrain.ts, "the
+   * lean code") carries its numbers there. Every other pass leaves both
+   * undefined and packs exactly as before.
+   */
+  abgrs?: number[];
+  w?: number[];
   /** Which way this face points (see FACE). Required: it drives the cull. */
   f: Facing;
   /** A body-anchored building's own quad — exempt from edge keep-rules. */

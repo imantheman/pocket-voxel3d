@@ -683,6 +683,8 @@ export interface PackedVert {
   x: number;
   y: number;
   z: number;
+  /** The spare i16 (written as 0 when undefined): FireRed's lean code. */
+  w?: number;
 }
 
 export interface PackedMesh {
@@ -728,14 +730,16 @@ function packQuads(quads: Quad[], uvt: UvTransform): PackedMesh {
       const [x, y, z] = q.c[i];
       const [uPx, vPx] = q.uv ? q.uv[i] : [q.u ?? 0, q.v ?? 0];
       const shade = typeof q.shade === "number" ? q.shade : q.shade[i];
-      verts.push({
+      const pv: PackedVert = {
         u: uPx / uvt.pageW,
         v: (vPx + uvt.baseY) / uvt.pageH,
-        abgr: q.abgr ?? shadeColor(shade),
+        abgr: q.abgrs ? q.abgrs[i]! : (q.abgr ?? shadeColor(shade)),
         x: Math.round(x),
         y: Math.round(y),
         z: Math.round(z),
-      });
+      };
+      if (q.w) pv.w = q.w[i]!;
+      verts.push(pv);
     }
     indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
   }

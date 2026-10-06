@@ -230,7 +230,8 @@ function instanceTrees(
       for (const tri of tris) {
         for (const v of tri) {
           const moved: PackedVert = { u: v.u, v: v.v, abgr: v.abgr, x: v.x - ox, y: v.y, z: v.z - oz };
-          const k = `${moved.x},${moved.y},${moved.z},${moved.u},${moved.v},${moved.abgr}`;
+          if (v.w !== undefined) moved.w = v.w;
+          const k = `${moved.x},${moved.y},${moved.z},${moved.u},${moved.v},${moved.abgr},${moved.w ?? 0}`;
           let at = seen.get(k);
           if (at === undefined) {
             at = verts.length;
@@ -305,7 +306,7 @@ function instanceTrees(
       verts.i16(v.x);
       verts.i16(v.y);
       verts.i16(v.z);
-      verts.i16(0);
+      verts.i16(v.w ?? 0);
     }
     for (const i of mesh.indices) indexPool.u16(i);
     vertCount += mesh.verts.length;
