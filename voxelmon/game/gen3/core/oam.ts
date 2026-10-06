@@ -62,6 +62,11 @@ export interface Sprite {
   objBlend?: any;
   _id?: number;
   _oamSortY?: number;
+  /** buildOamBuffer's sprite_priority_key, once a frame */
+  _oamKey?: number;
+  /** its pool slot and the sort's stamp (buildOamBuffer) */
+  _oamSlot?: number;
+  _oamStamp?: number;
   [k: string]: any;
 }
 
@@ -327,7 +332,9 @@ function blit_sprite(s: Sprite): void {
   const clip = s.clip ?? Oam._clip;
   if (clip != null && (clip.w <= 0 || clip.h <= 0)) return;
   const affine = s.affineScale;
-  if (fx == null && blend == null && clip == null) {
+  // No clip and an fx that draws plainly (Fx.withClip and Fx.draw would
+  // just call through): skip building their closures.
+  if (clip == null && !Fx.active(fx, blend)) {
     if (affine != null) blit_affine(s); else blit_plain(s);
     return;
   }
@@ -337,7 +344,11 @@ function blit_sprite(s: Sprite): void {
 
 // Lua: oam.lua:599
 function blit_plain(s: Sprite): void {
-  const [tlx, tly] = Oam.oamTopLeft(s);
+  // Oam.oamTopLeft(s), without building its pair (a per-sprite path)
+  const tlx = (s.x ?? 0) + (s.x2 ?? 0) + (s.centerToCornerVecX ?? 0)
+    + (Oam._coordOffsetX ?? 0);
+  const tly = (s.y ?? 0) + (s.y2 ?? 0) + (s.centerToCornerVecY ?? 0)
+    + (Oam._coordOffsetY ?? 0);
   const img = s.image, q = s.quad;
   if (!img) return;
   const sx = s.oam.hFlip ? -1 : 1;
@@ -364,6 +375,36 @@ function blit_plain(s: Sprite): void {
 }
 
 const drawable = (s: Sprite): boolean => s.inUse && !s.invisible && !!s.image;
+
+// sort_sprites_pret and sort_sprites over the keys buildOamBuffer stored
+// (_oamKey, _oamSortY), for when every key is a plain number: the same
+// answers without recomputing sprite_priority_key at each comparison.
+function pret_before(a: Sprite, b: Sprite): boolean {
+  const pa = a._oamKey!, pb = b._oamKey!;
+  if (pa !== pb) return pa > pb;
+  const ya = a._oamSortY!, yb = b._oamSortY!;
+  if (ya !== yb) return ya < yb;
+  return (a._id ?? 0) > (b._id ?? 0);
+}
+function plain_before(a: Sprite, b: Sprite): boolean {
+  const pa = a._oamKey!, pb = b._oamKey!;
+  if (pa !== pb) return pa < pb;
+  return a._oamSortY! < b._oamSortY!;
+}
+// The same orders with pool slot last: what lt.ts's stable sort from pool
+// order gives, as one total order, so any sort reaches the same list.
+function pret_total(a: Sprite, b: Sprite): boolean {
+  if (pret_before(a, b)) return true;
+  if (pret_before(b, a)) return false;
+  return a._oamSlot! < b._oamSlot!;
+}
+function plain_total(a: Sprite, b: Sprite): boolean {
+  if (plain_before(a, b)) return true;
+  if (plain_before(b, a)) return false;
+  return a._oamSlot! < b._oamSlot!;
+}
+const sortScratch: Sprite[] = [];
+let sortStamp = 0;
 
 export const Oam = {
   MAX_SPRITES: 64,
@@ -680,15 +721,28 @@ export const Oam = {
     ensure_pool();
     const pool = Oam._sprites!;
     let n = 0;
+    // Plain numbers in every key (the usual case) let the sort compare the
+    // stored keys; anything else (a string, NaN) keeps the original path.
+    let numeric = true;
     for (let i = 0; i <= Oam.MAX_SPRITES - 1; i++) {
       const s = pool[i]!;
       if (drawable(s)) {
-        const [, y] = Oam.oamTopLeft(s);
+        // Oam.oamTopLeft(s)'s y, without building its pair
+        const y = (s.y ?? 0) + (s.y2 ?? 0) + (s.centerToCornerVecY ?? 0)
+          + (Oam._coordOffsetY ?? 0);
         s._oamSortY = y;
+        s._oamSlot = i;
+        const k = sprite_priority_key(s);
+        s._oamKey = k;
+        const id = s._id ?? 0;
+        if (typeof y !== "number" || y !== y || typeof k !== "number" || k !== k
+          || typeof id !== "number" || id !== id) numeric = false;
         n = n + 1;
       }
     }
-    const cmp = pretOrder ? sort_sprites_pret : sort_sprites;
+    const cmp = numeric
+      ? (pretOrder ? pret_before : plain_before)
+      : (pretOrder ? sort_sprites_pret : sort_sprites);
     // Cache: last frame's sorted list.  Same length, every entry still drawable
     // and still in order means it holds exactly this frame's sprites (entries
     // are distinct pool slots), so the sort can be skipped.
@@ -709,16 +763,48 @@ export const Oam = {
     }
     if (!ok) {
       sorted = sorted ?? seq<Sprite>();
-      for (let i = len(sorted); i >= 1; i--) sorted[i] = null;
       let k = 0;
-      for (let i = 0; i <= Oam.MAX_SPRITES - 1; i++) {
-        const s = pool[i]!;
-        if (drawable(s)) {
-          k = k + 1;
-          sorted[k] = s;
+      if (numeric) {
+        // An insertion sort under the total order, from last frame's order
+        // (sprites that move a little stay nearly sorted), then any sprite
+        // new this frame; the total order gives lt.ts sort's list.
+        const tot = pretOrder ? pret_total : plain_total;
+        const a = sortScratch;
+        a.length = 0;
+        const st = ++sortStamp;
+        if (Oam._sortedPool === Oam._sprites) {
+          for (let i = 1, m = len(sorted); i <= m; i++) {
+            const s: Sprite | null = sorted[i];
+            if (s != null && drawable(s) && s._oamStamp !== st && pool[s._oamSlot!] === s) {
+              s._oamStamp = st;
+              a.push(s);
+            }
+          }
         }
+        for (let i = 0; i <= Oam.MAX_SPRITES - 1; i++) {
+          const s = pool[i]!;
+          if (drawable(s) && s._oamStamp !== st) { s._oamStamp = st; a.push(s); }
+        }
+        for (let i = 1; i < a.length; i++) {
+          const s = a[i]!;
+          let j = i - 1;
+          while (j >= 0 && tot(s, a[j]!)) { a[j + 1] = a[j]!; j--; }
+          a[j + 1] = s;
+        }
+        for (let i = len(sorted); i >= 1; i--) sorted[i] = null;
+        for (let i = 0; i < a.length; i++) sorted[i + 1] = a[i];
+        a.length = 0;
+      } else {
+        for (let i = len(sorted); i >= 1; i--) sorted[i] = null;
+        for (let i = 0; i <= Oam.MAX_SPRITES - 1; i++) {
+          const s = pool[i]!;
+          if (drawable(s)) {
+            k = k + 1;
+            sorted[k] = s;
+          }
+        }
+        sort(sorted, cmp);
       }
-      sort(sorted, cmp);
       Oam._sorted = sorted;
       Oam._sortedPool = Oam._sprites;
     }
