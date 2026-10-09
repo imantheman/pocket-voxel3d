@@ -70,6 +70,7 @@ extern "C" {
     fn g3_set_bytecode(p: *const u8, n: usize);
     fn g3_files_root(root: *const u8);
     fn g3_save_root(root: *const u8);
+    fn g3_heap_info(asked_kb: *mut u32, got_kb: *mut u32, steps: *mut u32);
     fn g3_host_keys_get() -> u32;
     fn g3_cmd_used(size: *mut i32) -> i32;
     fn g3_world_init(wsh: *const u8, wlen: u32, msh: *const u8, mlen: u32) -> i32;
@@ -125,6 +126,13 @@ pub fn size_pak_cache() {
 /// the guest finds it at load) and the gen3 natives.
 pub fn before_guest() {
     let _ = std::fs::create_dir_all(g3_root!());
+    // the app heap g3_heap.c's start asked for and got (the kernel can grant
+    // less than the resource limit reports; the start steps down until it fits)
+    {
+        let (mut a, mut g, mut s) = (0u32, 0u32, 0u32);
+        unsafe { g3_heap_info(&mut a, &mut g, &mut s) };
+        dlog(&format!("[pv] g3 heap: asked {} KB, got {} KB ({} step(s) down)", a, g, s));
+    }
     // the cache/pack reader's folder (g3_files.c defaults to FireRed's)
     unsafe { g3_files_root(concat!(g3_root!(), "\0").as_ptr()) };
     // the save store (g3_save.c): the game's saves and options, under save/
