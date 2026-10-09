@@ -1552,6 +1552,11 @@ static mut DRAWN: u32 = 0;
 /// the number a slow city is judged by.
 static mut EYE_VERTS: [u32; 2] = [0; 2];
 static mut EYE_DRAWS: [u32; 2] = [0; 2];
+/// ...and the vertices those draws fetch and shade: the same as EYE_VERTS
+/// for plain triangles, about two thirds of it indexed (each quad corner
+/// once; the GPU's post-transform cache catches the corner two triangles
+/// share).
+static mut EYE_SHADED: [u32; 2] = [0; 2];
 
 extern "C" {
     /// citro3d: how full the GPU command buffer is, 0..1, at the call.
@@ -1586,6 +1591,7 @@ struct BenchAcc {
     frames: u32,
     verts: [u64; 2],
     draws: [u64; 2],
+    shaded: [u64; 2],
     cpu_ms: f32,
     cpu_max: f32,
     cull_us: f32,
@@ -2896,7 +2902,14 @@ struct Span {
     occludable: bool,
     start: usize,
     end: usize,
+    /// Where the span's indices are in MapGeom::idx (it is drawn indexed:
+    /// start..end are its vertices, one per corner the pak stores), or
+    /// NO_IDX (start..end are whole triangles, three vertices each).
+    idx: u32,
 }
+
+/// Span::idx of a span drawn as plain triangles.
+const NO_IDX: u32 = u32::MAX;
 
 /// A stretch of one GPU slice, in draw order, with the box of the
 /// triangles in it: the unit the per-eye frustum test keeps or skips.
@@ -2912,11 +2925,16 @@ struct Span {
 /// the same order as before.
 #[derive(Clone, Copy)]
 struct Run {
-    /// Vertex range in the slice, end exclusive.
+    /// The run's range in the slice, end exclusive: vertices for a plain
+    /// slice, indices for an indexed one (GpuSpan::idx).
     start: u16,
     end: u16,
-    bmin: [i16; 3],
-    bmax: [i16; 3],
+    /// The vertices drawing it fetches and shades: its range for a plain
+    /// slice, the stretch of the slice its indices reach for an indexed one.
+    shaded: u16,
+    /// Its box, already widened by FRUSTUM_PAD.
+    lo: [f32; 3],
+    hi: [f32; 3],
 }
 
 /// Triangles per run: small enough to follow the screen edge, big enough
@@ -2928,35 +2946,124 @@ const RUN_TRIS: usize = 128;
 struct GpuSpan {
     span: Span,
     bi: buffer::Info,
+    /// Indexed (Span::idx): the triangles' indices into `bi`, in linear
+    /// memory. None: `bi` is whole triangles.
+    idx: Option<buffer::Buffer>,
     runs: Vec<Run>,
 }
 
-/// Cut a slice's vertices (whole triangles) into runs and box each one.
-fn runs_of(verts: &[Vertex]) -> Vec<Run> {
+/// Cut a slice into runs of whole triangles and box each one: by vertex
+/// for a plain slice, by index for an indexed one.
+fn runs_of(verts: &[Vertex], idx: Option<&[u16]>) -> Vec<Run> {
     let step = RUN_TRIS * 3;
-    let mut runs = Vec::with_capacity(verts.len().div_ceil(step));
+    let n = idx.map_or(verts.len(), |ix| ix.len());
+    let mut runs = Vec::with_capacity(n.div_ceil(step));
     let mut at = 0usize;
-    while at < verts.len() {
-        let end = (at + step).min(verts.len());
-        let mut bmin = [i16::MAX; 3];
-        let mut bmax = [i16::MIN; 3];
-        for v in &verts[at..end] {
+    while at < n {
+        let end = (at + step).min(n);
+        let mut lo = [f32::MAX; 3];
+        let mut hi = [f32::MIN; 3];
+        let mut grow = |v: &Vertex| {
             for c in 0..3 {
-                if v.pos[c] < bmin[c] { bmin[c] = v.pos[c]; }
-                if v.pos[c] > bmax[c] { bmax[c] = v.pos[c]; }
+                let p = v.pos[c] as f32;
+                if p < lo[c] { lo[c] = p; }
+                if p > hi[c] { hi[c] = p; }
             }
+        };
+        let shaded = match idx {
+            None => {
+                verts[at..end].iter().for_each(&mut grow);
+                end - at
+            }
+            Some(ix) => {
+                let (mut a, mut b) = (usize::MAX, 0usize);
+                for &i in &ix[at..end] {
+                    let i = i as usize;
+                    if let Some(v) = verts.get(i) { grow(v); }
+                    a = a.min(i);
+                    b = b.max(i);
+                }
+                b + 1 - a.min(b)
+            }
+        };
+        for c in 0..3 {
+            lo[c] -= FRUSTUM_PAD;
+            hi[c] += FRUSTUM_PAD;
         }
-        runs.push(Run { start: at as u16, end: end as u16, bmin, bmax });
+        runs.push(Run { start: at as u16, end: end as u16, shaded: shaded.min(65535) as u16, lo, hi });
         at = end;
     }
     runs
 }
 
-/// One GPU slice up, with its runs (None: linear could not take it).
-fn gpu_span(span: Span, verts: &[Vertex], attr_info: &attrib::Info) -> Option<GpuSpan> {
+/// One GPU slice up -- its vertices, and its indices when it is indexed --
+/// with its runs (None: linear could not take it).
+fn gpu_span(span: Span, verts: &[Vertex], idx: Option<&[u16]>, attr_info: &attrib::Info) -> Option<GpuSpan> {
     let mut bi = buffer::Info::new();
     bi.add(buffer::Buffer::new(verts), attr_info.permutation()).ok()?;
-    Some(GpuSpan { span, bi, runs: runs_of(verts) })
+    let ib = idx.map(buffer::Buffer::new);
+    Some(GpuSpan { span, bi, idx: ib, runs: runs_of(verts, idx) })
+}
+
+/// Linear has room for this many bytes, past the reserve (linear_fits,
+/// counted in bytes for a slice that brings its indices).
+fn linear_fits_bytes(bytes: usize) -> bool {
+    unsafe_free_kb() > (bytes / 1024) as u32 + LINEAR_RESERVE_KB
+}
+
+extern "C" {
+    fn C3D_SetBufInfo(info: *mut core::ffi::c_void);
+    fn C3D_DrawArrays(primitive: u32, first: i32, size: i32);
+    fn C3D_DrawElements(primitive: u32, count: i32, type_: i32, indices: *const core::ffi::c_void);
+}
+/// GPU_TRIANGLES, and citro3d's C3D_UNSIGNED_SHORT.
+const GPU_TRIANGLES: u32 = 0;
+const C3D_UNSIGNED_SHORT: i32 = 1;
+
+/// One range of a slice drawn: `count` vertices (plain) or indices
+/// (indexed) from `first`. citro3d straight, not Frame::draw_arrays, so a
+/// slice drawn as several ranges sets its buffer once (`bound`: the slice
+/// whose buffer is set; setting it again re-sends the attribute buffers
+/// with the next draw) and so an indexed slice can draw part of its list.
+/// The world pass only; `bound` starts null in each eye's pass.
+unsafe fn draw_range(bi: &buffer::Info, idx: Option<&buffer::Buffer>, first: u16, count: u16, bound: &mut *const buffer::Info) {
+    if count == 0 {
+        return;
+    }
+    if !core::ptr::eq(*bound, bi) {
+        C3D_SetBufInfo(bi.as_raw() as *mut core::ffi::c_void);
+        *bound = bi;
+    }
+    match idx {
+        None => C3D_DrawArrays(GPU_TRIANGLES, first as i32, count as i32),
+        Some(ib) => C3D_DrawElements(
+            GPU_TRIANGLES,
+            count as i32,
+            C3D_UNSIGNED_SHORT,
+            (ib.as_ptr() as *const u16).add(first as usize) as *const core::ffi::c_void,
+        ),
+    }
+}
+
+/// A tree shape on the GPU, drawn once per copy: its slice, its indices
+/// when indexed, how many vertices or indices a copy draws, the vertices
+/// that shades, and the shape's own box.
+struct TreeBuf {
+    bi: buffer::Info,
+    idx: Option<buffer::Buffer>,
+    count: u16,
+    shaded: u16,
+    gmin: [f32; 3],
+    gmax: [f32; 3],
+}
+
+/// One eye's draw of part of a span: the slice, the range (start, end
+/// exclusive, as Run counts it), and the vertices it shades.
+struct EyeDraw<'a> {
+    g: &'a GpuSpan,
+    a: u16,
+    b: u16,
+    shaded: u32,
 }
 
 /// An eye's view volume as its four side planes in world space (a*x + b*y +
@@ -3006,6 +3113,17 @@ impl Frustum {
         }
         if all_in { 2 } else { 1 }
     }
+    /// A pre-widened box (Run::lo/hi) lies wholly outside one of the
+    /// planes: the run test, with only the far corner tried.
+    #[inline]
+    fn outside(&self, lo: &[f32; 3], hi: &[f32; 3]) -> bool {
+        self.p.iter().any(|pl| {
+            let fx = if pl[0] >= 0.0 { hi[0] } else { lo[0] };
+            let fy = if pl[1] >= 0.0 { hi[1] } else { lo[1] };
+            let fz = if pl[2] >= 0.0 { hi[2] } else { lo[2] };
+            pl[0] * fx + pl[1] * fy + pl[2] * fz + pl[3] < 0.0
+        })
+    }
 }
 
 /// The run culling is the MIT games' only: FireRed's world shader leans
@@ -3013,32 +3131,43 @@ impl Frustum {
 /// a box measured off the buffer does not bound what it draws.
 const RUN_CULL: bool = !cfg!(feature = "gen3");
 
-/// One span's draw for one eye: the slice and its vertex ranges (start, end
-/// exclusive), consecutive surviving runs merged, appended to `out`.
-fn eye_ranges<'a>(g: &'a GpuSpan, fr: &Frustum, out: &mut Vec<(&'a buffer::Info, u16, u16)>) {
+/// One span's draw for one eye: its ranges, consecutive surviving runs
+/// merged, appended to `out`.
+fn eye_ranges<'a>(g: &'a GpuSpan, fr: &Frustum, out: &mut Vec<EyeDraw<'a>>) {
     let s = &g.span;
-    if !RUN_CULL || g.runs.is_empty() {
-        out.push((&g.bi, 0, g.bi.len()));
+    let whole = |out: &mut Vec<EyeDraw<'a>>| {
+        let shaded = g.runs.iter().map(|r| r.shaded as u32).sum();
+        let b = g.runs.last().map_or(0, |r| r.end);
+        out.push(EyeDraw { g, a: 0, b, shaded });
+    };
+    if !RUN_CULL {
+        whole(out);
         return;
     }
     match fr.test(s.gmin, s.gmax) {
         0 => {}
-        2 => out.push((&g.bi, 0, g.bi.len())),
+        2 => whole(out),
         _ => {
-            let mut open: Option<(u16, u16)> = None;
+            let mut open: Option<EyeDraw<'a>> = None;
             for r in g.runs.iter() {
-                let lo = [r.bmin[0] as f32, r.bmin[1] as f32, r.bmin[2] as f32];
-                let hi = [r.bmax[0] as f32, r.bmax[1] as f32, r.bmax[2] as f32];
-                if fr.test(lo, hi) != 0 {
-                    open = match open {
-                        Some((a, b)) if b == r.start => Some((a, r.end)),
-                        Some(prev) => { out.push((&g.bi, prev.0, prev.1)); Some((r.start, r.end)) }
-                        None => Some((r.start, r.end)),
-                    };
+                if fr.outside(&r.lo, &r.hi) {
+                    continue;
+                }
+                match open.as_mut() {
+                    Some(d) if d.b == r.start => {
+                        d.b = r.end;
+                        d.shaded += r.shaded as u32;
+                    }
+                    _ => {
+                        if let Some(d) = open.take() {
+                            out.push(d);
+                        }
+                        open = Some(EyeDraw { g, a: r.start, b: r.end, shaded: r.shaded as u32 });
+                    }
                 }
             }
-            if let Some((a, b)) = open {
-                out.push((&g.bi, a, b));
+            if let Some(d) = open {
+                out.push(d);
             }
         }
     }
@@ -3049,6 +3178,8 @@ struct MapGeom {
     floor: pocketvoxel_core::scene::FloorMap,
     chunk_spans: Vec<Span>,
     verts: VertStore,
+    /// The indexed spans' index lists (Span::idx).
+    idx: Vec<Vec<u16>>,
     center: [f32; 3],
     size: f32,
     tex_rgba: Vec<u8>,
@@ -3197,10 +3328,52 @@ impl VertStore {
         }
         Some(&s[off..off + n])
     }
+    /// Drop the vertices from global index `len` on, which all lie in the
+    /// open segment (a mesh that turned out to draw nothing).
+    fn truncate(&mut self, len: usize) {
+        if let Some(i) = self.starts.len().checked_sub(1) {
+            if len >= self.starts[i] && len <= self.len {
+                self.segs[i].truncate(len - self.starts[i]);
+                self.len = len;
+            }
+        }
+    }
     /// Let the reserved segments nothing was written to go.
     fn trim(&mut self) {
         self.segs.truncate(self.starts.len());
     }
+}
+
+/// Indexed drawing: a span's vertices are the pak's own, one per quad
+/// corner, and its triangles index them -- 4 vertices a quad where the
+/// plain path wrote 6. The GPU's post-transform cache then shades a corner
+/// two triangles share once, and fetches it once. The triangles, their
+/// order and every vertex value are the plain path's, so the picture is the
+/// same. Not FireRed's: its world pass is left exactly as it was.
+const INDEXED: bool = !cfg!(feature = "gen3");
+
+/// The index side of an indexed build: one list per span (Span::idx), and
+/// how many triangle corners the build has drawn so far -- the plain
+/// path's vertex count, which is what the plan's budget is counted in.
+struct IdxBuild {
+    lists: Vec<Vec<u16>>,
+    drawn: usize,
+}
+
+/// A pak vertex as the GPU takes it, the scene tint baked in.
+#[inline]
+fn vert_of(pv: &pak::PakVert, tint: u32) -> Vertex {
+    let a = draw::modulate_rgb(pv.abgr, tint);
+    let mut v = Vertex {
+        pos: [pv.x, pv.y, pv.z, 0],
+        color: [(a & 0xff) as u8, ((a >> 8) & 0xff) as u8, ((a >> 16) & 0xff) as u8, 255],
+        uv: [pv.uf(), pv.vf()],
+    };
+    #[cfg(feature = "gen3")]
+    gen3::lean_vert(&mut v, pv.abgr, pv.pad);
+    #[cfg(not(feature = "gen3"))]
+    let _ = &mut v;
+    v
 }
 
 fn push_chunk_mesh(
@@ -3215,18 +3388,36 @@ fn push_chunk_mesh(
     chunk_spans: &mut Vec<Span>,
     cmin: &mut [f32; 3],
     cmax: &mut [f32; 3],
+    mut ix: Option<&mut IdxBuild>,
 ) {
     let m = chunk.meshes[kind];
     if m.index_count == 0 {
         return;
     }
-    if !verts.begin_span(m.index_count as usize) {
+    let vbase = m.vert_base as usize;
+    // Indexed: the mesh's vertices go in first, each once, and the
+    // triangles below keep or drop only their indices.
+    let mut list: Vec<u16> = Vec::new();
+    let room = if ix.is_some() { m.vert_count as usize } else { m.index_count as usize };
+    if ix.is_some() && list.try_reserve_exact(m.index_count as usize).is_err() {
+        return;
+    }
+    if !verts.begin_span(room) {
         return;
     }
     let span_start = verts.len();
+    if ix.is_some() {
+        for i in 0..m.vert_count as usize {
+            let Some(pv) = pak.verts.get(vbase + i) else {
+                unsafe { POOL_OOB += 1 };
+                break;
+            };
+            verts.push(vert_of(pv, tint));
+        }
+    }
+    let have = verts.len() - span_start;
     let bmin = [chunk.aabb_min[0] as f32, chunk.aabb_min[1] as f32, chunk.aabb_min[2] as f32];
     let bmax = [chunk.aabb_max[0] as f32, chunk.aabb_max[1] as f32, chunk.aabb_max[2] as f32];
-    let vbase = m.vert_base as usize;
     let mut gmin = [f32::MAX; 3];
     let mut gmax = [f32::MIN; 3];
     // Walk TRIANGLES, not loose indices, so the border ring can be dropped
@@ -3248,7 +3439,8 @@ fn push_chunk_mesh(
     let mut imax = [i32::MIN; 3];
     let tri_count = m.index_count as usize / 3;
     for t in 0..tri_count {
-        if verts.len() + 3 > budget {
+        let drawn = match ix.as_deref() { Some(b) => b.drawn, None => verts.len() };
+        if drawn + 3 > budget {
             break;
         }
         let b = m.index_base as usize + t * 3;
@@ -3272,40 +3464,58 @@ fn push_chunk_mesh(
             }
         }
         for pv in [p0, p1, p2] {
-            let a = draw::modulate_rgb(pv.abgr, tint);
             let q = [pv.x as i32, pv.y as i32, pv.z as i32];
             for c in 0..3 {
                 if q[c] < imin[c] { imin[c] = q[c]; }
                 if q[c] > imax[c] { imax[c] = q[c]; }
             }
-            verts.push(Vertex {
-                pos: [pv.x, pv.y, pv.z, 0],
-                color: [(a & 0xff) as u8, ((a >> 8) & 0xff) as u8, ((a >> 16) & 0xff) as u8, 255],
-                uv: [pv.uf(), pv.vf()],
-            }); #[cfg(feature = "gen3")] if let Some(g3v) = verts.last_mut() { gen3::lean_vert(g3v, pv.abgr, pv.pad); }
+        }
+        if let Some(bld) = ix.as_deref_mut() {
+            // pool_vert checked the three against the pool; these against
+            // the vertices this span actually holds
+            let k = [pak.indices[b], pak.indices[b + 1], pak.indices[b + 2]];
+            if k.iter().any(|&i| i as usize >= have) {
+                break;
+            }
+            list.extend_from_slice(&k);
+            bld.drawn += 3;
+        } else {
+            for pv in [p0, p1, p2] {
+                verts.push(vert_of(&pv, tint));
+            }
         }
     }
-    if verts.len() > span_start {
-        for c in 0..3 {
-            gmin[c] = imin[c] as f32;
-            gmax[c] = imax[c] as f32;
-            if gmin[c] < cmin[c] { cmin[c] = gmin[c]; }
-            if gmax[c] > cmax[c] { cmax[c] = gmax[c]; }
+    let kept = if ix.is_some() { !list.is_empty() } else { verts.len() > span_start };
+    if !kept {
+        // an indexed mesh none of whose triangles survived: its vertices go
+        verts.truncate(span_start);
+        return;
+    }
+    for c in 0..3 {
+        gmin[c] = imin[c] as f32;
+        gmax[c] = imax[c] as f32;
+        if gmin[c] < cmin[c] { cmin[c] = gmin[c]; }
+        if gmax[c] > cmax[c] { cmax[c] = gmax[c]; }
+    }
+    let idx = match ix {
+        Some(bld) => {
+            bld.lists.push(list);
+            (bld.lists.len() - 1) as u32
         }
-    }
-    if verts.len() > span_start {
-        chunk_spans.push(Span {
-            bmin,
-            bmax,
-            gmin,
-            gmax,
-            occludable: kind == TREE_HULL_KIND
-                || kind == TREE_COARSE_KIND
-                || kind == TREE_BOX_KIND,
-            start: span_start,
-            end: verts.len(),
-        });
-    }
+        None => NO_IDX,
+    };
+    chunk_spans.push(Span {
+        bmin,
+        bmax,
+        gmin,
+        gmax,
+        occludable: kind == TREE_HULL_KIND
+            || kind == TREE_COARSE_KIND
+            || kind == TREE_BOX_KIND,
+        start: span_start,
+        end: verts.len(),
+        idx,
+    });
 }
 
 /// Push one removable stamp's mesh (cut tree, the S.S. Anne hull — cooked
@@ -3343,52 +3553,96 @@ fn push_stamp_mesh(
     chunk_spans: &mut Vec<Span>,
     cmin: &mut [f32; 3],
     cmax: &mut [f32; 3],
+    ix: Option<&mut IdxBuild>,
 ) {
     let m = stamp.mesh;
     if m.index_count == 0 {
         return;
     }
-    if !verts.begin_span(m.index_count as usize) {
-        return;
-    }
-    let span_start = verts.len();
     let vbase = m.vert_base as usize;
     let mut smin = [f32::MAX; 3];
     let mut smax = [f32::MIN; 3];
-    for k in 0..m.index_count as usize {
-        if verts.len() >= budget {
-            break;
-        }
-        let Some(pv) = pool_vert(pak, vbase, m.index_base as usize + k) else {
-            break;
-        };
-        let a = draw::modulate_rgb(pv.abgr, tint);
-        let p = [pv.x as f32, pv.y as f32, pv.z as f32];
+    let mut grow = |p: [f32; 3]| {
         for c in 0..3 {
             if p[c] < cmin[c] { cmin[c] = p[c]; }
             if p[c] > cmax[c] { cmax[c] = p[c]; }
             if p[c] < smin[c] { smin[c] = p[c]; }
             if p[c] > smax[c] { smax[c] = p[c]; }
         }
-        verts.push(Vertex {
-            pos: [pv.x, pv.y, pv.z, 0],
-            color: [(a & 0xff) as u8, ((a >> 8) & 0xff) as u8, ((a >> 16) & 0xff) as u8, 255],
-            uv: [pv.uf(), pv.vf()],
-        }); #[cfg(feature = "gen3")] if let Some(g3v) = verts.last_mut() { gen3::lean_vert(g3v, pv.abgr, pv.pad); }
+    };
+    let span_start;
+    let idx;
+    if let Some(bld) = ix {
+        // indexed: the stamp's vertices once each, its indices as cooked
+        let vc = m.vert_count as usize;
+        let mut list: Vec<u16> = Vec::new();
+        if list.try_reserve_exact(m.index_count as usize).is_err() || !verts.begin_span(vc) {
+            return;
+        }
+        span_start = verts.len();
+        for i in 0..vc {
+            let Some(pv) = pak.verts.get(vbase + i) else {
+                unsafe { POOL_OOB += 1 };
+                break;
+            };
+            verts.push(vert_of(pv, tint));
+        }
+        let have = verts.len() - span_start;
+        for t in 0..m.index_count as usize / 3 {
+            if bld.drawn + 3 > budget {
+                break;
+            }
+            let b = m.index_base as usize + t * 3;
+            let Some(k) = pak.indices.get(b..b + 3) else { break };
+            if k.iter().any(|&i| i as usize >= have) {
+                unsafe { POOL_OOB += 1 };
+                break;
+            }
+            for &i in k {
+                let v = verts.slice(span_start + i as usize, 1).map(|v| v[0].pos).unwrap_or([0; 4]);
+                grow([v[0] as f32, v[1] as f32, v[2] as f32]);
+            }
+            list.extend_from_slice(k);
+            bld.drawn += 3;
+        }
+        if list.is_empty() {
+            verts.truncate(span_start);
+            return;
+        }
+        bld.lists.push(list);
+        idx = (bld.lists.len() - 1) as u32;
+    } else {
+        if !verts.begin_span(m.index_count as usize) {
+            return;
+        }
+        span_start = verts.len();
+        for k in 0..m.index_count as usize {
+            if verts.len() >= budget {
+                break;
+            }
+            let Some(pv) = pool_vert(pak, vbase, m.index_base as usize + k) else {
+                break;
+            };
+            grow([pv.x as f32, pv.y as f32, pv.z as f32]);
+            verts.push(vert_of(&pv, tint));
+        }
+        if verts.len() == span_start {
+            return;
+        }
+        idx = NO_IDX;
     }
-    if verts.len() > span_start {
-        chunk_spans.push(Span {
-            // A stamp has no chunk AABB of its own, so both boxes are its
-            // own vertex bounds — already tight.
-            bmin: smin,
-            bmax: smax,
-            gmin: smin,
-            gmax: smax,
-            occludable: true,
-            start: span_start,
-            end: verts.len(),
-        });
-    }
+    chunk_spans.push(Span {
+        // A stamp has no chunk AABB of its own, so both boxes are its
+        // own vertex bounds — already tight.
+        bmin: smin,
+        bmax: smax,
+        gmin: smin,
+        gmax: smax,
+        occludable: true,
+        start: span_start,
+        end: verts.len(),
+        idx,
+    });
 }
 
 /// How far past the shared seam a neighbour map is drawn, world px. The
@@ -3814,6 +4068,7 @@ fn strip_chunk_resident(
                 occludable: kind == TREE_BOX_KIND,
                 start: span_start,
                 end: verts.len(),
+                idx: NO_IDX,
             });
         }
     }
@@ -4114,6 +4369,7 @@ fn strip_chunk_file(
                 occludable: kind == TREE_BOX_KIND,
                 start: span_start,
                 end: verts.len(),
+                idx: NO_IDX,
             });
         }
     }
@@ -4129,7 +4385,7 @@ fn upload_spans(verts: &[Vertex], spans: &[Span], attr_info: &attrib::Info, out:
         while at < s.end && at < verts.len() {
             let n = (s.end - at).min(SPAN_PIECE).min(verts.len() - at);
             if linear_fits(n) {
-                if let Some(g) = gpu_span(Span { start: at, end: at + n, ..*s }, &verts[at..at + n], attr_info) {
+                if let Some(g) = gpu_span(Span { start: at, end: at + n, ..*s }, &verts[at..at + n], None, attr_info) {
                     out.push(g);
                 }
             }
@@ -4186,6 +4442,7 @@ fn build_map(
             floor: Default::default(),
             chunk_spans: Vec::new(),
             verts: VertStore::new(),
+            idx: Vec::new(),
             center,
             size,
             tex_rgba: vec![0u8; 8 * 8 * 4],
@@ -4221,6 +4478,7 @@ fn build_map(
 
     let mut verts = VertStore::new();
     let mut chunk_spans: Vec<Span> = Vec::new();
+    let mut ib = IdxBuild { lists: Vec::new(), drawn: 0 };
     let mut cmin = [f32::MAX; 3];
     let mut cmax = [f32::MIN; 3];
     let map = pak.maps.iter().find(|m| m.map_id == map_id).expect("map");
@@ -4268,7 +4526,7 @@ fn build_map(
         // 8 MB block per rebuild while the outgoing build still holds its own
         // eventually cannot be met on a heap its 57 MB pak has nearly filled;
         // growing by doubling reuses what it already has).
-        while budget > 0 && !verts.try_reserve(budget) {
+        while budget > 0 && !verts.try_reserve(if INDEXED { budget * 2 / 3 } else { budget }) {
             dlog(&format!(
                 "[pv] no room for {} verts ({} KB); halving the budget",
                 budget,
@@ -4286,12 +4544,24 @@ fn build_map(
         // Only if even that cannot be had is the plan made smaller, and said.
         let mut p = plan_build(all_chunks, &order, is_huge, budget, stamp_verts);
         loop {
+            // what the store will hold: every triangle corner (plain), or
+            // each mesh's own vertices once (indexed)
+            let held = |m: pak::MeshRange| if INDEXED { m.vert_count as usize } else { m.index_count as usize };
+            let stamp_held: usize = if INDEXED {
+                pak.stamps_of(map_id)
+                    .iter()
+                    .filter(|st| !stamps_off.iter().any(|&(m, x, y)| m == map_id && x == st.cx && y == st.cy))
+                    .map(|st| st.mesh.vert_count as usize)
+                    .sum()
+            } else {
+                stamp_verts
+            };
             let want = (p
                 .items
                 .iter()
-                .map(|it| all_chunks[it.chunk].meshes[it.kind].index_count as usize)
+                .map(|it| held(all_chunks[it.chunk].meshes[it.kind]))
                 .sum::<usize>()
-                + stamp_verts)
+                + stamp_held)
                 .min(budget);
             if want == 0 || verts.try_reserve(want) {
                 break;
@@ -4348,7 +4618,7 @@ fn build_map(
 
     // Ground first — always in full.
     for it in plan.items.iter().filter(|i| GROUND_KINDS.contains(&i.kind)) {
-        push_chunk_mesh(pak, &chunks[it.chunk], it.kind, budget, tint, clip_min, clip_max, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax);
+        push_chunk_mesh(pak, &chunks[it.chunk], it.kind, budget, tint, clip_min, clip_max, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax, if INDEXED { Some(&mut ib) } else { None });
     }
     // Removable stamps (cut trees, the S.S. Anne hull) next, at ground
     // priority: these are cooked into the pak's separate STMP section, not
@@ -4364,7 +4634,7 @@ fn build_map(
         if stamps_off.iter().any(|&(m, x, y)| m == map_id && x == stamp.cx && y == stamp.cy) {
             continue;
         }
-        push_stamp_mesh(pak, stamp, budget, tint, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax);
+        push_stamp_mesh(pak, stamp, budget, tint, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax, if INDEXED { Some(&mut ib) } else { None });
     }
     // Round tree/rock cells next, BEFORE water/grass/flower: per chunk, use
     // the fine hull while it still fits the remaining budget, else the
@@ -4384,11 +4654,11 @@ fn build_map(
     // BOXES=1 pak, hulls folded into terrain) leaves every tier empty here
     // and just keeps what TERRAIN already carried above.
     for it in plan.items.iter().filter(|i| TREE_KINDS.contains(&i.kind)) {
-        push_chunk_mesh(pak, &chunks[it.chunk], it.kind, budget, tint, clip_min, clip_max, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax);
+        push_chunk_mesh(pak, &chunks[it.chunk], it.kind, budget, tint, clip_min, clip_max, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax, if INDEXED { Some(&mut ib) } else { None });
     }
     // Water, grass, flower last — whatever budget survives the above.
     for it in plan.items.iter().filter(|i| FILLER_KINDS.contains(&i.kind)) {
-        push_chunk_mesh(pak, &chunks[it.chunk], it.kind, budget, tint, clip_min, clip_max, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax);
+        push_chunk_mesh(pak, &chunks[it.chunk], it.kind, budget, tint, clip_min, clip_max, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax, if INDEXED { Some(&mut ib) } else { None });
     }
     verts.trim();
     if verts.is_empty() { cmin = [0.0; 3]; cmax = [16.0; 3]; }
@@ -4413,7 +4683,7 @@ fn build_map(
         map_max = [0.0; 2];
     }
     let floor = floor_map_of(pak, all_chunks, map_min, map_max);
-    MapGeom { floor, chunk_spans, verts, center, size, tex_rgba, tw, th, aw, ah, is_huge, map_min, map_max }
+    MapGeom { floor, chunk_spans, verts, idx: ib.lists, center, size, tex_rgba, tw, th, aw, ah, is_huge, map_min, map_max }
 }
 
 /// The floor under each cell of the map: the highest up-facing TERRAIN
@@ -4764,7 +5034,7 @@ fn main() {
     let mut map_i = 0usize;
     let mut geom = MapGeom {
         floor: Default::default(),
-        chunk_spans: Vec::new(), verts: VertStore::new(), center: [0.0; 3], size: 16.0,
+        chunk_spans: Vec::new(), verts: VertStore::new(), idx: Vec::new(), center: [0.0; 3], size: 16.0,
         tex_rgba: Vec::new(), tw: 8, th: 8, aw: 8, ah: 8, is_huge: false,
         map_min: [0.0; 2], map_max: [0.0; 2],
     };
@@ -4930,6 +5200,7 @@ fn main() {
     // pass sent, the cull's and the submit's CPU time, the command buffer
     let mut perf_verts: [u64; 2] = [0; 2];
     let mut perf_draws: [u64; 2] = [0; 2];
+    let mut perf_shaded: [u64; 2] = [0; 2];
     let mut perf_cull_us: f32 = 0.0;
     let mut perf_submit_us: f32 = 0.0;
     let mut perf_cmd_max: f32 = 0.0;
@@ -5011,7 +5282,7 @@ fn main() {
     // TINS: one buffer per carved shape, and the placements that draw them.
     // A forest is the same few drawings thousands of times, so the geometry
     // is uploaded once and the instances only say where and how detailed.
-    let mut tree_bufs: Vec<Option<(buffer::Info, [f32; 3], [f32; 3])>> = Vec::new();
+    let mut tree_bufs: Vec<Option<TreeBuf>> = Vec::new();
     let mut tree_insts: Vec<pak::TreeInst> = Vec::new();
     // Card/pic vertex buffers are rebuilt every frame. Freeing them the
     // instant the frame ends lets the GPU read memory that's already gone —
@@ -5173,9 +5444,9 @@ fn main() {
                     // and submitting them.
                     let pn = perf_n as f32;
                     dlog(&format!(
-                        "[pv] draw: L {:.0}k verts {:.0} calls  R {:.0}k verts {:.0} calls  cull {:.2} submit {:.2} ms  cmdbuf {:.0}%",
-                        perf_verts[0] as f32 / pn / 1000.0, perf_draws[0] as f32 / pn,
-                        perf_verts[1] as f32 / pn / 1000.0, perf_draws[1] as f32 / pn,
+                        "[pv] draw: L {:.0}k verts ({:.0}k shaded) {:.0} calls  R {:.0}k verts ({:.0}k shaded) {:.0} calls  cull {:.2} submit {:.2} ms  cmdbuf {:.0}%",
+                        perf_verts[0] as f32 / pn / 1000.0, perf_shaded[0] as f32 / pn / 1000.0, perf_draws[0] as f32 / pn,
+                        perf_verts[1] as f32 / pn / 1000.0, perf_shaded[1] as f32 / pn / 1000.0, perf_draws[1] as f32 / pn,
                         perf_cull_us / pn / 1000.0, perf_submit_us / pn / 1000.0,
                         perf_cmd_max * 100.0,
                     ));
@@ -5188,7 +5459,7 @@ fn main() {
                 unsafe { PERF_JS_US = 0.0; PERF_LCD_US = 0.0; PERF_LCDR_US = 0.0; PERF_LCDC_US = 0.0; }
                 perf_cpu_sum = 0.0; perf_cpu_max = 0.0;
                 perf_gpu_sum = 0.0; perf_gpu_max = 0.0; perf_proc_sum = 0.0;
-                perf_verts = [0; 2]; perf_draws = [0; 2];
+                perf_verts = [0; 2]; perf_draws = [0; 2]; perf_shaded = [0; 2];
                 perf_cull_us = 0.0; perf_submit_us = 0.0; perf_cmd_max = 0.0;
                 fps_frames = 0; aud_ticks = 0; aud_queued = 0; aud_dropped = 0;
                 fps_last = now;
@@ -5804,11 +6075,12 @@ fn main() {
                 );
                 dlog(&format!("[pv] built in {} ms", build_ms));
                 dlog(&format!(
-                    "[pv] built map#{} name={} spans={} verts={} huge={} tint={:08x}",
+                    "[pv] built map#{} name={} spans={} verts={} indices={} huge={} tint={:08x}",
                     map_ids[map_i],
                     map_index.get(map_i).map(|(_, n)| n.as_str()).unwrap_or("?"),
                     geom.chunk_spans.len(),
                     tot,
+                    geom.idx.iter().map(|l| l.len()).sum::<usize>(),
                     cur_map_huge,
                     last_tint,
                 ));
@@ -5926,12 +6198,27 @@ fn main() {
                 }
                 for &si in up_order.iter() {
                     let s = &geom.chunk_spans[si];
+                    if s.idx != NO_IDX {
+                        // indexed: one slice (a mesh's vertices are u16-
+                        // indexed, so never past SPAN_PIECE), with its list
+                        let n = s.end - s.start;
+                        let list = geom.idx.get(s.idx as usize).map_or(&[][..], |l| &l[..]);
+                        let Some(piece) = geom.verts.slice(s.start, n) else { upload_fail += 1; continue; };
+                        if n > SPAN_PIECE || !linear_fits_bytes(n * core::mem::size_of::<Vertex>() + list.len() * 2) {
+                            upload_fail += 1; fail_low += 1; fail_verts += list.len(); continue;
+                        }
+                        match gpu_span(*s, piece, Some(list), &attr_info) {
+                            Some(g) => chunk_infos.push(g),
+                            None => { upload_fail += 1; fail_verts += list.len(); }
+                        }
+                        continue;
+                    }
                     let mut at = s.start;
                     while at < s.end {
                         let n = (s.end - at).min(SPAN_PIECE);
                         let Some(piece) = geom.verts.slice(at, n) else { upload_fail += 1; break; };
                         if !linear_fits(n) { upload_fail += 1; fail_low += 1; fail_verts += n; at += n; continue; }
-                        if let Some(g) = gpu_span(Span { start: at, end: at + n, ..*s }, piece, &attr_info) {
+                        if let Some(g) = gpu_span(Span { start: at, end: at + n, ..*s }, piece, None, &attr_info) {
                             chunk_infos.push(g);
                         } else {
                             // Silently dropping these is how a map ends up as bare
@@ -6036,41 +6323,65 @@ fn main() {
                         let mut shape_verts = 0usize;
                         for m in pak_static.tree_shapes.iter() {
                             let n = m.index_count as usize;
-                            if n == 0 || !linear_fits(n) {
+                            let vc = m.vert_count as usize;
+                            let bytes = if INDEXED { vc * core::mem::size_of::<Vertex>() + n * 2 } else { n * core::mem::size_of::<Vertex>() };
+                            if n == 0 || !linear_fits_bytes(bytes) {
                                 tree_bufs.push(None);
                                 continue;
                             }
-                            let mut v: Vec<Vertex> = Vec::with_capacity(n);
                             let mut gmin = [f32::MAX; 3];
                             let mut gmax = [f32::MIN; 3];
                             let vbase = m.vert_base as usize;
+                            // indexed (INDEXED): the shape's vertices once each
+                            // and its indices as cooked; plain: every corner
+                            let mut v: Vec<Vertex> = Vec::with_capacity(if INDEXED { vc } else { n });
+                            let mut list: Vec<u16> = Vec::new();
                             for i in 0..n {
                                 let Some(pv) =
                                     pool_vert(pak_static, vbase, m.index_base as usize + i)
                                 else {
                                     break;
                                 };
-                                let a = draw::modulate_rgb(pv.abgr, last_tint);
                                 let p = [pv.x as f32, pv.y as f32, pv.z as f32];
                                 for c in 0..3 {
                                     if p[c] < gmin[c] { gmin[c] = p[c]; }
                                     if p[c] > gmax[c] { gmax[c] = p[c]; }
                                 }
-                                v.push(Vertex {
-                                    pos: [pv.x, pv.y, pv.z, 0],
-                                    color: [
-                                        (a & 0xff) as u8,
-                                        ((a >> 8) & 0xff) as u8,
-                                        ((a >> 16) & 0xff) as u8,
-                                        255,
-                                    ],
-                                    uv: [pv.uf(), pv.vf()],
-                                }); #[cfg(feature = "gen3")] if let Some(g3v) = v.last_mut() { gen3::lean_vert(g3v, pv.abgr, pv.pad); }
+                                if INDEXED {
+                                    let k = pak_static.indices[m.index_base as usize + i];
+                                    if k as usize >= vc {
+                                        break;
+                                    }
+                                    list.push(k);
+                                } else {
+                                    v.push(vert_of(&pv, last_tint));
+                                }
+                            }
+                            if INDEXED {
+                                list.truncate(list.len() / 3 * 3);
+                                for i in 0..vc {
+                                    match pak_static.verts.get(vbase + i) {
+                                        Some(pv) => v.push(vert_of(pv, last_tint)),
+                                        None => break,
+                                    }
+                                }
+                                if list.iter().any(|&k| k as usize >= v.len()) {
+                                    list.clear();
+                                }
                             }
                             let mut bi = buffer::Info::new();
-                            if bi.add(buffer::Buffer::new(&v), attr_info.permutation()).is_ok() {
+                            let drawn = if INDEXED { list.len() } else { v.len() };
+                            if drawn > 0 && bi.add(buffer::Buffer::new(&v), attr_info.permutation()).is_ok() {
                                 shape_verts += v.len();
-                                tree_bufs.push(Some((bi, gmin, gmax)));
+                                let idx = if INDEXED { Some(buffer::Buffer::new(&list)) } else { None };
+                                tree_bufs.push(Some(TreeBuf {
+                                    bi,
+                                    idx,
+                                    count: drawn.min(65535) as u16,
+                                    shaded: v.len().min(65535) as u16,
+                                    gmin,
+                                    gmax,
+                                }));
                             } else {
                                 tree_bufs.push(None);
                             }
@@ -6132,6 +6443,7 @@ fn main() {
                 geom.tex_rgba = Vec::new();
                 geom.tex_rgba.shrink_to_fit();
                 geom.verts = VertStore::new();
+                geom.idx = Vec::new();
                 dist = geom.size * 1.4;
                 {
                     let tex_ms = now_ms().wrapping_sub(t_tex);
@@ -7496,10 +7808,11 @@ if page_tex.len() < pak_static.atlases.len() {
                     [it.far, it.mid, it.near]
                 };
                 let id = *ladder.iter().find(|&&id| id != TREE_SHAPE_NONE)?;
-                let Some(Some((bi, gmin, gmax))) = tree_bufs_ref.get(id as usize) else {
+                let Some(Some(tb)) = tree_bufs_ref.get(id as usize) else {
                     t_noshape += 1;
                     return None;
                 };
+                let (gmin, gmax) = (&tb.gmin, &tb.gmax);
                 // the shape's own box, put where this copy stands
                 let cx = ix + (gmin[0] + gmax[0]) * 0.5;
                 let cz = iz + (gmin[2] + gmax[2]) * 0.5;
@@ -7526,7 +7839,7 @@ if page_tex.len() < pak_static.atlases.len() {
                         return None;
                     }
                 }
-                Some((it, (bi, *gmin, *gmax)))
+                Some((it, tb))
             }).collect()
         }; #[cfg(feature = "gen3")] let vis_trees: Vec<_> = if unsafe { voxel::scene() }.flat_world { Vec::new() } else { vis_trees };
         unsafe {
@@ -7545,18 +7858,18 @@ if page_tex.len() < pak_static.atlases.len() {
         // is made only when the right eye is drawn.
         let right_eye = !guest_drive || slider > 0.05;
         let eye_fr = [Frustum::of(&mvp_l), Frustum::of(&mvp_r)];
-        let mut eye_spans: [Vec<(&buffer::Info, u16, u16)>; 2] = [Vec::new(), Vec::new()];
-        let mut eye_trees: [Vec<(&pak::TreeInst, &buffer::Info)>; 2] = [Vec::new(), Vec::new()];
+        let mut eye_spans: [Vec<EyeDraw>; 2] = [Vec::new(), Vec::new()];
+        let mut eye_trees: [Vec<(&pak::TreeInst, &TreeBuf)>; 2] = [Vec::new(), Vec::new()];
         for e in 0..(if right_eye { 2 } else { 1 }) {
             for (_, g) in vis_spans.iter() {
                 eye_ranges(g, &eye_fr[e], &mut eye_spans[e]);
             }
-            for &(it, (bi, gmin, gmax)) in vis_trees.iter() {
+            for &(it, tb) in vis_trees.iter() {
                 let o = [it.x as f32, it.y as f32, it.z as f32];
-                let lo = [gmin[0] + o[0], gmin[1] + o[1], gmin[2] + o[2]];
-                let hi = [gmax[0] + o[0], gmax[1] + o[1], gmax[2] + o[2]];
+                let lo = [tb.gmin[0] + o[0], tb.gmin[1] + o[1], tb.gmin[2] + o[2]];
+                let hi = [tb.gmax[0] + o[0], tb.gmax[1] + o[1], tb.gmax[2] + o[2]];
                 if !RUN_CULL || eye_fr[e].test(lo, hi) != 0 {
-                    eye_trees[e].push((it, bi));
+                    eye_trees[e].push((it, tb));
                 }
             }
         }
@@ -7613,7 +7926,7 @@ if page_tex.len() < pak_static.atlases.len() {
         };
         let (tilt_unit_ref, tilt_sharp_ref, tilt_bands_ref) = (tilt_unit.as_ref(), tilt_sharp.as_ref(), tilt_bands.as_ref());
         let (tmvp_l_ref, tmvp_r_ref) = (&tmvp_l, &tmvp_r); #[cfg(feature = "gen3")] gen3::before_render();
-        unsafe { EYE_VERTS = [0; 2]; EYE_DRAWS = [0; 2]; }
+        unsafe { EYE_VERTS = [0; 2]; EYE_DRAWS = [0; 2]; EYE_SHADED = [0; 2]; }
         let mut submit_us = 0.0f32;
         let mut cmd_use = 0.0f32;
         instance.render_frame_with(|mut frame| { #[cfg(feature = "gen3")] gen3::offscreen_pass();
@@ -7659,10 +7972,15 @@ if page_tex.len() < pak_static.atlases.len() {
                 // This eye's share of the frame's cull (decided above the
                 // frame: eye_spans, eye_trees).
                 let ei = if eye < 0.0 { 0 } else { 1 };
-                for &(bi, a, b) in eye_spans[ei].iter() {
-                    if b > a {
-                        let _ = frame.draw_arrays(buffer::Primitive::Triangles, bi, Some(a..b - 1));
-                        unsafe { EYE_VERTS[ei] += (b - a) as u32; EYE_DRAWS[ei] += 1; }
+                let mut bound: *const buffer::Info = core::ptr::null();
+                for d in eye_spans[ei].iter() {
+                    if d.b > d.a {
+                        unsafe {
+                            draw_range(&d.g.bi, d.g.idx.as_ref(), d.a, d.b - d.a, &mut bound);
+                            EYE_VERTS[ei] += (d.b - d.a) as u32;
+                            EYE_SHADED[ei] += d.shaded;
+                            EYE_DRAWS[ei] += 1;
+                        }
                     }
                 }
                 // --- tree instances -------------------------------------
@@ -7671,8 +7989,9 @@ if page_tex.len() < pak_static.atlases.len() {
                 // far ones coarse, and nothing dropped for want of budget
                 // the way a baked-in chunk mesh had to be.
                 if !eye_trees[ei].is_empty() {
-                    let mut t_err = 0u32;
-                    for (it, bi) in eye_trees[ei].iter() {
+                    // (a raw draw has no error to count)
+                    let t_err = 0u32;
+                    for (it, tb) in eye_trees[ei].iter() {
                         // Where this copy stands, handed to the shader, which
                         // adds it to the vertex before the projection (a
                         // matrix edit moved the trees somewhere invisible).
@@ -7680,10 +7999,12 @@ if page_tex.len() < pak_static.atlases.len() {
                             toff_idx,
                             FVec4::new(it.x as f32, it.y as f32, it.z as f32, 0.0),
                         );
-                        if frame.draw_arrays(buffer::Primitive::Triangles, bi, None).is_err() {
-                            t_err += 1;
+                        unsafe {
+                            draw_range(&tb.bi, tb.idx.as_ref(), 0, tb.count, &mut bound);
+                            EYE_VERTS[ei] += tb.count as u32;
+                            EYE_SHADED[ei] += tb.shaded as u32;
+                            EYE_DRAWS[ei] += 1;
                         }
-                        unsafe { EYE_VERTS[ei] += bi.len() as u32; EYE_DRAWS[ei] += 1; }
                     }
                     frame.bind_vertex_uniform(toff_idx, FVec4::new(0.0, 0.0, 0.0, 0.0));
                     unsafe { TREES_CULLED[3] = t_err; }
@@ -7996,10 +8317,11 @@ if page_tex.len() < pak_static.atlases.len() {
             // to just before the cull), the cull, and the command build --
             // not the waits for the vblank or the GPU around them
             let cpu = cpu_pre + (cull_us + submit_us) / 1000.0;
-            let (ev, ed) = unsafe { (EYE_VERTS, EYE_DRAWS) };
+            let (ev, ed, es) = unsafe { (EYE_VERTS, EYE_DRAWS, EYE_SHADED) };
             for e in 0..2 {
                 perf_verts[e] += ev[e] as u64;
                 perf_draws[e] += ed[e] as u64;
+                perf_shaded[e] += es[e] as u64;
             }
             perf_cull_us += cull_us;
             perf_submit_us += submit_us;
@@ -8015,13 +8337,14 @@ if page_tex.len() < pak_static.atlases.len() {
                         let n = a.frames as f32;
                         let (cm, sl) = BENCH_COMBOS[bench_combo];
                         dlog(&format!(
-                            "[pv] bench: spot {} cam {} 3d {:.0} | L {:.0} verts {:.1} calls R {:.0} verts {:.1} calls | cpu {:.2} max {:.1} ms cull {:.3} submit {:.3} ms | cmdbuf {:.1}% | spans {:.1} trees {:.1} | frames {}",
+                            "[pv] bench: spot {} cam {} 3d {:.0} | L {:.0} verts {:.1} calls R {:.0} verts {:.1} calls | cpu {:.2} max {:.1} ms cull {:.3} submit {:.3} ms | cmdbuf {:.1}% | spans {:.1} trees {:.1} | frames {} | shaded L {:.0} R {:.0}",
                             // the round the combination was in, less the boot's
                             (seg as i64 - 1) / BENCH_COMBOS.len() as i64 - 1, CAM_MODES[cm].name, sl,
                             a.verts[0] as f32 / n, a.draws[0] as f32 / n,
                             a.verts[1] as f32 / n, a.draws[1] as f32 / n,
                             a.cpu_ms / n, a.cpu_max, a.cull_us / n / 1000.0, a.submit_us / n / 1000.0,
                             a.cmd_max * 100.0, a.spans as f32 / n, a.trees as f32 / n, a.frames,
+                            a.shaded[0] as f32 / n, a.shaded[1] as f32 / n,
                         ));
                     }
                     bench_acc = BenchAcc::default();
@@ -8034,6 +8357,7 @@ if page_tex.len() < pak_static.atlases.len() {
                     for e in 0..2 {
                         a.verts[e] += ev[e] as u64;
                         a.draws[e] += ed[e] as u64;
+                        a.shaded[e] += es[e] as u64;
                     }
                     a.cpu_ms += cpu;
                     if cpu > a.cpu_max { a.cpu_max = cpu; }
