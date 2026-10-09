@@ -1545,6 +1545,53 @@ fn build_page_tex_custom(pak: &Pak, pidx: u16, pal_sel: i32, custom: Option<[u16
 
 static mut DRAWN: u32 = 0;
 
+/// What the world pass sent the GPU this frame, per eye (0 left, 1 right):
+/// vertices and draw calls, spans and tree copies together. The hardware
+/// logs say the top screen's GPU time follows the vertex count (the biggest Gen 2 city,
+/// build 212143: ~23 ms an eye at 3d 0 against ~3 ms indoors), so this is
+/// the number a slow city is judged by.
+static mut EYE_VERTS: [u32; 2] = [0; 2];
+static mut EYE_DRAWS: [u32; 2] = [0; 2];
+
+extern "C" {
+    /// citro3d: how full the GPU command buffer is, 0..1, at the call.
+    fn C3D_GetCmdBufUsage() -> f32;
+}
+
+/// Bench builds only (PV_BENCH, never a release): the guest runs exactly
+/// two ticks a shown frame, whatever the time, so a bench sees the same
+/// scene on the same tick in every run and its shots compare; and the host
+/// steps the camera mode and the 3D slider on a fixed tick schedule
+/// (BENCH_COMBOS), printing each combination's averages once it is done.
+const BENCH: bool = option_env!("PV_BENCH").is_some();
+/// Ticks each (camera mode, slider) combination is held. The averages are
+/// taken over its second half, after the mode's tween and any warp.
+const BENCH_SEG: u64 = 360;
+/// (CAM_MODES index, slider). The first is the guest's: it moves the player
+/// to the next spot then, and nothing is measured.
+const BENCH_COMBOS: [(usize, f32); 9] = [
+    (0, 0.0),
+    (0, 0.0), (0, 1.0),
+    (7, 0.0), (7, 1.0),
+    (6, 0.0), (6, 1.0),
+    (4, 0.0), (4, 1.0),
+];
+
+/// One combination's sums over its measured half.
+#[derive(Default)]
+struct BenchAcc {
+    frames: u32,
+    verts: [u64; 2],
+    draws: [u64; 2],
+    cpu_ms: f32,
+    cpu_max: f32,
+    cull_us: f32,
+    submit_us: f32,
+    cmd_max: f32,
+    spans: u64,
+    trees: u64,
+}
+
 // libctru's default split leaves the app heap small and the linear heap
 // larger than this renderer needs. The pak (a single contiguous read) lives
 // on the app heap, so give it the room.
@@ -2619,6 +2666,19 @@ fn install_panic_log() {
 fn now_us() -> f32 {
     extern "C" { fn svcGetSystemTick() -> u64; }
     (unsafe { svcGetSystemTick() } as f64 / 268.111856) as f32
+}
+
+/// The CPU tick counter, for timing short stretches exactly (now_us is an
+/// f32 of the whole uptime, so it stops resolving microseconds after a
+/// minute or so).
+fn sys_tick() -> u64 {
+    extern "C" { fn svcGetSystemTick() -> u64; }
+    unsafe { svcGetSystemTick() }
+}
+
+/// Microseconds since `t0` (a sys_tick()).
+fn us_since(t0: u64) -> f32 {
+    (sys_tick().wrapping_sub(t0) as f64 / 268.111856) as f32
 }
 /// The perf line's split, summed over its second: guest ticks, and the
 /// Gold screen's render on the host.
@@ -4720,6 +4780,17 @@ fn main() {
     let mut perf_radius: f32 = 0.0;
     let mut perf_spans: usize = 0;
     let mut perf_trees: usize = 0;
+    // per eye, summed over the second: vertices and draw calls the world
+    // pass sent, the cull's and the submit's CPU time, the command buffer
+    let mut perf_verts: [u64; 2] = [0; 2];
+    let mut perf_draws: [u64; 2] = [0; 2];
+    let mut perf_cull_us: f32 = 0.0;
+    let mut perf_submit_us: f32 = 0.0;
+    let mut perf_cmd_max: f32 = 0.0;
+    // The bench's clock (BENCH): guest ticks run since boot.
+    let mut bench_ticks: u64 = 0;
+    let mut bench_acc = BenchAcc::default();
+    let mut bench_combo: usize = 0;
     let mut fps_last: u64 = 0;
     let pitches: [i32; 5] = [0, 1, 2, 3, 4];
     let mut pitch_i = 0usize;
@@ -4951,6 +5022,17 @@ fn main() {
                         // the vertex/texture pool left: a slow leak shows as this falling
                         unsafe_free_kb(),
                     ));
+                    // What the world pass sent, per eye: the GPU-load figure
+                    // (vertices), the draw calls, and the CPU spent deciding
+                    // and submitting them.
+                    let pn = perf_n as f32;
+                    dlog(&format!(
+                        "[pv] draw: L {:.0}k verts {:.0} calls  R {:.0}k verts {:.0} calls  cull {:.2} submit {:.2} ms  cmdbuf {:.0}%",
+                        perf_verts[0] as f32 / pn / 1000.0, perf_draws[0] as f32 / pn,
+                        perf_verts[1] as f32 / pn / 1000.0, perf_draws[1] as f32 / pn,
+                        perf_cull_us / pn / 1000.0, perf_submit_us / pn / 1000.0,
+                        perf_cmd_max * 100.0,
+                    ));
                     dlog(&format!("[pv] sound: peak {} over the last 5 s", aud_peak)); #[cfg(feature = "gen3")] gen3::perf_line();
                     aud_peak = 0;
                 }
@@ -4960,6 +5042,8 @@ fn main() {
                 unsafe { PERF_JS_US = 0.0; PERF_LCD_US = 0.0; PERF_LCDR_US = 0.0; PERF_LCDC_US = 0.0; }
                 perf_cpu_sum = 0.0; perf_cpu_max = 0.0;
                 perf_gpu_sum = 0.0; perf_gpu_max = 0.0; perf_proc_sum = 0.0;
+                perf_verts = [0; 2]; perf_draws = [0; 2];
+                perf_cull_us = 0.0; perf_submit_us = 0.0; perf_cmd_max = 0.0;
                 fps_frames = 0; aud_ticks = 0; aud_queued = 0; aud_dropped = 0;
                 fps_last = now;
             }
@@ -4997,7 +5081,10 @@ fn main() {
                     sim_acc = 16.667;
                 } #[cfg(feature = "gen3")] gen3::borrow_tick(n, &mut sim_acc);
                 let n = n.max(1);
+                // a bench's frames are two ticks each, so its scenes repeat
+                let n = if BENCH { 2 } else { n };
                 perf_ticks += n;
+                bench_ticks += n as u64;
                 n
             };
             let mut b = 0i32;
@@ -5988,6 +6075,9 @@ fn main() {
                     was_in_battle = false;
                 }
 
+                // A bench presses ZR for itself until the mode is the one
+                // its schedule wants (BENCH_COMBOS).
+                let d = if BENCH && cam_mode != BENCH_COMBOS[bench_combo].0 { d | KeyPad::ZR } else { d };
                 // ZL/ZR cycle the mode (L and R are the Kantogear's tabs);
                 // both together recentre whichever camera is up.
                 if k.contains(KeyPad::ZL) && k.contains(KeyPad::ZR) {
@@ -6085,6 +6175,7 @@ fn main() {
             CoordinateOrientation::RightHanded,
         );
         let slider = ctru::os::current_3d_slider_state();
+        let slider = if BENCH { BENCH_COMBOS[bench_combo].1 } else { slider };
         perf_slider = slider;
         let (sl, sr) = StereoDisplacement::new(slider * dist * STEREO_IOD, dist * STEREO_SCREEN);
         let (pl, pr) = Projection::perspective(
@@ -7119,6 +7210,7 @@ if page_tex.len() < pak_static.atlases.len() {
             ));
         }
 
+        let cpu_pre;
         unsafe {
             extern "C" { fn osGetTime() -> u64; }
             // citro3d's own clocks: drawing is the GPU's time on the last
@@ -7126,6 +7218,7 @@ if page_tex.len() < pak_static.atlases.len() {
             extern "C" { fn C3D_GetDrawingTime() -> f32; fn C3D_GetProcessingTime() -> f32; }
             let (gd, gp) = (C3D_GetDrawingTime(), C3D_GetProcessingTime());
             let cpu = osGetTime().wrapping_sub(frame_start) as f32;
+            cpu_pre = cpu;
             perf_cpu_sum += cpu;
             if cpu > perf_cpu_max { perf_cpu_max = cpu; }
             // The 30 Hz lock, on the vblanks: a frame whose work fits well
@@ -7148,6 +7241,7 @@ if page_tex.len() < pak_static.atlases.len() {
         // and every tree instance and reach the identical answer. Decide
         // once, draw the survivors in each pass. (With the slider down this
         // is the same work in a different place; with it up it is half.)
+        let t_cull = sys_tick();
         let (mut cull_r_n, mut cull_c_n, mut cull_o_n) = (0u32, 0u32, 0u32);
         let mut min_culled = f32::MAX;
         let vis_spans: Vec<_> = if pic_active {
@@ -7297,6 +7391,7 @@ if page_tex.len() < pak_static.atlases.len() {
             TREES_DRAWN = vis_trees.len() as u32;
             TREES_CULLED = [t_noshape, t_radius, t_cone, 0];
         }
+        let cull_us = us_since(t_cull);
         perf_radius = cull_radius.min(9999.0);
         perf_spans = infos_ref.len() + strips_ref.len();
         perf_trees = tree_insts_ref.len();
@@ -7349,7 +7444,11 @@ if page_tex.len() < pak_static.atlases.len() {
         };
         let (tilt_unit_ref, tilt_sharp_ref, tilt_bands_ref) = (tilt_unit.as_ref(), tilt_sharp.as_ref(), tilt_bands.as_ref());
         let (tmvp_l_ref, tmvp_r_ref) = (&tmvp_l, &tmvp_r); #[cfg(feature = "gen3")] gen3::before_render();
+        unsafe { EYE_VERTS = [0; 2]; EYE_DRAWS = [0; 2]; }
+        let mut submit_us = 0.0f32;
+        let mut cmd_use = 0.0f32;
         instance.render_frame_with(|mut frame| { #[cfg(feature = "gen3")] gen3::offscreen_pass();
+            let t_submit = sys_tick();
             fn cast_lifetime_to_closure<'frame, T>(x: T) -> T
             where
                 T: Fn(&mut Frame<'frame>, &'frame mut ScreenTarget<'_>, &Matrix4, f32),
@@ -7390,8 +7489,10 @@ if page_tex.len() < pak_static.atlases.len() {
                 if !pic_active { #[cfg(feature = "gen3")] gen3::lean_on();
                 // The survivors of this frame's cull (decided once, above the
                 // frame, for both eyes).
+                let ei = if eye < 0.0 { 0 } else { 1 };
                 for e in vis_spans.iter() {
                     frame.draw_arrays(buffer::Primitive::Triangles, e.1, None).unwrap();
+                    unsafe { EYE_VERTS[ei] += e.1.len() as u32; EYE_DRAWS[ei] += 1; }
                 }
                 // --- tree instances -------------------------------------
                 // The same shape drawn where each placement says, at the
@@ -7411,6 +7512,7 @@ if page_tex.len() < pak_static.atlases.len() {
                         if frame.draw_arrays(buffer::Primitive::Triangles, bi, None).is_err() {
                             t_err += 1;
                         }
+                        unsafe { EYE_VERTS[ei] += bi.len() as u32; EYE_DRAWS[ei] += 1; }
                     }
                     frame.bind_vertex_uniform(toff_idx, FVec4::new(0.0, 0.0, 0.0, 0.0));
                     unsafe { TREES_CULLED[3] = t_err; }
@@ -7714,8 +7816,64 @@ if page_tex.len() < pak_static.atlases.len() {
                     unsafe { c3d_depth_test(1); }
                 }
             }
+            submit_us = us_since(t_submit);
+            cmd_use = unsafe { C3D_GetCmdBufUsage() };
             frame
         });
+        {
+            // the frame's own CPU work: the sim and the scene build (cpu_pre,
+            // to just before the cull), the cull, and the command build --
+            // not the waits for the vblank or the GPU around them
+            let cpu = cpu_pre + (cull_us + submit_us) / 1000.0;
+            let (ev, ed) = unsafe { (EYE_VERTS, EYE_DRAWS) };
+            for e in 0..2 {
+                perf_verts[e] += ev[e] as u64;
+                perf_draws[e] += ed[e] as u64;
+            }
+            perf_cull_us += cull_us;
+            perf_submit_us += submit_us;
+            if cmd_use > perf_cmd_max { perf_cmd_max = cmd_use; }
+            if BENCH {
+                // The schedule: which combination this tick is in, its
+                // averages printed as the next one begins.
+                let seg = (bench_ticks / BENCH_SEG) as usize;
+                let combo = seg % BENCH_COMBOS.len();
+                if combo != bench_combo {
+                    let a = &bench_acc;
+                    if bench_combo != 0 && a.frames > 0 {
+                        let n = a.frames as f32;
+                        let (cm, sl) = BENCH_COMBOS[bench_combo];
+                        dlog(&format!(
+                            "[pv] bench: spot {} cam {} 3d {:.0} | L {:.0} verts {:.1} calls R {:.0} verts {:.1} calls | cpu {:.2} max {:.1} ms cull {:.3} submit {:.3} ms | cmdbuf {:.1}% | spans {:.1} trees {:.1} | frames {}",
+                            // the round the combination was in, less the boot's
+                            (seg - 1) / BENCH_COMBOS.len() - 1, CAM_MODES[cm].name, sl,
+                            a.verts[0] as f32 / n, a.draws[0] as f32 / n,
+                            a.verts[1] as f32 / n, a.draws[1] as f32 / n,
+                            a.cpu_ms / n, a.cpu_max, a.cull_us / n / 1000.0, a.submit_us / n / 1000.0,
+                            a.cmd_max * 100.0, a.spans as f32 / n, a.trees as f32 / n, a.frames,
+                        ));
+                    }
+                    bench_acc = BenchAcc::default();
+                    bench_combo = combo;
+                }
+                // the second half of the combination, when it has settled
+                if bench_ticks % BENCH_SEG >= BENCH_SEG / 2 {
+                    let a = &mut bench_acc;
+                    a.frames += 1;
+                    for e in 0..2 {
+                        a.verts[e] += ev[e] as u64;
+                        a.draws[e] += ed[e] as u64;
+                    }
+                    a.cpu_ms += cpu;
+                    if cpu > a.cpu_max { a.cpu_max = cpu; }
+                    a.cull_us += cull_us;
+                    a.submit_us += submit_us;
+                    if cmd_use > a.cmd_max { a.cmd_max = cmd_use; }
+                    a.spans += unsafe { DRAWN } as u64;
+                    a.trees += unsafe { TREES_DRAWN } as u64;
+                }
+            }
+        }
 
         // The 30 Hz lock is C3D_FrameRate's (boot, and the perf block's
         // light/heavy switch): C3D_FrameBegin waits for every second vblank,
