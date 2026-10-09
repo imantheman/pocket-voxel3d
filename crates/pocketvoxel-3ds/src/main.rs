@@ -5338,7 +5338,7 @@ fn main() {
                 map_i = (map_i + map_ids.len() - 1) % map_ids.len();
                 reload = true;
             }
-        } #[cfg(feature = "gen3")] gen3::mark(1);
+        } #[cfg(feature = "gen3")] gen3::mark(1); #[cfg(feature = "gen3")] if reload && gen3::hold_rebuild(unsafe { voxel::scene() }.flat_world, built_flat, built_key.as_ref().map(|k| k.0) == map_ids.get(map_i).copied(), unsafe_free_kb() as usize) { reload = false; }
 
         if reload {
             reload = false;
@@ -7229,7 +7229,7 @@ if page_tex.len() < pak_static.atlases.len() {
         // Nothing about WHAT is drawn changes: these are solid,
         // non-overlapping chunks, so no pixel depends on the order.
         let mut vis_spans = vis_spans;
-        vis_spans.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(core::cmp::Ordering::Equal));
+        vis_spans.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(core::cmp::Ordering::Equal)); #[cfg(feature = "gen3")] if unsafe { voxel::scene() }.flat_world { vis_spans.clear(); }
         // The same shape drawn where each placement says, at the level of
         // detail its distance earns: near ones carved, far ones coarse, and
         // nothing dropped for want of budget the way a baked-in chunk mesh
@@ -7287,7 +7287,7 @@ if page_tex.len() < pak_static.atlases.len() {
                 }
                 Some((it, bi))
             }).collect()
-        };
+        }; #[cfg(feature = "gen3")] let vis_trees: Vec<_> = if unsafe { voxel::scene() }.flat_world { Vec::new() } else { vis_trees };
         unsafe {
             DRAWN = vis_spans.len() as u32;
             CULL_RADIUS_N = cull_r_n;

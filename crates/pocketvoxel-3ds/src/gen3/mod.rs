@@ -108,6 +108,49 @@ static mut LEAN_OK: bool = false;
 static mut LEAN_F: f32 = 0.0;
 static mut SOUND_ON: bool = false;
 
+/// Linear memory a hidden world (flatWorld: a battle) may be kept in when it
+/// hides: the battle's own pictures still to come take about 2.5 MB more.
+const KEEP_MIN_KB: usize = 4608;
+/// Kept, and linear has run this low meanwhile: the world goes (the flat
+/// rebuild, as before), so the 2D layer's next textures have room.
+const KEEP_LOW_KB: usize = 2048;
+static mut KEEPING: bool = false;
+
+/// Just before main.rs's rebuild (a same-line hook clears its `reload`
+/// when this says so). The world hidden for a battle used to be rebuilt
+/// flat at once -- its vertex buffers, seam strips, trees and terrain
+/// texture freed -- and rebuilt in full the frame the battle ended: the
+/// rebuild was 320 ms of host time (most of it the seam strips, re-read
+/// from the card) on the first frame back on the field. Now the built world
+/// is kept while hidden, undrawn, when linear memory allows, and coming back
+/// costs nothing; the rebuild still runs when the map itself changed
+/// (`same_map` false), when the world was already flat, or when linear
+/// memory is short (then exactly as before).
+pub fn hold_rebuild(hidden: bool, built_flat: bool, same_map: bool, free_kb: usize) -> bool {
+    let keeping = unsafe { KEEPING };
+    if !hidden || built_flat || !same_map {
+        if keeping {
+            unsafe { KEEPING = false };
+            if !hidden { dlog("[pv] g3 world: shown again as kept (no rebuild)"); }
+        }
+        return false;
+    }
+    if !keeping {
+        if free_kb < KEEP_MIN_KB {
+            dlog(&format!("[pv] g3 world: hidden, let go (linear {} KB)", free_kb));
+            return false;
+        }
+        unsafe { KEEPING = true };
+        dlog(&format!("[pv] g3 world: hidden, kept (linear {} KB)", free_kb));
+    }
+    if free_kb < KEEP_LOW_KB {
+        unsafe { KEEPING = false };
+        dlog(&format!("[pv] g3 world: hidden, linear down to {} KB: let go", free_kb));
+        return false;
+    }
+    true
+}
+
 /// The map vertex cap with the 2D layer's linear share taken off (main.rs
 /// hands the result to mapplan on its next line).
 pub fn map_cap(free_kb: usize, cap: usize) -> usize {
