@@ -49,6 +49,9 @@ import { gbPalette, type PageDef } from "./atlas.ts";
 import { ROOT } from "./data.ts";
 import { frCacheDir, type FrData, type FrMap, type FrPair, loadFrData, loadPair } from "./gen3.ts";
 import { meshTerrain, type TerrainStats, type TileArt } from "./gen3terrain.ts";
+import { makeCtx } from "./g3ds/ctx.ts";
+import { meshScene } from "./g3ds/mesh.ts";
+import { buildScene, HULL_STEPS, HULL_STEPS_LEAN, type HullSteps, type NeighbourBody } from "./g3ds/struct.ts";
 import { type MapGeometry, packMap } from "./mesh.ts";
 import { writePak } from "./pak.ts";
 
@@ -103,38 +106,119 @@ export interface Gen3CookResult {
   verts: number;
   /** Quads per stream, each card counted once. */
   quads: { terrain: number; sheets: number; water: number; cards: number };
-  stats: TerrainStats;
+  stats: TerrainStats | Record<string, number>;
+  /** Index entries in the written pak: what the 3DS uploads, one vertex each. */
+  pakIndices?: number;
+  treeShapes?: number;
+  /** Art px per hull voxel (near, mid) the dramatic cook settled on. */
+  hullSteps?: [number, number];
+}
+
+/**
+ * Index entries (= uploaded vertices: the 3DS host expands every index) a
+ * map may write before its hulls fall back to the coarse carve. A town's
+ * spans plus its tree shapes share ~7.6 MB of linear memory with the seam
+ * strips of its neighbours and a 1 MB reserve; 240k vertices is 4.7 MB of
+ * it (20 bytes each). (ours)
+ */
+const FR_PAK_VERT_BUDGET = Number(process.env.FR_PAK_VERT_BUDGET ?? 240_000);
+
+/**
+ * The world rules: "dramatic" (the default; UNDERdecoded's DramaticShapes
+ * Gen 3 pipeline, cook/g3ds/) or "mod" (FR_WORLD=mod: the voxel-frlg port in
+ * cook/gen3terrain.ts, kept for an A/B).
+ */
+export const FR_WORLD = process.env.FR_WORLD === "mod" ? "mod" : "dramatic";
+
+/** The bodies of the maps connected to `map`, in its world px (the ring's horizon test). */
+function neighbourBodies(data: FrData, map: FrMap): NeighbourBody[] {
+  const out: NeighbourBody[] = [];
+  for (const [dir, c] of Object.entries(map.connections ?? {})) {
+    const n = data.maps[c.map];
+    if (!n) continue;
+    const o = c.offset * 16;
+    if (dir === "north") out.push({ x0: o, z0: -n.height * 16, x1: o + n.width * 16, z1: 0 });
+    else if (dir === "south") out.push({ x0: o, z0: map.height * 16, x1: o + n.width * 16, z1: (map.height + n.height) * 16 });
+    else if (dir === "west") out.push({ x0: -n.width * 16, z0: o, x1: 0, z1: o + n.height * 16 });
+    else if (dir === "east") out.push({ x0: map.width * 16, z0: o, x1: (map.width + n.width) * 16, z1: o + n.height * 16 });
+  }
+  return out;
+}
+
+const pairMapsCache = new WeakMap<FrData, Map<string, FrMap[]>>();
+function pairMapsOf(data: FrData): (name: string) => FrMap[] {
+  let m = pairMapsCache.get(data);
+  if (!m) {
+    m = new Map();
+    for (const mp of Object.values(data.maps)) {
+      let l = m.get(mp.pair);
+      if (!l) m.set(mp.pair, (l = []));
+      l.push(mp);
+    }
+    pairMapsCache.set(data, m);
+  }
+  const mm = m;
+  return (name) => mm.get(name) ?? [];
 }
 
 /** Cook one map to one pak. */
 export function cookFrMap(data: FrData, id: string, outPath: string, opts: { instances?: boolean } = {}): Gen3CookResult {
+  if (FR_WORLD !== "dramatic") return cookFrMapWith(data, id, outPath, opts, HULL_STEPS);
+  const first = cookFrMapWith(data, id, outPath, opts, HULL_STEPS);
+  if ((first.pakIndices ?? 0) <= FR_PAK_VERT_BUDGET) return first;
+  // too many vertices for the console: the same map with the coarse carve
+  const lean = cookFrMapWith(data, id, outPath, opts, HULL_STEPS_LEAN);
+  if ((lean.pakIndices ?? 0) > FR_PAK_VERT_BUDGET) {
+    console.warn(`gen3cook: ${id} is ${lean.pakIndices} vertices even with the coarse hulls (budget ${FR_PAK_VERT_BUDGET})`);
+  }
+  return lean;
+}
+
+function cookFrMapWith(data: FrData, id: string, outPath: string, opts: { instances?: boolean }, steps: HullSteps): Gen3CookResult {
   const map = data.maps[id];
   if (!map) throw new Error(`unknown FireRed map: ${id}`);
   const pair = loadPair(data.root, map.pair);
   const { page, art, clut } = buildPairPage(pair);
-  const t = meshTerrain(data.root, map, pair, art);
-
-  // Cards ride the tree path when instancing (the pak writer dedupes them
-  // into TINS shapes); every level of detail draws the same card, so the
-  // runtime's choice of level never drops one.
-  const instances = opts.instances ?? process.env.FR_CARD_INSTANCES !== "0";
-  const cards = instances ? t.cards.map((q) => ({ ...q, tree: true })) : t.cards;
-  const geo: MapGeometry = {
-    // carved-tree quads must be the terrain stream's suffix (mesh.ts packMap)
-    terrain: [...t.terrain, ...t.sheets, ...cards],
-    treeCoarse: instances ? t.cards : [],
-    treeBox: instances ? t.cards : [],
-    water: t.water,
-    grass: [],
-    flower: [],
-    stamps: new Map(),
-  };
+  let geo: MapGeometry;
+  let quads: Gen3CookResult["quads"];
+  let stats: TerrainStats | Record<string, number>;
+  if (FR_WORLD === "dramatic") {
+    // DramaticShapes' Gen 3 pipeline (cook/g3ds): every tree and prop is a
+    // carved hull or a per-pixel slab, every building a box under its roof;
+    // the hulls ride the tree path (TINS) with their own coarse and box
+    // levels of detail
+    const ctx = makeCtx(data.root, map, pair, pairMapsOf(data));
+    const S = buildScene(ctx, art, neighbourBodies(data, map), steps);
+    const g = meshScene(S);
+    geo = { terrain: g.terrain, treeCoarse: g.treeCoarse, treeBox: g.treeBox, water: g.water, grass: [], flower: [], stamps: new Map() };
+    quads = { terrain: g.stats.terrainQuads, sheets: g.stats.objectQuads, water: g.water.length, cards: g.stats.hullQuads };
+    stats = S.stats;
+  } else {
+    const t = meshTerrain(data.root, map, pair, art);
+    // Cards ride the tree path when instancing (the pak writer dedupes them
+    // into TINS shapes); every level of detail draws the same card, so the
+    // runtime's choice of level never drops one.
+    const instances = opts.instances ?? process.env.FR_CARD_INSTANCES !== "0";
+    const cards = instances ? t.cards.map((q) => ({ ...q, tree: true })) : t.cards;
+    geo = {
+      // carved-tree quads must be the terrain stream's suffix (mesh.ts packMap)
+      terrain: [...t.terrain, ...t.sheets, ...cards],
+      treeCoarse: instances ? t.cards : [],
+      treeBox: instances ? t.cards : [],
+      water: t.water,
+      grass: [],
+      flower: [],
+      stamps: new Map(),
+    };
+    quads = { terrain: t.terrain.length, sheets: t.sheets.length, water: t.water.length, cards: t.cards.length };
+    stats = t.stats;
+  }
   const { chunks, stamps } = packMap(geo, { baseY: 0, pageW: page.w, pageH: page.h });
   const verts = chunks.reduce((n, c) => n + c.meshes.reduce((m, mesh) => m + mesh.verts.length, 0), 0);
   const treeLod = chunks.some((c) => c.meshes[MESH_KIND.treeBox]!.indices.length > 0);
   const treeCoarse = chunks.some((c) => c.meshes[MESH_KIND.treeCoarse]!.indices.length > 0);
   const gameJson = new TextEncoder().encode(JSON.stringify({ game: "firered", maps: { [id]: mapRecord(map) } }));
-  const { bytes } = writePak({
+  const { bytes, stats: pakStats } = writePak({
     palettes: [clut, gbPalette(), gbPalette(), gbPalette()],
     pages: [page],
     maps: [{ mapId: map.index, chunks, stamps }],
@@ -146,8 +230,18 @@ export function cookFrMap(data: FrData, id: string, outPath: string, opts: { ins
   });
   mkdirSync(join(outPath, ".."), { recursive: true });
   writeFileSync(outPath, bytes);
-  const quads = { terrain: t.terrain.length, sheets: t.sheets.length, water: t.water.length, cards: t.cards.length };
-  return { id, index: map.index, bytes: bytes.length, chunks: chunks.length, verts, quads, stats: t.stats };
+  return {
+    id,
+    index: map.index,
+    bytes: bytes.length,
+    chunks: chunks.length,
+    verts,
+    quads,
+    stats,
+    pakIndices: pakStats.indices,
+    treeShapes: pakStats.treeShapes,
+    hullSteps: FR_WORLD === "dramatic" ? [steps.near, steps.mid] : undefined,
+  };
 }
 
 const DIST = join(ROOT, "dist/voxelmon");
@@ -180,7 +274,7 @@ export function cookFireRed(only?: string[], opts: { orig?: string; paks?: strin
   console.log(`  ${names.length} paks, ${(total / 1048576).toFixed(1)} MB before sharing, ${((performance.now() - t0) / 1000).toFixed(1)} s`);
   writeFileSync(
     join(orig, "cook_stats.json"),
-    JSON.stringify(results.map((r) => ({ id: r.id, index: r.index, bytes: r.bytes, chunks: r.chunks, verts: r.verts, quads: r.quads, ...r.stats })), null, 1),
+    JSON.stringify(results.map((r) => ({ id: r.id, index: r.index, bytes: r.bytes, chunks: r.chunks, verts: r.verts, pakIndices: r.pakIndices, treeShapes: r.treeShapes, hullSteps: r.hullSteps, quads: r.quads, ...r.stats })), null, 1),
   );
   if (only) {
     console.log("gen3cook: --only, so stopping after the cooks (no share, no index)");
