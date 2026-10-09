@@ -96,11 +96,14 @@ static G3_BYTECODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/g3.qbc"));
 /// and two 590 KB vertex buffers ride there too.
 const G3_LINEAR_KB: usize = 8 * 1024;
 
-/// FireRed's pak cache. Its paks are small (the largest, Route 23, is 733
-/// KB: one tile page of 256x848, shared through common.vxat), and the heap
-/// is wanted by the Gen 3 runtime's QuickJS heap far more than by maps the
-/// player has walked away from.
-const G3_PAK_CACHE_KB: usize = 6 * 1024;
+/// FireRed's pak cache. Its paks are small (with the DramaticShapes world a
+/// town is ~1.6 MB, a route ~2.3), and the heap is wanted by the Gen 3
+/// runtime's QuickJS heap far more than by maps the player has walked away
+/// from: room for the map in use, the one before it and the neighbour being
+/// read ahead. (It was 6 MB, but every build let the cache go then:
+/// BUILD_HEAP_MB below; kept now, it counts, and the app heap's high water
+/// came within 4 MB of its end.)
+const G3_PAK_CACHE_KB: usize = 5 * 1024;
 
 static mut GPU_OK: bool = false;
 static mut LEAN_OK: bool = false;
@@ -149,6 +152,155 @@ pub fn hold_rebuild(hidden: bool, built_flat: bool, same_map: bool, free_kb: usi
         return false;
     }
     true
+}
+
+/// The heap a map build wants free in one block before it starts (main.rs
+/// BUILD_HEAP_MB, 16 for Kanto and Johto, whose builds staged a route's
+/// vertices in one ~6 MB block). FireRed's build stages its vertices in
+/// segments (the segmented VertStore) and asks for each fallibly; the largest
+/// single ask is its terrain texture's pixels, 1 MB at most. With 16 -- or 8
+/// -- a QuickJS heap of 60 MB or more never left such a block (the log: 2 to
+/// 4 MB), so every build let the whole pak cache go first and every door back
+/// out of a house read the town's pak from the card again (320 ms on Citra).
+pub const BUILD_HEAP_MB: usize = 2;
+/// The headroom a read-ahead must leave behind it (main.rs PREFETCH_HEAP_MB,
+/// 16): with that, FireRed's heap refused nearly every read-ahead, and the
+/// map across a seam was read in the crossing frame (440 ms for a route).
+pub const PREFETCH_HEAP_MB: usize = 4;
+/// A read-ahead's slice (main.rs PREFETCH_SLICE, 64 KB: ~6 ms of the card on
+/// hardware, which a 60 fps frame has no room for).
+pub const PREFETCH_SLICE: usize = 16 * 1024;
+
+/// The time a frame gives the read-ahead (main.rs's 12 ms, 24 near the
+/// map's edge, sized for Kanto's 30 fps): what a 60 fps frame has left over
+/// -- at the 30 fps pace too, where a frame's two ticks already take most of
+/// its 33 ms (6 ms there made the frames after a door miss their beat) -- a
+/// little more near the edge, more while a warp's door and fade play.
+pub fn prefetch_budget(kanto_ms: u64) -> u64 {
+    if warp_read_in_flight() {
+        return 6;
+    }
+    if kanto_ms > 12 { 3 } else { 2 }
+}
+
+extern "C" {
+    fn g3_read_ahead_take() -> *const core::ffi::c_char;
+}
+
+/// The map a warp is going to, while its read-ahead is in flight.
+static mut WARP_TARGET: Option<String> = None;
+
+/// main.rs's read-ahead step (a same-line hook at its top): a warp the guest
+/// has just begun (core/warp.ts announce -> g3ReadAhead) has its map's pak
+/// read during the door and the fade, a slice a frame, instead of in the
+/// first frame of the new map (320 ms for a town on Citra, every visit the
+/// cache did not keep it). The neighbour being read ahead gives way -- the
+/// warp leaves this map -- and so do cached maps other than the one in use,
+/// if the cache has no room. main.rs's load adopts the read where it got to.
+#[allow(static_mut_refs)]
+pub fn warp_read_ahead() {
+    let p = unsafe { g3_read_ahead_take() };
+    if p.is_null() {
+        return;
+    }
+    let name = unsafe { core::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned();
+    unsafe {
+        if super::PAK_CACHE.iter().any(|c| c.name == name) {
+            dlog(&format!("[pv] g3 warp to {}: its pak is cached", name));
+            return;
+        }
+        if super::PREFETCH.as_ref().is_some_and(|pf| pf.name == name) {
+            WARP_TARGET = Some(name);
+            return;
+        }
+        super::PREFETCH = None;
+        let path = format!("{}/{}.vxpak", super::PAKS_DIR, name);
+        let kb = std::fs::metadata(&path).map(|m| (m.len() / 1024) as usize).unwrap_or(0);
+        if kb == 0 {
+            return;
+        }
+        while super::cache_total_kb() + kb > super::PAK_CACHE_BUDGET_KB && super::evict_lru(true) {}
+        super::PREFETCH_TRIED.retain(|n| n != &name);
+        let ok = super::prefetch_start(&name);
+        dlog(&format!("[pv] g3 warp to {}: read ahead {} ({} KB)", name, if ok { "begun" } else { "refused" }, kb));
+        if ok {
+            WARP_TARGET = Some(name);
+        }
+    }
+}
+
+/// The map the cache was last trimmed for, and the one before it.
+static mut ROOM_FOR: u32 = u32::MAX;
+static mut ROOM_PREV: u32 = u32::MAX;
+
+/// main.rs's read-ahead step (the same hook line): once on each map, the
+/// cached maps that are neither it, the map just left, nor one of its
+/// neighbours are let go. main.rs's read-ahead refuses a map that does not
+/// fit beside what is cached rather than push anything out (Kanto's rule,
+/// for the map underfoot), so a cache full of maps walked away from -- the
+/// town before the last warp, its routes -- read nothing ahead again: in
+/// Viridian the route south was read in the crossing frame, 440 ms, every
+/// time. (The map in use is never let go.)
+#[allow(static_mut_refs)]
+pub fn prefetch_room(map_index: &[(u32, String)], cur: u32) {
+    unsafe {
+        if ROOM_FOR == cur {
+            return;
+        }
+        ROOM_PREV = ROOM_FOR;
+        ROOM_FOR = cur;
+    }
+    let sc = unsafe { super::voxel::scene() };
+    let name_of = |id: u32| map_index.iter().find(|(m, _)| *m == id).map(|(_, n)| n.as_str());
+    let mut keep: Vec<&str> = Vec::new();
+    for id in [cur, unsafe { ROOM_PREV }] {
+        if let Some(n) = name_of(id) { keep.push(n); }
+    }
+    for i in 1..sc.maps.len() {
+        if sc.maps[i].shown {
+            if let Some(n) = name_of(sc.maps[i].map_id) { keep.push(n); }
+        }
+    }
+    unsafe {
+        let before = super::cache_total_kb();
+        let in_use = super::PAK_IN_USE;
+        super::PAK_CACHE.retain(|c| keep.contains(&c.name.as_str()) || core::ptr::eq(&**c as *const super::CachedPak, in_use));
+        let after = super::cache_total_kb();
+        if after < before {
+            dlog(&format!("[pv] g3 pak cache: {} KB of maps walked away from let go ({} KB kept)", before - after, after));
+        }
+    }
+}
+
+/// Whether the read in flight is a warp's (its frames are a door and a
+/// fade: the read may take more of them).
+#[allow(static_mut_refs)]
+fn warp_read_in_flight() -> bool {
+    unsafe {
+        let hit = match (&WARP_TARGET, super::PREFETCH.as_ref()) {
+            (Some(t), Some(pf)) => &pf.name == t,
+            _ => false,
+        };
+        if !hit {
+            WARP_TARGET = None;
+        }
+        hit
+    }
+}
+
+/// A map id no connection has: given as the map a crossing came from, it
+/// makes main.rs defer every seam strip.
+const NO_MAP: u32 = u32::MAX;
+
+/// main.rs's seam strips after a map change: a crossing builds the strip
+/// behind the player at once and defers the rest; a warp (a door, the
+/// first frame back on the field) built all of them in its one frame --
+/// 257 ms for Viridian's three, read from the card. In FireRed a warp
+/// defers them all too (they are at the map's far edges, and arrive a
+/// slice a frame during the fade-in): `crossing_from` None becomes a map no
+/// strip belongs to.
+pub fn strips_later(crossing_from: Option<u32>) -> Option<u32> {
+    crossing_from.or(Some(NO_MAP))
 }
 
 /// The map vertex cap with the 2D layer's linear share taken off (main.rs

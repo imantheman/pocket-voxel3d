@@ -605,7 +605,7 @@ const PREFETCH_MS_NEAR: u64 = 24;
 const PREFETCH_NEAR_PX: f32 = 3.0 * CHUNK_PX as f32;
 /// Bytes per read. At ~11 MB/s this is ~6 ms, comfortably inside the budget
 /// while being big enough that per-read overhead is not the limit.
-const PREFETCH_SLICE: usize = 64 * 1024;
+#[cfg(not(feature = "gen3"))] const PREFETCH_SLICE: usize = 64 * 1024; #[cfg(feature = "gen3")] const PREFETCH_SLICE: usize = gen3::PREFETCH_SLICE;
 
 /// Begin reading `name` ahead, unless it is already resident, already in
 /// progress, or would not fit beside what is cached.
@@ -805,9 +805,9 @@ unsafe fn evict_lru(protect_in_use: bool) -> bool {
 /// largest free block was down to 1 MB when entering Route 29 from New Bark
 /// with Routes 26, 27 and 46 read ahead (21 MB cached, under the 24 MB
 /// budget): the build after the upload died, back to the HOME Menu.
-const BUILD_HEAP_MB: usize = 16;
+#[cfg(not(feature = "gen3"))] const BUILD_HEAP_MB: usize = 16; #[cfg(feature = "gen3")] const BUILD_HEAP_MB: usize = gen3::BUILD_HEAP_MB;
 /// The same headroom a read-ahead must leave behind it, or it is not kept.
-const PREFETCH_HEAP_MB: usize = 16;
+#[cfg(not(feature = "gen3"))] const PREFETCH_HEAP_MB: usize = 16; #[cfg(feature = "gen3")] const PREFETCH_HEAP_MB: usize = gen3::PREFETCH_HEAP_MB;
 
 /// Before a build: a read-ahead in flight, then the least recent cached
 /// maps (never the one in use) let go until BUILD_HEAP_MB is free in one
@@ -5241,7 +5241,7 @@ fn main() {
                     // and competing with it would make the visible wait
                     // longer, not shorter.
                     if !reload {
-                        unsafe { prefetch_retarget(map_ids.get(map_i).copied().unwrap_or(0)) };
+                        unsafe { prefetch_retarget(map_ids.get(map_i).copied().unwrap_or(0)) }; #[cfg(feature = "gen3")] gen3::prefetch_room(&map_index, map_ids.get(map_i).copied().unwrap_or(0)); #[cfg(feature = "gen3")] gen3::warp_read_ahead();
                         // How close the player is to leaving this map at all:
                         // the read in flight is for a neighbour, and near the
                         // edge it is about to be wanted.
@@ -5249,7 +5249,7 @@ fn main() {
                             .min(geom.map_max[0] - center[0])
                             .min(center[2] - geom.map_min[1])
                             .min(geom.map_max[1] - center[2]);
-                        let budget = if edge < PREFETCH_NEAR_PX { PREFETCH_MS_NEAR } else { PREFETCH_MS };
+                        let budget = if edge < PREFETCH_NEAR_PX { PREFETCH_MS_NEAR } else { PREFETCH_MS }; #[cfg(feature = "gen3")] let budget = gen3::prefetch_budget(budget);
                         if unsafe { prefetch_step(budget) } {
                             // Inserting into PAK_CACHE can reallocate it and
                             // move the Pak structs with it, and pak_static
@@ -5748,7 +5748,7 @@ fn main() {
                 // StripJob). A warp builds them all here, behind its fade;
                 // the forest zone keeps its loader exactly as it was.
                 let crossing_from = prev_map_id
-                    .filter(|p| !unsafe { LEGACY_ZONE } && neighbor_slots.iter().any(|s| s.0 == *p));
+                    .filter(|p| !unsafe { LEGACY_ZONE } && neighbor_slots.iter().any(|s| s.0 == *p)); #[cfg(feature = "gen3")] let crossing_from = gen3::strips_later(crossing_from);
                 strip_jobs.clear();
                 if !cur_map_huge && free_kb >= STRIP_MIN_FREE_KB && !built_flat {
                     for &(nid, ox, oy) in neighbor_slots.iter() {

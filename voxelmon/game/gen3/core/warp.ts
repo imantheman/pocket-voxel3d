@@ -36,6 +36,7 @@ import { Weather } from "./weather.ts";
 import { Dive } from "./dive.ts";
 import { mod as lmod, tonumber, tostring, truthy } from "../../../import/gen3/lua.ts";
 import { find } from "../platform/lpattern.ts";
+import { Fast } from "../platform/fast.ts";
 
 type MapId = any;
 type Done = () => void;
@@ -155,6 +156,10 @@ function announce(game: any, destMap: MapId, destX: number, destY: number, kind:
   if (Collision && Collision.noteDynamicWarpEntry) {
     Collision.noteDynamicWarpEntry(game, destMap, destX, destY, srcX, srcY);
   }
+  // NOT FAITHFUL (performance, nothing seen): the host told where the warp
+  // goes as it starts, so it can read that map's world off the card during
+  // the door and the fade rather than in the first frame there
+  if (Fast.warpHint) Fast.warpHint(destMap);
   return [destMap, destX, destY];
 }
 

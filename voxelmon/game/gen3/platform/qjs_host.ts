@@ -35,6 +35,9 @@ if (pngNative.g3Blit) setNativeBlit(pngNative.g3Blit);
   };
   if (f.g3Md5) Fast.md5 = (s) => f.g3Md5!(s);
   if (f.g3Bake) Fast.bake = (b, p, m, c, r, l) => f.g3Bake!(b, p, m, c, r, l);
+  // a warp's destination, for the host's read-ahead of its world (g3ReadAhead)
+  const r = n as typeof n & { g3ReadAhead?(map: string): void };
+  if (r.g3ReadAhead) Fast.warpHint = (m) => r.g3ReadAhead!(m);
 }
 
 /** Draw-list timing, summed until read (main.ts's perf lines). */

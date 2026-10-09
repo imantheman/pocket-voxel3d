@@ -22,6 +22,8 @@
                                                         console.log also prints
                                                         it to stdout, slowly)
      g3Md5(byte string), g3Bake(...)                   (two hot loops, g3_fast.c)
+     g3ReadAhead(map)                                  (a warp's destination, for
+                                                        the read-ahead)
 
    Paths are the cache's (data/generated/gba/...), under
    sdmc:/3ds/voxelmon/firered/. */
@@ -342,6 +344,27 @@ static JSValue g3_bytes_js(JSContext *ctx, JSValueConst t, int c, JSValueConst *
     JSValue arr = JS_NewUint8Array(ctx, b, n, g3_realloc_buf, NULL, false);
     if (JS_IsException(arr)) { g3_realloc_buf(NULL, NULL, b, 0); JS_FreeValue(ctx, JS_GetException(ctx)); return JS_UNDEFINED; }
     return arr;
+}
+
+/* g3ReadAhead(map): a warp to `map` has begun (core/warp.ts); gen3/mod.rs
+   takes the name at the next frame's read-ahead step (g3_read_ahead_take). */
+static char g3_ra_name[96];
+static int g3_ra_set;
+static JSValue g3_readahead(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 1) return JS_UNDEFINED;
+    size_t n = 0;
+    const char *s = JS_ToCStringLen(ctx, &n, v[0]);
+    if (!s) { JS_FreeValue(ctx, JS_GetException(ctx)); return JS_UNDEFINED; }
+    if (n > 0 && n < sizeof g3_ra_name) { memcpy(g3_ra_name, s, n); g3_ra_name[n] = 0; g3_ra_set = 1; }
+    JS_FreeCString(ctx, s);
+    return JS_UNDEFINED;
+}
+/* The name given since the last call (NUL-terminated), or NULL. */
+const char *g3_read_ahead_take(void) {
+    if (!g3_ra_set) return NULL;
+    g3_ra_set = 0;
+    return g3_ra_name;
 }
 
 /* ------------------------------------------------------------ hot loops
@@ -736,6 +759,7 @@ int qjs_register_g3(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "g3Log", JS_NewCFunction(ctx, g3_log_js, "g3Log", 1));
     JS_SetPropertyStr(ctx, o, "g3Md5", JS_NewCFunction(ctx, g3_md5_js, "g3Md5", 1));
     JS_SetPropertyStr(ctx, o, "g3Bake", JS_NewCFunction(ctx, g3_bake_js, "g3Bake", 6));
+    JS_SetPropertyStr(ctx, o, "g3ReadAhead", JS_NewCFunction(ctx, g3_readahead, "g3ReadAhead", 1));
     static const struct { const char *name; JSCFunction *fn; int n; } snd[] = {
         { "g3SongPlay", g3_songplay, 1 }, { "g3SongStop", g3_songstop, 0 },
         { "g3SongPause", g3_songpause, 0 }, { "g3SongResume", g3_songresume, 0 },
