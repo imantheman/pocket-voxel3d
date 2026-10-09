@@ -1577,6 +1577,9 @@ const BENCH_COMBOS: [(usize, f32); 9] = [
     (4, 0.0), (4, 1.0),
 ];
 
+/// A bench's slider is up (the shots take the right eye too).
+static mut BENCH_STEREO: bool = false;
+
 /// One combination's sums over its measured half.
 #[derive(Default)]
 struct BenchAcc {
@@ -2461,8 +2464,9 @@ fn dump_top_screen() {
     let n = unsafe { SHOT_N };
     unsafe { SHOT_N += 1; }
     dump_top_side(0, 0, &format!("sdmc:/3ds/voxelmon/shot_{}.ppm", n));
-    // the right eye too while the slider is up (stereo checks: shot_N_r)
-    if ctru::os::current_3d_slider_state() > 0.0 {
+    // the right eye too while the slider is up (stereo checks: shot_N_r),
+    // or a bench has it up (BENCH_STEREO)
+    if ctru::os::current_3d_slider_state() > 0.0 || unsafe { BENCH_STEREO } {
         dump_top_side(0, 1, &format!("sdmc:/3ds/voxelmon/shot_{}_r.ppm", n));
     }
     // and the bottom screen (shot_N_b)
@@ -6176,6 +6180,7 @@ fn main() {
         );
         let slider = ctru::os::current_3d_slider_state();
         let slider = if BENCH { BENCH_COMBOS[bench_combo].1 } else { slider };
+        if BENCH { unsafe { BENCH_STEREO = slider > 0.05; } }
         perf_slider = slider;
         let (sl, sr) = StereoDisplacement::new(slider * dist * STEREO_IOD, dist * STEREO_SCREEN);
         let (pl, pr) = Projection::perspective(
@@ -7846,7 +7851,7 @@ if page_tex.len() < pak_static.atlases.len() {
                         dlog(&format!(
                             "[pv] bench: spot {} cam {} 3d {:.0} | L {:.0} verts {:.1} calls R {:.0} verts {:.1} calls | cpu {:.2} max {:.1} ms cull {:.3} submit {:.3} ms | cmdbuf {:.1}% | spans {:.1} trees {:.1} | frames {}",
                             // the round the combination was in, less the boot's
-                            (seg - 1) / BENCH_COMBOS.len() - 1, CAM_MODES[cm].name, sl,
+                            (seg as i64 - 1) / BENCH_COMBOS.len() as i64 - 1, CAM_MODES[cm].name, sl,
                             a.verts[0] as f32 / n, a.draws[0] as f32 / n,
                             a.verts[1] as f32 / n, a.draws[1] as f32 / n,
                             a.cpu_ms / n, a.cpu_max, a.cull_us / n / 1000.0, a.submit_us / n / 1000.0,
