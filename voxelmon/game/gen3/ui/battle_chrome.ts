@@ -163,7 +163,40 @@ function resolve_cache(cache: any): any {
 }
 
 // Lua: battle_chrome.lua:54
+// NOT FAITHFUL (performance, the same bytes): the battle screen's pictures
+// as last read, the last READ_KEEP_BYTES of them. Every battle's start
+// installs the chrome again (battle/ui.ts reset) and reads the text box and
+// the terrain's five layers from the card's pack: 1.4 MB inflated, ~220 ms
+// of a battle's start on the console. The next battle in the same terrain
+// reads none of it (those six are 1.5 MB of the 2: the health boxes and
+// the trainer's back picture come through here too); a file's bytes never
+// change in a session.
+const READ_KEEP_BYTES = 2 * 1024 * 1024;
+const readKept = new Map<string, string>();
+let readKeptBytes = 0;
+
 function read_bytes(rel: string): string | undefined {
+  const hit = readKept.get(rel);
+  if (hit !== undefined) {
+    readKept.delete(rel);
+    readKept.set(rel, hit);
+    return hit;
+  }
+  const d = read_bytes_uncached(rel);
+  if (d !== undefined && d.length >= 16384 && d.length <= READ_KEEP_BYTES / 2) {
+    readKept.set(rel, d);
+    readKeptBytes += d.length;
+    // a Map iterates in insertion order: the first is the least recently used
+    for (const [k, v] of readKept) {
+      if (readKeptBytes <= READ_KEEP_BYTES) break;
+      readKept.delete(k);
+      readKeptBytes -= v.length;
+    }
+  }
+  return d;
+}
+
+function read_bytes_uncached(rel: string): string | undefined {
   const cache = BattleChrome._cache;
   if (truthy(cache) && truthy(cache.read)) {
     const d = cache.read(rel);

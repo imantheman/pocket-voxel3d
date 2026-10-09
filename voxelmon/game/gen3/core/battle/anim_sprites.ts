@@ -42,6 +42,13 @@ function clear_slot(s: AnimSprite): void {
   }
 }
 
+// NOT FAITHFUL (performance, the same state): the slots acquired since they
+// were last cleared. reset() clears every one of the 128 with a key walk and
+// deletes -- QuickJS turns each slot into a dictionary to do it -- at every
+// battle's start and end, though a slot never acquired since is already in
+// its cleared state; only these are cleared again.
+const dirty = new Set<AnimSprite>();
+
 // Lua: anim_sprites.lua:111
 function new_slot(): AnimSprite {
   const s: AnimSprite = { data: {} };
@@ -121,8 +128,10 @@ export const AnimSprites: Record<string, any> = {
   reset(): void {
     AnimSprites.init();
     for (let i = 1; i <= AnimSprites.MAX; i++) {
-      clear_slot(AnimSprites._pool[i]);
+      const s = AnimSprites._pool[i];
+      if (dirty.has(s)) clear_slot(s);
     }
+    dirty.clear();
     AnimSprites._overflowLogged = false;
   },
 
@@ -147,6 +156,7 @@ export const AnimSprites: Record<string, any> = {
       const s = AnimSprites._pool[i];
       if (!s.active) {
         clear_slot(s);
+        dirty.add(s);
         s.active = true;
         s.x = opts.x ?? 0;
         s.y = opts.y ?? 0;
