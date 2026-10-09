@@ -204,6 +204,16 @@ building templates and the Gen 2 tile classifier) are ported from this Gen 2
 edition of the Dramatic Shape voxel mod, commit `726782f`, and the Gen 2 cook
 reads its height profile.
 
+The third-generation (GBA) world cook (`voxelmon/cook/g3ds/`) is a TypeScript
+port of the same commit's Gen 3 pipeline -- `lib/Gen3.lua` (the art analysis,
+the scenery carve, the class, role and building readings), `lib/Structures.lua`
+(the building runs and their founding, the hulls, the per-pixel props, rock,
+ledges and falls), `lib/ChunkMesher.lua` (the mesher), `lib/TileShape.lua` and
+`data/gen3_shapes.lua` (the class heights and the behaviour table, translated
+by behaviour NAME from the game it was written for to the one this repository
+cooks) and the `tools/gen3_metatiles_gen.lua` role generator -- with each
+translation marked in the files. Nothing is taken from Gen2Recomped itself.
+
 https://github.com/UNDERdecoded/Gen2Recomped-DramaticShapes
 
 ```
