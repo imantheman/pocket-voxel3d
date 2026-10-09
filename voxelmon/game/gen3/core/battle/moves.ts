@@ -83,9 +83,20 @@ Moves.setLinkRows = function (rows: any): void {
 Moves.BY_NUM = Object.create(null) as Record<number, string>;
 Moves._numByName = null;
 
+// NOT FAITHFUL (performance, same result): each name's constant remembered.
+// build_names runs at every battle's start (loadRomPack) and made all 354
+// with two Lua-pattern gsubs each: a third of a battle's start on the
+// console. const_name is pure, so a name seen before gives its constant back.
+const constNames = new Map<string, string>();
+
 // Lua: moves.lua:26
 function const_name(romName: any): string {
-  return gsub(gsub(tostring(romName).toUpperCase(), "%s+", "_")[0], "-", "_")[0];
+  const s = tostring(romName);
+  const hit = constNames.get(s);
+  if (hit !== undefined) return hit;
+  const out = gsub(gsub(s.toUpperCase(), "%s+", "_")[0], "-", "_")[0];
+  if (constNames.size < 4096) constNames.set(s, out);
+  return out;
 }
 
 // Lua: moves.lua:30
