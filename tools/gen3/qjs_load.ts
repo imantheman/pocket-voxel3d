@@ -17,6 +17,7 @@ import { Input } from "../../voxelmon/game/gen3/shared/core/Input.ts";
 import { WorldView, parseWorldJson } from "../../voxelmon/game/gen3/platform/worldview.ts";
 import { Game3World } from "../../voxelmon/game/gen3/platform/game3_world.ts";
 import { BenchLoad } from "../../voxelmon/game/gen3/platform/bench_load.ts";
+import { getHost } from "../../voxelmon/game/gen3/platform/host.ts";
 
 declare const print: (s: string) => void;
 declare const nowUs: () => number;
@@ -75,7 +76,7 @@ console.log = (...a: unknown[]): void => {
   const s = a.map((x) => (typeof x === "string" ? x : String(x))).join(" ");
   const m = s.match(/^\[pv\] g3 mark: (.*?)(?: \(tick \d+.*\))?$/);
   if (m && !/menu entries|start failed|still on|no warp/.test(m[1]!)) { startSeg(m[1]!.split(";")[0]!); print(`[mark] f${f} ${s.slice(14)}`); return; }
-  if (LOGS || s.startsWith("[pv] g3 mark")) print(s);
+  if (LOGS || s.startsWith("[pv] g3 mark") || s.startsWith("[pv] g3 stray")) print(s);
 };
 console.warn = console.log; console.error = console.log;
 
@@ -94,6 +95,13 @@ if (W3D) {
 }
 
 const bench = new BenchLoad(game, () => `heap ${(memUsage()[0] / 1048576).toFixed(1)} MB`, typeof QJS_PART === "string" ? QJS_PART : "");
+(globalThis as { __loadBench?: BenchLoad }).__loadBench = bench; // tools/gen3/load_shots.ts
+// the bench's probe sees each frame's draw list (the stale party icon check)
+{
+  const host = getHost() as { draw(list: Float32Array): void };
+  const draw0 = host.draw.bind(host);
+  host.draw = (list: Float32Array): void => { bench.probeFrame(list); draw0(list); };
+}
 let tick = 0;
 try {
   startSeg("(start)");
@@ -116,6 +124,7 @@ try {
       if (slow) spikes++;
       profFrameEnd!(slow);
     }
+    (globalThis as { __perfFrame?: (f: number) => void }).__perfFrame?.(f); // tools/gen3/load_shots.ts
     const cur = seg as Seg | null; // (startSeg sets it from the console hook)
     if (cur) { cur.up.push((tb - ta) / 1000); cur.dr.push((tc - tb) / 1000); }
   }
@@ -124,6 +133,7 @@ try {
   endSeg();
   print(`[load] stopped at f${f}: ${(e as Error)?.stack ?? e}`);
 }
+print(`[stray] ${bench.strays} battle frames with a stray party picture (bench_load.ts probeFrame)`);
 print("[load] summary (frame ms avg / p95 / max)");
 for (const s of done) {
   const tot = s.up.map((u, i) => u + s.dr[i]!);

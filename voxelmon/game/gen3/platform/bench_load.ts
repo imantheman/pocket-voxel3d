@@ -25,6 +25,9 @@ import { Stack } from "../ui/stack.ts";
 import { StartMenu } from "../ui/start_menu.ts";
 import { Flags } from "../core/scripting/flags.ts";
 import { Space } from "../core/scripting/space.ts";
+import { Oam } from "../core/oam.ts";
+import { PartyMenu } from "../ui/party_menu.ts";
+import { SummaryMenu } from "../ui/summary_menu.ts";
 
 const BIT: Record<string, number> = { UP: 0, DOWN: 1, LEFT: 2, RIGHT: 3, A: 4, B: 5, START: 6, SELECT: 7 };
 const DIRS: [string, number, number][] = [["up", 0, -1], ["down", 0, 1], ["left", -1, 0], ["right", 1, 0]];
@@ -57,6 +60,55 @@ export class BenchLoad {
     }
   }
 
+  /** Frames of a battle (with no party screen up) that drew a party-menu
+   *  sprite or a small picture in the spot left of the foe's health box. */
+  strays = 0;
+  /** A screenshot (the device's), taken a while into each fight of the "stray" part. */
+  shot: (() => void) | undefined;
+
+  /**
+   * Each frame's draw list (main.ts / tools/gen3/qjs_load.ts hand it over):
+   * a party-menu mon icon left behind (OAM sprite 0, ui/party_menu.ts
+   * ensure_slot_sprites) stood left of the foe's health box in every battle
+   * after the party menu (Isaac's shot). Nothing in a battle draws a 32x32
+   * picture (a mon icon's size) there (starting left of x 16, reaching
+   * 30 <= y < 58, into any target; the foe's box slides in over it with its
+   * 16 px glyphs and 8 px parts), and with no party screen up no OAM sprite is live on the ui
+   * layer (the battle's sprites are its own).
+   */
+  probeFrame(list: Float32Array): void {
+    if (!this.inBattle() || PartyMenu.open || SummaryMenu.isOpen?.()) return;
+    let found = "";
+    for (let i = 0, target = 0; i < list.length;) {
+      const op = list[i]!;
+      if (op === 1) { target = list[i + 1]!; i += 2; } else if (op === 2) i += 5;
+      else if (op === 3) i += 24;
+      else if (op === 4) {
+        let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+        for (let k = 0; k < 4; k++) {
+          const x = list[i + 2 + k * 2]!, y = list[i + 3 + k * 2]!;
+          if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+        }
+        if (Math.round(x1 - x0) === 32 && Math.round(y1 - y0) === 32 && x0 < 16 && x1 > 0 && y1 > 30 && y0 < 58) {
+          found = `a ${Math.round(x1 - x0)}x${Math.round(y1 - y0)} picture (texture ${list[i + 1]}, target ${target}) at ${Math.round(x0)},${Math.round(y0)}`;
+        }
+        i += 18;
+      } else if (op === 5) i += 6 + list[i + 1]! * 6;
+      else if (op === 6) i += 13;
+      else break;
+    }
+    const pool = (Oam as any)._sprites as any[] | null;
+    for (let i = 0; !found && pool && i < pool.length; i++) {
+      const s = pool[i];
+      if (s && s.inUse && !s.invisible && s.image && (s.layer ?? "ui") === "ui") {
+        found = `OAM sprite ${i} live on the ui layer (image ${s.image.id}) at ${s.x},${s.y}`;
+      }
+    }
+    if (!found) return;
+    this.strays++;
+    if (this.strays <= 5) console.log(`[pv] g3 stray: ${found} (tick ${this.tick}, top ${this.top()})`);
+  }
+
   /** The buttons held at `tick`. */
   at(tick: number, game: any): number {
     this.tick = tick;
@@ -79,7 +131,7 @@ export class BenchLoad {
     console.log(`[pv] g3 mark: ${what} (tick ${this.tick}, map ${this.lastMap}, top ${this.top()}, battle ${this.inBattle() ? 1 : 0})`);
   }
 
-  private inBattle(): boolean { const g = this.game; return !!(g && g.speedCategory && g.speedCategory() === "battle"); }
+  inBattle(): boolean { const g = this.game; return !!(g && g.speedCategory && g.speedCategory() === "battle"); }
 
   private *idle(n: number): Gen { for (let i = 0; i < n; i++) yield 0; }
   private *tap(key: string, hold = 4, after = 20): Gen {
@@ -91,7 +143,11 @@ export class BenchLoad {
   private *fight(): Gen {
     const t0 = this.tick;
     let want = 1, tries = 0;
+    // the "stray" part photographs each fight a few seconds in
+    // (then once the player's health box is up: its EXP bar)
+    const shots = this.part === "stray" && this.shot ? [t0 + 240, t0 + 420] : [];
     while (this.inBattle() && this.tick - t0 < 12000) {
+      if (shots.length && this.tick >= shots[0]!) { shots.shift(); this.shot!(); console.log(`[pv] g3 stray: shot (tick ${this.tick}, ${this.strays} stray frames so far)`); }
       const mode = (BattleUi as any)._mode;
       if (mode === "menu") {
         const i = (BattleUi as any)._menuIndex;
@@ -342,6 +398,17 @@ export class BenchLoad {
     yield* this.idle(120);
     this.mark(`arrived; ${this.mem()}`);
     const all = this.part === "";
+    if (this.part === "stray") {
+      // the party menu (and its summary) closed, then a battle: Isaac's
+      // stale party icon beside the foe's health box
+      yield* this.battle("stray: wild before", () => (BattleBridge as any).startWild(Runtime._mod, this.game, { species: 16, level: 4 }, {}));
+      yield* this.menus();
+      yield* this.battle("stray: wild after menus", () => (BattleBridge as any).startWild(Runtime._mod, this.game, { species: 16, level: 4 }, {}));
+      yield* this.menus();
+      yield* this.battle("stray: wild after menus again", () => (BattleBridge as any).startWild(Runtime._mod, this.game, { species: 19, level: 5 }, {}));
+      this.mark(`done; ${this.strays} stray frames; ${this.mem()}`);
+      return;
+    }
     if (all || this.part === "battle") { yield* this.battles(false); this.mark(`battles done; ${this.mem()}`); }
     if (all || this.part === "menu") { yield* this.menus(); this.mark(`menus done; ${this.mem()}`); }
     if (all || this.part === "walk") { yield* this.walks(""); this.mark(`walks done; ${this.mem()}`); }
@@ -349,6 +416,6 @@ export class BenchLoad {
     if (all || this.part === "walk") yield* this.walks(" again");
     if (all || this.part === "battle") yield* this.battles(true);
     if (all || this.part === "menu") yield* this.menus();
-    this.mark(`done; ${this.mem()}`);
+    this.mark(`done; ${this.strays} stray frames; ${this.mem()}`);
   }
 }

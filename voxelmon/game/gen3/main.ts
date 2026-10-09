@@ -41,6 +41,7 @@ import { BenchSuite } from "./platform/bench_suite.ts";
 import { BenchLeak } from "./platform/bench_leak.ts";
 import { BenchLoad } from "./platform/bench_load.ts";
 import { Stack } from "./ui/stack.ts";
+import { getHost } from "./platform/host.ts";
 
 declare const PV_G3_MODE: string;
 declare const PV_G3_BENCH_SCRIPT: string;
@@ -216,6 +217,14 @@ function gameMain(bench: boolean): void {
   // ... or its transitions (platform/bench_load.ts): battles, menus, doors, seams, each marked
   // ("load:battle", "load:menu", "load:walk": that part alone)
   const load = bench && /^load(:|$)/.test(scriptText) ? new BenchLoad(game, () => memText(true), scriptText.slice(5)) : null;
+  if (load) {
+    // its probe sees each frame's draw list on the way to the host, and its
+    // "stray" part photographs the fights
+    const h = getHost() as { draw(list: Float32Array): void };
+    const draw0 = h.draw.bind(h);
+    h.draw = (list: Float32Array): void => { load.probeFrame(list); draw0(list); };
+    load.shot = (): void => { n.screenshot?.(); };
+  }
   const script = new BenchScript(suite || leak || load ? "" : scriptText);
   const shots = shotSet(typeof PV_G3_BENCH_SHOTS === "string" ? PV_G3_BENCH_SHOTS : bench ? "90,300" : "");
   let tick = 0;
