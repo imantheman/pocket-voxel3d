@@ -42,6 +42,7 @@ import { BenchLeak } from "./platform/bench_leak.ts";
 import { BenchLoad } from "./platform/bench_load.ts";
 import { Stack } from "./ui/stack.ts";
 import { getHost } from "./platform/host.ts";
+import { Fade } from "./ui/fade.ts";
 
 declare const PV_G3_MODE: string;
 declare const PV_G3_BENCH_SCRIPT: string;
@@ -93,7 +94,7 @@ function ms1(us: number): string {
 }
 
 /** The boot natives some binaries have (g3_shim.c). */
-const g3n = n as unknown as { g3Mem?(cheap?: boolean): number[]; g3Gc?(hold: boolean): void };
+const g3n = n as unknown as { g3Mem?(cheap?: boolean): number[]; g3Gc?(hold: boolean): void; g3GcIdle?(growth: number): number };
 
 /** The heaps (g3_shim.c g3Mem): QuickJS, the app heap, linear memory. A
  *  cheap reading (the perf lines') leaves out the QuickJS heap, whose count
@@ -267,6 +268,18 @@ function gameMain(bench: boolean): void {
     G.endFrame();
     const t3 = clock();
     view.emit(field.state(game));
+    // A screen held black by a fade (a door, a warp): the cycle collector's
+    // turn, when the heap has grown 6 MB since it last ran here (g3_shim.c
+    // g3GcIdle) -- rather than QuickJS's own run wherever its threshold falls,
+    // a pause of 0.2 to over a second on the console mid-walk or mid-battle.
+    // NOT FAITHFUL (performance): Brian's stepGC is LuaJIT's, a no-op here.
+    {
+      const f = Fade.shown;
+      if (f && f[3] >= 1 && f[0] === 0 && f[1] === 0 && f[2] === 0 && g3n.g3GcIdle) {
+        const ms = g3n.g3GcIdle(4 * 1048576);
+        if (ms >= 0) console.log(`[pv] g3 gc: a cycle collection in a black fade, ${ms} ms`);
+      }
+    }
     const t4 = clock();
     if (bench && t4 - t2 > 20000) {
       console.log(`[pv] g3 slow draw ${ms1(t4 - t2)} ms (begin ${ms1(t2b - t2)} game.draw ${ms1(t2c - t2b)} endFrame ${ms1(t3 - t2c)} world ${ms1(t4 - t3)}; tick ${tick}, ${slowWhere(game)})`);

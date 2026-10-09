@@ -22,8 +22,9 @@
                                                         console.log also prints
                                                         it to stdout, slowly)
      g3Md5(byte string), g3Bake(...)                   (two hot loops, g3_fast.c)
-     g3ReadAhead(map)                                  (a warp's destination, for
-                                                        the read-ahead)
+     g3ReadAhead(map), g3GcIdle(growth)                (a warp's destination for
+                                                        the read-ahead; a cycle
+                                                        collection in a fade)
 
    Paths are the cache's (data/generated/gba/...), under
    sdmc:/3ds/voxelmon/firered/. */
@@ -706,6 +707,10 @@ static JSValue g3_mem(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     return a;
 }
 
+/* QuickJS's heap and newlib's count at g3Gc(false) (after the load): what
+   g3GcIdle estimates QuickJS's heap from, QuickJS's own count being a walk. */
+static size_t g3_js_ref, g3_mall_ref;
+
 /* g3Gc(hold): true holds QuickJS's cycle collector off (Game3.load builds
    tens of MB of tables that hold no cycles, and each collection walks all of
    them: seconds on the console); false runs one collection now and puts the
@@ -720,8 +725,50 @@ static JSValue g3_gc(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
         JSMemoryUsage mu;
         JS_ComputeMemoryUsage(rt, &mu);
         JS_SetGCThreshold(rt, (size_t)(mu.malloc_size + mu.malloc_size / 2));
+        g3_js_ref = (size_t)mu.malloc_size;
+        g3_mall_ref = (size_t)(unsigned)mallinfo().uordblks;
     }
     return JS_UNDEFINED;
+}
+
+/* g3GcIdle(growthBytes) -> ms taken, or -1: QuickJS's cycle collector run
+   now, while the screen is black (the guest calls it from a fade at full
+   strength: a door's, a battle's), when the app heap has grown by at least
+   growthBytes since the last time it ran here. A collection walks every
+   object of a 40-60 MB heap -- 0.2 to over a second on the console -- and
+   QuickJS's own runs when its threshold is crossed, wherever the player is;
+   one run in a fade instead frees the cycles before they reach it. The heap
+   in use is newlib's count (mallinfo), QuickJS's own being a full walk. A
+   collection called from here leaves QuickJS's threshold where it was, so
+   it is set as QuickJS would after its own, from QuickJS's heap estimated
+   by newlib's count against the reference g3Gc(false) took: 1.5x, but at
+   most 8 MB past it (QuickJS's 1.5x of a 62 MB heap was 93 MB, past what
+   the app heap can give). */
+uint64_t svcGetSystemTick(void); /* libctru */
+static size_t g3_gc_idle_base;
+static JSValue g3_gcidle(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    double growth = 6.0 * 1048576.0;
+    if (c > 0) JS_ToFloat64(ctx, &growth, v[0]);
+    struct mallinfo mi = mallinfo();
+    size_t used = (size_t)(unsigned)mi.uordblks;
+    if (g3_gc_idle_base == 0 || used < g3_gc_idle_base) { g3_gc_idle_base = used; return JS_NewInt32(ctx, -1); }
+    if ((double)(used - g3_gc_idle_base) < growth) return JS_NewInt32(ctx, -1);
+    JSRuntime *rt = JS_GetRuntime(ctx);
+    if (JS_GetGCThreshold(rt) == (size_t)-1) return JS_NewInt32(ctx, -1); /* held off (g3Gc(true)) */
+    uint64_t t0 = svcGetSystemTick();
+    JS_RunGC(rt);
+    double ms = (double)(svcGetSystemTick() - t0) / 268111.856;
+    mi = mallinfo();
+    g3_gc_idle_base = (size_t)(unsigned)mi.uordblks;
+    if (g3_mall_ref && g3_js_ref) {
+        long long est = (long long)g3_js_ref + ((long long)g3_gc_idle_base - (long long)g3_mall_ref);
+        if (est > (long long)(16 << 20)) {
+            size_t e = (size_t)est, add = e / 2 < ((size_t)8 << 20) ? e / 2 : ((size_t)8 << 20);
+            JS_SetGCThreshold(rt, e + add);
+        }
+    }
+    return JS_NewInt32(ctx, (int32_t)(ms + 0.5));
 }
 
 static JSValue g3_audioready(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
@@ -751,6 +798,7 @@ int qjs_register_g3(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "g3RunBytecode", JS_NewCFunction(ctx, g3_runbytecode, "g3RunBytecode", 0));
     JS_SetPropertyStr(ctx, o, "g3Mem", JS_NewCFunction(ctx, g3_mem, "g3Mem", 0));
     JS_SetPropertyStr(ctx, o, "g3Gc", JS_NewCFunction(ctx, g3_gc, "g3Gc", 1));
+    JS_SetPropertyStr(ctx, o, "g3GcIdle", JS_NewCFunction(ctx, g3_gcidle, "g3GcIdle", 1));
     JS_SetPropertyStr(ctx, o, "g3Strips", JS_NewCFunction(ctx, g3_strips, "g3Strips", 5));
     JS_SetPropertyStr(ctx, o, "g3HostKeys", JS_NewCFunction(ctx, g3_hostkeys, "g3HostKeys", 1));
     g3_save_register(ctx, o);
