@@ -773,6 +773,10 @@ function SpriteCB_UpdatePartyMonIcon(sprite: Sprite): void {
   }
 }
 
+// (A sprite id is a number from 0, and Lua's `if slot.mon` is true for 0:
+// the tests are `!= null`. With `if (slot.mon)` the first icon made, OAM
+// sprite 0, was taken for none, made again under a new id the next frame and
+// left behind -- the party's first icon drawn in the next battle.)
 // Lua: party_menu.lua:580
 function ensure_slot_sprites(i: number, mon: any, selected: boolean): void {
   PartyMenu._oam = PartyMenu._oam || seq();
@@ -800,7 +804,7 @@ function ensure_slot_sprites(i: number, mon: any, selected: boolean): void {
 
   const icon = Pokemon.monIcon(mon);
   const q0 = icon && icon.quads ? icon.quads[0] : null;
-  if (!slot.mon) {
+  if (slot.mon == null) {
     const id = Oam.createSprite({
       dims: Oam.SQUARE_32,
       priority: 1,
@@ -817,7 +821,7 @@ function ensure_slot_sprites(i: number, mon: any, selected: boolean): void {
       ms.subpriority = SUB_MON;
     }
   }
-  if (slot.mon) {
+  if (slot.mon != null) {
     const s = Oam.get(slot.mon);
     if (s) {
       s._quads = icon ? icon.quads : null;
@@ -854,7 +858,7 @@ function ensure_slot_sprites(i: number, mon: any, selected: boolean): void {
   const hold = holdFrame != null ? PartyMenu.heldItemSheet() : null;
   if (hold) {
     const hq = hold.quads[holdFrame!];
-    if (!slot.item) {
+    if (slot.item == null) {
       slot.item = Oam.createSprite({
         dims: Oam.SQUARE_8,
         priority: 1,
@@ -865,7 +869,7 @@ function ensure_slot_sprites(i: number, mon: any, selected: boolean): void {
       Oam.setPos(slot.item, spr[3], spr[4]);
       Oam.setImage(slot.item, hold.image, hq);
     }
-    if (slot.item) {
+    if (slot.item != null) {
       Oam.setInvisible(slot.item, PartyMenu.mode === "summary");
     }
   } else {
@@ -876,7 +880,7 @@ function ensure_slot_sprites(i: number, mon: any, selected: boolean): void {
   const balls = PartyChrome.ballEntry();
   const ballFrame = selected ? 1 : 0;
   const bq = balls && balls.quads ? balls.quads[ballFrame] : null;
-  if (!slot.ball) {
+  if (slot.ball == null) {
     const id = Oam.createSprite({
       dims: Oam.SQUARE_32,
       priority: 1,
@@ -890,7 +894,7 @@ function ensure_slot_sprites(i: number, mon: any, selected: boolean): void {
     const bs = Oam.get(slot.ball);
     if (bs) bs.subpriority = SUB_BALL;
   }
-  if (slot.ball) {
+  if (slot.ball != null) {
     Oam.setOffset(slot.ball, 0, 0);
     Oam.setInvisible(slot.ball, PartyMenu.mode === "summary");
   }
@@ -898,7 +902,7 @@ function ensure_slot_sprites(i: number, mon: any, selected: boolean): void {
   const statusFr = SummaryData.statusAilment(mon);
   const [stImg, stQ] = PartyChrome.statusEntry(statusFr);
   if (statusFr > 0 && statusFr !== 6 && stImg) {
-    if (!slot.status) {
+    if (slot.status == null) {
       const id = Oam.createSprite({
         dims: Oam.HRECT_32x8,
         priority: 1,
@@ -912,7 +916,7 @@ function ensure_slot_sprites(i: number, mon: any, selected: boolean): void {
       const ss = Oam.get(slot.status);
       if (ss) ss.subpriority = SUB_STATUS;
     }
-    if (slot.status) {
+    if (slot.status != null) {
       Oam.setInvisible(slot.status, PartyMenu.mode === "summary");
     }
   } else {
