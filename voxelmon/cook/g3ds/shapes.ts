@@ -90,7 +90,11 @@ export const ART: Record<string, string> = {
   waterfall: "upright",
   shell: "upright",
   tree: "upright",
-  fence: "upright",
+  // (ours) his fence is a 10px upright box, a low wall wearing the drawing;
+  // here the drawing itself stands, as the post pool's thin per-pixel slab
+  // squashed to the class's 10px (struct.ts buildObject), so the posts and
+  // the rail read with air between them
+  fence: "post",
   sign: "upright",
   cylinder: "cylinder",
   canopy: "canopy",

@@ -783,7 +783,7 @@ export function makeCtx(root: string, map: FrMap, pair: FrPair, pairMaps: PairMa
       // slab, each cell its own (Structures' post pool). So a blocked, thin
       // (0.06..0.75), non-foliage, non-overhead cell standing ON walkable
       // ground -- open ground (or more fence) both sides along one axis, the
-      // way a fence line runs and a cliff edge never does -- is a post; and
+      // way a fence line runs and a cliff edge never does -- is a fence; and
       // so is every railing his own carve found above.
       const thin = (cx: number, cy: number) => {
         if (offMap(cx, cy) || !blockedAt(cx, cy) || sc.has(sidx(cx, cy))) return false;
@@ -803,13 +803,21 @@ export function makeCtx(root: string, map: FrMap, pair: FrPair, pairMaps: PairMa
             continue;
           }
           if (!thin(cx, cy)) continue;
-          const side = (x: number, y: number) => open(x, y) || thin(x, y) || sc.get(sidx(x, y)) === "fence";
+          // (a sign set into the line, as the city's fences carry, continues it)
+          const side = (x: number, y: number) => {
+            const n = offMap(x, y) ? undefined : sc.get(sidx(x, y));
+            if (open(x, y) || thin(x, y) || n === "fence" || n === "signpost") return true;
+            return !offMap(x, y) && behaviourClass(attributes(metatileAt(x, y))) === "signpost";
+          };
           const alongX = side(cx - 1, cy) && side(cx + 1, cy) && (open(cx, cy - 1) || open(cx, cy + 1));
           const alongY = side(cx, cy - 1) && side(cx, cy + 1) && (open(cx - 1, cy) || open(cx + 1, cy));
           if (alongX || alongY) posts.push(i);
         }
       }
-      for (const i of posts) sc.set(i, "post");
+      // His own class for them, `fence` (10px, low): drawn as the post
+      // pool's thin slab squashed to that height (shapes.ts ART.fence,
+      // struct.ts buildObject).
+      for (const i of posts) sc.set(i, "fence");
     }
     // INDOOR FURNITURE, from the floor showing around it
     if (!outdoor) {
@@ -1398,7 +1406,7 @@ export function makeCtx(root: string, map: FrMap, pair: FrPair, pairMaps: PairMa
       // (or past a fence in front of it)
       const land = (cx: number, cy: number) => !offMap(cx, cy) && !blockedAt(cx, cy) && behaviourClass(attributes(metatileAt(cx, cy))) !== "water";
       const fronts = (group: { cx: number; bot: number }[]) =>
-        group.some((s) => land(s.cx, s.bot + 1) || (sceneryAt(s.cx, s.bot + 1) === "post" && land(s.cx, s.bot + 2)));
+        group.some((s) => land(s.cx, s.bot + 1) || (sceneryAt(s.cx, s.bot + 1) === "fence" && land(s.cx, s.bot + 2)));
       // A roof may also be a course left WALKABLE over the mass (his
       // `gen3RoofUnseen`: overhead, solid, not foliage) -- the top of a roof
       // you walk behind, with the building blocked beneath it.

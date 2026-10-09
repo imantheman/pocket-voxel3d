@@ -39,7 +39,7 @@ const LATERAL: Record<number, [number, number, number, number]> = {
   6: [1, 0, -1, 0],
 };
 /** ChunkMesher.lua:556 HULL_CLASS */
-const HULL_CLASS = new Set(["cylinder", "canopy", "stump", "can", "planter", "billboard", "post"]);
+const HULL_CLASS = new Set(["cylinder", "canopy", "stump", "can", "planter", "billboard", "post", "fence"]); // + fence: ours is the post slab (shapes.ts ART.fence)
 
 export interface G3Geometry {
   /** Tops, sides, runs, objects -- then the fine hulls, marked `tree`, last. */

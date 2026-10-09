@@ -157,7 +157,7 @@ const OBJECT_MAX_QUADS = 4096;
 const TILE_BG_RATIO = 0.2;
 const CLUSTER_MIN_BG = 0.05;
 const OBJECT_DEPTH = 6;
-const PINNED_DEPTH: Record<string, number> = { billboard: 10, prop: 5, stool: 10, cutout: 1, column: 6, console: 10, post: 6, signpost: 2, bike: 2 };
+const PINNED_DEPTH: Record<string, number> = { billboard: 10, prop: 5, stool: 10, cutout: 1, column: 6, console: 10, post: 6, signpost: 2, bike: 2, fence: 4 };
 /** Structures.lua:24658 OBJ_SHADE */
 const OBJ_SHADE = { front: 1.0, back: 0.68, side: 0.78, top: 1.0, bottom: 0.55 };
 
@@ -1236,6 +1236,7 @@ function buildObject(
     return [u + (p % 8) + 0.5, v + Math.floor(p / 8) + 0.5];
   };
   const quads = S.objectQuads;
+  const q0 = quads.length;
   // front/back faces merged into row runs of texels contiguous in the art
   // (ours: his object pass emits a quad per pixel; a run spanning the same
   // texels in order draws exactly the same picture)
@@ -1372,6 +1373,20 @@ function buildObject(
         const n = (votes.get(t) ?? 0) + 1;
         votes.set(t, n);
         if (n > bestN) [best, bestN] = [t, n];
+      }
+    }
+  }
+  // (ours) a fence stands at its class height: the drawing, however tall it
+  // is drawn, squashed onto the 10px his class states (shapes.ts ART.fence)
+  const cls0 = S.shapeAt.get(keyOf(cluster.tiles[0]![0], cluster.tiles[0]![1]))?.cls;
+  if (force && cls0 === "fence") {
+    let top = baseY;
+    for (let qi = q0; qi < quads.length; qi++) for (const c of quads[qi]!.c) top = Math.max(top, c[1]);
+    const k = top > baseY ? Math.min(1, CLASS_H.fence! / (top - baseY)) : 1;
+    if (k < 1) {
+      for (let qi = q0; qi < quads.length; qi++) {
+        const q = quads[qi]!;
+        q.c = q.c.map(([x, y, z]) => [x, baseY + (y - baseY) * k, z]) as typeof q.c;
       }
     }
   }
