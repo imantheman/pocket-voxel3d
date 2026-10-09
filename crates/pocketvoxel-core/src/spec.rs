@@ -381,6 +381,7 @@ pub mod op {
     pub const GB_WIDE: u32 = 115;
     pub const GB_WIDE_OBJS: u32 = 116;
     pub const LCD_TALL: u32 = 117;
+    pub const EMOTE_ART: u32 = 118;
 }
 
 /// Fixed-point scales used by op args.

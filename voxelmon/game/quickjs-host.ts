@@ -28,6 +28,8 @@ export interface VoxelNative {
   ): void;
   entHide(slot: number): void;
   emote(slot: number, kind: number): void;
+  /** voxel-spec.ts emoteArt: the bubble a pak with no emote page draws. */
+  emoteArt?(tl: number, tr: number, bl: number, br: number, c1: number, c2: number, c3: number): void;
   pic(slot: number, page: number, x: number, y: number, w: number, h: number): void;
   picDepth(slot: number, depthQ8: number): void;
   picHide(slot: number): void;
@@ -297,6 +299,9 @@ export class QuickJsHost implements VoxelHost {
   }
   emote(slot: number, kind: number): void {
     native.emote(slot, kind);
+  }
+  emoteArt(tl: number, tr: number, bl: number, br: number, c1: number, c2: number, c3: number): void {
+    native.emoteArt?.(tl, tr, bl, br, c1, c2, c3);
   }
   uiTile(x: number, y: number, tile: number): void {
     native.uiTile(x, y, tile);

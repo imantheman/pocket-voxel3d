@@ -316,6 +316,36 @@ export function drawMap2D(world: any, data: any, options?: any): boolean {
   }
   const sprites = data?.sprites ?? {};
   const daytime = world.daytime ?? "DAY";
+  // showemote's bubble (World.showEmote; SpawnEmote's object one cell over
+  // its person, on PAL_OW_EMOTE -- paletteId 5 through the daytime lookup):
+  // first, so it is drawn over everyone, the people after it
+  const emote = world.emote;
+  if (emote && emote.image && emote.entity && !world.peopleHidden) {
+    const sheet = image(emote.image);
+    if (sheet && sheet.tw >= 2 && sheet.th >= 2) {
+      let s = spriteCache.get(emote.image);
+      if (!s) {
+        s = { sheet, pals: new Map() };
+        spriteCache.set(emote.image, s);
+      }
+      let colours = s.pals.get(daytime);
+      if (colours === undefined) {
+        colours = (Palettes.spritePalette(world.palettes, daytime, { paletteId: 5 }) as unknown as Palette4 | undefined) ?? null;
+        s.pals.set(daytime, colours);
+      }
+      const pal = colours ? lcd.palette(colours, true) : 0;
+      const x0 = Math.round(emote.entity.px - camX);
+      const y0 = Math.round(emote.entity.py - 16 - camY);
+      for (let r = 0; r < 2; r++) {
+        for (let c = 0; c < 2; c++) {
+          const id = sheet.ids[r * sheet.tw + c];
+          if (id === undefined) continue;
+          if (canvas) lcd.underObj(x0 + c * 8, y0 + r * 8, id, pal);
+          else lcd.obj(x0 + c * 8, y0 + r * 8, id, pal);
+        }
+      }
+    }
+  }
   for (let k = actors.length - 1; k >= 0; k--) {
     const e = actors[k];
     const v = e?.view;

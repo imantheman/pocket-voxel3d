@@ -882,11 +882,14 @@ function* runCmd(self: Vm, cmd: Cmd, op: string | undefined): Script<any> {
     const emote = cmd.emote ?? arg1(cmd) ?? 0;
     const object = cmd.object ?? (cmd.args && cmd.args[1]) ?? 0;
     const frames = cmd.frames ?? (cmd.args && cmd.args[2]) ?? 0;
-    if (self.showEmoteFn) {
-      self.showEmoteFn(emote, object, frames);
-    }
     // ShowEmoteScript holds on `pause 0` reading back wScriptDelay
-    // (scripting.asm:981, 986-991): two frames per operand byte.
+    // (scripting.asm:981, 986-991): two frames per operand byte. The bubble
+    // is up for all of it -- its .Show movement runs before the pause and
+    // .Hide after -- so it lives as long as the pause does (the Lua gave it
+    // `length` frames, half of that).
+    if (self.showEmoteFn) {
+      self.showEmoteFn(emote, object, Vm.pauseLength(frames));
+    }
     yield* self.pauseFrames(frames);
   } else if (op === "trainerapproach") {
     // SeenByTrainerScript's callasm TrainerWalkToPlayer + applymovement, as

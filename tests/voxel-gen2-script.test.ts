@@ -392,7 +392,8 @@ gold("Vm on the Gold import", () => {
     const kinds = world.log.map((e) => e[0]);
     // The deferred script is what ran: player walks first, Mom's ! bubble.
     expect(world.log[0]).toEqual(["move", 0, scripts.movements["60:570f"]]);
-    expect(world.log).toContainEqual(["emote", 0, 2, 15]);
+    // showemote's length 15 is a 30-frame pause, and the bubble is up for it
+    expect(world.log).toContainEqual(["emote", 0, 2, 30]);
     // getstring -> the received line's {STRBUF}.
     const received = world.texts().find((t) => t.includes("GEAR"));
     expect(received).toBeDefined();

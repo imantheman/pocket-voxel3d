@@ -31249,6 +31249,9 @@ class QuickJsHost {
   emote(slot, kind) {
     native.emote(slot, kind);
   }
+  emoteArt(tl, tr, bl, br, c1, c2, c3) {
+    native.emoteArt?.(tl, tr, bl, br, c1, c2, c3);
+  }
   uiTile(x, y, tile2) {
     native.uiTile(x, y, tile2);
   }

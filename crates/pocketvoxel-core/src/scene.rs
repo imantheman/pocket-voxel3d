@@ -245,6 +245,13 @@ pub struct Scene {
     /// A field effect billboard: world px x, z and an emote-page frame.
     /// `None` when nothing is showing. See spec's `fieldFx`.
     pub field_fx: Option<(f32, f32, u16)>,
+    /// The `emoteArt` bubble, for a pak with no emote page (Gold's): four
+    /// Gold-screen tile ids (TL, TR, BL, BR), then OBJ colours 1-3 as
+    /// RGB555. `None` until the guest states one. The host builds its
+    /// texture from `lcd`'s tile pages; `emote_art_serial` counts changes,
+    /// so it rebuilds only when the art does.
+    pub emote_art: Option<[u16; 7]>,
+    pub emote_art_serial: u32,
     pub ents: [Ent; ENTS_MAX],
     /// Screen-space pictures (intro portraits, title art). Logical 480x272.
     pub pics: [Pic; PICS_MAX],
@@ -447,6 +454,8 @@ impl Scene {
             palette: -1,
             stamps_off: Vec::new(),
             field_fx: None,
+            emote_art: None,
+            emote_art_serial: 0,
             ents: [Ent::default(); ENTS_MAX],
             pics: [Pic::default(); PICS_MAX],
             ui: [0u16; UI_COLS * UI_ROWS],
@@ -729,6 +738,20 @@ impl Scene {
                     ent.emote = a(1) as u8;
                 }
             }
+            op::EMOTE_ART => {
+                if args.is_empty() || a(0) < 0 {
+                    self.emote_art = None;
+                } else if args.len() >= 7 {
+                    let mut art = [0u16; 7];
+                    for (i, v) in art.iter_mut().enumerate() {
+                        *v = a(i) as u16;
+                    }
+                    if self.emote_art != Some(art) {
+                        self.emote_art = Some(art);
+                        self.emote_art_serial = self.emote_art_serial.wrapping_add(1);
+                    }
+                }
+            }
 
             op::UI_TILE => {
                 if args.len() >= 3 {
@@ -1008,6 +1031,15 @@ mod tests {
         assert_eq!(s.ents[0].emote, 2, "pose update keeps the emote");
         s.op(op::ENT_HIDE, &[0], None);
         assert!(!s.ents[0].shown);
+
+        assert!(s.emote_art.is_none());
+        s.op(op::EMOTE_ART, &[40, 41, 42, 43, 0x7fff, 0x294a, 0, 0], None);
+        assert_eq!(s.emote_art, Some([40, 41, 42, 43, 0x7fff, 0x294a, 0]));
+        let serial = s.emote_art_serial;
+        s.op(op::EMOTE_ART, &[40, 41, 42, 43, 0x7fff, 0x294a, 0, 0], None);
+        assert_eq!(s.emote_art_serial, serial, "the same art is no change");
+        s.op(op::EMOTE_ART, &[-1, 0, 0, 0, 0, 0, 0, 0], None);
+        assert!(s.emote_art.is_none());
 
         s.op(op::TINT, &[0x40ff8040u32 as i32], None);
         assert_eq!(s.tint, 0x40ff8040);

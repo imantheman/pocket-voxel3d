@@ -14,6 +14,8 @@ import { BattleStage, type StageData } from "./battlestage.ts";
 import { is2d } from "../../viewmode.ts";
 import { Palettes } from "../world/Palettes.ts";
 import { rotateFacing } from "../world/rotate.ts";
+import { Assets } from "../shared/render/Assets.ts";
+import { rgb555 } from "./lcd.ts";
 
 /** The `daytime` op's order (cook/gen2.ts GEN2_DAYTIMES). */
 const DAYTIMES = ["MORN", "DAY", "NITE", "DARK"];
@@ -58,7 +60,7 @@ export interface WorldViewState {
   map?: { id: string };
   neighbors?: { id: string; ox: number; oy: number }[];
   camera?: { x: number; y: number; viewW: number; viewH: number };
-  actors?: { kind: "player" | "npc"; view: ActorView; ox: number; oy: number }[];
+  actors?: { kind: "player" | "npc"; view: ActorView; ox: number; oy: number; npcIndex?: number }[];
   hideAll?: boolean;
   palette?: { daytime?: string; dark?: boolean };
   /** Older shapes (tests): */
@@ -116,6 +118,12 @@ export class WorldView {
   private started = false;
   /** The flatWorld op's last value (-1 never stated). */
   private lastFlat = -1;
+  /** The entity slot the emote op last put the bubble on (-1 none), and the
+   *  emoteArt last sent, as a key. */
+  private emoteSlot = -1;
+  private emoteArtKey = "";
+  /** emoteArt's arguments per bubble and time of day. */
+  private emoteArts = new Map<string, number[] | null>();
 
   /** No world at all (the title, the intro, the main menu): the host is
    * told the voxel world is not seen, so it neither builds nor draws one.
@@ -207,7 +215,76 @@ export class WorldView {
       if (p) this.emitCam(p);
     }
     this.emitEnts(vs);
+    this.emitEmote(world, vs);
     this.emitDaytime(vs);
+  }
+
+  /**
+   * showemote's bubble (World.showEmote; SpawnEmote's object one cell over
+   * its person, on PAL_OW_EMOTE), over the entity slot its person stands in.
+   * The Gold paks carry no emote page, so the bubble goes to the host as the
+   * Gold screen's own tiles of it (the emoteArt op) and the emote op says
+   * whose head it is over -- the Kanto scene's emitEmote, otherwise.
+   */
+  private emitEmote(world: any, vs: WorldViewState): void {
+    const e = world?.emote;
+    let slot = -1;
+    if (e && e.image && e.entity && vs.actors && !vs.hideAll) {
+      // emitEnts' slots: the player 0, everyone else in list order from 1
+      let next = 1;
+      for (const a of vs.actors) {
+        if (a.kind === "player") {
+          if (e.entity === world.player) {
+            slot = 0;
+            break;
+          }
+        } else if (next < ENTS_MAX) {
+          if (a.ox === 0 && a.oy === 0 && (a.npcIndex ?? -1) >= 0 && world.npcs?.[a.npcIndex!] === e.entity) {
+            slot = a.view.visible === false ? -1 : next;
+            break;
+          }
+          next++;
+        }
+      }
+    }
+    if (slot >= 0) {
+      const art = this.emoteArt(world, e.image);
+      if (!art) slot = -1;
+      else {
+        const key = art.join(",");
+        if (key !== this.emoteArtKey) {
+          this.host.emoteArt?.(art[0]!, art[1]!, art[2]!, art[3]!, art[4]!, art[5]!, art[6]!);
+          this.emoteArtKey = key;
+        }
+      }
+    }
+    if (slot !== this.emoteSlot) {
+      if (this.emoteSlot >= 0) this.host.emote(this.emoteSlot, 0);
+      if (slot >= 0) this.host.emote(slot, 1);
+      this.emoteSlot = slot;
+    }
+  }
+
+  /** The bubble's four Gold-screen tiles and its OBJ colours 1-3 (RGB555)
+   *  at the world's time of day; null when the graphic is not cooked. */
+  private emoteArt(world: any, gfx: string): number[] | null {
+    const daytime: string = world.daytime ?? "DAY";
+    const k = gfx + "@" + daytime;
+    let art = this.emoteArts.get(k);
+    if (art !== undefined) return art;
+    art = null;
+    try {
+      const img = Assets.image(gfx) as { ids: ArrayLike<number>; tw: number; th: number } | null;
+      const pal = Palettes.spritePalette(world.palettes, daytime, { paletteId: 5 }) as unknown as [number, number, number][] | undefined;
+      if (img && img.tw >= 2 && img.th >= 2 && pal) {
+        const id = (x: number, y: number): number => img.ids[y * img.tw + x] ?? 0;
+        art = [id(0, 0), id(1, 0), id(0, 1), id(1, 1), rgb555(pal[1]!), rgb555(pal[2]!), rgb555(pal[3]!)];
+      }
+    } catch {
+      art = null;
+    }
+    this.emoteArts.set(k, art);
+    return art;
   }
 
   /**
@@ -387,5 +464,7 @@ export class WorldView {
       }
     }
     this.entSeen.fill(0);
+    // entHide takes an entity's emote with it (core scene.rs)
+    this.emoteSlot = -1;
   }
 }

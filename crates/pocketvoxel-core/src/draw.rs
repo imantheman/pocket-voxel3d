@@ -122,6 +122,12 @@ pub const SHADOW_LIFT_PX: f32 = 0.5;
 /// height plus a 2 px gap).
 pub const EMOTE_LIFT_PX: f32 = 18.0;
 
+/// The `Item::Card` page of an `emoteArt` bubble (spec `emoteArt`): no atlas
+/// page, but the one 16x16 texture the host builds from the Gold screen's
+/// tiles, its uv the whole of it. Only a scene that was sent `emoteArt`
+/// ever draws one, so a host that does not bind that op never sees it.
+pub const EMOTE_ART_PAGE: u16 = u16::MAX;
+
 /// The mod's billboard camera-ward pull (world px), a projection-invariant
 /// depth bias: `PULL_BASE + max(0, PULL_NUM*cos a - PULL_SUB) / max(sin a,
 /// PULL_MIN_SIN)` with `a` the camera pitch from straight down. Applied by
@@ -982,6 +988,18 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
                     pull: pull_card,
                 });
             }
+        } else if ent.emote != 0 && pak.meta.emote_page == EMOTE_PAGE_NONE && scene.emote_art.is_some() {
+            // Gold's paks carry no emote page; the guest named the bubble by
+            // the Gold screen's tiles (spec `emoteArt`) and the host draws
+            // it from its own texture, at the same place.
+            let feet = ent_feet(ent).add(vec3(0.0, EMOTE_LIFT_PX, 0.0));
+            items.push(Item::Card {
+                verts: card_verts(feet, card_w, card_w, a, fwd_x, fwd_z),
+                page: EMOTE_ART_PAGE,
+                uv: [0.0, 0.0, 1.0, 1.0],
+                mirror: false,
+                pull: pull_card,
+            });
         }
     }
     // The field effect (spec `fieldFx`): the same billboard an emote gets,

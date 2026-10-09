@@ -569,6 +569,9 @@ export const EMOTE = {
 //     ent(slot, sheet, frame, x, y, lift, flags)   x/y world px Q4; lift px
 //     entHide(slot)
 //     emote(slot, kind)                    EMOTE; kind 0 clears
+//     emoteArt(tl, tr, bl, br, c1, c2, c3) the bubble a pak without an emote
+//                                          page draws (Gold's): see VOX_OP
+//                                          .emoteArt
 //   ui (the GB tile layer; tile ids index the cooked UI atlas)
 //     uiTile(x, y, tile)
 //     uiFill(x, y, w, h, tile)
@@ -939,6 +942,19 @@ export const VOX_OP = {
    *   lcdTall(on)
    */
   lcdTall: 117,
+  /**
+   * The emote bubble's art, for a pak that carries no emote page (META
+   * emote_page none -- Gold's paks: the Gen 2 cook never baked one). The
+   * Gold screen already holds every Gold graphic as tile pages, so the
+   * guest names the bubble it wants by those tiles rather than the pak
+   * growing a page: four Gold-screen tile ids (lcd.rs ids, the 16x16
+   * bubble's top-left, top-right, bottom-left, bottom-right 8x8s) and the
+   * OBJ palette's colours 1-3 as RGB555 (colour 0 is clear, as on an OBJ).
+   * While it is set, an entity's `emote` (any kind but 0) draws this one
+   * bubble where an emote-page frame would stand. tl < 0 clears it.
+   *   emoteArt(tl, tr, bl, br, c1, c2, c3)
+   */
+  emoteArt: 118,
 } as const;
 
 /** Clips in Yellow's PikachuCriesPointerTable (NUM_PIKA_CRIES). */
