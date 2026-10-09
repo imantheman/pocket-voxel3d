@@ -2866,6 +2866,20 @@ const BATTLE_OCCLUDE_MARGIN_PX: f32 = 32.0;
 /// distance. Here (map-load time, no camera yet) the choice is made per
 /// CHUNK against the remaining vertex budget instead: see the tree loop in
 /// `build_map`.
+/// TERRAIN_KEEP (spec::mesh_kind): the structures the ground bake leaves
+/// standing -- for a renderer that draws a chunk as its baked ground image
+/// plus these. It is a COPY of quads TERRAIN already carries (the cook packs
+/// the kept quads out of the terrain stream: same corners, same UVs, same
+/// colours), and this host never draws the bake, it draws TERRAIN. Drawing
+/// both drew every wall and roof twice, the second copy at exactly the
+/// first's depth, where the GREATER depth test throws every fragment of it
+/// away: no pixel ever came of it. In the biggest Gen 2 city it was 185k of
+/// the map's 601k corners. SKIP_KEEP builds leave it out of what is drawn,
+/// but still charge it to the plan's budget and the strips' cap, exactly as
+/// before, so nothing else the plan or a strip takes changes.
+const TERRAIN_KEEP_KIND: usize = 2;
+/// Not FireRed's: its build is left exactly as it was.
+const SKIP_KEEP: bool = !cfg!(feature = "gen3");
 const TREE_HULL_KIND: usize = 3;
 const TREE_COARSE_KIND: usize = 4;
 const TREE_BOX_KIND: usize = 5;
@@ -3360,6 +3374,45 @@ struct IdxBuild {
     drawn: usize,
 }
 
+/// How many corners push_chunk_mesh would have drawn of `m` with `drawn`
+/// already spent: the same walk, the same clip, the same budget stop,
+/// nothing pushed (TERRAIN_KEEP under SKIP_KEEP).
+fn keep_corners(pak: &Pak, m: pak::MeshRange, budget: usize, drawn: usize, clip_min: [f32; 2], clip_max: [f32; 2]) -> usize {
+    let vbase = m.vert_base as usize;
+    let third = |c: f32| -> i64 { if c.abs() >= 1.0e8 { if c < 0.0 { i64::MIN / 4 } else { i64::MAX / 4 } } else { 3 * c as i64 } };
+    let (lo_x, lo_z, hi_x, hi_z) = (third(clip_min[0]), third(clip_min[1]), third(clip_max[0]), third(clip_max[1]));
+    let mut n = 0usize;
+    for t in 0..m.index_count as usize / 3 {
+        if drawn + n + 3 > budget {
+            break;
+        }
+        let b = m.index_base as usize + t * 3;
+        let (Some(p0), Some(p1), Some(p2)) = (
+            pool_vert(pak, vbase, b),
+            pool_vert(pak, vbase, b + 1),
+            pool_vert(pak, vbase, b + 2),
+        ) else {
+            break;
+        };
+        let sx = p0.x as i64 + p1.x as i64 + p2.x as i64;
+        let sz = p0.z as i64 + p1.z as i64 + p2.z as i64;
+        if sx < lo_x || sx > hi_x || sz < lo_z || sz > hi_z {
+            continue;
+        }
+        if sx == lo_x || sx == hi_x || sz == lo_z || sz == hi_z {
+            let pos = |v: &pak::PakVert| [v.x as f32, v.y as f32, v.z as f32];
+            if ring_inner_face([pos(&p0), pos(&p1), pos(&p2)], clip_min, clip_max) {
+                continue;
+            }
+        }
+        if [pak.indices[b], pak.indices[b + 1], pak.indices[b + 2]].iter().any(|&i| i as usize >= m.vert_count as usize) {
+            break;
+        }
+        n += 3;
+    }
+    n
+}
+
 /// A pak vertex as the GPU takes it, the scene tint baked in.
 #[inline]
 fn vert_of(pv: &pak::PakVert, tint: u32) -> Vertex {
@@ -3392,6 +3445,14 @@ fn push_chunk_mesh(
 ) {
     let m = chunk.meshes[kind];
     if m.index_count == 0 {
+        return;
+    }
+    // TERRAIN_KEEP under SKIP_KEEP: walked for its count only (indexed
+    // builds: IdxBuild::drawn is the budget's running total)
+    if SKIP_KEEP && kind == TERRAIN_KEEP_KIND {
+        if let Some(bld) = ix.as_deref_mut() {
+            bld.drawn += keep_corners(pak, m, budget, bld.drawn, clip_min, clip_max);
+        }
         return;
     }
     let vbase = m.vert_base as usize;
@@ -3808,6 +3869,9 @@ struct StripJob {
     cand: Vec<usize>,
     next: usize,
     verts: Vec<Vertex>,
+    /// Corners charged to STRIP_MAX_VERTS but not drawn (TERRAIN_KEEP under
+    /// SKIP_KEEP), so the cap stops where it always stopped.
+    charged: usize,
     spans: Vec<Span>,
     /// Spans already on the GPU (`drain`): a strip appears chunk by chunk,
     /// nearest the seam first, rather than all at the end.
@@ -3889,6 +3953,7 @@ impl StripJob {
             cand: cand.into_iter().map(|c| c.0).collect(),
             next: 0,
             verts: Vec::new(),
+            charged: 0,
             spans: Vec::new(),
             uploaded: 0,
             src: StripSrc::Resident(name.to_string()),
@@ -3918,7 +3983,7 @@ impl StripJob {
     fn step(&mut self, budget_ms: Option<u64>) -> bool {
         let t0 = now_ms();
         loop {
-            if self.next >= self.cand.len() || self.verts.len() >= STRIP_MAX_VERTS {
+            if self.next >= self.cand.len() || self.verts.len() + self.charged >= STRIP_MAX_VERTS {
                 // a resident copy that yielded nothing: the file's turn, as
                 // the one-shot path fell through to it
                 if self.spans.is_empty() && self.to_file() {
@@ -3931,13 +3996,13 @@ impl StripJob {
                 StripSrc::Resident(name) => match unsafe { resident_pak(name) } {
                     Some(p) => strip_chunk_resident(
                         p, ci, self.ox, self.oy, self.nb_real_min, self.nb_real_max, self.tint,
-                        &mut self.verts, &mut self.spans,
+                        &mut self.verts, &mut self.spans, &mut self.charged,
                     ),
                     None => StripChunk::Fallback,
                 },
                 StripSrc::File { f, recs, verts_off, indices_off } => strip_chunk_file(
                     f, recs, ci, *verts_off, *indices_off, self.ox, self.oy, self.nb_real_min,
-                    self.nb_real_max, self.tint, &mut self.verts, &mut self.spans,
+                    self.nb_real_max, self.tint, &mut self.verts, &mut self.spans, &mut self.charged,
                 ),
             };
             match res {
@@ -3986,6 +4051,7 @@ fn strip_chunk_resident(
     tint: u32,
     verts: &mut Vec<Vertex>,
     spans: &mut Vec<Span>,
+    charged: &mut usize,
 ) -> StripChunk {
     let Some(c) = pak.chunks.get(gi) else { return StripChunk::Fallback };
     let (x0, z0) = (c.aabb_min[0] as f32 + ox, c.aabb_min[2] as f32 + oy);
@@ -4037,6 +4103,11 @@ fn strip_chunk_resident(
                 [p[2].x as f32, p[2].y as f32, p[2].z as f32],
             ];
             if ring_inner_face(tri, nb_real_min, nb_real_max) {
+                continue;
+            }
+            if SKIP_KEEP && kind == TERRAIN_KEEP_KIND {
+                // the copy (TERRAIN_KEEP_KIND): charged to the cap, not drawn
+                *charged += 3;
                 continue;
             }
             for pv in p {
@@ -4232,6 +4303,7 @@ impl StripJob {
             cand: cand.into_iter().map(|c| c.0).collect(),
             next: 0,
             verts: Vec::new(),
+            charged: 0,
             spans: Vec::new(),
             uploaded: 0,
             src: StripSrc::File { f, recs, verts_off, indices_off },
@@ -4254,6 +4326,7 @@ fn strip_chunk_file(
     tint: u32,
     verts: &mut Vec<Vertex>,
     spans: &mut Vec<Span>,
+    charged: &mut usize,
 ) -> StripChunk {
     use std::io::{Read, Seek, SeekFrom};
     const REC: usize = 128;
@@ -4337,6 +4410,11 @@ fn strip_chunk_file(
             }
             let tri = [[t0.2, t0.3, t0.4], [t1.2, t1.3, t1.4], [t2.2, t2.3, t2.4]];
             if ring_inner_face(tri, nb_real_min, nb_real_max) {
+                continue;
+            }
+            if SKIP_KEEP && kind == TERRAIN_KEEP_KIND {
+                // the copy (TERRAIN_KEEP_KIND): charged to the cap, not drawn
+                *charged += 3;
                 continue;
             }
             for vt in [t0, t1, t2] {
@@ -4547,6 +4625,7 @@ fn build_map(
             // what the store will hold: every triangle corner (plain), or
             // each mesh's own vertices once (indexed)
             let held = |m: pak::MeshRange| if INDEXED { m.vert_count as usize } else { m.index_count as usize };
+            let held_item = |c: usize, k: usize| if SKIP_KEEP && k == TERRAIN_KEEP_KIND { 0 } else { held(all_chunks[c].meshes[k]) };
             let stamp_held: usize = if INDEXED {
                 pak.stamps_of(map_id)
                     .iter()
@@ -4559,7 +4638,7 @@ fn build_map(
             let want = (p
                 .items
                 .iter()
-                .map(|it| held(all_chunks[it.chunk].meshes[it.kind]))
+                .map(|it| held_item(it.chunk, it.kind))
                 .sum::<usize>()
                 + stamp_held)
                 .min(budget);
