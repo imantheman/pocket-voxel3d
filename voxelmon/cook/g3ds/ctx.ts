@@ -1396,6 +1396,8 @@ export function makeCtx(root: string, map: FrMap, pair: FrPair, pairMaps: PairMa
       // building -- which is the footprint his `take` reads off a roof
       // Emerald does state.
       const GROW_REACH = 8;
+      /** (ours) FRLG's department store and apartment blocks: nine cells. */
+      const TALL_ROWS_CELLS = 9;
       for (let id = 1; id <= b.list.length; id++) {
         const bl = b.list[id - 1]!;
         if (bl.overheadRows < 0) continue;
@@ -1406,10 +1408,13 @@ export function makeCtx(root: string, map: FrMap, pair: FrPair, pairMaps: PairMa
           for (const [ox, oy] of NEIGHBOURS) {
             const nx = c[0] + ox;
             const ny = c[1] + oy;
-            if (offMap(nx, ny) || b.cell.has(ck(nx, ny)) || !blockedAt(nx, ny) || ny > dy0 || ny < dy0 - GEN3_MAX_ROWS_CELLS) continue;
+            if (offMap(nx, ny) || b.cell.has(ck(nx, ny)) || !blockedAt(nx, ny) || ny > dy0 || ny < dy0 - TALL_ROWS_CELLS) continue;
             if (Math.abs(nx - dx0) > GROW_REACH || sceneryAt(nx, ny)) continue;
             const st = statsOf(metatileAt(nx, ny));
             if (!(st && st.solid >= DOORLESS_SOLID && !st.leafy) || !builtArt(nx, ny)) continue;
+            // past his 12 tile rows only straight up its own columns, and
+            // never into rock: the city blocks FRLG draws nine cells tall
+            if (ny < dy0 - GEN3_MAX_ROWS_CELLS && (oy !== -1 || metaRole(metatileAt(nx, ny))?.material === "rock")) continue;
             b.cell.set(ck(nx, ny), id);
             bl.cells.push([nx, ny]);
             q.push([nx, ny]);

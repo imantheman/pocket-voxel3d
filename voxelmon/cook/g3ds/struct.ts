@@ -1521,6 +1521,8 @@ function buildVolume(S: SG, tiles: [number, number][], doorFold: Set<number>, ro
           // into, so they stay in the column
           let n2 = firstRoof;
           while (n2 - 1 >= north && isB(tx, n2 - 1)) n2--;
+          // ...and so is the roof course his roof fold stood up behind it
+          while (n2 - 1 >= north && roofFold.has(keyOf(tx, n2 - 1))) n2--;
           north = n2;
           facade = true;
         }
