@@ -492,6 +492,9 @@ export function buildScene(ctx: Ctx, art: TileArt, bodies: NeighbourBody[], step
     };
     const roofedBelow = (cx: number, cy: number) => {
       if (!uprightRA(cx, cy + 1)) return false;
+      // (ours) outdoors a roof course sits on a BUILDING: the eave over a
+      // pen's or a ledge's wall is not a roof to stand up as a storey
+      if (outdoor && !ctx.isBuildingCell(cx, cy + 1)) return false;
       const st = statRA(cx, cy + 1);
       return st !== undefined && st.solid >= 0.7;
     };
