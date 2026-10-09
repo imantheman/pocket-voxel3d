@@ -639,6 +639,9 @@ export function buildScene(ctx: Ctx, art: TileArt, bodies: NeighbourBody[], step
   // ---- hulls (buildCylinders :20860) ----
   buildCylinders(S, ctx, groundTiles, ringCarved, opaqueT, rgbT, tileOrigin, steps);
 
+  // ---- flower beds (buildGen3Flowers :26832) ----
+  buildFlowers(S, ctx);
+
   // ---- the region flood -> objects, then volumes (:11360) ----
   {
     const seen = new Set<number>();
@@ -961,6 +964,184 @@ function buildCylinders(
   }
   void tw;
   void th;
+}
+
+// ---------------------------------------------------------------------------
+// flower beds (Structures.lua:26832 buildGen3Flowers)
+// ---------------------------------------------------------------------------
+
+/**
+ * Structures.lua:26631 FLOWER_THICK is 1: a card. (ours) 4 here -- this
+ * port's camera looks down from high up most of the time, and from there a
+ * one-voxel card is a red line; four voxels is a clump with a top to see,
+ * still thinner than his 5-voxel prop pool.
+ */
+const FLOWER_THICK = 4;
+/** Structures.lua:26256 SIDE_INSET */
+const SIDE_INSET = 0.03;
+
+/**
+ * His Gen 3 flower: ONE 16x16 plane per bed cell, standing at the middle of
+ * the cell's depth, one voxel thick, its silhouette the bed's own drawing
+ * with the field keyed out (Gen3.flowerMasks), and the cell's floor the
+ * commonest flat neighbour. (ours) His per-pixel caps exist for the tile
+ * animation, which trims the union of the frames in texture space; this
+ * game's world atlas is static, so a run of pixels along a row is one lid,
+ * one floor and two end caps, and the front and back are rectangles of runs
+ * that repeat row to row -- the same picture. The bed rides the hull path (a
+ * stamp per cell), so every bed of one drawing is stored once and placed;
+ * the far level of detail is the flat bed it always was.
+ */
+function buildFlowers(S: SG, ctx: Ctx): void {
+  if (!S.outdoor || ctx.flowers.size === 0) return;
+  const templates = new Map<string, { quads: Quad[]; coarse: Quad[] } | null>();
+  const templateFor = (cx: number, cy: number) => {
+    const m = ctx.metatileAt(cx, cy);
+    const tiles = [0, 1, 2, 3].map((q) => S.tileAt.get(keyOf(cx * 2 + (q & 1), cy * 2 + (q >> 1))));
+    if (tiles.some((t) => t === undefined)) return null;
+    const sig = `${m}|${tiles.join(":")}`;
+    if (templates.has(sig)) return templates.get(sig)!;
+    const slot = ctx.slotOf(m);
+    void slot;
+    const on = (fx: number, fy: number) => fx >= 0 && fx < 16 && fy >= 0 && fy < 16 && ctx.flowerOn(m, fx, fy);
+    const uvAt = (fx: number, fy: number): [number, number] => {
+      const [u, v] = S.tileOrigin(tiles[(fy >> 3) * 2 + (fx >> 3)]!);
+      return [u + (fx & 7) + 0.5, v + (fy & 7) + 0.5];
+    };
+    const zB = -FLOWER_THICK / 2;
+    const zF = zB + FLOWER_THICK;
+    const quads: Quad[] = [];
+    const coarse: Quad[] = [];
+    // runs per row, never across the seam at x = 8 (the quadrants' slots are
+    // not neighbours on the page), stacked into rectangles within a band
+    type R = { x0: number; x1: number; y0: number; y1: number };
+    const rects: R[] = [];
+    const open = new Map<string, R>();
+    for (let fy = 0; fy < 16; fy++) {
+      const seen = new Set<string>();
+      let fx = 0;
+      while (fx < 16) {
+        if (!on(fx, fy)) {
+          fx++;
+          continue;
+        }
+        let fx2 = fx;
+        const limit = fx < 8 ? 7 : 15;
+        while (fx2 + 1 <= limit && on(fx2 + 1, fy)) fx2++;
+        const key = `${fx},${fx2}`;
+        const prev = open.get(key);
+        if (prev && prev.y1 === fy - 1 && fy >> 3 === prev.y0 >> 3) prev.y1 = fy;
+        else {
+          const r = { x0: fx, x1: fx2, y0: fy, y1: fy };
+          rects.push(r);
+          open.set(key, r);
+        }
+        seen.add(key);
+        // the run's lid, floor and end caps, the texture walking its texels
+        const yTop = 16 - fy;
+        const yBot = 15 - fy;
+        const [ua, v] = uvAt(fx, fy);
+        const [ub] = uvAt(fx2, fy);
+        const u0 = ua - 0.45;
+        const u1 = ub + 0.45;
+        const xa = fx - 8;
+        const xb = fx2 + 1 - 8;
+        let lid = false;
+        let floor = false;
+        for (let x = fx; x <= fx2; x++) {
+          if (!on(x, fy - 1)) lid = true;
+          if (!on(x, fy + 1)) floor = true;
+        }
+        if (lid) quads.push({ c: [[xa, yTop - SIDE_INSET, zB], [xb, yTop - SIDE_INSET, zB], [xb, yTop - SIDE_INSET, zF], [xa, yTop - SIDE_INSET, zF]], uv: [[u0, v], [u1, v], [u1, v], [u0, v]], shade: OBJ_SHADE.top, f: 3 });
+        if (floor && fy < 15) quads.push({ c: [[xa, yBot + SIDE_INSET, zF], [xb, yBot + SIDE_INSET, zF], [xb, yBot + SIDE_INSET, zB], [xa, yBot + SIDE_INSET, zB]], uv: [[u0, v], [u1, v], [u1, v], [u0, v]], shade: OBJ_SHADE.bottom, f: 4 });
+        quads.push({ c: [[xa + SIDE_INSET, yBot, zB], [xa + SIDE_INSET, yBot, zF], [xa + SIDE_INSET, yTop, zF], [xa + SIDE_INSET, yTop, zB]], uv: [[ua, v], [ua, v], [ua, v], [ua, v]], shade: OBJ_SHADE.side, f: 2 });
+        quads.push({ c: [[xb - SIDE_INSET, yBot, zF], [xb - SIDE_INSET, yBot, zB], [xb - SIDE_INSET, yTop, zB], [xb - SIDE_INSET, yTop, zF]], uv: [[ub, v], [ub, v], [ub, v], [ub, v]], shade: OBJ_SHADE.side, f: 1 });
+        fx = fx2 + 1;
+      }
+      for (const k of [...open.keys()]) if (!seen.has(k)) open.delete(k);
+    }
+    if (rects.length === 0) {
+      templates.set(sig, null);
+      return null;
+    }
+    for (const r of rects) {
+      const [ua, va] = uvAt(r.x0, r.y0);
+      const [ub, vb] = uvAt(r.x1, r.y1);
+      const u0 = ua - 0.45;
+      const u1 = ub + 0.45;
+      const v0 = va - 0.45;
+      const v1 = vb + 0.45;
+      const xa = r.x0 - 8;
+      const xb = r.x1 + 1 - 8;
+      const yT = 16 - r.y0;
+      const yB = 15 - r.y1;
+      const front: Quad = { c: [[xa, yB, zF], [xb, yB, zF], [xb, yT, zF], [xa, yT, zF]], uv: [[u0, v1], [u1, v1], [u1, v0], [u0, v0]], shade: OBJ_SHADE.front, f: 5 };
+      const back: Quad = { c: [[xb, yB, zB], [xa, yB, zB], [xa, yT, zB], [xb, yT, zB]], uv: [[u1, v1], [u0, v1], [u0, v0], [u1, v0]], shade: OBJ_SHADE.back, f: 6 };
+      quads.push(front, back);
+      coarse.push(front, back);
+    }
+    const t = { quads, coarse };
+    templates.set(sig, t);
+    return t;
+  };
+  for (let cy = 0; cy < ctx.height; cy++) {
+    for (let cx = 0; cx < ctx.width; cx++) {
+      const k = keyOf(cx * 2, cy * 2);
+      const s = S.shapeAt.get(k);
+      if (!s || s.cls !== "flower" || S.skip.has(k)) continue;
+      const tpl = templateFor(cx, cy);
+      if (!tpl) continue;
+      // the floor: his is the commonest flat neighbour that is not itself a
+      // flower. (ours) Inside a bed every neighbour is a flower or the path
+      // round it, so the vote laid paving between the clumps; the floor is
+      // the nearby ground tile drawn most in the bed's own field colour (the
+      // colour its drawing shows between the flowers)
+      const mcell = ctx.metatileAt(cx, cy);
+      const fieldCount = new Map<number, number>();
+      const sl = ctx.slotOf(mcell);
+      for (let fy = 0; fy < 16; fy++) {
+        for (let fx = 0; fx < 16; fx++) {
+          if (ctx.flowerOn(mcell, fx, fy)) continue;
+          const [r, g, b] = ctx.art.rgbAt(sl, fx, fy);
+          const key = (r << 16) | (g << 8) | b;
+          fieldCount.set(key, (fieldCount.get(key) ?? 0) + 1);
+        }
+      }
+      let field = -1;
+      let fieldN = 0;
+      for (const [k2, n] of fieldCount) if (n > fieldN) [field, fieldN] = [k2, n];
+      let best: number | undefined;
+      let bestScore = -1;
+      for (let rr = 1; rr <= 3 && bestScore < 256; rr++) {
+        for (let dy = -rr; dy <= rr; dy++) {
+          for (let dx = -rr; dx <= rr; dx++) {
+            if (Math.max(Math.abs(dx), Math.abs(dy)) !== rr) continue;
+            const ns = S.shapeAt.get(keyOf((cx + dx) * 2, (cy + dy) * 2));
+            if (!(ns && ns.flat && ns.cls !== "void" && ns.cls !== "flower" && ns.cls !== "water")) continue;
+            // the WHOLE metatile: the mesh lays all four of its quadrants
+            const t = S.tileAt.get(keyOf((cx + dx) * 2, (cy + dy) * 2));
+            if (t === undefined) continue;
+            let score = 0;
+            for (let py = 0; py < 16; py++) {
+              for (let px = 0; px < 16; px++) {
+                const [r, g, b] = ctx.art.rgbAt(t >> 2, px, py);
+                if (((r << 16) | (g << 8) | b) === field) score++;
+              }
+            }
+            if (score > bestScore) [best, bestScore] = [t, score];
+          }
+        }
+      }
+      for (let q = 0; q < 4; q++) {
+        const tk = keyOf(cx * 2 + (q & 1), cy * 2 + (q >> 1));
+        S.skip.add(tk);
+        S.round.add(tk);
+        S.ground.set(tk, best ?? false);
+      }
+      S.roundStamps.push({ quads: tpl.quads, coarse: tpl.coarse, mx: cx * 16 + 8, mz: cy * 16 + 8, r: 8, my: s.h });
+      S.stats.flowers = (S.stats.flowers ?? 0) + 1;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

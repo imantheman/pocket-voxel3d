@@ -273,6 +273,20 @@ export function layerTypeOf(root: string, map: FrMap, mid: number): number {
   return i >= 0 && i < a.length ? (a[i] >>> 29) & 3 : 0;
 }
 
+/**
+ * The pair's animated flower metatiles, as the importer recorded them
+ * (native/<pair>/anim_manifest.lua `flower = { frames, mids }`): the beds
+ * the game sways with a tile animation. Empty when the pair has none.
+ */
+export function flowerMids(root: string, pairName: string): Set<number> {
+  const rel = `native/${pairName}/anim_manifest.lua`;
+  if (!has(root, rel)) return new Set();
+  const m = /flower\s*=\s*\{[^}]*mids\s*=\s*\{([^}]*)\}/.exec(read(root, rel).toString("latin1"));
+  if (!m) return new Set();
+  const ids = m[1]!.split(",").map((s) => s.trim()).filter((s) => s !== "");
+  return new Set(ids.map(Number).filter((n) => Number.isInteger(n) && n >= 0));
+}
+
 // ---------------------------------------------------------------------------
 // the map list
 // ---------------------------------------------------------------------------

@@ -17,7 +17,7 @@
 // measurements behind each one).
 
 import type { FrMap, FrPair } from "../gen3.ts";
-import { behaviourOf, layerTypeOf } from "../gen3.ts";
+import { behaviourOf, flowerMids, layerTypeOf } from "../gen3.ts";
 import { analysePair, type PairArt, type Role, rolesFor, type ShapeSurface, shapeSurface, type SlotStats } from "./art.ts";
 import {
   behaviourClass,
@@ -73,6 +73,10 @@ export interface Ctx {
   metatileCounts(): Map<number, number>;
   floorMetatiles: number[];
   usesElevation: boolean;
+  /** The pair's animated flower beds (gen3.ts flowerMids). */
+  flowers: Set<number>;
+  /** A flower bed's standing pixels: what is not the plain field's colours. */
+  flowerOn(m: number, fx: number, fy: number): boolean;
 }
 
 const ck = (cx: number, cy: number) => cy * 8192 + cx;
@@ -1508,8 +1512,64 @@ export function makeCtx(root: string, map: FrMap, pair: FrPair, pairMaps: PairMa
     if (r === "cliff" || r === "shelf" || r === "fence") return "cliff";
     return cls;
   };
+  const flowers = flowerMids(root, pair.name);
+  // (ours) the field a bed stands in, as colours: every floor metatile but
+  // the beds themselves. A bed is common and walkable, so the shape
+  // surface's floor census counts its petals as field and keys them out --
+  // Gen3.flowerMasks keys against the field alone, and so does this
+  let fieldRgb: Set<number> | null = null;
+  const flowerOn = (m: number, fx: number, fy: number): boolean => {
+    if (!fieldRgb) {
+      fieldRgb = new Set();
+      for (const fm of floorMetatiles) {
+        if (flowers.has(fm)) continue;
+        const sl = slotOf(fm);
+        for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+          const [r, g, b] = art.rgbAt(sl, x, y);
+          fieldRgb.add((r << 16) | (g << 8) | b);
+        }
+      }
+    }
+    const [r, g, b] = art.rgbAt(slotOf(m), fx, fy);
+    return !fieldRgb.has((r << 16) | (g << 8) | b);
+  };
+  /**
+   * The lid of a sign drawn into the cell above it: drawing only in the
+   * cell's lower half, and its bottom row meeting the sign's top row across
+   * at least four pixels (one drawing, cut by the cell seam).
+   */
+  const signCrown = (m: number, below: number): boolean => {
+    const s = slotOf(m);
+    const sb = slotOf(below);
+    let meet = 0;
+    for (let fy = 0; fy < 16; fy++) {
+      for (let fx = 0; fx < 16; fx++) {
+        if (!surface.opaque(s, fx, fy)) continue;
+        if (fy < 8) return false;
+        if (fy === 15 && surface.opaque(sb, fx, 0)) meet++;
+      }
+    }
+    return meet >= 4;
+  };
   const classAt = (cx: number, cy: number): { cls: string; pinned: boolean } | null => {
     const m = metatileAt(cx, cy);
+    if (outdoor && !offMap(cx, cy)) {
+      const named = behaviourClass(attributes(m));
+      // FRLG (ours): A SIGN IS NAMED. MB_SIGNPOST on a blocked cell is a sign
+      // (or a mailbox) whatever the carve made of its drawing -- a lathed
+      // round hull is not a sign
+      if (named === "signpost" && blockedAt(cx, cy)) return { cls: "signpost", pinned: true };
+      if (!blockedAt(cx, cy)) {
+        // ...and the top of a tall one, drawn into the walkable cell above
+        // it (a mailbox's rounded lid): the same prop, not a decal on the lawn
+        // his flower bed (Gen3.lua:2840): an animated bed you walk over
+        if (flowers.has(m) && (named === undefined || named === "ground" || named === "grass")) return { cls: "flower", pinned: true };
+        const mb = offMap(cx, cy + 1) ? -1 : metatileAt(cx, cy + 1);
+        if (mb >= 0 && blockedAt(cx, cy + 1) && behaviourClass(attributes(mb)) === "signpost" && signCrown(m, mb)) {
+          return { cls: "signpost", pinned: true };
+        }
+      }
+    }
     let scene = sceneryAt(cx, cy);
     if (scene && !inSceneClass) {
       inSceneClass = true;
@@ -1561,7 +1621,7 @@ export function makeCtx(root: string, map: FrMap, pair: FrPair, pairMaps: PairMa
       if (scenery === null) buildScenery();
       return waterRocks;
     },
-    roofAt, classAt, roleAt, buildings, isBuildingCell, metatileCounts, floorMetatiles, usesElevation,
+    roofAt, classAt, roleAt, buildings, isBuildingCell, metatileCounts, floorMetatiles, usesElevation, flowers, flowerOn,
   };
   return ctxRef;
 }
