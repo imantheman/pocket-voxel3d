@@ -261,6 +261,18 @@ export function behaviourOf(root: string, map: FrMap, mid: number): number {
   return i >= 0 && i < a.length ? a[i] & 0x1ff : 0;
 }
 
+/**
+ * A metatile's layer type (attribute bits 29-30, pokefirered
+ * METATILE_ATTRIBUTE_LAYER_TYPE): 0 NORMAL (top tiles drawn over the
+ * player), 1 COVERED (both halves under the player), 2 SPLIT.
+ */
+export function layerTypeOf(root: string, map: FrMap, mid: number): number {
+  const primary = mid < NUM_METATILES_IN_PRIMARY;
+  const a = attributes(root, primary ? map.primaryTileset : map.secondaryTileset);
+  const i = primary ? mid : mid - NUM_METATILES_IN_PRIMARY;
+  return i >= 0 && i < a.length ? (a[i] >>> 29) & 3 : 0;
+}
+
 // ---------------------------------------------------------------------------
 // the map list
 // ---------------------------------------------------------------------------

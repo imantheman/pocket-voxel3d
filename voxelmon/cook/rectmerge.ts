@@ -59,7 +59,7 @@ const r6 = (x: number): number => Math.round(x * 1e6) / 1e6;
  * The quad's plane, its rect, the uv inset, and its uv as an affine map of
  * (a, b) with the inset removed -- or null when it is not a candidate.
  */
-function analyse(q: Quad) {
+function analyse(q: Quad, cell: number = RECT_CELL) {
   if (!q.uv || q.tree || typeof q.shade !== "number" || q.c.length !== 4) return null;
   let axis = -1;
   for (const [ax] of AXES) {
@@ -119,9 +119,9 @@ function analyse(q: Quad) {
   const mu = solve(0);
   const mv = solve(1);
   if (!mu || !mv) return null;
-  const cellA = Math.floor(a0 / RECT_CELL);
-  const cellB = Math.floor(b0 / RECT_CELL);
-  if (Math.floor((a1 - 1e-6) / RECT_CELL) !== cellA || Math.floor((b1 - 1e-6) / RECT_CELL) !== cellB) {
+  const cellA = Math.floor(a0 / cell);
+  const cellB = Math.floor(b0 / cell);
+  if (Math.floor((a1 - 1e-6) / cell) !== cellA || Math.floor((b1 - 1e-6) / cell) !== cellB) {
     return null;
   }
   // winding sign on the plane, so a merge never flips a face
@@ -169,9 +169,9 @@ export interface RectMergeStats {
 }
 
 /** Merge what can be merged without changing a texel; see the file header. */
-export function mergeUvRects(quads: Quad[], stats?: RectMergeStats): Quad[] {
+export function mergeUvRects(quads: Quad[], stats?: RectMergeStats, cell: number = RECT_CELL): Quad[] {
   type A = NonNullable<ReturnType<typeof analyse>>;
-  const info: (A | null)[] = quads.map(analyse);
+  const info: (A | null)[] = quads.map((q) => analyse(q, cell));
   const groups = new Map<string, Piece[]>();
   info.forEach((a, at) => {
     if (!a) return;
