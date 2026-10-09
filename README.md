@@ -220,18 +220,18 @@ are still in the tree but are not built or tested here.
 
 MIT, see [LICENSE](LICENSE). Copyright Yifeng "Evan" Wang and Isaac Dishongh.
 
-**The exception: the FireRed / LeafGreen edition (in progress).** Its engine is
+**The exception: the Gen 3 code (in development, not released).** It is
 ported from gen1recomp's current version, which is GPLv3 with additional
-terms, so that edition is too: the Gen 3 trees (`voxelmon/game/gen3/`,
-`voxelmon/import/gen3/`), the 3DS host code compiled only into that build
-(`crates/pocketvoxel-3ds/src/gen3/`), and the FireRed and LeafGreen binaries
+terms, so it is too: the Gen 3 trees (`voxelmon/game/gen3/`,
+`voxelmon/import/gen3/`), the 3DS host code compiled only into a Gen 3
+build (`crates/pocketvoxel-3ds/src/gen3/`), and any binary built from them
 are GPLv3 with those terms -- see [voxelmon/game/gen3/LICENSE.md](voxelmon/game/gen3/LICENSE.md).
-Everything else, and the six other games, stays MIT; MIT code may be
-combined into a GPL build, not the other way round, and the MIT games never
+Everything else, and the six games above, stays MIT; MIT code may be
+combined into a GPL build, not the other way round, and the six games never
 compile any of the GPL code. As those terms require:
 
 > Based on the Pokemon Gen 1 Recompilation Project by BOIS CLUB GAMES, LLC (https://github.com/bryanthaboi/gen1recomp)
 
-Its 3D world follows Gummygamer's
-[gen1recomp-voxel-frlg](https://github.com/Gummygamer/gen1recomp-voxel-frlg)
-terrain rules (MIT); that port (`voxelmon/cook/gen3terrain.ts`) is MIT.
+Its 3D world follows MIT-licensed terrain rules credited in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md); that port
+(`voxelmon/cook/gen3terrain.ts`) is MIT.

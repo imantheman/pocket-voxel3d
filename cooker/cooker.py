@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pocket Voxel cooker: drop your Red, Blue, Yellow, Gold, Silver, Crystal, FireRed or LeafGreen ROM on it, get an SD card folder.
+"""Pocket Voxel cooker: drop your Red, Blue, Yellow, Gold, Silver or Crystal ROM on it, get an SD card folder.
 
     Windows:  drag your .gb (or Yellow / Gold / Silver / Crystal .gbc) file onto "Cook Pocket Voxel.bat"
     Mac:      double-click "Cook Pocket Voxel.command", then drag the .gb
@@ -63,7 +63,7 @@ from pathlib import Path
 POCKET_VOXEL_REPO = "imantheman/pocket-voxel3d"
 # The release this cooker ships with: its source is what the .3dsx and .cia
 # files beside it were built from.
-POCKET_VOXEL_REF = "v2.1.0"
+POCKET_VOXEL_REF = "v2.2.0"
 
 # Bun runs the importer and the cooker. MIT. https://bun.sh
 BUN_VERSION = "1.4.2"
@@ -137,6 +137,9 @@ CRYSTAL_11_SHA1 = "f2f52230b536214ef7c9924f483392993e226cfb"
 CRYSTAL = {"id": "crystal", "label": "Crystal", "manifest": "manifest_crystal", "paks": "paks_crystal",
            "maps": 388, "gamedata": "gamedata.json", "overlay": "version_crystal.vxat",
            "dsx": "pocketvoxel-3ds-crystal.3dsx", "cia": "PocketVoxel3DCrystal.cia"}
+# The Gen 3 edition (GPLv3: see the README) is in development and not
+# released: its ROMs are recognised only with POCKET_VOXEL_GEN3=1 set.
+GEN3_ENABLED = os.environ.get("POCKET_VOXEL_GEN3") == "1"
 # FireRed and LeafGreen (Gen 3, the GPLv3 edition: see the README), 1.0 and
 # 1.1 each. They share one paks folder, as Red and Blue do; each keeps its
 # own data and save folder (3ds/voxelmon/firered/, .../leafgreen/).
@@ -177,11 +180,10 @@ GAMES = {
     # Crystal's maps and tiles are its own, so it has a folder of its own.
     CRYSTAL_SHA1: CRYSTAL,
     CRYSTAL_11_SHA1: CRYSTAL,
-    FIRERED_SHA1: FIRERED,
-    FIRERED_11_SHA1: FIRERED,
-    LEAFGREEN_SHA1: LEAFGREEN,
-    LEAFGREEN_11_SHA1: LEAFGREEN,
 }
+if GEN3_ENABLED:
+    GAMES.update({FIRERED_SHA1: FIRERED, FIRERED_11_SHA1: FIRERED,
+                  LEAFGREEN_SHA1: LEAFGREEN, LEAFGREEN_11_SHA1: LEAFGREEN})
 # The games whose colours come out of the ROM itself (colour-handheld games).
 GBC_GAMES = ("yellow", "gold", "silver", "crystal", "firered", "leafgreen")
 # Gen 2: one engine, shapes from the game source, colours only from the ROM.
@@ -504,7 +506,7 @@ def open_folder(path):
 def find_rom(arg, yes):
     path = arg
     if not path:
-        say("Which ROM? Drag your Red, Blue, Yellow, Gold, Silver, Crystal, FireRed or LeafGreen file into this window and press Return.")
+        say("Which ROM? Drag your Red, Blue, Yellow, Gold, Silver or Crystal file into this window and press Return.")
         if yes:
             die("no ROM given (pass --rom PATH with --yes)")
         try:
@@ -521,12 +523,10 @@ def find_rom(arg, yes):
     digest = sha1_of(rom)
     game = GAMES.get(digest)
     if not game:
-        die(f"that is not the US Red, Blue, Yellow, Gold, Silver, Crystal, FireRed or LeafGreen ROM.",
+        die(f"that is not the US Red, Blue, Yellow, Gold, Silver or Crystal ROM.",
             f"\n  its SHA-1 is  {digest}\n  Red's is      {RED_SHA1}\n  Blue's is     {BLUE_SHA1}",
             f"\n  Yellow's is   {YELLOW_SHA1}\n  Gold's is     {GOLD_SHA1}\n  Silver's is   {SILVER_SHA1}",
             f"\n  Crystal's is  {CRYSTAL_SHA1} (1.0) or {CRYSTAL_11_SHA1} (1.1)",
-            f"\n  FireRed's is  {FIRERED_SHA1} (1.0) or {FIRERED_11_SHA1} (1.1)",
-            f"\n  LeafGreen's is {LEAFGREEN_SHA1} (1.0) or {LEAFGREEN_11_SHA1} (1.1)",
             "\nOnly those work. Other regions, colour hacks, ROM hacks, and",
             "files with a header or trailing bytes will all be refused here. Nothing was read from it.")
     say(f"  it is {game['label']} (US). Good.")
@@ -629,7 +629,7 @@ def write_sources(repo_desc, rom, palette, downloads, game):
 def main():
     global _log
     ap = argparse.ArgumentParser(add_help=True)
-    ap.add_argument("rom", nargs="?", help="your Red, Blue, Yellow, Gold, Silver, Crystal, FireRed or LeafGreen ROM file")
+    ap.add_argument("rom", nargs="?", help="your Red, Blue, Yellow, Gold, Silver or Crystal ROM file")
     ap.add_argument("--rom", dest="rom_opt")
     ap.add_argument("--yes", action="store_true", help="accept every default without asking")
     ap.add_argument("--palette", choices=("dmg", "gbc", "community"),
