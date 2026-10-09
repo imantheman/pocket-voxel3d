@@ -535,6 +535,7 @@ def find_rom(arg, yes):
 
 
 def write_sources(repo_desc, rom, palette, downloads, game):
+    colour = palette == "community"
     lines = [
         "Pocket Voxel -- what went into this build",
         "=" * 44,
