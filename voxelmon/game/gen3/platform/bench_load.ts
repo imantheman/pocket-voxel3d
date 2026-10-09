@@ -45,7 +45,8 @@ export class BenchLoad {
   /** The battle being fought (its exit is marked by afterUpdate, in the tick it ends). */
   private fighting = "";
 
-  /** `part`: "" the whole session, or "battle", "menu" or "walk" alone. */
+  /** `part`: "" the whole session, or "battle", "menu" or "walk" alone; "stray" (the
+   *  battle pictures after the party menu) or "city" (the big cities' memory). */
   constructor(game: any, private readonly mem: () => string, private readonly part = "") {
     this.game = game;
     this.it = this.session();
@@ -63,6 +64,8 @@ export class BenchLoad {
   /** Frames of a battle (with no party screen up) that drew a party-menu
    *  sprite or a small picture in the spot left of the foe's health box. */
   strays = 0;
+  /** Probe every part's frames (the desktop runner), not just the "stray" part's. */
+  probeAlways = false;
   /** A screenshot (the device's), taken a while into each fight of the "stray" part. */
   shot: (() => void) | undefined;
 
@@ -77,6 +80,9 @@ export class BenchLoad {
    * layer (the battle's sprites are its own).
    */
   probeFrame(list: Float32Array): void {
+    // (the stray part's, and the desktop runs': a walk over each frame's list
+    // would cost the other parts' timings a few ms a frame on the console)
+    if (this.part !== "stray" && !this.probeAlways) return;
     if (!this.inBattle() || PartyMenu.open || SummaryMenu.isOpen?.()) return;
     let found = "";
     for (let i = 0, target = 0; i < list.length;) {
@@ -398,6 +404,21 @@ export class BenchLoad {
     yield* this.idle(120);
     this.mark(`arrived; ${this.mem()}`);
     const all = this.part === "";
+    if (this.part === "city") {
+      // the big cities: the world's linear memory, and a battle in each
+      // with the world kept or let go (gen3/mod.rs hold_rebuild)
+      for (const c of ["FR_CELADON_CITY", "FR_SAFFRON_CITY"]) {
+        this.mark(`city: warp to ${c}`);
+        yield* this.teleport(c);
+        yield* this.settle();
+        yield* this.idle(240);
+        this.mark(`city: in ${this.lastMap}; ${this.mem()}`);
+        yield* this.battle(`city: ${c} wild`, () => (BattleBridge as any).startWild(Runtime._mod, this.game, { species: 19, level: 5 }, {}));
+        this.mark(`city: after the battle; ${this.mem()}`);
+      }
+      this.mark(`done; ${this.mem()}`);
+      return;
+    }
     if (this.part === "stray") {
       // the party menu (and its summary) closed, then a battle: Isaac's
       // stale party icon beside the foe's health box

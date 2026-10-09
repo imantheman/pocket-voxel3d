@@ -53,6 +53,8 @@ export const nativeProf = { up: 0, upUs: 0, upKB: 0, sub: 0, subUs: 0, subKB: 0,
  */
 export const readProf = {
   on: false,
+  /** Bench builds: a read in play taking this long (us) gets a log line; 0 none. */
+  slowUs: 0,
   list: [] as { path: string; size: number; host: number; after: number; t: number }[],
   /** Close the last read's `after` now. */
   close(): void {
@@ -111,7 +113,10 @@ class QuickJsG3Host implements G3Host {
     if (!readProf.on) {
       const t = clock();
       const s = n.g3Read!(path);
-      nativeProf.rd++; nativeProf.rdUs += clock() - t;
+      const dt = clock() - t;
+      nativeProf.rd++; nativeProf.rdUs += dt;
+      // bench builds (main.ts sets readProf.slowUs): each slow read in play
+      if (readProf.slowUs > 0 && dt >= readProf.slowUs) console.log(`[pv] g3 read ${Math.round(dt / 1000)} ms ${s?.length ?? -1} B ${path}`);
       return s;
     }
     readProf.close();

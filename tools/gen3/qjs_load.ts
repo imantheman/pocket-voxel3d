@@ -100,6 +100,7 @@ const bench = new BenchLoad(game, () => `heap ${(memUsage()[0] / 1048576).toFixe
 {
   const host = getHost() as { draw(list: Float32Array): void };
   const draw0 = host.draw.bind(host);
+  bench.probeAlways = true;
   host.draw = (list: Float32Array): void => { bench.probeFrame(list); draw0(list); };
 }
 let tick = 0;

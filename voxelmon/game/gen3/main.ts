@@ -219,6 +219,7 @@ function gameMain(bench: boolean): void {
   // ("load:battle", "load:menu", "load:walk": that part alone)
   const load = bench && /^load(:|$)/.test(scriptText) ? new BenchLoad(game, () => memText(true), scriptText.slice(5)) : null;
   if (load) {
+    readProf.slowUs = 8000; // the reads in play over 8 ms, each a line
     // its probe sees each frame's draw list on the way to the host, and its
     // "stray" part photographs the fights
     const h = getHost() as { draw(list: Float32Array): void };
