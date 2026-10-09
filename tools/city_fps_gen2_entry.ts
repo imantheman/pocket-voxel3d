@@ -18,8 +18,10 @@ const SEG = 360;
 const COMBOS = 9;
 const ROUND = SEG * COMBOS;
 
-/** Map, and where in it as fractions of its width and height. */
-const SPOTS: [string, number, number][] = [
+/** Map, and where in it as fractions of its width and height (a build
+ * can name others: --define 'BENCH_SPOTS=[["MAP",0.5,0.5]]'). */
+declare const BENCH_SPOTS: [string, number, number][];
+const SPOTS: [string, number, number][] = typeof BENCH_SPOTS !== "undefined" ? BENCH_SPOTS : [
   ["GOLDENROD_CITY", 0.5, 0.5],
   ["GOLDENROD_CITY", 0.45, 0.85],
   ["GOLDENROD_CITY", 0.3, 0.3],
