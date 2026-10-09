@@ -817,7 +817,10 @@ export function makeCtx(root: string, map: FrMap, pair: FrPair, pairMaps: PairMa
         if (offMap(cx, cy) || !blockedAt(cx, cy) || sc.has(sidx(cx, cy))) return false;
         const m = metatileAt(cx, cy);
         const st = statsOf(m);
-        if (!st || st.leafy || st.overhead || st.overhang || st.solid <= 0.06 || st.solid >= 0.75) return false;
+        // (the shape surface's own count where it reads thinner: a white
+        // picket on a pale lawn keys out where the analysis does not)
+        const sf = Math.min(st?.solid ?? 1, surface.solidFrac[slotOf(m)] ?? 1);
+        if (!st || st.leafy || st.overhead || st.overhang || sf <= 0.06 || sf >= 0.75) return false;
         const bc = behaviourClass(attributes(m));
         return bc === undefined || bc === "ground";
       };
