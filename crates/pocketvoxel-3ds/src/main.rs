@@ -1563,6 +1563,24 @@ extern "C" {
     fn C3D_GetCmdBufUsage() -> f32;
 }
 
+/// The GPU command buffer of the MIT games (C3D_Init), twice citro3d's
+/// default 256 KB. Every tree copy is a draw of its own -- its place handed
+/// to the shader, then the shape -- about 50 command words, and the dense
+/// Gen 2 forest keeps ~500 copies inside the old cull. With the slider up
+/// both eyes drew all of them and ran the default buffer past its end:
+/// citro3d's svcBreak, the game stopped dead the moment the slider went up
+/// there (the city bench, Citra, build 495ee16). Since each eye draws only
+/// the copies in its own view the worst seen is 78% of the default (third
+/// person, slider up), 39% of this. It is linear memory, which the
+/// indexed spans and the dropped ground-bake copies left far more of.
+const CMDBUF_BYTES: usize = 0x80000;
+/// How full the command buffer may get before a frame's remaining tree
+/// copies are left out (the left eye stops at half of it while the right
+/// eye is still to come). Never reached in any measured view; it is there
+/// so an unmeasured one costs some trees for a frame rather than the
+/// session -- a full buffer is a svcBreak on hardware.
+const CMD_GUARD: f32 = 0.9;
+
 /// Bench builds only (PV_BENCH, never a release): the guest runs exactly
 /// two ticks a shown frame, whatever the time, so a bench sees the same
 /// scene on the same tick in every run and its shots compare; and the host
@@ -4995,6 +5013,9 @@ fn main() {
     let map_ids: Vec<u32> = map_index.iter().map(|(id, _)| *id).collect();
     println!("{} maps.  L/R = switch map", map_ids.len());
     println!("D-pad orbit  A/B zoom  START exit");
+    #[cfg(not(feature = "gen3"))]
+    let mut instance = citro3d::Instance::with_cmdbuf_size(CMDBUF_BYTES).expect("citro3d");
+    #[cfg(feature = "gen3")]
     let mut instance = citro3d::Instance::new().expect("citro3d"); #[cfg(feature = "gen3")] let mut instance = { drop(instance); citro3d::Instance::with_cmdbuf_size(gen3::CMDBUF_BYTES).expect("citro3d") };
     // Lock to 30 Hz on the vblanks themselves: C3D_FrameBegin waits for every
     // second one (relaxed to the next one for a heavy frame -- the perf block).
@@ -8068,9 +8089,15 @@ if page_tex.len() < pak_static.atlases.len() {
                 // far ones coarse, and nothing dropped for want of budget
                 // the way a baked-in chunk mesh had to be.
                 if !eye_trees[ei].is_empty() {
-                    // (a raw draw has no error to count)
-                    let t_err = 0u32;
+                    // copies left out for want of command buffer (CMD_GUARD)
+                    let mut t_err = 0u32;
+                    // the left eye leaves the right eye its half
+                    let guard = if ei == 0 && right_eye { CMD_GUARD * 0.5 } else { CMD_GUARD };
                     for (it, tb) in eye_trees[ei].iter() {
+                        if unsafe { C3D_GetCmdBufUsage() } > guard {
+                            t_err += 1;
+                            continue;
+                        }
                         // Where this copy stands, handed to the shader, which
                         // adds it to the vertex before the projection (a
                         // matrix edit moved the trees somewhere invisible).
