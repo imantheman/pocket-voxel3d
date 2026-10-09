@@ -8,6 +8,7 @@ import { setSaveStore, memorySaveStore } from "../../voxelmon/game/gen3/platform
 import { setAudio, silentAudio } from "../../voxelmon/game/gen3/platform/audio.ts";
 import { setNativeBytes } from "../../voxelmon/import/gen3/lua.ts";
 import { setNativeBlit } from "../../voxelmon/game/gen3/platform/image.ts";
+import { Fast } from "../../voxelmon/game/gen3/platform/fast.ts";
 
 type Blit = (dst: Uint8Array, dw: number, dx: number, dy: number, src: Uint8Array, sw: number, sx: number, sy: number, w: number, h: number) => boolean;
 
@@ -62,6 +63,10 @@ const host: G3Host = {
   if (g.nativeBytes) setNativeBytes(g.nativeBytes);
   if (g.nativeBlit) setNativeBlit(g.nativeBlit);
   if (g.pngDecode) host.pngDecode = (s) => g.pngDecode!(s);
+  // g3_fast.c's MD5 and atlas bake (the 3DS host's g3Md5 / g3Bake)
+  const h = globalThis as { nativeMd5?: typeof Fast.md5; nativeBake?: typeof Fast.bake };
+  if (h.nativeMd5) Fast.md5 = h.nativeMd5;
+  if (h.nativeBake) Fast.bake = h.nativeBake;
 }
 // tools/gen3/perf_check.ts runs qjs_perf.ts under Bun on its own host
 setHost((globalThis as { __perfHost?: G3Host }).__perfHost ?? host);

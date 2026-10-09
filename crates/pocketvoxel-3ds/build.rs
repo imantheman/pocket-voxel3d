@@ -68,6 +68,8 @@ fn main() {
             println!("cargo:rerun-if-changed=src/gen3/{n}");
             g.file(format!("src/gen3/{n}"));
         }
+        // (included by g3_shim.c, and by the desktop runner tools/gen3/qjs_run.c)
+        println!("cargo:rerun-if-changed=src/gen3/g3_fast.c");
         g.compile("pvgen3");
         // The guest's boot: QuickJS bytecode when cc_build_firered.sh made a
         // game-firered.qbc at least as new as the bundle (main.rs then runs a

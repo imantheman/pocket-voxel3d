@@ -21,6 +21,7 @@
      g3Log(line)                                       (to the log file alone:
                                                         console.log also prints
                                                         it to stdout, slowly)
+     g3Md5(byte string), g3Bake(...)                   (two hot loops, g3_fast.c)
 
    Paths are the cache's (data/generated/gba/...), under
    sdmc:/3ds/voxelmon/firered/. */
@@ -343,6 +344,91 @@ static JSValue g3_bytes_js(JSContext *ctx, JSValueConst t, int c, JSValueConst *
     return arr;
 }
 
+/* ------------------------------------------------------------ hot loops
+   g3Md5(byte string) -> hex | undefined          (core/palette.ts md5hex)
+   g3Bake(blob, pix0, midCount, cols, rows, lut) -> byte string | undefined
+                                                   (native_pack.ts bakeRgba)
+   undefined: a char over 0xFF, or arguments out of range (the guest then
+   runs its own code). */
+#include "g3_fast.c"
+
+/* A byte string's bytes (malloc'd; NULL for a char over 0xFF): QuickJS hands
+   a char 0x80..0xFF over as two bytes of UTF-8. */
+static uint8_t *g3_str_bytes(JSContext *ctx, JSValueConst v, size_t *out_n) {
+    *out_n = 0;
+    if (!JS_IsString(v)) return NULL;
+    size_t ulen = 0;
+    const char *u = JS_ToCStringLen(ctx, &ulen, v);
+    if (!u) { JS_FreeValue(ctx, JS_GetException(ctx)); return NULL; }
+    uint8_t *b = (uint8_t *)malloc(ulen + 1);
+    size_t n = 0;
+    int bad = !b;
+    for (size_t i = 0; !bad && i < ulen; i++) {
+        uint8_t x = (uint8_t)u[i];
+        if (x < 0x80) b[n++] = x;
+        else if ((x == 0xC2 || x == 0xC3) && i + 1 < ulen) { b[n++] = (uint8_t)(((x & 0x1F) << 6) | ((uint8_t)u[i + 1] & 0x3F)); i++; }
+        else bad = 1;
+    }
+    JS_FreeCString(ctx, u);
+    if (bad) { free(b); return NULL; }
+    *out_n = n;
+    return b;
+}
+
+/* Bytes as a byte string (one char per byte; QuickJS keeps it 8-bit). */
+static JSValue g3_bytes_str(JSContext *ctx, const uint8_t *b, size_t n) {
+    size_t hi = 0;
+    for (size_t i = 0; i < n; i++) hi += b[i] >> 7;
+    if (!hi) return JS_NewStringLen(ctx, (const char *)b, n);
+    uint8_t *u = (uint8_t *)malloc(n + hi);
+    if (!u) return JS_UNDEFINED;
+    size_t k = 0;
+    for (size_t i = 0; i < n; i++) {
+        uint8_t x = b[i];
+        if (x < 0x80) u[k++] = x;
+        else { u[k++] = (uint8_t)(0xC0 | (x >> 6)); u[k++] = (uint8_t)(0x80 | (x & 0x3F)); }
+    }
+    JSValue r = JS_NewStringLen(ctx, (const char *)u, k);
+    free(u);
+    return r;
+}
+
+static JSValue g3_md5_js(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 1) return JS_UNDEFINED;
+    size_t n = 0;
+    uint8_t *b = g3_str_bytes(ctx, v[0], &n);
+    if (!b) return JS_UNDEFINED;
+    char hex[33];
+    g3_md5_hex(b, n, hex);
+    free(b);
+    return JS_NewStringLen(ctx, hex, 32);
+}
+
+static JSValue g3_bake_js(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 6) return JS_UNDEFINED;
+    int32_t pix0 = 0, mids = 0, cols = 0, rows = 0;
+    JS_ToInt32(ctx, &pix0, v[1]); JS_ToInt32(ctx, &mids, v[2]);
+    JS_ToInt32(ctx, &cols, v[3]); JS_ToInt32(ctx, &rows, v[4]);
+    size_t ll = 0;
+    const uint8_t *lut = g3_tbytes(ctx, v[5], &ll);
+    if (!lut || ll < 1024 || pix0 < 0 || mids < 0 || cols < 1 || rows < 1 || cols * rows > 16384) return JS_UNDEFINED;
+    size_t n = 0;
+    uint8_t *blob = g3_str_bytes(ctx, v[0], &n);
+    if (!blob) return JS_UNDEFINED;
+    size_t w = (size_t)cols * 16, h = (size_t)rows * 16;
+    uint8_t *out = (uint8_t *)malloc(w * h * 4);
+    if (!out) { free(blob); return JS_UNDEFINED; }
+    size_t npix = (size_t)pix0 < n ? n - (size_t)pix0 : 0;
+    if (npix > (size_t)mids * 256) npix = (size_t)mids * 256;
+    g3_bake_rgba(blob + ((size_t)pix0 < n ? (size_t)pix0 : n), npix, (int)mids, (int)cols, (int)rows, lut, out);
+    free(blob);
+    JSValue r = g3_bytes_str(ctx, out, w * h * 4);
+    free(out);
+    return r;
+}
+
 /* A PNG (a byte string, as g3Read gives) decoded here rather than by the
    guest's inflate: [w, h, RGBA8 Uint8Array], or undefined when g3_png_same
    says no or it fails (the guest then decodes it itself). */
@@ -648,6 +734,8 @@ int qjs_register_g3(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "g3PngDecode", JS_NewCFunction(ctx, g3_pngdecode, "g3PngDecode", 1));
     JS_SetPropertyStr(ctx, o, "g3Bytes", JS_NewCFunction(ctx, g3_bytes_js, "g3Bytes", 1));
     JS_SetPropertyStr(ctx, o, "g3Log", JS_NewCFunction(ctx, g3_log_js, "g3Log", 1));
+    JS_SetPropertyStr(ctx, o, "g3Md5", JS_NewCFunction(ctx, g3_md5_js, "g3Md5", 1));
+    JS_SetPropertyStr(ctx, o, "g3Bake", JS_NewCFunction(ctx, g3_bake_js, "g3Bake", 6));
     static const struct { const char *name; JSCFunction *fn; int n; } snd[] = {
         { "g3SongPlay", g3_songplay, 1 }, { "g3SongStop", g3_songstop, 0 },
         { "g3SongPause", g3_songpause, 0 }, { "g3SongResume", g3_songresume, 0 },

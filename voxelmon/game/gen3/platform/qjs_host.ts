@@ -12,6 +12,7 @@ import { memorySaveStore, setSaveStore, type SaveStore } from "./savefs.ts";
 import { setAudio, type CryParams, type G3Audio, type SeOptions } from "./audio.ts";
 import { setNativeBytes } from "../../../import/gen3/lua.ts";
 import { setNativeBlit } from "./image.ts";
+import { Fast } from "./fast.ts";
 
 const n = native;
 export const clock = (): number => (n.now ? n.now() : Date.now() * 1000);
@@ -26,6 +27,15 @@ const pngNative = n as typeof n & {
 if (pngNative.g3Bytes) setNativeBytes((s) => pngNative.g3Bytes!(s));
 // ImageData:paste's rect copies in C (g3_shim.c g3Blit)
 if (pngNative.g3Blit) setNativeBlit(pngNative.g3Blit);
+// the tileset atlases' MD5 key and their bake in C (g3_shim.c g3Md5 / g3Bake)
+{
+  const f = n as typeof n & {
+    g3Md5?(s: string): string | undefined;
+    g3Bake?(blob: string, pix0: number, mids: number, cols: number, rows: number, lut: Uint8Array): string | undefined;
+  };
+  if (f.g3Md5) Fast.md5 = (s) => f.g3Md5!(s);
+  if (f.g3Bake) Fast.bake = (b, p, m, c, r, l) => f.g3Bake!(b, p, m, c, r, l);
+}
 
 /** Draw-list timing, summed until read (main.ts's perf lines). */
 export const drawProf = { conv: 0, len: 0 };

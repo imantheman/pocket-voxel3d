@@ -239,6 +239,76 @@ static JSValue js_nativeblit(JSContext *ctx, JSValueConst t, int c, JSValueConst
     return JS_TRUE;
 }
 
+/* nativeMd5 / nativeBake: the 3DS host's g3Md5 / g3Bake (g3_fast.c, the same file) */
+#include "../../crates/pocketvoxel-3ds/src/gen3/g3_fast.c"
+
+static uint8_t *str_bytes(JSContext *ctx, JSValueConst v, size_t *out_n) {
+    *out_n = 0;
+    if (!JS_IsString(v)) return NULL;
+    size_t ulen = 0;
+    const char *u = JS_ToCStringLen(ctx, &ulen, v);
+    if (!u) return NULL;
+    uint8_t *b = malloc(ulen + 1);
+    size_t n = 0;
+    int bad = !b;
+    for (size_t i = 0; !bad && i < ulen; i++) {
+        uint8_t x = (uint8_t)u[i];
+        if (x < 0x80) b[n++] = x;
+        else if ((x == 0xC2 || x == 0xC3) && i + 1 < ulen) { b[n++] = (uint8_t)(((x & 0x1F) << 6) | ((uint8_t)u[i + 1] & 0x3F)); i++; }
+        else bad = 1;
+    }
+    JS_FreeCString(ctx, u);
+    if (bad) { free(b); return NULL; }
+    *out_n = n;
+    return b;
+}
+
+static JSValue js_nativemd5(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 1) return JS_UNDEFINED;
+    size_t n = 0;
+    uint8_t *b = str_bytes(ctx, v[0], &n);
+    if (!b) return JS_UNDEFINED;
+    char hex[33];
+    g3_md5_hex(b, n, hex);
+    free(b);
+    return JS_NewStringLen(ctx, hex, 32);
+}
+
+static JSValue js_nativebake(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 6) return JS_UNDEFINED;
+    int32_t pix0 = 0, mids = 0, cols = 0, rows = 0;
+    JS_ToInt32(ctx, &pix0, v[1]); JS_ToInt32(ctx, &mids, v[2]);
+    JS_ToInt32(ctx, &cols, v[3]); JS_ToInt32(ctx, &rows, v[4]);
+    size_t ll = 0;
+    const uint8_t *lut = ta_bytes(ctx, v[5], &ll);
+    if (!lut || ll < 1024 || pix0 < 0 || mids < 0 || cols < 1 || rows < 1 || cols * rows > 16384) return JS_UNDEFINED;
+    size_t n = 0;
+    uint8_t *blob = str_bytes(ctx, v[0], &n);
+    if (!blob) return JS_UNDEFINED;
+    size_t w = (size_t)cols * 16, h = (size_t)rows * 16, len = w * h * 4;
+    uint8_t *out = malloc(len);
+    size_t npix = (size_t)pix0 < n ? n - (size_t)pix0 : 0;
+    if (npix > (size_t)mids * 256) npix = (size_t)mids * 256;
+    g3_bake_rgba(blob + ((size_t)pix0 < n ? (size_t)pix0 : n), npix, (int)mids, (int)cols, (int)rows, lut, out);
+    free(blob);
+    /* as a byte string: chars 0x80..0xFF go in as two bytes of UTF-8 */
+    size_t hi = 0;
+    for (size_t i = 0; i < len; i++) hi += out[i] >> 7;
+    uint8_t *u = malloc(len + hi);
+    size_t k = 0;
+    for (size_t i = 0; i < len; i++) {
+        uint8_t x = out[i];
+        if (x < 0x80) u[k++] = x;
+        else { u[k++] = (uint8_t)(0xC0 | (x >> 6)); u[k++] = (uint8_t)(0x80 | (x & 0x3F)); }
+    }
+    free(out);
+    JSValue r = JS_NewStringLen(ctx, (const char *)u, k);
+    free(u);
+    return r;
+}
+
 static JSValue js_nowus(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t; (void)c; (void)v;
     struct timespec ts;
@@ -309,6 +379,10 @@ int main(int argc, char **argv) {
     JS_SetPropertyStr(ctx, g, "pngDecode", JS_NewCFunction(ctx, js_pngdecode, "pngDecode", 1));
     JS_SetPropertyStr(ctx, g, "nativeBytes", JS_NewCFunction(ctx, js_nativebytes, "nativeBytes", 1));
     JS_SetPropertyStr(ctx, g, "nativeBlit", JS_NewCFunction(ctx, js_nativeblit, "nativeBlit", 10));
+    if (!getenv("QJS_NO_FAST")) {
+        JS_SetPropertyStr(ctx, g, "nativeMd5", JS_NewCFunction(ctx, js_nativemd5, "nativeMd5", 1));
+        JS_SetPropertyStr(ctx, g, "nativeBake", JS_NewCFunction(ctx, js_nativebake, "nativeBake", 6));
+    }
     JS_FreeValue(ctx, g);
 #ifdef QJS_PROF
     { void qjs_prof_install(JSRuntime *, JSContext *); qjs_prof_install(rt, ctx); } /* tools/gen3/qjs_prof.c */

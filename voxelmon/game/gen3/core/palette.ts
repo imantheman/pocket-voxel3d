@@ -8,6 +8,7 @@
 import { Tileset } from "../../../import/gen3/tileset.ts";
 import { NativePack, type DecodedPalettes } from "../../../import/gen3/native_pack.ts";
 import { format } from "../../../import/gen3/lua.ts";
+import { Fast } from "../platform/fast.ts";
 
 type Rgb = [number, number, number];
 
@@ -30,6 +31,13 @@ function rol(x: number, n: number): number {
 
 // Lua: palette.lua:38
 function md5hex(msgIn: string): string {
+  // NOT FAITHFUL (performance, same digest): the host's C MD5 when it has
+  // one -- this loop over a tileset's whole mids.idx blob was seconds of
+  // QuickJS at a map change on the console
+  if (Fast.md5) {
+    const r = Fast.md5(msgIn);
+    if (r !== undefined) return r;
+  }
   const len = msgIn.length;
   const padLen = (((55 - len) % 64) + 64) % 64;
   const msg = msgIn + "\x80" + "\0".repeat(padLen)
@@ -97,7 +105,10 @@ export const Palette = {
     for (let p = 0; p <= Palette.NUM_PALS_TOTAL - 1; p++) {
       const colors = bgrPals[p] ?? bgrPals[0] ?? [];
       for (let c = 0; c <= 15; c++) {
-        parts.push(format("%04x", (colors[c] ?? 0) % 65536));
+        const v = (colors[c] ?? 0) % 65536;
+        // NOT FAITHFUL (performance, same text): a colour is a u16 from the
+        // pack, whose %04x is its hex padded to 4; anything else takes format
+        parts.push(Number.isInteger(v) && v >= 0 ? (v < 0x1000 ? (v < 0x100 ? (v < 0x10 ? "000" : "00") : "0") : "") + v.toString(16) : format("%04x", v));
       }
     }
     if (extraBlob && typeof extraBlob === "string") {

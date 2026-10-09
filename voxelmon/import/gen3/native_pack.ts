@@ -21,6 +21,7 @@ import { CachePaths } from "../../game/gen3/core/cache_paths.ts";
 import { CollPermissions as Coll } from "../../game/gen3/shared/core/CollPermissions.ts";
 import { Collision } from "../../game/gen3/core/scripting/collision.ts";
 import { VoidFill } from "../../game/gen3/core/void_fill.ts";
+import { Fast } from "../../game/gen3/platform/fast.ts";
 
 export interface IdxTable {
   formatVersion: number;
@@ -257,6 +258,10 @@ export const NativePack = {
       atlasRows,
       midIds,
     } as IdxTable;
+    // the blob and where its pixels start (0-based), for the host's bake
+    // (platform/fast.ts): not enumerable, so the table reads as before
+    Object.defineProperty(tbl, "_blob", { value: blob, enumerable: false });
+    Object.defineProperty(tbl, "_pix0", { value: dataOff - 1, enumerable: false });
     let pixels: Uint8Array | undefined;
     Object.defineProperty(tbl, "pixels", {
       enumerable: true,
@@ -352,6 +357,19 @@ export const NativePack = {
         const rgb = (pal && pal[colorIndex]) || [0, 0, 0];
         lut[byte] = [(rgb[0] ?? 0) & 255, (rgb[1] ?? 0) & 255, (rgb[2] ?? 0) & 255, 255];
       }
+    }
+    // NOT FAITHFUL (performance, same bytes): a table from decodeIdx baked by
+    // the host (g3_fast.c g3_bake_rgba), where it can, from the blob itself
+    const nb = Fast.bake;
+    const src = idxTbl as { _blob?: string; _pix0?: number };
+    if (nb && typeof src._blob === "string" && src._pix0 != null && !opts.cancelled) {
+      const flat = new Uint8Array(1024);
+      for (let byte = 0; byte <= 255; byte++) {
+        const c = lut[byte]!;
+        flat[byte * 4] = c[0]!; flat[byte * 4 + 1] = c[1]!; flat[byte * 4 + 2] = c[2]!; flat[byte * 4 + 3] = c[3]!;
+      }
+      const s = nb(src._blob, src._pix0, midCount, cols, rows, flat);
+      if (typeof s === "string") return [s, w, h];
     }
     // Fill atlas by mid slot: slot i occupies atlas cell (i%cols, floor(i/cols)).
     const pixels = idxTbl.pixels ?? [];
