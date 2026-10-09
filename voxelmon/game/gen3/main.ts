@@ -39,6 +39,8 @@ import { WorldView } from "./platform/worldview.ts";
 import { Game3World } from "./platform/game3_world.ts";
 import { BenchSuite } from "./platform/bench_suite.ts";
 import { BenchLeak } from "./platform/bench_leak.ts";
+import { BenchLoad } from "./platform/bench_load.ts";
+import { Stack } from "./ui/stack.ts";
 
 declare const PV_G3_MODE: string;
 declare const PV_G3_BENCH_SCRIPT: string;
@@ -123,6 +125,14 @@ function benchBytesCheck(paths: string[]): void {
   console.log(`[pv] g3 bench: g3Bytes against toBytes on ${files} files (${(bytes / 1048576).toFixed(1)} MB): ${bad} differ, ${left} left to toBytes`);
 }
 
+/** Bench builds' slow-frame lines: the phase, the top screen and whether a battle is up. */
+function slowWhere(game: any): string {
+  const L: any = (Stack as any)._layers;
+  let k = 0;
+  while (L && L[k + 1] != null) k++;
+  return `phase ${game?.phase}, top ${k > 0 ? String(L[k].id ?? "?") : "-"}, ${game?.speedCategory?.() ?? "?"}`;
+}
+
 function hostTestMain(): void {
   let test: HostTest | undefined;
   try {
@@ -203,7 +213,10 @@ function gameMain(bench: boolean): void {
   const suite = bench && scriptText === "suite" ? new BenchSuite() : null;
   // ... or its long session (platform/bench_leak.ts): memory over many battles and maps
   const leak = bench && scriptText === "leak" ? new BenchLeak(game, () => memText(false)) : null;
-  const script = new BenchScript(suite || leak ? "" : scriptText);
+  // ... or its transitions (platform/bench_load.ts): battles, menus, doors, seams, each marked
+  // ("load:battle", "load:menu", "load:walk": that part alone)
+  const load = bench && /^load(:|$)/.test(scriptText) ? new BenchLoad(game, () => memText(true), scriptText.slice(5)) : null;
+  const script = new BenchScript(suite || leak || load ? "" : scriptText);
   const shots = shotSet(typeof PV_G3_BENCH_SHOTS === "string" ? PV_G3_BENCH_SHOTS : bench ? "90,300" : "");
   let tick = 0;
   let shown = 0;
@@ -215,13 +228,16 @@ function gameMain(bench: boolean): void {
     tick++;
     const t1 = clock();
     try {
-      Input.hostButtons(padBits(buttons) | (suite ? suite.at(tick, game) : leak ? leak.at(tick, game) : script.at(tick)));
+      Input.hostButtons(padBits(buttons) | (suite ? suite.at(tick, game) : leak ? leak.at(tick, game) : load ? load.at(tick, game) : script.at(tick)));
       game.update(1 / 60);
+      if (load) load.afterUpdate();
     } catch (e) {
       if (!failedUpdate) console.log(`[pv] g3: update failed: ${errText(e)}`);
       failedUpdate = true;
     }
     const tu = clock() - t1;
+    // bench builds: a tick that took more than a frame's share, and on what
+    if (bench && tu > 20000) console.log(`[pv] g3 slow update ${ms1(tu)} ms (tick ${tick}, ${slowWhere(game)})`);
     if (suite) suite.noteUpdate(tu);
     prof.update += tu;
     if (tu > prof.updateMax) prof.updateMax = tu;
@@ -243,6 +259,9 @@ function gameMain(bench: boolean): void {
     const t3 = clock();
     view.emit(field.state(game));
     const t4 = clock();
+    if (bench && t4 - t2 > 20000) {
+      console.log(`[pv] g3 slow draw ${ms1(t4 - t2)} ms (begin ${ms1(t2b - t2)} game.draw ${ms1(t2c - t2b)} endFrame ${ms1(t3 - t2c)} world ${ms1(t4 - t3)}; tick ${tick}, ${slowWhere(game)})`);
+    }
     prof.draw += t3 - t2;
     prof.game += t2c - t2b;
     if (t3 - t2 > prof.drawMax) prof.drawMax = t3 - t2;

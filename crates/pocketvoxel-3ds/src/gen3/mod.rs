@@ -54,7 +54,7 @@ macro_rules! g3_root { () => { "sdmc:/3ds/voxelmon/leafgreen/" } }
 
 mod audio;
 mod pace;
-pub use pace::{after_render, borrow_tick, frame_top, step_begin};
+pub use pace::{after_render, borrow_tick, frame_top, mark, step_begin};
 
 extern "C" {
     fn g3_gpu_init_shared(shbin: *const u8, len: u32) -> i32;

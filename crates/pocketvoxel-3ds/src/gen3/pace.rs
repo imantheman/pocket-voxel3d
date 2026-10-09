@@ -92,13 +92,48 @@ struct Pace {
     ups: u32,
     downs: u32,
     late: u32,
+    /// This frame's marks (main.rs hooks, [`mark`]): the ticks' end, before
+    /// the map rebuild, the rebuild's end, the seam strip slice's end.
+    marks: [f64; 4],
+    steps: u32,
+    /// The last frame's split, logged at the next frame's top when its
+    /// period shows it was a hitch ([`HITCH_MS`]).
+    last: [f32; 9],
+    last_steps: u32,
+    gc_thr: usize,
+    gc_seen: bool,
+    frame_no: u32,
 }
 
 static mut P: Pace = Pace {
     new3ds: None, at60: false, rate: 30, t_top: 0.0, prev_top: 0.0, t_pre: 0.0, t_in: 0.0, t_step0: 0.0,
     t_last_step: 0.0, fits: 0, hold: 0, since: 0, prev_over: false, strain: 0.0, n60: 0, n30: 0,
     work_sum: 0.0, work_max: 0.0, max_pre: 0.0, max_post: 0.0, est_sum: 0.0, est_max: 0.0, ups: 0, downs: 0, late: 0,
+    marks: [0.0; 4], steps: 0, last: [0.0; 9], last_steps: 0, gc_thr: 0, gc_seen: false, frame_no: 0,
 };
+
+/// A frame shown this long after the one before it is a hitch: its split
+/// goes to the log (one line, in the next frame's batched write).
+const HITCH_MS: f32 = 36.0;
+
+extern "C" {
+    fn JS_GetRuntime(ctx: *mut super::super::JSContext) -> *mut core::ffi::c_void;
+    fn JS_GetGCThreshold(rt: *mut core::ffi::c_void) -> usize;
+}
+
+/// QuickJS's next-collection threshold: it moves only when a collection ran.
+fn gc_threshold() -> usize {
+    let ctx = unsafe { super::super::CTX };
+    if ctx.is_null() { return 0; }
+    unsafe { JS_GetGCThreshold(JS_GetRuntime(ctx)) }
+}
+
+/// A point inside the frame (main.rs hooks): 0 the ticks done, 1 before the
+/// map rebuild, 2 after it, 3 after the deferred seam strip slice.
+pub fn mark(i: usize) {
+    let p = p();
+    if i < p.marks.len() { p.marks[i] = now_ms(); }
+}
 
 fn now_ms() -> f64 {
     (unsafe { svcGetSystemTick() }) as f64 / 268_111.856
@@ -122,12 +157,29 @@ pub fn frame_top() {
     p.t_top = now_ms();
     p.t_step0 = 0.0;
     p.t_last_step = 0.0;
+    p.frame_no = p.frame_no.wrapping_add(1);
+    // the frame just shown, when it came late: where its time went
+    let period = if p.prev_top > 0.0 { (p.t_top - p.prev_top) as f32 } else { 0.0 };
+    let thr = gc_threshold();
+    let gc = p.gc_seen || (p.gc_thr != 0 && thr != p.gc_thr);
+    p.gc_thr = thr;
+    p.gc_seen = false;
+    if period > HITCH_MS && p.last[8] > 0.0 {
+        let l = p.last;
+        dlog(&format!(
+            "[pv] g3 hitch: frame {} {:.0} ms (work {:.0}: in {:.0} ticks {}x {:.0} map {:.0} rebuild {:.0} strips {:.0} rest {:.0} wait {:.0} render {:.0}){}",
+            p.frame_no.wrapping_sub(1), period, l[8], l[0], p.last_steps, l[1], l[2], l[3], l[4], l[5], l[6], l[7],
+            if gc { " gc" } else { "" },
+        ));
+    }
+    p.marks = [0.0; 4];
 }
 
 /// Before each guest tick (main.rs's step loop).
 pub fn step_begin(step: u32, steps: u32) {
     let p = p();
     let t = now_ms();
+    p.steps = steps;
     if step == 0 { p.t_step0 = t; }
     if step + 1 == steps { p.t_last_step = t; }
 }
@@ -148,6 +200,28 @@ pub fn after_render() {
     let t_end = now_ms();
     if p.t_top == 0.0 || p.t_in == 0.0 { return; }
     let work = ((p.t_pre - p.t_top) + (t_end - p.t_in)) as f32;
+    {
+        // the split for the hitch line: a mark not reached this frame
+        // takes the one before it
+        let s0 = if p.t_step0 > 0.0 { p.t_step0 } else { p.t_top };
+        let mut m = [s0; 4];
+        let mut prev = s0;
+        for i in 0..4 {
+            if p.marks[i] >= prev { prev = p.marks[i]; }
+            m[i] = prev;
+        }
+        let pre = p.t_pre.max(m[3]);
+        p.last = [
+            (s0 - p.t_top) as f32, (m[0] - s0) as f32, (m[1] - m[0]) as f32, (m[2] - m[1]) as f32,
+            (m[3] - m[2]) as f32, (pre - m[3]) as f32, (p.t_in - p.t_pre).max(0.0) as f32, (t_end - p.t_in) as f32,
+            work.max(0.001),
+        ];
+        p.last_steps = p.steps;
+        // a collection inside this frame (the threshold moved)
+        let thr = gc_threshold();
+        if p.gc_thr != 0 && thr != p.gc_thr { p.gc_seen = true; }
+        p.gc_thr = thr;
+    }
     // the ticks before the last: what a frame at 60 would not run
     let extra = if p.t_last_step > p.t_step0 && p.t_step0 > 0.0 { (p.t_last_step - p.t_step0) as f32 } else { 0.0 };
     let gpu = unsafe { C3D_GetDrawingTime() };

@@ -5102,7 +5102,7 @@ fn main() {
                         if got == 0 { aud_dropped += 1; }
                     }
                 }
-                PERF_JS_US += now_us() - t_js_us;
+                PERF_JS_US += now_us() - t_js_us; #[cfg(feature = "gen3")] gen3::mark(0);
                 if failed {
                     let n = e2.iter().position(|&c| c == 0).unwrap_or(0);
                     println!("frame ERR: {}", String::from_utf8_lossy(&e2[..n]));
@@ -5338,7 +5338,7 @@ fn main() {
                 map_i = (map_i + map_ids.len() - 1) % map_ids.len();
                 reload = true;
             }
-        }
+        } #[cfg(feature = "gen3")] gen3::mark(1);
 
         if reload {
             reload = false;
@@ -5920,7 +5920,7 @@ fn main() {
                 }
             }
             center = geom.center;
-        }
+        } #[cfg(feature = "gen3")] gen3::mark(2);
 
         // A deferred seam strip: a slice of it, onto the GPU chunk by chunk
         // (dropped if linear has run short meanwhile).
@@ -5948,7 +5948,7 @@ fn main() {
                     strip_jobs.remove(0);
                 }
             }
-        }
+        } #[cfg(feature = "gen3")] gen3::mark(3);
 
         if guest_drive {
             // The C-stick's four directions are ordinary keypad bits, so no
