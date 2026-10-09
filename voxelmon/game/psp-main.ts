@@ -137,6 +137,11 @@ let prevGearPrev = false;
   prevGearPrev = gearPrev;
   game.tick(phys);
   // Kanto Gear companion: redraw the bottom-screen surface from current game
-  // state. A host without a second screen ignores the UI_*_BOTTOM ops.
-  drawKantoGear(host, game as unknown as Parameters<typeof drawKantoGear>[1]);
+  // state. A host without a second screen ignores the UI_*_BOTTOM ops. Only
+  // on the step the host renders after (voxel.lastStep): a frame that runs
+  // two steps (every frame at 30 fps) would draw the gear twice, and the
+  // first is overwritten unseen. A host without lastStep draws every step.
+  if (!native.lastStep || native.lastStep()) {
+    drawKantoGear(host, game as unknown as Parameters<typeof drawKantoGear>[1]);
+  }
 };

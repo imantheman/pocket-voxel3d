@@ -7675,6 +7675,7 @@ class GameMap {
   cuttableAt = new Set;
   cutAt = new Set;
   openAt = new Set;
+  version = 0;
   constructor(def, tilesetDef, waterTilesets) {
     this.def = def;
     this.tileset = tilesetDef;
@@ -7738,15 +7739,18 @@ class GameMap {
   }
   markCut(cx, cy) {
     this.cutAt.add(cy * this.widthCells + cx);
+    this.version++;
   }
   cutCells() {
     return this.cutAt;
   }
   markOpen(cx, cy) {
     this.openAt.add(cy * this.widthCells + cx);
+    this.version++;
   }
   markShut(cx, cy) {
     this.openAt.delete(cy * this.widthCells + cx);
+    this.version++;
   }
   isOpenedDoor(cx, cy) {
     return this.openAt.has(cy * this.widthCells + cx);
@@ -24818,6 +24822,87 @@ function facingFrame(facing) {
     return { frame: 2, mirror: true };
   return { frame: 0, mirror: false };
 }
+var FLOOR = 0;
+var GRASS2 = 1;
+var WATER2 = 2;
+var WALL2 = 3;
+var WARP = 4;
+var kindsOf = null;
+function kindCells(map) {
+  if (!kindsOf || kindsOf.map !== map || kindsOf.version !== (map.version ?? 0)) {
+    kindsOf = {
+      map,
+      version: map.version ?? 0,
+      cells: new Uint8Array(map.widthCells * map.heightCells),
+      window: "",
+      ground: []
+    };
+  }
+  return kindsOf;
+}
+function groundRects(map, cx0, cy0, padX, padY) {
+  const kinds = kindCells(map);
+  const key = `${cx0},${cy0},${padX},${padY}`;
+  if (kinds.window === key)
+    return kinds.ground;
+  const out = [];
+  const cells = kinds.cells;
+  const mw = map.widthCells;
+  const x0 = OX + padX - cx0 * CELL;
+  const cx1 = Math.min(cx0 + VIEW_W2, mw);
+  const cy1 = Math.min(cy0 + VIEW_H2, map.heightCells);
+  for (let cy = cy0;cy < cy1; cy++) {
+    const y = OY + padY + (cy - cy0) * CELL;
+    let runKind = FLOOR;
+    let runX = 0;
+    let runN = 0;
+    for (let cx = cx0;cx < cx1; cx++) {
+      const x = x0 + cx * CELL;
+      const i = cy * mw + cx;
+      let k = cells[i];
+      if (k === 0) {
+        k = askKind(map, cx, cy) + 1;
+        cells[i] = k;
+      }
+      const kind = k - 1;
+      if (runN > 0 && kind === runKind && kind !== WARP) {
+        runN++;
+        continue;
+      }
+      if (runN > 0 && runKind !== FLOOR)
+        out.push(runX, y, runN * CELL, CELL, runKind);
+      runN = 0;
+      if (kind === WARP) {
+        out.push(x, y, CELL, CELL, 3, x + 3, y + 3, CELL - 6, CELL - 6, 0);
+        continue;
+      }
+      runKind = kind;
+      runX = x;
+      runN = 1;
+    }
+    if (runN > 0 && runKind !== FLOOR)
+      out.push(runX, y, runN * CELL, CELL, runKind);
+  }
+  kinds.window = key;
+  kinds.ground = out;
+  return out;
+}
+function askKind(map, cx, cy) {
+  return map.warpAtCell?.(cx, cy) ? WARP : map.isWaterCell?.(cx, cy) ? WATER2 : !map.isWalkableCell(cx, cy) ? WALL2 : map.isGrassCell?.(cx, cy) ? GRASS2 : FLOOR;
+}
+function explorerKey(game) {
+  const ow = game.overworld;
+  const map = ow?.map;
+  const p = ow?.player;
+  const ui = game.gearUi?.explorer;
+  const page = ui?.page ?? "area";
+  let k = `${page}|${ui?.top ?? 0}|${map?.id ?? ""}|${map?.version ?? 0}|${p?.cellX},${p?.cellY},${p?.facing}`;
+  if (page === "area") {
+    for (const n of ow?.npcs ?? [])
+      k += `|${n.cellX},${n.cellY},${n.facing},${n.hidden ? 1 : 0}`;
+  }
+  return k;
+}
 function drawArea(ctx) {
   const { host, game, data, save } = ctx;
   const ow = game.overworld;
@@ -24830,21 +24915,9 @@ function drawArea(ctx) {
   const padX = Math.max(0, Math.floor((VIEW_W2 - map.widthCells) * CELL / 2));
   const padY = Math.max(0, Math.floor((VIEW_H2 - map.heightCells) * CELL / 2));
   const at2 = (cx, cy) => ({ x: OX + padX + (cx - cx0) * CELL, y: OY + padY + (cy - cy0) * CELL });
-  for (let cy = cy0;cy < cy0 + VIEW_H2 && cy < map.heightCells; cy++) {
-    for (let cx = cx0;cx < cx0 + VIEW_W2 && cx < map.widthCells; cx++) {
-      const s = at2(cx, cy);
-      if (map.warpAtCell?.(cx, cy)) {
-        rect(host, s.x, s.y, CELL, CELL, 3);
-        rect(host, s.x + 3, s.y + 3, CELL - 6, CELL - 6, 0);
-        continue;
-      }
-      if (map.isWaterCell?.(cx, cy))
-        rect(host, s.x, s.y, CELL, CELL, 2);
-      else if (!map.isWalkableCell(cx, cy))
-        rect(host, s.x, s.y, CELL, CELL, 3);
-      else if (map.isGrassCell?.(cx, cy))
-        rect(host, s.x, s.y, CELL, CELL, 1);
-    }
+  const ground = groundRects(map, cx0, cy0, padX, padY);
+  for (let i = 0;i < ground.length; i += 5) {
+    rect(host, ground[i], ground[i + 1], ground[i + 2], ground[i + 3], ground[i + 4]);
   }
   const inView = (cx, cy) => cx >= cx0 && cy >= cy0 && cx < cx0 + VIEW_W2 && cy < cy0 + VIEW_H2;
   if (assists(save)) {
@@ -26518,13 +26591,12 @@ function stillFrame(game) {
   if (mk === "choice" || mk === "menu" || mk === "naming")
     return "";
   const view = activeView(game);
-  if (view === "explorer" || view === "map")
-    return "";
   const gear = gearSave(game.save);
   let party = "";
   for (const m of game.save?.party ?? [])
     party += `${m.species}/${m.nickname ?? ""}/${m.level}/${m.hp}/${m.stats?.hp ?? 0};`;
-  return `${view}|${top2?.kind ?? ""}|${pressedId() ?? ""}|${touchSerial}|${game.stack.length}|${game.overworld?.map?.id ?? ""}|` + `${gear.steps}|${gear.trip}|${clockStr(gear.clock24)}|${party}`;
+  const follows = view === "map" ? `|${game.gearMapPick ?? ""}|${game.overworld?.mapId ?? ""}` : view === "explorer" ? `|${explorerKey(game)}` : "";
+  return `${view}|${top2?.kind ?? ""}|${pressedId() ?? ""}|${touchSerial}|${game.stack.length}|${game.overworld?.map?.id ?? ""}|` + `${gear.steps}|${gear.trip}|${clockStr(gear.clock24)}|${party}${follows}`;
 }
 function drawKantoGear(realHost, game) {
   if (realHost !== lastHost || game !== lastGame) {
@@ -31485,5 +31557,7 @@ globalThis.frame = (buttons) => {
   prevGearNext = gearNext;
   prevGearPrev = gearPrev;
   game.tick(phys);
-  drawKantoGear(host, game);
+  if (!native.lastStep || native.lastStep()) {
+    drawKantoGear(host, game);
+  }
 };

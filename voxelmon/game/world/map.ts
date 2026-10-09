@@ -171,6 +171,9 @@ export class GameMap {
   private cutAt = new Set<number>();
   /** Cells of an unlocked card-key door — see markOpen. */
   private openAt = new Set<number>();
+  /** Bumped whenever markCut / markOpen / markShut change a cell's
+   *  walkability, so a reader caching cells can tell (the gear's AREA map). */
+  version = 0;
 
   // Map.lua:112 Map.new
   constructor(def: MapDef, tilesetDef: TilesetDef, waterTilesets?: string[]) {
@@ -261,6 +264,7 @@ export class GameMap {
    */
   markCut(cx: number, cy: number): void {
     this.cutAt.add(cy * this.widthCells + cx);
+    this.version++;
   }
 
   /** The cells markCut opened (cy * widthCells + cx): VIEW 2D draws their
@@ -276,6 +280,7 @@ export class GameMap {
    */
   markOpen(cx: number, cy: number): void {
     this.openAt.add(cy * this.widthCells + cx);
+    this.version++;
   }
 
   /**
@@ -285,6 +290,7 @@ export class GameMap {
    */
   markShut(cx: number, cy: number): void {
     this.openAt.delete(cy * this.widthCells + cx);
+    this.version++;
   }
 
   /** True when a card-key door at this cell has been unlocked. */

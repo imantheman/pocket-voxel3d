@@ -76,6 +76,113 @@ function facingFrame(facing: string | undefined): { frame: number; mirror: boole
   return { frame: 0, mirror: false };
 }
 
+/** How the AREA map shades a cell. */
+const FLOOR = 0, GRASS = 1, WATER = 2, WALL = 3, WARP = 4;
+
+/**
+ * The cells of the map in view as the AREA map shades them, each worked out
+ * the first time it is drawn and kept until the map changes (a new GameMap,
+ * or a cut or a door changing one: map.version). Asking the map's cell
+ * predicates for every cell in view, every frame, was 90 ms of a 3DS frame.
+ * Stored as kind + 1, so 0 is "not yet asked".
+ */
+let kindsOf: {
+  map: unknown;
+  version: number;
+  cells: Uint8Array;
+  window: string;
+  ground: number[];
+} | null = null;
+
+/** The map's cell cache, made afresh for a new map or a changed one. */
+function kindCells(map: any): NonNullable<typeof kindsOf> {
+  if (!kindsOf || kindsOf.map !== map || kindsOf.version !== (map.version ?? 0)) {
+    kindsOf = {
+      map, version: map.version ?? 0, cells: new Uint8Array(map.widthCells * map.heightCells),
+      window: "", ground: [],
+    };
+  }
+  return kindsOf;
+}
+
+/**
+ * The ground under the window whose top-left cell is (cx0, cy0), as the
+ * rects that draw it (x, y, w, h, shade each): walls darkest, water dark,
+ * grass mid, floor left as paper, an exit a dark ring; a row's run of like
+ * cells as one rect (the same squares, fewer of them). Kept while the
+ * window stays put, so a person moving about in view redraws only people.
+ */
+function groundRects(map: any, cx0: number, cy0: number, padX: number, padY: number): number[] {
+  const kinds = kindCells(map);
+  const key = `${cx0},${cy0},${padX},${padY}`;
+  if (kinds.window === key) return kinds.ground;
+  const out: number[] = [];
+  const cells = kinds.cells;
+  const mw = map.widthCells;
+  const x0 = OX + padX - cx0 * CELL;
+  const cx1 = Math.min(cx0 + VIEW_W, mw);
+  const cy1 = Math.min(cy0 + VIEW_H, map.heightCells);
+  for (let cy = cy0; cy < cy1; cy++) {
+    const y = OY + padY + (cy - cy0) * CELL;
+    let runKind = FLOOR;
+    let runX = 0;
+    let runN = 0;
+    for (let cx = cx0; cx < cx1; cx++) {
+      const x = x0 + cx * CELL;
+      const i = cy * mw + cx;
+      let k = cells[i]!;
+      if (k === 0) {
+        k = askKind(map, cx, cy) + 1;
+        cells[i] = k;
+      }
+      const kind = k - 1;
+      if (runN > 0 && kind === runKind && kind !== WARP) {
+        runN++;
+        continue;
+      }
+      if (runN > 0 && runKind !== FLOOR) out.push(runX, y, runN * CELL, CELL, runKind);
+      runN = 0;
+      if (kind === WARP) {
+        out.push(x, y, CELL, CELL, 3, x + 3, y + 3, CELL - 6, CELL - 6, 0);
+        continue;
+      }
+      runKind = kind;
+      runX = x;
+      runN = 1;
+    }
+    if (runN > 0 && runKind !== FLOOR) out.push(runX, y, runN * CELL, CELL, runKind);
+  }
+  kinds.window = key;
+  kinds.ground = out;
+  return out;
+}
+
+/** A cell's kind, asked of the map (the order the shading always went in:
+ *  an exit over everything, then water, walls, grass). */
+function askKind(map: any, cx: number, cy: number): number {
+  return map.warpAtCell?.(cx, cy) ? WARP
+    : map.isWaterCell?.(cx, cy) ? WATER
+    : !map.isWalkableCell(cx, cy) ? WALL
+    : map.isGrassCell?.(cx, cy) ? GRASS
+    : FLOOR;
+}
+
+/** What the AREA map draws from, as one string: it changes when a person
+ *  (or you) changes cell or facing, or the map's cells do -- the gear's
+ *  still-frame key (kantogear.ts) while EXPLORER is up. */
+export function explorerKey(game: any): string {
+  const ow = game.overworld;
+  const map = ow?.map;
+  const p = ow?.player;
+  const ui = game.gearUi?.explorer;
+  const page = ui?.page ?? "area";
+  let k = `${page}|${ui?.top ?? 0}|${map?.id ?? ""}|${map?.version ?? 0}|${p?.cellX},${p?.cellY},${p?.facing}`;
+  if (page === "area") {
+    for (const n of ow?.npcs ?? []) k += `|${n.cellX},${n.cellY},${n.facing},${n.hidden ? 1 : 0}`;
+  }
+  return k;
+}
+
 function drawArea(ctx: GearCtx): void {
   const { host, game, data, save } = ctx;
   const ow = game.overworld;
@@ -88,19 +195,10 @@ function drawArea(ctx: GearCtx): void {
   const padX = Math.max(0, Math.floor((VIEW_W - map.widthCells) * CELL / 2));
   const padY = Math.max(0, Math.floor((VIEW_H - map.heightCells) * CELL / 2));
   const at = (cx: number, cy: number) => ({ x: OX + padX + (cx - cx0) * CELL, y: OY + padY + (cy - cy0) * CELL });
-  // the ground: walls darkest, water dark, grass mid, floor left as paper
-  for (let cy = cy0; cy < cy0 + VIEW_H && cy < map.heightCells; cy++) {
-    for (let cx = cx0; cx < cx0 + VIEW_W && cx < map.widthCells; cx++) {
-      const s = at(cx, cy);
-      if (map.warpAtCell?.(cx, cy)) {
-        rect(host, s.x, s.y, CELL, CELL, 3);
-        rect(host, s.x + 3, s.y + 3, CELL - 6, CELL - 6, 0);
-        continue;
-      }
-      if (map.isWaterCell?.(cx, cy)) rect(host, s.x, s.y, CELL, CELL, 2);
-      else if (!map.isWalkableCell(cx, cy)) rect(host, s.x, s.y, CELL, CELL, 3);
-      else if (map.isGrassCell?.(cx, cy)) rect(host, s.x, s.y, CELL, CELL, 1);
-    }
+  // the ground (groundRects)
+  const ground = groundRects(map, cx0, cy0, padX, padY);
+  for (let i = 0; i < ground.length; i += 5) {
+    rect(host, ground[i]!, ground[i + 1]!, ground[i + 2]!, ground[i + 3]!, ground[i + 4]!);
   }
   const inView = (cx: number, cy: number) => cx >= cx0 && cy >= cy0 && cx < cx0 + VIEW_W && cy < cy0 + VIEW_H;
   // the item radar: balls (ENHANCED) and what is buried (SPOILERS)

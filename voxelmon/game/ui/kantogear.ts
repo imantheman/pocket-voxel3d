@@ -19,7 +19,7 @@ import { drawMirror, drawTextHint, mirrorKind, mirrorTapThrough } from "./gear/m
 import { availableApps, drawHome, drawOptions, drawSteps, drawStore } from "./gear/apps/home.ts";
 import { drawParty } from "./gear/apps/party.ts";
 import { drawMap, mapTouch } from "./gear/apps/map.ts";
-import { drawExplorer } from "./gear/apps/explorer.ts";
+import { drawExplorer, explorerKey } from "./gear/apps/explorer.ts";
 import { drawTrainer } from "./gear/apps/trainer.ts";
 import { drawPokedex } from "./gear/apps/pokedex.ts";
 import { drawBag } from "./gear/apps/bag.ts";
@@ -179,8 +179,9 @@ let lastGame: GearGame = null;
  * wherever the gear shows its own app (the overworld, the title, a text
  * box: no live mirror, no battle) the frame is skipped while those stand
  * still, and what is up stays up (the core keeps the bottom grid until it
- * is cleared). EXPLORER and MAP follow people about, menus have their
- * mirrors, a battle its own screen: those draw every frame.
+ * is cleared). EXPLORER and MAP add what they follow to the key (the
+ * people's cells, the place); menus have their mirrors, a battle its own
+ * screen: those draw every frame.
  */
 function stillFrame(game: GearGame): string {
   const top = game.stack?.[game.stack.length - 1];
@@ -193,12 +194,16 @@ function stillFrame(game: GearGame): string {
   const mk = mirrorKind(game);
   if (mk === "choice" || mk === "menu" || mk === "naming") return "";
   const view = activeView(game);
-  if (view === "explorer" || view === "map") return "";
   const gear = gearSave(game.save);
   let party = "";
   for (const m of game.save?.party ?? []) party += `${m.species}/${m.nickname ?? ""}/${m.level}/${m.hp}/${m.stats?.hp ?? 0};`;
+  // MAP shows the place you are in (or the one tapped); EXPLORER's AREA map
+  // the cells round you and who stands on them -- drawn again when those
+  // change, not every frame (EXPLORER every frame was the gear's lag)
+  const follows = view === "map" ? `|${game.gearMapPick ?? ""}|${game.overworld?.mapId ?? ""}`
+    : view === "explorer" ? `|${explorerKey(game)}` : "";
   return `${view}|${top?.kind ?? ""}|${pressedId() ?? ""}|${touchSerial}|${game.stack.length}|${game.overworld?.map?.id ?? ""}|` +
-    `${gear.steps}|${gear.trip}|${clockStr(gear.clock24)}|${party}`;
+    `${gear.steps}|${gear.trip}|${clockStr(gear.clock24)}|${party}${follows}`;
 }
 
 /** Redraw the companion for this frame. */
