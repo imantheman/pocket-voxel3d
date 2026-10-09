@@ -493,11 +493,33 @@ export function buildScene(ctx: Ctx, art: TileArt, bodies: NeighbourBody[], step
       if (!st || st.leafy) return false;
       return st.n2 >= 96 && st.solid >= 0.3;
     };
+    const tallRows = new Map<number, number>();
+    const tallBuilding = (cx: number, cy: number) => {
+      const bd = ctx.buildings();
+      const id = bd.cell.get(ck(cx, cy));
+      if (id === undefined) return false;
+      let rows = tallRows.get(id);
+      if (rows === undefined) {
+        let y0 = Infinity;
+        let y1 = -Infinity;
+        for (const c of bd.list[id - 1]!.cells) {
+          y0 = Math.min(y0, c[1]);
+          y1 = Math.max(y1, c[1]);
+        }
+        rows = y1 - y0 + 1;
+        tallRows.set(id, rows);
+      }
+      return rows > 6;
+    };
     const roofedBelow = (cx: number, cy: number) => {
       if (!uprightRA(cx, cy + 1)) return false;
       // (ours) outdoors a roof course sits on a BUILDING: the eave over a
       // pen's or a ledge's wall is not a roof to stand up as a storey
       if (outdoor && !ctx.isBuildingCell(cx, cy + 1)) return false;
+      // ...and not on a tower block: past his 12 tile rows the course is
+      // drawn half over the lawn behind it, and stood up it puts a strip of
+      // grass along the roof's back edge -- it stays the lawn it is drawn on
+      if (outdoor && tallBuilding(cx, cy + 1)) return false;
       const st = statRA(cx, cy + 1);
       return st !== undefined && st.solid >= 0.7;
     };
