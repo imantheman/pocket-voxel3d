@@ -54,7 +54,7 @@ macro_rules! g3_root { () => { "sdmc:/3ds/voxelmon/leafgreen/" } }
 
 mod audio;
 mod pace;
-pub use pace::{after_render, before_render, borrow_tick, frame_top, step_begin};
+pub use pace::{after_render, borrow_tick, frame_top, step_begin};
 
 extern "C" {
     fn g3_gpu_init_shared(shbin: *const u8, len: u32) -> i32;
@@ -71,6 +71,7 @@ extern "C" {
     fn g3_files_root(root: *const u8);
     fn g3_save_root(root: *const u8);
     fn g3_heap_info(asked_kb: *mut u32, got_kb: *mut u32, steps: *mut u32);
+    fn g3_flush_dead_targets();
     fn g3_host_keys_get() -> u32;
     fn g3_cmd_used(size: *mut i32) -> i32;
     fn g3_world_init(wsh: *const u8, wlen: u32, msh: *const u8, mlen: u32) -> i32;
@@ -184,6 +185,16 @@ fn cmd_check() {
         }
     }
 }
+/// Just before the render call (main.rs), outside C3D_FrameBegin..End:
+/// the canvases due to go are deleted here, the one place citro3d allows it
+/// (g3_flush_dead_targets), then the pace's timing mark.
+pub fn before_render() {
+    if unsafe { GPU_OK } {
+        unsafe { g3_flush_dead_targets() };
+    }
+    pace::before_render();
+}
+
 pub fn offscreen_pass() {
     pace::render_start();
     lean_frame();

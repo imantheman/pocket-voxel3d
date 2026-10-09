@@ -141,13 +141,38 @@ static void tex_retire(G3Tex *t) {
     nretired++;
 }
 
+/* Canvases whose wait is over, held for g3_flush_dead_targets: citro3d's
+   C3D_RenderTargetDelete svcBreaks inside a frame (C3D_FrameBegin..End),
+   and retire_tick runs in one (g3_frame_offscreen). Skipping the intro with
+   a button freed its canvases there -- a crash on hardware and in Citra. */
+static G3Tex **dead_rt;
+static int ndead_rt, capdead_rt;
+
 static void retire_tick(void) {
     int j = 0;
     for (int i = 0; i < nretired; i++) {
-        if (--retired[i].frames <= 0) tex_destroy(retired[i].t);
-        else retired[j++] = retired[i];
+        if (--retired[i].frames <= 0) {
+            G3Tex *t = retired[i].t;
+            if (t->rt) {
+                if (ndead_rt == capdead_rt) {
+                    capdead_rt = capdead_rt ? capdead_rt * 2 : 16;
+                    dead_rt = (G3Tex **)realloc(dead_rt, sizeof(G3Tex *) * capdead_rt);
+                }
+                dead_rt[ndead_rt++] = t;
+            } else {
+                tex_destroy(t);
+            }
+        } else {
+            retired[j++] = retired[i];
+        }
     }
     nretired = j;
+}
+
+/* Outside any frame (gen3::before_frame): the canvases retire_tick held. */
+void g3_flush_dead_targets(void) {
+    for (int i = 0; i < ndead_rt; i++) tex_destroy(dead_rt[i]);
+    ndead_rt = 0;
 }
 
 static int po2(int n) { int p = 8; while (p < n) p <<= 1; return p; }
