@@ -606,7 +606,11 @@ Healthbox.draw = function (side: any, battler: any, opts?: any): void {
       let ok = false;
       if (truthy(Anim) && truthy(Anim.displayExpRatio)) {
         const [okE, r] = viaAnim(() => Anim.displayExpRatio(side, battler));
-        if (okE) { ok = true; expRatio = r; }
+        // displayExpRatio returns [ratio, level] (Lua's two values); the
+        // Lua's `local ok, r = pcall(...)` keeps the first. The whole tuple
+        // here made the ratio NaN and every EXP tile undrawn: the bar showed
+        // the box's own cream.
+        if (okE) { ok = true; expRatio = (r as unknown as [number, number])[0]; }
       }
       if (!ok) {
         const prog = Experience.progress(battler.mon);
