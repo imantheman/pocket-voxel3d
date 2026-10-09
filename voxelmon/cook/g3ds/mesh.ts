@@ -534,7 +534,9 @@ export function meshScene(S: SG): G3Geometry {
       hulls.push({ ...m, shade: m.shade, tree: true });
     }
     for (const q of st.coarse) {
-      if (q.f === FACE.north) continue;
+      // (a level that IS the near carve keeps every face, so the pak's
+      // shape dedupe stores the two as one)
+      if (q.f === FACE.north && st.coarse !== st.quads) continue;
       treeCoarse.push(move(q));
     }
   }

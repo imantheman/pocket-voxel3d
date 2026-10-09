@@ -44,7 +44,10 @@ export interface HullSteps {
 }
 export const HULL_STEPS: HullSteps = { near: Number(process.env.FR_HULL_NEAR ?? 2), mid: Number(process.env.FR_HULL_MID ?? 4) };
 /** The coarser pair a map falls back to when its hulls would not fit (gen3cook). */
-export const HULL_STEPS_LEAN: HullSteps = { near: 4, mid: 8 };
+// (ours) and the same carve at both levels: the pak stores a shape once
+// however many levels draw it, so 4/4 costs less than 4/8 did, and the
+// middle distance keeps 4px voxels instead of 8px slabs
+export const HULL_STEPS_LEAN: HullSteps = { near: 4, mid: 4 };
 
 import { artOf, CLASS_H, isDoorBehaviour, ledgeHop } from "./shapes.ts";
 
@@ -831,7 +834,8 @@ function buildCylinders(
       const near = roundHull(cv, steps.near);
       const mid = roundHull(cv, steps.mid);
       const squash = (q: Quad[]) => mergeUvRects(mergePointQuads(q, S.colourAtUv), undefined, 16);
-      tpl = { quads: squash(near.quads), coarse: squash(mid.quads), ground };
+      const nq = squash(near.quads);
+      tpl = { quads: nq, coarse: steps.mid === steps.near ? nq : squash(mid.quads), ground };
       cache.set(sig, tpl);
     }
     return tpl;
@@ -954,7 +958,8 @@ function buildCylinders(
     let tpl = cache.get(sig);
     if (!tpl) {
       const squash = (q: Quad[]) => mergeUvRects(mergePointQuads(q, S.colourAtUv), undefined, 16);
-      tpl = { quads: squash(roundHull(cv, steps.near, [], true).quads), coarse: squash(roundHull(cv, steps.mid, [], true).quads), ground: -1 };
+      const nq = squash(roundHull(cv, steps.near, [], true).quads);
+      tpl = { quads: nq, coarse: steps.mid === steps.near ? nq : squash(roundHull(cv, steps.mid, [], true).quads), ground: -1 };
       cache.set(sig, tpl);
     }
     if (!tpl.quads.length) continue;
