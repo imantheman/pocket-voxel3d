@@ -849,6 +849,22 @@ export function makeCtx(root: string, map: FrMap, pair: FrPair, pairMaps: PairMa
       // pool's thin slab squashed to that height (shapes.ts ART.fence,
       // struct.ts buildObject).
       for (const i of posts) sc.set(i, "fence");
+      // FRLG (ours): A SHRUB IS A HULL. The little round bushes FRLG plants
+      // in rows (a museum's frontage, a garden's edge) draw a third of their
+      // cell in leaf greens: under his 0.5 crown threshold, so the rock pass
+      // stood each row up as a box wearing the bushes. A blocked cell drawn
+      // that thin and that leafy, not a fence, is one lone hull (cylinder)
+      for (let cy = 0; cy < height; cy++) {
+        for (let cx = 0; cx < width; cx++) {
+          const i = sidx(cx, cy);
+          if (sc.has(i) || !blockedAt(cx, cy)) continue;
+          const st = statsOf(metatileAt(cx, cy));
+          if (!st || !st.leafy || st.leafFrac < 0.6 || st.overhead || st.solid < 0.15 || st.solid > 0.45) continue;
+          const bc = behaviourClass(attributes(metatileAt(cx, cy)));
+          if (bc !== undefined && bc !== "ground") continue;
+          sc.set(i, "cylinder");
+        }
+      }
     }
     // INDOOR FURNITURE, from the floor showing around it
     if (!outdoor) {
