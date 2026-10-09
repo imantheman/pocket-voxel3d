@@ -2898,6 +2898,152 @@ struct Span {
     end: usize,
 }
 
+/// A stretch of one GPU slice, in draw order, with the box of the
+/// triangles in it: the unit the per-eye frustum test keeps or skips.
+///
+/// The span cull above works in whole chunks (128 px of map, and every
+/// kind of mesh in it), so a chunk the edge of the screen cuts through was
+/// drawn whole, off-screen half and all. The cook emits a chunk's quads cell
+/// by cell, so RUN_TRIS triangles in a row cover a patch of it -- about
+/// 50 x 40 px in the biggest Gen 2 city (rather than the chunk's 123 x 128) -- and
+/// the patches wholly outside an eye's view are skipped. Skipping only what
+/// lies wholly outside the frustum cannot change a pixel: those triangles
+/// rasterise to nothing. Draw order is kept, so what is drawn is drawn in
+/// the same order as before.
+#[derive(Clone, Copy)]
+struct Run {
+    /// Vertex range in the slice, end exclusive.
+    start: u16,
+    end: u16,
+    bmin: [i16; 3],
+    bmax: [i16; 3],
+}
+
+/// Triangles per run: small enough to follow the screen edge, big enough
+/// that a run costs the cull little and a visible stretch of them is one
+/// draw call (consecutive survivors are merged).
+const RUN_TRIS: usize = 128;
+
+/// A span's GPU slice and its runs.
+struct GpuSpan {
+    span: Span,
+    bi: buffer::Info,
+    runs: Vec<Run>,
+}
+
+/// Cut a slice's vertices (whole triangles) into runs and box each one.
+fn runs_of(verts: &[Vertex]) -> Vec<Run> {
+    let step = RUN_TRIS * 3;
+    let mut runs = Vec::with_capacity(verts.len().div_ceil(step));
+    let mut at = 0usize;
+    while at < verts.len() {
+        let end = (at + step).min(verts.len());
+        let mut bmin = [i16::MAX; 3];
+        let mut bmax = [i16::MIN; 3];
+        for v in &verts[at..end] {
+            for c in 0..3 {
+                if v.pos[c] < bmin[c] { bmin[c] = v.pos[c]; }
+                if v.pos[c] > bmax[c] { bmax[c] = v.pos[c]; }
+            }
+        }
+        runs.push(Run { start: at as u16, end: end as u16, bmin, bmax });
+        at = end;
+    }
+    runs
+}
+
+/// One GPU slice up, with its runs (None: linear could not take it).
+fn gpu_span(span: Span, verts: &[Vertex], attr_info: &attrib::Info) -> Option<GpuSpan> {
+    let mut bi = buffer::Info::new();
+    bi.add(buffer::Buffer::new(verts), attr_info.permutation()).ok()?;
+    Some(GpuSpan { span, bi, runs: runs_of(verts) })
+}
+
+/// An eye's view volume as its four side planes in world space (a*x + b*y +
+/// c*z + d >= 0 inside), read straight off the matrix the eye is drawn with,
+/// so it is the frustum of whatever camera is up -- the orbit at any rung,
+/// first or third person, a battle's rig -- and of that eye's stereo shift.
+/// The four side planes alone already exclude everything behind the eye.
+#[derive(Clone, Copy)]
+struct Frustum {
+    p: [[f32; 4]; 4],
+}
+
+/// How far (world px) every box is widened before the test, so a triangle
+/// lying exactly on the edge of the view is never the one the float
+/// arithmetic drops.
+const FRUSTUM_PAD: f32 = 2.0;
+
+impl Frustum {
+    fn of(m: &Matrix4) -> Frustum {
+        // clip = rows . (x, y, z, 1); inside is -w <= x <= w, -w <= y <= w
+        let r = m.clone().rows_xyzw();
+        let mut p = [[0.0f32; 4]; 4];
+        for i in 0..4 {
+            let s = if i % 2 == 0 { 1.0 } else { -1.0 };
+            for j in 0..4 {
+                p[i][j] = r[3][j] + s * r[i / 2][j];
+            }
+        }
+        Frustum { p }
+    }
+    /// 0: the box is wholly outside; 1: it crosses an edge; 2: wholly inside.
+    fn test(&self, bmin: [f32; 3], bmax: [f32; 3]) -> u8 {
+        let lo = [bmin[0] - FRUSTUM_PAD, bmin[1] - FRUSTUM_PAD, bmin[2] - FRUSTUM_PAD];
+        let hi = [bmax[0] + FRUSTUM_PAD, bmax[1] + FRUSTUM_PAD, bmax[2] + FRUSTUM_PAD];
+        let mut all_in = true;
+        for pl in self.p.iter() {
+            // the corner furthest along the plane's normal, and the nearest
+            let (fx, nx) = if pl[0] >= 0.0 { (hi[0], lo[0]) } else { (lo[0], hi[0]) };
+            let (fy, ny) = if pl[1] >= 0.0 { (hi[1], lo[1]) } else { (lo[1], hi[1]) };
+            let (fz, nz) = if pl[2] >= 0.0 { (hi[2], lo[2]) } else { (lo[2], hi[2]) };
+            if pl[0] * fx + pl[1] * fy + pl[2] * fz + pl[3] < 0.0 {
+                return 0;
+            }
+            if pl[0] * nx + pl[1] * ny + pl[2] * nz + pl[3] < 0.0 {
+                all_in = false;
+            }
+        }
+        if all_in { 2 } else { 1 }
+    }
+}
+
+/// The run culling is the MIT games' only: FireRed's world shader leans
+/// coded vertices away from where the buffer has them (gen3::lean_vert), so
+/// a box measured off the buffer does not bound what it draws.
+const RUN_CULL: bool = !cfg!(feature = "gen3");
+
+/// One span's draw for one eye: the slice and its vertex ranges (start, end
+/// exclusive), consecutive surviving runs merged, appended to `out`.
+fn eye_ranges<'a>(g: &'a GpuSpan, fr: &Frustum, out: &mut Vec<(&'a buffer::Info, u16, u16)>) {
+    let s = &g.span;
+    if !RUN_CULL || g.runs.is_empty() {
+        out.push((&g.bi, 0, g.bi.len()));
+        return;
+    }
+    match fr.test(s.gmin, s.gmax) {
+        0 => {}
+        2 => out.push((&g.bi, 0, g.bi.len())),
+        _ => {
+            let mut open: Option<(u16, u16)> = None;
+            for r in g.runs.iter() {
+                let lo = [r.bmin[0] as f32, r.bmin[1] as f32, r.bmin[2] as f32];
+                let hi = [r.bmax[0] as f32, r.bmax[1] as f32, r.bmax[2] as f32];
+                if fr.test(lo, hi) != 0 {
+                    open = match open {
+                        Some((a, b)) if b == r.start => Some((a, r.end)),
+                        Some(prev) => { out.push((&g.bi, prev.0, prev.1)); Some((r.start, r.end)) }
+                        None => Some((r.start, r.end)),
+                    };
+                }
+            }
+            if let Some((a, b)) = open {
+                out.push((&g.bi, a, b));
+            }
+        }
+    }
+}
+
 struct MapGeom {
     /// The floor under each cell, measured off the terrain (floor_map_of).
     floor: pocketvoxel_core::scene::FloorMap,
@@ -3562,7 +3708,7 @@ impl StripJob {
 
     /// The spans finished since the last drain, onto the GPU; their vertex
     /// count.
-    fn drain(&mut self, attr_info: &attrib::Info, out: &mut Vec<(Span, buffer::Info)>) -> usize {
+    fn drain(&mut self, attr_info: &attrib::Info, out: &mut Vec<GpuSpan>) -> usize {
         let mut n = 0;
         for s in self.spans[self.uploaded..].iter() {
             n += s.end - s.start;
@@ -3977,18 +4123,14 @@ fn strip_chunk_file(
 /// Strip spans into GPU buffers, beside the ones already there. A neighbour
 /// strip is scenery, so a span linear cannot take is dropped (the same
 /// infallible-allocation trap as the terrain upload -- see linear_fits).
-fn upload_spans(verts: &[Vertex], spans: &[Span], attr_info: &attrib::Info, out: &mut Vec<(Span, buffer::Info)>) {
+fn upload_spans(verts: &[Vertex], spans: &[Span], attr_info: &attrib::Info, out: &mut Vec<GpuSpan>) {
     for s in spans.iter() {
         let mut at = s.start;
         while at < s.end && at < verts.len() {
             let n = (s.end - at).min(SPAN_PIECE).min(verts.len() - at);
             if linear_fits(n) {
-                let mut bi = buffer::Info::new();
-                if bi
-                    .add(buffer::Buffer::new(&verts[at..at + n]), attr_info.permutation())
-                    .is_ok()
-                {
-                    out.push((Span { start: at, end: at + n, ..*s }, bi));
+                if let Some(g) = gpu_span(Span { start: at, end: at + n, ..*s }, &verts[at..at + n], attr_info) {
+                    out.push(g);
                 }
             }
             at += n;
@@ -4626,13 +4768,13 @@ fn main() {
         tex_rgba: Vec::new(), tw: 8, th: 8, aw: 8, ah: 8, is_huge: false,
         map_min: [0.0; 2], map_max: [0.0; 2],
     };
-    let mut chunk_infos: Vec<(Span, buffer::Info)> = Vec::new();
+    let mut chunk_infos: Vec<GpuSpan> = Vec::new();
     // Seam strips of the connected maps, so the world does not stop at a
     // wall of border bushes. Rebuilt with the map, never mid-walk: the
     // strip covers the whole shared edge, so walking along it needs no
     // reload and costs no hitch.
-    let mut strip_infos: Vec<(Span, buffer::Info)> = Vec::new();
-    let mut strip_hold: Vec<(Span, buffer::Info)> = Vec::new();
+    let mut strip_infos: Vec<GpuSpan> = Vec::new();
+    let mut strip_hold: Vec<GpuSpan> = Vec::new();
     let mut strip_verts_kb = 0usize;
     // The strips still to come after a seam crossing, one built a slice per
     // frame (StripJob), cleared by the next rebuild.
@@ -4646,7 +4788,7 @@ fn main() {
     // buffers this same tick just dropped (the bottom-screen tearing bug
     // this session already fixed once, for the same non-blocking-
     // C3D_FrameEnd reason).
-    let mut chunk_infos_prev: Vec<(Span, buffer::Info)> = Vec::new();
+    let mut chunk_infos_prev: Vec<GpuSpan> = Vec::new();
     let mut cur_map_huge = false;
     /// The map the last build was for, so a huge-map STREAM (same map, new
     /// chunk window) can be told from a map CHANGE into a huge map. Starts
@@ -5789,9 +5931,8 @@ fn main() {
                         let n = (s.end - at).min(SPAN_PIECE);
                         let Some(piece) = geom.verts.slice(at, n) else { upload_fail += 1; break; };
                         if !linear_fits(n) { upload_fail += 1; fail_low += 1; fail_verts += n; at += n; continue; }
-                        let mut bi = buffer::Info::new();
-                        if bi.add(buffer::Buffer::new(piece), attr_info.permutation()).is_ok() {
-                            chunk_infos.push((Span { start: at, end: at + n, ..*s }, bi));
+                        if let Some(g) = gpu_span(Span { start: at, end: at + n, ..*s }, piece, &attr_info) {
+                            chunk_infos.push(g);
                         } else {
                             // Silently dropping these is how a map ends up as bare
                             // sky: the geometry built fine, the GPU buffer just
@@ -7252,7 +7393,8 @@ if page_tex.len() < pak_static.atlases.len() {
         let vis_spans: Vec<_> = if pic_active {
             Vec::new()
         } else {
-            infos_ref.iter().chain(strips_ref.iter()).filter_map(|(span, bi)| {
+            infos_ref.iter().chain(strips_ref.iter()).filter_map(|g| {
+                let (span, bi) = (&g.span, g);
                 let (bmin, bmax) = (&span.bmin, &span.bmax);
                 let cx = (bmin[0] + bmax[0]) * 0.5;
                 let cz = (bmin[2] + bmax[2]) * 0.5;
@@ -7384,7 +7526,7 @@ if page_tex.len() < pak_static.atlases.len() {
                         return None;
                     }
                 }
-                Some((it, bi))
+                Some((it, (bi, *gmin, *gmax)))
             }).collect()
         }; #[cfg(feature = "gen3")] let vis_trees: Vec<_> = if unsafe { voxel::scene() }.flat_world { Vec::new() } else { vis_trees };
         unsafe {
@@ -7395,6 +7537,28 @@ if page_tex.len() < pak_static.atlases.len() {
             MIN_CULLED_D = if min_culled == f32::MAX { -1.0 } else { min_culled };
             TREES_DRAWN = vis_trees.len() as u32;
             TREES_CULLED = [t_noshape, t_radius, t_cone, 0];
+        }
+        // Each eye's own draw, from its own frustum: of every span the cull
+        // above kept, only the runs that eye can see (eye_ranges), and of
+        // every tree copy, only those in its view. Decided here, before the
+        // frame, so the passes themselves only draw. The right eye's list
+        // is made only when the right eye is drawn.
+        let right_eye = !guest_drive || slider > 0.05;
+        let eye_fr = [Frustum::of(&mvp_l), Frustum::of(&mvp_r)];
+        let mut eye_spans: [Vec<(&buffer::Info, u16, u16)>; 2] = [Vec::new(), Vec::new()];
+        let mut eye_trees: [Vec<(&pak::TreeInst, &buffer::Info)>; 2] = [Vec::new(), Vec::new()];
+        for e in 0..(if right_eye { 2 } else { 1 }) {
+            for (_, g) in vis_spans.iter() {
+                eye_ranges(g, &eye_fr[e], &mut eye_spans[e]);
+            }
+            for &(it, (bi, gmin, gmax)) in vis_trees.iter() {
+                let o = [it.x as f32, it.y as f32, it.z as f32];
+                let lo = [gmin[0] + o[0], gmin[1] + o[1], gmin[2] + o[2]];
+                let hi = [gmax[0] + o[0], gmax[1] + o[1], gmax[2] + o[2]];
+                if !RUN_CULL || eye_fr[e].test(lo, hi) != 0 {
+                    eye_trees[e].push((it, bi));
+                }
+            }
         }
         let cull_us = us_since(t_cull);
         perf_radius = cull_radius.min(9999.0);
@@ -7492,21 +7656,23 @@ if page_tex.len() < pak_static.atlases.len() {
                 frame.set_texenvs(&[stage0]);
                 frame.set_attr_info(&attr_info);
                 if !pic_active { #[cfg(feature = "gen3")] gen3::lean_on();
-                // The survivors of this frame's cull (decided once, above the
-                // frame, for both eyes).
+                // This eye's share of the frame's cull (decided above the
+                // frame: eye_spans, eye_trees).
                 let ei = if eye < 0.0 { 0 } else { 1 };
-                for e in vis_spans.iter() {
-                    frame.draw_arrays(buffer::Primitive::Triangles, e.1, None).unwrap();
-                    unsafe { EYE_VERTS[ei] += e.1.len() as u32; EYE_DRAWS[ei] += 1; }
+                for &(bi, a, b) in eye_spans[ei].iter() {
+                    if b > a {
+                        let _ = frame.draw_arrays(buffer::Primitive::Triangles, bi, Some(a..b - 1));
+                        unsafe { EYE_VERTS[ei] += (b - a) as u32; EYE_DRAWS[ei] += 1; }
+                    }
                 }
                 // --- tree instances -------------------------------------
                 // The same shape drawn where each placement says, at the
                 // level of detail its distance earns: near ones carved,
                 // far ones coarse, and nothing dropped for want of budget
                 // the way a baked-in chunk mesh had to be.
-                if !vis_trees.is_empty() {
+                if !eye_trees[ei].is_empty() {
                     let mut t_err = 0u32;
-                    for (it, bi) in vis_trees.iter() {
+                    for (it, bi) in eye_trees[ei].iter() {
                         // Where this copy stands, handed to the shader, which
                         // adds it to the vertex before the projection (a
                         // matrix edit moved the trees somewhere invisible).
@@ -7740,7 +7906,7 @@ if page_tex.len() < pak_static.atlases.len() {
             render_to(&mut frame, &mut left_target, &mvp_l, -1.0);
             // Right eye costs a full second pass; only pay it when the
             // 3D slider is actually up.
-            if !guest_drive || slider > 0.05 {
+            if right_eye {
                 render_to(&mut frame, &mut right_target, &mvp_r, 1.0);
             }
             // Kanto Gear increment 3: the companion (bottom) screen draws its
