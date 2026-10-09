@@ -404,13 +404,35 @@ export function makeCtx(root: string, map: FrMap, pair: FrPair, pairMaps: PairMa
   const waterRocks: [number, number, number][] = [];
   let ctxRef: Ctx;
 
+  // FRLG (ours): A GREEN ROOF IS NOT A CROWN. Some FRLG houses wear green
+  // shingles in the leaf greens, drawn over the player, so his foliage test
+  // reads the roof as a tree, the carve stands it as a hull and his building
+  // walk refuses the all-foliage column. A tree's crown is a common
+  // metatile; a roof is drawn once or twice a map, and it stands on a door.
+  // So a blocked, leafy, mostly over-layer cell whose metatile is rare (four
+  // times or fewer) with a warp door one to four rows below and at most
+  // three columns aside is a roof: not foliage, not scenery.
+  let roofCounts: Map<number, number> | null = null;
+  const greenRoofCell = (cx: number, cy: number): boolean => {
+    if (!outdoor || offMap(cx, cy) || !blockedAt(cx, cy)) return false;
+    const m = metatileAt(cx, cy);
+    const st = statsOf(m);
+    if (!(st && st.leafy && st.solid >= 0.75 && st.n2 >= 128)) return false;
+    if (!roofCounts) {
+      roofCounts = new Map();
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) roofCounts.set(metatileAt(x, y), (roofCounts.get(metatileAt(x, y)) ?? 0) + 1);
+    }
+    if ((roofCounts.get(m) ?? 0) > 4) return false;
+    return map.warps.some((w) => Math.abs(w.x - cx) <= 3 && w.y - cy >= 1 && w.y - cy <= 4 && isDoorBehaviour(attributes(metatileAt(w.x, w.y))));
+  };
+
   const buildScenery = () => {
     scenery = new Map();
     const sc = scenery;
     const inRing = (cx: number, cy: number) => cx >= sx0 && cy >= sy0 && cx <= sx1 && cy <= sy1;
     const material = (m: number) => metaRole(m)?.material;
     const leafAt = (cx: number, cy: number) => {
-      if (!inRing(cx, cy)) return false;
+      if (!inRing(cx, cy) || greenRoofCell(cx, cy)) return false;
       if (!offMap(cx, cy) && !blockedAt(cx, cy)) return false;
       const m = metatileAt(cx, cy);
       const st = statsOf(m);
@@ -423,14 +445,16 @@ export function makeCtx(root: string, map: FrMap, pair: FrPair, pairMaps: PairMa
       // test reads it short -- the sunlit crown row along the top of an FRLG
       // wood draws 0.33 of its leaves in pale greens the test passes over
       const ro = metaRole(m);
-      const treeRole = !!ro && ro.motif && ro.material === "green";
+      // (but a green motif with not one leaf in it is a painted wall -- the
+      // green window bay down the middle of a city's apartment block)
+      const treeRole = !!ro && ro.motif && ro.material === "green" && !!st && st.leafFrac > 0;
       if (!(st && (st.leafy || treeRole) && st.solid > 0.4)) return false;
       const mt = material(m);
       if (mt !== undefined && mt !== "green") return false;
       return true;
     };
     const crownAt = (cx: number, cy: number) => {
-      if (!inRing(cx, cy)) return false;
+      if (!inRing(cx, cy) || greenRoofCell(cx, cy)) return false;
       const m = metatileAt(cx, cy);
       const st = statsOf(m);
       if (!(st && st.leafy)) return false;
@@ -916,7 +940,7 @@ export function makeCtx(root: string, map: FrMap, pair: FrPair, pairMaps: PairMa
     if (sceneryAt(cx, cy)) return false;
     const st = statsOf(m);
     if (!st) return false;
-    return st.overhead && st.solid > 0.75 && !st.leafy;
+    return (st.overhead && st.solid > 0.75 && !st.leafy) || greenRoofCell(cx, cy);
   };
 
   // ---- the role vocabulary (Gen3.lua:3470-3880) ----
@@ -1046,6 +1070,7 @@ export function makeCtx(root: string, map: FrMap, pair: FrPair, pairMaps: PairMa
   const GEN3_MAX_ROWS_CELLS = 6;
   const blockedCell = (cx: number, cy: number) => !offMap(cx, cy) && blockedAt(cx, cy);
   const foliageCell = (cx: number, cy: number) => {
+    if (greenRoofCell(cx, cy)) return false;
     const m = metatileAt(cx, cy);
     const st = statsOf(m);
     if (!(st && st.leafy && st.solid > 0.5)) return false;
@@ -1230,7 +1255,7 @@ export function makeCtx(root: string, map: FrMap, pair: FrPair, pairMaps: PairMa
           const newTop = Math.max(tMin!, e.raw);
           for (let y = e.top - 1; y >= newTop; y--) {
             const st = statsOf(metatileAt(e.cx, y));
-            if (st && st.leafy) break;
+            if (st && st.leafy && !greenRoofCell(e.cx, y)) break;
             claim(e.cx, y);
           }
         }
