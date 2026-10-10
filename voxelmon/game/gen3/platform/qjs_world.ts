@@ -54,8 +54,8 @@ export function padBits(b: number): number {
 
 const KEY_BIT: Record<string, number> = { UP: 0, DOWN: 1, LEFT: 2, RIGHT: 3, A: 4, B: 5, START: 6, SELECT: 7, L: 8, R: 9 };
 
-/** Host buttons a bench can hold (gen3::inject_keys): the camera's. */
-const HOST_KEY_BIT: Record<string, number> = { ZL: 0, ZR: 1, CL: 2, CR: 3, CU: 4, CD: 5 };
+/** Host buttons a bench can hold (gen3::inject_keys): the camera's, and Y (the bottom screen's tab). */
+const HOST_KEY_BIT: Record<string, number> = { ZL: 0, ZR: 1, CL: 2, CR: 3, CU: 4, CD: 5, Y: 6 };
 
 /** A bench walk, "tick:KEYS,..." (keys joined by +; held until the next entry). */
 export class BenchScript {

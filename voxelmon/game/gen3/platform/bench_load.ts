@@ -28,6 +28,7 @@ import { Space } from "../core/scripting/space.ts";
 import { Oam } from "../core/oam.ts";
 import { PartyMenu } from "../ui/party_menu.ts";
 import { SummaryMenu } from "../ui/summary_menu.ts";
+import { BottomScreen } from "../ui/bottom_screen.ts";
 
 const BIT: Record<string, number> = { UP: 0, DOWN: 1, LEFT: 2, RIGHT: 3, A: 4, B: 5, START: 6, SELECT: 7 };
 const DIRS: [string, number, number][] = [["up", 0, -1], ["down", 0, 1], ["left", -1, 0], ["right", 1, 0]];
@@ -46,7 +47,8 @@ export class BenchLoad {
   private fighting = "";
 
   /** `part`: "" the whole session, or "battle", "menu" or "walk" alone; "stray" (the
-   *  battle pictures after the party menu) or "city" (the big cities' memory). */
+   *  battle pictures after the party menu), "city" (the big cities' memory) or
+   *  "bottom" (the bottom screen's tabs, photographed). */
   constructor(game: any, private readonly mem: () => string, private readonly part = "") {
     this.game = game;
     this.it = this.session();
@@ -390,6 +392,77 @@ export class BenchLoad {
     yield* this.seam(`seam: walk north${again}`, 0, -1);
   }
 
+  /** The bottom screen's four tabs, each photographed (main.ts's shot: the
+   *  host dumps both screens, shot_N.ppm and shot_N_b.ppm). */
+  private *bottomShots(where: string): Gen {
+    for (const t of ["party", "bag", "map", "card"] as const) {
+      // in the field the tabs are turned with Y, as a player turns them (the
+      // host's button, g3HostKeys bit 6); elsewhere set
+      if (where === "field" && t !== "party") yield* this.hostY();
+      BottomScreen.setTab(t);
+      yield* this.idle(30);
+      this.mark(`bottom: ${where}: ${t}`);
+      this.shot?.();
+      yield* this.idle(8);
+    }
+  }
+
+  /** Y pressed on the host's side for a few ticks (gen3::inject_keys). */
+  private *hostY(): Gen {
+    const hk = (globalThis as { voxel?: { g3HostKeys?(m: number): void } }).voxel?.g3HostKeys;
+    if (!hk) return;
+    const before = BottomScreen.tab;
+    hk(64);
+    yield* this.idle(4);
+    hk(0);
+    yield* this.idle(4);
+    console.log(`[pv] g3 mark: bottom: Y turned ${before} to ${BottomScreen.tab}`);
+  }
+
+  /** The "bottom" part: the bottom screen in the field, over the party
+   *  menu, in a wild battle (its first menu, and the field after), on
+   *  another bag pocket, and in the two big cities (their linear memory
+   *  with the bottom screen's canvas up). */
+  private *bottomTour(): Gen {
+    yield* this.bottomShots("field");
+    yield* this.step("menu: open", "START", 60);
+    yield* this.menuTo("pokemon");
+    yield* this.step("party: open", "A", 120);
+    yield* this.bottomShots("party menu");
+    yield* this.step("party: close", "B", 120);
+    yield* this.toStart();
+    if (StartMenu.open) yield* this.step("menu: close", "B", 120);
+    BottomScreen.setTab("party");
+    this.mark("bottom: battle: start");
+    try { (BattleBridge as any).startWild(Runtime._mod, this.game, { species: 19, level: 5 }, {}); } catch (e) { console.log(`[pv] g3 mark: bottom battle failed: ${String(e)}`); }
+    for (let i = 0; i < 600 && !this.inBattle(); i++) yield 0;
+    for (let i = 0; i < 1500 && this.inBattle() && (BattleUi as any)._mode !== "menu"; i++) yield 0;
+    yield* this.bottomShots("battle");
+    BottomScreen.setTab("party");
+    this.fighting = "bottom: battle";
+    yield* this.fight();
+    yield* this.idle(240);
+    yield* this.settle();
+    yield* this.idle(60);
+    this.mark("bottom: after the battle");
+    this.shot?.();
+    BottomScreen.setTab("bag");
+    BottomScreen.bagPocket = 3;
+    yield* this.idle(30);
+    this.mark("bottom: bag pocket 3");
+    this.shot?.();
+    for (const c of ["FR_CELADON_CITY", "FR_SAFFRON_CITY"]) {
+      this.mark(`bottom: warp to ${c}`);
+      yield* this.teleport(c);
+      yield* this.settle();
+      yield* this.idle(240);
+      BottomScreen.setTab(c === "FR_CELADON_CITY" ? "map" : "party");
+      yield* this.idle(30);
+      this.mark(`bottom: in ${this.lastMap}; ${this.mem()}`);
+      this.shot?.();
+    }
+  }
+
   private *session(): Gen {
     yield* this.idle(240);
     const s = Runtime.getSession();
@@ -416,6 +489,11 @@ export class BenchLoad {
         yield* this.battle(`city: ${c} wild`, () => (BattleBridge as any).startWild(Runtime._mod, this.game, { species: 19, level: 5 }, {}));
         this.mark(`city: after the battle; ${this.mem()}`);
       }
+      this.mark(`done; ${this.mem()}`);
+      return;
+    }
+    if (this.part === "bottom") {
+      yield* this.bottomTour();
       this.mark(`done; ${this.mem()}`);
       return;
     }
