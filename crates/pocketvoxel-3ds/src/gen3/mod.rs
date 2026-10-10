@@ -54,7 +54,9 @@ macro_rules! g3_root { () => { "sdmc:/3ds/voxelmon/leafgreen/" } }
 
 mod audio;
 mod pace;
+mod shared;
 mod watch;
+pub use shared::{pak_bytes, shared_attach, shared_plan, shared_release};
 pub use pace::{after_render, borrow_tick, frame_top, mark, step_begin};
 pub use watch::{note_upload, squeeze_heap};
 

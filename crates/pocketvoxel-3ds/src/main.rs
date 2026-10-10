@@ -404,8 +404,8 @@ unsafe fn load_map_pak(name: &str, want: Option<PlanKey>) -> bool {
                 extern "C" { fn osGetTime() -> u64; }
                 osGetTime().wrapping_sub(t_start)
             };
-            let buf: Box<[u8]> = pf.buf.into_boxed_slice();
-            let bytes: &'static [u8] = core::mem::transmute(buf.as_ref());
+            let buf: Box<[u8]> = pf.buf.into_boxed_slice(); #[cfg(feature = "gen3")] let buf = gen3::shared_attach(buf);
+            let bytes: &'static [u8] = core::mem::transmute(buf.as_ref()); #[cfg(feature = "gen3")] let bytes = gen3::pak_bytes(bytes);
             if let Ok(mut p) = pak::read_with_shared(bytes, SHARED_ATLAS) {
                 apply_overlay(&mut p);
                 while cache_total_kb() + kb > PAK_CACHE_BUDGET_KB && evict_lru(false) {}
@@ -468,8 +468,8 @@ unsafe fn load_map_pak(name: &str, want: Option<PlanKey>) -> bool {
     dlog(&format!(
         "[pv] pak {} {} KB in {} ms (cache {} KB)", name, kb, read_ms, cache_total_kb()
     ));
-    let buf: Box<[u8]> = v.into_boxed_slice();
-    let bytes: &'static [u8] = core::mem::transmute(buf.as_ref());
+    let buf: Box<[u8]> = v.into_boxed_slice(); #[cfg(feature = "gen3")] let buf = gen3::shared_attach(buf);
+    let bytes: &'static [u8] = core::mem::transmute(buf.as_ref()); #[cfg(feature = "gen3")] let bytes = gen3::pak_bytes(bytes);
     match pak::read_with_shared(bytes, unsafe { SHARED_ATLAS }) {
         Ok(mut p) => {
             apply_overlay(&mut p);
@@ -732,8 +732,8 @@ unsafe fn prefetch_step(budget_ms: u64) -> bool {
     if cache_total_kb() + kb > PAK_CACHE_BUDGET_KB {
         return false;
     }
-    let buf: Box<[u8]> = pf.buf.into_boxed_slice();
-    let bytes: &'static [u8] = core::mem::transmute(buf.as_ref());
+    let buf: Box<[u8]> = pf.buf.into_boxed_slice(); #[cfg(feature = "gen3")] let buf = gen3::shared_attach(buf);
+    let bytes: &'static [u8] = core::mem::transmute(buf.as_ref()); #[cfg(feature = "gen3")] let bytes = gen3::pak_bytes(bytes);
     match pak::read_with_shared(bytes, SHARED_ATLAS) {
         Ok(mut p) => {
             apply_overlay(&mut p);
@@ -1134,7 +1134,7 @@ fn map_pak(
     let (map_id, player_px) = match plan_for {
         Some(x) => x,
         None => return Some(v),
-    };
+    }; #[cfg(feature = "gen3")] gen3::shared_plan(&mut v);
 
     // Parse what we have -- records present, pools still zeros -- and replay
     // the allocation over it. Going through the real structures rather than
@@ -4953,7 +4953,7 @@ fn main() {
     match std::fs::read(format!("{}/common.vxat", PAKS_DIR)) {
         Ok(v) if !v.is_empty() => {
             println!("shared atlas {} KB", v.len() / 1024);
-            unsafe { SHARED_ATLAS = Some(Box::leak(v.into_boxed_slice())); }
+            unsafe { SHARED_ATLAS = Some(Box::leak(v.into_boxed_slice())); } #[cfg(feature = "gen3")] gen3::shared_release();
         }
         _ => println!("shared atlas: absent (paks carry their own pages)"),
     }
