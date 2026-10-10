@@ -12,11 +12,13 @@
 // the host lays that canvas under the frame (g3FieldLayer, g3_render.c) at
 // the zoom's scale; the frame keeps its text boxes and menus over it.
 //
-// The steps are the other games' where the scale comes out clean (MID: one
-// map pixel to one of the screen's, crisp; FAR: three screen pixels to four;
-// MAX: two map pixels to one, each screen pixel the even mix of a 2x2 block)
-// -- their LOW (1.2x) and HIGH (0.9x) would smear unevenly here, so they are
-// left out.
+// The steps are the other games' MID, FAR and MAX, at their percentages of
+// the box: MID comes out one map pixel to one of the screen's, crisp; FAR
+// (three screen pixels to four) and MAX (three to five) are sampled filtered,
+// as the other games smooth theirs below MID. Their LOW (1.2x) and HIGH
+// (0.9x) would only smear unevenly between OFF and MID here, so they are
+// left out. (A MAX of a half, two map pixels to one, was tried: the city
+// with the most people on it then fell to 30 fps on the console.)
 
 /** The box's scale: a GBA pixel is 1.5 of the top screen's (g3_render.c). */
 export const BOX_SCALE = 1.5;
@@ -37,7 +39,7 @@ export const ZOOMS_2D = [
   { pct: 100, label: "OFF", scale: 1.5 },
   { pct: 67, label: "MID", scale: 1 },
   { pct: 50, label: "FAR", scale: 0.75 },
-  { pct: 33, label: "MAX", scale: 0.5 },
+  { pct: 40, label: "MAX", scale: 0.6 },
 ] as const;
 
 export function screen2dIndex(v: unknown): number {
@@ -62,7 +64,7 @@ export interface Zoom2dSpec {
   y1: number;
   /** Screen pixels a map pixel takes. */
   scale: number;
-  /** Shrunk (scale under 1): the host samples it filtered (2x2 even at MAX). */
+  /** Shrunk (scale under 1): the host samples it filtered. */
   smooth: boolean;
 }
 
