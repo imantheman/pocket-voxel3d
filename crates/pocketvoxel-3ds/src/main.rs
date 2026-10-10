@@ -640,7 +640,7 @@ unsafe fn prefetch_start(name: &str) -> bool {
     if cache_total_kb() + len / 1024 > PAK_CACHE_BUDGET_KB {
         return false;
     }
-    let mut buf: Vec<u8> = Vec::new();
+    let mut buf: Vec<u8> = Vec::new(); #[cfg(feature = "gen3")] let mut buf = gen3::pak_vec(len, false);
     if buf.try_reserve_exact(len).is_err() {
         return false;
     }
@@ -1021,7 +1021,7 @@ fn map_pak(
     // fs::read grows by doubling, so a 45 MB pak can transiently want ~90 MB
     // and blow the heap even though the final size fits. Size it exactly
     // from the file length and read straight in.
-    let mut v: Vec<u8> = Vec::new(); #[cfg(feature = "gen3")] gen3::make_room(len, "a pak's read");
+    let mut v: Vec<u8> = Vec::new(); #[cfg(feature = "gen3")] let mut v = gen3::pak_vec(len, true);
     if v.try_reserve_exact(len).is_err() {
         println!("pak: cannot reserve {} KB", len / 1024);
         return None;

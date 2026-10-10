@@ -167,8 +167,13 @@ pub fn shared_attach(buf: Box<[u8]>) -> Box<[u8]> {
         }
         let base = n0.next_multiple_of(16);
         let need: usize = entries.iter().map(|e| e.2.next_multiple_of(16)).sum();
+        // (the read left room for this right behind the pak: pak_vec)
         if v.try_reserve_exact(base + need - v.len()).is_err() {
-            return v.into_boxed_slice();
+            super::make_room(base + need, "a pak and its shared page");
+            if v.try_reserve_exact(base + need - v.len()).is_err() {
+                dlog(&format!("[pv] g3: WARNING no room for a pak of {} KB and its shared page", n0 / 1024));
+                return v.into_boxed_slice();
+            }
         }
         v.resize(base, 0);
         for (at, off, len) in entries {
@@ -184,6 +189,29 @@ pub fn shared_attach(buf: Box<[u8]>) -> Box<[u8]> {
     }
 }
 
+/// The largest shared page a FireRed pak points at (256 x 2048 texels, a
+/// byte each), and the alignment around it.
+const PAGE_SLACK: usize = 256 * 2048 + 32;
+
+/// A pak's read buffer (same-line hooks in main.rs's map_pak and
+/// prefetch_start, which then reserve `len` in it as before): room for the
+/// pak and, behind it, the shared page shared_attach appends -- asked for
+/// in one block, so the append grows the buffer in place (the read's own
+/// shrink to the pak's size gives the room back just behind it) rather
+/// than wanting a second block of the pak's whole size beside the first,
+/// which a long session's heap could not give: the pak then failed to
+/// parse, every frame, and the old map's geometry stood on the new map.
+/// `room`: first make room (between frames only; a read-ahead does not).
+/// Empty when even that cannot be had: main.rs then asks for `len` alone.
+pub fn pak_vec(len: usize, room: bool) -> Vec<u8> {
+    if room {
+        super::make_room(len + PAGE_SLACK, "a pak's read");
+    }
+    let mut v: Vec<u8> = Vec::new();
+    let _ = v.try_reserve_exact(len + PAGE_SLACK);
+    v
+}
+
 /// The pak alone, for its parse (its length is its header's, the pages
 /// shared_attach appended past it).
 pub fn pak_bytes(b: &'static [u8]) -> &'static [u8] {
@@ -191,9 +219,4 @@ pub fn pak_bytes(b: &'static [u8]) -> &'static [u8] {
         Some(n) if n <= b.len() => &b[..n],
         _ => b,
     }
-}
-
-/// For the perf picture: pages read from the card and taken from the kept ones.
-pub fn shared_stats() -> (u32, u32) {
-    unsafe { (READS, HITS) }
 }
