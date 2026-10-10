@@ -474,6 +474,12 @@ static int loc_proj, loc_uvx, loc_toff;
 static float *list;
 static size_t list_n, list_cap;
 static int list_new;
+/* Lists drawn since the start (g3ListsRun): the host draws only the newest
+   list it was handed, so a list followed by another before a frame was
+   rendered is never drawn -- the guest's bottom screen, which draws into its
+   canvas only what changed, checks this to know its drawing reached it. */
+static uint32_t lists_run;
+uint32_t g3_lists_run(void) { return lists_run; }
 
 /* stats, summed until read */
 static uint32_t st_frames, st_lists, st_quads, st_tris, st_calls, st_verts, st_vars;
@@ -1488,6 +1494,7 @@ void g3_frame_offscreen(void) {
         run_list(list, list_n);
         list_new = 0;
         st_lists++;
+        lists_run++;
         flush();
         restore_main();
     }

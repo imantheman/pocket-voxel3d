@@ -17,6 +17,7 @@
      g3Bottom(id), g3BottomKeys() -> mask              (the bottom screen's
                                                         canvas and its buttons,
                                                         ui/bottom_screen.ts)
+     g3ListsRun() -> n                                 (draw lists drawn so far)
      g3PngDecode(byte string) -> [w, h, Uint8Array] | undefined
                                                        (RGBA8, what platform/
                                                         pngdecode.ts gives)
@@ -332,6 +333,13 @@ static JSValue g3_bottom(JSContext *ctx, JSValueConst t, int c, JSValueConst *v)
 static JSValue g3_bottomkeys(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t; (void)c; (void)v;
     return JS_NewInt32(ctx, (int32_t)g3_bottom_keys_take());
+}
+/* g3ListsRun() -> the draw lists the host has drawn so far (g3_render.c
+   g3_lists_run): one handed over and replaced before a frame drew it never is. */
+uint32_t g3_lists_run(void);
+static JSValue g3_listsrun(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    return JS_NewFloat64(ctx, (double)g3_lists_run());
 }
 
 static JSValue g3_strips(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
@@ -1004,6 +1012,7 @@ int qjs_register_g3(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "g3HostKeys", JS_NewCFunction(ctx, g3_hostkeys, "g3HostKeys", 1));
     JS_SetPropertyStr(ctx, o, "g3Bottom", JS_NewCFunction(ctx, g3_bottom, "g3Bottom", 1));
     JS_SetPropertyStr(ctx, o, "g3BottomKeys", JS_NewCFunction(ctx, g3_bottomkeys, "g3BottomKeys", 0));
+    JS_SetPropertyStr(ctx, o, "g3ListsRun", JS_NewCFunction(ctx, g3_listsrun, "g3ListsRun", 0));
     g3_save_register(ctx, o);
     JS_SetPropertyStr(ctx, o, "g3PngDecode", JS_NewCFunction(ctx, g3_pngdecode, "g3PngDecode", 1));
     JS_SetPropertyStr(ctx, o, "g3Bytes", JS_NewCFunction(ctx, g3_bytes_js, "g3Bytes", 1));
