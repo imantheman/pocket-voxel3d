@@ -107,6 +107,7 @@ function memText(cheap = false): string {
     // the 2D layer's textures (g3_render.c g3_tex_stats), where the binary counts them
     (m[6] !== undefined ? `, textures ${m[6]} (${Math.round(m[7]! / 1024)} KB linear, ${Math.round(m[8]! / 1024)} KB VRAM; ${watchedTextures()} watched)` : "") +
     (m[10] !== undefined ? `, host batches ${Math.round(m[9]! / 1024)} KB, guest buffers off the js heap ${Math.round(m[10]! / 1024)} KB` : "") +
+    (m[11] !== undefined ? `, js heap after the last collection ${mb(m[11]!)} MB (${m[12]} collections by QuickJS)` : "") +
     // images' pixel copies let go once uploaded (image.ts tryDropPixels)
     (pixelDrop.dropped || pixelDrop.verify ? `, pixel copies let go ${pixelDrop.dropped} (${mb(pixelDrop.droppedBytes)} MB), made again ${pixelDrop.remade}` +
       (pixelDrop.verify ? `, texture reads unlike the copy ${pixelDrop.mismatches}` : "") : "");

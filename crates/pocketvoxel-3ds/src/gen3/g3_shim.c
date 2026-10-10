@@ -177,6 +177,48 @@ static JSValue g3_texfree(JSContext *ctx, JSValueConst t, int c, JSValueConst *v
     return JS_UNDEFINED;
 }
 
+/* ---------------------------------------------------- the cycle collector
+   QuickJS collects cycles once its heap passes a threshold, then sets the
+   next at 1.5x the heap in use. On the console that is past the app heap:
+   with ~58 MB live the next collection waited for ~87 MB, and the garbage a
+   session makes between collections (a battle's worth is several MB) took
+   the app heap to within a few MB of its end. So the host sets the next
+   threshold itself, right after each collection: the heap QuickJS counts
+   in use (JS_GetMallocSize, vendor quickjs.c's own count, no walk) plus a
+   headroom of what the app heap has free beyond G3_GC_KEEP, 3 to 6 MB (and
+   never past QuickJS's own 1.5x). g3_gc_arm runs after g3Gc(false) (the
+   load), g3GcIdle's collection in a black fade, the host's own
+   (g3_gc_now), and -- checked each frame from g3Draw -- after one of
+   QuickJS's own runs (its threshold is then not the one set here). A
+   held-off collector ((size_t)-1, the load) is left alone. */
+size_t JS_GetMallocSize(JSRuntime *rt); /* vendor quickjs.c, gen3 builds */
+extern char *fake_heap_start, *fake_heap_end;
+#define G3_GC_HEAD_MIN ((size_t)3 << 20)
+#define G3_GC_HEAD_MAX ((size_t)6 << 20)
+#define G3_GC_KEEP ((size_t)12 << 20)
+static size_t g3_gc_set;
+static size_t g3_gc_live;  /* QuickJS's count after the last collection */
+static size_t g3_gc_arms;  /* re-arms after QuickJS's own runs */
+static void g3_gc_arm(JSRuntime *rt) {
+    size_t js = JS_GetMallocSize(rt);
+    struct mallinfo mi = mallinfo();
+    size_t heap = (size_t)(fake_heap_end - fake_heap_start), used = (size_t)(unsigned)mi.uordblks;
+    size_t free_ = heap > used ? heap - used : 0;
+    size_t head = free_ > G3_GC_KEEP ? free_ - G3_GC_KEEP : 0;
+    if (head < G3_GC_HEAD_MIN) head = G3_GC_HEAD_MIN;
+    if (head > G3_GC_HEAD_MAX) head = G3_GC_HEAD_MAX;
+    if (head > js / 2) head = js / 2;
+    g3_gc_live = js;
+    g3_gc_set = js + head;
+    JS_SetGCThreshold(rt, g3_gc_set);
+}
+static void g3_gc_clamp(JSRuntime *rt) {
+    size_t t = JS_GetGCThreshold(rt);
+    if (t == g3_gc_set || t == (size_t)-1) return;
+    g3_gc_arms++;
+    g3_gc_arm(rt);
+}
+
 static JSValue g3_drawlist(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t;
     if (c < 1) return JS_UNDEFINED;
@@ -184,6 +226,7 @@ static JSValue g3_drawlist(JSContext *ctx, JSValueConst t, int c, JSValueConst *
     const uint8_t *p = g3_bytes(ctx, v[0], &len);
     if (!p || ((uintptr_t)p & 3)) return JS_UNDEFINED;
     g3_draw((const float *)p, len / 4);
+    g3_gc_clamp(JS_GetRuntime(ctx));
     return JS_UNDEFINED;
 }
 
@@ -756,17 +799,16 @@ static JSValue g3_mem(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     for (int i = 0; i < 3; i++) JS_SetPropertyUint32(ctx, a, 6 + i, JS_NewFloat64(ctx, (double)ts[i]));
     JS_SetPropertyUint32(ctx, a, 9, JS_NewFloat64(ctx, (double)ts[3]));
     JS_SetPropertyUint32(ctx, a, 10, JS_NewFloat64(ctx, (double)g3_ext_bytes));
+    /* QuickJS's heap after the last collection, and the re-arms after its own */
+    JS_SetPropertyUint32(ctx, a, 11, JS_NewFloat64(ctx, (double)g3_gc_live));
+    JS_SetPropertyUint32(ctx, a, 12, JS_NewFloat64(ctx, (double)g3_gc_arms));
     return a;
 }
 
-/* QuickJS's heap and newlib's count at g3Gc(false) (after the load): what
-   g3GcIdle estimates QuickJS's heap from, QuickJS's own count being a walk. */
-static size_t g3_js_ref, g3_mall_ref;
-
 /* g3Gc(hold): true holds QuickJS's cycle collector off (Game3.load builds
    tens of MB of tables that hold no cycles, and each collection walks all of
-   them: seconds on the console); false runs one collection now and puts the
-   threshold back where QuickJS would (1.5x the heap in use). */
+   them: seconds on the console); false runs one collection now and arms the
+   next (g3_gc_arm). */
 static JSValue g3_gc(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t;
     JSRuntime *rt = JS_GetRuntime(ctx);
@@ -774,52 +816,33 @@ static JSValue g3_gc(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
         JS_SetGCThreshold(rt, (size_t)-1);
     } else {
         JS_RunGC(rt);
-        JSMemoryUsage mu;
-        JS_ComputeMemoryUsage(rt, &mu);
-        JS_SetGCThreshold(rt, (size_t)(mu.malloc_size + mu.malloc_size / 2));
-        g3_js_ref = (size_t)mu.malloc_size;
-        g3_mall_ref = (size_t)(unsigned)mallinfo().uordblks;
+        g3_gc_arm(rt);
     }
     return JS_UNDEFINED;
 }
 
 /* g3GcIdle(growthBytes) -> ms taken, or -1: QuickJS's cycle collector run
    now, while the screen is black (the guest calls it from a fade at full
-   strength: a door's, a battle's), when the app heap has grown by at least
-   growthBytes since the last time it ran here. A collection walks every
+   strength: a door's, a battle's), when QuickJS's heap has grown by at
+   least growthBytes since the last collection. A collection walks every
    object of a 40-60 MB heap -- 0.2 to over a second on the console -- and
    QuickJS's own runs when its threshold is crossed, wherever the player is;
-   one run in a fade instead frees the cycles before they reach it. The heap
-   in use is newlib's count (mallinfo), QuickJS's own being a full walk. A
-   collection called from here leaves QuickJS's threshold where it was, so
-   it is set as QuickJS would after its own, from QuickJS's heap estimated
-   by newlib's count against the reference g3Gc(false) took: 1.5x, but at
-   most 8 MB past it (QuickJS's 1.5x of a 62 MB heap was 93 MB, past what
-   the app heap can give). */
+   one run in a fade instead frees the cycles before they reach it. The next
+   threshold is then armed from the heap that is left (g3_gc_arm), so a
+   battle's garbage, gone at its end, no longer sets it. */
 uint64_t svcGetSystemTick(void); /* libctru */
-static size_t g3_gc_idle_base;
 static JSValue g3_gcidle(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t;
     double growth = 6.0 * 1048576.0;
     if (c > 0) JS_ToFloat64(ctx, &growth, v[0]);
-    struct mallinfo mi = mallinfo();
-    size_t used = (size_t)(unsigned)mi.uordblks;
-    if (g3_gc_idle_base == 0 || used < g3_gc_idle_base) { g3_gc_idle_base = used; return JS_NewInt32(ctx, -1); }
-    if ((double)(used - g3_gc_idle_base) < growth) return JS_NewInt32(ctx, -1);
     JSRuntime *rt = JS_GetRuntime(ctx);
     if (JS_GetGCThreshold(rt) == (size_t)-1) return JS_NewInt32(ctx, -1); /* held off (g3Gc(true)) */
+    size_t js = JS_GetMallocSize(rt);
+    if (js < g3_gc_live || (double)(js - g3_gc_live) < growth) return JS_NewInt32(ctx, -1);
     uint64_t t0 = svcGetSystemTick();
     JS_RunGC(rt);
     double ms = (double)(svcGetSystemTick() - t0) / 268111.856;
-    mi = mallinfo();
-    g3_gc_idle_base = (size_t)(unsigned)mi.uordblks;
-    if (g3_mall_ref && g3_js_ref) {
-        long long est = (long long)g3_js_ref + ((long long)g3_gc_idle_base - (long long)g3_mall_ref);
-        if (est > (long long)(16 << 20)) {
-            size_t e = (size_t)est, add = e / 2 < ((size_t)8 << 20) ? e / 2 : ((size_t)8 << 20);
-            JS_SetGCThreshold(rt, e + add);
-        }
-    }
+    g3_gc_arm(rt);
     return JS_NewInt32(ctx, (int32_t)(ms + 0.5));
 }
 
@@ -834,7 +857,7 @@ int g3_gc_now(void) {
     if (!g3_rt || JS_GetGCThreshold(g3_rt) == (size_t)-1) return -1;
     uint64_t t0 = svcGetSystemTick();
     JS_RunGC(g3_rt);
-    g3_gc_idle_base = (size_t)(unsigned)mallinfo().uordblks;
+    g3_gc_arm(g3_rt);
     return (int)((double)(svcGetSystemTick() - t0) / 268111.856 + 0.5);
 }
 

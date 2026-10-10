@@ -64836,3 +64836,14 @@ uintptr_t js_std_cmd(int cmd, ...) {
 #undef malloc
 #undef free
 #undef realloc
+
+#ifdef PV_QJS_USABLE_SIZE
+/* pocket-voxel FireRed (GPLv3 build only): the bytes QuickJS counts as in
+   use, the figure its collector triggers on -- read without a walk of the
+   heap (src/gen3/g3_shim.c g3_gc_arm). Here at the end so no line above
+   moves. */
+size_t JS_GetMallocSize(JSRuntime *rt)
+{
+    return rt->malloc_state.malloc_size;
+}
+#endif
