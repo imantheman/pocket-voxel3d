@@ -40,6 +40,7 @@ import { Game3World } from "./platform/game3_world.ts";
 import { BenchSuite } from "./platform/bench_suite.ts";
 import { BenchLeak } from "./platform/bench_leak.ts";
 import { BenchLoad } from "./platform/bench_load.ts";
+import { BenchView2d } from "./platform/bench_view2d.ts";
 import { Stack } from "./ui/stack.ts";
 import { getHost } from "./platform/host.ts";
 import { Fade } from "./ui/fade.ts";
@@ -219,7 +220,9 @@ function gameMain(bench: boolean): void {
   // title/new-game check that presses the game's own buttons)
   const scriptText = typeof PV_G3_BENCH_SCRIPT === "string" ? PV_G3_BENCH_SCRIPT : "";
   // bench mode's screen suite (platform/bench_suite.ts) instead of a key script
-  const suite = bench && scriptText === "suite" ? new BenchSuite() : null;
+  const suite: BenchSuite | BenchView2d | null = bench && scriptText === "suite" ? new BenchSuite()
+    // ... or VIEW 2D standing, walking and running (platform/bench_view2d.ts)
+    : bench && scriptText.startsWith("view2d") ? new BenchView2d(scriptText) : null;
   // ... or its long session (platform/bench_leak.ts): memory over many battles and maps
   const leak = bench && scriptText === "leak" ? new BenchLeak(game, () => memText(false), () => g3n.g3WorldStat?.(), g3n.g3TexBytes ? (id) => g3n.g3TexBytes!(id) : undefined) : null;
   // ... or its transitions (platform/bench_load.ts): battles, menus, doors, seams, each marked
@@ -348,3 +351,20 @@ function gameMain(bench: boolean): void {
 
 if (MODE === "hosttest") hostTestMain();
 else gameMain(MODE === "bench");
+
+// A bench built with the sampling profiler (tools/gen3/qjs_prof.c): each call
+// of the frame a profiled frame, so the host's time between calls (its
+// render, the vblank) is not charged to the guest's first function after.
+{
+  const pf = globalThis as { profFrameBegin?(): void; profFrameEnd?(keep: boolean): void; frame?: (b: number) => void };
+  const f0 = pf.frame;
+  if (MODE === "bench" && pf.profFrameBegin && pf.profFrameEnd && f0) {
+    // (a bench's "profslow=<ms>": only the calls that took longer count)
+    const slow = (): number => (globalThis as { __profSlowUs?: number }).__profSlowUs ?? 0;
+    pf.frame = (b: number): void => {
+      pf.profFrameBegin!();
+      const t = clock();
+      try { f0(b); } finally { pf.profFrameEnd!(clock() - t >= slow()); }
+    };
+  }
+}

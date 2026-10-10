@@ -981,6 +981,10 @@ static JSValue g3_audioready(JSContext *ctx, JSValueConst t, int c, JSValueConst
 void g3_save_register(JSContext *ctx, JSValue o); /* g3_save.c */
 
 int qjs_register_g3(JSContext *ctx) {
+#ifdef PV_G3_QJSPROF
+    /* a bench with the sampling profiler (build.rs; tools/gen3/qjs_prof.c) */
+    { void qjs_prof_install(JSRuntime *, JSContext *); qjs_prof_install(JS_GetRuntime(ctx), ctx); }
+#endif
     JSValue g = JS_GetGlobalObject(ctx);
     JSValue o = JS_GetPropertyStr(ctx, g, "voxel");
     if (!JS_IsObject(o)) { JS_FreeValue(ctx, o); JS_FreeValue(ctx, g); return -1; }

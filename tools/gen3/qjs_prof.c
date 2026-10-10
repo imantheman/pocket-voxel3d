@@ -14,13 +14,36 @@
  * profFrameBegin() / profFrameEnd(keep): samples between them count only if
  * keep (a profile of the slow frames alone). QJS_PROF_TICK=<n> polls every n
  * interpreter events instead of QuickJS's 10000 (finer samples).
- * Never shipped.
+ *
+ * Also built into a 3DS bench binary (build.rs, with PV_G3_QJSPROF=1 in
+ * the build's environment: cc_build_firered.sh passes it through): the
+ * same tables, timed by the system tick and written to pvlog.txt as
+ * "[pv] prof" lines (gen3/mod.rs g3_dlog). Never shipped.
  */
 #define JS_RunGC JS_RunGC_inner
 #include "quickjs.c"
 #undef JS_RunGC
 
 #include <time.h>
+#ifdef __3DS__
+#include <3ds.h>
+extern void g3_dlog(const char *s, int len);
+/* printf for the tables: one log line each, "[pv] prof " first */
+static void prof_printf(const char *fmt, ...) {
+    char b[300];
+    int n = snprintf(b, sizeof b, "[pv] prof ");
+    va_list ap;
+    va_start(ap, fmt);
+    n += vsnprintf(b + n, sizeof b - n, fmt, ap);
+    va_end(ap);
+    if (n > (int)sizeof b - 1) n = sizeof b - 1;
+    while (n > 0 && b[n - 1] == 10) n--; /* the trailing newline */
+    g3_dlog(b, n);
+}
+#define printf prof_printf
+#define fflush(f) ((void)0)
+#define getenv(k) ((char *)0)
+#endif
 
 typedef struct {
     const void *key;
@@ -32,7 +55,11 @@ typedef struct {
     uint32_t samples;
 } ProfEnt;
 
+#ifdef __3DS__
+#define PROF_CAP 8192
+#else
 #define PROF_CAP 65536
+#endif
 static ProfEnt prof_tab[PROF_CAP];
 static uint32_t prof_stamp;
 static double prof_last;
@@ -46,6 +73,9 @@ static ProfEnt *prof_touched[FRAME_TOUCH_MAX];
 static int prof_ntouched;
 
 static double prof_now(void) {
+#ifdef __3DS__
+    return (double)svcGetSystemTick() / 268.111856;
+#endif
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return ts.tv_sec * 1e6 + ts.tv_nsec / 1e3;
@@ -82,7 +112,7 @@ static void prof_label(JSContext *ctx, ProfEnt *e, JSStackFrame *sf) {
             const char *n = JS_AtomGetStr(ctx, nb, sizeof nb, b->func_name);
             const char *fn = JS_AtomGetStr(ctx, fb, sizeof fb, b->filename);
             const char *slash = strrchr(fn, '/');
-            snprintf(buf, sizeof buf, "%s (%s:%d)", n && *n ? n : "<anon>", slash ? slash + 1 : fn, b->line_num);
+            snprintf(buf, sizeof buf, "%s (%s:%d:%d)", n && *n ? n : "<anon>", slash ? slash + 1 : fn, b->line_num, b->col_num);
             e->label = strdup(buf);
             return;
         }
@@ -207,6 +237,9 @@ void qjs_prof_install(JSRuntime *rt, JSContext *ctx);
 void qjs_prof_install(JSRuntime *rt, JSContext *ctx) {
     prof_ctx = ctx;
     { const char *e = getenv("QJS_PROF_TICK"); prof_tick = e ? atoi(e) : 0; }
+#ifdef __3DS__
+    prof_tick = 1500; /* the console polls far less often a millisecond */
+#endif
     prof_last = prof_now();
     JS_SetInterruptHandler(rt, prof_interrupt, NULL);
     JSValue g = JS_GetGlobalObject(ctx);

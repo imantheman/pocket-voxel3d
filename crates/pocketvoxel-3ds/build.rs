@@ -36,12 +36,19 @@ fn main() {
         // never collides with pthread-3ds.
         .define("__DJGPP", None)
         .opt_level(2).warnings(false);
+    println!("cargo:rerun-if-env-changed=PV_G3_QJSPROF");
+    println!("cargo:rerun-if-changed=../../tools/gen3/qjs_prof.c");
+    let qjs_prof = std::env::var_os("CARGO_FEATURE_GEN3").is_some()
+        && std::env::var("PV_G3_QJSPROF").map(|v| v == "1").unwrap_or(false);
     for e in std::fs::read_dir("vendor/quickjs").unwrap() {
         let p = e.unwrap().path();
         if p.extension().and_then(|s| s.to_str()) != Some("c") { continue; }
         let n = p.file_name().unwrap().to_str().unwrap().to_string();
         if skip.contains(&n.as_str()) || n.starts_with("fuzz") { continue; }
         println!("cargo:rerun-if-changed=vendor/quickjs/{n}");
+        // a FireRed bench with the sampling profiler (PV_G3_QJSPROF=1):
+        // tools/gen3/qjs_prof.c is QuickJS itself plus the profiler
+        if n == "quickjs.c" && qjs_prof { b.file("../../tools/gen3/qjs_prof.c"); continue; }
         b.file(&p);
     }
     // FireRed: QuickJS counts its heap by newlib's chunk sizes (cutils.h
@@ -64,6 +71,7 @@ fn main() {
             .flag("-fno-strict-aliasing")
             .define("__3DS__", None).define("ARM11", None)
             .opt_level(2).warnings(false);
+        if qjs_prof { g.define("PV_G3_QJSPROF", None); }
         for n in ["g3_png.c", "g3_files.c", "g3_render.c", "g3_shim.c", "g3_world.c", "g3_save.c", "g3_heap.c"] {
             println!("cargo:rerun-if-changed=src/gen3/{n}");
             g.file(format!("src/gen3/{n}"));
