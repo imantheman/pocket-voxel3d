@@ -268,6 +268,7 @@ pub fn prefetch_room(map_index: &[(u32, String)], cur: u32) {
         ROOM_PREV = ROOM_FOR;
         ROOM_FOR = cur;
     }
+    pak_budget_refresh();
     let sc = unsafe { super::voxel::scene() };
     let name_of = |id: u32| map_index.iter().find(|(m, _)| *m == id).map(|(_, n)| n.as_str());
     let mut keep: Vec<&str> = Vec::new();
@@ -330,10 +331,51 @@ pub fn map_cap(free_kb: usize, cap: usize) -> usize {
     c
 }
 
-/// FireRed's own (small) pak cache budget, after the shared sizing.
+/// FireRed's own (small) pak cache budget, after the shared sizing: its
+/// opening figure, sized again from the app heap on every map
+/// ([`pak_budget_refresh`]).
 pub fn size_pak_cache() {
     unsafe { super::PAK_CACHE_BUDGET_KB = G3_PAK_CACHE_KB };
     dlog(&format!("[pv] g3: pak cache {} MB (FireRed's paks are small)", G3_PAK_CACHE_KB / 1024));
+}
+
+extern "C" {
+    fn g3_heap_use(size: *mut u32, used: *mut u32);
+}
+
+/// The app heap the pak cache leaves to everything else: QuickJS's garbage
+/// between collections (g3_shim.c g3_gc_arm, up to 6 MB), a map build's
+/// staging (a few MB) and a margin.
+const PAK_HEADROOM_KB: usize = 14 * 1024;
+/// The pak cache's bounds: room for a town and the house beside it at the
+/// least; past the most, the cache holds maps the player has walked away from.
+const PAK_MIN_KB: usize = 1536;
+const PAK_MAX_KB: usize = 6 * 1024;
+
+/// The pak cache sized from the app heap this console granted and what is in
+/// use now (once a map, prefetch_room): half of what is free beyond
+/// PAK_HEADROOM_KB -- counting what the cache and a read-ahead already hold
+/// as free, so the figure does not swing with the cache itself -- between
+/// PAK_MIN_KB and PAK_MAX_KB. Early in a session that is the most; as the
+/// session's heap grows (a console that granted less, or a long play) the
+/// cache gives way. A fixed 5 MB took the app heap's high water within 4 MB
+/// of its end.
+#[allow(static_mut_refs)]
+fn pak_budget_refresh() {
+    let (mut size, mut used) = (0u32, 0u32);
+    unsafe { g3_heap_use(&mut size, &mut used) };
+    let held = unsafe { super::cache_total_kb() + super::PREFETCH.as_ref().map(|p| p.buf.len() / 1024).unwrap_or(0) };
+    let avail = (size.saturating_sub(used) / 1024) as usize + held;
+    let want = (avail.saturating_sub(PAK_HEADROOM_KB) / 2).clamp(PAK_MIN_KB, PAK_MAX_KB);
+    let was = unsafe { super::PAK_CACHE_BUDGET_KB };
+    unsafe { super::PAK_CACHE_BUDGET_KB = want };
+    if want.abs_diff(was) >= 512 {
+        dlog(&format!("[pv] g3 pak cache: {} KB (was {}; app heap {} KB free beside {} KB the cache holds)", want, was, avail - held, held));
+    }
+    // over the new budget: the least recent maps go now (never the one in use)
+    unsafe {
+        while super::cache_total_kb() > want && super::PAK_CACHE.len() > 1 && super::evict_lru(true) {}
+    }
 }
 
 /// Before the guest is evaluated: the 2D layer's GPU side, the sound (so

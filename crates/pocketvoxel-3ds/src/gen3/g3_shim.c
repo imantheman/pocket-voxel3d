@@ -861,6 +861,12 @@ int g3_gc_now(void) {
     return (int)((double)(svcGetSystemTick() - t0) / 268111.856 + 0.5);
 }
 
+/* For the host (mod.rs): the app heap's size and newlib's count in use. */
+void g3_heap_use(uint32_t *size, uint32_t *used) {
+    *size = (uint32_t)(fake_heap_end - fake_heap_start);
+    *used = (uint32_t)(unsigned)mallinfo().uordblks;
+}
+
 /* g3WorldStat() -> [spans drawn last frame, spans uploaded, spans built,
    built map, built flat, kept through a battle, empty shown frames in a
    row, empty shown frames in all, empty builds] (watch.rs): the leak
