@@ -10,34 +10,32 @@
 //! one page. Here (same-line hooks in main.rs, around each place a pak is
 //! parsed):
 //! - at boot the blob main.rs read is let go ([`shared_release`]);
-//! - when a pak is read, its shared pages are read from the card -- or taken
-//!   from the last few read -- and appended to the pak's own buffer, so they
-//!   live and go with that pak; the page directory points at the copy and
-//!   SHARED_ATLAS points at the appended tail for the parse that follows
-//!   ([`shared_attach`]; [`pak_bytes`] gives the parse the pak without it);
-//! - map_pak's planning parse, before the pools are read, gets its pages the
-//!   same way, from a buffer of its own ([`shared_plan`]).
-//! The pages' bytes are the file's, so every texel is what it was.
+//! - when a pak is about to be parsed, its shared page is read from the card
+//!   into a store of pages (or found there), the pak's page directory is
+//!   pointed at offset 0 and SHARED_ATLAS at that page for the parse
+//!   ([`shared_attach`], [`shared_plan`] for map_pak's planning parse); the
+//!   pak's atlas page then borrows the stored page;
+//! - a stored page no cached pak borrows any more is let go (the two used
+//!   last are kept for the next map, which mostly shares its tileset's).
+//! A page is its own small block (a few hundred KB), never grown onto a
+//! pak's buffer: late in a long session the app heap had no second block of
+//! a pak's size to grow one into. The bytes are the file's, so every texel
+//! is what it was.
 
 use super::dlog;
 use std::io::{Read, Seek, SeekFrom};
 
 const SHARED_BIT: u32 = 1 << 31;
 const TAG_ATLS: u32 = u32::from_le_bytes(*b"ATLS");
-/// Pages kept after they are read, for the next pak that wants one: a
-/// route and the town beside it mostly share their tileset's page.
-const KEEP_PAGES: usize = 2;
+/// Stored pages no cached pak borrows that are kept anyway, the last used.
+const SPARE_PAGES: usize = 2;
 
-/// The pages read lately, most recent first: (offset in common.vxat, bytes).
-static mut PAGES: Vec<(u32, Box<[u8]>)> = Vec::new();
-/// shared_plan's pages for the planning parse, and what it changed in the
-/// pak's directory (the pak's length, then each patched field's place and
-/// its value before and after), for shared_attach to put back.
-static mut PLAN_PAGES: Vec<u8> = Vec::new();
+/// The stored pages, most recently used first: (offset in common.vxat --
+/// or u32::MAX for a pak's several pages put together -- and the bytes).
+static mut STORE: Vec<(u32, Box<[u8]>)> = Vec::new();
+/// What shared_plan changed in a pak's directory (the pak's length, then
+/// each field's place and its value before and after), for shared_attach.
 static mut PLAN_PATCH: Option<(u32, Vec<(usize, u32, u32)>)> = None;
-/// Pages read from the card, and from the kept ones (the perf picture).
-static mut READS: u32 = 0;
-static mut HITS: u32 = 0;
 
 fn u16_at(b: &[u8], o: usize) -> Option<u16> {
     b.get(o..o + 2).map(|s| u16::from_le_bytes([s[0], s[1]]))
@@ -75,27 +73,89 @@ fn shared_entries(b: &[u8]) -> Vec<(usize, u32, usize)> {
     out
 }
 
-/// A shared page's bytes: from the ones kept, else read from the card.
-#[allow(static_mut_refs)]
-fn page(off: u32, len: usize) -> Option<&'static [u8]> {
-    unsafe {
-        if let Some(i) = PAGES.iter().position(|(o, b)| *o == off && b.len() == len) {
-            let hit = PAGES.remove(i);
-            PAGES.insert(0, hit);
-            HITS += 1;
-            return Some(core::mem::transmute::<&[u8], &'static [u8]>(&PAGES[0].1[..]));
-        }
-        let path = format!("{}/common.vxat", super::super::PAKS_DIR);
-        let mut f = std::fs::File::open(&path).ok()?;
-        f.seek(SeekFrom::Start(off as u64)).ok()?;
-        let mut v: Vec<u8> = Vec::new();
+/// Read `len` bytes of common.vxat at `off`.
+fn read_page(off: u32, len: usize) -> Option<Box<[u8]>> {
+    let path = format!("{}/common.vxat", super::super::PAKS_DIR);
+    let mut f = std::fs::File::open(&path).ok()?;
+    f.seek(SeekFrom::Start(off as u64)).ok()?;
+    let mut v: Vec<u8> = Vec::new();
+    if v.try_reserve_exact(len).is_err() {
+        super::make_room(len, "a shared atlas page");
         v.try_reserve_exact(len).ok()?;
-        v.resize(len, 0);
-        f.read_exact(&mut v).ok()?;
-        READS += 1;
-        PAGES.insert(0, (off, v.into_boxed_slice()));
-        PAGES.truncate(KEEP_PAGES);
-        Some(core::mem::transmute::<&[u8], &'static [u8]>(&PAGES[0].1[..]))
+    }
+    v.resize(len, 0);
+    f.read_exact(&mut v).ok()?;
+    Some(v.into_boxed_slice())
+}
+
+/// The stored pages no cached pak borrows let go, but for the SPARE_PAGES
+/// used last.
+#[allow(static_mut_refs)]
+fn reclaim() {
+    unsafe {
+        let mut live: Vec<usize> = Vec::new();
+        for c in super::super::PAK_CACHE.iter() {
+            for pg in c.pak.atlases.iter() {
+                if pg.frame_len > 0 { live.push(pg.frame(0).as_ptr() as usize); }
+            }
+        }
+        let mut spare = 0;
+        STORE.retain(|(_, b)| {
+            let (lo, hi) = (b.as_ptr() as usize, b.as_ptr() as usize + b.len());
+            if live.iter().any(|&p| p >= lo && p < hi) { return true; }
+            spare += 1;
+            spare <= SPARE_PAGES
+        });
+    }
+}
+
+/// The pak's shared pages as one stored block, the directory pointed at it
+/// (each field's place, value before, value after), and SHARED_ATLAS at it.
+/// None: the pak has no shared page, or one could not be read (SHARED_ATLAS
+/// is then None, and the parse says so).
+#[allow(static_mut_refs)]
+fn pages_for(v: &mut [u8]) -> Option<Vec<(usize, u32, u32)>> {
+    unsafe {
+        // (never a stale page: one that cannot be read fails the parse)
+        super::super::SHARED_ATLAS = None;
+        let n0 = total_len(v).unwrap_or(v.len()).min(v.len());
+        let entries = shared_entries(&v[..n0]);
+        if entries.is_empty() { return None; }
+        let key = if entries.len() == 1 { entries[0].1 } else { u32::MAX };
+        let want: usize = entries.iter().map(|e| e.2.next_multiple_of(16)).sum();
+        let hit = if key != u32::MAX { STORE.iter().position(|(o, b)| *o == key && b.len() >= entries[0].2) } else { None };
+        let i = match hit {
+            Some(i) => i,
+            None => {
+                let b = if entries.len() == 1 {
+                    read_page(entries[0].1, entries[0].2)?
+                } else {
+                    let mut all: Vec<u8> = Vec::new();
+                    all.try_reserve_exact(want).ok()?;
+                    for &(_, off, len) in &entries {
+                        all.extend_from_slice(&read_page(off, len)?);
+                        all.resize(all.len().next_multiple_of(16), 0);
+                    }
+                    all.into_boxed_slice()
+                };
+                STORE.push((key, b));
+                STORE.len() - 1
+            }
+        };
+        let e = STORE.remove(i);
+        STORE.insert(0, e);
+        reclaim();
+        let mut patched = Vec::new();
+        let mut pos = 0usize;
+        for &(at, _, len) in &entries {
+            let old = u32_at(v, at).unwrap_or(0);
+            let new = SHARED_BIT | pos as u32;
+            v[at..at + 4].copy_from_slice(&new.to_le_bytes());
+            patched.push((at, old, new));
+            pos += len.next_multiple_of(16);
+        }
+        super::super::SHARED_ATLAS = Some(core::mem::transmute::<&[u8], &'static [u8]>(&STORE[0].1[..]));
+        Some(patched)
     }
 }
 
@@ -113,44 +173,24 @@ pub fn shared_release() {
 }
 
 /// map_pak's planning parse (before the pools are read): the pak's shared
-/// pages put in a buffer of their own, the directory pointed at it, and
-/// SHARED_ATLAS at the buffer; shared_attach puts the directory back.
+/// page stored and SHARED_ATLAS pointed at it, the directory patched;
+/// shared_attach puts the directory back before doing the same.
 #[allow(static_mut_refs)]
 pub fn shared_plan(v: &mut Vec<u8>) {
     unsafe {
-        // (never a stale tail: a page that cannot be read fails the parse)
-        super::super::SHARED_ATLAS = None;
         PLAN_PATCH = None;
-        PLAN_PAGES = Vec::new();
-        let entries = shared_entries(v);
-        if entries.is_empty() { return; }
-        let mut patched = Vec::new();
-        for (at, off, len) in entries {
-            let Some(p) = page(off, len) else { continue };
-            let pos = PLAN_PAGES.len();
-            PLAN_PAGES.extend_from_slice(p);
-            PLAN_PAGES.resize(PLAN_PAGES.len().next_multiple_of(16), 0);
-            let old = u32_at(v, at).unwrap_or(0);
-            let new = SHARED_BIT | pos as u32;
-            v[at..at + 4].copy_from_slice(&new.to_le_bytes());
-            patched.push((at, old, new));
+        if let Some(p) = pages_for(v) {
+            PLAN_PATCH = Some((total_len(v).unwrap_or(0) as u32, p));
         }
-        PLAN_PATCH = Some((total_len(v).unwrap_or(0) as u32, patched));
-        super::super::SHARED_ATLAS = Some(core::mem::transmute::<&[u8], &'static [u8]>(&PLAN_PAGES[..]));
     }
 }
 
-/// A pak just read, before it is parsed: its shared pages appended to its
-/// own buffer and its directory pointed at them; SHARED_ATLAS points at
-/// that tail for the parse (pak_bytes gives the parse the pak alone). A pak
-/// with no shared page, or one whose page cannot be read, comes back as it
-/// was (the parse then says so, as before without the blob).
+/// A pak just read, before it is parsed: its shared page stored (or found
+/// there), its directory pointed at it, SHARED_ATLAS at it for the parse.
 #[allow(static_mut_refs)]
 pub fn shared_attach(buf: Box<[u8]>) -> Box<[u8]> {
     unsafe {
-        // (never a stale tail: a page that cannot be read fails the parse)
-        super::super::SHARED_ATLAS = None;
-        let mut v = buf.into_vec();
+        let mut v = buf;
         let n0 = total_len(&v).unwrap_or(v.len()).min(v.len());
         // shared_plan's changes to this pak's directory, put back
         if let Some((len, patched)) = PLAN_PATCH.take() {
@@ -160,60 +200,22 @@ pub fn shared_attach(buf: Box<[u8]>) -> Box<[u8]> {
                 }
             }
         }
-        PLAN_PAGES = Vec::new();
-        let entries = shared_entries(&v[..n0]);
-        if entries.is_empty() {
-            return v.into_boxed_slice();
-        }
-        let base = n0.next_multiple_of(16);
-        let need: usize = entries.iter().map(|e| e.2.next_multiple_of(16)).sum();
-        // (the read left room for this right behind the pak: pak_vec)
-        if v.try_reserve_exact(base + need - v.len()).is_err() {
-            super::make_room(base + need, "a pak and its shared page");
-            if v.try_reserve_exact(base + need - v.len()).is_err() {
-                dlog(&format!("[pv] g3: WARNING no room for a pak of {} KB and its shared page", n0 / 1024));
-                return v.into_boxed_slice();
-            }
-        }
-        v.resize(base, 0);
-        for (at, off, len) in entries {
-            let Some(p) = page(off, len) else { continue };
-            let pos = v.len() - base;
-            v.extend_from_slice(p);
-            v.resize(v.len().next_multiple_of(16), 0);
-            v[at..at + 4].copy_from_slice(&(SHARED_BIT | pos as u32).to_le_bytes());
-        }
-        let b = v.into_boxed_slice();
-        super::super::SHARED_ATLAS = Some(core::mem::transmute::<&[u8], &'static [u8]>(&b[base..]));
-        b
+        let _ = pages_for(&mut v);
+        v
     }
 }
 
-/// The largest shared page a FireRed pak points at (256 x 2048 texels, a
-/// byte each), and the alignment around it.
-const PAGE_SLACK: usize = 256 * 2048 + 32;
-
-/// A pak's read buffer (same-line hooks in main.rs's map_pak and
-/// prefetch_start, which then reserve `len` in it as before): room for the
-/// pak and, behind it, the shared page shared_attach appends -- asked for
-/// in one block, so the append grows the buffer in place (the read's own
-/// shrink to the pak's size gives the room back just behind it) rather
-/// than wanting a second block of the pak's whole size beside the first,
-/// which a long session's heap could not give: the pak then failed to
-/// parse, every frame, and the old map's geometry stood on the new map.
-/// `room`: first make room (between frames only; a read-ahead does not).
-/// Empty when even that cannot be had: main.rs then asks for `len` alone.
+/// Room for a pak's read buffer (same-line hooks in main.rs's map_pak and
+/// prefetch_start, which then reserve `len` as before): `room`, between
+/// frames, makes room first when one block of `len` would not be given.
 pub fn pak_vec(len: usize, room: bool) -> Vec<u8> {
     if room {
-        super::make_room(len + PAGE_SLACK, "a pak's read");
+        super::make_room(len, "a pak's read");
     }
-    let mut v: Vec<u8> = Vec::new();
-    let _ = v.try_reserve_exact(len + PAGE_SLACK);
-    v
+    Vec::new()
 }
 
-/// The pak alone, for its parse (its length is its header's, the pages
-/// shared_attach appended past it).
+/// The pak alone, for its parse (its length is its header's).
 pub fn pak_bytes(b: &'static [u8]) -> &'static [u8] {
     match total_len(b) {
         Some(n) if n <= b.len() => &b[..n],

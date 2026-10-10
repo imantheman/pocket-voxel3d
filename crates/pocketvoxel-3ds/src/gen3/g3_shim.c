@@ -836,7 +836,9 @@ static JSValue g3_mem(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
         size_t lo = 0, hi = (size_t)(fake_heap_end - fake_heap_start) - (size_t)(unsigned)mi.uordblks;
         while (hi - lo > ((size_t)64 << 10)) {
             size_t mid = lo + (hi - lo) / 2;
-            void *p = malloc(mid);
+            /* (volatile: a malloc freed unused is otherwise optimised away,
+               and every ask "succeeds") */
+            void *volatile p = malloc(mid);
             if (p) { free(p); lo = mid; } else hi = mid;
         }
         JS_SetPropertyUint32(ctx, a, 13, JS_NewFloat64(ctx, (double)lo));
