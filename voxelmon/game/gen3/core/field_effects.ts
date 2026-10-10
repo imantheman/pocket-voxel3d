@@ -27,6 +27,7 @@ import { Logger } from "../shared/core/Logger.ts";
 import { Renderer } from "../shared/render/Renderer.ts";
 import { MB } from "./mb.ts";
 import { Collision as CollisionMod } from "./collision.ts";
+import LayoutNative from "./layout_native.ts";
 import { OwSprites as OwSpritesMod } from "./ow_sprites.ts";
 import { Objects as ObjectsMod } from "./objects.ts";
 import { Player as PlayerMod } from "./player.ts";
@@ -135,6 +136,28 @@ function getFrlgModules(): any {
   return frlgModules;
 }
 
+/** pocket-voxel: whether drawFrlgReflection could draw obj (this map's): its
+ *  reflection sheet has frames and the ground under it reflects -- the tests
+ *  drawFrlgReflection makes, in its order of side effects. */
+function reflectsHere(obj: any, graphicsId: any, behaviorAt: (x: number, y: number) => any, Ow: any): boolean {
+  const spr = Ow.getReflectionDraw ? Ow.getReflectionDraw(graphicsId) : null;
+  if (!(spr && spr.quads)) return false;
+  const cx = truthy(obj.moving) && obj.targetX != null ? obj.targetX : obj.cellX;
+  const cy = truthy(obj.moving) && obj.targetY != null ? obj.targetY : obj.cellY;
+  // (the ground's answer kept on the person while nothing it reads can have
+  // changed: the cells, the sheet, the map and its neighbours, any layout
+  // write -- a dozen behaviour reads a person a frame otherwise)
+  const C: any = CollisionMod, M: any = MapMod;
+  const m = obj._reflMemo;
+  if (m && m.cx === cx && m.cy === cy && m.px === obj.cellX && m.py === obj.cellY && m.spr === spr
+    && m.def === C._mapDef && m.nb === M.neighborList && m.w === LayoutNative.writes && m.at === behaviorAt) return m.v;
+  const v = frlgReflectionType(cx, cy, obj.cellX, obj.cellY, spr.width, spr.height, behaviorAt);
+  const k = m ?? (obj._reflMemo = {});
+  k.cx = cx; k.cy = cy; k.px = obj.cellX; k.py = obj.cellY; k.spr = spr;
+  k.def = C._mapDef; k.nb = M.neighborList; k.w = LayoutNative.writes; k.at = behaviorAt; k.v = v;
+  return v;
+}
+
 // Lua: field_effects.lua:103
 function drawFrlgReflections(camX: number, camY: number): void {
   if (GameVersion.layout(GameVersion.get()) !== "frlg") return;
@@ -153,13 +176,19 @@ function drawFrlgReflections(camX: number, camY: number): void {
   const vw0 = (FVc && FVc._viewW) || (Display as any).W;
   const vh0 = (FVc && FVc._viewH) || (Display as any).H;
   if (Objects.forDraw) {
-    for (const [, obj] of ipairs<any>(Objects.forDraw())) {
+    const list = Objects.forDraw();
+    for (let li = 1; list[li] != null; li++) {
+      const obj = list[li];
       const ry = obj.py ?? (truthy(obj.moving) && obj.targetY != null ? obj.targetY : obj.cellY) * CELL;
       const rx = obj.px ?? (truthy(obj.moving) && obj.targetX != null ? obj.targetX : obj.cellX) * CELL;
       if (rx < camX - FRLG_REFL_CULL || rx > camX + vw0 + FRLG_REFL_CULL
         || ry < camY - 96 || ry > camY + vh0 + 16) continue;
       if (!truthy(obj.hideReflection) && obj.graphicsId != null) {
         const spr = Ow.getDraw(obj.graphicsId);
+        // (pocket-voxel: drawFrlgReflection's own first tests -- a reflection
+        // sheet, reflective ground under the person -- before the pose, which
+        // only it needs; most people stand on none)
+        if (spr && !reflectsHere(obj, obj.graphicsId, behaviorAt, Ow)) continue;
         if (spr) {
           objectPoseOpts.frame = obj.customFrame;
           const [frame, flip] = Ow.pose(spr, obj.facing, Objects.walkPhase(obj), obj.stepFlip,
@@ -211,7 +240,7 @@ function drawFrlgReflections(camX: number, camY: number): void {
   if (P && P.isVisible && P.isVisible() && !truthy(P.hideReflection)) {
     const gid = Ow.playerGraphicsId(Runtime._game, P);
     const spr = gid != null ? Ow.getDraw(gid) : null;
-    if (spr) {
+    if (spr && reflectsHere(P, gid, behaviorAt, Ow)) {
       playerPoseOpts.running = P.runPose ? P.runPose() : undefined;
       const [frame, flip] = Ow.pose(spr, P.facing, P.walkPhase ? P.walkPhase() : 0,
         P.drawFlip ? P.drawFlip() : false, playerPoseOpts);

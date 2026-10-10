@@ -50,6 +50,9 @@ function wrap_border(cx: number, cy: number, _w: number, _h: number, bw: number,
 }
 
 export class LayoutNative {
+  /** pocket-voxel: every layout write (applyOverride, stamp, setMetatiles,
+   *  clearOverrides) bumps it -- a memo of what the map says can test it. */
+  static writes = 0;
   mapId: string;
   pair: string;
   width: number;
@@ -176,6 +179,7 @@ export class LayoutNative {
   // Lua: layout_native.lua:124
   applyOverride(xIn: unknown, yIn: unknown, mid: unknown, coll?: number | null, elev?: number | null): void {
     this._revision = (this._revision ?? 0) + 1;
+    LayoutNative.writes++;
     const x = tonumber(xIn) ?? 0, y = tonumber(yIn) ?? 0;
     this.overrides[y * 1024 + x] = {
       mid: tonumber(mid) ?? 0,
@@ -210,6 +214,7 @@ export class LayoutNative {
       }
     }
     markDirty();
+    LayoutNative.writes++;
     if (n > 0) this._revision = (this._revision ?? 0) + 1;
     return n;
   }
@@ -232,6 +237,7 @@ export class LayoutNative {
     }
     if (n > 0) {
       this._revision = (this._revision ?? 0) + 1;
+      LayoutNative.writes++;
       markCellsDirty(this, cells, n);
     }
     return n;
@@ -239,6 +245,7 @@ export class LayoutNative {
 
   // Lua: layout_native.lua:207
   clearOverrides(): void {
+    LayoutNative.writes++;
     if (!isEmpty(this.overrides)) {
       this._revision = (this._revision ?? 0) + 1;
       this.overrides = {};

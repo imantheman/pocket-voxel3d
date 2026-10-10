@@ -819,7 +819,8 @@ const owOpts: Record<string, any> = {};
 
 // Lua: field_view.lua:553
 function drawSingleActor(game: any, mapDef: any, a: any, camX: number, camY: number): void {
-  const daytime = daytimeFor(game, mapDef);
+  // (pocket-voxel: the daytime is for the fallback renderer below only, and
+  // asked there: a pure lookup, once per drawn person a frame)
   const OwSprites = modOwSprites();
   const useOw = OwSprites && OwSprites.ready && OwSprites.ready();
   G.setColor(1, 1, 1, 1);
@@ -848,6 +849,7 @@ function drawSingleActor(game: any, mapDef: any, a: any, camX: number, camY: num
       a.graphicsId, a.x, a.y, camX, camY, a.facing, a.walkPhase, a.stepFlip, opts));
   }
   if (!drew) {
+    const daytime = daytimeFor(game, mapDef);
     const sr = getSpriteRenderer(
       game, a.sprite, a.kind + ":" + tostring(lor(a.i, "p")), a.obj, daytime);
     if (sr) {
@@ -867,6 +869,8 @@ function drawSingleActor(game: any, mapDef: any, a: any, camX: number, camY: num
 }
 
 const frameActors: LuaTable = [null], frameUnder: LuaTable = [null], frameOver: LuaTable = [null];
+/** pocket-voxel: the empty def spriteNameForObj reads for an object without one. */
+const NO_DEF = Object.freeze({});
 // setmetatable({}, { __mode = "k" })
 const npcActors = new WeakMap<object, any>();
 const playerActor: any = {};
@@ -927,7 +931,10 @@ function collectGame3Actors(game: any, mapDef: any, camX: number, camY: number, 
       // pokeemerald/src/data/object_events/object_event_anims.h:602
       a.bow = (truthy(eo.bowFrames) && eo.bowFrames > 8 && eo.bowFrames <= 40) || eo.raiseHand === true;
       a.frame = eo.customFrame;
-      a.sprite = lor(eo.sprite, spriteNameForObj(lor(eo.def, {})));
+      // (the sprite name worked out only when the object has none: lor's
+      // second argument was a lookup and a table each person each frame)
+      const es = eo.sprite;
+      a.sprite = es != null && es !== false ? es : spriteNameForObj(lor(eo.def, NO_DEF));
       a.graphicsId = lor(eo.graphicsId, eo.def && lor(eo.def.graphicsId, eo.def.graphics));
       a.alpha = Objects.fadeAlpha(eo);
       a.priority = undefined;
