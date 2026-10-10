@@ -1021,7 +1021,7 @@ fn map_pak(
     // fs::read grows by doubling, so a 45 MB pak can transiently want ~90 MB
     // and blow the heap even though the final size fits. Size it exactly
     // from the file length and read straight in.
-    let mut v: Vec<u8> = Vec::new();
+    let mut v: Vec<u8> = Vec::new(); #[cfg(feature = "gen3")] gen3::make_room(len, "a pak's read");
     if v.try_reserve_exact(len).is_err() {
         println!("pak: cannot reserve {} KB", len / 1024);
         return None;
@@ -6135,7 +6135,7 @@ fn main() {
             let t_build = { extern "C" { fn osGetTime() -> u64; } unsafe { osGetTime() } };
             if !skip_build {
                 // room for the build, the cache giving way if it must
-                let (room_kb, dropped) = unsafe { make_build_room() };
+                let (room_kb, dropped) = unsafe { make_build_room() }; #[cfg(feature = "gen3")] gen3::make_room(BUILD_HEAP_MB * 1024 * 1024, "a map build");
                 if dropped > 0 || room_kb < BUILD_HEAP_MB * 1024 {
                     dlog(&format!(
                         "[pv] build room: {} cached/read-ahead maps let go, heap block {} KB, cache {} KB",

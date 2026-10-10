@@ -85,6 +85,40 @@ pub extern "C" fn g3_world_stat(out: *mut u32, n: i32) -> i32 {
     k as i32
 }
 
+/// Room for one block of `bytes` before a big ask the host makes between
+/// frames (same-line hooks in main.rs: a pak's read buffer, a map build's
+/// staging): when the app heap would not give it -- a long session leaves
+/// the free part in pieces -- the read-ahead and every cached pak but the
+/// one in use are let go and QuickJS's cycles collected first. A pak read
+/// that cannot have its buffer leaves the old map's geometry standing on
+/// the new map; a build's staging that cannot be had aborts.
+#[allow(static_mut_refs)]
+pub fn make_room(bytes: usize, why: &str) {
+    let fits = |n: usize| -> bool {
+        let mut v: Vec<u8> = Vec::new();
+        v.try_reserve_exact(n).is_ok()
+    };
+    if fits(bytes) {
+        return;
+    }
+    unsafe {
+        let cache0 = super::super::cache_total_kb();
+        let pf = super::super::PREFETCH.take().map(|p| p.buf.len() / 1024).unwrap_or(0);
+        let front = super::super::PAK_CACHE.first().map(|c| &**c as *const super::super::CachedPak);
+        let in_use = super::super::PAK_IN_USE;
+        super::super::PAK_CACHE.retain(|c| {
+            let p = &**c as *const super::super::CachedPak;
+            Some(p) == front || core::ptr::eq(p, in_use)
+        });
+        let cache1 = super::super::cache_total_kb();
+        let gc_ms = if fits(bytes) { -1 } else { g3_gc_now() };
+        dlog(&format!(
+            "[pv] g3 heap: no block of {} KB for {}: read-ahead {} KB and {} KB of cached paks let go, a cycle collection ({} ms); {}",
+            bytes / 1024, why, pf, cache0 - cache1, gc_ms, if fits(bytes) { "it fits now" } else { "STILL no block" },
+        ));
+    }
+}
+
 /// The map build's vertices could not be had (main.rs build_map, a
 /// same-line hook before it plans smaller): once a build, everything the
 /// heap holds that can go goes -- the read-ahead, every cached pak but the
