@@ -10,6 +10,7 @@ import {
 import { effectByName, effectId, type Effect, type Rgba } from "./effects.ts";
 import "./effects/index.ts";
 import { getHost } from "./host.ts";
+import { cacheCap } from "./membudget.ts";
 import {
   Canvas, Image, ImageData, Quad, SpriteBatch, newImage as makeImage, FileData, collectTextures, texturesListSent, batchUploaded,
 } from "./image.ts";
@@ -198,9 +199,10 @@ function variantFor(img: Image, sh: Shader): Image {
   const v = new Image(img.w, img.h, out);
   v.wrap = img.wrap;
   // NOT FAITHFUL: a crude bound on the cache -- 256 copies, or 2 MB of them
-  // (a palette fade over a battle background makes a 256 KB copy a step)
+  // (a palette fade over a battle background makes a 256 KB copy a step);
+  // less when the app heap runs short (membudget.ts)
   variantBytes += out.px.length;
-  if (variants.size > 256 || variantBytes > 2 * 1024 * 1024) { variants.clear(); variantBytes = out.px.length; }
+  if (variants.size > 256 || variantBytes > cacheCap(2 * 1024 * 1024, 512 * 1024, variantBytes)) { variants.clear(); variantBytes = out.px.length; }
   variants.set(key, v);
   return v;
 }

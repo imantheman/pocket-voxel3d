@@ -10,6 +10,7 @@ import { getHost } from "./host.ts";
 import { FileData } from "./image.ts";
 import { luaLoad } from "./luadata.ts";
 import { saveStore } from "./savefs.ts";
+import { cacheCap } from "./membudget.ts";
 
 function norm(path: string): string {
   return path.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+/g, "/");
@@ -23,9 +24,11 @@ export interface FileInfo { type: "file" | "directory"; size?: number; modtime?:
 // so the next boot need not bake them. On the 3DS there is no next boot to
 // spare (the card holds the cooked cache) and the save store kept them in
 // memory: a tour of the region kept 22 MB of them. They are held here
-// instead, the last used up to DERIVED_CAP bytes; one let go is baked again
-// when its pair is next decoded, as on a first visit.
+// instead, the last used up to DERIVED_CAP bytes (less when the app heap
+// runs short: membudget.ts); one let go is baked again when its pair is
+// next decoded, as on a first visit.
 const DERIVED_CAP = 3 * 1024 * 1024;
+const DERIVED_LEAST = 768 * 1024;
 const derived = new Map<string, string>();
 let derivedBytes = 0;
 const isDerived = (p: string): boolean => p.startsWith("data/") && p.endsWith(".rgba");
@@ -33,12 +36,13 @@ const isDerived = (p: string): boolean => p.startsWith("data/") && p.endsWith(".
 function derivedPut(p: string, text: string): void {
   const old = derived.get(p);
   if (old !== undefined) { derivedBytes -= old.length; derived.delete(p); }
-  if (text.length > DERIVED_CAP) return;
+  const cap = cacheCap(DERIVED_CAP, DERIVED_LEAST, derivedBytes);
+  if (text.length > cap) return;
   derived.set(p, text);
   derivedBytes += text.length;
   // a Map iterates in insertion order: the first is the least recently used
   for (const [k, v] of derived) {
-    if (derivedBytes <= DERIVED_CAP) break;
+    if (derivedBytes <= cap) break;
     derived.delete(k);
     derivedBytes -= v.length;
   }

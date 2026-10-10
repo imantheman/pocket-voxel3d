@@ -861,6 +861,16 @@ int g3_gc_now(void) {
     return (int)((double)(svcGetSystemTick() - t0) / 268111.856 + 0.5);
 }
 
+/* g3HeapFree() -> the app heap's free bytes (its size less newlib's count
+   in use): what the guest's caches size themselves from (platform/
+   membudget.ts). mallinfo walks the free lists, so the guest asks rarely. */
+static JSValue g3_heapfree(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    struct mallinfo mi = mallinfo();
+    size_t heap = (size_t)(fake_heap_end - fake_heap_start), used = (size_t)(unsigned)mi.uordblks;
+    return JS_NewFloat64(ctx, (double)(heap > used ? heap - used : 0));
+}
+
 /* For the host (mod.rs): the app heap's size and newlib's count in use. */
 void g3_heap_use(uint32_t *size, uint32_t *used) {
     *size = (uint32_t)(fake_heap_end - fake_heap_start);
@@ -894,6 +904,7 @@ int qjs_register_g3(JSContext *ctx) {
     if (!JS_IsObject(o)) { JS_FreeValue(ctx, o); JS_FreeValue(ctx, g); return -1; }
     g3_rt = JS_GetRuntime(ctx);
     JS_SetPropertyStr(ctx, o, "g3WorldStat", JS_NewCFunction(ctx, g3_worldstat, "g3WorldStat", 0));
+    JS_SetPropertyStr(ctx, o, "g3HeapFree", JS_NewCFunction(ctx, g3_heapfree, "g3HeapFree", 0));
     JS_SetPropertyStr(ctx, o, "g3TexUpload", JS_NewCFunction(ctx, g3_texupload, "g3TexUpload", 5));
     JS_SetPropertyStr(ctx, o, "g3TexSub", JS_NewCFunction(ctx, g3_texsub, "g3TexSub", 6));
     JS_SetPropertyStr(ctx, o, "g3Blit", JS_NewCFunction(ctx, g3_blit, "g3Blit", 10));

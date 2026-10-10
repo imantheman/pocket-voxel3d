@@ -24,6 +24,7 @@ const pngNative = n as typeof n & {
   g3Blit?(dst: Uint8Array, dw: number, dx: number, dy: number, src: Uint8Array, sw: number, sx: number, sy: number, w: number, h: number): boolean;
   g3TexRead?(id: number, w: number, h: number, probe: boolean): Uint8Array | boolean | undefined;
   g3RefCount?(v: unknown): number;
+  g3HeapFree?(): number;
 };
 // byte strings to bytes in C (g3_shim.c g3Bytes), for lua.ts toBytes
 if (pngNative.g3Bytes) setNativeBytes((s) => pngNative.g3Bytes!(s));
@@ -143,6 +144,8 @@ class QuickJsG3Host implements G3Host {
     return r;
   }
   now(): number { return clock() / 1e6; }
+  // the app heap's free bytes (g3_shim.c g3HeapFree), where the binary has it
+  heapFree = pngNative.g3HeapFree ? (): number => pngNative.g3HeapFree!() : undefined;
 }
 
 const PROBE_HIT = new Uint8Array(1);

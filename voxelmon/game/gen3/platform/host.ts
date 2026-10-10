@@ -48,6 +48,12 @@ export interface G3Host {
   exists(path: string): boolean;
   /** Seconds, monotonic (love.timer.getTime). */
   now(): number;
+  /**
+   * Optional: the bytes the app heap has free. The session's caches size
+   * themselves from it (membudget.ts); a host without it gives them their
+   * full sizes.
+   */
+  heapFree?(): number;
 }
 
 let host: G3Host | undefined;

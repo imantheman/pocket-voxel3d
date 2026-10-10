@@ -33,6 +33,7 @@ import CacheFs from "../shared/import/CacheFs.ts";
 import Chrome from "./chrome.ts";
 import FrlgFont from "./frlg_font.ts";
 import PokedexChrome from "./pokedex_chrome.ts";
+import { cacheCap } from "../platform/membudget.ts";
 
 export interface TerrainEntry {
   image: Image;
@@ -170,8 +171,10 @@ function resolve_cache(cache: any): any {
 // of a battle's start on the console. The next battle in the same terrain
 // reads none of it (those six are 1.5 MB of the 2: the health boxes and
 // the trainer's back picture come through here too); a file's bytes never
-// change in a session.
+// change in a session. (Less when the app heap runs short: platform/
+// membudget.ts.)
 const READ_KEEP_BYTES = 2 * 1024 * 1024;
+const READ_KEEP_LEAST = 512 * 1024;
 const readKept = new Map<string, string>();
 let readKeptBytes = 0;
 
@@ -183,12 +186,13 @@ function read_bytes(rel: string): string | undefined {
     return hit;
   }
   const d = read_bytes_uncached(rel);
-  if (d !== undefined && d.length >= 16384 && d.length <= READ_KEEP_BYTES / 2) {
+  const cap = d !== undefined && d.length >= 16384 ? cacheCap(READ_KEEP_BYTES, READ_KEEP_LEAST, readKeptBytes) : 0;
+  if (d !== undefined && d.length >= 16384 && d.length <= cap / 2) {
     readKept.set(rel, d);
     readKeptBytes += d.length;
     // a Map iterates in insertion order: the first is the least recently used
     for (const [k, v] of readKept) {
-      if (readKeptBytes <= READ_KEEP_BYTES) break;
+      if (readKeptBytes <= cap) break;
       readKept.delete(k);
       readKeptBytes -= v.length;
     }
