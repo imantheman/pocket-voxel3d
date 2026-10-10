@@ -53,9 +53,16 @@ macro_rules! g3_root { () => { "sdmc:/3ds/voxelmon/firered/" } }
 macro_rules! g3_root { () => { "sdmc:/3ds/voxelmon/leafgreen/" } }
 
 mod audio;
+mod bigalloc;
+pub use bigalloc::region_stats;
 mod pace;
 mod shared;
 mod watch;
+/// The FireRed build's allocator: the host's big blocks in a region of
+/// their own (bigalloc.rs).
+#[global_allocator]
+static G3_ALLOCATOR: bigalloc::G3Alloc = bigalloc::G3Alloc;
+
 pub use shared::{pak_bytes, pak_vec, shared_attach, shared_plan, shared_release};
 pub use pace::{after_render, borrow_tick, frame_top, mark, step_begin};
 pub use watch::{make_room, note_upload, pak_missing, squeeze_heap};
@@ -405,6 +412,11 @@ extern "C" {
     fn g3_heap_use(size: *mut u32, used: *mut u32);
 }
 
+/// The region of the app heap set apart for the host's big blocks
+/// (bigalloc.rs): the pak cache at its most (PAK_MAX_KB), a pak being
+/// read beside it, and the terrain texture's pixels.
+const BIG_REGION_BYTES: usize = 10 * 1024 * 1024;
+
 /// The app heap the pak cache leaves to everything else: QuickJS's garbage
 /// between collections (g3_shim.c g3_gc_arm, up to 6 MB), a map build's
 /// staging (a few MB) and a margin.
@@ -427,7 +439,10 @@ fn pak_budget_refresh() {
     let (mut size, mut used) = (0u32, 0u32);
     unsafe { g3_heap_use(&mut size, &mut used) };
     let held = unsafe { super::cache_total_kb() + super::PREFETCH.as_ref().map(|p| p.buf.len() / 1024).unwrap_or(0) };
-    let avail = (size.saturating_sub(used) / 1024) as usize + held;
+    // (the big blocks' region counts as used in newlib's figure; what of it
+    // is free is free for paks)
+    let (rsize, rused, _) = bigalloc::region_stats();
+    let avail = (size.saturating_sub(used) / 1024) as usize + (rsize - rused) / 1024 + held;
     let want = (avail.saturating_sub(PAK_HEADROOM_KB) / 2).clamp(PAK_MIN_KB, PAK_MAX_KB);
     let was = unsafe { super::PAK_CACHE_BUDGET_KB };
     unsafe { super::PAK_CACHE_BUDGET_KB = want };
@@ -451,6 +466,10 @@ pub fn before_guest() {
         unsafe { g3_heap_info(&mut a, &mut g, &mut s) };
         dlog(&format!("[pv] g3 heap: asked {} KB, got {} KB ({} step(s) down)", a, g, s));
     }
+    // the big blocks' region (bigalloc.rs), set apart before the guest's
+    // load fills the heap
+    let ok = bigalloc::region_init(BIG_REGION_BYTES);
+    dlog(&format!("[pv] g3 heap: {} KB set apart for paks and other big blocks{}", BIG_REGION_BYTES / 1024, if ok { "" } else { ": REFUSED" }));
     // the cache/pack reader's folder (g3_files.c defaults to FireRed's)
     unsafe { g3_files_root(concat!(g3_root!(), "\0").as_ptr()) };
     // the save store (g3_save.c): the game's saves and options, under save/

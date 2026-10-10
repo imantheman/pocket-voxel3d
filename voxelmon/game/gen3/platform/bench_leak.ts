@@ -131,7 +131,9 @@ export class BenchLeak {
     const w = this.world?.();
     if (!w || w.length < 9) return "";
     const [drawn, up, built, , flat, kept, , emptyAll, emptyBuilds] = w as [number, number, number, number, number, number, number, number, number];
-    const text = `; world: ${drawn} spans drawn, ${up} of ${built} uploaded${flat ? " (flat)" : ""}${kept ? " (kept)" : ""}, empty frames ${emptyAll}, empty builds ${emptyBuilds}`;
+    const mb = (n: number): string => (n / 1048576).toFixed(1);
+    const region = w.length >= 14 && w[11]! > 0 ? `; big blocks' region ${mb(w[12]!)} of ${mb(w[11]!)} MB used (largest free ${mb(w[13]!)})` : "";
+    const text = `; world: ${drawn} spans drawn, ${up} of ${built} uploaded${flat ? " (flat)" : ""}${kept ? " (kept)" : ""}, empty frames ${emptyAll}, empty builds ${emptyBuilds}${region}`;
     if (flat || this.inBattle() || Runtime.uiBusy?.()) return text;
     const def = this.game?.data?.maps?.[this.lastMap];
     const outdoor = !!def && FieldMoves.isOutdoors(def.mapType);

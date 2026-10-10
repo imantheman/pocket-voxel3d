@@ -106,14 +106,17 @@ pub fn pak_missing(map: u32) {
 /// The bench's view (g3_shim.c g3WorldStat): [spans drawn last frame, spans
 /// uploaded, spans built, built map, built flat, kept through a battle,
 /// empty shown frames in a row, empty shown frames in all, empty builds,
-/// the map shown, frames shown on another map's world in all].
+/// the map shown, frames shown on another map's world in all, the big
+/// blocks' region's size, its use and its largest free range (bytes)].
 #[no_mangle]
 pub extern "C" fn g3_world_stat(out: *mut u32, n: i32) -> i32 {
     // (the map shown read now, not as of the last frame drawn: main.rs draws
     // nothing at all while the map's pak will not load)
     let shown = unsafe { super::super::voxel::scene() }.maps.first().map(|m| m.map_id).unwrap_or(u32::MAX);
     let v = unsafe {
-        [DRAWN_LAST, UPLOADED, SPANS, BUILT_MAP, BUILT_FLAT as u32, super::keeping() as u32, EMPTY_RUN, EMPTY_TOTAL, EMPTY_BUILDS, shown, WRONG_TOTAL]
+        let (rs, ru, rb) = super::region_stats();
+        [DRAWN_LAST, UPLOADED, SPANS, BUILT_MAP, BUILT_FLAT as u32, super::keeping() as u32, EMPTY_RUN, EMPTY_TOTAL, EMPTY_BUILDS, shown, WRONG_TOTAL,
+         rs as u32, ru as u32, rb as u32]
     };
     let k = (n.max(0) as usize).min(v.len());
     for (i, x) in v.iter().take(k).enumerate() {
@@ -129,6 +132,8 @@ pub extern "C" fn g3_world_stat(out: *mut u32, n: i32) -> i32 {
 /// one in use are let go and QuickJS's cycles collected first. A pak read
 /// that cannot have its buffer leaves the old map's geometry standing on
 /// the new map; a build's staging that cannot be had aborts.
+static mut ROOM_GC_AT: u64 = 0;
+
 #[allow(static_mut_refs)]
 pub fn make_room(bytes: usize, why: &str) {
     let fits = |n: usize| -> bool {
@@ -148,11 +153,19 @@ pub fn make_room(bytes: usize, why: &str) {
             Some(p) == front || core::ptr::eq(p, in_use)
         });
         let cache1 = super::super::cache_total_kb();
-        let gc_ms = if fits(bytes) { -1 } else { g3_gc_now() };
-        dlog(&format!(
-            "[pv] g3 heap: no block of {} KB for {}: read-ahead {} KB and {} KB of cached paks let go, a cycle collection ({} ms); {}",
-            bytes / 1024, why, pf, cache0 - cache1, gc_ms, if fits(bytes) { "it fits now" } else { "STILL no block" },
-        ));
+        // (a collection at most every 3 s: a read that keeps failing is
+        // asked for again every frame)
+        extern "C" { fn osGetTime() -> u64; }
+        let now = osGetTime();
+        let gc_ms = if fits(bytes) || now.wrapping_sub(ROOM_GC_AT) < 3000 { -1 } else { ROOM_GC_AT = now; g3_gc_now() };
+        let ok = fits(bytes);
+        // (said when something changed: a read failing every frame says it once in 3 s)
+        if ok || gc_ms >= 0 || pf > 0 || cache1 < cache0 {
+            dlog(&format!(
+                "[pv] g3 heap: no block of {} KB for {}: read-ahead {} KB and {} KB of cached paks let go, a cycle collection ({} ms); {}",
+                bytes / 1024, why, pf, cache0 - cache1, gc_ms, if ok { "it fits now" } else { "STILL no block" },
+            ));
+        }
     }
 }
 
