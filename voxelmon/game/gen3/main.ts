@@ -43,6 +43,7 @@ import { BenchLoad } from "./platform/bench_load.ts";
 import { Stack } from "./ui/stack.ts";
 import { getHost } from "./platform/host.ts";
 import { Fade } from "./ui/fade.ts";
+import { BottomScreen } from "./ui/bottom_screen.ts";
 
 declare const PV_G3_MODE: string;
 declare const PV_G3_BENCH_SCRIPT: string;
@@ -242,7 +243,7 @@ function gameMain(bench: boolean): void {
   let tick = 0;
   let shown = 0;
   let failedUpdate = false, failedDraw = false;
-  const prof = { frames: 0, update: 0, draw: 0, emit: 0, ticks: 0, memEvery: 0, game: 0, updateMax: 0, drawMax: 0, logUs: 0 };
+  const prof = { frames: 0, update: 0, draw: 0, emit: 0, ticks: 0, memEvery: 0, game: 0, updateMax: 0, drawMax: 0, logUs: 0, bottom: 0, bottomMax: 0 };
 
   setFrame((buttons: number): void => {
     if (!ok) return;
@@ -250,6 +251,8 @@ function gameMain(bench: boolean): void {
     const t1 = clock();
     try {
       Input.hostButtons(padBits(buttons) | (suite ? suite.at(tick, game) : leak ? leak.at(tick, game) : load ? load.at(tick, game) : script.at(tick)));
+      // the bottom screen's touch (bits 8-23 of the host's word; ui/bottom_screen.ts)
+      BottomScreen.input(buttons);
       game.update(1 / 60);
       if (load) load.afterUpdate();
     } catch (e) {
@@ -276,6 +279,9 @@ function gameMain(bench: boolean): void {
       failedDraw = true;
     }
     const t2c = clock();
+    // the bottom screen: its page into its canvas when the page has changed
+    BottomScreen.frame(game);
+    const t2d = clock();
     G.endFrame();
     const t3 = clock();
     view.emit(field.state(game));
@@ -297,6 +303,8 @@ function gameMain(bench: boolean): void {
     }
     prof.draw += t3 - t2;
     prof.game += t2c - t2b;
+    prof.bottom += t2d - t2c;
+    if (t2d - t2c > prof.bottomMax) prof.bottomMax = t2d - t2c;
     if (t3 - t2 > prof.drawMax) prof.drawMax = t3 - t2;
     prof.emit += t4 - t3;
     if (suite) suite.noteDraw(t4 - t2);
@@ -315,7 +323,8 @@ function gameMain(bench: boolean): void {
       console.log(`[pv] g3 guest: update ${ms2(prof.update / prof.ticks)} ms/tick (max ${ms1(prof.updateMax)}, ${prof.ticks} ticks), ` +
         `draw ${ms2(prof.draw / f)} ms (max ${ms1(prof.drawMax)}; game.draw ${ms2(prof.game / f)}, g3Draw ${ms2(drawProf.conv / f)}, ` +
         `${Math.round(drawProf.len / f)} floats), world ${ms2(prof.emit / f)} ms, ` +
-        `3d=${field.world3d} ents=${view.entCount} phase=${game.phase}; log ${ms1(prof.logUs)} ms` +
+        `3d=${field.world3d} ents=${view.entCount} phase=${game.phase}; ` +
+        `bottom ${ms2(prof.bottom / f)} ms (max ${ms1(prof.bottomMax)}; ${BottomScreen.redraws} redraws); log ${ms1(prof.logUs)} ms` +
         // the heaps every sixth line: g3Mem's mallinfo walks the app heap's free lists
         `${++prof.memEvery % 6 === 1 ? "; " + memText(true) : ""}`);
       const np = nativeProf;
@@ -330,6 +339,7 @@ function gameMain(bench: boolean): void {
       }
       (globalThis as { __g3ProfDump?: () => void }).__g3ProfDump?.(); // tools/gen3/qjs_loadprof_gen.ts --device builds only
       prof.frames = prof.update = prof.draw = prof.emit = prof.ticks = prof.game = prof.updateMax = prof.drawMax = 0;
+      prof.bottom = prof.bottomMax = BottomScreen.redraws = 0;
       drawProf.conv = drawProf.len = 0;
       prof.logUs = clock() - tLog;
     }
