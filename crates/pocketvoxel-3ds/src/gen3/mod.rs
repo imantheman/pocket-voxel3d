@@ -58,7 +58,7 @@ mod shared;
 mod watch;
 pub use shared::{pak_bytes, pak_vec, shared_attach, shared_plan, shared_release};
 pub use pace::{after_render, borrow_tick, frame_top, mark, step_begin};
-pub use watch::{make_room, note_upload, squeeze_heap};
+pub use watch::{make_room, note_upload, pak_missing, squeeze_heap};
 
 extern "C" {
     fn g3_gpu_init_shared(shbin: *const u8, len: u32) -> i32;

@@ -5988,7 +5988,7 @@ fn main() {
                     "map #{} has no pak loaded ({}); keeping previous geometry",
                     want_id,
                     map_index.get(map_i).map(|(_, n)| n.as_str()).unwrap_or("?"),
-                );
+                ); #[cfg(feature = "gen3")] gen3::pak_missing(want_id);
                 continue;
             }
             tex = None;

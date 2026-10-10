@@ -43,6 +43,7 @@ pub fn note_upload(map: u32, uploaded: usize, spans: usize, flat: bool) {
         UPLOADED = uploaded as u32;
         SPANS = spans as u32;
         SQUEEZED = false;
+        MISSING_SAID = u32::MAX;
         EMPTY_RUN = 0;
         if !flat && uploaded == 0 {
             EMPTY_BUILDS += 1;
@@ -87,14 +88,32 @@ pub fn frame(drawn: u32) {
     }
 }
 
+/// The map whose pak would not load, last said (pak_missing).
+static mut MISSING_SAID: u32 = u32::MAX;
+
+/// main.rs's rebuild found the map's pak not loaded (a same-line hook): it
+/// keeps the last map's geometry and draws nothing that frame, and tries
+/// again the next -- said once a map, as main.rs says it only to stdout.
+pub fn pak_missing(map: u32) {
+    unsafe {
+        if MISSING_SAID != map {
+            MISSING_SAID = map;
+            dlog(&format!("[pv] g3 world: WARNING map#{}'s pak would not load: the last map's world kept, frames not drawn until it does", map));
+        }
+    }
+}
+
 /// The bench's view (g3_shim.c g3WorldStat): [spans drawn last frame, spans
 /// uploaded, spans built, built map, built flat, kept through a battle,
 /// empty shown frames in a row, empty shown frames in all, empty builds,
 /// the map shown, frames shown on another map's world in all].
 #[no_mangle]
 pub extern "C" fn g3_world_stat(out: *mut u32, n: i32) -> i32 {
+    // (the map shown read now, not as of the last frame drawn: main.rs draws
+    // nothing at all while the map's pak will not load)
+    let shown = unsafe { super::super::voxel::scene() }.maps.first().map(|m| m.map_id).unwrap_or(u32::MAX);
     let v = unsafe {
-        [DRAWN_LAST, UPLOADED, SPANS, BUILT_MAP, BUILT_FLAT as u32, super::keeping() as u32, EMPTY_RUN, EMPTY_TOTAL, EMPTY_BUILDS, SHOWN_MAP, WRONG_TOTAL]
+        [DRAWN_LAST, UPLOADED, SPANS, BUILT_MAP, BUILT_FLAT as u32, super::keeping() as u32, EMPTY_RUN, EMPTY_TOTAL, EMPTY_BUILDS, shown, WRONG_TOTAL]
     };
     let k = (n.max(0) as usize).min(v.len());
     for (i, x) in v.iter().take(k).enumerate() {
