@@ -17,7 +17,7 @@ import { Player } from "../core/player.ts";
 /** The sampling profiler's globals, in a bench built with it (tools/gen3/qjs_prof.c). */
 const prof = globalThis as { profReset?(): void; profDump?(n: number, title: string): void };
 
-const BIT: Record<string, number> = { U: 0, D: 1, L: 2, R: 3, A: 4, B: 5 };
+const BIT: Record<string, number> = { U: 0, D: 1, L: 2, R: 3, A: 4, B: 5, START: 6 };
 /** The phases: [name, ticks]. */
 const PHASES: [string, number][] = [["settle", 180], ["standing", 720], ["walking", 1200], ["running", 1200]];
 
@@ -30,6 +30,7 @@ class Stat {
 export class BenchView2d {
   private readonly walk: string;
   private readonly opts: Record<string, string | number> = {};
+  private readonly presses: [number, number][] = [];
   private phase = -1;
   private t0 = 0;
   private up = new Stat();
@@ -54,6 +55,14 @@ export class BenchView2d {
     for (const p of parts.slice(2)) {
       const [k, v] = p.split("=");
       if (k === "profslow") (globalThis as { __profSlowUs?: number }).__profSlowUs = Number(v) * 1000;
+      // press=TICK.KEY+TICK.KEY...: a button tapped (4 ticks) at those ticks
+      // while standing -- a menu over the field, for a photograph
+      else if (k === "press" && v) {
+        for (const t of v.split("+")) {
+          const [tk, key] = t.split(".");
+          if (tk && key && BIT[key.toUpperCase()] != null) this.presses.push([Number(tk), 1 << BIT[key.toUpperCase()]!]);
+        }
+      }
       else if (k && v != null) this.opts[k] = /^\d+$/.test(v) ? Number(v) : v;
     }
   }
@@ -119,7 +128,10 @@ export class BenchView2d {
       }
     }
     const name = PHASES[this.phase]![0];
-    if (name !== "walking" && name !== "running") return 0;
+    if (name !== "walking" && name !== "running") {
+      for (const [t, m] of this.presses) if (tick >= t && tick < t + 4) return m;
+      return 0;
+    }
     const run = name === "running";
     // closed loop: hold the step's direction until the player is bound for
     // (or stands in) the step's cell, so the walk never drifts into a wall
