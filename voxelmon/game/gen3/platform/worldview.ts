@@ -193,7 +193,7 @@ export class WorldView {
   }
 
   /** The scene for one shown frame. */
-  emit(state: WorldState | null): void {
+  emit(state: WorldState | null, strips?: WorldStrips): void {
     if (!this.started) {
       // the overworld camera's opening rung, as Gold and Kanto start it
       this.started = true;
@@ -202,7 +202,8 @@ export class WorldView {
     if (!state || !this.has(state.map)) {
       this.stateFlat(true);
       this.clear();
-      this.emitStrips(undefined);
+      // (no world: the strips VIEW 2D's widened field asks for, if any)
+      this.emitStrips(strips);
       return;
     }
     this.stateFlat(false);

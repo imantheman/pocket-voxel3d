@@ -503,10 +503,13 @@ export function newImage(src: ImageData | string | FileData): Image {
 }
 
 export class Canvas extends Image {
-  constructor(w: number, h: number) {
+  /** pocket-voxel: no alpha kept (G3Host.canvasNew). */
+  readonly opaque: boolean;
+  constructor(w: number, h: number, opaque = false) {
     super(w, h);
     this.isCanvas = true;
-    getHost().canvasNew(this.id, w, h);
+    this.opaque = opaque;
+    getHost().canvasNew(this.id, w, h, opaque);
     watch(this);
   }
   /** A released canvas drawn again is made again (empty: its pixels went with it). */
@@ -514,7 +517,7 @@ export class Canvas extends Image {
     if (!this.freed) return;
     this.freed = false;
     unfree(this.id);
-    getHost().canvasNew(this.id, this.w, this.h);
+    getHost().canvasNew(this.id, this.w, this.h, this.opaque);
     watch(this);
   }
   override replacePixels(): void { throw new Error("Canvas:replacePixels"); }

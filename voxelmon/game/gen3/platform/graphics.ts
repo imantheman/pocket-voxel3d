@@ -769,7 +769,8 @@ export const G = {
   setLineJoin(): void {},
 
   // ---- canvases
-  newCanvas(w = SCREEN_W, h = SCREEN_H, _opts?: unknown): Canvas { return new Canvas(w, h); },
+  // (pocket-voxel: opts.opaque, a canvas whose alpha is never read: G3Host.canvasNew)
+  newCanvas(w = SCREEN_W, h = SCREEN_H, opts?: { opaque?: boolean }): Canvas { return new Canvas(w, h, !!(opts && opts.opaque)); },
   setCanvas(c?: Canvas | null): void {
     const next = c ?? undefined;
     if (next === st.canvas) return;

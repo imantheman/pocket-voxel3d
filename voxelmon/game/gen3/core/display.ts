@@ -28,6 +28,8 @@ import { Stream } from "./asset_stream.ts";
 import { Bg } from "./bg.ts";
 import { Oam } from "./oam.ts";
 import { FieldView } from "./field_view.ts";
+import { getHost } from "../platform/host.ts";
+import type { Zoom2dSpec } from "../platform/zoom2d.ts";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -236,6 +238,72 @@ function presentPlanes(game: any): void {
   Display.mirrorFlatFrame(R);
 }
 
+// pocket-voxel: VIEW 2D zoomed out or widened (platform/zoom2d.ts; the spec
+// Display.zoom2d, set each frame by platform/game3_world.ts begin): the
+// field is drawn into a canvas of its own, at the GBA's pixels, as much
+// more of the map as the spec shows, and the host lays it under the frame
+// (G3Host.fieldLayer); the frame keeps the text boxes and menus over it,
+// clear elsewhere. Not while the screen is something else than the field:
+// a battle, its transition (which works on the GBA screen's picture), a
+// screen that covers it all, the shop's camera, the ferry's black.
+let zoomCanvas: Canvas | null = null;
+let zoomKey = "";
+/** Frames the canvas has gone unused: past ZOOM_KEEP_OFF its VRAM goes. */
+let zoomIdle = 0;
+const ZOOM_KEEP_OFF = 120;
+/** What the host was last told (fieldLayer is called on a change only). */
+let zoomSent = "";
+
+function zoomCanvasFor(spec: Zoom2dSpec): Canvas | null {
+  const key = spec.w + "x" + spec.h;
+  if (zoomKey === key) return zoomCanvas;
+  if (zoomCanvas) zoomCanvas.release();
+  zoomCanvas = null;
+  zoomKey = key;
+  let c: Canvas | null = null;
+  try {
+    // (opaque: 16 bits a texel -- 1 MB of VRAM at MAX, where RGBA8's 2 MB is refused)
+    c = G.newCanvas(spec.w, spec.h, { opaque: true });
+  } catch {
+    c = null;
+  }
+  // (a canvas the host could not make -- VRAM -- would send the field's
+  // draws into the frame itself: no zoom then)
+  const host = getHost();
+  if (c && host.texOk && !host.texOk(c.id)) {
+    log("zoom canvas " + key + ": the host could not make it");
+    c.release();
+    c = null;
+  }
+  if (c) c.setFilter("nearest", "nearest");
+  zoomCanvas = c;
+  return c;
+}
+
+function zoomFor(game: any): Zoom2dSpec | null {
+  const spec: Zoom2dSpec | null = (Display as any).zoom2d ?? null;
+  if (!spec || Battle.isActive()) return null;
+  const Transition: any = BattleTransition;
+  if (Transition && Transition.isActive && Transition.isActive()) return null;
+  const StackM: any = Stack;
+  if (StackM && StackM.fullscreen && StackM.fullscreen()) return null;
+  const Shop: any = ShopMenu;
+  if (Shop && Shop.isShopCamera && Shop.isShopCamera()) return null;
+  void game;
+  return spec;
+}
+
+/** The host's field layer: the canvas and where it goes, or off. */
+function sendZoom(spec: Zoom2dSpec | null, c: Canvas | null): void {
+  const host = getHost();
+  if (!host.fieldLayer) return;
+  const key = spec && c ? `${c.id}:${spec.x0}:${spec.y0}:${spec.x1}:${spec.y1}:${spec.smooth}` : "";
+  if (key === zoomSent) return;
+  zoomSent = key;
+  if (spec && c) host.fieldLayer(c.id, spec.x0, spec.y0, spec.x1, spec.y1, spec.smooth);
+  else host.fieldLayer(0, 0, 0, 0, 0, false);
+}
+
 // Lua: display.lua:392
 function presentFlat(game: any, winW: number, winH: number): boolean {
   const canvas = Display.ensureCanvas("main");
@@ -244,12 +312,16 @@ function presentFlat(game: any, winW: number, winH: number): boolean {
   beginOn(canvas);
   let failed = false;
   let err: unknown;
+  let zoomed = false;
   try {
     (() => {
       if (Help.isOpen()) { Help.draw(); return; }
       const world3d = !!(Display as any).world3d && !Battle.isActive();
-      // (with the voxel world under the frame, the canvas stays clear)
-      if (!world3d) G.clear(0.06, 0.12, 0.20, 1);
+      const zspec = world3d ? null : zoomFor(game);
+      const zc = zspec ? zoomCanvasFor(zspec) : null;
+      zoomed = zc != null;
+      // (with the voxel world or the zoomed field under the frame, the canvas stays clear)
+      if (!world3d && !zc) G.clear(0.06, 0.12, 0.20, 1);
 
       Oam.resetFrame();
 
@@ -257,6 +329,15 @@ function presentFlat(game: any, winW: number, winH: number): boolean {
         Battle.draw(game, Display.W, Display.H);
       } else if (world3d) {
         FieldView.draw(game, WORLD3D_VIEW_W, WORLD3D_VIEW_H, WORLD3D_OPTS);
+      } else if (zc && zspec) {
+        G.push("all");
+        G.setCanvas(zc);
+        G.clear(0, 0, 0, 1);
+        G.origin();
+        G.setColor(1, 1, 1, 1);
+        FieldView.draw(game, zspec.w, zspec.h);
+        G.pop();
+        sendZoom(zspec, zc);
       } else {
         FieldView.draw(game, Display.W, Display.H);
       }
@@ -284,9 +365,19 @@ function presentFlat(game: any, winW: number, winH: number): boolean {
     throw err;
   }
 
+  if (!zoomed) {
+    sendZoom(null, null);
+    if (zoomCanvas && ++zoomIdle >= ZOOM_KEEP_OFF) {
+      zoomCanvas.release();
+      zoomCanvas = null;
+      zoomKey = "";
+    }
+  } else {
+    zoomIdle = 0;
+  }
   // Void bars + blit our frame (game3 letterbox, not Gen2 Playfield).
-  // (none over the voxel world: the frame's clear pixels must stay clear)
-  if (!(Display as any).world3d) {
+  // (none over the voxel world or the zoomed field: the frame's clear pixels must stay clear)
+  if (!(Display as any).world3d && !zoomed) {
     G.setColor(0.02, 0.04, 0.08, 1);
     G.rectangle("fill", 0, 0, winW, winH);
   }

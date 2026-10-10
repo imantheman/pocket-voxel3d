@@ -287,7 +287,7 @@ function gameMain(bench: boolean): void {
     const t2d = clock();
     G.endFrame();
     const t3 = clock();
-    view.emit(field.state(game));
+    view.emit(field.state(game), field.zoomStrips());
     // A screen held black by a fade (a door, a warp): the cycle collector's
     // turn, when the heap has grown 6 MB since it last ran here (g3_shim.c
     // g3GcIdle) -- rather than QuickJS's own run wherever its threshold falls,

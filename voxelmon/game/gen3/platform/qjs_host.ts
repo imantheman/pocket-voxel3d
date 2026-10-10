@@ -43,6 +43,12 @@ if (pngNative.g3Blit) setNativeBlit(pngNative.g3Blit);
   if (r.g3ReadAhead) Fast.warpHint = (m) => r.g3ReadAhead!(m);
 }
 
+/** VIEW 2D zoom's natives (g3_shim.c), where the binary has them. */
+const zoomNative = n as typeof n & {
+  g3FieldLayer?(tex: number, x0: number, y0: number, x1: number, y1: number, smooth: number): void;
+  g3TexOk?(id: number): number;
+};
+
 /** Draw-list timing, summed until read (main.ts's perf lines). */
 export const drawProf = { conv: 0, len: 0 };
 
@@ -90,7 +96,10 @@ class QuickJsG3Host implements G3Host {
     nativeProf.cache++; nativeProf.cacheUs += clock() - t;
     return r ? [r[0], r[1]] : undefined;
   }
-  canvasNew(id: number, w: number, h: number): void { n.g3Canvas!(id, w, h); }
+  canvasNew(id: number, w: number, h: number, opaque?: boolean): void {
+    if (opaque) (n.g3Canvas as unknown as (id: number, w: number, h: number, o: number) => void)(id, w, h, 1);
+    else n.g3Canvas!(id, w, h);
+  }
   // a texture read back (g3_shim.c g3TexRead), where the binary has it
   texRead = pngNative.g3TexRead
     ? (id: number, w: number, h: number, probe?: boolean): Uint8Array | undefined => {
@@ -106,6 +115,12 @@ class QuickJsG3Host implements G3Host {
     ? (id: number, tex: number, quads: Float32Array, count: number): void => n.g3BatchUpload!(id, tex, quads, count)
     : undefined;
   batchFree = n.g3BatchFree ? (id: number): void => n.g3BatchFree!(id) : undefined;
+  // VIEW 2D zoomed out: the field's canvas under the frame (g3_shim.c g3FieldLayer)
+  fieldLayer = zoomNative.g3FieldLayer
+    ? (tex: number, x0: number, y0: number, x1: number, y1: number, smooth: boolean): void =>
+      zoomNative.g3FieldLayer!(tex, x0, y0, x1, y1, smooth ? 1 : 0)
+    : undefined;
+  texOk = zoomNative.g3TexOk ? (id: number): boolean => zoomNative.g3TexOk!(id) !== 0 : undefined;
   // PNGs decoded by the host (g3_shim.c g3PngDecode), where the binary has it
   pngDecode = pngNative.g3PngDecode ? (png: string): [number, number, Uint8Array] | undefined => {
     const t = clock();

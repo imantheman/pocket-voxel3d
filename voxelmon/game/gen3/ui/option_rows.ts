@@ -36,6 +36,7 @@ import { VoidFill } from "../core/void_fill.ts";
 import { Profile } from "../core/profile.ts";
 import { TouchControls } from "../shared/core/TouchControls.ts";
 import { ModManager } from "./mod_manager.ts";
+import { SCREENS_2D, ZOOMS_2D, screen2dIndex, zoom2dIndex } from "../platform/zoom2d.ts";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -134,6 +135,31 @@ export const Rows = {
         const next = c.options.view === "2d" ? "3d" : "2d";
         c.options.view = next;
         if (c.game?.options && c.game.options !== c.options) c.game.options.view = next;
+        return true;
+      },
+    });
+
+    // pocket-voxel: VIEW 2D's field out to the top screen's edges, and zoomed
+    // out round the same camera (platform/zoom2d.ts), as the other games'
+    // OPTION has them; text boxes and menus keep the GBA screen's box.
+    add({
+      id: "pvScreen2d", label: Strings("2D SCREEN"),
+      value: (c) => Strings(SCREENS_2D[screen2dIndex(c.options.screen2d)]!.label),
+      step: (c, _dir) => {
+        const next = SCREENS_2D[1 - screen2dIndex(c.options.screen2d)]!.key;
+        c.options.screen2d = next;
+        if (c.game?.options && c.game.options !== c.options) c.game.options.screen2d = next;
+        return true;
+      },
+    });
+    add({
+      id: "pvZoom2d", label: Strings("2D ZOOM OUT"),
+      value: (c) => Strings(ZOOMS_2D[zoom2dIndex(c.options.zoom2d)]!.label),
+      step: (c, dir) => {
+        const n = ZOOMS_2D.length;
+        const next = ZOOMS_2D[(((zoom2dIndex(c.options.zoom2d) + (dir < 0 ? -1 : 1)) % n) + n) % n]!.pct;
+        c.options.zoom2d = next;
+        if (c.game?.options && c.game.options !== c.options) c.game.options.zoom2d = next;
         return true;
       },
     });
@@ -438,9 +464,9 @@ export const Rows = {
       members: seq("tilt", "zoom", "voidFill", "eventTickets") },
   ),
 
-  // pocket-voxel: VIEW first (not in Brian's menu; see build)
+  // pocket-voxel: VIEW, 2D SCREEN and 2D ZOOM OUT first (not in Brian's menu; see build)
   ORDER: seq(
-    "pvView", "group.speed", "group.video", "group.graphics", "group.audio",
+    "pvView", "pvScreen2d", "pvZoom2d", "group.speed", "group.video", "group.graphics", "group.audio",
     "performance", "group.battle", "group.extras", "buttonMode", "controls", "mods",
   ),
 

@@ -37,6 +37,7 @@ import {
   CELL, STRIPS_COLOUR, STRIPS_EDGE, STRIPS_OFF, type WorldEnt, type WorldState, type WorldStrips, type WorldView,
 } from "./worldview.ts";
 import { backedImage, cardEnt, feetOf, groundEnt, quadBox, wallEnt } from "./world_fx.ts";
+import { zoom2dSpec } from "./zoom2d.ts";
 
 /** The room behind an opening door (doors.ts draw's backing rectangle). */
 const DOOR_DARK: [number, number, number] = [0.05, 0.07, 0.1];
@@ -88,9 +89,34 @@ export class Game3World {
     const want = !view2d && this.fieldMap() != null && !Battle.isActive();
     this.world3d = want;
     (Display as any).world3d = want;
-    G.setFrameClearAlpha(want ? 0 : 1);
+    // VIEW 2D widened or zoomed out (zoom2d.ts): the field's own canvas under
+    // the frame, which core/display.ts presentFlat draws when the screen is
+    // the field (else the frame covers it all as before)
+    const zoom = view2d ? zoom2dSpec(game?.options) : null;
+    (Display as any).zoom2d = zoom;
+    G.setFrameClearAlpha(want || zoom ? 0 : 1);
     Fade.shown = null;
     return want;
+  }
+
+  /**
+   * After the frame's draw, in VIEW 2D: the side strips while the field's
+   * canvas reaches past the frame (2D SCREEN WIDE) -- a screen fade's
+   * colour there too, as stripsNow gives the world's; undefined otherwise.
+   */
+  zoomStrips(): WorldStrips | undefined {
+    if (this.world3d) return undefined;
+    const z: any = (Display as any).zoom2d;
+    if (!z || (z.x0 >= 20 && z.x1 <= 380)) return undefined;
+    const s = this.strips;
+    s.mode = STRIPS_OFF;
+    s.r = s.g = s.b = s.a = 0;
+    const f = Fade.shown;
+    if (f) {
+      s.mode = STRIPS_COLOUR;
+      s.r = f[0]; s.g = f[1]; s.b = f[2]; s.a = f[3];
+    }
+    return s;
   }
 
   /** After the frame's draw: the frame's world, or null. */

@@ -88,8 +88,8 @@ typedef struct G3Tex {
    is stored in it (pick_fmt): grey images -- the font sheets, white glyphs
    the guest tints -- as luminance + alpha. The GPU reads LA texels as
    (L, L, L, A), so it samples the very values RGBA8 would have held. */
-enum { TF_RGBA8, TF_LA8, TF_LA4 };
-static const uint8_t TF_BPP[3] = {4, 2, 1};
+enum { TF_RGBA8, TF_LA8, TF_LA4, TF_RGB565 };
+static const uint8_t TF_BPP[4] = {4, 2, 1, 2};
 
 /* Live textures (allocated, retired ones included until destroyed): count
    and bytes in linear memory, bytes in VRAM (g3_tex_stats). */
@@ -236,7 +236,7 @@ static G3Tex *tex_alloc_fmt(int w, int h, int repeat, int vram, int fmt) {
     t->w = w; t->h = h; t->tw = po2(w); t->th = po2(h);
     t->repeat = (uint8_t)(repeat != 0);
     t->serial = tex_serial++;
-    GPU_TEXCOLOR gf = fmt == TF_LA4 ? GPU_LA4 : fmt == TF_LA8 ? GPU_LA8 : GPU_RGBA8;
+    GPU_TEXCOLOR gf = fmt == TF_LA4 ? GPU_LA4 : fmt == TF_LA8 ? GPU_LA8 : fmt == TF_RGB565 ? GPU_RGB565 : GPU_RGBA8;
     if (!(vram ? C3D_TexInitVRAM(&t->tex, (u16)t->tw, (u16)t->th, gf)
                : C3D_TexInit(&t->tex, (u16)t->tw, (u16)t->th, gf))) { free(t); return NULL; }
     t->vram = (uint8_t)(vram != 0);
@@ -292,6 +292,9 @@ static inline void tex_texel(const G3Tex *t, int x, int y, float out[4]) {
     } else if (t->fmt == TF_LA8) {
         uint16_t v = ((const uint16_t *)t->tex.data)[i];
         r = g = b = v >> 8; a = v & 255;
+    } else if (t->fmt == TF_RGB565) {
+        uint16_t v = ((const uint16_t *)t->tex.data)[i];
+        r = ((v >> 11) & 31) * 255 / 31; g = ((v >> 5) & 63) * 255 / 63; b = (v & 31) * 255 / 31; a = 255;
     } else {
         uint32_t v = ((const uint32_t *)t->tex.data)[i];
         r = v >> 24; g = (v >> 16) & 255; b = (v >> 8) & 255; a = v & 255;
@@ -433,6 +436,20 @@ int g3_tex_from_cache(int id, const char *path, int *ow, int *oh) {
     if (!ok) return 0;
     *ow = w; *oh = h;
     return 1;
+}
+
+/* A canvas whose alpha is never read (VIEW 2D's zoomed field,
+   voxelmon/game/gen3/core/display.ts): 16 bits a texel, half the VRAM --
+   a 1024x512 RGBA8 target (2 MB) is refused beside the screens. */
+void g3_canvas_new_opaque(int id, int w, int h) {
+    G3Tex *t = tex_alloc_fmt(w, h, 0, 1, TF_RGB565);
+    if (!t) { g3log("canvas %d: cannot make %dx%d RGB565 (VRAM)", id, w, h); return; }
+    t->rt = C3D_RenderTargetCreateFromTex(&t->tex, GPU_TEXFACE_2D, 0, -1);
+    if (!t->rt) { g3log("canvas %d: no render target", id); tex_destroy(t); return; }
+    t->canvas = 1;
+    t->fresh = 1;
+    tex_fresh_n++;
+    tex_set(id, t);
 }
 
 void g3_canvas_new(int id, int w, int h) {
@@ -1645,6 +1662,28 @@ void g3_bottom_draw(void) {
     restore_main();
 }
 
+/* VIEW 2D zoomed out or widened (voxelmon/game/gen3/core/display.ts): the
+   field drawn into a canvas of its own at the GBA's pixels, laid under the
+   frame over x0..x1, y0..y1 of the top screen (its 400x240 units) -- texel
+   for pixel at 1x, filtered when shrunk (at a half, each screen pixel the
+   even mix of a 2x2 block). Set by the guest's frame, laid out in
+   g3_frame_offscreen, drawn first in g3_composite. */
+static int field_tex;
+static float field_rect[4];
+static int field_smooth;
+static int field_start = -1;
+
+void g3_field_layer_set(int tex, float x0, float y0, float x1, float y1, int smooth) {
+    field_tex = tex;
+    field_rect[0] = x0; field_rect[1] = y0; field_rect[2] = x1; field_rect[3] = y1;
+    field_smooth = smooth != 0;
+}
+
+/* Whether texture `id` exists (a canvas the guest asked for and VRAM held). */
+int g3_tex_ok(int id) {
+    return (id > 0 && id < ntexs && texs[id]) ? 1 : 0;
+}
+
 /* First in the frame (inside citro3d-rs's frame, before the eyes): the
    newest list (if one came since the last frame) into the frame target and
    its canvases; then the composite quad for the eyes to draw. */
@@ -1676,6 +1715,20 @@ void g3_frame_offscreen(void) {
         lists_run++;
         flush();
         restore_main();
+    }
+    /* the field's canvas first (VIEW 2D zoomed out), under the frame */
+    field_start = -1;
+    if (field_tex) {
+        G3Tex *ft = (field_tex > 0 && field_tex < ntexs) ? texs[field_tex] : NULL;
+        if (ft && ft->canvas && !ft->fresh) {
+            float u1 = (float)ft->w / ft->tw, v1 = 1.0f - (float)ft->h / ft->th;
+            float x0 = field_rect[0], y0 = field_rect[1], x1 = field_rect[2], y1 = field_rect[3];
+            u32 c = 0xFFFFFFFFu;
+            field_start = vn;
+            put_raw(x0, y0, 0.5f, c, 0, 1);   put_raw(x1, y0, 0.5f, c, u1, 1);    put_raw(x1, y1, 0.5f, c, u1, v1);
+            put_raw(x0, y0, 0.5f, c, 0, 1);   put_raw(x1, y1, 0.5f, c, u1, v1);   put_raw(x0, y1, 0.5f, c, 0, v1);
+            ft->used = frame_no;
+        }
     }
     /* the 240x160 frame at 1.5x, centred on the 400x240 screen; a texture's
        first row is v = 1 (see the top of this file) */
@@ -1740,6 +1793,16 @@ void g3_composite(void) {
     C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
     for (int i = 0; i < 6; i++) C3D_SetTexEnv(i, &prog_plain.env[i]);
     C3D_TexEnvBufUpdate(C3D_Both, 0);
+    if (field_start >= 0) {
+        G3Tex *ft = (field_tex > 0 && field_tex < ntexs) ? texs[field_tex] : NULL;
+        if (ft) {
+            GPU_TEXTURE_FILTER_PARAM f = field_smooth ? GPU_LINEAR : GPU_NEAREST;
+            C3D_TexSetFilter(&ft->tex, f, f);
+            C3D_TexBind(0, &ft->tex);
+            C3D_DrawArrays(GPU_TRIANGLES, field_start, 6);
+            st_calls++;
+        }
+    }
     C3D_TexBind(0, &frame_tex->tex);
     C3D_DrawArrays(GPU_TRIANGLES, comp_start, 6);
     st_calls++;

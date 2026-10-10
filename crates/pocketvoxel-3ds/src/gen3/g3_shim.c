@@ -49,6 +49,7 @@ int g3_tex_sub(int id, int w, int h, int x0, int y0, int x1, int y1, const uint8
 int g3_tex_from_cache(int id, const char *path, int *ow, int *oh);
 int g3_tex_read(int id, int w, int h, uint8_t *out);
 void g3_canvas_new(int id, int w, int h);
+void g3_canvas_new_opaque(int id, int w, int h);
 void g3_tex_free(int id);
 void g3_tex_stats(uint32_t out[4]);
 void g3_draw(const float *f, size_t n);
@@ -56,6 +57,8 @@ void g3_batch_upload(int id, int tex, const float *q, int n);
 void g3_batch_free(int id);
 void g3_ents_set(const float *f, int n);
 void g3_strips_set(int mode, float r, float g, float b, float a);
+void g3_field_layer_set(int tex, float x0, float y0, float x1, float y1, int smooth);
+int g3_tex_ok(int id);
 uint8_t *g3_read_file(const char *path, size_t *len);
 int g3_exists(const char *path);
 uint8_t *g3_png_decode(const uint8_t *png, size_t len, int *ow, int *oh);
@@ -169,7 +172,10 @@ static JSValue g3_canvas(JSContext *ctx, JSValueConst t, int c, JSValueConst *v)
     JS_ToInt32(ctx, &id, v[0]);
     JS_ToInt32(ctx, &w, v[1]);
     JS_ToInt32(ctx, &h, v[2]);
-    g3_canvas_new(id, w, h);
+    int32_t opaque = 0;
+    if (c > 3) JS_ToInt32(ctx, &opaque, v[3]);
+    if (opaque) g3_canvas_new_opaque(id, w, h);
+    else g3_canvas_new(id, w, h);
     return JS_UNDEFINED;
 }
 
@@ -354,6 +360,28 @@ static JSValue g3_strips(JSContext *ctx, JSValueConst t, int c, JSValueConst *v)
     JS_ToFloat64(ctx, &a, v[4]);
     g3_strips_set((int)mode, (float)r, (float)g, (float)b, (float)a);
     return JS_UNDEFINED;
+}
+
+/* VIEW 2D zoomed out (core/display.ts): g3FieldLayer(tex, x0, y0, x1, y1,
+   smooth) lays canvas tex under the frame over that part of the top screen
+   (g3_render.c), tex 0 none; g3TexOk(id) says whether texture id exists. */
+static JSValue g3_fieldlayer(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 6) return JS_UNDEFINED;
+    int32_t tex = 0, smooth = 0;
+    double r[4] = {0, 0, 0, 0};
+    JS_ToInt32(ctx, &tex, v[0]);
+    for (int i = 0; i < 4; i++) JS_ToFloat64(ctx, &r[i], v[1 + i]);
+    JS_ToInt32(ctx, &smooth, v[5]);
+    g3_field_layer_set((int)tex, (float)r[0], (float)r[1], (float)r[2], (float)r[3], (int)smooth);
+    return JS_UNDEFINED;
+}
+
+static JSValue g3_texok(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    int32_t id = 0;
+    if (c > 0) JS_ToInt32(ctx, &id, v[0]);
+    return JS_NewInt32(ctx, g3_tex_ok((int)id));
 }
 
 /* The file as a JS string of one char per byte: the bytes re-encoded as
@@ -1013,6 +1041,8 @@ int qjs_register_g3(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "g3Gc", JS_NewCFunction(ctx, g3_gc, "g3Gc", 1));
     JS_SetPropertyStr(ctx, o, "g3GcIdle", JS_NewCFunction(ctx, g3_gcidle, "g3GcIdle", 1));
     JS_SetPropertyStr(ctx, o, "g3Strips", JS_NewCFunction(ctx, g3_strips, "g3Strips", 5));
+    JS_SetPropertyStr(ctx, o, "g3FieldLayer", JS_NewCFunction(ctx, g3_fieldlayer, "g3FieldLayer", 6));
+    JS_SetPropertyStr(ctx, o, "g3TexOk", JS_NewCFunction(ctx, g3_texok, "g3TexOk", 1));
     JS_SetPropertyStr(ctx, o, "g3HostKeys", JS_NewCFunction(ctx, g3_hostkeys, "g3HostKeys", 1));
     JS_SetPropertyStr(ctx, o, "g3Bottom", JS_NewCFunction(ctx, g3_bottom, "g3Bottom", 1));
     JS_SetPropertyStr(ctx, o, "g3BottomKeys", JS_NewCFunction(ctx, g3_bottomkeys, "g3BottomKeys", 0));

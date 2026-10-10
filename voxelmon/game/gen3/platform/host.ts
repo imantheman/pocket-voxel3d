@@ -15,8 +15,9 @@ export interface G3Host {
   texSub?(id: number, w: number, h: number, rects: Int32Array, n: number, rgba: Uint8Array): boolean;
   /** Make texture `id` from a cooked image in the cache (`path`); its [w, h], or undefined. */
   texFromCache(id: number, path: string): [number, number] | undefined;
-  /** Make texture `id` a w x h render target (a canvas). */
-  canvasNew(id: number, w: number, h: number): void;
+  /** Make texture `id` a w x h render target (a canvas). `opaque`: its
+   *  alpha is never read (the 3DS keeps it in 16 bits, half the VRAM). */
+  canvasNew(id: number, w: number, h: number, opaque?: boolean): void;
   /**
    * Optional: texture `id`'s w x h image read back as RGBA8, exactly the
    * pixels last uploaded to it, or undefined when it cannot be (no such
@@ -43,6 +44,14 @@ export interface G3Host {
    * Only where the pixels are exactly the guest decoder's.
    */
   pngDecode?(png: string): [number, number, Uint8Array] | undefined;
+  /**
+   * Optional (pocket-voxel, VIEW 2D zoomed out: core/display.ts): canvas
+   * `tex` laid under the frame over the top screen's x0..x1, y0..y1 (its
+   * 400x240 units), sampled filtered when `smooth`; tex 0 takes it away.
+   */
+  fieldLayer?(tex: number, x0: number, y0: number, x1: number, y1: number, smooth: boolean): void;
+  /** Optional: whether texture `id` exists host-side (a canvas the host could make). */
+  texOk?(id: number): boolean;
   /** A cache file's bytes as a byte string, or undefined. */
   read(path: string): string | undefined;
   exists(path: string): boolean;
