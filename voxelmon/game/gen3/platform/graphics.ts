@@ -363,18 +363,50 @@ function uploadBatch(host: ReturnType<typeof getHost>, sb: SpriteBatch): void {
     if (q8 && !sb.dirtyAll) nq.set(q8);
     sb.out = q8 = nq;
   }
-  if (sb.dirtyAll || sb.dirty.length * 2 > n) {
-    for (let i = 0; i < n; i++) batchQuad(q8, sb, i);
-  } else {
+  // pocket-voxel: a few changed quads of a batch the host already holds go
+  // alone (G3Host.batchPatch) -- the field's tile layers change a few cells a
+  // frame while walking, and a zoomed-out batch is 1600 quads
+  const tex = sb.texture.id;
+  let patched = false;
+  // (the texture may have changed -- a tile animation flips the field's
+  // atlases -- the host's quads do not depend on which one, only its size,
+  // and a size change marks the whole batch dirty: setTexture)
+  if (host.batchPatch && !sb.dirtyAll && sb.hostTex >= 0 && sb.dirty.length * 2 <= n) {
     const dl = sb.dirty;
-    for (let k = 0; k < dl.length; k++) if (dl[k]! < n) batchQuad(q8, sb, dl[k]!);
+    if (patchIdx.length < dl.length) {
+      patchIdx = new Int32Array(dl.length * 2);
+      patchQ = new Float32Array(dl.length * 24);
+    }
+    let k = 0;
+    for (let j = 0; j < dl.length; j++) {
+      const i = dl[j]!;
+      if (i >= n) continue;
+      batchQuad(q8, sb, i);
+      patchIdx[k] = i;
+      for (let c = 0; c < 12; c++) patchQ[k * 12 + c] = q8[i * 12 + c]!;
+      k++;
+    }
+    patched = host.batchPatch(sb.id, tex, n, patchIdx.subarray(0, k), patchQ.subarray(0, k * 12), k);
+  }
+  if (!patched) {
+    if (sb.dirtyAll || sb.dirty.length * 2 > n) {
+      for (let i = 0; i < n; i++) batchQuad(q8, sb, i);
+    } else {
+      const dl = sb.dirty;
+      for (let k = 0; k < dl.length; k++) if (dl[k]! < n) batchQuad(q8, sb, dl[k]!);
+    }
   }
   sb.dirty.length = 0;
   sb.dirtyAll = false;
-  host.batchUpload!(sb.id, sb.texture.id, q8.subarray(0, n * 12), n);
+  sb.hostTex = tex;
+  if (!patched) host.batchUpload!(sb.id, tex, q8.subarray(0, n * 12), n);
   batchUploaded(sb);
   sb.uploaded = sb.version;
 }
+
+/** uploadBatch's patch scratch: the changed quads' indices and floats. */
+let patchIdx = new Int32Array(64);
+let patchQ = new Float32Array(64 * 12);
 
 /** Entry i of sprite batch sb as 12 floats at q8[i * 12] (uploadBatch). */
 function batchQuad(q8: Float32Array, sb: SpriteBatch, i: number): void {

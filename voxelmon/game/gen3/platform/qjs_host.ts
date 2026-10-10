@@ -47,6 +47,7 @@ if (pngNative.g3Blit) setNativeBlit(pngNative.g3Blit);
 const zoomNative = n as typeof n & {
   g3FieldLayer?(tex: number, x0: number, y0: number, x1: number, y1: number, smooth: number): void;
   g3TexOk?(id: number): number;
+  g3BatchPatch?(id: number, tex: number, total: number, idx: Int32Array, quads: Float32Array, k: number): number;
 };
 
 /** Draw-list timing, summed until read (main.ts's perf lines). */
@@ -115,6 +116,11 @@ class QuickJsG3Host implements G3Host {
     ? (id: number, tex: number, quads: Float32Array, count: number): void => n.g3BatchUpload!(id, tex, quads, count)
     : undefined;
   batchFree = n.g3BatchFree ? (id: number): void => n.g3BatchFree!(id) : undefined;
+  // only a batch's changed quads (g3_shim.c g3BatchPatch), where the binary has it
+  batchPatch = zoomNative.g3BatchPatch
+    ? (id: number, tex: number, total: number, idx: Int32Array, quads: Float32Array, k: number): boolean =>
+      zoomNative.g3BatchPatch!(id, tex, total, idx, quads, k) !== 0
+    : undefined;
   // VIEW 2D zoomed out: the field's canvas under the frame (g3_shim.c g3FieldLayer)
   fieldLayer = zoomNative.g3FieldLayer
     ? (tex: number, x0: number, y0: number, x1: number, y1: number, smooth: boolean): void =>

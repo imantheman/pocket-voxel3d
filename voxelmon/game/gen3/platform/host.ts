@@ -39,6 +39,13 @@ export interface G3Host {
   batchUpload?(id: number, tex: number, quads: Float32Array, count: number): void;
   batchFree?(id: number): void;
   /**
+   * Optional: only the changed quads of a batch the host holds with texture
+   * `tex` -- `k` of them, 12 floats each in `quads`, at the indices in `idx`
+   * -- the batch now `total` quads long. False when the host cannot (the
+   * caller then sends the whole batch with batchUpload).
+   */
+  batchPatch?(id: number, tex: number, total: number, idx: Int32Array, quads: Float32Array, k: number): boolean;
+  /**
    * Optional: a PNG (a byte string) decoded by the host -- [w, h, RGBA8] --
    * or undefined, when the guest's own decoder (pngdecode.ts) is to do it.
    * Only where the pixels are exactly the guest decoder's.

@@ -284,6 +284,24 @@ static JSValue g3_batchupload(JSContext *ctx, JSValueConst t, int c, JSValueCons
     return JS_UNDEFINED;
 }
 
+int g3_batch_patch(int id, int tex, int total, const int32_t *idx, const float *q, int k);
+/* g3BatchPatch(id, tex, total, Int32Array idx, Float32Array quads, k) -> 1 or 0 (g3_render.c) */
+static JSValue g3_batchpatch(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 6) return JS_NewInt32(ctx, 0);
+    int32_t id = 0, tex = 0, total = 0, k = 0;
+    JS_ToInt32(ctx, &id, v[0]);
+    JS_ToInt32(ctx, &tex, v[1]);
+    JS_ToInt32(ctx, &total, v[2]);
+    JS_ToInt32(ctx, &k, v[5]);
+    size_t li = 0, lq = 0;
+    const uint8_t *pi = g3_bytes(ctx, v[3], &li);
+    const uint8_t *pq = g3_bytes(ctx, v[4], &lq);
+    if (k < 0 || (k > 0 && (!pi || !pq)) || ((uintptr_t)pi & 3) || ((uintptr_t)pq & 3)
+        || li / 4 < (size_t)k || lq / 4 < (size_t)k * 12) return JS_NewInt32(ctx, 0);
+    return JS_NewInt32(ctx, g3_batch_patch((int)id, (int)tex, (int)total, (const int32_t *)pi, (const float *)pq, (int)k));
+}
+
 static JSValue g3_batchfree(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t;
     int32_t id = 0;
@@ -1032,6 +1050,7 @@ int qjs_register_g3(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "g3Draw", JS_NewCFunction(ctx, g3_drawlist, "g3Draw", 1));
     JS_SetPropertyStr(ctx, o, "g3BatchUpload", JS_NewCFunction(ctx, g3_batchupload, "g3BatchUpload", 4));
     JS_SetPropertyStr(ctx, o, "g3BatchFree", JS_NewCFunction(ctx, g3_batchfree, "g3BatchFree", 1));
+    JS_SetPropertyStr(ctx, o, "g3BatchPatch", JS_NewCFunction(ctx, g3_batchpatch, "g3BatchPatch", 6));
     JS_SetPropertyStr(ctx, o, "g3Read", JS_NewCFunction(ctx, g3_read, "g3Read", 1));
     JS_SetPropertyStr(ctx, o, "g3ReadBuf", JS_NewCFunction(ctx, g3_readbuf, "g3ReadBuf", 1));
     JS_SetPropertyStr(ctx, o, "g3Exists", JS_NewCFunction(ctx, g3_exists_js, "g3Exists", 1));

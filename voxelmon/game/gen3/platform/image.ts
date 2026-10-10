@@ -558,6 +558,9 @@ export class SpriteBatch {
   out: Float32Array | null = null;
   dirty: number[] = [];
   dirtyAll = true;
+  /** pocket-voxel: the texture id the host's copy was last sent with
+   *  (graphics.ts uploadBatch's patch), -1 when the host has none. */
+  hostTex = -1;
   constructor(texture: Image, readonly capacity = 1000) { this.texture = texture; }
   /** add(quad, x, y[, r, sx, sy]) -> 1-based index */
   add(quad: Quad | number, x?: number, y?: number, r = 0, sx = 1, sy?: number): number {
@@ -601,6 +604,7 @@ export class SpriteBatch {
     if (hasHost()) batchFreeLater.add(this.id);
     this.watched = false;
     this.uploaded = -1;
+    this.hostTex = -1;
   }
   type(): string { return "SpriteBatch"; }
 }

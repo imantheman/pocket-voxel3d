@@ -618,7 +618,7 @@ void g3_batch_upload(int id, int tex, const float *q, int n) {
        next draw of each copy; more quads than they hold, made anew */
     BatchVbo *v = b->vbo;
     if (v) {
-        if (n > v->cap || b->tex != tex) {
+        if (n > v->cap) { /* (the uvs depend on the texture's size only: checked at the draw) */
             vbo_retire(v);
             b->vbo = NULL;
         } else {
@@ -639,6 +639,43 @@ void g3_batch_upload(int id, int tex, const float *q, int n) {
     if (n) memcpy(b->q, q, (size_t)n * 12 * sizeof(float));
     b->n = n;
     b->tex = tex;
+}
+
+/* A batch's changed quads only (graphics.ts uploadBatch, where the host has
+   the batch with this texture): `k` quads of 12 floats at the indices in
+   `idx`, the batch now `total` quads long (the new ones are among those
+   given), drawn from now on with texture `tex` (a tile animation flips the
+   field's atlases; the kept vertices depend only on its size, checked at
+   the draw). 0 when it cannot be -- no such batch, memory --
+   and the guest then uploads the whole batch. The field's tile layers
+   change a few cells a frame while walking: a zoomed-out batch of 1600
+   quads was copied and compared whole for each. */
+int g3_batch_patch(int id, int tex, int total, const int32_t *idx, const float *q, int k) {
+    if (id <= 0 || id >= nbatches || total < 0 || k < 0) return 0;
+    G3Batch *b = &batches[id];
+    if (!b->q) return 0;
+    for (int i = 0; i < k; i++) if (idx[i] < 0 || idx[i] >= total) return 0;
+    if (total * 12 > b->cap) {
+        int cap = total * 12 + total * 3; /* a quarter more */
+        float *nq = (float *)realloc(b->q, (size_t)cap * sizeof(float));
+        if (!nq) return 0;
+        b->q = nq;
+        batch_bytes += (uint32_t)(cap - b->cap) * 4;
+        b->cap = cap;
+    }
+    BatchVbo *v = b->vbo;
+    if (v && total > v->cap) {
+        vbo_retire(v);
+        b->vbo = v = NULL;
+    }
+    for (int i = 0; i < k; i++) {
+        int j = idx[i];
+        memcpy(b->q + j * 12, q + i * 12, 12 * sizeof(float));
+        if (v) for (int c = 0; c < 2; c++) if (!v->dirty[c][j]) { v->dirty[c][j] = 1; v->ndirty[c]++; }
+    }
+    b->n = total;
+    b->tex = tex;
+    return 1;
 }
 
 void g3_batch_free(int id) {
