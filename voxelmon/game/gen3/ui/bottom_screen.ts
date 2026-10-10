@@ -41,11 +41,11 @@
 // squares when only the head moved. A still screen costs a look a frame.
 // The art comes from the chrome modules the game itself uses (PartyChrome,
 // BagChrome, Gpu, the font, the frames), so it is the same textures the
-// game's screens load, not copies, and what a page alone keeps up in linear
-// memory is given back when it is not needed: the BAG's and the card's
-// pictures as soon as the page is drawn, the Town Map's frame too (its map
-// stays for the head's redraws), the party menu's panel and plates when
-// the POKéMON page closes (releaseArt).
+// game's screens load, not copies, and what a page alone keeps up is given
+// back when it is not needed: the textures of the BAG's, the Town Map's and
+// the card's pictures as soon as the page is drawn, the party menu's panel
+// and plates when the POKéMON page closes; the bag's and the Town Map's
+// images themselves when their pages close (releaseArt).
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { format, tonumber, tostring, truthy } from "../../../import/gen3/lua.ts";
@@ -95,6 +95,9 @@ const TAB_W = SW / TAB_IDS.length;
 const BAR = [0 / 255, 123 / 255, 197 / 255];
 const BAR_DARK = [0 / 255, 82 / 255, 115 / 255];
 
+// A selected tab's ground: the selected party slot's warm orange.
+const SELECT_ORANGE = [1, 213 / 255, 156 / 255];
+
 // The party menu's panel (pokemon/party/bg.rgba): its stripes, two rows.
 const PARTY_STRIPE_A = [74 / 255, 173 / 255, 165 / 255];
 const PARTY_STRIPE_B = [58 / 255, 140 / 255, 140 / 255];
@@ -105,7 +108,7 @@ const ICON_BALL = 4, ICON_POTION = 13, ICON_TOWN_MAP = 361;
 // ------------------------------------------------------------ host
 
 /** The 3DS host's natives (g3_shim.c); none on the desktop. */
-function nat(): { g3Bottom?(id: number): void; g3BottomKeys?(): number } {
+function nat(): { g3Bottom?(id: number): void; g3BottomKeys?(): number; g3ListsRun?(): number } {
   return (globalThis as { voxel?: object }).voxel ?? {};
 }
 
@@ -120,9 +123,21 @@ function C(): { white: Colors; dark: Colors; blue: Colors } {
   });
 }
 
-function rect(c: number[], x: number, y: number, w: number, h: number): void {
-  G.setColor(c[0]!, c[1]!, c[2]!, 1);
-  G.rectangle("fill", x, y, w, h);
+/**
+ * A filled box in colour `c` (alpha `a`): a white pixel's quad stretched over
+ * it, not G.rectangle's flat triangles -- on the console those drawn into
+ * this canvas while the game was at its title and intro never showed (the
+ * same box as a textured quad does), so every box here is a quad.
+ */
+let white: Image | undefined;
+function rect(c: number[], x: number, y: number, w: number, h: number, a = 1): void {
+  if (!white) {
+    const d = newImageData(1, 1);
+    d.setPixel(0, 0, 1, 1, 1, 1);
+    white = G.newImage(d);
+  }
+  G.setColor(c[0]!, c[1]!, c[2]!, a);
+  G.draw(white, x, y, 0, w, h);
   G.setColor(1, 1, 1, 1);
 }
 
@@ -303,6 +318,14 @@ class Bottom {
   private wait = 0;
   /** Shown frames since the game was last under way (frame1). */
   private inGameFrames = 0;
+  /** The frame a new canvas is drawn whole again (frame1). */
+  private settleAt = -1;
+  /** The host's lists drawn when this frame began (g3ListsRun), and when a
+   *  paint last went into a list (-1: none since the last check); paints
+   *  found lost (frame1). */
+  private listsRun = 0;
+  private paintedAt = -1;
+  lost = 0;
   private dead = false;
   private named = 0;
   /** The finger: where it went down (null while up). */
@@ -363,7 +386,7 @@ class Bottom {
 
   setTab(t: TabId): void {
     if (t === this.tab) return;
-    releaseArt(this.tab);
+    releaseArt(this.tab, true);
     this.tab = t;
     if (t !== "card") this.card = null; // its pictures go with it
     this.cardC = null;
@@ -424,16 +447,44 @@ class Bottom {
     if ((nat().g3BottomKeys?.() ?? 0) & 1) {
       this.setTab(TAB_IDS[(TAB_IDS.indexOf(this.tab) + 1) % TAB_IDS.length]!);
     }
-    if (!this.canvas) this.canvas = G.newCanvas(SW, SH);
+    // A new canvas (or one whose texture went, made again) is drawn into from
+    // the next frame on, and drawn whole again half a second later: drawing
+    // in a new canvas's first frames did not always reach it on the console
+    // (Citra too) -- the title's screen came out black, a first page without
+    // its tab frames -- while the same drawing a few frames on always did.
+    if (!this.canvas) {
+      this.canvas = G.newCanvas(SW, SH);
+      this.full = true;
+      this.settleAt = this.ticks + 30;
+      return;
+    }
     const c = this.canvas;
-    // a canvas whose texture went is made again empty on its next draw: all of it again
-    if ((c as any).freed) this.full = true;
+    if ((c as any).freed) {
+      c.sync();
+      this.full = true;
+      this.settleAt = this.ticks + 30;
+      return;
+    }
+    // The host draws only the newest draw list it was handed: if no frame
+    // was drawn since the last paint (the list it went in has not been
+    // drawn, and this frame's replaces it), all of it is drawn again now.
+    const ran = nat().g3ListsRun?.();
+    if (ran !== undefined) {
+      if (this.paintedAt >= 0 && ran <= this.paintedAt) {
+        this.full = true;
+        this.lost++;
+        if (this.lost <= 3) console.log(`[pv] g3 bottom: a paint's list was not drawn (lists ${ran}); all again`);
+      }
+      this.paintedAt = -1;
+      this.listsRun = ran;
+    }
     const s = session();
     const inGame = !!(game && game.phase === "field" && s);
     // a game just under way: everything drawn again a second in, too (the
     // first page can come before the game has its window frames and fonts)
     if (inGame && ++this.inGameFrames === 60) this.full = true;
     if (!inGame) this.inGameFrames = 0;
+    if (this.ticks === this.settleAt) this.full = true;
     if (!this.full && ++this.wait < CHECK_EVERY) {
       // between looks, one party slot a frame (a battle's HP shows within
       // six frames, and a look's cost is spread rather than paid at once)
@@ -501,14 +552,16 @@ class Bottom {
         }
         this.mapDrawn = [region, x, y, name];
         this.redraws++;
+        releaseArt("map", false);
         return;
       }
       this.pageSig = "map";
       this.mapDrawn = [region, x, y, name];
       this.paint(() => this.drawMap(s, null), pageBox);
       this.redraws++;
-      // the head's own redraws reach only the map: the frame goes back now
-      release(Gpu.images["frame_normal"]);
+      // the Town Map's pictures go back at once (the head's moves make the
+      // map's texture again for their two squares)
+      releaseArt("map", false);
       return;
     }
     const ps = this.pageSignature(s);
@@ -521,7 +574,7 @@ class Bottom {
     this.redraws++;
     // nothing redraws a part of these pages: their pictures go back at once
     // (made again, from the pixels their images keep, at the next draw)
-    if (this.tab === "bag") releaseArt("bag");
+    if (this.tab === "bag") releaseArt("bag", false);
     else if (this.card) for (const img of [this.card.img, this.card.pic, this.card.badges, this.card.star]) release(img);
   }
 
@@ -550,6 +603,7 @@ class Bottom {
   private paint(fn: () => void, scissor: [number, number, number, number]): void {
     const c = this.canvas!;
     c.sync();
+    this.paintedAt = this.listsRun;
     G.push("all");
     G.setCanvas(c);
     G.origin();
@@ -635,9 +689,7 @@ class Bottom {
   /** Before a game is under way (the title, the intro): the party panel's stripes. */
   private drawIdle(): void {
     rect(PARTY_STRIPE_A, 0, 0, SW, SH);
-    G.setColor(PARTY_STRIPE_B[0]!, PARTY_STRIPE_B[1]!, PARTY_STRIPE_B[2]!, 1);
-    for (let y = 1; y < SH; y += 2) G.rectangle("fill", 0, y, SW, 1);
-    G.setColor(1, 1, 1, 1);
+    for (let y = 1; y < SH; y += 2) rect(PARTY_STRIPE_B, 0, y, SW, 1);
   }
 
   /** The header: the location, the play time. */
@@ -663,9 +715,7 @@ class Bottom {
       const cx = tx * 8, cy = ty * 8;
       if (on) {
         // the selection: the selected party slot's warm orange under the words
-        G.setColor(1, 213 / 255, 156 / 255, 1);
-        G.rectangle("fill", cx, cy, 64, 24);
-        G.setColor(1, 1, 1, 1);
+        rect(SELECT_ORANGE, cx, cy, 64, 24);
       }
       this.drawTabIcon(id, s, cx + 1, cy);
       // the words in the small face (the party menu's), centred right of the icon
@@ -889,9 +939,7 @@ class Bottom {
     const name = this.location(s);
     if (name && (!clip || hit(clip, [OX + 24, OY + 16, OX + 144, OY + 32]))) {
       // Lua: region_map.lua:524 (updateMapsecNameBox), region_map.lua:1701 (drawBg3)
-      G.setColor(0, 0, 0, 6 / 16);
-      G.rectangle("fill", 24, 16, 120, 16);
-      G.setColor(1, 1, 1, 1);
+      rect([0, 0, 0], 24, 16, 120, 16, 6 / 16);
       FrlgFont.draw(name, 26, 18, { colors: { fg: Gpu.topBarColor(1), shadow: Gpu.topBarColor(2), bg: seq(0, 0, 0, 0) as number[] } });
     }
   }
@@ -1017,6 +1065,9 @@ function hpLevel(mon: any): number {
   return 4;
 }
 
+// party_menu.lua hp_bar's colours
+const HP_GREEN = [0.25, 0.85, 0.25], HP_YELLOW = [0.95, 0.85, 0.15], HP_RED = [0.95, 0.2, 0.15];
+
 // Lua: party_menu.lua:2481 (hp_bar)
 function hpBar(hpIn: number, maxHpIn: number, px: number, py: number, width: number): void {
   let maxHp = maxHpIn;
@@ -1024,11 +1075,7 @@ function hpBar(hpIn: number, maxHpIn: number, px: number, py: number, width: num
   const ratio = Math.max(0, Math.min(1, hpIn / maxHp));
   const w = Math.floor(width * ratio);
   if (w <= 0) return;
-  if (ratio > 0.5) G.setColor(0.25, 0.85, 0.25, 1);
-  else if (ratio > 0.2) G.setColor(0.95, 0.85, 0.15, 1);
-  else G.setColor(0.95, 0.2, 0.15, 1);
-  G.rectangle("fill", px, py, w, 3);
-  G.setColor(1, 1, 1, 1);
+  rect(ratio > 0.5 ? HP_GREEN : ratio > 0.2 ? HP_YELLOW : HP_RED, px, py, w, 3);
 }
 
 /** An image's host texture given back (the image keeps its pixels: drawn
@@ -1038,26 +1085,39 @@ function release(img: Image | null | undefined | false): void {
 }
 
 /**
- * Linear memory: what a page alone keeps up, given back when the page closes
- * -- the party menu's plates and panel, the bag's, the Town Map's. They are
- * the game's own chrome modules' images (shared with its screens, which keep
- * them for good once opened), so this gives back what the game would have
- * kept too; whichever draws one next makes its texture again.
+ * Memory: what a page alone keeps up, given back when it is not needed --
+ * the party menu's plates and panel, the bag's, the Town Map's. They are the
+ * game's own chrome modules' images (shared with its screens), so this gives
+ * back what the game would have kept too. `release` gives their textures back
+ * (linear memory; whichever draws one next makes it again from the pixels
+ * the image keeps); `drop` also lets the module forget the bag's and the
+ * Town Map's images (their pixels, on the app heap: read from the cache
+ * again by whichever draws them next), as the page closes.
  */
-function releaseArt(tab: TabId): void {
+function releaseArt(tab: TabId, drop: boolean): void {
   if (tab === "party") {
     const pc = PartyChrome;
     for (const e of [pc._bg, pc._slotMain, pc._slotWide, pc._slotMainSel, pc._slotWideSel, pc._slotEmpty]) release(e ? e.image : null);
     release(pc._balls ? pc._balls.image : null);
     release(pc._status ? pc._status.image : null);
   } else if (tab === "bag") {
-    release(BagChrome._bg);
-    release(BagChrome._images["bg_female"] || null);
-    release(BagChrome._bagMale);
-    release(BagChrome._bagFemale);
+    const bc = BagChrome;
+    release(bc._bg);
+    release(bc._images["bg_female"] || null);
+    release(bc._bagMale);
+    release(bc._bagFemale);
+    if (drop) {
+      bc._bg = undefined;
+      delete bc._images["bg_female"];
+      bc._bagMale = undefined;
+      bc._bagFemale = undefined;
+      bc._bagQuads = {};
+    }
   } else if (tab === "map") {
-    release(Gpu.images["frame_normal"]);
-    for (const k of Object.keys(REGION_IMAGES)) release(Gpu.images[REGION_IMAGES[Number(k)]!]);
+    for (const n of ["frame_normal", ...Object.values(REGION_IMAGES)]) {
+      release(Gpu.images[n]);
+      if (drop) delete Gpu.images[n];
+    }
   }
 }
 
