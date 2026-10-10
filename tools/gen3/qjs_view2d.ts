@@ -10,6 +10,8 @@ import { G } from "../../voxelmon/game/gen3/platform/graphics.ts";
 import { Game3 } from "../../voxelmon/game/gen3/core/Game3.ts";
 import { Input } from "../../voxelmon/game/gen3/shared/core/Input.ts";
 import { BenchView2d } from "../../voxelmon/game/gen3/platform/bench_view2d.ts";
+import { Display } from "../../voxelmon/game/gen3/core/display.ts";
+import { zoom2dSpec } from "../../voxelmon/game/gen3/platform/zoom2d.ts";
 
 declare const print: (s: string) => void;
 declare const nowUs: () => number;
@@ -66,6 +68,8 @@ while (!bench.done) {
   const tb = nowUs();
   if (SPIKE && hasProf && PART === "update") profFrameEnd!((tb - ta) / 1000 > SPIKE);
   if (SPIKE && hasProf && PART === "draw") profFrameBegin!();
+  // (VIEW 2D's zoom, as platform/game3_world.ts begin sets it on the 3DS)
+  (Display as any).zoom2d = zoom2dSpec(game.options);
   G.beginFrame();
   game.draw();
   G.endFrame();

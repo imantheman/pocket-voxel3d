@@ -139,6 +139,8 @@ export interface FieldViewModule {
   _nativeCamX: number | undefined;
   _nativeCamY: number | undefined;
   _cellPreparationRoute: string | undefined;
+  /** pocket-voxel: the host's entry says the frame's tick took long (main.ts): drawNativeTiles' ring waits. */
+  frameHeavy: boolean;
   _loggedNative: boolean;
   _loggedNativeFallback: boolean;
   _voidMapDef: any;
@@ -248,6 +250,7 @@ export const FieldView = {
   _nativeOverPair: undefined,
   _loggedNative: false,
   _loggedNativeFallback: false,
+  frameHeavy: false,
 } as unknown as FieldViewModule;
 
 // pokefirered/src/field_screen_effect.c:18
@@ -654,7 +657,9 @@ function collectNeighborActors(actors: LuaTable, baseIndex: number, hostMapId: a
             a.facing = lor(eo.facing, "down");
             a.walkPhase = lor(Objects && Objects.walkPhase && Objects.walkPhase(eo), 0);
             a.stepFlip = truthy(eo.stepFlip);
-            a.sprite = lor(eo.sprite, spriteNameForObj(lor(eo.def, {})));
+            // (pocket-voxel: the sprite name worked out only when the object has none)
+            const es = eo.sprite;
+            a.sprite = es != null && es !== false ? es : spriteNameForObj(lor(eo.def, NO_DEF));
             a.graphicsId = lor(eo.graphicsId,
               eo.def && lor(eo.def.graphicsId, eo.def.graphics));
             a.alpha = lor(Objects && Objects.fadeAlpha && Objects.fadeAlpha(eo), undefined);
@@ -784,6 +789,8 @@ function applyDrawOrder(actors: LuaTable, underActors?: LuaTable, overActors?: L
   const over: LuaTable = overActors ?? [null];
   clearSeq(under);
   clearSeq(over);
+  // (pocket-voxel: both just cleared and only appended to below: counted)
+  let nu = len(under), no = len(over);
   for (let i = 1; actors[i] != null; i++) {
     const a = actors[i];
     const obj = a.eventObject;
@@ -804,9 +811,9 @@ function applyDrawOrder(actors: LuaTable, underActors?: LuaTable, overActors?: L
       a.subpriority = base + y + 1;
     }
     if (lor(a.priority, 2) < 2) {
-      over[len(over) + 1] = a;
+      over[++no] = a;
     } else {
-      under[len(under) + 1] = a;
+      under[++nu] = a;
     }
   }
   sort(under, sortActors);
@@ -898,6 +905,9 @@ function collectGame3Actors(game: any, mapDef: any, camX: number, camY: number, 
 
   if (truthy(hasObjects)) {
     const list = Objects.forDraw();
+    // (pocket-voxel: the sequence was just cleared and only this loop appends
+    // to it: its length counted here rather than walked for each append)
+    let na = len(actors);
     for (let oi = 1; list[oi] != null; oi++) {
       const eo = list[oi];
       if (cull) {
@@ -939,7 +949,7 @@ function collectGame3Actors(game: any, mapDef: any, camX: number, camY: number, 
       a.alpha = Objects.fadeAlpha(eo);
       a.priority = undefined;
       a.subpriority = undefined;
-      actors[len(actors) + 1] = a;
+      actors[++na] = a;
     }
     collectNeighborActors(actors, 10000, currentMapId(game),
       resolveMapDef(game, currentMapId(game)), camX, camY);
@@ -1236,6 +1246,25 @@ function acquireNativeSprite(store: BatchStore, free: Record<string, LuaTable>, 
   return { key, index, quad };
 }
 
+/** pocket-voxel: acquireNativeSprite's common case made in line -- the pair's
+ *  batch there with this texture (ensure_batch's no-op) and a free slot to
+ *  reuse (lt.ts remove of its last) -- else acquireNativeSprite itself. */
+function acquireFast(store: BatchStore, free: Record<string, LuaTable>, key: string, texture: Image,
+  capacity: number, quad: Quad, x: number, y: number, layer: string): NativeSprite | undefined {
+  const batch = store[key];
+  const available = free[key];
+  if (batch && batch.texture === texture && available) {
+    const n = available.length - 1;
+    if (n > 0 && available[n] != null) {
+      const index: number = available[n];
+      available.length = n;
+      batch.set(index, quad, x, y);
+      return { key, index, quad };
+    }
+  }
+  return acquireNativeSprite(store, free, key, texture, capacity, quad, x, y, layer);
+}
+
 // Lua: field_view.lua:904
 function releaseNativeSprite(store: BatchStore, free: Record<string, LuaTable>, sprite: NativeSprite | undefined): boolean {
   if (!sprite) return true;
@@ -1299,9 +1328,18 @@ let nativePairCount: Record<string, number> = {};
 const nativeDropped: number[] = [];
 /** pocket-voxel: cells drawNativeTiles keeps round its window, off the screen. */
 const NATIVE_RING = 1;
-/** pocket-voxel: the ring's cells sampled a frame (at least; more while many
- *  wait) and let go a frame. */
+/** pocket-voxel: the ring's cells sampled a frame (at least: ringPace) and
+ *  let go a frame. */
 const RING_FILL_MIN = 3;
+/** pocket-voxel: frames a newly queued strip of the ring is spread over --
+ *  less than a running step's eight, so it is there before the next
+ *  crossing; the rate is set as it is queued (ringPace), so a zoomed-out
+ *  view's long strip costs the same each frame rather than most at once. */
+const RING_SPREAD = 6;
+let ringRate = RING_FILL_MIN;
+function ringPace(): void {
+  ringRate = Math.max(RING_FILL_MIN, Math.ceil(((ringFill.length - ringFillAt) >> 1) / RING_SPREAD));
+}
 const RING_RELEASE = 6;
 /** pocket-voxel: the ring's queues, x then y, read from ...At on. */
 const ringFill: number[] = [];
@@ -1546,6 +1584,7 @@ function drawNativeTiles(mapDef: any, camX: number, camY: number, canvasW: numbe
   if (FieldView._nativeDirty && FieldView._nativeLayout === layout) CellPlan.invalidate();
   const preparedCells = CellPlan.get(mapDef, cx0, cy0, cols, rows, voidMode);
   FieldView._cellPreparationRoute = preparedCells ? "worker" : "sync";
+  const readyMemo: Record<string, boolean> = {};
   const addCell = (wx: number, wy: number): NativeCell => {
     let mid: any, srcPair: any, isVoid: any;
     let skip: any = false;
@@ -1568,24 +1607,30 @@ function drawNativeTiles(mapDef: any, camX: number, camY: number, canvasW: numbe
         mid = fill; srcPair = pair;
       }
     }
-    if (!NativeTileset.ready(srcPair)) srcPair = pair;
+    // (pocket-voxel: ready() asked once a pair a draw, and slotFor / quad /
+    // overQuad's lookups made here where their cache has the answer -- the
+    // same answers, a cell sampled for a fraction of the calls)
+    let rdy = readyMemo[srcPair];
+    if (rdy === undefined) { rdy = NativeTileset.ready(srcPair); readyMemo[srcPair] = rdy; }
+    if (!rdy) srcPair = pair;
     const info: NativeCell = { pair: srcPair, draw: !truthy(skip) };
     if (!truthy(skip)) {
       const key = (truthy(isVoid) && voidMode === "map") ? voidKey(srcPair) : srcPair;
       info.key = key;
       const ts = nativeAtlas(NativeTileset, srcPair);
       if (ts && ts.image) {
-        const slot = NativeTileset.slotFor(ts, mid);
-        const q = NativeTileset.quad(ts, slot);
+        const m2s = ts.midToSlot;
+        const slot: number = m2s ? (m2s[mid] ?? m2s[0] ?? 0) : NativeTileset.slotFor(ts, mid);
+        const q = (ts.quads && ts.quads[slot]) || NativeTileset.quad(ts, slot);
         if (q) {
-          info.under = acquireNativeSprite(uStore,
+          info.under = acquireFast(uStore,
             FieldView._nativeFreeUnder!, key, ts.image, capacity, q,
             (wx - baseBx) * CELL, (wy - baseBy) * CELL, "under");
         }
         if (ts.layered && ts.overImage) {
-          const oq = NativeTileset.overQuad(ts, slot);
+          const oq = (ts.overQuads && ts.overQuads[slot]) || NativeTileset.overQuad(ts, slot);
           if (oq) {
-            info.over = acquireNativeSprite(oStore,
+            info.over = acquireFast(oStore,
               FieldView._nativeFreeOver!, key, ts.overImage, capacity, oq,
               (wx - baseBx) * CELL, (wy - baseBy) * CELL, "over");
           }
@@ -1704,6 +1749,7 @@ function drawNativeTiles(mapDef: any, camX: number, camY: number, canvasW: numbe
     }
     ringFill.length = 0; ringFillAt = 0;
     eachDiff(cx0 - R, cy0 - R, kw, kh, cx0, cy0, cols, rows, pushFill);
+    ringPace();
     return true;
   };
   // what a move brought into the window and is not there yet (the ring had
@@ -1715,6 +1761,7 @@ function drawNativeTiles(mapDef: any, camX: number, camY: number, canvasW: numbe
     if (moved) {
       if (!eachDiff(cx0, cy0, cols, rows, oldX, oldY, cols, rows, (wx, wy) => fillCell(rowAt(wy), wx, wy))) return false;
       eachDiff(cx0 - R, cy0 - R, kw, kh, oldX - R, oldY - R, kw, kh, pushFill);
+      ringPace();
     }
     for (let i = 0; i < dropped.length; i += 2) {
       const wx = dropped[i]!, wy = dropped[i + 1]!;
@@ -1743,8 +1790,7 @@ function drawNativeTiles(mapDef: any, camX: number, camY: number, canvasW: numbe
       if (emptyObj(row)) delete visibleCells[wy];
     }
     if (ringFreeAt >= ringFree.length) { ringFree.length = 0; ringFreeAt = 0; }
-    const left = (ringFill.length - ringFillAt) >> 1;
-    const budget = Math.max(RING_FILL_MIN, Math.ceil(left / 4));
+    const budget = ringRate;
     for (let n = 0; n < budget && ringFillAt < ringFill.length; ringFillAt += 2) {
       const wx = ringFill[ringFillAt]!, wy = ringFill[ringFillAt + 1]!;
       if (!inRing(wx, wy)) continue;
@@ -1776,8 +1822,11 @@ function drawNativeTiles(mapDef: any, camX: number, camY: number, canvasW: numbe
       nativeFillDone = fill();
     }
   }
-  // (not in a crossing frame, nor a reset's: the ring waits a frame)
-  if (!reset && !moved && (ringFillAt < ringFill.length || ringFreeAt < ringFree.length) && !ringStep()) {
+  // (not in a crossing frame, nor a reset's, nor one whose tick was heavy
+  // -- a step's end, FieldView.frameHeavy: the ring waits a frame, off the
+  // screen, and has the frames to the next crossing to catch up)
+  if (!reset && !moved && !FieldView.frameHeavy
+    && (ringFillAt < ringFill.length || ringFreeAt < ringFree.length) && !ringStep()) {
     // (as a fill that did not complete, above)
     FieldView._nativeSwap = false;
     reset = true;

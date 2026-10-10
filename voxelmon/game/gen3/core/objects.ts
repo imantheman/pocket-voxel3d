@@ -960,10 +960,13 @@ const vrecs: Record<string | number, EO> = {};
 // actors, the reflections, the sprite warm-up.
 let drawFrozen = false;
 let drawBuilt = false;
+/** Bumped by each bracket: a pool's list built under it (poolForDraw) is its. */
+let drawStamp = 0;
 /** FieldView.draw's bracket: true at its start, false at its end. */
 function freezeForDraw(on: boolean): void {
   drawFrozen = on;
   drawBuilt = false;
+  drawStamp++;
 }
 
 // Lua: objects.lua:840
@@ -2326,7 +2329,12 @@ function tickPool(pool: any, game: any, ctx?: any): void {
 
 // Lua: objects.lua:2054
 function poolForDraw(pool: any): LuaTable {
+  // (pocket-voxel: inside FieldView.draw's bracket, a neighbour's list is
+  // built once for its callers -- the actors, the reflections, the warm-up --
+  // as forDraw's is; they only read it)
+  if (drawFrozen && pool !== null && typeof pool === "object" && pool._drawStamp === drawStamp) return pool._drawList;
   const list: LuaTable = [null];
+  if (drawFrozen && pool !== null && typeof pool === "object") { pool._drawStamp = drawStamp; pool._drawList = list; }
   if (pool === null || typeof pool !== "object") return list;
   for (const [, lid] of ipairs<number>(pool.order ?? [null])) {
     const eo = pool.byId[lid];

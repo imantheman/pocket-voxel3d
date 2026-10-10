@@ -407,9 +407,14 @@ export const Map = {
       for (const [pair] of pairs(wantedPairs)) Native.prefetch(pair, priorities[pair] ?? 1);
       const Ow = OwSprites;
       const Obj = Objects;
+      // (pocket-voxel: the scan's loops index their sequences rather than
+      // run ipairs's generator -- every element a resumption, a scan a
+      // crossing and every fourth tick; same order, same stop at a nil)
+      const world: LuaTable = Map.world ?? [null];
       if (Obj && Obj.prefetchMap) {
         const wanted: Record<string, boolean> = {};
-        for (const [, entry] of ipairs<WorldEntry>(Map.world ?? [null])) {
+        for (let wi = 1; world[wi] != null; wi++) {
+          const entry: WorldEntry = world[wi];
           if (Map.warmNear(entry, x0, y0, x1, y1)) {
             wanted[entry.id] = true;
             Obj.prefetchMap(entry.id, entry.def, entry.id === Map.current ? 0 : 1);
@@ -431,11 +436,14 @@ export const Map = {
             }
           }
         };
-        for (const [, eo] of ipairs<any>((Obj && Obj.forDraw && Obj.forDraw()) ?? [null])) actor(eo);
+        const own: LuaTable = (Obj && Obj.forDraw && Obj.forDraw()) ?? [null];
+        for (let i = 1; own[i] != null; i++) actor(own[i]);
         // package.loaded["src.core.game3.ghosts"]
-        for (const [, entry] of ipairs<WorldEntry>(Map.world ?? [null])) {
+        for (let wi = 1; world[wi] != null; wi++) {
+          const entry: WorldEntry = world[wi];
           if (Map.warmNear(entry, x0, y0, x1, y1)) {
-            for (const [, eo] of ipairs<any>((Ghosts && Ghosts.forDraw(entry.id)) ?? [null])) actor(eo, entry.ox, entry.oy);
+            const live: LuaTable = (Ghosts && Ghosts.forDraw(entry.id)) ?? [null];
+            for (let i = 1; live[i] != null; i++) actor(live[i], entry.ox, entry.oy);
           }
         }
         const gid = Ow.playerGraphicsId(game);

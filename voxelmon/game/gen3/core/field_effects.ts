@@ -139,21 +139,22 @@ function getFrlgModules(): any {
 /** pocket-voxel: whether drawFrlgReflection could draw obj (this map's): its
  *  reflection sheet has frames and the ground under it reflects -- the tests
  *  drawFrlgReflection makes, in its order of side effects. */
-function reflectsHere(obj: any, graphicsId: any, behaviorAt: (x: number, y: number) => any, Ow: any): boolean {
+function reflectsHere(obj: any, graphicsId: any, behaviorAt: (x: number, y: number) => any, Ow: any,
+  ox = 0, oy = 0): boolean {
   const spr = Ow.getReflectionDraw ? Ow.getReflectionDraw(graphicsId) : null;
   if (!(spr && spr.quads)) return false;
-  const cx = truthy(obj.moving) && obj.targetX != null ? obj.targetX : obj.cellX;
-  const cy = truthy(obj.moving) && obj.targetY != null ? obj.targetY : obj.cellY;
+  const cx = (truthy(obj.moving) && obj.targetX != null ? obj.targetX : obj.cellX) + ox;
+  const cy = (truthy(obj.moving) && obj.targetY != null ? obj.targetY : obj.cellY) + oy;
   // (the ground's answer kept on the person while nothing it reads can have
   // changed: the cells, the sheet, the map and its neighbours, any layout
   // write -- a dozen behaviour reads a person a frame otherwise)
   const C: any = CollisionMod, M: any = MapMod;
   const m = obj._reflMemo;
-  if (m && m.cx === cx && m.cy === cy && m.px === obj.cellX && m.py === obj.cellY && m.spr === spr
+  if (m && m.cx === cx && m.cy === cy && m.px === obj.cellX + ox && m.py === obj.cellY + oy && m.spr === spr
     && m.def === C._mapDef && m.nb === M.neighborList && m.w === LayoutNative.writes && m.at === behaviorAt) return m.v;
-  const v = frlgReflectionType(cx, cy, obj.cellX, obj.cellY, spr.width, spr.height, behaviorAt);
+  const v = frlgReflectionType(cx, cy, obj.cellX + ox, obj.cellY + oy, spr.width, spr.height, behaviorAt);
   const k = m ?? (obj._reflMemo = {});
-  k.cx = cx; k.cy = cy; k.px = obj.cellX; k.py = obj.cellY; k.spr = spr;
+  k.cx = cx; k.cy = cy; k.px = obj.cellX + ox; k.py = obj.cellY + oy; k.spr = spr;
   k.def = C._mapDef; k.nb = M.neighborList; k.w = LayoutNative.writes; k.at = behaviorAt; k.v = v;
   return v;
 }
@@ -210,7 +211,11 @@ function drawFrlgReflections(camX: number, camY: number): void {
     const vh = (FV && FV._viewH) || D.H;
     const x0 = camX - FRLG_REFL_CULL, y0 = camY - FRLG_REFL_CULL;
     const x1 = camX + vw + FRLG_REFL_CULL, y1 = camY + vh + FRLG_REFL_CULL;
-    for (let i = 1; i <= len(world); i++) {
+    // (pocket-voxel: the lengths read once, not each turn -- nothing here
+    // changes them -- and, as for this map's people above, a neighbour's
+    // person whose reflection cannot reach the screen passed over)
+    const nw = len(world);
+    for (let i = 1; i <= nw; i++) {
       const entry = world[i];
       const ox = entry.ox ?? 0, oy = entry.oy ?? 0;
       const L = entry.def ? entry.def.midLayout : null;
@@ -220,11 +225,16 @@ function drawFrlgReflections(camX: number, camY: number): void {
         && ey + (L.height ?? 0) * CELL > y0 && ey < y1) {
         const live = Ghosts.forDraw(entry.id);
         if (live) {
-          for (let j = 1; j <= len(live); j++) {
+          const nl = len(live);
+          for (let j = 1; j <= nl; j++) {
             const obj = live[j];
+            const gy = (obj.py ?? (truthy(obj.moving) && obj.targetY != null ? obj.targetY : obj.cellY) * CELL) + ey;
+            const gx = (obj.px ?? (truthy(obj.moving) && obj.targetX != null ? obj.targetX : obj.cellX) * CELL) + ex;
+            if (gx < camX - FRLG_REFL_CULL || gx > camX + vw + FRLG_REFL_CULL
+              || gy < camY - 96 || gy > camY + vh + 16) continue;
             if (!truthy(obj.hideReflection) && obj.graphicsId != null && obj.virtualId == null) {
               const spr = Ow.getDraw(obj.graphicsId);
-              if (spr) {
+              if (spr && reflectsHere(obj, obj.graphicsId, behaviorAt, Ow, ox, oy)) {
                 objectPoseOpts.frame = obj.customFrame;
                 const [frame, flip] = Ow.pose(spr, obj.facing, Objects.walkPhase(obj), obj.stepFlip,
                   objectPoseOpts);

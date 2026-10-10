@@ -36,6 +36,7 @@ import { HostTest, HOSTTEST_SHOT_FRAME, hostTestSound } from "./hosttest.ts";
 import { Game3 } from "./core/Game3.ts";
 import { Input } from "./shared/core/Input.ts";
 import { WorldView } from "./platform/worldview.ts";
+import { FieldView } from "./core/field_view.ts";
 import { Game3World } from "./platform/game3_world.ts";
 import { BenchSuite } from "./platform/bench_suite.ts";
 import { BenchLeak } from "./platform/bench_leak.ts";
@@ -263,6 +264,9 @@ function gameMain(bench: boolean): void {
       failedUpdate = true;
     }
     const tu = clock() - t1;
+    // (a heavy tick -- a step's end -- leaves the field's off-screen ring
+    // filling to the next frame: core/field_view.ts drawNativeTiles)
+    (FieldView as { frameHeavy: boolean }).frameHeavy = tu > 6000;
     // bench builds: a tick that took more than a frame's share, and on what
     if (bench && tu > 20000) console.log(`[pv] g3 slow update ${ms1(tu)} ms (tick ${tick}, ${slowWhere(game)})`);
     if (suite) suite.noteUpdate(tu);
