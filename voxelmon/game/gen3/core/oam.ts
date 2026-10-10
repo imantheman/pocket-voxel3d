@@ -128,8 +128,14 @@ function new_slot(): Sprite {
 }
 
 // Lua: oam.lua:100
+/** pocket-voxel: the pool's slots in use (createSprite, destroySprite, reset
+ *  are the only writers of inUse): none, and the per-frame passes over all
+ *  128 slots (animateSprites, buildOamBuffer) have nothing to find. */
+let inUseCount = 0;
+
 function ensure_pool(): void {
   if (Oam._sprites) return;
+  inUseCount = 0;
   Oam._sprites = [];
   for (let i = 0; i <= Oam.MAX_SPRITES - 1; i++) {
     Oam._sprites[i] = new_slot();
@@ -458,6 +464,7 @@ export const Oam = {
   // Lua: oam.lua:108
   reset(): void {
     ensure_pool();
+    inUseCount = 0;
     for (let i = 0; i <= Oam.MAX_SPRITES - 1; i++) {
       const s = Oam._sprites![i]!;
       s.inUse = false;
@@ -520,6 +527,7 @@ export const Oam = {
       const s = Oam._sprites![i]!;
       if (!s.inUse) {
         s.inUse = true;
+        inUseCount++;
         s.oam.affineMode = 0;
         s.oam.hFlip = false; s.oam.vFlip = false;
         s.oam.matrixNum = 0;
@@ -574,6 +582,7 @@ export const Oam = {
     if (id == null || id < 0 || id >= Oam.MAX_SPRITES) return;
     const s = Oam._sprites![id];
     if (s == null) return; // a fractional id: Lua's s would be nil and error; nothing to destroy
+    if (s.inUse) inUseCount--;
     s.inUse = false;
     s.image = null;
     s.quad = null;
@@ -706,6 +715,7 @@ export const Oam = {
   // Lua: oam.lua:467
   animateSprites(layer?: string | null): void {
     ensure_pool();
+    if (inUseCount === 0) return;
     for (let i = 0; i <= Oam.MAX_SPRITES - 1; i++) {
       const s = Oam._sprites![i]!;
       if (s.inUse && s.callback && (!layer || (s.layer ?? "ui") === layer)) {
@@ -720,6 +730,17 @@ export const Oam = {
   buildOamBuffer(pretOrder?: unknown): LuaTable {
     ensure_pool();
     const pool = Oam._sprites!;
+    // (no slot in use and last frame's sorted list empty too: what the full
+    // pass below would come to, an empty buffer)
+    if (inUseCount === 0 && Oam._sorted != null && Oam._sortedPool === Oam._sprites && Oam._sorted[1] == null) {
+      let b = Oam._buffer;
+      if (b == null || b === Oam._sorted) {
+        b = seq<Sprite>();
+        Oam._buffer = b;
+      }
+      for (let i = len(b); i >= 1; i--) b[i] = null;
+      return b;
+    }
     let n = 0;
     // Plain numbers in every key (the usual case) let the sort compare the
     // stored keys; anything else (a string, NaN) keeps the original path.
