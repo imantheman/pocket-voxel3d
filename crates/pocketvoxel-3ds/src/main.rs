@@ -5991,7 +5991,9 @@ fn main() {
                 ); #[cfg(feature = "gen3")] gen3::pak_missing(want_id);
                 continue;
             }
-            tex = None;
+            // (the old terrain texture goes below, and only if the map is
+            // really rebuilt: cleared here, a skipped rebuild left no texture
+            // and the frame loop sat every frame out -- a freeze)
             // guest_drive's own position (center[]) is already current for
             // this tick by the time we get here (the cam_px() read and any
             // map-change reload both happen earlier in this same iteration,
@@ -6131,6 +6133,8 @@ fn main() {
             let skip_build = built_key.as_ref() == Some(&want_key);
             if skip_build {
                 dlog("[pv] rebuild skipped (inputs unchanged)");
+            } else {
+                tex = None;
             }
             let t_build = { extern "C" { fn osGetTime() -> u64; } unsafe { osGetTime() } };
             if !skip_build {
