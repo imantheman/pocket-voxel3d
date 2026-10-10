@@ -14,6 +14,9 @@
                                                         platform/worldview.ts)
      g3Strips(mode, r, g, b, a)                        (the top screen's side
                                                         strips, worldview.ts)
+     g3Bottom(id), g3BottomKeys() -> mask              (the bottom screen's
+                                                        canvas and its buttons,
+                                                        ui/bottom_screen.ts)
      g3PngDecode(byte string) -> [w, h, Uint8Array] | undefined
                                                        (RGBA8, what platform/
                                                         pngdecode.ts gives)
@@ -301,7 +304,8 @@ static JSValue g3_ents(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
    stretched), kept until the next call. */
 /* g3HostKeys(mask): buttons a bench script holds on the HOST's side (the
    camera's ZL/ZR and C-stick, which the guest never sees), so camera modes
-   can be driven in Citra. Bits: 0 ZL, 1 ZR, 2-5 C-stick left/right/up/down. */
+   can be driven in Citra. Bits: 0 ZL, 1 ZR, 2-5 C-stick left/right/up/down,
+   6 Y (the bottom screen's next tab). */
 static uint32_t host_keys;
 uint32_t g3_host_keys_get(void) { return host_keys; }
 static JSValue g3_hostkeys(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
@@ -310,6 +314,24 @@ static JSValue g3_hostkeys(JSContext *ctx, JSValueConst t, int c, JSValueConst *
     if (c >= 1) JS_ToInt32(ctx, &m, v[0]);
     host_keys = (uint32_t)m;
     return JS_UNDEFINED;
+}
+
+/* g3Bottom(id): the canvas the bottom screen shows (0: none), kept until the
+   next call (g3_render.c g3_bottom_set). g3BottomKeys() -> the bottom
+   screen's own buttons pressed since the last call: bit 0 Y (the next tab;
+   gen3/mod.rs inject_keys counts the presses). */
+void g3_bottom_set(int id);
+uint32_t g3_bottom_keys_take(void);
+static JSValue g3_bottom(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    int32_t id = 0;
+    if (c >= 1) JS_ToInt32(ctx, &id, v[0]);
+    g3_bottom_set((int)id);
+    return JS_UNDEFINED;
+}
+static JSValue g3_bottomkeys(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    return JS_NewInt32(ctx, (int32_t)g3_bottom_keys_take());
 }
 
 static JSValue g3_strips(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
@@ -980,6 +1002,8 @@ int qjs_register_g3(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "g3GcIdle", JS_NewCFunction(ctx, g3_gcidle, "g3GcIdle", 1));
     JS_SetPropertyStr(ctx, o, "g3Strips", JS_NewCFunction(ctx, g3_strips, "g3Strips", 5));
     JS_SetPropertyStr(ctx, o, "g3HostKeys", JS_NewCFunction(ctx, g3_hostkeys, "g3HostKeys", 1));
+    JS_SetPropertyStr(ctx, o, "g3Bottom", JS_NewCFunction(ctx, g3_bottom, "g3Bottom", 1));
+    JS_SetPropertyStr(ctx, o, "g3BottomKeys", JS_NewCFunction(ctx, g3_bottomkeys, "g3BottomKeys", 0));
     g3_save_register(ctx, o);
     JS_SetPropertyStr(ctx, o, "g3PngDecode", JS_NewCFunction(ctx, g3_pngdecode, "g3PngDecode", 1));
     JS_SetPropertyStr(ctx, o, "g3Bytes", JS_NewCFunction(ctx, g3_bytes_js, "g3Bytes", 1));

@@ -8416,7 +8416,7 @@ if page_tex.len() < pak_static.atlases.len() {
                     frame.bind_texture(texture::Index::Texture0, t);
                     frame.draw_arrays(buffer::Primitive::Triangles, lb, None).unwrap();
                     unsafe { c3d_depth_test(1); }
-                }
+                } #[cfg(feature = "gen3")] gen3::bottom_pass();
             }
             submit_us = us_since(t_submit);
             cmd_use = unsafe { C3D_GetCmdBufUsage() };

@@ -15,6 +15,12 @@
 //!   boxes, menus, battles, VIEW 2D's whole field) it covers the world, and
 //!   where it left the frame clear the world shows (worldview.ts clears the
 //!   frame to alpha 0 while the field is the world).
+//! - **The bottom screen.** The guest's companion (ui/bottom_screen.ts:
+//!   PARTY, BAG, MAP and CARD, in the game's own art) draws its 320x240 page
+//!   into a canvas when the page changes; [`bottom_pass`] lays that canvas
+//!   over the bottom screen each frame, and Y (which the game has no use
+//!   for) turns its tab ([`inject_keys`]); touch reaches the guest in the
+//!   button word, as the Kanto Gear's does.
 //! - **The people.** The guest's billboards (g3Ents: sprite frames of the
 //!   2D layer's own textures, standing in their cells) are turned into quads
 //!   facing the scene's camera ([`prepare_billboards`], once a frame) and
@@ -77,6 +83,7 @@ extern "C" {
     fn g3_bb_quad(tex: i32, xyz: *const f32, u0: f32, v0: f32, u1: f32, v1: f32, alpha: f32);
     fn g3_bb_draw(mvp: *const core::ffi::c_void);
     fn g3_composite();
+    fn g3_bottom_draw();
     fn qjs_register_g3(ctx: *mut JSContext) -> i32;
     fn g3_set_bytecode(p: *const u8, n: usize);
     fn g3_files_root(root: *const u8);
@@ -710,6 +717,31 @@ pub fn composite() {
     cmd_check();
 }
 
+/// main.rs's bottom-screen pass, last on the bottom target (a same-line
+/// hook): the guest's companion page (ui/bottom_screen.ts), which it draws
+/// into a canvas of its own only when something on it changes; here it is
+/// one quad a frame (g3_render.c g3_bottom_draw). Before the guest names a
+/// canvas the bottom screen stays main.rs's clear (black for FireRed).
+pub fn bottom_pass() {
+    if !unsafe { GPU_OK } {
+        return;
+    }
+    unsafe { g3_bottom_draw() };
+    cmd_check();
+}
+
+/// The bottom screen's buttons pressed since the guest last asked
+/// (g3_shim.c g3BottomKeys): bit 0 Y.
+static mut BOTTOM_KEYS: u32 = 0;
+#[no_mangle]
+pub extern "C" fn g3_bottom_keys_take() -> u32 {
+    unsafe {
+        let m = BOTTOM_KEYS;
+        BOTTOM_KEYS = 0;
+        m
+    }
+}
+
 /// The perf block's extra lines (every 5 s): the 2D layer's and the sound's.
 pub fn perf_line() {
     pace::perf_line();
@@ -757,11 +789,27 @@ pub fn exit() {
     audio::exit();
 }
 
+/// The frame's buttons as main.rs reads them (a same-line hook): a bench's
+/// host buttons laid over them ([`host_keys`]), and Y -- which FireRed has
+/// no use for (main.rs gives the guest the d-pad, A, B, START = START or X,
+/// SELECT, L and R) -- counted for the bottom screen, whose tab it turns.
+pub fn inject_keys(k: ctru::services::hid::KeyPad, d: ctru::services::hid::KeyPad)
+    -> (ctru::services::hid::KeyPad, ctru::services::hid::KeyPad) {
+    use ctru::services::hid::KeyPad;
+    let (k, d) = host_keys(k, d);
+    if d.contains(KeyPad::Y) {
+        unsafe { BOTTOM_KEYS |= 1 };
+    }
+    (k, d)
+}
+
 /// A bench's host buttons (g3HostKeys) laid over the console's: held is the
 /// union, down is what the bench newly pressed this frame. The console's own
-/// keys are untouched when no bench is pressing anything.
+/// keys are untouched when no bench is pressing anything. Bits 0-5 the
+/// camera's ZL, ZR and C-stick; bit 6 Y (a bench turns the bottom screen's
+/// tab the way a player does).
 static mut HOST_KEYS_PREV: u32 = 0;
-pub fn inject_keys(k: ctru::services::hid::KeyPad, d: ctru::services::hid::KeyPad)
+fn host_keys(k: ctru::services::hid::KeyPad, d: ctru::services::hid::KeyPad)
     -> (ctru::services::hid::KeyPad, ctru::services::hid::KeyPad) {
     use ctru::services::hid::KeyPad;
     let m = unsafe { g3_host_keys_get() };
@@ -778,6 +826,7 @@ pub fn inject_keys(k: ctru::services::hid::KeyPad, d: ctru::services::hid::KeyPa
         if m & 8 != 0 { out |= KeyPad::CSTICK_RIGHT; }
         if m & 16 != 0 { out |= KeyPad::CSTICK_UP; }
         if m & 32 != 0 { out |= KeyPad::CSTICK_DOWN; }
+        if m & 64 != 0 { out |= KeyPad::Y; }
         out
     };
     (k | map(m), d | map(m & !prev))

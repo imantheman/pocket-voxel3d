@@ -1406,6 +1406,61 @@ void g3_strips_set(int mode, float r, float g, float b, float a) {
     strip_col[0] = clamp01(r); strip_col[1] = clamp01(g); strip_col[2] = clamp01(b); strip_col[3] = clamp01(a);
 }
 
+/* The bottom screen (the guest's companion, ui/bottom_screen.ts): the guest
+   draws its 320x240 page into a canvas of its own, only when what the page
+   shows has changed (the canvas keeps it meanwhile), and names that canvas
+   with g3Bottom(id); every frame the bottom-screen pass lays it over the
+   bottom screen at 1:1 -- one quad, so a still page costs next to nothing.
+   0 (or a canvas that has gone): nothing drawn, the bottom stays the clear. */
+static int bottom_id;
+static int bottom_start = -1;
+static int bottom_logged;
+
+void g3_bottom_set(int id) {
+    bottom_id = id > 0 ? id : 0;
+    if (bottom_id && !bottom_logged) {
+        bottom_logged = 1;
+        g3log("bottom screen: canvas %d, VRAM free %u KB", bottom_id, (unsigned)(vramSpaceFree() >> 10));
+    }
+}
+
+/* In g3_frame_offscreen: the bottom quad's vertices in this frame's buffer
+   (the canvas's 320x240 at the allocation's top-left; its first row is v = 1). */
+static void bottom_layout(void) {
+    bottom_start = -1;
+    G3Tex *t = bottom_id ? tex_get(bottom_id) : NULL;
+    if (!t || !t->canvas || t->fresh || vn + 6 > VBUF_VERTS) return;
+    float w = t->w < 320 ? (float)t->w : 320.0f, h = t->h < 240 ? (float)t->h : 240.0f;
+    float u1 = w / t->tw, v1 = 1.0f - h / t->th;
+    u32 c = 0xFFFFFFFFu;
+    bottom_start = vn;
+    put_raw(0, 0, 0.5f, c, 0, 1);  put_raw(w, 0, 0.5f, c, u1, 1);  put_raw(w, h, 0.5f, c, u1, v1);
+    put_raw(0, 0, 0.5f, c, 0, 1);  put_raw(w, h, 0.5f, c, u1, v1); put_raw(0, h, 0.5f, c, 0, v1);
+}
+
+/* main.rs's bottom-screen pass (gen3/mod.rs bottom_pass), with the bottom
+   target selected: the companion's canvas over it, opaque. */
+void g3_bottom_draw(void) {
+    if (bottom_start < 0) return;
+    G3Tex *t = tex_get(bottom_id);
+    if (!t || !t->canvas) return;
+    use_g3_vertices();
+    C3D_Mtx m;
+    Mtx_OrthoTilt(&m, 0.0f, 320.0f, 240.0f, 0.0f, -1.0f, 1.0f, true);
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, loc_proj, &m);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, loc_uvx, 1.0f, 1.0f, 0.0f, 0.0f);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, loc_toff, 0.0f, 0.0f, 0.0f, 0.0f);
+    C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+    C3D_AlphaTest(false, GPU_ALWAYS, 0);
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
+    for (int i = 0; i < 6; i++) C3D_SetTexEnv(i, &prog_plain.env[i]);
+    C3D_TexEnvBufUpdate(C3D_Both, 0);
+    C3D_TexBind(0, &t->tex);
+    C3D_DrawArrays(GPU_TRIANGLES, bottom_start, 6);
+    st_calls++;
+    restore_main();
+}
+
 /* First in the frame (inside citro3d-rs's frame, before the eyes): the
    newest list (if one came since the last frame) into the frame target and
    its canvases; then the composite quad for the eyes to draw. */
@@ -1467,6 +1522,7 @@ void g3_frame_offscreen(void) {
             put_raw(380, 0, 0.5f, sc, ur, vt); put_raw(400, 240, 0.5f, sc, ur, v1); put_raw(380, 240, 0.5f, sc, ur, v1);
         }
     }
+    bottom_layout();
     vstart = vn;
     st_verts += vn;
     st_frames++;
@@ -1592,35 +1648,52 @@ void g3_perf(float *out) {
     st_build_us = 0;
 }
 
-/* The frame as the guest drew it (240x160), as a PPM at `path`. */
-int g3_shot(const char *path) {
-    C3D_FrameSync();
-    /* the frame lives in VRAM: a raw GX copy into linear memory first */
-    G3Tex copy = *frame_tex;
-    void *lin = linearAlloc(256 * 256 * 4);
+/* Canvas (or frame) `t`, which lives in VRAM, as a PPM at `path`: a raw GX
+   copy into linear memory first. */
+static int shot_tex(const G3Tex *t, const char *path) {
+    uint32_t bytes = (uint32_t)t->tw * t->th * 4;
+    G3Tex copy = *t;
+    void *lin = linearAlloc(bytes);
     if (!lin) return 0;
-    GSPGPU_FlushDataCache(lin, 256 * 256 * 4);
-    C3D_SyncTextureCopy((u32 *)frame_tex->tex.data, 0, (u32 *)lin, 0, 256 * 256 * 4, 8);
-    GSPGPU_InvalidateDataCache(lin, 256 * 256 * 4);
+    GSPGPU_FlushDataCache(lin, bytes);
+    C3D_SyncTextureCopy((u32 *)t->tex.data, 0, (u32 *)lin, 0, bytes, 8);
+    GSPGPU_InvalidateDataCache(lin, bytes);
     copy.tex.data = lin;
     FILE *f = fopen(path, "wb");
     if (!f) { linearFree(lin); return 0; }
-    fprintf(f, "P6\n%d %d\n255\n", frame_tex->w, frame_tex->h);
-    uint8_t *row = (uint8_t *)malloc((size_t)frame_tex->w * 3);
-    for (int y = 0; y < frame_tex->h && row; y++) {
-        for (int x = 0; x < frame_tex->w; x++) {
-            float t[4];
-            tex_texel(&copy, x, y, t);
-            row[x * 3] = (uint8_t)(t[0] * 255 + 0.5f);
-            row[x * 3 + 1] = (uint8_t)(t[1] * 255 + 0.5f);
-            row[x * 3 + 2] = (uint8_t)(t[2] * 255 + 0.5f);
+    fprintf(f, "P6\n%d %d\n255\n", t->w, t->h);
+    uint8_t *row = (uint8_t *)malloc((size_t)t->w * 3);
+    for (int y = 0; y < t->h && row; y++) {
+        for (int x = 0; x < t->w; x++) {
+            float c[4];
+            tex_texel(&copy, x, y, c);
+            row[x * 3] = (uint8_t)(c[0] * 255 + 0.5f);
+            row[x * 3 + 1] = (uint8_t)(c[1] * 255 + 0.5f);
+            row[x * 3 + 2] = (uint8_t)(c[2] * 255 + 0.5f);
         }
-        fwrite(row, 1, (size_t)frame_tex->w * 3, f);
+        fwrite(row, 1, (size_t)t->w * 3, f);
     }
     free(row);
     fclose(f);
     linearFree(lin);
     return 1;
+}
+
+/* The frame as the guest drew it (240x160), as a PPM at `path`; the bottom
+   screen's canvas too, beside it (<path>_b.ppm: what the canvas holds, as
+   against the screen's own dump, shot_N_b.ppm). */
+int g3_shot(const char *path) {
+    C3D_FrameSync();
+    int ok = shot_tex(frame_tex, path);
+    G3Tex *b = bottom_id ? ((bottom_id < ntexs) ? texs[bottom_id] : NULL) : NULL;
+    size_t n = strlen(path);
+    if (b && b->canvas && n > 4 && n < 250) {
+        char bp[256];
+        memcpy(bp, path, n - 4);
+        memcpy(bp + n - 4, "_b.ppm", 7);
+        shot_tex(b, bp);
+    }
+    return ok;
 }
 
 __attribute__((constructor)) static void g3_render_ctor(void) {
