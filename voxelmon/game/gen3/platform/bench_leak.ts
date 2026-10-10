@@ -47,7 +47,8 @@ export class BenchLeak {
   /**
    * `world`: the host's world watch (g3_shim.c g3WorldStat: spans drawn last
    * frame, uploaded, built, built map, built flat, kept, empty frames in a
-   * row, in all, empty builds), where the binary has it.
+   * row, in all, empty builds, the map shown, frames on another map's
+   * world), where the binary has it.
    */
   constructor(game: any, private readonly mem: () => string, private readonly world?: () => number[] | undefined,
     private readonly texBytes?: (id: number) => number) {
@@ -135,7 +136,9 @@ export class BenchLeak {
     const def = this.game?.data?.maps?.[this.lastMap];
     const outdoor = !!def && FieldMoves.isOutdoors(def.mapType);
     let fail = "";
-    if (up === 0) fail = "the map underfoot was built with nothing to draw";
+    // (a pak that would not load leaves the old map's world standing on the new one)
+    if (w.length >= 11 && w[9] !== w[3]) fail = `the world drawn is map #${w[3]}'s, not the map shown (#${w[9]})`;
+    else if (up === 0) fail = "the map underfoot was built with nothing to draw";
     else if (outdoor && drawn === 0) fail = "nothing drawn on an outdoor map";
     if (fail) {
       this.worldFails++;

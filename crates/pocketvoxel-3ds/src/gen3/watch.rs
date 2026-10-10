@@ -26,6 +26,12 @@ static mut EMPTY_TOTAL: u32 = 0;
 static mut EMPTY_BUILDS: u32 = 0;
 /// The last frame's span count (main.rs DRAWN).
 static mut DRAWN_LAST: u32 = 0;
+/// The map the guest shows (slot 0), and shown frames in a row whose world
+/// was built for another map (a pak that would not load: main.rs keeps the
+/// old geometry up), and in all.
+static mut SHOWN_MAP: u32 = u32::MAX;
+static mut WRONG_RUN: u32 = 0;
+static mut WRONG_TOTAL: u32 = 0;
 /// squeeze_heap has run for the build in progress (once a build).
 static mut SQUEEZED: bool = false;
 
@@ -49,12 +55,23 @@ pub fn note_upload(map: u32, uploaded: usize, spans: usize, flat: bool) {
 }
 
 /// Once a frame, after the cull (mod.rs before_render): a shown world that
-/// draws no span for a second is said in the log, once a run.
+/// draws no span for a second, or that was built for another map than the
+/// one shown, is said in the log, once a run.
 pub fn frame(drawn: u32) {
     let sc = unsafe { super::super::voxel::scene() };
     let shown = !sc.flat_world && sc.maps.first().is_some_and(|m| m.shown);
     unsafe {
         DRAWN_LAST = drawn;
+        SHOWN_MAP = sc.maps.first().map(|m| m.map_id).unwrap_or(u32::MAX);
+        if shown && !BUILT_FLAT && SHOWN_MAP != BUILT_MAP {
+            WRONG_RUN += 1;
+            WRONG_TOTAL += 1;
+            if WRONG_RUN == 60 {
+                dlog(&format!("[pv] g3 world: WARNING map#{} shown for 60 frames on map#{}'s world", SHOWN_MAP, BUILT_MAP));
+            }
+        } else {
+            WRONG_RUN = 0;
+        }
         if !shown || drawn > 0 {
             EMPTY_RUN = 0;
             return;
@@ -72,11 +89,12 @@ pub fn frame(drawn: u32) {
 
 /// The bench's view (g3_shim.c g3WorldStat): [spans drawn last frame, spans
 /// uploaded, spans built, built map, built flat, kept through a battle,
-/// empty shown frames in a row, empty shown frames in all, empty builds].
+/// empty shown frames in a row, empty shown frames in all, empty builds,
+/// the map shown, frames shown on another map's world in all].
 #[no_mangle]
 pub extern "C" fn g3_world_stat(out: *mut u32, n: i32) -> i32 {
     let v = unsafe {
-        [DRAWN_LAST, UPLOADED, SPANS, BUILT_MAP, BUILT_FLAT as u32, super::keeping() as u32, EMPTY_RUN, EMPTY_TOTAL, EMPTY_BUILDS]
+        [DRAWN_LAST, UPLOADED, SPANS, BUILT_MAP, BUILT_FLAT as u32, super::keeping() as u32, EMPTY_RUN, EMPTY_TOTAL, EMPTY_BUILDS, SHOWN_MAP, WRONG_TOTAL]
     };
     let k = (n.max(0) as usize).min(v.len());
     for (i, x) in v.iter().take(k).enumerate() {
