@@ -525,9 +525,65 @@ int g3_gpu_init_shared(const uint8_t *shbin, uint32_t len) {
 /* The guest's sprite batches (OP_BATCH): quads of 12 floats each -- x0 y0 x1
    y1 x2 y2 x3 y3 u0 v0 u1 v1, batch-local -- kept until replaced or freed,
    so a batch that did not change costs one op a frame instead of its quads. */
-typedef struct { int tex; float *q; int n, cap; } G3Batch;
+/* A batch's quads as GPU vertices (BatchVbo, drawn by draw_batch_cached):
+   built once and kept, so a batch that did not change costs the GPU its
+   quads but the CPU nothing -- the field's tile layers are 470 quads a
+   frame in VIEW 2D, 3500 zoomed out, each transformed, bounded and written
+   by the CPU (~1 us apiece on the console). Four vertices a quad (an index
+   buffer makes the two triangles), in batch-local coordinates: the batch's
+   transform rides in the projection. Two copies, one a frame (the GPU may
+   still read last frame's); a change marks the quads it touched dirty in
+   both, and each copy rewrites its dirty quads before it is drawn. */
+typedef struct {
+    Vtx *vb[2];
+    uint8_t *dirty[2];
+    int cap;                 /* quads allocated */
+    int all[2];              /* the copy must be rewritten whole */
+    int uv_w, uv_h;          /* the texture size its uvs were made for */
+    u32 col;                 /* the vertex colour it was made with */
+    int tw_check;            /* the texture's allocation (tw << 16 | th) */
+    int ndirty[2];
+} BatchVbo;
+
+typedef struct { int tex; float *q; int n, cap; BatchVbo *vbo; } G3Batch;
 static G3Batch *batches;
 static int nbatches;
+
+/* Copies whose batch went (or outgrew them), freed a few frames later. */
+typedef struct { BatchVbo *v; int frames; } DeadVbo;
+static DeadVbo dead_vbo[64];
+static int ndead_vbo;
+
+static void vbo_free_now(BatchVbo *v) {
+    if (!v) return;
+    for (int k = 0; k < 2; k++) { if (v->vb[k]) linearFree(v->vb[k]); free(v->dirty[k]); }
+    free(v);
+}
+
+static void vbo_retire(BatchVbo *v) {
+    if (!v) return;
+    if (ndead_vbo == 64) { /* full: the oldest is surely past the GPU */
+        vbo_free_now(dead_vbo[0].v);
+        memmove(dead_vbo, dead_vbo + 1, sizeof(DeadVbo) * 63);
+        ndead_vbo = 63;
+    }
+    dead_vbo[ndead_vbo].v = v;
+    dead_vbo[ndead_vbo].frames = 3;
+    ndead_vbo++;
+}
+
+static void vbo_tick(void) {
+    int j = 0;
+    for (int i = 0; i < ndead_vbo; i++) {
+        if (--dead_vbo[i].frames <= 0) vbo_free_now(dead_vbo[i].v);
+        else dead_vbo[j++] = dead_vbo[i];
+    }
+    ndead_vbo = j;
+}
+
+/* The two triangles of every quad: 0 1 2, 0 2 3 (the CPU path's fan). */
+static u16 *quad_idx;
+#define QUAD_IDX_MAX 16000
 
 void g3_batch_upload(int id, int tex, const float *q, int n) {
     if (id <= 0 || n < 0) return;
@@ -541,6 +597,21 @@ void g3_batch_upload(int id, int tex, const float *q, int n) {
         nbatches = c;
     }
     G3Batch *b = &batches[id];
+    /* the kept vertices: the quads that changed are rewritten before the
+       next draw of each copy; more quads than they hold, made anew */
+    BatchVbo *v = b->vbo;
+    if (v) {
+        if (n > v->cap || b->tex != tex) {
+            vbo_retire(v);
+            b->vbo = NULL;
+        } else {
+            int old = b->n;
+            for (int k = 0; k < n; k++) {
+                if (k < old && memcmp(b->q + k * 12, q + k * 12, 12 * sizeof(float)) == 0) continue;
+                for (int c = 0; c < 2; c++) if (!v->dirty[c][k]) { v->dirty[c][k] = 1; v->ndirty[c]++; }
+            }
+        }
+    }
     if (n * 12 > b->cap) {
         float *nq = (float *)realloc(b->q, (size_t)n * 12 * sizeof(float));
         if (!nq) { b->n = 0; return; }
@@ -555,6 +626,8 @@ void g3_batch_upload(int id, int tex, const float *q, int n) {
 
 void g3_batch_free(int id) {
     if (id <= 0 || id >= nbatches) return;
+    vbo_retire(batches[id].vbo);
+    batches[id].vbo = NULL;
     batch_bytes -= (uint32_t)batches[id].cap * 4;
     free(batches[id].q);
     memset(&batches[id], 0, sizeof(G3Batch));
@@ -1258,6 +1331,106 @@ static void clear_target(const float *c) {
     bound_valid = 0; /* the next primitive re-applies its blend and TEV */
 }
 
+/* One quad's four vertices into a kept copy (the CPU path's put_vtx, with
+   the colour and the uv scale of the current primitive); a hidden quad
+   (graphics.ts parks it at -1e6) as a point, which draws nothing. */
+static inline void vbo_quad(Vtx *o, const float *q) {
+    if (q[0] < -1e5f || q[1] < -1e5f) {
+        memset(o, 0, sizeof(Vtx) * 4);
+        return;
+    }
+    const float xs[4] = {q[0], q[2], q[4], q[6]}, ys[4] = {q[1], q[3], q[5], q[7]};
+    const float us[4] = {q[8], q[10], q[10], q[8]}, vs[4] = {q[9], q[9], q[11], q[11]};
+    for (int i = 0; i < 4; i++) {
+        o[i].x = xs[i]; o[i].y = ys[i]; o[i].z = 0.5f;
+        memcpy(o[i].c, &P_col, 4);
+        o[i].u = us[i] * P_ua + P_eu;
+        o[i].v = 1.0f - vs[i] * P_va - P_ev;
+    }
+}
+
+/* OP_BATCH from the batch's kept vertices, transformed by m (a b c d e f)
+   in the projection, after prim_begin. 0 when it cannot be (the caller then
+   draws the quads on the CPU as before): a scissor, the gba_fx band, a CPU
+   colour variant, a folded or split-repeating texture -- what needs the CPU
+   path's clipping -- or memory. Without them the GPU's own clipping to the
+   target covers the same pixels the CPU path's exact clip keeps. */
+static void use_g3_vertices(void);
+static int draw_batch_cached(G3Batch *b, const float *m) {
+    G3Tex *t = P_tex;
+    if (!t || S.sc_on || S.prog.cpu || (S.prog.vc == VC_GBAFX && S.prog.band) || t->fold
+        || (t->repeat && (t->w != t->tw || t->h != t->th)) || b->n > QUAD_IDX_MAX) return 0;
+    if (!quad_idx) {
+        quad_idx = (u16 *)linearAlloc(sizeof(u16) * 6 * QUAD_IDX_MAX);
+        if (!quad_idx) return 0;
+        for (int k = 0; k < QUAD_IDX_MAX; k++) {
+            u16 *o = quad_idx + k * 6, base = (u16)(k * 4);
+            o[0] = base; o[1] = base + 1; o[2] = base + 2; o[3] = base; o[4] = base + 2; o[5] = base + 3;
+        }
+        GSPGPU_FlushDataCache(quad_idx, sizeof(u16) * 6 * QUAD_IDX_MAX);
+    }
+    BatchVbo *v = b->vbo;
+    if (!v) {
+        int cap = b->n < 64 ? 64 : b->n + b->n / 4;
+        if (cap > QUAD_IDX_MAX) cap = QUAD_IDX_MAX;
+        v = (BatchVbo *)calloc(1, sizeof(BatchVbo));
+        if (!v) return 0;
+        v->cap = cap;
+        for (int k = 0; k < 2; k++) {
+            v->vb[k] = (Vtx *)linearAlloc(sizeof(Vtx) * 4 * (size_t)cap);
+            v->dirty[k] = (uint8_t *)calloc((size_t)cap, 1);
+            v->all[k] = 1;
+        }
+        if (!v->vb[0] || !v->vb[1] || !v->dirty[0] || !v->dirty[1]) { vbo_free_now(v); return 0; }
+        v->uv_w = t->w; v->uv_h = t->h; v->col = P_col;
+        v->tw_check = t->tw * 65536 + t->th;
+        b->vbo = v;
+    }
+    /* (the uvs depend on the texture only through its size: an atlas a tile
+       animation copied, g3_tex_sub, keeps them) */
+    if (v->uv_w != t->w || v->uv_h != t->h || v->tw_check != t->tw * 65536 + t->th || v->col != P_col) {
+        v->uv_w = t->w; v->uv_h = t->h; v->col = P_col;
+        v->tw_check = t->tw * 65536 + t->th;
+        v->all[0] = v->all[1] = 1;
+    }
+    int c = (int)(frame_no & 1);
+    Vtx *vb = v->vb[c];
+    if (v->all[c]) {
+        for (int k = 0; k < b->n; k++) vbo_quad(vb + k * 4, b->q + k * 12);
+        v->all[c] = 0;
+        GSPGPU_FlushDataCache(vb, sizeof(Vtx) * 4 * (size_t)b->n);
+    } else if (v->ndirty[c]) {
+        int lo = b->n, hi = -1;
+        for (int k = 0; k < b->n; k++) {
+            if (!v->dirty[c][k]) continue;
+            vbo_quad(vb + k * 4, b->q + k * 12);
+            if (k < lo) lo = k;
+            if (k > hi) hi = k;
+        }
+        if (hi >= lo) GSPGPU_FlushDataCache(vb + lo * 4, sizeof(Vtx) * 4 * (size_t)(hi - lo + 1));
+    }
+    if (v->ndirty[c]) { memset(v->dirty[c], 0, (size_t)v->cap); v->ndirty[c] = 0; }
+    flush();
+    /* the projection: the target's ortho times the batch's transform */
+    G3Tex *tg = bound_target;
+    C3D_Mtx ortho, xf, mvp;
+    Mtx_Ortho(&ortho, 0.0f, (float)tg->tw, (float)tg->th, 0.0f, -1.0f, 1.0f, true);
+    Mtx_Identity(&xf);
+    xf.r[0].x = m[0]; xf.r[0].y = m[2]; xf.r[0].w = m[4];
+    xf.r[1].x = m[1]; xf.r[1].y = m[3]; xf.r[1].w = m[5];
+    Mtx_Multiply(&mvp, &ortho, &xf);
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, loc_proj, &mvp);
+    C3D_BufInfo *bi = C3D_GetBufInfo();
+    BufInfo_Init(bi);
+    BufInfo_Add(bi, vb, sizeof(Vtx), 3, 0x210);
+    C3D_DrawElements(GPU_TRIANGLES, b->n * 6, C3D_UNSIGNED_SHORT, quad_idx);
+    st_calls++;
+    /* back to the frame's own vertices and the target's ortho */
+    use_g3_vertices();
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, loc_proj, &ortho);
+    return 1;
+}
+
 static void run_list(const float *f, size_t n) {
     memset(&S, 0, sizeof(S));
     S.blend = BLEND_ALPHA;
@@ -1315,6 +1488,11 @@ static void run_list(const float *f, size_t n) {
             if (b && b->n > 0) {
                 G3Tex *t = tex_get((int)f[i + 2]);
                 prim_begin(t, f + i + 9);
+                if (draw_batch_cached(b, m)) {
+                    st_quads += b->n;
+                    i += 13;
+                    continue;
+                }
                 const float *q = b->q;
                 for (int k = 0; k < b->n; k++, q += 12) {
                     /* a hidden entry (graphics.ts uploadBatch parks it at -1e6) */
@@ -1474,6 +1652,7 @@ void g3_frame_offscreen(void) {
     double t0 = tick_us();
     frame_no++;
     retire_tick();
+    vbo_tick();
     if (frame_tex->fresh) { C3D_RenderTargetClear(frame_tex->rt, C3D_CLEAR_COLOR, 0, 0); frame_tex->fresh = 0; }
     /* (texture ids are never reused, so the table only grows: walked only
        while a new canvas waits for its clear) */
