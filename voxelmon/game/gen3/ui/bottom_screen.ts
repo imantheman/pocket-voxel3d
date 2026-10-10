@@ -43,9 +43,9 @@
 // BagChrome, Gpu, the font, the frames), so it is the same textures the
 // game's screens load, not copies, and what a page alone keeps up is given
 // back when it is not needed: the textures of the BAG's, the Town Map's and
-// the card's pictures as soon as the page is drawn, the party menu's panel
-// and plates when the POKéMON page closes; the bag's and the Town Map's
-// images themselves when their pages close (releaseArt).
+// the card's pictures as soon as the page is drawn, and the pages' images
+// themselves (the party menu's panel and plates among them) when their
+// pages close (releaseArt).
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { format, tonumber, tostring, truthy } from "../../../import/gen3/lua.ts";
@@ -1085,38 +1085,39 @@ function release(img: Image | null | undefined | false): void {
 }
 
 /**
- * Memory: what a page alone keeps up, given back when it is not needed --
- * the party menu's plates and panel, the bag's, the Town Map's. They are the
- * game's own chrome modules' images (shared with its screens), so this gives
- * back what the game would have kept too. `release` gives their textures back
- * (linear memory; whichever draws one next makes it again from the pixels
- * the image keeps); `drop` also lets the module forget the bag's and the
- * Town Map's images (their pixels, on the app heap: read from the cache
- * again by whichever draws them next), as the page closes.
+ * Memory: what a page alone keeps up, given back when it is not needed.
+ * These are the game's own chrome modules' images (shared with its screens,
+ * which keep them for good once opened). While its page is open, `closing`
+ * false: the bag's and the Town Map's textures go back to linear memory
+ * once the page is drawn (their pixels come back to the image, image.ts
+ * release; drawn again, the texture is made again). As the page closes,
+ * `closing` true: the module forgets them -- the party menu's panel and
+ * plates too, whose textures the party page keeps up while it is open --
+ * and whichever draws one next reads it from the cache again, as the first
+ * time.
  */
-function releaseArt(tab: TabId, drop: boolean): void {
+function releaseArt(tab: TabId, closing: boolean): void {
   if (tab === "party") {
+    if (!closing) return;
     const pc = PartyChrome;
-    for (const e of [pc._bg, pc._slotMain, pc._slotWide, pc._slotMainSel, pc._slotWideSel, pc._slotEmpty]) release(e ? e.image : null);
-    release(pc._balls ? pc._balls.image : null);
-    release(pc._status ? pc._status.image : null);
+    pc._bg = pc._slotMain = pc._slotWide = pc._slotMainSel = pc._slotWideSel = pc._slotEmpty = null;
+    pc._balls = null;
+    pc._status = null;
   } else if (tab === "bag") {
     const bc = BagChrome;
-    release(bc._bg);
-    release(bc._images["bg_female"] || null);
-    release(bc._bagMale);
-    release(bc._bagFemale);
-    if (drop) {
-      bc._bg = undefined;
-      delete bc._images["bg_female"];
-      bc._bagMale = undefined;
-      bc._bagFemale = undefined;
-      bc._bagQuads = {};
+    if (!closing) {
+      for (const img of [bc._bg, bc._images["bg_female"] || null, bc._bagMale, bc._bagFemale]) release(img);
+      return;
     }
+    bc._bg = undefined;
+    delete bc._images["bg_female"];
+    bc._bagMale = undefined;
+    bc._bagFemale = undefined;
+    bc._bagQuads = {};
   } else if (tab === "map") {
     for (const n of ["frame_normal", ...Object.values(REGION_IMAGES)]) {
-      release(Gpu.images[n]);
-      if (drop) delete Gpu.images[n];
+      if (closing) delete Gpu.images[n];
+      else release(Gpu.images[n]);
     }
   }
 }
