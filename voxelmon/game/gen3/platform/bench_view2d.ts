@@ -114,6 +114,10 @@ export class BenchView2d {
     if (this.phase < 0) {
       if (game?.options) {
         game.options.view = "2d";
+        // (the zoom rows as the bench names them, NORMAL and OFF otherwise --
+        // not whatever a card's saved options last held)
+        game.options.screen2d = "normal";
+        game.options.zoom2d = 100;
         for (const k in this.opts) game.options[k] = this.opts[k];
       }
       this.log(`[pv] g3 view2d: walk ${this.walk}, options ${JSON.stringify(this.opts)}`);
