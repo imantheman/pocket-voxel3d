@@ -695,13 +695,27 @@ static JSValue g3_stopall(JSContext *ctx, JSValueConst t, int c, JSValueConst *v
 
 static const uint8_t *g3_bc;
 static size_t g3_bc_len;
+uint8_t *g3_inflate(const uint8_t *src, size_t len, size_t raw_len); /* g3_png.c */
 
 void g3_set_bytecode(const uint8_t *p, size_t n) { g3_bc = p; g3_bc_len = n; }
 
 static JSValue g3_runbytecode(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t; (void)c; (void)v;
     if (!g3_bc || !g3_bc_len) return JS_ThrowInternalError(ctx, "no bytecode in this build");
-    JSValue fn = JS_ReadObject(ctx, g3_bc, g3_bc_len, JS_READ_OBJ_BYTECODE);
+    /* deflated (build.rs: "PVQZ", u32 LE raw size, a raw deflate stream):
+       inflated into the heap, read (QuickJS copies all it keeps) and let go */
+    const uint8_t *bc = g3_bc;
+    size_t bc_len = g3_bc_len;
+    uint8_t *raw = NULL;
+    if (bc_len > 8 && memcmp(bc, "PVQZ", 4) == 0) {
+        size_t n = (size_t)bc[4] | ((size_t)bc[5] << 8) | ((size_t)bc[6] << 16) | ((size_t)bc[7] << 24);
+        raw = g3_inflate(bc + 8, bc_len - 8, n);
+        if (!raw) return JS_ThrowInternalError(ctx, "the bytecode would not inflate (%u bytes)", (unsigned)n);
+        bc = raw;
+        bc_len = n;
+    }
+    JSValue fn = JS_ReadObject(ctx, bc, bc_len, JS_READ_OBJ_BYTECODE);
+    free(raw);
     if (JS_IsException(fn)) return fn;
     JSValue r = JS_EvalFunction(ctx, fn);
     if (JS_IsException(r)) return r;

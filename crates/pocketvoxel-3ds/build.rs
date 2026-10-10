@@ -84,7 +84,18 @@ fn main() {
             _ => false,
         };
         if fresh {
-            std::fs::copy("game-firered.qbc", out.join("g3.qbc")).unwrap();
+            // Deflated ("PVQZ", the raw size as a u32 LE, a raw deflate
+            // stream; g3_shim.c g3RunBytecode inflates it, reads it and lets
+            // it go): the binary is the app's own memory for as long as it
+            // runs, so 5.9 MB of bytecode needed once at boot took 5.9 MB from
+            // the app heap for the whole session; deflated it is ~3. (The
+            // deflate is this file's own, below: a crate for it changed the
+            // dependency graph, and with it every game's binary.)
+            let raw = std::fs::read("game-firered.qbc").unwrap();
+            let mut z = b"PVQZ".to_vec();
+            z.extend_from_slice(&(raw.len() as u32).to_le_bytes());
+            z.extend_from_slice(&deflate_fixed(&raw));
+            std::fs::write(out.join("g3.qbc"), z).unwrap();
             std::fs::write(out.join("g3_boot.js"), "voxel.g3RunBytecode();\n").unwrap();
         } else {
             if mtime("game-firered.qbc").is_some() {
@@ -94,4 +105,87 @@ fn main() {
             std::fs::copy("game-firered.js", out.join("g3_boot.js")).unwrap();
         }
     }
+}
+
+/// A raw deflate stream (RFC 1951) of one block with the fixed Huffman
+/// codes, matches found greedily through 3-byte hash chains in a 32 KB
+/// window: for FireRed's boot bytecode (any inflater reads it; the host's
+/// is g3_png.c g3_inflate).
+fn deflate_fixed(data: &[u8]) -> Vec<u8> {
+    const LBASE: [u16; 29] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
+    const LEXTRA: [u8; 29] = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
+    const DBASE: [u16; 30] = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
+    const DEXTRA: [u8; 30] = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
+    const WIN: usize = 32768;
+    const CHAIN: usize = 48;
+    struct Bits { out: Vec<u8>, acc: u64, n: u32 }
+    impl Bits {
+        fn put(&mut self, v: u32, n: u32) {
+            self.acc |= (v as u64) << self.n;
+            self.n += n;
+            while self.n >= 8 { self.out.push(self.acc as u8); self.acc >>= 8; self.n -= 8; }
+        }
+        /// a Huffman code, most significant bit first
+        fn code(&mut self, c: u32, n: u32) {
+            let mut r = 0u32;
+            for i in 0..n { r |= ((c >> i) & 1) << (n - 1 - i); }
+            self.put(r, n);
+        }
+        fn lit(&mut self, s: u32) {
+            match s {
+                0..=143 => self.code(0x30 + s, 8),
+                144..=255 => self.code(0x190 + s - 144, 9),
+                256..=279 => self.code(s - 256, 7),
+                _ => self.code(0xC0 + s - 280, 8),
+            }
+        }
+    }
+    let mut b = Bits { out: Vec::with_capacity(data.len() / 2), acc: 0, n: 0 };
+    b.put(1, 1); // the last block
+    b.put(1, 2); // fixed codes
+    let hash = |i: usize| -> usize { ((data[i] as usize) << 10 ^ (data[i + 1] as usize) << 5 ^ data[i + 2] as usize) & 0x7FFF };
+    let mut head = vec![usize::MAX; 0x8000];
+    let mut prev = vec![usize::MAX; WIN];
+    let insert = |head: &mut Vec<usize>, prev: &mut Vec<usize>, i: usize| {
+        if i + 2 < data.len() {
+            let h = hash(i);
+            prev[i % WIN] = head[h];
+            head[h] = i;
+        }
+    };
+    let mut i = 0;
+    while i < data.len() {
+        let (mut best, mut bdist) = (0usize, 0usize);
+        if i + 2 < data.len() {
+            let mut c = head[hash(i)];
+            let mut tries = 0;
+            let max = (data.len() - i).min(258);
+            while c != usize::MAX && i - c <= WIN && tries < CHAIN {
+                let mut l = 0;
+                while l < max && data[c + l] == data[i + l] { l += 1; }
+                if l > best { best = l; bdist = i - c; if l == max { break; } }
+                let p = prev[c % WIN];
+                if p == usize::MAX || p >= c { break; }
+                c = p;
+                tries += 1;
+            }
+        }
+        if best >= 3 {
+            let li = LBASE.iter().rposition(|&x| x as usize <= best).unwrap();
+            b.lit(257 + li as u32);
+            b.put((best - LBASE[li] as usize) as u32, LEXTRA[li] as u32);
+            let di = DBASE.iter().rposition(|&x| x as usize <= bdist).unwrap();
+            b.code(di as u32, 5);
+            b.put((bdist - DBASE[di] as usize) as u32, DEXTRA[di] as u32);
+            for k in 0..best { insert(&mut head, &mut prev, i + k); }
+            i += best;
+        } else {
+            b.lit(data[i] as u32);
+            insert(&mut head, &mut prev, i);
+            i += 1;
+        }
+    }
+    b.lit(256);
+    if b.n > 0 { b.out.push(b.acc as u8); }
+    b.out
 }
