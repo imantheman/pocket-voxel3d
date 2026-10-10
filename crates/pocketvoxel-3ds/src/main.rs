@@ -4559,7 +4559,7 @@ fn build_map(
     let wp = pak.map_world_pal(map_id).unwrap_or(COLOR_PAL_NONE);
     let palv = &pak.palettes[resolve_pal(pak, pidx, page.kind, wp, pal_sel_now())];
     let (aw, ah) = (page.w as u32, page.h as u32);
-    let (tw, th) = (po2(aw), po2(ah));
+    let (tw, th) = (po2(aw), po2(ah)); #[cfg(feature = "gen3")] let (tw, th) = gen3::tex_dims(tw, th);
     let mut tex_rgba = vec![0u8; (tw * th * 4) as usize];
     for y in 0..ah {
         for x in 0..aw {
@@ -6254,7 +6254,7 @@ fn main() {
                     strip_hold.clear();
                     strip_infos.clear();
                     strip_verts_kb = 0;
-                }
+                } #[cfg(feature = "gen3")] if !streaming_same_map { tree_bufs.clear(); tree_insts.clear(); } #[cfg(feature = "gen3")] gen3::tex_reserve();
                 // (the map being left, for the seam strips below)
                 let prev_map_id = map_ids.get(prev_map_i).copied();
                 prev_map_i = map_i;
@@ -6531,7 +6531,7 @@ fn main() {
                             warmed += 1;
                         }
                     }
-                }
+                } #[cfg(feature = "gen3")] gen3::tex_release(geom.tw, geom.th);
                 let mut t = texture::Texture::new(
                     texture::TextureParameters::new_2d(geom.tw as u16, geom.th as u16, texture::ColorFormat::Rgba8),
                 ).expect("tex");

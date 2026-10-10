@@ -156,6 +156,66 @@ pub fn hold_rebuild(hidden: bool, built_flat: bool, same_map: bool, free_kb: usi
     true
 }
 
+extern "C" {
+    fn linearAlloc(size: usize) -> *mut core::ffi::c_void;
+    fn linearFree(p: *mut core::ffi::c_void);
+}
+
+/// The terrain texture's slot in linear memory: every FireRed map's terrain
+/// texture is made 256 x 1024 RGBA8 (tex_dims; the shader's UV scale is
+/// aw/tw, ah/th, so the picture is the same), and when no terrain texture
+/// holds the slot -- a build's upload in progress, a flat build -- this
+/// block does. main.rs makes the texture with expect("tex"), and the 2D
+/// layer's textures, made and let go all session, leave linear memory in
+/// pieces: the leak bench's tour died there twice ("tex:
+/// FailedToInitialize"), once with 1 MB of linear free and once with 6 MB
+/// free but no single block of 1 MB. One block of the one size, handed from
+/// texture to texture, is always there.
+const TEX_SLOT_W: u32 = 256;
+const TEX_SLOT_H: u32 = 1024;
+const TEX_SLOT_BYTES: usize = (TEX_SLOT_W * TEX_SLOT_H * 4) as usize;
+static mut TEX_HOLD: *mut core::ffi::c_void = core::ptr::null_mut();
+
+/// build_map's terrain texture size (a same-line hook after main.rs's po2
+/// sizing): the slot's, for any page that fits it.
+pub fn tex_dims(tw: u32, th: u32) -> (u32, u32) {
+    if tw <= TEX_SLOT_W && th <= TEX_SLOT_H { (TEX_SLOT_W, TEX_SLOT_H) } else { (tw, th) }
+}
+
+/// Before a build's upload (a same-line hook in main.rs, after the last
+/// map's buffers, its trees and -- earlier in the rebuild -- its terrain
+/// texture are let go): the slot is taken, so the spans, strips and trees
+/// that go up before the texture give way when linear runs short (a far
+/// span or a tree shape left out, as they already are) and the texture has
+/// its block.
+pub fn tex_reserve() {
+    unsafe {
+        if !TEX_HOLD.is_null() {
+            return; // (still held since a flat build)
+        }
+        TEX_HOLD = linearAlloc(TEX_SLOT_BYTES);
+        if TEX_HOLD.is_null() {
+            dlog(&format!(
+                "[pv] g3 build: WARNING no linear block of {} KB for the terrain texture (linear free {} KB)",
+                TEX_SLOT_BYTES / 1024,
+                super::unsafe_free_kb(),
+            ));
+        }
+    }
+}
+
+/// Just before main.rs makes the terrain texture (tw x th): the slot goes
+/// back for it to take -- unless the texture is a flat build's 8 x 8, which
+/// goes elsewhere while the slot stays held for the next real one.
+pub fn tex_release(tw: u32, th: u32) {
+    unsafe {
+        if !TEX_HOLD.is_null() && (tw as usize * th as usize * 4) > TEX_SLOT_BYTES / 2 {
+            linearFree(TEX_HOLD);
+            TEX_HOLD = core::ptr::null_mut();
+        }
+    }
+}
+
 /// Whether the built world is being kept, undrawn, through a battle (watch.rs).
 pub fn keeping() -> bool {
     unsafe { KEEPING }
