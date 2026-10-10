@@ -1265,6 +1265,38 @@ function releaseVoidFrom(from: VoidFrom | undefined): void {
 
 /** drawNativeTiles' last fill completed (its skip, below). */
 let nativeFillDone = false;
+/** pocket-voxel: the grid's drawn cells per pair (drawNativeTiles' fill). */
+let nativePairCount: Record<string, number> = {};
+/** pocket-voxel: drawNativeTiles' scratch, the cells a metatile write dropped. */
+const nativeDropped: number[] = [];
+/** pocket-voxel: cells drawNativeTiles keeps round its window, off the screen. */
+const NATIVE_RING = 1;
+/** pocket-voxel: the ring's cells sampled a frame (at least; more while many
+ *  wait) and let go a frame. */
+const RING_FILL_MIN = 3;
+const RING_RELEASE = 6;
+/** pocket-voxel: the ring's queues, x then y, read from ...At on. */
+const ringFill: number[] = [];
+let ringFillAt = 0;
+const ringFree: number[] = [];
+let ringFreeAt = 0;
+const pushFill = (x: number, y: number): boolean => { ringFill.push(x, y); return true; };
+const pushFree = (x: number, y: number): boolean => { ringFree.push(x, y); return true; };
+
+/** pocket-voxel: fn for each cell of rect a not in rect b (x0, y0, w, h each),
+ *  row by row; false as soon as fn is. */
+function eachDiff(ax: number, ay: number, aw: number, ah: number, bx: number, by: number, bw: number, bh: number,
+  fn: (x: number, y: number) => boolean): boolean {
+  for (let y = ay; y < ay + ah; y++) {
+    if (y < by || y >= by + bh) {
+      for (let x = ax; x < ax + aw; x++) if (!fn(x, y)) return false;
+      continue;
+    }
+    for (let x = ax; x < Math.min(ax + aw, bx); x++) if (!fn(x, y)) return false;
+    for (let x = Math.max(ax, bx + bw); x < ax + aw; x++) if (!fn(x, y)) return false;
+  }
+  return true;
+}
 
 // Lua: field_view.lua:953
 /**
@@ -1536,32 +1568,33 @@ function drawNativeTiles(mapDef: any, camX: number, camY: number, canvasW: numbe
   };
 
   const releaseCell = (info: NativeCell): boolean => {
+    if (info.draw) nativePairCount[info.pair] = (nativePairCount[info.pair] ?? 1) - 1;
     return releaseNativeSprite(uStore, FieldView._nativeFreeUnder!, info.under)
       && releaseNativeSprite(oStore, FieldView._nativeFreeOver!, info.over);
   };
 
+  // NOT FAITHFUL (performance, same picture): the grid holds the window
+  // and a ring of NATIVE_RING cells round it, off the screen (the window
+  // already reaches a cell past every edge). A move lets go of the cells
+  // that left the ring a few a frame (ringFree), and the ring's new cells
+  // are sampled a few a frame (ringFill) between crossings, so the cells a
+  // crossing brings into the window are already there -- where Brian's
+  // walked every cell of the grid twice and sampled the new row or column
+  // in the crossing frame (~6 ms more than any other frame on the console,
+  // a dropped frame each cell walked). Which batch slot a cell lands in
+  // does not show: cells never overlap.
+  const oldX = lor(FieldView._nativeBx, cx0), oldY = lor(FieldView._nativeBy, cy0);
+  const R = NATIVE_RING, kw = cols + 2 * R, kh = rows + 2 * R;
   if (!reset && moved) {
-    for (const ky in visibleCells) {
-      const wy = Number(ky);
-      const row = visibleCells[wy]!;
-      for (const kx in row) {
-        const wx = Number(kx);
-        if (wx < cx0 || wx >= cx0 + cols || wy < cy0 || wy >= cy0 + rows) {
-          if (!releaseCell(row[wx]!)) {
-            reset = true;
-            break;
-          }
-          delete row[wx];
-        }
-      }
-      if (emptyObj(row)) delete visibleCells[wy];
-      if (reset) break;
-    }
+    eachDiff(oldX - R, oldY - R, kw, kh, cx0 - R, cy0 - R, kw, kh, pushFree);
   }
 
   // Metatile writes since the last draw: drop just those cells so the fill
   // loop below re-samples them (FieldView.invalidateCell).
   const dirtyCells = FieldView._nativeDirtyCells;
+  // (the cells dropped here, x then y, for the fill to sample again)
+  const dropped = nativeDropped;
+  dropped.length = 0;
   if (dirtyCells) {
     FieldView._nativeDirtyCells = undefined;
     if (!reset) {
@@ -1576,6 +1609,7 @@ function drawNativeTiles(mapDef: any, camX: number, camY: number, canvasW: numbe
             break;
           }
           delete row[wx];
+          dropped.push(wx, wy);
         }
       }
     }
@@ -1591,6 +1625,9 @@ function drawNativeTiles(mapDef: any, camX: number, camY: number, canvasW: numbe
     visiblePairs = {};
     FieldView._nativeVisiblePairs = visiblePairs;
     nativeSlots.under = 0; nativeSlots.over = 0;
+    nativePairCount = {};
+    ringFill.length = 0; ringFillAt = 0;
+    ringFree.length = 0; ringFreeAt = 0;
     FieldView._nativeSpriteSlots = 0;
     FieldView._nativeBaseBx = cx0; FieldView._nativeBaseBy = cy0;
     FieldView._nativeViewCols = cols; FieldView._nativeViewRows = rows;
@@ -1599,29 +1636,99 @@ function drawNativeTiles(mapDef: any, camX: number, camY: number, canvasW: numbe
 
   if (reset) {
     resetNative();
-  } else if (moved) {
-    for (const k in visiblePairs) delete visiblePairs[k];
   }
 
-  const fill = (): boolean => {
-    for (let wy = cy0; wy <= cy0 + rows - 1; wy++) {
-      let row = visibleCells[wy];
-      if (!row) {
-        row = {};
-        visibleCells[wy] = row;
-      }
-      for (let wx = cx0; wx <= cx0 + cols - 1; wx++) {
-        let info = row[wx];
-        if (!info) {
-          info = addCell(wx, wy);
-          if (FieldView._nativeSwap) return false;
-          row[wx] = info;
-        }
-        if (info.draw) visiblePairs[info.pair] = true;
-      }
+  /** Cell (wx, wy) of `row` sampled if missing; false if an atlas swapped under it. */
+  const fillCell = (row: Record<number, NativeCell>, wx: number, wy: number): boolean => {
+    if (row[wx]) return true;
+    const info = addCell(wx, wy);
+    if (FieldView._nativeSwap) return false;
+    row[wx] = info;
+    if (info.draw) {
+      nativePairCount[info.pair] = (nativePairCount[info.pair] ?? 0) + 1;
+      // (a move resets the pairs from the counts below; standing, a
+      // re-sampled cell's pair is only added, as Brian's fill adds it)
+      visiblePairs[info.pair] = true;
     }
     return true;
   };
+  const rowAt = (wy: number): Record<number, NativeCell> => {
+    let row = visibleCells[wy];
+    if (!row) {
+      row = {};
+      visibleCells[wy] = row;
+    }
+    return row;
+  };
+  const inWindow = (wx: number, wy: number): boolean => wx >= cx0 && wx < cx0 + cols && wy >= cy0 && wy < cy0 + rows;
+  const inRing = (wx: number, wy: number): boolean => wx >= cx0 - R && wx < cx0 + cols + R && wy >= cy0 - R && wy < cy0 + rows + R;
+  // every cell of the window (a reset, or a fill that did not complete); the
+  // ring after it, a few a frame
+  const fillAll = (): boolean => {
+    if (moved) for (const k in visiblePairs) delete visiblePairs[k];
+    for (let wy = cy0; wy <= cy0 + rows - 1; wy++) {
+      const row = rowAt(wy);
+      for (let wx = cx0; wx <= cx0 + cols - 1; wx++) {
+        if (!fillCell(row, wx, wy)) return false;
+        const info = row[wx]!;
+        if (info.draw) visiblePairs[info.pair] = true;
+      }
+    }
+    ringFill.length = 0; ringFillAt = 0;
+    eachDiff(cx0 - R, cy0 - R, kw, kh, cx0, cy0, cols, rows, pushFill);
+    return true;
+  };
+  // what a move brought into the window and is not there yet (the ring had
+  // it, unless the move outran the ring's fill), and the cells dropped
+  // above; the ring's new cells queued; then, on a move, the pairs from the
+  // counts (the window's, as Brian's clear-and-mark of every cell leaves
+  // them, and the ring's)
+  const fillNew = (): boolean => {
+    if (moved) {
+      if (!eachDiff(cx0, cy0, cols, rows, oldX, oldY, cols, rows, (wx, wy) => fillCell(rowAt(wy), wx, wy))) return false;
+      eachDiff(cx0 - R, cy0 - R, kw, kh, oldX - R, oldY - R, kw, kh, pushFill);
+    }
+    for (let i = 0; i < dropped.length; i += 2) {
+      const wx = dropped[i]!, wy = dropped[i + 1]!;
+      if (inWindow(wx, wy)) {
+        if (!fillCell(rowAt(wy), wx, wy)) return false;
+      } else if (inRing(wx, wy)) {
+        ringFill.push(wx, wy);
+      }
+    }
+    if (moved) {
+      for (const k in visiblePairs) if (!(nativePairCount[k]! > 0)) delete visiblePairs[k];
+      for (const k in nativePairCount) if (nativePairCount[k]! > 0) visiblePairs[k] = true;
+    }
+    return true;
+  };
+  // the ring's queues, a few cells a frame: false if an atlas swapped
+  const ringStep = (): boolean => {
+    for (let n = 0; n < RING_RELEASE && ringFreeAt < ringFree.length; ringFreeAt += 2) {
+      const wx = ringFree[ringFreeAt]!, wy = ringFree[ringFreeAt + 1]!;
+      const row = visibleCells[wy];
+      const info = row && row[wx];
+      if (!info || inRing(wx, wy)) continue;
+      n++;
+      if (!releaseCell(info)) return false;
+      delete row![wx];
+      if (emptyObj(row)) delete visibleCells[wy];
+    }
+    if (ringFreeAt >= ringFree.length) { ringFree.length = 0; ringFreeAt = 0; }
+    const left = (ringFill.length - ringFillAt) >> 1;
+    const budget = Math.max(RING_FILL_MIN, Math.ceil(left / 4));
+    for (let n = 0; n < budget && ringFillAt < ringFill.length; ringFillAt += 2) {
+      const wx = ringFill[ringFillAt]!, wy = ringFill[ringFillAt + 1]!;
+      if (!inRing(wx, wy)) continue;
+      const row = rowAt(wy);
+      if (row[wx]) continue;
+      n++;
+      if (!fillCell(row, wx, wy)) return false;
+    }
+    if (ringFillAt >= ringFill.length) { ringFill.length = 0; ringFillAt = 0; }
+    return true;
+  };
+  const fill = (): boolean => (reset || !nativeFillDone ? fillAll() : fillNew());
 
   FieldView._nativeSwap = false;
   FieldView._nativeResetting = !!reset;
@@ -1640,6 +1747,15 @@ function drawNativeTiles(mapDef: any, camX: number, camY: number, canvasW: numbe
       FieldView._nativeResetting = true;
       nativeFillDone = fill();
     }
+  }
+  // (not in a crossing frame, nor a reset's: the ring waits a frame)
+  if (!reset && !moved && (ringFillAt < ringFill.length || ringFreeAt < ringFree.length) && !ringStep()) {
+    // (as a fill that did not complete, above)
+    FieldView._nativeSwap = false;
+    reset = true;
+    resetNative();
+    FieldView._nativeResetting = true;
+    nativeFillDone = fill();
   }
   FieldView._nativeResetting = false;
   FieldView._nativeSwap = false;
