@@ -48,6 +48,7 @@ import Rng from "./rng.ts";
 import Field from "./field.ts";
 import Hud from "../ui/hud.ts";
 import MB from "./mb.ts";
+import LayoutNative from "./layout_native.ts";
 
 /** An EventObject (object_prepare's record; fields are Brian's). */
 export type EventObject = Record<string, any>;
@@ -1097,8 +1098,31 @@ function updateElevation(eo: EO): void {
   const mapDef = eo.mapDef ?? Coll._mapDef;
   let cx = eo.cellX, cy = eo.cellY;
   if (eo.moving) { cx = eo.targetX; cy = eo.targetY; }
-  eo.currentElevation = Coll.nextElevation(mapDef, eo.currentElevation ?? 0,
-    cx, cy, eo.cellX, eo.cellY);
+  // pocket-voxel (NOT FAITHFUL: performance, same value): every object asks
+  // every tick, standing or not. Where the last answer came from the cell
+  // itself (not carried over from `current`), the same cells of the same
+  // unwritten layout give the same answer, kept as it is.
+  const L = mapDef ? mapDef.midLayout : undefined;
+  const m = eo._elevMemo;
+  if (m && m.def === mapDef && m.layout === L && L && m.rev === (L._revision ?? 0) && m.cells === L.cells
+      && m.cx === cx && m.cy === cy && m.px === eo.cellX && m.py === eo.cellY
+      && m.out === eo.currentElevation && Coll.nextElevation === m.fn) return;
+  const out = Coll.nextElevation(mapDef, eo.currentElevation ?? 0, cx, cy, eo.cellX, eo.cellY);
+  eo.currentElevation = out;
+  // (only an answer read from the map -- nextElevation's own test -- of a
+  // plain layout, is kept)
+  let fromMap = false;
+  if (L && L.cellAt === LayoutNative.prototype.cellAt && L.elevAt === LayoutNative.prototype.elevAt) {
+    const cur = Coll.elevationOn(mapDef, cx, cy), prev = Coll.elevationOn(mapDef, eo.cellX, eo.cellY);
+    fromMap = !(cur == null || cur === 15 || prev === 15);
+  }
+  if (fromMap) {
+    const k = m ?? (eo._elevMemo = {} as any);
+    k.def = mapDef; k.layout = L; k.rev = L._revision ?? 0; k.cells = L.cells;
+    k.cx = cx; k.cy = cy; k.px = eo.cellX; k.py = eo.cellY; k.out = out; k.fn = Coll.nextElevation;
+  } else if (m) {
+    eo._elevMemo = undefined;
+  }
 }
 
 // Lua: objects.lua:961
@@ -1761,6 +1785,18 @@ function upperMovement(k: unknown): string {
   return v;
 }
 
+// pocket-voxel (NOT FAITHFUL: performance, same behaviour): the object loops
+// (update, tickPool) ask whether a menu is open once, for every object that
+// asks after it -- an object's idle step opens no menu. Hud.isMenuOpen asks
+// fourteen screens each time; it was ~5% of a city frame on the console.
+let menuOnce = false;
+let menuOpenNow: boolean | undefined;
+function menuOpen(): boolean {
+  if (!menuOnce) return !!Hud.isMenuOpen();
+  if (menuOpenNow === undefined) menuOpenNow = !!Hud.isMenuOpen();
+  return menuOpenNow;
+}
+
 // Lua: objects.lua:1564
 function idleTick(eo: EO, game: any, ctx?: any): void {
   if (eo.frozen || eo.scriptBusy || eo.moving || eo.hidden || !eo.visible) {
@@ -1769,7 +1805,7 @@ function idleTick(eo: EO, game: any, ctx?: any): void {
   // package.loaded["src.core.game3.field"]
   if (Field && Field.locked) return;
   // package.loaded["src.ui.game3.hud"]
-  if (Hud && Hud.isMenuOpen && Hud.isMenuOpen()) return;
+  if (Hud && Hud.isMenuOpen && menuOpen()) return;
   if (eo.movement === "RAISE_HAND") {
     raiseHandTick(eo);
     return;
@@ -1937,18 +1973,24 @@ function update(game: any): void {
     }
   }
   const order = Objects._order;
-  for (let k = 1; order[k] != null; k++) {
-    const eo = Objects._byId[order[k]];
-    if (eo) {
-      if (eo.bowFrames && eo.bowFrames > 0) {
-        eo.bowFrames = eo.bowFrames - 1;
-        if (eo.bowFrames <= 0) eo.bowFrames = undefined;
+  menuOnce = true;
+  menuOpenNow = undefined;
+  try {
+    for (let k = 1; order[k] != null; k++) {
+      const eo = Objects._byId[order[k]];
+      if (eo) {
+        if (eo.bowFrames && eo.bowFrames > 0) {
+          eo.bowFrames = eo.bowFrames - 1;
+          if (eo.bowFrames <= 0) eo.bowFrames = undefined;
+        }
+        tickFade(eo);
+        tickMotion(eo, game);
+        idleTick(eo, game);
+        if (eo.rseKind || eo.levitate || eo.fig8) Objects.tickRse(eo);
       }
-      tickFade(eo);
-      tickMotion(eo, game);
-      idleTick(eo, game);
-      if (eo.rseKind || eo.levitate || eo.fig8) Objects.tickRse(eo);
     }
+  } finally {
+    menuOnce = false;
   }
 }
 
@@ -2262,17 +2304,23 @@ function spawnFromDefs(defs: LuaTable, mapDef: any, mapId: any): Pool {
 function tickPool(pool: any, game: any, ctx?: any): void {
   if (pool === null || typeof pool !== "object") return;
   const order = pool.order ?? [null];
-  for (let k = 1; order[k] != null; k++) {
-    const eo = pool.byId[order[k]];
-    if (eo) {
-      if (eo.bowFrames && eo.bowFrames > 0) {
-        eo.bowFrames = eo.bowFrames - 1;
-        if (eo.bowFrames <= 0) eo.bowFrames = undefined;
+  menuOnce = true;
+  menuOpenNow = undefined;
+  try {
+    for (let k = 1; order[k] != null; k++) {
+      const eo = pool.byId[order[k]];
+      if (eo) {
+        if (eo.bowFrames && eo.bowFrames > 0) {
+          eo.bowFrames = eo.bowFrames - 1;
+          if (eo.bowFrames <= 0) eo.bowFrames = undefined;
+        }
+        tickFade(eo);
+        tickMotion(eo, game, ctx ?? pool);
+        idleTick(eo, game, ctx);
       }
-      tickFade(eo);
-      tickMotion(eo, game, ctx ?? pool);
-      idleTick(eo, game, ctx);
     }
+  } finally {
+    menuOnce = false;
   }
 }
 
