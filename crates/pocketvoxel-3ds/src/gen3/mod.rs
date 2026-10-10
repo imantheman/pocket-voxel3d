@@ -56,7 +56,7 @@ mod audio;
 mod pace;
 mod watch;
 pub use pace::{after_render, borrow_tick, frame_top, mark, step_begin};
-pub use watch::note_upload;
+pub use watch::{note_upload, squeeze_heap};
 
 extern "C" {
     fn g3_gpu_init_shared(shbin: *const u8, len: u32) -> i32;
@@ -160,6 +160,17 @@ pub fn hold_rebuild(hidden: bool, built_flat: bool, same_map: bool, free_kb: usi
 pub fn keeping() -> bool {
     unsafe { KEEPING }
 }
+
+/// The map build's vertex segments (main.rs VertStore) for FireRed: 16K
+/// vertices (320 KB) where the Kanto builds take two GPU slices (2.6 MB).
+/// try_reserve takes the plan's vertices in whole segments plus one, so even
+/// a house of a few hundred vertices asked for two 2.6 MB blocks; a long
+/// session's app heap (the leak bench's tour: 95 of 96 MB at its high
+/// water, in pieces) could not give them, the plan halved to nothing and the
+/// map came out empty -- bare sky, only the billboards drawn. FireRed's
+/// meshes are small; one bigger than a segment still gets a block of its own
+/// size (begin_span).
+pub const SEG_VERTS: usize = 16384;
 
 /// The heap a map build wants free in one block before it starts (main.rs
 /// BUILD_HEAP_MB, 16 for Kanto and Johto, whose builds staged a route's

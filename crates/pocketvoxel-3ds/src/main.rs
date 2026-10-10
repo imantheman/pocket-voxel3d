@@ -3280,7 +3280,7 @@ struct VertStore {
 /// Two GPU slices' worth (2.6 MB): small enough for a fragmented heap,
 /// big enough that leaving a segment's tail unused (a mesh that does not fit
 /// opens the next) wastes little.
-const SEG_VERTS: usize = 2 * SPAN_PIECE;
+#[cfg(not(feature = "gen3"))] const SEG_VERTS: usize = 2 * SPAN_PIECE; #[cfg(feature = "gen3")] const SEG_VERTS: usize = gen3::SEG_VERTS;
 
 impl VertStore {
     fn new() -> Self {
@@ -4662,7 +4662,7 @@ fn build_map(
                 .min(budget);
             if want == 0 || verts.try_reserve(want) {
                 break;
-            }
+            } #[cfg(feature = "gen3")] if gen3::squeeze_heap(want * core::mem::size_of::<Vertex>()) && verts.try_reserve(want) { break; }
             dlog(&format!(
                 "[pv] no room for the plan's {} verts ({} KB); a smaller plan (tiers it may not have read)",
                 want,

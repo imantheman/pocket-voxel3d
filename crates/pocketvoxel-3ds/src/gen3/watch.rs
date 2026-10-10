@@ -2,9 +2,16 @@
 //! terms; see LICENSE.md). The world's own watch: whether the map underfoot
 //! was built with something to draw, and whether the shown world drew any
 //! of it -- a map built with no spans is the bare sky Isaac saw (only the
-//! billboards on it).
+//! billboards on it). And the build's last resort when the app heap cannot
+//! give its vertices: everything else that can go goes first.
 
 use super::dlog;
+
+extern "C" {
+    /// QuickJS's cycle collector run now (g3_shim.c); ms taken, or -1 while
+    /// it is held off (the load).
+    fn g3_gc_now() -> i32;
+}
 
 /// The last build: its map, whether it was flat (no world: a battle, VIEW
 /// 2D), the spans uploaded and the spans built.
@@ -19,6 +26,8 @@ static mut EMPTY_TOTAL: u32 = 0;
 static mut EMPTY_BUILDS: u32 = 0;
 /// The last frame's span count (main.rs DRAWN).
 static mut DRAWN_LAST: u32 = 0;
+/// squeeze_heap has run for the build in progress (once a build).
+static mut SQUEEZED: bool = false;
 
 /// After each build's upload (a same-line hook in main.rs).
 pub fn note_upload(map: u32, uploaded: usize, spans: usize, flat: bool) {
@@ -27,6 +36,7 @@ pub fn note_upload(map: u32, uploaded: usize, spans: usize, flat: bool) {
         BUILT_FLAT = flat;
         UPLOADED = uploaded as u32;
         SPANS = spans as u32;
+        SQUEEZED = false;
         EMPTY_RUN = 0;
         if !flat && uploaded == 0 {
             EMPTY_BUILDS += 1;
@@ -75,3 +85,35 @@ pub extern "C" fn g3_world_stat(out: *mut u32, n: i32) -> i32 {
     k as i32
 }
 
+/// The map build's vertices could not be had (main.rs build_map, a
+/// same-line hook before it plans smaller): once a build, everything the
+/// heap holds that can go goes -- the read-ahead, every cached pak but the
+/// one being built from, QuickJS's garbage cycles -- and the build asks
+/// again. Before this a long session's heap (the leak bench's tour: 95 of
+/// 96 MB at its high water, in pieces) could not give even a house's few
+/// hundred KB, the plan halved to nothing, and the map came out empty: the
+/// bare sky. True when anything was let go.
+#[allow(static_mut_refs)]
+pub fn squeeze_heap(want_bytes: usize) -> bool {
+    unsafe {
+        if SQUEEZED {
+            return false;
+        }
+        SQUEEZED = true;
+        let cache0 = super::super::cache_total_kb();
+        let pf = super::super::PREFETCH.take().map(|p| p.buf.len() / 1024).unwrap_or(0);
+        let front = super::super::PAK_CACHE.first().map(|c| &**c as *const super::super::CachedPak);
+        let in_use = super::super::PAK_IN_USE;
+        super::super::PAK_CACHE.retain(|c| {
+            let p = &**c as *const super::super::CachedPak;
+            Some(p) == front || core::ptr::eq(p, in_use)
+        });
+        let cache1 = super::super::cache_total_kb();
+        let gc_ms = g3_gc_now();
+        dlog(&format!(
+            "[pv] g3 build: no room for {} KB of vertices: read-ahead {} KB and {} KB of cached paks let go, a cycle collection ({} ms); asking again",
+            want_bytes / 1024, pf, cache0 - cache1, gc_ms,
+        ));
+        pf > 0 || cache1 < cache0 || gc_ms >= 0
+    }
+}

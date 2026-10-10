@@ -812,6 +812,18 @@ static JSValue g3_gcidle(JSContext *ctx, JSValueConst t, int c, JSValueConst *v)
 /* QuickJS's runtime, for the host's own calls between frames. */
 static JSRuntime *g3_rt;
 
+/* g3_gc_now() -> ms taken, or -1: a cycle collection run now, between
+   frames, for the host (watch.rs squeeze_heap: a map build the app heap
+   could not give its vertices). Not while the collector is held off (the
+   load: g3Gc(true)). */
+int g3_gc_now(void) {
+    if (!g3_rt || JS_GetGCThreshold(g3_rt) == (size_t)-1) return -1;
+    uint64_t t0 = svcGetSystemTick();
+    JS_RunGC(g3_rt);
+    g3_gc_idle_base = (size_t)(unsigned)mallinfo().uordblks;
+    return (int)((double)(svcGetSystemTick() - t0) / 268111.856 + 0.5);
+}
+
 /* g3WorldStat() -> [spans drawn last frame, spans uploaded, spans built,
    built map, built flat, kept through a battle, empty shown frames in a
    row, empty shown frames in all, empty builds] (watch.rs): the leak
