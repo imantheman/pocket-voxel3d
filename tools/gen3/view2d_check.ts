@@ -40,6 +40,18 @@ game._handleBootAction({
   action: "new_game", name: "RED", rivalName: "BLUE", gender: 0,
   start: { map, x: Number(x ?? 0), y: Number(y ?? 0), facing: "down" },
 });
+const { Objects } = await import("../../voxelmon/game/gen3/core/objects.ts");
+const { Player } = await import("../../voxelmon/game/gen3/core/player.ts");
+function stateText(): string {
+  const O: any = Objects, P: any = Player;
+  const people: unknown[] = [];
+  for (let k = 1; O._order[k] != null; k++) {
+    const eo = O._byId[O._order[k]];
+    if (eo) people.push([eo.localId, eo.cellX, eo.cellY, eo.px, eo.py, eo.facing, eo.moving, eo.currentElevation, eo.fixedClass]);
+  }
+  const ses = game.session;
+  return JSON.stringify([people, P.cellX, P.cellY, P.facing, P.currentElevation, ses && ses.questLog]);
+}
 const bench = new BenchView2d(`view2d:${walk}`);
 const lines: string[] = [];
 bench.log = (s) => { console.log(s); };
@@ -54,6 +66,9 @@ while (!bench.done && tick < MAX) {
   G.endFrame();
   const px = host.pixels();
   lines.push(`${tick} ${Bun.hash(px).toString(16)}`);
+  // every 30 ticks the game's own state too: the people (where, facing,
+  // elevation), the player, and the quest log the recorder keeps
+  if (tick % 30 === 0) lines.push(`${tick} state ${Bun.hash(stateText()).toString(16)}`);
   if (shots.has(tick)) {
     const name = `${SHOT_DIR}/${map}_${tick}.png`;
     writeFileSync(name, encodePng(240, 160, px));

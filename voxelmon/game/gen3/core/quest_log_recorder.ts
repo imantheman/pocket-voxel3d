@@ -107,10 +107,17 @@ export const R = {
         walkPhase: Pl.walkPhase(), stepFlip: Pl.drawFlip(), fieldMove: (Pl.fieldMoveAnim ?? 0) > 0,
       };
     }
-    for (const [, o] of ipairs<any>(Ob.forDraw())) {
+    // pocket-voxel (NOT FAITHFUL: performance, same frame): the people
+    // trimActors would drop for being out of view are not written down first
+    // (every sixth tick, each a record and a graphics lookup)
+    const list = Ob.forDraw();
+    for (let i = 1; list[i] != null; i++) {
+      const o = list[i];
+      const ax = o.px ?? o.cellX * 16, ay = o.py ?? o.cellY * 16;
+      if (o.localId !== 255 && !(Math.abs(ax - f.x) <= Q.VIEW_DX && Math.abs(ay - f.y) <= Q.VIEW_DY)) continue;
       const gid = Space && Space.resolveObjectGraphicsId && o.def && Space.resolveObjectGraphicsId(o.def);
       f.actors[len(f.actors) + 1] = {
-        id: o.localId ?? 1000 + (tonumber(o.virtualId) ?? 0), x: o.px ?? o.cellX * 16, y: o.py ?? o.cellY * 16,
+        id: o.localId ?? 1000 + (tonumber(o.virtualId) ?? 0), x: ax, y: ay,
         graphicsId: truthy(gid) ? gid : (o.graphicsId ?? (o.def && (o.def.graphicsId ?? o.def.graphics))),
         facing: o.facing, walkPhase: Ob.walkPhase(o), stepFlip: o.stepFlip, frame: o.customFrame,
         bow: (o.bowFrames ?? 0) > 8 && (o.bowFrames ?? 0) <= 40,
