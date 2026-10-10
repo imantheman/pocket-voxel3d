@@ -130,6 +130,13 @@ void g3_tex_stats(uint32_t out[4]) {
     out[3] = batch_bytes;
 }
 
+/* Texture id's bytes in linear memory (0: none, or in VRAM): the leak
+   bench's textures by where they were made (g3_shim.c g3TexBytes). */
+uint32_t g3_tex_bytes(int id) {
+    G3Tex *t = (id > 0 && id < ntexs) ? texs[id] : NULL;
+    return t && !t->vram ? t->bytes : 0;
+}
+
 static void tex_retire(G3Tex *t) {
     if (!t) return;
     if (nretired == capretired) {

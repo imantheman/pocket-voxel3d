@@ -94,7 +94,7 @@ function ms1(us: number): string {
 }
 
 /** The boot natives some binaries have (g3_shim.c). */
-const g3n = n as unknown as { g3Mem?(cheap?: boolean): number[]; g3Gc?(hold: boolean): void; g3GcIdle?(growth: number): number; g3WorldStat?(): number[] };
+const g3n = n as unknown as { g3Mem?(cheap?: boolean): number[]; g3Gc?(hold: boolean): void; g3GcIdle?(growth: number): number; g3WorldStat?(): number[]; g3TexBytes?(id: number): number; g3ArenaWatch?(on: boolean): void };
 
 /** The heaps (g3_shim.c g3Mem): QuickJS, the app heap, linear memory. A
  *  cheap reading (the perf lines') leaves out the QuickJS heap, whose count
@@ -108,6 +108,8 @@ function memText(cheap = false): string {
     (m[6] !== undefined ? `, textures ${m[6]} (${Math.round(m[7]! / 1024)} KB linear, ${Math.round(m[8]! / 1024)} KB VRAM; ${watchedTextures()} watched)` : "") +
     (m[10] !== undefined ? `, host batches ${Math.round(m[9]! / 1024)} KB, guest buffers off the js heap ${Math.round(m[10]! / 1024)} KB` : "") +
     (m[11] !== undefined ? `, js heap after the last collection ${mb(m[11]!)} MB (${m[12]} collections by QuickJS)` : "") +
+    (m[13] !== undefined ? `, largest free block ${mb(m[13]!)} MB` : "") +
+    (m[14] !== undefined ? `, most in use at a shown frame ${mb(m[14]!)} MB` : "") +
     // images' pixel copies let go once uploaded (image.ts tryDropPixels)
     (pixelDrop.dropped || pixelDrop.verify ? `, pixel copies let go ${pixelDrop.dropped} (${mb(pixelDrop.droppedBytes)} MB), made again ${pixelDrop.remade}` +
       (pixelDrop.verify ? `, texture reads unlike the copy ${pixelDrop.mismatches}` : "") : "");
@@ -218,7 +220,7 @@ function gameMain(bench: boolean): void {
   // bench mode's screen suite (platform/bench_suite.ts) instead of a key script
   const suite = bench && scriptText === "suite" ? new BenchSuite() : null;
   // ... or its long session (platform/bench_leak.ts): memory over many battles and maps
-  const leak = bench && scriptText === "leak" ? new BenchLeak(game, () => memText(false), () => g3n.g3WorldStat?.()) : null;
+  const leak = bench && scriptText === "leak" ? new BenchLeak(game, () => memText(false), () => g3n.g3WorldStat?.(), g3n.g3TexBytes ? (id) => g3n.g3TexBytes!(id) : undefined) : null;
   // ... or its transitions (platform/bench_load.ts): battles, menus, doors, seams, each marked
   // ("load:battle", "load:menu", "load:walk": that part alone)
   const load = bench && /^load(:|$)/.test(scriptText) ? new BenchLoad(game, () => memText(true), scriptText.slice(5)) : null;
@@ -233,6 +235,8 @@ function gameMain(bench: boolean): void {
   }
   // the long session checks every pixel copy against its texture before letting it go
   if (leak) pixelDrop.verify = true;
+  // ... and says when the app heap's high water grows (g3_shim.c g3ArenaWatch)
+  if (leak) g3n.g3ArenaWatch?.(true);
   const script = new BenchScript(suite || leak || load ? "" : scriptText);
   const shots = shotSet(typeof PV_G3_BENCH_SHOTS === "string" ? PV_G3_BENCH_SHOTS : bench ? "90,300" : "");
   let tick = 0;

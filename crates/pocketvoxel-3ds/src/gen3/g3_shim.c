@@ -33,6 +33,7 @@
    sdmc:/3ds/voxelmon/firered/. */
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -219,6 +220,32 @@ static void g3_gc_clamp(JSRuntime *rt) {
     g3_gc_arm(rt);
 }
 
+/* The leak bench (g3ArenaWatch(true)): each shown frame, newlib's arena --
+   the app heap's high water -- and a line whenever it has grown by 256 KB
+   or more, with what was in use then, so the log says when the high water
+   is made (a map build, a battle's start, garbage before a collection). */
+void g3_dlog(const char *s, int len);
+static int g3_arena_on;
+static size_t g3_arena_last;
+static size_t g3_inuse_peak; /* the most newlib's count was at a shown frame */
+static void g3_arena_watch(JSRuntime *rt) {
+    struct mallinfo mi = mallinfo();
+    size_t arena = (size_t)(unsigned)mi.arena;
+    if ((size_t)(unsigned)mi.uordblks > g3_inuse_peak) g3_inuse_peak = (size_t)(unsigned)mi.uordblks;
+    if (arena < g3_arena_last + ((size_t)256 << 10)) return;
+    char b[200];
+    int n = snprintf(b, sizeof b, "[pv] g3 arena: %u KB (+%u), in use %u KB, js %u KB (gc at %u KB, after the last %u KB)",
+        (unsigned)(arena >> 10), (unsigned)((arena - g3_arena_last) >> 10), (unsigned)((size_t)(unsigned)mi.uordblks >> 10),
+        (unsigned)(JS_GetMallocSize(rt) >> 10), (unsigned)(JS_GetGCThreshold(rt) >> 10), (unsigned)(g3_gc_live >> 10));
+    g3_arena_last = arena;
+    if (n > 0) g3_dlog(b, n < (int)sizeof b ? n : (int)sizeof b - 1);
+}
+static JSValue g3_arenawatch(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    g3_arena_on = c > 0 && JS_ToBool(ctx, v[0]);
+    return JS_UNDEFINED;
+}
+
 static JSValue g3_drawlist(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t;
     if (c < 1) return JS_UNDEFINED;
@@ -227,6 +254,7 @@ static JSValue g3_drawlist(JSContext *ctx, JSValueConst t, int c, JSValueConst *
     if (!p || ((uintptr_t)p & 3)) return JS_UNDEFINED;
     g3_draw((const float *)p, len / 4);
     g3_gc_clamp(JS_GetRuntime(ctx));
+    if (g3_arena_on) g3_arena_watch(JS_GetRuntime(ctx));
     return JS_UNDEFINED;
 }
 
@@ -802,6 +830,18 @@ static JSValue g3_mem(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     /* QuickJS's heap after the last collection, and the re-arms after its own */
     JS_SetPropertyUint32(ctx, a, 11, JS_NewFloat64(ctx, (double)g3_gc_live));
     JS_SetPropertyUint32(ctx, a, 12, JS_NewFloat64(ctx, (double)g3_gc_arms));
+    /* (not cheap) the largest block the app heap would give now, to 64 KB:
+       how far the free part is in pieces */
+    if (!cheap) {
+        size_t lo = 0, hi = (size_t)(fake_heap_end - fake_heap_start) - (size_t)(unsigned)mi.uordblks;
+        while (hi - lo > ((size_t)64 << 10)) {
+            size_t mid = lo + (hi - lo) / 2;
+            void *p = malloc(mid);
+            if (p) { free(p); lo = mid; } else hi = mid;
+        }
+        JS_SetPropertyUint32(ctx, a, 13, JS_NewFloat64(ctx, (double)lo));
+        if (g3_arena_on) JS_SetPropertyUint32(ctx, a, 14, JS_NewFloat64(ctx, (double)g3_inuse_peak));
+    }
     return a;
 }
 
@@ -871,6 +911,16 @@ static JSValue g3_heapfree(JSContext *ctx, JSValueConst t, int c, JSValueConst *
     return JS_NewFloat64(ctx, (double)(heap > used ? heap - used : 0));
 }
 
+/* g3TexBytes(id) -> texture id's bytes in linear memory (g3_render.c), for
+   the leak bench's textures by where they were made. */
+uint32_t g3_tex_bytes(int id);
+static JSValue g3_texbytes(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    int32_t id = 0;
+    if (c > 0) JS_ToInt32(ctx, &id, v[0]);
+    return JS_NewFloat64(ctx, (double)g3_tex_bytes((int)id));
+}
+
 /* For the host (mod.rs): the app heap's size and newlib's count in use. */
 void g3_heap_use(uint32_t *size, uint32_t *used) {
     *size = (uint32_t)(fake_heap_end - fake_heap_start);
@@ -905,6 +955,8 @@ int qjs_register_g3(JSContext *ctx) {
     g3_rt = JS_GetRuntime(ctx);
     JS_SetPropertyStr(ctx, o, "g3WorldStat", JS_NewCFunction(ctx, g3_worldstat, "g3WorldStat", 0));
     JS_SetPropertyStr(ctx, o, "g3HeapFree", JS_NewCFunction(ctx, g3_heapfree, "g3HeapFree", 0));
+    JS_SetPropertyStr(ctx, o, "g3TexBytes", JS_NewCFunction(ctx, g3_texbytes, "g3TexBytes", 1));
+    JS_SetPropertyStr(ctx, o, "g3ArenaWatch", JS_NewCFunction(ctx, g3_arenawatch, "g3ArenaWatch", 1));
     JS_SetPropertyStr(ctx, o, "g3TexUpload", JS_NewCFunction(ctx, g3_texupload, "g3TexUpload", 5));
     JS_SetPropertyStr(ctx, o, "g3TexSub", JS_NewCFunction(ctx, g3_texsub, "g3TexSub", 6));
     JS_SetPropertyStr(ctx, o, "g3Blit", JS_NewCFunction(ctx, g3_blit, "g3Blit", 10));

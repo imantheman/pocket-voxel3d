@@ -24,6 +24,7 @@ import { Options } from "../core/options.ts";
 import Trainers from "../core/scripting/trainers.ts";
 import { Ui as BattleUi } from "../core/battle/ui.ts";
 import { FieldMoves } from "../core/field_moves.ts";
+import { setImageTrack, type Image } from "./image.ts";
 
 const BIT: Record<string, number> = { UP: 0, DOWN: 1, LEFT: 2, RIGHT: 3, A: 4, B: 5, START: 6, SELECT: 7 };
 const KEY: Record<string, string> = { up: "UP", down: "DOWN", left: "LEFT", right: "RIGHT" };
@@ -48,9 +49,58 @@ export class BenchLeak {
    * frame, uploaded, built, built map, built flat, kept, empty frames in a
    * row, in all, empty builds), where the binary has it.
    */
-  constructor(game: any, private readonly mem: () => string, private readonly world?: () => number[] | undefined) {
+  constructor(game: any, private readonly mem: () => string, private readonly world?: () => number[] | undefined,
+    private readonly texBytes?: (id: number) => number) {
     this.game = game;
     this.it = this.session();
+    // every Image made, with where (the first callers outside image.ts), for
+    // the textures by where they were made (texDump)
+    if (texBytes) {
+      setImageTrack((img) => {
+        const st = (new Error().stack ?? "").split("\n").map((l) => l.trim().replace(/^at /, "").replace(/ \(.*$/, ""));
+        const keep = st.filter((f) => f && !/^(Error|Image|newImage|Canvas|<anonymous>|\[native code\])$/.test(f)).slice(1, 4);
+        this.images.push({ r: new WeakRef(img), site: keep.join(" < ") });
+      });
+    }
+  }
+
+  private images: { r: WeakRef<Image>; site: string }[] = [];
+  private logs = 0;
+
+  /** The 2D layer's textures in linear memory by where their images were made (every 20th step, and the last). */
+  private texDump(last: boolean): void {
+    if (!this.texBytes || (!last && ++this.logs % 20 !== 0)) return;
+    const by = new Map<string, [number, number]>();
+    const kept = new Map<string, [number, number]>();
+    let total = 0, keptTotal = 0, j = 0;
+    for (const t of this.images) {
+      const img = t.r.deref();
+      if (!img) continue;
+      this.images[j++] = t;
+      // the pixel copy the image still holds (image.ts tryDropPixels lets go of the ones nothing else holds)
+      const px = img._data ? img._data.px.length : 0;
+      if (px > 0) {
+        keptTotal += px;
+        const k = kept.get(t.site) ?? [0, 0];
+        k[0]++; k[1] += px;
+        kept.set(t.site, k);
+      }
+      const b = this.texBytes(img.id);
+      if (b <= 0) continue;
+      total += b;
+      const e = by.get(t.site) ?? [0, 0];
+      e[0]++; e[1] += b;
+      by.set(t.site, e);
+    }
+    this.images.length = j;
+    console.log(`[pv] g3 leak textures: ${Math.round(total / 1024)} KB of the guest's images' textures in linear memory, by where made:`);
+    for (const [site, [n, b]] of [...by].sort((x, y) => y[1][1] - x[1][1]).slice(0, 14)) {
+      console.log(`[pv] g3 leak textures:   ${String(Math.round(b / 1024)).padStart(6)} KB ${String(n).padStart(4)}  ${site}`);
+    }
+    console.log(`[pv] g3 leak pixel copies: ${Math.round(keptTotal / 1024)} KB still held by images, by where made:`);
+    for (const [site, [n, b]] of [...kept].sort((x, y) => y[1][1] - x[1][1]).slice(0, 10)) {
+      console.log(`[pv] g3 leak pixel copies:   ${String(Math.round(b / 1024)).padStart(6)} KB ${String(n).padStart(4)}  ${site}`);
+    }
   }
 
   /** The buttons held at `tick`. */
@@ -67,6 +117,7 @@ export class BenchLeak {
 
   private log(what: string): void {
     console.log(`[pv] g3 leak: ${what} (tick ${this.tick}, ${this.maps} map changes); ${this.mem()}${this.worldCheck()}`);
+    this.texDump(what === "done");
   }
 
   /**

@@ -376,8 +376,19 @@ export class Image {
     if (pixelDrop.verify) {
       const back = host.texRead(this.id, this.w, this.h);
       let same = !!back && back.length === d.px.length;
-      for (let i = 0; same && i < back!.length; i++) if (back![i] !== d.px[i]) same = false;
-      if (!same) { pixelDrop.mismatches++; this.noDrop = true; return; }
+      let at = -1;
+      for (let i = 0; same && i < back!.length; i++) if (back![i] !== d.px[i]) { same = false; at = i; }
+      if (!same) {
+        pixelDrop.mismatches++;
+        this.noDrop = true;
+        // (the bench: which image, and the first texel that differs)
+        if (pixelDrop.mismatches <= 8) {
+          const p = at & ~3;
+          console.log(`[pv] g3 pixel copy unlike its texture: image ${this.id} ${this.w}x${this.h}` +
+            (back ? ` at texel ${p / 4} (${p / 4 % this.w},${Math.floor(p / 4 / this.w)}): copy ${Array.from(d.px.subarray(p, p + 4)).join(",")} texture ${Array.from(back.subarray(p, p + 4)).join(",")}` : ": no texture read"));
+        }
+        return;
+      }
     } else if (!host.texRead(this.id, this.w, this.h, true)) return;
     pixelDrop.dropped++;
     pixelDrop.droppedBytes += d.px.length;
