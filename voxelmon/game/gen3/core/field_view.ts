@@ -873,18 +873,39 @@ const playerActor: any = {};
 
 // Lua: field_view.lua:604 -- [under, over]
 function collectGame3Actors(game: any, mapDef: any, camX: number, camY: number, px: number, py: number,
-  facing: any, walkPhase: any, stepFlip: any, playerYOff: number, playerXOff: number): [LuaTable, LuaTable] {
+  facing: any, walkPhase: any, stepFlip: any, playerYOff: number, playerXOff: number, cull = false): [LuaTable, LuaTable] {
   const Objects = modObjects();
   const OwSprites = modOwSprites();
   const useOw = OwSprites && OwSprites.ready && OwSprites.ready();
   const actors = frameActors;
   clearSeq(actors);
   const hasObjects = Objects && Objects.hasMap && Objects.hasMap();
+  // pocket-voxel (NOT FAITHFUL: performance, same picture): with `cull` (the
+  // 2D draw), this map's people far enough off the screen that no sprite of
+  // theirs (64x64 at most, feet on the cell) can reach it are left out, as
+  // collectNeighborActors leaves out the maps beside it -- in a city most
+  // of them, each worked out, sorted and drawn off the screen every frame.
+  // An unfixed actor's object gets what applyDrawOrder would give it; one
+  // with a fixed priority is kept (its class is worked out once, in view or
+  // not).
+  const vx0 = camX - ACTOR_CULL_MARGIN, vy0 = camY - ACTOR_CULL_MARGIN;
+  const vx1 = camX + lor(FieldView._viewW, Display.W) + ACTOR_CULL_MARGIN;
+  const vy1 = camY + lor(FieldView._viewH, Display.H) + ACTOR_CULL_MARGIN;
 
   if (truthy(hasObjects)) {
     const list = Objects.forDraw();
     for (let oi = 1; list[oi] != null; oi++) {
       const eo = list[oi];
+      if (cull) {
+        const x = lor(eo.px, eo.cellX * CELL) + lor(eo.raiseX, 0), y = lor(eo.py, eo.cellY * CELL) + lor(eo.raiseY, 0);
+        if (!(x > vx0 && x < vx1 && y > vy0 && y < vy1)) {
+          const a0 = npcActors.get(eo);
+          if (!truthy(eo.fixedPriority) && !(a0 && truthy(a0.fixedPriority))) {
+            eo.fixedClass = undefined;
+            continue;
+          }
+        }
+      }
       let sortY = lor(eo.py, eo.cellY * CELL);
       if (truthy(eo.moving) && truthy(eo.targetY) && eo.targetY > lor(eo.cellY, 0)) {
         sortY = Math.max(sortY, eo.targetY * CELL);
@@ -2332,7 +2353,7 @@ FieldView.draw = function (game: any, canvasWIn?: number, canvasHIn?: number, op
   // pokefirered/src/credits.c:717
   if (!(truthy(opts.skipActors) || truthy(FieldView.hideActors))) {
     [underActors, overActors] = collectGame3Actors(
-      game, mapDef, camX, camY, px, py, facing, walkPhase, stepFlip, playerYOff, playerXOff);
+      game, mapDef, camX, camY, px, py, facing, walkPhase, stepFlip, playerYOff, playerXOff, true);
   }
 
   // Draw Game3 actors with normal priority (under BG1 / overhead layer).

@@ -144,8 +144,20 @@ function drawFrlgReflections(camX: number, camY: number): void {
   const Objects = modules.Objects, P = modules.Player, Runtime = modules.Runtime;
   const behaviorAt = Collision.worldBehavior ?? Collision.behavior;
   let drawn = 0;
+  // pocket-voxel (NOT FAITHFUL: performance, same picture): this map's people
+  // whose reflection cannot reach the screen (it hangs from 14 px under the
+  // feet cell's top, 64x64 at most) are passed over, as the maps beside
+  // this one are below -- each a pose and up to a dozen behaviour reads a
+  // frame. (lastFrlgReflections counts only what is drawn near the screen.)
+  const FVc: any = FieldViewMod;
+  const vw0 = (FVc && FVc._viewW) || (Display as any).W;
+  const vh0 = (FVc && FVc._viewH) || (Display as any).H;
   if (Objects.forDraw) {
     for (const [, obj] of ipairs<any>(Objects.forDraw())) {
+      const ry = obj.py ?? (truthy(obj.moving) && obj.targetY != null ? obj.targetY : obj.cellY) * CELL;
+      const rx = obj.px ?? (truthy(obj.moving) && obj.targetX != null ? obj.targetX : obj.cellX) * CELL;
+      if (rx < camX - FRLG_REFL_CULL || rx > camX + vw0 + FRLG_REFL_CULL
+        || ry < camY - 96 || ry > camY + vh0 + 16) continue;
       if (!truthy(obj.hideReflection) && obj.graphicsId != null) {
         const spr = Ow.getDraw(obj.graphicsId);
         if (spr) {
