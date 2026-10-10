@@ -350,8 +350,12 @@ export const Map = {
     const vh = (FieldView && FieldView._viewH) ?? (Display && Display.H) ?? 160;
     const cols = Math.ceil(vw / 16), rows = Math.ceil(vh / 16);
     const margin = marginIn ?? Map.WARM_MARGIN_SCREENS;
-    const mx = Math.ceil(cols / 2) + 1 + cols * margin;
-    const my = Math.ceil(rows / 2) + 1 + rows * margin;
+    // pocket-voxel: zoomed out (platform/zoom2d.ts), a margin of the GBA's
+    // own screen past the view, not one of the zoomed view's (ghosts.ts tickRect)
+    const D: any = Display;
+    const zoomed = D && D.zoom2d && !D.world3d;
+    const mx = Math.ceil(cols / 2) + 1 + (zoomed ? Math.ceil((D.W || 240) / 16) : cols) * margin;
+    const my = Math.ceil(rows / 2) + 1 + (zoomed ? Math.ceil((D.H || 160) / 16) : rows) * margin;
     return [px - mx, py - my, px + mx, py + my];
   },
 

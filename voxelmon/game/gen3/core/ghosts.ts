@@ -144,8 +144,14 @@ function tickRect(): [number?, number?, number?, number?] {
   const vw = (FieldView && FieldView._viewW) || (Display && Display.W) || 240;
   const vh = (FieldView && FieldView._viewH) || (Display && Display.H) || 160;
   const cols = Math.ceil(vw / 16), rows = Math.ceil(vh / 16);
-  const mx = Math.ceil(cols / 2) + 1 + cols * Ghosts.TICK_MARGIN_SCREENS;
-  const my = Math.ceil(rows / 2) + 1 + rows * Ghosts.TICK_MARGIN_SCREENS;
+  // pocket-voxel: VIEW 2D zoomed out (platform/zoom2d.ts) sees much more of
+  // the map than the GBA's screen; the margin past it stays the GBA's own
+  // screen, not one of the zoomed view's (which ticked the people of every
+  // map round a city -- 15% of a zoomed frame on the console)
+  const zoomed = Display && Display.zoom2d && !Display.world3d;
+  const marginX = zoomed ? Math.ceil((Display.W || 240) / 16) : cols, marginY = zoomed ? Math.ceil((Display.H || 160) / 16) : rows;
+  const mx = Math.ceil(cols / 2) + 1 + marginX * Ghosts.TICK_MARGIN_SCREENS;
+  const my = Math.ceil(rows / 2) + 1 + marginY * Ghosts.TICK_MARGIN_SCREENS;
   // cull rect in current-map cells
   return [px - mx, py - my, px + mx, py + my];
 }
