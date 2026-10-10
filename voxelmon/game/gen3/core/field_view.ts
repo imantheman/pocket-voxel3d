@@ -2170,8 +2170,20 @@ function drawWorld3d(game: any, mapDef: any, mapId: any, camX: number, camY: num
   G.setColor(1, 1, 1, 1);
 }
 
-// Lua: field_view.lua:1562
+// pocket-voxel: FieldView.draw's frame, with Objects.forDraw's list built
+// once for all its callers (objects.ts freezeForDraw: drawing moves no one).
 FieldView.draw = function (game: any, canvasWIn?: number, canvasHIn?: number, optsIn?: DrawOpts): void {
+  const O: any = modObjects();
+  if (O && O.freezeForDraw) O.freezeForDraw(true);
+  try {
+    drawField(game, canvasWIn, canvasHIn, optsIn);
+  } finally {
+    if (O && O.freezeForDraw) O.freezeForDraw(false);
+  }
+};
+
+// Lua: field_view.lua:1562
+function drawField(game: any, canvasWIn?: number, canvasHIn?: number, optsIn?: DrawOpts): void {
   const canvasW = canvasWIn ?? Display.W;
   const canvasH = canvasHIn ?? Display.H;
   // `opts or {}`: a shared empty table (never written) instead of a new one
@@ -2417,7 +2429,7 @@ FieldView.draw = function (game: any, canvasWIn?: number, canvasHIn?: number, op
   drawFlashMask(canvasW, canvasH);
 
   G.setColor(1, 1, 1, 1);
-};
+}
 
 // Lua: field_view.lua:1801
 /** Drop cached atlases/sprites (tileset hot-reload). */

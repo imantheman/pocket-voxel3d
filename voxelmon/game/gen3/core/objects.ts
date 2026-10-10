@@ -953,9 +953,23 @@ const VIRT_DIR_FACE: Record<number, string> = { [1]: "down", [2]: "up", [3]: "le
 const drawList: LuaTable = [null];
 const vrecs: Record<string | number, EO> = {};
 
+// pocket-voxel (NOT FAITHFUL: performance, same list): while frozen (the 2D
+// draw, FieldView.draw: drawing moves no object) forDraw hands back the list
+// it built first instead of building it again for each caller -- the
+// actors, the reflections, the sprite warm-up.
+let drawFrozen = false;
+let drawBuilt = false;
+/** FieldView.draw's bracket: true at its start, false at its end. */
+function freezeForDraw(on: boolean): void {
+  drawFrozen = on;
+  drawBuilt = false;
+}
+
 // Lua: objects.lua:840
 /** The drawable objects this frame: a sequence reused across calls. */
 function forDraw(): LuaTable {
+  if (drawFrozen && drawBuilt) return drawList;
+  drawBuilt = drawFrozen;
   const list = drawList;
   let n = 0;
   const order = Objects._order;
@@ -2652,6 +2666,7 @@ export const Objects = {
   resetSubpriority,
   listActive,
   forDraw,
+  freezeForDraw,
   at,
   elevationsCompatible,
   blocks,
