@@ -23,6 +23,7 @@ import { Warp } from "../core/warp.ts";
 import { Options } from "../core/options.ts";
 import Trainers from "../core/scripting/trainers.ts";
 import { Ui as BattleUi } from "../core/battle/ui.ts";
+import { FieldMoves } from "../core/field_moves.ts";
 
 const BIT: Record<string, number> = { UP: 0, DOWN: 1, LEFT: 2, RIGHT: 3, A: 4, B: 5, START: 6, SELECT: 7 };
 const KEY: Record<string, string> = { up: "UP", down: "DOWN", left: "LEFT", right: "RIGHT" };
@@ -39,7 +40,15 @@ export class BenchLeak {
   private lastMap = "";
   private moveTurn = 0;
 
-  constructor(game: any, private readonly mem: () => string) {
+  /** World checks failed (the map underfoot built with nothing, or drawing nothing outdoors). */
+  private worldFails = 0;
+
+  /**
+   * `world`: the host's world watch (g3_shim.c g3WorldStat: spans drawn last
+   * frame, uploaded, built, built map, built flat, kept, empty frames in a
+   * row, in all, empty builds), where the binary has it.
+   */
+  constructor(game: any, private readonly mem: () => string, private readonly world?: () => number[] | undefined) {
     this.game = game;
     this.it = this.session();
   }
@@ -57,7 +66,31 @@ export class BenchLeak {
   }
 
   private log(what: string): void {
-    console.log(`[pv] g3 leak: ${what} (tick ${this.tick}, ${this.maps} map changes); ${this.mem()}`);
+    console.log(`[pv] g3 leak: ${what} (tick ${this.tick}, ${this.maps} map changes); ${this.mem()}${this.worldCheck()}`);
+  }
+
+  /**
+   * The world under the field, checked at each step (the bare-sky bug: a
+   * map built with no spans, only the billboards drawn): with the field in
+   * 3D and no battle, the map underfoot must have spans uploaded, and an
+   * outdoor one must have drawn some last frame. A failure is a FAIL line.
+   */
+  private worldCheck(): string {
+    const w = this.world?.();
+    if (!w || w.length < 9) return "";
+    const [drawn, up, built, , flat, kept, , emptyAll, emptyBuilds] = w as [number, number, number, number, number, number, number, number, number];
+    const text = `; world: ${drawn} spans drawn, ${up} of ${built} uploaded${flat ? " (flat)" : ""}${kept ? " (kept)" : ""}, empty frames ${emptyAll}, empty builds ${emptyBuilds}`;
+    if (flat || this.inBattle() || Runtime.uiBusy?.()) return text;
+    const def = this.game?.data?.maps?.[this.lastMap];
+    const outdoor = !!def && FieldMoves.isOutdoors(def.mapType);
+    let fail = "";
+    if (up === 0) fail = "the map underfoot was built with nothing to draw";
+    else if (outdoor && drawn === 0) fail = "nothing drawn on an outdoor map";
+    if (fail) {
+      this.worldFails++;
+      console.log(`[pv] g3 leak: FAIL ${fail} (${this.lastMap}, tick ${this.tick}, ${this.worldFails} failed)`);
+    }
+    return text;
   }
 
   private inBattle(): boolean { const g = this.game; return !!(g && g.speedCategory && g.speedCategory() === "battle"); }
@@ -291,6 +324,7 @@ export class BenchLeak {
       for (let j = 0; j < 4; j++) yield* this.tap(["RIGHT", "UP", "LEFT", "DOWN"][j]!, 48, 4);
       this.log(`big city ${this.lastMap}, walked`);
     }
+    if (this.world) console.log(`[pv] g3 leak: world check ${this.worldFails ? `FAILED ${this.worldFails} time(s)` : "passed at every step"}`);
     this.log("done");
   }
 }

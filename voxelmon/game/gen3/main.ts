@@ -94,7 +94,7 @@ function ms1(us: number): string {
 }
 
 /** The boot natives some binaries have (g3_shim.c). */
-const g3n = n as unknown as { g3Mem?(cheap?: boolean): number[]; g3Gc?(hold: boolean): void; g3GcIdle?(growth: number): number };
+const g3n = n as unknown as { g3Mem?(cheap?: boolean): number[]; g3Gc?(hold: boolean): void; g3GcIdle?(growth: number): number; g3WorldStat?(): number[] };
 
 /** The heaps (g3_shim.c g3Mem): QuickJS, the app heap, linear memory. A
  *  cheap reading (the perf lines') leaves out the QuickJS heap, whose count
@@ -217,7 +217,7 @@ function gameMain(bench: boolean): void {
   // bench mode's screen suite (platform/bench_suite.ts) instead of a key script
   const suite = bench && scriptText === "suite" ? new BenchSuite() : null;
   // ... or its long session (platform/bench_leak.ts): memory over many battles and maps
-  const leak = bench && scriptText === "leak" ? new BenchLeak(game, () => memText(false)) : null;
+  const leak = bench && scriptText === "leak" ? new BenchLeak(game, () => memText(false), () => g3n.g3WorldStat?.()) : null;
   // ... or its transitions (platform/bench_load.ts): battles, menus, doors, seams, each marked
   // ("load:battle", "load:menu", "load:walk": that part alone)
   const load = bench && /^load(:|$)/.test(scriptText) ? new BenchLoad(game, () => memText(true), scriptText.slice(5)) : null;

@@ -54,7 +54,9 @@ macro_rules! g3_root { () => { "sdmc:/3ds/voxelmon/leafgreen/" } }
 
 mod audio;
 mod pace;
+mod watch;
 pub use pace::{after_render, borrow_tick, frame_top, mark, step_begin};
+pub use watch::note_upload;
 
 extern "C" {
     fn g3_gpu_init_shared(shbin: *const u8, len: u32) -> i32;
@@ -152,6 +154,11 @@ pub fn hold_rebuild(hidden: bool, built_flat: bool, same_map: bool, free_kb: usi
         return false;
     }
     true
+}
+
+/// Whether the built world is being kept, undrawn, through a battle (watch.rs).
+pub fn keeping() -> bool {
+    unsafe { KEEPING }
 }
 
 /// The heap a map build wants free in one block before it starts (main.rs
@@ -384,6 +391,7 @@ fn cmd_check() {
 /// the canvases due to go are deleted here, the one place citro3d allows it
 /// (g3_flush_dead_targets), then the pace's timing mark.
 pub fn before_render() {
+    watch::frame(unsafe { super::DRAWN });
     if unsafe { GPU_OK } {
         unsafe { g3_flush_dead_targets() };
     }

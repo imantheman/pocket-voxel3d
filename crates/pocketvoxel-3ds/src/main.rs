@@ -6338,7 +6338,7 @@ fn main() {
                     fail_low,
                     fail_verts,
                     unsafe_free_kb(),
-                ));
+                )); #[cfg(feature = "gen3")] gen3::note_upload(map_ids[map_i], chunk_infos.len(), geom.chunk_spans.len(), built_flat);
                 // Land it. A rebuild dying past this point used to leave the
                 // whole batch unwritten, so the log stopped at "before build"
                 // and said nothing about which of the four things after it --

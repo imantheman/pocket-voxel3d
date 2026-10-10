@@ -809,6 +809,23 @@ static JSValue g3_gcidle(JSContext *ctx, JSValueConst t, int c, JSValueConst *v)
     return JS_NewInt32(ctx, (int32_t)(ms + 0.5));
 }
 
+/* QuickJS's runtime, for the host's own calls between frames. */
+static JSRuntime *g3_rt;
+
+/* g3WorldStat() -> [spans drawn last frame, spans uploaded, spans built,
+   built map, built flat, kept through a battle, empty shown frames in a
+   row, empty shown frames in all, empty builds] (watch.rs): the leak
+   bench's check that the map underfoot is there. */
+int g3_world_stat(uint32_t *out, int n); /* watch.rs */
+static JSValue g3_worldstat(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t; (void)c; (void)v;
+    uint32_t s[16];
+    int n = g3_world_stat(s, 16);
+    JSValue a = JS_NewArray(ctx);
+    for (int i = 0; i < n; i++) JS_SetPropertyUint32(ctx, a, (uint32_t)i, JS_NewFloat64(ctx, (double)s[i]));
+    return a;
+}
+
 static JSValue g3_audioready(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t; (void)c; (void)v;
     return JS_NewBool(ctx, g3a_ready());
@@ -820,6 +837,8 @@ int qjs_register_g3(JSContext *ctx) {
     JSValue g = JS_GetGlobalObject(ctx);
     JSValue o = JS_GetPropertyStr(ctx, g, "voxel");
     if (!JS_IsObject(o)) { JS_FreeValue(ctx, o); JS_FreeValue(ctx, g); return -1; }
+    g3_rt = JS_GetRuntime(ctx);
+    JS_SetPropertyStr(ctx, o, "g3WorldStat", JS_NewCFunction(ctx, g3_worldstat, "g3WorldStat", 0));
     JS_SetPropertyStr(ctx, o, "g3TexUpload", JS_NewCFunction(ctx, g3_texupload, "g3TexUpload", 5));
     JS_SetPropertyStr(ctx, o, "g3TexSub", JS_NewCFunction(ctx, g3_texsub, "g3TexSub", 6));
     JS_SetPropertyStr(ctx, o, "g3Blit", JS_NewCFunction(ctx, g3_blit, "g3Blit", 10));
