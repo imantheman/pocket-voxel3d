@@ -2,6 +2,7 @@
 mod voxel;
 // VC saves: the re-release titles' save data (Red, Blue, Yellow).
 mod vc;
+mod gpuwatch;
 
 use citro3d::macros::include_shader;
 use citro3d::math::{FVec4, ScreenOrientation, StereoDisplacement, AspectRatio, ClipPlanes, CoordinateOrientation, FVec3, Matrix4, Projection};
@@ -2767,6 +2768,11 @@ fn forest_zone(name: &str) -> bool {
 
 #[allow(static_mut_refs)]
 fn dlog_batch_begin() {
+    // (none while a VC continue's frames are traced: every line then goes
+    // to the log in the order it happened, beside the trace's own)
+    if vc::tracing() {
+        return;
+    }
     unsafe {
         if !LEGACY_ZONE && DLOG_BATCH.is_none() {
             DLOG_BATCH = Some(String::new());
@@ -3056,9 +3062,32 @@ fn runs_of(verts: &[Vertex], idx: Option<&[u16]>) -> Vec<Run> {
 /// One GPU slice up -- its vertices, and its indices when it is indexed --
 /// with its runs (None: linear could not take it).
 fn gpu_span(span: Span, verts: &[Vertex], idx: Option<&[u16]>, attr_info: &attrib::Info) -> Option<GpuSpan> {
-    let mut bi = buffer::Info::new();
-    bi.add(buffer::Buffer::new(verts), attr_info.permutation()).ok()?;
+    // An index past the slice's vertices would send the GPU reading
+    // whatever lies beyond the buffer (gpuwatch): the slice is left out.
+    if gpuwatch::ON {
+        if let Some(l) = idx {
+            if let Some(&k) = l.iter().find(|&&k| k as usize >= verts.len()) {
+                gpuwatch::refuse(0x1, &format!("a span whose index {} is past its {} vertices", k, verts.len()));
+                return None;
+            }
+        }
+    }
+    let vb = buffer::Buffer::new(verts);
     let ib = idx.map(buffer::Buffer::new);
+    if gpuwatch::ON {
+        let vbytes = verts.len() * core::mem::size_of::<Vertex>();
+        let ibytes = idx.map_or(0, |l| l.len() * 2);
+        if !gpuwatch::readable(vb.as_ptr(), vbytes)
+            || ib.as_ref().is_some_and(|b| !gpuwatch::readable(b.as_ptr(), ibytes))
+        {
+            gpuwatch::refuse(0x2, &format!(
+                "a span buffer the GPU cannot read (vertices at {:p}, indices at {:?})",
+                vb.as_ptr(), ib.as_ref().map(|b| b.as_ptr())));
+            return None;
+        }
+    }
+    let mut bi = buffer::Info::new();
+    bi.add(vb, attr_info.permutation()).ok()?;
     Some(GpuSpan { span, bi, idx: ib, runs: runs_of(verts, idx) })
 }
 
@@ -3086,6 +3115,14 @@ const C3D_UNSIGNED_SHORT: i32 = 1;
 unsafe fn draw_range(bi: &buffer::Info, idx: Option<&buffer::Buffer>, first: u16, count: u16, bound: &mut *const buffer::Info) {
     if count == 0 {
         return;
+    }
+    // A range past the end of its buffer: left out (gpuwatch).
+    if gpuwatch::ON {
+        let limit = match idx { Some(ib) => ib.len(), None => bi.len() as usize };
+        if first as usize + count as usize > limit {
+            gpuwatch::refuse(0x4, &format!("a draw of {} from {} past the {} its buffer holds", count, first, limit));
+            return;
+        }
     }
     if !core::ptr::eq(*bound, bi) {
         C3D_SetBufInfo(bi.as_raw() as *mut core::ffi::c_void);
@@ -6001,6 +6038,9 @@ fn main() {
             // publishing different connected maps, which is why it showed
             // up while standing still talking to someone.
             unsafe { C3D_FrameSync() };
+            // (C3D_FrameSync paces to the vblank and no more: on Red, Blue
+            // and Yellow the GPU itself is waited for -- gpuwatch::wait_idle)
+            if gpuwatch::ON { unsafe { gpuwatch::wait_idle("a map load frees its buffers") }; }
             dlog_batch_begin();
             let t_load = now_ms();
             // Load this map's own pak, then build from it.
@@ -6518,9 +6558,17 @@ fn main() {
                             }
                             let mut bi = buffer::Info::new();
                             let drawn = if INDEXED { list.len() } else { v.len() };
-                            if drawn > 0 && bi.add(buffer::Buffer::new(&v), attr_info.permutation()).is_ok() {
+                            let vb = buffer::Buffer::new(&v);
+                            let idx = if INDEXED && drawn > 0 { Some(buffer::Buffer::new(&list)) } else { None };
+                            // a buffer the GPU cannot read is left out (gpuwatch)
+                            let readable = !gpuwatch::ON || drawn == 0 || (
+                                gpuwatch::readable(vb.as_ptr(), v.len() * core::mem::size_of::<Vertex>())
+                                && idx.as_ref().is_none_or(|b| gpuwatch::readable(b.as_ptr(), list.len() * 2)));
+                            if !readable {
+                                gpuwatch::refuse(0x8, &format!("a tree shape buffer the GPU cannot read (vertices at {:p})", vb.as_ptr()));
+                            }
+                            if drawn > 0 && readable && bi.add(vb, attr_info.permutation()).is_ok() {
                                 shape_verts += v.len();
-                                let idx = if INDEXED { Some(buffer::Buffer::new(&list)) } else { None };
                                 tree_bufs.push(Some(TreeBuf {
                                     bi,
                                     idx,
@@ -7026,13 +7074,20 @@ fn main() {
                         color: tint_b,
                         uv: [pt.1 * sx, 1.0 - pt.2 * sy],
                     };
+                    let c = [mk(q[0]), mk(q[1]), mk(q[2]), mk(q[3])];
+                    // A corner that is not a number (or is a million units
+                    // out) is a broken position: left out (gpuwatch).
+                    if gpuwatch::ON && !c.iter().all(|v| gpuwatch::sane(&v.pos) && gpuwatch::sane(&v.uv)) {
+                        gpuwatch::refuse(0x10, &format!("a card (page {}) with a corner at {:?}", page, c.map(|v| v.pos)));
+                        continue;
+                    }
                     let gi = match card_groups.iter().position(|g| g.0 == *page) {
                         Some(i) => i,
                         None => { card_groups.push((*page, Vec::new())); card_groups.len() - 1 }
                     };
                     let gv = &mut card_groups[gi].1;
-                    gv.push(mk(q[0])); gv.push(mk(q[1])); gv.push(mk(q[2]));
-                    gv.push(mk(q[0])); gv.push(mk(q[2])); gv.push(mk(q[3]));
+                    gv.push(c[0]); gv.push(c[1]); gv.push(c[2]);
+                    gv.push(c[0]); gv.push(c[2]); gv.push(c[3]);
                 }
                 if let Item::Spark { verts, abgr, pull } = it {
                     // A card's placement and pull, a flat colour for a page
@@ -7048,6 +7103,10 @@ fn main() {
                         }
                     };
                     let v = verts.map(mk);
+                    if gpuwatch::ON && !v.iter().all(|c| gpuwatch::sane(&c.pos)) {
+                        gpuwatch::refuse(0x20, &format!("a spark with a corner at {:?}", v.map(|c| c.pos)));
+                        continue;
+                    }
                     spark_verts.extend_from_slice(&[v[0], v[1], v[2], v[0], v[2], v[3]]);
                 }
             }
@@ -8005,6 +8064,16 @@ if page_tex.len() < pak_static.atlases.len() {
         // is made only when the right eye is drawn.
         let right_eye = !guest_drive || slider > 0.05;
         let eye_fr = [Frustum::of(&mvp_l), Frustum::of(&mvp_r)];
+        // A view that is not a number puts every vertex nowhere (gpuwatch):
+        // said once, with the matrix.
+        if gpuwatch::ON {
+            for (m, what) in [(&mvp_l, "left"), (&mvp_r, "right"), (&tmvp_l, "tilt left"), (&tmvp_r, "tilt right")] {
+                let rows = m.rows_xyzw();
+                if !rows.iter().all(|r| r.iter().all(|f| f.is_finite())) {
+                    gpuwatch::say_once(0x40, &format!("[pv] gpu: the {} view matrix is not finite: {:?}", what, rows));
+                }
+            }
+        }
         let mut eye_spans: [Vec<EyeDraw>; 2] = [Vec::new(), Vec::new()];
         let mut eye_trees: [Vec<(&pak::TreeInst, &TreeBuf)>; 2] = [Vec::new(), Vec::new()];
         for e in 0..(if right_eye { 2 } else { 1 }) {
@@ -8077,9 +8146,22 @@ if page_tex.len() < pak_static.atlases.len() {
         if vc::tracing() {
             vc::trace(&format!("built; render (3d {:.2}, tilt {}, sprites {}, pics {})",
                 slider, tilt_ref.is_some(), ui_b_sprite_bufs.len(), pic_groups.len()));
+            // what each pass will be handed (gpuwatch::pass names them)
+            let pages = |v: &[(usize, buffer::Info)]| v.iter().map(|(p, b)| format!("{}x{}", p, b.len())).collect::<Vec<_>>().join(" ");
+            vc::trace(&format!(
+                "content: spans L {} R {}, trees L {} R {}, cards [{}], sparks {}, anims [{}], ui {}, pic pages [{}], bottom sprites [{}]",
+                eye_spans[0].len(), eye_spans[1].len(), eye_trees[0].len(), eye_trees[1].len(),
+                pages(&card_bufs), spark_buf.as_ref().map_or(0, |b| b.len()), pages(&anim_bufs),
+                ui_buf.as_ref().map_or(0, |b| b.len()),
+                pic_bufs.iter().map(|(p, _, b)| format!("{}x{}", p, b.len())).collect::<Vec<_>>().join(" "),
+                ui_b_sprite_bufs.iter().map(|(p, b)| format!("{}x{}", p, b.len())).collect::<Vec<_>>().join(" ")));
+            vc::trace(&format!("view: left {:?}", mvp_l.rows_xyzw()));
         }
         let mut submit_us = 0.0f32;
         let mut cmd_use = 0.0f32;
+        // Red, Blue and Yellow begin the frame here, with a limit on the wait
+        // for the last one (citro3d-rs's begin then finds it begun).
+        if gpuwatch::ON { unsafe { gpuwatch::begin_frame_watched(); } }
         instance.render_frame_with(|mut frame| { #[cfg(feature = "gen3")] gen3::offscreen_pass();
             let t_submit = sys_tick();
             fn cast_lifetime_to_closure<'frame, T>(x: T) -> T
@@ -8092,6 +8174,8 @@ if page_tex.len() < pak_static.atlases.len() {
             // picture that stands out of the screen is the same picture
             // shifted the other way for each eye.
             let render_to = cast_lifetime_to_closure(|frame, target, mvp, eye: f32| {
+                // the traced frame's pass names (gpuwatch::pass), per eye
+                let pn = |l: &'static str, r: &'static str| if eye < 0.0 { l } else { r };
                 // Gen 2 with no voxel world (the title, the intro, the main
                 // menu: worldview.ts states flatWorld then) clears to white,
                 // the Gold screen's own ground, rather than a sky tinted by the
@@ -8134,6 +8218,7 @@ if page_tex.len() < pak_static.atlases.len() {
                         }
                     }
                 }
+                gpuwatch::pass(pn("left: world spans", "right: world spans"));
                 // --- tree instances -------------------------------------
                 // The same shape drawn where each placement says, at the
                 // level of detail its distance earns: near ones carved,
@@ -8165,6 +8250,7 @@ if page_tex.len() < pak_static.atlases.len() {
                     }
                     frame.bind_vertex_uniform(toff_idx, FVec4::new(0.0, 0.0, 0.0, 0.0));
                     unsafe { TREES_CULLED[3] = t_err; }
+                    gpuwatch::pass(pn("left: trees", "right: trees"));
                 }
                 } #[cfg(feature = "gen3")] gen3::world_pass(if tilt_ref.is_some() { if eye < 0.0 { tmvp_l_ref } else { tmvp_r_ref } } else { mvp });
                 // Off before the ortho passes: the cards, pics, anims and UI
@@ -8193,6 +8279,7 @@ if page_tex.len() < pak_static.atlases.len() {
                             frame.set_texenvs(&[stage0]);
                         }
                         frame.set_attr_info(&attr_info);
+                        gpuwatch::pass(pn("left: cards into the tilt target", "right: cards into the tilt target"));
                     }
                     // Shrink twice, then the screen: the sharp world, and the
                     // small copy over the top and bottom.
@@ -8225,6 +8312,7 @@ if page_tex.len() < pak_static.atlases.len() {
                     frame.set_texenvs(&[stage0]);
                     frame.bind_vertex_uniform(projection_idx, mvp);
                     unsafe { c3d_depth_test(1); }
+                    gpuwatch::pass(pn("left: tilt blur and composite", "right: tilt blur and composite"));
                 }
                 // Card UVs are already atlas-scaled here, so the shader's
                 // terrain uvx transform must not apply again.
@@ -8378,6 +8466,7 @@ if page_tex.len() < pak_static.atlases.len() {
                     frame.bind_vertex_uniform(projection_idx, mvp);
                     unsafe { c3d_depth_test(1); }
                 } #[cfg(feature = "gen3")] gen3::composite();
+                gpuwatch::pass(pn("left: cards, pictures and the UI", "right: cards, pictures and the UI"));
             });
 
             frame.bind_program(&program);
@@ -8468,6 +8557,7 @@ if page_tex.len() < pak_static.atlases.len() {
                     unsafe { c3d_depth_test(1); }
                 } #[cfg(feature = "gen3")] gen3::bottom_pass();
             }
+            gpuwatch::pass("bottom screen");
             submit_us = us_since(t_submit);
             cmd_use = unsafe { C3D_GetCmdBufUsage() };
             if vc::tracing() { vc::trace(&format!("submitting (cmdbuf {:.0}%)", cmd_use * 100.0)); }

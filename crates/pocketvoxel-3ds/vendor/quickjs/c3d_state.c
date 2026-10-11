@@ -60,3 +60,63 @@ void c3d_tex_free(void *t) {
     C3D_TexDelete((C3D_Tex *)t);
     free(t);
 }
+
+/* ---- The GPU watch (main.rs vc::begin_frame_watched, vc::pass) ----
+   citro3d submits each frame through one GX command queue, the first member
+   of its context (__C3D_Context; citro3d's internal.h). These let the host
+   begin a frame without blocking, so a GPU that never finishes the last one
+   is written to the log instead of freezing the console in silence, and
+   let a traced frame be cut into its passes, each run and waited for alone,
+   so the log names the pass the GPU stopped in. */
+extern unsigned char __C3D_Context[];
+extern u32 __ctru_linear_heap;
+extern u32 __ctru_linear_heap_size;
+static gxCmdQueue_s *c3d_queue(void) { return (gxCmdQueue_s *)(void *)__C3D_Context; }
+
+/* C3D_FrameBegin without the wait: 1 begun, 0 the GPU is still on the last
+   frame. The caller does the vblank pacing (C3D_FrameSync) itself. */
+int c3d_frame_begin_nb(void) {
+    return C3D_FrameBegin(C3D_FRAME_NONBLOCK) ? 1 : 0;
+}
+
+/* Entries left in the queue (a full queue is a svcBreak in gxCmdQueueAdd). */
+int c3d_queue_room(void) {
+    gxCmdQueue_s *q = c3d_queue();
+    return (int)q->maxEntries - (int)q->numEntries;
+}
+
+/* Mid-frame: close the command list built so far, flush the CPU's writes
+   the way C3D_FrameEnd does (the whole linear heap), and start the GPU on
+   everything queued. 0, and nothing done, when the queue lacks the room
+   the rest of the frame needs. */
+int c3d_split_and_run(int keep) {
+    if (c3d_queue_room() < keep) return 0;
+    C3D_FrameSplit(GX_CMDLIST_FLUSH);
+    GSPGPU_FlushDataCache((const void *)__ctru_linear_heap, __ctru_linear_heap_size);
+    gxCmdQueueRun(c3d_queue());
+    return 1;
+}
+
+/* After a pass has finished: stop the queue again, so what the rest of the
+   frame adds waits for C3D_FrameEnd (which flushes before it runs them)
+   instead of starting the moment it is added. */
+void c3d_queue_stop(void) {
+    gxCmdQueueStop(c3d_queue());
+}
+
+/* 1 when the GPU has finished everything queued (no wait). */
+int c3d_queue_done(void) {
+    return gxCmdQueueWait(c3d_queue(), 0) ? 1 : 0;
+}
+
+/* Where the GPU may read: 1 when [p, p+len) lies in the linear heap or
+   VRAM and has a physical address. */
+int c3d_gpu_readable(const void *p, u32 len) {
+    u32 a = (u32)p;
+    if (osConvertVirtToPhys(p) == 0) return 0;
+    if (len && osConvertVirtToPhys((const void *)(a + len - 1)) == 0) return 0;
+    u32 lin = __ctru_linear_heap, linn = __ctru_linear_heap_size;
+    if (a >= lin && a + len <= lin + linn) return 1;
+    if (a >= 0x1F000000u && a + len <= 0x1F600000u) return 1;
+    return 0;
+}

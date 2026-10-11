@@ -413,6 +413,11 @@ pub fn trace(stage: &str) {
     }
 }
 
+/// The traced frame being built (the one the GPU last took is this less one).
+pub fn trace_n() -> u32 {
+    unsafe { TRACE_N }
+}
+
 /// The end of a traced frame.
 pub fn trace_frame_end() {
     unsafe {
