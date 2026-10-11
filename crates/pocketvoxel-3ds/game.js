@@ -30347,6 +30347,66 @@ class OverworldState {
     this.ow.update();
   }
 }
+var VC_STEP_DEADLINE_MS = 20000;
+function nowMs() {
+  const v = globalThis.voxel;
+  return v?.now ? v.now() / 1000 : Date.now();
+}
+
+class VcContinueState {
+  game;
+  bytes;
+  kind = "vccontinue";
+  step = 0;
+  running = null;
+  loaded = null;
+  fresh;
+  constructor(game, bytes) {
+    this.game = game;
+    this.bytes = bytes;
+    this.fresh = game.save;
+  }
+  update() {
+    const dl = globalThis.voxel?.deadline;
+    if (this.running !== null) {
+      const what = this.running === 1 ? "converting" : "entering";
+      this.game.drop(this);
+      this.game.vcContinueFailed(this.fresh, new Error(`${what} ran past ${VC_STEP_DEADLINE_MS / 1000} s and was stopped`));
+      return;
+    }
+    const step = this.step++;
+    if (step === 0) {
+      console.log("[pv] vc: continue: converting...");
+      return;
+    }
+    const t0 = nowMs();
+    this.running = step;
+    try {
+      dl?.(VC_STEP_DEADLINE_MS);
+      if (step === 1) {
+        this.loaded = this.game.vcConvert(this.bytes);
+        const s = this.loaded;
+        const p = s.player ?? {};
+        const boxed = (s.boxes ?? []).reduce((n, b) => n + (b?.length ?? 0), 0);
+        console.log(`[pv] vc: continue: converted in ${(nowMs() - t0).toFixed(0)} ms: ${p.name} at ${p.map} ${p.x},${p.y}; ` + `party ${s.party?.length ?? 0}, boxed ${boxed}, hall ${s.hallOfFame?.length ?? 0}, time ${s.playTime}`);
+      } else {
+        const p = this.loaded.player ?? {};
+        console.log(`[pv] vc: continue: entering ${p.map} ${p.x},${p.y}...`);
+        globalThis.voxel?.traceLoads?.(3);
+        this.game.vcEnter(this.loaded);
+        this.game.drop(this);
+        console.log(`[pv] vc: continue: entered in ${(nowMs() - t0).toFixed(0)} ms`);
+      }
+      this.running = null;
+    } catch (e) {
+      this.running = null;
+      this.game.drop(this);
+      this.game.vcContinueFailed(this.fresh, e);
+    } finally {
+      dl?.(0);
+    }
+  }
+}
 var SOFT_RESET_FRAMES = 16;
 
 class TextBoxState {
@@ -30649,6 +30709,7 @@ class VoxelmonGame {
     this.stack = [new OverworldState(this.overworld)];
     this.overworld.enter("REDS_HOUSE_2F", 3, 6, "down");
     const luaText = this.host.saveData?.();
+    this.luaOptions = null;
     this.vcBytes = this.readVc();
     const vcSum = this.vcBytes ? cartSummary(this.vcBytes) : null;
     this.hasSave = !!luaText || !!vcSum;
@@ -30714,9 +30775,11 @@ class VoxelmonGame {
     }
     return new Uint8Array(b);
   }
+  luaOptions = null;
   luaSummary(text2) {
     try {
       const s = decodeSave(text2);
+      this.luaOptions = s?.options && typeof s.options === "object" ? { ...s.options } : null;
       return {
         name: typeof s?.player?.name === "string" ? s.player.name : null,
         badges: count(this.data, s),
@@ -30728,37 +30791,37 @@ class VoxelmonGame {
     }
   }
   continueVc(bytes) {
-    const fresh = this.save;
-    try {
-      const { save: loaded, notes } = cartToSave(bytes, this.data);
-      for (const n of notes)
-        console.log(`[pv] vc: ${n}`);
-      const luaText = this.host.saveData?.();
-      if (luaText) {
-        try {
-          const l = decodeSave(luaText);
-          for (const [k, v] of Object.entries(l?.options ?? {})) {
-            if (!(k in loaded.options))
-              loaded.options[k] = v;
-          }
-        } catch {}
-      }
-      const told = this.enterLoadedSave(loaded);
-      this.saveTarget = "vc";
-      const p = this.save.player;
-      console.log(`[pv] vc: continued from the VC save: ${p.name} at ${p.map} ${p.x},${p.y}; SAVE writes the VC title`);
-      if (told.length)
-        this.showText(told.join("\f"));
-    } catch (e) {
-      this.save = fresh;
-      try {
-        this.overworld.enter("REDS_HOUSE_2F", 3, 6, "down");
-      } catch {}
-      const why = String(e?.message ?? e ?? "");
-      console.log(`[pv] vc: the VC save could not be read: ${why}`);
-      this.showText(`The VC save could
-not be read.\fIt is left as it is.`, () => this.newGame());
+    console.log(`[pv] vc: continue: start (${bytes.length} bytes)`);
+    this.push(new VcContinueState(this, bytes));
+  }
+  vcConvert(bytes) {
+    const { save: loaded, notes } = cartToSave(bytes, this.data);
+    for (const n of notes)
+      console.log(`[pv] vc: ${n}`);
+    for (const [k, v] of Object.entries(this.luaOptions ?? {})) {
+      if (!(k in loaded.options))
+        loaded.options[k] = v;
     }
+    return loaded;
+  }
+  vcEnter(loaded) {
+    const told = this.enterLoadedSave(loaded);
+    this.saveTarget = "vc";
+    const p = this.save.player;
+    console.log(`[pv] vc: continued from the VC save: ${p.name} at ${p.map} ${p.x},${p.y}; SAVE writes the VC title`);
+    if (told.length)
+      this.showText(told.join("\f"));
+  }
+  vcContinueFailed(fresh, e) {
+    this.save = fresh;
+    this.saveTarget = "lua";
+    try {
+      this.overworld.enter("REDS_HOUSE_2F", 3, 6, "down");
+    } catch {}
+    const why = String(e?.message ?? e ?? "").replace(/\s+/g, " ").trim();
+    console.log(`[pv] vc: continue FAILED: ${why}`);
+    this.showText(`The VC save could
+not be loaded.\f${why.slice(0, 18) || "?"}\fIt is left as it is.`, () => this.newGame());
   }
   saveUnreadable(e) {
     this.unreadableSave = true;
@@ -30914,6 +30977,11 @@ ${why.slice(0, 18)}` : ""}`);
   closeToOverworld() {
     while (this.stack.length > 1)
       this.stack.pop();
+  }
+  drop(state) {
+    const i = this.stack.lastIndexOf(state);
+    if (i >= 0)
+      this.stack.splice(i, 1);
   }
   top() {
     return this.stack[this.stack.length - 1];
