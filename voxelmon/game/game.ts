@@ -155,6 +155,81 @@ class OverworldState implements GameState {
   }
 }
 
+/** How long one step of a VC continue may run before the host cuts it off
+ *  (voxel.deadline): far beyond any real step, short of a frozen console. */
+const VC_STEP_DEADLINE_MS = 20000;
+
+/** The guest's clock in ms, where the host has one. */
+function nowMs(): number {
+  const v = (globalThis as { voxel?: { now?: () => number } }).voxel;
+  return v?.now ? v.now() / 1000 : Date.now();
+}
+
+/**
+ * CONTINUE on the VC save, a step a frame: frame 1 only logs (so the log
+ * line lands and the screen moves on before any work), frame 2 converts,
+ * frame 3 walks in. Each step under the host's deadline and in a try, so a
+ * bad save ends in a message and the title, never a hang.
+ */
+class VcContinueState implements GameState {
+  readonly kind = "vccontinue";
+  private step = 0;
+  /** The step under way: still set when update() comes round again means
+   *  the host cut that step off at the deadline (an uncatchable interrupt
+   *  skips the catch and the finally below). */
+  private running: number | null = null;
+  private loaded: any = null;
+  private readonly fresh: GameSave;
+  constructor(private game: VoxelmonGame, private bytes: Uint8Array) {
+    this.fresh = game.save;
+  }
+  update(): void {
+    const dl = (globalThis as { voxel?: { deadline?: (ms: number) => void } }).voxel?.deadline;
+    if (this.running !== null) {
+      const what = this.running === 1 ? "converting" : "entering";
+      this.game.drop(this);
+      this.game.vcContinueFailed(this.fresh, new Error(`${what} ran past ${VC_STEP_DEADLINE_MS / 1000} s and was stopped`));
+      return;
+    }
+    const step = this.step++;
+    if (step === 0) {
+      console.log("[pv] vc: continue: converting...");
+      return;
+    }
+    const t0 = nowMs();
+    this.running = step;
+    try {
+      dl?.(VC_STEP_DEADLINE_MS);
+      if (step === 1) {
+        this.loaded = this.game.vcConvert(this.bytes);
+        const s = this.loaded;
+        const p = s.player ?? {};
+        const boxed = (s.boxes ?? []).reduce((n: number, b: unknown[]) => n + (b?.length ?? 0), 0);
+        console.log(
+          `[pv] vc: continue: converted in ${(nowMs() - t0).toFixed(0)} ms: ${p.name} at ${p.map} ${p.x},${p.y}; ` +
+            `party ${s.party?.length ?? 0}, boxed ${boxed}, hall ${s.hallOfFame?.length ?? 0}, time ${s.playTime}`,
+        );
+      } else {
+        const p = this.loaded.player ?? {};
+        console.log(`[pv] vc: continue: entering ${p.map} ${p.x},${p.y}...`);
+        // the host's next map loads log line by line, not batched, so a
+        // load that never finishes still shows where it stopped
+        (globalThis as { voxel?: { traceLoads?: (n: number) => void } }).voxel?.traceLoads?.(3);
+        this.game.vcEnter(this.loaded);
+        this.game.drop(this);
+        console.log(`[pv] vc: continue: entered in ${(nowMs() - t0).toFixed(0)} ms`);
+      }
+      this.running = null;
+    } catch (e) {
+      this.running = null;
+      this.game.drop(this);
+      this.game.vcContinueFailed(this.fresh, e);
+    } finally {
+      dl?.(0);
+    }
+  }
+}
+
 /** Frames the soft-reset chord is held before it fires (Gold's Input uses 16). */
 const SOFT_RESET_FRAMES = 16;
 
@@ -619,6 +694,7 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     // title's own save beside it (vc/cartsave.ts). The session then saves
     // back to whichever was picked; a new game saves to the Lua file.
     const luaText = this.host.saveData?.();
+    this.luaOptions = null;
     this.vcBytes = this.readVc();
     const vcSum = this.vcBytes ? cartSummary(this.vcBytes) : null;
     (this as any).hasSave = !!luaText || !!vcSum;
@@ -725,10 +801,14 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     return new Uint8Array(b);
   }
 
+  /** The Lua save's own settings, kept from luaSummary for a VC session. */
+  private luaOptions: Record<string, unknown> | null = null;
+
   /** The Lua save's CONTINUE box, read without loading it. */
   private luaSummary(text: string): SaveSummary {
     try {
       const s: any = decodeSave(text);
+      this.luaOptions = s?.options && typeof s.options === "object" ? { ...s.options } : null;
       return {
         name: typeof s?.player?.name === "string" ? s.player.name : null,
         badges: badgeCount(this.data, s as never),
@@ -740,38 +820,53 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     }
   }
 
-  /** CONTINUE on the VC save: converted, walked into, and SAVE now writes
-   *  the VC title. The Lua save is left alone. */
+  /**
+   * CONTINUE on the VC save: converted, walked into, and SAVE now writes
+   * the VC title. The Lua save is left alone.
+   *
+   * Done a step a frame (VcContinueState), each step logged to pvlog before
+   * and after with its time, under a deadline the host enforces (a runaway
+   * step is cut off rather than freezing the console), and any failure --
+   * a throw, the deadline -- puts the title back with a message instead.
+   */
   private continueVc(bytes: Uint8Array): void {
-    const fresh = this.save;
-    try {
-      const { save: loaded, notes } = cartToSave(bytes, this.data as never);
-      for (const n of notes) console.log(`[pv] vc: ${n}`);
-      // This game's own settings (camera, tilt, movement...) have no place
-      // in a cartridge save: they come from the Lua save when there is one.
-      const luaText = this.host.saveData?.();
-      if (luaText) {
-        try {
-          const l: any = decodeSave(luaText);
-          for (const [k, v] of Object.entries((l?.options ?? {}) as Record<string, unknown>)) {
-            if (!(k in loaded.options)) loaded.options[k] = v;
-          }
-        } catch { /* an unreadable Lua save has no settings to lend */ }
-      }
-      const told = this.enterLoadedSave(loaded);
-      this.saveTarget = "vc";
-      const p: any = this.save.player;
-      console.log(`[pv] vc: continued from the VC save: ${p.name} at ${p.map} ${p.x},${p.y}; SAVE writes the VC title`);
-      if (told.length) this.showText(told.join("\f"));
-    } catch (e) {
-      this.save = fresh;
-      try {
-        this.overworld.enter("REDS_HOUSE_2F", 3, 6, "down");
-      } catch { /* the bedroom is the fresh save's own spot */ }
-      const why = String((e as Error)?.message ?? e ?? "");
-      console.log(`[pv] vc: the VC save could not be read: ${why}`);
-      this.showText("The VC save could\nnot be read.\fIt is left as it is.", () => this.newGame());
+    console.log(`[pv] vc: continue: start (${bytes.length} bytes)`);
+    this.push(new VcContinueState(this, bytes));
+  }
+
+  /** VcContinueState's step 1: the cartridge save as this game's save table. */
+  vcConvert(bytes: Uint8Array): any {
+    const { save: loaded, notes } = cartToSave(bytes, this.data as never);
+    for (const n of notes) console.log(`[pv] vc: ${n}`);
+    // This game's own settings (camera, tilt, movement...) have no place
+    // in a cartridge save: they come from the Lua save when there is one.
+    // (read when the title summed the Lua save up: not parsed a second time)
+    for (const [k, v] of Object.entries(this.luaOptions ?? {})) {
+      if (!(k in loaded.options)) loaded.options[k] = v;
     }
+    return loaded;
+  }
+
+  /** VcContinueState's step 2: walked into; SAVE now writes the VC title. */
+  vcEnter(loaded: any): void {
+    const told = this.enterLoadedSave(loaded);
+    this.saveTarget = "vc";
+    const p: any = this.save.player;
+    console.log(`[pv] vc: continued from the VC save: ${p.name} at ${p.map} ${p.x},${p.y}; SAVE writes the VC title`);
+    if (told.length) this.showText(told.join("\f"));
+  }
+
+  /** A VC continue that failed: the fresh world back, the reason said, the
+   *  title again. Nothing on the card or in the VC title is touched. */
+  vcContinueFailed(fresh: GameSave, e: unknown): void {
+    this.save = fresh;
+    this.saveTarget = "lua";
+    try {
+      this.overworld.enter("REDS_HOUSE_2F", 3, 6, "down");
+    } catch { /* the bedroom is the fresh save's own spot */ }
+    const why = String((e as Error)?.message ?? e ?? "").replace(/\s+/g, " ").trim();
+    console.log(`[pv] vc: continue FAILED: ${why}`);
+    this.showText(`The VC save could\nnot be loaded.\f${why.slice(0, 18) || "?"}\fIt is left as it is.`, () => this.newGame());
   }
 
   /**
@@ -1009,6 +1104,13 @@ export class VoxelmonGame implements OverworldShell, SceneView {
 
   closeToOverworld(): void {
     while (this.stack.length > 1) this.stack.pop();
+  }
+
+  /** Take `state` off the stack wherever it is (a state that finished
+   *  under something it pushed). */
+  drop(state: GameState): void {
+    const i = this.stack.lastIndexOf(state);
+    if (i >= 0) this.stack.splice(i, 1);
   }
 
   top(): GameState | undefined {

@@ -303,6 +303,9 @@ describe("CONTINUE's choice and where SAVE goes", () => {
     t = (game as any).title();
     expect(t.panel).toEqual(["PLAYER     ASH", "BADGES       2", "POKéDEX      2", "TIME      3:25"]);
     game.tick(VOX_BTN.a); game.tick(0);
+    // a step a frame: logged, converted, walked in
+    expect(game.stackKinds().at(-1)).toBe("vccontinue");
+    for (let i = 0; i < 4; i++) game.tick(0);
     expect(game.stackKinds().at(-1)).toBe("overworld");
     expect(game.saveTarget).toBe("vc");
     expect(game.save.player.name).toBe("ASH");
@@ -365,9 +368,52 @@ describe("CONTINUE's choice and where SAVE goes", () => {
     toTitleMenu(game);
     game.tick(VOX_BTN.a); game.tick(0);
     game.tick(VOX_BTN.a); game.tick(0);
+    for (let i = 0; i < 4; i++) game.tick(0);
     game.writeSave();
     expect(game.lastSaveOk).toBe(false);
     expect(host.luaWrites).toEqual([]);
     expect(game.stackKinds().at(-1)).toBe("textbox");
+  });
+});
+
+describe("a VC continue that goes wrong never hangs", () => {
+  function atChoice(data: VoxelmonData): { game: VoxelmonGame; logs: string[] } {
+    const host = new VcConsole(undefined, saveToCart(richSave(data, "red"), data as never, null).bytes);
+    const game = new VoxelmonGame(data, host, 1);
+    game.newGame();
+    toTitleMenu(game);
+    game.tick(VOX_BTN.a); game.tick(0);
+    return { game, logs: [] };
+  }
+  test.skipIf(!has("red"))("a conversion that throws: logged, a message, then the title", () => {
+    const data = sets.red!;
+    const { game } = atChoice(data);
+    (game as any).vcConvert = () => { throw new Error("bad bytes"); };
+    const seen: string[] = [];
+    const log = console.log;
+    console.log = (...a: unknown[]) => { seen.push(a.join(" ")); };
+    try {
+      game.tick(VOX_BTN.a); game.tick(0);
+      for (let i = 0; i < 4; i++) game.tick(0);
+    } finally { console.log = log; }
+    expect(seen.some((l) => l.includes("vc: continue FAILED: bad bytes"))).toBe(true);
+    expect(game.stackKinds().at(-1)).toBe("textbox");
+    expect(game.saveTarget).toBe("lua");
+    for (let i = 0; i < 600 && game.stackKinds().at(-1) !== "title"; i++) game.tick(i % 2 ? VOX_BTN.a : 0);
+    expect(game.stackKinds().at(-1)).toBe("title");
+  });
+
+  test.skipIf(!has("red"))("a step the host cut off (the deadline) is noticed on the next frame", () => {
+    const data = sets.red!;
+    const { game } = atChoice(data);
+    game.tick(VOX_BTN.a); game.tick(0); // the log-only first step
+    const state: any = (game as any).stack.at(-1);
+    expect(state.kind).toBe("vccontinue");
+    // what an uncatchable interrupt leaves behind: the step marked running
+    state.running = 1;
+    game.tick(0);
+    expect(game.stackKinds()).not.toContain("vccontinue");
+    expect(game.stackKinds().at(-1)).toBe("textbox");
+    expect(game.saveTarget).toBe("lua");
   });
 });

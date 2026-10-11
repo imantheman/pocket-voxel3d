@@ -15,6 +15,15 @@ const g = globalThis as unknown as { voxelmonGame: any; frame: (b: number) => vo
 const game = g.voxelmonGame;
 const mainFrame = g.frame;
 const log = (s: string): void => console.log(`[pv] vcbench: ${s}`);
+// --define VC_HANG=true: the conversion never ends, to watch the host cut
+// it off (voxel.deadline) and the guest put the title back
+declare const VC_HANG: boolean;
+if (typeof VC_HANG !== "undefined" && VC_HANG) {
+  game.vcConvert = (): never => {
+    log("hanging on purpose");
+    for (;;) { /* until the deadline */ }
+  };
+}
 let n = 0;
 let phase = 0;
 let at = 0;
