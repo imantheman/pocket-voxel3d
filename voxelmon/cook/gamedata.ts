@@ -252,6 +252,9 @@ export function buildGamedata(gen: GenData, atlas: AtlasIndex, cookedMaps: strin
     // Yellow's Surfing Pikachu tilemaps (the sheets are atlas pages)
     minigame: gen.minigame ?? undefined,
     pikapic: gen.pikapic ?? undefined,
+    // the ROM facts a Virtual Console (cartridge) save carries for the
+    // current map (game/vc/cartsave.ts)
+    vcsave: gen.vcsave ?? undefined,
   };
   return new TextEncoder().encode(JSON.stringify(game));
 }

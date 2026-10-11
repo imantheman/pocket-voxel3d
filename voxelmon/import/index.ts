@@ -16,6 +16,7 @@ import { extractAudio } from "./stages/audio.ts";
 import { extractPikaCries } from "./stages/pikacries.ts";
 import { extractMinigame } from "./stages/minigame.ts";
 import { extractPikapic } from "./stages/pikapic.ts";
+import { extractVcSave } from "./stages/vcsave.ts";
 import { extractEncounters } from "./stages/encounters.ts";
 import { extractField } from "./stages/field.ts";
 import { extractFont } from "./stages/font.ts";
@@ -109,6 +110,8 @@ export async function runImport(env: VoxelEnv): Promise<void> {
         else if (existsSync(path)) rmSync(path);
       },
     ],
+    // the cartridge-save facts: map headers, toggles, hidden-item order
+    ["vcsave", () => writeJson(genDir, "vcsave", extractVcSave(ctx))],
     [
       "pikapic",
       () => {

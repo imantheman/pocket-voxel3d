@@ -300,6 +300,10 @@ export interface VoxelmonData {
     frames: number;
     scripts: { ticks: number[]; cry?: { tick: number; clip: number }; thunderbolt?: number; flash?: number }[];
   };
+  /** The ROM facts a cartridge (Virtual Console) save carries for the map
+   *  the player stands on (import stages/vcsave.ts; vc/cartsave.ts). Absent
+   *  on a dataset cooked before them: VC saves then cannot be written. */
+  vcsave?: import("./vc/cartsave.ts").VcTables;
 }
 
 // ---------------------------------------------------------------------------
@@ -346,6 +350,7 @@ export const GEN_MODULES = [
   "text_pointers",
   "trainer_headers",
   "pikapic",
+  "vcsave",
 ] as const;
 
 /**

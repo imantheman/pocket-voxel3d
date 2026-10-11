@@ -129,6 +129,8 @@ export interface GenData {
   minigame: Record<string, unknown> | null;
   /** Yellow's PIKACHU faces (import stages/pikapic.ts), else null. */
   pikapic: Record<string, unknown> | null;
+  /** The cartridge-save facts (import stages/vcsave.ts), else null. */
+  vcsave: Record<string, unknown> | null;
   /** Which game the dataset was imported from (version.json; absent = red). */
   version: GameVersion;
 }
@@ -185,6 +187,7 @@ export function loadGen(genDir = GEN_DIR): GenData {
       : null,
     minigame: existsSync(join(genDir, "minigame.json")) ? readJson(genDir, "minigame.json") : null,
     pikapic: existsSync(join(genDir, "pikapic.json")) ? readJson(genDir, "pikapic.json") : null,
+    vcsave: existsSync(join(genDir, "vcsave.json")) ? readJson(genDir, "vcsave.json") : null,
     // A dataset imported before versions existed is Red's.
     version: existsSync(join(genDir, "version.json"))
       ? (readJson(genDir, "version.json") as { version: GameVersion }).version
