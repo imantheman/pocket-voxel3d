@@ -3059,6 +3059,18 @@ fn runs_of(verts: &[Vertex], idx: Option<&[u16]>) -> Vec<Run> {
     runs
 }
 
+/// A buffer the GPU will read, copied into linear memory (citro3d-rs
+/// Buffer::new) and flushed out of the CPU's data cache there at once, so
+/// the GPU never reads bytes still sitting in the cache. (C3D_FrameEnd also
+/// flushes the whole linear heap each frame; this does not rely on it.)
+fn gpu_buf<T: Copy + 'static>(d: &[T]) -> buffer::Buffer {
+    let b = buffer::Buffer::new(d);
+    if !d.is_empty() {
+        unsafe { gsp_flush(b.as_ptr() as *const u8, core::mem::size_of_val(d) as u32); }
+    }
+    b
+}
+
 /// One GPU slice up -- its vertices, and its indices when it is indexed --
 /// with its runs (None: linear could not take it).
 fn gpu_span(span: Span, verts: &[Vertex], idx: Option<&[u16]>, attr_info: &attrib::Info) -> Option<GpuSpan> {
@@ -3072,8 +3084,8 @@ fn gpu_span(span: Span, verts: &[Vertex], idx: Option<&[u16]>, attr_info: &attri
             }
         }
     }
-    let vb = buffer::Buffer::new(verts);
-    let ib = idx.map(buffer::Buffer::new);
+    let vb = gpu_buf(verts);
+    let ib = idx.map(gpu_buf);
     if gpuwatch::ON {
         let vbytes = verts.len() * core::mem::size_of::<Vertex>();
         let ibytes = idx.map_or(0, |l| l.len() * 2);
@@ -3445,6 +3457,14 @@ impl VertStore {
 /// order and every vertex value are the plain path's, so the picture is the
 /// same. Not FireRed's: its world pass is left exactly as it was.
 const INDEXED: bool = !cfg!(feature = "gen3");
+
+/// Tree shapes are NOT indexed, though the world spans are: each copy is a
+/// plain triangle list drawn with no index buffer. A hardware GPU hang
+/// (pvlog 2026-10-11, build 111453) sat in the trees pass, VC continue and
+/// Lua continue alike, and a draw with no indices cannot fetch a vertex
+/// outside its buffer whatever is in memory. The shapes are a few thousand
+/// corners, so the cost of the repeated corners is small.
+const TREES_INDEXED: bool = false;
 
 /// The index side of an indexed build: one list per span (Span::idx), and
 /// how many triangle corners the build has drawn so far -- the plain
@@ -5437,7 +5457,7 @@ fn main() {
         let mp = |px: i16, py: i16| Vertex { pos: [px, py, 0, 0], color: [0, 0, 0, GOLD_DIM_ALPHA], uv: [0.0, 0.0] };
         let verts = [mp(x0, y0), mp(x1, y0), mp(x1, y1), mp(x0, y0), mp(x1, y1), mp(x0, y1)];
         let mut bi = buffer::Info::new();
-        if bi.add(buffer::Buffer::new(&verts[..]), attr_info.permutation()).is_ok() { Some(bi) } else { None }
+        if bi.add(gpu_buf(&verts[..]), attr_info.permutation()).is_ok() { Some(bi) } else { None }
     };
     // TILT SHIFT's quads, held the same frame longer.
     let mut tilt_hold: [Option<buffer::Info>; 3] = [None, None, None];
@@ -6511,7 +6531,7 @@ fn main() {
                         for m in pak_static.tree_shapes.iter() {
                             let n = m.index_count as usize;
                             let vc = m.vert_count as usize;
-                            let bytes = if INDEXED { vc * core::mem::size_of::<Vertex>() + n * 2 } else { n * core::mem::size_of::<Vertex>() };
+                            let bytes = if TREES_INDEXED { vc * core::mem::size_of::<Vertex>() + n * 2 } else { n * core::mem::size_of::<Vertex>() };
                             if n == 0 || !linear_fits_bytes(bytes) {
                                 tree_bufs.push(None);
                                 continue;
@@ -6519,9 +6539,9 @@ fn main() {
                             let mut gmin = [f32::MAX; 3];
                             let mut gmax = [f32::MIN; 3];
                             let vbase = m.vert_base as usize;
-                            // indexed (INDEXED): the shape's vertices once each
+                            // indexed (TREES_INDEXED): the shape's vertices once each
                             // and its indices as cooked; plain: every corner
-                            let mut v: Vec<Vertex> = Vec::with_capacity(if INDEXED { vc } else { n });
+                            let mut v: Vec<Vertex> = Vec::with_capacity(if TREES_INDEXED { vc } else { n });
                             let mut list: Vec<u16> = Vec::new();
                             for i in 0..n {
                                 let Some(pv) =
@@ -6534,7 +6554,7 @@ fn main() {
                                     if p[c] < gmin[c] { gmin[c] = p[c]; }
                                     if p[c] > gmax[c] { gmax[c] = p[c]; }
                                 }
-                                if INDEXED {
+                                if TREES_INDEXED {
                                     let k = pak_static.indices[m.index_base as usize + i];
                                     if k as usize >= vc {
                                         break;
@@ -6544,7 +6564,12 @@ fn main() {
                                     v.push(vert_of(&pv, last_tint));
                                 }
                             }
-                            if INDEXED {
+                            // whole triangles only (a corner the pool lacked
+                            // ends the shape)
+                            if !TREES_INDEXED {
+                                v.truncate(v.len() / 3 * 3);
+                            }
+                            if TREES_INDEXED {
                                 list.truncate(list.len() / 3 * 3);
                                 for i in 0..vc {
                                     match pak_static.verts.get(vbase + i) {
@@ -6557,9 +6582,9 @@ fn main() {
                                 }
                             }
                             let mut bi = buffer::Info::new();
-                            let drawn = if INDEXED { list.len() } else { v.len() };
-                            let vb = buffer::Buffer::new(&v);
-                            let idx = if INDEXED && drawn > 0 { Some(buffer::Buffer::new(&list)) } else { None };
+                            let drawn = if TREES_INDEXED { list.len() } else { v.len() };
+                            let vb = gpu_buf(&v);
+                            let idx = if TREES_INDEXED && drawn > 0 { Some(gpu_buf(&list)) } else { None };
                             // a buffer the GPU cannot read is left out (gpuwatch)
                             let readable = !gpuwatch::ON || drawn == 0 || (
                                 gpuwatch::readable(vb.as_ptr(), v.len() * core::mem::size_of::<Vertex>())
@@ -7174,12 +7199,12 @@ if page_tex.len() < pak_static.atlases.len() {
             if v.is_empty() { return None; }
             let mut bi = buffer::Info::new();
             let n = v.len().min(65535);
-            bi.add(buffer::Buffer::new(&v[..n]), card_attr.permutation()).ok()?;
+            bi.add(gpu_buf(&v[..n]), card_attr.permutation()).ok()?;
             Some((*pg as usize, bi))
         }).collect();
         let spark_buf: Option<buffer::Info> = if spark_verts.is_empty() { None } else {
             let mut bi = buffer::Info::new();
-            bi.add(buffer::Buffer::new(&spark_verts[..]), card_attr.permutation()).ok().map(|_| bi)
+            bi.add(gpu_buf(&spark_verts[..]), card_attr.permutation()).ok().map(|_| bi)
         };
         if guest_drive && dbg_tick % 60 == 0 {
             let _pgx = pak_static.atlases.get(ui_page as usize);
@@ -7428,8 +7453,8 @@ if page_tex.len() < pak_static.atlases.len() {
                     let over_v = quad(0.0, 1.0, vw / tw, 1.0 - vh / th);
                     let mut a = buffer::Info::new();
                     let mut b = buffer::Info::new();
-                    if a.add(buffer::Buffer::new(&ring_v[..]), attr_info.permutation()).is_ok()
-                        && b.add(buffer::Buffer::new(&over_v[..]), attr_info.permutation()).is_ok() {
+                    if a.add(gpu_buf(&ring_v[..]), attr_info.permutation()).is_ok()
+                        && b.add(gpu_buf(&over_v[..]), attr_info.permutation()).is_ok() {
                         gb_wide_bufs = Some([a, b]);
                     }
                 }
@@ -7441,7 +7466,7 @@ if page_tex.len() < pak_static.atlases.len() {
                     mp(x0, y0, 0.0, 1.0), mp(x1, y1, u1, 1.0 - v1), mp(x0, y1, 0.0, 1.0 - v1),
                 ];
                 let mut bi = buffer::Info::new();
-                if bi.add(buffer::Buffer::new(&verts[..]), attr_info.permutation()).is_ok() {
+                if bi.add(gpu_buf(&verts[..]), attr_info.permutation()).is_ok() {
                     gb_buf = Some(bi);
                 }
             } else if gb_drawn.is_some() {
@@ -7489,8 +7514,8 @@ if page_tex.len() < pak_static.atlases.len() {
                 let over_v = quad(0.0, 1.0, vw / tw, 1.0 - vh / th);
                 let mut a = buffer::Info::new();
                 let mut b = buffer::Info::new();
-                if a.add(buffer::Buffer::new(&ring_v[..]), attr_info.permutation()).is_ok()
-                    && b.add(buffer::Buffer::new(&over_v[..]), attr_info.permutation()).is_ok() {
+                if a.add(gpu_buf(&ring_v[..]), attr_info.permutation()).is_ok()
+                    && b.add(gpu_buf(&over_v[..]), attr_info.permutation()).is_ok() {
                     canvas_bufs = Some([a, b]);
                 }
             }
@@ -7506,7 +7531,7 @@ if page_tex.len() < pak_static.atlases.len() {
                     mp(x0, y0, 0.0, 1.0), mp(x1, y1, u1, 1.0 - v1), mp(x0, y1, 0.0, 1.0 - v1),
                 ];
                 let mut bi = buffer::Info::new();
-                if bi.add(buffer::Buffer::new(&verts[..]), attr_info.permutation()).is_ok() {
+                if bi.add(gpu_buf(&verts[..]), attr_info.permutation()).is_ok() {
                     lcd_buf = Some(bi);
                 }
             }
@@ -7525,7 +7550,7 @@ if page_tex.len() < pak_static.atlases.len() {
                     mp(x0, 0, 0.0, 1.0), mp(x1, 240, u1, 1.0 - v1), mp(x0, 240, 0.0, 1.0 - v1),
                 ];
                 let mut bi = buffer::Info::new();
-                if bi.add(buffer::Buffer::new(&verts[..]), attr_info.permutation()).is_ok() {
+                if bi.add(gpu_buf(&verts[..]), attr_info.permutation()).is_ok() {
                     lcd_b_buf = Some(bi);
                 }
             }
@@ -7535,20 +7560,20 @@ if page_tex.len() < pak_static.atlases.len() {
                 if v.is_empty() { return None; }
                 let mut bi = buffer::Info::new();
                 let n = v.len().min(65535);
-                bi.add(buffer::Buffer::new(&v[..n]), attr_info.permutation()).ok()?;
+                bi.add(gpu_buf(&v[..n]), attr_info.permutation()).ok()?;
                 Some((*pg as usize, *depth, bi))
             }).collect();
         let anim_bufs: Vec<(usize, buffer::Info)> = anim_groups.iter().filter_map(|(pg, v)| {
             if v.is_empty() { return None; }
             let mut bi = buffer::Info::new();
             let n = v.len().min(65535);
-            bi.add(buffer::Buffer::new(&v[..n]), attr_info.permutation()).ok()?;
+            bi.add(gpu_buf(&v[..n]), attr_info.permutation()).ok()?;
             Some((*pg as usize, bi))
         }).collect();
         let ui_buf: Option<buffer::Info> = if ui_verts.is_empty() { None } else {
             let mut bi = buffer::Info::new();
             let n = ui_verts.len().min(65535);
-            bi.add(buffer::Buffer::new(&ui_verts[..n]), attr_info.permutation()).ok();
+            bi.add(gpu_buf(&ui_verts[..n]), attr_info.permutation()).ok();
             Some(bi)
         };
         // Kanto Gear: build the companion (bottom) UI verts from scene.ui_b.
@@ -7701,25 +7726,25 @@ if page_tex.len() < pak_static.atlases.len() {
         let ui_b_dim_buf: Option<buffer::Info> = if ui_b_dim_verts.is_empty() { None } else {
             let mut bi = buffer::Info::new();
             let n = ui_b_dim_verts.len().min(65535);
-            bi.add(buffer::Buffer::new(&ui_b_dim_verts[..n]), attr_info.permutation()).ok();
+            bi.add(gpu_buf(&ui_b_dim_verts[..n]), attr_info.permutation()).ok();
             Some(bi)
         };
         let ui_b_buf: Option<buffer::Info> = if ui_b_verts.is_empty() { None } else {
             let mut bi = buffer::Info::new();
             let n = ui_b_verts.len().min(65535);
-            bi.add(buffer::Buffer::new(&ui_b_verts[..n]), attr_info.permutation()).ok();
+            bi.add(gpu_buf(&ui_b_verts[..n]), attr_info.permutation()).ok();
             Some(bi)
         };
         let ui_b_light_buf: Option<buffer::Info> = if ui_b_light_verts.is_empty() { None } else {
             let mut bi = buffer::Info::new();
             let n = ui_b_light_verts.len().min(65535);
-            bi.add(buffer::Buffer::new(&ui_b_light_verts[..n]), attr_info.permutation()).ok();
+            bi.add(gpu_buf(&ui_b_light_verts[..n]), attr_info.permutation()).ok();
             Some(bi)
         };
         let ui_b_bar_buf: Option<buffer::Info> = if ui_b_bar_verts.is_empty() { None } else {
             let mut bi = buffer::Info::new();
             let n = ui_b_bar_verts.len().min(65535);
-            bi.add(buffer::Buffer::new(&ui_b_bar_verts[..n]), attr_info.permutation()).ok();
+            bi.add(gpu_buf(&ui_b_bar_verts[..n]), attr_info.permutation()).ok();
             Some(bi)
         };
         // Companion sprite pages load through the same lazy page_tex cache as
@@ -7743,7 +7768,7 @@ if page_tex.len() < pak_static.atlases.len() {
             if v.is_empty() { return None; }
             let mut bi = buffer::Info::new();
             let n = v.len().min(65535);
-            bi.add(buffer::Buffer::new(&v[..n]), attr_info.permutation()).ok()?;
+            bi.add(gpu_buf(&v[..n]), attr_info.permutation()).ok()?;
             Some((*pg as usize, bi))
         }).collect();
         let page_tex_ref = &page_tex;
@@ -8130,11 +8155,11 @@ if page_tex.len() < pak_static.atlases.len() {
                 ]);
             }
             let mut bi = buffer::Info::new();
-            if bi.add(buffer::Buffer::new(&unit[..]), attr_info.permutation()).is_ok() { tilt_unit = Some(bi); }
+            if bi.add(gpu_buf(&unit[..]), attr_info.permutation()).is_ok() { tilt_unit = Some(bi); }
             let mut bi = buffer::Info::new();
-            if bi.add(buffer::Buffer::new(&sharp[..]), attr_info.permutation()).is_ok() { tilt_sharp = Some(bi); }
+            if bi.add(gpu_buf(&sharp[..]), attr_info.permutation()).is_ok() { tilt_sharp = Some(bi); }
             let mut bi = buffer::Info::new();
-            if bi.add(buffer::Buffer::new(&bands[..]), attr_info.permutation()).is_ok() { tilt_bands = Some(bi); }
+            if bi.add(gpu_buf(&bands[..]), attr_info.permutation()).is_ok() { tilt_bands = Some(bi); }
         }
         let tilt_ref = match (&tilt_unit, &tilt_sharp, &tilt_bands) {
             (Some(_), Some(_), Some(_)) => tilt_ref,
