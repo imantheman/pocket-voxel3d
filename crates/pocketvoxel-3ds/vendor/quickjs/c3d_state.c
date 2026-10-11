@@ -120,3 +120,47 @@ int c3d_gpu_readable(const void *p, u32 len) {
     if (a >= 0x1F000000u && a + len <= 0x1F600000u) return 1;
     return 0;
 }
+
+/* ---- GPU-done recovery (gpuwatch::begin_frame_watched) ----
+   The queue entry the GPU is on: the first one not yet signalled finished
+   (lastEntry). Its GX command type (1 command list, 2 memory fill,
+   3 display transfer, 4 texture copy, 5 cache flush) in *type; -1 when
+   every entry has been signalled. */
+int c3d_queue_pending(int *type, int *left) {
+    gxCmdQueue_s *q = c3d_queue();
+    *left = (int)q->numEntries - (int)q->lastEntry;
+    if (q->lastEntry >= q->numEntries) { *type = 0; return -1; }
+    *type = (int)(q->entries[q->lastEntry].data[0] & 0xFF);
+    return (int)q->lastEntry;
+}
+
+/* The GPU's own registers (GSPGPU_ReadHWRegs, offsets from 0x1EB00000;
+   the GPU block is 0x10400000 physical, offset 0x400000):
+   [0] 0x1040001C memory fill 0 control (bit 0: running)
+   [1] 0x1040002C memory fill 1 control (bit 0: running)
+   [2] 0x10400034 status
+   [3] 0x10400C18 transfer engine control (bit 0: running)
+   [4] 0x104018E0 command list size   [5] 0x104018E8 command list address
+   [6] 0x104018F0 command list jump
+   0 on success, else the GSP result. */
+int c3d_gpu_regs(u32 *out) {
+    static const u32 at[7] = { 0x40001C, 0x40002C, 0x400034, 0x400C18, 0x4018E0, 0x4018E8, 0x4018F0 };
+    int rc = 0;
+    for (int i = 0; i < 7; i++) {
+        out[i] = 0xFFFFFFFFu;
+        Result r = GSPGPU_ReadHWRegs(at[i], &out[i], 4);
+        if (R_FAILED(r)) rc = (int)r;
+    }
+    return rc;
+}
+
+/* What libctru's GSP event thread does when the GPU says an entry is done
+   (gxqueue.c): count it finished and submit the next. For a completion
+   signal that never arrived. */
+void gxCmdQueueInterrupt(GSPGPU_Event irq);
+void c3d_queue_signal(int type) {
+    GSPGPU_Event ev = type == 1 ? GSPGPU_EVENT_P3D
+                    : type == 2 ? GSPGPU_EVENT_PSC0
+                    : GSPGPU_EVENT_PPF;
+    gxCmdQueueInterrupt(ev);
+}

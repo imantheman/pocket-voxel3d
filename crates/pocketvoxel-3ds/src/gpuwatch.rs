@@ -1,4 +1,6 @@
-//! The GPU watch: a frame the GPU never finishes, said on the log.
+//! The GPU watch: a frame the GPU never finishes, said on the log -- and,
+//! when the GPU turns out to be idle with only its completion signal lost,
+//! moved on by hand (recover).
 //!
 //! citro3d-rs begins each frame with C3D_FrameBegin(C3D_FRAME_SYNCDRAW),
 //! which waits, with no limit, for the GPU to finish the frame before. When
@@ -29,6 +31,9 @@ extern "C" {
     fn c3d_queue_room() -> i32;
     fn c3d_gpu_readable(p: *const core::ffi::c_void, len: u32) -> i32;
     fn svcSleepThread(ns: i64);
+    fn c3d_queue_pending(ty: *mut i32, left: *mut i32) -> i32;
+    fn c3d_gpu_regs(out: *mut u32) -> i32;
+    fn c3d_queue_signal(ty: i32);
 }
 
 /// Frames begun through begin_frame_watched.
@@ -59,6 +64,7 @@ pub unsafe fn begin_frame_watched() {
     }
     let t0 = crate::sys_tick();
     let mut said = 0u8;
+    let mut next_try = STUCK_MS;
     loop {
         svcSleepThread(250_000);
         if c3d_frame_begin_nb() != 0 {
@@ -95,7 +101,71 @@ pub unsafe fn begin_frame_watched() {
             said = 2;
             crate::dlog_now("[pv] gpu: still busy after 10 s; waiting on it (HOME cannot answer while it is)");
         }
+        // From 2 s on, every half second: a GPU that is idle but never said
+        // so is moved on by hand (recover).
+        if ms >= next_try {
+            next_try = ms + 500.0;
+            recover();
+        }
     }
+}
+
+/// Lines `recover` may still write this session (a GPU that hangs for good
+/// would otherwise fill the card twice a second).
+static mut RECOVER_LOGS: u32 = 24;
+
+fn gx_name(ty: i32) -> &'static str {
+    match ty {
+        1 => "command list",
+        2 => "memory fill",
+        3 => "display transfer",
+        4 => "texture copy",
+        5 => "cache flush",
+        _ => "?",
+    }
+}
+
+/// The queue has waited two seconds or more on one entry. Read what the GPU
+/// itself says (GSPGPU_ReadHWRegs): a fill or a transfer whose unit still
+/// shows running is really busy -- said, with the registers, and waited on.
+/// Otherwise the work is done and only its completion signal was lost: the
+/// entry is counted finished by hand, as libctru's GSP event thread would,
+/// and the queue goes on. (A command list has no busy bit to read; after two
+/// seconds -- a frame takes a few milliseconds -- it is taken as done.)
+unsafe fn recover() -> bool {
+    let (mut ty, mut left) = (0i32, 0i32);
+    let at = c3d_queue_pending(&mut ty, &mut left);
+    if at < 0 {
+        return false;
+    }
+    let mut r = [0u32; 7];
+    let rc = c3d_gpu_regs(r.as_mut_ptr());
+    let busy = rc == 0 && match ty {
+        2 => r[0] & 1 != 0 || r[1] & 1 != 0,
+        3 | 4 => r[3] & 1 != 0,
+        _ => false,
+    };
+    let regs = format!(
+        "fill0 {:08x} fill1 {:08x} status {:08x} transfer {:08x} list size {:08x} addr {:08x} jump {:08x}{}",
+        r[0], r[1], r[2], r[3], r[4], r[5], r[6],
+        if rc != 0 { format!(" (read failed {:08x})", rc as u32) } else { String::new() });
+    let say = RECOVER_LOGS > 0;
+    if say {
+        RECOVER_LOGS -= 1;
+    }
+    if busy {
+        if say {
+            crate::dlog_now(&format!(
+                "[pv] gpu: really busy: queue entry {} ({}), {} left; {}", at, gx_name(ty), left, regs));
+        }
+        return false;
+    }
+    c3d_queue_signal(ty);
+    if say {
+        crate::dlog_now(&format!(
+            "[pv] gpu: idle but unsignalled; moved on (queue entry {}, {}, {} left; {})", at, gx_name(ty), left, regs));
+    }
+    true
 }
 
 /// Wait for the GPU to finish everything submitted, before memory it may
@@ -105,11 +175,17 @@ pub unsafe fn begin_frame_watched() {
 pub unsafe fn wait_idle(why: &str) {
     let t0 = crate::sys_tick();
     let mut said = false;
+    let mut next_try = STUCK_MS;
     while c3d_queue_done() == 0 {
-        if !said && crate::us_since(t0) / 1000.0 >= STUCK_MS {
+        let ms = crate::us_since(t0) / 1000.0;
+        if !said && ms >= STUCK_MS {
             said = true;
             STUCK = true;
             crate::dlog_now(&format!("[pv] gpu: still busy after 2 s, before {}", why));
+        }
+        if ms >= next_try {
+            next_try = ms + 500.0;
+            recover();
         }
         svcSleepThread(250_000);
     }

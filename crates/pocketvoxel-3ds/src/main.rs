@@ -3456,7 +3456,9 @@ impl VertStore {
 /// two triangles share once, and fetches it once. The triangles, their
 /// order and every vertex value are the plain path's, so the picture is the
 /// same. Not FireRed's: its world pass is left exactly as it was.
-const INDEXED: bool = !cfg!(feature = "gen3");
+// FALLBACK BUILD: no draw anywhere uses an index buffer (the world spans
+// as before the city frame-rate work, the trees as in build 115009).
+const INDEXED: bool = false;
 
 /// Tree shapes are NOT indexed, though the world spans are: each copy is a
 /// plain triangle list drawn with no index buffer. A hardware GPU hang
