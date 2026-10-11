@@ -417,3 +417,20 @@ describe("a VC continue that goes wrong never hangs", () => {
     expect(game.saveTarget).toBe("lua");
   });
 });
+
+describe("a cartridge save with junk in it", () => {
+  test.skipIf(!has("yellow"))("converts with notes instead of failing", () => {
+    const data = sets.yellow!;
+    let seed = 12345;
+    const rnd = (): number => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) & 0xff;
+    for (let round = 0; round < 20; round++) {
+      const b = new Uint8Array(L.SAVE_SIZE);
+      for (let i = 0; i < b.length; i++) b[i] = rnd();
+      b[L.MAIN_CHECKSUM] = checksum(b, L.PLAYER_NAME, L.MAIN_CHECKSUM);
+      const { save } = cartToSave(b, data as never);
+      expect(typeof save.player.map).toBe("string");
+      expect(Array.isArray(save.party)).toBe(true);
+      for (const m of save.party) expect(m.level >= 1 && m.level <= 100 && m.hp <= m.stats.hp).toBe(true);
+    }
+  });
+});

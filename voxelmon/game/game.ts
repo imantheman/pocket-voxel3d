@@ -853,6 +853,11 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     this.saveTarget = "vc";
     const p: any = this.save.player;
     console.log(`[pv] vc: continued from the VC save: ${p.name} at ${p.map} ${p.x},${p.y}; SAVE writes the VC title`);
+    // what the first frames will draw from it: the party (the gear's lead
+    // pic, the partner), the options the host is told
+    const party = (this.save.party ?? []).map((m: any) => `${m.species}/${m.level}/${m.hp}`).join(" ");
+    const o: any = (this.save as { options?: unknown }).options ?? {};
+    console.log(`[pv] vc: party ${party}; options ${Object.entries(o).map(([k, v]) => `${k}=${v}`).join(" ")}`);
     if (told.length) this.showText(told.join("\f"));
   }
 

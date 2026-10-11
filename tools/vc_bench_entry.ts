@@ -17,6 +17,21 @@ const mainFrame = g.frame;
 const log = (s: string): void => console.log(`[pv] vcbench: ${s}`);
 // --define VC_HANG=true: the conversion never ends, to watch the host cut
 // it off (voxel.deadline) and the guest put the title back
+// --define VC_FAIL='"convert"' / '"enter"': that step throws (after the
+// walk-in has begun, for enter), to watch the failure path end at the title
+declare const VC_FAIL: string;
+if (typeof VC_FAIL !== "undefined") {
+  const why = "TypeError: cannot read property 'x' of undefined {PLAYER} <MAP_ID> #1 _";
+  if (VC_FAIL === "convert") game.vcConvert = (): never => { throw new Error(why); };
+  if (VC_FAIL === "enter") {
+    const real = game.vcEnter.bind(game);
+    game.vcEnter = (loaded: any): never => {
+      game.overworld.enter(loaded.player.map, loaded.player.x, loaded.player.y, "down");
+      void real;
+      throw new Error(why);
+    };
+  }
+}
 declare const VC_HANG: boolean;
 if (typeof VC_HANG !== "undefined" && VC_HANG) {
   game.vcConvert = (): never => {
@@ -77,5 +92,8 @@ g.frame = (b: number): void => {
     log("done");
     phase = 9;
   }
+  if (n % 120 === 0 && phase >= 4) log(`tick ${n}: ${game.stackKinds().join(",")} target ${game.saveTarget}`);
+  // after a failure, the title should come back: press A through the message
+  if (phase === 4 && n - at > 60 && top === "textbox" && n % 20 === 0) pad = VOX_BTN.a;
   mainFrame((b & ~0xff) | pad);
 };
