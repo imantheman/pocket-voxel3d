@@ -259,3 +259,115 @@ describe("a cartridge save continues in this game", () => {
     }
   });
 });
+
+/** A console with a VC title: its save in memory, writes recorded. */
+class VcConsole extends RecorderHost {
+  lua: string | undefined;
+  vc: Uint8Array | undefined;
+  luaWrites: string[] = [];
+  vcWrites: Uint8Array[] = [];
+  constructor(lua: string | undefined, vc: Uint8Array | undefined) {
+    super();
+    this.lua = lua;
+    this.vc = vc;
+  }
+  saveData(): string | undefined { return this.lua; }
+  saveWrite(text: string): void { this.luaWrites.push(text); this.lua = text; }
+  vcData(): Uint8Array | undefined { return this.vc ? new Uint8Array(this.vc) : undefined; }
+  vcWrite(b: Uint8Array): boolean { this.vcWrites.push(new Uint8Array(b)); this.vc = new Uint8Array(b); return true; }
+}
+
+function toTitleMenu(game: VoxelmonGame): any {
+  game.tick(VOX_BTN.start); game.tick(0);
+  return (game as any).title();
+}
+
+describe("CONTINUE's choice and where SAVE goes", () => {
+  test.skipIf(!has("red"))("with both saves: a choice, each with its info box", () => {
+    const data = sets.red!;
+    const lua = richSave(data, "red");
+    lua.player.name = "LUAKID";
+    lua.player.map = "PALLET_TOWN"; lua.player.x = 5; lua.player.y = 6;
+    const vcSave = richSave(data, "red");
+    const host = new VcConsole(encodeSave(lua), saveToCart(vcSave, data as never, null).bytes);
+    const game = new VoxelmonGame(data, host, 1);
+    game.newGame();
+    toTitleMenu(game);
+    expect((game as any).title().menu[0]).toBe("CONTINUE");
+    game.tick(VOX_BTN.a); game.tick(0);
+    let t = (game as any).title();
+    expect(t.phase).toBe("pick");
+    expect(t.menu).toEqual(["LUA SAVE", "VC SAVE"]);
+    expect(t.panel[0]).toBe("PLAYER  LUAKID");
+    game.tick(VOX_BTN.down); game.tick(0);
+    t = (game as any).title();
+    expect(t.panel).toEqual(["PLAYER     ASH", "BADGES       2", "POKéDEX      2", "TIME      3:25"]);
+    game.tick(VOX_BTN.a); game.tick(0);
+    expect(game.stackKinds().at(-1)).toBe("overworld");
+    expect(game.saveTarget).toBe("vc");
+    expect(game.save.player.name).toBe("ASH");
+    game.writeSave();
+    expect(host.luaWrites).toEqual([]);
+    expect(host.vcWrites.length).toBe(1);
+    expect(isCartSave(host.vcWrites[0])).toBe(true);
+    expect(cartSummary(host.vcWrites[0])!.name).toBe("ASH");
+  });
+
+  test.skipIf(!has("red"))("picking the Lua save saves to the Lua file only", () => {
+    const data = sets.red!;
+    const host = new VcConsole(encodeSave(richSave(data, "red")), saveToCart(richSave(data, "red"), data as never, null).bytes);
+    const game = new VoxelmonGame(data, host, 1);
+    game.newGame();
+    toTitleMenu(game);
+    game.tick(VOX_BTN.a); game.tick(0);
+    game.tick(VOX_BTN.a); game.tick(0); // LUA SAVE, first
+    expect(game.saveTarget).toBe("lua");
+    game.writeSave();
+    expect(host.luaWrites.length).toBe(1);
+    expect(host.vcWrites).toEqual([]);
+  });
+
+  test.skipIf(!has("red"))("a VC save alone: the choice offers just it; B goes back", () => {
+    const data = sets.red!;
+    const host = new VcConsole(undefined, saveToCart(richSave(data, "red"), data as never, null).bytes);
+    const game = new VoxelmonGame(data, host, 1);
+    game.newGame();
+    expect(toTitleMenu(game).menu[0]).toBe("CONTINUE");
+    game.tick(VOX_BTN.a); game.tick(0);
+    expect((game as any).title().menu).toEqual(["VC SAVE"]);
+    game.tick(VOX_BTN.b); game.tick(0);
+    expect((game as any).title().phase).toBe("menu");
+  });
+
+  test.skipIf(!has("red"))("an empty VC save, or none: CONTINUE is what it always was", () => {
+    const data = sets.red!;
+    for (const vc of [new Uint8Array(L.SAVE_SIZE).fill(0xff), undefined]) {
+      const host = new VcConsole(encodeSave(richSave(data, "red")), vc);
+      const game = new VoxelmonGame(data, host, 1);
+      game.newGame();
+      toTitleMenu(game);
+      game.tick(VOX_BTN.a); game.tick(0);
+      expect(game.stackKinds().at(-1)).toBe("overworld");
+      expect(game.saveTarget).toBe("lua");
+    }
+    // and with no save at all, no CONTINUE
+    const game = new VoxelmonGame(data, new VcConsole(undefined, new Uint8Array(L.SAVE_SIZE)), 1);
+    game.newGame();
+    expect(toTitleMenu(game).menu[0]).toBe("NEW GAME");
+  });
+
+  test.skipIf(!has("red"))("a VC save the host cannot write says so and keeps the session's target", () => {
+    const data = sets.red!;
+    class Refuses extends VcConsole { vcWrite(): boolean { return false; } vcErr(): string { return "commit failed"; } }
+    const host = new Refuses(undefined, saveToCart(richSave(data, "red"), data as never, null).bytes);
+    const game = new VoxelmonGame(data, host, 1);
+    game.newGame();
+    toTitleMenu(game);
+    game.tick(VOX_BTN.a); game.tick(0);
+    game.tick(VOX_BTN.a); game.tick(0);
+    game.writeSave();
+    expect(game.lastSaveOk).toBe(false);
+    expect(host.luaWrites).toEqual([]);
+    expect(game.stackKinds().at(-1)).toBe("textbox");
+  });
+});

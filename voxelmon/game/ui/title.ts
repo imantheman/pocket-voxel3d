@@ -80,7 +80,31 @@ const COPYRIGHT_Y = 136;
  * so it follows the prefix with no gap -- column 9. */
 const COPYRIGHT_GAMEFREAK_X = 16 + COPYRIGHT_PREFIX.length * 8;
 
-export type TitleChoice = "continue" | "new" | "option" | "viewer";
+export type TitleChoice = "continue" | "continue-vc" | "new" | "option" | "viewer";
+
+/**
+ * A save CONTINUE can load, as its info box shows it (the cartridge's
+ * CONTINUE box: PLAYER, BADGES, POKéDEX, TIME). Null fields read "?".
+ */
+export interface SaveSummary {
+  name: string | null;
+  badges: number | null;
+  owned: number | null;
+  seconds: number | null;
+}
+
+/** The info box's four lines, 14 columns: label left, value right. */
+export function summaryLines(s: SaveSummary): string[] {
+  const row = (label: string, value: string): string => label + value.padStart(14 - label.length);
+  const t = s.seconds;
+  const time = t === null ? "?" : `${Math.floor(t / 3600)}:${String(Math.floor(t / 60) % 60).padStart(2, "0")}`;
+  return [
+    row("PLAYER", s.name ?? "?"),
+    row("BADGES", s.badges === null ? "?" : String(s.badges)),
+    row("POKéDEX", s.owned === null ? "?" : String(s.owned)),
+    row("TIME", time),
+  ];
+}
 
 export interface TitleQuad {
   page: number;
@@ -99,7 +123,7 @@ export interface TitleTile {
 }
 
 export interface TitleView {
-  phase: "press" | "menu";
+  phase: "press" | "menu" | "pick";
   /** The mon in the box this beat, for the scene's redraw key. */
   monPage: number;
   /** Screen-space pictures, back to front. */
@@ -109,6 +133,8 @@ export interface TitleView {
   menu: string[];
   index: number;
   hasSave: boolean;
+  /** CONTINUE's info box for the save under the cursor (the pick phase). */
+  panel?: string[];
 }
 
 /** A title page by name, or -1 (Yellow's pieces have no literal fallback). */
@@ -118,7 +144,11 @@ function named(data: unknown, key: string): number {
 
 export class TitleState implements GameState {
   readonly kind = "title";
-  private phase: "press" | "menu" = "press";
+  private phase: "press" | "menu" | "pick" = "press";
+  /** CONTINUE's choice between the saves there are (Lua, VC), when the
+   *  game was given more than the Lua save to offer. */
+  private pick: { id: "lua" | "vc"; label: string; summary: SaveSummary }[] = [];
+  private pickIndex = 0;
   private timer = 0;
   private index = 0;
   private menu: string[];
@@ -146,6 +176,10 @@ export class TitleState implements GameState {
       picPageFor?: (species: string) => number;
       showChoice?: (text: string, cb: (yes: boolean) => void, opts?: { defaultNo?: boolean }) => void;
       deleteSave?: () => void;
+      /** The saves CONTINUE offers: the Lua save's and the VC title's
+       *  summaries, each absent when there is no such save. With no VC
+       *  save CONTINUE loads the Lua save straight away, as it always did. */
+      saveChoices?: { lua?: SaveSummary; vc?: SaveSummary };
     },
     private onChoose: (c: TitleChoice) => void,
   ) {
@@ -266,11 +300,36 @@ export class TitleState implements GameState {
       return;
     }
 
+    if (this.phase === "pick") {
+      // the cartridge's menu beeps on every move and press
+      const n = this.pick.length;
+      if (p.up && n > 1) { this.pickIndex = (this.pickIndex + n - 1) % n; this.audio()?.playSfx?.("Press_AB"); }
+      if (p.down && n > 1) { this.pickIndex = (this.pickIndex + 1) % n; this.audio()?.playSfx?.("Press_AB"); }
+      if (p.b) { this.audio()?.playSfx?.("Press_AB"); this.phase = "menu"; return; }
+      if (p.a) {
+        this.audio()?.playSfx?.("Press_AB");
+        const id = this.pick[this.pickIndex]!.id;
+        this.game.pop();
+        this.onChoose(id === "vc" ? "continue-vc" : "continue");
+      }
+      return;
+    }
+
     if (p.up) this.index = (this.index + this.menu.length - 1) % this.menu.length;
     if (p.down) this.index = (this.index + 1) % this.menu.length;
     if (p.b) { this.phase = "press"; return; }
     if (p.a) {
       const pick = this.menu[this.index];
+      // With a VC save there is a choice to make first: which save.
+      const ch = this.game.saveChoices;
+      if (pick === "CONTINUE" && ch?.vc) {
+        this.pick = [];
+        if (ch.lua) this.pick.push({ id: "lua", label: "LUA SAVE", summary: ch.lua });
+        this.pick.push({ id: "vc", label: "VC SAVE", summary: ch.vc });
+        this.pickIndex = 0;
+        this.phase = "pick";
+        return;
+      }
       this.game.pop();
       if (pick === "CONTINUE") this.onChoose("continue");
       else if (pick === "NEW GAME") this.onChoose("new");
@@ -312,10 +371,17 @@ export class TitleState implements GameState {
       monPage,
       pics,
       tiles,
-      menu: this.menu,
-      index: this.index,
+      ...this.menuView(),
       hasSave: !!this.game.hasSave,
     };
+  }
+
+  /** The menu on show: the main menu, or CONTINUE's save choice with the
+   *  info box of the save under the cursor. */
+  private menuView(): { menu: string[]; index: number; panel?: string[] } {
+    if (this.phase !== "pick") return { menu: this.menu, index: this.index };
+    const cur = this.pick[this.pickIndex]!;
+    return { menu: this.pick.map((e) => e.label), index: this.pickIndex, panel: summaryLines(cur.summary) };
   }
 
   /** Yellow's composition (title_yellow.asm): no ribbon, no cycling mon;
@@ -345,8 +411,7 @@ export class TitleState implements GameState {
       monPage: named(data, "pikachu"),
       pics: pics.filter((q) => q.page >= 0),
       tiles,
-      menu: this.menu,
-      index: this.index,
+      ...this.menuView(),
       hasSave: !!this.game.hasSave,
     };
   }

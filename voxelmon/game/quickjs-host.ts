@@ -39,6 +39,10 @@ export interface VoxelNative {
   saveBackup?(): boolean;
   writeTest?(): boolean;
   writeErr?(): string | undefined;
+  vcData?(): ArrayBuffer | undefined;
+  vcWrite?(bytes: Uint8Array): boolean;
+  vcInfo?(): string | undefined;
+  vcErr?(): string | undefined;
   viewer?(): void;
   uiTile(x: number, y: number, tile: number): void;
   uiFill(x: number, y: number, w: number, h: number, tile: number): void;
@@ -232,6 +236,23 @@ export class QuickJsHost implements VoxelHost {
 
   saveBackup(): boolean {
     return native.saveBackup ? native.saveBackup() === true : false;
+  }
+
+  vcData(): Uint8Array | undefined {
+    const b = native.vcData ? native.vcData() : undefined;
+    return b ? new Uint8Array(b) : undefined;
+  }
+
+  vcWrite(bytes: Uint8Array): boolean {
+    return native.vcWrite ? native.vcWrite(bytes) === true : false;
+  }
+
+  vcInfo(): string | undefined {
+    return native.vcInfo ? native.vcInfo() : undefined;
+  }
+
+  vcErr(): string | undefined {
+    return native.vcErr ? native.vcErr() : undefined;
   }
 
   gamedata(): ArrayBuffer | null {

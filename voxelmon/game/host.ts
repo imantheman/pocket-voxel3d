@@ -65,6 +65,17 @@ export interface VoxelHost {
   writeTest?(): boolean;
   /** Why the last write failed, from the host. */
   writeErr?(): string | undefined;
+  /**
+   * VC saves (Red, Blue, Yellow on the 3DS, src/vc.rs): the re-release
+   * title's 32 KB cartridge save as read at boot, or undefined when there is
+   * no title (or it cannot be opened). `vcWrite` backs the title's save up
+   * to the card, writes these bytes in and commits; true when it took.
+   * `vcInfo` says what was found, `vcErr` why the last write failed.
+   */
+  vcData?(): Uint8Array | undefined;
+  vcWrite?(bytes: Uint8Array): boolean;
+  vcInfo?(): string | undefined;
+  vcErr?(): string | undefined;
   viewer?(): void;
   // ui (the GB tile layer; tile ids index the cooked UI atlas)
   uiTile(x: number, y: number, tile: number): void;

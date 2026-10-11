@@ -1976,14 +1976,14 @@ export class Scene {
       // The ribbon and the copyright line are 8x8 tiles in the original
       // too; they ride the movie's tile layer, in GB space.
       this.emitIntroTiles(ttl.tiles ?? []);
-      const sig = `${ttl.phase},${ttl.index},${ttl.monPage}`;
+      const sig = `${ttl.phase},${ttl.index},${ttl.monPage},${ttl.menu?.join("/") ?? ""},${ttl.panel?.join("/") ?? ""}`;
       if (sig !== this.titleSig) {
         this.titleSig = sig;
         this.uiOwner = null;
         host.uiClear();
         // Nothing on the text layer while it waits: the cartridge says no
         // PRESS START, it just waits for one.
-        if (ttl.phase === "menu") {
+        if (ttl.phase === "menu" || ttl.phase === "pick") {
           // Top-left, like the original's main menu box.
           const MX = 0, MY = 0, MW = 12;
           const MH = ttl.menu.length * 2;
@@ -2000,6 +2000,22 @@ export class Scene {
             this.stamp(host, MX + 3, MY + 2 + i * 2, m);
             if (i === ttl.index) host.uiTile(MX + 2, MY + 2 + i * 2, ARROW_CURSOR);
           });
+          // CONTINUE's info box (DisplayContinueGameInfo's place: a box
+          // from tile (4,7) to (19,16), the four lines a row apart)
+          const panel: string[] | undefined = ttl.panel;
+          if (panel && panel.length > 0) {
+            const PX = 4, PY = 7, PW = 15, PH = 8;
+            host.uiTile(PX, PY, BORDER_TL);
+            host.uiFill(PX + 1, PY, PW - 1, 1, BORDER_H);
+            host.uiTile(PX + PW, PY, BORDER_TR);
+            host.uiFill(PX, PY + 1, 1, PH, BORDER_V);
+            host.uiFill(PX + PW, PY + 1, 1, PH, BORDER_V);
+            host.uiFill(PX + 1, PY + 1, PW - 1, PH, SPACE);
+            host.uiTile(PX, PY + 1 + PH, BORDER_BL);
+            host.uiFill(PX + 1, PY + 1 + PH, PW - 1, 1, BORDER_H);
+            host.uiTile(PX + PW, PY + 1 + PH, BORDER_BR);
+            panel.forEach((line, i) => this.stamp(host, PX + 1, PY + 2 + i * 2, line));
+          }
         }
       }
       return;

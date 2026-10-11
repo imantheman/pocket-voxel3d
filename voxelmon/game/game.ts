@@ -112,6 +112,8 @@ import { PokedexState } from "./ui/pokedexscreen.ts";
 import { encodeSave } from "./save-lua.ts";
 import { decodeSave } from "./save-read.ts";
 import { fromDisk, reportLines, syncItemBalls, toDisk } from "./savecompat.ts";
+import { cartSummary, cartToSave, saveToCart } from "./vc/cartsave.ts";
+import type { SaveSummary } from "./ui/title.ts";
 import * as Bag from "./rules/bag.ts";
 import { tiltShiftLevel } from "./tiltshift.ts";
 import { is2d } from "./viewmode.ts";
@@ -612,7 +614,18 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     // name entries. gen1recomp src/ui/OakSpeech.lua order.
     this.overworld.enter("REDS_HOUSE_2F", 3, 6, "down");
     // Title screen first; the intro only runs once the player picks.
-    (this as any).hasSave = !!this.host.saveData?.();
+    // CONTINUE offers the Lua save as it always has, and -- when this is
+    // Red, Blue or Yellow on a console with that game's VC title -- the VC
+    // title's own save beside it (vc/cartsave.ts). The session then saves
+    // back to whichever was picked; a new game saves to the Lua file.
+    const luaText = this.host.saveData?.();
+    this.vcBytes = this.readVc();
+    const vcSum = this.vcBytes ? cartSummary(this.vcBytes) : null;
+    (this as any).hasSave = !!luaText || !!vcSum;
+    (this as any).saveChoices = vcSum
+      ? { lua: luaText ? this.luaSummary(luaText) : undefined, vc: { ...vcSum } }
+      : undefined;
+    this.saveTarget = "lua";
     // The title is a pushed state, so nothing calls startMap for it; the
     // theme has to be asked for directly.
 
@@ -625,42 +638,18 @@ export class VoxelmonGame implements OverworldShell, SceneView {
           (this.host as any).viewer?.();
           return;
         }
+        if (choice === "continue-vc" && this.vcBytes) {
+          this.continueVc(this.vcBytes);
+          return;
+        }
         if (choice === "continue") {
           const text = this.host.saveData?.();
           if (text) {
             const fresh = this.save;
             try {
-              const loaded = decodeSave(text) as any;
-              // gen1recomp's fields read as ours, and anything this game
-              // does not have set aside rather than crashing (savecompat.ts)
-              const report = fromDisk(loaded, this.data as never);
-              syncItemBalls(loaded, (this.data as { maps?: never }).maps);
-              this.save = loaded;
-              const told = reportLines(report);
-              // Saves from before the nickname prompt asked first carry
-              // "CHARMAN"-style names: the species name cut to seven.
-              // Those are no nickname at all.
-              const scrubbed = scrubDefaultNicknames(this.data, this.save);
-              if (scrubbed > 0) console.log(`[pv] names: ${scrubbed} cut-short nickname(s) dropped on load`);
-              // `visited` postdates the saves that will be loaded here, so a
-              // save from before FLY existed gets its record reconstructed
-              // from what it already proves -- otherwise a finished game comes
-              // back with nowhere to fly to.
-              backfillVisited(this.save as never);
-              // A save the old induction wrote in the hall itself resumes
-              // in the bedroom, where the write now puts it.
-              postGameRescue(this.save as never);
-              // The live position lives in player.* (SaveData.lua newGame);
-              // lastOutdoor is only the palette/blackout anchor.
-              const pl: any = this.save.player ?? {};
-              const lo: any = this.save.lastOutdoor ?? {};
-              this.overworld.enter(
-                pl.map ?? lo.id ?? "PALLET_TOWN",
-                pl.x ?? lo.x ?? 5,
-                pl.y ?? lo.y ?? 6,
-                pl.facing ?? "down",
-              );
+              const told = this.enterLoadedSave(decodeSave(text) as any);
               this.unreadableSave = false;
+              this.saveTarget = "lua";
               if (told.length) this.showText(told.join("\f"));
               return;
             } catch (e) {
@@ -679,6 +668,110 @@ export class VoxelmonGame implements OverworldShell, SceneView {
         this.startIntro();
       }),
     );
+  }
+
+  /**
+   * A save table just read (from the Lua file or converted from the VC
+   * save) made this game's and walked into: gen1recomp's fields read as
+   * ours and anything this game does not have set aside (savecompat.ts),
+   * the old-save repairs, and the overworld entered at the saved spot.
+   * Returns what to tell the player. Throws on a save it cannot use.
+   */
+  private enterLoadedSave(loaded: any): string[] {
+    const report = fromDisk(loaded, this.data as never);
+    syncItemBalls(loaded, (this.data as { maps?: never }).maps);
+    this.save = loaded;
+    const told = reportLines(report);
+    // Saves from before the nickname prompt asked first carry
+    // "CHARMAN"-style names: the species name cut to seven.
+    // Those are no nickname at all.
+    const scrubbed = scrubDefaultNicknames(this.data, this.save);
+    if (scrubbed > 0) console.log(`[pv] names: ${scrubbed} cut-short nickname(s) dropped on load`);
+    // `visited` postdates the saves that will be loaded here, so a
+    // save from before FLY existed gets its record reconstructed
+    // from what it already proves -- otherwise a finished game comes
+    // back with nowhere to fly to.
+    backfillVisited(this.save as never);
+    // A save the old induction wrote in the hall itself resumes
+    // in the bedroom, where the write now puts it.
+    postGameRescue(this.save as never);
+    // The live position lives in player.* (SaveData.lua newGame);
+    // lastOutdoor is only the palette/blackout anchor.
+    const pl: any = this.save.player ?? {};
+    const lo: any = this.save.lastOutdoor ?? {};
+    this.overworld.enter(
+      pl.map ?? lo.id ?? "PALLET_TOWN",
+      pl.x ?? lo.x ?? 5,
+      pl.y ?? lo.y ?? 6,
+      pl.facing ?? "down",
+    );
+    return told;
+  }
+
+  /** Where SAVE writes this session: the Lua file, or the VC title. */
+  saveTarget: "lua" | "vc" = "lua";
+  /** The VC title's cartridge save as last read or written (the bytes a
+   *  VC write keeps what this game does not model from), or null. */
+  private vcBytes: Uint8Array | null = null;
+
+  /** The VC title's save, when this game can use one. */
+  private readVc(): Uint8Array | null {
+    const b = this.host.vcData?.();
+    if (!b || b.length < 0x8000) return null;
+    if (!(this.data as { vcsave?: unknown }).vcsave) {
+      console.log("[pv] vc: the game data has no VC tables (re-cook, or tools/vc_gamedata.ts); VC saves off");
+      return null;
+    }
+    return new Uint8Array(b);
+  }
+
+  /** The Lua save's CONTINUE box, read without loading it. */
+  private luaSummary(text: string): SaveSummary {
+    try {
+      const s: any = decodeSave(text);
+      return {
+        name: typeof s?.player?.name === "string" ? s.player.name : null,
+        badges: badgeCount(this.data, s as never),
+        owned: Object.keys(s?.pokedex?.owned ?? {}).length,
+        seconds: Math.max(0, Math.floor(Number(s?.playTime) || 0)),
+      };
+    } catch {
+      return { name: null, badges: null, owned: null, seconds: null };
+    }
+  }
+
+  /** CONTINUE on the VC save: converted, walked into, and SAVE now writes
+   *  the VC title. The Lua save is left alone. */
+  private continueVc(bytes: Uint8Array): void {
+    const fresh = this.save;
+    try {
+      const { save: loaded, notes } = cartToSave(bytes, this.data as never);
+      for (const n of notes) console.log(`[pv] vc: ${n}`);
+      // This game's own settings (camera, tilt, movement...) have no place
+      // in a cartridge save: they come from the Lua save when there is one.
+      const luaText = this.host.saveData?.();
+      if (luaText) {
+        try {
+          const l: any = decodeSave(luaText);
+          for (const [k, v] of Object.entries((l?.options ?? {}) as Record<string, unknown>)) {
+            if (!(k in loaded.options)) loaded.options[k] = v;
+          }
+        } catch { /* an unreadable Lua save has no settings to lend */ }
+      }
+      const told = this.enterLoadedSave(loaded);
+      this.saveTarget = "vc";
+      const p: any = this.save.player;
+      console.log(`[pv] vc: continued from the VC save: ${p.name} at ${p.map} ${p.x},${p.y}; SAVE writes the VC title`);
+      if (told.length) this.showText(told.join("\f"));
+    } catch (e) {
+      this.save = fresh;
+      try {
+        this.overworld.enter("REDS_HOUSE_2F", 3, 6, "down");
+      } catch { /* the bedroom is the fresh save's own spot */ }
+      const why = String((e as Error)?.message ?? e ?? "");
+      console.log(`[pv] vc: the VC save could not be read: ${why}`);
+      this.showText("The VC save could\nnot be read.\fIt is left as it is.", () => this.newGame());
+    }
   }
 
   /**
@@ -2266,7 +2359,9 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       this.showAuto("Now saving...", SAVE_HOLD, {
         onDone: () => {
           this.writeSave();
-          this.showAuto(`${name} saved\nthe game!`, SAVE_DONE_HOLD, {
+          // With a VC title on the console, which save this was, quietly
+          const tag = this.vcBytes ? (this.saveTarget === "vc" ? " (VC)" : " (Lua)") : "";
+          this.showAuto(`${name} saved\nthe game!${tag}`, SAVE_DONE_HOLD, {
             sfx: "Save",
             onDone: close,
           });
@@ -2327,6 +2422,11 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     // port reads the cell, which says the same)
     p.surfing = !at && ow.player?.surfing === true;
     const h: any = (this as any).host ?? (this as any).hostApi ?? (globalThis as any).voxel;
+    // A session continued from the VC save saves there, and only there.
+    if (this.saveTarget === "vc") {
+      this.writeVcSave(h);
+      return;
+    }
     if (!h?.saveWrite) {
       console.log("save: no host.saveWrite");
       return;
@@ -2349,6 +2449,31 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       const why = h.writeErr?.() ?? "";
       this.showText(`SAVE FAILED!\nThe SD card did\nnot take it.${why ? `\n${why.slice(0, 24)}` : ""}`);
     }
+  }
+
+  /**
+   * SAVE in a VC session: the save as a cartridge save, over the one the
+   * title had (whatever this game does not model stays as the cartridge
+   * left it), handed to the host, which backs the title's save up and
+   * writes and commits it (src/vc.rs).
+   */
+  private writeVcSave(h: any): void {
+    syncItemBalls(this.save, (this.data as { maps?: never }).maps);
+    const p: any = this.save.player;
+    let ok = false;
+    let why = "";
+    try {
+      const w = saveToCart(this.save as never, this.data as never, this.vcBytes);
+      for (const n of w.notes) console.log(`[pv] vc: ${n}`);
+      ok = h?.vcWrite?.(w.bytes) === true;
+      if (ok) this.vcBytes = w.bytes;
+      else why = h?.vcErr?.() ?? "no VC title";
+    } catch (e) {
+      why = String((e as Error)?.message ?? e ?? "");
+    }
+    this.lastSaveOk = ok;
+    console.log(`[pv] vc: SAVE ${ok ? "written to the VC title" : `FAILED: ${why}`} (${p.name} at ${p.map} ${p.x},${p.y})`);
+    if (!ok) this.showText(`SAVE FAILED!\nThe VC save did\nnot take it.${why ? `\n${why.slice(0, 18)}` : ""}`);
   }
 
   optionsMenu(): unknown {

@@ -50,9 +50,9 @@ export interface CartData {
 export const LOSSY = [
   "facing: the cartridge always continues facing down (its main menu sets it)",
   "repel steps, the poison step count and cut trees: not in the cartridge save; a repel wears off, cut trees grow back (as on the cartridge)",
-  "port-only options (camera, tilt, movement, dev menu): kept from the Lua save when there is one",
-  "Yellow's surfing minigame record: not mapped; kept from the Lua save when there is one",
-  "PIKACHU's walk-step and emotion counters: not saved by the cartridge",
+  "this game's own options (camera, tilt, movement, dev menu): not in the cartridge save; a VC session takes them from the Lua save when there is one",
+  "Yellow's surfing minigame record: not mapped (a VC session starts it at zero)",
+  "the partner's walk-step and emotion counters, and this game's own one-off flags (the cable-club gifts, the champion-run marker): not in the cartridge save",
   "play time frames: the cartridge counts 1/60 s; this game counts whole seconds",
   "each map's script position (wGameProgressFlags) and the engine's scratch bytes: kept from the cartridge save being replaced; a save with none starts them at zero, and the cartridge's map scripts re-check the event flags",
   "mons this game has no data for (unknown species index): left out, with a note",
@@ -494,7 +494,7 @@ export function cartToSave(sram: Uint8Array, data: CartData): CartLoad {
     inventory: {},
     pcItems: {},
     party: [],
-    box: {},
+    box: [], // (the legacy single box: an array, as decodeSave makes it)
     boxes: [],
     currentBox: 1,
     money: bcd(b, m(M.money), 3),
