@@ -12,6 +12,10 @@
 //! tools/pocketvoxel.rsf; under the Homebrew Launcher the process has its
 //! launcher's. Without them the open fails, the log says so, and the guest
 //! is told there is no VC save.
+//!
+//! The archive is never held across frames: the boot read opens, reads and
+//! closes it in one call, and so does every save. CONTINUE itself touches
+//! no file at all -- the guest converts the bytes read at boot.
 
 #[cfg(not(any(feature = "gen2", feature = "gen3")))]
 mod imp {
@@ -76,6 +80,12 @@ mod imp {
         fn FSDIR_Close(h: u32) -> i32;
     }
 
+    /// Every FS and AM call is logged before and after, straight to pvlog,
+    /// so a call that never returns is the last line there.
+    fn fslog(s: &str) {
+        crate::dlog(&format!("[pv] vc: fs {}", s));
+    }
+
     fn err(what: &str, rc: i32) -> String {
         format!("{} {:08x}", what, rc as u32)
     }
@@ -102,15 +112,19 @@ mod imp {
             let a = self.archive.ok_or("no archive open")?;
             let (_keep, p) = Self::path(name);
             let mut h = 0u32;
+            fslog(&format!("open file {} (flags {})...", name, flags));
             let rc = unsafe { FSUSER_OpenFile(&mut h, a, p, flags, 0) };
+            fslog(&format!("open file -> {:08x}", rc as u32));
             if rc < 0 { Err(err("FSUSER_OpenFile", rc)) } else { Ok(h) }
         }
     }
 
     impl VcFs for CtrFs {
         fn titles(&mut self) -> Result<Vec<u64>, String> {
+            fslog("title list: amInit...");
             unsafe {
                 let rc = amInit();
+                fslog(&format!("amInit -> {:08x}", rc as u32));
                 if rc < 0 {
                     return Err(err("amInit", rc));
                 }
@@ -124,6 +138,7 @@ mod imp {
                 let mut read = 0u32;
                 let rc = AM_GetTitleList(&mut read, MEDIATYPE_SD, n, ids.as_mut_ptr());
                 amExit();
+                fslog(&format!("title list -> {:08x}, {} of {}; amExit", rc as u32, read, n));
                 if rc < 0 {
                     return Err(err("AM_GetTitleList", rc));
                 }
@@ -136,7 +151,9 @@ mod imp {
             let bin: [u32; 3] = [MEDIATYPE_SD, tid as u32, (tid >> 32) as u32];
             let p = FsPath { kind: PATH_BINARY, size: 12, data: bin.as_ptr() as *const c_void };
             let mut a = 0u64;
+            fslog(&format!("open archive {:016x}...", tid));
             let rc = unsafe { FSUSER_OpenArchive(&mut a, ARCHIVE_USER_SAVEDATA, p) };
+            fslog(&format!("open archive -> {:08x}", rc as u32));
             if rc < 0 {
                 return Err(err("FSUSER_OpenArchive", rc));
             }
@@ -148,7 +165,9 @@ mod imp {
             let root = b"/\0";
             let p = FsPath { kind: PATH_ASCII, size: 2, data: root.as_ptr() as *const c_void };
             let mut h = 0u32;
+            fslog("open dir /...");
             let rc = unsafe { FSUSER_OpenDirectory(&mut h, a, p) };
+            fslog(&format!("open dir -> {:08x}", rc as u32));
             if rc < 0 {
                 return Err(err("FSUSER_OpenDirectory", rc));
             }
@@ -170,6 +189,7 @@ mod imp {
                 }
             }
             unsafe { FSDIR_Close(h) };
+            fslog(&format!("dir closed ({} files)", out.len()));
             Ok(out)
         }
         fn read(&mut self, name: &str) -> Result<Vec<u8>, String> {
@@ -182,8 +202,10 @@ mod imp {
             }
             let mut buf = vec![0u8; size as usize];
             let mut got = 0u32;
+            fslog(&format!("read {} bytes...", size));
             let rc = unsafe { FSFILE_Read(h, &mut got, 0, buf.as_mut_ptr() as *mut c_void, size as u32) };
             unsafe { FSFILE_Close(h) };
+            fslog(&format!("read -> {:08x}, {} bytes; file closed", rc as u32, got));
             if rc < 0 {
                 return Err(err("FSFILE_Read", rc));
             }
@@ -193,8 +215,10 @@ mod imp {
         fn write(&mut self, name: &str, data: &[u8]) -> Result<(), String> {
             let h = self.open_file(name, FS_OPEN_WRITE)?;
             let mut put = 0u32;
+            fslog(&format!("write {} bytes...", data.len()));
             let rc = unsafe { FSFILE_Write(h, &mut put, 0, data.as_ptr() as *const c_void, data.len() as u32, FS_WRITE_FLUSH) };
             unsafe { FSFILE_Close(h) };
+            fslog(&format!("write -> {:08x}, {} bytes; file closed", rc as u32, put));
             if rc < 0 {
                 return Err(err("FSFILE_Write", rc));
             }
@@ -205,12 +229,16 @@ mod imp {
         }
         fn commit(&mut self) -> Result<(), String> {
             let a = self.archive.ok_or("no archive open")?;
+            fslog("commit...");
             let rc = unsafe { FSUSER_ControlArchive(a, ARCHIVE_ACTION_COMMIT_SAVE_DATA, core::ptr::null(), 0, core::ptr::null_mut(), 0) };
+            fslog(&format!("commit -> {:08x}", rc as u32));
             if rc < 0 { Err(err("FSUSER_ControlArchive", rc)) } else { Ok(()) }
         }
         fn close(&mut self) {
             if let Some(a) = self.archive.take() {
-                unsafe { FSUSER_CloseArchive(a) };
+                fslog("close archive...");
+                let rc = unsafe { FSUSER_CloseArchive(a) };
+                fslog(&format!("close archive -> {:08x}", rc as u32));
             }
         }
     }
@@ -273,7 +301,14 @@ mod imp {
 /// Gen 2 and Gen 3 builds.
 pub unsafe fn boot() {
     #[cfg(not(any(feature = "gen2", feature = "gen3")))]
-    imp::probe();
+    {
+        // Every guest frame under a 30 s watchdog (voxel_shim.c): a frame
+        // that never returns is cut off and logged, and the console keeps
+        // answering HOME -- a VC save is data this game did not make.
+        extern "C" { static mut pv_frame_watchdog_ms: i32; }
+        pv_frame_watchdog_ms = 30_000;
+        imp::probe();
+    }
 }
 
 /// `voxel.vcData()`: the VC title's 32 KB save as it was read at boot (or
@@ -331,5 +366,25 @@ pub unsafe extern "C" fn voxel_vc_info(which: u32, len: *mut u32) -> *const u8 {
         let _ = which;
         *len = 0;
         core::ptr::null()
+    }
+}
+
+/// After a VC continue the next map loads log every line straight to pvlog
+/// (no batching), so a load that never finishes is pinned there.
+/// `voxel.traceLoads(n)` asks for the next `n`.
+static mut TRACE_LOADS: u32 = 0;
+
+#[no_mangle]
+pub unsafe extern "C" fn voxel_vc_trace_loads(n: i32) {
+    TRACE_LOADS = n.max(0) as u32;
+}
+
+/// Whether this map load is a traced one (and count it).
+pub unsafe fn take_trace_load() -> bool {
+    if TRACE_LOADS > 0 {
+        TRACE_LOADS -= 1;
+        true
+    } else {
+        false
     }
 }

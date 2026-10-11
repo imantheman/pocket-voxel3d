@@ -5669,7 +5669,7 @@ fn main() {
                 b |= (e & 15) << 28;
             }
             unsafe {
-                let mut e2 = [0u8; 256];
+                let mut e2 = [0u8; 1024];
                 let mut failed = false;
                 // Before the frame reads a single vertex: if anything put a
                 // different entry at the front of the pak cache without
@@ -5687,7 +5687,7 @@ fn main() {
                 let t_js_us = now_us();
                 for step in 0..steps {
                     voxel::set_last_step(step + 1 == steps); #[cfg(feature = "gen3")] gen3::step_begin(step, steps);
-                    if qjs_call_frame(CTX, b, e2.as_mut_ptr(), 255) != 0 { failed = true; break; }
+                    if qjs_call_frame(CTX, b, e2.as_mut_ptr(), 1023) != 0 { failed = true; break; }
                     // Scene time and audio belong to the SIM tick, not the
                     // rendered frame: at the 30 Hz render cap they were
                     // advancing at half speed.
@@ -5713,8 +5713,15 @@ fn main() {
                 PERF_JS_US += now_us() - t_js_us; #[cfg(feature = "gen3")] gen3::mark(0);
                 if failed {
                     let n = e2.iter().position(|&c| c == 0).unwrap_or(0);
-                    println!("frame ERR: {}", String::from_utf8_lossy(&e2[..n]));
-                    guest_drive = false;
+                    let why = String::from_utf8_lossy(&e2[..n]).into_owned();
+                    println!("frame ERR: {}", why);
+                    dlog(&format!("[pv] frame ERR: {}", why));
+                    // A step the guest put under voxel.deadline and the host
+                    // cut off: the guest carries on (it notices and says so)
+                    // rather than the console dropping into the viewer.
+                    if !why.contains("interrupted") {
+                        guest_drive = false;
+                    }
                 } else {
                     let sc = voxel::scene();
                     // The guest owns which map you're standing in (mapShow).
@@ -5737,7 +5744,14 @@ fn main() {
                                 }
                                 unsafe { LEGACY_ZONE = zone };
                             }
-                            dlog_batch_begin();
+                            // (straight to the log, line by line, right after
+                            // a VC continue: see vc::take_trace_load)
+                            if unsafe { vc::take_trace_load() } {
+                                let nm = map_index.iter().find(|(id, _)| *id == want).map(|(_, n)| n.as_str()).unwrap_or("?");
+                                dlog(&format!("[pv] vc: host loading {} (map {})...", nm, want));
+                            } else {
+                                dlog_batch_begin();
+                            }
                             if let Some((_, nm)) = map_index.iter().find(|(id, _)| *id == want) {
                                 // cam_px is already the NEW map's position on
                                 // this frame -- the same value `center` is

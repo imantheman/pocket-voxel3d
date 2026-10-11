@@ -28,6 +28,7 @@ extern const uint8_t *voxel_vc_ptr(void);
 extern uint32_t voxel_vc_len(void);
 extern int voxel_vc_write(const uint8_t *p, uint32_t len);
 extern const uint8_t *voxel_vc_info(uint32_t which, uint32_t *len);
+extern void voxel_vc_trace_loads(int n);
 extern double voxel_now_us(void);
 extern int32_t voxel_last_step(void);
 extern void voxel_lcd_bin(uint32_t which, int32_t a0, const uint8_t *p1, uint32_t l1,
@@ -206,6 +207,43 @@ static JSValue vox_vcinfo(JSContext *ctx, JSValueConst t, int c, JSValueConst *v
     return JS_NewStringLen(ctx, (const char *)p, n);
 }
 
+/* voxel.deadline(ms): from now, a guest step that runs longer than `ms` is
+   cut off -- QuickJS's interrupt handler stops the script with an
+   uncatchable "interrupted" error, the frame returns, and the console keeps
+   running. 0 clears it, and every frame clears it when it returns. For the
+   steps that run on data the game did not make (a VC save at CONTINUE), so
+   a step that never ends is a message instead of a frozen console. */
+extern uint64_t svcGetSystemTick(void);
+static uint64_t g_deadline_tick = 0;
+/* A watchdog for every frame, in ms (0 = none): the Kanto builds set it
+   (vc.rs), so a frame that never ends is cut off and logged instead of
+   freezing the console, HOME and all. */
+int pv_frame_watchdog_ms = 0;
+static int pv_interrupt(JSRuntime *rt, void *opaque) {
+    (void)rt; (void)opaque;
+    if (g_deadline_tick && svcGetSystemTick() > g_deadline_tick) {
+        g_deadline_tick = 0;
+        return 1;
+    }
+    return 0;
+}
+/* voxel.traceLoads(n): the next n map loads log straight to pvlog (vc.rs). */
+static JSValue vox_traceloads(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    int32_t n = 0;
+    if (c > 0) JS_ToInt32(ctx, &n, v[0]);
+    voxel_vc_trace_loads(n);
+    return JS_UNDEFINED;
+}
+static JSValue vox_deadline(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    int32_t ms = 0;
+    if (c > 0) JS_ToInt32(ctx, &ms, v[0]);
+    /* 268111856 ticks a second */
+    g_deadline_tick = ms > 0 ? svcGetSystemTick() + (uint64_t)ms * 268112u : 0;
+    return JS_UNDEFINED;
+}
+
 /* optionsWrite(text) / optionsData() - the OPTION screen's file, beside the save. */
 static JSValue vox_optionswrite(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t;
@@ -315,6 +353,9 @@ int qjs_register_voxel(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "linkRecv",  JS_NewCFunction(ctx, vox_linkrecv,  "linkRecv", 0));
     JS_SetPropertyStr(ctx, o, "linkClose", JS_NewCFunction(ctx, vox_linkclose, "linkClose", 0));
     JS_SetPropertyStr(ctx, o, "writeErr",  JS_NewCFunction(ctx, vox_writeerr,  "writeErr", 0));
+    JS_SetPropertyStr(ctx, o, "deadline",  JS_NewCFunction(ctx, vox_deadline,  "deadline", 1));
+    JS_SetPropertyStr(ctx, o, "traceLoads", JS_NewCFunction(ctx, vox_traceloads, "traceLoads", 1));
+    JS_SetInterruptHandler(JS_GetRuntime(ctx), pv_interrupt, NULL);
     JS_SetPropertyStr(ctx, o, "vcData",    JS_NewCFunction(ctx, vox_vcdata,    "vcData", 0));
     JS_SetPropertyStr(ctx, o, "vcWrite",   JS_NewCFunction(ctx, vox_vcwrite,   "vcWrite", 1));
     JS_SetPropertyStr(ctx, o, "vcInfo",    JS_NewCFunctionMagic(ctx, vox_vcinfo, "vcInfo", 0, JS_CFUNC_generic_magic, 0));
@@ -444,12 +485,24 @@ int qjs_call_frame(JSContext *ctx, int buttons, char *errbuf, int errlen) {
         return 2;
     }
     JSValue arg = JS_NewInt32(ctx, buttons);
+    if (pv_frame_watchdog_ms > 0)
+        g_deadline_tick = svcGetSystemTick() + (uint64_t)pv_frame_watchdog_ms * 268112u;
     JSValue r = JS_Call(ctx, f, g, 1, &arg);
+    g_deadline_tick = 0; /* a deadline never outlives its frame */
     int failed = JS_IsException(r);
     if (failed) {
         JSValue e = JS_GetException(ctx);
         const char *m = JS_ToCString(ctx, e);
-        if (m) { snprintf(errbuf, errlen, "%s", m); JS_FreeCString(ctx, m); }
+        int used = 0;
+        if (m) { used = snprintf(errbuf, errlen, "%s", m); JS_FreeCString(ctx, m); }
+        /* and where: the first lines of the stack, for the log */
+        JSValue st = JS_GetPropertyStr(ctx, e, "stack");
+        const char *ss = JS_IsString(st) ? JS_ToCString(ctx, st) : NULL;
+        if (ss) {
+            if (used >= 0 && used < errlen - 2) snprintf(errbuf + used, errlen - used, " | %s", ss);
+            JS_FreeCString(ctx, ss);
+        }
+        JS_FreeValue(ctx, st);
         JS_FreeValue(ctx, e);
     }
     JS_FreeValue(ctx, r); JS_FreeValue(ctx, arg);
