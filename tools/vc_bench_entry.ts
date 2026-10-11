@@ -33,6 +33,9 @@ if (typeof VC_FAIL !== "undefined") {
   }
 }
 declare const VC_HANG: boolean;
+// --define VC_DUMP_LUA=true: the SAVE after the continue goes to the Lua
+// save instead, its text printed between LUASAVE-BEGIN and LUASAVE-END
+declare const VC_DUMP_LUA: boolean;
 if (typeof VC_HANG !== "undefined" && VC_HANG) {
   game.vcConvert = (): never => {
     log("hanging on purpose");
@@ -83,6 +86,19 @@ g.frame = (b: number): void => {
   } else if (phase === 4 && top === "overworld" && n - at > 180) {
     const p = game.save.player;
     log(`continued: target ${game.saveTarget}; ${p.name} at ${p.map} ${p.x},${p.y}; party ${game.save.party.length}`);
+    if (typeof VC_DUMP_LUA !== "undefined" && VC_DUMP_LUA) {
+      // the continued game as a Lua save, printed whole (an A/B save: the
+      // same place and party, continued the Lua way)
+      const vox = (globalThis as any).voxel;
+      const write = vox.saveWrite;
+      vox.saveWrite = (text: string): unknown => {
+        console.log(`LUASAVE-BEGIN
+${text}
+LUASAVE-END`);
+        return write(text);
+      };
+      game.saveTarget = "lua";
+    }
     game.writeSave();
     log(`writeSave: ok=${game.lastSaveOk}`);
     phase = 5;

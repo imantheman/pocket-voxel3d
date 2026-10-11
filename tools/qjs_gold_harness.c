@@ -31,9 +31,23 @@ static char *slurp(const char *path, size_t *len) {
     return b;
 }
 
-static JSValue op_any(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
-    (void)ctx; (void)t; (void)c; (void)v;
+/* TRACE_OPS=<text>: once a guest log line holds <text>, every op of the
+   next TRACE_FRAMES frames (default 4) is printed with its arguments. */
+static const char **g_op_names;
+static int g_trace_left = 0;
+static int g_frame_no = 0;
+static JSValue op_any(JSContext *ctx, JSValueConst t, int c, JSValueConst *v, int magic) {
+    (void)t;
     g_ops++;
+    if (g_trace_left > 0) {
+        printf("op f%d %s(", g_frame_no, g_op_names[magic]);
+        for (int i = 0; i < c; i++) {
+            const char *s = JS_ToCString(ctx, v[i]);
+            printf("%s%s", i ? "," : "", s ? s : "?");
+            if (s) JS_FreeCString(ctx, s);
+        }
+        printf(")\n");
+    }
     return JS_UNDEFINED;
 }
 static JSValue op_gamedata(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
@@ -73,7 +87,15 @@ static JSValue op_log(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t;
     for (int i = 0; i < c; i++) {
         const char *s = JS_ToCString(ctx, v[i]);
-        if (s) { printf("%s%s", i ? " " : "", s); JS_FreeCString(ctx, s); }
+        if (s) {
+            printf("%s%s", i ? " " : "", s);
+            const char *want = getenv("TRACE_OPS");
+            if (want && *want && strstr(s, want) && g_trace_left == 0) {
+                const char *n = getenv("TRACE_FRAMES");
+                g_trace_left = n ? atoi(n) : 4;
+            }
+            JS_FreeCString(ctx, s);
+        }
     }
     printf("\n");
     return JS_UNDEFINED;
@@ -122,7 +144,8 @@ int main(int argc, char **argv) {
     JSContext *ctx = JS_NewContext(rt);
     JSValue g = JS_GetGlobalObject(ctx);
     JSValue vox = JS_NewObject(ctx);
-    for (int i = 0; OPS[i]; i++) JS_SetPropertyStr(ctx, vox, OPS[i], JS_NewCFunction(ctx, op_any, OPS[i], 0));
+    g_op_names = OPS;
+    for (int i = 0; OPS[i]; i++) JS_SetPropertyStr(ctx, vox, OPS[i], JS_NewCFunctionMagic(ctx, op_any, OPS[i], 0, JS_CFUNC_generic_magic, i));
     JS_SetPropertyStr(ctx, vox, "gamedata", JS_NewCFunction(ctx, op_gamedata, "gamedata", 0));
     JS_SetPropertyStr(ctx, vox, "audiodata", JS_NewCFunction(ctx, op_null, "audiodata", 0));
     JS_SetPropertyStr(ctx, vox, "saveData", JS_NewCFunction(ctx, op_savedata, "saveData", 0));
@@ -147,12 +170,15 @@ int main(int argc, char **argv) {
     for (int i = 0; i < frames; i++) {
         int buttons = (every > 0 && i % every == 0) ? 16 /* A */ : 0;
         if (every > 0 && i % (every * 7) == 3) buttons = 64; /* START now and then */
+        g_frame_no = i;
+        if (g_trace_left > 0) printf("op ---- frame %d (%d left)\n", i, g_trace_left);
         JSValue arg = JS_NewInt32(ctx, buttons);
         double a = now_ms();
         JSValue res = JS_Call(ctx, frame, JS_UNDEFINED, 1, &arg);
         double b = now_ms();
         if (JS_IsException(res)) { printf("frame %d: ", i); dump_exception(ctx); return 1; }
         JS_FreeValue(ctx, res);
+        if (g_trace_left > 0) g_trace_left--;
         total += b - a;
         if (b - a > worst) worst = b - a;
     }
