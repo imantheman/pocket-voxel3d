@@ -27,6 +27,7 @@ pub mod pakcompact;
 pub mod scene;
 pub mod spec;
 pub mod ui;
+pub mod vcsave;
 
 #[cfg(all(not(feature = "std"), not(feature = "libm")))]
 compile_error!("pocketvoxel-core needs either the `std` or the `libm` feature for f32 math");

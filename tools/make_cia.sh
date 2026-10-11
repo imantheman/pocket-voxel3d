@@ -123,8 +123,12 @@ bannertool makebanner -ci "$WORK/banner3d.cgfx" -a "$WORK/banner.wav" -o "$WORK/
 echo "=== rsf"
 # The one RSF, with this title's own ID: two titles sharing a UniqueId
 # would install over each other.
+# The VC-save rights (other titles' save data) are Red, Blue and Yellow's
+# alone: every other game's CIA leaves the lines marked vc-only out.
+case "$GAME" in red|blue|yellow) VCDROP="/# vc-only/s/ # vc-only//" ;; *) VCDROP="/# vc-only/d" ;; esac
 sed -e "s/^\(  UniqueId *: \).*/\1$UNIQUE/" \
     -e "s/^\(  ProductCode *: \).*/\1\"$PCODE\"/" \
+    -e "$VCDROP" \
   tools/pocketvoxel.rsf > "$WORK/pocketvoxel.rsf"
 grep -E "UniqueId|ProductCode" "$WORK/pocketvoxel.rsf"
 

@@ -24,6 +24,10 @@ extern uint32_t voxel_game_len(void);
 extern const uint8_t *voxel_audio_ptr(void);
 extern uint32_t voxel_audio_len(void);
 extern int32_t voxel_stick(void);
+extern const uint8_t *voxel_vc_ptr(void);
+extern uint32_t voxel_vc_len(void);
+extern int voxel_vc_write(const uint8_t *p, uint32_t len);
+extern const uint8_t *voxel_vc_info(uint32_t which, uint32_t *len);
 extern double voxel_now_us(void);
 extern int32_t voxel_last_step(void);
 extern void voxel_lcd_bin(uint32_t which, int32_t a0, const uint8_t *p1, uint32_t l1,
@@ -169,6 +173,39 @@ static JSValue vox_savedata(JSContext *ctx, JSValueConst t, int c, JSValueConst 
     return JS_NewStringLen(ctx, (const char *)voxel_save_ptr(), voxel_save_len());
 }
 
+/* VC saves (vc.rs): vcData() the VC title's 32 KB save as an ArrayBuffer,
+   or undefined when there is no title; vcWrite(bytes) writes it back
+   (backup, write, read back, commit); vcInfo() / vcErr() say what was
+   found and why a write failed. */
+static JSValue vox_vcdata(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;(void)c;(void)v;
+    uint32_t n = voxel_vc_len();
+    if (n == 0 || !voxel_vc_ptr()) return JS_UNDEFINED;
+    return JS_NewArrayBufferCopy(ctx, voxel_vc_ptr(), n);
+}
+
+static JSValue vox_vcwrite(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;
+    if (c < 1) return JS_FALSE;
+    size_t len = 0;
+    const uint8_t *p = typed_bytes(ctx, v[0], &len);
+    if (!p) {
+        size_t size = 0;
+        p = JS_GetArrayBuffer(ctx, &size, v[0]);
+        if (!p) { JS_FreeValue(ctx, JS_GetException(ctx)); return JS_FALSE; }
+        len = size;
+    }
+    return voxel_vc_write(p, (uint32_t)len) ? JS_TRUE : JS_FALSE;
+}
+
+static JSValue vox_vcinfo(JSContext *ctx, JSValueConst t, int c, JSValueConst *v, int magic) {
+    (void)t;(void)c;(void)v;
+    uint32_t n = 0;
+    const uint8_t *p = voxel_vc_info((uint32_t)magic, &n);
+    if (!p || n == 0) return JS_UNDEFINED;
+    return JS_NewStringLen(ctx, (const char *)p, n);
+}
+
 /* optionsWrite(text) / optionsData() - the OPTION screen's file, beside the save. */
 static JSValue vox_optionswrite(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t;
@@ -278,6 +315,10 @@ int qjs_register_voxel(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "linkRecv",  JS_NewCFunction(ctx, vox_linkrecv,  "linkRecv", 0));
     JS_SetPropertyStr(ctx, o, "linkClose", JS_NewCFunction(ctx, vox_linkclose, "linkClose", 0));
     JS_SetPropertyStr(ctx, o, "writeErr",  JS_NewCFunction(ctx, vox_writeerr,  "writeErr", 0));
+    JS_SetPropertyStr(ctx, o, "vcData",    JS_NewCFunction(ctx, vox_vcdata,    "vcData", 0));
+    JS_SetPropertyStr(ctx, o, "vcWrite",   JS_NewCFunction(ctx, vox_vcwrite,   "vcWrite", 1));
+    JS_SetPropertyStr(ctx, o, "vcInfo",    JS_NewCFunctionMagic(ctx, vox_vcinfo, "vcInfo", 0, JS_CFUNC_generic_magic, 0));
+    JS_SetPropertyStr(ctx, o, "vcErr",     JS_NewCFunctionMagic(ctx, vox_vcinfo, "vcErr", 0, JS_CFUNC_generic_magic, 1));
     JS_SetPropertyStr(ctx, o, "uiText",    JS_NewCFunction(ctx, vox_uitext,    "uiText", 3));
 
     add_num(ctx, o, "reset",     3, 0);

@@ -1,5 +1,7 @@
 #![feature(allocator_api)] #![cfg_attr(feature = "gen3", allow(unused, static_mut_refs))]
 mod voxel;
+// VC saves: the re-release titles' save data (Red, Blue, Yellow).
+mod vc;
 
 use citro3d::macros::include_shader;
 use citro3d::math::{FVec4, ScreenOrientation, StereoDisplacement, AspectRatio, ClipPlanes, CoordinateOrientation, FVec3, Matrix4, Projection};
@@ -5003,6 +5005,8 @@ fn main() {
     let audio_programs: &'static [u8] = pak::audio_programs_of(audi);
     dlog(&format!("[pv] sound: {} KB of programs", audio_programs.len() / 1024));
     unsafe { voxel::init(gd_static, audi); voxel::load_save_file(); }
+    // The VC title's save, for CONTINUE's choice (Red, Blue, Yellow only).
+    unsafe { vc::boot(); }
     if let Some(pcm) = unsafe { OVERLAY_PCM } {
         let ok = unsafe { voxel::scene().audio.set_pcm_bank(pcm) };
         dlog(&format!("[pv] Pikachu's voice: {} KB, {}", pcm.len() / 1024,
