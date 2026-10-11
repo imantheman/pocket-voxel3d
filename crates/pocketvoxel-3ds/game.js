@@ -29157,6 +29157,13 @@ function tables(data) {
 var STATUS_BITS = [["PSN", 3], ["BRN", 4], ["FRZ", 5], ["PAR", 6]];
 var STATS = ["hp", "attack", "defense", "speed", "special"];
 function readMon(b, o, party, t, data) {
+  try {
+    return readMonUnsafe(b, o, party, t, data);
+  } catch {
+    return null;
+  }
+}
+function readMonUnsafe(b, o, party, t, data) {
   const species = t.species.get(u8(b, o));
   if (!species)
     return null;
@@ -29191,7 +29198,7 @@ function readMon(b, o, party, t, data) {
   });
   const mon = {
     species,
-    level: u8(b, party ? o + 33 : o + 3),
+    level: Math.max(1, Math.min(100, u8(b, party ? o + 33 : o + 3))),
     exp: u24be(b, o + 14),
     dvs,
     statExp,
@@ -29207,6 +29214,12 @@ function readMon(b, o, party, t, data) {
       stats[k] = u16be(b, o + 34 + i * 2);
     });
     mon.stats = stats;
+    if (!(stats.hp > 0)) {
+      const def = data.pokemon[species];
+      if (def?.baseStats)
+        mon.stats = calc(def, mon.level, dvs, statExp);
+    }
+    mon.hp = Math.min(mon.hp, mon.stats.hp);
   } else {
     const def = data.pokemon[species];
     if (def?.baseStats)
@@ -29376,6 +29389,14 @@ function cartToSave(sram, data) {
   };
   if (!mapId)
     notes.push(`unknown map $${mapIdx.toString(16)}: placed in the bedroom`);
+  const vc = data.vcsave;
+  const part = (name, fn) => {
+    try {
+      fn();
+    } catch (e) {
+      notes.push(`${name} could not be read (${String(e?.message ?? e)}); left out`);
+    }
+  };
   for (const [dex, sp] of t.dex) {
     if (bit(b, m(M.dexOwned), dex - 1))
       save.pokedex.owned[sp] = true;
@@ -29397,162 +29418,183 @@ function cartToSave(sram, data) {
   save.options.textSpeed = opt & 15;
   save.options.animations = (opt & 128) === 0;
   save.options.battleStyle = opt & 64 ? "set" : "shift";
-  const count2 = Math.min(6, u8(b, PARTY));
-  for (let i = 0;i < count2; i++) {
-    const mon = readMon(b, PARTY + 8 + i * PARTY_MON, true, t, data);
-    if (!mon) {
-      notes.push(`party slot ${i + 1}: unknown species $${u8(b, PARTY + 8 + i * PARTY_MON).toString(16)} left out`);
-      continue;
-    }
-    const ot = readName(b, PARTY + 8 + 6 * PARTY_MON + i * NAME_LEN);
-    ownership(mon, ot, mon.otId, player);
-    const nick = nickname(data, mon.species, readName(b, PARTY + 8 + 6 * (PARTY_MON + NAME_LEN) + i * NAME_LEN));
-    if (nick !== undefined)
-      mon.nickname = nick;
-    save.party.push(mon);
-  }
-  const boxByte = u8(b, m(M.curBox));
-  const cur = Math.min(11, boxByte & 127);
-  const ready = (boxByte & 128) !== 0;
-  const readBox = (o, n) => {
-    const out = [];
-    const c = Math.min(MONS_PER_BOX, u8(b, o));
-    for (let i = 0;i < c; i++) {
-      const mon = readMon(b, o + 22 + i * BOX_MON, false, t, data);
+  part("the party", () => {
+    const count2 = Math.min(6, u8(b, PARTY));
+    for (let i = 0;i < count2; i++) {
+      const mon = readMon(b, PARTY + 8 + i * PARTY_MON, true, t, data);
       if (!mon) {
-        notes.push(`box ${n + 1}: unknown species left out`);
+        notes.push(`party slot ${i + 1}: unknown species $${u8(b, PARTY + 8 + i * PARTY_MON).toString(16)} left out`);
         continue;
       }
-      const ot = readName(b, o + 22 + MONS_PER_BOX * BOX_MON + i * NAME_LEN);
+      const ot = readName(b, PARTY + 8 + 6 * PARTY_MON + i * NAME_LEN);
       ownership(mon, ot, mon.otId, player);
-      const nick = nickname(data, mon.species, readName(b, o + 22 + MONS_PER_BOX * (BOX_MON + NAME_LEN) + i * NAME_LEN));
+      const nick = nickname(data, mon.species, readName(b, PARTY + 8 + 6 * (PARTY_MON + NAME_LEN) + i * NAME_LEN));
       if (nick !== undefined)
         mon.nickname = nick;
-      out.push(mon);
+      save.party.push(mon);
     }
-    return out;
-  };
-  for (let n = 0;n < BOXES; n++) {
-    if (n === cur)
-      save.boxes.push(readBox(CUR_BOX, n));
-    else if (!ready)
-      save.boxes.push([]);
-    else
-      save.boxes.push(readBox(BOX_BANKS[n < 6 ? 0 : 1] + n % 6 * BOX_SIZE, n));
-  }
-  save.currentBox = cur + 1;
-  for (const [n, name] of t.events)
-    if (bit(b, m(M.events), n))
-      save.flags[name] = true;
-  for (const [name, [byte, k]] of Object.entries(EXTRA_FLAGS))
-    if (u8(b, m(byte)) & 1 << k)
-      save.flags[name] = true;
-  for (const [name, k] of Object.entries(TRADE_FLAGS))
-    if (bit(b, m(M.tradeFlags), k))
-      save.flags[name] = true;
-  for (const [ours, theirs] of Object.entries(FLAG_ALIAS))
-    if (save.flags[theirs])
-      save.flags[ours] = true;
-  const vc = data.vcsave;
-  save.objectToggles = {};
-  save.itemsTaken = {};
-  for (let i = 0;i < (vc?.toggles.length ?? 0); i++) {
-    const [map, objNo, hiddenAtStart] = vc.toggles[i];
-    const obj = toggleObject2(data, vc, i);
-    if (!obj?.name)
-      continue;
-    const hidden = bit(b, m(M.toggles), i);
-    (save.objectToggles[map] ??= {})[obj.name] = !hidden;
-    if (hidden && !hiddenAtStart) {
-      if (obj.item)
-        save.itemsTaken[`${map}_obj_${obj.index}`] = true;
-      if (obj.pokemon)
-        save.defeatedTrainers[`${map}_obj_${obj.index}`] = true;
-    }
-    if (hidden && hiddenAtStart && obj.item && ((save.inventory[obj.item] ?? 0) > 0 || (save.pcItems[obj.item] ?? 0) > 0)) {
-      save.itemsTaken[`${map}_obj_${obj.index}`] = true;
-    }
-  }
-  for (const [flag, [map, name]] of Object.entries(TOGGLE_FLAGS)) {
-    if (save.objectToggles[map]?.[name] === false)
-      save.flags[flag] = true;
-  }
-  forEachTrainer(data, (key, obj, flag) => {
-    if (flag && save.flags[flag])
-      save.defeatedTrainers[key] = true;
   });
-  save.hiddenTaken = {};
-  vc?.hiddenItems.forEach(([map, x, y], i) => {
-    if (bit(b, m(M.hiddenItems), i))
-      save.hiddenTaken[`${map}_${x}_${y}`] = true;
-  });
-  vc?.hiddenCoins.forEach(([map, x, y], i) => {
-    if (bit(b, m(M.hiddenCoins), i))
-      save.hiddenTaken[`${map}_${x}_${y}`] = true;
-  });
-  save.visited = {};
-  for (let i = 0;i < 16; i++) {
-    const town = t.maps.get(i);
-    if (town && bit(b, m(M.townVisited), i))
-      save.visited[town] = true;
-  }
-  const last = t.maps.get(u8(b, m(M.lastMap)));
-  if (last)
-    save.lastOutdoor = outdoorSpot(data, last, mapId);
-  const heal = t.maps.get(u8(b, m(M.lastBlackoutMap)));
-  save.lastHeal = healSpot(data, heal ?? "PALLET_TOWN");
-  save.playTime = u8(b, m(M.playHours)) * 3600 + u8(b, m(M.playMinutes)) * 60 + u8(b, m(M.playSeconds));
-  save.strengthActive = (u8(b, m(M.statusFlags1)) & 1) === 1;
-  save.forcedBike = (u8(b, m(M.statusFlags6)) & 32) !== 0;
-  if (mapId && (data.field?.darkMaps?.maps ?? []).includes(mapId))
-    save.flashLit = u8(b, m(M.palOffset)) === 0;
-  save.trashPuzzle = { first: u8(b, m(M.trashFirst)), second: u8(b, m(M.trashSecond)) };
-  const starter = t.species.get(u8(b, m(M.playerStarter)));
-  if (!t.yellow && starter && RIVAL_PICK[starter] && save.flags.EVENT_GOT_STARTER)
-    save.flags[`EVENT_CHOSE_${starter}`] = true;
-  if (t.yellow) {
-    if (save.flags.EVENT_GOT_STARTER)
-      save.flags.EVENT_CHOSE_PIKACHU = true;
-    save.rivalStarter = u8(b, m(M.rivalStarter));
-    save.pikachuHappiness = u8(b, m(M.pikachuHappiness));
-    save.pikachuMood = u8(b, m(M.pikachuMood));
-  }
-  const fossil = t.species.get(u8(b, m(M.fossilMon)));
-  if (fossil && FOSSILS[fossil] && save.flags.EVENT_GAVE_FOSSIL_TO_LAB)
-    save.labFossilMon = fossil;
-  if (save.flags.EVENT_IN_SAFARI_ZONE && mapId?.startsWith("SAFARI_ZONE") && !mapId.endsWith("GATE")) {
-    save.safari = { balls: u8(b, m(M.safariBalls)), steps: u16be(b, m(M.safariSteps)) };
-  }
-  if (u8(b, m(M.daycareInUse))) {
-    const mon = readMon(b, m(M.daycareMon), false, t, data);
-    if (mon) {
-      const depositLevel = u8(b, m(M.daycareMon) + 3);
-      ownership(mon, readName(b, m(M.daycareOt)), mon.otId, player);
-      const nick = nickname(data, mon.species, readName(b, m(M.daycareName)));
-      if (nick !== undefined)
-        mon.nickname = nick;
-      save.daycare = { mon, steps: 0, depositLevel };
-    }
-  }
-  const teams = Math.min(HOF_TEAMS, u8(b, m(M.numHofTeams)));
-  if (teams > 0) {
-    save.hallOfFame = [];
-    for (let n = 0;n < teams; n++) {
-      const team = [];
-      for (let i = 0;i < 6; i++) {
-        const o = HOF + (n * 6 + i) * HOF_MON;
-        const species = t.species.get(u8(b, o));
-        if (!species)
-          break;
-        const rec = { species, level: u8(b, o + 1) };
-        const nick = nickname(data, species, readName(b, o + 2));
+  part("the boxes", () => {
+    const boxByte = u8(b, m(M.curBox));
+    const cur = Math.min(11, boxByte & 127);
+    const ready = (boxByte & 128) !== 0;
+    const readBox = (o, n) => {
+      const out = [];
+      const c = Math.min(MONS_PER_BOX, u8(b, o));
+      for (let i = 0;i < c; i++) {
+        const mon = readMon(b, o + 22 + i * BOX_MON, false, t, data);
+        if (!mon) {
+          notes.push(`box ${n + 1}: unknown species left out`);
+          continue;
+        }
+        const ot = readName(b, o + 22 + MONS_PER_BOX * BOX_MON + i * NAME_LEN);
+        ownership(mon, ot, mon.otId, player);
+        const nick = nickname(data, mon.species, readName(b, o + 22 + MONS_PER_BOX * (BOX_MON + NAME_LEN) + i * NAME_LEN));
         if (nick !== undefined)
-          rec.nickname = nick;
-        team.push(rec);
+          mon.nickname = nick;
+        out.push(mon);
       }
-      save.hallOfFame.push(team);
+      return out;
+    };
+    for (let n = 0;n < BOXES; n++) {
+      if (n === cur)
+        save.boxes.push(readBox(CUR_BOX, n));
+      else if (!ready)
+        save.boxes.push([]);
+      else
+        save.boxes.push(readBox(BOX_BANKS[n < 6 ? 0 : 1] + n % 6 * BOX_SIZE, n));
     }
-  }
+    save.currentBox = cur + 1;
+  });
+  part("the event flags", () => {
+    for (const [n, name] of t.events)
+      if (bit(b, m(M.events), n))
+        save.flags[name] = true;
+    for (const [name, [byte, k]] of Object.entries(EXTRA_FLAGS))
+      if (u8(b, m(byte)) & 1 << k)
+        save.flags[name] = true;
+    for (const [name, k] of Object.entries(TRADE_FLAGS))
+      if (bit(b, m(M.tradeFlags), k))
+        save.flags[name] = true;
+    for (const [ours, theirs] of Object.entries(FLAG_ALIAS))
+      if (save.flags[theirs])
+        save.flags[ours] = true;
+  });
+  part("shown objects and trainers", () => {
+    save.objectToggles = {};
+    save.itemsTaken = {};
+    for (let i = 0;i < (vc?.toggles.length ?? 0); i++) {
+      const [map, objNo, hiddenAtStart] = vc.toggles[i];
+      const obj = toggleObject2(data, vc, i);
+      if (!obj?.name)
+        continue;
+      const hidden = bit(b, m(M.toggles), i);
+      (save.objectToggles[map] ??= {})[obj.name] = !hidden;
+      if (hidden && !hiddenAtStart) {
+        if (obj.item)
+          save.itemsTaken[`${map}_obj_${obj.index}`] = true;
+        if (obj.pokemon)
+          save.defeatedTrainers[`${map}_obj_${obj.index}`] = true;
+      }
+      if (hidden && hiddenAtStart && obj.item && ((save.inventory[obj.item] ?? 0) > 0 || (save.pcItems[obj.item] ?? 0) > 0)) {
+        save.itemsTaken[`${map}_obj_${obj.index}`] = true;
+      }
+    }
+    for (const [flag, [map, name]] of Object.entries(TOGGLE_FLAGS)) {
+      if (save.objectToggles[map]?.[name] === false)
+        save.flags[flag] = true;
+    }
+    forEachTrainer(data, (key, obj, flag) => {
+      if (flag && save.flags[flag])
+        save.defeatedTrainers[key] = true;
+    });
+  });
+  part("hidden items", () => {
+    save.hiddenTaken = {};
+    vc?.hiddenItems.forEach(([map, x, y], i) => {
+      if (bit(b, m(M.hiddenItems), i))
+        save.hiddenTaken[`${map}_${x}_${y}`] = true;
+    });
+    vc?.hiddenCoins.forEach(([map, x, y], i) => {
+      if (bit(b, m(M.hiddenCoins), i))
+        save.hiddenTaken[`${map}_${x}_${y}`] = true;
+    });
+  });
+  part("towns visited", () => {
+    save.visited = {};
+    for (let i = 0;i < 16; i++) {
+      const town = t.maps.get(i);
+      if (town && bit(b, m(M.townVisited), i))
+        save.visited[town] = true;
+    }
+  });
+  part("the last map and blackout point", () => {
+    const last = t.maps.get(u8(b, m(M.lastMap)));
+    if (last)
+      save.lastOutdoor = outdoorSpot(data, last, mapId);
+    const heal = t.maps.get(u8(b, m(M.lastBlackoutMap)));
+    save.lastHeal = healSpot(data, heal ?? "PALLET_TOWN");
+  });
+  save.playTime = u8(b, m(M.playHours)) * 3600 + u8(b, m(M.playMinutes)) * 60 + u8(b, m(M.playSeconds));
+  part("status bits", () => {
+    save.strengthActive = (u8(b, m(M.statusFlags1)) & 1) === 1;
+    save.forcedBike = (u8(b, m(M.statusFlags6)) & 32) !== 0;
+    if (mapId && (data.field?.darkMaps?.maps ?? []).includes(mapId))
+      save.flashLit = u8(b, m(M.palOffset)) === 0;
+    save.trashPuzzle = { first: u8(b, m(M.trashFirst)), second: u8(b, m(M.trashSecond)) };
+  });
+  part("starters, fossil, safari", () => {
+    const starter = t.species.get(u8(b, m(M.playerStarter)));
+    if (!t.yellow && starter && RIVAL_PICK[starter] && save.flags.EVENT_GOT_STARTER)
+      save.flags[`EVENT_CHOSE_${starter}`] = true;
+    if (t.yellow) {
+      if (save.flags.EVENT_GOT_STARTER)
+        save.flags.EVENT_CHOSE_PIKACHU = true;
+      save.rivalStarter = u8(b, m(M.rivalStarter));
+      save.pikachuHappiness = u8(b, m(M.pikachuHappiness));
+      save.pikachuMood = u8(b, m(M.pikachuMood));
+    }
+    const fossil = t.species.get(u8(b, m(M.fossilMon)));
+    if (fossil && FOSSILS[fossil] && save.flags.EVENT_GAVE_FOSSIL_TO_LAB)
+      save.labFossilMon = fossil;
+    if (save.flags.EVENT_IN_SAFARI_ZONE && mapId?.startsWith("SAFARI_ZONE") && !mapId.endsWith("GATE")) {
+      save.safari = { balls: u8(b, m(M.safariBalls)), steps: u16be(b, m(M.safariSteps)) };
+    }
+  });
+  part("the day care", () => {
+    if (u8(b, m(M.daycareInUse))) {
+      const mon = readMon(b, m(M.daycareMon), false, t, data);
+      if (mon) {
+        const depositLevel = u8(b, m(M.daycareMon) + 3);
+        ownership(mon, readName(b, m(M.daycareOt)), mon.otId, player);
+        const nick = nickname(data, mon.species, readName(b, m(M.daycareName)));
+        if (nick !== undefined)
+          mon.nickname = nick;
+        save.daycare = { mon, steps: 0, depositLevel };
+      }
+    }
+  });
+  part("the hall of records", () => {
+    const teams = Math.min(HOF_TEAMS, u8(b, m(M.numHofTeams)));
+    if (teams > 0) {
+      save.hallOfFame = [];
+      for (let n = 0;n < teams; n++) {
+        const team = [];
+        for (let i = 0;i < 6; i++) {
+          const o = HOF + (n * 6 + i) * HOF_MON;
+          const species = t.species.get(u8(b, o));
+          if (!species)
+            break;
+          const rec = { species, level: u8(b, o + 1) };
+          const nick = nickname(data, species, readName(b, o + 2));
+          if (nick !== undefined)
+            rec.nickname = nick;
+          team.push(rec);
+        }
+        save.hallOfFame.push(team);
+      }
+    }
+  });
   return { save, notes };
 }
 function toggleObject2(data, vc, i) {
@@ -30809,6 +30851,9 @@ class VoxelmonGame {
     this.saveTarget = "vc";
     const p = this.save.player;
     console.log(`[pv] vc: continued from the VC save: ${p.name} at ${p.map} ${p.x},${p.y}; SAVE writes the VC title`);
+    const party = (this.save.party ?? []).map((m) => `${m.species}/${m.level}/${m.hp}`).join(" ");
+    const o = this.save.options ?? {};
+    console.log(`[pv] vc: party ${party}; options ${Object.entries(o).map(([k, v]) => `${k}=${v}`).join(" ")}`);
     if (told.length)
       this.showText(told.join("\f"));
   }
