@@ -4,6 +4,7 @@
 // shot of the choice, then once the world is up a SAVE straight through
 // writeSave -- every step on pvlog as "[pv] vcbench: ...", beside the
 // host's "[pv] vc: ..." lines. Never shipped.
+import "./vc_bench_fake.ts";
 import "../voxelmon/game/psp-main.ts";
 import { VOX_BTN } from "../contracts/spec/voxel-spec.ts";
 import { native } from "../voxelmon/game/quickjs-host.ts";
