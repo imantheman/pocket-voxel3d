@@ -297,6 +297,35 @@ pub fn backup(card: &mut dyn Card, dir: &str, game: Game, when: &str, raw: &[u8]
     Ok(path)
 }
 
+/// Read copies kept per game (`read_<game>_<date>-<time>.sav`, apart from
+/// the pre-write backups so they never push those out).
+pub const KEEP_READS: usize = 3;
+
+/// Copy the save as read at boot to `<dir>/read_<game>_<stamp>.sav`, unless
+/// the newest read copy already holds the same bytes; keep the last
+/// [`KEEP_READS`]. A copy of exactly what the game was handed, for when it
+/// misbehaves on a save only one console has.
+pub fn dump_read(card: &mut dyn Card, dir: &str, game: Game, when: &str, raw: &[u8]) -> Result<Option<String>, String> {
+    card.mkdir(dir);
+    let prefix = format!("read_{}_", game.name());
+    let mut mine: Vec<String> = card.list(dir).into_iter().filter(|f| f.starts_with(&prefix) && f.ends_with(".sav")).collect();
+    mine.sort();
+    if let Some(last) = mine.last() {
+        if card.read(&format!("{}/{}", dir, last)).map(|b| b == raw).unwrap_or(false) {
+            return Ok(None);
+        }
+    }
+    let path = format!("{}/{}{}.sav", dir, prefix, when);
+    card.write(&path, raw)?;
+    mine.push(format!("{}{}.sav", prefix, when));
+    mine.sort();
+    while mine.len() > KEEP_READS {
+        let old = mine.remove(0);
+        card.remove(&format!("{}/{}", dir, old));
+    }
+    Ok(Some(path))
+}
+
 /// Write a cartridge save into the title's save data: re-read what is there
 /// now, back it up, write, read back, commit. `sram` must be exactly 32 KB.
 /// On success `found.raw` is the new file.
@@ -596,6 +625,20 @@ mod tests {
         // the same second twice gets a second name
         backup(&mut card, "d", Game::Red, "20261011-120011", &[99]).unwrap();
         assert!(card.files.contains_key("d/red_20261011-120011_2.sav"));
+    }
+
+    #[test]
+    fn read_copies_skip_repeats_and_keep_three() {
+        let mut card = FakeCard::default();
+        card.files.insert("d/red_20200101-000000.sav".into(), vec![9]);
+        assert!(dump_read(&mut card, "d", Game::Red, "20261011-100000", &[1]).unwrap().is_some());
+        assert!(dump_read(&mut card, "d", Game::Red, "20261011-100001", &[1]).unwrap().is_none(), "same bytes: no new copy");
+        for i in 2..7 {
+            dump_read(&mut card, "d", Game::Red, &format!("20261011-10000{}", i), &[i as u8]).unwrap();
+        }
+        let reads: Vec<String> = card.list("d").into_iter().filter(|f| f.starts_with("read_red_")).collect();
+        assert_eq!(reads.len(), KEEP_READS);
+        assert!(card.files.contains_key("d/red_20200101-000000.sav"), "pre-write backups untouched");
     }
 
     #[test]

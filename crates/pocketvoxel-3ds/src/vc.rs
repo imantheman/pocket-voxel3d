@@ -261,6 +261,16 @@ mod imp {
         let over = std::fs::read_to_string(OVERRIDE_PATH).ok().and_then(|t| vcsave::title_override(&t, GAME));
         let mut fs = CtrFs::new();
         FOUND = vcsave::probe(&mut fs, GAME, over, &mut |l| log(l));
+        // a copy of exactly what the game is handed, for a save that only
+        // misbehaves on one console
+        if let Some(f) = FOUND.as_ref() {
+            let mut card = StdCard;
+            match vcsave::dump_read(&mut card, BACKUP_DIR, GAME, &now_stamp(), &f.raw) {
+                Ok(Some(p)) => log(&format!("vc: copy of the save as read: {}", p)),
+                Ok(None) => log("vc: the save as read is already copied (unchanged)"),
+                Err(e) => log(&format!("vc: could not copy the save as read: {}", e)),
+            }
+        }
         INFO = match &FOUND {
             Some(f) => format!("{} {:016x} {} {}", GAME.label(), f.tid, f.file, f.raw.len()),
             None => String::new(),
@@ -373,10 +383,46 @@ pub unsafe extern "C" fn voxel_vc_info(which: u32, len: *mut u32) -> *const u8 {
 /// (no batching), so a load that never finishes is pinned there.
 /// `voxel.traceLoads(n)` asks for the next `n`.
 static mut TRACE_LOADS: u32 = 0;
+/// And the frames after it: each stage of each frame (guest done, scene
+/// built, each eye, the bottom screen, submitted, frame end) goes straight
+/// to pvlog, so a frame that never finishes -- a GPU that never answers --
+/// shows the stage it stopped in.
+static mut TRACE_FRAMES: u32 = 0;
+static mut TRACE_N: u32 = 0;
 
 #[no_mangle]
 pub unsafe extern "C" fn voxel_vc_trace_loads(n: i32) {
     TRACE_LOADS = n.max(0) as u32;
+    TRACE_FRAMES = if n > 0 { 12 } else { 0 };
+    TRACE_N = 0;
+}
+
+/// Whether frames are being traced.
+pub fn tracing() -> bool {
+    unsafe { TRACE_FRAMES > 0 }
+}
+
+/// One stage of a traced frame, written to the log at once (not batched).
+pub fn trace(stage: &str) {
+    unsafe {
+        if TRACE_FRAMES == 0 {
+            return;
+        }
+        let line = format!("[pv] vc: trace frame {} {}", TRACE_N, stage);
+        crate::dlog_now(&line);
+    }
+}
+
+/// The end of a traced frame.
+pub fn trace_frame_end() {
+    unsafe {
+        if TRACE_FRAMES == 0 {
+            return;
+        }
+        trace("end");
+        TRACE_FRAMES -= 1;
+        TRACE_N += 1;
+    }
 }
 
 /// Whether this map load is a traced one (and count it).

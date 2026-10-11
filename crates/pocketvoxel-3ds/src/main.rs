@@ -2662,6 +2662,16 @@ fn dlog(s: &str) {
     }
 }
 
+/// A line straight to the first log file, whatever the batching: for the
+/// VC trace (vc::trace), where a line held back is a line lost to a freeze.
+fn dlog_now(s: &str) {
+    unsafe { svcOutputDebugString(s.as_ptr(), s.len() as i32); }
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(LOG_PATHS[0]) {
+        let _ = writeln!(f, "{}", s);
+    }
+}
+
 /// Write a panic to the log before the process dies.
 ///
 /// A Rust panic on this console aborts, and an aborted 3dsx drops the
@@ -2688,6 +2698,19 @@ fn install_panic_log() {
             }
         }
     }));
+}
+
+/// A page index the guest handed over that names no page: skipped, and said
+/// once per kind (it would have been an out-of-range index -- a panic, which
+/// on the console is a dead screen with HOME gone).
+fn bad_page(kind: &str, page: i64) {
+    static mut SAID: u32 = 0;
+    let bit = match kind { "pic" => 1, "anim" => 2, "ui" => 4, "card" => 8, _ => 16 };
+    unsafe {
+        if SAID & bit != 0 { return; }
+        SAID |= bit;
+    }
+    dlog_now(&format!("[pv] skipped a {} with page {}: no such page", kind, page));
 }
 
 /// osGetTime, for the load timings.
@@ -5500,6 +5523,7 @@ fn main() {
         let d = hid.keys_down(); #[cfg(feature = "gen3")] let (k, d) = gen3::inject_keys(k, d);
         // Commit whatever the last map load logged, in one write.
         dlog_batch_end();
+        if vc::tracing() { vc::trace("begin"); }
         // START belongs to the game (menu). Exit with START+SELECT.
         unsafe {
             extern "C" { fn osGetTime() -> u64; }
@@ -5714,6 +5738,7 @@ fn main() {
                 if failed {
                     let n = e2.iter().position(|&c| c == 0).unwrap_or(0);
                     let why = String::from_utf8_lossy(&e2[..n]).into_owned();
+                    if vc::tracing() { vc::trace("guest threw"); }
                     println!("frame ERR: {}", why);
                     dlog(&format!("[pv] frame ERR: {}", why));
                     // A step the guest put under voxel.deadline and the host
@@ -6881,7 +6906,7 @@ fn main() {
             let pic_active_scan = list.items.iter().any(|i| matches!(i, Item::ScreenPic { .. }));
             for it in list.items.iter() {
                 if let Item::ScreenPic { x, y, w, h, page, depth_q8 } = it {
-                    let pg = &pak_static.atlases[*page as usize];
+                    let Some(pg) = pak_static.atlases.get(*page as usize) else { bad_page("pic", *page as i64); continue; };
                     // Via page_tex_size / page_prescale rather than po2 of the
                     // source: the content fills w * prescale texels of the
                     // uploaded surface, not w. A no-op while pics are not
@@ -6921,7 +6946,7 @@ fn main() {
                     // padded to a power of two at the bottom right. So the
                     // tiles are a plain 8x8 grid, and v counts down from 1
                     // the way a pic's does.
-                    let pg = &pak_static.atlases[*page as usize];
+                    let Some(pg) = pak_static.atlases.get(*page as usize) else { bad_page("anim", *page as i64); continue; };
                     let cols = (pg.w as u32 / UI_CELL).max(1) as u16;
                     let (pw, ph) = page_tex_size(pg);
                     let sc = page_prescale(pg) as f32;
@@ -6953,8 +6978,8 @@ fn main() {
                     gv.push(ma(x0, y1, u0, v1));
                 }
                 if let Item::UiQuad { x, y, w, h, page, tile } = it {
+                    let Some(pg) = pak_static.atlases.get(*page as usize) else { bad_page("ui", *page as i64); continue; };
                     ui_page = *page;
-                    let pg = &pak_static.atlases[*page as usize];
                     // Tile indices count cells in the atlas's real width; the
                     // UVs address the gutter-repacked surface.
                     let cols = ((pg.w as u32 / UI_CELL) as u16).max(1);
@@ -6977,7 +7002,7 @@ fn main() {
                     // the uploaded surface. (An emoteArt bubble is no page:
                     // it fills its own 16x16 texture.)
                     let (sx, sy) = if *page == EMOTE_ART_PAGE { (1.0, 1.0) } else {
-                        let pg = &pak_static.atlases[*page as usize];
+                        let Some(pg) = pak_static.atlases.get(*page as usize) else { bad_page("card", *page as i64); continue; };
                         let (pw, ph) = page_tex_size(pg);
                         let s = page_prescale(pg) as f32;
                         (pg.w as f32 * s / pw, pg.h as f32 * s / ph)
@@ -7098,7 +7123,7 @@ if page_tex.len() < pak_static.atlases.len() {
             bi.add(buffer::Buffer::new(&spark_verts[..]), card_attr.permutation()).ok().map(|_| bi)
         };
         if guest_drive && dbg_tick % 60 == 0 {
-            let pgx = &pak_static.atlases[ui_page as usize];
+            let _pgx = pak_static.atlases.get(ui_page as usize);
         }
         if guest_drive && dbg_tick % 30 == 0 {
             let sc3 = unsafe { voxel::scene() };
@@ -7586,7 +7611,7 @@ if page_tex.len() < pak_static.atlases.len() {
             for i in 0..(sc.ui_b_sprite_n as usize).min(UI_B_SPRITES_MAX) {
                 let spr = &sc.ui_b_sprites[i];
                 if spr.w <= 0 || spr.h <= 0 { continue; }
-                let spg = &pak_static.atlases[spr.page as usize];
+                let Some(spg) = pak_static.atlases.get(spr.page as usize) else { bad_page("bottom sprite", spr.page as i64); continue; };
                 let (spw, sph) = (po2(spg.w as u32) as f32, po2(spg.h as u32) as f32);
                 // A sub-rect (uiSpriteRectBottom) or the whole page. V is
                 // flipped like Item::ScreenPic: page row 0 is v = 1.
@@ -8049,6 +8074,10 @@ if page_tex.len() < pak_static.atlases.len() {
         let (tilt_unit_ref, tilt_sharp_ref, tilt_bands_ref) = (tilt_unit.as_ref(), tilt_sharp.as_ref(), tilt_bands.as_ref());
         let (tmvp_l_ref, tmvp_r_ref) = (&tmvp_l, &tmvp_r); #[cfg(feature = "gen3")] gen3::before_render();
         unsafe { EYE_VERTS = [0; 2]; EYE_DRAWS = [0; 2]; EYE_SHADED = [0; 2]; }
+        if vc::tracing() {
+            vc::trace(&format!("built; render (3d {:.2}, tilt {}, sprites {}, pics {})",
+                slider, tilt_ref.is_some(), ui_b_sprite_bufs.len(), pic_groups.len()));
+        }
         let mut submit_us = 0.0f32;
         let mut cmd_use = 0.0f32;
         instance.render_frame_with(|mut frame| { #[cfg(feature = "gen3")] gen3::offscreen_pass();
@@ -8352,12 +8381,15 @@ if page_tex.len() < pak_static.atlases.len() {
             });
 
             frame.bind_program(&program);
+            if vc::tracing() { vc::trace("frame begun; left eye"); }
             render_to(&mut frame, &mut left_target, &mvp_l, -1.0);
             // Right eye costs a full second pass; only pay it when the
             // 3D slider is actually up.
             if right_eye {
+                if vc::tracing() { vc::trace("right eye"); }
                 render_to(&mut frame, &mut right_target, &mvp_r, 1.0);
             }
+            if vc::tracing() { vc::trace("bottom"); }
             // Kanto Gear increment 3: the companion (bottom) screen draws its
             // own UI surface (scene.ui_b) in true 320-wide space via a 0..320
             // ortho — no squish — driven by the guest's KantoGear module.
@@ -8438,8 +8470,10 @@ if page_tex.len() < pak_static.atlases.len() {
             }
             submit_us = us_since(t_submit);
             cmd_use = unsafe { C3D_GetCmdBufUsage() };
+            if vc::tracing() { vc::trace(&format!("submitting (cmdbuf {:.0}%)", cmd_use * 100.0)); }
             frame
         });
+        if vc::tracing() { vc::trace("submitted"); }
         {
             // the frame's own CPU work: the sim and the scene build (cpu_pre,
             // to just before the cull), the cull, and the command build --
@@ -8505,6 +8539,7 @@ if page_tex.len() < pak_static.atlases.len() {
         // guest still simulates at 60 (sim_acc), so this is smoothness, not
         // game speed. A heavy frame takes the next vblank.
 
+        if vc::tracing() { vc::trace_frame_end(); }
         // Previous frame's buffers drop here, a full frame after the GPU
         // last touched them.
         card_hold = card_bufs; #[cfg(feature = "gen3")] gen3::after_render();
