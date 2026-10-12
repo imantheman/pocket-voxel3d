@@ -18,9 +18,18 @@ if (typeof VC_FAKE_B64 !== "undefined") {
   }
   v.vcData = (): ArrayBuffer => bytes.slice().buffer;
   v.vcWrite = (b: Uint8Array): boolean => {
-    let sum = 0;
-    for (let i = 0x2598; i < 0x3523; i++) sum = (sum + b[i]!) & 0xff;
-    console.log(`[pv] vcbench: fake vcWrite ${b.length} bytes, checksum ${((~sum) & 0xff) === b[0x3523] ? "ok" : "BAD"}`);
+    const ok = (from: number, to: number, at: number): boolean => {
+      let sum = 0;
+      for (let i = from; i < to; i++) sum = (sum + b[i]!) & 0xff;
+      return ((~sum) & 0xff) === b[at];
+    };
+    // the main block, then the two box banks (each whole, then per box)
+    let banks = true;
+    for (const bank of [0x4000, 0x6000]) {
+      banks &&= ok(bank, bank + 0x1a4c, bank + 0x1a4c);
+      for (let n = 0; n < 6; n++) banks &&= ok(bank + n * 0x462, bank + (n + 1) * 0x462, bank + 0x1a4d + n);
+    }
+    console.log(`[pv] vcbench: fake vcWrite ${b.length} bytes, checksum ${ok(0x2598, 0x3523, 0x3523) ? "ok" : "BAD"}, box banks ${banks ? "ok" : "BAD"}`);
     return true;
   };
   v.vcInfo = (): string => "fake";

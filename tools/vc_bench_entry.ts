@@ -46,8 +46,74 @@ let n = 0;
 let phase = 0;
 let at = 0;
 
+// --define VC_NEW=true: NEW GAME instead -- the save choice, VC SAVE (and
+// the replace question, answered YES), Oak's speech pressed through, then a
+// few steps in the bedroom and a SAVE to the stand-in VC title.
+declare const VC_NEW: boolean;
+let nphase = 0;
+let nat = 0;
+function newGameFrame(): number {
+  const top = game.stackKinds().at(-1);
+  const t = top === "title" ? game.title() : null;
+  let pad = 0;
+  if (nphase === 0) {
+    if (t?.phase === "menu") {
+      log(`title menu: ${t.menu.join(" / ")}`);
+      nphase = 1;
+      nat = n;
+    } else if (n % 30 === 0) pad = VOX_BTN.start;
+  } else if (nphase === 1 && n - nat > 20) {
+    // to NEW GAME, then A
+    if (t?.menu?.[t.index] !== "NEW GAME") { if (n % 10 === 0) pad = VOX_BTN.down; }
+    else { pad = VOX_BTN.a; nphase = 2; nat = n; }
+  } else if (nphase === 2 && n - nat > 20) {
+    log(`new game choice: ${t?.phase} ${(t?.menu ?? []).join(" / ")}`);
+    native.screenshot?.();
+    pad = VOX_BTN.down;
+    nphase = 3;
+    nat = n;
+  } else if (nphase === 3 && n - nat > 20) {
+    log(`picked ${t?.menu?.[t.index]}`);
+    pad = VOX_BTN.a;
+    nphase = 4;
+    nat = n;
+  } else if (nphase === 4) {
+    // the replace question (YES is up from NO), then Oak's speech and the
+    // name lists pressed through with A
+    if (top === "choice" && game.saveTarget !== "vc") {
+      if (n - nat > 30) { log("replace question: YES"); nat = n; pad = VOX_BTN.up; nphase = 5; }
+    } else if (top === "overworld" && game.saveTarget === "vc") { log("in the bedroom"); nphase = 6; nat = n; }
+    else if (top === "naming") {
+      // the name list: down to the first preset, A; the keyboard: START
+      const st = game.stack.at(-1);
+      if (n % 8 === 0) pad = st.pick ? (n % 16 === 0 ? VOX_BTN.down : VOX_BTN.a) : VOX_BTN.start;
+    } else if (n % 8 === 0) pad = VOX_BTN.a;
+  } else if (nphase === 5 && n - nat > 10) {
+    pad = VOX_BTN.a;
+    nphase = 4;
+    nat = n;
+  } else if (nphase === 6) {
+    if (top !== "overworld") { if (n % 8 === 0) pad = VOX_BTN.a; }
+    else if (n - nat < 60) pad = VOX_BTN.right;
+    else {
+      const p = game.save.player;
+      log(`saving: target ${game.saveTarget}; ${p.name} at ${game.overworld.mapId ?? p.map}`);
+      game.writeSave();
+      log(`writeSave: ok=${game.lastSaveOk}`);
+      native.screenshot?.();
+      nphase = 9;
+    }
+  }
+  return pad;
+}
+
 g.frame = (b: number): void => {
   n++;
+  if (typeof VC_NEW !== "undefined" && VC_NEW) {
+    mainFrame((b & ~0xff) | newGameFrame());
+    if (n % 300 === 0) log(`tick ${n}: ${game.stackKinds().join(",")} target ${game.saveTarget}`);
+    return;
+  }
   let pad = 0;
   const top = game.stackKinds().at(-1);
   const t = top === "title" ? game.title() : null;
