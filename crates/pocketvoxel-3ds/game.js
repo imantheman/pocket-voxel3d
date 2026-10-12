@@ -29083,13 +29083,24 @@ var TRADE_FLAGS = {
   EVENT_TRADED_VENONAT_FOR_TANGELA: 8,
   EVENT_TRADED_NIDORAN_M_FOR_NIDORAN_F: 9
 };
+var SCENE_STEPS = [
+  { map: "VIRIDIAN_MART", at: 29, step: (f) => f.EVENT_GOT_OAKS_PARCEL || f.EVENT_OAK_GOT_PARCEL ? 2 : 0 },
+  {
+    map: "OAKS_LAB",
+    at: 0,
+    step: (f, y) => !f.EVENT_OAK_APPEARED_IN_PALLET ? 0 : f.EVENT_BATTLED_RIVAL_IN_OAKS_LAB ? y ? 22 : 18 : f.EVENT_GOT_STARTER ? y ? 12 : 10 : f.EVENT_OAK_ASKED_TO_CHOOSE_MON ? 6 : 0
+  },
+  { map: "PALLET_TOWN", at: 1, step: (f, y) => f.EVENT_FOLLOWED_OAK_INTO_LAB ? y ? 8 : 5 : 0 },
+  { map: "VIRIDIAN_CITY", at: 4, step: (f, y) => !y || !f.EVENT_GOT_POKEDEX ? 0 : f.EVENT_COMPLETED_CATCH_TRAINING ? 2 : 1 },
+  { map: "SS_ANNE_2F", at: 117, step: (f) => f.EVENT_BEAT_SS_ANNE_RIVAL ? SHIP_RIVAL_BEATEN : 0 }
+];
+var SHIP_RIVAL_BEATEN = 4;
 var FLAG_ALIAS = {
   EVENT_RECEIVED_BIKE_VOUCHER: "EVENT_GOT_BIKE_VOUCHER",
   EVENT_BEAT_GIOVANNI: "EVENT_BEAT_VIRIDIAN_GYM_GIOVANNI",
   EVENT_BEAT_MT_MOON_3_SUPER_NERD: "EVENT_BEAT_MT_MOON_EXIT_SUPER_NERD"
 };
 var TOGGLE_FLAGS = {
-  EVENT_BEAT_SS_ANNE_RIVAL: ["SS_ANNE_2F", "SSANNE2F_RIVAL"],
   EVENT_BEAT_GAME_CORNER_ROCKET: ["GAME_CORNER", "GAMECORNER_ROCKET"],
   EVENT_GOT_EEVEE: ["CELADON_MANSION_ROOF_HOUSE", "CELADONMANSION_ROOF_HOUSE_EEVEE_POKEBALL"],
   EVENT_GOT_TM28: ["CERULEAN_CITY", "CERULEANCITY_ROCKET"]
@@ -29142,7 +29153,8 @@ function tables(data) {
     maps: new Map,
     mapId: new Map,
     events: new Map,
-    eventBit: new Map
+    eventBit: new Map,
+    single: new Set
   };
   for (const [id, d] of Object.entries(data.pokemon ?? {})) {
     if (typeof d.index === "number") {
@@ -29166,6 +29178,8 @@ function tables(data) {
       t.items.set(n, id);
       t.itemId.set(id, n);
     }
+    if (d.keyItem && id !== "SAFARI_BALL" && !BADGES.includes(id))
+      t.single.add(id);
   }
   for (const [id, d] of Object.entries(data.maps ?? {})) {
     if (typeof d.index === "number") {
@@ -29321,7 +29335,7 @@ function readItems(b, o, cap, t, notes, where) {
       notes.push(`${where}: unknown item $${id.toString(16)} left out`);
       continue;
     }
-    inv[item] = (inv[item] ?? 0) + u8(b, o + i * 2 + 1);
+    inv[item] = t.single.has(item) ? 1 : (inv[item] ?? 0) + u8(b, o + i * 2 + 1);
     if (!order2.includes(item))
       order2.push(item);
   }
@@ -29347,7 +29361,7 @@ function writeItems(b, o, cap, inv, order2, t, notes, where) {
       return;
     }
     set8(b, o + n * 2, code);
-    set8(b, o + n * 2 + 1, Math.min(99, count2));
+    set8(b, o + n * 2 + 1, t.single.has(id) ? 1 : Math.min(99, count2));
     n++;
   };
   for (const id of order2 ?? [])
@@ -29508,6 +29522,8 @@ function cartToSave(sram, data) {
     for (const [ours, theirs] of Object.entries(FLAG_ALIAS))
       if (save.flags[theirs])
         save.flags[ours] = true;
+    if (u8(b, m(M.progress) + 117) === SHIP_RIVAL_BEATEN)
+      save.flags.EVENT_BEAT_SS_ANNE_RIVAL = true;
   });
   part("shown objects and trainers", () => {
     save.objectToggles = {};
@@ -29723,6 +29739,8 @@ function saveToCart(save, data, template) {
     setBit(b, m(byte), k, !!flags[name]);
   for (const [name, k] of Object.entries(TRADE_FLAGS))
     setBit(b, m(M.tradeFlags), k, !!flags[name]);
+  for (const sc of SCENE_STEPS)
+    set8(b, m(M.progress) + sc.at, sc.step(flags, t.yellow));
   const vc = data.vcsave;
   if (!vc)
     notes.push("the dataset has no cartridge tables (gamedata vcsave): objects, hidden items and the map were not written");
