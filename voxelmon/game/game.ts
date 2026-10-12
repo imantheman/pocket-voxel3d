@@ -701,7 +701,11 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     (this as any).saveChoices = vcSum
       ? { lua: luaText ? this.luaSummary(luaText) : undefined, vc: { ...vcSum } }
       : undefined;
+    // NEW GAME asks where it saves whenever the VC title is there to save
+    // to (its save may be empty); replacing a game in it is asked first.
+    (this as any).newGameChoice = this.vcBytes ? { vcHasGame: !!vcSum } : undefined;
     this.saveTarget = "lua";
+    this.vcFresh = false;
     // The title is a pushed state, so nothing calls startMap for it; the
     // theme has to be asked for directly.
 
@@ -716,6 +720,17 @@ export class VoxelmonGame implements OverworldShell, SceneView {
         }
         if (choice === "continue-vc" && this.vcBytes) {
           this.continueVc(this.vcBytes);
+          return;
+        }
+        if (choice === "new-vc" && this.vcBytes) {
+          // A new game whose SAVEs write the VC title. Its first save is a
+          // whole new cartridge save, nothing kept from the game it
+          // replaces (writeVcSave); the host backs the title's save up
+          // before every write, as for a continued VC game.
+          this.saveTarget = "vc";
+          this.vcFresh = true;
+          console.log("[pv] vc: NEW GAME saves to the VC title");
+          this.startIntro();
           return;
         }
         if (choice === "continue") {
@@ -786,6 +801,11 @@ export class VoxelmonGame implements OverworldShell, SceneView {
 
   /** Where SAVE writes this session: the Lua file, or the VC title. */
   saveTarget: "lua" | "vc" = "lua";
+  /** A new game saving to the VC title that has not saved yet: its first
+   *  write builds the cartridge save from nothing rather than over the
+   *  game it replaces (whose Hall of Fame, boxes and the rest would
+   *  otherwise show through wherever this game writes nothing). */
+  private vcFresh = false;
   /** The VC title's cartridge save as last read or written (the bytes a
    *  VC write keeps what this game does not model from), or null. */
   private vcBytes: Uint8Array | null = null;
@@ -2570,10 +2590,13 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     let ok = false;
     let why = "";
     try {
-      const w = saveToCart(this.save as never, this.data as never, this.vcBytes);
+      const w = saveToCart(this.save as never, this.data as never, this.vcFresh ? null : this.vcBytes);
       for (const n of w.notes) console.log(`[pv] vc: ${n}`);
       ok = h?.vcWrite?.(w.bytes) === true;
-      if (ok) this.vcBytes = w.bytes;
+      if (ok) {
+        this.vcBytes = w.bytes;
+        this.vcFresh = false;
+      }
       else why = h?.vcErr?.() ?? "no VC title";
     } catch (e) {
       why = String((e as Error)?.message ?? e ?? "");

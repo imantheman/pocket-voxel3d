@@ -80,7 +80,7 @@ const COPYRIGHT_Y = 136;
  * so it follows the prefix with no gap -- column 9. */
 const COPYRIGHT_GAMEFREAK_X = 16 + COPYRIGHT_PREFIX.length * 8;
 
-export type TitleChoice = "continue" | "continue-vc" | "new" | "option" | "viewer";
+export type TitleChoice = "continue" | "continue-vc" | "new" | "new-vc" | "option" | "viewer";
 
 /**
  * A save CONTINUE can load, as its info box shows it (the cartridge's
@@ -147,8 +147,11 @@ export class TitleState implements GameState {
   private phase: "press" | "menu" | "pick" = "press";
   /** CONTINUE's choice between the saves there are (Lua, VC), when the
    *  game was given more than the Lua save to offer. */
-  private pick: { id: "lua" | "vc"; label: string; summary: SaveSummary }[] = [];
+  private pick: { id: "lua" | "vc"; label: string; summary?: SaveSummary }[] = [];
   private pickIndex = 0;
+  /** What the choice is for: CONTINUE (which save to load) or NEW GAME
+   *  (which save the new game writes). */
+  private pickFor: "continue" | "new" = "continue";
   private timer = 0;
   private index = 0;
   private menu: string[];
@@ -180,6 +183,11 @@ export class TitleState implements GameState {
        *  summaries, each absent when there is no such save. With no VC
        *  save CONTINUE loads the Lua save straight away, as it always did. */
       saveChoices?: { lua?: SaveSummary; vc?: SaveSummary };
+      /** NEW GAME's choice, when the VC title is on the console: where the
+       *  new game saves. `vcHasGame`: its save holds a game, which a VC new
+       *  game replaces (asked first). Absent: NEW GAME saves to the Lua
+       *  file, with no question, as it always did. */
+      newGameChoice?: { vcHasGame: boolean };
     },
     private onChoose: (c: TitleChoice) => void,
   ) {
@@ -309,6 +317,23 @@ export class TitleState implements GameState {
       if (p.a) {
         this.audio()?.playSfx?.("Press_AB");
         const id = this.pick[this.pickIndex]!.id;
+        if (this.pickFor === "new") {
+          const go = (): void => {
+            this.game.pop();
+            this.onChoose(id === "vc" ? "new-vc" : "new");
+          };
+          // A new game saved to the VC title writes over the game in it:
+          // asked first, as the cartridge asks before a save replaces an
+          // older file. NO is the choice again.
+          if (id === "vc" && this.game.newGameChoice?.vcHasGame && this.game.showChoice) {
+            this.game.showChoice("The VC save will be\nreplaced. Is that OK?", (yes) => {
+              if (yes) go();
+            }, { defaultNo: true });
+            return;
+          }
+          go();
+          return;
+        }
         this.game.pop();
         this.onChoose(id === "vc" ? "continue-vc" : "continue");
       }
@@ -327,6 +352,16 @@ export class TitleState implements GameState {
         if (ch.lua) this.pick.push({ id: "lua", label: "LUA SAVE", summary: ch.lua });
         this.pick.push({ id: "vc", label: "VC SAVE", summary: ch.vc });
         this.pickIndex = 0;
+        this.pickFor = "continue";
+        this.phase = "pick";
+        return;
+      }
+      // With the VC title on the console, NEW GAME asks where the new game
+      // saves; the Lua file first, as it always was.
+      if (pick === "NEW GAME" && this.game.newGameChoice) {
+        this.pick = [{ id: "lua", label: "LUA SAVE" }, { id: "vc", label: "VC SAVE" }];
+        this.pickIndex = 0;
+        this.pickFor = "new";
         this.phase = "pick";
         return;
       }
@@ -381,7 +416,11 @@ export class TitleState implements GameState {
   private menuView(): { menu: string[]; index: number; panel?: string[] } {
     if (this.phase !== "pick") return { menu: this.menu, index: this.index };
     const cur = this.pick[this.pickIndex]!;
-    return { menu: this.pick.map((e) => e.label), index: this.pickIndex, panel: summaryLines(cur.summary) };
+    return {
+      menu: this.pick.map((e) => e.label),
+      index: this.pickIndex,
+      panel: cur.summary ? summaryLines(cur.summary) : undefined,
+    };
   }
 
   /** Yellow's composition (title_yellow.asm): no ribbon, no cycling mon;

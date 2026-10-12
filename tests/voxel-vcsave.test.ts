@@ -434,3 +434,228 @@ describe("a cartridge save with junk in it", () => {
     }
   });
 });
+
+/** The cartridge's own checksum rules, computed here independently of
+ *  cartsave.ts: each one the complement of the low byte of a plain sum. */
+function cartChecksumsOk(b: Uint8Array): string[] {
+  const bad: string[] = [];
+  const sum = (from: number, to: number): number => {
+    let s = 0;
+    for (let i = from; i < to; i++) s += b[i]!;
+    return ~s & 0xff;
+  };
+  // bank 1: sPlayerName ($2598) up to the checksum byte ($3523)
+  if (sum(0x2598, 0x3523) !== b[0x3523]) bad.push("main");
+  // banks 2 and 3: six boxes each, the whole bank's sum, then one per box
+  for (const bank of [0x4000, 0x6000]) {
+    if (sum(bank, bank + 0x1a4c) !== b[bank + 0x1a4c]) bad.push(`bank ${bank.toString(16)}`);
+    for (let n = 0; n < 6; n++) {
+      const o = bank + n * 0x462;
+      if (sum(o, o + 0x462) !== b[bank + 0x1a4d + n]) bad.push(`box ${bank.toString(16)}:${n}`);
+    }
+  }
+  return bad;
+}
+
+/** A new game as NEW GAME leaves it: the bedroom, the names given, nothing
+ *  yet (before Oak). `starter`: a few minutes on, the first mon in hand and
+ *  standing on Route 1. */
+function earlySave(data: VoxelmonData, v: V, starter: boolean): any {
+  const game = new VoxelmonGame(data, new RecorderHost(), 1);
+  game.newGame();
+  const s: any = JSON.parse(JSON.stringify(game.save));
+  s.player.name = "RED";
+  s.player.rival = "BLUE";
+  s.player.id = 0x4d2;
+  if (!starter) return s;
+  const species = v === "yellow" ? "PIKACHU" : "SQUIRTLE";
+  s.party = [{
+    species, level: 5, exp: 135, hp: 20, catchRate: v === "yellow" ? 163 : 45, status: null,
+    dvs: { attack: 9, defense: 8, speed: 7, special: 6, hp: 0b1010 },
+    statExp: { hp: 0, attack: 0, defense: 0, speed: 0, special: 0 },
+    stats: { hp: 20, attack: 11, defense: 10, speed: 13, special: 11 },
+    moves: [{ id: v === "yellow" ? "THUNDERSHOCK" : "TACKLE", pp: 30 }, { id: "GROWL", pp: 40 }],
+  }];
+  s.pokedex = { owned: { [species]: true }, seen: { [species]: true } };
+  s.flags = { ...s.flags, EVENT_FOLLOWED_OAK_INTO_LAB: true, EVENT_OAK_ASKED_TO_CHOOSE_MON: true, EVENT_GOT_STARTER: true, EVENT_BATTLED_RIVAL_IN_OAKS_LAB: true };
+  if (v !== "yellow") s.flags.EVENT_CHOSE_SQUIRTLE = true;
+  if (v === "yellow") { s.pikachuHappiness = 90; s.pikachuMood = 80; }
+  s.player.map = "ROUTE_1"; s.player.x = 9; s.player.y = 30; s.player.facing = "up";
+  s.lastOutdoor = { id: "ROUTE_1", x: 9, y: 30 };
+  s.visited = { PALLET_TOWN: true };
+  s.playTime = 7 * 60 + 12;
+  return s;
+}
+
+for (const v of Object.keys(dirs) as V[]) {
+  describe(`${v}: an early new game saved straight to the VC title`, () => {
+    for (const starter of [false, true]) {
+      const what = starter ? "with the first mon, on Route 1" : "in the bedroom, before Oak";
+      test.skipIf(!has(v))(`${what}: a valid cartridge save that reads back`, () => {
+        const data = sets[v]!;
+        const src = earlySave(data, v, starter);
+        const w = saveToCart(src, data as never, null);
+        expect(w.notes).toEqual([]);
+        const b = w.bytes;
+        expect(isCartSave(b)).toBe(true);
+        expect(cartChecksumsOk(b)).toEqual([]);
+        const m = (k: number): number => b[L.MAIN + k]!;
+        // the lists the cartridge walks: a count, then $FF after the last
+        const party = starter ? 1 : 0;
+        expect(b[L.PARTY]).toBe(party);
+        expect(b[L.PARTY + 1 + party]).toBe(0xff);
+        expect(m(M.numBagItems)).toBe(0);
+        expect(b[L.MAIN + M.bagItems]).toBe(0xff);
+        expect(m(M.numPcItems)).toBe(1);
+        expect(b[L.MAIN + M.pcItems + 2]).toBe(0xff);
+        expect(b[L.CUR_BOX]).toBe(0);
+        expect(b[L.CUR_BOX + 1]).toBe(0xff);
+        for (const bank of L.BOX_BANKS) for (let n = 0; n < 6; n++) {
+          expect(b[bank + n * L.BOX_SIZE]).toBe(0);
+          expect(b[bank + n * L.BOX_SIZE + 1]).toBe(0xff);
+        }
+        expect(m(M.numHofTeams)).toBe(0);
+        // the map's engine state is the ROM's for the spot it is on
+        const map = starter ? "ROUTE_1" : "REDS_HOUSE_2F";
+        const hdr = Buffer.from(b.subarray(L.MAIN + M.mapHeader, L.MAIN + M.mapHeader + 10)).toString("hex");
+        expect(hdr).toBe(data.vcsave!.maps[map]!.h);
+        // and it reads back as the game it was
+        const { save: back, notes } = cartToSave(b, data as never);
+        expect(notes).toEqual([]);
+        expect(back.player).toMatchObject({ name: "RED", rival: "BLUE", id: 0x4d2, map, x: src.player.x, y: src.player.y });
+        expect(back.party.length).toBe(party);
+        expect(back.pcItems).toEqual({ POTION: 1 });
+        expect(back.hallOfFame ?? []).toEqual([]);
+        if (starter) {
+          expect(back.party[0]).toMatchObject({ species: src.party[0].species, level: 5, hp: 20 });
+          expect(back.flags).toMatchObject({ EVENT_GOT_STARTER: true, EVENT_BATTLED_RIVAL_IN_OAKS_LAB: true });
+          if (v === "yellow") expect(back).toMatchObject({ pikachuHappiness: 90, pikachuMood: 80 });
+          else expect(back.flags.EVENT_CHOSE_SQUIRTLE).toBe(true);
+        }
+        // and a second save over the first is byte for byte the same
+        const again = saveToCart(decodeSave(encodeSave(back)), data as never, b).bytes;
+        const diffs: string[] = [];
+        for (let i = 0; i < L.SAVE_SIZE; i++) if (again[i] !== b[i]) diffs.push(`${i.toString(16)}:${b[i]}>${again[i]}`);
+        expect(diffs.slice(0, 20)).toEqual([]);
+      });
+    }
+  });
+}
+
+/** Wait for a YES/NO and answer it: the confirm opens on NO. */
+function answer(game: VoxelmonGame, yes: boolean): boolean {
+  for (let i = 0; i < 400; i++) {
+    if (game.stackKinds().at(-1) === "choice") {
+      game.tick(0);
+      if (yes) { game.tick(VOX_BTN.up); game.tick(0); }
+      game.tick(VOX_BTN.a); game.tick(0);
+      for (let k = 0; k < 20; k++) game.tick(0);
+      return true;
+    }
+    game.tick(i % 2 === 0 ? VOX_BTN.a : 0);
+  }
+  return false;
+}
+
+describe("NEW GAME's choice of where it saves", () => {
+  /** The title's NEW GAME picked (it follows CONTINUE when there is a save). */
+  function newGameAt(host: VcConsole, data: VoxelmonData): VoxelmonGame {
+    const game = new VoxelmonGame(data, host, 1);
+    game.newGame();
+    const t = toTitleMenu(game);
+    const i = t.menu.indexOf("NEW GAME");
+    for (let k = 0; k < i; k++) { game.tick(VOX_BTN.down); game.tick(0); }
+    game.tick(VOX_BTN.a); game.tick(0);
+    return game;
+  }
+
+  test.skipIf(!has("red"))("no VC title: no question, and SAVE writes the Lua file", () => {
+    const data = sets.red!;
+    const host = new VcConsole(encodeSave(richSave(data, "red")), undefined);
+    const game = newGameAt(host, data);
+    expect(game.stackKinds()).not.toContain("title");
+    expect(game.saveTarget).toBe("lua");
+    game.writeSave();
+    expect(host.luaWrites.length).toBe(1);
+    expect(host.vcWrites).toEqual([]);
+  });
+
+  test.skipIf(!has("red"))("LUA SAVE, first and the default: the Lua file, as today", () => {
+    const data = sets.red!;
+    const host = new VcConsole(encodeSave(richSave(data, "red")), saveToCart(richSave(data, "red"), data as never, null).bytes);
+    const game = newGameAt(host, data);
+    const t = (game as any).title();
+    expect(t.phase).toBe("pick");
+    expect(t.menu).toEqual(["LUA SAVE", "VC SAVE"]);
+    expect(t.index).toBe(0);
+    expect(t.panel).toBeUndefined();
+    game.tick(VOX_BTN.a); game.tick(0);
+    expect(game.stackKinds()).not.toContain("title");
+    expect(game.saveTarget).toBe("lua");
+    game.writeSave();
+    expect(host.luaWrites.length).toBe(1);
+    expect(host.vcWrites).toEqual([]);
+  });
+
+  test.skipIf(!has("red"))("VC SAVE over a VC game: asked first; NO is the choice again, YES saves there", () => {
+    const data = sets.red!;
+    const old = saveToCart(richSave(data, "red"), data as never, null).bytes;
+    const host = new VcConsole(undefined, old);
+    const game = newGameAt(host, data);
+    game.tick(VOX_BTN.down); game.tick(0);
+    game.tick(VOX_BTN.a); game.tick(0);
+    expect(game.stackKinds().at(-1)).toBe("textbox");
+    expect(answer(game, false)).toBe(true);
+    expect(game.stackKinds().at(-1)).toBe("title");
+    expect((game as any).title().phase).toBe("pick");
+    expect(game.saveTarget).toBe("lua");
+    expect(host.vcWrites).toEqual([]);
+    game.tick(VOX_BTN.a); game.tick(0);
+    expect(answer(game, true)).toBe(true);
+    expect(game.stackKinds()).not.toContain("title");
+    expect(game.saveTarget).toBe("vc");
+    game.save.player.name = "NEWKID";
+    game.writeSave();
+    expect(host.luaWrites).toEqual([]);
+    expect(host.vcWrites.length).toBe(1);
+    const b = host.vcWrites[0]!;
+    expect(isCartSave(b)).toBe(true);
+    expect(cartChecksumsOk(b)).toEqual([]);
+    // a whole new cartridge save: nothing of the game it replaced
+    const { save } = cartToSave(b, data as never);
+    expect(save.player.name).toBe("NEWKID");
+    expect(save.party).toEqual([]);
+    expect(save.hallOfFame ?? []).toEqual([]);
+    expect(save.boxes.every((x: unknown[]) => x.length === 0)).toBe(true);
+    expect(save.money).toBe(3000);
+    // the next save is over this one, and still the new game
+    game.save.money = 2500;
+    game.writeSave();
+    expect(host.vcWrites.length).toBe(2);
+    const next = cartToSave(host.vcWrites[1]!, data as never).save;
+    expect(next.money).toBe(2500);
+    expect(next.hallOfFame ?? []).toEqual([]);
+  });
+
+  test.skipIf(!has("red"))("VC SAVE on an empty VC save: no question", () => {
+    const data = sets.red!;
+    const host = new VcConsole(encodeSave(richSave(data, "red")), new Uint8Array(L.SAVE_SIZE).fill(0xff));
+    const game = newGameAt(host, data);
+    expect((game as any).title().menu).toEqual(["LUA SAVE", "VC SAVE"]);
+    game.tick(VOX_BTN.down); game.tick(0);
+    game.tick(VOX_BTN.a); game.tick(0);
+    expect(game.stackKinds()).not.toContain("title");
+    expect(game.saveTarget).toBe("vc");
+    game.writeSave();
+    expect(host.vcWrites.length).toBe(1);
+    expect(cartChecksumsOk(host.vcWrites[0]!)).toEqual([]);
+  });
+
+  test.skipIf(!has("red"))("B leaves the choice for the menu", () => {
+    const data = sets.red!;
+    const host = new VcConsole(undefined, saveToCart(richSave(data, "red"), data as never, null).bytes);
+    const game = newGameAt(host, data);
+    game.tick(VOX_BTN.b); game.tick(0);
+    expect((game as any).title().phase).toBe("menu");
+  });
+});
