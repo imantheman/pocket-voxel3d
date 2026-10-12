@@ -36,7 +36,7 @@ export interface CartData {
   version?: string | { version?: string };
   pokemon: Record<string, { index?: number; dex?: number; name?: string; types?: string[]; catchRate?: number; baseStats?: Record<string, number>; growthRate?: string }>;
   moves: Record<string, { index?: number; pp?: number }>;
-  items: Record<string, { index?: number; machine?: { kind: string; number: number } }>;
+  items: Record<string, { index?: number; machine?: { kind: string; number: number }; keyItem?: boolean }>;
   maps?: Record<string, { index?: number; label?: string; tileset?: string; objects?: Obj[]; warps?: { x: number; y: number; destMap: string; destWarp: number }[] }>;
   field?: { darkMaps?: { maps?: string[] }; flyWarps?: Record<string, { x: number; y: number }> };
   trainer_headers?: Record<string, unknown>;
@@ -54,8 +54,9 @@ export const LOSSY = [
   "Yellow's surfing minigame record: not mapped (a VC session starts it at zero)",
   "the partner's walk-step and emotion counters, and this game's own one-off flags (the cable-club gifts, the champion-run marker): not in the cartridge save",
   "play time frames: the cartridge counts 1/60 s; this game counts whole seconds",
-  "each map's script position (wGameProgressFlags) and the engine's scratch bytes: kept from the cartridge save being replaced; a save with none starts them at zero, and the cartridge's map scripts re-check the event flags",
+  "each map's script position (wGameProgressFlags) and the engine's scratch bytes: kept from the cartridge save being replaced (a save with none starts them at zero), except the maps in SCENE_STEPS, whose position is written from the event flags; every other map's scripts re-check the flags from position zero",
   "mons this game has no data for (unknown species index): left out, with a note",
+  "key items: one each, both ways (the cartridge draws no count for them; a doubled one is read back as one)",
 ];
 
 // ---------------------------------------------------------------------------
@@ -179,6 +180,51 @@ const TRADE_FLAGS: Record<string, number> = {
   EVENT_TRADED_NIDORAN_M_FOR_NIDORAN_F: 9,
 };
 /** This game's name for a flag the cartridge spells another way. */
+/**
+ * The maps whose script position (one byte each in wGameProgressFlags) is
+ * not re-derived by the cartridge from the event flags: a scene there moves
+ * the position on and the map's first step does not look at the flags again,
+ * so a position kept from the cartridge save being replaced (or a fresh
+ * save's zero) replays a scene this game has already played -- the clerk
+ * in the second town's shop handing the parcel over twice. Each is written
+ * from the flags instead. `at` is the byte in the block, read out of the
+ * ROMs (each map script's `ld a,[position]` before its step table); the
+ * steps are the ones the cartridge settles on between scenes, read from the
+ * ROMs' step tables and matched against real cartridge saves (a finished
+ * Yellow game holds 22, 8, 2 and 2 here).
+ */
+const SCENE_STEPS: { map: string; at: number; step: (f: Record<string, boolean>, yellow: boolean) => number }[] = [
+  // the shop's errand: step 0 calls the player over and hands the parcel
+  // whatever the flags say; 2 is the shop's idle step once it has
+  { map: "VIRIDIAN_MART", at: 29, step: (f) => (f.EVENT_GOT_OAKS_PARCEL || f.EVENT_OAK_GOT_PARCEL ? 2 : 0) },
+  // the lab: step 0 walks the professor in whenever he has appeared in the
+  // first town (that flag stays set for good); then the wait while the
+  // player picks (6), the wait for the rival's challenge at the door (Red
+  // 10, Yellow 12), and the lab's idle step after that battle (Red 18,
+  // Yellow 22), where the parcel and the dex are handled by talking
+  {
+    map: "OAKS_LAB", at: 0, step: (f, y) => !f.EVENT_OAK_APPEARED_IN_PALLET ? 0
+      : f.EVENT_BATTLED_RIVAL_IN_OAKS_LAB ? (y ? 22 : 18)
+      : f.EVENT_GOT_STARTER ? (y ? 12 : 10)
+      : f.EVENT_OAK_ASKED_TO_CHOOSE_MON ? 6 : 0,
+  },
+  // the first town: once the player has followed the professor in, the
+  // town sits on its last step (the neighbour's walk); step 0 would do
+  // nothing, but that step never runs again
+  { map: "PALLET_TOWN", at: 1, step: (f, y) => (f.EVENT_FOLLOWED_OAK_INTO_LAB ? (y ? 8 : 5) : 0) },
+  // the second town: Red's step 0 checks the dex itself (0 always); Yellow's
+  // blocks the north road on its step 0 whatever the flags say, then checks
+  // for the catching lesson (1), then idles (2)
+  { map: "VIRIDIAN_CITY", at: 4, step: (f, y) => (!y || !f.EVENT_GOT_POKEDEX ? 0 : f.EVENT_COMPLETED_CATCH_TRAINING ? 2 : 1) },
+  // the ship's second deck: step 0 brings the rival out whenever the player
+  // walks past, with no flag to say he was beaten -- the step (4, the deck's
+  // idle step after the battle) is the only record, read back as this
+  // game's EVENT_BEAT_SS_ANNE_RIVAL (SHIP_RIVAL_BEATEN)
+  { map: "SS_ANNE_2F", at: 117, step: (f) => (f.EVENT_BEAT_SS_ANNE_RIVAL ? SHIP_RIVAL_BEATEN : 0) },
+];
+/** The ship deck's step once its rival battle is over (SCENE_STEPS). */
+const SHIP_RIVAL_BEATEN = 4;
+
 const FLAG_ALIAS: Record<string, string> = {
   EVENT_RECEIVED_BIKE_VOUCHER: "EVENT_GOT_BIKE_VOUCHER",
   EVENT_BEAT_GIOVANNI: "EVENT_BEAT_VIRIDIAN_GYM_GIOVANNI",
@@ -186,8 +232,9 @@ const FLAG_ALIAS: Record<string, string> = {
 };
 /** This game's flags for what the cartridge records only by hiding the
  * object: the flag is set exactly when the object is hidden. */
+// (Not the ship's rival: his object is hidden before his battle as well as
+// after it, so the deck's step is his record instead -- SCENE_STEPS.)
 const TOGGLE_FLAGS: Record<string, [string, string]> = {
-  EVENT_BEAT_SS_ANNE_RIVAL: ["SS_ANNE_2F", "SSANNE2F_RIVAL"],
   EVENT_BEAT_GAME_CORNER_ROCKET: ["GAME_CORNER", "GAMECORNER_ROCKET"],
   EVENT_GOT_EEVEE: ["CELADON_MANSION_ROOF_HOUSE", "CELADONMANSION_ROOF_HOUSE_EEVEE_POKEBALL"],
   EVENT_GOT_TM28: ["CERULEAN_CITY", "CERULEANCITY_ROCKET"],
@@ -218,7 +265,7 @@ const TRAINER_FLAGS: Record<string, string> = {
   ROUTE24_COOLTRAINER_M1: "EVENT_BEAT_ROUTE24_ROCKET",
   SAFFRONGYM_SABRINA: "EVENT_BEAT_SABRINA",
   SILPHCO11F_GIOVANNI: "EVENT_BEAT_SILPH_CO_GIOVANNI",
-  SSANNE2F_RIVAL: "EVENT_BEAT_SS_ANNE_RIVAL", // (a TOGGLE_FLAGS flag)
+  SSANNE2F_RIVAL: "EVENT_BEAT_SS_ANNE_RIVAL", // (read from the deck's step: SCENE_STEPS)
   VERMILIONGYM_LT_SURGE: "EVENT_BEAT_LT_SURGE",
   VIRIDIANGYM_GIOVANNI: "EVENT_BEAT_VIRIDIAN_GYM_GIOVANNI",
 };
@@ -245,6 +292,10 @@ interface Tables {
   mapId: Map<string, number>;
   events: Map<number, string>;
   eventBit: Map<string, number>;
+  /** Key items: never more than one (the cartridge draws no count for them,
+   *  so a doubled one would never show; the safari balls excepted, which
+   *  the data marks key but are counted). */
+  single: Set<string>;
 }
 
 const cache = new WeakMap<object, Tables>();
@@ -256,6 +307,7 @@ function tables(data: CartData): Tables {
     species: new Map(), speciesId: new Map(), dex: new Map(),
     moves: new Map(), moveId: new Map(), items: new Map(), itemId: new Map(),
     maps: new Map(), mapId: new Map(), events: new Map(), eventBit: new Map(),
+    single: new Set(),
   };
   for (const [id, d] of Object.entries(data.pokemon ?? {})) {
     if (typeof d.index === "number") { t.species.set(d.index, id); t.speciesId.set(id, d.index); }
@@ -269,6 +321,7 @@ function tables(data: CartData): Tables {
     // The machines are items too: HM01 is $C4 and TM01 is $C9, counting up.
     if (typeof n !== "number" && d.machine) n = (d.machine.kind === "HM" ? 0xc3 : 0xc8) + d.machine.number;
     if (typeof n === "number") { t.items.set(n, id); t.itemId.set(id, n); }
+    if (d.keyItem && id !== "SAFARI_BALL" && !BADGES.includes(id)) t.single.add(id);
   }
   for (const [id, d] of Object.entries(data.maps ?? {})) {
     if (typeof d.index === "number") { t.maps.set(d.index, id); t.mapId.set(id, d.index); }
@@ -420,7 +473,7 @@ function readItems(b: Uint8Array, o: number, cap: number, t: Tables, notes: stri
     if (id === 0xff) break;
     const item = t.items.get(id);
     if (!item) { notes.push(`${where}: unknown item $${id.toString(16)} left out`); continue; }
-    inv[item] = (inv[item] ?? 0) + u8(b, o + i * 2 + 1);
+    inv[item] = t.single.has(item) ? 1 : (inv[item] ?? 0) + u8(b, o + i * 2 + 1);
     if (!order.includes(item)) order.push(item);
   }
   return { inv, order };
@@ -438,7 +491,7 @@ function writeItems(b: Uint8Array, o: number, cap: number, inv: Record<string, n
     if (code === undefined) { notes.push(`${where}: ${id} has no cartridge item; left out`); return; }
     if (n >= cap) { notes.push(`${where}: no room for ${id}`); return; }
     set8(b, o + n * 2, code);
-    set8(b, o + n * 2 + 1, Math.min(99, count));
+    set8(b, o + n * 2 + 1, t.single.has(id) ? 1 : Math.min(99, count));
     n++;
   };
   for (const id of order ?? []) if (inv[id] !== undefined) put(id);
@@ -599,6 +652,8 @@ export function cartToSave(sram: Uint8Array, data: CartData): CartLoad {
     for (const [name, [byte, k]] of Object.entries(EXTRA_FLAGS)) if (u8(b, m(byte)) & (1 << k)) save.flags[name] = true;
     for (const [name, k] of Object.entries(TRADE_FLAGS)) if (bit(b, m(M.tradeFlags), k)) save.flags[name] = true;
     for (const [ours, theirs] of Object.entries(FLAG_ALIAS)) if (save.flags[theirs]) save.flags[ours] = true;
+    // the one scene the cartridge records by its step alone (SCENE_STEPS)
+    if (u8(b, m(M.progress) + 117) === SHIP_RIVAL_BEATEN) save.flags.EVENT_BEAT_SS_ANNE_RIVAL = true;
   });
 
   part("shown objects and trainers", () => {
@@ -836,6 +891,8 @@ export function saveToCart(save: Record<string, any>, data: CartData, template?:
   for (const [n, name] of t.events) setBit(b, m(M.events), n, !!flags[name]);
   for (const [name, [byte, k]] of Object.entries(EXTRA_FLAGS)) setBit(b, m(byte), k, !!flags[name]);
   for (const [name, k] of Object.entries(TRADE_FLAGS)) setBit(b, m(M.tradeFlags), k, !!flags[name]);
+  // the scenes whose position the cartridge does not re-derive (SCENE_STEPS)
+  for (const sc of SCENE_STEPS) set8(b, m(M.progress) + sc.at, sc.step(flags, t.yellow));
 
   // shown/hidden objects, folding in item balls taken and static mons beaten
   const vc = data.vcsave;

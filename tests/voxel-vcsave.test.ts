@@ -659,3 +659,163 @@ describe("NEW GAME's choice of where it saves", () => {
     expect((game as any).title().phase).toBe("menu");
   });
 });
+
+/** A save partway through the opening, as this game holds it. */
+function openingSave(data: VoxelmonData, v: V, stage: "start" | "choosing" | "starter" | "battled" | "parcel" | "delivered" | "lesson"): any {
+  const s = earlySave(data, v, stage !== "start" && stage !== "choosing");
+  s.flags = {};
+  const f = s.flags;
+  const at = (k: string[]): void => { for (const n of k) f[n] = true; };
+  if (stage !== "start") at(["EVENT_OAK_APPEARED_IN_PALLET", "EVENT_FOLLOWED_OAK_INTO_LAB", "EVENT_FOLLOWED_OAK_INTO_LAB_2", "EVENT_OAK_ASKED_TO_CHOOSE_MON"]);
+  if (["starter", "battled", "parcel", "delivered", "lesson"].includes(stage)) at(["EVENT_GOT_STARTER"]);
+  if (["battled", "parcel", "delivered", "lesson"].includes(stage)) at(["EVENT_BATTLED_RIVAL_IN_OAKS_LAB"]);
+  if (["parcel", "delivered", "lesson"].includes(stage)) at(["EVENT_GOT_OAKS_PARCEL"]);
+  if (["delivered", "lesson"].includes(stage)) at(["EVENT_OAK_GOT_PARCEL", "EVENT_GOT_POKEDEX"]);
+  if (stage === "lesson") at(["EVENT_COMPLETED_CATCH_TRAINING"]);
+  s.inventory = stage === "parcel" ? { OAKS_PARCEL: 1 } : {};
+  s.bagOrder = Object.keys(s.inventory);
+  return s;
+}
+
+const progress = (b: Uint8Array, at: number): number => b[L.MAIN + M.progress + at]!;
+
+for (const v of Object.keys(dirs) as V[]) {
+  describe(`${v}: scene steps the cartridge keeps per map`, () => {
+    const y = v === "yellow";
+    // [stage, the lab, the first town, the shop, the second town]
+    const expected: [Parameters<typeof openingSave>[2], number, number, number, number][] = [
+      ["start", 0, 0, 0, 0],
+      ["choosing", 6, y ? 8 : 5, 0, 0],
+      ["starter", y ? 12 : 10, y ? 8 : 5, 0, 0],
+      ["battled", y ? 22 : 18, y ? 8 : 5, 0, 0],
+      ["parcel", y ? 22 : 18, y ? 8 : 5, 2, 0],
+      ["delivered", y ? 22 : 18, y ? 8 : 5, 2, y ? 1 : 0],
+      ["lesson", y ? 22 : 18, y ? 8 : 5, 2, y ? 2 : 0],
+    ];
+    for (const [stage, lab, town, shop, city] of expected) {
+      test.skipIf(!has(v))(`${stage}: written from the flags, over any step the replaced save had`, () => {
+        const data = sets[v]!;
+        const s = openingSave(data, v, stage);
+        // over a save whose steps are all wrong, and over none at all
+        const junk = saveToCart(richSave(data, v), data as never, null).bytes;
+        for (const at of [0, 1, 4, 29]) junk[L.MAIN + M.progress + at] = 0x0b;
+        for (const tmpl of [junk, null]) {
+          const b = saveToCart(s, data as never, tmpl).bytes;
+          expect([progress(b, 0), progress(b, 1), progress(b, 29), progress(b, 4)]).toEqual([lab, town, shop, city]);
+          expect(cartChecksumsOk(b)).toEqual([]);
+        }
+      });
+    }
+
+    test.skipIf(!has(v))("the parcel errand: done in this game, then saved over a VC save from before it", () => {
+      const data = sets[v]!;
+      // the VC save from before: the shop still waiting to call the player over
+      const before = saveToCart(openingSave(data, v, "battled"), data as never, null).bytes;
+      expect(progress(before, 29)).toBe(0);
+      const after = openingSave(data, v, "parcel");
+      after.player.map = "VIRIDIAN_MART"; after.player.x = 3; after.player.y = 6;
+      const b = saveToCart(after, data as never, before).bytes;
+      // the shop's idle step: the clerk does not call the player over again
+      expect(progress(b, 29)).toBe(2);
+      // and one parcel, however many this game had
+      after.inventory.OAKS_PARCEL = 2;
+      const twice = saveToCart(after, data as never, before).bytes;
+      const back = cartToSave(twice, data as never).save;
+      expect(back.inventory.OAKS_PARCEL).toBe(1);
+    });
+  });
+}
+
+describe("key items never stack", () => {
+  test.skipIf(!has("yellow"))("read as one and written as one; counted items keep their counts", () => {
+    const data = sets.yellow!;
+    const s = openingSave(data, "yellow", "parcel");
+    s.inventory = { OAKS_PARCEL: 2, POKE_FLUTE: 3, SILPH_SCOPE: 1, POTION: 7, SAFARI_BALL: 30 };
+    s.bagOrder = Object.keys(s.inventory);
+    const b = saveToCart(s, data as never, null).bytes;
+    const count = (id: string): number => {
+      const code = (data as any).items[id].index;
+      for (let i = 0; i < b[L.MAIN + M.numBagItems]!; i++) {
+        if (b[L.MAIN + M.bagItems + i * 2] === code) return b[L.MAIN + M.bagItems + i * 2 + 1]!;
+      }
+      return 0;
+    };
+    expect([count("OAKS_PARCEL"), count("POKE_FLUTE"), count("SILPH_SCOPE"), count("POTION"), count("SAFARI_BALL")]).toEqual([1, 1, 1, 7, 30]);
+    // a VC save the bug already doubled: the parcel twice, comes back once
+    const doubled = new Uint8Array(b);
+    doubled[L.MAIN + M.bagItems + 1] = 2; // the first slot is the parcel
+    doubled[L.MAIN_CHECKSUM] = checksum(doubled, L.PLAYER_NAME, L.MAIN_CHECKSUM);
+    const back = cartToSave(doubled, data as never).save;
+    expect(back.inventory).toMatchObject({ OAKS_PARCEL: 1, POKE_FLUTE: 1, SILPH_SCOPE: 1, POTION: 7, SAFARI_BALL: 30 });
+  });
+});
+
+describe("the parcel errand, VC save into this game", () => {
+  /** Hold a direction until the player has moved (or the map changed). */
+  function walk(game: VoxelmonGame, btn: number): void {
+    const ow: any = game.overworld;
+    const where = (): string => `${mapOf(game)},${ow.player?.cellX},${ow.player?.cellY}`;
+    const from = where();
+    for (let i = 0; i < 240; i++) {
+      game.tick(btn);
+      if (where() !== from && game.stackKinds().at(-1) === "overworld") break;
+    }
+    for (let i = 0; i < 90; i++) game.tick(0);
+  }
+
+  const mapOf = (game: VoxelmonGame): string => {
+    const ow: any = game.overworld;
+    return ow.mapId ?? ow.map?.id;
+  };
+  for (const v of ["red", "yellow"] as V[]) {
+    test.skipIf(!has(v))(`${v}: continued in the shop after the errand, out the door and back in: no second parcel`, () => {
+      const data = sets[v]!;
+      const s = openingSave(data, v, "parcel");
+      s.player.map = "VIRIDIAN_MART"; s.player.x = 3; s.player.y = 6;
+      s.lastOutdoor = { id: "VIRIDIAN_CITY", x: 29, y: 20 };
+      s.inventory = { OAKS_PARCEL: 1 };
+      const cart = saveToCart(s, data as never, null).bytes;
+      const host = new VcConsole(undefined, cart);
+      const game = new VoxelmonGame(data, host, 1);
+      game.newGame();
+      // (Yellow's title drops its logo in before it takes a button)
+      for (let i = 0; i < 400 && (game as any).title()?.phase !== "menu"; i++) game.tick(i % 2 ? VOX_BTN.start : 0);
+      game.tick(0);
+      game.tick(VOX_BTN.a); game.tick(0); // CONTINUE: the choice (VC SAVE alone)
+      game.tick(VOX_BTN.a); game.tick(0);
+      for (let i = 0; i < 6; i++) game.tick(0);
+      expect(game.stackKinds().at(-1)).toBe("overworld");
+      const ow: any = game.overworld;
+      expect(mapOf(game)).toBe("VIRIDIAN_MART");
+      walk(game, VOX_BTN.down); // onto the mat
+      walk(game, VOX_BTN.down); // out of the door
+      expect(mapOf(game)).toBe("VIRIDIAN_CITY");
+      walk(game, VOX_BTN.up); // (turn)
+      walk(game, VOX_BTN.up); // back in
+      expect(mapOf(game)).toBe("VIRIDIAN_MART");
+      for (let i = 0; i < 120; i++) game.tick(0);
+      expect(game.stackKinds().at(-1)).toBe("overworld");
+      expect(game.save.inventory.OAKS_PARCEL).toBe(1);
+      // and saved back to the VC title: the shop at its idle step
+      game.writeSave();
+      expect(progress(host.vcWrites.at(-1)!, 29)).toBe(2);
+    });
+  }
+});
+
+describe("the ship's rival, which the cartridge records by its step alone", () => {
+  for (const v of ["red", "yellow"] as V[]) {
+    test.skipIf(!has(v))(`${v}: beaten here -> the deck's idle step; the idle step read back -> beaten`, () => {
+      const data = sets[v]!;
+      const s = openingSave(data, v, "lesson");
+      s.player.map = "SS_ANNE_2F"; s.player.x = 36; s.player.y = 10;
+      const before = saveToCart(s, data as never, null).bytes;
+      expect(progress(before, 117)).toBe(0);
+      expect(cartToSave(before, data as never).save.flags.EVENT_BEAT_SS_ANNE_RIVAL).toBeUndefined();
+      s.flags.EVENT_BEAT_SS_ANNE_RIVAL = true;
+      const after = saveToCart(s, data as never, before).bytes;
+      expect(progress(after, 117)).toBe(4);
+      expect(cartToSave(after, data as never).save.flags.EVENT_BEAT_SS_ANNE_RIVAL).toBe(true);
+    });
+  }
+});
