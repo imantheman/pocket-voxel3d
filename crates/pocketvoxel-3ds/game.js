@@ -22737,6 +22737,7 @@ class TitleState {
   phase = "press";
   pick = [];
   pickIndex = 0;
+  pickFor = "continue";
   timer = 0;
   index = 0;
   menu;
@@ -22881,6 +22882,22 @@ data?`;
       if (p.a) {
         this.audio()?.playSfx?.("Press_AB");
         const id = this.pick[this.pickIndex].id;
+        if (this.pickFor === "new") {
+          const go = () => {
+            this.game.pop();
+            this.onChoose(id === "vc" ? "new-vc" : "new");
+          };
+          if (id === "vc" && this.game.newGameChoice?.vcHasGame && this.game.showChoice) {
+            this.game.showChoice(`The VC save will be
+replaced. Is that OK?`, (yes) => {
+              if (yes)
+                go();
+            }, { defaultNo: true });
+            return;
+          }
+          go();
+          return;
+        }
         this.game.pop();
         this.onChoose(id === "vc" ? "continue-vc" : "continue");
       }
@@ -22903,6 +22920,14 @@ data?`;
           this.pick.push({ id: "lua", label: "LUA SAVE", summary: ch.lua });
         this.pick.push({ id: "vc", label: "VC SAVE", summary: ch.vc });
         this.pickIndex = 0;
+        this.pickFor = "continue";
+        this.phase = "pick";
+        return;
+      }
+      if (pick === "NEW GAME" && this.game.newGameChoice) {
+        this.pick = [{ id: "lua", label: "LUA SAVE" }, { id: "vc", label: "VC SAVE" }];
+        this.pickIndex = 0;
+        this.pickFor = "new";
         this.phase = "pick";
         return;
       }
@@ -22957,7 +22982,11 @@ data?`;
     if (this.phase !== "pick")
       return { menu: this.menu, index: this.index };
     const cur = this.pick[this.pickIndex];
-    return { menu: this.pick.map((e) => e.label), index: this.pickIndex, panel: summaryLines(cur.summary) };
+    return {
+      menu: this.pick.map((e) => e.label),
+      index: this.pickIndex,
+      panel: cur.summary ? summaryLines(cur.summary) : undefined
+    };
   }
   yellowView() {
     const data = this.game.data;
@@ -30756,7 +30785,9 @@ class VoxelmonGame {
     const vcSum = this.vcBytes ? cartSummary(this.vcBytes) : null;
     this.hasSave = !!luaText || !!vcSum;
     this.saveChoices = vcSum ? { lua: luaText ? this.luaSummary(luaText) : undefined, vc: { ...vcSum } } : undefined;
+    this.newGameChoice = this.vcBytes ? { vcHasGame: !!vcSum } : undefined;
     this.saveTarget = "lua";
+    this.vcFresh = false;
     this.push(new TitleState(this, (choice) => {
       if (choice === "viewer") {
         this.host.viewer?.();
@@ -30764,6 +30795,13 @@ class VoxelmonGame {
       }
       if (choice === "continue-vc" && this.vcBytes) {
         this.continueVc(this.vcBytes);
+        return;
+      }
+      if (choice === "new-vc" && this.vcBytes) {
+        this.saveTarget = "vc";
+        this.vcFresh = true;
+        console.log("[pv] vc: NEW GAME saves to the VC title");
+        this.startIntro();
         return;
       }
       if (choice === "continue") {
@@ -30806,6 +30844,7 @@ class VoxelmonGame {
     return told;
   }
   saveTarget = "lua";
+  vcFresh = false;
   vcBytes = null;
   readVc() {
     const b = this.host.vcData?.();
@@ -32065,13 +32104,14 @@ ${why.slice(0, 24)}` : ""}`);
     let ok = false;
     let why = "";
     try {
-      const w = saveToCart(this.save, this.data, this.vcBytes);
+      const w = saveToCart(this.save, this.data, this.vcFresh ? null : this.vcBytes);
       for (const n of w.notes)
         console.log(`[pv] vc: ${n}`);
       ok = h?.vcWrite?.(w.bytes) === true;
-      if (ok)
+      if (ok) {
         this.vcBytes = w.bytes;
-      else
+        this.vcFresh = false;
+      } else
         why = h?.vcErr?.() ?? "no VC title";
     } catch (e) {
       why = String(e?.message ?? e ?? "");
