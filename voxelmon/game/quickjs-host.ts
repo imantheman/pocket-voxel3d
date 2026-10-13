@@ -37,6 +37,8 @@ export interface VoxelNative {
   saveData(): string | undefined;
   /** Copy the boot-time save to <save>.unreadable; false if it did not take. */
   saveBackup?(): boolean;
+  /** A dated copy of the save as it is on the card now, in save_backup/. */
+  saveKeepCopy?(): boolean;
   writeTest?(): boolean;
   writeErr?(): string | undefined;
   vcData?(): ArrayBuffer | undefined;
@@ -236,6 +238,12 @@ export class QuickJsHost implements VoxelHost {
 
   saveBackup(): boolean {
     return native.saveBackup ? native.saveBackup() === true : false;
+  }
+
+  /** False when the copy is not on the card (why: writeErr), or the host
+   *  has no such native. */
+  saveKeepCopy(): boolean {
+    return native.saveKeepCopy ? native.saveKeepCopy() === true : false;
   }
 
   vcData(): Uint8Array | undefined {

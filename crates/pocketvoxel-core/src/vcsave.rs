@@ -272,12 +272,24 @@ pub fn stamp(unix: u64) -> String {
 /// Copy `raw` to `<dir>/<game>_<stamp>.sav` (`_2`, `_3`... if that name is
 /// taken), read it back, and drop the oldest beyond [`KEEP_BACKUPS`].
 pub fn backup(card: &mut dyn Card, dir: &str, game: Game, when: &str, raw: &[u8]) -> Result<String, String> {
+    keep_copy(card, dir, &format!("{}_", game.name()), ".sav", when, raw, KEEP_BACKUPS)
+}
+
+/// Where a dated copy of the game's own (Lua) save goes before a save is
+/// copied over it from a VC title, and how many are kept per file.
+pub const SAVE_BACKUP_DIR: &str = "sdmc:/3ds/voxelmon/save_backup";
+pub const KEEP_SAVE_BACKUPS: usize = 10;
+
+/// Copy `raw` to `<dir>/<prefix><when><ext>` (`_2`, `_3`... before the
+/// extension if that name is taken), read it back, and drop the oldest of
+/// the `<prefix>*<ext>` files beyond `keep`. Returns the path written.
+pub fn keep_copy(card: &mut dyn Card, dir: &str, prefix: &str, ext: &str, when: &str, raw: &[u8], keep: usize) -> Result<String, String> {
     card.mkdir(dir);
     let existing = card.list(dir);
-    let mut name = format!("{}_{}.sav", game.name(), when);
+    let mut name = format!("{}{}{}", prefix, when, ext);
     let mut n = 2;
     while existing.iter().any(|e| *e == name) {
-        name = format!("{}_{}_{}.sav", game.name(), when, n);
+        name = format!("{}{}_{}{}", prefix, when, n, ext);
         n += 1;
     }
     let path = format!("{}/{}", dir, name);
@@ -287,10 +299,9 @@ pub fn backup(card: &mut dyn Card, dir: &str, game: Game, when: &str, raw: &[u8]
         Ok(back) => return Err(format!("{} read back {} of {} bytes", path, back.len(), raw.len())),
         Err(e) => return Err(format!("{} did not read back: {}", path, e)),
     }
-    let prefix = format!("{}_", game.name());
-    let mut mine: Vec<String> = card.list(dir).into_iter().filter(|f| f.starts_with(&prefix) && f.ends_with(".sav")).collect();
+    let mut mine: Vec<String> = card.list(dir).into_iter().filter(|f| f.starts_with(prefix) && f.ends_with(ext)).collect();
     mine.sort();
-    while mine.len() > KEEP_BACKUPS {
+    while mine.len() > keep {
         let old = mine.remove(0);
         card.remove(&format!("{}/{}", dir, old));
     }
@@ -609,6 +620,24 @@ mod tests {
         assert!(write_save(&mut fs, &mut card, &mut found, Game::Red, &[0u8; 100], "d", "x", &mut |_| {}).is_err());
         assert!(write_save(&mut fs, &mut card, &mut found, Game::Red, &vec![0x12u8; SRAM_SIZE], "d", "x", &mut |_| {}).is_err());
         assert!(card.files.is_empty());
+    }
+
+    #[test]
+    fn keep_copy_keeps_the_last_n_of_its_own_files() {
+        let mut card = FakeCard::default();
+        card.files.insert("d/save_gold.lua.unreadable".into(), vec![1]);
+        card.files.insert("d/save_silver_20200101-000000.lua".into(), vec![2]);
+        for i in 0..12u8 {
+            keep_copy(&mut card, "d", "save_gold_", ".lua", &format!("20261013-1200{:02}", i), &[i], KEEP_SAVE_BACKUPS).unwrap();
+        }
+        let mine: Vec<&String> = card.files.keys().filter(|k| k.starts_with("d/save_gold_")).collect();
+        assert_eq!(mine.len(), KEEP_SAVE_BACKUPS);
+        assert!(!card.files.contains_key("d/save_gold_20261013-120001.lua"), "oldest dropped");
+        assert!(card.files.contains_key("d/save_gold_20261013-120011.lua"));
+        assert!(card.files.contains_key("d/save_silver_20200101-000000.lua"), "other files left alone");
+        assert!(card.files.contains_key("d/save_gold.lua.unreadable"));
+        let p = keep_copy(&mut card, "d", "save_gold_", ".lua", "20261013-120011", &[7], KEEP_SAVE_BACKUPS).unwrap();
+        assert_eq!(p, "d/save_gold_20261013-120011_2.lua", "a taken name gets a number");
     }
 
     #[test]
