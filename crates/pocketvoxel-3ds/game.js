@@ -32739,6 +32739,9 @@ class QuickJsHost {
   saveBackup() {
     return native.saveBackup ? native.saveBackup() === true : false;
   }
+  saveKeepCopy() {
+    return native.saveKeepCopy ? native.saveKeepCopy() === true : false;
+  }
   vcData() {
     const b = native.vcData ? native.vcData() : undefined;
     return b ? new Uint8Array(b) : undefined;
