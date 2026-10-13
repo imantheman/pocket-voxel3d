@@ -206,6 +206,9 @@ pub unsafe extern "C" fn voxel_save_write(s: *const u8, len: i32) -> i32 {
     LAST_WRITE_ERR = String::new();
     if card_write(SAVE_PATH, b) {
         println!("save: wrote {} bytes", b.len());
+        // what voxel.saveData() hands back from now on (a title screen
+        // that re-reads the save after a copy sees the new one)
+        SAVE_BUF = b.to_vec();
         1
     } else {
         0
@@ -247,6 +250,45 @@ pub unsafe extern "C" fn voxel_save_backup() -> i32 {
     }
     LAST_WRITE_ERR = String::from("nine .unreadable copies already");
     0
+}
+
+/// Keep a dated copy of the save file as it is on the card now (not as it
+/// was at boot) in `sdmc:/3ds/voxelmon/save_backup/<stem>_<date>-<time>.lua`,
+/// read back, the last 10 per file: before a save copied from a VC title is
+/// written over it. 1 when the copy is on the card or there is no save to
+/// keep; 0 when it is not (why: `voxel.writeErr()`), and then nothing may be
+/// written.
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub unsafe extern "C" fn voxel_save_keep_copy() -> i32 {
+    use pocketvoxel_core::vcsave;
+    LAST_WRITE_ERR = String::new();
+    let now = match std::fs::read(SAVE_PATH) {
+        Ok(b) => b,
+        Err(_) => {
+            println!("save: no save on the card to keep a copy of");
+            return 1;
+        }
+    };
+    if now.is_empty() {
+        return 1;
+    }
+    let file = SAVE_PATH.rsplit('/').next().unwrap_or("save.lua");
+    let stem = file.strip_suffix(".lua").unwrap_or(file);
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let mut card = vcsave::StdCard;
+    match vcsave::keep_copy(&mut card, vcsave::SAVE_BACKUP_DIR, &format!("{}_", stem), ".lua", &vcsave::stamp(secs), &now, vcsave::KEEP_SAVE_BACKUPS) {
+        Ok(p) => {
+            crate::dlog(&format!("[pv] save: kept a copy of the save as {}", p));
+            println!("save: kept a copy as {}", p);
+            1
+        }
+        Err(e) => {
+            crate::dlog(&format!("[pv] save: could not keep a copy of the save: {}", e));
+            LAST_WRITE_ERR = e;
+            0
+        }
+    }
 }
 
 #[no_mangle]

@@ -8,6 +8,7 @@
 extern void voxel_log(const char *s, int len);
 extern int voxel_save_write(const char *s, int len);
 extern int voxel_save_backup(void);
+extern int voxel_save_keep_copy(void);
 extern int voxel_write_test(void);
 extern const uint8_t *voxel_write_err_ptr(void);
 extern uint32_t voxel_write_err_len(void);
@@ -153,6 +154,14 @@ static JSValue vox_savewrite(JSContext *ctx, JSValueConst t, int c, JSValueConst
 static JSValue vox_savebackup(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)ctx;(void)t;(void)c;(void)v;
     return voxel_save_backup() ? JS_TRUE : JS_FALSE;
+}
+
+/* Keep a dated copy of the save file as it is on the card now, in
+   sdmc:/3ds/voxelmon/save_backup/ (the last 10): before a save is copied
+   over it from a VC title. vc.rs; why it failed in vcErr(). */
+static JSValue vox_savekeepcopy(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)ctx;(void)t;(void)c;(void)v;
+    return voxel_save_keep_copy() ? JS_TRUE : JS_FALSE;
 }
 
 /* Write a file and read it back, so the game can say whether the card is
@@ -344,6 +353,7 @@ int qjs_register_voxel(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "saveWrite", JS_NewCFunction(ctx, vox_savewrite, "saveWrite", 1));
     JS_SetPropertyStr(ctx, o, "saveData",  JS_NewCFunction(ctx, vox_savedata,  "saveData", 0));
     JS_SetPropertyStr(ctx, o, "saveBackup", JS_NewCFunction(ctx, vox_savebackup, "saveBackup", 0));
+    JS_SetPropertyStr(ctx, o, "saveKeepCopy", JS_NewCFunction(ctx, vox_savekeepcopy, "saveKeepCopy", 0));
     JS_SetPropertyStr(ctx, o, "optionsWrite", JS_NewCFunction(ctx, vox_optionswrite, "optionsWrite", 1));
     JS_SetPropertyStr(ctx, o, "optionsData",  JS_NewCFunction(ctx, vox_optionsdata,  "optionsData", 0));
     JS_SetPropertyStr(ctx, o, "writeTest", JS_NewCFunction(ctx, vox_writetest, "writeTest", 0));

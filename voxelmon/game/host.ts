@@ -61,6 +61,13 @@ export interface VoxelHost {
    * the card, and the game must not save. Absent: the host keeps no copy.
    */
   saveBackup?(): boolean;
+  /**
+   * Keep a dated copy of the save as it is on the card now in
+   * sdmc:/3ds/voxelmon/save_backup/ (the last 10), before a save copied
+   * from a VC title replaces it. True when the copy is there, or there is
+   * no save to keep; false: nothing may be written (why: writeErr).
+   */
+  saveKeepCopy?(): boolean;
   /** Write a file and read it back: is this card writable at all? */
   writeTest?(): boolean;
   /** Why the last write failed, from the host. */
@@ -330,6 +337,12 @@ export class RecorderHost implements VoxelHost {
   backedUp: string[] = [];
   saveBackup(): boolean {
     if (this.savedText !== undefined) this.backedUp.push(this.savedText);
+    return true;
+  }
+  /** What `saveKeepCopy` kept. */
+  keptCopies: string[] = [];
+  saveKeepCopy(): boolean {
+    if (this.savedText !== undefined && this.savedText !== "") this.keptCopies.push(this.savedText);
     return true;
   }
 
