@@ -18,6 +18,18 @@ if (typeof VC_FAKE_B64 !== "undefined") {
   }
   v.vcData = (): ArrayBuffer => bytes.slice().buffer;
   v.vcWrite = (b: Uint8Array): boolean => {
+    // a Gen 2 save: its check bytes and 16-bit sums (main and backup)
+    if (b[0x2008] === 0x63) {
+      const sum = (pieces: [number, number][]): number => pieces.reduce((s, [o, n]) => { for (let i = o; i < o + n; i++) s += b[i]!; return s; }, 0) & 0xffff;
+      const le = (o: number): number => b[o]! | (b[o + 1]! << 8);
+      const crystal = b[0x2d0f] === 0x7f && sum([[0x2009, 0xb7a]]) === le(0x2d0d);
+      const main = crystal || (b[0x2d6b] === 0x7f && sum([[0x2009, 0xd60]]) === le(0x2d69));
+      const backup = crystal
+        ? b[0x1208] === 0x63 && sum([[0x1209, 0xb7a]]) === le(0x1f0d)
+        : b[0x7e38] === 0x63 && sum([[0x15c7, 0x226], [0x3d96, 0x1aa], [0x0c6b, 0x47d], [0x7e39, 0x34], [0x10e8, 0x4df]]) === le(0x7e6d);
+      console.log(`[pv] vcbench: fake vcWrite ${b.length} bytes (${crystal ? "Crystal" : "Gold/Silver"} layout), main ${main ? "ok" : "BAD"}, backup ${backup ? "ok" : "BAD"}`);
+      return true;
+    }
     const ok = (from: number, to: number, at: number): boolean => {
       let sum = 0;
       for (let i = from; i < to; i++) sum = (sum + b[i]!) & 0xff;
