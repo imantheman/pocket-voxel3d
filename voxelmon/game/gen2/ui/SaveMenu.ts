@@ -20,6 +20,7 @@ import { Sound } from "../shared/core/Sound.ts";
 import { Strings } from "../shared/core/Strings.ts";
 import { Typer } from "./Typer.ts";
 import G from "../platform/screen.ts";
+import { Vc } from "../vc/session.ts";
 
 type Page = string[] & { scrolled?: boolean };
 type Phase = "confirm" | "overwrite" | "saving" | "done";
@@ -315,9 +316,12 @@ export class SaveMenu {
       return Strings.get(SAVING_PROMPT_SOURCE);
     }
     if (this.phase === "done") {
+      // With a VC title on the console, which save this was, quietly
+      const tag = Vc.present() ? (Vc.target() === "vc" ? " (VC)" : " (Lua)") : "";
       if (this.saved) {
-        return Strings.get("%s saved\nthe game.", this.playerName());
+        return Strings.get("%s saved\nthe game.", this.playerName()) + tag;
       }
+      if (Vc.target() === "vc") return Strings.get("SAVE FAILED!\nThe VC save did\fnot take it.");
       return Strings.get("Could not save.");
     }
     return Strings.get("Would you like to\nsave the game?");

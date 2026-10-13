@@ -54,6 +54,8 @@ import { Apricorns } from "./Apricorns.ts";
 import { PokedexText } from "./PokedexText.ts";
 import { Palettes } from "../world/Palettes.ts";
 import { MenuFade } from "../ui/MenuFade.ts";
+import { Vc } from "../vc/session.ts";
+import { tonumber } from "../platform/lua.ts";
 
 function noop(): void {}
 
@@ -187,6 +189,12 @@ export class Game2 {
     // being waited on. (It stays resident either way once a battle is had.)
     void this.data?.gen2BattleAnims;
     this.phase = "play";
+    // a VC write restores the screen from the map's blocks as they stand
+    // (its TILES callbacks applied), as the cartridge's own save does
+    Vc.setBlocksSource(() => {
+      const map = this.world?.map;
+      return map && Array.isArray(map.blocks) ? { map: map.id, blocks: map.blocks } : undefined;
+    });
     return true;
   }
 
@@ -203,8 +211,64 @@ export class Game2 {
     });
   }
 
+  /** NEW GAME saved to the VC title (vc/session.ts): its first SAVE builds a
+   *  whole new cartridge save there, nothing kept from the game it replaces. */
+  newGameVc(): void {
+    this.newGame();
+    Vc.useVc(true);
+  }
+
+  /**
+   * CONTINUE on the VC title's save: converted on the next frame (so the
+   * choice is off the screen first), logged, then walked into like a Lua
+   * save; SAVE now writes the VC title. A save that cannot be used says so
+   * and the main menu comes back; nothing is written anywhere.
+   */
+  continueVc(luaSave: any): void {
+    this.stack.clear();
+    console.log("[pv] vc: continue: converting...");
+    let step = 0;
+    this.stack.push({
+      isOpaque: true,
+      update: () => {
+        if (step++ === 0) return;
+        const t0 = Date.now();
+        let save: any;
+        try {
+          save = Vc.load();
+          // this game's own clock base comes from the Lua save when there is
+          // one (the cartridge's clock stays the VC title's own)
+          const r = luaSave?.rtc;
+          save.rtc = { ...(save.rtc ?? {}), startMinute: tonumber(r?.startMinute) ?? 0, startDay: tonumber(r?.startDay) ?? 0 };
+          if (r?.dayOfWeek != null) save.rtc.dayOfWeek = r.dayOfWeek;
+          // the cartridge's own OPTION settings into this session's
+          const o = save.options ?? {};
+          for (const k of ["textSpeed", "battleScene", "battleStyle", "sound", "frame", "print", "menuAccount"]) {
+            if (o[k] !== undefined) this.options[k] = o[k];
+          }
+          Save.normalize(save);
+          const p = save.player ?? {};
+          console.log(`[pv] vc: continue: converted in ${Date.now() - t0} ms: ${p.name} at ${save.position?.map} ${save.position?.x},${save.position?.y}; party ${(save.party ?? []).map((m: any) => `${m.species}/${m.level}/${m.hp}`).join(" ")}`);
+        } catch (e) {
+          const why = String((e as Error)?.message ?? e).replace(/\s+/g, " ").trim();
+          console.log(`[pv] vc: continue FAILED: ${why}`);
+          Vc.useLua();
+          this.stack.clear();
+          this.showMainMenu();
+          this.stack.push(TextBox.new(this, `The VC save could\nnot be loaded.\f${why.slice(0, 18) || "?"}\fIt is left as it is.`));
+          return;
+        }
+        this.continueGame(save);
+        Vc.useVc(false);
+        console.log("[pv] vc: continued from the VC save; SAVE writes the VC title");
+      },
+      draw: () => {},
+    });
+  }
+
   /** Game2.lua:262 */
   newGame(): void {
+    Vc.useLua();
     this.save = Save.newGame({ playerName: this.save.player.name });
     this.save.options = this.options;
     this.sessionStartedAt = clockNow();
@@ -220,6 +284,7 @@ export class Game2 {
       this.newGame();
       return;
     }
+    Vc.useLua();
     // Continue_CheckRTC_RestartClock: a password-reset clock is set before
     // the game goes on; B there cancels the CONTINUE
     if (clockResetPending(save)) {
@@ -255,9 +320,13 @@ export class Game2 {
   showMainMenu(): void {
     this.stack.clear();
     this.phase = "boot";
+    // back at the title, the session is nobody's until a save is picked
+    Vc.useLua();
     Screens.push(this, "Gen2MainMenu", {
       onNewGame: () => this.newGame(),
       onContinue: (save: any) => this.continueGame(save),
+      onContinueVc: (luaSave: any) => this.continueVc(luaSave),
+      onNewGameVc: () => this.newGameVc(),
       onOption: () => this.showOptions(() => this.showMainMenu()),
       onMysteryGift: (save: any) => {
         this.stack.clear();

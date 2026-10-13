@@ -26,6 +26,7 @@ import { InitClock } from "./InitClock.ts";
 import { MysteryGift } from "../core/MysteryGift.ts";
 import { SaveMenu } from "./SaveMenu.ts";
 import { TextBox } from "../shared/render/TextBox.ts";
+import { Vc } from "../vc/session.ts";
 
 // Lua: MainMenu.lua:31 -- ../pokecrystal/engine/menus/intro_menu.asm:487
 // (SaveMenu.PANEL is read lazily: the two modules import each other's graph)
@@ -42,6 +43,10 @@ const MENU_MUSIC = "Music_MainMenu";
 export interface MainMenuOpts {
   onNewGame?: () => void;
   onContinue?: (save: any) => void;
+  /** VC saves (vc/session.ts): CONTINUE on the VC title's save, and a new
+   *  game that saves there. Absent: no VC choice is offered. */
+  onContinueVc?: (luaSave: any) => void;
+  onNewGameVc?: () => void;
   onOption?: () => void;
   onMysteryGift?: (save: any) => void;
   /** Not the cart's: set the game clock straight from here. */
@@ -67,6 +72,14 @@ export class MainMenu {
   game: any;
   onNewGame: (() => void) | undefined;
   onContinue: ((save: any) => void) | undefined;
+  onContinueVc: ((luaSave: any) => void) | undefined;
+  onNewGameVc: (() => void) | undefined;
+  /** The save choice (LUA SAVE / VC SAVE), for CONTINUE or NEW GAME. */
+  pick: { id: "lua" | "vc"; label: string }[] = [];
+  pickIndex = 0;
+  pickFor: "continue" | "new" = "continue";
+  /** NEW GAME over a VC game: "replaced?", YES 1 / NO 2 (NO first). */
+  replaceChoice = 2;
   onOption: (() => void) | undefined;
   onMysteryGift: ((save: any) => void) | undefined;
   onSetClock: ((save: any) => void) | undefined;
@@ -74,7 +87,7 @@ export class MainMenu {
   clock: MainMenuOpts["clock"];
   save: any;
   hasSave: boolean;
-  phase: "menu" | "confirm" = "menu";
+  phase: "menu" | "confirm" | "pick" | "replace" = "menu";
   confirmDelay = 0;
   list!: List;
 
@@ -82,6 +95,8 @@ export class MainMenu {
     this.game = game;
     this.onNewGame = opts.onNewGame;
     this.onContinue = opts.onContinue;
+    this.onContinueVc = opts.onContinueVc;
+    this.onNewGameVc = opts.onNewGameVc;
     this.onOption = opts.onOption;
     this.onMysteryGift = opts.onMysteryGift;
     this.onSetClock = opts.onSetClock;
@@ -95,8 +110,44 @@ export class MainMenu {
       // why instead of going on; NEW GAME's first save keeps a copy of it
       if (!loaded && err && err !== "missing") this.loadErr = err;
     }
-    this.hasSave = opts.hasSave ?? (this.save != null || this.loadErr !== undefined);
+    this.hasSave = opts.hasSave ?? (this.save != null || this.loadErr !== undefined || this.vcContinues());
     this.buildList();
+  }
+
+  /** The VC title's save can be continued (it holds a game). */
+  vcContinues(): boolean {
+    return !!this.onContinueVc && Vc.present() && Vc.hasGame();
+  }
+
+  /** The save choice, LUA SAVE first; only the saves there are (CONTINUE). */
+  private openPick(forWhat: "continue" | "new"): void {
+    this.pickFor = forWhat;
+    this.pick = [];
+    if (forWhat === "new" || this.save != null || this.loadErr !== undefined) this.pick.push({ id: "lua", label: Strings.get("LUA SAVE") });
+    this.pick.push({ id: "vc", label: Strings.get("VC SAVE") });
+    this.pickIndex = 0;
+    this.phase = "pick";
+  }
+
+  private pickChosen(id: "lua" | "vc"): void {
+    if (this.pickFor === "new") {
+      if (id === "lua") { this.onNewGame?.(); return; }
+      // a new game saved to the VC title writes over the game in it: asked
+      // first, as the cartridge asks before a save replaces an older file
+      if (Vc.hasGame()) {
+        this.replaceChoice = 2;
+        this.phase = "replace";
+        return;
+      }
+      this.onNewGameVc?.();
+      return;
+    }
+    if (id === "lua") {
+      if (this.save == null && this.loadErr !== undefined) { this.phase = "menu"; this.sayUnreadable(); return; }
+      this.onContinue?.(this.save);
+      return;
+    }
+    this.onContinueVc?.(this.save);
   }
 
   /** Lua: MainMenu.lua:54 -- opts: onNewGame, onContinue(save), onOption, onExit, hasSave, save, clock */
@@ -161,7 +212,13 @@ export class MainMenu {
 
   /** Lua: MainMenu.lua:115 */
   choose(value: unknown): void {
-    if (value === "continue" && this.save == null && this.loadErr !== undefined) {
+    // With a VC title holding a game, CONTINUE asks which save; with the
+    // VC title there at all, NEW GAME asks where it saves (Lua first).
+    if (value === "continue" && this.vcContinues()) {
+      this.openPick("continue");
+    } else if (value === "new" && this.onNewGameVc && Vc.present()) {
+      this.openPick("new");
+    } else if (value === "continue" && this.save == null && this.loadErr !== undefined) {
       this.sayUnreadable();
     } else if (value === "continue") {
       this.phase = "confirm";
@@ -191,6 +248,28 @@ export class MainMenu {
   update(_dt?: number): void {
     const input = this.game?.input;
     if (!input) return;
+    if (this.phase === "pick") {
+      if (input.wasPressed("up") || input.wasPressed("down")) {
+        const n = this.pick.length;
+        this.pickIndex = (this.pickIndex + (input.wasPressed("up") ? n - 1 : 1)) % n;
+      } else if (input.wasPressed("a")) {
+        this.pickChosen(this.pick[this.pickIndex]!.id);
+      } else if (input.wasPressed("b")) {
+        this.phase = "menu";
+      }
+      return;
+    }
+    if (this.phase === "replace") {
+      if (input.wasPressed("up") || input.wasPressed("down")) {
+        this.replaceChoice = this.replaceChoice === 1 ? 2 : 1;
+      } else if (input.wasPressed("a")) {
+        if (this.replaceChoice === 1) this.onNewGameVc?.();
+        else this.phase = "pick";
+      } else if (input.wasPressed("b")) {
+        this.phase = "pick";
+      }
+      return;
+    }
     if (this.phase === "confirm") {
       if (this.confirmDelay && this.confirmDelay > 0) {
         this.confirmDelay -= 1;
@@ -234,10 +313,40 @@ export class MainMenu {
     Chrome.print(MainMenu.timeString(hour, minute), 4, 16);
   }
 
-  /** Lua: MainMenu.lua:184 */
-  drawSavePanel(): void {
+  /** The save choice: the two saves in the menu's box, and the info box of
+   *  the one under the cursor (CONTINUE only). */
+  drawPick(): void {
+    Chrome.box(0, 0, 17, this.pick.length * 2 + 2);
+    this.pick.forEach((e, i) => {
+      Chrome.print(e.label, 2, 2 + i * 2);
+      if (i === this.pickIndex) Chrome.cursor(1, 2 + i * 2);
+    });
+    if (this.pickFor !== "continue") return;
+    const cur = this.pick[this.pickIndex];
+    if (cur?.id === "vc") {
+      const s = Vc.summary();
+      this.drawSavePanel(s ? { name: s.name, badges: s.badges, caught: s.caught, hours: s.hours, minutes: s.minutes } : undefined);
+    } else {
+      this.drawSavePanel();
+    }
+  }
+
+  /** "The VC save will be replaced. Is that OK?" -- the YES/NO SaveMenu uses. */
+  drawReplace(): void {
+    Chrome.textbox(0, 10, 18, 6);
+    Chrome.print(Strings.get("The VC save will"), 1, 12);
+    Chrome.print(Strings.get("be replaced."), 1, 14);
+    Chrome.print(Strings.get("Is that OK?"), 1, 16);
+    Chrome.box(0, 4, 6, 5);
+    Chrome.print(Strings.get("YES"), 2, 5);
+    Chrome.print(Strings.get("NO"), 2, 7);
+    Chrome.cursor(1, this.replaceChoice === 1 ? 5 : 7);
+  }
+
+  /** Lua: MainMenu.lua:184 (a summary handed in: the VC save's) */
+  drawSavePanel(given?: { name: string; badges: number; caught: number; hours: number; minutes: number }): void {
     const PANEL = panel();
-    const summary = Save.summary(this.save);
+    const summary = given ?? Save.summary(this.save);
     Chrome.box(PANEL.x, PANEL_Y, PANEL.w, PANEL.h);
     if (!summary) {
       Chrome.print(Strings.get("NO SAVE FILE"), PANEL.labelX, PANEL_Y + PANEL.labelDy);
@@ -260,6 +369,14 @@ export class MainMenu {
   /** Lua: MainMenu.lua:207 */
   drawPanel(): void {
     Chrome.clear();
+    if (this.phase === "pick") {
+      this.drawPick();
+      return;
+    }
+    if (this.phase === "replace") {
+      this.drawReplace();
+      return;
+    }
     if (this.phase === "confirm") {
       this.drawSavePanel();
       return;

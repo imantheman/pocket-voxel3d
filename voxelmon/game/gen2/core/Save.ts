@@ -27,6 +27,7 @@ import { random } from "../platform/rng.ts";
 import { osDate, osTime } from "../platform/clock.ts";
 import { tonumber, tostring, removeAt } from "../platform/lua.ts";
 import * as saveio from "../platform/saveio.ts";
+import { Vc } from "../vc/session.ts";
 
 export type SaveTable = Record<string, any>;
 
@@ -615,7 +616,9 @@ export const Save = {
   },
 
   // Lua: Save.lua:876-881 -- MainMenu_GetWhichMenu's wSaveFileExists.
+  // (A VC session's save file is the VC title's: vc/session.ts.)
   exists(_version?: string): boolean {
+    if (Vc.target() === "vc") return Vc.hasGame();
     const text = saveio.read();
     return text !== undefined && text !== "";
   },
@@ -636,6 +639,16 @@ export const Save = {
    * no staged or backup copy, so `recovered` is always undefined.
    */
   load(_version?: string): [SaveTable | undefined, string | undefined, string | undefined, SaveReport | undefined] {
+    // a VC session's stored game is the VC title's (converted afresh)
+    if (Vc.target() === "vc") {
+      try {
+        const stored = Vc.load();
+        Save.normalize(stored);
+        return [stored, undefined, undefined, undefined];
+      } catch (e) {
+        return [undefined, undefined, `VC: ${tostring((e as Error)?.message ?? e)}`, undefined];
+      }
+    }
     const [data, err] = readTable();
     const recovered: string | undefined = undefined;
     if (!data) {
@@ -674,6 +687,13 @@ export const Save = {
   /** Lua: Save.lua:930-984 -- [ok, err]; the seam's write is atomic. */
   save(save: unknown): [boolean, string?] {
     if (!isTable(save)) return [false, "no save"];
+    // A session continued from the VC save (or a new game started there)
+    // saves to the VC title, and only there; the Lua file is not touched.
+    if (Vc.target() === "vc") {
+      Save.normalize(save);
+      save.savedAt = osTime();
+      return Vc.write(save);
+    }
     const kept = keepUnreadable();
     if (kept) {
       Logger.error("gold save refused: %s", kept);

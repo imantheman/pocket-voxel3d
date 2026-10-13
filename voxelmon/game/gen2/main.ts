@@ -25,6 +25,7 @@ import { Companion } from "./ui/Companion.ts";
 import { Logger } from "./shared/core/Logger.ts";
 import { Sound } from "./shared/core/Sound.ts";
 import { GameVersion } from "./shared/core/GameVersion.ts";
+import { Vc } from "./vc/session.ts";
 
 /** Same seed as the Gen 1 story tapes; the save carries nothing of it. */
 const SEED = 17;
@@ -54,6 +55,15 @@ setSaveIo({
   // without the file keeps them for the session only
   readOptions: () => native.optionsData?.() ?? undefined,
   writeOptions: (text) => (native.optionsWrite ? native.optionsWrite(text) !== false : false),
+});
+
+// VC saves (src/vc.rs): the matching VC title's save as read at boot, and
+// the write that backs it up and commits a new one; nothing without a title
+Vc.setHost({
+  data: () => host.vcData?.(),
+  write: (bytes) => host.vcWrite?.(bytes) === true,
+  err: () => host.vcErr?.(),
+  info: () => host.vcInfo?.(),
 });
 
 // the sound seam, when its port provides one
