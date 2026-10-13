@@ -112,7 +112,8 @@ import { PokedexState } from "./ui/pokedexscreen.ts";
 import { encodeSave } from "./save-lua.ts";
 import { decodeSave } from "./save-read.ts";
 import { fromDisk, reportLines, syncItemBalls, toDisk } from "./savecompat.ts";
-import { cartSummary, cartToSave, saveToCart } from "./vc/cartsave.ts";
+import { cartSummary, cartToSave, isCartSave, saveToCart } from "./vc/cartsave.ts";
+import { COPY_SAVE_TEXT, copyMessage, copyPanel, runCopy, type CopyDir, type CopyIo, type CopyResult } from "./vc/copysave.ts";
 import type { SaveSummary } from "./ui/title.ts";
 import * as Bag from "./rules/bag.ts";
 import { tiltShiftLevel } from "./tiltshift.ts";
@@ -693,17 +694,7 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     // Red, Blue or Yellow on a console with that game's VC title -- the VC
     // title's own save beside it (vc/cartsave.ts). The session then saves
     // back to whichever was picked; a new game saves to the Lua file.
-    const luaText = this.host.saveData?.();
-    this.luaOptions = null;
-    this.vcBytes = this.readVc();
-    const vcSum = this.vcBytes ? cartSummary(this.vcBytes) : null;
-    (this as any).hasSave = !!luaText || !!vcSum;
-    (this as any).saveChoices = vcSum
-      ? { lua: luaText ? this.luaSummary(luaText) : undefined, vc: { ...vcSum } }
-      : undefined;
-    // NEW GAME asks where it saves whenever the VC title is there to save
-    // to (its save may be empty); replacing a game in it is asked first.
-    (this as any).newGameChoice = this.vcBytes ? { vcHasGame: !!vcSum } : undefined;
+    this.readSaves();
     this.saveTarget = "lua";
     this.vcFresh = false;
     // The title is a pushed state, so nothing calls startMap for it; the
@@ -762,30 +753,172 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   }
 
   /**
-   * A save table just read (from the Lua file or converted from the VC
-   * save) made this game's and walked into: gen1recomp's fields read as
-   * ours and anything this game does not have set aside (savecompat.ts),
-   * the old-save repairs, and the overworld entered at the saved spot.
-   * Returns what to tell the player. Throws on a save it cannot use.
+   * What the title knows of the two saves, read afresh from the host: at
+   * boot (newGame) and after COPY SAVE. CONTINUE offers the Lua save as it
+   * always has and, with a VC title holding a game, that save beside it;
+   * NEW GAME asks where it saves whenever the VC title is there to save to
+   * (its save may be empty; replacing a game in it is asked first); COPY
+   * SAVE is offered whenever the VC title is there and either save holds
+   * a game.
    */
-  private enterLoadedSave(loaded: any): string[] {
+  private readSaves(): void {
+    const luaText = this.host.saveData?.();
+    this.luaOptions = null;
+    this.vcBytes = this.readVc();
+    const vcSum = this.vcBytes ? cartSummary(this.vcBytes) : null;
+    // (the Lua save is only parsed for its box when there is a VC title:
+    // without one nothing shows it, and the boot does not pay for it)
+    const luaSum = luaText && this.vcBytes ? this.luaSummary(luaText) : undefined;
+    (this as any).hasSave = !!luaText || !!vcSum;
+    (this as any).saveChoices = vcSum ? { lua: luaSum, vc: { ...vcSum } } : undefined;
+    (this as any).newGameChoice = this.vcBytes ? { vcHasGame: !!vcSum } : undefined;
+    (this as any).copyChoice = this.vcBytes ? { lua: !!luaText, vc: !!vcSum } : undefined;
+  }
+
+  /**
+   * COPY SAVE (vc/copysave.ts), a direction picked: the confirm screen --
+   * both info boxes, the question, NO first -- then the copy, its message,
+   * and `done` (the title's menu, the saves read afresh). The title stays
+   * on the stack under all of it.
+   */
+  copySave(dir: CopyDir, done: () => void): void {
+    const T = COPY_SAVE_TEXT;
+    const log = (s: string): void => console.log(`[pv] vc: copy: ${s}`);
+    const luaText = this.host.saveData?.();
+    const luaSum = luaText ? this.luaSummary(luaText) : null;
+    const vcSum = this.vcBytes ? cartSummary(this.vcBytes) : null;
+    const src = dir === "lua-vc" ? luaSum : vcSum;
+    const dst = dir === "lua-vc" ? vcSum : luaSum;
+    log(`${T.choices[dir]}: from ${src ? src.name ?? "?" : "nothing"} over ${dst ? dst.name ?? "?" : "an empty save"}; asking`);
+    if (!src) {
+      const r = runCopy(dir, this.copyIo()); // says what is missing, writes nothing
+      this.showText(copyMessage(dir, r), done);
+      return;
+    }
+    this.savePanelLines = copyPanel(dir, src, dst);
+    this.showChoice(T.ask[dir], (yes) => {
+      if (!yes) {
+        this.savePanelLines = null;
+        log("NO: nothing copied");
+        done();
+        return;
+      }
+      log("YES");
+      this.showAuto(T.working, SAVE_HOLD / 2, {
+        onDone: () => {
+          let r: CopyResult;
+          try {
+            r = runCopy(dir, this.copyIo());
+          } catch (e) {
+            // runCopy catches each step's throw; this is the one it cannot
+            const why = String((e as Error)?.message ?? e ?? "?");
+            log(`FAILED: ${why}`);
+            r = { ok: false, stage: "convert", why };
+          }
+          this.savePanelLines = null;
+          this.readSaves();
+          const c = (this as any).copyChoice;
+          log(`the title's saves read again: Lua ${c?.lua ? "yes" : "none"}, VC ${c?.vc ? "a game" : "none"}`);
+          this.showText(copyMessage(dir, r), done);
+        },
+      });
+    }, { defaultNo: true });
+  }
+
+  /** The game and host behind COPY SAVE's steps. */
+  private copyIo(): CopyIo {
+    const h: any = this.host;
+    const data = this.data as never;
+    const maps = (this.data as { maps?: never }).maps;
+    return {
+      log: (s) => console.log(s),
+      luaText: () => h.saveData?.() || undefined,
+      vcBytes: () => this.vcBytes,
+      vcHasGame: () => !!cartSummary(this.vcBytes),
+      readLua: (text) => {
+        const s: any = decodeSave(text);
+        if (!s || typeof s !== "object" || !s.player) throw new Error("no player in the save");
+        this.prepareLoadedSave(s);
+        return s;
+      },
+      toCart: (save, template) => {
+        syncItemBalls(save as never, maps);
+        return saveToCart(save, data, template);
+      },
+      isCart: (b) => isCartSave(b),
+      readCart: (bytes) => {
+        const { save, notes } = cartToSave(bytes, data);
+        // this game's own settings come from the Lua save, as vcConvert's do
+        for (const [k, v] of Object.entries(this.luaOptions ?? {})) {
+          if (!(k in save.options)) save.options[k] = v;
+        }
+        this.prepareLoadedSave(save);
+        return { save, notes };
+      },
+      toLua: (save) => {
+        const text = encodeSave(toDisk(save as never));
+        decodeSave(text); // reads back, or the copy stops here
+        return text;
+      },
+      keepLua: () => {
+        // a save CONTINUE could not read gets its .unreadable copy first,
+        // as any write over it would
+        if (this.unreadableSave) {
+          if (h.saveBackup?.() !== true) return { ok: false, why: h.writeErr?.() || "no .unreadable copy" };
+          this.unreadableSave = false;
+        }
+        if (!h.saveKeepCopy) return { ok: false, why: "this build keeps no copies" };
+        if (h.saveKeepCopy() === true) return { ok: true };
+        return { ok: false, why: h.writeErr?.() || "the copy did not take" };
+      },
+      writeLua: (text) => {
+        if (!h.saveWrite) return { ok: false, why: "no save file" };
+        if (h.saveWrite(text) === false) return { ok: false, why: h.writeErr?.() || "the SD card did not take it" };
+        return { ok: true };
+      },
+      writeVc: (bytes) => {
+        const ok = h.vcWrite?.(bytes) === true;
+        if (!ok) return { ok: false, why: h.vcErr?.() || "no VC title" };
+        this.vcBytes = new Uint8Array(bytes);
+        return { ok: true };
+      },
+    };
+  }
+
+  /**
+   * A save table just read (from the Lua file or converted from the VC
+   * save) made this game's: gen1recomp's fields read as ours and anything
+   * this game does not have set aside (savecompat.ts), and the old-save
+   * repairs. Returns what to tell the player.
+   */
+  private prepareLoadedSave(loaded: any): string[] {
     const report = fromDisk(loaded, this.data as never);
     syncItemBalls(loaded, (this.data as { maps?: never }).maps);
-    this.save = loaded;
     const told = reportLines(report);
     // Saves from before the nickname prompt asked first carry
     // "CHARMAN"-style names: the species name cut to seven.
     // Those are no nickname at all.
-    const scrubbed = scrubDefaultNicknames(this.data, this.save);
+    const scrubbed = scrubDefaultNicknames(this.data, loaded);
     if (scrubbed > 0) console.log(`[pv] names: ${scrubbed} cut-short nickname(s) dropped on load`);
     // `visited` postdates the saves that will be loaded here, so a
     // save from before FLY existed gets its record reconstructed
     // from what it already proves -- otherwise a finished game comes
     // back with nowhere to fly to.
-    backfillVisited(this.save as never);
+    backfillVisited(loaded as never);
     // A save the old induction wrote in the hall itself resumes
     // in the bedroom, where the write now puts it.
-    postGameRescue(this.save as never);
+    postGameRescue(loaded as never);
+    return told;
+  }
+
+  /**
+   * A save table just read made this game's (prepareLoadedSave) and walked
+   * into: the overworld entered at the saved spot. Returns what to tell the
+   * player. Throws on a save it cannot use.
+   */
+  private enterLoadedSave(loaded: any): string[] {
+    const told = this.prepareLoadedSave(loaded);
+    this.save = loaded;
     // The live position lives in player.* (SaveData.lua newGame);
     // lastOutdoor is only the palette/blackout anchor.
     const pl: any = this.save.player ?? {};
