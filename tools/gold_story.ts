@@ -26,7 +26,15 @@ const DIRS: Dir[] = ["up", "down", "left", "right"];
 const DELTA: Record<Dir, [number, number]> = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
 const BTN: Record<Dir, number> = { up: VOX_BTN.up, down: VOX_BTN.down, left: VOX_BTN.left, right: VOX_BTN.right };
 
-useGoldGen();
+// GEN2_GAME=silver|crystal: the same run on that game's import
+if (process.env.GEN2_GAME) {
+  const { join } = await import("node:path");
+  const { GameVersion } = await import("../voxelmon/game/gen2/shared/core/GameVersion.ts");
+  useGoldGen(join(import.meta.dir, "..", "dist", "voxelmon", process.env.GEN2_GAME, "gen"));
+  GameVersion.set(process.env.GEN2_GAME);
+} else {
+  useGoldGen();
+}
 const errors: string[] = [];
 Logger.sink = (line: string) => {
   if (/error|not ported|notported/i.test(line)) errors.push(line);
@@ -1320,6 +1328,15 @@ for (const c of chapters) {
     settle();
     done++;
     log(`ok   ${c.name}  [${frames - f0} frames${errors.length ? `, ${errors.length} log errors: ${errors[0]}` : ""}]`);
+    // STORY_SAVES=dir: the game as SAVE would write it, after each chapter
+    // (<dir>/<chapter number>.lua), for the VC save round trips
+    if (process.env.STORY_SAVES) {
+      const { SaveSerializer } = await import("../voxelmon/game/gen2/shared/core/SaveSerializer.ts");
+      const { writeFileSync, mkdirSync } = await import("node:fs");
+      mkdirSync(process.env.STORY_SAVES, { recursive: true });
+      const s = game.snapshotSave();
+      writeFileSync(`${process.env.STORY_SAVES}/${c.name.split(" ")[0]}.lua`, SaveSerializer.encode(s));
+    }
   } catch (e) {
     log(`FAIL ${c.name}: ${e instanceof Error ? e.message : e}`);
     if (!(e instanceof StoryFail) && e instanceof Error) log(e.stack ?? "");
