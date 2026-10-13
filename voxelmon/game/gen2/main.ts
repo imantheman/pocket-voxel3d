@@ -50,6 +50,9 @@ setSaveIo({
   // the save the card had at boot, kept as save_gold.lua.unreadable before
   // the game writes over a save it could not read
   backup: () => host.saveBackup(),
+  // COPY SAVE (VC TO LUA): a dated copy in save_backup/ first
+  keepCopy: () => host.saveKeepCopy(),
+  writeErr: () => host.writeErr(),
   // the OPTION screen's settings in their own file (options_gold.lua), so
   // they stick across boots whether or not the game was saved; a host
   // without the file keeps them for the session only

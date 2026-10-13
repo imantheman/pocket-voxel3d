@@ -26,6 +26,15 @@ export interface SaveIo {
    * keeps no copy, and the write goes ahead.
    */
   backup?(): boolean;
+  /**
+   * Keep a dated copy of the save as it is in storage now (the 3DS:
+   * save_backup/, the last 10), before a save copied from a VC title is
+   * written over it. False: not kept, and nothing may be written (why:
+   * `writeErr`). Optional: a store without it cannot take a copied save.
+   */
+  keepCopy?(): boolean;
+  /** Why the last write or copy did not take, from the store. */
+  writeErr?(): string | undefined;
   /** options.lua's text, or undefined. Optional: default is memory. */
   readOptions?(): string | undefined;
   /** Commit options.lua's text. Optional: default is memory. */
@@ -36,13 +45,18 @@ export interface SaveIo {
 export function memorySaveIo(
   initial?: string,
   initialOptions?: string,
-): SaveIo & { text: string | undefined; options: string | undefined; backups: string[] } {
+): SaveIo & { text: string | undefined; options: string | undefined; backups: string[]; kept: string[] } {
   const io = {
     text: initial,
     options: initialOptions,
     backups: [] as string[],
+    kept: [] as string[],
     backup() {
       if (io.text !== undefined) io.backups.push(io.text);
+      return true;
+    },
+    keepCopy() {
+      if (io.text !== undefined && io.text !== "") io.kept.push(io.text);
       return true;
     },
     read: () => io.text,
@@ -100,6 +114,26 @@ export function backup(): boolean {
   }
 }
 
+/** A dated copy of the stored save (SaveIo.keepCopy); false when the
+ *  store has no such channel or the copy did not take. */
+export function keepCopy(): boolean {
+  try {
+    return io.keepCopy ? io.keepCopy() === true : false;
+  } catch {
+    return false;
+  }
+}
+
+/** The store's reason the last write or copy failed, if it says. */
+export function writeErr(): string | undefined {
+  try {
+    const e = io.writeErr?.();
+    return typeof e === "string" && e !== "" ? e : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** options.lua's text, or undefined. */
 export function readOptions(): string | undefined {
   try {
@@ -124,5 +158,5 @@ export function writeOptions(text: string): boolean {
   return true;
 }
 
-export const SaveIoSeam = { read, write, backup, readOptions, writeOptions, setSaveIo, saveIo, memorySaveIo };
+export const SaveIoSeam = { read, write, backup, keepCopy, writeErr, readOptions, writeOptions, setSaveIo, saveIo, memorySaveIo };
 export default SaveIoSeam;

@@ -461,7 +461,7 @@ function writePocket(b: Uint8Array, o: number, cap: number, withQty: boolean, id
 // ---------------------------------------------------------------------------
 // summary
 
-export interface CartSummary { name: string; badges: number; caught: number; hours: number; minutes: number; seconds: number }
+export interface CartSummary { name: string; id: number; badges: number; caught: number; hours: number; minutes: number; seconds: number }
 
 /** What the CONTINUE choice shows for a cartridge save; null when it is none. */
 export function cartSummary(raw: Uint8Array | null | undefined, engine: Engine): CartSummary | null {
@@ -475,6 +475,7 @@ export function cartSummary(raw: Uint8Array | null | undefined, engine: Engine):
   };
   return {
     name: readName(b, Lo.playerName, L.NAME_LEN),
+    id: be16(b, Lo.playerId),
     badges: pop(Lo.badges, 2),
     caught: pop(Lo.dexCaught, 32),
     hours: be16(b, Lo.hours),

@@ -55,6 +55,7 @@ import { PokedexText } from "./PokedexText.ts";
 import { Palettes } from "../world/Palettes.ts";
 import { MenuFade } from "../ui/MenuFade.ts";
 import { Vc } from "../vc/session.ts";
+import * as saveio from "../platform/saveio.ts";
 import { tonumber } from "../platform/lua.ts";
 
 function noop(): void {}
@@ -266,6 +267,78 @@ export class Game2 {
     });
   }
 
+  /** The cartridge's own OPTION settings (the rest are this port's). */
+  static CART_OPTIONS = ["textSpeed", "battleScene", "battleStyle", "sound", "frame", "print", "menuAccount"];
+
+  /**
+   * COPY SAVE (the title, not on the cart): one save written over the other
+   * through the VC converter. The destination is backed up first (the VC
+   * title's by the host, into vc_backup/; the Lua file's as a dated copy in
+   * save_backup/); on any failure nothing is written and a text box says
+   * why. Then the title again, its summaries read afresh.
+   */
+  copySave(dir: "toVc" | "toLua"): void {
+    const what = dir === "toVc" ? "LUA TO VC" : "VC TO LUA";
+    const log = (t: string): void => console.log(`[pv] vc: copy ${t}`);
+    log(`${what}: start`);
+    let res: [boolean, string?];
+    try {
+      res = dir === "toVc" ? this.copyLuaToVc(log) : this.copyVcToLua(log);
+    } catch (e) {
+      res = [false, String((e as Error)?.message ?? e)];
+    }
+    const [ok, why] = res;
+    if (!ok) log(`${what} FAILED: ${why ?? "?"}`);
+    this.showMainMenu();
+    if (ok) {
+      this.stack.push(TextBox.new(this, "Copied the save!"));
+      return;
+    }
+    const w = String(why ?? "").replace(/\s+/g, " ").trim().slice(0, 54);
+    const rows: string[] = [];
+    for (let i = 0; i < w.length && rows.length < 3; i += 18) rows.push(w.slice(i, i + 18));
+    this.stack.push(TextBox.new(this, `The save was not\ncopied.\f${rows.length ? `${rows.join("\n")}\f` : ""}Nothing was\nwritten.`));
+  }
+
+  private copyLuaToVc(log: (t: string) => void): [boolean, string?] {
+    const [lua, , err] = Save.load();
+    if (!lua) return [false, `Lua save: ${err ?? "none"}`];
+    log(`LUA TO VC: the Lua save holds ${lua.player?.name}`);
+    return Vc.copyToVc(lua);
+  }
+
+  private copyVcToLua(log: (t: string) => void): [boolean, string?] {
+    const [old] = Save.load();
+    log(`VC TO LUA: converting the VC save (the Lua save ${old ? `holds ${old.player?.name}` : "is empty or unreadable"})`);
+    const t0 = Date.now();
+    let save: any;
+    try {
+      save = Vc.load();
+    } catch (e) {
+      return [false, `VC save: ${String((e as Error)?.message ?? e)}`];
+    }
+    // this game's own clock base stays the Lua save's (as a VC CONTINUE)
+    const r = old?.rtc;
+    save.rtc = { ...(save.rtc ?? {}), startMinute: tonumber(r?.startMinute) ?? 0, startDay: tonumber(r?.startDay) ?? 0 };
+    if (r?.dayOfWeek != null) save.rtc.dayOfWeek = r.dayOfWeek;
+    // the port's own options stay the Lua save's (this session's when there
+    // is none); the cartridge's OPTION settings come over from the VC save
+    const cart = save.options ?? {};
+    const options: Record<string, any> = { ...(old?.options ?? this.options) };
+    for (const k of Game2.CART_OPTIONS) if (cart[k] !== undefined) options[k] = cart[k];
+    save.options = options;
+    Save.normalize(save);
+    log(`VC TO LUA: converted in ${Date.now() - t0} ms: ${save.player?.name} at ${save.position?.map} ${save.position?.x},${save.position?.y}`);
+    if (!saveio.keepCopy()) return [false, `backup failed: ${saveio.writeErr() ?? "the card did not take it"}`];
+    log("VC TO LUA: the Lua save kept in save_backup; writing");
+    const [ok, err] = Save.save(save);
+    if (!ok) return [false, err ?? "the Lua save was not written"];
+    for (const k of Game2.CART_OPTIONS) if (options[k] !== undefined) this.options[k] = options[k];
+    this.persistOptions();
+    log(`VC TO LUA done: ${save.player?.name}, party ${(save.party ?? []).length}`);
+    return [true];
+  }
+
   /** Game2.lua:262 */
   newGame(): void {
     Vc.useLua();
@@ -327,6 +400,7 @@ export class Game2 {
       onContinue: (save: any) => this.continueGame(save),
       onContinueVc: (luaSave: any) => this.continueVc(luaSave),
       onNewGameVc: () => this.newGameVc(),
+      onCopy: (dir: "toVc" | "toLua") => this.copySave(dir),
       onOption: () => this.showOptions(() => this.showMainMenu()),
       onMysteryGift: (save: any) => {
         this.stack.clear();
