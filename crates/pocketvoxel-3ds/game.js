@@ -22655,6 +22655,181 @@ class NamingState {
   }
 }
 
+// voxelmon/game/vc/copysave.ts
+var COPY_SAVE_TEXT = {
+  menu: "COPY SAVE",
+  choices: { "lua-vc": "LUA TO VC", "vc-lua": "VC TO LUA" },
+  cancel: "CANCEL",
+  from: { "lua-vc": "COPY: LUA SAVE", "vc-lua": "COPY: VC SAVE" },
+  over: { "lua-vc": "REPLACE: VC SAVE", "vc-lua": "REPLACE: LUA SAVE" },
+  overEmpty: { "lua-vc": "TO: VC SAVE", "vc-lua": "TO: LUA SAVE" },
+  empty: "(EMPTY)",
+  ask: {
+    "lua-vc": `Copy the LUA save
+over the VC save?`,
+    "vc-lua": `Copy the VC save
+over the LUA save?`
+  },
+  working: "Copying...",
+  done: "Copied the save!",
+  failed: {
+    read: { "lua-vc": `The LUA save could
+not be read.`, "vc-lua": `The VC save could
+not be read.` },
+    backup: { "lua-vc": `The VC save could
+not be backed up.`, "vc-lua": `The LUA save could
+not be backed up.` },
+    convert: { "lua-vc": `The save could not
+be converted.`, "vc-lua": `The save could not
+be converted.` },
+    write: { "lua-vc": `The VC save did
+not take it.`, "vc-lua": `The LUA save could
+not be written.` }
+  },
+  kept: {
+    nothing: `Nothing was
+copied.`,
+    "lua-vc": `The VC save is
+left as it was.`,
+    "vc-lua": `A copy of the old
+LUA save is kept.`
+  }
+};
+var PANEL_INFO_COLS = 12;
+function panelLines(s) {
+  const row = (label3, value) => label3 + value.padStart(PANEL_INFO_COLS - label3.length);
+  const t = s.seconds;
+  const time = t === null ? "?" : `${Math.floor(t / 3600)}:${String(Math.floor(t / 60) % 60).padStart(2, "0")}`;
+  return [
+    row("NAME", s.name ?? "?"),
+    row("BADGES", s.badges === null ? "?" : String(s.badges)),
+    row("POKéDEX", s.owned === null ? "?" : String(s.owned)),
+    row("TIME", time)
+  ];
+}
+function copyPanel(dir, src, dst) {
+  const T = COPY_SAVE_TEXT;
+  return [
+    T.from[dir],
+    ...panelLines(src),
+    dst ? T.over[dir] : T.overEmpty[dir],
+    ...dst ? panelLines(dst) : [`   ${T.empty}`]
+  ];
+}
+function wrapWhy(why) {
+  const words = why.replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+  const lines = [];
+  let line = "";
+  for (const w of words) {
+    const next = line ? `${line} ${w}` : w;
+    if (next.length > 18 && line) {
+      lines.push(line);
+      line = w.slice(0, 18);
+    } else
+      line = next.slice(0, 18);
+    if (lines.length >= 3) {
+      line = "";
+      break;
+    }
+  }
+  if (line && lines.length < 3)
+    lines.push(line);
+  return lines;
+}
+function copyMessage(dir, r) {
+  const T = COPY_SAVE_TEXT;
+  if (r.ok)
+    return T.done;
+  const why = wrapWhy(r.why);
+  const kept = r.stage !== "write" || dir === "vc-lua" && !r.backedUp ? T.kept.nothing : T.kept[dir];
+  return `${T.failed[r.stage][dir]}\f${why.length ? `${why.join(`
+`)}\f` : ""}${kept}`;
+}
+var msg = (e) => String(e?.message ?? e ?? "").replace(/\s+/g, " ").trim() || "?";
+function runCopy(dir, io) {
+  const log = (s) => io.log(`[pv] vc: copy: ${s}`);
+  const fail = (stage, why, backedUp) => {
+    log(`FAILED at ${stage}: ${why}; ${stage === "write" ? "the write did not take" : "nothing written"}`);
+    return backedUp ? { ok: false, stage, why, backedUp } : { ok: false, stage, why };
+  };
+  const label3 = COPY_SAVE_TEXT.choices[dir];
+  log(`${label3}: start`);
+  if (dir === "lua-vc") {
+    const text2 = io.luaText();
+    if (!text2)
+      return fail("read", "there is no LUA save");
+    log(`reading the LUA save (${text2.length} bytes)`);
+    let save2;
+    try {
+      save2 = io.readLua(text2);
+    } catch (e) {
+      return fail("read", msg(e));
+    }
+    const p2 = save2.player ?? {};
+    log(`LUA save: ${p2.name} at ${p2.map} ${p2.x},${p2.y}; party ${save2.party?.length ?? 0}`);
+    const current = io.vcBytes();
+    if (!current)
+      return fail("write", "no VC title");
+    const template = io.vcHasGame() ? current : null;
+    log(`converting (${template ? "over the VC save's bytes" : "into a fresh cartridge save"})`);
+    let bytes2;
+    try {
+      const w3 = io.toCart(save2, template);
+      for (const n of w3.notes)
+        log(`note: ${n}`);
+      bytes2 = w3.bytes;
+    } catch (e) {
+      return fail("convert", msg(e));
+    }
+    if (!io.isCart(bytes2))
+      return fail("convert", "the new save fails its checksum");
+    log(`converted: ${bytes2.length} bytes, checksum ok`);
+    log("writing the VC save (the host backs it up to vc_backup first)");
+    const w2 = io.writeVc(bytes2);
+    if (!w2.ok)
+      return fail("write", w2.why || "the VC save did not take it");
+    log("done: the VC save is the LUA save's game");
+    return { ok: true };
+  }
+  const bytes = io.vcBytes();
+  if (!bytes || !io.vcHasGame())
+    return fail("read", "the VC save holds no game");
+  log(`reading the VC save (${bytes.length} bytes)`);
+  let save;
+  try {
+    const r = io.readCart(bytes);
+    for (const n of r.notes)
+      log(`note: ${n}`);
+    save = r.save;
+  } catch (e) {
+    return fail("read", msg(e));
+  }
+  const p = save.player ?? {};
+  log(`VC save: ${p.name} at ${p.map} ${p.x},${p.y}; party ${save.party?.length ?? 0}`);
+  let text;
+  try {
+    text = io.toLua(save);
+  } catch (e) {
+    return fail("convert", msg(e));
+  }
+  log(`converted: ${text.length} bytes of LUA save`);
+  const had = !!io.luaText();
+  if (had) {
+    log("backing up the LUA save to save_backup");
+    const k = io.keepLua();
+    if (!k.ok)
+      return fail("backup", k.why || "the copy did not take");
+    log("backed up");
+  } else
+    log("no LUA save to back up");
+  log("writing the LUA save");
+  const w = io.writeLua(text);
+  if (!w.ok)
+    return fail("write", w.why || "the SD card did not take it", had);
+  log("done: the LUA save is the VC save's game");
+  return { ok: true };
+}
+
 // voxelmon/game/ui/title.ts
 var TITLE_MONS = [
   "CHARMANDER",
@@ -22756,10 +22931,23 @@ class TitleState {
   constructor(game, onChoose) {
     this.game = game;
     this.onChoose = onChoose;
-    this.menu = game.hasSave ? ["CONTINUE", "NEW GAME", "OPTION", "MAP VIEWER"] : ["NEW GAME", "OPTION", "MAP VIEWER"];
+    this.menu = this.buildMenu();
     this.cast = titleMons(game.data);
     this.mon = this.cast[0];
     this.yellow = gameVersion(game.data) === "yellow";
+  }
+  buildMenu() {
+    const m = this.game.hasSave ? ["CONTINUE", "NEW GAME"] : ["NEW GAME"];
+    const c = this.game.copyChoice;
+    if (c && (c.lua || c.vc) && this.game.copySave)
+      m.push(COPY_SAVE_TEXT.menu);
+    m.push("OPTION", "MAP VIEWER");
+    return m;
+  }
+  refresh() {
+    this.menu = this.buildMenu();
+    this.phase = "menu";
+    this.index = Math.max(0, this.menu.indexOf(COPY_SAVE_TEXT.menu));
   }
   audio() {
     return this.game.audio;
@@ -22882,6 +23070,14 @@ data?`;
       if (p.a) {
         this.audio()?.playSfx?.("Press_AB");
         const id = this.pick[this.pickIndex].id;
+        if (this.pickFor === "copy") {
+          if (id === "cancel") {
+            this.phase = "menu";
+            return;
+          }
+          this.game.copySave(id, () => this.refresh());
+          return;
+        }
         if (this.pickFor === "new") {
           const go = () => {
             this.game.pop();
@@ -22921,6 +23117,20 @@ replaced. Is that OK?`, (yes) => {
         this.pick.push({ id: "vc", label: "VC SAVE", summary: ch.vc });
         this.pickIndex = 0;
         this.pickFor = "continue";
+        this.phase = "pick";
+        return;
+      }
+      if (pick === COPY_SAVE_TEXT.menu && this.game.copyChoice) {
+        const c = this.game.copyChoice;
+        const T = COPY_SAVE_TEXT;
+        this.pick = [];
+        if (c.lua)
+          this.pick.push({ id: "lua-vc", label: T.choices["lua-vc"] });
+        if (c.vc)
+          this.pick.push({ id: "vc-lua", label: T.choices["vc-lua"] });
+        this.pick.push({ id: "cancel", label: T.cancel });
+        this.pickIndex = 0;
+        this.pickFor = "copy";
         this.phase = "pick";
         return;
       }
@@ -23394,9 +23604,9 @@ class LinkBattle extends TrainerBattle {
     this.trace(`order: ${playerFirst ? "me" : "them"} first (mirror=${this.mirror})`);
   }
   awardExp() {}
-  trace(msg) {
+  trace(msg2) {
     if (globalThis.voxel)
-      console.log(`[pv] link: battle ${msg}`);
+      console.log(`[pv] link: battle ${msg2}`);
   }
   waitingForPeer() {
     return this.pendingMine !== null;
@@ -23808,13 +24018,13 @@ class PrizeState {
     }
     return this.game.data.items?.[p.item]?.name ?? p.item;
   }
-  close(msg) {
+  close(msg2) {
     if (this.closing)
       return;
     this.closing = true;
     this.game.pop();
-    if (msg)
-      this.game.showText(msg, this.onDone);
+    if (msg2)
+      this.game.showText(msg2, this.onDone);
     else
       this.onDone?.();
   }
@@ -30797,13 +31007,7 @@ class VoxelmonGame {
     this.overworld = new Overworld(this);
     this.stack = [new OverworldState(this.overworld)];
     this.overworld.enter("REDS_HOUSE_2F", 3, 6, "down");
-    const luaText = this.host.saveData?.();
-    this.luaOptions = null;
-    this.vcBytes = this.readVc();
-    const vcSum = this.vcBytes ? cartSummary(this.vcBytes) : null;
-    this.hasSave = !!luaText || !!vcSum;
-    this.saveChoices = vcSum ? { lua: luaText ? this.luaSummary(luaText) : undefined, vc: { ...vcSum } } : undefined;
-    this.newGameChoice = this.vcBytes ? { vcHasGame: !!vcSum } : undefined;
+    this.readSaves();
     this.saveTarget = "lua";
     this.vcFresh = false;
     this.push(new TitleState(this, (choice) => {
@@ -30846,16 +31050,136 @@ class VoxelmonGame {
       this.startIntro();
     }));
   }
-  enterLoadedSave(loaded) {
+  readSaves() {
+    const luaText = this.host.saveData?.();
+    this.luaOptions = null;
+    this.vcBytes = this.readVc();
+    const vcSum = this.vcBytes ? cartSummary(this.vcBytes) : null;
+    const luaSum = luaText && this.vcBytes ? this.luaSummary(luaText) : undefined;
+    this.hasSave = !!luaText || !!vcSum;
+    this.saveChoices = vcSum ? { lua: luaSum, vc: { ...vcSum } } : undefined;
+    this.newGameChoice = this.vcBytes ? { vcHasGame: !!vcSum } : undefined;
+    this.copyChoice = this.vcBytes ? { lua: !!luaText, vc: !!vcSum } : undefined;
+  }
+  copySave(dir, done) {
+    const T = COPY_SAVE_TEXT;
+    const log = (s) => console.log(`[pv] vc: copy: ${s}`);
+    const luaText = this.host.saveData?.();
+    const luaSum = luaText ? this.luaSummary(luaText) : null;
+    const vcSum = this.vcBytes ? cartSummary(this.vcBytes) : null;
+    const src = dir === "lua-vc" ? luaSum : vcSum;
+    const dst = dir === "lua-vc" ? vcSum : luaSum;
+    log(`${T.choices[dir]}: from ${src ? src.name ?? "?" : "nothing"} over ${dst ? dst.name ?? "?" : "an empty save"}; asking`);
+    if (!src) {
+      const r = runCopy(dir, this.copyIo());
+      this.showText(copyMessage(dir, r), done);
+      return;
+    }
+    this.savePanelLines = copyPanel(dir, src, dst);
+    this.showChoice(T.ask[dir], (yes) => {
+      if (!yes) {
+        this.savePanelLines = null;
+        log("NO: nothing copied");
+        done();
+        return;
+      }
+      log("YES");
+      this.showAuto(T.working, SAVE_HOLD / 2, {
+        onDone: () => {
+          let r;
+          try {
+            r = runCopy(dir, this.copyIo());
+          } catch (e) {
+            const why = String(e?.message ?? e ?? "?");
+            log(`FAILED: ${why}`);
+            r = { ok: false, stage: "convert", why };
+          }
+          this.savePanelLines = null;
+          this.readSaves();
+          const c = this.copyChoice;
+          log(`the title's saves read again: Lua ${c?.lua ? "yes" : "none"}, VC ${c?.vc ? "a game" : "none"}`);
+          this.showText(copyMessage(dir, r), done);
+        }
+      });
+    }, { defaultNo: true });
+  }
+  copyIo() {
+    const h = this.host;
+    const data = this.data;
+    const maps = this.data.maps;
+    return {
+      log: (s) => console.log(s),
+      luaText: () => h.saveData?.() || undefined,
+      vcBytes: () => this.vcBytes,
+      vcHasGame: () => !!cartSummary(this.vcBytes),
+      readLua: (text2) => {
+        const s = decodeSave(text2);
+        if (!s || typeof s !== "object" || !s.player)
+          throw new Error("no player in the save");
+        this.prepareLoadedSave(s);
+        return s;
+      },
+      toCart: (save, template) => {
+        syncItemBalls(save, maps);
+        return saveToCart(save, data, template);
+      },
+      isCart: (b) => isCartSave(b),
+      readCart: (bytes) => {
+        const { save, notes } = cartToSave(bytes, data);
+        for (const [k, v] of Object.entries(this.luaOptions ?? {})) {
+          if (!(k in save.options))
+            save.options[k] = v;
+        }
+        this.prepareLoadedSave(save);
+        return { save, notes };
+      },
+      toLua: (save) => {
+        const text2 = encodeSave(toDisk(save));
+        decodeSave(text2);
+        return text2;
+      },
+      keepLua: () => {
+        if (this.unreadableSave) {
+          if (h.saveBackup?.() !== true)
+            return { ok: false, why: h.writeErr?.() || "no .unreadable copy" };
+          this.unreadableSave = false;
+        }
+        if (!h.saveKeepCopy)
+          return { ok: false, why: "this build keeps no copies" };
+        if (h.saveKeepCopy() === true)
+          return { ok: true };
+        return { ok: false, why: h.writeErr?.() || "the copy did not take" };
+      },
+      writeLua: (text2) => {
+        if (!h.saveWrite)
+          return { ok: false, why: "no save file" };
+        if (h.saveWrite(text2) === false)
+          return { ok: false, why: h.writeErr?.() || "the SD card did not take it" };
+        return { ok: true };
+      },
+      writeVc: (bytes) => {
+        const ok = h.vcWrite?.(bytes) === true;
+        if (!ok)
+          return { ok: false, why: h.vcErr?.() || "no VC title" };
+        this.vcBytes = new Uint8Array(bytes);
+        return { ok: true };
+      }
+    };
+  }
+  prepareLoadedSave(loaded) {
     const report = fromDisk(loaded, this.data);
     syncItemBalls(loaded, this.data.maps);
-    this.save = loaded;
     const told = reportLines(report);
-    const scrubbed = scrubDefaultNicknames(this.data, this.save);
+    const scrubbed = scrubDefaultNicknames(this.data, loaded);
     if (scrubbed > 0)
       console.log(`[pv] names: ${scrubbed} cut-short nickname(s) dropped on load`);
-    backfillVisited(this.save);
-    postGameRescue(this.save);
+    backfillVisited(loaded);
+    postGameRescue(loaded);
+    return told;
+  }
+  enterLoadedSave(loaded) {
+    const told = this.prepareLoadedSave(loaded);
+    this.save = loaded;
     const pl = this.save.player ?? {};
     const lo = this.save.lastOutdoor ?? {};
     this.overworld.enter(pl.map ?? lo.id ?? "PALLET_TOWN", pl.x ?? lo.x ?? 5, pl.y ?? lo.y ?? 6, pl.facing ?? "down");

@@ -5,11 +5,13 @@
 // the mon's box; the title mon bottom-aligned in the 7x7 box at tile
 // (5,10), in the four Game Boy shades; the copyright on row 17. Nothing
 // says PRESS START -- the cartridge waits for START or A -- and then the
-// main menu offers CONTINUE / NEW GAME / OPTION.
+// main menu offers CONTINUE / NEW GAME / OPTION (and, with the VC title on
+// the console, COPY SAVE: vc/copysave.ts).
 import type { GameState } from "../game.ts";
 import { namedPage, picPageFor } from "../battle/staging.ts";
 import { gameVersion } from "../data.ts";
 import { COPYRIGHT_GAMEFREAK, COPYRIGHT_PREFIX, COPYRIGHT_PREFIX_YELLOW, gbW, gbX, gbY } from "./intro.ts";
+import { COPY_SAVE_TEXT, type CopyDir } from "../vc/copysave.ts";
 
 /**
  * data/pokemon/title_mons.asm, the Red list. The starter leads, then
@@ -147,11 +149,11 @@ export class TitleState implements GameState {
   private phase: "press" | "menu" | "pick" = "press";
   /** CONTINUE's choice between the saves there are (Lua, VC), when the
    *  game was given more than the Lua save to offer. */
-  private pick: { id: "lua" | "vc"; label: string; summary?: SaveSummary }[] = [];
+  private pick: { id: "lua" | "vc" | CopyDir | "cancel"; label: string; summary?: SaveSummary }[] = [];
   private pickIndex = 0;
-  /** What the choice is for: CONTINUE (which save to load) or NEW GAME
-   *  (which save the new game writes). */
-  private pickFor: "continue" | "new" = "continue";
+  /** What the choice is for: CONTINUE (which save to load), NEW GAME
+   *  (which save the new game writes) or COPY SAVE (which way to copy). */
+  private pickFor: "continue" | "new" | "copy" = "continue";
   private timer = 0;
   private index = 0;
   private menu: string[];
@@ -188,15 +190,37 @@ export class TitleState implements GameState {
        *  game replaces (asked first). Absent: NEW GAME saves to the Lua
        *  file, with no question, as it always did. */
       newGameChoice?: { vcHasGame: boolean };
+      /** COPY SAVE, when the VC title is on the console: which of the two
+       *  saves holds a game to copy from. The entry is left out when
+       *  neither does, and so is a direction with nothing to copy. */
+      copyChoice?: { lua: boolean; vc: boolean };
+      /** The copy's confirm screen and the copy itself (game.ts, by way of
+       *  vc/copysave.ts); `done` brings the menu back, read afresh. */
+      copySave?: (dir: CopyDir, done: () => void) => void;
     },
     private onChoose: (c: TitleChoice) => void,
   ) {
-    this.menu = game.hasSave
-      ? ["CONTINUE", "NEW GAME", "OPTION", "MAP VIEWER"]
-      : ["NEW GAME", "OPTION", "MAP VIEWER"];
+    this.menu = this.buildMenu();
     this.cast = titleMons(game.data);
     this.mon = this.cast[0]!;
     this.yellow = gameVersion(game.data as { version?: string }) === "yellow";
+  }
+
+  /** The main menu for the saves there are now. */
+  private buildMenu(): string[] {
+    const m = this.game.hasSave ? ["CONTINUE", "NEW GAME"] : ["NEW GAME"];
+    const c = this.game.copyChoice;
+    if (c && (c.lua || c.vc) && this.game.copySave) m.push(COPY_SAVE_TEXT.menu);
+    m.push("OPTION", "MAP VIEWER");
+    return m;
+  }
+
+  /** After COPY SAVE: the menu again, for the saves as they are now (the
+   *  game has read them afresh), the cursor back on COPY SAVE. */
+  refresh(): void {
+    this.menu = this.buildMenu();
+    this.phase = "menu";
+    this.index = Math.max(0, this.menu.indexOf(COPY_SAVE_TEXT.menu));
   }
 
   private audio():
@@ -317,6 +341,13 @@ export class TitleState implements GameState {
       if (p.a) {
         this.audio()?.playSfx?.("Press_AB");
         const id = this.pick[this.pickIndex]!.id;
+        if (this.pickFor === "copy") {
+          // the title stays underneath: the confirm screen, the copy and
+          // its message go over it, and refresh() brings the menu back
+          if (id === "cancel") { this.phase = "menu"; return; }
+          this.game.copySave!(id as CopyDir, () => this.refresh());
+          return;
+        }
         if (this.pickFor === "new") {
           const go = (): void => {
             this.game.pop();
@@ -353,6 +384,19 @@ export class TitleState implements GameState {
         this.pick.push({ id: "vc", label: "VC SAVE", summary: ch.vc });
         this.pickIndex = 0;
         this.pickFor = "continue";
+        this.phase = "pick";
+        return;
+      }
+      // COPY SAVE: which way, a direction only where its source has a game
+      if (pick === COPY_SAVE_TEXT.menu && this.game.copyChoice) {
+        const c = this.game.copyChoice;
+        const T = COPY_SAVE_TEXT;
+        this.pick = [];
+        if (c.lua) this.pick.push({ id: "lua-vc", label: T.choices["lua-vc"] });
+        if (c.vc) this.pick.push({ id: "vc-lua", label: T.choices["vc-lua"] });
+        this.pick.push({ id: "cancel", label: T.cancel });
+        this.pickIndex = 0;
+        this.pickFor = "copy";
         this.phase = "pick";
         return;
       }
