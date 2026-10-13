@@ -380,6 +380,133 @@ describe("the main menu and SAVE with a VC title", () => {
     expect(Save.exists()).toBe(false);
     Vc.reset();
   });
+
+  test.skipIf(!goldData)("COPY SAVE: both ways, the destination kept first, NO first, nothing written on a failure", async () => {
+    const { rig } = await import("./gen2-ui-d-harness.ts");
+    const { MainMenu } = await import("../voxelmon/game/gen2/ui/MainMenu.ts");
+    const { Save } = await import("../voxelmon/game/gen2/core/Save.ts");
+    const { setSaveIo, memorySaveIo } = await import("../voxelmon/game/gen2/platform/saveio.ts");
+    const r = await rig();
+    const game = r.game;
+    const vcSave = saveToCart(richSave("gold", goldData!), goldData!, "gold", null).bytes;
+    const cartOpts = cartToSave(vcSave, goldData!, "gold").save.options;
+    let vcNow: Uint8Array = vcSave;
+    const writes: Uint8Array[] = [];
+    let refuse = false;
+    const host = { data: () => vcNow, write: (b: Uint8Array) => { if (refuse) return false; writes.push(b.slice()); vcNow = b.slice(); return true; }, err: () => (refuse ? "commit failed" : ""), info: () => "test" };
+    Vc.reset();
+    Vc.setHost(host);
+    const io = memorySaveIo();
+    setSaveIo(io);
+    const lua = Save.newGame({ playerName: "LUAGUY" });
+    lua.rtc = { startMinute: 30, startDay: 2 };
+    lua.options = { ...game.options, screenPos: "left", textSpeed: "SLOW" };
+    expect(Save.save(lua)[0]).toBe(true);
+    const luaText = io.text;
+    const menu = (): any => {
+      game.showMainMenu();
+      return game.stack.top();
+    };
+    const top = (): any => game.stack.top();
+    // YES: "Copying..." for 60 frames, then the copy
+    const yes = (): void => {
+      r.press("a");
+      expect(top().phase).toBe("copying");
+      for (let i = 0; i < 70; i++) r.frame();
+    };
+
+    // the row and its directions
+    let m = menu();
+    const labels = m.list.items.map((i: any) => i.label);
+    expect(labels.indexOf("COPY SAVE")).toBe(labels.indexOf("NEW GAME") + 1); // as the Gen 1 games
+    m.list.index = labels.indexOf("COPY SAVE") + 1;
+    r.press("a");
+    expect(m.phase).toBe("copy");
+    expect(m.copyRows.map((c: any) => c.label)).toEqual(["LUA TO VC", "VC TO LUA", "CANCEL"]);
+    r.draw();
+    r.press("down"); // VC TO LUA
+    r.press("a");
+    expect([m.phase, m.copyDir, m.copyChoice]).toEqual(["copyConfirm", "toLua", 2]);
+    r.draw();
+    r.press("a"); // NO: back to the directions, nothing written
+    expect(m.phase).toBe("copy");
+    expect(io.text).toBe(luaText);
+    r.press("a");
+    r.press("up"); // YES
+    r.draw();
+    yes();
+    // VC TO LUA: the Lua save kept, then the VC game in the Lua file
+    expect(top().screenId ?? "").not.toBe("Gen2MainMenu"); // the text box on top
+    expect(io.kept).toEqual([luaText!]);
+    let [now] = Save.load();
+    expect(now!.player.name).toBe("PLAYR");
+    expect(now!.rtc.startMinute).toBe(30); // this game's clock base kept
+    expect(now!.options.screenPos).toBe("left"); // the port's options kept
+    expect(now!.options.textSpeed).toBe(cartOpts.textSpeed); // the cartridge's come over
+    expect(writes.length).toBe(0);
+    // the title read afresh: CONTINUE's Lua summary is the copied game
+    game.stack.pop();
+    m = top();
+    expect(Save.summary(m.save)!.name).toBe("PLAYR");
+    expect(m.list.items[m.list.index - 1].value).toBe("copy"); // the cursor back on COPY SAVE
+
+    // LUA TO VC over another trainer's VC game: built afresh, VC written
+    expect(Save.save(lua)[0]).toBe(true);
+    m = menu();
+    m.copyDir = "toVc";
+    m.phase = "copyConfirm";
+    m.copyChoice = 2;
+    r.draw();
+    r.press("up");
+    yes();
+    expect(writes.length).toBe(1);
+    expect(cartSummary(writes[0]!, "gs")!.name).toBe("LUAGUY");
+    expect(Vc.summary()!.name).toBe("LUAGUY");
+    expect(io.text).toBe(luaText); // the Lua file untouched
+
+    // a VC write that fails: nothing changes, a text box says why
+    refuse = true;
+    m = menu();
+    m.copyDir = "toVc";
+    m.phase = "copyConfirm";
+    m.copyChoice = 1;
+    yes();
+    expect(writes.length).toBe(1);
+    expect(Vc.summary()!.name).toBe("LUAGUY");
+    refuse = false;
+    // a Lua backup that fails: the Lua file is not written
+    game.stack.clear();
+    const io2 = { ...memorySaveIo(luaText), keepCopy: () => false, writeErr: () => "card full" };
+    let wrote = false;
+    io2.write = (t: string) => { wrote = true; io2.text = t; return true; };
+    setSaveIo(io2);
+    m = menu();
+    m.copyDir = "toLua";
+    m.phase = "copyConfirm";
+    m.copyChoice = 1;
+    yes();
+    expect(wrote).toBe(false);
+
+    // the failure texts (the Gen 1 games' words)
+    const G2 = game.constructor as any;
+    expect(G2.copyFailText("toVc", { ok: false, stage: "write", why: "commit failed" })).toBe("The VC save did\nnot take it.\fcommit failed\fThe VC save is\nleft as it was.");
+    expect(G2.copyFailText("toLua", { ok: false, stage: "backup", why: "card full" })).toBe("The LUA save could\nnot be backed up.\fcard full\fNothing was\ncopied.");
+    expect(G2.copyFailText("toLua", { ok: false, stage: "write", why: "x", kept: true })).toContain("A copy of the old\nLUA save is kept.");
+
+    // only the directions whose source holds a game
+    setSaveIo(memorySaveIo());
+    m = menu();
+    expect(m.copyDirections().map((d: any) => d.id)).toEqual(["toLua"]);
+    Vc.reset();
+    Vc.setHost({ ...host, data: () => new Uint8Array(0x8000) });
+    setSaveIo(memorySaveIo(luaText));
+    m = menu();
+    expect(m.copyDirections().map((d: any) => d.id)).toEqual(["toVc"]);
+    Vc.reset();
+    m = menu();
+    expect(m.list.items.map((i: any) => i.label)).not.toContain("COPY SAVE");
+    setSaveIo(memorySaveIo());
+  });
 });
 
 // ---------------------------------------------------------------- the real cartridges

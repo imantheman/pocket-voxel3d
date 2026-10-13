@@ -7,7 +7,9 @@
 // the guest's "[pv] vc: ..." lines and the fake title's checksum line.
 // --define VC_NEW=true: NEW GAME instead -- the choice, VC SAVE, the replace
 // question answered YES, the intro pressed through, then a SAVE in the
-// bedroom. Never shipped.
+// bedroom. --define VC_COPY='"toVc"' (or '"toLua"'): COPY SAVE instead --
+// the row, the direction, a shot of the confirm (NO first), YES, then the
+// title again with its summaries. Never shipped.
 import "./vc_bench_fake.ts";
 import "../voxelmon/game/gen2/main.ts";
 import { VOX_BTN } from "../contracts/spec/voxel-spec.ts";
@@ -16,6 +18,8 @@ import { Vc } from "../voxelmon/game/gen2/vc/session.ts";
 
 declare const VC_PICK: string;
 declare const VC_NEW: boolean;
+declare const VC_COPY: string;
+const copyDir = typeof VC_COPY !== "undefined" ? VC_COPY : "";
 const pick = typeof VC_PICK !== "undefined" ? VC_PICK : "vc";
 const isNew = typeof VC_NEW !== "undefined" && VC_NEW;
 const g = globalThis as unknown as { goldGame: any; frame: (b: number) => void };
@@ -43,6 +47,42 @@ g.frame = (b: number): void => {
       phase = 1;
       at = n;
     } else if (n % 40 === 0) pad = VOX_BTN.start;
+  } else if (phase === 1 && n - at > 30 && copyDir) {
+    // COPY SAVE: walk the cursor to its row, A
+    const row = menu.list.items.findIndex((i: any) => i.value === "copy");
+    if (row < 0) { log("no COPY SAVE row"); phase = 9; }
+    else if (menu.list.index !== row + 1) pad = VOX_BTN.down;
+    else { pad = VOX_BTN.a; phase = 20; at = n; }
+  } else if (phase === 20 && n - at > 30) {
+    log(`copy rows: ${menu.copyRows.map((r: any) => r.label).join(" / ")}`);
+    const want = menu.copyRows.findIndex((r: any) => r.id === copyDir);
+    if (want < 0) { log(`no ${copyDir} row`); phase = 9; }
+    else if (menu.copyIndex !== want) pad = VOX_BTN.down;
+    else { pad = VOX_BTN.a; phase = 21; at = n; }
+  } else if (phase === 21 && n - at > 30) {
+    native.screenshot?.();
+    log(`confirm: ${menu.phase}, cursor on ${menu.copyChoice === 2 ? "NO" : "YES"}; answering YES`);
+    pad = VOX_BTN.up;
+    phase = 22;
+    at = n;
+  } else if (phase === 22 && n - at > 10) {
+    pad = VOX_BTN.a;
+    phase = 23;
+    at = n;
+  } else if (phase === 23 && n - at > 150) {
+    native.screenshot?.();
+    const t: any = game.stack.top();
+    log(`after the copy: top ${t?.screenId ?? t?.constructor?.name ?? "-"}`);
+    pad = VOX_BTN.a; // the text box
+    phase = 24;
+    at = n;
+  } else if (phase === 24 && n - at > 60) {
+    if (menu) {
+      const vs = Vc.summary();
+      log(`title again: Lua save ${menu.save ? `${menu.save.player?.name} ${menu.save.playTime?.hours}:${menu.save.playTime?.minutes}` : "none"}; VC save ${vs ? `${vs.name} ${vs.hours}:${vs.minutes}` : "none"}; rows ${menu.list.items.map((i: any) => i.label).join(" / ")}`);
+      native.screenshot?.();
+      phase = 9;
+    } else if (n % 30 === 0) pad = VOX_BTN.a;
   } else if (phase === 1 && n - at > 30) {
     // CONTINUE is the first row, NEW GAME the second
     if (isNew) { if (menu.list.index === 1) pad = VOX_BTN.down; else { pad = VOX_BTN.a; phase = 2; at = n; } }
