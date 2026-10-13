@@ -51,13 +51,13 @@ g.frame = (b: number): void => {
     // COPY SAVE: walk the cursor to its row, A
     const row = menu.list.items.findIndex((i: any) => i.value === "copy");
     if (row < 0) { log("no COPY SAVE row"); phase = 9; }
-    else if (menu.list.index !== row + 1) pad = VOX_BTN.down;
+    else if (menu.list.index !== row + 1) { if (n % 8 === 0) pad = VOX_BTN.down; }
     else { pad = VOX_BTN.a; phase = 20; at = n; }
   } else if (phase === 20 && n - at > 30) {
     log(`copy rows: ${menu.copyRows.map((r: any) => r.label).join(" / ")}`);
     const want = menu.copyRows.findIndex((r: any) => r.id === copyDir);
     if (want < 0) { log(`no ${copyDir} row`); phase = 9; }
-    else if (menu.copyIndex !== want) pad = VOX_BTN.down;
+    else if (menu.copyIndex !== want) { if (n % 8 === 0) pad = VOX_BTN.down; }
     else { pad = VOX_BTN.a; phase = 21; at = n; }
   } else if (phase === 21 && n - at > 30) {
     native.screenshot?.();
@@ -73,7 +73,7 @@ g.frame = (b: number): void => {
     native.screenshot?.();
     const t: any = game.stack.top();
     log(`after the copy: top ${t?.screenId ?? t?.constructor?.name ?? "-"}`);
-    pad = VOX_BTN.a; // the text box
+    // (the shot is of the frame after this one: A waits for phase 24)
     phase = 24;
     at = n;
   } else if (phase === 24 && n - at > 60) {
