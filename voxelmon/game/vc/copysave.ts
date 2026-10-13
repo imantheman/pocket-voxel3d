@@ -10,10 +10,12 @@
 //   COPY SAVE
 //     -> a choice: LUA TO VC / VC TO LUA / CANCEL (a direction whose source
 //        has no save is left out; B is CANCEL)
-//     -> the confirm screen: the source's info box (the one CONTINUE shows)
-//        under "COPY: LUA SAVE", the destination's under "REPLACE: VC SAVE"
-//        ("TO: VC SAVE" and "(EMPTY)" when it holds no game), above
-//        "Copy the LUA save\nover the VC save?" with YES/NO, the cursor on NO
+//     -> the confirm screen: the source's name, badges, dex and time (what
+//        CONTINUE's box shows) under "COPY: LUA SAVE", the destination's
+//        under "REPLACE: VC SAVE" ("TO: VC SAVE" and "(EMPTY)" when it holds
+//        no game), above "Copy the LUA save\nover the VC save?" with YES/NO,
+//        the cursor on NO. The info lines are 12 columns: the YES/NO window
+//        covers the panel's right side from row 7 down.
 //     -> YES: "Copying..." while the destination is backed up (the VC save
 //        to vc_backup by the host inside its write; the Lua file to
 //        save_backup, timestamped, the last ten kept), the save converted
@@ -26,7 +28,7 @@
 // was (the host commits only a write that reads back); a Lua write that
 // fails has the old file in save_backup.
 
-import { summaryLines, type SaveSummary } from "../ui/title.ts";
+import type { SaveSummary } from "../ui/title.ts";
 
 export type CopyDir = "lua-vc" | "vc-lua";
 
@@ -73,14 +75,33 @@ export type CopyResult =
   | { ok: true }
   | { ok: false; stage: CopyStage; why: string; backedUp?: boolean };
 
-/** The confirm screen's two info boxes, one line a row (17 columns). */
+/** The width of an info line: the panel's text starts at column 2 and
+ *  the YES/NO window (columns 14-19, rows 7-11) sits over the rest. */
+export const PANEL_INFO_COLS = 12;
+
+/** One save's four info lines, CONTINUE's box narrowed to 12 columns:
+ *  NAME, BADGES, POKéDEX, TIME, label left and value right. */
+export function panelLines(s: SaveSummary): string[] {
+  const row = (label: string, value: string): string => label + value.padStart(PANEL_INFO_COLS - label.length);
+  const t = s.seconds;
+  const time = t === null ? "?" : `${Math.floor(t / 3600)}:${String(Math.floor(t / 60) % 60).padStart(2, "0")}`;
+  return [
+    row("NAME", s.name ?? "?"),
+    row("BADGES", s.badges === null ? "?" : String(s.badges)),
+    row("POKéDEX", s.owned === null ? "?" : String(s.owned)),
+    row("TIME", time),
+  ];
+}
+
+/** The confirm screen's panel, one line a row from row 1: the source's
+ *  heading and lines, then the destination's (or "(EMPTY)"). */
 export function copyPanel(dir: CopyDir, src: SaveSummary, dst: SaveSummary | null): string[] {
   const T = COPY_SAVE_TEXT;
   return [
     T.from[dir],
-    ...summaryLines(src),
+    ...panelLines(src),
     dst ? T.over[dir] : T.overEmpty[dir],
-    ...(dst ? summaryLines(dst) : [`   ${T.empty}`]),
+    ...(dst ? panelLines(dst) : [`   ${T.empty}`]),
   ];
 }
 

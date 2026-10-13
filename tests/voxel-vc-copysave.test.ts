@@ -16,8 +16,7 @@ import { encodeSave } from "../voxelmon/game/save-lua.ts";
 import { decodeSave } from "../voxelmon/game/save-read.ts";
 import * as L from "../voxelmon/game/vc/layout.ts";
 import { cartSummary, cartToSave, isCartSave, saveToCart } from "../voxelmon/game/vc/cartsave.ts";
-import { COPY_SAVE_TEXT, copyMessage, copyPanel, wrapWhy } from "../voxelmon/game/vc/copysave.ts";
-import { summaryLines } from "../voxelmon/game/ui/title.ts";
+import { COPY_SAVE_TEXT, copyMessage, copyPanel, panelLines, PANEL_INFO_COLS, wrapWhy } from "../voxelmon/game/vc/copysave.ts";
 
 const root = join(import.meta.dir, "..");
 const dirs = { red: "dist/voxelmon/gen", blue: "dist/voxelmon/blue/gen", yellow: "dist/voxelmon/yellow/gen" } as const;
@@ -247,9 +246,14 @@ describe("COPY SAVE's strings", () => {
 
   test("the confirm panel: the source's box, then the destination's (or empty)", () => {
     const a = { name: "ASH", badges: 2, owned: 2, seconds: 3 * 3600 + 25 * 60 };
-    const b = { name: "RED", badges: 8, owned: 150, seconds: 99 * 3600 };
-    expect(copyPanel("lua-vc", a, b)).toEqual(["COPY: LUA SAVE", ...summaryLines(a), "REPLACE: VC SAVE", ...summaryLines(b)]);
-    expect(copyPanel("vc-lua", b, null)).toEqual(["COPY: VC SAVE", ...summaryLines(b), "TO: LUA SAVE", "   (EMPTY)"]);
+    const b = { name: "YELLOWW", badges: 8, owned: 151, seconds: 999 * 3600 + 59 * 60 };
+    expect(panelLines(a)).toEqual(["NAME     ASH", "BADGES     2", "POKéDEX    2", "TIME    3:25"]);
+    expect(copyPanel("lua-vc", a, b)).toEqual(["COPY: LUA SAVE", ...panelLines(a), "REPLACE: VC SAVE", ...panelLines(b)]);
+    expect(copyPanel("vc-lua", b, null)).toEqual(["COPY: VC SAVE", ...panelLines(b), "TO: LUA SAVE", "   (EMPTY)"]);
+    // rows 7 down (lines 6 on) stay clear of the YES/NO window; all fit the panel
+    for (const p of [copyPanel("lua-vc", a, b), copyPanel("vc-lua", b, null), copyPanel("lua-vc", { name: null, badges: null, owned: null, seconds: null }, b)]) {
+      p.forEach((l, i) => expect(`${l}: ${l.length <= (i >= 6 ? PANEL_INFO_COLS : 17)}`).toBe(`${l}: true`));
+    }
   });
 
   test("a failure says what, why, and what became of the destination", () => {
@@ -310,8 +314,8 @@ for (const v of Object.keys(dirs) as V[]) {
       const game = boot(data, host);
       const r = copy(game, "lua-vc");
       expect(r.panel).toEqual([
-        "COPY: LUA SAVE", ...summaryLines({ name: "LUAKID", badges: 2, owned: 2, seconds: src.playTime }),
-        "REPLACE: VC SAVE", ...summaryLines(oldSum),
+        "COPY: LUA SAVE", ...panelLines({ name: "LUAKID", badges: 2, owned: 2, seconds: src.playTime }),
+        "REPLACE: VC SAVE", ...panelLines(oldSum),
       ]);
       expect(r.message).toBe("Copied the save!");
       expect(host.vcWrites.length).toBe(1);
@@ -372,7 +376,7 @@ for (const v of Object.keys(dirs) as V[]) {
       const game = boot(data, host);
       const r = copy(game, "vc-lua");
       expect(r.panel![0]).toBe("COPY: VC SAVE");
-      expect(r.panel![1]).toBe(summaryLines(cartSummary(vc)!)[0]);
+      expect(r.panel![1]).toBe(panelLines(cartSummary(vc)!)[0]);
       expect(r.panel![5]).toBe("REPLACE: LUA SAVE");
       expect(r.message).toBe("Copied the save!");
       expect(host.vcWrites).toEqual([]);
