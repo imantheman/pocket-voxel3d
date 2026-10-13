@@ -5087,7 +5087,7 @@ fn main() {
     let audio_programs: &'static [u8] = pak::audio_programs_of(audi);
     dlog(&format!("[pv] sound: {} KB of programs", audio_programs.len() / 1024));
     unsafe { voxel::init(gd_static, audi); voxel::load_save_file(); }
-    // The VC title's save, for CONTINUE's choice (Red, Blue, Yellow only).
+    // The VC title's save, for CONTINUE's choice (the six cartridge games; not the Gen 3 builds).
     unsafe { vc::boot(); }
     if let Some(pcm) = unsafe { OVERLAY_PCM } {
         let ok = unsafe { voxel::scene().audio.set_pcm_bank(pcm) };

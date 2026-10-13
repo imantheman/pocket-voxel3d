@@ -74,7 +74,7 @@ AccessControlInfo:
   FileSystemAccess:
    - DirectSdmc
    - DirectSdmcWrite
-   # VC saves (src/vc.rs): the Red, Blue and Yellow re-release titles' save
+   # VC saves (src/vc.rs): the six cartridge re-release titles' save
    # data is another title's, opened as ARCHIVE_USER_SAVEDATA. The file
    # system lets a title do that for the save data IDs it lists below, and
    # a file-system tool for any; both are asked for, the way save managers'
@@ -82,8 +82,9 @@ AccessControlInfo:
    # (Lines marked vc-only are dropped from every other game's CIA.)
    - CategoryFileSystemTool # vc-only
 
-  # The three titles' unique IDs (0004000000171000 / 1100 / 1200).
-  AccessibleSaveDataIds: [0x01710, 0x01711, 0x01712] # vc-only
+  # The six titles' unique IDs (0004000000171000 / 1100 / 1200, and
+  # 0004000000172600 / 2700 / 2800). Six is as many as a title may list.
+  AccessibleSaveDataIds: [0x01710, 0x01711, 0x01712, 0x01726, 0x01727, 0x01728] # vc-only
 
   # ARM9 side: nothing beyond what makerom derives from UseOnSD and
   # DirectSdmc (SD application, direct SDMC). The first cut also granted

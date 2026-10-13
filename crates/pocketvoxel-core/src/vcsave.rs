@@ -1,7 +1,8 @@
-//! The 3DS re-releases (VC) of Red, Blue and Yellow keep the cartridge's
-//! 32 KB battery save in their own save data. This finds that save, reads
-//! it, and -- only when the player saved in that mode -- backs it up to the
-//! SD card and writes the new one in, committing the archive after.
+//! The 3DS re-releases (VC) of Red, Blue and Yellow, and of Gold, Silver and
+//! Crystal, keep the cartridge's 32 KB battery save in their own save data
+//! (the Gen 2 titles may keep more after it: their clock). This finds that
+//! save, reads it, and -- only when the player saved in that mode -- backs it
+//! up to the SD card and writes the new one in, committing the archive after.
 //!
 //! The file system is behind [`VcFs`] (the console's title list and one
 //! title's save archive) and [`Card`] (the SD card), so all of the logic
@@ -36,6 +37,9 @@ pub enum Game {
     Red,
     Blue,
     Yellow,
+    Gold,
+    Silver,
+    Crystal,
 }
 
 impl Game {
@@ -44,6 +48,9 @@ impl Game {
             Game::Red => "red",
             Game::Blue => "blue",
             Game::Yellow => "yellow",
+            Game::Gold => "gold",
+            Game::Silver => "silver",
+            Game::Crystal => "crystal",
         }
     }
     pub fn label(self) -> &'static str {
@@ -51,19 +58,61 @@ impl Game {
             Game::Red => "Red",
             Game::Blue => "Blue",
             Game::Yellow => "Yellow",
+            Game::Gold => "Gold",
+            Game::Silver => "Silver",
+            Game::Crystal => "Crystal",
         }
     }
-    /// The US titles' IDs (the eShop listings' program IDs).
+    /// The English titles' IDs (one ID each for the US and European eShops,
+    /// per the 3DS title databases; Red/Blue/Yellow confirmed on hardware).
     pub fn us_title(self) -> u64 {
         match self {
             Game::Red => 0x0004_0000_0017_1000,
             Game::Blue => 0x0004_0000_0017_1100,
             Game::Yellow => 0x0004_0000_0017_1200,
+            Game::Gold => 0x0004_0000_0017_2600,
+            Game::Silver => 0x0004_0000_0017_2700,
+            Game::Crystal => 0x0004_0000_0017_2800,
         }
+    }
+    fn gen2(self) -> bool {
+        matches!(self, Game::Gold | Game::Silver | Game::Crystal)
+    }
+    /// Whether `sram` holds a game of this generation: Gen 1's main
+    /// checksum, or Gen 2's check bytes and 16-bit sum (main copy or the
+    /// backup copy, which the cartridge falls back to).
+    pub fn save_ok(self, sram: &[u8]) -> bool {
+        if sram.len() < SRAM_SIZE {
+            return false;
+        }
+        if !self.gen2() {
+            return main_checksum_ok(sram);
+        }
+        let sum = |pieces: &[(usize, usize)]| -> u16 {
+            pieces.iter().fold(0u32, |a, &(s, n)| sram[s..s + n].iter().fold(a, |a, &b| a + b as u32)) as u16
+        };
+        let le = |o: usize| u16::from_le_bytes([sram[o], sram[o + 1]]);
+        let (main, check2, at, backup, bcheck1, bcheck2, bat): (&[(usize, usize)], usize, usize, &[(usize, usize)], usize, usize, usize) =
+            if self == Game::Crystal {
+                (&[(0x2009, 0xb7a)], 0x2d0f, 0x2d0d, &[(0x1209, 0xb7a)], 0x1208, 0x1f0f, 0x1f0d)
+            } else {
+                (
+                    &[(0x2009, 0xd60)],
+                    0x2d6b,
+                    0x2d69,
+                    &[(0x15c7, 0x226), (0x3d96, 0x1aa), (0x0c6b, 0x47d), (0x7e39, 0x34), (0x10e8, 0x4df)],
+                    0x7e38,
+                    0x7e6f,
+                    0x7e6d,
+                )
+            };
+        let main_ok = sram[0x2008] == 0x63 && sram[check2] == 0x7f && sum(main) == le(at);
+        let backup_ok = sram[bcheck1] == 0x63 && sram[bcheck2] == 0x7f && sum(backup) == le(bat);
+        main_ok || backup_ok
     }
 }
 
-/// A title ID in the block the three re-releases sit in, for the log: if
+/// A title ID in the block the six re-releases sit in, for the log: if
 /// the console has one of these and it is not the expected ID, the log
 /// says so, and `vc_titles.txt` can name it.
 pub fn looks_like_vc_title(tid: u64) -> bool {
@@ -104,6 +153,11 @@ pub trait VcFs {
     /// Make the writes final.
     fn commit(&mut self) -> Result<(), String>;
     fn close(&mut self);
+    /// What a title says it is (product code, its icon's short name), for
+    /// the log only; None when that cannot be had.
+    fn describe(&mut self, _tid: u64) -> Option<String> {
+        None
+    }
 }
 
 /// The SD card, for the backups.
@@ -151,9 +205,11 @@ pub fn main_checksum_ok(sram: &[u8]) -> bool {
 /// What was found: the title, the save file, and the file as it is.
 #[derive(Clone, Debug)]
 pub struct Found {
+    pub game: Game,
     pub tid: u64,
     pub file: String,
-    /// The whole file: the 32 KB save, then anything the title keeps after.
+    /// The whole file: the 32 KB save, then anything the title keeps after
+    /// (the Gen 2 titles' clock), which every write keeps byte for byte.
     pub raw: Vec<u8>,
 }
 
@@ -165,7 +221,7 @@ impl Found {
     /// Whether it holds a game (a save that has never been written is
     /// all $FF or zero and fails the checksum).
     pub fn has_game(&self) -> bool {
-        main_checksum_ok(self.sram())
+        self.game.save_ok(self.sram())
     }
 }
 
@@ -193,6 +249,12 @@ pub fn probe(fs: &mut dyn VcFs, game: Game, override_tid: Option<u64>, log: &mut
         Ok(list) => {
             let near: Vec<String> = list.iter().filter(|t| looks_like_vc_title(**t)).map(|t| format!("{:016x}", t)).collect();
             log(&format!("vc: {} titles on the card; in the VC block: [{}]", list.len(), near.join(", ")));
+            // what each of those says it is, so a wrong ID shows in the log
+            for t in list.iter().filter(|t| looks_like_vc_title(**t)) {
+                if let Some(d) = fs.describe(*t) {
+                    log(&format!("vc: {:016x} is {}", t, d));
+                }
+            }
             if !list.contains(&want) {
                 if override_tid.is_none() {
                     log(&format!("vc: no {} title ({:016x}) installed; VC saves off", game.label(), want));
@@ -240,7 +302,14 @@ pub fn probe(fs: &mut dyn VcFs, game: Game, override_tid: Option<u64>, log: &mut
         }
     };
     fs.close();
-    let found = Found { tid: want, file, raw };
+    let found = Found { game, tid: want, file, raw };
+    if found.raw.len() > SRAM_SIZE {
+        // the bytes after the cartridge save (the Gen 2 titles' clock), as
+        // they are: kept as they are on every write
+        let tail = &found.raw[SRAM_SIZE..found.raw.len().min(SRAM_SIZE + 64)];
+        let hex: Vec<String> = tail.iter().map(|b| format!("{:02x}", b)).collect();
+        log(&format!("vc: after the 32 KB: {}{}", hex.join(" "), if found.raw.len() > SRAM_SIZE + 64 { " ..." } else { "" }));
+    }
     log(&format!(
         "vc: {} save {} bytes{}, {}",
         found.file,
@@ -342,7 +411,7 @@ pub fn write_save(
     if sram.len() != SRAM_SIZE {
         return Err(format!("a cartridge save is {} bytes, not {}", SRAM_SIZE, sram.len()));
     }
-    if !main_checksum_ok(sram) {
+    if !game.save_ok(sram) {
         return Err(String::from("the new save fails its own checksum"));
     }
     fs.open(found.tid).map_err(|e| format!("cannot open the save data: {}", e))?;
@@ -639,6 +708,66 @@ mod tests {
         let reads: Vec<String> = card.list("d").into_iter().filter(|f| f.starts_with("read_red_")).collect();
         assert_eq!(reads.len(), KEEP_READS);
         assert!(card.files.contains_key("d/red_20200101-000000.sav"), "pre-write backups untouched");
+    }
+
+    /// A Gen 2 save with a game in it: check bytes and the 16-bit sum, main
+    /// copy only (`backup` false) or the backup copy only.
+    fn gen2_sram(game: Game, fill: u8, backup: bool) -> Vec<u8> {
+        let mut s = vec![fill; SRAM_SIZE];
+        let crystal = game == Game::Crystal;
+        let (main, check2, at): (&[(usize, usize)], usize, usize) =
+            if crystal { (&[(0x2009, 0xb7a)], 0x2d0f, 0x2d0d) } else { (&[(0x2009, 0xd60)], 0x2d6b, 0x2d69) };
+        let (bk, b1, b2, bat): (&[(usize, usize)], usize, usize, usize) = if crystal {
+            (&[(0x1209, 0xb7a)], 0x1208, 0x1f0f, 0x1f0d)
+        } else {
+            (&[(0x15c7, 0x226), (0x3d96, 0x1aa), (0x0c6b, 0x47d), (0x7e39, 0x34), (0x10e8, 0x4df)], 0x7e38, 0x7e6f, 0x7e6d)
+        };
+        let (pieces, c1, c2, sat) = if backup { (bk, b1, b2, bat) } else { (main, 0x2008, check2, at) };
+        s[c1] = 0x63;
+        s[c2] = 0x7f;
+        let sum: u32 = pieces.iter().map(|&(o, n)| s[o..o + n].iter().map(|&b| b as u32).sum::<u32>()).sum();
+        s[sat..sat + 2].copy_from_slice(&(sum as u16).to_le_bytes());
+        s
+    }
+
+    #[test]
+    fn gen2_saves_are_told_by_their_own_check() {
+        for game in [Game::Gold, Game::Silver, Game::Crystal] {
+            assert!(game.save_ok(&gen2_sram(game, 3, false)), "{:?} main copy", game);
+            assert!(game.save_ok(&gen2_sram(game, 5, true)), "{:?} backup copy only", game);
+            assert!(!game.save_ok(&vec![0xff; SRAM_SIZE]));
+            assert!(!game.save_ok(&vec![0u8; SRAM_SIZE]));
+            // a Gen 1 save is not a Gen 2 one
+            assert!(!game.save_ok(&game_sram(7)));
+        }
+        assert!(!Game::Red.save_ok(&gen2_sram(Game::Gold, 3, false)));
+        assert_eq!(Game::Gold.us_title(), 0x0004_0000_0017_2600);
+        assert_eq!(Game::Silver.us_title(), 0x0004_0000_0017_2700);
+        assert_eq!(Game::Crystal.us_title(), 0x0004_0000_0017_2800);
+    }
+
+    #[test]
+    fn a_gen2_write_keeps_the_clock_after_the_save() {
+        const GOLD: u64 = 0x0004_0000_0017_2600;
+        let mut old = gen2_sram(Game::Gold, 1, false);
+        let trailer: Vec<u8> = (0..48u8).map(|i| i.wrapping_mul(37)).collect();
+        old.extend_from_slice(&trailer);
+        let mut fs = Fake { titles: Some(vec![GOLD]), ..Default::default() };
+        fs.saves.insert(GOLD, BTreeMap::from([("sav.dat".to_string(), old.clone())]));
+        let mut lines = Vec::new();
+        let mut found = probe(&mut fs, Game::Gold, None, &mut |l| lines.push(l.to_string())).unwrap();
+        assert!(found.has_game());
+        assert!(lines.iter().any(|l| l.contains("48 kept after the 32 KB")));
+        assert!(lines.iter().any(|l| l.contains("after the 32 KB: 00 25 4a")));
+        let new = gen2_sram(Game::Gold, 2, false);
+        let mut card = FakeCard::default();
+        write_save(&mut fs, &mut card, &mut found, Game::Gold, &new, "sdmc:/b", "20261013-120000", &mut |_| {}).unwrap();
+        let on = &fs.saves[&GOLD]["sav.dat"];
+        assert_eq!(&on[..SRAM_SIZE], &new[..]);
+        assert_eq!(&on[SRAM_SIZE..], &trailer[..]);
+        assert_eq!(card.files["sdmc:/b/gold_20261013-120000.sav"], old);
+        // a Gen 1 save is refused by the Gold build
+        assert!(write_save(&mut fs, &mut card, &mut found, Game::Gold, &game_sram(4), "sdmc:/b", "x", &mut |_| {}).is_err());
     }
 
     #[test]

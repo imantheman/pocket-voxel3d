@@ -3,8 +3,8 @@
 //! pocketvoxel_core::vcsave's VcFs, plus the guest's natives
 //! (`voxel.vcData()`, `voxel.vcWrite(bytes)`, `voxel.vcInfo()`).
 //!
-//! Red, Blue and Yellow only. Every other build still links the natives
-//! (the shim is shared) and they report nothing found.
+//! Red, Blue, Yellow, Gold, Silver and Crystal. The Gen 3 builds still link
+//! the natives (the shim is shared) and they report nothing found.
 //!
 //! The archive is the other title's user save data (ARCHIVE_USER_SAVEDATA
 //! with a binary path of media type and title ID), the way any save manager
@@ -17,7 +17,7 @@
 //! closes it in one call, and so does every save. CONTINUE itself touches
 //! no file at all -- the guest converts the bytes read at boot.
 
-#[cfg(not(any(feature = "gen2", feature = "gen3")))]
+#[cfg(not(feature = "gen3"))]
 mod imp {
     use core::ffi::c_void;
     use pocketvoxel_core::vcsave::{self, Found, Game, StdCard, VcFs};
@@ -26,7 +26,13 @@ mod imp {
     pub const GAME: Game = Game::Blue;
     #[cfg(feature = "yellow")]
     pub const GAME: Game = Game::Yellow;
-    #[cfg(not(any(feature = "blue", feature = "yellow")))]
+    #[cfg(feature = "gold")]
+    pub const GAME: Game = Game::Gold;
+    #[cfg(feature = "silver")]
+    pub const GAME: Game = Game::Silver;
+    #[cfg(feature = "crystal")]
+    pub const GAME: Game = Game::Crystal;
+    #[cfg(not(any(feature = "blue", feature = "yellow", feature = "gen2")))]
     pub const GAME: Game = Game::Red;
 
     pub const BACKUP_DIR: &str = "sdmc:/3ds/voxelmon/vc_backup";
@@ -66,6 +72,8 @@ mod imp {
         fn amExit();
         fn AM_GetTitleCount(media: u32, count: *mut u32) -> i32;
         fn AM_GetTitleList(read: *mut u32, media: u32, count: u32, ids: *mut u64) -> i32;
+        fn AM_GetTitleProductCode(media: u32, id: u64, code: *mut u8) -> i32;
+        fn FSUSER_OpenFileDirectly(out: *mut u32, archive: u32, archive_path: FsPath, file_path: FsPath, flags: u32, attributes: u32) -> i32;
         fn fsInit() -> i32;
         fn FSUSER_OpenArchive(archive: *mut u64, id: u32, path: FsPath) -> i32;
         fn FSUSER_CloseArchive(archive: u64) -> i32;
@@ -234,6 +242,48 @@ mod imp {
             fslog(&format!("commit -> {:08x}", rc as u32));
             if rc < 0 { Err(err("FSUSER_ControlArchive", rc)) } else { Ok(()) }
         }
+        /// The product code (AM) and the icon's English short name (the
+        /// title's SMDH, read straight from its content), for the log.
+        fn describe(&mut self, tid: u64) -> Option<String> {
+            let mut out = String::new();
+            unsafe {
+                if amInit() >= 0 {
+                    let mut code = [0u8; 16];
+                    let rc = AM_GetTitleProductCode(MEDIATYPE_SD, tid, code.as_mut_ptr());
+                    amExit();
+                    if rc >= 0 {
+                        let n = code.iter().position(|&c| c == 0).unwrap_or(16);
+                        out.push_str(&String::from_utf8_lossy(&code[..n]));
+                    }
+                }
+                // ARCHIVE_SAVEDATA_AND_CONTENT, the ExeFS "icon"
+                let arch: [u32; 4] = [tid as u32, (tid >> 32) as u32, MEDIATYPE_SD, 0];
+                let file: [u32; 5] = [0, 0, 2, 0x6e6f_6369, 0];
+                let ap = FsPath { kind: PATH_BINARY, size: 16, data: arch.as_ptr() as *const c_void };
+                let fp = FsPath { kind: PATH_BINARY, size: 20, data: file.as_ptr() as *const c_void };
+                let mut h = 0u32;
+                fslog(&format!("icon of {:016x}...", tid));
+                let rc = FSUSER_OpenFileDirectly(&mut h, 0x2345_678a, ap, fp, FS_OPEN_READ, 0);
+                fslog(&format!("icon -> {:08x}", rc as u32));
+                if rc >= 0 {
+                    let mut smdh = vec![0u8; 0x36c0];
+                    let mut got = 0u32;
+                    let rc = FSFILE_Read(h, &mut got, 0, smdh.as_mut_ptr() as *mut c_void, smdh.len() as u32);
+                    FSFILE_Close(h);
+                    if rc >= 0 && got as usize >= 0x408 && &smdh[0..4] == b"SMDH" {
+                        // title 1 (English): its short name, UTF-16, 0x80 bytes
+                        let w: Vec<u16> = smdh[0x208..0x288].chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|&c| c != 0).collect();
+                        if !out.is_empty() {
+                            out.push(' ');
+                        }
+                        out.push('"');
+                        out.push_str(&String::from_utf16_lossy(&w));
+                        out.push('"');
+                    }
+                }
+            }
+            if out.is_empty() { None } else { Some(out) }
+        }
         fn close(&mut self) {
             if let Some(a) = self.archive.take() {
                 fslog("close archive...");
@@ -308,9 +358,9 @@ mod imp {
 }
 
 /// At boot: look for this game's VC title and read its save. Nothing in the
-/// Gen 2 and Gen 3 builds.
+/// Gen 3 builds.
 pub unsafe fn boot() {
-    #[cfg(not(any(feature = "gen2", feature = "gen3")))]
+    #[cfg(not(feature = "gen3"))]
     {
         // Every guest frame under a 30 s watchdog (voxel_shim.c): a frame
         // that never returns is cut off and logged, and the console keeps
@@ -326,7 +376,7 @@ pub unsafe fn boot() {
 #[no_mangle]
 #[allow(static_mut_refs)]
 pub unsafe extern "C" fn voxel_vc_ptr() -> *const u8 {
-    #[cfg(not(any(feature = "gen2", feature = "gen3")))]
+    #[cfg(not(feature = "gen3"))]
     if let Some(f) = imp::FOUND.as_ref() {
         return f.raw.as_ptr();
     }
@@ -336,7 +386,7 @@ pub unsafe extern "C" fn voxel_vc_ptr() -> *const u8 {
 #[no_mangle]
 #[allow(static_mut_refs)]
 pub unsafe extern "C" fn voxel_vc_len() -> u32 {
-    #[cfg(not(any(feature = "gen2", feature = "gen3")))]
+    #[cfg(not(feature = "gen3"))]
     if imp::FOUND.is_some() {
         return pocketvoxel_core::vcsave::SRAM_SIZE as u32;
     }
@@ -349,7 +399,7 @@ pub unsafe extern "C" fn voxel_vc_write(p: *const u8, len: u32) -> i32 {
     if p.is_null() {
         return 0;
     }
-    #[cfg(not(any(feature = "gen2", feature = "gen3")))]
+    #[cfg(not(feature = "gen3"))]
     {
         return imp::write(core::slice::from_raw_parts(p, len as usize)) as i32;
     }
@@ -365,7 +415,7 @@ pub unsafe extern "C" fn voxel_vc_write(p: *const u8, len: u32) -> i32 {
 #[no_mangle]
 #[allow(static_mut_refs)]
 pub unsafe extern "C" fn voxel_vc_info(which: u32, len: *mut u32) -> *const u8 {
-    #[cfg(not(any(feature = "gen2", feature = "gen3")))]
+    #[cfg(not(feature = "gen3"))]
     {
         let s: &String = if which == 0 { &imp::INFO } else { &imp::LAST_ERR };
         *len = s.len() as u32;
