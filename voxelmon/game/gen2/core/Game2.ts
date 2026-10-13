@@ -54,7 +54,7 @@ import { Apricorns } from "./Apricorns.ts";
 import { PokedexText } from "./PokedexText.ts";
 import { Palettes } from "../world/Palettes.ts";
 import { MenuFade } from "../ui/MenuFade.ts";
-import { Vc } from "../vc/session.ts";
+import { Vc, type CopyResult } from "../vc/session.ts";
 import * as saveio from "../platform/saveio.ts";
 import { tonumber } from "../platform/lua.ts";
 
@@ -274,69 +274,91 @@ export class Game2 {
    * COPY SAVE (the title, not on the cart): one save written over the other
    * through the VC converter. The destination is backed up first (the VC
    * title's by the host, into vc_backup/; the Lua file's as a dated copy in
-   * save_backup/); on any failure nothing is written and a text box says
-   * why. Then the title again, its summaries read afresh.
+   * save_backup/); on any failure before the write nothing is written, and a
+   * text box says what stopped it and why. Then the title again, in place
+   * (the cursor on COPY SAVE), its summaries read afresh. The texts are the
+   * Gen 1 games' (voxelmon/game/vc/copysave.ts), so the two read alike.
    */
   copySave(dir: "toVc" | "toLua"): void {
     const what = dir === "toVc" ? "LUA TO VC" : "VC TO LUA";
-    const log = (t: string): void => console.log(`[pv] vc: copy ${t}`);
+    const log = (t: string): void => console.log(`[pv] vc: copy: ${t}`);
     log(`${what}: start`);
-    let res: [boolean, string?];
+    let res: CopyResult;
     try {
       res = dir === "toVc" ? this.copyLuaToVc(log) : this.copyVcToLua(log);
     } catch (e) {
-      res = [false, String((e as Error)?.message ?? e)];
+      res = { ok: false, stage: "convert", why: String((e as Error)?.message ?? e) };
     }
-    const [ok, why] = res;
-    if (!ok) log(`${what} FAILED: ${why ?? "?"}`);
+    if (!res.ok && dir === "toLua") log(`${what} FAILED (${res.stage}): ${res.why ?? "?"}`);
     this.showMainMenu();
-    if (ok) {
-      this.stack.push(TextBox.new(this, "Copied the save!"));
-      return;
-    }
-    const w = String(why ?? "").replace(/\s+/g, " ").trim().slice(0, 54);
-    const rows: string[] = [];
-    for (let i = 0; i < w.length && rows.length < 3; i += 18) rows.push(w.slice(i, i + 18));
-    this.stack.push(TextBox.new(this, `The save was not\ncopied.\f${rows.length ? `${rows.join("\n")}\f` : ""}Nothing was\nwritten.`));
+    const menu: any = this.stack.top();
+    const row = menu?.list?.items?.findIndex?.((i: any) => i.value === "copy") ?? -1;
+    if (row >= 0) menu.list.index = row + 1;
+    this.stack.push(TextBox.new(this, res.ok ? "Copied the save!" : Game2.copyFailText(dir, res)));
   }
 
-  private copyLuaToVc(log: (t: string) => void): [boolean, string?] {
+  /** The failure's text box: what stopped it, \f, why (up to 3 lines of
+   *  18), \f, what is left. */
+  static copyFailText(dir: "toVc" | "toLua", res: CopyResult): string {
+    const [src, dst] = dir === "toVc" ? ["LUA", "VC"] : ["VC", "LUA"];
+    const first = {
+      read: `The ${src} save could\nnot be read.`,
+      backup: `The ${dst} save could\nnot be backed up.`,
+      convert: "The save could not\nbe converted.",
+      write: dir === "toVc" ? "The VC save did\nnot take it." : "The LUA save could\nnot be written.",
+    }[res.stage ?? "convert"];
+    const last = res.stage !== "write"
+      ? "Nothing was\ncopied."
+      : dir === "toVc"
+        ? "The VC save is\nleft as it was."
+        : res.kept
+          ? "A copy of the old\nLUA save is kept."
+          : "Nothing was\ncopied.";
+    const w = String(res.why ?? "").replace(/\s+/g, " ").trim().slice(0, 54);
+    const rows: string[] = [];
+    for (let i = 0; i < w.length && rows.length < 3; i += 18) rows.push(w.slice(i, i + 18));
+    return `${first}\f${rows.length ? `${rows.join("\n")}\f` : ""}${last}`;
+  }
+
+  private copyLuaToVc(log: (t: string) => void): CopyResult {
     const [lua, , err] = Save.load();
-    if (!lua) return [false, `Lua save: ${err ?? "none"}`];
+    if (!lua) return { ok: false, stage: "read", why: err ?? "no Lua save" };
     log(`LUA TO VC: the Lua save holds ${lua.player?.name}`);
     return Vc.copyToVc(lua);
   }
 
-  private copyVcToLua(log: (t: string) => void): [boolean, string?] {
+  private copyVcToLua(log: (t: string) => void): CopyResult {
     const [old] = Save.load();
     log(`VC TO LUA: converting the VC save (the Lua save ${old ? `holds ${old.player?.name}` : "is empty or unreadable"})`);
+    if (!Vc.hasGame()) return { ok: false, stage: "read", why: "no game in the VC save" };
     const t0 = Date.now();
     let save: any;
     try {
       save = Vc.load();
+      // this game's own clock base stays the Lua save's (as a VC CONTINUE)
+      const r = old?.rtc;
+      save.rtc = { ...(save.rtc ?? {}), startMinute: tonumber(r?.startMinute) ?? 0, startDay: tonumber(r?.startDay) ?? 0 };
+      if (r?.dayOfWeek != null) save.rtc.dayOfWeek = r.dayOfWeek;
+      // the port's own options stay the Lua save's (this session's when
+      // there is none); the cartridge's OPTION settings come over
+      const cart = save.options ?? {};
+      const options: Record<string, any> = { ...(old?.options ?? this.options) };
+      for (const k of Game2.CART_OPTIONS) if (cart[k] !== undefined) options[k] = cart[k];
+      save.options = options;
+      Save.normalize(save);
     } catch (e) {
-      return [false, `VC save: ${String((e as Error)?.message ?? e)}`];
+      return { ok: false, stage: "convert", why: String((e as Error)?.message ?? e) };
     }
-    // this game's own clock base stays the Lua save's (as a VC CONTINUE)
-    const r = old?.rtc;
-    save.rtc = { ...(save.rtc ?? {}), startMinute: tonumber(r?.startMinute) ?? 0, startDay: tonumber(r?.startDay) ?? 0 };
-    if (r?.dayOfWeek != null) save.rtc.dayOfWeek = r.dayOfWeek;
-    // the port's own options stay the Lua save's (this session's when there
-    // is none); the cartridge's OPTION settings come over from the VC save
-    const cart = save.options ?? {};
-    const options: Record<string, any> = { ...(old?.options ?? this.options) };
-    for (const k of Game2.CART_OPTIONS) if (cart[k] !== undefined) options[k] = cart[k];
-    save.options = options;
-    Save.normalize(save);
     log(`VC TO LUA: converted in ${Date.now() - t0} ms: ${save.player?.name} at ${save.position?.map} ${save.position?.x},${save.position?.y}`);
-    if (!saveio.keepCopy()) return [false, `backup failed: ${saveio.writeErr() ?? "the card did not take it"}`];
-    log("VC TO LUA: the Lua save kept in save_backup; writing");
+    const hadLua = saveio.read() !== undefined && saveio.read() !== "";
+    if (!saveio.keepCopy()) return { ok: false, stage: "backup", why: saveio.writeErr() ?? "the card did not take it" };
+    log(`VC TO LUA: ${hadLua ? "the Lua save kept in save_backup" : "no Lua save to keep"}; writing`);
     const [ok, err] = Save.save(save);
-    if (!ok) return [false, err ?? "the Lua save was not written"];
-    for (const k of Game2.CART_OPTIONS) if (options[k] !== undefined) this.options[k] = options[k];
+    if (!ok) return { ok: false, stage: "write", why: err ?? saveio.writeErr() ?? "the card did not take it", kept: hadLua };
+    for (const k of Game2.CART_OPTIONS) if (save.options[k] !== undefined) this.options[k] = save.options[k];
     this.persistOptions();
     log(`VC TO LUA done: ${save.player?.name}, party ${(save.party ?? []).length}`);
-    return [true];
+    return { ok: true };
   }
 
   /** Game2.lua:262 */

@@ -104,7 +104,9 @@ export class MainMenu {
   clock: MainMenuOpts["clock"];
   save: any;
   hasSave: boolean;
-  phase: "menu" | "confirm" | "pick" | "replace" | "copy" | "copyConfirm" = "menu";
+  phase: "menu" | "confirm" | "pick" | "replace" | "copy" | "copyConfirm" | "copying" = "menu";
+  /** "Copying..." shows this many frames before the copy runs. */
+  copyWait = 0;
   confirmDelay = 0;
   list!: List;
 
@@ -203,9 +205,9 @@ export class MainMenu {
     let items: { label: string; value: unknown }[] = [];
     if (this.hasSave) items.push({ label: Strings.get("CONTINUE"), value: "continue" });
     items.push({ label: Strings.get("NEW GAME"), value: "new" });
-    items.push({ label: Strings.get("OPTION"), value: "option" });
     // Not on the cart: copy one save over the other (the VC title there)
     if (this.copyDirections().length) items.push({ label: Strings.get("COPY SAVE"), value: "copy" });
+    items.push({ label: Strings.get("OPTION"), value: "option" });
     if (this.save != null && this.onMysteryGift && MysteryGift.unlocked(this.save)) {
       items.push({ label: Strings.get("MYSTERY GIFT"), value: "gift" });
     }
@@ -318,11 +320,19 @@ export class MainMenu {
         this.copyChoice = this.copyChoice === 1 ? 2 : 1;
       } else if (input.wasPressed("a")) {
         if (this.copyChoice === 1) {
-          console.log(`[pv] vc: copy ${this.copyDir === "toVc" ? "LUA TO VC" : "VC TO LUA"}: YES`);
-          this.onCopy?.(this.copyDir);
+          console.log(`[pv] vc: copy: ${this.copyDir === "toVc" ? "LUA TO VC" : "VC TO LUA"}: YES`);
+          this.phase = "copying";
+          this.copyWait = 60;
         } else this.phase = "copy";
       } else if (input.wasPressed("b")) {
         this.phase = "copy";
+      }
+      return;
+    }
+    if (this.phase === "copying") {
+      if (--this.copyWait <= 0) {
+        this.phase = "menu";
+        this.onCopy?.(this.copyDir);
       }
       return;
     }
@@ -407,26 +417,30 @@ export class MainMenu {
     });
   }
 
-  /** One save's box for the copy's confirm: whose, then name, badges and
-   *  time (`s` absent: EMPTY). */
-  private drawCopyBox(y: number, title: string, s: Summary | null | undefined): void {
-    Chrome.box(0, y, 14, 6);
-    Chrome.print(title, 1, y + 1);
+  /** One save's lines on the copy's confirm: its title, then the four
+   *  CONTINUE lines (or "(EMPTY)"), one row each, kept to x <= 12 so the
+   *  YES/NO box beside them covers nothing. */
+  private drawCopyLines(y: number, title: string, s: Summary | null | undefined): void {
+    Chrome.print(title, 1, y);
     if (!s) {
-      Chrome.print(Strings.get("EMPTY"), 1, y + 2);
+      Chrome.print(Strings.get("   (EMPTY)"), 1, y + 1);
       return;
     }
-    Chrome.print(s.name, 1, y + 2);
-    Chrome.print(Strings.get("BADGES"), 1, y + 3);
-    Chrome.print(Chrome.number(s.badges, 2), 10, y + 3);
-    Chrome.print(Strings.get("TIME"), 1, y + 4);
-    Chrome.print(Chrome.number(s.hours, 3), 6, y + 4);
-    Chrome.print(":", 9, y + 4);
-    Chrome.print(Chrome.number(s.minutes, 2, true), 10, y + 4);
+    Chrome.print(s.name, 2, y + 1);
+    Chrome.print(Strings.get("BADGES"), 2, y + 2);
+    Chrome.print(Chrome.number(s.badges, 2), 10, y + 2);
+    Chrome.print(Strings.get("POKéDEX"), 2, y + 3);
+    Chrome.print(Chrome.number(s.caught, 3), 10, y + 3);
+    Chrome.print(Strings.get("TIME"), 2, y + 4);
+    Chrome.print(Chrome.number(s.hours, 3), 7, y + 4);
+    Chrome.print(":", 10, y + 4);
+    Chrome.print(Chrome.number(s.minutes, 2, true), 11, y + 4);
   }
 
-  /** The copy's confirm: the source, the save it replaces (or EMPTY), and
-   *  "Copy the LUA save over the VC save?" with YES/NO, NO first. */
+  /** The copy's confirm: "COPY: LUA SAVE" and its lines, "REPLACE: VC
+   *  SAVE" and its lines (or "TO: VC SAVE" / "(EMPTY)"), then "Copy the LUA
+   *  save / over the VC save?" with YES/NO, NO first -- the Gen 1 games'
+   *  words (voxelmon/game/vc/copysave.ts). */
   drawCopyConfirm(): void {
     const toVc = this.copyDir === "toVc";
     const vc = Vc.summary();
@@ -434,9 +448,9 @@ export class MainMenu {
     const src = toVc ? lua : vc;
     const dst = toVc ? vc : lua;
     const [from, to] = toVc ? ["LUA", "VC"] : ["VC", "LUA"];
-    // (12 columns inside a box: the one replaced says so in its title)
-    this.drawCopyBox(0, Strings.get("%s SAVE", from), src);
-    this.drawCopyBox(6, dst ? Strings.get("%s REPLACED", to) : Strings.get("%s SAVE", to), dst);
+    Chrome.box(0, 0, 20, 12);
+    this.drawCopyLines(1, Strings.get("COPY: %s SAVE", from), src);
+    this.drawCopyLines(6, dst ? Strings.get("REPLACE: %s SAVE", to) : Strings.get("TO: %s SAVE", to), dst);
     Chrome.textbox(0, 12, 18, 4);
     Chrome.print(Strings.get("Copy the %s save", from), 1, 14);
     Chrome.print(Strings.get("over the %s save?", to), 1, 16);
@@ -444,6 +458,12 @@ export class MainMenu {
     Chrome.print(Strings.get("YES"), 16, 8);
     Chrome.print(Strings.get("NO"), 16, 10);
     Chrome.cursor(15, this.copyChoice === 1 ? 8 : 10);
+  }
+
+  /** "Copying..." while the copy waits its 60 frames. */
+  drawCopying(): void {
+    Chrome.textbox(0, 12, 18, 4);
+    Chrome.print(Strings.get("Copying..."), 1, 14);
   }
 
   /** "The VC save will be replaced. Is that OK?" -- the YES/NO SaveMenu uses. */
@@ -498,6 +518,10 @@ export class MainMenu {
     }
     if (this.phase === "copyConfirm") {
       this.drawCopyConfirm();
+      return;
+    }
+    if (this.phase === "copying") {
+      this.drawCopying();
       return;
     }
     if (this.phase === "confirm") {

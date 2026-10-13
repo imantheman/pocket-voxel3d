@@ -17,6 +17,11 @@ import { loadGenerated } from "../platform/data.ts";
 import { GameVersion } from "../shared/core/GameVersion.ts";
 import { cartSummary, cartToSave, engineOf, isCartSave, saveToCart, type CartSummary, type G2Data } from "./cartsave.ts";
 
+/** COPY SAVE's outcome: where it stopped, and whether the destination's
+ *  old save is kept (a backup was made before the write that failed). */
+export type CopyStage = "read" | "backup" | "convert" | "write";
+export interface CopyResult { ok: boolean; stage?: CopyStage; why?: string; kept?: boolean }
+
 export interface VcHost {
   data(): Uint8Array | undefined;
   write(bytes: Uint8Array): boolean;
@@ -142,30 +147,35 @@ export const Vc = {
    *  trainer (name and ID) the bytes this game does not model are kept from
    *  it, the cartridge's clock among them; over another game's, or an empty
    *  one, the cartridge save is built afresh. */
-  copyToVc(luaSave: Record<string, any>): [boolean, string?] {
-    const fail = (why: string): [boolean, string] => {
+  copyToVc(luaSave: Record<string, any>): CopyResult {
+    const fail = (stage: CopyStage, why: string): CopyResult => {
       lastErr = why;
-      log(`copy FAILED, nothing written: ${why}`);
-      return [false, why];
+      log(`copy: LUA TO VC FAILED (${stage}): ${why}`);
+      return { ok: false, stage, why };
     };
-    if (!host || !bytes) return fail("no VC title");
+    if (!host || !bytes) return fail("write", "no VC title");
+    const cur = Vc.summary();
+    const p = luaSave.player ?? {};
+    const same = !!cur && cur.name === p.name && cur.id === Number(p.id ?? -1);
+    log(`copy: the VC save ${cur ? `holds ${cur.name}, ${cur.badges} badges, ${cur.hours}:${String(cur.minutes).padStart(2, "0")} (${same ? "the same trainer: its other bytes kept" : "another game: built afresh"})` : "is empty (built afresh)"}`);
+    let w: { bytes: Uint8Array; notes: string[] };
     try {
-      const cur = Vc.summary();
-      const p = luaSave.player ?? {};
-      const same = !!cur && cur.name === p.name && cur.id === Number(p.id ?? -1);
-      log(`copy: the VC save ${cur ? `holds ${cur.name}, ${cur.badges} badges, ${cur.hours}:${String(cur.minutes).padStart(2, "0")} (${same ? "the same trainer: its other bytes kept" : "another game: built afresh"})` : "is empty (built afresh)"}`);
       const t0 = Date.now();
-      const w = saveToCart(luaSave, dataset(), GameVersion.get(), same ? bytes : null, {});
+      w = saveToCart(luaSave, dataset(), GameVersion.get(), same ? bytes : null, {});
       for (const n of w.notes) log(`copy: ${n}`);
       log(`copy: converted in ${Date.now() - t0} ms; writing the VC title (its save backed up first)`);
-      if (host.write(w.bytes) !== true) return fail(host.err() ?? "the VC title did not take it");
-      bytes = w.bytes;
-      lastErr = "";
-      log(`copy LUA TO VC done: ${p.name} at ${luaSave.position?.map} ${luaSave.position?.x},${luaSave.position?.y}`);
-      return [true];
     } catch (e) {
-      return fail(String((e as Error)?.message ?? e));
+      return fail("convert", String((e as Error)?.message ?? e));
     }
+    if (host.write(w.bytes) !== true) {
+      const why = host.err() ?? "the VC title did not take it";
+      // the host backs the title's save up before it writes anything
+      return fail(/backup failed/i.test(why) ? "backup" : "write", why);
+    }
+    bytes = w.bytes;
+    lastErr = "";
+    log(`copy: LUA TO VC done: ${p.name} at ${luaSave.position?.map ?? "?"} ${luaSave.position?.x ?? "?"},${luaSave.position?.y ?? "?"}`);
+    return { ok: true };
   },
 
   /** For tests and benches. */
