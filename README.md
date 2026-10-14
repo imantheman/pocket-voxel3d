@@ -122,31 +122,38 @@ folder and an `options.lua`). Inside `saves` there is one folder per game
   the title screen and keeps the file as it was (it copies it to
   `<name>.unreadable` before ever writing over it).
 
-### Red, Blue and Yellow: sharing a save with the official 3DS re-release
+### Sharing a save with the official 3DS re-releases
 
-If the official digital re-release of Red, Blue or Yellow (US) is installed
-on the same console, the 3DS game can load and write that game's own save,
-so one playthrough can move back and forth between the two.
+If the official digital re-release of the same game (US) is installed on
+the same console, the 3DS game can load and write that game's own save, so
+one playthrough can move back and forth between the two. This works for all
+six games: Red, Blue, Yellow, Gold, Silver and Crystal.
 
 - **CONTINUE** asks which save to load: **LUA SAVE** (this game's own file,
   as above) or **VC SAVE** (the re-release's save).
 - Whichever you load is the one **SAVE** writes to. The "saved the game!"
   message ends with (VC) or (Lua) so you can tell which.
-- Before writing to the re-release's save, the game copies it to
-  `SD:/3ds/voxelmon/vc_backup/` (the last few copies are kept). To undo a
-  save, put a copy back with a save manager such as Checkpoint.
-- This needs the Red, Blue and Yellow cooks from **2.3.0 or later**: cook
-  those ROMs again with this release's cooker (see "Updating, and cooking
-  again" above). With an older cook, CONTINUE simply does not offer the VC
-  save.
+- **NEW GAME** asks the same question, so a new game can live in the
+  re-release's save from the start. If that save already holds a game, it
+  asks before replacing it.
+- **COPY SAVE** on the title screen copies one save over the other:
+  **LUA TO VC** or **VC TO LUA**. It shows both saves (name, badges, dex,
+  time) and asks before copying.
+- Nothing is written over without a copy first. The re-release's save goes to
+  `SD:/3ds/voxelmon/vc_backup/`, and a Lua save replaced by COPY SAVE goes to
+  `SD:/3ds/voxelmon/save_backup/` (the last 10 are kept). To undo, put a copy
+  back: a save manager such as Checkpoint for the re-release, or copy the
+  `.lua` file back over the save.
+- Red, Blue and Yellow need cooks from **2.3.0 or later** (cook those ROMs
+  again with this release's cooker; see "Updating, and cooking again"
+  above). With an older cook, CONTINUE simply does not offer the VC save.
+  Gold, Silver and Crystal need no new cook.
 - Things the original game has no room for stay behind: the facing
-  direction, repel steps, cut trees (they grow back, as on the original),
-  and this game's own options. Monsters or items the converter does not know
-  (glitch ones) are left out.
-- **Known issue:** switch between the two after finishing a story event, not
-  partway through one. Saving here halfway through a scene and then loading
-  the re-release can make that scene play again (for example, the first
-  parcel errand can hand over a second parcel).
+  direction, repel steps, cut trees and smashed rocks (they come back, as on
+  the original), and this game's own options. Monsters or items the converter
+  does not know (glitch ones) are left out.
+- Gold, Silver and Crystal keep their own clocks: the re-release's clock is
+  never changed, so the time of day can differ between the two.
 
 ### If something goes wrong
 
