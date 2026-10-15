@@ -3,12 +3,12 @@
 // (base stats), AREA (where it lives, with levels) and MOVES (what it
 // learns and when). Stats, habitats and moves are assists: VANILLA keeps to
 // the game's own dex page.
-import { picPageFor } from "../../../battle/staging.ts";
 import {
-  COLS, TILE_H, TILE_W, center, fit, pressedId, region, right, rule, sprite, text,
+  COLS, center, fit, pressedId, region, right, rule, text, width,
 } from "../draw.ts";
-import { assists, spoilers, wildRows } from "../model.ts";
+import { assists, spoilers, typeName, wildRows } from "../model.ts";
 import { stepper, tabs, type GearCtx } from "../ui.ts";
+import { VALUE_X, monStrip } from "./party.ts";
 
 const ROWS_SHOWN = 14;
 
@@ -46,7 +46,8 @@ function drawList(ctx: GearCtx): void {
   });
   const nOwn = Object.values(owned).filter(Boolean).length;
   const nSeen = Object.values(seen).filter(Boolean).length;
-  text(host, 0, 15, `SEEN ${nSeen}  OWN ${nOwn}`);
+  // the tally a row clear of the list, centred over the pager
+  center(host, 16, `SEEN ${nSeen}  OWN ${nOwn}`);
   const at = Math.floor(top / ROWS_SHOWN);
   stepper(ctx, `${at + 1}/${pages}`,
     () => { ui.top = ((at + pages - 1) % pages) * ROWS_SHOWN; },
@@ -81,53 +82,64 @@ function drawEntry(ctx: GearCtx, id: string): void {
   const d = data.pokemon[id] ?? {};
   const owned = !!save?.pokedex?.owned?.[id];
   const page = ui.page ?? "info";
-  sprite(host, picPageFor(data, id), 0, TILE_H + 2, 4 * TILE_W, 4 * TILE_H);
-  text(host, 5, 2, fit(d.name ?? id, 10));
-  right(host, 2, owned ? "OWN" : "SEEN", "dark", 20);
-  text(host, 5, 3, `No.${String(d.dex ?? 0).padStart(3, "0")}`);
-  if (d.dexEntry?.kind) text(host, 5, 4, fit(`${d.dexEntry.kind} POKéMON`, 15));
+  // the kind alone, as the cartridge's own dex page gives it ("SHELLFISH
+  // POKéMON" was cut to "SHELLFISH POKé."); OWN / SEEN beside the number,
+  // clear of a long name
+  monStrip(ctx, id, d.name ?? id, "", d.dex, owned ? "OWN" : "SEEN");
+  if (d.dexEntry?.kind) text(host, 5, 4, fit(String(d.dexEntry.kind), 14));
   rule(host, 6);
   const locked = page !== "info" && !assists(save);
   if (locked) {
     center(host, 9, "SET INFO TO ENHANCED");
     center(host, 11, "IN OPTIONS");
   } else if (page === "info") {
+    // the summary's columns: labels at 1, values at 8, a type a row
+    const types: string[] = (d.types ?? []).map(typeName);
     text(host, 1, 7, "TYPE");
-    text(host, 7, 7, (d.types ?? []).join("/"));
+    types.slice(0, 2).forEach((t, k) => text(host, VALUE_X, 7 + k, t));
     if (owned && d.dexEntry) {
       text(host, 1, 9, "HT");
-      text(host, 7, 9, `${d.dexEntry.heightFt}'${String(d.dexEntry.heightIn).padStart(2, "0")}"`);
+      text(host, VALUE_X, 9, `${d.dexEntry.heightFt}'${String(d.dexEntry.heightIn).padStart(2, "0")}"`);
       text(host, 1, 10, "WT");
-      text(host, 7, 10, `${(d.dexEntry.weight / 10).toFixed(1)}lb`);
+      text(host, VALUE_X, 10, `${(d.dexEntry.weight / 10).toFixed(1)}lb`);
       const entry = data.text?.[d.dexEntry.text];
       if (typeof entry === "string") {
         entry.replace(/[\f\v]/g, "\n").split("\n").filter(Boolean).slice(0, 4)
           .forEach((l: string, i: number) => text(host, 1, 12 + i, fit(l, 18)));
       }
     } else {
-      text(host, 1, 9, "CATCH ONE TO LEARN");
-      text(host, 1, 10, "MORE.");
+      center(host, 11, "CATCH ONE TO LEARN");
+      center(host, 12, "MORE.");
     }
   } else if (page === "stats") {
+    // one row each and one right-aligned column; CATCH RATE apart below
+    // (it was drawn over SPECIAL)
     const b = d.baseStats ?? {};
     ([["HP", b.hp], ["ATTACK", b.attack], ["DEFENSE", b.defense], ["SPEED", b.speed], ["SPECIAL", b.special]] as const)
       .forEach(([label, v], k) => {
-        text(host, 1, 7 + k * 2, label);
-        text(host, 10, 7 + k * 2, String(v ?? "-").padStart(3, " "));
+        text(host, 1, 7 + k, label);
+        right(host, 7 + k, String(v ?? "-"), "dark", 15);
       });
-    text(host, 1, 15, `CATCH RATE ${d.catchRate ?? "-"}`);
+    text(host, 1, 13, "CATCH RATE");
+    right(host, 13, String(d.catchRate ?? "-"), "dark", 15);
   } else if (page === "area") {
     const all = habitats(data, id);
-    if (all.length === 0) text(host, 1, 8, "NOT FOUND IN THE WILD");
-    // ENHANCED hides where a mon you have not caught lives
-    else if (!owned && !spoilers(save)) text(host, 1, 8, fit(`${all.length} PLACES. CATCH ONE`, 18));
-    else {
+    if (all.length === 0) {
+      center(host, 10, "NOT FOUND IN");
+      center(host, 11, "THE WILD.");
+    } else if (!owned && !spoilers(save)) {
+      // ENHANCED hides where a mon you have not caught lives
+      center(host, 10, fit(`FOUND IN ${all.length} PLACE${all.length === 1 ? "" : "S"}.`, 18));
+      center(host, 11, "CATCH ONE TO SEE.");
+    } else {
       const short: Record<string, string> = {
         GRASS: "GRS", WATER: "SURF", "OLD ROD": "ROD1", "GOOD ROD": "ROD2", "SUPER ROD": "ROD3",
       };
+      // the place cut to leave a column before its method and levels
       all.slice(0, 9).forEach((h, k) => {
-        text(host, 0, 7 + k, fit(h.map, 10));
-        right(host, 7 + k, `${short[h.method] ?? h.method} L${h.lv}`, "dark", 20);
+        const where = `${short[h.method] ?? h.method} L${h.lv}`;
+        text(host, 1, 7 + k, fit(h.map, 19 - width(where) - 2));
+        right(host, 7 + k, where);
       });
     }
   } else {
