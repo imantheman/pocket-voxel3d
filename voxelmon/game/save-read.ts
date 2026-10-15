@@ -113,6 +113,12 @@ const ARRAY_FIELDS: string[][] = [
   ["boxes"],
   ["boxes", "*"],
   ["boxes", "*", "*", "moves"],
+  // the Kanto Gear's notes (ui/gear/model.ts): no notes yet, a checklist
+  // with nothing on it -- NOTES threw on the first, so the console's
+  // bottom-screen tap dropped into the map viewer
+  ["modData", "kanto_gear", "notes"],
+  ["modData", "kanto_gear", "notes", "*", "lines"],
+  ["modData", "kanto_gear", "notes", "*", "done"],
 ];
 
 /** Every value `path` names, walking `*` across a container's entries. */

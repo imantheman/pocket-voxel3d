@@ -9942,6 +9942,27 @@ describe("a save that was written with an empty list", () => {
     expect(Array.isArray((save as { boxes: unknown }).boxes)).toBe(true);
   });
 
+  test("the gear's notes come back as lists, empty or not", () => {
+    // NOTES with no notes yet, and a checklist with nothing on it: both
+    // written `{}`; the app threw on the object, and the console dropped
+    // into the map viewer
+    const text = [
+      "return {",
+      "  modData = { kanto_gear = { notes = {}, removed = {} } },",
+      "}",
+    ].join("\n");
+    const save = decodeSave(text) as { modData: { kanto_gear: { notes: unknown; removed: unknown } } };
+    expect(save.modData.kanto_gear.notes).toEqual([]);
+    expect(Array.isArray(save.modData.kanto_gear.removed)).toBe(false);
+    const list = decodeSave([
+      "return {",
+      '  modData = { kanto_gear = { notes = { [1] = { kind = "list", title = "", lines = {}, done = {} } } } },',
+      "}",
+    ].join("\n")) as { modData: { kanto_gear: { notes: { lines: unknown; done: unknown }[] } } };
+    expect(list.modData.kanto_gear.notes[0]!.lines).toEqual([]);
+    expect(list.modData.kanto_gear.notes[0]!.done).toEqual([]);
+  });
+
   test.skipIf(!hasGen)("a record that happens to be empty stays a record", () => {
     const save = decodeSave("return { flags = {}, inventory = {}, pokedex = { seen = {} } }") as {
       flags: unknown;
