@@ -1984,8 +1984,11 @@ export class Scene {
         // Nothing on the text layer while it waits: the cartridge says no
         // PRESS START, it just waits for one.
         if (ttl.phase === "menu" || ttl.phase === "pick") {
-          // Top-left, like the original's main menu box.
-          const MX = 0, MY = 0, MW = 12;
+          // Top-left, like the original's main menu box: wide enough for
+          // its longest entry and a clear column before the right border
+          // (MAP VIEWER sat on the border of the old fixed 12).
+          const longest = Math.max(0, ...ttl.menu.map((m: string) => encodeGlyphs(m).length));
+          const MX = 0, MY = 0, MW = Math.max(12, longest + 4);
           const MH = ttl.menu.length * 2;
           host.uiTile(MX, MY, BORDER_TL);
           host.uiFill(MX + 1, MY, MW - 1, 1, BORDER_H);
