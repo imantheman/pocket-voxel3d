@@ -9,9 +9,9 @@ import { picPageFor } from "../../battle/staging.ts";
 import { encodeGlyphs, BORDER_H } from "../tiles.ts";
 import {
   COLS, DARKTEXT_BIT, FILL_BIT, ROWS, TILE_H, TILE_W, box, center, cursor, fill, fit, pill,
-  region, right, rule, sprite, spriteFrame, text, tile,
+  region, right, row, rule, sprite, spriteFrame, text, tile,
 } from "./draw.ts";
-import { assists, matchups, multLabel, spoilers, typeShort } from "./model.ts";
+import { assists, matchups, multLabel, spoilers, typeName, typeShort } from "./model.ts";
 import { header, type GearCtx } from "./ui.ts";
 import { drawMoveInfo, drawPartyGrid } from "./apps/party.ts";
 import { spritePage } from "./apps/explorer.ts";
@@ -145,25 +145,27 @@ function drawMoveSelect(ctx: GearCtx, b: GearBattle): void {
     const y0 = rowY[(i / 2) | 0]!;
     const slot = moves[i]!;
     const def = data.moves?.[slot.id];
-    const name = (def?.name ?? slot.id).slice(0, 7);
     const maxPp = def?.pp ?? slot.pp;
-    const type = (def?.type ?? "").toUpperCase().slice(0, 6);
     const selected = i === b.moveIndex - 1;
     const ink = selected ? "fill" : "dark";
     if (selected) fill(host, x0, y0, 10, 8);
     box(host, x0, y0, 10, 8, selected ? "fill" : "dark");
-    text(host, x0 + 1, y0 + 1, name, ink);
-    text(host, x0 + 1, y0 + 3, `PP ${slot.pp}/${maxPp}`, ink);
-    text(host, x0 + 1, y0 + 5, type, ink);
+    // inside the box (columns x0+1..x0+8): the name and its type on rows
+    // 1-2, PP on row 4, the matchup and the ? on row 6 -- the name cut
+    // with an ellipsis rather than run into the ?, the type whole rather
+    // than run into the matchup
+    text(host, x0 + 1, y0 + 1, fit(def?.name ?? slot.id, 8), ink);
+    text(host, x0 + 1, y0 + 2, typeName(def?.type), ink);
+    text(host, x0 + 1, y0 + 4, `PP ${slot.pp}/${maxPp}`, ink);
     let eff = "--";
     if (details && (def?.power ?? 0) > 0 && b.enemy && b.chart) {
       eff = multLabel(b.chart.effectiveness(def!.type ?? "", b.enemy.curTypes));
     }
-    text(host, x0 + 9 - eff.length, y0 + 5, eff, ink);
+    text(host, x0 + 1, y0 + 6, eff, ink);
     if (details) {
       // the ? is its own target: it opens the details, it does not pick
-      host.uiTileBottom(x0 + 8, y0 + 1, qmark | (selected ? FILL_BIT : DARKTEXT_BIT));
-      region(`b:q${i}`, x0 + 7, y0, 3, 3, () => { s.moveInfo = i; });
+      host.uiTileBottom(x0 + 8, y0 + 6, qmark | (selected ? FILL_BIT : DARKTEXT_BIT));
+      region(`b:q${i}`, x0 + 6, y0 + 5, 4, 3, () => { s.moveInfo = i; });
     }
   }
 }
@@ -205,7 +207,7 @@ function drawItemList(ctx: GearCtx, b: GearBattle): void {
   for (let i = top; i < b.itemList.length && i < top + ITEM_ROWS; i++) {
     const id = b.itemList[i]!;
     const y = 2 + (i - top);
-    text(host, 2, y, (data.items?.[id]?.name ?? id).slice(0, 13));
+    text(host, 2, y, fit(data.items?.[id]?.name ?? id, 13));
     right(host, y, `x${save?.inventory?.[id] ?? 0}`);
     if (i === b.itemIndex) cursor(host, 0, y);
   }
@@ -274,7 +276,7 @@ function drawEnemyInfo(ctx: GearCtx, b: GearBattle): void {
   sprite(host, picPageFor(data, mon?.species ?? ""), 0, TILE_H + 2, 5 * TILE_W, 5 * TILE_H);
   text(host, 6, 2, fit(b.enemy?.name ?? def.name ?? "", 13));
   text(host, 6, 3, `No.${String(def.dex ?? 0).padStart(3, "0")} L${mon?.level ?? "?"}`);
-  text(host, 6, 4, fit((b.enemy?.curTypes ?? def.types ?? []).join("/"), 14));
+  text(host, 6, 4, fit((b.enemy?.curTypes ?? def.types ?? []).map(typeName).join("/"), 14));
   const owned = !!save?.pokedex?.owned?.[mon?.species];
   text(host, 6, 5, `CAUGHT ${owned ? "YES" : "NO"}`);
   if (spoilers(save) && mon?.dvs) {
@@ -289,13 +291,17 @@ function drawEnemyInfo(ctx: GearCtx, b: GearBattle): void {
   }
   center(host, 8, "BASE MATCHUP");
   const { weak, resist } = matchups(b.chart, b.enemy?.curTypes ?? def.types ?? []);
-  text(host, 0, 9, `WEAK ${weak.length}`);
-  text(host, 10, 9, `RESIST ${resist.length}`);
+  // a column either side of the divider (column 9): the type left, its
+  // multiplier right-aligned against the divider or the screen's edge
+  // (the widest, "GROUND 1/2", fills a side; it used to run into the
+  // divider)
+  row(host, 9, "WEAK", String(weak.length), 0, 9);
+  row(host, 9, "RESIST", String(resist.length), 10, COLS);
   for (let i = 0; i < 6; i++) {
     const w = weak[i];
     const r = resist[i];
-    if (w) text(host, 0, 10 + i, fit(`${typeShort(w[0])} ${multLabel(w[1])}`, 10));
-    if (r) text(host, 10, 10 + i, fit(`${typeShort(r[0])} ${multLabel(r[1])}`, 10));
+    if (w) row(host, 10 + i, typeShort(w[0]), multLabel(w[1]), 0, 9);
+    if (r) row(host, 10 + i, typeShort(r[0]), multLabel(r[1]), 10, COLS);
   }
   for (let y = 9; y < 16; y++) tile(host, 9, y, 0x7c);
 }
