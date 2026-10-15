@@ -451,11 +451,17 @@ export const TYPES = [
 ];
 
 /** The short names the mod prints where a type has to fit a column. */
+/** A type as the game prints it: the dataset's PSYCHIC_TYPE is "PSYCHIC". */
+export function typeName(t: string | undefined): string {
+  return String(t ?? "").replace(/_TYPE$/, "");
+}
+
 export function typeShort(t: string): string {
   const s: Record<string, string> = {
     FIGHTING: "FIGHT", ELECTRIC: "ELECT", PSYCHIC: "PSYCH",
   };
-  return s[t] ?? t;
+  const n = typeName(t);
+  return s[n] ?? n;
 }
 
 type Chart = { effectiveness: (atk: string, def: readonly string[]) => number };

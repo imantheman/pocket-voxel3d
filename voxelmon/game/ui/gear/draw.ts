@@ -110,11 +110,17 @@ export function text(host: GearHost, x: number, y: number, s: string, ink: Ink =
   }
   const codes = encodeGlyphs(s);
   const bit = INK_BIT[ink];
-  let n = 0;
   for (let i = 0; i < codes.length && x + i < COLS; i++) {
     if (x + i < 0) continue;
     host.uiTileBottom(x + i, y, codes[i]! | bit);
-    n++;
+  }
+  if (ink === "dark" && host.uiRectBottom && /[%+]/.test(s)) {
+    // the drawn "%" and "+" sit under the grid: their cells stay empty, or
+    // the glyph's paper would cover them (they never showed)
+    for (let i = 0; i < s.length; i++) {
+      const cx = x + width(s.slice(0, i));
+      if ((s[i] === "%" || s[i] === "+") && cx >= 0 && cx < COLS) host.uiTileBottom(cx, y, 0);
+    }
   }
   return codes.length;
 }
@@ -316,10 +322,19 @@ export function wrap(s: string, w: number): string[] {
   return out;
 }
 
-/** Cut to `n` glyphs with a trailing stop when it had to be cut. */
+/** Cut to `n` glyphs, ending in an ellipsis when it had to be cut. */
 export function fit(s: string, n: number): string {
   if (width(s) <= n) return s;
-  return s.slice(0, Math.max(1, n - 1)) + ".";
+  let cut = s.slice(0, Math.max(1, n - 1));
+  while (cut.length > 1 && width(cut) > n - 1) cut = cut.slice(0, -1);
+  return `${cut.trimEnd()}…`;
+}
+
+/** A label at column `x` and its value right-aligned to end before
+ * `rightEdge` (exclusive): the label/value rows of the info pages. */
+export function row(host: GearHost, y: number, label: string, value: string, x = 1, rightEdge = COLS - 1, ink: Ink = "dark"): void {
+  text(host, x, y, label, ink);
+  right(host, y, value, ink, rightEdge);
 }
 
 /** A scrolled window over `count` rows that keeps `sel` in view. */

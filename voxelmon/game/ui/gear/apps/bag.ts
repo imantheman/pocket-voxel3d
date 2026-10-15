@@ -4,7 +4,7 @@
 import * as Bag from "../../../rules/bag.ts";
 import * as Items from "../../../rules/items.ts";
 import { COLS, center, fit, pressedId, region, right, text, wrap } from "../draw.ts";
-import { moveEffectLines } from "../model.ts";
+import { moveEffectLines, typeName } from "../model.ts";
 import { backRow, tabs, type GearCtx } from "../ui.ts";
 import { drawPartyGrid } from "./party.ts";
 
@@ -79,7 +79,7 @@ export function itemAbout(data: any, id: string): string[] {
   const mv = it.machine?.move;
   if (mv) {
     const d = data.moves?.[mv] ?? {};
-    return [`TEACHES ${d.name ?? mv}.`, `${d.type ?? ""} PWR ${d.power || "--"}`, ...moveEffectLines(mv, d)];
+    return [`TEACHES ${d.name ?? mv}.`, `${typeName(d.type)} PWR ${d.power || "--"}`, ...moveEffectLines(mv, d)];
   }
   if (it.keyItem) return ["AN IMPORTANT ITEM."];
   return it.price ? [`SELLS FOR ¥${Math.floor(it.price / 2)}.`] : [];
