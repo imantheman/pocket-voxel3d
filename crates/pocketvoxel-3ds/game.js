@@ -16968,13 +16968,17 @@ var TYPES2 = [
   "ICE",
   "DRAGON"
 ];
+function typeName(t) {
+  return String(t ?? "").replace(/_TYPE$/, "");
+}
 function typeShort(t) {
   const s = {
     FIGHTING: "FIGHT",
     ELECTRIC: "ELECT",
     PSYCHIC: "PSYCH"
   };
-  return s[t] ?? t;
+  const n = typeName(t);
+  return s[n] ?? n;
 }
 function matchups(chart, defTypes) {
   const weak = [];
@@ -22093,7 +22097,8 @@ class Scene {
         this.uiOwner = null;
         host.uiClear();
         if (ttl.phase === "menu" || ttl.phase === "pick") {
-          const MX = 0, MY = 0, MW = 12;
+          const longest = Math.max(0, ...ttl.menu.map((m) => encodeGlyphs(m).length));
+          const MX = 0, MY = 0, MW = Math.max(12, longest + 4);
           const MH = ttl.menu.length * 2;
           host.uiTile(MX, MY, BORDER_TL);
           host.uiFill(MX + 1, MY, MW - 1, 1, BORDER_H);
@@ -24691,12 +24696,17 @@ function text(host, x, y, s, ink = "dark") {
   }
   const codes = encodeGlyphs(s);
   const bit = INK_BIT[ink];
-  let n = 0;
   for (let i = 0;i < codes.length && x + i < COLS; i++) {
     if (x + i < 0)
       continue;
     host.uiTileBottom(x + i, y, codes[i] | bit);
-    n++;
+  }
+  if (ink === "dark" && host.uiRectBottom && /[%+]/.test(s)) {
+    for (let i = 0;i < s.length; i++) {
+      const cx = x + width(s.slice(0, i));
+      if ((s[i] === "%" || s[i] === "+") && cx >= 0 && cx < COLS)
+        host.uiTileBottom(cx, y, 0);
+    }
   }
   return codes.length;
 }
@@ -24834,7 +24844,14 @@ function wrap2(s, w) {
 function fit(s, n) {
   if (width(s) <= n)
     return s;
-  return s.slice(0, Math.max(1, n - 1)) + ".";
+  let cut = s.slice(0, Math.max(1, n - 1));
+  while (cut.length > 1 && width(cut) > n - 1)
+    cut = cut.slice(0, -1);
+  return `${cut.trimEnd()}…`;
+}
+function row(host, y, label3, value, x = 1, rightEdge = COLS - 1, ink = "dark") {
+  text(host, x, y, label3, ink);
+  right(host, y, value, ink, rightEdge);
 }
 var drags = [];
 function beginDrags() {
@@ -24923,6 +24940,18 @@ function go(ctx, view) {
 }
 
 // voxelmon/game/ui/gear/apps/party.ts
+var VALUE_X = 8;
+function monStrip(ctx, species, name, level, dex, mark = "") {
+  const { host, data } = ctx;
+  sprite(host, picPageFor(data, species), 0, TILE_H * 1 + 2, 4 * TILE_W, 4 * TILE_H);
+  const end = COLS - 1 - (level ? width(level) + 1 : 0);
+  text(host, 5, 2, fit(name, end - 5));
+  if (level)
+    right(host, 2, level);
+  text(host, 5, 3, `No.${String(dex ?? 0).padStart(3, "0")}`);
+  if (mark)
+    right(host, 3, mark);
+}
 function monName2(data, m) {
   return m.nickname ?? data.pokemon?.[m.species]?.name ?? m.species;
 }
@@ -24937,8 +24966,7 @@ function drawPartyGrid(ctx, cursorAt, onTap) {
     if (i >= party.length)
       continue;
     const mon = party[i];
-    const full = monName2(data, mon);
-    const name = full.length > 7 ? full.slice(0, 6) + "." : full;
+    const name = fit(monName2(data, mon), 6);
     const maxHp = mon.stats?.hp ?? mon.hp;
     const lit = pressedId() === `party:${i}`;
     box(host, x0, y0, 10, 5, lit ? "light" : "dark");
@@ -24946,10 +24974,10 @@ function drawPartyGrid(ctx, cursorAt, onTap) {
     if (cursorAt === i)
       cursor(host, x0, y0);
     text(host, x0 + 3, y0 + 1, name);
-    text(host, x0 + 3, y0 + 2, `L${mon.level}`);
+    text(host, x0 + 3, y0 + 2, mon.level >= 100 ? String(mon.level) : `L${mon.level}`);
     tiles(host, x0 + 1, y0 + 3, hpBarTiles(mon.hp, maxHp, true).slice(1));
     if (mon.status)
-      text(host, x0 + 6, y0 + 2, mon.status.slice(0, 3));
+      text(host, x0 + 6, y0 + 2, mon.status.slice(0, 3).toUpperCase(), "fill");
     if (onTap)
       region(`party:${i}`, x0, y0, 10, 5, () => onTap(i));
   }
@@ -24967,9 +24995,9 @@ function drawParty(ctx) {
     ui.page ??= "info";
   });
   if (party.length === 0)
-    text(ctx.host, 4, 8, "NO POKéMON YET");
+    center(ctx.host, 8, "NO POKéMON YET");
   else
-    text(ctx.host, 2, 17, "TAP FOR A SUMMARY");
+    center(ctx.host, 17, "TAP FOR A SUMMARY");
 }
 var PAGES = [
   { id: "info", label: "INFO" },
@@ -24982,30 +25010,25 @@ function drawSummary(ctx, i) {
   const mon = party[i];
   const def = data.pokemon?.[mon.species] ?? {};
   const page = ui.page ?? "info";
-  sprite(host, picPageFor(data, mon.species), 0, TILE_H * 1 + 2, 4 * TILE_W, 4 * TILE_H);
-  text(host, 5, 2, fit(monName2(data, mon), 10));
-  right(host, 2, `L${mon.level}`);
-  text(host, 5, 3, `No.${String(def.dex ?? 0).padStart(3, "0")}`);
+  monStrip(ctx, mon.species, monName2(data, mon), `L${mon.level}`, def.dex);
   tiles(host, 5, 4, hpBarTiles(mon.hp, mon.stats?.hp ?? mon.hp, true));
-  right(host, 5, `${mon.hp}/${mon.stats?.hp ?? mon.hp}`);
+  right(host, 5, `${mon.hp}/${mon.stats?.hp ?? mon.hp}`, "dark", 14);
   rule(host, 6);
   if (page === "info") {
-    const types = def.types ?? [];
+    const types = (def.types ?? []).map(typeName);
     text(host, 1, 7, "TYPE");
-    text(host, 7, 7, types.join("/"));
-    text(host, 1, 8, "STATUS");
-    text(host, 8, 8, mon.status ?? "OK");
-    text(host, 1, 9, "OT");
-    text(host, 7, 9, fit(mon.otName ?? String(ctx.save.player?.name ?? "RED"), 10));
-    text(host, 1, 10, "ID No");
-    text(host, 7, 10, String(mon.otId ?? ctx.save.player?.id ?? 0).padStart(5, "0"));
+    types.slice(0, 2).forEach((t, k) => text(host, VALUE_X, 7 + k, t));
+    text(host, 1, 9, "STATUS");
+    text(host, VALUE_X, 9, String(mon.status ?? "OK").toUpperCase());
+    text(host, 1, 11, "OT");
+    text(host, VALUE_X, 11, fit(mon.otName ?? String(ctx.save.player?.name ?? "RED"), 10));
+    text(host, 1, 12, "ID No.");
+    text(host, VALUE_X, 12, String(mon.otId ?? ctx.save.player?.id ?? 0).padStart(5, "0"));
     const exp = mon.exp ?? 0;
-    text(host, 1, 12, "EXP POINTS");
-    right(host, 13, String(exp));
+    row(host, 14, "EXP POINTS", String(exp));
     if (mon.level < 100 && def.growthRate) {
       const next = expForLevel(def.growthRate, mon.level + 1);
-      text(host, 1, 14, `TO L${mon.level + 1}`);
-      right(host, 15, String(Math.max(0, next - exp)));
+      row(host, 15, `TO L${mon.level + 1}`, String(Math.max(0, next - exp)));
     }
   } else if (page === "stats") {
     const s = mon.stats;
@@ -25017,13 +25040,13 @@ function drawSummary(ctx, i) {
     ];
     const dv = spoilers(ctx.save);
     if (dv)
-      right(host, 7, "DV", "dark", 20);
+      right(host, 7, "DV");
     rows.forEach(([label3, v, d], k) => {
       const y = 8 + k * 2;
       text(host, 1, y, label3);
-      text(host, 10, y, String(v ?? "-").padStart(3, " "));
+      right(host, y, String(v ?? "-"), "dark", 15);
       if (dv && d !== undefined)
-        right(host, y, String(d), "dark", 20);
+        right(host, y, String(d));
     });
   } else {
     drawMoveList(ctx, mon.moves ?? [], 7);
@@ -25056,8 +25079,8 @@ function drawMoveList(ctx, moves, y0) {
     const d = data.moves?.[m.id] ?? {};
     const y = y0 + k * 2;
     const lit = pressedId() === `move:${k}`;
-    text(host, 1, y, fit(d.name ?? m.id, 12), lit ? "fill" : "dark");
-    text(host, 2, y + 1, d.type ?? "");
+    text(host, 1, y, fit(d.name ?? m.id, 18), lit ? "fill" : "dark");
+    text(host, 2, y + 1, typeName(d.type));
     right(host, y + 1, `PP ${m.pp}/${d.pp ?? m.pp}`);
     region(`move:${k}`, 0, y, COLS, 2, () => {
       ui.move = k;
@@ -25067,9 +25090,9 @@ function drawMoveList(ctx, moves, y0) {
 function drawMoveInfo(ctx, m, y0, close, vs) {
   const { host, data } = ctx;
   const d = data.moves?.[m.id] ?? {};
-  text(host, 1, y0, fit(d.name ?? m.id, 12));
-  right(host, y0, d.type ?? "");
+  text(host, 1, y0, fit(d.name ?? m.id, 18));
   text(host, 1, y0 + 1, `PP ${m.pp}/${d.pp ?? m.pp}`);
+  right(host, y0 + 1, typeName(d.type));
   if (assists(ctx.save)) {
     text(host, 1, y0 + 2, `PWR ${d.power ? d.power : "--"}`);
     right(host, y0 + 2, `ACC ${d.accuracy ?? "--"}`);
@@ -25314,14 +25337,16 @@ function drawTrainers(ctx) {
   }
   const top = pager(ctx, rows.length);
   const left = rows.filter((r) => !r.beaten).length;
-  right(host, 1, `${left} LEFT`, "dark", 20);
+  right(host, 1, `${left} LEFT`);
   rows.slice(top, top + PER_PAGE).forEach((r, k) => {
     const y0 = 2 + k * 2;
     spriteFrame(host, spritePage(data, r.obj.sprite), 2, y0 * TILE_H + 4, 2 * TILE_H - 4);
-    text(host, 2, y0, fit(r.name, 11));
-    right(host, y0, r.beaten ? "BEATEN" : "READY");
+    text(host, 2, y0, fit(r.name, 17));
+    const state = r.beaten ? "BEATEN" : "READY";
+    right(host, y0 + 1, state);
+    const room = 19 - width(state) - 1 - 2;
     if (spoilers(save) && r.party.length) {
-      text(host, 2, y0 + 1, fit(r.party.map((m) => `${(data.pokemon?.[m.species]?.name ?? m.species).slice(0, 4)}${m.level}`).join(" "), 18));
+      text(host, 2, y0 + 1, fit(r.party.map((m) => `${(data.pokemon?.[m.species]?.name ?? m.species).slice(0, 4)}${m.level}`).join(" "), room));
     } else {
       text(host, 2, y0 + 1, `${r.party.length} POKéMON`);
     }
@@ -25431,25 +25456,23 @@ function drawMoveSelect(ctx, b) {
     const y0 = rowY[i / 2 | 0];
     const slot = moves[i];
     const def = data.moves?.[slot.id];
-    const name = (def?.name ?? slot.id).slice(0, 7);
     const maxPp = def?.pp ?? slot.pp;
-    const type = (def?.type ?? "").toUpperCase().slice(0, 6);
     const selected = i === b.moveIndex - 1;
     const ink = selected ? "fill" : "dark";
     if (selected)
       fill(host, x0, y0, 10, 8);
     box(host, x0, y0, 10, 8, selected ? "fill" : "dark");
-    text(host, x0 + 1, y0 + 1, name, ink);
-    text(host, x0 + 1, y0 + 3, `PP ${slot.pp}/${maxPp}`, ink);
-    text(host, x0 + 1, y0 + 5, type, ink);
+    text(host, x0 + 1, y0 + 1, fit(def?.name ?? slot.id, 8), ink);
+    text(host, x0 + 1, y0 + 2, typeName(def?.type), ink);
+    text(host, x0 + 1, y0 + 4, `PP ${slot.pp}/${maxPp}`, ink);
     let eff = "--";
     if (details && (def?.power ?? 0) > 0 && b.enemy && b.chart) {
       eff = multLabel(b.chart.effectiveness(def.type ?? "", b.enemy.curTypes));
     }
-    text(host, x0 + 9 - eff.length, y0 + 5, eff, ink);
+    text(host, x0 + 1, y0 + 6, eff, ink);
     if (details) {
-      host.uiTileBottom(x0 + 8, y0 + 1, qmark | (selected ? FILL_BIT : DARKTEXT_BIT));
-      region(`b:q${i}`, x0 + 7, y0, 3, 3, () => {
+      host.uiTileBottom(x0 + 8, y0 + 6, qmark | (selected ? FILL_BIT : DARKTEXT_BIT));
+      region(`b:q${i}`, x0 + 6, y0 + 5, 4, 3, () => {
         s.moveInfo = i;
       });
     }
@@ -25491,7 +25514,7 @@ function drawItemList(ctx, b) {
   for (let i = top;i < b.itemList.length && i < top + ITEM_ROWS; i++) {
     const id = b.itemList[i];
     const y = 2 + (i - top);
-    text(host, 2, y, (data.items?.[id]?.name ?? id).slice(0, 13));
+    text(host, 2, y, fit(data.items?.[id]?.name ?? id, 13));
     right(host, y, `x${save?.inventory?.[id] ?? 0}`);
     if (i === b.itemIndex)
       cursor(host, 0, y);
@@ -25556,7 +25579,7 @@ function drawEnemyInfo(ctx, b) {
   sprite(host, picPageFor(data, mon?.species ?? ""), 0, TILE_H + 2, 5 * TILE_W, 5 * TILE_H);
   text(host, 6, 2, fit(b.enemy?.name ?? def.name ?? "", 13));
   text(host, 6, 3, `No.${String(def.dex ?? 0).padStart(3, "0")} L${mon?.level ?? "?"}`);
-  text(host, 6, 4, fit((b.enemy?.curTypes ?? def.types ?? []).join("/"), 14));
+  text(host, 6, 4, fit((b.enemy?.curTypes ?? def.types ?? []).map(typeName).join("/"), 14));
   const owned = !!save?.pokedex?.owned?.[mon?.species];
   text(host, 6, 5, `CAUGHT ${owned ? "YES" : "NO"}`);
   if (spoilers(save) && mon?.dvs) {
@@ -25571,15 +25594,15 @@ function drawEnemyInfo(ctx, b) {
   }
   center(host, 8, "BASE MATCHUP");
   const { weak, resist } = matchups(b.chart, b.enemy?.curTypes ?? def.types ?? []);
-  text(host, 0, 9, `WEAK ${weak.length}`);
-  text(host, 10, 9, `RESIST ${resist.length}`);
+  row(host, 9, "WEAK", String(weak.length), 0, 9);
+  row(host, 9, "RESIST", String(resist.length), 10, COLS);
   for (let i = 0;i < 6; i++) {
     const w = weak[i];
     const r = resist[i];
     if (w)
-      text(host, 0, 10 + i, fit(`${typeShort(w[0])} ${multLabel(w[1])}`, 10));
+      row(host, 10 + i, typeShort(w[0]), multLabel(w[1]), 0, 9);
     if (r)
-      text(host, 10, 10 + i, fit(`${typeShort(r[0])} ${multLabel(r[1])}`, 10));
+      row(host, 10 + i, typeShort(r[0]), multLabel(r[1]), 10, COLS);
   }
   for (let y = 9;y < 16; y++)
     tile(host, 9, y, 124);
@@ -25622,22 +25645,22 @@ function clampInt(v, lo, hi) {
 function battleTouchDown(ctx, b, x, y) {
   armed = false;
   const col = clampInt(Math.floor(x / TILE_W), 0, COLS - 1);
-  const row = clampInt(Math.floor(y / TILE_H), 0, ROWS - 1);
+  const row2 = clampInt(Math.floor(y / TILE_H), 0, ROWS - 1);
   const s = bstate(ctx, b);
   if (s.info && (b.phase === "menu" || b.phase === "messages")) {
     s.info = false;
     return;
   }
   if (b.choiceOpen) {
-    if (col >= 14 && col <= 19 && row >= 7 && row <= 11)
-      b.choiceYes = row < 9;
+    if (col >= 14 && col <= 19 && row2 >= 7 && row2 <= 11)
+      b.choiceYes = row2 < 9;
     armed = true;
     return;
   }
-  const cell2x2 = () => (row < 10 ? 0 : 2) + (col < 10 ? 0 : 1);
+  const cell2x2 = () => (row2 < 10 ? 0 : 2) + (col < 10 ? 0 : 1);
   switch (b.phase) {
     case "menu":
-      if (row < 2)
+      if (row2 < 2)
         return;
       b.menuIndex = cell2x2() + 1;
       armed = true;
@@ -25647,7 +25670,7 @@ function battleTouchDown(ctx, b, x, y) {
         s.moveInfo = null;
         return;
       }
-      if (row < 2)
+      if (row2 < 2)
         return;
       const i = cell2x2();
       if (i >= (b.menuMoves ? b.menuMoves() : b.player.curMoves).length)
@@ -25657,9 +25680,9 @@ function battleTouchDown(ctx, b, x, y) {
       return;
     }
     case "party": {
-      if (row < 2)
+      if (row2 < 2)
         return;
-      const r = row < 7 ? 0 : row < 12 ? 1 : 2;
+      const r = row2 < 7 ? 0 : row2 < 12 ? 1 : 2;
       const i = r * 2 + (col < 10 ? 0 : 1);
       if (i >= (ctx.save?.party?.length ?? 0))
         return;
@@ -25668,8 +25691,8 @@ function battleTouchDown(ctx, b, x, y) {
       return;
     }
     case "item": {
-      const i = row - 2 + itemListTop(b);
-      if (row < 2 || row >= 2 + ITEM_ROWS || i >= b.itemList.length)
+      const i = row2 - 2 + itemListTop(b);
+      if (row2 < 2 || row2 >= 2 + ITEM_ROWS || i >= b.itemList.length)
         return;
       b.itemIndex = i;
       armed = true;
@@ -25731,9 +25754,9 @@ function drawMirror(ctx) {
     const perCol = n > 8 ? Math.ceil(n / 2) : n;
     m.items.forEach((label3, i) => {
       const col = Math.floor(i / perCol);
-      const row = i % perCol;
+      const row2 = i % perCol;
       const w = n > 8 ? 10 : COLS;
-      pill(host, `m:${i}`, col * 10, 2 + row * 2, w, fit(label3, w - 2), () => {
+      pill(host, `m:${i}`, col * 10, 2 + row2 * 2, w, fit(label3, w - 2), () => {
         m.select(i);
         pressA(game);
       }, i === m.index);
@@ -25753,9 +25776,9 @@ function drawNaming(ctx, t) {
   header(ctx, fit(v.title ?? "NAME?", 11));
   text(host, 1, 1, `${v.name}${"_".repeat(Math.max(0, (v.maxLen ?? 7) - v.name.length))}`);
   const grid2 = v.grid;
-  grid2.forEach((row, r) => {
-    const wide = row.length === 1;
-    row.forEach((cell, c) => {
+  grid2.forEach((row2, r) => {
+    const wide = row2.length === 1;
+    row2.forEach((cell, c) => {
       const w = wide ? COLS : 2;
       const x = wide ? 0 : c * 2 + 1;
       const label3 = cell === "lower case" ? "lower case" : cell === "UPPER CASE" ? "UPPER CASE" : cell;
@@ -25813,9 +25836,11 @@ function drawHome(ctx) {
   const name = mapName(ctx);
   text(host, 1, 3, fit(name, 8), ie);
   const wild = new Set(wildRows(ctx.data, id).map((r) => r.species)).size;
-  text(host, 1, 5, `WILD ${wild}`, ie);
-  if (!ctx.gear.removed.steps)
-    text(host, 1, 6, fit(`${ctx.gear.steps} STEPS`, 8), ie);
+  row(host, 4, "WILD", String(wild), 1, 9, ie);
+  if (!ctx.gear.removed.steps) {
+    text(host, 1, 5, "STEPS", ie);
+    right(host, 6, fit(String(ctx.gear.steps), 8), ie, 9);
+  }
   button(host, "home:party", 10, 2, 10, 6, "", () => go(ctx, "party"));
   const ip = pressedId() === "home:party" ? "fill" : "dark";
   const lead = save?.party?.[0];
@@ -25831,10 +25856,10 @@ function drawHome(ctx) {
   const apps = availableApps(game).filter((a) => a !== "home");
   apps.forEach((a, i) => {
     const col = i % 3;
-    const row = Math.floor(i / 3);
+    const row2 = Math.floor(i / 3);
     const x = [0, 7, 14][col];
     const w = 6;
-    const y = 9 + row * 2;
+    const y = 9 + row2 * 2;
     if (y > 16)
       return;
     pill(host, `home:${a}`, x, y, w, appOf(a).short, () => go(ctx, a));
@@ -25858,7 +25883,7 @@ function drawStore(ctx) {
   if (ui.sel === undefined)
     ui.sel = 0;
   optional.forEach((a2, i) => {
-    const y = 2 + i * 2;
+    const y = 1 + i * 2;
     const on = !gear.removed[a2.id];
     if (ui.sel === i)
       cursor(host, 0, y);
@@ -25872,8 +25897,8 @@ function drawStore(ctx) {
     }, !on);
   });
   const a = optional[ui.sel] ?? optional[0];
-  box(host, 0, 14, COLS, 4);
-  wrap2(a.about.join(" "), 18).slice(0, 2).forEach((line, i) => text(host, 1, 15 + i, line));
+  box(host, 0, 12, COLS, 6);
+  wrap2(a.about.join(" "), 18).slice(0, 4).forEach((line, i) => text(host, 1, 13 + i, line));
 }
 function drawOptions(ctx) {
   const { host, gear } = ctx;
@@ -25898,7 +25923,7 @@ function drawOptions(ctx) {
   ];
   rows.forEach((r, i) => {
     const y = 2 + i * 2;
-    text(host, 1, y, r.label);
+    text(host, 0, y, r.label);
     pill(host, `opt:${i}`, 12, y, 8, r.value(), r.step);
   });
   const say = {
@@ -25999,30 +26024,33 @@ function drawTrainer(ctx) {
   const inv = save?.inventory ?? {};
   box(host, 0, 1, COLS, 9);
   sprite(host, data.atlas?.trainerCardPic ?? -1, 14 * TILE_W, 2 * TILE_H, 5 * TILE_W, 7 * TILE_H);
-  text(host, 1, 2, `NAME/${save?.player?.name ?? "RED"}`);
-  text(host, 1, 3, `IDNo/${String(save?.player?.id ?? 0).padStart(5, "0")}`);
-  text(host, 1, 4, `MONEY/¥${save?.money ?? 0}`);
-  text(host, 1, 5, `TIME/${formatPlayTime(Number(save?.playTime ?? 0))}`);
   const seen = Object.values(save?.pokedex?.seen ?? {}).filter(Boolean).length;
   const owned = Object.values(save?.pokedex?.owned ?? {}).filter(Boolean).length;
-  text(host, 1, 6, `OWN/${owned}`);
-  text(host, 1, 7, `SEEN/${seen}`);
+  const lines = [
+    ["NAME", String(save?.player?.name ?? "RED")],
+    ["ID No.", String(save?.player?.id ?? 0).padStart(5, "0")],
+    ["MONEY", `¥${save?.money ?? 0}`],
+    ["TIME", formatPlayTime(Number(save?.playTime ?? 0))],
+    ["SEEN", String(seen)],
+    ["OWN", String(owned)]
+  ];
   if (!gear.removed.steps)
-    text(host, 1, 8, `STEPS ${gear.steps}`);
+    lines.push(["STEPS", String(gear.steps)]);
+  lines.forEach(([label3, value], k) => row(host, 2 + k, label3, value, 1, 14));
   const list2 = list(data);
   const cell = 12;
   list2.slice(0, 8).forEach((b, i) => {
     const col = i % 4;
-    const row = Math.floor(i / 4);
+    const row2 = Math.floor(i / 4);
     const cx = col * 5;
-    const cy = 10 + row * 4;
+    const cy = 10 + row2 * 4;
     const have = !!inv[itemFor(b)];
     box(host, cx, cy, 5, 4);
     const px2 = cx * TILE_W + (5 * TILE_W - 2 * cell) / 2;
     const py = (cy + 1) * TILE_H - 3;
     badgeIcon(host, data.atlas?.uiPage ?? -1, i, px2, py, cell, !have);
   });
-  right(host, 17, `BADGES ${count(data, save)}/8`, "dark", 20);
+  center(host, 9, ` BADGES ${count(data, save)}/8 `);
 }
 
 // voxelmon/game/ui/gear/apps/pokedex.ts
@@ -26063,7 +26091,7 @@ function drawList(ctx) {
   });
   const nOwn = Object.values(owned).filter(Boolean).length;
   const nSeen = Object.values(seen).filter(Boolean).length;
-  text(host, 0, 15, `SEEN ${nSeen}  OWN ${nOwn}`);
+  center(host, 16, `SEEN ${nSeen}  OWN ${nOwn}`);
   const at2 = Math.floor(top2 / ROWS_SHOWN);
   stepper(ctx, `${at2 + 1}/${pages}`, () => {
     ui.top = (at2 + pages - 1) % pages * ROWS_SHOWN;
@@ -26099,25 +26127,23 @@ function drawEntry(ctx, id) {
   const d = data.pokemon[id] ?? {};
   const owned = !!save?.pokedex?.owned?.[id];
   const page = ui.page ?? "info";
-  sprite(host, picPageFor(data, id), 0, TILE_H + 2, 4 * TILE_W, 4 * TILE_H);
-  text(host, 5, 2, fit(d.name ?? id, 10));
-  right(host, 2, owned ? "OWN" : "SEEN", "dark", 20);
-  text(host, 5, 3, `No.${String(d.dex ?? 0).padStart(3, "0")}`);
+  monStrip(ctx, id, d.name ?? id, "", d.dex, owned ? "OWN" : "SEEN");
   if (d.dexEntry?.kind)
-    text(host, 5, 4, fit(`${d.dexEntry.kind} POKéMON`, 15));
+    text(host, 5, 4, fit(String(d.dexEntry.kind), 14));
   rule(host, 6);
   const locked = page !== "info" && !assists(save);
   if (locked) {
     center(host, 9, "SET INFO TO ENHANCED");
     center(host, 11, "IN OPTIONS");
   } else if (page === "info") {
+    const types = (d.types ?? []).map(typeName);
     text(host, 1, 7, "TYPE");
-    text(host, 7, 7, (d.types ?? []).join("/"));
+    types.slice(0, 2).forEach((t, k) => text(host, VALUE_X, 7 + k, t));
     if (owned && d.dexEntry) {
       text(host, 1, 9, "HT");
-      text(host, 7, 9, `${d.dexEntry.heightFt}'${String(d.dexEntry.heightIn).padStart(2, "0")}"`);
+      text(host, VALUE_X, 9, `${d.dexEntry.heightFt}'${String(d.dexEntry.heightIn).padStart(2, "0")}"`);
       text(host, 1, 10, "WT");
-      text(host, 7, 10, `${(d.dexEntry.weight / 10).toFixed(1)}lb`);
+      text(host, VALUE_X, 10, `${(d.dexEntry.weight / 10).toFixed(1)}lb`);
       const entry = data.text?.[d.dexEntry.text];
       if (typeof entry === "string") {
         entry.replace(/[\f\v]/g, `
@@ -26125,23 +26151,26 @@ function drawEntry(ctx, id) {
 `).filter(Boolean).slice(0, 4).forEach((l, i) => text(host, 1, 12 + i, fit(l, 18)));
       }
     } else {
-      text(host, 1, 9, "CATCH ONE TO LEARN");
-      text(host, 1, 10, "MORE.");
+      center(host, 11, "CATCH ONE TO LEARN");
+      center(host, 12, "MORE.");
     }
   } else if (page === "stats") {
     const b = d.baseStats ?? {};
     [["HP", b.hp], ["ATTACK", b.attack], ["DEFENSE", b.defense], ["SPEED", b.speed], ["SPECIAL", b.special]].forEach(([label3, v], k) => {
-      text(host, 1, 7 + k * 2, label3);
-      text(host, 10, 7 + k * 2, String(v ?? "-").padStart(3, " "));
+      text(host, 1, 7 + k, label3);
+      right(host, 7 + k, String(v ?? "-"), "dark", 15);
     });
-    text(host, 1, 15, `CATCH RATE ${d.catchRate ?? "-"}`);
+    text(host, 1, 13, "CATCH RATE");
+    right(host, 13, String(d.catchRate ?? "-"), "dark", 15);
   } else if (page === "area") {
     const all = habitats(data, id);
-    if (all.length === 0)
-      text(host, 1, 8, "NOT FOUND IN THE WILD");
-    else if (!owned && !spoilers(save))
-      text(host, 1, 8, fit(`${all.length} PLACES. CATCH ONE`, 18));
-    else {
+    if (all.length === 0) {
+      center(host, 10, "NOT FOUND IN");
+      center(host, 11, "THE WILD.");
+    } else if (!owned && !spoilers(save)) {
+      center(host, 10, fit(`FOUND IN ${all.length} PLACE${all.length === 1 ? "" : "S"}.`, 18));
+      center(host, 11, "CATCH ONE TO SEE.");
+    } else {
       const short = {
         GRASS: "GRS",
         WATER: "SURF",
@@ -26150,8 +26179,9 @@ function drawEntry(ctx, id) {
         "SUPER ROD": "ROD3"
       };
       all.slice(0, 9).forEach((h, k) => {
-        text(host, 0, 7 + k, fit(h.map, 10));
-        right(host, 7 + k, `${short[h.method] ?? h.method} L${h.lv}`, "dark", 20);
+        const where = `${short[h.method] ?? h.method} L${h.lv}`;
+        text(host, 1, 7 + k, fit(h.map, 19 - width(where) - 2));
+        right(host, 7 + k, where);
       });
     }
   } else {
@@ -26271,7 +26301,7 @@ function itemAbout(data, id) {
   const mv = it.machine?.move;
   if (mv) {
     const d = data.moves?.[mv] ?? {};
-    return [`TEACHES ${d.name ?? mv}.`, `${d.type ?? ""} PWR ${d.power || "--"}`, ...moveEffectLines(mv, d)];
+    return [`TEACHES ${d.name ?? mv}.`, `${typeName(d.type)} PWR ${d.power || "--"}`, ...moveEffectLines(mv, d)];
   }
   if (it.keyItem)
     return ["AN IMPORTANT ITEM."];
@@ -26382,8 +26412,8 @@ function drawTools(ctx) {
   }
   open.forEach((t, i) => {
     const col = i % 2;
-    const row = Math.floor(i / 2);
-    const y = 2 + row * 2;
+    const row2 = Math.floor(i / 2);
+    const y = 2 + row2 * 2;
     const x = col * 10;
     let label3 = t.label;
     if (t.key === "bicycle" && save?.onBike)
@@ -26442,7 +26472,7 @@ effect.`);
 }
 
 // voxelmon/game/ui/gear/apps/stamps.ts
-var PER_PAGE2 = 7;
+var PER_PAGE2 = 4;
 function drawStamps(ctx) {
   const { host, data, save, ui } = ctx;
   const areas = stampAreas(data, save, spoilers(save)).filter((a) => a.visited);
@@ -26462,21 +26492,22 @@ function drawStamps(ctx) {
     return;
   }
   const done = areas.filter(stampDone).length;
-  text(host, 0, 1, `STAMPS ${done}/${areas.length}`);
+  text(host, 1, 1, `STAMPS ${done}/${areas.length}`);
   const pages = Math.ceil(areas.length / PER_PAGE2);
   ui.top = Math.min(ui.top ?? 0, (pages - 1) * PER_PAGE2);
   areas.slice(ui.top, ui.top + PER_PAGE2).forEach((a, k) => {
-    const y = 2 + k * 2;
+    const y = 2 + k * 4;
     const lit = pressedId() === `stamp:${a.name}`;
     const ink = lit ? "fill" : "dark";
-    if (stampDone(a))
+    const stamped = stampDone(a);
+    if (stamped)
       cursor(host, 0, y, ink);
-    text(host, 1, y, fit(a.name, 14), ink);
-    text(host, 1, y + 1, `TRAINERS ${a.beaten}/${a.trainers}`);
-    right(host, y + 1, `ITEMS ${a.found}/${a.items}`, "dark", 20);
-    if (stampDone(a))
-      right(host, y, "STAMP", ink, 20);
-    region(`stamp:${a.name}`, 0, y, COLS, 2, () => {
+    text(host, 1, y, fit(a.name, stamped ? 13 : 19), ink);
+    if (stamped)
+      right(host, y, "STAMP", ink, COLS);
+    row(host, y + 1, "TRAINERS", `${a.beaten}/${a.trainers}`, 2, COLS);
+    row(host, y + 2, "ITEMS", `${a.found}/${a.items}`, 2, COLS);
+    region(`stamp:${a.name}`, 0, y, COLS, 3, () => {
       ui.area = a.name;
     });
   });
@@ -26491,22 +26522,22 @@ function drawStamps(ctx) {
 }
 function drawArea2(ctx, a) {
   const { host, data, save, ui } = ctx;
-  text(host, 0, 1, fit(a.name, 20));
+  text(host, 1, 1, fit(a.name, 18));
   const lines = [];
   for (const id of a.maps) {
     const place2 = id.replace(/_/g, " ");
     for (const t of mapTrainers(data, save, id))
       if (!t.beaten)
-        lines.push(fit(`${t.name} ${place2}`, 20));
+        lines.push(fit(`${t.name} ${place2}`, 18));
     for (const it of mapItems(data, save, id)) {
       if (it.taken || it.hidden && !spoilers(save))
         continue;
-      lines.push(fit(`${it.hidden ? "HIDDEN " : ""}${it.name} ${place2}`, 20));
+      lines.push(fit(`${it.hidden ? "HIDDEN " : ""}${it.name} ${place2}`, 18));
     }
   }
   if (lines.length === 0)
     center(host, 8, "ALL DONE HERE!");
-  lines.slice(0, 14).forEach((l, i) => text(host, 0, 3 + i, l));
+  lines.slice(0, 14).forEach((l, i) => text(host, 1, 3 + i, l));
   backRow(ctx, () => {
     ui.area = null;
   });
@@ -26595,12 +26626,13 @@ function drawText(ctx, note) {
     });
     return;
   }
+  pill(host, "back:other", 0, 16, 6, "EDIT", () => {
+    ui.typing = true;
+  });
+  pill(host, "note:delete", 14, 16, 6, "DELETE", () => deleteNote(ctx));
   backRow(ctx, () => {
     ctx.ui.open = null;
-  }, { label: "EDIT", tap: () => {
-    ui.typing = true;
-  } });
-  pill(host, "note:delete", 14, 16, 6, "DELETE", () => deleteNote(ctx));
+  });
 }
 var ROWS_ABC = ["QWERTYUIOP", "ASDFGHJKL-", "ZXCVBNM,.?"];
 var ROWS_123 = ["1234567890", "!?:;/()'-.", "é♂♀×&,.  "];
@@ -26609,8 +26641,8 @@ function keyboard(ctx, press) {
   let rows = ui.nums ? ROWS_123 : ROWS_ABC;
   if (!ui.nums && gear.qwertz)
     rows = rows.map((r) => r.replace("Y", "#").replace("Z", "Y").replace("#", "Z"));
-  rows.forEach((row, r) => {
-    [...row].forEach((ch, c) => {
+  rows.forEach((row2, r) => {
+    [...row2].forEach((ch, c) => {
       if (ch === " ")
         return;
       pill(host, `key:${r}:${c}`, c * 2, 10 + r * 2, 2, ch, () => press(ch));
@@ -26620,9 +26652,9 @@ function keyboard(ctx, press) {
     ui.nums = !ui.nums;
   });
   pill(host, "key:space", 4, 16, 6, "SPACE", () => press(" "));
-  pill(host, "key:del", 10, 16, 3, "DEL", () => press("DEL"));
-  pill(host, "key:nl", 13, 16, 3, "NL", () => press("NL"));
-  pill(host, "key:ok", 16, 16, 4, "OK", () => press("OK"));
+  pill(host, "key:del", 10, 16, 4, "DEL", () => press("DEL"));
+  pill(host, "key:nl", 14, 16, 3, "NL", () => press("NL"));
+  pill(host, "key:ok", 17, 16, 3, "OK", () => press("OK"));
 }
 function drawChecklist(ctx, note) {
   const { host, ui } = ctx;
@@ -26755,17 +26787,17 @@ function drawSketch(ctx, note) {
   pill(host, "ink:dark", 0, y, 4, "INK", () => {
     ui.ink = 3;
   }, ink === 3);
-  pill(host, "ink:grey", 4, y, 4, "GREY", () => {
+  pill(host, "ink:grey", 4, y, 5, "GREY", () => {
     ui.ink = 2;
   }, ink === 2);
-  pill(host, "ink:erase", 8, y, 4, "RUB", () => {
+  pill(host, "ink:erase", 9, y, 4, "RUB", () => {
     ui.ink = 0;
   }, ink === 0);
-  pill(host, "ink:clear", 12, y, 4, "WIPE", () => {
+  pill(host, "ink:clear", 13, y, 5, "WIPE", () => {
     pad.fill(0);
     note.ink = encodeInk(pad);
   });
-  pill(host, "ink:back", 16, y, 4, "BACK", () => {
+  pill(host, "ink:back", 18, y, 2, "OK", () => {
     ui.open = null;
   });
 }
@@ -27603,16 +27635,16 @@ That will be
       return;
     }
   }
-  chooseItem(row) {
+  chooseItem(row2) {
     const save = this.game.save;
     if (this.buying) {
-      const price = this.price(row.id);
+      const price = this.price(row2.id);
       if ((save.money ?? 0) < price) {
         this.footer = NOT_ENOUGH;
         return;
       }
-      this.selId = row.id;
-      this.selName = row.label;
+      this.selId = row2.id;
+      this.selName = row2.label;
       this.unitPrice = price;
       this.maxQty = Math.min(99, Math.floor((save.money ?? 0) / Math.max(1, price)));
       this.qty = 1;
@@ -27626,14 +27658,14 @@ That will be
         this.mode = "confirm";
       }
     } else {
-      if (this.unsellable(row.id)) {
+      if (this.unsellable(row2.id)) {
         this.footer = UNSELLABLE;
         return;
       }
-      this.selId = row.id;
-      this.selName = row.label;
-      this.unitPrice = Math.floor(this.price(row.id) / 2);
-      this.maxQty = save.inventory?.[row.id] ?? 1;
+      this.selId = row2.id;
+      this.selName = row2.label;
+      this.unitPrice = Math.floor(this.price(row2.id) / 2);
+      this.maxQty = save.inventory?.[row2.id] ?? 1;
       this.qty = 1;
       this.mode = "quantity";
     }
@@ -29006,7 +29038,10 @@ var ARRAY_FIELDS = [
   ["box"],
   ["boxes"],
   ["boxes", "*"],
-  ["boxes", "*", "*", "moves"]
+  ["boxes", "*", "*", "moves"],
+  ["modData", "kanto_gear", "notes"],
+  ["modData", "kanto_gear", "notes", "*", "lines"],
+  ["modData", "kanto_gear", "notes", "*", "done"]
 ];
 function atPath(root, path) {
   let level = [];
@@ -30574,23 +30609,23 @@ function writeWideRect(v, t, map, tx0, ty0, cols, rows) {
   const col = tx0 & rc - 1;
   const first = Math.min(cols, rc - col);
   for (let r = 0;r < rows; r++) {
-    const row = (ty0 + r & rr - 1) * rc;
+    const row2 = (ty0 + r & rr - 1) * rc;
     if (inside) {
       const src = (y + r) * t.w + x;
       if (cols === 1)
-        maps[row + col] = t.ids[src];
+        maps[row2 + col] = t.ids[src];
       else {
-        maps.set(t.ids.subarray(src, src + first), row + col);
+        maps.set(t.ids.subarray(src, src + first), row2 + col);
         if (first < cols)
-          maps.set(t.ids.subarray(src + first, src + cols), row);
+          maps.set(t.ids.subarray(src + first, src + cols), row2);
       }
     } else {
       for (let c = 0;c < cols; c++)
-        maps[row + (tx0 + c & rc - 1)] = map.tileAt(tx0 + c, ty0 + r) & 127;
+        maps[row2 + (tx0 + c & rc - 1)] = map.tileAt(tx0 + c, ty0 + r) & 127;
     }
-    v.markWide(row + col, row + col + first);
+    v.markWide(row2 + col, row2 + col + first);
     if (first < cols)
-      v.markWide(row, row + cols - first);
+      v.markWide(row2, row2 + cols - first);
   }
 }
 function writeWindow(maps, t, map, tx0, ty0) {
@@ -30600,15 +30635,15 @@ function writeWindow(maps, t, map, tx0, ty0) {
   const col = tx0 & 31;
   const first = Math.min(COLS2, 32 - col);
   for (let r = 0;r < ROWS10; r++) {
-    const row = (ty0 + r & 31) * 32;
+    const row2 = (ty0 + r & 31) * 32;
     if (inside) {
       const src = (y + r) * t.w + x;
-      maps.set(t.ids.subarray(src, src + first), row + col);
+      maps.set(t.ids.subarray(src, src + first), row2 + col);
       if (first < COLS2)
-        maps.set(t.ids.subarray(src + first, src + COLS2), row);
+        maps.set(t.ids.subarray(src + first, src + COLS2), row2);
     } else {
       for (let c = 0;c < COLS2; c++)
-        maps[row + (tx0 + c & 31)] = map.tileAt(tx0 + c, ty0 + r) & 127;
+        maps[row2 + (tx0 + c & 31)] = map.tileAt(tx0 + c, ty0 + r) & 127;
     }
   }
 }
@@ -31505,10 +31540,10 @@ ${why.slice(0, 18)}` : ""}`);
     if (pending2.length === 0)
       return;
     const step = (i) => {
-      const row = pending2[i];
-      if (!row)
+      const row2 = pending2[i];
+      if (!row2)
         return;
-      this.push(new EvolutionState(this, row.mon, row.to, "LEVEL", (mon, to) => apply2(this.data, mon, to, this.save.pokedex), () => this.learnMovesAtLevel(row.mon, () => step(i + 1))));
+      this.push(new EvolutionState(this, row2.mon, row2.to, "LEVEL", (mon, to) => apply2(this.data, mon, to, this.save.pokedex), () => this.learnMovesAtLevel(row2.mon, () => step(i + 1))));
     };
     step(0);
   }
@@ -33275,8 +33310,8 @@ class QuickJsHost {
   lcdUnder(w, h) {
     native.lcdUnder?.(w, h);
   }
-  lcdUnderRow(row, hex3) {
-    native.lcdUnderRow?.(row, hex3);
+  lcdUnderRow(row2, hex3) {
+    native.lcdUnderRow?.(row2, hex3);
   }
   lcdUnderAt(on, x, y) {
     native.lcdUnderAt?.(on, x, y);
