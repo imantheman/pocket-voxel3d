@@ -107,7 +107,7 @@ export function drawStore(ctx: GearCtx): void {
   const optional = APPS.filter((a) => !a.fixed);
   if (ui.sel === undefined) ui.sel = 0;
   optional.forEach((a, i) => {
-    const y = 2 + i * 2;
+    const y = 1 + i * 2;
     const on = !gear.removed[a.id];
     if (ui.sel === i) cursor(host, 0, y);
     text(host, 1, y, a.title);
@@ -118,8 +118,9 @@ export function drawStore(ctx: GearCtx): void {
     }, !on);
   });
   const a = optional[ui.sel] ?? optional[0]!;
-  box(host, 0, 14, COLS, 4);
-  wrap(a.about.join(" "), 18).slice(0, 2).forEach((line, i) => text(host, 1, 15 + i, line));
+  // four lines: every app's words fit whole (two cut most of them off)
+  box(host, 0, 12, COLS, 6);
+  wrap(a.about.join(" "), 18).slice(0, 4).forEach((line, i) => text(host, 1, 13 + i, line));
 }
 
 // ---------------------------------------------------------------------------
@@ -145,9 +146,11 @@ export function drawOptions(ctx: GearCtx): void {
     { label: "CLOCK", value: () => (gear.clock24 ? "24 HOUR" : "12 HOUR"), step: () => { gear.clock24 = !gear.clock24; } },
     { label: "KEYBOARD", value: () => (gear.qwertz ? "QWERTZ" : "QWERTY"), step: () => { gear.qwertz = !gear.qwertz; } },
   ];
+  // labels flush with the box below, so the longest (CAUGHT ICON) keeps a
+  // column clear of its button
   rows.forEach((r, i) => {
     const y = 2 + i * 2;
-    text(host, 1, y, r.label);
+    text(host, 0, y, r.label);
     pill(host, `opt:${i}`, 12, y, 8, r.value(), r.step);
   });
   // what INFO means, since it is the one that changes the most

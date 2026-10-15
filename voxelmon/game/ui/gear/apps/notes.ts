@@ -86,8 +86,11 @@ function drawText(ctx: GearCtx, note: GearNote): void {
     });
     return;
   }
-  backRow(ctx, () => { ctx.ui.open = null; }, { label: "EDIT", tap: () => { ui.typing = true; } });
+  // the checklist's arrangement: the note's own buttons on row 16 (EDIT
+  // where ADD is, DELETE at the right), BACK the whole bottom row
+  pill(host, "back:other", 0, 16, 6, "EDIT", () => { ui.typing = true; });
   pill(host, "note:delete", 14, 16, 6, "DELETE", () => deleteNote(ctx));
+  backRow(ctx, () => { ctx.ui.open = null; });
 }
 
 // ---------------------------------------------------------------------------
@@ -107,11 +110,13 @@ function keyboard(ctx: GearCtx, press: (k: string) => void): void {
       pill(host, `key:${r}:${c}`, c * 2, 10 + r * 2, 2, ch, () => press(ch));
     });
   });
+  // widths that leave a clear column after every label ("DEL" filled its
+  // key and ran into "NL")
   pill(host, "key:mode", 0, 16, 4, ui.nums ? "ABC" : "123", () => { ui.nums = !ui.nums; });
   pill(host, "key:space", 4, 16, 6, "SPACE", () => press(" "));
-  pill(host, "key:del", 10, 16, 3, "DEL", () => press("DEL"));
-  pill(host, "key:nl", 13, 16, 3, "NL", () => press("NL"));
-  pill(host, "key:ok", 16, 16, 4, "OK", () => press("OK"));
+  pill(host, "key:del", 10, 16, 4, "DEL", () => press("DEL"));
+  pill(host, "key:nl", 14, 16, 3, "NL", () => press("NL"));
+  pill(host, "key:ok", 17, 16, 3, "OK", () => press("OK"));
 }
 
 // ---------------------------------------------------------------------------
@@ -233,11 +238,13 @@ function drawSketch(ctx: GearCtx, note: GearNote): void {
     note.ink = encodeInk(pad);
   });
   const y = ROWS - 1;
+  // each label a clear column from the next ("GREYRUB WIPEBACK" read as
+  // two words); leaving the pad is OK, the keyboard's word for done
   pill(host, "ink:dark", 0, y, 4, "INK", () => { ui.ink = 3; }, ink === 3);
-  pill(host, "ink:grey", 4, y, 4, "GREY", () => { ui.ink = 2; }, ink === 2);
-  pill(host, "ink:erase", 8, y, 4, "RUB", () => { ui.ink = 0; }, ink === 0);
-  pill(host, "ink:clear", 12, y, 4, "WIPE", () => { pad.fill(0); note.ink = encodeInk(pad); });
-  pill(host, "ink:back", 16, y, 4, "BACK", () => { ui.open = null; });
+  pill(host, "ink:grey", 4, y, 5, "GREY", () => { ui.ink = 2; }, ink === 2);
+  pill(host, "ink:erase", 9, y, 4, "RUB", () => { ui.ink = 0; }, ink === 0);
+  pill(host, "ink:clear", 13, y, 5, "WIPE", () => { pad.fill(0); note.ink = encodeInk(pad); });
+  pill(host, "ink:back", 18, y, 2, "OK", () => { ui.open = null; });
 }
 
 function stroke(pad: Uint8Array, x0: number, y0: number, x1: number, y1: number, v: number): void {
