@@ -1620,6 +1620,8 @@ struct BenchAcc {
     cmd_max: f32,
     spans: u64,
     trees: u64,
+    /// on a map drawn with one eye whatever the slider (STEREO_OFF_MAPS)
+    mono: bool,
 }
 
 // libctru's default split leaves the app heap small and the linear heap
@@ -1672,6 +1674,27 @@ const STEREO_IOD: f32 = 0.03;
 /// screens drawn flat on it (text boxes, menus, the battle HUD) in front of
 /// it, not the world popping out past them.
 const STEREO_SCREEN: f32 = 0.9;
+
+/// Maps whose top screen is always drawn with one eye, as if the 3D slider
+/// were down, whatever it says: the heaviest scenes, for speed and
+/// steadiness. The right eye's pass is skipped outright, its cull and its
+/// draws, so the GPU and the CPU both get it back. Names as the pak index
+/// (index.txt) gives them, which Gen 1 and Gen 2 share; the ids differ.
+const STEREO_OFF_MAPS: [&str; 3] = [
+    "VIRIDIAN_FOREST", // the forest map: Red, Blue, Yellow (51)
+    "GOLDENROD_CITY",  // the biggest Gen 2 city: Gold, Silver, Crystal (2818)
+    "SAFFRON_CITY",    // the walled city: Red, Blue, Yellow (10); Gold, Silver, Crystal (6402)
+];
+
+/// Whether map `name` may be drawn in stereo. The FireRed and LeafGreen
+/// builds are left as they were (their names are their own, FR_...).
+fn stereo_allowed(name: &str) -> bool {
+    cfg!(feature = "gen3") || !STEREO_OFF_MAPS.contains(&name)
+}
+
+/// This frame's map is one of STEREO_OFF_MAPS (the screenshot op then
+/// leaves the right eye, which was not drawn, out).
+static mut STEREO_OFF_HERE: bool = false;
 
 /// Guest screen coordinate -> the quantised grid `Vertex::pos` stores.
 fn qpx(v: f32) -> i16 { (v * UI_Q) as i16 }
@@ -2493,7 +2516,7 @@ fn dump_top_screen() {
     dump_top_side(0, 0, &format!("sdmc:/3ds/voxelmon/shot_{}.ppm", n));
     // the right eye too while the slider is up (stereo checks: shot_N_r),
     // or a bench has it up (BENCH_STEREO)
-    if ctru::os::current_3d_slider_state() > 0.0 || unsafe { BENCH_STEREO } {
+    if (ctru::os::current_3d_slider_state() > 0.0 && !unsafe { STEREO_OFF_HERE }) || unsafe { BENCH_STEREO } {
         dump_top_side(0, 1, &format!("sdmc:/3ds/voxelmon/shot_{}_r.ppm", n));
     }
     // and the bottom screen (shot_N_b)
@@ -5379,6 +5402,8 @@ fn main() {
     let mut perf_gpu_max: f32 = 0.0;
     let mut perf_proc_sum: f32 = 0.0;
     let mut perf_slider: f32 = 0.0;
+    // the map is one drawn with one eye whatever the slider (STEREO_OFF_MAPS)
+    let mut perf_mono = false;
     let mut perf_radius: f32 = 0.0;
     let mut perf_spans: usize = 0;
     let mut perf_trees: usize = 0;
@@ -5611,7 +5636,7 @@ fn main() {
                     // build has no window for, which is why the first run of
                     // this line left no trace in pvlog.txt at all.
                     dlog(&format!(
-                        "[pv] perf: {} fps  cpu {:.1} avg {:.0} max ms (js {:.1} lcd {:.1} r {:.1} c {:.1})  gpu {:.1} avg {:.0} max ms  proc {:.1} ms  spans {}/{}  trees {}/{}  3d {:.2} r{:.0}  ticks {} dropped {:.0} ms  linear {} KB",
+                        "[pv] perf: {} fps  cpu {:.1} avg {:.0} max ms (js {:.1} lcd {:.1} r {:.1} c {:.1})  gpu {:.1} avg {:.0} max ms  proc {:.1} ms  spans {}/{}  trees {}/{}  3d {:.2}{} r{:.0}  ticks {} dropped {:.0} ms  linear {} KB",
                         fps_frames,
                         perf_cpu_sum / perf_n as f32, perf_cpu_max,
                         unsafe { PERF_JS_US } / 1000.0 / perf_n as f32,
@@ -5621,7 +5646,7 @@ fn main() {
                         perf_gpu_sum / perf_n as f32, perf_gpu_max,
                         perf_proc_sum / perf_n as f32,
                         unsafe { DRAWN }, perf_spans, unsafe { TREES_DRAWN }, perf_trees,
-                        perf_slider, perf_radius,
+                        perf_slider, if perf_mono { " (off here)" } else { "" }, perf_radius,
                         perf_ticks, perf_drop_ms,
                         // the vertex/texture pool left: a slow leak shows as this falling
                         unsafe_free_kb(),
@@ -6855,8 +6880,16 @@ fn main() {
         );
         let slider = ctru::os::current_3d_slider_state();
         let slider = if BENCH { BENCH_COMBOS[bench_combo].1 } else { slider };
+        // The maps drawn with one eye (STEREO_OFF_MAPS): as if the slider
+        // were down, from the first frame drawn there -- map_i is already
+        // this frame's map, the load above done -- so no stereo frame
+        // shows on the way in, and the slider is back the frame after.
+        let stereo_ok = stereo_allowed(map_index.get(map_i).map(|(_, n)| n.as_str()).unwrap_or(""));
+        let slider = if stereo_ok { slider } else { 0.0 };
+        unsafe { STEREO_OFF_HERE = !stereo_ok; }
         if BENCH { unsafe { BENCH_STEREO = slider > 0.05; } }
         perf_slider = slider;
+        perf_mono = !stereo_ok;
         let (sl, sr) = StereoDisplacement::new(slider * dist * STEREO_IOD, dist * STEREO_SCREEN);
         let (pl, pr) = Projection::perspective(
             world_fov(),
@@ -8089,7 +8122,7 @@ if page_tex.len() < pak_static.atlases.len() {
         // every tree copy, only those in its view. Decided here, before the
         // frame, so the passes themselves only draw. The right eye's list
         // is made only when the right eye is drawn.
-        let right_eye = !guest_drive || slider > 0.05;
+        let right_eye = stereo_ok && (!guest_drive || slider > 0.05);
         let eye_fr = [Frustum::of(&mvp_l), Frustum::of(&mvp_r)];
         // A view that is not a number puts every vertex nowhere (gpuwatch):
         // said once, with the matrix.
@@ -8616,9 +8649,10 @@ if page_tex.len() < pak_static.atlases.len() {
                         let n = a.frames as f32;
                         let (cm, sl) = BENCH_COMBOS[bench_combo];
                         dlog(&format!(
-                            "[pv] bench: spot {} cam {} 3d {:.0} | L {:.0} verts {:.1} calls R {:.0} verts {:.1} calls | cpu {:.2} max {:.1} ms cull {:.3} submit {:.3} ms | cmdbuf {:.1}% | spans {:.1} trees {:.1} | frames {} | shaded L {:.0} R {:.0}",
+                            "[pv] bench: spot {} cam {} 3d {:.0}{} | L {:.0} verts {:.1} calls R {:.0} verts {:.1} calls | cpu {:.2} max {:.1} ms cull {:.3} submit {:.3} ms | cmdbuf {:.1}% | spans {:.1} trees {:.1} | frames {} | shaded L {:.0} R {:.0}",
                             // the round the combination was in, less the boot's
-                            (seg as i64 - 1) / BENCH_COMBOS.len() as i64 - 1, CAM_MODES[cm].name, sl,
+                            (seg as i64 - 1) / BENCH_COMBOS.len() as i64 - 1, CAM_MODES[cm].name,
+                            if a.mono { 0.0 } else { sl }, if a.mono && sl > 0.0 { " (off here)" } else { "" },
                             a.verts[0] as f32 / n, a.draws[0] as f32 / n,
                             a.verts[1] as f32 / n, a.draws[1] as f32 / n,
                             a.cpu_ms / n, a.cpu_max, a.cull_us / n / 1000.0, a.submit_us / n / 1000.0,
@@ -8645,6 +8679,7 @@ if page_tex.len() < pak_static.atlases.len() {
                     if cmd_use > a.cmd_max { a.cmd_max = cmd_use; }
                     a.spans += unsafe { DRAWN } as u64;
                     a.trees += unsafe { TREES_DRAWN } as u64;
+                    a.mono |= perf_mono;
                 }
             }
         }
