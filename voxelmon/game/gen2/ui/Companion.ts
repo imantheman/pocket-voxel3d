@@ -68,11 +68,13 @@ const PARTY_MAX = 6;
 const TAB_ROW = 14;
 type Page = "party" | "mon" | "badges" | "card" | "map";
 /** Each tab: its label, first column and width in tiles (<PK><MN> is two). */
+// (each tab one column from the next, the cursor's: the row's two ends a
+// column in, where the gaps used to run 2, 1 and 2)
 const TABS: { page: Page; label: string; x: number; w: number }[] = [
-  { page: "party", label: "<PK><MN>", x: 1, w: 2 },
+  { page: "party", label: "<PK><MN>", x: 2, w: 2 },
   { page: "badges", label: "BADGE", x: 5, w: 5 },
   { page: "card", label: "CARD", x: 11, w: 4 },
-  { page: "map", label: "MAP", x: 17, w: 3 },
+  { page: "map", label: "MAP", x: 16, w: 3 },
 ];
 /** Town map rows the MAP page drops off the top (header and rule). */
 const MAP_SHIFT = 3;
@@ -378,7 +380,9 @@ export class Companion {
     const minutes = Clock.minutes(game?.save);
     const hh = Math.floor(minutes / 60);
     const mm = minutes % 60;
-    return `${hh < 10 ? " " : ""}${hh}:${mm < 10 ? "0" : ""}${mm} ${Clock.daytimeLabel(hh)}`;
+    // (no pad before a one-digit hour: it sits at the row's start, under
+    // the place name, and the pad pushed it a column in)
+    return `${hh}:${mm < 10 ? "0" : ""}${mm} ${Clock.daytimeLabel(hh)}`;
   }
 
   private badges(game: any): string[] {
@@ -496,8 +500,13 @@ export class Companion {
       const defs = game.data?.moves ?? {};
       moves.forEach((m, k) => {
         const row = MOVE_ROW + k;
-        Chrome.print(String(defs[String(m?.id)]?.name ?? m?.id ?? "-").slice(0, 12), 2, row);
-        Chrome.printRight(`${m?.pp ?? 0}/${m?.maxPp ?? m?.pp ?? 0}`, COLS - 1, row);
+        // the name cut with an ellipsis a column short of its PP (a
+        // twelve-letter name ran into it: "POISON STING27/35")
+        const pp = `${m?.pp ?? 0}/${m?.maxPp ?? m?.pp ?? 0}`;
+        const room = COLS - 1 - pp.length - 1 - 2;
+        const name = String(defs[String(m?.id)]?.name ?? m?.id ?? "-");
+        Chrome.print(name.length > room ? `${name.slice(0, room - 1)}…` : name, 2, row);
+        Chrome.printRight(pp, COLS - 1, row);
         if (k + 1 === st.moveIndex) Chrome.cursor(1, row);
       });
       const cur = moves[(st.moveIndex ?? 1) - 1];
@@ -545,7 +554,8 @@ export class Companion {
         continue;
       }
       Chrome.print(monName(m), 1, row);
-      Chrome.print(`<LV>${m.level ?? 1}`, 14, row);
+      // the level right-aligned over the HP numbers, as on a mon's page
+      Chrome.printRight(`<LV>${m.level ?? 1}`, COLS, row);
       const max = maxHpOf(m);
       const hp = Math.max(0, Math.min(max, Number(m.hp ?? 0)));
       if (hud.available()) hud.drawHpBar(hp, max, 1, row + 1);
@@ -562,22 +572,31 @@ export class Companion {
       return;
     }
     const data = game.data ?? {};
-    Chrome.print(monName(m), 0, 2);
+    // the PARTY page's columns: text from column 1, numbers right-aligned
+    // to the edge
+    Chrome.print(monName(m), 1, 2);
     Chrome.printRight(`<LV>${m.level ?? 1}`, COLS, 2);
     const types: string[] = m.types ?? data.pokemon?.[String(m.species ?? "")]?.types ?? [];
-    Chrome.print([...new Set(types)].join("/").slice(0, COLS), 0, 3);
+    Chrome.print([...new Set(types)].join("/").slice(0, COLS - 1), 1, 3);
     const max = maxHpOf(m);
     const hp = Math.max(0, Math.min(max, Number(m.hp ?? 0)));
-    if (this.hud!.available()) this.hud!.drawHpBar(hp, max, 0, 4);
+    if (this.hud!.available()) this.hud!.drawHpBar(hp, max, 1, 4);
     Chrome.printRight(`${hp}/${max}`, COLS, 4);
     const status = hp <= 0 ? "FNT" : m.status ? String(m.status).toUpperCase().slice(0, 3) : "OK";
-    Chrome.print(`STATUS/${status}`, 0, 5);
+    Chrome.print(`STATUS/${status}`, 1, 5);
+    // the stats in pairs -- attack and defense, the special two, then
+    // speed -- each value right-aligned in its half (the right half's
+    // under the HP numbers)
     const st = m.stats ?? {};
-    Chrome.print(`ATK${Chrome.number(st.attack ?? 0, 4)}`, 0, 6);
-    Chrome.print(`DEF${Chrome.number(st.defense ?? 0, 4)}`, 10, 6);
-    Chrome.print(`SPD${Chrome.number(st.speed ?? 0, 4)}`, 0, 7);
-    Chrome.print(`SAT${Chrome.number(st.specialAttack ?? 0, 4)}`, 10, 7);
-    Chrome.print(`SDF${Chrome.number(st.specialDefense ?? 0, 4)}`, 0, 8);
+    const stat = (label: string, v: number | undefined, x: number, end: number, row: number): void => {
+      Chrome.print(label, x, row);
+      Chrome.printRight(String(v ?? 0), end, row);
+    };
+    stat("ATK", st.attack, 1, 9, 6);
+    stat("DEF", st.defense, 11, COLS, 6);
+    stat("SAT", st.specialAttack, 1, 9, 7);
+    stat("SDF", st.specialDefense, 11, COLS, 7);
+    stat("SPD", st.speed, 1, 9, 8);
     const moves = m.moves ?? [];
     for (let i = 0; i < 4; i++) {
       const mv = moves[i];
@@ -593,11 +612,12 @@ export class Companion {
 
   private drawBadges(game: any): void {
     const have = new Set(this.badges(game));
+    // (from column 1, as the other pages' text is)
     const list = (title: string, names: string[], row: number): void => {
-      Chrome.print(title, 0, row);
+      Chrome.print(title, 1, row);
       Chrome.printRight(`${names.filter((n) => have.has(n)).length}/8`, COLS, row);
       names.forEach((n, i) => {
-        const tx = (i % 2) * 10;
+        const tx = 1 + (i % 2) * 10;
         const ty = row + 1 + Math.floor(i / 2);
         if (have.has(n)) {
           Chrome.cursor(tx, ty);
@@ -615,15 +635,21 @@ export class Companion {
     const player = game.save?.player ?? {};
     const time = game.save?.playTime ?? {};
     const dex = game.save?.pokedex ?? {};
-    Chrome.print(`NAME/${player.name || "GOLD"}`, 0, 3);
-    Chrome.print(`ID No.${Chrome.number(player.id || 0, 5, true)}`, 0, 5);
-    Chrome.print("POKéDEX", 0, 7);
-    Chrome.print(`OWN${Chrome.number(this.count(dex.caught), 4)}`, 1, 8);
-    Chrome.print(`SEEN${Chrome.number(this.count(dex.seen), 4)}`, 10, 8);
-    Chrome.print("PLAY TIME", 0, 10);
-    Chrome.printRight(`${time.hours || 0}:${Chrome.number(time.minutes || 0, 2, true)}`, COLS, 10);
-    Chrome.print("BADGES", 0, 12);
-    Chrome.printRight(`${this.badges(game).length}`, COLS, 12);
+    // one style for every line, the label at column 1 and its value
+    // right-aligned to the edge, in three groups a row apart: you, your
+    // POKeDEX (SEEN before OWN, as the dex itself counts), your time and
+    // badges
+    const line = (label: string, value: string, row: number, x = 1): void => {
+      Chrome.print(label, x, row);
+      Chrome.printRight(value, COLS, row);
+    };
+    line("NAME", String(player.name || "GOLD"), 3);
+    line("ID No.", Chrome.number(player.id || 0, 5, true), 4);
+    Chrome.print("POKéDEX", 1, 6);
+    line("SEEN", String(this.count(dex.seen)), 7, 2);
+    line("OWN", String(this.count(dex.caught)), 8, 2);
+    line("PLAY TIME", `${time.hours || 0}:${Chrome.number(time.minutes || 0, 2, true)}`, 10);
+    line("BADGES", `${this.badges(game).length}`, 11);
   }
 
   private drawMap(game: any): void {

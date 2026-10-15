@@ -62,7 +62,8 @@ describe("gen2 Companion (the bottom screen)", () => {
     tap(c, game, 3, 7);
     expect((c as any).mon).toBe(0);
 
-    // the tab row: <PK><MN> (columns 0-2), BADGE (4-9), CARD (10-14), MAP (16-19)
+    // the tab row, each tab with its cursor's column: <PK><MN> (columns
+    // 1-3), BADGE (4-9), CARD (10-14), MAP (15-18)
     tap(c, game, 9, 14);
     expect(page()).toBe("badges");
     expect(draw()).toBeGreaterThan(0);
@@ -86,10 +87,12 @@ describe("gen2 Companion (the bottom screen)", () => {
     tap(c, game, 2, 14);
     expect(page()).toBe("party");
 
-    // an empty party row and the gap between tabs do nothing
+    // an empty party row and the tab row's ends do nothing
     tap(c, game, 3, 10);
     expect(page()).toBe("party");
-    tap(c, game, 3, 14);
+    tap(c, game, 0, 14);
+    expect(page()).toBe("party");
+    tap(c, game, 19, 14);
     expect(page()).toBe("party");
 
     // a finger that is only resting (never lifted) does nothing yet
