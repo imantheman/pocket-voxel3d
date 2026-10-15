@@ -6,8 +6,8 @@
 import { hpBarTiles } from "../../../battle/ui.ts";
 import { picPageFor } from "../../../battle/staging.ts";
 import {
-  COLS, TILE_H, TILE_W, box, button, center, cursor, fit, pill, pressedId, region, sprite, text,
-  tiles, wrap, type Ink,
+  COLS, TILE_H, TILE_W, box, button, center, cursor, fit, pill, pressedId, region, right, row, sprite,
+  text, tiles, wrap, type Ink,
 } from "../draw.ts";
 import { APPS, appOf, gearSave, wildRows, type GearViewId } from "../model.ts";
 import { go, header, type GearCtx } from "../ui.ts";
@@ -45,10 +45,16 @@ export function drawHome(ctx: GearCtx): void {
   const ie: Ink = pressedId() === "home:explorer" ? "fill" : "dark";
   const id = game.overworld?.map?.id ?? "";
   const name = mapName(ctx);
+  // the card's inside is columns 1-8: the place, then labels with their
+  // numbers right-aligned (the step count on a row of its own, as it is
+  // too long to share one with its label)
   text(host, 1, 3, fit(name, 8), ie);
   const wild = new Set(wildRows(ctx.data, id).map((r) => r.species)).size;
-  text(host, 1, 5, `WILD ${wild}`, ie);
-  if (!ctx.gear.removed.steps) text(host, 1, 6, fit(`${ctx.gear.steps} STEPS`, 8), ie);
+  row(host, 4, "WILD", String(wild), 1, 9, ie);
+  if (!ctx.gear.removed.steps) {
+    text(host, 1, 5, "STEPS", ie);
+    right(host, 6, fit(String(ctx.gear.steps), 8), ie, 9);
+  }
 
   // PARTY card: the lead
   button(host, "home:party", 10, 2, 10, 6, "", () => go(ctx, "party"));

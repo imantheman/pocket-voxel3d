@@ -9,7 +9,7 @@
 // SPOILERS shows everything.
 import { picPageFor } from "../../../battle/staging.ts";
 import {
-  COLS, TILE_H, TILE_W, center, fit, rect, region, right, sprite, spriteFrame, text,
+  COLS, TILE_H, TILE_W, center, fit, rect, region, right, sprite, spriteFrame, text, width,
 } from "../draw.ts";
 import { assists, mapItems, mapTrainers, spoilers, wildRows } from "../model.ts";
 import { stepper, tabs, type GearCtx } from "../ui.ts";
@@ -274,14 +274,18 @@ function drawTrainers(ctx: GearCtx): void {
   if (rows.length === 0) { center(host, 8, "NO TRAINERS HERE"); return; }
   const top = pager(ctx, rows.length);
   const left = rows.filter((r) => !r.beaten).length;
-  right(host, 1, `${left} LEFT`, "dark", 20);
+  right(host, 1, `${left} LEFT`);
+  // the name has its row to itself (JR.TRAINER♀ ran into BEATEN); READY /
+  // BEATEN go at the end of the row under it, after the team
   rows.slice(top, top + PER_PAGE).forEach((r, k) => {
     const y0 = 2 + k * 2;
     spriteFrame(host, spritePage(data, r.obj.sprite), 2, y0 * TILE_H + 4, 2 * TILE_H - 4);
-    text(host, 2, y0, fit(r.name, 11));
-    right(host, y0, r.beaten ? "BEATEN" : "READY");
+    text(host, 2, y0, fit(r.name, 17));
+    const state = r.beaten ? "BEATEN" : "READY";
+    right(host, y0 + 1, state);
+    const room = 19 - width(state) - 1 - 2;
     if (spoilers(save) && r.party.length) {
-      text(host, 2, y0 + 1, fit(r.party.map((m) => `${(data.pokemon?.[m.species]?.name ?? m.species).slice(0, 4)}${m.level}`).join(" "), 18));
+      text(host, 2, y0 + 1, fit(r.party.map((m) => `${(data.pokemon?.[m.species]?.name ?? m.species).slice(0, 4)}${m.level}`).join(" "), room));
     } else {
       text(host, 2, y0 + 1, `${r.party.length} POKéMON`);
     }

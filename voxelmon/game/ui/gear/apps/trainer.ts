@@ -2,7 +2,7 @@
 // the eight badges (their own art from the trainer card sheet).
 import * as Badges from "../../../rules/badges.ts";
 import { formatPlayTime } from "../../trainercard.ts";
-import { COLS, TILE_H, TILE_W, badgeIcon, box, right, sprite, text } from "../draw.ts";
+import { COLS, TILE_H, TILE_W, badgeIcon, box, center, row, sprite } from "../draw.ts";
 import type { GearCtx } from "../ui.ts";
 
 export function drawTrainer(ctx: GearCtx): void {
@@ -10,15 +10,20 @@ export function drawTrainer(ctx: GearCtx): void {
   const inv = save?.inventory ?? {};
   box(host, 0, 1, COLS, 9);
   sprite(host, data.atlas?.trainerCardPic ?? -1, 14 * TILE_W, 2 * TILE_H, 5 * TILE_W, 7 * TILE_H);
-  text(host, 1, 2, `NAME/${save?.player?.name ?? "RED"}`);
-  text(host, 1, 3, `IDNo/${String(save?.player?.id ?? 0).padStart(5, "0")}`);
-  text(host, 1, 4, `MONEY/¥${save?.money ?? 0}`);
-  text(host, 1, 5, `TIME/${formatPlayTime(Number(save?.playTime ?? 0))}`);
+  // one style for every line: the label left, its value right-aligned
+  // against the picture (columns 1-13); SEEN before OWN, as the dex says it
   const seen = Object.values(save?.pokedex?.seen ?? {}).filter(Boolean).length;
   const owned = Object.values(save?.pokedex?.owned ?? {}).filter(Boolean).length;
-  text(host, 1, 6, `OWN/${owned}`);
-  text(host, 1, 7, `SEEN/${seen}`);
-  if (!gear.removed.steps) text(host, 1, 8, `STEPS ${gear.steps}`);
+  const lines: [string, string][] = [
+    ["NAME", String(save?.player?.name ?? "RED")],
+    ["ID No.", String(save?.player?.id ?? 0).padStart(5, "0")],
+    ["MONEY", `¥${save?.money ?? 0}`],
+    ["TIME", formatPlayTime(Number(save?.playTime ?? 0))],
+    ["SEEN", String(seen)],
+    ["OWN", String(owned)],
+  ];
+  if (!gear.removed.steps) lines.push(["STEPS", String(gear.steps)]);
+  lines.forEach(([label, value], k) => row(host, 2 + k, label, value, 1, 14));
 
   // the badges: two rows of four, each its art over its name
   const list = Badges.list(data);
@@ -35,5 +40,7 @@ export function drawTrainer(ctx: GearCtx): void {
     // a badge you hold shows the badge; one you don't, the leader's face
     badgeIcon(host, data.atlas?.uiPage ?? -1, i, px, py, cell, !have);
   });
-  right(host, 17, `BADGES ${Badges.count(data, save)}/8`, "dark", 20);
+  // the count is a title on the card's bottom edge, over the badges it
+  // counts (on the boxes' own bottom edge it broke two of them)
+  center(host, 9, ` BADGES ${Badges.count(data, save)}/8 `);
 }
