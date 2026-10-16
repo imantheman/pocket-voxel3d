@@ -74,6 +74,11 @@ export class SpeedStepper {
   }
 }
 
+/** A battle turn's frame budget for the guest, microseconds: past it the
+ * host's 33 ms frame (the guest plus the screen's render and the host's own
+ * work) is about to be missed. */
+export const TURN_BUDGET = 25000;
+
 /**
  * The fallback: 2X costs a second logic tick every step, and where a frame
  * was already near the budget (Gold's battles: their screen is most of the
@@ -98,6 +103,10 @@ export class SpeedGovernor {
   private acc = 0;
   private logicAcc = 0;
   private calm = 0;
+  /** The last frame sampled was in a battle's turn (sample's `busy`). */
+  private wasBusy = false;
+  /** The longest logic tick in the frame being sampled. */
+  private peakAcc = 0;
 
   constructor(
     readonly high = 18000,
@@ -107,17 +116,45 @@ export class SpeedGovernor {
   ) {}
 
   /** One frame() call took `us`, `logicUs` of it in logic ticks; `shown`
-   * when the host renders after it; `want` the speed asked for. */
-  sample(us: number, logicUs: number, shown: boolean, want: number): void {
+   * when the host renders after it; `want` the speed asked for. `busy`
+   * (a caller that says): a battle's turn is playing -- see TURN_BUDGET;
+   * `peakUs` the longest single logic tick in the call. */
+  sample(us: number, logicUs: number, shown: boolean, want: number, busy?: boolean, peakUs = 0): void {
     this.acc += us;
     this.logicAcc += logicUs;
+    if (peakUs > this.peakAcc) this.peakAcc = peakUs;
     if (!shown) return;
+    const peak = this.peakAcc;
+    this.peakAcc = 0;
     const clip = this.high * 2;
+    const raw = this.acc;
     const f = Math.min(this.acc, clip);
     const l = Math.min(this.logicAcc, f);
     this.acc = this.logicAcc = 0;
     this.ema = this.ema === 0 ? f : this.ema + (f - this.ema) / 16;
     this.logicEma = this.logicEma === 0 ? l : this.logicEma + (l - this.logicEma) / 16;
+    // A battle's turn (a caller that passes `busy`): the frame rate first,
+    // then as fast as it will go. One rendered frame whose guest time is over
+    // the budget with the logic a real part of it steps SPEED down at once --
+    // 2X, 1.5X, 1X -- and it stays down for the rest of the turn (no
+    // waiting for an average: a turn is a few seconds, and every dropped
+    // frame of it shows); the turn over, it is back to 2X.
+    if (busy !== undefined && want > 1) {
+      if (busy) {
+        this.wasBusy = true;
+        this.calm = 0;
+        // (the logic fewer ticks would save: not the frame's longest tick --
+        // a turn resolving is one big tick, there at any speed)
+        if (raw > TURN_BUDGET && l - Math.min(peak, l) > f * this.share) this.set(this.cap > 1.5 ? 1.5 : 1);
+        return;
+      }
+      if (this.wasBusy) {
+        this.wasBusy = false;
+        this.calm = 0;
+        this.set(GAME_SPEED_MAX);
+        return;
+      }
+    }
     const logicHeavy = this.logicEma > this.ema * this.share;
     if (want <= 1) {
       this.set(GAME_SPEED_MAX);

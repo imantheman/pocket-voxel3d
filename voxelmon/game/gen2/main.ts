@@ -131,6 +131,15 @@ const stepper = new SpeedStepper();
 const governor = new SpeedGovernor(undefined, undefined, (cap, ema, logic) =>
   console.log(`[pv] speed: ${cap}X here (guest ${(ema / 1000).toFixed(1)} ms a frame, logic ${(logic / 1000).toFixed(1)})`));
 
+/** A battle's turn is playing (or its intro): the governor's `busy` -- SPEED
+ *  steps down for the rest of it the moment a frame overfills, and comes
+ *  back to 2X at the menu. */
+let peakTick = 0;
+function battleTurn(): boolean {
+  const st = game.stack.top() as { screenId?: string; phase?: string } | undefined;
+  return st?.screenId === "Gen2BattleState" && (st.phase === "resolving" || st.phase === "intro");
+}
+
 (globalThis as unknown as { frame: (buttons: number) => void }).frame = (buttons: number): void => {
   clock = (globalThis as unknown as { goldProf?: boolean }).goldProf || !lastStep ? nowFn : undefined;
   const t0 = clock ? clock() : 0;
@@ -167,7 +176,14 @@ const governor = new SpeedGovernor(undefined, undefined, (cap, ema, logic) =>
     // frame is too full for 2X: SpeedGovernor)
     l0 = nowFn ? nowFn() : 0;
     stepHost(stepper, governor.speed(game.logicSpeed()), compose, () => {
+      const k0 = nowFn ? nowFn() : 0;
       game.logicFrame(buttons & 0xff);
+      // the step's longest tick (a turn's resolving is one big tick: fewer
+      // ticks a frame would not shorten it -- SpeedGovernor's `peak`)
+      if (nowFn) {
+        const k = nowFn() - k0;
+        if (k > peakTick) peakTick = k;
+      }
       // the CABLE CLUB's link (polled every step, as the carrier needs)
       game.serviceLink();
       // the bottom screen's touch, packed above the pad by the host (bit 8 a
@@ -199,7 +215,8 @@ const governor = new SpeedGovernor(undefined, undefined, (cap, ema, logic) =>
   } catch (e) {
     Logger.error("gold: draw: %s", String((e as Error)?.stack ?? e));
   }
-  if (nowFn) governor.sample(nowFn() - g0, Math.max(0, l1 - l0), compose, game.logicSpeed());
+  if (nowFn) governor.sample(nowFn() - g0, Math.max(0, l1 - l0), compose, game.logicSpeed(), battleTurn(), peakTick);
+  peakTick = 0;
   if (clock) {
     const t4 = clock();
     prof.step += t1 - t0;

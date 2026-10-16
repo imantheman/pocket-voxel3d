@@ -75,6 +75,41 @@ describe("the speed stepper", () => {
     expect(changes).toEqual([1.5, 2]);
   });
 
+  test("a battle's turn: one overfull frame steps SPEED down at once, held till the turn ends", () => {
+    const changes: number[] = [];
+    const g = new SpeedGovernor(18000, 14000, (cap) => changes.push(cap));
+    const frame = (us: number, logicPart: number, busy: boolean, want = 2): void => {
+      g.sample(us / 2, (us * logicPart) / 2, false, want, busy);
+      g.sample(us / 2, (us * logicPart) / 2, true, want, busy);
+    };
+    // a quick turn stays 2X
+    for (let i = 0; i < 60; i++) frame(15000, 0.5, true);
+    expect(g.speed(2)).toBe(2);
+    // a frame the drawing overfills buys nothing from slowing the game
+    frame(30000, 0.1, true);
+    expect(g.speed(2)).toBe(2);
+    // nor one a single long tick overfills (the turn resolving: there at any speed)
+    g.sample(15000, 1000, false, 2, true, 1000);
+    g.sample(15000, 17000, true, 2, true, 17000);
+    expect(g.speed(2)).toBe(2);
+    // one the logic overfills: 1.5X on the spot, then 1X if it does again
+    frame(30000, 0.6, true);
+    expect(g.speed(2)).toBe(1.5);
+    frame(30000, 0.6, true);
+    expect(g.speed(2)).toBe(1);
+    // quick frames for the rest of the turn do not lift it
+    for (let i = 0; i < 120; i++) frame(8000, 0.5, true);
+    expect(g.speed(2)).toBe(1);
+    // the turn over: straight back to 2X
+    frame(8000, 0.5, false);
+    expect(g.speed(2)).toBe(2);
+    expect(changes).toEqual([1.5, 1, 2]);
+    // at 1X nothing changes: it is the game as it always ran
+    frame(30000, 0.6, true, 1);
+    expect(g.speed(1)).toBe(1);
+    expect(g.speed(2)).toBe(2);
+  });
+
   test("the option: 1 or 2 under options.gameSpeed, anything else is 1X", () => {
     expect(GAME_SPEEDS.map((s) => s.label)).toEqual(["1X", "2X"]);
     expect(gameSpeedOf(undefined)).toBe(1);
