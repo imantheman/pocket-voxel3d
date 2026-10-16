@@ -3650,6 +3650,13 @@ export class BattleState {
     // (home/text.asm:834-835), so the line is not dismissable under it.
     this.push({ kind: "message", sfx: SFX_CAUGHT_MON, waitSfx: true,
       text: Strings.get("Gotcha! %s was caught!", this.name(enemy)) });
+    // EXP FOR CATCHING (core/Cheats.ts): Battle.caught paid the award while
+    // the ball was rolled; its EXP lines, level ups and new moves come here,
+    // right after the catch is announced.
+    if (truthy(this.battle.catchExpPaid)) {
+      this.battle.catchExpPaid = undefined;
+      this.pushAll(this.battle.takeEvents());
+    }
     // BATTLETYPE_TUTORIAL returns before every one of the steps below
     // (`.FinishTutorial`, and `.return_from_capture: ret z`).
     if (truthy(this.tutorial) || !truthy(save)) return;

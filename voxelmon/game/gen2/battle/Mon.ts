@@ -24,6 +24,7 @@
 
 import { GameVersion } from "../shared/core/GameVersion.ts";
 import { Unown } from "../core/Unown.ts";
+import { Cheats } from "../core/Cheats.ts";
 import { Runtime } from "../shared/mods/Runtime.ts";
 import { mod, sortedKeys, tonumber, tostring, truthy } from "../platform/lua.ts";
 import { random } from "../platform/rng.ts";
@@ -261,8 +262,14 @@ export const Mon = {
     };
   },
 
-  // Lua: Mon.lua:139
+  // Lua: Mon.lua:139 -- through the port's SHINY ODDS (core/Cheats.ts), which
+  // at the cart's 1/8192 is this roll untouched.
   randomDVs(): Dvs {
+    return Cheats.rollDVs(Mon.cartDVs);
+  },
+
+  // The cart's roll: four random nibbles.
+  cartDVs(): Dvs {
     return {
       hp: undefined, // derived below
       attack: rand(0, Mon.MAX_DV),

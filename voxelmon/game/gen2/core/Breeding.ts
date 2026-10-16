@@ -17,6 +17,7 @@
 
 import { Mail } from "./Mail.ts";
 import { Mon } from "../battle/Mon.ts";
+import { Cheats, FAST_EGG_STEPS } from "./Cheats.ts";
 import { Runtime } from "../shared/mods/Runtime.ts";
 import { mod, removeAt, tonumber } from "../platform/lua.ts";
 import { random } from "../platform/rng.ts";
@@ -530,6 +531,8 @@ export const Breeding = {
       dvs.defense = mod(parent.defense ?? 0, 16);
       dvs.special = dvs.special! - mod(dvs.special!, 8) + mod(parent.special ?? 0, 8);
     }
+    // the port's SHINY ODDS on top of the cart's inheritance (core/Cheats.ts)
+    Cheats.eggDVs(dvs);
     dvs.hp = Mon.hpDV(dvs);
 
     // hp = 0: DayCare_GiveEgg zeroes MON_HP.
@@ -801,6 +804,13 @@ export const Breeding = {
 
     // .check_egg only while flagged compatible.
     if (!dc.compatible) return false;
+    // FAST EGGS (core/Cheats.ts): the egg is there on this step, whatever
+    // the countdown and the compatibility roll would have said.
+    if (Cheats.fastEggs()) {
+      dc.compatible = false;
+      dc.hasEgg = true;
+      return true;
+    }
     // `dec [hl] / ret nz` on a byte: 0 wraps to 255.
     dc.stepsToEgg = mod((dc.stepsToEgg ?? 0) - 1, 256);
     if (dc.stepsToEgg !== 0) return false;
@@ -831,7 +841,14 @@ export const Breeding = {
   step(data: BreedData | undefined, save: any, rng?: Rng): "hatch" | undefined {
     if (save === null || typeof save !== "object") return undefined;
     save.stepCount = mod((save.stepCount ?? 0) + 1, Breeding.STEP_CYCLE);
-    if (save.stepCount === Breeding.EGG_STEP_PHASE) {
+    // FAST EGGS: no egg has more than FAST_EGG_STEPS cycles left, and a cycle
+    // is one step rather than 256.
+    if (Cheats.fastEggs()) {
+      for (const mon of save.party || []) {
+        if (Breeding.isEgg(mon) && (mon.eggSteps ?? 0) > FAST_EGG_STEPS) mon.eggSteps = FAST_EGG_STEPS;
+      }
+      if (Breeding.doEggStep(save)) return "hatch";
+    } else if (save.stepCount === Breeding.EGG_STEP_PHASE) {
       if (Breeding.doEggStep(save)) return "hatch";
     }
     Breeding.dayCareStep(data, save, rng);

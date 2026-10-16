@@ -30,6 +30,7 @@
 
 import { Runtime } from "../shared/mods/Runtime.ts";
 import { Mon } from "./Mon.ts";
+import { Cheats } from "../core/Cheats.ts";
 import { truthy } from "../platform/lua.ts";
 import { random as luaRandom } from "../platform/rng.ts";
 
@@ -357,6 +358,7 @@ export const Catching = {
   // previews.  A catch.rate hook may replace the roll entirely, so nil is
   // safer than presenting a guess.
   chance(opts?: CatchOpts): number | undefined {
+    if (truthy(opts) && truthy(opts!.battle) && truthy(opts!.battle.wild) && Cheats.alwaysCatch()) return 100;
     if (Runtime.wantsHook("catch.rate")) return undefined;
     const [rate, guaranteed] = Catching.rate(opts);
     if (guaranteed || rate >= 255) return 100;
@@ -444,6 +446,12 @@ export const Catching = {
       );
     } else {
       [caught, rate] = Catching.vanillaAttempt(o);
+    }
+    // ALWAYS CATCH (core/Cheats.ts): a ball at a wild mon in a battle never
+    // fails; 255 is the rate the wobble animation reads as a sure catch.
+    if (!caught && truthy(o.battle) && truthy(o.battle.wild) && Cheats.alwaysCatch()) {
+      caught = true;
+      rate = 255;
     }
     // PokeBallEffect's captured tail runs BEFORE the mon is added to anything
     // (item_effects.asm:514-566), so a caught mon is reloaded out of its base

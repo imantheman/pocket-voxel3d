@@ -27,6 +27,7 @@ import { osTime as clockNow } from "../platform/clock.ts";
 import { AutoInput } from "./AutoInput.ts";
 import { Clock } from "./Clock.ts";
 import { Save } from "./Save.ts";
+import { Cheats } from "./Cheats.ts";
 import { gen2ScrubLines, scrubGen2Save } from "./SaveScrub.ts";
 import { clockResetPending } from "../ui/ResetClock.ts";
 import { GameVersion } from "../shared/core/GameVersion.ts";
@@ -148,6 +149,9 @@ export class Game2 {
     this.save.options = this.options;
     this.sessionStartedAt = clockNow();
     anchorNewGameClock(this.save);
+    // the ENHANCEMENTS and CHEATS read this session's options, whichever
+    // table they are by then (core/Cheats.ts)
+    Cheats.bind(() => this.options);
   }
 
   static new(): Game2 {
@@ -987,6 +991,8 @@ export class Game2 {
     ModRuntime.call("input.step", noop, this, 1 / 60);
     this.autoInput.step(this.input);
     this.input.step();
+    // INFINITE MONEY (core/Cheats.ts)
+    Cheats.frame(this);
     if (this.input.isDown("a") && this.input.isDown("b") && this.input.isDown("start") && this.input.isDown("select")) {
       Input.reset();
       this.softReset();

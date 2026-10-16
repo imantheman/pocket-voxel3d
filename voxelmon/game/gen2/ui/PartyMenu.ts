@@ -368,8 +368,15 @@ export class PartyMenu {
     for (const entry of (mon && mon.moves) || []) {
       if (entry && entry.id) known[entry.id] = entry;
     }
+    // HMS WITHOUT MOVE (core/Cheats.ts): FLY and FLASH have no overworld
+    // press to hang on, so with the HM in the bag every mon's menu offers
+    // them (the badge is still asked for when one is picked). The four
+    // actions below always keep their rows.
+    const save = this.game && this.game.save;
+    const byItem = (id: string): boolean =>
+      !known[id] && (id === "FLY" || id === "FLASH") && FieldMoves.moveByItem(id, save);
     for (const id of FIELD_MOVES) {
-      if (known[id]) {
+      if (known[id] || (byItem(id) && items.length < NUM_MONMENU_ITEMS - 4)) {
         const def = this.moves && this.moves[id];
         items.push({ id, label: (def && def.name) || id, fieldMove: true });
       }
