@@ -8274,6 +8274,68 @@ class GameMap {
     }
     return true;
   }
+  tileFlags;
+  cellFlagsRow(cy, out) {
+    const w = this.widthCells;
+    const o = cy * w;
+    if (this.byCollision) {
+      for (let cx = 0;cx < w; cx++) {
+        let f = 0;
+        if (this.isWalkableCell(cx, cy))
+          f |= 1 | 8;
+        if (this.isWaterCell(cx, cy))
+          f |= 2 | 16;
+        if (this.isGrassCell(cx, cy))
+          f |= 4;
+        if (this.warpAtCell(cx, cy) || this.isWarpTileCell(cx, cy))
+          f |= 32;
+        out[o + cx] = f;
+      }
+      return;
+    }
+    let tf = this.tileFlags;
+    if (!tf) {
+      tf = this.tileFlags = new Uint8Array(256);
+      for (const t of this.walkable)
+        tf[t & 255] |= 1;
+      for (const t of this.waterTiles)
+        tf[t & 255] |= 2;
+      const g = this.tileset.grassTile;
+      if (g !== undefined)
+        tf[g & 255] |= 4;
+      for (const t of this.doorTiles)
+        tf[t & 255] |= 32;
+      for (const t of this.warpTiles)
+        tf[t & 255] |= 32;
+    }
+    const bw = this.def.width;
+    const by = cy >> 1;
+    const ty0 = (cy & 1) * 2;
+    const tsBlocks = this.tileset.blocks;
+    for (let cx = 0;cx < w; cx++) {
+      const bx = cx >> 1;
+      const blockId = bx < bw && by < this.def.height ? this.def.blocks[by * bw + bx] : this.def.borderBlock;
+      const b = tsBlocks[blockId];
+      if (!b) {
+        out[o + cx] = 0;
+        continue;
+      }
+      const tx0 = (cx & 1) * 2;
+      const tl = tf[b[ty0 * 4 + tx0] & 255], tr = tf[b[ty0 * 4 + tx0 + 1] & 255];
+      const bl = tf[b[(ty0 + 1) * 4 + tx0] & 255], br = tf[b[(ty0 + 1) * 4 + tx0 + 1] & 255];
+      const i = o + cx;
+      let f = bl & (1 | 2 | 4 | 32);
+      if (this.cutAt.has(i) || this.openAt.has(i))
+        f |= 1;
+      if (tl & tr & bl & br & 1 && !((tl | tr | bl | br) & 2))
+        f |= 8;
+      if (tl & tr & bl & br & 2)
+        f |= 16;
+      if (this.warpAt.has(i))
+        f |= 32;
+      out[i] = f;
+    }
+  }
   isWaterCell(cx, cy) {
     if (this.byCollision)
       return isWater(this.cellCollision(cx, cy));
@@ -17226,9 +17288,41 @@ function waterTable(enc) {
 function everyTileRolls(map, indoor) {
   return !!indoor && map.def.index >= indoor.firstIndoorMap && map.def.tileset !== indoor.excludedTileset;
 }
+var CF_WALK = 1;
+var CF_WATER = 2;
+var CF_GRASS = 4;
+var CF_WHOLE = 8;
+var CF_WHOLE_WATER = 16;
+var CF_WARP = 32;
+function dryOf(g) {
+  return (g & CF_WALK) !== 0 && (g & CF_WATER) === 0;
+}
+function flagsRowByMethods(map, y, out) {
+  const w = map.widthCells;
+  for (let x = 0;x < w; x++) {
+    let f = 0;
+    if (map.isWalkableCell(x, y))
+      f |= CF_WALK;
+    if (map.isWaterCell(x, y))
+      f |= CF_WATER;
+    if (map.isGrassCell(x, y))
+      f |= CF_GRASS;
+    const whole = map.isWholeCell;
+    if (whole ? whole.call(map, x, y, "floor") : f & CF_WALK && !(f & CF_WATER))
+      f |= CF_WHOLE;
+    if (whole ? whole.call(map, x, y, "water") : f & CF_WATER)
+      f |= CF_WHOLE_WATER;
+    if (map.warpAtCell(x, y) || map.isWarpTileCell(x, y))
+      f |= CF_WARP;
+    out[y * w + x] = f;
+  }
+}
+
 class CellClassifier {
   map;
   out;
+  flags;
+  fy = 0;
   y = 1;
   land;
   water;
@@ -17236,6 +17330,9 @@ class CellClassifier {
   constructor(map, enc, indoor) {
     this.map = map;
     this.out = new Uint8Array(map.widthCells * map.heightCells);
+    this.flags = new Uint8Array(map.widthCells * map.heightCells);
+    this.landPrefix = new Uint16Array((map.widthCells + 1) * map.heightCells);
+    this.waterPrefix = new Uint16Array((map.widthCells + 1) * map.heightCells);
     this.land = landTable(enc) !== null;
     this.water = waterTable(enc) !== null;
     this.cave = this.land && everyTileRolls(map, indoor);
@@ -17246,46 +17343,100 @@ class CellClassifier {
     return this.y >= this.map.heightCells - 1;
   }
   step(budget) {
-    const w = this.map.widthCells;
+    const map = this.map;
+    const w = map.widthCells;
     let n = 0;
     while (!this.done && n < budget) {
-      for (let x = 1;x < w - 1; x++)
-        this.out[this.y * w + x] = this.kindOf(x, this.y);
+      while (this.fy <= this.y + 1 && this.fy < map.heightCells) {
+        if (map.cellFlagsRow)
+          map.cellFlagsRow(this.fy, this.flags);
+        else
+          flagsRowByMethods(map, this.fy, this.flags);
+        this.fy++;
+      }
+      this.kindsRow(this.y);
       n += w;
       this.y++;
     }
   }
-  kindOf(x, y) {
-    const map = this.map;
-    const isWater2 = (cx, cy) => map.isWaterCell(cx, cy);
-    const walk = (cx, cy) => map.isWalkableCell(cx, cy) && !isWater2(cx, cy);
-    const cave = this.cave;
-    let k = CELL_NONE;
-    if (this.water && isWater2(x, y))
-      k = CELL_WATER;
-    else if (this.land && walk(x, y) && (cave || map.isGrassCell(x, y)))
-      k = CELL_LAND;
-    if (k === CELL_NONE)
-      return k;
-    {
-      if (map.isWholeCell && !map.isWholeCell(x, y, k === CELL_WATER ? "water" : "floor"))
-        return CELL_NONE;
-      if (k === CELL_LAND && !cave && !map.isGrassCell(x, y - 1))
-        return CELL_NONE;
-      if (k === CELL_LAND && !cave && !walk(x, y + 1))
-        return CELL_NONE;
-      if (map.warpAtCell(x, y) || map.isWarpTileCell(x, y))
-        return CELL_NONE;
-      if (map.warpAtCell(x - 1, y) || map.warpAtCell(x + 1, y) || map.warpAtCell(x, y - 1) || map.warpAtCell(x, y + 1))
-        return CELL_NONE;
-      const pass = k === CELL_WATER ? isWater2 : walk;
-      const u = pass(x, y - 1), d = pass(x, y + 1), l = pass(x - 1, y), r = pass(x + 1, y);
-      if (u && d && !l && !r || l && r && !u && !d)
-        return CELL_NONE;
-      if (+u + +d + +l + +r <= 1)
-        return CELL_NONE;
+  kindsRow(y) {
+    const w = this.map.widthCells;
+    const F = this.flags;
+    const out = this.out;
+    const cave = this.cave, land = this.land, water = this.water;
+    const up = (y - 1) * w, at = y * w, dn = (y + 1) * w;
+    for (let x = 1;x < w - 1; x++) {
+      const f = F[at + x];
+      let k = CELL_NONE;
+      const dry = (f & CF_WALK) !== 0 && (f & CF_WATER) === 0;
+      if (water && f & CF_WATER)
+        k = CELL_WATER;
+      else if (land && dry && (cave || f & CF_GRASS))
+        k = CELL_LAND;
+      if (k === CELL_NONE) {
+        out[at + x] = 0;
+        continue;
+      }
+      const fu = F[up + x], fd = F[dn + x], fl = F[at + x - 1], fr = F[at + x + 1];
+      let ok = k === CELL_WATER ? (f & CF_WHOLE_WATER) !== 0 : (f & CF_WHOLE) !== 0;
+      if (ok && k === CELL_LAND && !cave) {
+        if (!(fu & CF_GRASS) || !dryOf(fd))
+          ok = false;
+      }
+      if (ok && (f | fu | fd | fl | fr) & CF_WARP)
+        ok = false;
+      if (ok) {
+        const wet = k === CELL_WATER;
+        const u = wet ? (fu & CF_WATER) !== 0 : dryOf(fu), d = wet ? (fd & CF_WATER) !== 0 : dryOf(fd);
+        const l = wet ? (fl & CF_WATER) !== 0 : dryOf(fl), r = wet ? (fr & CF_WATER) !== 0 : dryOf(fr);
+        if (u && d && !l && !r || l && r && !u && !d)
+          ok = false;
+        else if (+u + +d + +l + +r <= 1)
+          ok = false;
+      }
+      out[at + x] = ok ? k : CELL_NONE;
     }
-    return k;
+    const pw = w + 1;
+    const pl = this.landPrefix, pv = this.waterPrefix;
+    let nl = 0, nw = 0;
+    for (let x = 0;x < w; x++) {
+      pl[y * pw + x] = nl;
+      pv[y * pw + x] = nw;
+      const k = out[at + x];
+      if (k === CELL_LAND)
+        nl++;
+      else if (k === CELL_WATER)
+        nw++;
+    }
+    pl[y * pw + w] = nl;
+    pv[y * pw + w] = nw;
+  }
+  landPrefix;
+  waterPrefix;
+  countIn(kind, x0, x1, y0, y1) {
+    const pw = this.map.widthCells + 1;
+    const p = kind === CELL_WATER ? this.waterPrefix : this.landPrefix;
+    let n = 0;
+    for (let y = y0;y <= y1; y++)
+      n += p[y * pw + x1 + 1] - p[y * pw + x0];
+    return n;
+  }
+  nthIn(kind, r, x0, x1, y0, y1) {
+    const w = this.map.widthCells;
+    const pw = w + 1;
+    const p = kind === CELL_WATER ? this.waterPrefix : this.landPrefix;
+    for (let y = y0;y <= y1; y++) {
+      const n = p[y * pw + x1 + 1] - p[y * pw + x0];
+      if (r >= n) {
+        r -= n;
+        continue;
+      }
+      for (let x = x0;x <= x1; x++) {
+        if (this.out[y * w + x] === kind && r-- === 0)
+          return y * w + x;
+      }
+    }
+    return -1;
   }
 }
 var WINDOW_X = 7;
@@ -18021,7 +18172,8 @@ class WildMon {
   }
 }
 var TOUCH_PX = 12;
-var CLASSIFY_CELLS = 48;
+var CLASSIFY_CELLS = 32;
+var SPAWN_DRAWS = 12;
 
 class VisibleWild {
   ow;
@@ -18030,8 +18182,6 @@ class VisibleWild {
   lastBattle;
   classifier = null;
   cellsMap = null;
-  marks = null;
-  cands = [];
   spawnTimer = 0;
   filled = false;
   rng;
@@ -18052,7 +18202,6 @@ class VisibleWild {
     this.mons.length = 0;
     this.classifier = null;
     this.cellsMap = null;
-    this.marks = null;
     this.forMap = this.ow.map ?? null;
     this.filled = false;
     this.spawnTimer = 0;
@@ -18192,90 +18341,69 @@ class VisibleWild {
     const water = waterTable(enc);
     if (!land && !water)
       return;
-    const kinds = this.classify().out;
+    const cls = this.classify();
     const p = ow.player;
-    const surfing = !!p.surfing;
     const w = map.widthCells;
+    const surf = !!water && !!p.surfing;
     const x0 = Math.max(1, p.cellX - WINDOW_X), x1 = Math.min(w - 2, p.cellX + WINDOW_X);
     const y0 = Math.max(1, p.cellY - WINDOW_Y), y1 = Math.min(map.heightCells - 2, p.cellY + WINDOW_Y);
-    const allowed = (k) => k === CELL_LAND && !!land || k === CELL_WATER && !!water && surfing;
-    let cells = 0;
-    for (let y = y0;y <= y1; y++)
-      for (let x = x0;x <= x1; x++)
-        if (allowed(kinds[y * w + x]))
-          cells += 1;
-    const target2 = wildTarget(visibleWildMode(this.save), wildMode(this.save), cells, this.freeSlots());
-    let tries = fill ? target2 : 1;
-    while (tries-- > 0 && this.mons.length < target2) {
-      const at = this.pickCell(kinds, allowed, x0, x1, y0, y1);
-      if (!at)
+    const nl = land ? cls.countIn(CELL_LAND, x0, x1, y0, y1) : 0;
+    const nw = surf ? cls.countIn(CELL_WATER, x0, x1, y0, y1) : 0;
+    const target2 = wildTarget(visibleWildMode(this.save), wildMode(this.save), nl + nw, this.freeSlots());
+    let want = Math.min(target2 - this.mons.length, fill ? target2 : 1);
+    const rng = this.rng;
+    while (want-- > 0) {
+      if (nl + nw === 0)
         return;
-      const k = kinds[at[1] * w + at[0]];
-      const slot = pickSlot(k === CELL_WATER ? water : land, this.rng);
+      let at = -1;
+      let water1 = false;
+      for (let t = 0;t < SPAWN_DRAWS && at < 0; t++) {
+        const r = rng.int(nl + nw);
+        water1 = r >= nl;
+        const i = water1 ? cls.nthIn(CELL_WATER, r - nl, x0, x1, y0, y1) : cls.nthIn(CELL_LAND, r, x0, x1, y0, y1);
+        if (i < 0)
+          continue;
+        const x2 = i % w, y = (i - x2) / w;
+        if (x2 - p.cellX < NEAR && p.cellX - x2 < NEAR && y - p.cellY < NEAR && p.cellY - y < NEAR)
+          continue;
+        if (this.taken(x2, y))
+          continue;
+        at = i;
+      }
+      if (at < 0)
+        return;
+      const slot = pickSlot(water1 ? water : land, rng);
       if (!slot || repelled(ow.shell.save, slot.level))
         continue;
-      const rng = this.rng;
-      this.mons.push(new WildMon(slot.species, slot.level, wildSprite(data, slot.species), k, at[0], at[1], DIRS[rng.int(4)], wanderDelay(rng), lifetime(rng), rng.int(64)));
+      const x = at % w;
+      this.mons.push(new WildMon(slot.species, slot.level, wildSprite(data, slot.species), water1 ? CELL_WATER : CELL_LAND, x, (at - x) / w, DIRS[rng.int(4)], wanderDelay(rng), lifetime(rng), rng.int(64)));
     }
   }
-  pickCell(kinds, allowed, x0, x1, y0, y1) {
-    const ow = this.ow;
-    const p = ow.player;
-    const map = ow.map;
-    const w = map.widthCells;
-    const size = w * map.heightCells;
-    if (!this.marks || this.marks.length !== size)
-      this.marks = new Uint8Array(size);
-    const marks = this.marks;
-    const marked = [];
-    const mark = (x, y) => {
-      if (y === undefined || x < 0 || y < 0 || x >= w || y >= map.heightCells)
-        return;
-      const i2 = y * w + x;
-      if (!marks[i2]) {
-        marks[i2] = 1;
-        marked.push(i2);
-      }
-    };
-    for (const e of ow.entities) {
+  taken(x, y) {
+    const ents = this.ow.entities;
+    for (let k = 0;k < ents.length; k++) {
+      const e = ents[k];
       if (e.hidden)
         continue;
-      mark(e.cellX, e.cellY);
-      if (e.targetX !== undefined)
-        mark(e.targetX, e.targetY);
+      if (e.cellX === x && e.cellY === y || e.targetX === x && e.targetY === y)
+        return true;
     }
-    for (const m of this.mons) {
-      mark(m.cellX, m.cellY);
-      if (m.targetX !== undefined)
-        mark(m.targetX, m.targetY);
-    }
-    for (const n of ow.npcs) {
+    const npcs = this.ow.npcs;
+    for (let k = 0;k < npcs.length; k++) {
+      const n = npcs[k];
       if (n.hidden)
         continue;
-      for (let dy = -1;dy <= 1; dy++)
-        for (let dx = -1;dx <= 1; dx++)
-          mark(n.cellX + dx, n.cellY + dy);
+      const dx = n.cellX - x, dy = n.cellY - y;
+      if (dx <= 1 && dx >= -1 && dy <= 1 && dy >= -1)
+        return true;
     }
-    const cands = this.cands;
-    cands.length = 0;
-    for (let y = y0;y <= y1; y++) {
-      const row = y * w;
-      const ny = Math.abs(y - p.cellY) < NEAR;
-      for (let x = x0;x <= x1; x++) {
-        const i2 = row + x;
-        if (marks[i2] || !allowed(kinds[i2]))
-          continue;
-        if (ny && Math.abs(x - p.cellX) < NEAR)
-          continue;
-        cands.push(i2);
-      }
+    const mons = this.mons;
+    for (let k = 0;k < mons.length; k++) {
+      const m = mons[k];
+      if (m.cellX === x && m.cellY === y || m.targetX === x && m.targetY === y)
+        return true;
     }
-    for (const i2 of marked)
-      marks[i2] = 0;
-    if (cands.length === 0)
-      return null;
-    const i = cands[this.rng.int(cands.length)];
-    return [i % w, Math.floor(i / w)];
+    return false;
   }
 }
 
@@ -25979,6 +26107,7 @@ var TILE_H = 240 / ROWS;
 var LIGHT_BIT = 32768;
 var FILL_BIT = 16384;
 var DARKTEXT_BIT = 8192;
+var HALF_BIT = 4096;
 var INK_BIT = { dark: DARKTEXT_BIT, light: LIGHT_BIT, fill: FILL_BIT };
 var targets = [];
 var pressed = null;
@@ -26097,15 +26226,38 @@ function rule(host, y, x0 = 0, w = COLS) {
 function cursor(host, x, y, ink = "dark") {
   host.uiTileBottom(x, y, ARROW_CURSOR | INK_BIT[ink]);
 }
-function pill(host, id, x, y, w, label3, tap, on = false) {
-  const lit = on !== (pressed === id);
-  if (lit) {
-    center(host, y, label3, "dark", x, w);
-  } else {
-    fill(host, x, y, w, 1);
-    center(host, y, label3, "fill", x, w);
+function textCenteredPx(host, centerPx, y, s, ink) {
+  const codes = encodeGlyphs(s);
+  const start = Math.round(centerPx - codes.length * TILE_W / 2);
+  const cell = Math.floor(start / TILE_W);
+  const half = start - cell * TILE_W >= TILE_W / 2 ? HALF_BIT : 0;
+  const bit = INK_BIT[ink] | half;
+  for (let i = 0;i < codes.length; i++) {
+    const cx = cell + i;
+    if (cx >= 0 && cx < COLS)
+      host.uiTileBottom(cx, y, codes[i] | bit);
   }
-  region(id, x, y, w, 1, tap);
+}
+function rowPx(y) {
+  return [Math.floor(y * TILE_H), Math.floor((y + 1) * TILE_H)];
+}
+function pill(host, id, x, y, w, label3, tap, on = false) {
+  pillPx(host, id, x * TILE_W, y, w * TILE_W, label3, tap, on);
+}
+function pillPx(host, id, xPx, y, wPx, label3, tap, on = false) {
+  const lit = on !== (pressed === id);
+  const [top, bot] = rowPx(y);
+  if (!host.uiRectBottom) {
+    const x = Math.round(xPx / TILE_W), w = Math.round(wPx / TILE_W);
+    if (!lit)
+      fill(host, x, y, w, 1);
+    center(host, y, label3, lit ? "dark" : "fill", x, w);
+  } else {
+    if (!lit)
+      host.uiRectBottom(Math.round(xPx), top, Math.round(wPx), bot - top, 3);
+    textCenteredPx(host, xPx + wPx / 2, y, label3, lit ? "dark" : "light");
+  }
+  regionPx(id, xPx, top, wPx, bot - top, tap);
 }
 function button(host, id, x, y, w, h, label3, tap, on = false) {
   const lit = on || pressed === id;
@@ -27185,19 +27337,19 @@ function drawHome(ctx) {
     const pos = homePill(i, apps.length);
     if (!pos)
       return;
-    pill(host, `home:${a}`, pos.x, pos.y, HOME_PILL_W, appOf(a).short, () => go(ctx, a));
+    pillPx(host, `home:${a}`, pos.x, pos.y, HOME_PILL_PX, appOf(a).short, () => go(ctx, a));
   });
 }
-var HOME_PILL_W = 6;
-var HOME_COLS = [0, 7, 14];
-var HOME_LAST_ROW = { 1: [7], 2: [3, 11] };
+var HOME_PILL_PX = 96;
+var HOME_COLS_PX = [8, 112, 216];
+var HOME_LAST_ROW_PX = { 1: [112], 2: [56, 168] };
 function homePill(i, n) {
   const row2 = Math.floor(i / 3);
   const y = 9 + row2 * 2;
   if (y > 17)
     return null;
   const inRow = Math.min(3, n - row2 * 3);
-  const xs = inRow < 3 ? HOME_LAST_ROW[inRow] : HOME_COLS;
+  const xs = inRow < 3 ? HOME_LAST_ROW_PX[inRow] : HOME_COLS_PX;
   return { x: xs[i % 3], y };
 }
 function drawSteps(ctx) {
