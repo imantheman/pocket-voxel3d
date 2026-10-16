@@ -31,7 +31,7 @@ import {
 } from "../voxelmon/game/ui/extras_layout.ts";
 import { OptionsMenuState } from "../voxelmon/game/ui/optionsmenu.ts";
 import { drawKantoGear, gearTabs, gearTouchDown, gearTouchUp } from "../voxelmon/game/ui/kantogear.ts";
-import { availableApps, homePill } from "../voxelmon/game/ui/gear/apps/home.ts";
+import { availableApps, HOME_PILL_PX, homePill } from "../voxelmon/game/ui/gear/apps/home.ts";
 import { gearAbout, gearLabel } from "../voxelmon/game/ui/gear/apps/enhancements.ts";
 import { appOf } from "../voxelmon/game/ui/gear/model.ts";
 import { TILE_H, TILE_W, wrap } from "../voxelmon/game/ui/gear/draw.ts";
@@ -675,6 +675,29 @@ describe("VISIBLE WILD in the overworld", () => {
     expect([...ow.wild.cellKinds()]).toEqual([...kinds]);
   });
 
+  test.skipIf(!hasGen)("the map's fast cell flags agree with its own methods, on every map with a table", () => {
+    const game = makeGame();
+    const ow = game.overworld;
+    let maps = 0;
+    for (const id of Object.keys(data!.encounters ?? {})) {
+      if (!data!.maps[id]) continue;
+      ow.setMap(id, 1, 1, "down");
+      const m = ow.map;
+      const indoor = (data!.field as any).indoorEncounters;
+      const fast = classifyCells(m, data!.encounters[id], indoor);
+      // the same map without its fast route: every cell by the methods
+      const slow = classifyCells({
+        widthCells: m.widthCells, heightCells: m.heightCells, def: m.def,
+        isGrassCell: (x, y) => m.isGrassCell(x, y), isWaterCell: (x, y) => m.isWaterCell(x, y),
+        isWalkableCell: (x, y) => m.isWalkableCell(x, y), isWarpTileCell: (x, y) => m.isWarpTileCell(x, y),
+        warpAtCell: (x, y) => m.warpAtCell(x, y), isWholeCell: (x, y, k) => m.isWholeCell(x, y, k),
+      }, data!.encounters[id], indoor);
+      expect([...fast]).toEqual([...slow]);
+      maps++;
+    }
+    expect(maps).toBeGreaterThan(40);
+  });
+
   test.skipIf(!hasGen)("a map's first tick keeps what stands there (it only clears on a new map)", () => {
     const game = makeGame();
     game.save.options.visibleWild = "some";
@@ -778,15 +801,57 @@ describe("the gear's ENHANCEMENTS app", () => {
   });
 
   test("HOME: fourteen apps fill four rows of three and centre the last two", () => {
-    expect(homePill(12, 14)).toEqual({ x: 3, y: 17 });
-    expect(homePill(13, 14)).toEqual({ x: 11, y: 17 });
-    expect(homePill(12, 13)).toEqual({ x: 7, y: 17 });
-    expect(homePill(0, 14)).toEqual({ x: 0, y: 9 });
-    expect(homePill(11, 14)).toEqual({ x: 14, y: 15 });
-    expect(homePill(14, 15)).toEqual({ x: 14, y: 17 }); // a full last row
+    // px: 96-wide pills, 8 px margins and gaps
+    expect(homePill(0, 14)).toEqual({ x: 8, y: 9 });
+    expect(homePill(1, 14)).toEqual({ x: 112, y: 9 });
+    expect(homePill(11, 14)).toEqual({ x: 216, y: 15 });
+    expect(homePill(12, 14)).toEqual({ x: 56, y: 17 });
+    expect(homePill(13, 14)).toEqual({ x: 168, y: 17 });
+    expect(homePill(12, 13)).toEqual({ x: 112, y: 17 });
+    expect(homePill(14, 15)).toEqual({ x: 216, y: 17 }); // a full last row
     expect(homePill(15, 16)).toBeNull(); // past the bottom row
-    // the pair is centred: as far from either edge
-    expect(homePill(12, 14)!.x).toBe(20 - (homePill(13, 14)!.x + 6));
+    // even margins: the grid and the pair as far from either edge
+    expect(homePill(0, 14)!.x).toBe(320 - (homePill(2, 14)!.x + HOME_PILL_PX));
+    expect(homePill(12, 14)!.x).toBe(320 - (homePill(13, 14)!.x + HOME_PILL_PX));
+    expect(homePill(1, 14)!.x - (homePill(0, 14)!.x + HOME_PILL_PX)).toBe(8);
+  });
+
+  test.skipIf(!hasGen)("HOME: every label centred in its pill to the pixel, no pill against an edge", () => {
+    class Grid extends MenuHost {
+      grid: number[][] = Array.from({ length: 18 }, () => Array(20).fill(0));
+      rects: { x: number; y: number; w: number; h: number; shade: number }[] = [];
+      uiClearBottom(): void { this.grid.forEach((r) => r.fill(0)); this.rects = []; }
+      uiTileBottom(x: number, y: number, t: number): void { if (x >= 0 && y >= 0 && x < 20 && y < 18) this.grid[y]![x] = t; }
+      uiRectBottom(x: number, y: number, w: number, h: number, shade: number): void { this.rects.push({ x, y, w, h, shade }); }
+    }
+    const host = new Grid();
+    const game = new VoxelmonGame(data!, host, 1);
+    game.newGame();
+    game.closeToOverworld();
+    game.save.inventory.TOWN_MAP = 1;
+    game.save.flags.EVENT_GOT_POKEDEX = true;
+    (game as { data: any }).data = { ...(game.data as object), atlas: { ...((game.data as any).atlas ?? {}), townMapPage: 0 } };
+    game.save.options.cheats = true;
+    game.setGearView("home");
+    drawKantoGear(host as never, game as never);
+    const pills = host.rects.filter((r) => r.shade === 3 && r.w === HOME_PILL_PX);
+    expect(pills.length).toBe(14);
+    for (const r of pills) {
+      expect(r.x).toBeGreaterThanOrEqual(8);
+      expect(r.x + r.w).toBeLessThanOrEqual(312);
+      const y = Math.round(r.y / TILE_H);
+      // the label's glyphs in that row, inside the pill
+      let first = Infinity, last = -Infinity;
+      for (let x = 0; x < 20; x++) {
+        const t = host.grid[y]![x]!;
+        if (!t) continue;
+        const px = x * 16 + (t & 0x1000 ? 8 : 0);
+        if (px < r.x || px + 16 > r.x + r.w) continue;
+        first = Math.min(first, px);
+        last = Math.max(last, px + 16);
+      }
+      expect((first + last) / 2).toBe(r.x + r.w / 2);
+    }
   });
 
   test.skipIf(!hasGen)("with every app on offer, ENHANCEMENTS and CHEATS share the bottom row", () => {

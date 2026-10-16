@@ -7652,6 +7652,10 @@ if page_tex.len() < pak_static.atlases.len() {
             const LIGHT_BIT: u16 = 0x8000;
             const FILL_BIT: u16 = 0x4000;
             const DARKTEXT_BIT: u16 = 0x2000;
+            //   HALF_BIT (0x1000) -> the cell is drawn half a cell (8 px) to
+            //                         the right: a label centred to the pixel
+            //                         in its pill (ui/gear/draw.ts textCenteredPx).
+            const HALF_BIT: u16 = 0x1000;
             // Solid top-bar fill. Emitted into its OWN buffer (ui_b_bar_verts)
             // and drawn with a REPLACE -> PrimaryColor texenv below, so the strip
             // is a flat DARK quad that doesn't depend on any atlas texel being
@@ -7691,11 +7695,12 @@ if page_tex.len() < pak_static.atlases.len() {
                     let is_fill = raw & FILL_BIT != 0;
                     let is_dim = raw & DARKTEXT_BIT != 0;
                     let color = if is_light { LIGHT } else { DARK };
-                    let tile = raw & !(LIGHT_BIT | FILL_BIT | DARKTEXT_BIT);
+                    let tile = raw & !(LIGHT_BIT | FILL_BIT | DARKTEXT_BIT | HALF_BIT);
                     let (u0, u1, v0, v1) = ui_tile_uv(tile, cols, pw, ph, page_prescale(pg));
-                    let x0 = (cx as f32 * tpxx) as i16;
+                    let half = if raw & HALF_BIT != 0 { tpxx * 0.5 } else { 0.0 };
+                    let x0 = (cx as f32 * tpxx + half) as i16;
                     let y0 = (cy as f32 * tpxy) as i16;
-                    let x1 = ((cx + 1) as f32 * tpxx) as i16;
+                    let x1 = ((cx + 1) as f32 * tpxx + half) as i16;
                     let y1 = ((cy + 1) as f32 * tpxy) as i16;
                     // Inverted cell: a solid DARK quad behind the glyph, drawn on
                     // the flat (REPLACE) path with the bar so it's atlas-proof.

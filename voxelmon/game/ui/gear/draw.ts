@@ -31,6 +31,9 @@ export const LIGHT_BIT = 0x8000;
 export const FILL_BIT = 0x4000;
 /** A dark glyph with no cell behind it: ordinary text and borders. */
 export const DARKTEXT_BIT = 0x2000;
+/** The cell drawn half a cell (8 px) to the right (main.rs HALF_BIT): how a
+ *  label whose width and its space's do not share a parity sits centred. */
+export const HALF_BIT = 0x1000;
 
 export type Ink = "dark" | "light" | "fill";
 const INK_BIT: Record<Ink, number> = { dark: DARKTEXT_BIT, light: LIGHT_BIT, fill: FILL_BIT };
@@ -210,10 +213,36 @@ export function cursor(host: GearHost, x: number, y: number, ink: Ink = "dark"):
 // ---------------------------------------------------------------------------
 
 /**
+ * Text centred on a pixel column of the bottom screen: its glyphs on the
+ * grid, shifted half a cell (HALF_BIT) where the label's width and the
+ * centre do not meet on a cell edge -- a five-letter word in a six-cell
+ * pill sits in the middle, not half a cell to one side.
+ */
+export function textCenteredPx(host: GearHost, centerPx: number, y: number, s: string, ink: Ink): void {
+  const codes = encodeGlyphs(s);
+  const start = Math.round(centerPx - (codes.length * TILE_W) / 2);
+  const cell = Math.floor(start / TILE_W);
+  const half = start - cell * TILE_W >= TILE_W / 2 ? HALF_BIT : 0;
+  const bit = INK_BIT[ink] | half;
+  for (let i = 0; i < codes.length; i++) {
+    const cx = cell + i;
+    if (cx >= 0 && cx < COLS) host.uiTileBottom(cx, y, codes[i]! | bit);
+  }
+}
+
+/** A row's top and bottom in px, on the host's own cell edges (main.rs
+ *  truncates cy * 240 / 18). */
+function rowPx(y: number): [number, number] {
+  return [Math.floor(y * TILE_H), Math.floor((y + 1) * TILE_H)];
+}
+
+/**
  * A one-row button: a solid dark bar with its label light, the look the
  * battle panel's selected option has. Under the finger it inverts (light
  * bar, dark label) so a press is seen before it fires. `on` draws it
- * inverted permanently -- the chosen tab, a toggle that is set.
+ * inverted permanently -- the chosen tab, a toggle that is set. The bar is
+ * a flat rect under the grid and the label is centred to the pixel
+ * (textCenteredPx); a host without rects gets the bar in cells.
  */
 export function pill(
   host: GearHost,
@@ -225,15 +254,33 @@ export function pill(
   tap: () => void,
   on = false,
 ): void {
+  pillPx(host, id, x * TILE_W, y, w * TILE_W, label, tap, on);
+}
+
+/** pill() at any pixel x and width (HOME's grid, an even margin round it). */
+export function pillPx(
+  host: GearHost,
+  id: string,
+  xPx: number,
+  y: number,
+  wPx: number,
+  label: string,
+  tap: () => void,
+  on = false,
+): void {
   const lit = on !== (pressed === id);
-  if (lit) {
-    // inverted: the label dark on the paper, the bar gone
-    center(host, y, label, "dark", x, w);
+  const [top, bot] = rowPx(y);
+  if (!host.uiRectBottom) {
+    // the old cells: a bar of fill, the label cell-centred
+    const x = Math.round(xPx / TILE_W), w = Math.round(wPx / TILE_W);
+    if (!lit) fill(host, x, y, w, 1);
+    center(host, y, label, lit ? "dark" : "fill", x, w);
   } else {
-    fill(host, x, y, w, 1);
-    center(host, y, label, "fill", x, w);
+    // inverted: the label dark on the paper, the bar gone
+    if (!lit) host.uiRectBottom(Math.round(xPx), top, Math.round(wPx), bot - top, 3);
+    textCenteredPx(host, xPx + wPx / 2, y, label, lit ? "dark" : "light");
   }
-  region(id, x, y, w, 1, tap);
+  regionPx(id, xPx, top, wPx, bot - top, tap);
 }
 
 /** A bordered button; filled while pressed or when `on`. */

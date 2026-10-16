@@ -7,7 +7,7 @@
 import { hpBarTiles } from "../../../battle/ui.ts";
 import { picPageFor } from "../../../battle/staging.ts";
 import {
-  COLS, TILE_H, TILE_W, box, button, center, cursor, fit, pill, pressedId, region, right, row, sprite,
+  COLS, TILE_H, TILE_W, box, button, center, cursor, fit, pill, pillPx, pressedId, region, right, row, sprite,
   text, tiles, wrap, type Ink,
 } from "../draw.ts";
 import { APPS, appOf, gearSave, wildRows, type GearViewId } from "../model.ts";
@@ -75,29 +75,34 @@ export function drawHome(ctx: GearCtx): void {
 
   // the apps: three to a row, one row of pills with a row between, rows
   // 9-17 (fifteen places: every app, ENHANCEMENTS and CHEATS included, is
-  // fourteen). A last row that is not full is centred: one pill in the
-  // middle column, two either side of the middle with two columns between.
+  // fourteen). Placed to the pixel: 8 px margins and 8 px between the
+  // columns, every label centred in its pill (draw.ts pillPx). A last row
+  // that is not full is centred: one pill in the middle column, two either
+  // side of the screen's middle.
   const apps = availableApps(game).filter((a) => a !== "home");
   apps.forEach((a, i) => {
     const pos = homePill(i, apps.length);
     if (!pos) return;
-    pill(host, `home:${a}`, pos.x, pos.y, HOME_PILL_W, appOf(a)!.short, () => go(ctx, a));
+    pillPx(host, `home:${a}`, pos.x, pos.y, HOME_PILL_PX, appOf(a)!.short, () => go(ctx, a));
   });
 }
 
-/** HOME's app pills: six wide, a column between them. */
-export const HOME_PILL_W = 6;
-const HOME_COLS = [0, 7, 14] as const;
-/** The last row's places when it holds one or two. */
-const HOME_LAST_ROW: Record<number, readonly number[]> = { 1: [7], 2: [3, 11] };
+/** HOME's app pills: 96 px (six cells) wide, 8 px margins and gaps. */
+export const HOME_PILL_PX = 96;
+const HOME_COLS_PX = [8, 112, 216] as const;
+/** The last row's places when it holds one or two (px): one in the middle
+ *  column; two 16 px apart round the middle (their labels then centre on a
+ *  half cell, which the grid can draw), 56 px from either edge. */
+const HOME_LAST_ROW_PX: Record<number, readonly number[]> = { 1: [112], 2: [56, 168] };
 
-/** Where HOME puts app `i` of `n`, or null past the bottom row. */
+/** Where HOME puts app `i` of `n` (x in px, y the row), or null past the
+ *  bottom row. */
 export function homePill(i: number, n: number): { x: number; y: number } | null {
   const row = Math.floor(i / 3);
   const y = 9 + row * 2;
   if (y > 17) return null;
   const inRow = Math.min(3, n - row * 3);
-  const xs = inRow < 3 ? HOME_LAST_ROW[inRow]! : HOME_COLS;
+  const xs = inRow < 3 ? HOME_LAST_ROW_PX[inRow]! : HOME_COLS_PX;
   return { x: xs[i % 3]!, y };
 }
 
