@@ -17095,12 +17095,112 @@ function pcTileAt(mapLabel, x, y, facing) {
   return tiles.some((t) => t.x === x && t.y === y && (!t.facing || t.facing === facing));
 }
 
+// voxelmon/game/gamespeed.ts
+var GAME_SPEEDS = [
+  { key: 1, label: "1X" },
+  { key: 2, label: "2X" }
+];
+var GAME_SPEED_LABEL = "SPEED";
+var GAME_SPEED_MAX = 2;
+function gameSpeedOf(options) {
+  const v = Number(options?.gameSpeed);
+  return v >= GAME_SPEED_MAX ? GAME_SPEED_MAX : 1;
+}
+function gameSpeedIndex(options) {
+  return gameSpeedOf(options) - 1;
+}
+function setGameSpeedIn(options, n) {
+  const v = gameSpeedOf({ gameSpeed: n });
+  options.gameSpeed = v;
+  return v;
+}
+
+class SpeedStepper {
+  acc = 0;
+  ticks(speed) {
+    const s = Number.isFinite(speed) && speed > 1 ? speed : 1;
+    if (Number.isInteger(s)) {
+      this.acc = 0;
+      return s;
+    }
+    this.acc += s;
+    const n = Math.floor(this.acc + 0.000000001);
+    this.acc -= n;
+    return Math.max(1, n);
+  }
+}
+
+class SpeedGovernor {
+  high;
+  low;
+  onChange;
+  share;
+  cap = GAME_SPEED_MAX;
+  ema = 0;
+  logicEma = 0;
+  acc = 0;
+  logicAcc = 0;
+  calm = 0;
+  constructor(high = 18000, low = 14000, onChange, share = 0.35) {
+    this.high = high;
+    this.low = low;
+    this.onChange = onChange;
+    this.share = share;
+  }
+  sample(us, logicUs, shown, want) {
+    this.acc += us;
+    this.logicAcc += logicUs;
+    if (!shown)
+      return;
+    const clip = this.high * 2;
+    const f = Math.min(this.acc, clip);
+    const l = Math.min(this.logicAcc, f);
+    this.acc = this.logicAcc = 0;
+    this.ema = this.ema === 0 ? f : this.ema + (f - this.ema) / 16;
+    this.logicEma = this.logicEma === 0 ? l : this.logicEma + (l - this.logicEma) / 16;
+    const logicHeavy = this.logicEma > this.ema * this.share;
+    if (want <= 1) {
+      this.set(GAME_SPEED_MAX);
+      this.calm = 0;
+    } else if (this.cap > 1.5 && this.ema > this.high && logicHeavy) {
+      this.set(1.5);
+      this.calm = 0;
+    } else if (this.cap < GAME_SPEED_MAX && (this.ema < this.low || this.logicEma < this.ema * (this.share - 0.1))) {
+      if (++this.calm >= 30) {
+        this.set(GAME_SPEED_MAX);
+        this.calm = 0;
+      }
+    } else {
+      this.calm = 0;
+    }
+  }
+  speed(want) {
+    return Math.min(want, this.cap);
+  }
+  set(cap) {
+    if (cap === this.cap)
+      return;
+    this.cap = cap;
+    this.onChange?.(cap, this.ema, this.logicEma);
+  }
+}
+function stepHost(stepper, speed, hostCompose, tick) {
+  const n = stepper.ticks(speed);
+  for (let i = 0;i < n; i++)
+    tick(hostCompose && i === n - 1, i);
+  return n;
+}
+
 // voxelmon/game/ui/extras_layout.ts
 var OPTION_PAGES = ["SETTINGS", "ENHANCEMENTS"];
 var ON_OFF = ["OFF", "ON"];
 var CHEATS_ROW = { key: "cheats", label: "CHEATS", choices: ON_OFF };
-var SPEED_ROW = { key: "speed", label: "SPEED", choices: ["1X", "2X"] };
-var SPEED_ROW_READY = false;
+var SPEED_ROW = {
+  key: "gameSpeed",
+  label: GAME_SPEED_LABEL,
+  choices: GAME_SPEEDS.map((s) => s.label)
+};
+var SPEED_ROW_READY = true;
 var ENHANCEMENT_ROWS = [
   { key: "expForCatching", label: "EXP FOR CATCHING", choices: ON_OFF },
   { key: "partyExpShare", label: "PARTY EXP SHARE", choices: ON_OFF },
@@ -24464,7 +24564,7 @@ class OptionsMenuState {
       return this.enhancementDefs().map((d) => ({
         label: d.label,
         choices: [...d.choices],
-        index: d.key === "speed" ? 0 : this.opts()[d.key] === true ? 1 : 0
+        index: d === SPEED_ROW ? gameSpeedIndex(this.opts()) : this.opts()[d.key] === true ? 1 : 0
       }));
     }
     return [...this.settingsRows(), {
@@ -24550,7 +24650,9 @@ class OptionsMenuState {
     const at = Math.max(0, Math.min(r.choices.length - 1, to));
     if (this.page === 1) {
       const d = this.enhancementDefs()[row];
-      if (d.key !== "speed")
+      if (d === SPEED_ROW)
+        setGameSpeedIn(this.opts(), GAME_SPEEDS[at].key);
+      else
         this.opts()[d.key] = at === 1;
       return;
     }
@@ -31874,7 +31976,7 @@ ${why.slice(0, 18)}` : ""}`);
       return false;
     return !(i.isDown("up") || i.isDown("down") || i.isDown("left") || i.isDown("right"));
   }
-  tick(buttons) {
+  tick(buttons, compose = true) {
     const p = this.prof;
     const t0 = p ? p.now() : 0;
     this.input.setButtons(buttons);
@@ -31896,7 +31998,8 @@ ${why.slice(0, 18)}` : ""}`);
     holdMoney(this.save);
     this.advancePlayTime();
     const t1 = p ? p.now() : 0;
-    this.scene.emit(this);
+    if (compose)
+      this.scene.emit(this);
     const t2 = p ? p.now() : 0;
     this.driveAudio();
     this.host.frameDone(this.tickIndex, buttons);
@@ -32017,6 +32120,20 @@ ${why.slice(0, 18)}` : ""}`);
       x: Math.max(-1, Math.min(1, x / r)),
       y: Math.max(-1, Math.min(1, y / r))
     };
+  }
+  gameSpeed() {
+    return gameSpeedOf(this.save?.options);
+  }
+  setGameSpeed(n) {
+    const save = this.save;
+    if (!save)
+      return 1;
+    return setGameSpeedIn(save.options ??= {}, n);
+  }
+  logicSpeed() {
+    if (this.overworld?.link)
+      return 1;
+    return this.gameSpeed();
   }
   tiltShiftLevel() {
     return tiltShiftLevel(this.save.options?.tiltShift);
@@ -33877,7 +33994,10 @@ if (nat.now && nat.perf) {
 var prevTouch = false;
 var prevGearNext = false;
 var prevGearPrev = false;
+var stepper2 = new SpeedStepper;
+var governor = new SpeedGovernor(undefined, undefined, (cap, ema, logic) => console.log(`[pv] speed: ${cap}X here (guest ${(ema / 1000).toFixed(1)} ms a frame, logic ${(logic / 1000).toFixed(1)})`));
 globalThis.frame = (buttons) => {
+  const g0 = nat.now ? nat.now() : 0;
   const phys = buttons & 255;
   const touching = (buttons >> 8 & 1) !== 0;
   if (touching && !prevTouch) {
@@ -33911,8 +34031,13 @@ globalThis.frame = (buttons) => {
     game.cycleGearView(-1);
   prevGearNext = gearNext;
   prevGearPrev = gearPrev;
-  game.tick(phys);
-  if (!native.lastStep || native.lastStep()) {
+  const show = !native.lastStep || native.lastStep();
+  const l0 = nat.now ? nat.now() : 0;
+  stepHost(stepper2, governor.speed(game.logicSpeed()), show, (compose) => game.tick(phys, compose));
+  const l1 = nat.now ? nat.now() : 0;
+  if (show) {
     drawKantoGear(host, game);
   }
+  if (nat.now)
+    governor.sample(nat.now() - g0, l1 - l0, show, game.logicSpeed());
 };
