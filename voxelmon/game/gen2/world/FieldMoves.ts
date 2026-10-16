@@ -41,6 +41,7 @@ import { Permissions } from "./Permissions.ts";
 import { Runtime } from "../shared/mods/Runtime.ts";
 import { Strings } from "../shared/core/Strings.ts";
 import { truthy } from "../platform/lua.ts";
+import { Cheats } from "../core/Cheats.ts";
 
 type Coll = number | null | undefined;
 
@@ -328,15 +329,47 @@ export const FieldMoves = {
   // mon. `fieldCtx` is World:fieldContext's table when the caller has one;
   // it is only read for the hook's ctx.
   partyMoveUser(party: any[] | undefined, moveId: unknown, fieldCtx?: FieldCtx): any {
+    let mon: any;
     if (!Runtime.wantsHook("fieldmove.eligibility")) {
-      return findMoveUser(party, moveId);
+      mon = findMoveUser(party, moveId);
+    } else {
+      mon = Runtime.call("fieldmove.eligibility", partyMoveUserVanilla, moveId, {
+        save: fieldCtx ? fieldCtx.save : undefined,
+        data: fieldCtx ? fieldCtx.data : undefined,
+        party,
+        moveId,
+      });
     }
-    return Runtime.call("fieldmove.eligibility", partyMoveUserVanilla, moveId, {
-      save: fieldCtx ? fieldCtx.save : undefined,
-      data: fieldCtx ? fieldCtx.data : undefined,
-      party,
-      moveId,
-    });
+    if (truthy(mon)) return mon;
+    return FieldMoves.standIn(party, moveId, fieldCtx ? fieldCtx.save : undefined);
+  },
+
+  // Not the cart's: HMS WITHOUT MOVE (core/Cheats.ts) -- the item that
+  // teaches each field move it covers. The badge stays the caller's check.
+  MOVE_ITEMS: {
+    CUT: "HM_CUT", FLY: "HM_FLY", SURF: "HM_SURF", STRENGTH: "HM_STRENGTH",
+    FLASH: "HM_FLASH", WHIRLPOOL: "HM_WHIRLPOOL", WATERFALL: "HM_WATERFALL",
+    HEADBUTT: "TM_HEADBUTT", ROCK_SMASH: "TM_ROCK_SMASH",
+  } as Record<string, string>,
+
+  /** HMS WITHOUT MOVE: whether the bag's HM / TM lets `moveId` be used with
+   *  no mon knowing it. */
+  moveByItem(moveId: unknown, save: any): boolean {
+    const item = typeof moveId === "string" ? FieldMoves.MOVE_ITEMS[moveId] : undefined;
+    if (!item || !Cheats.hmsWithoutMove()) return false;
+    const inv = save && save.inventory;
+    return !!inv && (inv[item] ?? 0) > 0;
+  },
+
+  /** The mon that stands in for the move's user under HMS WITHOUT MOVE: the
+   *  first one that is not an egg (it is named in "X used SURF!" and picks
+   *  the surf sprite). */
+  standIn(party: any[] | undefined, moveId: unknown, save: any): any {
+    if (!FieldMoves.moveByItem(moveId, save)) return undefined;
+    for (const mon of party ?? []) {
+      if (mon && !truthy(mon.egg) && !truthy(mon.isEgg)) return mon;
+    }
+    return undefined;
   },
 
   // --------------------------------------------------------- encounter gate

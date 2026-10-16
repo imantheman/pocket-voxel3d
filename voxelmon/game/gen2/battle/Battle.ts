@@ -43,6 +43,7 @@ import { Mon } from "./Mon.ts";
 import { Prize } from "./Prize.ts";
 import { Happiness } from "../core/Happiness.ts";
 import { Pokerus } from "../core/Pokerus.ts";
+import { Cheats } from "../core/Cheats.ts";
 import { Roamers } from "../core/Roamers.ts";
 import { Runtime } from "../shared/mods/Runtime.ts";
 import { Strings } from "../shared/core/Strings.ts";
@@ -3063,10 +3064,15 @@ export class Battle {
     if (truthy(this.caughtHandled)) return mon;
     this.caughtHandled = true;
     this.untransform(mon);
-    if (Runtime.wantsHook("battle.catch_exp")
-        && truthy(Runtime.call("battle.catch_exp", (_c: any) => false,
-          { battle: this }))) {
+    // EXP FOR CATCHING (core/Cheats.ts) pays the faint's award; the catch
+    // site queues these events after "Gotcha!" (BattleState.pushCaught).
+    const vanilla = (_c: any): boolean => Cheats.expForCatching() && truthy(this.wild);
+    const pays = Runtime.wantsHook("battle.catch_exp")
+      ? truthy(Runtime.call("battle.catch_exp", vanilla, { battle: this }))
+      : vanilla(undefined);
+    if (pays) {
       this.awardExperience(mon);
+      this.catchExpPaid = true;
     }
     return mon;
   }
@@ -3094,10 +3100,21 @@ export class Battle {
       }
     }
 
-    const halved = holders.length > 0;
+    // PARTY EXP SHARE (core/Cheats.ts): the fighters split the award as the
+    // cart splits it, every other healthy mon takes half of one fighter's
+    // share, and the EXP SHARE item adds nothing on top (no tax, no holders'
+    // pass) -- its holder is paid like any other mon.
+    const partyShare = Cheats.partyExpShare();
+    const halved = !partyShare && holders.length > 0;
     const vanillaAward = (): void => {
       this.giveExperiencePass(loser, def, participants, participants.length, halved);
-      if (halved) {
+      if (partyShare) {
+        const fought: Record<number, boolean> = {};
+        for (const index of participants) fought[index] = true;
+        const others: number[] = [];
+        for (let i = 1; i <= this.party.length; i++) if (!fought[i]) others.push(i);
+        this.giveExperiencePass(loser, def, others, Math.max(1, participants.length), true);
+      } else if (halved) {
         this.giveExperiencePass(loser, def, holders, holders.length, true);
       }
     };
@@ -5596,6 +5613,17 @@ function runTurn(self: any, action?: any, enemyAction?: any): any[] {
   if (truthy(self.over)) return self.takeEvents();
   self.turn = self.turn + 1;
   action = truthy(action) ? action : { kind: "move" };
+  // INSTANT VICTORY (core/Cheats.ts): FIGHT knocks the foe in play out before
+  // either side moves. It faints as if hit, so resolveFaints runs the win
+  // exactly as a real KO would (EXP, the next mon, the prize, the win text).
+  if (action.kind === "move" && Cheats.instantVictory() && !truthy(self.linkBattle)
+      && !truthy(self.inBattleTowerBattle) && truthy(self.enemy) && (self.enemy.hp ?? 0) > 0) {
+    const lost = self.enemy.hp;
+    self.enemy.hp = 0;
+    self.emit({ kind: "damage", side: "enemy", amount: lost, hp: 0, anim: false });
+    self.resolveFaints();
+    return self.takeEvents();
+  }
   // HandleBerserkGene sits at the top of BattleTurn's loop
   // (engine/battle/core.asm:160), player first then enemy, so a holder
   // fires on its first turn out whether it started the battle or switched

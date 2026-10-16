@@ -50,6 +50,7 @@ import { Decorations } from "../core/Decorations.ts";
 import { MomShopping } from "../core/MomShopping.ts";
 import { CmdQueue } from "./CmdQueue.ts";
 import { Encounter } from "../battle/Encounter.ts";
+import { Cheats } from "../core/Cheats.ts";
 import { ChoiceBox } from "../shared/ui/ChoiceBox.ts";
 import { Events } from "./Events.ts";
 import { FieldMoves } from "./FieldMoves.ts";
@@ -5297,6 +5298,11 @@ export class World {
         break;
       }
     }
+    // WILD ENCOUNTERS (core/Cheats.ts): LESS / MORE halve or double the rate.
+    // NONE rolls the map's own rate for a roaming beast alone (below), so the
+    // roamers can still be met.
+    const wildMode = Cheats.wildRate();
+    if (wildMode !== "none") rate = Cheats.scaleEncounterRate(rate, wildMode);
     if (!truthy(Encounter.triggers(rate, undefined))) return false;
     // CheckEncounterRoamMon is the FIRST thing ChooseWildEncounter does, before
     // it reaches for the map's own slot list -- so a beast REPLACES the map's
@@ -5316,6 +5322,7 @@ export class World {
         return true;
       }
     }
+    if (wildMode === "none") return false;
     const roll = this.rollEncounter("wild", onWater ? "water" : "grass",
       tables, onWater ? rollWaterVanilla : rollGrassVanilla);
     if (!truthy(roll)) return false;

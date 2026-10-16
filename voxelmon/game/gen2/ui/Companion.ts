@@ -19,6 +19,8 @@
 //                        landmark header and the bottom frame row fall off
 //                        the 15 rows shown; rows 0-1 go to it too)
 //   row 14     the tabs, <PK><MN> BADGE CARD MAP, tapped to turn the page
+//              -- and "!", the CHEATS page (ui/CheatsPanel.ts), while
+//              OPTION's CHEATS row is ON (the row then spans all 20 columns)
 //
 // In a battle the whole panel is the battle's (the Kanto games' 3D battles
 // put their menus on the bottom screen the same way; with BATTLES 3D the
@@ -57,6 +59,8 @@ import { Chrome } from "./Chrome.ts";
 import { Pokegear } from "./Pokegear.ts";
 import { Input } from "../shared/core/Input.ts";
 import { TypeChart } from "../shared/battle/TypeChart.ts";
+import { Cheats } from "../core/Cheats.ts";
+import { CheatsPanel } from "./CheatsPanel.ts";
 
 type LcdBankSpec = { base: number; page: number; count: number };
 
@@ -66,15 +70,27 @@ const CHECK_EVERY = 15;
 const PARTY_MAX = 6;
 /** The tab row, and each tab's first column (its cursor sits one left). */
 const TAB_ROW = 14;
-type Page = "party" | "mon" | "badges" | "card" | "map";
+type Page = "party" | "mon" | "badges" | "card" | "map" | "cheats";
+type Tab = { page: Page; label: string; x: number; w: number };
 /** Each tab: its label, first column and width in tiles (<PK><MN> is two). */
 // (each tab one column from the next, the cursor's: the row's two ends a
 // column in, where the gaps used to run 2, 1 and 2)
-const TABS: { page: Page; label: string; x: number; w: number }[] = [
+const TABS: Tab[] = [
   { page: "party", label: "<PK><MN>", x: 2, w: 2 },
   { page: "badges", label: "BADGE", x: 5, w: 5 },
   { page: "card", label: "CARD", x: 11, w: 4 },
   { page: "map", label: "MAP", x: 16, w: 3 },
+];
+/** With CHEATS on in OPTION: the same four, still a column apart, and a
+ *  fifth whose label is the one glyph "!" -- the row then runs the full
+ *  twenty columns, the edges the header rows above already use. (The font
+ *  has no star; the page itself is titled CHEATS.) */
+const TABS_CHEATS: Tab[] = [
+  { page: "party", label: "<PK><MN>", x: 1, w: 2 },
+  { page: "badges", label: "BADGE", x: 4, w: 5 },
+  { page: "card", label: "CARD", x: 10, w: 4 },
+  { page: "map", label: "MAP", x: 15, w: 3 },
+  { page: "cheats", label: "!", x: 19, w: 1 },
 ];
 /** Town map rows the MAP page drops off the top (header and rule). */
 const MAP_SHIFT = 3;
@@ -186,6 +202,8 @@ export class Companion {
   private downPx: [number, number] | null = null;
   /** Bumped per whole-screen redraw: those views change every frame. */
   private tick = 0;
+  /** The CHEATS page (its own views and taps). */
+  private readonly cheats = new CheatsPanel();
 
   constructor(host: VoxelHost, banks: LcdBankSpec[]) {
     this.lcd = new Lcd(targeted(host, 1));
@@ -226,11 +244,22 @@ export class Companion {
       if (game.stack.top() === st) this.battleTap(st, cx, cy);
       return;
     }
-    let page: Page = this.page;
+    let page: Page = this.shownPage(game);
     let mon = this.mon;
     const party = this.party(game);
     if (cy === TAB_ROW) {
-      for (const t of TABS) if (cx >= t.x - 1 && cx < t.x + t.w) page = t.page;
+      for (const t of this.tabs(game)) if (cx >= t.x - 1 && cx < t.x + t.w) page = t.page;
+      // the "!" tab always opens on the CHEATS list
+      if (page === "cheats" && this.cheats.view !== "list") {
+        this.cheats.view = "list";
+        this.sig = "";
+      }
+    } else if (page === "cheats" && cy !== 1 && cy <= 13) {
+      this.cheats.tap(game, cx, cy);
+      console.log(`[pv] gold panel: cheats ${this.cheats.view} (tap at ${cx},${cy})`);
+      this.sig = "";
+      this.wait = CHECK_EVERY;
+      return;
     } else if (this.page === "party" && cy >= 2 && cy <= 13) {
       const i = Math.floor((cy - 2) / 2);
       if (party[i] && !isEgg(party[i])) {
@@ -363,6 +392,18 @@ export class Companion {
     this.draw(game);
   }
 
+  /** The tab row: the CHEATS tab only while OPTION's CHEATS is ON. */
+  private tabs(game: any): Tab[] {
+    return Cheats.tabShown(game?.options) ? TABS_CHEATS : TABS;
+  }
+
+  /** The page shown: the CHEATS page falls back to the party when its tab
+   *  has been turned off. */
+  private shownPage(game: any): Page {
+    if (this.page === "cheats" && !Cheats.tabShown(game?.options)) this.page = "party";
+    return this.page;
+  }
+
   private party(game: any): MonLike[] {
     const p = game?.save?.party;
     return Array.isArray(p) ? (p as MonLike[]).slice(0, PARTY_MAX) : [];
@@ -416,13 +457,15 @@ export class Companion {
     if (this.tallWanted(game)) return `T${++this.tick}`;
     const st = battleOf(game);
     if (st) return this.battleSignature(game, st);
-    let s = `${this.page}:${this.mon}|${this.location(game)}|${this.time(game)}|${game.save?.player?.money ?? 0}`;
+    const page = this.shownPage(game);
+    let s = `${this.tabs(game).length}|${page}:${this.mon}|${this.location(game)}|${this.time(game)}|${game.save?.player?.money ?? 0}`;
     for (const m of this.party(game)) {
       s += `|${monName(m)}:${m.level ?? 0}:${m.hp ?? 0}/${maxHpOf(m)}:${isEgg(m) ? 1 : 0}`;
       if (this.page === "mon") s += `:${String(m.status ?? "")}:${(m.moves ?? []).map((v) => `${String(v?.id)}${v?.pp}`).join(",")}`;
     }
     if (this.page === "badges") s += `|${this.badges(game).join(",")}`;
     if (this.page === "map") s += `|${game.world?.map?.id ?? ""}`;
+    if (page === "cheats") s += `|${this.cheats.signature(game)}`;
     if (this.page === "card") {
       const dex = game.save?.pokedex ?? {};
       s += `|${this.count(dex.caught)}/${this.count(dex.seen)}|${game.save?.playTime?.hours ?? 0}:${game.save?.playTime?.minutes ?? 0}`;
@@ -712,18 +755,20 @@ export class Companion {
     if (game?.world?.map && this.page === "map") {
       this.drawMap(game);
     } else if (game?.world?.map) {
-      Chrome.print(this.location(game), 0, 0);
+      // (the CHEATS page has its own title where the place goes)
+      if (this.shownPage(game) !== "cheats") Chrome.print(this.location(game), 0, 0);
       Chrome.print(this.time(game), 0, 1);
       Chrome.printRight(`¥${game.save?.player?.money ?? 0}`, COLS, 1);
       if (!this.hud) this.hud = BattleHud.new(game.data?.gen2MenuGfx, game.data?.gen2Palettes);
       if (this.page === "mon") this.drawMon(game);
+      else if (this.shownPage(game) === "cheats") this.cheats.draw(game);
       else if (this.page === "badges") this.drawBadges(game);
       else if (this.page === "card") this.drawCard(game);
       else this.drawParty(game);
     }
     if (game?.world?.map) {
       // the tabs, the cursor on the page shown (a mon's page is PARTY's)
-      for (const t of TABS) {
+      for (const t of this.tabs(game)) {
         Chrome.print(t.label, t.x, TAB_ROW);
         if (t.page === this.page || (t.page === "party" && this.page === "mon")) Chrome.cursor(t.x - 1, TAB_ROW);
       }

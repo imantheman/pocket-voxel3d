@@ -13,6 +13,7 @@
 // check / checkMon ([entry, consumesHeldItem]).
 
 import { Mon } from "../battle/Mon.ts";
+import { Cheats } from "./Cheats.ts";
 import { Runtime } from "../shared/mods/Runtime.ts";
 import { sortedKeys } from "../platform/lua.ts";
 
@@ -101,6 +102,9 @@ export const Evolution = {
   // Lua: Evolution.lua:45 -- HAPPINESS_TO_EVOLVE EQU 220.
   HAPPINESS_TO_EVOLVE: 220,
 
+  // Not the cart's: TRADE EVO LV.40's level (core/Cheats.ts).
+  TRADE_EVO_LEVEL: 40,
+
   // Lua: Evolution.lua:51 -- IsMonHoldingEverstone; NOT checked on ITEM.
   EVERSTONE: "EVERSTONE",
 
@@ -139,7 +143,19 @@ export const Evolution = {
     [TRADE]: {
       requiresLink: true,
       check(entry, mon, ctx) {
-        if (!ctx.link) return [false, "not trading"];
+        if (!ctx.link) {
+          // TRADE EVO LV.40 (core/Cheats.ts): off a link, at level 40 or
+          // above, in the level-up sweep (never a stone's use); a row that
+          // wants an item wants it held, and eats it as the trade would.
+          if (ctx.force || !Cheats.tradeEvoLv40()) return [false, "not trading"];
+          if (((mon && mon.level) ?? 1) < Evolution.TRADE_EVO_LEVEL) return [false, "level"];
+          if (Evolution.holdsEverstone(mon)) return [false, "everstone"];
+          if (entry.item) {
+            if ((mon && mon.item) !== entry.item) return [false, "wrong item"];
+            return [true, undefined, true];
+          }
+          return [true];
+        }
         if (Evolution.holdsEverstone(mon)) return [false, "everstone"];
         // $ff (written as no item) means any trade will do.
         if (entry.item) {
@@ -242,7 +258,15 @@ export const Evolution = {
   // [entry, consumesHeldItem] (entry undefined when none fires).
   check(def: any, mon: EvoMon | undefined, ctx?: EvoCtx, data?: EvoData): [EvoEntry | undefined, boolean] {
     const hooked = Runtime.wantsHook("evolution.check");
-    for (const entry of ((def && def.evolutions) || []) as EvoEntry[]) {
+    let rows = ((def && def.evolutions) || []) as EvoEntry[];
+    // TRADE EVO LV.40: a mon holding the item one of its trade rows uses tries
+    // that row first, so a SLOWPOKE holding a KING'S ROCK can still become
+    // SLOWKING at 40 (its level-37 row would otherwise always win).
+    if (mon && mon.item && !(ctx && ctx.link) && Cheats.tradeEvoLv40()) {
+      const held = (e: EvoEntry): boolean => e.method === TRADE && !!e.item && e.item === mon.item;
+      rows = [...rows.filter(held), ...rows.filter((e) => !held(e))];
+    }
+    for (const entry of rows) {
       let consumes = false;
       const vanilla = (): boolean => {
         const [matched, , eats] = Evolution.rowMatches(entry, mon, ctx, data);
