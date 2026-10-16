@@ -385,7 +385,7 @@ describe("GAME SPEED on Gold/Silver/Crystal", () => {
     const page = menu.focusRow("gameSpeed")!;
     expect(page.row()!.label).toBe(GAME_SPEED_LABEL);
     expect(page.view.map((r: any) => r.label)).toEqual([
-      GAME_SPEED_LABEL, "EXP FOR CATCHING", "PARTY EXP SHARE", "TRADE EVO LV.40", "HMS WITHOUT MOVE", "BACK",
+      GAME_SPEED_LABEL, "EXP FOR CATCHING", "PARTY EXP SHARE", "TRADE EVO LV.40", "HMS WITHOUT MOVE", "VISIBLE WILD", "BACK",
     ]);
     // gen1recomp's own `speed` row is gone; its key is left alone
     expect(menu.rows.some((r: any) => r.key === "speed")).toBe(false);
