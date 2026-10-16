@@ -326,8 +326,17 @@ export class Map {
         // cellCollision: block 0 and a block with no quad are $ff
         const quad = id === 0 || !coll ? undefined : coll[id];
         const c = quad ? (quad[ly + (cx & 1)] ?? 0xff) : 0xff;
-        if (open[c & 0xff] && this._warpAt[cy * 1024 + cx] === undefined) out[cy * w + cx] = 1;
+        if (open[c & 0xff]) out[cy * w + cx] = 1;
       }
+    }
+    // the warp cells shut after, from the warp table, rather than a lookup
+    // in it for every cell of the map
+    for (const k of Object.keys(this._warpAt)) {
+      const key = Number(k);
+      if (!(key >= 0)) continue;
+      const cy = Math.floor(key / 1024);
+      const cx = key - cy * 1024;
+      if (cx < w && cy < h) out[cy * w + cx] = 0;
     }
     return out;
   }
