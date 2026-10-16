@@ -11,12 +11,13 @@
 //                 GIVE asks YES / NO, and the items go to the bag, or the PC
 //                 when the bag has no room.
 //
-// Laid out on the gear's rules: labels at the left edge, values ending at
-// the right one, a clear column between, pills the OPTIONS app's sizes.
+// Laid out on the gear's rules: whole labels a column in from the left edge,
+// values ending in column 17, a clear column between (or the value on the
+// row under a label too long for that), two pages with a pager.
 import { UI_TILE } from "../../../../../contracts/spec/voxel-spec.ts";
 import { ARROW_CURSOR } from "../../tiles.ts";
 import { COLS, FILL_BIT, box, center, fill, fit, pill, pressedId, region, right, row, text, wrap } from "../draw.ts";
-import { backRow, tabs, type GearCtx } from "../ui.ts";
+import { LIST_CAPTION_Y, LIST_LABEL_X, backRow, listLayout, listPager, tabs, type GearCtx, type ListSlot } from "../ui.ts";
 import { POCKETS, fieldIdle, itemAbout, pocketOf } from "./bag.ts";
 import { fillDex, giveItem, giveItemList, oneOnly, WILD_MODES, wildMode } from "../../../extras.ts";
 import { CHEAT_ROWS, CHEAT_TEXT, WILD_LABELS, type CheatRowDef } from "../../extras_layout.ts";
@@ -32,8 +33,6 @@ const TOGGLE_X = 15;
 const ACTION_X = 13;
 /** WILD ENCOUNTERS' value, under its label. */
 const WILD_X = 11;
-/** The first row: one clear under the header, as on the other apps. */
-const FIRST_Y = 2;
 /** Items a page of the GIVE ITEMS list holds (rows 1-11); the pager, the
  *  pockets and BACK each have a row with a clear one above it. */
 export const GIVE_PAGE = 11;
@@ -74,44 +73,56 @@ function valuePill(ctx: GearCtx, id: string, x: number, y: number, label: string
   region(id, x, y, w, 1, tap);
 }
 
+/** Where each row goes (ui.ts listLayout): whole labels, a value on the
+ *  label's row when it leaves a clear column, else on the row under it
+ *  (WILD ENCOUNTERS, INSTANT VICTORY, INFINITE MONEY); two pages (the
+ *  battle and money cheats, then DEX FULL and GIVE ITEMS). */
+export function cheatRows(): { slots: ListSlot[]; pages: number } {
+  return listLayout(CHEAT_ROWS.map((r) => ({
+    label: r.label,
+    x: r.kind === "cycle" ? WILD_X : r.kind === "toggle" ? TOGGLE_X : ACTION_X,
+    below: r.kind === "cycle",
+  })));
+}
+
 function drawList(ctx: GearCtx): void {
   const { host, ui } = ctx;
   const o = opts(ctx);
-  let y = FIRST_Y;
+  const { slots, pages } = cheatRows();
+  const page = Math.min(Math.max(0, ui.page ?? 0), pages - 1);
   CHEAT_ROWS.forEach((r, i) => {
     const pick = () => { ui.sel = i; ui.msg = null; };
+    const at = slots[i]!;
+    if (at.page !== page) return;
+    text(host, LIST_LABEL_X, at.label, r.label);
     if (r.kind === "cycle") {
-      // the label has the row to itself; its value sits under it, right
-      text(host, 0, y, r.label);
       const cur = wildMode(ctx.save);
-      valuePill(ctx, `cheat:${r.key}`, WILD_X, y + 1, WILD_LABELS[cur] ?? cur, () => {
+      valuePill(ctx, `cheat:${r.key}`, at.x, at.value, WILD_LABELS[cur] ?? cur, () => {
         pick();
         o.wildEncounters = WILD_MODES[(WILD_MODES.indexOf(cur) + 1) % WILD_MODES.length];
       });
-      y += 3;
-      return;
-    }
-    text(host, 0, y, r.label);
-    if (r.kind === "toggle") {
+    } else if (r.kind === "toggle") {
       const on = o[r.key] === true;
       // the STORE's toggle look: ON a dark bar, OFF lifted off it
-      valuePill(ctx, `cheat:${r.key}`, TOGGLE_X, y, on ? "ON" : "OFF", () => {
+      valuePill(ctx, `cheat:${r.key}`, at.x, at.value, on ? "ON" : "OFF", () => {
         pick();
         o[r.key] = !on;
       }, !on);
     } else {
-      valuePill(ctx, `cheat:${r.key}`, ACTION_X, y, r.button ?? "", () => {
+      valuePill(ctx, `cheat:${r.key}`, at.x, at.value, r.button ?? "", () => {
         pick();
         if (r.key === "dexFull") ui.confirm = { kind: "dex" };
         else { ui.give = { pocket: "items", page: 0 }; }
       });
     }
-    y += 2;
   });
-  // what the last row tapped does, or what was just done: a two-line
-  // caption a row clear of the rows above and of the bottom edge
-  const said = ui.msg ?? aboutOf(ctx, CHEAT_ROWS[ui.sel ?? 0] ?? CHEAT_ROWS[0]!);
-  wrap(said, 18).slice(0, 2).forEach((line, i) => center(host, y + i, line));
+  // what the last row tapped does (a row of this page), or what was just
+  // done: two lines over the pager, a row clear either side
+  let sel = ui.sel ?? 0;
+  if (slots[sel]?.page !== page) sel = slots.findIndex((s) => s.page === page);
+  const said = ui.msg ?? aboutOf(ctx, CHEAT_ROWS[sel] ?? CHEAT_ROWS[0]!);
+  wrap(said, 18).slice(0, 2).forEach((line, i) => center(host, LIST_CAPTION_Y + i, line));
+  if (pages > 1) listPager(ctx, "cheat:page", page, pages, (p) => { ui.page = p; ui.sel = undefined; ui.msg = null; });
 }
 
 // ---------------------------------------------------------------------------

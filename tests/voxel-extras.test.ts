@@ -741,20 +741,23 @@ describe("the gear's CHEATS app", () => {
     expect(o.wildEncounters).toBe("more");
     touch(game, 15, 3);
     expect(o.wildEncounters).toBe("none");
-    // the toggles' pills on rows 5, 7, 9
+    // the toggles' pills: ALWAYS CATCH's on its row (5); INSTANT VICTORY's
+    // and INFINITE MONEY's under their labels (8, 11)
     touch(game, 17, 5);
     expect(o.alwaysCatch).toBe(true);
-    touch(game, 17, 7);
+    touch(game, 17, 8);
     expect(o.instantVictory).toBe(true);
-    touch(game, 17, 9);
+    touch(game, 17, 11);
     expect(o.infiniteMoney).toBe(true);
-    touch(game, 17, 9);
+    touch(game, 17, 11);
     expect(o.infiniteMoney).toBe(false);
-    // DEX FULL: FILL, then NO leaves the dex alone, YES fills it
-    touch(game, 16, 11);
+    // the second page (the pager's right arrow): DEX FULL: FILL, then NO
+    // leaves the dex alone, YES fills it
+    touch(game, 17, 16);
+    touch(game, 16, 2);
     touch(game, 9, 11); // NO
     expect(Object.keys(game.save.pokedex.owned).length).toBe(0);
-    touch(game, 16, 11);
+    touch(game, 16, 2);
     touch(game, 9, 7); // YES
     expect(Object.keys(game.save.pokedex.owned).length).toBe(151);
   });
@@ -763,7 +766,8 @@ describe("the gear's CHEATS app", () => {
     const game = makeGame();
     game.save.options.cheats = true;
     game.setGearView("cheats");
-    touch(game, 16, 13); // OPEN
+    touch(game, 17, 16); // the second page
+    touch(game, 16, 4); // OPEN
     const ui = () => (game as unknown as { gearUi: Record<string, any> }).gearUi.cheats!;
     expect(ui().give).toBeTruthy();
     const items = givePocket(game.data, "items");
@@ -819,20 +823,30 @@ describe("the gear's CHEATS app", () => {
     const on = encodeGlyphs("ON");
     const off = encodeGlyphs("OFF");
     expect(glyph(g[5]![17]!)).toBe(on[1]); // ALWAYS CATCH: ON
-    expect(glyph(g[7]![17]!)).toBe(off[2]); // INSTANT WIN: OFF
+    expect(glyph(g[8]![17]!)).toBe(off[2]); // INSTANT VICTORY: OFF, under its label
     expect(glyph(g[3]![17]!)).toBe(encodeGlyphs("NORMAL")[5]);
-    expect(glyph(g[11]![17]!)).toBe(encodeGlyphs("FILL")[3]);
-    expect(glyph(g[13]![17]!)).toBe(encodeGlyphs("OPEN")[3]);
-    // the labels keep a column clear of their values
-    expect(blank(g[9]![14]!)).toBe(true); // after INFINITE MONEY
+    // the labels keep a column clear of their values, and one off the edge
+    expect(blank(g[5]![14]!)).toBe(true); // after ALWAYS CATCH
+    for (let y = 2; y < 18; y++) expect(blank(g[y]![0]!)).toBe(true);
+    expect(glyph(g[10]![1]!)).toBe(encodeGlyphs("INFINITE MONEY")[0]);
+    expect(g[17]!.every(blank)).toBe(true);
+    // the second page: the two actions
+    (game as unknown as { gearUi: Record<string, any> }).gearUi.cheats!.page = 1;
+    // away and back: the gear redraws a still page only when its key moves
+    game.setGearView("home");
+    drawKantoGear(host as never, game as never);
+    game.setGearView("cheats");
+    drawKantoGear(host as never, game as never);
+    expect(glyph(g[2]![17]!)).toBe(encodeGlyphs("FILL")[3]);
+    expect(glyph(g[4]![17]!)).toBe(encodeGlyphs("OPEN")[3]);
   });
 
   test("every row's words fit: labels before their pills, the box's two lines", () => {
     for (const r of CHEAT_ROWS) {
       const w = encodeGlyphs(r.label).length;
-      if (r.kind === "toggle") expect(w).toBeLessThanOrEqual(14);
-      if (r.kind === "action") expect(w).toBeLessThanOrEqual(13);
-      if (r.kind === "cycle") expect(w).toBeLessThanOrEqual(20);
+      // from column 1: on its pill's row with a column clear, or a row to itself
+      expect(w).toBeLessThanOrEqual(18);
+      if (r.kind === "action") expect(w).toBeLessThanOrEqual(11);
       const abouts = typeof r.about === "string" ? [r.about] : Object.values(r.about);
       for (const a of abouts) expect(wrap(a, 18).length).toBeLessThanOrEqual(2);
     }

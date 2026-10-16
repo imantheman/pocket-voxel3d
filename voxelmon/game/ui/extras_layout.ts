@@ -101,22 +101,18 @@ export const ENHANCEMENTS_APP = {
 } as const;
 
 /**
- * The app's rows: each ENHANCEMENTS row under a label short enough to keep
- * a clear column before its pill (OPTION's labels run to sixteen glyphs;
- * the gear's pills start at column 15), and the two lines the box at the
- * foot says while the row is the last one tapped -- the full name first.
+ * The two lines the app's box at the foot says while a row is the last one
+ * tapped (18 glyphs a line), by choice for SPEED and VISIBLE WILD. The rows
+ * themselves carry OPTION's own labels, whole: one too long to share its
+ * row with its pill has the value on the row under it.
  */
-export const ENHANCEMENT_GEAR: Record<string, { label: string; about: string | Record<string, string> }> = {
-  gameSpeed: {
-    label: "SPEED",
-    about: { "1X": "SPEED: THE GAME'S OWN PACE.", "2X": "SPEED: EVERYTHING TWICE AS FAST." },
-  },
-  expForCatching: { label: "EXP FOR CATCH", about: "EXP FOR CATCHING: A CATCH PAYS EXP." },
-  partyExpShare: { label: "PARTY SHARE", about: "PARTY EXP SHARE: EVERY MON EARNS." },
-  tradeEvoLv40: { label: "TRADE EVO LV40", about: "TRADE EVO LV.40: ALSO BY LEVEL 40." },
-  hmsWithoutMove: { label: "HMS W/O MOVE", about: "HMS WITHOUT MOVE: JUST HM AND BADGE." },
+export const ENHANCEMENT_GEAR: Record<string, { about: string | Record<string, string> }> = {
+  gameSpeed: { about: { "1X": "THE GAME'S OWN PACE.", "2X": "EVERYTHING TWICE AS FAST." } },
+  expForCatching: { about: "A CATCH PAYS EXP, AS A WIN DOES." },
+  partyExpShare: { about: "EVERY MON IN THE PARTY EARNS EXP." },
+  tradeEvoLv40: { about: "TRADE EVOLUTIONS ALSO BY LEVEL 40." },
+  hmsWithoutMove: { about: "THE HM AND ITS BADGE ARE ENOUGH." },
   visibleWild: {
-    label: "VISIBLE WILD",
     about: {
       OFF: "RANDOM BATTLES, AS THE GAME HAS THEM.",
       SOME: "NO RANDOM BATTLES. A FEW ROAM.",
@@ -164,9 +160,9 @@ export const CHEAT_ROWS: readonly CheatRowDef[] = [
     },
   },
   { key: "alwaysCatch", label: "ALWAYS CATCH", kind: "toggle", about: "ANY BALL CATCHES. TRAINERS BLOCK." },
-  // INSTANT VICTORY on the reference's menu: fifteen glyphs leave no column
-  // before the gear's ON/OFF pill, so the gear says INSTANT WIN
-  { key: "instantVictory", label: "INSTANT WIN", kind: "toggle", about: "FIGHT KNOCKS OUT THE FOE AT ONCE." },
+  // the reference's own name, whole: too long to share a row with its pill,
+  // so the gear puts its value on the row under it
+  { key: "instantVictory", label: "INSTANT VICTORY", kind: "toggle", about: "FIGHT KNOCKS OUT THE FOE AT ONCE." },
   { key: "infiniteMoney", label: "INFINITE MONEY", kind: "toggle", about: "MONEY STAYS AT ¥999999." },
   { key: "dexFull", label: "DEX FULL", kind: "action", button: "FILL", about: "EVERY POKéMON SEEN AND OWNED." },
   { key: "giveItems", label: "GIVE ITEMS", kind: "action", button: "OPEN", about: "ANY ITEM INTO THE BAG OR THE PC." },

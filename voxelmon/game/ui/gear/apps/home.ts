@@ -8,7 +8,7 @@ import { hpBarTiles } from "../../../battle/ui.ts";
 import { picPageFor } from "../../../battle/staging.ts";
 import {
   COLS, TILE_H, TILE_W, box, button, center, cursor, fit, pill, pillPx, pressedId, region, right, row, sprite,
-  text, tiles, wrap, type Ink,
+  text, tiles, width, wrap, type Ink,
 } from "../draw.ts";
 import { APPS, appOf, gearSave, wildRows, type GearViewId } from "../model.ts";
 import { go, header, type GearCtx } from "../ui.ts";
@@ -134,8 +134,9 @@ export function drawStore(ctx: GearCtx): void {
     const on = !gear.removed[a.id];
     if (ui.sel === i) cursor(host, 0, y);
     text(host, 1, y, a.title);
-    region(`store:${a.id}`, 0, y, 13, 1, () => { ui.sel = i; });
-    pill(host, `store:t:${a.id}`, 14, y, 6, on ? "ON" : "OFF", () => {
+    region(`store:${a.id}`, 0, y, 12, 1, () => { ui.sel = i; });
+    // ending in column 18, column 19 clear, as every app's values
+    pill(host, `store:t:${a.id}`, 13, y, 6, on ? "ON" : "OFF", () => {
       ui.sel = i;
       gear.removed[a.id] = on;
     }, !on);
@@ -149,6 +150,11 @@ export function drawStore(ctx: GearCtx): void {
 // ---------------------------------------------------------------------------
 // OPTIONS
 // ---------------------------------------------------------------------------
+
+/** OPTIONS' labels and pills (8 cells, ending in column 18). */
+const OPT_LABEL_X = 1;
+const OPT_PILL_X = 11;
+const OPT_PILL_W = 8;
 
 interface OptionRow {
   label: string;
@@ -169,12 +175,16 @@ export function drawOptions(ctx: GearCtx): void {
     { label: "CLOCK", value: () => (gear.clock24 ? "24 HOUR" : "12 HOUR"), step: () => { gear.clock24 = !gear.clock24; } },
     { label: "KEYBOARD", value: () => (gear.qwertz ? "QWERTZ" : "QWERTY"), step: () => { gear.qwertz = !gear.qwertz; } },
   ];
-  // labels flush with the box below, so the longest (CAUGHT ICON) keeps a
-  // column clear of its button
+  // labels a column in from the edge; the pills end in column 18 (column
+  // 19 clear) and keep their eight cells for ENHANCED and SPOILERS, so a
+  // label that would meet its pill (CAUGHT ICON) has its row and the pill
+  // goes on the row under it, as CHEATS and ENHANCEMENTS do
+  let y = 2;
   rows.forEach((r, i) => {
-    const y = 2 + i * 2;
-    text(host, 0, y, r.label);
-    pill(host, `opt:${i}`, 12, y, 8, r.value(), r.step);
+    text(host, OPT_LABEL_X, y, r.label);
+    const inline = OPT_LABEL_X + width(r.label) < OPT_PILL_X;
+    pill(host, `opt:${i}`, OPT_PILL_X, inline ? y : y + 1, OPT_PILL_W, r.value(), r.step);
+    y += inline ? 2 : 3;
   });
   // what INFO means, since it is the one that changes the most
   const say = {

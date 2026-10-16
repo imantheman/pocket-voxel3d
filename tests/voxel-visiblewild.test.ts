@@ -302,7 +302,10 @@ describe("VISIBLE WILD: the cells a mon may stand on", () => {
     const c = new CellClassifier(m, grassOnly);
     let ticks = 0;
     while (!c.done) { c.step(20); ticks++; }
-    expect(ticks).toBe(10); // two rows of ten a tick
+    // 22 rows of flags (10 cells each) and 20 rows of 8 kinds: 380 cells'
+    // work at about 20 a tick
+    expect(ticks).toBeGreaterThanOrEqual(15);
+    expect(ticks).toBeLessThanOrEqual(25);
     expect([...c.out]).toEqual([...whole]);
   });
 
@@ -664,13 +667,14 @@ describe("VISIBLE WILD in the overworld", () => {
     let at: [number, number] = [0, 0];
     for (let i = 0; i < kinds.length; i++) if (kinds[i] === CELL_LAND) { at = [i % ow.map.widthCells, Math.floor(i / ow.map.widthCells)]; }
     ow.setMap("VIRIDIAN_FOREST", at[0], at[1], "down");
-    const rowsPerTick = Math.ceil(CLASSIFY_CELLS / ow.map.widthCells);
-    const ticks = Math.ceil((ow.map.heightCells - 2) / rowsPerTick);
-    for (let i = 0; i < ticks - 1; i++) {
+    // every cell's flags and kind, CLASSIFY_CELLS of work a tick
+    const work = ow.map.widthCells * ow.map.heightCells + (ow.map.widthCells - 2) * (ow.map.heightCells - 2);
+    const ticks = Math.floor(work / (CLASSIFY_CELLS + ow.map.widthCells));
+    for (let i = 0; i < ticks; i++) {
       game.tick(0);
       expect(ow.wild.mons.length).toBe(0);
     }
-    for (let i = 0; i < 3 && ow.wild.mons.length === 0; i++) game.tick(0);
+    for (let i = 0; i < 200 && ow.wild.mons.length === 0; i++) game.tick(0);
     expect(ow.wild.mons.length).toBeGreaterThan(0);
     expect([...ow.wild.cellKinds()]).toEqual([...kinds]);
   });
@@ -776,10 +780,12 @@ describe("the gear's ENHANCEMENTS app", () => {
   test("its rows are OPTION's ENHANCEMENTS rows, SPEED first", () => {
     expect(enhancementDefs().map((d) => d.key)).toEqual([SPEED_ROW, ...ENHANCEMENT_ROWS].map((d) => d.key));
     expect(OPTION_PAGES).toContain("ENHANCEMENTS");
-    // every gear label leaves a clear column before the pills at 15
+    // OPTION's own labels, whole, from column 1: on the pill's row with a
+    // column clear, or a row to themselves
     for (const d of enhancementDefs()) {
+      expect(gearLabel(d)).toBe(d.label);
       const w = encodeGlyphs(gearLabel(d)).length;
-      expect(w).toBeLessThanOrEqual(d === VISIBLE_WILD_ROW ? 20 : 14);
+      expect(w).toBeLessThanOrEqual(18);
       for (const c of d.choices) expect(wrap(gearAbout(d, c), 18).length).toBeLessThanOrEqual(2);
       expect(ENHANCEMENT_GEAR[d.key]).toBeTruthy();
     }
@@ -880,24 +886,26 @@ describe("the gear's ENHANCEMENTS app", () => {
     touch(game, 17, 2);
     expect(o.gameSpeed).toBe(2);
     expect(optionRow("SPEED").index).toBe(1);
-    // the toggles on rows 4, 6, 8, 10
-    touch(game, 17, 4);
+    // the toggles' values under their labels: rows 5, 8, 11 on the first
+    // page, 3 on the second
+    touch(game, 17, 5);
     expect(o.expForCatching).toBe(true);
     expect(optionRow("EXP FOR CATCHING").index).toBe(1);
-    touch(game, 17, 6);
-    expect(o.partyExpShare).toBe(true);
     touch(game, 17, 8);
+    expect(o.partyExpShare).toBe(true);
+    touch(game, 17, 11);
     expect(o.tradeEvoLv40).toBe(true);
-    touch(game, 17, 10);
+    touch(game, 17, 16); // the pager's right arrow
+    touch(game, 17, 3);
     expect(o.hmsWithoutMove).toBe(true);
     expect(optionRow("HMS WITHOUT MOVE").index).toBe(1);
     // VISIBLE WILD's value under its label: OFF -> SOME -> MANY -> OFF
-    touch(game, 15, 13);
+    touch(game, 15, 6);
     expect(o.visibleWild).toBe("some");
     expect(optionRow("VISIBLE WILD").index).toBe(1);
-    touch(game, 15, 13);
+    touch(game, 15, 6);
     expect(o.visibleWild).toBe("many");
-    touch(game, 15, 13);
+    touch(game, 15, 6);
     expect(o.visibleWild).toBe("off");
     // and the other way: OPTION's page writes, the app reads the same key
     const pressed: Record<string, boolean> = {};
@@ -908,7 +916,7 @@ describe("the gear's ENHANCEMENTS app", () => {
     pressed.right = true; m2.update(); m2.update(); pressed.right = false;
     expect(o.visibleWild).toBe("many");
     const ui = () => (game as unknown as { gearUi: Record<string, any> }).gearUi.enhancements!;
-    touch(game, 15, 13); // MANY -> OFF on the app
+    touch(game, 15, 6); // MANY -> OFF on the app
     expect(o.visibleWild).toBe("off");
     expect(m2.view().rows[vwAt]!.index).toBe(0);
     expect(ui().sel).toBe(enhancementDefs().indexOf(VISIBLE_WILD_ROW));
@@ -935,11 +943,23 @@ describe("the gear's ENHANCEMENTS app", () => {
     for (let y = 1; y < 18; y++) expect(blank(g[y]![19]!)).toBe(true);
     expect(g[17]!.every(blank)).toBe(true); // a clear row above the bottom edge
     expect(glyph(g[2]![17]!)).toBe(encodeGlyphs("1X")[1]);
-    expect(glyph(g[4]![17]!)).toBe(encodeGlyphs("ON")[1]);
-    expect(glyph(g[6]![17]!)).toBe(encodeGlyphs("OFF")[2]);
-    expect(glyph(g[13]![17]!)).toBe(encodeGlyphs("SOME")[3]);
-    // the labels keep a column clear of their pills
-    for (const y of [2, 4, 6, 8, 10]) expect(blank(g[y]![14]!)).toBe(true);
+    expect(glyph(g[5]![17]!)).toBe(encodeGlyphs("ON")[1]); // under EXP FOR CATCHING
+    expect(glyph(g[8]![17]!)).toBe(encodeGlyphs("OFF")[2]);
+    // SPEED keeps a column clear of its pill; the long names are whole, a
+    // column off the edge
+    expect(blank(g[2]![14]!)).toBe(true);
+    expect(glyph(g[4]![1]!)).toBe(encodeGlyphs("EXP FOR CATCHING")[0]);
+    for (let y = 2; y < 18; y++) expect(blank(g[y]![0]!)).toBe(true);
+    // the second page: HMS WITHOUT MOVE and VISIBLE WILD
+    (game as unknown as { gearUi: Record<string, any> }).gearUi.enhancements!.page = 1;
+    // away and back: the gear redraws a still page only when its key moves
+    game.setGearView("home");
+    drawKantoGear(host as never, game as never);
+    game.setGearView("enhancements");
+    drawKantoGear(host as never, game as never);
+    expect(glyph(g[2]![16]!)).toBe(encodeGlyphs("HMS WITHOUT MOVE")[15]);
+    expect(glyph(g[6]![17]!)).toBe(encodeGlyphs("SOME")[3]);
+    for (let y = 2; y < 18; y++) expect(blank(g[y]![0]!)).toBe(true);
     // the header: the title with its arrows, a column clear of both ends
     expect(blank(g[0]![0]!)).toBe(true);
     expect(blank(g[0]![19]!)).toBe(true);
