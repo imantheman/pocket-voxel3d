@@ -53,12 +53,18 @@ g.frame = (b: number): void => {
     if (t === 73) game.setGearView("home");
     if (t === 130) shot("home_no_cheats");
     // the other apps with pills, where the build has them
-    const apps = ["tools", "store", "options", "cheats", "enhancements"];
+    // (a "2" is the app's second page, where it has one)
+    const apps = ["tools", "store", "options", "cheats", "cheats2", "enhancements", "enhancements2"];
     const k = Math.floor((t - 140) / 60);
     if (t >= 140 && (t - 140) % 60 === 0 && k < apps.length) {
       game.save.options.cheats = true;
-      game.setGearView(apps[k]);
+      const name = apps[k]!;
+      const app = name.replace(/2$/, "");
+      const ui = ((game.gearUi ??= {})[app] ??= {});
+      ui.page = name.endsWith("2") ? 1 : 0;
+      game.setGearView("home");
     }
+    if (t >= 140 && (t - 140) % 60 === 3 && k < apps.length) game.setGearView(apps[k]!.replace(/2$/, ""));
     if (t >= 140 && (t - 140) % 60 === 50 && k < apps.length) shot(`app_${apps[k]}`);
     if (t === 140 + apps.length * 60 + 20) console.log("[pv] bpshot done");
   }

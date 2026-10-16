@@ -11,7 +11,7 @@ const only = process.argv[3];
 const data = await loadRuntimeData(dir);
 const indoor = (data.field as { indoorEncounters?: { firstIndoorMap: number; excludedTileset: string } }).indoorEncounters;
 const rows: [string, number, number, number, number][] = [];
-for (const [id, def] of Object.entries(data.maps)) {
+for (const [id, def] of Object.entries((data as any).maps ?? {})) {
   if (only && id !== only) continue;
   const enc = data.encounters?.[id];
   if (!enc) continue;

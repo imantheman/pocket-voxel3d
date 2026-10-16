@@ -5,10 +5,10 @@ import { GameMap } from "../voxelmon/game/world/map.ts";
 
 const [dir, id, x0, y0, w, h] = process.argv.slice(2);
 const data = await loadRuntimeData(dir!);
-const def = data.maps[id!] as any;
-const map = new GameMap(def, data.tilesets[def.tileset] as never, (data.field as any).waterTilesets);
+const def = (data as any).maps[id!];
+const map = new GameMap(def, (data as any).tilesets[def.tileset], (data.field as any).waterTilesets);
 console.log("grassTile", (map as any).tileset.grassTile, "tileset", def.tileset,
-  "walkable", JSON.stringify(((data.tilesets[def.tileset] as any).walkable ?? []).map((x: number) => x.toString(16))));
+  "walkable", JSON.stringify((((data as any).tilesets[def.tileset]).walkable ?? []).map((x: number) => x.toString(16))));
 for (let cy = +y0!; cy < +y0! + +h!; cy++) {
   let a = "", b = "";
   for (let cx = +x0!; cx < +x0! + +w!; cx++) {

@@ -4,9 +4,9 @@
 // (as tools/speed_bench_gen1_entry.ts does) and logging one "vwbench:" line
 // per segment beside the host's own perf lines:
 //
-//   forest  the forest (its 3D is off by the map's own rule), OFF at 1X,
-//           then MANY at 1X and 2X
-//   route   the big grass route with 3D on, OFF at 1X, MANY at 1X and 2X
+//   forest  the forest (its 3D is off by the map's own rule), OFF and
+//           MANY at 1X, then OFF and MANY at 2X
+//   route   the big grass route with 3D on, the same four
 //
 // The walk is a row of the busiest grass, so the mons are round it the whole
 // time; a touch starts nothing here (the shell's battle is held back) but
@@ -29,9 +29,11 @@ const SEG = 1200;
 const SEGS: { map: string; vw: string; speed: number }[] = [
   { map: "VIRIDIAN_FOREST", vw: "off", speed: 1 },
   { map: "VIRIDIAN_FOREST", vw: "many", speed: 1 },
+  { map: "VIRIDIAN_FOREST", vw: "off", speed: 2 },
   { map: "VIRIDIAN_FOREST", vw: "many", speed: 2 },
   { map: "ROUTE_11", vw: "off", speed: 1 },
   { map: "ROUTE_11", vw: "many", speed: 1 },
+  { map: "ROUTE_11", vw: "off", speed: 2 },
   { map: "ROUTE_11", vw: "many", speed: 2 },
 ];
 
