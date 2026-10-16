@@ -8,7 +8,7 @@ import { moveEffectLines, typeName } from "../model.ts";
 import { backRow, tabs, type GearCtx } from "../ui.ts";
 import { drawPartyGrid } from "./party.ts";
 
-const POCKETS = [
+export const POCKETS = [
   { id: "items", label: "ITEM" },
   { id: "balls", label: "BALL" },
   { id: "key", label: "KEY" },
@@ -20,7 +20,7 @@ const FIELD_USE = new Set([
   "REPEL", "SUPER_REPEL", "MAX_REPEL", "ESCAPE_ROPE", "COIN_CASE", "TOWN_MAP", "ITEMFINDER",
 ]);
 
-function pocketOf(data: any, id: string): string {
+export function pocketOf(data: any, id: string): string {
   const it = data.items?.[id] ?? {};
   if (it.machine || /^(TM|HM)\d/.test(id)) return "tms";
   if (Items.isBall(id)) return "balls";

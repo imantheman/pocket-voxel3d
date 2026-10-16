@@ -9,6 +9,7 @@
 
 import type { EncounterDef, EncounterSlot } from "../data.ts";
 import type { Rng } from "../rng.ts";
+import { encounterRateFor, type WildMode } from "../extras.ts";
 
 /**
  * Cumulative slot thresholds out of 256 (pokered
@@ -30,11 +31,15 @@ export function roll(
   encounterDef: EncounterDef | null | undefined,
   rng: Rng,
   buckets: readonly number[] = ENCOUNTER_BUCKETS,
+  mode: WildMode = "normal",
 ): EncounterSlot | null {
   if (!encounterDef) return null;
   const grass = encounterDef.grass;
-  if (!grass || grass.rate === 0) return null;
-  if (rng.byte() >= grass.rate) return null;
+  if (!grass) return null;
+  // the WILD ENCOUNTERS cheat (extras.ts) scales the gate; NORMAL is the cart
+  const rate = encounterRateFor(grass.rate, mode);
+  if (rate === 0) return null;
+  if (rng.byte() >= rate) return null;
   const pick = rng.byte();
   const thresholds = grass.buckets ?? buckets;
   for (let i = 0; i < thresholds.length; i++) {

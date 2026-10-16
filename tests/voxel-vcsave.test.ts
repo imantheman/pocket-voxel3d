@@ -162,6 +162,25 @@ for (const v of Object.keys(dirs) as V[]) {
       expect(diffs.slice(0, 20)).toEqual([]);
     });
 
+    test.skipIf(!has(v))("the port's ENHANCEMENTS and CHEATS settings never reach the cartridge", () => {
+      // extras.ts: port-only option keys. The cart's option byte holds text
+      // speed, animations and battle style only; the rest must change nothing.
+      const data = sets[v]!;
+      const plain = saveToCart(richSave(data, v), data as never, null).bytes;
+      const s = richSave(data, v);
+      Object.assign(s.options, {
+        expForCatching: true, partyExpShare: true, tradeEvoLv40: true, hmsWithoutMove: true, cheats: true,
+        wildEncounters: "none", alwaysCatch: true, instantVictory: true, infiniteMoney: true,
+      });
+      const withExtras = saveToCart(s, data as never, null).bytes;
+      expect(Buffer.from(withExtras).equals(Buffer.from(plain))).toBe(true);
+      const back = cartToSave(withExtras, data as never).save as { options: Record<string, unknown> };
+      expect(Object.keys(back.options).sort()).toEqual(["animations", "battleStyle", "textSpeed"]);
+      // INFINITE MONEY's 999999 is the cart's own ceiling: it goes over whole
+      s.money = 999999;
+      expect((cartToSave(saveToCart(s, data as never, null).bytes, data as never).save as { money: number }).money).toBe(999999);
+    });
+
     test.skipIf(!has(v))("the current map's engine state is the ROM's, on every map", () => {
       const data = sets[v]!;
       const s = richSave(data, v);

@@ -25,6 +25,7 @@ import {
 } from "../rules/damage.ts";
 import { attempt as catchAttempt } from "../rules/catching.ts";
 import { apply as expApply, movesLearnedAt } from "../rules/experience.ts";
+import { expShareSplit, extraOn, type ExtrasFlag } from "../extras.ts";
 import { beforeMove as statusBeforeMove, residual as statusResidual } from "../rules/status.ts";
 import { effectiveSpeed, firstMover } from "../rules/turnorder.ts";
 import { createTypeChart, type TypeChart } from "../rules/typechart.ts";
@@ -1239,6 +1240,10 @@ export class WildBattle implements EffectBattle {
       this.menuIndex = row * 2 + col + 1;
       if (input.wasPressed("a")) {
         const choice = (["fight", "pkmn", "item", "run"] as const)[this.menuIndex - 1];
+        if (choice === "fight" && this.instantVictoryOn()) {
+          this.instantVictory();
+          return;
+        }
         if (choice === "fight") {
           // own trapping/Bide or foe Wrap skips the move list and forces
           // the locked action (core.asm:320-329)
@@ -1938,6 +1943,45 @@ export class WildBattle implements EffectBattle {
     }
   }
 
+  // -------------------------------------------------------------------
+  // ENHANCEMENTS / CHEATS (extras.ts): never in a link battle or a demo
+  // -------------------------------------------------------------------
+
+  /** Whether this battle honours the port's enhancements and cheats. A link
+   *  battle (battle/linkbattle.ts) says no: both consoles must agree. */
+  protected allowsCheats(): boolean {
+    return !this.demo;
+  }
+
+  protected extra(key: ExtrasFlag): boolean {
+    return this.allowsCheats() && extraOn(this.save as never, key);
+  }
+
+  /** INSTANT VICTORY applies: on, and a foe that can be fought at all (the
+   *  unidentified GHOST of the tower cannot be, cheat or no cheat). */
+  instantVictoryOn(): boolean {
+    if (!this.extra("instantVictory")) return false;
+    if (this.disguised && !this.scopeReveal) return false;
+    return !!this.enemy && this.enemy.mon.hp > 0 && !!this.player && this.player.mon.hp > 0;
+  }
+
+  /**
+   * INSTANT VICTORY: FIGHT knocks the foe's mon out at once -- no move, no
+   * foe turn -- and the ordinary faint takes it from there, so the EXP, a
+   * trainer's next mon, the prize money and the script's win are all the
+   * real ones.
+   */
+  instantVictory(): void {
+    this.phase = "messages";
+    this.afterQueue = "menu";
+    this.act(() => {
+      const e = this.enemy;
+      e.mon.hp = 0;
+      this.drainNext(e, 0);
+      this.onFaint(e);
+    });
+  }
+
   /** :3694-3806 awardExp — participant split, EXP.ALL passes, level-ups,
    * stat boxes, learnset checks. */
   awardExp(): void {
@@ -1996,6 +2040,16 @@ export class WildBattle implements EffectBattle {
         }
       }
     };
+    // PARTY EXP SHARE (extras.ts): every standing mon, in party order; the
+    // ones that fought take the full amount, the bench half. EXP.ALL sits
+    // out -- the share already reaches the whole party.
+    if (this.extra("partyExpShare")) {
+      for (const mon of this.save.party) {
+        if (mon.hp > 0) applyShare(mon, expShareSplit(alive.includes(mon)), true);
+      }
+      this.participants = new Set();
+      return;
+    }
     // vanillaExpAward (:3776-3797)
     const expAll = (this.save.inventory.EXP_ALL ?? 0) > 0;
     for (const mon of alive) {
@@ -2352,12 +2406,18 @@ export class WildBattle implements EffectBattle {
     }
     this.act(() => {
       this.lastBall = ball;
-      const [caught, shakes] = catchAttempt(ball, this.enemy.mon, this.enemy.def, this.rng);
+      // ALWAYS CATCH (extras.ts): the throw lands as a MASTER BALL's would
+      const [caught, shakes] = this.extra("alwaysCatch")
+        ? [true, 3] as [boolean, number]
+        : catchAttempt(ball, this.enemy.mon, this.enemy.def, this.rng);
       // ItemUseBall's 20-frame beat before the toss chain (:4551-4553)
       this.insertNext({ wait: 20 });
       this.ballChain(caught, shakes, ball);
       if (caught) {
         this.sayNext(`All right!\n${this.enemy.name} was\ncaught!`);
+        // EXP FOR CATCHING (extras.ts): the battle's EXP, as for a faint,
+        // before the mon goes to the party or the PC
+        if (this.extra("expForCatching")) this.actNext(() => this.awardExp());
         this.act(() => this.storeCaughtMon());
       } else {
         this.sayNext(this.ballMissMessage(shakes));

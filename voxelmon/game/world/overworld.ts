@@ -15,6 +15,7 @@ import type { EncounterDef, MapObject, VoxelmonData } from "../data.ts";
 import { gameVersion } from "../data.ts";
 import type { Rng } from "../rng.ts";
 import { roll as encounterRoll } from "../rules/encounter.ts";
+import { wildMode } from "../extras.ts";
 import { WARP_FADE_OUT } from "../rules/timing.ts";
 import {
   canMove, occupied, rotateDir, target,
@@ -2191,16 +2192,18 @@ export class Overworld implements ScriptWorld {
       indoorEncounters?: { firstIndoorMap: number; excludedTileset: string };
     })?.indoorEncounters;
     let enc: { species: string; level: number } | null = null;
+    // the WILD ENCOUNTERS cheat (extras.ts): NONE / LESS / NORMAL / MORE
+    const mode = wildMode(this.save as never);
     if (p.surfing && encDef?.water && this.map.isWaterCell(p.cellX, p.cellY)) {
-      enc = encounterRoll({ grass: encDef.water }, this.shell.rng);
+      enc = encounterRoll({ grass: encDef.water }, this.shell.rng, undefined, mode);
     } else if (this.map.isGrassCell(p.cellX, p.cellY)) {
-      enc = encounterRoll(encDef, this.shell.rng);
+      enc = encounterRoll(encDef, this.shell.rng, undefined, mode);
     } else if (
       indoor &&
       this.map.def.index >= indoor.firstIndoorMap &&
       this.map.def.tileset !== indoor.excludedTileset
     ) {
-      enc = encounterRoll(encDef, this.shell.rng);
+      enc = encounterRoll(encDef, this.shell.rng, undefined, mode);
     }
     // wRepelRemainingSteps (wild_encounters.asm): while a REPEL is on, a
     // mon under the lead's level does not appear at all.

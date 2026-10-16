@@ -9,6 +9,8 @@
 
 import { itemBallFlag } from "../../world/mapscripts.ts";
 import { hiddenKey } from "../../world/hiddenitems.ts";
+import { hmWithoutMove } from "../../extras.ts";
+import { CHEATS_APP } from "../extras_layout.ts";
 
 // ---------------------------------------------------------------------------
 // saved state (save.modData.kanto_gear -- where the mod keeps its own)
@@ -88,7 +90,7 @@ export function spoilers(save: SaveLike | undefined): boolean {
 
 export type GearViewId =
   | "home" | "party" | "map" | "explorer" | "trainer" | "pokedex" | "bag"
-  | "tools" | "steps" | "stamps" | "notes" | "store" | "options";
+  | "tools" | "steps" | "stamps" | "notes" | "store" | "options" | "cheats";
 
 export interface GearApp {
   id: GearViewId;
@@ -129,6 +131,10 @@ export const APPS: GearApp[] = [
     about: ["ADD OR REMOVE APPS."] },
   { id: "options", title: "OPTIONS", short: "OPTION", fixed: true,
     about: ["HOW MUCH HELP THE GEAR GIVES."] },
+  // Only while the OPTION screen's CHEATS row is ON (home.ts availableApps);
+  // fixed, so the STORE never lists it: OPTION is its switch.
+  { id: "cheats", title: CHEATS_APP.title, short: CHEATS_APP.short, fixed: true,
+    about: [...CHEATS_APP.about] },
 ];
 
 export function appOf(id: string): GearApp | undefined {
@@ -541,6 +547,8 @@ export function knowerOf(save: ToolSave, move: string): number {
 export function toolUnlocked(t: ToolDef, save: ToolSave): boolean {
   const inv = save.inventory ?? {};
   if (t.item) return (inv[t.item] ?? 0) > 0;
+  // HMS WITHOUT MOVE (extras.ts): the HM and its badge are enough
+  if (t.move && hmWithoutMove(save as never, t.move)) return true;
   if (!t.move || knowerOf(save, t.move) < 0) return false;
   const badge = FIELD_BADGE[t.move];
   return badge === false || (!!badge && (inv[badge] ?? 0) > 0);

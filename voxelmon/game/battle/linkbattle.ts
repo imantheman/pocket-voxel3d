@@ -65,6 +65,12 @@ export class LinkBattle extends TrainerBattle {
    */
   lastPeerAction: BattleAction | null = null;
 
+  /** No enhancements or cheats over a link: both consoles must play the
+   *  same battle (extras.ts). */
+  protected override allowsCheats(): boolean {
+    return false;
+  }
+
   /** EnemySendOut skips the SHIFT offer in a link battle. */
   protected override offersShift(): boolean {
     return false;

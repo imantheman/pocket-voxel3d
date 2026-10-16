@@ -18,6 +18,12 @@ import { calc, type DVs, type StatExp } from "./stats.ts";
 export interface EvoTrigger {
   kind: "levelup" | "item" | "trade" | "manual" | (string & {});
   item?: string;
+  /**
+   * TRADE EVO LV. 40 (extras.ts): a level-up at this level or above also
+   * fires a TRADE evolution, through the same after-battle flow as a LEVEL
+   * one. Absent: the cart's rule, trade only.
+   */
+  tradeLevel?: number;
 }
 
 export interface EvoMon {
@@ -71,6 +77,10 @@ export function pendingFor(
     if (method?.check && method.check(mon, evo, trig)) {
       return [evo.species, evo];
     }
+    if (evo.method === "TRADE" && trig.kind === "levelup" && trig.tradeLevel !== undefined
+      && mon.level >= trig.tradeLevel) {
+      return [evo.species, evo];
+    }
   }
   return null;
 }
@@ -106,12 +116,13 @@ export function checkParty<T extends EvoMon>(
   data: VoxelmonData,
   party: readonly T[],
   leveledUp: ReadonlySet<T> | null | undefined,
+  opts: { tradeLevel?: number } = {},
 ): { mon: T; to: string; evo: EvolutionEntry }[] {
   const pending: { mon: T; to: string; evo: EvolutionEntry }[] = [];
   if (!leveledUp) return pending;
   for (const mon of party) {
     if (!leveledUp.has(mon)) continue;
-    const hit = pendingFor(data, mon, { kind: "levelup" });
+    const hit = pendingFor(data, mon, { kind: "levelup", tradeLevel: opts.tradeLevel });
     if (hit) pending.push({ mon, to: hit[0], evo: hit[1] });
   }
   return pending;

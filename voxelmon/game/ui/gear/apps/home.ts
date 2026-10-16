@@ -25,6 +25,8 @@ export function availableApps(game: any): GearViewId[] {
     if (a.id === "map" && !((inv.TOWN_MAP ?? 0) > 0 && typeof atlas?.townMapPage === "number" && atlas.townMapPage >= 0)) continue;
     // the POKéDEX is Oak's to give, as on the START menu
     if (a.id === "pokedex" && !game.save?.flags?.EVENT_GOT_POKEDEX) continue;
+    // CHEATS only while OPTION's CHEATS row is ON (ui/extras_layout.ts)
+    if (a.id === "cheats" && game.save?.options?.cheats !== true) continue;
     out.push(a.id);
   }
   return out;
@@ -70,15 +72,21 @@ export function drawHome(ctx: GearCtx): void {
     center(host, 4, "NO POKéMON", ip, 11, 8);
   }
 
-  // the apps: three to a row, one row of pills with a row between
+  // the apps: three to a row, one row of pills with a row between. Twelve
+  // fill rows 9-15; a thirteenth (CHEATS, with every app on offer) takes
+  // the middle of the bottom row, a row clear of the grid like the rest.
   const apps = availableApps(game).filter((a) => a !== "home");
   apps.forEach((a, i) => {
     const col = i % 3;
     const row = Math.floor(i / 3);
-    const x = [0, 7, 14][col]!;
+    let x = [0, 7, 14][col]!;
     const w = 6;
     const y = 9 + row * 2;
-    if (y > 16) return;
+    if (y > 17) return;
+    if (y === 17) {
+      if (i !== apps.length - 1 || col !== 0) return;
+      x = 7;
+    }
     pill(host, `home:${a}`, x, y, w, appOf(a)!.short, () => go(ctx, a));
   });
 }

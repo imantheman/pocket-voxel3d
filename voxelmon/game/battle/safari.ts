@@ -135,7 +135,8 @@ export class SafariBattle extends WildBattle {
 
   private throwSafariBall(): void {
     this.audioCues.push("sfx:Ball_Toss");
-    const [caught, shakes] = this.safariCatch();
+    // ALWAYS CATCH (extras.ts): the ball is still spent and counted
+    const [caught, shakes] = this.extra("alwaysCatch") ? [true, 3] as [boolean, number] : this.safariCatch();
     this.ballChain(caught, shakes, "SAFARI_BALL");
     if (caught) {
       this.sayNext(`All right!\n${this.enemy.name} was\ncaught!`);

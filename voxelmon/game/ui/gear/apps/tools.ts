@@ -5,6 +5,7 @@
 // game says and does.
 import { center, fit, pill, text } from "../draw.ts";
 import { TOOLS, knowerOf, toolUnlocked } from "../model.ts";
+import { hmWithoutMove } from "../../../extras.ts";
 import { backRow, type GearCtx } from "../ui.ts";
 import { fieldIdle } from "./bag.ts";
 import { drawPartyGrid, monName } from "./party.ts";
@@ -46,7 +47,9 @@ function useTool(ctx: GearCtx, key: string): void {
     game.useKeyItem?.(t.item);
     return;
   }
-  const who = knowerOf(save, t.move!);
+  let who = knowerOf(save, t.move!);
+  // HMS WITHOUT MOVE (extras.ts): nobody knows it, so the lead uses it
+  if (who < 0 && hmWithoutMove(save, t.move!) && (save.party?.length ?? 0) > 0) who = 0;
   if (who < 0) return;
   if (t.move === "SOFTBOILED") { ui.softFrom = who; return; }
   const name = monName(data, save.party[who]);

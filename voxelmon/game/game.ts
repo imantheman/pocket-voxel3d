@@ -117,6 +117,7 @@ import { COPY_SAVE_TEXT, copyMessage, copyPanel, runCopy, type CopyDir, type Cop
 import type { SaveSummary } from "./ui/title.ts";
 import * as Bag from "./rules/bag.ts";
 import { tiltShiftLevel } from "./tiltshift.ts";
+import { holdMoney, tradeEvoLevel } from "./extras.ts";
 import { is2d } from "./viewmode.ts";
 import { OverworldView2d } from "./world/view2d.ts";
 
@@ -1192,6 +1193,8 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     this.overworld.serviceLink();
     const top = this.stack[this.stack.length - 1];
     top?.update();
+    // INFINITE MONEY (extras.ts): held at the cart's ceiling while it is on
+    holdMoney(this.save as never);
     this.advancePlayTime();
     const t1 = p ? p.now() : 0;
     this.scene.emit(this);
@@ -1419,7 +1422,8 @@ export class VoxelmonGame implements OverworldShell, SceneView {
    * evos_moves.asm EvolveMon -> LearnMoveFromLevelUp predef).
    */
   runEvolutions(leveledUp: ReadonlySet<PartyMon> | null | undefined): void {
-    const pending = checkParty(this.data, this.save.party, leveledUp);
+    // TRADE EVO LV. 40 (extras.ts) adds the trade evolutions at level 40
+    const pending = checkParty(this.data, this.save.party, leveledUp, { tradeLevel: tradeEvoLevel(this.save as never) });
     if (pending.length === 0) return;
     const step = (i: number): void => {
       const row = pending[i];
@@ -2650,6 +2654,10 @@ export class VoxelmonGame implements OverworldShell, SceneView {
    * that cycler had no way to pick a destination, which is why it went.
    */
   cycleGearView(dir: 1 | -1): void {
+    // On the OPTION screen the shoulder buttons turn its pages
+    // (SETTINGS / ENHANCEMENTS) instead.
+    const top = this.stack[this.stack.length - 1] as { kind?: string; turnPage?: (d: 1 | -1) => void } | undefined;
+    if (top?.kind === "options" && top.turnPage) { top.turnPage(dir); return; }
     this.setGearView(gearViewStep(this as never, dir));
   }
 

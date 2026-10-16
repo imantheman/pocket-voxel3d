@@ -7,6 +7,7 @@ import { expForLevel } from "../rules/growth.ts";
 import type { PartyMon } from "../battle/mon.ts";
 import { ESCAPE_ROPE_TILESETS } from "../rules/items.ts";
 import { isOutside } from "../world/map.ts";
+import { hmWithoutMove } from "../extras.ts";
 
 interface PartyGame {
   input: any;
@@ -61,6 +62,9 @@ export function partyIconCell(i: number): { x: number; y: number; w: number; h: 
  * .outOfBattleMovePointers, PartyMenu.lua's HM dispatch) — the HMs go to
  * world/script.ts's use_* verbs; SOFTBOILED is handled here. */
 const FIELD_MOVES = ["CUT", "FLY", "SURF", "STRENGTH", "FLASH", "DIG", "TELEPORT", "SOFTBOILED"] as const;
+
+/** The submenu's box grows up from row 17, two rows an entry: eight fill it. */
+const SUBMENU_MAX = 8;
 
 export class PartyState implements GameState {
   readonly kind = "party";
@@ -148,6 +152,13 @@ export class PartyState implements GameState {
     const knows = (id: string) => mon?.moves?.some((m) => m.id === id) ?? false;
     const items = ["STATS", "SWITCH"];
     for (const id of FIELD_MOVES) if (knows(id) && this.fieldMoveOffered(id)) items.push(id);
+    // HMS WITHOUT MOVE (extras.ts): the HMs the bag and the badges allow,
+    // on every mon's list, as far as the box has room (eight rows fill the
+    // screen; the gear's TOOLS app offers them all whatever the list holds)
+    for (const id of FIELD_MOVES) {
+      if (items.length >= SUBMENU_MAX - 1) break;
+      if (!items.includes(id) && hmWithoutMove(this.game.save, id)) items.push(id);
+    }
     items.push("CANCEL");
     return items;
   }

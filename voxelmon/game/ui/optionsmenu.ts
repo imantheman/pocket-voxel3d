@@ -15,11 +15,18 @@
 //
 // The settings live in save.options under gen1recomp's own key names
 // (textSpeed, animations), so a save moves between the two builds intact.
+//
+// Two pages, turned with L/R (game.ts cycleGearView) or SELECT: SETTINGS,
+// the rows above plus CHEATS (which shows the gear's CHEATS app), and
+// ENHANCEMENTS (../extras.ts). The words are ui/extras_layout.ts's.
 import type { GameState } from "../game.ts";
 import { TEXT_SPEEDS, TEXT_SPEED_DEFAULT } from "../world/textbox.ts";
 import { TILT_SHIFTS, tiltShiftLevel } from "../tiltshift.ts";
 import { SCREENS_2D, VIEW_MODES, ZOOMS_2D, screen2dIndex, viewIndex, zoom2dIndex } from "../viewmode.ts";
 import { CAMERA_SPEEDS } from "../cameraspeed.ts";
+import {
+  CHEATS_ROW, ENHANCEMENT_ROWS, OPTION_PAGES, SPEED_ROW, SPEED_ROW_READY, type ExtrasRowDef,
+} from "./extras_layout.ts";
 
 export interface OptionsRow {
   label: string;
@@ -36,6 +43,9 @@ export interface OptionsView {
   /** The first item on screen (rows, then CANCEL) and how many fit. */
   first: number;
   visible: number;
+  /** The page shown (ui/extras_layout.ts OPTION_PAGES) and every page's name. */
+  page: number;
+  pages: readonly string[];
 }
 
 /**
@@ -66,6 +76,8 @@ interface OptionsSave {
     battleView?: string;
     eventPokemon?: boolean;
     devMenu?: boolean;
+    cheats?: boolean;
+    [extra: string]: unknown;
   };
 }
 
@@ -73,6 +85,21 @@ export class OptionsMenuState implements GameState {
   readonly kind = "options";
   private index = 0;
   private first = 0;
+  /** OPTION_PAGES index: SETTINGS, ENHANCEMENTS. */
+  private page = 0;
+
+  /** L/R (game.ts cycleGearView) or SELECT: the next page, cursor to its top. */
+  turnPage(dir: 1 | -1): void {
+    const n = OPTION_PAGES.length;
+    this.page = (this.page + dir + n) % n;
+    this.index = 0;
+    this.first = 0;
+  }
+
+  /** The ENHANCEMENTS rows on show: SPEED once its setter is merged. */
+  private enhancementDefs(): ExtrasRowDef[] {
+    return [...(SPEED_ROW_READY ? [SPEED_ROW] : []), ...ENHANCEMENT_ROWS];
+  }
 
   constructor(private game: { input: any; pop(): void; save: OptionsSave }) {}
 
@@ -93,6 +120,24 @@ export class OptionsMenuState implements GameState {
   }
 
   private rows(): OptionsRow[] {
+    if (this.page === 1) {
+      // ENHANCEMENTS (extras.ts): OFF / ON toggles, OFF unless set
+      return this.enhancementDefs().map((d) => ({
+        label: d.label,
+        choices: [...d.choices],
+        index: d.key === "speed" ? 0 : this.opts()[d.key] === true ? 1 : 0,
+      }));
+    }
+    return [...this.settingsRows(), {
+      // The gear's CHEATS app (ui/gear/apps/cheats.ts) shows while this is
+      // ON. OFF hides the app; the cheats keep their settings.
+      label: CHEATS_ROW.label,
+      choices: [...CHEATS_ROW.choices],
+      index: this.opts().cheats === true ? 1 : 0,
+    }];
+  }
+
+  private settingsRows(): OptionsRow[] {
     return [
       {
         label: "TEXT SPEED",
@@ -181,6 +226,13 @@ export class OptionsMenuState implements GameState {
     const r = rows[row];
     if (!r) return;
     const at = Math.max(0, Math.min(r.choices.length - 1, to));
+    if (this.page === 1) {
+      const d = this.enhancementDefs()[row]!;
+      // SPEED's setter arrives with the game-speed work (extras_layout.ts)
+      if (d.key !== "speed") this.opts()[d.key] = at === 1;
+      return;
+    }
+    if (row === rows.length - 1) { this.opts().cheats = at === 1; return; }
     if (row === 0) this.opts().textSpeed = TEXT_SPEEDS[at]!.delay;
     else if (row === 1) this.opts().animations = at === 0;
     else if (row === 2) this.opts().battleStyle = at === 1 ? "set" : "shift";
@@ -198,6 +250,8 @@ export class OptionsMenuState implements GameState {
 
   update(): void {
     const p = this.game.input.pressed;
+    // SELECT turns the page too, for a host without shoulder buttons
+    if (p.select) this.turnPage(1);
     const rows = this.rows();
     const n = rows.length + 1; // + CANCEL
     if (p.up) this.index = (this.index + n - 1) % n;
@@ -222,6 +276,9 @@ export class OptionsMenuState implements GameState {
   }
 
   view(): OptionsView {
-    return { rows: this.rows(), index: this.index, first: this.first, visible: OPTIONS_VISIBLE };
+    return {
+      rows: this.rows(), index: this.index, first: this.first, visible: OPTIONS_VISIBLE,
+      page: this.page, pages: OPTION_PAGES,
+    };
   }
 }

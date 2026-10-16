@@ -1797,17 +1797,30 @@ export class Scene {
     if (op) {
       const first: number = op.first ?? 0;
       const visible: number = op.visible ?? op.rows.length + 1;
-      const sig = `o${op.index},${first},${op.rows.map((r: any) => r.index).join(",")}`;
+      const page: number = op.page ?? 0;
+      const pages: readonly string[] = op.pages ?? [];
+      const sig = `o${page},${op.index},${first},${op.rows.map((r: any) => r.index).join(",")}`;
       if (sig !== this.menuSig) {
         this.menuSig = sig;
         this.uiOwner = null;
         host.uiClear();
         host.uiFill(0, 0, 20, 18, SPACE);
+        // The page tabs (ui/extras_layout.ts): the page's name between the
+        // L/R arrows on the top line, a rule under it, the rows below.
+        let top = 1;
+        if (pages.length > 1) {
+          const name = String(pages[page] ?? "");
+          host.uiTile(1, 0, UI_TILE.arrowLeft);
+          host.uiTile(18, 0, ARROW_CURSOR);
+          this.stamp(host, Math.floor((20 - name.length) / 2), 0, name);
+          host.uiFill(0, 1, 20, 1, BORDER_H);
+          top = 2;
+        }
         // Items are the rows and then CANCEL; only the window from `first`
         // is drawn, four lines each, so the screen scrolls with the cursor.
         for (let k = 0; k < visible; k++) {
           const i = first + k;
-          const labelY = 1 + k * 4;
+          const labelY = top + k * 4;
           if (i === op.rows.length) {
             this.stamp(host, 2, labelY, "CANCEL");
             if (op.index === i) host.uiTile(1, labelY, ARROW_CURSOR);
