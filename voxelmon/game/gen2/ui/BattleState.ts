@@ -4538,14 +4538,26 @@ export class BattleState {
    * recording pictures that never come back cost more than drawing them.
    */
   hudBlock(side: string, mon: any, draw: () => void): void {
-    const moving = (this.hpAnim && this.hpAnim.side === side) || (side === "player" && this.expAnim);
-    if (moving) {
-      // what cachedBlock does with a key it has not seen
-      G.push();
-      try {
-        draw();
-      } finally {
-        G.pop();
+    const hpMoving = !!(this.hpAnim && this.hpAnim.side === side);
+    const expMoving = side === "player" && !!this.expAnim;
+    if (hpMoving || expMoving) {
+      // The HUD in its three parts, in its own order (hudPart): the one
+      // moving drawn straight (every step a new picture), the others --
+      // the name and level, the frame -- replayed, each a block of its own.
+      const common = this.hudCommonKey();
+      for (let part = 0; part < 3; part++) {
+        const draws = () => (side === "enemy" ? this.drawEnemyHudPart(mon, part) : this.drawPlayerHudPart(mon, part));
+        if ((part === 1 && hpMoving) || (part === 2 && expMoving)) {
+          // what cachedBlock does with a key it has not seen
+          G.push();
+          try {
+            draws();
+          } finally {
+            G.pop();
+          }
+        } else {
+          cachedBlock(this.hudOwner(`${side}${part}`), `${this.hudPartKey(side, mon, part)}|${common}`, draws, true);
+        }
       }
       return;
     }
@@ -4554,14 +4566,61 @@ export class BattleState {
     cachedBlock(this.hudOwner(side), this.hudKey(side, mon), draw, true);
   }
 
-  /** A cachedBlock owner per side, so each side keeps its own few records. */
+  /** A cachedBlock owner per side (and per part), so each keeps its own few records. */
   hudOwner(side: string): object {
-    const owners = (this.hudOwners ??= { enemy: {}, player: {} });
-    return owners[side];
+    const owners: Record<string, object> = (this.hudOwners ??= {});
+    return (owners[side] ??= {});
   }
 
-  // drawEnemyHud's cells (Lua: BattleState.lua:4203).
+  /** What every HUD part's cells come out in: palette, frame and font state. */
+  hudCommonKey(): string {
+    return `${this.hud.available() ? 1 : 0}|${GbcPalette.stateKey()}|${Font.frameIndex()}|${Font.battleExtraActive() ? 1 : 0}`
+      + `|${keyOf(this.hud)}|${keyOf(this.palettes)}|${keyOf(Chrome.DEFAULT_BOX_PALETTE)}`;
+  }
+
+  /** What one HUD part reads (hudPart): 0 the name, level or tag and
+   *  gender; 1 the bar (and the enemy's caught mark, the player's digits);
+   *  2 the frame (and the player's exp bar). */
+  hudPartKey(side: string, mon: any, part: number): string {
+    if (part === 0) {
+      const level = side === "enemy" ? (mon.level ?? 1) : (this.shownLevel ?? mon.level ?? 1);
+      return `${side}0|${this.name(mon)}|${this.statusTag(mon, side) ?? "\u0000"}|${this.genderSymbol(mon) ?? ""}|${level}`;
+    }
+    if (part === 1) {
+      const maxHp = mon.maxHp || (mon.stats && mon.stats.hp);
+      const caught = side === "enemy" && truthy(this.battle) && truthy(this.battle.wild) && truthy(this.caughtMark);
+      return `${side}1|${this.hudHp(mon, side)}|${maxHp}|${this.hudHpPixels(mon, side)}|${caught ? 1 : 0}`;
+    }
+    return `${side}2|${side === "player" ? (this.shownExp ?? 0) : ""}`;
+  }
+
+  // drawEnemyHud's cells (Lua: BattleState.lua:4203), its three parts in order.
   drawEnemyHudCells(enemy: any): void {
+    this.drawEnemyHudPart(enemy, 0);
+    this.drawEnemyHudPart(enemy, 1);
+    this.drawEnemyHudPart(enemy, 2);
+  }
+
+  drawEnemyHudPart(enemy: any, part: number): void {
+    if (part === 1) {
+      // `ld a, [wBattleMode] / dec a / ret nz`, then CheckCaughtMon puts $5d at
+      // (1,1) (engine/battle/trainer_huds.asm:140-152).
+      if (truthy(this.battle) && truthy(this.battle.wild) && truthy(this.caughtMark)) {
+        this.hud.drawCaughtIcon(1, 1, this.hudHp(enemy, "enemy"),
+          truthy(enemy.maxHp) ? enemy.maxHp : (truthy(enemy.stats) ? enemy.stats.hp : undefined));
+      }
+      this.drawHpBar(enemy, "enemy", 2, 2);
+      return;
+    }
+    if (part === 2) {
+      // Stub on the LEFT (tile $6d), rule on the row under the bar.
+      if (this.hud.available()) {
+        this.hud.drawEnemyFrame();
+      } else {
+        this.drawFrame(1, 3, 10, false);
+      }
+      return;
+    }
     Chrome.printThrough(this.name(enemy), 1, 0, Chrome.DEFAULT_BOX_PALETTE as any);
     // PrintLevel writes <LV> at the coordinate it is given and then LEFT-aligns
     // the digits after it, so the glyph is pinned to column 6 whether the level
@@ -4575,19 +4634,6 @@ export class BattleState {
     const enemyGender = this.genderSymbol(enemy);
     if (truthy(enemyGender)) {
       Chrome.printThrough(enemyGender!, 9, 1, Chrome.DEFAULT_BOX_PALETTE as any);
-    }
-    // `ld a, [wBattleMode] / dec a / ret nz`, then CheckCaughtMon puts $5d at
-    // (1,1) (engine/battle/trainer_huds.asm:140-152).
-    if (truthy(this.battle) && truthy(this.battle.wild) && truthy(this.caughtMark)) {
-      this.hud.drawCaughtIcon(1, 1, this.hudHp(enemy, "enemy"),
-        truthy(enemy.maxHp) ? enemy.maxHp : (truthy(enemy.stats) ? enemy.stats.hp : undefined));
-    }
-    this.drawHpBar(enemy, "enemy", 2, 2);
-    // Stub on the LEFT (tile $6d), rule on the row under the bar.
-    if (this.hud.available()) {
-      this.hud.drawEnemyFrame();
-    } else {
-      this.drawFrame(1, 3, 10, false);
     }
   }
 
@@ -4619,8 +4665,39 @@ export class BattleState {
     Font.useBattleExtra(wasBattle);
   }
 
-  // drawPlayerHud's cells (Lua: BattleState.lua:4255).
+  // drawPlayerHud's cells (Lua: BattleState.lua:4255), its three parts in order.
   drawPlayerHudCells(player: any): void {
+    this.drawPlayerHudPart(player, 0);
+    this.drawPlayerHudPart(player, 1);
+    this.drawPlayerHudPart(player, 2);
+  }
+
+  drawPlayerHudPart(player: any, part: number): void {
+    if (part === 1) {
+      this.drawHpBar(player, "player", 10, 9);
+      const maxHp = (truthy(player.maxHp) ? player.maxHp
+        : (truthy(player.stats) ? player.stats.hp : undefined)) ?? 0;
+      Chrome.printRightThrough(format("%d/%d", this.hudHp(player, "player"), maxHp),
+        18, 10, Chrome.DEFAULT_BOX_PALETTE as any);
+      return;
+    }
+    if (part === 2) {
+      // Stub on the RIGHT (tile $73), border from (18,10) laid leftward, exp bar
+      // at (10,11).
+      // The chased fill, not the mon's: AnimateExpBar crawls it, and reading the
+      // mon straight put the bar at its post-kill value before the "gained N EXP.
+      // Points!" line was even on screen.
+      const expFraction = (this.shownExp ?? 0) / BattleHud.EXP_LENGTH_PX;
+      if (this.hud.available()) {
+        this.hud.drawPlayerFrame();
+        // Eight tiles at (10,11); FillInExpBar's own span.
+        this.hud.drawExpBar(expFraction, 10, 11);
+      } else {
+        this.drawFrame(9, 11, 10, true);
+        HpBar.drawExp(expPainter, this.palettes, expFraction, 10 * 8, 11 * 8 + 4);
+      }
+      return;
+    }
     Chrome.printThrough(this.name(player), 10, 7, Chrome.DEFAULT_BOX_PALETTE as any);
     // PrintPlayerHUD places the same status tag at (14,8) and skips the level
     // while it is up.
@@ -4630,25 +4707,6 @@ export class BattleState {
     const playerGender = this.genderSymbol(player);
     if (truthy(playerGender)) {
       Chrome.printThrough(playerGender!, 17, 8, Chrome.DEFAULT_BOX_PALETTE as any);
-    }
-    this.drawHpBar(player, "player", 10, 9);
-    const maxHp = (truthy(player.maxHp) ? player.maxHp
-      : (truthy(player.stats) ? player.stats.hp : undefined)) ?? 0;
-    Chrome.printRightThrough(format("%d/%d", this.hudHp(player, "player"), maxHp),
-      18, 10, Chrome.DEFAULT_BOX_PALETTE as any);
-    // Stub on the RIGHT (tile $73), border from (18,10) laid leftward, exp bar
-    // at (10,11).
-    // The chased fill, not the mon's: AnimateExpBar crawls it, and reading the
-    // mon straight put the bar at its post-kill value before the "gained N EXP.
-    // Points!" line was even on screen.
-    const expFraction = (this.shownExp ?? 0) / BattleHud.EXP_LENGTH_PX;
-    if (this.hud.available()) {
-      this.hud.drawPlayerFrame();
-      // Eight tiles at (10,11); FillInExpBar's own span.
-      this.hud.drawExpBar(expFraction, 10, 11);
-    } else {
-      this.drawFrame(9, 11, 10, true);
-      HpBar.drawExp(expPainter, this.palettes, expFraction, 10 * 8, 11 * 8 + 4);
     }
   }
 
