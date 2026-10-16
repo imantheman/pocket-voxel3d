@@ -6900,25 +6900,114 @@ function orbitDir(arena, rig, q8) {
 }
 function chooseView(map, arena, rig, preferQ8 = 0) {
   const preferStep = Math.round((preferQ8 % 256 + 256) % 256 * ORBIT_STEPS / 256) % ORBIT_STEPS;
+  const solid = solidGrid(map);
+  const memoKey = `${arena.x},${arena.y},${arena.shape},${arena.enemyCell},${arena.playerCell}|${rig}|${preferQ8}`;
+  const memo = solid !== null && typeof solid === "object" ? VIEW_MEMO.get(solid) : undefined;
+  const held = memo?.get(memoKey);
+  if (held)
+    return { orbit: held.orbit, pitch: held.pitch };
   let best = { orbit: Math.round(preferStep * 256 / ORBIT_STEPS), pitch: 0 };
   let bestScore = Number.POSITIVE_INFINITY;
-  const solid = solidGrid(map);
+  let bestIdx = Number.POSITIVE_INFINITY;
+  const blockerH = rig === 1 ? VIEW_BLOCKER_INDOOR_PX : VIEW_BLOCKER_OUTDOOR_PX;
+  for (const c of viewOrder(preferStep)) {
+    const { idx, q8, pitchQ8, base } = c;
+    const earlier = idx < bestIdx;
+    if (base > bestScore || base === bestScore && !earlier)
+      continue;
+    const eye = eyeOf(arena, rig, q8, pitchQ8);
+    const room = bestScore - base;
+    const enemy = cardHits(map, solid, arena.enemyCell, eye, blockerH, earlier ? Math.floor(room / 2) + 1 : room / 2);
+    if (earlier ? enemy * 2 > room : enemy * 2 >= room)
+      continue;
+    const left = room - enemy * 2;
+    const player = cardHits(map, solid, arena.playerCell, eye, blockerH, earlier ? Math.floor(left) + 1 : left);
+    let score = enemy * 2 + player + base;
+    if (!(score < bestScore || score === bestScore && earlier))
+      continue;
+    if (eyeInFill(map, arena, rig, q8, pitchQ8))
+      score += VIEW_EYE_IN_FILL_COST;
+    if (score < bestScore || score === bestScore && earlier) {
+      bestScore = score;
+      bestIdx = idx;
+      best = { orbit: q8, pitch: pitchQ8 };
+    }
+  }
+  if (solid !== null && typeof solid === "object") {
+    let m = VIEW_MEMO.get(solid);
+    if (!m) {
+      m = new Map;
+      VIEW_MEMO.set(solid, m);
+    }
+    m.set(memoKey, best);
+  }
+  return { orbit: best.orbit, pitch: best.pitch };
+}
+function viewOrder(preferStep) {
+  let order2 = VIEW_ORDERS.get(preferStep);
+  if (order2)
+    return order2;
+  order2 = [];
+  let idx = 0;
   for (const pitchQ8 of VIEW_PITCHES) {
     for (let step = 0;step < ORBIT_STEPS; step++) {
       const q8 = Math.round(step * 256 / ORBIT_STEPS);
-      const hits = sightlineHits(map, arena, rig, q8, pitchQ8, solid);
       const d = (step - preferStep + ORBIT_STEPS) % ORBIT_STEPS;
       const turn = Math.min(d, ORBIT_STEPS - d) / ORBIT_STEPS;
-      let score = hits.enemy * 2 + hits.player + turn * ORBIT_TURN_COST + pitchQ8 / 256 * VIEW_PITCH_COST;
-      if (eyeInFill(map, arena, rig, q8, pitchQ8))
-        score += VIEW_EYE_IN_FILL_COST;
-      if (score < bestScore) {
-        bestScore = score;
-        best = { orbit: q8, pitch: pitchQ8 };
-      }
+      order2.push({ idx: idx++, q8, pitchQ8, base: turn * ORBIT_TURN_COST + pitchQ8 / 256 * VIEW_PITCH_COST });
     }
   }
-  return best;
+  order2.sort((a, b) => a.base - b.base || a.idx - b.idx);
+  VIEW_ORDERS.set(preferStep, order2);
+  return order2;
+}
+var VIEW_ORDERS = new Map;
+var VIEW_MEMO = new WeakMap;
+function cardHits(map, solid, mon, at, blockerH, stopAt) {
+  const sw = map.widthCells;
+  const sh = map.heightCells;
+  const fast = solid !== null && solid.length === sw * sh;
+  const cx0 = mon[0] + 0.5;
+  const cy0 = mon[1] + 0.5;
+  const dx = at.x + 0.5 - cx0;
+  const dy = at.y + 0.5 - cy0;
+  const eyeH = at.h;
+  const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / VIEW_SAMPLE_CELLS));
+  const climbs = eyeH > VIEW_CARD_PX;
+  let last = NaN;
+  let hits = 0;
+  for (let i = 1;i <= steps; i++) {
+    const t = i / steps;
+    const qx = cx0 + dx * t;
+    const qy = cy0 + dy * t;
+    const x = Math.floor(qx);
+    const y = Math.floor(qy);
+    const key = x * 4096 + y;
+    if (key === last)
+      continue;
+    last = key;
+    const lineH = VIEW_CARD_PX + (eyeH - VIEW_CARD_PX) * t;
+    if (!(lineH < blockerH)) {
+      if (climbs)
+        break;
+      continue;
+    }
+    let blocked;
+    if (fast)
+      blocked = x >= 0 && y >= 0 && x < sw && y < sh && solid[y * sw + x] === 1;
+    else if (!map.inBounds(x, y))
+      blocked = false;
+    else if (solid)
+      blocked = solid[y * sw + x] === 1;
+    else
+      blocked = !map.isWalkableCell(x, y) && !map.isWaterCell(x, y);
+    if (blocked) {
+      hits++;
+      if (hits >= stopAt)
+        return hits;
+    }
+  }
+  return hits;
 }
 function eyeOf(arena, rig, orbitQ8, pitchQ8) {
   const [ex, ey] = arena.enemyCell;
@@ -6963,45 +7052,6 @@ function eyeInFill(map, arena, rig, orbitQ8, pitchQ8) {
   if (x >= 0 && !map.inBounds(x, ay) && past((d) => map.inBounds(x - d, ay)) <= fill && !conn("east"))
     return true;
   return false;
-}
-function sightlineHits(map, arena, rig, orbitQ8, pitchQ8, solid = solidGrid(map)) {
-  const blockerH = rig === 1 ? VIEW_BLOCKER_INDOOR_PX : VIEW_BLOCKER_OUTDOOR_PX;
-  const sw = map.widthCells;
-  const blocked = (cx, cy) => {
-    const x = Math.floor(cx);
-    const y = Math.floor(cy);
-    if (!map.inBounds(x, y))
-      return false;
-    if (solid)
-      return solid[y * sw + x] === 1;
-    return !map.isWalkableCell(x, y) && !map.isWaterCell(x, y);
-  };
-  const at = eyeOf(arena, rig, orbitQ8, pitchQ8);
-  const eye = [at.x, at.y];
-  const eyeH = at.h;
-  const count = (mon) => {
-    const cx0 = mon[0] + 0.5;
-    const cy0 = mon[1] + 0.5;
-    const dx = eye[0] + 0.5 - cx0;
-    const dy = eye[1] + 0.5 - cy0;
-    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / VIEW_SAMPLE_CELLS));
-    let last = NaN;
-    let hits = 0;
-    for (let i = 1;i <= steps; i++) {
-      const t = i / steps;
-      const qx = cx0 + dx * t;
-      const qy = cy0 + dy * t;
-      const key = Math.floor(qx) * 4096 + Math.floor(qy);
-      if (key === last)
-        continue;
-      last = key;
-      const lineH = VIEW_CARD_PX + (eyeH - VIEW_CARD_PX) * t;
-      if (lineH < blockerH && blocked(qx, qy))
-        hits++;
-    }
-    return hits;
-  };
-  return { enemy: count(arena.enemyCell), player: count(arena.playerCell) };
 }
 function solidGrid(map) {
   const solidOf = map.solidCells;
@@ -17248,6 +17298,7 @@ class SpeedStepper {
     return Math.max(1, n);
   }
 }
+var TURN_BUDGET = 25000;
 
 class SpeedGovernor {
   high;
@@ -17260,23 +17311,45 @@ class SpeedGovernor {
   acc = 0;
   logicAcc = 0;
   calm = 0;
+  wasBusy = false;
+  peakAcc = 0;
   constructor(high = 18000, low = 14000, onChange, share = 0.35) {
     this.high = high;
     this.low = low;
     this.onChange = onChange;
     this.share = share;
   }
-  sample(us, logicUs, shown, want) {
+  sample(us, logicUs, shown, want, busy, peakUs = 0) {
     this.acc += us;
     this.logicAcc += logicUs;
+    if (peakUs > this.peakAcc)
+      this.peakAcc = peakUs;
     if (!shown)
       return;
+    const peak = this.peakAcc;
+    this.peakAcc = 0;
     const clip = this.high * 2;
+    const raw = this.acc;
     const f = Math.min(this.acc, clip);
     const l = Math.min(this.logicAcc, f);
     this.acc = this.logicAcc = 0;
     this.ema = this.ema === 0 ? f : this.ema + (f - this.ema) / 16;
     this.logicEma = this.logicEma === 0 ? l : this.logicEma + (l - this.logicEma) / 16;
+    if (busy !== undefined && want > 1) {
+      if (busy) {
+        this.wasBusy = true;
+        this.calm = 0;
+        if (raw > TURN_BUDGET && l - Math.min(peak, l) > f * this.share)
+          this.set(this.cap > 1.5 ? 1.5 : 1);
+        return;
+      }
+      if (this.wasBusy) {
+        this.wasBusy = false;
+        this.calm = 0;
+        this.set(GAME_SPEED_MAX);
+        return;
+      }
+    }
     const logicHeavy = this.logicEma > this.ema * this.share;
     if (want <= 1) {
       this.set(GAME_SPEED_MAX);
