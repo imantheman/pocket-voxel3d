@@ -287,19 +287,30 @@ export class BattleHud {
     const pixels = Math.floor(fraction * BattleHud.EXP_LENGTH_PX);
     // The whole row wears the exp bar's palette, full and empty cells included.
     const colors = this.expColors(zero);
+    // drawTile's eight cells with the palette swap made once
+    const hpImg = this.image("hpBar");
+    const expImg = this.image("expBar");
+    G.setColor(1, 1, 1, 1);
+    const savedPal = G.palette;
+    const savedKeyed = G.keyed;
+    GbcPalette.use(colors ?? GbcPalette.DMG_SHADES);
+    const ox = G.tx;
+    const oy = G.ty;
     let remaining = pixels;
     for (let cell = BattleHud.EXP_CELLS - 1; cell >= 0; cell--) {
       const column = tx + cell;
       if (remaining >= 8) {
         remaining = remaining - 8;
-        this.drawTile("hpBar", FIRST_BATTLE_EXTRA, TILE_EXP_FULL, column, ty, colors);
+        this.putSheetTile(hpImg, FIRST_BATTLE_EXTRA, TILE_EXP_FULL, ox, oy, column, ty);
       } else if (remaining > 0) {
-        this.drawTile("expBar", this.gfx!.expBarFirstTile, EXP_PARTIAL_BASE + remaining, column, ty, colors);
+        this.putSheetTile(expImg, this.gfx!.expBarFirstTile, EXP_PARTIAL_BASE + remaining, ox, oy, column, ty);
         remaining = 0;
       } else {
-        this.drawTile("hpBar", FIRST_BATTLE_EXTRA, TILE_EXP_EMPTY, column, ty, colors);
+        this.putSheetTile(hpImg, FIRST_BATTLE_EXTRA, TILE_EXP_EMPTY, ox, oy, column, ty);
       }
     }
+    G.palette = savedPal;
+    G.keyed = savedKeyed;
     return true;
   }
 
@@ -331,15 +342,40 @@ export class BattleHud {
   // bottom-side tiles stepping by `step`, then the far corner.
   // Lua: BattleHud.lua:278
   placeBorder(tiles: BorderTiles, tx: number, ty: number, step: number): void {
-    this.drawTile(tiles.sideSheet, tiles.sideFirst, tiles.side, tx, ty);
-    this.drawTile(tiles.cornerSheet, tiles.cornerFirst, tiles.nearCorner, tx, ty + 1);
+    // drawTile's eleven cells with its palette swap made once (all in the
+    // default shades): the same cells, a third of the calls
+    const sideImg = this.image(tiles.sideSheet);
+    const cornerImg = this.image(tiles.cornerSheet);
+    const farImg = this.image(tiles.farSheet ?? tiles.cornerSheet);
+    if (!sideImg && !cornerImg && !farImg) return;
+    G.setColor(1, 1, 1, 1);
+    const savedPal = G.palette;
+    const savedKeyed = G.keyed;
+    GbcPalette.use(GbcPalette.DMG_SHADES);
+    const ox = G.tx;
+    const oy = G.ty;
+    this.putSheetTile(sideImg, tiles.sideFirst, tiles.side, ox, oy, tx, ty);
+    this.putSheetTile(cornerImg, tiles.cornerFirst, tiles.nearCorner, ox, oy, tx, ty + 1);
     let x = tx;
     for (let i = 1; i <= 8; i++) {
       x = x + step;
-      this.drawTile(tiles.cornerSheet, tiles.cornerFirst, tiles.bottom, x, ty + 1);
+      this.putSheetTile(cornerImg, tiles.cornerFirst, tiles.bottom, ox, oy, x, ty + 1);
     }
     x = x + step;
-    this.drawTile(tiles.farSheet ?? tiles.cornerSheet, tiles.farFirst ?? tiles.cornerFirst, tiles.farCorner, x, ty + 1);
+    this.putSheetTile(farImg, tiles.farFirst ?? tiles.cornerFirst, tiles.farCorner, ox, oy, x, ty + 1);
+    G.palette = savedPal;
+    G.keyed = savedKeyed;
+  }
+
+  /** drawTile's cell alone (unmirrored), in whatever palette is set; (ox, oy) the translation. */
+  private putSheetTile(image: LcdImage | undefined, firstTile: number | undefined, tile: number,
+                       ox: number, oy: number, tx: number, ty: number): void {
+    if (!image) return;
+    const index = tile - (firstTile as number);
+    if (!(index >= 0)) return;
+    if (image.ids && index < image.tw && image.th > 0) {
+      putTile(image.ids[index]!, Math.round(ox + tx * 8), Math.round(oy + ty * 8), false, false, image.obj);
+    }
   }
 
   // DrawEnemyHUDBorder: hlcoord 1, 2 stepping right, tiles $6d / $74 / $78 / $76.
