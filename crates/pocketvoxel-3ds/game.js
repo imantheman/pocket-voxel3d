@@ -17342,30 +17342,39 @@ class CellClassifier {
   get done() {
     return this.y >= this.map.heightCells - 1;
   }
+  x = 1;
   step(budget) {
     const map = this.map;
     const w = map.widthCells;
     let n = 0;
     while (!this.done && n < budget) {
-      while (this.fy <= this.y + 1 && this.fy < map.heightCells) {
+      if (this.fy <= this.y + 1 && this.fy < map.heightCells) {
         if (map.cellFlagsRow)
           map.cellFlagsRow(this.fy, this.flags);
         else
           flagsRowByMethods(map, this.fy, this.flags);
         this.fy++;
+        n += w;
+        continue;
       }
-      this.kindsRow(this.y);
-      n += w;
-      this.y++;
+      const x1 = Math.min(w - 1, this.x + (budget - n));
+      this.kindsSpan(this.y, this.x, x1);
+      n += x1 - this.x;
+      this.x = x1;
+      if (this.x >= w - 1) {
+        this.rowCounts(this.y);
+        this.y++;
+        this.x = 1;
+      }
     }
   }
-  kindsRow(y) {
+  kindsSpan(y, x0, x1) {
     const w = this.map.widthCells;
     const F = this.flags;
     const out = this.out;
     const cave = this.cave, land = this.land, water = this.water;
     const up = (y - 1) * w, at = y * w, dn = (y + 1) * w;
-    for (let x = 1;x < w - 1; x++) {
+    for (let x = x0;x < x1; x++) {
       const f = F[at + x];
       let k = CELL_NONE;
       const dry = (f & CF_WALK) !== 0 && (f & CF_WATER) === 0;
@@ -17396,6 +17405,11 @@ class CellClassifier {
       }
       out[at + x] = ok ? k : CELL_NONE;
     }
+  }
+  rowCounts(y) {
+    const w = this.map.widthCells;
+    const out = this.out;
+    const at = y * w;
     const pw = w + 1;
     const pl = this.landPrefix, pv = this.waterPrefix;
     let nl = 0, nw = 0;
@@ -17578,16 +17592,12 @@ var ENHANCEMENTS_APP = {
   about: ["SPEED, EXP, EVOLUTION, HMS", "AND VISIBLE WILD POKéMON."]
 };
 var ENHANCEMENT_GEAR = {
-  gameSpeed: {
-    label: "SPEED",
-    about: { "1X": "SPEED: THE GAME'S OWN PACE.", "2X": "SPEED: EVERYTHING TWICE AS FAST." }
-  },
-  expForCatching: { label: "EXP FOR CATCH", about: "EXP FOR CATCHING: A CATCH PAYS EXP." },
-  partyExpShare: { label: "PARTY SHARE", about: "PARTY EXP SHARE: EVERY MON EARNS." },
-  tradeEvoLv40: { label: "TRADE EVO LV40", about: "TRADE EVO LV.40: ALSO BY LEVEL 40." },
-  hmsWithoutMove: { label: "HMS W/O MOVE", about: "HMS WITHOUT MOVE: JUST HM AND BADGE." },
+  gameSpeed: { about: { "1X": "THE GAME'S OWN PACE.", "2X": "EVERYTHING TWICE AS FAST." } },
+  expForCatching: { about: "A CATCH PAYS EXP, AS A WIN DOES." },
+  partyExpShare: { about: "EVERY MON IN THE PARTY EARNS EXP." },
+  tradeEvoLv40: { about: "TRADE EVOLUTIONS ALSO BY LEVEL 40." },
+  hmsWithoutMove: { about: "THE HM AND ITS BADGE ARE ENOUGH." },
   visibleWild: {
-    label: "VISIBLE WILD",
     about: {
       OFF: "RANDOM BATTLES, AS THE GAME HAS THEM.",
       SOME: "NO RANDOM BATTLES. A FEW ROAM.",
@@ -17619,7 +17629,7 @@ var CHEAT_ROWS = [
     }
   },
   { key: "alwaysCatch", label: "ALWAYS CATCH", kind: "toggle", about: "ANY BALL CATCHES. TRAINERS BLOCK." },
-  { key: "instantVictory", label: "INSTANT WIN", kind: "toggle", about: "FIGHT KNOCKS OUT THE FOE AT ONCE." },
+  { key: "instantVictory", label: "INSTANT VICTORY", kind: "toggle", about: "FIGHT KNOCKS OUT THE FOE AT ONCE." },
   { key: "infiniteMoney", label: "INFINITE MONEY", kind: "toggle", about: "MONEY STAYS AT ¥999999." },
   { key: "dexFull", label: "DEX FULL", kind: "action", button: "FILL", about: "EVERY POKéMON SEEN AND OWNED." },
   { key: "giveItems", label: "GIVE ITEMS", kind: "action", button: "OPEN", about: "ANY ITEM INTO THE BAG OR THE PC." }
@@ -26412,6 +26422,37 @@ function stepper(ctx, label3, prev, next, y = ROWS - 1) {
   fill(ctx.host, 3, y, COLS - 6, 1);
   text(ctx.host, 3 + Math.max(0, Math.floor((COLS - 6 - width(label3)) / 2)), y, label3, "fill");
 }
+var LIST_LABEL_X = 1;
+var LIST_LAST_ROW = 11;
+var LIST_CAPTION_Y = 13;
+var LIST_PAGER_Y = 16;
+function listLayout(items) {
+  const slots2 = [];
+  let page = 0;
+  let y = 2;
+  for (const it of items) {
+    const inline = !it.below && LIST_LABEL_X + width(it.label) < it.x;
+    const h = inline ? 1 : 2;
+    if (y + h - 1 > LIST_LAST_ROW) {
+      page += 1;
+      y = 2;
+    }
+    slots2.push({ page, label: y, value: inline ? y : y + 1, x: it.x });
+    y += h + 1;
+  }
+  return { slots: slots2, pages: page + 1 };
+}
+function listPager(ctx, id, page, pages, go) {
+  const { host } = ctx;
+  const y = LIST_PAGER_Y;
+  const ink = (pid) => !host.uiRectBottom ? FILL_BIT : pressedId() === pid ? DARKTEXT_BIT : LIGHT_BIT;
+  pill(host, `${id}:prev`, 1, y, 3, "", () => go((page + pages - 1) % pages));
+  host.uiTileBottom(2, y, UI_TILE.arrowLeft | ink(`${id}:prev`));
+  pill(host, `${id}:next`, COLS - 4, y, 3, "", () => go((page + 1) % pages));
+  host.uiTileBottom(COLS - 3, y, ARROW_CURSOR | ink(`${id}:next`));
+  const label3 = `PAGE ${page + 1}/${pages}`;
+  text(host, Math.floor((COLS - width(label3)) / 2), y, label3);
+}
 function go(ctx, view) {
   ctx.game.setGearView?.(view);
 }
@@ -27375,10 +27416,10 @@ function drawStore(ctx) {
     if (ui.sel === i)
       cursor(host, 0, y);
     text(host, 1, y, a2.title);
-    region(`store:${a2.id}`, 0, y, 13, 1, () => {
+    region(`store:${a2.id}`, 0, y, 12, 1, () => {
       ui.sel = i;
     });
-    pill(host, `store:t:${a2.id}`, 14, y, 6, on ? "ON" : "OFF", () => {
+    pill(host, `store:t:${a2.id}`, 13, y, 6, on ? "ON" : "OFF", () => {
       ui.sel = i;
       gear.removed[a2.id] = on;
     }, !on);
@@ -27387,6 +27428,9 @@ function drawStore(ctx) {
   box(host, 0, 12, COLS, 6);
   wrap2(a.about.join(" "), 18).slice(0, 4).forEach((line, i) => text(host, 1, 13 + i, line));
 }
+var OPT_LABEL_X = 1;
+var OPT_PILL_X = 11;
+var OPT_PILL_W = 8;
 function drawOptions(ctx) {
   const { host, gear } = ctx;
   const levels = ["vanilla", "enhanced", "spoiler"];
@@ -27408,10 +27452,12 @@ function drawOptions(ctx) {
       gear.qwertz = !gear.qwertz;
     } }
   ];
+  let y = 2;
   rows.forEach((r, i) => {
-    const y = 2 + i * 2;
-    text(host, 0, y, r.label);
-    pill(host, `opt:${i}`, 12, y, 8, r.value(), r.step);
+    text(host, OPT_LABEL_X, y, r.label);
+    const inline = OPT_LABEL_X + width(r.label) < OPT_PILL_X;
+    pill(host, `opt:${i}`, OPT_PILL_X, inline ? y : y + 1, OPT_PILL_W, r.value(), r.step);
+    y += inline ? 2 : 3;
   });
   const say = {
     vanilla: ["ONLY WHAT THE GAME", "ITSELF TELLS YOU."],
@@ -28329,7 +28375,6 @@ var VALUE_END = 18;
 var TOGGLE_X = 15;
 var ACTION_X = 13;
 var WILD_X = 11;
-var FIRST_Y = 2;
 var GIVE_PAGE = 11;
 var PAGER_Y = 13;
 var TABS_Y = 15;
@@ -28362,34 +28407,41 @@ function valuePill(ctx, id, x, y, label3, tap, on = false) {
   right(host, y, label3, lit ? "dark" : "fill", VALUE_END);
   region(id, x, y, w, 1, tap);
 }
+function cheatRows() {
+  return listLayout(CHEAT_ROWS.map((r) => ({
+    label: r.label,
+    x: r.kind === "cycle" ? WILD_X : r.kind === "toggle" ? TOGGLE_X : ACTION_X,
+    below: r.kind === "cycle"
+  })));
+}
 function drawList3(ctx) {
   const { host, ui } = ctx;
   const o = opts(ctx);
-  let y = FIRST_Y;
+  const { slots: slots2, pages } = cheatRows();
+  const page = Math.min(Math.max(0, ui.page ?? 0), pages - 1);
   CHEAT_ROWS.forEach((r, i) => {
     const pick = () => {
       ui.sel = i;
       ui.msg = null;
     };
+    const at2 = slots2[i];
+    if (at2.page !== page)
+      return;
+    text(host, LIST_LABEL_X, at2.label, r.label);
     if (r.kind === "cycle") {
-      text(host, 0, y, r.label);
       const cur = wildMode(ctx.save);
-      valuePill(ctx, `cheat:${r.key}`, WILD_X, y + 1, WILD_LABELS[cur] ?? cur, () => {
+      valuePill(ctx, `cheat:${r.key}`, at2.x, at2.value, WILD_LABELS[cur] ?? cur, () => {
         pick();
         o.wildEncounters = WILD_MODES[(WILD_MODES.indexOf(cur) + 1) % WILD_MODES.length];
       });
-      y += 3;
-      return;
-    }
-    text(host, 0, y, r.label);
-    if (r.kind === "toggle") {
+    } else if (r.kind === "toggle") {
       const on = o[r.key] === true;
-      valuePill(ctx, `cheat:${r.key}`, TOGGLE_X, y, on ? "ON" : "OFF", () => {
+      valuePill(ctx, `cheat:${r.key}`, at2.x, at2.value, on ? "ON" : "OFF", () => {
         pick();
         o[r.key] = !on;
       }, !on);
     } else {
-      valuePill(ctx, `cheat:${r.key}`, ACTION_X, y, r.button ?? "", () => {
+      valuePill(ctx, `cheat:${r.key}`, at2.x, at2.value, r.button ?? "", () => {
         pick();
         if (r.key === "dexFull")
           ui.confirm = { kind: "dex" };
@@ -28398,10 +28450,18 @@ function drawList3(ctx) {
         }
       });
     }
-    y += 2;
   });
-  const said = ui.msg ?? aboutOf(ctx, CHEAT_ROWS[ui.sel ?? 0] ?? CHEAT_ROWS[0]);
-  wrap2(said, 18).slice(0, 2).forEach((line, i) => center(host, y + i, line));
+  let sel = ui.sel ?? 0;
+  if (slots2[sel]?.page !== page)
+    sel = slots2.findIndex((s) => s.page === page);
+  const said = ui.msg ?? aboutOf(ctx, CHEAT_ROWS[sel] ?? CHEAT_ROWS[0]);
+  wrap2(said, 18).slice(0, 2).forEach((line, i) => center(host, LIST_CAPTION_Y + i, line));
+  if (pages > 1)
+    listPager(ctx, "cheat:page", page, pages, (p) => {
+      ui.page = p;
+      ui.sel = undefined;
+      ui.msg = null;
+    });
 }
 function drawConfirm(ctx) {
   const { host, ui, data, save } = ctx;
@@ -28523,7 +28583,6 @@ function drawGiveItem(ctx, g) {
 var VALUE_END2 = 18;
 var TOGGLE_X2 = 15;
 var CYCLE_X = 11;
-var FIRST_Y2 = 2;
 function opts2(ctx) {
   return ctx.save.options ??= {};
 }
@@ -28531,7 +28590,7 @@ function cycles(d) {
   return d === VISIBLE_WILD_ROW;
 }
 function gearLabel(d) {
-  return ENHANCEMENT_GEAR[d.key]?.label ?? d.label;
+  return d.label;
 }
 function gearAbout(d, choice) {
   const a = ENHANCEMENT_GEAR[d.key]?.about;
@@ -28548,29 +28607,42 @@ function valuePill2(ctx, id, x, y, label3, tap, on = false) {
   right(host, y, label3, lit ? "dark" : "fill", VALUE_END2);
   region(id, x, y, w, 1, tap);
 }
+function enhancementRows() {
+  return listLayout(enhancementDefs().map((d) => ({
+    label: gearLabel(d),
+    x: cycles(d) ? CYCLE_X : TOGGLE_X2,
+    below: cycles(d)
+  })));
+}
 function drawEnhancements(ctx) {
   const { host, ui } = ctx;
   const o = opts2(ctx);
   const defs = enhancementDefs();
-  let y = FIRST_Y2;
+  const { slots: slots2, pages } = enhancementRows();
+  const page = Math.min(Math.max(0, ui.page ?? 0), pages - 1);
   defs.forEach((d2, i) => {
+    const r = slots2[i];
+    if (r.page !== page)
+      return;
     const at2 = enhancementIndex(o, d2);
     const next = () => {
       ui.sel = i;
       setEnhancement(o, d2, (at2 + 1) % d2.choices.length);
     };
-    text(host, 0, y, gearLabel(d2));
-    if (cycles(d2)) {
-      valuePill2(ctx, `enh:${d2.key}`, CYCLE_X, y + 1, d2.choices[at2] ?? "", next);
-      y += 3;
-      return;
-    }
-    valuePill2(ctx, `enh:${d2.key}`, TOGGLE_X2, y, d2.choices[at2] ?? "", next, at2 === 0);
-    y += 2;
+    text(host, LIST_LABEL_X, r.label, gearLabel(d2));
+    valuePill2(ctx, `enh:${d2.key}`, r.x, r.value, d2.choices[at2] ?? "", next, !cycles(d2) && at2 === 0);
   });
-  const d = defs[ui.sel ?? 0] ?? defs[0];
+  let sel = ui.sel ?? 0;
+  if (slots2[sel]?.page !== page)
+    sel = slots2.findIndex((s) => s.page === page);
+  const d = defs[sel] ?? defs[0];
   const said = gearAbout(d, d.choices[enhancementIndex(o, d)] ?? "");
-  wrap2(said, 18).slice(0, 2).forEach((line, k) => center(host, y + k, line));
+  wrap2(said, 18).slice(0, 2).forEach((line, k) => center(host, LIST_CAPTION_Y + k, line));
+  if (pages > 1)
+    listPager(ctx, "enh:page", page, pages, (p) => {
+      ui.page = p;
+      ui.sel = undefined;
+    });
 }
 function enhancementsKey(save) {
   const o = save?.options ?? {};
