@@ -61,6 +61,8 @@ import { Input } from "../shared/core/Input.ts";
 import { TypeChart } from "../shared/battle/TypeChart.ts";
 import { Cheats } from "../core/Cheats.ts";
 import { CheatsPanel } from "./CheatsPanel.ts";
+import { Font } from "../shared/render/Font.ts";
+import { GbcPalette } from "../shared/render/GbcPalette.ts";
 
 type LcdBankSpec = { base: number; page: number; count: number };
 
@@ -502,27 +504,40 @@ export class Companion {
     const view = game.stack.top() === st ? battleView(st) : "text";
     const enemy = st.activeMon?.("enemy");
     const player = st.activeMon?.("player");
-    if (enemy?.species) Chrome.print(`${monName(enemy)} <LV>${enemy.level ?? 1}`, 0, 0);
-    if (view === "moves") {
-      Chrome.printRight("BACK", COLS, 0);
-    }
-    // Everything but the text, recorded once and replayed while it stands
+    // Everything but the text -- the white page, the foe's name (and BACK)
+    // and the still part below -- recorded once and replayed while it stands
     // (screen.ts cachedBlock): the text types every other frame, and this
     // part redrawn with it cost the battle ~7 ms a frame.
     const e = enemy ?? {};
     const p = player ?? {};
+    const fonts = `${GbcPalette.stateKey()}|${Font.frameIndex()}|${Font.battleExtraActive() ? 1 : 0}`;
     const key = `bp|${view}|${st.menuIndex}|${st.moveIndex}|${view === "ask" ? askIndex(st) : 0}`
-      + `|${monName(e)}:${e.level}:${Math.round(st.shownHp?.enemy ?? e.hp ?? 0)}/${maxHpOf(e)}`
-      + `|${monName(p)}:${p.level}:${Math.round(st.shownHp?.player ?? p.hp ?? 0)}/${maxHpOf(p)}`
+      + `|${enemy?.species ? 1 : 0}${monName(e)}:${e.level}:${Math.round(st.shownHp?.enemy ?? e.hp ?? 0)}/${maxHpOf(e)}`
+      + `|${monName(p)}:${p.level}:${Math.round(st.shownHp?.player ?? p.hp ?? 0)}/${maxHpOf(p)}|${fonts}`
       + (view === "menu" ? `|${(st.menuLabels?.() ?? []).join(",")}` : "")
       + (view === "moves" ? `|${(st.playerMoves?.() ?? []).map((m: any) => `${String(m?.id)}${m?.pp}`).join(",")}` : "");
-    cachedBlock(this, key, () => this.drawBattleStill(game, st, view, enemy, player));
-    // the text, on the box's two rows as the top screen sets them
+    cachedBlock(this, key, () => {
+      G.setColor(1, 1, 1, 1);
+      G.rectangle("fill", 0, 0, 160, 144);
+      if (enemy?.species) Chrome.print(`${monName(enemy)} <LV>${enemy.level ?? 1}`, 0, 0);
+      if (view === "moves") {
+        Chrome.printRight("BACK", COLS, 0);
+      }
+      this.drawBattleStill(game, st, view, enemy, player);
+    });
+    // the text, on the box's two rows as the top screen sets them; a line
+    // already typed out is the same cells while the next one types, so each
+    // row is a block of its own too
     st.syncTyper?.();
     const lines: string[] = st.messageLines?.() ?? [];
-    for (let i = 0; i < Math.min(2, lines.length); i++) Chrome.print(lines[i]!, 1, 3 + i * 2);
+    for (let i = 0; i < Math.min(2, lines.length); i++) {
+      const line = lines[i]!;
+      cachedBlock(this.lineOwners[i]!, `${line}|${fonts}`, () => Chrome.print(line, 1, 3 + i * 2));
+    }
     if (st.messageArrowVisible?.()) Chrome.print("▼", 18, 6);
   }
+  /** cachedBlock owners for the battle text's two rows. */
+  private readonly lineOwners = [{}, {}];
 
   /** The battle panel's still part: the text's box, the boxes and lists below. */
   private drawBattleStill(game: any, st: any, view: BattleView, enemy: any, player: any): void {
@@ -731,10 +746,11 @@ export class Companion {
     resetDrawState();
     lcd.shown = true;
     G.setColor(1, 1, 1, 1);
-    G.rectangle("fill", 0, 0, 160, 144);
     const st = game?.world?.map ? battleOf(game) : null;
     const routed = st ? game.stagedBattleBelow?.() : null;
     lcd.tall = !!routed || (!!st && game.stack.top() === st && tallPhase(st));
+    // (the battle panel lays its white page inside its cached block)
+    if (!st || lcd.tall) G.rectangle("fill", 0, 0, 160, 144);
     if (routed) {
       this.drawScreens(routed.above);
       lcd.end();
