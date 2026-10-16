@@ -17,7 +17,7 @@
 // other flavour of the list goes directly to its caller, which is why the
 // submenu is opt-in through `opts.submenu`.
 
-import G, { type LcdImage } from "../platform/screen.ts";
+import G, { cachedBlock, keyOf, type LcdImage } from "../platform/screen.ts";
 import { tostring } from "../platform/lua.ts";
 import { FieldMoves } from "../world/FieldMoves.ts";
 import { HpBar, type HpBarPainter } from "../battle/HpBar.ts";
@@ -1036,6 +1036,99 @@ export class PartyMenu {
    *   cursor at column 0, PlacePartyMenuText box at (0,14).
    */
   drawPanel(): void {
+    const rows = this.panelRows();
+    // No battle-HUD sheet: the plain bar paints objects at its ragged ends,
+    // so everything is drawn as it comes, the icons among the rows.
+    if (!(this.hud && this.hud.available())) {
+      this.drawPanelCells(rows, true);
+      return;
+    }
+    // The list's cells -- the box, the names, the HP and its bars, the
+    // prompt or the submenu -- are the same cells frame after frame until
+    // something they show changes, and drawn glyph by glyph they were most
+    // of the screen's frame on the 3DS: recorded once and replayed after
+    // (screen.ts cachedBlock) under a key naming everything they read. The
+    // icons are objects (their palette is the OBJ layer's own), so drawing
+    // them after the cells instead of among them changes nothing on screen;
+    // they bob and flap, and are cached apart (drawIcons).
+    cachedBlock(this, this.panelKey(rows), () => this.drawPanelCells(rows, false));
+    this.drawIcons();
+    // (the blocks put the draw state back; the drawing left white set)
+    G.setColor(1, 1, 1, 1);
+  }
+
+  /** drawPanel's rows: each mon's shown HP and the strings rowFor makes of it. */
+  panelRows(): { hp: number | undefined; row: PartyRow }[] {
+    const statuses = this.game && this.game.data && this.game.data.gen2Statuses;
+    return this.party.map((mon, idx) => {
+      const hp = this.shownHpFor(idx + 1, mon);
+      return { hp, row: PartyMenu.rowFor(mon, hp, statuses) };
+    });
+  }
+
+  /**
+   * Everything drawPanelCells reads, as a string: the rows' text and bars,
+   * the cursor and the held row, what the box at the bottom shows, and the
+   * palette, frame and font state the glyphs come out in.
+   */
+  panelKey(rows: { hp: number | undefined; row: PartyRow }[]): string {
+    const textShown = !!(this.itemResult && this.itemResult.text && !this.itemResultClimbing());
+    let key = `${this.index}|${this.switchFrom ?? "-"}|${this.softboiledFrom ?? "-"}|${this.isCancel() ? 1 : 0}`
+      + `|${rows.length}|${this.tmhm ? 1 : 0}|${actionLabel("CANCEL")}`
+      + `|${textShown ? tostring(this.itemResult!.text) : "\u0000"}|${this.promptCleared ? 1 : 0}|${this.promptText()}`
+      + `|${GbcPalette.stateKey()}|${Font.frameIndex()}|${Font.battleExtraActive() ? 1 : 0}`
+      + `|${keyOf(this.palettes)}|${keyOf(this.hud)}|${keyOf(Chrome.DEFAULT_BOX_PALETTE)}`;
+    const menu = this.submenu;
+    if (menu) {
+      key += `|sub${menu.battle ? "b" : ""}${menu.index}`;
+      for (const item of menu.items) key += `\u0001${item.label}`;
+    }
+    for (let i = 0; i < rows.length; i++) {
+      const mon = this.party[i];
+      const { hp, row } = rows[i]!;
+      key += `\u0002${row.name}\u0001${row.hp ?? ""}\u0001${row.status ?? ""}\u0001${row.level ?? ""}`;
+      if (this.tmhm) key += `\u0001${this.tmhmAble(mon) ?? ""}`;
+      else if (row.hp) key += `\u0001${hp ?? mon.hp}\u0001${mon.maxHp || (mon.stats && mon.stats.hp)}`;
+    }
+    return key;
+  }
+
+  /** The prompt line under the list (item_effects.asm:2016). */
+  promptText(): string {
+    if (this.party.length === 0) return Strings.get(PROMPTS.none!);
+    return this.switchFrom
+      ? Strings.get(PROMPTS.moveTo!)
+      : this.softboiledFrom
+        ? Strings.get(PROMPTS.useItem!)
+        : this.promptIsBuiltin
+          ? Strings.get(this.prompt)
+          : this.prompt;
+  }
+
+  /**
+   * The six icons: the same objects until the cursor moves, the icons
+   * change or their two frames swap (with the selected icon's bob, every 16
+   * steps) -- recorded per cursor row and replayed (screen.ts cachedBlock).
+   */
+  drawIcons(): void {
+    const owners: object[] = (this.iconOwners ??= []);
+    const owner = (owners[this.index] ??= {});
+    let key = `${Math.floor(this.clock / ICON_FRAME_STEPS) % 2}|${this.iconBob(this.index)}`
+      + `|${keyOf(this.palettes)}|${GbcPalette.available() ? 1 : 0}|${GbcPalette.stateKey()}|${keyOf(this.heldMarkerImage())}`;
+    for (const mon of this.party) {
+      const [image] = this.iconFor(mon);
+      key += `|${keyOf(image)}:${PartyMenu.heldMarkerRow(mon) ?? "-"}`;
+    }
+    cachedBlock(owner, key, () => {
+      this.party.forEach((mon, idx) => {
+        const i = idx + 1;
+        this.drawIcon(mon, this.iconX(i), 4 + (i - 1) * 16 + this.iconBob(i));
+      });
+    });
+  }
+
+  /** drawPanel's drawing; `icons` puts each mon's icon among its row's cells. */
+  drawPanelCells(rows: { hp: number | undefined; row: PartyRow }[], icons: boolean): void {
     // LoadPartyMenuGFX starts with LoadFontsBattleExtra.
     const wasBattle = Font.useBattleExtra(true);
     Chrome.clear();
@@ -1050,9 +1143,8 @@ export class PartyMenu {
         // SwitchPartyMons parks '▷' on the held row.
         Chrome.cursor(0, nameY, true);
       }
-      this.drawIcon(mon, this.iconX(i), 4 + (i - 1) * 16 + this.iconBob(i));
-      const hp = this.shownHpFor(i, mon);
-      const row = PartyMenu.rowFor(mon, hp, this.game && this.game.data && this.game.data.gen2Statuses);
+      if (icons) this.drawIcon(mon, this.iconX(i), 4 + (i - 1) * 16 + this.iconBob(i));
+      const { hp, row } = rows[idx]!;
       Chrome.print(row.name, 3, nameY);
       if (this.tmhm) {
         const able = this.tmhmAble(mon);
