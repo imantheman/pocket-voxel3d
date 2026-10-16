@@ -77,7 +77,8 @@ describe("gen2 OPTION screen", () => {
     // Brian's top level is the groups plus the ungrouped rows (MENU ACCOUNT,
     // BACK); the groups whose rows are desktop-only are gone.
     const labels = menu.visible().map((r) => r.label);
-    expect(labels).toEqual(["SPEED", "VIDEO", "GRAPHICS", "CONTROLS", "AUDIO", "BATTLE OPTIONS", "EXTRAS", "MENU ACCOUNT", "BACK"]);
+    // (ENHANCEMENTS and CHEATS are this port's: tests/voxel-gen2-cheats.test.ts)
+    expect(labels).toEqual(["SPEED", "VIDEO", "GRAPHICS", "CONTROLS", "AUDIO", "BATTLE OPTIONS", "EXTRAS", "ENHANCEMENTS", "MENU ACCOUNT", "CHEATS", "BACK"]);
     game.draw(lcd);
     expect(holes(lcd)).toBe(0);
     await shot(lcd, "options");
@@ -102,11 +103,12 @@ describe("gen2 OPTION screen", () => {
     expect(game.stack.top()).toBe(menu);
     expect(done).toBe(0);
     // MENU ACCOUNT is on the top level: right flips it.
-    for (let i = 0; i < 7; i++) press(game, "down");
+    for (let i = 0; i < 8; i++) press(game, "down");
     expect(menu.row()!.label).toBe("MENU ACCOUNT");
     press(game, "right");
     expect(game.options.menuAccount).toBe(false);
-    // down to BACK; A there leaves through onDone.
+    // down past CHEATS to BACK; A there leaves through onDone.
+    press(game, "down");
     press(game, "down");
     expect(menu.row()!.label).toBe("BACK");
     press(game, "a");

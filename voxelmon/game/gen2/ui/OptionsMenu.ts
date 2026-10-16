@@ -93,6 +93,18 @@ function stepVolume(v: number | undefined, delta: number): number {
   return Math.max(0, Math.min(7, (v ?? 7) + delta));
 }
 
+// Not the Lua's: a port row that is OFF unless set to true (the shape of
+// EVENT POKéMON and DEV MENU), for the ENHANCEMENTS page and CHEATS.
+function onOffRow(label: string, key: string): OptionRow {
+  return {
+    label: Strings.source(label), key, port: true,
+    cycle: (options) => {
+      options[key] = options[key] !== true;
+    },
+    text: (options) => Strings.get(options[key] === true ? "ON" : "OFF"),
+  };
+}
+
 // Lua: OptionsMenu.lua:122 -- each row: the label, the option key it edits,
 // and the cycle of values with the exact strings the cart prints (trailing
 // spaces included -- they blank the longer previous value, e.g. "MID " over
@@ -283,6 +295,18 @@ const ROWS: OptionRow[] = [
     },
     text: (options) => Strings.get(options.devMenu === true ? "ON" : "OFF"),
   },
+  // Not the Lua's: the ENHANCEMENTS page (core/Cheats.ts has what each one
+  // does). OFF unless set.
+  // (SPEED: the game-speed branch's 1X/2X row goes here, at the top of the
+  // page, when the two are merged.)
+  onOffRow("EXP FOR CATCHING", "expForCatching"),
+  onOffRow("PARTY EXP SHARE", "partyExpShare"),
+  onOffRow("TRADE EVO LV.40", "tradeEvoLv40"),
+  onOffRow("HMS WITHOUT MOVE", "hmsWithoutMove"),
+  // Not the Lua's: CHEATS -- the CHEATS tab on the bottom screen
+  // (ui/Companion.ts). Turning it off hides the tab; the cheats set there
+  // stay as they are. OFF unless set.
+  onOffRow("CHEATS", "cheats"),
   // Lua: OptionsMenu.lua:428
   {
     label: Strings.source("LOGIC CLOCK"), key: "logicClock", port: true,
@@ -326,12 +350,18 @@ const GROUPS: Group[] = [
     members: ["battleScene", "battleStyle", "battleLayout", "battleHud", "battleFit", "battleBg"],
   },
   { id: "group.extras", label: Strings.source("EXTRAS"), members: ["zoom", "voidFill", "tilt", "eventPokemon", "devMenu"] },
+  // Not the Lua's: the ENHANCEMENTS page (the reference's tab of that name;
+  // its CHEATS live on the bottom screen here, behind the CHEATS row)
+  {
+    id: "group.enhancements", label: Strings.source("ENHANCEMENTS"),
+    members: ["speed2x", "expForCatching", "partyExpShare", "tradeEvoLv40", "hmsWithoutMove"],
+  },
 ];
 
 // Lua: OptionsMenu.lua:501
 const ORDER = [
   "group.speed", "group.video", "group.graphics", "group.controls", "group.audio",
-  "performance", "group.battle", "group.extras",
+  "performance", "group.battle", "group.extras", "group.enhancements",
 ];
 
 // Lua: OptionsMenu.lua:508 -- a group's page is this same screen driving the
