@@ -215,6 +215,22 @@ export class OverworldView2d {
         frames > 1 && (f === "right" || ((f === "down" || f === "up") && phase === 1 && npc.stepFlip)),
       );
     }
+    // VISIBLE WILD (wildmons.ts): the wild mons, drawn as the people are,
+    // after them (OAM priority: the people stay on top of them)
+    for (const m of ow.wild?.mons ?? []) {
+      const def = sprites?.[m.sprite];
+      const frames = def?.frames ?? 6;
+      const walker = def?.walker ?? frames > 1;
+      const phase = m.walkPhase();
+      const f: Dir = m.facing;
+      this.put(
+        m.sprite,
+        m.px,
+        m.py - m.lift,
+        frames <= 1 ? 0 : phase === 1 && walker ? WALK[f]! : STAND[f]!,
+        frames > 1 && (f === "right" || ((f === "down" || f === "up") && phase === 1 && m.stepFlip)),
+      );
+    }
 
     // VRAM: the terrain page, then each sheet in its slot -- a new array
     // only when a sheet joins, so the emitter can tell by identity

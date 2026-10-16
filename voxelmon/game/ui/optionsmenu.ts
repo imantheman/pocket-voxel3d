@@ -25,7 +25,7 @@ import { TILT_SHIFTS, tiltShiftLevel } from "../tiltshift.ts";
 import { SCREENS_2D, VIEW_MODES, ZOOMS_2D, screen2dIndex, viewIndex, zoom2dIndex } from "../viewmode.ts";
 import { CAMERA_SPEEDS } from "../cameraspeed.ts";
 import {
-  CHEATS_ROW, ENHANCEMENT_ROWS, OPTION_PAGES, SPEED_ROW, SPEED_ROW_READY, type ExtrasRowDef,
+  CHEATS_ROW, OPTION_PAGES, enhancementDefs, enhancementIndex, setEnhancement, type ExtrasRowDef,
 } from "./extras_layout.ts";
 
 export interface OptionsRow {
@@ -60,7 +60,6 @@ export const OPTIONS_VISIBLE = 4;
 export { CAMERA_SPEED_DEFAULT_Q8, CAMERA_SPEEDS } from "../cameraspeed.ts";
 import { RUNNING_SHOES, runningShoesOn } from "../runshoes.ts";
 import { EVENT_POKEMON, eventPokemonOn } from "../eventmons.ts";
-import { GAME_SPEEDS, gameSpeedIndex, setGameSpeedIn } from "../gamespeed.ts";
 
 interface OptionsSave {
   options?: {
@@ -79,6 +78,7 @@ interface OptionsSave {
     devMenu?: boolean;
     cheats?: boolean;
     gameSpeed?: number;
+    visibleWild?: string;
     [extra: string]: unknown;
   };
 }
@@ -98,9 +98,10 @@ export class OptionsMenuState implements GameState {
     this.first = 0;
   }
 
-  /** The ENHANCEMENTS rows on show: SPEED (../gamespeed.ts), then the rest. */
+  /** The ENHANCEMENTS rows on show: SPEED (../gamespeed.ts), then the rest
+   *  -- the gear's ENHANCEMENTS app lists the same (extras_layout.ts). */
   private enhancementDefs(): ExtrasRowDef[] {
-    return [...(SPEED_ROW_READY ? [SPEED_ROW] : []), ...ENHANCEMENT_ROWS];
+    return enhancementDefs();
   }
 
   constructor(private game: { input: any; pop(): void; save: OptionsSave }) {}
@@ -124,11 +125,12 @@ export class OptionsMenuState implements GameState {
   private rows(): OptionsRow[] {
     if (this.page === 1) {
       // ENHANCEMENTS: SPEED's 1X / 2X (../gamespeed.ts, options.gameSpeed),
-      // then OFF / ON toggles (extras.ts), OFF unless set
+      // OFF / ON toggles (extras.ts), VISIBLE WILD's OFF / SOME / MANY;
+      // the first choice unless set
       return this.enhancementDefs().map((d) => ({
         label: d.label,
         choices: [...d.choices],
-        index: d === SPEED_ROW ? gameSpeedIndex(this.opts()) : this.opts()[d.key] === true ? 1 : 0,
+        index: enhancementIndex(this.opts(), d),
       }));
     }
     return [...this.settingsRows(), {
@@ -230,10 +232,9 @@ export class OptionsMenuState implements GameState {
     if (!r) return;
     const at = Math.max(0, Math.min(r.choices.length - 1, to));
     if (this.page === 1) {
-      const d = this.enhancementDefs()[row]!;
-      // SPEED: 1 or 2 (game.gameSpeed / setGameSpeed read and write the same key)
-      if (d === SPEED_ROW) setGameSpeedIn(this.opts(), GAME_SPEEDS[at]!.key);
-      else this.opts()[d.key] = at === 1;
+      // SPEED: 1 or 2 (game.gameSpeed / setGameSpeed read and write the
+      // same key); the gear's app writes through the same setEnhancement
+      setEnhancement(this.opts(), this.enhancementDefs()[row]!, at);
       return;
     }
     if (row === rows.length - 1) { this.opts().cheats = at === 1; return; }

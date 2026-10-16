@@ -2486,7 +2486,7 @@ describe("the town map", () => {
     expect(game.gearView).toBe("party");
     game.cycleGearView(-1);
     game.cycleGearView(-1); // wraps past HOME to the last app
-    expect(game.gearView).toBe("options");
+    expect(game.gearView).toBe("enhancements");
 
     // "◀ PARTY ▶" is 9 wide, centred in the 12 columns left of the clock:
     // the right arrow is column 9. A tap fires as the finger lifts.

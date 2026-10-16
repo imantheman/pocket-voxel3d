@@ -8298,6 +8298,83 @@ class GameMap {
     const grass = this.tileset.grassTile;
     return grass !== undefined && this.cellTile(cx, cy) === grass;
   }
+  isWholeCell(cx, cy, kind) {
+    if (!this.inBounds(cx, cy))
+      return false;
+    if (this.byCollision)
+      return kind === "water" ? this.isWaterCell(cx, cy) : this.isWalkableCell(cx, cy);
+    for (let dy = 0;dy < 2; dy++) {
+      for (let dx = 0;dx < 2; dx++) {
+        const t = this.tileAt(cx * 2 + dx, cy * 2 + dy);
+        const ok = kind === "water" ? this.waterTiles.has(t) : this.walkable.has(t) && !this.waterTiles.has(t);
+        if (!ok)
+          return false;
+      }
+    }
+    return true;
+  }
+  tileFlags;
+  cellFlagsRow(cy, out) {
+    const w = this.widthCells;
+    const o = cy * w;
+    if (this.byCollision) {
+      for (let cx = 0;cx < w; cx++) {
+        let f = 0;
+        if (this.isWalkableCell(cx, cy))
+          f |= 1 | 8;
+        if (this.isWaterCell(cx, cy))
+          f |= 2 | 16;
+        if (this.isGrassCell(cx, cy))
+          f |= 4;
+        if (this.warpAtCell(cx, cy) || this.isWarpTileCell(cx, cy))
+          f |= 32;
+        out[o + cx] = f;
+      }
+      return;
+    }
+    let tf = this.tileFlags;
+    if (!tf) {
+      tf = this.tileFlags = new Uint8Array(256);
+      for (const t of this.walkable)
+        tf[t & 255] |= 1;
+      for (const t of this.waterTiles)
+        tf[t & 255] |= 2;
+      const g = this.tileset.grassTile;
+      if (g !== undefined)
+        tf[g & 255] |= 4;
+      for (const t of this.doorTiles)
+        tf[t & 255] |= 32;
+      for (const t of this.warpTiles)
+        tf[t & 255] |= 32;
+    }
+    const bw = this.def.width;
+    const by = cy >> 1;
+    const ty0 = (cy & 1) * 2;
+    const tsBlocks = this.tileset.blocks;
+    for (let cx = 0;cx < w; cx++) {
+      const bx = cx >> 1;
+      const blockId = bx < bw && by < this.def.height ? this.def.blocks[by * bw + bx] : this.def.borderBlock;
+      const b = tsBlocks[blockId];
+      if (!b) {
+        out[o + cx] = 0;
+        continue;
+      }
+      const tx0 = (cx & 1) * 2;
+      const tl = tf[b[ty0 * 4 + tx0] & 255], tr = tf[b[ty0 * 4 + tx0 + 1] & 255];
+      const bl = tf[b[(ty0 + 1) * 4 + tx0] & 255], br = tf[b[(ty0 + 1) * 4 + tx0 + 1] & 255];
+      const i = o + cx;
+      let f = bl & (1 | 2 | 4 | 32);
+      if (this.cutAt.has(i) || this.openAt.has(i))
+        f |= 1;
+      if (tl & tr & bl & br & 1 && !((tl | tr | bl | br) & 2))
+        f |= 8;
+      if (tl & tr & bl & br & 2)
+        f |= 16;
+      if (this.warpAt.has(i))
+        f |= 32;
+      out[i] = f;
+    }
+  }
   isWaterCell(cx, cy) {
     if (this.byCollision)
       return isWater(this.cellCollision(cx, cy));
@@ -17230,6 +17307,282 @@ function stepHost(stepper, speed, hostCompose, tick) {
   return n;
 }
 
+// voxelmon/game/visiblewild.ts
+var VISIBLE_WILD_MODES = ["off", "some", "many"];
+function visibleWildMode(save) {
+  const v = save?.options?.visibleWild;
+  return VISIBLE_WILD_MODES.includes(v) ? v : "off";
+}
+var CELL_NONE = 0;
+var CELL_LAND = 1;
+var CELL_WATER = 2;
+function landTable(enc) {
+  const g = enc?.grass;
+  return g && g.rate > 0 && g.slots?.length ? g : null;
+}
+function waterTable(enc) {
+  const g = enc?.water;
+  return g && g.rate > 0 && g.slots?.length ? g : null;
+}
+function everyTileRolls(map, indoor) {
+  return !!indoor && map.def.index >= indoor.firstIndoorMap && map.def.tileset !== indoor.excludedTileset;
+}
+var CF_WALK = 1;
+var CF_WATER = 2;
+var CF_GRASS = 4;
+var CF_WHOLE = 8;
+var CF_WHOLE_WATER = 16;
+var CF_WARP = 32;
+function dryOf(g) {
+  return (g & CF_WALK) !== 0 && (g & CF_WATER) === 0;
+}
+function flagsRowByMethods(map, y, out) {
+  const w = map.widthCells;
+  for (let x = 0;x < w; x++) {
+    let f = 0;
+    if (map.isWalkableCell(x, y))
+      f |= CF_WALK;
+    if (map.isWaterCell(x, y))
+      f |= CF_WATER;
+    if (map.isGrassCell(x, y))
+      f |= CF_GRASS;
+    const whole = map.isWholeCell;
+    if (whole ? whole.call(map, x, y, "floor") : f & CF_WALK && !(f & CF_WATER))
+      f |= CF_WHOLE;
+    if (whole ? whole.call(map, x, y, "water") : f & CF_WATER)
+      f |= CF_WHOLE_WATER;
+    if (map.warpAtCell(x, y) || map.isWarpTileCell(x, y))
+      f |= CF_WARP;
+    out[y * w + x] = f;
+  }
+}
+
+class CellClassifier {
+  map;
+  out;
+  flags;
+  fy = 0;
+  y = 1;
+  land;
+  water;
+  cave;
+  constructor(map, enc, indoor) {
+    this.map = map;
+    this.out = new Uint8Array(map.widthCells * map.heightCells);
+    this.flags = new Uint8Array(map.widthCells * map.heightCells);
+    this.landPrefix = new Uint16Array((map.widthCells + 1) * map.heightCells);
+    this.waterPrefix = new Uint16Array((map.widthCells + 1) * map.heightCells);
+    this.land = landTable(enc) !== null;
+    this.water = waterTable(enc) !== null;
+    this.cave = this.land && everyTileRolls(map, indoor);
+    if (!this.land && !this.water)
+      this.y = map.heightCells;
+  }
+  get done() {
+    return this.y >= this.map.heightCells - 1;
+  }
+  x = 1;
+  step(budget) {
+    const map = this.map;
+    const w = map.widthCells;
+    let n = 0;
+    while (!this.done && n < budget) {
+      if (this.fy <= this.y + 1 && this.fy < map.heightCells) {
+        if (map.cellFlagsRow)
+          map.cellFlagsRow(this.fy, this.flags);
+        else
+          flagsRowByMethods(map, this.fy, this.flags);
+        this.fy++;
+        n += w;
+        continue;
+      }
+      const x1 = Math.min(w - 1, this.x + (budget - n));
+      this.kindsSpan(this.y, this.x, x1);
+      n += x1 - this.x;
+      this.x = x1;
+      if (this.x >= w - 1) {
+        this.rowCounts(this.y);
+        this.y++;
+        this.x = 1;
+      }
+    }
+  }
+  kindsSpan(y, x0, x1) {
+    const w = this.map.widthCells;
+    const F = this.flags;
+    const out = this.out;
+    const cave = this.cave, land = this.land, water = this.water;
+    const up = (y - 1) * w, at = y * w, dn = (y + 1) * w;
+    for (let x = x0;x < x1; x++) {
+      const f = F[at + x];
+      let k = CELL_NONE;
+      const dry = (f & CF_WALK) !== 0 && (f & CF_WATER) === 0;
+      if (water && f & CF_WATER)
+        k = CELL_WATER;
+      else if (land && dry && (cave || f & CF_GRASS))
+        k = CELL_LAND;
+      if (k === CELL_NONE) {
+        out[at + x] = 0;
+        continue;
+      }
+      const fu = F[up + x], fd = F[dn + x], fl = F[at + x - 1], fr = F[at + x + 1];
+      let ok = k === CELL_WATER ? (f & CF_WHOLE_WATER) !== 0 : (f & CF_WHOLE) !== 0;
+      if (ok && k === CELL_LAND && !cave) {
+        if (!(fu & CF_GRASS) || !dryOf(fd))
+          ok = false;
+      }
+      if (ok && (f | fu | fd | fl | fr) & CF_WARP)
+        ok = false;
+      if (ok) {
+        const wet = k === CELL_WATER;
+        const u = wet ? (fu & CF_WATER) !== 0 : dryOf(fu), d = wet ? (fd & CF_WATER) !== 0 : dryOf(fd);
+        const l = wet ? (fl & CF_WATER) !== 0 : dryOf(fl), r = wet ? (fr & CF_WATER) !== 0 : dryOf(fr);
+        if (u && d && !l && !r || l && r && !u && !d)
+          ok = false;
+        else if (+u + +d + +l + +r <= 1)
+          ok = false;
+      }
+      out[at + x] = ok ? k : CELL_NONE;
+    }
+  }
+  rowCounts(y) {
+    const w = this.map.widthCells;
+    const out = this.out;
+    const at = y * w;
+    const pw = w + 1;
+    const pl = this.landPrefix, pv = this.waterPrefix;
+    let nl = 0, nw = 0;
+    for (let x = 0;x < w; x++) {
+      pl[y * pw + x] = nl;
+      pv[y * pw + x] = nw;
+      const k = out[at + x];
+      if (k === CELL_LAND)
+        nl++;
+      else if (k === CELL_WATER)
+        nw++;
+    }
+    pl[y * pw + w] = nl;
+    pv[y * pw + w] = nw;
+  }
+  landPrefix;
+  waterPrefix;
+  countIn(kind, x0, x1, y0, y1) {
+    const pw = this.map.widthCells + 1;
+    const p = kind === CELL_WATER ? this.waterPrefix : this.landPrefix;
+    let n = 0;
+    for (let y = y0;y <= y1; y++)
+      n += p[y * pw + x1 + 1] - p[y * pw + x0];
+    return n;
+  }
+  nthIn(kind, r, x0, x1, y0, y1) {
+    const w = this.map.widthCells;
+    const pw = w + 1;
+    const p = kind === CELL_WATER ? this.waterPrefix : this.landPrefix;
+    for (let y = y0;y <= y1; y++) {
+      const n = p[y * pw + x1 + 1] - p[y * pw + x0];
+      if (r >= n) {
+        r -= n;
+        continue;
+      }
+      for (let x = x0;x <= x1; x++) {
+        if (this.out[y * w + x] === kind && r-- === 0)
+          return y * w + x;
+      }
+    }
+    return -1;
+  }
+}
+var WINDOW_X = 7;
+var WINDOW_Y = 6;
+var NEAR = 3;
+var FAR = 10;
+var MAX_WILD = 8;
+function baseCount(mode, cells) {
+  if (mode === "off" || cells <= 0)
+    return 0;
+  if (mode === "some")
+    return cells < 8 ? 1 : cells < 40 ? 2 : 3;
+  return cells < 8 ? 2 : cells < 24 ? 4 : cells < 60 ? 5 : 6;
+}
+function wildTarget(mode, cheat, cells, slots2 = MAX_WILD) {
+  if (cheat === "none")
+    return 0;
+  const base = baseCount(mode, cells);
+  if (base === 0)
+    return 0;
+  const scaled = cheat === "less" ? Math.max(1, Math.round(base / 2)) : cheat === "more" ? Math.round(base * 1.5) : base;
+  return Math.max(0, Math.min(scaled, MAX_WILD, slots2));
+}
+function pickSlot(table, rng) {
+  if (!table?.slots?.length)
+    return null;
+  const pick = rng.byte();
+  const thresholds = table.buckets ?? ENCOUNTER_BUCKETS;
+  for (let i = 0;i < thresholds.length; i++) {
+    if (pick < thresholds[i]) {
+      const s = table.slots[i];
+      return s ? { species: s.species, level: s.level } : null;
+    }
+  }
+  return null;
+}
+var MON_PARTY_ICONS = "GGGMMMWWWUUUUUUDDDQQDDSSFFMMMMMMMMFFQQFFMMGGGUUUUM" + "MMMMMMMQQMMMMMMMMMGGGWWMMMQQQMBBDDDWWMMHHMMMSMMWWB" + "BGGMMMMMMMQMFGMWWWWHHMUMMMUQWSWMQQQQMHHHHDMDDDSSSM" + "M";
+var ICON_SHEETS = {
+  M: "SPRITE_MONSTER",
+  B: "SPRITE_POKE_BALL",
+  H: "SPRITE_FOSSIL",
+  F: "SPRITE_FAIRY",
+  D: "SPRITE_BIRD",
+  W: "SPRITE_SEEL",
+  P: "SPRITE_PIKACHU",
+  U: "SPRITE_ICON_BUG",
+  G: "SPRITE_ICON_PLANT",
+  S: "SPRITE_ICON_SNAKE",
+  Q: "SPRITE_ICON_QUADRUPED"
+};
+var OWN_SHEETS = {
+  PIKACHU: "SPRITE_PIKACHU",
+  SANDSHREW: "SPRITE_SANDSHREW",
+  ODDISH: "SPRITE_ODDISH",
+  BULBASAUR: "SPRITE_BULBASAUR",
+  JIGGLYPUFF: "SPRITE_JIGGLYPUFF",
+  CLEFAIRY: "SPRITE_CLEFAIRY",
+  CHANSEY: "SPRITE_CHANSEY",
+  SEEL: "SPRITE_SEEL"
+};
+function hasSheet(data, id) {
+  const atlas = data.atlas?.sprites;
+  if (atlas) {
+    const page = atlas[id.replace(/^SPRITE_/, "").toLowerCase()];
+    return typeof page === "number" && page >= 0;
+  }
+  return !!data.sprites && id in data.sprites;
+}
+function iconFamily(data, species) {
+  const dex = data.pokemon?.[species]?.dex ?? 0;
+  let f = dex >= 1 && dex <= MON_PARTY_ICONS.length ? MON_PARTY_ICONS[dex - 1] : "M";
+  if ((dex === 25 || dex === 26) && data.sprites && "SPRITE_PIKACHU" in data.sprites)
+    f = "P";
+  return f;
+}
+function wildSprite(data, species) {
+  const own = OWN_SHEETS[species];
+  if (own && hasSheet(data, own))
+    return own;
+  const sheet = ICON_SHEETS[iconFamily(data, species)] ?? "SPRITE_MONSTER";
+  return hasSheet(data, sheet) ? sheet : "SPRITE_MONSTER";
+}
+var WILD_STEP_FRAMES = 24;
+function wanderDelay(rng) {
+  return randRange(rng, 50, 160);
+}
+function lifetime(rng) {
+  return randRange(rng, 1800, 3600);
+}
+function respawnDelay(rng) {
+  return randRange(rng, 60, 150);
+}
+
 // voxelmon/game/ui/extras_layout.ts
 var OPTION_PAGES = ["SETTINGS", "ENHANCEMENTS"];
 var ON_OFF = ["OFF", "ON"];
@@ -17240,12 +17593,57 @@ var SPEED_ROW = {
   choices: GAME_SPEEDS.map((s) => s.label)
 };
 var SPEED_ROW_READY = true;
+var VISIBLE_WILD_ROW = {
+  key: "visibleWild",
+  label: "VISIBLE WILD",
+  choices: ["OFF", "SOME", "MANY"],
+  values: VISIBLE_WILD_MODES
+};
 var ENHANCEMENT_ROWS = [
   { key: "expForCatching", label: "EXP FOR CATCHING", choices: ON_OFF },
   { key: "partyExpShare", label: "PARTY EXP SHARE", choices: ON_OFF },
   { key: "tradeEvoLv40", label: "TRADE EVO LV.40", choices: ON_OFF },
-  { key: "hmsWithoutMove", label: "HMS WITHOUT MOVE", choices: ON_OFF }
+  { key: "hmsWithoutMove", label: "HMS WITHOUT MOVE", choices: ON_OFF },
+  VISIBLE_WILD_ROW
 ];
+function enhancementDefs() {
+  return [...SPEED_ROW_READY ? [SPEED_ROW] : [], ...ENHANCEMENT_ROWS];
+}
+function enhancementIndex(opts, d) {
+  if (d === SPEED_ROW)
+    return gameSpeedIndex(opts);
+  if (d.values)
+    return Math.max(0, d.values.indexOf(opts[d.key]));
+  return opts[d.key] === true ? 1 : 0;
+}
+function setEnhancement(opts, d, at) {
+  const i = Math.max(0, Math.min(d.choices.length - 1, at));
+  if (d === SPEED_ROW)
+    setGameSpeedIn(opts, GAME_SPEEDS[i].key);
+  else if (d.values)
+    opts[d.key] = d.values[i];
+  else
+    opts[d.key] = i === 1;
+}
+var ENHANCEMENTS_APP = {
+  title: "ENHANCEMENTS",
+  short: "EXTRAS",
+  about: ["SPEED, EXP, EVOLUTION, HMS", "AND VISIBLE WILD POKéMON."]
+};
+var ENHANCEMENT_GEAR = {
+  gameSpeed: { about: { "1X": "THE GAME'S OWN PACE.", "2X": "EVERYTHING TWICE AS FAST." } },
+  expForCatching: { about: "A CATCH PAYS EXP, AS A WIN DOES." },
+  partyExpShare: { about: "EVERY MON IN THE PARTY EARNS EXP." },
+  tradeEvoLv40: { about: "TRADE EVOLUTIONS ALSO BY LEVEL 40." },
+  hmsWithoutMove: { about: "THE HM AND ITS BADGE ARE ENOUGH." },
+  visibleWild: {
+    about: {
+      OFF: "RANDOM BATTLES, AS THE GAME HAS THEM.",
+      SOME: "NO RANDOM BATTLES. A FEW ROAM.",
+      MANY: "NO RANDOM BATTLES. MANY ROAM."
+    }
+  }
+};
 var CHEATS_APP = {
   title: "CHEATS",
   short: "CHEATS",
@@ -17270,7 +17668,7 @@ var CHEAT_ROWS = [
     }
   },
   { key: "alwaysCatch", label: "ALWAYS CATCH", kind: "toggle", about: "ANY BALL CATCHES. TRAINERS BLOCK." },
-  { key: "instantVictory", label: "INSTANT WIN", kind: "toggle", about: "FIGHT KNOCKS OUT THE FOE AT ONCE." },
+  { key: "instantVictory", label: "INSTANT VICTORY", kind: "toggle", about: "FIGHT KNOCKS OUT THE FOE AT ONCE." },
   { key: "infiniteMoney", label: "INFINITE MONEY", kind: "toggle", about: "MONEY STAYS AT ¥999999." },
   { key: "dexFull", label: "DEX FULL", kind: "action", button: "FILL", about: "EVERY POKéMON SEEN AND OWNED." },
   { key: "giveItems", label: "GIVE ITEMS", kind: "action", button: "OPEN", about: "ANY ITEM INTO THE BAG OR THE PC." }
@@ -17413,6 +17811,13 @@ var APPS = [
     short: "OPTION",
     fixed: true,
     about: ["HOW MUCH HELP THE GEAR GIVES."]
+  },
+  {
+    id: "enhancements",
+    title: ENHANCEMENTS_APP.title,
+    short: ENHANCEMENTS_APP.short,
+    fixed: true,
+    about: [...ENHANCEMENTS_APP.about]
   },
   {
     id: "cheats",
@@ -17744,6 +18149,311 @@ function toolUnlocked(t, save) {
     return false;
   const badge = FIELD_BADGE[t.move];
   return badge === false || !!badge && (inv[badge] ?? 0) > 0;
+}
+
+// voxelmon/game/world/wildmons.ts
+var DIRS = ["up", "down", "left", "right"];
+
+class WildMon {
+  species;
+  level;
+  sprite;
+  kind;
+  cellX;
+  cellY;
+  px;
+  py;
+  facing;
+  moving = false;
+  progress = 0;
+  stepFlip = false;
+  targetX;
+  targetY;
+  surfing;
+  timer;
+  life;
+  clock;
+  constructor(species, level, sprite, kind, cx, cy, facing, timer, life, clock) {
+    this.species = species;
+    this.level = level;
+    this.sprite = sprite;
+    this.kind = kind;
+    this.cellX = cx;
+    this.cellY = cy;
+    this.px = cx * 16;
+    this.py = cy * 16;
+    this.facing = facing;
+    this.surfing = kind === CELL_WATER;
+    this.timer = timer;
+    this.life = life;
+    this.clock = clock;
+  }
+  walkPhase() {
+    if (!this.moving)
+      return 0;
+    const p = this.progress * 16 / WILD_STEP_FRAMES % 16;
+    return p >= 4 && p < 12 ? 1 : 0;
+  }
+  get lift() {
+    if (this.moving)
+      return Math.round(2 * Math.sin(Math.PI * this.progress / WILD_STEP_FRAMES));
+    return this.clock % 64 < 8 ? 1 : 0;
+  }
+  advance() {
+    this.clock = this.clock + 1 & 65535;
+    if (!this.moving)
+      return;
+    this.progress += 1;
+    const d = DELTA[this.facing];
+    const moved = Math.floor(this.progress * 16 / WILD_STEP_FRAMES);
+    this.px = this.cellX * 16 + d[0] * moved;
+    this.py = this.cellY * 16 + d[1] * moved;
+    if (this.progress >= WILD_STEP_FRAMES) {
+      this.cellX = this.targetX;
+      this.cellY = this.targetY;
+      this.targetX = this.targetY = undefined;
+      this.px = this.cellX * 16;
+      this.py = this.cellY * 16;
+      this.moving = false;
+      this.progress = 0;
+      this.stepFlip = !this.stepFlip;
+    }
+  }
+}
+var TOUCH_PX = 12;
+var CLASSIFY_CELLS = 32;
+var SPAWN_DRAWS = 12;
+
+class VisibleWild {
+  ow;
+  mons = [];
+  battles = 0;
+  lastBattle;
+  classifier = null;
+  cellsMap = null;
+  spawnTimer = 0;
+  filled = false;
+  rng;
+  constructor(ow, seed = 1364675652) {
+    this.ow = ow;
+    this.rng = seededRng(seed);
+  }
+  get save() {
+    return this.ow.shell.save;
+  }
+  suppressesRoll() {
+    return visibleWildMode(this.save) !== "off" && !this.ow.link;
+  }
+  active() {
+    return this.suppressesRoll() && wildMode(this.save) !== "none";
+  }
+  onMap() {
+    this.mons.length = 0;
+    this.classifier = null;
+    this.cellsMap = null;
+    this.forMap = this.ow.map ?? null;
+    this.filled = false;
+    this.spawnTimer = 0;
+  }
+  forMap = null;
+  classify() {
+    const map = this.ow.map;
+    if (!this.classifier || this.cellsMap !== map) {
+      const data = this.ow.shell.data;
+      const enc = data.encounters?.[map.id];
+      const indoor = data.field?.indoorEncounters;
+      this.classifier = new CellClassifier(map, enc, indoor);
+      this.cellsMap = map;
+    }
+    return this.classifier;
+  }
+  cellKinds() {
+    const c = this.classify();
+    c.step(Infinity);
+    return c.out;
+  }
+  monAt(cx, cy) {
+    return this.mons.find((m) => m.cellX === cx && m.cellY === cy || m.targetX === cx && m.targetY === cy);
+  }
+  update(frozen) {
+    if (!this.active()) {
+      if (this.mons.length)
+        this.mons.length = 0;
+      return false;
+    }
+    if (frozen)
+      return false;
+    const ow = this.ow;
+    const p = ow.player;
+    if (this.forMap !== ow.map)
+      this.onMap();
+    const cls = this.classify();
+    if (!cls.done)
+      cls.step(CLASSIFY_CELLS);
+    for (const m of this.mons) {
+      m.advance();
+      if (!m.moving && --m.timer <= 0)
+        this.wander(m);
+    }
+    for (const m of this.mons) {
+      if (Math.abs(m.px - p.px) < TOUCH_PX && Math.abs(m.py - p.py) < TOUCH_PX) {
+        this.battle(m);
+        return true;
+      }
+    }
+    for (let i = this.mons.length - 1;i >= 0; i--) {
+      const m = this.mons[i];
+      const far = Math.max(Math.abs(m.cellX - p.cellX), Math.abs(m.cellY - p.cellY));
+      m.life -= 1;
+      if (far > FAR || m.life <= 0 && far >= 4 && !m.moving)
+        this.mons.splice(i, 1);
+    }
+    if (!cls.done)
+      return false;
+    if (!this.filled) {
+      this.filled = true;
+      this.spawn(true);
+      this.spawnTimer = respawnDelay(this.rng);
+    } else if (--this.spawnTimer <= 0) {
+      this.spawnTimer = respawnDelay(this.rng);
+      this.spawn(false);
+    }
+    return false;
+  }
+  battle(m) {
+    const i = this.mons.indexOf(m);
+    if (i >= 0)
+      this.mons.splice(i, 1);
+    this.spawnTimer = Math.max(this.spawnTimer, 180);
+    this.battles += 1;
+    this.lastBattle = { species: m.species, level: m.level };
+    this.ow.shell.pushStubBattle(m.species, m.level);
+  }
+  tryTalk(cx, cy) {
+    if (!this.active() || this.mons.length === 0)
+      return false;
+    const m = this.monAt(cx, cy);
+    if (!m)
+      return false;
+    this.battle(m);
+    return true;
+  }
+  freeSlots() {
+    const npcs = this.ow.npcs;
+    let taken = 0;
+    for (let i = 0;i < npcs.length && i < ENTS_MAX - 1; i++)
+      if (!npcs[i].hidden)
+        taken += 1;
+    return ENTS_MAX - 1 - taken;
+  }
+  wander(m) {
+    const rng = this.rng;
+    m.timer = wanderDelay(rng);
+    const p = this.ow.player;
+    const dx = p.cellX - m.cellX;
+    const dy = p.cellY - m.cellY;
+    let dir;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) <= 4 && rng.int(4) === 0) {
+      dir = Math.abs(dx) > Math.abs(dy) ? dx > 0 ? "right" : "left" : dy > 0 ? "down" : "up";
+    } else {
+      dir = DIRS[rng.int(4)];
+    }
+    m.facing = dir;
+    if (rng.byte() < 96)
+      return;
+    const d = DELTA[dir];
+    const tx = m.cellX + d[0];
+    const ty = m.cellY + d[1];
+    const map = this.ow.map;
+    if (!map.inBounds(tx, ty) || this.classify().out[ty * map.widthCells + tx] !== m.kind)
+      return;
+    const ents = [];
+    for (const e of this.ow.entities)
+      if (e !== p)
+        ents.push(e);
+    for (const o of this.mons)
+      if (o !== m)
+        ents.push(o);
+    if (!canMove(map, ents, m, dir, this.ow.tilePairs).ok)
+      return;
+    m.targetX = tx;
+    m.targetY = ty;
+    m.moving = true;
+    m.progress = 0;
+  }
+  spawn(fill) {
+    const ow = this.ow;
+    const map = ow.map;
+    const data = ow.shell.data;
+    const enc = data.encounters?.[map.id];
+    const land = landTable(enc);
+    const water = waterTable(enc);
+    if (!land && !water)
+      return;
+    const cls = this.classify();
+    const p = ow.player;
+    const w = map.widthCells;
+    const surf = !!water && !!p.surfing;
+    const x0 = Math.max(1, p.cellX - WINDOW_X), x1 = Math.min(w - 2, p.cellX + WINDOW_X);
+    const y0 = Math.max(1, p.cellY - WINDOW_Y), y1 = Math.min(map.heightCells - 2, p.cellY + WINDOW_Y);
+    const nl = land ? cls.countIn(CELL_LAND, x0, x1, y0, y1) : 0;
+    const nw = surf ? cls.countIn(CELL_WATER, x0, x1, y0, y1) : 0;
+    const target2 = wildTarget(visibleWildMode(this.save), wildMode(this.save), nl + nw, this.freeSlots());
+    let want = Math.min(target2 - this.mons.length, fill ? target2 : 1);
+    const rng = this.rng;
+    while (want-- > 0) {
+      if (nl + nw === 0)
+        return;
+      let at = -1;
+      let water1 = false;
+      for (let t = 0;t < SPAWN_DRAWS && at < 0; t++) {
+        const r = rng.int(nl + nw);
+        water1 = r >= nl;
+        const i = water1 ? cls.nthIn(CELL_WATER, r - nl, x0, x1, y0, y1) : cls.nthIn(CELL_LAND, r, x0, x1, y0, y1);
+        if (i < 0)
+          continue;
+        const x2 = i % w, y = (i - x2) / w;
+        if (x2 - p.cellX < NEAR && p.cellX - x2 < NEAR && y - p.cellY < NEAR && p.cellY - y < NEAR)
+          continue;
+        if (this.taken(x2, y))
+          continue;
+        at = i;
+      }
+      if (at < 0)
+        return;
+      const slot = pickSlot(water1 ? water : land, rng);
+      if (!slot || repelled(ow.shell.save, slot.level))
+        continue;
+      const x = at % w;
+      this.mons.push(new WildMon(slot.species, slot.level, wildSprite(data, slot.species), water1 ? CELL_WATER : CELL_LAND, x, (at - x) / w, DIRS[rng.int(4)], wanderDelay(rng), lifetime(rng), rng.int(64)));
+    }
+  }
+  taken(x, y) {
+    const ents = this.ow.entities;
+    for (let k = 0;k < ents.length; k++) {
+      const e = ents[k];
+      if (e.hidden)
+        continue;
+      if (e.cellX === x && e.cellY === y || e.targetX === x && e.targetY === y)
+        return true;
+    }
+    const npcs = this.ow.npcs;
+    for (let k = 0;k < npcs.length; k++) {
+      const n = npcs[k];
+      if (n.hidden)
+        continue;
+      const dx = n.cellX - x, dy = n.cellY - y;
+      if (dx <= 1 && dx >= -1 && dy <= 1 && dy >= -1)
+        return true;
+    }
+    const mons = this.mons;
+    for (let k = 0;k < mons.length; k++) {
+      const m = mons[k];
+      if (m.cellX === x && m.cellY === y || m.targetX === x && m.targetY === y)
+        return true;
+    }
+    return false;
+  }
 }
 
 // voxelmon/game/ui/yellowintro.ts
@@ -18838,6 +19548,7 @@ class Overworld {
   carpets;
   encounterCount = 0;
   lastEncounter;
+  wild = new VisibleWild(this);
   constructor(shell) {
     this.shell = shell;
     const field = shell.data.field;
@@ -18917,6 +19628,7 @@ class Overworld {
       const toggles = this.save.objectToggles ??= {};
       (toggles[mapId] ??= {})[sleeper.object] = false;
     }
+    this.wild.onMap();
     this.npcs = [];
     for (const obj of def.objects ?? []) {
       if (this.objectVisible(obj)) {
@@ -18998,11 +19710,14 @@ class Overworld {
       this.player.update();
       return;
     }
+    const ents = this.wild.mons.length > 0 ? this.entities.concat(this.wild.mons) : this.entities;
     for (const npc of this.npcs) {
-      npc.update(this.map, this.entities, this.shell.npcRng, this.tilePairs);
+      npc.update(this.map, ents, this.shell.npcRng, this.tilePairs);
     }
     this.updateScriptMoves();
     let scripted = this.runner.isRunning() || this.scriptMoves.length > 0 || this.emote !== undefined || this.engaging;
+    if (this.wild.update(scripted || this.transitioning))
+      return;
     if (!scripted && !this.transitioning) {
       this.checkTrainerSight();
       scripted = this.runner.isRunning() || this.scriptMoves.length > 0 || this.emote !== undefined || this.engaging;
@@ -19337,6 +20052,8 @@ class Overworld {
     const p = this.player;
     const [fx, fy] = p.facingCell();
     if (this.tryLinkMachine(fx, fy))
+      return;
+    if (this.wild.tryTalk(fx, fy))
       return;
     let npc = this.npcAtCell(fx, fy);
     if (!npc && this.map.isCounterCell(fx, fy)) {
@@ -19999,7 +20716,7 @@ wore off.`);
     const encDef = this.shell.data.encounters[this.map.id];
     const indoor = this.shell.data.field?.indoorEncounters;
     let enc = null;
-    const mode = wildMode(this.save);
+    const mode = this.wild.suppressesRoll() ? "none" : wildMode(this.save);
     if (p.surfing && encDef?.water && this.map.isWaterCell(p.cellX, p.cellY)) {
       enc = roll({ grass: encDef.water }, this.shell.rng, undefined, mode);
     } else if (this.map.isGrassCell(p.cellX, p.cellY)) {
@@ -21626,6 +22343,27 @@ class Scene {
       if (mirror)
         flags |= ENT_FLAG.mirror;
       this.emitSlot(slot, this.sheetIndex(view, npc.def.sprite), frame2, npc.px * Q4, npc.py * Q4, npc.lift ?? 0, flags);
+    }
+    const wild = ow.wild?.mons;
+    if (wild && wild.length > 0) {
+      let w = 0;
+      for (let slot = 1;slot < ENTS_MAX && w < wild.length; slot++) {
+        const i = slot - 1;
+        if (i < npcs.length && !npcs[i].hidden)
+          continue;
+        const m = wild[w++];
+        const def = view.data.sprites?.[m.sprite];
+        const frames = def?.frames ?? 6;
+        const walker = def?.walker ?? frames > 1;
+        const nf = seenAs(m.facing);
+        const phase = m.walkPhase();
+        const frame2 = frames <= 1 ? 0 : phase === 1 && walker ? WALK[nf] : STAND[nf];
+        const mirror = frames > 1 && (nf === "right" || (nf === "down" || nf === "up") && phase === 1 && m.stepFlip);
+        let flags = ENT_FLAG.walker;
+        if (mirror)
+          flags |= ENT_FLAG.mirror;
+        this.emitSlot(slot, this.sheetIndex(view, m.sprite), frame2, m.px * Q4, m.py * Q4, m.lift, flags);
+      }
     }
     for (let slot = 0;slot < ENTS_MAX; slot++) {
       if (this.entSeen[slot] === 0 && this.entShown[slot] !== 0) {
@@ -24580,7 +25318,7 @@ class OptionsMenuState {
     this.first = 0;
   }
   enhancementDefs() {
-    return [...SPEED_ROW_READY ? [SPEED_ROW] : [], ...ENHANCEMENT_ROWS];
+    return enhancementDefs();
   }
   constructor(game) {
     this.game = game;
@@ -24603,7 +25341,7 @@ class OptionsMenuState {
       return this.enhancementDefs().map((d) => ({
         label: d.label,
         choices: [...d.choices],
-        index: d === SPEED_ROW ? gameSpeedIndex(this.opts()) : this.opts()[d.key] === true ? 1 : 0
+        index: enhancementIndex(this.opts(), d)
       }));
     }
     return [...this.settingsRows(), {
@@ -24688,11 +25426,7 @@ class OptionsMenuState {
       return;
     const at = Math.max(0, Math.min(r.choices.length - 1, to));
     if (this.page === 1) {
-      const d = this.enhancementDefs()[row];
-      if (d === SPEED_ROW)
-        setGameSpeedIn(this.opts(), GAME_SPEEDS[at].key);
-      else
-        this.opts()[d.key] = at === 1;
+      setEnhancement(this.opts(), this.enhancementDefs()[row], at);
       return;
     }
     if (row === rows.length - 1) {
@@ -25422,6 +26156,7 @@ var TILE_H = 240 / ROWS;
 var LIGHT_BIT = 32768;
 var FILL_BIT = 16384;
 var DARKTEXT_BIT = 8192;
+var HALF_BIT = 4096;
 var INK_BIT = { dark: DARKTEXT_BIT, light: LIGHT_BIT, fill: FILL_BIT };
 var targets = [];
 var pressed = null;
@@ -25540,15 +26275,38 @@ function rule(host, y, x0 = 0, w = COLS) {
 function cursor(host, x, y, ink = "dark") {
   host.uiTileBottom(x, y, ARROW_CURSOR | INK_BIT[ink]);
 }
-function pill(host, id, x, y, w, label3, tap, on = false) {
-  const lit = on !== (pressed === id);
-  if (lit) {
-    center(host, y, label3, "dark", x, w);
-  } else {
-    fill(host, x, y, w, 1);
-    center(host, y, label3, "fill", x, w);
+function textCenteredPx(host, centerPx, y, s, ink) {
+  const codes = encodeGlyphs(s);
+  const start = Math.round(centerPx - codes.length * TILE_W / 2);
+  const cell = Math.floor(start / TILE_W);
+  const half = start - cell * TILE_W >= TILE_W / 2 ? HALF_BIT : 0;
+  const bit = INK_BIT[ink] | half;
+  for (let i = 0;i < codes.length; i++) {
+    const cx = cell + i;
+    if (cx >= 0 && cx < COLS)
+      host.uiTileBottom(cx, y, codes[i] | bit);
   }
-  region(id, x, y, w, 1, tap);
+}
+function rowPx(y) {
+  return [Math.floor(y * TILE_H), Math.floor((y + 1) * TILE_H)];
+}
+function pill(host, id, x, y, w, label3, tap, on = false) {
+  pillPx(host, id, x * TILE_W, y, w * TILE_W, label3, tap, on);
+}
+function pillPx(host, id, xPx, y, wPx, label3, tap, on = false) {
+  const lit = on !== (pressed === id);
+  const [top, bot] = rowPx(y);
+  if (!host.uiRectBottom) {
+    const x = Math.round(xPx / TILE_W), w = Math.round(wPx / TILE_W);
+    if (!lit)
+      fill(host, x, y, w, 1);
+    center(host, y, label3, lit ? "dark" : "fill", x, w);
+  } else {
+    if (!lit)
+      host.uiRectBottom(Math.round(xPx), top, Math.round(wPx), bot - top, 3);
+    textCenteredPx(host, xPx + wPx / 2, y, label3, lit ? "dark" : "light");
+  }
+  regionPx(id, xPx, top, wPx, bot - top, tap);
 }
 function button(host, id, x, y, w, h, label3, tap, on = false) {
   const lit = on || pressed === id;
@@ -25658,19 +26416,21 @@ function header(ctx, title, opts = {}) {
   const { host } = ctx;
   const many = !!opts.arrows;
   const w = width(title) + (many ? 4 : 0);
-  const x = Math.max(0, Math.floor((CLOCK_COL - w) / 2));
+  const wide = w > CLOCK_COL && opts.aside === undefined;
+  const x = wide ? Math.max(1, Math.floor((COLS - w) / 2)) : Math.max(0, Math.floor((CLOCK_COL - w) / 2));
   if (many) {
     host.uiTileBottom(x, 0, UI_TILE.arrowLeft | LIGHT_BIT);
     host.uiTileBottom(x + w - 1, 0, ARROW_CURSOR | LIGHT_BIT);
     if (opts.onLeft)
       region("hdr:left", 0, 0, x + 1, 1, opts.onLeft);
+    const rightEnd = wide ? COLS : CLOCK_COL;
     if (opts.onRight)
-      region("hdr:right", x + w - 1, 0, Math.max(1, CLOCK_COL - (x + w - 1)), 1, opts.onRight);
+      region("hdr:right", x + w - 1, 0, Math.max(1, rightEnd - (x + w - 1)), 1, opts.onRight);
   }
   text(host, x + (many ? 2 : 0), 0, title, "light");
   if (opts.onTitle)
     region("hdr:title", x + (many ? 1 : 0), 0, width(title) + 2, 1, opts.onTitle);
-  const aside = opts.aside ?? clockStr(ctx.gear.clock24);
+  const aside = wide ? "" : opts.aside ?? clockStr(ctx.gear.clock24);
   if (aside)
     text(host, Math.max(0, COLS - width(aside) - 1), 0, aside, "light");
 }
@@ -25700,6 +26460,37 @@ function stepper(ctx, label3, prev, next, y = ROWS - 1) {
   ctx.host.uiTileBottom(COLS - 2, y, ARROW_CURSOR | FILL_BIT);
   fill(ctx.host, 3, y, COLS - 6, 1);
   text(ctx.host, 3 + Math.max(0, Math.floor((COLS - 6 - width(label3)) / 2)), y, label3, "fill");
+}
+var LIST_LABEL_X = 1;
+var LIST_LAST_ROW = 11;
+var LIST_CAPTION_Y = 13;
+var LIST_PAGER_Y = 16;
+function listLayout(items) {
+  const slots2 = [];
+  let page = 0;
+  let y = 2;
+  for (const it of items) {
+    const inline = !it.below && LIST_LABEL_X + width(it.label) < it.x;
+    const h = inline ? 1 : 2;
+    if (y + h - 1 > LIST_LAST_ROW) {
+      page += 1;
+      y = 2;
+    }
+    slots2.push({ page, label: y, value: inline ? y : y + 1, x: it.x });
+    y += h + 1;
+  }
+  return { slots: slots2, pages: page + 1 };
+}
+function listPager(ctx, id, page, pages, go) {
+  const { host } = ctx;
+  const y = LIST_PAGER_Y;
+  const ink = (pid) => !host.uiRectBottom ? FILL_BIT : pressedId() === pid ? DARKTEXT_BIT : LIGHT_BIT;
+  pill(host, `${id}:prev`, 1, y, 3, "", () => go((page + pages - 1) % pages));
+  host.uiTileBottom(2, y, UI_TILE.arrowLeft | ink(`${id}:prev`));
+  pill(host, `${id}:next`, COLS - 4, y, 3, "", () => go((page + 1) % pages));
+  host.uiTileBottom(COLS - 3, y, ARROW_CURSOR | ink(`${id}:next`));
+  const label3 = `PAGE ${page + 1}/${pages}`;
+  text(host, Math.floor((COLS - width(label3)) / 2), y, label3);
 }
 function go(ctx, view) {
   ctx.game.setGearView?.(view);
@@ -26623,20 +27414,23 @@ function drawHome(ctx) {
   }
   const apps = availableApps(game).filter((a) => a !== "home");
   apps.forEach((a, i) => {
-    const col = i % 3;
-    const row2 = Math.floor(i / 3);
-    let x = [0, 7, 14][col];
-    const w = 6;
-    const y = 9 + row2 * 2;
-    if (y > 17)
+    const pos = homePill(i, apps.length);
+    if (!pos)
       return;
-    if (y === 17) {
-      if (i !== apps.length - 1 || col !== 0)
-        return;
-      x = 7;
-    }
-    pill(host, `home:${a}`, x, y, w, appOf(a).short, () => go(ctx, a));
+    pillPx(host, `home:${a}`, pos.x, pos.y, HOME_PILL_PX, appOf(a).short, () => go(ctx, a));
   });
+}
+var HOME_PILL_PX = 96;
+var HOME_COLS_PX = [8, 112, 216];
+var HOME_LAST_ROW_PX = { 1: [112], 2: [56, 168] };
+function homePill(i, n) {
+  const row2 = Math.floor(i / 3);
+  const y = 9 + row2 * 2;
+  if (y > 17)
+    return null;
+  const inRow = Math.min(3, n - row2 * 3);
+  const xs = inRow < 3 ? HOME_LAST_ROW_PX[inRow] : HOME_COLS_PX;
+  return { x: xs[i % 3], y };
 }
 function drawSteps(ctx) {
   const { host, gear } = ctx;
@@ -26661,10 +27455,10 @@ function drawStore(ctx) {
     if (ui.sel === i)
       cursor(host, 0, y);
     text(host, 1, y, a2.title);
-    region(`store:${a2.id}`, 0, y, 13, 1, () => {
+    region(`store:${a2.id}`, 0, y, 12, 1, () => {
       ui.sel = i;
     });
-    pill(host, `store:t:${a2.id}`, 14, y, 6, on ? "ON" : "OFF", () => {
+    pill(host, `store:t:${a2.id}`, 13, y, 6, on ? "ON" : "OFF", () => {
       ui.sel = i;
       gear.removed[a2.id] = on;
     }, !on);
@@ -26673,6 +27467,9 @@ function drawStore(ctx) {
   box(host, 0, 12, COLS, 6);
   wrap2(a.about.join(" "), 18).slice(0, 4).forEach((line, i) => text(host, 1, 13 + i, line));
 }
+var OPT_LABEL_X = 1;
+var OPT_PILL_X = 11;
+var OPT_PILL_W = 8;
 function drawOptions(ctx) {
   const { host, gear } = ctx;
   const levels = ["vanilla", "enhanced", "spoiler"];
@@ -26694,10 +27491,12 @@ function drawOptions(ctx) {
       gear.qwertz = !gear.qwertz;
     } }
   ];
+  let y = 2;
   rows.forEach((r, i) => {
-    const y = 2 + i * 2;
-    text(host, 0, y, r.label);
-    pill(host, `opt:${i}`, 12, y, 8, r.value(), r.step);
+    text(host, OPT_LABEL_X, y, r.label);
+    const inline = OPT_LABEL_X + width(r.label) < OPT_PILL_X;
+    pill(host, `opt:${i}`, OPT_PILL_X, inline ? y : y + 1, OPT_PILL_W, r.value(), r.step);
+    y += inline ? 2 : 3;
   });
   const say = {
     vanilla: ["ONLY WHAT THE GAME", "ITSELF TELLS YOU."],
@@ -27615,7 +28414,6 @@ var VALUE_END = 18;
 var TOGGLE_X = 15;
 var ACTION_X = 13;
 var WILD_X = 11;
-var FIRST_Y = 2;
 var GIVE_PAGE = 11;
 var PAGER_Y = 13;
 var TABS_Y = 15;
@@ -27648,34 +28446,41 @@ function valuePill(ctx, id, x, y, label3, tap, on = false) {
   right(host, y, label3, lit ? "dark" : "fill", VALUE_END);
   region(id, x, y, w, 1, tap);
 }
+function cheatRows() {
+  return listLayout(CHEAT_ROWS.map((r) => ({
+    label: r.label,
+    x: r.kind === "cycle" ? WILD_X : r.kind === "toggle" ? TOGGLE_X : ACTION_X,
+    below: r.kind === "cycle"
+  })));
+}
 function drawList3(ctx) {
   const { host, ui } = ctx;
   const o = opts(ctx);
-  let y = FIRST_Y;
+  const { slots: slots2, pages } = cheatRows();
+  const page = Math.min(Math.max(0, ui.page ?? 0), pages - 1);
   CHEAT_ROWS.forEach((r, i) => {
     const pick = () => {
       ui.sel = i;
       ui.msg = null;
     };
+    const at2 = slots2[i];
+    if (at2.page !== page)
+      return;
+    text(host, LIST_LABEL_X, at2.label, r.label);
     if (r.kind === "cycle") {
-      text(host, 0, y, r.label);
       const cur = wildMode(ctx.save);
-      valuePill(ctx, `cheat:${r.key}`, WILD_X, y + 1, WILD_LABELS[cur] ?? cur, () => {
+      valuePill(ctx, `cheat:${r.key}`, at2.x, at2.value, WILD_LABELS[cur] ?? cur, () => {
         pick();
         o.wildEncounters = WILD_MODES[(WILD_MODES.indexOf(cur) + 1) % WILD_MODES.length];
       });
-      y += 3;
-      return;
-    }
-    text(host, 0, y, r.label);
-    if (r.kind === "toggle") {
+    } else if (r.kind === "toggle") {
       const on = o[r.key] === true;
-      valuePill(ctx, `cheat:${r.key}`, TOGGLE_X, y, on ? "ON" : "OFF", () => {
+      valuePill(ctx, `cheat:${r.key}`, at2.x, at2.value, on ? "ON" : "OFF", () => {
         pick();
         o[r.key] = !on;
       }, !on);
     } else {
-      valuePill(ctx, `cheat:${r.key}`, ACTION_X, y, r.button ?? "", () => {
+      valuePill(ctx, `cheat:${r.key}`, at2.x, at2.value, r.button ?? "", () => {
         pick();
         if (r.key === "dexFull")
           ui.confirm = { kind: "dex" };
@@ -27684,10 +28489,18 @@ function drawList3(ctx) {
         }
       });
     }
-    y += 2;
   });
-  const said = ui.msg ?? aboutOf(ctx, CHEAT_ROWS[ui.sel ?? 0] ?? CHEAT_ROWS[0]);
-  wrap2(said, 18).slice(0, 2).forEach((line, i) => center(host, y + i, line));
+  let sel = ui.sel ?? 0;
+  if (slots2[sel]?.page !== page)
+    sel = slots2.findIndex((s) => s.page === page);
+  const said = ui.msg ?? aboutOf(ctx, CHEAT_ROWS[sel] ?? CHEAT_ROWS[0]);
+  wrap2(said, 18).slice(0, 2).forEach((line, i) => center(host, LIST_CAPTION_Y + i, line));
+  if (pages > 1)
+    listPager(ctx, "cheat:page", page, pages, (p) => {
+      ui.page = p;
+      ui.sel = undefined;
+      ui.msg = null;
+    });
 }
 function drawConfirm(ctx) {
   const { host, ui, data, save } = ctx;
@@ -27804,6 +28617,76 @@ function drawGiveItem(ctx, g) {
     }
   });
 }
+
+// voxelmon/game/ui/gear/apps/enhancements.ts
+var VALUE_END2 = 18;
+var TOGGLE_X2 = 15;
+var CYCLE_X = 11;
+function opts2(ctx) {
+  return ctx.save.options ??= {};
+}
+function cycles(d) {
+  return d === VISIBLE_WILD_ROW;
+}
+function gearLabel(d) {
+  return d.label;
+}
+function gearAbout(d, choice) {
+  const a = ENHANCEMENT_GEAR[d.key]?.about;
+  if (!a)
+    return d.label;
+  return typeof a === "string" ? a : a[choice] ?? "";
+}
+function valuePill2(ctx, id, x, y, label3, tap, on = false) {
+  const { host } = ctx;
+  const w = VALUE_END2 - x + 1;
+  const lit = on !== (pressedId() === id);
+  if (!lit)
+    fill(host, x, y, w, 1);
+  right(host, y, label3, lit ? "dark" : "fill", VALUE_END2);
+  region(id, x, y, w, 1, tap);
+}
+function enhancementRows() {
+  return listLayout(enhancementDefs().map((d) => ({
+    label: gearLabel(d),
+    x: cycles(d) ? CYCLE_X : TOGGLE_X2,
+    below: cycles(d)
+  })));
+}
+function drawEnhancements(ctx) {
+  const { host, ui } = ctx;
+  const o = opts2(ctx);
+  const defs = enhancementDefs();
+  const { slots: slots2, pages } = enhancementRows();
+  const page = Math.min(Math.max(0, ui.page ?? 0), pages - 1);
+  defs.forEach((d2, i) => {
+    const r = slots2[i];
+    if (r.page !== page)
+      return;
+    const at2 = enhancementIndex(o, d2);
+    const next = () => {
+      ui.sel = i;
+      setEnhancement(o, d2, (at2 + 1) % d2.choices.length);
+    };
+    text(host, LIST_LABEL_X, r.label, gearLabel(d2));
+    valuePill2(ctx, `enh:${d2.key}`, r.x, r.value, d2.choices[at2] ?? "", next, !cycles(d2) && at2 === 0);
+  });
+  let sel = ui.sel ?? 0;
+  if (slots2[sel]?.page !== page)
+    sel = slots2.findIndex((s) => s.page === page);
+  const d = defs[sel] ?? defs[0];
+  const said = gearAbout(d, d.choices[enhancementIndex(o, d)] ?? "");
+  wrap2(said, 18).slice(0, 2).forEach((line, k) => center(host, LIST_CAPTION_Y + k, line));
+  if (pages > 1)
+    listPager(ctx, "enh:page", page, pages, (p) => {
+      ui.page = p;
+      ui.sel = undefined;
+    });
+}
+function enhancementsKey(save) {
+  const o = save?.options ?? {};
+  return enhancementDefs().map((d) => enhancementIndex(o, d)).join("");
+}
 // voxelmon/game/ui/kantogear.ts
 function activeView(game) {
   const want = game.gearView ?? "home";
@@ -27828,6 +28711,7 @@ var DRAW = {
   notes: drawNotes,
   store: drawStore,
   options: drawOptions,
+  enhancements: drawEnhancements,
   cheats: drawCheats
 };
 var drawnFor = "";
@@ -27914,7 +28798,7 @@ function stillFrame(game) {
   let party = "";
   for (const m of game.save?.party ?? [])
     party += `${m.species}/${m.nickname ?? ""}/${m.level}/${m.hp}/${m.stats?.hp ?? 0};`;
-  const follows = view === "map" ? `|${game.gearMapPick ?? ""}|${game.overworld?.mapId ?? ""}` : view === "explorer" ? `|${explorerKey(game)}` : "";
+  const follows = view === "map" ? `|${game.gearMapPick ?? ""}|${game.overworld?.mapId ?? ""}` : view === "explorer" ? `|${explorerKey(game)}` : view === "enhancements" ? `|${enhancementsKey(game.save)}` : "";
   return `${view}|${top2?.kind ?? ""}|${pressedId() ?? ""}|${touchSerial}|${game.stack.length}|${game.overworld?.map?.id ?? ""}|` + `${gear.steps}|${gear.trip}|${clockStr(gear.clock24)}|${party}${follows}`;
 }
 function drawKantoGear(realHost, game) {
@@ -29292,7 +30176,7 @@ class PokedexState {
   digits;
   static SUBMENU = ["DATA", "CRY", "AREA", "QUIT"];
   standalone = false;
-  constructor(game, onCancel, opts2) {
+  constructor(game, onCancel, opts3) {
     this.game = game;
     this.onCancel = onCancel;
     const data = game.data;
@@ -29325,11 +30209,11 @@ class PokedexState {
         value: isSeen ? def.id : null
       });
     }
-    if (opts2?.species && mons[opts2.species]) {
+    if (opts3?.species && mons[opts3.species]) {
       this.standalone = true;
       this.mode = "entry";
-      this.entrySpecies = opts2.species;
-      const at2 = this.entries.findIndex((e) => e.value === opts2.species);
+      this.entrySpecies = opts3.species;
+      const at2 = this.entries.findIndex((e) => e.value === opts3.species);
       if (at2 >= 0)
         this.index = at2;
     }
@@ -31048,6 +31932,14 @@ class OverworldView2d {
       const f = npc.facing;
       this.put(npc.def.sprite, npc.px, npc.py - (npc.lift ?? 0), frames <= 1 ? 0 : phase === 1 && walker ? WALK2[f] : STAND2[f], frames > 1 && (f === "right" || (f === "down" || f === "up") && phase === 1 && npc.stepFlip));
     }
+    for (const m of ow.wild?.mons ?? []) {
+      const def = sprites?.[m.sprite];
+      const frames = def?.frames ?? 6;
+      const walker = def?.walker ?? frames > 1;
+      const phase = m.walkPhase();
+      const f = m.facing;
+      this.put(m.sprite, m.px, m.py - m.lift, frames <= 1 ? 0 : phase === 1 && walker ? WALK2[f] : STAND2[f], frames > 1 && (f === "right" || (f === "down" || f === "up") && phase === 1 && m.stepFlip));
+    }
     if (this.slots.size !== this.loadsSize) {
       this.loadsSize = this.slots.size;
       const loads = [{ dest: 256, sheet: "terrain", first: 0, count: 128, map: map.def.index }];
@@ -31397,13 +32289,13 @@ class TextBoxState {
   kind = "textbox";
   box;
   choicePushed = false;
-  constructor(game, text2, onDone, choice, opts2, onTyped, choiceOpts) {
+  constructor(game, text2, onDone, choice, opts3, onTyped, choiceOpts) {
     this.game = game;
     this.onDone = onDone;
     this.choice = choice;
     this.onTyped = onTyped;
     this.choiceOpts = choiceOpts;
-    this.box = new Textbox(text2, { player: game.save.player.name, rival: game.save.player.rival }, { speed: game.textSpeed(), ...opts2 });
+    this.box = new Textbox(text2, { player: game.save.player.name, rival: game.save.player.rival }, { speed: game.textSpeed(), ...opts3 });
   }
   update() {
     if (this.choice && this.box.done) {
@@ -31445,11 +32337,11 @@ class ChoiceState {
   yes;
   pending = null;
   holdFrames = 0;
-  constructor(game, cb, opts2) {
+  constructor(game, cb, opts3) {
     this.game = game;
     this.cb = cb;
-    this.yes = !opts2?.defaultNo;
-    this.noSound = opts2?.noSound === true;
+    this.yes = !opts3?.defaultNo;
+    this.noSound = opts3?.noSound === true;
   }
   noSound;
   update() {
@@ -32144,10 +33036,10 @@ ${why.slice(0, 18)}` : ""}`);
       this.showText(r.rating, onDone, () => this.audio.playSfx(r.sfx));
     });
   }
-  showAuto(text2, delay, opts2) {
-    if (opts2?.sfx)
-      this.audio.playSfx(opts2.sfx);
-    this.push(new TextBoxState(this, text2, opts2?.onDone, undefined, { auto: { delay } }));
+  showAuto(text2, delay, opts3) {
+    if (opts3?.sfx)
+      this.audio.playSfx(opts3.sfx);
+    this.push(new TextBoxState(this, text2, opts3?.onDone, undefined, { auto: { delay } }));
   }
   textSpeed() {
     const v = this.save.options?.textSpeed;
@@ -32184,8 +33076,8 @@ ${why.slice(0, 18)}` : ""}`);
   animationsOn() {
     return this.save.options?.animations !== false;
   }
-  showChoice(text2, choice, opts2) {
-    this.push(new TextBoxState(this, text2, undefined, choice, undefined, undefined, opts2));
+  showChoice(text2, choice, opts3) {
+    this.push(new TextBoxState(this, text2, undefined, choice, undefined, undefined, opts3));
   }
   deleteSave() {
     if (!this.keepUnreadable(this.host))
@@ -33695,24 +34587,24 @@ to {RAM:wNameBuffer}?`).replace(/\{RAM:wNameBuffer\}/g, defaultName).replace(/\{
     st.loseable = loseable;
     this.push(st);
   }
-  startWildBattle(species, level, opts2, onDone) {
+  startWildBattle(species, level, opts3, onDone) {
     const battle = new WildBattle(this.data, this.save, this.battleRng, species, level);
-    battle.noCatch = opts2?.noCatch === true;
-    if (opts2?.disguised)
+    battle.noCatch = opts3?.noCatch === true;
+    if (opts3?.disguised)
       battle.makeGhost();
-    else if (opts2?.unveil)
+    else if (opts3?.unveil)
       battle.makeUnveiledGhost();
-    battle.hooked = opts2?.hooked === true;
+    battle.hooked = opts3?.hooked === true;
     const st = new BattleGameState(this, species, level, battle);
     st.onDone = () => onDone?.(battle.finished);
     this.push(st);
   }
-  startOldManDemo(onDone, opts2) {
+  startOldManDemo(onDone, opts3) {
     const field = this.data.field?.oldManBattle ?? { species: "WEEDLE", level: 5 };
-    const species = opts2?.species ?? field.species;
-    const level = opts2?.level ?? field.level;
+    const species = opts3?.species ?? field.species;
+    const level = opts3?.level ?? field.level;
     const battle = new WildBattle(this.data, this.save, this.battleRng, species, level);
-    battle.makeOldManDemo(opts2?.name, opts2?.fail);
+    battle.makeOldManDemo(opts3?.name, opts3?.fail);
     const st = new BattleGameState(this, "", 0, battle);
     st.onDone = () => onDone?.();
     this.push(st);

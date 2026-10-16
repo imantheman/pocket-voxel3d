@@ -10,7 +10,7 @@
 import { itemBallFlag } from "../../world/mapscripts.ts";
 import { hiddenKey } from "../../world/hiddenitems.ts";
 import { hmWithoutMove } from "../../extras.ts";
-import { CHEATS_APP } from "../extras_layout.ts";
+import { CHEATS_APP, ENHANCEMENTS_APP } from "../extras_layout.ts";
 
 // ---------------------------------------------------------------------------
 // saved state (save.modData.kanto_gear -- where the mod keeps its own)
@@ -90,7 +90,7 @@ export function spoilers(save: SaveLike | undefined): boolean {
 
 export type GearViewId =
   | "home" | "party" | "map" | "explorer" | "trainer" | "pokedex" | "bag"
-  | "tools" | "steps" | "stamps" | "notes" | "store" | "options" | "cheats";
+  | "tools" | "steps" | "stamps" | "notes" | "store" | "options" | "enhancements" | "cheats";
 
 export interface GearApp {
   id: GearViewId;
@@ -131,6 +131,10 @@ export const APPS: GearApp[] = [
     about: ["ADD OR REMOVE APPS."] },
   { id: "options", title: "OPTIONS", short: "OPTION", fixed: true,
     about: ["HOW MUCH HELP THE GEAR GIVES."] },
+  // OPTION's ENHANCEMENTS page on the bottom screen (apps/enhancements.ts),
+  // always there; fixed, so the STORE never lists it.
+  { id: "enhancements", title: ENHANCEMENTS_APP.title, short: ENHANCEMENTS_APP.short, fixed: true,
+    about: [...ENHANCEMENTS_APP.about] },
   // Only while the OPTION screen's CHEATS row is ON (home.ts availableApps);
   // fixed, so the STORE never lists it: OPTION is its switch.
   { id: "cheats", title: CHEATS_APP.title, short: CHEATS_APP.short, fixed: true,

@@ -170,7 +170,7 @@ for (const v of Object.keys(dirs) as V[]) {
       const s = richSave(data, v);
       Object.assign(s.options, {
         gameSpeed: 2, expForCatching: true, partyExpShare: true, tradeEvoLv40: true, hmsWithoutMove: true, cheats: true,
-        wildEncounters: "none", alwaysCatch: true, instantVictory: true, infiniteMoney: true,
+        wildEncounters: "none", alwaysCatch: true, instantVictory: true, infiniteMoney: true, visibleWild: "many",
       });
       const withExtras = saveToCart(s, data as never, null).bytes;
       expect(Buffer.from(withExtras).equals(Buffer.from(plain))).toBe(true);

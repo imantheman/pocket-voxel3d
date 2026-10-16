@@ -308,6 +308,88 @@ export class GameMap {
     return grass !== undefined && this.cellTile(cx, cy) === grass;
   }
 
+  /**
+   * All four of a cell's 8x8 tiles are walkable floor (grass and its tufts
+   * included), or all four water -- not only the bottom-left one the
+   * collision rules read. A cell whose top half is a fence, a ledge or a
+   * cave wall still walks (and rolls) as the bottom tile says; VISIBLE WILD
+   * (world/wildmons.ts) keeps its mons off those, so none is drawn half
+   * over the fence. Gen 2 maps (one collision byte a cell) answer with the
+   * cell's own kind.
+   */
+  isWholeCell(cx: number, cy: number, kind: "floor" | "water"): boolean {
+    if (!this.inBounds(cx, cy)) return false;
+    if (this.byCollision) return kind === "water" ? this.isWaterCell(cx, cy) : this.isWalkableCell(cx, cy);
+    for (let dy = 0; dy < 2; dy++) {
+      for (let dx = 0; dx < 2; dx++) {
+        const t = this.tileAt(cx * 2 + dx, cy * 2 + dy);
+        const ok = kind === "water" ? this.waterTiles.has(t) : this.walkable.has(t) && !this.waterTiles.has(t);
+        if (!ok) return false;
+      }
+    }
+    return true;
+  }
+
+  /** Per-tile lookups for cellFlagsRow, built on first use. */
+  private tileFlags?: Uint8Array;
+
+  /**
+   * One row of cell flags (../visiblewild.ts CF_*) into `out` at y * width:
+   * what isWalkableCell / isWaterCell / isGrassCell / isWholeCell and the
+   * warp checks say of each cell, worked out straight from the blocks and
+   * per-tile tables -- the per-call route cost the console most of a frame
+   * for a few dozen cells (VISIBLE WILD reads a map's every cell).
+   */
+  cellFlagsRow(cy: number, out: Uint8Array): void {
+    const w = this.widthCells;
+    const o = cy * w;
+    if (this.byCollision) {
+      for (let cx = 0; cx < w; cx++) {
+        let f = 0;
+        if (this.isWalkableCell(cx, cy)) f |= 1 | 8;
+        if (this.isWaterCell(cx, cy)) f |= 2 | 16;
+        if (this.isGrassCell(cx, cy)) f |= 4;
+        if (this.warpAtCell(cx, cy) || this.isWarpTileCell(cx, cy)) f |= 32;
+        out[o + cx] = f;
+      }
+      return;
+    }
+    let tf = this.tileFlags;
+    if (!tf) {
+      // per tile: 1 walkable, 2 water, 4 grass, 32 door/warp tile
+      tf = this.tileFlags = new Uint8Array(256);
+      for (const t of this.walkable) tf[t & 255] |= 1;
+      for (const t of this.waterTiles) tf[t & 255] |= 2;
+      const g = this.tileset.grassTile;
+      if (g !== undefined) tf[g & 255] |= 4;
+      for (const t of this.doorTiles) tf[t & 255] |= 32;
+      for (const t of this.warpTiles) tf[t & 255] |= 32;
+    }
+    const bw = this.def.width;
+    const by = cy >> 1;
+    const ty0 = (cy & 1) * 2;
+    const tsBlocks = this.tileset.blocks;
+    for (let cx = 0; cx < w; cx++) {
+      const bx = cx >> 1;
+      const blockId = bx < bw && by < this.def.height ? this.def.blocks[by * bw + bx]! : this.def.borderBlock;
+      const b = tsBlocks[blockId];
+      if (!b) { out[o + cx] = 0; continue; }
+      const tx0 = (cx & 1) * 2;
+      const tl = tf[b[ty0 * 4 + tx0]! & 255]!, tr = tf[b[ty0 * 4 + tx0 + 1]! & 255]!;
+      const bl = tf[b[(ty0 + 1) * 4 + tx0]! & 255]!, br = tf[b[(ty0 + 1) * 4 + tx0 + 1]! & 255]!;
+      const i = o + cx;
+      // the bottom-left tile decides, as cellTile does; a cut tree or an
+      // open door walks
+      let f = bl & (1 | 2 | 4 | 32);
+      if (this.cutAt.has(i) || this.openAt.has(i)) f |= 1;
+      // whole: all four walkable and dry (8), or all four water (16)
+      if (tl & tr & bl & br & 1 && !((tl | tr | bl | br) & 2)) f |= 8;
+      if (tl & tr & bl & br & 2) f |= 16;
+      if (this.warpAt.has(i)) f |= 32;
+      out[i] = f;
+    }
+  }
+
   // Map.lua:242 — water and eastern-shore tiles share one lookup
   isWaterCell(cx: number, cy: number): boolean {
     if (this.byCollision) return Coll.isWater(this.cellCollision(cx, cy));

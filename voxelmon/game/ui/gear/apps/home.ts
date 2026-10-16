@@ -1,4 +1,5 @@
 // HOME (the launcher), STORE (add/remove apps), OPTIONS and STEPS.
+// (ENHANCEMENTS is always on HOME; CHEATS only while OPTION's row is ON.)
 //
 // The mod's Silph Link home puts two widgets over a grid of app buttons; on
 // the 20x18 grid that is an EXPLORER card (where you are, what lives there,
@@ -6,8 +7,8 @@
 import { hpBarTiles } from "../../../battle/ui.ts";
 import { picPageFor } from "../../../battle/staging.ts";
 import {
-  COLS, TILE_H, TILE_W, box, button, center, cursor, fit, pill, pressedId, region, right, row, sprite,
-  text, tiles, wrap, type Ink,
+  COLS, TILE_H, TILE_W, box, button, center, cursor, fit, pill, pillPx, pressedId, region, right, row, sprite,
+  text, tiles, width, wrap, type Ink,
 } from "../draw.ts";
 import { APPS, appOf, gearSave, wildRows, type GearViewId } from "../model.ts";
 import { go, header, type GearCtx } from "../ui.ts";
@@ -72,23 +73,37 @@ export function drawHome(ctx: GearCtx): void {
     center(host, 4, "NO POKéMON", ip, 11, 8);
   }
 
-  // the apps: three to a row, one row of pills with a row between. Twelve
-  // fill rows 9-15; a thirteenth (CHEATS, with every app on offer) takes
-  // the middle of the bottom row, a row clear of the grid like the rest.
+  // the apps: three to a row, one row of pills with a row between, rows
+  // 9-17 (fifteen places: every app, ENHANCEMENTS and CHEATS included, is
+  // fourteen). Placed to the pixel: 8 px margins and 8 px between the
+  // columns, every label centred in its pill (draw.ts pillPx). A last row
+  // that is not full is centred: one pill in the middle column, two either
+  // side of the screen's middle.
   const apps = availableApps(game).filter((a) => a !== "home");
   apps.forEach((a, i) => {
-    const col = i % 3;
-    const row = Math.floor(i / 3);
-    let x = [0, 7, 14][col]!;
-    const w = 6;
-    const y = 9 + row * 2;
-    if (y > 17) return;
-    if (y === 17) {
-      if (i !== apps.length - 1 || col !== 0) return;
-      x = 7;
-    }
-    pill(host, `home:${a}`, x, y, w, appOf(a)!.short, () => go(ctx, a));
+    const pos = homePill(i, apps.length);
+    if (!pos) return;
+    pillPx(host, `home:${a}`, pos.x, pos.y, HOME_PILL_PX, appOf(a)!.short, () => go(ctx, a));
   });
+}
+
+/** HOME's app pills: 96 px (six cells) wide, 8 px margins and gaps. */
+export const HOME_PILL_PX = 96;
+const HOME_COLS_PX = [8, 112, 216] as const;
+/** The last row's places when it holds one or two (px): one in the middle
+ *  column; two 16 px apart round the middle (their labels then centre on a
+ *  half cell, which the grid can draw), 56 px from either edge. */
+const HOME_LAST_ROW_PX: Record<number, readonly number[]> = { 1: [112], 2: [56, 168] };
+
+/** Where HOME puts app `i` of `n` (x in px, y the row), or null past the
+ *  bottom row. */
+export function homePill(i: number, n: number): { x: number; y: number } | null {
+  const row = Math.floor(i / 3);
+  const y = 9 + row * 2;
+  if (y > 17) return null;
+  const inRow = Math.min(3, n - row * 3);
+  const xs = inRow < 3 ? HOME_LAST_ROW_PX[inRow]! : HOME_COLS_PX;
+  return { x: xs[i % 3]!, y };
 }
 
 // ---------------------------------------------------------------------------
@@ -119,8 +134,9 @@ export function drawStore(ctx: GearCtx): void {
     const on = !gear.removed[a.id];
     if (ui.sel === i) cursor(host, 0, y);
     text(host, 1, y, a.title);
-    region(`store:${a.id}`, 0, y, 13, 1, () => { ui.sel = i; });
-    pill(host, `store:t:${a.id}`, 14, y, 6, on ? "ON" : "OFF", () => {
+    region(`store:${a.id}`, 0, y, 12, 1, () => { ui.sel = i; });
+    // ending in column 18, column 19 clear, as every app's values
+    pill(host, `store:t:${a.id}`, 13, y, 6, on ? "ON" : "OFF", () => {
       ui.sel = i;
       gear.removed[a.id] = on;
     }, !on);
@@ -134,6 +150,11 @@ export function drawStore(ctx: GearCtx): void {
 // ---------------------------------------------------------------------------
 // OPTIONS
 // ---------------------------------------------------------------------------
+
+/** OPTIONS' labels and pills (8 cells, ending in column 18). */
+const OPT_LABEL_X = 1;
+const OPT_PILL_X = 11;
+const OPT_PILL_W = 8;
 
 interface OptionRow {
   label: string;
@@ -154,12 +175,16 @@ export function drawOptions(ctx: GearCtx): void {
     { label: "CLOCK", value: () => (gear.clock24 ? "24 HOUR" : "12 HOUR"), step: () => { gear.clock24 = !gear.clock24; } },
     { label: "KEYBOARD", value: () => (gear.qwertz ? "QWERTZ" : "QWERTY"), step: () => { gear.qwertz = !gear.qwertz; } },
   ];
-  // labels flush with the box below, so the longest (CAUGHT ICON) keeps a
-  // column clear of its button
+  // labels a column in from the edge; the pills end in column 18 (column
+  // 19 clear) and keep their eight cells for ENHANCED and SPOILERS, so a
+  // label that would meet its pill (CAUGHT ICON) has its row and the pill
+  // goes on the row under it, as CHEATS and ENHANCEMENTS do
+  let y = 2;
   rows.forEach((r, i) => {
-    const y = 2 + i * 2;
-    text(host, 0, y, r.label);
-    pill(host, `opt:${i}`, 12, y, 8, r.value(), r.step);
+    text(host, OPT_LABEL_X, y, r.label);
+    const inline = OPT_LABEL_X + width(r.label) < OPT_PILL_X;
+    pill(host, `opt:${i}`, OPT_PILL_X, inline ? y : y + 1, OPT_PILL_W, r.value(), r.step);
+    y += inline ? 2 : 3;
   });
   // what INFO means, since it is the one that changes the most
   const say = {

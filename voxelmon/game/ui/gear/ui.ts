@@ -3,7 +3,7 @@
 // its arrows and clock, the page tabs along the bottom, a BACK pill.
 import { UI_TILE } from "../../../../contracts/spec/voxel-spec.ts";
 import { ARROW_CURSOR } from "../tiles.ts";
-import { COLS, FILL_BIT, LIGHT_BIT, ROWS, fill, pill, region, text, width, type GearHost } from "./draw.ts";
+import { COLS, DARKTEXT_BIT, FILL_BIT, LIGHT_BIT, ROWS, fill, pill, pressedId, region, text, width, type GearHost } from "./draw.ts";
 import { gearSave, type GearSave, type GearViewId } from "./model.ts";
 
 /**
@@ -68,21 +68,25 @@ export interface HeaderOpts {
 }
 
 /** The dark bar on row 0: the title between its arrows, the clock right.
- * main.rs paints the bar; everything here is drawn light over it. */
+ * main.rs paints the bar; everything here is drawn light over it. A title
+ * too long to leave the clock its columns (ENHANCEMENTS, sixteen with its
+ * arrows) has the bar to itself, centred, a column clear of either end. */
 export function header(ctx: GearCtx, title: string, opts: HeaderOpts = {}): void {
   const { host } = ctx;
   const many = !!opts.arrows;
   const w = width(title) + (many ? 4 : 0);
-  const x = Math.max(0, Math.floor((CLOCK_COL - w) / 2));
+  const wide = w > CLOCK_COL && opts.aside === undefined;
+  const x = wide ? Math.max(1, Math.floor((COLS - w) / 2)) : Math.max(0, Math.floor((CLOCK_COL - w) / 2));
   if (many) {
     host.uiTileBottom(x, 0, UI_TILE.arrowLeft | LIGHT_BIT);
     host.uiTileBottom(x + w - 1, 0, ARROW_CURSOR | LIGHT_BIT);
     if (opts.onLeft) region("hdr:left", 0, 0, x + 1, 1, opts.onLeft);
-    if (opts.onRight) region("hdr:right", x + w - 1, 0, Math.max(1, CLOCK_COL - (x + w - 1)), 1, opts.onRight);
+    const rightEnd = wide ? COLS : CLOCK_COL;
+    if (opts.onRight) region("hdr:right", x + w - 1, 0, Math.max(1, rightEnd - (x + w - 1)), 1, opts.onRight);
   }
   text(host, x + (many ? 2 : 0), 0, title, "light");
   if (opts.onTitle) region("hdr:title", x + (many ? 1 : 0), 0, width(title) + 2, 1, opts.onTitle);
-  const aside = opts.aside ?? clockStr(ctx.gear.clock24);
+  const aside = wide ? "" : opts.aside ?? clockStr(ctx.gear.clock24);
   if (aside) text(host, Math.max(0, COLS - width(aside) - 1), 0, aside, "light");
 }
 
@@ -127,6 +131,63 @@ export function stepper(ctx: GearCtx, label: string, prev: () => void, next: () 
   ctx.host.uiTileBottom(COLS - 2, y, ARROW_CURSOR | FILL_BIT);
   fill(ctx.host, 3, y, COLS - 6, 1);
   text(ctx.host, 3 + Math.max(0, Math.floor((COLS - 6 - width(label)) / 2)), y, label, "fill");
+}
+
+// ---------------------------------------------------------------------------
+// settings lists (CHEATS, ENHANCEMENTS): labels, values, pages
+// ---------------------------------------------------------------------------
+
+/** Labels a column in from the edge, as the STORE's list. */
+export const LIST_LABEL_X = 1;
+/** The last row an item may use; the caption's two lines; the pager. Each
+ *  has a clear row before it, and row 17 stays clear. */
+export const LIST_LAST_ROW = 11;
+export const LIST_CAPTION_Y = 13;
+export const LIST_PAGER_Y = 16;
+
+export interface ListSlot {
+  page: number;
+  /** The label's row, and the value's (the same, or the row under it). */
+  label: number;
+  value: number;
+  /** The value pill's first column. */
+  x: number;
+}
+
+/**
+ * Where a settings list's rows go. A label (whole, never cut down) that
+ * leaves a clear column before its pill shares the row; a longer one, or
+ * one marked `below`, has its row and the value sits right-aligned on the
+ * row under it. A clear row after every item; what does not fit above the
+ * caption goes on the next page.
+ */
+export function listLayout(items: readonly { label: string; x: number; below?: boolean }[]): { slots: ListSlot[]; pages: number } {
+  const slots: ListSlot[] = [];
+  let page = 0;
+  let y = 2;
+  for (const it of items) {
+    const inline = !it.below && LIST_LABEL_X + width(it.label) < it.x;
+    const h = inline ? 1 : 2;
+    if (y + h - 1 > LIST_LAST_ROW) { page += 1; y = 2; }
+    slots.push({ page, label: y, value: inline ? y : y + 1, x: it.x });
+    y += h + 1;
+  }
+  return { slots, pages: page + 1 };
+}
+
+/** ◀ PAGE 1/2 ▶ on the pager row: the arrows as their own pills a column
+ *  in from either edge, the label between them on the paper. */
+export function listPager(ctx: GearCtx, id: string, page: number, pages: number, go: (page: number) => void): void {
+  const { host } = ctx;
+  const y = LIST_PAGER_Y;
+  // the arrow light on the bar, dark while the finger lifts the bar away
+  const ink = (pid: string): number => (!host.uiRectBottom ? FILL_BIT : pressedId() === pid ? DARKTEXT_BIT : LIGHT_BIT);
+  pill(host, `${id}:prev`, 1, y, 3, "", () => go((page + pages - 1) % pages));
+  host.uiTileBottom(2, y, UI_TILE.arrowLeft | ink(`${id}:prev`));
+  pill(host, `${id}:next`, COLS - 4, y, 3, "", () => go((page + 1) % pages));
+  host.uiTileBottom(COLS - 3, y, ARROW_CURSOR | ink(`${id}:next`));
+  const label = `PAGE ${page + 1}/${pages}`;
+  text(host, Math.floor((COLS - width(label)) / 2), y, label);
 }
 
 /** Open a view (HOME, or an app), the one place views change. */

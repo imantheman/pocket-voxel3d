@@ -4,8 +4,8 @@
 // core's `ui_b` surface through the host's bottom-screen ops.
 //
 // A HOME screen launches the apps (ui/gear/apps): PARTY, MAP, EXPLORER,
-// TRAINER, POKéDEX, BAG, TOOLS, STEPS, STAMPS, NOTES, STORE and OPTIONS (and
-// CHEATS, while the OPTION screen's CHEATS row is ON). L/R
+// TRAINER, POKéDEX, BAG, TOOLS, STEPS, STAMPS, NOTES, STORE, OPTIONS and
+// ENHANCEMENTS (and CHEATS, while the OPTION screen's CHEATS row is ON). L/R
 // and the header's arrows step through them; tapping an app's title goes
 // HOME. A battle takes the whole screen (ui/gear/battle.ts); the game's own
 // menus get touch mirrors (ui/gear/mirrors.ts) while their words stay on the
@@ -28,6 +28,7 @@ import { drawTools } from "./gear/apps/tools.ts";
 import { drawStamps } from "./gear/apps/stamps.ts";
 import { drawNotes } from "./gear/apps/notes.ts";
 import { drawCheats } from "./gear/apps/cheats.ts";
+import { drawEnhancements, enhancementsKey } from "./gear/apps/enhancements.ts";
 import type { VoxelHost } from "../host.ts";
 import type { GearHost } from "./gear/draw.ts";
 import { UI_COLS, UI_ROWS } from "../../../contracts/spec/voxel-spec.ts";
@@ -78,6 +79,7 @@ const DRAW: Partial<Record<GearViewId, (ctx: GearCtx) => void>> = {
   notes: drawNotes,
   store: drawStore,
   options: drawOptions,
+  enhancements: drawEnhancements,
   cheats: drawCheats,
 };
 
@@ -204,7 +206,8 @@ function stillFrame(game: GearGame): string {
   // the cells round you and who stands on them -- drawn again when those
   // change, not every frame (EXPLORER every frame was the gear's lag)
   const follows = view === "map" ? `|${game.gearMapPick ?? ""}|${game.overworld?.mapId ?? ""}`
-    : view === "explorer" ? `|${explorerKey(game)}` : "";
+    : view === "explorer" ? `|${explorerKey(game)}`
+    : view === "enhancements" ? `|${enhancementsKey(game.save)}` : "";
   return `${view}|${top?.kind ?? ""}|${pressedId() ?? ""}|${touchSerial}|${game.stack.length}|${game.overworld?.map?.id ?? ""}|` +
     `${gear.steps}|${gear.trip}|${clockStr(gear.clock24)}|${party}${follows}`;
 }

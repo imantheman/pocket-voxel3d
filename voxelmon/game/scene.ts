@@ -700,6 +700,31 @@ export class Scene {
         flags,
       );
     }
+    // VISIBLE WILD (world/wildmons.ts): the wild mons take the slots the
+    // map's people leave free -- a hidden person's, then those past the last
+    // -- so no person's slot (or emote) ever moves. A sheet with walk
+    // frames walks; a single pose stands and bobs (the lift).
+    const wild = ow.wild?.mons;
+    if (wild && wild.length > 0) {
+      let w = 0;
+      for (let slot = 1; slot < ENTS_MAX && w < wild.length; slot++) {
+        const i = slot - 1;
+        if (i < npcs.length && !(npcs[i] as { hidden?: boolean }).hidden) continue;
+        const m = wild[w++]!;
+        const def = view.data.sprites?.[m.sprite];
+        const frames = def?.frames ?? 6;
+        const walker = def?.walker ?? frames > 1;
+        const nf = seenAs(m.facing);
+        const phase = m.walkPhase();
+        const frame = frames <= 1 ? 0 : phase === 1 && walker ? WALK[nf] : STAND[nf];
+        const mirror = frames > 1 &&
+          (nf === "right" || ((nf === "down" || nf === "up") && phase === 1 && m.stepFlip));
+        // every one is grass-occluded like the player: it stands in the grass
+        let flags = ENT_FLAG.walker;
+        if (mirror) flags |= ENT_FLAG.mirror;
+        this.emitSlot(slot, this.sheetIndex(view, m.sprite), frame, m.px * Q4, m.py * Q4, m.lift, flags);
+      }
+    }
     for (let slot = 0; slot < ENTS_MAX; slot++) {
       if (this.entSeen[slot] === 0 && this.entShown[slot] !== 0) {
         this.host.entHide(slot);

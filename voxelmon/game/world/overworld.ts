@@ -65,6 +65,7 @@ import { ScriptRunner, type ScriptRow, type ScriptWorld } from "./script.ts";
 import { mapScript, useScriptsFor, type MapScript } from "./mapscripts.ts";
 import { countGearStep } from "../ui/gear/model.ts";
 import * as Pikachu from "./pikachu.ts";
+import { VisibleWild } from "./wildmons.ts";
 import { namedPage, picPageFor } from "../battle/staging.ts";
 import { gbW, gbX, gbY } from "../ui/intro.ts";
 import {
@@ -397,6 +398,9 @@ export class Overworld implements ScriptWorld {
   /** Battle-port seam bookkeeping the tests and the sim read. */
   encounterCount = 0;
   lastEncounter?: { species: string; level: number };
+  /** VISIBLE WILD (ENHANCEMENTS): the wild mons about the map
+   *  (world/wildmons.ts). Empty while the setting is OFF. */
+  readonly wild: VisibleWild = new VisibleWild(this);
 
   constructor(shell: OverworldShell) {
     this.shell = shell;
@@ -551,6 +555,8 @@ export class Overworld implements ScriptWorld {
         .objectToggles ??= {});
       (toggles[mapId] ??= {})[sleeper.object] = false;
     }
+    // VISIBLE WILD: no mon comes along to a new map (seams included)
+    this.wild.onMap();
     this.npcs = [];
     for (const obj of def.objects ?? []) {
       if (this.objectVisible(obj)) {
@@ -667,8 +673,10 @@ export class Overworld implements ScriptWorld {
       this.player.update();
       return;
     }
+    // people walk round the wild mons (VISIBLE WILD); the player does not
+    const ents = this.wild.mons.length > 0 ? this.entities.concat(this.wild.mons) : this.entities;
     for (const npc of this.npcs) {
-      npc.update(this.map, this.entities, this.shell.npcRng, this.tilePairs);
+      npc.update(this.map, ents, this.shell.npcRng, this.tilePairs);
     }
     this.updateScriptMoves();
     // emote is included: a hold queued from a scriptMove onDone is assigned
@@ -677,6 +685,9 @@ export class Overworld implements ScriptWorld {
     let scripted =
       this.runner.isRunning() || this.scriptMoves.length > 0 || this.emote !== undefined ||
       this.engaging;
+    // VISIBLE WILD (world/wildmons.ts): the mons step, spawn and go; a touch
+    // starts its battle, and this tick stands down for it
+    if (this.wild.update(scripted || this.transitioning)) return;
     // OverworldController.lua:1070 — scan for a trainer sighting on the step
     // that just landed, then re-gate: a spotted player can never start another
     // step (CheckFightingMapTrainers zeroes the joypad the instant it engages).
@@ -1171,6 +1182,8 @@ export class Overworld implements ScriptWorld {
     // TRADE CENTER the machine IS a counter, and the press would otherwise
     // reach over it to the other player and get the ROM's "!".
     if (this.tryLinkMachine(fx, fy)) return;
+    // VISIBLE WILD: A on a wild mon is a touch
+    if (this.wild.tryTalk(fx, fy)) return;
     let npc = this.npcAtCell(fx, fy);
     if (!npc && this.map.isCounterCell(fx, fy)) {
       // talk across counters (mart clerks, nurses)
@@ -2192,8 +2205,10 @@ export class Overworld implements ScriptWorld {
       indoorEncounters?: { firstIndoorMap: number; excludedTileset: string };
     })?.indoorEncounters;
     let enc: { species: string; level: number } | null = null;
-    // the WILD ENCOUNTERS cheat (extras.ts): NONE / LESS / NORMAL / MORE
-    const mode = wildMode(this.save as never);
+    // the WILD ENCOUNTERS cheat (extras.ts): NONE / LESS / NORMAL / MORE.
+    // VISIBLE WILD (../visiblewild.ts) stops the roll entirely while it is
+    // on: the wild mons are about the map instead (NONE spends no roll).
+    const mode = this.wild.suppressesRoll() ? "none" : wildMode(this.save as never);
     if (p.surfing && encDef?.water && this.map.isWaterCell(p.cellX, p.cellY)) {
       enc = encounterRoll({ grass: encDef.water }, this.shell.rng, undefined, mode);
     } else if (this.map.isGrassCell(p.cellX, p.cellY)) {
