@@ -118,6 +118,7 @@ import type { SaveSummary } from "./ui/title.ts";
 import * as Bag from "./rules/bag.ts";
 import { tiltShiftLevel } from "./tiltshift.ts";
 import { holdMoney, tradeEvoLevel } from "./extras.ts";
+import { gameSpeedOf, setGameSpeedIn } from "./gamespeed.ts";
 import { is2d } from "./viewmode.ts";
 import { OverworldView2d } from "./world/view2d.ts";
 
@@ -1171,8 +1172,14 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     return !(i.isDown("up") || i.isDown("down") || i.isDown("left") || i.isDown("right"));
   }
 
-  /** One guest turn per host tick — exactly once. */
-  tick(buttons: number): void {
+  /**
+   * One logic tick. The host calls frame() once per 1/60 s and the entry
+   * runs logicSpeed() of these per call (gamespeed.ts stepHost); `compose`
+   * false skips the scene, which a tick the host will not render after has
+   * no use for -- the scene's ops are all state, so the next composed tick
+   * says everything this one would have.
+   */
+  tick(buttons: number, compose = true): void {
     const p = this.prof;
     const t0 = p ? p.now() : 0;
     this.input.setButtons(buttons);
@@ -1197,7 +1204,7 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     holdMoney(this.save as never);
     this.advancePlayTime();
     const t1 = p ? p.now() : 0;
-    this.scene.emit(this);
+    if (compose) this.scene.emit(this);
     const t2 = p ? p.now() : 0;
     this.driveAudio();
     this.host.frameDone(this.tickIndex, buttons);
@@ -1381,6 +1388,29 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       x: Math.max(-1, Math.min(1, x / r)),
       y: Math.max(-1, Math.min(1, y / r)),
     };
+  }
+
+  /** save.options.gameSpeed, the OPTION screen's SPEED (gamespeed.ts): 1 or 2. */
+  gameSpeed(): number {
+    return gameSpeedOf((this.save as { options?: { gameSpeed?: unknown } } | undefined)?.options);
+  }
+
+  /** Set SPEED (clamped to 1 or 2); takes effect on the next host step. */
+  setGameSpeed(n: number): number {
+    const save = this.save as { options?: { gameSpeed?: unknown } } | undefined;
+    if (!save) return 1;
+    return setGameSpeedIn((save.options ??= {}), n);
+  }
+
+  /**
+   * Logic ticks per host step: SPEED, except over a link -- the CABLE
+   * CLUB's rooms, a trade or a battle with the other console -- which runs
+   * at 1X on both machines so the two stay in lockstep (gen1recomp's
+   * Game:logicSpeed puts the link first the same way).
+   */
+  logicSpeed(): number {
+    if (this.overworld?.link) return 1;
+    return this.gameSpeed();
   }
 
   /** save.options.tiltShift -> the host's level (spec `tiltShift`). */

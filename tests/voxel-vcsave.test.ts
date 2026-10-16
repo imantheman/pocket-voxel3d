@@ -162,14 +162,14 @@ for (const v of Object.keys(dirs) as V[]) {
       expect(diffs.slice(0, 20)).toEqual([]);
     });
 
-    test.skipIf(!has(v))("the port's ENHANCEMENTS and CHEATS settings never reach the cartridge", () => {
+    test.skipIf(!has(v))("the port's SPEED, ENHANCEMENTS and CHEATS settings never reach the cartridge", () => {
       // extras.ts: port-only option keys. The cart's option byte holds text
       // speed, animations and battle style only; the rest must change nothing.
       const data = sets[v]!;
       const plain = saveToCart(richSave(data, v), data as never, null).bytes;
       const s = richSave(data, v);
       Object.assign(s.options, {
-        expForCatching: true, partyExpShare: true, tradeEvoLv40: true, hmsWithoutMove: true, cheats: true,
+        gameSpeed: 2, expForCatching: true, partyExpShare: true, tradeEvoLv40: true, hmsWithoutMove: true, cheats: true,
         wildEncounters: "none", alwaysCatch: true, instantVictory: true, infiniteMoney: true,
       });
       const withExtras = saveToCart(s, data as never, null).bytes;

@@ -8,7 +8,9 @@
 //                         while OPTION's CHEATS row is ON. Hiding it leaves
 //                         every cheat as it was set (they stay active).
 //
-// What each setting does is in ../extras.ts.
+// What each setting does is in ../extras.ts (SPEED: ../gamespeed.ts).
+
+import { GAME_SPEEDS, GAME_SPEED_LABEL } from "../gamespeed.ts";
 
 /** OPTION's pages, in L/R order. */
 export const OPTION_PAGES = ["SETTINGS", "ENHANCEMENTS"] as const;
@@ -27,12 +29,14 @@ export interface ExtrasRowDef {
 }
 
 /**
- * The SPEED row heads ENHANCEMENTS. Its setter comes from the game-speed
- * work; until that is merged the row is held back (SPEED_ROW_READY), so no
- * build shows a row that does nothing.
+ * The SPEED row heads ENHANCEMENTS: GAME SPEED (../gamespeed.ts), the logic
+ * at 1X or 2X, saved as the port-only options.gameSpeed (1 or 2) -- not
+ * gen1recomp's own speed keys. Its words are gamespeed.ts's GAME_SPEEDS.
  */
-export const SPEED_ROW: ExtrasRowDef = { key: "speed", label: "SPEED", choices: ["1X", "2X"] };
-export const SPEED_ROW_READY = false;
+export const SPEED_ROW: ExtrasRowDef = {
+  key: "gameSpeed", label: GAME_SPEED_LABEL, choices: GAME_SPEEDS.map((s) => s.label),
+};
+export const SPEED_ROW_READY = true;
 
 /** ENHANCEMENTS, after SPEED. Toggles, OFF first. */
 export const ENHANCEMENT_ROWS: readonly ExtrasRowDef[] = [

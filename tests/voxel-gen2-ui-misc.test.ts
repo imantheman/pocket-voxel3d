@@ -83,11 +83,12 @@ describe("gen2 OPTION screen", () => {
     expect(holes(lcd)).toBe(0);
     await shot(lcd, "options");
 
-    // A on SPEED opens its page: TEXT SPEED, GAME SPEED, BACK.
+    // A on SPEED opens its page: TEXT SPEED, BACK (the desktop's GAME SPEED is
+    // the port's SPEED, on ENHANCEMENTS).
     press(game, "a");
     const page = game.stack.top() as OptionsMenu;
     expect(page).not.toBe(menu);
-    expect(page.view.map((r) => r.label)).toEqual(["TEXT SPEED", "GAME SPEED", "BACK"]);
+    expect(page.view.map((r) => r.label)).toEqual(["TEXT SPEED", "BACK"]);
     press(game, "right");
     expect(game.options.textSpeed).toBe("SLOW");
     press(game, "right");

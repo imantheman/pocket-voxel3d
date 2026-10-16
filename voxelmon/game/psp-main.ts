@@ -17,6 +17,7 @@ import { fromObject } from "./data.ts";
 import { VoxelmonGame } from "./game.ts";
 import { native, QuickJsHost, STICK_RANGE } from "./quickjs-host.ts";
 import { drawKantoGear, gearTouchDown, gearTouchMove, gearTouchUp } from "./ui/kantogear.ts";
+import { SpeedStepper, stepHost } from "./gamespeed.ts";
 
 /** The story seed — voxelmon/tapes/story.tape is plotted against it
  * (tools/voxel.ts STORY_SEED). A save system picks its own seed later. */
@@ -82,6 +83,7 @@ let prevTouch = false;
 // the same way prevTouch does for a held tap.
 let prevGearNext = false;
 let prevGearPrev = false;
+const stepper = new SpeedStepper();
 (globalThis as unknown as { frame: (buttons: number) => void }).frame = (
   buttons: number,
 ): void => {
@@ -135,13 +137,17 @@ let prevGearPrev = false;
   if (gearPrev && !prevGearPrev) game.cycleGearView(-1);
   prevGearNext = gearNext;
   prevGearPrev = gearPrev;
-  game.tick(phys);
+  // GAME SPEED (gamespeed.ts): SPEED's logic ticks for this host step, the
+  // scene composed on the last of them and only when the host renders after
+  // this step (voxel.lastStep) -- a frame at 30 fps runs two steps, and a
+  // scene composed on the first is overwritten unseen. A host without
+  // lastStep composes every step, as it always has.
+  const show = !native.lastStep || native.lastStep();
+  stepHost(stepper, game.logicSpeed(), show, (compose) => game.tick(phys, compose));
   // Kanto Gear companion: redraw the bottom-screen surface from current game
   // state. A host without a second screen ignores the UI_*_BOTTOM ops. Only
-  // on the step the host renders after (voxel.lastStep): a frame that runs
-  // two steps (every frame at 30 fps) would draw the gear twice, and the
-  // first is overwritten unseen. A host without lastStep draws every step.
-  if (!native.lastStep || native.lastStep()) {
+  // on the step the host renders after, for the same reason.
+  if (show) {
     drawKantoGear(host, game as unknown as Parameters<typeof drawKantoGear>[1]);
   }
 };

@@ -30,7 +30,7 @@ import { expForLevel } from "../voxelmon/game/rules/growth.ts";
 import { encodeSave } from "../voxelmon/game/save-lua.ts";
 import { decodeSave } from "../voxelmon/game/save-read.ts";
 import { fromDisk, toDisk } from "../voxelmon/game/savecompat.ts";
-import { CHEAT_ROWS, CHEAT_TEXT, ENHANCEMENT_ROWS, OPTION_PAGES } from "../voxelmon/game/ui/extras_layout.ts";
+import { CHEAT_ROWS, CHEAT_TEXT, ENHANCEMENT_ROWS, OPTION_PAGES, SPEED_ROW } from "../voxelmon/game/ui/extras_layout.ts";
 import { OptionsMenuState } from "../voxelmon/game/ui/optionsmenu.ts";
 import { PartyState } from "../voxelmon/game/ui/partyscreen.ts";
 import { drawKantoGear, gearTabs, gearTouchDown, gearTouchUp } from "../voxelmon/game/ui/kantogear.ts";
@@ -597,7 +597,7 @@ describe("GIVE ITEMS", () => {
 // ---------------------------------------------------------------------------
 
 describe("the OPTION screen: SETTINGS and ENHANCEMENTS", () => {
-  test("SETTINGS keeps its rows and ends on CHEATS; ENHANCEMENTS has the four toggles", () => {
+  test("SETTINGS keeps its rows and ends on CHEATS; ENHANCEMENTS has SPEED and the four toggles", () => {
     const save: any = {};
     const pressed: Record<string, boolean> = {};
     const st = new OptionsMenuState({ input: { pressed }, pop() {}, save } as never);
@@ -613,20 +613,20 @@ describe("the OPTION screen: SETTINGS and ENHANCEMENTS", () => {
     const e = st.view();
     expect(e.page).toBe(1);
     expect(e.index).toBe(0);
-    expect(e.rows.map((r) => r.label)).toEqual(ENHANCEMENT_ROWS.map((r) => r.label));
-    expect(e.rows.every((r) => r.index === 0)).toBe(true); // OFF unless set
+    expect(e.rows.map((r) => r.label)).toEqual([SPEED_ROW, ...ENHANCEMENT_ROWS].map((r) => r.label));
+    expect(e.rows.every((r) => r.index === 0)).toBe(true); // 1X, and OFF, unless set
     // walk to TRADE EVO and turn it on
-    pressed.down = true; st.update(); st.update(); pressed.down = false;
+    pressed.down = true; st.update(); st.update(); st.update(); pressed.down = false;
     pressed.right = true; st.update(); pressed.right = false;
     expect(save.options.tradeEvoLv40).toBe(true);
-    expect(st.view().rows[2]!.index).toBe(1);
+    expect(st.view().rows[3]!.index).toBe(1);
     // SELECT turns back to SETTINGS
     pressed.select = true; st.update(); pressed.select = false;
     expect(st.view().page).toBe(0);
   });
 
   test("every label and choice row fits the 20 columns", () => {
-    for (const r of ENHANCEMENT_ROWS) {
+    for (const r of [SPEED_ROW, ...ENHANCEMENT_ROWS]) {
       expect(encodeGlyphs(r.label).length).toBeLessThanOrEqual(19);
       const w = r.choices.reduce((n, c) => n + c.length + 2, 1);
       expect(w).toBeLessThanOrEqual(20);
@@ -683,8 +683,9 @@ describe("the OPTION screen: SETTINGS and ENHANCEMENTS", () => {
     game.tick(0);
     expect(rowText(17, 4, "ENHANCEMENTS")).toEqual(encodeGlyphs("ENHANCEMENTS"));
     expect(host.grid[17]![2]).toBe(0x13);
-    expect(rowText(1, 1, "EXP FOR CATCHING")).toEqual(encodeGlyphs("EXP FOR CATCHING"));
-    expect(rowText(3, 2, "OFF")).toEqual(encodeGlyphs("OFF"));
+    expect(rowText(1, 1, "SPEED")).toEqual(encodeGlyphs("SPEED"));
+    expect(rowText(3, 2, "1X")).toEqual(encodeGlyphs("1X"));
+    expect(rowText(5, 1, "EXP FOR CATCHING")).toEqual(encodeGlyphs("EXP FOR CATCHING"));
     expect(host.outside).toBe(0);
   });
 });
@@ -848,7 +849,7 @@ describe("the gear's CHEATS app", () => {
 
 describe("the settings in the save", () => {
   const extras = {
-    expForCatching: true, partyExpShare: true, tradeEvoLv40: true, hmsWithoutMove: true, cheats: true,
+    gameSpeed: 2, expForCatching: true, partyExpShare: true, tradeEvoLv40: true, hmsWithoutMove: true, cheats: true,
     wildEncounters: "less", alwaysCatch: true, instantVictory: true, infiniteMoney: true,
   };
 

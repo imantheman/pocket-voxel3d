@@ -30,7 +30,8 @@
 //   battle and the window's void around it; the Gold screen is 160x144).
 // Kept: Gold's TEXT SPEED, BATTLE SCENE, BATTLE STYLE, SOUND, PRINT (hidden,
 // as the Lua hides it), MENU ACCOUNT, FRAME, BACK; and the port rows that run
-// here: MUSIC VOL, SFX VOL, MUSIC FILTER, GAME SPEED, VOID FILL, LOGIC CLOCK.
+// here: MUSIC VOL, SFX VOL, MUSIC FILTER, GAME SPEED (as this port's SPEED,
+// 1X or 2X under its own key, on ENHANCEMENTS), VOID FILL, LOGIC CLOCK.
 // Added: TILT SHIFT, this port's own (voxelmon/game/tiltshift.ts), which the
 // Kanto games' OPTION screen carries too.
 
@@ -42,12 +43,12 @@ import { Save } from "../core/Save.ts";
 import { Strings } from "../shared/core/Strings.ts";
 import { Music } from "../shared/core/Music.ts";
 import { Sound } from "../shared/core/Sound.ts";
-import { GameSpeed } from "../shared/core/GameSpeed.ts";
+import { GAME_SPEEDS, GAME_SPEED_LABEL, gameSpeedIndex, setGameSpeedIn } from "../../gamespeed.ts";
 import { LogicClock } from "../shared/core/LogicClock.ts";
 import { BorderFill } from "../world/BorderFill.ts";
 import { Font } from "../shared/render/Font.ts";
 import { GbcPalette } from "../shared/render/GbcPalette.ts";
-import { tonumber, tostring } from "../platform/lua.ts";
+import { tostring } from "../platform/lua.ts";
 import { TILT_SHIFTS, tiltShiftLevel } from "../../tiltshift.ts";
 import { SCREENS_2D, VIEW_MODES, ZOOMS_2D, screen2dIndex, viewIndex, zoom2dIndex } from "../../viewmode.ts";
 import { CAMERA_SPEEDS, cameraSpeedIndex } from "../../cameraspeed.ts";
@@ -104,6 +105,21 @@ function onOffRow(label: string, key: string): OptionRow {
     text: (options) => Strings.get(options[key] === true ? "ON" : "OFF"),
   };
 }
+
+/**
+ * SPEED, the port's fast-forward (voxelmon/game/gamespeed.ts): the logic
+ * runs 1X or 2X, the music does not. Saved as options.gameSpeed (1 or 2),
+ * at the top of the ENHANCEMENTS page; the Kanto games' wording
+ * (ui/extras_layout.ts SPEED_ROW).
+ */
+export const GAME_SPEED_ROW: OptionRow = {
+  label: Strings.source(GAME_SPEED_LABEL), key: "gameSpeed", port: true,
+  cycle: (options, delta) => {
+    const n = GAME_SPEEDS.length;
+    setGameSpeedIn(options, GAME_SPEEDS[(((gameSpeedIndex(options) + delta) % n) + n) % n]!.key);
+  },
+  text: (options) => Strings.get(GAME_SPEEDS[gameSpeedIndex(options)]!.label),
+};
 
 // Lua: OptionsMenu.lua:122 -- each row: the label, the option key it edits,
 // and the cycle of values with the exact strings the cart prints (trailing
@@ -177,18 +193,6 @@ const ROWS: OptionRow[] = [
       Music.setFilterLevel(options.musicFilter);
     },
     text: (options) => Strings.get(FILTERS[(options.musicFilter ?? 0)]!),
-  },
-  // Lua: OptionsMenu.lua:220
-  {
-    label: Strings.source("GAME SPEED"), key: "speed", port: true,
-    cycle: (options, delta) => {
-      options.speed = GameSpeed.cycle(options.speed, delta);
-    },
-    text: (options) => {
-      const speed = tonumber(options.speed) ?? 1;
-      if (speed === 1) return Strings.get("NORMAL");
-      return Strings.get("%dX", speed);
-    },
   },
   // Lua: OptionsMenu.lua:249 -- VOID FILL: FADE is each map's own border block
   // with the dissolve across a boundary; WATER / TREES force one outdoor
@@ -297,8 +301,9 @@ const ROWS: OptionRow[] = [
   },
   // Not the Lua's: the ENHANCEMENTS page (core/Cheats.ts has what each one
   // does). OFF unless set.
-  // (SPEED: the game-speed branch's 1X/2X row goes here, at the top of the
-  // page, when the two are merged.)
+  // SPEED heads the page: the Lua's GAME SPEED (OptionsMenu.lua:220,
+  // `speed`, 1X to 200X) as this port's 1X / 2X under its own key.
+  GAME_SPEED_ROW,
   onOffRow("EXP FOR CATCHING", "expForCatching"),
   onOffRow("PARTY EXP SHARE", "partyExpShare"),
   onOffRow("TRADE EVO LV.40", "tradeEvoLv40"),
@@ -331,7 +336,8 @@ interface Group {
 // Lua: OptionsMenu.lua:485 -- the Gen 1 screen's grouping, with Gold's rows.
 // Members whose rows were dropped (see the header) simply never match.
 const GROUPS: Group[] = [
-  { id: "group.speed", label: Strings.source("SPEED"), members: ["textSpeed", "speed"] },
+  // (the Lua's GAME SPEED is this port's SPEED, on ENHANCEMENTS)
+  { id: "group.speed", label: Strings.source("SPEED"), members: ["textSpeed"] },
   {
     id: "group.video", label: Strings.source("VIDEO"),
     members: ["videoMode", "screenPos", "fpsCap", "vsync", "logicClock"],
@@ -354,7 +360,7 @@ const GROUPS: Group[] = [
   // its CHEATS live on the bottom screen here, behind the CHEATS row)
   {
     id: "group.enhancements", label: Strings.source("ENHANCEMENTS"),
-    members: ["speed2x", "expForCatching", "partyExpShare", "tradeEvoLv40", "hmsWithoutMove"],
+    members: ["gameSpeed", "expForCatching", "partyExpShare", "tradeEvoLv40", "hmsWithoutMove"],
   },
 ];
 

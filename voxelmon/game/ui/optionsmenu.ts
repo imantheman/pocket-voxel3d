@@ -60,6 +60,7 @@ export const OPTIONS_VISIBLE = 4;
 export { CAMERA_SPEED_DEFAULT_Q8, CAMERA_SPEEDS } from "../cameraspeed.ts";
 import { RUNNING_SHOES, runningShoesOn } from "../runshoes.ts";
 import { EVENT_POKEMON, eventPokemonOn } from "../eventmons.ts";
+import { GAME_SPEEDS, gameSpeedIndex, setGameSpeedIn } from "../gamespeed.ts";
 
 interface OptionsSave {
   options?: {
@@ -96,7 +97,7 @@ export class OptionsMenuState implements GameState {
     this.first = 0;
   }
 
-  /** The ENHANCEMENTS rows on show: SPEED once its setter is merged. */
+  /** The ENHANCEMENTS rows on show: SPEED (../gamespeed.ts), then the rest. */
   private enhancementDefs(): ExtrasRowDef[] {
     return [...(SPEED_ROW_READY ? [SPEED_ROW] : []), ...ENHANCEMENT_ROWS];
   }
@@ -121,11 +122,12 @@ export class OptionsMenuState implements GameState {
 
   private rows(): OptionsRow[] {
     if (this.page === 1) {
-      // ENHANCEMENTS (extras.ts): OFF / ON toggles, OFF unless set
+      // ENHANCEMENTS: SPEED's 1X / 2X (../gamespeed.ts, options.gameSpeed),
+      // then OFF / ON toggles (extras.ts), OFF unless set
       return this.enhancementDefs().map((d) => ({
         label: d.label,
         choices: [...d.choices],
-        index: d.key === "speed" ? 0 : this.opts()[d.key] === true ? 1 : 0,
+        index: d === SPEED_ROW ? gameSpeedIndex(this.opts()) : this.opts()[d.key] === true ? 1 : 0,
       }));
     }
     return [...this.settingsRows(), {
@@ -228,8 +230,9 @@ export class OptionsMenuState implements GameState {
     const at = Math.max(0, Math.min(r.choices.length - 1, to));
     if (this.page === 1) {
       const d = this.enhancementDefs()[row]!;
-      // SPEED's setter arrives with the game-speed work (extras_layout.ts)
-      if (d.key !== "speed") this.opts()[d.key] = at === 1;
+      // SPEED: 1 or 2 (game.gameSpeed / setGameSpeed read and write the same key)
+      if (d === SPEED_ROW) setGameSpeedIn(this.opts(), GAME_SPEEDS[at]!.key);
+      else this.opts()[d.key] = at === 1;
       return;
     }
     if (row === rows.length - 1) { this.opts().cheats = at === 1; return; }

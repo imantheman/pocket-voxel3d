@@ -7,13 +7,14 @@
 // Boot: the dataset is Gold's container (platform/container.ts) -- each
 // importer table handed to the engine as a lazily parsed string -- then the
 // Gold screen learns where the cooked tile pages live, Game2 loads, and per
-// host tick `frame(buttons)` runs one 60 Hz step, composes the Gold screen,
-// and emits the voxel scene under it.
+// host tick `frame(buttons)` runs one 60 Hz step (two at GAME SPEED 2X),
+// composes the Gold screen, and emits the voxel scene under it.
 
 import { native, QuickJsHost, STICK_RANGE } from "../quickjs-host.ts";
 import { tiltShiftLevel } from "../tiltshift.ts";
 import { is2d } from "../viewmode.ts";
 import { cameraSpeedQ8 } from "../cameraspeed.ts";
+import { SpeedStepper, stepHost } from "../gamespeed.ts";
 import { readGen2Container } from "./platform/container.ts";
 import { loadGenerated, setGen2Source } from "./platform/data.ts";
 import { Lcd } from "./platform/lcd.ts";
@@ -124,6 +125,7 @@ const prof = { n: 0, step: 0, draw: 0, end: 0, view: 0 };
 // which feeds them, builds a sizeable object graph each call.
 let stepNo = 0;
 const lastStep = native.lastStep;
+const stepper = new SpeedStepper();
 
 (globalThis as unknown as { frame: (buttons: number) => void }).frame = (buttons: number): void => {
   clock = (globalThis as unknown as { goldProf?: boolean }).goldProf || !lastStep ? nowFn : undefined;
@@ -151,12 +153,18 @@ const lastStep = native.lastStep;
     }
   }
   try {
-    game.frame(buttons & 0xff);
-    // the CABLE CLUB's link (polled every step, as the carrier needs)
-    game.serviceLink();
-    // the bottom screen's touch, packed above the pad by the host (bit 8 a
-    // finger down, bits 9-16 x/2, bits 17-23 y/2 -- psp-main.ts reads the same)
-    companion.touch(game, ((buttons >> 9) & 0xff) * 2, ((buttons >> 17) & 0x7f) * 2, (buttons & 0x100) !== 0);
+    // the sound's clock, once per real 1/60 s whatever GAME SPEED is
+    game.audioFrame();
+    // GAME SPEED (../gamespeed.ts): logicSpeed() logic ticks this step; the
+    // compose below runs once, after the last of them
+    stepHost(stepper, game.logicSpeed(), compose, () => {
+      game.logicFrame(buttons & 0xff);
+      // the CABLE CLUB's link (polled every step, as the carrier needs)
+      game.serviceLink();
+      // the bottom screen's touch, packed above the pad by the host (bit 8 a
+      // finger down, bits 9-16 x/2, bits 17-23 y/2 -- psp-main.ts reads the same)
+      companion.touch(game, ((buttons >> 9) & 0xff) * 2, ((buttons >> 17) & 0x7f) * 2, (buttons & 0x100) !== 0);
+    });
   } catch (e) {
     Logger.error("gold: step: %s", String((e as Error)?.stack ?? e));
   }

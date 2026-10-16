@@ -550,9 +550,9 @@ describe("the real cartridges (headless)", () => {
 // options table, which the Lua save also carries as save.options; none of
 // them is a cartridge setting, so the VC converter must neither write them
 // nor make them up.
-describe("the ENHANCEMENTS and CHEATS keys", () => {
+describe("the SPEED, ENHANCEMENTS and CHEATS keys", () => {
   const CHEAT_KEYS = {
-    expForCatching: true, partyExpShare: true, tradeEvoLv40: true, hmsWithoutMove: true,
+    gameSpeed: 2, expForCatching: true, partyExpShare: true, tradeEvoLv40: true, hmsWithoutMove: true,
     cheats: true, wildEncounters: "none", shinyOdds: 64, alwaysCatch: true,
     instantVictory: true, fastEggs: true, infiniteMoney: true,
   };

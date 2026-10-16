@@ -58,6 +58,7 @@ import { MenuFade } from "../ui/MenuFade.ts";
 import { Vc, type CopyResult } from "../vc/session.ts";
 import * as saveio from "../platform/saveio.ts";
 import { tonumber } from "../platform/lua.ts";
+import { gameSpeedOf, setGameSpeedIn } from "../../gamespeed.ts";
 
 function noop(): void {}
 
@@ -976,17 +977,62 @@ export class Game2 {
     return this.phase === "boot" && this.stack.top() !== undefined;
   }
 
+  /**
+   * Logic ticks per host step (gen2/main.ts runs this many logicFrame()s
+   * a frame() call): the OPTION screen's SPEED (voxelmon/game/gamespeed.ts,
+   * options.gameSpeed), except over a link -- the CABLE CLUB's session, a
+   * link battle -- which runs at 1X on both machines (Game.lua:376
+   * logicSpeed puts the link first the same way). speedOverride is the
+   * driver's hook. The text box's sfx waits divide by it (TextBox.ts
+   * sfxWaitStep), so a wait for a sound still lasts the sound.
+   *
+   * (gen1recomp's own `options.speed` stays in the options file untouched:
+   * on the 3DS it never drove anything, and its levels run to 200X.)
+   */
   logicSpeed(): number {
-    return Math.max(1, Number(this.speedOverride ?? this.options?.speed ?? 1) || 1);
+    if (this.club?.session || this.club?.battle) return 1;
+    if (this.speedOverride != null) return Math.max(1, Number(this.speedOverride) || 1);
+    return gameSpeedOf(this.options);
+  }
+
+  /** options.gameSpeed, the OPTION screen's SPEED: 1 or 2. */
+  gameSpeed(): number {
+    return gameSpeedOf(this.options);
+  }
+
+  /** Set SPEED (clamped to 1 or 2); takes effect on the next host step. The
+   * options file is written by whoever writes it for the other rows (the
+   * OPTION screen's onDone). */
+  setGameSpeed(n: number): number {
+    if (!this.options || typeof this.options !== "object") this.options = {};
+    return setGameSpeedIn(this.options, n);
   }
 
   /**
-   * One 60 Hz step: Game2:update's per-step audio work, then the FixedStep
-   * callback (Game2.lua:1236), with the pad's buttons for this step.
+   * One 60 Hz step: the audio frame, then one logic tick -- the 3DS entry
+   * calls the two halves itself, the audio once per real 1/60 s and the
+   * logic logicSpeed() times (gen1recomp Game2:update does the same: audio
+   * off its own real-time accumulator, the fixed step N times).
    */
   frame(buttons: number): void {
+    this.audioFrame();
+    this.logicFrame(buttons);
+  }
+
+  /**
+   * Game2:update's real-time half (Game2.lua:1290-1299): the sound's frame
+   * clock and fades, and the map name sign. Once per real 1/60 s whatever
+   * GAME SPEED is, so music keeps its tempo and a wait for a sound (which
+   * reads this clock) lasts as long as the sound does.
+   */
+  audioFrame(): void {
     Music.update(this.data);
     if (this.world && this.world.map) MapNameSign.frame(this.world);
+  }
+
+  /** The FixedStep callback (Game2.lua:1236): one logic tick, with the
+   * pad's buttons for it. */
+  logicFrame(buttons: number): void {
     Input.setButtons(buttons);
     ModRuntime.call("input.step", noop, this, 1 / 60);
     this.autoInput.step(this.input);
