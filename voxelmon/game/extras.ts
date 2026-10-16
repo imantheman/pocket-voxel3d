@@ -19,9 +19,14 @@
 //   hmsWithoutMove   CUT, FLY, SURF, STRENGTH and FLASH can be used outside
 //                    battle with the HM in the bag and the badge the cart
 //                    asks for, whether or not a party mon knows the move.
+//   visibleWild      OFF / SOME / MANY: the wild mons walk about the map and
+//                    a touch is the battle; the step roll stops while it is
+//                    on (visiblewild.ts, world/wildmons.ts).
 //   wildEncounters   NONE / LESS (half the map's rate) / NORMAL / MORE
 //                    (double, capped at 255). Only the random step roll:
 //                    fishing, scripted and static battles are untouched.
+//                    Under VISIBLE WILD it scales how many walk about
+//                    instead (NONE: none).
 //   alwaysCatch      every ball thrown at a catchable mon catches. Trainers
 //                    still block, the tower ghost still dodges, the SAFARI
 //                    ZONE still counts its balls.
@@ -45,6 +50,7 @@ export interface ExtrasOptions {
   partyExpShare?: boolean;
   tradeEvoLv40?: boolean;
   hmsWithoutMove?: boolean;
+  visibleWild?: string;
   cheats?: boolean;
   wildEncounters?: string;
   alwaysCatch?: boolean;
