@@ -1036,6 +1036,531 @@ function movesLearnedAt(speciesDef, level) {
   return out;
 }
 
+// voxelmon/game/rules/bag.ts
+var DEFAULT_CAPACITY = 20;
+function capacity(data) {
+  const configured = data?.constants?.bagSize;
+  if (typeof configured === "number" && configured >= 1) {
+    return Math.floor(configured);
+  }
+  return DEFAULT_CAPACITY;
+}
+function precious(data, id) {
+  const def = data.items?.[id];
+  return !def || id.startsWith("HM_") || def.keyItem === true || def.tossable === false;
+}
+function isBadge(id) {
+  return id.includes("BADGE");
+}
+function slots(save) {
+  let n = 0;
+  for (const id of Object.keys(save.inventory)) {
+    if (!isBadge(id))
+      n += 1;
+  }
+  return n;
+}
+function order(save) {
+  let list = save.bagOrder;
+  if (!Array.isArray(list)) {
+    list = undefined;
+  }
+  if (!list) {
+    list = [];
+    for (const id of Object.keys(save.inventory)) {
+      if (!isBadge(id))
+        list.push(id);
+    }
+    list.sort();
+    save.bagOrder = list;
+  }
+  const seen = new Set;
+  for (let i = list.length - 1;i >= 0; i--) {
+    const id = list[i];
+    if (save.inventory[id] === undefined || seen.has(id)) {
+      list.splice(i, 1);
+    } else {
+      seen.add(id);
+    }
+  }
+  for (const id of Object.keys(save.inventory)) {
+    if (!isBadge(id) && !seen.has(id))
+      list.push(id);
+  }
+  return list;
+}
+function add(save, id, qty, data) {
+  const inv = save.inventory;
+  if (inv[id] === undefined && !isBadge(id) && slots(save) >= capacity(data)) {
+    return false;
+  }
+  if (!isBadge(id) && (inv[id] ?? 0) + (qty ?? 1) > 99) {
+    return false;
+  }
+  const isNew = inv[id] === undefined;
+  inv[id] = (inv[id] ?? 0) + (qty ?? 1);
+  if (isNew && !isBadge(id)) {
+    order(save).push(id);
+  }
+  return true;
+}
+function remove(save, id, qty) {
+  const inv = save.inventory;
+  inv[id] = (inv[id] ?? 0) - (qty ?? 1);
+  if (inv[id] <= 0) {
+    delete inv[id];
+    const list = save.bagOrder;
+    if (Array.isArray(list)) {
+      const i = list.indexOf(id);
+      if (i !== -1)
+        list.splice(i, 1);
+    }
+  }
+}
+
+// voxelmon/game/savecompat.ts
+var GEN1RECOMP_FORMAT = 5;
+var known = (table, id) => typeof id === "string" && !!table && Object.prototype.hasOwnProperty.call(table, id);
+function eachMon(save, fn) {
+  for (const mon of save.party ?? [])
+    if (mon && typeof mon === "object")
+      fn(mon);
+  for (const box of save.boxes ?? [])
+    for (const mon of box ?? [])
+      if (mon && typeof mon === "object")
+        fn(mon);
+  if (save.daycare?.mon && typeof save.daycare.mon === "object")
+    fn(save.daycare.mon);
+}
+function orphaned(save) {
+  save.orphaned ??= {};
+  save.orphaned.mons ??= [];
+  save.orphaned.items ??= [];
+  return save.orphaned;
+}
+function scrubMons(list, where, save, data, report) {
+  if (!Array.isArray(list) || !data.pokemon)
+    return;
+  for (let i = list.length - 1;i >= 0; i--) {
+    const mon = list[i];
+    if (!mon || typeof mon !== "object" || !known(data.pokemon, mon.species)) {
+      list.splice(i, 1);
+      orphaned(save).mons.push(mon);
+      report.lostMons.push({ species: mon?.species, from: where });
+      continue;
+    }
+    scrubMoves(mon, data, report);
+  }
+}
+function scrubMoves(mon, data, report) {
+  if (!Array.isArray(mon.moves) || !data.moves)
+    return;
+  const had = mon.moves.length > 0;
+  for (let j = mon.moves.length - 1;j >= 0; j--) {
+    const slot = mon.moves[j];
+    const id = slot && typeof slot === "object" ? slot.id : slot;
+    if (!known(data.moves, id)) {
+      mon.moves.splice(j, 1);
+      report.droppedMoves.push({ species: String(mon.species), move: String(id) });
+    }
+  }
+  if (mon.moves.length > 4)
+    mon.moves.length = 4;
+  if (had && mon.moves.length === 0) {
+    const fallback = data.constants?.fallbackMove ?? "TACKLE";
+    const def = data.moves[fallback];
+    if (def)
+      mon.moves.push({ id: fallback, pp: def.pp ?? 35 });
+  }
+}
+function scrubItems(map, where, save, data, report) {
+  if (!map || typeof map !== "object" || !data.items)
+    return;
+  for (const [id, count] of Object.entries(map)) {
+    if (known(data.items, id))
+      continue;
+    delete map[id];
+    const n = Number(count) || 0;
+    orphaned(save).items.push({ id, count: n, from: where });
+    report.lostItems.push({ id, count: n, from: where });
+  }
+}
+function reclaim(save, data, report) {
+  const o = save.orphaned;
+  if (!o)
+    return;
+  const mons = o.mons ?? [];
+  for (let i = mons.length - 1;i >= 0; i--) {
+    const mon = mons[i];
+    if (!mon || !known(data.pokemon, mon.species))
+      continue;
+    save.boxes ??= [];
+    for (let b = 0;b < 12; b++)
+      save.boxes[b] ??= [];
+    const box = save.boxes.find((bx) => bx.length < 20);
+    if (!box)
+      continue;
+    box.push(mon);
+    mons.splice(i, 1);
+    report.restoredMons.push({ species: mon.species });
+  }
+  const items = o.items ?? [];
+  for (let i = items.length - 1;i >= 0; i--) {
+    const e = items[i];
+    if (!e || !known(data.items, e.id))
+      continue;
+    save.pcItems ??= {};
+    save.pcItems[e.id] = Math.min(99, (Number(save.pcItems[e.id]) || 0) + (Number(e.count) || 0));
+    if (!Array.isArray(save.pcOrder))
+      save.pcOrder = [];
+    if (!save.pcOrder.includes(e.id))
+      save.pcOrder.push(e.id);
+    items.splice(i, 1);
+    report.restoredItems.push({ id: e.id, count: Number(e.count) || 0 });
+  }
+  if (mons.length === 0 && items.length === 0)
+    delete save.orphaned;
+}
+function scrubMaps(save, data, report) {
+  if (!data.maps)
+    return;
+  const spawn = { map: "REDS_HOUSE_2F", x: 3, y: 6 };
+  if (save.lastHeal && !known(data.maps, save.lastHeal.map)) {
+    report.remappedMaps.push({ id: save.lastHeal.map, to: spawn.map, field: "lastHeal" });
+    save.lastHeal = { ...spawn };
+  }
+  if (save.player && !known(data.maps, save.player.map)) {
+    const heal = save.lastHeal ?? spawn;
+    report.remappedMaps.push({ id: save.player.map, to: heal.map, field: "player" });
+    save.player.map = heal.map;
+    save.player.x = heal.x;
+    save.player.y = heal.y;
+  }
+  if (save.lastOutdoor && !known(data.maps, save.lastOutdoor.id)) {
+    report.remappedMaps.push({ id: save.lastOutdoor.id, field: "lastOutdoor" });
+    delete save.lastOutdoor;
+  }
+  if (save.lastHeal?.outdoor && !known(data.maps, save.lastHeal.outdoor.id))
+    delete save.lastHeal.outdoor;
+}
+function migratePc(save) {
+  const old = save.pc;
+  if (!old || typeof old !== "object")
+    return;
+  if (!save.pcItems || typeof save.pcItems !== "object")
+    save.pcItems = {};
+  if (!Array.isArray(save.pcOrder))
+    save.pcOrder = [];
+  for (const [id, n] of Object.entries(old.inventory ?? {})) {
+    save.pcItems[id] = Math.min(99, (Number(save.pcItems[id]) || 0) + (Number(n) || 0));
+  }
+  const was = Array.isArray(old.bagOrder) ? old.bagOrder : [];
+  for (const id of [...was, ...Object.keys(save.pcItems)]) {
+    if (save.pcItems[id] > 0 && !save.pcOrder.includes(id))
+      save.pcOrder.push(id);
+  }
+  delete save.pc;
+}
+function syncItemBalls(save, maps) {
+  if (!maps || !save || typeof save !== "object")
+    return;
+  if (!save.flags || typeof save.flags !== "object")
+    save.flags = {};
+  const had = save.itemsTaken && typeof save.itemsTaken === "object";
+  const taken = had ? save.itemsTaken : {};
+  for (const [mapId, map] of Object.entries(maps)) {
+    for (const o of map?.objects ?? []) {
+      if (!o.item || !o.text || o.index === undefined)
+        continue;
+      const key = `${mapId}_obj_${o.index}`;
+      const flag = `EVENT_ITEMBALL_${mapId}_${o.text}`;
+      if (taken[key])
+        save.flags[flag] = true;
+      else if (save.flags[flag])
+        taken[key] = true;
+    }
+  }
+  if (had || Object.keys(taken).length > 0)
+    save.itemsTaken = taken;
+}
+function fromDisk(save, data) {
+  const report = { lostMons: [], lostItems: [], remappedMaps: [], droppedMoves: [], restoredMons: [], restoredItems: [] };
+  if (!save || typeof save !== "object")
+    throw new Error("not a save table");
+  if (!save.player || typeof save.player !== "object")
+    throw new Error("the save has no player");
+  const fmt2 = Number(save.meta?.format);
+  if (Number.isFinite(fmt2) && fmt2 > GEN1RECOMP_FORMAT)
+    report.newerFormat = fmt2;
+  const name = save.player.name;
+  const id = save.player.id;
+  eachMon(save, (mon) => {
+    if (mon.otName === undefined && typeof mon.ot === "string") {
+      const mine = mon.ot === name && (mon.otId === undefined || mon.otId === id);
+      if (!mine)
+        mon.otName = mon.ot;
+    }
+    if (mon.traded === undefined && mon.otId !== undefined && id !== undefined && mon.otId !== id)
+      mon.traded = true;
+  });
+  migratePc(save);
+  if (save.surfingHighScore === undefined && save.surfingHiScore !== undefined)
+    save.surfingHighScore = save.surfingHiScore;
+  delete save.surfingHiScore;
+  if (save.usedPokecenter === undefined && typeof save.lastHeal?.map === "string" && save.lastHeal.map.includes("POKECENTER")) {
+    save.usedPokecenter = true;
+  }
+  reclaim(save, data, report);
+  scrubMons(save.party, "party", save, data, report);
+  (save.boxes ?? []).forEach((box, b) => scrubMons(box, `box ${b + 1}`, save, data, report));
+  if (save.daycare?.mon && data.pokemon) {
+    const mon = save.daycare.mon;
+    if (!known(data.pokemon, mon.species)) {
+      orphaned(save).mons.push(mon);
+      report.lostMons.push({ species: mon.species, from: "daycare" });
+      delete save.daycare.mon;
+    } else
+      scrubMoves(mon, data, report);
+  }
+  scrubItems(save.inventory, "bag", save, data, report);
+  scrubItems(save.pcItems, "PC", save, data, report);
+  for (const key of ["bagOrder", "pcOrder"]) {
+    if (Array.isArray(save[key]))
+      save[key] = save[key].filter((i) => known(data.items, i));
+  }
+  scrubMaps(save, data, report);
+  for (const k of data.pokemon ? ["seen", "owned"] : []) {
+    const set = save.pokedex?.[k];
+    if (set && typeof set === "object") {
+      for (const s of Object.keys(set))
+        if (!known(data.pokemon, s))
+          delete set[s];
+    }
+  }
+  return report;
+}
+function reportLines(r) {
+  const out = [];
+  if (r.newerFormat !== undefined)
+    out.push(`This save is from a
+newer version; some
+of it may not carry
+over.`);
+  if (r.lostMons.length)
+    out.push(`${r.lostMons.length} POKéMON this
+game does not know
+were set aside.`);
+  if (r.lostItems.length)
+    out.push(`${r.lostItems.length} item(s) this
+game does not know
+were set aside.`);
+  if (r.remappedMaps.some((m) => m.field === "player"))
+    out.push(`This game does not
+have that place, so
+you are back at the
+last POKéMON CENTER.`);
+  if (r.restoredMons.length || r.restoredItems.length) {
+    out.push(`${r.restoredMons.length} POKéMON and
+${r.restoredItems.length} item(s) set
+aside before are
+back (PC).`);
+  }
+  return out;
+}
+function toDisk(save) {
+  const out = JSON.parse(JSON.stringify(save ?? {}));
+  const name = out.player?.name;
+  const id = out.player?.id;
+  eachMon(out, (mon) => {
+    if (mon.ot === undefined && !(mon.traded && mon.otName === undefined))
+      mon.ot = mon.otName ?? name;
+    if (mon.otId === undefined && !mon.traded && id !== undefined)
+      mon.otId = id;
+  });
+  if (!out.meta || typeof out.meta !== "object")
+    out.meta = { mods: {} };
+  if (!(Number(out.meta.format) >= GEN1RECOMP_FORMAT)) {
+    out.meta.format = GEN1RECOMP_FORMAT;
+  }
+  return out;
+}
+
+// voxelmon/game/world/pcitems.ts
+var PC_ITEM_CAPACITY = 50;
+function pcBag(save) {
+  if (save.pc)
+    migratePc(save);
+  if (!save.pcItems || typeof save.pcItems !== "object")
+    save.pcItems = {};
+  return {
+    get inventory() {
+      return save.pcItems ??= {};
+    },
+    set inventory(v) {
+      save.pcItems = v;
+    },
+    get bagOrder() {
+      return save.pcOrder;
+    },
+    set bagOrder(v) {
+      save.pcOrder = v;
+    }
+  };
+}
+function pcCapacityData(data) {
+  const cap = data?.field?.pcItemCap;
+  return {
+    constants: {
+      ...data?.constants ?? {},
+      bagSize: typeof cap === "number" && cap >= 1 ? cap : PC_ITEM_CAPACITY
+    }
+  };
+}
+function pcOrder(save) {
+  return order(pcBag(save));
+}
+function deposit(save, id, qty, data) {
+  const have = save.inventory?.[id] ?? 0;
+  const n = Math.min(qty, have);
+  if (n <= 0)
+    return false;
+  if (!add(pcBag(save), id, n, pcCapacityData(data)))
+    return false;
+  remove(save, id, n);
+  return true;
+}
+function withdraw(save, id, qty, data) {
+  const box = pcBag(save);
+  const have = box.inventory?.[id] ?? 0;
+  const n = Math.min(qty, have);
+  if (n <= 0)
+    return false;
+  if (!add(save, id, n, data))
+    return false;
+  remove(box, id, n);
+  return true;
+}
+function tossFromPc(save, id, qty) {
+  remove(pcBag(save), id, qty);
+}
+
+// voxelmon/game/extras.ts
+function extraOn(save, key) {
+  return save?.options?.[key] === true;
+}
+var WILD_MODES = ["none", "less", "normal", "more"];
+function wildMode(save) {
+  const v = save?.options?.wildEncounters;
+  return WILD_MODES.includes(v) ? v : "normal";
+}
+function encounterRateFor(rate, mode) {
+  if (mode === "none")
+    return 0;
+  if (mode === "less")
+    return rate > 0 ? Math.max(1, Math.floor(rate / 2)) : 0;
+  if (mode === "more")
+    return Math.min(255, rate * 2);
+  return rate;
+}
+function expShareSplit(participated) {
+  return participated ? 1 : 2;
+}
+var TRADE_EVO_LEVEL = 40;
+function tradeEvoLevel(save) {
+  return extraOn(save, "tradeEvoLv40") ? TRADE_EVO_LEVEL : undefined;
+}
+var FIELD_HMS = {
+  CUT: { item: "HM_CUT", badge: "CASCADEBADGE" },
+  FLY: { item: "HM_FLY", badge: "THUNDERBADGE" },
+  SURF: { item: "HM_SURF", badge: "SOULBADGE" },
+  STRENGTH: { item: "HM_STRENGTH", badge: "RAINBOWBADGE" },
+  FLASH: { item: "HM_FLASH", badge: "BOULDERBADGE" }
+};
+function hmWithoutMove(save, move) {
+  if (!save || !extraOn(save, "hmsWithoutMove"))
+    return false;
+  const need = FIELD_HMS[move];
+  if (!need)
+    return false;
+  const inv = save.inventory ?? {};
+  const hasHm = (inv[need.item] ?? 0) > 0 || (save.pcItems?.[need.item] ?? 0) > 0;
+  return hasHm && (inv[need.badge] ?? 0) > 0;
+}
+var MONEY_MAX = 999999;
+function holdMoney(save) {
+  if (save && extraOn(save, "infiniteMoney") && typeof save.money === "number" && save.money !== MONEY_MAX) {
+    save.money = MONEY_MAX;
+  }
+}
+function fillDex(save, data) {
+  const dex = save.pokedex ??= { seen: {}, owned: {} };
+  dex.seen ??= {};
+  dex.owned ??= {};
+  let added = 0;
+  for (const [id, def] of Object.entries(data.pokemon)) {
+    const n = def?.dex ?? 0;
+    if (n < 1 || n > 151)
+      continue;
+    if (!dex.owned[id])
+      added += 1;
+    dex.seen[id] = true;
+    dex.owned[id] = true;
+  }
+  return added;
+}
+function giveable(id, def) {
+  if (!def)
+    return false;
+  if (isBadge(id) || id.startsWith("FLOOR_"))
+    return false;
+  if (["SURFBOARD", "ITEM_2C", "ITEM_32", "COIN", "POKEDEX", "SAFARI_BALL"].includes(id))
+    return false;
+  if ((def.name ?? "").includes("?"))
+    return false;
+  return true;
+}
+function giveItemList(data) {
+  const rank = (d) => d.machine ? (d.machine.kind === "HM" ? 1000 : 2000) + (d.machine.number ?? 0) : d.index ?? 999;
+  return Object.entries(data.items ?? {}).filter(([id, d]) => giveable(id, d)).sort((a, b) => rank(a[1]) - rank(b[1])).map(([id]) => id);
+}
+function oneOnly(data, id) {
+  return precious(data, id);
+}
+function giveItem(save, data, id, qty) {
+  const out = { bag: 0, pc: 0 };
+  if (!giveable(id, data.items?.[id])) {
+    out.refused = "full";
+    return out;
+  }
+  const box = pcBag(save);
+  const one = oneOnly(data, id);
+  if (one && ((save.inventory[id] ?? 0) > 0 || (box.inventory[id] ?? 0) > 0)) {
+    out.refused = "have";
+    return out;
+  }
+  let left = one ? 1 : Math.max(1, Math.min(99, Math.floor(qty)));
+  const room = (s, cap) => {
+    const have = s.inventory[id];
+    if (have !== undefined)
+      return Math.max(0, 99 - have);
+    return slots(s) < cap ? 99 : 0;
+  };
+  const toBag = Math.min(left, room(save, capacity(data)));
+  if (toBag > 0 && add(save, id, toBag, data)) {
+    out.bag = toBag;
+    left -= toBag;
+  }
+  if (left > 0) {
+    const pcData = pcCapacityData(data);
+    const toPc = Math.min(left, room(box, capacity(pcData)));
+    if (toPc > 0 && add(box, id, toPc, pcData))
+      out.pc = toPc;
+  }
+  if (out.bag === 0 && out.pc === 0)
+    out.refused = "full";
+  return out;
+}
+
 // voxelmon/game/rules/turnorder.ts
 function effectiveSpeed(battler) {
   let spd = applyStage(battler.curStats.speed, battler.stages?.speed ?? 0);
@@ -2574,8 +3099,8 @@ class MoveAnim {
           if (tailFx === "flash")
             flashScreen();
         } else {
-          const known = SE_FRAMES[row.effect];
-          const dur = known ?? SE_PAUSE_FRAMES;
+          const known2 = SE_FRAMES[row.effect];
+          const dur = known2 ?? SE_PAUSE_FRAMES;
           events.push({ effect: row.effect, frame, dur });
           if (dur > 0)
             emit(dur);
@@ -2589,7 +3114,7 @@ class MoveAnim {
       }
       const transform = resolveTransform(sub.type, attackerIsPlayer);
       const reverse = transform === "REVERSE";
-      const order = reverse ? [...sub.blocks].reverse() : sub.blocks;
+      const order2 = reverse ? [...sub.blocks].reverse() : sub.blocks;
       const passes = opts.shakes ?? 1;
       for (let pass = 0;pass < passes; pass++) {
         if (opts.shakes !== undefined) {
@@ -2598,7 +3123,7 @@ class MoveAnim {
         }
         let dest = 0;
         let played = 0;
-        for (const entry of order) {
+        for (const entry of order2) {
           const fb = data.frameBlocks[entry.block];
           const bc = data.baseCoords[entry.base];
           if (!fb || !bc) {
@@ -2642,7 +3167,7 @@ class MoveAnim {
           if (ballFlicker)
             obp0Flip = !obp0Flip;
           if (idFx) {
-            const counter = order.length - played + 1;
+            const counter = order2.length - played + 1;
             if (idFx === "flash" || idFx === "every4" && counter % 4 === 0 || idFx === "every8" && counter % 8 === 0 || idFx === "blizzard" && (counter === 13 || counter === 9 || counter === 5 || counter === 1)) {
               flashScreen();
             } else if (idFx === "explode") {
@@ -3302,9 +3827,9 @@ is unaffected!`);
   },
   METRONOME_EFFECT: {
     callsMove: (ctx) => {
-      const order = ctx.data.constants?.moveOrder ?? Object.keys(ctx.data.moves);
+      const order2 = ctx.data.constants?.moveOrder ?? Object.keys(ctx.data.moves);
       for (let tries = 0;tries < 1000; tries++) {
-        const pick = order[randRange(ctx.rng, 1, order.length) - 1];
+        const pick = order2[randRange(ctx.rng, 1, order2.length) - 1];
         if (pick !== "METRONOME" && pick !== "STRUGGLE" && ctx.data.moves[pick])
           return pick;
       }
@@ -3550,15 +4075,15 @@ hit with recoil!`);
 // voxelmon/game/battle/mon.ts
 function movesAtLevel(speciesDef, level) {
   const moves = [];
-  const add = (id) => {
+  const add2 = (id) => {
     if (!moves.includes(id))
       moves.push(id);
   };
   for (const m of speciesDef.level1Moves)
-    add(m);
+    add2(m);
   for (const entry of speciesDef.learnset) {
     if (entry.level <= level)
-      add(entry.move);
+      add2(entry.move);
   }
   while (moves.length > 4)
     moves.shift();
@@ -4000,7 +4525,7 @@ function ensure2(save) {
 function active(save) {
   return ensure2(save)[save.currentBox - 1];
 }
-function deposit(save, mon) {
+function deposit2(save, mon) {
   const boxes = ensure2(save);
   for (let off = 0;off < BOX_COUNT; off++) {
     const i = (save.currentBox - 1 + off) % BOX_COUNT;
@@ -4010,88 +4535,6 @@ function deposit(save, mon) {
     }
   }
   return null;
-}
-
-// voxelmon/game/rules/bag.ts
-var DEFAULT_CAPACITY = 20;
-function capacity(data) {
-  const configured = data?.constants?.bagSize;
-  if (typeof configured === "number" && configured >= 1) {
-    return Math.floor(configured);
-  }
-  return DEFAULT_CAPACITY;
-}
-function precious(data, id) {
-  const def = data.items?.[id];
-  return !def || id.startsWith("HM_") || def.keyItem === true || def.tossable === false;
-}
-function isBadge(id) {
-  return id.includes("BADGE");
-}
-function slots(save) {
-  let n = 0;
-  for (const id of Object.keys(save.inventory)) {
-    if (!isBadge(id))
-      n += 1;
-  }
-  return n;
-}
-function order(save) {
-  let list = save.bagOrder;
-  if (!Array.isArray(list)) {
-    list = undefined;
-  }
-  if (!list) {
-    list = [];
-    for (const id of Object.keys(save.inventory)) {
-      if (!isBadge(id))
-        list.push(id);
-    }
-    list.sort();
-    save.bagOrder = list;
-  }
-  const seen = new Set;
-  for (let i = list.length - 1;i >= 0; i--) {
-    const id = list[i];
-    if (save.inventory[id] === undefined || seen.has(id)) {
-      list.splice(i, 1);
-    } else {
-      seen.add(id);
-    }
-  }
-  for (const id of Object.keys(save.inventory)) {
-    if (!isBadge(id) && !seen.has(id))
-      list.push(id);
-  }
-  return list;
-}
-function add(save, id, qty, data) {
-  const inv = save.inventory;
-  if (inv[id] === undefined && !isBadge(id) && slots(save) >= capacity(data)) {
-    return false;
-  }
-  if (!isBadge(id) && (inv[id] ?? 0) + (qty ?? 1) > 99) {
-    return false;
-  }
-  const isNew = inv[id] === undefined;
-  inv[id] = (inv[id] ?? 0) + (qty ?? 1);
-  if (isNew && !isBadge(id)) {
-    order(save).push(id);
-  }
-  return true;
-}
-function remove(save, id, qty) {
-  const inv = save.inventory;
-  inv[id] = (inv[id] ?? 0) - (qty ?? 1);
-  if (inv[id] <= 0) {
-    delete inv[id];
-    const list = save.bagOrder;
-    if (Array.isArray(list)) {
-      const i = list.indexOf(id);
-      if (i !== -1)
-        list.splice(i, 1);
-    }
-  }
 }
 
 // voxelmon/game/battle/battle.ts
@@ -4859,6 +5302,10 @@ learned\v${this.data.moves[id]?.name ?? id}!`);
       this.menuIndex = row * 2 + col + 1;
       if (input.wasPressed("a")) {
         const choice = ["fight", "pkmn", "item", "run"][this.menuIndex - 1];
+        if (choice === "fight" && this.instantVictoryOn()) {
+          this.instantVictory();
+          return;
+        }
         if (choice === "fight") {
           const fightLock = this.fightLockedAction(this.player);
           if (fightLock) {
@@ -5427,6 +5874,29 @@ fainted!`);
       this.act(() => this.enemyMonFainted());
     }
   }
+  allowsCheats() {
+    return !this.demo;
+  }
+  extra(key) {
+    return this.allowsCheats() && extraOn(this.save, key);
+  }
+  instantVictoryOn() {
+    if (!this.extra("instantVictory"))
+      return false;
+    if (this.disguised && !this.scopeReveal)
+      return false;
+    return !!this.enemy && this.enemy.mon.hp > 0 && !!this.player && this.player.mon.hp > 0;
+  }
+  instantVictory() {
+    this.phase = "messages";
+    this.afterQueue = "menu";
+    this.act(() => {
+      const e = this.enemy;
+      e.mon.hp = 0;
+      this.drainNext(e, 0);
+      this.onFaint(e);
+    });
+  }
   awardExp() {
     let participants = 0;
     const alive = [];
@@ -5481,6 +5951,14 @@ to level ${lv}!`);
         }
       }
     };
+    if (this.extra("partyExpShare")) {
+      for (const mon of this.save.party) {
+        if (mon.hp > 0)
+          applyShare(mon, expShareSplit(alive.includes(mon)), true);
+      }
+      this.participants = new Set;
+      return;
+    }
     const expAll = (this.save.inventory.EXP_ALL ?? 0) > 0;
     for (const mon of alive) {
       applyShare(mon, participants * (expAll ? 2 : 1), true);
@@ -5790,13 +6268,15 @@ can't be caught!`));
     }
     this.act(() => {
       this.lastBall = ball;
-      const [caught, shakes] = attempt(ball, this.enemy.mon, this.enemy.def, this.rng);
+      const [caught, shakes] = this.extra("alwaysCatch") ? [true, 3] : attempt(ball, this.enemy.mon, this.enemy.def, this.rng);
       this.insertNext({ wait: 20 });
       this.ballChain(caught, shakes, ball);
       if (caught) {
         this.sayNext(`All right!
 ${this.enemy.name} was
 caught!`);
+        if (this.extra("expForCatching"))
+          this.actNext(() => this.awardExp());
         this.act(() => this.storeCaughtMon());
       } else {
         this.sayNext(this.ballMissMessage(shakes));
@@ -5818,7 +6298,7 @@ caught!`);
       this.caughtNewSpecies = species;
     markOwned(this.save, species);
     if (!partyAdd(this.save.party, this.enemy.mon)) {
-      const box = deposit(this.save, this.enemy.mon);
+      const box = deposit2(this.save, this.enemy.mon);
       if (box) {
         const met = this.save.flags?.EVENT_MET_BILL;
         const pc = met ? "BILL's PC" : "someone's PC";
@@ -6242,7 +6722,7 @@ ROCK.`);
   }
   throwSafariBall() {
     this.audioCues.push("sfx:Ball_Toss");
-    const [caught, shakes] = this.safariCatch();
+    const [caught, shakes] = this.extra("alwaysCatch") ? [true, 3] : this.safariCatch();
     this.ballChain(caught, shakes, "SAFARI_BALL");
     if (caught) {
       this.sayNext(`All right!
@@ -6885,17 +7365,20 @@ function pendingFor(data, mon, trigger) {
     if (method?.check && method.check(mon, evo, trig)) {
       return [evo.species, evo];
     }
+    if (evo.method === "TRADE" && trig.kind === "levelup" && trig.tradeLevel !== undefined && mon.level >= trig.tradeLevel) {
+      return [evo.species, evo];
+    }
   }
   return null;
 }
-function checkParty(data, party, leveledUp) {
+function checkParty(data, party, leveledUp, opts = {}) {
   const pending = [];
   if (!leveledUp)
     return pending;
   for (const mon of party) {
     if (!leveledUp.has(mon))
       continue;
-    const hit = pendingFor(data, mon, { kind: "levelup" });
+    const hit = pendingFor(data, mon, { kind: "levelup", tradeLevel: opts.tradeLevel });
     if (hit)
       pending.push({ mon, to: hit[0], evo: hit[1] });
   }
@@ -7828,6 +8311,7 @@ function partyIconCell(i) {
   return { x: 1, y: i * 2, w: 2, h: 2 };
 }
 var FIELD_MOVES = ["CUT", "FLY", "SURF", "STRENGTH", "FLASH", "DIG", "TELEPORT", "SOFTBOILED"];
+var SUBMENU_MAX = 7;
 
 class PartyState {
   game;
@@ -7902,6 +8386,12 @@ POKéMON?`;
     for (const id of FIELD_MOVES)
       if (knows(id) && this.fieldMoveOffered(id))
         items.push(id);
+    for (const id of FIELD_MOVES) {
+      if (items.length >= SUBMENU_MAX - 1)
+        break;
+      if (!items.includes(id) && hmWithoutMove(this.game.save, id))
+        items.push(id);
+    }
     items.push("CANCEL");
     return items;
   }
@@ -8635,13 +9125,16 @@ var ENCOUNTER_BUCKETS = [
   253,
   256
 ];
-function roll(encounterDef, rng, buckets = ENCOUNTER_BUCKETS) {
+function roll(encounterDef, rng, buckets = ENCOUNTER_BUCKETS, mode = "normal") {
   if (!encounterDef)
     return null;
   const grass = encounterDef.grass;
-  if (!grass || grass.rate === 0)
+  if (!grass)
     return null;
-  if (rng.byte() >= grass.rate)
+  const rate = encounterRateFor(grass.rate, mode);
+  if (rate === 0)
+    return null;
+  if (rng.byte() >= rate)
     return null;
   const pick = rng.byte();
   const thresholds = grass.buckets ?? buckets;
@@ -9974,7 +10467,7 @@ function* give_pokemon(ctx, ...args) {
   }
   let pc = null;
   if (party.length >= 6) {
-    if (deposit(w.save, mon) === null) {
+    if (deposit2(w.save, mon) === null) {
       if (typeof w.showText === "function") {
         w.showText(`There's no more
 room for POKéMON!`, () => runner.resume());
@@ -16602,6 +17095,67 @@ function pcTileAt(mapLabel, x, y, facing) {
   return tiles.some((t) => t.x === x && t.y === y && (!t.facing || t.facing === facing));
 }
 
+// voxelmon/game/ui/extras_layout.ts
+var OPTION_PAGES = ["SETTINGS", "ENHANCEMENTS"];
+var ON_OFF = ["OFF", "ON"];
+var CHEATS_ROW = { key: "cheats", label: "CHEATS", choices: ON_OFF };
+var SPEED_ROW = { key: "speed", label: "SPEED", choices: ["1X", "2X"] };
+var SPEED_ROW_READY = false;
+var ENHANCEMENT_ROWS = [
+  { key: "expForCatching", label: "EXP FOR CATCHING", choices: ON_OFF },
+  { key: "partyExpShare", label: "PARTY EXP SHARE", choices: ON_OFF },
+  { key: "tradeEvoLv40", label: "TRADE EVO LV.40", choices: ON_OFF },
+  { key: "hmsWithoutMove", label: "HMS WITHOUT MOVE", choices: ON_OFF }
+];
+var CHEATS_APP = {
+  title: "CHEATS",
+  short: "CHEATS",
+  about: ["WILD BATTLES, CATCHING,", "MONEY, THE DEX AND ITEMS."]
+};
+var WILD_LABELS = {
+  none: "NONE",
+  less: "LESS",
+  normal: "NORMAL",
+  more: "MORE"
+};
+var CHEAT_ROWS = [
+  {
+    key: "wildEncounters",
+    label: "WILD ENCOUNTERS",
+    kind: "cycle",
+    about: {
+      none: "NO RANDOM BATTLES. STORY ONES STAY.",
+      less: "HALF AS MANY RANDOM BATTLES.",
+      normal: "THE GAME'S OWN RATE OF BATTLES.",
+      more: "TWICE AS MANY RANDOM BATTLES."
+    }
+  },
+  { key: "alwaysCatch", label: "ALWAYS CATCH", kind: "toggle", about: "ANY BALL CATCHES. TRAINERS BLOCK." },
+  { key: "instantVictory", label: "INSTANT WIN", kind: "toggle", about: "FIGHT KNOCKS OUT THE FOE AT ONCE." },
+  { key: "infiniteMoney", label: "INFINITE MONEY", kind: "toggle", about: "MONEY STAYS AT ¥999999." },
+  { key: "dexFull", label: "DEX FULL", kind: "action", button: "FILL", about: "EVERY POKéMON SEEN AND OWNED." },
+  { key: "giveItems", label: "GIVE ITEMS", kind: "action", button: "OPEN", about: "ANY ITEM INTO THE BAG OR THE PC." }
+];
+var CHEAT_TEXT = {
+  yes: "YES",
+  no: "NO",
+  back: "BACK",
+  give: "GIVE",
+  dexAsk: "FILL THE POKéDEX?",
+  dexDone: "THE POKéDEX IS FULL!",
+  giveAsk: (qty, name) => `GIVE ${qty} ${name}?`,
+  gaveBag: (qty) => `${qty} PUT IN THE BAG.`,
+  gavePc: (qty) => `${qty} PUT IN THE PC.`,
+  gaveSplit: (bag, pc) => `BAG ${bag}, PC ${pc}.`,
+  have: "ALREADY HAVE ONE.",
+  full: "BAG AND PC FULL.",
+  notNow: "NOT NOW!",
+  quantity: "QUANTITY",
+  oneOnly: "ONLY ONE",
+  page: (at, of) => `PAGE ${at}/${of}`,
+  presets: [1, 10, 50, 99]
+};
+
 // voxelmon/game/ui/gear/model.ts
 function gearSave(save) {
   const fallback = {
@@ -16720,6 +17274,13 @@ var APPS = [
     short: "OPTION",
     fixed: true,
     about: ["HOW MUCH HELP THE GEAR GIVES."]
+  },
+  {
+    id: "cheats",
+    title: CHEATS_APP.title,
+    short: CHEATS_APP.short,
+    fixed: true,
+    about: [...CHEATS_APP.about]
   }
 ];
 function appOf(id) {
@@ -17038,6 +17599,8 @@ function toolUnlocked(t, save) {
   const inv = save.inventory ?? {};
   if (t.item)
     return (inv[t.item] ?? 0) > 0;
+  if (t.move && hmWithoutMove(save, t.move))
+    return true;
   if (!t.move || knowerOf(save, t.move) < 0)
     return false;
   const badge = FIELD_BADGE[t.move];
@@ -19297,12 +19860,13 @@ wore off.`);
     const encDef = this.shell.data.encounters[this.map.id];
     const indoor = this.shell.data.field?.indoorEncounters;
     let enc = null;
+    const mode = wildMode(this.save);
     if (p.surfing && encDef?.water && this.map.isWaterCell(p.cellX, p.cellY)) {
-      enc = roll({ grass: encDef.water }, this.shell.rng);
+      enc = roll({ grass: encDef.water }, this.shell.rng, undefined, mode);
     } else if (this.map.isGrassCell(p.cellX, p.cellY)) {
-      enc = roll(encDef, this.shell.rng);
+      enc = roll(encDef, this.shell.rng, undefined, mode);
     } else if (indoor && this.map.def.index >= indoor.firstIndoorMap && this.map.def.tileset !== indoor.excludedTileset) {
-      enc = roll(encDef, this.shell.rng);
+      enc = roll(encDef, this.shell.rng, undefined, mode);
     }
     if (enc && repelled(this.save, enc.level))
       enc = null;
@@ -21934,15 +22498,26 @@ class Scene {
     if (op) {
       const first = op.first ?? 0;
       const visible = op.visible ?? op.rows.length + 1;
-      const sig = `o${op.index},${first},${op.rows.map((r) => r.index).join(",")}`;
+      const page = op.page ?? 0;
+      const pages = op.pages ?? [];
+      const sig = `o${page},${op.index},${first},${op.rows.map((r) => r.index).join(",")}`;
       if (sig !== this.menuSig) {
         this.menuSig = sig;
         this.uiOwner = null;
         host.uiClear();
         host.uiFill(0, 0, 20, 18, SPACE);
+        const top = 1;
+        const paged = pages.length > 1;
+        if (paged) {
+          const name = String(pages[page] ?? "");
+          const nx = Math.floor((20 - name.length) / 2);
+          host.uiTile(nx - 2, 17, UI_TILE.arrowLeft);
+          this.stamp(host, nx, 17, name);
+          host.uiTile(nx + name.length + 1, 17, ARROW_CURSOR);
+        }
         for (let k = 0;k < visible; k++) {
           const i = first + k;
-          const labelY = 1 + k * 4;
+          const labelY = top + k * 4;
           if (i === op.rows.length) {
             this.stamp(host, 2, labelY, "CANCEL");
             if (op.index === i)
@@ -21963,8 +22538,12 @@ class Scene {
           if (i === op.index)
             host.uiTile(0, labelY, ARROW_HOLLOW);
         }
-        if (first + visible < op.rows.length + 1)
-          host.uiTile(18, 17, ARROW_CURSOR);
+        if (first + visible < op.rows.length + 1) {
+          if (paged)
+            host.uiTile(18, 16, ARROW_MORE);
+          else
+            host.uiTile(18, 17, ARROW_CURSOR);
+        }
       }
       return;
     }
@@ -23591,6 +24170,9 @@ class LinkBattle extends TrainerBattle {
   pendingMine = null;
   awaitingReplacement = false;
   lastPeerAction = null;
+  allowsCheats() {
+    return false;
+  }
   offersShift() {
     return false;
   }
@@ -23851,6 +24433,16 @@ class OptionsMenuState {
   kind = "options";
   index = 0;
   first = 0;
+  page = 0;
+  turnPage(dir) {
+    const n = OPTION_PAGES.length;
+    this.page = (this.page + dir + n) % n;
+    this.index = 0;
+    this.first = 0;
+  }
+  enhancementDefs() {
+    return [...SPEED_ROW_READY ? [SPEED_ROW] : [], ...ENHANCEMENT_ROWS];
+  }
   constructor(game) {
     this.game = game;
   }
@@ -23868,6 +24460,20 @@ class OptionsMenuState {
     return at >= 0 ? at : 1;
   }
   rows() {
+    if (this.page === 1) {
+      return this.enhancementDefs().map((d) => ({
+        label: d.label,
+        choices: [...d.choices],
+        index: d.key === "speed" ? 0 : this.opts()[d.key] === true ? 1 : 0
+      }));
+    }
+    return [...this.settingsRows(), {
+      label: CHEATS_ROW.label,
+      choices: [...CHEATS_ROW.choices],
+      index: this.opts().cheats === true ? 1 : 0
+    }];
+  }
+  settingsRows() {
     return [
       {
         label: "TEXT SPEED",
@@ -23942,6 +24548,16 @@ class OptionsMenuState {
     if (!r)
       return;
     const at = Math.max(0, Math.min(r.choices.length - 1, to));
+    if (this.page === 1) {
+      const d = this.enhancementDefs()[row];
+      if (d.key !== "speed")
+        this.opts()[d.key] = at === 1;
+      return;
+    }
+    if (row === rows.length - 1) {
+      this.opts().cheats = at === 1;
+      return;
+    }
     if (row === 0)
       this.opts().textSpeed = TEXT_SPEEDS[at].delay;
     else if (row === 1)
@@ -23971,6 +24587,8 @@ class OptionsMenuState {
   }
   update() {
     const p = this.game.input.pressed;
+    if (p.select)
+      this.turnPage(1);
     const rows = this.rows();
     const n = rows.length + 1;
     if (p.up)
@@ -23999,7 +24617,14 @@ class OptionsMenuState {
     }
   }
   view() {
-    return { rows: this.rows(), index: this.index, first: this.first, visible: OPTIONS_VISIBLE };
+    return {
+      rows: this.rows(),
+      index: this.index,
+      first: this.first,
+      visible: OPTIONS_VISIBLE,
+      page: this.page,
+      pages: OPTION_PAGES
+    };
   }
 }
 
@@ -25316,9 +25941,9 @@ function drawWild(ctx) {
   const owned = save?.pokedex?.owned ?? {};
   rows.slice(top, top + PER_PAGE).forEach((r, k) => {
     const y0 = 2 + k * 2;
-    const known = seen[r.species] || owned[r.species] || spoilers(save);
-    const name = known ? data.pokemon?.[r.species]?.name ?? r.species : "?????";
-    if (known)
+    const known2 = seen[r.species] || owned[r.species] || spoilers(save);
+    const name = known2 ? data.pokemon?.[r.species]?.name ?? r.species : "?????";
+    if (known2)
       sprite(host, picPageFor(data, r.species), 0, y0 * TILE_H, 2 * TILE_W - 2, 2 * TILE_H - 1);
     text(host, 2, y0, fit(name, 10));
     const lv = r.minLv === r.maxLv ? `L${r.minLv}` : `L${r.minLv}-${r.maxLv}`;
@@ -25818,6 +26443,8 @@ function availableApps(game) {
       continue;
     if (a.id === "pokedex" && !game.save?.flags?.EVENT_GOT_POKEDEX)
       continue;
+    if (a.id === "cheats" && game.save?.options?.cheats !== true)
+      continue;
     out.push(a.id);
   }
   return out;
@@ -25857,11 +26484,16 @@ function drawHome(ctx) {
   apps.forEach((a, i) => {
     const col = i % 3;
     const row2 = Math.floor(i / 3);
-    const x = [0, 7, 14][col];
+    let x = [0, 7, 14][col];
     const w = 6;
     const y = 9 + row2 * 2;
-    if (y > 16)
+    if (y > 17)
       return;
+    if (y === 17) {
+      if (i !== apps.length - 1 || col !== 0)
+        return;
+      x = 7;
+    }
     pill(host, `home:${a}`, x, y, w, appOf(a).short, () => go(ctx, a));
   });
 }
@@ -26435,7 +27067,9 @@ function useTool(ctx, key) {
     game.useKeyItem?.(t.item);
     return;
   }
-  const who = knowerOf(save, t.move);
+  let who = knowerOf(save, t.move);
+  if (who < 0 && hmWithoutMove(save, t.move) && (save.party?.length ?? 0) > 0)
+    who = 0;
   if (who < 0)
     return;
   if (t.move === "SOFTBOILED") {
@@ -26834,6 +27468,201 @@ function stroke(pad, x0, y0, x1, y1, v) {
     }
   }
 }
+
+// voxelmon/game/ui/gear/apps/cheats.ts
+var VALUE_END = 18;
+var TOGGLE_X = 15;
+var ACTION_X = 13;
+var WILD_X = 11;
+var FIRST_Y = 2;
+var GIVE_PAGE = 11;
+var PAGER_Y = 13;
+var TABS_Y = 15;
+function opts(ctx) {
+  return ctx.save.options ??= {};
+}
+function aboutOf(ctx, r) {
+  if (typeof r.about === "string")
+    return r.about;
+  return r.about[wildMode(ctx.save)] ?? "";
+}
+function drawCheats(ctx) {
+  const { ui } = ctx;
+  if (ui.confirm) {
+    drawConfirm(ctx);
+    return;
+  }
+  if (ui.give) {
+    drawGive(ctx);
+    return;
+  }
+  drawList3(ctx);
+}
+function valuePill(ctx, id, x, y, label3, tap, on = false) {
+  const { host } = ctx;
+  const w = VALUE_END - x + 1;
+  const lit = on !== (pressedId() === id);
+  if (!lit)
+    fill(host, x, y, w, 1);
+  right(host, y, label3, lit ? "dark" : "fill", VALUE_END);
+  region(id, x, y, w, 1, tap);
+}
+function drawList3(ctx) {
+  const { host, ui } = ctx;
+  const o = opts(ctx);
+  let y = FIRST_Y;
+  CHEAT_ROWS.forEach((r, i) => {
+    const pick = () => {
+      ui.sel = i;
+      ui.msg = null;
+    };
+    if (r.kind === "cycle") {
+      text(host, 0, y, r.label);
+      const cur = wildMode(ctx.save);
+      valuePill(ctx, `cheat:${r.key}`, WILD_X, y + 1, WILD_LABELS[cur] ?? cur, () => {
+        pick();
+        o.wildEncounters = WILD_MODES[(WILD_MODES.indexOf(cur) + 1) % WILD_MODES.length];
+      });
+      y += 3;
+      return;
+    }
+    text(host, 0, y, r.label);
+    if (r.kind === "toggle") {
+      const on = o[r.key] === true;
+      valuePill(ctx, `cheat:${r.key}`, TOGGLE_X, y, on ? "ON" : "OFF", () => {
+        pick();
+        o[r.key] = !on;
+      }, !on);
+    } else {
+      valuePill(ctx, `cheat:${r.key}`, ACTION_X, y, r.button ?? "", () => {
+        pick();
+        if (r.key === "dexFull")
+          ui.confirm = { kind: "dex" };
+        else {
+          ui.give = { pocket: "items", page: 0 };
+        }
+      });
+    }
+    y += 2;
+  });
+  const said = ui.msg ?? aboutOf(ctx, CHEAT_ROWS[ui.sel ?? 0] ?? CHEAT_ROWS[0]);
+  wrap2(said, 18).slice(0, 2).forEach((line, i) => center(host, y + i, line));
+}
+function drawConfirm(ctx) {
+  const { host, ui, data, save } = ctx;
+  const c = ui.confirm;
+  const name = c.id ? data.items?.[c.id]?.name ?? c.id : "";
+  const ask2 = c.kind === "dex" ? CHEAT_TEXT.dexAsk : CHEAT_TEXT.giveAsk(c.qty ?? 1, name);
+  wrap2(ask2, 18).slice(0, 2).forEach((line, i) => center(host, 2 + i, line));
+  box(host, 2, 5, 16, 10);
+  pill(host, "cheat:yes", 4, 7, 12, CHEAT_TEXT.yes, () => {
+    ui.confirm = null;
+    if (c.kind === "dex") {
+      fillDex(save, data);
+      ui.msg = CHEAT_TEXT.dexDone;
+      return;
+    }
+    const got = giveItem(save, data, c.id, c.qty ?? 1);
+    ui.giveMsg = got.refused === "have" ? CHEAT_TEXT.have : got.refused ? CHEAT_TEXT.full : got.pc === 0 ? CHEAT_TEXT.gaveBag(got.bag) : got.bag === 0 ? CHEAT_TEXT.gavePc(got.pc) : CHEAT_TEXT.gaveSplit(got.bag, got.pc);
+  });
+  pill(host, "cheat:no", 4, 11, 12, CHEAT_TEXT.no, () => {
+    ui.confirm = null;
+  });
+}
+function givePocket(data, pocket) {
+  return giveItemList(data).filter((id) => pocketOf(data, id) === pocket);
+}
+function drawGive(ctx) {
+  const g = ctx.ui.give;
+  if (g.item) {
+    drawGiveItem(ctx, g);
+    return;
+  }
+  const { host, data, save, ui } = ctx;
+  const ids = givePocket(data, g.pocket);
+  const pages = Math.max(1, Math.ceil(ids.length / GIVE_PAGE));
+  g.page = Math.min(Math.max(0, g.page), pages - 1);
+  ids.slice(g.page * GIVE_PAGE, (g.page + 1) * GIVE_PAGE).forEach((id, k) => {
+    const y = 1 + k;
+    const lit = pressedId() === `give:${id}`;
+    if (lit)
+      fill(host, 0, y, COLS, 1);
+    const ink = lit ? "fill" : "dark";
+    text(host, 1, y, fit(data.items?.[id]?.name ?? id, 13), ink);
+    const have = (save.inventory?.[id] ?? 0) + (save.pcItems?.[id] ?? 0);
+    if (have > 0)
+      right(host, y, `x${have}`, ink);
+    region(`give:${id}`, 0, y, COLS, 1, () => {
+      g.item = id;
+      g.qty = 1;
+      ui.giveMsg = null;
+    });
+  });
+  if (pages > 1) {
+    pager2(ctx, CHEAT_TEXT.page(g.page + 1, pages), () => {
+      g.page = (g.page + pages - 1) % pages;
+    }, () => {
+      g.page = (g.page + 1) % pages;
+    }, PAGER_Y);
+  }
+  tabs(ctx, POCKETS, g.pocket, (p) => {
+    g.pocket = p;
+    g.page = 0;
+  }, TABS_Y);
+  backRow(ctx, () => {
+    ui.give = null;
+  });
+}
+function pager2(ctx, label3, prev, next, y) {
+  const { host } = ctx;
+  pill(host, "give:prev", 0, y, 3, "", prev);
+  host.uiTileBottom(1, y, UI_TILE.arrowLeft | FILL_BIT);
+  pill(host, "give:next", COLS - 3, y, 3, "", next);
+  host.uiTileBottom(COLS - 2, y, ARROW_CURSOR | FILL_BIT);
+  center(host, y, label3, "dark", 4, COLS - 8);
+}
+function drawGiveItem(ctx, g) {
+  const { host, data, save, ui, game } = ctx;
+  const id = g.item;
+  const one = oneOnly(data, id);
+  const qty = one ? 1 : Math.max(1, Math.min(99, g.qty ?? 1));
+  g.qty = qty;
+  text(host, 1, 1, fit(data.items?.[id]?.name ?? id, 18));
+  row(host, 3, "IN BAG", `x${save.inventory?.[id] ?? 0}`);
+  row(host, 4, "IN PC", `x${save.pcItems?.[id] ?? 0}`);
+  itemAbout(data, id).flatMap((l) => wrap2(l, 18)).slice(0, 3).forEach((l, i) => text(host, 1, 6 + i, l));
+  if (one) {
+    row(host, 10, CHEAT_TEXT.quantity, CHEAT_TEXT.oneOnly);
+  } else {
+    pager2(ctx, `${CHEAT_TEXT.quantity} x${qty}`, () => {
+      g.qty = qty <= 1 ? 99 : qty - 1;
+    }, () => {
+      g.qty = qty >= 99 ? 1 : qty + 1;
+    }, 10);
+    const w = Math.floor(COLS / CHEAT_TEXT.presets.length);
+    CHEAT_TEXT.presets.forEach((n, i) => {
+      pill(host, `give:q${n}`, i * w, 12, w, String(n), () => {
+        g.qty = n;
+      }, qty === n);
+    });
+  }
+  if (ui.giveMsg)
+    center(host, 14, fit(ui.giveMsg, 18));
+  backRow(ctx, () => {
+    g.item = undefined;
+    ui.giveMsg = null;
+  }, {
+    label: CHEAT_TEXT.give,
+    tap: () => {
+      if (!fieldIdle(game)) {
+        ui.giveMsg = CHEAT_TEXT.notNow;
+        return;
+      }
+      ui.giveMsg = null;
+      ui.confirm = { kind: "give", id, qty };
+    }
+  });
+}
 // voxelmon/game/ui/kantogear.ts
 function activeView(game) {
   const want = game.gearView ?? "home";
@@ -26857,7 +27686,8 @@ var DRAW = {
   stamps: drawStamps,
   notes: drawNotes,
   store: drawStore,
-  options: drawOptions
+  options: drawOptions,
+  cheats: drawCheats
 };
 var drawnFor = "";
 
@@ -27058,8 +27888,8 @@ class WarpPickerState {
     this.onPick = onPick;
     const data = game.data ?? {};
     const cooked = Array.isArray(data.cookedMaps) ? data.cookedMaps : [];
-    const known = data.maps ?? {};
-    this.maps = cooked.filter((m) => known[m]).sort();
+    const known2 = data.maps ?? {};
+    this.maps = cooked.filter((m) => known2[m]).sort();
     const at2 = this.maps.indexOf(here2);
     if (at2 >= 0)
       this.index = at2;
@@ -28035,332 +28865,6 @@ Bye ${this.monName(mon)}!`, "release-list");
   }
 }
 
-// voxelmon/game/savecompat.ts
-var GEN1RECOMP_FORMAT = 5;
-var known = (table, id) => typeof id === "string" && !!table && Object.prototype.hasOwnProperty.call(table, id);
-function eachMon(save, fn) {
-  for (const mon of save.party ?? [])
-    if (mon && typeof mon === "object")
-      fn(mon);
-  for (const box2 of save.boxes ?? [])
-    for (const mon of box2 ?? [])
-      if (mon && typeof mon === "object")
-        fn(mon);
-  if (save.daycare?.mon && typeof save.daycare.mon === "object")
-    fn(save.daycare.mon);
-}
-function orphaned(save) {
-  save.orphaned ??= {};
-  save.orphaned.mons ??= [];
-  save.orphaned.items ??= [];
-  return save.orphaned;
-}
-function scrubMons(list2, where, save, data, report) {
-  if (!Array.isArray(list2) || !data.pokemon)
-    return;
-  for (let i = list2.length - 1;i >= 0; i--) {
-    const mon = list2[i];
-    if (!mon || typeof mon !== "object" || !known(data.pokemon, mon.species)) {
-      list2.splice(i, 1);
-      orphaned(save).mons.push(mon);
-      report.lostMons.push({ species: mon?.species, from: where });
-      continue;
-    }
-    scrubMoves(mon, data, report);
-  }
-}
-function scrubMoves(mon, data, report) {
-  if (!Array.isArray(mon.moves) || !data.moves)
-    return;
-  const had = mon.moves.length > 0;
-  for (let j = mon.moves.length - 1;j >= 0; j--) {
-    const slot = mon.moves[j];
-    const id = slot && typeof slot === "object" ? slot.id : slot;
-    if (!known(data.moves, id)) {
-      mon.moves.splice(j, 1);
-      report.droppedMoves.push({ species: String(mon.species), move: String(id) });
-    }
-  }
-  if (mon.moves.length > 4)
-    mon.moves.length = 4;
-  if (had && mon.moves.length === 0) {
-    const fallback = data.constants?.fallbackMove ?? "TACKLE";
-    const def = data.moves[fallback];
-    if (def)
-      mon.moves.push({ id: fallback, pp: def.pp ?? 35 });
-  }
-}
-function scrubItems(map, where, save, data, report) {
-  if (!map || typeof map !== "object" || !data.items)
-    return;
-  for (const [id, count2] of Object.entries(map)) {
-    if (known(data.items, id))
-      continue;
-    delete map[id];
-    const n = Number(count2) || 0;
-    orphaned(save).items.push({ id, count: n, from: where });
-    report.lostItems.push({ id, count: n, from: where });
-  }
-}
-function reclaim(save, data, report) {
-  const o = save.orphaned;
-  if (!o)
-    return;
-  const mons = o.mons ?? [];
-  for (let i = mons.length - 1;i >= 0; i--) {
-    const mon = mons[i];
-    if (!mon || !known(data.pokemon, mon.species))
-      continue;
-    save.boxes ??= [];
-    for (let b = 0;b < 12; b++)
-      save.boxes[b] ??= [];
-    const box2 = save.boxes.find((bx) => bx.length < 20);
-    if (!box2)
-      continue;
-    box2.push(mon);
-    mons.splice(i, 1);
-    report.restoredMons.push({ species: mon.species });
-  }
-  const items = o.items ?? [];
-  for (let i = items.length - 1;i >= 0; i--) {
-    const e = items[i];
-    if (!e || !known(data.items, e.id))
-      continue;
-    save.pcItems ??= {};
-    save.pcItems[e.id] = Math.min(99, (Number(save.pcItems[e.id]) || 0) + (Number(e.count) || 0));
-    if (!Array.isArray(save.pcOrder))
-      save.pcOrder = [];
-    if (!save.pcOrder.includes(e.id))
-      save.pcOrder.push(e.id);
-    items.splice(i, 1);
-    report.restoredItems.push({ id: e.id, count: Number(e.count) || 0 });
-  }
-  if (mons.length === 0 && items.length === 0)
-    delete save.orphaned;
-}
-function scrubMaps(save, data, report) {
-  if (!data.maps)
-    return;
-  const spawn = { map: "REDS_HOUSE_2F", x: 3, y: 6 };
-  if (save.lastHeal && !known(data.maps, save.lastHeal.map)) {
-    report.remappedMaps.push({ id: save.lastHeal.map, to: spawn.map, field: "lastHeal" });
-    save.lastHeal = { ...spawn };
-  }
-  if (save.player && !known(data.maps, save.player.map)) {
-    const heal = save.lastHeal ?? spawn;
-    report.remappedMaps.push({ id: save.player.map, to: heal.map, field: "player" });
-    save.player.map = heal.map;
-    save.player.x = heal.x;
-    save.player.y = heal.y;
-  }
-  if (save.lastOutdoor && !known(data.maps, save.lastOutdoor.id)) {
-    report.remappedMaps.push({ id: save.lastOutdoor.id, field: "lastOutdoor" });
-    delete save.lastOutdoor;
-  }
-  if (save.lastHeal?.outdoor && !known(data.maps, save.lastHeal.outdoor.id))
-    delete save.lastHeal.outdoor;
-}
-function migratePc(save) {
-  const old = save.pc;
-  if (!old || typeof old !== "object")
-    return;
-  if (!save.pcItems || typeof save.pcItems !== "object")
-    save.pcItems = {};
-  if (!Array.isArray(save.pcOrder))
-    save.pcOrder = [];
-  for (const [id, n] of Object.entries(old.inventory ?? {})) {
-    save.pcItems[id] = Math.min(99, (Number(save.pcItems[id]) || 0) + (Number(n) || 0));
-  }
-  const was = Array.isArray(old.bagOrder) ? old.bagOrder : [];
-  for (const id of [...was, ...Object.keys(save.pcItems)]) {
-    if (save.pcItems[id] > 0 && !save.pcOrder.includes(id))
-      save.pcOrder.push(id);
-  }
-  delete save.pc;
-}
-function syncItemBalls(save, maps) {
-  if (!maps || !save || typeof save !== "object")
-    return;
-  if (!save.flags || typeof save.flags !== "object")
-    save.flags = {};
-  const had = save.itemsTaken && typeof save.itemsTaken === "object";
-  const taken = had ? save.itemsTaken : {};
-  for (const [mapId, map] of Object.entries(maps)) {
-    for (const o of map?.objects ?? []) {
-      if (!o.item || !o.text || o.index === undefined)
-        continue;
-      const key = `${mapId}_obj_${o.index}`;
-      const flag = `EVENT_ITEMBALL_${mapId}_${o.text}`;
-      if (taken[key])
-        save.flags[flag] = true;
-      else if (save.flags[flag])
-        taken[key] = true;
-    }
-  }
-  if (had || Object.keys(taken).length > 0)
-    save.itemsTaken = taken;
-}
-function fromDisk(save, data) {
-  const report = { lostMons: [], lostItems: [], remappedMaps: [], droppedMoves: [], restoredMons: [], restoredItems: [] };
-  if (!save || typeof save !== "object")
-    throw new Error("not a save table");
-  if (!save.player || typeof save.player !== "object")
-    throw new Error("the save has no player");
-  const fmt2 = Number(save.meta?.format);
-  if (Number.isFinite(fmt2) && fmt2 > GEN1RECOMP_FORMAT)
-    report.newerFormat = fmt2;
-  const name = save.player.name;
-  const id = save.player.id;
-  eachMon(save, (mon) => {
-    if (mon.otName === undefined && typeof mon.ot === "string") {
-      const mine = mon.ot === name && (mon.otId === undefined || mon.otId === id);
-      if (!mine)
-        mon.otName = mon.ot;
-    }
-    if (mon.traded === undefined && mon.otId !== undefined && id !== undefined && mon.otId !== id)
-      mon.traded = true;
-  });
-  migratePc(save);
-  if (save.surfingHighScore === undefined && save.surfingHiScore !== undefined)
-    save.surfingHighScore = save.surfingHiScore;
-  delete save.surfingHiScore;
-  if (save.usedPokecenter === undefined && typeof save.lastHeal?.map === "string" && save.lastHeal.map.includes("POKECENTER")) {
-    save.usedPokecenter = true;
-  }
-  reclaim(save, data, report);
-  scrubMons(save.party, "party", save, data, report);
-  (save.boxes ?? []).forEach((box2, b) => scrubMons(box2, `box ${b + 1}`, save, data, report));
-  if (save.daycare?.mon && data.pokemon) {
-    const mon = save.daycare.mon;
-    if (!known(data.pokemon, mon.species)) {
-      orphaned(save).mons.push(mon);
-      report.lostMons.push({ species: mon.species, from: "daycare" });
-      delete save.daycare.mon;
-    } else
-      scrubMoves(mon, data, report);
-  }
-  scrubItems(save.inventory, "bag", save, data, report);
-  scrubItems(save.pcItems, "PC", save, data, report);
-  for (const key of ["bagOrder", "pcOrder"]) {
-    if (Array.isArray(save[key]))
-      save[key] = save[key].filter((i) => known(data.items, i));
-  }
-  scrubMaps(save, data, report);
-  for (const k of data.pokemon ? ["seen", "owned"] : []) {
-    const set2 = save.pokedex?.[k];
-    if (set2 && typeof set2 === "object") {
-      for (const s of Object.keys(set2))
-        if (!known(data.pokemon, s))
-          delete set2[s];
-    }
-  }
-  return report;
-}
-function reportLines(r) {
-  const out = [];
-  if (r.newerFormat !== undefined)
-    out.push(`This save is from a
-newer version; some
-of it may not carry
-over.`);
-  if (r.lostMons.length)
-    out.push(`${r.lostMons.length} POKéMON this
-game does not know
-were set aside.`);
-  if (r.lostItems.length)
-    out.push(`${r.lostItems.length} item(s) this
-game does not know
-were set aside.`);
-  if (r.remappedMaps.some((m) => m.field === "player"))
-    out.push(`This game does not
-have that place, so
-you are back at the
-last POKéMON CENTER.`);
-  if (r.restoredMons.length || r.restoredItems.length) {
-    out.push(`${r.restoredMons.length} POKéMON and
-${r.restoredItems.length} item(s) set
-aside before are
-back (PC).`);
-  }
-  return out;
-}
-function toDisk(save) {
-  const out = JSON.parse(JSON.stringify(save ?? {}));
-  const name = out.player?.name;
-  const id = out.player?.id;
-  eachMon(out, (mon) => {
-    if (mon.ot === undefined && !(mon.traded && mon.otName === undefined))
-      mon.ot = mon.otName ?? name;
-    if (mon.otId === undefined && !mon.traded && id !== undefined)
-      mon.otId = id;
-  });
-  if (!out.meta || typeof out.meta !== "object")
-    out.meta = { mods: {} };
-  if (!(Number(out.meta.format) >= GEN1RECOMP_FORMAT)) {
-    out.meta.format = GEN1RECOMP_FORMAT;
-  }
-  return out;
-}
-
-// voxelmon/game/world/pcitems.ts
-var PC_ITEM_CAPACITY = 50;
-function pcBag(save) {
-  if (save.pc)
-    migratePc(save);
-  if (!save.pcItems || typeof save.pcItems !== "object")
-    save.pcItems = {};
-  return {
-    get inventory() {
-      return save.pcItems ??= {};
-    },
-    set inventory(v) {
-      save.pcItems = v;
-    },
-    get bagOrder() {
-      return save.pcOrder;
-    },
-    set bagOrder(v) {
-      save.pcOrder = v;
-    }
-  };
-}
-function pcCapacityData(data) {
-  const cap = data?.field?.pcItemCap;
-  return {
-    constants: {
-      ...data?.constants ?? {},
-      bagSize: typeof cap === "number" && cap >= 1 ? cap : PC_ITEM_CAPACITY
-    }
-  };
-}
-function pcOrder(save) {
-  return order(pcBag(save));
-}
-function deposit2(save, id, qty, data) {
-  const have = save.inventory?.[id] ?? 0;
-  const n = Math.min(qty, have);
-  if (n <= 0)
-    return false;
-  if (!add(pcBag(save), id, n, pcCapacityData(data)))
-    return false;
-  remove(save, id, n);
-  return true;
-}
-function withdraw(save, id, qty, data) {
-  const box2 = pcBag(save);
-  const have = box2.inventory?.[id] ?? 0;
-  const n = Math.min(qty, have);
-  if (n <= 0)
-    return false;
-  if (!add(save, id, n, data))
-    return false;
-  remove(box2, id, n);
-  return true;
-}
-function tossFromPc(save, id, qty) {
-  remove(pcBag(save), id, qty);
-}
-
 // voxelmon/game/ui/pcscreen.ts
 var ROWS8 = 4;
 var ITEMS = ["WITHDRAW ITEM", "DEPOSIT ITEM", "TOSS ITEM", "LOG OFF"];
@@ -28419,7 +28923,7 @@ to toss away?`));
   commit(id, n) {
     const save = this.game.save;
     if (this.action === "deposit") {
-      if (!deposit2(save, id, n, this.game.data)) {
+      if (!deposit(save, id, n, this.game.data)) {
         this.game.showText(this.line("_NoRoomToStoreText", `No room left to
 store items.`));
       }
@@ -28647,7 +29151,7 @@ class PokedexState {
   digits;
   static SUBMENU = ["DATA", "CRY", "AREA", "QUIT"];
   standalone = false;
-  constructor(game, onCancel, opts) {
+  constructor(game, onCancel, opts2) {
     this.game = game;
     this.onCancel = onCancel;
     const data = game.data;
@@ -28680,11 +29184,11 @@ class PokedexState {
         value: isSeen ? def.id : null
       });
     }
-    if (opts?.species && mons[opts.species]) {
+    if (opts2?.species && mons[opts2.species]) {
       this.standalone = true;
       this.mode = "entry";
-      this.entrySpecies = opts.species;
-      const at2 = this.entries.findIndex((e) => e.value === opts.species);
+      this.entrySpecies = opts2.species;
+      const at2 = this.entries.findIndex((e) => e.value === opts2.species);
       if (at2 >= 0)
         this.index = at2;
     }
@@ -30752,13 +31256,13 @@ class TextBoxState {
   kind = "textbox";
   box;
   choicePushed = false;
-  constructor(game, text2, onDone, choice, opts, onTyped, choiceOpts) {
+  constructor(game, text2, onDone, choice, opts2, onTyped, choiceOpts) {
     this.game = game;
     this.onDone = onDone;
     this.choice = choice;
     this.onTyped = onTyped;
     this.choiceOpts = choiceOpts;
-    this.box = new Textbox(text2, { player: game.save.player.name, rival: game.save.player.rival }, { speed: game.textSpeed(), ...opts });
+    this.box = new Textbox(text2, { player: game.save.player.name, rival: game.save.player.rival }, { speed: game.textSpeed(), ...opts2 });
   }
   update() {
     if (this.choice && this.box.done) {
@@ -30800,11 +31304,11 @@ class ChoiceState {
   yes;
   pending = null;
   holdFrames = 0;
-  constructor(game, cb, opts) {
+  constructor(game, cb, opts2) {
     this.game = game;
     this.cb = cb;
-    this.yes = !opts?.defaultNo;
-    this.noSound = opts?.noSound === true;
+    this.yes = !opts2?.defaultNo;
+    this.noSound = opts2?.noSound === true;
   }
   noSound;
   update() {
@@ -31389,6 +31893,7 @@ ${why.slice(0, 18)}` : ""}`);
     this.overworld.serviceLink();
     const top2 = this.stack[this.stack.length - 1];
     top2?.update();
+    holdMoney(this.save);
     this.advancePlayTime();
     const t1 = p ? p.now() : 0;
     this.scene.emit(this);
@@ -31497,10 +32002,10 @@ ${why.slice(0, 18)}` : ""}`);
       this.showText(r.rating, onDone, () => this.audio.playSfx(r.sfx));
     });
   }
-  showAuto(text2, delay, opts) {
-    if (opts?.sfx)
-      this.audio.playSfx(opts.sfx);
-    this.push(new TextBoxState(this, text2, opts?.onDone, undefined, { auto: { delay } }));
+  showAuto(text2, delay, opts2) {
+    if (opts2?.sfx)
+      this.audio.playSfx(opts2.sfx);
+    this.push(new TextBoxState(this, text2, opts2?.onDone, undefined, { auto: { delay } }));
   }
   textSpeed() {
     const v = this.save.options?.textSpeed;
@@ -31523,8 +32028,8 @@ ${why.slice(0, 18)}` : ""}`);
   animationsOn() {
     return this.save.options?.animations !== false;
   }
-  showChoice(text2, choice, opts) {
-    this.push(new TextBoxState(this, text2, undefined, choice, undefined, undefined, opts));
+  showChoice(text2, choice, opts2) {
+    this.push(new TextBoxState(this, text2, undefined, choice, undefined, undefined, opts2));
   }
   deleteSave() {
     if (!this.keepUnreadable(this.host))
@@ -31536,7 +32041,7 @@ ${why.slice(0, 18)}` : ""}`);
     this.push(new WarpFadeState(this, frames, midpoint, onDone));
   }
   runEvolutions(leveledUp) {
-    const pending2 = checkParty(this.data, this.save.party, leveledUp);
+    const pending2 = checkParty(this.data, this.save.party, leveledUp, { tradeLevel: tradeEvoLevel(this.save) });
     if (pending2.length === 0)
       return;
     const step = (i) => {
@@ -32434,6 +32939,11 @@ the game!${tag}`, SAVE_DONE_HOLD, {
       this.gearMapPick = null;
   }
   cycleGearView(dir) {
+    const top2 = this.stack[this.stack.length - 1];
+    if (top2?.kind === "options" && top2.turnPage) {
+      top2.turnPage(dir);
+      return;
+    }
     this.setGearView(gearViewStep(this, dir));
   }
   setGearMapPick(id) {
@@ -33029,24 +33539,24 @@ to {RAM:wNameBuffer}?`).replace(/\{RAM:wNameBuffer\}/g, defaultName).replace(/\{
     st.loseable = loseable;
     this.push(st);
   }
-  startWildBattle(species, level, opts, onDone) {
+  startWildBattle(species, level, opts2, onDone) {
     const battle = new WildBattle(this.data, this.save, this.battleRng, species, level);
-    battle.noCatch = opts?.noCatch === true;
-    if (opts?.disguised)
+    battle.noCatch = opts2?.noCatch === true;
+    if (opts2?.disguised)
       battle.makeGhost();
-    else if (opts?.unveil)
+    else if (opts2?.unveil)
       battle.makeUnveiledGhost();
-    battle.hooked = opts?.hooked === true;
+    battle.hooked = opts2?.hooked === true;
     const st = new BattleGameState(this, species, level, battle);
     st.onDone = () => onDone?.(battle.finished);
     this.push(st);
   }
-  startOldManDemo(onDone, opts) {
+  startOldManDemo(onDone, opts2) {
     const field = this.data.field?.oldManBattle ?? { species: "WEEDLE", level: 5 };
-    const species = opts?.species ?? field.species;
-    const level = opts?.level ?? field.level;
+    const species = opts2?.species ?? field.species;
+    const level = opts2?.level ?? field.level;
     const battle = new WildBattle(this.data, this.save, this.battleRng, species, level);
-    battle.makeOldManDemo(opts?.name, opts?.fail);
+    battle.makeOldManDemo(opts2?.name, opts2?.fail);
     const st = new BattleGameState(this, "", 0, battle);
     st.onDone = () => onDone?.();
     this.push(st);
