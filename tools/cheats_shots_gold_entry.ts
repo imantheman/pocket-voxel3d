@@ -29,6 +29,9 @@ let shots = 0;
 let i = 0;
 let step = 0;
 let stepAt = 0;
+const SETTLE = 12;
+let pendingSet: (() => void) | null = null;
+let setAt = 0;
 
 const shot = (name: string): void => {
   console.log(`[pv] bpshot ${shots} ${name}`);
@@ -101,6 +104,12 @@ g.frame = (_b: number): void => {
     s.player.money = 148250;
     stepAt = i + 90;
   }
+  // a step's own set-up waits SETTLE frames after the last shot, and its pad
+  // presses as long again (the card's shot is taken a few frames late)
+  if (pendingSet && i >= setAt) {
+    pendingSet();
+    pendingSet = null;
+  }
   if (world > 60) {
     const s = STEPS[step];
     if (s) {
@@ -113,8 +122,11 @@ g.frame = (_b: number): void => {
         step++;
         const n = STEPS[step];
         if (n) {
-          n.set?.();
-          stepAt = i + (n.frames ?? 60);
+          if (n.set) {
+            pendingSet = n.set;
+            setAt = i + SETTLE;
+          }
+          stepAt = i + (n.frames ?? 60) + (n.set || n.pad ? 2 * SETTLE : 0);
         } else {
           console.log("[pv] bpshot done");
         }
