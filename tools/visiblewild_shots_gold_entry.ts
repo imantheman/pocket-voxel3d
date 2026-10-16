@@ -145,6 +145,22 @@ function shotsTour(): void {
   then(240, () => shot("touch_battle_menu"));
 }
 
+/** The battle camera at the first route's (40,14), whose solved framing
+ *  stood its eye in the south edge's border fill: a battle begun there. */
+function camTour(): void {
+  then(1, () => {
+    while (game.stack.top()) game.stack.pop();
+    game.options.visibleWild = "off";
+    game.options.view = "3d";
+    world().warpToMapId("ROUTE_29", 40, 14, "down");
+  });
+  then(200, () => {
+    world().startBattle({ wild: Mon.new(game.data, "HOOTHOOT", 3, {}) });
+    console.log("[pv] vwbench cam: battle at 40,14");
+  });
+  then(420, () => shot("cam_40_14_battle"));
+}
+
 /** One shot for a second game: MANY on a route in 3D. */
 function oneTour(): void {
   goTo("ROUTE_29");
@@ -205,6 +221,7 @@ g.frame = (b: number): void => {
     clock = i + 60;
     if (TOUR === "ab") abTour();
     if (TOUR === "one") oneTour();
+    if (TOUR === "cam") camTour();
     if (TOUR === "shots" || TOUR === "all") shotsTour();
     if (TOUR === "perf" || TOUR === "all") perfTour();
     then(30, () => console.log("[pv] bpshot done"));
