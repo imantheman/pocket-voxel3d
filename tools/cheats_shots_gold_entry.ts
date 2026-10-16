@@ -48,7 +48,7 @@ const top = (): any => game.stack.top();
 const STEPS: Step[] = [
   // the bottom screen as it was: four tabs
   { name: "off_party" },
-  { name: "off_card", tap: [12, 14] },
+  { name: "off_card", tap: [7, 14] },
   // OPTION: the top level, then ENHANCEMENTS
   { name: "option_top", set: () => { game.showOptions(); top().focusRow?.("cheats"); }, frames: 40 },
   { name: "enhancements", set: () => { const m = game.stack.states[game.stack.states.length - 1]; m.focusRow?.("expForCatching"); }, frames: 40 },

@@ -73,9 +73,11 @@ const STEPS: Step[] = [
   { name: "mon2", tap: [3, 6] },
   { name: "mon3", tap: [3, 6] },
   { name: "mon4", tap: [3, 6] },
-  { name: "badges", tap: [7, 14] },
-  { name: "card", tap: [12, 14] },
-  { name: "map", tap: [18, 14], frames: 90 },
+  // (the badges are the CARD's back: the CARD tab, then a tap on the card)
+  { name: "card", tap: [7, 14] },
+  { name: "badges", tap: [8, 6] },
+  { name: "map", tap: [13, 14], frames: 90 },
+  { name: "enhancements", tap: [17, 14] },
   { name: "party_again", tap: [1, 14] },
   // a wild battle's panel
   { name: "battle_text", set: () => {
