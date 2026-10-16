@@ -94,8 +94,9 @@ export function setEnhancement(opts: Opts, d: ExtrasRowDef, at: number): void {
 
 export const ENHANCEMENTS_APP = {
   title: "ENHANCEMENTS",
-  // six glyphs on HOME's pills: cut with the gear's ellipsis
-  short: "ENHAN…",
+  // HOME's pill: a whole word of six glyphs at most (the one place to
+  // change it); the header and the L/R order keep the full title
+  short: "EXTRAS",
   about: ["SPEED, EXP, EVOLUTION, HMS", "AND VISIBLE WILD POKéMON."],
 } as const;
 
