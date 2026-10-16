@@ -78,6 +78,7 @@ interface OptionsSave {
     eventPokemon?: boolean;
     devMenu?: boolean;
     cheats?: boolean;
+    gameSpeed?: number;
     [extra: string]: unknown;
   };
 }
