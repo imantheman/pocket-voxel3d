@@ -308,6 +308,28 @@ export class GameMap {
     return grass !== undefined && this.cellTile(cx, cy) === grass;
   }
 
+  /**
+   * All four of a cell's 8x8 tiles are walkable floor (grass and its tufts
+   * included), or all four water -- not only the bottom-left one the
+   * collision rules read. A cell whose top half is a fence, a ledge or a
+   * cave wall still walks (and rolls) as the bottom tile says; VISIBLE WILD
+   * (world/wildmons.ts) keeps its mons off those, so none is drawn half
+   * over the fence. Gen 2 maps (one collision byte a cell) answer with the
+   * cell's own kind.
+   */
+  isWholeCell(cx: number, cy: number, kind: "floor" | "water"): boolean {
+    if (!this.inBounds(cx, cy)) return false;
+    if (this.byCollision) return kind === "water" ? this.isWaterCell(cx, cy) : this.isWalkableCell(cx, cy);
+    for (let dy = 0; dy < 2; dy++) {
+      for (let dx = 0; dx < 2; dx++) {
+        const t = this.tileAt(cx * 2 + dx, cy * 2 + dy);
+        const ok = kind === "water" ? this.waterTiles.has(t) : this.walkable.has(t) && !this.waterTiles.has(t);
+        if (!ok) return false;
+      }
+    }
+    return true;
+  }
+
   // Map.lua:242 — water and eastern-shore tiles share one lookup
   isWaterCell(cx: number, cy: number): boolean {
     if (this.byCollision) return Coll.isWater(this.cellCollision(cx, cy));

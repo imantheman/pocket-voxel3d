@@ -21,10 +21,10 @@ import { RecorderHost } from "../voxelmon/game/host.ts";
 import { seededRng, seqRng } from "../voxelmon/game/rng.ts";
 import { ENCOUNTER_BUCKETS } from "../voxelmon/game/rules/encounter.ts";
 import {
-  baseCount, CELL_LAND, CELL_NONE, CELL_WATER, classifyCells, iconFamily, MAX_WILD, MON_PARTY_ICONS, NEAR,
+  baseCount, CELL_LAND, CELL_NONE, CELL_WATER, CellClassifier, classifyCells, iconFamily, MAX_WILD, MON_PARTY_ICONS, NEAR,
   pickSlot, visibleWildMode, visibleWildOn, WINDOW_X, WINDOW_Y, wildSprite, wildTarget, type WildMapLike,
 } from "../voxelmon/game/visiblewild.ts";
-import { WildMon } from "../voxelmon/game/world/wildmons.ts";
+import { CLASSIFY_CELLS, WildMon } from "../voxelmon/game/world/wildmons.ts";
 import {
   ENHANCEMENT_GEAR, ENHANCEMENT_ROWS, enhancementDefs, enhancementIndex, OPTION_PAGES, SPEED_ROW,
   VISIBLE_WILD_ROW,
@@ -208,18 +208,20 @@ describe("VISIBLE WILD: the table and its slots", () => {
 // where: a hand-made map
 // ---------------------------------------------------------------------------
 
-/** g grass, . floor, # wall, w water, D a door (a warp on a floor cell). */
+/** g grass, . floor, # wall, w water, D a door (a warp on a floor cell),
+ *  h grass whose top half is a fence (walks and rolls as grass). */
 function fakeMap(rows: string[], opts: { index?: number; tileset?: string } = {}): WildMapLike {
   const at = (x: number, y: number) => rows[y]?.[x] ?? "#";
   return {
     widthCells: rows[0]!.length,
     heightCells: rows.length,
     def: { index: opts.index ?? 12, tileset: opts.tileset ?? "OVERWORLD" },
-    isGrassCell: (x, y) => at(x, y) === "g",
+    isGrassCell: (x, y) => "gh".includes(at(x, y)),
     isWaterCell: (x, y) => at(x, y) === "w",
-    isWalkableCell: (x, y) => "g.D".includes(at(x, y)),
+    isWalkableCell: (x, y) => "gh.D".includes(at(x, y)),
     isWarpTileCell: (x, y) => at(x, y) === "D",
     warpAtCell: (x, y) => (at(x, y) === "D" ? {} : undefined),
+    isWholeCell: (x, y, kind) => (kind === "water" ? at(x, y) === "w" : "g.D".includes(at(x, y))),
   };
 }
 
@@ -239,8 +241,9 @@ describe("VISIBLE WILD: the cells a mon may stand on", () => {
     ]);
     const k = classifyCells(m, grassOnly);
     const kind = (x: number, y: number) => k[y * m.widthCells + x];
-    expect(kind(1, 1)).toBe(CELL_LAND);
-    expect(kind(7, 1)).toBe(CELL_NONE); // floor, not grass
+    expect(kind(1, 1)).toBe(CELL_NONE); // the patch's top row: the card would stand over the wall
+    expect(kind(1, 2)).toBe(CELL_LAND);
+    expect(kind(7, 2)).toBe(CELL_NONE); // floor, not grass
     expect(kind(3, 3)).toBe(CELL_NONE); // the door
     for (const [x, y] of [[2, 3], [4, 3], [3, 2], [3, 4]]) expect(kind(x!, y!)).toBe(CELL_NONE); // beside it
     expect(kind(4, 5)).toBe(CELL_NONE); // the lane south
@@ -258,14 +261,49 @@ describe("VISIBLE WILD: the cells a mon may stand on", () => {
   });
 
   test("a cave rolls on every floor tile; the FOREST tileset only on its grass", () => {
-    const rows = ["#######", "#.....#", "#.ggg.#", "#.....#", "#######"];
+    const rows = ["#######", "#.....#", "#.ggg.#", "#.ggg.#", "#.....#", "#######"];
     const indoor = { firstIndoorMap: 37, excludedTileset: "FOREST" };
     const cave = classifyCells(fakeMap(rows, { index: 59, tileset: "CAVERN" }), grassOnly, indoor);
     expect(cave[1 * 7 + 1]).toBe(CELL_LAND);
     expect(cave[2 * 7 + 3]).toBe(CELL_LAND);
     const forest = classifyCells(fakeMap(rows, { index: 51, tileset: "FOREST" }), grassOnly, indoor);
     expect(forest[1 * 7 + 1]).toBe(CELL_NONE);
-    expect(forest[2 * 7 + 3]).toBe(CELL_LAND);
+    expect(forest[2 * 7 + 3]).toBe(CELL_NONE); // the top row of the patch
+    expect(forest[3 * 7 + 3]).toBe(CELL_LAND);
+  });
+
+  test("never a cell only partly grass (a fence over its top half), nor the row under a fence", () => {
+    const m = fakeMap([
+      "##########",
+      "#........#",
+      "#hhhhhhhh#",
+      "#gggggggg#",
+      "#gggggggg#",
+      "#gggggggg#",
+      "##########",
+    ]);
+    const k = classifyCells(m, grassOnly);
+    const kind = (x: number, y: number) => k[y * m.widthCells + x];
+    for (let x = 1; x < 9; x++) expect(kind(x, 2)).toBe(CELL_NONE); // half fence
+    for (let x = 2; x < 8; x++) expect(kind(x, 4)).toBe(CELL_LAND);
+    for (let x = 1; x < 9; x++) expect(kind(x, 5)).toBe(CELL_NONE); // the bottom row, against the wall
+    // every LAND cell has grass above it and is whole
+    for (let y = 0; y < m.heightCells; y++) for (let x = 0; x < m.widthCells; x++) {
+      if (kind(x, y) !== CELL_LAND) continue;
+      expect(m.isGrassCell(x, y - 1)).toBe(true);
+      expect(m.isWholeCell!(x, y, "floor")).toBe(true);
+    }
+  });
+
+  test("the overworld's classifier works a few rows a tick, and ends as the whole map does", () => {
+    const rows = ["##########", ...Array.from({ length: 20 }, () => "#gggggggg#"), "##########"];
+    const m = fakeMap(rows);
+    const whole = classifyCells(m, grassOnly);
+    const c = new CellClassifier(m, grassOnly);
+    let ticks = 0;
+    while (!c.done) { c.step(20); ticks++; }
+    expect(ticks).toBe(10); // two rows of ten a tick
+    expect([...c.out]).toEqual([...whole]);
   });
 
   test("water only with a surf table", () => {
@@ -351,6 +389,8 @@ describe("VISIBLE WILD in the overworld", () => {
     const from = new Map<WildMon, string>();
     for (let i = 0; i < 3000; i++) {
       game.tick(0);
+      // one may walk into the standing player: that battle is let go
+      if (battleOf(game)) game.pop();
       expect(game.stackKinds().at(-1)).toBe("overworld");
       for (const m of ow.wild.mons) {
         seen++;
@@ -359,6 +399,10 @@ describe("VISIBLE WILD in the overworld", () => {
         else if (was !== `${m.cellX},${m.cellY}`) walked = true;
         for (const [x, y] of [[m.cellX, m.cellY], [m.targetX ?? m.cellX, m.targetY ?? m.cellY]] as const) {
           expect(ow.map.isGrassCell(x, y)).toBe(true);
+          // all of the cell, and grass behind it: never half on a fence
+          expect(ow.map.isWholeCell(x, y, "floor")).toBe(true);
+          expect(ow.map.isGrassCell(x, y - 1)).toBe(true);
+          expect(ow.map.isWalkableCell(x, y + 1)).toBe(true);
           expect(ow.map.warpAtCell(x, y)).toBeUndefined();
           expect(ow.wild.cellKinds()[y * ow.map.widthCells + x]).toBe(CELL_LAND);
         }
@@ -549,6 +593,7 @@ describe("VISIBLE WILD in the overworld", () => {
     game.tick(0);
     expect(ow.wild.mons.filter((m) => m.kind === CELL_WATER).length).toBe(0);
     ow.wild.onMap();
+    ow.wild.cellKinds(); // all known now: the next tick fills
     ow.player.surfing = true;
     (game.save as { surfing?: boolean }).surfing = true;
     game.tick(0);
@@ -608,6 +653,26 @@ describe("VISIBLE WILD in the overworld", () => {
     // a map change clears them
     ow.setMap("ROUTE_2", 5, 5, "down");
     expect(ow.wild.mons.length).toBe(0);
+  });
+
+  test.skipIf(!hasGen)("a map's cells are worked out a few rows a tick: the mons come once they are all known", () => {
+    const game = makeGame();
+    game.save.options.visibleWild = "many";
+    const ow = game.overworld;
+    ow.setMap("VIRIDIAN_FOREST", 1, 1, "down");
+    const kinds = classifyCells(ow.map, data!.encounters.VIRIDIAN_FOREST, (data!.field as any).indoorEncounters);
+    let at: [number, number] = [0, 0];
+    for (let i = 0; i < kinds.length; i++) if (kinds[i] === CELL_LAND) { at = [i % ow.map.widthCells, Math.floor(i / ow.map.widthCells)]; }
+    ow.setMap("VIRIDIAN_FOREST", at[0], at[1], "down");
+    const rowsPerTick = Math.ceil(CLASSIFY_CELLS / ow.map.widthCells);
+    const ticks = Math.ceil((ow.map.heightCells - 2) / rowsPerTick);
+    for (let i = 0; i < ticks - 1; i++) {
+      game.tick(0);
+      expect(ow.wild.mons.length).toBe(0);
+    }
+    for (let i = 0; i < 3 && ow.wild.mons.length === 0; i++) game.tick(0);
+    expect(ow.wild.mons.length).toBeGreaterThan(0);
+    expect([...ow.wild.cellKinds()]).toEqual([...kinds]);
   });
 
   test.skipIf(!hasGen)("a map's first tick keeps what stands there (it only clears on a new map)", () => {

@@ -14,7 +14,12 @@
 //                  (an indoor map whose tileset is not FOREST, where the
 //                  cart rolls on every tile) its walkable floor. A map with
 //                  a surf table: its water, while the player is surfing (the
-//                  cart only rolls the surf table afloat). Never a warp, a
+//                  cart only rolls the surf table afloat). Only a cell that
+//                  is floor (or water) in all four of its tiles, not one
+//                  half fence or ledge, not a grass patch's top row (the
+//                  standing card would cover the fence or path behind it),
+//                  nor its bottom row against a fence, a ledge or trees
+//                  (its feet would sit on them). Never a warp, a
 //                  cell beside one, the map's edge row, a one-wide corridor
 //                  or its dead end, so no doorway or only path is ever stood
 //                  in; never a map without a table (a town's grass included).
@@ -77,6 +82,9 @@ export interface WildMapLike {
   isWalkableCell(cx: number, cy: number): boolean;
   isWarpTileCell(cx: number, cy: number): boolean;
   warpAtCell(cx: number, cy: number): unknown;
+  /** All four tiles of the cell of the kind (map.ts); absent: the cell's
+   *  own kind is taken as the whole of it. */
+  isWholeCell?(cx: number, cy: number, kind: "floor" | "water"): boolean;
 }
 
 /** field.indoorEncounters: maps from this index roll on every tile, but
@@ -104,44 +112,96 @@ export function everyTileRolls(map: WildMapLike, indoor: IndoorRule | null | und
 }
 
 /**
- * Every cell's kind for a map (CELL_*), worked out once a map load. A cell a
- * mon could roll on but must keep clear of -- a warp or a door, a cell next
- * to one, the edge row (a connection's crossing), a one-wide corridor -- is
- * CELL_NONE, so nothing ever stands in a doorway or a path's only lane.
+ * Every cell's kind for a map (CELL_*). A cell a mon could roll on but must
+ * keep clear of is CELL_NONE: one that is only partly floor or water (the
+ * top half a fence, a ledge or a cave wall), the top row of a patch of
+ * grass (a mon there stands up in front of the fence or path behind it)
+ * or its bottom row against a fence, a ledge or trees,
+ * a warp or a door, a cell next to one, the edge row (a connection's
+ * crossing), a one-wide corridor or its dead end -- so nothing ever stands
+ * in a doorway or a path's only lane, or half out of the grass.
+ *
+ * The overworld works this out a few rows a tick (CellClassifier) so a
+ * map's entry costs no long frame on the console; this is the whole map at
+ * once, for the tests and the tools.
  */
 export function classifyCells(
   map: WildMapLike,
   enc: EncounterDef | null | undefined,
   indoor?: IndoorRule | null,
 ): Uint8Array {
-  const w = map.widthCells;
-  const h = map.heightCells;
-  const out = new Uint8Array(w * h);
-  const land = landTable(enc) !== null;
-  const water = waterTable(enc) !== null;
-  if (!land && !water) return out;
-  const cave = land && everyTileRolls(map, indoor);
-  const isWater = (x: number, y: number) => map.isWaterCell(x, y);
-  const walk = (x: number, y: number) => map.isWalkableCell(x, y) && !isWater(x, y);
-  for (let y = 1; y < h - 1; y++) {
-    for (let x = 1; x < w - 1; x++) {
-      let k = CELL_NONE;
-      if (water && isWater(x, y)) k = CELL_WATER;
-      else if (land && walk(x, y) && (cave || map.isGrassCell(x, y))) k = CELL_LAND;
-      if (k === CELL_NONE) continue;
-      // a warp or a door, or a cell beside one
-      if (map.warpAtCell(x, y) || map.isWarpTileCell(x, y)) continue;
-      if (map.warpAtCell(x - 1, y) || map.warpAtCell(x + 1, y) || map.warpAtCell(x, y - 1) || map.warpAtCell(x, y + 1)) continue;
-      // a one-wide lane (open both ways along one axis, shut across it) or
-      // the dead end of one: the way past, or to what the lane leads to
-      const pass = k === CELL_WATER ? isWater : (cx: number, cy: number) => map.isWalkableCell(cx, cy) && !isWater(cx, cy);
-      const u = pass(x, y - 1), d = pass(x, y + 1), l = pass(x - 1, y), r = pass(x + 1, y);
-      if ((u && d && !l && !r) || (l && r && !u && !d)) continue;
-      if (+u + +d + +l + +r <= 1) continue;
-      out[y * w + x] = k;
+  const c = new CellClassifier(map, enc, indoor);
+  c.step(Infinity);
+  return c.out;
+}
+
+/** classifyCells a slice at a time: `step(budget)` does whole rows until
+ *  about `budget` cells are done. `out` reads CELL_NONE where not yet done. */
+export class CellClassifier {
+  readonly out: Uint8Array;
+  private y = 1;
+  private readonly land: boolean;
+  private readonly water: boolean;
+  private readonly cave: boolean;
+
+  constructor(
+    private readonly map: WildMapLike,
+    enc: EncounterDef | null | undefined,
+    indoor?: IndoorRule | null,
+  ) {
+    this.out = new Uint8Array(map.widthCells * map.heightCells);
+    this.land = landTable(enc) !== null;
+    this.water = waterTable(enc) !== null;
+    this.cave = this.land && everyTileRolls(map, indoor);
+    if (!this.land && !this.water) this.y = map.heightCells;
+  }
+
+  get done(): boolean {
+    return this.y >= this.map.heightCells - 1;
+  }
+
+  step(budget: number): void {
+    const w = this.map.widthCells;
+    let n = 0;
+    while (!this.done && n < budget) {
+      for (let x = 1; x < w - 1; x++) this.out[this.y * w + x] = this.kindOf(x, this.y);
+      n += w;
+      this.y++;
     }
   }
-  return out;
+
+  private kindOf(x: number, y: number): number {
+    const map = this.map;
+    const isWater = (cx: number, cy: number) => map.isWaterCell(cx, cy);
+    const walk = (cx: number, cy: number) => map.isWalkableCell(cx, cy) && !isWater(cx, cy);
+    const cave = this.cave;
+    let k = CELL_NONE;
+    if (this.water && isWater(x, y)) k = CELL_WATER;
+    else if (this.land && walk(x, y) && (cave || map.isGrassCell(x, y))) k = CELL_LAND;
+    if (k === CELL_NONE) return k;
+    {
+      // the whole cell floor (grass included) or water: a cell half fence,
+      // half ledge or half cave wall walks as its bottom tile says, but a
+      // mon on it would be drawn over the fence
+      if (map.isWholeCell && !map.isWholeCell(x, y, k === CELL_WATER ? "water" : "floor")) return CELL_NONE;
+      // grass: not the top row of a patch -- the mon's card stands up from
+      // its cell, so there it would be drawn over the fence or path behind
+      if (k === CELL_LAND && !cave && !map.isGrassCell(x, y - 1)) return CELL_NONE;
+      // nor the bottom row against a fence, a ledge or trees: the card's
+      // feet would sit on them
+      if (k === CELL_LAND && !cave && !walk(x, y + 1)) return CELL_NONE;
+      // a warp or a door, or a cell beside one
+      if (map.warpAtCell(x, y) || map.isWarpTileCell(x, y)) return CELL_NONE;
+      if (map.warpAtCell(x - 1, y) || map.warpAtCell(x + 1, y) || map.warpAtCell(x, y - 1) || map.warpAtCell(x, y + 1)) return CELL_NONE;
+      // a one-wide lane (open both ways along one axis, shut across it) or
+      // the dead end of one: the way past, or to what the lane leads to
+      const pass = k === CELL_WATER ? isWater : walk;
+      const u = pass(x, y - 1), d = pass(x, y + 1), l = pass(x - 1, y), r = pass(x + 1, y);
+      if ((u && d && !l && !r) || (l && r && !u && !d)) return CELL_NONE;
+      if (+u + +d + +l + +r <= 1) return CELL_NONE;
+    }
+    return k;
+  }
 }
 
 // ---------------------------------------------------------------------------

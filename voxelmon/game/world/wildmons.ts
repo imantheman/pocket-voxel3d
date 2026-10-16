@@ -4,8 +4,10 @@
 //
 //   spawning     round the player (the WINDOW), never within NEAR cells of
 //                them, never in a cell anyone stands in or is stepping into,
-//                never beside a person. Up to the count on entering a map,
-//                then one every second or two while under it.
+//                never beside a person. A map's cells are worked out a few
+//                rows a tick once it is entered (under a second for the
+//                biggest), then up to the count at once, and one every
+//                second or two while under it.
 //   wandering    a step (24 frames, slower than a person) every second or
 //                three, onto cells of their own kind only -- grass stays on
 //                grass, water on water -- with a small lean towards a
@@ -37,7 +39,7 @@ import { wildMode } from "../extras.ts";
 import { seededRng, type Rng } from "../rng.ts";
 import { repelled } from "../rules/items.ts";
 import {
-  CELL_LAND, CELL_WATER, FAR, NEAR, WILD_STEP_FRAMES, WINDOW_X, WINDOW_Y, classifyCells, landTable,
+  CELL_LAND, CELL_WATER, CellClassifier, FAR, NEAR, WILD_STEP_FRAMES, WINDOW_X, WINDOW_Y, landTable,
   lifetime, pickSlot, respawnDelay, visibleWildMode, wanderDelay, waterTable, wildSprite, wildTarget,
   type IndoorRule,
 } from "../visiblewild.ts";
@@ -144,14 +146,23 @@ export interface WildWorld {
 /** Touching distance, px either way: a body two-thirds into the cell. */
 export const TOUCH_PX = 12;
 
+/** Cells classified a tick after a map's entry (whole rows): the forest's
+ *  1632 cells take about half a second, no frame more than a sliver. The
+ *  whole map at once was half a second in ONE frame on the console. */
+export const CLASSIFY_CELLS = 48;
+
 export class VisibleWild {
   mons: WildMon[] = [];
   /** Battles a touch has started (the tests and the benches count them). */
   battles = 0;
   /** The last mon touched into a battle. */
   lastBattle?: { species: string; level: number };
-  private cells: Uint8Array | null = null;
+  private classifier: CellClassifier | null = null;
   private cellsMap: GameMap | null = null;
+  /** Per-cell marks for a spawn's pick (someone there, or a person beside
+   *  it), set and cleared around each pick; and its candidate list. */
+  private marks: Uint8Array | null = null;
+  private readonly cands: number[] = [];
   private spawnTimer = 0;
   /** The map has had its first fill. */
   private filled = false;
@@ -181,8 +192,9 @@ export class VisibleWild {
    *  mons come along. */
   onMap(): void {
     this.mons.length = 0;
-    this.cells = null;
+    this.classifier = null;
     this.cellsMap = null;
+    this.marks = null;
     this.forMap = this.ow.map ?? null;
     this.filled = false;
     this.spawnTimer = 0;
@@ -190,17 +202,25 @@ export class VisibleWild {
   /** The map the mons belong to (onMap's). */
   private forMap: GameMap | null = null;
 
-  /** The map's cell kinds, worked out on first use after a map load. */
-  cellKinds(): Uint8Array {
+  /** The map's classifier, made on first use after a map load. */
+  private classify(): CellClassifier {
     const map = this.ow.map;
-    if (!this.cells || this.cellsMap !== map) {
+    if (!this.classifier || this.cellsMap !== map) {
       const data = this.ow.shell.data;
       const enc = data.encounters?.[map.id] as EncounterDef | undefined;
       const indoor = (data.field as { indoorEncounters?: IndoorRule } | undefined)?.indoorEncounters;
-      this.cells = classifyCells(map, enc, indoor);
+      this.classifier = new CellClassifier(map, enc, indoor);
       this.cellsMap = map;
     }
-    return this.cells;
+    return this.classifier;
+  }
+
+  /** The map's cell kinds, all of them worked out now (the tests' and the
+   *  benches' view; the tick works them out CLASSIFY_CELLS at a time). */
+  cellKinds(): Uint8Array {
+    const c = this.classify();
+    c.step(Infinity);
+    return c.out;
   }
 
   /** The mon in or stepping into a cell. */
@@ -223,6 +243,9 @@ export class VisibleWild {
     const p = ow.player;
     // a map built without setMap's call (never, but cheap to be sure)
     if (this.forMap !== ow.map) this.onMap();
+    // the cells, a few rows a tick: a map's entry is no long frame
+    const cls = this.classify();
+    if (!cls.done) cls.step(CLASSIFY_CELLS);
     for (const m of this.mons) {
       m.advance();
       if (!m.moving && --m.timer <= 0) this.wander(m);
@@ -241,7 +264,8 @@ export class VisibleWild {
       m.life -= 1;
       if (far > FAR || (m.life <= 0 && far >= 4 && !m.moving)) this.mons.splice(i, 1);
     }
-    // coming
+    // coming: the first fill once every cell is known
+    if (!cls.done) return false;
     if (!this.filled) {
       this.filled = true;
       this.spawn(true);
@@ -301,7 +325,7 @@ export class VisibleWild {
     const tx = m.cellX + d[0];
     const ty = m.cellY + d[1];
     const map = this.ow.map;
-    if (!map.inBounds(tx, ty) || this.cellKinds()[ty * map.widthCells + tx] !== m.kind) return;
+    if (!map.inBounds(tx, ty) || this.classify().out[ty * map.widthCells + tx] !== m.kind) return;
     // the people and the other mons block; the player does not (that is a touch)
     const ents: Mover[] = [];
     for (const e of this.ow.entities) if (e !== p) ents.push(e);
@@ -322,7 +346,7 @@ export class VisibleWild {
     const land = landTable(enc);
     const water = waterTable(enc);
     if (!land && !water) return;
-    const kinds = this.cellKinds();
+    const kinds = this.classify().out;
     const p = ow.player;
     const surfing = !!p.surfing;
     const w = map.widthCells;
@@ -356,33 +380,47 @@ export class VisibleWild {
   ): [number, number] | null {
     const ow = this.ow;
     const p = ow.player;
-    const w = ow.map.widthCells;
-    const taken = (x: number, y: number): boolean => {
-      for (const e of ow.entities) {
-        if ((e as { hidden?: boolean }).hidden) continue;
-        if ((e.cellX === x && e.cellY === y) || (e.targetX === x && e.targetY === y)) return true;
-      }
-      return this.monAt(x, y) !== undefined;
+    const map = ow.map;
+    const w = map.widthCells;
+    const size = w * map.heightCells;
+    if (!this.marks || this.marks.length !== size) this.marks = new Uint8Array(size);
+    const marks = this.marks;
+    // mark what rules a cell out -- someone in it or stepping into it, a
+    // person in it or next to it -- once, rather than asking every cell
+    const marked: number[] = [];
+    const mark = (x: number, y: number | undefined): void => {
+      if (y === undefined || x < 0 || y < 0 || x >= w || y >= map.heightCells) return;
+      const i = y * w + x;
+      if (!marks[i]) { marks[i] = 1; marked.push(i); }
     };
-    const nearPerson = (x: number, y: number): boolean => {
-      for (const n of ow.npcs) {
-        if (n.hidden) continue;
-        if (Math.abs(n.cellX - x) <= 1 && Math.abs(n.cellY - y) <= 1) return true;
-      }
-      return false;
-    };
-    let pick: [number, number] | null = null;
-    let seen = 0;
+    for (const e of ow.entities) {
+      if ((e as { hidden?: boolean }).hidden) continue;
+      mark(e.cellX, e.cellY);
+      if (e.targetX !== undefined) mark(e.targetX, e.targetY);
+    }
+    for (const m of this.mons) {
+      mark(m.cellX, m.cellY);
+      if (m.targetX !== undefined) mark(m.targetX, m.targetY);
+    }
+    for (const n of ow.npcs) {
+      if (n.hidden) continue;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) mark(n.cellX + dx, n.cellY + dy);
+    }
+    const cands = this.cands;
+    cands.length = 0;
     for (let y = y0; y <= y1; y++) {
+      const row = y * w;
+      const ny = Math.abs(y - p.cellY) < NEAR;
       for (let x = x0; x <= x1; x++) {
-        if (!allowed(kinds[y * w + x]!)) continue;
-        if (Math.max(Math.abs(x - p.cellX), Math.abs(y - p.cellY)) < NEAR) continue;
-        if (taken(x, y) || nearPerson(x, y)) continue;
-        // reservoir: every candidate equally likely, one pass
-        seen += 1;
-        if (this.rng.int(seen) === 0) pick = [x, y];
+        const i = row + x;
+        if (marks[i] || !allowed(kinds[i]!)) continue;
+        if (ny && Math.abs(x - p.cellX) < NEAR) continue;
+        cands.push(i);
       }
     }
-    return pick;
+    for (const i of marked) marks[i] = 0;
+    if (cands.length === 0) return null;
+    const i = cands[this.rng.int(cands.length)]!;
+    return [i % w, Math.floor(i / w)];
   }
 }
