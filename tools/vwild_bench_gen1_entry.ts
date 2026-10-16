@@ -51,6 +51,31 @@ const toOverworld = (): void => {
 let held = 0;
 game.pushStubBattle = (): void => { held++; };
 
+// the mons' own share of a tick, logged where one is slow
+{
+  const w = game.overworld.wild;
+  const real = w.update.bind(w);
+  w.update = (frozen: boolean): boolean => {
+    const t0 = now();
+    const cls = w.classifier;
+    const wasDone = cls ? cls.done : null;
+    const n0 = w.mons.length;
+    const r = real(frozen);
+    const dt = now() - t0;
+    if (dt > 8000) log(`slow wild tick ${(dt / 1000).toFixed(1)} ms: classifier ${wasDone === null ? "new" : wasDone ? "done" : "working"}, mons ${n0} -> ${w.mons.length}; spawn ${(spawnUs / 1000).toFixed(1)} wander ${(wanderUs / 1000).toFixed(1)} slots ${(slotsUs / 1000).toFixed(1)}`);
+    spawnUs = wanderUs = slotsUs = 0;
+    return r;
+  };
+  let spawnUs = 0, wanderUs = 0, slotsUs = 0;
+  const time = (name: string, add: (us: number) => void): void => {
+    const f = w[name].bind(w);
+    w[name] = (...a: unknown[]): unknown => { const t0 = now(); const r = f(...a); add(now() - t0); return r; };
+  };
+  time("spawn", (us) => { spawnUs += us; });
+  time("wander", (us) => { wanderUs += us; });
+  time("freeSlots", (us) => { slotsUs += us; });
+}
+
 /** The busiest grass cell, then the longest walkable row through or next to
  *  it (no warp, no water, nobody near), up to 10 cells. */
 function walkRow(): [number, number, number] | null {
@@ -157,6 +182,7 @@ g.frame = (b: number): void => {
   const k0 = game.tickIndex;
   mainFrame((b & ~0xff) | pad);
   const dt = now() - t0;
+  if (dt > 25000 && ready >= 0 && n > ready) log(`slow step ${(dt / 1000).toFixed(1)} ms at t=${(n - ready) % SEG}, ${game.tickIndex - k0} ticks, mons ${game.overworld?.wild?.mons?.length}`);
   acc += dt;
   segSteps++;
   segTicks += game.tickIndex - k0;

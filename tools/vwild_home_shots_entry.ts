@@ -52,7 +52,15 @@ g.frame = (b: number): void => {
     if (t === 70) { game.save.options.cheats = false; game.setGearView("party"); }
     if (t === 73) game.setGearView("home");
     if (t === 130) shot("home_no_cheats");
-    if (t === 190) console.log("[pv] bpshot done");
+    // the other apps with pills, where the build has them
+    const apps = ["tools", "store", "options", "cheats", "enhancements"];
+    const k = Math.floor((t - 140) / 60);
+    if (t >= 140 && (t - 140) % 60 === 0 && k < apps.length) {
+      game.save.options.cheats = true;
+      game.setGearView(apps[k]);
+    }
+    if (t >= 140 && (t - 140) % 60 === 50 && k < apps.length) shot(`app_${apps[k]}`);
+    if (t === 140 + apps.length * 60 + 20) console.log("[pv] bpshot done");
   }
   mainFrame((b & ~0xff & ~R) | pad);
 };
