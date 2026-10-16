@@ -85,6 +85,8 @@ export interface WildMapLike {
   /** All four tiles of the cell of the kind (map.ts); absent: the cell's
    *  own kind is taken as the whole of it. */
   isWholeCell?(cx: number, cy: number, kind: "floor" | "water"): boolean;
+  /** One row of CF_* flags at y * widthCells (map.ts: the fast route). */
+  cellFlagsRow?(cy: number, out: Uint8Array): void;
 }
 
 /** field.indoorEncounters: maps from this index roll on every tile, but
@@ -135,10 +137,46 @@ export function classifyCells(
   return c.out;
 }
 
+/** Cell flags (map.ts cellFlagsRow): walkable by its bottom-left tile,
+ *  water, grass, all four tiles dry floor, all four water, a warp or door. */
+export const CF_WALK = 1;
+export const CF_WATER = 2;
+export const CF_GRASS = 4;
+export const CF_WHOLE = 8;
+export const CF_WHOLE_WATER = 16;
+export const CF_WARP = 32;
+
+/** Walkable and not water. */
+function dryOf(g: number): boolean {
+  return (g & CF_WALK) !== 0 && (g & CF_WATER) === 0;
+}
+
+/** A row of flags from the map's own methods: the route for a map without
+ *  cellFlagsRow (the tests' hand-made maps). */
+function flagsRowByMethods(map: WildMapLike, y: number, out: Uint8Array): void {
+  const w = map.widthCells;
+  for (let x = 0; x < w; x++) {
+    let f = 0;
+    if (map.isWalkableCell(x, y)) f |= CF_WALK;
+    if (map.isWaterCell(x, y)) f |= CF_WATER;
+    if (map.isGrassCell(x, y)) f |= CF_GRASS;
+    const whole = map.isWholeCell;
+    if (whole ? whole.call(map, x, y, "floor") : (f & CF_WALK) && !(f & CF_WATER)) f |= CF_WHOLE;
+    if (whole ? whole.call(map, x, y, "water") : f & CF_WATER) f |= CF_WHOLE_WATER;
+    if (map.warpAtCell(x, y) || map.isWarpTileCell(x, y)) f |= CF_WARP;
+    out[y * w + x] = f;
+  }
+}
+
 /** classifyCells a slice at a time: `step(budget)` does whole rows until
- *  about `budget` cells are done. `out` reads CELL_NONE where not yet done. */
+ *  about `budget` cells are done. `out` reads CELL_NONE where not yet done.
+ *  Two passes a row: the row's flags (one look at the map a cell), then its
+ *  kinds from the flags of it and the rows either side. */
 export class CellClassifier {
   readonly out: Uint8Array;
+  private readonly flags: Uint8Array;
+  /** The next row whose flags are wanted, and whose kinds. */
+  private fy = 0;
   private y = 1;
   private readonly land: boolean;
   private readonly water: boolean;
@@ -150,6 +188,9 @@ export class CellClassifier {
     indoor?: IndoorRule | null,
   ) {
     this.out = new Uint8Array(map.widthCells * map.heightCells);
+    this.flags = new Uint8Array(map.widthCells * map.heightCells);
+    this.landPrefix = new Uint16Array((map.widthCells + 1) * map.heightCells);
+    this.waterPrefix = new Uint16Array((map.widthCells + 1) * map.heightCells);
     this.land = landTable(enc) !== null;
     this.water = waterTable(enc) !== null;
     this.cave = this.land && everyTileRolls(map, indoor);
@@ -161,46 +202,103 @@ export class CellClassifier {
   }
 
   step(budget: number): void {
-    const w = this.map.widthCells;
+    const map = this.map;
+    const w = map.widthCells;
     let n = 0;
     while (!this.done && n < budget) {
-      for (let x = 1; x < w - 1; x++) this.out[this.y * w + x] = this.kindOf(x, this.y);
+      // the flags of this row and the next
+      while (this.fy <= this.y + 1 && this.fy < map.heightCells) {
+        if (map.cellFlagsRow) map.cellFlagsRow(this.fy, this.flags);
+        else flagsRowByMethods(map, this.fy, this.flags);
+        this.fy++;
+      }
+      this.kindsRow(this.y);
       n += w;
       this.y++;
     }
   }
 
-  private kindOf(x: number, y: number): number {
-    const map = this.map;
-    const isWater = (cx: number, cy: number) => map.isWaterCell(cx, cy);
-    const walk = (cx: number, cy: number) => map.isWalkableCell(cx, cy) && !isWater(cx, cy);
-    const cave = this.cave;
-    let k = CELL_NONE;
-    if (this.water && isWater(x, y)) k = CELL_WATER;
-    else if (this.land && walk(x, y) && (cave || map.isGrassCell(x, y))) k = CELL_LAND;
-    if (k === CELL_NONE) return k;
-    {
+  private kindsRow(y: number): void {
+    const w = this.map.widthCells;
+    const F = this.flags;
+    const out = this.out;
+    const cave = this.cave, land = this.land, water = this.water;
+    const up = (y - 1) * w, at = y * w, dn = (y + 1) * w;
+    for (let x = 1; x < w - 1; x++) {
+      const f = F[at + x]!;
+      let k = CELL_NONE;
+      const dry = (f & CF_WALK) !== 0 && (f & CF_WATER) === 0;
+      if (water && f & CF_WATER) k = CELL_WATER;
+      else if (land && dry && (cave || f & CF_GRASS)) k = CELL_LAND;
+      if (k === CELL_NONE) { out[at + x] = 0; continue; }
+      const fu = F[up + x]!, fd = F[dn + x]!, fl = F[at + x - 1]!, fr = F[at + x + 1]!;
       // the whole cell floor (grass included) or water: a cell half fence,
       // half ledge or half cave wall walks as its bottom tile says, but a
       // mon on it would be drawn over the fence
-      if (map.isWholeCell && !map.isWholeCell(x, y, k === CELL_WATER ? "water" : "floor")) return CELL_NONE;
-      // grass: not the top row of a patch -- the mon's card stands up from
-      // its cell, so there it would be drawn over the fence or path behind
-      if (k === CELL_LAND && !cave && !map.isGrassCell(x, y - 1)) return CELL_NONE;
-      // nor the bottom row against a fence, a ledge or trees: the card's
-      // feet would sit on them
-      if (k === CELL_LAND && !cave && !walk(x, y + 1)) return CELL_NONE;
+      let ok = k === CELL_WATER ? (f & CF_WHOLE_WATER) !== 0 : (f & CF_WHOLE) !== 0;
+      if (ok && k === CELL_LAND && !cave) {
+        // grass: not the top row of a patch (the card stands up from its
+        // cell, over the fence or path behind), nor the bottom row against
+        // a fence, a ledge or trees (its feet would sit on them)
+        if (!(fu & CF_GRASS) || !dryOf(fd)) ok = false;
+      }
       // a warp or a door, or a cell beside one
-      if (map.warpAtCell(x, y) || map.isWarpTileCell(x, y)) return CELL_NONE;
-      if (map.warpAtCell(x - 1, y) || map.warpAtCell(x + 1, y) || map.warpAtCell(x, y - 1) || map.warpAtCell(x, y + 1)) return CELL_NONE;
-      // a one-wide lane (open both ways along one axis, shut across it) or
-      // the dead end of one: the way past, or to what the lane leads to
-      const pass = k === CELL_WATER ? isWater : walk;
-      const u = pass(x, y - 1), d = pass(x, y + 1), l = pass(x - 1, y), r = pass(x + 1, y);
-      if ((u && d && !l && !r) || (l && r && !u && !d)) return CELL_NONE;
-      if (+u + +d + +l + +r <= 1) return CELL_NONE;
+      if (ok && (f | fu | fd | fl | fr) & CF_WARP) ok = false;
+      if (ok) {
+        // a one-wide lane (open both ways along one axis, shut across it)
+        // or the dead end of one: the way past, or what the lane leads to
+        const wet = k === CELL_WATER;
+        const u = wet ? (fu & CF_WATER) !== 0 : dryOf(fu), d = wet ? (fd & CF_WATER) !== 0 : dryOf(fd);
+        const l = wet ? (fl & CF_WATER) !== 0 : dryOf(fl), r = wet ? (fr & CF_WATER) !== 0 : dryOf(fr);
+        if ((u && d && !l && !r) || (l && r && !u && !d)) ok = false;
+        else if (+u + +d + +l + +r <= 1) ok = false;
+      }
+      out[at + x] = ok ? k : CELL_NONE;
     }
-    return k;
+    // the row's running counts, for the spawner: a window's count, and its
+    // r-th cell, in a few lookups
+    const pw = w + 1;
+    const pl = this.landPrefix, pv = this.waterPrefix;
+    let nl = 0, nw = 0;
+    for (let x = 0; x < w; x++) {
+      pl[y * pw + x] = nl;
+      pv[y * pw + x] = nw;
+      const k = out[at + x];
+      if (k === CELL_LAND) nl++;
+      else if (k === CELL_WATER) nw++;
+    }
+    pl[y * pw + w] = nl;
+    pv[y * pw + w] = nw;
+  }
+
+  /** Per row, how many cells of each kind lie left of each column. */
+  private readonly landPrefix: Uint16Array;
+  private readonly waterPrefix: Uint16Array;
+
+  /** Cells of `kind` in the box [x0, x1] x [y0, y1] (rows done so far). */
+  countIn(kind: number, x0: number, x1: number, y0: number, y1: number): number {
+    const pw = this.map.widthCells + 1;
+    const p = kind === CELL_WATER ? this.waterPrefix : this.landPrefix;
+    let n = 0;
+    for (let y = y0; y <= y1; y++) n += p[y * pw + x1 + 1]! - p[y * pw + x0]!;
+    return n;
+  }
+
+  /** The index of the `r`-th cell of `kind` in the box (row by row, left to
+   *  right), r below countIn's count; -1 past it. A row's count is two
+   *  lookups, so only the one row it falls in is walked. */
+  nthIn(kind: number, r: number, x0: number, x1: number, y0: number, y1: number): number {
+    const w = this.map.widthCells;
+    const pw = w + 1;
+    const p = kind === CELL_WATER ? this.waterPrefix : this.landPrefix;
+    for (let y = y0; y <= y1; y++) {
+      const n = p[y * pw + x1 + 1]! - p[y * pw + x0]!;
+      if (r >= n) { r -= n; continue; }
+      for (let x = x0; x <= x1; x++) {
+        if (this.out[y * w + x] === kind && r-- === 0) return y * w + x;
+      }
+    }
+    return -1;
   }
 }
 
