@@ -14,6 +14,8 @@ import { FieldMoves } from "../voxelmon/game/gen2/world/FieldMoves.ts";
 import { Permissions } from "../voxelmon/game/gen2/world/Permissions.ts";
 import { VisibleWild, aimFor, MAX_MONS, RX, RY } from "../voxelmon/game/gen2/world/VisibleWild.ts";
 import { OptionsMenu } from "../voxelmon/game/gen2/ui/OptionsMenu.ts";
+import { search } from "../voxelmon/game/battle/arena.ts";
+import { chooseView, eyeInFill, sightlineHits } from "../voxelmon/game/battle/staging.ts";
 
 const gold = haveGoldGen();
 const t = test.skipIf(!gold);
@@ -258,6 +260,33 @@ describe("gen2 VISIBLE WILD: on the map", () => {
       world.tryWildEncounter();
     }
     expect(met.length).toBeGreaterThan(0);
+  });
+
+  t("a battle begun anywhere in ROUTE_29's grass is staged with both cards in sight (not from past the map's edge)", () => {
+    // A touch starts a battle wherever a mon stands; the staging camera at
+    // (40,14) used to stand five cells off the map's south edge, low, and
+    // open on the border fill instead of the fight.
+    const game = route({ visibleWild: "many" }, "ROUTE_29", 40, 14);
+    const map = game.world.map;
+    const at = search(map, 40, 14, false)!;
+    expect(eyeInFill(map, at, 0, 0, 0)).toBe(true);
+    const view = chooseView(map, at, 0, 32);
+    expect(view.orbit === 0 && view.pitch === 0).toBe(false);
+    expect(eyeInFill(map, at, 0, view.orbit, view.pitch)).toBe(false);
+    expect(sightlineHits(map, at, 0, view.orbit, view.pitch).enemy).toBe(0);
+    // and from every grass cell of the map: never an eye low in the fill
+    let staged = 0;
+    for (let y = 0; y < map.heightCells; y++) {
+      for (let x = 0; x < map.widthCells; x++) {
+        if (!Permissions.isEncounterCollision(map.cellCollision(x, y)) || !map.isWalkable(x, y)) continue;
+        const a = search(map, x, y, false);
+        if (!a) continue;
+        staged++;
+        const v = chooseView(map, a, 0, 32);
+        expect(eyeInFill(map, a, 0, v.orbit, v.pitch)).toBe(false);
+      }
+    }
+    expect(staged).toBeGreaterThan(0);
   });
 
   t("over a link: no mons, and the step encounters are the cart's", () => {

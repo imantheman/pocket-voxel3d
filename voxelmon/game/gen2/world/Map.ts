@@ -399,6 +399,14 @@ export class Map {
     return this.connections[dir];
   }
 
+  /** Not the Lua's: how many cells past an edge the voxel world builds the
+   *  map's border block out to (the cook's ring, cook/structures.ts RING:
+   *  twelve tiles), for the battle camera's choice of view (battle/
+   *  staging.ts eyeInFill). */
+  borderFillCells(): number {
+    return 6;
+  }
+
   // Lua: Map.lua:294-313 -- destination cell after stepping off this edge onto
   // a connected map. Returns [x, y], or undefined without a connection.
   static connectionLanding(def: any, conn: any, dir: string, fromCx: number, fromCy: number): [number, number] | undefined {

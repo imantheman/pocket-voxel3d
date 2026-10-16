@@ -117,7 +117,11 @@ export function orbitDir(arena: Arena, rig: number, q8: number): [number, number
  * from each mon's card up to the eye is walked, and a cell the player
  * cannot walk through (and is not water) that stands taller than the line
  * at that point hides the card. The enemy's card counts double: it is what
- * the opening frame is for.
+ * the opening frame is for. An eye stood low inside the border fill past
+ * an edge with no connection (eyeInFill; Gold's maps, whose cook tiles the
+ * border block out round them) sees nothing but the fill, so that view is
+ * costed out -- the first Gold route's south edge took the solved
+ * framing's eye five cells out and opened on its border, not the fight.
  *
  * The guest has no voxel heights (arena.ts), so a blocker is taken to be
  * as tall as the tallest thing the cook stands up off a floor plan: a
@@ -143,7 +147,8 @@ export function chooseView(
       // The rig was solved at orbit 0 and its own height; changes earn themselves.
       const d = (step - preferStep + ORBIT_STEPS) % ORBIT_STEPS;
       const turn = Math.min(d, ORBIT_STEPS - d) / ORBIT_STEPS;
-      const score = hits.enemy * 2 + hits.player + turn * ORBIT_TURN_COST + (pitchQ8 / 256) * VIEW_PITCH_COST;
+      let score = hits.enemy * 2 + hits.player + turn * ORBIT_TURN_COST + (pitchQ8 / 256) * VIEW_PITCH_COST;
+      if (eyeInFill(map, arena, rig, q8, pitchQ8)) score += VIEW_EYE_IN_FILL_COST;
       if (score < bestScore) {
         bestScore = score;
         best = { orbit: q8, pitch: pitchQ8 };
@@ -151,6 +156,60 @@ export function chooseView(
     }
   }
   return best;
+}
+
+/**
+ * Where the battle camera's eye stands for an orbit and pitch: its cell
+ * (fractional, from the arena midpoint along orbitDir) and its height in px
+ * -- cam.rs `battle`, extra elevation on the same eye distance.
+ */
+export function eyeOf(arena: Arena, rig: number, orbitQ8: number, pitchQ8: number): { x: number; y: number; h: number } {
+  const [ex, ey] = arena.enemyCell;
+  const [px, py] = arena.playerCell;
+  const r = rig === 1 ? RIG.wide : RIG.tele;
+  const hLen = Math.hypot(r.side, r.back);
+  const len = Math.hypot(hLen, r.height);
+  const e = Math.min(
+    Math.atan2(r.height, hLen) + (pitchQ8 / 256) * ((RIG_PITCH_MAX_DEG * Math.PI) / 180),
+    0.49 * Math.PI,
+  );
+  const eyeD = (len * Math.cos(e)) / CELL_PX; // cells out from the midpoint
+  const [ux, uy] = orbitDir(arena, rig, orbitQ8);
+  return { x: (ex + px) / 2 + ux * eyeD, y: (ey + py) / 2 + uy * eyeD, h: len * Math.sin(e) };
+}
+
+/**
+ * Whether the eye stands low inside the fill the voxel world builds past an
+ * edge of the map with no connection: `map.borderFillCells()` cells of the
+ * map's border block (Gold's cook tiles it out round every map; a Kanto map
+ * answers nothing -- its cook stands only a tree hull there, which the host
+ * culls in front of the camera). Low is under a blocker's height. A corner
+ * is filled if either side is.
+ */
+export function eyeInFill(map: GameMap, arena: Arena, rig: number, orbitQ8: number, pitchQ8: number): boolean {
+  const fillOf = (map as unknown as { borderFillCells?: () => number }).borderFillCells;
+  const fill = typeof fillOf === "function" ? fillOf.call(map) : 0;
+  if (!(fill > 0)) return false;
+  const eye = eyeOf(arena, rig, orbitQ8, pitchQ8);
+  if (eye.h >= (rig === 1 ? VIEW_BLOCKER_INDOOR_PX : VIEW_BLOCKER_OUTDOOR_PX)) return false;
+  const x = Math.floor(eye.x);
+  const y = Math.floor(eye.y);
+  if (map.inBounds(x, y)) return false;
+  const conn = (dir: string): boolean => {
+    const c = (map as unknown as { connection?: (d: string) => unknown }).connection;
+    return typeof c === "function" ? !!c.call(map, dir) : false;
+  };
+  // the far edges by inBounds along the arena's row and column
+  const [ax, ay] = arena.enemyCell;
+  const past = (inside: (d: number) => boolean): number => {
+    for (let d = 1; d <= fill + 1; d++) if (inside(d)) return d;
+    return fill + 1;
+  };
+  if (y < 0 && -y <= fill && !conn("north")) return true;
+  if (y >= 0 && !map.inBounds(ax, y) && past((d) => map.inBounds(ax, y - d)) <= fill && !conn("south")) return true;
+  if (x < 0 && -x <= fill && !conn("west")) return true;
+  if (x >= 0 && !map.inBounds(x, ay) && past((d) => map.inBounds(x - d, ay)) <= fill && !conn("east")) return true;
+  return false;
 }
 
 /**
@@ -167,9 +226,6 @@ export function sightlineHits(
   /** solidGrid(map), when the caller asks many lines of one map. */
   solid: ArrayLike<number> | null = solidGrid(map),
 ): { enemy: number; player: number } {
-  const [ex, ey] = arena.enemyCell;
-  const [px, py] = arena.playerCell;
-  const mid = [(ex + px) / 2, (ey + py) / 2];
   const blockerH = rig === 1 ? VIEW_BLOCKER_INDOOR_PX : VIEW_BLOCKER_OUTDOOR_PX;
   const sw = map.widthCells;
   const blocked = (cx: number, cy: number): boolean => {
@@ -179,18 +235,9 @@ export function sightlineHits(
     if (solid) return solid[y * sw + x] === 1;
     return !map.isWalkableCell(x, y) && !map.isWaterCell(x, y);
   };
-  const r = rig === 1 ? RIG.wide : RIG.tele;
-  const hLen = Math.hypot(r.side, r.back);
-  const len = Math.hypot(hLen, r.height);
-  // cam.rs: extra elevation on the same eye distance
-  const e = Math.min(
-    Math.atan2(r.height, hLen) + (pitchQ8 / 256) * ((RIG_PITCH_MAX_DEG * Math.PI) / 180),
-    0.49 * Math.PI,
-  );
-  const eyeD = (len * Math.cos(e)) / CELL_PX; // cells out from the midpoint
-  const eyeH = len * Math.sin(e); // px up
-  const [ux, uy] = orbitDir(arena, rig, orbitQ8);
-  const eye = [mid[0] + ux * eyeD, mid[1] + uy * eyeD];
+  const at = eyeOf(arena, rig, orbitQ8, pitchQ8);
+  const eye = [at.x, at.y];
+  const eyeH = at.h;
   const count = (mon: readonly [number, number] | number[]): number => {
     const cx0 = mon[0]! + 0.5;
     const cy0 = mon[1]! + 0.5;
@@ -245,6 +292,9 @@ const VIEW_CARD_PX = 14;
 /** How tall a blocking cell is taken to be (two voxel blocks; a house/tree). */
 const VIEW_BLOCKER_INDOOR_PX = 40;
 const VIEW_BLOCKER_OUTDOOR_PX = 56;
+/** What an eye stood low in the border fill costs (eyeInFill): more than a
+ *  card hidden behind a few blockers, since it sees nothing at all. */
+const VIEW_EYE_IN_FILL_COST = 8;
 
 /**
  * Stage a wild battle on the current map: BattleArena.search from the

@@ -19,7 +19,7 @@ import { TrainerBattle } from "../voxelmon/game/battle/trainer.ts";
 import { makeBattler } from "../voxelmon/game/battle/battler.ts";
 import { newMon, type PartyMon } from "../voxelmon/game/battle/mon.ts";
 import { search as arenaSearch, type Arena } from "../voxelmon/game/battle/arena.ts";
-import { chooseOrbit, chooseView, orbitDir, sightlineHits } from "../voxelmon/game/battle/staging.ts";
+import { chooseOrbit, chooseView, eyeInFill, orbitDir, sightlineHits } from "../voxelmon/game/battle/staging.ts";
 import {
   HUD_BAR_EMPTY,
   HUD_BAR_FULL,
@@ -1181,6 +1181,23 @@ describe("the battle camera's opening angle", () => {
     // and the angle it picked looks in over ground it can see across
     const [nx, ny] = orbitDir(arena, 0, q8);
     expect(nx * ux + ny * uy).toBeLessThan(0.5);
+  });
+
+  test("an eye low in the border fill past an unconnected edge: the camera turns or lifts", () => {
+    // The same open ground, the arena by the bottom edge: the solved
+    // framing's eye stands off the map, in the fill a map that builds one
+    // (Gold's) stands there.
+    const edge: Arena = { ...arena, y: 32, enemyCell: [19, 33], playerCell: [19, 36] };
+    const open = ground(() => false) as unknown as Record<string, unknown>;
+    expect(eyeInFill(open as never, edge, 0, 0, 0)).toBe(false); // no fill: Kanto's maps
+    expect(chooseView(open as never, edge, 0)).toEqual({ orbit: 0, pitch: 0 });
+    const filled = { ...open, borderFillCells: () => 6, connection: () => undefined };
+    expect(eyeInFill(filled as never, edge, 0, 0, 0)).toBe(true);
+    const view = chooseView(filled as never, edge, 0);
+    expect(eyeInFill(filled as never, edge, 0, view.orbit, view.pitch)).toBe(false);
+    // and past a connection the neighbour stands, not fill
+    const joined = { ...filled, connection: (d: string) => (d === "south" ? { map: "X", offset: 0 } : undefined) };
+    expect(eyeInFill(joined as never, edge, 0, 0, 0)).toBe(false);
   });
 
   test("a wall on both sides still opens on the clearest one", () => {
