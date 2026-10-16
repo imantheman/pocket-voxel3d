@@ -75,6 +75,79 @@ export class SpeedStepper {
 }
 
 /**
+ * The fallback: 2X costs a second logic tick every step, and where a frame
+ * was already near the budget (Gold's battles: their screen is most of the
+ * frame) that tips it under 30 fps -- and a slow frame makes the host run
+ * more steps the next, each now two ticks. The entry times its own frame()
+ * calls (voxel.now, microseconds) and the logic ticks inside them, and
+ * hands both here. While the guest's share of a rendered frame stays over
+ * `high` on average AND the logic is a real part of it (`share`), SPEED
+ * runs at 1.5X instead (one tick, two ticks, ...); it goes back to 2X once
+ * the frame has been under `low`, or the logic a small part of it, for a
+ * second. A frame the logic is not filling -- a screen whose drawing is the
+ * cost -- keeps 2X: slowing the game there would buy nothing. A map load's
+ * one long frame is clipped so it cannot trip it on its own. No clock (a
+ * host without voxel.now): never engages.
+ */
+export class SpeedGovernor {
+  /** The most SPEED may be right now. */
+  cap = GAME_SPEED_MAX;
+  /** Guest microseconds per rendered frame, smoothed; and the logic's part. */
+  ema = 0;
+  logicEma = 0;
+  private acc = 0;
+  private logicAcc = 0;
+  private calm = 0;
+
+  constructor(
+    readonly high = 18000,
+    readonly low = 14000,
+    private readonly onChange?: (cap: number, ema: number, logic: number) => void,
+    readonly share = 0.35,
+  ) {}
+
+  /** One frame() call took `us`, `logicUs` of it in logic ticks; `shown`
+   * when the host renders after it; `want` the speed asked for. */
+  sample(us: number, logicUs: number, shown: boolean, want: number): void {
+    this.acc += us;
+    this.logicAcc += logicUs;
+    if (!shown) return;
+    const clip = this.high * 2;
+    const f = Math.min(this.acc, clip);
+    const l = Math.min(this.logicAcc, f);
+    this.acc = this.logicAcc = 0;
+    this.ema = this.ema === 0 ? f : this.ema + (f - this.ema) / 16;
+    this.logicEma = this.logicEma === 0 ? l : this.logicEma + (l - this.logicEma) / 16;
+    const logicHeavy = this.logicEma > this.ema * this.share;
+    if (want <= 1) {
+      this.set(GAME_SPEED_MAX);
+      this.calm = 0;
+    } else if (this.cap > 1.5 && this.ema > this.high && logicHeavy) {
+      this.set(1.5);
+      this.calm = 0;
+    } else if (this.cap < GAME_SPEED_MAX && (this.ema < this.low || this.logicEma < this.ema * (this.share - 0.1))) {
+      if (++this.calm >= 30) {
+        this.set(GAME_SPEED_MAX);
+        this.calm = 0;
+      }
+    } else {
+      this.calm = 0;
+    }
+  }
+
+  /** `want` (logicSpeed) under the cap. */
+  speed(want: number): number {
+    return Math.min(want, this.cap);
+  }
+
+  private set(cap: number): void {
+    if (cap === this.cap) return;
+    this.cap = cap;
+    this.onChange?.(cap, this.ema, this.logicEma);
+  }
+}
+
+/**
  * One host step at `speed`: `tick(compose)` runs once per logic tick, and
  * compose is true on the last tick of the step and only when the host will
  * render after this step (`hostCompose`: voxel.lastStep, or the entry's own

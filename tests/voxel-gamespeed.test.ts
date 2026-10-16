@@ -12,7 +12,7 @@ import { join } from "node:path";
 
 import { VOX_BTN } from "../contracts/spec/voxel-spec.ts";
 import {
-  GAME_SPEEDS, GAME_SPEED_LABEL, gameSpeedIndex, gameSpeedOf, setGameSpeedIn, SpeedStepper, stepHost,
+  GAME_SPEEDS, GAME_SPEED_LABEL, gameSpeedIndex, gameSpeedOf, setGameSpeedIn, SpeedGovernor, SpeedStepper, stepHost,
 } from "../voxelmon/game/gamespeed.ts";
 import { loadRuntimeData, REQUIRED_MODULES, type VoxelmonData } from "../voxelmon/game/data.ts";
 import { VoxelmonGame } from "../voxelmon/game/game.ts";
@@ -44,6 +44,35 @@ describe("the speed stepper", () => {
     seen.length = 0;
     expect(stepHost(s, 1, true, (c) => seen.push(c))).toBe(1);
     expect(seen).toEqual([true]);
+  });
+
+  test("the fallback: 1.5X while the logic overfills frames, 2X again once they are quick", () => {
+    const changes: number[] = [];
+    const g = new SpeedGovernor(18000, 14000, (cap) => changes.push(cap));
+    /** A rendered frame of `us`, `logicPart` of it logic, over two host steps. */
+    const frame = (us: number, logicPart: number, want = 2): void => {
+      g.sample(us / 2, (us * logicPart) / 2, false, want);
+      g.sample(us / 2, (us * logicPart) / 2, true, want);
+    };
+    for (let i = 0; i < 60; i++) frame(12000, 0.5);
+    expect(g.speed(2)).toBe(2);
+    // one map load's long frame is not enough
+    frame(400000, 0.5);
+    expect(g.speed(2)).toBe(2);
+    for (let i = 0; i < 10; i++) frame(12000, 0.5);
+    // full frames the drawing fills: slowing the game would buy nothing
+    for (let i = 0; i < 80; i++) frame(24000, 0.15);
+    expect(g.speed(2)).toBe(2);
+    // full frames the logic fills
+    for (let i = 0; i < 80; i++) frame(24000, 0.5);
+    expect(g.speed(2)).toBe(1.5);
+    expect(g.speed(1)).toBe(1);
+    // quick again: back to 2X after a second of it
+    for (let i = 0; i < 20; i++) frame(10000, 0.5);
+    expect(g.speed(2)).toBe(1.5);
+    for (let i = 0; i < 60; i++) frame(10000, 0.5);
+    expect(g.speed(2)).toBe(2);
+    expect(changes).toEqual([1.5, 2]);
   });
 
   test("the option: 1 or 2 under options.gameSpeed, anything else is 1X", () => {
@@ -147,6 +176,54 @@ describe("GAME SPEED on Red/Blue/Yellow", () => {
     const two = walked(2);
     expect(one).toBeGreaterThanOrEqual(2);
     expect(two).toBeGreaterThanOrEqual(one * 2 - 1);
+  });
+
+  test.skipIf(!hasGen)("2X plays a battle's sounds once each, in the same order as 1X", async () => {
+    const { fromGenDir } = await import("../voxelmon/game/audio/banks.ts");
+    const banks = await fromGenDir(genDir);
+    const sounds = async (speed: number): Promise<{ ops: string[]; steps: number }> => {
+      const ops: string[] = [];
+      const host = new RecorderHost();
+      const h: any = host;
+      for (const k of ["sfx", "cry", "music", "musicStop", "musicFade"]) {
+        const f = h[k].bind(host);
+        h[k] = (...a: number[]) => { ops.push(`${k} ${a.join(" ")}`); f(...a); };
+      }
+      const game = new VoxelmonGame(romData!, host, 1);
+      game.setAudio(banks);
+      game.newGame();
+      game.closeToOverworld();
+      const s: any = game.save;
+      const { newMon } = await import("../voxelmon/game/battle/mon.ts");
+      s.party = [newMon(romData!, "MEW", 70)];
+      s.party[0].moves = [{ id: "SWIFT", pp: 30 }];
+      game.setGameSpeed(speed);
+      const stepper = new SpeedStepper();
+      for (let i = 0; i < 10; i++) kantoStep(game, stepper, 0);
+      ops.length = 0;
+      game.startWildBattle("CHANSEY", 30);
+      // the slide-in, the cries, the pages, then one whole turn (FIGHT ->
+      // SWIFT, the foe's move) back to the menu
+      let steps = 0;
+      let turned = false;
+      while (steps < 6000) {
+        const ph = (game as any).battleView()?.battle.phase;
+        if (ph === "moveSelect") turned = true;
+        // (or the battle over: SWIFT may win it in one)
+        if (turned && (ph === "menu" || ph === undefined)) break;
+        kantoStep(game, stepper, steps % 2 === 0 ? VOX_BTN.a : 0);
+        steps++;
+      }
+      expect(turned).toBe(true);
+      return { ops, steps };
+    };
+    const one = await sounds(1);
+    const two = await sounds(2);
+    // the battle theme, the cry, SWIFT's sound, and what follows it
+    expect(one.ops.length).toBeGreaterThanOrEqual(3);
+    expect(two.ops).toEqual(one.ops);
+    // and it got there in fewer host steps
+    expect(two.steps).toBeLessThan(one.steps);
   });
 
   test.skipIf(!hasGen)("a link session runs at 1X whatever SPEED says", () => {

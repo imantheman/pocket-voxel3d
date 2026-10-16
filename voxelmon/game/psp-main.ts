@@ -17,7 +17,7 @@ import { fromObject } from "./data.ts";
 import { VoxelmonGame } from "./game.ts";
 import { native, QuickJsHost, STICK_RANGE } from "./quickjs-host.ts";
 import { drawKantoGear, gearTouchDown, gearTouchMove, gearTouchUp } from "./ui/kantogear.ts";
-import { SpeedStepper, stepHost } from "./gamespeed.ts";
+import { SpeedGovernor, SpeedStepper, stepHost } from "./gamespeed.ts";
 
 /** The story seed — voxelmon/tapes/story.tape is plotted against it
  * (tools/voxel.ts STORY_SEED). A save system picks its own seed later. */
@@ -84,9 +84,12 @@ let prevTouch = false;
 let prevGearNext = false;
 let prevGearPrev = false;
 const stepper = new SpeedStepper();
+const governor = new SpeedGovernor(undefined, undefined, (cap, ema, logic) =>
+  console.log(`[pv] speed: ${cap}X here (guest ${(ema / 1000).toFixed(1)} ms a frame, logic ${(logic / 1000).toFixed(1)})`));
 (globalThis as unknown as { frame: (buttons: number) => void }).frame = (
   buttons: number,
 ): void => {
+  const g0 = nat.now ? nat.now() : 0;
   const phys = buttons & 0xff;
   const touching = ((buttons >> 8) & 1) !== 0;
   if (touching && !prevTouch) {
@@ -142,12 +145,17 @@ const stepper = new SpeedStepper();
   // this step (voxel.lastStep) -- a frame at 30 fps runs two steps, and a
   // scene composed on the first is overwritten unseen. A host without
   // lastStep composes every step, as it always has.
+  // (1.5X while the frame is too full for 2X: SpeedGovernor)
   const show = !native.lastStep || native.lastStep();
-  stepHost(stepper, game.logicSpeed(), show, (compose) => game.tick(phys, compose));
+  // (the logic's time, for the fallback, includes the scene's one compose)
+  const l0 = nat.now ? nat.now() : 0;
+  stepHost(stepper, governor.speed(game.logicSpeed()), show, (compose) => game.tick(phys, compose));
+  const l1 = nat.now ? nat.now() : 0;
   // Kanto Gear companion: redraw the bottom-screen surface from current game
   // state. A host without a second screen ignores the UI_*_BOTTOM ops. Only
   // on the step the host renders after, for the same reason.
   if (show) {
     drawKantoGear(host, game as unknown as Parameters<typeof drawKantoGear>[1]);
   }
+  if (nat.now) governor.sample(nat.now() - g0, l1 - l0, show, game.logicSpeed());
 };

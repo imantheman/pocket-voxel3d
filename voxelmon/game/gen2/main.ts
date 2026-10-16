@@ -14,7 +14,7 @@ import { native, QuickJsHost, STICK_RANGE } from "../quickjs-host.ts";
 import { tiltShiftLevel } from "../tiltshift.ts";
 import { is2d } from "../viewmode.ts";
 import { cameraSpeedQ8 } from "../cameraspeed.ts";
-import { SpeedStepper, stepHost } from "../gamespeed.ts";
+import { SpeedGovernor, SpeedStepper, stepHost } from "../gamespeed.ts";
 import { readGen2Container } from "./platform/container.ts";
 import { loadGenerated, setGen2Source } from "./platform/data.ts";
 import { Lcd } from "./platform/lcd.ts";
@@ -126,10 +126,15 @@ const prof = { n: 0, step: 0, draw: 0, end: 0, view: 0 };
 let stepNo = 0;
 const lastStep = native.lastStep;
 const stepper = new SpeedStepper();
+const governor = new SpeedGovernor(undefined, undefined, (cap, ema, logic) =>
+  console.log(`[pv] speed: ${cap}X here (guest ${(ema / 1000).toFixed(1)} ms a frame, logic ${(logic / 1000).toFixed(1)})`));
 
 (globalThis as unknown as { frame: (buttons: number) => void }).frame = (buttons: number): void => {
   clock = (globalThis as unknown as { goldProf?: boolean }).goldProf || !lastStep ? nowFn : undefined;
   const t0 = clock ? clock() : 0;
+  const g0 = nowFn ? nowFn() : 0;
+  let l0 = 0;
+  let l1 = 0;
   const compose = lastStep ? lastStep() : (stepNo++ & 1) === 0;
   // The camera, as the Kanto entry reads it (psp-main.ts): bits 24-25 its
   // quarter turns, bits 28-31 the low four bits of its yaw in 64ths of a
@@ -156,8 +161,10 @@ const stepper = new SpeedStepper();
     // the sound's clock, once per real 1/60 s whatever GAME SPEED is
     game.audioFrame();
     // GAME SPEED (../gamespeed.ts): logicSpeed() logic ticks this step; the
-    // compose below runs once, after the last of them
-    stepHost(stepper, game.logicSpeed(), compose, () => {
+    // compose below runs once, after the last of them (at 1.5X while the
+    // frame is too full for 2X: SpeedGovernor)
+    l0 = nowFn ? nowFn() : 0;
+    stepHost(stepper, governor.speed(game.logicSpeed()), compose, () => {
       game.logicFrame(buttons & 0xff);
       // the CABLE CLUB's link (polled every step, as the carrier needs)
       game.serviceLink();
@@ -165,6 +172,7 @@ const stepper = new SpeedStepper();
       // finger down, bits 9-16 x/2, bits 17-23 y/2 -- psp-main.ts reads the same)
       companion.touch(game, ((buttons >> 9) & 0xff) * 2, ((buttons >> 17) & 0x7f) * 2, (buttons & 0x100) !== 0);
     });
+    l1 = nowFn ? nowFn() : 0;
   } catch (e) {
     Logger.error("gold: step: %s", String((e as Error)?.stack ?? e));
   }
@@ -189,6 +197,7 @@ const stepper = new SpeedStepper();
   } catch (e) {
     Logger.error("gold: draw: %s", String((e as Error)?.stack ?? e));
   }
+  if (nowFn) governor.sample(nowFn() - g0, Math.max(0, l1 - l0), compose, game.logicSpeed());
   if (clock) {
     const t4 = clock();
     prof.step += t1 - t0;
