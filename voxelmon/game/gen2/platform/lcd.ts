@@ -336,6 +336,9 @@ export class Lcd {
     this.palStateGen = this.palGen;
     return out;
   }
+  /** Bumped whenever s.lines is written (lines(), a replayed block): screen.ts
+   *  recordBlock compares the 144 values only when it moved. */
+  linesGen = 0;
   /** Bumped wherever the palette table changes (begin, a new slot, setPalette). */
   private palGen = 0;
   private palStateGen = -1;
@@ -502,6 +505,7 @@ export class Lcd {
   /** Per-line scroll for effects (1 SCY, 2 SCX); 0 turns it off. */
   lines(target: number, values?: ArrayLike<number>): void {
     this.s.lineTarget = target;
+    if (values) this.linesGen++;
     if (values instanceof Uint8Array && values.length === LCD_H) this.s.lines.set(values);
     else if (values) for (let i = 0; i < LCD_H; i++) this.s.lines[i] = (values[i] ?? 0) & 0xff;
   }

@@ -375,8 +375,13 @@ function drawObjs(image: LcdImage, tx0: number, ty0: number, cols: number, rows:
  * real and records afresh. `key` must name everything the block reads; the
  * position, map, scissor and object mode are added to it here. The block
  * runs between G.push and G.pop, so it leaves the draw state as it found it.
+ *
+ * `recordFirst`: record on the key's first frame rather than its second, for
+ * a block whose keys come back (a HUD, a panel that holds while text types):
+ * one frame pays drawing plus recording instead of one drawing and the next
+ * drawing plus recording.
  */
-export function cachedBlock(owner: object, key: string, draw: () => void): void {
+export function cachedBlock(owner: object, key: string, draw: () => void, recordFirst = false): void {
   const l = lcd;
   // (globalThis.noBlockCache: every block drawn for real -- the reference a
   // check of the cache compares against, tools/qjs_prof_gold_menus.ts)
@@ -407,6 +412,10 @@ export function cachedBlock(owner: object, key: string, draw: () => void): void 
   const rec = byKey.get(full);
   if (rec === undefined) {
     if (byKey.size >= 16) byKey.clear();
+    if (recordFirst) {
+      byKey.set(full, recordBlock(l, draw));
+      return;
+    }
     byKey.set(full, null);
     G.push();
     try {
@@ -470,6 +479,7 @@ function recordBlock(l: Lcd, draw: () => void): BlockRecord {
   const objStart = l.s.objs.length;
   const regs0 = regsOf(l);
   const lines0 = l.s.lines.slice();
+  const linesGen0 = l.linesGen;
   const windowUsed0 = l.windowUsed;
   const pals: BlockRecord["pals"] = [];
   // the palette requests, logged through a wrapper on this Lcd -- over any
@@ -514,9 +524,10 @@ function recordBlock(l: Lcd, draw: () => void): BlockRecord {
   const words = l.windowUsed ? a32.length : a32.length >> 1;
   let start = -1;
   for (let w = 0; w < words; w++) {
-    // sixteen untouched cells at a time first
-    if ((w & 3) === 0 && start < 0 && w + 4 <= words && (a32[w]! & a32[w + 1]! & a32[w + 2]! & a32[w + 3]!) === -1) {
-      w += 3;
+    // a row of 32 untouched cells at a time first
+    if ((w & 7) === 0 && start < 0 && w + 8 <= words
+        && (a32[w]! & a32[w + 1]! & a32[w + 2]! & a32[w + 3]! & a32[w + 4]! & a32[w + 5]! & a32[w + 6]! & a32[w + 7]!) === -1) {
+      w += 7;
       continue;
     }
     const v = a32[w]!;
@@ -527,6 +538,12 @@ function recordBlock(l: Lcd, draw: () => void): BlockRecord {
         runAttrs.push(attrsOf.slice(start, w * 4));
         start = -1;
       }
+      continue;
+    }
+    // four written cells (a written attribute never has the hole bit, which
+    // UNTOUCHED has): the run goes on
+    if ((v & 0x10101010) === 0) {
+      if (start < 0) start = w * 4;
       continue;
     }
     for (let i = w * 4, end = i + 4; i < end; i++) {
@@ -565,11 +582,14 @@ function recordBlock(l: Lcd, draw: () => void): BlockRecord {
   };
   const regs1 = regsOf(l);
   if (regs1.some((v, i) => v !== regs0[i])) rec.regs = regs1;
-  const lines1 = l.s.lines;
-  for (let i = 0; i < lines1.length; i++) {
-    if (lines1[i] !== lines0[i]) {
-      rec.lines = lines1.slice();
-      break;
+  // (the per-line values looked at only when something set them meanwhile)
+  if (l.linesGen !== linesGen0) {
+    const lines1 = l.s.lines;
+    for (let i = 0; i < lines1.length; i++) {
+      if (lines1[i] !== lines0[i]) {
+        rec.lines = lines1.slice();
+        break;
+      }
     }
   }
   return rec;
@@ -597,7 +617,10 @@ function replayBlock(l: Lcd, rec: BlockRecord): boolean {
     const s = l.s;
     [s.scx, s.scy, s.wx, s.wy, s.flags, s.lineTarget] = rec.regs as [number, number, number, number, number, number];
   }
-  if (rec.lines) l.s.lines.set(rec.lines);
+  if (rec.lines) {
+    l.s.lines.set(rec.lines);
+    l.linesGen++;
+  }
   if (rec.windowUsed) l.windowUsed = true;
   return true;
 }

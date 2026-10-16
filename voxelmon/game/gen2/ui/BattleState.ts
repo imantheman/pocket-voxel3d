@@ -4549,7 +4549,9 @@ export class BattleState {
       }
       return;
     }
-    cachedBlock(this.hudOwner(side), this.hudKey(side, mon), draw);
+    // (recorded on its first frame: a HUD's pictures come back -- it holds
+    // between hits)
+    cachedBlock(this.hudOwner(side), this.hudKey(side, mon), draw, true);
   }
 
   /** A cachedBlock owner per side, so each side keeps its own few records. */
