@@ -379,6 +379,21 @@ const GROUPS: Group[] = [
   },
 ];
 
+/**
+ * The ENHANCEMENTS page's rows, in the page's order: the very row objects
+ * OPTION steps, so the bottom screen's ENHANCEMENTS tab (ui/EnhancementsPanel.ts)
+ * reads and writes the same keys with the same ladders and words.
+ */
+export function enhancementRows(): OptionRow[] {
+  const group = GROUPS.find((g) => g.id === "group.enhancements");
+  const out: OptionRow[] = [];
+  for (const key of group ? group.members : []) {
+    const row = ROWS.find((r) => r.key === key);
+    if (row) out.push(row);
+  }
+  return out;
+}
+
 // Lua: OptionsMenu.lua:501
 const ORDER = [
   "group.speed", "group.video", "group.graphics", "group.controls", "group.audio",

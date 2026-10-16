@@ -641,17 +641,20 @@ describe("gen2 cheats: the bottom screen's CHEATS tab", () => {
       }
     };
 
-    // CHEATS off: the cart's four tabs exactly as before, and no fifth
+    // CHEATS off: <PK><MN> CARD MAP and the ENHANCEMENTS glyph, evenly
+    // spaced, and no CHEATS tab (the row's right end is ENHANCEMENTS')
     delete game.options.cheats;
     const off = printed().filter((p) => p.y === 14).map((p) => [p.text, p.x]);
-    expect(off).toEqual([["<PK><MN>", 2], ["BADGE", 5], ["CARD", 11], ["MAP", 16]]);
+    expect(off).toEqual([["<PK><MN>", 2], ["CARD", 6], ["MAP", 12], ["▲", 17]]);
     tap(19, 14);
+    expect(page()).toBe("enh");
+    tap(1, 14);
     expect(page()).toBe("party");
 
-    // CHEATS on: the fifth tab, the row across all twenty columns
+    // CHEATS on: the "!" after the ENHANCEMENTS glyph, the row centred
     game.options.cheats = true;
     const on = printed().filter((p) => p.y === 14).map((p) => [p.text, p.x]);
-    expect(on).toEqual([["<PK><MN>", 1], ["BADGE", 4], ["CARD", 10], ["MAP", 15], ["!", 19]]);
+    expect(on).toEqual([["<PK><MN>", 3], ["CARD", 6], ["MAP", 11], ["▲", 15], ["!", 17]]);
     tidy("party with five tabs");
     tap(18, 14);
     expect(page()).toBe("cheats");
