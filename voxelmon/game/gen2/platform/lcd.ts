@@ -228,6 +228,7 @@ export class Lcd {
   /** Start a frame: every cell a hole, no objects, no palettes handed out. */
   begin(): void {
     this.frame++;
+    this.palGen++;
     this.windowUsed = false;
     this.s.clearMaps();
     this.bgPalKeys.length = 0;
@@ -275,6 +276,7 @@ export class Lcd {
       }
     }
     if (slot < 0) {
+      this.palGen++;
       slot = Math.min(keys.length, LCD_PALS - 1);
       keys[slot] = "";
       const b = off + slot * 4;
@@ -302,6 +304,7 @@ export class Lcd {
   setPalette(slot: number, p: Palette4, obj = false): void {
     const keys = obj ? this.objPalKeys : this.bgPalKeys;
     if (slot < 0 || slot >= LCD_PALS || slot > keys.length) return;
+    this.palGen++;
     keys[slot] = "";
     const b = (obj ? 16 * 4 : 0) + slot * 4;
     const cols = this.s.colours;
@@ -320,14 +323,23 @@ export class Lcd {
    * question the same way (screen.ts cachedBlock replays on that).
    */
   paletteState(): string {
+    // the same string again while no slot has been handed out or set since
+    // (a replayed block asks twice, and a screen replays several a frame)
+    if (this.palStateGen === this.palGen) return this.palState;
     const nb = this.bgPalKeys.length;
     const no = this.objPalKeys.length;
     let out = `${nb},${no}:`;
     const cols = this.s.colours;
     for (let i = 0; i < nb * 4; i++) out += cols[i] + ",";
     for (let i = 64; i < 64 + no * 4; i++) out += cols[i] + ",";
+    this.palState = out;
+    this.palStateGen = this.palGen;
     return out;
   }
+  /** Bumped wherever the palette table changes (begin, a new slot, setPalette). */
+  private palGen = 0;
+  private palStateGen = -1;
+  private palState = "";
 
   /**
    * A palette slot already handed out this frame that has colour `c`, as

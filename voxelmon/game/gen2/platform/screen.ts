@@ -95,6 +95,8 @@ let lcd: Lcd | null = null;
 // last cell drawn used (valid for one lcd frame)
 let cellsOf = new Uint16Array(0);
 let attrsOf = new Uint8Array(0);
+/** attrsOf four at a time (recordBlock's scan for the cells a block wrote). */
+let attrs32Of = new Uint32Array(0);
 let cachePal: Palette4 | null = null;
 let cacheFrame = -1;
 let cacheSlot = 0;
@@ -114,6 +116,7 @@ export function setLcd(target: Lcd | null): void {
   lcd = target;
   cellsOf = target ? target.s.cells : new Uint16Array(0);
   attrsOf = target ? target.s.attrs : new Uint8Array(0);
+  attrs32Of = new Uint32Array(attrsOf.buffer, attrsOf.byteOffset, attrsOf.length >> 2);
   cachePal = null;
   cacheObjPal = null;
 }
@@ -388,7 +391,11 @@ export function cachedBlock(owner: object, key: string, draw: () => void): void 
   }
   const s = st;
   const sc = s.scissor;
-  const full = `${key}@${s.tx},${s.ty},${s.map},${s.objects ? 1 : 0},${sc ? sc.join(",") : ""}`;
+  // (the palette table the block starts on is part of the key too: a block
+  // drawn after something whose palettes come and go -- a battle animation's
+  // -- keeps a record for each table instead of recording afresh at every
+  // change; replayBlock still checks the table)
+  const full = `${key}@${s.tx},${s.ty},${s.map},${s.objects ? 1 : 0},${sc ? sc.join(",") : ""}|${l.paletteState()}`;
   let byKey = blockCache.get(owner);
   if (!byKey) {
     byKey = new Map();
@@ -417,9 +424,12 @@ interface BlockRecord {
   entry: string;
   exit: string;
   pals: { p: Palette4; obj: boolean; slot: number }[];
-  idx: Uint16Array;
-  cells: Uint16Array;
-  attrs: Uint8Array;
+  /** The cells the block wrote, as runs of consecutive cells: each run's
+   *  first index and its tiles and attributes (replayed with a native copy a
+   *  run, not a JS store a cell -- a full screen is 18 runs, not 360 cells). */
+  runAt: number[];
+  runCells: Uint16Array[];
+  runAttrs: Uint8Array[];
   objs: { x: number; y: number; tile: number; attr: number }[];
   regs: number[] | null;
   lines: Uint8Array | null;
@@ -491,32 +501,68 @@ function recordBlock(l: Lcd, draw: () => void): BlockRecord {
     if (hadOwn) own.palette = prev;
     else delete own.palette;
   }
-  // the cells the block wrote, and everything else put back as it was
-  const idx: number[] = [];
-  for (let i = 0; i < 2048; i++) {
-    if (attrsOf[i] !== UNTOUCHED) idx.push(i);
-    else {
-      cellsOf[i] = savedCells[i]!;
-      attrsOf[i] = savedAttrs[i]!;
+  // The cells the block wrote, in runs, then everything put back as it was
+  // and the runs over it. Looked at four attributes a word: a block touches
+  // few of the 2048 cells, and a JS look at each was most of recording one
+  // on the 3DS (~12 ms -- more than drawing the block).
+  const runAt: number[] = [];
+  const runCells: Uint16Array[] = [];
+  const runAttrs: Uint8Array[] = [];
+  const a32 = attrs32Of;
+  // (the window's half only when something drew into the window this frame:
+  // every draw into it marks windowUsed)
+  const words = l.windowUsed ? a32.length : a32.length >> 1;
+  let start = -1;
+  for (let w = 0; w < words; w++) {
+    // sixteen untouched cells at a time first
+    if ((w & 3) === 0 && start < 0 && w + 4 <= words && (a32[w]! & a32[w + 1]! & a32[w + 2]! & a32[w + 3]!) === -1) {
+      w += 3;
+      continue;
+    }
+    const v = a32[w]!;
+    if (v === 0xffffffff) {
+      if (start >= 0) {
+        runAt.push(start);
+        runCells.push(cellsOf.slice(start, w * 4));
+        runAttrs.push(attrsOf.slice(start, w * 4));
+        start = -1;
+      }
+      continue;
+    }
+    for (let i = w * 4, end = i + 4; i < end; i++) {
+      if (attrsOf[i] !== UNTOUCHED) {
+        if (start < 0) start = i;
+      } else if (start >= 0) {
+        runAt.push(start);
+        runCells.push(cellsOf.slice(start, i));
+        runAttrs.push(attrsOf.slice(start, i));
+        start = -1;
+      }
     }
   }
-  const n = idx.length;
+  if (start >= 0) {
+    runAt.push(start);
+    runCells.push(cellsOf.slice(start, words * 4));
+    runAttrs.push(attrsOf.slice(start, words * 4));
+  }
+  cellsOf.set(savedCells);
+  attrsOf.set(savedAttrs);
+  for (let k = 0; k < runAt.length; k++) {
+    cellsOf.set(runCells[k]!, runAt[k]!);
+    attrsOf.set(runAttrs[k]!, runAt[k]!);
+  }
   const rec: BlockRecord = {
     entry,
     exit: l.paletteState(),
     pals,
-    idx: new Uint16Array(idx),
-    cells: new Uint16Array(n),
-    attrs: new Uint8Array(n),
+    runAt,
+    runCells,
+    runAttrs,
     objs: l.s.objs.slice(objStart).map((o) => ({ x: o.x, y: o.y, tile: o.tile, attr: o.attr })),
     regs: null,
     lines: null,
     windowUsed: l.windowUsed && !windowUsed0,
   };
-  for (let k = 0; k < n; k++) {
-    rec.cells[k] = cellsOf[idx[k]!]!;
-    rec.attrs[k] = attrsOf[idx[k]!]!;
-  }
   const regs1 = regsOf(l);
   if (regs1.some((v, i) => v !== regs0[i])) rec.regs = regs1;
   const lines1 = l.s.lines;
@@ -535,12 +581,12 @@ function replayBlock(l: Lcd, rec: BlockRecord): boolean {
     if (l.palette(q.p, q.obj) !== q.slot) return false;
   }
   if (l.paletteState() !== rec.exit) return false;
-  const idx = rec.idx;
-  const cells = rec.cells;
-  const attrs = rec.attrs;
-  for (let k = 0; k < idx.length; k++) {
-    cellsOf[idx[k]!] = cells[k]!;
-    attrsOf[idx[k]!] = attrs[k]!;
+  const at = rec.runAt;
+  const cells = rec.runCells;
+  const attrs = rec.runAttrs;
+  for (let k = 0; k < at.length; k++) {
+    cellsOf.set(cells[k]!, at[k]!);
+    attrsOf.set(attrs[k]!, at[k]!);
   }
   const objs = l.s.objs;
   for (const o of rec.objs) {
