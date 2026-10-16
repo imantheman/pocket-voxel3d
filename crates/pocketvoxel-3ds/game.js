@@ -6840,17 +6840,20 @@ function search(map, fromX, fromY, surfing) {
       SAT_HELD.set(grid, sat);
   }
   const t = sat;
-  const openIn = (x, y, w, h) => t[(y + h) * sw + x + w] - t[y * sw + x + w] - t[(y + h) * sw + x] + t[y * sw + x];
   for (const shape of SHAPES) {
     let best = null;
     let bestD = Infinity;
-    const area = shape.w * shape.h;
-    for (let y = 0;y <= gh - shape.h; y++) {
-      for (let x = 0;x <= gw - shape.w; x++) {
-        if (openIn(x, y, shape.w, shape.h) !== area)
+    const sw0 = shape.w;
+    const sh0 = shape.h;
+    const area = sw0 * sh0;
+    for (let y = 0;y <= gh - sh0; y++) {
+      const top = y * sw;
+      const bottom = (y + sh0) * sw;
+      for (let x = 0;x <= gw - sw0; x++) {
+        if (t[bottom + x + sw0] - t[top + x + sw0] - t[bottom + x] + t[top + x] !== area)
           continue;
-        const mx = x + (shape.w - 1) / 2;
-        const my = y + (shape.h - 1) / 2;
+        const mx = x + (sw0 - 1) / 2;
+        const my = y + (sh0 - 1) / 2;
         const dx = mx - fromX;
         const dy = my - fromY;
         const d = dx * dx + dy * dy;
