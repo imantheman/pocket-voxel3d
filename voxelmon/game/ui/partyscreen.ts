@@ -63,8 +63,10 @@ export function partyIconCell(i: number): { x: number; y: number; w: number; h: 
  * world/script.ts's use_* verbs; SOFTBOILED is handled here. */
 const FIELD_MOVES = ["CUT", "FLY", "SURF", "STRENGTH", "FLASH", "DIG", "TELEPORT", "SOFTBOILED"] as const;
 
-/** The submenu's box grows up from row 17, two rows an entry: eight fill it. */
-const SUBMENU_MAX = 8;
+/** The submenu's box grows up from row 17, two rows an entry. Seven reach
+ *  row 2, as far as the cart's own lists go (two, four moves, CANCEL); an
+ *  eighth would put the frame on row 0, which the 3DS top screen cuts. */
+const SUBMENU_MAX = 7;
 
 export class PartyState implements GameState {
   readonly kind = "party";
@@ -153,8 +155,8 @@ export class PartyState implements GameState {
     const items = ["STATS", "SWITCH"];
     for (const id of FIELD_MOVES) if (knows(id) && this.fieldMoveOffered(id)) items.push(id);
     // HMS WITHOUT MOVE (extras.ts): the HMs the bag and the badges allow,
-    // on every mon's list, as far as the box has room (eight rows fill the
-    // screen; the gear's TOOLS app offers them all whatever the list holds)
+    // on every mon's list, as far as the box has room (SUBMENU_MAX; the
+    // gear's TOOLS app offers them all whatever the list holds)
     for (const id of FIELD_MOVES) {
       if (items.length >= SUBMENU_MAX - 1) break;
       if (!items.includes(id) && hmWithoutMove(this.game.save, id)) items.push(id);

@@ -21,18 +21,24 @@ import { POCKETS, fieldIdle, itemAbout, pocketOf } from "./bag.ts";
 import { fillDex, giveItem, giveItemList, oneOnly, WILD_MODES, wildMode } from "../../../extras.ts";
 import { CHEAT_ROWS, CHEAT_TEXT, WILD_LABELS, type CheatRowDef } from "../../extras_layout.ts";
 
-/** ON/OFF pills: OFF with a clear column each side, ending at the right
- *  edge; the longest toggle label (INFINITE MONEY) keeps a column clear. */
+/**
+ * Every value ends in column 17 (valuePill), its bar in 18, and column 19 is
+ * left clear, as the other apps' right edges are. The ON/OFF bar starts a
+ * column after the longest toggle label (INFINITE MONEY).
+ */
+const VALUE_END = 18;
 const TOGGLE_X = 15;
-const TOGGLE_W = 5;
-/** DEX FULL's SET and GIVE ITEMS' OPEN: a column clear round OPEN. */
-const ACTION_X = 14;
-const ACTION_W = 6;
-/** WILD ENCOUNTERS' value: the OPTIONS app's pill, under its label. */
-const VALUE_X = 12;
-const VALUE_W = 8;
-/** Items a page of the GIVE ITEMS list holds (rows 1-12). */
-export const GIVE_PAGE = 12;
+/** DEX FULL's FILL and GIVE ITEMS' OPEN. */
+const ACTION_X = 13;
+/** WILD ENCOUNTERS' value, under its label. */
+const WILD_X = 11;
+/** The first row: one clear under the header, as on the other apps. */
+const FIRST_Y = 2;
+/** Items a page of the GIVE ITEMS list holds (rows 1-11); the pager, the
+ *  pockets and BACK each have a row with a clear one above it. */
+export const GIVE_PAGE = 11;
+const PAGER_Y = 13;
+const TABS_Y = 15;
 
 function opts(ctx: GearCtx): Record<string, unknown> {
   return (ctx.save.options ??= {});
@@ -54,17 +60,31 @@ export function drawCheats(ctx: GearCtx): void {
 // the list
 // ---------------------------------------------------------------------------
 
+/**
+ * A pill whose label is right-aligned (ending a column inside the bar)
+ * rather than centred, so the page's values read as one column. Lit the
+ * way `pill` is: inverted under the finger, or when `on`.
+ */
+function valuePill(ctx: GearCtx, id: string, x: number, y: number, label: string, tap: () => void, on = false): void {
+  const { host } = ctx;
+  const w = VALUE_END - x + 1;
+  const lit = on !== (pressedId() === id);
+  if (!lit) fill(host, x, y, w, 1);
+  right(host, y, label, lit ? "dark" : "fill", VALUE_END);
+  region(id, x, y, w, 1, tap);
+}
+
 function drawList(ctx: GearCtx): void {
   const { host, ui } = ctx;
   const o = opts(ctx);
-  let y = 1;
+  let y = FIRST_Y;
   CHEAT_ROWS.forEach((r, i) => {
     const pick = () => { ui.sel = i; ui.msg = null; };
     if (r.kind === "cycle") {
       // the label has the row to itself; its value sits under it, right
       text(host, 0, y, r.label);
       const cur = wildMode(ctx.save);
-      pill(host, `cheat:${r.key}`, VALUE_X, y + 1, VALUE_W, WILD_LABELS[cur] ?? cur, () => {
+      valuePill(ctx, `cheat:${r.key}`, WILD_X, y + 1, WILD_LABELS[cur] ?? cur, () => {
         pick();
         o.wildEncounters = WILD_MODES[(WILD_MODES.indexOf(cur) + 1) % WILD_MODES.length];
       });
@@ -74,12 +94,13 @@ function drawList(ctx: GearCtx): void {
     text(host, 0, y, r.label);
     if (r.kind === "toggle") {
       const on = o[r.key] === true;
-      pill(host, `cheat:${r.key}`, TOGGLE_X, y, TOGGLE_W, on ? "ON" : "OFF", () => {
+      // the STORE's toggle look: ON a dark bar, OFF lifted off it
+      valuePill(ctx, `cheat:${r.key}`, TOGGLE_X, y, on ? "ON" : "OFF", () => {
         pick();
         o[r.key] = !on;
-      }, on);
+      }, !on);
     } else {
-      pill(host, `cheat:${r.key}`, ACTION_X, y, ACTION_W, r.button ?? "", () => {
+      valuePill(ctx, `cheat:${r.key}`, ACTION_X, y, r.button ?? "", () => {
         pick();
         if (r.key === "dexFull") ui.confirm = { kind: "dex" };
         else { ui.give = { pocket: "items", page: 0 }; }
@@ -87,10 +108,10 @@ function drawList(ctx: GearCtx): void {
     }
     y += 2;
   });
-  // what the last row tapped does, or what was just done
-  box(host, 0, 14, COLS, 4);
+  // what the last row tapped does, or what was just done: a two-line
+  // caption a row clear of the rows above and of the bottom edge
   const said = ui.msg ?? aboutOf(ctx, CHEAT_ROWS[ui.sel ?? 0] ?? CHEAT_ROWS[0]!);
-  wrap(said, 18).slice(0, 2).forEach((line, i) => text(host, 1, 15 + i, line));
+  wrap(said, 18).slice(0, 2).forEach((line, i) => center(host, y + i, line));
 }
 
 // ---------------------------------------------------------------------------
@@ -121,8 +142,8 @@ function drawConfirm(ctx: GearCtx): void {
     const got = giveItem(save, data, c.id!, c.qty ?? 1);
     ui.giveMsg = got.refused === "have" ? CHEAT_TEXT.have
       : got.refused ? CHEAT_TEXT.full
-      : got.pc === 0 ? CHEAT_TEXT.gaveBag(got.bag, name)
-      : got.bag === 0 ? CHEAT_TEXT.gavePc(got.pc, name)
+      : got.pc === 0 ? CHEAT_TEXT.gaveBag(got.bag)
+      : got.bag === 0 ? CHEAT_TEXT.gavePc(got.pc)
       : CHEAT_TEXT.gaveSplit(got.bag, got.pc);
   });
   pill(host, "cheat:no", 4, 11, 12, CHEAT_TEXT.no, () => { ui.confirm = null; });
@@ -170,14 +191,14 @@ function drawGive(ctx: GearCtx): void {
   if (pages > 1) {
     pager(ctx, CHEAT_TEXT.page(g.page + 1, pages),
       () => { g.page = (g.page + pages - 1) % pages; },
-      () => { g.page = (g.page + 1) % pages; }, 14);
+      () => { g.page = (g.page + 1) % pages; }, PAGER_Y);
   }
-  tabs(ctx, POCKETS, g.pocket, (p) => { g.pocket = p; g.page = 0; }, 16);
+  tabs(ctx, POCKETS, g.pocket, (p) => { g.pocket = p; g.page = 0; }, TABS_Y);
   backRow(ctx, () => { ui.give = null; });
 }
 
 /** ◀ PAGE 1/5 ▶ on one row: the arrows as their own pills, the label
- *  between them in a bar of its own, a clear column either side. */
+ *  between them on the paper, a clear column either side. */
 function pager(ctx: GearCtx, label: string, prev: () => void, next: () => void, y: number): void {
   const { host } = ctx;
   pill(host, "give:prev", 0, y, 3, "", prev);
@@ -197,16 +218,19 @@ function drawGiveItem(ctx: GearCtx, g: GiveUi): void {
   row(host, 3, "IN BAG", `x${save.inventory?.[id] ?? 0}`);
   row(host, 4, "IN PC", `x${save.pcItems?.[id] ?? 0}`);
   itemAbout(data, id).flatMap((l) => wrap(l, 18)).slice(0, 3).forEach((l, i) => text(host, 1, 6 + i, l));
-  row(host, 10, CHEAT_TEXT.quantity, one ? CHEAT_TEXT.oneOnly : `x${qty}`);
-  if (!one) {
-    pager(ctx, `x${qty}`, () => { g.qty = qty <= 1 ? 99 : qty - 1; }, () => { g.qty = qty >= 99 ? 1 : qty + 1; }, 12);
+  if (one) {
+    row(host, 10, CHEAT_TEXT.quantity, CHEAT_TEXT.oneOnly);
+  } else {
+    // ◀ QUANTITY x11 ▶, one at a time, wrapping
+    pager(ctx, `${CHEAT_TEXT.quantity} x${qty}`,
+      () => { g.qty = qty <= 1 ? 99 : qty - 1; }, () => { g.qty = qty >= 99 ? 1 : qty + 1; }, 10);
     // the usual amounts, a segmented row like the pockets' tabs
     const w = Math.floor(COLS / CHEAT_TEXT.presets.length);
     CHEAT_TEXT.presets.forEach((n, i) => {
-      pill(host, `give:q${n}`, i * w, 14, w, String(n), () => { g.qty = n; }, qty === n);
+      pill(host, `give:q${n}`, i * w, 12, w, String(n), () => { g.qty = n; }, qty === n);
     });
   }
-  if (ui.giveMsg) center(host, 16, fit(ui.giveMsg, 20));
+  if (ui.giveMsg) center(host, 14, fit(ui.giveMsg, 18));
   backRow(ctx, () => { g.item = undefined; ui.giveMsg = null; }, {
     label: CHEAT_TEXT.give,
     tap: () => {

@@ -30,14 +30,14 @@ import { expForLevel } from "../voxelmon/game/rules/growth.ts";
 import { encodeSave } from "../voxelmon/game/save-lua.ts";
 import { decodeSave } from "../voxelmon/game/save-read.ts";
 import { fromDisk, toDisk } from "../voxelmon/game/savecompat.ts";
-import { CHEAT_ROWS, ENHANCEMENT_ROWS, OPTION_PAGES } from "../voxelmon/game/ui/extras_layout.ts";
+import { CHEAT_ROWS, CHEAT_TEXT, ENHANCEMENT_ROWS, OPTION_PAGES } from "../voxelmon/game/ui/extras_layout.ts";
 import { OptionsMenuState } from "../voxelmon/game/ui/optionsmenu.ts";
 import { PartyState } from "../voxelmon/game/ui/partyscreen.ts";
 import { drawKantoGear, gearTabs, gearTouchDown, gearTouchUp } from "../voxelmon/game/ui/kantogear.ts";
 import { availableApps } from "../voxelmon/game/ui/gear/apps/home.ts";
 import { GIVE_PAGE, givePocket } from "../voxelmon/game/ui/gear/apps/cheats.ts";
 import { TOOLS, toolUnlocked } from "../voxelmon/game/ui/gear/model.ts";
-import { TILE_H, TILE_W } from "../voxelmon/game/ui/gear/draw.ts";
+import { TILE_H, TILE_W, wrap } from "../voxelmon/game/ui/gear/draw.ts";
 import { encodeGlyphs } from "../voxelmon/game/ui/tiles.ts";
 
 const root = join(import.meta.dir, "..");
@@ -356,10 +356,10 @@ describe("HMS WITHOUT MOVE", () => {
     expect(items()).not.toContain("CUT");
     game.save.options.hmsWithoutMove = true;
     expect(items()).toEqual(["STATS", "SWITCH", "CUT", "CANCEL"]);
-    // the box never outgrows the screen: eight rows at most
+    // the box never outgrows the screen: seven rows at most
     Object.assign(game.save.inventory, { HM_FLY: 1, HM_SURF: 1, HM_STRENGTH: 1, HM_FLASH: 1, THUNDERBADGE: 1, SOULBADGE: 1, RAINBOWBADGE: 1, BOULDERBADGE: 1 });
     mon.moves = [{ id: "DIG", pp: 10 }, { id: "TELEPORT", pp: 20 }, { id: "SOFTBOILED", pp: 10 }];
-    expect(items().length).toBeLessThanOrEqual(8);
+    expect(items().length).toBeLessThanOrEqual(7);
     expect(items().at(-1)).toBe("CANCEL");
     // CUT from the menu: the menus close and the move's own verb runs
     mon.moves = [{ id: "TACKLE", pp: 35 }];
@@ -673,15 +673,18 @@ describe("the OPTION screen: SETTINGS and ENHANCEMENTS", () => {
       return host.grid[y]!.slice(x, x + codes.length);
     };
     game.tick(0);
-    expect(rowText(0, 6, "SETTINGS")).toEqual(encodeGlyphs("SETTINGS"));
-    expect(rowText(2, 1, "TEXT SPEED")).toEqual(encodeGlyphs("TEXT SPEED"));
+    // the rows where they always were; the page on the bottom line
+    expect(rowText(1, 1, "TEXT SPEED")).toEqual(encodeGlyphs("TEXT SPEED"));
+    expect(rowText(17, 6, "SETTINGS")).toEqual(encodeGlyphs("SETTINGS"));
+    expect(host.grid[17]![4]).toBe(0x13); // the left arrow (UI_TILE.arrowLeft)
+    expect(host.grid[16]![18]).toBe(0xee); // more below: the GB's ▼
+    expect(host.grid[0]!.every((t) => t === host.grid[0]![0])).toBe(true); // the top line stays blank
     menu.turnPage(1);
     game.tick(0);
-    expect(rowText(0, 4, "ENHANCEMENTS")).toEqual(encodeGlyphs("ENHANCEMENTS"));
-    expect(host.grid[0]![1]).toBe(0x13); // the left arrow (UI_TILE.arrowLeft)
-    expect(new Set(host.grid[1]).size).toBe(1); // the rule, edge to edge
-    expect(rowText(2, 1, "EXP FOR CATCHING")).toEqual(encodeGlyphs("EXP FOR CATCHING"));
-    expect(rowText(4, 2, "OFF")).toEqual(encodeGlyphs("OFF"));
+    expect(rowText(17, 4, "ENHANCEMENTS")).toEqual(encodeGlyphs("ENHANCEMENTS"));
+    expect(host.grid[17]![2]).toBe(0x13);
+    expect(rowText(1, 1, "EXP FOR CATCHING")).toEqual(encodeGlyphs("EXP FOR CATCHING"));
+    expect(rowText(3, 2, "OFF")).toEqual(encodeGlyphs("OFF"));
     expect(host.outside).toBe(0);
   });
 });
@@ -732,25 +735,25 @@ describe("the gear's CHEATS app", () => {
     game.save.options.cheats = true;
     game.setGearView("cheats");
     const o = game.save.options;
-    // WILD ENCOUNTERS' value under its label (row 2), right
-    touch(game, 15, 2);
+    // WILD ENCOUNTERS' value under its label (row 3), right
+    touch(game, 15, 3);
     expect(o.wildEncounters).toBe("more");
-    touch(game, 15, 2);
+    touch(game, 15, 3);
     expect(o.wildEncounters).toBe("none");
-    // the toggles' pills on rows 4, 6, 8
-    touch(game, 17, 4);
+    // the toggles' pills on rows 5, 7, 9
+    touch(game, 17, 5);
     expect(o.alwaysCatch).toBe(true);
-    touch(game, 17, 6);
+    touch(game, 17, 7);
     expect(o.instantVictory).toBe(true);
-    touch(game, 17, 8);
+    touch(game, 17, 9);
     expect(o.infiniteMoney).toBe(true);
-    touch(game, 17, 8);
+    touch(game, 17, 9);
     expect(o.infiniteMoney).toBe(false);
-    // DEX FULL: SET, then NO leaves the dex alone, YES fills it
-    touch(game, 16, 10);
+    // DEX FULL: FILL, then NO leaves the dex alone, YES fills it
+    touch(game, 16, 11);
     touch(game, 9, 11); // NO
     expect(Object.keys(game.save.pokedex.owned).length).toBe(0);
-    touch(game, 16, 10);
+    touch(game, 16, 11);
     touch(game, 9, 7); // YES
     expect(Object.keys(game.save.pokedex.owned).length).toBe(151);
   });
@@ -759,31 +762,68 @@ describe("the gear's CHEATS app", () => {
     const game = makeGame();
     game.save.options.cheats = true;
     game.setGearView("cheats");
-    touch(game, 16, 12); // OPEN
+    touch(game, 16, 13); // OPEN
     const ui = () => (game as unknown as { gearUi: Record<string, any> }).gearUi.cheats!;
     expect(ui().give).toBeTruthy();
     const items = givePocket(game.data, "items");
     expect(items.length).toBeGreaterThan(GIVE_PAGE); // more than one page
     // the second page
-    touch(game, 18, 14);
+    touch(game, 18, 13);
     expect(ui().give.page).toBe(1);
-    touch(game, 1, 14);
+    touch(game, 1, 13);
     expect(ui().give.page).toBe(0);
-    // the first item on the page: its page, quantity 10, GIVE, YES
+    // the KEY pocket and back
+    touch(game, 12, 15);
+    expect(ui().give.pocket).toBe("key");
+    touch(game, 2, 15);
+    // the first item on the page: its page, quantity 10 then 11, GIVE, YES
     const first = items[0]!;
     touch(game, 5, 1);
     expect(ui().give.item).toBe(first);
-    touch(game, 7, 14); // the "10" preset
+    touch(game, 7, 12); // the "10" preset
     expect(ui().give.qty).toBe(10);
+    touch(game, 18, 10); // ▶: one more
+    expect(ui().give.qty).toBe(11);
     const had = game.save.inventory[first] ?? 0;
     touch(game, 15, 17); // GIVE
     touch(game, 9, 7); // YES
-    expect(game.save.inventory[first]).toBe(had + 10);
-    expect(ui().giveMsg).toContain("TO THE BAG");
+    expect(game.save.inventory[first]).toBe(had + 11);
+    expect(ui().giveMsg).toBe("11 PUT IN THE BAG.");
     // BACK, BACK: the list again
     touch(game, 3, 17);
     touch(game, 3, 17);
     expect(ui().give).toBeNull();
+  });
+
+  test.skipIf(!hasGen)("the page's layout: a row clear under the header, column 19 clear, values ending in 17", () => {
+    class BottomGrid extends MenuHost {
+      grid: number[][] = Array.from({ length: 18 }, () => Array(20).fill(0));
+      uiClearBottom(): void { this.grid.forEach((r) => r.fill(0)); }
+      uiTileBottom(x: number, y: number, t: number): void { if (x >= 0 && y >= 0 && x < 20 && y < 18) this.grid[y]![x] = t; }
+    }
+    const host = new BottomGrid();
+    const game = new VoxelmonGame(data!, host, 1);
+    game.newGame();
+    game.closeToOverworld();
+    game.save.options.cheats = true;
+    game.save.options.alwaysCatch = true;
+    game.setGearView("cheats");
+    drawKantoGear(host as never, game as never);
+    const g = host.grid;
+    const glyph = (t: number) => t & 0x1fff;
+    const blank = (t: number) => t === 0 || glyph(t) === 0x7f; // nothing, or a SPACE cell
+    expect(g[1]!.every(blank)).toBe(true); // the gap under the header
+    for (let y = 1; y < 18; y++) expect(blank(g[y]![19]!)).toBe(true); // column 19
+    // every value's last glyph in column 17, column 18 its bar (or paper)
+    const on = encodeGlyphs("ON");
+    const off = encodeGlyphs("OFF");
+    expect(glyph(g[5]![17]!)).toBe(on[1]); // ALWAYS CATCH: ON
+    expect(glyph(g[7]![17]!)).toBe(off[2]); // INSTANT WIN: OFF
+    expect(glyph(g[3]![17]!)).toBe(encodeGlyphs("NORMAL")[5]);
+    expect(glyph(g[11]![17]!)).toBe(encodeGlyphs("FILL")[3]);
+    expect(glyph(g[13]![17]!)).toBe(encodeGlyphs("OPEN")[3]);
+    // the labels keep a column clear of their values
+    expect(blank(g[9]![14]!)).toBe(true); // after INFINITE MONEY
   });
 
   test("every row's words fit: labels before their pills, the box's two lines", () => {
@@ -792,6 +832,12 @@ describe("the gear's CHEATS app", () => {
       if (r.kind === "toggle") expect(w).toBeLessThanOrEqual(14);
       if (r.kind === "action") expect(w).toBeLessThanOrEqual(13);
       if (r.kind === "cycle") expect(w).toBeLessThanOrEqual(20);
+      const abouts = typeof r.about === "string" ? [r.about] : Object.values(r.about);
+      for (const a of abouts) expect(wrap(a, 18).length).toBeLessThanOrEqual(2);
+    }
+    // what an action says, under the item: 18 glyphs
+    for (const s of [CHEAT_TEXT.gaveBag(99), CHEAT_TEXT.gavePc(99), CHEAT_TEXT.gaveSplit(98, 99), CHEAT_TEXT.have, CHEAT_TEXT.full, CHEAT_TEXT.notNow]) {
+      expect(encodeGlyphs(s).length).toBeLessThanOrEqual(18);
     }
   });
 });

@@ -1805,16 +1805,18 @@ export class Scene {
         this.uiOwner = null;
         host.uiClear();
         host.uiFill(0, 0, 20, 18, SPACE);
-        // The page tabs (ui/extras_layout.ts): the page's name between the
-        // L/R arrows on the top line, a rule under it, the rows below.
-        let top = 1;
-        if (pages.length > 1) {
+        // The pages (ui/extras_layout.ts): the page's name between the L/R
+        // arrows on the bottom line, under the rows, which keep the places
+        // they always had. (The top line is not used: the host's top screen
+        // cuts into it.)
+        const top = 1;
+        const paged = pages.length > 1;
+        if (paged) {
           const name = String(pages[page] ?? "");
-          host.uiTile(1, 0, UI_TILE.arrowLeft);
-          host.uiTile(18, 0, ARROW_CURSOR);
-          this.stamp(host, Math.floor((20 - name.length) / 2), 0, name);
-          host.uiFill(0, 1, 20, 1, BORDER_H);
-          top = 2;
+          const nx = Math.floor((20 - name.length) / 2);
+          host.uiTile(nx - 2, 17, UI_TILE.arrowLeft);
+          this.stamp(host, nx, 17, name);
+          host.uiTile(nx + name.length + 1, 17, ARROW_CURSOR);
         }
         // Items are the rows and then CANCEL; only the window from `first`
         // is drawn, four lines each, so the screen scrolls with the cursor.
@@ -1841,8 +1843,13 @@ export class Scene {
           });
           if (i === op.index) host.uiTile(0, labelY, ARROW_HOLLOW);
         }
-        // more below: a marker on the last line, the way the bag says so
-        if (first + visible < op.rows.length + 1) host.uiTile(18, 17, ARROW_CURSOR);
+        // more below: a marker on the last line, the way the bag says so --
+        // with the page name on that line, the GB's own ▼ in the cell its
+        // text box prints one (hlcoord 18,16)
+        if (first + visible < op.rows.length + 1) {
+          if (paged) host.uiTile(18, 16, ARROW_MORE);
+          else host.uiTile(18, 17, ARROW_CURSOR);
+        }
       }
       return;
     }

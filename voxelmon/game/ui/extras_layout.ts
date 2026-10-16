@@ -76,16 +76,16 @@ export const CHEAT_ROWS: readonly CheatRowDef[] = [
     about: {
       none: "NO RANDOM BATTLES. STORY ONES STAY.",
       less: "HALF AS MANY RANDOM BATTLES.",
-      normal: "AS MANY RANDOM BATTLES AS THE GAME.",
+      normal: "THE GAME'S OWN RATE OF BATTLES.",
       more: "TWICE AS MANY RANDOM BATTLES.",
     },
   },
-  { key: "alwaysCatch", label: "ALWAYS CATCH", kind: "toggle", about: "EVERY BALL CATCHES. TRAINERS STILL BLOCK." },
+  { key: "alwaysCatch", label: "ALWAYS CATCH", kind: "toggle", about: "ANY BALL CATCHES. TRAINERS BLOCK." },
   // INSTANT VICTORY on the reference's menu: fifteen glyphs leave no column
   // before the gear's ON/OFF pill, so the gear says INSTANT WIN
   { key: "instantVictory", label: "INSTANT WIN", kind: "toggle", about: "FIGHT KNOCKS OUT THE FOE AT ONCE." },
   { key: "infiniteMoney", label: "INFINITE MONEY", kind: "toggle", about: "MONEY STAYS AT ¥999999." },
-  { key: "dexFull", label: "DEX FULL", kind: "action", button: "SET", about: "EVERY POKéMON SEEN AND OWNED." },
+  { key: "dexFull", label: "DEX FULL", kind: "action", button: "FILL", about: "EVERY POKéMON SEEN AND OWNED." },
   { key: "giveItems", label: "GIVE ITEMS", kind: "action", button: "OPEN", about: "ANY ITEM INTO THE BAG OR THE PC." },
 ];
 
@@ -98,11 +98,12 @@ export const CHEAT_TEXT = {
   dexAsk: "FILL THE POKéDEX?",
   dexDone: "THE POKéDEX IS FULL!",
   giveAsk: (qty: number, name: string) => `GIVE ${qty} ${name}?`,
-  gaveBag: (qty: number, name: string) => `${qty} ${name} TO THE BAG.`,
-  gavePc: (qty: number, name: string) => `${qty} ${name} TO THE PC.`,
-  gaveSplit: (bag: number, pc: number) => `${bag} TO THE BAG, ${pc} TO THE PC.`,
-  have: "YOU ALREADY HAVE ONE.",
-  full: "THE BAG AND PC ARE FULL.",
+  // the item page says these under the item's own name: 18 glyphs at most
+  gaveBag: (qty: number) => `${qty} PUT IN THE BAG.`,
+  gavePc: (qty: number) => `${qty} PUT IN THE PC.`,
+  gaveSplit: (bag: number, pc: number) => `BAG ${bag}, PC ${pc}.`,
+  have: "ALREADY HAVE ONE.",
+  full: "BAG AND PC FULL.",
   notNow: "NOT NOW!",
   quantity: "QUANTITY",
   oneOnly: "ONLY ONE",
