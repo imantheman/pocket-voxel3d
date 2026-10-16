@@ -68,21 +68,25 @@ export interface HeaderOpts {
 }
 
 /** The dark bar on row 0: the title between its arrows, the clock right.
- * main.rs paints the bar; everything here is drawn light over it. */
+ * main.rs paints the bar; everything here is drawn light over it. A title
+ * too long to leave the clock its columns (ENHANCEMENTS, sixteen with its
+ * arrows) has the bar to itself, centred, a column clear of either end. */
 export function header(ctx: GearCtx, title: string, opts: HeaderOpts = {}): void {
   const { host } = ctx;
   const many = !!opts.arrows;
   const w = width(title) + (many ? 4 : 0);
-  const x = Math.max(0, Math.floor((CLOCK_COL - w) / 2));
+  const wide = w > CLOCK_COL && opts.aside === undefined;
+  const x = wide ? Math.max(1, Math.floor((COLS - w) / 2)) : Math.max(0, Math.floor((CLOCK_COL - w) / 2));
   if (many) {
     host.uiTileBottom(x, 0, UI_TILE.arrowLeft | LIGHT_BIT);
     host.uiTileBottom(x + w - 1, 0, ARROW_CURSOR | LIGHT_BIT);
     if (opts.onLeft) region("hdr:left", 0, 0, x + 1, 1, opts.onLeft);
-    if (opts.onRight) region("hdr:right", x + w - 1, 0, Math.max(1, CLOCK_COL - (x + w - 1)), 1, opts.onRight);
+    const rightEnd = wide ? COLS : CLOCK_COL;
+    if (opts.onRight) region("hdr:right", x + w - 1, 0, Math.max(1, rightEnd - (x + w - 1)), 1, opts.onRight);
   }
   text(host, x + (many ? 2 : 0), 0, title, "light");
   if (opts.onTitle) region("hdr:title", x + (many ? 1 : 0), 0, width(title) + 2, 1, opts.onTitle);
-  const aside = opts.aside ?? clockStr(ctx.gear.clock24);
+  const aside = wide ? "" : opts.aside ?? clockStr(ctx.gear.clock24);
   if (aside) text(host, Math.max(0, COLS - width(aside) - 1), 0, aside, "light");
 }
 

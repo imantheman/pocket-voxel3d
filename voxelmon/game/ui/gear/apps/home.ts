@@ -1,4 +1,5 @@
 // HOME (the launcher), STORE (add/remove apps), OPTIONS and STEPS.
+// (ENHANCEMENTS is always on HOME; CHEATS only while OPTION's row is ON.)
 //
 // The mod's Silph Link home puts two widgets over a grid of app buttons; on
 // the 20x18 grid that is an EXPLORER card (where you are, what lives there,
@@ -72,23 +73,32 @@ export function drawHome(ctx: GearCtx): void {
     center(host, 4, "NO POKéMON", ip, 11, 8);
   }
 
-  // the apps: three to a row, one row of pills with a row between. Twelve
-  // fill rows 9-15; a thirteenth (CHEATS, with every app on offer) takes
-  // the middle of the bottom row, a row clear of the grid like the rest.
+  // the apps: three to a row, one row of pills with a row between, rows
+  // 9-17 (fifteen places: every app, ENHANCEMENTS and CHEATS included, is
+  // fourteen). A last row that is not full is centred: one pill in the
+  // middle column, two either side of the middle with two columns between.
   const apps = availableApps(game).filter((a) => a !== "home");
   apps.forEach((a, i) => {
-    const col = i % 3;
-    const row = Math.floor(i / 3);
-    let x = [0, 7, 14][col]!;
-    const w = 6;
-    const y = 9 + row * 2;
-    if (y > 17) return;
-    if (y === 17) {
-      if (i !== apps.length - 1 || col !== 0) return;
-      x = 7;
-    }
-    pill(host, `home:${a}`, x, y, w, appOf(a)!.short, () => go(ctx, a));
+    const pos = homePill(i, apps.length);
+    if (!pos) return;
+    pill(host, `home:${a}`, pos.x, pos.y, HOME_PILL_W, appOf(a)!.short, () => go(ctx, a));
   });
+}
+
+/** HOME's app pills: six wide, a column between them. */
+export const HOME_PILL_W = 6;
+const HOME_COLS = [0, 7, 14] as const;
+/** The last row's places when it holds one or two. */
+const HOME_LAST_ROW: Record<number, readonly number[]> = { 1: [7], 2: [3, 11] };
+
+/** Where HOME puts app `i` of `n`, or null past the bottom row. */
+export function homePill(i: number, n: number): { x: number; y: number } | null {
+  const row = Math.floor(i / 3);
+  const y = 9 + row * 2;
+  if (y > 17) return null;
+  const inRow = Math.min(3, n - row * 3);
+  const xs = inRow < 3 ? HOME_LAST_ROW[inRow]! : HOME_COLS;
+  return { x: xs[i % 3]!, y };
 }
 
 // ---------------------------------------------------------------------------

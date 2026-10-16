@@ -3,14 +3,21 @@
 //
 //   OPTION (top screen)   two pages, turned with L/R (or SELECT):
 //                           SETTINGS      the existing rows, then CHEATS
-//                           ENHANCEMENTS  SPEED, then the four below
-//   the gear (bottom)     a CHEATS app, on HOME and in the L/R order, only
-//                         while OPTION's CHEATS row is ON. Hiding it leaves
-//                         every cheat as it was set (they stay active).
+//                           ENHANCEMENTS  SPEED, then the five below
+//   the gear (bottom)     an ENHANCEMENTS app, always on HOME and in the L/R
+//                         order: the same rows on the same save keys, so a
+//                         change on either screen shows on the other
+//                         (enhancementIndex / setEnhancement below are the
+//                         one reading and writing both use). And a CHEATS
+//                         app, only while OPTION's CHEATS row is ON. Hiding
+//                         it leaves every cheat as it was set (they stay
+//                         active).
 //
-// What each setting does is in ../extras.ts (SPEED: ../gamespeed.ts).
+// What each setting does is in ../extras.ts (SPEED: ../gamespeed.ts,
+// VISIBLE WILD: ../visiblewild.ts).
 
-import { GAME_SPEEDS, GAME_SPEED_LABEL } from "../gamespeed.ts";
+import { GAME_SPEEDS, GAME_SPEED_LABEL, gameSpeedIndex, setGameSpeedIn } from "../gamespeed.ts";
+import { VISIBLE_WILD_MODES } from "../visiblewild.ts";
 
 /** OPTION's pages, in L/R order. */
 export const OPTION_PAGES = ["SETTINGS", "ENHANCEMENTS"] as const;
@@ -26,6 +33,8 @@ export interface ExtrasRowDef {
   key: string;
   label: string;
   choices: readonly string[];
+  /** What each choice saves, by index; a toggle (false / true) without. */
+  values?: readonly unknown[];
 }
 
 /**
@@ -38,13 +47,82 @@ export const SPEED_ROW: ExtrasRowDef = {
 };
 export const SPEED_ROW_READY = true;
 
-/** ENHANCEMENTS, after SPEED. Toggles, OFF first. */
+/**
+ * VISIBLE WILD (../visiblewild.ts): OFF, or the wild mons about the map in
+ * place of random battles, a few (SOME) or more (MANY). options.visibleWild.
+ */
+export const VISIBLE_WILD_ROW: ExtrasRowDef = {
+  key: "visibleWild", label: "VISIBLE WILD", choices: ["OFF", "SOME", "MANY"], values: VISIBLE_WILD_MODES,
+};
+
+/** ENHANCEMENTS, after SPEED: four toggles (OFF first), then VISIBLE WILD. */
 export const ENHANCEMENT_ROWS: readonly ExtrasRowDef[] = [
   { key: "expForCatching", label: "EXP FOR CATCHING", choices: ON_OFF },
   { key: "partyExpShare", label: "PARTY EXP SHARE", choices: ON_OFF },
   { key: "tradeEvoLv40", label: "TRADE EVO LV.40", choices: ON_OFF },
   { key: "hmsWithoutMove", label: "HMS WITHOUT MOVE", choices: ON_OFF },
+  VISIBLE_WILD_ROW,
 ];
+
+/** Every ENHANCEMENTS row in order, SPEED first: OPTION's page and the
+ *  gear's app both list exactly these. */
+export function enhancementDefs(): ExtrasRowDef[] {
+  return [...(SPEED_ROW_READY ? [SPEED_ROW] : []), ...ENHANCEMENT_ROWS];
+}
+
+type Opts = Record<string, unknown>;
+
+/** The choice a row shows for these options: SPEED's 1X / 2X, a row's own
+ *  values, else a toggle's OFF / ON. Unset or unknown reads as the first. */
+export function enhancementIndex(opts: Opts, d: ExtrasRowDef): number {
+  if (d === SPEED_ROW) return gameSpeedIndex(opts);
+  if (d.values) return Math.max(0, d.values.indexOf(opts[d.key]));
+  return opts[d.key] === true ? 1 : 0;
+}
+
+/** Set a row to choice `at` (clamped): what both screens write. */
+export function setEnhancement(opts: Opts, d: ExtrasRowDef, at: number): void {
+  const i = Math.max(0, Math.min(d.choices.length - 1, at));
+  if (d === SPEED_ROW) setGameSpeedIn(opts, GAME_SPEEDS[i]!.key);
+  else if (d.values) opts[d.key] = d.values[i];
+  else opts[d.key] = i === 1;
+}
+
+// ---------------------------------------------------------------------------
+// the gear's ENHANCEMENTS app
+// ---------------------------------------------------------------------------
+
+export const ENHANCEMENTS_APP = {
+  title: "ENHANCEMENTS",
+  // six glyphs on HOME's pills: cut with the gear's ellipsis
+  short: "ENHAN…",
+  about: ["SPEED, EXP, EVOLUTION, HMS", "AND VISIBLE WILD POKéMON."],
+} as const;
+
+/**
+ * The app's rows: each ENHANCEMENTS row under a label short enough to keep
+ * a clear column before its pill (OPTION's labels run to sixteen glyphs;
+ * the gear's pills start at column 15), and the two lines the box at the
+ * foot says while the row is the last one tapped -- the full name first.
+ */
+export const ENHANCEMENT_GEAR: Record<string, { label: string; about: string | Record<string, string> }> = {
+  gameSpeed: {
+    label: "SPEED",
+    about: { "1X": "SPEED: THE GAME'S OWN PACE.", "2X": "SPEED: EVERYTHING TWICE AS FAST." },
+  },
+  expForCatching: { label: "EXP FOR CATCH", about: "EXP FOR CATCHING: A CATCH PAYS EXP." },
+  partyExpShare: { label: "PARTY SHARE", about: "PARTY EXP SHARE: EVERY MON EARNS." },
+  tradeEvoLv40: { label: "TRADE EVO LV40", about: "TRADE EVO LV.40: ALSO BY LEVEL 40." },
+  hmsWithoutMove: { label: "HMS W/O MOVE", about: "HMS WITHOUT MOVE: JUST HM AND BADGE." },
+  visibleWild: {
+    label: "VISIBLE WILD",
+    about: {
+      OFF: "RANDOM BATTLES, AS THE GAME HAS THEM.",
+      SOME: "NO RANDOM BATTLES. A FEW ROAM.",
+      MANY: "NO RANDOM BATTLES. MANY ROAM.",
+    },
+  },
+};
 
 // ---------------------------------------------------------------------------
 // the gear's CHEATS app

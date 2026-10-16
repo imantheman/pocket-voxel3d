@@ -719,15 +719,15 @@ describe("the gear's CHEATS app", () => {
     expect(game.save.options.alwaysCatch).toBe(true);
   });
 
-  test.skipIf(!hasGen)("with every app on offer, CHEATS takes the middle of the bottom row", () => {
+  test.skipIf(!hasGen)("with every app on offer, CHEATS takes the right of the bottom row, beside ENHANCEMENTS", () => {
     const game = makeGame();
     game.save.inventory.TOWN_MAP = 1;
     game.save.flags.EVENT_GOT_POKEDEX = true;
     (game as { data: any }).data = { ...(game.data as object), atlas: { ...((game.data as any).atlas ?? {}), townMapPage: 0 } };
     game.save.options.cheats = true;
-    expect(availableApps(game).length).toBe(14); // HOME + 13
+    expect(availableApps(game).length).toBe(15); // HOME + 14 (ENHANCEMENTS is always there)
     game.setGearView("home");
-    touch(game, 9, 17);
+    touch(game, 13, 17);
     expect(game.gearView).toBe("cheats");
   });
 
@@ -850,7 +850,7 @@ describe("the gear's CHEATS app", () => {
 describe("the settings in the save", () => {
   const extras = {
     gameSpeed: 2, expForCatching: true, partyExpShare: true, tradeEvoLv40: true, hmsWithoutMove: true, cheats: true,
-    wildEncounters: "less", alwaysCatch: true, instantVictory: true, infiniteMoney: true,
+    wildEncounters: "less", alwaysCatch: true, instantVictory: true, infiniteMoney: true, visibleWild: "many",
   };
 
   test("they survive the Lua save and gen1recomp's load untouched", () => {
