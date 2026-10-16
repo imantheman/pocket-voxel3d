@@ -259,15 +259,14 @@ export class BattleAnimView implements AnimPainter {
     let colors = this.objPalette(palette, this.battle) ?? GbcPalette.DMG_SHADES;
     const byte = this.objByte(palette);
     if (byte != null && byte !== BGP_IDENTITY) colors = GbcPalette.remap(colors, byte) ?? colors;
-    let pal: Palette4 = G.palette;
-    GbcPalette.with(colors, () => {
-      pal = G.palette;
-    });
+    // the palette GbcPalette.with(colors) would set (its use() is exactly
+    // resolvedPalette), asked for straight: a closure and a swap an object
+    // were most of an animation's OBJ layer
+    const pal: Palette4 = GbcPalette.resolvedPalette(colors);
     const slot = lcd.palette(pal, true);
     const flags =
       (attr & OAM_XFLIP ? ATTR_X_FLIP : 0) | (attr & OAM_YFLIP ? ATTR_Y_FLIP : 0) | (attr & OAM_PRIORITY ? ATTR_PRIORITY : 0);
-    const [tx, ty] = G.transformPoint(x, y);
-    lcd.obj(tx, ty, tile, slot | flags);
+    lcd.obj(x + G.tx, y + G.ty, tile, slot | flags);
   }
 
   // AnimPainter: one anim-sheet OAM entry, already at screen pixels.
@@ -341,8 +340,43 @@ export class BattleAnimView implements AnimPainter {
       const c = GbcPalette.color(Chrome.DEFAULT_BOX_PALETTE, 1);
       const rgb: readonly [number, number, number] = [c[0]!, c[1]!, c[2]!];
       const slot = lcd.palette([rgb, rgb, rgb, rgb]);
-      for (let i = 0; i < 1024; i++) {
-        if (lcd.s.attrs[i]! & ATTR_HOLE) lcd.cell(i & 31, i >> 5, SOLID[0], slot);
+      // lcd.cell(x, y, SOLID[0], slot) on every hole, a run of holes at a
+      // time with a native fill (and four cells a word looked at): the cell
+      // a hole, written one call each, was most of an intro slide frame
+      const cells = lcd.s.cells;
+      const attrs = lcd.s.attrs;
+      const words = new Uint32Array(attrs.buffer, attrs.byteOffset, 256);
+      const attr = slot & ~ATTR_HOLE & 0xff;
+      const tile = SOLID[0] & 0xffff;
+      const HOLES = ATTR_HOLE * 0x01010101;
+      let start = -1;
+      for (let w = 0; w < 256; w++) {
+        const v = words[w]! & HOLES;
+        if (v === HOLES) {
+          if (start < 0) start = w * 4;
+          continue;
+        }
+        if (v === 0) {
+          if (start >= 0) {
+            cells.fill(tile, start, w * 4);
+            attrs.fill(attr, start, w * 4);
+            start = -1;
+          }
+          continue;
+        }
+        for (let i = w * 4, end = i + 4; i < end; i++) {
+          if (attrs[i]! & ATTR_HOLE) {
+            if (start < 0) start = i;
+          } else if (start >= 0) {
+            cells.fill(tile, start, i);
+            attrs.fill(attr, start, i);
+            start = -1;
+          }
+        }
+      }
+      if (start >= 0) {
+        cells.fill(tile, start, 1024);
+        attrs.fill(attr, start, 1024);
       }
     } finally {
       GbcPalette.setBgp(previousBgp);

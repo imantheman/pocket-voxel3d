@@ -223,6 +223,9 @@ function mirror(value: number, flip: boolean): number {
   return u8(-(u8(value) + 8));
 }
 
+/** framesetIds per frameset order table (AnimObjectPool's constructor). */
+const FRAMESET_IDS = new WeakMap<readonly string[], Record<string, number>>();
+
 export class AnimObjectPool {
   data: AnimObjectData;
   env: AnimEnv;
@@ -263,10 +266,18 @@ export class AnimObjectPool {
     // (`ld a, BATTLE_ANIM_FRAMESET_SOUND_1; add [hl]`) while the extractor
     // writes names.  Keeping the struct's FRAMESET_ID numeric is what makes
     // those adds mean the same thing they do on the cart.
-    this.framesetIds = Object.create(null) as Record<string, number>;
-    this.framesetOrder.forEach((name, index) => {
-      this.framesetIds[name] = index;
-    });
+    // (built once per order table and shared -- it is only ever read -- where
+    // every animation starting built it afresh, 185 names)
+    let ids = FRAMESET_IDS.get(this.framesetOrder);
+    if (!ids) {
+      const made = Object.create(null) as Record<string, number>;
+      this.framesetOrder.forEach((name, index) => {
+        made[name] = index;
+      });
+      FRAMESET_IDS.set(this.framesetOrder, made);
+      ids = made;
+    }
+    this.framesetIds = ids;
     // engine/battle_anims/functions.asm:1158
     this.hram = null;
     this.obp0 = null;
