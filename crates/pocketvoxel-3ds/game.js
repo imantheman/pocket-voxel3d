@@ -8259,6 +8259,21 @@ class GameMap {
     const grass = this.tileset.grassTile;
     return grass !== undefined && this.cellTile(cx, cy) === grass;
   }
+  isWholeCell(cx, cy, kind) {
+    if (!this.inBounds(cx, cy))
+      return false;
+    if (this.byCollision)
+      return kind === "water" ? this.isWaterCell(cx, cy) : this.isWalkableCell(cx, cy);
+    for (let dy = 0;dy < 2; dy++) {
+      for (let dx = 0;dx < 2; dx++) {
+        const t = this.tileAt(cx * 2 + dx, cy * 2 + dy);
+        const ok = kind === "water" ? this.waterTiles.has(t) : this.walkable.has(t) && !this.waterTiles.has(t);
+        if (!ok)
+          return false;
+      }
+    }
+    return true;
+  }
   isWaterCell(cx, cy) {
     if (this.byCollision)
       return isWater(this.cellCollision(cx, cy));
@@ -17191,6 +17206,179 @@ function stepHost(stepper, speed, hostCompose, tick) {
   return n;
 }
 
+// voxelmon/game/visiblewild.ts
+var VISIBLE_WILD_MODES = ["off", "some", "many"];
+function visibleWildMode(save) {
+  const v = save?.options?.visibleWild;
+  return VISIBLE_WILD_MODES.includes(v) ? v : "off";
+}
+var CELL_NONE = 0;
+var CELL_LAND = 1;
+var CELL_WATER = 2;
+function landTable(enc) {
+  const g = enc?.grass;
+  return g && g.rate > 0 && g.slots?.length ? g : null;
+}
+function waterTable(enc) {
+  const g = enc?.water;
+  return g && g.rate > 0 && g.slots?.length ? g : null;
+}
+function everyTileRolls(map, indoor) {
+  return !!indoor && map.def.index >= indoor.firstIndoorMap && map.def.tileset !== indoor.excludedTileset;
+}
+class CellClassifier {
+  map;
+  out;
+  y = 1;
+  land;
+  water;
+  cave;
+  constructor(map, enc, indoor) {
+    this.map = map;
+    this.out = new Uint8Array(map.widthCells * map.heightCells);
+    this.land = landTable(enc) !== null;
+    this.water = waterTable(enc) !== null;
+    this.cave = this.land && everyTileRolls(map, indoor);
+    if (!this.land && !this.water)
+      this.y = map.heightCells;
+  }
+  get done() {
+    return this.y >= this.map.heightCells - 1;
+  }
+  step(budget) {
+    const w = this.map.widthCells;
+    let n = 0;
+    while (!this.done && n < budget) {
+      for (let x = 1;x < w - 1; x++)
+        this.out[this.y * w + x] = this.kindOf(x, this.y);
+      n += w;
+      this.y++;
+    }
+  }
+  kindOf(x, y) {
+    const map = this.map;
+    const isWater2 = (cx, cy) => map.isWaterCell(cx, cy);
+    const walk = (cx, cy) => map.isWalkableCell(cx, cy) && !isWater2(cx, cy);
+    const cave = this.cave;
+    let k = CELL_NONE;
+    if (this.water && isWater2(x, y))
+      k = CELL_WATER;
+    else if (this.land && walk(x, y) && (cave || map.isGrassCell(x, y)))
+      k = CELL_LAND;
+    if (k === CELL_NONE)
+      return k;
+    {
+      if (map.isWholeCell && !map.isWholeCell(x, y, k === CELL_WATER ? "water" : "floor"))
+        return CELL_NONE;
+      if (k === CELL_LAND && !cave && !map.isGrassCell(x, y - 1))
+        return CELL_NONE;
+      if (k === CELL_LAND && !cave && !walk(x, y + 1))
+        return CELL_NONE;
+      if (map.warpAtCell(x, y) || map.isWarpTileCell(x, y))
+        return CELL_NONE;
+      if (map.warpAtCell(x - 1, y) || map.warpAtCell(x + 1, y) || map.warpAtCell(x, y - 1) || map.warpAtCell(x, y + 1))
+        return CELL_NONE;
+      const pass = k === CELL_WATER ? isWater2 : walk;
+      const u = pass(x, y - 1), d = pass(x, y + 1), l = pass(x - 1, y), r = pass(x + 1, y);
+      if (u && d && !l && !r || l && r && !u && !d)
+        return CELL_NONE;
+      if (+u + +d + +l + +r <= 1)
+        return CELL_NONE;
+    }
+    return k;
+  }
+}
+var WINDOW_X = 7;
+var WINDOW_Y = 6;
+var NEAR = 3;
+var FAR = 10;
+var MAX_WILD = 8;
+function baseCount(mode, cells) {
+  if (mode === "off" || cells <= 0)
+    return 0;
+  if (mode === "some")
+    return cells < 8 ? 1 : cells < 40 ? 2 : 3;
+  return cells < 8 ? 2 : cells < 24 ? 4 : cells < 60 ? 5 : 6;
+}
+function wildTarget(mode, cheat, cells, slots2 = MAX_WILD) {
+  if (cheat === "none")
+    return 0;
+  const base = baseCount(mode, cells);
+  if (base === 0)
+    return 0;
+  const scaled = cheat === "less" ? Math.max(1, Math.round(base / 2)) : cheat === "more" ? Math.round(base * 1.5) : base;
+  return Math.max(0, Math.min(scaled, MAX_WILD, slots2));
+}
+function pickSlot(table, rng) {
+  if (!table?.slots?.length)
+    return null;
+  const pick = rng.byte();
+  const thresholds = table.buckets ?? ENCOUNTER_BUCKETS;
+  for (let i = 0;i < thresholds.length; i++) {
+    if (pick < thresholds[i]) {
+      const s = table.slots[i];
+      return s ? { species: s.species, level: s.level } : null;
+    }
+  }
+  return null;
+}
+var MON_PARTY_ICONS = "GGGMMMWWWUUUUUUDDDQQDDSSFFMMMMMMMMFFQQFFMMGGGUUUUM" + "MMMMMMMQQMMMMMMMMMGGGWWMMMQQQMBBDDDWWMMHHMMMSMMWWB" + "BGGMMMMMMMQMFGMWWWWHHMUMMMUQWSWMQQQQMHHHHDMDDDSSSM" + "M";
+var ICON_SHEETS = {
+  M: "SPRITE_MONSTER",
+  B: "SPRITE_POKE_BALL",
+  H: "SPRITE_FOSSIL",
+  F: "SPRITE_FAIRY",
+  D: "SPRITE_BIRD",
+  W: "SPRITE_SEEL",
+  P: "SPRITE_PIKACHU",
+  U: "SPRITE_ICON_BUG",
+  G: "SPRITE_ICON_PLANT",
+  S: "SPRITE_ICON_SNAKE",
+  Q: "SPRITE_ICON_QUADRUPED"
+};
+var OWN_SHEETS = {
+  PIKACHU: "SPRITE_PIKACHU",
+  SANDSHREW: "SPRITE_SANDSHREW",
+  ODDISH: "SPRITE_ODDISH",
+  BULBASAUR: "SPRITE_BULBASAUR",
+  JIGGLYPUFF: "SPRITE_JIGGLYPUFF",
+  CLEFAIRY: "SPRITE_CLEFAIRY",
+  CHANSEY: "SPRITE_CHANSEY",
+  SEEL: "SPRITE_SEEL"
+};
+function hasSheet(data, id) {
+  const atlas = data.atlas?.sprites;
+  if (atlas) {
+    const page = atlas[id.replace(/^SPRITE_/, "").toLowerCase()];
+    return typeof page === "number" && page >= 0;
+  }
+  return !!data.sprites && id in data.sprites;
+}
+function iconFamily(data, species) {
+  const dex = data.pokemon?.[species]?.dex ?? 0;
+  let f = dex >= 1 && dex <= MON_PARTY_ICONS.length ? MON_PARTY_ICONS[dex - 1] : "M";
+  if ((dex === 25 || dex === 26) && data.sprites && "SPRITE_PIKACHU" in data.sprites)
+    f = "P";
+  return f;
+}
+function wildSprite(data, species) {
+  const own = OWN_SHEETS[species];
+  if (own && hasSheet(data, own))
+    return own;
+  const sheet = ICON_SHEETS[iconFamily(data, species)] ?? "SPRITE_MONSTER";
+  return hasSheet(data, sheet) ? sheet : "SPRITE_MONSTER";
+}
+var WILD_STEP_FRAMES = 24;
+function wanderDelay(rng) {
+  return randRange(rng, 50, 160);
+}
+function lifetime(rng) {
+  return randRange(rng, 1800, 3600);
+}
+function respawnDelay(rng) {
+  return randRange(rng, 60, 150);
+}
+
 // voxelmon/game/ui/extras_layout.ts
 var OPTION_PAGES = ["SETTINGS", "ENHANCEMENTS"];
 var ON_OFF = ["OFF", "ON"];
@@ -17201,12 +17389,61 @@ var SPEED_ROW = {
   choices: GAME_SPEEDS.map((s) => s.label)
 };
 var SPEED_ROW_READY = true;
+var VISIBLE_WILD_ROW = {
+  key: "visibleWild",
+  label: "VISIBLE WILD",
+  choices: ["OFF", "SOME", "MANY"],
+  values: VISIBLE_WILD_MODES
+};
 var ENHANCEMENT_ROWS = [
   { key: "expForCatching", label: "EXP FOR CATCHING", choices: ON_OFF },
   { key: "partyExpShare", label: "PARTY EXP SHARE", choices: ON_OFF },
   { key: "tradeEvoLv40", label: "TRADE EVO LV.40", choices: ON_OFF },
-  { key: "hmsWithoutMove", label: "HMS WITHOUT MOVE", choices: ON_OFF }
+  { key: "hmsWithoutMove", label: "HMS WITHOUT MOVE", choices: ON_OFF },
+  VISIBLE_WILD_ROW
 ];
+function enhancementDefs() {
+  return [...SPEED_ROW_READY ? [SPEED_ROW] : [], ...ENHANCEMENT_ROWS];
+}
+function enhancementIndex(opts, d) {
+  if (d === SPEED_ROW)
+    return gameSpeedIndex(opts);
+  if (d.values)
+    return Math.max(0, d.values.indexOf(opts[d.key]));
+  return opts[d.key] === true ? 1 : 0;
+}
+function setEnhancement(opts, d, at) {
+  const i = Math.max(0, Math.min(d.choices.length - 1, at));
+  if (d === SPEED_ROW)
+    setGameSpeedIn(opts, GAME_SPEEDS[i].key);
+  else if (d.values)
+    opts[d.key] = d.values[i];
+  else
+    opts[d.key] = i === 1;
+}
+var ENHANCEMENTS_APP = {
+  title: "ENHANCEMENTS",
+  short: "EXTRAS",
+  about: ["SPEED, EXP, EVOLUTION, HMS", "AND VISIBLE WILD POKéMON."]
+};
+var ENHANCEMENT_GEAR = {
+  gameSpeed: {
+    label: "SPEED",
+    about: { "1X": "SPEED: THE GAME'S OWN PACE.", "2X": "SPEED: EVERYTHING TWICE AS FAST." }
+  },
+  expForCatching: { label: "EXP FOR CATCH", about: "EXP FOR CATCHING: A CATCH PAYS EXP." },
+  partyExpShare: { label: "PARTY SHARE", about: "PARTY EXP SHARE: EVERY MON EARNS." },
+  tradeEvoLv40: { label: "TRADE EVO LV40", about: "TRADE EVO LV.40: ALSO BY LEVEL 40." },
+  hmsWithoutMove: { label: "HMS W/O MOVE", about: "HMS WITHOUT MOVE: JUST HM AND BADGE." },
+  visibleWild: {
+    label: "VISIBLE WILD",
+    about: {
+      OFF: "RANDOM BATTLES, AS THE GAME HAS THEM.",
+      SOME: "NO RANDOM BATTLES. A FEW ROAM.",
+      MANY: "NO RANDOM BATTLES. MANY ROAM."
+    }
+  }
+};
 var CHEATS_APP = {
   title: "CHEATS",
   short: "CHEATS",
@@ -17374,6 +17611,13 @@ var APPS = [
     short: "OPTION",
     fixed: true,
     about: ["HOW MUCH HELP THE GEAR GIVES."]
+  },
+  {
+    id: "enhancements",
+    title: ENHANCEMENTS_APP.title,
+    short: ENHANCEMENTS_APP.short,
+    fixed: true,
+    about: [...ENHANCEMENTS_APP.about]
   },
   {
     id: "cheats",
@@ -17705,6 +17949,334 @@ function toolUnlocked(t, save) {
     return false;
   const badge = FIELD_BADGE[t.move];
   return badge === false || !!badge && (inv[badge] ?? 0) > 0;
+}
+
+// voxelmon/game/world/wildmons.ts
+var DIRS = ["up", "down", "left", "right"];
+
+class WildMon {
+  species;
+  level;
+  sprite;
+  kind;
+  cellX;
+  cellY;
+  px;
+  py;
+  facing;
+  moving = false;
+  progress = 0;
+  stepFlip = false;
+  targetX;
+  targetY;
+  surfing;
+  timer;
+  life;
+  clock;
+  constructor(species, level, sprite, kind, cx, cy, facing, timer, life, clock) {
+    this.species = species;
+    this.level = level;
+    this.sprite = sprite;
+    this.kind = kind;
+    this.cellX = cx;
+    this.cellY = cy;
+    this.px = cx * 16;
+    this.py = cy * 16;
+    this.facing = facing;
+    this.surfing = kind === CELL_WATER;
+    this.timer = timer;
+    this.life = life;
+    this.clock = clock;
+  }
+  walkPhase() {
+    if (!this.moving)
+      return 0;
+    const p = this.progress * 16 / WILD_STEP_FRAMES % 16;
+    return p >= 4 && p < 12 ? 1 : 0;
+  }
+  get lift() {
+    if (this.moving)
+      return Math.round(2 * Math.sin(Math.PI * this.progress / WILD_STEP_FRAMES));
+    return this.clock % 64 < 8 ? 1 : 0;
+  }
+  advance() {
+    this.clock = this.clock + 1 & 65535;
+    if (!this.moving)
+      return;
+    this.progress += 1;
+    const d = DELTA[this.facing];
+    const moved = Math.floor(this.progress * 16 / WILD_STEP_FRAMES);
+    this.px = this.cellX * 16 + d[0] * moved;
+    this.py = this.cellY * 16 + d[1] * moved;
+    if (this.progress >= WILD_STEP_FRAMES) {
+      this.cellX = this.targetX;
+      this.cellY = this.targetY;
+      this.targetX = this.targetY = undefined;
+      this.px = this.cellX * 16;
+      this.py = this.cellY * 16;
+      this.moving = false;
+      this.progress = 0;
+      this.stepFlip = !this.stepFlip;
+    }
+  }
+}
+var TOUCH_PX = 12;
+var CLASSIFY_CELLS = 48;
+
+class VisibleWild {
+  ow;
+  mons = [];
+  battles = 0;
+  lastBattle;
+  classifier = null;
+  cellsMap = null;
+  marks = null;
+  cands = [];
+  spawnTimer = 0;
+  filled = false;
+  rng;
+  constructor(ow, seed = 1364675652) {
+    this.ow = ow;
+    this.rng = seededRng(seed);
+  }
+  get save() {
+    return this.ow.shell.save;
+  }
+  suppressesRoll() {
+    return visibleWildMode(this.save) !== "off" && !this.ow.link;
+  }
+  active() {
+    return this.suppressesRoll() && wildMode(this.save) !== "none";
+  }
+  onMap() {
+    this.mons.length = 0;
+    this.classifier = null;
+    this.cellsMap = null;
+    this.marks = null;
+    this.forMap = this.ow.map ?? null;
+    this.filled = false;
+    this.spawnTimer = 0;
+  }
+  forMap = null;
+  classify() {
+    const map = this.ow.map;
+    if (!this.classifier || this.cellsMap !== map) {
+      const data = this.ow.shell.data;
+      const enc = data.encounters?.[map.id];
+      const indoor = data.field?.indoorEncounters;
+      this.classifier = new CellClassifier(map, enc, indoor);
+      this.cellsMap = map;
+    }
+    return this.classifier;
+  }
+  cellKinds() {
+    const c = this.classify();
+    c.step(Infinity);
+    return c.out;
+  }
+  monAt(cx, cy) {
+    return this.mons.find((m) => m.cellX === cx && m.cellY === cy || m.targetX === cx && m.targetY === cy);
+  }
+  update(frozen) {
+    if (!this.active()) {
+      if (this.mons.length)
+        this.mons.length = 0;
+      return false;
+    }
+    if (frozen)
+      return false;
+    const ow = this.ow;
+    const p = ow.player;
+    if (this.forMap !== ow.map)
+      this.onMap();
+    const cls = this.classify();
+    if (!cls.done)
+      cls.step(CLASSIFY_CELLS);
+    for (const m of this.mons) {
+      m.advance();
+      if (!m.moving && --m.timer <= 0)
+        this.wander(m);
+    }
+    for (const m of this.mons) {
+      if (Math.abs(m.px - p.px) < TOUCH_PX && Math.abs(m.py - p.py) < TOUCH_PX) {
+        this.battle(m);
+        return true;
+      }
+    }
+    for (let i = this.mons.length - 1;i >= 0; i--) {
+      const m = this.mons[i];
+      const far = Math.max(Math.abs(m.cellX - p.cellX), Math.abs(m.cellY - p.cellY));
+      m.life -= 1;
+      if (far > FAR || m.life <= 0 && far >= 4 && !m.moving)
+        this.mons.splice(i, 1);
+    }
+    if (!cls.done)
+      return false;
+    if (!this.filled) {
+      this.filled = true;
+      this.spawn(true);
+      this.spawnTimer = respawnDelay(this.rng);
+    } else if (--this.spawnTimer <= 0) {
+      this.spawnTimer = respawnDelay(this.rng);
+      this.spawn(false);
+    }
+    return false;
+  }
+  battle(m) {
+    const i = this.mons.indexOf(m);
+    if (i >= 0)
+      this.mons.splice(i, 1);
+    this.spawnTimer = Math.max(this.spawnTimer, 180);
+    this.battles += 1;
+    this.lastBattle = { species: m.species, level: m.level };
+    this.ow.shell.pushStubBattle(m.species, m.level);
+  }
+  tryTalk(cx, cy) {
+    if (!this.active() || this.mons.length === 0)
+      return false;
+    const m = this.monAt(cx, cy);
+    if (!m)
+      return false;
+    this.battle(m);
+    return true;
+  }
+  freeSlots() {
+    const npcs = this.ow.npcs;
+    let taken = 0;
+    for (let i = 0;i < npcs.length && i < ENTS_MAX - 1; i++)
+      if (!npcs[i].hidden)
+        taken += 1;
+    return ENTS_MAX - 1 - taken;
+  }
+  wander(m) {
+    const rng = this.rng;
+    m.timer = wanderDelay(rng);
+    const p = this.ow.player;
+    const dx = p.cellX - m.cellX;
+    const dy = p.cellY - m.cellY;
+    let dir;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) <= 4 && rng.int(4) === 0) {
+      dir = Math.abs(dx) > Math.abs(dy) ? dx > 0 ? "right" : "left" : dy > 0 ? "down" : "up";
+    } else {
+      dir = DIRS[rng.int(4)];
+    }
+    m.facing = dir;
+    if (rng.byte() < 96)
+      return;
+    const d = DELTA[dir];
+    const tx = m.cellX + d[0];
+    const ty = m.cellY + d[1];
+    const map = this.ow.map;
+    if (!map.inBounds(tx, ty) || this.classify().out[ty * map.widthCells + tx] !== m.kind)
+      return;
+    const ents = [];
+    for (const e of this.ow.entities)
+      if (e !== p)
+        ents.push(e);
+    for (const o of this.mons)
+      if (o !== m)
+        ents.push(o);
+    if (!canMove(map, ents, m, dir, this.ow.tilePairs).ok)
+      return;
+    m.targetX = tx;
+    m.targetY = ty;
+    m.moving = true;
+    m.progress = 0;
+  }
+  spawn(fill) {
+    const ow = this.ow;
+    const map = ow.map;
+    const data = ow.shell.data;
+    const enc = data.encounters?.[map.id];
+    const land = landTable(enc);
+    const water = waterTable(enc);
+    if (!land && !water)
+      return;
+    const kinds = this.classify().out;
+    const p = ow.player;
+    const surfing = !!p.surfing;
+    const w = map.widthCells;
+    const x0 = Math.max(1, p.cellX - WINDOW_X), x1 = Math.min(w - 2, p.cellX + WINDOW_X);
+    const y0 = Math.max(1, p.cellY - WINDOW_Y), y1 = Math.min(map.heightCells - 2, p.cellY + WINDOW_Y);
+    const allowed = (k) => k === CELL_LAND && !!land || k === CELL_WATER && !!water && surfing;
+    let cells = 0;
+    for (let y = y0;y <= y1; y++)
+      for (let x = x0;x <= x1; x++)
+        if (allowed(kinds[y * w + x]))
+          cells += 1;
+    const target2 = wildTarget(visibleWildMode(this.save), wildMode(this.save), cells, this.freeSlots());
+    let tries = fill ? target2 : 1;
+    while (tries-- > 0 && this.mons.length < target2) {
+      const at = this.pickCell(kinds, allowed, x0, x1, y0, y1);
+      if (!at)
+        return;
+      const k = kinds[at[1] * w + at[0]];
+      const slot = pickSlot(k === CELL_WATER ? water : land, this.rng);
+      if (!slot || repelled(ow.shell.save, slot.level))
+        continue;
+      const rng = this.rng;
+      this.mons.push(new WildMon(slot.species, slot.level, wildSprite(data, slot.species), k, at[0], at[1], DIRS[rng.int(4)], wanderDelay(rng), lifetime(rng), rng.int(64)));
+    }
+  }
+  pickCell(kinds, allowed, x0, x1, y0, y1) {
+    const ow = this.ow;
+    const p = ow.player;
+    const map = ow.map;
+    const w = map.widthCells;
+    const size = w * map.heightCells;
+    if (!this.marks || this.marks.length !== size)
+      this.marks = new Uint8Array(size);
+    const marks = this.marks;
+    const marked = [];
+    const mark = (x, y) => {
+      if (y === undefined || x < 0 || y < 0 || x >= w || y >= map.heightCells)
+        return;
+      const i2 = y * w + x;
+      if (!marks[i2]) {
+        marks[i2] = 1;
+        marked.push(i2);
+      }
+    };
+    for (const e of ow.entities) {
+      if (e.hidden)
+        continue;
+      mark(e.cellX, e.cellY);
+      if (e.targetX !== undefined)
+        mark(e.targetX, e.targetY);
+    }
+    for (const m of this.mons) {
+      mark(m.cellX, m.cellY);
+      if (m.targetX !== undefined)
+        mark(m.targetX, m.targetY);
+    }
+    for (const n of ow.npcs) {
+      if (n.hidden)
+        continue;
+      for (let dy = -1;dy <= 1; dy++)
+        for (let dx = -1;dx <= 1; dx++)
+          mark(n.cellX + dx, n.cellY + dy);
+    }
+    const cands = this.cands;
+    cands.length = 0;
+    for (let y = y0;y <= y1; y++) {
+      const row = y * w;
+      const ny = Math.abs(y - p.cellY) < NEAR;
+      for (let x = x0;x <= x1; x++) {
+        const i2 = row + x;
+        if (marks[i2] || !allowed(kinds[i2]))
+          continue;
+        if (ny && Math.abs(x - p.cellX) < NEAR)
+          continue;
+        cands.push(i2);
+      }
+    }
+    for (const i2 of marked)
+      marks[i2] = 0;
+    if (cands.length === 0)
+      return null;
+    const i = cands[this.rng.int(cands.length)];
+    return [i % w, Math.floor(i / w)];
+  }
 }
 
 // voxelmon/game/ui/yellowintro.ts
@@ -18799,6 +19371,7 @@ class Overworld {
   carpets;
   encounterCount = 0;
   lastEncounter;
+  wild = new VisibleWild(this);
   constructor(shell) {
     this.shell = shell;
     const field = shell.data.field;
@@ -18878,6 +19451,7 @@ class Overworld {
       const toggles = this.save.objectToggles ??= {};
       (toggles[mapId] ??= {})[sleeper.object] = false;
     }
+    this.wild.onMap();
     this.npcs = [];
     for (const obj of def.objects ?? []) {
       if (this.objectVisible(obj)) {
@@ -18959,11 +19533,14 @@ class Overworld {
       this.player.update();
       return;
     }
+    const ents = this.wild.mons.length > 0 ? this.entities.concat(this.wild.mons) : this.entities;
     for (const npc of this.npcs) {
-      npc.update(this.map, this.entities, this.shell.npcRng, this.tilePairs);
+      npc.update(this.map, ents, this.shell.npcRng, this.tilePairs);
     }
     this.updateScriptMoves();
     let scripted = this.runner.isRunning() || this.scriptMoves.length > 0 || this.emote !== undefined || this.engaging;
+    if (this.wild.update(scripted || this.transitioning))
+      return;
     if (!scripted && !this.transitioning) {
       this.checkTrainerSight();
       scripted = this.runner.isRunning() || this.scriptMoves.length > 0 || this.emote !== undefined || this.engaging;
@@ -19298,6 +19875,8 @@ class Overworld {
     const p = this.player;
     const [fx, fy] = p.facingCell();
     if (this.tryLinkMachine(fx, fy))
+      return;
+    if (this.wild.tryTalk(fx, fy))
       return;
     let npc = this.npcAtCell(fx, fy);
     if (!npc && this.map.isCounterCell(fx, fy)) {
@@ -19960,7 +20539,7 @@ wore off.`);
     const encDef = this.shell.data.encounters[this.map.id];
     const indoor = this.shell.data.field?.indoorEncounters;
     let enc = null;
-    const mode = wildMode(this.save);
+    const mode = this.wild.suppressesRoll() ? "none" : wildMode(this.save);
     if (p.surfing && encDef?.water && this.map.isWaterCell(p.cellX, p.cellY)) {
       enc = roll({ grass: encDef.water }, this.shell.rng, undefined, mode);
     } else if (this.map.isGrassCell(p.cellX, p.cellY)) {
@@ -21587,6 +22166,27 @@ class Scene {
       if (mirror)
         flags |= ENT_FLAG.mirror;
       this.emitSlot(slot, this.sheetIndex(view, npc.def.sprite), frame2, npc.px * Q4, npc.py * Q4, npc.lift ?? 0, flags);
+    }
+    const wild = ow.wild?.mons;
+    if (wild && wild.length > 0) {
+      let w = 0;
+      for (let slot = 1;slot < ENTS_MAX && w < wild.length; slot++) {
+        const i = slot - 1;
+        if (i < npcs.length && !npcs[i].hidden)
+          continue;
+        const m = wild[w++];
+        const def = view.data.sprites?.[m.sprite];
+        const frames = def?.frames ?? 6;
+        const walker = def?.walker ?? frames > 1;
+        const nf = seenAs(m.facing);
+        const phase = m.walkPhase();
+        const frame2 = frames <= 1 ? 0 : phase === 1 && walker ? WALK[nf] : STAND[nf];
+        const mirror = frames > 1 && (nf === "right" || (nf === "down" || nf === "up") && phase === 1 && m.stepFlip);
+        let flags = ENT_FLAG.walker;
+        if (mirror)
+          flags |= ENT_FLAG.mirror;
+        this.emitSlot(slot, this.sheetIndex(view, m.sprite), frame2, m.px * Q4, m.py * Q4, m.lift, flags);
+      }
     }
     for (let slot = 0;slot < ENTS_MAX; slot++) {
       if (this.entSeen[slot] === 0 && this.entShown[slot] !== 0) {
@@ -24541,7 +25141,7 @@ class OptionsMenuState {
     this.first = 0;
   }
   enhancementDefs() {
-    return [...SPEED_ROW_READY ? [SPEED_ROW] : [], ...ENHANCEMENT_ROWS];
+    return enhancementDefs();
   }
   constructor(game) {
     this.game = game;
@@ -24564,7 +25164,7 @@ class OptionsMenuState {
       return this.enhancementDefs().map((d) => ({
         label: d.label,
         choices: [...d.choices],
-        index: d === SPEED_ROW ? gameSpeedIndex(this.opts()) : this.opts()[d.key] === true ? 1 : 0
+        index: enhancementIndex(this.opts(), d)
       }));
     }
     return [...this.settingsRows(), {
@@ -24649,11 +25249,7 @@ class OptionsMenuState {
       return;
     const at = Math.max(0, Math.min(r.choices.length - 1, to));
     if (this.page === 1) {
-      const d = this.enhancementDefs()[row];
-      if (d === SPEED_ROW)
-        setGameSpeedIn(this.opts(), GAME_SPEEDS[at].key);
-      else
-        this.opts()[d.key] = at === 1;
+      setEnhancement(this.opts(), this.enhancementDefs()[row], at);
       return;
     }
     if (row === rows.length - 1) {
@@ -25619,19 +26215,21 @@ function header(ctx, title, opts = {}) {
   const { host } = ctx;
   const many = !!opts.arrows;
   const w = width(title) + (many ? 4 : 0);
-  const x = Math.max(0, Math.floor((CLOCK_COL - w) / 2));
+  const wide = w > CLOCK_COL && opts.aside === undefined;
+  const x = wide ? Math.max(1, Math.floor((COLS - w) / 2)) : Math.max(0, Math.floor((CLOCK_COL - w) / 2));
   if (many) {
     host.uiTileBottom(x, 0, UI_TILE.arrowLeft | LIGHT_BIT);
     host.uiTileBottom(x + w - 1, 0, ARROW_CURSOR | LIGHT_BIT);
     if (opts.onLeft)
       region("hdr:left", 0, 0, x + 1, 1, opts.onLeft);
+    const rightEnd = wide ? COLS : CLOCK_COL;
     if (opts.onRight)
-      region("hdr:right", x + w - 1, 0, Math.max(1, CLOCK_COL - (x + w - 1)), 1, opts.onRight);
+      region("hdr:right", x + w - 1, 0, Math.max(1, rightEnd - (x + w - 1)), 1, opts.onRight);
   }
   text(host, x + (many ? 2 : 0), 0, title, "light");
   if (opts.onTitle)
     region("hdr:title", x + (many ? 1 : 0), 0, width(title) + 2, 1, opts.onTitle);
-  const aside = opts.aside ?? clockStr(ctx.gear.clock24);
+  const aside = wide ? "" : opts.aside ?? clockStr(ctx.gear.clock24);
   if (aside)
     text(host, Math.max(0, COLS - width(aside) - 1), 0, aside, "light");
 }
@@ -26584,20 +27182,23 @@ function drawHome(ctx) {
   }
   const apps = availableApps(game).filter((a) => a !== "home");
   apps.forEach((a, i) => {
-    const col = i % 3;
-    const row2 = Math.floor(i / 3);
-    let x = [0, 7, 14][col];
-    const w = 6;
-    const y = 9 + row2 * 2;
-    if (y > 17)
+    const pos = homePill(i, apps.length);
+    if (!pos)
       return;
-    if (y === 17) {
-      if (i !== apps.length - 1 || col !== 0)
-        return;
-      x = 7;
-    }
-    pill(host, `home:${a}`, x, y, w, appOf(a).short, () => go(ctx, a));
+    pill(host, `home:${a}`, pos.x, pos.y, HOME_PILL_W, appOf(a).short, () => go(ctx, a));
   });
+}
+var HOME_PILL_W = 6;
+var HOME_COLS = [0, 7, 14];
+var HOME_LAST_ROW = { 1: [7], 2: [3, 11] };
+function homePill(i, n) {
+  const row2 = Math.floor(i / 3);
+  const y = 9 + row2 * 2;
+  if (y > 17)
+    return null;
+  const inRow = Math.min(3, n - row2 * 3);
+  const xs = inRow < 3 ? HOME_LAST_ROW[inRow] : HOME_COLS;
+  return { x: xs[i % 3], y };
 }
 function drawSteps(ctx) {
   const { host, gear } = ctx;
@@ -27765,6 +28366,64 @@ function drawGiveItem(ctx, g) {
     }
   });
 }
+
+// voxelmon/game/ui/gear/apps/enhancements.ts
+var VALUE_END2 = 18;
+var TOGGLE_X2 = 15;
+var CYCLE_X = 11;
+var FIRST_Y2 = 2;
+function opts2(ctx) {
+  return ctx.save.options ??= {};
+}
+function cycles(d) {
+  return d === VISIBLE_WILD_ROW;
+}
+function gearLabel(d) {
+  return ENHANCEMENT_GEAR[d.key]?.label ?? d.label;
+}
+function gearAbout(d, choice) {
+  const a = ENHANCEMENT_GEAR[d.key]?.about;
+  if (!a)
+    return d.label;
+  return typeof a === "string" ? a : a[choice] ?? "";
+}
+function valuePill2(ctx, id, x, y, label3, tap, on = false) {
+  const { host } = ctx;
+  const w = VALUE_END2 - x + 1;
+  const lit = on !== (pressedId() === id);
+  if (!lit)
+    fill(host, x, y, w, 1);
+  right(host, y, label3, lit ? "dark" : "fill", VALUE_END2);
+  region(id, x, y, w, 1, tap);
+}
+function drawEnhancements(ctx) {
+  const { host, ui } = ctx;
+  const o = opts2(ctx);
+  const defs = enhancementDefs();
+  let y = FIRST_Y2;
+  defs.forEach((d2, i) => {
+    const at2 = enhancementIndex(o, d2);
+    const next = () => {
+      ui.sel = i;
+      setEnhancement(o, d2, (at2 + 1) % d2.choices.length);
+    };
+    text(host, 0, y, gearLabel(d2));
+    if (cycles(d2)) {
+      valuePill2(ctx, `enh:${d2.key}`, CYCLE_X, y + 1, d2.choices[at2] ?? "", next);
+      y += 3;
+      return;
+    }
+    valuePill2(ctx, `enh:${d2.key}`, TOGGLE_X2, y, d2.choices[at2] ?? "", next, at2 === 0);
+    y += 2;
+  });
+  const d = defs[ui.sel ?? 0] ?? defs[0];
+  const said = gearAbout(d, d.choices[enhancementIndex(o, d)] ?? "");
+  wrap2(said, 18).slice(0, 2).forEach((line, k) => center(host, y + k, line));
+}
+function enhancementsKey(save) {
+  const o = save?.options ?? {};
+  return enhancementDefs().map((d) => enhancementIndex(o, d)).join("");
+}
 // voxelmon/game/ui/kantogear.ts
 function activeView(game) {
   const want = game.gearView ?? "home";
@@ -27789,6 +28448,7 @@ var DRAW = {
   notes: drawNotes,
   store: drawStore,
   options: drawOptions,
+  enhancements: drawEnhancements,
   cheats: drawCheats
 };
 var drawnFor = "";
@@ -27875,7 +28535,7 @@ function stillFrame(game) {
   let party = "";
   for (const m of game.save?.party ?? [])
     party += `${m.species}/${m.nickname ?? ""}/${m.level}/${m.hp}/${m.stats?.hp ?? 0};`;
-  const follows = view === "map" ? `|${game.gearMapPick ?? ""}|${game.overworld?.mapId ?? ""}` : view === "explorer" ? `|${explorerKey(game)}` : "";
+  const follows = view === "map" ? `|${game.gearMapPick ?? ""}|${game.overworld?.mapId ?? ""}` : view === "explorer" ? `|${explorerKey(game)}` : view === "enhancements" ? `|${enhancementsKey(game.save)}` : "";
   return `${view}|${top2?.kind ?? ""}|${pressedId() ?? ""}|${touchSerial}|${game.stack.length}|${game.overworld?.map?.id ?? ""}|` + `${gear.steps}|${gear.trip}|${clockStr(gear.clock24)}|${party}${follows}`;
 }
 function drawKantoGear(realHost, game) {
@@ -29253,7 +29913,7 @@ class PokedexState {
   digits;
   static SUBMENU = ["DATA", "CRY", "AREA", "QUIT"];
   standalone = false;
-  constructor(game, onCancel, opts2) {
+  constructor(game, onCancel, opts3) {
     this.game = game;
     this.onCancel = onCancel;
     const data = game.data;
@@ -29286,11 +29946,11 @@ class PokedexState {
         value: isSeen ? def.id : null
       });
     }
-    if (opts2?.species && mons[opts2.species]) {
+    if (opts3?.species && mons[opts3.species]) {
       this.standalone = true;
       this.mode = "entry";
-      this.entrySpecies = opts2.species;
-      const at2 = this.entries.findIndex((e) => e.value === opts2.species);
+      this.entrySpecies = opts3.species;
+      const at2 = this.entries.findIndex((e) => e.value === opts3.species);
       if (at2 >= 0)
         this.index = at2;
     }
@@ -31009,6 +31669,14 @@ class OverworldView2d {
       const f = npc.facing;
       this.put(npc.def.sprite, npc.px, npc.py - (npc.lift ?? 0), frames <= 1 ? 0 : phase === 1 && walker ? WALK2[f] : STAND2[f], frames > 1 && (f === "right" || (f === "down" || f === "up") && phase === 1 && npc.stepFlip));
     }
+    for (const m of ow.wild?.mons ?? []) {
+      const def = sprites?.[m.sprite];
+      const frames = def?.frames ?? 6;
+      const walker = def?.walker ?? frames > 1;
+      const phase = m.walkPhase();
+      const f = m.facing;
+      this.put(m.sprite, m.px, m.py - m.lift, frames <= 1 ? 0 : phase === 1 && walker ? WALK2[f] : STAND2[f], frames > 1 && (f === "right" || (f === "down" || f === "up") && phase === 1 && m.stepFlip));
+    }
     if (this.slots.size !== this.loadsSize) {
       this.loadsSize = this.slots.size;
       const loads = [{ dest: 256, sheet: "terrain", first: 0, count: 128, map: map.def.index }];
@@ -31358,13 +32026,13 @@ class TextBoxState {
   kind = "textbox";
   box;
   choicePushed = false;
-  constructor(game, text2, onDone, choice, opts2, onTyped, choiceOpts) {
+  constructor(game, text2, onDone, choice, opts3, onTyped, choiceOpts) {
     this.game = game;
     this.onDone = onDone;
     this.choice = choice;
     this.onTyped = onTyped;
     this.choiceOpts = choiceOpts;
-    this.box = new Textbox(text2, { player: game.save.player.name, rival: game.save.player.rival }, { speed: game.textSpeed(), ...opts2 });
+    this.box = new Textbox(text2, { player: game.save.player.name, rival: game.save.player.rival }, { speed: game.textSpeed(), ...opts3 });
   }
   update() {
     if (this.choice && this.box.done) {
@@ -31406,11 +32074,11 @@ class ChoiceState {
   yes;
   pending = null;
   holdFrames = 0;
-  constructor(game, cb, opts2) {
+  constructor(game, cb, opts3) {
     this.game = game;
     this.cb = cb;
-    this.yes = !opts2?.defaultNo;
-    this.noSound = opts2?.noSound === true;
+    this.yes = !opts3?.defaultNo;
+    this.noSound = opts3?.noSound === true;
   }
   noSound;
   update() {
@@ -32105,10 +32773,10 @@ ${why.slice(0, 18)}` : ""}`);
       this.showText(r.rating, onDone, () => this.audio.playSfx(r.sfx));
     });
   }
-  showAuto(text2, delay, opts2) {
-    if (opts2?.sfx)
-      this.audio.playSfx(opts2.sfx);
-    this.push(new TextBoxState(this, text2, opts2?.onDone, undefined, { auto: { delay } }));
+  showAuto(text2, delay, opts3) {
+    if (opts3?.sfx)
+      this.audio.playSfx(opts3.sfx);
+    this.push(new TextBoxState(this, text2, opts3?.onDone, undefined, { auto: { delay } }));
   }
   textSpeed() {
     const v = this.save.options?.textSpeed;
@@ -32145,8 +32813,8 @@ ${why.slice(0, 18)}` : ""}`);
   animationsOn() {
     return this.save.options?.animations !== false;
   }
-  showChoice(text2, choice, opts2) {
-    this.push(new TextBoxState(this, text2, undefined, choice, undefined, undefined, opts2));
+  showChoice(text2, choice, opts3) {
+    this.push(new TextBoxState(this, text2, undefined, choice, undefined, undefined, opts3));
   }
   deleteSave() {
     if (!this.keepUnreadable(this.host))
@@ -33656,24 +34324,24 @@ to {RAM:wNameBuffer}?`).replace(/\{RAM:wNameBuffer\}/g, defaultName).replace(/\{
     st.loseable = loseable;
     this.push(st);
   }
-  startWildBattle(species, level, opts2, onDone) {
+  startWildBattle(species, level, opts3, onDone) {
     const battle = new WildBattle(this.data, this.save, this.battleRng, species, level);
-    battle.noCatch = opts2?.noCatch === true;
-    if (opts2?.disguised)
+    battle.noCatch = opts3?.noCatch === true;
+    if (opts3?.disguised)
       battle.makeGhost();
-    else if (opts2?.unveil)
+    else if (opts3?.unveil)
       battle.makeUnveiledGhost();
-    battle.hooked = opts2?.hooked === true;
+    battle.hooked = opts3?.hooked === true;
     const st = new BattleGameState(this, species, level, battle);
     st.onDone = () => onDone?.(battle.finished);
     this.push(st);
   }
-  startOldManDemo(onDone, opts2) {
+  startOldManDemo(onDone, opts3) {
     const field = this.data.field?.oldManBattle ?? { species: "WEEDLE", level: 5 };
-    const species = opts2?.species ?? field.species;
-    const level = opts2?.level ?? field.level;
+    const species = opts3?.species ?? field.species;
+    const level = opts3?.level ?? field.level;
     const battle = new WildBattle(this.data, this.save, this.battleRng, species, level);
-    battle.makeOldManDemo(opts2?.name, opts2?.fail);
+    battle.makeOldManDemo(opts3?.name, opts3?.fail);
     const st = new BattleGameState(this, "", 0, battle);
     st.onDone = () => onDone?.();
     this.push(st);
