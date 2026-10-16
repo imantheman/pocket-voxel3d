@@ -3,19 +3,20 @@
 // settings and what each one does are core/Cheats.ts; the row names are the
 // Kanto games' (the green gear's CHEATS page) where the two share a cheat.
 // Drawn in the panel's own style -- labels from column 1, values
-// right-aligned to the edge, a label too long to share its row with its
+// right-aligned to column 18 (the mon pages' edge), a label too long to share its row with its
 // value has the value on the row below, groups a row apart -- and worked by
 // touch alone:
 //
 //   row 0      the title, CHEATS, where the other pages name the place
 //   row 1      the time and the money, as on every page
-//   rows 3-10  WILD ENCOUNTERS (its value below it), SHINY ODDS, then
+//   rows 3-9   WILD ENCOUNTERS (its value below it), SHINY ODDS,
 //              ALWAYS CATCH, INSTANT WIN, FAST EGGS, INFINITE MONEY: a tap
 //              on a row steps its value
-//   rows 12-13 DEX FULL (SET, then "FILL THE POKéDEX?" YES/NO) and GIVE
-//              ITEMS (OPEN: a pocket's items nine at a time, what the PACK
+//   rows 11-12 DEX FULL (SET, then "FILL THE POKéDEX?" YES/NO) and GIVE
+//              ITEMS (OPEN: a pocket's items eight at a time, what the PACK
 //              holds of each on the right; an item's own page with its
 //              QUANTITY, then BACK | GIVE, then "GIVE 10 POTION?" YES/NO)
+//   row 13     clear, above the tabs, as on the other pages
 //
 // The one-shot actions only run while the overworld itself has the frame
 // (no menu or text open over it), so nothing on the top screen is showing a
@@ -25,6 +26,8 @@ import { Chrome } from "./Chrome.ts";
 import { Cheats, SHINY_ODDS, WILD_RATES, WILD_RATE_LABELS } from "../core/Cheats.ts";
 
 const COLS = 20;
+/** Where values end: printRight's edge, one column in from the screen's. */
+const RIGHT = COLS - 1;
 type View = "list" | "dex" | "items" | "qty" | "give" | "message";
 
 interface Row {
@@ -43,7 +46,7 @@ const toggle = (key: string) => (panel: CheatsPanel, game: any): void => {
   panel.changed(game, key);
 };
 
-/** The page: two settings, four switches, two actions, a row between. */
+/** The page: the settings, then the two actions a row apart. */
 const ROWS: Row[] = [
   {
     label: "WILD ENCOUNTERS", widest: 6, y: 3,
@@ -61,16 +64,16 @@ const ROWS: Row[] = [
       panel.changed(game, "shinyOdds");
     },
   },
-  { label: "ALWAYS CATCH", widest: 3, y: 7, value: onOff("alwaysCatch"), tap: toggle("alwaysCatch") },
-  { label: "INSTANT WIN", widest: 3, y: 8, value: onOff("instantVictory"), tap: toggle("instantVictory") },
-  { label: "FAST EGGS", widest: 3, y: 9, value: onOff("fastEggs"), tap: toggle("fastEggs") },
-  { label: "INFINITE MONEY", widest: 3, y: 10, value: onOff("infiniteMoney"), tap: toggle("infiniteMoney") },
-  { label: "DEX FULL", widest: 3, y: 12, value: () => "SET", tap: (p) => p.go("dex") },
-  { label: "GIVE ITEMS", widest: 4, y: 13, value: () => "OPEN", tap: (p) => p.go("items") },
+  { label: "ALWAYS CATCH", widest: 3, y: 6, value: onOff("alwaysCatch"), tap: toggle("alwaysCatch") },
+  { label: "INSTANT WIN", widest: 3, y: 7, value: onOff("instantVictory"), tap: toggle("instantVictory") },
+  { label: "FAST EGGS", widest: 3, y: 8, value: onOff("fastEggs"), tap: toggle("fastEggs") },
+  { label: "INFINITE MONEY", widest: 3, y: 9, value: onOff("infiniteMoney"), tap: toggle("infiniteMoney") },
+  { label: "DEX FULL", widest: 3, y: 11, value: () => "SET", tap: (p) => p.go("dex") },
+  { label: "GIVE ITEMS", widest: 4, y: 12, value: () => "OPEN", tap: (p) => p.go("items") },
 ];
 
 /** Whether a row's value goes on the row below its label. */
-const twoLine = (r: Row): boolean => 1 + r.label.length + 1 + r.widest > COLS;
+const twoLine = (r: Row): boolean => 1 + r.label.length + 1 + r.widest > RIGHT;
 const rowsOf = (r: Row): number => (twoLine(r) ? 2 : 1);
 
 /** The item list's pockets: label, first column (its cursor one left). */
@@ -81,11 +84,11 @@ const POCKETS: { pocket: string; label: string; x: number }[] = [
   { pocket: "TM_HM", label: "TM", x: 16 },
 ];
 const LIST_TOP = 4;
-const LIST_ROWS = 9;
-const NAV_ROW = 13;
+const LIST_ROWS = 8;
+const NAV_ROW = 12;
 /** The two boxes along the bottom (YES / NO, BACK / GIVE): the battle
- *  panel's pair, four rows high. */
-const BOX_ROW = 10;
+ *  panel's pair, four rows high, a row clear of the tabs. */
+const BOX_ROW = 9;
 /** The QUANTITY row's controls: a step down, the presets, a step up. */
 const QTY_ROW = 8;
 const QTY: { label: string; x: number; set: (q: number) => number }[] = [
@@ -94,7 +97,7 @@ const QTY: { label: string; x: number; set: (q: number) => number }[] = [
   { label: "10", x: 7, set: () => 10 },
   { label: "50", x: 11, set: () => 50 },
   { label: "99", x: 15, set: () => 99 },
-  { label: "+", x: 19, set: (q) => q + 1 },
+  { label: "+", x: 18, set: (q) => q + 1 },
 ];
 
 /** `text` cut with an ellipsis to `room` tiles. */
@@ -279,7 +282,7 @@ export class CheatsPanel {
       Chrome.print("CHEATS", 0, 0);
       for (const r of ROWS) {
         Chrome.print(r.label, 1, r.y);
-        Chrome.printRight(r.value(o), COLS, twoLine(r) ? r.y + 1 : r.y);
+        Chrome.printRight(r.value(o), RIGHT, twoLine(r) ? r.y + 1 : r.y);
       }
       return;
     }
@@ -292,12 +295,12 @@ export class CheatsPanel {
     if (this.view === "message") {
       Chrome.print(this.back === "list" ? "CHEATS" : "GIVE ITEMS", 0, 0);
       this.textBox(this.message);
-      Chrome.print("▼", 18, 8);
+      Chrome.print("▼", 18, 7);
       return;
     }
     // the item views share their title row
     Chrome.print("GIVE ITEMS", 0, 0);
-    if (this.view !== "give") Chrome.printRight("BACK", COLS, 0);
+    if (this.view !== "give") Chrome.printRight("BACK", RIGHT, 0);
     if (this.view === "items") this.drawItems(game);
     else if (this.view === "qty") this.drawQty(game);
     else {
@@ -310,10 +313,10 @@ export class CheatsPanel {
     }
   }
 
-  /** The battle panel's text box, rows 3-8, two lines a row apart. */
+  /** The battle panel's text box, rows 2-7, two lines a row apart. */
   private textBox(lines: string[]): void {
-    Chrome.box(0, 3, COLS, 6);
-    lines.slice(0, 2).forEach((line, i) => Chrome.print(fit(line, COLS - 2), 1, 5 + i * 2));
+    Chrome.box(0, 2, COLS, 6);
+    lines.slice(0, 2).forEach((line, i) => Chrome.print(fit(line, COLS - 2), 1, 4 + i * 2));
   }
 
   private boxes(left: string, right: string): void {
@@ -338,22 +341,22 @@ export class CheatsPanel {
       if (!id) break;
       const have = this.count(inv, id);
       const qty = have > 0 ? `×${have}` : "";
-      Chrome.print(fit(this.itemName(game, id), COLS - 2 - (qty ? qty.length + 1 : 0)), 1, LIST_TOP + k);
-      if (qty) Chrome.printRight(qty, COLS, LIST_TOP + k);
+      Chrome.print(fit(this.itemName(game, id), RIGHT - 1 - (qty ? qty.length + 1 : 0)), 1, LIST_TOP + k);
+      if (qty) Chrome.printRight(qty, RIGHT, LIST_TOP + k);
     }
     Chrome.print("PREV", 1, NAV_ROW);
     const at = `${this.scroll + 1}/${pages}`;
     Chrome.print(at, Math.floor((COLS - at.length) / 2), NAV_ROW);
-    Chrome.printRight("NEXT", COLS, NAV_ROW);
+    Chrome.printRight("NEXT", RIGHT, NAV_ROW);
   }
 
   private drawQty(game: any): void {
     const save = game?.save ?? {};
     const max = Cheats.maxGive(save, game?.data, this.item);
-    Chrome.print(fit(this.itemName(game, this.item), COLS - 2), 1, 3);
+    Chrome.print(fit(this.itemName(game, this.item), RIGHT - 1), 1, 3);
     const line = (label: string, value: string, row: number): void => {
       Chrome.print(label, 1, row);
-      Chrome.printRight(value, COLS, row);
+      Chrome.printRight(value, RIGHT, row);
     };
     line("IN PACK", `×${this.count(save.inventory, this.item)}`, 4);
     line("IN PC", `×${this.count(save.pcItems, this.item)}`, 5);

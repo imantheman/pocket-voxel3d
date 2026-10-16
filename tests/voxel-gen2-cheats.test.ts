@@ -624,11 +624,15 @@ describe("gen2 cheats: the bottom screen's CHEATS tab", () => {
       }
       return out;
     };
-    const tidy = (what: string): void => {
+    // (the CHEATS views keep their text off column 19 -- the mon pages' right
+    // edge -- except the time and money row the panel shares)
+    const tidy = (what: string, edge = 20): void => {
       const rows: Record<number, Array<[number, number]>> = {};
       for (const { text, x, y } of printed()) {
         const w = width(text);
-        if (x < 0 || x + w > 20) throw new Error(`${what}: "${text}" at ${x},${y} runs off the row`);
+        // and the row above the tabs stays clear, as on the other pages
+        if (edge < 20 && y === 13) throw new Error(`${what}: "${text}" on the row above the tabs`);
+        if (x < 0 || x + w > (y === 1 || y === 14 ? 20 : edge)) throw new Error(`${what}: "${text}" at ${x},${y} runs off the row`);
         for (const [a, b] of rows[y] ?? []) {
           if (x < b && a < x + w) throw new Error(`${what}: "${text}" at ${x},${y} overlaps`);
         }
@@ -650,7 +654,7 @@ describe("gen2 cheats: the bottom screen's CHEATS tab", () => {
     tidy("party with five tabs");
     tap(18, 14);
     expect(page()).toBe("cheats");
-    tidy("cheats page 1");
+    tidy("cheats page 1", 19);
     // WILD ENCOUNTERS' two rows step NORMAL -> MORE -> NONE
     tap(5, 4);
     expect(game.options.wildEncounters).toBe("more");
@@ -658,57 +662,57 @@ describe("gen2 cheats: the bottom screen's CHEATS tab", () => {
     expect(game.options.wildEncounters).toBe("none");
     tap(5, 5);
     expect(game.options.shinyOdds).toBe(4096);
-    for (const [row, key] of [[7, "alwaysCatch"], [8, "instantVictory"], [9, "fastEggs"], [10, "infiniteMoney"]] as const) {
+    for (const [row, key] of [[6, "alwaysCatch"], [7, "instantVictory"], [8, "fastEggs"], [9, "infiniteMoney"]] as const) {
       tap(3, row);
       expect(game.options[key]).toBe(true);
     }
-    tidy("cheats, all on");
+    tidy("cheats, all on", 19);
     // DEX FULL: SET asks first; NO leaves the dex alone
-    tap(3, 12);
+    tap(3, 11);
     expect(panel().view).toBe("dex");
-    tidy("dex confirm");
+    tidy("dex confirm", 19);
     tap(15, 11);
     expect(panel().view).toBe("list");
     expect(Object.keys(game.save.pokedex.caught).length).toBeLessThan(251);
-    tap(3, 12);
-    tap(4, 12);
+    tap(3, 11);
+    tap(4, 11);
     expect(panel().view).toBe("message");
     expect(Object.keys(game.save.pokedex.caught).length).toBe(251);
-    tidy("dex message");
+    tidy("dex message", 19);
     tap(4, 6);
     expect(panel().view).toBe("list");
     // GIVE ITEMS: the list, a page on, a pocket, an item, ten and one more,
     // GIVE, YES
-    tap(3, 13);
+    tap(3, 12);
     expect(panel().view).toBe("items");
-    tidy("items");
-    tap(18, 13);
+    tidy("items", 19);
+    tap(18, 12);
     expect(panel().scroll).toBe(1);
-    tap(1, 13);
+    tap(1, 12);
     expect(panel().scroll).toBe(0);
     tap(8, 3);
     expect(panel().pocket).toBe("BALL");
-    tidy("balls");
+    tidy("balls", 19);
     tap(3, 4);
     expect(panel().view).toBe("qty");
     const ball = panel().item;
     tap(7, 8);
     expect(panel().qty).toBe(10);
-    tap(19, 8);
+    tap(18, 8);
     expect(panel().qty).toBe(11);
-    tidy("quantity");
+    tidy("quantity", 19);
     const had = game.save.inventory[ball] ?? 0;
-    tap(15, 12);
+    tap(15, 11);
     expect(panel().view).toBe("give");
-    tidy("give confirm");
+    tidy("give confirm", 19);
     // NO goes back to the item's page with nothing given
-    tap(15, 12);
+    tap(15, 11);
     expect(panel().view).toBe("qty");
     expect(game.save.inventory[ball] ?? 0).toBe(had);
-    tap(15, 12);
-    tap(4, 12);
+    tap(15, 11);
+    tap(4, 11);
     expect(game.save.inventory[ball]).toBe(had + 11);
-    tidy("give message");
+    tidy("give message", 19);
     tap(4, 6);
     expect(panel().view).toBe("items");
     // BACK (on the title row), and the "!" tab always opens on the list
