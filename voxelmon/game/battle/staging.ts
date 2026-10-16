@@ -137,25 +137,136 @@ export function chooseView(
   preferQ8 = 0,
 ): { orbit: number; pitch: number } {
   const preferStep = Math.round(((((preferQ8 % 256) + 256) % 256) * ORBIT_STEPS) / 256) % ORBIT_STEPS;
+  const solid = solidGrid(map);
+  // The same arena on the same map (its blocks unchanged: the solid grid is
+  // held per block version) gets the same view: asked again, answered again.
+  const memoKey = `${arena.x},${arena.y},${arena.shape},${arena.enemyCell},${arena.playerCell}|${rig}|${preferQ8}`;
+  const memo = solid !== null && typeof solid === "object" ? VIEW_MEMO.get(solid as object) : undefined;
+  const held = memo?.get(memoKey);
+  if (held) return { orbit: held.orbit, pitch: held.pitch };
   let best = { orbit: Math.round((preferStep * 256) / ORBIT_STEPS), pitch: 0 };
   let bestScore = Number.POSITIVE_INFINITY;
-  const solid = solidGrid(map);
+  let bestIdx = Number.POSITIVE_INFINITY;
+  const blockerH = rig === 1 ? VIEW_BLOCKER_INDOOR_PX : VIEW_BLOCKER_OUTDOOR_PX;
+  // The answer is the lowest score, the first in pitch-then-orbit order on a
+  // tie -- the order the views were always tried in. The views are walked
+  // cheapest turn-and-lift first instead, so a good one is found early and
+  // the rest can be ruled out: hidden cards and the fill only add to a
+  // view's turn and lift, so one that cannot beat the best (lower, or equal
+  // and earlier) is not walked at all, and its walk stops once it is over.
+  // (Every term is a multiple of 1/16, so the sums are exact.)
+  for (const c of viewOrder(preferStep)) {
+    const { idx, q8, pitchQ8, base } = c;
+    const earlier = idx < bestIdx;
+    if (base > bestScore || (base === bestScore && !earlier)) continue;
+    const eye = eyeOf(arena, rig, q8, pitchQ8);
+    const room = bestScore - base;
+    // (hits that lose: past the room, or up to it for a later view)
+    const enemy = cardHits(map, solid, arena.enemyCell, eye, blockerH, earlier ? Math.floor(room / 2) + 1 : room / 2);
+    if (earlier ? enemy * 2 > room : enemy * 2 >= room) continue;
+    const left = room - enemy * 2;
+    const player = cardHits(map, solid, arena.playerCell, eye, blockerH, earlier ? Math.floor(left) + 1 : left);
+    let score = enemy * 2 + player + base;
+    if (!(score < bestScore || (score === bestScore && earlier))) continue;
+    if (eyeInFill(map, arena, rig, q8, pitchQ8)) score += VIEW_EYE_IN_FILL_COST;
+    if (score < bestScore || (score === bestScore && earlier)) {
+      bestScore = score;
+      bestIdx = idx;
+      best = { orbit: q8, pitch: pitchQ8 };
+    }
+  }
+  if (solid !== null && typeof solid === "object") {
+    let m = VIEW_MEMO.get(solid as object);
+    if (!m) {
+      m = new Map();
+      VIEW_MEMO.set(solid as object, m);
+    }
+    m.set(memoKey, best);
+  }
+  return { orbit: best.orbit, pitch: best.pitch };
+}
+
+/**
+ * Every (pitch, orbit) chooseView tries, with its place in the old order
+ * (`idx`: pitch by pitch, orbit by orbit) and its turn-and-lift cost
+ * (`base`), cheapest first (then by idx) -- per preferred orbit, made once.
+ */
+function viewOrder(preferStep: number): { idx: number; q8: number; pitchQ8: number; base: number }[] {
+  let order = VIEW_ORDERS.get(preferStep);
+  if (order) return order;
+  order = [];
+  let idx = 0;
   for (const pitchQ8 of VIEW_PITCHES) {
     for (let step = 0; step < ORBIT_STEPS; step++) {
       const q8 = Math.round((step * 256) / ORBIT_STEPS);
-      const hits = sightlineHits(map, arena, rig, q8, pitchQ8, solid);
       // The rig was solved at orbit 0 and its own height; changes earn themselves.
       const d = (step - preferStep + ORBIT_STEPS) % ORBIT_STEPS;
       const turn = Math.min(d, ORBIT_STEPS - d) / ORBIT_STEPS;
-      let score = hits.enemy * 2 + hits.player + turn * ORBIT_TURN_COST + (pitchQ8 / 256) * VIEW_PITCH_COST;
-      if (eyeInFill(map, arena, rig, q8, pitchQ8)) score += VIEW_EYE_IN_FILL_COST;
-      if (score < bestScore) {
-        bestScore = score;
-        best = { orbit: q8, pitch: pitchQ8 };
-      }
+      order.push({ idx: idx++, q8, pitchQ8, base: turn * ORBIT_TURN_COST + (pitchQ8 / 256) * VIEW_PITCH_COST });
     }
   }
-  return best;
+  order.sort((a, b) => a.base - b.base || a.idx - b.idx);
+  VIEW_ORDERS.set(preferStep, order);
+  return order;
+}
+const VIEW_ORDERS = new Map<number, { idx: number; q8: number; pitchQ8: number; base: number }[]>();
+
+/** chooseView's answers, per solid grid (a map at one block version), per arena. */
+const VIEW_MEMO = new WeakMap<object, Map<string, { orbit: number; pitch: number }>>();
+
+/**
+ * sightlineHits' count for one card, written out for chooseView: the same
+ * samples, the same cells, the same blocking test -- stopping once the line
+ * stands taller than any blocker (it only climbs, from the card's middle up
+ * to an eye above it) or once `stopAt` hits are counted (enough to lose).
+ */
+function cardHits(
+  map: GameMap,
+  solid: ArrayLike<number> | null,
+  mon: readonly [number, number] | number[],
+  at: { x: number; y: number; h: number },
+  blockerH: number,
+  stopAt: number,
+): number {
+  const sw = map.widthCells;
+  const sh = map.heightCells;
+  // a map that answers the grid is Gold's, whose inBounds is the rectangle
+  const fast = solid !== null && solid.length === sw * sh;
+  const cx0 = mon[0]! + 0.5;
+  const cy0 = mon[1]! + 0.5;
+  const dx = at.x + 0.5 - cx0;
+  const dy = at.y + 0.5 - cy0;
+  const eyeH = at.h;
+  const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / VIEW_SAMPLE_CELLS));
+  const climbs = eyeH > VIEW_CARD_PX;
+  let last = NaN;
+  let hits = 0;
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const qx = cx0 + dx * t;
+    const qy = cy0 + dy * t;
+    const x = Math.floor(qx);
+    const y = Math.floor(qy);
+    const key = x * 4096 + y;
+    if (key === last) continue;
+    last = key;
+    const lineH = VIEW_CARD_PX + (eyeH - VIEW_CARD_PX) * t;
+    if (!(lineH < blockerH)) {
+      // climbing, it never comes back under
+      if (climbs) break;
+      continue;
+    }
+    let blocked: boolean;
+    if (fast) blocked = x >= 0 && y >= 0 && x < sw && y < sh && solid![y * sw + x] === 1;
+    else if (!map.inBounds(x, y)) blocked = false;
+    else if (solid) blocked = solid[y * sw + x] === 1;
+    else blocked = !map.isWalkableCell(x, y) && !map.isWaterCell(x, y);
+    if (blocked) {
+      hits++;
+      if (hits >= stopAt) return hits;
+    }
+  }
+  return hits;
 }
 
 /**
