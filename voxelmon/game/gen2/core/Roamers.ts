@@ -515,14 +515,17 @@ export const Roamers = {
   // Lua: Roamers.lua:374-399 -- the enemy for a roaming battle, from Mon.new.
   // Stored HP 0 means fresh: roll DVs and bank full HP now (.InitRoamHP);
   // otherwise reuse DVs and HP. The Lua also returns the slot; its callers
-  // take only the mon.
-  beginBattle(save: SaveLike, index: number, data: any): any {
+  // take only the mon. `freshDVs` (not the Lua's): VISIBLE WILD
+  // (world/VisibleWild.ts) rolls a fresh beast's DVs when it shows it, so the
+  // one walked into is the one that was shown; a beast already met keeps its
+  // stored DVs whatever is passed.
+  beginBattle(save: SaveLike, index: number, data: any, freshDVs?: any): any {
     const slot = Roamers.slot(save, index);
     if (!Roamers.active(slot)) return undefined;
     const s = slot!;
     const fresh = (s.hp ?? 0) === 0;
     const mon = Mon.new(data, s.species!, s.level ?? LEVEL, {
-      dvs: !fresh ? s.dvs : undefined,
+      dvs: !fresh ? s.dvs : (freshDVs ? { ...freshDVs } : undefined),
     });
     if (!mon) return undefined;
     s.dvs = mon.dvs;

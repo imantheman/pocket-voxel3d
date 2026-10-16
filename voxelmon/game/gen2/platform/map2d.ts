@@ -359,12 +359,16 @@ export function drawMap2D(world: any, data: any, options?: any): boolean {
     }
     const sheet = s.sheet;
     if (!sheet) continue;
-    const pk = daytime + (v.palette ?? sprites[v.spriteId]?.paletteId ?? "");
-    let colours = s.pals.get(pk);
+    // a VISIBLE WILD mon brings its own colours (world/VisibleWild.ts)
+    let colours: Palette4 | null | undefined = v.wildArt ? v.wildArt.colors : undefined;
     if (colours === undefined) {
-      const def = sprites[v.spriteId] ?? { paletteId: v.palette };
-      colours = (Palettes.spritePalette(world.palettes, daytime, def) as unknown as Palette4 | undefined) ?? null;
-      s.pals.set(pk, colours);
+      const pk = daytime + (v.palette ?? sprites[v.spriteId]?.paletteId ?? "");
+      colours = s.pals.get(pk);
+      if (colours === undefined) {
+        const def = sprites[v.spriteId] ?? { paletteId: v.palette };
+        colours = (Palettes.spritePalette(world.palettes, daytime, def) as unknown as Palette4 | undefined) ?? null;
+        s.pals.set(pk, colours);
+      }
     }
     const pal = colours ? lcd.palette(colours, true) : 0;
     const frames = Math.max(1, sheet.th >> 1);

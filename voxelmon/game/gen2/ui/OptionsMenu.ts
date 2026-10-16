@@ -54,6 +54,7 @@ import { SCREENS_2D, VIEW_MODES, ZOOMS_2D, screen2dIndex, viewIndex, zoom2dIndex
 import { CAMERA_SPEEDS, cameraSpeedIndex } from "../../cameraspeed.ts";
 import { runningShoesOn } from "../../runshoes.ts";
 import { eventPokemonOn } from "../../eventmons.ts";
+import { Cheats, VISIBLE_WILD_LABELS, VISIBLE_WILD_MODES } from "../core/Cheats.ts";
 
 type Options = Record<string, any>;
 
@@ -119,6 +120,19 @@ export const GAME_SPEED_ROW: OptionRow = {
     setGameSpeedIn(options, GAME_SPEEDS[(((gameSpeedIndex(options) + delta) % n) + n) % n]!.key);
   },
   text: (options) => Strings.get(GAME_SPEEDS[gameSpeedIndex(options)]!.label),
+};
+
+/**
+ * VISIBLE WILD (world/VisibleWild.ts): OFF, SOME or MANY wild mons standing
+ * in the overworld, saved as options.visibleWild. The bottom screen's
+ * ENHANCEMENTS tab steps the same key.
+ */
+export const VISIBLE_WILD_ROW: OptionRow = {
+  label: Strings.source("VISIBLE WILD"), key: "visibleWild", port: true,
+  cycle: (options, delta) => {
+    options.visibleWild = Cheats.step(VISIBLE_WILD_MODES, Cheats.visibleWild(options), delta);
+  },
+  text: (options) => Strings.get(VISIBLE_WILD_LABELS[Cheats.visibleWild(options)]),
 };
 
 // Lua: OptionsMenu.lua:122 -- each row: the label, the option key it edits,
@@ -308,6 +322,7 @@ const ROWS: OptionRow[] = [
   onOffRow("PARTY EXP SHARE", "partyExpShare"),
   onOffRow("TRADE EVO LV.40", "tradeEvoLv40"),
   onOffRow("HMS WITHOUT MOVE", "hmsWithoutMove"),
+  VISIBLE_WILD_ROW,
   // Not the Lua's: CHEATS -- the CHEATS tab on the bottom screen
   // (ui/Companion.ts). Turning it off hides the tab; the cheats set there
   // stay as they are. OFF unless set.
@@ -360,7 +375,7 @@ const GROUPS: Group[] = [
   // its CHEATS live on the bottom screen here, behind the CHEATS row)
   {
     id: "group.enhancements", label: Strings.source("ENHANCEMENTS"),
-    members: ["gameSpeed", "expForCatching", "partyExpShare", "tradeEvoLv40", "hmsWithoutMove"],
+    members: ["gameSpeed", "expForCatching", "partyExpShare", "tradeEvoLv40", "hmsWithoutMove", "visibleWild"],
   },
 ];
 

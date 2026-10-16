@@ -553,7 +553,7 @@ describe("the real cartridges (headless)", () => {
 describe("the SPEED, ENHANCEMENTS and CHEATS keys", () => {
   const CHEAT_KEYS = {
     gameSpeed: 2, expForCatching: true, partyExpShare: true, tradeEvoLv40: true, hmsWithoutMove: true,
-    cheats: true, wildEncounters: "none", shinyOdds: 64, alwaysCatch: true,
+    visibleWild: "many", cheats: true, wildEncounters: "none", shinyOdds: 64, alwaysCatch: true,
     instantVictory: true, fastEggs: true, infiniteMoney: true,
   };
   for (const g of GAMES) {

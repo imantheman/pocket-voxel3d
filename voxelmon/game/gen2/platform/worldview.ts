@@ -8,7 +8,7 @@
 // state, and this module is the only thing that turns that state into
 // pictures. Nothing here changes the world.
 
-import { ENT_FLAG, ENTS_MAX, Q4 } from "../../../../contracts/spec/voxel-spec.ts";
+import { ENT_ART_MAX, ENT_ART_SHEET, ENT_FLAG, ENTS_MAX, Q4 } from "../../../../contracts/spec/voxel-spec.ts";
 import type { VoxelHost } from "../../host.ts";
 import { BattleStage, type StageData } from "./battlestage.ts";
 import { is2d } from "../../viewmode.ts";
@@ -403,8 +403,57 @@ export class WorldView {
     this.entShown[slot] = 1;
   }
 
+  /** The entArt slots: the art key each holds, and the frame it was last
+   *  used (the least recently used one is the next to go). */
+  private artKeys: (string | null)[] = new Array(ENT_ART_MAX).fill(null);
+  private artUsed = new Int32Array(ENT_ART_MAX);
+  private artFrame = 0;
+
+  /**
+   * The entArt slot holding `art` (a VISIBLE WILD mon's icon sheet in its
+   * colours), stating it to the host when it is new; -1 when it cannot be
+   * drawn (a host without the op, an uncooked sheet).
+   */
+  private artSlot(art: { gfx: string; colors: number[][]; key: string }): number {
+    if (!this.host.entArt) return -1;
+    const key = art.key;
+    let k = this.artKeys.indexOf(key);
+    if (k < 0) {
+      let img: { ids: ArrayLike<number>; tw: number; th: number } | null = null;
+      try {
+        img = Assets.image(art.gfx) as unknown as { ids: ArrayLike<number>; tw: number; th: number };
+      } catch {
+        img = null;
+      }
+      if (!img || img.tw < 2 || img.th < 4) return -1;
+      // the oldest slot not drawn this frame
+      k = 0;
+      for (let i = 1; i < ENT_ART_MAX; i++) if (this.artUsed[i]! < this.artUsed[k]!) k = i;
+      if (this.artUsed[k] === this.artFrame && this.artKeys[k] !== null) return -1;
+      const id = (x: number, y: number): number => (img!.ids[y * img!.tw + x] ?? 0) & 0xffff;
+      const two = (x: number, y: number): number => id(x, y) | (id(x + 1, y) << 16);
+      const c = art.colors;
+      this.host.entArt(k, two(0, 0), two(0, 1), two(0, 2), two(0, 3),
+        rgb555(c[1] as [number, number, number]), rgb555(c[2] as [number, number, number]), rgb555(c[3] as [number, number, number]));
+      this.artKeys[k] = key;
+    }
+    this.artUsed[k] = this.artFrame;
+    return k;
+  }
+
   private actor(slot: number, a: ActorView, ghost: boolean, ox = 0, oy = 0): void {
     if (a.visible === false) return;
+    const art = (a as ActorView & { wildArt?: { gfx: string; colors: number[][]; key: string } }).wildArt;
+    if (art) {
+      // a VISIBLE WILD mon: its icon sheet from the Gold screen's tiles
+      const k = this.artSlot(art);
+      if (k < 0) return;
+      let flags = ENT_FLAG.walker;
+      if (a.mirror) flags |= ENT_FLAG.mirror;
+      this.emitSlot(slot, ENT_ART_SHEET + k, (a.frame ?? 0) & 1,
+        Math.round((a.px + ox) * Q4), Math.round((a.py + oy) * Q4), Math.round(a.lift ?? 0), flags);
+      return;
+    }
     const def = a.spriteId ? this.data?.sprites?.[a.spriteId] : undefined;
     const frames = def?.frames ?? 6;
     const walker = def?.walker ?? frames > 1;
@@ -435,6 +484,7 @@ export class WorldView {
 
   private emitEnts(vs: WorldViewState): void {
     this.entSeen.fill(0);
+    this.artFrame++;
     if (vs.actors) {
       // the Lua's Y-sorted draw list: the player in slot 0, everyone else after
       let slot = 1;

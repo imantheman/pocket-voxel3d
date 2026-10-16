@@ -28,6 +28,11 @@
 //                   the TM for HEADBUTT / ROCK SMASH) and the player has the
 //                   badge the cart asks for (FieldMoves.partyMoveUser,
 //                   PartyMenu.buildSubmenuItems).
+//   visibleWild     VISIBLE WILD      off / some / many: wild mons stand in
+//                   the overworld where a step could meet one, and walking
+//                   into one is that battle; random step encounters stop
+//                   while it is on. The whole set of rules is
+//                   world/VisibleWild.ts's header.
 //
 // CHEATS (the bottom screen's CHEATS tab, shown while `cheats` is on; turning
 // the tab off hides it and leaves every cheat as it was set -- they keep
@@ -79,6 +84,11 @@ type Options = Record<string, any>;
 export type WildRate = "none" | "less" | "normal" | "more";
 
 export const WILD_RATES: WildRate[] = ["none", "less", "normal", "more"];
+
+/** VISIBLE WILD (world/VisibleWild.ts). */
+export type VisibleWildMode = "off" | "some" | "many";
+export const VISIBLE_WILD_MODES: VisibleWildMode[] = ["off", "some", "many"];
+export const VISIBLE_WILD_LABELS: Record<VisibleWildMode, string> = { off: "OFF", some: "SOME", many: "MANY" };
 export const WILD_RATE_LABELS: Record<WildRate, string> = {
   none: "NONE", less: "LESS", normal: "NORMAL", more: "MORE",
 };
@@ -134,6 +144,12 @@ export const Cheats = {
   instantVictory: (o: Options | null = Cheats.options()): boolean => on(o, "instantVictory"),
   fastEggs: (o: Options | null = Cheats.options()): boolean => on(o, "fastEggs"),
   infiniteMoney: (o: Options | null = Cheats.options()): boolean => on(o, "infiniteMoney"),
+
+  /** VISIBLE WILD: "off" unless set to one of the others. */
+  visibleWild(o: Options | null = Cheats.options()): VisibleWildMode {
+    const v = o ? o.visibleWild : undefined;
+    return VISIBLE_WILD_MODES.includes(v) ? v : "off";
+  },
 
   wildRate(o: Options | null = Cheats.options()): WildRate {
     const v = o ? o.wildEncounters : undefined;

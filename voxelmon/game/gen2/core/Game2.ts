@@ -990,7 +990,7 @@ export class Game2 {
    * on the 3DS it never drove anything, and its levels run to 200X.)
    */
   logicSpeed(): number {
-    if (this.club?.session || this.club?.battle) return 1;
+    if (this.linked()) return 1;
     if (this.speedOverride != null) return Math.max(1, Number(this.speedOverride) || 1);
     return gameSpeedOf(this.options);
   }
@@ -1171,6 +1171,11 @@ export class Game2 {
   private club: CableClub | null = null;
   cableClub(): CableClub {
     return (this.club ??= new CableClub(this));
+  }
+  /** A link is open: the CABLE CLUB's session or a link battle (SPEED runs
+   *  1X and VISIBLE WILD stands down). */
+  linked(): boolean {
+    return !!(this.club?.session || this.club?.battle);
   }
   /** Once a frame (gen2/main.ts): the link, when one is open. */
   serviceLink(): void {

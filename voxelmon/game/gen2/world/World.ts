@@ -75,6 +75,7 @@ import { NPC } from "./Npc.ts";
 import { Party } from "../shared/pokemon/Party.ts";
 import { Sprites } from "../shared/pokemon/Sprites.ts";
 import { Permissions } from "./Permissions.ts";
+import { VisibleWild } from "./VisibleWild.ts";
 import { Player, SpriteHandle, type ActorView } from "./Player.ts";
 import { Pokerus } from "../core/Pokerus.ts";
 import { Roamers } from "../core/Roamers.ts";
@@ -1322,6 +1323,16 @@ export function peopleView_W6(self: World, out: WorldActorEntry[], hideAll: bool
       const d = near ? away(npc.px ?? 0, npc.py ?? 0) : 0;
       if (near && d > NEAR_PX) continue;
       list.push({ kind: "npc", entity: npc, ox: 0, oy: 0, py: npc.py, npcIndex: i, d });
+    }
+  }
+  // VISIBLE WILD's mons (world/VisibleWild.ts), drawn like any person
+  const wild = self.visibleWild ? self.visibleWild.list : undefined;
+  if (wild) {
+    for (const w of wild) {
+      const npc = w.npc;
+      const d = near ? away(npc.px, npc.py) : 0;
+      if (near && d > NEAR_PX) continue;
+      list.push({ kind: "npc", entity: npc, ox: 0, oy: 0, py: npc.py, npcIndex: -1, d });
     }
   }
   for (const g of seq_W6(self.ghosts)) {
@@ -5277,6 +5288,10 @@ export class World {
     if (truthy(BugContest.isActive(save))) {
       return this.tryContestEncounter(collision);
     }
+    // VISIBLE WILD (world/VisibleWild.ts): the mons stand in the grass
+    // instead, so no step rolls one -- not even a roaming beast, which shows
+    // there too. The contest above keeps its own.
+    if (VisibleWild.active(this)) return false;
     // TryWildEncounter's own order: `.EncounterRate` FIRST, and
     // ChooseWildEncounter -- roamer check included -- only on a pass.
     const tables = this.wildTables();
@@ -11260,6 +11275,8 @@ export class World {
         this.player.stopForEvent();
       }
       this.updatePeople();
+      // VISIBLE WILD's mons finish the step they are on and wait
+      if (this.visibleWild) this.visibleWild.step(this, false);
       return;
     }
 
@@ -11282,6 +11299,12 @@ export class World {
 
     // People keep their anim paths even while the player is idle / mid-step.
     this.updatePeople();
+
+    // VISIBLE WILD (world/VisibleWild.ts): its mons wander, come and go, and
+    // the one the player has walked into is that battle.
+    const wild: VisibleWild = this.visibleWild ?? (this.visibleWild = new VisibleWild());
+    wild.step(this, true);
+    if (wild.touch(this)) return;
 
     // MOVEMENT: FREE (the Kanto games' free walk, world/freemove.ts): the
     // position is continuous and steered by the camera; the grid below still

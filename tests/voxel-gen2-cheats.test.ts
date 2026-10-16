@@ -534,7 +534,7 @@ describe("gen2 cheats: OPTION and the save", () => {
     expect(labels).toContain("ENHANCEMENTS");
     expect(labels.slice(-3)).toEqual(["MENU ACCOUNT", "CHEATS", "BACK"]);
     const page = menu.focusRow("expForCatching")!;
-    expect(page.view.map((r) => r.label)).toEqual(["SPEED", "EXP FOR CATCHING", "PARTY EXP SHARE", "TRADE EVO LV.40", "HMS WITHOUT MOVE", "BACK"]);
+    expect(page.view.map((r) => r.label)).toEqual(["SPEED", "EXP FOR CATCHING", "PARTY EXP SHARE", "TRADE EVO LV.40", "HMS WITHOUT MOVE", "VISIBLE WILD", "BACK"]);
     // SPEED (voxelmon/game/gamespeed.ts) reads 1X unless set
     for (const r of page.rows) expect(r.text!(page.options)).toBe(r.key === "gameSpeed" ? "1X" : "OFF");
     // every label fits the 17 columns from column 2
