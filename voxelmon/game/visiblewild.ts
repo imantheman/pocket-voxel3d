@@ -168,10 +168,10 @@ function flagsRowByMethods(map: WildMapLike, y: number, out: Uint8Array): void {
   }
 }
 
-/** classifyCells a slice at a time: `step(budget)` does whole rows until
- *  about `budget` cells are done. `out` reads CELL_NONE where not yet done.
- *  Two passes a row: the row's flags (one look at the map a cell), then its
- *  kinds from the flags of it and the rows either side. */
+/** classifyCells a slice at a time: `step(budget)` does about `budget`
+ *  cells' work. `out` reads CELL_NONE where not yet done. Two passes a row:
+ *  the row's flags (one look at the map a cell), then its kinds from the
+ *  flags of it and the rows either side. */
 export class CellClassifier {
   readonly out: Uint8Array;
   private readonly flags: Uint8Array;
@@ -201,30 +201,44 @@ export class CellClassifier {
     return this.y >= this.map.heightCells - 1;
   }
 
+  /** The next cell of row y whose kind is wanted. */
+  private x = 1;
+
+  /** About `budget` cells' work: a row of flags counts its width, a kind
+   *  one each, and a row may be finished over several calls. */
   step(budget: number): void {
     const map = this.map;
     const w = map.widthCells;
     let n = 0;
     while (!this.done && n < budget) {
-      // the flags of this row and the next
-      while (this.fy <= this.y + 1 && this.fy < map.heightCells) {
+      // the flags of this row and the next, a row a unit of work
+      if (this.fy <= this.y + 1 && this.fy < map.heightCells) {
         if (map.cellFlagsRow) map.cellFlagsRow(this.fy, this.flags);
         else flagsRowByMethods(map, this.fy, this.flags);
         this.fy++;
+        n += w;
+        continue;
       }
-      this.kindsRow(this.y);
-      n += w;
-      this.y++;
+      const x1 = Math.min(w - 1, this.x + (budget - n));
+      this.kindsSpan(this.y, this.x, x1);
+      n += x1 - this.x;
+      this.x = x1;
+      if (this.x >= w - 1) {
+        this.rowCounts(this.y);
+        this.y++;
+        this.x = 1;
+      }
     }
   }
 
-  private kindsRow(y: number): void {
+  /** Kinds of row y's cells x0 .. x1 - 1. */
+  private kindsSpan(y: number, x0: number, x1: number): void {
     const w = this.map.widthCells;
     const F = this.flags;
     const out = this.out;
     const cave = this.cave, land = this.land, water = this.water;
     const up = (y - 1) * w, at = y * w, dn = (y + 1) * w;
-    for (let x = 1; x < w - 1; x++) {
+    for (let x = x0; x < x1; x++) {
       const f = F[at + x]!;
       let k = CELL_NONE;
       const dry = (f & CF_WALK) !== 0 && (f & CF_WATER) === 0;
@@ -255,8 +269,14 @@ export class CellClassifier {
       }
       out[at + x] = ok ? k : CELL_NONE;
     }
-    // the row's running counts, for the spawner: a window's count, and its
-    // r-th cell, in a few lookups
+  }
+
+  /** Row y's running counts, for the spawner: a window's count, and its
+   *  r-th cell, in a few lookups. */
+  private rowCounts(y: number): void {
+    const w = this.map.widthCells;
+    const out = this.out;
+    const at = y * w;
     const pw = w + 1;
     const pl = this.landPrefix, pv = this.waterPrefix;
     let nl = 0, nw = 0;
