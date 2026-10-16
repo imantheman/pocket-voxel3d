@@ -254,7 +254,7 @@ export class Companion {
         this.cheats.view = "list";
         this.sig = "";
       }
-    } else if (page === "cheats" && cy >= 2 && cy <= 13) {
+    } else if (page === "cheats" && cy !== 1 && cy <= 13) {
       this.cheats.tap(game, cx, cy);
       console.log(`[pv] gold panel: cheats ${this.cheats.view} (tap at ${cx},${cy})`);
       this.sig = "";
@@ -755,7 +755,8 @@ export class Companion {
     if (game?.world?.map && this.page === "map") {
       this.drawMap(game);
     } else if (game?.world?.map) {
-      Chrome.print(this.location(game), 0, 0);
+      // (the CHEATS page has its own title where the place goes)
+      if (this.shownPage(game) !== "cheats") Chrome.print(this.location(game), 0, 0);
       Chrome.print(this.time(game), 0, 1);
       Chrome.printRight(`¥${game.save?.player?.money ?? 0}`, COLS, 1);
       if (!this.hud) this.hud = BattleHud.new(game.data?.gen2MenuGfx, game.data?.gen2Palettes);

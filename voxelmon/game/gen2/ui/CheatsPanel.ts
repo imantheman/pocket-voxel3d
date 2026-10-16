@@ -7,8 +7,8 @@
 // value has the value on the row below, groups a row apart -- and worked by
 // touch alone:
 //
-//   rows 0-1   the panel's header (place, time, money), as on every page
-//   row 2      the title, CHEATS
+//   row 0      the title, CHEATS, where the other pages name the place
+//   row 1      the time and the money, as on every page
 //   rows 3-10  WILD ENCOUNTERS (its value below it), SHINY ODDS, then
 //              ALWAYS CATCH, INSTANT WIN, FAST EGGS, INFINITE MONEY: a tap
 //              on a row steps its value
@@ -168,7 +168,7 @@ export class CheatsPanel {
 
   // ------------------------------------------------------------------ taps
 
-  /** A tap at cell (cx, cy) of the page (rows 2-13). */
+  /** A tap at cell (cx, cy) of the page (rows 0-13). */
   tap(game: any, cx: number, cy: number): void {
     if (this.view === "message") {
       this.view = this.back;
@@ -204,7 +204,7 @@ export class CheatsPanel {
   }
 
   private itemsTap(game: any, cx: number, cy: number): void {
-    if (cy === 2) {
+    if (cy === 0) {
       if (cx >= 14) this.view = "list";
       return;
     }
@@ -232,7 +232,7 @@ export class CheatsPanel {
   }
 
   private qtyTap(game: any, cx: number, cy: number): void {
-    if (cy === 2) {
+    if (cy === 0) {
       if (cx >= 14) this.view = "items";
       return;
     }
@@ -276,7 +276,7 @@ export class CheatsPanel {
   draw(game: any): void {
     const o = game?.options ?? {};
     if (this.view === "list") {
-      Chrome.print("CHEATS", 1, 2);
+      Chrome.print("CHEATS", 0, 0);
       for (const r of ROWS) {
         Chrome.print(r.label, 1, r.y);
         Chrome.printRight(r.value(o), COLS, twoLine(r) ? r.y + 1 : r.y);
@@ -284,20 +284,20 @@ export class CheatsPanel {
       return;
     }
     if (this.view === "dex") {
-      Chrome.print("CHEATS", 1, 2);
+      Chrome.print("CHEATS", 0, 0);
       this.textBox(["FILL THE POKéDEX?"]);
       this.boxes("YES", "NO");
       return;
     }
     if (this.view === "message") {
-      Chrome.print(this.back === "list" ? "CHEATS" : "GIVE ITEMS", 1, 2);
+      Chrome.print(this.back === "list" ? "CHEATS" : "GIVE ITEMS", 0, 0);
       this.textBox(this.message);
       Chrome.print("▼", 18, 8);
       return;
     }
     // the item views share their title row
-    Chrome.print("GIVE ITEMS", 1, 2);
-    if (this.view !== "give") Chrome.printRight("BACK", COLS, 2);
+    Chrome.print("GIVE ITEMS", 0, 0);
+    if (this.view !== "give") Chrome.printRight("BACK", COLS, 0);
     if (this.view === "items") this.drawItems(game);
     else if (this.view === "qty") this.drawQty(game);
     else {
@@ -342,7 +342,7 @@ export class CheatsPanel {
       if (qty) Chrome.printRight(qty, COLS, LIST_TOP + k);
     }
     Chrome.print("PREV", 1, NAV_ROW);
-    const at = `PAGE ${this.scroll + 1}/${pages}`;
+    const at = `${this.scroll + 1}/${pages}`;
     Chrome.print(at, Math.floor((COLS - at.length) / 2), NAV_ROW);
     Chrome.printRight("NEXT", COLS, NAV_ROW);
   }

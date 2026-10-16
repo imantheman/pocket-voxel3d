@@ -711,8 +711,8 @@ describe("gen2 cheats: the bottom screen's CHEATS tab", () => {
     tidy("give message");
     tap(4, 6);
     expect(panel().view).toBe("items");
-    // BACK, and the "!" tab always opens on the list
-    tap(17, 2);
+    // BACK (on the title row), and the "!" tab always opens on the list
+    tap(17, 0);
     expect(panel().view).toBe("list");
     panel().view = "items";
     tap(19, 14);
