@@ -545,3 +545,28 @@ describe("the real cartridges (headless)", () => {
     }, 120000);
   }
 });
+
+// The port's ENHANCEMENTS and CHEATS (core/Cheats.ts) are options on the
+// options table, which the Lua save also carries as save.options; none of
+// them is a cartridge setting, so the VC converter must neither write them
+// nor make them up.
+describe("the ENHANCEMENTS and CHEATS keys", () => {
+  const CHEAT_KEYS = {
+    expForCatching: true, partyExpShare: true, tradeEvoLv40: true, hmsWithoutMove: true,
+    cheats: true, wildEncounters: "none", shinyOdds: 64, alwaysCatch: true,
+    instantVictory: true, fastEggs: true, infiniteMoney: true,
+  };
+  for (const g of GAMES) {
+    const d = data[g];
+    test.skipIf(!d)(`${g}: the cartridge save is the same with them or without; none come back`, () => {
+      const plain = richSave(g, d!);
+      const cheat = richSave(g, d!);
+      cheat.options = { ...(cheat.options ?? {}), ...CHEAT_KEYS };
+      const a = saveToCart(plain, d!, g, null).bytes;
+      const b = saveToCart(cheat, d!, g, null).bytes;
+      expect(Buffer.from(b).equals(Buffer.from(a))).toBe(true);
+      const back = cartToSave(b, d!, g).save;
+      for (const k of Object.keys(CHEAT_KEYS)) expect(back.options?.[k]).toBeUndefined();
+    });
+  }
+});
