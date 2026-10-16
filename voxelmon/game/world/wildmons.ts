@@ -177,14 +177,18 @@ export class VisibleWild {
     return this.suppressesRoll() && wildMode(this.save as never) !== "none";
   }
 
-  /** A new map (setMap): none of the old map's mons come along. */
+  /** A new map (setMap, after the map is built): none of the old map's
+   *  mons come along. */
   onMap(): void {
     this.mons.length = 0;
     this.cells = null;
     this.cellsMap = null;
+    this.forMap = this.ow.map ?? null;
     this.filled = false;
     this.spawnTimer = 0;
   }
+  /** The map the mons belong to (onMap's). */
+  private forMap: GameMap | null = null;
 
   /** The map's cell kinds, worked out on first use after a map load. */
   cellKinds(): Uint8Array {
@@ -217,7 +221,8 @@ export class VisibleWild {
     if (frozen) return false;
     const ow = this.ow;
     const p = ow.player;
-    if (this.cellsMap !== ow.map) this.onMap();
+    // a map built without setMap's call (never, but cheap to be sure)
+    if (this.forMap !== ow.map) this.onMap();
     for (const m of this.mons) {
       m.advance();
       if (!m.moving && --m.timer <= 0) this.wander(m);

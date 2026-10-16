@@ -610,6 +610,18 @@ describe("VISIBLE WILD in the overworld", () => {
     expect(ow.wild.mons.length).toBe(0);
   });
 
+  test.skipIf(!hasGen)("a map's first tick keeps what stands there (it only clears on a new map)", () => {
+    const game = makeGame();
+    game.save.options.visibleWild = "some";
+    const ow = game.overworld;
+    ow.setMap("ROUTE_1", 9, 27, "up");
+    const [x, y] = grassRow(ow);
+    ow.setMap("ROUTE_1", x, y, "right");
+    const m = placeMon(ow, "PIDGEY", 3, 2);
+    game.tick(0);
+    expect(ow.wild.mons).toContain(m);
+  });
+
   test.skipIf(!hasGen)("frozen while a script runs; off while a link is up", () => {
     const game = makeGame();
     game.save.options.visibleWild = "many";
