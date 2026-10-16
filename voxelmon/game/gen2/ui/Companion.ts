@@ -524,15 +524,23 @@ export class Companion {
         Chrome.printRight("BACK", COLS, 0);
       }
       this.drawBattleStill(game, st, view, enemy, player);
-    });
+    }, !st.hpAnim); // (recorded at once unless a bar is draining: then it is a new picture each redraw)
     // the text, on the box's two rows as the top screen sets them; a line
     // already typed out is the same cells while the next one types, so each
-    // row is a block of its own too
-    st.syncTyper?.();
+    // row is a block of its own too -- but not the line still typing, which
+    // changes every redraw (recording a picture that never comes back costs
+    // more than drawing it), nor an empty one
+    const typing = !!st.syncTyper?.();
     const lines: string[] = st.messageLines?.() ?? [];
-    for (let i = 0; i < Math.min(2, lines.length); i++) {
+    const rows = Math.min(2, lines.length);
+    // (the typer hands back every row, the ones not reached yet empty: the
+    // row typing is the last one with anything in it)
+    let live = -1;
+    if (typing) for (let i = 0; i < rows; i++) if (lines[i] !== "") live = i;
+    for (let i = 0; i < rows; i++) {
       const line = lines[i]!;
-      cachedBlock(this.lineOwners[i]!, `${line}|${fonts}`, () => Chrome.print(line, 1, 3 + i * 2));
+      if (line === "" || i === live) Chrome.print(line, 1, 3 + i * 2);
+      else cachedBlock(this.lineOwners[i]!, `${line}|${fonts}`, () => Chrome.print(line, 1, 3 + i * 2), true);
     }
     if (st.messageArrowVisible?.()) Chrome.print("▼", 18, 6);
   }
