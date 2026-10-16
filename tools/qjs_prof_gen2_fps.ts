@@ -25,10 +25,13 @@ import { Font } from "../voxelmon/game/gen2/shared/render/Font.ts";
 import { GbcPalette } from "../voxelmon/game/gen2/shared/render/GbcPalette.ts";
 import { Companion } from "../voxelmon/game/gen2/ui/Companion.ts";
 import { BattleHud } from "../voxelmon/game/gen2/ui/BattleHud.ts";
+import { BattleAnimView } from "../voxelmon/game/gen2/ui/BattleAnimView.ts";
+import { AnimRunner, AnimRunnerInstance } from "../voxelmon/game/gen2/battle/AnimRunner.ts";
 import { Strings } from "../voxelmon/game/gen2/shared/core/Strings.ts";
 import { Sprites } from "../voxelmon/game/gen2/shared/pokemon/Sprites.ts";
 import { WorldView } from "../voxelmon/game/gen2/platform/worldview.ts";
 import { VOX_BTN } from "../contracts/spec/voxel-spec.ts";
+import { setClockSource } from "../voxelmon/game/gen2/platform/clock.ts";
 
 const g = globalThis as unknown as { goldGame: any; frame: (b: number) => void };
 const game = g.goldGame;
@@ -41,6 +44,9 @@ declare const HASH: boolean;
 declare const SEGS: string[];
 const wrapping = typeof WRAP !== "undefined" && WRAP;
 const hashing = typeof HASH !== "undefined" && HASH;
+// a pinned clock while hashing: the bottom screen shows the time, and the
+// daytime picks palettes
+if (hashing) setClockSource({ now: () => 1790000000 });
 const PHASES: readonly string[] = typeof SEGS !== "undefined" ? SEGS : ["menu", "battle"];
 // NOCACHE=1: every cachedBlock drawn for real (screen.ts), the reference a
 // HASH run with the cache is compared against
@@ -50,6 +56,11 @@ declare const NOCACHE: boolean;
 if (typeof NOCACHE !== "undefined" && NOCACHE) (globalThis as { noBlockCache?: boolean }).noBlockCache = true;
 
 const stats: Record<string, { us: number; n: number }> = {};
+/** This compose's share (SLOWONLY: kept only for a compose past SLOW). */
+const frameStats: Record<string, { us: number; n: number }> = {};
+let slowCount = 0;
+declare const SLOWONLY: boolean;
+const slowOnly = (typeof SLOWONLY !== "undefined" && SLOWONLY) || typeof LOGICSLOW !== "undefined";
 let on = false;
 const done = new Set<any>();
 function wrap(owner: any, label: string): void {
@@ -68,7 +79,7 @@ function wrap(owner: any, label: string): void {
         try {
           return orig.apply(this, args);
         } finally {
-          const s = (stats[key] ??= { us: 0, n: 0 });
+          const s = ((slowOnly ? frameStats : stats)[key] ??= { us: 0, n: 0 });
           s.us += now() - a;
           s.n++;
         }
@@ -85,6 +96,9 @@ if (wrapping) {
   wrap(Font, "Font");
   wrap(Companion.prototype, "Companion");
   wrap(BattleHud.prototype, "BattleHud");
+  wrap(BattleAnimView.prototype, "AnimView");
+  wrap(AnimRunnerInstance.prototype, "AnimRunner");
+  wrap(AnimRunner, "AnimRunner.static");
   wrap(Strings, "Strings");
   wrap(Sprites, "Sprites");
   wrap(WorldView.prototype, "WorldView");
@@ -105,6 +119,30 @@ if (typeof SIGLOG !== "undefined" && SIGLOG) {
   };
 }
 
+
+// LOGICSLOW=<us>: the wrapped split of each logic tick past that (with
+// SLOWONLY's per-compose bookkeeping turned onto game.logicFrame instead)
+declare const LOGICSLOW: number;
+if (typeof LOGICSLOW !== "undefined") {
+  const lf = game.logicFrame.bind(game);
+  game.logicFrame = (b: number): void => {
+    for (const key of Object.keys(frameStats)) delete frameStats[key];
+    const a = now();
+    lf(b);
+    const spent = now() - a;
+    if (on && spent > LOGICSLOW) {
+      slowCount++;
+      const st = game.stack.top();
+      console.log(`[fps] slow tick ${spent.toFixed(0)} us: ${st?.screenId} ${st?.phase ?? ""} msg=${JSON.stringify(st?.message ?? "").slice(0, 40)}`);
+      for (const [key, s] of Object.entries(frameStats)) {
+        const t = (stats[key] ??= { us: 0, n: 0 });
+        t.us += s.us;
+        t.n += s.n;
+      }
+    }
+    for (const key of Object.keys(frameStats)) delete frameStats[key];
+  };
+}
 // ---- the bottom screen's ops, hashed (HASH) -----------------------------------
 let h = 0x811c9dc5 | 0;
 const mix = (v: number): void => {
@@ -129,7 +167,8 @@ if (hashing) {
   // every bottom-screen op (and every other op the host takes) mixed in order,
   // with a frame marker: two runs whose op streams match drew the same
   for (const name of Object.keys(nat)) {
-    if (!/Bottom|uiPanel|^ui[A-Z]|^lcd/.test(name)) continue;
+    // (and the 3D battle's stage: where the arena stands, the camera, the cards)
+    if (!/Bottom|uiPanel|^ui[A-Z]|^lcd|^arena|^battleCam|^card/.test(name)) continue;
     const orig = nat[name];
     if (typeof orig !== "function") continue;
     nat[name] = (...args: unknown[]) => {
@@ -209,6 +248,51 @@ function battleMixPad(t: number): number {
   }
   return walkPad(t);
 }
+// The "anims" segment: a battle held at its menu and the animations below
+// played over it one after another (BattleState.startAnim, stepped by its
+// update as a turn's would be), each one's composes timed apart.
+const ANIMS: [string, number][] = [
+  ["DOUBLE_EDGE", 1], ["ANIM_PLAYER_DAMAGE", 1], ["ANIM_ENEMY_DAMAGE", 0], ["SWIFT", 0], ["DEFENSE_CURL", 1],
+  ["LIGHT_SCREEN", 1], ["EGG_BOMB", 1], ["ANIM_SEND_OUT_MON", 0], ["DOUBLE_EDGE", 0],
+];
+let animAt = -1;
+declare const STARTPROF: boolean;
+const startProf = typeof STARTPROF !== "undefined" && STARTPROF;
+let starts = 0;
+let animState: any = null;
+let animStats: { name: string; frames: number; us: number; max: number; startUs: number } | null = null;
+function animsPad(t: number): number {
+  if (!animState || game.stack.top() !== animState) {
+    if (t < 30) return 0;
+    while (game.stack.top()) game.stack.pop();
+    game.save.party = party();
+    const wild: any = Mon.new(game.data, "CHANSEY", 60, { dvs: perfect() });
+    const battle: any = Battle.new({ data: game.data, party: game.save.party, wild, save: game.save });
+    Screens.push(game, "Gen2BattleState", { battle, save: game.save, onDone: () => game.stack.pop() });
+    animState = game.stack.top();
+    animAt = -1;
+    return 0;
+  }
+  const st = animState;
+  if (st.phase !== "menu") return n % 2 === 0 ? VOX_BTN.a : 0;
+  if (st.anim || st.hpAnim) return 0;
+  if (animStats) {
+    const s = animStats;
+    console.log(`[fps] anim ${s.name}: ${s.frames} composes, draw avg ${(s.us / Math.max(1, s.frames)).toFixed(0)} us max ${s.max.toFixed(0)} us; start ${s.startUs.toFixed(0)} us`);
+    animStats = null;
+  }
+  animAt = (animAt + 1) % ANIMS.length;
+  const [name, turn] = ANIMS[animAt]!;
+  const key = st.anims?.moves?.[name] ?? st.anims?.ids?.[name];
+  const a = now();
+  // STARTPROF: the wrapped methods timed only inside startAnim
+  const wasOn = on;
+  if (startProf) { on = true; starts++; }
+  const ok = st.startAnim(key, { turn, isMove: !name.startsWith("ANIM_") });
+  if (startProf) on = wasOn;
+  animStats = { name: `${name}/${turn}${ok ? "" : " (none)"}`, frames: 0, us: 0, max: 0, startUs: now() - a };
+  return 0;
+}
 function menuPad(t: number): number {
   if (t === 1) {
     while (game.stack.top()) game.stack.pop();
@@ -237,6 +321,22 @@ game.draw = (lcd: any): void => {
   drawOrig(lcd);
   const spent = now() - a;
   if (on) drawUs += spent;
+  if (animStats && on && animState?.anim) {
+    animStats.frames++;
+    animStats.us += spent;
+    if (spent > animStats.max) animStats.max = spent;
+  }
+  if (slowOnly && typeof LOGICSLOW === "undefined") {
+    if (on && spent > SLOW) {
+      slowCount++;
+      for (const [key, s] of Object.entries(frameStats)) {
+        const t = (stats[key] ??= { us: 0, n: 0 });
+        t.us += s.us;
+        t.n += s.n;
+      }
+    }
+    for (const key of Object.keys(frameStats)) delete frameStats[key];
+  }
   // SLOW=<us>: each compose past that, with what was up
   if (typeof SLOW !== "undefined" && on && spent > SLOW) {
     const st = game.stack.top();
@@ -244,6 +344,12 @@ game.draw = (lcd: any): void => {
   }
 };
 declare const SLOW: number;
+/** SETTLE=<steps>: how long a segment settles before it counts (default 120). */
+declare const SETTLE: number;
+/** SPEED=2: GAME SPEED 2X throughout. */
+declare const SPEED: number;
+/** ANIMONLY=<name>: in the anims segment, count only that animation's frames. */
+declare const ANIMONLY: string;
 
 function report(): void {
   const name = PHASES[k];
@@ -254,7 +360,9 @@ function report(): void {
     h = 0x811c9dc5 | 0;
     return;
   }
-  const c = Math.max(1, composed);
+  const c = Math.max(1, startProf ? starts : slowOnly ? slowCount : composed);
+  if (slowOnly) console.log(`[fps] ${slowCount} composes/ticks past ${typeof SLOW !== "undefined" ? SLOW : LOGICSLOW} us; the split below is per slow compose`);
+  slowCount = 0;
   console.log(`[fps] ${name}: ${composed} composed; guest per composed frame avg ${(segUs / c / 1000).toFixed(2)} ms max ${(segMax / 1000).toFixed(1)}; game.draw ${(drawUs / c / 1000).toFixed(2)} ms`);
   if (wrapping) {
     const rows = Object.entries(stats).sort((x, y) => y[1].us - x[1].us).slice(0, 40);
@@ -263,6 +371,35 @@ function report(): void {
   for (const key of Object.keys(stats)) delete stats[key];
 }
 
+// HUDBENCH=1: once the battle stands at its menu, each side's HUD cells drawn
+// 200 times over (G.push/pop round each, into the Lcd as it stands), timed
+// (with WRAP, split), then the segment goes on
+declare const HUDBENCH: boolean;
+let hudBenched = false;
+function hudBench(st: any): void {
+  if (hudBenched || typeof HUDBENCH === "undefined" || !HUDBENCH) return;
+  if (st?.screenId !== "Gen2BattleState" || st.phase !== "menu" || !st.staged3d) return;
+  hudBenched = true;
+  for (const key of Object.keys(stats)) delete stats[key];
+  const was = on;
+  on = true;
+  const lcd = (globalThis as any).__gen2Lcd;
+  const enemy = st.activeMon("enemy");
+  const player = st.activeMon("player");
+  for (const [side, fn] of [["enemy", () => st.drawEnemyHudCells(enemy)], ["player", () => st.drawPlayerHudCells(player)]] as [string, () => void][]) {
+    const a = now();
+    for (let i = 0; i < 200; i++) {
+      lcd.begin();
+      G.push();
+      try { fn(); } finally { G.pop(); }
+    }
+    console.log(`[fps] hudbench ${side}: ${((now() - a) / 200).toFixed(1)} us a draw`);
+  }
+  on = was;
+  const rows = Object.entries(stats).sort((x, y) => y[1].us - x[1].us).slice(0, 25);
+  for (const [key, s] of rows) console.log(`[fps]   ${(s.us / 400).toFixed(1).padStart(8)} us  ${(s.n / 400).toFixed(1).padStart(7)} calls  ${key}`);
+  for (const key of Object.keys(stats)) delete stats[key];
+}
 let lastTop = "";
 const seen = new Set<string>();
 g.frame = (b: number): void => {
@@ -281,7 +418,7 @@ g.frame = (b: number): void => {
     game.save.party = party();
     game.save.repelSteps = 60000;
     if (game.world) game.world.trainerBeaten = () => true;
-    game.setGameSpeed(1);
+    game.setGameSpeed(typeof SPEED !== "undefined" ? SPEED : 1);
     ready = n + 60;
   }
   if (ready >= 0 && n >= ready) {
@@ -297,8 +434,10 @@ g.frame = (b: number): void => {
       } else {
         battleDone = true;
         mixDone = true;
+        animState = null;
+        animStats = null;
         while (game.stack.top()) game.stack.pop();
-        if (PHASES[k] === "battle" || PHASES[k] === "battlemix") game.world.setMap("ROUTE_29", 20, 8, "down");
+        if (PHASES[k] === "battle" || PHASES[k] === "battlemix" || PHASES[k] === "anims") game.world.setMap("ROUTE_29", 20, 8, "down");
       }
     }
     const phase = PHASES[k];
@@ -306,15 +445,18 @@ g.frame = (b: number): void => {
     else if (phase === "menu") pad = menuPad(t);
     else if (phase === "menusub") pad = menuSubPad(t);
     else if (phase === "battlemix") pad = battleMixPad(t);
+    else if (phase === "anims") pad = animsPad(t);
     // the first 120 steps settle (the screen's fade in, the battle's intro);
     // BUSY=1 counts only the battle's frames off its menus (the turns)
     const st = game.stack.top();
-    on = t > 120 && !!phase && (!busyOnly || (st?.screenId === "Gen2BattleState" && st.phase !== "menu" && st.phase !== "moves"));
+    on = (typeof ANIMONLY === "undefined" || !!(animStats && animStats.name.startsWith(ANIMONLY))) && !startProf && t > (typeof SETTLE !== "undefined" ? SETTLE : 120) && !!phase && (!busyOnly || (st?.screenId === "Gen2BattleState" && st.phase !== "menu" && st.phase !== "moves"));
   }
   const topObj = game.stack.top();
+  hudBench(topObj);
   const top = topObj?.screenId ?? "-";
   if (top !== lastTop) lastTop = top;
   if (topObj && wrapping) wrap(Object.getPrototypeOf(topObj), `top:${top}`);
+  if (topObj?.battle && wrapping) wrap(Object.getPrototypeOf(topObj.battle), "Battle");
   if (game.world && wrapping) wrap(Object.getPrototypeOf(game.world), "World");
   if (hashing && on) {
     for (const s of game.stack.screens ?? game.stack.items ?? []) seen.add(s?.screenId ?? "?");
