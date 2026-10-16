@@ -37,6 +37,29 @@ const DELTA: Record<string, [number, number]> = { up: [0, -1], down: [0, 1], lef
 // Lua: Map.lua:82
 let warnedCellTile = false;
 
+/** Map.byBlocks' tables: per collision table, per predicate, each block id's
+ *  four cells' answers (block 0 and a block with no quad: the $ff answer). */
+const BLOCK_TABLES = new WeakMap<object, Record<string, Uint8Array>>();
+function blockTable(coll: any, pred: Uint8Array, predKey: string): Uint8Array {
+  const held = coll && typeof coll === "object" ? BLOCK_TABLES.get(coll) : undefined;
+  const hit = held?.[predKey];
+  if (hit) return hit;
+  const t = new Uint8Array(256 * 4);
+  for (let id = 0; id < 256; id++) {
+    const quad = id === 0 || !coll ? undefined : coll[id];
+    for (let q = 0; q < 4; q++) {
+      const c = quad ? (quad[q] ?? 0xff) : 0xff;
+      t[id * 4 + q] = pred[c & 0xff]!;
+    }
+  }
+  if (coll && typeof coll === "object") {
+    const m = held ?? {};
+    m[predKey] = t;
+    if (!held) BLOCK_TABLES.set(coll, m);
+  }
+  return t;
+}
+
 export class Map {
   static DELTA = DELTA;
 
@@ -315,20 +338,7 @@ export class Map {
       if (Permissions.isWarpCollision(c) || Permissions.isGrass(c)) continue;
       if (Permissions.isWalkable(c) || (surfing && Permissions.isWater(c))) open[c] = 1;
     }
-    const blocks = this.blocks;
-    const coll = this.collision;
-    const bw = this.width;
-    for (let cy = 0; cy < h; cy++) {
-      const brow = (cy >> 1) * bw;
-      const ly = (cy & 1) * 2;
-      for (let cx = 0; cx < w; cx++) {
-        const id = blocks[brow + (cx >> 1)] ?? 0;
-        // cellCollision: block 0 and a block with no quad are $ff
-        const quad = id === 0 || !coll ? undefined : coll[id];
-        const c = quad ? (quad[ly + (cx & 1)] ?? 0xff) : 0xff;
-        if (open[c & 0xff]) out[cy * w + cx] = 1;
-      }
-    }
+    this.byBlocks(open, surfing ? "open1" : "open0", out);
     // the warp cells shut after, from the warp table, rather than a lookup
     // in it for every cell of the map
     for (const k of Object.keys(this._warpAt)) {
@@ -360,20 +370,44 @@ export class Map {
     for (let c = 0; c < 256; c++) {
       if (!Permissions.isWalkable(c) && !Permissions.isWater(c)) solid[c] = 1;
     }
+    this.byBlocks(solid, "solid", out);
+    return out;
+  }
+
+  /**
+   * out[cell] = pred[the cell's COLL byte] (cellCollision: block 0 and a block
+   * with no quad are $ff) for every cell, a block's four at a time from a
+   * table of each block id's four answers -- built once per collision table
+   * and predicate. A cell a time, with its block and quad looked up, the
+   * pass was ~40 ms of a battle's start on the 3DS.
+   */
+  private byBlocks(pred: Uint8Array, predKey: string, out: Uint8Array): void {
+    const w = this.widthCells;
     const blocks = this.blocks;
     const coll = this.collision;
     const bw = this.width;
-    for (let cy = 0; cy < h; cy++) {
-      const brow = (cy >> 1) * bw;
-      const ly = (cy & 1) * 2;
-      for (let cx = 0; cx < w; cx++) {
-        const id = blocks[brow + (cx >> 1)] ?? 0;
-        const quad = id === 0 || !coll ? undefined : coll[id];
-        const c = quad ? (quad[ly + (cx & 1)] ?? 0xff) : 0xff;
-        out[cy * w + cx] = solid[c & 0xff]!;
+    const bh = this.height;
+    const table = blockTable(coll, pred, predKey);
+    for (let by = 0; by < bh; by++) {
+      for (let bx = 0; bx < bw; bx++) {
+        const id = blocks[by * bw + bx] ?? 0;
+        const o = by * 2 * w + bx * 2;
+        if (id >= 0 && id < 256 && (id | 0) === id) {
+          const b = id * 4;
+          out[o] = table[b]!;
+          out[o + 1] = table[b + 1]!;
+          out[o + w] = table[b + 2]!;
+          out[o + w + 1] = table[b + 3]!;
+        } else {
+          // (an id past the byte range: the quad looked up as ever)
+          const quad = id === 0 || !coll ? undefined : coll[id];
+          for (let q = 0; q < 4; q++) {
+            const c = quad ? (quad[q] ?? 0xff) : 0xff;
+            out[o + (q >> 1) * w + (q & 1)] = pred[c & 0xff]!;
+          }
+        }
       }
     }
-    return out;
   }
 
   // Lua: Map.lua:253-262 -- coordinate-only (no facing/event filter).
