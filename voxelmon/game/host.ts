@@ -44,6 +44,9 @@ export interface VoxelHost {
   /** voxel-spec.ts emoteArt: the bubble a pak with no emote page draws
    * (Gold's), as four Gold-screen tile ids and OBJ colours 1-3 (RGB555). */
   emoteArt?(tl: number, tr: number, bl: number, br: number, c1: number, c2: number, c3: number): void;
+  /** voxel-spec.ts entArt: art slot k, a two-frame card from Gold-screen
+   * tiles (two ids an argument, `a | b << 16`) and OBJ colours 1-3. */
+  entArt?(k: number, f0top: number, f0bottom: number, f1top: number, f1bottom: number, c1: number, c2: number, c3: number): void;
   pic(slot: number, page: number, x: number, y: number, w: number, h: number): void;
   /**
    * How far out of the screen a pic stands, Q8 (256 = as far as the 3D
@@ -301,6 +304,9 @@ export class RecorderHost implements VoxelHost {
   }
   emoteArt(tl: number, tr: number, bl: number, br: number, c1: number, c2: number, c3: number): void {
     this.op(VOX_OP.emoteArt, tl, tr, bl, br, c1, c2, c3);
+  }
+  entArt(k: number, f0top: number, f0bottom: number, f1top: number, f1bottom: number, c1: number, c2: number, c3: number): void {
+    this.op(VOX_OP.entArt, k, f0top, f0bottom, f1top, f1bottom, c1, c2, c3);
   }
   uiTile(x: number, y: number, tile: number): void {
     this.op(VOX_OP.uiTile, x, y, tile);

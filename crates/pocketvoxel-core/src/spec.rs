@@ -283,6 +283,9 @@ pub const SHADOW_ALPHA_BATTLE: f32 = 0.68;
 
 /// Max simultaneously shown entity billboards (player is slot 0).
 pub const ENTS_MAX: usize = 16;
+/// The `entArt` op's art slots, and the `ent` sheet of slot 0.
+pub const ENT_ART_MAX: usize = 8;
+pub const ENT_ART_SHEET: i32 = 28672;
 
 /// Entity billboard flags.
 pub mod ent_flag {
@@ -382,6 +385,7 @@ pub mod op {
     pub const GB_WIDE_OBJS: u32 = 116;
     pub const LCD_TALL: u32 = 117;
     pub const EMOTE_ART: u32 = 118;
+    pub const ENT_ART: u32 = 119;
 }
 
 /// Fixed-point scales used by op args.

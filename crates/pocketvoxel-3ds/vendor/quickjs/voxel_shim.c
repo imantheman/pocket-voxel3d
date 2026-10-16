@@ -386,6 +386,8 @@ int qjs_register_voxel(JSContext *ctx) {
     add_num(ctx, o, "emote",    32, 2);
     /* the bubble a pak with no emote page draws (Gold's), by Gold-screen tiles */
     add_num(ctx, o, "emoteArt", 118, 7);
+    /* an entity card from Gold-screen tiles (VISIBLE WILD's icon mons) */
+    add_num(ctx, o, "entArt",   119, 8);
     add_num(ctx, o, "pic",      33, 6);
     add_num(ctx, o, "picHide",  34, 1);
     add_num(ctx, o, "picDepth", 35, 2);

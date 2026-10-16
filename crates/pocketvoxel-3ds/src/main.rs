@@ -1984,6 +1984,46 @@ fn build_emote_tex(lcd: &pocketvoxel_core::lcd::LcdScreen, atl: &[pak::AtlasPage
     Some(t)
 }
 
+/// An `entArt` slot (spec; VISIBLE WILD's mons, drawn with the party-menu
+/// icon the cart shows an overworld mon as, which the Gold paks carry no
+/// page for) as a 16x32 RGBA8 texture: frame 0's four Gold-screen tiles
+/// over frame 1's, read out of the LCD tile pages as build_emote_tex reads
+/// them, colour 0 clear and 1-3 the OBJ colours sent.
+fn build_ent_art_tex(lcd: &pocketvoxel_core::lcd::LcdScreen, atl: &[pak::AtlasPage],
+                     pages: &mut Vec<(u16, Vec<u8>, usize)>, art: &[u16; 11]) -> Option<texture::Texture> {
+    let mut cols = [0u32; 4];
+    for (i, c) in cols.iter_mut().enumerate().skip(1) {
+        *c = pocketvoxel_core::lcd::LcdScreen::abgr(art[7 + i]);
+    }
+    let mut out = vec![0u8; 16 * 32 * 4];
+    let mut last = usize::MAX;
+    for q in 0..8u32 {
+        let (page, tile) = lcd.tile_source(art[q as usize])?;
+        // frame (q / 4) stacked below the one before; TL TR BL BR in each
+        let (ox, oy) = ((q & 1) * 8, ((q >> 1) & 1) * 8 + (q >> 2) * 16);
+        for y in 0..8u32 {
+            let row = lcd_page_row(pages, atl, &mut last, page, tile, y as u8);
+            for x in 0..8u32 {
+                let v = (row[x as usize] & 3) as usize;
+                if v == 0 { continue; }
+                let c = cols[v];
+                let o = tiled_off(ox + x, oy + y, 16);
+                out[o] = (c >> 24) as u8;
+                out[o + 1] = (c >> 16) as u8;
+                out[o + 2] = (c >> 8) as u8;
+                out[o + 3] = c as u8;
+            }
+        }
+    }
+    let mut t = texture::Texture::new(
+        texture::TextureParameters::new_2d(16, 32, texture::ColorFormat::Rgba8)).ok()?;
+    t.load_image(&out, texture::Face::default()).ok()?;
+    unsafe { gsp_flush(out.as_ptr(), out.len() as u32); }
+    t.set_filter(texture::Filter::Nearest, texture::Filter::Nearest);
+    t.set_wrap(texture::Wrap::ClampToEdge, texture::Wrap::ClampToEdge);
+    Some(t)
+}
+
 /// The canvas textures' size: 512x256 RGBA5551 each, or 1024x512 for a
 /// picture too big for that (2D ZOOM OUT's FAR and MAX), which is also
 /// smoothed as it shrinks onto the screen.
@@ -5476,6 +5516,10 @@ fn main() {
     // serial it was built for.
     let mut emote_tex: Option<texture::Texture> = None;
     let mut emote_tex_serial: u32 = u32::MAX;
+    // The entArt slots (spec `entArt`; build_ent_art_tex), and the art
+    // serial each was built for.
+    let mut ent_art_tex: [Option<texture::Texture>; pocketvoxel_core::spec::ENT_ART_MAX] = Default::default();
+    let mut ent_art_serial = [u32::MAX; pocketvoxel_core::spec::ENT_ART_MAX];
     let mut lcd_hold: Option<buffer::Info> = None;
     // Gold's dim quad (geometry_tint): black over the whole top screen at
     // GOLD_DIM_ALPHA, in the UI ortho the Gold screen draws in. Built once.
@@ -7109,7 +7153,7 @@ fn main() {
                     // As ScreenPic above: the content fills w * prescale of
                     // the uploaded surface. (An emoteArt bubble is no page:
                     // it fills its own 16x16 texture.)
-                    let (sx, sy) = if *page == EMOTE_ART_PAGE { (1.0, 1.0) } else {
+                    let (sx, sy) = if *page == EMOTE_ART_PAGE || draw::ent_art_page(*page).is_some() { (1.0, 1.0) } else {
                         let Some(pg) = pak_static.atlases.get(*page as usize) else { bad_page("card", *page as i64); continue; };
                         let (pw, ph) = page_tex_size(pg);
                         let s = page_prescale(pg) as f32;
@@ -7226,6 +7270,22 @@ if page_tex.len() < pak_static.atlases.len() {
                     if let Some(t) = build_emote_tex(&sc.lcd, &pak_static.atlases, &mut lcd_pages, &art) {
                         if let Some(old) = emote_tex.replace(t) { page_tex_retired.push(old); }
                         emote_tex_serial = sc.emote_art_serial;
+                    }
+                }
+            }
+        }
+        // The entArt slots' textures (VISIBLE WILD's mons), each built from
+        // the Gold screen's tile pages when its art changes (a stale one is
+        // held a frame, like a page's).
+        if card_groups.iter().any(|g| draw::ent_art_page(g.0).is_some()) {
+            let sc = unsafe { voxel::scene() };
+            for k in 0..pocketvoxel_core::spec::ENT_ART_MAX {
+                if !card_groups.iter().any(|g| draw::ent_art_page(g.0) == Some(k)) { continue; }
+                let Some(art) = sc.ent_art[k] else { continue };
+                if ent_art_tex[k].is_none() || ent_art_serial[k] != sc.ent_art_serial[k] {
+                    if let Some(t) = build_ent_art_tex(&sc.lcd, &pak_static.atlases, &mut lcd_pages, &art) {
+                        if let Some(old) = ent_art_tex[k].replace(t) { page_tex_retired.push(old); }
+                        ent_art_serial[k] = sc.ent_art_serial[k];
                     }
                 }
             }
@@ -7807,9 +7867,13 @@ if page_tex.len() < pak_static.atlases.len() {
             Some((*pg as usize, bi))
         }).collect();
         let page_tex_ref = &page_tex;
-        // a card's texture: its page's, or the emoteArt bubble's own
+        // a card's texture: its page's, the emoteArt bubble's own, or an
+        // entArt slot's
+        let ent_art_ref = &ent_art_tex;
         let card_tex = |pg: usize| -> Option<&texture::Texture> {
-            if pg == EMOTE_ART_PAGE as usize { emote_tex.as_ref() } else { page_tex_ref.get(pg).and_then(|o| o.as_ref()) }
+            if pg == EMOTE_ART_PAGE as usize { emote_tex.as_ref() }
+            else if let Some(k) = draw::ent_art_page(pg as u16) { ent_art_ref[k].as_ref() }
+            else { page_tex_ref.get(pg).and_then(|o| o.as_ref()) }
         };
         let gb_tex_ref = gb_tex[gb_cur].as_ref();
         let gb_wide_ref = gb_wide_bufs.as_ref();
@@ -8329,6 +8393,7 @@ if page_tex.len() < pak_static.atlases.len() {
                             match card_tex(*pg) {
                                 Some(t) => frame.bind_texture(texture::Index::Texture0, t),
                                 None if *pg == EMOTE_ART_PAGE as usize => continue,
+                                None if draw::ent_art_page(*pg as u16).is_some() => continue,
                                 None => {}
                             }
                             frame.draw_arrays(buffer::Primitive::Triangles, ci, None).unwrap();
@@ -8460,6 +8525,7 @@ if page_tex.len() < pak_static.atlases.len() {
                         match card_tex(*pg) {
                             Some(t) => frame.bind_texture(texture::Index::Texture0, t),
                             None if *pg == EMOTE_ART_PAGE as usize => continue,
+                            None if draw::ent_art_page(*pg as u16).is_some() => continue,
                             None => {}
                         }
                         frame.draw_arrays(buffer::Primitive::Triangles, ci, None).unwrap();

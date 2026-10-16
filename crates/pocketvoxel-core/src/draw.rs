@@ -128,6 +128,26 @@ pub const EMOTE_LIFT_PX: f32 = 18.0;
 /// ever draws one, so a host that does not bind that op never sees it.
 pub const EMOTE_ART_PAGE: u16 = u16::MAX;
 
+/// The `Item::Card` page of `entArt` slot 0 (slot k is ENT_ART_PAGE0 + k):
+/// no atlas page, but the slot's 16x32 texture the host builds from the
+/// Gold screen's tiles. Only a scene that was sent `entArt` draws one.
+pub const ENT_ART_PAGE0: u16 = u16::MAX - 0x10;
+
+/// Whether a card page is an `entArt` slot's texture, and which.
+pub fn ent_art_page(page: u16) -> Option<usize> {
+    let k = page.wrapping_sub(ENT_ART_PAGE0) as usize;
+    if page >= ENT_ART_PAGE0 && k < crate::spec::ENT_ART_MAX { Some(k) } else { None }
+}
+
+/// The `entArt` slot an entity's sheet names, when that slot holds art.
+fn ent_art_slot(scene: &Scene, sheet: i32) -> Option<usize> {
+    let k = sheet.checked_sub(crate::spec::ENT_ART_SHEET)?;
+    if !(0..crate::spec::ENT_ART_MAX as i32).contains(&k) {
+        return None;
+    }
+    scene.ent_art[k as usize].map(|_| k as usize)
+}
+
 /// The mod's billboard camera-ward pull (world px), a projection-invariant
 /// depth bias: `PULL_BASE + max(0, PULL_NUM*cos a - PULL_SUB) / max(sin a,
 /// PULL_MIN_SIN)` with `a` the camera pitch from straight down. Applied by
@@ -966,13 +986,21 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
     for (_, ent) in scene.ents.iter().enumerate()
         .filter(|(i, e)| ent_drawn(scene, *i, e))
     {
-        let Some(page) = page_at(pak, ent.sheet) else {
-            continue;
+        // an `entArt` card (spec `entArt`): the host's own 16x32 texture of
+        // the slot, its frame the top or bottom half
+        let (card_page, uv) = if let Some(k) = ent_art_slot(scene, ent.sheet) {
+            let v0 = if ent.frame.rem_euclid(2) == 1 { 0.5 } else { 0.0 };
+            (ENT_ART_PAGE0 + k as u16, [0.0, v0, 1.0, v0 + 0.5])
+        } else {
+            let Some(page) = page_at(pak, ent.sheet) else {
+                continue;
+            };
+            (ent.sheet as u16, sheet_uv(page, ent.frame))
         };
         items.push(Item::Card {
             verts: card_verts(ent_feet(ent), card_w, card_w, a, fwd_x, fwd_z),
-            page: ent.sheet as u16,
-            uv: sheet_uv(page, ent.frame),
+            page: card_page,
+            uv,
             mirror: ent.flags & ent_flag::MIRROR != 0,
             pull: pull_card,
         });
@@ -1524,6 +1552,35 @@ mod tests {
     /// The rung's grass/flower dials strip the far chunk's DETAIL meshes and
     /// nothing else: the same chunk's terrain still draws, because terrain is
     /// the silhouette and only the chunk cap bounds it.
+
+    /// An `entArt` entity draws its slot's own texture (no atlas page), the
+    /// frame's half of it, once the slot holds art -- and nothing before.
+    #[test]
+    fn an_ent_art_entity_draws_its_slot() {
+        let blob = crate::pak::AlignedBlob::from_bytes(&crate::pak::tests::tiny_pak_bytes());
+        let pak = crate::pak::read(blob.bytes()).unwrap();
+        let mut scene = Scene::new();
+        scene.op(op::ENT, &[3, spec::ENT_ART_SHEET + 2, 1, 160, 160, 0, ent_flag::MIRROR as i32], None);
+        let art_cards = |scene: &Scene| -> Vec<(u16, [f32; 4], bool)> {
+            build(scene, &pak)
+                .items
+                .iter()
+                .filter_map(|it| match it {
+                    Item::Card { page, uv, mirror, .. } if ent_art_page(*page).is_some() => Some((*page, *uv, *mirror)),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert!(art_cards(&scene).is_empty(), "no art in the slot yet: nothing drawn");
+        scene.op(op::ENT_ART, &[2, 1 | (2 << 16), 3 | (4 << 16), 5 | (6 << 16), 7 | (8 << 16), 0x7fff, 0x294a, 0], None);
+        let cards = art_cards(&scene);
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].0, ENT_ART_PAGE0 + 2);
+        assert_eq!(cards[0].1, [0.0, 0.5, 1.0, 1.0], "frame 1 is the bottom half");
+        assert!(cards[0].2, "the mirror flag carries");
+        assert_eq!(ent_art_page(ENT_ART_PAGE0 + 2), Some(2));
+        assert_eq!(ent_art_page(EMOTE_ART_PAGE), None);
+    }
 
     /// A mon faces the one it is fighting from either side of the arena.
     #[test]

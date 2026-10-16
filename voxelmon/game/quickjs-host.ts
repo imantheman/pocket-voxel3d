@@ -30,6 +30,8 @@ export interface VoxelNative {
   emote(slot: number, kind: number): void;
   /** voxel-spec.ts emoteArt: the bubble a pak with no emote page draws. */
   emoteArt?(tl: number, tr: number, bl: number, br: number, c1: number, c2: number, c3: number): void;
+  /** voxel-spec.ts entArt: an entity card from Gold-screen tiles. */
+  entArt?(k: number, f0top: number, f0bottom: number, f1top: number, f1bottom: number, c1: number, c2: number, c3: number): void;
   pic(slot: number, page: number, x: number, y: number, w: number, h: number): void;
   picDepth(slot: number, depthQ8: number): void;
   picHide(slot: number): void;
@@ -331,6 +333,9 @@ export class QuickJsHost implements VoxelHost {
   }
   emoteArt(tl: number, tr: number, bl: number, br: number, c1: number, c2: number, c3: number): void {
     native.emoteArt?.(tl, tr, bl, br, c1, c2, c3);
+  }
+  entArt(k: number, f0top: number, f0bottom: number, f1top: number, f1bottom: number, c1: number, c2: number, c3: number): void {
+    native.entArt?.(k, f0top, f0bottom, f1top, f1bottom, c1, c2, c3);
   }
   uiTile(x: number, y: number, tile: number): void {
     native.uiTile(x, y, tile);

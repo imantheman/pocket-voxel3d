@@ -46,6 +46,8 @@ import {
   DIR,
   EMOTE,
   ENTS_MAX,
+  ENT_ART_MAX,
+  ENT_ART_SHEET,
   ENT_FLAG,
   EVENT_CAP,
   EVENT_SIZE,
@@ -385,6 +387,9 @@ export function generateVoxelRust(): string {
   put("");
   put("/// Max simultaneously shown entity billboards (player is slot 0).");
   put(`pub const ENTS_MAX: usize = ${ENTS_MAX};`);
+  put("/// The `entArt` op's art slots, and the `ent` sheet of slot 0.");
+  put(`pub const ENT_ART_MAX: usize = ${ENT_ART_MAX};`);
+  put(`pub const ENT_ART_SHEET: i32 = ${ENT_ART_SHEET};`);
   put("");
   constMod(put, "ent_flag", "u32", ENT_FLAG, ["Entity billboard flags."]);
   constMod(put, "emote", "u8", EMOTE, ["Emote bubble kinds."]);

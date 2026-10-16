@@ -15,7 +15,7 @@ use core::cell::Cell;
 use crate::audio::Audio;
 use crate::pak::Pak;
 use crate::spec::{
-    self, ANIM_SPRITES_MAX, ENTS_MAX, PITCH_RUNGS, PITCH_TWEEN_TICKS, Q8, QUALITY, QUALITY_TIER_DEFAULT,
+    self, ANIM_SPRITES_MAX, ENT_ART_MAX, ENTS_MAX, PITCH_RUNGS, PITCH_TWEEN_TICKS, Q8, QUALITY, QUALITY_TIER_DEFAULT,
     QualityDials, RIG_ZOOM_MAX, RIG_ZOOM_MIN, UI_COLS, UI_PANELS, UI_ROWS, op,
 };
 
@@ -252,6 +252,13 @@ pub struct Scene {
     /// so it rebuilds only when the art does.
     pub emote_art: Option<[u16; 7]>,
     pub emote_art_serial: u32,
+    /// The `entArt` slots: each a two-frame 16x32 card from eight
+    /// Gold-screen tile ids (frame 0 TL, TR, BL, BR, then frame 1's), then
+    /// OBJ colours 1-3 as RGB555. An `ent` with sheet `ENT_ART_SHEET + k`
+    /// draws slot k. `ent_art_serial[k]` counts that slot's changes, so the
+    /// host rebuilds a texture only when its art does.
+    pub ent_art: [Option<[u16; 11]>; ENT_ART_MAX],
+    pub ent_art_serial: [u32; ENT_ART_MAX],
     pub ents: [Ent; ENTS_MAX],
     /// Screen-space pictures (intro portraits, title art). Logical 480x272.
     pub pics: [Pic; PICS_MAX],
@@ -456,6 +463,8 @@ impl Scene {
             field_fx: None,
             emote_art: None,
             emote_art_serial: 0,
+            ent_art: [None; ENT_ART_MAX],
+            ent_art_serial: [0; ENT_ART_MAX],
             ents: [Ent::default(); ENTS_MAX],
             pics: [Pic::default(); PICS_MAX],
             ui: [0u16; UI_COLS * UI_ROWS],
@@ -752,6 +761,32 @@ impl Scene {
                     }
                 }
             }
+            op::ENT_ART => {
+                let k = a(0);
+                if args.len() >= 2 && (0..ENT_ART_MAX as i32).contains(&k) {
+                    let k = k as usize;
+                    if a(1) < 0 {
+                        if self.ent_art[k].is_some() {
+                            self.ent_art[k] = None;
+                            self.ent_art_serial[k] = self.ent_art_serial[k].wrapping_add(1);
+                        }
+                    } else if args.len() >= 8 {
+                        let mut art = [0u16; 11];
+                        for i in 0..4 {
+                            let v = a(1 + i) as u32;
+                            art[i * 2] = v as u16;
+                            art[i * 2 + 1] = (v >> 16) as u16;
+                        }
+                        for i in 0..3 {
+                            art[8 + i] = a(5 + i) as u16;
+                        }
+                        if self.ent_art[k] != Some(art) {
+                            self.ent_art[k] = Some(art);
+                            self.ent_art_serial[k] = self.ent_art_serial[k].wrapping_add(1);
+                        }
+                    }
+                }
+            }
 
             op::UI_TILE => {
                 if args.len() >= 3 {
@@ -1040,6 +1075,18 @@ mod tests {
         assert_eq!(s.emote_art_serial, serial, "the same art is no change");
         s.op(op::EMOTE_ART, &[-1, 0, 0, 0, 0, 0, 0, 0], None);
         assert!(s.emote_art.is_none());
+
+        assert!(s.ent_art[3].is_none());
+        let pack = |a: i32, b: i32| a | (b << 16);
+        s.op(op::ENT_ART, &[3, pack(10, 11), pack(12, 13), pack(14, 15), pack(16, 17), 0x7fff, 0x294a, 0], None);
+        assert_eq!(s.ent_art[3], Some([10, 11, 12, 13, 14, 15, 16, 17, 0x7fff, 0x294a, 0]));
+        let serial = s.ent_art_serial[3];
+        s.op(op::ENT_ART, &[3, pack(10, 11), pack(12, 13), pack(14, 15), pack(16, 17), 0x7fff, 0x294a, 0], None);
+        assert_eq!(s.ent_art_serial[3], serial, "the same art is no change");
+        s.op(op::ENT_ART, &[9, pack(1, 2), 0, 0, 0, 0, 0, 0], None);
+        assert!(s.ent_art.iter().enumerate().all(|(i, a)| a.is_none() || i == 3), "a slot past the end is a no-op");
+        s.op(op::ENT_ART, &[3, -1, 0, 0, 0, 0, 0, 0], None);
+        assert!(s.ent_art[3].is_none());
 
         s.op(op::TINT, &[0x40ff8040u32 as i32], None);
         assert_eq!(s.tint, 0x40ff8040);

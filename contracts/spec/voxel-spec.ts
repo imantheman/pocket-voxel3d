@@ -491,6 +491,10 @@ export const SHADOW_ALPHA_BATTLE = 0.68;
 
 /** Max simultaneously shown entity billboards (player is slot 0). */
 export const ENTS_MAX = 16;
+/** VOX_OP.entArt's slots, and the `ent` sheet value of slot 0 (slot k is
+ *  ENT_ART_SHEET + k): far past any pak's page count. */
+export const ENT_ART_MAX = 8;
+export const ENT_ART_SHEET = 0x7000;
 
 export const ENT_FLAG = {
   /** Mirror the card on X (right-facing / alternating walk step). */
@@ -955,6 +959,21 @@ export const VOX_OP = {
    *   emoteArt(tl, tr, bl, br, c1, c2, c3)
    */
   emoteArt: 118,
+  /**
+   * An entity card drawn from the Gold screen's tiles rather than an atlas
+   * page: art slot `k` (0..ENT_ART_MAX-1) is a two-frame 16x32 sheet named
+   * by eight Gold-screen tile ids (lcd.rs ids), packed two to an argument as
+   * `a | b << 16`: frame 0's top-left|top-right, frame 0's
+   * bottom-left|bottom-right, then frame 1's the same, and the OBJ palette's
+   * colours 1-3 as RGB555 (colour 0 clear). An `ent` whose sheet is
+   * ENT_ART_SHEET + k draws that slot, its frame 0 or 1, mirrored by its
+   * flag as any card. The Gold paks carry no page for the party-menu icons
+   * the cart draws an overworld mon with (VISIBLE WILD's mons), and every
+   * Gold graphic is already on the Gold screen's tile pages, so the guest
+   * names the art by those tiles, as emoteArt does. f0 < 0 clears the slot.
+   *   entArt(k, f0top, f0bottom, f1top, f1bottom, c1, c2, c3)
+   */
+  entArt: 119,
 } as const;
 
 /** Clips in Yellow's PikachuCriesPointerTable (NUM_PIKA_CRIES). */
