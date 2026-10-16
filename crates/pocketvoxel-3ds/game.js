@@ -6906,7 +6906,9 @@ function chooseView(map, arena, rig, preferQ8 = 0) {
       const hits = sightlineHits(map, arena, rig, q8, pitchQ8, solid);
       const d = (step - preferStep + ORBIT_STEPS) % ORBIT_STEPS;
       const turn = Math.min(d, ORBIT_STEPS - d) / ORBIT_STEPS;
-      const score = hits.enemy * 2 + hits.player + turn * ORBIT_TURN_COST + pitchQ8 / 256 * VIEW_PITCH_COST;
+      let score = hits.enemy * 2 + hits.player + turn * ORBIT_TURN_COST + pitchQ8 / 256 * VIEW_PITCH_COST;
+      if (eyeInFill(map, arena, rig, q8, pitchQ8))
+        score += VIEW_EYE_IN_FILL_COST;
       if (score < bestScore) {
         bestScore = score;
         best = { orbit: q8, pitch: pitchQ8 };
@@ -6915,10 +6917,51 @@ function chooseView(map, arena, rig, preferQ8 = 0) {
   }
   return best;
 }
-function sightlineHits(map, arena, rig, orbitQ8, pitchQ8, solid = solidGrid(map)) {
+function eyeOf(arena, rig, orbitQ8, pitchQ8) {
   const [ex, ey] = arena.enemyCell;
   const [px2, py] = arena.playerCell;
-  const mid = [(ex + px2) / 2, (ey + py) / 2];
+  const r = rig === 1 ? RIG.wide : RIG.tele;
+  const hLen = Math.hypot(r.side, r.back);
+  const len = Math.hypot(hLen, r.height);
+  const e = Math.min(Math.atan2(r.height, hLen) + pitchQ8 / 256 * (RIG_PITCH_MAX_DEG * Math.PI / 180), 0.49 * Math.PI);
+  const eyeD = len * Math.cos(e) / CELL_PX;
+  const [ux, uy] = orbitDir(arena, rig, orbitQ8);
+  return { x: (ex + px2) / 2 + ux * eyeD, y: (ey + py) / 2 + uy * eyeD, h: len * Math.sin(e) };
+}
+function eyeInFill(map, arena, rig, orbitQ8, pitchQ8) {
+  const fillOf = map.borderFillCells;
+  const fill = typeof fillOf === "function" ? fillOf.call(map) : 0;
+  if (!(fill > 0))
+    return false;
+  const eye = eyeOf(arena, rig, orbitQ8, pitchQ8);
+  if (eye.h >= (rig === 1 ? VIEW_BLOCKER_INDOOR_PX : VIEW_BLOCKER_OUTDOOR_PX))
+    return false;
+  const x = Math.floor(eye.x);
+  const y = Math.floor(eye.y);
+  if (map.inBounds(x, y))
+    return false;
+  const conn = (dir) => {
+    const c = map.connection;
+    return typeof c === "function" ? !!c.call(map, dir) : false;
+  };
+  const [ax, ay] = arena.enemyCell;
+  const past = (inside) => {
+    for (let d = 1;d <= fill + 1; d++)
+      if (inside(d))
+        return d;
+    return fill + 1;
+  };
+  if (y < 0 && -y <= fill && !conn("north"))
+    return true;
+  if (y >= 0 && !map.inBounds(ax, y) && past((d) => map.inBounds(ax, y - d)) <= fill && !conn("south"))
+    return true;
+  if (x < 0 && -x <= fill && !conn("west"))
+    return true;
+  if (x >= 0 && !map.inBounds(x, ay) && past((d) => map.inBounds(x - d, ay)) <= fill && !conn("east"))
+    return true;
+  return false;
+}
+function sightlineHits(map, arena, rig, orbitQ8, pitchQ8, solid = solidGrid(map)) {
   const blockerH = rig === 1 ? VIEW_BLOCKER_INDOOR_PX : VIEW_BLOCKER_OUTDOOR_PX;
   const sw = map.widthCells;
   const blocked = (cx, cy) => {
@@ -6930,14 +6973,9 @@ function sightlineHits(map, arena, rig, orbitQ8, pitchQ8, solid = solidGrid(map)
       return solid[y * sw + x] === 1;
     return !map.isWalkableCell(x, y) && !map.isWaterCell(x, y);
   };
-  const r = rig === 1 ? RIG.wide : RIG.tele;
-  const hLen = Math.hypot(r.side, r.back);
-  const len = Math.hypot(hLen, r.height);
-  const e = Math.min(Math.atan2(r.height, hLen) + pitchQ8 / 256 * (RIG_PITCH_MAX_DEG * Math.PI / 180), 0.49 * Math.PI);
-  const eyeD = len * Math.cos(e) / CELL_PX;
-  const eyeH = len * Math.sin(e);
-  const [ux, uy] = orbitDir(arena, rig, orbitQ8);
-  const eye = [mid[0] + ux * eyeD, mid[1] + uy * eyeD];
+  const at = eyeOf(arena, rig, orbitQ8, pitchQ8);
+  const eye = [at.x, at.y];
+  const eyeH = at.h;
   const count = (mon) => {
     const cx0 = mon[0] + 0.5;
     const cy0 = mon[1] + 0.5;
@@ -6974,6 +7012,7 @@ var VIEW_SAMPLE_CELLS = 0.25;
 var VIEW_CARD_PX = 14;
 var VIEW_BLOCKER_INDOOR_PX = 40;
 var VIEW_BLOCKER_OUTDOOR_PX = 56;
+var VIEW_EYE_IN_FILL_COST = 8;
 function computeStaging(map, playerCellX, playerCellY, surfing) {
   const arena = search(map, playerCellX, playerCellY, surfing);
   if (!arena)
@@ -33795,6 +33834,9 @@ class QuickJsHost {
   }
   emoteArt(tl, tr, bl, br, c1, c2, c3) {
     native.emoteArt?.(tl, tr, bl, br, c1, c2, c3);
+  }
+  entArt(k, f0top, f0bottom, f1top, f1bottom, c1, c2, c3) {
+    native.entArt?.(k, f0top, f0bottom, f1top, f1bottom, c1, c2, c3);
   }
   uiTile(x, y, tile2) {
     native.uiTile(x, y, tile2);
