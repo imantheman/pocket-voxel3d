@@ -52,7 +52,7 @@ import { Typer } from "./Typer.ts";
 import { Unown } from "../core/Unown.ts";
 import { Playfield } from "../shared/render/Playfield.ts";
 import { WideBattle } from "./WideBattle.ts";
-import G from "../platform/screen.ts";
+import G, { cachedBlock, keyOf } from "../platform/screen.ts";
 import { random } from "../platform/rng.ts";
 import { truthy, tonumber, tostring, idiv, mod, insertAt, removeAt, sortedKeys, format } from "../platform/lua.ts";
 import { Music } from "../shared/core/Music.ts";
@@ -4495,33 +4495,9 @@ export class BattleState {
     // And nothing at all before UpdateEnemyHUD has ever run: the intro bands
     // slide in over a blanked tilemap (core.asm:8554/8564).
     if (truthy(showStatus) && truthy(this.showEnemyHud) && !truthy(this.hudCleared("enemy"))) {
-      Chrome.printThrough(this.name(enemy), 1, 0, Chrome.DEFAULT_BOX_PALETTE as any);
-      // PrintLevel writes <LV> at the coordinate it is given and then LEFT-aligns
-      // the digits after it, so the glyph is pinned to column 6 whether the level
-      // is 5 or 100; only a three-digit level moves, and it does so by eating the
-      // <LV> tile.  The gender symbol sits past the two digit columns, at (9,1).
-      // PlaceNonFaintStatus (engine/pokemon/mon_stats.asm): a statused mon's tag
-      // prints where the level goes, and DrawEnemyHUD's `.skip_level` arm drops
-      // the level entirely while one is up.
-      Chrome.printThrough(this.statusTag(enemy, "enemy")
-        ?? ("<LV>" + tostring(enemy.level ?? 1)), 6, 1, Chrome.DEFAULT_BOX_PALETTE as any);
-      const enemyGender = this.genderSymbol(enemy);
-      if (truthy(enemyGender)) {
-        Chrome.printThrough(enemyGender!, 9, 1, Chrome.DEFAULT_BOX_PALETTE as any);
-      }
-      // `ld a, [wBattleMode] / dec a / ret nz`, then CheckCaughtMon puts $5d at
-      // (1,1) (engine/battle/trainer_huds.asm:140-152).
-      if (truthy(this.battle) && truthy(this.battle.wild) && truthy(this.caughtMark)) {
-        this.hud.drawCaughtIcon(1, 1, this.hudHp(enemy, "enemy"),
-          truthy(enemy.maxHp) ? enemy.maxHp : (truthy(enemy.stats) ? enemy.stats.hp : undefined));
-      }
-      this.drawHpBar(enemy, "enemy", 2, 2);
-      // Stub on the LEFT (tile $6d), rule on the row under the bar.
-      if (this.hud.available()) {
-        this.hud.drawEnemyFrame();
-      } else {
-        this.drawFrame(1, 3, 10, false);
-      }
+      // the same cells every frame until something the HUD shows changes:
+      // recorded once and replayed after (hudKey, screen.ts cachedBlock)
+      this.hudBlock("enemy", enemy, () => this.drawEnemyHudCells(enemy));
     }
     // ShowOTTrainerMonsRemaining (engine/battle/trainer_huds.asm:32-45): balls
     // walking LEFT from OAM (72, 32), which the -8/-16 offset puts at (8, 2).
@@ -4532,6 +4508,85 @@ export class BattleState {
       this.hud.drawBallRow(truthy(this.battle) ? this.battle.enemyParty : undefined, 8, 2, -1);
     }
     Font.useBattleExtra(wasBattle);
+  }
+
+  /**
+   * Everything a side's HUD cells read, as a string (drawEnemyHudCells,
+   * drawPlayerHudCells): the name, the level or status tag and the gender,
+   * the HP the bar and the digits show, the exp bar's fill, the caught mark,
+   * and the palette, frame and font state the tiles come out in.
+   */
+  hudKey(side: string, mon: any): string {
+    const maxHp = mon.maxHp || (mon.stats && mon.stats.hp);
+    const hp = this.hudHp(mon, side);
+    let key = `${side}|${this.name(mon)}|${this.statusTag(mon, side) ?? "\u0000"}|${this.genderSymbol(mon) ?? ""}`
+      + `|${hp}|${maxHp}|${this.hudHpPixels(mon, side)}|${this.hud.available() ? 1 : 0}`
+      + `|${GbcPalette.stateKey()}|${Font.frameIndex()}|${Font.battleExtraActive() ? 1 : 0}`
+      + `|${keyOf(this.hud)}|${keyOf(this.palettes)}|${keyOf(Chrome.DEFAULT_BOX_PALETTE)}`;
+    if (side === "enemy") {
+      const caught = truthy(this.battle) && truthy(this.battle.wild) && truthy(this.caughtMark);
+      key += `|${mon.level ?? 1}|${caught ? 1 : 0}`;
+    } else {
+      key += `|${this.shownLevel ?? mon.level ?? 1}|${this.shownExp ?? 0}`;
+    }
+    return key;
+  }
+
+  /**
+   * A side's HUD cells through cachedBlock -- except while its HP bar (or
+   * the player's exp bar) is moving: every step is a new picture then, and
+   * recording pictures that never come back cost more than drawing them.
+   */
+  hudBlock(side: string, mon: any, draw: () => void): void {
+    const moving = (this.hpAnim && this.hpAnim.side === side) || (side === "player" && this.expAnim);
+    if (moving) {
+      // what cachedBlock does with a key it has not seen
+      G.push();
+      try {
+        draw();
+      } finally {
+        G.pop();
+      }
+      return;
+    }
+    cachedBlock(this.hudOwner(side), this.hudKey(side, mon), draw);
+  }
+
+  /** A cachedBlock owner per side, so each side keeps its own few records. */
+  hudOwner(side: string): object {
+    const owners = (this.hudOwners ??= { enemy: {}, player: {} });
+    return owners[side];
+  }
+
+  // drawEnemyHud's cells (Lua: BattleState.lua:4203).
+  drawEnemyHudCells(enemy: any): void {
+    Chrome.printThrough(this.name(enemy), 1, 0, Chrome.DEFAULT_BOX_PALETTE as any);
+    // PrintLevel writes <LV> at the coordinate it is given and then LEFT-aligns
+    // the digits after it, so the glyph is pinned to column 6 whether the level
+    // is 5 or 100; only a three-digit level moves, and it does so by eating the
+    // <LV> tile.  The gender symbol sits past the two digit columns, at (9,1).
+    // PlaceNonFaintStatus (engine/pokemon/mon_stats.asm): a statused mon's tag
+    // prints where the level goes, and DrawEnemyHUD's `.skip_level` arm drops
+    // the level entirely while one is up.
+    Chrome.printThrough(this.statusTag(enemy, "enemy")
+      ?? ("<LV>" + tostring(enemy.level ?? 1)), 6, 1, Chrome.DEFAULT_BOX_PALETTE as any);
+    const enemyGender = this.genderSymbol(enemy);
+    if (truthy(enemyGender)) {
+      Chrome.printThrough(enemyGender!, 9, 1, Chrome.DEFAULT_BOX_PALETTE as any);
+    }
+    // `ld a, [wBattleMode] / dec a / ret nz`, then CheckCaughtMon puts $5d at
+    // (1,1) (engine/battle/trainer_huds.asm:140-152).
+    if (truthy(this.battle) && truthy(this.battle.wild) && truthy(this.caughtMark)) {
+      this.hud.drawCaughtIcon(1, 1, this.hudHp(enemy, "enemy"),
+        truthy(enemy.maxHp) ? enemy.maxHp : (truthy(enemy.stats) ? enemy.stats.hp : undefined));
+    }
+    this.drawHpBar(enemy, "enemy", 2, 2);
+    // Stub on the LEFT (tile $6d), rule on the row under the bar.
+    if (this.hud.available()) {
+      this.hud.drawEnemyFrame();
+    } else {
+      this.drawFrame(1, 3, 10, false);
+    }
   }
 
   // Lua: BattleState.lua:4255
@@ -4557,6 +4612,13 @@ export class BattleState {
       Font.useBattleExtra(wasBattle);
       return;
     }
+    // recorded once and replayed after, as the enemy's (hudKey)
+    this.hudBlock("player", player, () => this.drawPlayerHudCells(player));
+    Font.useBattleExtra(wasBattle);
+  }
+
+  // drawPlayerHud's cells (Lua: BattleState.lua:4255).
+  drawPlayerHudCells(player: any): void {
     Chrome.printThrough(this.name(player), 10, 7, Chrome.DEFAULT_BOX_PALETTE as any);
     // PrintPlayerHUD places the same status tag at (14,8) and skips the level
     // while it is up.
@@ -4586,7 +4648,6 @@ export class BattleState {
       this.drawFrame(9, 11, 10, true);
       HpBar.drawExp(expPainter, this.palettes, expFraction, 10 * 8, 11 * 8 + 4);
     }
-    Font.useBattleExtra(wasBattle);
   }
 
   // Lua: BattleState.lua:4317
