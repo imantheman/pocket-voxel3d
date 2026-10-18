@@ -17,6 +17,7 @@ import type { GameMap } from "../../world/map.ts";
 import { Map as GoldMap } from "../world/Map.ts";
 import { FieldMoves } from "../world/FieldMoves.ts";
 import { is2d } from "../../viewmode.ts";
+import { Save as Gen2Save } from "../core/Save.ts";
 
 const SIDE_PLAYER = 0;
 const SIDE_ENEMY = 1;
@@ -134,16 +135,16 @@ export class BattleStage {
     // The trainers' own pics while the battle screen shows them (the enemy's
     // frontpic until EnemySwitch slides it out, the player's until the
     // send-out), each through its class's palette, as Kanto's 3D battles
-    // stand them: the player is CAL, the class pokegold draws with the
-    // player's own pic.
+    // stand them (playerPic below for the player's).
+    const player = side === SIDE_PLAYER ? playerPic(this.data?.atlas?.picTrainer, st.save) : undefined;
     const trainerKey = side === SIDE_ENEMY
       ? (st.showEnemyTrainer ? picKey(st.enemyTrainerPath) : undefined)
-      : (st.showPlayerTrainer ? "cal" : undefined);
+      : (st.showPlayerTrainer ? player!.key : undefined);
     if (trainerKey !== undefined && !st.picBoxCleared?.(name)) {
       const tpage = this.data?.atlas?.picTrainer?.[trainerKey];
       if (tpage !== undefined) {
-        const cls = side === SIDE_ENEMY ? st.enemyTrainerClass : "PLAYER";
-        this.showCard(side, tpage, cell, palettes?.trainers?.[cls], `trainer:${cls}`);
+        const cls = side === SIDE_ENEMY ? st.enemyTrainerClass : player!.palette;
+        this.showCard(side, tpage, cell, palettes?.trainers?.[cls], `trainer:${cls}:${trainerKey}`);
         return;
       }
     }
@@ -196,6 +197,24 @@ export class BattleStage {
     if (this.arena) this.host.arenaEnd();
     this.arena = null;
   }
+}
+
+/**
+ * The player's own pic on the stage, and the TrainerPalettes row it is drawn
+ * in. Gold and Silver: CAL, the class pokegold draws with the player's pic.
+ * Crystal swapped CAL's pic for someone else and gave the player pics of
+ * their own, ChrisPic and KrisPic (pokecrystal engine/gfx/player_gfx.asm,
+ * the importer's "chris"/"kris" pages): the one for the save's gender, Kris
+ * in her own colours (the FALKNER row, engine/gfx/color.asm, as BattleState's
+ * back-pic picks them). A pak without them keeps CAL.
+ */
+export function playerPic(
+  pics: Record<string, number> | undefined,
+  save: unknown,
+): { key: string; palette: string } {
+  if (pics?.kris !== undefined && Gen2Save.isFemale(save)) return { key: "kris", palette: "FALKNER" };
+  if (pics?.kris !== undefined && pics?.chris !== undefined) return { key: "chris", palette: "PLAYER" };
+  return { key: "cal", palette: "PLAYER" };
 }
 
 /** A trainer pic's atlas key out of its asset path: battle/trainers/falkner(.png) -> falkner. */
