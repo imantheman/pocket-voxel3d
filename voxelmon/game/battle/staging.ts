@@ -294,8 +294,10 @@ export function eyeOf(arena: Arena, rig: number, orbitQ8: number, pitchQ8: numbe
  * edge of the map with no connection: `map.borderFillCells()` cells of the
  * map's border block (Gold's cook tiles it out round every map; a Kanto map
  * answers nothing -- its cook stands only a tree hull there, which the host
- * culls in front of the camera). Low is under a blocker's height. A corner
- * is filled if either side is.
+ * culls in front of the camera). Low is under a blocker's height. The fill
+ * is missing only alongside a connected neighbour (the map's
+ * connectionCovers), and a corner is filled unless a neighbour on either
+ * side reaches it.
  */
 export function eyeInFill(map: GameMap, arena: Arena, rig: number, orbitQ8: number, pitchQ8: number): boolean {
   const fillOf = (map as unknown as { borderFillCells?: () => number }).borderFillCells;
@@ -306,9 +308,17 @@ export function eyeInFill(map: GameMap, arena: Arena, rig: number, orbitQ8: numb
   const x = Math.floor(eye.x);
   const y = Math.floor(eye.y);
   if (map.inBounds(x, y)) return false;
-  const conn = (dir: string): boolean => {
-    const c = (map as unknown as { connection?: (d: string) => unknown }).connection;
-    return typeof c === "function" ? !!c.call(map, dir) : false;
+  // Whether a connected map stands past `dir` at cell `along` of that side
+  // (a row for west/east, a column for north/south): the host drops the
+  // fill only alongside the neighbour, and keeps it on the rest of a side
+  // a shorter connection leaves open (main.rs RingClip).
+  const m = map as unknown as {
+    connection?: (d: string) => unknown;
+    connectionCovers?: (d: string, along: number) => boolean;
+  };
+  const covered = (dir: string, along: number): boolean => {
+    if (typeof m.connectionCovers === "function") return m.connectionCovers.call(map, dir, along);
+    return typeof m.connection === "function" ? !!m.connection.call(map, dir) : false;
   };
   // the far edges by inBounds along the arena's row and column
   const [ax, ay] = arena.enemyCell;
@@ -316,11 +326,14 @@ export function eyeInFill(map: GameMap, arena: Arena, rig: number, orbitQ8: numb
     for (let d = 1; d <= fill + 1; d++) if (inside(d)) return d;
     return fill + 1;
   };
-  if (y < 0 && -y <= fill && !conn("north")) return true;
-  if (y >= 0 && !map.inBounds(ax, y) && past((d) => map.inBounds(ax, y - d)) <= fill && !conn("south")) return true;
-  if (x < 0 && -x <= fill && !conn("west")) return true;
-  if (x >= 0 && !map.inBounds(x, ay) && past((d) => map.inBounds(x - d, ay)) <= fill && !conn("east")) return true;
-  return false;
+  const north = y < 0 && -y <= fill;
+  const south = y >= 0 && !map.inBounds(ax, y) && past((d) => map.inBounds(ax, y - d)) <= fill;
+  const west = x < 0 && -x <= fill;
+  const east = x >= 0 && !map.inBounds(x, ay) && past((d) => map.inBounds(x - d, ay)) <= fill;
+  if (!(north || south || west || east)) return false;
+  // a corner is the neighbour's if either side's neighbour reaches it
+  return !((north && covered("north", x)) || (south && covered("south", x))
+    || (west && covered("west", y)) || (east && covered("east", y)));
 }
 
 /**

@@ -450,6 +450,34 @@ export class Map {
     return 6;
   }
 
+  /** Not the Lua's: the cells along each side a connected map spans (rows
+   *  for west/east, columns for north/south), [first, past-last]. Filled
+   *  in by World from the maps table (spanConnections). */
+  connectionSpans: Record<string, [number, number]> = {};
+
+  spanConnections(maps: Record<string, any> | null | undefined): void {
+    const spans: Record<string, [number, number]> = {};
+    for (const dir of Object.keys(this.connections)) {
+      const conn = this.connections[dir];
+      const dest = conn && maps ? maps[conn.mapId ?? conn.map] : undefined;
+      if (!dest) continue;
+      const len = dir === "north" || dir === "south" ? dest.width : dest.height;
+      const at = (conn.offset ?? 0) * 2;
+      spans[dir] = [at, at + len * 2];
+    }
+    this.connectionSpans = spans;
+  }
+
+  /** Not the Lua's: whether the map connected on `dir` stands past cell
+   *  `along` of that side -- where the voxel world draws the neighbour and
+   *  not the border fill (battle/staging.ts eyeInFill). A connection whose
+   *  span is unknown spans the whole side. */
+  connectionCovers(dir: string, along: number): boolean {
+    if (!this.connections[dir]) return false;
+    const span = this.connectionSpans[dir];
+    return !span || (along >= span[0] && along < span[1]);
+  }
+
   // Lua: Map.lua:294-313 -- destination cell after stepping off this edge onto
   // a connected map. Returns [x, y], or undefined without a connection.
   static connectionLanding(def: any, conn: any, dir: string, fromCx: number, fromCy: number): [number, number] | undefined {
