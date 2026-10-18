@@ -3395,6 +3395,91 @@ fn ring_inner_face(p: [[f32; 3]; 3], clip_min: [f32; 2], clip_max: [f32; 2]) -> 
         || ((mz - clip_max[1]).abs() < ON && nz < 0.0)
 }
 
+/// The stretch of each side of the map a neighbour is drawn behind, in world
+/// px: west and east as a z range, north and south as an x range. A side
+/// with nothing behind it holds the empty range `[i32::MAX, i32::MIN]`.
+type SeamSpans = [[i32; 2]; 4];
+const NO_SEAM: [i32; 2] = [i32::MAX, i32::MIN];
+
+/// Which sides `spans` puts a neighbour on, for the log.
+fn seam_sides_of(spans: &SeamSpans) -> [bool; 4] {
+    [spans[0][0] < spans[0][1], spans[1][0] < spans[1][1], spans[2][0] < spans[2][1], spans[3][0] < spans[3][1]]
+}
+
+/// The border-ring clip: the map's real box, and the part of each side a
+/// connected neighbour is drawn behind. A ring triangle is dropped only
+/// where both hold -- past the edge AND alongside the neighbour -- so the
+/// rest of that side keeps its ring. Clipping a whole side for any
+/// neighbour on it left the day-care route's east edge, whose connection
+/// covers only its southern third, ending in sky where the border trees
+/// stand in the 2D view (and every corner beside a seam with it).
+///
+/// Run in integers on the corner SUMS (three times the centroid), as the
+/// box test before it was: every line and span end is a whole px.
+#[derive(Clone, Copy)]
+struct RingClip {
+    /// The real box (float, for ring_inner_face).
+    min: [f32; 2],
+    max: [f32; 2],
+    /// Three times the real box's lines.
+    lo: [i64; 2],
+    hi: [i64; 2],
+    /// Three times each side's span (W, E over z; N, S over x); empty when
+    /// no neighbour is on that side.
+    span: [[i64; 2]; 4],
+    /// Three times the box no triangle inside can be clipped from: the real
+    /// box, widened to everything on a side with no seam.
+    safe_lo: [i64; 2],
+    safe_hi: [i64; 2],
+}
+
+impl RingClip {
+    const FAR: i64 = i64::MAX / 4;
+
+    fn new(real_min: [f32; 2], real_max: [f32; 2], spans: &SeamSpans) -> RingClip {
+        let sides = seam_sides_of(spans);
+        let span = core::array::from_fn(|i| {
+            if sides[i] { [3 * spans[i][0] as i64, 3 * spans[i][1] as i64] } else { [Self::FAR, -Self::FAR] }
+        });
+        let lo = [3 * real_min[0] as i64, 3 * real_min[1] as i64];
+        let hi = [3 * real_max[0] as i64, 3 * real_max[1] as i64];
+        RingClip {
+            min: real_min,
+            max: real_max,
+            lo,
+            hi,
+            span,
+            safe_lo: [if sides[0] { lo[0] } else { -Self::FAR }, if sides[2] { lo[1] } else { -Self::FAR }],
+            safe_hi: [if sides[1] { hi[0] } else { Self::FAR }, if sides[3] { hi[1] } else { Self::FAR }],
+        }
+    }
+
+    /// Whether the triangle whose corners sum to (sx, sz) is clipped away.
+    /// `tri` is only looked at for one lying on a clipped line.
+    #[inline]
+    fn cuts(&self, sx: i64, sz: i64, tri: impl FnOnce() -> [[f32; 3]; 3]) -> bool {
+        // nearly every triangle: well inside, nothing to decide
+        if sx > self.safe_lo[0] && sx < self.safe_hi[0] && sz > self.safe_lo[1] && sz < self.safe_hi[1] {
+            return false;
+        }
+        let along = |s: [i64; 2], v: i64| v > s[0] && v < s[1];
+        let (w, e) = (along(self.span[0], sz), along(self.span[1], sz));
+        let (n, s) = (along(self.span[2], sx), along(self.span[3], sx));
+        if (w && sx < self.lo[0]) || (e && sx > self.hi[0]) || (n && sz < self.lo[1]) || (s && sz > self.hi[1]) {
+            return true;
+        }
+        if (w && sx == self.lo[0]) || (e && sx == self.hi[0]) || (n && sz == self.lo[1]) || (s && sz == self.hi[1]) {
+            // on an edge: the rare full test, against only the lines this
+            // triangle lies alongside a neighbour on
+            const NO: f32 = 1.0e9;
+            let cmin = [if w { self.min[0] } else { -NO }, if n { self.min[1] } else { -NO }];
+            let cmax = [if e { self.max[0] } else { NO }, if s { self.max[1] } else { NO }];
+            return ring_inner_face(tri(), cmin, cmax);
+        }
+        false
+    }
+}
+
 /// Stops (silent, last-resort backstop) if `verts` is already at `budget` —
 /// callers that care about it check `verts.len()` before choosing `kind`.
 /// The map build's vertices, kept in segments instead of one block.
@@ -3542,10 +3627,8 @@ struct IdxBuild {
 /// How many corners push_chunk_mesh would have drawn of `m` with `drawn`
 /// already spent: the same walk, the same clip, the same budget stop,
 /// nothing pushed (TERRAIN_KEEP under SKIP_KEEP).
-fn keep_corners(pak: &Pak, m: pak::MeshRange, budget: usize, drawn: usize, clip_min: [f32; 2], clip_max: [f32; 2]) -> usize {
+fn keep_corners(pak: &Pak, m: pak::MeshRange, budget: usize, drawn: usize, clip: &RingClip) -> usize {
     let vbase = m.vert_base as usize;
-    let third = |c: f32| -> i64 { if c.abs() >= 1.0e8 { if c < 0.0 { i64::MIN / 4 } else { i64::MAX / 4 } } else { 3 * c as i64 } };
-    let (lo_x, lo_z, hi_x, hi_z) = (third(clip_min[0]), third(clip_min[1]), third(clip_max[0]), third(clip_max[1]));
     let mut n = 0usize;
     for t in 0..m.index_count as usize / 3 {
         if drawn + n + 3 > budget {
@@ -3561,14 +3644,9 @@ fn keep_corners(pak: &Pak, m: pak::MeshRange, budget: usize, drawn: usize, clip_
         };
         let sx = p0.x as i64 + p1.x as i64 + p2.x as i64;
         let sz = p0.z as i64 + p1.z as i64 + p2.z as i64;
-        if sx < lo_x || sx > hi_x || sz < lo_z || sz > hi_z {
+        let pos = |v: &pak::PakVert| [v.x as f32, v.y as f32, v.z as f32];
+        if clip.cuts(sx, sz, || [pos(&p0), pos(&p1), pos(&p2)]) {
             continue;
-        }
-        if sx == lo_x || sx == hi_x || sz == lo_z || sz == hi_z {
-            let pos = |v: &pak::PakVert| [v.x as f32, v.y as f32, v.z as f32];
-            if ring_inner_face([pos(&p0), pos(&p1), pos(&p2)], clip_min, clip_max) {
-                continue;
-            }
         }
         if [pak.indices[b], pak.indices[b + 1], pak.indices[b + 2]].iter().any(|&i| i as usize >= m.vert_count as usize) {
             break;
@@ -3600,8 +3678,7 @@ fn push_chunk_mesh(
     kind: usize,
     budget: usize,
     tint: u32,
-    clip_min: [f32; 2],
-    clip_max: [f32; 2],
+    clip: &RingClip,
     verts: &mut VertStore,
     chunk_spans: &mut Vec<Span>,
     cmin: &mut [f32; 3],
@@ -3616,7 +3693,7 @@ fn push_chunk_mesh(
     // builds: IdxBuild::drawn is the budget's running total)
     if SKIP_KEEP && kind == TERRAIN_KEEP_KIND {
         if let Some(bld) = ix.as_deref_mut() {
-            bld.drawn += keep_corners(pak, m, budget, bld.drawn, clip_min, clip_max);
+            bld.drawn += keep_corners(pak, m, budget, bld.drawn, clip);
         }
         return;
     }
@@ -3647,20 +3724,17 @@ fn push_chunk_mesh(
     let mut gmin = [f32::MAX; 3];
     let mut gmax = [f32::MIN; 3];
     // Walk TRIANGLES, not loose indices, so the border ring can be dropped
-    // whole-primitive: `clip` is the real map box on any side that has a
-    // connected neighbour drawn behind it (see build_map), and ±huge on the
-    // sides that do not, where the ring is still the only thing standing
-    // between the player and empty sky.
+    // whole-primitive: `clip` drops it past the real map box only alongside
+    // a connected neighbour drawn behind it (see build_map, RingClip), and
+    // keeps it everywhere else, where the ring is still the only thing
+    // standing between the player and empty sky.
     //
     // The tests run in integers, which on the ARM11 is most of this loop's
     // cost saved: the coordinates are i16 and every clip line is a whole
     // number (a chunk bound, or none), so "the centroid is past the line" is
     // "three times the line is less than the sum" -- no divide by 3 -- and
     // "the centroid is ON the line" (within 0.01, ring_inner_face) is the
-    // sum being exactly three times it. The same triangles come out as the
-    // float tests chose (checked against a hash of the built buffer).
-    let third = |c: f32| -> i64 { if c.abs() >= 1.0e8 { if c < 0.0 { i64::MIN / 4 } else { i64::MAX / 4 } } else { 3 * c as i64 } };
-    let (lo_x, lo_z, hi_x, hi_z) = (third(clip_min[0]), third(clip_min[1]), third(clip_max[0]), third(clip_max[1]));
+    // sum being exactly three times it.
     let mut imin = [i32::MAX; 3];
     let mut imax = [i32::MIN; 3];
     let tri_count = m.index_count as usize / 3;
@@ -3679,15 +3753,9 @@ fn push_chunk_mesh(
         };
         let sx = p0.x as i64 + p1.x as i64 + p2.x as i64;
         let sz = p0.z as i64 + p1.z as i64 + p2.z as i64;
-        if sx < lo_x || sx > hi_x || sz < lo_z || sz > hi_z {
+        let pos = |v: &pak::PakVert| [v.x as f32, v.y as f32, v.z as f32];
+        if clip.cuts(sx, sz, || [pos(&p0), pos(&p1), pos(&p2)]) {
             continue;
-        }
-        if sx == lo_x || sx == hi_x || sz == lo_z || sz == hi_z {
-            // on an edge: the rare full test, in floats as before
-            let pos = |v: &pak::PakVert| [v.x as f32, v.y as f32, v.z as f32];
-            if ring_inner_face([pos(&p0), pos(&p1), pos(&p2)], clip_min, clip_max) {
-                continue;
-            }
         }
         for pv in [p0, p1, p2] {
             let q = [pv.x as i32, pv.y as i32, pv.z as i32];
@@ -4654,11 +4722,11 @@ fn build_map(
     // a dark-cave map's baked colours come out dim until Flash brightens
     // scene.tint back to white and a reload rebakes them.
     tint: u32,
-    // Which sides have a connected map drawn behind them: west, east,
-    // north, south. The border ring is dropped on those sides only — the
-    // neighbour's own ground replaces it — and kept everywhere else, where
-    // removing it would leave the map ending in open sky.
-    seam_sides: [bool; 4],
+    // Where a connected map is drawn behind each side: west, east, north,
+    // south (SeamSpans). The border ring is dropped alongside those stretches
+    // only -- the neighbour's own ground replaces it -- and kept everywhere
+    // else, where removing it would leave the map ending in open sky.
+    seam_spans: SeamSpans,
     // The world is not seen (spec flatWorld, VIEW 2D): the map's bounds
     // only -- what the read-ahead and the camera key off -- and no mesh,
     // terrain texture or floor. Built in full when it is seen again.
@@ -4850,19 +4918,11 @@ fn build_map(
             real_max[i] = mx[i] - ring[i];
         }
     }
-    const NO_CLIP: f32 = 1.0e9;
-    let clip_min = [
-        if seam_sides[0] { real_min[0] } else { -NO_CLIP },
-        if seam_sides[2] { real_min[1] } else { -NO_CLIP },
-    ];
-    let clip_max = [
-        if seam_sides[1] { real_max[0] } else { NO_CLIP },
-        if seam_sides[3] { real_max[1] } else { NO_CLIP },
-    ];
+    let clip = RingClip::new(real_min, real_max, &seam_spans);
 
     // Ground first — always in full.
     for it in plan.items.iter().filter(|i| GROUND_KINDS.contains(&i.kind)) {
-        push_chunk_mesh(pak, &chunks[it.chunk], it.kind, budget, tint, clip_min, clip_max, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax, if INDEXED { Some(&mut ib) } else { None });
+        push_chunk_mesh(pak, &chunks[it.chunk], it.kind, budget, tint, &clip, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax, if INDEXED { Some(&mut ib) } else { None });
     }
     // Removable stamps (cut trees, the S.S. Anne hull) next, at ground
     // priority: these are cooked into the pak's separate STMP section, not
@@ -4898,11 +4958,11 @@ fn build_map(
     // BOXES=1 pak, hulls folded into terrain) leaves every tier empty here
     // and just keeps what TERRAIN already carried above.
     for it in plan.items.iter().filter(|i| TREE_KINDS.contains(&i.kind)) {
-        push_chunk_mesh(pak, &chunks[it.chunk], it.kind, budget, tint, clip_min, clip_max, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax, if INDEXED { Some(&mut ib) } else { None });
+        push_chunk_mesh(pak, &chunks[it.chunk], it.kind, budget, tint, &clip, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax, if INDEXED { Some(&mut ib) } else { None });
     }
     // Water, grass, flower last — whatever budget survives the above.
     for it in plan.items.iter().filter(|i| FILLER_KINDS.contains(&i.kind)) {
-        push_chunk_mesh(pak, &chunks[it.chunk], it.kind, budget, tint, clip_min, clip_max, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax, if INDEXED { Some(&mut ib) } else { None });
+        push_chunk_mesh(pak, &chunks[it.chunk], it.kind, budget, tint, &clip, &mut verts, &mut chunk_spans, &mut cmin, &mut cmax, if INDEXED { Some(&mut ib) } else { None });
     }
     verts.trim();
     if verts.is_empty() { cmin = [0.0; 3]; cmax = [16.0; 3]; }
@@ -5338,7 +5398,7 @@ fn main() {
     /// two and three times over with no frame drawn in between.
     ///
     /// (map id, stream centre, tint, stamp count, seam sides)
-    type BuiltKey = (u32, Option<(i32, i32)>, u32, u64, [bool; 4], u8, bool);
+    type BuiltKey = (u32, Option<(i32, i32)>, u32, u64, SeamSpans, u8, bool);
     let mut built_key: Option<BuiltKey> = None;
     // whether the geometry up was built flat (spec flatWorld: no mesh)
     let mut built_flat = false;
@@ -6181,9 +6241,9 @@ fn main() {
             let stamps_off_snapshot: Vec<(u32, i16, i16)> = scene_now.stamps_off.clone();
             stamps_off_seen = stamps_off_snapshot.clone();
             last_tint = geometry_tint(scene_now.tint);
-            // Which sides a neighbour will be drawn on, read from the slots
-            // the guest already publishes. Needed BEFORE build_map so the
-            // border ring can be clipped away on exactly those sides.
+            // Where a neighbour will be drawn, read from the slots the guest
+            // already publishes. Needed BEFORE build_map so the border ring
+            // can be clipped away alongside exactly those stretches.
             let neighbor_slots: Vec<(u32, f32, f32)> = (1..scene_now.maps.len())
                 .filter(|&i| scene_now.maps[i].shown)
                 .map(|i| {
@@ -6214,6 +6274,7 @@ fn main() {
                     (
                         [mn[0] + ring[0], mn[1] + ring[1]],
                         [mx[0] - ring[0], mx[1] - ring[1]],
+                        ring,
                     )
                 })
             };
@@ -6221,9 +6282,13 @@ fn main() {
             // box lies wholly outside ours. Deciding from the offset's sign
             // instead mistakes a lateral slide along a seam for a second
             // connection, and clips a border ring off an edge that has
-            // nothing behind it.
-            let mut seam_sides = [false; 4]; // west, east, north, south
-            if let Some((cmn, cmx)) = cur_box {
+            // nothing behind it. And only the stretch of that side the
+            // neighbour spans: a connection shorter than the edge (the
+            // day-care route's east one covers a third of it) leaves the
+            // rest of the edge to the ring, as the 2D view leaves it to the
+            // border block.
+            let mut seam_spans: SeamSpans = [NO_SEAM; 4]; // west, east, north, south
+            if let Some((cmn, cmx, ring)) = cur_box {
                 for &(nid, ox, oy) in neighbor_slots.iter() {
                     let Some((_, nname)) = map_index.iter().find(|(id, _)| *id == nid) else {
                         continue;
@@ -6257,10 +6322,17 @@ fn main() {
                         continue;
                     };
                     let (lo, hi) = ([nmn[0] + ox, nmn[1] + oy], [nmx[0] + ox, nmx[1] + oy]);
-                    if hi[0] <= cmn[0] + 1.0 { seam_sides[0] = true; }
-                    if lo[0] >= cmx[0] - 1.0 { seam_sides[1] = true; }
-                    if hi[1] <= cmn[1] + 1.0 { seam_sides[2] = true; }
-                    if lo[1] >= cmx[1] - 1.0 { seam_sides[3] = true; }
+                    let mut widen = |side: usize, a: f32, b: f32| {
+                        let sp = &mut seam_spans[side];
+                        sp[0] = sp[0].min(a.floor() as i32);
+                        sp[1] = sp[1].max(b.ceil() as i32);
+                    };
+                    // (a slot two hops out that stops short of the ring --
+                    // the map past a neighbour -- leaves it standing)
+                    if hi[0] <= cmn[0] + 1.0 && hi[0] > cmn[0] - ring[0] { widen(0, lo[1], hi[1]); }
+                    if lo[0] >= cmx[0] - 1.0 && lo[0] < cmx[0] + ring[0] { widen(1, lo[1], hi[1]); }
+                    if hi[1] <= cmn[1] + 1.0 && hi[1] > cmn[1] - ring[1] { widen(2, lo[0], hi[0]); }
+                    if lo[1] >= cmx[1] - 1.0 && lo[1] < cmx[1] + ring[1] { widen(3, lo[0], hi[0]); }
                 }
             }
             let bounds_ms = now_ms().wrapping_sub(t_load);
@@ -6296,7 +6368,7 @@ fn main() {
                 if cur_map_huge { stream_center_chunk } else { None },
                 last_tint,
                 stamps_key,
-                seam_sides,
+                seam_spans,
                 last_daytime,
                 flat_now,
             );
@@ -6328,7 +6400,7 @@ fn main() {
                     player_px,
                     &stamps_off_snapshot,
                     last_tint,
-                    seam_sides,
+                    seam_spans,
                     flat_now,
                 );
                 built_flat = flat_now;
@@ -6374,10 +6446,13 @@ fn main() {
                         f.w, f.h, raised, top,
                     ));
                 }
+                let seam_sides = seam_sides_of(&seam_spans);
+                let span_of = |i: usize| if seam_sides[i] { format!("{}..{}", seam_spans[i][0], seam_spans[i][1]) } else { "-".to_string() };
                 dlog(&format!(
-                    "[pv] seams W={} E={} N={} S={} nbrs={}",
+                    "[pv] seams W={} E={} N={} S={} nbrs={} spans W={} E={} N={} S={}",
                     seam_sides[0], seam_sides[1], seam_sides[2], seam_sides[3],
                     neighbor_slots.len(),
+                    span_of(0), span_of(1), span_of(2), span_of(3),
                 ));
             }
             // Nothing was built, so there is nothing to upload -- and
