@@ -155,6 +155,38 @@ six games: Red, Blue, Yellow, Gold, Silver and Crystal.
 - Gold, Silver and Crystal keep their own clocks: the re-release's clock is
   never changed, so the time of day can differ between the two.
 
+### Extras: enhancements, cheats, speed and visible wild monsters
+
+All six games have optional extras. Everything is off unless you turn it on,
+and it is all stored with your own save (it never changes the re-release's
+save).
+
+**ENHANCEMENTS** (OPTION's second page, flip with L/R; also on the bottom
+screen: the **EXTRAS** app in Red/Blue/Yellow, the **▲** tab in
+Gold/Silver/Crystal):
+
+- **SPEED 1X / 2X**: at 2X the game runs twice as fast (walking, text,
+  battles, menus) at the same frame rate. Music stays at normal speed. Link
+  play always runs at 1X.
+- **EXP FOR CATCHING**: a catch pays the battle's EXP, as a win does.
+- **PARTY EXP SHARE**: the whole team earns EXP; monsters that did not fight
+  get half.
+- **TRADE EVO LV.40**: monsters that only evolve by trading also evolve at
+  level 40 (Gold/Silver/Crystal: while holding their trade item, if they need
+  one).
+- **HMS WITHOUT MOVE**: use field moves without teaching them, as long as you
+  have the HM and the badge the game asks for.
+- **VISIBLE WILD** (OFF / SOME / MANY): wild monsters wander in the grass,
+  caves and water. Walk into one to battle it. While this is on, random
+  encounters in the grass stop.
+
+**CHEATS**: turn **CHEATS** on in OPTION and a cheats page appears on the
+bottom screen (a CHEATS app in Red/Blue/Yellow, a **!** tab in
+Gold/Silver/Crystal). It has WILD ENCOUNTERS (none / less / normal / more),
+ALWAYS CATCH, INSTANT VICTORY, INFINITE MONEY, DEX FULL and GIVE ITEMS, plus
+SHINY ODDS and FAST EGGS in Gold/Silver/Crystal. Turning CHEATS off hides
+the page; cheats you set stay as they are.
+
 ### If something goes wrong
 
 - **"That is not the US Red, Blue, Yellow, Gold, Silver or Crystal ROM."**
