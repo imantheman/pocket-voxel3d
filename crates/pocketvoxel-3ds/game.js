@@ -7032,9 +7032,11 @@ function eyeInFill(map, arena, rig, orbitQ8, pitchQ8) {
   const y = Math.floor(eye.y);
   if (map.inBounds(x, y))
     return false;
-  const conn = (dir) => {
-    const c = map.connection;
-    return typeof c === "function" ? !!c.call(map, dir) : false;
+  const m = map;
+  const covered = (dir, along) => {
+    if (typeof m.connectionCovers === "function")
+      return m.connectionCovers.call(map, dir, along);
+    return typeof m.connection === "function" ? !!m.connection.call(map, dir) : false;
   };
   const [ax, ay] = arena.enemyCell;
   const past = (inside) => {
@@ -7043,15 +7045,13 @@ function eyeInFill(map, arena, rig, orbitQ8, pitchQ8) {
         return d;
     return fill + 1;
   };
-  if (y < 0 && -y <= fill && !conn("north"))
-    return true;
-  if (y >= 0 && !map.inBounds(ax, y) && past((d) => map.inBounds(ax, y - d)) <= fill && !conn("south"))
-    return true;
-  if (x < 0 && -x <= fill && !conn("west"))
-    return true;
-  if (x >= 0 && !map.inBounds(x, ay) && past((d) => map.inBounds(x - d, ay)) <= fill && !conn("east"))
-    return true;
-  return false;
+  const north = y < 0 && -y <= fill;
+  const south = y >= 0 && !map.inBounds(ax, y) && past((d) => map.inBounds(ax, y - d)) <= fill;
+  const west = x < 0 && -x <= fill;
+  const east = x >= 0 && !map.inBounds(x, ay) && past((d) => map.inBounds(x - d, ay)) <= fill;
+  if (!(north || south || west || east))
+    return false;
+  return !(north && covered("north", x) || south && covered("south", x) || west && covered("west", y) || east && covered("east", y));
 }
 function solidGrid(map) {
   const solidOf = map.solidCells;

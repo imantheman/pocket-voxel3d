@@ -20,6 +20,7 @@ import { makeBattler } from "../voxelmon/game/battle/battler.ts";
 import { newMon, type PartyMon } from "../voxelmon/game/battle/mon.ts";
 import { search as arenaSearch, type Arena } from "../voxelmon/game/battle/arena.ts";
 import { chooseOrbit, chooseView, eyeInFill, orbitDir, sightlineHits } from "../voxelmon/game/battle/staging.ts";
+import { Map as Gen2Map } from "../voxelmon/game/gen2/world/Map.ts";
 import {
   HUD_BAR_EMPTY,
   HUD_BAR_FULL,
@@ -1198,6 +1199,33 @@ describe("the battle camera's opening angle", () => {
     // and past a connection the neighbour stands, not fill
     const joined = { ...filled, connection: (d: string) => (d === "south" ? { map: "X", offset: 0 } : undefined) };
     expect(eyeInFill(joined as never, edge, 0, 0, 0)).toBe(false);
+    // a connection shorter than the edge leaves the fill on the rest of it
+    // (the day-care route's east side), as the host draws it
+    const along = (lo: number, hi: number) => ({
+      ...joined,
+      connectionCovers: (d: string, at: number) => d === "south" && at >= lo && at < hi,
+    });
+    expect(eyeInFill(along(100, 140) as never, edge, 0, 0, 0)).toBe(true);
+    expect(eyeInFill(along(-10, 100) as never, edge, 0, 0, 0)).toBe(false);
+  });
+
+  test("a Gold map knows where along each edge its neighbour stands", () => {
+    const def = {
+      width: 10, height: 27, blocks: [],
+      connections: { north: { mapId: "N", offset: -5 }, east: { mapId: "E", offset: 18 } },
+    };
+    const map = new Gen2Map(def, {});
+    map.spanConnections({ N: { width: 20, height: 18 }, E: { width: 20, height: 9 } });
+    expect(map.connectionSpans).toEqual({ north: [-10, 30], east: [36, 54] });
+    expect(map.connectionCovers("east", 35)).toBe(false);
+    expect(map.connectionCovers("east", 36)).toBe(true);
+    expect(map.connectionCovers("east", 53)).toBe(true);
+    expect(map.connectionCovers("north", -11)).toBe(false);
+    expect(map.connectionCovers("north", 29)).toBe(true);
+    expect(map.connectionCovers("west", 5)).toBe(false);
+    // a neighbour the table lacks spans its whole side
+    map.spanConnections({});
+    expect(map.connectionCovers("east", 0)).toBe(true);
   });
 
   test("a wall on both sides still opens on the clearest one", () => {

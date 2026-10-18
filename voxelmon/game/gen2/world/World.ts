@@ -10201,6 +10201,9 @@ export class World {
     this.skyfall = undefined;
     if (this.player) this.player.spriteYOffset = undefined;
     this.map = Map.new(def, tileset);
+    // (not the Lua's: where along each edge the voxel world stands a
+    // neighbour rather than the border fill, for the battle camera)
+    this.map.spanConnections(this.maps);
     this.rebuildAttrGrid();
     // A follow pairing points at two live objects, and a map load rebuilds
     // them (RefreshMapSprites).
