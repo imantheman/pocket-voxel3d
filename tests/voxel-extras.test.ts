@@ -36,8 +36,9 @@ import { PartyState } from "../voxelmon/game/ui/partyscreen.ts";
 import { drawKantoGear, gearTabs, gearTouchDown, gearTouchUp } from "../voxelmon/game/ui/kantogear.ts";
 import { availableApps } from "../voxelmon/game/ui/gear/apps/home.ts";
 import { GIVE_PAGE, givePocket } from "../voxelmon/game/ui/gear/apps/cheats.ts";
-import { TOOLS, toolUnlocked } from "../voxelmon/game/ui/gear/model.ts";
-import { TILE_H, TILE_W, wrap } from "../voxelmon/game/ui/gear/draw.ts";
+import { APPS, TOOLS, toolUnlocked } from "../voxelmon/game/ui/gear/model.ts";
+import { COLS, TILE_H, TILE_W, wrap } from "../voxelmon/game/ui/gear/draw.ts";
+import { KEY_W, SWITCHER_EDGE, switcherLayout, switcherWidth } from "../voxelmon/game/ui/gear/ui.ts";
 import { encodeGlyphs } from "../voxelmon/game/ui/tiles.ts";
 
 const root = join(import.meta.dir, "..");
@@ -677,12 +678,19 @@ describe("the OPTION screen: SETTINGS and ENHANCEMENTS", () => {
     expect(rowText(1, 1, "TEXT SPEED")).toEqual(encodeGlyphs("TEXT SPEED"));
     expect(rowText(17, 6, "SETTINGS")).toEqual(encodeGlyphs("SETTINGS"));
     expect(host.grid[17]![4]).toBe(0x13); // the left arrow (UI_TILE.arrowLeft)
+    // the shoulder buttons against the arrows' outer sides: L◀ SETTINGS ▶R
+    expect(host.grid[17]![3]).toBe(encodeGlyphs("L")[0]);
+    expect(host.grid[17]![16]).toBe(encodeGlyphs("R")[0]);
     expect(host.grid[16]![18]).toBe(0xee); // more below: the GB's ▼
     expect(host.grid[0]!.every((t) => t === host.grid[0]![0])).toBe(true); // the top line stays blank
     menu.turnPage(1);
     game.tick(0);
     expect(rowText(17, 4, "ENHANCEMENTS")).toEqual(encodeGlyphs("ENHANCEMENTS"));
     expect(host.grid[17]![2]).toBe(0x13);
+    // L and R a column in from either edge
+    expect(host.grid[17]![1]).toBe(encodeGlyphs("L")[0]);
+    expect(host.grid[17]![18]).toBe(encodeGlyphs("R")[0]);
+    expect(host.grid[17]![0]).toBe(host.grid[17]![19]);
     expect(rowText(1, 1, "SPEED")).toEqual(encodeGlyphs("SPEED"));
     expect(rowText(3, 2, "1X")).toEqual(encodeGlyphs("1X"));
     expect(rowText(5, 1, "EXP FOR CATCHING")).toEqual(encodeGlyphs("EXP FOR CATCHING"));
@@ -854,6 +862,85 @@ describe("the gear's CHEATS app", () => {
     for (const s of [CHEAT_TEXT.gaveBag(99), CHEAT_TEXT.gavePc(99), CHEAT_TEXT.gaveSplit(98, 99), CHEAT_TEXT.have, CHEAT_TEXT.full, CHEAT_TEXT.notNow]) {
       expect(encodeGlyphs(s).length).toBeLessThanOrEqual(18);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// the gear's app switcher: [L] ◀ TITLE ▶ [R]
+// ---------------------------------------------------------------------------
+
+describe("the app header's L and R keys", () => {
+  const titles = APPS.filter((a) => a.id !== "home").map((a) => a.title);
+  const clocks: [string, boolean][] = [["9:47AM", false], ["12:59PM", false], ["1:05PM", false], ["23:59", true], ["07:05", true]];
+
+  test("every title: the keys clear of the edges and the clock, the arrows and title on half cells", () => {
+    for (const t of titles) {
+      const n = encodeGlyphs(t).length;
+      for (const [clock, h24] of clocks) {
+        const L = switcherLayout(n, clock, h24);
+        expect(L.keyL).toBeGreaterThanOrEqual(SWITCHER_EDGE);
+        const end = L.keyR + KEY_W;
+        expect(end).toBeLessThanOrEqual((L.clock >= 0 ? L.clock : COLS * TILE_W) - SWITCHER_EDGE);
+        expect(end - L.keyL).toBe(switcherWidth(n));
+        for (const x of [L.left, L.title, L.right]) expect(x % 8).toBe(0);
+        // a half cell between each arrow and the title, the title whole
+        expect(L.title - L.left).toBe(24);
+        expect(L.right - L.title).toBe(n * 16 + 8);
+        // seven glyphs or fewer keep the clock whatever the hour
+        if (n <= 7) expect(L.clock).toBeGreaterThanOrEqual(0);
+      }
+    }
+  });
+
+  test("the header does not move with the hour; a long title has the bar when the clock leaves no room", () => {
+    const at = (t: string, c: string, h24 = false) => switcherLayout(encodeGlyphs(t).length, c, h24);
+    for (const t of ["TRAINER", "BAG", "PARTY", "OPTIONS"]) expect(at(t, "9:47AM").left).toBe(at(t, "12:59PM").left);
+    expect(at("EXPLORER", "9:47AM").clock).toBe(13 * TILE_W);
+    expect(at("EXPLORER", "12:59PM").clock).toBe(-1);
+    expect(at("EXPLORER", "23:59", true).clock).toBe(14 * TILE_W);
+    // ENHANCEMENTS has the bar, centred
+    const e = at("ENHANCEMENTS", "9:47AM");
+    expect(e.clock).toBe(-1);
+    expect(e.keyL + (e.keyR + KEY_W) ).toBe(COLS * TILE_W);
+  });
+
+  test.skipIf(!hasGen)("drawn: two light keys on the bar with their letters, ◀ ▶ and the title light", () => {
+    class RectGrid extends MenuHost {
+      grid: number[][] = Array.from({ length: 18 }, () => Array(20).fill(0));
+      rects: number[][] = [];
+      uiClearBottom(): void { this.grid.forEach((r) => r.fill(0)); this.rects = []; }
+      uiTileBottom(x: number, y: number, t: number): void { if (x >= 0 && y >= 0 && x < 20 && y < 18) this.grid[y]![x] = t; }
+      uiRectBottom(x: number, y: number, w: number, h: number, shade: number): void { this.rects.push([x, y, w, h, shade]); }
+    }
+    const host = new RectGrid();
+    const game = new VoxelmonGame(data!, host, 1);
+    game.newGame();
+    game.closeToOverworld();
+    game.setGearView("trainer");
+    drawKantoGear(host as never, game as never);
+    const bar = host.rects.filter(([, y, , h]) => y! + h! <= Math.floor(TILE_H));
+    const keys = bar.filter((r) => r[4] === 0);
+    const ink = bar.filter((r) => r[4] === 3);
+    // each key is two light rects (its corners cut); the letters are dark
+    expect(keys.length).toBe(4);
+    expect(ink.length).toBeGreaterThan(4);
+    for (const [x, y, w, h] of bar) {
+      expect(y).toBeGreaterThanOrEqual(1); // a px of the bar above and below
+      expect(y! + h!).toBeLessThanOrEqual(Math.floor(TILE_H) - 1);
+      expect(x).toBeGreaterThanOrEqual(SWITCHER_EDGE);
+      expect(x! + w!).toBeLessThanOrEqual(COLS * TILE_W - SWITCHER_EDGE);
+    }
+    // every dark stroke inside a key
+    for (const [x, , w] of ink) expect(keys.some(([kx, , kw]) => x! >= kx! && x! + w! <= kx! + kw!)).toBe(true);
+    // ◀ TRAINER ▶ light on row 0, column 0 and 19 clear
+    const row = host.grid[0]!;
+    const glyph = (t: number) => t & 0xfff;
+    expect(row.map(glyph)).toContain(0x13);
+    expect(row.map(glyph)).toContain(0xed);
+    const titleAt = row.findIndex((t) => glyph(t) === encodeGlyphs("T")[0]);
+    expect(row.slice(titleAt, titleAt + 7).map(glyph)).toEqual(encodeGlyphs("TRAINER"));
+    expect(row[0]).toBe(0);
+    expect(row[19]).toBe(0);
   });
 });
 

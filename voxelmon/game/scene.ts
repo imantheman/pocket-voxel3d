@@ -1833,15 +1833,19 @@ export class Scene {
         // The pages (ui/extras_layout.ts): the page's name between the L/R
         // arrows on the bottom line, under the rows, which keep the places
         // they always had. (The top line is not used: the host's top screen
-        // cuts into it.)
+        // cuts into it.) Each arrow has the shoulder button that turns that
+        // way against its outer side -- "L◀ SETTINGS ▶R" -- which leaves
+        // ENHANCEMENTS a column clear of either edge.
         const top = 1;
         const paged = pages.length > 1;
         if (paged) {
           const name = String(pages[page] ?? "");
           const nx = Math.floor((20 - name.length) / 2);
+          this.stamp(host, nx - 3, 17, "L");
           host.uiTile(nx - 2, 17, UI_TILE.arrowLeft);
           this.stamp(host, nx, 17, name);
           host.uiTile(nx + name.length + 1, 17, ARROW_CURSOR);
+          this.stamp(host, nx + name.length + 2, 17, "R");
         }
         // Items are the rows and then CANCEL; only the window from `first`
         // is drawn, four lines each, so the screen scrolls with the cursor.

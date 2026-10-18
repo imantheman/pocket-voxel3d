@@ -23464,9 +23464,11 @@ class Scene {
         if (paged) {
           const name = String(pages[page] ?? "");
           const nx = Math.floor((20 - name.length) / 2);
+          this.stamp(host, nx - 3, 17, "L");
           host.uiTile(nx - 2, 17, UI_TILE.arrowLeft);
           this.stamp(host, nx, 17, name);
           host.uiTile(nx + name.length + 1, 17, ARROW_CURSOR);
+          this.stamp(host, nx + name.length + 2, 17, "R");
         }
         for (let k = 0;k < visible; k++) {
           const i = first + k;
@@ -26489,26 +26491,119 @@ function clockStr(clock24) {
 }
 var CLOCK_COL = COLS - 8;
 function header(ctx, title, opts = {}) {
+  if (opts.arrows) {
+    switcherHeader(ctx, title, opts);
+    return;
+  }
   const { host } = ctx;
-  const many = !!opts.arrows;
-  const w = width(title) + (many ? 4 : 0);
+  const w = width(title);
   const wide = w > CLOCK_COL && opts.aside === undefined;
   const x = wide ? Math.max(1, Math.floor((COLS - w) / 2)) : Math.max(0, Math.floor((CLOCK_COL - w) / 2));
-  if (many) {
-    host.uiTileBottom(x, 0, UI_TILE.arrowLeft | LIGHT_BIT);
-    host.uiTileBottom(x + w - 1, 0, ARROW_CURSOR | LIGHT_BIT);
-    if (opts.onLeft)
-      region("hdr:left", 0, 0, x + 1, 1, opts.onLeft);
-    const rightEnd = wide ? COLS : CLOCK_COL;
-    if (opts.onRight)
-      region("hdr:right", x + w - 1, 0, Math.max(1, rightEnd - (x + w - 1)), 1, opts.onRight);
-  }
-  text(host, x + (many ? 2 : 0), 0, title, "light");
+  text(host, x, 0, title, "light");
   if (opts.onTitle)
-    region("hdr:title", x + (many ? 1 : 0), 0, width(title) + 2, 1, opts.onTitle);
+    region("hdr:title", x, 0, w, 1, opts.onTitle);
   const aside = wide ? "" : opts.aside ?? clockStr(ctx.gear.clock24);
   if (aside)
     text(host, Math.max(0, COLS - width(aside) - 1), 0, aside, "light");
+}
+var BAR_PX = Math.floor(TILE_H);
+var KEY_W = 9;
+var KEY_H = BAR_PX - 2;
+var SWITCHER_EDGE = 6;
+var KEY_GLYPH = {
+  L: ["XX...", "XX...", "XX...", "XX...", "XX...", "XX...", "XXXXX"],
+  R: ["XXXX.", "XX.XX", "XX.XX", "XXXX.", "XX.X.", "XX.XX", "XX.XX"]
+};
+function switcherWidth(n) {
+  return KEY_W + 16 + 8 + n * 16 + 8 + 16 + KEY_W;
+}
+function switcherLayout(n, clock, clock24) {
+  const w = switcherWidth(n);
+  const lead = KEY_W;
+  const clockAt = (s) => (COLS - width(s) - 1) * TILE_W;
+  const rooms = [];
+  if (clock) {
+    rooms.push([SWITCHER_EDGE, clockAt(clock24 ? "23:59" : "12:59PM") - SWITCHER_EDGE, clockAt(clock)]);
+    rooms.push([SWITCHER_EDGE, clockAt(clock) - SWITCHER_EDGE, clockAt(clock)]);
+  }
+  rooms.push([SWITCHER_EDGE, COLS * TILE_W - SWITCHER_EDGE, -1]);
+  let room = rooms[rooms.length - 1];
+  let left = Math.max(0, Math.round((room[0] + (room[1] - room[0] - w) / 2 + lead) / 8) * 8);
+  for (const r of rooms) {
+    const [a, b] = r;
+    const lo = Math.ceil((a + lead) / 8) * 8;
+    const hi = Math.floor((b - w + lead) / 8) * 8;
+    if (hi < lo)
+      continue;
+    const ideal = a + (b - a - w) / 2 + lead;
+    left = Math.min(hi, Math.max(lo, Math.round(ideal / 8) * 8));
+    room = r;
+    break;
+  }
+  const title = left + 24;
+  const right2 = title + n * 16 + 8;
+  return { left, title, right: right2, keyL: left - KEY_W, keyR: right2 + 16, clock: room[2] };
+}
+function textAtPx(host, px2, y, codes, bit) {
+  const cell = Math.floor(px2 / TILE_W);
+  const half = px2 - cell * TILE_W >= TILE_W / 2 ? HALF_BIT : 0;
+  for (let i = 0;i < codes.length; i++) {
+    const cx = cell + i;
+    if (cx >= 0 && cx < COLS)
+      host.uiTileBottom(cx, y, codes[i] | bit | half);
+  }
+}
+function shoulderKey(host, x, letter) {
+  if (!host.uiRectBottom)
+    return;
+  const y = Math.floor((BAR_PX - KEY_H) / 2);
+  host.uiRectBottom(x + 1, y, KEY_W - 2, KEY_H, 0);
+  host.uiRectBottom(x, y + 1, KEY_W, KEY_H - 2, 0);
+  const rows = KEY_GLYPH[letter];
+  const gw = rows[0].length;
+  const gx = x + Math.ceil((KEY_W - gw) / 2);
+  const gy = y + Math.floor((KEY_H - rows.length) / 2);
+  const done = rows.map(() => new Set);
+  rows.forEach((row2, ry) => {
+    for (let rx = 0;rx < gw; rx++) {
+      if (row2[rx] !== "X" || done[ry].has(rx))
+        continue;
+      let len = 1;
+      while (rx + len < gw && row2[rx + len] === "X")
+        len++;
+      const run = row2.slice(rx, rx + len);
+      const edgeOk = (r) => r.slice(rx, rx + len) === run && r[rx - 1] !== "X" && r[rx + len] !== "X";
+      let h = 1;
+      if (edgeOk(row2))
+        while (ry + h < rows.length && edgeOk(rows[ry + h]))
+          h++;
+      for (let k = 0;k < h; k++)
+        for (let j = 0;j < len; j++)
+          done[ry + k].add(rx + j);
+      host.uiRectBottom(gx + rx, gy + ry, len, h, 3);
+      rx += len - 1;
+    }
+  });
+}
+function switcherHeader(ctx, title, opts) {
+  const { host } = ctx;
+  const n = width(title);
+  const clock = opts.aside ?? clockStr(ctx.gear.clock24);
+  const L = switcherLayout(n, clock, ctx.gear.clock24);
+  textAtPx(host, L.left, 0, [UI_TILE.arrowLeft], LIGHT_BIT);
+  textAtPx(host, L.right, 0, [ARROW_CURSOR], LIGHT_BIT);
+  textAtPx(host, L.title, 0, encodeGlyphs(title), LIGHT_BIT);
+  shoulderKey(host, L.keyL, "L");
+  shoulderKey(host, L.keyR, "R");
+  const end = L.clock >= 0 ? L.clock : COLS * TILE_W;
+  if (opts.onLeft)
+    regionPx("hdr:left", 0, 0, L.left + TILE_W, TILE_H, opts.onLeft);
+  if (opts.onRight)
+    regionPx("hdr:right", L.right, 0, Math.max(TILE_W, end - L.right), TILE_H, opts.onRight);
+  if (opts.onTitle)
+    regionPx("hdr:title", L.left + TILE_W, 0, L.right - L.left - TILE_W, TILE_H, opts.onTitle);
+  if (L.clock >= 0 && clock)
+    text(host, L.clock / TILE_W, 0, clock, "light");
 }
 function tabs(ctx, list2, active2, pick, y = ROWS - 1) {
   if (list2.length === 0)
