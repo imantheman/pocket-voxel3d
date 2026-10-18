@@ -1400,6 +1400,37 @@ fn ui_tile_uv(tile: u16, cols: u16, pw: f32, ph: f32, scale: u32) -> (f32, f32, 
     (x0 / pw, (x0 + c) / pw, 1.0 - y0 / ph, 1.0 - (y0 + c) / ph)
 }
 
+/// UV rect of a sub-rect of a page as the guest names it -- in the page's own
+/// source pixels (uiSpriteRectBottom's sx, sy, sw, sh) -- in the texture
+/// `build_page_tex` actually made of it. V already flipped.
+///
+/// For most pages that texture is the page itself, padded to a power of two,
+/// so the source rect divides straight through. The UI sheet is not: it is
+/// prescaled and repacked cell by cell on its own pitch (page_prescale,
+/// UI_GUTTER), so dividing its source coordinates by the padded source size
+/// lands up to a cell away -- which is what drew the trainer card's badges on
+/// the bottom screen as fragments of their neighbours. There each edge goes
+/// through the repack: the cell it is in, then its texel within that cell.
+/// A rect inside one cell (all the guest asks for -- one tile, blown up)
+/// maps exactly; one spanning cells would take the gutters between them too.
+fn page_sub_uv(page: &pak::AtlasPage, sx: i32, sy: i32, sw: i32, sh: i32) -> (f32, f32, f32, f32) {
+    let (tw, th) = page_tex_size(page);
+    if page.kind != atlas_kind::UI {
+        let s = page_prescale(page) as f32;
+        return (sx as f32 * s / tw, (sx + sw) as f32 * s / tw,
+                1.0 - sy as f32 * s / th, 1.0 - (sy + sh) as f32 * s / th);
+    }
+    let scale = page_prescale(page);
+    let (pitch, g) = (ui_pitch(scale) as i32, UI_GUTTER as i32);
+    let cell = UI_CELL as i32;
+    let s = scale as i32;
+    // a start edge: the cell it opens, then that many texels in
+    let start = |e: i32| -> f32 { let e = e.max(0); ((e / cell) * pitch + g + (e % cell) * s) as f32 };
+    // an end edge (exclusive): the cell its last pixel is in, then just past it
+    let end = |e: i32| -> f32 { let l = (e - 1).max(0); ((l / cell) * pitch + g + (l % cell + 1) * s) as f32 };
+    (start(sx) / tw, end(sx + sw) / tw, 1.0 - start(sy) / th, 1.0 - end(sy + sh) / th)
+}
+
 /// Byte offsets within one uploaded texel.
 ///
 /// `build_page_tex` writes a palette entry out most-significant byte first,
@@ -7889,14 +7920,14 @@ if page_tex.len() < pak_static.atlases.len() {
                 let spr = &sc.ui_b_sprites[i];
                 if spr.w <= 0 || spr.h <= 0 { continue; }
                 let Some(spg) = pak_static.atlases.get(spr.page as usize) else { bad_page("bottom sprite", spr.page as i64); continue; };
-                let (spw, sph) = (po2(spg.w as u32) as f32, po2(spg.h as u32) as f32);
-                // A sub-rect (uiSpriteRectBottom) or the whole page. V is
-                // flipped like Item::ScreenPic: page row 0 is v = 1.
+                // A sub-rect (uiSpriteRectBottom) or the whole page, mapped
+                // into the texture build_page_tex made (the UI sheet's is
+                // repacked: page_sub_uv). V is flipped like Item::ScreenPic:
+                // page row 0 is v = 1.
                 let (u_a, u_b, v_top, v_bot) = if spr.sw > 0 && spr.sh > 0 {
-                    (spr.sx as f32 / spw, (spr.sx + spr.sw) as f32 / spw,
-                     1.0 - spr.sy as f32 / sph, 1.0 - (spr.sy + spr.sh) as f32 / sph)
+                    page_sub_uv(spg, spr.sx as i32, spr.sy as i32, spr.sw as i32, spr.sh as i32)
                 } else {
-                    (0.0, spg.w as f32 / spw, 1.0, 1.0 - spg.h as f32 / sph)
+                    page_sub_uv(spg, 0, 0, spg.w as i32, spg.h as i32)
                 };
                 let (u_l, u_r) = if spr.flags & 1 != 0 { (u_b, u_a) } else { (u_a, u_b) };
                 let (sx0, sy0) = (spr.x, spr.y);
