@@ -52,6 +52,8 @@ extern "C" {
     #[cfg(not(feature = "gen3"))] fn audio3ds_init(rate: i32, frames_per_buf: i32) -> i32;
     fn audio3ds_free_frames() -> i32;
     fn audio3ds_queue(pcm: *const i16, frames: i32) -> i32;
+    /// citro3d's alpha test, passing alpha GREATER than `r`: on for the card
+    /// passes only (CARD_ALPHA_REF), off for everything else.
     fn c3d_alpha_test(on: i32, r: i32);
     fn c3d_early_depth(on: i32);
     fn c3d_target_clear(target: *mut core::ffi::c_void, bits: u32, colour: u32, depth: u32);
@@ -4336,6 +4338,22 @@ fn strip_chunk_resident(
 /// with the perf line before trusting it.
 const EARLY_DEPTH: bool = false;
 
+/// The card passes' alpha test: a texel passes when its alpha is GREATER
+/// than this, so 0x7F keeps alpha 0x80 and up -- the cutoff the PSP host and
+/// the software raster use, and gen3's billboards on this one.
+///
+/// A card is a quad, and its sheet is clear (alpha 0) round the sprite.
+/// Without the test those clear texels still wrote depth, so a card drawn
+/// after it and standing behind it failed the depth test across the front
+/// card's whole rectangle: a straight-edged box round the player cutting a
+/// visible-wild mon or the follower in two, the near battle card cutting the
+/// far one. Discarded, they write nothing. The sheets' alpha is 0 or 255
+/// (palette index 0 clear, nearest filtering), and the shiny sparkle's flat
+/// colours are 0xE0 and 0xFF, so nothing meant to show is lost. Terrain,
+/// grass and trees keep drawing without it: a card still hides behind a
+/// wall and sinks into the grass drawn before it, as it did.
+const CARD_ALPHA_REF: i32 = 0x7F;
+
 /// A map whose trees are instanced (TINS) carries no box tier in its
 /// chunks, so a seam strip built from it would be bare ground where its
 /// trees are. Those keep to the file path until strips place instances too.
@@ -8394,6 +8412,8 @@ if page_tex.len() < pak_static.atlases.len() {
                     frame.bind_vertex_uniform(uvx_idx, FVec4::new(1.0, 1.0, 0.0, 0.0));
                     if !card_bufs.is_empty() {
                         frame.set_attr_info(&card_attr);
+                        // the clear texels write no depth (CARD_ALPHA_REF)
+                        unsafe { c3d_alpha_test(1, CARD_ALPHA_REF); }
                         for (pg, ci) in card_bufs.iter() {
                             match card_tex(*pg) {
                                 Some(t) => frame.bind_texture(texture::Index::Texture0, t),
@@ -8408,6 +8428,7 @@ if page_tex.len() < pak_static.atlases.len() {
                             let _ = frame.draw_arrays(buffer::Primitive::Triangles, sb, None);
                             frame.set_texenvs(&[stage0]);
                         }
+                        unsafe { c3d_alpha_test(0, 0); }
                         frame.set_attr_info(&attr_info);
                         gpuwatch::pass(pn("left: cards into the tilt target", "right: cards into the tilt target"));
                     }
@@ -8526,6 +8547,11 @@ if page_tex.len() < pak_static.atlases.len() {
                     // the pass. The mvp is the plain one -- there is no
                     // longer a quantisation scale to divide back out.
                     frame.set_attr_info(&card_attr);
+                    // A card's clear texels are discarded, not drawn: drawn,
+                    // they wrote depth, and a card standing behind it failed
+                    // the depth test across the whole empty rectangle
+                    // (CARD_ALPHA_REF).
+                    unsafe { c3d_alpha_test(1, CARD_ALPHA_REF); }
                     for (pg, ci) in card_bufs.iter() {
                         match card_tex(*pg) {
                             Some(t) => frame.bind_texture(texture::Index::Texture0, t),
@@ -8542,7 +8568,9 @@ if page_tex.len() < pak_static.atlases.len() {
                         frame.set_texenvs(&[stage0]);
                     }
                     // Restore: render_to runs again for the right eye, and
-                    // the companion screen's passes follow, both on i16.
+                    // the companion screen's passes follow, both on i16 and
+                    // with every texel drawn.
+                    unsafe { c3d_alpha_test(0, 0); }
                     frame.set_attr_info(&attr_info);
                 }
                 // The Gold screen, last of all: it is the UI (text boxes,
