@@ -1494,16 +1494,59 @@ fn pal_sel_now() -> i32 {
 }
 
 fn build_page_tex(pak: &Pak, pidx: u16, pal_sel: i32) -> (Vec<u8>, u32, u32) {
-    build_page_tex_custom(pak, pidx, pal_sel, None)
+    build_page_tex_custom(pak, pidx, pal_sel, None, false)
+}
+
+/// Whether a page drawn as a card gets its white backdrop keyed out
+/// (`matte_backdrop`): every picture page. A mon's pic was keyed when it was
+/// imported, so for it this finds nothing to do; a trainer's was not.
+fn card_matte(pak: &Pak, pidx: usize) -> bool {
+    pak.atlases.get(pidx).is_some_and(|p| p.kind == atlas_kind::PICS)
+}
+
+/// The white backdrop of a picture, keyed out: the shade-0 texels joined to
+/// the page's border through other shade-0 texels become index 255, the
+/// pics' clear index. Interior whites (eyes, highlights, a shirt) are walled
+/// in by the outline and stay.
+///
+/// The importer does exactly this to every mon pic (import/gfx.ts
+/// matteColor0, after the Lua extractor's ImageWriter), which is why those
+/// stand on the 3D battle stage with the world showing round them. The
+/// trainers' pics are written without it -- the extractor never needed them
+/// clear, as the 2D battle screen draws them on white anyway -- so on the
+/// stage the player (and every trainer they fight) stood in an opaque
+/// square: grey, once the night or a cave's dim had tinted the white. Done
+/// here rather than at import so the paks people have already cooked show
+/// it, and so the import stays byte-for-byte the extractor's.
+fn matte_backdrop(lin: &mut [u8], w: usize, h: usize) {
+    const SHADE0: u8 = 0;
+    const CLEAR: u8 = 0xff;
+    if w == 0 || h == 0 || lin.len() < w * h { return; }
+    let mut stack: Vec<usize> = Vec::new();
+    for x in 0..w { stack.push(x); stack.push((h - 1) * w + x); }
+    for y in 0..h { stack.push(y * w); stack.push(y * w + w - 1); }
+    while let Some(i) = stack.pop() {
+        if lin[i] != SHADE0 { continue; }
+        lin[i] = CLEAR;
+        let (x, y) = (i % w, i / w);
+        if x > 0 { stack.push(i - 1); }
+        if x + 1 < w { stack.push(i + 1); }
+        if y > 0 { stack.push(i - w); }
+        if y + 1 < h { stack.push(i + w); }
+    }
 }
 
 /// build_page_tex with shades 0..3 recoloured: a battle card's own colours
 /// (spec `cardPal`, RGB555 lightest first). The page's transparent index and
-/// the rest of its palette are kept.
-fn build_page_tex_custom(pak: &Pak, pidx: u16, pal_sel: i32, custom: Option<[u16; 4]>) -> (Vec<u8>, u32, u32) {
+/// the rest of its palette are kept. `matte` keys a picture's white backdrop
+/// out (matte_backdrop), for a page about to stand on the stage as a card.
+fn build_page_tex_custom(pak: &Pak, pidx: u16, pal_sel: i32, custom: Option<[u16; 4]>, matte: bool) -> (Vec<u8>, u32, u32) {
     let page = pak.atlases[pidx as usize];
-    let lin = pak::unswizzle(page.w as usize, page.h as usize, page.frame(0))
+    let mut lin = pak::unswizzle(page.w as usize, page.h as usize, page.frame(0))
         .unwrap_or_else(|_| vec![0u8; (page.w as usize) * (page.h as usize)]);
+    if matte {
+        matte_backdrop(&mut lin, page.w as usize, page.h as usize);
+    }
     let base = &pak.palettes[resolve_pal(pak, pidx, page.kind, COLOR_PAL_NONE, pal_sel)];
     let mut own = [0u32; 256];
     let palv: &[u32] = match custom {
@@ -5619,6 +5662,10 @@ fn main() {
     // page's texture was built in, and the textures they replaced, freed a
     // frame later (the GPU may still be reading them).
     let mut page_tex_pal: Vec<Option<[u16; 4]>> = Vec::new();
+    // Which page textures were built with their backdrop keyed out for a
+    // card (card_matte): a card finding its page built plain (by a picture
+    // drawn flat first) builds it again. Cleared wherever page_tex is.
+    let mut page_tex_matte: Vec<bool> = Vec::new();
     let mut page_tex_retired: Vec<texture::Texture> = Vec::new();
     let mut page_tex_retired_hold: Vec<texture::Texture> = Vec::new();
     // Gold's emote bubble (spec `emoteArt`; build_emote_tex), and the art
@@ -6074,6 +6121,7 @@ fn main() {
                             if i >= page_tex.len() || pg.kind == atlas_kind::UI { continue; }
                             if pak_static.page_pal(i as u16).is_some() { continue; }
                             page_tex[i] = None;
+                            if let Some(m) = page_tex_matte.get_mut(i) { *m = false; }
                         }
                     }
                     let (gx, gy) = sc.cam_px();
@@ -7353,10 +7401,15 @@ if page_tex.len() < pak_static.atlases.len() {
             if page_tex_pal.len() < page_tex.len() {
                 page_tex_pal.resize(page_tex.len(), None);
             }
+            if page_tex_matte.len() < page_tex.len() {
+                page_tex_matte.resize(page_tex.len(), false);
+            }
             for card in sc.battle.cards.iter().filter(|c| c.shown && c.has_pal) {
                 let i = card.pic as usize;
-                if i < page_tex.len() && (page_tex[i].is_none() || page_tex_pal[i] != Some(card.pal)) {
-                    let (data, ptw, pth) = build_page_tex_custom(pak_static, i as u16, pal_sel_now(), Some(card.pal));
+                if i >= page_tex.len() { continue; }
+                let matte = card_matte(pak_static, i);
+                if page_tex[i].is_none() || page_tex_pal[i] != Some(card.pal) || page_tex_matte[i] != matte {
+                    let (data, ptw, pth) = build_page_tex_custom(pak_static, i as u16, pal_sel_now(), Some(card.pal), matte);
                     if let Ok(mut t) = texture::Texture::new(
                         texture::TextureParameters::new_2d(ptw as u16, pth as u16, texture::ColorFormat::Rgba8)) {
                         if t.load_image(&data, texture::Face::default()).is_ok() {
@@ -7366,21 +7419,34 @@ if page_tex.len() < pak_static.atlases.len() {
                                 page_tex_retired.push(old);
                             }
                             page_tex_pal[i] = Some(card.pal);
+                            page_tex_matte[i] = matte;
                         }
                     }
                 }
             }
         }
+        if page_tex_matte.len() < page_tex.len() {
+            page_tex_matte.resize(page_tex.len(), false);
+        }
         for (pg, _) in card_groups.iter() {
             let i = *pg as usize;
-            if i < page_tex.len() && page_tex[i].is_none() {
-                let (data, ptw, pth) = build_page_tex(pak_static, *pg, pal_sel_now());
+            if i >= page_tex.len() { continue; }
+            // a picture standing as a card, keyed (card_matte); built plain
+            // by a flat picture first, it is built again
+            let matte = card_matte(pak_static, i);
+            if page_tex[i].is_none() || (matte && !page_tex_matte[i]) {
+                let (data, ptw, pth) = build_page_tex_custom(pak_static, *pg, pal_sel_now(), None, matte);
                 if let Ok(mut t) = texture::Texture::new(
                     texture::TextureParameters::new_2d(ptw as u16, pth as u16, texture::ColorFormat::Rgba8)) {
                     if t.load_image(&data, texture::Face::default()).is_ok() {
                         unsafe { gsp_flush(data.as_ptr(), data.len() as u32); }
                         sprite_filter(&mut t, pak_static, *pg);
-                        page_tex[i] = Some(t);
+                        if let Some(old) = page_tex[i].replace(t) {
+                            page_tex_retired.push(old);
+                        }
+                        page_tex_matte[i] = matte;
+                        // in the page's own colours, not a card's
+                        if let Some(p) = page_tex_pal.get_mut(i) { *p = None; }
                     }
                 }
             }
@@ -7479,6 +7545,7 @@ if page_tex.len() < pak_static.atlases.len() {
                 let (tw, th) = page_tex_size(&pak_static.atlases[i]);
                 if tw * th * 4.0 >= 262144.0 && page_tex[i].is_some() {
                     page_tex[i] = None;
+                    if let Some(m) = page_tex_matte.get_mut(i) { *m = false; }
                     dlog(&format!("[pv] let picture page {} go ({} KB)", i, (tw * th * 4.0) as u32 / 1024));
                 }
             }
