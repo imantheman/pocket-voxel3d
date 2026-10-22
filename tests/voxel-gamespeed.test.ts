@@ -1,4 +1,5 @@
-// GAME SPEED (voxelmon/game/gamespeed.ts): the OPTION screen's SPEED 1X/2X.
+// GAME SPEED (voxelmon/game/gamespeed.ts): the OPTION screen's SPEED 1X/2X,
+// or BATTLES (2X in battles only).
 // At 2X each host step runs two logic ticks and composes the scene once,
 // after the last; the sound's clock keeps real time; a link runs at 1X.
 //
@@ -111,7 +112,7 @@ describe("the speed stepper", () => {
   });
 
   test("the option: 1 or 2 under options.gameSpeed, anything else is 1X", () => {
-    expect(GAME_SPEEDS.map((s) => s.label)).toEqual(["1X", "2X"]);
+    expect(GAME_SPEEDS.map((s) => s.label)).toEqual(["1X", "2X", "BATTLES"]);
     expect(gameSpeedOf(undefined)).toBe(1);
     expect(gameSpeedOf({})).toBe(1);
     expect(gameSpeedOf({ gameSpeed: 2 })).toBe(2);
@@ -124,6 +125,19 @@ describe("the speed stepper", () => {
     expect(gameSpeedIndex(o)).toBe(1);
     expect(setGameSpeedIn(o, 1)).toBe(1);
     expect(gameSpeedIndex(o)).toBe(0);
+  });
+
+  test("BATTLES: 2X in a battle, 1X anywhere else", () => {
+    const o: { gameSpeed?: unknown } = {};
+    expect(setGameSpeedIn(o, "battle")).toBe("battle");
+    expect(o.gameSpeed).toBe("battle");
+    expect(gameSpeedIndex(o)).toBe(2);
+    expect(gameSpeedOf(o)).toBe(1);
+    expect(gameSpeedOf(o, false)).toBe(1);
+    expect(gameSpeedOf(o, true)).toBe(2);
+    // the plain choices do not care where they are
+    expect(gameSpeedOf({ gameSpeed: 2 }, false)).toBe(2);
+    expect(gameSpeedOf({ gameSpeed: 1 }, true)).toBe(1);
   });
 });
 
@@ -291,7 +305,7 @@ describe("GAME SPEED on Red/Blue/Yellow", () => {
     expect(menu.view().pages[menu.view().page]).toBe("ENHANCEMENTS");
     const at = rows().findIndex((r) => r.label === GAME_SPEED_LABEL);
     expect(at).toBe(0);
-    expect(rows()[at]!.choices).toEqual(["1X", "2X"]);
+    expect(rows()[at]!.choices).toEqual(["1X", "2X", "BATTLES"]);
     expect(rows()[at]!.index).toBe(0);
     game.tick(VOX_BTN.right);
     game.tick(0);
@@ -300,7 +314,34 @@ describe("GAME SPEED on Red/Blue/Yellow", () => {
     expect(rows()[at]!.index).toBe(1);
     game.tick(VOX_BTN.right);
     game.tick(0);
+    expect((game.save as any).options.gameSpeed).toBe("battle");
+    expect(rows()[at]!.index).toBe(2);
+    // (no battle up: the game's own pace)
     expect(game.gameSpeed()).toBe(1);
+    game.tick(VOX_BTN.right);
+    game.tick(0);
+    expect((game.save as any).options.gameSpeed).toBe(1);
+    expect(game.gameSpeed()).toBe(1);
+  });
+
+  test.skipIf(!hasGen)("BATTLES: 1X walking, 2X once a battle is up, 1X again after", () => {
+    const game = kantoGame();
+    const g: any = game;
+    game.setGameSpeed("battle");
+    expect(game.logicSpeed()).toBe(1);
+    const stepper = new SpeedStepper();
+    let t0 = g.tickIndex;
+    for (let i = 0; i < 10; i++) kantoStep(game, stepper, 0);
+    expect(g.tickIndex - t0).toBe(10);
+    game.startWildBattle("PIDGEY", 3);
+    expect(game.inBattle()).toBe(true);
+    expect(game.logicSpeed()).toBe(2);
+    t0 = g.tickIndex;
+    for (let i = 0; i < 10; i++) kantoStep(game, stepper, 0);
+    expect(g.tickIndex - t0).toBe(20);
+    // the battle over (popped), the walk is back at 1X
+    while (game.inBattle()) g.pop();
+    expect(game.logicSpeed()).toBe(1);
   });
 
   test.skipIf(!hasGen)("options.gameSpeed survives the Lua save and the gen1recomp swap", () => {
@@ -312,6 +353,11 @@ describe("GAME SPEED on Red/Blue/Yellow", () => {
     fromDisk(back, romData as never);
     expect(back.options.gameSpeed).toBe(2);
     expect(gameSpeedOf(back.options)).toBe(2);
+    // and BATTLES, a string, the same way
+    game.setGameSpeed("battle");
+    const back2: any = decodeSave(encodeSave(toDisk(game.save as never)));
+    fromDisk(back2, romData as never);
+    expect(back2.options.gameSpeed).toBe("battle");
   });
 });
 
@@ -432,6 +478,33 @@ describe("GAME SPEED on Gold/Silver/Crystal", () => {
     expect(GAME_SPEED_ROW.text!(page.options)).toBe("2X");
     game.frame(VOX_BTN.right);
     game.frame(0);
+    expect(page.options.gameSpeed).toBe("battle");
+    expect(GAME_SPEED_ROW.text!(page.options)).toBe("BATTLES");
+    game.frame(VOX_BTN.right);
+    game.frame(0);
     expect(page.options.gameSpeed).toBe(1);
+  });
+
+  test.skipIf(!gold)("BATTLES: 1X walking, 2X while a battle is on the stack", async () => {
+    const game = await goldGame();
+    const { Mon } = await import("../voxelmon/game/gen2/battle/Mon.ts");
+    const { Battle } = await import("../voxelmon/game/gen2/battle/Battle.ts");
+    const { Screens } = await import("../voxelmon/game/gen2/shared/ui/Screens.ts");
+    game.setGameSpeed("battle");
+    expect(game.logicSpeed()).toBe(1);
+    const perfect = { attack: 15, defense: 15, speed: 15, special: 15 };
+    game.save.party = [Mon.new(game.data, "CYNDAQUIL", 14, { dvs: perfect })];
+    const wild: any = Mon.new(game.data, "PIDGEY", 3, { dvs: perfect });
+    const battle: any = Battle.new({ data: game.data, party: game.save.party, wild, save: game.save });
+    Screens.push(game, "Gen2BattleState", { battle, save: game.save, onDone: () => game.stack.pop() });
+    expect(game.inBattle()).toBe(true);
+    expect(game.logicSpeed()).toBe(2);
+    // a menu opened over the fight keeps it
+    game.stack.push({ screenId: "Gen2PackMenu" });
+    expect(game.logicSpeed()).toBe(2);
+    game.stack.pop();
+    game.stack.pop();
+    expect(game.inBattle()).toBe(false);
+    expect(game.logicSpeed()).toBe(1);
   });
 });

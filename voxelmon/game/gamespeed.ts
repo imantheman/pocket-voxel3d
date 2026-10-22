@@ -19,15 +19,24 @@
 // own `options.gameSpeed`, 1 or 2, so a save moving between the two keeps
 // what each game set.
 //
+// BATTLES is 2X while a battle is on (the wipe into it, the fight, its menus)
+// and 1X everywhere else: the walking and the story at the game's own pace,
+// the fights quick. Saved as options.gameSpeed = "battle"; each game says
+// when it is in a battle (game.inBattle()).
+//
 // THE API the OPTION / ENHANCEMENTS pages use: GAME_SPEEDS for the choices,
-// gameSpeedOf(options) / setGameSpeedIn(options, n) on an options table, or
-// the games' own game.gameSpeed() / game.setGameSpeed(n), which do the same
-// on the game's options.
+// gameSpeedOf(options, inBattle) / setGameSpeedIn(options, key) on an
+// options table, or the games' own game.gameSpeed() / game.setGameSpeed(key),
+// which do the same on the game's options.
 
 export const GAME_SPEEDS = [
   { key: 1, label: "1X" },
   { key: 2, label: "2X" },
+  { key: "battle", label: "BATTLES" },
 ] as const;
+
+/** What the row saves: 1, 2, or "battle" (2X in battles only). */
+export type GameSpeedSetting = (typeof GAME_SPEEDS)[number]["key"];
 
 /** The row's label, kept here so a page can find the row by it. */
 export const GAME_SPEED_LABEL = "SPEED";
@@ -35,20 +44,31 @@ export const GAME_SPEED_LABEL = "SPEED";
 /** The fastest the option goes. */
 export const GAME_SPEED_MAX = 2;
 
-/** options.gameSpeed -> 1 or 2 (1 when unset or anything else). */
-export function gameSpeedOf(options: { gameSpeed?: unknown } | null | undefined): number {
-  const v = Number(options?.gameSpeed);
-  return v >= GAME_SPEED_MAX ? GAME_SPEED_MAX : 1;
+/** options.gameSpeed -> the row's choice: "battle", else 1 or 2 (1 when
+ *  unset or anything else). */
+export function gameSpeedSetting(options: { gameSpeed?: unknown } | null | undefined): GameSpeedSetting {
+  const raw = options?.gameSpeed;
+  if (raw === "battle") return "battle";
+  return Number(raw) >= GAME_SPEED_MAX ? GAME_SPEED_MAX : 1;
+}
+
+/** options.gameSpeed -> the speed the logic runs at now: 1 or 2. BATTLES is
+ *  2 only `inBattle`. */
+export function gameSpeedOf(options: { gameSpeed?: unknown } | null | undefined, inBattle = false): number {
+  const s = gameSpeedSetting(options);
+  if (s === "battle") return inBattle ? GAME_SPEED_MAX : 1;
+  return s;
 }
 
 /** The row's index into GAME_SPEEDS. */
 export function gameSpeedIndex(options: { gameSpeed?: unknown } | null | undefined): number {
-  return gameSpeedOf(options) - 1;
+  const s = gameSpeedSetting(options);
+  return GAME_SPEEDS.findIndex((c) => c.key === s);
 }
 
 /** Set options.gameSpeed to `n`, clamped to a choice the row offers. */
-export function setGameSpeedIn(options: { gameSpeed?: unknown }, n: unknown): number {
-  const v = gameSpeedOf({ gameSpeed: n });
+export function setGameSpeedIn(options: { gameSpeed?: unknown }, n: unknown): GameSpeedSetting {
+  const v = gameSpeedSetting({ gameSpeed: n });
   options.gameSpeed = v;
   return v;
 }

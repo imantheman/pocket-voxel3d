@@ -58,7 +58,7 @@ import { MenuFade } from "../ui/MenuFade.ts";
 import { Vc, type CopyResult } from "../vc/session.ts";
 import * as saveio from "../platform/saveio.ts";
 import { tonumber } from "../platform/lua.ts";
-import { gameSpeedOf, setGameSpeedIn } from "../../gamespeed.ts";
+import { gameSpeedOf, setGameSpeedIn, type GameSpeedSetting } from "../../gamespeed.ts";
 
 function noop(): void {}
 
@@ -992,18 +992,28 @@ export class Game2 {
   logicSpeed(): number {
     if (this.linked()) return 1;
     if (this.speedOverride != null) return Math.max(1, Number(this.speedOverride) || 1);
-    return gameSpeedOf(this.options);
+    return this.gameSpeed();
   }
 
-  /** options.gameSpeed, the OPTION screen's SPEED: 1 or 2. */
+  /** The speed the OPTION screen's SPEED asks for now, 1 or 2: options.gameSpeed,
+   *  with BATTLES 2 only while a battle is up. */
   gameSpeed(): number {
-    return gameSpeedOf(this.options);
+    return gameSpeedOf(this.options, this.inBattle());
+  }
+
+  /** A battle (or the wipe into one) is on the stack, under any menu opened
+   *  over it: SPEED's BATTLES. */
+  inBattle(): boolean {
+    for (const s of this.stack.states as { screenId?: string }[]) {
+      if (s.screenId === "Gen2BattleState" || s.screenId === "Gen2BattleTransition") return true;
+    }
+    return false;
   }
 
   /** Set SPEED (clamped to 1 or 2); takes effect on the next host step. The
    * options file is written by whoever writes it for the other rows (the
    * OPTION screen's onDone). */
-  setGameSpeed(n: number): number {
+  setGameSpeed(n: unknown): GameSpeedSetting {
     if (!this.options || typeof this.options !== "object") this.options = {};
     return setGameSpeedIn(this.options, n);
   }

@@ -118,7 +118,7 @@ import type { SaveSummary } from "./ui/title.ts";
 import * as Bag from "./rules/bag.ts";
 import { tiltShiftLevel } from "./tiltshift.ts";
 import { holdMoney, tradeEvoLevel } from "./extras.ts";
-import { gameSpeedOf, setGameSpeedIn } from "./gamespeed.ts";
+import { gameSpeedOf, setGameSpeedIn, type GameSpeedSetting } from "./gamespeed.ts";
 import { is2d } from "./viewmode.ts";
 import { OverworldView2d } from "./world/view2d.ts";
 
@@ -1390,13 +1390,19 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     };
   }
 
-  /** save.options.gameSpeed, the OPTION screen's SPEED (gamespeed.ts): 1 or 2. */
+  /** The speed SPEED asks for now (gamespeed.ts), 1 or 2: save.options.gameSpeed,
+   *  with BATTLES 2 only while a battle is up. */
   gameSpeed(): number {
-    return gameSpeedOf((this.save as { options?: { gameSpeed?: unknown } } | undefined)?.options);
+    return gameSpeedOf((this.save as { options?: { gameSpeed?: unknown } } | undefined)?.options, this.inBattle());
   }
 
-  /** Set SPEED (clamped to 1 or 2); takes effect on the next host step. */
-  setGameSpeed(n: number): number {
+  /** A battle is on the stack (under any menu opened over it): SPEED's BATTLES. */
+  inBattle(): boolean {
+    return this.stack.some((s) => s.kind === "battle");
+  }
+
+  /** Set SPEED (1, 2 or "battle"; anything else is 1X); takes effect on the next host step. */
+  setGameSpeed(n: unknown): GameSpeedSetting {
     const save = this.save as { options?: { gameSpeed?: unknown } } | undefined;
     if (!save) return 1;
     return setGameSpeedIn((save.options ??= {}), n);

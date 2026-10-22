@@ -39,7 +39,8 @@ export interface ExtrasRowDef {
 
 /**
  * The SPEED row heads ENHANCEMENTS: GAME SPEED (../gamespeed.ts), the logic
- * at 1X or 2X, saved as the port-only options.gameSpeed (1 or 2) -- not
+ * at 1X, 2X, or 2X in battles only (BATTLES), saved as the port-only
+ * options.gameSpeed (1, 2 or "battle") -- not
  * gen1recomp's own speed keys. Its words are gamespeed.ts's GAME_SPEEDS.
  */
 export const SPEED_ROW: ExtrasRowDef = {
@@ -107,7 +108,9 @@ export const ENHANCEMENTS_APP = {
  * row with its pill has the value on the row under it.
  */
 export const ENHANCEMENT_GEAR: Record<string, { about: string | Record<string, string> }> = {
-  gameSpeed: { about: { "1X": "THE GAME'S OWN PACE.", "2X": "EVERYTHING TWICE AS FAST." } },
+  gameSpeed: {
+    about: { "1X": "THE GAME'S OWN PACE.", "2X": "EVERYTHING TWICE AS FAST.", BATTLES: "BATTLES TWICE AS FAST." },
+  },
   expForCatching: { about: "A CATCH PAYS EXP, AS A WIN DOES." },
   partyExpShare: { about: "EVERY MON IN THE PARTY EARNS EXP." },
   tradeEvoLv40: { about: "TRADE EVOLUTIONS ALSO BY LEVEL 40." },

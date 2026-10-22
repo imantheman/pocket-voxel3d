@@ -109,7 +109,8 @@ function onOffRow(label: string, key: string): OptionRow {
 
 /**
  * SPEED, the port's fast-forward (voxelmon/game/gamespeed.ts): the logic
- * runs 1X or 2X, the music does not. Saved as options.gameSpeed (1 or 2),
+ * runs 1X or 2X (or 2X in battles only: BATTLES), the music does not.
+ * Saved as options.gameSpeed (1, 2 or "battle"),
  * at the top of the ENHANCEMENTS page; the Kanto games' wording
  * (ui/extras_layout.ts SPEED_ROW).
  */
