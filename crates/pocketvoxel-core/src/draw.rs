@@ -303,6 +303,12 @@ pub struct DrawList {
     pub tint: u32,
     pub palette: i32,
     pub items: Vec<Item>,
+    /// Over a 3D battle with a Gold screen up: where its field layer (the
+    /// move animation's objects, `lcd::ATTR_FIELD`) goes. A backend that
+    /// draws it renders the screen without them (`ObjSet::NotField`) and the
+    /// layer (`ObjSet::FieldOnly`) into this rect; one that does not leaves
+    /// them on the screen as before.
+    pub lcd_field: Option<ui::LcdField>,
 }
 
 /// Modulate a color's RGB by a tint's RGB (alpha kept). Integer rounding,
@@ -1171,12 +1177,14 @@ pub fn build(scene: &Scene, pak: &Pak) -> DrawList {
 
     ui::append_anim(scene, &card_rects, &mut items);
     ui::append_ui(scene, pak, ui::ease_panels(scene, &card_rects), &mut items);
+    let lcd_field = if scene.lcd.shown && scene.lcd.has_field_objs() { ui::lcd_field(&card_rects) } else { None };
 
     DrawList {
         cam,
         tint: scene.tint,
         palette: scene.palette,
         items,
+        lcd_field,
     }
 }
 

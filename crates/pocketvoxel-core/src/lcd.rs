@@ -58,6 +58,31 @@ pub const ATTR_Y_FLIP: u8 = 0x40;
 /// On a cell: its colours 1-3 draw over objects. On an object: it draws
 /// only over background colour 0 (or a hole).
 pub const ATTR_PRIORITY: u8 = 0x80;
+/// On an object (where ATTR_HOLE means nothing): it belongs to the battle's
+/// FIELD -- a move animation's sprite -- not to the screen's HUD. Over a 3D
+/// battle the field's objects are drawn apart, as their own layer, and put
+/// where the battle cards are (draw.rs `lcd_field`), instead of where the
+/// Game Boy drew the two pics.
+pub const ATTR_FIELD: u8 = ATTR_HOLE;
+
+/// Which objects a render draws: all of them; all but the field's; or only
+/// the field's, on a clear screen (no map, no window).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ObjSet {
+    All,
+    NotField,
+    FieldOnly,
+}
+
+impl ObjSet {
+    fn wants(self, attr: u8) -> bool {
+        match self {
+            ObjSet::All => true,
+            ObjSet::NotField => attr & ATTR_FIELD == 0,
+            ObjSet::FieldOnly => attr & ATTR_FIELD != 0,
+        }
+    }
+}
 
 /// `lcdRegs` flags.
 pub const FLAG_BG_ON: u8 = 0x01;
@@ -631,9 +656,21 @@ impl LcdScreen {
     /// 3DS host calls: a map row reads each tile's row eight pixels running,
     /// so the host's page lookup runs once per tile per line.
     pub fn render_rows(&self, row: &mut impl FnMut(u16, u16, u8) -> [u8; 8], out: &mut [u8]) {
+        self.render_rows_of(row, out, ObjSet::All);
+    }
+
+    /// Whether any object on the screen is the field's (ATTR_FIELD).
+    pub fn has_field_objs(&self) -> bool {
+        self.flags & FLAG_OBJ_ON != 0 && self.objs[..self.obj_count].iter().any(|o| o.attr & ATTR_FIELD != 0)
+    }
+
+    /// `render_rows` with only the objects `set` asks for; FieldOnly draws
+    /// them alone on a clear screen.
+    pub fn render_rows_of(&self, row: &mut impl FnMut(u16, u16, u8) -> [u8; 8], out: &mut [u8], set: ObjSet) {
         if out.len() < LCD_W * LCD_H {
             return;
         }
+        let field_only = set == ObjSet::FieldOnly;
         let mut fetch = RowFetch {
             banks: &self.banks[..self.bank_count],
             row,
@@ -647,7 +684,7 @@ impl LcdScreen {
         let mut bg_col = [0u8; LCD_W];
         let mut bg_pri = [false; LCD_W];
         let objs = &self.objs[..self.obj_count];
-        let obj_on = self.flags & FLAG_OBJ_ON != 0 && !objs.is_empty();
+        let obj_on = self.flags & FLAG_OBJ_ON != 0 && objs.iter().any(|o| set.wants(o.attr));
         let tall = self.flags & FLAG_OBJ_TALL != 0;
         let h: i32 = if tall { 16 } else { 8 };
         let mut win_line: usize = 0;
@@ -656,7 +693,7 @@ impl LcdScreen {
         // the background's own cells over it, not the layer's row of each
         // of its holes (most of the screen, every frame the map scrolls)
         // (a canvas: the under layer is the host's to draw, behind the screen)
-        let under = self.under_on && !self.canvas_on();
+        let under = self.under_on && !self.canvas_on() && !field_only;
         let blocks = under && self.flags & FLAG_BG_ON != 0;
         // which of the layer's pixels keep their colours above objects, a
         // bit each (an object's line reads it back with the colours)
@@ -668,7 +705,7 @@ impl LcdScreen {
         for ly in 0..LCD_H {
             let line = &mut out[ly * LCD_W..(ly + 1) * LCD_W];
             let lyi = ly as i32;
-            let keep = obj_on && objs.iter().any(|o| (0..h).contains(&(lyi - o.y as i32)));
+            let keep = obj_on && objs.iter().any(|o| set.wants(o.attr) && (0..h).contains(&(lyi - o.y as i32)));
             // the layer already on this line: its pixels stay under the
             // holes, and an object's line reads the colours under it back
             // (colour = the pixel's low two bits; a layer hole is colour 0)
@@ -691,7 +728,7 @@ impl LcdScreen {
             let mut px = Line { line, bg_col: &mut bg_col, bg_pri: &mut bg_pri, keep };
             let scy = if self.line_target == 1 { self.lines[ly] } else { self.scy };
             let scx = if self.line_target == 2 { self.lines[ly] } else { self.scx };
-            if self.flags & FLAG_BG_ON != 0 {
+            if self.flags & FLAG_BG_ON != 0 && !field_only {
                 let by = (ly as u8).wrapping_add(scy) as usize;
                 let rowi = ((by >> 3) & 31) * 32;
                 let py = (by & 7) as u8;
@@ -710,7 +747,7 @@ impl LcdScreen {
                     x += n;
                 }
             }
-            if self.flags & FLAG_WIN_ON != 0 && ly >= self.wy as usize && self.wx <= 166 {
+            if self.flags & FLAG_WIN_ON != 0 && ly >= self.wy as usize && self.wx <= 166 && !field_only {
                 let x0 = (self.wx as usize).saturating_sub(7);
                 let rowi = 1024 + ((win_line >> 3) & 31) * 32;
                 let py = (win_line & 7) as u8;
@@ -740,6 +777,9 @@ impl LcdScreen {
             }
             // a lower index on top (CGB): draw from the last one back
             for o in objs.iter().rev() {
+                if !set.wants(o.attr) {
+                    continue;
+                }
                 let mut ty = lyi - o.y as i32;
                 if !(0..h).contains(&ty) {
                     continue;
@@ -1380,6 +1420,34 @@ mod tests {
         lcd.op(op::LCD_CELLS, &[0], Some(&row));
         let f = frame(&lcd);
         assert_eq!(f[3], 1);
+    }
+
+    #[test]
+    fn the_field_objects_draw_apart_when_asked() {
+        let mut lcd = LcdScreen::default();
+        lcd.op(op::LCD_BANK, &[0, 1, 256], None);
+        let row: String = (0..32).map(|_| "000100").collect();
+        lcd.op(op::LCD_CELLS, &[0], Some(&row));
+        // a HUD object at (4, 2), and a move animation's (ATTR_FIELD) at (20, 2)
+        lcd.op(op::LCD_OBJS, &[], Some("0002000400020300020014000213"));
+        assert!(lcd.has_field_objs());
+        let draw = |set: ObjSet| {
+            let mut out = alloc::vec![0u8; LCD_W * LCD_H];
+            lcd.render_rows_of(&mut |_, tile, _| [(tile % 4) as u8; 8], &mut out, set);
+            out
+        };
+        let obj = (16 + 3) * 4 + 2;
+        let all = draw(ObjSet::All);
+        assert_eq!((all[2 * LCD_W + 4], all[2 * LCD_W + 20]), (obj, obj));
+        // the screen without the field: the map where it was
+        let rest = draw(ObjSet::NotField);
+        assert_eq!((rest[2 * LCD_W + 4], rest[2 * LCD_W + 20]), (obj, 1));
+        // the field alone, on a clear screen
+        let field = draw(ObjSet::FieldOnly);
+        assert_eq!((field[2 * LCD_W + 4], field[2 * LCD_W + 20], field[0]), (LCD_HOLE, obj, LCD_HOLE));
+        // HUD objects only: no field
+        lcd.op(op::LCD_OBJS, &[], Some("00020004000203"));
+        assert!(!lcd.has_field_objs());
     }
 
     #[test]

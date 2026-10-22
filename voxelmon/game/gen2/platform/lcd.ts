@@ -30,6 +30,8 @@ export const ATTR_HOLE = 0x10;
 export const ATTR_X_FLIP = 0x20;
 export const ATTR_Y_FLIP = 0x40;
 export const ATTR_PRIORITY = 0x80;
+/** On an object: a battle field's (a move animation's) -- core lcd.rs ATTR_FIELD. */
+export const ATTR_FIELD = ATTR_HOLE;
 
 export const FLAG_BG_ON = 0x01;
 export const FLAG_WIN_ON = 0x02;

@@ -74,31 +74,70 @@ const ANIM_SCALE_MAX: f32 = 2.5;
 /// that threw it.
 fn anim_frame(cards: &[Option<Rect>; UI_PANELS]) -> (f32, f32, f32, bool) {
     let home = (UI_ORIGIN_X, 0.0, UI_SCALE, false);
-    let (Some(p), Some(e)) = (cards[0], cards[1]) else { return home };
+    anim_frame_from(cards, GB_ENEMY_PIC, GB_PLAYER_PIC).unwrap_or(home)
+}
+
+/// `anim_frame` for pics centred at `enemy` and `player` (GB px); None
+/// without both cards.
+fn anim_frame_from(cards: &[Option<Rect>; UI_PANELS], enemy: (f32, f32), player: (f32, f32))
+    -> Option<(f32, f32, f32, bool)> {
+    let (Some(p), Some(e)) = (cards[0], cards[1]) else { return None };
     let mid = |r: Rect| ((r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5);
     let (px, py) = mid(p);
     let (ex, ey) = mid(e);
     let gap = crate::math::sqrtf((ex - px) * (ex - px) + (ey - py) * (ey - py));
     let gb_gap = {
-        let dx = GB_ENEMY_PIC.0 - GB_PLAYER_PIC.0;
-        let dy = GB_ENEMY_PIC.1 - GB_PLAYER_PIC.1;
+        let dx = enemy.0 - player.0;
+        let dy = enemy.1 - player.1;
         crate::math::sqrtf(dx * dx + dy * dy)
     };
     if gb_gap < 1.0 {
-        return home;
+        return None;
     }
     let scale = (gap / gb_gap).clamp(UI_SCALE * ANIM_SCALE_MIN, UI_SCALE * ANIM_SCALE_MAX);
-    let gb_mid = (
-        (GB_ENEMY_PIC.0 + GB_PLAYER_PIC.0) * 0.5,
-        (GB_ENEMY_PIC.1 + GB_PLAYER_PIC.1) * 0.5,
-    );
+    let gb_mid = ((enemy.0 + player.0) * 0.5, (enemy.1 + player.1) * 0.5);
     let screen_mid = ((px + ex) * 0.5, (py + ey) * 0.5);
-    (
+    Some((
         screen_mid.0 - gb_mid.0 * scale,
         screen_mid.1 - gb_mid.1 * scale,
         scale,
         ex < px,
-    )
+    ))
+}
+
+/// Gold's two pic boxes (BattleState.ts): the enemy's 7x7 at tile (12, 0),
+/// the player's 6x6 at tile (2, 6).
+const GOLD_ENEMY_PIC: (f32, f32) = (96.0 + 28.0, 28.0);
+const GOLD_PLAYER_PIC: (f32, f32) = (16.0 + 24.0, 48.0 + 24.0);
+
+/// Where a Gold screen's field layer goes (its ATTR_FIELD objects drawn on
+/// their own, all 160x144 of it): the rect in UI px, and whether it is
+/// mirrored (the mons the other way round on screen -- draw it with u
+/// reversed). The same mapping as Kanto's sprites (`anim_frame`): the two
+/// pic boxes onto the two cards.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LcdField {
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+    pub mirrored: bool,
+}
+
+pub fn lcd_field(cards: &[Option<Rect>; UI_PANELS]) -> Option<LcdField> {
+    let (ox, oy, scale, mirrored) = anim_frame_from(cards, GOLD_ENEMY_PIC, GOLD_PLAYER_PIC)?;
+    let (w, h) = (crate::lcd::LCD_W as f32, crate::lcd::LCD_H as f32);
+    // mirrored, GB x maps through 2 * mid - x: the layer's left edge (x = 0)
+    // lands on the right
+    let mid = (GOLD_ENEMY_PIC.0 + GOLD_PLAYER_PIC.0) * 0.5;
+    let (gx0, gx1) = if mirrored { (2.0 * mid - w, 2.0 * mid) } else { (0.0, w) };
+    Some(LcdField {
+        x0: ox + gx0 * scale,
+        y0: oy,
+        x1: ox + gx1 * scale,
+        y1: oy + h * scale,
+        mirrored,
+    })
 }
 
 /// The GB x a tile is drawn at, reflected about the two pics' midpoint
@@ -562,6 +601,28 @@ pub fn append_ui(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_gold_field_layer_spans_the_two_cards_and_mirrors_with_them() {
+        use super::{lcd_field, Rect};
+        let none = [None; super::UI_PANELS];
+        assert_eq!(lcd_field(&none), None);
+        // player low left, enemy high right: as the Game Boy drew them
+        let mut cards = [None; super::UI_PANELS];
+        cards[0] = Some(Rect::of(100.0, 150.0, 140.0, 200.0));
+        cards[1] = Some(Rect::of(300.0, 40.0, 340.0, 90.0));
+        let f = lcd_field(&cards).unwrap();
+        assert!(!f.mirrored && f.x0 < f.x1 && f.y0 < f.y1);
+        // the pics' midpoint lands on the cards' midpoint
+        let s = (f.x1 - f.x0) / crate::lcd::LCD_W as f32;
+        let mid_gb = ((124.0 + 40.0) * 0.5, (28.0 + 72.0) * 0.5);
+        assert!((f.x0 + mid_gb.0 * s - 220.0).abs() < 0.5);
+        assert!((f.y0 + mid_gb.1 * s - 120.0).abs() < 0.5);
+        // the other way round on screen: mirrored, still left to right
+        cards.swap(0, 1);
+        let m = lcd_field(&cards).unwrap();
+        assert!(m.mirrored && m.x0 < m.x1);
+    }
+
     use super::*;
     use crate::pak;
     use crate::spec::op;

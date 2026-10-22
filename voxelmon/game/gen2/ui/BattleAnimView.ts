@@ -20,7 +20,7 @@ import { Chrome } from "./Chrome.ts";
 import { GbcPalette } from "../shared/render/GbcPalette.ts";
 import { Palettes } from "../world/Palettes.ts";
 import G, { currentLcd, type LcdImage, SOLID } from "../platform/screen.ts";
-import { ATTR_HOLE, ATTR_PRIORITY, ATTR_X_FLIP, ATTR_Y_FLIP, type Palette4 } from "../platform/lcd.ts";
+import { ATTR_FIELD, ATTR_HOLE, ATTR_PRIORITY, ATTR_X_FLIP, ATTR_Y_FLIP, type Palette4 } from "../platform/lcd.ts";
 import type { AnimBgState, AnimPainter, AnimRunnerInstance } from "../battle/AnimRunner.ts";
 
 type Colors = readonly (readonly number[])[];
@@ -264,8 +264,11 @@ export class BattleAnimView implements AnimPainter {
     // were most of an animation's OBJ layer
     const pal: Palette4 = GbcPalette.resolvedPalette(colors);
     const slot = lcd.palette(pal, true);
+    // Over a 3D battle (openField) they are the field's: the host draws
+    // them where the cards stand rather than where the pics were.
     const flags =
-      (attr & OAM_XFLIP ? ATTR_X_FLIP : 0) | (attr & OAM_YFLIP ? ATTR_Y_FLIP : 0) | (attr & OAM_PRIORITY ? ATTR_PRIORITY : 0);
+      (attr & OAM_XFLIP ? ATTR_X_FLIP : 0) | (attr & OAM_YFLIP ? ATTR_Y_FLIP : 0) | (attr & OAM_PRIORITY ? ATTR_PRIORITY : 0)
+      | (BattleAnimView.openField ? ATTR_FIELD : 0);
     lcd.obj(x + G.tx, y + G.ty, tile, slot | flags);
   }
 

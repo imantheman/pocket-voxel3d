@@ -16,6 +16,7 @@ use ctru::services::romfs::RomFS;
 use pocketvoxel_core::draw::{self, resolve_pal, Item, EMOTE_ART_PAGE};
 use pocketvoxel_core::pak::{self, AlignedBlob, Pak};
 use pocketvoxel_core::scene::UI_B_SPRITES_MAX;
+use pocketvoxel_core::lcd::ObjSet;
 use pocketvoxel_core::mapplan::{
     build_order, plan_build, planned_ranges, FILLER_KINDS, GROUND_KINDS, TREE_KINDS,
 };
@@ -1871,7 +1872,8 @@ struct CardVertex { pos: [f32; 3], color: [u8; 4], uv: [f32; 2] }
 struct LcdTex {
     tex: [Option<texture::Texture>; 2],
     cur: usize,
-    drawn: Option<u32>,
+    /// The serial drawn, and which objects it was drawn with.
+    drawn: Option<(u32, ObjSet)>,
     fb: Vec<u8>,
     data: Vec<u8>,
 }
@@ -1891,6 +1893,13 @@ impl LcdTex {
     /// `pages` caches the unswizzled tile pages (shared by both screens).
     fn update(&mut self, lcd: &pocketvoxel_core::lcd::LcdScreen, atl: &[pak::AtlasPage],
               pages: &mut Vec<(u16, Vec<u8>, usize)>) -> bool {
+        self.update_of(lcd, atl, pages, ObjSet::All)
+    }
+
+    /// `update`, with only the objects `set` asks for (a 3D battle's field
+    /// layer is drawn apart: lcd::ATTR_FIELD).
+    fn update_of(&mut self, lcd: &pocketvoxel_core::lcd::LcdScreen, atl: &[pak::AtlasPage],
+              pages: &mut Vec<(u16, Vec<u8>, usize)>, set: ObjSet) -> bool {
         if !lcd.shown {
             // Hidden: forget what was drawn so the next frame shown is drawn
             // afresh, but keep the two textures. Freeing them on every hide
@@ -1899,10 +1908,10 @@ impl LcdTex {
             self.drawn = None;
             return false;
         }
-        if self.drawn == Some(lcd.serial) {
+        if self.drawn == Some((lcd.serial, set)) {
             return true;
         }
-        self.drawn = Some(lcd.serial);
+        self.drawn = Some((lcd.serial, set));
         let t_lcd = now_us();
         let mut last = usize::MAX;
         let mut row = |page: u16, tile: u16, y: u8| -> [u8; 8] {
@@ -1934,7 +1943,7 @@ impl LcdTex {
             }
             r
         };
-        lcd.render_rows(&mut row, &mut self.fb);
+        lcd.render_rows_of(&mut row, &mut self.fb, set);
         let t_conv = now_us();
         unsafe { PERF_LCDR_US += t_conv - t_lcd; }
         // RGBA5551: the screen's own RGB555 colours and its holes exactly, at
@@ -5658,6 +5667,9 @@ fn main() {
     // the two Gold screens' textures: the top (over the world) and the
     // bottom (Gold's companion panel)
     let mut lcd_top = LcdTex::new();
+    // a 3D battle's field layer: the Gold screen's move-animation objects,
+    // drawn where the cards stand (DrawList::lcd_field)
+    let mut lcd_field_tex = LcdTex::new();
     // VIEW 2D's widened / zoomed-out map, behind the Gold screen
     let mut map_canvas = MapCanvas::new();
     let mut canvas_hold: Option<[buffer::Info; 2]> = None;
@@ -7178,8 +7190,11 @@ fn main() {
             ((scene_tint >> 16) & 0xff) as u8,
             255,
         ];
+        // Where this frame's Gold field layer goes, if anywhere (below).
+        let mut lcd_field_at: Option<pocketvoxel_core::ui::LcdField> = None;
         if guest_drive {
             let list = unsafe { draw::build(voxel::scene(), pak_static) };
+            lcd_field_at = list.lcd_field;
             // Use the game's eye/focus with OUR projection: importing the
             // PSP VP directly clips (different depth range + screen tilt).
             let (sox, soy) = {
@@ -7775,6 +7790,7 @@ if page_tex.len() < pak_static.atlases.len() {
         // world shows through a text box's surroundings; laid over the same
         // 10:9 rect as the GB screen, above it.
         let mut lcd_buf: Option<buffer::Info> = None;
+        let mut lcd_field_buf: Option<buffer::Info> = None;
         let mut canvas_bufs: Option<[buffer::Info; 2]> = None;
         let mut lcd_b_buf: Option<buffer::Info> = None;
         {
@@ -7810,7 +7826,28 @@ if page_tex.len() < pak_static.atlases.len() {
                     canvas_bufs = Some([a, b]);
                 }
             }
-            if lcd_top.update(&sc.lcd, atl, &mut lcd_pages) {
+            // A 3D battle's move animation: its objects drawn as their own
+            // layer over the cards, and left off the screen itself.
+            let top_set = if lcd_field_at.is_some() { ObjSet::NotField } else { ObjSet::All };
+            if let Some(f) = lcd_field_at {
+                if lcd_field_tex.update_of(&sc.lcd, atl, &mut lcd_pages, ObjSet::FieldOnly) {
+                    let (x0, y0, x1, y1) = (qpx(f.x0), qpx(f.y0), qpx(f.x1), qpx(f.y1));
+                    let (u1, v1) = (160.0 / 256.0, 144.0 / 256.0);
+                    // mirrored: the mons the other way round, u reversed
+                    let (ua, ub) = if f.mirrored { (u1, 0.0) } else { (0.0, u1) };
+                    let mp = |px: i16, py: i16, u: f32, v: f32| Vertex {
+                        pos: [px, py, 0, 0], color: [255, 255, 255, 255], uv: [u, v] };
+                    let verts = [
+                        mp(x0, y0, ua, 1.0), mp(x1, y0, ub, 1.0), mp(x1, y1, ub, 1.0 - v1),
+                        mp(x0, y0, ua, 1.0), mp(x1, y1, ub, 1.0 - v1), mp(x0, y1, ua, 1.0 - v1),
+                    ];
+                    let mut bi = buffer::Info::new();
+                    if bi.add(gpu_buf(&verts[..]), attr_info.permutation()).is_ok() {
+                        lcd_field_buf = Some(bi);
+                    }
+                }
+            }
+            if lcd_top.update_of(&sc.lcd, atl, &mut lcd_pages, top_set) {
                 let w = pocketvoxel_core::lcd::LCD_W as f32 * UI_VIEW_H / pocketvoxel_core::lcd::LCD_H as f32;
                 let ox = (UI_VIEW_W - w) / 2.0;
                 let (x0, y0, x1, y1) = (qpx(ox), qpx(0.0), qpx(ox + w), qpx(UI_VIEW_H));
@@ -8081,6 +8118,8 @@ if page_tex.len() < pak_static.atlases.len() {
         let (gb_wide_ring, gb_wide_over) = gb_wide.textures();
         let gb_buf_ref = gb_buf.as_ref();
         let lcd_tex_ref = lcd_top.texture();
+        let lcd_field_tex_ref = lcd_field_tex.texture();
+        let lcd_field_buf_ref = lcd_field_buf.as_ref();
         let lcd_b_tex_ref = lcd_bot.texture();
         let lcd_b_buf_ref = lcd_b_buf.as_ref();
         let lcd_buf_ref = lcd_buf.as_ref();
@@ -8787,6 +8826,21 @@ if page_tex.len() < pak_static.atlases.len() {
                     frame.set_texenvs(&[stage_flat]);
                     frame.draw_arrays(buffer::Primitive::Triangles, db, None).unwrap();
                     frame.set_texenvs(&[stage0]);
+                    frame.bind_vertex_uniform(projection_idx, mvp);
+                    unsafe { c3d_depth_test(1); }
+                }
+                // the field layer (a 3D battle's move animation), over the
+                // cards and under the screen's HUD
+                if let (Some(fb), Some(t)) = (lcd_field_buf_ref, lcd_field_tex_ref) {
+                    unsafe { c3d_depth_test(0); }
+                    let po: Matrix4 = Projection::orthographic(
+                        0.0..(UI_VIEW_W * UI_Q), (UI_VIEW_H * UI_Q)..0.0,
+                        ClipPlanes { near: -1.0, far: 1.0 })
+                        .screen(ScreenOrientation::Rotated).into();
+                    frame.bind_vertex_uniform(projection_idx, &po);
+                    frame.bind_vertex_uniform(uvx_idx, FVec4::new(1.0, 1.0, 0.0, 0.0));
+                    frame.bind_texture(texture::Index::Texture0, t);
+                    frame.draw_arrays(buffer::Primitive::Triangles, fb, None).unwrap();
                     frame.bind_vertex_uniform(projection_idx, mvp);
                     unsafe { c3d_depth_test(1); }
                 }
