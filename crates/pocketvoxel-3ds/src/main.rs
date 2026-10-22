@@ -5335,6 +5335,11 @@ fn main() {
     let mut right_target = instance
         .render_target(width, height, top_right, Some(DepthFormat::Depth24Stencil8))
         .expect("right target");
+    // The world is drawn at world_fov on the 400x240 top screen whatever fov
+    // a frame's camera asks for (only its eye and focus are taken): tell the
+    // core, so the move animations and the HUD's dodge it places over the
+    // battle cards use where the cards really are.
+    pocketvoxel_core::cam::set_device_projection(world_fov(), 400.0 / 240.0);
     // TILT SHIFT (the OPTION screen's, spec `tiltShift`). With it on, the 3D
     // world renders into tilt_world instead of the screen, is shrunk twice --
     // each a bilinear draw whose taps land between texels, so each averages

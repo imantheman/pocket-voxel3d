@@ -381,11 +381,15 @@ fn shadow_quad(center: Vec3, card_w: f32) -> [[f32; 3]; 4] {
 /// projects to -- so the unpulled verts give the same rectangle and this
 /// does not need to know the pull. A card with any vertex behind the eye
 /// has no usable rectangle.
+///
+/// Through `screen_vp`: where the backend really draws the card, which on
+/// the 3DS is not the rig's own framing.
 fn card_screen_rect(cam: &Camera, verts: &[[f32; 3]; 4]) -> Option<ui::Rect> {
     let (mut x0, mut y0) = (f32::MAX, f32::MAX);
     let (mut x1, mut y1) = (f32::MIN, f32::MIN);
+    let vp = cam.screen_vp();
     for v in verts.iter() {
-        let clip = cam.vp.transform(vec3(v[0], v[1], v[2]), 1.0);
+        let clip = vp.transform(vec3(v[0], v[1], v[2]), 1.0);
         if clip.w <= 1e-4 {
             return None;
         }

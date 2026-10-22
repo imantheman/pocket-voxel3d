@@ -7,6 +7,8 @@
 //! looks north as pitch rises; at rung 0 it is straight overhead and frames
 //! exactly like the flat 2D game.
 
+use core::sync::atomic::{AtomicU32, Ordering};
+
 use crate::math::{Frustum, Mat4, Vec3, atan2f, atanf, cosf, sinf, sqrtf, vec3};
 use crate::spec::{
     ARENA_GAP_CELLS, CAM_FOCAL, CELL_PX, RIG_DOLLY, RIG_DOLLY_TICKS, RIG_PAN_TICKS,
@@ -16,6 +18,21 @@ use crate::spec::{
 
 const PI: f32 = core::f32::consts::PI;
 const TAU: f32 = core::f32::consts::TAU;
+
+/// The projection a backend really draws the world with, when it is not the
+/// camera's own: the 3DS takes only eye and focus from a frame's camera and
+/// projects at its fixed `world_fov` on the 400x240 top screen. Bits of
+/// (fov_y, aspect); 0 = the camera's own. Read by `Camera::screen_vp`.
+static DEVICE_FOV_BITS: AtomicU32 = AtomicU32::new(0);
+static DEVICE_ASPECT_BITS: AtomicU32 = AtomicU32::new(0);
+
+/// A backend that projects the world its own way says how, once, so what
+/// the core places in screen space over the world (the battle cards'
+/// rects: move animations and the HUD's dodge) lands where it is drawn.
+pub fn set_device_projection(fov_y: f32, aspect: f32) {
+    DEVICE_FOV_BITS.store(fov_y.to_bits(), Ordering::Relaxed);
+    DEVICE_ASPECT_BITS.store(aspect.to_bits(), Ordering::Relaxed);
+}
 
 /// A solved camera: everything a backend needs to draw one frame.
 #[derive(Clone, Copy, Debug)]
@@ -37,6 +54,19 @@ pub struct Camera {
 impl Camera {
     pub fn frustum(&self) -> Frustum {
         Frustum::from_clip(&self.vp)
+    }
+
+    /// `vp` as the screen will show it: the backend's own projection
+    /// (`set_device_projection`) from this camera's eye, else `vp`. For
+    /// placing things in screen space over the world.
+    pub fn screen_vp(&self) -> Mat4 {
+        let fov = DEVICE_FOV_BITS.load(Ordering::Relaxed);
+        if fov == 0 {
+            return self.vp;
+        }
+        let aspect = f32::from_bits(DEVICE_ASPECT_BITS.load(Ordering::Relaxed));
+        Mat4::perspective_gl(f32::from_bits(fov), aspect, self.near, self.far)
+            .mul(&Mat4::look_at(self.eye, self.focus, self.up))
     }
 }
 
