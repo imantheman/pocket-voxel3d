@@ -17267,19 +17267,29 @@ function pcTileAt(mapLabel, x, y, facing) {
 // voxelmon/game/gamespeed.ts
 var GAME_SPEEDS = [
   { key: 1, label: "1X" },
-  { key: 2, label: "2X" }
+  { key: 2, label: "2X" },
+  { key: "battle", label: "BATTLES" }
 ];
 var GAME_SPEED_LABEL = "SPEED";
 var GAME_SPEED_MAX = 2;
-function gameSpeedOf(options) {
-  const v = Number(options?.gameSpeed);
-  return v >= GAME_SPEED_MAX ? GAME_SPEED_MAX : 1;
+function gameSpeedSetting(options) {
+  const raw = options?.gameSpeed;
+  if (raw === "battle")
+    return "battle";
+  return Number(raw) >= GAME_SPEED_MAX ? GAME_SPEED_MAX : 1;
+}
+function gameSpeedOf(options, inBattle = false) {
+  const s = gameSpeedSetting(options);
+  if (s === "battle")
+    return inBattle ? GAME_SPEED_MAX : 1;
+  return s;
 }
 function gameSpeedIndex(options) {
-  return gameSpeedOf(options) - 1;
+  const s = gameSpeedSetting(options);
+  return GAME_SPEEDS.findIndex((c) => c.key === s);
 }
 function setGameSpeedIn(options, n) {
-  const v = gameSpeedOf({ gameSpeed: n });
+  const v = gameSpeedSetting({ gameSpeed: n });
   options.gameSpeed = v;
   return v;
 }
@@ -17707,7 +17717,9 @@ var ENHANCEMENTS_APP = {
   about: ["SPEED, EXP, EVOLUTION, HMS", "AND VISIBLE WILD POKéMON."]
 };
 var ENHANCEMENT_GEAR = {
-  gameSpeed: { about: { "1X": "THE GAME'S OWN PACE.", "2X": "EVERYTHING TWICE AS FAST." } },
+  gameSpeed: {
+    about: { "1X": "THE GAME'S OWN PACE.", "2X": "EVERYTHING TWICE AS FAST.", BATTLES: "BATTLES TWICE AS FAST." }
+  },
   expForCatching: { about: "A CATCH PAYS EXP, AS A WIN DOES." },
   partyExpShare: { about: "EVERY MON IN THE PARTY EARNS EXP." },
   tradeEvoLv40: { about: "TRADE EVOLUTIONS ALSO BY LEVEL 40." },
@@ -33224,7 +33236,10 @@ ${why.slice(0, 18)}` : ""}`);
     };
   }
   gameSpeed() {
-    return gameSpeedOf(this.save?.options);
+    return gameSpeedOf(this.save?.options, this.inBattle());
+  }
+  inBattle() {
+    return this.stack.some((s) => s.kind === "battle");
   }
   setGameSpeed(n) {
     const save = this.save;
