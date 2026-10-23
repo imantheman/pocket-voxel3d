@@ -201,8 +201,12 @@ pub unsafe extern "C" fn voxel_write_err_len() -> u32 { LAST_WRITE_ERR.len() as 
 #[no_mangle]
 #[allow(static_mut_refs)]
 pub unsafe extern "C" fn voxel_save_write(s: *const u8, len: i32) -> i32 {
-    if s.is_null() || len <= 0 { return 0; }
-    let b = core::slice::from_raw_parts(s, len as usize);
+    // An empty write is the game clearing its save (the title's "Clear all
+    // saved data?", Gen 2's erase): the file is emptied, as asked. This
+    // used to return before writing, so a cleared save stayed on the card
+    // -- and came back at the next boot, and was what SYNC offered.
+    if s.is_null() || len < 0 { return 0; }
+    let b: &[u8] = if len == 0 { &[] } else { core::slice::from_raw_parts(s, len as usize) };
     LAST_WRITE_ERR = String::new();
     if card_write(SAVE_PATH, b) {
         println!("save: wrote {} bytes", b.len());
