@@ -1,35 +1,29 @@
 //! SYNC's host side: the title-screen save transfer with the PC/phone games
-//! on the same wifi (PVS1; crates/pocketvoxel-sync is the protocol). The
-//! guest's screen (voxelmon/game/sync/model.ts) reaches this through the
-//! `voxel.sync*` natives (vendor/quickjs/voxel_shim.c):
+//! on the same wifi (PVS1). The protocol, the sockets and the records the
+//! guest reads are crates/pocketvoxel-sync (`host::SyncHost`); this adds SOC
+//! and the `voxel.sync*` natives (vendor/quickjs/voxel_shim.c) that the
+//! guest's screen (voxelmon/game/sync/model.ts) calls:
 //!
-//! - `syncOpen()` starts SOC (the IP stack) and binds UDP 47610 / TCP 47611;
-//!   0 when there is no network ("ERROR: NO WIFI").
-//! - `syncPoll()` runs one frame of the session and reports, one record a
-//!   line, tab-separated: `S open|nowifi|error <why>`, `H <0|1>` (we have a
-//!   save to serve), `P <id> <platform> <game> <offered> <name>` per peer,
-//!   `G <got> <size> <name>` while pulling, and the events once each:
-//!   `O <name>` (an offer), `R <name> <size>` (a save arrived),
-//!   `F <name> <why>` (a pull failed).
+//! - `syncOpen()` starts SOC (the IP stack) and binds UDP 47610 / TCP 47611
+//!   (another port if one cannot be had); 0 when there is no network
+//!   ("ERROR: NO WIFI"). Open already: nothing is bound again.
+//! - `syncPoll()` runs one frame and returns the records (host.rs).
 //! - `syncReceived()` / `syncInstall()` / `syncDiscard()`: the arrived save
 //!   for the guest's own reader, then written (or dropped).
-//! - `syncClose()` closes every socket and stops SOC.
+//! - `syncClose()` drops every socket, then stops SOC; once.
 //!
-//! The save served is the file on the card, byte for byte, read when the
-//! screen opens and after an install. Nothing here runs unless the screen is
-//! open, and nothing is ever written without the player's two A presses.
-
+//! Every step's result goes to pvlog ("[pv] sync: ..."). The save served is
+//! the file on the card, byte for byte, read when the screen opens and after
+//! an install. Nothing is written without the player's two A presses.
 #[cfg(not(feature = "gen3"))]
 mod imp {
     use crate::voxel;
     use ctru::services::soc::Soc;
     use pocketvoxel_core::vcsave;
-    use pocketvoxel_sync::install::{self, Paths, StdStore};
-    use pocketvoxel_sync::luadata;
-    use pocketvoxel_sync::net::{self, StdNet};
+    use pocketvoxel_sync::host::{HostConfig, SyncHost};
+    use pocketvoxel_sync::install::{Paths, StdStore};
+    use pocketvoxel_sync::net;
     use pocketvoxel_sync::proto;
-    use pocketvoxel_sync::session::{Config, Event, PullPhase, Session};
-    use std::fmt::Write as _;
     use std::net::{Ipv4Addr, SocketAddrV4};
 
     #[cfg(not(any(feature = "blue", feature = "yellow", feature = "gen2")))]
@@ -49,14 +43,8 @@ mod imp {
     const BACKUP_DIR: &str = "sdmc:/3ds/voxelmon/sync_backups";
 
     struct State {
-        // (dropped in this order: the sockets before SOC)
-        session: Option<Session<StdNet>>,
+        host: SyncHost,
         soc: Option<Soc>,
-        nowifi: bool,
-        error: Option<String>,
-        received: Option<(String, Vec<u8>)>,
-        out: String,
-        reply: String,
     }
 
     static mut ST: Option<State> = None;
@@ -69,27 +57,16 @@ mod imp {
         unsafe { voxel::voxel_now_us() / 1e6 }
     }
 
-    fn card_save() -> Option<Vec<u8>> {
-        std::fs::read(voxel::SAVE_PATH).ok().filter(|b| !b.is_empty())
-    }
-
-    /// The name HELLO carries: the save's player, else "3DS".
-    fn name_of(body: Option<&[u8]>) -> String {
-        body.and_then(|b| luadata::check(b).ok())
-            .and_then(|i| i.player_name)
-            .map(|n| proto::sanitize_name(&n))
-            .filter(|n| !n.is_empty())
-            .unwrap_or_else(|| "3DS".into())
-    }
-
-    /// No tab or newline gets into a record.
-    fn field(s: &str) -> String {
-        s.chars().map(|c| if c == '\t' || c == '\n' || c == '\r' { ' ' } else { c }).collect()
-    }
-
     #[allow(static_mut_refs)]
-    unsafe fn st() -> Option<&'static mut State> {
-        ST.as_mut()
+    unsafe fn st() -> &'static mut State {
+        ST.get_or_insert_with(|| State { host: SyncHost::new(), soc: None })
+    }
+
+    /// The host's log lines, to pvlog.
+    fn flush(st: &mut State) {
+        for l in st.host.take_log() {
+            log(&l);
+        }
     }
 
     unsafe fn arg(p: *const u8, len: i32) -> String {
@@ -99,37 +76,63 @@ mod imp {
         String::from_utf8_lossy(core::slice::from_raw_parts(p, len as usize)).into_owned()
     }
 
+    fn libc_gethostid() -> i64 {
+        extern "C" {
+            fn gethostid() -> core::ffi::c_long;
+        }
+        unsafe { gethostid() as i64 }
+    }
+
+    /// Sockets first, then SOC.
+    fn shut(st: &mut State) {
+        st.host.close();
+        flush(st);
+        if st.soc.take().is_some() {
+            log("socExit");
+        }
+    }
+
     #[no_mangle]
     pub unsafe extern "C" fn voxel_sync_open() -> i32 {
-        voxel_sync_close();
-        let mut st = State { session: None, soc: None, nowifi: false, error: None, received: None, out: String::new(), reply: String::new() };
-        let soc = match Soc::new() {
-            Ok(s) => s,
-            Err(e) => {
-                log(&format!("SOC would not start ({:?}): no wifi", e));
-                st.nowifi = true;
-                ST = Some(st);
-                return 0;
+        let st = st();
+        if st.host.is_open() {
+            log("open: already open (one bind a visit)");
+            return 1;
+        }
+        extern "C" {
+            fn pv_net_soc_up() -> i32;
+        }
+        // the link (vendor/quickjs/net_link.c) already holds SOC: use it as
+        // it is; it is the link's to stop, not ours
+        let shared = st.soc.is_none() && pv_net_soc_up() != 0;
+        if shared {
+            log("SOC is already up (the link holds it): using it");
+        }
+        if st.soc.is_none() && !shared {
+            match Soc::new() {
+                Ok(s) => {
+                    log("socInit ok (1 MB buffer)");
+                    st.soc = Some(s);
+                }
+                Err(e) => {
+                    log(&format!("socInit failed: {:?}: no wifi", e));
+                    st.host.set_nowifi();
+                    flush(st);
+                    return 0;
+                }
             }
+        }
+        let ip = match st.soc.as_ref() {
+            Some(s) => s.host_address(),
+            None => Ipv4Addr::from(u32::from_be(libc_gethostid() as u32)),
         };
-        let ip = soc.host_address();
+        log(&format!("gethostid: {}", ip));
         if ip.is_unspecified() {
             log("no IP address: wifi is off or not connected");
-            drop(soc);
-            st.nowifi = true;
-            ST = Some(st);
+            shut(st);
+            st.host.set_nowifi();
             return 0;
         }
-        let net = match StdNet::bind(Ipv4Addr::UNSPECIFIED, proto::UDP_PORT, proto::TCP_PORT) {
-            Ok(n) => n,
-            Err(e) => {
-                log(&format!("bind {}/{} failed: {}", proto::UDP_PORT, proto::TCP_PORT, e));
-                st.error = Some(format!("PORT {} IN USE", proto::UDP_PORT));
-                st.soc = Some(soc);
-                ST = Some(st);
-                return -1;
-            }
-        };
         let mut targets = vec![SocketAddrV4::new(Ipv4Addr::BROADCAST, proto::UDP_PORT)];
         if let Some(b) = net::subnet_broadcast(ip) {
             targets.push(SocketAddrV4::new(b, proto::UDP_PORT));
@@ -138,113 +141,56 @@ mod imp {
             fn svcGetSystemTick() -> u64;
         }
         let seed = svcGetSystemTick() ^ ((u32::from(ip) as u64) << 21);
-        let body = card_save();
-        let name = name_of(body.as_deref());
-        let cfg = Config { id: proto::make_id(seed), platform: "3ds".into(), game: GAME.into(), name: name.clone(), tcp_port: net.tcp_port(), targets };
-        let mut session = Session::new(net, cfg);
-        log(&format!(
-            "open: {} as {} ({}, {}), serving {} bytes",
-            ip,
-            session.id(),
-            GAME,
-            name,
-            body.as_ref().map(|b| b.len()).unwrap_or(0)
-        ));
-        session.set_body(body);
-        st.session = Some(session);
-        st.soc = Some(soc);
-        ST = Some(st);
-        1
+        let save = std::fs::read(voxel::SAVE_PATH).ok().filter(|b| !b.is_empty());
+        let cfg = HostConfig {
+            id: proto::make_id(seed),
+            platform: "3ds".into(),
+            game: GAME.into(),
+            bind_ip: Ipv4Addr::UNSPECIFIED,
+            udp_port: proto::UDP_PORT,
+            tcp_port: proto::TCP_PORT,
+            targets,
+            save,
+        };
+        let r = st.host.open(cfg);
+        flush(st);
+        if r.is_ok() { 1 } else { -1 }
     }
 
     #[no_mangle]
     pub unsafe extern "C" fn voxel_sync_poll(len: *mut u32) -> *const u8 {
-        let Some(st) = st() else {
-            if !len.is_null() {
-                *len = 0;
-            }
-            return core::ptr::null();
-        };
-        let State { session, nowifi, error, received, out, .. } = st;
-        out.clear();
-        if *nowifi {
-            out.push_str("S\tnowifi\n");
-        } else if let Some(e) = error {
-            let _ = writeln!(out, "S\terror\t{}", field(e));
-        } else if let Some(s) = session.as_mut() {
-            s.tick(now());
-            out.push_str("S\topen\n");
-            let _ = writeln!(out, "H\t{}", if s.has_body() { 1 } else { 0 });
-            for p in s.peers() {
-                let _ = writeln!(out, "P\t{}\t{}\t{}\t{}\t{}", p.id, field(&p.platform), field(&p.game), if p.offered { 1 } else { 0 }, field(&p.label()));
-            }
-            if let Some((name, phase)) = s.pulling() {
-                let (got, size) = match phase {
-                    PullPhase::Body { got, size } => (*got, *size),
-                    _ => (0, 0),
-                };
-                let _ = writeln!(out, "G\t{}\t{}\t{}", got, size, field(name));
-            }
-            while let Some(ev) = s.poll_event() {
-                match ev {
-                    Event::Offer { name, .. } => {
-                        log(&format!("{} offers its save", name));
-                        let _ = writeln!(out, "O\t{}", field(&name));
-                    }
-                    Event::Pulled { name, body, .. } => {
-                        log(&format!("got {} bytes from {} (crc {:08x})", body.len(), name, proto::crc32(&body)));
-                        let _ = writeln!(out, "R\t{}\t{}", field(&name), body.len());
-                        *received = Some((name, body));
-                    }
-                    Event::PullFailed { name, reason, .. } => {
-                        log(&format!("pull from {} failed: {}", name, reason));
-                        let _ = writeln!(out, "F\t{}\t{}", field(&name), field(&reason));
-                    }
-                }
-            }
-        }
+        let st = st();
+        let out = st.host.poll(now());
+        let (p, n) = (out.as_ptr(), out.len());
+        flush(st);
         if !len.is_null() {
-            *len = out.len() as u32;
+            *len = n as u32;
         }
-        out.as_ptr()
+        p
     }
 
     #[no_mangle]
     pub unsafe extern "C" fn voxel_sync_offer(id: *const u8, len: i32) -> i32 {
         let id = arg(id, len);
-        let Some(s) = st().and_then(|st| st.session.as_mut()) else { return 0 };
-        match s.offer(&id) {
-            Ok(()) => {
-                log(&format!("offered our save to {}", id));
-                1
-            }
-            Err(e) => {
-                log(&format!("offer to {} failed: {}", id, e));
-                0
-            }
-        }
+        let st = st();
+        let r = st.host.offer(&id);
+        flush(st);
+        r as i32
     }
 
     #[no_mangle]
     pub unsafe extern "C" fn voxel_sync_pull(id: *const u8, len: i32) -> i32 {
         let id = arg(id, len);
-        let Some(s) = st().and_then(|st| st.session.as_mut()) else { return 0 };
-        match s.pull(&id) {
-            Ok(()) => {
-                log(&format!("pulling from {}", id));
-                1
-            }
-            Err(e) => {
-                log(&format!("pull from {} not started: {}", id, e));
-                0
-            }
-        }
+        let st = st();
+        let r = st.host.pull(&id);
+        flush(st);
+        r as i32
     }
 
     #[no_mangle]
     pub unsafe extern "C" fn voxel_sync_received(len: *mut u32) -> *const u8 {
-        match st().and_then(|st| st.received.as_ref()) {
-            Some((_, body)) => {
+        match st().host.received() {
+            Some(body) => {
                 *len = body.len() as u32;
                 body.as_ptr()
             }
@@ -258,53 +204,30 @@ mod imp {
     /// "" when the save is on the card; "R:<why>" refused; "E:<why>" failed.
     #[no_mangle]
     pub unsafe extern "C" fn voxel_sync_install(len: *mut u32) -> *const u8 {
-        let Some(st) = st() else {
-            *len = 0;
-            return core::ptr::null();
-        };
-        st.reply = match st.received.take() {
-            None => "E:NOTHING RECEIVED".into(),
-            Some((from, body)) => {
-                let paths = Paths { save: voxel::SAVE_PATH.into(), backups: BACKUP_DIR.into() };
-                let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-                match install::install(&mut StdStore, &paths, &body, GAME, &vcsave::stamp(secs)) {
-                    Ok(info) => {
-                        log(&format!("installed {} bytes from {} over {} (player {})", body.len(), from, voxel::SAVE_PATH, info.player_name.as_deref().unwrap_or("?")));
-                        // CONTINUE reads this; HELLO now offers it
-                        voxel::set_save_buf(body.clone());
-                        if let Some(s) = st.session.as_mut() {
-                            s.set_name(&name_of(Some(&body)));
-                            s.set_body(Some(body));
-                        }
-                        String::new()
-                    }
-                    Err(r) => {
-                        log(&format!("install refused: {:?}", r));
-                        format!("{}:{}", if r.is_error() { "E" } else { "R" }, r.reason())
-                    }
-                }
-            }
-        };
-        *len = st.reply.len() as u32;
-        st.reply.as_ptr()
+        let st = st();
+        let paths = Paths { save: voxel::SAVE_PATH.into(), backups: BACKUP_DIR.into() };
+        let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let (reply, wrote) = st.host.install(&mut StdStore, &paths, GAME, &vcsave::stamp(secs));
+        let (p, n) = (reply.as_ptr(), reply.len());
+        if let Some(body) = wrote {
+            // what CONTINUE reads from now on
+            voxel::set_save_buf(body);
+        }
+        flush(st);
+        *len = n as u32;
+        p
     }
 
     #[no_mangle]
     pub unsafe extern "C" fn voxel_sync_discard() {
-        if let Some(st) = st() {
-            st.received = None;
-        }
+        st().host.discard();
     }
 
     #[no_mangle]
-    #[allow(static_mut_refs)]
     pub unsafe extern "C" fn voxel_sync_close() {
-        if ST.take().is_some() {
-            log("closed");
-        }
+        shut(st());
     }
 }
-
 /// The Gen 3 builds have no SYNC: the natives answer "not here".
 #[cfg(feature = "gen3")]
 mod imp {

@@ -10,7 +10,9 @@
 //! - [`net`]: that trait over std::net (the 3DS and a desktop).
 //! - [`luadata`]: a received save checked as data, never run.
 //! - [`install`]: the version check, the backup ring, the atomic write.
+//! - [`host`]: one SYNC screen's sockets and records, opened once a visit.
 
+pub mod host;
 pub mod install;
 pub mod luadata;
 pub mod net;

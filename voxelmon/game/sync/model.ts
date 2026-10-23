@@ -124,6 +124,8 @@ export class SyncModel {
   peers: SyncPeer[] = [];
   /** We have a save to serve (SEND rows). */
   hasSave = false;
+  /** A note from the host under SEARCHING... (a port it fell back to). */
+  note: string | undefined;
   /** A save was installed this visit. */
   installed = false;
   /** open / nowifi / error / closed. */
@@ -273,6 +275,7 @@ export class SyncModel {
       return;
     }
     const peers: SyncPeer[] = [];
+    this.note = undefined;
     for (const line of text.split("\n")) {
       if (!line) continue;
       const f = line.split("\t");
@@ -288,6 +291,9 @@ export class SyncModel {
           break;
         case "H":
           this.hasSave = f[1] === "1";
+          break;
+        case "N":
+          this.note = f[1] || undefined;
           break;
         case "P":
           peers.push({ id: f[1] ?? "", platform: f[2] ?? "", game: f[3] ?? "", offered: f[4] === "1", name: f[5] || platformTag(f[2] ?? "") });
@@ -394,6 +400,8 @@ export class SyncModel {
 
   /** The status line wrapped to `width`, at most `lines` lines. */
   statusLines(width: number, lines = 2): string[] {
+    // the host's note (not an error) on the line under SEARCHING...
+    if (this.status === SEARCHING && this.note && lines >= 2) return [SEARCHING, this.note.slice(0, width)];
     const out: string[] = [];
     let line = "";
     for (const word of this.status.split(" ")) {

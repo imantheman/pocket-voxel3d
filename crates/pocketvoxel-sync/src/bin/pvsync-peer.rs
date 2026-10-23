@@ -57,10 +57,18 @@ fn main() {
     if targets.is_empty() {
         targets.push(SocketAddrV4::new(Ipv4Addr::BROADCAST, proto::UDP_PORT));
     }
-    let net = StdNet::bind(Ipv4Addr::UNSPECIFIED, udp, tcp).unwrap_or_else(|e| {
-        println!("ERROR bind: {}", e);
+    // as the console does: a port that cannot be had falls back
+    let bound = StdNet::bind_lenient(Ipv4Addr::UNSPECIFIED, udp, tcp).unwrap_or_else(|e| {
+        println!("ERROR bind: {}", e.log);
         std::process::exit(2)
     });
+    for n in &bound.notes {
+        println!("NOTE {}", n);
+    }
+    if bound.udp_fell_back {
+        println!("FALLBACK udp {}", bound.net.udp_port());
+    }
+    let net = bound.net;
     let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) ^ std::process::id() as u64;
     let cfg = Config { id: proto::make_id(seed), platform, game: game.clone(), name, tcp_port: net.tcp_port(), targets };
     let mut s = Session::new(net, cfg);

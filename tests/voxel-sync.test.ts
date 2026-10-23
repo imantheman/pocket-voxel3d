@@ -28,6 +28,8 @@ class FakeSync implements SyncNative {
   hasSave = true;
   peers: string[] = [];
   events: string[] = [];
+  /** Records sent every poll (the host's N note). */
+  sticky: string[] = [];
   offers: string[] = [];
   pulls: string[] = [];
   text: string | undefined;
@@ -39,7 +41,7 @@ class FakeSync implements SyncNative {
   onInstall?: (text: string) => void;
   open(): number { return this.openResult; }
   poll(): string {
-    const out = [`S\t${this.openResult === 1 ? "open" : "error\tport 47610 busy"}`, `H\t${this.hasSave ? 1 : 0}`, ...this.peers, ...this.events];
+    const out = [`S\t${this.openResult === 1 ? "open" : "error\tport 47610 busy"}`, ...this.sticky, `H\t${this.hasSave ? 1 : 0}`, ...this.peers, ...this.events];
     this.events = [];
     return out.join("\n");
   }
@@ -233,6 +235,24 @@ describe("the SYNC screen", () => {
     expect(m.statusLines(18)).toEqual(["A AGAIN: OVERWRITE", "YOUR SAVE"]);
     m.status = "RECEIVING FROM ABCDEFGHIJKLMNOPQRST...";
     expect(m.statusLines(18)).toEqual(["RECEIVING FROM", "ABCDEFGHIJKLMNOPQR"]);
+  });
+
+  test("a port the host fell back to is a note under SEARCHING..., not an error", () => {
+    const f = new FakeSync();
+    f.sticky = ["N\tUDP PORT 50123"];
+    const m = model(f);
+    expect(m.status).toBe(SEARCHING);
+    expect(m.statusLines(18)).toEqual([SEARCHING, "UDP PORT 50123"]);
+    // any real status takes the box back
+    f.peers = [f.peer("aa", "red", "DESKTOP")];
+    m.update(NONE);
+    m.update(A);
+    expect(m.statusLines(18)).toEqual(["A AGAIN: OVERWRITE", "YOUR SAVE"]);
+    // and no note, no second line
+    f.sticky = [];
+    f.t += 5;
+    m.update(NONE);
+    expect(m.statusLines(18)).toEqual([SEARCHING]);
   });
 
   test("a long list scrolls with the cursor", () => {

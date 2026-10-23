@@ -142,6 +142,11 @@ pub struct Session<N: Net> {
     events: VecDeque<Event>,
     next_hello: f64,
     now: f64,
+    /// What the log should hear: each target's first send result and any
+    /// change in it, and each kind of socket error once.
+    notes: Vec<String>,
+    sent_to: Vec<(SocketAddrV4, String)>,
+    errors_seen: Vec<String>,
 }
 
 fn would_block(e: &io::Error) -> bool {
@@ -150,7 +155,21 @@ fn would_block(e: &io::Error) -> bool {
 
 impl<N: Net> Session<N> {
     pub fn new(net: N, cfg: Config) -> Self {
-        Session { net, cfg, body: None, crc: 0, peers: Vec::new(), serving: Vec::new(), pull: None, events: VecDeque::new(), next_hello: 0.0, now: 0.0 }
+        Session {
+            net,
+            cfg,
+            body: None,
+            crc: 0,
+            peers: Vec::new(),
+            serving: Vec::new(),
+            pull: None,
+            events: VecDeque::new(),
+            next_hello: 0.0,
+            now: 0.0,
+            notes: Vec::new(),
+            sent_to: Vec::new(),
+            errors_seen: Vec::new(),
+        }
     }
 
     pub fn id(&self) -> &str {
@@ -184,6 +203,19 @@ impl<N: Net> Session<N> {
         self.peers.iter().find(|p| p.id == id)
     }
 
+    /// Log lines since the last call (see the `notes` field).
+    pub fn take_notes(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.notes)
+    }
+
+    fn note_error(&mut self, what: &str, e: &io::Error) {
+        let line = format!("{}: {}", what, crate::net::describe(e));
+        if !self.errors_seen.contains(&line) && self.errors_seen.len() < 32 {
+            self.errors_seen.push(line.clone());
+            self.notes.push(line);
+        }
+    }
+
     /// The next event, if any.
     pub fn poll_event(&mut self) -> Option<Event> {
         self.events.pop_front()
@@ -215,10 +247,28 @@ impl<N: Net> Session<N> {
                 to.push(p.addr);
             }
         }
+        let targets = self.cfg.targets.clone();
         for a in to {
             // a target that cannot be reached (no route for a broadcast)
             // must not stop the others
-            let _ = self.net.send_to(line.as_bytes(), a);
+            let r = self.net.send_to(line.as_bytes(), a);
+            if targets.contains(&a) {
+                let said = match &r {
+                    Ok(()) => "ok".to_string(),
+                    Err(e) => crate::net::describe(e),
+                };
+                match self.sent_to.iter_mut().find(|(t, _)| *t == a) {
+                    Some((_, last)) if *last == said => {}
+                    Some((_, last)) => {
+                        *last = said.clone();
+                        self.notes.push(format!("HELLO to {}: {}", a, said));
+                    }
+                    None => {
+                        self.sent_to.push((a, said.clone()));
+                        self.notes.push(format!("HELLO to {}: {}", a, said));
+                    }
+                }
+            }
         }
     }
 
@@ -272,7 +322,11 @@ impl<N: Net> Session<N> {
         for _ in 0..UDP_PER_TICK {
             let (n, from) = match self.net.recv_from(&mut buf) {
                 Ok(Some(x)) => x,
-                _ => break,
+                Ok(None) => break,
+                Err(e) => {
+                    self.note_error("udp receive", &e);
+                    break;
+                }
             };
             match proto::parse_line(&buf[..n]) {
                 Some(Msg::Hello(h)) if h.id != self.cfg.id => {
@@ -327,7 +381,11 @@ impl<N: Net> Session<N> {
                     }
                     self.serving.push(Serve { conn, started: self.now, line: Vec::new(), head: Vec::new(), body: None, sent: 0, replied: false });
                 }
-                _ => break,
+                Ok(None) => break,
+                Err(e) => {
+                    self.note_error("tcp accept", &e);
+                    break;
+                }
             }
         }
         let mut budget = TCP_BYTES_PER_TICK;

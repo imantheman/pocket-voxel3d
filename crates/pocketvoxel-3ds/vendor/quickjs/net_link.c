@@ -179,6 +179,12 @@ int pv_net_open(void) {
     return PV_SEARCHING;
 }
 
+/* Whether the link holds SOC (the IP stack) right now: SYNC (src/sync.rs)
+   then uses it as it is rather than starting it again or stopping it. */
+int pv_net_soc_up(void) {
+    return g_inited;
+}
+
 int pv_net_state(void) {
     if (!g_inited) return 0;
     return g_have_peer ? 1 : 0;

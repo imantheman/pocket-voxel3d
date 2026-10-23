@@ -98,5 +98,17 @@ grep -q "PEER [0-9a-f]* pc red 127.0.0.1:$LU $SZ2 $CRC2 LUA PEER" "$W/rust.log";
 grep -q "PEER [0-9a-f]* 3ds red $SZ $CRC RUST PEER" "$W/lua.log"; h1=$?
 [ $h1 = 0 ] && [ $h2 = 0 ] && ok "8 HELLO size/crc/name agree both ways" || bad "8 hello fields"
 
+# 9. the Rust side's UDP port is someone else's: it falls back to a free
+#    port, HELLOs from there, and the Lua side still finds it by its echo
+cat > "$W/hold.lua" <<'EOF'
+local socket = require("socket")
+local u = socket.udp(); assert(u:setsockname("*", tonumber(arg[1]))); socket.sleep(tonumber(arg[2]))
+EOF
+luajit "$W/hold.lua" $RU 12 & hp=$!
+sleep 0.5
+run "port taken" --game red --target 127.0.0.1:$LU --serve "$W/red.lua" --seconds 8 -- pull red $LU $LT $RU "$W/got9.lua" 10
+kill $hp 2>/dev/null; wait $hp 2>/dev/null
+[ $LUA_RC = 0 ] && grep -q "^FALLBACK udp" "$W/rust.log" && same "$W/red.lua" "$W/got9.lua" && ok "9 rust's port taken: falls back, lua still finds it and pulls" || bad "9 port taken"
+
 echo "cross: $PASS passed, $FAIL failed"
 [ $FAIL = 0 ]
