@@ -22087,6 +22087,7 @@ class Scene {
   introSig = null;
   gbEmitter = new GbEmitter;
   menuSig = null;
+  syncSig = null;
   bagSig = null;
   shopSig = null;
   boxSig = null;
@@ -23634,6 +23635,36 @@ class Scene {
       host.uiClear();
       this.uiOwner = null;
     }
+    const sy2 = view.syncView?.();
+    if (sy2) {
+      if (this.titleSig !== null) {
+        this.titleSig = null;
+        this.emitIntroTiles([]);
+      }
+      const sig = `Y${sy2.title}|${sy2.cursor}|${sy2.rows.join("/")}|${sy2.status.join("/")}|${sy2.more.up},${sy2.more.down}`;
+      if (sig !== this.syncSig) {
+        this.syncSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        this.frame(host, 0, 0, UI_COLS, 13);
+        this.stamp(host, 2, 1, sy2.title);
+        sy2.rows.forEach((r, i) => {
+          this.stamp(host, 3, 3 + i * 2, r);
+          if (i === sy2.cursor && sy2.pickable[i])
+            host.uiTile(2, 3 + i * 2, ARROW_CURSOR);
+        });
+        if (sy2.more.down)
+          host.uiTile(UI_COLS - 2, 12, ARROW_MORE);
+        this.frame(host, 0, 13, UI_COLS, 5);
+        sy2.status.forEach((line, i) => this.stamp(host, 1, 14 + i * 2, line));
+      }
+      return;
+    }
+    if (this.syncSig !== null) {
+      this.syncSig = null;
+      host.uiClear();
+      this.uiOwner = null;
+    }
     const ttl = view.title?.();
     if (ttl) {
       this.emitIntroTiles(ttl.tiles ?? []);
@@ -24441,6 +24472,7 @@ var MON_BOX = { x: 40, y: 80, w: 56, h: 56 };
 var RED_AT = { x: 82, y: 80, w: 40, h: 56 };
 var COPYRIGHT_Y = 136;
 var COPYRIGHT_GAMEFREAK_X = 16 + COPYRIGHT_PREFIX.length * 8;
+var SYNC_TEXT = "SYNC";
 function summaryLines(s) {
   const row = (label3, value) => label3 + value.padStart(14 - label3.length);
   const t = s.seconds;
@@ -24489,16 +24521,18 @@ class TitleState {
   }
   buildMenu() {
     const m = this.game.hasSave ? ["CONTINUE", "NEW GAME"] : ["NEW GAME"];
+    if (this.game.openSync && this.game.syncAvailable?.())
+      m.push(SYNC_TEXT);
     const c = this.game.copyChoice;
     if (c && (c.lua || c.vc) && this.game.copySave)
       m.push(COPY_SAVE_TEXT.menu);
     m.push("OPTION", "MAP VIEWER");
     return m;
   }
-  refresh() {
+  refresh(on = COPY_SAVE_TEXT.menu) {
     this.menu = this.buildMenu();
     this.phase = "menu";
-    this.index = Math.max(0, this.menu.indexOf(COPY_SAVE_TEXT.menu));
+    this.index = Math.max(0, this.menu.indexOf(on));
   }
   audio() {
     return this.game.audio;
@@ -24690,6 +24724,10 @@ replaced. Is that OK?`, (yes) => {
         this.pickIndex = 0;
         this.pickFor = "new";
         this.phase = "pick";
+        return;
+      }
+      if (pick === SYNC_TEXT && this.game.openSync) {
+        this.game.openSync(() => this.refresh(SYNC_TEXT));
         return;
       }
       this.game.pop();
@@ -24897,6 +24935,568 @@ class DevMenuState {
   }
   view() {
     return { entries: ENTRIES.map((e) => e[0]), index: this.index };
+  }
+}
+
+// voxelmon/game/save-read.ts
+class P {
+  src;
+  pos = 0;
+  constructor(src) {
+    this.src = src;
+  }
+  skip() {
+    while (this.pos < this.src.length && ` 	\r
+`.includes(this.src[this.pos]))
+      this.pos++;
+  }
+  eat(ch) {
+    this.skip();
+    if (this.src[this.pos] === ch) {
+      this.pos++;
+      return true;
+    }
+    return false;
+  }
+  expect(ch) {
+    if (!this.eat(ch))
+      throw new Error(`expected ${ch} at ${this.pos}`);
+  }
+}
+function parseString(p) {
+  p.expect('"');
+  let out = "";
+  while (p.pos < p.src.length) {
+    const c = p.src[p.pos++];
+    if (c === '"')
+      return out;
+    if (c !== "\\") {
+      out += c;
+      continue;
+    }
+    const e = p.src[p.pos++];
+    if (e === "n")
+      out += `
+`;
+    else if (e === "r")
+      out += "\r";
+    else if (e === "t")
+      out += "\t";
+    else if (e === `
+`)
+      out += `
+`;
+    else if (e >= "0" && e <= "9") {
+      let digits = e;
+      while (digits.length < 3 && /[0-9]/.test(p.src[p.pos] ?? ""))
+        digits += p.src[p.pos++];
+      out += String.fromCharCode(Number(digits));
+    } else
+      out += e;
+  }
+  throw new Error("unterminated string");
+}
+function parseValue(p, depth = 0) {
+  if (depth > 128)
+    throw new Error("too deep");
+  p.skip();
+  const c = p.src[p.pos];
+  if (c === '"')
+    return parseString(p);
+  if (c === "{")
+    return parseTable(p, depth);
+  const m = /^(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?|true|false|nil)/i.exec(p.src.slice(p.pos));
+  if (!m)
+    throw new Error(`bad value at ${p.pos}`);
+  p.pos += m[0].length;
+  if (m[0] === "true")
+    return true;
+  if (m[0] === "false")
+    return false;
+  if (m[0] === "nil")
+    return;
+  return Number(m[0]);
+}
+function parseTable(p, depth) {
+  p.expect("{");
+  const out = {};
+  const arr = [];
+  let isArray = true;
+  for (;; ) {
+    p.skip();
+    if (p.eat("}"))
+      break;
+    let key;
+    if (p.eat("[")) {
+      const k = parseValue(p, depth + 1);
+      p.expect("]");
+      key = k;
+    } else {
+      const m = /^[A-Za-z_][A-Za-z0-9_]*/.exec(p.src.slice(p.pos));
+      if (!m)
+        throw new Error(`bad key at ${p.pos}`);
+      p.pos += m[0].length;
+      key = m[0];
+    }
+    p.expect("=");
+    const v = parseValue(p, depth + 1);
+    if (typeof key === "number")
+      arr[key - 1] = v;
+    else {
+      isArray = false;
+      out[key] = v;
+    }
+    p.eat(",");
+  }
+  if (isArray && arr.length > 0)
+    return arr;
+  return out;
+}
+var ARRAY_FIELDS = [
+  ["party"],
+  ["party", "*", "moves"],
+  ["bagOrder"],
+  ["pc", "bagOrder"],
+  ["pcItems", "bagOrder"],
+  ["pcOrder"],
+  ["orphaned", "mons"],
+  ["orphaned", "items"],
+  ["box"],
+  ["boxes"],
+  ["boxes", "*"],
+  ["boxes", "*", "*", "moves"],
+  ["modData", "kanto_gear", "notes"],
+  ["modData", "kanto_gear", "notes", "*", "lines"],
+  ["modData", "kanto_gear", "notes", "*", "done"]
+];
+function atPath(root, path) {
+  let level = [];
+  let containers = [root];
+  for (let i = 0;i < path.length; i++) {
+    const key = path[i];
+    const next = [];
+    level = [];
+    for (const c of containers) {
+      if (!c || typeof c !== "object")
+        continue;
+      const obj = c;
+      if (key === "*") {
+        for (const k of Object.keys(obj)) {
+          level.push({ owner: obj, key: k });
+          next.push(obj[k]);
+        }
+      } else {
+        level.push({ owner: obj, key });
+        next.push(obj[key]);
+      }
+    }
+    containers = next;
+  }
+  return level;
+}
+function fixArrays(save) {
+  for (const path of ARRAY_FIELDS) {
+    for (const { owner, key } of atPath(save, path)) {
+      const v = owner[key];
+      if (v && typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 0) {
+        owner[key] = [];
+      }
+    }
+  }
+}
+function decodeSave(text) {
+  const p = new P(text);
+  p.skip();
+  if (!p.src.startsWith("return", p.pos))
+    throw new Error("not a save file");
+  p.pos += 6;
+  const save = parseValue(p);
+  if (save && typeof save === "object")
+    fixArrays(save);
+  return save;
+}
+
+// voxelmon/game/sync/model.ts
+function hostSync() {
+  const v = globalThis.voxel;
+  if (!v || typeof v.syncOpen !== "function")
+    return null;
+  const f = (name) => v[name];
+  return {
+    open: () => Number(f("syncOpen")()),
+    poll: () => String(f("syncPoll")() ?? ""),
+    offer: (id) => Number(f("syncOffer")(id)),
+    pull: (id) => Number(f("syncPull")(id)),
+    received: () => {
+      const r = f("syncReceived")();
+      return typeof r === "string" ? r : undefined;
+    },
+    install: () => String(f("syncInstall")() ?? "E:no install"),
+    discard: () => {
+      f("syncDiscard")();
+    },
+    close: () => {
+      f("syncClose")();
+    },
+    now: typeof v.now === "function" ? () => Number(f("now")()) : undefined
+  };
+}
+function syncAccepts(game, version) {
+  return version === game || game === "blue" && version === "red";
+}
+function wrongGame(version) {
+  return typeof version === "string" && version !== "" ? `SAVE IS ${version.toUpperCase()}` : "SAVE HAS NO GAME";
+}
+var PLATFORM_TAG = { "3ds": "3DS", pc: "PC", android: "PHONE", ios: "PHONE", switch: "SWITCH" };
+function platformTag(p) {
+  return PLATFORM_TAG[p] ?? p.toUpperCase().slice(0, 6);
+}
+var CONFIRM_SECS = 3;
+var SEARCHING = "SEARCHING...";
+var CONFIRM = "A AGAIN: OVERWRITE YOUR SAVE";
+
+class SyncModel {
+  opts;
+  status = SEARCHING;
+  rows = [{ kind: "back", label: "BACK" }];
+  index = 0;
+  peers = [];
+  hasSave = false;
+  installed = false;
+  state = "closed";
+  armed = null;
+  frames = 0;
+  receiving = null;
+  moved = false;
+  constructor(opts) {
+    this.opts = opts;
+  }
+  get title() {
+    return `SYNC ${this.opts.game.toUpperCase()}`;
+  }
+  now() {
+    if (this.opts.now)
+      return this.opts.now();
+    const n = this.opts.native?.now?.();
+    if (typeof n === "number" && Number.isFinite(n) && n > 0)
+      return n / 1e6;
+    return this.frames / 60;
+  }
+  open() {
+    const n = this.opts.native;
+    if (!n) {
+      this.state = "nowifi";
+      this.status = "ERROR: NO WIFI";
+      return;
+    }
+    let r = 0;
+    try {
+      r = n.open();
+    } catch {
+      r = 0;
+    }
+    if (r === 1) {
+      this.state = "open";
+      this.status = SEARCHING;
+      this.poll();
+    } else if (r === 0) {
+      this.state = "nowifi";
+      this.status = "ERROR: NO WIFI";
+    } else {
+      this.state = "error";
+      this.poll();
+      if (!this.status.startsWith("ERROR"))
+        this.status = "ERROR: NETWORK";
+    }
+    this.rebuild();
+  }
+  close() {
+    if (this.state === "closed")
+      return;
+    this.state = "closed";
+    try {
+      this.opts.native?.close();
+    } catch {}
+  }
+  update(p) {
+    this.frames += 1;
+    if (this.state === "open" || this.state === "error")
+      this.poll();
+    if (this.armed && this.now() - this.armed.at > CONFIRM_SECS) {
+      this.armed = null;
+      if (this.status === CONFIRM)
+        this.status = this.idle();
+    }
+    if (p.b) {
+      this.close();
+      return "close";
+    }
+    if (p.up)
+      this.move(-1);
+    if (p.down)
+      this.move(1);
+    if (p.a)
+      return this.choose();
+    return null;
+  }
+  idle() {
+    if (this.state === "nowifi")
+      return "ERROR: NO WIFI";
+    if (this.receiving)
+      return `RECEIVING FROM ${this.receiving}...`;
+    return SEARCHING;
+  }
+  selectable(i) {
+    const r = this.rows[i];
+    return !!r && r.kind !== "other";
+  }
+  move(d) {
+    const n = this.rows.length;
+    for (let k = 1;k <= n; k++) {
+      const j = ((this.index + d * k) % n + n) % n;
+      if (this.selectable(j)) {
+        if (j !== this.index)
+          this.moved = true;
+        if (j !== this.index && this.armed) {
+          this.armed = null;
+          if (this.status === CONFIRM)
+            this.status = this.idle();
+        }
+        this.index = j;
+        return;
+      }
+    }
+  }
+  choose() {
+    const row = this.rows[this.index];
+    if (!row || row.kind === "back") {
+      this.close();
+      return "close";
+    }
+    const peer = this.peers.find((x) => x.id === row.peer);
+    if (!peer || !this.opts.native)
+      return null;
+    if (row.kind === "send") {
+      this.status = this.opts.native.offer(peer.id) === 1 ? `OFFERED TO ${peer.name}` : "ERROR: OFFER NOT SENT";
+      return null;
+    }
+    if (row.kind !== "get" && row.kind !== "accept")
+      return null;
+    if (this.receiving) {
+      this.status = "ERROR: ALREADY RECEIVING";
+      return null;
+    }
+    const t = this.now();
+    if (!this.armed || this.armed.peer !== peer.id || t - this.armed.at > CONFIRM_SECS) {
+      this.armed = { peer: peer.id, at: t };
+      this.status = CONFIRM;
+      return null;
+    }
+    this.armed = null;
+    if (this.opts.native.pull(peer.id) === 1) {
+      this.receiving = peer.name;
+      this.status = `RECEIVING FROM ${peer.name}...`;
+    } else {
+      this.status = "ERROR: COULD NOT CONNECT";
+    }
+    return null;
+  }
+  poll() {
+    let text = "";
+    try {
+      text = this.opts.native?.poll() ?? "";
+    } catch (e) {
+      this.status = `ERROR: ${String(e?.message ?? e).toUpperCase().slice(0, 40)}`;
+      return;
+    }
+    const peers = [];
+    for (const line of text.split(`
+`)) {
+      if (!line)
+        continue;
+      const f = line.split("\t");
+      switch (f[0]) {
+        case "S":
+          if (f[1] === "error") {
+            this.state = "error";
+            this.status = `ERROR: ${(f[2] ?? "NETWORK").toUpperCase()}`;
+          } else if (f[1] === "nowifi") {
+            this.state = "nowifi";
+            this.status = "ERROR: NO WIFI";
+          }
+          break;
+        case "H":
+          this.hasSave = f[1] === "1";
+          break;
+        case "P":
+          peers.push({ id: f[1] ?? "", platform: f[2] ?? "", game: f[3] ?? "", offered: f[4] === "1", name: f[5] || platformTag(f[2] ?? "") });
+          break;
+        case "O":
+          this.status = `${f[1] ?? "?"} OFFERS A SAVE`;
+          break;
+        case "F":
+          this.receiving = null;
+          this.status = `ERROR: ${(f[2] ?? "FAILED").toUpperCase()}`;
+          break;
+        case "R":
+          this.receiving = null;
+          this.received(f[1] ?? "?");
+          break;
+        default:
+          break;
+      }
+    }
+    this.peers = peers;
+    this.rebuild();
+  }
+  received(name) {
+    const n = this.opts.native;
+    const text = n.received();
+    if (text === undefined) {
+      this.status = "ERROR: NOTHING RECEIVED";
+      return;
+    }
+    let why;
+    try {
+      why = this.opts.validate(text);
+    } catch {
+      why = "NOT A SAVE";
+    }
+    if (why) {
+      n.discard();
+      this.status = `REFUSED: ${why}`;
+      return;
+    }
+    const r = n.install();
+    if (r === "") {
+      this.installed = true;
+      this.status = `GOT ${name}'S SAVE!`;
+      try {
+        this.opts.onInstalled?.();
+      } catch {}
+    } else if (r.startsWith("R:")) {
+      this.status = `REFUSED: ${r.slice(2)}`;
+    } else {
+      this.status = `ERROR: ${r.replace(/^E:/, "")}`;
+    }
+  }
+  rebuild() {
+    const cur = this.rows[this.index];
+    const key = cur ? `${cur.kind}:${cur.peer ?? ""}` : "";
+    const rows = [];
+    if (this.state === "open" || this.state === "error") {
+      for (const p of this.peers) {
+        if (p.game !== this.opts.game) {
+          rows.push({ kind: "other", peer: p.id, label: p.name, right: p.game.toUpperCase() });
+          continue;
+        }
+        if (p.offered)
+          rows.push({ kind: "accept", peer: p.id, label: `ACCEPT ${p.name}` });
+        rows.push({ kind: "get", peer: p.id, label: `GET ${p.name}` });
+        if (this.hasSave)
+          rows.push({ kind: "send", peer: p.id, label: `SEND ${p.name}` });
+      }
+    }
+    rows.push({ kind: "back", label: "BACK" });
+    this.rows = rows;
+    const again = this.moved ? rows.findIndex((r) => `${r.kind}:${r.peer ?? ""}` === key) : 0;
+    this.index = again >= 0 ? again : Math.min(this.index, rows.length - 1);
+    if (!this.selectable(this.index)) {
+      const moved = this.moved;
+      this.move(1);
+      this.moved = moved;
+    }
+    if (this.armed && !rows.some((r) => r.peer === this.armed.peer && (r.kind === "get" || r.kind === "accept"))) {
+      this.armed = null;
+      if (this.status === CONFIRM)
+        this.status = this.idle();
+    }
+  }
+  rowText(width) {
+    return this.rows.map((r) => {
+      if (r.kind === "other" && r.right) {
+        const room = Math.max(1, width - r.right.length - 1);
+        const left = r.label.slice(0, room);
+        return left + " ".repeat(Math.max(1, width - left.length - r.right.length)) + r.right;
+      }
+      return r.label.slice(0, width);
+    });
+  }
+  scrollTop(n) {
+    if (this.rows.length <= n)
+      return 0;
+    return Math.max(0, Math.min(this.index - Math.floor(n / 2), this.rows.length - n));
+  }
+  statusLines(width, lines = 2) {
+    const out = [];
+    let line = "";
+    for (const word of this.status.split(" ")) {
+      const w = word.slice(0, width);
+      if (line && line.length + 1 + w.length > width) {
+        out.push(line);
+        line = w;
+      } else {
+        line = line ? `${line} ${w}` : w;
+      }
+    }
+    if (line)
+      out.push(line);
+    return out.slice(0, lines);
+  }
+}
+
+// voxelmon/game/ui/syncscreen.ts
+var SYNC_ROWS = 5;
+var SYNC_COLS = 16;
+function validateGen1(game, text) {
+  let s;
+  try {
+    s = decodeSave(text);
+  } catch {
+    return "NOT A SAVE";
+  }
+  if (!s || typeof s !== "object" || Array.isArray(s))
+    return "NOT A SAVE";
+  const v = s.version;
+  if (!syncAccepts(game, v))
+    return wrongGame(v);
+  const p = s.player;
+  if (!p || typeof p !== "object")
+    return "NOT A SAVE";
+  return null;
+}
+
+class SyncState {
+  game;
+  onClose;
+  kind = "sync";
+  model;
+  constructor(game, gameToken, onClose, native = hostSync()) {
+    this.game = game;
+    this.onClose = onClose;
+    this.model = new SyncModel({ game: gameToken, native, validate: (t) => validateGen1(gameToken, t) });
+    this.model.open();
+  }
+  update() {
+    const p = this.game.input.pressed;
+    if (this.model.update({ up: p.up, down: p.down, a: p.a, b: p.b }) === "close") {
+      this.game.pop();
+      this.onClose(this.model.installed);
+    }
+  }
+  view() {
+    const m = this.model;
+    const all = m.rowText(SYNC_COLS);
+    const top = m.scrollTop(SYNC_ROWS);
+    const rows = all.slice(top, top + SYNC_ROWS);
+    return {
+      title: m.title,
+      rows,
+      cursor: m.index - top,
+      pickable: m.rows.slice(top, top + SYNC_ROWS).map((r) => r.kind !== "other"),
+      more: { up: top > 0, down: top + SYNC_ROWS < all.length },
+      status: m.statusLines(18, 2)
+    };
   }
 }
 
@@ -30624,182 +31224,16 @@ function encodeSave(data) {
 `;
 }
 
-// voxelmon/game/save-read.ts
-class P {
-  src;
-  pos = 0;
-  constructor(src) {
-    this.src = src;
-  }
-  skip() {
-    while (this.pos < this.src.length && ` 	\r
-`.includes(this.src[this.pos]))
-      this.pos++;
-  }
-  eat(ch) {
-    this.skip();
-    if (this.src[this.pos] === ch) {
-      this.pos++;
-      return true;
-    }
-    return false;
-  }
-  expect(ch) {
-    if (!this.eat(ch))
-      throw new Error(`expected ${ch} at ${this.pos}`);
-  }
+// voxelmon/game/saveversion.ts
+function newSaveVersion(game) {
+  return game === "blue" || game === "yellow" ? game : "red";
 }
-function parseString(p) {
-  p.expect('"');
-  let out = "";
-  while (p.pos < p.src.length) {
-    const c = p.src[p.pos++];
-    if (c === '"')
-      return out;
-    if (c !== "\\") {
-      out += c;
-      continue;
-    }
-    const e = p.src[p.pos++];
-    if (e === "n")
-      out += `
-`;
-    else if (e === "r")
-      out += "\r";
-    else if (e === "t")
-      out += "\t";
-    else if (e === `
-`)
-      out += `
-`;
-    else if (e >= "0" && e <= "9") {
-      let digits = e;
-      while (digits.length < 3 && /[0-9]/.test(p.src[p.pos] ?? ""))
-        digits += p.src[p.pos++];
-      out += String.fromCharCode(Number(digits));
-    } else
-      out += e;
-  }
-  throw new Error("unterminated string");
-}
-function parseValue(p, depth = 0) {
-  if (depth > 128)
-    throw new Error("too deep");
-  p.skip();
-  const c = p.src[p.pos];
-  if (c === '"')
-    return parseString(p);
-  if (c === "{")
-    return parseTable(p, depth);
-  const m = /^(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?|true|false|nil)/i.exec(p.src.slice(p.pos));
-  if (!m)
-    throw new Error(`bad value at ${p.pos}`);
-  p.pos += m[0].length;
-  if (m[0] === "true")
+function adoptSaveVersion(save, game) {
+  if (game === "blue" && (save.version === "red" || save.version === undefined || save.version === null)) {
+    save.version = "blue";
     return true;
-  if (m[0] === "false")
-    return false;
-  if (m[0] === "nil")
-    return;
-  return Number(m[0]);
-}
-function parseTable(p, depth) {
-  p.expect("{");
-  const out = {};
-  const arr = [];
-  let isArray = true;
-  for (;; ) {
-    p.skip();
-    if (p.eat("}"))
-      break;
-    let key;
-    if (p.eat("[")) {
-      const k = parseValue(p, depth + 1);
-      p.expect("]");
-      key = k;
-    } else {
-      const m = /^[A-Za-z_][A-Za-z0-9_]*/.exec(p.src.slice(p.pos));
-      if (!m)
-        throw new Error(`bad key at ${p.pos}`);
-      p.pos += m[0].length;
-      key = m[0];
-    }
-    p.expect("=");
-    const v = parseValue(p, depth + 1);
-    if (typeof key === "number")
-      arr[key - 1] = v;
-    else {
-      isArray = false;
-      out[key] = v;
-    }
-    p.eat(",");
   }
-  if (isArray && arr.length > 0)
-    return arr;
-  return out;
-}
-var ARRAY_FIELDS = [
-  ["party"],
-  ["party", "*", "moves"],
-  ["bagOrder"],
-  ["pc", "bagOrder"],
-  ["pcItems", "bagOrder"],
-  ["pcOrder"],
-  ["orphaned", "mons"],
-  ["orphaned", "items"],
-  ["box"],
-  ["boxes"],
-  ["boxes", "*"],
-  ["boxes", "*", "*", "moves"],
-  ["modData", "kanto_gear", "notes"],
-  ["modData", "kanto_gear", "notes", "*", "lines"],
-  ["modData", "kanto_gear", "notes", "*", "done"]
-];
-function atPath(root, path) {
-  let level = [];
-  let containers = [root];
-  for (let i = 0;i < path.length; i++) {
-    const key = path[i];
-    const next = [];
-    level = [];
-    for (const c of containers) {
-      if (!c || typeof c !== "object")
-        continue;
-      const obj = c;
-      if (key === "*") {
-        for (const k of Object.keys(obj)) {
-          level.push({ owner: obj, key: k });
-          next.push(obj[k]);
-        }
-      } else {
-        level.push({ owner: obj, key });
-        next.push(obj[key]);
-      }
-    }
-    containers = next;
-  }
-  return level;
-}
-function fixArrays(save) {
-  for (const path of ARRAY_FIELDS) {
-    for (const { owner, key } of atPath(save, path)) {
-      const v = owner[key];
-      if (v && typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 0) {
-        owner[key] = [];
-      }
-    }
-  }
-}
-function decodeSave(text2) {
-  const p = new P(text2);
-  p.skip();
-  if (!p.src.startsWith("return", p.pos))
-    throw new Error("not a save file");
-  p.pos += 6;
-  const save = parseValue(p);
-  if (save && typeof save === "object")
-    fixArrays(save);
-  return save;
+  return false;
 }
 
 // voxelmon/game/vc/layout.ts
@@ -31359,7 +31793,7 @@ function cartToSave(sram, data) {
   const wbs = u8(b, m(M.walkBikeSurf));
   const save = {
     meta: { format: 5, mods: {} },
-    version: t.yellow ? "yellow" : "red",
+    version: newSaveVersion(gameOf(data)),
     player: {
       name: player.name,
       rival: readName(b, m(M.rivalName)),
@@ -32385,7 +32819,8 @@ var FULL_SCREEN_KINDS = new Set([
   "diploma",
   "tradeanim",
   "tradescreen",
-  "slots"
+  "slots",
+  "sync"
 ]);
 var SAVE_FORMAT = 5;
 var PIC_NAMES = { oak: "prof.oak", player: "red", rival: "rival1" };
@@ -32698,7 +33133,7 @@ class VoxelmonGame {
     if (mapId !== this.audioMap && !this.overworld.pendingSeamMusic) {
       this.audioMap = mapId;
       const top2 = this.stack[this.stack.length - 1];
-      if (top2?.kind === "intro" || top2?.kind === "title") {
+      if (top2?.kind === "intro" || top2?.kind === "title" || top2?.kind === "sync") {
         this.audio.noteMap(mapId);
       } else {
         this.audio.startMap(mapId, !!this.save.onBike);
@@ -32735,7 +33170,7 @@ class VoxelmonGame {
     }
     this.save = {
       meta: { format: SAVE_FORMAT, mods: {} },
-      version: gameVersion(this.data) === "yellow" ? "yellow" : "red",
+      version: newSaveVersion(gameVersion(this.data)),
       player: {
         map: "REDS_HOUSE_2F",
         x: 3,
@@ -32858,6 +33293,19 @@ class VoxelmonGame {
       });
     }, { defaultNo: true });
   }
+  syncAvailable() {
+    return hostSync() !== null;
+  }
+  openSync(done) {
+    this.push(new SyncState(this, gameVersion(this.data), (installed) => {
+      if (installed) {
+        console.log("[pv] sync: a save was installed; the title reads the saves again");
+        this.unreadableSave = false;
+      }
+      this.readSaves();
+      done();
+    }));
+  }
   copyIo() {
     const h = this.host;
     const data = this.data;
@@ -32922,6 +33370,8 @@ class VoxelmonGame {
     };
   }
   prepareLoadedSave(loaded) {
+    if (adoptSaveVersion(loaded, gameVersion(this.data)))
+      console.log("[pv] save: a red-tagged save adopted as blue");
     const report = fromDisk(loaded, this.data);
     syncItemBalls(loaded, this.data.maps);
     const told = reportLines(report);
@@ -34704,6 +35154,10 @@ here.`, onDone);
   title() {
     const top2 = this.stack[this.stack.length - 1];
     return top2?.kind === "title" ? top2.view() : null;
+  }
+  syncView() {
+    const top2 = this.stack[this.stack.length - 1];
+    return top2?.kind === "sync" ? top2.view() : null;
   }
   intro() {
     const top2 = this.stack[this.stack.length - 1];
