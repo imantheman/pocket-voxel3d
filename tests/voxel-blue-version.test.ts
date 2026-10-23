@@ -31,14 +31,14 @@ const red = await load("dist/voxelmon/gen", "red");
 const blue = await load("dist/voxelmon/blue/gen", "blue");
 
 class Card extends RecorderHost {
-  card: string | undefined;
+  saveText: string | undefined;
   writes: string[] = [];
   constructor(text?: string) {
     super();
-    this.card = text;
+    this.saveText = text;
   }
-  saveData(): string | undefined { return this.card; }
-  saveWrite(t: string): boolean { this.card = t; this.writes.push(t); return true; }
+  saveData(): string | undefined { return this.saveText; }
+  saveWrite(t: string): boolean { this.saveText = t; this.writes.push(t); return true; }
 }
 
 /** A game's new-game save, as the card would hold it, with `version` set. */

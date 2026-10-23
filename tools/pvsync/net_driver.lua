@@ -29,7 +29,7 @@ local done, status = false, 1
 
 local session
 session = net.new({
-  udpPort = tonumber(udp), tcpPort = tonumber(tcp),
+  udpPort = tonumber(udp), tcpPort = tonumber(tcp), bindHost = os.getenv("PVS_BIND") or "*",
   targets = (target ~= "-") and { { "127.0.0.1", tonumber(target) } } or {},
   info = function() return { platform = "pc", game = game, name = "Lua Peer", body = body } end,
   onOffer = function(peer)

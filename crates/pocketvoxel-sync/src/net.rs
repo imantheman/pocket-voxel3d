@@ -22,7 +22,9 @@ use std::os::fd::FromRawFd;
 
 pub struct StdNet {
     udp: UdpSocket,
-    tcp: TcpListener,
+    /// None only if re-making it failed ([`Net::refresh_listener`]).
+    tcp: Option<TcpListener>,
+    ip: Ipv4Addr,
     /// The ports bound (from the bind itself; getsockname only for port 0).
     udp_port: u16,
     tcp_port: u16,
@@ -162,13 +164,13 @@ impl StdNet {
         let mut notes = Vec::new();
         let udp = udp_at(SocketAddrV4::new(ip, udp_port), &mut notes)?;
         let tcp = tcp_at(SocketAddrV4::new(ip, tcp_port), &mut notes)?;
-        Ok(StdNet::new(udp, udp_port, tcp, tcp_port))
+        Ok(StdNet::new(ip, udp, udp_port, tcp, tcp_port))
     }
 
-    fn new(udp: UdpSocket, udp_asked: u16, tcp: TcpListener, tcp_asked: u16) -> StdNet {
+    fn new(ip: Ipv4Addr, udp: UdpSocket, udp_asked: u16, tcp: TcpListener, tcp_asked: u16) -> StdNet {
         let udp_port = port_of(udp_asked, udp.local_addr());
         let tcp_port = port_of(tcp_asked, tcp.local_addr());
-        StdNet { udp, tcp, udp_port, tcp_port, sndbuf: None }
+        StdNet { udp, tcp: Some(tcp), ip, udp_port, tcp_port, sndbuf: None }
     }
 
     /// As [`bind`](Self::bind), but a port that cannot be had is not the
@@ -220,7 +222,7 @@ impl StdNet {
         let Some((tcp, tcp_fell_back)) = tcp else {
             return Err(BindError { log: format!("tcp bind {}:{}..: {}", ip, tcp_port, first_err), short: first_short });
         };
-        let net = StdNet::new(udp.0, udp.1, tcp.0, tcp.1);
+        let net = StdNet::new(ip, udp.0, udp.1, tcp.0, tcp.1);
         notes.push(format!("bound udp {} tcp {}", net.udp_port(), net.tcp_port()));
         Ok(Bound { net, notes, udp_fell_back, tcp_fell_back, udp_errno })
     }
@@ -272,7 +274,8 @@ impl Net for StdNet {
         }
     }
     fn accept(&mut self) -> io::Result<Option<Box<dyn Conn>>> {
-        match self.tcp.accept() {
+        let Some(tcp) = &self.tcp else { return Ok(None) };
+        match tcp.accept() {
             Ok((s, _)) => {
                 use std::os::fd::AsRawFd;
                 if nonblocking_fd(s.as_raw_fd()).is_err() {
@@ -291,6 +294,24 @@ impl Net for StdNet {
     fn connect(&mut self, to: SocketAddrV4) -> io::Result<Box<dyn Conn>> {
         let s = connect_nonblocking(to)?;
         Ok(Box::new(StdConn { s, connected: false }))
+    }
+    /// A fresh listener on the same port (SO_REUSEADDR), else a free one.
+    fn refresh_listener(&mut self) -> io::Result<u16> {
+        self.tcp = None; // the old one closes first: one port, one listener
+        let mut notes = Vec::new();
+        let port = self.tcp_port;
+        match tcp_at(SocketAddrV4::new(self.ip, port), &mut notes) {
+            Ok(l) => {
+                self.tcp = Some(l);
+                Ok(port)
+            }
+            Err(e) => {
+                let l = tcp_at(SocketAddrV4::new(self.ip, 0), &mut notes).map_err(|e2| io::Error::new(e2.kind(), format!("port {}: {}; any port: {}", port, describe(&e), describe(&e2))))?;
+                self.tcp_port = port_of(0, l.local_addr());
+                self.tcp = Some(l);
+                Ok(self.tcp_port)
+            }
+        }
     }
 }
 
@@ -322,6 +343,9 @@ impl Conn for StdConn {
     }
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.s.write(buf)
+    }
+    fn shutdown_write(&mut self) -> io::Result<()> {
+        self.s.shutdown(std::net::Shutdown::Write)
     }
 }
 

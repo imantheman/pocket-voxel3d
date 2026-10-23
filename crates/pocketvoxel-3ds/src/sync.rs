@@ -59,7 +59,11 @@ mod imp {
 
     #[allow(static_mut_refs)]
     unsafe fn st() -> &'static mut State {
-        ST.get_or_insert_with(|| State { host: SyncHost::new(), soc: None })
+        ST.get_or_insert_with(|| {
+            let mut host = SyncHost::new();
+            host.set_clock(now);
+            State { host, soc: None }
+        })
     }
 
     /// The host's log lines, to pvlog.
@@ -141,7 +145,6 @@ mod imp {
             fn svcGetSystemTick() -> u64;
         }
         let seed = svcGetSystemTick() ^ ((u32::from(ip) as u64) << 21);
-        let save = std::fs::read(voxel::SAVE_PATH).ok().filter(|b| !b.is_empty());
         let cfg = HostConfig {
             id: proto::make_id(seed),
             platform: "3ds".into(),
@@ -150,7 +153,9 @@ mod imp {
             udp_port: proto::UDP_PORT,
             tcp_port: proto::TCP_PORT,
             targets,
-            save,
+            // the file itself: read at open, at every GET, and when it changes
+            save: None,
+            save_path: Some(voxel::SAVE_PATH.into()),
         };
         let r = st.host.open(cfg);
         flush(st);

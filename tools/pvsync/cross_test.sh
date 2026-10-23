@@ -5,7 +5,8 @@
 #
 #   bash tools/pvsync/cross_test.sh /path/to/pvsync/net.lua
 #
-# Everything runs on 127.0.0.1 with HELLOs aimed at the other side's port.
+# Everything runs on 127.0.0.1 (bound there, not on the LAN) with HELLOs
+# aimed at the other side's port; no broadcast, no standard port.
 set -u
 NET_LUA=${1:?path to the pvsync mod net.lua}
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -17,6 +18,7 @@ DRV="$HERE/net_driver.lua"
 W=$(mktemp -d)
 trap 'kill $(jobs -p) 2>/dev/null; rm -rf "$W"' EXIT
 RU=47710; RT=47711; LU=47720; LT=47721
+export PVS_BIND=127.0.0.1
 PASS=0; FAIL=0
 ok() { echo "PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "FAIL $1"; FAIL=$((FAIL+1)); sed 's/^/    /' "$W/rust.log" "$W/lua.log" 2>/dev/null | tail -20; }
@@ -44,7 +46,7 @@ run() { # name, rust args..., --, lua args...
   local ra=() la=()
   while [ "$1" != "--" ]; do ra+=("$1"); shift; done; shift
   la=("$@")
-  "$PEER" --udp $RU --tcp $RT "${ra[@]}" > "$W/rust.log" 2>&1 &
+  "$PEER" --bind 127.0.0.1 --udp $RU --tcp $RT "${ra[@]}" > "$W/rust.log" 2>&1 &
   local rp=$!
   luajit "$DRV" "$NET_LUA" "${la[@]}" > "$W/lua.log" 2>&1 &
   local lp=$!
@@ -73,7 +75,7 @@ run "lua offers" --game red --target 127.0.0.1:$LU --accept --out "$W/got4.lua" 
 
 # 5. one-way broadcast, rust deaf to nothing but echo: Rust sends no HELLO
 #    targets; Lua's HELLO reaches Rust, Rust's unicast echo finds Lua
-"$PEER" --udp $RU --tcp $RT --game red --target 127.0.0.1:9 --serve "$W/red.lua" --seconds 8 > "$W/rust.log" 2>&1 & rp=$!
+"$PEER" --bind 127.0.0.1 --udp $RU --tcp $RT --game red --target 127.0.0.1:9 --serve "$W/red.lua" --seconds 8 > "$W/rust.log" 2>&1 & rp=$!
 luajit "$DRV" "$NET_LUA" pull red $LU $LT $RU "$W/got5.lua" 10 > "$W/lua.log" 2>&1; LUA_RC=$?
 wait $rp
 [ $LUA_RC = 0 ] && same "$W/red.lua" "$W/got5.lua" && ok "5 one-way: lua finds rust through rust's echo" || bad "5 one-way (rust echo)"
@@ -102,7 +104,7 @@ grep -q "PEER [0-9a-f]* 3ds red $SZ $CRC RUST PEER" "$W/lua.log"; h1=$?
 #    port, HELLOs from there, and the Lua side still finds it by its echo
 cat > "$W/hold.lua" <<'EOF'
 local socket = require("socket")
-local u = socket.udp(); assert(u:setsockname("*", tonumber(arg[1]))); socket.sleep(tonumber(arg[2]))
+local u = socket.udp(); assert(u:setsockname("127.0.0.1", tonumber(arg[1]))); socket.sleep(tonumber(arg[2]))
 EOF
 luajit "$W/hold.lua" $RU 12 & hp=$!
 sleep 0.5
@@ -116,13 +118,43 @@ kill $hp 2>/dev/null; wait $hp 2>/dev/null
 for mode in "allornothing:2048" "short:700 --sndbuf 2048" "flaky"; do
   rm -f "$W/got10.lua"
   run "stingy $mode" --game red --target 127.0.0.1:$LU --serve "$W/red.lua" --choke $mode --seconds 12 -- pull red $LU $LT $RU "$W/got10.lua" 12
-  [ $LUA_RC = 0 ] && same "$W/red.lua" "$W/got10.lua" && grep -q "sent all" "$W/rust.log" && ok "stingy server ($mode): lua pulls all 300 KB" || bad "stingy server ($mode)"
+  [ $LUA_RC = 0 ] && same "$W/red.lua" "$W/got10.lua" && grep -q "wrote all" "$W/rust.log" && ok "stingy server ($mode): lua pulls all 300 KB" || bad "stingy server ($mode)"
 done
 
 # 13. the Rust side pulling 300 KB through a stingy socket (short reads)
 rm -f "$W/got13.lua"
 run "stingy client" --game red --target 127.0.0.1:$LU --pull --out "$W/got13.lua" --choke short:500 --seconds 12 -- serve red $LU $LT $RU "$W/red.lua" 10
 [ $RUST_RC = 0 ] && same "$W/red.lua" "$W/got13.lua" && ok "stingy client (short reads): rust pulls all 300 KB from lua" || bad "stingy client"
+
+# 14. a slow wire from the Rust side (about 8 KB/s, 100 KB: over 10 s):
+#     both ends wait while bytes still move (10 s without progress, not 10 s)
+head -c 102400 "$W/red.lua" > "$W/mid.raw"; { printf 'return {\n  version = "red",\n  blob = "'; tr -dc 'A-Za-z0-9' < "$W/mid.raw" | head -c 90000; printf '",\n}\n'; } > "$W/mid.lua"
+run "slow wire" --game red --target 127.0.0.1:$LU --serve "$W/mid.lua" --choke buffered:4096:8192 --seconds 40 -- pull red $LU $LT $RU "$W/got14.lua" 40
+[ $LUA_RC = 0 ] && same "$W/mid.lua" "$W/got14.lua" && ok "slow wire (~8 KB/s, $(stat -c %s "$W/mid.lua") bytes): lua waits it out" || bad "slow wire"
+
+# 15-16. one visit on the Rust side, many pulls: three in a row through a
+#     buffer the stack never gives back if a socket is closed early; then
+#     the file replaced (served as it is now), then deleted ("no save")
+cp "$W/red_small.lua" "$W/live.lua"
+"$PEER" --bind 127.0.0.1 --udp $RU --tcp $RT --game red --target 127.0.0.1:$LU --serve "$W/live.lua" --choke buffered:32768:262144 --seconds 60 > "$W/rust.log" 2>&1 &
+rp=$!
+cp "$W/red.lua" "$W/live.lua"
+okn=0
+for k in 1 2 3; do
+  rm -f "$W/got15.lua"
+  luajit "$DRV" "$NET_LUA" pull red $LU $LT $RU "$W/got15.lua" 15 > "$W/lua.log" 2>&1 && same "$W/red.lua" "$W/got15.lua" && okn=$((okn+1))
+  sleep 1
+done
+[ $okn = 3 ] && ok "three 300 KB pulls in one visit through a leaky buffer" || bad "three pulls in one visit ($okn of 3)"
+cp "$W/red_small.lua" "$W/live.lua"
+rm -f "$W/got16.lua"
+luajit "$DRV" "$NET_LUA" pull red $LU $LT $RU "$W/got16.lua" 15 > "$W/lua.log" 2>&1; r1=$?
+same "$W/red_small.lua" "$W/got16.lua"; r2=$?
+rm -f "$W/live.lua"
+luajit "$DRV" "$NET_LUA" pull red $LU $LT $RU "$W/got16b.lua" 15 > "$W/lua2.log" 2>&1
+grep -q "no save" "$W/lua2.log"; r3=$?
+kill $rp 2>/dev/null; wait $rp 2>/dev/null
+[ $r1 = 0 ] && [ $r2 = 0 ] && [ $r3 = 0 ] && ok "the file replaced is served as it is now; deleted, it is no save" || { cat "$W/lua2.log" >> "$W/lua.log"; bad "fresh file per GET ($r1 $r2 $r3)"; }
 
 echo "cross: $PASS passed, $FAIL failed"
 [ $FAIL = 0 ]

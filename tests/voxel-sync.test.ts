@@ -255,6 +255,43 @@ describe("the SYNC screen", () => {
     expect(m.statusLines(18)).toEqual([SEARCHING]);
   });
 
+  test("a transfer we serve shows on screen, and stays until the next or BACK", () => {
+    const f = new FakeSync();
+    f.peers = [f.peer("aa", "yellow", "PC")];
+    f.sticky = ["C\t1\t1", "T\t1\tsending\t41000\t171234\t12\t1024\t0"];
+    const m = model(f, "yellow");
+    expect(m.diag()).toBe("S1 O1");
+    expect(m.statusLines(18)).toEqual(["SEND 41000/171234", "R12 C1024"]);
+    f.sticky = ["C\t1\t1", "T\t1\tclosing\t171265\t171265\t12\t4096\t0"];
+    m.update(NONE);
+    expect(m.statusLines(18)).toEqual(["SENT ALL, CLOSING", "171265 BYTES"]);
+    f.sticky = ["C\t1\t0", "T\t1\tsent\t171265\t171265\t12\t4096\t0"];
+    m.update(NONE);
+    expect(m.diag()).toBe("S1 O0");
+    expect(m.statusLines(18)).toEqual(["SENT ALL, CLOSED", "171265 BYTES"]);
+    // the line stays while nothing else happens
+    m.update(NONE);
+    m.update(NONE);
+    expect(m.statusLines(18)[0]).toBe("SENT ALL, CLOSED");
+    // a SEND is an action of the player's: its status shows...
+    m.update(DOWN);
+    m.update(A);
+    expect(m.status).toBe("OFFERED TO PC");
+    // ...until the next transfer starts
+    f.sticky = ["C\t2\t1", "T\t2\tsending\t0\t171265\t0\t4096\t0"];
+    m.update(NONE);
+    expect(m.statusLines(18)).toEqual(["SEND 0/171265", "R0 C4096"]);
+    for (const [rec, want] of [
+      ["T\t2\ttimeout\t5000\t171265\t3\t256\t0", ["TIMED OUT AT", "5000/171265"]],
+      ["T\t2\tsenderr\t5000\t171265\t3\t256\t104", ["SEND ERR E104", "AT 5000/171265"]],
+      ["T\t2\tpeerclosed\t9000\t171265\t3\t256\t0", ["PEER CLOSED AT", "9000/171265"]],
+    ] as [string, string[]][]) {
+      f.sticky = ["C\t2\t0", rec];
+      m.update(NONE);
+      expect(m.statusLines(18)).toEqual(want);
+    }
+  });
+
   test("a long list scrolls with the cursor", () => {
     const f = new FakeSync();
     f.peers = ["a1", "a2", "a3", "a4"].map((id) => f.peer(id, "red", id.toUpperCase()));
@@ -318,9 +355,9 @@ const red: VoxelmonData | null = existsSync(join(redDir, "pokemon.json")) ? awai
 
 describe("the Gen 1 title's SYNC row", () => {
   class Card extends RecorderHost {
-    card: string | undefined;
-    saveData(): string | undefined { return this.card; }
-    saveWrite(t: string): boolean { this.card = t; return true; }
+    saveText: string | undefined;
+    saveData(): string | undefined { return this.saveText; }
+    saveWrite(t: string): boolean { this.saveText = t; return true; }
   }
   function boot(host: Card): VoxelmonGame {
     const game = new VoxelmonGame(red!, host, 1);

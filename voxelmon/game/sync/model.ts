@@ -99,6 +99,33 @@ export function platformTag(p: string): string {
 export const CONFIRM_SECS = 3;
 
 export const SEARCHING = "SEARCHING...";
+/** The status while it shows the transfer we are serving (serveLines). */
+export const SERVING = "<serving>";
+
+/** The transfer a peer is pulling from us, as the host reports it (T). */
+export interface ServeInfo {
+  n: number;
+  state: "sending" | "closing" | "sent" | "timeout" | "senderr" | "peerclosed";
+  sent: number;
+  total: number;
+  refused: number;
+  chunk: number;
+  errno: number;
+}
+
+/** A serve as two status lines, for a photo of the screen. */
+export function serveLines(s: ServeInfo, width: number): string[] {
+  const of = `${s.sent}/${s.total}`;
+  const lines: Record<ServeInfo["state"], string[]> = {
+    sending: [`SEND ${of}`, `R${s.refused} C${s.chunk}`],
+    closing: ["SENT ALL, CLOSING", `${s.total} BYTES`],
+    sent: ["SENT ALL, CLOSED", `${s.total} BYTES`],
+    timeout: ["TIMED OUT AT", of],
+    senderr: [`SEND ERR E${s.errno}`, `AT ${of}`],
+    peerclosed: ["PEER CLOSED AT", of],
+  };
+  return (lines[s.state] ?? [String(s.state).toUpperCase(), of]).map((l) => l.slice(0, width));
+}
 export const CONFIRM = "A AGAIN: OVERWRITE YOUR SAVE";
 
 export interface SyncOpts {
@@ -126,6 +153,11 @@ export class SyncModel {
   hasSave = false;
   /** A note from the host under SEARCHING... (a port it fell back to). */
   note: string | undefined;
+  /** Connections the host took this visit, and transfers open now (C). */
+  counts: { accepted: number; open: number } | undefined;
+  /** The transfer being served, or the last one (T). */
+  serve: ServeInfo | undefined;
+  private serveKey = "";
   /** A save was installed this visit. */
   installed = false;
   /** open / nowifi / error / closed. */
@@ -208,6 +240,7 @@ export class SyncModel {
   private idle(): string {
     if (this.state === "nowifi") return "ERROR: NO WIFI";
     if (this.receiving) return `RECEIVING FROM ${this.receiving}...`;
+    if (this.serve) return SERVING;
     return SEARCHING;
   }
 
@@ -295,6 +328,29 @@ export class SyncModel {
         case "N":
           this.note = f[1] || undefined;
           break;
+        case "C":
+          this.counts = { accepted: Number(f[1]) || 0, open: Number(f[2]) || 0 };
+          break;
+        case "T": {
+          const s: ServeInfo = {
+            n: Number(f[1]) || 0,
+            state: (f[2] ?? "sending") as ServeInfo["state"],
+            sent: Number(f[3]) || 0,
+            total: Number(f[4]) || 0,
+            refused: Number(f[5]) || 0,
+            chunk: Number(f[6]) || 0,
+            errno: Number(f[7]) || 0,
+          };
+          this.serve = s;
+          // a new transfer, or a step in this one: the status shows it
+          // (not over a confirm in progress or a save arriving)
+          const key = `${s.n}:${s.state}`;
+          if (key !== this.serveKey) {
+            this.serveKey = key;
+            if (!this.armed && !this.receiving) this.status = SERVING;
+          }
+          break;
+        }
         case "P":
           peers.push({ id: f[1] ?? "", platform: f[2] ?? "", game: f[3] ?? "", offered: f[4] === "1", name: f[5] || platformTag(f[2] ?? "") });
           break;
@@ -399,7 +455,16 @@ export class SyncModel {
   }
 
   /** The status line wrapped to `width`, at most `lines` lines. */
+  /** The counters for the title row: `S<connections taken> O<open>`. */
+  diag(): string {
+    return this.state === "open" && this.counts ? `S${this.counts.accepted} O${this.counts.open}` : "";
+  }
+
   statusLines(width: number, lines = 2): string[] {
+    if (this.status === SERVING) {
+      if (this.serve) return serveLines(this.serve, width).slice(0, lines);
+      return [SEARCHING];
+    }
     // the host's note (not an error) on the line under SEARCHING...
     if (this.status === SEARCHING && this.note && lines >= 2) return [SEARCHING, this.note.slice(0, width)];
     const out: string[] = [];

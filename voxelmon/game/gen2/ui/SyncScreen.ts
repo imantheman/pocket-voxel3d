@@ -78,6 +78,8 @@ export class SyncScreen {
     G.setColor(1, 1, 1, 1);
     Chrome.box(0, 0, Chrome.SCREEN_W, 13);
     Chrome.print(m.title, 2, 1);
+    const diag = m.diag();
+    if (diag) Chrome.print(diag, Chrome.SCREEN_W - 1 - diag.length, 1);
     const all = m.rowText(COLS);
     const top = m.scrollTop(ROWS);
     all.slice(top, top + ROWS).forEach((text, i) => {

@@ -11,6 +11,8 @@
 //! --offer    OFFER our save to the first same-game peer heard (once)
 //! --choke    TCP like a stingy socket: allornothing:N, short:N, flaky
 //! --sndbuf   SO_SNDBUF for connections it serves
+//! --bind     the address to bind (default 0.0.0.0; tests use 127.0.0.1)
+//! --serve    the file is read again at every GET (as the console does)
 //! Without --pull/--accept it serves until --seconds run out (exit 0).
 //! Every event is printed as one line on stdout.
 
@@ -37,6 +39,7 @@ fn main() {
     let (mut pull, mut accept, mut offer) = (false, false, false);
     let mut seconds = 20.0f64;
     let mut choke = Mode::Off;
+    let mut bind = Ipv4Addr::UNSPECIFIED;
     let mut sndbuf: Option<i32> = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -58,6 +61,7 @@ fn main() {
             "--offer" => offer = true,
             "--choke" => choke = Mode::parse(&val()).expect("--choke off|allornothing:N|short:N|flaky"),
             "--sndbuf" => sndbuf = Some(val().parse().expect("--sndbuf")),
+            "--bind" => bind = val().parse().expect("--bind IP"),
             other => panic!("unknown argument {}", other),
         }
     }
@@ -65,7 +69,7 @@ fn main() {
         targets.push(SocketAddrV4::new(Ipv4Addr::BROADCAST, proto::UDP_PORT));
     }
     // as the console does: a port that cannot be had falls back
-    let bound = StdNet::bind_lenient(Ipv4Addr::UNSPECIFIED, udp, tcp).unwrap_or_else(|e| {
+    let bound = StdNet::bind_lenient(bind, udp, tcp).unwrap_or_else(|e| {
         println!("ERROR bind: {}", e.log);
         std::process::exit(2)
     });
@@ -84,8 +88,13 @@ fn main() {
     let cfg = Config { id: proto::make_id(seed), platform, game: game.clone(), name, tcp_port, targets };
     let mut s = Session::new(net, cfg);
     if let Some(f) = &serve {
-        s.set_body(Some(std::fs::read(f).expect("--serve file")));
+        // as the console does: the file as it is at each GET
+        s.set_body(std::fs::read(f).ok().filter(|b| !b.is_empty()));
+        let path = f.clone();
+        s.set_source(Box::new(move || std::fs::read(&path).ok().filter(|b| !b.is_empty())));
     }
+    let t_clock = Instant::now();
+    s.set_clock(Box::new(move || t_clock.elapsed().as_secs_f64()));
     println!("READY id={} udp={} tcp={} choke={:?} sndbuf={:?}", s.id(), s.net().inner.udp_port(), s.net().inner.tcp_port(), choke, sndbuf);
     let t0 = Instant::now();
     let mut known: Vec<String> = Vec::new();

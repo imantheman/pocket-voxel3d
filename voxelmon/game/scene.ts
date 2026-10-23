@@ -2031,13 +2031,14 @@ export class Scene {
         this.titleSig = null;
         this.emitIntroTiles([]);
       }
-      const sig = `Y${sy.title}|${sy.cursor}|${sy.rows.join("/")}|${sy.status.join("/")}|${sy.more.up},${sy.more.down}`;
+      const sig = `Y${sy.title}|${sy.diag}|${sy.cursor}|${sy.rows.join("/")}|${sy.status.join("/")}|${sy.more.up},${sy.more.down}`;
       if (sig !== this.syncSig) {
         this.syncSig = sig;
         this.uiOwner = null;
         host.uiClear();
         this.frame(host, 0, 0, UI_COLS, 13);
         this.stamp(host, 2, 1, sy.title);
+        if (sy.diag) this.stamp(host, UI_COLS - 1 - sy.diag.length, 1, sy.diag);
         sy.rows.forEach((r: string, i: number) => {
           this.stamp(host, 3, 3 + i * 2, r);
           if (i === sy.cursor && sy.pickable[i]) host.uiTile(2, 3 + i * 2, ARROW_CURSOR);

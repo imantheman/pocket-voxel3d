@@ -18,7 +18,7 @@ use crate::install::{self, Paths, Store};
 use crate::luadata;
 use crate::net::StdNet;
 use crate::proto;
-use crate::session::{Config, Event, PullPhase, Session};
+use crate::session::{Config, Event, PullPhase, ServeState, Session};
 use std::fmt::Write as _;
 use std::net::{Ipv4Addr, SocketAddrV4};
 
@@ -34,8 +34,22 @@ pub struct HostConfig {
     pub udp_port: u16,
     pub tcp_port: u16,
     pub targets: Vec<SocketAddrV4>,
-    /// The save to serve, byte for byte.
+    /// The save to serve, byte for byte (when there is no `save_path`).
     pub save: Option<Vec<u8>>,
+    /// The save file: read when SYNC opens, at every GET, and again
+    /// whenever it changes on the card while SYNC is open, so what is
+    /// served and advertised is always the file as it is now.
+    pub save_path: Option<String>,
+}
+
+/// The file's bytes, or None when it is missing or empty.
+fn read_save(path: &str) -> Option<Vec<u8>> {
+    std::fs::read(path).ok().filter(|b| !b.is_empty())
+}
+
+/// What tells a changed file: its size and modification time.
+fn stamp_of(path: &str) -> Option<(u64, Option<std::time::SystemTime>)> {
+    std::fs::metadata(path).ok().map(|m| (m.len(), m.modified().ok()))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -56,6 +70,10 @@ pub struct SyncHost {
     log: Vec<String>,
     /// How many times sockets were bound (tests: one per visit).
     pub binds: u32,
+    save_path: Option<String>,
+    stamp: Option<(u64, Option<std::time::SystemTime>)>,
+    checked: f64,
+    clock: Option<fn() -> f64>,
 }
 
 impl Default for SyncHost {
@@ -80,7 +98,13 @@ fn field(s: &str) -> String {
 
 impl SyncHost {
     pub fn new() -> Self {
-        SyncHost { state: State::Closed, session: None, received: None, note: None, out: String::new(), reply: String::new(), log: Vec::new(), binds: 0 }
+        SyncHost { state: State::Closed, session: None, received: None, note: None, out: String::new(), reply: String::new(), log: Vec::new(), binds: 0, save_path: None, stamp: None, checked: 0.0, clock: None }
+    }
+
+    /// A steady clock in seconds: lets a frame keep writing for a few ms
+    /// (session::FRAME_WRITE_SECS) instead of stopping at a fixed count.
+    pub fn set_clock(&mut self, clock: fn() -> f64) {
+        self.clock = Some(clock);
     }
 
     pub fn is_open(&self) -> bool {
@@ -151,11 +175,27 @@ impl SyncHost {
         if bound.tcp_fell_back {
             self.log.push(format!("tcp {} was not to be had: on {} (HELLO says so)", cfg.tcp_port, tcp));
         }
-        let name = name_of(cfg.save.as_deref(), &proto::sanitize_name(&cfg.platform));
-        let size = cfg.save.as_ref().map(|b| b.len()).unwrap_or(0);
+        let save = match &cfg.save_path {
+            Some(p) => {
+                self.stamp = stamp_of(p);
+                read_save(p)
+            }
+            None => cfg.save.clone(),
+        };
+        let name = name_of(save.as_deref(), &proto::sanitize_name(&cfg.platform));
+        let size = save.as_ref().map(|b| b.len()).unwrap_or(0);
         let config = Config { id: cfg.id.clone(), platform: cfg.platform, game: cfg.game.clone(), name: name.clone(), tcp_port: tcp, targets: cfg.targets };
         let mut session = Session::new(bound.net, config);
-        session.set_body(cfg.save);
+        session.set_body(save);
+        if let Some(c) = self.clock {
+            session.set_clock(Box::new(c));
+        }
+        if let Some(p) = cfg.save_path.clone() {
+            let path = p.clone();
+            session.set_source(Box::new(move || read_save(&path)));
+            self.log.push(format!("serving {} (read at every GET)", p));
+        }
+        self.save_path = cfg.save_path;
         self.log.push(format!("open: {} ({}, {}) udp {} tcp {}, serving {} bytes", cfg.id, cfg.game, name, udp, tcp, size));
         self.session = Some(session);
         self.state = State::Open;
@@ -169,6 +209,9 @@ impl SyncHost {
         }
         self.received = None;
         self.note = None;
+        self.save_path = None;
+        self.stamp = None;
+        self.checked = 0.0;
         self.state = State::Closed;
     }
 
@@ -183,12 +226,41 @@ impl SyncHost {
             }
             State::Open => {
                 let Some(s) = self.session.as_mut() else { return &self.out };
+                // the save changed on the card while SYNC is open (an
+                // install, a save from elsewhere): HELLO follows it
+                if let Some(p) = &self.save_path {
+                    if now - self.checked >= 1.0 {
+                        self.checked = now;
+                        let st = stamp_of(p);
+                        if st != self.stamp {
+                            self.stamp = st;
+                            let b = read_save(p);
+                            self.log.push(format!("the save on the card changed: {} bytes", b.as_ref().map(|x| x.len()).unwrap_or(0)));
+                            s.set_name(&name_of(b.as_deref(), "3DS"));
+                            s.set_body(b);
+                        }
+                    }
+                }
                 s.tick(now);
                 self.out.push_str("S\topen\n");
                 if let Some(n) = &self.note {
                     let _ = writeln!(self.out, "N\t{}", field(n));
                 }
                 let _ = writeln!(self.out, "H\t{}", if s.has_body() { 1 } else { 0 });
+                // connections taken this visit, transfers open now
+                let (accepted, open) = s.serve_counts();
+                let _ = writeln!(self.out, "C\t{}\t{}", accepted, open);
+                if let Some(r) = s.serve_report() {
+                    let (state, errno) = match r.state {
+                        ServeState::Sending => ("sending", 0),
+                        ServeState::Closing => ("closing", 0),
+                        ServeState::SentAll => ("sent", 0),
+                        ServeState::TimedOut => ("timeout", 0),
+                        ServeState::SendErr(n) => ("senderr", n),
+                        ServeState::PeerClosed => ("peerclosed", 0),
+                    };
+                    let _ = writeln!(self.out, "T\t{}\t{}\t{}\t{}\t{}\t{}\t{}", r.n, state, r.sent, r.total, r.refused, r.chunk, errno);
+                }
                 for p in s.peers() {
                     let _ = writeln!(self.out, "P\t{}\t{}\t{}\t{}\t{}", p.id, field(&p.platform), field(&p.game), if p.offered { 1 } else { 0 }, field(&p.label()));
                 }
@@ -288,6 +360,7 @@ impl SyncHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::Session;
     use std::net::UdpSocket;
     use std::time::Duration;
 
@@ -299,7 +372,7 @@ mod tests {
     }
 
     fn cfg(id: &str, udp: u16, tcp: u16, targets: Vec<SocketAddrV4>, save: Option<&[u8]>) -> HostConfig {
-        HostConfig { id: id.into(), platform: "3ds".into(), game: "gold".into(), bind_ip: LO, udp_port: udp, tcp_port: tcp, targets, save: save.map(|b| b.to_vec()) }
+        HostConfig { id: id.into(), platform: "3ds".into(), game: "gold".into(), bind_ip: LO, udp_port: udp, tcp_port: tcp, targets, save: save.map(|b| b.to_vec()), save_path: None }
     }
 
     #[test]
@@ -409,6 +482,86 @@ mod tests {
         assert_eq!(a.received(), Some(save.as_slice()));
         let log = a.take_log().join("\n");
         assert!(log.contains(&format!("HELLO to 127.0.0.1:{}: ok", bu)), "{}", log);
+    }
+
+    /// The save served and advertised is the file as it is now: install A,
+    /// serve it twice, replace the file with B (as COPY SAVE or a save from
+    /// the game would), serve B with B's name, size and CRC; delete it and
+    /// it is "no save" with 0 00000000.
+    #[test]
+    fn every_get_serves_the_file_as_it_is_now() {
+        use crate::session::{Config, Event};
+        let dir = std::env::temp_dir().join(format!("pvsync-fresh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("save_yellow.lua").to_string_lossy().into_owned();
+        let save = |name: &str, pad: usize| format!("return {{\n  player = {{\n    name = \"{}\",\n  }},\n  pad = \"{}\",\n  version = \"gold\",\n}}\n", name, "x".repeat(pad)).into_bytes();
+        let a_save = save("AAAAAA", 3000);
+        std::fs::write(&path, &a_save).unwrap();
+
+        let nb = StdNet::bind(LO, 0, 0).unwrap();
+        let ub = SocketAddrV4::new(LO, nb.udp_port());
+        let tb = nb.tcp_port();
+        let mut a = SyncHost::new();
+        let mut c = cfg("a1a1a1a1", free_port(), free_port(), vec![ub], None);
+        c.save_path = Some(path.clone());
+        a.open(c).unwrap();
+        let ua = SocketAddrV4::new(LO, a.session().unwrap().net().udp_port());
+        let mut b = Session::new(nb, Config { id: "b2b2b2b2".into(), platform: "pc".into(), game: "gold".into(), name: "PC".into(), tcp_port: tb, targets: vec![ua] });
+
+        let mut t = 0.0;
+        let mut step = |a: &mut SyncHost, b: &mut Session<StdNet>, t: &mut f64| {
+            *t += 1.0 / 30.0;
+            a.poll(*t);
+            b.tick(*t);
+            std::thread::sleep(Duration::from_millis(2));
+        };
+        let pull = |a: &mut SyncHost, b: &mut Session<StdNet>, t: &mut f64, step: &mut dyn FnMut(&mut SyncHost, &mut Session<StdNet>, &mut f64)| -> Result<Vec<u8>, String> {
+            while b.peer("a1a1a1a1").is_none() {
+                step(a, b, t);
+            }
+            b.pull("a1a1a1a1").unwrap();
+            let start = *t;
+            loop {
+                step(a, b, t);
+                match b.poll_event() {
+                    Some(Event::Pulled { body, .. }) => {
+                        // let A finish its close
+                        for _ in 0..10 {
+                            step(a, b, t);
+                        }
+                        return Ok(body);
+                    }
+                    Some(Event::PullFailed { reason, .. }) => return Err(reason),
+                    _ => {}
+                }
+                assert!(*t - start < 12.0, "stalled");
+            }
+        };
+        let seen = |b: &Session<StdNet>| b.peer("a1a1a1a1").map(|p| (p.name.clone(), p.size, p.crc));
+
+        assert_eq!(pull(&mut a, &mut b, &mut t, &mut step).unwrap(), a_save);
+        assert_eq!(pull(&mut a, &mut b, &mut t, &mut step).unwrap(), a_save);
+        assert_eq!(seen(&b), Some(("AAAAAA".into(), a_save.len(), proto::crc32(&a_save))));
+
+        // the file replaced behind SYNC's back
+        let b_save = save("BBBBBB", 5000);
+        std::fs::write(&path, &b_save).unwrap();
+        assert_eq!(pull(&mut a, &mut b, &mut t, &mut step).unwrap(), b_save);
+        for _ in 0..80 {
+            step(&mut a, &mut b, &mut t); // a HELLO or two
+        }
+        assert_eq!(seen(&b), Some(("BBBBBB".into(), b_save.len(), proto::crc32(&b_save))));
+
+        // and deleted
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(pull(&mut a, &mut b, &mut t, &mut step), Err("no save".into()));
+        for _ in 0..80 {
+            step(&mut a, &mut b, &mut t);
+        }
+        assert_eq!(seen(&b), Some(("3DS".into(), 0, 0)));
+        assert_eq!(a.session().unwrap().serve_counts().1, 0, "every slot freed");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

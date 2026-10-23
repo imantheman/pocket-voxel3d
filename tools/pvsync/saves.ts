@@ -22,10 +22,10 @@ const data = await loadRuntimeData(dir!);
 (data as { version?: string }).version ??= game;
 
 class Card extends RecorderHost {
-  card: string | undefined;
+  saveText: string | undefined;
   written: string | undefined;
-  saveData(): string | undefined { return this.card; }
-  saveWrite(t: string): boolean { this.card = t; this.written = t; return true; }
+  saveData(): string | undefined { return this.saveText; }
+  saveWrite(t: string): boolean { this.saveText = t; this.written = t; return true; }
 }
 
 if (cmd === "make") {
@@ -46,7 +46,7 @@ if (cmd === "make") {
   console.log(`made ${file} version=${s.version} name=${s.player.name}`);
 } else if (cmd === "check") {
   const host = new Card();
-  host.card = readFileSync(file!, "utf8");
+  host.saveText = readFileSync(file!, "utf8");
   const g = new VoxelmonGame(data, host, 1);
   g.newGame();
   for (let k = 0; k < 400 && (g as any).title()?.phase !== "menu"; k++) g.tick(k % 8 === 0 ? VOX_BTN.start : 0);

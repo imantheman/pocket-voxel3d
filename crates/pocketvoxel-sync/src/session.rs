@@ -25,13 +25,23 @@ pub const MAX_SERVING: usize = 4;
 /// and a non-blocking send that does not fit may be refused whole (would
 /// block) rather than taken in part -- so one big write, retried every
 /// frame, never goes. Writes stay under libctru's small-send path (8 KB),
-/// halve on every refusal down to [`MIN_CHUNK`] (retried at once, up to
-/// [`REFUSALS_PER_FRAME`]), and grow back fourfold whenever one is taken.
+/// halve on every refusal and are retried at once; only a refusal at
+/// [`MIN_CHUNK`] (the socket is full) waits for the next frame. A write that
+/// is taken lets the next grow fourfold.
 pub const MAX_CHUNK: usize = 4096;
 pub const MIN_CHUNK: usize = 256;
-/// Refused writes a transfer takes in one frame (each retried smaller)
-/// before it waits for the next.
-pub const REFUSALS_PER_FRAME: u32 = 8;
+/// A safety stop on refusals in one frame.
+pub const REFUSALS_PER_FRAME: u32 = 32;
+/// How long a frame may spend writing (seconds), with a clock ([`Session::set_clock`]).
+pub const FRAME_WRITE_SECS: f64 = 0.004;
+/// After the last byte: how long to wait for the peer to close (seconds).
+/// The sending side shuts its half down and keeps the socket until then: a
+/// console's SOC may throw away bytes still in its buffer, or reset the
+/// connection, when a socket is closed with data unsent.
+pub const DRAIN_SECS: f64 = 3.0;
+/// A transfer still moving is never cut off for being slow -- only for
+/// [`IO_TIMEOUT`] seconds without progress -- up to this in all.
+pub const HARD_CAP_SECS: f64 = 120.0;
 
 /// A TCP connection.
 pub trait Conn {
@@ -41,6 +51,40 @@ pub trait Conn {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize>;
     /// Bytes written; `WouldBlock` is "not now".
     fn write(&mut self, buf: &[u8]) -> io::Result<usize>;
+    /// Shut the sending half (the peer reads the end of the stream once
+    /// everything written has gone); the socket stays open for reading.
+    fn shutdown_write(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// How the last transfer we served went, for the screen.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ServeState {
+    Sending,
+    /// Every byte written; waiting for the peer to close.
+    Closing,
+    /// Every byte written and the connection closed.
+    SentAll,
+    /// No progress for [`IO_TIMEOUT`] (or past [`HARD_CAP_SECS`]).
+    TimedOut,
+    /// A write failed with this errno (0: none given).
+    SendErr(i32),
+    /// The peer closed before everything was sent.
+    PeerClosed,
+}
+
+/// The transfer being served now, or the last one (kept until the next
+/// starts or the session closes). Only transfers of our save count.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServeReport {
+    /// The n-th connection this visit.
+    pub n: u32,
+    pub sent: usize,
+    pub total: usize,
+    pub refused: u32,
+    pub chunk: usize,
+    pub state: ServeState,
 }
 
 /// The sockets: one UDP socket (sends come from it, so its port is our
@@ -53,6 +97,12 @@ pub trait Net {
     fn accept(&mut self) -> io::Result<Option<Box<dyn Conn>>>;
     /// Start a connect; it completes later ([`Conn::poll_connected`]).
     fn connect(&mut self, to: SocketAddrV4) -> io::Result<Box<dyn Conn>>;
+    /// Close the TCP listener and make a fresh one; the port it is on.
+    /// The session does this between transfers, so a listener a console's
+    /// stack has stopped answering on is never kept. Optional.
+    fn refresh_listener(&mut self) -> io::Result<u16> {
+        Err(io::Error::from(io::ErrorKind::Unsupported))
+    }
 }
 
 /// Who we are.
@@ -125,6 +175,8 @@ struct Pull {
     conn: Box<dyn Conn>,
     phase: PullPhase,
     started: f64,
+    /// When bytes last moved (or the connect completed).
+    progress: f64,
     request: Vec<u8>,
     sent: usize,
     line: Vec<u8>,
@@ -150,6 +202,12 @@ struct Serve {
     frames: u32,
     /// When progress was last logged.
     logged: f64,
+    /// When bytes last moved.
+    progress: f64,
+    /// Shut down after the last byte, at this time (draining).
+    closing: Option<f64>,
+    /// This transfer carries our save (an OK, not an ERR).
+    report: bool,
 }
 
 pub struct Session<N: Net> {
@@ -170,6 +228,12 @@ pub struct Session<N: Net> {
     sent_to: Vec<(SocketAddrV4, String)>,
     errors_seen: Vec<String>,
     accepted: u32,
+    /// Transfers that ended since the listener was last made afresh.
+    ended: u32,
+    serve_report: Option<ServeReport>,
+    clock: Option<Box<dyn Fn() -> f64>>,
+    /// Where the save comes from at each GET (the file on the card).
+    source: Option<Box<dyn FnMut() -> Option<Vec<u8>>>>,
 }
 
 fn would_block(e: &io::Error) -> bool {
@@ -193,6 +257,10 @@ impl<N: Net> Session<N> {
             sent_to: Vec::new(),
             errors_seen: Vec::new(),
             accepted: 0,
+            ended: 0,
+            serve_report: None,
+            clock: None,
+            source: None,
         }
     }
 
@@ -225,6 +293,30 @@ impl<N: Net> Session<N> {
     }
     pub fn peer(&self, id: &str) -> Option<&Peer> {
         self.peers.iter().find(|p| p.id == id)
+    }
+
+    /// A steady clock in seconds, for the time a frame may spend writing
+    /// ([`FRAME_WRITE_SECS`]). Without one, a frame writes until the socket
+    /// is full or the frame's byte budget is spent.
+    pub fn set_clock(&mut self, clock: Box<dyn Fn() -> f64>) {
+        self.clock = Some(clock);
+    }
+
+    /// Connections accepted this visit, and transfers open now.
+    pub fn serve_counts(&self) -> (u32, usize) {
+        (self.accepted, self.serving.len())
+    }
+
+    /// Read the save afresh at every GET with `source` (None: no save): the
+    /// header's size and CRC and the bytes sent are always one read of it,
+    /// and HELLO follows. Without a source, the body last set is served.
+    pub fn set_source(&mut self, source: Box<dyn FnMut() -> Option<Vec<u8>>>) {
+        self.source = Some(source);
+    }
+
+    /// The transfer we are serving, or the last one served.
+    pub fn serve_report(&self) -> Option<&ServeReport> {
+        self.serve_report.as_ref()
     }
 
     /// Log lines since the last call (see the `notes` field).
@@ -320,6 +412,7 @@ impl<N: Net> Session<N> {
             conn,
             phase: PullPhase::Connecting,
             started: self.now,
+            progress: self.now,
             request: proto::get_line(&self.cfg.game).into_bytes(),
             sent: 0,
             line: Vec::new(),
@@ -418,6 +511,9 @@ impl<N: Net> Session<N> {
                         blocked: 0,
                         frames: 0,
                         logged: self.now,
+                        progress: self.now,
+                        closing: None,
+                        report: false,
                     });
                 }
                 Ok(None) => break,
@@ -430,13 +526,46 @@ impl<N: Net> Session<N> {
         let mut budget = TCP_BYTES_PER_TICK;
         let now = self.now;
         let game = self.cfg.game.clone();
-        let mine = self.body.clone();
-        let crc = self.crc;
+        let mut mine = self.body.clone();
+        let mut crc = self.crc;
+        let clock = self.clock.as_deref();
+        let source = &mut self.source;
+        // the save as read at this tick's first GET (Some once read)
+        let mut fresh: Option<Option<Rc<[u8]>>> = None;
+        let frame_start = clock.map(|c| c());
         let mut notes: Vec<String> = Vec::new();
+        let mut reports: Vec<ServeReport> = Vec::new();
+        let open_before = self.serving.len();
         self.serving.retain_mut(|s| {
             let total = s.head.len() + s.body.as_ref().map(|b| b.len()).unwrap_or(0);
-            if now - s.started > IO_TIMEOUT {
-                notes.push(format!("serve #{}: timed out at {} of {} bytes ({} frames, {} refused writes, chunk {})", s.n, s.sent, total, s.frames, s.blocked, s.chunk));
+            let report = |s: &Serve, state: ServeState| ServeReport { n: s.n, sent: s.sent, total, refused: s.blocked, chunk: s.chunk, state };
+            // Every byte written and the sending half shut: wait for the
+            // peer to close (it has read everything) before closing ours.
+            if let Some(since) = s.closing {
+                let mut b = [0u8; 256];
+                let gone = loop {
+                    match s.conn.read(&mut b) {
+                        Ok(0) => break Some("the peer closed"),
+                        Ok(_) => continue, // nothing is expected; drop it
+                        Err(e) if would_block(&e) => break None,
+                        Err(_) => break Some("the connection ended"),
+                    }
+                };
+                let late = now - since > DRAIN_SECS;
+                if gone.is_some() || late {
+                    notes.push(format!("serve #{}: closed ({}) {:.2} s after the last byte", s.n, gone.unwrap_or("waited long enough"), now - since));
+                    if s.report {
+                        reports.push(report(s, ServeState::SentAll));
+                    }
+                    return false;
+                }
+                return true;
+            }
+            if now - s.progress > IO_TIMEOUT || now - s.started > HARD_CAP_SECS {
+                notes.push(format!("serve #{}: timed out at {} of {} bytes ({:.1} s since the last byte; {} frames, {} refused writes, chunk {})", s.n, s.sent, total, now - s.progress, s.frames, s.blocked, s.chunk));
+                if s.report {
+                    reports.push(report(s, ServeState::TimedOut));
+                }
                 return false;
             }
             if !s.replied {
@@ -449,6 +578,7 @@ impl<N: Net> Session<N> {
                         }
                         Ok(n) => {
                             s.line.extend_from_slice(&b[..n]);
+                            s.progress = now;
                             if s.line.contains(&b'\n') || s.line.len() > proto::MAX_LINE {
                                 break;
                             }
@@ -465,10 +595,22 @@ impl<N: Net> Session<N> {
                     return s.line.len() <= proto::MAX_LINE;
                 };
                 let req = String::from_utf8_lossy(&s.line[..nl]).trim_end().to_string();
-                s.head = match proto::parse_line(&s.line[..=nl]) {
+                let msg = proto::parse_line(&s.line[..=nl]);
+                // a GET serves the save as it is on the card now: read it,
+                // and the header and the bytes are that one read
+                if matches!(msg, Some(Msg::Get { .. })) && fresh.is_none() {
+                    if let Some(src) = source.as_mut() {
+                        let b: Option<Rc<[u8]>> = src().filter(|b| !b.is_empty()).map(Rc::from);
+                        crc = b.as_deref().map(proto::crc32).unwrap_or(0);
+                        mine = b.clone();
+                        fresh = Some(b);
+                    }
+                }
+                s.head = match msg {
                     Some(Msg::Get { game: g }) if g == game => match &mine {
                         Some(body) => {
                             s.body = Some(body.clone());
+                            s.report = true;
                             proto::ok_line(&game, body.len(), crc).into_bytes()
                         }
                         None => proto::err_line("no save").into_bytes(),
@@ -480,36 +622,50 @@ impl<N: Net> Session<N> {
                 notes.push(format!("serve #{}: \"{}\" -> {}", s.n, req.chars().take(40).collect::<String>(), String::from_utf8_lossy(&s.head).trim_end()));
             }
             // Header, then body, a chunk at a time, for as long as the
-            // socket takes them this frame; a refused write halves the
-            // chunk and waits for the next frame (MAX_CHUNK).
+            // socket takes them this frame (and the frame's time and byte
+            // budget last). A refused write is retried smaller at once; a
+            // refusal at the smallest size means the socket is full: wait
+            // for the next frame.
             let total = s.head.len() + s.body.as_ref().map(|b| b.len()).unwrap_or(0);
             let before = s.sent;
             let mut refused = 0;
             while s.sent < total && budget > 0 {
+                if let (Some(c), Some(t0)) = (clock, frame_start) {
+                    if c() - t0 > FRAME_WRITE_SECS {
+                        break;
+                    }
+                }
                 let (src, off) = if s.sent < s.head.len() { (&s.head[..], s.sent) } else { (s.body.as_deref().unwrap(), s.sent - s.head.len()) };
                 let end = (off + s.chunk.min(budget)).min(src.len());
                 match s.conn.write(&src[off..end]) {
                     Ok(0) => {
                         notes.push(format!("serve #{}: the peer stopped taking bytes at {} of {}", s.n, s.sent, total));
+                        if s.report {
+                            reports.push(report(s, ServeState::PeerClosed));
+                        }
                         return false;
                     }
                     Ok(n) => {
                         s.sent += n;
                         budget -= n.min(budget);
-                        // taken: the next may be bigger (back up fast: a refusal
-                        // may be a full buffer for a moment, not a small one)
+                        s.progress = now;
                         s.chunk = (s.chunk * 4).min(MAX_CHUNK);
                     }
                     Err(e) if would_block(&e) => {
                         s.blocked += 1;
-                        s.chunk = (s.chunk / 2).max(MIN_CHUNK);
                         refused += 1;
-                        if refused >= REFUSALS_PER_FRAME {
-                            break;
+                        if s.chunk <= MIN_CHUNK || refused >= REFUSALS_PER_FRAME {
+                            break; // full: the next frame
                         }
+                        s.chunk = (s.chunk / 2).max(MIN_CHUNK);
                     }
                     Err(e) => {
+                        let closed = matches!(e.kind(), io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted | io::ErrorKind::BrokenPipe | io::ErrorKind::NotConnected);
                         notes.push(format!("serve #{}: write at {} of {}: {}", s.n, s.sent, total, crate::net::describe(&e)));
+                        if s.report {
+                            let state = if closed { ServeState::PeerClosed } else { ServeState::SendErr(e.raw_os_error().unwrap_or(0)) };
+                            reports.push(report(s, state));
+                        }
                         return false;
                     }
                 }
@@ -518,24 +674,91 @@ impl<N: Net> Session<N> {
                 s.frames += 1;
             }
             if s.sent >= total {
-                notes.push(format!("serve #{}: sent all {} bytes in {:.2} s ({} frames, {} refused writes)", s.n, total, now - s.started, s.frames, s.blocked));
-                // all written: dropping the connection closes it
-                return false;
+                let secs = (now - s.started).max(1e-3);
+                notes.push(format!(
+                    "serve #{}: wrote all {} bytes in {:.2} s ({:.1} KB/s; {} frames, {} refused writes); shutting down sending",
+                    s.n,
+                    total,
+                    secs,
+                    total as f64 / 1024.0 / secs,
+                    s.frames,
+                    s.blocked
+                ));
+                if let Err(e) = s.conn.shutdown_write() {
+                    notes.push(format!("serve #{}: shutdown: {}", s.n, crate::net::describe(&e)));
+                }
+                s.closing = Some(now);
+                if s.report {
+                    reports.push(report(s, ServeState::Closing));
+                }
+                return true;
+            }
+            if s.report {
+                reports.push(report(s, ServeState::Sending));
             }
             if now - s.logged >= 1.0 {
                 s.logged = now;
-                notes.push(format!("serve #{}: {} of {} bytes, +{} this frame, {} refused writes, chunk {}", s.n, s.sent, total, s.sent - before, s.blocked, s.chunk));
+                let secs = (now - s.started).max(1e-3);
+                notes.push(format!(
+                    "serve #{}: {} of {} bytes ({:.1} KB/s), +{} this frame, {} refused writes, chunk {}",
+                    s.n,
+                    s.sent,
+                    total,
+                    s.sent as f64 / 1024.0 / secs,
+                    s.sent - before,
+                    s.blocked,
+                    s.chunk
+                ));
             }
             true
         });
+        self.ended += (open_before - self.serving.len()) as u32;
+        if let Some(b) = fresh {
+            let changed = match (&b, &self.body) {
+                (Some(x), Some(y)) => x[..] != y[..],
+                (None, None) => false,
+                _ => true,
+            };
+            if changed {
+                notes.push(format!("the save on the card changed: now {} bytes", b.as_ref().map(|x| x.len()).unwrap_or(0)));
+                // HELLO's name follows the save (none: the platform)
+                self.cfg.name = crate::host::name_of(b.as_deref(), &proto::sanitize_name(&self.cfg.platform));
+            }
+            self.crc = crc;
+            self.body = b;
+        }
         self.notes.extend(notes);
+        // Between transfers, a fresh listener (Net::refresh_listener): a
+        // listener is never left to whatever state a finished transfer put
+        // it in. The port stays (HELLO says so if it cannot).
+        if self.serving.is_empty() && self.ended > 0 {
+            self.ended = 0;
+            match self.net.refresh_listener() {
+                Ok(port) => {
+                    if port != self.cfg.tcp_port {
+                        self.notes.push(format!("listener: tcp {} was not to be had again; now on {}", self.cfg.tcp_port, port));
+                        self.cfg.tcp_port = port;
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::Unsupported => {}
+                Err(e) => self.notes.push(format!("listener: could not make it afresh: {}", crate::net::describe(&e))),
+            }
+        }
+        // the newest transfer is the one the screen shows
+        if let Some(r) = reports.into_iter().max_by_key(|r| r.n) {
+            if self.serve_report.as_ref().map(|o| o.n <= r.n).unwrap_or(true) {
+                self.serve_report = Some(r);
+            }
+        }
     }
     fn tick_pull(&mut self) {
         let Some(mut p) = self.pull.take() else { return };
         let outcome = self.step_pull(&mut p);
         match outcome {
             None => {
-                if self.now - p.started > IO_TIMEOUT {
+                // without progress for IO_TIMEOUT (a slow transfer that is
+                // still moving goes on), or too long in all
+                if self.now - p.progress > IO_TIMEOUT || self.now - p.started > HARD_CAP_SECS {
                     self.events.push_back(Event::PullFailed { id: p.id, name: p.name, reason: "timed out".into() });
                 } else {
                     self.pull = Some(p);
@@ -555,7 +778,10 @@ impl<N: Net> Session<N> {
     fn step_pull(&mut self, p: &mut Pull) -> Option<Result<Vec<u8>, String>> {
         if p.phase == PullPhase::Connecting {
             match p.conn.poll_connected() {
-                Ok(true) => p.phase = PullPhase::Requesting,
+                Ok(true) => {
+                    p.phase = PullPhase::Requesting;
+                    p.progress = self.now;
+                }
                 Ok(false) => return None,
                 Err(e) => return Some(Err(conn_reason(&e))),
             }
@@ -564,7 +790,10 @@ impl<N: Net> Session<N> {
             while p.sent < p.request.len() {
                 match p.conn.write(&p.request[p.sent..]) {
                     Ok(0) => return Some(Err("connection dropped".into())),
-                    Ok(n) => p.sent += n,
+                    Ok(n) => {
+                        p.sent += n;
+                        p.progress = self.now;
+                    }
                     Err(e) if would_block(&e) => return None,
                     Err(e) => return Some(Err(conn_reason(&e))),
                 }
@@ -589,6 +818,7 @@ impl<N: Net> Session<N> {
                 Err(e) => return Some(Err(conn_reason(&e))),
             };
             budget -= n;
+            p.progress = self.now;
             match p.phase {
                 PullPhase::Header => {
                     p.line.push(buf[0]);

@@ -7,6 +7,8 @@ import { hostSync, SyncModel, syncAccepts, wrongGame, type SyncNative } from "..
 
 export interface SyncView {
   title: string;
+  /** The host's counters, right of the title (`S2 O0`), or "". */
+  diag: string;
   /** The rows shown (already scrolled), the cursor's index among them,
    *  and which can be picked. */
   rows: string[];
@@ -66,6 +68,7 @@ export class SyncState implements GameState {
     const rows = all.slice(top, top + SYNC_ROWS);
     return {
       title: m.title,
+      diag: m.diag(),
       rows,
       cursor: m.index - top,
       pickable: m.rows.slice(top, top + SYNC_ROWS).map((r) => r.kind !== "other"),

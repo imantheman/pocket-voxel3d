@@ -5,7 +5,7 @@
 use pocketvoxel_sync::choke::{ChokeNet, Mode};
 use pocketvoxel_sync::net::StdNet;
 use pocketvoxel_sync::proto;
-use pocketvoxel_sync::session::{Config, Event, PullPhase, Session};
+use pocketvoxel_sync::session::{Config, Event, PullPhase, ServeState, Session};
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream, UdpSocket};
 use std::time::Duration;
@@ -367,7 +367,7 @@ fn a_server_whose_socket_refuses_big_writes_still_sends_it_all() {
     let (save, got, notes) = stingy_pull(Mode::AllOrNothing(2048), Mode::Off, None);
     assert!(got == save);
     let log = notes.join("\n");
-    assert!(log.contains("sent all"), "{}", log);
+    assert!(log.contains("wrote all"), "{}", log);
     assert!(log.contains("refused writes"), "{}", log);
 }
 
@@ -395,4 +395,115 @@ fn short_both_ends() {
     // 2 KB buffer on per-segment overhead, a desktop artefact)
     let (save, got, _) = stingy_pull(Mode::Short(300), Mode::Short(500), None);
     assert!(got == save);
+}
+// ---- one visit, many transfers, on the wall clock ----------------------
+
+/// A (serving, through `mode`) and B (plain), HELLOs aimed at each other.
+fn wall_pair(mode: Mode, game: &str) -> (Session<ChokeNet<StdNet>>, Session<StdNet>) {
+    let na = StdNet::bind(LO, 0, 0).unwrap();
+    let nb = StdNet::bind(LO, 0, 0).unwrap();
+    let ua = SocketAddrV4::new(LO, na.udp_port());
+    let ub = SocketAddrV4::new(LO, nb.udp_port());
+    let (ta, tb) = (na.tcp_port(), nb.tcp_port());
+    let a = Session::new(ChokeNet::new(na, mode), Config { id: "aaaa0001".into(), platform: "3ds".into(), game: game.into(), name: "Server".into(), tcp_port: ta, targets: vec![ub] });
+    let b = Session::new(nb, Config { id: "bbbb0002".into(), platform: "pc".into(), game: game.into(), name: "Client".into(), tcp_port: tb, targets: vec![ua] });
+    (a, b)
+}
+
+/// B pulls A's save once; the bytes and the seconds it took. Panics on a
+/// failure, with A's log.
+fn wall_pull(a: &mut Session<ChokeNet<StdNet>>, b: &mut Session<StdNet>, t0: std::time::Instant, limit: f64) -> (Vec<u8>, f64) {
+    let now = |t0: std::time::Instant| t0.elapsed().as_secs_f64();
+    while b.peers().is_empty() {
+        a.tick(now(t0));
+        b.tick(now(t0));
+        std::thread::sleep(Duration::from_millis(5));
+        assert!(now(t0) < 5.0, "no discovery");
+    }
+    b.pull("aaaa0001").unwrap();
+    let start = now(t0);
+    let mut log: Vec<String> = Vec::new();
+    loop {
+        let t = now(t0);
+        a.tick(t);
+        b.tick(t);
+        log.extend(a.take_notes());
+        match b.poll_event() {
+            Some(Event::Pulled { body, .. }) => return (body, t - start),
+            Some(Event::PullFailed { reason, .. }) => panic!("pull failed after {:.1} s: {}\n{}", t - start, reason, log.join("\n")),
+            _ => {}
+        }
+        assert!(t - start < limit, "stalled\n{}", log.join("\n"));
+        // about 30 frames a second, as the title screen runs
+        std::thread::sleep(Duration::from_millis(30));
+    }
+}
+
+/// Let A finish closing (it waits for the peer, up to DRAIN_SECS).
+fn settle(a: &mut Session<ChokeNet<StdNet>>, b: &mut Session<StdNet>, t0: std::time::Instant) {
+    let end = t0.elapsed().as_secs_f64() + 0.5;
+    while t0.elapsed().as_secs_f64() < end {
+        let t = t0.elapsed().as_secs_f64();
+        a.tick(t);
+        b.tick(t);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn save_of(n: usize) -> Vec<u8> {
+    big_save(n)
+}
+
+/// The stack keeps sending what a closed socket still held, but never gives
+/// the buffer back (Mode::Buffered): closing at once after the last write
+/// works the first time and starves every transfer after it. Closing only
+/// once the peer has everything (shutdown, then wait) leaks nothing, and a
+/// visit serves as many times as it is asked.
+#[test]
+fn three_transfers_in_one_visit_with_a_leaky_send_buffer() {
+    let (mut a, mut b) = wall_pair(Mode::Buffered { cap: 32 * 1024, rate: 256 * 1024 }, "yellow");
+    let save = save_of(120 * 1024);
+    a.set_body(Some(save.clone()));
+    let t0 = std::time::Instant::now();
+    for k in 1..=3 {
+        let (got, secs) = wall_pull(&mut a, &mut b, t0, 15.0);
+        assert!(got == save, "transfer {}", k);
+        settle(&mut a, &mut b, t0);
+        let r = a.serve_report().unwrap().clone();
+        assert_eq!(r.n, k as u32, "accepted");
+        assert_eq!(r.state, ServeState::SentAll, "transfer {} ({:.1} s)", k, secs);
+        assert_eq!(a.serve_counts(), (k as u32, 0), "the slot is free again");
+        assert_eq!(a.net().leaked(), 0, "no buffer lost (transfer {})", k);
+    }
+}
+
+/// A slow wire, about 8 KB/s, for a save that takes longer than 10 s: a
+/// transfer still moving is not cut off (the limit is 10 s with nothing
+/// moving), on either end.
+#[test]
+fn a_slow_drain_is_not_a_timeout() {
+    let (mut a, mut b) = wall_pair(Mode::Buffered { cap: 4096, rate: 8 * 1024 }, "yellow");
+    let save = save_of(100 * 1024);
+    a.set_body(Some(save.clone()));
+    let t0 = std::time::Instant::now();
+    let (got, secs) = wall_pull(&mut a, &mut b, t0, 40.0);
+    assert!(got == save);
+    assert!(secs > 10.0, "the wire was meant to take over 10 s ({:.1})", secs);
+    settle(&mut a, &mut b, t0);
+    assert_eq!(a.serve_report().unwrap().state, ServeState::SentAll);
+}
+
+/// Repeated GETs in one visit through a socket that refuses big writes.
+#[test]
+fn repeated_transfers_through_a_stingy_socket() {
+    let (mut a, mut b) = wall_pair(Mode::AllOrNothing(2048), "red");
+    let save = save_of(170 * 1024);
+    a.set_body(Some(save.clone()));
+    let t0 = std::time::Instant::now();
+    for k in 1..=3u32 {
+        let (got, _) = wall_pull(&mut a, &mut b, t0, 15.0);
+        assert!(got == save);
+        settle(&mut a, &mut b, t0);
+        assert_eq!(a.serve_counts(), (k, 0));
+    }
 }
