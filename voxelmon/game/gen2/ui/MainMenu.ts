@@ -62,6 +62,8 @@ export interface MainMenuOpts {
   hasSave?: boolean;
   save?: any;
   clock?: { hour?: number; minute?: number; weekday?: number };
+  /** The row the cursor starts on (its value, e.g. "sync"); else the first. */
+  focus?: unknown;
 }
 
 /** COPY SAVE's directions: the Lua save over the VC title's, or back. */
@@ -106,6 +108,7 @@ export class MainMenu {
   onSetClock: ((save: any) => void) | undefined;
   onExit: (() => void) | undefined;
   clock: MainMenuOpts["clock"];
+  focus: unknown;
   save: any;
   hasSave: boolean;
   phase: "menu" | "confirm" | "pick" | "replace" | "copy" | "copyConfirm" | "copying" = "menu";
@@ -127,6 +130,7 @@ export class MainMenu {
     this.onSetClock = opts.onSetClock;
     this.onExit = opts.onExit;
     this.clock = opts.clock;
+    this.focus = opts.focus;
     this.save = opts.save;
     if (this.save == null && opts.hasSave !== false) {
       const [loaded, , err] = Save.load();
@@ -226,14 +230,16 @@ export class MainMenu {
     const hooked = Runtime.call("ui.title_menu.items", sameItems, this.game, items);
     if (hooked && typeof hooked === "object") items = hooked as typeof items;
     else Logger.error("ui.title_menu.items returned %s; keeping the vanilla items", typeof hooked);
-    // MenuHeader's "db 1 ; default option": the first entry
+    // MenuHeader's "db 1 ; default option": the first entry -- or, coming
+    // back from a row's own screen (SYNC), that row again
+    const back = this.focus === undefined ? -1 : items.findIndex((it) => it.value === this.focus);
     this.list = Chrome.List.new({
       items,
       x: 2,
       y: 2,
       spacing: 2,
       wrap: true,
-      index: 1,
+      index: back >= 0 ? back + 1 : 1,
       onChoose: (value: unknown) => this.choose(value),
     } as any);
   }

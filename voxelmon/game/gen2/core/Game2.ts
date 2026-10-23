@@ -418,12 +418,14 @@ export class Game2 {
     if (ModRuntime.wants("save.loaded")) ModRuntime.emit("save.loaded", { save, meta: save.meta });
   }
 
-  showMainMenu(): void {
+  /** `focus`: the row the cursor comes back to (e.g. "sync"); else the first. */
+  showMainMenu(focus?: string): void {
     this.stack.clear();
     this.phase = "boot";
     // back at the title, the session is nobody's until a save is picked
     Vc.useLua();
     Screens.push(this, "Gen2MainMenu", {
+      focus,
       onNewGame: () => this.newGame(),
       onContinue: (save: any) => this.continueGame(save),
       onContinueVc: (luaSave: any) => this.continueVc(luaSave),
@@ -438,7 +440,7 @@ export class Game2 {
             Screens.push(this, "Gen2Sync", {
               onClose: (installed: boolean) => {
                 if (installed) Logger.info("sync: a save was installed; the main menu reads it again");
-                this.showMainMenu();
+                this.showMainMenu("sync");
               },
             });
           }

@@ -394,6 +394,8 @@ describe("the Gen 2 main menu's SYNC row", () => {
       expect(menu.screenId).toBe("Gen2MainMenu");
       expect(menu.hasSave).toBe(true);
       expect(menu.list.items[0].value).toBe("continue");
+      // the cursor comes back on SYNC, the row that was left
+      expect(menu.list.items[menu.list.index - 1].value).toBe("sync");
     } finally {
       saveio.setSaveIo(undefined);
     }
