@@ -7,8 +7,9 @@ also be played on the original flat handheld screen, in its OPTION menu.
 
 **New in 2.5.0: SYNC.** Move your save between the 3DS and
 [gen1recomp](https://github.com/bryanthaboi/gen1recomp) on PC or Android over
-the same wifi, in either direction, right from the title menu. The PC/phone
-side uses the free [pvsync](https://github.com/imantheman/pvsync) mod; see
+the same wifi, in either direction, right from the title menu.
+**This needs the free [pvsync](https://github.com/imantheman/pvsync) mod
+installed in gen1recomp** -- gen1recomp has no SYNC option without it. See
 [SYNC](#sync-move-a-save-to-or-from-gen1recomp-over-wifi) below.
 
 **You bring the game.** Nothing from any cartridge is in this repository or
@@ -132,6 +133,10 @@ folder and an `options.lua`). Inside `saves` there is one folder per game
 
 Instead of copying files by hand, the 3DS and gen1recomp (PC or Android) can
 pass a save to each other over the same wifi network.
+
+> **You need the pvsync mod.** Plain gen1recomp doesn't have SYNC; the mod
+> adds it. Without the mod on your PC or phone, the 3DS has nothing to talk
+> to.
 
 **Set up the PC/phone side once:** install the
 [**pvsync**](https://github.com/imantheman/pvsync) mod in gen1recomp: import
