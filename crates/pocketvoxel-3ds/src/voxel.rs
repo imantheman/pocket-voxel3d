@@ -84,17 +84,17 @@ pub unsafe fn scene() -> &'static mut Scene {
 // file names, so a save moves between the two ports unchanged, and Red and
 // Blue never write over each other.
 #[cfg(not(any(feature = "blue", feature = "yellow", feature = "gen2", feature = "gen3")))]
-const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save.lua";
+pub(crate) const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save.lua";
 #[cfg(feature = "blue")]
-const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save_blue.lua";
+pub(crate) const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save_blue.lua";
 #[cfg(feature = "yellow")]
-const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save_yellow.lua";
+pub(crate) const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save_yellow.lua";
 #[cfg(feature = "gold")]
-const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save_gold.lua";
+pub(crate) const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save_gold.lua";
 #[cfg(feature = "silver")]
-const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save_silver.lua";
+pub(crate) const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save_silver.lua";
 #[cfg(feature = "crystal")]
-const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save_crystal.lua";
+pub(crate) const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/save_crystal.lua";
 static mut SAVE_BUF: Vec<u8> = Vec::new();
 /// The OPTION screen's settings, beside the save (`voxel.optionsData()` /
 /// `optionsWrite`): Gold keeps them out of the save the way the cart keeps
@@ -291,6 +291,13 @@ pub unsafe extern "C" fn voxel_save_keep_copy() -> i32 {
     }
 }
 
+/// SYNC (sync.rs) wrote a received save to the card: what
+/// `voxel.saveData()` hands back from now on, as after any save.
+#[allow(static_mut_refs)]
+pub unsafe fn set_save_buf(b: Vec<u8>) {
+    SAVE_BUF = b;
+}
+
 #[no_mangle]
 #[allow(static_mut_refs)]
 pub unsafe extern "C" fn voxel_save_ptr() -> *const u8 { SAVE_BUF.as_ptr() }
@@ -413,10 +420,10 @@ pub unsafe extern "C" fn voxel_lcd_bin(which: u32, a0: i32, p1: *const u8, l1: u
 // guest saves through its own store; these only keep the shared natives off
 // Red's files.
 #[cfg(all(feature = "gen3", not(feature = "leafgreen")))]
-const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/firered/save_voxel.lua";
+pub(crate) const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/firered/save_voxel.lua";
 #[cfg(all(feature = "gen3", not(feature = "leafgreen")))]
 const OPTIONS_PATH: &str = "sdmc:/3ds/voxelmon/firered/options_voxel.lua";
 #[cfg(feature = "leafgreen")]
-const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/leafgreen/save_voxel.lua";
+pub(crate) const SAVE_PATH: &str = "sdmc:/3ds/voxelmon/leafgreen/save_voxel.lua";
 #[cfg(feature = "leafgreen")]
 const OPTIONS_PATH: &str = "sdmc:/3ds/voxelmon/leafgreen/options_voxel.lua";

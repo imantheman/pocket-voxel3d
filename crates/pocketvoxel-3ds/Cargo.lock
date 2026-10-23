@@ -362,11 +362,19 @@ dependencies = [
  "citro3d",
  "ctru-rs",
  "pocketvoxel-core",
+ "pocketvoxel-sync",
 ]
 
 [[package]]
 name = "pocketvoxel-core"
 version = "0.1.0"
+
+[[package]]
+name = "pocketvoxel-sync"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "prettyplease"

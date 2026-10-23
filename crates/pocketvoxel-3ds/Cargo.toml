@@ -12,6 +12,8 @@ path = "src/main.rs"
 ctru-rs = { git = "https://github.com/rust3ds/ctru-rs.git" }
 citro3d = { git = "https://github.com/rust3ds/citro3d-rs.git" }
 pocketvoxel-core = { path = "../pocketvoxel-core" }
+# SYNC (src/sync.rs): the PVS1 protocol, session and save install
+pocketvoxel-sync = { path = "../pocketvoxel-sync" }
 
 [features]
 # Pokemon Blue: its own dataset (paks/gamedata_blue.json), save

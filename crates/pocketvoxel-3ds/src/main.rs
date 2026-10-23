@@ -3,6 +3,8 @@ mod voxel;
 // VC saves: the re-release titles' save data (Red, Blue, Yellow).
 mod vc;
 mod gpuwatch;
+// SYNC: the title screen's save transfer over wifi (PVS1).
+mod sync;
 
 use citro3d::macros::include_shader;
 use citro3d::math::{FVec4, ScreenOrientation, StereoDisplacement, AspectRatio, ClipPlanes, CoordinateOrientation, FVec3, Matrix4, Projection};

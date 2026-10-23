@@ -319,6 +319,56 @@ static JSValue vox_linkclose(JSContext *ctx, JSValueConst t, int c, JSValueConst
     return JS_UNDEFINED;
 }
 
+/* SYNC (src/sync.rs): the title screen's save transfer over wifi (PVS1).
+   syncOpen() -> 1 open / 0 no wifi / <0 failed; syncPoll() -> the state as
+   text records (one frame of networking first); syncOffer(id) / syncPull(id)
+   -> 1 when sent / started; syncReceived() -> the arrived save as text, or
+   undefined; syncInstall() -> "" written, "R:why" refused, "E:why" failed;
+   syncDiscard(); syncClose(). */
+extern int voxel_sync_open(void);
+extern const uint8_t *voxel_sync_poll(uint32_t *len);
+extern int voxel_sync_offer(const char *s, int len);
+extern int voxel_sync_pull(const char *s, int len);
+extern const uint8_t *voxel_sync_received(uint32_t *len);
+extern const uint8_t *voxel_sync_install(uint32_t *len);
+extern void voxel_sync_discard(void);
+extern void voxel_sync_close(void);
+
+static JSValue vox_syncopen(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    (void)t;(void)c;(void)v;
+    return JS_NewInt32(ctx, voxel_sync_open());
+}
+
+/* `magic` 0 syncPoll, 1 syncReceived, 2 syncInstall: a Rust-owned buffer as
+   a string (undefined when there is none). */
+static JSValue vox_synctext(JSContext *ctx, JSValueConst t, int c, JSValueConst *v, int magic) {
+    (void)t;(void)c;(void)v;
+    uint32_t n = 0;
+    const uint8_t *p = magic == 0 ? voxel_sync_poll(&n)
+                     : magic == 1 ? voxel_sync_received(&n)
+                     : voxel_sync_install(&n);
+    if (!p) return magic == 2 ? JS_NewString(ctx, "E:closed") : JS_UNDEFINED;
+    return JS_NewStringLen(ctx, (const char *)p, n);
+}
+
+/* `magic` 0 syncOffer(id), 1 syncPull(id). */
+static JSValue vox_syncpeer(JSContext *ctx, JSValueConst t, int c, JSValueConst *v, int magic) {
+    (void)t;
+    if (c < 1) return JS_NewInt32(ctx, 0);
+    size_t len = 0;
+    const char *s = JS_ToCStringLen(ctx, &len, v[0]);
+    if (!s) return JS_NewInt32(ctx, 0);
+    int r = magic == 0 ? voxel_sync_offer(s, (int)len) : voxel_sync_pull(s, (int)len);
+    JS_FreeCString(ctx, s);
+    return JS_NewInt32(ctx, r);
+}
+
+static JSValue vox_syncvoid(JSContext *ctx, JSValueConst t, int c, JSValueConst *v, int magic) {
+    (void)ctx;(void)t;(void)c;(void)v;
+    if (magic == 0) voxel_sync_discard(); else voxel_sync_close();
+    return JS_UNDEFINED;
+}
+
 static JSValue vox_log(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     (void)t;
     for (int i = 0; i < c; i++) {
@@ -362,6 +412,21 @@ int qjs_register_voxel(JSContext *ctx) {
     JS_SetPropertyStr(ctx, o, "linkSend",  JS_NewCFunction(ctx, vox_linksend,  "linkSend", 1));
     JS_SetPropertyStr(ctx, o, "linkRecv",  JS_NewCFunction(ctx, vox_linkrecv,  "linkRecv", 0));
     JS_SetPropertyStr(ctx, o, "linkClose", JS_NewCFunction(ctx, vox_linkclose, "linkClose", 0));
+    JS_SetPropertyStr(ctx, o, "syncOpen",  JS_NewCFunction(ctx, vox_syncopen,  "syncOpen", 0));
+    JS_SetPropertyStr(ctx, o, "syncPoll",
+        JS_NewCFunctionMagic(ctx, vox_synctext, "syncPoll", 0, JS_CFUNC_generic_magic, 0));
+    JS_SetPropertyStr(ctx, o, "syncReceived",
+        JS_NewCFunctionMagic(ctx, vox_synctext, "syncReceived", 0, JS_CFUNC_generic_magic, 1));
+    JS_SetPropertyStr(ctx, o, "syncInstall",
+        JS_NewCFunctionMagic(ctx, vox_synctext, "syncInstall", 0, JS_CFUNC_generic_magic, 2));
+    JS_SetPropertyStr(ctx, o, "syncOffer",
+        JS_NewCFunctionMagic(ctx, vox_syncpeer, "syncOffer", 1, JS_CFUNC_generic_magic, 0));
+    JS_SetPropertyStr(ctx, o, "syncPull",
+        JS_NewCFunctionMagic(ctx, vox_syncpeer, "syncPull", 1, JS_CFUNC_generic_magic, 1));
+    JS_SetPropertyStr(ctx, o, "syncDiscard",
+        JS_NewCFunctionMagic(ctx, vox_syncvoid, "syncDiscard", 0, JS_CFUNC_generic_magic, 0));
+    JS_SetPropertyStr(ctx, o, "syncClose",
+        JS_NewCFunctionMagic(ctx, vox_syncvoid, "syncClose", 0, JS_CFUNC_generic_magic, 1));
     JS_SetPropertyStr(ctx, o, "writeErr",  JS_NewCFunction(ctx, vox_writeerr,  "writeErr", 0));
     JS_SetPropertyStr(ctx, o, "deadline",  JS_NewCFunction(ctx, vox_deadline,  "deadline", 1));
     JS_SetPropertyStr(ctx, o, "traceLoads", JS_NewCFunction(ctx, vox_traceloads, "traceLoads", 1));
