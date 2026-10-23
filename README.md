@@ -291,6 +291,11 @@ terms, so it is too: the Gen 3 trees (`voxelmon/game/gen3/`,
 `voxelmon/import/gen3/`), the 3DS host code compiled only into a Gen 3
 build (`crates/pocketvoxel-3ds/src/gen3/`), and any binary built from them
 are GPLv3 with those terms -- see [voxelmon/game/gen3/LICENSE.md](voxelmon/game/gen3/LICENSE.md).
+The test tools in `tools/pvsync/`, which load the PC sync mod and
+gen1recomp's engine at run time to test SYNC against them, are under the
+same licence -- see [tools/pvsync/LICENSE.md](tools/pvsync/LICENSE.md). They
+are not part of any game; the games' own sync code is MIT and talks to the PC
+mod only over the network.
 Everything else, and the six games above, stays MIT; MIT code may be
 combined into a GPL build, not the other way round, and the six games never
 compile any of the GPL code. As those terms require:
