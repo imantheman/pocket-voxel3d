@@ -25162,6 +25162,7 @@ class SyncModel {
   index = 0;
   peers = [];
   hasSave = false;
+  note;
   installed = false;
   state = "closed";
   armed = null;
@@ -25310,6 +25311,7 @@ class SyncModel {
       return;
     }
     const peers = [];
+    this.note = undefined;
     for (const line of text.split(`
 `)) {
       if (!line)
@@ -25327,6 +25329,9 @@ class SyncModel {
           break;
         case "H":
           this.hasSave = f[1] === "1";
+          break;
+        case "N":
+          this.note = f[1] || undefined;
           break;
         case "P":
           peers.push({ id: f[1] ?? "", platform: f[2] ?? "", game: f[3] ?? "", offered: f[4] === "1", name: f[5] || platformTag(f[2] ?? "") });
@@ -25428,6 +25433,8 @@ class SyncModel {
     return Math.max(0, Math.min(this.index - Math.floor(n / 2), this.rows.length - n));
   }
   statusLines(width, lines = 2) {
+    if (this.status === SEARCHING && this.note && lines >= 2)
+      return [SEARCHING, this.note.slice(0, width)];
     const out = [];
     let line = "";
     for (const word of this.status.split(" ")) {
