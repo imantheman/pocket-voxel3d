@@ -23641,13 +23641,15 @@ class Scene {
         this.titleSig = null;
         this.emitIntroTiles([]);
       }
-      const sig = `Y${sy2.title}|${sy2.cursor}|${sy2.rows.join("/")}|${sy2.status.join("/")}|${sy2.more.up},${sy2.more.down}`;
+      const sig = `Y${sy2.title}|${sy2.diag}|${sy2.cursor}|${sy2.rows.join("/")}|${sy2.status.join("/")}|${sy2.more.up},${sy2.more.down}`;
       if (sig !== this.syncSig) {
         this.syncSig = sig;
         this.uiOwner = null;
         host.uiClear();
         this.frame(host, 0, 0, UI_COLS, 13);
         this.stamp(host, 2, 1, sy2.title);
+        if (sy2.diag)
+          this.stamp(host, UI_COLS - 1 - sy2.diag.length, 1, sy2.diag);
         sy2.rows.forEach((r, i) => {
           this.stamp(host, 3, 3 + i * 2, r);
           if (i === sy2.cursor && sy2.pickable[i])
@@ -25153,6 +25155,19 @@ function platformTag(p) {
 }
 var CONFIRM_SECS = 3;
 var SEARCHING = "SEARCHING...";
+var SERVING = "<serving>";
+function serveLines(s, width) {
+  const of = `${s.sent}/${s.total}`;
+  const lines = {
+    sending: [`SEND ${of}`, `R${s.refused} C${s.chunk}`],
+    closing: ["SENT ALL, CLOSING", `${s.total} BYTES`],
+    sent: ["SENT ALL, CLOSED", `${s.total} BYTES`],
+    timeout: ["TIMED OUT AT", of],
+    senderr: [`SEND ERR E${s.errno}`, `AT ${of}`],
+    peerclosed: ["PEER CLOSED AT", of]
+  };
+  return (lines[s.state] ?? [String(s.state).toUpperCase(), of]).map((l) => l.slice(0, width));
+}
 var CONFIRM = "A AGAIN: OVERWRITE YOUR SAVE";
 
 class SyncModel {
@@ -25163,6 +25178,9 @@ class SyncModel {
   peers = [];
   hasSave = false;
   note;
+  counts;
+  serve;
+  serveKey = "";
   installed = false;
   state = "closed";
   armed = null;
@@ -25245,6 +25263,8 @@ class SyncModel {
       return "ERROR: NO WIFI";
     if (this.receiving)
       return `RECEIVING FROM ${this.receiving}...`;
+    if (this.serve)
+      return SERVING;
     return SEARCHING;
   }
   selectable(i) {
@@ -25333,6 +25353,28 @@ class SyncModel {
         case "N":
           this.note = f[1] || undefined;
           break;
+        case "C":
+          this.counts = { accepted: Number(f[1]) || 0, open: Number(f[2]) || 0 };
+          break;
+        case "T": {
+          const s = {
+            n: Number(f[1]) || 0,
+            state: f[2] ?? "sending",
+            sent: Number(f[3]) || 0,
+            total: Number(f[4]) || 0,
+            refused: Number(f[5]) || 0,
+            chunk: Number(f[6]) || 0,
+            errno: Number(f[7]) || 0
+          };
+          this.serve = s;
+          const key = `${s.n}:${s.state}`;
+          if (key !== this.serveKey) {
+            this.serveKey = key;
+            if (!this.armed && !this.receiving)
+              this.status = SERVING;
+          }
+          break;
+        }
         case "P":
           peers.push({ id: f[1] ?? "", platform: f[2] ?? "", game: f[3] ?? "", offered: f[4] === "1", name: f[5] || platformTag(f[2] ?? "") });
           break;
@@ -25432,7 +25474,15 @@ class SyncModel {
       return 0;
     return Math.max(0, Math.min(this.index - Math.floor(n / 2), this.rows.length - n));
   }
+  diag() {
+    return this.state === "open" && this.counts ? `S${this.counts.accepted} O${this.counts.open}` : "";
+  }
   statusLines(width, lines = 2) {
+    if (this.status === SERVING) {
+      if (this.serve)
+        return serveLines(this.serve, width).slice(0, lines);
+      return [SEARCHING];
+    }
     if (this.status === SEARCHING && this.note && lines >= 2)
       return [SEARCHING, this.note.slice(0, width)];
     const out = [];
@@ -25498,6 +25548,7 @@ class SyncState {
     const rows = all.slice(top, top + SYNC_ROWS);
     return {
       title: m.title,
+      diag: m.diag(),
       rows,
       cursor: m.index - top,
       pickable: m.rows.slice(top, top + SYNC_ROWS).map((r) => r.kind !== "other"),
