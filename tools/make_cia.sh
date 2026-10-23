@@ -48,9 +48,11 @@ case "$GAME" in
     LABEL=Silver; UNIQUE=0xff3d4; PCODE=CTR-P-PVXS
     ELF=crates/pocketvoxel-3ds/target-silver/armv6k-nintendo-3ds/release/pocketvoxel-3ds.elf
     WORK=dist/voxelmon/cia-silver ;;
-  # Crystal: Gen 2, its own pak set (paks_crystal/) and save
+  # Crystal: Gen 2, its own pak set (paks_crystal/) and save. Its first ID,
+  # 0xff3d5, was already taken by another homebrew title, so the 3DS saw the
+  # two as one app; this one is picked to be unlikely to clash.
   crystal)
-    LABEL=Crystal; UNIQUE=0xff3d5; PCODE=CTR-P-PVXC
+    LABEL=Crystal; UNIQUE=0xf9c27; PCODE=CTR-P-PVXC
     ELF=crates/pocketvoxel-3ds/target-crystal/armv6k-nintendo-3ds/release/pocketvoxel-3ds.elf
     WORK=dist/voxelmon/cia-crystal ;;
   # FireRed: Gen 3 (the GPLv3 edition), its own pak set (paks_firered/), data and save
