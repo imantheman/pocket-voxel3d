@@ -1,9 +1,10 @@
 // Test tool, not shipped: saves made and read the way this port does, for
 // tools/pvsync/pc_e2e.sh.
 //
-//   bun tools/pvsync/saves.ts make  <genDir> <game> <out.lua> <version|-> <name>
+//   bun tools/pvsync/saves.ts make  <genDir> <game> <out.lua> <version|-> <name> [padKB]
 //       a new game's save as this port writes it, `version` overridden
-//       ("-": as the game writes it), the player named <name>
+//       ("-": as the game writes it), the player named <name>; padKB pads
+//       it to about that size (a long game's save) with mod data
 //   bun tools/pvsync/saves.ts check <genDir> <game> <save.lua>
 //       CONTINUE on that save in this port, then SAVE: prints the version
 //       loaded and the version written
@@ -16,7 +17,7 @@ import { encodeSave } from "../../voxelmon/game/save-lua.ts";
 import { decodeSave } from "../../voxelmon/game/save-read.ts";
 import { toDisk } from "../../voxelmon/game/savecompat.ts";
 
-const [cmd, dir, game, file, version, name] = process.argv.slice(2);
+const [cmd, dir, game, file, version, name, padKB] = process.argv.slice(2);
 const data = await loadRuntimeData(dir!);
 (data as { version?: string }).version ??= game;
 
@@ -35,6 +36,12 @@ if (cmd === "make") {
   s.player.map = "PALLET_TOWN"; s.player.x = 5; s.player.y = 6;
   s.money = 1234;
   if (version && version !== "-") s.version = version;
+  if (padKB) {
+    // a long game's save is big: notes in mod data, as a mod might keep
+    const lines: string[] = [];
+    for (let i = 0; lines.join("").length < Number(padKB) * 1024; i++) lines.push(`NOTE ${i} THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG`);
+    s.modData = { ...(s.modData ?? {}), padding: { lines } };
+  }
   await Bun.write(file!, encodeSave(toDisk(s)));
   console.log(`made ${file} version=${s.version} name=${s.player.name}`);
 } else if (cmd === "check") {

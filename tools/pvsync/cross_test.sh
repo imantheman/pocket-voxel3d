@@ -110,5 +110,19 @@ run "port taken" --game red --target 127.0.0.1:$LU --serve "$W/red.lua" --second
 kill $hp 2>/dev/null; wait $hp 2>/dev/null
 [ $LUA_RC = 0 ] && grep -q "^FALLBACK udp" "$W/rust.log" && same "$W/red.lua" "$W/got9.lua" && ok "9 rust's port taken: falls back, lua still finds it and pulls" || bad "9 port taken"
 
+# 10-12. the Rust side serving 300 KB through a stingy socket, as a real
+#    3DS's can be: writes over 2 KB refused whole (and every other one);
+#    short writes into a 2 KB SO_SNDBUF; half the calls refused
+for mode in "allornothing:2048" "short:700 --sndbuf 2048" "flaky"; do
+  rm -f "$W/got10.lua"
+  run "stingy $mode" --game red --target 127.0.0.1:$LU --serve "$W/red.lua" --choke $mode --seconds 12 -- pull red $LU $LT $RU "$W/got10.lua" 12
+  [ $LUA_RC = 0 ] && same "$W/red.lua" "$W/got10.lua" && grep -q "sent all" "$W/rust.log" && ok "stingy server ($mode): lua pulls all 300 KB" || bad "stingy server ($mode)"
+done
+
+# 13. the Rust side pulling 300 KB through a stingy socket (short reads)
+rm -f "$W/got13.lua"
+run "stingy client" --game red --target 127.0.0.1:$LU --pull --out "$W/got13.lua" --choke short:500 --seconds 12 -- serve red $LU $LT $RU "$W/red.lua" 10
+[ $RUST_RC = 0 ] && same "$W/red.lua" "$W/got13.lua" && ok "stingy client (short reads): rust pulls all 300 KB from lua" || bad "stingy client"
+
 echo "cross: $PASS passed, $FAIL failed"
 [ $FAIL = 0 ]

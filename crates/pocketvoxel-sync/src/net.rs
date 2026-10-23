@@ -26,6 +26,8 @@ pub struct StdNet {
     /// The ports bound (from the bind itself; getsockname only for port 0).
     udp_port: u16,
     tcp_port: u16,
+    /// SO_SNDBUF for accepted connections (tests: a stingy send buffer).
+    sndbuf: Option<i32>,
 }
 
 /// The port a socket is on: the one asked for, or getsockname's for 0.
@@ -166,7 +168,7 @@ impl StdNet {
     fn new(udp: UdpSocket, udp_asked: u16, tcp: TcpListener, tcp_asked: u16) -> StdNet {
         let udp_port = port_of(udp_asked, udp.local_addr());
         let tcp_port = port_of(tcp_asked, tcp.local_addr());
-        StdNet { udp, tcp, udp_port, tcp_port }
+        StdNet { udp, tcp, udp_port, tcp_port, sndbuf: None }
     }
 
     /// As [`bind`](Self::bind), but a port that cannot be had is not the
@@ -222,6 +224,10 @@ impl StdNet {
         notes.push(format!("bound udp {} tcp {}", net.udp_port(), net.tcp_port()));
         Ok(Bound { net, notes, udp_fell_back, tcp_fell_back, udp_errno })
     }
+    /// Give every connection accepted from now on this SO_SNDBUF (tests).
+    pub fn set_send_buffer(&mut self, bytes: Option<i32>) {
+        self.sndbuf = bytes;
+    }
     pub fn udp_port(&self) -> u16 {
         self.udp_port
     }
@@ -271,6 +277,9 @@ impl Net for StdNet {
                 use std::os::fd::AsRawFd;
                 if nonblocking_fd(s.as_raw_fd()).is_err() {
                     s.set_nonblocking(true)?;
+                }
+                if let Some(n) = self.sndbuf {
+                    set_int(s.as_raw_fd(), libc::SOL_SOCKET, libc::SO_SNDBUF, n)?;
                 }
                 let _ = s.set_nodelay(true);
                 Ok(Some(Box::new(StdConn { s, connected: true })))

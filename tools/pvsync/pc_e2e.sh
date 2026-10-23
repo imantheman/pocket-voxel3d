@@ -22,17 +22,18 @@ trap 'kill $(jobs -p) 2>/dev/null; rm -rf "$G1R/mods/pvsync" "$W"' EXIT
 PASS=0; FAIL=0
 ok() { echo "PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "FAIL $1"; FAIL=$((FAIL+1)); sed 's/^/    /' "$W/pc.log" "$W/peer.log" 2>/dev/null | tail -25; }
-gen() { case $1 in red) echo "$ROOT/dist/voxelmon/gen" ;; blue) echo "$ROOT/dist/voxelmon/blue/gen" ;; esac; }
+gen() { case $1 in red) echo "$ROOT/dist/voxelmon/gen" ;; blue) echo "$ROOT/dist/voxelmon/blue/gen" ;; yellow) echo "$ROOT/dist/voxelmon/yellow/gen" ;; esac; }
 saves() { (cd "$ROOT" && bun tools/pvsync/saves.ts "$@"); }
 
 # the 3DS's save reaches the PC game: GET on the PC, the PC's own install
-get() { # game file name expect label
-  "$PEER" --game $1 --name $3 --serve "$2" --udp 47710 --tcp 47711 --target 127.0.0.1:47610 --seconds 20 > "$W/peer.log" 2>&1 &
+get() { # game file name expect label [peer args...]
+  local g=$1 f=$2 n=$3 x=$4 l=$5; shift 5
+  "$PEER" --game $g --name $n --serve "$f" --udp 47710 --tcp 47711 --target 127.0.0.1:47610 --seconds 20 "$@" > "$W/peer.log" 2>&1 &
   local p=$!
-  (cd "$G1R" && luajit "$HERE/pc_e2e.lua" get $1 $3 "$4") > "$W/pc.log" 2>&1
+  (cd "$G1R" && luajit "$HERE/pc_e2e.lua" get $g $n "$x") > "$W/pc.log" 2>&1
   local rc=$?
   kill $p 2>/dev/null; wait $p 2>/dev/null
-  [ $rc = 0 ] && ok "$5" || bad "$5"
+  [ $rc = 0 ] && ok "$l" || bad "$l"
 }
 
 # the PC game's save reaches the 3DS: GET on the 3DS, this port's install,
@@ -67,6 +68,12 @@ put blue "PC Blue save -> 3DS Blue: installed here, CONTINUE and SAVE keep blue"
 # the old save once it has been continued and saved here
 saves check "$(gen blue)" blue "$W/blue_old.lua" > "$W/check.log" 2>&1
 grep -q "loaded name=DSOLD version=blue" "$W/check.log" && grep -q "saved version=blue" "$W/check.log" && ok "the old red-tagged Blue save continues here and saves as blue" || { cat "$W/check.log" > "$W/peer.log"; bad "old blue save rewritten"; }
+
+# a long game's Yellow save (~120 KB) from a 3DS whose socket refuses big
+# writes: the PC game still gets all of it
+saves make "$(gen yellow)" yellow "$W/yellow_big.lua" - DSYELLOW 120 > /dev/null || exit 1
+get yellow "$W/yellow_big.lua" DSYELLOW "GOT DSYELLOW" "a 120 KB 3DS Yellow save through a stingy socket -> PC Yellow: installed" --choke allornothing:2048
+put yellow "PC Yellow save -> 3DS Yellow: installed here, CONTINUE and SAVE keep yellow"
 
 echo "pc e2e: $PASS passed, $FAIL failed"
 [ $FAIL = 0 ]

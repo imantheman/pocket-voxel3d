@@ -19,6 +19,19 @@ pub const TCP_BYTES_PER_TICK: usize = 64 * 1024;
 pub const ACCEPT_PER_TICK: usize = 4;
 /// Transfers served at once; more are turned away.
 pub const MAX_SERVING: usize = 4;
+/// The largest single write a transfer makes, and where it starts.
+///
+/// A real 3DS's SOC is not a desktop stack: its TCP send buffer is small,
+/// and a non-blocking send that does not fit may be refused whole (would
+/// block) rather than taken in part -- so one big write, retried every
+/// frame, never goes. Writes stay under libctru's small-send path (8 KB),
+/// halve on every refusal down to [`MIN_CHUNK`] (retried at once, up to
+/// [`REFUSALS_PER_FRAME`]), and grow back fourfold whenever one is taken.
+pub const MAX_CHUNK: usize = 4096;
+pub const MIN_CHUNK: usize = 256;
+/// Refused writes a transfer takes in one frame (each retried smaller)
+/// before it waits for the next.
+pub const REFUSALS_PER_FRAME: u32 = 8;
 
 /// A TCP connection.
 pub trait Conn {
@@ -120,6 +133,8 @@ struct Pull {
 }
 
 struct Serve {
+    /// For the log: the n-th connection taken this visit.
+    n: u32,
     conn: Box<dyn Conn>,
     started: f64,
     line: Vec<u8>,
@@ -128,6 +143,13 @@ struct Serve {
     body: Option<Rc<[u8]>>,
     sent: usize,
     replied: bool,
+    /// The next write's size ([`MAX_CHUNK`]).
+    chunk: usize,
+    /// Writes refused (would block), and frames that sent something.
+    blocked: u32,
+    frames: u32,
+    /// When progress was last logged.
+    logged: f64,
 }
 
 pub struct Session<N: Net> {
@@ -147,6 +169,7 @@ pub struct Session<N: Net> {
     notes: Vec<String>,
     sent_to: Vec<(SocketAddrV4, String)>,
     errors_seen: Vec<String>,
+    accepted: u32,
 }
 
 fn would_block(e: &io::Error) -> bool {
@@ -169,6 +192,7 @@ impl<N: Net> Session<N> {
             notes: Vec::new(),
             sent_to: Vec::new(),
             errors_seen: Vec::new(),
+            accepted: 0,
         }
     }
 
@@ -376,10 +400,25 @@ impl<N: Net> Session<N> {
         for _ in 0..ACCEPT_PER_TICK {
             match self.net.accept() {
                 Ok(Some(conn)) => {
+                    self.accepted += 1;
                     if self.serving.len() >= MAX_SERVING {
+                        self.notes.push(format!("serve #{}: turned away ({} already)", self.accepted, MAX_SERVING));
                         continue; // dropped: closes it
                     }
-                    self.serving.push(Serve { conn, started: self.now, line: Vec::new(), head: Vec::new(), body: None, sent: 0, replied: false });
+                    self.serving.push(Serve {
+                        n: self.accepted,
+                        conn,
+                        started: self.now,
+                        line: Vec::new(),
+                        head: Vec::new(),
+                        body: None,
+                        sent: 0,
+                        replied: false,
+                        chunk: MAX_CHUNK,
+                        blocked: 0,
+                        frames: 0,
+                        logged: self.now,
+                    });
                 }
                 Ok(None) => break,
                 Err(e) => {
@@ -393,15 +432,21 @@ impl<N: Net> Session<N> {
         let game = self.cfg.game.clone();
         let mine = self.body.clone();
         let crc = self.crc;
+        let mut notes: Vec<String> = Vec::new();
         self.serving.retain_mut(|s| {
+            let total = s.head.len() + s.body.as_ref().map(|b| b.len()).unwrap_or(0);
             if now - s.started > IO_TIMEOUT {
+                notes.push(format!("serve #{}: timed out at {} of {} bytes ({} frames, {} refused writes, chunk {})", s.n, s.sent, total, s.frames, s.blocked, s.chunk));
                 return false;
             }
             if !s.replied {
                 let mut b = [0u8; 256];
                 loop {
                     match s.conn.read(&mut b) {
-                        Ok(0) => return false,
+                        Ok(0) => {
+                            notes.push(format!("serve #{}: closed before a request", s.n));
+                            return false;
+                        }
                         Ok(n) => {
                             s.line.extend_from_slice(&b[..n]);
                             if s.line.contains(&b'\n') || s.line.len() > proto::MAX_LINE {
@@ -409,13 +454,17 @@ impl<N: Net> Session<N> {
                             }
                         }
                         Err(e) if would_block(&e) => break,
-                        Err(_) => return false,
+                        Err(e) => {
+                            notes.push(format!("serve #{}: read: {}", s.n, crate::net::describe(&e)));
+                            return false;
+                        }
                     }
                 }
                 let Some(nl) = s.line.iter().position(|&c| c == b'\n') else {
                     // no sane request is this long
                     return s.line.len() <= proto::MAX_LINE;
                 };
+                let req = String::from_utf8_lossy(&s.line[..nl]).trim_end().to_string();
                 s.head = match proto::parse_line(&s.line[..=nl]) {
                     Some(Msg::Get { game: g }) if g == game => match &mine {
                         Some(body) => {
@@ -428,27 +477,59 @@ impl<N: Net> Session<N> {
                     _ => proto::err_line("bad request").into_bytes(),
                 };
                 s.replied = true;
+                notes.push(format!("serve #{}: \"{}\" -> {}", s.n, req.chars().take(40).collect::<String>(), String::from_utf8_lossy(&s.head).trim_end()));
             }
-            // header, then body, as far as the socket and the budget allow
+            // Header, then body, a chunk at a time, for as long as the
+            // socket takes them this frame; a refused write halves the
+            // chunk and waits for the next frame (MAX_CHUNK).
             let total = s.head.len() + s.body.as_ref().map(|b| b.len()).unwrap_or(0);
+            let before = s.sent;
+            let mut refused = 0;
             while s.sent < total && budget > 0 {
                 let (src, off) = if s.sent < s.head.len() { (&s.head[..], s.sent) } else { (s.body.as_deref().unwrap(), s.sent - s.head.len()) };
-                let end = (off + budget).min(src.len());
+                let end = (off + s.chunk.min(budget)).min(src.len());
                 match s.conn.write(&src[off..end]) {
-                    Ok(0) => return false,
+                    Ok(0) => {
+                        notes.push(format!("serve #{}: the peer stopped taking bytes at {} of {}", s.n, s.sent, total));
+                        return false;
+                    }
                     Ok(n) => {
                         s.sent += n;
                         budget -= n.min(budget);
+                        // taken: the next may be bigger (back up fast: a refusal
+                        // may be a full buffer for a moment, not a small one)
+                        s.chunk = (s.chunk * 4).min(MAX_CHUNK);
                     }
-                    Err(e) if would_block(&e) => break,
-                    Err(_) => return false,
+                    Err(e) if would_block(&e) => {
+                        s.blocked += 1;
+                        s.chunk = (s.chunk / 2).max(MIN_CHUNK);
+                        refused += 1;
+                        if refused >= REFUSALS_PER_FRAME {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        notes.push(format!("serve #{}: write at {} of {}: {}", s.n, s.sent, total, crate::net::describe(&e)));
+                        return false;
+                    }
                 }
             }
-            // all written: dropping the connection closes it
-            s.sent < total
+            if s.sent > before {
+                s.frames += 1;
+            }
+            if s.sent >= total {
+                notes.push(format!("serve #{}: sent all {} bytes in {:.2} s ({} frames, {} refused writes)", s.n, total, now - s.started, s.frames, s.blocked));
+                // all written: dropping the connection closes it
+                return false;
+            }
+            if now - s.logged >= 1.0 {
+                s.logged = now;
+                notes.push(format!("serve #{}: {} of {} bytes, +{} this frame, {} refused writes, chunk {}", s.n, s.sent, total, s.sent - before, s.blocked, s.chunk));
+            }
+            true
         });
+        self.notes.extend(notes);
     }
-
     fn tick_pull(&mut self) {
         let Some(mut p) = self.pull.take() else { return };
         let outcome = self.step_pull(&mut p);

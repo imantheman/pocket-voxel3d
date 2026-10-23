@@ -12,6 +12,7 @@
 //! - [`install`]: the version check, the backup ring, the atomic write.
 //! - [`host`]: one SYNC screen's sockets and records, opened once a visit.
 
+pub mod choke;
 pub mod host;
 pub mod install;
 pub mod luadata;

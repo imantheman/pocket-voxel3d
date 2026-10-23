@@ -2,6 +2,7 @@
 //! each other (no broadcast needed), plus hand-rolled peers for the error
 //! cases.
 
+use pocketvoxel_sync::choke::{ChokeNet, Mode};
 use pocketvoxel_sync::net::StdNet;
 use pocketvoxel_sync::proto;
 use pocketvoxel_sync::session::{Config, Event, PullPhase, Session};
@@ -312,4 +313,86 @@ fn a_refused_connect_fails_fast() {
         std::thread::sleep(Duration::from_millis(2));
         assert!(t - start < 12.0);
     }
+}
+
+/// A server whose socket is stingy (choke.rs) serving a 300 KB save to a
+/// plain client, and a stingy client pulling from a plain server: every
+/// byte arrives, inside the 10 s, whatever the socket does.
+fn stingy_pull(server_mode: Mode, client_mode: Mode, sndbuf: Option<i32>) -> (Vec<u8>, Vec<u8>, Vec<String>) {
+    let mut na = StdNet::bind(LO, 0, 0).unwrap();
+    na.set_send_buffer(sndbuf);
+    let nb = StdNet::bind(LO, 0, 0).unwrap();
+    let ua = SocketAddrV4::new(LO, na.udp_port());
+    let ub = SocketAddrV4::new(LO, nb.udp_port());
+    let (ta, tb) = (na.tcp_port(), nb.tcp_port());
+    let mut a = Session::new(ChokeNet::new(na, server_mode), Config { id: "aaaa0001".into(), platform: "3ds".into(), game: "yellow".into(), name: "Server".into(), tcp_port: ta, targets: vec![ub] });
+    let mut b = Session::new(ChokeNet::new(nb, client_mode), Config { id: "bbbb0002".into(), platform: "pc".into(), game: "yellow".into(), name: "Client".into(), tcp_port: tb, targets: vec![ua] });
+    let save = big_save(300 * 1024);
+    a.set_body(Some(save.clone()));
+    let mut t = 0.0;
+    while b.peers().is_empty() {
+        t += 1.0 / 30.0;
+        a.tick(t);
+        b.tick(t);
+        std::thread::sleep(Duration::from_millis(1));
+        assert!(t < 3.0, "no discovery");
+    }
+    b.pull("aaaa0001").unwrap();
+    let start = t;
+    loop {
+        // 30 frames a second, as the title screen runs
+        t += 1.0 / 30.0;
+        a.tick(t);
+        b.tick(t);
+        match b.poll_event() {
+            Some(Event::Pulled { body, .. }) => {
+                assert!(t - start < 10.0, "took {:.1} s", t - start);
+                let mut notes = a.take_notes();
+                for _ in 0..3 {
+                    a.tick(t);
+                    notes.extend(a.take_notes());
+                }
+                return (save, body, notes);
+            }
+            Some(Event::PullFailed { reason, .. }) => panic!("pull failed: {} ({:?})", reason, a.take_notes()),
+            _ => {}
+        }
+        std::thread::sleep(Duration::from_millis(1));
+        assert!(t - start < 12.0, "stalled: {:?}", a.take_notes());
+    }
+}
+
+#[test]
+fn a_server_whose_socket_refuses_big_writes_still_sends_it_all() {
+    let (save, got, notes) = stingy_pull(Mode::AllOrNothing(2048), Mode::Off, None);
+    assert!(got == save);
+    let log = notes.join("\n");
+    assert!(log.contains("sent all"), "{}", log);
+    assert!(log.contains("refused writes"), "{}", log);
+}
+
+#[test]
+fn short_writes_and_a_small_send_buffer() {
+    let (save, got, _) = stingy_pull(Mode::Short(700), Mode::Off, Some(2048));
+    assert!(got == save);
+}
+
+#[test]
+fn a_flaky_server() {
+    let (save, got, _) = stingy_pull(Mode::Flaky, Mode::Off, None);
+    assert!(got == save);
+}
+
+#[test]
+fn a_flaky_client() {
+    let (save, got, _) = stingy_pull(Mode::Off, Mode::Flaky, None);
+    assert!(got == save);
+}
+
+#[test]
+fn short_both_ends() {
+    // (no tiny SO_SNDBUF here: with 300-byte writes Linux spends most of a
+    // 2 KB buffer on per-segment overhead, a desktop artefact)
+    let (save, got, _) = stingy_pull(Mode::Short(300), Mode::Short(500), None);
+    assert!(got == save);
 }

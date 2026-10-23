@@ -9,10 +9,13 @@
 //! --pull     pull the first same-game peer heard, then exit
 //! --accept   pull the first peer that OFFERs, then exit
 //! --offer    OFFER our save to the first same-game peer heard (once)
+//! --choke    TCP like a stingy socket: allornothing:N, short:N, flaky
+//! --sndbuf   SO_SNDBUF for connections it serves
 //! Without --pull/--accept it serves until --seconds run out (exit 0).
 //! Every event is printed as one line on stdout.
 
 use pocketvoxel_sync::install::{self, Paths, StdStore};
+use pocketvoxel_sync::choke::{ChokeNet, Mode};
 use pocketvoxel_sync::net::StdNet;
 use pocketvoxel_sync::proto;
 use pocketvoxel_sync::session::{Config, Event, Session};
@@ -33,6 +36,8 @@ fn main() {
     let mut backups: Option<String> = None;
     let (mut pull, mut accept, mut offer) = (false, false, false);
     let mut seconds = 20.0f64;
+    let mut choke = Mode::Off;
+    let mut sndbuf: Option<i32> = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         let mut val = || args.next().unwrap_or_else(|| panic!("{} needs a value", a));
@@ -51,6 +56,8 @@ fn main() {
             "--pull" => pull = true,
             "--accept" => accept = true,
             "--offer" => offer = true,
+            "--choke" => choke = Mode::parse(&val()).expect("--choke off|allornothing:N|short:N|flaky"),
+            "--sndbuf" => sndbuf = Some(val().parse().expect("--sndbuf")),
             other => panic!("unknown argument {}", other),
         }
     }
@@ -68,14 +75,18 @@ fn main() {
     if bound.udp_fell_back {
         println!("FALLBACK udp {}", bound.net.udp_port());
     }
-    let net = bound.net;
+    let mut net = bound.net;
+    net.set_send_buffer(sndbuf);
+    let tcp_port = net.tcp_port();
+    // a stingy socket, as a real 3DS can have (choke.rs)
+    let net = ChokeNet::new(net, choke);
     let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) ^ std::process::id() as u64;
-    let cfg = Config { id: proto::make_id(seed), platform, game: game.clone(), name, tcp_port: net.tcp_port(), targets };
+    let cfg = Config { id: proto::make_id(seed), platform, game: game.clone(), name, tcp_port, targets };
     let mut s = Session::new(net, cfg);
     if let Some(f) = &serve {
         s.set_body(Some(std::fs::read(f).expect("--serve file")));
     }
-    println!("READY id={} udp={} tcp={}", s.id(), s.net().udp_port(), s.net().tcp_port());
+    println!("READY id={} udp={} tcp={} choke={:?} sndbuf={:?}", s.id(), s.net().inner.udp_port(), s.net().inner.tcp_port(), choke, sndbuf);
     let t0 = Instant::now();
     let mut known: Vec<String> = Vec::new();
     let mut offered = false;
@@ -90,6 +101,9 @@ fn main() {
             return;
         }
         s.tick(now);
+        for n in s.take_notes() {
+            println!("NOTE {}", n);
+        }
         let peers: Vec<_> = s.peers().to_vec();
         for p in &peers {
             if !known.contains(&p.id) {
