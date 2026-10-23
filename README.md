@@ -5,6 +5,12 @@ run on a **New 3DS / New 2DS XL** with the stereoscopic slider doing
 real 3D. Trade and battle between two consoles on the same wifi. Each game can
 also be played on the original flat handheld screen, in its OPTION menu.
 
+**New in 2.5.0: SYNC.** Move your save between the 3DS and
+[gen1recomp](https://github.com/bryanthaboi/gen1recomp) on PC or Android over
+the same wifi, in either direction, right from the title menu. The PC/phone
+side uses the free [pvsync](https://github.com/imantheman/pvsync) mod; see
+[SYNC](#sync-move-a-save-to-or-from-gen1recomp-over-wifi) below.
+
 **You bring the game.** Nothing from any cartridge is in this repository or
 in the download. A small program on your computer reads *your own* US
 Red, Blue, Yellow, Gold, Silver or Crystal cartridge file and turns it into the files the 3DS
