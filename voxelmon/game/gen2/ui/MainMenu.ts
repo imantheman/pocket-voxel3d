@@ -52,6 +52,9 @@ export interface MainMenuOpts {
    *  back to a fresh title. Absent: no COPY SAVE row. */
   onCopy?: (dir: CopyDir) => void;
   onOption?: () => void;
+  /** SYNC (ui/SyncScreen.ts, not on the cart): a save to or from the
+   *  PC/phone games on this wifi. Absent: no SYNC row. */
+  onSync?: () => void;
   onMysteryGift?: (save: any) => void;
   /** Not the cart's: set the game clock straight from here. */
   onSetClock?: (save: any) => void;
@@ -98,6 +101,7 @@ export class MainMenu {
   /** NEW GAME over a VC game: "replaced?", YES 1 / NO 2 (NO first). */
   replaceChoice = 2;
   onOption: (() => void) | undefined;
+  onSync: (() => void) | undefined;
   onMysteryGift: ((save: any) => void) | undefined;
   onSetClock: ((save: any) => void) | undefined;
   onExit: (() => void) | undefined;
@@ -118,6 +122,7 @@ export class MainMenu {
     this.onNewGameVc = opts.onNewGameVc;
     this.onCopy = opts.onCopy;
     this.onOption = opts.onOption;
+    this.onSync = opts.onSync;
     this.onMysteryGift = opts.onMysteryGift;
     this.onSetClock = opts.onSetClock;
     this.onExit = opts.onExit;
@@ -205,6 +210,8 @@ export class MainMenu {
     let items: { label: string; value: unknown }[] = [];
     if (this.hasSave) items.push({ label: Strings.get("CONTINUE"), value: "continue" });
     items.push({ label: Strings.get("NEW GAME"), value: "new" });
+    // Not on the cart: SYNC, a save to or from the PC/phone games on this wifi
+    if (this.onSync) items.push({ label: Strings.get("SYNC"), value: "sync" });
     // Not on the cart: copy one save over the other (the VC title there)
     if (this.copyDirections().length) items.push({ label: Strings.get("COPY SAVE"), value: "copy" });
     items.push({ label: Strings.get("OPTION"), value: "option" });
@@ -264,6 +271,8 @@ export class MainMenu {
       if (this.onNewGame) this.onNewGame();
     } else if (value === "copy") {
       this.openCopy();
+    } else if (value === "sync") {
+      if (this.onSync) this.onSync();
     } else if (value === "option") {
       if (this.onOption) this.onOption();
     } else if (value === "gift") {

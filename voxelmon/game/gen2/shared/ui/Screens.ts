@@ -62,6 +62,7 @@ import * as M_ScriptMenu from "../../ui/ScriptMenu.ts";
 import * as M_SlotMachine from "../../ui/SlotMachine.ts";
 import * as M_StartMenu from "../../ui/StartMenu.ts";
 import * as M_SummaryMenu from "../../ui/SummaryMenu.ts";
+import * as M_SyncScreen from "../../ui/SyncScreen.ts";
 import * as M_TitleState from "../../ui/TitleState.ts";
 import * as M_TradeAnim from "../../ui/TradeAnim.ts";
 import * as M_TradeMenu from "../../ui/TradeMenu.ts";
@@ -135,6 +136,7 @@ const BUILTIN: Record<string, () => Factory> = {
   Gen2StartMenu: () => pick(M_StartMenu, "StartMenu"),
   Gen2DevMenu: () => pick(M_DevMenu, "DevMenu"),
   Gen2SummaryMenu: () => pick(M_SummaryMenu, "SummaryMenu"),
+  Gen2Sync: () => pick(M_SyncScreen, "SyncScreen"),
   Gen2TitleState: () => pick(M_TitleState, "TitleState"),
   Gen2TradeAnim: () => pick(M_TradeAnim, "TradeAnimView"),
   Gen2TradeMenu: () => pick(M_TradeMenu, "TradeMenu"),

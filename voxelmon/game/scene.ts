@@ -199,6 +199,8 @@ export class Scene {
   /** The GB screen's op stream (gb/emit.ts). */
   private readonly gbEmitter = new GbEmitter();
   private menuSig: string | null = null;
+  /** What the SYNC screen last drew (ui/syncscreen.ts). */
+  private syncSig: string | null = null;
   private bagSig: string | null = null;
   private shopSig: string | null = null;
   private boxSig: string | null = null;
@@ -2020,6 +2022,37 @@ export class Scene {
       return;
     }
     if (this.menuSig !== null) { this.menuSig = null; host.uiClear(); this.uiOwner = null; }
+    // SYNC (ui/syncscreen.ts): the list in a box over the whole top, the
+    // status line in the text box under it. Over the title, whose ribbon
+    // and copyright tiles go while it is up.
+    const sy = (view as unknown as { syncView?: () => any }).syncView?.();
+    if (sy) {
+      if (this.titleSig !== null) {
+        this.titleSig = null;
+        this.emitIntroTiles([]);
+      }
+      const sig = `Y${sy.title}|${sy.cursor}|${sy.rows.join("/")}|${sy.status.join("/")}|${sy.more.up},${sy.more.down}`;
+      if (sig !== this.syncSig) {
+        this.syncSig = sig;
+        this.uiOwner = null;
+        host.uiClear();
+        this.frame(host, 0, 0, UI_COLS, 13);
+        this.stamp(host, 2, 1, sy.title);
+        sy.rows.forEach((r: string, i: number) => {
+          this.stamp(host, 3, 3 + i * 2, r);
+          if (i === sy.cursor && sy.pickable[i]) host.uiTile(2, 3 + i * 2, ARROW_CURSOR);
+        });
+        if (sy.more.down) host.uiTile(UI_COLS - 2, 12, ARROW_MORE);
+        this.frame(host, 0, 13, UI_COLS, 5);
+        sy.status.forEach((line: string, i: number) => this.stamp(host, 1, 14 + i * 2, line));
+      }
+      return;
+    }
+    if (this.syncSig !== null) {
+      this.syncSig = null;
+      host.uiClear();
+      this.uiOwner = null;
+    }
     const ttl = (view as unknown as { title?: () => any }).title?.();
     if (ttl) {
       // The ribbon and the copyright line are 8x8 tiles in the original

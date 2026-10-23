@@ -82,6 +82,9 @@ const COPYRIGHT_Y = 136;
  * so it follows the prefix with no gap -- column 9. */
 const COPYRIGHT_GAMEFREAK_X = 16 + COPYRIGHT_PREFIX.length * 8;
 
+/** The title row that opens SYNC (ui/syncscreen.ts). */
+export const SYNC_TEXT = "SYNC";
+
 export type TitleChoice = "continue" | "continue-vc" | "new" | "new-vc" | "option" | "viewer";
 
 /**
@@ -197,6 +200,11 @@ export class TitleState implements GameState {
       /** The copy's confirm screen and the copy itself (game.ts, by way of
        *  vc/copysave.ts); `done` brings the menu back, read afresh. */
       copySave?: (dir: CopyDir, done: () => void) => void;
+      /** SYNC (ui/syncscreen.ts): offered when the host can network
+       *  (`syncAvailable`); `openSync` puts the screen over the title and
+       *  `done` brings the menu back, the saves read afresh. */
+      syncAvailable?: () => boolean;
+      openSync?: (done: () => void) => void;
     },
     private onChoose: (c: TitleChoice) => void,
   ) {
@@ -209,6 +217,8 @@ export class TitleState implements GameState {
   /** The main menu for the saves there are now. */
   private buildMenu(): string[] {
     const m = this.game.hasSave ? ["CONTINUE", "NEW GAME"] : ["NEW GAME"];
+    // SYNC: a save to or from the PC/phone games on this wifi, under NEW GAME
+    if (this.game.openSync && this.game.syncAvailable?.()) m.push(SYNC_TEXT);
     const c = this.game.copyChoice;
     if (c && (c.lua || c.vc) && this.game.copySave) m.push(COPY_SAVE_TEXT.menu);
     m.push("OPTION", "MAP VIEWER");
@@ -217,10 +227,10 @@ export class TitleState implements GameState {
 
   /** After COPY SAVE: the menu again, for the saves as they are now (the
    *  game has read them afresh), the cursor back on COPY SAVE. */
-  refresh(): void {
+  refresh(on: string = COPY_SAVE_TEXT.menu): void {
     this.menu = this.buildMenu();
     this.phase = "menu";
-    this.index = Math.max(0, this.menu.indexOf(COPY_SAVE_TEXT.menu));
+    this.index = Math.max(0, this.menu.indexOf(on));
   }
 
   private audio():
@@ -407,6 +417,11 @@ export class TitleState implements GameState {
         this.pickIndex = 0;
         this.pickFor = "new";
         this.phase = "pick";
+        return;
+      }
+      // SYNC goes over the title, which stays: back on SYNC afterwards
+      if (pick === SYNC_TEXT && this.game.openSync) {
+        this.game.openSync(() => this.refresh(SYNC_TEXT));
         return;
       }
       this.game.pop();

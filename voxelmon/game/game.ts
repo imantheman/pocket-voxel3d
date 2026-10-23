@@ -52,6 +52,8 @@ import { SurfingState } from "./ui/surfingstate.ts";
 import type { GbVideo } from "./gb/video.ts";
 import { StartMenuState } from "./ui/startmenu.ts";
 import { DevMenuState } from "./ui/devmenu.ts";
+import { SyncState } from "./ui/syncscreen.ts";
+import { hostSync } from "./sync/model.ts";
 import { CARD_PIC_RECT, TrainerCardState } from "./ui/trainercard.ts";
 import { CreditsState, HallOfFameState } from "./ui/hofscreen.ts";
 import { DiplomaState } from "./ui/diploma.ts";
@@ -128,6 +130,7 @@ import { OverworldView2d } from "./world/view2d.ts";
 const FULL_SCREEN_KINDS = new Set([
   "pokedex", "party", "summary", "naming", "trainercard", "options", "evolution",
   "halloffame", "credits", "diploma", "tradeanim", "tradescreen", "slots",
+  "sync",
 ]);
 /** Must match Version.saveFormat in the recomp. */
 const SAVE_FORMAT = 5;   // Version.lua saveFormat (savecompat.ts GEN1RECOMP_FORMAT)
@@ -605,7 +608,7 @@ export class VoxelmonGame implements OverworldShell, SceneView {
       // the speech itself starts the bedroom's -- sees the map as already
       // accounted for, exactly as it did when the theme used to play.
       const top = this.stack[this.stack.length - 1];
-      if (top?.kind === "intro" || top?.kind === "title") {
+      if (top?.kind === "intro" || top?.kind === "title" || top?.kind === "sync") {
         this.audio.noteMap(mapId);
       } else {
         this.audio.startMap(mapId, !!this.save.onBike);
@@ -825,6 +828,26 @@ export class VoxelmonGame implements OverworldShell, SceneView {
         },
       });
     }, { defaultNo: true });
+  }
+
+  /** The title offers SYNC on a host with the sync natives (the 3DS). */
+  syncAvailable(): boolean {
+    return hostSync() !== null;
+  }
+
+  /**
+   * SYNC (ui/syncscreen.ts), from the title only: pushed over it, and when
+   * it closes the saves are read again, so CONTINUE shows a received save.
+   */
+  openSync(done: () => void): void {
+    this.push(new SyncState(this as any, gameVersion(this.data), (installed) => {
+      if (installed) {
+        console.log("[pv] sync: a save was installed; the title reads the saves again");
+        this.unreadableSave = false;
+      }
+      this.readSaves();
+      done();
+    }));
   }
 
   /** The game and host behind COPY SAVE's steps. */
@@ -3389,6 +3412,12 @@ export class VoxelmonGame implements OverworldShell, SceneView {
   title(): unknown {
     const top = this.stack[this.stack.length - 1] as any;
     return top?.kind === "title" ? top.view() : null;
+  }
+
+  /** The SYNC screen (ui/syncscreen.ts), when it is up. */
+  syncView(): unknown {
+    const top = this.stack[this.stack.length - 1] as any;
+    return top?.kind === "sync" ? top.view() : null;
   }
 
   intro(): unknown {

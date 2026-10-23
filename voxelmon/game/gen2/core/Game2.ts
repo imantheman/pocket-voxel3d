@@ -59,6 +59,7 @@ import { Vc, type CopyResult } from "../vc/session.ts";
 import * as saveio from "../platform/saveio.ts";
 import { tonumber } from "../platform/lua.ts";
 import { gameSpeedOf, setGameSpeedIn, type GameSpeedSetting } from "../../gamespeed.ts";
+import { hostSync } from "../../sync/model.ts";
 
 function noop(): void {}
 
@@ -429,6 +430,19 @@ export class Game2 {
       onNewGameVc: () => this.newGameVc(),
       onCopy: (dir: "toVc" | "toLua") => this.copySave(dir),
       onOption: () => this.showOptions(() => this.showMainMenu()),
+      // SYNC (ui/SyncScreen.ts) where the host can network; the main menu
+      // it returns to reads the save again, so CONTINUE shows a received one
+      onSync: hostSync()
+        ? () => {
+            this.stack.clear();
+            Screens.push(this, "Gen2Sync", {
+              onClose: (installed: boolean) => {
+                if (installed) Logger.info("sync: a save was installed; the main menu reads it again");
+                this.showMainMenu();
+              },
+            });
+          }
+        : undefined,
       onMysteryGift: (save: any) => {
         this.stack.clear();
         Screens.push(this, "Gen2MysteryGift", { save, onClose: () => this.showMainMenu() });
