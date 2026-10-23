@@ -113,6 +113,7 @@ import { PcState } from "./ui/pcscreen.ts";
 import { PokedexState } from "./ui/pokedexscreen.ts";
 import { encodeSave } from "./save-lua.ts";
 import { decodeSave } from "./save-read.ts";
+import { adoptSaveVersion, newSaveVersion } from "./saveversion.ts";
 import { fromDisk, reportLines, syncItemBalls, toDisk } from "./savecompat.ts";
 import { cartSummary, cartToSave, isCartSave, saveToCart } from "./vc/cartsave.ts";
 import { COPY_SAVE_TEXT, copyMessage, copyPanel, runCopy, type CopyDir, type CopyIo, type CopyResult } from "./vc/copysave.ts";
@@ -663,9 +664,10 @@ export class VoxelmonGame implements OverworldShell, SceneView {
     // recomp writes, so a save from either side opens in the other.
     this.save = {
       meta: { format: SAVE_FORMAT, mods: {} },
-      // gen1recomp's save field: Yellow says so (its Pikachu keeps its
-      // happiness in this save); Red and Blue stay "red" as they always were
-      version: gameVersion(this.data) === "yellow" ? "yellow" : "red",
+      // gen1recomp's save field, its own game's name (saveversion.ts):
+      // Yellow's Pikachu keeps its happiness in this save, and the PC's
+      // SYNC refuses a save of another game
+      version: newSaveVersion(gameVersion(this.data)),
       player: {
         map: "REDS_HOUSE_2F",
         x: 3,
@@ -917,6 +919,8 @@ export class VoxelmonGame implements OverworldShell, SceneView {
    * repairs. Returns what to tell the player.
    */
   private prepareLoadedSave(loaded: any): string[] {
+    // Blue's older saves say "red": Blue's from here (the next SAVE writes it)
+    if (adoptSaveVersion(loaded, gameVersion(this.data))) console.log("[pv] save: a red-tagged save adopted as blue");
     const report = fromDisk(loaded, this.data as never);
     syncItemBalls(loaded, (this.data as { maps?: never }).maps);
     const told = reportLines(report);

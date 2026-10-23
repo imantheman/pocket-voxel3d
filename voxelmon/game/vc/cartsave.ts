@@ -20,6 +20,7 @@ import * as L from "./layout.ts";
 import { M } from "./layout.ts";
 import { EVENT_FLAGS_RB, EVENT_FLAGS_YELLOW } from "./eventflags.ts";
 import { calc as calcStats, ensure as ensureStats } from "../rules/stats.ts";
+import { newSaveVersion } from "../saveversion.ts";
 
 /** The ROM facts (gamedata.vcsave). */
 export interface VcTables {
@@ -545,7 +546,7 @@ export function cartToSave(sram: Uint8Array, data: CartData): CartLoad {
   const wbs = u8(b, m(M.walkBikeSurf));
   const save: Record<string, any> = {
     meta: { format: 5, mods: {} },
-    version: t.yellow ? "yellow" : "red",
+    version: newSaveVersion(gameOf(data)),
     player: {
       name: player.name,
       rival: readName(b, m(M.rivalName)),
