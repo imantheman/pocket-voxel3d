@@ -63,7 +63,7 @@ from pathlib import Path
 POCKET_VOXEL_REPO = "imantheman/pocket-voxel3d"
 # The release this cooker ships with: its source is what the .3dsx and .cia
 # files beside it were built from.
-POCKET_VOXEL_REF = "v2.4.0"
+POCKET_VOXEL_REF = "v2.5.0"
 
 # Bun runs the importer and the cooker. MIT. https://bun.sh
 BUN_VERSION = "1.4.2"

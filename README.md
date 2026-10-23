@@ -122,6 +122,40 @@ folder and an `options.lua`). Inside `saves` there is one folder per game
   the title screen and keeps the file as it was (it copies it to
   `<name>.unreadable` before ever writing over it).
 
+### SYNC: move a save to or from gen1recomp over wifi
+
+Instead of copying files by hand, the 3DS and gen1recomp (PC or Android) can
+pass a save to each other over the same wifi network.
+
+**Set up the PC/phone side once:** install the
+[**pvsync**](https://github.com/imantheman/pvsync) mod in gen1recomp: import
+`pvsync.zip` (from [its releases](https://github.com/imantheman/pvsync/releases/latest),
+also attached to this project's releases) through the launcher's **MODS**
+menu, or unzip it into gen1recomp's `mods/` folder, then enable it
+and allow its **network** and **engine internals** permissions. On Windows,
+allow the game through the firewall on **private** networks, and make sure
+your wifi is set to **Private**, not Public, in Windows' network settings.
+
+**Then, with both devices on the same wifi:**
+
+1. Pick **SYNC** on the title menu on both (it is right under NEW GAME).
+   Each lists the other within a couple of seconds.
+2. On the device that should **receive** the save, pick **GET** and press A
+   twice (the second press confirms the overwrite).
+3. Or, on the device that has the save, pick **SEND**; the other device then
+   shows **ACCEPT**, which also needs A twice.
+
+Only the same game syncs (Red with Red, Crystal with Crystal); a device on
+another game is listed but can't be picked. A received save is checked as
+plain data and must be for the same game. The save it replaces is copied to
+`SD:/3ds/voxelmon/sync_backups/` first (the last 10 are kept). SYNC never
+works mid-game, and nothing is ever written unless the receiving player
+confirms it.
+
+If the two never find each other: check that both are on the same network
+(not a guest network), that the PC's wifi is set to Private, and that the
+firewall prompt was allowed.
+
 ### Sharing a save with the official 3DS re-releases
 
 If the official digital re-release of the same game (US) is installed on
@@ -165,9 +199,9 @@ save).
 screen: the **EXTRAS** app in Red/Blue/Yellow, the **▲** tab in
 Gold/Silver/Crystal):
 
-- **SPEED 1X / 2X**: at 2X the game runs twice as fast (walking, text,
-  battles, menus) at the same frame rate. Music stays at normal speed. Link
-  play always runs at 1X.
+- **SPEED 1X / 2X / BATTLES**: at 2X the game runs twice as fast (walking,
+  text, battles, menus) at the same frame rate; BATTLES runs 2X in battles
+  only. Music stays at normal speed. Link play always runs at 1X.
 - **EXP FOR CATCHING**: a catch pays the battle's EXP, as a win does.
 - **PARTY EXP SHARE**: the whole team earns EXP; monsters that did not fight
   get half.
