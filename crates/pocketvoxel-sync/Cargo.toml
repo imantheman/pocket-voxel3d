@@ -1,0 +1,18 @@
+[package]
+name = "pocketvoxel-sync"
+description = "PVS1 save sync over a LAN: the wire protocol, the session state machine and the save install path"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+# Written from the PVS1 protocol description alone (PROTOCOL.md in the PC
+# mod): no code from the PC mod or from gen1recomp is in here.
+
+[dependencies]
+# the one non-blocking TCP connect (net.rs); everything else is std::net
+libc = "0.2"
+
+[[bin]]
+name = "pvsync-peer"
+path = "src/bin/pvsync-peer.rs"
